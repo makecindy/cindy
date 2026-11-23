@@ -6926,7 +6926,8 @@
           "routeRelay": "Relais",
           "routeUnavailable": "Indisponible",
           "routeMeasuring": "Mesure…",
-          "routeDirectUnavailableHint": "La connexion directe est actuellement indisponible sur ce réseau"
+          "routeDirectUnavailableHint": "La connexion directe est actuellement indisponible sur ce réseau",
+          "routePreferenceFailed": "Impossible de changer d’itinéraire. Veuillez réessayer."
         },
         "protocol": {
           "agentNet": "Agent-Net",

@@ -270,8 +270,8 @@ describe('HubNodePopover', () => {
 
   // 2026-11-22 用户需求:在线 Agent-Net 设备展示独立线路区(直连与中转延迟+三档切换),直连不可达时直连档禁用并标明不可用;
   // 非 Agent-Net(Device Link)仍保持单行延迟。tier: unit。
-  it('Agent-Net 在线设备展示线路卡片与三档切换器,直连不可达时禁用直连档,旧版连接保持单行延迟', () => {
-    const onPref = vi.fn();
+  it('Agent-Net 在线设备展示线路卡片与三档切换器,直连不可达时禁用直连档,保存失败时回退乐观选中,旧版连接保持单行延迟', async () => {
+    const onPref = vi.fn().mockResolvedValueOnce(false).mockResolvedValue(true);
     const dual = node({
       id: 'dual-peer',
       encrypted: true,
@@ -291,8 +291,17 @@ describe('HubNodePopover', () => {
     expect(screen.getByText('86 ms')).toBeTruthy();
     const directRadio = screen.getByRole('radio', { name: 'settings.remoteControl.v2.popover.routeDirect' }) as HTMLButtonElement;
     expect(directRadio.disabled).toBe(false);
-    fireEvent.click(screen.getByRole('radio', { name: 'settings.remoteControl.v2.popover.routeRelay' }));
+    // First click fails to save -> optimistic selection reverts back to serverPref ('auto').
+    await act(async () => {
+      fireEvent.click(screen.getByRole('radio', { name: 'settings.remoteControl.v2.popover.routeRelay' }));
+    });
     expect(onPref).toHaveBeenCalledWith(dual, 'relay');
+    expect(screen.getByRole('radio', { name: 'settings.remoteControl.v2.popover.routeAuto' }).getAttribute('aria-checked')).toBe('true');
+    // Second click succeeds -> optimistic selection stays on 'relay'.
+    await act(async () => {
+      fireEvent.click(screen.getByRole('radio', { name: 'settings.remoteControl.v2.popover.routeRelay' }));
+    });
+    expect(screen.getByRole('radio', { name: 'settings.remoteControl.v2.popover.routeRelay' }).getAttribute('aria-checked')).toBe('true');
 
     // Direct unreachable on Agent-Net: still shows route card and switcher, with Direct disabled & marked unavailable.
     rerender(

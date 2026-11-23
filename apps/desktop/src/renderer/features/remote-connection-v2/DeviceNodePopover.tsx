@@ -9,7 +9,7 @@
  * 切不了的写原因。见 agentNetRemoteSwitch.ts。
  */
 
-import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { isCindyApp } from '@cindy/maker-shared/device-list';
 import { appLabel, deviceLabel } from '@/components/settings/deviceLabels';
@@ -106,7 +106,7 @@ function RouteOptionRow({
   available: boolean;
 }) {
   return (
-    <div className="flex items-start justify-between gap-3 text-12 leading-4">
+    <div className="flex items-start justify-between gap-3 text-12 leading-[1.35]">
       <span className={cn('flex min-w-0 items-start gap-2', active ? 'font-medium text-[var(--text-primary)]' : 'text-[var(--text-secondary)]')}>
         <span
           className={cn(
@@ -322,10 +322,11 @@ export function DeviceNodePopover({
   onRemoteDesktop: (node: TopologyNode) => void;
   switchEntry?: RemoteSwitchEntry | null;
   onSwitch?: (node: TopologyNode, target: RemoteSwitchTarget) => void;
-  onPathPreferenceChange?: (node: TopologyNode, preference: DeviceLinkPeerPathPreference) => void;
+  onPathPreferenceChange?: (node: TopologyNode, preference: DeviceLinkPeerPathPreference) => Promise<boolean | void> | void;
 }) {
   const { t } = useTranslation();
-  const [optimisticPref, setOptimisticPref] = useState<{ id: string; value: DeviceLinkPeerPathPreference } | null>(null);
+  const [optimisticPref, setOptimisticPref] = useState<{ id: string; value: DeviceLinkPeerPathPreference; seq: number } | null>(null);
+  const prefSeqRef = useRef(0);
   const switchArea = useSwitchArea(node, switchEntry, onSwitch);
   const running = switchEntry?.kind === 'running' ? switchEntry : null;
   const reconnecting = running !== null && running.step !== 'request';
@@ -453,8 +454,18 @@ export function DeviceNodePopover({
                 { value: 'relay', label: t('settings.remoteControl.v2.popover.routeRelay') },
               ]}
               onValueChange={(next) => {
-                setOptimisticPref({ id: node.id, value: next });
-                onPathPreferenceChange(node, next);
+                const seq = ++prefSeqRef.current;
+                setOptimisticPref({ id: node.id, value: next, seq });
+                Promise.resolve(onPathPreferenceChange(node, next)).then(
+                  (ok) => {
+                    if (ok === false) {
+                      setOptimisticPref((cur) => (cur && cur.seq === seq ? null : cur));
+                    }
+                  },
+                  () => {
+                    setOptimisticPref((cur) => (cur && cur.seq === seq ? null : cur));
+                  },
+                );
               }}
             />
           ) : null}

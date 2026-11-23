@@ -6926,7 +6926,8 @@
           "routeRelay": "Retransmisión",
           "routeUnavailable": "No disponible",
           "routeMeasuring": "Midiendo…",
-          "routeDirectUnavailableHint": "La conexión directa no está disponible actualmente en esta red"
+          "routeDirectUnavailableHint": "La conexión directa no está disponible actualmente en esta red",
+          "routePreferenceFailed": "No se pudo cambiar la ruta. Inténtalo de nuevo."
         },
         "protocol": {
           "agentNet": "Agent-Net",

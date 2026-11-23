@@ -512,10 +512,8 @@ async function setPeerPathPreference(
   preference: 'auto' | 'direct' | 'relay',
 ): Promise<Record<string, 'direct' | 'relay'>> {
   const trimmed = deviceId.trim();
-  const current = readDeviceLinkSettings().peerPathPreferences ?? {};
-  if (!trimmed) return current;
-  const currentPref = current[trimmed] ?? 'auto';
-  if (currentPref === preference) return current;
+  if (!trimmed) return readDeviceLinkSettings().peerPathPreferences ?? {};
+  // 不在写队列外拿磁盘旧值判重：快速连点（如 auto → relay → auto）必须按队列内最新值串行落地，防止先入队的旧写覆盖最后选择。
   const next = await updateDeviceLinkSetting('peerPathPreferences', (latest) => {
     const copy: Record<string, 'direct' | 'relay'> = { ...(latest ?? {}) };
     if (preference === 'auto') delete copy[trimmed];

@@ -6859,7 +6859,8 @@
           "routeRelay": "Relay",
           "routeUnavailable": "Nicht verfügbar",
           "routeMeasuring": "Wird gemessen…",
-          "routeDirectUnavailableHint": "Direktverbindung ist in diesem Netzwerk derzeit nicht verfügbar"
+          "routeDirectUnavailableHint": "Direktverbindung ist in diesem Netzwerk derzeit nicht verfügbar",
+          "routePreferenceFailed": "Route konnte nicht gewechselt werden. Bitte erneut versuchen."
         },
         "protocol": {
           "agentNet": "Agent-Net",

@@ -6816,7 +6816,8 @@
           "routeRelay": "중계",
           "routeUnavailable": "사용 불가",
           "routeMeasuring": "측정 중…",
-          "routeDirectUnavailableHint": "현재 네트워크에서는 이 기기에 직접 연결할 수 없습니다"
+          "routeDirectUnavailableHint": "현재 네트워크에서는 이 기기에 직접 연결할 수 없습니다",
+          "routePreferenceFailed": "경로를 전환하지 못했습니다. 다시 시도해 주세요."
         },
         "protocol": {
           "agentNet": "Agent-Net",

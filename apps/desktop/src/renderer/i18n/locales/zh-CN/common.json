@@ -6816,7 +6816,8 @@
           "routeRelay": "中转",
           "routeUnavailable": "不可用",
           "routeMeasuring": "测速中…",
-          "routeDirectUnavailableHint": "当前网络无法直连此设备"
+          "routeDirectUnavailableHint": "当前网络无法直连此设备",
+          "routePreferenceFailed": "切换线路失败，请重试"
         },
         "protocol": {
           "agentNet": "Agent-Net",

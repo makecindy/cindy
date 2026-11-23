@@ -161,9 +161,18 @@ export function RemoteConnectionV2Section({
     });
   }, [t]);
 
-  const onPathPreferenceChange = useCallback((node: TopologyNode, preference: 'auto' | 'direct' | 'relay') => {
-    void window.electronAPI?.deviceLink?.setPeerPathPreference?.(node.id, preference);
-  }, []);
+  const onPathPreferenceChange = useCallback(async (node: TopologyNode, preference: 'auto' | 'direct' | 'relay') => {
+    const setPref = window.electronAPI?.deviceLink?.setPeerPathPreference;
+    if (!setPref) return false;
+    try {
+      await setPref(node.id, preference);
+      return true;
+    } catch (err) {
+      log.warn('setPeerPathPreference failed', err);
+      toast.error(t('settings.remoteControl.v2.popover.routePreferenceFailed'));
+      return false;
+    }
+  }, [t]);
 
   const linkStatusText = t(`settings.devices.linkStatus.${s.linkStatus}`);
   const offlineToggleVisible = model.stats.offline >= 2;

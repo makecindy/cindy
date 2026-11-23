@@ -92,6 +92,8 @@ export interface CoreDial {
 }
 
 const hex = (bytes: Uint8Array) => Buffer.from(bytes).toString('hex');
+const sameAddress = (a: Address | null, b: Address | null): boolean =>
+  a !== null && b !== null && a.address === b.address && a.port === b.port;
 
 class CoreChannel implements PeerChannel {
   readonly remoteId: string;
@@ -140,7 +142,7 @@ class CoreChannel implements PeerChannel {
   constructor(
     private readonly connection: Connection,
     localCandidates: Address[],
-    reprobeMs: number,
+    private readonly reprobeMs: number,
     private readonly publicOnly = false,
     private readonly relayAddress: () => PeerAddress | null = () => null,
   ) {
@@ -237,6 +239,10 @@ class CoreChannel implements PeerChannel {
       .sort((a, b) => Number(isPrivate(a.address)) - Number(isPrivate(b.address)))
       .slice(0, MAX_CANDIDATES);
     this.nextCandidate = 0;
+    // 对端换网或重新公布候选时，若当前未走直连且旧直连地址已不在新候选列表里，清掉旧缓存以便立即探测新候选。
+    if (this.path() !== 'direct' && this.lastDirectAddress && !this.candidates.some((c) => sameAddress(c, this.lastDirectAddress))) {
+      this.lastDirectAddress = null;
+    }
     if (this.effectivePreferRelay()) this.measureStandbyPath();
     else this.probeCandidates();
   }
@@ -326,14 +332,24 @@ class CoreChannel implements PeerChannel {
       this.measuredRelayRttMs = rttMs;
       this.measuredRelayAt = now;
     } else {
-      this.lastDirectAddress = address;
-      this.measuredDirectRttMs = rttMs;
-      this.measuredDirectAt = now;
+      const existingFresh = this.freshRtt(this.measuredDirectRttMs, this.measuredDirectAt, now);
+      // 同一轮多候选测速里保留更快的直连地址，避免慢公网回包覆盖刚测出的局域网低延迟直连。
+      const keepExisting =
+        this.lastDirectAddress !== null &&
+        !sameAddress(this.lastDirectAddress, address) &&
+        existingFresh !== null &&
+        now - this.measuredDirectAt < this.reprobeMs &&
+        existingFresh < rttMs;
+      if (!keepExisting) {
+        this.lastDirectAddress = address;
+        this.measuredDirectRttMs = rttMs;
+        this.measuredDirectAt = now;
+      }
     }
     const autoChanged = this.evaluateAutoRoute(true);
     // 正在中转且自动模式测出直连不比中转明显慢：马上发起真正切换。
     if (!autoChanged && !isLinkAddress(address) && this.path() === 'relay' && !this.effectivePreferRelay()) {
-      this.connection.probe(address);
+      this.connection.probe(this.lastDirectAddress ?? address);
     }
   }
 
@@ -357,6 +373,26 @@ class CoreChannel implements PeerChannel {
     return true;
   }
 
+  private pickDirectTargets(): Address[] {
+    const now = performance.now();
+    if (this.lastDirectAddress && this.freshRtt(this.measuredDirectRttMs, this.measuredDirectAt, now) === null) {
+      this.lastDirectAddress = null;
+    }
+    const targets: Address[] = [];
+    if (this.lastDirectAddress) targets.push(this.lastDirectAddress);
+    const total = this.candidates.length;
+    if (total > 0 && targets.length < PROBES_PER_ROUND) {
+      let checked = 0;
+      while (checked < total && targets.length < PROBES_PER_ROUND) {
+        const candidate = this.candidates[this.nextCandidate % total];
+        this.nextCandidate = (this.nextCandidate + 1) % total;
+        checked++;
+        if (!targets.some((item) => sameAddress(item, candidate))) targets.push(candidate);
+      }
+    }
+    return targets;
+  }
+
   private applyRoutePreference(triggerSwitch: boolean): void {
     if (this.events.closed || this.connection.closed) return;
     const preferRelay = this.effectivePreferRelay();
@@ -367,8 +403,7 @@ class CoreChannel implements PeerChannel {
       const relay = this.relayAddress();
       if (relay) this.connection.probe(relay);
     } else if (!preferRelay && current === 'relay') {
-      if (this.lastDirectAddress) this.connection.probe(this.lastDirectAddress);
-      else this.probeCandidates();
+      for (const target of this.pickDirectTargets()) this.connection.probe(target);
     }
   }
 
@@ -379,13 +414,7 @@ class CoreChannel implements PeerChannel {
       const relay = this.relayAddress();
       if (relay) this.connection.measure(relay);
     } else if (current === 'relay' && this.effectivePreferRelay()) {
-      if (this.lastDirectAddress) {
-        this.connection.measure(this.lastDirectAddress);
-      } else {
-        const count = Math.min(PROBES_PER_ROUND, this.candidates.length);
-        for (let i = 0; i < count; i++) this.connection.measure(this.candidates[(this.nextCandidate + i) % this.candidates.length]);
-        this.nextCandidate = (this.nextCandidate + count) % Math.max(1, this.candidates.length);
-      }
+      for (const target of this.pickDirectTargets()) this.connection.measure(target);
     }
   }
 

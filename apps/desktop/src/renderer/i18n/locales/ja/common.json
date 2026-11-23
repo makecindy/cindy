@@ -6816,7 +6816,8 @@
           "routeRelay": "中継",
           "routeUnavailable": "利用不可",
           "routeMeasuring": "計測中…",
-          "routeDirectUnavailableHint": "現在のネットワークではこのデバイスに直接接続できません"
+          "routeDirectUnavailableHint": "現在のネットワークではこのデバイスに直接接続できません",
+          "routePreferenceFailed": "ルートの切り替えに失敗しました。もう一度お試しください。"
         },
         "protocol": {
           "agentNet": "Agent-Net",

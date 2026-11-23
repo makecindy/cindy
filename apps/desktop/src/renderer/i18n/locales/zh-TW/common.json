@@ -6816,7 +6816,8 @@
           "routeRelay": "中繼",
           "routeUnavailable": "無法使用",
           "routeMeasuring": "測速中…",
-          "routeDirectUnavailableHint": "目前網路無法直連此裝置"
+          "routeDirectUnavailableHint": "目前網路無法直連此裝置",
+          "routePreferenceFailed": "切換線路失敗，請重試"
         },
         "protocol": {
           "agentNet": "Agent-Net",

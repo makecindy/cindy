@@ -118,7 +118,7 @@ export interface RemoteConnectionTopologyProps {
   switches?: ReadonlyMap<string, RemoteSwitchEntry>;
   onSwitch?: (node: TopologyNode, target: RemoteSwitchTarget) => void;
   /** 手动切换本机到指定设备的 Agent-Net 选路偏好(auto / direct / relay)。 */
-  onPathPreferenceChange?: (node: TopologyNode, preference: DeviceLinkPeerPathPreference) => void;
+  onPathPreferenceChange?: (node: TopologyNode, preference: DeviceLinkPeerPathPreference) => Promise<boolean | void> | void;
 }
 
 /**
