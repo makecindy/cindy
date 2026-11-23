@@ -531,6 +531,10 @@ function SourceFilter({
   const count = (n: number) => (
     <span className="text-12 tabular-nums text-[var(--text-tertiary)]">{n}</span>
   );
+  // Importing every task of the chosen source drops it from the rescan counts; keep it as a
+  // 0-count option so the trigger still names the active filter (as the old menu trigger did).
+  const options: Array<[ImportSourceId, number]> =
+    value !== 'all' && !counts.some(([id]) => id === value) ? [...counts, [value, 0]] : counts;
   return (
     <Select
       data-settings-search-action="Filters the importable task list by its source tool"
@@ -539,7 +543,7 @@ function SourceFilter({
       size="compact"
       options={[
         { value: 'all', label: t('settings.sessionImport.allSources'), endAdornment: count(total) },
-        ...counts.map(([id, n]) => ({ value: id, label: IMPORT_SOURCE_NAMES[id], endAdornment: count(n) })),
+        ...options.map(([id, n]) => ({ value: id, label: IMPORT_SOURCE_NAMES[id], endAdornment: count(n) })),
       ]}
       onValueChange={(next) => onChange(next as ImportSourceId | 'all')}
     />
