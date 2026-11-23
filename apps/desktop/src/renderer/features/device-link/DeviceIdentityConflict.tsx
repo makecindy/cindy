@@ -75,6 +75,10 @@ export function DeviceIdentityConflictNotice() {
 
 /** 本机卡片里的冲突说明；conflict 由卡片读取，同一份状态也用来收起重复的连接问题提示。 */
 export function DeviceIdentityConflictRow({ conflict }: { conflict: DeviceLinkIdentityConflict | null }) {
+  return conflict ? <ConfirmedDeviceIdentityConflictRow conflict={conflict} /> : null;
+}
+
+function ConfirmedDeviceIdentityConflictRow({ conflict }: { conflict: DeviceLinkIdentityConflict }) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
   const [replacing, setReplacing] = useState(false);
@@ -103,7 +107,6 @@ export function DeviceIdentityConflictRow({ conflict }: { conflict: DeviceLinkId
     }
   }, [confirm, t]);
 
-  if (!conflict) return null;
   const name = conflict.otherDeviceName;
   return (
     <div className="mt-3 flex flex-col gap-2 border-t border-[var(--border-default)] pt-3">

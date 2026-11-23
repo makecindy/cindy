@@ -212,8 +212,8 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
    * The cross-account and compatibility connections register the same device identity on the official relay, so another
    * computer with that identity replaces them too. Both the signal and the host's cool-down cover every such connection.
    */
-  override onReplaced(cb: (event: DeviceLinkReplacedEvent) => void): () => void {
-    const offs = [super.onReplaced(cb), this.crossAccount?.onReplaced(cb), this.legacy?.onReplaced(cb)];
+  override onReplaced(cb: (event: DeviceLinkReplacedEvent, onOfficialCrossAccount?: boolean) => void): () => void {
+    const offs = [super.onReplaced(cb), this.crossAccount?.onReplaced((event) => cb(event, true)), this.legacy?.onReplaced(cb)];
     return () => { for (const off of offs) off?.(); };
   }
 

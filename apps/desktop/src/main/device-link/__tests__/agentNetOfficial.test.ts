@@ -70,12 +70,15 @@ it('single-flights account enrollment and keeps the signed identity in the exist
 // 2026-11-23：两台电脑共用硬件身份，用户在冲突提示里给这台换了新身份并重启。旧证书属于让出去的
 // 身份，这台要按新身份重新登记，不能卡在 AGENT_NET_IDENTITY_MISMATCH；其它身份不符照旧拒绝。
 it('enrolls again under a replacement identity but still rejects any other identity mismatch', async () => {
-  await ensureOfficialAgentNetClient('Unit device');
+  const original = await ensureOfficialAgentNetClient('Unit device');
   state.deviceId = 'other-device';
   await expect(ensureOfficialAgentNetClient('Unit device')).rejects.toThrow('AGENT_NET_IDENTITY_MISMATCH');
   state.deviceId = 'replacement-device'; state.replaced = 'unit-device';
   const renewed = await ensureOfficialAgentNetClient('Unit device');
   expect(renewed.certificate.deviceId).toBe('replacement-device');
+  expect(renewed.certificate.signingKey).not.toBe(original.certificate.signingKey);
+  expect(renewed.certificate.transportKey).not.toBe(original.certificate.transportKey);
+  expect((await ensureOfficialAgentNetClient('Unit device')).certificate).toEqual(renewed.certificate);
   expect(state.secrets.get(officialAgentNetSlot()).agentNet.certificate.deviceId).toBe('replacement-device');
   expect(state.requests).toBe(2);
 });

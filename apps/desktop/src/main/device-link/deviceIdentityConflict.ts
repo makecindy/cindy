@@ -38,8 +38,7 @@ export interface DeviceIdentityConflictMonitorDeps {
 }
 
 export interface DeviceIdentityConflictMonitor {
-  noteReplaced(): void;
-  noteDirectory(rows: readonly DeviceIdentityDirectoryRow[]): void;
+  noteReplaced(readDirectory?: DeviceIdentityConflictMonitorDeps['readDirectory']): void;
   current(): DeviceIdentityConflict | null;
   /** 换账号、登出或连接拆除：清掉证据与已确认状态。 */
   reset(): void;
@@ -119,7 +118,7 @@ export function createDeviceIdentityConflictMonitor(
     evaluate();
   };
 
-  const maybeSample = () => {
+  const maybeSample = (readDirectory: DeviceIdentityConflictMonitorDeps['readDirectory']) => {
     const at = now();
     if (conflict || sampling || replacedAt.length < MIN_REPLACEMENTS) return;
     if (at - lastSampleAt < DIRECTORY_SAMPLE_INTERVAL_MS) return;
@@ -127,7 +126,7 @@ export function createDeviceIdentityConflictMonitor(
     sampling = true;
     const started = generation;
     // 被顶替的这一刻，目录里本机这一行刚被另一台电脑的连接改写，读取要赶在本机重连之前。
-    void deps.readDirectory().then(
+    void readDirectory().then(
       (rows) => { if (started === generation) noteDirectory(rows); },
       () => { /* 目录读不到只少一次取样，下一次被顶替再读。 */ },
     ).finally(() => { if (started === generation) sampling = false; });
@@ -145,7 +144,7 @@ export function createDeviceIdentityConflictMonitor(
   };
 
   return {
-    noteReplaced() {
+    noteReplaced(readDirectory = deps.readDirectory) {
       const at = now();
       // 同一次顶替可能同时关掉主连接和兼容连接，算一次。
       const last = replacedAt[replacedAt.length - 1];
@@ -153,9 +152,8 @@ export function createDeviceIdentityConflictMonitor(
       prune(at);
       armQuietClear();
       evaluate();
-      maybeSample();
+      maybeSample(readDirectory);
     },
-    noteDirectory,
     current: () => conflict,
     reset() {
       generation += 1;

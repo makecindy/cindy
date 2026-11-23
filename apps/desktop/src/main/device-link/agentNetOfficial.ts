@@ -36,7 +36,12 @@ function currentEnrollment(secrets: RelaySecrets): RelaySecrets['agentNet'] {
 }
 function identity(slot: string, secrets: RelaySecrets): Identity {
   const stored = currentEnrollment(secrets);
-  if (!stored) return identityFromSeed(slot, secrets.seed, getDeviceId());
+  if (!stored) {
+    const deviceId = getDeviceId();
+    // A cloned profile may share the old seed. Keep the other device's keys distinct from the new identity.
+    const context = getReplacedHardwareDeviceId() ? `${slot}/replacement/${deviceId}` : slot;
+    return identityFromSeed(context, secrets.seed, deviceId);
+  }
   const signingPrivateKey = createPrivateKey(stored.signingPrivateKey), transportPrivateKey = createPrivateKey(stored.transportPrivateKey);
   const c = stored.certificate;
   if (stored.version !== 2 || signingPrivateKey.asymmetricKeyType !== 'ed25519' || transportPrivateKey.asymmetricKeyType !== 'x25519'
