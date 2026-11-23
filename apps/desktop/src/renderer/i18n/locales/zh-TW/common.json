@@ -4096,6 +4096,7 @@
         "refreshReconnect": "模型列表重新整理失敗。重新連線此供應商後再試。",
         "refreshFetchDisabled": "模型目錄遠端擷取未啟用，已跳過重新整理",
         "withdrawn": {
+          "rowStatus": "上次重新整理未列出",
           "refreshFound": "有 {{count}} 個模型上游已不再提供",
           "refreshAdded": "新增 {{added}} 個模型，另有 {{count}} 個上游已不再提供",
           "refreshSuspicious": "這次有 {{count}} 個模型沒回傳，可能是上游暫時回傳不完整",

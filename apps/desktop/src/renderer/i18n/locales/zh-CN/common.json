@@ -4096,6 +4096,7 @@
         "refreshReconnect": "模型列表刷新失败。重新连接此供应商后再试。",
         "refreshFetchDisabled": "模型目录远程拉取未启用，已跳过刷新",
         "withdrawn": {
+          "rowStatus": "上次刷新未列出",
           "refreshFound": "有 {{count}} 个模型上游已不再提供",
           "refreshAdded": "新增 {{added}} 个模型，另有 {{count}} 个上游已不再提供",
           "refreshSuspicious": "这次有 {{count}} 个模型没返回，可能是上游暂时返回不全",

@@ -4096,6 +4096,7 @@
         "refreshReconnect": "モデル一覧を更新できませんでした。このプロバイダーに再接続してから、もう一度お試しください。",
         "refreshFetchDisabled": "モデルカタログのリモート取得が無効のため、更新をスキップしました",
         "withdrawn": {
+          "rowStatus": "前回の更新で未掲載",
           "refreshFound": "提供元で提供終了したモデル：{{count}} 件",
           "refreshAdded": "新しいモデル {{added}} 件、提供終了したモデル {{count}} 件",
           "refreshSuspicious": "今回 {{count}} 件のモデルが返されませんでした。一覧が一時的に不完全な可能性があります",

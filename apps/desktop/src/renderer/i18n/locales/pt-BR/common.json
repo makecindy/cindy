@@ -4192,6 +4192,7 @@
         "refreshReconnect": "Não foi possível atualizar a lista de modelos. Reconecte este provedor e tente novamente.",
         "refreshFetchDisabled": "A busca no catálogo remoto de modelos está desativada — atualização ignorada",
         "withdrawn": {
+          "rowStatus": "Ausente na última atualização",
           "refreshFound": "Modelos que não são mais oferecidos: {{count}}",
           "refreshAdded": "Novos modelos: {{added}}. Não oferecidos mais: {{count}}",
           "refreshSuspicious": "Modelos não retornados desta vez: {{count}}. A lista pode estar incompleta",
