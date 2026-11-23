@@ -9,6 +9,7 @@ import { assertSharedTaskQueueMutation } from './sharedTaskInput.js';
 import { acceptTaskActionRecoveryCopy, assertTaskActionCurrent, bindTaskActionInput, combineInputGuards, hasTaskActionAuthorization, taskActionRevocationCode, taskActionInputGuard, TASK_ACTION_INPUT_GUARD } from './taskActionAuthorization.js';
 import { isBotGroupClientId } from '../../shared/botGroupChat.js';
 import { BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON } from './botCandidateRecovery.js';
+import { BotCapabilityRefreshDeferredError } from './botCompactRuntimeRefresh.js';
 import { SchedulerQueuedPreparationError } from './schedulerQueuedPreparation.js';
 import { SnapshotOperationDeadlineError } from '../utils/operationBudget.js';
 import { ProviderGroupUsageLimitError } from '../provider-group/failurePolicy.js';
@@ -132,6 +133,8 @@ const MAX_AUTO_RESUME_DISPATCH_ATTEMPTS = 3;
  * 会白做几百次,取 10s(事件路径正常时用户等待时长由事件决定,感知不到兜底)。
  */
 const CREDENTIAL_SWITCH_RETRY_DELAY_MS = 10_000;
+// One fallback for an idle session that receives no refresh completion event.
+const BOT_CAPABILITY_REFRESH_RETRY_DELAY_MS = 2_000;
 const TERMINAL_DONE_FALLBACK_DELAY_MS = 250;
 const REWIND_BOUNDARY_POLL_INTERVAL_MS = 100;
 
@@ -951,6 +954,7 @@ interface SessionInputState {
   credentialSwitchWait: { clientId: string; blockedBySessionIds: string[] } | null;
   credentialSwitchRetryTimer: ReturnType<typeof setTimeout> | null;
   credentialSwitchRetryGeneration: number | null;
+  botCapabilityRefreshVersion: number;
   /**
    * 近期已受理的 enqueue clientId 环形窗口(容量小、常驻内存)。用于控制端弱网
    * 重发的幂等判定:同 clientId 的重复投递即使原 turn 已极快结束(不在队列 /
@@ -1030,6 +1034,7 @@ function createInitialInputState(
     credentialSwitchWait: null,
     credentialSwitchRetryTimer: null,
     credentialSwitchRetryGeneration: null,
+    botCapabilityRefreshVersion: 0,
     recentEnqueuedClientIds: [],
     generation,
     clearBoundaryMs,
@@ -1402,6 +1407,10 @@ export class AgentInputCoordinator {
   }
 
   private readonly states = new Map<string, SessionInputState>();
+  private readonly botCapabilityRefreshWaits = new WeakMap<AgentInputQueuedMessage, {
+    waiting: boolean;
+    timer: ReturnType<typeof setTimeout> | null;
+  }>();
   // Stop can drop the active turn before the in-flight replacement reports
   // whether its send reached the executor. The transaction releases the claim.
   private readonly sharedReconnectClaims = new Map<string, { clientId: string; runId: string }>();
@@ -5617,6 +5626,7 @@ export class AgentInputCoordinator {
     const head = state.pendingQueue[0];
     if (!head) return 'queue-empty';
     if (this.getDrainableCompact(sessionId, state)) return 'compact-first';
+    if (this.botCapabilityRefreshWaits.get(head)?.waiting) return 'bot-capability-refresh';
     if (state.queueEditLocks.includes(head.clientId)) return 'edit-lock';
     return null;
   }
@@ -5783,6 +5793,7 @@ export class AgentInputCoordinator {
       this.scheduleExternalTurnRetryIfNeeded(sessionId, state, `drain-blocked:${reason}`);
       return;
     }
+    const refreshVersion = state.botCapabilityRefreshVersion;
     const head = this.coalesceAutoBridgeHead(sessionId, state, drainHead);
     state.staleLiveIdleSinceMs = null;
     state.pendingQueue = state.pendingQueue.slice(1);
@@ -6176,6 +6187,14 @@ export class AgentInputCoordinator {
           this.discardAutoResumeBeforeDispatch(sessionId, head);
           this.emit(sessionId);
           this.deps.onQueueEmptied?.(sessionId);
+          return;
+        }
+        if (err instanceof BotCapabilityRefreshDeferredError && !isAutomaticInputOriginKind(head.origin?.kind)) {
+          latest.activeTurn = null;
+          this.prependQueueHeadIfMissing(latest, head);
+          this.clearCredentialSwitchWait(latest);
+          this.deferQueueHeadForBotCapabilityRefresh(sessionId, latest, head, refreshVersion);
+          this.emit(sessionId);
           return;
         }
         latest.activeTurn = null;
@@ -6581,6 +6600,46 @@ export class AgentInputCoordinator {
   /** host 侧异步边界(pending 凭证切换 apply 完成等)后恢复该会话的队列派发。 */
   wakeSession(sessionId: string, reason: string): void {
     this.scheduleDrain(sessionId, reason);
+  }
+
+  private deferQueueHeadForBotCapabilityRefresh(
+    sessionId: string,
+    state: SessionInputState,
+    head: AgentInputQueuedMessage,
+    refreshVersion: number,
+  ): void {
+    const previous = this.botCapabilityRefreshWaits.get(head);
+    const wait = previous ?? { waiting: true, timer: null };
+    wait.waiting = state.botCapabilityRefreshVersion === refreshVersion;
+    this.botCapabilityRefreshWaits.set(head, wait);
+    if (!wait.waiting) {
+      // Refresh can finish while the rejected send is unwinding.
+      this.scheduleDrain(sessionId, 'bot-capability-refresh-ready');
+    } else if (!previous) {
+      const timer = setTimeout(() => {
+        wait.timer = null;
+        wait.waiting = false;
+        if (this.states.get(sessionId) === state && state.pendingQueue[0] === head) {
+          this.scheduleDrain(sessionId, 'bot-capability-refresh-retry');
+        }
+      }, BOT_CAPABILITY_REFRESH_RETRY_DELAY_MS);
+      timer.unref?.();
+      wait.timer = timer;
+    }
+  }
+
+  onBotCapabilityRefreshReady(sessionId: string): void {
+    const state = this.states.get(sessionId);
+    if (!state) return;
+    state.botCapabilityRefreshVersion += 1;
+    for (const item of state.pendingQueue) {
+      const wait = this.botCapabilityRefreshWaits.get(item);
+      if (!wait?.waiting) continue;
+      if (wait.timer) clearTimeout(wait.timer);
+      wait.timer = null;
+      wait.waiting = false;
+      if (item === state.pendingQueue[0]) this.scheduleDrain(sessionId, 'bot-capability-refresh-ready');
+    }
   }
 
   private scheduleCredentialSwitchRetry(sessionId: string): void {
