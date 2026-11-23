@@ -4764,7 +4764,68 @@
         "hint": "经已系之飞书或 Lark 机器人，私遣君一讯；唯于窗口失焦时遣之。",
         "disabledHint": "须先设 Bot，并遣之一讯以成其系。"
       },
-      "bind": "系之"
+      "bind": "系之",
+      "groups": {
+        "title": "群议",
+        "description": "为机器人所在之某群另定项目、模型与权柄。",
+        "rules": "未另定者：已系项目之群从「案与模型」中该项目之设，未系项目之群从上方「新言谈配置」与「群议新差事之权柄档」。群之主线与其话题共一群之设。",
+        "expand": "展",
+        "collapse": "收",
+        "groupCount_one": "{{count}} 群",
+        "groupCount_other": "{{count}} 群",
+        "customCount_one": "{{count}} 群另设",
+        "customCount_other": "{{count}} 群另设",
+        "refresh": "重读",
+        "loading": "正读群录…",
+        "loadFailed": "群录未能读得，请稍后点「重读」再试。",
+        "saveFailed": "群设未能存",
+        "notConnected": "机器人连上后方能列其所在之群。下方唯列已另设之群。",
+        "empty": "机器人尚未入群。引之入群后，再来此设之。",
+        "listPermission": "未能读机器人所在之群：请于飞书开放平台为此应用开「获取群组信息」之权。下方先列机器人曾用之群。",
+        "listUnavailable": "暂未能读机器人所在之群，下方先列机器人曾用之群。",
+        "unnamed": "无名之群（{{id}}）",
+        "summaryModel": "另定模型",
+        "summaryPermission": "另定权柄",
+        "expandAria": "设「{{name}}」",
+        "searchLabel": "寻群",
+        "searchPlaceholder": "以群名寻之",
+        "customHeading": "另设者",
+        "followHeading": "从渠道之设者",
+        "showMore": "再显 {{count}} 个",
+        "showLess": "收",
+        "noMatch": "未见名含「{{query}}」之群",
+        "project": {
+          "label": "项目",
+          "follow": "言谈",
+          "missing": "{{name}}（已离侧栏）",
+          "hint": "于群中初 @ 机器人、开新话题或发 /new 时乃行，进行之差事不移。择项目，则模型与权柄常从此项目于「案与模型」之设；择「言谈」，则差事置于机器人之言谈目录，从上方「新言谈配置」。唯可择侧栏中本机之项目。"
+        },
+        "model": {
+          "label": "模型与思之深浅",
+          "hintFollow": "从「新言谈配置」。于此换模型或思之深浅，则唯及此群。",
+          "hintFollowProject": "从项目「{{project}}」于「案与模型」之设。于此换模型或思之深浅，则唯及此群。",
+          "hintProjectUnavailable": "项目「{{project}}」于「案与模型」所定之模型今不可用。可往彼处重择，或于此为此群另择之。",
+          "hintFixed": "此群另定模型。群中未另改模型之差事，得下一言时即换之；新差事径用之。"
+        },
+        "permission": {
+          "label": "权柄",
+          "hintFollow": "今从「群议新差事之权柄档」。唯及此后于此群新开之差事，既有差事请于群中以 /permission 切换。",
+          "hintFollowProject": "今从项目「{{project}}」于「案与模型」之权柄。唯及此后于此群新开之差事，既有差事请于群中以 /permission 切换。",
+          "hintFixed": "此群另定权柄。唯及此后于此群新开之差事，既有差事请于群中以 /permission 切换。"
+        },
+        "fullAccessConfirm": {
+          "title": "令「{{name}}」以完全访问行之乎？",
+          "description": "此后于此群新开之差事皆径行，不复逐项确认，群中无论何人 @ 机器人皆然。群议之言由成员掌之，请确保群中之人皆可信。",
+          "confirm": "改为完全访问",
+          "cancel": "罢"
+        },
+        "widerConfirm": {
+          "title": "宽「{{name}}」之权柄乎？",
+          "description": "此后于此群新开之差事，将由「{{current}}」易为「{{next}}」，群中无论何人 @ 机器人皆然。群议之言由成员掌之，请确保群中之人皆可信。",
+          "confirm": "仍改之",
+          "cancel": "罢"
+        }
+      }
     },
     "wechatBot": {
       "title": "个人微信",
