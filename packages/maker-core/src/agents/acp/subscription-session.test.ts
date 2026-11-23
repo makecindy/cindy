@@ -248,10 +248,15 @@ describe('AntigravityAgent native Cindy contract', () => {
     const change = handle.setPermissionMode!('bypassPermissions');
     const rejectedChange = expect(change).rejects.toThrow('CLOSED');
     await vi.waitFor(() => expect(release).toBeTypeOf('function'), { interval: 1 });
+    // Unit: this deferred RPC owns the runtime even without a running turn.
+    // Idle-only close must see it while the permission replacement is pending.
+    expect(handle.isTurnRunning?.()).toBe(false);
+    expect(handle.hasPendingHostOperation?.()).toBe(true);
     await expect(handle.send({ type: 'user', content: 'hello' })).rejects.toThrow('TURN_UNSUPPORTED');
     const closing = handle.close();
     release({ transport: replacement.transport, assertSubscriptionOnly: replacement.policy });
     await rejectedChange; await closing;
+    expect(handle.hasPendingHostOperation?.()).toBe(false);
     expect(closeReplacement).toHaveBeenCalled();
     expect(allowed).not.toHaveBeenCalled();
     expect(replacement.sent.some(x => x.method === 'session/prompt')).toBe(false);

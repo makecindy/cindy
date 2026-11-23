@@ -888,7 +888,16 @@ import {
 } from './orcaIdleReleaseWatcher.js';
 import { createOrcaWorkerResumeScheduler } from './orcaWorkerResumeScheduler.js';
 import { readClaudeIdleMinutes } from '../maker-host/claude-idle-release-settings.js';
-import { createClaudeIdleReleaseWatcher, createIdleReleaseRuntimeClose, createOrdinaryIdleReleaseTaskCheck, ORDINARY_CLAUDE_TASK_SQL, ORDINARY_CODEX_TASK_SQL, DEFAULT_CODEX_IDLE_RELEASE_MINUTES } from './claudeIdleReleaseWatcher.js';
+import {
+  createClaudeIdleReleaseWatcher,
+  createIdleReleaseRuntimeClose,
+  createOrdinaryIdleReleaseTaskCheck,
+  DEFAULT_ANTIGRAVITY_IDLE_RELEASE_MINUTES,
+  DEFAULT_CODEX_IDLE_RELEASE_MINUTES,
+  ORDINARY_ANTIGRAVITY_TASK_SQL,
+  ORDINARY_CLAUDE_TASK_SQL,
+  ORDINARY_CODEX_TASK_SQL,
+} from './claudeIdleReleaseWatcher.js';
 import { configureTaskArchiveRuntime } from '../task-management/service.js';
 import { hasIdleReleaseQueuedWork, hasPendingIdleReleaseInput as hasPendingIdleReleaseInputFor, hasScheduledIdleReleaseAutoResume } from './idleReleaseInputGates.js';
 import {
@@ -3349,6 +3358,7 @@ let idleReleaseWatcher: OrcaIdleReleaseWatcher | null = null;
 let piIdleReleaseWatcher: PiIdleReleaseWatcher | null = null;
 let claudeIdleReleaseWatcher: ReturnType<typeof createClaudeIdleReleaseWatcher> | null = null;
 let codexIdleReleaseWatcher: ReturnType<typeof createClaudeIdleReleaseWatcher> | null = null;
+let antigravityIdleReleaseWatcher: ReturnType<typeof createClaudeIdleReleaseWatcher> | null = null;
 
 /**
  * 取 Orca collab service, ready 前返 null。registerMakerIpc 执行完成后 holder
@@ -3389,6 +3399,8 @@ export function stopOrcaIdleWatcher(): void {
   claudeIdleReleaseWatcher = null;
   codexIdleReleaseWatcher?.stop();
   codexIdleReleaseWatcher = null;
+  antigravityIdleReleaseWatcher?.stop();
+  antigravityIdleReleaseWatcher = null;
   configureTaskArchiveRuntime(null);
   idleReleaseWatcher?.stop();
   idleReleaseWatcher = null;
@@ -16958,6 +16970,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
   piIdleReleaseWatcher.start();
 
+  const isIdleReleaseHostBusy = (id: string) => isSessionTurnPendingCompletion(id)
+    || hasPendingAgentInteractionForSession(id)
+    || hasIdleReleaseQueuedWork(inputCoordinator, id)
+    || pendingCredentialSwitchHolder?.has(id) === true;
+
   // Ordinary local Claude tasks retain their native resume identity and task
   // resources. Specialized owners (bots, Orca, Goals, remote agents) stay out.
   claudeIdleReleaseWatcher?.stop();
@@ -16967,11 +16984,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     readMinutes: readClaudeIdleMinutes,
     isOrdinaryTask: createOrdinaryIdleReleaseTaskCheck(getDbClient, ORDINARY_CLAUDE_TASK_SQL),
     hasPendingInput: hasPendingIdleReleaseInput,
-    isHostBusy: (id) => isSessionTurnPendingCompletion(id)
-      || hasPendingAgentInteractionForSession(id)
-      || Boolean(getClaudeSessionBackgroundActivity(id))
-      || hasIdleReleaseQueuedWork(inputCoordinator, id)
-      || pendingCredentialSwitchHolder?.has(id) === true,
+    isHostBusy: (id) => isIdleReleaseHostBusy(id) || getClaudeSessionBackgroundActivity(id),
     withLock: withSendToSessionLock,
     // The existing suppression window is sampled by the synchronous status
     // listener and onClose hook before it yields; no task resources are removed.
@@ -17007,10 +17020,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     readMinutes: () => DEFAULT_CODEX_IDLE_RELEASE_MINUTES,
     isOrdinaryTask: createOrdinaryIdleReleaseTaskCheck(getDbClient, ORDINARY_CODEX_TASK_SQL),
     hasPendingInput: hasPendingIdleReleaseInput,
-    isHostBusy: (id) => isSessionTurnPendingCompletion(id)
-      || hasPendingAgentInteractionForSession(id)
-      || hasIdleReleaseQueuedWork(inputCoordinator, id)
-      || pendingCredentialSwitchHolder?.has(id) === true,
+    isHostBusy: isIdleReleaseHostBusy,
     withLock: withSendToSessionLock,
     close: createIdleReleaseRuntimeClose(maker, withRehydrateCloseSuppressed),
     now: () => performance.now(),
@@ -17018,6 +17028,29 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     warn: (message) => log.warn(message),
   });
   codexIdleReleaseWatcher.start();
+
+  // Antigravity exposes command-exit wake claims on Session. The host tracker
+  // also sees ACP background activity that has no Session background task.
+  antigravityIdleReleaseWatcher?.stop();
+  antigravityIdleReleaseWatcher = createClaudeIdleReleaseWatcher({
+    agentKind: 'antigravity',
+    listSessions: () => maker.listActiveSessions(),
+    getSession: (id) => maker.getSession(id),
+    readMinutes: () => DEFAULT_ANTIGRAVITY_IDLE_RELEASE_MINUTES,
+    isOrdinaryTask: createOrdinaryIdleReleaseTaskCheck(getDbClient, ORDINARY_ANTIGRAVITY_TASK_SQL),
+    hasPendingInput: hasPendingIdleReleaseInput,
+    isHostBusy: (id) => isIdleReleaseHostBusy(id) || getClaudeSessionBackgroundActivity(id)
+      || maker.getSession(id)?.hasPendingHostOperation() === true,
+    withLock: async (id, closeIfStillIdle) => {
+      // A queued scan would keep the wake blocked after the current sender leaves.
+      if (!hasSendToSessionLock(id)) await withSendToSessionLock(id, closeIfStillIdle);
+    },
+    close: createIdleReleaseRuntimeClose(maker, withRehydrateCloseSuppressed),
+    now: () => performance.now(),
+    released: (sessionId, idleMs) => log.info('antigravityIdleWatcher: released idle runtime', { sessionId, idleMs }),
+    warn: (message) => log.warn(message),
+  });
+  antigravityIdleReleaseWatcher.start();
 
   let applySessionRuntimeSelection: ApplySessionRuntimeSelection = async () => {
     throw new Error('session runtime selection is not ready');

@@ -746,6 +746,7 @@ export class AntigravityAgent extends BaseAgent {
       id: scope + id, agentKind: 'antigravity', get model() { return session.currentModel ?? opts.model; },
       setInteractionResolver(next) { resolver = next; }, events: () => queue,
       isTurnRunning: () => active,
+      hasPendingHostOperation: () => control !== undefined,
       countPendingWakeContinuations: () => commandWake && Date.now() < commandWake.deadline ? 1 : 0,
       cancelPendingBackgroundWake,
       getUsageSnapshot: () => ({ ...usage }),

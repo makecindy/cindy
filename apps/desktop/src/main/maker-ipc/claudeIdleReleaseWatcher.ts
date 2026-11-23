@@ -8,10 +8,16 @@ export type IdleClaudeSession = Pick<Session, 'id' | 'agentKind' | 'remoteHostId
   & Partial<Pick<Session, 'hasLiveBackgroundWork'>>;
 /** Codex mirrors the Pi and Claude 30-minute default; no separate setting. */
 export const DEFAULT_CODEX_IDLE_RELEASE_MINUTES = 30;
+export const DEFAULT_ANTIGRAVITY_IDLE_RELEASE_MINUTES = 15;
 /** Engines whose ordinary local tasks share this reclamation policy. */
-export type IdleReleaseAgentKind = 'claude-code' | 'codex';
+export type IdleReleaseAgentKind = 'claude-code' | 'codex' | 'antigravity';
+const engineLabels: Record<IdleReleaseAgentKind, string> = {
+  'claude-code': 'Claude',
+  codex: 'Codex',
+  antigravity: 'Antigravity',
+};
 export interface ClaudeIdleReleaseDeps {
-  /** Defaults to Claude; Codex reuses the same gates plus its async background probe. */
+  /** Defaults to Claude. */
   agentKind?: IdleReleaseAgentKind;
   listSessions(): IdleClaudeSession[];
   getSession(id: string): IdleClaudeSession | undefined;
@@ -19,15 +25,22 @@ export interface ClaudeIdleReleaseDeps {
   isOrdinaryTask(id: string, sdkSessionId: string): Promise<boolean>;
   hasPendingInput(id: string): Promise<boolean>;
   isHostBusy(id: string): boolean;
-  withLock<T>(id: string, fn: () => Promise<T>): Promise<T>;
+  withLock(id: string, fn: () => Promise<void>): Promise<void>;
   close(session: IdleClaudeSession, retryFailedClose: boolean): Promise<boolean>;
   now(): number;
   released(sessionId: string, idleMs: number): void;
   warn(message: string): void;
 }
 
+interface IdleReleaseState {
+  since: number;
+  generation: number;
+  closeFailed: boolean;
+  unsubscribe(): void;
+}
+
 /** Scope query runs through the DB worker; source and ownership are host facts. */
-const ordinaryTaskSql = (dbAgentKind: 'cc' | 'codex') => `SELECT id FROM sessions s
+const ordinaryTaskSql = (dbAgentKind: 'cc' | 'codex' | 'antigravity') => `SELECT id FROM sessions s
 WHERE s.id = ? AND s.status = 'active' AND s.source = 'desktop'
 AND s.hidden_at IS NULL AND s.agent_device_id IS NULL
 AND s.sdk_session_id = ? AND s.sdk_session_id != '<pending>'
@@ -39,6 +52,7 @@ AND NOT EXISTS (SELECT 1 FROM session_goals g WHERE g.session_id = s.id AND g.st
 export const ORDINARY_CLAUDE_TASK_SQL = ordinaryTaskSql('cc');
 /** Same ordinary-task scope for Codex: bots, Orca, Goals, remote and hidden tasks keep their own lifecycle. */
 export const ORDINARY_CODEX_TASK_SQL = ordinaryTaskSql('codex');
+export const ORDINARY_ANTIGRAVITY_TASK_SQL = ordinaryTaskSql('antigravity');
 
 /** Whether a task is in the ordinary scope, by the given SQL against the database the caller reads now. */
 export function createOrdinaryIdleReleaseTaskCheck(
@@ -64,8 +78,8 @@ export function createIdleReleaseRuntimeClose(
 /** Single-flight scans reuse the send lock and Session's atomic close-if-idle boundary. */
 export function createClaudeIdleReleaseWatcher(deps: ClaudeIdleReleaseDeps) {
   const agentKind = deps.agentKind ?? 'claude-code';
-  const label = agentKind === 'codex' ? 'Codex' : 'Claude';
-  const tracked = new Map<IdleClaudeSession, { since: number; generation: number; closeFailed: boolean; unsubscribe: () => void }>();
+  const label = engineLabels[agentKind];
+  const tracked = new Map<IdleClaudeSession, IdleReleaseState>();
   let timer: ReturnType<typeof setInterval> | undefined;
   let epoch = 0;
   let scanning = false;
@@ -81,6 +95,15 @@ export function createClaudeIdleReleaseWatcher(deps: ClaudeIdleReleaseDeps) {
   // questions deliberately do not hold a product turn or a host interaction lock.
   const hasQuestions = (session: IdleClaudeSession) => session.getStatus() === 'active'
     && (session.manageAsyncUserQuestions({ action: 'list' }).questions?.length ?? 0) > 0;
+  const isDue = (session: IdleClaudeSession, state: IdleReleaseState, minutes: number) => {
+    const generation = session.getTurnGeneration();
+    if (busy(session, state.closeFailed) || hasQuestions(session) || state.generation !== generation) {
+      state.since = deps.now();
+      state.generation = generation;
+      return false;
+    }
+    return deps.now() - state.since >= minutes * 60_000;
+  };
   const scanNow = async () => {
     if (scanning) return;
     scanning = true;
@@ -105,14 +128,12 @@ export function createClaudeIdleReleaseWatcher(deps: ClaudeIdleReleaseDeps) {
           tracked.set(session, state);
         }
         try {
+          // Antigravity's native wake yields to the send lock. Leave the lock
+          // free while it is waiting for exit, in its grace period or in preflight.
+          if (agentKind === 'antigravity' && !isDue(session, state, minutes)) continue;
           await deps.withLock(session.id, async () => {
             if (scanEpoch !== epoch || deps.getSession(session.id) !== session) return;
-            if (busy(session, state.closeFailed) || hasQuestions(session) || state.generation !== session.getTurnGeneration()) {
-              state.since = deps.now();
-              state.generation = session.getTurnGeneration();
-              return;
-            }
-            if (deps.now() - state.since < minutes * 60_000) return;
+            if (!isDue(session, state, minutes)) return;
             const sdkSessionId = session.sdkSessionId;
             if (!await deps.isOrdinaryTask(session.id, sdkSessionId) || await deps.hasPendingInput(session.id)) {
               state.since = deps.now();
@@ -143,8 +164,9 @@ export function createClaudeIdleReleaseWatcher(deps: ClaudeIdleReleaseDeps) {
               }
             } catch (error) {
               // Session fences provider events and enters error after failed teardown.
-              // Only our own failed close may be retried; unrelated error runtimes stay untouched.
-              state.closeFailed = true;
+              // Only our own failed close may be retried. Antigravity always
+              // requires the atomic idle check, which excludes error runtimes.
+              state.closeFailed = agentKind !== 'antigravity';
               throw error;
             }
           });

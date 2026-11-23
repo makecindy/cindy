@@ -5,7 +5,11 @@ import { makerToDbAgentKind } from '../../../shared/agentKindConversion';
 import { Maker, type AgentSessionHandle, type BaseAgent, type SessionMeta, type SessionStorage, type StartSessionOptions } from '@cindy/maker-core';
 import { createRehydrateCloseSuppression } from '../../maker-host/rehydrateCloseSuppression';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createClaudeIdleReleaseWatcher, createIdleReleaseRuntimeClose, createOrdinaryIdleReleaseTaskCheck, ORDINARY_CLAUDE_TASK_SQL, ORDINARY_CODEX_TASK_SQL, type IdleClaudeSession, type IdleReleaseAgentKind } from '../claudeIdleReleaseWatcher';
+import {
+  createClaudeIdleReleaseWatcher, createIdleReleaseRuntimeClose, createOrdinaryIdleReleaseTaskCheck,
+  DEFAULT_ANTIGRAVITY_IDLE_RELEASE_MINUTES, ORDINARY_ANTIGRAVITY_TASK_SQL, ORDINARY_CLAUDE_TASK_SQL,
+  ORDINARY_CODEX_TASK_SQL, type IdleClaudeSession, type IdleReleaseAgentKind,
+} from '../claudeIdleReleaseWatcher';
 import { AgentInputCoordinator } from '../agent-input-coordinator';
 import { hasIdleReleaseQueuedWork, hasPendingIdleReleaseInput, hasScheduledIdleReleaseAutoResume } from '../idleReleaseInputGates';
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue';
@@ -29,9 +33,10 @@ function fixture(agentKind: IdleReleaseAgentKind = 'claude-code') {
   const deps = {
     agentKind,
     listSessions: () => live, getSession: (id: string) => live.find(s => s.id === id),
-    readMinutes: vi.fn(() => 30), isOrdinaryTask: vi.fn(async (_id: string, _nativeId: string) => true),
+    readMinutes: vi.fn((): number => agentKind === 'antigravity' ? DEFAULT_ANTIGRAVITY_IDLE_RELEASE_MINUTES : 30),
+    isOrdinaryTask: vi.fn(async (_id: string, _nativeId: string) => true),
     hasPendingInput: vi.fn(async () => false), isHostBusy: vi.fn(() => false),
-    withLock: async <T>(_id: string, fn: () => Promise<T>) => fn(),
+    withLock: async (_id: string, fn: () => Promise<void>) => fn(),
     close: vi.fn(async (s: IdleClaudeSession) => {
       const closed = await s.closeIfIdle();
       if (closed) live = live.filter(item => item !== s);
@@ -107,9 +112,9 @@ describe('ordinary Claude idle runtime release', () => {
     expect(f.deps.close).not.toHaveBeenCalled(); f.advance(30);
     await f.watcher.scanNow(); expect(f.deps.close).toHaveBeenCalledOnce();
   });
-  it.each(['stop', 'replace', 'turn', 'event', 'disable', 'queue', 'identity', 'question'] as const)(
+  it.each(['stop', 'replace', 'turn', 'event', 'disable', 'queue', 'identity', 'question', 'wake'] as const)(
     'rechecks %s after asynchronous task lookup', async (change) => {
-      const f = fixture(); await aged(f);
+      const f = fixture(change === 'wake' ? 'antigravity' : 'claude-code'); await aged(f);
       f.deps.isOrdinaryTask.mockImplementation(async () => {
         if (change === 'identity') Object.defineProperty(f.session, 'sdkSessionId', { value: 'new-history' });
         if (change === 'stop') f.watcher.stop();
@@ -118,6 +123,7 @@ describe('ordinary Claude idle runtime release', () => {
         if (change === 'event') f.event();
         if (change === 'disable') f.deps.readMinutes.mockReturnValue(0);
         if (change === 'queue') f.deps.isHostBusy.mockReturnValue(true);
+        if (change === 'wake') vi.mocked(f.session.countPendingWakeContinuations).mockReturnValue(1);
         if (change === 'question') vi.mocked(f.session.manageAsyncUserQuestions).mockReturnValue({ questions: [
           { request_id: 'late-question', question: 'Still waiting', status: 'pending' },
         ] });
@@ -164,8 +170,34 @@ describe('ordinary Claude idle runtime release', () => {
   });
 });
 
+describe('ordinary Antigravity idle runtime release', () => {
+  // Unit: c48bc9ec75 gives the native wake priority over idle cleanup. The
+  // watcher must leave the send lock free after 15 minutes with work outstanding.
+  // Existing Claude busy tests only assert that teardown is skipped inside the lock.
+  it.each(['turn', 'background', 'wake', 'host'] as const)('leaves the send lock free during %s', async blocker => {
+    const f = fixture('antigravity');
+    f.deps.withLock = vi.fn(f.deps.withLock);
+    try {
+      await f.watcher.scanNow();
+      f.advance(15);
+      if (blocker === 'turn') vi.mocked(f.session.isTurnRunning).mockReturnValueOnce(true);
+      if (blocker === 'background') vi.mocked(f.session.listBackgroundTasks).mockReturnValueOnce([{ taskId: 'build' }]);
+      if (blocker === 'wake') vi.mocked(f.session.countPendingWakeContinuations).mockReturnValueOnce(1);
+      if (blocker === 'host') f.deps.isHostBusy.mockReturnValueOnce(true);
+      await f.watcher.scanNow();
+      expect(f.deps.withLock).not.toHaveBeenCalled();
+      expect(f.deps.close).not.toHaveBeenCalled();
+      f.advance(14);
+      await f.watcher.scanNow();
+      expect(f.deps.close).not.toHaveBeenCalled();
+      f.advance(1);
+      await f.watcher.scanNow();
+      expect(f.deps.close).toHaveBeenCalledOnce();
+    } finally { f.watcher.stop(); }
+  });
+});
 
-describe('ordinary Claude task eligibility in SQLite', () => {
+describe('ordinary task eligibility in SQLite', () => {
   function database() {
     const db = new Database(':memory:');
     db.exec(`
@@ -231,16 +263,25 @@ describe('ordinary Claude task eligibility in SQLite', () => {
       expect(f.deps.close).not.toHaveBeenCalled();
     } finally { f.watcher.stop(); db.close(); }
   });
-  it('scopes the Codex query to ordinary Codex tasks with the same ownership exclusions', () => {
+  // Unit: in-memory SQLite exercises the production read-only scope with the
+  // persisted engine kind. The Claude matrix alone cannot catch a misrouted kind.
+  it.each([
+    ['codex', ORDINARY_CODEX_TASK_SQL],
+    ['antigravity', ORDINARY_ANTIGRAVITY_TASK_SQL],
+  ] as const)('scopes the %s query to ordinary local tasks and preserves task data', (kind, sql) => {
     const db = database();
     try {
-      const codex = db.prepare(ORDINARY_CODEX_TASK_SQL);
-      expect(codex.get('task', 'native-history')).toBeUndefined();
-      db.exec(`UPDATE sessions SET agent_kind = '${makerToDbAgentKind('codex')}'`);
-      expect(codex.get('task', 'native-history')).toEqual({ id: 'task' });
+      const eligible = db.prepare(sql);
+      expect(eligible.readonly).toBe(true);
+      expect(eligible.get('task', 'native-history')).toBeUndefined();
+      db.prepare('UPDATE sessions SET agent_kind = ?').run(makerToDbAgentKind(kind));
+      expect(eligible.get('task', 'native-history')).toEqual({ id: 'task' });
+      expect(eligible.get('task', 'stale-history')).toBeUndefined();
       expect(db.prepare(ORDINARY_CLAUDE_TASK_SQL).get('task', 'native-history')).toBeUndefined();
+      expect(db.prepare('SELECT status, sdk_session_id FROM sessions WHERE id = ?').get('task'))
+        .toEqual({ status: 'active', sdk_session_id: 'native-history' });
       db.exec("INSERT INTO bot_session_links VALUES ('task')");
-      expect(codex.get('task', 'native-history')).toBeUndefined();
+      expect(eligible.get('task', 'native-history')).toBeUndefined();
     } finally { db.close(); }
   });
   it('retains completed goals and other tasks while releasing only a resumable ordinary task', () => {
@@ -259,7 +300,13 @@ describe('ordinary Claude task eligibility in SQLite', () => {
 });
 
 
-it.each([false, true])('preserves task data and resumes native identity after real Maker release (teardown retry: %s)', async (failFirstClose) => {
+// Unit: the real Maker close/resume contract must preserve Antigravity's
+// native identity when it first becomes eligible at 15 minutes.
+it.each([
+  { agentKind: 'claude-code', failFirstClose: false },
+  { agentKind: 'claude-code', failFirstClose: true },
+  { agentKind: 'antigravity', failFirstClose: false },
+] as const)('preserves $agentKind task data and resumes native identity (teardown retry: $failFirstClose)', async ({ agentKind, failFirstClose }) => {
   const rows = new Map<string, SessionMeta>();
   const storage: SessionStorage = {
     create: async meta => { const row = { ...meta, createdAt: 1, updatedAt: 1 }; rows.set(meta.id, row); return row; },
@@ -277,7 +324,7 @@ it.each([false, true])('preserves task data and resumes native identity after re
     let finish!: () => void;
     const ended = new Promise<void>(resolve => { finish = resolve; });
     const handle: AgentSessionHandle = {
-      id: opts.resumeSessionId ?? 'native-history', agentKind: 'claude-code', model: 'model',
+      id: opts.resumeSessionId ?? 'native-history', agentKind, model: 'model',
       send: vi.fn(async () => {}), steer: async () => {}, abort: async () => {},
       getUsageSnapshot: () => ({ tokenUsage: 0, contextTokens: 0, contextWindow: 0, costUsd: 0 }),
       close: vi.fn(async () => { finish(); }),
@@ -287,24 +334,24 @@ it.each([false, true])('preserves task data and resumes native identity after re
     handles.push(handle);
     return handle;
   });
-  const agent = { kind: 'claude-code', capabilities: { sameTurnSteer: { supported: true } }, startSession,
+  const agent = { kind: agentKind, capabilities: { sameTurnSteer: { supported: true } }, startSession,
     filterActiveSkillCommands: (result: unknown) => result, dispose: async () => {} } as unknown as BaseAgent;
-  const maker = new Maker({ agents: { 'claude-code': agent }, storage, logger: log,
+  const maker = new Maker({ agents: { [agentKind]: agent }, storage, logger: log,
     lifecycleHooks: { onClose: id => suppression.runOnCloseSideEffects(id, removeAttachmentsAndWorkspace) } });
-  const opts = { id: 'task', agentKind: 'claude-code' as const, workingDir: path.join(os.tmpdir(), 'claude-idle-fixture'), model: 'model' };
+  const opts = { id: 'task', agentKind, workingDir: path.join(os.tmpdir(), 'idle-runtime-fixture'), model: 'model' };
   const first = await maker.createSession(opts);
   if (failFirstClose) vi.mocked(handles[0].close).mockRejectedValueOnce(Error('process still alive'));
   const stored = { ...rows.get('task')! };
   let now = 0;
+  const idleMinutes = agentKind === 'antigravity' ? DEFAULT_ANTIGRAVITY_IDLE_RELEASE_MINUTES : 30;
   const watcher = createClaudeIdleReleaseWatcher({
+    agentKind,
     listSessions: () => maker.listActiveSessions(), getSession: id => maker.getSession(id),
-    readMinutes: () => 30,
+    readMinutes: () => idleMinutes,
     isOrdinaryTask: async (id, nativeId) => (await storage.get(id))?.sdkSessionId === nativeId,
     hasPendingInput: async () => false, isHostBusy: () => false,
     withLock: async (_id, fn) => fn(),
-    close: (session, retryFailedClose) => suppression.withSuppressed(session.id, async () =>
-      await maker.closeSessionIfCurrent(session as typeof first, 'runtime-refresh',
-        retryFailedClose && session.getStatus() === 'error' ? undefined : { onlyIfIdle: true }) === 'closed'),
+    close: createIdleReleaseRuntimeClose(maker, suppression.withSuppressed),
     now: () => now, released: vi.fn(), warn: log.warn,
   });
   try {
@@ -312,14 +359,14 @@ it.each([false, true])('preserves task data and resumes native identity after re
     // apparently idle Session used to expire them even without a running turn.
     first.setInteractionListener(() => new Promise(() => {}));
     const question = first.askUserQuestionAsync([{ question: 'Keep working?' }]);
-    await watcher.scanNow(); now = 30 * 60_000; await watcher.scanNow();
+    await watcher.scanNow(); now = idleMinutes * 60_000; await watcher.scanNow();
     expect(handles[0].close).not.toHaveBeenCalled();
     expect(first.manageAsyncUserQuestions({ action: 'list' }).questions).toHaveLength(1);
     first.manageAsyncUserQuestions({ action: 'withdraw', request_ids: [question.request_id], reason: 'Resolved in test' });
     // The watcher must still delegate its final atomic check to Session while
     // an otherwise invisible host RPC (compact / rewind) is in flight.
     handles[0].hasPendingHostOperation = () => true;
-    now += 30 * 60_000; await watcher.scanNow();
+    now += idleMinutes * 60_000; await watcher.scanNow();
     expect(handles[0].close).not.toHaveBeenCalled();
     handles[0].hasPendingHostOperation = () => false;
     now += 60_000; await watcher.scanNow();
