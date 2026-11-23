@@ -101,6 +101,7 @@ type RemoteHostSnapshot = {
     identityFileName?: string;
     source: 'ssh-config' | 'manual';
     managedByCindy: boolean;
+    managedAliasConflict?: boolean;
   };
   status: import('@cindy/maker-remote-ssh').RemoteStatus;
   lastError?: string;

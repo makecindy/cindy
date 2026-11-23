@@ -1951,6 +1951,7 @@
       },
       "footnote": "Only SSH connection management is available for now. Running agents on remote machines is coming in a later update.",
       "viaAuth": "via {{label}}",
+      "managedAliasConflict": "This alias is declared in both Cindy-managed and external SSH configuration. Connection details are read-only, and this host can’t be removed here.",
       "readOnlyFromSshConfig": "Connection details come from SSH configuration",
       "importedAgentHint": "Authenticates through the local SSH key agent (ssh-agent). A successful terminal ssh connection does not mean the agent is ready.",
       "agentError": {
