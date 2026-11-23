@@ -4318,6 +4318,7 @@ export function ProvidersSection() {
             setWizard(null);
             if (reason !== 'connection-failed') toast.error(t('settings.providers.custom.nameSearchUnavailable'));
           } : undefined}
+          showOfficialModelPlugins
           onOpenCustomForm={() => {
             setWizard(null);
             setDialog({ mode: 'create' });

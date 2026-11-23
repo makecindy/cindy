@@ -783,6 +783,48 @@ it.each(['delayed', 'failed'] as const)('waits for a %s catalog before building 
 });
 
 describe('AddProviderWizard — preset 直达', () => {
+  // Unit: select the reviewed release after catalog recovery, both for a new install and an older install without ACP.
+  it.each(['not-installed', 'update-available'] as const)('opens the reviewed official engine release for %s', async installState => {
+    const { __resetInstalledGhostsStoreForTest } = await import('../cindy-brain/useInstalledGhosts');
+    __resetInstalledGhostsStoreForTest();
+    const action = installState === 'not-installed' ? 'settings.providers.wizard.installAndConfigure' : 'settings.ghosts.market.update';
+    const query = vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce({ items: [], officialIds: ['tool'], totalOfficial: 2, nextCursor: 'next' }).mockResolvedValueOnce({
+      items: [{ name: 'Antigravity', ghostId: 'engine', pluginId: 'official-engine' }], officialIds: ['official-engine'], totalOfficial: null, nextCursor: 'community-only',
+    });
+    Object.assign(window.electronAPI, { pluginMarket: { officialModelPlugins: query, cancelOfficialModelPlugins: vi.fn().mockResolvedValue(undefined) } });
+    const detail = vi.fn().mockResolvedValue({ pluginId: 'official-engine', ghostId: 'engine', sourceType: 'server',
+      scope: 'public', publisherKind: 'official', releaseId: 'r1', installState, manifest: { harnesses: [{ protocol: 'acp' }] } });
+    const install = vi.fn().mockRejectedValue({ code: 'MUTATION_CANCELLED' });
+    Object.assign(window.electronAPI.pluginMarket, { detail, install });
+    const ghosts = installState === 'update-available' ? [{ manifest: { id: 'engine', version: '0.1.0' },
+      dir: '/plugins/engine', enabled: true, approval: { state: 'approved', revision: 'previous' } }] : [];
+    Object.assign(window.electronAPI, { ghosts: { listSync: () => ({ ghosts }), onChanged: () => () => {} } });
+    render(<AddProviderWizard providers={[]} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={vi.fn()} showOfficialModelPlugins />);
+    await screen.findByText('settings.ghosts.market.unavailable');
+    expect(screen.getByText('DeepSeek')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.retryPlugin' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.ghosts.contribution.loadMore' }));
+    await screen.findByText('Antigravity');
+    expect(screen.queryByText('settings.ghosts.market.unavailable')).toBeNull();
+    const search = screen.getByRole('textbox', { name: 'settings.providers.wizard.searchPlaceholder' });
+    fireEvent.change(search, { target: { value: 'deepseek' } });
+    expect(screen.queryByText('Antigravity')).toBeNull();
+    expect(screen.getByText('DeepSeek')).toBeTruthy();
+    fireEvent.change(search, { target: { value: 'antigravity' } });
+    expect(screen.queryByText('Image tool')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Antigravity/ }));
+    await screen.findByRole('button', { name: action });
+    expect(detail).toHaveBeenCalledWith('official-engine');
+    fireEvent.click(screen.getByRole('button', { name: action }));
+    await waitFor(() => expect(install).toHaveBeenCalledWith('official-engine', {
+      ...(installState === 'update-available' ? { expectedInstalledApproval: 'approved:previous' } : {}),
+      expectedReleaseId: 'r1', expectedManifest: { harnesses: [{ protocol: 'acp' }] }, allowSourceReplacement: false,
+    }));
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.back' }));
+    expect(screen.getByRole('textbox', { name: 'settings.providers.wizard.searchPlaceholder' })).toHaveProperty('value', 'antigravity');
+    expect(query.mock.calls).toEqual([[null], [null], ['next']]);
+  });
+
   it('opens custom configuration from the header and leaves only cancel below the list', async () => {
     const onOpenCustomForm = vi.fn();
     const onClose = vi.fn();

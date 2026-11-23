@@ -239,6 +239,11 @@ import type {
   ImDefaultSettingsState,
 } from '../shared/imDefaultSettings';
 import type {
+  FeishuGroupSettingsList,
+  FeishuGroupSettingsPatch,
+  FeishuGroupSettingsView,
+} from '../shared/feishuGroupSettings';
+import type {
   SubagentModelSettingsPatch,
   SubagentModelSettingsState,
   SubagentModelSettingsWriteResult,
@@ -1867,6 +1872,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('plugin-market:lookup', ghostIds),
     query: (input: import('../shared/pluginMarket').PluginMarketQuery): Promise<import('../shared/pluginMarket').PluginMarketPage> =>
       ipcRenderer.invoke('plugin-market:query', input),
+    cancelOfficialModelPlugins: (): Promise<void> => ipcRenderer.invoke('plugin-market:cancel-official-model-plugins'),
+    officialModelPlugins: (cursor: string | null): Promise<import('../shared/pluginMarket').OfficialModelPluginPage> =>
+      ipcRenderer.invoke('plugin-market:official-model-plugins', cursor),
     recommendations: (): Promise<import('../shared/pluginMarket').PluginMarketItem[]> =>
       ipcRenderer.invoke('plugin-market:recommendations'),
     snapshot: (): Promise<import('../shared/pluginMarket').PluginMarketSnapshot> =>
@@ -8210,6 +8218,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:im-default-settings:set', patch, channel),
     imDefaultSettingsReset: (channel?: ImDefaultSettingsChannel): Promise<ImDefaultSettingsState> =>
       ipcRenderer.invoke('maker:im-default-settings:reset', channel),
+    /** 个人飞书 / Lark 机器人所在的群与各群单独的项目、模型、权限。 */
+    feishuGroupSettingsList: (options?: { refresh?: boolean; summary?: boolean }): Promise<FeishuGroupSettingsList> =>
+      ipcRenderer.invoke('maker:feishu-group-settings:list', {
+        refresh: options?.refresh === true,
+        summary: options?.summary === true,
+      }),
+    feishuGroupSettingsSet: (
+      chatId: string,
+      patch: FeishuGroupSettingsPatch,
+      name: string | null,
+    ): Promise<FeishuGroupSettingsView> =>
+      ipcRenderer.invoke('maker:feishu-group-settings:set', chatId, patch, name),
 
     /**
      * 子代理模型覆盖与 Codex 子代理护栏。null 表示不注入覆盖。Claude 字段对新建

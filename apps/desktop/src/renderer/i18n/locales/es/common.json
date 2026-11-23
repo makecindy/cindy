@@ -4539,6 +4539,16 @@
         "groupLocal": "Modelos locales",
         "metaLocalRecommended": "Recomendado · descargar en Cindy",
         "metaLocalConnect": "Conecte un servidor local en ejecución",
+        "configurePlugin": "Configurar",
+        "installAndConfigure": "Instalar y configurar",
+        "pluginLoading": "Cargando el complemento…",
+        "engineState": {
+          "available": "Disponible",
+          "unavailable": "No disponible",
+          "unknown": "Esperando el estado del motor"
+        },
+        "retryPlugin": "Reintentar",
+        "officialModelPlugins": "Complementos oficiales de modelos",
         "moreLocal": "Más servidores locales"
       },
       "local": {
@@ -4863,7 +4873,70 @@
         "hint": "Envía un mensaje privado a través del bot Feishu o Lark vinculado; sólo cuando la ventana está desenfocada.",
         "disabledHint": "Primero configure el bot y envíele un mensaje directo una vez para completar la vinculación."
       },
-      "bind": "Vincular"
+      "bind": "Vincular",
+      "groups": {
+        "title": "Chats grupales",
+        "description": "Asigna a un grupo en el que esté el bot su propio proyecto, modelo y permisos.",
+        "rules": "Lo que no configures: un grupo con proyecto sigue ese proyecto en Proyectos y modelos; un grupo sin proyecto sigue la Configuración de nuevas conversaciones y el Modo de permisos para tareas nuevas en grupos de arriba. El chat principal de un grupo y sus temas comparten la misma configuración.",
+        "expand": "Expandir",
+        "collapse": "Contraer",
+        "groupCount_one": "{{count}} grupo",
+        "groupCount_other": "{{count}} grupos",
+        "groupCount_many": "{{count}} grupos",
+        "customCount_one": "{{count}} con configuración propia",
+        "customCount_other": "{{count}} con configuración propia",
+        "customCount_many": "{{count}} con configuración propia",
+        "refresh": "Actualizar",
+        "loading": "Cargando grupos…",
+        "loadFailed": "No se pudieron cargar los grupos. Vuelve a intentarlo con Actualizar en un momento.",
+        "saveFailed": "No se pudo guardar la configuración del grupo",
+        "notConnected": "Los grupos aparecen cuando el bot está conectado. Abajo solo se muestran los grupos con configuración propia.",
+        "empty": "El bot todavía no está en ningún grupo. Agrégalo a un grupo y vuelve aquí.",
+        "listPermission": "No se pueden leer los grupos del bot. En Feishu Open Platform, concede a esta app el permiso para leer la información de grupos. Abajo aparecen los grupos en los que ya se usó el bot.",
+        "listUnavailable": "Ahora no se pueden leer los grupos del bot. Abajo aparecen los grupos en los que ya se usó el bot.",
+        "unnamed": "Grupo sin nombre ({{id}})",
+        "summaryModel": "Modelo propio",
+        "summaryPermission": "Permisos propios",
+        "expandAria": "Configuración de {{name}}",
+        "searchLabel": "Buscar grupos",
+        "searchPlaceholder": "Buscar por nombre de grupo",
+        "customHeading": "Configuración propia",
+        "followHeading": "Siguen la configuración del canal",
+        "showMore": "Mostrar {{count}} más",
+        "showLess": "Mostrar menos",
+        "noMatch": "Ningún grupo coincide con «{{query}}»",
+        "project": {
+          "label": "Proyecto",
+          "follow": "Conversación",
+          "missing": "{{name}} (ya no está en la barra lateral)",
+          "hint": "Se aplica cuando se menciona al bot por primera vez en el grupo, empieza un tema o alguien envía /new. Las tareas en curso no se mueven. Con un proyecto, el modelo y los permisos siguen ese proyecto en Proyectos y modelos; con Conversación, las tareas quedan en la carpeta de conversaciones del bot y siguen la Configuración de nuevas conversaciones de arriba. Solo se pueden elegir proyectos de la barra lateral de este ordenador."
+        },
+        "model": {
+          "label": "Modelo e intensidad de razonamiento",
+          "hintFollow": "Sigue la Configuración de nuevas conversaciones. Si cambias aquí el modelo o la intensidad de razonamiento, solo se aplica a este grupo.",
+          "hintFollowProject": "Sigue el proyecto «{{project}}» en Proyectos y modelos. Si cambias aquí el modelo o la intensidad de razonamiento, solo se aplica a este grupo.",
+          "hintProjectUnavailable": "El modelo configurado para «{{project}}» en Proyectos y modelos no está disponible ahora. Elige otro allí o uno para este grupo aquí.",
+          "hintFixed": "Este grupo tiene su propio modelo. Las tareas de este grupo cuyo modelo no se haya cambiado cambian con su siguiente mensaje; las tareas nuevas usan este modelo."
+        },
+        "permission": {
+          "label": "Permisos",
+          "hintFollow": "Sigue el Modo de permisos para tareas nuevas en grupos. Solo afecta a las tareas que se creen en este grupo a partir de ahora; cambia una tarea existente con /permission en el grupo.",
+          "hintFollowProject": "Sigue los permisos de «{{project}}» en Proyectos y modelos. Solo afecta a las tareas que se creen en este grupo a partir de ahora; cambia una tarea existente con /permission en el grupo.",
+          "hintFixed": "Este grupo tiene su propio modo de permisos. Solo afecta a las tareas que se creen en este grupo a partir de ahora; cambia una tarea existente con /permission en el grupo."
+        },
+        "fullAccessConfirm": {
+          "title": "¿Usar Acceso completo en {{name}}?",
+          "description": "Las tareas nuevas de este grupo se ejecutarán sin confirmar cada paso, sin importar quién mencione al bot. Los mensajes del grupo los controlan sus miembros, así que hazlo solo si confías en todos.",
+          "confirm": "Usar Acceso completo",
+          "cancel": "Cancelar"
+        },
+        "widerConfirm": {
+          "title": "¿Ampliar los permisos de {{name}}?",
+          "description": "Las tareas nuevas de este grupo pasarán de «{{current}}» a «{{next}}», sin importar quién mencione al bot. Los mensajes del grupo los controlan sus miembros, así que hazlo solo si confías en todos.",
+          "confirm": "Cambiar de todos modos",
+          "cancel": "Cancelar"
+        }
+      }
     },
     "wechatBot": {
       "title": "Personal WeChat",

@@ -1816,6 +1816,8 @@ interface ElectronAPI {
 
   /** Plugin Protocol v2 市场；网络、下载与安装全部在 main 进程完成。 */
   pluginMarket: {
+    cancelOfficialModelPlugins: () => Promise<void>;
+    officialModelPlugins: (cursor: string | null) => Promise<import('../shared/pluginMarket').OfficialModelPluginPage>;
     query: (input: import('../shared/pluginMarket').PluginMarketQuery) => Promise<import('../shared/pluginMarket').PluginMarketPage>;
     lookup: (ghostIds: string[]) => Promise<import('../shared/pluginMarket').PluginMarketSnapshot>;
     recommendations: () => Promise<import('../shared/pluginMarket').PluginMarketItem[]>;
@@ -7033,6 +7035,18 @@ interface ElectronAPI {
       channel?: ImDefaultSettingsChannel,
     ) => Promise<ImDefaultSettingsState>;
     imDefaultSettingsReset: (channel?: ImDefaultSettingsChannel) => Promise<ImDefaultSettingsState>;
+    /** 个人飞书 / Lark 机器人所在的群与各群单独的项目、模型、权限。 */
+    feishuGroupSettingsList: (options?: {
+      /** 用户点了「刷新」：不复用 30 秒内的群名单。 */
+      refresh?: boolean;
+      /** 只给收起时的群数与头像用：不解析项目模型（`project.config` 都是 null）。 */
+      summary?: boolean;
+    }) => Promise<import('../shared/feishuGroupSettings').FeishuGroupSettingsList>;
+    feishuGroupSettingsSet: (
+      chatId: string,
+      patch: import('../shared/feishuGroupSettings').FeishuGroupSettingsPatch,
+      name: string | null,
+    ) => Promise<import('../shared/feishuGroupSettings').FeishuGroupSettingsView>;
 
     /** 子代理模型覆盖。null 表示不注入覆盖，仅对新建 agent 会话生效。 */
     subagentModelSettingsGet: () => Promise<SubagentModelSettingsState>;

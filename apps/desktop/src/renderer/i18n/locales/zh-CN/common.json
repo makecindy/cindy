@@ -4440,6 +4440,16 @@
         "groupLocal": "本机模型",
         "metaLocalRecommended": "推荐 · 在 Cindy 内下载",
         "metaLocalConnect": "连接已运行的本机服务",
+        "configurePlugin": "配置",
+        "installAndConfigure": "安装并配置",
+        "pluginLoading": "正在读取插件…",
+        "engineState": {
+          "available": "已就绪",
+          "unavailable": "不可用",
+          "unknown": "等待引擎报告状态"
+        },
+        "retryPlugin": "重试",
+        "officialModelPlugins": "官方模型插件",
         "moreLocal": "更多本机服务"
       },
       "local": {
@@ -4764,7 +4774,68 @@
         "hint": "通过已绑定的飞书或 Lark 机器人，向你私聊发送一条消息；仅在窗口失焦时发送。",
         "disabledHint": "需要先配置 Bot 并向它发送一条消息以完成绑定。"
       },
-      "bind": "绑定"
+      "bind": "绑定",
+      "groups": {
+        "title": "群聊",
+        "description": "给机器人所在的某个群单独指定项目、模型和权限。",
+        "rules": "没单独设置的项：绑定了项目的群跟随「项目与模型」里那个项目的设置，没绑项目的群跟随上面的「新对话配置」和「群聊新建任务权限档」。群主线和群里的话题共用一个群的设置。",
+        "expand": "展开",
+        "collapse": "收起",
+        "groupCount_one": "{{count}} 个群",
+        "groupCount_other": "{{count}} 个群",
+        "customCount_one": "{{count}} 个单独设置",
+        "customCount_other": "{{count}} 个单独设置",
+        "refresh": "刷新",
+        "loading": "正在读取群列表…",
+        "loadFailed": "读取群列表失败，请稍后点「刷新」重试。",
+        "saveFailed": "保存群设置失败",
+        "notConnected": "机器人连上后才能列出它所在的群。下面只列出已经单独设置过的群。",
+        "empty": "机器人还没有加入任何群。把机器人拉进群后，再来这里设置。",
+        "listPermission": "读不到机器人所在的群：请在飞书开放平台给这个应用开通「获取群组信息」权限。下面先列出机器人用过的群。",
+        "listUnavailable": "暂时读不到机器人所在的群，下面先列出机器人用过的群。",
+        "unnamed": "未命名的群（{{id}}）",
+        "summaryModel": "单独设置了模型",
+        "summaryPermission": "单独设置了权限",
+        "expandAria": "设置「{{name}}」",
+        "searchLabel": "搜索群",
+        "searchPlaceholder": "按群名搜索",
+        "customHeading": "单独设置",
+        "followHeading": "跟随渠道设置",
+        "showMore": "再显示 {{count}} 个",
+        "showLess": "收起",
+        "noMatch": "没有找到名字包含「{{query}}」的群",
+        "project": {
+          "label": "项目",
+          "follow": "对话",
+          "missing": "{{name}}（已不在侧栏）",
+          "hint": "在群里第一次 @ 机器人、开新话题或发 /new 时生效，进行中的任务不会被挪走。选项目时，模型和权限默认跟随这个项目在「项目与模型」里的设置；选「对话」时任务放在机器人的对话目录里，跟随上面的「新对话配置」。只能选侧栏里的本机项目。"
+        },
+        "model": {
+          "label": "模型和推理强度",
+          "hintFollow": "跟随「新对话配置」。在这里换模型或推理强度，就只对这个群生效。",
+          "hintFollowProject": "跟随项目「{{project}}」在「项目与模型」里的设置。在这里换模型或推理强度，就只对这个群生效。",
+          "hintProjectUnavailable": "项目「{{project}}」在「项目与模型」里设置的模型现在不可用。可以到那里重新选，或在这里给这个群单独选一个。",
+          "hintFixed": "这个群单独设置了模型。群里没单独改过模型的任务，收到下一条消息时会换过去；新任务直接用它。"
+        },
+        "permission": {
+          "label": "权限",
+          "hintFollow": "当前跟随「群聊新建任务权限档」。只影响之后在这个群新建的任务，已有任务在群里用 /permission 切换。",
+          "hintFollowProject": "当前跟随项目「{{project}}」在「项目与模型」里的权限。只影响之后在这个群新建的任务，已有任务在群里用 /permission 切换。",
+          "hintFixed": "这个群单独设置了权限。只影响之后在这个群新建的任务，已有任务在群里用 /permission 切换。"
+        },
+        "fullAccessConfirm": {
+          "title": "让「{{name}}」以完全访问执行？",
+          "description": "之后在这个群新建的任务都会直接执行、不再逐条确认，群里任何人 @ 机器人都一样。群聊内容由成员控制，请确认群里的人都可信。",
+          "confirm": "改为完全访问",
+          "cancel": "取消"
+        },
+        "widerConfirm": {
+          "title": "放宽「{{name}}」的权限？",
+          "description": "之后在这个群新建的任务会从「{{current}}」变成「{{next}}」，群里任何人 @ 机器人都一样。群聊内容由成员控制，请确认群里的人都可信。",
+          "confirm": "仍然更改",
+          "cancel": "取消"
+        }
+      }
     },
     "wechatBot": {
       "title": "个人微信",

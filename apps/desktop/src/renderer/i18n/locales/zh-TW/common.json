@@ -4440,6 +4440,16 @@
         "groupLocal": "本機模型",
         "metaLocalRecommended": "推薦 · 在 Cindy 內下載",
         "metaLocalConnect": "連接已執行的本機服務",
+        "configurePlugin": "設定",
+        "installAndConfigure": "安裝並設定",
+        "pluginLoading": "正在讀取插件…",
+        "engineState": {
+          "available": "已就緒",
+          "unavailable": "無法使用",
+          "unknown": "等待引擎回報狀態"
+        },
+        "retryPlugin": "重試",
+        "officialModelPlugins": "官方模型插件",
         "moreLocal": "更多本機服務"
       },
       "local": {
@@ -4764,7 +4774,68 @@
         "hint": "透過已繫結的飛書或 Lark 機器人私訊你一則訊息；僅在視窗失焦時傳送。",
         "disabledHint": "需要先設定 Bot 並傳送一則訊息給它，以完成繫結。"
       },
-      "bind": "繫結"
+      "bind": "繫結",
+      "groups": {
+        "title": "群組",
+        "description": "為機器人所在的某個群組單獨指定專案、模型與權限。",
+        "rules": "沒有單獨設定的項目：已選擇專案的群組跟隨「專案與模型」裡那個專案的設定，未選擇專案的群組跟隨上方的「新對話配置」與「群組新任務的權限模式」。群組主線與群組裡的話題共用同一個群組的設定。",
+        "expand": "展開",
+        "collapse": "收起",
+        "groupCount_one": "{{count}} 個群組",
+        "groupCount_other": "{{count}} 個群組",
+        "customCount_one": "{{count}} 個單獨設定",
+        "customCount_other": "{{count}} 個單獨設定",
+        "refresh": "重新整理",
+        "loading": "正在讀取群組列表…",
+        "loadFailed": "讀取群組列表失敗，請稍後點「重新整理」重試。",
+        "saveFailed": "儲存群組設定失敗",
+        "notConnected": "機器人連上後才能列出它所在的群組。下方只列出已單獨設定過的群組。",
+        "empty": "機器人還沒有加入任何群組。把機器人拉進群組後，再來這裡設定。",
+        "listPermission": "讀不到機器人所在的群組：請在飛書開放平台為這個應用開通「獲取群組資訊」權限。下方先列出機器人用過的群組。",
+        "listUnavailable": "暫時讀不到機器人所在的群組，下方先列出機器人用過的群組。",
+        "unnamed": "未命名的群組（{{id}}）",
+        "summaryModel": "單獨設定了模型",
+        "summaryPermission": "單獨設定了權限",
+        "expandAria": "設定「{{name}}」",
+        "searchLabel": "搜尋群組",
+        "searchPlaceholder": "依群組名稱搜尋",
+        "customHeading": "單獨設定",
+        "followHeading": "跟隨頻道設定",
+        "showMore": "再顯示 {{count}} 個",
+        "showLess": "收起",
+        "noMatch": "找不到名稱包含「{{query}}」的群組",
+        "project": {
+          "label": "專案",
+          "follow": "對話",
+          "missing": "{{name}}（已不在側欄）",
+          "hint": "在群組裡第一次 @ 機器人、開新話題或傳送 /new 時生效，進行中的任務不會被移走。選專案時，模型與權限預設跟隨這個專案在「專案與模型」裡的設定；選「對話」時任務放在機器人的對話目錄裡，跟隨上方的「新對話配置」。只能選擇側欄裡的本機專案。"
+        },
+        "model": {
+          "label": "模型和推理強度",
+          "hintFollow": "跟隨「新對話配置」。在這裡更換模型或推理強度，就只對這個群組生效。",
+          "hintFollowProject": "跟隨專案「{{project}}」在「專案與模型」裡的設定。在這裡更換模型或推理強度，就只對這個群組生效。",
+          "hintProjectUnavailable": "專案「{{project}}」在「專案與模型」裡設定的模型目前無法使用。可以到那裡重新選擇，或在這裡為這個群組單獨選一個。",
+          "hintFixed": "這個群組單獨設定了模型。群組裡沒有單獨改過模型的任務，收到下一則訊息時會切換過去；新任務直接使用它。"
+        },
+        "permission": {
+          "label": "權限",
+          "hintFollow": "目前跟隨「群組新任務的權限模式」。只影響之後在這個群組新建的任務，已有任務在群組裡用 /permission 切換。",
+          "hintFollowProject": "目前跟隨專案「{{project}}」在「專案與模型」裡的權限。只影響之後在這個群組新建的任務，已有任務在群組裡用 /permission 切換。",
+          "hintFixed": "這個群組單獨設定了權限。只影響之後在這個群組新建的任務，已有任務在群組裡用 /permission 切換。"
+        },
+        "fullAccessConfirm": {
+          "title": "讓「{{name}}」以完全存取執行？",
+          "description": "之後在這個群組新建的任務都會直接執行、不再逐項確認，群組裡任何人 @ 機器人都一樣。群組內容由成員控制，請確認群組成員都可信。",
+          "confirm": "改為完全存取",
+          "cancel": "取消"
+        },
+        "widerConfirm": {
+          "title": "放寬「{{name}}」的權限？",
+          "description": "之後在這個群組新建的任務會從「{{current}}」變成「{{next}}」，群組裡任何人 @ 機器人都一樣。群組內容由成員控制，請確認群組成員都可信。",
+          "confirm": "仍然變更",
+          "cancel": "取消"
+        }
+      }
     },
     "wechatBot": {
       "title": "個人微信",
