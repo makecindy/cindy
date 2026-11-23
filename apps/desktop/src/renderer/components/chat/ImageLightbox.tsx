@@ -665,10 +665,17 @@ export function ImageLightbox(props: ImageLightboxProps) {
     const collectionAnnotationDisabled = Boolean(
       annotationDisabled || imageProps?.annotationDisabled,
     );
-    const baseAnnotationEdit = contentProps.annotationEdit;
+    // A live collection item owns its draft. Once it exists, a missing strokes
+    // field means the attachment was cleared to [], never "use the frozen
+    // opening baseline".
+    const hasLiveImageProps = imageProps !== undefined;
+    const baseAnnotationEdit = hasLiveImageProps ? undefined : contentProps.annotationEdit;
     const collectionAnnotationEdit = imageProps?.annotationEdit;
     const annotationEditSource =
       collectionAnnotationEdit ?? baseAnnotationEdit ?? latestAnnotationEdit;
+    const liveInitialStrokes = hasLiveImageProps
+      ? imageProps.initialStrokes ?? collectionAnnotationEdit?.initialStrokes ?? []
+      : undefined;
     const annotationEdit =
       !collectionAnnotationDisabled && annotationEditSource
         ? {
@@ -676,10 +683,7 @@ export function ImageLightbox(props: ImageLightboxProps) {
             ...(collectionAnnotationEdit ?? {}),
             ...(latestAnnotationEdit ?? {}),
             initialStrokes:
-              imageProps?.initialStrokes ??
-              (collectionAnnotationEdit
-                ? collectionAnnotationEdit.initialStrokes ?? []
-                : undefined) ??
+              liveInitialStrokes ??
               baseAnnotationEdit?.initialStrokes ??
               latestAnnotationEdit?.initialStrokes,
             onDraftChange:
@@ -698,10 +702,7 @@ export function ImageLightbox(props: ImageLightboxProps) {
       onLeaveSettled: requestSettleAfterLeave,
       pendingSourceRef,
       annotationDisabled: collectionAnnotationDisabled,
-      initialStrokes:
-        imageProps?.initialStrokes ??
-        (imageProps?.annotationEdit ? imageProps.annotationEdit.initialStrokes ?? [] : undefined) ??
-        contentProps.initialStrokes,
+      initialStrokes: liveInitialStrokes ?? contentProps.initialStrokes,
       annotationEdit,
     } as ImageLightboxContentProps;
   };
