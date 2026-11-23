@@ -6615,7 +6615,7 @@
           "defaultWorkspaceChip": "Default: {{name}}",
           "defaultWorkspaceAria": "Choose the default project for dispatched tasks",
           "defaultWorkspaceRadioAria": "Set “{{name}}” as the default project",
-          "defaultWorkspaceRowHint": "The selected project is the default: Telegram, Feishu / Lark and X conversations that have not picked a project run their tasks there.",
+          "defaultWorkspaceRowHint": "The selected project is the default: Telegram, Feishu / Lark, X and Discord conversations that have not picked a project run their tasks there.",
           "defaultProjectTag": "Default",
           "defaultProjectFullAccessWarning": "The default project “{{name}}” has Full access: an @mention from any group runs with full access inside it.",
           "sharedSettingsPointer": "Projects, models and permissions are shared by all official bots.",
@@ -6856,6 +6856,40 @@
           "workingDeviceThisComputer": "This computer",
           "workingDeviceUnknown": "Working computer not yet synced",
           "workingDeviceUnnamed": "Unnamed computer"
+        },
+        "discord": {
+          "description": "Link your Discord account and dispatch tasks to Cindy via the official bot, in direct messages or servers.",
+          "disabledHint": "Turn on the switch to get a link code, then send it to the Cindy bot in Discord.",
+          "toggleAria": "Toggle the Discord connection",
+          "connect": "Link Discord",
+          "openApp": "Add Cindy to Discord",
+          "cancel": "Cancel Linking",
+          "retry": "Retry Linking",
+          "openBot": "Open Bot",
+          "addToGroup": "Add to Server",
+          "unlink": "Unlink Discord",
+          "unlinkConfirmTitle": "Unlink Discord?",
+          "unlinkConfirmDescription": "Discord will no longer dispatch messages to this device. Your local projects and other channels are not affected.",
+          "status": {
+            "checking": "Checking server support…",
+            "unavailable": "Not available on this server",
+            "disabled": "Disabled",
+            "none": "Not linked",
+            "pending": "Send the link code to the Cindy bot",
+            "awaiting_confirmation": "Confirm the link in Discord",
+            "confirmed": "Linked as {{user}}",
+            "denied": "Linking was denied",
+            "expired": "Link code expired",
+            "failed": "Linking failed",
+            "revoked": "Link removed",
+            "superseded": "Linked to another device"
+          },
+          "bindCode": {
+            "label": "Link code",
+            "copy": "Copy code",
+            "copied": "Link code copied",
+            "hint": "Send this code to the Cindy bot in a Discord direct message, or run /bind with it in Discord. Haven't added Cindy yet? Add it to Discord first."
+          }
         }
       },
       "summary": {
@@ -7088,6 +7122,7 @@
         "providerTelegram": "Telegram",
         "providerX": "X",
         "providerFeishu": "Feishu / Lark",
+        "providerDiscord": "Discord",
         "requireConnected": "Editable once {{provider}} is connected (enable its switch above and wait for the connection).",
         "offlineLocal": "{{provider}} is offline. Changes are saved on this computer and sync to the chat model card when it reconnects.",
         "requireBinding": "Complete {{provider}} account linking first.",
@@ -8532,6 +8567,8 @@
         "badgeDetail": "When it has something new, it can show a green dot on the Plugins entry in the left navigation and on its own card, with a one-line summary. Opening its panel clears the dot. The dot makes no sound, does not vibrate, never reaches your system notification center, and is a permission separate from system tips.",
         "confirm": "Can ask for your confirmation in a dialog",
         "confirmDetail": "Before acting it can open a dialog that looks like Cindy's own to ask you. The question comes from the plugin and the dialog is labeled with its name; only you can click confirm or cancel — the plugin cannot. At most one dialog at a time, and asking too often is blocked.",
+        "form": "Can ask you to fill in a form",
+        "formDetail": "It can open a form that looks like Cindy's own and ask you to fill it in. The form is labeled with the plugin's name; what you enter reaches the plugin only after you click Save, and nothing is sent if you cancel. It opens only while you're looking at Cindy, at most one form at a time, and asking too often is blocked.",
         "fsWrite": "Can manage its private files",
         "fsWriteDetail": "Can read, write, list and delete its own private data. During an Agent call, it can also read, list and watch the task's working directory. Writes and deletions follow the task's permissions; approving a write does not approve deletion. Watching stops when the call ends. All file operations run in the host.",
         "deviceSync": "Sync plugin data between your computers",
@@ -8834,6 +8871,8 @@
         "slotNetwork": "Network access",
         "slotNotify": "System tips",
         "slotBadge": "Unread badge",
+        "slotConfirm": "Confirmation dialogs",
+        "slotForm": "Form dialogs",
         "slotFs": "File writing",
         "slotLibrary": "Durable library",
         "slotSkill": "Agent skills",
@@ -8953,6 +8992,17 @@
       "saveAs": {
         "dialogTitle": "Plugin “{{name}}” — Save As",
         "dialogMessage": "Plugin “{{name}}” is asking you to save a copy"
+      },
+      "form": {
+        "save": "Save",
+        "cancel": "Cancel",
+        "addItem": "Add",
+        "removeItem": "Remove",
+        "removeNamed": "Remove {{name}}",
+        "required": "This field is required",
+        "incomplete": "Some required fields are empty",
+        "itemTitle": "{{label}} {{index}}",
+        "srDescription": "Plugin “{{name}}” asks you to fill in this form"
       },
       "confirm": {
         "dialogTitle": "Plugin “{{name}}” needs your confirmation"
@@ -12851,16 +12901,22 @@
     "listSeparator": ", ",
     "crossAgentConvert": {
       "asking": {
-        "title": "Convertible workspace config detected",
-        "description": "This workspace contains project-level config for {{sourceAgent}}. Generate matching config for {{targetAgent}}? Changes are written only inside this workspace.",
-        "primary": "Convert",
-        "cancel": "No thanks"
+        "title": "Use these project settings with {{targetAgent}} too?",
+        "description": "This project already has these settings for {{sourceAgent}}. You can save a copy here for {{targetAgent}} or start the task without adding them.",
+        "primary": "Add to {{targetAgent}}",
+        "cancel": "Start task now"
       },
       "running": {
-        "title": "Converting config…",
-        "description": "Writing workspace config for {{targetAgent}}. Don’t close the window.",
-        "primary": "Convert",
-        "cancel": "No thanks"
+        "title": "Adding project settings…",
+        "description": "Saving settings for {{targetAgent}} in this project.",
+        "primary": "Adding…",
+        "cancel": "Start task now"
+      },
+      "items": {
+        "agents-md": "Project instructions and guidelines",
+        "agents": "Custom assistant roles",
+        "hooks": "Automatic actions, such as running a project script",
+        "mcp": "Connections to external tools"
       }
     },
     "confirmDialog": {

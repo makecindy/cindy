@@ -6572,7 +6572,7 @@
           "defaultWorkspaceChip": "常例：{{name}}",
           "defaultWorkspaceAria": "擇派差事時所用之常例案",
           "defaultWorkspaceRadioAria": "立「{{name}}」為常例案",
-          "defaultWorkspaceRowHint": "所選者即常例案：Telegram、飛書 / Lark 與 X 中，未另擇案之私聊與群，差事皆落於此。",
+          "defaultWorkspaceRowHint": "所選者即常例案：Telegram、飛書 / Lark、X 與 Discord 中，未另擇案之私聊與群，差事皆落於此。",
           "defaultProjectTag": "常例",
           "defaultProjectFullAccessWarning": "常例案「{{name}}」之權限為完全存取：任一群中 @ 機器人，皆將以完全存取之權於其中執行，慎之。",
           "sharedSettingsPointer": "案、模型與權限，諸官方機器人共用。",
@@ -6813,6 +6813,40 @@
           "workingDeviceThisComputer": "此機",
           "workingDeviceUnknown": "工作電腦尚未同步",
           "workingDeviceUnnamed": "未命名電腦"
+        },
+        "discord": {
+          "description": "關聯 Discord 名籍，於私訊或伺服器中藉官方 bot 為 Cindy 派差事。",
+          "disabledHint": "開此開關則得關聯碼，遣予 Discord 中之 Cindy 機器人，即成關聯。",
+          "toggleAria": "啟閉 Discord 連線",
+          "connect": "關聯 Discord",
+          "openApp": "增 Cindy 入 Discord",
+          "cancel": "罷關聯",
+          "retry": "重關聯",
+          "openBot": "開 Cindy bot",
+          "addToGroup": "增入 Discord 伺服器",
+          "unlink": "解綁 Discord",
+          "unlinkConfirmTitle": "解綁 Discord 乎？",
+          "unlinkConfirmDescription": "解綁之後，Discord 不能再向此臺裝置派訊；本地之案與他渠道不受影響。",
+          "status": {
+            "checking": "方察伺服器支援…",
+            "unavailable": "此伺服器尚未開放",
+            "disabled": "已停",
+            "none": "未綁",
+            "pending": "請將關聯碼遣予 Cindy 機器人",
+            "awaiting_confirmation": "請於 Discord 內確認關聯",
+            "confirmed": "已關聯 {{user}}",
+            "denied": "關聯已拒",
+            "expired": "關聯碼已逾期",
+            "failed": "關聯未成",
+            "revoked": "關聯已解",
+            "superseded": "已關聯至他臺裝置"
+          },
+          "bindCode": {
+            "label": "關聯碼",
+            "copy": "錄關聯碼",
+            "copied": "關聯碼已錄",
+            "hint": "於 Discord 中將關聯碼私遣予 Cindy 機器人，或行 /bind 並填關聯碼。未增 Cindy 者，先增之入 Discord。"
+          }
         }
       },
       "summary": {
@@ -7045,6 +7079,7 @@
         "providerTelegram": "Telegram",
         "providerX": "X",
         "providerFeishu": "飛書 / Lark",
+        "providerDiscord": "Discord",
         "requireConnected": "連上 {{provider}} 後方可修（先於上方開啟相應開關，候其連線成功）。",
         "offlineLocal": "{{provider}} 暫連不上，變更存於此機；連上後同步至言談中之模型卡。",
         "requireBinding": "須先完成 {{provider}} 名籍關聯，方可修。",
@@ -8455,6 +8490,8 @@
         "badgeDetail": "有新內容時，其可於左側導覽之法器入口及自身卡片上亮一綠點，並附一句摘要；君啟其面板即清零。綠點無聲、不震，亦不入系統通知中心，與上述系統提示為兩項獨立之權柄。",
         "confirm": "可彈確認框徵君同意",
         "confirmDetail": "其行事前可彈一與 Cindy 同款之確認框問君，所問由其提供，框上標其名；允或罷皆由君親點，其不能自點。同時至多一框，彈之過頻即被攔下。",
+        "form": "可彈表單請君填寫",
+        "formDetail": "其可彈一與 Cindy 同款之表單請君填寫，單上標其名；所填唯君點「存之」後方交予之，罷則一無所與。唯君正觀 Cindy 時方彈，同時至多一單，彈之過頻即被攔下。",
         "fsWrite": "可管理自己的私有檔案",
         "fsWriteDetail": "可讀寫、列舉和刪除自己的私有資料。當前 Agent 呼叫期間，也可讀取、列舉和監聽差事的工作目錄。寫入與刪除沿用差事權限；允許寫入不代表允許刪除。呼叫結束即停止監聽。檔案操作均由宿主執行。",
         "deviceSync": "於君諸機間同步法器資料",
@@ -8777,6 +8814,8 @@
         "slotNetwork": "網路存取",
         "slotNotify": "系統之示",
         "slotBadge": "未讀之標",
+        "slotConfirm": "確認之框",
+        "slotForm": "表單之框",
         "slotFs": "寫卷",
         "slotLibrary": "久藏之庫",
         "slotSkill": "Agent 技藝",
@@ -8896,6 +8935,17 @@
       "saveAs": {
         "dialogTitle": "法器「{{name}}」另存為",
         "dialogMessage": "法器「{{name}}」請君另存一份"
+      },
+      "form": {
+        "save": "存之",
+        "cancel": "罷",
+        "addItem": "增之",
+        "removeItem": "刪之",
+        "removeNamed": "刪「{{name}}」",
+        "required": "此項必填",
+        "incomplete": "尚有必填之項未填",
+        "itemTitle": "{{label}} {{index}}",
+        "srDescription": "法器「{{name}}」請君填寫"
       },
       "confirm": {
         "dialogTitle": "法器「{{name}}」請君確認"
@@ -12805,16 +12855,22 @@
     "listSeparator": "、",
     "crossAgentConvert": {
       "asking": {
-        "title": "察得工作區配置可轉",
-        "description": "此工作區含 {{sourceAgent}} 之案級配置。欲為 {{targetAgent}} 生相應配置否？所改僅寫入此工作區目錄。",
-        "primary": "轉之",
-        "cancel": "不必"
+        "title": "亦為 {{targetAgent}} 採用此案設定乎？",
+        "description": "此案已有 {{sourceAgent}} 之設定如下。可於案中為 {{targetAgent}} 另存一份，亦可逕啟差事。",
+        "primary": "添予 {{targetAgent}}",
+        "cancel": "逕啟差事"
       },
       "running": {
-        "title": "方轉配置…",
-        "description": "方為 {{targetAgent}} 寫入工作區配置，勿闔視窗。",
-        "primary": "轉之",
-        "cancel": "不必"
+        "title": "方添此案設定…",
+        "description": "方存 {{targetAgent}} 之設定於此案。",
+        "primary": "方添…",
+        "cancel": "逕啟差事"
+      },
+      "items": {
+        "agents-md": "此案說明與行事之約",
+        "agents": "此案自訂之助手職分",
+        "hooks": "自動所行之事（如執行指令碼）",
+        "mcp": "外部工具之連線"
       }
     },
     "confirmDialog": {

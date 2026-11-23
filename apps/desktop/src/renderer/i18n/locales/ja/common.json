@@ -6572,7 +6572,7 @@
           "defaultWorkspaceChip": "デフォルト: {{name}}",
           "defaultWorkspaceAria": "タスク発行時に使う既定のプロジェクトを選択",
           "defaultWorkspaceRadioAria": "「{{name}}」を既定のプロジェクトに設定",
-          "defaultWorkspaceRowHint": "選択中が既定のプロジェクトです。Telegram・Feishu / Lark・X でプロジェクトを個別に選んでいない会話のタスクはここで実行されます。",
+          "defaultWorkspaceRowHint": "選択中が既定のプロジェクトです。Telegram・Feishu / Lark・X・Discord でプロジェクトを個別に選んでいない会話のタスクはここで実行されます。",
           "defaultProjectTag": "既定",
           "defaultProjectFullAccessWarning": "既定のプロジェクト「{{name}}」の権限はフルアクセスです。どのグループから @ で呼ばれても、この中でフルアクセスで実行されます。",
           "sharedSettingsPointer": "プロジェクト・モデル・権限はすべての公式ボットで共通です。",
@@ -6813,6 +6813,40 @@
           "workingDeviceThisComputer": "このパソコン",
           "workingDeviceUnknown": "作業用パソコンはまだ同期されていません",
           "workingDeviceUnnamed": "名前のないパソコン"
+        },
+        "discord": {
+          "description": "Discord アカウントを連携し、DM やサーバーで公式 bot 経由で Cindy にタスクを依頼できます。",
+          "disabledHint": "スイッチをオンにすると連携コードが発行されます。Discord で Cindy bot に送信して連携を完了してください。",
+          "toggleAria": "Discord 接続を切り替える",
+          "connect": "Discord と連携",
+          "openApp": "Cindy を Discord に追加",
+          "cancel": "連携をキャンセル",
+          "retry": "連携を再試行",
+          "openBot": "Bot を開く",
+          "addToGroup": "サーバーに追加",
+          "unlink": "Discord の連携を解除",
+          "unlinkConfirmTitle": "Discord の連携を解除しますか？",
+          "unlinkConfirmDescription": "Discord からこのデバイスへメッセージを送れなくなります。ローカルプロジェクトとほかのチャネルには影響しません。",
+          "status": {
+            "checking": "サーバー対応を確認中…",
+            "unavailable": "このサーバーでは利用できません",
+            "disabled": "無効",
+            "none": "未連携",
+            "pending": "連携コードを Cindy bot に送信してください",
+            "awaiting_confirmation": "Discord で連携を確認してください",
+            "confirmed": "{{user}} と連携済み",
+            "denied": "連携が拒否されました",
+            "expired": "連携コードの期限が切れました",
+            "failed": "連携に失敗しました",
+            "revoked": "連携を解除しました",
+            "superseded": "別のデバイスに連携されています"
+          },
+          "bindCode": {
+            "label": "連携コード",
+            "copy": "コードをコピー",
+            "copied": "連携コードをコピーしました",
+            "hint": "Discord の DM でこのコードを Cindy bot に送信するか、Discord で /bind を実行してコードを入力してください。Cindy をまだ追加していない場合は、先に Discord に追加してください。"
+          }
         }
       },
       "summary": {
@@ -7045,6 +7079,7 @@
         "providerTelegram": "Telegram",
         "providerX": "X",
         "providerFeishu": "Feishu / Lark",
+        "providerDiscord": "Discord",
         "requireConnected": "{{provider}} 接続後に編集できます（上のスイッチをオンにして接続をお待ちください）。",
         "offlineLocal": "{{provider}} に接続できない間、変更はこのコンピューターに保存されます。再接続後にチャットのモデルカードへ同期します。",
         "requireBinding": "先に {{provider}} アカウントの連携を完了してください。",
@@ -8489,6 +8524,8 @@
         "badgeDetail": "新しい内容があるとき、左側ナビゲーションのプラグイン入口と自身のカードに緑の点を点灯し、一行の要約を添えられます。パネルを開くと消えます。音は鳴らず、振動もせず、システムの通知センターにも入らず、システム通知とは別個の権限です。",
         "confirm": "確認ダイアログで同意を求められます",
         "confirmDetail": "実行前に Cindy 自身と同じ確認ダイアログを開いて尋ねることができます。文面はプラグインが提供し、ダイアログにはその名前が表示されます。確認するかキャンセルするかはあなたがクリックして決め、プラグイン自身はクリックできません。同時に開けるのは 1 つまでで、頻繁な要求はブロックされます。",
+        "form": "フォームへの入力を求められます",
+        "formDetail": "Cindy 自身と同じ見た目のフォームを開いて入力を求めることができます。フォームにはプラグインの名前が表示され、入力内容は「保存」をクリックしたときだけプラグインに渡り、キャンセルすると何も渡りません。Cindy を見ているときだけ開き、同時に開けるのは 1 つまでで、頻繁な要求はブロックされます。",
         "fsWrite": "専用ファイルを管理できます",
         "fsWriteDetail": "専用データの読み書き、一覧表示、削除ができます。Agent の呼び出し中は、タスクの作業ディレクトリの読み取り、一覧表示、変更の監視もできます。書き込みと削除にはタスクの権限が適用され、書き込みの許可は削除の許可にはなりません。呼び出しが終わると監視も停止します。すべてのファイル操作はホストが実行します。",
         "deviceSync": "自分のパソコン間でプラグインのデータを同期",
@@ -8791,6 +8828,8 @@
         "slotNetwork": "ネットワークアクセス",
         "slotNotify": "システム通知",
         "slotBadge": "未読バッジ",
+        "slotConfirm": "確認ダイアログ",
+        "slotForm": "フォームダイアログ",
         "slotFs": "ファイル書き込み",
         "slotLibrary": "永続ライブラリ",
         "slotSkill": "Agent スキル",
@@ -8910,6 +8949,17 @@
       "saveAs": {
         "dialogTitle": "プラグイン「{{name}}」名前を付けて保存",
         "dialogMessage": "プラグイン「{{name}}」がコピーの保存先選択を求めています"
+      },
+      "form": {
+        "save": "保存",
+        "cancel": "キャンセル",
+        "addItem": "追加",
+        "removeItem": "削除",
+        "removeNamed": "「{{name}}」を削除",
+        "required": "この項目は必須です",
+        "incomplete": "未入力の必須項目があります",
+        "itemTitle": "{{label}} {{index}}",
+        "srDescription": "プラグイン「{{name}}」が入力を求めています"
       },
       "confirm": {
         "dialogTitle": "プラグイン「{{name}}」が確認を求めています"
@@ -12805,16 +12855,22 @@
     "listSeparator": "、",
     "crossAgentConvert": {
       "asking": {
-        "title": "変換できるワークスペース設定を検出",
-        "description": "このワークスペースには {{sourceAgent}} のプロジェクト設定があります。{{targetAgent}} 用の対応設定を生成しますか？変更はこのワークスペース内にのみ書き込まれます。",
-        "primary": "変換",
-        "cancel": "不要"
+        "title": "{{targetAgent}} でもこのプロジェクト設定を使いますか？",
+        "description": "このプロジェクトには {{sourceAgent}} 用の設定があります。以下の設定を {{targetAgent}} 用にプロジェクトに追加するか、そのままタスクを開始できます。",
+        "primary": "{{targetAgent}} に追加",
+        "cancel": "そのままタスクを開始"
       },
       "running": {
-        "title": "設定を変換中…",
-        "description": "{{targetAgent}} 用のワークスペース設定を書き込んでいます。ウィンドウを閉じないでください。",
-        "primary": "変換",
-        "cancel": "不要"
+        "title": "プロジェクト設定を追加中…",
+        "description": "{{targetAgent}} 用の設定をこのプロジェクトに保存しています。",
+        "primary": "追加中…",
+        "cancel": "そのままタスクを開始"
+      },
+      "items": {
+        "agents-md": "プロジェクトの指示と作業ルール",
+        "agents": "プロジェクト独自のアシスタントの役割",
+        "hooks": "スクリプトの実行などの自動処理",
+        "mcp": "外部ツールとの接続"
       }
     },
     "confirmDialog": {

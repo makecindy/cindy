@@ -6678,7 +6678,7 @@
           "defaultWorkspaceChip": "Par défaut : {{name}}",
           "defaultWorkspaceAria": "Choisir le projet par défaut des tâches transmises",
           "defaultWorkspaceRadioAria": "Définir « {{name}} » comme projet par défaut",
-          "defaultWorkspaceRowHint": "Le projet sélectionné est le projet par défaut : les conversations Telegram, Feishu / Lark et X qui n'ont pas choisi de projet y exécutent leurs tâches.",
+          "defaultWorkspaceRowHint": "Le projet sélectionné est le projet par défaut : les conversations Telegram, Feishu / Lark, X et Discord qui n'ont pas choisi de projet y exécutent leurs tâches.",
           "defaultProjectTag": "Par défaut",
           "defaultProjectFullAccessWarning": "Le projet par défaut « {{name}} » est en Accès complet : une @mention depuis n'importe quel groupe s'y exécute avec un accès complet.",
           "sharedSettingsPointer": "Les projets, modèles et autorisations sont partagés par tous les bots officiels.",
@@ -6923,6 +6923,40 @@
           "workingDeviceThisComputer": "Cet ordinateur",
           "workingDeviceUnknown": "Ordinateur de travail pas encore synchronisé",
           "workingDeviceUnnamed": "Ordinateur sans nom"
+        },
+        "discord": {
+          "description": "Associez votre compte Discord et transmettez des tâches à Cindy via le bot officiel, en message privé ou sur un serveur.",
+          "disabledHint": "Activez l'interrupteur pour obtenir un code d'association, puis envoyez-le au bot Cindy dans Discord.",
+          "toggleAria": "Activer/désactiver la connexion Discord",
+          "connect": "Associer Discord",
+          "openApp": "Ajouter Cindy à Discord",
+          "cancel": "Annuler l'association",
+          "retry": "Réessayer l'association",
+          "openBot": "Ouvrir le bot",
+          "addToGroup": "Ajouter à un serveur",
+          "unlink": "Dissocier Discord",
+          "unlinkConfirmTitle": "Dissocier Discord ?",
+          "unlinkConfirmDescription": "Discord ne transmettra plus de messages à cet appareil. Vos projets locaux et les autres canaux ne sont pas affectés.",
+          "status": {
+            "checking": "Vérification de la prise en charge par le serveur…",
+            "unavailable": "Indisponible sur ce serveur",
+            "disabled": "Désactivé",
+            "none": "Non associé",
+            "pending": "Envoyez le code au bot Cindy",
+            "awaiting_confirmation": "Confirmez l'association dans Discord",
+            "confirmed": "Associé en tant que {{user}}",
+            "denied": "Association refusée",
+            "expired": "Code d'association expiré",
+            "failed": "Échec de l'association",
+            "revoked": "Association supprimée",
+            "superseded": "Associé à un autre appareil"
+          },
+          "bindCode": {
+            "label": "Code d'association",
+            "copy": "Copier le code",
+            "copied": "Code d'association copié",
+            "hint": "Envoyez ce code au bot Cindy en message privé dans Discord, ou exécutez /bind avec ce code. Cindy n'est pas encore ajouté ? Ajoutez-le d'abord à Discord."
+          }
         }
       },
       "summary": {
@@ -7155,6 +7189,7 @@
         "providerTelegram": "Telegram",
         "providerX": "X",
         "providerFeishu": "Feishu / Lark",
+        "providerDiscord": "Discord",
         "requireConnected": "Modifiable une fois {{provider}} connecté (activez son interrupteur ci-dessus et attendez la connexion).",
         "offlineLocal": "{{provider}} est hors ligne. Les modifications sont enregistrées sur cet ordinateur et seront synchronisées avec la fiche du modèle dans la conversation à la reconnexion.",
         "requireBinding": "Terminez d'abord l'association du compte {{provider}}.",
@@ -8604,6 +8639,8 @@
         "badgeDetail": "Lorsqu'il a du nouveau, il peut afficher un point vert sur l'entrée Plugins de la navigation de gauche et sur sa propre carte, avec un résumé d'une ligne. Ouvrir son panneau efface le point. Le point n'émet aucun son, ne vibre pas, n'atteint jamais le centre de notifications du système, et constitue une autorisation distincte des bannières système.",
         "confirm": "Peut vous demander une confirmation dans une boîte de dialogue",
         "confirmDetail": "Avant d'agir, il peut ouvrir une boîte de dialogue semblable à celles de Cindy pour vous demander votre accord. La question provient du plugin et la boîte de dialogue porte son nom ; vous seul pouvez cliquer sur confirmer ou annuler (le plugin ne le peut pas). Une seule boîte de dialogue à la fois, et les demandes trop fréquentes sont bloquées.",
+        "form": "Peut vous demander de remplir un formulaire",
+        "formDetail": "Il peut ouvrir un formulaire semblable à ceux de Cindy pour vous demander des informations. Le formulaire affiche le nom du plugin ; ce que vous saisissez ne lui est transmis que lorsque vous cliquez sur Enregistrer, et rien n'est transmis si vous annulez. Il ne s'ouvre que lorsque vous utilisez Cindy, un seul formulaire à la fois, et les demandes trop fréquentes sont bloquées.",
         "fsWrite": "Peut gérer ses fichiers privés",
         "fsWriteDetail": "Peut lire, écrire, lister et supprimer ses propres données privées. Pendant un appel Agent actif, il peut aussi lire, lister et surveiller le répertoire de travail de la tâche. Écritures et suppressions suivent les autorisations de la tâche ; autoriser une écriture n'autorise pas la suppression. La surveillance s'arrête à la fin de l'appel. Toutes les opérations sont exécutées par l'hôte.",
         "deviceSync": "Synchroniser les données du plugin entre vos ordinateurs",
@@ -8906,6 +8943,8 @@
         "slotNetwork": "Accès réseau",
         "slotNotify": "Bannières système",
         "slotBadge": "Badge de non-lu",
+        "slotConfirm": "Boîtes de dialogue de confirmation",
+        "slotForm": "Formulaires",
         "slotFs": "Écriture de fichiers",
         "slotLibrary": "Bibliothèque persistante",
         "slotSkill": "Skills de l'Agent",
@@ -9025,6 +9064,17 @@
       "saveAs": {
         "dialogTitle": "Plugin « {{name}} » · Enregistrer sous",
         "dialogMessage": "Le plugin « {{name}} » vous demande d'enregistrer une copie"
+      },
+      "form": {
+        "save": "Enregistrer",
+        "cancel": "Annuler",
+        "addItem": "Ajouter",
+        "removeItem": "Supprimer",
+        "removeNamed": "Supprimer {{name}}",
+        "required": "Ce champ est obligatoire",
+        "incomplete": "Des champs obligatoires sont vides",
+        "itemTitle": "{{label}} {{index}}",
+        "srDescription": "Le plugin « {{name}} » vous demande de remplir ce formulaire"
       },
       "confirm": {
         "dialogTitle": "Le plugin « {{name}} » a besoin de votre confirmation"
@@ -12951,16 +13001,22 @@
     "listSeparator": ", ",
     "crossAgentConvert": {
       "asking": {
-        "title": "Configuration d'espace de travail convertible détectée",
-        "description": "Cet espace de travail contient une configuration au niveau du projet pour {{sourceAgent}}. Générer une configuration équivalente pour {{targetAgent}} ? Les modifications sont écrites uniquement dans cet espace de travail.",
-        "primary": "Convertir",
-        "cancel": "Non merci"
+        "title": "Utiliser aussi ces réglages avec {{targetAgent}} ?",
+        "description": "Ce projet contient déjà les réglages suivants pour {{sourceAgent}}. Vous pouvez en enregistrer une copie dans le projet pour {{targetAgent}} ou démarrer la tâche sans les ajouter.",
+        "primary": "Ajouter à {{targetAgent}}",
+        "cancel": "Démarrer la tâche"
       },
       "running": {
-        "title": "Conversion de la configuration…",
-        "description": "Écriture de la configuration de l'espace de travail pour {{targetAgent}}. Veuillez ne pas fermer la fenêtre.",
-        "primary": "Convertir",
-        "cancel": "Non merci"
+        "title": "Ajout des réglages du projet…",
+        "description": "Enregistrement des réglages de {{targetAgent}} dans ce projet.",
+        "primary": "Ajout en cours…",
+        "cancel": "Démarrer la tâche"
+      },
+      "items": {
+        "agents-md": "Consignes et conventions du projet",
+        "agents": "Rôles d’assistant personnalisés",
+        "hooks": "Actions automatiques, comme l’exécution d’un script du projet",
+        "mcp": "Connexions à des outils externes"
       }
     },
     "confirmDialog": {

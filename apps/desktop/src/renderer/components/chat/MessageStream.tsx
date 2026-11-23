@@ -369,7 +369,7 @@ import {
   ensureCard,
   ensureRemoteCard,
   retainRemoteCardSession,
-  ensureSessionCards,
+  retainLocalCardSession,
   getGhostCardSnapshot,
   subscribeGhostCards,
   type GhostCardSnapshot,
@@ -3368,7 +3368,7 @@ export function MessageStream({
     if (remoteCardDeviceId && sessionId) return retainRemoteCardSession(remoteCardDeviceId, sessionId);
   }, [remoteCardDeviceId, sessionId]);
   useEffect(() => {
-    if (sessionId && !ownerDeviceId) ensureSessionCards(sessionId);
+    if (sessionId && !ownerDeviceId) return retainLocalCardSession(sessionId);
   }, [sessionId, ownerDeviceId]);
   useEffect(() => {
     for (const m of messages) {
@@ -3377,7 +3377,7 @@ export function MessageStream({
         if (!cardId) continue;
         // Anything else (local tasks, shared-task guests) resolves here; a missing card keeps the tool row.
         if (remoteCardDeviceId && sessionId) ensureRemoteCard(remoteCardDeviceId, sessionId, cardId);
-        else ensureCard(cardId);
+        else ensureCard(cardId, sessionId ?? undefined);
       }
     }
   }, [messages, remoteCardDeviceId, sessionId]);

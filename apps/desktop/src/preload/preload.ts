@@ -829,6 +829,10 @@ const fanOutGhostUnreadSnapshot = createIpcFanOut('ghosts:unread-snapshot');
 // main 只投单个窗口(不广播),所以这里落地的窗口就是该弹框的唯一归属。
 const fanOutGhostConfirmRequest = createIpcFanOut('ghosts:confirm-request');
 const fanOutGhostConfirmDismissed = createIpcFanOut('ghosts:confirm-dismissed');
+// 插件表单弹窗(form 槽:renderer 画主机表单,答复回 main)。main 只投获得焦点的那个窗口;
+// 超时或切账号时再发 dismissed 收起。
+const fanOutGhostFormRequest = createIpcFanOut('ghosts:form-request');
+const fanOutGhostFormDismissed = createIpcFanOut('ghosts:form-dismissed');
 const fanOutGhostModelPickerRequest = createIpcFanOut('ghosts:model-picker:request');
 const fanOutGhostModelPickerDismissed = createIpcFanOut('ghosts:model-picker:dismissed');
 const fanOutForgeOidcInstallConfirmRequest = createIpcFanOut('forge-oidc-install:confirm-request');
@@ -1721,6 +1725,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // 管子请求。requestId 是 main 铸的,陌生/重复 id 由桥忽略。
     resolveConfirm: (requestId: string, confirmed: boolean): Promise<{ handled: boolean }> =>
       ipcRenderer.invoke('ghosts:confirm:resolve', { requestId, confirmed }),
+    onFormRequest: fanOutGhostFormRequest,
+    onFormDismissed: fanOutGhostFormDismissed,
+    // 表单弹窗回包(form 槽):main 只认投递目标窗口的回包,并按原表单收口 values。
+    resolveForm: (requestId: string, answer: import('../shared/ghostForm').GhostFormAnswer): Promise<{ handled: boolean }> =>
+      ipcRenderer.invoke('ghosts:form:resolve', { requestId, answer }),
     onForgeOidcInstallConfirmRequest: fanOutForgeOidcInstallConfirmRequest,
     resolveForgeOidcInstallConfirm: (
       requestId: string,
@@ -5826,7 +5835,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     setLifecycleAnnouncement: (enabled: boolean): Promise<{ hook: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:set-lifecycle-announcement', { enabled }),
     setProviderEnabled: (
-      provider: 'telegram' | 'x' | 'feishu',
+      provider: 'telegram' | 'x' | 'feishu' | 'discord',
       enabled: boolean,
     ): Promise<{ hook: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:set-provider-enabled', { provider, enabled }),
@@ -5835,7 +5844,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     setXCompanion: (botId: string | null, expectedBotId: string | null): Promise<{ hook: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:set-x-companion', { botId, expectedBotId }),
     setProviderDefaultWorkspace: (
-      provider: 'telegram' | 'x' | 'feishu',
+      provider: 'telegram' | 'x' | 'feishu' | 'discord',
       alias: string | null,
     ): Promise<{ hook: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:set-provider-default-workspace', { provider, alias }),
@@ -5854,16 +5863,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:hook-control:revoke-team', { teamId }),
     cancelPendingBind: (): Promise<{ hook: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:cancel-pending-bind'),
-    providerBindStart: (provider: 'telegram' | 'x' | 'feishu', scopeId?: string): Promise<{ hook: unknown }> =>
+    providerBindStart: (provider: 'telegram' | 'x' | 'feishu' | 'discord', scopeId?: string): Promise<{ hook: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:provider-bind-start', { provider, ...(scopeId ? { scopeId } : {}) }),
-    providerBindCancel: (provider: 'telegram' | 'x' | 'feishu'): Promise<{ hook: unknown }> =>
+    providerBindCancel: (provider: 'telegram' | 'x' | 'feishu' | 'discord'): Promise<{ hook: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:provider-bind-cancel', { provider }),
-    providerBindSelect: (provider: 'telegram' | 'x' | 'feishu', bindingId?: string): Promise<{ hook: unknown }> =>
+    providerBindSelect: (provider: 'telegram' | 'x' | 'feishu' | 'discord', bindingId?: string): Promise<{ hook: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:provider-bind-select', { provider, ...(bindingId === undefined ? {} : { bindingId }) }),
-    providerBindRevoke: (provider: 'telegram' | 'x' | 'feishu', bindingId?: string): Promise<{ hook: unknown }> =>
+    providerBindRevoke: (provider: 'telegram' | 'x' | 'feishu' | 'discord', bindingId?: string): Promise<{ hook: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:provider-bind-revoke', { provider, ...(bindingId === undefined ? {} : { bindingId }) }),
     openProviderAction: (
-      provider: 'telegram' | 'x' | 'feishu',
+      provider: 'telegram' | 'x' | 'feishu' | 'discord',
       action: 'connect' | 'provider' | 'add-to-group',
       scopeId?: string,
     ): Promise<{ ok: true }> =>

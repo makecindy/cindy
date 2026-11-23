@@ -7,7 +7,7 @@
 > **适用路径**：`apps/desktop/src/main/im/**`、`apps/desktop/src/main/hook-control/**`
 
 个人 IM 渠道（Telegram / 飞书 / 微信 / 钉钉 / Discord / 企业微信）与官方 hook（官方
-Telegram / Slack / X / 飞书 / Lark）是同一件事的两套实现：把渠道里的一条消息变成 Cindy 任务里的一轮，
+Telegram / Slack / X / 飞书 / Lark / Discord）是同一件事的两套实现：把渠道里的一条消息变成 Cindy 任务里的一轮，
 再把结果送回渠道。本文登记两套实现**今天各自在哪一步做了什么**、**持有哪些状态**、
 **合并后归谁**，以及迁移中必须守住的不变量。用户可见的两侧差异另见
 [`../product-rules/telegram-bot-parity.md`](../product-rules/telegram-bot-parity.md)；
@@ -165,8 +165,8 @@ Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询�
    IM 写 `agentMeta.imSource`，hook 写 `agentMeta.hookSource`；新数据不得塞进 `origin`
    （coordinator 把任何 `origin.kind` 当非人工输入）。
 4. **Pi 管理命令授权来源**：个人 IM 用 `authenticated-im-command`；官方 hook 的 origin
-   是 `hook`，**不得**伪装成 `local-desktop-command`；官方 Telegram、官方飞书 / Lark 与对应个人 bot
-   共用 `source.im`（`telegram` / `feishu`），hook 路径（`session-runner.ts` 的 `mainOwnedChannelOrigin`）
+   是 `hook`，**不得**伪装成 `local-desktop-command`；官方 Telegram、官方飞书 / Lark、官方 Discord 与对应个人 bot
+   共用 `source.im`（`telegram` / `feishu` / `discord`），hook 路径（`session-runner.ts` 的 `mainOwnedChannelOrigin`）
    必须显式映射成 `{ kind: 'hook' }`，**不得**落到个人 bot 的可信 `im` 来源（回归：`session-runner.test.ts`
    「线程来源」表）；`MAIN_OWNED_SEND_CONTEXT` 是 Symbol，
    跨队列快照时必须由宿主在派发时重新盖章，不能指望它随队列项持久化。
@@ -350,6 +350,23 @@ inbound ──► admitted ──► queued? ──► dispatching ──► run
   用 `feishu-hook`，让 `cindy_feishu_bot` 追加官方会话提示而不把它当个人渠道；模型说明为
   `buildHookPromptNote('feishu')`。
 - 绑定链接只接受飞书 / Lark 网页授权页与打开机器人的 AppLink（`feishuDeepLink.ts`），关联码只随 pending 快照出现。
+
+### 官方 Discord（2026-11-23，未发布）
+
+官方 Discord 寄宿在 telegram-hook-server 的独立 `/discord` 路径，经 provider-neutral 状态机接入
+（`manager.ts` 的 `discordConfig`），与个人 Discord bot（`im/discord/**`、`cindy_discord`）互不相干：
+
+- lane：私信 `discord:dm:…`，服务器频道 / 子区 `discord:ch:…`（同频道每个用户一条）；`deriveLaneKind` 把
+  `discord:ch:` 视为群轮次，send 后持有 session turn lease。派发只接本机已确认绑定的应用与用户。
+- 出站全部由服务端渲染（进度、终稿、附件、交互按钮）；hello 只声明 provider-bind / provider-prefs /
+  `provider:discord`，不声明 `msg-op-v1`、`session-picker-v1`、`session-result-v1` 与任何 `telegram-*`。
+  后台轮次回传（`backgroundResults`）不覆盖 Discord。
+- 会话：`sessions.source` 与 `vendorOptions.source` 都用 `discord-hook`，不复用个人 bot 的 `discord`
+  （个人行会被启动回填强制归入「对话」并改写托管目录，`cindy_discord` 也只给个人任务用）；
+  origin 为 `{ kind: 'hook', source: 'discord' }`；模型说明为 `buildHookPromptNote('discord')`。
+- 项目与模型只读共用那一份（§0），不等并入、不吃服务端便签；Discord 没有 `/model` 卡，不是偏好镜像渠道。
+- 关联只靠一次性关联码（私信或 `/bind`），设置页把它排在动作行之前；`connectUrl` 只是添加应用，
+  本机不自动打开。协议约定见 [`protocol-compatibility/official-discord-channel.md`](protocol-compatibility/official-discord-channel.md)。
 
 ### 官方 X 的伙伴路由
 

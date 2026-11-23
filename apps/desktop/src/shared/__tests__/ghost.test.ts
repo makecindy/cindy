@@ -1265,6 +1265,7 @@ describe('ghost · Manifest v3 直接能力声明', () => {
       agent: {},
       notify: true,
       library: true,
+      form: true,
       futureCapability: { mode: 'example' },
     });
     expect(result.ok).toBe(true);
@@ -1275,6 +1276,9 @@ describe('ghost · Manifest v3 直接能力声明', () => {
     expect(result.manifest.notify).toBe(true);
     expect(result.manifest.library).toBe(true);
     expect(ghostPermissionItems(result.manifest).map((item) => item.key)).toContain('library');
+    // form 是独立权限项:已装插件新增表单弹窗时,更新的扩权确认要能拦下。
+    expect(result.manifest.form).toBe(true);
+    expect(ghostPermissionItems(result.manifest).map((item) => item.key)).toContain('form');
     expect(result.manifest.futureCapability).toEqual({ mode: 'example' });
     expect(result.unsupportedLegacySlots).toEqual([]);
     expect(ghostPermissionItems(result.manifest).map((item) => item.key)).not.toContain(

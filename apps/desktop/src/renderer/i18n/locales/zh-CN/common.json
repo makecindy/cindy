@@ -6572,7 +6572,7 @@
           "defaultWorkspaceChip": "默认：{{name}}",
           "defaultWorkspaceAria": "选择派发任务时使用的默认项目",
           "defaultWorkspaceRadioAria": "把「{{name}}」设为默认项目",
-          "defaultWorkspaceRowHint": "选中的是默认项目：在 Telegram、飞书 / Lark 和 X 里，没有单独选过项目的私聊和群，任务都落在它里面。",
+          "defaultWorkspaceRowHint": "选中的是默认项目：在 Telegram、飞书 / Lark、X 和 Discord 里，没有单独选过项目的私聊和群，任务都落在它里面。",
           "defaultProjectTag": "默认",
           "defaultProjectFullAccessWarning": "默认项目「{{name}}」的权限是完全访问：任何群里 @ 机器人，都会以完全访问在它里面执行。",
           "sharedSettingsPointer": "项目、模型与权限由所有官方机器人共用。",
@@ -6813,6 +6813,40 @@
           "workingDeviceThisComputer": "本机",
           "workingDeviceUnknown": "工作电脑尚未同步",
           "workingDeviceUnnamed": "未命名电脑"
+        },
+        "discord": {
+          "description": "关联 Discord 账号，在私信或服务器里通过官方 bot 给 Cindy 派发任务。",
+          "disabledHint": "打开开关后会生成关联码，把它发给 Discord 里的 Cindy 机器人即可完成关联。",
+          "toggleAria": "切换 Discord 连接",
+          "connect": "关联 Discord",
+          "openApp": "把 Cindy 添加到 Discord",
+          "cancel": "取消关联",
+          "retry": "重新关联",
+          "openBot": "打开 Cindy bot",
+          "addToGroup": "添加到 Discord 服务器",
+          "unlink": "解绑 Discord",
+          "unlinkConfirmTitle": "解绑 Discord？",
+          "unlinkConfirmDescription": "解绑后 Discord 将不能再向这台设备派发消息；本地项目和其他渠道不受影响。",
+          "status": {
+            "checking": "正在检查服务器支持…",
+            "unavailable": "当前服务器尚未开放",
+            "disabled": "已停用",
+            "none": "未关联",
+            "pending": "把关联码发给 Cindy 机器人",
+            "awaiting_confirmation": "请在 Discord 内确认关联",
+            "confirmed": "已关联 {{user}}",
+            "denied": "已拒绝关联",
+            "expired": "关联码已过期",
+            "failed": "关联失败",
+            "revoked": "已解除关联",
+            "superseded": "已关联到另一台设备"
+          },
+          "bindCode": {
+            "label": "关联码",
+            "copy": "复制关联码",
+            "copied": "关联码已复制",
+            "hint": "在 Discord 里把关联码私信发给 Cindy 机器人，或执行 /bind 并填入关联码。还没添加 Cindy？先把它添加到 Discord。"
+          }
         }
       },
       "summary": {
@@ -7045,6 +7079,7 @@
         "providerTelegram": "Telegram",
         "providerX": "X",
         "providerFeishu": "飞书 / Lark",
+        "providerDiscord": "Discord",
         "requireConnected": "连接 {{provider}} 后可编辑（先在上方开启对应开关并等待连接成功）。",
         "offlineLocal": "{{provider}} 暂时连不上，改动会保存在本机；连上后同步到对话里的模型卡。",
         "requireBinding": "先完成 {{provider}} 账号关联后可编辑。",
@@ -8489,6 +8524,8 @@
         "badgeDetail": "有新内容时，它可以在左侧导航的插件入口和自己的卡片上点亮一个绿点，并附一句话摘要；你打开它的面板即清零。绿点不出声、不震动，也不会进入系统通知中心，和上面的系统提示是两项独立权限。",
         "confirm": "可弹出确认框征求你同意",
         "confirmDetail": "它动手前可以弹一个和 Cindy 同款的确认框来问你，问句由它提供、框上会标注它的名字；同意还是取消都由你亲手点，它自己点不了。同时最多一个确认框，弹得太频会被拦下。",
+        "form": "可弹出表单请你填写",
+        "formDetail": "它可以弹一个和 Cindy 同款的表单请你填写，表单上会标注它的名字；填好的内容只有你点「保存」后才交给它，点取消什么都不给。只在你正看着 Cindy 时弹出，同时最多一个表单，弹得太频会被拦下。",
         "fsWrite": "可管理自己的私有文件",
         "fsWriteDetail": "可读写、列举和删除自己的私有数据。当前 Agent 调用期间，也可读取、列举和监听任务的工作目录。写入与删除沿用任务权限；允许写入不代表允许删除。调用结束即停止监听。文件操作均由宿主执行。",
         "deviceSync": "在你的电脑间同步插件资料",
@@ -8791,6 +8828,8 @@
         "slotNetwork": "网络访问",
         "slotNotify": "系统提示",
         "slotBadge": "未读角标",
+        "slotConfirm": "确认弹窗",
+        "slotForm": "表单弹窗",
         "slotFs": "写文件",
         "slotLibrary": "持久作品库",
         "slotSkill": "Agent 技能",
@@ -8910,6 +8949,17 @@
       "saveAs": {
         "dialogTitle": "插件「{{name}}」另存为",
         "dialogMessage": "插件「{{name}}」请求你另存一份副本"
+      },
+      "form": {
+        "save": "保存",
+        "cancel": "取消",
+        "addItem": "添加",
+        "removeItem": "删除",
+        "removeNamed": "删除「{{name}}」",
+        "required": "这一项必填",
+        "incomplete": "还有必填项没填",
+        "itemTitle": "{{label}} {{index}}",
+        "srDescription": "插件「{{name}}」请你填写"
       },
       "confirm": {
         "dialogTitle": "插件「{{name}}」请你确认"
@@ -12805,16 +12855,22 @@
     "listSeparator": "、",
     "crossAgentConvert": {
       "asking": {
-        "title": "检测到工作区配置可转换",
-        "description": "当前工作区包含 {{sourceAgent}} 的项目级配置。是否为 {{targetAgent}} 生成对应配置？这些更改只会写入当前工作区目录。",
-        "primary": "转换",
-        "cancel": "暂不转换"
+        "title": "要让 {{targetAgent}} 也使用这些项目设置吗？",
+        "description": "这个项目为 {{sourceAgent}} 配好了以下设置。你可以在项目里为 {{targetAgent}} 添加一份，也可以直接开始任务。",
+        "primary": "添加到 {{targetAgent}}",
+        "cancel": "直接开始任务"
       },
       "running": {
-        "title": "正在转换配置…",
-        "description": "正在为 {{targetAgent}} 写入工作区配置，请勿关闭窗口。",
-        "primary": "转换",
-        "cancel": "暂不转换"
+        "title": "正在添加项目设置…",
+        "description": "正在将 {{targetAgent}} 的设置保存到当前项目。",
+        "primary": "正在添加…",
+        "cancel": "直接开始任务"
+      },
+      "items": {
+        "agents-md": "项目说明和工作约定",
+        "agents": "项目自定义的助手角色",
+        "hooks": "自动执行的操作（如运行项目脚本）",
+        "mcp": "外部工具连接"
       }
     },
     "confirmDialog": {

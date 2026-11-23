@@ -6572,7 +6572,7 @@
           "defaultWorkspaceChip": "기본값: {{name}}",
           "defaultWorkspaceAria": "작업을 보낼 때 사용할 기본 프로젝트 선택",
           "defaultWorkspaceRadioAria": "\"{{name}}\"을(를) 기본 프로젝트로 설정",
-          "defaultWorkspaceRowHint": "선택한 프로젝트가 기본 프로젝트입니다. Telegram, Feishu / Lark, X에서 프로젝트를 따로 고르지 않은 대화의 작업은 여기에서 실행됩니다.",
+          "defaultWorkspaceRowHint": "선택한 프로젝트가 기본 프로젝트입니다. Telegram, Feishu / Lark, X, Discord에서 프로젝트를 따로 고르지 않은 대화의 작업은 여기에서 실행됩니다.",
           "defaultProjectTag": "기본",
           "defaultProjectFullAccessWarning": "기본 프로젝트 ‘{{name}}’의 권한이 전체 액세스입니다. 어느 그룹에서 @로 불러도 이 안에서 전체 액세스로 실행됩니다.",
           "sharedSettingsPointer": "프로젝트, 모델, 권한은 모든 공식 봇이 함께 씁니다.",
@@ -6813,6 +6813,40 @@
           "workingDeviceThisComputer": "이 컴퓨터",
           "workingDeviceUnknown": "작업 컴퓨터가 아직 동기화되지 않았습니다",
           "workingDeviceUnnamed": "이름 없는 컴퓨터"
+        },
+        "discord": {
+          "description": "Discord 계정을 연결하고 DM이나 서버에서 공식 bot을 통해 Cindy에게 작업을 맡기세요.",
+          "disabledHint": "스위치를 켜면 연동 코드가 발급됩니다. Discord에서 Cindy 봇에게 보내 연결을 완료하세요.",
+          "toggleAria": "Discord 연결 전환",
+          "connect": "Discord 연결",
+          "openApp": "Discord에 Cindy 추가",
+          "cancel": "연결 취소",
+          "retry": "연결 다시 시도",
+          "openBot": "봇 열기",
+          "addToGroup": "서버에 추가",
+          "unlink": "Discord 연결 해제",
+          "unlinkConfirmTitle": "Discord 연결을 해제할까요?",
+          "unlinkConfirmDescription": "Discord에서 이 기기로 더 이상 메시지를 보낼 수 없습니다. 로컬 프로젝트와 다른 채널에는 영향을 주지 않습니다.",
+          "status": {
+            "checking": "서버 지원 확인 중…",
+            "unavailable": "이 서버에서는 사용할 수 없음",
+            "disabled": "사용 안 함",
+            "none": "연결되지 않음",
+            "pending": "Cindy 봇에게 연동 코드를 보내세요",
+            "awaiting_confirmation": "Discord에서 연결을 확인해 주세요",
+            "confirmed": "{{user}} 계정이 연결됨",
+            "denied": "연결이 거부됨",
+            "expired": "연동 코드가 만료됨",
+            "failed": "연결 실패",
+            "revoked": "연결 해제됨",
+            "superseded": "다른 기기에 연결됨"
+          },
+          "bindCode": {
+            "label": "연동 코드",
+            "copy": "코드 복사",
+            "copied": "연동 코드를 복사했습니다",
+            "hint": "Discord DM으로 이 코드를 Cindy 봇에게 보내거나 Discord에서 /bind를 실행해 코드를 입력하세요. 아직 Cindy를 추가하지 않았다면 먼저 Discord에 추가하세요."
+          }
         }
       },
       "summary": {
@@ -7045,6 +7079,7 @@
         "providerTelegram": "Telegram",
         "providerX": "X",
         "providerFeishu": "Feishu / Lark",
+        "providerDiscord": "Discord",
         "requireConnected": "{{provider}} 연결 후 편집할 수 있습니다(위의 스위치를 켜고 연결을 기다려 주세요).",
         "offlineLocal": "{{provider}}에 연결되지 않은 동안 변경 사항은 이 컴퓨터에 저장되며, 다시 연결되면 채팅의 모델 카드로 동기화됩니다.",
         "requireBinding": "먼저 {{provider}} 계정 연결을 완료해 주세요.",
@@ -8489,6 +8524,8 @@
         "badgeDetail": "새 내용이 있으면 왼쪽 내비게이션의 플러그인 항목과 자체 카드에 초록 점을 켜고 한 줄 요약을 함께 표시할 수 있습니다. 패널을 열면 사라집니다. 소리를 내지 않고 진동하지도 않으며 시스템 알림 센터에도 들어가지 않고, 시스템 알림과는 별개의 권한입니다.",
         "confirm": "확인 대화상자로 동의를 요청할 수 있음",
         "confirmDetail": "작업 전에 Cindy 자체와 동일한 확인 대화상자를 열어 물어볼 수 있습니다. 질문 내용은 플러그인이 제공하며 대화상자에는 그 이름이 표시됩니다. 확인이든 취소든 직접 클릭해야 하고 플러그인은 스스로 누를 수 없습니다. 동시에 하나만 열 수 있으며 너무 자주 요청하면 차단됩니다.",
+        "form": "양식 입력을 요청할 수 있음",
+        "formDetail": "Cindy 자체와 같은 모양의 양식을 열어 입력을 요청할 수 있습니다. 양식에는 플러그인 이름이 표시되며, 입력한 내용은 \"저장\"을 클릭해야만 플러그인에 전달되고 취소하면 아무것도 전달되지 않습니다. Cindy를 보고 있을 때만 열리고, 한 번에 하나까지만 열 수 있으며, 너무 자주 요청하면 차단됩니다.",
         "fsWrite": "전용 파일을 관리할 수 있음",
         "fsWriteDetail": "전용 데이터를 읽고 쓰고, 목록을 조회하고 삭제할 수 있습니다. Agent 호출 중에는 작업의 작업 디렉터리를 읽고, 목록을 조회하고, 변경을 감시할 수도 있습니다. 쓰기와 삭제는 작업 권한을 따르며, 쓰기 허용이 삭제 허용을 뜻하지는 않습니다. 호출이 끝나면 감시도 중지됩니다. 모든 파일 작업은 호스트에서 실행됩니다.",
         "deviceSync": "내 컴퓨터 간 플러그인 데이터 동기화",
@@ -8791,6 +8828,8 @@
         "slotNetwork": "네트워크 접근",
         "slotNotify": "시스템 알림",
         "slotBadge": "읽지 않음 배지",
+        "slotConfirm": "확인 대화상자",
+        "slotForm": "양식 대화상자",
         "slotFs": "파일 쓰기",
         "slotLibrary": "영구 라이브러리",
         "slotSkill": "Agent 스킬",
@@ -8910,6 +8949,17 @@
       "saveAs": {
         "dialogTitle": "플러그인 \"{{name}}\" 다른 이름으로 저장",
         "dialogMessage": "플러그인 \"{{name}}\"이(가) 복사본 저장을 요청합니다"
+      },
+      "form": {
+        "save": "저장",
+        "cancel": "취소",
+        "addItem": "추가",
+        "removeItem": "삭제",
+        "removeNamed": "{{name}} 삭제",
+        "required": "필수 항목입니다",
+        "incomplete": "입력하지 않은 필수 항목이 있습니다",
+        "itemTitle": "{{label}} {{index}}",
+        "srDescription": "플러그인 \"{{name}}\"이(가) 입력을 요청합니다"
       },
       "confirm": {
         "dialogTitle": "플러그인 \"{{name}}\"이(가) 확인을 요청합니다"
@@ -12805,16 +12855,22 @@
     "listSeparator": ", ",
     "crossAgentConvert": {
       "asking": {
-        "title": "변환 가능한 워크스페이스 설정 감지됨",
-        "description": "이 워크스페이스에 {{sourceAgent}} 프로젝트 설정이 있습니다. {{targetAgent}}용 대응 설정을 생성할까요? 변경 사항은 이 워크스페이스 안에만 기록됩니다.",
-        "primary": "변환",
-        "cancel": "아니요"
+        "title": "{{targetAgent}}에서도 이 프로젝트 설정을 사용할까요?",
+        "description": "이 프로젝트에는 아래와 같은 {{sourceAgent}}용 설정이 있습니다. 프로젝트에 {{targetAgent}}용으로도 추가하거나 바로 작업을 시작할 수 있습니다.",
+        "primary": "{{targetAgent}}에 추가",
+        "cancel": "바로 작업 시작"
       },
       "running": {
-        "title": "설정 변환 중…",
-        "description": "{{targetAgent}}용 워크스페이스 설정을 기록하고 있습니다. 창을 닫지 마세요.",
-        "primary": "변환",
-        "cancel": "아니요"
+        "title": "프로젝트 설정 추가 중…",
+        "description": "이 프로젝트에 {{targetAgent}}용 설정을 저장하고 있습니다.",
+        "primary": "추가 중…",
+        "cancel": "바로 작업 시작"
+      },
+      "items": {
+        "agents-md": "프로젝트 지침 및 작업 규칙",
+        "agents": "프로젝트에서 정의한 도우미 역할",
+        "hooks": "프로젝트 스크립트 실행과 같은 자동 작업",
+        "mcp": "외부 도구 연결"
       }
     },
     "confirmDialog": {
