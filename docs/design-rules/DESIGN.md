@@ -1096,6 +1096,7 @@ tailwind-merge，调用方传入的 `z-<层名>` 会覆盖组件的默认层。
 | `modal-blocking` | 10050 | 全局阻断提示 | 只经 `confirm({ blocking: true })` 使用（现为登录过期）；遮罩与面板同值，其中 Tip 取 +1 |
 | `toast` | 10100 | 通知 | Toast 容器 |
 | `toast-top` | 10101 | 通知之上 | 下载 Toast、庆祝动画（`ConfettiBurst` 默认值，额度重置动画同层） |
+| `blocking-gate` | 10200 | 必须先处理才能继续使用的整窗遮挡 | 协议更新确认（`LegalTermsUpdateGate`）及其加载中的透明遮挡；盖过通知，只用于不处理就不能继续用的场景 |
 
 使用规则：
 

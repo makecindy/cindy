@@ -42,11 +42,20 @@ function isModelGroupAgentKind(value: unknown): value is ModelGroupAgentKind {
 }
 
 /**
- * 只给本机直接开的普通任务：伙伴、定时与自动化、IM、复核等来源，SSH、Agent 在另一台电脑、协同
- * (Lead / Worker)、共享中的任务与目标都不提议。被控电脑上的任务由那台的主进程回答，本机查不到会话行。
+ * 哪些来源的任务按记下的模式接替(撞配额提议与自动降级共用)：本机直接开的普通任务，以及定时任务与自动化建的任务
+ * (2026-11-22 用户裁决：模式跟着任务走，接替是所有任务公共的事)。伙伴另有自己的接替(§6.2)；IM、复核等来源
+ * 还没有接入模式选择，按原样不接替。
+ */
+export function isModelGroupRecoverySource(source: string | null | undefined): boolean {
+  return source === 'desktop' || source === 'scheduler';
+}
+
+/**
+ * SSH、Agent 在另一台电脑、协同(Lead / Worker)、共享中的任务与目标都不提议。被控电脑上的任务由那台的主进程回答，
+ * 本机查不到会话行。
  */
 function isPlainLocalTask(row: ModelGroupSwitchOfferSessionRow): boolean {
-  return row.source === 'desktop' && !row.remoteHostId && !row.agentDeviceId && !row.orcaRole;
+  return isModelGroupRecoverySource(row.source) && !row.remoteHostId && !row.agentDeviceId && !row.orcaRole;
 }
 
 export async function computeModelGroupSwitchOffer(

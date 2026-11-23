@@ -10968,8 +10968,9 @@ export function registerGhostIpc(): void {
       updateKey: activeOwnerScopeKey(),
       tempRoot: app.getPath('temp'),
       isCurrentOwner: () => ghostOwnerScope.isStable(owner),
-      download: (file, asset, callbacks) => downloadGithubPluginRelease(
-        outboundFetch as typeof fetch, token, source.repository, asset, file, callbacks,
+      download: (file, _asset, callbacks) => downloadGithubPluginRelease(
+        outboundFetch as typeof fetch, check.authenticated ? token : null, source.repository,
+        release, file, callbacks,
       ),
       install: async file => {
         const { ghost } = await installLocalFile(event.sender, owner, file, {
@@ -11127,14 +11128,16 @@ export function registerGhostIpc(): void {
     if (!ghostOwnerScope.isStable(owner)) throwIpcError('PRECONDITION_FAILED', 'Plugin owner changed');
     if (action === 'sign-in') return openGithubSignIn();
     const token = await readLocalGithubToken();
-    const result = await checkGithubPluginRelease(outboundFetch as typeof fetch, token, repository, target.manifest.id, target.manifest.version);
+    const { check, authenticated } = await checkGithubPluginRelease(
+      outboundFetch as typeof fetch, token, repository, target.manifest.id, target.manifest.version,
+    );
     if (!ghostOwnerScope.isStable(owner)) throwIpcError('PRECONDITION_FAILED', 'Plugin owner changed');
-    if (action === 'check' || !token || typeof expectedAssetId !== 'number') return result;
+    if (action === 'check' || typeof expectedAssetId !== 'number') return check;
     const instance = installedGhostStoragePart(target);
     const approval = ghostInstallApprovalToken(target.approval);
     const ownerStamp = getGhostOwnerPushStamp();
     return installCheckedGithubPluginRelease({
-      check: result,
+      check,
       expectedAssetId,
       pending: githubReleaseUpdates,
       updateKey: JSON.stringify([activeOwnerScopeKey(), instance]),
@@ -11145,8 +11148,10 @@ export function registerGhostIpc(): void {
           sendGhostContentsPush(event.sender, GITHUB_PLUGIN_RELEASE_PROGRESS_CHANNEL, { instanceId: instance, progress }, ownerStamp);
         }
       },
-      download: (file, release, callbacks) =>
-        downloadGithubPluginRelease(outboundFetch as typeof fetch, token, repository, release, file, callbacks),
+      download: (file, release, callbacks) => downloadGithubPluginRelease(
+        outboundFetch as typeof fetch, authenticated ? token : null, repository,
+        { ...release, pluginId: target.manifest.id }, file, callbacks,
+      ),
       async install(file, release) {
         const updated = await updateLocalFile(event.sender, owner, file, {
           expectedPackageSha256: release.sha256,

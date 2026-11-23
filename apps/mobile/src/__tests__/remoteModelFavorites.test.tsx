@@ -119,6 +119,20 @@ it("maps engine spelling and treats unchanged field order as no operation", () =
     expected: item,
   });
 });
+// 回归：保存或编辑 ultrafast 收藏时，写入必须带原档位。收成 true 后星标对不上，再点会再加一条。
+it("preserves ultrafast when a favorite is saved or edited", () => {
+  const stored = { ...item, fast: "ultrafast" as const };
+  const mobile = mobileFavorite(stored);
+  expect(mobileFavoriteMutation([], [{ ...mobile, uid: "draft" }])).toMatchObject({
+    kind: "add",
+    item: { agent: "cc", effort: "high", fast: "ultrafast" },
+  });
+  expect(mobileFavoriteMutation([stored], [{ ...mobile, effort: "low" }])).toMatchObject({
+    kind: "update",
+    expected: stored,
+    item: { agent: "cc", effort: "low", fast: "ultrafast" },
+  });
+});
 it("reads only the controlled computer and reloads on its invalidation", async () => {
   await act(async () => root.render(createElement(Probe, {})));
   expect(h.invoke).toHaveBeenCalledWith("a", "maker:model-favorites:get", []);

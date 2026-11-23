@@ -728,6 +728,10 @@
       "z-toast-top": {
         "$type": "number",
         "$value": 10101
+      },
+      "z-blocking-gate": {
+        "$type": "number",
+        "$value": 10200
       }
     }
   }
