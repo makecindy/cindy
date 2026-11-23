@@ -8576,6 +8576,8 @@
         "badgeDetail": "Cuando tiene novedades, puede mostrar un punto verde en la entrada Complementos de la navegación izquierda y en su propia tarjeta, con un resumen de una línea. Al abrir su panel, el punto desaparece. El punto no emite sonidos, no vibra, nunca llega al centro de notificaciones del sistema y requiere un permiso independiente del de los avisos del sistema.",
         "confirm": "Puede pedir tu confirmación en un cuadro de diálogo",
         "confirmDetail": "Antes de actuar puede abrir un cuadro de diálogo parecido al propio de Cindy para preguntarte. La pregunta proviene del complemento y el cuadro de diálogo está etiquetado con su nombre; solo tú puedes hacer clic en confirmar o cancelar; el complemento no puede. Como máximo, un diálogo a la vez, y se bloquea preguntar con demasiada frecuencia.",
+        "form": "Puede pedirte que rellenes un formulario",
+        "formDetail": "Puede abrir un formulario con el mismo aspecto que los de Cindy para pedirte datos. El formulario muestra el nombre del complemento; lo que escribas solo le llega cuando haces clic en Guardar, y si cancelas no recibe nada. Solo se abre mientras estás usando Cindy, como máximo un formulario a la vez, y se bloquea si lo pide con demasiada frecuencia.",
         "fsWrite": "Puede gestionar sus archivos privados",
         "fsWriteDetail": "Puede leer, escribir, listar y eliminar sus propios datos privados. Durante una llamada activa del Agent también puede leer, listar y vigilar el directorio de trabajo de la tarea. La escritura y la eliminación siguen los permisos de la tarea; permitir una escritura no permite eliminar. La vigilancia termina con la llamada. El host ejecuta todas las operaciones.",
         "deviceSync": "Sincronizar datos del complemento entre tus computadoras",
@@ -8878,6 +8880,8 @@
         "slotNetwork": "Acceso a la red",
         "slotNotify": "Avisos del sistema",
         "slotBadge": "Indicador de no leídos",
+        "slotConfirm": "Diálogos de confirmación",
+        "slotForm": "Formularios",
         "slotFs": "Escritura de archivos",
         "slotLibrary": "Biblioteca persistente",
         "slotSkill": "Habilidades de Agent",
@@ -8997,6 +9001,17 @@
       "saveAs": {
         "dialogTitle": "Complemento “{{name}}” — Guardar como",
         "dialogMessage": "El complemento “{{name}}” te pide que guardes una copia"
+      },
+      "form": {
+        "save": "Guardar",
+        "cancel": "Cancelar",
+        "addItem": "Añadir",
+        "removeItem": "Quitar",
+        "removeNamed": "Quitar {{name}}",
+        "required": "Este campo es obligatorio",
+        "incomplete": "Faltan campos obligatorios",
+        "itemTitle": "{{label}} {{index}}",
+        "srDescription": "El complemento “{{name}}” te pide que rellenes este formulario"
       },
       "confirm": {
         "dialogTitle": "El complemento “{{name}}” necesita tu confirmación"

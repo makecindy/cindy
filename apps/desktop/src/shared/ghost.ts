@@ -118,6 +118,10 @@ const GHOST_ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
  * 超时/无窗口/载荷非法一律 fail closed 当「没同意」。壳、标题与身份头(图标+名字)
  * 由主机画,意识只供被净化的正文与按钮字——伪装不了主机文案、冒充不了别的意识,
  * 也点不了自己的按钮。桌面独占:本机对话框在 device-link 白名单里属永不放行类别。
+ * 'form' = 表单弹窗(2026-11-23):意识经管子请主机弹一个**主机画的**表单(文本、多行、
+ * 下拉、分段单选、开关、可增删的条目列表),拿回用户保存的值。确认弹窗只能问「是/否」,
+ * 要用户填一组设置时用本槽。护栏同 confirm(限速 + 全局单飞 + fail closed),另加
+ * 「只在用户正看着 Cindy 时弹」。字段、上限与校验见 shared/ghostForm.ts。桌面独占。
  * 'fs' = 写文件(2026-07-14):意识经管子请主机代写文件(创建/修改)。三档
  * 目的地:自己的私有数据目录(userData/ghost-fs/<id>,免确认)、当前会话
  * workdir(跟随会话 permission 模式:免批模式直写、逐条模式弹确认卡、
@@ -180,6 +184,7 @@ const LEGACY_GHOST_SLOTS = [
   'notify',
   'badge',
   'confirm',
+  'form',
   'fs',
   'library',
   'device-sync',
@@ -1943,6 +1948,8 @@ export interface GhostManifest {
   notify?: true;
   badge?: true;
   confirm?: true;
+  /** 表单弹窗(form 槽):请主机弹表单并拿回用户保存的值。 */
+  form?: true;
   fs?: true;
   /** 持久作品库；卸载不删数据，位置和删除由 Host 设置页管理。 */
   library?: true;
@@ -2164,6 +2171,7 @@ export function ghostContentKeys(manifest: GhostManifest): string[] {
   if (manifest.notify === true) keys.push('slotNotify');
   if (manifest.badge === true) keys.push('slotBadge');
   if (manifest.confirm === true) keys.push('slotConfirm');
+  if (manifest.form === true) keys.push('slotForm');
   if (manifest.fs === true) keys.push('slotFs');
   if (manifest.library === true) keys.push('slotLibrary');
   // skill 是信任面最高的内容(给主 Agent 灌指令),详情页必须如实露出。
@@ -2942,6 +2950,16 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
       kind: 'confirm',
       labelKey: 'confirm',
       detailKey: 'confirmDetail',
+    });
+  }
+  // form 槽:能请主机弹一个表单让用户填(会打断操作)。独立 key,已装插件新增这一档时
+  // 扩权确认能拦下;图标与确认弹窗同组(都是主机弹窗来问你)。
+  if (manifest.form === true) {
+    items.push({
+      key: 'form',
+      kind: 'confirm',
+      labelKey: 'form',
+      detailKey: 'formDetail',
     });
   }
   // 常驻模式如实告知(用户要背一个后台进程);on-demand 是默认行为,不列。
@@ -3724,6 +3742,7 @@ const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
   'notify',
   'badge',
   'confirm',
+  'form',
   'fs',
   'library',
   'deviceSync',
@@ -3741,6 +3760,7 @@ const V3_BOOLEAN_CAPABILITY_FIELDS = [
   'notify',
   'badge',
   'confirm',
+  'form',
   'fs',
   'library',
   'deviceSync',
@@ -3770,6 +3790,7 @@ const V3_BOOLEAN_TO_LEGACY_SLOT: Record<(typeof V3_BOOLEAN_CAPABILITY_FIELDS)[nu
   notify: 'notify',
   badge: 'badge',
   confirm: 'confirm',
+  form: 'form',
   fs: 'fs',
   library: 'library',
   deviceSync: 'device-sync',
@@ -7099,6 +7120,7 @@ function validateGhostManifestInput(
       ...(slots.includes('notify') ? { notify: true as const } : {}),
       ...(slots.includes('badge') ? { badge: true as const } : {}),
       ...(slots.includes('confirm') ? { confirm: true as const } : {}),
+      ...(slots.includes('form') ? { form: true as const } : {}),
       ...(slots.includes('fs') ? { fs: true as const } : {}),
       ...(slots.includes('device-sync') ? { deviceSync: true as const } : {}),
       ...(slots.includes('library') ? { library: true as const } : {}),
