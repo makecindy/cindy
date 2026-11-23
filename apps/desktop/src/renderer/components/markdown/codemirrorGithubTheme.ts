@@ -190,7 +190,8 @@ function makeEditorTheme(c: typeof githubLightColors, isDark: boolean) {
         boxSizing: 'border-box',
         color: 'var(--text-secondary)',
         fontFamily: UI_FONT_STACK,
-        fontSize: '10px',
+        // 跟随「外观 → UI 字号」：10 已是登记档位，走 token 而不是字面量。
+        fontSize: 'var(--text-10)',
         lineHeight: '16px',
         whiteSpace: 'nowrap',
         overflow: 'hidden',
