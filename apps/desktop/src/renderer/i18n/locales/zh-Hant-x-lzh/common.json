@@ -5866,7 +5866,8 @@
         "title": "代操瀏覽器",
         "description": "Agent 專用之獨立瀏覽器，與君日常之 Chrome 兩不相擾",
         "toggleAria": "切換代操瀏覽器",
-        "toggleHint": "僅於新開之 Agent 會話生效",
+        "toggleHint": "本案之瀏覽器設定，於本案 Agent 會話開啟或重啟時生效。",
+        "userDefaultToggleHint": "更易瀏覽器常例，Cindy 待本機 Codex 閒時自動更新。原差事與對話紀錄悉存。Codex 重讀諸內置工具之設定，先從各案覆寫。Pi 等其餘 Agent 俟再啟之時從瀏覽器常例。",
         "noProjectHint": "自案中差事開「規制」，可為該案開關代操瀏覽器。",
         "detected": "已偵得 {{browser}}",
         "notDetected": "此機未見瀏覽器。安裝 Chrome 後即可代操瀏覽器。",
@@ -6150,7 +6151,7 @@
       "description": "設 Agent 會話之常例，或為指定之案另立覆寫。案之設定先於使用者常例。",
       "empty": "工具匣中空空，暫無可用者。",
       "toggleAria": "啟閉 {{name}} 之器",
-      "toggleHint": "變更僅於新開或重啟之 Agent 會話生效，方行之 Agent 會話不受其擾。",
+      "toggleHint": "Agent 會話新開或重啟，乃從此處之工具設定。",
       "loadFailed": "工具列表載入未成",
       "scopePicker": {
         "ariaLabel": "切換內建工具設定之範圍",

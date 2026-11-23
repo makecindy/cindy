@@ -5969,7 +5969,8 @@
         "title": "Automatização do navegador",
         "description": "Um navegador dedicado aos Agents — separado do Chrome que usa diariamente",
         "toggleAria": "Ativar/desativar automatização do navegador",
-        "toggleHint": "Aplica-se apenas a novas sessões de Agent.",
+        "toggleHint": "A definição do navegador deste projeto aplica-se ao iniciar ou reiniciar as suas sessões do Agent.",
+        "userDefaultToggleHint": "Ao alterar a predefinição do navegador, o Codex local é atualizado automaticamente quando fica inativo. As suas sessões e o histórico de conversas são preservados. O Codex volta a carregar as definições de todas as ferramentas integradas e dá prioridade às do projeto. O Pi e os restantes Agents usam a predefinição do navegador ao iniciar ou reiniciar as respetivas sessões.",
         "noProjectHint": "Abra as Definições a partir de uma sessão de projeto para ativar ou desativar a automatização do navegador nesse projeto.",
         "detected": "{{browser}} detetado",
         "notDetected": "Não foi detetado nenhum navegador local. Instale o Chrome para usar a automatização do navegador.",
@@ -6250,15 +6251,15 @@
     },
     "builtinTools": {
       "title": "Ferramentas integradas",
-      "description": "Defina as predefinições para novas sessões ou substitua-as para um projeto. As definições do projeto têm prioridade.",
+      "description": "Defina as predefinições das ferramentas ou personalize-as para um projeto. As definições do projeto têm prioridade.",
       "empty": "Nenhuma ferramenta disponível.",
       "toggleAria": "Ativar ou desativar a ferramenta {{name}}",
-      "toggleHint": "As alterações aplicam-se apenas a sessões do Agent novas ou reiniciadas. As sessões em execução não são afetadas.",
+      "toggleHint": "As sessões do Agent novas ou reiniciadas usam estas definições de ferramentas.",
       "loadFailed": "Falha ao carregar a lista de ferramentas",
       "scopePicker": {
         "ariaLabel": "Alterar o âmbito das definições de ferramentas integradas",
-        "userDefault": "Predefinições de novas sessões",
-        "userDefaultDescription": "Usadas por novas sessões sem definições específicas do projeto"
+        "userDefault": "Predefinições das sessões do Agent",
+        "userDefaultDescription": "Usadas quando o projeto não tem uma definição própria"
       },
       "source": {
         "project": "projeto",

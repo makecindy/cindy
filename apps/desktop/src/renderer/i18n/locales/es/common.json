@@ -5969,7 +5969,8 @@
         "title": "Automatización del navegador",
         "description": "Un navegador para los Agents, separado de tu Chrome habitual",
         "toggleAria": "Alternar automatización del navegador",
-        "toggleHint": "Solo se aplica a las nuevas sesiones de Agent.",
+        "toggleHint": "El ajuste del navegador de este proyecto se aplica al iniciar o reiniciar sus sesiones de Agent.",
+        "userDefaultToggleHint": "Al cambiar el valor predeterminado del navegador, Codex local se actualiza automáticamente cuando queda inactivo. Se conservan tus sesiones y el historial del chat. Codex vuelve a cargar los ajustes de todas las herramientas integradas y da prioridad a los del proyecto. Pi y los demás Agents aplican el valor predeterminado del navegador al iniciar o reiniciar sus sesiones.",
         "noProjectHint": "Abre Configuración desde una sesión de proyecto para activar o desactivar la automatización del navegador en ese proyecto.",
         "detected": "Detectado {{browser}}",
         "notDetected": "No se detectó ningún navegador local. Instala Chrome para usar la automatización del navegador.",
@@ -6250,15 +6251,15 @@
     },
     "builtinTools": {
       "title": "Herramientas integradas",
-      "description": "Establece los valores predeterminados para las sesiones nuevas o personalízalos para un proyecto. La configuración del proyecto tiene prioridad.",
+      "description": "Establece los valores predeterminados de las herramientas o personalízalos para un proyecto. La configuración del proyecto tiene prioridad.",
       "empty": "No hay herramientas disponibles.",
       "toggleAria": "Activar o desactivar la herramienta {{name}}",
-      "toggleHint": "Los cambios solo se aplican a las sesiones de Agent nuevas o reiniciadas. Las sesiones en ejecución no se ven afectadas.",
+      "toggleHint": "Las sesiones de Agent nuevas o reiniciadas adoptan estos ajustes de herramientas.",
       "loadFailed": "No se pudo cargar la lista de herramientas",
       "scopePicker": {
         "ariaLabel": "Cambiar el ámbito de configuración de las herramientas integradas",
-        "userDefault": "Valores predeterminados para sesiones nuevas",
-        "userDefaultDescription": "Se usa en sesiones nuevas sin configuración específica del proyecto"
+        "userDefault": "Valores predeterminados de las sesiones de Agent",
+        "userDefaultDescription": "Se aplican si el proyecto no tiene su propia configuración"
       },
       "source": {
         "project": "proyecto",

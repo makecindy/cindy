@@ -5969,7 +5969,8 @@
         "title": "Automatisation du navigateur",
         "description": "Un navigateur dédié aux Agents, distinct de votre Chrome habituel",
         "toggleAria": "Activer ou désactiver l'automatisation du navigateur",
-        "toggleHint": "S'applique uniquement aux nouvelles sessions Agent.",
+        "toggleHint": "Le réglage du navigateur de ce projet s’applique au démarrage ou au redémarrage de ses sessions Agent.",
+        "userDefaultToggleHint": "Quand le réglage par défaut du navigateur change, Codex local se met à jour automatiquement dès qu’il est inactif. Vos sessions et l’historique du chat sont conservés. Codex recharge les réglages de tous les outils intégrés, en donnant la priorité à ceux du projet. Pi et les autres Agents appliquent le réglage par défaut du navigateur au démarrage ou au redémarrage de leurs sessions.",
         "noProjectHint": "Ouvrez les Paramètres depuis une session de projet pour activer ou désactiver l'automatisation du navigateur pour ce projet.",
         "detected": "{{browser}} détecté",
         "notDetected": "Aucun navigateur local détecté. Installez Chrome pour utiliser l'automatisation du navigateur.",
@@ -6250,15 +6251,15 @@
     },
     "builtinTools": {
       "title": "Outils intégrés",
-      "description": "Définissez les valeurs par défaut des nouvelles sessions ou remplacez-les pour un projet. Les paramètres du projet sont prioritaires.",
+      "description": "Définissez les réglages par défaut des outils ou adaptez-les à un projet. Les paramètres du projet sont prioritaires.",
       "empty": "Aucun outil disponible.",
       "toggleAria": "Activer/désactiver l'outil {{name}}",
-      "toggleHint": "Les modifications ne s'appliquent qu'aux sessions Agent nouvelles ou redémarrées. Les sessions en cours d'exécution ne sont pas affectées.",
+      "toggleHint": "Les sessions Agent nouvelles ou redémarrées utilisent ces réglages d’outils.",
       "loadFailed": "Échec du chargement de la liste des outils",
       "scopePicker": {
         "ariaLabel": "Changer la portée des paramètres des outils intégrés",
-        "userDefault": "Par défaut (nouvelles sessions)",
-        "userDefaultDescription": "Utilisées par les nouvelles sessions sans paramètres de projet spécifiques"
+        "userDefault": "Réglages par défaut des sessions Agent",
+        "userDefaultDescription": "S’appliquent en l’absence de réglage propre au projet"
       },
       "source": {
         "project": "projet",
