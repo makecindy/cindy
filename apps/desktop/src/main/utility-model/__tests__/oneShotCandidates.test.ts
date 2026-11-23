@@ -155,6 +155,7 @@ import {
 } from '../oneShotCandidates.js';
 import { resetUtilityReasoningMemory } from '../utilityReasoningPlan.js';
 import { AUTO_AUXILIARY_MODEL_CHAIN } from '../../../shared/auxiliaryModelChain.js';
+import { setAuxiliaryChainOutcomeListener } from '../auxiliaryChainOutcomeSink.js';
 
 const getProfiles = vi.mocked(getUtilityModelChainProfiles);
 const appCapabilities = vi.mocked(getAppCapabilities);
@@ -394,6 +395,21 @@ describe('utility one-shot candidates', () => {
       const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
       expect(body).toMatchObject({ reasoning: { effort: 'medium' }, max_output_tokens: 384 });
       expect(body).not.toHaveProperty('thinking');
+    });
+
+    // #8706 unit: the real explicit fallback must classify a gateway quota
+    // rejection before spending requests on the parameter-compatibility ladder.
+    it.each([400, 422])('keeps HTTP %s quota ahead of parameter retries', async (status) => {
+      chainState.refs = ['cat:review-a:codex:small'];
+      fetchMock.mockImplementation(async () => new Response(
+        '{"error":{"type":"insufficient_balance_error","message":"PRIVATE_ECHO"}}', { status },
+      ) as never);
+      const result = await createCustomAutoReviewFallback()!(prompt, options);
+      expect(result).toMatchObject({ ok: false, attempts: [expect.objectContaining({
+        reason: 'http_error', httpStatus: status, quotaExhausted: true,
+      })] });
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(JSON.stringify(result)).not.toContain('PRIVATE_ECHO');
     });
 
     it('does not expand an exhausted custom chain into defaults or the gateway', async () => {
@@ -752,6 +768,56 @@ describe('utility one-shot candidates', () => {
       ],
     });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  // docs/product-rules/auxiliary-model-health.md: every default-chain request tells the
+  // health tracker whether the chain could run. Cancelled or superseded requests say
+  // nothing (an account switch must not raise a problem for the new account).
+  describe('auxiliary health outcome', () => {
+    const outcomes: string[] = [];
+    beforeEach(() => {
+      outcomes.length = 0;
+      setAuxiliaryChainOutcomeListener((outcome) => { outcomes.push(outcome); });
+    });
+    afterEach(() => setAuxiliaryChainOutcomeListener(null));
+
+    it.each([
+      ['no candidate can run', () => makerMock(false), [] as string[], 'no_candidate'],
+      ['every candidate failed', () => {
+        const maker = makerMock(true);
+        vi.mocked(maker.oneShot).mockRejectedValueOnce(new Error('codex down'));
+        return maker;
+      }, ['codex-gpt-5.4-mini'], 'failed'],
+      ['a candidate answered', () => makerMock(true), ['codex-gpt-5.4-mini'], 'success'],
+    ] as const)('%s', async (_name, makeMaker, refs, expected) => {
+      if (refs.length) chainState.refs = [...refs];
+      await requestUtilityText(makeMaker(), 'hello');
+      expect(outcomes).toEqual([expected]);
+    });
+
+    it('stays silent when the caller rejects the final LiteLLM dispatch', async () => {
+      chainState.refs = ['litellm-gpt-5.4-mini'];
+      readKey.mockReturnValue('proxy-key');
+      const beforeDispatch = vi.fn<() => Promise<boolean>>()
+        .mockResolvedValueOnce(true).mockResolvedValueOnce(true).mockResolvedValue(false);
+
+      const result = await requestUtilityText(makerMock(false), 'superseded', { beforeDispatch });
+
+      expect(result.ok).toBe(false);
+      expect(beforeDispatch).toHaveBeenCalledTimes(3);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(outcomes).toEqual([]);
+    });
+
+    it('stays silent when the account changes during the request', async () => {
+      const maker = makerMock(true);
+      vi.mocked(maker.getAgentAuthState).mockImplementation(async () => {
+        ownerState.key = 'owner-b';
+        return { authenticated: true };
+      });
+      await requestUtilityText(maker, 'hello');
+      expect(outcomes).toEqual([]);
+    });
   });
 
   it('falls through failed codex execution and succeeds on LiteLLM', async () => {
@@ -3059,6 +3125,48 @@ describe('utility one-shot candidates', () => {
       max_tokens: 384,
       messages: [{ role: 'user', content: 'classify' }],
     });
+  });
+
+  // #8706 unit: real Response streams through the production HTTP entry. Existing HTTP
+  // failures cover status only, not quota classification, bounded reads or body privacy.
+  it.each([
+    [429, '{"type":"budget_exceeded","message":"ExceededBudget: PRIVATE_ECHO"}', true],
+    [429, '{"message":"Too Many Requests; rate limit exceeded"}', false],
+    [402, 'Payment Required', true],
+    [400, '{"type":"insufficient_balance_error","message":"PRIVATE_ECHO"}', true],
+    [422, '{"code":"insufficient_quota","message":"PRIVATE_ECHO"}', true],
+    [400, '{"message":"invalid parameter"}', false],
+    [422, '{"message":"invalid parameter"}', false],
+    [500, 'budget_exceeded', false],
+  ])('classifies HTTP %s body %s safely', async (status, body, quota) => {
+    readKey.mockReturnValue('synthetic-key');
+    fetchMock.mockResolvedValueOnce(new Response(body, { status }) as never);
+    const result = await requestDedicatedAutoReviewCandidateText('classify', DEDICATED_AUTO_REVIEW_CANDIDATES[0], { timeoutMs: 8000 });
+    expect(result).toMatchObject({ ok: false, attempts: [expect.objectContaining({
+      reason: 'http_error', httpStatus: status, ...(quota ? { quotaExhausted: true } : {}),
+    })] });
+    if (!result.ok && !quota) expect(result.attempts[0]).not.toHaveProperty('quotaExhausted');
+    expect(JSON.stringify(result)).not.toMatch(/PRIVATE_ECHO|Payment Required|Too Many Requests/);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it.each([429, 400, 422].flatMap(status => [true, false].map(earlyQuota => [status, earlyQuota] as const)))(
+    'bounds and cancels an unfinished HTTP %s error stream (early quota=%s)', async (status, earlyQuota) => {
+    readKey.mockReturnValue('synthetic-key');
+    const cancel = vi.fn();
+    let chunks = 0;
+    const pull = vi.fn((controller: ReadableStreamDefaultController<Uint8Array>) => {
+      // A finite safety ceiling lets the unfixed reader fail without unbounded allocation.
+      if (++chunks > 2) { controller.close(); return; }
+      controller.enqueue(new TextEncoder().encode(earlyQuota ? 'budget_exceeded PRIVATE_ECHO' : 'x'.repeat(8192)));
+    });
+    fetchMock.mockResolvedValueOnce(new Response(new ReadableStream({ pull, cancel }), { status }) as never);
+    const result = await requestDedicatedAutoReviewCandidateText('classify', DEDICATED_AUTO_REVIEW_CANDIDATES[0], { timeoutMs: 8000 });
+    expect(result).toMatchObject({ ok: false, attempts: [expect.objectContaining({ reason: 'http_error', httpStatus: status })] });
+    if (!result.ok) expect(result.attempts[0]).toMatchObject(earlyQuota ? { quotaExhausted: true } : { reason: 'http_error' });
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(pull.mock.calls.length).toBeLessThanOrEqual(2);
+    expect(JSON.stringify(result)).not.toContain('PRIVATE_ECHO');
   });
 
   it('keeps Auto-review policy on the system channel and evidence on the user channel', async () => {

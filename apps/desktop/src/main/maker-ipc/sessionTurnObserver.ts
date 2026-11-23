@@ -26,13 +26,16 @@ export interface InstallSessionTurnObserverDeps {
   readonly log: Pick<ReturnType<typeof createLogger>, 'debug'>;
 }
 
-export function installSessionTurnObserver(deps: InstallSessionTurnObserverDeps, session: Session) {
+export function installSessionTurnObserver(deps: InstallSessionTurnObserverDeps, session: Session,
+  usage?: { reserve(generation: number): (dispatched: boolean) => void; dispatch(generation: number): void }) {
   let assertPermissionDispatch: (() => void) | undefined;
   const channelTurn = createChannelTurnObserver(session);
   session.setTurnLifecycleObserver({
+    onTurnReserved: usage?.reserve,
     onDispatching: () => {
       assertPermissionDispatch?.();
       channelTurn.onDispatching();
+      usage?.dispatch(session.getTurnGeneration());
     },
     beforeProviderStart: async (turnGeneration, signal) => {
       assertPermissionDispatch = undefined;

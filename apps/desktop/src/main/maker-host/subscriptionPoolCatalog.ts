@@ -41,14 +41,18 @@ export function publishSubscriptionPoolProviders(ports: SubscriptionPoolPublishe
 }
 
 /** Apply account membership to both selectable and full routing snapshots. */
-export function projectSubscriptionPoolCatalog(catalog: Catalog, ports: SubscriptionPoolCatalogPorts, routingCatalog = false, include?: (p: Catalog['providers'][number]) => boolean): Catalog {
+export function projectSubscriptionPoolCatalog(catalog: Catalog, ports: SubscriptionPoolCatalogPorts,
+  routingCatalog = false, include?: (provider: Catalog['providers'][number]) => boolean,
+  includeLastConfirmed = false,
+): Catalog {
+  const accountOptions = routingCatalog ? { includeBoundAccounts: true } : { includeLastConfirmed };
   const pool = ports.readPool('openai');
   const aliases = pool?.legacyCodexAccounts;
   const originalProviders = catalog.providers;
   const selected = include ? originalProviders.filter(include) : originalProviders;
   catalog = { ...catalog, providers: selected.map(provider => {
     if (provider.id === 'anthropic' || provider.subscriptionPool === 'anthropic') {
-      const models = ports.readSubscriptionPoolClaudeModels(provider.id, routingCatalog ? { includeBoundAccounts: true } : undefined);
+      const models = ports.readSubscriptionPoolClaudeModels(provider.id, accountOptions);
       if (models === null) return provider;
       const anthropic = ports.getActiveCatalogWithClaudeModels(models).providers.find(entry => entry.id === 'anthropic');
       if (!anthropic) return provider;
@@ -62,7 +66,7 @@ export function projectSubscriptionPoolCatalog(catalog: Catalog, ports: Subscrip
     }
     const legacy = provider.auth.native === 'codex' && aliases && Object.hasOwn(aliases, provider.id);
     if (provider.id !== 'openai' && provider.subscriptionPool !== 'openai' && !legacy) return provider;
-    const pooledModels = ports.readSubscriptionPoolCodexModels(provider.id, routingCatalog ? { includeBoundAccounts: true } : undefined);
+    const pooledModels = ports.readSubscriptionPoolCodexModels(provider.id, accountOptions);
     if (pooledModels === null) return provider;
     const openai = ports.getActiveCatalogWithCodexModels(pooledModels).providers.find(entry => entry.id === 'openai');
     if (!openai) return provider;

@@ -294,6 +294,7 @@ const AGENT_CHAT_ERROR_CODES: ReadonlySet<string> = new Set([
   'PLUGIN_ENGINE_RESUME_UNAVAILABLE',
   'PLUGIN_ENGINE_REMOTE_TOOLS_UNSUPPORTED',
   'SUBSCRIPTION_ACCOUNT_LIMITED',
+  'SUBSCRIPTION_POOL_MODEL_LIMITED',
   'SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED',
   'SUBSCRIPTION_ACCOUNT_SIGNING_IN',
   'SUBSCRIPTION_ACCOUNT_UNAVAILABLE',
@@ -308,6 +309,7 @@ const AGENT_CHAT_ERROR_CODES: ReadonlySet<string> = new Set([
   'DEVICE_LINK_MEDIA_TRANSFER_FAILED',
   'DEVICE_LINK_MEDIA_ACCESS_DENIED',
   'AUTO_REVIEW_UNAVAILABLE',
+  'AUTO_REVIEW_UNAVAILABLE_QUOTA',
   'AUTO_REVIEW_NO_AVAILABLE_MODEL',
   'AUTO_REVIEW_CONFIRM_UNDELIVERED',
   'MCP_APPROVAL_AUTO_BLOCKED',
@@ -391,6 +393,15 @@ export function requiresAgentErrorConfigurationChange(message: string): boolean 
     || code === 'REMOTE_AGENT_RESUME_UNAVAILABLE';
 }
 
+function subscriptionRetryTime(fallback: string, locale?: string): string | undefined {
+  const reset = Number(/(?:^|\n)resetAtMs=(\d{1,16})(?:\n|$)/.exec(fallback)?.[1]);
+  if (!Number.isSafeInteger(reset) || reset <= Date.now() || reset > 8.64e15) return undefined;
+  // Classical editions use the corresponding script for Intl formatting.
+  return new Intl.DateTimeFormat(locale?.replace(/-x-lzh$/, ''), {
+    dateStyle: 'medium', timeStyle: 'short',
+  }).format(new Date(reset));
+}
+
 /** Presentation only: startup failures must not be mistaken for a new retry policy.
  * Account identities are intentionally absent from the wire error. Old hosts have
  * only an ambiguous message; never infer a login or limit cause from that text.
@@ -406,18 +417,21 @@ export function localizeSubscriptionAccountError(
     case 'SUBSCRIPTION_ACCOUNT_SIGNING_IN': return translate('chat.subscriptionAccountError.signingIn');
     case 'SUBSCRIPTION_ACCOUNT_UNAVAILABLE': return translate('chat.subscriptionAccountError.unavailable');
     case 'SUBSCRIPTION_ACCOUNT_LIMITED': {
-      const reset = Number(/(?:^|\n)resetAtMs=(\d{1,16})(?:\n|$)/.exec(parsed.fallback)?.[1]);
-      if (Number.isSafeInteger(reset) && reset > Date.now() && reset <= 8.64e15) {
-        // Classical editions use the corresponding script for Intl formatting.
-        const language = locale?.replace(/-x-lzh$/, '');
-        const resetAt = new Intl.DateTimeFormat(language, {
-          dateStyle: 'medium', timeStyle: 'short',
-        }).format(new Date(reset));
-        return translate('chat.subscriptionAccountError.limitedUntil', { resetAt });
-      }
-      return translate('chat.subscriptionAccountError.limited');
+      const resetAt = subscriptionRetryTime(parsed.fallback, locale);
+      return resetAt ? translate('chat.subscriptionAccountError.limitedUntil', { resetAt })
+        : translate('chat.subscriptionAccountError.limited');
+    }
+    case 'SUBSCRIPTION_POOL_MODEL_LIMITED': {
+      const guidance = [translate('chat.subscriptionAccountError.poolModelLimited')];
+      const resetAt = subscriptionRetryTime(parsed.fallback, locale);
+      if (resetAt) guidance.push(translate('chat.subscriptionAccountError.poolRetryUntil', { resetAt }));
+      if (parsed.fallback.split('\n').includes('otherAccountSignedOut=true'))
+        guidance.push(translate('chat.subscriptionAccountError.poolOtherSignedOut'));
+      return guidance.join(' ');
     }
   }
+  if (/(?:^|: Error: )(?:\[IPC_ERROR\]\s*)?(?:(?:LAZY_CREATE_FAILED|REHYDRATE_FAILED):\s*)?No subscription account is available$/.test(message))
+    return translate('chat.subscriptionAccountError.poolUnavailable');
   if (/(?:^|: Error: )(?:\[IPC_ERROR\]\s*)?(?:LAZY_CREATE_FAILED:\s*)?The task subscription account requires login or quota reset$/.test(message))
     return translate('chat.subscriptionAccountError.legacy');
   return null;

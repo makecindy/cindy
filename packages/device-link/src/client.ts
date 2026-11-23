@@ -2192,7 +2192,7 @@ export class DeviceLinkClient {
         return { ok: false as const, error: { code: 'IPC_ERROR' as const, message: 'GITHUB_READ_UNSUPPORTED: update the target computer to use GitHub queries' } };
       }
       if (resolveInvokePriority(payload.channel, options?.background, payload.args) === 'background'
-        && (this.networkProbeTimer || this.networkChangeTimer)) {
+        && (this.networkProbeTimer || (this.networkChangeTimer && this.lastInboundAt <= this.networkChangeHintedAt))) {
         throw new DeviceLinkError('BACKPRESSURE', 'background refresh paused while checking relay connectivity');
       }
       // Prepare at dispatch, not when joining the admission queue. Earlier
@@ -6101,7 +6101,7 @@ export class DeviceLinkClient {
       if (pending.envelope.kind === 'invoke' && pending.envelope.id
         && this.pending.get(pending.envelope.id)?.expireIfOverdue()) continue;
       if (opts.onlyUnsent && pending.sent) continue;
-      // Cumulative ACK cannot confirm a tail while a byte-paced head is still
+      // Cumulative ACK cannot confirm a tail while the stream head is still
       // missing. Allow one early tail retry to fill the receiver's buffer, but
       // do not burn its whole retry budget (and reset this healthy slow link)
       // before the head has finished. ACK removal naturally releases this hold;
@@ -6110,7 +6110,8 @@ export class DeviceLinkClient {
         !opts.ignoreInterval
         && head
         && pending !== head
-        && head.bytes > RELIABLE_RETRY_BYTES_PER_INTERVAL
+        && (head.bytes > RELIABLE_RETRY_BYTES_PER_INTERVAL
+          || (pending.path === 'relay' && head.path === 'relay' && pending.envelope.kind === 'push'))
         && pending.attempts >= Math.min(2, this.timing.transportMaxRetryAttempts)
       ) continue;
       // A local ws write is not a delivery receipt: relay -> mobile can still be

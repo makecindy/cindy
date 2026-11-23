@@ -25,6 +25,7 @@ export default {
       stopping: '正在确认停止',
       error: '发送错误',
       credential: '等待切换凭证',
+      'own-credential': '本任务等待自己的凭证切换',
       'remote-edit': '另一端正在编辑',
       locked: '队列操作锁定',
       readonly: '只读状态',
@@ -42,6 +43,10 @@ export default {
     await page.locator('[contenteditable=true]').waitFor();
   },
   async check(page, ui) {
+    if (ui.case === 'credential' || ui.case === 'own-credential') {
+      const banner = page.getByText(await ui.t('chat.credentialSwitchWait.waiting'), { exact: true });
+      await banner.waitFor({ state: ui.case === 'credential' ? 'visible' : 'hidden' });
+    }
     if (ui.case === 'error' || ui.case === 'quota') {
       const details = page.getByRole('button', {
         name: await ui.t('chat.errorBanner.networkShowRaw'),

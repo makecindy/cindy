@@ -347,8 +347,11 @@ export type UnifiedRailItem =
   | { kind: 'favorites' }
   | { kind: 'engine'; agent: AgentKind }
   | { kind: 'all' }
-  /** 用户建的模式与路线(模型组)。只在新任务草稿出现，列表内容由调用方提供，不按目录筛选。 */
-  | { kind: 'model-groups' }
+  /**
+   * 用户建的模式与路线(模型组)。只在新任务草稿出现，列表内容由调用方提供，不按目录筛选。
+   * `deviceId` = 另一台电脑自己的模式(model-groups.md §6.3)，格位排进那台电脑那一段。
+   */
+  | { kind: 'model-groups'; deviceId?: string }
   /**
    * 一个插件提供的执行引擎(docs/plans/acp-plugin-bridge.md)，与供应商格一样每个引擎一格、用插件
    * 自己的图标。只在新任务草稿出现；列表内容由调用方提供，不按目录筛选。`deviceId` = 引擎在自己的
@@ -378,7 +381,31 @@ export interface PluginEngineRailTab {
 /** 这一格所属的另一台电脑(远程供应商格，或另一台电脑上的插件引擎格)；其余格为 null。 */
 export function railItemDeviceId(item: UnifiedRailItem): string | null {
   if (item.kind === 'remote-provider') return item.deviceId;
-  return item.kind === 'plugin-engine' ? (item.deviceId ?? null) : null;
+  return item.kind === 'plugin-engine' || item.kind === 'model-groups' ? (item.deviceId ?? null) : null;
+}
+
+/** 左侧栏一台电脑的「模型组」格：那台电脑的 id 与悬停显示的名字。 */
+export interface DeviceModelGroupsRailTab {
+  deviceId: string;
+  name: string;
+}
+
+/**
+ * 把另一台电脑的「模型组」格放进左侧栏：与本机「模型组」紧跟「全部」同理，排在那台电脑那一段的最前面；
+ * 那台没有别的格时在末尾单独成段。
+ */
+export function withRemoteModelGroupRailItems(
+  items: readonly UnifiedRailItem[],
+  tabs: readonly Pick<DeviceModelGroupsRailTab, 'deviceId'>[],
+): UnifiedRailItem[] {
+  const out = [...items];
+  for (const tab of tabs) {
+    const item: UnifiedRailItem = { kind: 'model-groups', deviceId: tab.deviceId };
+    const first = out.findIndex((entry) => railItemDeviceId(entry) === tab.deviceId);
+    if (first < 0) out.push(item);
+    else out.splice(first, 0, item);
+  }
+  return out;
 }
 
 /**
@@ -423,6 +450,7 @@ export function railItemKey(item: UnifiedRailItem): string {
   if (item.kind === 'plugin-engine') {
     return item.deviceId ? `plugin-engine:${item.deviceId}:${item.providerId}` : `plugin-engine:${item.providerId}`;
   }
+  if (item.kind === 'model-groups' && item.deviceId) return `model-groups:${item.deviceId}`;
   return item.kind;
 }
 
@@ -517,6 +545,11 @@ export interface UnifiedListSection {
    * 合并组 —— 分组名必须直接回答"这是哪家的",不引入第二套口径)。
    */
   group?: { type: 'provider'; providerId: string };
+  /**
+   * 该小节属于「已隐藏」区:用户在设置里从选择器收起的供应商 / 模型。面板把它们排在
+   * 常规小节之后、默认折叠,搜索时自动展开 —— 隐藏只是收起,不是不能选。
+   */
+  hidden?: true;
   rows: UnifiedListRow[];
 }
 
@@ -657,6 +690,12 @@ export function buildUnifiedListSections(args: {
    * 不因收起而消失。
    */
   listHiddenProviderIds?: ReadonlySet<string>;
+  /**
+   * 收藏与最近的解析目录；缺省 = `entries`。`entries` 决定常规分组里列什么，这里决定
+   * 「用户存下来的东西还能不能解析回一行」：被隐藏的模型不进常规分组，但它仍然可调用，
+   * 存过的收藏和最近必须还在。调用方传入「常规清单 ∪ 被隐藏的模型」。
+   */
+  resolveEntries?: readonly UnifiedModelEntry[];
 }): UnifiedListSection[] {
   const { entries, favorites, effectiveEngineOf } = args;
   const q = args.query.trim().toLowerCase();
@@ -672,7 +711,7 @@ export function buildUnifiedListSections(args: {
    * 连回来就该回来,静默删掉用户存过的东西是不可逆的。
    */
   const resolveStoredEntry = (providerId: string, modelId: string) =>
-    resolveStoredModelEntry(entries, providerId, modelId);
+    resolveStoredModelEntry(args.resolveEntries ?? entries, providerId, modelId);
 
   const sections: UnifiedListSection[] = [];
 

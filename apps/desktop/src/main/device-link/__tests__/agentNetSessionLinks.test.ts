@@ -14,7 +14,8 @@
  *   对端此刻在 Agent-Net 上在线、还没有连接（本机刚启动，2026-11-17 真机）时先连上再等，不在线的不拨、当场交给 Device Link，
  *   拨不了的不等满；对端在中转上签名说开着 Agent-Net、Device Link 要改到主连接重开时，等它的会话再在会话上开；
  *   跨账号（供应商分享）的受邀者第一次建链：分享连接用到时才拨，先连上再等会话，线上编码和 Device Link 给跨账号的一样不压缩、
- *   不做增量，按对端取连接拿到的是那条分享连接，离线事件带它的代次（业务按这个代次丢弃过期事件）。
+ *   不做增量，按对端取连接拿到的是那条分享连接，离线事件带它的代次（业务按这个代次丢弃过期事件）；
+ *   请求超时而对端走中转时报给连接判断中转 UDP（2026-11-22：VPN 代理下中转 UDP 只通登记，几个小时不退回 WebSocket），直连的不报。
  * - tier：unit，两个真实的 SessionPeer 在内存里相连，真实的 Node 压缩编码器。 */
 import { describe, expect, it, vi } from 'vitest';
 import { AgentNetSessionLinks, SESSION_INVOKE_REPLAY, SessionPeer, agentNetSessionLane, routeSessionPeers, type AgentNetSessionLinksOptions, type SessionLane } from '@cindy/agent-net';
@@ -31,7 +32,8 @@ const openPayload = { controllerName: 'test', protocolVersion: 1, appVersion: 't
  */
 function pair(options: { connected?: boolean; connectedAt?(id: string): number | null; hostKey?: string; controllerKey?: string;
   connect?(id: string): Promise<boolean>; agentNetPeer?(id: string): 'online' | 'offline' | null; controllerEpoch?(id: string): number;
-  reopenLink?(id: string): void; hostInvokeEpoch?(id: string): string | null; controllerLog?: AgentNetSessionLinksOptions['log'] } = {}) {
+  reopenLink?(id: string): void; hostInvokeEpoch?(id: string): string | null; controllerLog?: AgentNetSessionLinksOptions['log'];
+  controllerPath?(id: string): 'direct' | 'relay' | null; onRelayStall?(id: string): void; requestTimeoutMs?: number } = {}) {
   const hostKey = options.hostKey ?? 'a-host', controllerKey = options.controllerKey ?? 'b-controller';
   const sessions: Record<'host' | 'controller', SessionPeer | null> = { host: null, controller: null };
   const bytes = { toHost: 0, toController: 0 };
@@ -42,7 +44,8 @@ function pair(options: { connected?: boolean; connectedAt?(id: string): number |
       selfDeviceId: () => 'a-host', transferCodec: desktopTransferCodec, invokeEpoch: options.hostInvokeEpoch, log: quiet }),
     controller: new AgentNetSessionLinks({ session: (id) => (id === hostKey ? sessions.controller : null), connectionEpoch: options.controllerEpoch ?? (() => 3),
       selfDeviceId: () => 'b-controller', transferCodec: desktopTransferCodec, connectedAt: options.connectedAt, connect: options.connect,
-      agentNetPeer: options.agentNetPeer, reopenLink: options.reopenLink, log: options.controllerLog ?? quiet }),
+      agentNetPeer: options.agentNetPeer, reopenLink: options.reopenLink, log: options.controllerLog ?? quiet,
+      path: options.controllerPath, onRelayStall: options.onRelayStall, requestTimeoutMs: options.requestTimeoutMs }),
   };
   const receivers: Record<'host' | 'controller', ((lane: SessionLane, data: Uint8Array) => void) | null> = { host: null, controller: null };
   const wire = (side: 'host' | 'controller') => ({
@@ -97,6 +100,26 @@ function listResult(rows: number, changed = -1) {
 }
 
 describe('AgentNetSessionLinks', () => {
+  it.each([['relay', ['a-host']], ['direct', []]] as const)(
+    'reports a timed-out request to a peer on the %s path to its connection only when relayed', async (path, stalled) => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+      try {
+        const reported: string[] = [];
+        const { links } = pair({ controllerPath: () => path, onRelayStall: (id) => reported.push(id), requestTimeoutMs: 1_000 });
+        // The host accepts the link but never answers the call (its replies are lost on the way back).
+        links.host.onFrame((env) => {
+          if (env.kind === 'link-open') links.host.sendLinkAccept(env.src!, env.id!, { appVersion: 'host', allowlistHash: 'hash' });
+        });
+        const opened = links.controller.openLink('a-host', openPayload);
+        await vi.advanceTimersByTimeAsync(0);
+        await opened;
+        const call = links.controller.invoke('a-host', { channel: 'local-db:sessions:list', args: [] }).catch((error) => error);
+        await vi.advanceTimersByTimeAsync(1_500);
+        expect(await call).toMatchObject({ code: 'INVOKE_TIMEOUT' });
+        expect(reported).toEqual(stalled);
+      } finally { vi.useRealTimers(); }
+    });
+
   // Unit #11345: sharing uses the session adapter too. Earlier saturation tests
   // reserved only control slots; 12 held metadata reads still blocked ordinary
   // model/context calls. Exercise both actual admission and SessionPeer lanes

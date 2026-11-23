@@ -150,6 +150,7 @@ vi.mock('@cindy/maker-core', async (importOriginal) => {
     hasSessionPermissionUpdates: actual.hasSessionPermissionUpdates,
     isAutoReviewUnavailableNotice: actual.isAutoReviewUnavailableNotice,
     isAutoReviewNoAvailableModelNotice: actual.isAutoReviewNoAvailableModelNotice,
+    isAutoReviewQuotaExhaustedNotice: actual.isAutoReviewQuotaExhaustedNotice,
     isAutoReviewUnavailableMetadata: actual.isAutoReviewUnavailableMetadata,
     autoReviewReasonFromMetadata: actual.autoReviewReasonFromMetadata,
     AUTO_REVIEW_UNAVAILABLE_PROMPT_TEXT: actual.AUTO_REVIEW_UNAVAILABLE_PROMPT_TEXT,
@@ -2929,6 +2930,34 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     for (let i = 0; i < times; i++) await Promise.resolve();
   }
 
+  // #8706 unit: the Hook observer has its own maker-core mock. Existing overload
+  // cases missed quota notices; one nonterminal event must show safe guidance
+  // through the real observer/presenter without ending the running turn.
+  it('配额故障通过官方 Hook 过程区显示安全提示，不收口', async () => {
+    setMainLocale('zh-CN');
+    vi.useFakeTimers();
+    try {
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeManualSession(opts.id ?? 'sess-x'),
+      );
+      const emitted: string[] = [];
+      const runner = createMakerHookSessionRunner({ log });
+      const pending = runner.run(baseReq({ onProgress: (text: string) => emitted.push(text) }));
+      await vi.waitFor(() => expect(h.eventCbs.get('sess-new')).toBeDefined());
+      const cb = h.eventCbs.get('sess-new')!;
+      cb({ type: 'error', data: {
+        message: '[AUTO_REVIEW_UNAVAILABLE_QUOTA] PRIVATE_UPSTREAM_BODY', isTerminal: false,
+      } });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(emitted.join('\n')).toContain('配额已耗尽');
+      expect(emitted.join('\n')).not.toMatch(/PRIVATE_UPSTREAM_BODY|完全访问/);
+      cb({ type: 'done', data: null });
+      expect((await pending).status).toBe('ok');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   /**
    * 本 describe 的核心回归: 过载重投只在**零产出**时发生, 那时过程区与正文都是
    * 空的。若非终止 error 不进过程区, 整个退避窗口(~22-38s)一帧 turn.progress 都
@@ -3075,7 +3104,7 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     }
   });
 
-  it('重试耗尽的终态过载错误换成可操作说明(桌面端重试不回流, 必须说清)', async () => {
+  it('重试耗尽的嵌套 529 终态 reason 在官方 Hook 中换成可操作说明', async () => {
     setMainLocale('zh-CN');
     fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
       makeManualSession(opts.id ?? 'sess-x'),
@@ -3087,7 +3116,8 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     cb({
       type: 'error',
       data: {
-        message: 'Selected model is at capacity. Please try a different model.',
+        message: 'stream disconnected before completion',
+        reason: 'UPSTREAM_OVERLOADED',
         isTerminal: true,
       },
     });
@@ -3095,8 +3125,8 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     expect(outcome.status).toBe('error');
     expect(outcome.errorMessage).toContain('模型服务繁忙');
     expect(outcome.errorMessage).toContain('在这里重发这条消息');
-    // 上游原文不外发到渠道, 只留在本地日志里。
-    expect(outcome.errorMessage).not.toContain('Selected model is at capacity');
+    // The generic transport message must not replace the user-facing overload diagnosis.
+    expect(outcome.errorMessage).not.toContain('stream disconnected before completion');
   });
 
   it.each([

@@ -1135,7 +1135,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         query.supportedModels(),
         new Promise<never>((_, reject) => {
           timer = setTimeout(
-            () => reject(new Error('supportedModels probe timed out')),
+            () => reject(new Error('Request timed out: supportedModels probe')),
             SUPPORTED_MODELS_PROBE_TIMEOUT_MS,
           );
         }),
@@ -1145,6 +1145,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       return true;
     } catch (error) {
       log.warn('probe failed', { error: String(error) });
+      if (options?.throwOnError) throw error;
       return false;
     } finally {
       if (timer) clearTimeout(timer);
@@ -2274,16 +2275,22 @@ export class ClaudeCodeAgent extends BaseAgent {
     // everything else stays with the native classifier so no call is reviewed twice.
     const nativeAutoPolicyHook: HookCallback = async (input) => {
       if (input.hook_event_name !== 'PreToolUse') return { continue: true };
-      if (
-        mutablePermissionMode !== 'auto' || mutablePlanMode || planTurnActive
-        || !usesNativeClaudeAutoReview()
-      ) return { continue: true };
       const pre = input as PreToolUseHookInput;
       const toolName = pre.tool_name;
       const decide = (permissionDecision: 'allow' | 'ask', reason: string) => ({
         continue: true,
         hookSpecificOutput: { hookEventName: 'PreToolUse' as const, permissionDecision, permissionDecisionReason: reason },
       });
+      // A user or project `permissions.allow` rule skips canUseTool in every mode, which is where a
+      // channel turn's forced confirmation (non-owner destructive call) is decided. Hand those calls
+      // back to the approval chain in Ask as well as Auto (the modes that accept a turn policy).
+      if (!mutablePlanMode && !planTurnActive && forceTurnConfirmation(toolName, pre.tool_input)) {
+        return decide('ask', 'This channel turn requires confirmation for this action.');
+      }
+      if (
+        mutablePermissionMode !== 'auto' || mutablePlanMode || planTurnActive
+        || !usesNativeClaudeAutoReview()
+      ) return { continue: true };
       const isMcp = resolveMcpToolTarget(toolName, registeredMcpServerNames) !== null;
       const mcpPolicy = isMcp ? classifyMcpApprovalPolicy(toolName, pre.tool_input) : null;
       // Requester authority (owner / group guest) and forceConfirmToolCall are only known to
@@ -2762,9 +2769,8 @@ export class ClaudeCodeAgent extends BaseAgent {
           if (autoDecision.unavailable) {
             autoReviewUnavailableNotice.notify(autoDecision);
             unavailableHandoff = true;
-          } else {
-            autoReviewAskReason = autoDecision.reason;
           }
+          autoReviewAskReason = autoDecision.reason;
           forcePrompt = true;
         }
       } else {
@@ -4262,9 +4268,8 @@ export class ClaudeCodeAgent extends BaseAgent {
               if (autoDecision.unavailable) {
                 autoReviewUnavailableNotice.notify(autoDecision);
                 remoteUnavailableHandoff = true;
-              } else {
-                remoteAutoReviewAskReason = autoDecision.reason;
               }
+              remoteAutoReviewAskReason = autoDecision.reason;
               remoteForcePrompt = true;
             } else {
               remoteForcePrompt = remoteForcePrompt || remoteMcpPolicy === 'prompt-each-time';

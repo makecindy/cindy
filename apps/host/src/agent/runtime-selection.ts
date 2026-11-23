@@ -53,6 +53,7 @@ import {
   createSetSessionPlanMode,
   persistAgentPlanModeChangeWith,
 } from '../../../desktop/src/main/maker-ipc/sessionPermissionSettings.ts';
+import { projectDeferredCredentialSwitchIntent } from '../../../desktop/src/main/maker-ipc/pendingCredentialSwitch.ts';
 import { createDeferredRestartQueueGate } from '../../../desktop/src/main/maker-ipc/deferredRestartQueueWiring.ts';
 import {
   createRecoverRemoteRuntimeAxisPersistence,
@@ -279,6 +280,7 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
   // The cleanup at a task's archive or delete (register.ts setSessionRuntimeCleanup), which
   // bindHostSessionRuntimeHooks installs: the task's runtime override and axes do not outlive it.
   const sessionRuntimeCleanup = createSessionRuntimeCleanup(explicitPorts<Parameters<typeof createSessionRuntimeCleanup>[0]>({
+    clearDeferredCredentialSelection: sessionId => pendingCredentialSwitchService.clearDeferredSelection(sessionId),
     // The desktop stops a start still in progress on another computer; the Host starts no task on
     // another computer (send-preflight.ts refuses remote tasks), so none is ever waiting.
     cancelPendingRemoteStart: () => {},
@@ -368,6 +370,8 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
   }));
   const rehydrateColdPiRuntimeForWindowVerification = bindColdPiRehydration();
 
+  const projectCredentialSwitch = (sessionId: string) =>
+    projectDeferredCredentialSwitchIntent(getPendingCredentialSwitchTargetWith(accessPorts(), sessionId));
   const agentSwitchDeps: MakerSessionAgentSwitchHandlerDeps = explicitPorts<MakerSessionAgentSwitchHandlerDeps>({
     // Ports for moving a task to or between other computers (release table, B5): the Host refuses a
     // switch with a non-empty agentDeviceId at its entry and refuses tasks running elsewhere at send,
@@ -442,6 +446,7 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     })),
     // As register.ts: an engine pick replaces a credential switch registered before it.
     supersedePendingCredentialSwitch: sessionId => clearPendingCredentialSwitchWith(accessPorts(), sessionId),
+    projectDeferredCredentialSwitchIntent: projectCredentialSwitch,
     // As register.ts: a committed switch's thinking choice goes to the preference mirror the next
     // runtime start reads (start-options.ts getThinkingEnabledFromMemory), and to the clients' memory.
     rememberThinkingIntent: createRememberThinkingIntent(explicitPorts<Parameters<typeof createRememberThinkingIntent>[0]>({
@@ -490,11 +495,11 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     }),
     log: deps.log,
   }));
-  const persistSessionFields: SessionRuntimeSelectionPorts['persistSessionFields'] = (sessionId, patch) => persistSessionFieldsWith(explicitPorts<Parameters<typeof persistSessionFieldsWith>[0]>({
+  const persistSessionFields: SessionRuntimeSelectionPorts['persistSessionFields'] = (sessionId, patch, options) => persistSessionFieldsWith(explicitPorts<Parameters<typeof persistSessionFieldsWith>[0]>({
     captureOwnerScope, isOwnerScopeCurrent, broadcastSessionPatched,
     // The session settings' budget hook, as the desktop registers it (bootstrap-electron.ts).
     applyContextWindowBudget: () => contextWindowBudgetReconcile.sessionContextWindowBudgetApplier,
-  }), sessionId, patch);
+  }), sessionId, patch, options);
   const ports = (): SessionRuntimeSelectionPorts => explicitPorts<SessionRuntimeSelectionPorts>({
     maker: maker(),
     agentSwitchPending: pendingSwitches,
@@ -884,7 +889,8 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
      */
     admitLocalRoute,
     /** The intent of a task as clients see it (session_changed, the task snapshot). */
-    projectIntent: (sessionId: string) => projectPendingAgentSwitchIntent(pendingSwitches.get(sessionId)),
+    projectIntent: (sessionId: string) =>
+      projectPendingAgentSwitchIntent(pendingSwitches.get(sessionId)) ?? projectCredentialSwitch(sessionId),
     /** The desktop's set-effort (an effort change of a task, live or staged into a pending pick). */
     setEffort: (sessionId: unknown, effort: unknown) => setSessionEffort(sessionId, effort),
     /** The desktop's set-fast-mode. */

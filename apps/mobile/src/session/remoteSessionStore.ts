@@ -1441,7 +1441,7 @@ const mergedSessionById = new Map<string, RemoteSession>();
 // List-only projection. Detail consumers keep reading mergedSessions, including
 // live usage. Usage pushes must not rebuild Home's grouping/localization tree.
 let homeSessions: RemoteSession[] = [];
-const SESSION_USAGE_FIELDS = new Set(['totalMoney', 'totalCostUsd', 'totalTokenUsage']);
+const SESSION_USAGE_FIELDS = new Set(['totalMoney', 'totalCostUsd', 'totalCostUsdIsApproximate', 'totalTokenUsage']);
 // These fields cannot change shard ownership, visibility or retention. Timestamps
 // still update this task's live-row anchor; titles still reconcile local previews.
 const SESSION_METADATA_FIELDS = new Set([...SESSION_USAGE_FIELDS, 'title', 'updatedAt', 'userSendAt']);
@@ -1460,6 +1460,7 @@ function reconcileHomeSessions(): void {
     const projected = { ...session };
     delete projected.totalMoney;
     delete projected.totalCostUsd;
+    delete projected.totalCostUsdIsApproximate;
     delete projected.totalTokenUsage;
     const stableProjected = cached && remoteSessionEqual(cached.projected, projected)
       ? cached.projected
@@ -4967,7 +4968,11 @@ export const remoteSessionStore = {
         bumpDeviceSessionListMutationEpoch(deviceId);
         this.applySessionPatch(deviceId, sessionId, {
           totalMoney,
-          ...(totalMoney.currency === 'USD' ? { totalCostUsd: totalMoney.amount } : {}),
+          ...(totalMoney.currency === 'USD' ? { totalCostUsd: totalMoney.amount }
+            : totalCostUsd !== null && totalCostUsd >= 0 ? { totalCostUsd } : {}),
+          ...(typeof payload.totalCostUsdIsApproximate === 'boolean' && {
+            totalCostUsdIsApproximate: payload.totalCostUsdIsApproximate,
+          }),
         });
       } else if (sessionId && totalCostUsd !== null && totalCostUsd >= 0) {
         bumpDeviceSessionListMutationEpoch(deviceId);
@@ -6366,6 +6371,14 @@ export function useRemoteSessions(): RemoteSession[] {
   return usePausableRemoteSessionStoreSnapshot('sessions', remoteSessionStore.getVisibleSessions);
 }
 
+/** Native deep links must resolve hidden/detail-only sessions after the mirror hydrates. */
+export function useRemoteSessionLinkTarget(sessionId: string): RemoteSession | null {
+  const read = useCallback(() => remoteSessionStore.getSessions().find(session =>
+    session.id === sessionId,
+  ) ?? null, [sessionId]);
+  return usePausableRemoteSessionStoreSnapshot(read, read);
+}
+
 /** Link chips observe only their visible targets, not every task's activity. */
 export function useRemoteSessionTitles(ids: readonly string[]): Record<string, string> | undefined {
   const read = useCallback(() => {
@@ -6401,12 +6414,13 @@ export function useRemoteHomeSessions(): RemoteSession[] {
   );
 }
 
-export type RemoteSessionUsage = Pick<RemoteSession, 'totalMoney' | 'totalCostUsd' | 'totalTokenUsage'>;
+export type RemoteSessionUsage = Pick<RemoteSession, 'totalMoney' | 'totalCostUsd' | 'totalCostUsdIsApproximate' | 'totalTokenUsage'>;
 const EMPTY_SESSION_USAGE: RemoteSessionUsage = {};
 
 function sessionUsageEqual(a: RemoteSessionUsage, b: RemoteSessionUsage): boolean {
   return a.totalTokenUsage === b.totalTokenUsage
     && a.totalCostUsd === b.totalCostUsd
+    && a.totalCostUsdIsApproximate === b.totalCostUsdIsApproximate
     && a.totalMoney?.amount === b.totalMoney?.amount
     && a.totalMoney?.currency === b.totalMoney?.currency
     && a.totalMoney?.kind === b.totalMoney?.kind
@@ -6423,7 +6437,7 @@ export function useRemoteSessionUsage(sessionId: string, enabled = true): Remote
   const readUsage = useCallback(() => {
     const session = enabled ? sessionById(sessionId) : undefined;
     const next: RemoteSessionUsage = session
-      ? { totalCostUsd: session.totalCostUsd, totalMoney: session.totalMoney, totalTokenUsage: session.totalTokenUsage }
+      ? { totalCostUsd: session.totalCostUsd, totalCostUsdIsApproximate: session.totalCostUsdIsApproximate, totalMoney: session.totalMoney, totalTokenUsage: session.totalTokenUsage }
       : EMPTY_SESSION_USAGE;
     if (sessionUsageEqual(previousRef.current, next)) return previousRef.current;
     previousRef.current = next;

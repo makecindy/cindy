@@ -98,6 +98,15 @@ export const providersSettings = defineSettings({
     sectionKey: 'settings.sections.providers',
     keywordKeys: ['settings.providers.remote.modelsTitle'],
   },
+  pluginProviders: {
+    id: 'providers.pluginProviders',
+    tab: 'providers',
+    targetId: 'settings-panel-providers',
+    titleKey: 'settings.providers.plugin.title',
+    descriptionKey: 'settings.providers.plugin.note',
+    sectionKey: 'settings.tabs.providers',
+    aliases: ['插件供应商', '插件引擎', 'plugin provider', 'plugin engine'],
+  },
   videoApi: {
     id: 'providers.videoApi',
     tab: 'providers',

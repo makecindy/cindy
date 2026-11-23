@@ -208,3 +208,15 @@ it.each(['locked', 'lock-failed', 'lock-failed timeout', 'released', ''])(
     expect(ended).not.toHaveBeenCalled();
   },
 );
+
+// macOS 27.3 regression: the helper identifies a missing grant before exiting.
+// Unit, real watcher with fake stdio: the settings UI needs that specific reason.
+it('keeps the macOS permission denial when the away helper closes before ready', async () => {
+  Object.defineProperty(process, 'platform', { value: 'darwin' });
+  const f = fixture();
+  const starting = watchAwayGuardInput(f.local, undefined, f.runtime);
+  await Promise.resolve();
+  f.line('permission\n');
+  f.child.emit('close');
+  await expect(starting).rejects.toThrow('DESKTOP_ACCESSIBILITY_REQUIRED');
+});

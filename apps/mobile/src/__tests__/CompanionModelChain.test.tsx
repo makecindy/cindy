@@ -5,6 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 const h = vi.hoisted(() => ({
   catalog: { providers: [] as any[], ready: true },
+  pluginEngines: [] as any[],
   device: vi.fn(),
   change: vi.fn(),
   picker: null as any,
@@ -64,6 +65,13 @@ vi.mock("@/session/ModelPickerSheet", () => ({
     return null;
   },
 }));
+vi.mock("@/session/pluginEngines", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/session/pluginEngines")>();
+  return {
+    ...actual,
+    usePluginEngines: () => ({ engines: h.pluginEngines, loading: false, refresh: vi.fn() }),
+  };
+});
 import {
   CompanionModelChain,
   CompanionModelPicker,
@@ -102,6 +110,7 @@ beforeEach(() => {
     ],
     ready: true,
   };
+  h.pluginEngines = [];
 });
 afterEach(() => {
   act(() => root.unmount());
@@ -223,4 +232,59 @@ it('shows a group entry by its group and lets the picker choose the host\'s grou
   expect(select).toHaveBeenLastCalledWith({ harness: 'pi', model: 'glm', providerId: 'xd', effort: '', fastMode: false, modelGroup: 'night' });
   await h.picker.unified.onSelect({ agent: 'codex', modelId: 'gpt-6', providerId: 'openai:second', effort: 'high', fast: true });
   expect(select).toHaveBeenLastCalledWith({ ...route, agentDeviceId: null });
+});
+
+// 生产入口与可观察结果：手机端 CompanionModelChain 与 CompanionModelPicker 展示并写回插件引擎路由(harness='acp')。
+// 依据：docs/plans/acp-plugin-bridge.md「伙伴完整支持插件引擎」。
+// 覆盖缺口：此前 readCompanionModelChain 丢弃 harness='acp'，且 CompanionModelPicker 未透传 pluginEngines。
+// 最小失败输入与 tier：unit（jsdom），单台被控电脑上的 DSH 插件引擎路由展示与选择。
+it('renders plugin engine companion routes and selects plugin engines from the mobile picker', async () => {
+  h.pluginEngines = [{
+    key: 'dsh-acp:dsh',
+    providerId: 'acp-plugin:dsh-acp:dsh',
+    ghostId: 'dsh-acp',
+    harnessId: 'dsh',
+    name: 'DeepSeek Harness',
+    availability: { state: 'available' },
+    models: [{ id: 'deepseek-v4', displayName: 'DeepSeek V4', efforts: ['high'] }],
+    permissionModes: [{ id: 'ask', displayName: 'Ask' }],
+    defaultPermissionMode: 'ask',
+  }];
+  const acpRoute = {
+    harness: 'acp',
+    model: 'deepseek-v4',
+    providerId: 'acp-plugin:dsh-acp:dsh',
+    effort: 'high',
+    fastMode: false,
+  };
+  await render('remote-mac', [acpRoute as any]);
+  expect(node.textContent).toContain('DeepSeek V4');
+  expect(node.textContent).toContain('DeepSeek Harness');
+
+  const select = vi.fn(() => true);
+  await act(async () => root.render(createElement(CompanionModelPicker, {
+    visible: true,
+    deviceId: 'remote-mac',
+    route: acpRoute as any,
+    onClose() {},
+    onClosed() {},
+    onSelect: select,
+  })));
+  expect(h.picker.unified.pluginEngines.active).toEqual({
+    providerId: 'acp-plugin:dsh-acp:dsh',
+    modelId: 'deepseek-v4',
+    effort: 'high',
+  });
+  h.picker.unified.pluginEngines.onSelect({
+    providerId: 'acp-plugin:dsh-acp:dsh',
+    modelId: 'default',
+  });
+  expect(select).toHaveBeenCalledWith({
+    agentDeviceId: null,
+    harness: 'acp',
+    model: 'default',
+    providerId: 'acp-plugin:dsh-acp:dsh',
+    effort: '',
+    fastMode: false,
+  });
 });
