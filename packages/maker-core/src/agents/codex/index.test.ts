@@ -9054,6 +9054,59 @@ describe('CodexAgent MCP thread context hooks', () => {
     }
   });
 
+  // #7903: the successful lookup cases do not cover a transport that stays open
+  // without replying to an explicit slash command's skills/list. Unit tier:
+  // real Host and RPC timers under a fake clock, checking turn/start and turn/steer.
+  it.each([
+    ['send', false], ['send', true], ['steer', false], ['steer', true],
+  ] as const)('bounds a silent local skills/list during %s (cancel=%s)', async (method, cancel) => {
+    const agent = new CodexAgent(createDeps());
+    const handle = await agent.startSession({ sessionId: 'silent-skill-list', model: 'gpt-5.4', workingDir: '/repo' });
+    const transport = createdTransports[0];
+    transport.setMockResponse(Method.TurnStart, { result: { turn: { id: 'probe-turn' } } });
+    transport.setMockResponse(Method.TurnSteer, { result: { turnId: 'probe-turn' } });
+    const requests = () => transport.lines.map(line => JSON.parse(line));
+    const dispatchRpc = method === 'send' ? Method.TurnStart : Method.TurnSteer;
+    const reply = deferred<void>();
+    const abort = new AbortController();
+    const raw = '/probe 参数';
+    const wire = `[UI language] English\n\n${raw}`;
+    try {
+      if (method === 'steer') await handle.send({ type: 'user', content: 'Start a turn' });
+      MockCodexTransport.beforeSkillsListResponse = () => reply.promise;
+      vi.useFakeTimers();
+      let result: string | undefined;
+      const pending = handle[method]({ type: 'user', content: wire }, {
+        signal: abort.signal,
+        [MAIN_OWNED_SEND_CONTEXT]: { origin: { kind: 'desktop' }, rawChannelText: raw },
+      }).then(() => { result = 'accepted'; }, error => { result = String(error); });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(requests().filter(request => request.method === Method.SkillsList)).toHaveLength(1);
+      expect(requests().some(request => request.method === dispatchRpc)).toBe(false);
+      if (cancel) {
+        abort.abort();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(result).toMatch(/cancelled before acceptance/);
+        if (method === 'send') expect(handle.isTurnRunning?.()).toBe(false);
+      } else {
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(result).toBe('accepted');
+        expect(requests().filter(request => request.method === dispatchRpc).map(request => request.params.input))
+          .toEqual([[{ type: 'text', text: wire }]]);
+      }
+      reply.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      await pending;
+      expect(requests().filter(request => request.method === dispatchRpc)).toHaveLength(cancel ? 0 : 1);
+      expect(transport.closed).toBe(false);
+    } finally {
+      reply.resolve();
+      vi.useRealTimers();
+      await handle.close();
+      await agent.dispose();
+    }
+  });
+
   it.each(['system', 'admin'] as const)(
     'keeps a palette-hidden %s Skill directly invocable',
     async (scope) => {

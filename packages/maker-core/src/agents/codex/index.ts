@@ -7115,6 +7115,7 @@ assertRouteCurrent();
 
     const toTurnInput = async (
       content: UserMessage['content'],
+      action: 'send' | 'steer',
       sendOpts?: SendOptions,
       pinnedSkill?: PinnedSkillInvocation,
     ): Promise<UserInput[]> => {
@@ -7175,9 +7176,13 @@ assertRouteCurrent();
       if (!slash) return toAppServerInput(content, opts.workingDir);
 
       try {
+        rejectIfCancelled(sendOpts, action);
         const { skills } = localSource === undefined
           ? await this.listSkillsForCwd(opts.workingDir, false)
-          : await this.listSkillsForHost(host, opts.workingDir, false);
+          : await awaitCodexRouteSelection(
+              this.listSkillsForHost(host, opts.workingDir, false, CRITICAL_THREAD_RPC_TIMEOUT_MS),
+              sendOpts?.signal,
+            );
         // 受邀者：斜杠只解析它自己带来的技能与 Codex 自带技能，不把本机用户的技能文件交给模型。
         const skill = selectInvocableCodexSkill(
           guestSkillAllowed ? skills.filter((candidate) => guestSkillAllowed(candidate.path, candidate.scope)) : skills,
@@ -7196,6 +7201,7 @@ assertRouteCurrent();
         if (prompt) inputs.push({ type: 'text', text: prompt });
         return inputs;
       } catch (err) {
+        rejectIfCancelled(sendOpts, action);
         log.warn('failed to resolve leading slash as Codex skill, sending literal text', {
           name: slash.name,
           error: String(err),
@@ -14251,19 +14257,20 @@ assertRouteCurrent();
         try {
           turnInput = await toTurnInput(
             withLibraryNativeReadContext(message.content, mutableLibraryRoot, mutableExtraDirs),
+            'send',
             sendOpts,
             sendOpts?.[PINNED_SKILL_INVOCATION],
           );
+          if (rejectClosedOrCancelledSend(sendOpts, 'after input preparation')) {
+            isTurnStartPending = false;
+            abandonBufferedTurns('send cancelled after input preparation');
+            flushDeferredTerminalTurnCompletionsIfIdle();
+            return;
+          }
         } catch (e) {
           isTurnStartPending = false;
           flushDeferredTerminalTurnCompletionsIfIdle();
           throw e;
-        }
-        if (rejectClosedOrCancelledSend(sendOpts, 'after input preparation')) {
-          isTurnStartPending = false;
-          abandonBufferedTurns('send cancelled after input preparation');
-          flushDeferredTerminalTurnCompletionsIfIdle();
-          return;
         }
         const autoReviewIntent = (sendOpts as CodexInternalSendOptions | undefined)?.[
           CODEX_AUTO_REVIEW_INTENT
@@ -14903,7 +14910,7 @@ assertRouteCurrent();
         // Validate content before steering. `toTurnInput` can touch local
         // files/images; if that fails, leaving the current turn untouched is
         // better than sending a broken 插话.
-        const input = await toTurnInput(message.content, sendOpts);
+        const input = await toTurnInput(message.content, 'steer', sendOpts);
         rejectIfCancelled(sendOpts, 'steer');
         if (closed) {
           throw new Error('No active Codex turn to steer: session is closed');
