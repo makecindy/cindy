@@ -360,7 +360,8 @@ export interface ProviderGroupBeforeSendOptions {
 /** 一次终态错误的处理结局(调用方据此结算换电脑期间先不呈现的那次错误)。 */
 export interface ProviderGroupTurnErrorHooks {
   /** Async checks declined ownership before switching; true transfers back to interrupted-turn recovery. */
-  notHandled?(): boolean;
+  notHandled?(token: number): boolean;
+  accountsExhausted?(token: number): boolean;
   /** 不换了，马上交回原有处理(报错与额度重置后自动继续)：先把错误放出来。 */
   beforeFallback?(): void;
   /** 已换到另一台电脑(或原电脑恢复后在原电脑)续上了这一轮。 */
@@ -1298,15 +1299,16 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     lease: object,
     run: SwitchRun,
     hooks: ProviderGroupTurnErrorHooks | undefined,
-    body: (isCurrent: () => boolean, handBack: () => void, setAccountSwitchChecked: (checked: boolean) => void) => Promise<void>,
+    body: (isCurrent: () => boolean, handBack: (accountsExhausted?: boolean) => void, setAccountSwitchChecked: (checked: boolean) => void) => Promise<void>,
   ): Promise<void> {
     const isCurrent = () => !run.superseded && deps.isLeaseCurrent(sessionId, lease) && (run.isCurrent?.() ?? true);
     if (!isCurrent()) return;
     let accountSwitchChecked = false;
-    const handBack = () => {
+    const handBack = (accountsExhausted = false) => {
       if (!isCurrent()) return;
-      hooks?.beforeFallback?.();
       const fallbackToken = deps.leaseRecovery(sessionId, token) ? token : deps.rearmContinue(sessionId, lease, null);
+      if (accountsExhausted && fallbackToken !== null && hooks?.accountsExhausted?.(fallbackToken)) return;
+      hooks?.beforeFallback?.();
       if (fallbackToken !== null) {
         if (accountSwitchChecked) deps.fallback(sessionId, signals, fallbackToken, { accountSwitchChecked: true });
         else deps.fallback(sessionId, signals, fallbackToken);
@@ -1694,7 +1696,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     current: ProviderGroupMember;
     lease: object;
     isCurrent: () => boolean;
-    handBack: () => void;
+    handBack: (accountsExhausted?: boolean) => void;
     setAccountSwitchChecked: (checked: boolean) => void;
     onRelocationMutationStart?: () => void;
     hooks: ProviderGroupTurnErrorHooks | undefined;
@@ -1747,7 +1749,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
         }
         deps.log.info('provider group: no computer left to switch to', { sessionId, cause, tried: tried().size });
         resetRound(sessionId);
-        handBack();
+        handBack(cause === 'usage-limit');
         return;
       }
       if (accountSwitch !== null && pick.member.key === current.key) {
@@ -2116,6 +2118,10 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     async resolveSwitchTarget(sessionId, target) {
       const { providerId, agentDeviceId } = target;
       if (!providerId) return null;
+      const currentBinding = deps.readBinding(sessionId);
+      if (target.current.agentDeviceId === agentDeviceId && target.current.providerId === null &&
+          currentBinding?.providerId === providerId && currentBinding.memberKey === 'local' &&
+          (currentBinding.groupDeviceId ?? null) === agentDeviceId) return null;
       const source = agentDeviceId === null
         ? (deps.readGroup(providerId) ? localSource : null)
         : (deps.remote && !isProviderShareAgentDeviceId(agentDeviceId) ? remoteSource(agentDeviceId) : null);
@@ -2161,7 +2167,8 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
 
     mayHandleTurnError(sessionId, signals) {
       if (signals.reason === 'remote_agent_restarted') return true;
-      if (decideProviderGroupFailure(signals, 'run').action !== 'switch') return false;
+      const decision = decideProviderGroupFailure(signals, 'run');
+      if (decision.action !== 'switch') return false;
       const binding = deps.readBinding(sessionId);
       if (!binding) return deps.guestSwitch?.hasOffer(sessionId) === true
         || !!deps.directGuestSession?.(sessionId);
@@ -2170,7 +2177,8 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       const current = config?.members.find((m) => m.key === binding.memberKey);
       // 同机其他连接也能接替；只有当前成员时仍交回原有错误处理。
       return Boolean(
-        config?.autoSwitch && current && config.members.some((m) => m.key !== current.key),
+        config?.autoSwitch && current && (config.members.some((m) => m.key !== current.key) ||
+          (decision.cause === 'usage-limit' && deps.readAccountSwitch !== undefined)),
       );
     },
 
@@ -2182,7 +2190,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
         deps.log.warn('provider group: automatic switch failed', { sessionId, error: errorText(error) });
       }
       if (handled) return;
-      if (hooks?.notHandled?.()) return;
+      if (hooks?.notHandled?.(token)) return;
       hooks?.beforeFallback?.();
       deps.fallback(sessionId, signals, token);
     },

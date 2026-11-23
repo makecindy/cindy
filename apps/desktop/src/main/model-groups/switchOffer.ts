@@ -45,8 +45,8 @@ function isModelGroupAgentKind(value: unknown): value is ModelGroupAgentKind {
  * 只给本机直接开的普通任务：伙伴、定时与自动化、IM、复核等来源，SSH、Agent 在另一台电脑、协同
  * (Lead / Worker)、共享中的任务与目标都不提议。被控电脑上的任务由那台的主进程回答，本机查不到会话行。
  */
-function isPlainLocalTask(row: ModelGroupSwitchOfferSessionRow): boolean {
-  return row.source === 'desktop' && !row.remoteHostId && !row.agentDeviceId && !row.orcaRole;
+function isLocalOfferEligible(row: ModelGroupSwitchOfferSessionRow, recovering: boolean): boolean {
+  return row.source === 'desktop' && !row.remoteHostId && !row.agentDeviceId && (!row.orcaRole || (recovering && row.orcaRole === 'worker'));
 }
 
 export async function computeModelGroupSwitchOffer(
@@ -57,7 +57,7 @@ export async function computeModelGroupSwitchOffer(
   const binding = deps.readBinding(sessionId);
   if (!binding) return null;
   const row = await deps.readSession(sessionId);
-  if (!row || !isPlainLocalTask(row) || deps.isShared(sessionId) || await deps.hasGoal(sessionId)) return null;
+  if (!row || !isLocalOfferEligible(row, !!recovery) || deps.isShared(sessionId) || await deps.hasGoal(sessionId)) return null;
   if (!isModelGroupAgentKind(row.agentKind) || !row.providerId || !row.model) return null;
   // 任务此刻的运行位置(只给本机任务提议，所以这里总是本机)；记录里的候选键同样带位置。
   const location = row.agentDeviceId || undefined;

@@ -155,6 +155,15 @@ describe('computeModelGroupSwitchOffer', () => {
     expect(await computeModelGroupSwitchOffer(onlyRemote, 's1')).toBeNull();
   });
 
+  it('uses the configured recovery route for a local Worker after account exhaustion', async () => {
+    const d = deps({ row: { orcaRole: 'worker' } });
+    expect(await computeModelGroupSwitchOffer(d, 's1')).toBeNull();
+    expect(await computeModelGroupSwitchOffer(d, 's1', {
+      visited: new Set(), accountUnavailable: true, recordUnavailable: vi.fn(),
+      current: { agentKind: 'codex', providerId: 'acct-a', model: 'gpt' },
+    })).toMatchObject({ providerId: 'anthropic' });
+  });
+
   it('gives the same answer when asked again (no rotate cursor or decision is advanced)', async () => {
     const d = deps({ config: { routes: [route('rotate')] } });
     const first = await computeModelGroupSwitchOffer(d, 's1');
