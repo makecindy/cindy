@@ -66,6 +66,9 @@ const viewportHarness = vi.hoisted(() => ({
   captureNativeOpacity: false,
   memoizedCells: false,
   opacityTargets: new Set<HTMLElement>(),
+  layouts: new WeakMap<Element, (event: { nativeEvent: { layout: { height: number } } }) => void>(),
+  scrollToEnd: vi.fn(),
+  scrollToOffset: vi.fn(),
 }));
 
 // Keep the production list, bubble gate, invocation header, and message model.
@@ -74,25 +77,30 @@ vi.mock("react-native", async () => {
   const React = await import("react");
   const window = { width: 402, height: 874, scale: 3, fontScale: 1 };
   // onLongPress 映射到 contextmenu,便于测试长按显示来源 ID。
-  const view = ({ children, testID, accessibilityLabel, accessibilityHint, accessibilityState, onLongPress, onPress, disabled, selectable, style, nativeRef }: {
+  const view = ({ children, testID, accessibilityLabel, accessibilityHint, accessibilityState, onLayout, onLongPress, onPress, disabled, selectable, style, nativeRef }: {
     children?: ReactNode;
     testID?: string;
     accessibilityLabel?: string;
     accessibilityHint?: string;
     accessibilityState?: { expanded?: boolean };
+    onLayout?: (event: { nativeEvent: { layout: { height: number } } }) => void;
     onLongPress?: () => void;
     onPress?: MouseEventHandler<HTMLDivElement>;
     disabled?: boolean;
     selectable?: boolean;
     style?: unknown;
     nativeRef?: Ref<HTMLDivElement>;
-  }) =>
-    React.createElement(
+  }) => {
+    const layoutStyle = Object.assign({}, ...[typeof style === 'function' ? style({ pressed: false }) : style].flat(Infinity).filter(Boolean));
+    return React.createElement(
       "div",
       {
-        ref: nativeRef,
+        ref: onLayout ? (node: HTMLDivElement | null) => {
+          if (node) viewportHarness.layouts.set(node, onLayout);
+        } : nativeRef,
+        style: { height: layoutStyle.height },
         "data-testid": testID,
-        "data-min-height": Object.assign({}, ...[typeof style === 'function' ? style({ pressed: false }) : style].flat(Infinity).filter(Boolean)).minHeight,
+        "data-min-height": layoutStyle.minHeight,
         ...(selectable !== undefined ? { "data-selectable": String(selectable) } : {}),
         "aria-label": accessibilityLabel,
         "aria-expanded": accessibilityState?.expanded,
@@ -103,6 +111,7 @@ vi.mock("react-native", async () => {
       },
       children,
     );
+  };
   class Value {
     constructor(public value: number) {}
     interpolate() {
@@ -178,16 +187,17 @@ vi.mock("@legendapp/list/react-native", () => ({
     viewportHarness.list = { ...props, data };
     useImperativeHandle(ref, () => ({
       getNativeScrollRef: () => ({ getBoundingClientRect: () => ({ top: 0, bottom: viewportHarness.bottom }) }),
-      scrollToEnd() {},
-      scrollToOffset() {},
+      scrollToEnd: viewportHarness.scrollToEnd,
+      scrollToOffset: viewportHarness.scrollToOffset,
       getState() {
         return undefined;
       },
     }));
     // Model retained native cells: changing renderItem alone need not redraw them.
-    return useMemo(() => data.map((item: any, index: number) =>
+    const rows = useMemo(() => data.map((item: any, index: number) =>
       createElement("section", { key: item.key }, renderItem({ item, index })),
     ), [data, props.extraData, viewportHarness.memoizedCells ? null : renderItem]);
+    return <>{rows}{props.ListFooterComponent && <footer>{props.ListFooterComponent}</footer>}</>;
   },
   useRecyclingState: (initial: any) => useState(initial),
   useViewability: () => {},
@@ -1335,6 +1345,61 @@ describe('buddy primary inbox letters', () => {
       expect(taskRow.querySelector(sources)).toBeNull();
       expect(buddyRow.textContent).toContain('Buddy second paragraph.');
     } finally { h.unmount(); }
+  });
+
+  // PR #12151, unit: the existing disclosure tests have no native size events.
+  // A long letter opened at the tail must not seek past its heading or follow live growth.
+  it('holds the reading position across letter size changes until following is requested again', () => {
+    const h = mount([
+      msg('long-letter', 'First line.\n\n' + 'Synthetic progress.\n\n'.repeat(16) + 'Last paragraph.', { origin }),
+      { ...msg('streaming-reply', 'A reply in progress.', null), role: 'assistant' },
+    ], { ...primary, isSessionStreaming: true, scrollResetKey: 'original-task' });
+    const size = (height: number) => act(() => viewportHarness.list.onContentSizeChange(402, height));
+    const scroll = (y: number, height: number) => act(() => viewportHarness.list.onScroll({
+      nativeEvent: { contentOffset: { y }, contentSize: { height }, layoutMeasurement: { height: 500 } },
+    }));
+    const jump = () => h.host.querySelector<HTMLElement>('[data-testid="message.jumpToLatestButton"]');
+    const footer = () => h.host.querySelector<HTMLElement>('footer > div');
+    const clearScrollCommands = () => {
+      viewportHarness.scrollToEnd.mockClear();
+      viewportHarness.scrollToOffset.mockClear();
+    };
+    try {
+      scroll(500, 1000);
+      clearScrollCommands();
+      const letter = h.host.querySelector<HTMLElement>(letters)!;
+      act(() => letter.click());
+      size(1600);
+      scroll(500, 1600); // native layout sample, not a downward gesture
+      size(1680); // the in-progress reply adds another 80pt
+      expect(viewportHarness.scrollToOffset).not.toHaveBeenCalled();
+      expect(viewportHarness.scrollToEnd).not.toHaveBeenCalled();
+      expect(jump()).not.toBeNull();
+
+      // Return to the live reply, then close a measured body while following at the tail.
+      act(() => jump()!.click());
+      expect(viewportHarness.scrollToEnd).toHaveBeenCalledWith({ animated: true });
+      expect(jump()).toBeNull();
+      scroll(1180, 1680);
+      const body = letter.nextElementSibling!;
+      act(() => viewportHarness.layouts.get(body)!({ nativeEvent: { layout: { height: 600 } } }));
+      clearScrollCommands();
+      act(() => letter.click());
+      expect(letter.closest('section')?.textContent).not.toContain('Last paragraph.');
+      expect(footer()?.style.height).toBe('600px'); // native max offset stays 1180, not 580
+      size(1680);
+      size(1720); // another chunk, even though the viewport was at the old tail
+      expect(viewportHarness.scrollToOffset).not.toHaveBeenCalled();
+      expect(viewportHarness.scrollToEnd).not.toHaveBeenCalled();
+
+      h.rerender({ scrollResetKey: 'next-task' });
+      expect(footer()).toBeNull();
+      expect(jump()).toBeNull();
+      expect(h.host.querySelector(letters)?.getAttribute('aria-expanded')).toBe('false');
+    } finally {
+      h.unmount();
+      clearScrollCommands();
+    }
   });
 
   it('keeps an ID-less letter readable without inventing a source target', () => {

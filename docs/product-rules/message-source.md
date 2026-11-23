@@ -144,7 +144,8 @@ Agent 用 `send_to_session` 把消息发给另一台电脑上的任务时（包�
 
 伙伴主对话里的来信（2026-11-10 主人裁决）：桌面与手机默认将其他任务或伙伴发来的普通来信收成左侧与伙伴回复对齐的一行
 （来源名称 + 回信 + 首个非空行），不占主人的右侧气泡。点开看全文；有来源任务 ID 时可「打开任务」，
-操作栏只在展开后出现，手机上的附件也在展开后显示。主人发言、伙伴答复、普通任务页、Orca、Hook 与其他渠道沿用原展示，
+操作栏只在展开后出现，手机上的附件也在展开后显示。手机展开／收起来信时暂停贴底跟随，保留阅读位置；
+用户滑到底部或点「跳到底部」可恢复跟随。主人发言、伙伴答复、普通任务页、Orca、Hook 与其他渠道沿用原展示，
 不改投递、历史记录或发给模型的内容。实现见桌面 `UserMessage.tsx` 的 `botLetter` 分支与手机
 [`MessageRenderer.tsx`](../../apps/mobile/src/session/MessageRenderer.tsx) 的 `CompanionTaskLetter`；
 手机回归见 [`messageSourceLabelsRender.test.tsx`](../../apps/mobile/src/__tests__/messageSourceLabelsRender.test.tsx)。

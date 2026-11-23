@@ -3645,6 +3645,8 @@ function CompanionTaskLetter({ item, actions, origin }: {
   const { colors } = useTheme();
   const { t } = useTranslation();
   const [expanded, setExpanded] = useRecyclingState(false);
+  const inspectViewport = useContext(ProcessDisclosureViewport);
+  const bodyHeight = useRef(0);
   const sender = origin.senderBotName ?? origin.senderSessionTitle;
   const title = sender
     ? t('message.renderer.taskLetterReplied', { name: sender })
@@ -3665,7 +3667,13 @@ function CompanionTaskLetter({ item, actions, origin }: {
           label: showPreview ? `${title} · ${preview}` : title,
         })}
         expanded={expanded}
-        onPress={() => setExpanded((value) => !value)}
+        onPress={() => {
+          // Take ownership before layout changes; closing needs the current body height
+          // so the native scroll range does not clamp the reader to a new bottom.
+          inspectViewport?.(expanded ? bodyHeight.current : 0);
+          bodyHeight.current = 0;
+          setExpanded(!expanded);
+        }}
         style={styles.companionLetterPill}
         testID="message.companionLetter"
       >
@@ -3678,7 +3686,11 @@ function CompanionTaskLetter({ item, actions, origin }: {
         ) : null}
         <Chevron color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
       </FoldableHeaderButton>
-      {expanded ? <MessageBubble item={item} actions={actions} taskLetter /> : null}
+      {expanded ? (
+        <View onLayout={event => { bodyHeight.current = event.nativeEvent.layout.height; }}>
+          <MessageBubble item={item} actions={actions} taskLetter />
+        </View>
+      ) : null}
     </View>
   );
 }
