@@ -420,6 +420,7 @@
       "description": "仅限远程调用，不涉此机使用。存后，于立差事、易模型及遣下一轮讯时生效。",
       "all": "诸模型",
       "selected": "已开 {{count}} 个模型",
+      "selectionExcludesModels": "尚有模型未选。日后新增者，须亲选而后开放。",
       "choose": "择模型",
       "memberTitle": "可用模型",
       "memberDescription": "设 {{name}} 可用之模型，仅能择远程已开者。经此人转分享之调用亦适用。",

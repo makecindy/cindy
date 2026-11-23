@@ -420,6 +420,7 @@
       "description": "Only limits remote use. Local use is unchanged. Saved changes apply when creating a task, switching models, or sending the next message.",
       "all": "All models",
       "selected": "{{count}} models allowed",
+      "selectionExcludesModels": "Some models are outside the selected range. To allow future models, select them manually.",
       "choose": "Choose models",
       "memberTitle": "Allowed models",
       "memberDescription": "Choose which models {{name}} can use, within the models open for remote use. These limits also apply to use reshared through this person.",

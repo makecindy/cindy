@@ -420,6 +420,7 @@
       "description": "Schränkt nur die Remote-Nutzung ein. Die lokale Nutzung bleibt unverändert. Gespeicherte Änderungen gelten beim Erstellen einer Aufgabe, beim Wechseln von Modellen oder beim Senden der nächsten Nachricht.",
       "all": "Alle Modelle",
       "selected": "{{count}} Modelle zugelassen",
+      "selectionExcludesModels": "Einige Modelle sind nicht ausgewählt. Neu hinzugefügte Modelle müssen manuell ausgewählt werden.",
       "choose": "Modelle auswählen",
       "memberTitle": "Zugelassene Modelle",
       "memberDescription": "Wähle aus den für die Remote-Nutzung freigegebenen Modellen aus, welche {{name}} verwenden darf. Diese Einschränkungen gelten auch für die Nutzung, die über diese Person weitergeteilt wird.",

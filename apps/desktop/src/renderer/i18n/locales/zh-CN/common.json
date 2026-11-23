@@ -420,6 +420,7 @@
       "description": "只限制远程调用，本机使用不受影响。保存后，创建任务、切换模型和发送下一条消息时生效。",
       "all": "全部模型",
       "selected": "已开放 {{count}} 个模型",
+      "selectionExcludesModels": "当前有模型未选中。新增模型需手动选择后才会开放。",
       "choose": "选择模型",
       "memberTitle": "可用模型",
       "memberDescription": "设置 {{name}} 可以使用的模型，只能选择远程已开放的模型。也适用于经此人转分享的调用。",

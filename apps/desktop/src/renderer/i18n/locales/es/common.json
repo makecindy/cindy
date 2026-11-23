@@ -425,6 +425,7 @@
       "description": "Sólo limita el uso remoto. El uso local no cambia. Los cambios guardados se aplican al crear una tarea, cambiar de modelo o enviar el siguiente mensaje.",
       "all": "Todos los modelos",
       "selected": "{{count}} modelos permitidos",
+      "selectionExcludesModels": "Hay modelos sin seleccionar. Para permitir los que se añadan en el futuro, selecciónalos manualmente.",
       "choose": "Elige modelos",
       "memberTitle": "Modelos permitidos",
       "memberDescription": "Elige qué modelos puede usar {{name}}, dentro de los modelos abiertos para uso remoto. Estos límites también se aplican al uso que esta persona vuelva a compartir.",
