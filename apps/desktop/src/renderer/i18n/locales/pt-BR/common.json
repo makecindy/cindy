@@ -15501,6 +15501,7 @@
       "codexHelperUnverified": "Não foi possível verificar se cindy_helper está disponível nesta tarefa. Talvez não seja possível comunicar o resultado da tarefa.",
       "requestFormatError": "O aplicativo enviou uma solicitação inválida, por isso não foi possível concluir esta resposta.",
       "replyFailed": "Não foi possível concluir a resposta",
+      "upstreamOutputBlocked": "O serviço do modelo interrompeu esta resposta devido às suas regras de segurança. Verifique se algum progresso foi salvo.",
       "retryTitle": "Reenviar a última mensagem",
       "cancelTitle": "Fechar aviso de erro",
       "retry": "Tentar novamente",

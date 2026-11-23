@@ -15501,6 +15501,7 @@
       "codexHelperUnverified": "Impossible de vérifier si cindy_helper est disponible pour cette tâche. Le résultat de la tâche risque de ne pas pouvoir être transmis.",
       "requestFormatError": "L'application a envoyé une requête non valide : cette réponse n'a donc pas pu aboutir.",
       "replyFailed": "Impossible de terminer la réponse",
+      "upstreamOutputBlocked": "Le service du modèle a interrompu cette réponse en application de ses règles de sécurité. Vérifiez si des résultats ont été enregistrés.",
       "retryTitle": "Renvoyer le dernier message",
       "cancelTitle": "Fermer l'erreur",
       "retry": "Réessayer",

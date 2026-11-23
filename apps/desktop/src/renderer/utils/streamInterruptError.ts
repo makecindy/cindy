@@ -16,6 +16,21 @@ export function isStreamInterruptedErrorMessage(message: string, reason?: string
   return STREAM_INTERRUPTED_RE.test(message);
 }
 
+/** Codex forwards this HTTP error as a JSON body. Require an explicit output block. */
+export function isUpstreamOutputBlockedErrorMessage(raw: string): boolean {
+  if (raw.length > 64_000 || !raw.includes('"safety_violation"')) return false;
+  try {
+    const body = JSON.parse(raw) as { error?: { type?: unknown; code?: unknown; message?: unknown } } | null;
+    const error = body?.error;
+    return error?.type === 'invalid_request_error'
+      && error.code === 'safety_violation'
+      && typeof error.message === 'string'
+      && /\bblocked the output stream\b/i.test(error.message);
+  } catch {
+    return false;
+  }
+}
+
 const OPENAI_API_ERROR_PREFIX = /^(?:Azure )?OpenAI API error \(\d+\):\s*/i;
 const LITELLM_ERROR_PREFIX = /^litellm\.\w+Error:\s*/;
 const VENDOR_JSON_EXCEPTION_RE = /^([A-Za-z][\w.]*)\s*-\s*(\{[\s\S]*\})$/;
@@ -70,7 +85,7 @@ function extractErrorMessage(value: unknown, depth = 0): string | null {
 
 /** Only promote a bounded message field, never the transport wrapper or a stack trace. */
 export function providerErrorExplanation(raw: string): string | null {
-  if (raw.length > 64_000) return null;
+  if (raw.length > 64_000 || isUpstreamOutputBlockedErrorMessage(raw)) return null;
   const message = extractErrorMessage(embeddedErrorObject(raw));
   if (!message || message.length > 1500 || /(?:^\s*[\[{]|\n\s*at\s)/.test(message)) return null;
   return message;

@@ -15338,6 +15338,7 @@
       "codexHelperUnverified": "未能核实此任务的 cindy_helper 是否可用，任务结果可能无法回传。",
       "requestFormatError": "应用发送的请求格式有误，本次回复未能完成。",
       "replyFailed": "回复未完成",
+      "upstreamOutputBlocked": "模型服务因安全规则中止了这次回复。可以先检查是否有已保存的结果。",
       "retryTitle": "重新发送最后一条消息",
       "cancelTitle": "关闭错误提示",
       "retry": "重试",

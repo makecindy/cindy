@@ -4,7 +4,7 @@ import {
   CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON,
 } from '../../../shared/claudeGatewayError';
 import { UPSTREAM_OVERLOAD_REASON } from '@/utils/overloadError';
-import { UPSTREAM_STREAM_INTERRUPTED_REASON } from '@/utils/streamInterruptError';
+import { isUpstreamOutputBlockedErrorMessage, UPSTREAM_STREAM_INTERRUPTED_REASON } from '@/utils/streamInterruptError';
 
 /**
  * Stable maker-core error reason -> renderer i18n key.
@@ -57,6 +57,9 @@ export const ERROR_REASON_I18N_KEYS: Record<string, string> = {
 export function errorReasonI18nKey(reason: string | null | undefined, message: string): string | undefined {
   if ((!reason || reason === 'context-overflow') && isRemoteCompactEncryptedContentError(message, reason)) {
     return 'chat.errorBanner.remoteCompactEncryptedContent';
+  }
+  if ((!reason || reason === 'turn-failed') && isUpstreamOutputBlockedErrorMessage(message)) {
+    return 'chat.errorBanner.upstreamOutputBlocked';
   }
   return reason ? ERROR_REASON_I18N_KEYS[reason] : undefined;
 }

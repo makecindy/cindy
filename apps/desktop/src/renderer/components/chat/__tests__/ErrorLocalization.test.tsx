@@ -42,6 +42,47 @@ const raw = JSON.stringify({ error: {
 } });
 afterEach(cleanup);
 
+// #8100, unit: real live/tail/history notices used the generic copy and surfaced
+// the provider's "plugin" wording. The Codex error envelope is the minimum
+// input that distinguishes a provider output block from a local plugin failure.
+it.each(['live', 'tail', 'history'] as const)('explains an upstream output block in %s', async surface => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'en', resources: { en: { translation: en } } });
+  const technicalMessage = 'Synthetic plugin blocked the output stream. api_key=fixture-private-value fixture-end.';
+  const error = JSON.stringify({ error: {
+    type: 'invalid_request_error', code: 'safety_violation', message: technicalMessage,
+  }, sequence_number: 2 });
+  render(<I18nextProvider i18n={i18n}>{surface === 'live'
+    ? <ErrorBanner error={error} agentKind="codex" onRetry={vi.fn()} />
+    : surface === 'tail'
+      ? <ErrorTailErrorBanner errorText={error} agentKind="codex" onContinue={vi.fn()} onDismiss={vi.fn()} />
+      : <ErrorMessageCard message={error} />}</I18nextProvider>);
+
+  expect(screen.getByText('The model service stopped this reply under its safety rules. Check whether any progress was saved.')).toBeTruthy();
+  expect(screen.queryByText(/plugin blocked/)).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: en.chat.errorBanner.networkShowRaw }));
+  const details = screen.getByText(/"sequence_number":2/).textContent;
+  expect(details).toContain('safety_violation');
+  expect(details).toContain('plugin blocked');
+  expect(details).toContain('[REDACTED]');
+  expect(details).not.toContain('fixture-private-value');
+});
+
+it.each([
+  'Synthetic local plugin startup failed: safety_violation label in plugin metadata.',
+  JSON.stringify({ error: {
+    type: 'invalid_request_error', code: 'invalid_argument', message: 'Synthetic plugin blocked the output stream.',
+  } }),
+  JSON.stringify({ error: {
+    type: 'invalid_request_error', code: 'safety_violation', message: 'Synthetic input rejected.',
+  } }),
+])('keeps other failures on the existing error path (%#)', async error => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'en', resources: { en: { translation: en } } });
+  render(<I18nextProvider i18n={i18n}><ErrorBanner error={error} agentKind="codex" onRetry={vi.fn()} /></I18nextProvider>);
+  expect(screen.getByText(en.chat.errorBanner.replyFailed)).toBeTruthy();
+});
+
 // L343 / unit: a short input skipped after a context overflow uses the same
 // notice as any skipped input. Exercise the real bubble with its locale bundle.
 it('shows the context-full notice on a skipped short input', async () => {
