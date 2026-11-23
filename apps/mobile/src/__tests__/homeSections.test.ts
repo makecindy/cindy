@@ -5,6 +5,7 @@ import {
   buildHomeSections,
   buildInboxHomeSections,
   buildMixedHomeRows,
+  movePinnedItem,
   HOME_MAIN_SECTION_KEY,
   homeFolderRowsShareRenderData,
   homeRowsShareRenderData,
@@ -42,6 +43,41 @@ function presentation(over: Partial<MobileHomePresentation>): MobileHomePresenta
 }
 
 describe('buildHomeSections', () => {
+  it('keeps dialogue group keys distinct across computers', () => {
+    const chats = ['a', 'b'].map(id => {
+      const item = listItem(id, '2026-06-02T00:00:00Z');
+      return { ...item, session: { ...item.session, deviceLinkDeviceId: id } };
+    });
+    const home = presentation({ chats, deviceFilters: [] });
+    const open = buildHomeSections(home, true, false, { groupDevice: true, groupDialogue: true });
+    expect(open.map(s => s.data[0]?.key)).toEqual(['device:a:dialogue', 'device:b:dialogue']);
+  });
+
+  it('restores manual pin order after sorting the same pins by recent activity', () => {
+    const home = presentation({ pinned: [
+      listItem('old', '2026-06-01T00:00:00Z'), listItem('new', '2026-06-02T00:00:00Z'),
+    ] });
+    const pinnedOrder = movePinnedItem([], [...home.pinned].reverse(), 'old', -1)!;
+    for (const pinnedSort of ['manual', 'activity', 'manual'] as const) {
+      const [pins] = buildHomeSections(home, false, false, { pinnedSort, pinnedOrder });
+      expect(pins.data.map(row => row.key)).toEqual(pinnedSort === 'activity'
+        ? ['pinned:new', 'pinned:old'] : ['pinned:old', 'pinned:new']);
+    }
+  });
+
+  it('moves a re-pinned task ahead of its previous manual position', () => {
+    const pin = (id: string, date: string) => {
+      const item = listItem(id, date);
+      return { ...item, session: { ...item.session, pinnedAt: date } };
+    };
+    const a = pin('a', '2026-06-01'), b = pin('b', '2026-06-02');
+    const pinnedOrder = movePinnedItem([], [b, a], 'a', -1)!;
+    const rows = (pinned: RemoteSessionListItem[]) => buildHomeSections(presentation({ pinned }),
+      false, false, { pinnedOrder })[0].data.map(row => row.key);
+    expect(rows([a, b])).toEqual(['pinned:a', 'pinned:b']);
+    expect(rows([a, pin('b', '2026-06-03')])).toEqual(['pinned:b', 'pinned:a']);
+  });
+
   it('置顶收起时保留分区但清空 data(表头照常渲染,只折叠下属会话)', () => {
     const home = presentation({
       pinned: [listItem('p1', '2026-06-02T00:00:00Z'), listItem('p2', '2026-06-01T00:00:00Z')],
@@ -410,16 +446,7 @@ describe('buildMixedHomeRows / buildGroupedHomeRows', () => {
     ]);
   });
 
-  it('平铺时给项目会话和对话会话带来源标签,分组模式不带', () => {
-    const mixed = buildMixedHomeRows(home, { dialogueTitle: '对话' });
-    expect(mixed.filter((row): row is Extract<typeof row, { kind: 'session' }> => row.kind === 'session')
-      .map((row) => [row.item.session.id, row.sourceLabel])).toEqual([
-      ['chat-new', '对话'],
-      ['s1', undefined],
-      ['s2', undefined],
-      ['chat-old', '对话'],
-    ]);
-    // project.title 来自 fixture 里缺省的 undefined —— 上面只断言对话标签。补一个带 title 的项目。
+  it('平铺时只给项目任务标项目名,独立对话和分组内任务省略来源', () => {
     const named = presentation({
       chats: [listItem('chat-new', '2026-06-06T00:00:00Z')],
       projects: [{
@@ -428,12 +455,12 @@ describe('buildMixedHomeRows / buildGroupedHomeRows', () => {
       }],
     });
     const namedMixed = buildMixedHomeRows(named, { dialogueTitle: '对话' });
-    expect(namedMixed.map((row) => row.kind === 'session' ? [row.item.session.id, row.sourceLabel] : row.kind)).toEqual([
-      ['chat-new', '对话'],
+    expect(namedMixed.map((row) => row.kind === 'session' ? [row.item.session.id, row.projectLabel ?? row.sourceLabel] : row.kind)).toEqual([
+      ['chat-new', undefined],
       ['s1', 'Cindy'],
     ]);
     const grouped = buildGroupedHomeRows(named, { dialogueTitle: '对话' });
-    expect(grouped.filter((row) => row.kind === 'session').map((row) => row.kind === 'session' ? row.sourceLabel : null))
+    expect(grouped.filter((row) => row.kind === 'session').map((row) => row.kind === 'session' ? row.projectLabel ?? row.sourceLabel : null))
       .toEqual([undefined]);
   });
 

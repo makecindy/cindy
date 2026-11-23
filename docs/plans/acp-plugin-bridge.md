@@ -95,6 +95,12 @@ Cindy 主进程**从不执行插件写的命令**，只启动插件包里声明�
 | 权限 | `session/request_permission` → `interaction_request`（kind = permission） |
 | 模型 / 推理强度 | 类别为 `model` 的配置项 / `reasoning_effort` 配置项 → `setModel` / `setEffort` |
 
+本机 Desktop 的普通新建任务（[#11956](https://github.com/makecindy/cindy/issues/11956)）：
+项目和插件引擎均在本机时，可选择源分支并启用 Git worktree。宿主等受管 worktree 完整检出，
+才用新目录创建任务；第一条消息启动时，`session/new.cwd` 使用同一目录。检出失败时保留原草稿和附件，
+不在基础仓库创建任务或发送。未启用 worktree 或直接选择已有 worktree 时，仍在所选目录运行。
+此行为不改变 Orca、远程建任务、SSH 或远程引擎的 worktree 约束。
+
 不支持的能力（分叉、回退、会话树、手动压缩、记忆、计划模式、Fast）在 `Capabilities` 中
 如实标为不支持，界面按现有能力开关隐藏，不伪装成功。
 

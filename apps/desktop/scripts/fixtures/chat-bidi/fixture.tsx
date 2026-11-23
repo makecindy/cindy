@@ -57,6 +57,22 @@ function HookContextFixture() {
   </main>;
 }
 
+function LongInlineCodeFixture() {
+  // #11312: a single unbroken inline-code token (long path / long identifier)
+  // must wrap inside the bubble instead of widening the bubble past its
+  // max width. Mirrors the issue screenshot, where one long `*.tsx` name pushed
+  // the whole paragraph outside the bubble edge.
+  const longToken = 'src/renderer/features/workflow/components/JudgeAttributeFieldWithVeryLongName.tsx';
+  const content = [
+    `工作区里还有另一处正在修改的改动不属于我，涉及 \`${longToken}\`、\`attributeJudge.ts\`、\`useWorkflowModelDict.ts\`。我都没有改动，也没有提交。`,
+    '',
+    `单个超长 token 独占一段时的极限情况：\`${'a'.repeat(220)}.tsx\``,
+  ].join('\n');
+  return <main className="p-4" data-ui-page-subject>
+    <section data-testid="long-inline"><MarkdownRenderer content={content} workingDir="" allowPrivilegedLinks={false} /></section>
+  </main>;
+}
+
 void mountPage({
   route: '/bots/fixture-bidi',
   host: {
@@ -78,5 +94,6 @@ void mountPage({
     ghosts: { listSync: () => ({ ghosts: [] }) },
   },
   render: (ctx) => ctx.case === 'context' ? <HookContextFixture /> : ctx.case === 'orca' ? <OrcaMessagesFixture />
-    : ctx.case === 'sources' ? <SourceMessagesFixture /> : <Fixture composerOnly={ctx.case === 'lists'} />,
+    : ctx.case === 'sources' ? <SourceMessagesFixture />
+    : ctx.case === 'long-inline-code' ? <LongInlineCodeFixture /> : <Fixture composerOnly={ctx.case === 'lists'} />,
 });

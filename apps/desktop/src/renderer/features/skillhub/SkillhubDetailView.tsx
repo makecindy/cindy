@@ -556,7 +556,7 @@ function SkillUsagePanel({
                 <div
                   role="img"
                   aria-label={t('skillhub.detail.usageTrendChartLabel')}
-                  className="flex h-14 items-end gap-[3px] border-b border-[var(--cmd-palette-border)]"
+                  className="flex h-14 items-end gap-0.5 border-b border-[var(--cmd-palette-border)]"
                 >
                   {trendRows.map((point) => {
                     const height =

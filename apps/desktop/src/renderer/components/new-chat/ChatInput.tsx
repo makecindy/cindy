@@ -469,6 +469,7 @@ import {
   type ComposerLongPressVoiceGesture,
 } from '@/voice-input/composerLongPressGesture';
 import { requestRendererMicrophonePermission } from '@/voice-input/startGuards';
+import { COMPOSER_ATTACHMENT_MIME, composerAttachmentDropError, isComposerAttachmentDrag } from '@/lib/composerDrop';
 import { COMPOSER_MENTION_MIME, decodeComposerMentionPayload } from '@/lib/composerMentionDrag';
 import { createWorkLouderCodexVoiceGesture } from '@/lib/workLouderCodexVoiceGesture';
 import { appendMentionChip } from './mentionChipInsertion';
@@ -3455,6 +3456,10 @@ export function ChatInput({
 
     const result = await requestRendererMicrophonePermission();
     if (result.ok) return;
+    if (result.status === 'device-unavailable') {
+      toast.error(t('settings.voiceInput.microphone.errors.deviceUnavailable'));
+      return;
+    }
 
     const settingsResult = await window.electronAPI.voiceInput.openMicrophoneSettings();
     if (!settingsResult.ok) {
@@ -3558,6 +3563,9 @@ export function ChatInput({
     currentStorageKey: storageKeyForDraftRef.current,
   });
   const composerMutationLocked = composerEditorLocked || voiceBusyOnCurrentComposer;
+  const canReceiveComposerDrag = () => !!sessionId && storageKey === sessionId && !sharedGuest &&
+    !composerMutationLocked && !remoteHostId && !deviceLinkDeviceId && !getSessionDeviceId(sessionId) &&
+    typeof window.electronAPI?.maker?.redeemComposerAttachmentDrag === 'function';
   // Only the composer that owns the run explains why someone else's words are missing.
   const showSpeakerFilteredNotice = voiceInput.speakerFiltered && voiceBusyOnCurrentComposer;
   useEffect(() => {
@@ -9660,11 +9668,30 @@ export function ChatInput({
               if (intent === 'keep-caret') editor.commands.focus();
               else if (intent === 'doc-end') editor.commands.focus('end');
             }}
+            onDropCapture={(event) => {
+              if (!isComposerAttachmentDrag(event.dataTransfer)) return;
+              event.preventDefault();
+              event.stopPropagation();
+              dragCounterRef.current = 0;
+              setIsDragOver(false);
+              composerMentionDragActiveRef.current = false;
+              internalMentionDragActiveRef.current = false;
+              setMentionDragCaret(editor, null);
+              onComposerDropHandled?.();
+              const ticket = event.dataTransfer.getData(COMPOSER_ATTACHMENT_MIME);
+              if (!ticket || !sessionId || !canReceiveComposerDrag()) {
+                toast.error(t('mcpApps.composerDragFailed'));
+                return;
+              }
+              void window.electronAPI.maker.redeemComposerAttachmentDrag({ sessionId, ticket })
+                .catch(error => toast.error(t(composerAttachmentDropError(error))));
+            }}
             onDragEnter={(e) => {
               e.preventDefault();
               e.stopPropagation();
+              if (isComposerAttachmentDrag(e.dataTransfer) && !canReceiveComposerDrag()) return;
               const firstEnter = dragCounterRef.current === 0;
-              if (firstEnter && Array.from(e.dataTransfer.types).includes(COMPOSER_MENTION_MIME)) {
+              if (firstEnter && !isComposerAttachmentDrag(e.dataTransfer) && Array.from(e.dataTransfer.types).includes(COMPOSER_MENTION_MIME)) {
                 composerMentionDragActiveRef.current = true;
                 if (editor && !editor.isDestroyed) {
                   lastComposerSelectionFromRef.current = editor.state.selection.from;
@@ -9678,6 +9705,10 @@ export function ChatInput({
             onDragOver={(e) => {
               e.preventDefault();
               e.stopPropagation();
+              if (isComposerAttachmentDrag(e.dataTransfer)) {
+                e.dataTransfer.dropEffect = canReceiveComposerDrag() ? 'copy' : 'none';
+                return;
+              }
               if (internalMentionDragActiveRef.current && editor && !editor.isDestroyed) {
                 const dropPos =
                   editor.view.posAtCoords({ left: e.clientX, top: e.clientY })?.pos ?? null;
@@ -9690,7 +9721,7 @@ export function ChatInput({
             onDragLeave={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              dragCounterRef.current -= 1;
+              dragCounterRef.current = Math.max(0, dragCounterRef.current - 1);
               if (dragCounterRef.current === 0) {
                 setIsDragOver(false);
                 composerMentionDragActiveRef.current = false;
@@ -9933,7 +9964,8 @@ export function ChatInput({
                 {/* 字号 / 行高 / 颜色与原生 placeholder 对齐,单行截断防止长句撑高输入框。
                     py-[3px] 是镜像 .ProseMirror 的 py-[3px]:它的 -my-[3px] 会穿过这里
                     向外折叠(relative 不建立 BFC),于是 .ProseMirror 的 border box 贴在本
-                    容器顶边、正文被自身 padding 推低 3px。overlay 不跟着补这 3px 就会高一行边距。 */}
+                    容器顶边、正文被自身 padding 推低 3px。overlay 不跟着补这 3px 就会高一行边距。
+                    3px 属于 DESIGN.md §5 登记的输入区破出套组，不单独收到刻度。 */}
                 {showRecommendationOverlay && !showPromptPreview && (
                   <div
                     className={cn(
@@ -10454,7 +10486,7 @@ export function ChatInput({
                       onReleaseToSendChange={setVoiceReleaseToSendActive}
                       visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
                       className={
-                        isCreateAgentVariant && !useNarrowToolbar ? 'ml-[7px]' : undefined
+                        isCreateAgentVariant && !useNarrowToolbar ? 'ml-1.5' : undefined
                       }
                     />
                   )}

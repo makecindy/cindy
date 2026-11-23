@@ -75,7 +75,7 @@ export function SearchInput({
           aria-label={t('ccAgent.workdirBrowse.searchPanel.matchCaseAria')}
           aria-pressed={caseSensitive}
           className={cn(
-            'flex h-[22px] min-w-[22px] shrink-0 items-center justify-center rounded-[4px] px-1',
+            'flex h-[22px] min-w-[22px] shrink-0 items-center justify-center rounded-lg px-1',
             'text-11 font-semibold leading-none transition-colors',
             caseSensitive
               ? 'bg-sidebar-item-active text-sidebar-item-active-foreground'
