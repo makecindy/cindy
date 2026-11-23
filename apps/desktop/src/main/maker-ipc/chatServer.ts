@@ -191,8 +191,10 @@ class SettlementRefused extends Error {
 const CHAT_AUTH_RETRY_MS = 60_000;
 const HISTORY_UPGRADE_RETRY_DELAYS_MS = [60_000, 120_000, 240_000, 300_000, 300_000];
 function historyUpgradeRetryAt(error: unknown, failures: number): number {
-  const delay = HISTORY_UPGRADE_RETRY_DELAYS_MS[failures - 1];
-  if (delay === undefined) return Infinity;
+  const delay = HISTORY_UPGRADE_RETRY_DELAYS_MS[Math.min(failures, HISTORY_UPGRADE_RETRY_DELAYS_MS.length) - 1]!;
+  if (failures > HISTORY_UPGRADE_RETRY_DELAYS_MS.length && (
+    error instanceof ChatResponseError ? !retryableResponse(error) : fileRefusedHere(error)
+  )) return Infinity;
   return Math.max(Date.now() + delay, error instanceof ChatResponseError ? error.retryAt ?? 0 : 0);
 }
 function isTerminalHistoryUpgradeError(error: unknown): error is ChatResponseError {
@@ -2002,6 +2004,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const executionsRead = direct ? Promise.resolve([] as Execution[]) : api<Execution[]>(`/conversations/${roomId}/executions`);
     for (const read of [messagesRead, executionsRead]) read?.catch(() => undefined);
     const s = await snapshotRead;
+    if (!direct && s.room.archived === false && !s.room.dissolved_at
+      && generation(roomId) === attentionGeneration && snapshotConnection === attentionConnection) {
+      resumeUnarchivedUpgrade(roomId);
+    }
     // The snapshot this read adopts (not a side read such as the readers list), so a receipt that arrives while the rest is awaited lands on its layer.
     fenceReceipts(s);
     const page = (await messagesRead) ?? s.messages;

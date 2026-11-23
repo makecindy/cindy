@@ -225,13 +225,12 @@ describe('Chat Server result delivery and refresh', () => {
   });
   afterEach(() => { service.dispose(); vi.useRealTimers(); vi.unstubAllEnvs(); fixture.config = ''; vi.clearAllMocks(); });
 
-  // #7401 / unit: run the actual Desktop timer and migration against the
-  // smallest repro, a failing GET /import. Earlier importer tests bypassed scheduling.
+  // #7401 / unit: the Desktop timer must stop terminal imports even when another
+  // pass would otherwise repeat the request. Earlier importer tests bypassed scheduling.
   it.each([
-    [404, 'CONVERSATION_NOT_FOUND', []],
-    [409, 'CONVERSATION_ARCHIVED', []],
-    [503, 'UPSTREAM_FAILED', [60_000, 120_000, 240_000, 300_000, 300_000]],
-  ] as const)('bounds background import attempts after %s %s', async (status, code, delays) => {
+    [404, 'CONVERSATION_NOT_FOUND'],
+    [409, 'CONVERSATION_ARCHIVED'],
+  ] as const)('stops background import after %s %s', async (status, code) => {
     const source = '10000000-0000-4000-8000-000000000088';
     service.dispose();
     service = withChatServer({ listGroups: async () => ({ ok: true, groups: [{ id: source, name: 'Old group', members: [] }] }),
@@ -246,21 +245,16 @@ describe('Chat Server result delivery and refresh', () => {
 
     await vi.advanceTimersByTimeAsync(2000);
     expect(attempts()).toBe(1);
-    for (const [index, delay] of delays.entries()) {
-      await vi.advanceTimersByTimeAsync(delay - 1);
-      expect(attempts()).toBe(index + 1);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(attempts()).toBe(index + 2);
-    }
     await vi.advanceTimersByTimeAsync(600_000);
-    expect(attempts()).toBe(delays.length + 1);
+    expect(attempts()).toBe(1);
     const group = await service.getGroup(source);
     expect(group.ok && group.group.migrationPending).toBe(false);
   });
 
   // #7401 / unit: a pass can contain both a terminal group and a temporarily
-  // unavailable group. Retrying the second must neither retry nor stall the first.
-  it('retries only the group that can recover in a mixed history import', async () => {
+  // unavailable group. A 503 lasting beyond the original retry limit must still
+  // recover, and the archived group must resume when opened after a remote unarchive.
+  it.each(['locally', 'on another device'])('resumes mixed history imports after unarchiving %s', async unarchiveLocation => {
     const archived = '10000000-0000-4000-8000-000000000088';
     const recoverable = '10000000-0000-4000-8000-000000000089';
     const localGroups = [archived, recoverable].map(id => ({ id, name: 'Old group', members: [] }));
@@ -295,15 +289,25 @@ describe('Chat Server result delivery and refresh', () => {
     try {
       await vi.advanceTimersByTimeAsync(2000);
       expect(requests()).toEqual([archived, recoverable]);
-      available = true;
-      await vi.advanceTimersByTimeAsync(60_000);
+      const delays = [60_000, 120_000, 240_000, 300_000, 300_000, 300_000];
+      for (const [index, delay] of delays.entries()) {
+        await vi.advanceTimersByTimeAsync(delay - 1);
+        expect(requests()).toEqual([archived, ...Array<string>(index + 1).fill(recoverable)]);
+        if (index === delays.length - 1) available = true;
+        await vi.advanceTimersByTimeAsync(1);
+        expect(requests()).toEqual([archived, ...Array<string>(index + 2).fill(recoverable)]);
+      }
       expect(migration.save).toHaveBeenCalledExactlyOnceWith(recoverable, { roomId: recoverable, sequence: 0, version: 2 });
-      expect(requests()).toEqual([archived, recoverable, recoverable]);
-      await vi.advanceTimersByTimeAsync(120_000);
-      expect(requests()).toEqual([archived, recoverable, recoverable]);
-      expect(await service.chatServer!.manage({
-        groupId: archived, action: { type: 'archive', archived: false, expectedRevision: 1 },
-      })).toMatchObject({ ok: true });
+      await vi.advanceTimersByTimeAsync(300_000);
+      expect(requests()).toHaveLength(delays.length + 2);
+      if (unarchiveLocation === 'locally') {
+        expect(await service.chatServer!.manage({
+          groupId: archived, action: { type: 'archive', archived: false, expectedRevision: 1 },
+        })).toMatchObject({ ok: true });
+      } else {
+        unarchived = true;
+        expect(await service.getGroup(archived)).toMatchObject({ ok: true, group: { archived: false } });
+      }
       await vi.advanceTimersByTimeAsync(2000);
       expect(migration.save).toHaveBeenLastCalledWith(archived, { roomId: archived, sequence: 0, version: 2 });
     } finally {
