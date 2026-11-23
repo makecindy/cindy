@@ -93,7 +93,7 @@ export interface StartCodexHttpBridgeOptions {
    * MCP SDK 的 McpServer/Protocol 实例只能 connect 一个 transport，所以每个
    * streamable-http session 必须拿到独立实例。
    */
-  serverFactories: Record<string, () => McpServer>;
+  serverFactories: Record<string, (startupContext?: LiziMcpSessionContext) => McpServer>;
   /** Built-in plugin id for each policy-controlled MCP server. */
   pluginIdByServerName?: Record<string, string>;
   /**
@@ -432,10 +432,11 @@ async function startCodexHttpBridge(
       // A process-wide daemon has no frozen mount policy. App facades
       // may attach upstream credentials only for an explicitly bound Session,
       // including Codex's short-lived discovery lease before thread/start returns.
-      const appContext = appServer
+      const boundContext = appServer || serverName === 'cindy'
         ? sessionTokenCtx ?? (instanceQuery === null ? undefined
           : threadContextStore.getContextForSessionInstanceId(instanceQuery) ?? discoveryContexts.get(instanceQuery))
         : undefined;
+      const appContext = appServer ? boundContext : undefined;
       if (appServer && (!appContext?.sessionId || (isScopedRemoteToken && !appContext.remoteHostId))) {
         res.statusCode = 401;
         res.end('MCP App server requires a bound Session');
@@ -473,7 +474,7 @@ async function startCodexHttpBridge(
         await dispatchToTransport({
           req,
           res,
-          createMcpServer,
+          createMcpServer: () => createMcpServer(serverName === 'cindy' ? boundContext : undefined),
           transports,
           serverName,
           log,
@@ -774,6 +775,14 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
     if (!existing) {
       res.statusCode = 404;
       res.end('Unknown session');
+      return;
+    }
+    // A cindy transport created with a concrete task may expose its private
+    // startup catalog. The transport ID alone does not identify that task.
+    if (serverName === 'cindy' && existing.ownerSessionInstanceId &&
+        existing.ownerSessionInstanceId !== ownerSessionInstanceId) {
+      res.statusCode = 401;
+      res.end('Session instance mismatch');
       return;
     }
     let parsedBody: unknown;

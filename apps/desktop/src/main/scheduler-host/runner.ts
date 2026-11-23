@@ -123,6 +123,7 @@ import {
   takeUnattendedPlanReviewDeclines,
 } from '../mcp-integrations/unattendedTurn.js';
 import { terminalErrorText } from '../im/shared/turnRetryNotice.js';
+import type { ModelGroupSessionStart } from '../model-groups/sessionStart.js';
 
 
 const ALLOWED_EFFORT = new Set<string>([
@@ -310,6 +311,11 @@ export interface SchedulerQueueDeps {
 
 export interface MakerScheduleRunnerDeps {
   projectForNewTask?: ScheduleProjectLookup;
+  /**
+   * 模型组(model-groups.md §6.3)：模式跟着任务走。这次要新建任务时按模式选来源，把凭据随建任务参数交出去，
+   * 选路记账与说明由任务层在第一轮派发时做；发到已有任务时不经这里，那个任务按它自己的模式走。
+   */
+  modelGroupStart?: Pick<ModelGroupSessionStart, 'prepare' | 'canRoute' | 'exists'>;
   maker: Maker;
   /** Use the ordinary task startup funnel, including provider-group allocation.
    * The funnel may update the options to the member it actually selected. */
@@ -322,6 +328,8 @@ export interface MakerScheduleRunnerDeps {
   readAutoReviewHistory?: (sessionId: string) => Promise<AutoReviewHistoryMessage[]>;
   beforeDispatchUserTurn?: (sessionId: string, signal?: AbortSignal) => void | Promise<void>;
   onUndispatchedUserTurn?: (sessionId: string) => void;
+  /** Fire-local model defaults supplied by the host; never persisted into the schedule. */
+  resolveInheritedModel?: (schedule: Schedule) => Promise<Partial<Schedule> | null>;
   /** Saved quota waits deduplicate by schedule even when each fire creates a new task. */
   findUsageLimitWait?: (scheduleId: string) => Promise<string | null>;
   /**
@@ -598,6 +606,14 @@ export class MakerScheduleRunner implements ScheduleRunner {
     this.scheduler = scheduler;
   }
 
+  /** 这次运行会不会新建任务：没有目标任务，或目标任务已删除(持续任务会重建)。其余都发到那个任务。 */
+  private async startsNewTask(schedule: Schedule): Promise<boolean> {
+    const targetId = schedule.targetSessionId?.trim();
+    if (!targetId) return true;
+    const target = await this.runtime.getSessionRowSnapshot(targetId).catch(() => null);
+    return !target || target.status === 'deleted';
+  }
+
   /** Validate an explicit saved choice without switching or waking its target.
    * Names, timing and other unrelated edits must still work while a source is offline.
    * Legacy model-only overrides keep their existing follow-task semantics.
@@ -611,6 +627,14 @@ export class MakerScheduleRunner implements ScheduleRunner {
       // 插件引擎在保存时就确认本机此刻提供它(停用 / 卸载 / 不可用都明确拒绝)。
       this.admitScheduledPluginEngine(schedule);
       return;
+    }
+    // 选着模式时新建任务由模式选来源，存下的具体模型只是兜底：模式此刻能选出可用来源就放行(只看不提交)，
+    // 选不出来才要求兜底模型可用。
+    const groupId = schedule.modelGroup?.trim();
+    if (groupId && schedule.agentKind !== 'acp' && this.deps.modelGroupStart) {
+      const usable = await this.deps.modelGroupStart.canRoute(groupId, { localOnly: !!schedule.primaryHostKey?.trim() })
+        .catch(() => false);
+      if (usable) return;
     }
     const target = schedule.targetSessionId
       ? await this.runtime.getSessionRowSnapshot(schedule.targetSessionId) : null;
@@ -1010,6 +1034,40 @@ export class MakerScheduleRunner implements ScheduleRunner {
       };
     }
     const holder: EphemeralSessionHolder = { assertOwner: ctx.assertFireContext };
+    // 模型组：只有这次要新建任务时按模式选(续跑、发到还在的任务都按那个任务自己的模式走)；
+    // 脚本与插件引擎任务不按模式选。只在本机运行的自动化只在本机的来源里选。
+    const groupId = schedule.modelGroup?.trim();
+    const groupApplies = !!groupId && !ctx.resumeSessionId && (schedule.executionMode ?? 'agent') !== 'script'
+      && schedule.agentKind !== 'acp' && !!this.deps.modelGroupStart;
+    const startsNewTask = groupApplies && await this.startsNewTask(schedule);
+    if (groupApplies && !startsNewTask && await this.deps.modelGroupStart!.exists(groupId!).catch(() => false)) {
+      // 发到还在的任务：按那个任务自己的模式走，沿用它当前的来源(与续跑同一做法)。存下的具体模型只是新建任务
+      // 选不出来时的兜底，不能当成这次的指定模型把任务换回去。模式已删除时照旧按存下的具体模型运行。
+      schedule = { ...schedule, model: undefined, providerId: undefined, effort: undefined,
+        fastMode: undefined, modelAgentKind: undefined, modelAgentDeviceId: undefined };
+    }
+    if (groupApplies && startsNewTask) {
+      const prepared = await this.deps.modelGroupStart!.prepare(groupId!, {
+        keptModelName: schedule.model?.trim() || schedule.modelAgentKind || schedule.agentKind,
+        localOnly: !!schedule.primaryHostKey?.trim(),
+      }).catch((error: unknown) => {
+        this.deps.logger.warn?.('[runner] model group pick failed; using the saved model', {
+          scheduleId: schedule.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return null;
+      });
+      throwIfFireAborted(ctx.signal, 'runner entry');
+      if (prepared?.route) {
+        const { route } = prepared;
+        schedule = { ...schedule, fastMode: false,
+          modelAgentKind: route.agentKind === 'cc' ? 'claude-code' : route.agentKind,
+          model: route.model, providerId: route.providerId, effort: route.effort,
+          // '' = 本机：选中的来源在哪台，新任务就在哪台运行。
+          modelAgentDeviceId: route.agentDeviceId ?? '' };
+      }
+      if (prepared) holder.modelGroupStart = prepared.token;
+    }
     const closeQuietOutput = hidesScheduledTranscript(schedule)
       ? beginQuietScheduledOutput(schedule.id, ctx.runId)
       : undefined;
@@ -1209,6 +1267,13 @@ export class MakerScheduleRunner implements ScheduleRunner {
         durationMs: hook.durationMs,
         stdout: hook.stdout.slice(0, 200),
       });
+    }
+
+    if (!ctx.resumeSessionId && !schedule.model?.trim()) {
+      const inherited = await this.deps.resolveInheritedModel?.(schedule);
+      ctx.assertFireContext?.();
+      throwIfFireAborted(ctx.signal, 'inherited model resolution');
+      if (inherited) schedule = { ...schedule, ...inherited };
     }
 
     // isHeartbeat / sessionId 在 persistentSession 自我续命分支里可能被翻回新建路径，
@@ -1859,6 +1924,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       // Explicit null means Cindy's default route for Pi.
       providerId: createProviderId,
       vendorOptions: { source: 'scheduler' as const },
+      ...(holder.modelGroupStart ? { modelGroupStart: holder.modelGroupStart } : {}),
     };
     let session: Awaited<ReturnType<Maker['createSession']>>;
     try {
@@ -4391,6 +4457,7 @@ function extractErr(data: unknown): string {
  * after a delete/pause won the race.
  */
 type FireAbortStage =
+  | 'inherited model resolution'
   | 'runner entry'
   | 'quota wait check'
   | 'queue snapshot restore'
@@ -4413,6 +4480,8 @@ function throwIfFireAborted(signal: AbortSignal, stage: FireAbortStage): void {
  */
 interface EphemeralSessionHolder {
   assertOwner?: () => void;
+  /** 这次新建任务按模式选来源时的凭据，随建任务参数交给 bootstrapSession(model-groups/sessionStart.ts)。 */
+  modelGroupStart?: string;
   preRunHookOutput?: string;
   /** 与引擎写进 run 记录的同一份放行结果；本轮之后的失败通知要带上它，去重才对得上。 */
   preRunHookResult?: ScheduleRun['preRunHookResult'];

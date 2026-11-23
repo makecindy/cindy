@@ -110,6 +110,7 @@
     "@fontsource-variable/jetbrains-mono": "^5.2.8",
     "@google/model-viewer": "^4.0.0",
     "@lezer/highlight": "^1.2.3",
+    "@lezer/python": "^1.1.19",
     "@modelcontextprotocol/ext-apps": "1.7.5",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@napi-rs/canvas": "^0.1.100",

@@ -332,3 +332,47 @@ describe('SubscriptionAccountsSection usage', () => {
     expect(screen.queryByText('/home/.claude-second')).toBeNull();
   });
 });
+
+/*
+ * 插件引擎的账号(subscription-account-pools.md 插件引擎的账号，2026-11-23)：同一个账号区组件。
+ * 生产入口：SubscriptionAccountsSection 以插件引擎的 providerId 渲染。可观察结果：账号行显示插件报告的身份、
+ * 套餐与用量；只有一种浏览器登录方式时「添加账号」直接带上这种方式；插件只报告原有登录(没有登录方式)时
+ * 没有「添加账号」和账号设置。最小失败输入：插件引擎 providerId 的读回结果。tier：unit(jsdom，IPC mock)。
+ */
+describe('SubscriptionAccountsSection for plugin engines', () => {
+  const providerId = 'acp-plugin:zcode-plugin:zcode';
+  const pluginView = (methods: NonNullable<SubscriptionPoolView['pluginEngine']>['methods']): SubscriptionPoolView => ({
+    providerId,
+    configured: true,
+    strategy: 'least',
+    pluginEngine: { engineKey: 'zcode-plugin:zcode', methods },
+    accounts: [{
+      id: 'default', paused: false, limit: 4, weight: 1, directory: '', status: 'ready', running: 0,
+      identity: 'me@z.ai', plan: 'GLM Coding Pro',
+      usage: { plugin: { updatedAt: Date.now(), windows: [{ label: 'GLM · 5h', remainingPercent: 70, resetsAt: Date.now() + 3_600_000 }] } },
+    }],
+  });
+
+  it('shows the identity, plan and usage the plugin reports, and adds an account with its sign-in method', async () => {
+    const command = vi.fn(async () => pluginView([{ id: 'zai', label: 'Z.ai', kind: 'browser' }]));
+    (window.electronAPI.subscriptionAccounts as { command: unknown }).command = command;
+    render(<SubscriptionAccountsSection providerId={providerId} />);
+    const row = await screen.findByTestId('subscription-account');
+    expect(within(row).getByText('me@z.ai')).toBeTruthy();
+    expect(within(row).getByText('GLM Coding Pro')).toBeTruthy();
+    expect(within(row).getByText('GLM · 5h')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'subscriptionAccounts.add' }));
+    await waitFor(() => expect(command).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'add', providerId, methodId: 'zai',
+    })));
+  });
+
+  it('offers neither adding nor account settings when the plugin only reports its one login', async () => {
+    (window.electronAPI.subscriptionAccounts as { command: unknown }).command = vi.fn(async () => pluginView([]));
+    render(<SubscriptionAccountsSection providerId={providerId} />);
+    const row = await screen.findByTestId('subscription-account');
+    expect(within(row).getByText('me@z.ai')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'subscriptionAccounts.add' })).toBeNull();
+    expect(within(row).queryByRole('button', { name: 'providerGroup.member.moreAria' })).toBeNull();
+  });
+});

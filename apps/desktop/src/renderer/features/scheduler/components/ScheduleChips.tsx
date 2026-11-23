@@ -24,6 +24,7 @@ import { VendorIcon, agentKindToVendor } from '@/components/sidebar/VendorIcon';
 import { ModelRouteSelectorContent } from '@/components/new-chat/ModelRouteSelector';
 import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
 import type { PluginEnginesPickerProps } from '@/components/new-chat/PluginEnginesSection';
+import { ModelGroupIcon, type ModelGroupsPickerProps } from '@/components/new-chat/ModelGroupsPickerSection';
 import { pluginEngineModelName, resolvePluginEngineEffort, PLUGIN_ENGINE_DEFAULT_MODEL } from '@/lib/pluginEngineSelection';
 import { useModelDiscoveryPending } from '@/components/new-chat/useModelDiscoveryPending';
 import {
@@ -1041,12 +1042,14 @@ export function ModelEffortChip({
   onChangeEffort,
   disabled,
   followSession,
+  followModel,
   providerId,
   onChangeProviderId,
   onNavigateToProviders,
   fastMode,
   onChangeFast,
   pluginEngines,
+  modelGroups,
 }: {
   onSelect: NonNullable<React.ComponentProps<typeof ModelRouteSelectorContent>['onUnifiedSelect']>;
   onFollowSession: () => void;
@@ -1060,6 +1063,7 @@ export function ModelEffortChip({
   disabled?: boolean;
   /** Bound automations may explicitly inherit the session model when modelValue is empty. */
   followSession?: boolean;
+  followModel?: { active: boolean; label: string; onFollow: () => void };
   /** 显式选定来源(供应商)id;'' = 跟随该 agent 原生默认来源(no-break)。 */
   providerId: string;
   /** 用户在来源轨选了某供应商时回调(等于原生默认时归一化为 '')。 */
@@ -1074,6 +1078,8 @@ export function ModelEffortChip({
    * active 有值时触发器显示「引擎 · 模型 · 思考深度」。
    */
   pluginEngines?: PluginEnginesPickerProps;
+  /** 模型组(model-groups.md §6.3)：选着模式时触发器写模式名，来源在新建任务时按模式选。 */
+  modelGroups?: ModelGroupsPickerProps;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -1132,7 +1138,7 @@ export function ModelEffortChip({
     providerId,
     effort: effortValue,
   });
-  const followsSessionModel = usesBoundSessionModel({ followSession, model: modelValue });
+  const followsSessionModel = followModel?.active || usesBoundSessionModel({ followSession, model: modelValue });
   // The form owns default resolution. Empty means no selected model, not permission
   // to resolve another default from this chip's independent catalog snapshot.
   const effectiveId = followsSessionModel ? '' : modelValue;
@@ -1145,7 +1151,7 @@ export function ModelEffortChip({
   const modelLabel = catalogModel?.name || current?.displayName || effectiveId || t('scheduler.chips.model.default');
   const agentLabel = t(`newChat.modelSelector.trigger.agent.${agentKind === 'claude-code' ? 'claudeCode' : agentKind}`);
   const effortLabel = (e: EffortValue) => t(`effortLevels.${e}`);
-  const display = followsSessionModel
+  const display = followModel?.active ? followModel.label : followsSessionModel
     ? [
       t('scheduler.chips.model.followSession'),
       providerId.trim()
@@ -1185,9 +1191,23 @@ export function ModelEffortChip({
       ].filter(Boolean).join(' · ')
     : null;
 
+  const activeModelGroupName = modelGroups?.active
+    ? modelGroups.config.routes.find((route) => route.id === modelGroups.active?.id)?.name ?? null
+    : null;
+
   return (
     <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>
+        {activeModelGroupName ? (
+          <ChipButton
+            icon={<ModelGroupIcon size={14} />}
+            label={activeModelGroupName}
+            title={t('scheduler.chips.model.modelGroupTitle', { name: activeModelGroupName })}
+            active={open}
+            disabled={disabled}
+            className="max-w-[240px] px-2"
+          />
+        ) : (
         <ChipButton
           icon={engineDisplay
             ? <PluginEngineIcon size={14} iconDataUrl={activeEngine?.iconDataUrl} className='text-current' />
@@ -1198,6 +1218,7 @@ export function ModelEffortChip({
           disabled={disabled}
           className="[&>span:last-of-type]:min-w-[106px] max-w-[240px] px-2"
         />
+        )}
       </PopoverTrigger>
       <PopoverContent
         align="end"
@@ -1207,9 +1228,11 @@ export function ModelEffortChip({
           // 本 chip 在 ScheduleFormDialog 内:共享 PopoverContent 默认在 dropdown 层
           // (10010),已盖过对话框;不要再局部降层,否则会渲染在对话框下层、点了"没反应"。
           'overflow-hidden rounded-xl p-0 shadow-[shadow:var(--shadow-menu)]',
+          // 高度不超过窗口可用高度(与聊天选择器同口径)：矮窗口里弹层顶到窗口外，最上面的模型组点不到。
+          'flex min-h-0 max-h-[var(--radix-popover-content-available-height)] flex-col',
           'bg-[var(--model-dropdown-bg)] border border-[var(--model-dropdown-border)]',
           // 宽度由内容自适应(单栏 320;Edit 展开 ~517 向左加宽),与聊天选择器同口径。
-          'w-auto',
+          'w-auto flex max-h-[var(--radix-popover-content-available-height)] flex-col',
         )}
         onWheel={stopWheel}
       >
@@ -1219,6 +1242,7 @@ export function ModelEffortChip({
           hostOnly={hostOnly}
           agentDeviceId={agentDeviceId || null}
           fastModeConfigurable={['codex', 'pi']}
+          {...(modelGroups ? { modelGroups } : {})}
           unifiedAgents={pickerAgents}
           onUnifiedSelect={onSelect}
           vendorKey={vendorKey}
@@ -1246,7 +1270,7 @@ export function ModelEffortChip({
           discoveringModels={discovery.pending}
           {...(pluginEngines ? { pluginEngines } : {})}
           followSession={
-            followSession
+            followModel ?? (followSession
               ? {
                   active: isFollowingSession,
                   label: t('scheduler.chips.model.followSession'),
@@ -1254,7 +1278,7 @@ export function ModelEffortChip({
                     onFollowSession();
                   },
                 }
-              : undefined
+              : undefined)
           }
         />
       </PopoverContent>

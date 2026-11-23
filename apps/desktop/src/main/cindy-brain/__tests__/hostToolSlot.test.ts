@@ -290,6 +290,7 @@ describe('plugin Host tool entry', () => {
       releasePluginUiRegions: noop, releasePluginAppearance: noop,
       pluginDeviceSync: { invalidate: noop }, pluginLiveScreenViews: { invalidate: noop }, getGhostPipeDispatcher: () => ({ onRuntimeState: noop }),
       networkSlotSingleton: null, fsSlotSingleton: null, getDesktopHostTerminalService: () => ({ disposePlugin: noop }),
+      getGhostFormDialogBridge: () => null,
       disposePluginHostTools, modelPickerSingleton: null, pluginInvocations: { invalidate: noop },
       invocationRuntimeGenerations: new Map(), broadcastGhostRuntimeStates: noop,
     };

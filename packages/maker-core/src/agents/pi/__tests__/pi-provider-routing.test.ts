@@ -7424,6 +7424,43 @@ describe("Pi provider-aware model routing", () => {
     },
   );
 
+  // #11339, unit: a stopped Pi turn can leave a hidden native extension
+  // marker as the retry parent. The RPC must confirm that raw leaf and send
+  // the retried prompt once; existing tests only navigated to visible parents.
+  it('confirms retry navigation to a hidden native subagent history parent', async () => {
+    let navigated = false;
+    const marker = {
+      id: 'marker', parentId: 'previous', type: 'custom',
+      customType: 'cindy-native-subagent-call', data: { toolCallId: 'call' },
+    };
+    captured.requestHandler = async command => {
+      if (command.type === 'get_state') return { success: true, data: {
+        sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 },
+      } };
+      if (command.type === 'get_tree') return { success: true, data: {
+        leafId: navigated ? 'marker' : 'failed',
+        tree: [{ entry: { id: 'previous', type: 'message', message: { role: 'assistant' } }, children: [
+          { entry: marker, children: [{ entry: {
+            id: 'accepted', parentId: 'marker', type: 'message', message: { role: 'user' },
+          }, children: [{ entry: {
+            id: 'failed', parentId: 'accepted', type: 'message',
+            message: { role: 'assistant', stopReason: 'error', content: [] },
+          }, children: [] }] }] },
+        ] }],
+      } };
+      if (command.type === 'prompt' && String(command.message).startsWith('/cindy-branch-switch ')) navigated = true;
+      return { success: true, data: {} };
+    };
+    const agent = new PiAgent(byomDeps(async () => ({ providers: [], env: {} })));
+    const handle = await agent.startSession({ sessionId: 'retry-hidden-parent', workingDir: cwd, model: 'local-model' });
+    try {
+      await handle.send({ type: 'user', content: 'same input' }, { retryTranscriptUserEntryId: 'accepted' });
+      expect(captured.requests.filter(r => r.type === 'prompt' && r.message === 'same input')).toHaveLength(1);
+    } finally {
+      await handle.close();
+    }
+  });
+
   it('reports the oversized history response before retry accepts another prompt', async () => {
     captured.requestHandler = async command => {
       if (command.type === 'get_state') return { success: true, data: {

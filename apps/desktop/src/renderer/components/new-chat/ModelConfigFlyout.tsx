@@ -1,5 +1,6 @@
 import { DisplayPricingDetails } from '@/components/DisplayPricingDetails';
 import { useModelContextLimit } from '@/hooks/useModelContextLimit';
+import { useCodexContextWindow } from '@/hooks/useCodexContextWindow';
 import { localizedModelName } from '@/lib/modelDisplayNames';
 import { Star, Zap } from 'lucide-react';
 import { SpeedIcon } from './SpeedIcon';
@@ -35,7 +36,7 @@ export interface ModelConfigFlyoutProps {
   state: ModelConfigFlyoutState;
   /** 来源供应商展示名。 */
   sourceLabel: string;
-  /** Catalog source; only a local catalog may read this computer's preferences/native metadata. */
+  /** Native metadata belongs to this target; only local rows read this computer's preferences. */
   deviceId?: string;
   price: ModelPricePresentation | null;
   /** 档位 → 显示文案(按当前选中引擎取,i18n)。 */
@@ -101,7 +102,15 @@ export function ModelConfigFlyout({
   });
   const contextWindow = contextLimit.limit ?? config.capability?.contextWindow ?? 0;
   const codexDefaultContext = config.engine === 'codex';
-  const codexContext = codexDefaultContext ? contextLimit.codexContext ?? null : null;
+  const remoteCodexContext = useCodexContextWindow({
+    enabled: Boolean(deviceId) && codexDefaultContext,
+    deviceId,
+    providerId: entry.providerId,
+    modelId: config.wireModelId ?? entry.modelId,
+  });
+  const codexContext = codexDefaultContext
+    ? deviceId ? remoteCodexContext : contextLimit.codexContext ?? null
+    : null;
   const starred = state === 'favorite' || justFavorited;
 
   const discount = price?.kind === 'priced' ? price.discount : undefined;
@@ -167,11 +176,11 @@ export function ModelConfigFlyout({
 
       <div className="truncate border-b border-[var(--model-dropdown-border)] pb-2.5 pt-0.5 text-12 text-[var(--text-tertiary)]">
         {sourceLabel}
-        {contextWindow > 0 && (
+        {(codexDefaultContext || contextWindow > 0) && (
           <>
             {' · '}
             {t('newChat.modelSelector.meta.context', {
-              value: codexDefaultContext && !deviceId
+              value: codexDefaultContext
                 ? codexContext ? formatContextWindow(codexContext.contextWindow) : t('settings.providers.models.advanced.codexContextUnknown')
                 : formatContextWindow(contextWindow),
             })}

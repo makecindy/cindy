@@ -5,6 +5,7 @@
  * public Plugin is installed by default is an installation policy, not a source.
  * An installed Ghost without a matching market record remains local.
  */
+import { pluginCatalogPublisherGroup } from '@cindy/plugin-protocol';
 import type { GhostInstallApproval } from '../../../../shared/ghost';
 import {
   createPluginLogicalIdentity,
@@ -15,6 +16,12 @@ import {
 import type { PluginMarketItem } from '../../../../shared/pluginMarket';
 
 export type PluginPresentationOrigin = 'public' | 'organization' | 'local' | 'custom';
+export type PublicPublisherFilter = 'official' | 'community';
+export type PluginCatalogFilter = 'all' | PublicPublisherFilter | 'organization' | 'custom';
+
+export function publicPublisherFilter(item: Pick<PluginMarketItem, 'scope' | 'sourceType' | 'publisherKind'>): PublicPublisherFilter | null {
+  return item.sourceType === 'server' ? pluginCatalogPublisherGroup(item.scope, item.publisherKind) : null;
+}
 
 /** Public contributors stay anonymous even when an older payload includes an author. */
 export function pluginPresentationAuthor(

@@ -45,7 +45,7 @@ import { getSessionLastLiveUsage } from './sessionLastLiveUsage.js';
 import { logColdPiRehydrationFailure, reportColdPiRehydrationFailure, ColdPiRehydrationError } from './coldPiRehydrationFailure.js';
 import { classifyColdPiRehydrationOutcome } from './coldPiRehydration.js';
 import { resolveVerifiedContextWindow } from '../maker-host/catalog-to-descriptors.js';
-import { resolveModelSwitchWindows, resolveModelSwitchContextTokens } from './modelSwitchGateInput.js';
+import { resolveModelSwitchWindows, resolveModelSwitchContextTokens, describeModelWindowGateFailure } from './modelSwitchGateInput.js';
 import { codexThreadTransferSourcePredicate, relinkCodexProviderThread, commitCodexThreadTransfer } from './codexProviderThreadRelink.js';
 import { CredentialModeSwitchBusyError } from '../maker-host/codex-credential-switch.js';
 import { withSendToSessionLock } from './sendToSessionLock.js';
@@ -1059,16 +1059,26 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
         );
         ownerPiFinalWindow = ownerWindowRebuild && runtimeAgentKind === 'pi' &&
           !!runtimeStatus.sdkSessionId && modelWindowContextNeedsProtection;
-        if (ownerWindowRebuild && runtimeAgentKind !== 'codex' && runtimeStatus.sdkSessionId &&
-            modelWindowContextNeedsProtection && (
-              !contextTokensKnown || !verifiedCurrentWindow || !targetContextWindow ||
-              (runtimeAgentKind === 'pi' && (rebuildLiveOrcaWorker ||
-                (piPreview?.action !== 'hot' && piPreview?.action !== 'refresh')))
-            )) {
+        const windowGateFailure = ownerWindowRebuild && runtimeAgentKind !== 'codex' &&
+            runtimeStatus.sdkSessionId && modelWindowContextNeedsProtection
+          ? describeModelWindowGateFailure({
+              contextTokensKnown, verifiedCurrentWindow, targetContextWindow, runtimeAgentKind,
+              model, targetRouteProviderId, rebuildLiveOrcaWorker, piPreview,
+            })
+          : null;
+        if (windowGateFailure) {
           if (rehydratedColdPiRuntime) await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId));
-          throwIpcError('PRECONDITION_FAILED', runtimeAgentKind === 'pi'
-            ? 'Pi final context window could not be verified; runtime selection was not changed'
-            : 'target context window or current usage could not be verified; runtime selection was not changed');
+          log.warn('set-model: model window gate refused the runtime selection', {
+            sessionId, ...windowGateFailure, model, targetRouteProviderId,
+            contextTokens, verifiedCurrentWindow, targetContextWindow,
+            piPreviewAction: piPreview?.action ?? null,
+          });
+          const prefix = runtimeAgentKind === 'pi'
+            ? 'Pi final context window could not be verified'
+            : 'target context window or current usage could not be verified';
+          // The fixed prefixes stay: the IPC error and the Main log both name the failing check.
+          throwIpcError('PRECONDITION_FAILED',
+            `${prefix} (${windowGateFailure.category}: ${windowGateFailure.detail}); runtime selection was not changed`);
         }
         const modelSwitchPlan = planUserRuntimeModelSwitch({
           agentKind: runtimeAgentKind ?? 'claude-code',
@@ -1519,7 +1529,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
         const piSessionAfterRouteChange = maker.getSession(sessionId);
         if (ownerPiFinalWindow && result.status === 'applied' && result.retiredRuntime) {
           restoreControlStores();
-          throwIpcError('PRECONDITION_FAILED', 'Pi final context window could not be verified; runtime selection was not changed');
+          throwIpcError('PRECONDITION_FAILED', 'Pi final context window could not be verified (runtime-retired: the Pi runtime was retired before its final window could be read); runtime selection was not changed');
         }
         if (
           runtimeAgentKind === 'pi' &&

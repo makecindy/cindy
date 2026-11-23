@@ -271,6 +271,8 @@ pub struct Stats {
     pub packets_received: u64,
     pub wire_bytes_sent: u64,
     pub wire_bytes_received: u64,
+    /// Cumulative bytes in sent packets acknowledged by the peer.
+    pub acknowledged_bytes: u64,
     pub retransmitted_segments: u64,
     pub bundled_segments: u64,
     pub parity_packets: u64,
@@ -681,6 +683,7 @@ impl Connection {
 
     pub fn stats(&self) -> Stats {
         Stats {
+            acknowledged_bytes: self.delivered,
             srtt_us: self.rtt.srtt_us(),
             min_rtt_us: self.congestion.min_rtt_us(),
             bandwidth: self.congestion.bandwidth_estimate(),

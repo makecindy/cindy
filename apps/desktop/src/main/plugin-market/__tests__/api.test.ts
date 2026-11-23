@@ -110,7 +110,7 @@ function legacyServer(plugins: unknown[], onUnknown: (path: string) => never = (
 describe('PluginMarketApi 旧服务端兼容', () => {
   // unit：客户端 62588f5ff0 先于服务端 eb701e0d4 上线；旧服务端把 defaults 当插件 ID（400），没有 resolve（404）。
   it('reads the full catalog when defaults, resolve and catalog do not exist, and remembers it', async () => {
-    const fetcher = legacyServer([summary(PLUGIN_A, 'alpha'), summary(PLUGIN_B, 'beta')]);
+    const fetcher = legacyServer([summary(PLUGIN_A, 'alpha'), { ...summary(PLUGIN_B, 'beta'), publisherKind: 'personal' }]);
     const api = new PluginMarketApi(fetcher, undefined, () => 'https://plugins.example.com', () => 0);
     await expect(api.defaults()).rejects.toBeInstanceOf(PluginMarketEndpointUnsupportedError);
 
@@ -120,7 +120,7 @@ describe('PluginMarketApi 旧服务端兼容', () => {
 
     const page = await api.catalog({ limit: 1 });
     expect(page.plugins.map(plugin => plugin.id)).toEqual([PLUGIN_A]);
-    expect(page.counts?.all).toBe(2);
+    expect(page.counts).toMatchObject({ all: 2, public: 2, official: 0, community: 1 });
     expect((await api.catalog({ limit: 1, cursor: page.nextCursor })).plugins.map(plugin => plugin.id)).toEqual([PLUGIN_B]);
     // 记住旧服务端后不再逐个撞 404 / 400。
     expect(fetcher.mock.calls.map(call => String(call[0])).filter(path => !path.startsWith('/api/plugins?')))
@@ -168,10 +168,10 @@ describe('PluginMarketApi', () => {
   // unit：v7.5 市场必须按页读取；旧 listAll 用例不能证明首屏不会追完整目录。
   it('reads one catalog page and preserves complete query counts without following its cursor', async () => {
     const fetcher = pagedFetcher({ plugins: [summary(PLUGIN_A, 'alpha')], nextCursor: 'next-page',
-      counts: { all: 200, public: 200, organization: 0, personal: 0 } });
+      counts: { all: 200, public: 200, organization: 0, personal: 0, official: 145, community: 53 } });
     const result = await new PluginMarketApi(fetcher).catalog({ query: 'alpha', limit: 12 });
     expect(result.plugins).toHaveLength(1);
-    expect(result.counts?.all).toBe(200);
+    expect(result.counts).toMatchObject({ all: 200, official: 145, community: 53 });
     expect(result.nextCursor).toBe('next-page');
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(fetcher.mock.calls[0]![0]).toContain('/api/plugins/catalog?');
