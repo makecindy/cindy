@@ -55,7 +55,7 @@ export function useEntryWidgetSync(ready: boolean) {
         id: desktopEntryId({ kind: 'new-task' }),
         title: desktopEntryTitle(t('settings.entryWidget.newTask'), 'Cindy'),
         subtitle: '',
-        url: desktopEntryDestinationUrl({ kind: 'new-task' }, '', scheme),
+        url: desktopEntryDestinationUrl({ kind: 'new-task' }, scheme),
       }];
       const signature: string[] = [`new-task|${targets[0].title}|${scheme}`];
       for (const row of rows) {
@@ -84,7 +84,7 @@ export function useEntryWidgetSync(ready: boolean) {
           id,
           title,
           subtitle,
-          url: desktopEntryDestinationUrl(link, row.sessionId, scheme),
+          url: desktopEntryDestinationUrl(link, scheme),
           icon: icons.current.get(cacheKey),
         });
         signature.push(`${id}|${title}|${subtitle}|${cacheKey}|${scheme}`);

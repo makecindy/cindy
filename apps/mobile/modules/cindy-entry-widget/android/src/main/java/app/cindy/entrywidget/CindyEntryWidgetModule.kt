@@ -11,19 +11,13 @@ class CindyEntryWidgetModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("CindyEntryWidget")
 
-    /** 目标数量，供 JS 判断写入是否生效；写失败返回 -1。 */
+    /** 写入成功返回目标数量，失败返回 -1；JS 只判 `< 0`。 */
     Function("writeTargets") { json: String ->
       val context = appContext.reactContext ?: return@Function -1
       val written = EntryWidgetStore.write(context, json)
-      if (!written) return@Function -1
+      if (written < 0) return@Function -1
       EntryWidgetProvider.refreshAll(context)
-      EntryWidgetStore.targets(context).size
-    }
-
-    /** 当前已写入的目标数量；组件设置页与 JS 都据此决定显示什么。 */
-    Function("targetCount") {
-      val context = appContext.reactContext ?: return@Function 0
-      EntryWidgetStore.targets(context).size
+      written
     }
   }
 }

@@ -23,6 +23,9 @@ export interface CompanionDesktopEntryLink extends CompanionDesktopEntryTarget {
   sessionId: string;
 }
 
+/** 白名单允许的两个目标形态；也是深链的输入。 */
+export type ParsedDesktopEntryLink = { kind: 'new-task' } | CompanionDesktopEntryLink;
+
 export const NEW_TASK_DESKTOP_ENTRY_ID = 'cindy.desktop-entry.new-task';
 const COMPANION_DESKTOP_ENTRY_ID_PREFIX = 'cindy.desktop-entry.companion.';
 /** 身份字段分隔符。控制字符不会出现在正常的电脑 / 集合 / 伙伴 ID 里。 */
@@ -68,18 +71,12 @@ export function companionDesktopEntryUrl(link: CompanionDesktopEntryLink, scheme
   return `${scheme}://sessions/${encodeURIComponent(link.sessionId)}?${query}`;
 }
 
-/** 组件快照共用的深链选择：新任务走固定页，伙伴走会话页。 */
-export function desktopEntryDestinationUrl(
-  target: DesktopEntryTarget,
-  sessionId: string,
-  scheme: string,
-): string {
-  return target.kind === 'new-task'
+/** 组件快照共用的深链选择：新任务走固定页，伙伴走会话页。目标自带会话 ID。 */
+export function desktopEntryDestinationUrl(entry: ParsedDesktopEntryLink, scheme: string): string {
+  return entry.kind === 'new-task'
     ? newTaskDesktopEntryUrl(scheme)
-    : companionDesktopEntryUrl({ ...target, sessionId }, scheme);
+    : companionDesktopEntryUrl(entry, scheme);
 }
-
-export type ParsedDesktopEntryLink = { kind: 'new-task' } | CompanionDesktopEntryLink;
 
 /**
  * 白名单：只放行伙伴对话与新任务。标记、会话 ID 形态、伙伴参数任一不符就丢弃，

@@ -24,13 +24,13 @@ class EntryConfigActivity : Activity() {
     val targets = EntryWidgetStore.targets(this)
     if (targets.isEmpty()) {
       // 还没有名单：组件本身能显示「打开 App」的空态，不拦着用户放上去。
-      return done(EntryWidgetStore.NEW_TASK_ID)
+      return done(null)
     }
     val ids = targets.map { it.id }
     val labels = targets.map { target ->
       if (target.subtitle.isEmpty()) target.title else "${target.title} · ${target.subtitle}"
     }
-    val current = ids.indexOf(EntryWidgetStore.selection(this, appWidgetId)).coerceAtLeast(0)
+    val current = EntryWidgetStore.selection(this, appWidgetId)?.let(ids::indexOf)?.takeIf { it >= 0 } ?: 0
     AlertDialog.Builder(this, dialogTheme())
       .setTitle(getString(R.string.cindy_entry_widget_pick_title))
       .setSingleChoiceItems(labels.toTypedArray(), current) { dialog, which ->
@@ -41,8 +41,8 @@ class EntryConfigActivity : Activity() {
       .show()
   }
 
-  private fun done(targetId: String) {
-    EntryWidgetStore.setSelection(this, appWidgetId, targetId)
+  private fun done(targetId: String?) {
+    if (targetId != null) EntryWidgetStore.setSelection(this, appWidgetId, targetId)
     EntryWidgetProvider.refreshAll(this)
     setResult(RESULT_OK, Intent().putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId))
     finish()

@@ -40,7 +40,7 @@ export function redirectSystemPath({ path, initial }: { path: string; initial: b
     })) return '/';
     // 桌面入口组件：目标只留在内存里，冷启动先回首页、热唤起保留当前页；
     // 登录就绪后由根级 DesktopEntryHost 校验白名单再跳转。
-    if (isDesktopEntryLink(path)) { receiveDesktopEntryLink(path); return initial ? '/' : null; }
+    if (receiveDesktopEntryLink(path)) return initial ? '/' : null;
     // Group invitations stay in memory across login. A warm link preserves the
     // current page; the single root Host presents the invitation after auth.
     if (receiveChatInviteLink(path)) return initial ? '/' : null;

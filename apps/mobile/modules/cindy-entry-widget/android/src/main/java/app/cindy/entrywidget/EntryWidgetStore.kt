@@ -24,7 +24,6 @@ internal data class EntryTarget(
  */
 internal object EntryWidgetStore {
   private const val PREFS = "cindy-entry-widget"
-  const val NEW_TASK_ID = "new-task"
 
   fun snapshotFile(context: Context) = File(context.noBackupFilesDir, "entry-widget-targets.json")
 
@@ -63,9 +62,9 @@ internal object EntryWidgetStore {
 
   /**
    * 原子写入快照：图标先落盘再换文件，桌面重绘时看到的要么是旧快照、要么是新快照，
-   * 不会读到只写了一半的目标列表。返回 false 时调用方不要把失败当成「没有目标」。
+   * 不会读到只写了一半的目标列表。返回写入条数；失败返回 -1，调用方不要把失败当成「没有目标」。
    */
-  fun write(context: Context, json: String): Boolean = try {
+  fun write(context: Context, json: String): Int = try {
     val rows = JSONObject(json).optJSONArray("targets") ?: JSONArray()
     val normalized = JSONArray()
     val directory = iconDir(context)
@@ -90,9 +89,9 @@ internal object EntryWidgetStore {
     // 换掉的头像文件不能留着，否则同一个伙伴会越攒越多。
     directory.listFiles()?.forEach { if (it !in keep) it.delete() }
     writeAtomically(snapshotFile(context), JSONObject().put("targets", normalized).toString())
-    true
+    normalized.length()
   } catch (_: Exception) {
-    false
+    -1
   }
 
   /**
@@ -123,8 +122,9 @@ internal object EntryWidgetStore {
     }
   }
 
-  fun selection(context: Context, appWidgetId: Int): String =
-    preferences(context).getString("target.$appWidgetId", null)?.trim().orEmpty().ifEmpty { NEW_TASK_ID }
+  /** 这份组件选中的入口；还没选过时为 null，由调用方退回目标列表的第一项。 */
+  fun selection(context: Context, appWidgetId: Int): String? =
+    preferences(context).getString("target.$appWidgetId", null)?.trim()?.ifEmpty { null }
 
   fun setSelection(context: Context, appWidgetId: Int, targetId: String) {
     preferences(context).edit().putString("target.$appWidgetId", targetId).apply()
