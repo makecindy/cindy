@@ -62,6 +62,8 @@ export function GhostFormDialogHost() {
   const [current, setCurrent] = useState<FormRequest | null>(null);
   const currentRef = useRef<FormRequest | null>(null);
   currentRef.current = current;
+  /** 已回过答复的请求:同一请求只回一次,迟到的旧回调不再回包。 */
+  const answered = useRef(new Set<string>());
 
   useEffect(() => {
     const api = window.electronAPI.ghosts;
@@ -84,13 +86,17 @@ export function GhostFormDialogHost() {
   }, []);
 
   if (!current) return null;
+  const requestId = current.requestId;
   return (
     <GhostFormDialog
-      key={current.requestId}
+      key={requestId}
       request={current}
       onDone={(answer) => {
-        void sendAnswer(current.requestId, answer);
-        setCurrent(null);
+        if (answered.current.has(requestId)) return;
+        answered.current.add(requestId);
+        void sendAnswer(requestId, answer);
+        // 只收起自己这一份:旧表单的迟到回调不能关掉之后弹出的新表单。
+        setCurrent((value) => (value && value.requestId === requestId ? null : value));
       }}
     />
   );
@@ -147,6 +153,12 @@ function GhostFormDialog({ request, onDone }: { request: FormRequest; onDone: (a
   });
   const [showErrors, setShowErrors] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  // 表单卸载(保存、取消、被 main 撤销)时取消还开着的二次确认,并拦住它的旧回调。
+  const lifetime = useRef(new AbortController());
+  useEffect(() => {
+    const controller = lifetime.current;
+    return () => controller.abort();
+  }, []);
 
   const missing = new Set(showErrors ? ghostFormMissingRequired(spec.fields, values) : []);
   const leafId = (key: string) => `${baseId}-${key}`;
@@ -195,6 +207,7 @@ function GhostFormDialog({ request, onDone }: { request: FormRequest; onDone: (a
   const runAction = async () => {
     const action = spec.action;
     if (!action) return;
+    const signal = lifetime.current.signal;
     if (action.confirm) {
       setConfirming(true);
       const ok = await confirm({
@@ -202,11 +215,12 @@ function GhostFormDialog({ request, onDone }: { request: FormRequest; onDone: (a
         description: action.confirm,
         confirmText: action.text,
         ...(action.danger ? { confirmVariant: 'destructive' as const } : {}),
-      });
+      }, signal);
+      if (signal.aborted) return;
       setConfirming(false);
       if (!ok) return;
     }
-    onDone({ outcome: 'action' });
+    if (!signal.aborted) onDone({ outcome: 'action' });
   };
 
   /** 不走 FormField 的控件(分段、开关)也用同一行版式;label 用 id 关联。 */

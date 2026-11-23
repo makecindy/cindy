@@ -9,7 +9,7 @@
  *   与 §4 Dialog & Modal(取消 / 额外操作 / 主操作的顺序与语义,不点遮罩关闭)。
  * - 现有覆盖缺口:新组件;main 侧单测只覆盖收口与往返,不覆盖用户在表单里增删条目、必填拦截和
  *   额外操作的二次确认。
- * - 最小失败输入:必填项为空时点保存;新增一条(上一条收起成摘要)后不填就保存,应展开它并提示;
+ * - 最小失败输入:必填项为空时点保存;二次确认开着时表单被撤销、随后新表单弹出、旧确认被点了确认;新增一条(上一条收起成摘要)后不填就保存,应展开它并提示;
  *   保存后条目 id 不该凭空出现,已有条目 id 要带回;
  *   二次确认点了取消;main 发来 dismissed。
  * - tier:unit(jsdom,只在测试内渲染组件,无真实 IPC)。单独成文件:需要 jsdom 环境,不能并入 node 环境的
@@ -106,7 +106,11 @@ describe('GhostFormDialogHost', () => {
     open();
     mocks.confirm.mockResolvedValueOnce(false);
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: '删除关注' })); });
-    expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({ title: '删除关注', description: '确定删除关注?', confirmVariant: 'destructive' }));
+    // 二次确认绑定表单生命周期的取消信号(表单被撤销时一起取消)。
+    expect(mocks.confirm).toHaveBeenCalledWith(
+      expect.objectContaining({ title: '删除关注', description: '确定删除关注?', confirmVariant: 'destructive' }),
+      expect.objectContaining({ aborted: false }),
+    );
     expect(resolveForm).not.toHaveBeenCalled();
 
     mocks.confirm.mockResolvedValueOnce(true);
@@ -120,11 +124,24 @@ describe('GhostFormDialogHost', () => {
     expect(resolveForm).toHaveBeenCalledWith('r2', { outcome: 'cancel' });
   });
 
-  it('main 发来 dismissed(那边已超时结算)时直接收起,不再回包', () => {
+  it('main 发来 dismissed(那边已超时结算)时直接收起并取消还开着的二次确认;旧确认迟到的点击不回包、不关掉新表单', async () => {
+    // 依据:自动审阅指出的竞态——二次确认由全局 ConfirmDialogProvider 持有,表单被撤销后它若还在,
+    // 用户再点确认会走旧回调,把之后弹出的新表单一起关掉、新请求拿不到答复。
     open();
-    expect(screen.getByRole('dialog')).toBeTruthy();
+    let confirmSignal: AbortSignal | undefined;
+    let finishConfirm!: (ok: boolean) => void;
+    mocks.confirm.mockImplementationOnce((_options: unknown, signal?: AbortSignal) => {
+      confirmSignal = signal;
+      return new Promise<boolean>((resolve) => { finishConfirm = resolve; });
+    });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '删除关注' })); });
     act(() => dismiss!({ requestId: 'r1' }));
     expect(screen.queryByRole('dialog')).toBeNull();
+    expect(confirmSignal?.aborted).toBe(true);
+
+    act(() => push!({ requestId: 'r2', ghostId: 'xd-feishu', ghostName: 'XD Feishu', spec: SPEC }));
+    await act(async () => { finishConfirm(true); });
+    expect(screen.getByRole('dialog')).toBeTruthy();
     expect(resolveForm).not.toHaveBeenCalled();
   });
 });

@@ -2410,6 +2410,8 @@ export function acceptPluginInvocation(id: string, invocationId: string): void {
 
 /** Both sandbox pages and Node workers release their Host-owned resources here. */
 function disposePluginRuntimeHostServices(id: string): void {
+  // 插件停用、卸载、崩溃或熔断:它的表单按取消结算并收起,不再占着全局唯一的表单位置。
+  getGhostFormDialogBridge()?.cancelAll(id);
   networkSlotSingleton?.disposeGhost(id);
   fsSlotSingleton?.disposePlugin(id);
   getDesktopHostTerminalService(false)?.disposePlugin(id);
