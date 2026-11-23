@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -7,6 +13,11 @@ import { useAuth } from '@/contexts/AuthContext';
 import { acquireAppInteractionLock } from '@/lib/appInteractionLock';
 import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
 
+/** 查询迟迟不回时的兜底:超时后按「不需要确认」放行,不让窗口一直被无形遮挡锁住。 */
+const PENDING_TIMEOUT_MS = 5_000;
+
+type LegalStatus = 'pending' | 'required' | 'clear';
+
 /**
  * 分离侧栏 / 单页签窗口的协议更新遮挡。
  *
@@ -14,40 +25,59 @@ import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
  * 界面并提示回主窗口确认;主窗口确认后经设置广播自动解除。判定口径与 LegalTermsUpdateGate
  * 一致:只对已登录的个人账号生效。
  *
- * 模态语义与 LoginConsentDialog 一致(DESIGN.md §14.2):打开时把焦点收进遮挡层、背景兄弟节点
- * inert,Tab 不会落回被盖住的终端 / 浏览器等控件;关闭后焦点归还。交互锁另外挡住全局快捷键。
+ * 账号与协议状态都确定之前先用透明遮挡层接住输入(不显示内容,避免每次打开都闪一下):
+ * 已恢复的终端 / 浏览器页签不能在判定完成前收到按键。查询失败或超时按「不需要」放行。
+ *
+ * 模态语义与 LoginConsentDialog 一致(DESIGN.md §14.2):焦点收进遮挡层、背景兄弟节点 inert,
+ * Tab 不会落回被盖住的控件;解除后焦点归还。交互锁另外挡住全局快捷键。
  */
 export function DetachedLegalTermsUpdateBlocker() {
   const { t } = useTranslation();
-  const { mode, user } = useAuth();
-  const [required, setRequired] = useState(false);
+  const { mode, user, isInitializing } = useAuth();
+  const [legal, setLegal] = useState<LegalStatus>('pending');
 
   useEffect(() => {
     const api = window.electronAPI;
     let cancelled = false;
     let sawBroadcast = false;
+    const settle = (next: LegalStatus) => {
+      if (!cancelled) setLegal(next);
+    };
+    const timeout = window.setTimeout(() => {
+      setLegal((current) => (current === 'pending' ? 'clear' : current));
+    }, PENDING_TIMEOUT_MS);
     const unsubscribe = api.onLegalTermsUpdateRequiredChange?.((value) => {
       sawBroadcast = true;
-      if (!cancelled) setRequired(value);
+      settle(value ? 'required' : 'clear');
     });
-    void api
-      .getLegalTermsUpdateRequired?.()
-      .then((value) => {
-        if (!cancelled && !sawBroadcast) setRequired(value === true);
-      })
-      .catch(() => undefined);
+    if (!api.getLegalTermsUpdateRequired) {
+      settle('clear');
+    } else {
+      void api
+        .getLegalTermsUpdateRequired()
+        .then((value) => {
+          if (!sawBroadcast) settle(value === true ? 'required' : 'clear');
+        })
+        .catch(() => {
+          if (!sawBroadcast) settle('clear');
+        });
+    }
     return () => {
       cancelled = true;
+      window.clearTimeout(timeout);
       unsubscribe?.();
     };
   }, []);
 
-  const open = required && mode === 'cloud' && user?.membershipKind === 'personal';
+  const pending = legal === 'pending' || isInitializing;
+  const open = !pending && legal === 'required' && mode === 'cloud' && user?.membershipKind === 'personal';
+  const blocking = pending || open;
 
   const containerRef = useRef<HTMLDivElement | null>(null);
 
-  useEffect(() => {
-    if (!open) return undefined;
+  // layout effect:在浏览器绘制、用户能操作之前就加锁并收拢焦点。
+  useLayoutEffect(() => {
+    if (!blocking) return undefined;
     const releaseLock = acquireAppInteractionLock();
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const root = containerRef.current;
@@ -66,9 +96,9 @@ export function DetachedLegalTermsUpdateBlocker() {
       releaseLock();
       opener?.focus();
     };
-  }, [open]);
+  }, [blocking]);
 
-  if (!open) return null;
+  if (!blocking) return null;
 
   // 遮挡层内没有可操作控件:Tab 一律留在容器上,不让焦点回到被盖住的界面。
   const keepFocus = (event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -80,11 +110,12 @@ export function DetachedLegalTermsUpdateBlocker() {
 
   return createPortal(
     <div
-      data-testid="detached-legal-terms-blocker"
-      role="alertdialog"
-      aria-modal="true"
-      aria-labelledby="detached-legal-terms-title"
-      aria-describedby="detached-legal-terms-body"
+      data-testid={open ? 'detached-legal-terms-blocker' : 'detached-legal-terms-pending'}
+      role={open ? 'alertdialog' : undefined}
+      aria-modal={open ? true : undefined}
+      aria-busy={open ? undefined : true}
+      aria-labelledby={open ? 'detached-legal-terms-title' : undefined}
+      aria-describedby={open ? 'detached-legal-terms-body' : undefined}
       ref={containerRef}
       tabIndex={-1}
       onKeyDown={keepFocus}
@@ -92,19 +123,28 @@ export function DetachedLegalTermsUpdateBlocker() {
         if (event.target === event.currentTarget) event.currentTarget.focus();
       }}
       className="fixed inset-0 grid place-items-center p-6 outline-none"
-      style={{ background: LOGIN_COLORS.consentOverlay, zIndex: Z_INDEX_LAYERS['blocking-gate'] }}
+      style={{
+        background: open ? LOGIN_COLORS.consentOverlay : 'transparent',
+        zIndex: Z_INDEX_LAYERS['blocking-gate'],
+      }}
     >
-      <div
-        className="w-full max-w-[340px] rounded-[18px] px-5 py-5 text-center"
-        style={{ background: LOGIN_COLORS.panelBg, boxShadow: `inset 0 0 0 1px ${LOGIN_COLORS.panelBorder}` }}
-      >
-        <p id="detached-legal-terms-title" className="text-16 font-semibold" style={{ color: LOGIN_COLORS.titleText }}>
-          {t('legalTermsUpdate.title')}
-        </p>
-        <p id="detached-legal-terms-body" className="mt-2 text-13 leading-[1.54]" style={{ color: LOGIN_COLORS.secondaryText }}>
-          {t('legalTermsUpdate.detachedBody')}
-        </p>
-      </div>
+      {open && (
+        <div
+          className="w-full max-w-[340px] rounded-xl px-5 py-5 text-center"
+          style={{ background: LOGIN_COLORS.panelBg, boxShadow: `inset 0 0 0 1px ${LOGIN_COLORS.panelBorder}` }}
+        >
+          <p id="detached-legal-terms-title" className="text-16 font-semibold" style={{ color: LOGIN_COLORS.titleText }}>
+            {t('legalTermsUpdate.title')}
+          </p>
+          <p
+            id="detached-legal-terms-body"
+            className="mt-2 text-13 leading-[1.54]"
+            style={{ color: LOGIN_COLORS.secondaryText }}
+          >
+            {t('legalTermsUpdate.detachedBody')}
+          </p>
+        </div>
+      )}
     </div>,
     document.body,
   );

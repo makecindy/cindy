@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useLayoutEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -35,7 +35,8 @@ export function LegalTermsUpdateGate() {
     !state.loading &&
     state.legalTermsUpdateRequired;
 
-  useEffect(() => {
+  // layout effect:在浏览器绘制、用户能操作之前就加锁。
+  useLayoutEffect(() => {
     if (!open) return undefined;
     return acquireAppInteractionLock();
   }, [open]);

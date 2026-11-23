@@ -12,6 +12,7 @@ vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => k
 
 const auth = vi.hoisted(() => ({
   mode: 'cloud' as 'signed-out' | 'local' | 'cloud',
+  isInitializing: false,
   user: { membershipKind: 'personal' } as { membershipKind: 'personal' | 'org' } | null,
 }));
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => auth }));
@@ -33,6 +34,7 @@ const electronAPI = {
 
 beforeEach(() => {
   auth.mode = 'cloud';
+  auth.isInitializing = false;
   auth.user = { membershipKind: 'personal' };
   electronAPI.getLegalTermsUpdateRequired.mockResolvedValue(true);
   Object.assign(window, { electronAPI });
@@ -91,5 +93,41 @@ describe('DetachedLegalTermsUpdateBlocker', () => {
     render(<DetachedLegalTermsUpdateBlocker />);
     await act(async () => {});
     expect(screen.queryByTestId('detached-legal-terms-blocker')).toBeNull();
+    expect(screen.queryByTestId('detached-legal-terms-pending')).toBeNull();
+  });
+
+  // 依据:已恢复的终端 / 浏览器页签在账号与协议状态确定之前不能收到按键(判定期间 fail closed)。
+  it('swallows input with an invisible blocker until identity and terms status are known', async () => {
+    let resolve: (value: boolean) => void = () => {};
+    electronAPI.getLegalTermsUpdateRequired.mockReturnValue(new Promise<boolean>((r) => (resolve = r)));
+    auth.isInitializing = true;
+    const view = render(<DetachedLegalTermsUpdateBlocker />);
+
+    const pending = screen.getByTestId('detached-legal-terms-pending');
+    expect(document.activeElement).toBe(pending);
+    expect(isAppInteractionLocked()).toBe(true);
+
+    await act(async () => resolve(false));
+    auth.isInitializing = false;
+    view.rerender(<DetachedLegalTermsUpdateBlocker />);
+
+    expect(screen.queryByTestId('detached-legal-terms-pending')).toBeNull();
+    expect(isAppInteractionLocked()).toBe(false);
+  });
+
+  it('gives up waiting and stays usable when the status never arrives', async () => {
+    vi.useFakeTimers();
+    try {
+      electronAPI.getLegalTermsUpdateRequired.mockReturnValue(new Promise<boolean>(() => {}));
+      render(<DetachedLegalTermsUpdateBlocker />);
+      expect(screen.getByTestId('detached-legal-terms-pending')).toBeTruthy();
+
+      await act(async () => {
+        vi.advanceTimersByTime(5_000);
+      });
+      expect(screen.queryByTestId('detached-legal-terms-pending')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
