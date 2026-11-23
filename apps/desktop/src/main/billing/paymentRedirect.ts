@@ -8,13 +8,13 @@ const ALLOWED_BILLING_REDIRECT_HOSTS = new Set([
 ]);
 const ALLOWED_STRIPE_PORTAL_HOSTS = new Set(['billing.stripe.com']);
 
-function parseHttpsBillingUrl(value: unknown): URL | null {
+function isAllowedStripeUrl(value: unknown, allowedHosts: ReadonlySet<string>): value is string {
   if (
     typeof value !== 'string' ||
     value.length === 0 ||
     value.length > MAX_BILLING_REDIRECT_URL_LENGTH
   ) {
-    return null;
+    return false;
   }
   try {
     const parsed = new URL(value);
@@ -22,38 +22,18 @@ function parseHttpsBillingUrl(value: unknown): URL | null {
       parsed.protocol === 'https:' &&
       parsed.username === '' &&
       parsed.password === '' &&
-      parsed.port === ''
-    ) ? parsed : null;
+      parsed.port === '' &&
+      allowedHosts.has(parsed.hostname)
+    );
   } catch {
-    return null;
+    return false;
   }
 }
 
 export function isAllowedBillingRedirectUrl(value: unknown): value is string {
-  const url = parseHttpsBillingUrl(value);
-  if (!url) return false;
-  if (ALLOWED_BILLING_REDIRECT_HOSTS.has(url.hostname)) return true;
-  if (url.hostname === 'g.alipayplus.com') {
-    const cn = url.pathname === '/page/aplus-linker/acwallet/qrcode.html';
-    const hk = url.pathname === '/page/aplus-linker/acwallet/authorization.html';
-    if ((!cn && !hk) || url.searchParams.get('source') !== 'AlipayConnect') return false;
-    if (cn && url.searchParams.get('url') !== 'alipayconnect://platformapi/acwallet/signContract') return false;
-    try {
-      const data = JSON.parse(url.searchParams.get('bizContent') ?? 'null');
-      const returnUrl = parseHttpsBillingUrl(data?.authRedirectUrl);
-      return data?.customerBelongsTo === (cn ? 'ALIPAY_CN' : 'ALIPAY_HK') &&
-        returnUrl?.hostname === 'g.alipayplus.com' &&
-        returnUrl.pathname === '/page/ac-auth-payment/result/mobile/index.html';
-    } catch {
-      return false;
-    }
-  }
-  return url.hostname === 'checkout.antom.com' &&
-    /^\/easysafepay\/\d+\.\d+\.\d+\/pages\/api-portal\/index\.html$/.test(url.pathname) &&
-    url.searchParams.has('sessionData');
+  return isAllowedStripeUrl(value, ALLOWED_BILLING_REDIRECT_HOSTS);
 }
 
 export function isAllowedStripeBillingPortalUrl(value: unknown): value is string {
-  const url = parseHttpsBillingUrl(value);
-  return url !== null && ALLOWED_STRIPE_PORTAL_HOSTS.has(url.hostname);
+  return isAllowedStripeUrl(value, ALLOWED_STRIPE_PORTAL_HOSTS);
 }

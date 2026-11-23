@@ -29,7 +29,7 @@ function walletProduct(subscription: boolean): BillingCatalogProduct {
       minAmount: null, maxAmount: null, rolloverCap: null,
       purchaseOptions: ['alipay', 'antom_alipay_cn', 'antom_alipay_hk'].map((provider) => ({
         id: provider, provider, capability: subscription ? 'MERCHANT_INITIATED_MANDATE' : 'ONE_TIME_PAYMENT',
-        paymentAction: subscription && provider !== 'alipay' ? 'REDIRECT' : 'QR_CODE',
+        paymentAction: 'QR_CODE',
       })),
     }],
   };

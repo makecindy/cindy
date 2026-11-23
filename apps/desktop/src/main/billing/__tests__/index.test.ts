@@ -627,20 +627,7 @@ describe('billing IPC', () => {
   it.each([
     'https://checkout.stripe.com/c/pay/session_fixture#fragment',
     'https://invoice.stripe.com/i/acct_fixture/test_fixture',
-    ...(['ALIPAY_CN', 'ALIPAY_HK'] as const).map((customerBelongsTo) => {
-      const cn = customerBelongsTo === 'ALIPAY_CN';
-      const query = new URLSearchParams({
-        source: 'AlipayConnect',
-        bizContent: JSON.stringify({
-          customerBelongsTo,
-          authRedirectUrl: 'https://g.alipayplus.com/page/ac-auth-payment/result/mobile/index.html',
-        }),
-      });
-      if (cn) query.set('url', 'alipayconnect://platformapi/acwallet/signContract');
-      return `https://g.alipayplus.com/page/aplus-linker/acwallet/${cn ? 'qrcode' : 'authorization'}.html?${query}`;
-    }),
-    'https://checkout.antom.com/easysafepay/1.39.0/pages/api-portal/index.html?sessionData=fixture',
-  ])('opens an approved HTTPS payment URL from the main top-level frame: %s', async (url) => {
+  ])('opens a public HTTPS Stripe payment URL from the main top-level frame: %s', async (url) => {
     const { call, openExternal } = harness();
 
     await expect(call(BILLING_INVOKE.OPEN_PAYMENT_REDIRECT, { url })).resolves.toEqual({
@@ -655,9 +642,6 @@ describe('billing IPC', () => {
     'javascript:alert(1)',
     'stripe://checkout/session',
     'https://checkout.stripe.com.evil.example/c/pay/test',
-    'https://checkout.antom.com.evil.example/easysafepay/1.39.0/pages/api-portal/index.html?sessionData=fixture',
-    'https://checkout.antom.com/account',
-    'https://g.alipayplus.com/page/aplus-linker/acwallet/qrcode.html?url=https%3A%2F%2Fevil.example',
     'https://invoice.stripe.com.evil.example/i/test',
     'https://checkout.stripe.com@evil.example/c/pay/test',
     'https://invoice.stripe.com@evil.example/i/test',
