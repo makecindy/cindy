@@ -35,6 +35,8 @@ export function pluginNodeEnvironment(ghostId: string, inherited: NodeJS.Process
     // XDG_CONFIG_HOME 也可指定 gh 配置目录，且在 Windows 上同样可能优先于 APPDATA。
     'XDG_CONFIG_HOME',
   ] as const;
+  // Windows 环境变量名大小写不敏感；按宿主原始键名透传，避免生成重复键。
+  const windowsSystemKeys = ['PATHEXT', 'ComSpec', 'USERNAME'] as const;
   const env: NodeJS.ProcessEnv = {
     CINDY_GHOST_ID: ghostId,
     // 不暴露安装目录路径——插件通过 __dirname 定位自身资源即可。
@@ -43,6 +45,14 @@ export function pluginNodeEnvironment(ghostId: string, inherited: NodeJS.Process
   };
   for (const key of inheritedKeys) {
     if (inherited[key] !== undefined) env[key] = inherited[key];
+  }
+  for (const canonicalKey of windowsSystemKeys) {
+    const inheritedKey = Object.keys(inherited).find(
+      (key) => key.toLowerCase() === canonicalKey.toLowerCase(),
+    );
+    if (inheritedKey !== undefined && inherited[inheritedKey] !== undefined) {
+      env[inheritedKey] = inherited[inheritedKey];
+    }
   }
 
 return env;

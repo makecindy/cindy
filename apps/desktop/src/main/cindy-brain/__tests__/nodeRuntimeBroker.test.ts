@@ -523,6 +523,9 @@ describe('nodeRuntimeBroker · Electron utilityProcess 适配', () => {
     vi.stubEnv('APPDATA', 'C:\\Users\\demo\\AppData\\Roaming');
     vi.stubEnv('GH_CONFIG_DIR', 'D:\\gh-config');
     vi.stubEnv('XDG_CONFIG_HOME', 'D:\\xdg-config');
+    vi.stubEnv('PATHEXT', '.COM;.EXE;.BAT;.CMD');
+    vi.stubEnv('COMSPEC', 'C:\\Windows\\System32\\cmd.exe');
+    vi.stubEnv('USERNAME', 'demo');
     const child = new FakeUtilityProcess();
     const fork = vi.fn((modulePath: unknown, entryArgs: unknown, options: unknown) => {
       void modulePath;
@@ -560,6 +563,9 @@ describe('nodeRuntimeBroker · Electron utilityProcess 适配', () => {
     expect(forkOptions.env.APPDATA).toBe('C:\\Users\\demo\\AppData\\Roaming');
     expect(forkOptions.env.GH_CONFIG_DIR).toBe('D:\\gh-config');
     expect(forkOptions.env.XDG_CONFIG_HOME).toBe('D:\\xdg-config');
+    expect(forkOptions.env.PATHEXT).toBe('.COM;.EXE;.BAT;.CMD');
+    expect(forkOptions.env.COMSPEC).toBe('C:\\Windows\\System32\\cmd.exe');
+    expect(forkOptions.env.USERNAME).toBe('demo');
 
     expect(worker.stderr).toBe(child.stderr);
     expect(child.stderr.listenerCount('error')).toBe(0);
