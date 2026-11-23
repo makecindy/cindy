@@ -18,6 +18,8 @@ import {
   type PluginEnginePermissionMode,
   type PluginEngineView,
 } from '../../shared/pluginEngines';
+import { modelCatalogKey } from '../../shared/controlledModelCatalog';
+import { isProviderShareAgentDeviceId } from '../../shared/providerShare';
 import { isOrganizationPluginNamespace, parsePluginStoragePart } from '../../shared/pluginIdentity';
 import type { PermissionMode } from '@/lib/userPreferences.types';
 
@@ -268,19 +270,56 @@ export function pluginEngineSessionCreateFields(selection: ActivePluginEngine): 
 }
 
 /**
+ * A computer or received share whose engines a picker offers. `catalogueKey` is where its engine
+ * list is cached when that differs from `deviceId` (read through the task computer under remote
+ * control); the choice still runs on `deviceId`.
+ */
+export interface PluginEngineSource {
+  deviceId: string;
+  name?: string | null;
+  catalogueKey?: string;
+}
+
+/**
+ * Under remote control the task computer (`hostDeviceId`) decides where its task's Agent may run,
+ * as for built-in models (provider-sharing.md §5.1): its other computers of this account (this one
+ * included) and the shares it received. Only shares of a plugin engine are kept; a built-in
+ * provider share offers no engine. Engine lists are read through the task computer.
+ * Nothing is offered while the task computer has not listed its sources (or cannot).
+ */
+export function controlledPluginEngineSources(
+  hostDeviceId: string | undefined,
+  locations: readonly { deviceId: string; name?: string | null; favoriteSource?: { providerId: string } }[] | undefined,
+  shareName: (deviceId: string) => string | null | undefined,
+): PluginEngineSource[] {
+  if (!hostDeviceId || !locations) return [];
+  return locations.flatMap((location) => {
+    if (location.deviceId === hostDeviceId) return [];
+    const share = isProviderShareAgentDeviceId(location.deviceId);
+    if (share && !pluginEngineKeyFromProviderId(location.favoriteSource?.providerId)) return [];
+    return [{
+      deviceId: location.deviceId,
+      // Shares read 「来自 X 的分享」 like this computer's own picker; the task computer's label is the fallback.
+      name: (share ? shareName(location.deviceId) : null) || location.name || null,
+      catalogueKey: modelCatalogKey(location.deviceId, hostDeviceId)!,
+    }];
+  });
+}
+
+/**
  * The engines other computers of this account or received provider shares offer, as picker choices.
  * `catalogues` holds what each computer/share last answered (null = not read yet or unreachable: it
  * offers nothing for now); only engines opened there for remote use and with at least one permitted
  * model are kept. The consumer computer does not need the plugin installed locally.
  */
 export function remotePluginEngineChoices(
-  devices: readonly { deviceId: string; name?: string | null }[],
+  devices: readonly PluginEngineSource[],
   catalogues: ReadonlyMap<string, readonly PluginEngineView[] | null>,
   displayName: (deviceId: string, name?: string | null) => string,
   _installedEngines?: readonly Pick<PluginEngineView, 'providerId'>[],
 ): PluginEngineChoice[] {
   return devices.flatMap((device) =>
-    (catalogues.get(device.deviceId) ?? [])
+    (catalogues.get(device.catalogueKey ?? device.deviceId) ?? [])
       .filter((engine) =>
         !!pluginEngineKeyFromProviderId(engine.providerId)
         && isPluginEngineOfferedRemotely(engine)

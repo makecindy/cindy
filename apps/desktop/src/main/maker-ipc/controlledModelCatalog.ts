@@ -1,8 +1,16 @@
 import { PROVIDER_SHARE_GROUP_STATUS_REQUEST, scrubSharedProviderCatalog, type InvokeResultPayload } from '@cindy/device-link';
 import { MODEL_CATALOG_READ_CHANNELS, type ControlledModelLocation } from '../../shared/controlledModelCatalog.js';
 import { extractIpcError } from '../../shared/ipcError.js';
+import { PLUGIN_ENGINES_INVOKE, parseOfferedPluginEngines, pluginEngineKeyFromProviderId } from '../../shared/pluginEngines.js';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+
+/**
+ * Plugin engine list of a source, read through the task computer like its model catalog
+ * (plugin-harnesses.md). Kept apart from MODEL_CATALOG_READ_CHANNELS: the provider metadata
+ * snapshot path does not cover plugin engines.
+ */
+const PLUGIN_ENGINE_LIST = PLUGIN_ENGINES_INVOKE.LIST;
 
 export interface ControlledModelCatalogDeps {
   assertCaller(): void;
@@ -26,9 +34,10 @@ export function createControlledModelCatalogReader(deps: ControlledModelCatalogD
       assertOwner();
       return snapshot;
     }
+    const pluginEngineRead = request.channel === PLUGIN_ENGINE_LIST;
     if (request.op !== 'read'
       || typeof request.agentDeviceId !== 'string'
-      || !MODEL_CATALOG_READ_CHANNELS.some(channel => channel === request.channel)
+      || (!pluginEngineRead && !MODEL_CATALOG_READ_CHANNELS.some(channel => channel === request.channel))
       || !Array.isArray(request.args) || request.args.length > 1) {
       throwIpcError('INVALID_PARAMS', 'Invalid model catalog read');
     }
@@ -51,10 +60,14 @@ export function createControlledModelCatalogReader(deps: ControlledModelCatalogD
     const snapshot = await deps.locations();
     assertOwner();
     const deviceId = request.agentDeviceId;
-    if (!snapshot.locations.some(location => location.agentDeviceId === deviceId)) {
+    const source = snapshot.locations.find(location => location.agentDeviceId === deviceId);
+    if (!source) {
       if (snapshot.status === 'degraded') throwIpcError('MODEL_VISIBILITY_NOT_READY', 'Model source directory is temporarily unavailable');
       throwIpcError('PRECONDITION_FAILED', 'Model source is unavailable on the task computer');
     }
+    // A share is one provider: a built-in provider share offers no plugin engine, so it is not asked.
+    const sharedProviderId = isProviderShareAgentDeviceId(deviceId) ? source.favoriteSource?.providerId : undefined;
+    if (pluginEngineRead && sharedProviderId !== undefined && !pluginEngineKeyFromProviderId(sharedProviderId)) return [];
     const result = await deps.invoke(deviceId, request.channel as string, request.args, assertOwner);
     assertOwner();
     // A revoked/paused share or a disabled device must not publish a late catalog.
@@ -75,6 +88,14 @@ export function createControlledModelCatalogReader(deps: ControlledModelCatalogD
         throwIpcError('DEVICE_LINK_CHANNEL_NOT_ALLOWED', result.error.message);
       }
       throwIpcError('PRECONDITION_FAILED', 'Model source is currently unavailable');
+    }
+    if (pluginEngineRead) {
+      // Only well-formed engine views travel on. Account usage is read from the computer that has
+      // the engine, never through the task computer, so the usage flag is dropped here; a share
+      // keeps only the engine it was granted for.
+      return parseOfferedPluginEngines(result.result)
+        .filter(engine => sharedProviderId === undefined || engine.providerId === sharedProviderId)
+        .map(({ reportsUsage: _reportsUsage, ...engine }) => engine);
     }
     // 分享来的供应商与控制端直读(ipc.ts)用同一份受邀者投影，远控时的模型列表同样按组判断能否选用
     // (provider-sharing.md §5.1)。

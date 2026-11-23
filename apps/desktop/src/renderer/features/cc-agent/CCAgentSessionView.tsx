@@ -67,11 +67,13 @@ import {
 } from '@/hooks/usePluginEngines';
 import {
   PLUGIN_ENGINE_DEFAULT_MODEL,
+  controlledPluginEngineSources,
   isSamePluginEngineChoice,
   remotePluginEngineChoices,
   resolvePluginEngineSessionSwitchEffort,
   type PluginEngineChoice,
   type PluginEngineSelection,
+  type PluginEngineSource,
 } from '@/lib/pluginEngineSelection';
 import {
   usePluginEngineChoiceLabel,
@@ -2385,21 +2387,36 @@ function CCAgentSessionContent({
   // Agent 恰好就在正在看的这台电脑上(从另一台建的任务)时读本机的列表。
   const pluginEngineAgentDeviceId = pluginEngineTask && session?.agentDeviceId
     ? session.agentDeviceId : undefined;
+  const controlledModelRoute = useModelRouteDevices({
+    controlledDeviceId: remoteDeviceId,
+    leadAgentDeviceId: session?.agentDeviceId,
+    pendingAgentDeviceId,
+    sshRemote: !!session?.remoteHostId,
+  });
+  // Keep the direct catalogue for reachable sources on older task computers.
+  const activePluginEngineCatalogueHost = pluginEngineAgentDeviceId
+    && isProviderShareAgentDeviceId(pluginEngineAgentDeviceId)
+    && !isReceivedProviderShare(pluginEngineAgentDeviceId)
+    ? controlledModelRoute.catalogHostDeviceId
+    : undefined;
+  const activePluginEngineCatalogueKey = modelCatalogKey(pluginEngineAgentDeviceId, activePluginEngineCatalogueHost);
   const pluginEngineAgentIsThisComputer = !!pluginEngineAgentDeviceId && pluginEngineAgentDeviceId === selfDeviceId;
   const thisComputerPluginEngines = usePluginEngines(pluginEngineAgentIsThisComputer);
   const agentPluginCatalogue = useRemotePluginEngines(
     pluginEngineAgentDeviceId && !pluginEngineAgentIsThisComputer && !readOnly && !remoteSessionUnavailable && !awaitingCreation
-      ? pluginEngineAgentDeviceId : undefined,
+      ? activePluginEngineCatalogueKey : undefined,
     pluginEngineTask && viewVisible,
     viewVisible,
   );
   /** 那台电脑的引擎列表；undefined = 引擎就在任务所在电脑，null = 那台还没答复(或暂时连不上)。 */
+  const refreshAgentPluginCatalogue = activePluginEngineCatalogueHost ? agentPluginCatalogue.read : agentPluginCatalogue.refresh;
   const agentDevicePluginEngines = pluginEngineAgentDeviceId
     ? (pluginEngineAgentIsThisComputer ? thisComputerPluginEngines : agentPluginCatalogue.engines)
     : undefined;
   const pluginEngineAgentDeviceName = pluginEngineAgentDeviceId
     ? selectableDevices.find((device) => device.deviceId === pluginEngineAgentDeviceId)?.name
-      ?? providerShareDeviceName?.(pluginEngineAgentDeviceId)
+      ?? (isReceivedProviderShare(pluginEngineAgentDeviceId) ? providerShareDeviceName?.(pluginEngineAgentDeviceId) : undefined)
+      ?? controlledModelRoute.devices?.find((device) => device.deviceId === pluginEngineAgentDeviceId)?.name
       ?? undefined
     : undefined;
   const pluginEngine = useMemo<PluginEngineChoice | null>(() => {
@@ -2419,6 +2436,10 @@ function CCAgentSessionContent({
         : (pluginEngineSwitchIntent.agentDeviceId ?? undefined))
     : undefined;
   const canBrowseRemotePluginEngines = viewVisible && pluginEngineSwitchEligible && !pluginEngineDeviceId;
+  // 远程控制的被控电脑上的任务：与内置模型一样按被控电脑的名单列出同账号其他电脑与它收到的插件供应商分享
+  // 开放的引擎，经被控电脑代读(provider-sharing.md §5.1)；被控电脑不提供名单时只列它自己的引擎。
+  const canBrowseControlledPluginEngines = viewVisible && pluginEngineSwitchEligible && !!pluginEngineDeviceId
+    && controlledModelRoute.catalogHostDeviceId === pluginEngineDeviceId;
   const switchPluginEngineDevicesKey = canBrowseRemotePluginEngines
     ? JSON.stringify([
         ...selectableDevices
@@ -2433,26 +2454,42 @@ function CCAgentSessionContent({
           ? [[pendingPluginEngineDeviceId, providerShareDeviceName?.(pendingPluginEngineDeviceId) ?? null] as [string, string | null]]
           : []),
       ])
-    : '[]';
-  const switchPluginEngineDevices = useMemo(
-    () => (JSON.parse(switchPluginEngineDevicesKey) as Array<[string, string | null]>)
-      .map(([id, name]) => ({ deviceId: id, name })),
+    : canBrowseControlledPluginEngines
+      ? JSON.stringify(controlledPluginEngineSources(
+          controlledModelRoute.catalogHostDeviceId,
+          controlledModelRoute.devices,
+          // 本机也收到的分享按本机的叫法；只在被控电脑加载的分享用被控电脑给的名字。
+          (id) => (isReceivedProviderShare(id) ? providerShareDeviceName?.(id) : null),
+        ).map(({ deviceId: id, name, catalogueKey }) => [id, name ?? null, catalogueKey]))
+      : '[]';
+  const switchPluginEngineDevices = useMemo<readonly PluginEngineSource[]>(
+    () => (JSON.parse(switchPluginEngineDevicesKey) as Array<[string, string | null, string?]>)
+      .map(([id, name, catalogueKey]) => ({ deviceId: id, name, ...(catalogueKey ? { catalogueKey } : {}) })),
     [switchPluginEngineDevicesKey],
   );
   const switchPluginEngineDeviceIds = useMemo(
-    () => switchPluginEngineDevices.map((device) => device.deviceId),
+    () => switchPluginEngineDevices.map((device) => device.catalogueKey ?? device.deviceId),
+    [switchPluginEngineDevices],
+  );
+  /** Where a source's engine list is cached: the source itself, or its read through the task computer. */
+  const switchPluginEngineCatalogueKey = useCallback(
+    (deviceId: string) => switchPluginEngineDevices.find((device) => device.deviceId === deviceId)?.catalogueKey ?? deviceId,
     [switchPluginEngineDevices],
   );
   const { catalogues: devicePluginEngines, read: readDevicePluginEngines } = useDevicesPluginEngines(switchPluginEngineDeviceIds);
   const activePluginEngineInDeviceList = !!pluginEngineAgentDeviceId
-    && switchPluginEngineDeviceIds.includes(pluginEngineAgentDeviceId);
-  const readPendingRemotePluginEngine = viewVisible && !!pendingPluginEngineDeviceId
-    && devicePluginEngines.get(pendingPluginEngineDeviceId) === null;
+    && switchPluginEngineDevices.some((device) => device.deviceId === pluginEngineAgentDeviceId);
+  const pendingPluginEngineCatalogueKey = pendingPluginEngineDeviceId
+    ? switchPluginEngineCatalogueKey(pendingPluginEngineDeviceId)
+    : undefined;
+  const readPendingRemotePluginEngine = viewVisible && !!pendingPluginEngineCatalogueKey
+    && devicePluginEngines.get(pendingPluginEngineCatalogueKey) === null;
   useEffect(() => {
-    if (readPendingRemotePluginEngine) readDevicePluginEngines(pendingPluginEngineDeviceId);
-  }, [readPendingRemotePluginEngine, pendingPluginEngineDeviceId, readDevicePluginEngines]);
+    if (readPendingRemotePluginEngine) readDevicePluginEngines(pendingPluginEngineCatalogueKey);
+  }, [readPendingRemotePluginEngine, pendingPluginEngineCatalogueKey, readDevicePluginEngines]);
   const switchablePluginEngines = useMemo<readonly PluginEngineChoice[]>(() => {
-    if (pluginEngineDeviceId) {
+    const remote = remotePluginEngineChoices(switchPluginEngineDevices, devicePluginEngines, deviceDisplayName, localPluginEngines);
+    if (pluginEngineDeviceId && remote.length === 0) {
       return pluginEngineAgentDeviceId
         ? [
             ...pluginEngines.filter((engine) => engine.providerId !== session?.providerId),
@@ -2460,14 +2497,18 @@ function CCAgentSessionContent({
           ]
         : pluginEngines;
     }
-    const remote = remotePluginEngineChoices(switchPluginEngineDevices, devicePluginEngines, deviceDisplayName, localPluginEngines);
-    const combined: PluginEngineChoice[] = [...localPluginEngines, ...remote];
+    const combined: PluginEngineChoice[] = pluginEngineDeviceId
+      ? [...pluginEngines, ...remote]
+      : [...localPluginEngines, ...remote];
     if (pluginEngine && !combined.some((item) => isSamePluginEngineChoice(item, pluginEngine))) {
       combined.push(pluginEngine);
     }
     if (pendingPluginEngineDeviceId && pluginEngineSwitchIntent?.providerId
       && !combined.some((item) => isSamePluginEngineChoice(item, { providerId: pluginEngineSwitchIntent.providerId!, deviceId: pendingPluginEngineDeviceId }))) {
-      const pendingRemote = findPluginEngine(devicePluginEngines.get(pendingPluginEngineDeviceId) ?? [], pluginEngineSwitchIntent.providerId);
+      const pendingRemote = findPluginEngine(
+        devicePluginEngines.get(switchPluginEngineCatalogueKey(pendingPluginEngineDeviceId)) ?? [],
+        pluginEngineSwitchIntent.providerId,
+      );
       if (pendingRemote) {
         const matchedDevice = switchPluginEngineDevices.find((item) => item.deviceId === pendingPluginEngineDeviceId);
         combined.push({
@@ -2479,13 +2520,8 @@ function CCAgentSessionContent({
     }
     return combined;
   }, [pluginEngineDeviceId, pluginEngineAgentDeviceId, pluginEngines, session?.providerId, pluginEngine,
-    switchPluginEngineDevices, devicePluginEngines, localPluginEngines, pendingPluginEngineDeviceId, pluginEngineSwitchIntent?.providerId]);
-  const controlledModelRoute = useModelRouteDevices({
-    controlledDeviceId: remoteDeviceId,
-    leadAgentDeviceId: session?.agentDeviceId,
-    pendingAgentDeviceId,
-    sshRemote: !!session?.remoteHostId,
-  });
+    switchPluginEngineDevices, devicePluginEngines, localPluginEngines, pendingPluginEngineDeviceId, pluginEngineSwitchIntent?.providerId,
+    switchPluginEngineCatalogueKey]);
   // 被控电脑上的任务 Agent 现在 / 挂着的位置是分享时:分享按账号授予,本机也收到了同一条就经本机
   // 的分享通道读它的目录,模型按钮按分享显示(否则只能读到被控电脑自己的目录,显示「模型信息暂
   // 不可用」)。本机没收到的分享读不到,维持原样。
@@ -3845,7 +3881,7 @@ function CCAgentSessionContent({
             onSelectModel: handlePluginEngineModelSelect,
             // 引擎在另一台电脑上：打开模型菜单时请那台重报模型并复读列表；就在这台时沿用本机的刷新。
             readCatalogue: pluginEngineAgentDeviceId
-              ? (pluginEngineAgentIsThisComputer ? undefined : agentPluginCatalogue.refresh)
+              ? (pluginEngineAgentIsThisComputer ? undefined : refreshAgentPluginCatalogue)
               : refreshPluginEngineCatalogue,
             catalogueUnknown: pluginEngineAgentDeviceId
               ? agentDevicePluginEngines === null
@@ -3854,7 +3890,7 @@ function CCAgentSessionContent({
         : undefined,
     [pluginEngineTask, session, pluginEngine, pluginEngineChoiceLabel, handlePluginEngineModelSelect, refreshPluginEngineCatalogue,
       pluginEngineDeviceId, remotePluginCatalogue.engines, pluginEngineAgentDeviceId, pluginEngineAgentIsThisComputer,
-      agentPluginCatalogue.refresh, agentDevicePluginEngines, t],
+      refreshAgentPluginCatalogue, agentDevicePluginEngines, t],
   );
 
   const activeSessionPluginEngineChoice = useMemo<PluginEnginesPickerProps['active']>(() => {
@@ -3895,9 +3931,11 @@ function CCAgentSessionContent({
       activeSessionPluginEngineChoice,
     );
     const api = pluginEngineDeviceId ? makerApiForDevice(pluginEngineDeviceId) : makerApiFor(sessionId);
+    // 被控电脑上的任务：它自己的引擎不点名位置(沿用原行为)；被控电脑名单里另一台电脑或分享的引擎带上位置。
     const switchTo = () => api.switchSessionAgent(
       sessionId, 'acp', selection.modelId, selection.providerId, resolvedEffort ?? '', false,
-      pluginEngineDeviceId ? undefined : { agentDeviceId: selection.deviceId ?? null },
+      pluginEngineDeviceId && !selection.deviceId && !pluginEngineAgentDeviceId
+        ? undefined : { agentDeviceId: selection.deviceId ?? null },
     );
     try {
       if (pluginEngineTask && selection.providerId === session.providerId
@@ -3941,16 +3979,18 @@ function CCAgentSessionContent({
   const readSessionPluginEngines = useCallback(() => {
     if (pluginEngineDeviceId) {
       refreshPluginEngineCatalogue?.();
-      if (pluginEngineAgentDeviceId && !pluginEngineAgentIsThisComputer) agentPluginCatalogue.refresh();
+      if (pluginEngineAgentDeviceId && !pluginEngineAgentIsThisComputer) refreshAgentPluginCatalogue();
+      // 被控电脑名单里其他来源的列表(经被控电脑代读)；没有名单时这里什么都不读。
+      readDevicePluginEngines();
       return;
     }
     if (hasLocalSessionPluginEnginesRef.current) requestPluginEnginesRefresh();
     readDevicePluginEngines();
     if (pluginEngineAgentDeviceId && !pluginEngineAgentIsThisComputer && !activePluginEngineInDeviceList) {
-      agentPluginCatalogue.refresh();
+      refreshAgentPluginCatalogue();
     }
   }, [pluginEngineDeviceId, refreshPluginEngineCatalogue, pluginEngineAgentDeviceId, pluginEngineAgentIsThisComputer,
-    agentPluginCatalogue.refresh, readDevicePluginEngines, activePluginEngineInDeviceList]);
+    refreshAgentPluginCatalogue, readDevicePluginEngines, activePluginEngineInDeviceList]);
   // 普通任务的选择器列出本机及同账号其他电脑开放的插件引擎(本机须已装对应插件)：
   // 当前选中的是待切到的引擎，或任务自己的引擎；待切到内置引擎时不选中任何插件引擎。
   const pluginEngineSwitchPicker = useMemo<PluginEnginesPickerProps | undefined>(() => {

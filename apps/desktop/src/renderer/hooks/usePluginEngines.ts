@@ -21,7 +21,9 @@ import {
   type DataOwnerGeneration,
 } from '@/contexts/dataOwnerGeneration';
 import { createLogger } from '@/lib/logger';
+import { invokeModelCatalog } from '@/lib/invokeModelCatalog';
 import { extractIpcError } from '@/utils/ipcError';
+import { parseModelCatalogKey } from '../../shared/controlledModelCatalog';
 import {
   PLUGIN_ENGINES_INVOKE,
   pluginEngineKeyFromProviderId,
@@ -149,8 +151,11 @@ function sameEngineViews(
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
-function isUnsupportedRemoteListError(error: unknown): boolean {
-  if (extractIpcError(error)?.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED') return true;
+function isUnsupportedRemoteListError(error: unknown, deviceId: string): boolean {
+  const code = extractIpcError(error)?.code;
+  if (code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED') return true;
+  // A task computer that cannot read plugin engines for its sources yet refuses the read itself.
+  if (code === 'INVALID_PARAMS' && parseModelCatalogKey(deviceId)) return true;
   const message = error instanceof Error ? error.message : String(error ?? '');
   return message.includes('CHANNEL_NOT_ALLOWED');
 }
@@ -227,9 +232,11 @@ function deviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCa
       if (pending) return pending;
       const readGeneration = deviceGeneration;
       const readStartedAt = Date.now();
+      const link = window.electronAPI?.deviceLink;
       const run = Promise.resolve()
-        .then(() => isDataOwnerGenerationCurrent(owner) && readGeneration === deviceGeneration
-          ? window.electronAPI?.deviceLink?.invoke(deviceId, PLUGIN_ENGINES_INVOKE.LIST, [])
+        .then(() => isDataOwnerGenerationCurrent(owner) && readGeneration === deviceGeneration && link
+          // A source read through the task computer (remote control) is keyed by modelCatalogKey.
+          ? invokeModelCatalog(link, deviceId, PLUGIN_ENGINES_INVOKE.LIST, [])
           : undefined)
         .then((reply) => {
           if (!isDataOwnerGenerationCurrent(owner) || readGeneration !== deviceGeneration || !Array.isArray(reply)) {
@@ -251,7 +258,7 @@ function deviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCa
         // Old or unreachable hosts leave the catalogue unknown or retain their last result.
         .catch((error: unknown) => {
           if (!isDataOwnerGenerationCurrent(owner) || readGeneration !== deviceGeneration) return;
-          if (isUnsupportedRemoteListError(error)) unsupported = true;
+          if (isUnsupportedRemoteListError(error, deviceId)) unsupported = true;
           else lastFailedAt = Date.now();
         })
         .finally(() => {
