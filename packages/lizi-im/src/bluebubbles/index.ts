@@ -37,6 +37,10 @@ function attachmentFileName(raw: string): string {
 function isShortCopy(attachment: BlueBubblesAttachment, bytes: Uint8Array): boolean {
   return (attachment.totalBytes ?? 0) > 0 && bytes.byteLength < attachment.totalBytes!;
 }
+/** A converted complete photo is reusable by history; a short transfer must be retried. */
+function heicPreviewToken(token: string, attachment: BlueBubblesAttachment): string {
+  return `${token}:heic-preview:${attachment.totalBytes || 0}`;
+}
 /** Human-readable size for attachment notes the model reads. */
 function formatBytes(bytes: number): string {
   return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
@@ -842,11 +846,12 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     const token = `${this.botContextId}:${attachment.guid}`;
     if (kind.kind === 'image' && isHeicPhoto(bytes)) {
       // Keep the original retrievable by GUID even if the bridge has no working decoder.
+      const previewToken = isShortCopy(attachment, bytes) ? token + ':preview' : heicPreviewToken(token, attachment);
       const cachePreview = async (preview: Uint8Array | null, mimeType: string) => {
         this.assertLive(generation);
         if (!preview?.byteLength) return null;
         try {
-          return await this.host.media?.cacheImage({ integration: 'imessage', token: token + ':preview',
+          return await this.host.media?.cacheImage({ integration: 'imessage', token: previewToken,
             buffer: preview, mimeType, staging: true });
         } catch (error) {
           if (!(error instanceof UnsupportedInboundMediaError)) throw error;
@@ -904,13 +909,19 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
           continue;
         }
         try {
-          const cached = image ? await this.host.media?.getCachedImage('imessage', `${this.botContextId}:${item.guid}`,
-            { staging: true, shouldReuse: () => this.live(generation) }) : null;
+          const token = `${this.botContextId}:${item.guid}`;
+          const cacheOptions = { staging: true, shouldReuse: () => this.live(generation) };
+          const cached = image ? await this.host.media?.getCachedImage('imessage', token, cacheOptions) : null;
           this.assertLive(generation);
           // An earlier short copy cached under this attachment is not the attachment.
           const cachedSize = cached && item.totalBytes ? await fs.stat(cached.absPath).then(stat => stat.size, () => 0) : 0;
           let stored: { absPath: string; url?: string; mimeType?: string; discard?: () => Promise<void> } | null | undefined =
             cached && !(item.totalBytes && cachedSize < item.totalBytes) ? cached : null;
+          if (!stored && image) {
+            this.assertLive(generation);
+            stored = await this.host.media?.getCachedImage('imessage', heicPreviewToken(token, item), cacheOptions);
+            this.assertLive(generation);
+          }
           if (!stored) {
             const bytes = await api.download(item.guid);
             this.assertLive(generation);
