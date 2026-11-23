@@ -29,7 +29,7 @@ import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
-import type { Schedule } from '@cindy/maker-scheduler';
+import type { Schedule, ScheduleRun } from '@cindy/maker-scheduler';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -44,6 +44,7 @@ interface Props {
   schedule: Schedule;
   selected: boolean;
   unreadCount?: number;
+  failureStatus?: ScheduleRun['status'];
   onSelect: (s: Schedule) => void;
   /** 右键菜单的 Pause/Resume 动作；与 RunHistoryPane ⋯ 菜单同行为。 */
   onTogglePause?: (s: Schedule) => void | Promise<void>;
@@ -84,6 +85,7 @@ export function TaskListCell({
   schedule: s,
   selected,
   unreadCount = 0,
+  failureStatus,
   onSelect,
   onTogglePause,
   onDelete,
@@ -173,7 +175,10 @@ export function TaskListCell({
     subtitle = lastText ?? nextText;
   }
   // 副标题行是否渲染:决定右下角 Run 按钮的"预留位"落在哪一行(见下方两处 pr-3.5)。
-  const hasMetaRow = Boolean(subtitle);
+  const failureLabel = s.status === 'active' && (failureStatus === 'failed' || failureStatus === 'interrupted')
+    ? t(`scheduler.runs.status.${failureStatus}`)
+    : null;
+  const hasMetaRow = Boolean(subtitle || failureLabel);
 
   // ── Double-click rename（与 SessionItem 完全同款）──
   // - 单击立即选择；双击只额外进入重命名（仅在 onRename 传入时启用）
@@ -353,8 +358,7 @@ export function TaskListCell({
           />
         ) : (
           <span className="flex min-w-0 flex-1 items-center gap-1.5">
-            {/* 未读点走全端统一"完成未读=绿"(失败结局的红色语义由运行历史卡与
-                侧栏组头表达,本 cell 只有未读计数,不做失败聚合)。 */}
+            {/* 未读与运行结果分别展示，读过运行记录不代表故障恢复。 */}
             {hasUnreadRuns && <AttentionDot size={6} className="shrink-0" />}
             <span className="min-w-0 truncate text-sm font-medium text-[var(--msg-assistant-text)]">
               {s.name}
@@ -389,8 +393,14 @@ export function TaskListCell({
       </div>
       {hasMetaRow && (
         <div className={cn('flex min-w-0 items-center gap-2', onRunNow && 'pr-5')}>
+          {failureLabel && (
+            <span className="shrink-0 text-11 font-medium text-[var(--text-danger)]">
+              {failureLabel}
+            </span>
+          )}
           {subtitle && (
             <span
+              title={failureLabel ? subtitle : undefined}
               className={cn(
                 'min-w-0 flex-1 truncate text-11',
                 isPaused

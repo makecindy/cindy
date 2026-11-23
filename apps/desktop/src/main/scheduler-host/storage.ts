@@ -817,6 +817,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
    * - 每个 session 只返回最新的 run 映射，读取量不随同一任务的运行次数增长。
    * - 额外包含全部 running 与未读终态 run，供运行标记对账和未读计数。
    * - 每个 session 保留最近一次尚未恢复的失败/中断；已读不等于恢复。
+   * - 每个启用的自动化额外保留最近一次无会话的未恢复失败，供自动化列表显示。
    * - 未读旧 run 先返回以累计 session 红点，最新映射最后返回以裁决 Automation 归属。
    * - 非最新 running 不携带 sessionId，只参与运行标记对账。
    * - 内部例行任务在 SQL 内排除，避免未读历史随运行次数累积到公共侧栏内存中。
@@ -860,7 +861,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       .where(and(unreadTerminalRunWhere(), publicScheduleRunWhere()))
       .orderBy(desc(scheduleRuns.firedAt), desc(scheduleRuns.id))
       .limit(SIDEBAR_UNREAD_RUN_LIMIT);
-    const [latestSessionRows, unreadRows, runningRows, latestFailedRows] = await Promise.all([
+    const [latestSessionRows, unreadRows, runningRows, latestFailedRows, latestSessionlessFailedRows] = await Promise.all([
       db
         .select(projection)
         .from(scheduleSessionLatestRuns)
@@ -896,12 +897,29 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         )
         .innerJoin(schedules, eq(scheduleRuns.scheduleId, schedules.id))
         .where(publicScheduleRunWhere()),
+      db
+        .select(projection)
+        .from(schedules)
+        .innerJoin(scheduleRuns, eq(scheduleRuns.id, sql`(
+          SELECT failed.id FROM schedule_runs AS failed
+          WHERE failed.schedule_id = ${schedules.id}
+            AND failed.session_id IS NULL
+            AND failed.status IN ('failed', 'interrupted')
+            AND failed.fired_at >= COALESCE((
+              SELECT MAX(success.fired_at) FROM schedule_runs AS success
+              WHERE success.schedule_id = ${schedules.id} AND success.status = 'success'
+            ), 0)
+            AND NOT ${failureRecoveredSql('failed')}
+          ORDER BY failed.fired_at DESC, failed.id DESC LIMIT 1
+        )`))
+        .where(and(eq(schedules.status, 'active'), publicScheduleRunWhere())),
     ]);
     const latestRunIds = new Set(latestSessionRows.map((row) => row.runId));
     // SQL 按 fired_at 新→旧截 200 条；组装仍把其中较旧的未读放前面，红点累计后再用尾部最新映射裁决归属。
     const unreadOldestFirst = unreadRows.slice().reverse();
     const unreadRunIds = new Set(unreadOldestFirst.map((row) => row.runId));
     const rows = [
+      ...latestSessionlessFailedRows.filter((row) => !unreadRunIds.has(row.runId)),
       ...unreadOldestFirst.filter((row) => !latestRunIds.has(row.runId)),
       ...latestFailedRows.filter(
         (row) => !latestRunIds.has(row.runId) && !unreadRunIds.has(row.runId),

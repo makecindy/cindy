@@ -641,6 +641,36 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
     }
   });
 
+  // #10941, DB tier: route rejection can precede session creation. The list
+  // still needs the most recent unresolved failure once the user reads it.
+  it('keeps a read sessionless failure in the index until the automation succeeds', async () => {
+    const harness = createStorageHarness();
+    const scheduleId = 'sch-sessionless-failure';
+    try {
+      await harness.storage.insert(baseSchedule({ id: scheduleId, source: 'project' }));
+      await harness.storage.insertRun({
+        id: 'old-failure', scheduleId, status: 'failed', firedAt: 10, readAt: 11,
+      });
+      await harness.storage.insertRun({
+        id: 'latest-failure', scheduleId, status: 'failed', firedAt: 20, readAt: 21,
+        errorMsg: 'schedule route unavailable (explicit-source-unavailable)',
+      });
+      await harness.storage.insertRun({
+        id: 'skipped', scheduleId, status: 'skipped', firedAt: 30,
+      });
+      expect(await harness.storage.listSidebarIndexRuns()).toEqual([
+        expect.objectContaining({ runId: 'latest-failure', readAt: 21, failureRecovered: false }),
+      ]);
+
+      await harness.storage.insertRun({
+        id: 'recovered', scheduleId, status: 'success', firedAt: 40, readAt: 41,
+      });
+      expect(await harness.storage.listSidebarIndexRuns()).toEqual([]);
+    } finally {
+      harness.close();
+    }
+  });
+
   it('caps unread terminal runs so the sidebar index stays bounded', async () => {
     const harness = createStorageHarness();
     try {
@@ -2087,6 +2117,10 @@ it('excludes internal routine rows in SQLite before materializing the public sid
     for (let i = 0; i < 128; i++) {
       await harness.storage.insertRun({ id: `routine-unread-${i}`, scheduleId: 'routine-owned', sessionId: 'routine-owned', firedAt: i + 4, status: 'success' });
     }
+    await harness.storage.insertRun({
+      id: 'routine-sessionless-failed', scheduleId: 'routine-owned', firedAt: 132,
+      status: 'failed', readAt: 133,
+    });
     queries.length = 0;
     const runs = await harness.storage.listSidebarIndexRuns();
     expect(new Set(runs.map((run) => run.scheduleId))).toEqual(new Set(['public', 'legacy']));
@@ -2095,12 +2129,12 @@ it('excludes internal routine rows in SQLite before materializing the public sid
     const indexQueries = queries.filter(({ query }) =>
       query.startsWith('select "schedule_runs"."id", "schedules"."id",'),
     );
-    expect(indexQueries).toHaveLength(4);
+    expect(indexQueries).toHaveLength(5);
     for (const { query, params } of indexQueries) {
       const rows = harness.sqlite.prepare(query).all(...params) as { source: string | null }[];
       expect(rows.every((row) => row.source !== 'bot')).toBe(true);
     }
-    expect(await harness.storage.listRuns('routine-owned', 131)).toHaveLength(131);
+    expect(await harness.storage.listRuns('routine-owned', 132)).toHaveLength(132);
   } finally {
     harness.close();
   }

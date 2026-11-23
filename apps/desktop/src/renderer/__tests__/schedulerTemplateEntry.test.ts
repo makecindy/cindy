@@ -129,8 +129,8 @@ vi.mock('@/features/scheduler/hooks/useDeleteScheduleWithSessions', () => ({
   }),
 }));
 
-vi.mock('@/features/scheduler/hooks/useScheduleUnreadRunCounts', () => ({
-  useScheduleUnreadRunCounts: () => new Map(),
+vi.mock('@/features/scheduler/hooks/useScheduleRunSummary', () => ({
+  useScheduleRunSummary: () => ({ unreadRunCounts: new Map(), unrecoveredFailures: new Map() }),
 }));
 
 vi.mock('@/features/scheduler/hooks/useSessionReferences', () => ({

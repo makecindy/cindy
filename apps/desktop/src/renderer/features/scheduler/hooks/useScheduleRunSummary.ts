@@ -3,20 +3,25 @@ import type { Schedule, SchedulerEvent } from '@cindy/maker-scheduler';
 
 import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import { createLogger } from '@/lib/logger';
-import { activeScheduleFailures, isUnreadScheduleRun } from '@cindy/maker-shared/schedule-model';
-import { loadScheduleSidebarIndexRuns } from '../lib/scheduleSidebarIndexRuns';
+import { activeScheduleFailures, compareFailedScheduleRuns, isUnreadScheduleRun } from '@cindy/maker-shared/schedule-model';
+import { loadScheduleSidebarIndexRuns, type ScheduleSidebarIndexRun } from '../lib/scheduleSidebarIndexRuns';
 import { subscribeScheduleRunReadSync } from '../lib/scheduleRunReadSync';
 
-const log = createLogger('ScheduleUnreadRunCounts');
+const log = createLogger('ScheduleRunSummary');
 
-export function useScheduleUnreadRunCounts(
-  schedules: readonly Schedule[],
-): ReadonlyMap<string, number> {
+interface ScheduleRunSummary {
+  unreadRunCounts: ReadonlyMap<string, number>;
+  unrecoveredFailures: ReadonlyMap<string, ScheduleSidebarIndexRun>;
+}
+
+const EMPTY_SUMMARY: ScheduleRunSummary = { unreadRunCounts: new Map(), unrecoveredFailures: new Map() };
+
+export function useScheduleRunSummary(schedules: readonly Schedule[]): ScheduleRunSummary {
   const scheduleIdsKey = useMemo(
     () => schedules.map((schedule) => schedule.id).join('\u0000'),
     [schedules],
   );
-  const [counts, setCounts] = useState<ReadonlyMap<string, number>>(() => new Map());
+  const [summary, setSummary] = useState(EMPTY_SUMMARY);
   const refreshSeqRef = useRef(0);
 
   const refresh = useCallback(async () => {
@@ -24,7 +29,7 @@ export function useScheduleUnreadRunCounts(
     const seq = refreshSeqRef.current + 1;
     refreshSeqRef.current = seq;
     if (scheduleIds.length === 0) {
-      setCounts(new Map());
+      setSummary(EMPTY_SUMMARY);
       return;
     }
 
@@ -34,17 +39,28 @@ export function useScheduleUnreadRunCounts(
       if (refreshSeqRef.current !== seq) return;
 
       const activeFailures = activeScheduleFailures(runs.map((run) => ({ ...run, id: run.runId })));
-      const next = new Map<string, number>();
+      const unreadRunCounts = new Map<string, number>();
+      const unrecoveredFailures = new Map<string, ScheduleSidebarIndexRun>();
       for (const run of runs) {
         if (!visibleScheduleIds.has(run.scheduleId)) continue;
+        const isUnrecoveredFailure = activeFailures.has(run.runId);
+        if (isUnrecoveredFailure) {
+          const previous = unrecoveredFailures.get(run.scheduleId);
+          if (!previous || compareFailedScheduleRuns(
+            { runId: run.runId, firedAt: run.firedAt ?? 0 },
+            { runId: previous.runId, firedAt: previous.firedAt ?? 0 },
+          ) > 0) {
+            unrecoveredFailures.set(run.scheduleId, run);
+          }
+        }
         if (!isUnreadScheduleRun(run)) continue;
         // Recovered failures remain unread in history, but no longer light task indicators.
-        if (run.status !== 'success' && !activeFailures.has(run.runId)) continue;
-        next.set(run.scheduleId, (next.get(run.scheduleId) ?? 0) + 1);
+        if (run.status !== 'success' && !isUnrecoveredFailure) continue;
+        unreadRunCounts.set(run.scheduleId, (unreadRunCounts.get(run.scheduleId) ?? 0) + 1);
       }
-      setCounts(next);
+      setSummary({ unreadRunCounts, unrecoveredFailures });
     } catch (error) {
-      log.warn('failed to refresh schedule unread run counts', {
+      log.warn('failed to refresh schedule run summary', {
         error: error instanceof Error ? error.message : String(error),
       });
     }
@@ -77,5 +93,5 @@ export function useScheduleUnreadRunCounts(
     };
   }, [refresh]);
 
-  return counts;
+  return summary;
 }
