@@ -3304,8 +3304,14 @@ async function changeAccountPlacement(
     const own = accountOwnProvider(kind, command.accountId);
     const { copyProviderDisableOverrides } = await import('../maker-host/model-disable-store.js');
     assertOwner(state);
+    const copyOverrides = (targetId: string, created: boolean) => {
+      const renameModel = kind === 'openai' && created && (ref.providerId === kind || ref.created)
+        ? { from: subscriptionImageModelId(ref.providerId), to: subscriptionImageModelId(targetId) }
+        : undefined;
+      copyProviderDisableOverrides(ref.providerId, targetId, renameModel);
+    };
     if (own && own !== kind && own !== ref.providerId) {
-      copyProviderDisableOverrides(ref.providerId, own);
+      copyOverrides(own, resolveSubscriptionPoolProvider(own)?.created === true);
       await move(own);
       return;
     }
@@ -3316,7 +3322,7 @@ async function changeAccountPlacement(
     await createSubscriptionProvider(kind, command.accountId,
       identity ? `${providerBrandName(kind)} · ${identity}` : providerBrandName(kind),
       () => randomUUID().replaceAll('-', '').slice(0, 8),
-      (providerId) => copyProviderDisableOverrides(ref.providerId, providerId),
+      (providerId) => copyOverrides(providerId, true),
       [...managed].filter(id => id !== command.accountId));
     return;
   }

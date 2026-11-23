@@ -28,6 +28,11 @@ import {
 import { desktopMakerLogger } from './logger-adapter.js';
 import { createOverrideSettingsFile, portableOverrideSettings } from './override-settings-file.js';
 import { ownerScopedPath as ownerScopedUserDataPath } from '../ownerContext.js';
+import { subscriptionImageModelId } from '../cindy-media/sharedSubscriptionImage.js';
+import {
+  readCreatedSubscriptionProvidersIfReadable,
+  type CreatedSubscriptionProvider,
+} from '../subscription-accounts/placement.js';
 
 const log = desktopMakerLogger.child('model-disable-store');
 
@@ -56,6 +61,7 @@ interface ModelAccessPrefs {
 }
 
 const DEFAULTS: ModelAccessPrefs = { disabledModels: {}, disabledProviders: {}, hiddenProviders: {} };
+const LEGACY_SUBSCRIPTION_IMAGE_KEY_SUFFIX = `:${subscriptionImageModelId('openai')}`;
 
 /**
  * 单 section 条目总量硬上限(深防线,PR #744 review):正常路径已有 IPC 边界的尺寸 +
@@ -93,8 +99,21 @@ function sanitizeSection(raw: unknown): Record<string, true> {
 
 function normalize(raw: unknown): ModelAccessPrefs {
   if (!raw || typeof raw !== 'object') return { disabledModels: {}, disabledProviders: {}, hiddenProviders: {} };
+  const disabledModels = sanitizeSection('disabledModels' in raw ? raw.disabledModels : undefined);
+  // A split used to copy the built-in image ID verbatim. Read it as the same
+  // disable on this standalone provider, and persist only the canonical key on
+  // the next model write. Enabling then removes the disable in that same write.
+  let created: Readonly<Record<string, CreatedSubscriptionProvider>> | null | undefined;
+  for (const key in disabledModels) {
+    if (!key.startsWith('openai-sub-') || !key.endsWith(LEGACY_SUBSCRIPTION_IMAGE_KEY_SUFFIX)) continue;
+    const providerId = key.slice(0, -LEGACY_SUBSCRIPTION_IMAGE_KEY_SUFFIX.length);
+    if (created === undefined) created = readCreatedSubscriptionProvidersIfReadable();
+    if (created?.[providerId]?.kind !== 'openai') continue;
+    disabledModels[modelDisableKey(providerId, subscriptionImageModelId(providerId))] = true;
+    delete disabledModels[key];
+  }
   return {
-    disabledModels: sanitizeSection((raw as { disabledModels?: unknown }).disabledModels),
+    disabledModels,
     disabledProviders: sanitizeSection((raw as { disabledProviders?: unknown }).disabledProviders),
     hiddenProviders: sanitizeSection((raw as { hiddenProviders?: unknown }).hiddenProviders),
   };
@@ -118,7 +137,11 @@ export function readModelDisableOverrides(): ModelDisableOverrides {
 /** Taking an account out must not re-enable models. Persist the complete override copy before
  * publishing its provider; unlike a best-effort batch toggle, a capacity failure aborts the move.
  */
-export function copyProviderDisableOverrides(sourceId: string, targetId: string): void {
+export function copyProviderDisableOverrides(
+  sourceId: string,
+  targetId: string,
+  renameModel?: { from: string; to: string },
+): void {
   if (!sourceId || !targetId || sourceId === targetId) return;
   store.invalidateIfChanged();
   const current = store.read();
@@ -126,7 +149,9 @@ export function copyProviderDisableOverrides(sourceId: string, targetId: string)
   const disabledProviders = { ...current.disabledProviders };
   const prefix = `${sourceId}:`;
   for (const key of Object.keys(current.disabledModels)) {
-    if (key.startsWith(prefix)) disabledModels[modelDisableKey(targetId, key.slice(prefix.length))] = true;
+    if (!key.startsWith(prefix)) continue;
+    const modelId = key.slice(prefix.length);
+    disabledModels[modelDisableKey(targetId, modelId === renameModel?.from ? renameModel.to : modelId)] = true;
   }
   if (current.disabledProviders[sourceId]) disabledProviders[targetId] = true;
   // The split-out account inherits the picker choice too, or a hidden connection reappears.

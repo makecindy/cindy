@@ -1,4 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   SubscriptionAccountCommand,
@@ -54,6 +57,7 @@ const h = vi.hoisted(() => ({
   created: {} as Record<string, { kind: 'openai' | 'anthropic'; name: string; account: string }>,
   strategies: {} as Record<string, string>,
   copyOverrides: vi.fn(),
+  modelPrefsDir: null as string | null,
   storedUsage: new Map<string, object | null>(),
 }));
 // Persisted placement is replaced like the pool file; its own rules are covered in ipc.test.ts.
@@ -82,6 +86,7 @@ vi.mock('../placement.js', () => {
     providerAccounts,
     accountSiblings: <T extends { id: string }>(kind: string, accounts: readonly T[], accountId: string) =>
       accounts.filter((a) => owner(kind, a.id) === owner(kind, accountId)),
+    readCreatedSubscriptionProvidersIfReadable: () => h.created,
     readMergedLegacyCodexAccountId: (providerId: string) => {
       const accountId = legacyAccount(providerId);
       return accountId && owner('openai', accountId) !== providerId ? accountId : undefined;
@@ -153,6 +158,13 @@ vi.mock('../nativeCli.js', () => ({
 }));
 vi.mock('../../maker-host/codex-home-path.js', () => ({
   getCodexHome: () => '/existing-cindy/codex-home',
+}));
+vi.mock('../../ownerContext.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../ownerContext.js')>(),
+  ownerScopedPath: (...parts: string[]) => {
+    if (!h.modelPrefsDir) throw new Error('No synthetic model preferences directory');
+    return path.join(h.modelPrefsDir, ...parts);
+  },
 }));
 vi.mock('../../maker-host/model-disable-store.js', () => ({ copyProviderDisableOverrides: h.copyOverrides }));
 vi.mock('../../usage/accountUsageStorage.js', () => ({
@@ -312,7 +324,7 @@ import {
 } from '../../maker-ipc/sessionAgentSwitchHandler.js';
 import { prependHandoffToUserMessage } from '../../maker-ipc/agentHandoff.js';
 import { hostSessionIdFor } from '../../remote-agent/host/sessionIdentity.js';
-import { BUNDLED_CATALOG, type ProviderView } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, isModelDisabled, type ProviderView } from '@cindy/model-providers';
 import { resolveSubscriptionPoolProvider } from '../placement.js';
 import { createAccountCodexImageChannel, createCodexImageAuthAcquirer, setCodexImageAuthBinding } from '../../cindy-brain/codexImageAuthBinding.js';
 import { subscriptionPoolSources } from '../../menubar/collect.js';
@@ -4353,7 +4365,10 @@ describe('native account assignment on the executing computer', () => {
     await runSubscriptionAccountCommand({ action: 'place', providerId: kind, accountId: 'third', target: null });
     const [created] = Object.keys(h.created);
     expect(created).toMatch(new RegExp(`^${kind}-sub-`));
-    expect(h.copyOverrides).toHaveBeenCalledWith(kind, created);
+    const imageRemap = kind === 'openai'
+      ? { from: 'openai/gpt-image-2', to: `${created}/gpt-image-2` }
+      : undefined;
+    expect(h.copyOverrides).toHaveBeenCalledWith(kind, created, imageRemap);
     expect(await ids(kind)).toEqual(['default', 'second']);
     expect(await pick(created!)).toBe(`${kind}/third`);
     // Review regression: a task switched to another provider used to keep its old account. A fresh
@@ -4388,7 +4403,7 @@ describe('native account assignment on the executing computer', () => {
     expect(hasConnectedSubscriptionPool(created!)).toBe(true);
     // Deleting a created provider stops using only its own accounts.
     await runSubscriptionAccountCommand({ action: 'place', providerId: kind, accountId: 'third', target: null });
-    expect(h.copyOverrides).toHaveBeenLastCalledWith(kind, created);
+    expect(h.copyOverrides).toHaveBeenLastCalledWith(kind, created, imageRemap);
     await runSubscriptionAccountCommand({ action: 'remove-provider', providerId: created! });
     expect(h.pools[kind]!.accounts.map(a => a.id)).toEqual(['default', 'second']);
     expect(h.created).toEqual({});
@@ -4401,6 +4416,45 @@ describe('native account assignment on the executing computer', () => {
     await expect(runSubscriptionAccountCommand({ action: 'merge', providerId: kind, target: other! }))
       .rejects.toThrow('built-in');
     expect(await ids(kind)).toEqual(['second']);
+  });
+
+  // #12129 review, unit: the pool movement tests mock the preference copy. A real
+  // split of a disabled parent image must persist a disable on the newly namespaced row.
+  it('keeps GPT Image Gen disabled when taking an OpenAI account out of the built-in pool', async () => {
+    const { copyProviderDisableOverrides, readModelDisableOverrides, setModelsDisabled } =
+      await vi.importActual<typeof import('../../maker-host/model-disable-store.js')>('../../maker-host/model-disable-store.js');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-split-model-prefs-'));
+    h.modelPrefsDir = root;
+    h.copyOverrides.mockImplementation(copyProviderDisableOverrides);
+    h.pools.openai = { strategy: 'order', accounts: [account('default'), account('second')] };
+    const builtinModel = 'openai/gpt-image-2';
+    try {
+      setModelsDisabled('openai', [builtinModel, 'fixture-chat', 'other/gpt-image-2'], true);
+      await runSubscriptionAccountCommand({
+        action: 'place', providerId: 'openai', accountId: 'second', target: null,
+      });
+      const [providerId] = Object.keys(h.created);
+      if (!providerId) throw new Error('Split did not create a provider');
+      expect(providerId).toMatch(/^openai-sub-[a-f0-9]{8}$/);
+      expect((await readSubscriptionPool(providerId)).accounts.map(a => a.id)).toEqual(['second']);
+      expect((await readSubscriptionPool('openai')).accounts.map(a => a.id)).toEqual(['default']);
+      const modelId = `${providerId}/gpt-image-2`;
+      expect(JSON.parse(fs.readFileSync(path.join(root, 'model-disable-prefs.json'), 'utf8'))).toMatchObject({
+        disabledModels: { [`${providerId}:${modelId}`]: true },
+      });
+      const prefs = readModelDisableOverrides();
+      expect(isModelDisabled(prefs, providerId, modelId)).toBe(true);
+      expect(isModelDisabled(prefs, 'openai', builtinModel)).toBe(true);
+      expect(isModelDisabled(prefs, providerId, builtinModel)).toBe(false);
+      expect(isModelDisabled(prefs, providerId, 'fixture-chat')).toBe(true);
+      expect(isModelDisabled(prefs, providerId, 'other/gpt-image-2')).toBe(true);
+      setModelsDisabled(providerId, [modelId], false);
+      expect(isModelDisabled(readModelDisableOverrides(), providerId, modelId)).toBe(false);
+      expect(isModelDisabled(readModelDisableOverrides(), 'openai', builtinModel)).toBe(true);
+    } finally {
+      h.modelPrefsDir = null;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
   // PR #10405, unit: merging an entire multi-account provider previously pinned every old task
   // to its first account. Start and fork must keep the native history's recorded second account.

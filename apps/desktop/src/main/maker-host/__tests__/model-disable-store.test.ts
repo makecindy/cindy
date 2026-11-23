@@ -9,9 +9,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { describe, it, expect, vi } from 'vitest';
+import { afterAll, describe, it, expect, vi } from 'vitest';
+import { isModelDisabled } from '@cindy/model-providers';
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-disable-store-test-'));
+let prefsDir = tmpDir;
+afterAll(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
 
 vi.mock('electron', () => ({ app: { getPath: () => '/tmp/never-used-here' } }));
 vi.mock('../logger-adapter.js', () => ({
@@ -19,9 +22,15 @@ vi.mock('../logger-adapter.js', () => ({
 }));
 vi.mock('../../ownerContext.js', () => ({
   configureOwnerContext: () => {},
-  ownerScopedPath: (name: string) => path.join(tmpDir, name),
+  ownerScopedPath: (name: string) => path.join(prefsDir, name),
   ownerGeneration: () => 0,
   hasCommittedOwner: () => true,
+}));
+vi.mock('../../subscription-accounts/placement.js', () => ({
+  readCreatedSubscriptionProvidersIfReadable: () => ({
+    'openai-sub-1234abcd': { kind: 'openai', name: 'Split', account: 'fixture-account' },
+    'openai-sub-5678abcd': { kind: 'openai', name: 'Other split', account: 'other-account' },
+  }),
 }));
 
 const { __testing, migrateLegacyNamespacedModelDisableOverrides, setModelsDisabled,
@@ -31,7 +40,7 @@ const { __testing, migrateLegacyNamespacedModelDisableOverrides, setModelsDisabl
 
 function readPrefsFile(): { disabledModels: Record<string, unknown> } {
   return JSON.parse(
-    fs.readFileSync(path.join(tmpDir, 'model-disable-prefs.json'), 'utf8'),
+    fs.readFileSync(path.join(prefsDir, 'model-disable-prefs.json'), 'utf8'),
   ) as { disabledModels: Record<string, unknown> };
 }
 
@@ -90,6 +99,56 @@ describe('旧媒体 modelId 停用项迁移', () => {
     ]);
     expect(readPrefsFile().disabledModels['ambiguous-xd:gpt-image-2']).toBe(true);
     expect(readPrefsFile().disabledModels['ambiguous-xd:openai/gpt-image-2']).toBeUndefined();
+  });
+
+  // #12129 review, unit: a legacy split saved the built-in image ID under
+  // the new provider. Test the actual store read/write and a cold reload.
+  it('reads a copied legacy image disable and does not restore it after enabling the canonical ID', async () => {
+    const provider = 'openai-sub-1234abcd';
+    const other = 'openai-sub-5678abcd';
+    const unregistered = 'openai-sub-9999abcd';
+    const oldId = 'openai/gpt-image-2';
+    const image = `${provider}/gpt-image-2`;
+    const otherImage = `${other}/gpt-image-2`;
+    prefsDir = fs.mkdtempSync(path.join(tmpDir, 'legacy-image-'));
+    const file = path.join(prefsDir, 'model-disable-prefs.json');
+    const unchanged = {
+      [`openai:${oldId}`]: true,
+      [`${provider}:fixture-chat`]: true,
+      [`${provider}:different/gpt-image-2`]: true,
+      [`${unregistered}:${oldId}`]: true,
+    };
+    const legacy = {
+      ...unchanged,
+      [`${provider}:${oldId}`]: true,
+      [`${other}:${oldId}`]: true,
+      [`${other}:${otherImage}`]: true,
+    };
+    fs.writeFileSync(file, JSON.stringify({ disabledModels: legacy, hiddenProviders: { [other]: true } }));
+    try {
+      const normalized = { ...unchanged, [`${provider}:${image}`]: true, [`${other}:${otherImage}`]: true };
+      expect(readModelDisableOverrides().disabledModels).toEqual(normalized);
+      expect(readModelDisableOverrides().disabledModels).toEqual(normalized);
+      expect(readPrefsFile().disabledModels).toEqual(legacy); // Pure reads do not rewrite preferences.
+      setModelsDisabled(provider, [image], false);
+      expect(readPrefsFile()).toEqual({
+        disabledModels: { ...unchanged, [`${other}:${otherImage}`]: true },
+        hiddenProviders: { [other]: true },
+      });
+
+      // reset-modules: simulate restart with only the persisted preferences, not the store cache.
+      vi.resetModules();
+      const restarted = await import('../model-disable-store.js');
+      const isDisabled = () => isModelDisabled(restarted.readModelDisableOverrides(), provider, image);
+      expect(isDisabled()).toBe(false);
+      restarted.setModelsDisabled(provider, [image], true);
+      expect(isDisabled()).toBe(true);
+      expect(readPrefsFile().disabledModels[`${provider}:${oldId}`]).toBeUndefined();
+      restarted.setModelsDisabled(provider, [image], false);
+      expect(isDisabled()).toBe(false);
+    } finally {
+      prefsDir = tmpDir;
+    }
   });
 });
 
