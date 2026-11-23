@@ -873,7 +873,8 @@ export default function (pi) {
         var keepBlocks = null;
         for (var kb = 0; kb < assistant.content.length; kb++) {
           var keptBlock = assistant.content[kb];
-          if (keptBlock && keptBlock.type === 'toolCall') continue;
+          // 只留看得见的正文：thinking 块不重发，留着只是白占上下文（实测单会话 2.7M 字符）。
+          if (!keptBlock || keptBlock.type !== 'text') continue;
           if (keepBlocks === null) keepBlocks = [];
           keepBlocks.push(keptBlock);
         }
