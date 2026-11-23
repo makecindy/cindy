@@ -203,6 +203,25 @@ describe('Bot compact runtime refresh coordinator', () => {
     expect(retryCoordinator.hasPending(h.session.id)).toBe(false);
   });
 
+  it.each([false, true])('wakes after rebuilding a closed runtime only when no newer epoch is pending (%s)', async (newerEpoch) => {
+    const oldRuntime = createSession();
+    const replacement = createSession(oldRuntime.session.id, 'replacement');
+    const onReady = vi.fn();
+    const coordinator = createBotCompactRuntimeRefreshCoordinator({
+      hasPendingInteraction: () => false,
+      refresh: async session => {
+        coordinator.clearForClosedSession(session);
+        if (newerEpoch) coordinator.noteBoundary(replacement.session);
+        return 'refreshed';
+      },
+      onReady,
+    });
+    coordinator.noteBoundary(oldRuntime.session);
+    await expect(coordinator.attempt(oldRuntime.session)).resolves.toBe('refreshed');
+    expect(coordinator.hasPending(oldRuntime.session.id)).toBe(newerEpoch);
+    expect(onReady.mock.calls).toEqual(newerEpoch ? [] : [[oldRuntime.session.id]]);
+  });
+
   it('clears only the matching closed runtime', () => {
     const oldRuntime = createSession('bot-session', 'runtime-old');
     const otherRuntime = createSession('bot-session', 'runtime-new');
@@ -220,6 +239,33 @@ describe('Bot compact runtime refresh coordinator', () => {
 
 describe('capability refresh input admission', () => {
   const botChat = { role: 'canonical', source: 'bot', status: 'active', workingDir: '/virtual/bot' };
+
+  it('keeps a send temporarily deferred when a permission card opens during resource preflight', async () => {
+    const h = createSession();
+    let hasInteraction = false;
+    const close = vi.fn(async () => {});
+    const coordinator = createBotCompactRuntimeRefreshCoordinator({
+      hasPendingInteraction: () => hasInteraction,
+      refresh: async () => {
+        // The check before entering refresh saw an idle session.
+        await replaceBotRuntimeAfterPreflight({
+          preflight: async () => { hasInteraction = true; return true; },
+          isCurrentOwner: () => true,
+          isIdle: () => !hasInteraction,
+          close,
+          bootstrap: async () => h.session,
+        });
+        return 'refreshed';
+      },
+    });
+    await expect(prepareBotCapabilityEpochBeforeSend(h.session, {
+      readSession: async () => botChat,
+      preflight: async () => true,
+      coordinator,
+    })).resolves.toBe('deferred');
+    expect(close).not.toHaveBeenCalled();
+    expect(coordinator.hasPending(h.session.id)).toBe(true);
+  });
 
   it('waits for an in-flight idle refresh before admitting a queued turn', async () => {
     const h = createSession();
@@ -299,7 +345,7 @@ describe('capability refresh input admission', () => {
     const admit = () => prepareBotCapabilityEpochBeforeSend(h.session, {
       readSession: async () => botChat, preflight: async () => true, coordinator,
     });
-    await expect(admit()).resolves.toBe('deferred');
+    await expect(admit()).resolves.toBe('refresh-failed');
     expect(coordinator.hasPending(h.session.id)).toBe(true);
     await expect(admit()).resolves.toBe('refreshed');
     expect(coordinator.hasPending(h.session.id)).toBe(false);
