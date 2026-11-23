@@ -140,10 +140,14 @@ export default function (pi) {
   // a restart simply re-folds on the next batch.
   var foldedIds = Object.create(null);
   var foldedSize = 0;
-  // Which admitted batch a call belongs to, and each batch's member ids in transcript
-  // order. One batch renders one record line; the ids let cindy_toolfold_read open it.
+  // Which admitted batch a call belongs to. One batch renders one record line.
   var foldedBatch = Object.create(null);
-  var batchCalls = Object.create(null);
+  // 被删字节的唯一账本：能删就一定先在这里登记，取回也只读这里。id 在登记时分配，
+  // 不从内容或调用 id 派生——派生身份会撞名、会被截断、会被 provider 的字面量遮住。
+  var refSeq = 0;
+  var refs = new Map();
+  var refByKey = Object.create(null);
+  var refLegacy = Object.create(null);
   // Pins: callId -> { ts, chars }. ts is a monotonic recovery clock so the eviction
   // victim is the least-recently-recovered entry, not the earliest-pinned one.
   var pinned = new Map();
@@ -415,7 +419,7 @@ export default function (pi) {
     var tally = [];
     for (var n = 0; n < names.length; n++) tally.push(names[n] + ' ' + batch.names[names[n]]);
     return '[folded] ' + batch.dropped + (batch.dropped === 1 ? ' round-trip, ' : ' round-trips, ') + tally.join(', ') + ', ' + batch.chars +
-      ' chars, read with cindy_toolfold_read("' + batch.first + '")';
+      ' chars, read with cindy_toolfold_read("' + batch.ref + '")';
   }
 
   function allFolded(trip) {
@@ -444,53 +448,48 @@ export default function (pi) {
   }
 
   // 文本回合禁用了所有工具：被 ingest 截断、原文还留在 giants 里的结果，模型既看不到
-  // 全文也调不了取回，只能瞎猜。把仍在预算内的原文放回去，超预算的保持预览。
+  // 全文也调不了取回，只能瞎猜。放回时用入库时的块结构，图片与文字的位置关系不变。
   function expandRetained(messages) {
     var out = null;
     var left = PIN_BUDGET_CHARS;
     for (var i = 0; i < messages.length; i++) {
       var message = messages[i];
-      if (!message || message.role !== 'toolResult') continue;
-      if (!Array.isArray(message.content) || message.content.length === 0) continue;
-      var full = giants.get(String(message.toolCallId));
-      if (full === undefined) continue;
-      var preview = '';
-      var others = [];
-      for (var pb = 0; pb < message.content.length; pb++) {
-        var part = message.content[pb];
-        if (part && part.type === 'text' && typeof part.text === 'string') preview += part.text;
-        else others.push(part);
-      }
-      if (full.length <= preview.length) continue;
-      if (full.length - preview.length > left) continue;
-      left -= full.length - preview.length;
+      if (!message || message.role !== 'toolResult' || !Array.isArray(message.content) || message.content.length === 0) continue;
+      var giant = giants.get(String(message.toolCallId));
+      if (!giant || !Array.isArray(giant.blocks) || giant.blocks.length === 0) continue;
+      var preview = textOf(message.content).length;
+      if (!(giant.text.length > preview) || giant.text.length - preview > left) continue;
+      left -= giant.text.length - preview;
       if (out === null) out = messages.slice();
-      // 图片等非文本块照旧留着：被截断的只有文本，原文也只会存文本。
-      out[i] = Object.assign({}, message, { content: [{ type: 'text', text: full }].concat(others) });
+      out[i] = Object.assign({}, message, { content: giant.blocks });
     }
     return out === null ? undefined : out;
   }
 
-  // 取回工具的 call_id 有 4096 字符上限，别名可能超出这个额度，也可能遮住真实调用 id。
-  var MAX_CALL_ID_CHARS = 4096;
-  function batchAlias(ids, liveIds) {
-    // 可读形式 batch:<首条 id> 要同时满足：不超取回参数上限、不被某条真实调用 id 遮住
-    // （provider 的 id 本身可能就是 batch: xxx）。都不满足时退回整批成员的指纹。
-    var plain = 'batch:' + String(ids[0]);
-    if (plain.length <= MAX_CALL_ID_CHARS && liveIds[plain] !== true) return plain;
-    var hash = 2166136261;
-    var joined = ids.join('\u0000');
-    for (var i = 0; i < joined.length; i++) {
-      hash ^= joined.charCodeAt(i);
-      hash = Math.imul(hash, 16777619) >>> 0;
-    }
-    var alias = 'batch:' + hash.toString(16);
-    var attempt = 0;
-    while (liveIds[alias] === true && attempt < 8) {
-      attempt += 1;
-      alias = 'batch:' + hash.toString(16) + '.' + attempt;
-    }
-    return alias;
+  /**
+   * 登记一次删除：返回稳定的 refId。成员集合只用来让同一批在后续投影里复用同一个 id，
+   * 身份本身在这里分配（不能复用真实调用 id，否则会被它遮住；也不截断拼接，否则撞名）。
+   */
+  function admitRef(ids, liveIds) {
+    var key = ids.join('\u0000');
+    var known = refByKey[key];
+    if (known !== undefined) return known;
+    var refId;
+    do {
+      refSeq += 1;
+      refId = 'r' + refSeq;
+    } while (liveIds[refId] === true || refs.has(refId) || refLegacy[refId] !== undefined);
+    refs.set(refId, { ids: ids.slice() });
+    refByKey[key] = refId;
+    // 旧记录的兼容入口：本进程内更早渲染过的 batch:<首条 id> 仍能打开同一批。
+    refLegacy['batch:' + String(ids[0])] = refId;
+    return refId;
+  }
+
+  function refIdOf(entryId) {
+    if (refs.has(entryId)) return entryId;
+    var legacy = refLegacy[entryId];
+    return legacy === undefined ? null : legacy;
   }
 
   function foldable(id) {
@@ -498,20 +497,22 @@ export default function (pi) {
   }
 
   /** Admit a giant payload; evict oldest entries until the aggregate bound holds. */
-  function admitGiant(id, text) {
+  function admitGiant(id, text, blocks) {
     if (text.length > GIANT_BUDGET_CHARS) return false; // a single payload over budget is never retained
     if (giants.has(id)) {
-      giantBytes -= giants.get(id).length;
+      giantBytes -= giants.get(id).text.length;
       giants.delete(id);
     }
-    giants.set(id, text);
+    // 同时留住块结构：只存拼好的文本，还原时无法把文字放回图片/字幕之间的原位。
+    giants.set(id, { text: text, blocks: blocks || [{ type: 'text', text: text }] });
     giantBytes += text.length;
     while (giants.size > 1 && (giants.size > GIANT_KEEP || giantBytes > GIANT_BUDGET_CHARS)) {
       var oldest = giants.keys().next().value;
-      giantBytes -= giants.get(oldest).length;
+      giantBytes -= giants.get(oldest).text.length;
       giants.delete(oldest);
     }
-    return giants.get(id) === text;
+    var stored = giants.get(id);
+    return Boolean(stored) && stored.text === text;
   }
 
   // -----------------------------------------------------------------------
@@ -532,8 +533,8 @@ export default function (pi) {
     }
     if (total <= INGEST_LIMIT) return null;
     var full = textOf(blocks);
-    admitGiant(id, full);
-    var retained = giants.get(id) === full;
+    admitGiant(id, full, blocks);
+    var retained = (giants.get(id) || {}).text === full;
     var kept = 0;
     var truncated = 0;
     var parts = [];
@@ -610,7 +611,8 @@ export default function (pi) {
     // The registry holds the FULL text of an ingestion-truncated payload (the transcript
     // only has the preview). Prefer it, and combine it with the call block so recovery
     // returns arguments + result as the tool promises.
-    var giant = giants.has(key) ? giants.get(key) : null;
+    var giantEntry = giants.has(key) ? giants.get(key) : null;
+    var giant = giantEntry === null ? null : giantEntry.text;
     // Evicted/lost giant with only the truncation preview in context (the marker ends
     // the text): refuse rather than serve the preview as the original.
     if (giant === null && truncatedPreview) {
@@ -653,7 +655,8 @@ export default function (pi) {
   // 整批取回：按批内顺序把每条往返的原文拼起来，交给同一条分页逻辑。
   // shortcut: 一次拼完整批；批总量到几 MB 时会有几十毫秒开销，需要再优化时改成分段拼。
   function batchOriginal(batchId) {
-    var ids = batchCalls[batchId] || [];
+    var entry = refs.get(refIdOf(batchId) || '');
+    var ids = entry ? entry.ids : [];
     var parts = [];
     var missing = [];
     for (var i = 0; i < ids.length; i++) {
@@ -719,8 +722,9 @@ export default function (pi) {
     execute: async function (_toolCallId, params) {
       var id = params && typeof params.call_id === 'string' ? params.call_id : '';
       if (!id) throw new Error('call_id is required');
-      if (batchCalls[id] && foldedIds[id] === undefined) {
-        var batch = batchOriginal(id);
+      var batchRef = refIdOf(id);
+      if (batchRef !== null && foldedIds[id] === undefined) {
+        var batch = batchOriginal(batchRef);
         if (batch.recovered === 0) return { content: [{ type: 'text', text: 'Cannot recover ' + id + ': ' + batch.text }], isError: true };
         return readSlice(id, batch.text, params);
       }
@@ -742,7 +746,7 @@ export default function (pi) {
         // 再拼一次调用说明与参数（续读的 offset 随之失真）。
         if (raw.length <= PIN_BUDGET_CHARS && raw.length <= RECOVERY_READ_MAX_CHARS) {
           pinOriginal(id);
-        } else if (!admitGiant(String(id), String(original.result || ''))) {
+        } else if (!admitGiant(String(id), String(original.result || ''), [{ type: 'text', text: String(original.result || '') }])) {
           // 转存被拒（超出内存预算）时不能退回钉住：那等于让一次取回把整段原文塞回
           // 上下文，把读上限和 pin 预算一起作废。这里 fail-closed，保持折叠并说明原因。
           return { content: [{ type: 'text', text: 'Cannot recover ' + id + ': the payload is over the retention budget, so it was not retained; re-run the command instead.' }], isError: true };
@@ -825,9 +829,18 @@ export default function (pi) {
         var prunedBatch = Object.create(null);
         for (var pb2 in pruned) if (foldedBatch[pb2] !== undefined) prunedBatch[pb2] = foldedBatch[pb2];
         foldedBatch = prunedBatch;
-        var liveBatches = Object.create(null);
-        for (var pb3 in prunedBatch) liveBatches[prunedBatch[pb3]] = true;
-        for (var pb4 in batchCalls) if (!liveBatches[pb4]) delete batchCalls[pb4];
+        for (var pb4 = 0; pb4 < Object.keys(foldedBatch).length; pb4 += 0) break;
+        refs.forEach(function (entry, refId) {
+          var alive = false;
+          for (var ri = 0; ri < entry.ids.length; ri++) if (foldedIds[entry.ids[ri]] !== undefined) { alive = true; break; }
+          if (!alive) refs.delete(refId);
+        });
+        refByKey = Object.create(null);
+        refLegacy = Object.create(null);
+        refs.forEach(function (entry, refId) {
+          refByKey[entry.ids.join('\u0000')] = refId;
+          refLegacy['batch:' + String(entry.ids[0])] = refId;
+        });
       }
       var batchIds = [];
       for (var m = 0; m < candidates.length; m++) {
@@ -837,20 +850,18 @@ export default function (pi) {
       for (var lv = 0; lv < trips.length; lv++) {
         for (var lc = 0; lc < trips[lv].calls.length; lc++) liveIds[String(trips[lv].calls[lc].id)] = true;
       }
-      var batchId = batchAlias(batchIds, liveIds);
+      var batchId = admitRef(batchIds, liveIds);
       for (var m2 = 0; m2 < candidates.length; m2++) {
         for (var mi2 = 0; mi2 < candidates[m2].calls.length; mi2++) {
           var bc = String(candidates[m2].calls[mi2].id);
           markFolded(bc, candidates[m2].sizes[bc] || 0, batchId);
         }
       }
-      batchCalls[batchId] = batchIds;
     }
 
-    var replaced = Object.create(null);
-    var dropped = Object.create(null);
+    var plan = new Array(messages.length);   // undefined = keep, 'drop', or { message }
+    var records = Object.create(null);
     var groups = Object.create(null);
-    var synthetic = new Set();
     var dirty = false;
     for (var g = 0; g < trips.length; g++) {
       var unit = trips[g];
@@ -860,7 +871,7 @@ export default function (pi) {
       var groupId = droppableBatch(unit);
       if (groupId !== null) {
         var group = groups[groupId];
-        if (!group) group = groups[groupId] = { first: groupId, dropped: 0, chars: 0, names: Object.create(null), slot: -1 };
+        if (!group) group = groups[groupId] = { ref: groupId, dropped: 0, chars: 0, names: Object.create(null), slot: -1 };
         group.slot = Math.max(group.slot, unit.end);
         group.dropped += 1;
         group.chars += unit.chars;
@@ -879,11 +890,11 @@ export default function (pi) {
           keepBlocks.push(keptBlock);
         }
         if (keepBlocks === null) {
-          dropped[unit.start] = true;
+          plan[unit.start] = 'drop';
         } else {
-          replaced[unit.start] = Object.assign({}, assistant, { content: keepBlocks });
+          plan[unit.start] = { message: Object.assign({}, assistant, { content: keepBlocks }) };
         }
-        for (var d2 = 0; d2 < unit.indexes.length; d2++) dropped[unit.indexes[d2]] = true;
+        for (var d2 = 0; d2 < unit.indexes.length; d2++) plan[unit.indexes[d2]] = 'drop';
         dirty = true;
         continue;
       }
@@ -912,7 +923,7 @@ export default function (pi) {
       // Fold per call, not per trip: a pinned call keeps its own payload verbatim while
       // its parallel siblings stay folded.
       if (argsReplaced) {
-        replaced[unit.start] = Object.assign({}, assistant, { content: nextContent });
+        plan[unit.start] = { message: Object.assign({}, assistant, { content: nextContent }) };
         dirty = true;
       }
       for (var r = 0; r < unit.results.length; r++) {
@@ -921,26 +932,33 @@ export default function (pi) {
         if (!entry || !entry.foldResult) continue;
         var record = foldedResult(result, entry.call, entry.argsFolded);
         if (!record) continue;
-        replaced[unit.indexes[r]] = record;
+        plan[unit.indexes[r]] = { message: record };
         dirty = true;
       }
     }
 
     if (!dirty) return undefined;
-    // One marker per batch, at the last slot it replaced: earlier markers keep their bytes,
+    // One record per batch, at the last slot it replaced: earlier records keep their bytes,
     // so folding a new batch never rewrites an old one.
-    var markers = Object.create(null);
     for (var batchKey in groups) {
       var batchGroup = groups[batchKey];
-      var marker = { role: 'assistant', content: [{ type: 'text', text: batchRecordText(batchGroup) }] };
-      markers[batchGroup.slot] = marker;
-      synthetic.add(marker);
+      records[batchGroup.slot] = { role: 'assistant', content: [{ type: 'text', text: batchRecordText(batchGroup) }] };
     }
+
+    // ---- 执行：单遍按输入顺序走。记录行插在自己的槽位，来源索引单调递增，所以输出
+    // 里每个块的相对次序必然是输入的子序列（重排类漏洞无从发生）。----
     var final = [];
+    var sources = [];
+    var synthetic = new Set();
     for (var fi = 0; fi < messages.length; fi++) {
-      if (markers[fi]) final.push(markers[fi]);
-      if (dropped[fi]) continue;
-      final.push(replaced[fi] || messages[fi]);
+      if (records[fi]) {
+        final.push(records[fi]);
+        synthetic.add(records[fi]);
+      }
+      var op = plan[fi];
+      if (op === 'drop') continue;
+      final.push(op ? op.message : messages[fi]);
+      sources.push(fi);
     }
     // Dropping a trip removes the messages between two assistant turns, so two assistant
     // messages can land next to each other. Providers reject that: fold the older record
@@ -957,9 +975,9 @@ export default function (pi) {
       }
       merged.push(current);
     }
-    // 只允许变小：任何入口将来漏了限额（新内容类型、新的折叠分支、异常回退），都在
-    // 这里退回原样，而不是把上下文撑大。这是投影层的最后一道闸。
+    // 出口不变量：不放大 + 保序。任一失败退回原文（deny-by-default），不把错误折进去。
     if (contentChars(merged) > contentChars(messages)) return undefined;
+    for (var si = 1; si < sources.length; si++) if (sources[si] <= sources[si - 1]) return undefined;
     return { messages: merged };
   });
 }
