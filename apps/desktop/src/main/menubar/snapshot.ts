@@ -501,7 +501,7 @@ class Builder {
     return this.input.settings.privacy ? { label: source.brand } : source.shared;
   }
 
-  /** Short name under a tube and in sentences: the other computer, else the account handle, else the brand. */
+  /** Compact tube identity: the other computer, else the account handle, else the brand. */
   private baseName(source: MenubarSourceInput): string {
     if (source.kind === 'subscription') return this.sharedIdentity(source)?.label ??
       (source.pooled ? this.handle(source) ?? source.device?.name : source.device?.name ?? this.handle(source)) ?? source.brand;
@@ -513,7 +513,8 @@ class Builder {
     const name = this.baseName(source);
     if (source.kind !== 'subscription' || !source.pooled || source.shared) return name;
     const peers = this.input.sources.filter((candidate): candidate is MenubarSubscriptionInput =>
-      candidate.kind === 'subscription' && !!candidate.pooled && !candidate.shared && this.baseName(candidate) === name);
+      candidate.kind === 'subscription' && !!candidate.pooled && !candidate.shared
+      && candidate.family === source.family && this.baseName(candidate) === name);
     if (peers.length < 2) return name;
     const plan = source.plan?.trim() || '';
     const samePlan = peers.filter(candidate => (candidate.plan?.trim() || '') === plan);
@@ -524,6 +525,25 @@ class Builder {
       : '';
     const qualifier = [plan, ordinal].filter(Boolean).join(' ');
     return qualifier ? `${qualifier} · ${name}` : name;
+  }
+
+  /** Sentences have no provider icon: name the service before any account qualifier. */
+  private headlineName(source: MenubarSourceInput): string {
+    if (source.kind !== 'subscription') return this.who(source);
+    const shared = this.sharedIdentity(source);
+    if (shared) return shared.label;
+    const plan = source.plan?.trim() || '';
+    const title = [source.brand, plan].filter(Boolean).join(' ');
+    const peers = this.visibleSubscriptions().filter(candidate => !candidate.shared
+      && candidate.family === source.family && (candidate.plan?.trim() || '') === plan);
+    if (peers.length < 2) return title;
+    const name = this.baseName(source);
+    const sameName = peers.filter(candidate => this.baseName(candidate) === name);
+    const ordinal = sameName.length > 1
+      ? String(sameName.map(candidate => candidate.id).sort().indexOf(source.id) + 1)
+      : '';
+    const identity = [ordinal, name].filter(Boolean).join(' · ');
+    return `${title} · ${identity}`;
   }
 
   private sourceTitle(source: MenubarSourceInput): string {
@@ -608,11 +628,11 @@ class Builder {
     const parts: string[] = [];
     if (big) {
       const first = big.sources[0]!;
-      const name = big.sources.length > 1 ? first.brand : this.who(first);
+      const name = big.sources.length > 1 ? first.brand : this.headlineName(first);
       parts.push(this.t('headline.restore', { name, duration: this.duration(big.atMs - this.input.nowMs) }));
     }
     // A source already named for its reset does not also need "running low".
-    if (soon && !big?.sources.includes(soon.source)) parts.push(this.t('headline.soon', { name: this.who(soon.source) }));
+    if (soon && !big?.sources.includes(soon.source)) parts.push(this.t('headline.soon', { name: this.headlineName(soon.source) }));
     const sentence = (items: string[]): string | null =>
       items.length ? this.t('headline.sentence', { text: items.join(this.t('headline.joiner')) }) : null;
     if (!recommended) {
@@ -641,7 +661,7 @@ class Builder {
       };
     }
     return {
-      primary: this.t('headline.recommend', { name: this.who(recommended) }),
+      primary: this.t('headline.recommend', { name: this.headlineName(recommended) }),
       secondary: sentence(parts),
       alert: parts.length > 0,
     };

@@ -60,6 +60,24 @@ function input(sources: MenubarSourceInput[], options: { locale?: SupportedLocal
 }
 
 describe('buildMenubarView', () => {
+  // #10935, unit: existing pool tests only compared accounts within one brand.
+  // Minimal failure: two brands reuse a handle; production panel copy must name
+  // the service, while its narrow cells and phone-widget projection stay compact.
+  it.each([false, true])('names the recommended subscription across brands (privacy=%s)', privacy => {
+    const sources = [
+      codex('claude', 60, { family: 'claude', logoSvg: familyLogo('claude'), brand: 'Claude', plan: 'Pro', pooled: true, account: 'shared@example.com' }),
+      codex('codex', 40, { plan: 'Plus', pooled: true, account: 'shared@example.com' }),
+      codex('grok', 10, { family: 'grok', logoSvg: familyLogo('grok'), brand: 'Grok', plan: null, pooled: true, account: 'shared@example.com' }),
+    ];
+    const view = buildMenubarView(input(sources, { locale: 'zh-CN', settings: { privacy } }));
+    expect(view.headlinePrimary).toBe('Grok 余量最足。');
+    const names = sources.map(() => privacy ? 's•••d' : 'shared');
+    expect(view.sources.map(source => source.name)).toEqual(names);
+    expect(buildUsageWidgetSnapshot(view, NOW, key => rawMainString(key, 'zh-CN'))?.sources.map(source => source.name)).toEqual(names);
+    const hidden = buildMenubarView(input(sources, { settings: { hidden: ['grok'] } }));
+    expect(hidden.headlinePrimary).toBe('Codex Plus has the most left.');
+  });
+
   // Unit: selecting all devices must preserve the currency of local task rates, including the status item.
   it('keeps a two-dollar local task in USD while the all-device overview displays CNY', () => {
     const data = input([], { settings: { scope: 'all' } });
@@ -101,27 +119,29 @@ describe('buildMenubarView', () => {
     const handle = privacy ? 's•••e' : 'same';
     const names = [`Plus · ${handle}`, `Team · ${handle}`];
     expect(view.sources.map(source => source.name)).toEqual(names);
-    expect(view.headlinePrimary).toBe(`${names[1]} has the most left.`);
+    expect(view.headlinePrimary).toBe('Codex Team has the most left.');
     expect(view.manage.map(source => source.title)).toEqual(names);
     expect(buildUsageWidgetSnapshot(view, NOW, key => rawMainString(key, 'en'))?.sources.map(source => source.name)).toEqual(names);
     if (privacy) expect(JSON.stringify(view)).not.toContain('same@example.com');
   });
 
-  it.each(['Team', null])('keeps same-name pool labels distinct and stable when plans match (%s)', plan => {
+  it.each([['Team', false], ['Team', true], [null, false], [null, true]] as const)(
+    'keeps same-name pool labels distinct and stable when plans match (%s, privacy=%s)', (plan, privacy) => {
     const sources = [codex('pool-a', 80, { pooled: true, account: 'same@example.com', plan }),
       codex('pool-b', 20, { pooled: true, account: 'same@example.com', plan })];
     const namesById = (view: ReturnType<typeof buildMenubarView>) => Object.fromEntries(view.sources.map(source => [source.id, source.name]));
-    const view = buildMenubarView(input(sources));
+    const view = buildMenubarView(input(sources, { settings: { privacy } }));
     const prefix = plan ? `${plan} ` : '';
-    expect(namesById(view)).toEqual({ 'pool-a': `${prefix}1 · same`, 'pool-b': `${prefix}2 · same` });
-    const reordered = buildMenubarView(input([...sources].reverse(), { settings: { order: ['pool-b', 'pool-a'] } }));
+    const handle = privacy ? 's•••e' : 'same';
+    expect(namesById(view)).toEqual({ 'pool-a': `${prefix}1 · ${handle}`, 'pool-b': `${prefix}2 · ${handle}` });
+    const reordered = buildMenubarView(input([...sources].reverse(), { settings: { privacy, order: ['pool-b', 'pool-a'] } }));
     expect(namesById(reordered)).toEqual(namesById(view));
-    expect(reordered.headlinePrimary).toBe(`${prefix}2 · same has the most left.`);
+    expect(reordered.headlinePrimary).toBe(`Codex${plan ? ` ${plan}` : ''} · 2 · ${handle} has the most left.`);
   });
 
   it('recommends the source with the most room and outlines its tube', () => {
     const view = buildMenubarView(input([codex('alpha', 80), codex('beta', 20)]));
-    expect(view.headlinePrimary).toBe('beta has the most left.');
+    expect(view.headlinePrimary).toBe('Codex Pro · beta has the most left.');
     const beta = view.sources.find((s) => s.id === 'beta');
     expect(beta).toMatchObject({ value: '80', valueUnit: '%', level: 'normal', fill: 0.8, emphasized: true });
     expect(view.sources.find((s) => s.id === 'alpha')?.emphasized).toBe(false);
@@ -362,13 +382,18 @@ describe('buildMenubarView', () => {
     expect(view.details.alpha).toMatchObject({ bigValue: '0', action: { kind: 'open-settings' } });
   });
 
-  it('names when a nearly empty source resets', () => {
-    const low = codex('alpha', 92, {
-      windows: [{ kind: 'session', usedPercent: 92, resetsAtMs: NOW + 3 * HOUR + 5 * 60_000, windowMinutes: 300 }],
+  it.each([
+    { used: 92, kind: 'session' as const, left: 3 * HOUR + 5 * 60_000, minutes: 300,
+      when: '3h 5m', level: 'error', headline: 'Codex Pro · alpha resets in 3h 5m.' },
+    { used: 69, kind: 'week' as const, left: 6 * DAY, minutes: 10_080,
+      when: '6d', level: 'normal', headline: 'Codex Pro · alpha is running low.' },
+  ])('names the subscription in reset and low-quota reminders ($kind)', scenario => {
+    const low = codex('alpha', scenario.used, {
+      windows: [{ kind: scenario.kind, usedPercent: scenario.used, resetsAtMs: NOW + scenario.left, windowMinutes: scenario.minutes }],
     });
     const view = buildMenubarView(input([low, codex('beta', 20)]));
-    expect(view.sources.find((cell) => cell.id === 'alpha')).toMatchObject({ when: '3h 5m', whenLevel: 'normal', level: 'error' });
-    expect(view.headlineSecondary).toBe('alpha resets in 3h 5m.');
+    expect(view.sources.find((cell) => cell.id === 'alpha')).toMatchObject({ when: scenario.when, whenLevel: 'normal', level: scenario.level });
+    expect(view.headlineSecondary).toBe(scenario.headline);
     expect(view.headlineAlert).toBe(true);
   });
 
@@ -384,7 +409,7 @@ describe('buildMenubarView', () => {
 
   it('localizes the headline', () => {
     const view = buildMenubarView(input([codex('alpha', 80), codex('beta', 20)], { locale: 'zh-CN' }));
-    expect(view.headlinePrimary).toBe('beta 余量最足。');
+    expect(view.headlinePrimary).toBe('Codex Pro · beta 余量最足。');
   });
 });
 
@@ -519,8 +544,10 @@ it.each(['ready', 'no-windows', 'label-only'])('hides sharer identity across the
   });
   const visible = buildMenubarView(input([source]));
   expect(visible.sources[0].name).toBe('Private sharer');
+  if (kind !== 'no-windows') expect(visible.headlinePrimary).toBe('Private sharer has the most left.');
   const hidden = buildMenubarView(input([source], { settings: { privacy: true } }));
   expect(hidden.sources[0].name).toBe('Anthropic');
+  if (kind !== 'no-windows') expect(hidden.headlinePrimary).toBe('Anthropic has the most left.');
   expect(hidden.manage.find(row => row.id === source.id)?.title).toBe('Anthropic');
   expect(hidden.details[source.id].title).toBe('Anthropic');
   expect(hidden.details[source.id].facts).toContainEqual(expect.objectContaining({ label: 'Anthropic' }));
