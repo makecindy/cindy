@@ -4440,6 +4440,16 @@
         "groupLocal": "本机模型",
         "metaLocalRecommended": "推荐 · 在 Cindy 内下载",
         "metaLocalConnect": "连接已运行的本机服务",
+        "configurePlugin": "配置",
+        "installAndConfigure": "安装并配置",
+        "pluginLoading": "正在读取插件…",
+        "engineState": {
+          "available": "已就绪",
+          "unavailable": "不可用",
+          "unknown": "等待引擎报告状态"
+        },
+        "retryPlugin": "重试",
+        "officialModelPlugins": "官方模型插件",
         "moreLocal": "更多本机服务"
       },
       "local": {

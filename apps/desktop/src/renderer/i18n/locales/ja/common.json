@@ -4440,6 +4440,16 @@
         "groupLocal": "ローカルモデル",
         "metaLocalRecommended": "おすすめ · Cindy 内でダウンロード",
         "metaLocalConnect": "起動中のローカルサーバーに接続",
+        "configurePlugin": "設定",
+        "installAndConfigure": "インストールして設定",
+        "pluginLoading": "プラグインを読み込み中…",
+        "engineState": {
+          "available": "準備完了",
+          "unavailable": "利用不可",
+          "unknown": "エンジンの状態を確認中"
+        },
+        "retryPlugin": "再試行",
+        "officialModelPlugins": "公式モデルプラグイン",
         "moreLocal": "その他のローカルサーバー"
       },
       "local": {
