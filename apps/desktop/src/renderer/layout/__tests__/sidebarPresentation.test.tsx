@@ -75,6 +75,21 @@ it('ignores a late open reply after the user has already closed', async () => {
   expect(result.current).toEqual({ collapsed: true, instant: false });
 });
 
+// Codex P2: the close supersedes the open, even when the stale reply needs no polling.
+it('does not reopen when a superseded open reply lands at the old target', async () => {
+  const replies: ((delta: number) => void)[] = [];
+  window.electronAPI = { windowSidebarExpansion: vi.fn(() => new Promise<number>((done) => { replies.push(done); })) } as never;
+  const { result, rerender } = renderHook(({ collapsed }) => useSidebarPresentation(root, collapsed, true, width),
+    { initialProps: { collapsed: true } });
+  rerender({ collapsed: false });
+  // Close before the open reply: the viewport never grew, so the stale reply's target is
+  // already the current width and its `finish` commits on the spot.
+  rerender({ collapsed: true });
+  await act(async () => { replies[1](0); replies[0](0); });
+  frame();
+  expect(result.current).toEqual({ collapsed: true, instant: false });
+});
+
 it('releases the frozen layout if the native request fails', async () => {
   window.electronAPI = { windowSidebarExpansion: vi.fn(async () => { throw new Error('unavailable'); }) } as never;
   const { result, rerender } = renderHook(({ collapsed }) => useSidebarPresentation(root, collapsed, true, width),
@@ -131,6 +146,13 @@ it('keeps the window width when a session switch restores the sidebar state', as
 
 // Bug: leaving the chat route retracts the expansion; returning must expand again
 // instead of adopting the shrunken window (repeated navigation narrowed it 1800 → 1399 → 998).
+// Codex P2: a pane that is not on screen is not "already open" — the program open that
+// brings it back owns the source, so it must not widen the window later.
+it('treats an open on a pane that is not shown as a source rewrite', () => {
+  expect(rewritesRevealSource({ visibility: 'open', userInitiated: false, collapsed: false })).toBe(false);
+  expect(rewritesRevealSource({ visibility: 'open', userInitiated: false, collapsed: true })).toBe(true);
+});
+
 it('re-expands when returning to a sidebar route after it was retracted', async () => {
   const resize = vi.fn(async (requested: number, _shrink?: number, adopt?: boolean) => (requested > 0 || adopt ? 401 : 0));
   window.electronAPI = { windowSidebarExpansion: resize } as never;

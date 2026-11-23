@@ -365,6 +365,9 @@ export function MainLayout() {
   const detachedHostSessionIdRef = useRef<string | null>(null);
   const isRightSidebarCollapsedRef = useRef(isRightSidebarCollapsed);
   isRightSidebarCollapsedRef.current = isRightSidebarCollapsed;
+  // 面板此刻是否真的挂在屏幕上。路由离开（/plugins 等接管）后折叠位仍是上次的值，
+  // 只看它会把「程序把面板放出来」误判成幂等的重复 open。
+  const isRightSidebarPaneShownRef = useRef(false);
   const rsbDetachedRef = useRef(rsbDetached);
   rsbDetachedRef.current = rsbDetached;
   // 跨任务的用户开栏手势：导航到目标任务后，那一次记忆恢复仍算用户触发。
@@ -1145,7 +1148,10 @@ export function MainLayout() {
         if (rewritesRevealSource({
           visibility,
           userInitiated,
-          collapsed: isRightSidebarCollapsedRef.current,
+          // 面板没在场（路由退出后还没重新挂上、或正被强制折叠）时，这次 open 就是在把
+          // 它放出来：不是幂等请求，来源必须跟着这次请求走，否则全局面板就绪后会被当成
+          // 用户开栏把窗口拉宽。
+          collapsed: isRightSidebarCollapsedRef.current || !isRightSidebarPaneShownRef.current,
         })) {
           setRightTabsUserToggle(userInitiated);
           // 程序动作(插件 / agent / MCP App)把面板放出来时不占窗口宽度。这一帧可能正好
@@ -1244,6 +1250,7 @@ export function MainLayout() {
       loaded: rsbWindow.loaded,
       detached: rsbDetached,
     });
+  isRightSidebarPaneShownRef.current = rightSidebarMounted && !rightSidebarForceCollapsed;
   const exitRightSidebarMaximize = useCallback(() => setIsRightSidebarMaximized(false), []);
   useRightSidebarMaximizeEscape(isRightSidebarMaximized, exitRightSidebarMaximize);
   // 折叠 RSB / session 切换 / 主路由切走聊天视图 → 自动退出 maximize。

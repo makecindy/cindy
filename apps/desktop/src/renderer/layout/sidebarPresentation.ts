@@ -145,12 +145,14 @@ export function useSidebarPresentation(
       if (pollFrame !== null) cancelAnimationFrame(pollFrame);
     };
     void resize(collapsed ? 0 : expansion.current()).then((delta) => {
-      if (!active) return;
+      // A superseded run (the user closed, or a Settings takeover landed) must not commit
+      // its own visibility when its reply arrives: `active` alone only covers this closure.
+      if (!active || id !== generation.current) return;
       const growth = typeof delta === 'number' ? delta : 0;
       const target = viewport + growth;
       const started = performance.now();
       const finish = () => {
-        if (!active) return;
+        if (!active || id !== generation.current) return;
         // The invoke reply can arrive before Chromium observes the new native bounds.
         // A hidden/closing window must not retain a frozen layout indefinitely.
         if (growth !== 0 && Math.abs(window.innerWidth - target) > 1 && performance.now() - started < 1000) {
@@ -174,6 +176,9 @@ export function useSidebarPresentation(
       ownsWidth.current = false;
       setPresentation({ collapsed, instant: false });
     });
+    // The next state change settles its own request; this one stops waiting for a reply
+    // that would only describe a window rectangle nobody asked for anymore.
+    return stopWaiting;
   }, [collapsed, ready, root, sessionKey, userToggle, retractOnUnready]);
 
   useLayoutEffect(() => () => {
