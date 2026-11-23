@@ -477,11 +477,11 @@ export function NewSessionDefaultsSheet({
               </Pressable>
               {explainOpen ? (
                 <View style={styles.explainBody}>
-                  <Text style={styles.explainSection}>{t('session.new.defaults.explainDeviceTitle')}</Text>
+                  <Text style={styles.explainSectionTitle}>{t('session.new.defaults.explainDeviceTitle')}</Text>
                   <Text style={styles.explainText}>{t('session.new.defaults.explainDeviceEntry')}</Text>
                   <Text style={styles.explainText}>{t('session.new.defaults.explainDeviceRemembered')}</Text>
                   <Text style={styles.explainText}>{t('session.new.defaults.explainDeviceFallback')}</Text>
-                  <Text style={styles.explainSection}>{t('session.new.defaults.explainWorkspaceTitle')}</Text>
+                  <Text style={styles.explainSectionTitle}>{t('session.new.defaults.explainWorkspaceTitle')}</Text>
                   <Text style={styles.explainText}>{t('session.new.defaults.explainWorkspaceEntry')}</Text>
                   <Text style={styles.explainText}>{t('session.new.defaults.explainWorkspaceMode')}</Text>
                   <Text style={styles.explainText}>{t('session.new.defaults.explainWorkspaceProject')}</Text>
@@ -697,7 +697,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   explainBody: {
     paddingBottom: spacing.sm,
   },
-  explainSection: {
+  explainSectionTitle: {
     color: colors.textTertiary,
     fontSize: typeScale.footnote,
     fontWeight: fontWeight.semibold,
