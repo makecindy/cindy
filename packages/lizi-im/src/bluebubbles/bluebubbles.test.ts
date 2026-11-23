@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
+import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import type { IMHost, IMMessageEvent } from '../types.js';
 import { LocalWebhookReceiver } from '../localWebhook.js';
@@ -13,13 +14,14 @@ import { BlueBubblesReceipts, type BlueBubblesState } from './state.js';
 // handling and requester identity absent from other transports' tests; no real contacts.
 const connections: BlueBubblesIM[] = [];
 afterEach(async () => { await Promise.all(connections.splice(0).map(im => im.dispose())); });
-async function fixture(initialState: BlueBubblesState | null = null, media?: IMHost['media'], extraChat = false, files?: IMHost['files']) {
+async function fixture(initialState: BlueBubblesState | null = null, media?: IMHost['media'], extraChat = false,
+  files?: IMHost['files'], groups = false) {
   const secrets = new Map<string, string>();
   let saved: BlueBubblesState | null = initialState;
   let callbackUrl = '';
   let now = 1_000;
-  const chat = { guid: 'any;-;owner@example.test', participants: [{ address: 'owner@example.test', service: 'iMessage' }] };
-  const otherChat = { guid: 'any;-;other@example.test', participants: [{ address: 'other@example.test', service: 'iMessage' }] };
+  const chat = { guid: groups ? 'any;+;example-group' : 'any;-;owner@example.test', participants: [{ address: 'owner@example.test', service: 'iMessage' }] };
+  const otherChat = { guid: groups ? 'any;+;other-group' : 'any;-;other@example.test', participants: [{ address: 'other@example.test', service: 'iMessage' }] };
   const messages = new Map<string, BlueBubblesMessage>();
   const api = new BlueBubblesApi('http://127.0.0.1:1', 'test-only');
   vi.spyOn(api, 'info').mockResolvedValue({ server_version: '1.9.9' });
@@ -61,6 +63,40 @@ async function fixture(initialState: BlueBubblesState | null = null, media?: IMH
 }
 
 describe('BlueBubbles local ingress', () => {
+  // Tier 1: retries of one addressed document must use its durable bridge receipt.
+  // A lost response (including after process restart) must not trigger a second POST.
+  it('reuses direct delivery receipts and leaves an uncertain send pending on retry', async () => {
+    const f = await fixture(null, undefined, true);
+    const text = 'QA morning report — 17°C';
+    const send = (id: string) => f.im.sendDirectDelivery(f.chat.guid, text, id);
+    await expect(send('first-document')).resolves.toEqual({ messageId: 'outbound' });
+    await expect(send('first-document')).resolves.toEqual({ messageId: 'outbound' });
+    await expect(f.im.sendDirectDelivery(f.otherChat.guid, text, 'first-document')).rejects.toThrow('BLUEBUBBLES_SEND_UNKNOWN');
+    await expect(f.im.sendDirectDelivery('any;+;group', text, 'first-document')).rejects.toThrow('BLUEBUBBLES_DIRECT_CHAT_REQUIRED');
+    f.send.mockRejectedValueOnce(new Error('lost response'));
+    await expect(send('second-document')).rejects.toThrow('BLUEBUBBLES_SEND_UNKNOWN');
+    const restored = await fixture(f.state(), undefined, true);
+    await expect(restored.im.sendDirectDelivery(f.chat.guid, text, 'second-document')).rejects.toThrow('BLUEBUBBLES_SEND_UNKNOWN');
+    expect(f.send.mock.calls.map(([chat]) => chat)).toEqual([f.chat.guid, f.chat.guid]);
+    expect(restored.send).not.toHaveBeenCalled();
+  });
+
+  it('keeps confirmed parent lookups scoped through duplicate receipts and a failed echo', async () => {
+    const f = await fixture(null, undefined, true, undefined, true);
+    const receipts = new BlueBubblesReceipts(f.storage, 1_000);
+    const sent = { chatId: f.chat.guid, state: 'sent' as const, messageId: 'confirmed-parent' };
+    receipts.outgoing('first', sent);
+    receipts.outgoing('second', sent);
+    const restored = new BlueBubblesReceipts(f.storage, 1_000);
+    expect(restored.hasSentMessage(f.chat.guid, sent.messageId)).toBe(true);
+    expect(restored.hasSentMessage(f.otherChat.guid, sent.messageId)).toBe(false);
+    restored.recordEcho(f.chat.guid, sent.messageId, 'first', true);
+    expect(restored.hasSentMessage(f.chat.guid, sent.messageId)).toBe(true);
+    restored.recordEcho(f.chat.guid, sent.messageId, 'second', true);
+    expect(restored.hasSentMessage(f.chat.guid, sent.messageId)).toBe(false);
+    expect(new BlueBubblesReceipts(f.storage, 1_000).hasSentMessage(f.chat.guid, sent.messageId)).toBe(false);
+  });
+
   it('loads selected history and the inline reply from the connected chat, including image-only messages', async () => {
     const cacheImage = vi.fn(async ({ token }: { token: string }) => ({ absPath: `/media/${token}`, url: `cindy-media://${token}` }));
     const f = await fixture(null, { cacheImage, getCachedImage: async () => null, resolveMediaUrl: () => null }, true);
@@ -128,6 +164,78 @@ describe('BlueBubbles local ingress', () => {
       { staging: true, shouldReuse: expect.any(Function) });
     expect(download).not.toHaveBeenCalled();
     expect(cacheImage).not.toHaveBeenCalled();
+  });
+
+  it('invokes group replies only for a direct parent confirmed sent by this connection in this chat', async () => {
+    const f = await fixture(null, undefined, true, undefined, true);
+    f.im.onMessage(event => event.delivery?.accept());
+    const another = await fixture(null, undefined, false, undefined, true);
+    f.send.mockResolvedValueOnce({ guid: 'direct-parent' });
+    await f.im.sendText(f.chat.guid, 'confirmed');
+    another.send.mockResolvedValueOnce({ guid: 'other-connection-parent' });
+    await another.im.sendText(another.chat.guid, 'other connection');
+    const receipts = new BlueBubblesReceipts(f.storage, 1_000);
+    receipts.outgoing('unknown-attempt', { chatId: f.chat.guid, state: 'unknown', messageId: 'unknown-parent' });
+    receipts.outgoing('pending-attempt', { chatId: f.chat.guid, state: 'sending', messageId: 'pending-parent' });
+    await f.im.init();
+
+    f.message('direct', { replyToGuid: 'direct-parent' });
+    f.message('both', { replyToGuid: 'direct-parent', text: '@Cindy help' });
+    f.message('nested', { replyToGuid: 'other-member-parent', threadOriginatorGuid: 'direct-parent' });
+    f.message('root-only', { threadOriginatorGuid: 'direct-parent' });
+    f.message('cross-chat', { replyToGuid: 'direct-parent', chats: [f.otherChat] });
+    f.message('other-connection', { replyToGuid: 'other-connection-parent' });
+    f.message('unknown', { replyToGuid: 'unknown-parent' });
+    f.message('pending', { replyToGuid: 'pending-parent' });
+    f.message('plain-text', { text: '@Cindy help' });
+    f.message('quote-text', { text: '> @Cindy help' });
+    f.message('not-allowed', { replyToGuid: 'direct-parent', chats: [{ guid: 'any;+;not-allowed' }] });
+    await Promise.all([f.webhook('direct'), f.webhook('both'), f.webhook('direct'), f.webhook('both')]);
+    await f.im.reconcile();
+    await f.im.reconcile();
+    expect(f.received.filter(event => event.invoked).map(event => event.messageId).sort()).toEqual(['both', 'direct', 'plain-text']);
+    expect(f.received.filter(event => event.ambient).map(event => event.messageId).sort()).toEqual([
+      'cross-chat', 'nested', 'other-connection', 'pending', 'quote-text', 'root-only', 'unknown',
+    ]);
+    expect(f.state().inbox['not-allowed']?.state).toBe('ignored');
+  });
+
+  it('uses only the connected server’s verified address for native mentions and falls back safely when unavailable', async () => {
+    const f = await fixture(null, undefined, false, undefined, true);
+    f.im.onMessage(event => event.delivery?.accept());
+    vi.mocked(f.api.info).mockResolvedValue({ private_api: true, helper_connected: true });
+    const account = vi.spyOn(f.api, 'iMessageAccount').mockResolvedValue({ vetted_aliases: [
+      { Alias: 'Partner@example.test' }, { Alias: '+15551234567' }, { Alias: 'Display Name' }, null,
+    ] });
+    const mention = (address: string) => [{ runs: [] }, { runs: [null, { attributes: {} }, {
+      attributes: { __kIMMentionConfirmedMention: address },
+    }] }];
+    f.message('unconfigured-address', { attributedBody: mention('partner@example.test') });
+    await f.im.reconcile();
+    expect(f.received.at(-1)).toMatchObject({ messageId: 'unconfigured-address', ambient: true });
+    expect(account).not.toHaveBeenCalled();
+    await f.im.updateCredentials({ ...f.im.getEditableConfig(), mentionAddress: 'Partner@example.test' });
+    f.message('right-address', { text: 'Partner help', attributedBody: mention('partner@example.test') });
+    f.message('unbound-alias', { attributedBody: mention('+15551234567') });
+    f.message('wrong-person', { text: 'Partner help', attributedBody: mention('another@example.test') });
+    f.message('wrong-phone', { attributedBody: mention('+15551234568') });
+    f.message('configured-owner', { attributedBody: mention('owner@example.test') });
+    f.message('display-name', { attributedBody: mention('Display Name') });
+    f.message('bold-text', { text: 'Partner help', attributedBody: [{ runs: [{ attributes: { bold: true } }] }] });
+    await f.im.reconcile();
+    expect(f.received.filter(event => event.invoked).map(event => event.messageId)).toEqual(['right-address']);
+    expect(f.received.filter(event => event.ambient)).toHaveLength(7);
+
+    await f.im.updateCredentials({ ...f.im.getEditableConfig(), mentionAddress: '+15551234567' });
+    f.message('bound-phone', { attributedBody: mention('+15551234567') });
+    await f.im.reconcile();
+    expect(f.received.at(-1)).toMatchObject({ messageId: 'bound-phone', invoked: true });
+    account.mockRejectedValue(new Error('helper unavailable'));
+    f.message('unverified-address', { attributedBody: mention('+15551234567') });
+    f.message('text-still-works', { text: '@Cindy help' });
+    await f.im.reconcile();
+    expect(f.received.at(-2)).toMatchObject({ messageId: 'unverified-address', ambient: true, invoked: false });
+    expect(f.received.at(-1)).toMatchObject({ messageId: 'text-still-works', ambient: false, invoked: true });
   });
 
   // Tier 1, PR #10241/r4556881876: a failed candidate edit used to permanently
@@ -908,9 +1016,10 @@ describe('BlueBubbles local ingress', () => {
       expect((await f.webhook(guid)).status).toBe(202);
     }
     await f.im.reconcile();
+    // The note says how to reach the original (2026-11-22: the model had only a file name).
     expect(f.received.map(event => [event.text, event.unsupported])).toEqual([
-      ['missing-size', [{ type: 'oversize', label: 'large.bin' }]],
-      ['zero-size', [{ type: 'oversize', label: 'large.bin' }]],
+      ['missing-size', [{ type: 'oversize', retrievable: true, label: 'large.bin（超过 64 MB，超过直接读取上限；message_id=missing-size，attachment_guid=missing-size；可用 cindy_imessage.fetch_attachment 取原件）' }]],
+      ['zero-size', [{ type: 'oversize', retrievable: true, label: 'large.bin（超过 64 MB，超过直接读取上限；message_id=zero-size，attachment_guid=zero-size；可用 cindy_imessage.fetch_attachment 取原件）' }]],
     ]);
     expect(f.state().inbox['missing-size'].state).toBe('accepted');
     expect(f.state().inbox['zero-size'].state).toBe('accepted');
@@ -922,6 +1031,104 @@ describe('BlueBubbles local ingress', () => {
     expect((await f.webhook('after-oversize')).status).toBe(202);
     await f.im.reconcile();
     expect(f.received.map(event => event.messageId)).toEqual(['missing-size', 'zero-size', 'after-oversize']);
+  });
+
+  // Regression (2026-11-22): BlueBubbles answered a 894 KB photo with a 105 KB copy and the model got it as
+  // the attachment with no hint. A copy shorter than the attachment record is re-read, then labelled with the
+  // original's size and how to fetch it, and never cached as the attachment itself.
+  it('re-reads a short copy, then labels it as a preview of the original', async () => {
+    const cacheImage = vi.fn(async (input: { token: string }) => ({ absPath: `/cache/${input.token}.jpg`, url: `cindy-media://${input.token}` }));
+    const f = await fixture(null, { cacheImage, getCachedImage: async () => null, resolveMediaUrl: () => null });
+    f.im.shortCopyRetryMs = 0;
+    const download = vi.spyOn(f.api, 'download').mockResolvedValue(new Uint8Array(104_970));
+    f.message('photo', { attachments: [{ guid: 'img-1', transferName: 'IMG_0106.jpeg', mimeType: 'image/jpeg', totalBytes: 894_420 }] });
+    expect((await f.webhook('photo')).status).toBe(202);
+    await f.im.reconcile();
+    expect(download).toHaveBeenCalledTimes(3);
+    const event = f.received.find(item => item.messageId === 'photo')!;
+    expect(event.attachments).toHaveLength(1);
+    expect(event.unsupported).toEqual([{ type: 'preview', retrievable: true, label:
+      'IMG_0106.jpeg（本轮附件只有 103 KB，原件 873 KB；message_id=photo，attachment_guid=img-1；可用 cindy_imessage.fetch_attachment 取原件）' }]);
+    expect(cacheImage.mock.calls[0][0].token).toMatch(/:img-1:preview$/);
+
+    download.mockClear();
+    download.mockResolvedValueOnce(new Uint8Array(10)).mockResolvedValueOnce(new Uint8Array(894_420));
+    f.message('photo-2', { attachments: [{ guid: 'img-2', transferName: 'IMG_0107.jpeg', mimeType: 'image/jpeg', totalBytes: 894_420 }] });
+    expect((await f.webhook('photo-2')).status).toBe(202);
+    await f.im.reconcile();
+    const complete = f.received.find(item => item.messageId === 'photo-2')!;
+    expect(download).toHaveBeenCalledTimes(2);
+    expect(complete.unsupported).toEqual([]);
+    expect(cacheImage.mock.calls.at(-1)![0].token).toMatch(/:img-2$/);
+    await f.im.dispose();
+  });
+
+  // Originals stream to disk instead of memory; a runaway transfer stops without leaving a partial file.
+  it('streams an original to its destination and stops at the byte limit', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'bb-stream-'));
+    try {
+      const body = () => new Response(new ReadableStream({ start(controller) {
+        controller.enqueue(new Uint8Array(3)); controller.enqueue(new Uint8Array(4)); controller.close();
+      } }));
+      const api = new BlueBubblesApi('http://127.0.0.1:1', 'test-only', vi.fn<typeof fetch>(async () => body()));
+      const dest = path.join(root, 'clip.mov');
+      await expect(api.downloadToFile('g', dest)).resolves.toBe(7);
+      expect((await fs.stat(dest)).size).toBe(7);
+      // Review (#12146): two concurrent downloads of one original each write their own temporary file.
+      const both = await Promise.all([api.downloadToFile('g', path.join(root, 'twice.mov')), api.downloadToFile('g', path.join(root, 'twice.mov'))]);
+      expect(both).toEqual([7, 7]);
+      expect((await fs.stat(path.join(root, 'twice.mov'))).size).toBe(7);
+      await fs.rm(path.join(root, 'twice.mov'));
+      const capped = path.join(root, 'capped.mov');
+      await expect(api.downloadToFile('g', capped, 5)).rejects.toThrow('BLUEBUBBLES_RESPONSE_TOO_LARGE');
+      expect(await fs.readdir(root)).toEqual(['clip.mov']);
+    } finally { await fs.rm(root, { recursive: true, force: true }); }
+  });
+
+  // fetch_attachment backs on this: only an attachment of a message in this connected chat, streamed to disk.
+  it('fetches an original only for an attachment of a message in that chat', async () => {
+    const f = await fixture();
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'bb-original-'));
+    try {
+      f.message('clip', { attachments: [{ guid: 'mov-1', transferName: 'clip.MOV', totalBytes: 5 }] });
+      const toFile = vi.spyOn(f.api, 'downloadToFile').mockImplementation(async (_guid, dest) => { await fs.writeFile(dest, 'hello'); return 5; });
+      const chat = f.chat.guid;
+      const result = await f.im.fetchAttachment(chat, 'clip', 'mov-1', root);
+      expect(result).toMatchObject({ name: 'clip.MOV', bytes: 5, totalBytes: 5, complete: true });
+      expect(result.path.startsWith(root)).toBe(true);
+      await expect(f.im.fetchAttachment(chat, 'clip', 'other-attachment', root)).rejects.toThrow('BLUEBUBBLES_ATTACHMENT_NOT_IN_CHAT');
+      expect(toFile).toHaveBeenCalledTimes(1);
+      // Review (#12146): a legal 255-byte name still fits with the guid prefix and the download suffix.
+      const real = new BlueBubblesApi('http://127.0.0.1:1', 'test-only', vi.fn<typeof fetch>(async () => new Response('hello')));
+      toFile.mockImplementation((guid, dest) => real.downloadToFile(guid, dest));
+      f.message('long', { attachments: [{ guid: 'mov-2', transferName: `${'a'.repeat(251)}.mov`, totalBytes: 5 }] });
+      const long = await f.im.fetchAttachment(chat, 'long', 'mov-2', root);
+      expect(long).toMatchObject({ bytes: 5, complete: true });
+      expect(long.name.endsWith('.mov')).toBe(true);
+      expect(await fs.readFile(long.path, 'utf8')).toBe('hello');
+      // Review (#12146): GUIDs sharing a prefix with one name keep separate files; Windows-reserved characters are replaced.
+      f.message('pair', { attachments: [
+        { guid: 'AAAAAAAA-1', transferName: 'budget?.pdf', totalBytes: 5 },
+        { guid: 'AAAAAAAA-2', transferName: 'budget?.pdf', totalBytes: 5 },
+      ] });
+      const first = await f.im.fetchAttachment(chat, 'pair', 'AAAAAAAA-1', root);
+      const second = await f.im.fetchAttachment(chat, 'pair', 'AAAAAAAA-2', root);
+      expect(first.path).not.toBe(second.path);
+      expect(path.basename(first.path)).not.toMatch(/[<>:"|?*]/);
+      expect(first.name).toBe('budget_.pdf');
+      // Review (#12146): a preview that finishes after the original never replaces it.
+      const bodies = ['complete', 'pre'];
+      const racing = new BlueBubblesApi('http://127.0.0.1:1', 'test-only', vi.fn<typeof fetch>(async () => new Response(bodies.shift())));
+      toFile.mockImplementation((guid, dest) => racing.downloadToFile(guid, dest));
+      f.message('race', { attachments: [{ guid: 'mov-3', transferName: 'clip.mov', totalBytes: 8 }] });
+      const original = await f.im.fetchAttachment(chat, 'race', 'mov-3', root);
+      const preview = await f.im.fetchAttachment(chat, 'race', 'mov-3', root);
+      expect(original).toMatchObject({ bytes: 8, complete: true });
+      expect(preview).toMatchObject({ bytes: 3, complete: false });
+      expect(preview.path).not.toBe(original.path);
+      expect(await fs.readFile(original.path, 'utf8')).toBe('complete');
+      expect((await fs.readdir(root)).some((entry) => entry.endsWith('.download') || entry.endsWith('.partial'))).toBe(false);
+    } finally { await fs.rm(root, { recursive: true, force: true }); await f.im.dispose(); }
   });
 
   // Tier 1, #9250/r4505831911: failed download/staging has not entered the
@@ -1592,4 +1799,37 @@ it('registers and removes only its exact callback while preserving an existing b
   await api.unregisterWebhook(callback);
   expect(rows.map(row => row.id)).toEqual([1]);
   expect(fetcher.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
+});
+
+// Tier 1: exercise the HTTP error envelope through final delivery and journal reload.
+// The old transport discarded the AppleScript diagnostic and collapsed attachment errors.
+it.each(['text', 'attachment'] as const)('reports a denied Apple event during final %s delivery without replay', async kind => {
+  const f = await fixture();
+  const fetcher = vi.fn(async () => Response.json({ status: 500, message: kind === 'text' ? 'Message Send Error' : 'Attachment Send Error',
+    error: { type: 'iMessage Error', message: 'Command failed: osascript (synthetic)\n12:19: execution error: Not authorized to send Apple events to Messages. (-1743)\n' } }, { status: 500 }));
+  const api = new BlueBubblesApi(f.api.origin, 'test-only', fetcher);
+  f.send.mockImplementation(api.sendText.bind(api));
+  vi.spyOn(f.api, 'sendFile').mockImplementation(api.sendFile.bind(api));
+  const output = { userId: f.chat.guid, terminal: 'done' as const, text: kind === 'text' ? 'sample' : '',
+    mediaAbsPaths: kind === 'attachment' ? [fileURLToPath(new URL('./api.ts', import.meta.url))] : [] };
+  await expect(f.im.commitFinal(output)).rejects.toThrow('BLUEBUBBLES_AUTOMATION_DENIED');
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  const reopened = await fixture(f.state());
+  expect(reopened.im.health()).toMatchObject({ uncertainSends: 1, automationDenied: true });
+  expect(reopened.send).not.toHaveBeenCalled();
+});
+
+it('keeps a generic attachment failure uncertain even when the command quotes a denial', async () => {
+  const f = await fixture();
+  const response = { status: 500, error: { type: 'iMessage Error',
+    message: 'Command failed: osascript -e "execution error: sample (-1743)"\nexecution error: timed out (-1712)' } };
+  const fetcher = vi.fn(async () => Response.json(response, { status: 500 }));
+  const api = new BlueBubblesApi(f.api.origin, 'test-only', fetcher);
+  vi.spyOn(f.api, 'sendFile').mockImplementation(api.sendFile.bind(api));
+  await expect(f.im.commitFinal({ userId: f.chat.guid, terminal: 'done', text: 'sample',
+    mediaAbsPaths: [fileURLToPath(new URL('./api.ts', import.meta.url))] })).rejects.toThrow('BLUEBUBBLES_SEND_UNKNOWN');
+  expect(f.im.health().automationDenied).toBeUndefined();
+  expect(f.im.health().uncertainSends).toBe(1);
+  expect(f.send).toHaveBeenCalledTimes(1);
+  expect(fetcher).toHaveBeenCalledTimes(1);
 });

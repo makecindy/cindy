@@ -53,6 +53,15 @@ it('preserves optional direct-switch generations and accepts legacy requests', (
   expect(() => parseRemoteAgentRequest({ ...request, generation: 'invalid' })).toThrow();
 });
 
+it('negotiates optional reporting on capable peers and bounds authorization messages', () => {
+  const caps = { version: 1, maxRuns: 10, uploadChunkBytes: 1024, maxPayloadBytes: 8192 };
+  expect(parseRemoteAgentCaps(caps).companyTokenReporting).toBeUndefined();
+  expect(parseRemoteAgentCaps({ ...caps, companyTokenReporting: true }).companyTokenReporting).toBe(true);
+  const grant = { op: 'company-reporting-grant', runId, grant: 'test' };
+  expect(parseRemoteAgentRequest(grant)).toEqual(grant);
+  expect(() => parseRemoteAgentRequest({ ...grant, grant: 'x'.repeat(8193) })).toThrow();
+});
+
 describe('subscription Fast policy wire compatibility', () => {
   it('advertises support only with an explicit capability', () => {
     const caps = { version: 1, maxRuns: 10, uploadChunkBytes: 1024, maxPayloadBytes: 8192 };
@@ -288,6 +297,23 @@ describe('remote agent channel', () => {
       reshareBatch: true,
     });
     expect(parseRemoteAgentCaps({ ...caps, reshareBatch: 'yes' })).not.toHaveProperty('reshareBatch');
+  });
+
+  // 协议(protocol-compatibility/plugin-harnesses.md「自己的其他电脑使用插件引擎」)：插件引擎种类只有 open 接受，
+  // 且运行端要先声明 caps.pluginEngines；供应商组分配、备用与分叉仍只认内置引擎，否则会把插件引擎当成某个
+  // 供应商去分配。最小失败输入：agentKind 'acp' 出现在 open 之外的请求里。
+  it('accepts the plugin engine kind on open only and reads the capability that announces it', () => {
+    expect(parseRemoteAgentRequest({ op: 'open', runId, agentKind: 'acp', payload: { json: {} } }))
+      .toEqual({ op: 'open', runId, agentKind: 'acp', payload: { json: {} } });
+    for (const request of [
+      { op: 'allocate', agentKind: 'acp', model: 'model', sessionId: runId },
+      { op: 'standby-prepare', agentKind: 'acp', model: 'model', sessionId: runId },
+      { op: 'fork', request: { sourceSessionId: runId, newSessionId: otherId, agentKind: 'acp', sourceSdkSessionId: 's', model: 'model' } },
+    ]) expect(() => parseRemoteAgentRequest(request)).toThrow('REMOTE_AGENT_INVALID');
+    const caps = { version: 1, agents: [{ kind: 'pi', available: true }, { kind: 'acp', available: true }], maxRuns: 4, uploadChunkBytes: 1024, maxPayloadBytes: 4096 };
+    expect(parseRemoteAgentCaps(caps)).not.toHaveProperty('pluginEngines');
+    expect(parseRemoteAgentCaps({ ...caps, pluginEngines: 'yes' })).not.toHaveProperty('pluginEngines');
+    expect(parseRemoteAgentCaps({ ...caps, pluginEngines: true })).toMatchObject({ pluginEngines: true, agents: [{ kind: 'pi', available: true }] });
   });
 
   it('parses every op and drops unknown fields', () => {

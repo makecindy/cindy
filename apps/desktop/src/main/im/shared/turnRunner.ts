@@ -328,6 +328,7 @@ interface TurnState {
   terminalErrorCode: string | null;
   /** Whether a callback-bound text response has already been reserved. */
   chunkedReplyBegun: boolean;
+  commitChunkedFinal?: ChannelToolScope['commitChunkedFinal'];
   queueMode: 'internal' | 'external';
   /**
    * 授权检查通过的「将要运行」路由(渠道默认跟随会切过去的那条; 未跟随则为 null)。
@@ -687,6 +688,7 @@ export interface ImTurnRunner {
   /** 接管 detach 清理(原 detachFeishuFromSession)— binding cleanup hook 调用。 */
   detachFromSession(sessionId: string): void;
   disposeAllSessions(): Promise<void>;
+  detachIdleCompanionGroup(botContextId: string, chatId: string): void;
   disposeOneSession(sessionId: string): Promise<void>;
   /** Get the live Maker Session for a given DB session id, or null. */
   getMakerSessionById(sessionId: string): MakerSession | null;
@@ -905,9 +907,9 @@ export function createTurnRunner(
   /** 只告警一次的伙伴解析失败(按连接); 恢复后清掉, 下次再失败会再记一次。 */
   const companionFallbackWarned = new Set<string>();
 
-  function companionBotIdFor(botContextId: string): string | null {
+  function companionBotIdFor(botContextId: string, chatId?: string): string | null {
     if (!deps.companion || !adapter.companionLane) return null;
-    return deps.companion.readBinding(botContextId);
+    return deps.companion.readBinding(botContextId, chatId);
   }
 
   /**
@@ -927,7 +929,7 @@ export function createTurnRunner(
     create: boolean,
   ): Promise<RouteTarget | 'absent' | null> {
     const companion = deps.companion;
-    const botId = companionBotIdFor(botContextId);
+    const botId = companionBotIdFor(botContextId, userId);
     if (!companion || !botId || !adapter.companionLane) return null;
     const lane = adapter.companionLane(userId);
     const target: ImCompanionSessionTarget =
@@ -948,7 +950,10 @@ export function createTurnRunner(
         message: err instanceof Error ? err.message : String(err),
       };
     }
-    if (!resolved) return 'absent';
+    if (!resolved) {
+      if (create && adapter.requiresCompanionLane?.(userId)) throw new Error('GROUP_RECIPIENT_UNAVAILABLE');
+      return 'absent';
+    }
     if (resolved.ok) {
       const row = await repo.peekSessionById(resolved.sessionId);
       if (row) {
@@ -963,6 +968,7 @@ export function createTurnRunner(
       }
       resolved = { ok: false, errorCode: 'SESSION_UNAVAILABLE', message: 'companion session row missing' };
     }
+    if (adapter.requiresCompanionLane?.(userId)) throw new Error('GROUP_RECIPIENT_UNAVAILABLE');
     if (!companionFallbackWarned.has(botContextId)) {
       companionFallbackWarned.add(botContextId);
       log.warn(
@@ -986,7 +992,7 @@ export function createTurnRunner(
     userId: string,
   ): Promise<'unbound' | 'owner-dm' | 'rotated'> {
     const companion = deps.companion;
-    const botId = companionBotIdFor(botContextId);
+    const botId = companionBotIdFor(botContextId, userId);
     if (!companion || !botId || !adapter.companionLane) return 'unbound';
     const lane = adapter.companionLane(userId);
     if (lane.kind === 'owner-dm') {
@@ -996,7 +1002,7 @@ export function createTurnRunner(
       return current && current !== 'absent' ? 'owner-dm' : 'unbound';
     }
     const routeKey = companionLaneRouteKey(channel, botContextId, lane);
-    const archived = await companion.archiveLane(routeKey);
+    const archived = channel === 'imessage' ? await companion.archiveLane(routeKey, botId) : await companion.archiveLane(routeKey);
     for (const sessionId of archived) await disposeOneSession(sessionId);
     const fresh = await resolveCompanionRouteTarget(botContextId, userId, undefined, true);
     return fresh && fresh !== 'absent' ? 'rotated' : 'unbound';
@@ -1345,6 +1351,9 @@ export function createTurnRunner(
       terminalKind: 'done',
       terminalErrorCode: null,
       chunkedReplyBegun: false,
+      commitChunkedFinal: output.kind === 'chunked-text'
+        ? (args.channelToolScope?.commitChunkedFinal ?? output.commitFinal.bind(output))
+        : undefined,
       queueMode: args.queueMode,
       followAuthRoute: followTarget ?? null,
       terminalPromise,
@@ -3620,7 +3629,9 @@ export function createTurnRunner(
     if (!t) return;
     state.scheduledTranspond = null; // 防重入(下一条 stray 不会再命中)
     // 静默须在终态事件同步读(run 此时仍在跑)。失败照发；已开卡的不留半截卡。
-    const silenced = !errMsg && isSilencedSchedulerTurn(t.origin);
+    // A teammate's channel lane exists to talk in this chat: a scheduled run there always posts its
+    // result (owner 2026-11-22); silence only quiets desktop notifications.
+    const silenced = !errMsg && state.botLane !== 'channel' && isSilencedSchedulerTurn(t.origin);
     state.pendingTranspondFinals += 1;
     clearSilentStopSettleWait(t);
     clearTranspondTicker(t);
@@ -4114,8 +4125,8 @@ export function createTurnRunner(
       async finalize(finalText: string) {
         if (closed) return;
         closed = true;
-        if (output.kind === 'chunked-text') {
-          await output.commitFinal({
+        if (turn.commitChunkedFinal) {
+          await turn.commitChunkedFinal({
             userId: turn.userId,
             text: finalText,
             terminal: turn.terminalKind,
@@ -4252,8 +4263,8 @@ export function createTurnRunner(
       // 实现兑现)。发送失败只记脱敏日志,不阻塞 settle / 队列放行。
       try {
         const fallbackText = composeStreamingView(turn);
-        if (output.kind === 'chunked-text') {
-          await output.commitFinal({
+        if (turn.commitChunkedFinal) {
+          await turn.commitChunkedFinal({
             userId,
             text: fallbackText,
             terminal: turn.terminalKind,
@@ -5046,6 +5057,13 @@ export function createTurnRunner(
     prewireAttachedSession,
     detachFromSession,
     disposeAllSessions,
+    detachIdleCompanionGroup(botContextId, chatId) {
+      if (bindingStore.get({ channel, botContextId, userId: chatId })) throw new Error('GROUP_HAS_TASK_BINDING');
+      const states = [...sessionStates.entries()].filter(([, state]) => state.botLane === 'channel' && state.userId === chatId);
+      if (states.some(([, state]) => state.queue.length || state.sendQueue.length || state.scheduledTranspond
+        || state.pendingTranspondFinals || state.makerSession.isTurnRunning())) throw new Error('GROUP_BUSY');
+      for (const [id, state] of states) detachSessionStateNow(id, state);
+    },
     disposeOneSession,
     getMakerSessionById,
     vendorOptionsForSession: (sessionId) => {

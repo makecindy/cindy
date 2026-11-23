@@ -9,6 +9,7 @@ export default {
     'Real IPC, browser discovery and device permissions; timeout and stale response behavior is covered by ComputerUseSection.browserHealth.test.tsx',
   cases: {
     default: { about: 'All settings loaded' },
+    'mac-control-permission': { about: 'macOS 27.3 opens the missing control permission for CuaDriver.' },
     'driver-rate-limited': {
       about:
         'cua-driver installed, update check rate-limited by GitHub: the row names the rate limit instead of a generic failure',
@@ -48,6 +49,14 @@ export default {
       name: await ui.t('settings.computerUse.realProfile.toggleAria'),
     });
     if (ui.case === 'default') await loginCopy.waitFor();
+    if (ui.case === 'mac-control-permission') {
+      const pane = page.getByText(await ui.t('macControlPermission.pane'), { exact: true });
+      await pane.scrollIntoViewIfNeeded();
+      assert.ok(await page.getByText(await ui.t('macControlPermission.review', { app: 'CuaDriver' })).isVisible());
+      await ui.capture('driver-permission');
+      await page.getByRole('switch', { name: await ui.t('settings.computerUse.directControl.toggleAria') }).click();
+      await page.waitForFunction(() => document.documentElement.dataset.openedSettings?.endsWith('?Privacy_Accessibility'));
+    }
     if ((ui.case.startsWith('my-browser') || ['browser-updating', 'browser-selection'].includes(ui.case))) {
       await page
         .getByRole('radio', {

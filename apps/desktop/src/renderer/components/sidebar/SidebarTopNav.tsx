@@ -610,7 +610,7 @@ export function SidebarTopNav({
               className={cn(
                 'shrink-0 px-3',
                 searchIndex > 0 && '-mt-1.5',
-                pinSearch && 'sticky top-0 z-30',
+                pinSearch && 'sticky top-0 z-page-overlay',
               )}
               ref={searchRowRef}
             >

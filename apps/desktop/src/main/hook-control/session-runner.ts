@@ -38,7 +38,7 @@ import path from 'node:path';
 
 import { app } from 'electron';
 import { materializeTaskImageTextResult, TASK_IMAGE_MAX_BYTES } from '../cindy-media/taskImageDelivery';
-import { localTaskImagePath, rewriteTaskImageReferences } from '../cindy-media/taskImageMarkdown';
+import { isUnsafeLocalTaskImagePath, localTaskImagePath, rewriteTaskImageReferences } from '../cindy-media/taskImageMarkdown';
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
 import { MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
 
@@ -683,7 +683,7 @@ async function collectOutboundForFinalText(
   const oversizedLocalImages = new Set<string>();
   for (const failed of 'failures' in materialized ? materialized.failures : []) {
     const absPath = localTaskImagePath(failed);
-    if (!absPath) continue;
+    if (!absPath || isUnsafeLocalTaskImagePath(absPath)) continue;
     try {
       if ((await fs.stat(absPath)).size > TASK_IMAGE_MAX_BYTES) oversizedLocalImages.add(absPath);
     } catch { /* 文件已不在: 按普通的未能发送提示 */ }

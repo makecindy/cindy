@@ -343,3 +343,128 @@ test('an expired browser pairing keeps the page and can reconnect after pairing 
   assert.ok(b.calls.every(c => !c.url.includes('/enqueue')));
   assert.deepEqual(b.redirects, []);
 });
+
+/*
+ * 甲-1 (release table): the Host web page runs a prebuilt renderer whose TapDB collector was fixed
+ * when it was built; the Host must not add a cross-region upload of the signed-in account's usage.
+ * Production entry: the real shim bundle plus the real vendored TapDB SDK, initialized the way the
+ * renderer's tapdbClient does (ajax, device_login). The fake collector is the page's own
+ * XMLHttpRequest, navigator.sendBeacon and image pixel, recording what would leave the browser.
+ * Gap: the shim tests above stub no network primitives, and the renderer's TapDB tests run in
+ * Electron where the build region and the account region are checked by the Desktop.
+ * Minimal failure: account realm cn, renderer collector global: any recorded request is a leak.
+ * Tier: unit (vm, no sockets).
+ */
+// Bundled once, only by the test that needs it (the other shim tests do not pay for it).
+let tapdbSdk;
+async function loadTapdbSdk() {
+  const { build: bundle } = await import('esbuild');
+  tapdbSdk ??= (await bundle({
+    entryPoints: [fileURLToPath(new URL('../../desktop/src/renderer/vendor/tapdb/tapdb.esm.min.js', import.meta.url))],
+    bundle: true, write: false, format: 'iife', globalName: 'TapDBLib', platform: 'browser', logLevel: 'silent',
+  })).outputFiles[0].text;
+}
+const COLLECTOR = { cn: 'https://e.tapdb.com/event', global: 'https://e.tapdb.ap-sg.tapapis.com/event' };
+
+function analyticsPage(auth, frames = [], authState = { authenticated: Boolean(auth), realm: auth?.realm ?? 'global' }) {
+  const sent = [];
+  class FakeXhr {
+    open(method, url) { this.url = url; }
+    setRequestHeader() {}
+    send() { sent.push(['xhr', this.url]); }
+  }
+  class FakeImage {}
+  Object.defineProperty(FakeImage.prototype, 'src', { configurable: true, set(value) { sent.push(['img', value]); }, get() { return ''; } });
+  const storage = new Map();
+  const timers = [];
+  const window = { addEventListener() {}, removeEventListener() {}, crypto: { randomUUID: () => 'test-id' }, __cindyBoot: { auth } };
+  const context = vm.createContext({
+    window, console, URL, URLSearchParams, TextDecoder, AbortController, JSON, Math, Date, encodeURIComponent, decodeURIComponent,
+    XMLHttpRequest: FakeXhr, HTMLImageElement: FakeImage, Image: FakeImage,
+    navigator: { language: 'en', languages: ['en', 'en'], userAgent: 'test', platform: 'test', clipboard: { writeText() {} },
+      sendBeacon: (url) => { sent.push(['beacon', url]); return true; } },
+    document: { referrer: '', title: 't', URL: 'http://127.0.0.1:1234/', cookie: '', addEventListener() {},
+      createElement: () => ({ dataset: {} }), getElementsByTagName: () => [], head: { appendChild() {} } },
+    location: { href: 'http://127.0.0.1:1234/', protocol: 'http:', host: '127.0.0.1:1234', hostname: '127.0.0.1', pathname: '/', search: '', hash: '', replace() {} },
+    screen: { width: 1, height: 1 },
+    localStorage: { getItem: (k) => storage.get(k) ?? null, setItem: (k, v) => storage.set(k, String(v)), removeItem: (k) => storage.delete(k) },
+    sessionStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+    setTimeout: (fn) => { timers.push(fn); return timers.length; }, clearTimeout() {}, setInterval: () => 0, clearInterval() {},
+    TextEncoder, ReadableStream, Response,
+    // The stream's opening /api/auth/state read answers authState; the event stream carries the
+    // frames (auth_changed); every other request stays pending.
+    fetch: (url) => {
+      if (String(url).startsWith('/api/auth/state')) {
+        return Promise.resolve({ ok: true, text: async () => JSON.stringify({ ...authState, user: null, dataOwnerId: null }) });
+      }
+      if (String(url).startsWith('/events')) {
+        // Open (never closed), so the stream reaches its opening auth read for every case.
+        return Promise.resolve(new Response(new ReadableStream({ start(controller) {
+          if (frames.length) controller.enqueue(new TextEncoder().encode(frames.map((frame) => `data: ${JSON.stringify(frame)}\n\n`).join('')));
+        } })));
+      }
+      return new Promise(() => {});
+    },
+  });
+  for (const key of ['XMLHttpRequest', 'HTMLImageElement', 'Image', 'navigator', 'document', 'location', 'localStorage', 'sessionStorage', 'screen']) window[key] = context[key];
+  vm.runInContext(source, context);
+  vm.runInContext(`${tapdbSdk};globalThis.__tapdb = TapDBLib.default;`, context);
+  return { sent, tapdb: context.__tapdb, beacon: (url) => context.navigator.sendBeacon(url), pixel: (url) => { new FakeImage().src = url; } };
+}
+
+test('Host web usage statistics leave only for the signed-in account region', async () => {
+  await loadTapdbSdk();
+  const signedOut = { seq: 1, type: 'auth_changed', authenticated: false, user: null, dataOwnerId: null, realm: 'global' };
+  for (const [label, auth, renderer, leaves, frames] of [
+    ['same region', { realm: 'global' }, 'global', true],
+    ['same region (cn)', { realm: 'cn' }, 'cn', true],
+    ['account cn, renderer global', { realm: 'cn' }, 'global', false],
+    ['account global, renderer cn', { realm: 'global' }, 'cn', false],
+    ['no signed-in account', undefined, 'global', false],
+    // auth_changed keeps the stored realm when signed out; the shim must not keep reporting.
+    ['signed out after boot', { realm: 'global' }, 'global', false, [signedOut]],
+  ]) {
+    const page = analyticsPage(auth, frames);
+    for (let n = 0; n < 40; n++) await Promise.resolve();
+    page.tapdb.init({ appId: 'fixture-app', serverUrl: COLLECTOR[renderer], send_method: 'ajax', textContent: 'form',
+      isInitDeviceLogin: true, autoTrack: { pageShow: false, pageHide: false } });
+    page.tapdb.optInTracking();
+    page.tapdb.setUser('fixture-member');
+    page.tapdb.track('fixture_event');
+    page.beacon(COLLECTOR[renderer]);
+    page.pixel(COLLECTOR[renderer]);
+    const toCollector = page.sent.filter(([, url]) => String(url).startsWith(new URL(COLLECTOR[renderer]).origin));
+    if (leaves) {
+      assert.ok(toCollector.some(([kind]) => kind === 'xhr'), `${label}: the SDK reports through XHR`);
+      assert.ok(toCollector.some(([kind]) => kind === 'beacon') && toCollector.some(([kind]) => kind === 'img'), label);
+    } else {
+      assert.deepEqual(toCollector, [], `${label}: nothing reaches the other region's collector`);
+    }
+    // Other origins are untouched by the guard.
+    page.beacon('https://example.invalid/collect');
+    assert.deepEqual(page.sent.at(-1), ['beacon', 'https://example.invalid/collect'], label);
+  }
+});
+
+// 并存方案 A 的 W（审核方 2026-11-17 定）：网页端把 Host 的 typed 错误体还原成 `[CODE] message`（带 code），
+// 让 renderer 共用的解码（公共映射、发送失败横幅）按窗口那样认出“桌面版占用数据”的拒绝；之前用户看到的是
+// 一段 JSON。启动被拒的 409 带原因码时与窗口的 host-ipc-proxy 同样加标记。其余错误体与之前完全相同。
+test('typed Host errors reach the renderer as [CODE] message; other failures as before', async () => {
+  let reply;
+  const b = browser(() => reply());
+  const answer = (status, body) => () => new Response(typeof body === 'string' ? body : JSON.stringify(body), { status });
+  const running = '[PRECONDITION_FAILED] HOST_PROFILE_IN_USE_BY_DESKTOP: In use by the desktop app.';
+  reply = answer(409, { error: 'PRECONDITION_FAILED', message: running });
+  await assert.rejects(b.api.localDb.sessions.list(), { code: 'PRECONDITION_FAILED', message: running });
+  reply = answer(409, { error: 'NOT_FOUND', message: 'Source task is unavailable' });
+  await assert.rejects(b.api.localDb.sessions.list(), { code: 'NOT_FOUND', message: '[NOT_FOUND] Source task is unavailable' });
+  reply = answer(409, { error: 'owner_runtime_unavailable', reason: 'HOST_PROFILE_IN_USE_BY_DESKTOP', message: 'Quit that app, then restart the Host.' });
+  await assert.rejects(b.api.localDb.sessions.list(), { code: 'PRECONDITION_FAILED',
+    message: '[PRECONDITION_FAILED] HOST_PROFILE_IN_USE_BY_DESKTOP_AT_START: Quit that app, then restart the Host.' });
+  for (const [status, body] of [[409, { error: 'owner_runtime_unavailable' }], [500, { error: 'internal_error', message: 'Unexpected error' }],
+    [502, 'Bad gateway'], [409, { error: 'PRECONDITION_FAILED' }]]) {
+    reply = answer(status, body);
+    const text = typeof body === 'string' ? body : JSON.stringify(body);
+    await assert.rejects(b.api.localDb.sessions.list(), { code: `HTTP_${status}`, message: text });
+  }
+});

@@ -436,14 +436,20 @@ func virtualKey(for name: String) throws -> CGKeyCode {
   }
 }
 
-func requireAccessibilityTrusted() throws {
-  guard AXIsProcessTrusted() else {
+// Reading AX context and sending a global key or wheel event have different
+// authorization on newer macOS. Check posting only on input paths.
+func canPostInput() -> Bool {
+  AXIsProcessTrusted() && CGPreflightPostEventAccess()
+}
+
+func requireEventPostingAccess() throws {
+  guard canPostInput() else {
     throw HelperError.accessibilityNotTrusted
   }
 }
 
 func postHardwareKey(name: String) throws {
-  try requireAccessibilityTrusted()
+  try requireEventPostingAccess()
   let virtualKey = try virtualKey(for: name)
   guard let source = CGEventSource(stateID: .privateState),
         let keyDown = CGEvent(keyboardEventSource: source, virtualKey: virtualKey, keyDown: true),
@@ -485,7 +491,7 @@ func keyEventPayload(options: Options) throws -> [String: Any] {
 }
 
 func scrollEventPayload(options: Options) throws -> [String: Any] {
-  try requireAccessibilityTrusted()
+  try requireEventPostingAccess()
   try postScroll(deltaY: options.scrollDeltaY)
   return [
     "ok": true,
@@ -500,7 +506,7 @@ func scrollEventPayload(options: Options) throws -> [String: Any] {
 /// signed pixels/second; we own the 16ms clock so a held stick keeps scrolling
 /// even when the device stops sending move events.
 func runHoldScroll() throws {
-  try requireAccessibilityTrusted()
+  try requireEventPostingAccess()
   let lock = NSLock()
   var velocity = 0
   var stopped = false
@@ -1089,7 +1095,7 @@ func revertEnhancedAxIfNeeded(_ lifecycle: EnhancedAxLifecycle?) {
 func pasteVerifiedPayload(options: Options) -> [String: Any] {
   let totalStartedAt = Date()
   var timings: [String: Int] = [:]
-  guard AXIsProcessTrusted() else {
+  guard canPostInput() else {
     return buildPasteResult(
       outcome: "verified_failure",
       reason: HelperError.accessibilityNotTrusted.description,

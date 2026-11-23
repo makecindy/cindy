@@ -6,6 +6,7 @@ import { isSessionSharedTaskActive } from '../device-link/sharedTaskDispatch.js'
 import { getGoalController } from '../goal-host/index.js';
 import { getSessionRowSnapshot } from '../localDb/sessionDispatchSnapshot.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
+import { isRemoteProviderInvocationAllowed } from '../maker-host/remote-provider-access-store.js';
 import { readWorkerAgentLocations } from '../maker-ipc/workerAgentLocations.js';
 import { getQuotaOverviewService } from '../quota-overview/service.js';
 import { getGatewayModelPricing } from '../usage/modelPricing.js';
@@ -52,6 +53,8 @@ export const resolver = createModelGroupResolver({
   config: readModelGroupsConfig,
   recordDecision: recordModelGroupDecision,
   views: () => getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true }),
+  // 另一台电脑借这台跑 Agent 时只用开了「允许被远程调用」的连接(与设置里那个开关同一份)。
+  remoteInvocable: isRemoteProviderInvocationAllowed,
   agents: getPluginModelPickerAgents,
   // 别的电脑上的引擎问那台的 maker:agent:status，与插件选路同一判断。
   harnessInstalled: (agent, agentDeviceId) => isPluginRouteHarnessInstalled(agent, agentDeviceId, async (deviceId, name) => {
@@ -85,4 +88,19 @@ const switchOfferDeps = {
 
 export function readModelGroupRecoveryOffer(sessionId: string, recovery?: NonNullable<Parameters<typeof computeModelGroupSwitchOffer>[2]>) {
   return computeModelGroupSwitchOffer(switchOfferDeps, sessionId, recovery);
+}
+
+/**
+ * 伙伴与定时任务按组的规则挑一个来源(model-groups.md §6.2)：与新任务同一个解析，不限运行位置。
+ * 组已删除或此刻都用不了时为 null，调用方沿用存下的具体模型。dryRun 只看会选谁；否则 `commit`
+ * 要在这个来源真的用上之后再调(推进「轮流」、记进「最近的选择」)。
+ */
+export async function pickModelGroupRoute(groupId: string, options: { dryRun: boolean }) {
+  const result = await resolver.resolve({ selection: { type: 'route', id: groupId }, dryRun: options.dryRun });
+  if (result.outcome !== 'routed') return null;
+  const { decisionId } = result;
+  return {
+    route: result.route,
+    commit: () => { if (decisionId) resolver.commit(decisionId); },
+  };
 }

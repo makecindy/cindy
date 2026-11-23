@@ -41,7 +41,7 @@ export function ProviderRow({
       disabled={busy || buttonProps.disabled}
       aria-busy={busy}
       className={cn(
-        'flex w-full items-center gap-2.5 rounded-lg px-2 py-[7px] text-left transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
+        'flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
         className,
       )}
     >
@@ -62,7 +62,7 @@ export function ProviderRow({
         {name}
       </span>
       {beta && (
-        <span className="shrink-0 rounded-full border border-[var(--settings-badge-border)] bg-[var(--settings-badge-bg)] px-2 py-[1px] text-10 font-medium uppercase leading-[1.5] tracking-wide text-[var(--text-secondary)]">
+        <span className="shrink-0 rounded-full border border-[var(--settings-badge-border)] bg-[var(--settings-badge-bg)] px-2 py-px text-10 font-medium uppercase leading-[1.5] tracking-wide text-[var(--text-secondary)]">
           {t('settings.providers.local.beta')}
         </span>
       )}

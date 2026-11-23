@@ -9,7 +9,8 @@ import { quotaLevelFromRemaining } from '@cindy/maker-shared/quota-level';
 import { QUOTA_TEXT_COLOR_CLASSES } from './QuotaBar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { QuotaHoverCard } from './QuotaHoverCard';
-import { formatQuotaResetDuration, type UsageCardAccount } from './usageCardModel';
+import { pluginEngineUsageAccount, pluginEngineUsageBalances } from './pluginEngineUsageAccount';
+import { formatQuotaResetDuration } from './usageCardModel';
 
 /** Mounted only for the visible task. Its React key includes the account device and engine. */
 export function PluginEngineUsageChip({ engineKey, name, deviceId, running }: {
@@ -75,9 +76,7 @@ export function PluginEngineUsageChip({ engineKey, name, deviceId, running }: {
   if (!usage) return null;
   const windows = usage.windows ?? [];
   const current = windows.filter(row => !row.resetsAt || row.resetsAt > now);
-  const balances = (usage.balances ?? []).map(row => t('providerAccountUsage.deepSeek.chipBalance', {
-    balance: new Intl.NumberFormat(i18n.language, { style: 'currency', currency: row.currency, currencyDisplay: 'code' }).format(Number(row.amount)),
-  }));
+  const balances = pluginEngineUsageBalances(usage, i18n.language, t);
   // The compact row names the most constrained group. The full card shows every group.
   const first = current.reduce<typeof current[number] | undefined>((lowest, row) =>
     !lowest || row.remainingPercent < lowest.remainingPercent ? row : lowest, undefined);
@@ -87,16 +86,7 @@ export function PluginEngineUsageChip({ engineKey, name, deviceId, running }: {
   const level = first ? quotaLevelFromRemaining(first.remainingPercent)
     : usage.balances?.[0] && Number(usage.balances[0].amount) <= 0 ? 'crit' : 'normal';
   const title = name || t('quotaCard.usageTitle');
-  const account: UsageCardAccount = {
-    title,
-    updatedAt: usage.updatedAt,
-    windows: current.map((row, index) => ({
-      key: String(index), title: row.label, showRemaining: true,
-      window: { utilization: 100 - row.remainingPercent, resetsAt: row.resetsAt ? row.resetsAt / 1000 : null },
-    })),
-    details: [...balances, ...windows.filter(row => row.resetsAt && row.resetsAt <= now)
-      .map(row => row.label + ' · ' + t('quotaCard.resetPending'))],
-  };
+  const account = pluginEngineUsageAccount(usage, { title, now, language: i18n.language, t });
   return (
     <Popover open={menu.open} onOpenChange={menu.onOpenChange} modal={false}>
       <PopoverTrigger asChild>

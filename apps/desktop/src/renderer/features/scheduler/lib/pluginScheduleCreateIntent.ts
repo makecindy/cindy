@@ -16,6 +16,7 @@ import type { ScheduleFormState } from './scheduleFormLogic';
 
 export interface PluginScheduleCreateIntent {
   kind: 'plugin-schedule-draft';
+  primaryHostKey?: string;
   /** main 铸的请求 id;renderer 用它去重(同一次请求重复推送不叠开面板)。 */
   requestId: string;
   /**
@@ -64,6 +65,7 @@ export function readPluginScheduleCreateIntent(
     !value.name ||
     typeof value.prompt !== 'string' ||
     !value.prompt ||
+    (value.primaryHostKey !== undefined && typeof value.primaryHostKey !== 'string') ||
     (value.intervalMs !== undefined &&
       (typeof value.intervalMs !== 'number' ||
         !Number.isFinite(value.intervalMs) ||
@@ -109,6 +111,7 @@ export function buildPluginScheduleFormOverrides(
   intent: PluginScheduleCreateIntent,
 ): Partial<ScheduleFormState> {
   return {
+    ...(intent.primaryHostKey ? { primaryHostKey: intent.primaryHostKey } : {}),
     name: intent.name,
     prompt: intent.prompt,
     executionMode: 'agent',

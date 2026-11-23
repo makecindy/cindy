@@ -10,6 +10,8 @@ const mocks = vi.hoisted(() => ({
   getAccessToken: vi.fn(),
   refresh: vi.fn(),
   invalidateSession: vi.fn(),
+  ownerScope: 'cloud:account-a:1',
+  ownerInvalidations: new Set<() => void>(),
   logger: {
     debug: vi.fn(),
     error: vi.fn(),
@@ -18,6 +20,15 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('electron', () => ({ net: { fetch: mocks.netFetch } }));
+vi.mock('../appSessionState.js', () => ({
+  activeOwnerScopeKey: () => mocks.ownerScope,
+  getActiveAppSession: () => ({ mode: 'cloud' }),
+  isAppSessionBoundaryPending: () => false,
+  onAppSessionInvalidated: (listener: () => void) => {
+    mocks.ownerInvalidations.add(listener);
+    return () => mocks.ownerInvalidations.delete(listener);
+  },
+}));
 vi.mock('../authManager', () => ({
   getAccessToken: mocks.getAccessToken,
   refresh: mocks.refresh,
@@ -488,6 +499,46 @@ describe('serverApiFetch', () => {
     expect(mocks.refresh).not.toHaveBeenCalled();
     expect(mocks.invalidateSession).not.toHaveBeenCalled();
     expect(mocks.getAccessToken).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['read', 'ACCOUNT_UNAVAILABLE'], ['select', 'TOKEN_EXPIRED'], ['renew', 'ACCOUNT_UNAVAILABLE'],
+  ] as const)('cancels the automation host %s request when its account changes', async (action, code) => {
+    const { pluginAutomationAccount } = await import('../device-link/pluginAutomationHost.desktop.js');
+    mocks.ownerScope = 'cloud:account-a:1';
+    mocks.getAccessToken.mockReturnValue('test-token-a');
+    let finish!: (response: Response) => void;
+    mocks.netFetch.mockReturnValueOnce(new Promise<Response>(resolve => { finish = resolve; }));
+    const account = pluginAutomationAccount('public/cindy-contacts');
+    const requests = {
+      read: () => account.read(),
+      select: () => account.select(1, true),
+      renew: () => account.run('renew', 'test-run', new AbortController().signal),
+    };
+    const pending = requests[action]();
+    expect(mocks.netFetch).toHaveBeenCalledOnce();
+    const requestSignal: AbortSignal = mocks.netFetch.mock.calls[0][1].signal;
+    for (const invalidate of mocks.ownerInvalidations) invalidate();
+    mocks.ownerScope = 'cloud:account-b:2';
+    finish(new Response(JSON.stringify({ error: { code } }), { status: 401 }));
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(requestSignal.aborted).toBe(true);
+    expect(mocks.refresh).not.toHaveBeenCalled();
+    expect(mocks.invalidateSession).not.toHaveBeenCalled();
+    expect(mocks.ownerInvalidations.size).toBe(0);
+  });
+
+  it('retries a host selection for the same account and releases its listener on success', async () => {
+    const { pluginAutomationAccount } = await import('../device-link/pluginAutomationHost.desktop.js');
+    mocks.getAccessToken.mockReturnValue('test-token');
+    mocks.refresh.mockResolvedValueOnce(true);
+    const choice = { revision: 2, selected: true, isPrimary: true, deviceName: 'Home' };
+    mocks.netFetch
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: { code: 'TOKEN_EXPIRED' } }), { status: 401 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(choice)));
+    await expect(pluginAutomationAccount('public/cindy-contacts').select(1, true)).resolves.toEqual(choice);
+    expect(mocks.refresh).toHaveBeenCalledOnce();
+    expect(mocks.ownerInvalidations.size).toBe(0);
   });
 
   it.each(['INVALID_TOKEN', 'UNAUTHORIZED'])('%s refresh 一次后重试', async (code) => {

@@ -1,3 +1,4 @@
+import { primaryHostTargetIsRemote, skipPrimaryHostRun } from './pluginAutomationHostGuard.js';
 import { projectForScheduledTask, type ScheduleProjectLookup } from './scheduleProject.js';
 import { throwIpcError } from '../utils/ipcValidate';
 import { beginQuietScheduledOutput, hidesScheduledTranscript, hasVisibleScheduledOutput, isQuietScheduledOutput } from './silent-output.js';
@@ -295,11 +296,12 @@ export interface SchedulerQueueDeps {
    * active-turn recovery、清会话等),不探测的话 run 会永久挂在等待派发上。
    */
   isPromptTracked(sessionId: string, clientId: string): boolean;
-  /** 普通聊天自动续跑是否已接管当前 scheduler run。 */
+  /** 当前 scheduler run 是否由自动续跑接管。 */
   isAutoResumePending?: (sessionId: string, runId: string) => boolean;
+  isSharedReconnectPending?: (sessionId: string, runId: string) => boolean;
   /** 已接管的续跑最终仍失败（含补发未 dispatch / Stop / clear）。 */
   onAutoResumeFailed?: (
-    sessionId: string, runId: string, listener: (error?: string) => void,
+    sessionId: string, runId: string, listener: (error?: string, stopped?: true) => void,
     quotaWait?: { start(): void; resume(): boolean },
   ) => () => void;
   /** Schedule pause/delete：撤销仍属于该 run 的退避或派发前隐藏续跑。 */
@@ -515,6 +517,7 @@ interface TurnCompletionWaiterOptions {
   origin: { kind: 'scheduler'; scheduleId: string; scheduleName: string; runId: string };
   /** Coordinator queue path has authoritative per-turn origins; direct fallback keeps legacy compatibility. */
   requireTurnOrigin?: boolean;
+  skipStoppedDispatch?: boolean;
   /**
    * Turn-scoped marks that must stop applying the moment this turn ends — not
    * when the fire settles. The session accepts a user message again at `done`,
@@ -1083,6 +1086,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // and service-owned Bot lifecycle separate.
     if (schedule.source !== 'bot' && schedule.targetSessionId) {
       const target = await this.runtime.getSessionRowSnapshot(schedule.targetSessionId);
+      if (primaryHostTargetIsRemote(schedule, target)) return skipPrimaryHostRun(ctx, 'The persistent task moved off the automation host.', schedule.targetSessionId);
       if (target && !schedule.persistentSession && (target.status === 'deleted'
         || (target.status === 'archived' && this.runtime.isManagedScheduledTarget(target)))) {
         return this.retireHeartbeat(schedule, ctx, target.status);
@@ -1285,6 +1289,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
         this.deps.maker.getSessionMeta(sessionId).catch(() => null),
         this.runtime.getSessionRowSnapshot(sessionId),
       ]);
+      if (primaryHostTargetIsRemote(schedule, row) || primaryHostTargetIsRemote(schedule, resolvedSelection)) {
+        return skipPrimaryHostRun(ctx, 'The persistent task moved off the automation host.', sessionId);
+      }
       const archived = !row || row.status === 'archived' || row.status === 'deleted';
       if (archived) {
         holder.releaseAgentSwitchLock?.();
@@ -2356,7 +2363,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         }
         throwIfFireAborted(ctx.signal, 'agent turn dispatch');
       }
-      if (ctx.canDispatch && !ctx.canDispatch()) {
+      if (primaryHostTargetIsRemote(schedule, session) || (ctx.canDispatch && !ctx.canDispatch())) {
         waiter.stopListening();
         ctx.signal.removeEventListener('abort', onAbort);
         return this.deferFire(schedule, session.id, 'routine-dispatch-invalidated');
@@ -2458,7 +2465,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
             await this.deps.beforeDispatchUserTurn(session.id, signal);
             baselineStarted = true;
           }
-          if (ctx.canDispatch && !ctx.canDispatch()) {
+          if (primaryHostTargetIsRemote(schedule, session) || (ctx.canDispatch && !ctx.canDispatch())) {
             // Throw before Session.send reaches its vendor-dispatch boundary. The
             // deferral error is itself an AcceptedCallbackDispatchCancelled, so the
             // direct Session.send path and any accepted-callback wrapper both cancel
@@ -2903,6 +2910,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         failDispatch(error instanceof Error ? error : new Error(String(error)));
       },
       onAccepted: async (queuedPermissions) => {
+        const acceptingReplacement = waiterSlot.current !== null;
         dispatched = true;
         // Queue admission happens while another (possibly user-driven)
         // Desktop turn still owns the session. Only the accepted scheduler
@@ -3050,6 +3058,13 @@ export class MakerScheduleRunner implements ScheduleRunner {
           this.clearPermissionMismatchStreak(schedule.id, ctx.runId);
           acceptedSnapshot = { session: live, ...permissions };
         }
+        if (primaryHostTargetIsRemote(schedule, live)) {
+          const error = new RoutineDispatchDeferredError('Persistent task moved off the automation host');
+          failAfterAccept(error);
+          failDispatch(error);
+          blockAcceptedDispatch(live, error.message);
+          return;
+        }
         if (ctx.canDispatch && !ctx.canDispatch()) {
           const error = new RoutineDispatchDeferredError(
             'Routine revision changed before dispatch',
@@ -3059,17 +3074,21 @@ export class MakerScheduleRunner implements ScheduleRunner {
           blockAcceptedDispatch(live, 'routine revision changed');
           return;
         }
-        if (live) {
+        if (!waiterSlot.current) {
+          // A shared reconnect revalidates acceptance on the replacement.
+          // The existing waiter follows Maker lifecycle events for this run.
           waiterSlot.current = this.createTurnCompletionWaiter(live, {
             onProgress: ctx.onProgress,
             onQueueWaitStart: ctx.onQueueWaitStart,
             endQueueWait: ctx.endQueueWait,
             origin,
             requireTurnOrigin: true,
+            skipStoppedDispatch: schedule.source !== 'bot',
             onTurnSettled: () => holder.releaseUnattendedTurn?.(),
           });
         }
         // 与直发路径 onAccepted 的簿记对齐(落库/基线钩子除外,见方法头注释)。
+        if (acceptingReplacement) return;
         ctx.onTurnActive?.(sessionId);
         this.runtime.noteSilentStopUserSend(sessionId);
         options?.onAccepted?.();
@@ -3266,7 +3285,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       // 排队超时 / 拿不到执行槽都不是"这轮失败了",是"这轮没轮到" —— 与撞忙顺延
       // 同语义:撤销预插的 running run、不通知不亮红点,下次到点重新排队(会话届时
       // 若空闲就直发,槽位届时也可能腾出来)。
-      // 不能顺延的(一次性 / manual / 已 paused)退回可见失败,否则任务静默消失。
+      // 不可顺延的排队超时保留 skipped 记录和未派发原因；槽位异常仍可见失败。
       if (err instanceof ScheduledDispatchStoppedError) {
         waiterSlot.current?.stopListening();
         return this.settleStoppedDispatch(schedule, ctx, sessionId, holder, err);
@@ -3287,6 +3306,11 @@ export class MakerScheduleRunner implements ScheduleRunner {
       if (err instanceof QueuedDispatchTimeoutError || err instanceof QueuedSlotUnavailableError) {
         if (this.canDefer(schedule, ctx)) {
           return this.deferFire(schedule, sessionId, 'queue-wait-timeout');
+        }
+        if (err instanceof QueuedDispatchTimeoutError) {
+          // The prompt never reached the Agent. Keep the bounded wait's reason in
+          // history instead of reporting a model/turn failure; Run now can recover it.
+          return { sessionId, skipped: true, resultText: `[QUEUE_WAIT_TIMEOUT] ${err.message}` };
         }
         const errMsg = formatSchedulerSendError(
           buildSchedulerSendContext(schedule, ctx, sessionId),
@@ -3923,6 +3947,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
       };
       const isCurrentAutoResumePending = (): boolean =>
         this.deps.schedulerQueue?.isAutoResumePending?.(sessionId, options.origin.runId) === true;
+      const isSharedReconnectPending = (): boolean =>
+        this.deps.schedulerQueue?.isSharedReconnectPending?.(sessionId, options.origin.runId) === true;
       const clearSessionListeners = (): void => {
         pendingContinuationUnsub?.();
         pendingContinuationUnsub = undefined;
@@ -3982,10 +4008,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
       ): void => {
         if (owner !== currentSession) return;
         if (status !== 'closed' && status !== 'error') return;
-        if (isCurrentAutoResumePending()) {
-          // AutoResumeBookkeeping owns the retry decision. A dead provider instance is
-          // therefore not the logical run terminal: detach from it and wait for Maker's
-          // existing same-id lazy rebuild. No second recovery state or timer lives here.
+        if (isCurrentAutoResumePending() || isSharedReconnectPending()) {
+          // Let the send transaction settle a shared reconnect if either
+          // instance closes before the replacement send resolves.
           clearSessionListeners();
           this.deps.logger.info?.(
             '[runner] scheduler session instance ended during auto-resume; waiting for replacement',
@@ -4059,6 +4084,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           return;
         }
         if (ev.type === 'done') {
+          if (owner === initialSession && isSharedReconnectPending()) return;
           if (ignorePairedInterruptedDone) {
             ignorePairedInterruptedDone = false;
             clearInterruptedDoneTimer();
@@ -4148,6 +4174,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           }
           finish();
         } else if (isTerminalAgentErrorEvent(ev)) {
+          if (owner === initialSession && isSharedReconnectPending()) return;
           const error = extractErr(ev.data);
           lastTerminalError = error;
           ignorePairedInterruptedDone = true;
@@ -4161,8 +4188,12 @@ export class MakerScheduleRunner implements ScheduleRunner {
           // listener 全跑完再问 bridge，避免订阅注册顺序把已接管的错误抢先判失败。
           queueMicrotask(() => {
             if (settled) return;
-            const claimed = isCurrentAutoResumePending();
-            if (!claimed) fail(new Error(error));
+            if (owner === initialSession && isSharedReconnectPending()) {
+              ignorePairedInterruptedDone = false;
+              clearInterruptedDoneTimer();
+              return;
+            }
+            if (!isCurrentAutoResumePending()) fail(new Error(error));
           });
         }
       };
@@ -4184,7 +4215,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           if (
             event.type !== 'session:created' ||
             event.session.id !== sessionId ||
-            !isCurrentAutoResumePending()
+            !(isCurrentAutoResumePending() || isSharedReconnectPending())
           ) {
             return;
           }
@@ -4194,7 +4225,11 @@ export class MakerScheduleRunner implements ScheduleRunner {
       autoResumeFailureUnsub = this.deps.schedulerQueue?.onAutoResumeFailed?.(
         sessionId,
         options.origin.runId,
-        (error) => {
+        (error, stopped) => {
+          if (stopped && options.skipStoppedDispatch) {
+            fail(new ScheduledDispatchStoppedError('Scheduled turn stopped before vendor dispatch'));
+            return;
+          }
           // A recovery callback can report a newer pre-dispatch failure. If it
           // has no detail, keep the latest terminal error owned by this run.
           fail(new Error(formatAutoResumeFailure(error || lastTerminalError)));

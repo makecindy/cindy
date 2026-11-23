@@ -27,6 +27,7 @@ type Input = Pick<PreparedSessionEvent, 'event' | 'attributedEvent' | 'broadcast
   | 'isPlannedUpgradeClose' | 'isRemoteAuthRetry' | 'isGatewayProxyTokenRecovery'> & {
   session: Session;
   autoResumeSuppressesPersist: boolean;
+  inputClientId?: string;
   persistId: SessionDeliveryResult['persistId'];
   /** Classified by launchers that support automatic Pi request-body recovery. */
   isPiBodyLimitError?: boolean;
@@ -47,6 +48,7 @@ export function claimContextRecoveryTerminal(ports: ContextRecoveryTerminalPorts
         ? (ports.getRollover()?.claim(session.id, {
             instanceId: event.sessionInstanceId,
             generation: event.sessionTurnGeneration,
+            ...(input.inputClientId ? { inputClientId: input.inputClientId } : {}),
           }, ports.isContextOverflowErrorData(attributedEvent.data)
             || input.isPiBodyLimitError === true
             || ports.isOversizedHistoryErrorData(attributedEvent.data)
@@ -108,7 +110,11 @@ export function settleContextRecoveryTerminal(ports: ContextRecoveryTerminalPort
         ports.onTurnErrorEvent(session.id, overflowErrorPayload, eventAgentMeta, overflowPersistId);
         notifyUnsuccessfulProductTurn();
       };
-      const turn = { instanceId: event.sessionInstanceId, generation: event.sessionTurnGeneration };
+      const turn = {
+        instanceId: event.sessionInstanceId,
+        generation: event.sessionTurnGeneration,
+        ...(input.inputClientId ? { inputClientId: input.inputClientId } : {}),
+      };
       const activeRollover = ports.getRollover();
       const recovery = input.isPiBodyLimitError
         ? activeRollover?.tryRecover(session.id, overflowErrorData, turn, surfaceOverflowFailure)

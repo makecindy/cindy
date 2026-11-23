@@ -22,6 +22,24 @@ export function assertHostTaskExecutionSupported(facts: HostTaskExecutionFacts):
   if (unsupported) throwIpcError('UNSUPPORTED_CAPABILITY', `Host does not yet support ${unsupported}`);
 }
 
+/**
+ * The provider group refusal of a task start (moved verbatim out of main.ts, where the input queue's
+ * assertProviderExecutionSupported was bound): the Host has no provider group assignment service, so a
+ * task bound to a group, or routed to a group provider, is refused before its runtime starts. The send
+ * path (turn-executor.mjs readExecutionSession) and the Device Link create entry take the same check.
+ */
+export function createHostProviderExecutionCheck({ hostProviderBindings, hostProviderGroups }: {
+  hostProviderBindings: { readProviderGroupBinding(sessionId: string): unknown };
+  hostProviderGroups: { readProviderGroup(providerId: string): unknown };
+}) {
+  return (id: string, providerId?: string | null) => {
+    if (hostProviderBindings.readProviderGroupBinding(id)
+      || (providerId && hostProviderGroups.readProviderGroup(providerId))) {
+      throw new Error('[UNSUPPORTED_CAPABILITY] Host does not yet support provider groups');
+    }
+  };
+}
+
 /** Preserve Host's existing text/mention/local-file input. Desktop cache and
  * transfer references need the shared materializer before they can reach core;
  * never pass them as a local file or quietly drop an attachment. */

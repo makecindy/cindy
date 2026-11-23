@@ -5242,6 +5242,19 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
   // 审阅器不可用时降级为「问用户」,不再静默拒绝:宿主侧已重试过,走到这里
   // 说明确实没救回来。静默否掉一批正常的灰区操作会让 Auto 档看起来像坏了,
   // 而用户既看不到原因也无法接管。降级后安全边界不变(未点头仍不执行)。
+  // #8706 unit: real extension dispatch must retain quota metadata and await a human decision.
+  it('keeps quota cause on the Pi confirmation request', async () => {
+    const handle = await start('auto', async () => ({ verdict: 'ask', unavailable: true, unavailableReason: 'quota_exhausted' }));
+    const seen: InteractionRequest[] = [];
+    handle.setInteractionResolver?.(async req => { seen.push(req); return { kind: 'permission', behavior: 'deny' } as never; });
+    try {
+      firePermissionRequest('quota-r', 'write', { path: '/tmp/quota-output.txt' });
+      await flush();
+      expect(seen[0]).toMatchObject({ kind: 'permission', metadata: { autoReviewUnavailable: true, autoReviewUnavailableReason: 'quota_exhausted' } });
+      expect(captured.sent).toContainEqual(expect.objectContaining({ type: 'extension_ui_response', id: 'quota-r', confirmed: false }));
+    } finally { await handle.close(); }
+  });
+
   it('auto mode hands gray actions to the user when the current-model reviewer is unavailable', async () => {
     const handle = await start('auto');
     let resolverCalls = 0;

@@ -348,7 +348,7 @@ export function ControlledBanner({
   }
 
   return (
-    <div className="pointer-events-none fixed bottom-4 right-4 z-50 flex max-w-[calc(100vw-2rem)]">
+    <div className="pointer-events-none fixed bottom-4 right-4 z-float flex max-w-[calc(100vw-2rem)]">
       {chip}
     </div>
   );

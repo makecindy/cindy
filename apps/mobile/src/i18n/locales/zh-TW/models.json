@@ -53,7 +53,8 @@
   },
   "switchOutcome": {
     "applied": "模型來源切換已生效。",
-    "failed": "模型來源切換失敗，請重新選擇。"
+    "failed": "模型來源切換失敗，請重新選擇。",
+    "previousSettingsRetained": "這次切換未完成，任務會繼續使用原來的設定。"
   },
   "agentSwitch": {
     "browseAccessibility": "瀏覽 {{agent}} 模型"
@@ -109,6 +110,38 @@
     "quotaResetIn": "{{duration}}後重設",
     "quotaAverageHint": "每週配額 · 各帳號等權平均",
     "quotaResetHint": "依目前使用速度，重設時可能仍有餘量：24 小時內為黃色，6 小時內為紅色。"
+  },
+  "modelGroups": {
+    "title": "模型組",
+    "sourceCount_other": "{{count}} 個來源",
+    "strategy": {
+      "expiring": "快作廢的先用",
+      "order": "按順序",
+      "rotate": "輪流",
+      "cheapest": "最省錢"
+    },
+    "sourceOnDevice": "{{provider}} · {{device}}",
+    "why": {
+      "expiringQuota": "還剩 {{left}}% 配額，{{reset}} 重設，先用它",
+      "expiring": "按配額排在最前",
+      "order": "排在最前面的可用來源",
+      "rotate": "這次輪到它",
+      "only": "現在只有它能用",
+      "soonest": "所有來源的配額都用完了，它最早恢復",
+      "soonestUntil": "所有來源的配額都用完了，它最早恢復（{{reset}}）",
+      "cheapest": "標價最低",
+      "cheapestFree": "訂閱還有配額，不另外花錢",
+      "exceptionImage": "訊息裡有圖片，只在能看圖的來源裡選",
+      "exceptionImageFallback": "訊息裡有圖片，但沒有能看圖的來源，照常選",
+      "exceptionHours": "這個時段改走「{{name}}」",
+      "separator": "；"
+    },
+    "picker": {
+      "switched": "「{{name}}」把這個任務換成了 {{model}}",
+      "switchUnavailable": "「{{name}}」裡現在沒有能給這個任務用的來源，模型沒換。",
+      "chooseUnavailable": "「{{name}}」裡現在沒有能用的來源，沒有選它。"
+    },
+    "anotherDevice": "另一台電腦"
   },
   "pluginEngines": {
     "genericName": "插件引擎",

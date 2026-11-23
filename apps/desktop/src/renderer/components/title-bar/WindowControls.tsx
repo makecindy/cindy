@@ -35,6 +35,12 @@ interface WindowControlsProps {
 const DEFAULT_ICON_CLASS = 'text-titlebar-icon';
 
 /**
+ * Windows 关闭按钮悬停：系统标准红 `#E81123` + 白色图标，Light / Dark 同值。
+ * 平台约定色，不是主题语义色（DESIGN.md §2「Windows window close button」）。
+ */
+const WINDOWS_CLOSE_HOVER_CLASS = 'hover:bg-[#E81123] hover:text-white';
+
+/**
  * True when this renderer is served by `cindy-host` into a browser tab.
  *
  * A tab already has the browser's own chrome, so drawing minimize/maximize/close
@@ -265,7 +271,7 @@ export function WindowControls({
             className="inline-flex focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
           >
             <button
-              className={cn(controlBase, 'hover:bg-[#E81123] hover:text-white')}
+              className={cn(controlBase, WINDOWS_CLOSE_HOVER_CLASS)}
               aria-hidden="true"
               disabled
             >
@@ -274,7 +280,7 @@ export function WindowControls({
           </span>
         ) : (
           <button
-            className={cn(controlBase, 'hover:bg-[#E81123] hover:text-white')}
+            className={cn(controlBase, WINDOWS_CLOSE_HOVER_CLASS)}
             onClick={() => void handleCloseClick()}
             aria-label={t('titleBar.close')}
             data-tooltip-exempt="windows-system-control"
@@ -346,8 +352,8 @@ function ClosingOverlay({ visible }: { visible: boolean }) {
   if (!visible) return null;
   return createPortal(
     <div
-      // z-[10000]: 高于 splash 的 z-[9999], 保证退出 overlay 永远在最顶层
-      className="fixed inset-0 z-[10000] flex select-none items-center justify-center"
+      // z-modal(10000): 高于 splash 的 fullscreen 层(9999), 保证退出 overlay 永远在最顶层
+      className="fixed inset-0 z-modal flex select-none items-center justify-center"
       style={{ background: 'rgba(0, 0, 0, 0.2)' }}
       role="alertdialog"
       aria-live="polite"
