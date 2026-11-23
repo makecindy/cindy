@@ -892,6 +892,8 @@ describe('installQuitHandler', () => {
 
       const [uncaughtException] = snapshot.added('uncaughtException');
       uncaughtException(error, 'uncaughtException');
+      const repeatedQuit = { preventDefault: vi.fn() };
+      beforeQuit(repeatedQuit);
       expect(app.exit).not.toHaveBeenCalled();
       finishCleanup();
 
@@ -909,6 +911,7 @@ describe('installQuitHandler', () => {
         { kind, marker: { exitCode, shutdownReason, disposedAt: expect.any(String) } },
       ]);
       expect(dispose).toHaveBeenCalledOnce();
+      expect(repeatedQuit.preventDefault).toHaveBeenCalledOnce();
     } finally {
       electronPaths.userData = previousUserData;
       vi.useRealTimers();

@@ -568,7 +568,11 @@ export function installQuitHandler(timeoutMs = 2000): void {
     // 幂等,与 beginShutdown 里的布防互为兜底。
     armShutdownHardKillWatchdog();
     log.info('before-quit received');
-    if (_isDisposing) return;
+    if (_isDisposing) {
+      // 再次退出也必须等待已启动的清理链，否则 Electron 可能以默认状态码退出。
+      if (beforeQuitExitCode !== undefined) e.preventDefault();
+      return;
+    }
     e.preventDefault();
     beforeQuitExitCode = 0;
     void beginShutdown(timeoutMs, 'before-quit').finally(() => app.exit(beforeQuitExitCode));
