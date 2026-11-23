@@ -1,5 +1,6 @@
 import { app, BrowserWindow } from 'electron';
 
+import { restoreDockIconAfterShow } from './app-icon.js';
 import { createLogger } from './logger.js';
 
 const log = createLogger('app-presence');
@@ -37,6 +38,7 @@ export async function ensureMainAppPresence(
       // actually fallen out of the Dock.
       app.setActivationPolicy('regular');
       await app.dock?.show();
+      restoreDockIconAfterShow();
       return;
     }
 

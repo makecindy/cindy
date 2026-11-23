@@ -45,3 +45,9 @@ export function applyDockIcon(
     // Dock updates are cosmetic and must not block startup or settings writes.
   }
 }
+
+export function restoreDockIconAfterShow(): void {
+  // macOS can rebuild the tile with the bundle icon while this process keeps running.
+  appliedIconPath = null;
+  applyDockIcon();
+}
