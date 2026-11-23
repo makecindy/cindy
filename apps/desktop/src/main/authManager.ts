@@ -4379,11 +4379,11 @@ export function getDeviceId(): string {
 }
 
 /**
- * 这台电脑换身份前的硬件身份；没换过(或显式覆盖)返回 null。旧身份留给了另一台电脑，
- * 本机只用它识别「旧身份时代」留下的本地记录(如 Agent-Net 证书)。
+ * 这台电脑主动让出的设备身份，包括多次换身份时的旧设备号。
+ * 仅用于识别留在本地的旧记录，例如 Agent-Net 证书。
  */
-export function getReplacedHardwareDeviceId(): string | null {
-  return deviceIdentity.source === 'replacement' ? deviceIdentity.hardwareId : null;
+export function getRetiredDeviceIds(): readonly string[] {
+  return deviceIdentity.retiredDeviceIds ?? [];
 }
 
 /**
@@ -4396,7 +4396,7 @@ export function replaceDeviceIdentityForNextStart(): void {
   if (deviceIdentity.source === 'override' || !deviceIdentity.hardwareId || !profileDir) {
     throw new Error('DEVICE_IDENTITY_NOT_REPLACEABLE');
   }
-  writeReplacementDeviceId(profileDir, deviceIdentity.hardwareId);
+  writeReplacementDeviceId(profileDir, deviceIdentity.hardwareId, deviceId);
 }
 
 export function getAuthState(): AuthState {

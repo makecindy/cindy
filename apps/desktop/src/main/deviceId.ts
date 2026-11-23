@@ -30,6 +30,7 @@ export interface RuntimeDeviceIdentity {
   source: 'override' | 'hardware' | 'replacement';
   /** The hardware id read on this start; null under an explicit override. */
   hardwareId: string | null;
+  retiredDeviceIds?: readonly string[];
 }
 
 /**
@@ -38,7 +39,9 @@ export interface RuntimeDeviceIdentity {
  * to that hardware id instead of carrying the identity elsewhere. A missing or
  * malformed record means no replacement.
  */
-export function readReplacementDeviceId(profileDir: string, physicalId: string): string | null {
+function readReplacementDeviceIdentity(profileDir: string, physicalId: string): {
+  deviceId: string; retiredDeviceIds: string[];
+} | null {
   let raw: string | null;
   try {
     raw = readAtomicFileSync(path.join(profileDir, DEVICE_IDENTITY_FILE));
@@ -47,10 +50,15 @@ export function readReplacementDeviceId(profileDir: string, physicalId: string):
   }
   if (!raw) return null;
   try {
-    const record = JSON.parse(raw) as { version?: unknown; deviceId?: unknown; replaces?: unknown };
+    const record = JSON.parse(raw) as { version?: unknown; deviceId?: unknown; replaces?: unknown; retiredDeviceIds?: unknown };
     if (record?.version !== 1 || record.replaces !== physicalId) return null;
     if (typeof record.deviceId !== 'string' || !REPLACEMENT_DEVICE_ID.test(record.deviceId)) return null;
-    return record.deviceId === physicalId ? null : record.deviceId;
+    if (record.deviceId === physicalId) return null;
+    const retired = Array.isArray(record.retiredDeviceIds)
+      ? record.retiredDeviceIds.filter((id): id is string =>
+        typeof id === 'string' && REPLACEMENT_DEVICE_ID.test(id) && id !== record.deviceId)
+      : [];
+    return { deviceId: record.deviceId, retiredDeviceIds: [...new Set([physicalId, ...retired])] };
   } catch {
     return null;
   }
@@ -61,11 +69,14 @@ export function readReplacementDeviceId(profileDir: string, physicalId: string):
  * one (64 lowercase hex, within the server's 64-character limit). Takes effect on the
  * next start; returns the new id.
  */
-export function writeReplacementDeviceId(profileDir: string, physicalId: string): string {
+export function writeReplacementDeviceId(profileDir: string, physicalId: string, outgoingId = physicalId): string {
   const deviceId = randomBytes(32).toString('hex');
+  const previous = readReplacementDeviceIdentity(profileDir, physicalId);
+  const retiredDeviceIds = [...new Set([...(previous?.retiredDeviceIds ?? []), outgoingId])]
+    .filter((id) => id !== physicalId);
   atomicWriteFileSync(
     path.join(profileDir, DEVICE_IDENTITY_FILE),
-    JSON.stringify({ version: 1, deviceId, replaces: physicalId, createdAt: Date.now() }),
+    JSON.stringify({ version: 1, deviceId, replaces: physicalId, retiredDeviceIds, createdAt: Date.now() }),
   );
   return deviceId;
 }
@@ -81,9 +92,9 @@ export function resolveRuntimeDeviceIdentity(
   if (explicit) return { deviceId: explicit, source: 'override', hardwareId: null };
   ensureSystemBinPathForMachineId();
   const hardwareId = readPhysicalId();
-  const replacement = profileDir ? readReplacementDeviceId(profileDir, hardwareId) : null;
+  const replacement = profileDir ? readReplacementDeviceIdentity(profileDir, hardwareId) : null;
   return replacement
-    ? { deviceId: replacement, source: 'replacement', hardwareId }
+    ? { ...replacement, source: 'replacement', hardwareId }
     : { deviceId: hardwareId, source: 'hardware', hardwareId };
 }
 

@@ -55,12 +55,22 @@ describe('replacement device identity', () => {
     const replacement = writeReplacementDeviceId(profileDir, 'hw-a');
     expect(replacement).toMatch(/^[0-9a-f]{64}$/);
     expect(resolveRuntimeDeviceIdentity(() => 'hw-a', ' ', profileDir))
-      .toEqual({ deviceId: replacement, source: 'replacement', hardwareId: 'hw-a' });
+      .toEqual({ deviceId: replacement, source: 'replacement', hardwareId: 'hw-a', retiredDeviceIds: ['hw-a'] });
     // 数据目录被复制到另一台电脑，或硬件身份变了：回到那台电脑自己的硬件身份。
     expect(resolveRuntimeDeviceId(() => 'hw-b', ' ', profileDir)).toBe('hw-b');
     expect(resolveRuntimeDeviceId(() => 'hw-a', ' isolated ', profileDir)).toBe('isolated');
     // 没传数据目录的调用方(旧入口)不受影响。
     expect(resolveRuntimeDeviceId(() => 'hw-a', ' ')).toBe('hw-a');
+  });
+
+  it('keeps the outgoing identity when repairing a cloned replacement a second time', () => {
+    // An existing version-1 profile did not record identifiers from earlier repairs.
+    const first = 'a'.repeat(64);
+    writeFileSync(path.join(profileDir, DEVICE_IDENTITY_FILE), JSON.stringify({ version: 1, deviceId: first, replaces: 'hw-a' }));
+    const second = writeReplacementDeviceId(profileDir, 'hw-a', first);
+    expect(resolveRuntimeDeviceIdentity(() => 'hw-a', '', profileDir)).toMatchObject({
+      deviceId: second, retiredDeviceIds: ['hw-a', first],
+    });
   });
 
   it.each([
