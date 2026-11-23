@@ -553,6 +553,10 @@ describe('nodeRuntimeBroker · Electron utilityProcess 适配', () => {
       }),
     );
     const forkOptions = fork.mock.calls[0][2] as { env: Record<string, string> };
+    const envValue = (name: string): string | undefined =>
+      Object.entries(forkOptions.env).find(
+        ([key]) => key.toLowerCase() === name.toLowerCase(),
+      )?.[1];
     expect(forkOptions.env).not.toHaveProperty('CINDY_GHOST_DIR');
     expect(forkOptions.env).not.toHaveProperty('ELECTRON_RUN_AS_NODE');
     expect(forkOptions.env).not.toHaveProperty('NODE_OPTIONS');
@@ -563,9 +567,14 @@ describe('nodeRuntimeBroker · Electron utilityProcess 适配', () => {
     expect(forkOptions.env.APPDATA).toBe('C:\\Users\\demo\\AppData\\Roaming');
     expect(forkOptions.env.GH_CONFIG_DIR).toBe('D:\\gh-config');
     expect(forkOptions.env.XDG_CONFIG_HOME).toBe('D:\\xdg-config');
-    expect(forkOptions.env.PATHEXT).toBe('.COM;.EXE;.BAT;.CMD');
-    expect(forkOptions.env.COMSPEC).toBe('C:\\Windows\\System32\\cmd.exe');
-    expect(forkOptions.env.USERNAME).toBe('demo');
+    expect(envValue('PATHEXT')).toBe('.COM;.EXE;.BAT;.CMD');
+    expect(envValue('ComSpec')).toBe('C:\\Windows\\System32\\cmd.exe');
+    expect(envValue('USERNAME')).toBe('demo');
+    expect(
+      Object.keys(forkOptions.env).filter(
+        (key) => key.toLowerCase() === 'comspec',
+      ),
+    ).toHaveLength(1);
 
     expect(worker.stderr).toBe(child.stderr);
     expect(child.stderr.listenerCount('error')).toBe(0);
