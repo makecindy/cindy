@@ -95,6 +95,7 @@ export interface PluginRemovalUserNotice {
 
 export type OfficialModelPlugin = Pick<PluginMarketItem, 'pluginId' | 'ghostId' | 'namespace' | 'name' | 'description'>;
 export interface OfficialModelPluginPage {
+  incomplete?: boolean;
   officialIds: string[];
   totalOfficial: number | null;
   items: OfficialModelPlugin[];

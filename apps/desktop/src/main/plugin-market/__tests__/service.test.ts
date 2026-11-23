@@ -848,9 +848,17 @@ describe('PluginMarketService migration and defaultInstall', () => {
       ...manifest(engine.ghostId), node: { entry: 'worker.js', protocol: 'json-rpc-stdio', entries: ['engine.js'] },
       harnesses: [{ id: 'engine', name: 'Engine', protocol: 'acp', entry: 'engine.js' }],
     }));
+    // Legacy servers already returned the entire catalog, including the engine after page one.
+    const firstPage = await h.api.catalog();
+    h.api.catalog.mockClear();
+    h.api.catalog.mockResolvedValueOnce({ ...firstPage, plugins: [community], nextCursor: 'legacy:1',
+      legacyQueryPlugins: [community, engine, tool] });
     for (let open = 0; open < 2; open++) {
-      expect((await service.officialModelPlugins()).items.map(item => item.pluginId)).toEqual([engine.id]);
+      const page = await service.officialModelPlugins();
+      expect(page.items.map(item => item.pluginId)).toEqual([engine.id]);
+      expect(page.nextCursor).toBeNull();
     }
+    expect(h.api.catalog).toHaveBeenCalledTimes(2);
     expect(h.api.detail.mock.calls).toEqual([[engine.id], [tool.id]]);
     expect(h.api.resolve).not.toHaveBeenCalled();
     expect(bindSources).not.toHaveBeenCalled();

@@ -62,7 +62,9 @@ export function OfficialModelPluginStep({ item, owner, onBack, onDone }: {
   const ghost = installed ? local : undefined;
   const approved = ghost?.approval.state === 'approved' && !ghost.retirement;
   const instance = ghost && installedGhostStoragePart(ghost);
-  const configured = approved && ghost.enabled;
+  const needsEngineUpdate = detail?.installState === 'update-available' && approved &&
+    !ghost.manifest.harnesses?.some(engine => engine.protocol === 'acp');
+  const configured = approved && ghost.enabled && !needsEngineUpdate;
   const engines = usePluginEngines(Boolean(configured)).filter(engine => engine.ghostId === instance);
   const canInstall = detail?.installState === 'not-installed';
   const error = actionError || result?.error || (detail?.installState === 'conflict' ? 'settings.ghosts.market.errors.conflict' :
@@ -74,8 +76,10 @@ export function OfficialModelPluginStep({ item, owner, onBack, onDone }: {
     setActionError('');
     try {
       let targetInstance = instance;
-      if (canInstall) targetInstance = installedGhostStoragePart((await installReviewedMarketRelease(detail)).ghost);
-      else if (approved && instance) await window.electronAPI.ghosts.setEnabled(instance, true, ghostInstallApprovalToken(ghost.approval));
+      if (canInstall || needsEngineUpdate) {
+        const approval = needsEngineUpdate ? ghostInstallApprovalToken(ghost.approval) : undefined;
+        targetInstance = installedGhostStoragePart((await installReviewedMarketRelease(detail, approval)).ghost);
+      } else if (approved && instance) await window.electronAPI.ghosts.setEnabled(instance, true, ghostInstallApprovalToken(ghost.approval));
       if (mounted.current && isDataOwnerGenerationCurrent(owner)) {
         setReload(v => v + 1);
         if (targetInstance) requestPluginEnginesRefresh(targetInstance);
@@ -102,11 +106,11 @@ export function OfficialModelPluginStep({ item, owner, onBack, onDone }: {
       </div>}
     </div>
     <div className="flex items-center justify-between px-4 py-3">
-      <Button variant="secondary" onClick={onBack}>{t('settings.providers.wizard.back')}</Button>
-      {configured ? <Button variant="cta" onClick={() => { requestPluginEnginesRefresh(instance); onDone(); }}>{t('settings.providers.wizard.finish')}</Button> :
-        canInstall || approved ? <Button variant="cta" loading={busy} disabled={busy} onClick={() => void act()}>
-          {t(canInstall ? 'settings.providers.wizard.installAndConfigure' : 'settings.ghosts.detail.enable')}</Button> :
-        error ? <Button variant="secondary" onClick={() => { setActionError(''); setReload(v => v + 1); }}>{t('settings.providers.wizard.retryPlugin')}</Button> : null}
+      <Button data-settings-search-action="Return to the provider list" variant="secondary" onClick={onBack}>{t('settings.providers.wizard.back')}</Button>
+      {configured ? <Button data-settings-search-action="Finish configuring the selected plugin" variant="cta" onClick={() => { requestPluginEnginesRefresh(instance); onDone(); }}>{t('settings.providers.wizard.finish')}</Button> :
+        canInstall || approved ? <Button data-settings-search-action="Install, update or enable the selected plugin" variant="cta" loading={busy} disabled={busy} onClick={() => void act()}>
+          {t(canInstall ? 'settings.providers.wizard.installAndConfigure' : needsEngineUpdate ? 'settings.ghosts.market.update' : 'settings.ghosts.detail.enable')}</Button> :
+        error ? <Button data-settings-search-action="Retry loading the selected plugin" variant="secondary" onClick={() => { setActionError(''); setReload(v => v + 1); }}>{t('settings.providers.wizard.retryPlugin')}</Button> : null}
     </div>
   </>;
 }

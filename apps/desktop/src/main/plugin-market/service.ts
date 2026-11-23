@@ -1313,7 +1313,7 @@ export class PluginMarketService {
 
   /** Provider discovery reads only public server metadata. Installation and local markets belong to the detail page. */
   async officialModelPlugins(cursor: unknown = null, active = () => true): Promise<OfficialModelPluginPage> {
-    if (cursor !== null && (typeof cursor !== 'string' || !cursor || cursor.length > 128))
+    if (cursor !== null && (typeof cursor !== 'string' || !cursor || cursor.length > 4_096))
       throwIpcError('INVALID_PARAMS', 'Invalid Plugin catalog cursor');
     this.requireConfigured();
     const endpoint = getClientEndpoint('pluginApiBaseUrl');
@@ -1326,8 +1326,9 @@ export class PluginMarketService {
     assertCurrent();
     const page = await this.api.catalog({ scope: 'public', limit: 100, cursor, counts: cursor === null });
     assertCurrent();
-    const candidates = page.plugins.filter(plugin => plugin.scope === 'public' && plugin.publisherKind === 'official');
+    const candidates = (page.legacyQueryPlugins ?? page.plugins).filter(plugin => plugin.scope === 'public' && plugin.publisherKind === 'official');
     const items: OfficialModelPluginPage['items'] = [];
+    let incomplete = false;
     for (const plugin of candidates) {
       if (!active()) break;
       const key = JSON.stringify([endpoint, plugin.id]);
@@ -1342,7 +1343,11 @@ export class PluginMarketService {
         }
         const detail = await read.catch(() => null);
         assertCurrent();
-        if (!detail || detail.publisherKind !== 'official') continue;
+        if (!detail) {
+          incomplete = true;
+          continue;
+        }
+        if (detail.publisherKind !== 'official') continue;
         try { assertDetailMatchesSummary(plugin, detail); } catch { continue; }
         const manifest = validateNormalizedGhostManifest(detail.currentRelease.manifest);
         if (!manifest.ok) continue;
@@ -1352,7 +1357,7 @@ export class PluginMarketService {
       if (capability.hasEngine)
         items.push({ pluginId: plugin.id, ghostId: plugin.ghostId, ...deliveryNamespaceFields(plugin), name: plugin.name, description: plugin.description });
     }
-    return { items, nextCursor: page.nextCursor, officialIds: candidates.map(plugin => plugin.id), totalOfficial: page.counts?.official ?? null };
+    return { items, incomplete, nextCursor: page.legacyQueryPlugins ? null : page.nextCursor, officialIds: candidates.map(plugin => plugin.id), totalOfficial: page.counts?.official ?? null };
   }
 
   /** UI and Agent queries share target-owned pagination; they never run maintenance. */

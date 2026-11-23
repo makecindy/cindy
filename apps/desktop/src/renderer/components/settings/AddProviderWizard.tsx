@@ -514,8 +514,9 @@ export function AddProviderWizard({
     [presets],
   );
   const q = query.trim().toLowerCase();
-  const officialPlugins = useOfficialModelPlugins(step === 1 && !!showOfficialModelPlugins, i18n.language);
-  const matchingPlugins = officialPlugins.filter(item =>
+  const activePluginStep = pluginStep && isDataOwnerGenerationCurrent(pluginStep.owner) ? pluginStep : undefined;
+  const officialPlugins = useOfficialModelPlugins(step === 1 && !activePluginStep && !!showOfficialModelPlugins, i18n.language);
+  const matchingPlugins = officialPlugins.items.filter(item =>
     !q || [item.name, item.ghostId, item.description].some(value => value?.toLowerCase().includes(q)));
   const filteredOauth = q
     ? oauthChoices.filter((p) => p.name.toLowerCase().includes(q))
@@ -1607,8 +1608,8 @@ export function AddProviderWizard({
         style={WINDOW_NO_DRAG_STYLE}
         className="modal-panel fixed inset-0 z-modal m-auto flex h-fit max-h-[min(640px,85vh)] w-[min(600px,calc(100vw-32px))] flex-col overflow-hidden outline-none"
       >
-        {pluginStep && isDataOwnerGenerationCurrent(pluginStep.owner) ? (
-          <OfficialModelPluginStep item={pluginStep.item} owner={pluginStep.owner}
+        {activePluginStep ? (
+          <OfficialModelPluginStep item={activePluginStep.item} owner={activePluginStep.owner}
             onBack={() => setPluginStep(undefined)} onDone={() => onDone()} />
         ) : <>
         {/* 头部:标题居左 + 步骤指示居右,同一行(2026-07 定稿原型形态)。 */}
@@ -1837,7 +1838,7 @@ export function AddProviderWizard({
                     })}
                   </>
                 )}
-                {showOfficialModelPlugins && matchingPlugins.length > 0 && (
+                {showOfficialModelPlugins && (matchingPlugins.length > 0 || officialPlugins.failed || officialPlugins.hasMore) && (
                   <>
                     <GroupLabel>{t('settings.providers.wizard.officialModelPlugins')}</GroupLabel>
                     {matchingPlugins.map(item => (
@@ -1850,6 +1851,19 @@ export function AddProviderWizard({
                       />
                     ))}
                   </>
+                )}
+                {officialPlugins.hasMore && (
+                  <Button variant="secondary" data-settings-search-action="Load the next page of official model plugins" onClick={officialPlugins.loadMore}>
+                    {t('settings.ghosts.contribution.loadMore')}
+                  </Button>
+                )}
+                {officialPlugins.failed && (
+                  <div className="flex items-center justify-between gap-2 px-3 py-2">
+                    <span role="status">{t('settings.ghosts.market.unavailable')}</span>
+                    <Button variant="secondary" data-settings-search-action="Retry loading the official model plugin catalog" onClick={officialPlugins.retry}>
+                      {t('settings.providers.wizard.retryPlugin')}
+                    </Button>
+                  </div>
                 )}
                 {listedLocalPresets.length > 0 && (
                   <>
