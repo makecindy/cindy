@@ -107,6 +107,14 @@ export const imBotSettings = defineSettings({
     sectionKey: 'settings.imBot.groups.personal',
     aliases: ['Feishu', '飞书', '飞书机器人'],
   },
+  lark: {
+    id: 'imBot.lark',
+    tab: 'im-bot',
+    targetId: 'personal-im-feishu',
+    titleKey: 'settings.feishuBot.services.lark',
+    sectionKey: 'settings.imBot.groups.personal',
+    aliases: ['Lark bot'],
+  },
   feishuGroups: {
     id: 'imBot.feishu.groups',
     tab: 'im-bot',
@@ -114,7 +122,7 @@ export const imBotSettings = defineSettings({
     fallbackTargetId: 'personal-im-feishu',
     titleKey: 'settings.feishuBot.groups.title',
     descriptionKey: 'settings.feishuBot.groups.description',
-    sectionKey: 'settings.feishuBot.title',
+    sectionKey: 'settings.imBot.groups.personal',
     keywordKeys: [
       'settings.feishuBot.groups.searchLabel',
       'settings.feishuBot.groups.project.label',
@@ -127,14 +135,6 @@ export const imBotSettings = defineSettings({
       'settings.feishuBot.groups.fullAccessConfirm.description',
     ],
     aliases: ['Feishu group settings', 'Lark group settings', '飞书群聊'],
-  },
-  lark: {
-    id: 'imBot.lark',
-    tab: 'im-bot',
-    targetId: 'personal-im-feishu',
-    titleKey: 'settings.feishuBot.services.lark',
-    sectionKey: 'settings.imBot.groups.personal',
-    aliases: ['Lark bot'],
   },
   dingtalk: {
     id: 'imBot.dingtalk',
