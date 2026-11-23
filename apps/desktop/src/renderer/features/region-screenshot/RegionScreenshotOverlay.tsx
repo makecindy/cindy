@@ -636,22 +636,25 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
       // Unedited, pixel-aligned captures already have their pixels in memory.
       // Avoid an extra canvas backing store and GPU readback. Resizing,
       // annotations and alpha compositing retain the existing canvas path.
-      let image = list.length === 0 && crop.width === output.width && crop.height === output.height
+      // Device RGB needs the embedded ICC transform before sRGB export.
+      const profiledFrame = long ? undefined : current.preview;
+      let image = !profiledFrame && list.length === 0 && crop.width === output.width && crop.height === output.height
         ? cropOpaqueImageDataToBitmap(current.frameData, crop)
         : null;
       if (!image) {
         const canvas = document.createElement('canvas');
         canvas.width = output.width;
         canvas.height = output.height;
-        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        const ctx = canvas.getContext('2d', { colorSpace: 'srgb', willReadFrequently: true });
         if (!ctx) return;
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = 'high';
-        ctx.drawImage(frame, crop.x, crop.y, crop.width, crop.height, 0, 0, output.width, output.height);
+        const exportFrame = profiledFrame ?? frame;
+        ctx.drawImage(exportFrame, crop.x, crop.y, crop.width, crop.height, 0, 0, output.width, output.height);
         const sx = output.width / rect.width;
         const sy = output.height / rect.height;
         ctx.setTransform(sx, 0, 0, sy, -rect.x * sx, -rect.y * sy);
-        drawAnnotations(ctx, list, source);
+        drawAnnotations(ctx, list, { ...source, frame: exportFrame });
         image = imageDataToBitmap(ctx.getImageData(0, 0, output.width, output.height));
       }
       busyRef.current = true;
