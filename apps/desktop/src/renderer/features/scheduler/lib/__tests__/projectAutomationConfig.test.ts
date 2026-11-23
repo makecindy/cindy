@@ -56,6 +56,18 @@ describe('formToProjectConfig fastMode', () => {
   });
 });
 
+// PR #11881 review r4651177664, unit: the project form is what writes schedules.json. Gap: only the schedule→config
+// path carried the mode, so saving the form dropped it and the next load removed it from the database too.
+// Minimal input: a form with a mode, the same form as a script, and a saved schedule with a mode.
+describe('project automation model group', () => {
+  it('keeps the mode when the form saves and when a schedule is promoted; script tasks have none', () => {
+    expect(formToProjectConfig(makeForm({ agentKind: 'codex', model: 'gpt-saved', modelGroup: 'daily' }), 'm1').modelGroup).toBe('daily');
+    expect(formToProjectConfig(makeForm({ executionMode: 'script', modelGroup: 'daily' }), 'm2').modelGroup).toBeUndefined();
+    expect(scheduleToProjectConfig({ id: 's1', name: 'Daily', prompt: 'Check', cronExpr: '0 9 * * *', timezone: 'UTC',
+      agentKind: 'codex', model: 'gpt-saved', modelGroup: 'daily' } as Schedule).modelGroup).toBe('daily');
+  });
+});
+
 describe('project automation providerId serialization', () => {
   // PR #6832: promotion and subsequent edits must keep the provider's device.
   // Unit: both production projections cross JSON, which previously lost it.

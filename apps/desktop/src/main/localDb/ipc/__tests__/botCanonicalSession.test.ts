@@ -10,6 +10,7 @@ import { setModelVisibilityMirror } from '../../../maker-host/model-visibility-m
 import { setMainLocale } from '../../../i18n.desktop';
 import Database from 'better-sqlite3';
 import { createMessage } from '../messages';
+import { setSessionRestoreObserver } from '../../sessionRestoreRetention';
 import type { ProviderView } from '@cindy/model-providers';
 import { createHash } from 'node:crypto';
 import { createCompanionCloudHost } from '../../../companion-cloud/host';
@@ -536,6 +537,9 @@ const capabilityDeps = {
 const { list: findBotCapabilities, select: selectBotCapability } = createBotCapabilityService(capabilityDeps);
 
 beforeEach(async () => {
+  // 任务管理服务随本文件的导入链在加载时装上全局恢复钩子，它要求账号状态已就绪；本文件不测归档保留，
+  // 与 sessionsUpdate / sessionsRestoreIfArchived 一样先清空，免得 CI 并行负载下账号未就绪时恢复失败。
+  setSessionRestoreObserver(null);
   h.dbReady = true;
   setSessionOpeningModelAdmission(async body => body);
   setModelVisibilityMirror({}, { fallback: true });

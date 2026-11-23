@@ -1,6 +1,8 @@
 import { ErrorNotice } from '@/components/ui/error-notice';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useModelGroups } from '@/features/model-groups/modelGroupsClient';
+import type { ModelGroupSelection } from '../../../../shared/modelGroups';
 import * as Dialog from '@radix-ui/react-dialog';
 import { CalendarClock, FolderOpen, Info, Maximize2, Minimize2, Play, Sparkles, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -173,7 +175,7 @@ export function ScheduleFormDialog({
     );
     return () => { current = false; };
   }, []);
-  const { form, setField, selectModelConfiguration, selectPluginEngine, setDestination, setRunMode, selectBoundSession, applyTemplateAgentFields, reset, toInput, validate } = formApi;
+  const { form, setField, selectModelConfiguration, selectPluginEngine, selectModelGroup, setDestination, setRunMode, selectBoundSession, applyTemplateAgentFields, reset, toInput, validate } = formApi;
   // "运行会话"三态(fresh / persistent / bound)与心跳形态派生值。
   // hasRealBinding = targetSessionId 为真实会话 id(B 已绑 / C 已选 / MCP 手绑),
   // 此时目录 / worktree / fastMode 由绑定会话决定,表单隐藏对应字段。
@@ -328,6 +330,24 @@ export function ScheduleFormDialog({
         }
       : undefined,
     [pluginEnginesAllowed, pluginEngineList, pluginEngineChoice, selectPluginEngine],
+  );
+  // 模型组(model-groups.md §6.3)：新建任务时按模式选来源。脚本不跑 Agent，不提供；记住的模式后来被删掉时按没选处理。
+  const modelGroupsAllowed = !isScriptMode;
+  const navigateToModelGroups = useNavigate();
+  const { config: modelGroupsConfig } = useModelGroups(modelGroupsAllowed);
+  const scheduleModelGroupId = form.modelGroup;
+  const scheduleModelGroups = useMemo(
+    () => modelGroupsAllowed
+      ? {
+          config: modelGroupsConfig,
+          active: scheduleModelGroupId && modelGroupsConfig.routes.some((route) => route.id === scheduleModelGroupId)
+            ? { type: 'route' as const, id: scheduleModelGroupId }
+            : null,
+          onSelect: (selection: ModelGroupSelection) => selectModelGroup(selection.id),
+          onManage: () => navigateToModelGroups('/settings?tab=model-groups'),
+        }
+      : undefined,
+    [modelGroupsAllowed, modelGroupsConfig, scheduleModelGroupId, selectModelGroup, navigateToModelGroups],
   );
   // 项目自动化的配置文件不保存插件前置检查(插件装在各自的电脑上),只提供脚本。
   const usePluginSource = form.preRunSource === 'plugin' && !isProjectAutomationMode;
@@ -683,7 +703,8 @@ export function ScheduleFormDialog({
     form.agentKind, form.model, form.providerId, form.effort, setField]);
 
   // 选着插件引擎时内置模型字段只是切回内置时的初值，不参与可用性判断(插件引擎另判，见下)。
-  const modelUnavailable = !isScriptMode && !pluginEngineChoice && modelCatalogReady && (
+  // 选着还在的模式时同理：新建任务由模式选来源，存下的具体模型只在模式被删后才用。
+  const modelUnavailable = !isScriptMode && !pluginEngineChoice && !scheduleModelGroups?.active && modelCatalogReady && (
     (!!form.model.trim() && (
       (agentsLoaded && !availableVendors.has(form.agentKind === 'claude-code' ? 'cc' : form.agentKind))
       || (!legacyRemoteCatalog && !effectiveSourceIdForModel(providers, form.providerId || null, form.model, form.agentKind))
@@ -1081,14 +1102,15 @@ export function ScheduleFormDialog({
                                   agentKind={form.agentKind}
                                   agentDeviceId={selectedAgentDeviceId ?? undefined}
                                   modelValue={form.model}
-                                  onChangeModel={(v) => { setField('model', v); setField('followTeammateModel', false); }}
+                                  onChangeModel={(v) => { setField('model', v); setField('followTeammateModel', false); setField('modelGroup', undefined); }}
                                   effortValue={form.effort}
                                   onChangeEffort={(v) => setField('effort', v)}
                                   followSession={isBound}
                                   providerId={form.providerId}
-                                  onChangeProviderId={(v) => setField('providerId', v)}
+                                  onChangeProviderId={(v) => { setField('providerId', v); setField('modelGroup', undefined); }}
                                   onNavigateToProviders={() => navigate('/settings?tab=providers')}
                                   {...(schedulePluginEngines ? { pluginEngines: schedulePluginEngines } : {})}
+                                  {...(scheduleModelGroups ? { modelGroups: scheduleModelGroups } : {})}
                                   fastMode={form.fastMode}
                                   onChangeFast={(v) => {
                                     setField('fastMode', v);

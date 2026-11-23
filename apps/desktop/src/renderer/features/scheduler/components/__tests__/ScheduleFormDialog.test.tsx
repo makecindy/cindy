@@ -33,6 +33,7 @@ const state = vi.hoisted(() => ({
     { id: 'shared', efforts: ['ultra'], supportsFastMode: true },
     { id: 'remote-only', efforts: ['ultra'], supportsFastMode: true },
   ],
+  modelGroupIds: [] as string[],
 }));
 vi.mock('react-router-dom', () => ({ useNavigate: () => vi.fn() }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key, i18n: { exists: () => true } }) }));
@@ -78,6 +79,10 @@ vi.mock('../TemplateGallery', () => ({ TemplateGallery: () => null }));
 vi.mock('../WebhookAccountManager', () => ({ WebhookAccountManager: () => null }));
 vi.mock('../TemplateParamForm', () => ({ TemplateParamForm: () => null }));
 vi.mock('../BoundSessionCard', () => ({ BoundSessionCard: () => null }));
+vi.mock('@/features/model-groups/modelGroupsClient', async (importOriginal) => ({
+  ...await importOriginal<object>(),
+  useModelGroups: () => ({ config: { routes: state.modelGroupIds.map((id) => ({ id, name: id, strategy: 'order', sources: [] })) } }),
+}));
 vi.mock('../ScheduleChips', () => ({
   ProjectChip: () => null, ScheduleChip: () => null, ScheduleSettingsButton: () => null, ThreadPickerInline: () => null,
   ModelEffortChip: ({ onSelect, followModel, ...selection }: { onSelect: (choice: unknown) => void; followModel?: { label: string; active: boolean; onFollow: () => void } }) => (
@@ -140,6 +145,7 @@ beforeEach(() => {
   state.localCapabilities = {};
   state.pendingCapabilities.clear();
   state.vendors = new Set(['cc', 'codex', 'pi']);
+  state.modelGroupIds = [];
   localStorage.clear();
   vi.stubGlobal('electronAPI', { localDb: { bots: {
     // Opening the editor must work without loading profiles or resuming invitations (PR 10847).
@@ -431,6 +437,24 @@ it('rejects a model missing from the selected remote catalog', () => {
   form.save();
   expect(form.onSubmit).not.toHaveBeenCalled();
   expect(state.warning).toHaveBeenCalledWith('scheduler.editor.validation.modelUnavailable');
+});
+
+// PR #11881 review r4651232118: a schedule following a mode was refused because its saved
+// fallback model had become unavailable, though each run picks from the mode. Minimal input:
+// the unavailable-model schedule above plus a mode; it saves while the mode exists, not after deletion.
+it.each([
+  { modes: ['daily'], saves: true },
+  { modes: [], saves: false },
+])('lets a schedule following a mode save without its fallback model: modes $modes', async ({ modes, saves }) => {
+  state.modelGroupIds = modes;
+  const form = mount(schedule({ agentDeviceId: 'studio', model: 'removed', modelAgentKind: 'codex', modelGroup: 'daily' }));
+  form.save();
+  if (saves) {
+    await waitFor(() => expect(form.onSubmit).toHaveBeenCalledWith(expect.objectContaining({ modelGroup: 'daily' }), true));
+  } else {
+    expect(form.onSubmit).not.toHaveBeenCalled();
+    expect(state.warning).toHaveBeenCalledWith('scheduler.editor.validation.modelUnavailable');
+  }
 });
 
 // PR #8950 P1: old peers explicitly lacking provider:list still expose model
