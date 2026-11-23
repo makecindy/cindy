@@ -125,6 +125,27 @@ describe('lead turn declaration reconciliation', () => {
     });
   });
 
+  it('reports the missing declaration, not a fake id, when the id came from an earlier turn', () => {
+    noteLeadDispatchFact('lead-1', fact({ dispatchId: 'mq-old', turnGeneration: 5 }));
+    noteLeadDispatchFact('lead-1', fact({ dispatchId: 'mq-new', turnGeneration: 7 }));
+    noteLeadTurnDeclaration('lead-1', {
+      assignments: [],
+      dispatched: [{ workerId: 'worker-1', messageId: 'mq-old' }],
+      pending: [],
+      turnGeneration: 7,
+    });
+
+    // 编号真实存在过，所以不判「编造」；本轮新派发没写进声明才是要纠正的错。
+    expect(
+      reconcileLeadTurnDeclaration('lead-1', dispatchFactsForTurn('lead-1', 7)),
+    ).toEqual({
+      consistent: false,
+      reason: 'dispatched-not-declared',
+      targets: ['research'],
+      detail: 'research',
+    });
+  });
+
   it('catches a queued message id that matches no dispatch', () => {
     noteLeadDispatchFact('lead-1', fact());
     noteLeadTurnDeclaration('lead-1', {

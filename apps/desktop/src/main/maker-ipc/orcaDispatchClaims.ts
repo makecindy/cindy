@@ -257,6 +257,8 @@ export function reconcileLeadTurnDeclaration(
     declaration.assignments.find((entry) => entry.workerId === workerId)?.workerId ??
     workerId;
 
+  // 声明指着更早轮次的编号时，本轮同 Worker 的凭据仍然没有被这一句声明覆盖。
+  const uncovered = new Set<string>();
   for (const entry of declaration.dispatched) {
     // 同一个 Worker 可以连着收多条（q1、q2）：按这一轮它全部凭据匹配，不能只看最后一条。
     const bucket = factsByWorker.get(entry.workerId);
@@ -274,6 +276,18 @@ export function reconcileLeadTurnDeclaration(
         (fact) => fact.dispatchId === entry.messageId || fact.queuedMessageId === entry.messageId,
       );
     if (!matched) {
+      // 编号在更早轮次的凭据里存在，就不是「编了个不存在的编号」：这种错没法纠正。
+      // 把它留给下面「本轮有派发没声明」的判定，那条能靠补交声明修好。
+      const seenEarlier = entry.messageId
+        ? ledger.facts.some(
+            (fact) =>
+              fact.dispatchId === entry.messageId || fact.queuedMessageId === entry.messageId,
+          )
+        : false;
+      if (seenEarlier) {
+        uncovered.add(entry.workerId);
+        continue;
+      }
       return {
         consistent: false,
         reason: 'unknown-message-id',
@@ -296,7 +310,7 @@ export function reconcileLeadTurnDeclaration(
   }
 
   for (const fact of facts) {
-    if (declaredWorkers.has(fact.workerId)) continue;
+    if (declaredWorkers.has(fact.workerId) && !uncovered.has(fact.workerId)) continue;
     return {
       consistent: false,
       reason: 'dispatched-not-declared',
