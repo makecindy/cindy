@@ -18,13 +18,12 @@
  * 重传了至少 6 个分片、占发出包数的四分之一以上（本机只被控、自己不发请求时也看得到）。都按同样处理。
  * 和 STUN、直连共用核心的 UDP 端口；核心照常负责丢包重发和拥塞控制，这里不限速。
  */
-import { lookup } from 'node:dns/promises';
 import type { Address } from '@cindy/agent-net-core/node';
 import {
   UDP_RELAY_DOWN, UDP_RELAY_REGISTER_ACK, encodeUdpRegister, encodeUdpUp, isUdpRelayPacket, udpRelayPeerHash,
   verifyUdpDown, verifyUdpRegisterAck, type UdpRelayCredentials,
 } from '@cindy/agent-net-relay/client';
-import { splitHostPort } from './stun.js';
+import { resolveUdpHost, splitHostPort } from './stun.js';
 
 /** 不通、或有登记还没确认时每秒登记一次；连续 10 秒不通后放慢到每 5 秒。 */
 const REGISTER_RETRY_MS = 1_000;
@@ -251,7 +250,7 @@ export class RelayUdpPath {
     if (!host || !Number.isInteger(port) || port < 1 || port > 65_535) { this.nextResolveAt = Number.POSITIVE_INFINITY; return; }
     this.resolving = true;
     try {
-      const address = this.options.resolveHost ? await this.options.resolveHost(host) : (await lookup(host, { family: 4 })).address;
+      const address = this.options.resolveHost ? await this.options.resolveHost(host) : await resolveUdpHost(host);
       if (this.closed) return;
       const now = performance.now();
       this.resolvedAt = now;

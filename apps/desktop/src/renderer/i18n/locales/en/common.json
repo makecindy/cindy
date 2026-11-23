@@ -6875,7 +6875,15 @@
           "encrypted": "End-to-end encrypted",
           "legacyConnection": "Older connection",
           "encryptionUnknown": "Not confirmed",
-          "legacyEncryptionHint": "The relay path on the older connection is not end-to-end encrypted."
+          "legacyEncryptionHint": "The relay path on the older connection is not end-to-end encrypted.",
+          "routePreference": "Route preference",
+          "routeAuto": "Auto",
+          "routeDirect": "Direct",
+          "routeRelay": "Relay",
+          "routeUnavailable": "Unavailable",
+          "routeMeasuring": "Measuring…",
+          "routeDirectUnavailableHint": "Direct connection is currently unavailable on this network",
+          "routePreferenceFailed": "Could not switch route. Try again."
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -14396,7 +14404,6 @@
       "regionAria": "Pending message queue",
       "listAria": "Queued messages",
       "pausedFooter": "Task stopped, queue paused",
-
       "steerUnsupportedNotice": "This engine doesn’t support steering. Queued messages will be sent after the current turn.",
       "resumeAction": "Continue sending",
       "resumeAria": "Continue sending queued messages",

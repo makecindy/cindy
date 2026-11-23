@@ -6942,7 +6942,15 @@
           "encrypted": "Encriptação ponto a ponto",
           "legacyConnection": "Ligação anterior",
           "encryptionUnknown": "Não confirmado",
-          "legacyEncryptionHint": "O caminho via relay da ligação anterior não tem encriptação ponto a ponto."
+          "legacyEncryptionHint": "O caminho via relay da ligação anterior não tem encriptação ponto a ponto.",
+          "routePreference": "Escolha de rota",
+          "routeAuto": "Auto",
+          "routeDirect": "Direta",
+          "routeRelay": "Retransmissão",
+          "routeUnavailable": "Indisponível",
+          "routeMeasuring": "A medir…",
+          "routeDirectUnavailableHint": "A ligação direta não está disponível nesta rede de momento",
+          "routePreferenceFailed": "Não foi possível alterar a rota. Tente novamente."
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -14511,7 +14519,6 @@
       "regionAria": "Fila de mensagens pendentes",
       "listAria": "Mensagens em fila",
       "pausedFooter": "Tarefa parada, fila em pausa",
-
       "steerUnsupportedNotice": "Este motor não permite orientar. As mensagens em fila serão enviadas quando o turno atual terminar.",
       "resumeAction": "Continuar a enviar",
       "resumeAria": "Continuar a enviar mensagens em fila",

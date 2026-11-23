@@ -6832,7 +6832,15 @@
           "encrypted": "エンドツーエンド暗号化",
           "legacyConnection": "旧接続",
           "encryptionUnknown": "未確認",
-          "legacyEncryptionHint": "旧接続の中継経路はエンドツーエンド暗号化されていません。"
+          "legacyEncryptionHint": "旧接続の中継経路はエンドツーエンド暗号化されていません。",
+          "routePreference": "経路の選択",
+          "routeAuto": "自動",
+          "routeDirect": "直接",
+          "routeRelay": "中継",
+          "routeUnavailable": "利用不可",
+          "routeMeasuring": "計測中…",
+          "routeDirectUnavailableHint": "現在のネットワークではこのデバイスに直接接続できません",
+          "routePreferenceFailed": "ルートの切り替えに失敗しました。もう一度お試しください。"
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -14342,7 +14350,6 @@
       "regionAria": "送信待ちメッセージのキュー",
       "listAria": "キュー内のメッセージ",
       "pausedFooter": "タスク停止、キューは一時停止中",
-
       "steerUnsupportedNotice": "このエンジンは割り込みに対応していません。キュー内のメッセージは現在のターンが終わってから送信されます。",
       "resumeAction": "送信を続ける",
       "resumeAria": "キューの送信を続ける",

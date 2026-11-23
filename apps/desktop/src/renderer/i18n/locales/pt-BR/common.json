@@ -6942,7 +6942,15 @@
           "encrypted": "Criptografia de ponta a ponta",
           "legacyConnection": "Conexão anterior",
           "encryptionUnknown": "Não confirmado",
-          "legacyEncryptionHint": "O caminho pelo retransmissor da conexão anterior não tem criptografia de ponta a ponta."
+          "legacyEncryptionHint": "O caminho pelo retransmissor da conexão anterior não tem criptografia de ponta a ponta.",
+          "routePreference": "Escolha de rota",
+          "routeAuto": "Auto",
+          "routeDirect": "Direta",
+          "routeRelay": "Retransmissão",
+          "routeUnavailable": "Indisponível",
+          "routeMeasuring": "Medindo…",
+          "routeDirectUnavailableHint": "A conexão direta não está disponível nesta rede no momento",
+          "routePreferenceFailed": "Não foi possível trocar a rota. Tente novamente."
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -14511,7 +14519,6 @@
       "regionAria": "Fila de mensagens pendentes",
       "listAria": "Mensagens na fila",
       "pausedFooter": "Tarefa interrompida, fila pausada",
-
       "steerUnsupportedNotice": "Este motor não permite orientar. As mensagens na fila serão enviadas quando o turno atual terminar.",
       "resumeAction": "Continuar envio",
       "resumeAria": "Continuar enviando mensagens da fila",

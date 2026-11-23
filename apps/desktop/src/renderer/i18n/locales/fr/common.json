@@ -6942,7 +6942,15 @@
           "encrypted": "Chiffrée de bout en bout",
           "legacyConnection": "Ancienne connexion",
           "encryptionUnknown": "Non confirmé",
-          "legacyEncryptionHint": "Le chemin via le relais de l’ancienne connexion n’est pas chiffré de bout en bout."
+          "legacyEncryptionHint": "Le chemin via le relais de l’ancienne connexion n’est pas chiffré de bout en bout.",
+          "routePreference": "Choix de la route",
+          "routeAuto": "Auto",
+          "routeDirect": "Direct",
+          "routeRelay": "Relais",
+          "routeUnavailable": "Indisponible",
+          "routeMeasuring": "Mesure…",
+          "routeDirectUnavailableHint": "La connexion directe est actuellement indisponible sur ce réseau",
+          "routePreferenceFailed": "Impossible de changer d’itinéraire. Veuillez réessayer."
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -14511,7 +14519,6 @@
       "regionAria": "File d'attente des messages",
       "listAria": "Messages en file d'attente",
       "pausedFooter": "Tâche arrêtée, file d'attente en pause",
-
       "steerUnsupportedNotice": "Ce moteur ne permet pas de réorienter. Les messages en attente seront envoyés à la fin du tour en cours.",
       "resumeAction": "Reprendre l'envoi",
       "resumeAria": "Reprendre l'envoi des messages en file d'attente",
