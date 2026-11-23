@@ -9782,6 +9782,12 @@
       "support": "Si le problème persiste après l'attente, envoyez en privé les journaux à feedback@cindy.app en indiquant votre système d'exploitation, votre version de Cindy, l'heure de l'erreur et le code ci-dessous. Ne publiez pas les journaux publiquement."
     }
   },
+  "legalTermsUpdate": {
+    "title": "Conditions mises à jour",
+    "body": "Nous avons mis à jour les <terms>Conditions d'utilisation</terms> et la <privacy>Politique de confidentialité</privacy>. Acceptez pour continuer ou déconnectez-vous.",
+    "agree": "Accepter",
+    "disagree": "Déconnexion"
+  },
   "legacyMigration": {
     "title": "Migrer les données de la version précédente",
     "description": "Des données d'une version précédente ont été trouvées sur cet appareil. Votre historique de conversations et vos fichiers multimédias seront migrés vers le nouvel emplacement des données. Si l'ancienne application est encore ouverte, quittez-la complètement au préalable, et laissez {{appName}} ouverte pendant la migration. Remarque : les clés et identifiants tiers autorisés ne peuvent pas être migrés. Après la migration, vous devrez les autoriser ou les saisir à nouveau dans les Paramètres.",
@@ -20600,6 +20606,7 @@
       "totalDetail_other": "{{count}} cartes × {{amount}}",
       "pay": "Continuer vers le paiement",
       "refundNote": "Les cartes cadeaux ne peuvent pas être échangées contre de l’argent. Une carte récupérée ou utilisée n’est pas remboursable. Pour demander le remboursement d’une carte non récupérée, contactez le support.",
+      "termsNote": "En sélectionnant Continuer vers le paiement, vous acceptez les <terms>Conditions des cartes cadeaux</terms>.",
       "cancel": "Annuler",
       "loadFailed": "Impossible de charger les limites d’achat. Réessayez plus tard.",
       "checkoutSubtitle_one": "Carte cadeau {{amount}} × {{count}} · émise dès le paiement réussi",

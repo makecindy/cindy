@@ -9667,6 +9667,12 @@
       "support": "等待後仍無法登入，請將記錄私下寄給 feedback@cindy.app，並提供作業系統、Cindy 版本、出錯時間和下方錯誤碼。請勿公開發布記錄。"
     }
   },
+  "legalTermsUpdate": {
+    "title": "服務條款和隱私政策已更新",
+    "body": "Cindy 的<terms>服務條款</terms>和<privacy>隱私政策</privacy>已更新，請閱讀並同意後繼續使用。",
+    "agree": "同意",
+    "disagree": "退出登入"
+  },
   "legacyMigration": {
     "title": "遷移舊版本資料",
     "description": "檢測到本機存有舊版本的資料。歷史對話和媒體檔案將遷移到新的資料位置。若舊版應用正在執行，請先完全退出它；遷移期間請保持 {{appName}} 開啟。注意：已授權的第三方金鑰與憑證無法隨資料遷移，遷移完成後需要在設定中重新授權或重新填寫。",
@@ -20332,6 +20338,7 @@
       "totalDetail_other": "{{count}} 張 × {{amount}}",
       "pay": "前往付款",
       "refundNote": "禮品卡不能兌換現金。卡被領取或兌換後不退款；未領取的卡如需退款，請聯絡支援人員。",
+      "termsNote": "點擊「前往付款」即表示你已閱讀並同意<terms>《禮品卡購買與使用條款》</terms>。",
       "cancel": "取消",
       "loadFailed": "暫時無法讀取購買限制，請稍後重試。",
       "checkoutSubtitle_other": "禮品卡 {{amount}} × {{count}} · 付款成功後立即產生",

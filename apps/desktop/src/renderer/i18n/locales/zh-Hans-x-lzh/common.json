@@ -9667,6 +9667,12 @@
       "support": "稍待之后仍无法登录，请将记录私下寄予 feedback@cindy.app，并附操作系统、Cindy 版本、出错时间及下方错误码。请勿公开发布记录。"
     }
   },
+  "legalTermsUpdate": {
+    "title": "服务条款与隐私政策已更",
+    "body": "Cindy 之<terms>服务条款</terms>与<privacy>隐私政策</privacy>已更，请阅而允之，方可续用。",
+    "agree": "允",
+    "disagree": "辞出"
+  },
   "legacyMigration": {
     "title": "迁旧版之数据",
     "description": "察得此机存有旧版数据。旧日言谈与影音卷帙将迁至新之数据位置。若旧版应用方在运行，请先完全退出；迁移期间，请保持 {{appName}} 打开。注意：已授权之第三方密钥与凭证无法随数据迁移，迁毕后须于规制中重新授权或重新填写。",
@@ -20332,6 +20338,7 @@
       "totalDetail_other": "{{count}} 张 × {{amount}}",
       "pay": "去支付",
       "refundNote": "礼品卡不能兑换现金。卡被领取或兑换后不退款；未领取的卡如需退款，请联系支持人员。",
+      "termsNote": "点「去支付」，即为已阅并允<terms>《礼品卡购买与使用条款》</terms>。",
       "cancel": "取消",
       "loadFailed": "暂时无法读取购买限制，请稍后重试。",
       "checkoutSubtitle_other": "礼品卡 {{amount}} × {{count}} · 付款成功后立即生成",

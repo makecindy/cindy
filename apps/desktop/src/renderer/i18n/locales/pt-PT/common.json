@@ -9782,6 +9782,12 @@
       "support": "Se o problema continuar após aguardar, envie os registos em privado para feedback@cindy.app com o seu sistema operativo, a versão de Cindy, a hora do erro e o código abaixo. Não publique registos."
     }
   },
+  "legalTermsUpdate": {
+    "title": "Termos atualizados",
+    "body": "Atualizámos os <terms>Termos de Serviço</terms> e a <privacy>Política de Privacidade</privacy> da Cindy. Aceite para continuar a utilizar ou termine sessão.",
+    "agree": "Aceitar",
+    "disagree": "Terminar sessão"
+  },
   "legacyMigration": {
     "title": "Migrar dados da versão anterior",
     "description": "Foram encontrados dados de uma versão anterior neste dispositivo. O histórico de conversas e os ficheiros multimédia serão migrados para a nova localização de dados. Se a aplicação antiga ainda estiver em execução, encerre-a completamente primeiro e mantenha {{appName}} aberto durante a migração. Nota: as chaves e credenciais de terceiros autorizadas não podem ser migradas — após a migração, terá de voltar a autorizá-las ou introduzi-las nas Definições.",
@@ -20600,6 +20606,7 @@
       "totalDetail_other": "{{count}} cartões × {{amount}}",
       "pay": "Continuar para o pagamento",
       "refundNote": "Os cartões de oferta não podem ser trocados por dinheiro. Os cartões utilizados não são reembolsáveis. Para pedir o reembolso de um cartão por utilizar, contacte o suporte.",
+      "termsNote": "Ao selecionar Continuar para o pagamento, aceita os <terms>Termos do cartão de oferta</terms>.",
       "cancel": "Cancelar",
       "loadFailed": "Não foi possível carregar os limites de compra. Tente novamente mais tarde.",
       "checkoutSubtitle_one": "Cartão de oferta {{amount}} × {{count}} · emitido assim que o pagamento for concluído",
