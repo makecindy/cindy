@@ -6509,7 +6509,7 @@
           "defaultWorkspaceChip": "기본값: {{name}}",
           "defaultWorkspaceAria": "작업을 보낼 때 사용할 기본 프로젝트 선택",
           "defaultWorkspaceRadioAria": "\"{{name}}\"을(를) 기본 프로젝트로 설정",
-          "defaultWorkspaceRowHint": "선택한 프로젝트가 기본 프로젝트입니다. Telegram, Feishu / Lark, X에서 프로젝트를 따로 고르지 않은 대화의 작업은 여기에서 실행됩니다.",
+          "defaultWorkspaceRowHint": "선택한 프로젝트가 기본 프로젝트입니다. Telegram, Feishu / Lark, X, Discord에서 프로젝트를 따로 고르지 않은 대화의 작업은 여기에서 실행됩니다.",
           "defaultProjectTag": "기본",
           "defaultProjectFullAccessWarning": "기본 프로젝트 ‘{{name}}’의 권한이 전체 액세스입니다. 어느 그룹에서 @로 불러도 이 안에서 전체 액세스로 실행됩니다.",
           "sharedSettingsPointer": "프로젝트, 모델, 권한은 모든 공식 봇이 함께 씁니다.",
@@ -6750,6 +6750,40 @@
           "workingDeviceThisComputer": "이 컴퓨터",
           "workingDeviceUnknown": "작업 컴퓨터가 아직 동기화되지 않았습니다",
           "workingDeviceUnnamed": "이름 없는 컴퓨터"
+        },
+        "discord": {
+          "description": "Discord 계정을 연결하고 DM이나 서버에서 공식 bot을 통해 Cindy에게 작업을 맡기세요.",
+          "disabledHint": "스위치를 켜면 연동 코드가 발급됩니다. Discord에서 Cindy 봇에게 보내 연결을 완료하세요.",
+          "toggleAria": "Discord 연결 전환",
+          "connect": "Discord 연결",
+          "openApp": "Discord에 Cindy 추가",
+          "cancel": "연결 취소",
+          "retry": "연결 다시 시도",
+          "openBot": "봇 열기",
+          "addToGroup": "서버에 추가",
+          "unlink": "Discord 연결 해제",
+          "unlinkConfirmTitle": "Discord 연결을 해제할까요?",
+          "unlinkConfirmDescription": "Discord에서 이 기기로 더 이상 메시지를 보낼 수 없습니다. 로컬 프로젝트와 다른 채널에는 영향을 주지 않습니다.",
+          "status": {
+            "checking": "서버 지원 확인 중…",
+            "unavailable": "이 서버에서는 사용할 수 없음",
+            "disabled": "사용 안 함",
+            "none": "연결되지 않음",
+            "pending": "Cindy 봇에게 연동 코드를 보내세요",
+            "awaiting_confirmation": "Discord에서 연결을 확인해 주세요",
+            "confirmed": "{{user}} 계정이 연결됨",
+            "denied": "연결이 거부됨",
+            "expired": "연동 코드가 만료됨",
+            "failed": "연결 실패",
+            "revoked": "연결 해제됨",
+            "superseded": "다른 기기에 연결됨"
+          },
+          "bindCode": {
+            "label": "연동 코드",
+            "copy": "코드 복사",
+            "copied": "연동 코드를 복사했습니다",
+            "hint": "Discord DM으로 이 코드를 Cindy 봇에게 보내거나 Discord에서 /bind를 실행해 코드를 입력하세요. 아직 Cindy를 추가하지 않았다면 먼저 Discord에 추가하세요."
+          }
         }
       },
       "summary": {
@@ -6982,6 +7016,7 @@
         "providerTelegram": "Telegram",
         "providerX": "X",
         "providerFeishu": "Feishu / Lark",
+        "providerDiscord": "Discord",
         "requireConnected": "{{provider}} 연결 후 편집할 수 있습니다(위의 스위치를 켜고 연결을 기다려 주세요).",
         "offlineLocal": "{{provider}}에 연결되지 않은 동안 변경 사항은 이 컴퓨터에 저장되며, 다시 연결되면 채팅의 모델 카드로 동기화됩니다.",
         "requireBinding": "먼저 {{provider}} 계정 연결을 완료해 주세요.",

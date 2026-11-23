@@ -6509,7 +6509,7 @@
           "defaultWorkspaceChip": "預設：{{name}}",
           "defaultWorkspaceAria": "選擇派發任務時使用的預設專案",
           "defaultWorkspaceRadioAria": "把「{{name}}」設為預設專案",
-          "defaultWorkspaceRowHint": "選中的是預設專案：在 Telegram、飛書 / Lark 和 X 裡，沒有單獨選過專案的私聊和群，任務都落在它裡面。",
+          "defaultWorkspaceRowHint": "選中的是預設專案：在 Telegram、飛書 / Lark、X 和 Discord 裡，沒有單獨選過專案的私聊和群，任務都落在它裡面。",
           "defaultProjectTag": "預設",
           "defaultProjectFullAccessWarning": "預設專案「{{name}}」的權限是完全訪問：任何群裡 @ 機器人，都會以完全訪問在它裡面執行。",
           "sharedSettingsPointer": "專案、模型與權限由所有官方機器人共用。",
@@ -6750,6 +6750,40 @@
           "workingDeviceThisComputer": "本機",
           "workingDeviceUnknown": "工作電腦尚未同步",
           "workingDeviceUnnamed": "未命名電腦"
+        },
+        "discord": {
+          "description": "關聯 Discord 帳號，在私訊或伺服器裡透過官方 bot 給 Cindy 派發任務。",
+          "disabledHint": "開啟開關後會產生關聯碼，把它傳給 Discord 裡的 Cindy 機器人即可完成關聯。",
+          "toggleAria": "切換 Discord 連線",
+          "connect": "關聯 Discord",
+          "openApp": "把 Cindy 新增到 Discord",
+          "cancel": "取消關聯",
+          "retry": "重新關聯",
+          "openBot": "開啟 Cindy bot",
+          "addToGroup": "新增到 Discord 伺服器",
+          "unlink": "解綁 Discord",
+          "unlinkConfirmTitle": "解綁 Discord？",
+          "unlinkConfirmDescription": "解綁後 Discord 將不能再向這臺裝置派發訊息；本地專案和其他渠道不受影響。",
+          "status": {
+            "checking": "正在檢查伺服器支援…",
+            "unavailable": "當前伺服器尚未開放",
+            "disabled": "已停用",
+            "none": "未關聯",
+            "pending": "把關聯碼傳給 Cindy 機器人",
+            "awaiting_confirmation": "請在 Discord 內確認關聯",
+            "confirmed": "已關聯 {{user}}",
+            "denied": "已拒絕關聯",
+            "expired": "關聯碼已過期",
+            "failed": "關聯失敗",
+            "revoked": "已解除關聯",
+            "superseded": "已關聯到另一臺裝置"
+          },
+          "bindCode": {
+            "label": "關聯碼",
+            "copy": "複製關聯碼",
+            "copied": "關聯碼已複製",
+            "hint": "在 Discord 裡把關聯碼私訊傳給 Cindy 機器人，或執行 /bind 並填入關聯碼。還沒新增 Cindy？先把它新增到 Discord。"
+          }
         }
       },
       "summary": {
@@ -6982,6 +7016,7 @@
         "providerTelegram": "Telegram",
         "providerX": "X",
         "providerFeishu": "飛書 / Lark",
+        "providerDiscord": "Discord",
         "requireConnected": "連線 {{provider}} 後可編輯（先在上方開啟對應開關並等待連線成功）。",
         "offlineLocal": "{{provider}} 暫時連不上，變更會保存在本機；連上後同步到對話裡的模型卡。",
         "requireBinding": "先完成 {{provider}} 帳號關聯後可編輯。",

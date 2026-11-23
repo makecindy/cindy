@@ -6509,7 +6509,7 @@
           "defaultWorkspaceChip": "常例：{{name}}",
           "defaultWorkspaceAria": "择派差事时所用之常例案",
           "defaultWorkspaceRadioAria": "立「{{name}}」为常例案",
-          "defaultWorkspaceRowHint": "所选者即常例案：Telegram、飞书 / Lark 与 X 中，未另择案之私聊与群，差事皆落于此。",
+          "defaultWorkspaceRowHint": "所选者即常例案：Telegram、飞书 / Lark、X 与 Discord 中，未另择案之私聊与群，差事皆落于此。",
           "defaultProjectTag": "常例",
           "defaultProjectFullAccessWarning": "常例案「{{name}}」之权限为完全访问：任一群中 @ 机器人，皆将以完全访问之权于其中运行，慎之。",
           "sharedSettingsPointer": "案、模型与权限，诸官方机器人共用。",
@@ -6750,6 +6750,40 @@
           "workingDeviceThisComputer": "此机",
           "workingDeviceUnknown": "工作电脑尚未同步",
           "workingDeviceUnnamed": "未命名电脑"
+        },
+        "discord": {
+          "description": "关联 Discord 名籍，于私信或服务器中藉官方 bot 为 Cindy 派差事。",
+          "disabledHint": "开此开关则得关联码，遣予 Discord 中之 Cindy 机器人，即成关联。",
+          "toggleAria": "启闭 Discord 连接",
+          "connect": "关联 Discord",
+          "openApp": "增 Cindy 入 Discord",
+          "cancel": "罢关联",
+          "retry": "重关联",
+          "openBot": "开 Cindy bot",
+          "addToGroup": "增入 Discord 服务器",
+          "unlink": "解绑 Discord",
+          "unlinkConfirmTitle": "解绑 Discord 乎？",
+          "unlinkConfirmDescription": "解绑之后，Discord 不能再向此台设备派讯；本地之案与他渠道不受影响。",
+          "status": {
+            "checking": "方察服务器支持…",
+            "unavailable": "此服务器尚未开放",
+            "disabled": "已停",
+            "none": "未绑",
+            "pending": "请将关联码遣予 Cindy 机器人",
+            "awaiting_confirmation": "请于 Discord 内确认关联",
+            "confirmed": "已关联 {{user}}",
+            "denied": "关联已拒",
+            "expired": "关联码已逾期",
+            "failed": "关联未成",
+            "revoked": "关联已解",
+            "superseded": "已关联至他台设备"
+          },
+          "bindCode": {
+            "label": "关联码",
+            "copy": "录关联码",
+            "copied": "关联码已录",
+            "hint": "于 Discord 中将关联码私遣予 Cindy 机器人，或行 /bind 并填关联码。未增 Cindy 者，先增之入 Discord。"
+          }
         }
       },
       "summary": {
@@ -6982,6 +7016,7 @@
         "providerTelegram": "Telegram",
         "providerX": "X",
         "providerFeishu": "飞书 / Lark",
+        "providerDiscord": "Discord",
         "requireConnected": "连上 {{provider}} 后方可修（先于上方打开相应开关，候其连接成功）。",
         "offlineLocal": "{{provider}} 暂连不上，变更存于此机；连上后同步至言谈中之模型卡。",
         "requireBinding": "须先完成 {{provider}} 名籍关联，方可修。",

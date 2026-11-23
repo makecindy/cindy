@@ -5825,7 +5825,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     setLifecycleAnnouncement: (enabled: boolean): Promise<{ hook: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:set-lifecycle-announcement', { enabled }),
     setProviderEnabled: (
-      provider: 'telegram' | 'x' | 'feishu',
+      provider: 'telegram' | 'x' | 'feishu' | 'discord',
       enabled: boolean,
     ): Promise<{ hook: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:set-provider-enabled', { provider, enabled }),
@@ -5834,7 +5834,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     setXCompanion: (botId: string | null, expectedBotId: string | null): Promise<{ hook: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:set-x-companion', { botId, expectedBotId }),
     setProviderDefaultWorkspace: (
-      provider: 'telegram' | 'x' | 'feishu',
+      provider: 'telegram' | 'x' | 'feishu' | 'discord',
       alias: string | null,
     ): Promise<{ hook: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:set-provider-default-workspace', { provider, alias }),
@@ -5853,16 +5853,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:hook-control:revoke-team', { teamId }),
     cancelPendingBind: (): Promise<{ hook: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:cancel-pending-bind'),
-    providerBindStart: (provider: 'telegram' | 'x' | 'feishu', scopeId?: string): Promise<{ hook: unknown }> =>
+    providerBindStart: (provider: 'telegram' | 'x' | 'feishu' | 'discord', scopeId?: string): Promise<{ hook: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:provider-bind-start', { provider, ...(scopeId ? { scopeId } : {}) }),
-    providerBindCancel: (provider: 'telegram' | 'x' | 'feishu'): Promise<{ hook: unknown }> =>
+    providerBindCancel: (provider: 'telegram' | 'x' | 'feishu' | 'discord'): Promise<{ hook: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:provider-bind-cancel', { provider }),
-    providerBindSelect: (provider: 'telegram' | 'x' | 'feishu', bindingId?: string): Promise<{ hook: unknown }> =>
+    providerBindSelect: (provider: 'telegram' | 'x' | 'feishu' | 'discord', bindingId?: string): Promise<{ hook: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:provider-bind-select', { provider, ...(bindingId === undefined ? {} : { bindingId }) }),
-    providerBindRevoke: (provider: 'telegram' | 'x' | 'feishu', bindingId?: string): Promise<{ hook: unknown }> =>
+    providerBindRevoke: (provider: 'telegram' | 'x' | 'feishu' | 'discord', bindingId?: string): Promise<{ hook: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:provider-bind-revoke', { provider, ...(bindingId === undefined ? {} : { bindingId }) }),
     openProviderAction: (
-      provider: 'telegram' | 'x' | 'feishu',
+      provider: 'telegram' | 'x' | 'feishu' | 'discord',
       action: 'connect' | 'provider' | 'add-to-group',
       scopeId?: string,
     ): Promise<{ ok: true }> =>

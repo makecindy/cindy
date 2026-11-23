@@ -6615,7 +6615,7 @@
           "defaultWorkspaceChip": "Predeterminado: {{name}}",
           "defaultWorkspaceAria": "Elige el proyecto predeterminado para las tareas enviadas",
           "defaultWorkspaceRadioAria": "Establecer «{{name}}» como proyecto predeterminado",
-          "defaultWorkspaceRowHint": "El proyecto seleccionado es el predeterminado: las conversaciones de Telegram, Feishu / Lark y X que no han elegido proyecto ejecutan sus tareas allí.",
+          "defaultWorkspaceRowHint": "El proyecto seleccionado es el predeterminado: las conversaciones de Telegram, Feishu / Lark, X y Discord que no han elegido proyecto ejecutan sus tareas allí.",
           "defaultProjectTag": "Predeterminado",
           "defaultProjectFullAccessWarning": "El proyecto predeterminado «{{name}}» tiene Acceso completo: una @mention desde cualquier grupo se ejecuta con acceso completo dentro de él.",
           "sharedSettingsPointer": "Los proyectos, modelos y permisos se comparten entre todos los bots oficiales.",
@@ -6860,6 +6860,40 @@
           "workingDeviceThisComputer": "Esta computadora",
           "workingDeviceUnknown": "Computadora de trabajo aún sin sincronizar",
           "workingDeviceUnnamed": "Computadora sin nombre"
+        },
+        "discord": {
+          "description": "Vincula tu cuenta de Discord y envía tareas a Cindy a través del bot oficial, por mensaje directo o en servidores.",
+          "disabledHint": "Activa el interruptor para obtener un código de vinculación y envíalo al bot de Cindy en Discord.",
+          "toggleAria": "Activar o desactivar la conexión de Discord",
+          "connect": "Vincular Discord",
+          "openApp": "Agregar Cindy a Discord",
+          "cancel": "Cancelar vinculación",
+          "retry": "Reintentar vinculación",
+          "openBot": "Abrir bot",
+          "addToGroup": "Agregar a un servidor",
+          "unlink": "Desvincular Discord",
+          "unlinkConfirmTitle": "¿Desvincular Discord?",
+          "unlinkConfirmDescription": "Discord dejará de enviar mensajes a este dispositivo. No afecta a tus proyectos locales ni a otros canales.",
+          "status": {
+            "checking": "Comprobando compatibilidad del servidor…",
+            "unavailable": "No disponible en este servidor",
+            "disabled": "Desactivado",
+            "none": "Sin vincular",
+            "pending": "Envía el código al bot de Cindy",
+            "awaiting_confirmation": "Confirma la vinculación en Discord",
+            "confirmed": "Vinculado como {{user}}",
+            "denied": "Se rechazó la vinculación",
+            "expired": "El código de vinculación caducó",
+            "failed": "Error de vinculación",
+            "revoked": "Vinculación eliminada",
+            "superseded": "Vinculado a otro dispositivo"
+          },
+          "bindCode": {
+            "label": "Código de vinculación",
+            "copy": "Copiar código",
+            "copied": "Código de vinculación copiado",
+            "hint": "Envía este código al bot de Cindy por mensaje directo en Discord o ejecuta /bind con el código. ¿Aún no agregaste Cindy? Agrégalo primero a Discord."
+          }
         }
       },
       "summary": {
@@ -7092,6 +7126,7 @@
         "providerTelegram": "Telegram",
         "providerX": "X",
         "providerFeishu": "Feishu / Lark",
+        "providerDiscord": "Discord",
         "requireConnected": "Se puede editar cuando {{provider}} esté conectado (activa su interruptor arriba y espera a que se conecte).",
         "offlineLocal": "{{provider}} está sin conexión. Los cambios se guardan en esta computadora y se sincronizan con la tarjeta de modelo de la conversación cuando vuelva a conectarse.",
         "requireBinding": "Primero completa la vinculación de la cuenta de {{provider}}.",

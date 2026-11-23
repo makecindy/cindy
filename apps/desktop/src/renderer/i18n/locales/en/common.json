@@ -6552,7 +6552,7 @@
           "defaultWorkspaceChip": "Default: {{name}}",
           "defaultWorkspaceAria": "Choose the default project for dispatched tasks",
           "defaultWorkspaceRadioAria": "Set “{{name}}” as the default project",
-          "defaultWorkspaceRowHint": "The selected project is the default: Telegram, Feishu / Lark and X conversations that have not picked a project run their tasks there.",
+          "defaultWorkspaceRowHint": "The selected project is the default: Telegram, Feishu / Lark, X and Discord conversations that have not picked a project run their tasks there.",
           "defaultProjectTag": "Default",
           "defaultProjectFullAccessWarning": "The default project “{{name}}” has Full access: an @mention from any group runs with full access inside it.",
           "sharedSettingsPointer": "Projects, models and permissions are shared by all official bots.",
@@ -6793,6 +6793,40 @@
           "workingDeviceThisComputer": "This computer",
           "workingDeviceUnknown": "Working computer not yet synced",
           "workingDeviceUnnamed": "Unnamed computer"
+        },
+        "discord": {
+          "description": "Link your Discord account and dispatch tasks to Cindy via the official bot, in direct messages or servers.",
+          "disabledHint": "Turn on the switch to get a link code, then send it to the Cindy bot in Discord.",
+          "toggleAria": "Toggle the Discord connection",
+          "connect": "Link Discord",
+          "openApp": "Add Cindy to Discord",
+          "cancel": "Cancel Linking",
+          "retry": "Retry Linking",
+          "openBot": "Open Bot",
+          "addToGroup": "Add to Server",
+          "unlink": "Unlink Discord",
+          "unlinkConfirmTitle": "Unlink Discord?",
+          "unlinkConfirmDescription": "Discord will no longer dispatch messages to this device. Your local projects and other channels are not affected.",
+          "status": {
+            "checking": "Checking server support…",
+            "unavailable": "Not available on this server",
+            "disabled": "Disabled",
+            "none": "Not linked",
+            "pending": "Send the link code to the Cindy bot",
+            "awaiting_confirmation": "Confirm the link in Discord",
+            "confirmed": "Linked as {{user}}",
+            "denied": "Linking was denied",
+            "expired": "Link code expired",
+            "failed": "Linking failed",
+            "revoked": "Link removed",
+            "superseded": "Linked to another device"
+          },
+          "bindCode": {
+            "label": "Link code",
+            "copy": "Copy code",
+            "copied": "Link code copied",
+            "hint": "Send this code to the Cindy bot in a Discord direct message, or run /bind with it in Discord. Haven't added Cindy yet? Add it to Discord first."
+          }
         }
       },
       "summary": {
@@ -7025,6 +7059,7 @@
         "providerTelegram": "Telegram",
         "providerX": "X",
         "providerFeishu": "Feishu / Lark",
+        "providerDiscord": "Discord",
         "requireConnected": "Editable once {{provider}} is connected (enable its switch above and wait for the connection).",
         "offlineLocal": "{{provider}} is offline. Changes are saved on this computer and sync to the chat model card when it reconnects.",
         "requireBinding": "Complete {{provider}} account linking first.",

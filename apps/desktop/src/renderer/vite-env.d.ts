@@ -4748,7 +4748,7 @@ interface ElectronAPI {
       enabled: boolean,
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     setProviderEnabled: (
-      provider: 'telegram' | 'x' | 'feishu',
+      provider: 'telegram' | 'x' | 'feishu' | 'discord',
       enabled: boolean,
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     /** 把一个本机目录加进项目列表(侧栏与 IM 机器人共用)。 */
@@ -4759,7 +4759,7 @@ interface ElectronAPI {
     setXCompanion: (botId: string | null, expectedBotId: string | null) =>
       Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     setProviderDefaultWorkspace: (
-      provider: 'telegram' | 'x' | 'feishu',
+      provider: 'telegram' | 'x' | 'feishu' | 'discord',
       alias: string | null,
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     bindStart: () => Promise<{ ok: true }>;
@@ -4778,22 +4778,22 @@ interface ElectronAPI {
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     cancelPendingBind: () => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     providerBindStart: (
-      provider: 'telegram' | 'x' | 'feishu',
+      provider: 'telegram' | 'x' | 'feishu' | 'discord',
       scopeId?: string,
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     providerBindCancel: (
-      provider: 'telegram' | 'x' | 'feishu',
+      provider: 'telegram' | 'x' | 'feishu' | 'discord',
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     providerBindSelect: (
-      provider: 'telegram' | 'x' | 'feishu',
+      provider: 'telegram' | 'x' | 'feishu' | 'discord',
       bindingId?: string,
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     providerBindRevoke: (
-      provider: 'telegram' | 'x' | 'feishu',
+      provider: 'telegram' | 'x' | 'feishu' | 'discord',
       bindingId?: string,
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     openProviderAction: (
-      provider: 'telegram' | 'x' | 'feishu',
+      provider: 'telegram' | 'x' | 'feishu' | 'discord',
       action: import('../shared/hookControlIpc').ProviderOpenAction,
       scopeId?: string,
     ) => Promise<{ ok: true }>;
