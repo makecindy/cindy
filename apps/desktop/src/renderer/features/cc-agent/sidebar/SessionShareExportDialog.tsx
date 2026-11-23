@@ -182,7 +182,7 @@ export function SessionShareExportDialog({
                   placeholder={t('sessionShare.export.passwordPlaceholder')}
                   disabled={exporting}
                   autoFocus
-                  className="h-8 w-full rounded-md border bg-transparent px-2 pr-8 text-sm outline-none"
+                  className="h-8 w-full rounded-full border bg-transparent px-2 pr-8 text-sm outline-none"
                   style={{
                     borderColor: 'var(--border-default)',
                     color: 'var(--confirm-title)',
@@ -216,7 +216,7 @@ export function SessionShareExportDialog({
                 onChange={(e) => setPassConfirm(e.target.value)}
                 placeholder={t('sessionShare.export.passwordConfirmPlaceholder')}
                 disabled={exporting}
-                className="h-8 w-full rounded-md border bg-transparent px-2 text-sm outline-none"
+                className="h-8 w-full rounded-full border bg-transparent px-2 text-sm outline-none"
                 style={{
                   borderColor: mismatch ? 'var(--error-border)' : 'var(--border-default)',
                   color: 'var(--confirm-title)',

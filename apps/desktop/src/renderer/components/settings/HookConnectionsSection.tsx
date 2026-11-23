@@ -1740,7 +1740,7 @@ export function HookConnectionsSection({ companion, projectsOnly = false }: {
                     type="button"
                     onClick={() => void handleRemoveBinding(b)}
                     aria-label={t('settings.remoteControl.hook.multi.removeAria')}
-                    className="shrink-0 rounded-md p-1.5 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-primary)]"
+                    className="shrink-0 rounded-lg p-1.5 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-primary)]"
                   >
                     <Trash2 size={13} />
                   </button>

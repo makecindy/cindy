@@ -403,7 +403,7 @@ export function TelegramPersonaSettings() {
         placeholder={t('settings.telegramBot.persona.soulPlaceholder')}
         spellCheck={false}
         className={cn(
-          'w-full resize-y rounded-2xl px-[14px] py-[10px]',
+          'w-full resize-y rounded-lg px-[14px] py-[10px]',
           'bg-[var(--settings-input-bg)] border border-[var(--settings-input-border)]',
           'text-13 leading-[1.6] text-[var(--settings-input-text)] placeholder:text-[var(--settings-input-placeholder)]',
           'outline-none transition-colors focus:border-[var(--settings-input-border-focus)]',

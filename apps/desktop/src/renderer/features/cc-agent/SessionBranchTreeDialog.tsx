@@ -254,7 +254,7 @@ export function SessionBranchTreeDialog({
               </Dialog.Description>
             </div>
             <Dialog.Close asChild>
-              <button type="button" className="rounded-md p-1 text-[var(--text-tertiary)] hover:bg-[var(--surface-elevated)]" aria-label={t('ccAgent.sidebar.sessionBranches.close')}>
+              <button type="button" className="rounded-lg p-1 text-[var(--text-tertiary)] hover:bg-[var(--surface-elevated)]" aria-label={t('ccAgent.sidebar.sessionBranches.close')}>
                 <X size={16} />
               </button>
             </Dialog.Close>

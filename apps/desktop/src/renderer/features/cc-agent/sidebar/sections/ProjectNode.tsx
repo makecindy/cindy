@@ -415,7 +415,7 @@ const ProjectHeader = memo(function ProjectHeader({
               }}
               onClick={(e) => e.stopPropagation()}
               className={cn(
-                'min-w-0 flex-1 h-6 px-1.5 rounded',
+                'min-w-0 flex-1 h-6 px-1.5 rounded-full',
                 'text-sm font-normal text-foreground',
                 'bg-transparent outline-none',
                 'border-[1.5px] border-[var(--focus-ring)]',
@@ -711,7 +711,7 @@ function ProjectAction({ label, onClick, disabled = false, children }: ProjectAc
         onPointerDown={(e) => e.stopPropagation()}
         onKeyDown={(e) => e.stopPropagation()}
         className={cn(
-          'shrink-0 size-5 flex items-center justify-center rounded-md',
+          'shrink-0 size-5 flex items-center justify-center rounded-lg',
           'text-sidebar-action-icon hover:text-foreground',
           'hover:bg-sidebar-item-hover focus:outline-none',
           'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent',

@@ -1237,3 +1237,11 @@ Toast 仍在它之上：Toast 不拦截操作、只占角落，盖住阻断提�
 明确不包含：Codex（ChatGPT）凭证失效提示可以选「稍后」，不属于阻断提示。主进程发起的授权请求（插件确认、插件安装授权、本机 Agent 确认等）同样会被 `modal-raised` 面板压住，被压住时等到超时按拒绝处理；要不要让它们盖过用户正在用的弹窗，另行决定。
 
 现行规则见 `DESIGN.md` §6 层级刻度。落点：`packages/design-tokens`（`z-modal-blocking`）、`confirm-dialog-provider.tsx`、`AuthContext.tsx`；测试 `confirmDialogBlocking.test.tsx`、`modalBlockingLayer.guard.test.ts`。
+
+## 2026-11-23 · 桌面端预设圆角类改到刻度值
+
+桌面 renderer 里的预设圆角类 `rounded-md`（6px，随主题 `--radius`）、`rounded-sm`（4px，随主题）、裸 `rounded`（4px）与 `rounded-2xl`（16px）按盘点（基线 `ceb6e01d077`，208 处）分组裁决，32 组全部按推荐。改值：图标按钮的悬停面、焦点环包裹层、菜单与列表行高亮、多行输入、说明块与日志块、缩略图、取色框、拖拽影像改 8px；横幅、Diff 文件卡与手写浮层改 12px；单行输入、行内重命名、徽标、16px 以下的小图标按钮、输入框里的清除钮与加载骨架条改胶囊。行内代码统一 6px 并入「内容排版」；键帽、拖拽柄与应用图标等值替换；注释与变量名里的 rounded 是误报。
+
+手写控件换共享组件与正当例外登记见「预设圆角：手写控件换共享组件，正当例外登记」一条。
+
+现行规则见 `DESIGN.md` §5 Border Radius Scale。

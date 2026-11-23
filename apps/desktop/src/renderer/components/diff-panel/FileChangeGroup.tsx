@@ -69,7 +69,7 @@ export function FileChangeGroup({
   };
 
   return (
-    <li className="rounded-md border border-border bg-background/50">
+    <li className="rounded-xl border border-border bg-background/50">
       <button
         type="button"
         onClick={() => setExpanded((p) => !p)}
@@ -95,7 +95,7 @@ export function FileChangeGroup({
         </span>
         <span className="flex shrink-0 items-center gap-2 text-xs tabular-nums">
           {change.isBinary ? (
-            <span className="rounded bg-muted px-1.5 py-0.5 text-10 text-muted-foreground">
+            <span className="rounded-full bg-muted px-1.5 py-0.5 text-10 text-muted-foreground">
               {t(summaryOnly ? 'skillhub.publishComparison.summaryBadge' : 'skillhub.diffPanel.binaryBadge')}
             </span>
           ) : stats ? (
