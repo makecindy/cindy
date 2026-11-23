@@ -33,7 +33,7 @@ export default {
       [
         'telegram-save-timeout',
         {
-          about: 'telegram: a new binding that only timed out keeps the input; the same input then connects',
+          about: 'telegram: a new binding that only timed out keeps the input and offers the same Connect',
           data: { channel: 'telegram', saveTimeout: true },
         },
       ],
@@ -43,6 +43,13 @@ export default {
           about: 'telegram: save timeout at 320px',
           data: { channel: 'telegram', saveTimeout: true },
           viewport: { width: 320, height: 850 },
+        },
+      ],
+      [
+        'telegram-save-timeout-retry',
+        {
+          about: 'telegram: retrying the kept input after a timeout connects',
+          data: { channel: 'telegram', saveTimeout: true, retry: true },
         },
       ],
     ]),
@@ -69,6 +76,8 @@ export default {
         assert.equal(await page.getByRole('button', { name: await ui.t(key), exact: true }).count(), 0);
       }
       await ui.capture('timed-out');
+      // The published frame is the last one: timeout cases stop here, `-retry` shows the result.
+      if (!ui.data.retry) return;
       await connect.click();
       await alert.waitFor({ state: 'hidden' });
       await page.getByText(await ui.t('settings.telegramBot.status.connected'), { exact: true }).first().waitFor();
