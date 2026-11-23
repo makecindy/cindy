@@ -3288,12 +3288,23 @@ export class AgentInputCoordinator {
       steerGeneration,
       steerRequestToken,
     );
-    const preservesWorkerRecovery = workerRecoverySource !== undefined &&
-      accepted.recovery?.kind === 'active-turn' &&
-      accepted.recovery.item?.clientId === workerRecoverySource.item.clientId &&
-      this.isContinuationOnlyAutoResume(sessionId);
+    const workerSourceClientId = workerRecoverySource?.item.clientId;
+    const preservesWorkerRecovery = workerSourceClientId !== undefined && (
+      (accepted.recovery?.kind === 'active-turn' &&
+        accepted.recovery.item.clientId === workerSourceClientId &&
+        isContinuationOnlyAutoResumeReason(accepted.autoResumePending?.reason)) ||
+      // After backoff the retry owns the original recovery until vendor dispatch.
+      (accepted.autoResumeAttemptToken !== null &&
+        Array.from(this.pendingAutoResumeRecoveries.values()).some((pending) =>
+          pending.stateRef === accepted && pending.attemptToken === accepted.autoResumeAttemptToken &&
+          pending.recovery.item.clientId === workerSourceClientId &&
+          isContinuationOnlyAutoResumeReason(pending.autoResumeInfo?.reason),
+        ))
+    );
     if (!ownsCurrentSteerMarker || preservesWorkerRecovery) {
-      this.clearSteeringMarker(accepted, item.clientId, { generation: steerGeneration, token: steerRequestToken });
+      const releasedSteerMarker = this.clearSteeringMarker(accepted, item.clientId, {
+        generation: steerGeneration, token: steerRequestToken,
+      });
       this.clearSteerAbortController(sessionId, item.clientId, steerAbort);
       if (
         accepted.generation !== steerGeneration ||
@@ -3350,6 +3361,9 @@ export class AgentInputCoordinator {
         persisted,
       });
       this.emit(sessionId);
+      if (preservesWorkerRecovery && releasedSteerMarker) {
+        this.scheduleDrain(sessionId, 'steer-persistence-settled');
+      }
       return finishSteerRequest(true);
     }
     this.clearDirectSteeringItem(accepted, item.clientId);

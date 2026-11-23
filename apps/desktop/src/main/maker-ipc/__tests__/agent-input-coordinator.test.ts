@@ -14640,7 +14640,9 @@ describe('Orca report durable recovery', () => {
     },
   );
 
-  it.each([false, true])('retains Worker recovery after an EOF races steer ACK (runtime closed: %s)', async closes => {
+  // Unit regression for PR #12163: an EOF can queue Continue before the provider
+  // acknowledges a steer. The earlier cases settle the ACK before backoff expires.
+  it.each(['before-backoff', 'after-backoff', 'after-close'] as const)('retains Worker recovery when steer ACK arrives %s', async timing => {
     vi.useFakeTimers();
     const ack = deferred<void>();
     try {
@@ -14666,11 +14668,21 @@ describe('Orca report durable recovery', () => {
       h.setRunning(false);
       h.coordinator.onTurnEvent('worker', 'error', 'Session event loop stopped unexpectedly without a terminal event',
         { reason: 'session_event_loop_crashed' }, { sessionInstanceId: runtime.instanceId, sessionTurnGeneration: 1 });
-      if (closes) {
+      if (timing === 'after-close') {
         h.coordinator.onSessionClosed('worker', { preserveAutoResumeIntent: true });
         h.setTurnSessionIdentity({ instanceId: 'replacement' });
       }
-      mocks.createMessage.mockRejectedValueOnce(new Error('steer row unavailable'));
+      if (timing === 'after-backoff') {
+        await vi.advanceTimersByTimeAsync(4_000);
+        expect(h.coordinator.hasQueuedAutoResume('worker')).toBe(true);
+        expect(h.sendToAgent).not.toHaveBeenCalled();
+        h.setObservedCurrentTurnTerminal({
+          kind: 'error', generation: 1, reason: 'session_event_loop_crashed',
+          message: 'Session event loop stopped unexpectedly without a terminal event',
+        });
+      } else {
+        mocks.createMessage.mockRejectedValueOnce(new Error('steer row unavailable'));
+      }
       ack.resolve();
       await expect(steering).resolves.toBe('steered');
       await vi.advanceTimersByTimeAsync(10_000);
