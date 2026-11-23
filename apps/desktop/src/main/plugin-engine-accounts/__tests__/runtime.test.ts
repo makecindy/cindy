@@ -23,7 +23,7 @@ import {
  * - 现有覆盖缺口：新模块；内置账号池的测试只覆盖 Claude / Codex。
  * - 最小失败输入：两个已登录账号的引擎连开两个任务；第一个账号启动时报额度用完；绑定账号额度用完后再发送；
  *   空闲一分钟后绑定账号已退出登录再发送；重新登录只回「已登录」不回身份；插件登录失败的添加；
- *   各账号只列出自己的真实模型时用引擎默认模型（`default`）开任务。
+ *   各账号只列出自己的真实模型时用引擎默认模型（`default`）开任务；还没保存过账号设置时重启后重新登录原有登录。
  * - tier：unit(内存设置文件、内存冷却、假的插件 worker；只有账号目录在 mkdtemp 临时目录里创建)。
  *   实测耗时：< 2s。
  */
@@ -80,7 +80,7 @@ const { acquirePluginEngineAccount, runPluginEngineAccountCommand, resetPluginEn
   await import('../runtime.js');
 const { withPluginEngineAccounts } = await import('../agent.js');
 const { preparePluginEngineAccountForSend } = await import('../failover.js');
-const { updatePluginEnginePool, readPluginEngineBinding } = await import('../store.js');
+const { updatePluginEnginePool, readPluginEngineBinding, readPluginEnginePool } = await import('../store.js');
 
 const ENGINE = 'dsh-plugin:dsh';
 const PROVIDER = `acp-plugin:${ENGINE}`;
@@ -249,6 +249,24 @@ describe('plugin engine account pool', () => {
       .rejects.toThrow('login_failed');
     const after = await runPluginEngineAccountCommand({ action: 'read', providerId: PROVIDER });
     expect(after.accounts).toHaveLength(4);
+  });
+
+  // Review of #12242: before any account setting is saved, the original login's identity was not
+  // kept, so after a restart its re-login accepted anyone. Minimal input: no saved pool, the original
+  // login read once as me@example.com, Cindy restarted, then re-signed in as other@example.com.
+  it('keeps the original login identity before any account setting is saved, and checks its re-login against it', async () => {
+    h.files.clear();
+    h.status.set('default', { state: 'signed-in', identity: { email: 'me@example.com' } });
+    await runPluginEngineAccountCommand({ action: 'read', providerId: PROVIDER });
+    await vi.waitFor(() => expect(readPluginEnginePool(ENGINE)?.accounts.find(account => account.id === 'default')?.lastConfirmedIdentity)
+      .toBe('me@example.com'));
+    resetPluginEngineAccountsRuntimeForTests();
+    h.login.mockImplementationOnce(async (_key: string, dir: string | undefined) => {
+      h.status.set(dir ? path.basename(dir) : 'default', { state: 'signed-in', identity: { email: 'other@example.com' } });
+      return { ok: true };
+    });
+    await expect(runPluginEngineAccountCommand({ action: 'login', providerId: PROVIDER, accountId: 'default', loginKey: 'k1', methodId: 'api-key', secret: 'sk' }))
+      .rejects.toThrow('account_mismatch');
   });
 
   // Review of #12242: `default` asks for the engine's own starting model, so accounts that list their

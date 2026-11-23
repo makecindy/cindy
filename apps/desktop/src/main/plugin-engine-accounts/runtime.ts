@@ -272,7 +272,11 @@ async function readStatus(
 
 /** Bounded write: only when the confirmed identity actually changed. */
 async function rememberIdentity(engineKey: string, accountId: string, identity: string): Promise<void> {
-  const account = readPluginEnginePool(engineKey)?.accounts.find(entry => entry.id === accountId);
+  // The original login of an engine that can add accounts keeps its identity before any account
+  // setting was saved too: a later re-login of it is checked against it.
+  const pool = readPluginEnginePool(engineKey)
+    ?? (accountId === 'default' && liveEngine(engineKey)?.accounts?.methods.length ? effectivePluginEnginePool(engineKey) : null);
+  const account = pool?.accounts.find(entry => entry.id === accountId);
   if (!account || account.lastConfirmedIdentity === identity) return;
   // A re-login still waiting for its own identity keeps the guard; a matching identity clears it.
   const relogin = account.reloginIdentity;
@@ -915,7 +919,9 @@ export async function runPluginEngineAccountCommand(
       if ((state.running.get(accountKey(ref.engineKey, account.id))?.size ?? 0) > 0) throw new Error('Account is in use');
       const method = methodFor(command.methodId);
       // Signing in as someone else does not count: keep the account out until its identity returns.
-      const original = account.lastConfirmedIdentity;
+      // The identity shown last stands in when its saving has not happened yet.
+      const shown = state.status.get(accountKey(ref.engineKey, account.id))?.status;
+      const original = account.lastConfirmedIdentity ?? (shown?.state === 'signed-in' ? displayIdentity(shown) : undefined);
       if (original) await withPool(ref, current => ({
         ...current,
         accounts: current.accounts.map(entry => entry.id === account.id ? { ...entry, reloginIdentity: original } : entry),
