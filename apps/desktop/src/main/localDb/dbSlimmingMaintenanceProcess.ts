@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 
 import { runDbSlimmingMaintenance } from './dbSlimmingMaintenance';
+import { readDbSlimmingPreview } from './dbSlimmingScanQuery';
 import type {
   DbSlimmingProcessCommand,
   DbSlimmingProcessInput,
@@ -73,6 +74,15 @@ async function run(input: DbSlimmingProcessInput): Promise<void> {
 
 processPort.on('message', (event) => {
   const command = event.data as Partial<DbSlimmingProcessCommand> | undefined;
+  if (command?.type === 'scan' && !started && command.input) {
+    started = true;
+    try {
+      post({ type: 'scan-result', row: readDbSlimmingPreview(command.input) });
+    } catch (error) {
+      post({ type: 'error', error: { message: error instanceof Error ? error.message : String(error) } });
+    }
+    return;
+  }
   if (command?.type === 'commit') {
     const resolve = releaseCommit;
     releaseCommit = null;

@@ -9712,7 +9712,6 @@ const registerIpcHandlers = () => {
         !isAppSessionBoundaryPending() &&
         getActiveAppSession().dataOwnerId === ownerId &&
         activeOwnerScopeKey() === scopeKey,
-      getDbClient,
       getDbClientOwnerId: getCurrentDbClientUserId,
       getCurrentDbPath: () => {
         const ownerId = getActiveAppSession().dataOwnerId;

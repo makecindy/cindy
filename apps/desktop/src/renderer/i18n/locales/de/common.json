@@ -1370,6 +1370,7 @@
     "DEVICE_LINK_BUSY": "Der Remotecomputer ist ausgelastet. Versuche es in Kürze erneut.",
     "INVALID_PARAMS": "Ungültige Eingabe. Überprüfe sie und versuch es erneut.",
     "PRECONDITION_FAILED": "Diese Aktion ist im aktuellen Zustand nicht verfügbar. Versuch es erneut.",
+    "DB_SCAN_TIMEOUT": "Die Datenbankprüfung hat das Zeitlimit überschritten. Es wurden keine Daten geändert.",
     "PROVIDER_GROUP_CHANGED": "Die Anbietergruppe wurde an anderer Stelle geändert, daher wurde diese Aktion nicht angewendet. Überprüfe die aktuellen Einstellungen und versuch es erneut.",
     "MODEL_CONTEXT_USAGE_UNKNOWN": "Modell nicht gewechselt: Cindy kann nicht überprüfen, wie viel Kontext diese Aufgabe nutzt. Behalte das aktuelle Modell bei oder starte eine neue Aufgabe.",
     "MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN": "Modell nicht gewechselt: Cindy kann das Kontextfenster des aktuellen Modells nicht überprüfen. Prüfe bei einem benutzerdefinierten Modell die Einstellung für das Kontextfenster. Falls sie sich nicht ändern lässt, behalte das aktuelle Modell bei oder starte eine neue Aufgabe.",

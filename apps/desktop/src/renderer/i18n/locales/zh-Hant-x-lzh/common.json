@@ -1357,6 +1357,7 @@
     "DEVICE_LINK_BUSY": "遠端方忙，請稍後再試。",
     "INVALID_PARAMS": "引數無效，請察之而後再試。",
     "PRECONDITION_FAILED": "今之狀態下不能行此操作，請稍後再試。",
+    "DB_SCAN_TIMEOUT": "資料庫掃描逾時，資料未改。",
     "PROVIDER_GROUP_CHANGED": "供方組已於他處修改，此番操作未行。請察最新設定而後重為之",
     "MODEL_CONTEXT_USAGE_UNKNOWN": "模型未易：不能確知今差事已用之上下文。請留今模型，或新開差事後再擇",
     "MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN": "模型未易：不能確知今模型之上下文視窗。請察自訂模型之視窗設定；若不能改，請留今模型或新開差事",

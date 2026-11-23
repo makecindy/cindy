@@ -29,7 +29,7 @@ const DB_SLIMMING_WORKER_INACTIVITY_PER_GIB_MS = 2 * 60_000;
 const DB_SLIMMING_WORKER_INACTIVITY_MAX_MS = 2 * 60 * 60_000;
 const GIB_BYTES = 1024 ** 3;
 
-interface DbSlimmingUtilityProcessLike {
+export interface DbSlimmingUtilityProcessLike {
   postMessage(message: DbSlimmingProcessCommand): void;
   on(event: 'message', listener: (message: unknown) => void): void;
   on(event: 'exit', listener: (code: number) => void): void;
@@ -91,7 +91,7 @@ export function dbSlimmingWorkerInactivityTimeoutMs(beforeBytes: number): number
   );
 }
 
-function forkDbSlimmingUtilityProcess(): DbSlimmingUtilityProcessLike {
+export function forkDbSlimmingUtilityProcess(): DbSlimmingUtilityProcessLike {
   const env: NodeJS.ProcessEnv = {};
   for (const key of [
     'PATH',

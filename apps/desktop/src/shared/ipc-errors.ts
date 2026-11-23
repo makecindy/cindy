@@ -88,6 +88,7 @@ export type IpcErrorCode =
   | 'INTERNAL'
   | 'ALREADY_EXISTS'
   | 'PRECONDITION_FAILED'
+  | 'DB_SCAN_TIMEOUT'
   | 'OFFICIAL_PLUGIN_GITHUB_REQUIRED' // 客户端提审限制，不扩展服务端 wire 错误
   | 'VOICE_SPEECH_TIMEOUT' // 本机语音合成等待响应或音频读取超时
   | 'VOICE_CONVERSATION_BUSY' // 本机已有语音通话、朗读、试听或听写占用麦克风
@@ -379,6 +380,7 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'INTERNAL',
   'ALREADY_EXISTS',
   'PRECONDITION_FAILED',
+  'DB_SCAN_TIMEOUT',
   'OFFICIAL_PLUGIN_GITHUB_REQUIRED',
   'VOICE_SPEECH_TIMEOUT',
   'VOICE_CONVERSATION_BUSY',

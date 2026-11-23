@@ -1357,6 +1357,7 @@
     "DEVICE_LINK_BUSY": "远端繁忙，请稍后重试。",
     "INVALID_PARAMS": "参数无效，请检查后重试。",
     "PRECONDITION_FAILED": "当前状态下无法执行此操作，请稍后重试。",
+    "DB_SCAN_TIMEOUT": "数据库扫描超时，数据未更改。",
     "PROVIDER_GROUP_CHANGED": "供应商组已在别处修改，本次操作未执行。请查看最新设置后重新操作",
     "MODEL_CONTEXT_USAGE_UNKNOWN": "模型未切换：无法确认当前任务已使用的上下文。请保留当前模型，或新建任务后再选择",
     "MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN": "模型未切换：无法确认当前模型的上下文窗口。请检查自定义模型的窗口设置；若无法修改，请保留当前模型或新建任务",

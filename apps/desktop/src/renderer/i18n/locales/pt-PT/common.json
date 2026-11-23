@@ -1388,6 +1388,7 @@
     "DEVICE_LINK_BUSY": "O computador remoto está ocupado. Tente novamente dentro de instantes.",
     "INVALID_PARAMS": "Entrada inválida. Verifique e tente novamente.",
     "PRECONDITION_FAILED": "Esta ação está indisponível no estado atual. Tente novamente.",
+    "DB_SCAN_TIMEOUT": "A análise da base de dados excedeu o tempo limite. Os dados não foram alterados.",
     "PROVIDER_GROUP_CHANGED": "O grupo de fornecedores foi alterado noutro local, pelo que esta ação não foi aplicada. Reveja as definições mais recentes e tente novamente.",
     "MODEL_CONTEXT_USAGE_UNKNOWN": "Modelo não alterado: Cindy não consegue verificar quanto contexto esta tarefa utiliza. Mantenha o modelo atual ou inicie uma nova tarefa.",
     "MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN": "Modelo não alterado: Cindy não consegue verificar a janela de contexto do modelo atual. Verifique a definição da janela para um modelo personalizado. Se não puder ser alterada, mantenha o modelo atual ou inicie uma nova tarefa.",

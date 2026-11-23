@@ -1388,6 +1388,7 @@
     "DEVICE_LINK_BUSY": "L'ordinateur distant est occupé. Réessayez dans un instant.",
     "INVALID_PARAMS": "Saisie invalide. Vérifiez et réessayez.",
     "PRECONDITION_FAILED": "Cette action n'est pas disponible dans l'état actuel. Réessayez.",
+    "DB_SCAN_TIMEOUT": "L’analyse de la base de données a dépassé le délai. Aucune donnée n’a été modifiée.",
     "PROVIDER_GROUP_CHANGED": "Le groupe de fournisseurs a été modifié ailleurs ; cette action n'a donc pas été appliquée. Consultez les derniers paramètres et réessayez.",
     "MODEL_CONTEXT_USAGE_UNKNOWN": "Modèle non changé : Cindy ne peut pas vérifier la quantité de contexte utilisée par cette tâche. Conservez le modèle actuel ou démarrez une nouvelle tâche.",
     "MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN": "Modèle non changé : Cindy ne peut pas vérifier la fenêtre de contexte du modèle actuel. Vérifiez le paramètre de fenêtre d'un modèle personnalisé. S'il ne peut pas être modifié, conservez le modèle actuel ou démarrez une nouvelle tâche.",

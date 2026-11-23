@@ -4,7 +4,6 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { DbClient } from '../../client/DbClient';
 import { archiveCutoffForAge, createLocalDbMaintenanceIpcHandlers } from '../maintenance';
 import {
   readDbSlimmingRequest,
@@ -47,7 +46,7 @@ function createHarness() {
     captureOwner: () => ({ ...owner }),
     isOwnerCurrent: (snapshot) =>
       snapshot.ownerId === owner.ownerId && snapshot.scopeKey === owner.scopeKey,
-    getDbClient: () => ({ queryOne } as unknown as DbClient),
+    scanDatabase: queryOne,
     getDbClientOwnerId: () => dbClientOwnerId,
     getCurrentDbPath: () => dbFilePath,
     getUserDataDir: () => tmpDir,
@@ -78,6 +77,50 @@ function createHarness() {
 }
 
 describe('local database maintenance IPC', () => {
+  // #11628: the preview used to enter the same worker queue as message persistence.
+  // The injected scan models that independent read; real WAL/worker coverage is in
+  // dbSlimmingScan.test.ts (db tier), while these cases protect grant/lifecycle behavior.
+  it('returns a read-only preview without entering the ordinary database RPC queue (#11628)', async () => {
+    const { handlers } = createHarness();
+    await expect(handlers.scan({ archiveAgeMonths: 3 })).resolves.toMatchObject({
+      messageCount: 3,
+      estimatedMessageBytes: 4_096,
+    });
+  });
+
+  it('bounds concurrent scans, rejects a stale owner result and releases the guard for retry', async () => {
+    const harness = createHarness();
+    let finish!: (row: Awaited<ReturnType<typeof harness.queryOne>>) => void;
+    harness.queryOne.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const scanning = harness.handlers.scan({ archiveAgeMonths: 3 });
+    await expect(harness.handlers.scan({ archiveAgeMonths: 1 })).rejects.toThrow('already running');
+    expect(harness.queryOne).toHaveBeenCalledTimes(1);
+    harness.setOwner({ ownerId: 'owner-1', scopeKey: 'scope-2' });
+    finish({ activeTaskCount: 0, deletedTaskCount: 1, archivedTaskCount: 2,
+      messageCount: 3, estimatedMessageBytes: 4096 });
+    await expect(scanning).rejects.toThrow('[PRECONDITION_FAILED]');
+    await expect(harness.handlers.scan({ archiveAgeMonths: 1 })).resolves.toMatchObject({ messageCount: 3 });
+  });
+
+  it('captures the path before scanning and refuses a result if that path changes', async () => {
+    const harness = createHarness();
+    const capturedPath = dbFilePath;
+    harness.queryOne.mockImplementationOnce(async () => {
+      dbFilePath = path.join(tmpDir, 'other.db');
+      return { activeTaskCount: 0, deletedTaskCount: 1, archivedTaskCount: 2,
+        messageCount: 3, estimatedMessageBytes: 4096 };
+    });
+    await expect(harness.handlers.scan({ archiveAgeMonths: 1 })).rejects.toThrow('path changed');
+    expect(harness.queryOne).toHaveBeenCalledWith(expect.objectContaining({ dbFilePath: capturedPath }));
+  });
+
+  it('releases the scan guard after a reader failure without creating a cleanup request', async () => {
+    const harness = createHarness();
+    harness.queryOne.mockRejectedValueOnce(new Error('reader failed'));
+    await expect(harness.handlers.scan({ archiveAgeMonths: 1 })).rejects.toThrow('reader failed');
+    expect(readDbSlimmingRequest(tmpDir)).toBeNull();
+    await expect(harness.handlers.scan({ archiveAgeMonths: 1 })).resolves.toMatchObject({ messageCount: 3 });
+  });
   it('accepts only the fixed 7 day, 1 month, 3 month, and 6 month archive thresholds', async () => {
     const { handlers, queryOne } = createHarness();
 
@@ -100,12 +143,11 @@ describe('local database maintenance IPC', () => {
     const scan = await handlers.scan({ archiveAgeMonths: 3 });
 
     expect(scan).toMatchObject({ includeActiveTasks: false, activeTaskCount: 0 });
-    expect(queryOne).toHaveBeenLastCalledWith(expect.stringContaining("status = 'active'"), [
-      scan.archivedBeforeMs,
-      scan.archivedBeforeMs,
-      0,
-      scan.archivedBeforeMs,
-    ]);
+    expect(queryOne).toHaveBeenLastCalledWith(expect.objectContaining({
+      dbFilePath,
+      archivedBeforeMs: scan.archivedBeforeMs,
+      includeActiveTasks: false,
+    }));
 
     for (const includeActiveTasks of [null, 0, 'true', {}]) {
       await expect(
@@ -131,10 +173,11 @@ describe('local database maintenance IPC', () => {
     });
 
     expect(scan).toMatchObject({ includeActiveTasks: true, activeTaskCount: 4 });
-    expect(harness.queryOne).toHaveBeenLastCalledWith(
-      expect.stringContaining("status = 'active'"),
-      [scan.archivedBeforeMs, scan.archivedBeforeMs, 1, scan.archivedBeforeMs],
-    );
+    expect(harness.queryOne).toHaveBeenLastCalledWith(expect.objectContaining({
+      dbFilePath,
+      archivedBeforeMs: scan.archivedBeforeMs,
+      includeActiveTasks: true,
+    }));
 
     await expect(
       harness.handlers.schedule({ scanId: scan.scanId, backupEnabled: true }),

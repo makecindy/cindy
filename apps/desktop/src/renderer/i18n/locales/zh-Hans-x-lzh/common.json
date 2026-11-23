@@ -1357,6 +1357,7 @@
     "DEVICE_LINK_BUSY": "远程方忙，请稍后再试。",
     "INVALID_PARAMS": "参数无效，请察之而后再试。",
     "PRECONDITION_FAILED": "今之状态下不能行此操作，请稍后再试。",
+    "DB_SCAN_TIMEOUT": "数据库扫描逾时，资料未改。",
     "PROVIDER_GROUP_CHANGED": "供方组已于他处修改，此番操作未行。请察最新设置而后重为之",
     "MODEL_CONTEXT_USAGE_UNKNOWN": "模型未易：不能确知今差事已用之上下文。请留今模型，或新开差事后再择",
     "MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN": "模型未易：不能确知今模型之上下文窗口。请察自订模型之窗口设置；若不能改，请留今模型或新开差事",

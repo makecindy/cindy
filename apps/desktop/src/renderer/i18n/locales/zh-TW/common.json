@@ -1357,6 +1357,7 @@
     "DEVICE_LINK_BUSY": "遠端忙碌中，請稍後再試。",
     "INVALID_PARAMS": "輸入無效，請檢查後重試。",
     "PRECONDITION_FAILED": "目前狀態下無法執行此操作，請稍後再試。",
+    "DB_SCAN_TIMEOUT": "資料庫掃描逾時，資料未變更。",
     "PROVIDER_GROUP_CHANGED": "供應商組已在別處修改，本次操作未執行。請查看最新設定後重新操作",
     "MODEL_CONTEXT_USAGE_UNKNOWN": "模型未切換：無法確認目前任務已使用的上下文。請保留目前模型，或新增任務後再選擇",
     "MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN": "模型未切換：無法確認目前模型的上下文視窗。請檢查自訂模型的視窗設定；若無法修改，請保留目前模型或新增任務",

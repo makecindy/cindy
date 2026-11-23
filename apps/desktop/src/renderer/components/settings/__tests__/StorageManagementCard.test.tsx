@@ -687,10 +687,10 @@ describe('StorageManagementCard fixed cache directories', () => {
 });
 
 describe('StorageManagementCard database cleanup', () => {
-  it('maps serialized IPC scan failures to localized messages', async () => {
+  it.each(['PRECONDITION_FAILED', 'DB_SCAN_TIMEOUT'])('maps serialized IPC scan failure %s to a localized message', async (code) => {
     vi.mocked(window.electronAPI.localDb.maintenance.scan).mockRejectedValueOnce(
       new Error(
-        'Error invoking remote method: Error: [PRECONDITION_FAILED] active database owner changed',
+        `Error invoking remote method: Error: [${code}] private scan error details`,
       ),
     );
     render(<StorageManagementCard />);
@@ -700,10 +700,10 @@ describe('StorageManagementCard database cleanup', () => {
     );
 
     await waitFor(() => {
-      expect(toast.error).toHaveBeenCalledWith('ipcError.PRECONDITION_FAILED');
+      expect(toast.error).toHaveBeenCalledWith(`ipcError.${code}`);
     });
     expect(toast.error).not.toHaveBeenCalledWith(
-      expect.stringContaining('active database owner changed'),
+      expect.stringContaining('private scan error details'),
     );
   });
 
