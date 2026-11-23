@@ -14642,7 +14642,10 @@ describe('Orca report durable recovery', () => {
 
   // Unit regression for PR #12163: an EOF can queue Continue before the provider
   // acknowledges a steer. The earlier cases settle the ACK before backoff expires.
-  it.each(['before-backoff', 'after-backoff', 'after-close', 'after-takeover', 'before-stopped-write'] as const)('settles Worker recovery when steer ACK arrives %s', async timing => {
+  it.each([
+    'before-backoff', 'after-backoff', 'after-close', 'after-takeover',
+    'before-stopped-write', 'before-replacement-failure',
+  ] as const)('settles Worker recovery when steer ACK arrives %s', async timing => {
     vi.useFakeTimers();
     const ack = deferred<void>();
     try {
@@ -14684,7 +14687,7 @@ describe('Orca report durable recovery', () => {
         expect(h.sendToAgent).not.toHaveBeenCalled();
       } else if (timing === 'after-takeover') {
         h.coordinator.enqueue('worker', makeItem('takeover', 'My next instruction'));
-      } else if (timing === 'before-stopped-write') {
+      } else if (timing === 'before-stopped-write' || timing === 'before-replacement-failure') {
         const savingSteer = deferred<void>();
         const steerWrite = deferred<void>();
         mocks.createMessage.mockImplementationOnce(async () => {
@@ -14694,12 +14697,23 @@ describe('Orca report durable recovery', () => {
         });
         ack.resolve();
         await savingSteer.promise;
-        h.coordinator.stop('worker');
+        if (timing === 'before-stopped-write') {
+          h.coordinator.stop('worker');
+        } else {
+          h.setTurnGeneration(2);
+          h.coordinator.enqueue('worker', makeItem('takeover', 'My next instruction'));
+          await vi.advanceTimersByTimeAsync(100);
+          expect(h.sendToAgent).toHaveBeenCalledOnce();
+          h.coordinator.onTurnEvent('worker', 'error', 'New turn failed');
+          expect(h.coordinator.getProjection('worker').error).toBe('New turn failed');
+        }
         steerWrite.reject(new Error('steer row unavailable'));
         await expect(steering).resolves.toBe('steered');
-        expect(h.coordinator.getProjection('worker').error).toContain('steer row unavailable');
+        const projection = h.coordinator.getProjection('worker');
+        expect(projection.error).toBe(timing === 'before-stopped-write'
+          ? 'Failed to persist user message: steer row unavailable' : 'New turn failed');
         await vi.advanceTimersByTimeAsync(10_000);
-        expect(h.sendToAgent).not.toHaveBeenCalled();
+        expect(h.sendToAgent).toHaveBeenCalledTimes(timing === 'before-stopped-write' ? 0 : 1);
         return;
       } else {
         mocks.createMessage.mockRejectedValueOnce(new Error('steer row unavailable'));

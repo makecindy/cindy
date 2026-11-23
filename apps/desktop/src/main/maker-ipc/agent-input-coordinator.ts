@@ -863,6 +863,7 @@ interface SessionInputState {
   /** Last completed owner input, only reusable by a wake-up of that live SDK turn. */
   providerContinuationCandidate?: { turn: ActiveTurn; sessionIdentity: object };
   error: string | null;
+  detachedSteerPersistenceError: string | null;
   /** Stable error reason for live projections; null when no terminal error is active. */
   errorReason: string | null;
   errorPersistBinding: { message: string; persistId: string } | null;
@@ -1012,6 +1013,7 @@ function createInitialInputState(
     queueAbortPending: false,
     activeTurn: null,
     error: null,
+    detachedSteerPersistenceError: null,
     errorReason: null,
     errorPersistBinding: null,
     errorCanContinue: false,
@@ -4117,6 +4119,7 @@ export class AgentInputCoordinator {
     this.cancelPreparedAutoResume(sessionId, state);
     const shouldDrainTail = state.recovery?.kind === 'active-turn';
     state.error = null;
+    state.detachedSteerPersistenceError = null;
     clearErrorProjectionSignals(state);
     state.stickyError = null;
     // 用户显式收下了这条错误 → 自愈提示也该撤掉(退避到点后的复核会发现 recovery
@@ -5248,7 +5251,7 @@ export class AgentInputCoordinator {
     const pendingQueue = state.pendingQueue.map((item) => this.toProjectedItem(item));
     // 供应商组正在换电脑：错误先不呈现(没有红横幅、没有限额倒计时)，聊天流里只有「正在换一台电脑继续」。
     const groupSwitchHeld = isProviderGroupSwitchHoldLive(state);
-    const error = groupSwitchHeld || (state.autoResumePending?.reason === 'orca-report-preparation'
+    const turnError = groupSwitchHeld || (state.autoResumePending?.reason === 'orca-report-preparation'
       || state.autoResumePending?.reason === BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON) ? null : state.error;
     // Draining removes the queue row before asynchronous preparation starts.
     // Keep the existing recovery projection until dispatch settles; derive it
@@ -5260,6 +5263,10 @@ export class AgentInputCoordinator {
           ? state.activeTurn.providerGroupReconnect ??
             (state.activeTurn.item?.autoResume ? state.activeTurn.item.autoResumeInfo : undefined)
           : undefined
+    );
+    const error = turnError ?? (
+      !groupSwitchHeld && state.autoResumeAttemptToken === null && !state.recovery
+        ? state.detachedSteerPersistenceError : null
     );
     const recovery: AgentInputRecovery =
       state.recovery?.kind === 'active-turn'
@@ -5287,13 +5294,13 @@ export class AgentInputCoordinator {
       queueEditLocks: [...state.queueEditLocks],
       queueAbortPending: state.queueAbortPending,
       error,
-      ...(error && state.errorPersistBinding?.message === error
+      ...(turnError && state.errorPersistBinding?.message === turnError
         ? { errorPersistId: state.errorPersistBinding.persistId }
         : {}),
-      ...(error && state.errorCanContinue ? { errorCanContinue: true } : {}),
-      ...(error && state.errorReason ? { errorReason: state.errorReason } : {}),
-      ...(error && state.toolLoop ? { toolLoop: state.toolLoop } : {}),
-      ...(error && state.outputLimit ? { outputLimit: state.outputLimit } : {}),
+      ...(turnError && state.errorCanContinue ? { errorCanContinue: true } : {}),
+      ...(turnError && state.errorReason ? { errorReason: state.errorReason } : {}),
+      ...(turnError && state.toolLoop ? { toolLoop: state.toolLoop } : {}),
+      ...(turnError && state.outputLimit ? { outputLimit: state.outputLimit } : {}),
       recovery,
       ...(autoResumePending ? { autoResumePending } : {}),
       usageLimitWait: !groupSwitchHeld && isUsageLimitWaitLive(state)
@@ -7537,6 +7544,7 @@ export class AgentInputCoordinator {
       return;
     }
     state.error = null;
+    state.detachedSteerPersistenceError = null;
     clearErrorProjectionSignals(state);
     state.stickyError = null;
     state.recovery = null;
@@ -8562,9 +8570,7 @@ export class AgentInputCoordinator {
         // without changing the active turn or another input's recovery.
         active.persisting = false;
         if (!this.hasMatchingWorkerRecovery(state, active.workerRecoverySource)) {
-          state.error = `Failed to persist user message: ${errorMessage(err)}`;
-          clearErrorProjectionSignals(state);
-          state.stickyError = state.error;
+          state.detachedSteerPersistenceError = `Failed to persist user message: ${errorMessage(err)}`;
           this.emit(sessionId);
         }
         log.error('persist accepted Worker steer failed after turn settled', {
