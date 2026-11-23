@@ -5477,6 +5477,29 @@
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 flash",
         "cindyQwen38Flash": "Qwen 3.8 Flash"
+      },
+      "health": {
+        "configTitle": "No hay ningún modelo auxiliar disponible",
+        "configDescription": "Afecta al nombrado automático de tareas, los resúmenes de tareas fijadas, la ayuda y las tareas de complementos, como la traducción de subtítulos. Corrige los problemas siguientes o elige otros modelos disponibles en Personalizado.",
+        "runtimeTitle": "Las últimas solicitudes a los modelos auxiliares fallaron",
+        "runtimeDescription": "Puede que la red o el servicio no estén disponibles temporalmente. Este aviso desaparece solo cuando las solicitudes vuelven a funcionar. Si sigue apareciendo, elige otros modelos disponibles en Personalizado.",
+        "fallback": "Las tareas de complementos usan temporalmente {{model}} con una intensidad de razonamiento menor, lo que puede ser más lento y consumir más cuota.",
+        "candidate": "{{model}}: {{reason}}",
+        "openProviders": "Abrir proveedores",
+        "customize": "Personalizar modelos auxiliares",
+        "issues": {
+          "signed_out": "Hay que iniciar sesión en Cindy",
+          "provider_disabled": "Proveedor desactivado",
+          "model_disabled": "Modelo desactivado",
+          "payment_required": "No lo incluye tu plan o saldo",
+          "no_credential": "Falta el inicio de sesión o la clave",
+          "unavailable": "Actualmente no disponible"
+        },
+        "toast": {
+          "config": "No hay ningún modelo auxiliar disponible. Afecta al nombrado de tareas, los resúmenes y las tareas de complementos, como la traducción de subtítulos.",
+          "runtime": "Las últimas solicitudes a los modelos auxiliares fallaron. Puede afectar al nombrado de tareas, los resúmenes y las tareas de complementos, como la traducción de subtítulos.",
+          "open": "Abrir configuración"
+        }
       }
     },
     "compaction": {
@@ -6919,7 +6942,15 @@
           "encrypted": "Cifrado de extremo a extremo",
           "legacyConnection": "Conexión anterior",
           "encryptionUnknown": "Sin confirmar",
-          "legacyEncryptionHint": "La ruta por relé de la conexión anterior no tiene cifrado de extremo a extremo."
+          "legacyEncryptionHint": "La ruta por relé de la conexión anterior no tiene cifrado de extremo a extremo.",
+          "routePreference": "Selección de ruta",
+          "routeAuto": "Auto",
+          "routeDirect": "Directa",
+          "routeRelay": "Retransmisión",
+          "routeUnavailable": "No disponible",
+          "routeMeasuring": "Midiendo…",
+          "routeDirectUnavailableHint": "La conexión directa no está disponible actualmente en esta red",
+          "routePreferenceFailed": "No se pudo cambiar la ruta. Inténtalo de nuevo."
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -8687,7 +8718,7 @@
           "updated": "Complemento actualizado.",
           "empty": "No hay ninguna versión disponible para instalar.",
           "sign-in": "Inicia sesión en GitHub para buscar actualizaciones.",
-          "forbidden": "Esta sesión de GitHub no tiene acceso de lectura al repositorio privado.",
+          "forbidden": "No se pudo leer la versión publicada en GitHub. Comprueba el enlace del repositorio y los permisos de tu cuenta de GitHub.",
           "unavailable": "No se pudo comprobar ni instalar la actualización. Inténtalo de nuevo."
         },
         "customSlotTitle": "Área de configuración personalizada del complemento",
@@ -9750,6 +9781,12 @@
       "guidance": "Espera antes de solicitar otro código. Reiniciar, reinstalar o cambiar de red no garantiza que se elimine el límite.",
       "support": "Si esto continúa después de esperar, envía los registros de forma privada a feedback@cindy.app e incluye tu sistema operativo, la versión de Cindy, la hora del error y el código que aparece abajo. No publiques los registros."
     }
+  },
+  "legalTermsUpdate": {
+    "title": "Términos actualizados",
+    "body": "Actualizamos los <terms>Términos del servicio</terms> y la <privacy>Política de privacidad</privacy> de Cindy. Acéptalos para continuar o cierra sesión.",
+    "agree": "Aceptar",
+    "disagree": "Cerrar sesión"
   },
   "legacyMigration": {
     "title": "Migrar datos de la versión anterior",
@@ -14488,7 +14525,6 @@
       "regionAria": "Cola de mensajes pendientes",
       "listAria": "Mensajes en cola",
       "pausedFooter": "Tarea detenida, cola en pausa",
-
       "steerUnsupportedNotice": "Este motor no admite incorporar mensajes. Los mensajes en cola se enviarán cuando termine el turno actual.",
       "resumeAction": "Continuar enviando",
       "resumeAria": "Continuar enviando mensajes en cola",
@@ -17856,6 +17892,7 @@
       }
     },
     "editor": {
+      "reviewModelReadFailed": "No se pudo leer el modelo de la automatización. Cierra y vuelve a abrir el editor para reintentar.",
       "promptDialog": {
         "titleEdit": "Editar automatización",
         "titleCreate": "Crear automatización",
@@ -18199,11 +18236,13 @@
         "effortHeading": "Intensidad de razonamiento",
         "effortDefault": "Predeterminado",
         "followSession": "Seguir sesión",
+        "followTeammate": "Seguir el modelo principal del amigo",
         "modelListAria": "Lista de modelos",
         "modelSelectorAria": "Selector de modelo",
         "categoryListAria": "Modelos de {{category}}",
         "effortListAria": "Intensidad de razonamiento",
-        "boundLocationLocked": "Las tareas vinculadas siguen ejecutándose donde están. Elige un modelo de esa computadora."
+        "boundLocationLocked": "Las tareas vinculadas siguen ejecutándose donde están. Elige un modelo de esa computadora.",
+        "modelGroupTitle": "Grupo de modelos «{{name}}»: elige una fuente al crear una tarea nueva"
       }
     },
     "toast": {
@@ -20570,6 +20609,7 @@
       "totalDetail_other": "{{count}} tarjetas × {{amount}}",
       "pay": "Continuar al pago",
       "refundNote": "Las tarjetas de regalo no se pueden cambiar por dinero. Las tarjetas canjeadas no se reembolsan. Para solicitar el reembolso de una tarjeta sin canjear, ponte en contacto con el soporte.",
+      "termsNote": "Al seleccionar Continuar al pago, aceptas los <terms>Términos de las tarjetas de regalo</terms>.",
       "cancel": "Cancelar",
       "loadFailed": "No se pudieron cargar los límites de compra. Vuelve a intentarlo más tarde.",
       "checkoutSubtitle_one": "Tarjeta de regalo {{amount}} × {{count}} · se emite en cuanto se complete el pago",

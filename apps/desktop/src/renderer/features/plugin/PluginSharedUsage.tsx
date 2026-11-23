@@ -15,11 +15,13 @@ export function PluginSharedUsage({
   detail,
   variant = 'detail',
   onClick,
+  leadingSeparator = true,
 }: {
   detail: PluginMarketItem;
   variant?: 'detail' | 'list';
   /** Forward clicks when metadata sits above a sibling card-detail button. */
   onClick?: () => void;
+  leadingSeparator?: boolean;
 }) {
   const { t, i18n } = useTranslation();
   if (detail.sourceType !== 'server' || detail.scope === 'personal') return null;
@@ -45,7 +47,7 @@ export function PluginSharedUsage({
         ]
       : []),
   ];
-  return metrics.map(({ key, count, explanation, Icon }) => {
+  return metrics.map(({ key, count, explanation, Icon }, index) => {
     const numericCount = BigInt(count);
     const label = t(`settings.ghosts.usage.${key}`, {
       value: numericCount.toLocaleString(i18n.language),
@@ -53,7 +55,7 @@ export function PluginSharedUsage({
     const description = t(`settings.ghosts.usage.${explanation}`);
     return (
       <span key={key} className="inline-flex max-w-full items-center gap-1.5">
-        <span aria-hidden="true">·</span>
+        {leadingSeparator || index > 0 ? <span aria-hidden="true">·</span> : null}
         <Tip text={variant === 'list' ? label : description}>
           <span
             role="group"

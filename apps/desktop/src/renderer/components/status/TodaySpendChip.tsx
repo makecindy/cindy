@@ -1083,6 +1083,10 @@ export function TodaySpendChip({
   // codex-oauth 与 cc+chatgpt/ bridge 共用同一 ChatGPT 账户 → 同一套限额窗口 chip 渲染。
   const usesCodexQuotaForm = isCodexOauth || isChatgptBridge;
   const usesXaiQuotaForm = isCodexXaiProvider || isXaiBridge;
+  // 订阅空态回退（#12149）覆盖 codex 订阅与 xai-backed codex（xai 账号 / xai/ 模型）：
+  // 这两类远程会话都不读本机额度、反向隧道计费为 0，chipSegments 同样会空。只按
+  // usesCodexQuotaForm 会漏掉 xai-backed codex（它归 usesXaiQuotaForm，同样空态）。
+  const codexFamilyQuotaForm = usesCodexQuotaForm || isCodexXaiProvider;
   // 远程会话不读本机账户快照 —— 额度事实在远端:SSH 用 remoteHostId 判,device-link 与
   // 远程 Agent 用 isDeviceLinkRemote 判(任一成立即远程,turn 消耗的是远端账号的额度)。
   const isAnyRemoteSession = Boolean(remoteHostId) || isDeviceLinkRemote;
@@ -1777,6 +1781,10 @@ export function TodaySpendChip({
         (usesCodexQuotaForm || usesXaiQuotaForm || isDeviceLinkRemoteGateway)));
   let labelNode: React.ReactNode;
   let account: UsageCardAccount = { title: t('quotaCard.usageTitle'), windows: [] };
+  // 订阅(codex/xai/claude)与 codex-api 两个形态共用的「有没有用量数据」判定（#12149）：
+  // 只在这里调一次 getCodexApiEmptyState，两个空态分支各按自身条件取用，避免同一判定
+  // 出现两份口径（下面的源码契约测试也钉住只有一个调用点）。
+  const codexEmptyState = getCodexApiEmptyState(latestTurnUsage);
   if (isDeviceLinkRemote && !deviceLinkRemoteFormResolved) {
     // device-link 远程会话不读取本机账号形态；金额仍使用同一个会话合计投影。
     // (形态已解析的远程会话不走这里——落到下方对应形态分支,用被控端镜像渲染。)
@@ -1804,9 +1812,37 @@ export function TodaySpendChip({
       );
     }
     if (sessionSegment) chipSegments.push(sessionSegment);
+    // 订阅形态没有可展示的额度窗口、也没有金额时（典型：SSH 远程 Codex —— 账号快照
+    // 读不到、反向隧道计费为 0），回退展示会话已记录的 token；与下方 codex-api 分支
+    // 同一把尺子（#12149）：有额度或金额保持原展示，都没有而有 token 显示会话 token，
+    // 连 token 都没有时区分「尚无用量」与「数据暂不可用」，不再渲染孤立的货币符号。
+    // codex 家族（含 xai-backed codex）远程会话同样两手空空，一并覆盖。
+    const codexQuotaTokenFallback =
+      codexFamilyQuotaForm && chipSegments.length === 0 && hasPositiveSessionTokens(sessionTokens);
+    if (codexQuotaTokenFallback) {
+      chipSegments.push(
+        t('todaySpend.codex.sessionTokensLine', {
+          tokens: formatCompactTokens(Math.floor(sessionTokens ?? 0)),
+        }),
+      );
+    }
+    const codexQuotaEmptyState =
+      codexFamilyQuotaForm &&
+      chipSegments.length === 0 &&
+      !hasPositiveSessionTokens(sessionTokens)
+        ? codexEmptyState
+        : null;
     labelNode =
       chipSegments.length > 0 ? (
         renderSegmentedLabel(chipSegments, isClaudeSubscription)
+      ) : codexQuotaEmptyState ? (
+        <span className="tabular-nums opacity-60">
+          {t(
+            codexQuotaEmptyState === 'no-usage'
+              ? 'todaySpend.codex.noUsageLabel'
+              : 'todaySpend.codex.unavailableLabel',
+          )}
+        </span>
       ) : (
         <span className="tabular-nums opacity-60">{DEFAULT_MONEY_SYMBOL}</span>
       );
@@ -1870,7 +1906,7 @@ export function TodaySpendChip({
       isCodexApi && !slots.session.available && hasPositiveSessionTokens(sessionTokens);
     const codexApiEmptyState =
       isCodexApi && !slots.session.available && !hasPositiveSessionTokens(sessionTokens)
-        ? getCodexApiEmptyState(latestTurnUsage)
+        ? codexEmptyState
         : null;
     if (codexApiHasTokenFallback) {
       chipSegments.push(

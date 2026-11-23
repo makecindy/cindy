@@ -5376,6 +5376,29 @@
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 flash",
         "cindyQwen38Flash": "Qwen 3.8 Flash"
+      },
+      "health": {
+        "configTitle": "利用できる補助モデルがありません",
+        "configDescription": "タスクの自動命名、ピン留めタスクの要約、Help、字幕翻訳などのプラグインタスクに影響します。以下の問題を解決するか、「カスタム」で利用できる他のモデルを選択してください。",
+        "runtimeTitle": "補助モデルへのリクエストが続けて失敗しています",
+        "runtimeDescription": "ネットワークやサービスが一時的に不安定な可能性があります。リクエストが成功すると、この通知は自動的に消えます。表示が続く場合は、「カスタム」で利用できる他のモデルを選択してください。",
+        "fallback": "プラグインタスクは一時的に {{model}} を低い推論強度で使用しています。時間がかかり、クォータの消費が増える場合があります。",
+        "candidate": "{{model}}：{{reason}}",
+        "openProviders": "プロバイダーを開く",
+        "customize": "補助モデルをカスタマイズ",
+        "issues": {
+          "signed_out": "Cindy へのログインが必要",
+          "provider_disabled": "プロバイダーが無効",
+          "model_disabled": "モデルが無効",
+          "payment_required": "現在のプランまたは残高では利用不可",
+          "no_credential": "ログイン情報またはキーがありません",
+          "unavailable": "現在利用不可"
+        },
+        "toast": {
+          "config": "利用できる補助モデルがありません。タスクの命名、要約、字幕翻訳などのプラグインタスクに影響します。",
+          "runtime": "補助モデルへのリクエストが続けて失敗しています。タスクの命名、要約、字幕翻訳などのプラグインタスクに影響する可能性があります。",
+          "open": "設定を開く"
+        }
       }
     },
     "compaction": {
@@ -6809,7 +6832,15 @@
           "encrypted": "エンドツーエンド暗号化",
           "legacyConnection": "旧接続",
           "encryptionUnknown": "未確認",
-          "legacyEncryptionHint": "旧接続の中継経路はエンドツーエンド暗号化されていません。"
+          "legacyEncryptionHint": "旧接続の中継経路はエンドツーエンド暗号化されていません。",
+          "routePreference": "経路の選択",
+          "routeAuto": "自動",
+          "routeDirect": "直接",
+          "routeRelay": "中継",
+          "routeUnavailable": "利用不可",
+          "routeMeasuring": "計測中…",
+          "routeDirectUnavailableHint": "現在のネットワークではこのデバイスに直接接続できません",
+          "routePreferenceFailed": "ルートの切り替えに失敗しました。もう一度お試しください。"
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -8572,7 +8603,7 @@
           "updated": "プラグインを更新しました。",
           "empty": "インストールできるリリースはありません。",
           "sign-in": "更新を確認するには GitHub にログインしてください。",
-          "forbidden": "この GitHub アカウントには非公開リポジトリの読み取り権限がありません。",
+          "forbidden": "GitHub のリリース情報を取得できませんでした。リポジトリのリンクと GitHub アカウントのアクセス権限を確認してください。",
           "unavailable": "更新を確認またはインストールできませんでした。もう一度お試しください。"
         },
         "customSlotTitle": "プラグインのカスタム設定エリア",
@@ -9635,6 +9666,12 @@
       "guidance": "しばらく待ってから認証コードを取得してください。再起動、再インストール、ネットワークの変更で制限が解除されるとは限りません。",
       "support": "待ってもログインできない場合は、OS、Cindy のバージョン、発生時刻、下のエラーコードとログを feedback@cindy.app に非公開で送ってください。ログを公開しないでください。"
     }
+  },
+  "legalTermsUpdate": {
+    "title": "利用規約を更新しました",
+    "body": "Cindyの<terms>利用規約</terms>と<privacy>プライバシーポリシー</privacy>を更新しました。引き続き利用するには同意してください。",
+    "agree": "同意する",
+    "disagree": "ログアウト"
   },
   "legacyMigration": {
     "title": "旧バージョンのデータを移行",
@@ -14319,7 +14356,6 @@
       "regionAria": "送信待ちメッセージのキュー",
       "listAria": "キュー内のメッセージ",
       "pausedFooter": "タスク停止、キューは一時停止中",
-
       "steerUnsupportedNotice": "このエンジンは割り込みに対応していません。キュー内のメッセージは現在のターンが終わってから送信されます。",
       "resumeAction": "送信を続ける",
       "resumeAria": "キューの送信を続ける",
@@ -17616,6 +17652,7 @@
       }
     },
     "editor": {
+      "reviewModelReadFailed": "自動化のモデル設定を読み込めませんでした。エディターを閉じて開き直してください。",
       "promptDialog": {
         "titleEdit": "自動化を編集",
         "titleCreate": "自動化を作成",
@@ -17959,11 +17996,13 @@
         "effortHeading": "推論強度",
         "effortDefault": "デフォルト",
         "followSession": "セッションに従う",
+        "followTeammate": "仲間のメインモデルに従う",
         "modelListAria": "モデル一覧",
         "modelSelectorAria": "モデルセレクター",
         "categoryListAria": "{{category}} モデル",
         "effortListAria": "推論強度",
-        "boundLocationLocked": "連携したタスクは元のコンピューターで実行されます。そのコンピューターのモデルを選んでください。"
+        "boundLocationLocked": "連携したタスクは元のコンピューターで実行されます。そのコンピューターのモデルを選んでください。",
+        "modelGroupTitle": "モデルグループ「{{name}}」：新しいタスクを作るときにソースを選びます"
       }
     },
     "toast": {
@@ -20302,6 +20341,7 @@
       "totalDetail_other": "{{count}} 枚 × {{amount}}",
       "pay": "支払いへ進む",
       "refundNote": "ギフトカードは現金に交換できません。受け取り済みまたは使用済みのカードは返金できません。未受け取りのカードの返金はサポートにお問い合わせください。",
+      "termsNote": "「支払いへ進む」を選択すると、<terms>ギフトカード利用規約</terms>に同意したものとみなされます。",
       "cancel": "キャンセル",
       "loadFailed": "購入制限を読み込めませんでした。しばらくしてからお試しください。",
       "checkoutSubtitle_other": "ギフトカード {{amount}} × {{count}}・支払いが完了するとすぐに発行されます",

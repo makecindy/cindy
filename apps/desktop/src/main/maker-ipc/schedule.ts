@@ -446,7 +446,7 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
     // JSON must keep null until this receiving boundary; undefined keys disappear
     // in transit. Only model-selection axes gain explicit clearing semantics.
     const normalizedPatch = { ...patch as Record<string, unknown> };
-    for (const key of ['modelAgentDeviceId', 'modelAgentKind', 'model', 'providerId', 'effort']) {
+    for (const key of ['modelAgentDeviceId', 'modelAgentKind', 'model', 'providerId', 'effort', 'modelGroup']) {
       if (normalizedPatch[key] === null) normalizedPatch[key] = undefined;
     }
     return withScheduler(({ scheduler }) =>

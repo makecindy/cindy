@@ -5477,6 +5477,29 @@
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 flash",
         "cindyQwen38Flash": "Qwen 3.8 Flash"
+      },
+      "health": {
+        "configTitle": "Nenhum modelo auxiliar está disponível",
+        "configDescription": "Afeta a atribuição automática de nomes às tarefas, os resumos de tarefas afixadas, a Ajuda e as tarefas de plugins, como a tradução de legendas. Corrija os problemas abaixo ou escolha outros modelos disponíveis em Personalizado.",
+        "runtimeTitle": "Os últimos pedidos aos modelos auxiliares falharam",
+        "runtimeDescription": "A rede ou o serviço podem estar temporariamente indisponíveis. Este aviso desaparece sozinho quando os pedidos voltarem a ter êxito. Se continuar a aparecer, escolha outros modelos disponíveis em Personalizado.",
+        "fallback": "As tarefas de plugins estão a utilizar temporariamente {{model}} com um esforço de raciocínio mais baixo, o que pode ser mais lento e consumir mais quota.",
+        "candidate": "{{model}}: {{reason}}",
+        "openProviders": "Abrir fornecedores",
+        "customize": "Personalizar modelos auxiliares",
+        "issues": {
+          "signed_out": "É necessário iniciar sessão na Cindy",
+          "provider_disabled": "Fornecedor desativado",
+          "model_disabled": "Modelo desativado",
+          "payment_required": "Não incluído no seu plano ou saldo",
+          "no_credential": "Falta o início de sessão ou a chave",
+          "unavailable": "Atualmente indisponível"
+        },
+        "toast": {
+          "config": "Nenhum modelo auxiliar está disponível. A atribuição de nomes às tarefas, os resumos e as tarefas de plugins, como a tradução de legendas, são afetados.",
+          "runtime": "Os últimos pedidos aos modelos auxiliares falharam. A atribuição de nomes às tarefas, os resumos e as tarefas de plugins, como a tradução de legendas, podem ser afetados.",
+          "open": "Abrir definições"
+        }
       }
     },
     "compaction": {
@@ -6919,7 +6942,15 @@
           "encrypted": "Encriptação ponto a ponto",
           "legacyConnection": "Ligação anterior",
           "encryptionUnknown": "Não confirmado",
-          "legacyEncryptionHint": "O caminho via relay da ligação anterior não tem encriptação ponto a ponto."
+          "legacyEncryptionHint": "O caminho via relay da ligação anterior não tem encriptação ponto a ponto.",
+          "routePreference": "Escolha de rota",
+          "routeAuto": "Auto",
+          "routeDirect": "Direta",
+          "routeRelay": "Retransmissão",
+          "routeUnavailable": "Indisponível",
+          "routeMeasuring": "A medir…",
+          "routeDirectUnavailableHint": "A ligação direta não está disponível nesta rede de momento",
+          "routePreferenceFailed": "Não foi possível alterar a rota. Tente novamente."
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -8687,7 +8718,7 @@
           "updated": "Plugin atualizado.",
           "empty": "Nenhuma versão disponível para instalar.",
           "sign-in": "Inicie sessão no GitHub para procurar atualizações.",
-          "forbidden": "Esta conta do GitHub não tem acesso de leitura ao repositório privado.",
+          "forbidden": "Não foi possível ler a versão publicada no GitHub. Verifique a ligação do repositório e as permissões da sua conta do GitHub.",
           "unavailable": "Não foi possível verificar ou instalar a atualização. Tente novamente."
         },
         "customSlotTitle": "Área de definições personalizadas do plugin",
@@ -9750,6 +9781,12 @@
       "guidance": "Aguarde antes de pedir outro código. Reiniciar, reinstalar ou mudar de rede não garante que o limite seja levantado.",
       "support": "Se o problema continuar após aguardar, envie os registos em privado para feedback@cindy.app com o seu sistema operativo, a versão de Cindy, a hora do erro e o código abaixo. Não publique registos."
     }
+  },
+  "legalTermsUpdate": {
+    "title": "Termos atualizados",
+    "body": "Atualizámos os <terms>Termos de Serviço</terms> e a <privacy>Política de Privacidade</privacy> da Cindy. Aceite para continuar a utilizar ou termine sessão.",
+    "agree": "Aceitar",
+    "disagree": "Terminar sessão"
   },
   "legacyMigration": {
     "title": "Migrar dados da versão anterior",
@@ -14488,7 +14525,6 @@
       "regionAria": "Fila de mensagens pendentes",
       "listAria": "Mensagens em fila",
       "pausedFooter": "Tarefa parada, fila em pausa",
-
       "steerUnsupportedNotice": "Este motor não permite orientar. As mensagens em fila serão enviadas quando o turno atual terminar.",
       "resumeAction": "Continuar a enviar",
       "resumeAria": "Continuar a enviar mensagens em fila",
@@ -17856,6 +17892,7 @@
       }
     },
     "editor": {
+      "reviewModelReadFailed": "Não foi possível ler o modelo da automação. Feche e volte a abrir o editor para tentar novamente.",
       "promptDialog": {
         "titleEdit": "Editar automatização",
         "titleCreate": "Criar automatização",
@@ -18199,11 +18236,13 @@
         "effortHeading": "Esforço de raciocínio",
         "effortDefault": "Predefinido",
         "followSession": "Seguir sessão",
+        "followTeammate": "Seguir o modelo principal do amigo",
         "modelListAria": "Lista de modelos",
         "modelSelectorAria": "Seletor de modelo",
         "categoryListAria": "Modelos de {{category}}",
         "effortListAria": "Esforço de raciocínio",
-        "boundLocationLocked": "As tarefas associadas continuam a ser executadas onde estão. Escolha um modelo desse computador."
+        "boundLocationLocked": "As tarefas associadas continuam a ser executadas onde estão. Escolha um modelo desse computador.",
+        "modelGroupTitle": "Grupo de modelos «{{name}}»: escolhe uma fonte ao criar uma nova tarefa"
       }
     },
     "toast": {
@@ -20570,6 +20609,7 @@
       "totalDetail_other": "{{count}} cartões × {{amount}}",
       "pay": "Continuar para o pagamento",
       "refundNote": "Os cartões de oferta não podem ser trocados por dinheiro. Os cartões utilizados não são reembolsáveis. Para pedir o reembolso de um cartão por utilizar, contacte o suporte.",
+      "termsNote": "Ao selecionar Continuar para o pagamento, aceita os <terms>Termos do cartão de oferta</terms>.",
       "cancel": "Cancelar",
       "loadFailed": "Não foi possível carregar os limites de compra. Tente novamente mais tarde.",
       "checkoutSubtitle_one": "Cartão de oferta {{amount}} × {{count}} · emitido assim que o pagamento for concluído",

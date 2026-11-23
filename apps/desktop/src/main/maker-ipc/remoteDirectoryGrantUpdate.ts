@@ -6,6 +6,7 @@ export interface RemoteDirectoryGrantSession {
 }
 
 export interface RemoteDirectoryGrantUpdateDeps {
+  assertWriteAllowed?(): void;
   validate(dirs: string[]): Promise<{ valid: string[]; rejected: unknown[] }>;
   readExtraDirs(): Promise<string[]>;
   readWritableDirs(): Promise<string[]>;
@@ -59,6 +60,7 @@ export async function applyRemoteDirectoryGrantUpdate(
     ? { extraDirs: dirs }
     : { writableDirs: dirs };
 
+  deps.assertWriteAllowed?.();
   try {
     await applyRuntime(nextDirs);
   } catch (applyError) {
@@ -79,10 +81,15 @@ export async function applyRemoteDirectoryGrantUpdate(
     throw applyError;
   }
 
+  let persistenceStarted = false;
   try {
+    deps.assertWriteAllowed?.();
     // A rebuilt runtime still needs the grants even when SQLite already has them.
     // Only persistence/mirror broadcasts are redundant in that case.
-    if (changed) await deps.persist(patch(nextDirs));
+    if (changed) {
+      persistenceStarted = true;
+      await deps.persist(patch(nextDirs));
+    }
   } catch (persistenceError) {
     const rollbackErrors: unknown[] = [];
     try {
@@ -91,7 +98,10 @@ export async function applyRemoteDirectoryGrantUpdate(
       rollbackErrors.push(error);
     }
     try {
-      await deps.persist(patch(previousDirs));
+      if (persistenceStarted) {
+        deps.assertWriteAllowed?.();
+        await deps.persist(patch(previousDirs));
+      }
     } catch (error) {
       rollbackErrors.push(error);
     }

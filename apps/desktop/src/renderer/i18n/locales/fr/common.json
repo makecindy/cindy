@@ -5477,6 +5477,29 @@
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 flash",
         "cindyQwen38Flash": "Qwen 3.8 Flash"
+      },
+      "health": {
+        "configTitle": "Aucun modèle auxiliaire n’est disponible",
+        "configDescription": "Le nommage automatique des tâches, les résumés des tâches épinglées, l’Aide et les tâches de plugins comme la traduction des sous-titres sont concernés. Corrigez les problèmes ci-dessous ou choisissez d’autres modèles disponibles sous Personnalisé.",
+        "runtimeTitle": "Les dernières requêtes aux modèles auxiliaires ont échoué",
+        "runtimeDescription": "Le réseau ou le service est peut-être temporairement indisponible. Cet avis disparaît de lui-même dès que les requêtes aboutissent. S’il persiste, choisissez d’autres modèles disponibles sous Personnalisé.",
+        "fallback": "Les tâches de plugins utilisent temporairement {{model}} avec un effort de raisonnement plus faible, ce qui peut être plus lent et consommer davantage de quota.",
+        "candidate": "{{model}} : {{reason}}",
+        "openProviders": "Ouvrir les fournisseurs",
+        "customize": "Personnaliser les modèles auxiliaires",
+        "issues": {
+          "signed_out": "Connexion à Cindy requise",
+          "provider_disabled": "Fournisseur désactivé",
+          "model_disabled": "Modèle désactivé",
+          "payment_required": "Non inclus dans votre forfait ou votre solde",
+          "no_credential": "Connexion ou clé manquante",
+          "unavailable": "Actuellement indisponible"
+        },
+        "toast": {
+          "config": "Aucun modèle auxiliaire n’est disponible. Le nommage des tâches, les résumés et les tâches de plugins comme la traduction des sous-titres sont concernés.",
+          "runtime": "Les dernières requêtes aux modèles auxiliaires ont échoué. Le nommage des tâches, les résumés et les tâches de plugins comme la traduction des sous-titres peuvent être concernés.",
+          "open": "Ouvrir les paramètres"
+        }
       }
     },
     "compaction": {
@@ -6919,7 +6942,15 @@
           "encrypted": "Chiffrée de bout en bout",
           "legacyConnection": "Ancienne connexion",
           "encryptionUnknown": "Non confirmé",
-          "legacyEncryptionHint": "Le chemin via le relais de l’ancienne connexion n’est pas chiffré de bout en bout."
+          "legacyEncryptionHint": "Le chemin via le relais de l’ancienne connexion n’est pas chiffré de bout en bout.",
+          "routePreference": "Choix de la route",
+          "routeAuto": "Auto",
+          "routeDirect": "Direct",
+          "routeRelay": "Relais",
+          "routeUnavailable": "Indisponible",
+          "routeMeasuring": "Mesure…",
+          "routeDirectUnavailableHint": "La connexion directe est actuellement indisponible sur ce réseau",
+          "routePreferenceFailed": "Impossible de changer d’itinéraire. Veuillez réessayer."
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -8687,7 +8718,7 @@
           "updated": "Plugin mis à jour.",
           "empty": "Aucune version installable disponible.",
           "sign-in": "Connectez-vous à GitHub pour rechercher des mises à jour.",
-          "forbidden": "Ce compte GitHub ne peut pas lire le dépôt privé.",
+          "forbidden": "Impossible de lire la version publiée sur GitHub. Vérifiez le lien du dépôt et les droits d’accès de votre compte GitHub.",
           "unavailable": "Impossible de vérifier ou d’installer la mise à jour. Réessayez."
         },
         "customSlotTitle": "Zone de paramètres personnalisés du plugin",
@@ -9750,6 +9781,12 @@
       "guidance": "Patientez avant de demander un autre code. Redémarrer, réinstaller ou changer de réseau ne garantit pas la levée de la limite.",
       "support": "Si le problème persiste après l'attente, envoyez en privé les journaux à feedback@cindy.app en indiquant votre système d'exploitation, votre version de Cindy, l'heure de l'erreur et le code ci-dessous. Ne publiez pas les journaux publiquement."
     }
+  },
+  "legalTermsUpdate": {
+    "title": "Conditions mises à jour",
+    "body": "Nous avons mis à jour les <terms>Conditions d'utilisation</terms> et la <privacy>Politique de confidentialité</privacy>. Acceptez pour continuer ou déconnectez-vous.",
+    "agree": "Accepter",
+    "disagree": "Déconnexion"
   },
   "legacyMigration": {
     "title": "Migrer les données de la version précédente",
@@ -14488,7 +14525,6 @@
       "regionAria": "File d'attente des messages",
       "listAria": "Messages en file d'attente",
       "pausedFooter": "Tâche arrêtée, file d'attente en pause",
-
       "steerUnsupportedNotice": "Ce moteur ne permet pas de réorienter. Les messages en attente seront envoyés à la fin du tour en cours.",
       "resumeAction": "Reprendre l'envoi",
       "resumeAria": "Reprendre l'envoi des messages en file d'attente",
@@ -17856,6 +17892,7 @@
       }
     },
     "editor": {
+      "reviewModelReadFailed": "Impossible de lire le modèle de l’automatisation. Fermez puis rouvrez l’éditeur pour réessayer.",
       "promptDialog": {
         "titleEdit": "Modifier l'automatisation",
         "titleCreate": "Créer une automatisation",
@@ -18199,11 +18236,13 @@
         "effortHeading": "Effort de raisonnement",
         "effortDefault": "Par défaut",
         "followSession": "Suivre la session",
+        "followTeammate": "Suivre le modèle principal de l’ami",
         "modelListAria": "Liste des modèles",
         "modelSelectorAria": "Sélecteur de modèle",
         "categoryListAria": "Modèles {{category}}",
         "effortListAria": "Effort de raisonnement",
-        "boundLocationLocked": "Les tâches liées continuent de s'exécuter là où elles se trouvent. Choisissez un modèle de cet ordinateur."
+        "boundLocationLocked": "Les tâches liées continuent de s'exécuter là où elles se trouvent. Choisissez un modèle de cet ordinateur.",
+        "modelGroupTitle": "Groupe de modèles « {{name}} » : choisit une source à la création d’une nouvelle tâche"
       }
     },
     "toast": {
@@ -20570,6 +20609,7 @@
       "totalDetail_other": "{{count}} cartes × {{amount}}",
       "pay": "Continuer vers le paiement",
       "refundNote": "Les cartes cadeaux ne peuvent pas être échangées contre de l’argent. Une carte récupérée ou utilisée n’est pas remboursable. Pour demander le remboursement d’une carte non récupérée, contactez le support.",
+      "termsNote": "En sélectionnant Continuer vers le paiement, vous acceptez les <terms>Conditions des cartes cadeaux</terms>.",
       "cancel": "Annuler",
       "loadFailed": "Impossible de charger les limites d’achat. Réessayez plus tard.",
       "checkoutSubtitle_one": "Carte cadeau {{amount}} × {{count}} · émise dès le paiement réussi",
