@@ -20,12 +20,14 @@ const {
   mockProbePiManager,
   mockInstallPiManagerBundle,
   mockEnsurePiManagerDaemon,
+  mockTailDaemonLog,
   mockStatSync,
   realShellQuoteRef,
 } = vi.hoisted(() => ({
   mockProbePiManager: vi.fn(),
   mockInstallPiManagerBundle: vi.fn(),
   mockEnsurePiManagerDaemon: vi.fn(),
+  mockTailDaemonLog: vi.fn(),
   mockStatSync: vi.fn(),
   realShellQuoteRef: { fn: null as null | ((s: string) => string) },
 }));
@@ -42,6 +44,7 @@ vi.mock('electron', () => ({
 
 vi.mock('@cindy/maker-remote-ssh', () => ({
   probePiManager: mockProbePiManager,
+  tailDaemonLog: mockTailDaemonLog,
   installPiManagerBundle: mockInstallPiManagerBundle,
   ensurePiManagerDaemon: mockEnsurePiManagerDaemon,
   shellQuote: (s: string) => realShellQuoteRef.fn!(s),
@@ -50,7 +53,7 @@ vi.mock('@cindy/maker-remote-ssh', () => ({
   BUNDLED_NODE_VERSION: '22.13.0',
 }));
 
-import { shellQuote as realShellQuote } from '../pi-remote-transport.js';
+import { killRemotePiManagerSession, shellQuote as realShellQuote } from '../pi-remote-transport.js';
 realShellQuoteRef.fn = realShellQuote;
 
 // 轮 7 CRITICAL #1:mock 只覆盖需要替换的部分, PROTOCOL_VERSION 等常量从
@@ -60,7 +63,6 @@ vi.mock('@cindy/maker-pi-manager', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@cindy/maker-pi-manager')>();
   return {
     ...actual,
-    RpcClient: vi.fn(),
     PI_MANAGER_BUNDLE_VERSION: '0.1.0',
     METHODS: {
       PROTOCOL_HELLO: 'protocol/hello',
@@ -139,6 +141,49 @@ const PROBE_INCOMPATIBLE_PROTOCOL = { ...FULL_PROBE, piManagerProtocolVersion: 9
 // ---------------------------------------------------------------------------
 
 import { ensurePiManagerInstalled } from '../pi-manager-client.js';
+
+describe('remote Pi session cleanup', () => {
+  it.each([
+    ['SESSION_NOT_FOUND', 'manager log entry'],
+    ['SESSION_NOT_FOUND', ''],
+    ['INTERNAL_ERROR', 'manager log entry'],
+  ])('classifies %s with daemon log tail %j', async (code, tail) => {
+    mockProbePiManager.mockResolvedValue(FULL_PROBE);
+    mockTailDaemonLog.mockResolvedValue(tail);
+    let onStdoutBytes: (chunk: Buffer) => void = () => undefined;
+    const write = vi.fn((raw: Buffer) => {
+      const { id, method, params } = JSON.parse(raw.toString());
+      const reply = method === 'protocol/hello'
+        ? { type: 'response', id, result: { protocolVersion: params.protocolVersion } }
+        : { type: 'response', id, error: { code, message: 'cleanup failed' } };
+      queueMicrotask(() => onStdoutBytes(Buffer.from(JSON.stringify(reply) + '\n')));
+    });
+    const host = {
+      ...makeHost('cleanup'),
+      execStream: vi.fn(async () => ({
+        write,
+        kill: vi.fn(),
+        onStdoutBytes: (listener: typeof onStdoutBytes) => { onStdoutBytes = listener; },
+        onStderr: vi.fn(),
+        onClose: vi.fn(),
+        onError: vi.fn(),
+      })),
+    } as unknown as RemoteHost;
+    const cleanup = killRemotePiManagerSession(host, 'old-session', makeLogger());
+    if (code === 'SESSION_NOT_FOUND') {
+      await expect(cleanup).resolves.toBeUndefined();
+    } else {
+      await expect(cleanup).rejects.toMatchObject({
+        code,
+        message: `${code}: cleanup failed\ndaemon log tail: ${tail}`,
+      });
+    }
+    expect(JSON.parse(write.mock.calls[1]![0].toString())).toMatchObject({
+      method: 'pi/kill',
+      params: { sessionId: 'old-session' },
+    });
+  });
+});
 
 describe('ensurePiManagerInstalled (post-retirement: pi-manager only)', () => {
   beforeEach(() => {
