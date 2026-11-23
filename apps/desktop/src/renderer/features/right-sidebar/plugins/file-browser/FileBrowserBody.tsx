@@ -5,12 +5,7 @@ import { Button } from '@/components/ui/button';
 /**
  * FileBrowserBody — file-browser plugin 的 TabBody 实现。
  *
- * 中间展示当前目录或文件。项目树可单独收起；窄栏展开时排在内容上方。
- * 宽栏展开后的布局:
- *   ┌─────────────────────────────────┬───────────┐
- *   │  Body                           │  Tree     │
- *   │ (flex-1, FileBodyView)          │ (resizable) │
- *   └─────────────────────────────────┴───────────┘
+ * 中间展示当前目录或文件。项目树以右侧覆盖层展开，不挤压正文宽度。
  *
  * 中间分割线可拖拽 + 双击复位(useSessionScopedTreeWidth 走 per-session 持久化,
  * 树在 handle 右边、invert=true 让指针左移=树变宽)。树宽 **per-session** 持久化
@@ -43,6 +38,7 @@ import { isGlobalDropIntercepted } from '@/lib/globalDropIntercept';
 import { useFileBrowserPreference } from '@/hooks/useFileBrowserPreference';
 import { toast } from '@/lib/toast';
 import { ImageLightbox } from '@/components/chat/ImageLightbox';
+import { FileTypeIcon } from '@/components/ui/file-type-icon';
 import {
   useSessionScopedTreeWidth,
   TREE_MIN_WIDTH,
@@ -166,7 +162,7 @@ function FileBrowserBodyWithWorkdir({
   const renderingHtml = !!state.selectedFilePath && state.previewHtmlPath === state.selectedFilePath
     && isHtmlFilePath(state.selectedFilePath);
   const fileContent = useFileContent(workdir, renderingHtml ? null : state.selectedFilePath, remoteHostId, deviceId, visible);
-  const [treeOpen, setTreeOpen] = useState(false);
+  const [treeOpen, setTreeOpen] = useState(true);
   const [previousEntry, setPreviousEntry] = useState<string | null>(null);
   const [directoryFilter, setDirectoryFilter] = useState('');
   const [grid, setGrid] = useState(false);
@@ -590,7 +586,6 @@ function FileBrowserBodyWithWorkdir({
 
   const projectName = basename(workdir.replace(/[\\/]+$/, '')) || workdir;
   const directoryLabel = directory || projectName;
-  const stackedTree = containerWidth > 0 && containerWidth < 540;
   const browseDirectory = useCallback(async (path: string) => {
     if (!(await confirmSwitchAway(state.selectedFilePath, null))) return;
     setPreviousEntry(activeRelPath ?? directory);
@@ -605,6 +600,17 @@ function FileBrowserBodyWithWorkdir({
     void handleSelectFile(relPath);
   }, [handleSelectFile]);
   const parentPath = activeRelPath ? directory : dirname(directory);
+  const toggleTree = () => {
+    setTreeOpen(!treeOpen);
+    if (!treeOpen) void revealFileInTree((externalFile ? null : activeRelPath) ?? directory);
+  };
+  const treeButton = (
+    <Button type="button" size="sm" compact variant={treeOpen ? 'primary' : 'secondary'}
+      aria-expanded={treeOpen} onClick={toggleTree}>
+      <FolderTree size={15} />
+      {t('ccAgent.workdirBrowse.projectTree')}
+    </Button>
+  );
 
   return (
     <div
@@ -621,30 +627,11 @@ function FileBrowserBodyWithWorkdir({
       onDragEnd={handleFileDragEnd}
       onDrop={handleDrop}
     >
-      <div className="flex shrink-0 items-center gap-2 border-b border-[var(--border-default)] px-3 py-1.5">
-        <Button type="button" size="sm" compact variant={treeOpen ? 'primary' : 'secondary'}
-          aria-expanded={treeOpen} onClick={() => {
-            setTreeOpen(!treeOpen);
-            if (!treeOpen) void revealFileInTree((externalFile ? null : activeRelPath) ?? directory);
-          }}>
-          <FolderTree size={15} />
-          {t('ccAgent.workdirBrowse.projectTree')}
-        </Button>
-        {(directory || activeRelPath) && (
-          <Button type="button" size="xs" variant="secondary" tone="quiet" compact className="min-w-0 shrink"
-            title={parentPath || projectName} onClick={() => void browseDirectory(parentPath)}>
-            <ArrowLeft size={14} />
-            <span className="truncate">{basename(parentPath) || projectName}</span>
-          </Button>
-        )}
-        {!externalFile && activeRelPath && isHtmlFilePath(activeRelPath) && (
-          <Button size="xs" compact variant="secondary" className="ml-auto"
-            onClick={() => renderingHtml ? ctx.patchState({ previewHtmlPath: null }) : void handleSelectFile(activeRelPath)}>
-            {t(renderingHtml ? 'chat.markdownRenderer.viewSourceFile' : 'ccAgent.workdirBrowse.previewFile')}
-          </Button>
-        )}
+      <div className="absolute top-3 z-page-float flex items-center gap-2"
+        style={{ right: treeOpen ? treeWidth + 8 : 8 }}>
+        {treeButton}
       </div>
-      <div className={cn('flex min-h-0 min-w-0 flex-1', stackedTree && 'flex-col')}>
+      <div className="flex min-h-0 min-w-0 flex-1" style={{ marginRight: treeOpen ? treeWidth : 0 }}>
         {!activeRelPath ? (
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             {tree.loadError || (!tree.entries.has(directory) && !tree.initialLoading && !tree.loadingPaths.has(directory)) ? (
@@ -661,66 +648,84 @@ function FileBrowserBodyWithWorkdir({
                 setFilter={setDirectoryFilter}
                 previousEntry={previousEntry}
                 localWorkdir={isRemote ? undefined : workdir}
+                onBack={directory ? () => void browseDirectory(parentPath) : undefined}
+                backTitle={parentPath || projectName}
+                rightInset={116}
                 onOpen={(entry) => entry.type === 'directory'
                   ? void browseDirectory(entry.relPath) : openFile(entry.relPath)}
               />
             )}
           </div>
         ) : (
-          <div className="rsb-fbody-compact flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-            {renderingHtml && !externalFile ? <InlineHtmlPreview
-              key={JSON.stringify([activeRelPath, deviceId, remoteHostId])}
-              workdir={workdir} relPath={activeRelPath} remoteHostId={remoteHostId}
-              deviceId={deviceId}
-              sessionId={ctx.sessionId} tabId={ctx.tabId} active={visible}
-            /> : <FileBodyView
-              key={externalFile?.absPath ?? 'project-file-browser'}
-              visible={visible}
-              autosaveReady={fileContent.autosaveReady}
-              workdir={activeWorkdir}
-              remoteHostId={externalFile ? null : remoteHostId}
-              deviceId={externalFile ? null : deviceId}
-              // 外部文件(externalFile)不属于会话,图片"发送到对话/标注"不适用。
-              sessionId={externalFile ? undefined : ctx.sessionId}
-              relPath={activeRelPath}
-              content={activeContent}
-              allowEdit={!externalFile}
-              onSaved={externalFile ? undefined : fileContent.setLocal}
-            />}
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+            <div className="flex shrink-0 items-center gap-2 px-3 pb-2 pt-3"
+              style={{ paddingRight: 116 }}>
+              <Button type="button" size="xs" variant="secondary" tone="quiet" compact className="shrink-0"
+                title={parentPath || projectName} onClick={() => void browseDirectory(parentPath)}>
+                <ArrowLeft size={14} />
+              </Button>
+              <FileTypeIcon name={basename(activeRelPath)} size={16} className="shrink-0" />
+              <h2 title={activeRelPath} className="min-w-0 flex-1 truncate text-sm font-semibold">
+                {basename(activeRelPath)}
+              </h2>
+              {!externalFile && isHtmlFilePath(activeRelPath) && (
+                <Button size="xs" compact variant="secondary"
+                  onClick={() => renderingHtml ? ctx.patchState({ previewHtmlPath: null }) : void handleSelectFile(activeRelPath)}>
+                  {t(renderingHtml ? 'chat.markdownRenderer.viewSourceFile' : 'ccAgent.workdirBrowse.previewFile')}
+                </Button>
+              )}
+            </div>
+            <div className="rsb-fbody-compact flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+              {renderingHtml && !externalFile ? <InlineHtmlPreview
+                key={JSON.stringify([activeRelPath, deviceId, remoteHostId])}
+                workdir={workdir} relPath={activeRelPath} remoteHostId={remoteHostId}
+                deviceId={deviceId}
+                sessionId={ctx.sessionId} tabId={ctx.tabId} active={visible}
+              /> : <FileBodyView
+                key={externalFile?.absPath ?? 'project-file-browser'}
+                visible={visible}
+                autosaveReady={fileContent.autosaveReady}
+                workdir={activeWorkdir}
+                remoteHostId={externalFile ? null : remoteHostId}
+                deviceId={externalFile ? null : deviceId}
+                // 外部文件(externalFile)不属于会话,图片"发送到对话/标注"不适用。
+                sessionId={externalFile ? undefined : ctx.sessionId}
+                relPath={activeRelPath}
+                content={activeContent}
+                allowEdit={!externalFile}
+                onSaved={externalFile ? undefined : fileContent.setLocal}
+              />}
+            </div>
           </div>
         )}
-        {/* 中间分割线 + resize handle —— 4px 命中宽度,内部 1px 实线;hover 高亮提示
-            可拖。双击复位到默认 200px。pointer-events 仅在 handle 上,不挡邻接 pane。
-            (语义对齐 RightSidebar 主壳 resize handle 的样式) */}
-        <div
-          className={cn("relative h-full w-px shrink-0 cursor-col-resize bg-[var(--border-default)]", (!treeOpen || stackedTree) && "hidden")}
-          onPointerDown={handleTreeDragStart}
-          onDoubleClick={resetTreeWidth}
-          role="separator"
-          aria-orientation="vertical"
-        >
-          <div className="absolute -left-1 top-0 h-full w-1 group/handle">
-            {/* hover 高亮:整条 1px 分割线变成 sidebar-action-icon 色调,跟主壳的 handle 视觉一致。 */}
-            <div
-              className={cn(
-                'absolute left-1 top-0 h-full w-px transition-colors',
-                isTreeDragging
-                  ? 'bg-sidebar-action-icon'
-                  : 'bg-transparent group-hover/handle:bg-sidebar-action-icon',
-              )}
-            />
-          </div>
+      </div>
+      {/* 中间分割线 + resize handle —— 4px 命中宽度,内部 1px 实线;hover 高亮提示
+          可拖。双击复位到默认 200px。pointer-events 仅在 handle 上,不挡邻接 pane。 */}
+      <div
+        className={cn("absolute inset-y-0 z-page-float w-px cursor-col-resize bg-[var(--border-default)]", !treeOpen && "hidden")}
+        style={{ right: treeWidth }}
+        onPointerDown={handleTreeDragStart}
+        onDoubleClick={resetTreeWidth}
+        role="separator"
+        aria-orientation="vertical"
+      >
+        <div className="absolute -left-1 top-0 h-full w-1 group/handle">
+          {/* hover 高亮:整条 1px 分割线变成 sidebar-action-icon 色调,跟主壳的 handle 视觉一致。 */}
+          <div
+            className={cn(
+              'absolute left-1 top-0 h-full w-px transition-colors',
+              isTreeDragging
+                ? 'bg-sidebar-action-icon'
+                : 'bg-transparent group-hover/handle:bg-sidebar-action-icon',
+            )}
+          />
         </div>
-        {/* 右 pane:文件树 / 搜索 双模式 —— 拖拽宽度,跨 tab 共享持久化。
-            v1 不接 onNewFile / onDelete / onRename 等右键能力,只支持选中文件 —— RSB
-            这种狭窄面板里弹"新建文件 / 重命名"对话框体验差,doc 模式更合适。
-            tree / search 切换跟 doc 模式 sidebar 同 ergonomics:tree 模式显示文件树,
-            search 模式显示 SearchPanel(ripgrep 项目级搜索)。 */}
-        <div
-          className={cn('rsb-fbody-tree-pane flex min-h-0 shrink-0 flex-col overflow-hidden',
-            stackedTree && 'order-first border-b border-[var(--border-default)]', !treeOpen && 'hidden')}
-          style={stackedTree ? { height: '38%' } : { width: treeWidth }}
-        >
+      </div>
+      {/* 右 pane:覆盖在正文上方，展开不改变正文宽度。 */}
+      <div
+        className={cn('rsb-fbody-tree-pane absolute inset-y-0 right-0 z-raised flex min-h-0 flex-col overflow-hidden border-l border-[var(--border-default)] bg-[var(--surface)]', !treeOpen && 'hidden')}
+        style={{ width: treeWidth }}
+      >
           <TreeHeader
             workdir={workdir}
             onOpenRoot={() => void browseDirectory('')}
@@ -792,7 +797,6 @@ function FileBrowserBodyWithWorkdir({
               onOpenMatch={handleOpenMatch}
             />
           </div>
-        </div>
       </div>
       {isDraggingFile && (
         <div

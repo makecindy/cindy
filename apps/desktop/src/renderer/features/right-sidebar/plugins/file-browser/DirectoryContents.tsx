@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { Folder, LayoutGrid, List } from 'lucide-react';
+import { ArrowLeft, Folder, LayoutGrid, List } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { toast } from '@/lib/toast';
@@ -50,6 +50,9 @@ export function DirectoryContents({
   filter,
   setFilter,
   onOpen,
+  onBack,
+  backTitle,
+  rightInset,
 }: {
   directory: string;
   entries?: readonly DirEntry[];
@@ -61,6 +64,9 @@ export function DirectoryContents({
   filter: string;
   setFilter: (value: string) => void;
   onOpen: (entry: DirEntry) => void;
+  onBack?: () => void;
+  backTitle?: string;
+  rightInset?: number;
 }) {
   const { t } = useTranslation();
   const ref = useRef<HTMLDivElement>(null);
@@ -110,7 +116,13 @@ export function DirectoryContents({
   }, [columns, previousEntry, sorted, virtual, width]);
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col p-3">
-      <header className="flex items-center gap-2 pb-2">
+      <header className="flex items-center gap-2 pb-2" style={{ paddingRight: rightInset }}>
+        {onBack && (
+          <Button type="button" size="xs" variant="secondary" tone="quiet" compact className="shrink-0"
+            title={backTitle} onClick={onBack}>
+            <ArrowLeft size={14} />
+          </Button>
+        )}
         <Folder size={16} className="shrink-0" />
         <h2 title={directory} className="min-w-0 flex-1 truncate text-sm font-semibold">
           {basename(directory) || directory}
