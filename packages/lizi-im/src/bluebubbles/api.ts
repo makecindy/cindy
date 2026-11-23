@@ -1,4 +1,9 @@
 /** BlueBubbles REST transport. Credentials never leave the configured origin. */
+import { createWriteStream } from 'node:fs';
+import { rename, rm } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 export interface BlueBubblesAttachment {
   guid: string;
   transferName?: string;
@@ -32,6 +37,8 @@ export interface BlueBubblesMessage {
 
 const WITH_MESSAGE = 'chats,chats.participants,attachments,attributed-body';
 export const BLUEBUBBLES_MAX_BYTES = 64 * 1024 * 1024;
+/** On-request original downloads stream to disk; only a runaway transfer is cut off. */
+export const BLUEBUBBLES_ORIGINAL_MAX_BYTES = 4 * 1024 * 1024 * 1024;
 
 export function blueBubblesOrigin(value: string): string {
   const url = new URL(value);
@@ -140,6 +147,31 @@ export class BlueBubblesApi {
   }
   download(guid: string): Promise<Uint8Array> {
     return this.request('GET', `/api/v1/attachment/${encodeURIComponent(guid)}/download?original=true`, undefined, true);
+  }
+  /** Stream the stored original to `dest` (written via a temporary file); returns the byte count. */
+  async downloadToFile(guid: string, dest: string, limit = BLUEBUBBLES_ORIGINAL_MAX_BYTES, timeoutMs = 15 * 60_000): Promise<number> {
+    const url = new URL(`/api/v1/attachment/${encodeURIComponent(guid)}/download?original=true`, this.origin);
+    url.searchParams.set('password', this.password);
+    // Each download writes its own file; concurrent downloads of one original never share it.
+    const partial = `${dest}.${randomUUID()}.partial`;
+    let size = 0;
+    try {
+      const response = await this.fetcher(url, { method: 'GET', redirect: 'error', signal: AbortSignal.timeout(timeoutMs) });
+      if (!response.ok) throw new BlueBubblesApiError(`BLUEBUBBLES_HTTP_${response.status}`);
+      if (!response.body) throw new BlueBubblesApiError('BLUEBUBBLES_EMPTY_RESPONSE');
+      const counted = Readable.fromWeb(response.body as import('node:stream/web').ReadableStream).on('data', (chunk: Buffer) => {
+        size += chunk.byteLength;
+        if (size > limit) counted.destroy(new BlueBubblesApiError('BLUEBUBBLES_RESPONSE_TOO_LARGE'));
+      });
+      await pipeline(counted, createWriteStream(partial, { mode: 0o600, flags: 'wx' }));
+      await rename(partial, dest);
+      return size;
+    } catch (error) {
+      await rm(partial, { force: true }).catch(() => {});
+      // fetch errors may contain the query password, remote text or URL.
+      if (error instanceof BlueBubblesApiError) throw error;
+      throw new BlueBubblesApiError('BLUEBUBBLES_REQUEST_FAILED');
+    }
   }
   sendText(chatGuid: string, message: string, tempGuid: string): Promise<{ guid: string }> {
     return this.request('POST', '/api/v1/message/text', { chatGuid, message, tempGuid, method: chatGuid.split(';')[1] === '+' ? this.groupSendMethod : 'apple-script' });

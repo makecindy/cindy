@@ -95,6 +95,7 @@ import {
   registerBotImConnectionIpc,
   setWechatCompanionBinding,
   getBotFeishuTransport,
+  getBotIMessageLaneTarget,
   listBotImConnectionGroups,
   removeBotImConnection,
   setBotImConnectionGroupMode,
@@ -611,7 +612,11 @@ describe('bot im connection runtime', () => {
           contextId: () => connectionStore.readBotImConnection(record.id)?.botContextId ?? null,
           receiver: () => new LocalWebhookReceiver('127.0.0.1', 0), resolvePeers: async () => ['127.0.0.1'], now: () => now });
         transport.onMessage(event => { deliveries.push(event.messageId); event.delivery!.awaitPersistence(); event.delivery!.accept(); });
-        return { kind: 'imessage', im: transport, orchestrator: fakeOrchestrator() as never };
+        // Lane ownership follows the group route, as the real iMessage adapter does.
+        const adapter = { connectedChatForLane: (bot: string, routeKey: string) => routeKey === `lane:${chat.guid}`
+          && (connectionStore.readBotImConnection(record.id)?.iMessageGroupRoutes?.[chat.guid]?.botId ?? record.botId) === bot
+          ? chat.guid : undefined };
+        return { kind: 'imessage', im: transport, orchestrator: { ...fakeOrchestrator(), adapter } as never };
       },
       settingsIdentity: () => ({ telegramToken: null, feishuAppId: null, wecomBotId: null, dingtalkAppKey: null, discordToken: null }),
       listKnownGroups: async () => [],
@@ -667,6 +672,10 @@ describe('bot im connection runtime', () => {
           await notify('after-switch');
           await notify('after-switch');
           await vi.waitFor(() => expect(deliveries.filter(id => id === 'after-switch')).toHaveLength(1));
+          // Review (#12143): the handed-over group stays on bot-mia's connection; bot-new's lane still
+          // resolves to it (for owner input in Cindy and scheduled runs), and bot-mia's no longer does.
+          expect(getBotIMessageLaneTarget('bot-new', `lane:${chat.guid}`)?.chat).toBe(chat.guid);
+          expect(getBotIMessageLaneTarget('bot-mia', `lane:${chat.guid}`)).toBeNull();
           return;
         }
         // Tier 1, PR #10241/r4552139485: simulate a pre-edit legacy connection
