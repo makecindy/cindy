@@ -558,5 +558,8 @@
     "grantCamera": "允许使用相机",
     "openSettings": "打开系统设置",
     "wrongCode": "这不是 Cindy 的登录二维码"
+  },
+  "entryWidget": {
+    "newTask": "新建任务"
   }
 }

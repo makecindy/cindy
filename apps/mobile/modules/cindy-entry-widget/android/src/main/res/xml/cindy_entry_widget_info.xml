@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 默认放 2×2（minWidth/Height 是默认尺寸，Android 12 起由 targetCell 决定），但允许一直缩到 1 格。 -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+  android:minWidth="110dp"
+  android:minHeight="110dp"
+  android:minResizeWidth="40dp"
+  android:minResizeHeight="40dp"
+  android:targetCellWidth="2"
+  android:targetCellHeight="2"
+  android:initialLayout="@layout/cindy_entry_widget"
+  android:configure="app.cindy.entrywidget.EntryConfigActivity"
+  android:updatePeriodMillis="0"
+  android:resizeMode="horizontal|vertical"
+  android:widgetCategory="home_screen"
+  android:widgetFeatures="reconfigurable"
+  android:description="@string/cindy_entry_widget_description" />

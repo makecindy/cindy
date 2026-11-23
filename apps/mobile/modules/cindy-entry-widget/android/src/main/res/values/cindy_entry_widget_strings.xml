@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="cindy_entry_widget_label">Cindy shortcut</string>
+  <string name="cindy_entry_widget_description">Open a new task or one of your buddies</string>
+  <string name="cindy_entry_widget_pick_title">What should this shortcut open?</string>
+  <string name="cindy_entry_widget_empty">Open Cindy to finish setting up</string>
+</resources>

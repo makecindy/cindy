@@ -558,5 +558,8 @@
     "grantCamera": "카메라 허용",
     "openSettings": "설정 열기",
     "wrongCode": "Cindy 로그인 코드가 아닙니다"
+  },
+  "entryWidget": {
+    "newTask": "새 작업"
   }
 }

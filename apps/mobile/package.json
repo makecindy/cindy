@@ -25,6 +25,7 @@
     "expo": "~58.0.23",
     "expo-apple-authentication": "~58.0.2",
     "expo-audio": "~58.0.11",
+    "expo-asset": "~58.0.20",
     "expo-auth-session": "~58.0.17",
     "expo-blur": "~58.0.5",
     "expo-build-properties": "~58.0.12",

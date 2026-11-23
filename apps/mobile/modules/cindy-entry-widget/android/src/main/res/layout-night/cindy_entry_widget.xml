@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+  android:id="@+id/cindy_entry_widget_root"
+  android:layout_width="match_parent"
+  android:layout_height="match_parent"
+  android:background="@drawable/cindy_entry_widget_card"
+  android:gravity="center"
+  android:orientation="vertical"
+  android:padding="12dp">
+  <ImageView
+    android:id="@+id/cindy_entry_widget_icon"
+    android:layout_width="48dp"
+    android:layout_height="48dp"
+    android:contentDescription="@null"
+    android:scaleType="fitCenter" />
+  <TextView
+    android:id="@+id/cindy_entry_widget_title"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginTop="6dp"
+    android:ellipsize="end"
+    android:gravity="center"
+    android:maxLines="1"
+    android:textColor="#F2F2F7"
+    android:textSize="13sp" />
+  <TextView
+    android:id="@+id/cindy_entry_widget_subtitle"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginTop="2dp"
+    android:ellipsize="end"
+    android:gravity="center"
+    android:maxLines="1"
+    android:textColor="#9A9AA0"
+    android:textSize="11sp" />
+</LinearLayout>

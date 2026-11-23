@@ -265,6 +265,7 @@ import {
   parseNewSessionDeviceOptions,
   pickAgentDefaultRuntime,
   pickNewSessionDefaultDevice,
+  resolveNewSessionDeviceOptions,
   sessionFromCreateResult,
   compensatePrecreatedWorktree,
   resolveStartedDowngradeOrCommit,
@@ -288,6 +289,8 @@ import {
   subscribeMobileAuthOwner,
 } from '@/auth/authOwnerGeneration';
 import { useTranslation } from 'react-i18next';
+import { useNewSessionDeviceDirectory } from '@/session/useNewSessionDeviceDirectory';
+import { useRevokedDevices } from '@/device-link/revokedDevicesStore';
 import {
   createNewSessionId,
   drainStashedNewSessionDraft,
@@ -590,6 +593,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     getPresenceAvailability,
     invoke,
     openLink,
+    readDeviceList,
     subscribe,
     unsubscribe,
     onAgentsChanged,
@@ -603,14 +607,39 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     () => routeDeviceId ? { deviceId: routeDeviceId, name: deviceDisplayName(routeDeviceId, routeDeviceName) } : null,
     [routeDeviceId, routeDeviceName],
   );
+  const routeDeviceOptions = useMemo(
+    () => parseNewSessionDeviceOptions(params.deviceOptions),
+    [params.deviceOptions],
+  );
+  const [newSessionPreferences, setNewSessionPreferences] = useState<NewSessionStoredPreferences | null>(null);
+  const revokedDevices = useRevokedDevices();
+  // 从桌面入口组件这类不带 deviceOptions 的入口进来时自己补候选电脑：默认电脑只在候选列表里
+  // 找得到，缺了它设备与模型两处都会空着，设备选择器也列不出电脑。
+  const directoryDeviceOptions = useNewSessionDeviceDirectory({
+    enabled: routeDeviceOptions.length === 0,
+    connectionEpoch,
+    revokedDevices,
+    readDeviceList,
+  });
   const deviceOptions = useMemo(
-    () => parseNewSessionDeviceOptions(params.deviceOptions, routeDeviceFallback),
-    [params.deviceOptions, routeDeviceFallback],
+    () => resolveNewSessionDeviceOptions({
+      routeOptions: routeDeviceOptions,
+      routeDevice: routeDeviceFallback,
+      discoveredOptions: directoryDeviceOptions,
+      rememberedDevice: newSessionPreferences?.device ?? null,
+    }),
+    [directoryDeviceOptions, newSessionPreferences?.device, routeDeviceFallback, routeDeviceOptions],
   );
   // 路由设备何时算"显式指定"(盖过上次选择的记忆):项目入口(带 workingDir)、只有一台
   // 可选电脑,或入口明确带 deviceExplicit 标记(首页列表正筛选某台电脑时新建跟随它)。
+  // 只数路由带来的候选：屏幕自补的目录不能把一个单设备入口变成多设备，否则这类深链
+  // 的显式指定会被悄悄丢掉。
+  const routeDeviceCandidates = new Set([
+    ...routeDeviceOptions.map((option) => option.deviceId),
+    ...(routeDeviceId ? [routeDeviceId] : []),
+  ]);
   const routeDeviceExplicit = !!routeDeviceId
-    && (readRouteString(params.deviceExplicit) === '1' || !!initialWorkingDir || deviceOptions.length <= 1);
+    && (readRouteString(params.deviceExplicit) === '1' || !!initialWorkingDir || routeDeviceCandidates.size <= 1);
   const [selectedDeviceId, setSelectedDeviceId] = useState(routeDeviceId);
   const [selectedDeviceName, setSelectedDeviceName] = useState(routeDeviceName);
   const [newSessionPreferences, setNewSessionPreferences] = useState<NewSessionStoredPreferences | null>(null);

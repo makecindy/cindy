@@ -1,0 +1,14 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'app.cindy.entrywidget'
+version = '0.1.0'
+
+android {
+  namespace 'app.cindy.entrywidget'
+  defaultConfig {
+    minSdkVersion 24
+  }
+}

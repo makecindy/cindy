@@ -105,6 +105,7 @@ import { useHomeStartupSplashRelease } from '@/session/useHomeMode';
 import { RemoteDesktopHost } from '@/remote-desktop/RemoteDesktopHost';
 import { ChatInviteHost } from '@/chat/ChatInviteHost';
 import { GiftCardHost } from '@/gift-card/GiftCardHost';
+import { DesktopEntryHost } from '@/device-link/DesktopEntryHost';
 import { TaskArchiveUndoHost } from '@/session/TaskArchiveUndoNotice';
 
 const holdSplash = () => undefined;
@@ -257,6 +258,8 @@ function NavigationGate() {
         <RecentMessageHistoriesProvider key={auth.accountGeneration}>
         <ResidentHomeListProvider>
         <HomeRosterStoreProvider>
+        <DesktopEntryHost ready={auth.initialized && auth.isAuthenticated
+          && segments[0] !== '(auth)' && segments[0] !== 'add-account'} />
         <PluginPromptReadsProvider>
         <AdaptiveNavigationStack accountGeneration={auth.accountGeneration} statusBarTheme={statusBarTheme} />
         </PluginPromptReadsProvider>

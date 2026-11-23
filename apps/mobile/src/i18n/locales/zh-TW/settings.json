@@ -558,5 +558,8 @@
     "grantCamera": "允許使用相機",
     "openSettings": "開啟系統設定",
     "wrongCode": "這不是 Cindy 的登入 QR 碼"
+  },
+  "entryWidget": {
+    "newTask": "新增任務"
   }
 }

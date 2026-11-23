@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 宽而矮（1 格高）：头像在左、名字在右，避免竖排被高度截断。 -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+  android:id="@+id/cindy_entry_widget_root"
+  android:layout_width="match_parent"
+  android:layout_height="match_parent"
+  android:background="@drawable/cindy_entry_widget_card"
+  android:gravity="center_vertical"
+  android:orientation="horizontal"
+  android:paddingStart="10dp"
+  android:paddingEnd="10dp"
+  android:paddingTop="6dp"
+  android:paddingBottom="6dp">
+  <ImageView
+    android:id="@+id/cindy_entry_widget_icon"
+    android:layout_width="32dp"
+    android:layout_height="32dp"
+    android:contentDescription="@null"
+    android:scaleType="fitCenter" />
+  <TextView
+    android:id="@+id/cindy_entry_widget_title"
+    android:layout_width="0dp"
+    android:layout_height="wrap_content"
+    android:layout_marginStart="8dp"
+    android:layout_weight="1"
+    android:ellipsize="end"
+    android:gravity="center_vertical"
+    android:maxLines="1"
+    android:textColor="#1B1B1F"
+    android:textSize="12sp" />
+</LinearLayout>

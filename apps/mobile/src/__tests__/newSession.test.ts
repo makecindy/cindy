@@ -41,6 +41,7 @@ import {
   isHostDraftDefaultsReady,
   pickNewSessionDefaultDevice,
   resolveNewSessionAutoDefault,
+  resolveNewSessionDeviceOptions,
   resolveRecentModelAndProvider,
   resolveSubmitGuardCatalog,
   resolveStartedDowngradeOrCommit,
@@ -1325,6 +1326,44 @@ describe('pickNewSessionDefaultDevice', () => {
       routeDevice: null,
       routeDeviceExplicit: false,
     })).toEqual(devices[0]);
+  });
+});
+
+// 测试价值
+// - 生产入口与可观察结果：`resolveNewSessionDeviceOptions` 决定 `/sessions/new` 的候选电脑；
+//   从桌面入口组件进新建页时，设备与模型两处不再空着，设备选择器也能列出电脑。
+// - Bug／规则依据：本次修复——组件深链不带 `deviceOptions`（设备清单会变，不能写死）。
+// - 现有覆盖缺口：`pickNewSessionDefaultDevice` 只覆盖「候选已给定」的优先级，没有覆盖
+//   候选列表自身来自哪里。
+// - 最小失败输入：`routeOptions: []` + `discoveredOptions: [...]`（旧代码候选恒为空）。
+// - tier：unit（纯函数，无 I/O）。
+// - 实测耗时：`vitest run src/__tests__/newSession.test.ts` 单文件 14.4s（185 个用例）。
+describe('resolveNewSessionDeviceOptions', () => {
+  const mac = { deviceId: 'devA', name: 'Mac A' };
+  const studio = { deviceId: 'devB', name: 'Studio' };
+
+  it('keeps route options first and de-duplicates the directory copy', () => {
+    expect(resolveNewSessionDeviceOptions({
+      routeOptions: [studio],
+      discoveredOptions: [mac, studio],
+    })).toEqual([studio, mac]);
+  });
+
+  it('uses the directory when the entry carried no options', () => {
+    expect(resolveNewSessionDeviceOptions({ discoveredOptions: [mac, studio] })).toEqual([mac, studio]);
+  });
+
+  it('falls back to the remembered device only when nothing else is known', () => {
+    expect(resolveNewSessionDeviceOptions({ rememberedDevice: mac })).toEqual([mac]);
+    expect(resolveNewSessionDeviceOptions({ discoveredOptions: [studio], rememberedDevice: mac })).toEqual([studio]);
+  });
+
+  it('falls back to the single route device before the directory', () => {
+    expect(resolveNewSessionDeviceOptions({ routeDevice: mac, discoveredOptions: [studio] })).toEqual([mac, studio]);
+  });
+
+  it('stays empty when nothing is known, so the user has to pick a computer', () => {
+    expect(resolveNewSessionDeviceOptions({})).toEqual([]);
   });
 });
 
