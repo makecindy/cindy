@@ -232,7 +232,7 @@ function resendUnanswered(path: RelayUdpPath, step: (ms: number) => void) {
 }
 
 it('leaves relay UDP when registrations are acked but no data comes back, tells the relay, and retries after a growing cooldown', async () => {
-  const { path, registrations, step, reply } = await upWithAckingRelay(3);
+  const { path, registrations, step } = await upWithAckingRelay(3);
   resendUnanswered(path, step);
   // Checked on the 1 s tick: a 4 s silence is acted on within 5 s of the first unanswered send.
   step(2_000);
@@ -253,15 +253,6 @@ it('leaves relay UDP when registrations are acked but no data comes back, tells 
   resendUnanswered(path, step);
   step(2_000);
   expect(path.suspension?.cooldownMs).toBe(RELAY_UDP_DATA_COOLDOWNS_MS[1]);
-
-  // Once data does arrive over UDP, a later failure starts from the first cooldown again.
-  step(RELAY_UDP_DATA_COOLDOWNS_MS[1]);
-  expect(path.send('member', new Uint8Array(100))).toBe(true);
-  reply();
-  expect(path.send('member', new Uint8Array(100))).toBe(true);
-  resendUnanswered(path, step);
-  step(2_000);
-  expect(path.suspension?.cooldownMs).toBe(RELAY_UDP_DATA_COOLDOWNS_MS[0]);
 });
 
 it('stays on relay UDP for an unanswered pure ACK, and while replies keep arriving over UDP or the WebSocket', async () => {
@@ -303,8 +294,10 @@ it('leaves relay UDP after two session request timeouts within a minute even whi
   expect(path.suspension?.cooldownMs).toBe(RELAY_UDP_DATA_COOLDOWNS_MS[0]);
 });
 
-it('leaves relay UDP when its own relayed sends go unacknowledged, even as a controlled host that only receives requests', async () => {
-  const counters = { retransmitted: 0, sent: 0 };
+// Unit regression: a peer can keep sending UDP data while every upload times out. Exercise the
+// second outage and recovery through the relay path; checking just the first fallback misses the loop.
+it('backs off repeated uplink loss despite incoming UDP, then resets after sustained acknowledged traffic', async () => {
+  const counters = { retransmitted: 0, sent: 0, acknowledgedBytes: 0 };
   const { path, registrations, step, reply } = await upWithAckingRelay(9, { relayedSendCounters: () => ({ ...counters }) });
   // Requests keep arriving (so the silence check stays clear) and this side never sends a request of its own.
   const receiving = (retransmitted: number, sent: number) => {
@@ -325,24 +318,53 @@ it('leaves relay UDP when its own relayed sends go unacknowledged, even as a con
   expect(path.send('member', new Uint8Array(100))).toBe(false);
   expect(path.suspension).toEqual({ reason: 'unacked-sends', cooldownMs: RELAY_UDP_DATA_COOLDOWNS_MS[0] });
   expect(registrations().at(-1)!.receiving).toBe(false);
+
+  // A late UDP datagram and work completed on the fallback WebSocket cannot bless the next UDP attempt.
+  reply();
+  counters.acknowledgedBytes += 32_000;
+  step(RELAY_UDP_DATA_COOLDOWNS_MS[0]);
+  expect(path.send('member', new Uint8Array(100))).toBe(true);
+  // Registration works and the peer keeps sending for longer than the recovery window,
+  // but only one old acknowledgement makes it through.
+  for (let i = 0; i < 12; i++) receiving(0, 1);
+  counters.acknowledgedBytes += 100;
+  receiving(0, 1);
+  receiving(2, 4);
+  expect(path.suspension).toEqual({ reason: 'unacked-sends', cooldownMs: RELAY_UDP_DATA_COOLDOWNS_MS[1] });
+  expect(path.send('member', new Uint8Array(100))).toBe(false);
+
+  step(RELAY_UDP_DATA_COOLDOWNS_MS[1]);
+  for (let i = 0; i < 70; i++) {
+    expect(path.send('member', new Uint8Array(1_350))).toBe(true);
+    counters.sent++;
+    counters.acknowledgedBytes += 1_350;
+    reply();
+    step(1_000);
+  }
+  receiving(2, 4);
+  expect(path.suspension).toEqual({ reason: 'unacked-sends', cooldownMs: RELAY_UDP_DATA_COOLDOWNS_MS[0] });
 });
 
 it('counts only the growth a connection made while it stayed on the relay, not its history from a direct path', () => {
   const counters = new RelaySendCounters();
   const relayed = {}, direct = {};
   // The core's per-connection stats are lifetime totals and survive a path change.
-  expect(counters.sample([{ key: relayed, relay: true, retransmitted: 3, sent: 100 }, { key: direct, relay: false, retransmitted: 400, sent: 1_000 }]))
-    .toEqual({ retransmitted: 0, sent: 0 });
-  expect(counters.sample([{ key: relayed, relay: true, retransmitted: 4, sent: 120 }, { key: direct, relay: false, retransmitted: 410, sent: 1_050 }]))
-    .toEqual({ retransmitted: 1, sent: 20 });
+  const onRelay = { key: relayed, relay: true, retransmitted: 3, sent: 100, acknowledgedBytes: 800 };
+  const offRelay = { key: direct, relay: false, retransmitted: 400, sent: 1_000, acknowledgedBytes: 4_000 };
+  expect(counters.sample([onRelay, offRelay])).toEqual({ retransmitted: 0, sent: 0, acknowledgedBytes: 0 });
+  expect(counters.sample([
+    { ...onRelay, retransmitted: 4, sent: 120, acknowledgedBytes: 850 },
+    { ...offRelay, retransmitted: 410, sent: 1_050, acknowledgedBytes: 5_000 },
+  ])).toEqual({ retransmitted: 1, sent: 20, acknowledgedBytes: 50 });
   // The long-lived direct connection falls back to the relay: its 400+ past resends must not land in the window.
-  expect(counters.sample([{ key: relayed, relay: true, retransmitted: 4, sent: 140 }, { key: direct, relay: true, retransmitted: 410, sent: 1_060 }]))
-    .toEqual({ retransmitted: 1, sent: 40 });
+  const switched = { ...offRelay, relay: true, retransmitted: 410, sent: 1_060, acknowledgedBytes: 5_100 };
+  const steady = { ...onRelay, retransmitted: 4, sent: 140, acknowledgedBytes: 850 };
+  expect(counters.sample([steady, switched])).toEqual({ retransmitted: 1, sent: 40, acknowledgedBytes: 50 });
   // From then on its growth on the relay counts; once it leaves the relay it stops counting.
-  expect(counters.sample([{ key: relayed, relay: true, retransmitted: 4, sent: 160 }, { key: direct, relay: true, retransmitted: 418, sent: 1_070 }]))
-    .toEqual({ retransmitted: 9, sent: 70 });
-  expect(counters.sample([{ key: relayed, relay: true, retransmitted: 4, sent: 180 }, { key: direct, relay: false, retransmitted: 500, sent: 1_200 }]))
-    .toEqual({ retransmitted: 9, sent: 90 });
+  expect(counters.sample([{ ...steady, sent: 160 }, { ...switched, retransmitted: 418, sent: 1_070, acknowledgedBytes: 5_140 }]))
+    .toEqual({ retransmitted: 9, sent: 70, acknowledgedBytes: 90 });
+  expect(counters.sample([{ ...steady, sent: 180 }, { ...switched, relay: false, retransmitted: 500, sent: 1_200, acknowledgedBytes: 8_000 }]))
+    .toEqual({ retransmitted: 9, sent: 90, acknowledgedBytes: 90 });
 });
 
 it('detects RFC 2544 Fake-IP addresses and parses real IPv4 answers from DoH JSON', () => {
