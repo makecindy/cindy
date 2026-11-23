@@ -27,6 +27,8 @@ vi.mock("react-native", () => ({
   },
 }));
 vi.mock("@/device-link/DeviceLinkContext", () => ({ useDeviceLink: () => h, subscribeRemoteSubscriptionAccountsChanged: (cb: (device: string) => void) => { h.changed.add(cb); return () => h.changed.delete(cb); } }));
+import { setMobileAuthOwner } from "@/auth/authOwnerGeneration";
+import type { MobilePluginEngine } from "@/session/pluginEngines";
 import { useMobileModelQuotas } from "@/session/useMobileModelQuotas";
 import {
   mobileWeeklyQuota,
@@ -40,12 +42,13 @@ const providers = [
 let root: Root;
 let view: ReturnType<typeof useMobileModelQuotas>;
 let renders: number;
-function Probe({ sources = providers, remoteCatalogs = [], taskId }: {
+function Probe({ sources = providers, remoteCatalogs = [], taskId, pluginEngines }: {
   sources?: ProviderView[];
   remoteCatalogs?: { deviceId: string; providers: ProviderView[] }[];
   taskId?: string;
+  pluginEngines?: MobilePluginEngine[];
 }) {
-  view = useMobileModelQuotas('["account","host"]', true, sources, remoteCatalogs, taskId);
+  view = useMobileModelQuotas('["account","host"]', true, sources, remoteCatalogs, taskId, pluginEngines);
   renders++;
   return null;
 }
@@ -250,4 +253,59 @@ it("reads an independent subscription's account pool, not the default login", as
   expect(h.invoke).toHaveBeenCalledWith('host', 'maker:subscription-accounts', [{ action: 'read', providerId: 'openai-sub-second' }]);
   expect(h.invoke).toHaveBeenCalledTimes(1);
   expect(view.quotas['openai-sub-second']).toMatchObject({ accountIdentity: 'second@example.test', remaining: 80 });
+});
+
+// Unit: useMobileModelQuotas must read account usage for selectable plugin engines with
+// reportsUsage=true and ignore engines that do not report usage or are unavailable.
+it("reads usage for selectable reporting plugin engines through the shared usage channel", async () => {
+  setMobileAuthOwner("plugin-quota-acct");
+  const updatedAt = 1_700_000_000_000;
+  h.invoke.mockImplementation(async (_device, channel, args) => {
+    if (channel === "maker:get-plugin-engine-usage" && args?.[0] === "dsh:dsh") {
+      return { updatedAt, windows: [{ label: "Weekly", remainingPercent: 75, resetsAt: updatedAt + 3_600_000 }] };
+    }
+    return null;
+  });
+  const engines: MobilePluginEngine[] = [
+    {
+      key: "dsh:dsh",
+      providerId: "acp-plugin:dsh:dsh",
+      name: "DeepSeek Harness",
+      reportsUsage: true,
+      availability: { state: "available" },
+      models: [],
+      permissionModes: [],
+      defaultPermissionMode: "ask",
+    },
+    {
+      key: "off:cli",
+      providerId: "acp-plugin:off:cli",
+      name: "Silent CLI",
+      availability: { state: "available" },
+      models: [],
+      permissionModes: [],
+      defaultPermissionMode: "ask",
+    },
+    {
+      key: "down:cli",
+      providerId: "acp-plugin:down:cli",
+      name: "Down CLI",
+      reportsUsage: true,
+      availability: { state: "unavailable" },
+      models: [],
+      permissionModes: [],
+      defaultPermissionMode: "ask",
+    },
+  ];
+  await act(async () => {
+    root.render(createElement(Probe, { sources: [], pluginEngines: engines }));
+  });
+  expect(h.invoke).toHaveBeenCalledTimes(1);
+  expect(h.invoke).toHaveBeenCalledWith("host", "maker:get-plugin-engine-usage", ["dsh:dsh"]);
+  expect(view.pluginEngineQuotas["acp-plugin:dsh:dsh"]).toMatchObject({
+    updatedAt,
+    windows: [{ label: "Weekly", remainingPercent: 75 }],
+  });
+  expect(view.pluginEngineQuotas["acp-plugin:off:cli"]).toBeUndefined();
+  expect(view.pluginEngineQuotas["acp-plugin:down:cli"]).toBeUndefined();
 });

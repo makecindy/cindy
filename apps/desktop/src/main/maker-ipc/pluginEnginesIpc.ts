@@ -284,8 +284,28 @@ export interface RegisterPluginEnginesIpcOpts {
   isCurrentOwner?(stamp: DataOwnerPushStamp): boolean;
 }
 
+const viewListeners = new Set<() => void>();
+let activeIpcPublishers = 0;
+
+/**
+ * Subscribe to any change in the local plugin engine view list (registry, availability,
+ * models, remote-use toggle or Settings prefs). Safe to call before registerPluginEnginesIpc.
+ */
+export function onPluginEnginesChanged(listener: () => void): () => void {
+  viewListeners.add(listener);
+  // Before registerPluginEnginesIpc mounts (or in isolated tests), fall back to the registry directly.
+  const offRegistry = getPluginHarnessRegistry().onChange(() => {
+    if (activeIpcPublishers === 0) listener();
+  });
+  return () => {
+    viewListeners.delete(listener);
+    offRegistry();
+  };
+}
+
 /** Returns a disposer for the change subscriptions. */
 export function registerPluginEnginesIpc(opts: RegisterPluginEnginesIpcOpts): () => void {
+  activeIpcPublishers += 1;
   const remote = () => opts.isDeviceLinkInvoke?.() === true;
   remoteUseAccess = opts.remoteUse ?? null;
   settingsAccess = opts.settings ?? null;
@@ -365,12 +385,23 @@ export function registerPluginEnginesIpc(opts: RegisterPluginEnginesIpcOpts): ()
     if (payload === lastPayload) return;
     lastPayload = payload;
     opts.broadcast(PLUGIN_ENGINES_PUSH.CHANGED, engines);
+    for (const listener of [...viewListeners]) {
+      try {
+        listener();
+      } catch {
+        // Isolate subscriber errors from the IPC broadcast.
+      }
+    }
   };
   const offRegistry = getPluginHarnessRegistry().onChange(publish);
   const offModels = onPluginHarnessModelsChanged(publish);
   const offRemoteUse = remoteUseAccess?.onChange(publish);
   const offSettings = settingsAccess?.onChange(publish);
+  let disposed = false;
   return () => {
+    if (disposed) return;
+    disposed = true;
+    activeIpcPublishers = Math.max(0, activeIpcPublishers - 1);
     offRegistry();
     offModels();
     offRemoteUse?.();

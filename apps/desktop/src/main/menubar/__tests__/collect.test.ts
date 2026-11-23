@@ -14,6 +14,7 @@ import {
   dayKeysEndingAt,
   distinctRemoteSubscriptions,
   paygSource,
+  pluginEngineSource,
   type MenubarCollectDeps,
   modelDisplayNames,
   opencodeGoSource,
@@ -470,7 +471,9 @@ describe('collectMenubarInputs', () => {
     }] as never }), invoke: async (id, channel, args) => channel === 'maker:provider:list'
       ? { ok: true, result: { providers: [provider({ id: providerId, remoteInvocationEnabled: true,
           agents: ['codex'], models: { codex: [] }, openAiAccount: { identity: 'wrong@example.com' } } as never), ...aliases] } }
-      : invoke(id, channel, args),
+      : channel === 'maker:list-plugin-engines'
+        ? { ok: true, result: [] }
+        : invoke(id, channel, args),
     };
   }
 
@@ -823,4 +826,148 @@ it('includes auxiliary tokens in widget totals without inventing a Claude harnes
   expect(scope.models['30']).toEqual([]);
   expect(scope.modelSeries?.models).toEqual([{ name: 'helper', harness: 'auxiliary' }]);
   expect(scope.modelSeries?.tokens).toEqual([[1100, 0]]);
+});
+
+// Unit: plugin engines reporting account usage must enter the menu bar collector (windows and
+// balance-only), mark running ACP tasks as consuming, stay distinct across engines/computers,
+// and appear in remote peer collection when offered remotely. Minimal failing inputs: collector
+// skips listPluginEngines, consumingSourceIds ignores acp-plugin: providerId, or remote read
+// omits maker:list-plugin-engines / maker:get-plugin-engine-usage.
+describe('plugin engine quota collection', () => {
+  const engine = (overrides: Record<string, unknown> = {}) => ({
+    key: 'dsh:dsh',
+    providerId: 'acp-plugin:dsh:dsh',
+    ghostId: 'dsh',
+    harnessId: 'dsh',
+    name: 'DeepSeek Harness',
+    availability: { state: 'available' as const },
+    reportsUsage: true as const,
+    models: [],
+    permissionModes: [],
+    defaultPermissionMode: 'ask' as const,
+    ...overrides,
+  });
+
+  it('collects local reporting plugin engines (windows and balance-only), drops expired windows, and marks running ACP tasks', async () => {
+    const dsh = engine();
+    const gemini = engine({ key: 'gem:cli', providerId: 'acp-plugin:gem:cli', ghostId: 'gem', harnessId: 'cli', name: 'Gemini CLI' });
+    const silent = engine({ key: 'off:cli', providerId: 'acp-plugin:off:cli', reportsUsage: undefined });
+    const suspended = engine({ key: 'sus:cli', providerId: 'acp-plugin:sus:cli', suspended: true as const, availability: { state: 'unavailable' as const } });
+
+    const collected = await collectMenubarInputs({
+      nowMs: NOW,
+      listProviders: async () => [],
+      listPluginEngines: () => [dsh, gemini, silent, suspended],
+      readPluginEngineUsage: async (key) => {
+        if (key === 'dsh:dsh') {
+          return {
+            updatedAt: NOW - 10_000,
+            windows: [
+              { label: 'Weekly', remainingPercent: 72, resetsAt: NOW + 86_400_000 },
+              { label: 'Expired', remainingPercent: 0, resetsAt: NOW - 1 },
+            ],
+            balances: [{ currency: 'CNY', amount: '18.50' }],
+          };
+        }
+        if (key === 'gem:cli') {
+          return { updatedAt: NOW - 5_000, balances: [{ currency: 'USD', amount: '9.25' }] };
+        }
+        return null;
+      },
+      readCodex: async () => null,
+      readClaude: async () => null,
+      readXai: async () => null,
+      readBalance: async () => null,
+      readUsage: async () => null,
+      activities: () => [{ sessionId: 'acp-run', phase: 'running' } as never],
+      sessionRow: async () => ({ title: 'ACP task', model: 'deepseek-v4', agentKind: 'acp', providerId: dsh.providerId }),
+      selfDeviceName: 'Mac',
+    });
+
+    const dshSource = collected.sources.find((s) => s.id === dsh.providerId);
+    const gemSource = collected.sources.find((s) => s.id === gemini.providerId);
+    expect(dshSource).toMatchObject({
+      kind: 'subscription',
+      family: 'plugin',
+      brand: 'DeepSeek Harness',
+      consuming: true,
+      windows: [{ kind: 'custom', label: 'Weekly', usedPercent: 28, resetsAtMs: NOW + 86_400_000 }],
+      balances: [{ currency: 'CNY', amount: 18.5 }],
+    });
+    expect(gemSource).toMatchObject({
+      kind: 'subscription',
+      family: 'plugin',
+      brand: 'Gemini CLI',
+      windows: [],
+      balances: [{ currency: 'USD', amount: 9.25 }],
+    });
+    expect(collected.sources.map((s) => s.id)).toEqual([dsh.providerId, gemini.providerId]);
+  });
+
+  it('keeps distinct plugin engines separate even with identical window percentages and collects remote offered engines', async () => {
+    const localA = pluginEngineSource(
+      { key: 'a:eng', providerId: 'acp-plugin:a:eng', name: 'Alpha' },
+      { updatedAt: NOW, windows: [{ label: 'Quota', remainingPercent: 100, resetsAt: NOW + 3600_000 }] },
+      NOW,
+    );
+    const remoteB = {
+      ...pluginEngineSource(
+        { key: 'b:eng', providerId: 'acp-plugin:b:eng', name: 'Beta' },
+        { updatedAt: NOW, windows: [{ label: 'Quota', remainingPercent: 100, resetsAt: NOW + 3600_000 }] },
+        NOW,
+        'desk-2',
+      ),
+      id: 'remote:desk-2:acp-plugin:b:eng',
+      device: { id: 'desk-2', name: 'Office Mac' },
+    };
+    const remoteBal = {
+      ...pluginEngineSource(
+        { key: 'c:eng', providerId: 'acp-plugin:c:eng', name: 'Gamma' },
+        { updatedAt: NOW, balances: [{ currency: 'USD', amount: '12.00' }] },
+        NOW,
+        'desk-2',
+      ),
+      id: 'remote:desk-2:acp-plugin:c:eng',
+      device: { id: 'desk-2', name: 'Office Mac' },
+    };
+    expect(distinctRemoteSubscriptions([localA], [remoteB, remoteBal]).map((s) => s.id)).toEqual([
+      'remote:desk-2:acp-plugin:b:eng',
+      'remote:desk-2:acp-plugin:c:eng',
+    ]);
+
+    const read = await readRemoteSubscriptions({
+      nowMs: NOW,
+      listDevices: async () => ({
+        devices: [{
+          deviceId: 'desk-2', name: 'Office Mac', platform: 'darwin', isSelf: false,
+          online: true, remoteControlEnabled: true, controlEnabled: true, appVersion: '9.0.0',
+        } as never],
+      }),
+      invoke: async (_deviceId, channel, args) => {
+        if (channel === 'maker:provider:list') return { ok: true, result: { providers: [] } };
+        if (channel === 'maker:list-plugin-engines') {
+          return {
+            ok: true,
+            result: [
+              engine({ remoteUse: { supported: true, enabled: true } }),
+              engine({ key: 'closed:eng', providerId: 'acp-plugin:closed:eng', remoteUse: { supported: true, enabled: false } }),
+            ],
+          };
+        }
+        if (channel === 'maker:get-plugin-engine-usage' && args[0] === 'dsh:dsh') {
+          return { ok: true, result: { updatedAt: NOW, windows: [{ label: 'Pro', remainingPercent: 60, resetsAt: NOW + 7200_000 }] } };
+        }
+        return { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: 'unsupported' } };
+      },
+    } as RemoteSubscriptionDeps);
+
+    expect(read.sources).toHaveLength(1);
+    expect(read.sources[0]).toMatchObject({
+      id: 'remote:desk-2:acp-plugin:dsh:dsh',
+      family: 'plugin',
+      brand: 'DeepSeek Harness',
+      device: { id: 'desk-2', name: 'Office Mac' },
+      windows: [{ kind: 'custom', label: 'Pro', usedPercent: 40 }],
+    });
+  });
 });

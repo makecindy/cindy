@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { AppState } from "react-native";
+import type { GhostHarnessUsage } from "@cindy/plugin-protocol";
 import type { ProviderView } from "@cindy/model-providers/registry";
 import { isCodexBucketStale } from "@cindy/maker-shared/codex-usage-buckets";
 import type { MobileCodexRateLimitsResult } from "@cindy/maker-shared/device-link-contract";
@@ -8,7 +9,13 @@ import {
   subscriptionQuotaAccounts,
   subscriptionQuotaOverview,
 } from "@cindy/maker-shared/subscription-selection";
+import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from "@/auth/authOwnerGeneration";
 import { isProviderShareAgentDeviceId } from "./providerShareAgentDevice";
+import {
+  isPluginEngineSelectable,
+  pluginUsageReader,
+  type MobilePluginEngine,
+} from "./pluginEngines";
 import {
   useDeviceLink,
   subscribeRemoteSubscriptionAccountsChanged,
@@ -91,7 +98,9 @@ export function useMobileModelQuotas(
     offline?: boolean;
   }[] = [],
   taskId?: string,
+  pluginEngines?: readonly MobilePluginEngine[],
 ) {
+  const pluginEngineQuotas = useMobilePluginEngineQuotas(scope, visible, pluginEngines);
   const { invoke, status, connectionEpoch } = useDeviceLink();
   const deviceId = (JSON.parse(scope) as [string, string])[1];
   const quotaKey = (targetDeviceId: string, providerId: string) =>
@@ -349,8 +358,61 @@ export function useMobileModelQuotas(
   );
   return {
     quotas,
+    pluginEngineQuotas,
     now,
     quotaOf: (targetDeviceId: string, providerId: string) =>
       quotas[quotaKey(targetDeviceId, providerId)],
   };
+}
+
+/**
+ * Reads account usage for selectable plugin engines that declare `reportsUsage: true`,
+ * sharing the 1-minute `pluginUsageReader` cache with the session menu.
+ */
+function useMobilePluginEngineQuotas(
+  scope: string,
+  visible: boolean,
+  engines: readonly MobilePluginEngine[] | undefined,
+): Readonly<Record<string, GhostHarnessUsage>> {
+  const { invoke, status, connectionEpoch } = useDeviceLink();
+  const deviceId = (JSON.parse(scope) as [string, string])[1];
+  const reporting = (engines ?? []).filter(
+    (engine) => engine.reportsUsage === true && isPluginEngineSelectable(engine),
+  );
+  const targets = JSON.stringify(reporting.map((engine) => [engine.providerId, engine.key]));
+  const binding = JSON.stringify([scope, visible, status, connectionEpoch, targets]);
+  const [state, setState] = useState<{
+    binding: string;
+    values: Record<string, GhostHarnessUsage>;
+  }>();
+
+  useEffect(() => {
+    if (!visible || status !== "online" || targets === "[]" || isProviderShareAgentDeviceId(deviceId)) return;
+    const owner = getMobileAuthOwner();
+    if (!owner.accountId) return;
+    let active = true;
+    const items = JSON.parse(targets) as [string, string][];
+    void Promise.all(
+      items.map(async ([providerId, key]) => {
+        const usage = await pluginUsageReader.read(owner, deviceId, key, () =>
+          isMobileAuthOwnerCurrent(owner)
+            ? invoke<unknown>(deviceId, "maker:get-plugin-engine-usage", [key])
+            : undefined,
+        ).result;
+        return [providerId, usage] as const;
+      }),
+    ).then((entries) => {
+      if (!active || !isMobileAuthOwnerCurrent(owner)) return;
+      const values: Record<string, GhostHarnessUsage> = {};
+      for (const [providerId, usage] of entries) {
+        if (usage) values[providerId] = usage;
+      }
+      setState({ binding, values });
+    });
+    return () => {
+      active = false;
+    };
+  }, [binding, deviceId, invoke]);
+
+  return state?.binding === binding ? state.values : {};
 }
