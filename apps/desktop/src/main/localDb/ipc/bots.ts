@@ -1788,6 +1788,19 @@ export function broadcastBotProfileChanged(payload: {
   // Readers of teammate profiles (Chat Server companion sync) re-read without waiting for their timers.
   signalBotProfilesChanged();
   if (payload.change === 'updated') notifyAgentIslandCompanionChanged(payload.botId);
+  sendBotProfileChangedToWindows(payload);
+}
+
+/**
+ * Only a teammate's task list changed, no profile field: open windows and remote controllers re-read
+ * it, while in-process profile readers (cloud sync) are not woken for nothing.
+ */
+export function broadcastBotTaskListChanged(botId: string): void {
+  broadcastBotRemoteResourceChanged(botId, { local: false });
+  sendBotProfileChangedToWindows({ botId, change: 'updated' });
+}
+
+function sendBotProfileChangedToWindows(payload: { botId: string; change: 'created' | 'updated' }): void {
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
     try {

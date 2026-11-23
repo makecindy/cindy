@@ -14,7 +14,9 @@ PUT 的 selected 只含任务 ID、截断标题和状态，优先等待操作→
 `supportsInputPushToken` 表示 iOS 18+ 支持；`DELETE` 只注销本账号本设备的活动，不触碰普通推送。
 APNs 采用 `CindyAgentActivityAttributes`，`attributes.accountId` 存 scope，ContentState 的既有
 必填 JSON 字段保持不变。`confirmedAt` 是可选的 Unix 秒：新原生包本地更新时写入，旧
-APNs 内容缺省仍可解码，界面用“等待更新”代替未知时间。旧消费端忽略新增字段。手机仍不以
+APNs 内容缺省仍可解码；界面不显示这个时间（2026-11-23 去掉过期画面，带过期画面的旧原生包
+仍用“等待更新”代替未知时间）。必填的 `staleDetail` 与注册里的 `labels.stale` 照旧发送，
+已安装的原生包靠它解码，新界面不显示。旧消费端忽略新增字段。手机仍不以
 不完整 Home 列表覆盖已接管的服务端活动。前台可另从各执行电脑取得完整摘要（见下节）；
 后台和缺少可信摘要时沿用 APNs。
 `getPushRegistration.isStale` 是原生内部观测字段，JS 序列化 HTTP 注册前剥离，兼容旧接口。
