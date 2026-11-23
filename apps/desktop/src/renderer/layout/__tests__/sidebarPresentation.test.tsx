@@ -189,17 +189,23 @@ it('keeps a programmatic reveal unexpanded across a route gap', async () => {
 
 // Bug: 就绪空档里换了任务（例如在设置页从系统岛跳到另一个任务），落到的那个任务的
 // 记忆状态不是用户这次要开栏，不能拉宽窗口；用户直接点名展开的落回仍要展开。
-// Codex P1: a cold start on a route without a sidebar (/settings, /bots) and a later
-// notification landing on a task must not expand the window for that task's saved state.
-it('does not expand on the first task landing after a taskless start', async () => {
-  const resize = vi.fn(async () => 800);
-  window.electronAPI = { windowSidebarExpansion: resize } as never;
-  const { rerender } = renderHook(
-    ({ ready, sessionKey }) => useSidebarPresentation(root, false, ready, width, false, sessionKey),
-    { initialProps: { ready: false, sessionKey: '' } },
+// Codex P1: a metadata-only rerender (same collapsed state, new sessionKey) must not
+// release a native open/close that is still settling.
+it('keeps a settling request when only the session key changes', async () => {
+  let reply!: (delta: number) => void;
+  window.electronAPI = { windowSidebarExpansion: vi.fn(() => new Promise<number>((done) => { reply = done; })) } as never;
+  const { result, rerender } = renderHook(
+    ({ sessionKey }) => useSidebarPresentation(root, false, true, width, true, sessionKey),
+    { initialProps: { sessionKey: 'task-a' } },
   );
-  act(() => { rerender({ ready: true, sessionKey: 'task-a' }); });
-  expect(resize).not.toHaveBeenCalled();
+  expect(result.current.frozenWidth).toBe(800);
+  // The reply has not arrived yet; a session declaration alone must not drop the freeze.
+  act(() => { rerender({ sessionKey: 'task-b' }); });
+  expect(result.current.collapsed).toBe(true);
+  expect(result.current.frozenWidth).toBe(800);
+  window.innerWidth = 1800;
+  await act(async () => { reply(800); });
+  expect(result.current).toEqual({ collapsed: false, instant: true, expandedWidth: 1600 });
 });
 
 it('keeps the standalone width when a readiness gap lands on another task passively', async () => {

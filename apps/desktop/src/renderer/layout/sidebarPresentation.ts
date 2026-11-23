@@ -67,8 +67,6 @@ export function useSidebarPresentation(
   const ownsWidth = useRef(false);
   /** 最近一次就绪渲染所属的任务；设置页接管会先清空 sessionKey，不能拿空档里的值。 */
   const lastReadySession = useRef(sessionKey);
-  /** 这次挂载先停在「没有任务语境、也还没就绪」的路由（冷启动落在 /settings、/bots 等）。 */
-  const sawTasklessRender = useRef(false);
   /** 离开就绪区间时的快照；null = 还没经历过就绪区间（首次挂载）。 */
   const beforeGap = useRef<{ ownsWidth: boolean; sessionKey: string } | null>(null);
   const generation = useRef(0);
@@ -79,7 +77,6 @@ export function useSidebarPresentation(
   useLayoutEffect(() => {
     const wasCollapsed = previous.current;
     const turnedUser = userToggle && !previousUserToggle.current;
-    if (!sessionKey && !ready) sawTasklessRender.current = true;
     previousUserToggle.current = userToggle;
     previous.current = ready ? collapsed : null;
     if (ready) {
@@ -107,9 +104,8 @@ export function useSidebarPresentation(
     const gap = beforeGap.current;
     // 先落在没有侧栏的路由（/settings、/bots 等）、之后才被通知带到任务上，和离开就绪区间
     // 再回来是同一种「落地」：这次展开来自任务自己的存档，不是用户开栏，窗口保持原宽。
-    const relanded = openingFromMount && !userResize.current
-      && (gap !== null ? gap.ownsWidth === false || gap.sessionKey !== sessionKey
-        : sawTasklessRender.current);
+    const relanded = openingFromMount && !userResize.current && gap !== null
+      && (gap.ownsWidth === false || gap.sessionKey !== sessionKey);
     // 启动时按存档恢复展开照常占窗口宽度；但同一帧里由视图强制的展示（首帧 Orca
     // workers 等程序动作）只是把面板放出来，不能顺手把窗口拉宽。
     const forcedReveal = openingFromMount && !userResize.current && passive.current;
@@ -182,9 +178,6 @@ export function useSidebarPresentation(
       ownsWidth.current = false;
       setPresentation({ collapsed, instant: false });
     });
-    // The next state change settles its own request; this one stops waiting for a reply
-    // that would only describe a window rectangle nobody asked for anymore.
-    return stopWaiting;
   }, [collapsed, ready, root, sessionKey, userToggle, retractOnUnready]);
 
   useLayoutEffect(() => () => {
