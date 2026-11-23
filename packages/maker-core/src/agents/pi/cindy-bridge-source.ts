@@ -3900,10 +3900,10 @@ class CindyMcpGateway {
         reason: unavailableReason,
         availableServers: this.availableServers(),
       };
-    } else if (serverName && toolName) {
-      const selected = canonicalServerName && this.botMemoryFacadeEnabled && canonicalServerName === 'cindy_memory'
+    } else if (canonicalServerName && toolName) {
+      const selected = this.botMemoryFacadeEnabled && canonicalServerName === 'cindy_memory'
         ? undefined
-        : canonicalServerName ? this.tools.get(mcpGatewayKey(canonicalServerName, toolName)) : undefined;
+        : this.tools.get(mcpGatewayKey(canonicalServerName, toolName));
       if (!selected) {
         payload = {
           ok: false,
