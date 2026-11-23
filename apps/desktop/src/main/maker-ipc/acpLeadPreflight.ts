@@ -1,5 +1,16 @@
 import type { AcpLeadSupport } from '@cindy/maker-core';
 
+import { pluginEngineKeyFromProviderId } from '../../shared/pluginEngines.js';
+
+/**
+ * The plugin registry's key (`<plugin instance>:<engine id>`) of the engine a task's provider runs. A provider an
+ * engine's account was taken out into (`acp-plugin:<key>~<8 lowercase letters or digits>`) runs that same engine, so
+ * its suffix is not part of the key: the registry lists no entry that has it.
+ */
+export function acpLeadHarnessKey(providerId: string | null | undefined): string | null {
+  return pluginEngineKeyFromProviderId(providerId)?.replace(/~[a-z0-9]{8}$/, '') ?? null;
+}
+
 export interface AcpLeadRefusal {
   code: 'UNSUPPORTED_CAPABILITY' | 'PROVIDER_ROUTE_UNAVAILABLE';
   message: string;

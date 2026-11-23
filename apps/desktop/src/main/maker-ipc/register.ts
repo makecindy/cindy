@@ -262,7 +262,7 @@ import { pluginEngineRemoteUse, setPluginEngineRemoteUse } from '../maker-host/p
 import { onPluginEnginePrefsChanged, readPluginEnginePrefs, updatePluginEnginePrefs } from '../maker-host/plugin-engine-prefs-store.js';
 import { admitPluginEngineSession, admitPluginEngineSwitchTarget } from './pluginEngineSessionAdmission.js';
 import { probePluginHarnessLeadSupport } from '../maker-host/acp-host.js';
-import { createDormantAcpLeadPreflight, revokeAcpLeadIfTeamEnded } from './acpLeadPreflight.js';
+import { acpLeadHarnessKey, createDormantAcpLeadPreflight, revokeAcpLeadIfTeamEnded } from './acpLeadPreflight.js';
 import { getPluginHarnessRegistry } from '../cindy-brain/pluginHarnesses.js';
 import {
   isPluginEngineKind,
@@ -12499,7 +12499,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // a team or creating a Worker so engines that cannot lead fail cleanly with zero side effects.
         // A task that already has a native session has to be reopened to become a Lead.
         const refusal = await dormantAcpLeadPreflight(
-          pluginEngineKeyFromProviderId(leadRow?.providerId),
+          acpLeadHarnessKey(leadRow?.providerId),
           Boolean(leadRow?.sdkSessionId),
         );
         if (refusal) throwIpcError(refusal.code, refusal.message);

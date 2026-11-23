@@ -12,7 +12,7 @@
  */
 import type { AcpLeadSupport } from '@cindy/maker-core';
 import { describe, expect, it, vi } from 'vitest';
-import { createDormantAcpLeadPreflight, dormantAcpLeadRefusal, revokeAcpLeadIfTeamEnded } from '../acpLeadPreflight.js';
+import { acpLeadHarnessKey, createDormantAcpLeadPreflight, dormantAcpLeadRefusal, revokeAcpLeadIfTeamEnded } from '../acpLeadPreflight.js';
 
 describe('dormantAcpLeadRefusal', () => {
   it.each([
@@ -143,5 +143,34 @@ describe('revokeAcpLeadIfTeamEnded', () => {
     const revokeRole = vi.fn(async () => {});
     await expect(revokeAcpLeadIfTeamEnded({ hasActiveTeam: async () => hasActiveTeam, revokeRole })).resolves.toBe(revoked);
     expect(revokeRole).toHaveBeenCalledTimes(revoked ? 1 : 0);
+  });
+});
+
+// Production entry: acpLeadHarnessKey, the engine key assertLeadCollabProjectEnabled (register.ts) gives the dormant
+// preflight for the provider a plugin-engine task runs on, and the preflight it feeds.
+// Basis: pluginEngineSessionAdmission (a provider an engine's account was taken out into, `acp-plugin:<key>~<suffix>`,
+// runs that same engine) and subscription-account-pools.md 插件引擎的账号; the plugin registry lists engines by `<key>` only.
+// Gap: the preflight was given the key with its suffix, which no registry entry has, so a dormant task on a taken-out
+// provider was refused as "engine unavailable" without any probe, while the same engine's own provider passed.
+// Minimal failing input: `acp-plugin:acme:agent~ab12cd34` against a registry that lists `acme:agent`.
+// Tier: unit (pure key mapping, fake registry state and probe).
+describe('acpLeadHarnessKey', () => {
+  it.each([
+    { name: "an engine's own provider", providerId: `acp-plugin:${ENGINE}`, key: ENGINE },
+    { name: 'a provider an account was taken out into', providerId: `acp-plugin:${ENGINE}~ab12cd34`, key: ENGINE },
+    { name: 'a task with no provider', providerId: null, key: null },
+    { name: 'a built-in provider', providerId: 'anthropic', key: null },
+  ])('names the registry engine of $name', ({ providerId, key }) => {
+    expect(acpLeadHarnessKey(providerId)).toBe(key);
+  });
+
+  it('lets a dormant task on a taken-out provider through the preflight of its engine', async () => {
+    const probe = vi.fn(async () => CAN_LEAD);
+    const preflight = createDormantAcpLeadPreflight({
+      engineState: (harnessKey) => (harnessKey === ENGINE ? 'available' : undefined),
+      probe,
+    });
+    await expect(preflight(acpLeadHarnessKey(`acp-plugin:${ENGINE}~ab12cd34`), true)).resolves.toBeNull();
+    expect(probe).toHaveBeenCalledExactlyOnceWith(ENGINE);
   });
 });
