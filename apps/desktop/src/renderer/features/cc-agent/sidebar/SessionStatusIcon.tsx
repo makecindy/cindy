@@ -41,8 +41,10 @@ import {
 } from '@/components/sidebar/VendorIcon';
 import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
 import { useProviderShareAgentDevices } from '@/features/provider-share/useProviderShareAgentDevices';
+import { useOptionalAuthDeviceId } from '@/contexts/AuthContext';
 import { usePluginEngineIdentity } from '@/hooks/usePluginEngines';
 import { isProviderShareAgentDeviceId } from '../../../../shared/providerShare';
+import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
 import { useCindyMakeActivity } from './useCindyMakeActivity';
 
 /**
@@ -52,18 +54,24 @@ import { useCindyMakeActivity } from './useCindyMakeActivity';
 function PluginEngineVendorIcon({
   providerId,
   deviceId,
+  readRemote,
   ...iconProps
 }: {
   providerId: string | null | undefined;
   /** 引擎所在的电脑(被控电脑，或 Agent 所在的自己另一台电脑)；缺省 = 本机。 */
   deviceId?: string;
+  /** False while the remote host is disconnected/connecting: keep cached icon without firing a read. */
+  readRemote?: boolean;
   /** 引擎在任务所在电脑之外的另一台电脑上：与远程 Agent 同一个信号波纹。 */
   remote?: boolean;
   size: number;
   running: boolean;
   colorClassName?: string;
 }) {
-  const { name, iconDataUrl } = usePluginEngineIdentity(providerId, deviceId);
+  const selfDeviceId = useOptionalAuthDeviceId();
+  // Remote task whose plugin engine runs on THIS computer: read the local list instead of calling ourselves over Device Link.
+  const effectiveDeviceId = deviceId && deviceId === selfDeviceId ? undefined : deviceId;
+  const { name, iconDataUrl } = usePluginEngineIdentity(providerId, effectiveDeviceId, { readRemote });
   return <VendorIcon {...iconProps} vendor="acp" title={name} {...(iconDataUrl ? { iconDataUrl } : {})} />;
 }
 
@@ -116,6 +124,9 @@ function AgentDeviceVendorIcon({
 export interface SessionStatusIconProps {
   /** Inbox rows use project identity while retaining draft/attention badges. */
   identityIcon?: ReactNode;
+  hideHarness?: boolean;
+  /** Whether this row already displays activity beside its title or preview. */
+  hasSeparateStatusIndicator?: boolean;
   session: Session;
   isRunning: boolean;
   /** /ctr 接管中:图标切 RadioTower。 */
@@ -144,6 +155,8 @@ export interface SessionStatusIconProps {
 
 export function SessionStatusIcon({
   identityIcon,
+  hideHarness = false,
+  hasSeparateStatusIndicator = false,
   session,
   isRunning: isAgentRunning,
   isAttached,
@@ -195,8 +208,12 @@ export function SessionStatusIcon({
     ? t('ccAgent.sidebar.hasDraft')
     : t('ccAgent.sidebar.hasPausedQueue');
 
+  const hideVendor = hideHarness && !identityIcon && !isArchived && !isOrcaLead && !isAttached;
+  const showRunningIndicator = hideVendor && !hasSeparateStatusIndicator && isRunning;
+  if (hideVendor && !showRunningIndicator && !showDraftIndicator && !(showAttentionDot && hasAttentionDot)) return null;
+
   return (
-    <span className={cn("relative shrink-0 inline-flex items-center justify-center", identityIcon ? "size-[18px]" : "size-3")} aria-hidden>
+    <span className={cn("relative shrink-0 inline-flex items-center justify-center", identityIcon ? "size-[18px]" : "size-3")} aria-hidden={showRunningIndicator ? undefined : true}>
       {identityIcon ?? (isArchived ? (
         <Archive
           size={size ?? 12}
@@ -239,13 +256,19 @@ export function SessionStatusIcon({
         >
           <RadioTower size={size ?? 12} strokeWidth={1.75} className="shrink-0" />
         </span>
-      ) : vendor === 'acp' ? (
+      ) : hideVendor ? null : vendor === 'acp' ? (
         <PluginEngineVendorIcon
           providerId={session.providerId}
           // 引擎在自己的另一台电脑上(Agent 在那台，任务在这台)：名称与图标读那台的列表。别人分享的
           // 来源不提供插件引擎，不当作引擎所在的电脑。
           deviceId={(agentDeviceId && !isProviderShareAgentDeviceId(agentDeviceId) ? agentDeviceId : null)
             ?? session.deviceLinkDeviceId ?? undefined}
+          readRemote={
+            agentDeviceId && !isProviderShareAgentDeviceId(agentDeviceId)
+              ? true
+              : session.deviceLinkConnectionStatus !== 'disconnected'
+                && session.deviceLinkConnectionStatus !== 'connecting'
+          }
           remote={!!agentDeviceId && !(showAttentionDot && hasAttentionDot)}
           size={size ?? 12}
           running={isRunning}
@@ -269,6 +292,9 @@ export function SessionStatusIcon({
           colorClassName={isActive ? 'text-[var(--sidebar-item-active-foreground)]' : undefined}
         />
       ))}
+      {showRunningIndicator && (
+        <SidebarRightStatusIndicator kind="running" isActive={isActive} className="size-3" />
+      )}
       {showAttentionDot && hasAttentionDot && (
         <AttentionDot size={6} tone={attentionTone} className="absolute -top-0.5 -right-0.5" />
       )}

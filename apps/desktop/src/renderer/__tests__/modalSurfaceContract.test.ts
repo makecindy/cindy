@@ -172,7 +172,7 @@ describe('modal surface contract', () => {
     expect(rule('.modal-scrim')).toMatch(/background-color:\s*var\(--overlay-modal\)/);
     expect(rule('.modal-scrim')).toMatch(/backdrop-filter:\s*blur\(4px\)/);
     expect(rule("[data-platform='win32'] .modal-scrim")).toMatch(/backdrop-filter:\s*none/);
-    expect(rule('.modal-panel')).toMatch(/border-radius:\s*0\.75rem/);
+    expect(rule('.modal-panel')).toMatch(/border-radius:\s*var\(--radius-xl\)/);
     expect(rule('.modal-panel')).toMatch(/border:\s*1px solid var\(--border-default\)/);
     expect(rule('.modal-panel')).toMatch(/background-color:\s*var\(--confirm-bg\)/);
     expect(rule('.modal-panel')).toMatch(/box-shadow:\s*var\(--shadow-menu\)/);

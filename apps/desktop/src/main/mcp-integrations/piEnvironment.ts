@@ -388,6 +388,9 @@ async function getPiExtraSpawnConfig(
           }
         }
       },
+      ...(sessionCtx?.sessionInstanceId
+        ? { closeSessionInstance: () => bridge.closeSessionInstance(sessionCtx.sessionInstanceId!) }
+        : {}),
     };
   } catch (err) {
     // 注册后构造失败必须回滚,否则调用方拿不到 dispose,ctx 永久残留(该 id 的
@@ -548,7 +551,7 @@ async function doStart(
     },
   };
 
-  const serverFactories: Record<string, () => McpServer> = Object.create(null);
+  const serverFactories: Parameters<typeof startCodexHttpBridge>[0]['serverFactories'] = Object.create(null);
   const serverDisplayNames: Record<string, string> = Object.create(null);
   const pluginIdByServerName: Record<string, string> = Object.create(null);
   const remoteServers: NonNullable<PiExtraSpawnConfig['mcpBridge']>['servers'] = [];
@@ -662,8 +665,10 @@ async function doStart(
     const toClaudeSdkConfig = provider.toClaudeSdkConfig;
     if (!toClaudeSdkConfig) continue;
 
-    const createServer = (): McpServer => {
-      const cfg = toClaudeSdkConfig.call(provider, ctx) as { type?: string; instance?: unknown } | null;
+    const createServer = (startup?: LiziMcpSessionContext): McpServer => {
+      const cfg = toClaudeSdkConfig.call(provider, startup
+        ? { ...ctx, ...startup, agentKind: ctx.agentKind, getSessionContext: ctx.getSessionContext }
+        : ctx) as { type?: string; instance?: unknown } | null;
       if (cfg?.type !== 'sdk' || !cfg.instance) {
         throw new Error(`provider ${provider.name} did not return an SDK McpServer instance`);
       }
@@ -680,7 +685,8 @@ async function doStart(
       });
       continue;
     }
-    serverFactories[provider.name] = () => {
+    serverFactories[provider.name] = (startup) => {
+      if (startup) return createServer(startup);
       if (firstInstance) {
         const instance = firstInstance;
         firstInstance = null;

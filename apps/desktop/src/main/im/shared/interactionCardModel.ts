@@ -132,6 +132,10 @@ export function buildAskAnswersDecision(answers: Record<string, string>): Intera
   return { kind: 'ask_user_question', answers };
 }
 
+export function isOneTimePermission(request: Pick<SessionPermissionRequest, 'metadata'>): boolean {
+  return request.metadata?.permissionScope === 'once';
+}
+
 /** permission: 只允许这一次。 */
 export function buildPermissionAllowOnceDecision(): InteractionDecision {
   return { kind: 'permission', behavior: 'allow' };
@@ -152,6 +156,7 @@ export function buildPermissionAllowOnceDecision(): InteractionDecision {
  * maker-core 运行期依赖; 漂移由本模块单测钉住(见 __tests__)。
  */
 export function buildPermissionAllowAlwaysDecision(request: SessionPermissionRequest): InteractionDecision {
+  if (isOneTimePermission(request)) return buildPermissionAllowOnceDecision();
   // 本机凭证卡的授权范围由宿主定义，不能转换成普通工具的 addRules。
   if (request.metadata?.hostOwnedConfirmation === 'shared_provider_credential'
     && isProviderShareCredentialSessionApproval(request.suggestions)) {

@@ -85,6 +85,8 @@ const desktopDbExclude = [
 const desktopGitIntegrationInclude = [
   'src/main/**/*.git-integration.test.ts',
 ];
+const desktopCredentialCompatibilityTest =
+  'src/renderer/components/new-chat/__tests__/l342SignedCompatibility.test.tsx';
 const makerCoreIntegrationInclude = [
   'src/agents/codex/*.integration.test.ts',
   'src/agents/claude-code/__tests__/*.integration.test.ts',
@@ -167,6 +169,7 @@ const desktopGuardInclude = [
   'src/renderer/features/cc-agent/__tests__/sessionSlashDispatch.guard.test.ts',
   // Host and desktop source contracts: lines the Node Host copies or wires as the desktop does.
   'src/main/maker-host/__tests__/hostDesktopSourceContracts.guard.test.ts',
+  'src/main/maker-ipc/__tests__/silentStopRegisterWiring.guard.test.ts',
   // Usage cores shared with the Host: desktop code reaches them only through wrappers that bind every port they use.
   'src/main/__tests__/usageCorePortWiring.guard.test.ts',
   // Build fuses and Node worker entrypoints are a cross-file packaging contract.
@@ -191,6 +194,8 @@ const desktopGuardInclude = [
   'src/renderer/__tests__/sessionHeaderMenuParity.test.ts',
   'src/renderer/__tests__/typographyDiscipline.test.ts',
   'src/renderer/__tests__/designEffectsDiscipline.test.ts',
+  // DESIGN.md §6: only confirm({ blocking: true }) may draw on the modal-blocking layer.
+  'src/renderer/__tests__/modalBlockingLayer.guard.test.ts',
   'src/renderer/__tests__/motionDiscipline.test.ts',
   'src/renderer/__tests__/windowBackdropAcrylic.test.ts',
   // Existing credential/permission/protocol contracts, separated from runtime units.
@@ -393,6 +398,7 @@ export default {
             '**/*.git-integration.test.ts',
             '**/*.integration.test.ts',
             '**/*.e2e.test.ts',
+            desktopCredentialCompatibilityTest,
             'src/main/localDb/**',
             'src/main/__tests__/*Migration.test.ts',
             'src/main/__tests__/schemaDriftRepair.test.ts',
@@ -409,7 +415,7 @@ export default {
         },
         integration: {
           status: 'manual',
-          reason: 'Local Agent protocol tests use real sockets; Skill archive size regressions perform large encrypted disk transfers; the Host Pi package parity runs the bundled Pi binary.',
+          reason: 'Local Agent protocol tests use real sockets; Skill archive regressions transfer large encrypted files; Host compatibility and Pi parity run isolated subprocesses.',
           execution: 'exclusive',
           coverage: 'allowlist',
           command: vitestBin('run', '--maxWorkers=2'),
@@ -417,7 +423,9 @@ export default {
             'src/main/local-agent/__tests__/*.integration.test.ts',
             'src/main/device-link/__tests__/linkTraffic.integration.test.ts',
             'src/main/bot-import/__tests__/skillArchive.integration.test.ts',
+            'src/main/maker-host/__tests__/codexSmartNamespace.integration.test.ts',
             'src/main/maker-host/__tests__/hostPiPackagesParity.integration.test.ts',
+            desktopCredentialCompatibilityTest,
           ],
         },
         'git-integration': {

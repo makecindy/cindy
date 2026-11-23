@@ -15,6 +15,9 @@
 
 ## 1. Dogfooding：在本仓 worktree 会话里工作
 
+托管 worktree 从刚拉取的远端默认分支切出；拉取失败时 `create_task_worktree` 返回
+`base_fetched: false`，说明起点可能不是最新，要告诉用户。
+
 Cindy 创建或重建托管 worktree 时，会尽力向 Git 本地 `info/exclude` 追加所用托管目录的
 根级排除规则，避免基础仓库的未跟踪扫描进入这些目录。保留已有规则，不修改项目
 `.gitignore`，不影响已跟踪文件；写入失败不阻止创建或恢复。不扫描、排除任意第三方目录。
@@ -33,7 +36,8 @@ Multibox 建完才返回（2026-11-16 实测 Unity 项目 67–88 秒），所�
 手机发起）的等待上限是 5 分钟（`packages/device-link/src/allowlist.ts` 的 `worktree:create`），
 期间控制端一直显示创建中，建好后才建任务，Agent 不会进入半成品目录；未更新的控制端仍按
 60 秒超时。Desktop 的创建中卡片（`WorktreeCreatingOverlay`）超过 3 秒后显示已等待时长：本机
-新建在任务页替代输入框；远程创建时显示在新建页输入框下方，Goal 创建时显示在目标弹窗内。
+内置引擎新建在任务页替代输入框；远程创建与普通本机插件引擎在新建页输入框下方显示，
+Goal 创建在目标弹窗内显示。普通本机插件引擎完整检出后才建任务并送出首条消息。
 手机新建页暂无同款卡片与计时。
 
 正常回收后的完整 Git 快照恢复也使用 Multibox：直接在最终目录检出快照 commit 并携带缓存，

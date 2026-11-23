@@ -184,6 +184,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
   let agentHome = '';
   let cwd = '';
   let disposed = 0;
+  let closedInstance = 0;
   let proxyDisposed = 0;
   let proxyGeneration = 0;
   let preparedMcpContext: unknown;
@@ -214,6 +215,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     knobs.requests = [];
     knobs.requestOptions = [];
     disposed = 0;
+    closedInstance = 0;
     proxyDisposed = 0;
     proxyGeneration++;
     preparedMcpContext = undefined;
@@ -292,6 +294,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
           },
           mcpEnv: { CINDY_PI_REMOTE_MCP_SECRET_0: 'Bearer spawn-secret-canary' },
           disposeSessionCtx: () => { disposed++; },
+          closeSessionInstance: () => { closedInstance++; },
         };
       },
       ...overrides,
@@ -543,6 +546,32 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       expect(handle.hasProjectResourceDrift?.()).toBe(false);
     } finally {
       await handle.close();
+    }
+  });
+
+  it('keeps teammate-owned skills beside in-place project skills on project-context lanes', async () => {
+    // Regression: a V2 group lane outside the teammate workspace loaded project skills in place
+    // and dropped the teammate's own skills (PR #12128 review).
+    mkdirSync(path.join(cwd, '.pi', 'skills', 'alpha'), { recursive: true });
+    writeFileSync(path.join(cwd, '.pi', 'skills', 'alpha', 'SKILL.md'), '---\nname: alpha\n---\n');
+    const ownRoot = mkdtempSync(path.join(tmpdir(), 'pi-own-skill-'));
+    const ownSkill = path.join(ownRoot, 'weekly-report');
+    mkdirSync(ownSkill, { recursive: true });
+    writeFileSync(path.join(ownSkill, 'SKILL.md'), '---\nname: weekly-report\n---\n');
+    const handle = await new PiAgent(buildDeps()).startSession({ ...opts(), botRuntimeProfile: {
+      botId: 'bot', profileVersion: 1, projectContext: true,
+      skillPolicy: { mode: 'allowlist', configured: [], catalog: [], ownSkills: [{ name: 'weekly-report', path: ownSkill }] },
+      mcpPolicy: { mode: 'allowlist', configured: [], catalog: [] },
+      toolsetPolicy: { mode: 'allowlist', configured: [], catalog: [] },
+    } });
+    try {
+      const skills = repeatedArgValues(knobs.spawnedArgs[0]!, '--skill');
+      expect(skills).toEqual(expect.arrayContaining([ownSkill, path.join(cwd, '.pi', 'skills', 'alpha')]));
+      expect(skills.filter((skill) => skill === path.join(cwd, '.pi', 'skills', 'alpha'))).toHaveLength(1);
+      expect(knobs.spawnedArgs[0]).not.toContain('--no-skills');
+    } finally {
+      await handle.close();
+      rmSync(ownRoot, { recursive: true, force: true });
     }
   });
 
@@ -3415,12 +3444,14 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     // Pi RPC and Cindy's durable Subagent status poll both release their timers.
     expect(clearIntervalSpy).toHaveBeenCalledTimes(2);
     expect(disposed).toBe(1);
+    expect(closedInstance).toBe(1);
     await vi.waitFor(() => expect(proxyDisposed).toBe(2));
 
     // 上层随后仍可能调用 close() —— 幂等,不得二次注销。
     await handle.close();
     expect(clearIntervalSpy).toHaveBeenCalledTimes(2);
     expect(disposed).toBe(1);
+    expect(closedInstance).toBe(1);
     expect(proxyDisposed).toBe(2);
   });
 

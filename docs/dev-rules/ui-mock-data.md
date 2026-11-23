@@ -131,6 +131,7 @@ pnpm mobile:sim:whoami -- --mock --json
   地址取 `apps/mobile/src/debug/mailVisualFixture.ts` 的 `VISUAL_MAIL_URLS`（宽版营销邮件、三封往来邮件），均为合成数据。
 - 写邮件卡片：`cindy://sessions/visual-mail-draft?deviceId=cindy-visual-mock-mac`（仅手机端的模拟任务，含一张回复草稿卡）。
 - 反馈确认：`cindy://sessions/visual-issue-confirm?deviceId=cindy-visual-mock-mac`，合成反馈草稿、署名与环境，覆盖预览、编辑和展开详情；不提交。Desktop 对应 `pnpm ui:check --page issue-confirm --case all --theme all`，两端均加载实际组件。
+- 代输入：`cindy://sessions/visual-input-handoff?deviceId=cindy-visual-mock-mac`，一条英文的电脑 App 登录请求（长目的、Agent 补充、邮箱与密码），点「填写」打开实际的 iOS 原生面板；用于在 iPhone Duo 折叠／展开、短屏与常规机型上检查对齐和高度。合成数据，「继续」不会提交到任何电脑。
 - 群聊点名：`cindy://companions/groups/mention-qa?deviceId=cindy-visual-mock-mac`，合成成员覆盖显式身份、唯一名称回退、重名、未知及群体提及。沿用实际群聊组件与成员身份 sheet，只用于界面验收；话题入口另由直连 Chat Server 的组件回归覆盖。
 - 群列表告警：模拟电脑的伙伴群列表包含「已结束分工」「另一执行失败」「仍需回复」三行，
   由真实共享状态判据生成无提醒、错误、待回复状态，验证失败历史不等于仍需处理。只用于列表目检。

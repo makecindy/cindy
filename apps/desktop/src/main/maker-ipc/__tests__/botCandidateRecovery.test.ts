@@ -421,3 +421,19 @@ it.each([
 ])('classifies the connection scope of 429 %s', (message, expected) => {
   expect(isModelGroupConnectionOutOfCredit({ errorStatus: 429, message })).toBe(expected);
 });
+
+// 生产入口与可观察结果：isBotCandidateUnavailable 与 createInterruptedTurnAutoResumeHooks 判定插件引擎终态是否切备用路由。
+// 依据：docs/product-rules/cindy-bots-runtime.md §5，插件进程退出/缺登录/上游限流切备用模型，用户拒绝/超窗不切。
+// 覆盖缺口：既有测试只覆盖内置引擎的 turn-failed 与 provider_* 原因，未覆盖 ACP 的三种终态 reason。
+// 最小失败输入与 tier：unit，纯内存信号表驱动。
+it.each([
+  [{ reason: 'acp-agent-exited', message: 'The agent process ended unexpectedly.' }, true],
+  [{ reason: 'acp-auth-required', message: 'The agent needs you to sign in again.' }, true],
+  [{ reason: 'acp-request-failed', errorStatus: 429, message: 'Rate limit exceeded' }, true],
+  [{ reason: 'acp-request-failed', message: 'User denied permission' }, false],
+  [{ reason: 'acp-request-failed', message: 'Prompt too long for context window' }, false],
+] as const)('classifies plugin engine failure %j for companion candidate fallback = %s', async (signals, expected) => {
+  expect(isBotCandidateUnavailable(signals)).toBe(expected);
+  const h = harness();
+  expect(h.isResumableTurnErrorCandidate(signals, h.item)).toBe(expected);
+});

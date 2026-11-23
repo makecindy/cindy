@@ -412,7 +412,7 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
    本地非 Review、非隔离 Bot（V2 伙伴项目里的主人私聊按普通任务）、非 SSH 的 root 任务用重复 `--skill` / `--prompt-template` /
    `--extension` 把仓库原路径交给 Pi：`.pi/skills` 与 cwd→git root 内 `.agents/skills`
    的目录型 Skill、`.pi/prompts/*.md`、`.pi/extensions/*.ts` 与 `*/index.ts`。越界 symlink
-   不传入。root 仍回装 Cindy 自有 bridge/subagent 与 pinned plan-mode。Review、Bot、子代理、
+   不传入。root 仍回装 Cindy 自有 bridge/subagent 与 pinned plan-mode；按普通任务装配的伙伴会话另挂伙伴自有技能（`ownSkills`）。Review、Bot、子代理、
    离线 `forkSdkSession` 克隆进程与远端会话不带这些项目资源。随后以 `resumeSessionId`
    恢复的本地根任务（含 fork 之后的恢复）与普通本地任务相同，加载项目资源。
    不得读取/复制项目 `.pi/settings.json`，不得传 `--approve`，

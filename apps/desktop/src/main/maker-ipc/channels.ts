@@ -438,6 +438,7 @@ export const MAKER_INVOKE = {
   SUBAGENT_MODEL_SETTINGS_RESET: 'maker:subagent-model-settings:reset',
   /** Global exact-model choices for short host-generated text tasks. */
   AUXILIARY_MODEL_SETTINGS_GET: 'maker:auxiliary-model-settings:get',
+  AUXILIARY_MODEL_HEALTH_GET: 'maker:auxiliary-model-health:get',
   AUXILIARY_MODEL_SETTINGS_SET: 'maker:auxiliary-model-settings:set',
   SILENT_ENCRYPTED_RETRY_GET: 'maker:silent-encrypted-retry:get',
   SILENT_ENCRYPTED_RETRY_SET: 'maker:silent-encrypted-retry:set',

@@ -33,10 +33,12 @@
 | `/review`、成果快照、Finding 与复核生命周期 | [成果复核](review-product-direction.md) |
 | 区域、构建身份、端点与版本文案 | [区域与版本](region-and-editions.md) |
 | 模型资料、目录下发、窗口、价格与默认值 | [模型架构入口](../dev-rules/model-catalog-maintenance.md)、[资料优先级](model-metadata-precedence.md) |
+| 辅助模型全部不可用时的提示与插件任务的退回 | [辅助模型提示](auxiliary-model-health.md) |
 | 本地模型候选、包装、硬件与推荐 | [本地模型](local-model-selection.md) |
 | 供应商连接、状态、操作与用量 | [供应商设置](provider-settings.md) |
 | 跨账号供应商分享、申请、审批与管理 | [供应商分享](provider-sharing.md) |
 | 供应商组、选电脑策略、转发与用量 | [供应商组](provider-groups.md) |
+| 远程供应商在本机执行命令与文件操作时的权限确认、两台电脑的分工 | [远程执行的权限确认](remote-execution-permissions.md) |
 | 模型组：把已有来源合成路线与模式、新任务选来源 | [模型组](model-groups.md) |
 | 同一供应商内的 Claude / Codex 多订阅账号、目录与分配；单独供应商与合并／拿出 | [供应商内的订阅账号](subscription-account-pools.md) |
 | 媒体模型资料与发布兼容 | [V4 全类型规范](../model-registry-v4-media.md) |

@@ -12,7 +12,10 @@ use alloc::vec::Vec;
 use crate::congestion::{Bbr, RECOVERY_TIMEOUTS, RateSample};
 use crate::parity::{self, MAX_UNKNOWNS};
 use crate::rtt::RttEstimator;
-use crate::stream::{DEFAULT_STREAM, HEADED_LENGTH_BIT, Priority, RecvStream, STREAM_HEADER_LEN, Scheduler, SendStream, StreamEvent, StreamHeader};
+use crate::stream::{
+    DEFAULT_STREAM, HEADED_LENGTH_BIT, PRIORITY_LEVELS, Priority, RecvStream, STREAM_HEADER_LEN, Scheduler, SendProgress, SendStream, StreamEvent,
+    StreamHeader, StreamProgress,
+};
 use crate::wire::{self, Frame};
 
 const MAX_SEGMENTS_PER_PACKET: usize = 16;
@@ -138,7 +141,7 @@ const STREAM_ACTIVE_US: u64 = 1_000_000;
 const INTERACTIVE_WINDOW_RESERVE: u64 = 16;
 /// 每个往返最多这么多个分片的交互流数据不用等节奏和拥塞窗口。
 const INTERACTIVE_ROUND_SEGMENTS: usize = 8;
-/// 一个确认包最多带这么多条流的额度。
+/// 一个确认包最多带这么多条流的额度；回探测的确认不受它限制（见 [`Connection::write_grants`]）。
 const MAX_GRANTS_PER_PACKET: usize = 2;
 
 /// 传输策略；只影响发送节奏和冗余，不改变线格式。
@@ -415,6 +418,8 @@ pub struct Connection {
     send_streams: BTreeMap<u32, SendStream>,
     scheduler: Scheduler,
     next_stream_id: u32,
+    /// 上一次有数据被确认的时刻；之前没有数据在等时，是数据开始等的时刻（`send_progress`）。
+    progress_at: u64,
     /// 交互流和其他流都在发：其他流要给它让路，也要少占网络里的队列。
     mixed_traffic: bool,
     last_interactive_at: Option<u64>,
@@ -483,6 +488,8 @@ pub struct Connection {
     peer_window_max: u32,
     /// 收到过对端的确认，`peer_window_max` 是对端说的，不再是猜的。
     peer_window_known: bool,
+    /// 收到了探测：下一个确认带上放得下的所有额度（见 [`Self::write_grants`]）。
+    grant_all: bool,
     probe_at: Option<u64>,
     probe_interval_us: u64,
     probe_due: bool,
@@ -582,6 +589,7 @@ impl Connection {
             send_buffered: 0,
             send_streams: BTreeMap::from([(DEFAULT_STREAM, SendStream::new(Priority::Normal, 0))]),
             scheduler: Scheduler::default(),
+            progress_at: 0,
             next_stream_id: DEFAULT_STREAM + 1,
             mixed_traffic: false,
             last_interactive_at: None,
@@ -628,6 +636,7 @@ impl Connection {
             peer_window: Self::initial_window(&config),
             peer_window_max: Self::initial_window(&config),
             peer_window_known: false,
+            grant_all: false,
             probe_at: None,
             probe_interval_us: config.probe_initial_us,
             probe_due: false,
@@ -698,6 +707,8 @@ impl Connection {
         for (&id, stream) in &self.send_streams {
             let unacked: usize = self.segments.iter().filter(|segment| segment.stream == id).map(|segment| segment.data.len()).sum();
             assert_eq!(stream.unacked, unacked, "stream {id} send accounting");
+            let outstanding: usize = self.segments.iter().filter(|segment| segment.stream == id && !segment.acked).map(|segment| segment.data.len()).sum();
+            assert_eq!(stream.outstanding, outstanding, "stream {id} unacknowledged accounting");
         }
         assert_eq!(self.segments.len() as u64, self.snd_sent - self.snd_una, "segment queue length");
         assert!(self.snd_una <= self.snd_sent, "send sequence order");
@@ -789,6 +800,9 @@ impl Connection {
         if !self.has_unacked_data() {
             self.last_heard = now_us;
         }
+        if !self.bytes_waiting() {
+            self.progress_at = now_us;
+        }
         let per_stream = self.stream_send_buffer();
         let Some(priority) = self.send_streams.get(&stream).filter(|state| !state.finishing).map(|state| state.priority) else { return 0 };
         let total_room = per_stream.saturating_mul(MAX_SEND_BUFFERS).saturating_sub(self.shared_buffer_used(priority, per_stream));
@@ -800,6 +814,9 @@ impl Connection {
         let total_room = if own == 0 { total_room.max(max_segment) } else { total_room };
         let room = per_stream.saturating_sub(own).min(total_room);
         let accepted = data.len().min(room);
+        if !state.waiting() && accepted > 0 {
+            state.progress_at = now_us;
+        }
         state.pending.extend(&data[..accepted]);
         self.send_buffered += accepted;
         accepted
@@ -809,6 +826,48 @@ impl Connection {
     /// （Agent-Net 会话的积压，慢线路上不再往里灌推送，交互回复不排在大批推送后面）。
     pub fn stream_buffered(&self, stream: u32) -> usize {
         self.send_streams.get(&stream).map_or(0, |state| state.pending.len() + state.unacked)
+    }
+
+    /// 一条流的进展。流不存在时是 `None`：没开过，或者已经写完、全部被确认（结束标记也确认了）。
+    /// 上层据此按进展判超时：字节一直在被确认的流再慢也不算卡住，有字节在等却很久没有一个被确认才算。
+    /// 停顿只算还没被确认的字节：别的流丢了包时，这条流被确认了的字节还要等缺口补齐才从缓冲里放掉，它们算在 `buffered`
+    /// 里，不算停顿。只等着切出结束标记的流也不算，结束标记切出以后才开始算。
+    pub fn stream_progress(&self, now_us: u64, stream: u32) -> Option<StreamProgress> {
+        let state = self.send_streams.get(&stream)?;
+        let buffered = state.pending.len() + state.unacked;
+        Some(StreamProgress { acked_bytes: state.acked, buffered, stalled_us: if state.waiting() { now_us.saturating_sub(state.progress_at) } else { 0 } })
+    }
+
+    /// 某条流有字节在等（见 [`SendStream::waiting`]）：发送方向的停顿从这时算起。
+    fn bytes_waiting(&self) -> bool {
+        self.send_streams.values().any(SendStream::waiting)
+    }
+
+    /// 发送方向的进展：每一档还在发送缓冲里的字节（写进来还没发的，加发了还没确认的），以及有数据没被确认时距上一次有数据被确认
+    /// 过了多久。上层据此看线路是不是变慢、推送是不是积压，不用自己数。
+    pub fn send_progress(&self, now_us: u64) -> SendProgress {
+        let mut queued = [0usize; PRIORITY_LEVELS];
+        for state in self.send_streams.values() {
+            queued[state.priority.value() as usize] += state.pending.len() + state.unacked;
+        }
+        let stalled_us = if self.bytes_waiting() { now_us.saturating_sub(self.progress_at) } else { 0 };
+        SendProgress { queued, stalled_us }
+    }
+
+    /// 放弃一条流：写进来还没切成分片的字节不再发，流随即结束，对端收到已经发出的那部分和结束标记。已经发出、还没被确认的
+    /// 分片照常重传：全连接共用分片序号，对端要收齐才能往后交付，这部分最多是在途的那一窗。线上格式不变，旧版对端看到的是一条
+    /// 提前结束的流，所以上层要自己看出内容不全（比如按头里写的长度）。返回丢掉的字节数；默认流、不存在或已经发出结束标记的流
+    /// 返回 `None`。
+    pub fn abandon_stream(&mut self, stream: u32) -> Option<usize> {
+        if stream == DEFAULT_STREAM {
+            return None;
+        }
+        let state = self.send_streams.get_mut(&stream).filter(|state| !state.fin_sent)?;
+        let dropped = state.pending.len();
+        state.pending.clear();
+        state.finishing = true;
+        self.send_buffered -= dropped;
+        Some(dropped)
     }
 
     /// 这条流不再写了。之前写入的数据发完后，对端会收到 [`StreamEvent::Finished`]。默认流不能结束。
@@ -1291,10 +1350,11 @@ impl Connection {
                 Frame::Ping => {
                     ack_eliciting = true;
                     urgent = true;
-                    // 对端可能是等额度等到了探测：额度帧丢光时靠这里补。
+                    // 对端可能是等额度等到了探测：额度帧丢光时靠这里补。它等的是哪条流不知道，回它的确认把每条流的都带上。
                     for state in self.recv_streams.values_mut() {
                         state.grant_repeats = state.grant_repeats.max(1);
                     }
+                    self.grant_all = true;
                 }
                 Frame::Credit { stream, end } => {
                     if let Some(state) = self.send_streams.get_mut(&stream) {
@@ -1617,8 +1677,16 @@ impl Connection {
         }
         segment.acked = true;
         let was_in_flight = core::mem::replace(&mut segment.in_flight, false);
+        let (stream, bytes) = (segment.stream, segment.data.len());
         if was_in_flight {
             self.in_flight -= 1;
+        }
+        // 确认都在收到包时处理，`last_heard` 就是此刻。
+        self.progress_at = self.last_heard;
+        if let Some(state) = self.send_streams.get_mut(&stream) {
+            state.acked += bytes as u64;
+            state.outstanding -= bytes;
+            state.progress_at = self.last_heard;
         }
     }
 
@@ -1867,7 +1935,7 @@ impl Connection {
         // 给交互流留一点窗口：窗口被丢包卡住时，新消息不用等大量数据。
         let reserve = if self.mixed_traffic { (window / INTERACTIVE_WINDOW_RESERVE).max(1) } else { 0 };
         self.scheduler.pick(&self.send_streams, |id, stream| {
-            let allowed = if stream.priority == Priority::Interactive { room > 0 } else { room > reserve };
+            let allowed = if stream.priority.is_urgent() { room > 0 } else { room > reserve };
             allowed && stream.has_data() && self.peer_allows(id, stream)
         })
     }
@@ -1892,20 +1960,28 @@ impl Connection {
         if size > room {
             return None;
         }
+        // 空闲的流只切出结束标记：从这时起它（和整个发送方向，之前什么都没在等的话）在等确认。
+        if count == 0 && !self.bytes_waiting() {
+            self.progress_at = now_us;
+        }
         let mut data = self.take_buffer();
         let state = self.send_streams.get_mut(&id)?;
         if headed {
             StreamHeader { stream: id, seq: state.next_seq as u32, fin }.write(&mut data);
         }
+        if count == 0 && !state.waiting() {
+            state.progress_at = now_us;
+        }
         state.take_pending(count, &mut data);
         state.unacked += size;
+        state.outstanding += size;
         state.next_seq += 1;
         state.fin_sent |= fin;
         let (next_seq, priority) = (state.next_seq, state.priority);
         self.send_buffered += size - count;
         self.tail_stream = (id, next_seq);
         self.scheduler.record(id, priority, &self.send_streams);
-        let urgent = priority == Priority::Interactive;
+        let urgent = priority.is_urgent();
         *(if urgent { &mut self.last_interactive_at } else { &mut self.last_other_at }) = Some(now_us);
         self.update_mixed_traffic(now_us);
         self.segments.push_back(Segment { data, stream: id, headed, urgent, acked: false, in_flight: false, sent_before: false });
@@ -2260,7 +2336,7 @@ impl Connection {
 
     /// 下一个新分片是不是交互流的。
     fn next_interactive_stream(&self) -> Option<u32> {
-        self.next_stream().filter(|id| self.send_streams.get(id).is_some_and(|stream| stream.priority == Priority::Interactive))
+        self.next_stream().filter(|id| self.send_streams.get(id).is_some_and(|stream| stream.priority.is_urgent()))
     }
 
     /// 接下来要发的是交互流的数据。
@@ -2483,10 +2559,16 @@ impl Connection {
     }
 
     /// 把还没告诉对端的流量额度写进这个包，放不下的留给后面的确认。
+    ///
+    /// 平时一个确认最多带 [`MAX_GRANTS_PER_PACKET`] 条；回探测的确认带上放得下的所有额度。探测会把每条流都标成要重发，
+    /// 原来回它的确认也只带得下编号最小的两条：编号靠后的流最初那几份额度一旦没送到，之后每个探测换来的都还是前两条，
+    /// 那条流就一直停在初始的 128 个分片上（2026-11-22：会话 v2 的正文流是一条连接的第 6 条流，手机轮询慢一点、探测和
+    /// 整批数据一起到，就停在 160 KB）。
     fn write_grants(&mut self, out: &mut [u8], mut used: usize) -> usize {
+        let limit = if core::mem::take(&mut self.grant_all) { usize::MAX } else { MAX_GRANTS_PER_PACKET };
         let mut written = 0;
         for (&id, state) in self.recv_streams.iter_mut() {
-            if written == MAX_GRANTS_PER_PACKET || used + wire::CREDIT_FRAME_LEN > out.len() {
+            if written == limit || used + wire::CREDIT_FRAME_LEN > out.len() {
                 break;
             }
             if state.grant_repeats > 0 && id != DEFAULT_STREAM {

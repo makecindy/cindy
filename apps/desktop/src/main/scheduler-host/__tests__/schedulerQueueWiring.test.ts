@@ -31,6 +31,7 @@ vi.mock('../../localDb/dialogueWorkspace', () => ({ dialogueWorkspaceRoots: () =
 vi.mock('../../localDb/schema.js', () => ({ sessions: {} }));
 vi.mock('../../localDb/client/current', () => ({ getDbClient: vi.fn() }));
 vi.mock('../../maker-ipc/scheduledModelSelection', () => ({ assertScheduledHarnessSupported: vi.fn() }));
+vi.mock('../../maker-host/bot-model-chain-settings-store.js', () => ({ readEffectiveBotModelChain: vi.fn() }));
 vi.mock('../../maker-host/model-route-guard-live.js', () => ({
   resolveDefaultScheduleRoute: vi.fn(), resolveRouteCopyCapabilities: vi.fn(),
   resolveScheduledModelSelectionLive: vi.fn(), verdictForModelRoute: vi.fn(),
@@ -48,7 +49,7 @@ vi.mock('../../maker-ipc/register.js', () => ({
   prepareScheduledModelPreferencesUnderLock: vi.fn(), recordDispatchedModel: vi.fn(),
   broadcastSessionCreated: vi.fn(), cancelSchedulerAutoResume: vi.fn(),
   enqueueSchedulerPrompt: vi.fn(), hasQueuedSchedulerPrompt: vi.fn(),
-  isSchedulerAutoResumePending: vi.fn(), isSchedulerPromptTracked: vi.fn(), releaseQueuedSchedulerPrompt: vi.fn(),
+  isSchedulerAutoResumePending: vi.fn(), isSchedulerSharedReconnectPending: vi.fn(), isSchedulerPromptTracked: vi.fn(), releaseQueuedSchedulerPrompt: vi.fn(),
   isSchedulerTargetSessionBusy: vi.fn(), onSchedulerAutoResumeFailed: vi.fn(),
   removeQueuedSchedulerPrompt: vi.fn(),
 }));
@@ -70,6 +71,8 @@ vi.mock('../script-capability-broker.desktop', () => ({ SchedulerScriptCapabilit
 vi.mock('../notifier.desktop', () => ({ DesktopNotifier: class {} }));
 vi.mock('../../im/feishu/notificationOrigin', () => ({ sendFeishuSessionNotification: vi.fn() }));
 vi.mock('../../wecomGroupNotification', () => ({ wecomGroupNotificationService: {} }));
+// 模型组选路的装配静态导入了本机解析器(会读 Electron 路径)，这里只验排队装配。
+vi.mock('../../model-groups/sessionStart.desktop.js', () => ({ modelGroupSessionStart: { prepare: async () => null, canRoute: async () => false, exists: async () => false } }));
 
 import { resetScheduler, startScheduler } from '../index.desktop';
 

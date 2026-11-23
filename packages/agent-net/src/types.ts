@@ -1,5 +1,13 @@
 import type { KeyObject } from 'node:crypto';
 import type { AgentNetUplink } from '@cindy/agent-net-relay/client';
+export type PathPreference = 'auto' | 'direct' | 'relay';
+
+export interface PeerPathMetrics {
+  directRttMs: number | null;
+  relayRttMs: number | null;
+  preference: PathPreference;
+}
+
 export interface RosterEntry { id: string; dial: unknown; }
 export interface PeerChannel {
   readonly remoteId: string;
@@ -22,7 +30,20 @@ export interface PeerChannel {
   onSessionCapable?(handler: () => void): void;
   /** Features the peer declared along with session support. */
   sessionFeatures?(): readonly string[];
+  /**
+   * The channel carries `agent-net-session-v2` body streams (`SessionWire.openBody` / `onBody`): this node declares
+   * `AGENT_NET_SESSION_V2` and reads the peer's body streams.
+   */
+  readonly sessionBodies?: boolean;
   path?(): 'direct' | 'relay' | null;
+  /** Live RTT of both direct and relay paths (when measured) plus the local path preference. */
+  pathMetrics?(): PeerPathMetrics;
+  /** Change the local path preference (`auto` / `direct` / `relay`) and sync it with the peer on the control stream. */
+  setPathPreference?(preference: PathPreference): void;
+  /** The peer's authenticated direct UDP address while `path()` is `'direct'`, so a fast foreground resume can dial it first. */
+  directAddress?(): { address: string; port: number } | null;
+  /** Fires when `path()` or `directAddress()` changes after the channel was adopted (for instance after hole punching). */
+  onPathChange?(handler: (path: 'direct' | 'relay' | null) => void): void;
   stats?(): Record<string, number> | null;
   addressKind?(): 'relay' | 'loopback' | 'private' | 'public' | null;
 }
@@ -39,6 +60,27 @@ export const SESSION_LANE_PRIORITY = { control: 'interactive', normal: 'normal',
 export type SessionLaneName = keyof typeof SESSION_LANE_KINDS;
 /** Session bytes that may arrive before this side attached its session; beyond it the connection is closed. */
 export const MAX_EARLY_SESSION_BYTES = 16 * 1024 * 1024;
+/**
+ * Declared along with session support by a node that reads body streams (docs/dev-rules/protocol-compatibility/agent-net-session.md
+ * 「会话 v2」). Only once the peer declared it does this node open one: older nodes close the connection on a stream type they do not know.
+ */
+export const AGENT_NET_SESSION_V2 = 'agent-net-session-v2';
+/**
+ * First byte of a body stream, then the body's key (4 bytes, big-endian), then the message body; the stream ends after it.
+ * The core priority is the one of the lane the message's placeholder went on.
+ */
+export const SESSION_BODY_KIND = 0x33;
+export const SESSION_BODY_HEADER_BYTES = 5;
+/** What each body event that arrives before the session attached costs in MAX_EARLY_SESSION_BYTES, besides its bytes (an end has none). */
+export const EARLY_BODY_EVENT_BYTES = 64;
+/** One message body on a stream of its own (session v2, `SessionWire.openBody`). */
+export interface SessionBodyWriter {
+  write(bytes: Uint8Array): void;
+  /** The body is complete: the stream ends after what was written. */
+  finish(): void;
+  /** Give the body up (its caller cancelled): what the core has not sent goes no further, the stream ends now. */
+  abandon(): void;
+}
 
 /** The session's three core streams on one connection, independent of the Device Link frame stream. */
 export interface SessionWire {
@@ -47,6 +89,14 @@ export interface SessionWire {
   readonly bufferedAmount: number;
   /** Each chunk is handed over to the session, which may keep it until its frame is complete: the wire must not reuse it. */
   onData(handler: (lane: 'control' | 'normal' | 'background', bytes: Uint8Array) => void): void;
+  /**
+   * Session v2: a stream of its own for one message body, at the core priority of `lane`, starting with `SESSION_BODY_KIND`
+   * and `key`. Null when the connection cannot open one (stream limit): the message then goes on its lane as in v1.
+   * Only after the peer declared `AGENT_NET_SESSION_V2`.
+   */
+  openBody?(lane: 'control' | 'normal' | 'background', key: number): SessionBodyWriter | null;
+  /** Bytes of a body stream the peer opened (after its kind and key), then `null` once that stream ended. Same rule as `onData`. */
+  onBody?(handler: (key: number, bytes: Uint8Array | null) => void): void;
 }
 /**
  * `onDrain` fires when the socket backlog falls back to this or below. Same as Device Link's socket low watermark
@@ -60,6 +110,8 @@ export const DRAIN_LOW_WATER_BYTES = 128 * 1024;
 export interface RelayRoute {
   via: 'udp' | 'websocket';
   rttMs: number | null;
+  /** On the WebSocket because the relay UDP carried registrations but no data (relayUdp.ts); retried after `cooldownMs`. */
+  udpSuspension?: { reason: 'data-silence' | 'request-timeouts' | 'unacked-sends'; cooldownMs: number };
 }
 export interface Transport {
   readonly id: string;
@@ -68,6 +120,10 @@ export interface Transport {
   close(): Promise<void>;
   /** This computer changed networks: connections send from the new address now (the peer follows) and candidates are gathered again. */
   networkChanged?(): void;
+  /** Session requests to a relayed peer timed out; relay UDP may carry registrations but no data (relayUdp.ts noteStall). */
+  relayStalled?(): void;
+  /** The roster or the peer rule changed: a transport that mirrors the admitted peers elsewhere (the phone's engine) does it now. */
+  admissionChanged?(): void;
   /**
    * See RelayRoute; null without a relay. Only the UDP round trip is known here (`rttMs` is null for the WebSocket):
    * the WebSocket itself is opened and pinged by the host (workerSocket.ts).
