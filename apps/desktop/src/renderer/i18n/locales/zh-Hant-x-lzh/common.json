@@ -3377,6 +3377,7 @@
       "description": "將他家 AI 程式設計工具之差事接入 Cindy，續而為之。唯讀原始記錄，不改分毫。",
       "rescan": "再察",
       "allSources": "諸源",
+      "sourceFilterAria": "源",
       "search": "尋差事或卷匣",
       "projectFilter": "唯覽 {{name}}",
       "clearProjectFilter": "示諸案",

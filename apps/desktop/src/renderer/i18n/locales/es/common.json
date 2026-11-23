@@ -3445,6 +3445,7 @@
       "description": "Trae sesiones de otras herramientas de programación con IA a Cindy y sigue trabajando. Cindy solo lee los originales y nunca los modifica.",
       "rescan": "Buscar de nuevo",
       "allSources": "Todos los orígenes",
+      "sourceFilterAria": "Origen",
       "search": "Buscar sesiones o carpetas",
       "projectFilter": "Solo {{name}}",
       "clearProjectFilter": "Mostrar todos los proyectos",

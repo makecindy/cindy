@@ -14,7 +14,6 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
   ArrowRight,
-  Check,
   ChevronDown,
   ChevronRight,
   CircleCheck,
@@ -24,7 +23,6 @@ import {
   FileUp,
   Folder,
   FolderOpen,
-  ListFilter,
   MessageSquare,
   Minus,
   RefreshCw,
@@ -40,6 +38,7 @@ import { emitRefresh } from '@/lib/sessionsBus';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Collapse } from '@/components/ui/collapse';
+import { Select } from '@/components/ui/select';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
@@ -528,36 +527,22 @@ function SourceFilter({
   onChange: (value: ImportSourceId | 'all') => void;
 }) {
   const { t } = useTranslation();
-  const label = value === 'all' ? t('settings.sessionImport.allSources') : IMPORT_SOURCE_NAMES[value];
+  // A single-value field is the shared Select, not a menu (DESIGN.md §4 Desktop settings controls).
+  const count = (n: number) => (
+    <span className="text-12 tabular-nums text-[var(--text-tertiary)]">{n}</span>
+  );
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          className="inline-flex h-8 shrink-0 items-center gap-2 rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-theme-card-bg)] pl-3 pr-2.5 text-13 font-medium text-[var(--text-primary)] select-none hover:bg-[var(--settings-menu-bg-hover)]"
-        >
-          {value === 'all' ? <ListFilter size={14} aria-hidden /> : <ImportSourceMark source={value} size={14} />}
-          <span>{label}</span>
-          <ChevronDown size={14} className="text-[var(--text-tertiary)]" aria-hidden />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="min-w-[232px]">
-        <DropdownMenuItem onSelect={() => onChange('all')} className="gap-2.5">
-          <span className="flex w-4 justify-center">{value === 'all' && <Check size={16} />}</span>
-          {t('settings.sessionImport.allSources')}
-          <DropdownMenuShortcut className="tracking-normal tabular-nums">{total}</DropdownMenuShortcut>
-        </DropdownMenuItem>
-        {counts.length > 0 && <DropdownMenuSeparator />}
-        {counts.map(([id, n]) => (
-          <DropdownMenuItem key={id} onSelect={() => onChange(id)} className="gap-2.5">
-            <span className="flex w-4 justify-center">{value === id && <Check size={16} />}</span>
-            <ImportSourceMark source={id} size={16} />
-            {IMPORT_SOURCE_NAMES[id]}
-            <DropdownMenuShortcut className="tracking-normal tabular-nums">{n}</DropdownMenuShortcut>
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <Select
+      data-settings-search-action="Filters the importable task list by its source tool"
+      label={t('settings.sessionImport.sourceFilterAria')}
+      value={value}
+      size="compact"
+      options={[
+        { value: 'all', label: t('settings.sessionImport.allSources'), endAdornment: count(total) },
+        ...counts.map(([id, n]) => ({ value: id, label: IMPORT_SOURCE_NAMES[id], endAdornment: count(n) })),
+      ]}
+      onValueChange={(next) => onChange(next as ImportSourceId | 'all')}
+    />
   );
 }
 

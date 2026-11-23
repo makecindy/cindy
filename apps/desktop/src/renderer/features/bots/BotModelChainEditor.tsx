@@ -1,4 +1,5 @@
 import { Button } from '@/components/ui/button';
+import { Tip } from '@/components/ui/tooltip';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ArrowDown, ArrowUp, Plus, Trash2 } from 'lucide-react';
 import { isSharedTaskPeer } from '@cindy/device-link';
@@ -39,6 +40,7 @@ import { MODEL_GROUPS_DEFAULTS, type ModelGroupSelection, type ModelGroupsConfig
 import { isPluginEngineEffort } from '../../../shared/pluginEngines';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import { useBotTranslation } from './botPronounContext';
+import { ResetGroupButton } from '@/components/ui/reset-buttons';
 
 function vendorFor(harness: BotHarness): 'cc' | 'codex' | 'pi' {
   return harness === 'claude' ? 'cc' : harness === 'acp' ? 'pi' : harness;
@@ -464,15 +466,19 @@ export function BotModelChainEditor({
             <ArrowDown size={14} />
           </button>
           {routes.length > 1 ? (
-            <button
-              type="button"
-              disabled={disabled}
-              onClick={() => onChange(routes.filter((_, at) => at !== index))}
-              aria-label={t('bots.modelChain.remove')}
-              className="rounded-lg p-1.5 hover:bg-[var(--danger-bg-soft)] hover:text-[var(--text-danger)]"
-            >
-              <Trash2 size={14} />
-            </button>
+            <Tip text={t('bots.modelChain.remove')}>
+              <Button
+                variant="secondary"
+                tone="danger"
+                size="sm"
+                disabled={disabled}
+                onClick={() => onChange(routes.filter((_, at) => at !== index))}
+                aria-label={t('bots.modelChain.remove')}
+                className="w-7 px-0"
+              >
+                <Trash2 size={14} aria-hidden />
+              </Button>
+            </Tip>
           ) : null}
         </div>
       </div>
@@ -591,19 +597,13 @@ export function BotModelChainEditor({
               {t('bots.modelChain.add')}
             </Button>
             {onRestoreDefault ? (
-              <Button
-                variant="secondary"
-                size="md"
-                tone="quiet"
-                compact
-                type="button"
+              <ResetGroupButton
                 disabled={disabled}
                 onClick={() => {
                   if (!disabled) onRestoreDefault();
                 }}
-              >
-                {t('bots.model.restoreDefault')}
-              </Button>
+                label={t('bots.model.restoreDefault')}
+              />
             ) : null}
           </div>
         </div>

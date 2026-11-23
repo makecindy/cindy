@@ -3445,6 +3445,7 @@
       "description": "Importez dans Cindy des sessions provenant d’autres outils de programmation avec IA et poursuivez votre travail. Cindy lit les originaux sans jamais les modifier.",
       "rescan": "Rechercher à nouveau",
       "allSources": "Toutes les sources",
+      "sourceFilterAria": "Source",
       "search": "Rechercher des sessions ou des dossiers",
       "projectFilter": "{{name}} uniquement",
       "clearProjectFilter": "Afficher tous les projets",

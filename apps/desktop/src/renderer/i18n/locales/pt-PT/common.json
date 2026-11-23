@@ -3445,6 +3445,7 @@
       "description": "Traga sessões de outras ferramentas de programação com IA para o Cindy e continue a trabalhar. O Cindy apenas lê os originais e nunca os altera.",
       "rescan": "Procurar novamente",
       "allSources": "Todas as origens",
+      "sourceFilterAria": "Origem",
       "search": "Procurar sessões ou pastas",
       "projectFilter": "Apenas {{name}}",
       "clearProjectFilter": "Mostrar todos os projetos",

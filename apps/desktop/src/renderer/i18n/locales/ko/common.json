@@ -3377,6 +3377,7 @@
       "description": "다른 AI 코딩 도구의 세션을 Cindy로 가져와 이어서 작업하세요. 원본 기록은 읽기만 하고 변경하지 않습니다.",
       "rescan": "다시 스캔",
       "allSources": "모든 출처",
+      "sourceFilterAria": "출처",
       "search": "세션 또는 폴더 검색",
       "projectFilter": "{{name}}만 보기",
       "clearProjectFilter": "모든 프로젝트 보기",

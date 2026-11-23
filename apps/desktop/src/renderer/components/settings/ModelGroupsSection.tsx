@@ -178,6 +178,7 @@ export function ModelGroupsSection() {
         description: t('modelGroups.settings.deleteRouteConfirmDescription'),
         confirmText: t('modelGroups.settings.delete'),
         cancelText: t('modelGroups.settings.cancel'),
+        confirmVariant: 'destructive',
       })) return;
       if (await save((latest) => ({ ...latest, routes: latest.routes.filter((item) => item.id !== route.id) }))) back();
     };

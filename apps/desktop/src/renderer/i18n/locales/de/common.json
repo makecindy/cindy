@@ -3407,6 +3407,7 @@
       "description": "Sitzungen aus anderen KI-Programmierwerkzeugen in Cindy übernehmen und weiterarbeiten. Cindy liest die Originale nur und verändert sie nicht.",
       "rescan": "Erneut suchen",
       "allSources": "Alle Quellen",
+      "sourceFilterAria": "Quelle",
       "search": "Sitzungen oder Ordner suchen",
       "projectFilter": "Nur {{name}}",
       "clearProjectFilter": "Alle Projekte anzeigen",

@@ -3409,6 +3409,7 @@ function ExpandedView({
           : ''),
       confirmText: t('ccAgent.sidebar.bulkSelection.confirmDelete.confirm'),
       cancelText: t('ccAgent.sidebar.bulkSelection.confirmDelete.cancel'),
+      confirmVariant: 'destructive',
     });
     if (!ok) return;
 
@@ -3998,6 +3999,7 @@ function ExpandedView({
         }
         confirmText={t('ccAgent.sidebar.confirmDelete.confirm')}
         cancelText={t('ccAgent.sidebar.confirmDelete.cancel')}
+        confirmVariant="destructive"
         onConfirm={handleConfirm}
         onCancel={handleCancelConfirm}
       />

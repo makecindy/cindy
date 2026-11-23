@@ -12,6 +12,7 @@ import type {
   LocalProviderImportItem,
   LocalProviderImportScan,
 } from '../../../shared/localProviderImport';
+import { Checkbox } from '@/components/ui/checkbox';
 
 const SOURCE_NAMES = {
   alma: 'Alma',
@@ -210,10 +211,8 @@ export function LocalProviderImportButton({ onImported }: { onImported: (ids: st
                     <li key={item.importId} className="space-y-2 py-3">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <label className="flex min-h-9 min-w-0 items-center gap-2 font-medium">
-                          <input
+                          <Checkbox
                             data-settings-search-action="Select a temporary local-import candidate for review"
-                            type="checkbox"
-                            className="size-4 shrink-0 accent-[var(--text-primary)]"
                             checked={selected.has(item.importId)}
                             disabled={busy || !!item.issue}
                             onChange={(e) =>
