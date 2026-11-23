@@ -2,8 +2,9 @@ import {
   AGENT_NET_SESSION_V1, AGENT_NET_SESSION_V2, ChannelEvents, EARLY_BODY_EVENT_BYTES, MAX_EARLY_SESSION_BYTES,
   SESSION_BODY_HEADER_BYTES, SESSION_BODY_KIND,
   SESSION_LANE_KINDS, SESSION_LANE_PRIORITY, type PeerChannel, type RosterEntry, type SessionBodyWriter, type SessionLaneName,
-  type SessionWire, type Transport, type TransportOptions, type RelayRoute,
+  type SessionWire, type Transport, type TransportOptions, type RelayRoute, type PathPreference, type PeerPathMetrics,
 } from './types.js';
+import { PathRouter } from './pathRouter.js';
 import { concatBytes, decodeUtf8, fromBase64Url, keyHex, toBase64Url, utf8 } from './portableBytes.js';
 
 export interface NativeEnginePort {
@@ -34,6 +35,8 @@ interface NativeState {
   rttUs: number; sent: number; received: number; rotations: number;
   /** [stream, bytes still in the core's send buffer] for the streams this side opened (`stream-buffered` builds). */
   buffered?: [number, number][];
+  /** Round trips the core measured on paths it validated, in µs (`path-routing` builds). */
+  probeRtts?: [Address | { link: number }, number][];
 }
 interface Poll {
   packets: { link: number; data: Uint8Array }[]; connections: NativeState[]; mapped?: Address[]; relayUdp?: boolean;
@@ -104,8 +107,12 @@ interface Waiting { resolve(channel: PeerChannel): void; reject(error: Error): v
 export type NativeAddresses = string[] | (() => Promise<string[]>);
 const MAX_PENDING = 16 * 1024 * 1024;
 const MAX_CANDIDATES = 16;
+/** `path-routing`: probe the candidates again this often while relayed, as the WASM transport (`DEFAULT_REPROBE_MS`). */
+const NATIVE_REPROBE_MS = 10_000;
 /** Same as the Desktop driver (transport.ts): at most this many STUN servers are asked. */
 const MAX_STUN_SERVERS = 4;
+/** `resolveUdpServer`: the relay's UDP host is looked up again this often, and on every network change (relayUdp.ts `RESOLVE_REFRESH_MS`). */
+const UDP_SERVER_REFRESH_MS = 5 * 60_000;
 const DATA = 0x44;
 const CONTROL = 0x43;
 const LANE_BY_KIND = new Map<number, SessionLaneName>(Object.entries(SESSION_LANE_KINDS).map(([lane, kind]) => [kind, lane as SessionLaneName]));
@@ -236,6 +243,10 @@ export class NativeTransport implements Transport {
   private relayUdpSince = now();
   private relayUdpWaiters: Array<() => void> = [];
   private relayUdpServer: string | undefined;
+  /** The relay UDP server as configured (`host:port`), which `resolveUdpServer` turns into `relayUdpServer`. */
+  private relayUdpName: string | undefined;
+  private stunServers: string[];
+  private udpRefresh: ReturnType<typeof setInterval> | null = null;
   /** `relay-udp-health`: the route the engine last reported for relayed datagrams (`relayRoute`). */
   private route: RelayRoute | null = null;
   private refreshingAddresses = false;
@@ -254,6 +265,8 @@ export class NativeTransport implements Transport {
     this.binary = enhanced && this.features.has('binary-io') && typeof engine.io === 'function';
     this.bodies = enhanced && this.features.has('probe-grants');
     this.relayUdpServer = options.relayUdpServer;
+    this.relayUdpName = options.relayUdpServer;
+    this.stunServers = (options.stunServers ?? []).slice(0, MAX_STUN_SERVERS);
     this.localAddresses = addresses;
     this.candidateList = this.computeCandidates();
     options.relay?.uplink.onDatagram((deviceId, bytes) => {
@@ -275,7 +288,8 @@ export class NativeTransport implements Transport {
       const initial = typeof addresses === 'function' ? await addresses().catch((): string[] => []) : addresses;
       const transport = new NativeTransport(engine, options, identity, initial, enhanced ? read : null, enhanced);
       await transport.synchronizeAdmission();
-      await transport.startStun();
+      await transport.resolveUdpServers();
+      await transport.startStun(transport.stunServers);
       if (transport.waits) transport.drive(); else transport.schedule();
       return transport;
     } catch (error) { await engine.destroy().catch(() => undefined); throw error; }
@@ -295,6 +309,11 @@ export class NativeTransport implements Transport {
   candidates(): Address[] { return this.candidateList; }
   /** Benchmarks and tests that force the relay path: no private address is offered or probed (`publicCandidatesOnly`). */
   get publicOnly(): boolean { return this.options.publicCandidatesOnly === true; }
+  /** The engine's relay link to the peer with this transport key, when it has a relay id. */
+  linkOf(remoteId: string): number | null {
+    const deviceId = this.options.relayIdOf?.(remoteId);
+    return (deviceId && this.links.get(deviceId)) || null;
+  }
   private computeCandidates(): Address[] {
     const port = this.identity.udpPort;
     if (!port) return [];
@@ -315,12 +334,37 @@ export class NativeTransport implements Transport {
   }
   async configureUdpServer(server: string): Promise<void> {
     if (this.closed || !this.enhanced) return;
-    this.relayUdpServer = server;
+    this.relayUdpName = server;
+    this.relayUdpServer = await this.resolveUdpServer(server);
+    if (this.closed) return;
     // The next poll hands the engine the relay's UDP credentials: now, not when the engine next has something for JS.
     this.wake();
-    await this.startStun([server]);
+    await this.startStun([this.relayUdpServer]);
   }
-  private async startStun(servers = (this.options.stunServers ?? []).slice(0, MAX_STUN_SERVERS)): Promise<void> {
+  /** The relay UDP and STUN servers as `resolveUdpServer` gives them (unchanged without it, or when it fails). */
+  private async resolveUdpServers(): Promise<void> {
+    if (!this.options.resolveUdpServer) return;
+    if (this.relayUdpName) this.relayUdpServer = await this.resolveUdpServer(this.relayUdpName);
+    this.stunServers = await Promise.all(this.stunServers.map(server => this.resolveUdpServer(server)));
+    if (!this.udpRefresh && this.relayUdpName) {
+      this.udpRefresh = setInterval(() => { void this.refreshUdpServer(); }, UDP_SERVER_REFRESH_MS);
+      (this.udpRefresh as { unref?: () => void }).unref?.();
+    }
+  }
+  private resolveUdpServer(server: string): Promise<string> {
+    const resolve = this.options.resolveUdpServer;
+    return resolve ? resolve(server).catch(() => server) : Promise.resolve(server);
+  }
+  /** The relay's UDP host answers with another address now (moved, or a proxy's Fake-IP went away): the engine registers there. */
+  private async refreshUdpServer(): Promise<void> {
+    if (this.closed || !this.relayUdpName || !this.options.resolveUdpServer) return;
+    const next = await this.resolveUdpServer(this.relayUdpName);
+    if (this.closed || next === this.relayUdpServer) return;
+    this.relayUdpServer = next;
+    this.wake();
+    await this.startStun([next]);
+  }
+  private async startStun(servers = this.stunServers): Promise<void> {
     if (!servers.length || !this.identity.udpPort || !this.supports('stun')) return;
     await this.call({ op: 'stun', servers }).catch(() => undefined);
   }
@@ -427,6 +471,7 @@ export class NativeTransport implements Transport {
     void this.call({ op: 'migrate' }).catch(() => undefined);
     // Everything in flight goes again from the new address: poll for it now.
     this.wake();
+    void this.refreshUdpServer();
     if (!this.readAddresses || this.refreshingAddresses) return;
     this.refreshingAddresses = true;
     void this.readAddresses().then(addresses => {
@@ -727,6 +772,7 @@ export class NativeTransport implements Transport {
     if (this.closed) return;
     this.closed = true;
     if (this.timer) clearTimeout(this.timer); this.timer = null;
+    if (this.udpRefresh) clearInterval(this.udpRefresh); this.udpRefresh = null;
     const ids = [...this.channels.keys(), ...this.waiting.keys()];
     for (const pending of this.waiting.values()) pending.reject(new Error('NATIVE_TRANSPORT_CLOSED'));
     this.waiting.clear();
@@ -804,7 +850,26 @@ class NativeChannel implements PeerChannel {
   private readonly drainHandlers: Array<() => void> = [];
   private readonly pathHandlers: Array<(path: 'direct' | 'relay' | null) => void> = [];
   private reportedPath = '';
-  constructor(private owner: NativeTransport, private id: number, readonly remoteId: string) {}
+  /**
+   * `path-routing` engines: direct or relayed, and when to probe or measure which path, the same as on the WASM transport
+   * (pathRouter.ts), with the peer's preference synced on the control stream. Older engines probe the candidates every 10 s.
+   */
+  private readonly router: PathRouter<{ link: number }> | null;
+  constructor(private owner: NativeTransport, private id: number, readonly remoteId: string) {
+    const fire = (command: Record<string, unknown>) => { void owner.call({ ...command, id }).catch(() => undefined); };
+    this.router = owner.enhanced && owner.supports('path-routing') ? new PathRouter<{ link: number }>({
+      closed: () => this.events.closed || this.disposed,
+      path: () => this.path(),
+      directAddress: () => this.directAddress(),
+      activeRttMs: () => (this.state?.rttUs ?? 0) > 0 ? this.state!.rttUs / 1000 : null,
+      relayAddress: () => { const link = owner.linkOf(remoteId); return link ? { link } : null; },
+      probe: (address) => fire({ op: 'probe', address }),
+      measure: (address) => fire({ op: 'measure', address }),
+      setPreferRelay: (prefer) => fire({ op: 'preferRelay', prefer }),
+      writeControl: (line) => { this.control.push(utf8(line)); owner.wake(); },
+    }, NATIVE_REPROBE_MS) : null;
+    this.router?.start();
+  }
   async initialize(): Promise<void> {
     this.data.stream = await this.owner.call<number>({ op: 'openStream', id: this.id });
     await this.owner.call({ op: 'write', id: this.id, stream: this.data.stream, data: toBase64Url(Uint8Array.of(DATA)) });
@@ -1094,7 +1159,10 @@ class NativeChannel implements PeerChannel {
       this.streams.delete(event.stream);
       if (stream?.kind === SESSION_BODY_KIND && stream.key != null && this.owner.enhanced) { this.sessionBody(stream.key, null); if (this.disposed) return; }
     }
-    if (!this.events.closed && now() >= this.nextProbe && this.candidates.length) {
+    for (const [address, rttUs] of state.probeRtts ?? []) {
+      if (this.router && address && typeof rttUs === 'number') this.router.onProbeRtt(address, 'link' in address, rttUs);
+    }
+    if (!this.router && !this.events.closed && now() >= this.nextProbe && this.candidates.length) {
       this.nextProbe = now() + 10_000;
       const count = Math.min(4, this.candidates.length);
       for (let index = 0; index < count; index++) {
@@ -1105,7 +1173,7 @@ class NativeChannel implements PeerChannel {
     }
   }
   private onControl(line: string): void {
-    let value: { candidates?: unknown; session?: unknown };
+    let value: { candidates?: unknown; session?: unknown; pathPreference?: unknown; autoRelay?: unknown };
     // Ignore malformed control lines, never business frames.
     try { value = JSON.parse(line); } catch { return; }
     if (this.owner.enhanced && Array.isArray(value?.session) && value.session.includes(AGENT_NET_SESSION_V1) && !this.sessionCapable) {
@@ -1120,8 +1188,18 @@ class NativeChannel implements PeerChannel {
       if (this.owner.enhanced) candidates.sort((a: Address, b: Address) => Number(isPrivate(a.address)) - Number(isPrivate(b.address)));
       this.candidates = candidates.slice(0, MAX_CANDIDATES);
       this.candidateCursor = 0; this.nextProbe = 0;
+      this.router?.setCandidates(this.candidates);
     }
+    if (value) this.router?.onPeerPreference(value);
   }
+  /** Both paths' round trips as last measured and this side's preference (types.ts `PeerPathMetrics`). */
+  pathMetrics(): PeerPathMetrics {
+    if (this.router) return this.router.pathMetrics();
+    const path = this.path(), rtt = (this.state?.rttUs ?? 0) > 0 ? this.state!.rttUs / 1000 : null;
+    return { directRttMs: path === 'direct' ? rtt : null, relayRttMs: path === 'relay' ? rtt : null, preference: 'auto' };
+  }
+  /** Prefer the direct or the relay path, or choose by round trip (`auto`); the peer is told and follows. */
+  setPathPreference(preference: PathPreference): void { this.router?.setPathPreference(preference); }
   onData(handler: (bytes: Uint8Array) => void): void { this.events.onData(handler); }
   onClose(handler: () => void): void { this.events.onClose(handler); }
   path(): 'direct' | 'relay' | null { return this.events.closed || !this.state?.path ? null : 'link' in this.state.path ? 'relay' : 'direct'; }
@@ -1139,6 +1217,7 @@ class NativeChannel implements PeerChannel {
   private dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.router?.stop();
     for (const item of this.data.items) this.owner.release(item.bytes.length - item.offset);
     for (const outgoing of [this.data, this.control, ...(this.lanes ? Object.values(this.lanes) : []), ...this.bodies]) { outgoing.items = []; outgoing.queued = 0; }
     this.bodies = [];

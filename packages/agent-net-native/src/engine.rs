@@ -30,11 +30,13 @@ const MAX_REPORTED_STREAMS: usize = 40;
 /// `stream-retired`（2026-11-22）：`buffered` 里核心已经收回的流报一次就不再报，名额（`MAX_REPORTED_STREAMS`）留给新开的流。
 /// `probe-grants`（2026-11-22）：核心回对端探测的确认带上所有流的额度。没有它的核心只带编号最小的两条，对端开的第 6 条流
 /// 最初的额度没送到时一直停在 128 个分片上；JS 只在有它的引擎上用会话 v2 的正文流（nativeTransport.ts `bodies`）。
+/// `path-routing`（2026-11-23）：`measure` 只验证一条路径、量它的往返，不换数据路径；`preferRelay` 让这条连接优先走中转（中转
+/// 代价降到直连以下）；`poll` 里每条连接带 `probeRtts`（`[地址, 往返微秒]`）。和电脑端 WASM 传输一样供选路用（pathRouter.ts）。
 /// `relay-udp-health`（2026-11-23）：中转 UDP 只通登记、不通数据时退回 WebSocket（数据静默、发出的数据不被确认、`relayStalled`
 /// 报的请求超时；冷却 30 秒、5 分钟、30 分钟），`poll` 报 `relayRoute`（走 UDP 还是 WebSocket、登记往返、停用原因）与套接字的
 /// `udpTraffic`。和电脑端 WASM 传输（relayUdp.ts）一致。
-const FEATURES: [&str; 9] = ["stream-buffered", "stun", "relay-udp-v2", "native-wait", "binary-io", "stream-levels", "stream-retired", "probe-grants",
-    "relay-udp-health"];
+const FEATURES: [&str; 10] = ["stream-buffered", "stun", "relay-udp-v2", "native-wait", "binary-io", "stream-levels", "stream-retired", "probe-grants",
+    "relay-udp-health", "path-routing"];
 /// Relayed datagrams the application still has to carry over its relay WebSocket; beyond this the oldest go (the
 /// transport resends them). Only fills while the application does not poll.
 const MAX_OUTBOX: usize = 1024;
@@ -238,6 +240,12 @@ impl NativeEngine {
                 Ok(json!(self.endpoint.close(id).is_some()))
             },
             "probe" => Ok(json!(self.endpoint.probe(self.now, number(command, "id")?, address(&command["address"])?))),
+            "measure" => {
+                let started = self.endpoint.measure(self.now, number(command, "id")?, address(&command["address"])?);
+                self.send_now();
+                Ok(json!(started))
+            },
+            "preferRelay" => Ok(json!(self.endpoint.set_prefer_relay(number(command, "id")?, command["prefer"] == true))),
             "migrate" => {
                 // A new network: connections send from the new address at once; ask STUN again for the new outside address.
                 self.endpoint.on_local_address_change(self.now);
@@ -396,7 +404,8 @@ impl NativeEngine {
     /// stream data or events not read yet.
     fn has_unread_work(&self) -> bool {
         !self.outbox.is_empty() || self.endpoint.has_accepted()
-            || self.endpoint.ids().any(|id| self.endpoint.connection(id).is_some_and(|connection| connection.connection().has_unread()))
+            || self.endpoint.ids().any(|id| self.endpoint.connection(id)
+                .is_some_and(|connection| connection.connection().has_unread() || connection.has_probe_rtt()))
     }
     /// The states `signature` reads from a `collect` result, read from the engine itself: whether relay UDP is up, the mapped
     /// addresses, and which connections exist, established or gone, over which path. Equal hashes, unchanged states.
@@ -522,6 +531,9 @@ impl NativeEngine {
         let mut overflowed = Vec::new();
         for id in ids {
             let path = self.endpoint.peer_addr(id).map(address_value);
+            // Round trips the core measured on paths it validated (`measure`, `probe`): for choosing between direct and relay.
+            let mut probe_rtts = Vec::new();
+            while let Some((address, rtt_us)) = self.endpoint.poll_probe_rtt(id) { probe_rtts.push(json!([address_value(address), rtt_us])); }
             let Some(connection) = self.endpoint.connection_mut(id) else { continue; };
             let streams = self.streams.entry(id).or_default();
             let finishing = self.finishing.entry(id).or_default();
@@ -568,7 +580,8 @@ impl NativeEngine {
                 "closedByPeer":connection.closed_by_peer(),"remoteKey":encoded(connection.remote_static()),
                 "unacked":connection.connection().has_unacked_data(),
                 "path":path,"events":events,"data":data,"rttUs":stats.srtt_us,"buffered":buffered,
-                "rotations":security.connection_id_rotations,"received":stats.wire_bytes_received,"sent":stats.wire_bytes_sent}));
+                "rotations":security.connection_id_rotations,"received":stats.wire_bytes_received,"sent":stats.wire_bytes_sent,
+                "probeRtts":probe_rtts}));
         }
         for id in overflowed { self.endpoint.close(id); }
         let live: BTreeSet<u32> = self.endpoint.ids().collect();
@@ -601,7 +614,7 @@ fn merge(result: &mut Value, mut stash: Value) {
     let Some(connections) = result["connections"].as_array_mut() else { return; };
     for mut old in earlier {
         let Some(current) = connections.iter_mut().find(|current| current["id"] == old["id"]) else { continue; };
-        for key in ["events", "data"] { front(&mut old[key], &mut current[key]); }
+        for key in ["events", "data", "probeRtts"] { front(&mut old[key], &mut current[key]); }
     }
 }
 /// Hands over the bytes a result names by `blob` (see `NativeEngine::blobs`), in the order the application reads them: the
@@ -624,7 +637,7 @@ fn take_blobs(result: &mut Value, blobs: &mut Vec<Vec<u8>>, mut finish: impl FnM
 fn has_work(result: &Value) -> bool {
     let filled = |value: &Value| value.as_array().is_some_and(|items| !items.is_empty());
     filled(&result["packets"]) || filled(&result["accepted"])
-        || result["connections"].as_array().is_some_and(|all| all.iter().any(|c| filled(&c["events"]) || filled(&c["data"])))
+        || result["connections"].as_array().is_some_and(|all| all.iter().any(|c| filled(&c["events"]) || filled(&c["data"]) || filled(&c["probeRtts"])))
 }
 /// The part of a result the application acts on without any data arriving: which connections exist, whether each is
 /// established or gone and over which path, relay UDP and the mapped addresses. Counters and round trips are left out.

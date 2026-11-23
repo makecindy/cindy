@@ -115,6 +115,42 @@ for (const route of ['direct', 'relayed'] as const) {
   }, 60_000);
 }
 
+// Route choice (pathRouter.ts, #12175): a preference set on either side moves both off a live direct path onto the relay and
+// back, with both round trips measured, whichever engine each side runs; the peer follows the control-stream message.
+it.skipIf(!binding)('switches a live peer between direct and relay from either side, a computer on the native engine with one on WASM', async () => {
+  const net = await network();
+  const wasm = await AgentNetSocket.open({ client: net.hostApi, userId: net.userId, lanDiscovery: false,
+    stunServers: [net.udpServer], relayUdpServer: net.udpServer });
+  cleanups.push(() => wasm.close());
+  const native = await AgentNetSocket.open({ client: net.memberApi, userId: net.userId, lanDiscovery: false,
+    stunServers: [net.udpServer], relayUdpServer: net.udpServer, native: { binding: binding! } });
+  cleanups.push(() => native.close());
+  expect(transportOf(native)).toBeInstanceOf(NativeTransport);
+  await serveSessions(wasm, native, { wasm: 'w', native: 'n' });
+  await until(() => native.supports(net.owner.deviceId) && wasm.supports(net.member.deviceId));
+  expect(await native.connectSession(net.owner.deviceId)).toBe(true);
+  await until(() => !!native.session(net.owner.deviceId));
+  const echo = async (text: string) => expect(await native.session(net.owner.deviceId)!.request('test:echo', [text], { timeoutMs: 5_000 }))
+    .toEqual({ ok: true, result: text });
+  await native.session(net.owner.deviceId)!.open({ controllerName: 'native' }, 5_000);
+  const paths = () => [native.peerSnapshot(net.owner.deviceId)?.path, wasm.peerSnapshot(net.member.deviceId)?.path];
+  await until(() => paths().every(path => path === 'direct'));
+  for (const [side, other] of [[native, wasm], [wasm, native]] as const) {
+    const peer = side === native ? net.owner.deviceId : net.member.deviceId;
+    side.setPeerPathPreference(peer, 'relay');
+    await until(() => paths().every(path => path === 'relay'));
+    await echo(`relayed by ${side === native ? 'native' : 'wasm'}`);
+    const snapshot = side.peerSnapshot(peer);
+    expect(snapshot).toMatchObject({ path: 'relay', pathPreference: 'relay' });
+    await until(() => typeof side.peerSnapshot(peer)?.directRttMs === 'number' && typeof side.peerSnapshot(peer)?.relayRttMs === 'number');
+    side.setPeerPathPreference(peer, 'direct');
+    await until(() => paths().every(path => path === 'direct'));
+    await echo(`direct again by ${side === native ? 'native' : 'wasm'}`);
+    side.setPeerPathPreference(peer, 'auto');
+    void other;
+  }
+}, 60_000);
+
 it.skipIf(!binding)('keeps a computer on WASM when the native engine comes up with another identity', async () => {
   const net = await network();
   const fallbacks: string[] = [];

@@ -898,3 +898,42 @@ it('tells the socket whenever the engine takes queued bytes, also from a connect
     expect(drained).toHaveBeenCalled();
   } finally { await transport.close(); vi.useRealTimers(); }
 });
+
+/** 测试价值
+ * - 生产入口与可观察结果：电脑端原生引擎的 NativeTransport 把 STUN 与中转 UDP 的 `host:port` 先经 `resolveUdpServer` 解析再交给引擎
+ *   （`stun`、`relayUdp` 命令里的地址），换网后重新解析，地址变了就让引擎改到新地址。
+ * - Bug 依据：#12175（2026-11-22）给 WASM 传输加了透明代理 Fake-IP（198.18.0.0/15）避让：往 Fake-IP 发 STUN 和中转 UDP 会走代理的分流，
+ *   端口和真实 IP 不同，对端端口受限时永远打不通。原生引擎自己用系统 DNS 解析，电脑改跑原生引擎后会回到这个问题。
+ * - 现有覆盖缺口：stun.ts 的单测只测解析函数本身；没有测原生传输把解析结果交给引擎、并在换网后更新。
+ * - 最小失败输入：中转 UDP 主机名解析成一个地址；换网后解析成另一个。tier：unit，引擎用替身。
+ */
+it('hands the engine the STUN and relay UDP addresses resolveUdpServer gives, and the new one after a network change', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance'] });
+  const local = generateIdentity('native');
+  const commands: Record<string, unknown>[] = [];
+  const engine: NativeEnginePort = {
+    async command<T>(command: Record<string, unknown>): Promise<T> {
+      commands.push(command);
+      let value: unknown = null;
+      if (command.op === 'identity') value = { deviceId: local.deviceId, transportKey: local.transportKey, udpPort: 4000, features: ['stun', 'relay-udp-v2'] };
+      if (command.op === 'poll') value = { packets: [], connections: [], relayUdp: false };
+      return value as T;
+    }, async destroy() {},
+  };
+  let answer = '203.0.113.9';
+  const transport = await NativeTransport.create(engine, { admit: () => true, admittedPeers: () => [], onIncoming: () => undefined,
+    relayUdpServer: 'relay.example:3478', stunServers: ['relay.example:3478'],
+    resolveUdpServer: async (server) => server.replace('relay.example', answer),
+    relay: { deviceId: local.deviceId, udpCredentials: () => ({ session: new Uint8Array(8), key: new Uint8Array(32) }),
+      uplink: { kind: 'agent-net', send: () => undefined, onDatagram: () => undefined, close: () => undefined } } });
+  try {
+    await vi.advanceTimersByTimeAsync(100);
+    expect(commands.filter(c => c.op === 'stun').at(-1)).toMatchObject({ servers: ['203.0.113.9:3478'] });
+    expect(commands.filter(c => c.op === 'relayUdp').at(-1)).toMatchObject({ server: '203.0.113.9:3478' });
+    answer = '198.51.100.7';
+    transport.networkChanged();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(commands.filter(c => c.op === 'stun').at(-1)).toMatchObject({ servers: ['198.51.100.7:3478'] });
+    expect(commands.filter(c => c.op === 'relayUdp').at(-1)).toMatchObject({ server: '198.51.100.7:3478' });
+  } finally { await transport.close(); vi.useRealTimers(); }
+});

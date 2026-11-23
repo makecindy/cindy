@@ -557,6 +557,14 @@ Node Host 仍用 WASM。
   线路上比 WASM 慢 15–20%。现在套接字到包时置一个事件，再配一个高精度计时器，两个一起等（`packages/agent-net-native/src/wait.rs`），
   1 毫秒的等待 1.57 毫秒，不改整个进程的计时器精度。只影响 Windows，手机不受影响。
 - 身份：电脑端有的身份是存下来的私钥、不是从种子派生的，引擎可以直接收这两把私钥（`create` 的 `keys`），worker 本来就持有它们。
+- **直连与中转的选路**（#12175：自动／直连／中转、双路往返）。选路的判断从 `transport.ts` 搬进不依赖 Node 的 `pathRouter.ts`，
+  WASM 与原生两种传输共用；引擎加了只测速不换路的 `measure`、`preferRelay` 和 `poll` 里的 `probeRtts`（能力位 `path-routing`）。
+  两端的偏好照旧经控制流同步（`{"pathPreference":…,"autoRelay":…}`），原生与 WASM 两端互相跟随（`nodeNative.integration.test.ts`
+  「switches a live peer between direct and relay from either side …」）。手机随新安装包同样跟随电脑端设的偏好、自动模式同样生效；
+  旧安装包不报 `path-routing`，照旧每 10 秒探测候选地址，不读这条消息，和以前一样。
+- **透明代理的 Fake-IP 避让**（#12175）：引擎自己用系统 DNS 解析 STUN 与中转 UDP 的主机名，开着 Clash／Surge 这类代理时会拿到
+  198.18.0.0/15。电脑端先用 `resolveUdpHost` 解析好再把地址交给引擎（`TransportOptions.resolveUdpServer`），每 5 分钟和每次换网
+  重新解析，变了就让引擎改到新地址；解析不出来时把主机名照旧交给引擎。手机不传它，行为不变。
 
 查到并修掉的两个崩溃：Node 在最后一个加载原生模块的 worker 结束时卸载模块，而模块起的线程（收发线程最多再等 250 毫秒、中转与 STUN
 的域名解析要等 DNS）还会回到已卸载的代码，整个进程崩溃（Electron 42，退出码 139，压测两轮之间必现）；模块现在把自己钉在进程里

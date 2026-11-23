@@ -10,6 +10,7 @@ import os from 'node:os';
 import type { KeyObject } from 'node:crypto';
 import { NativeTransport } from './nativeTransport.js';
 import { NodeNativeEngine, loadNodeNativeBinding, type NodeNativeBinding } from './nodeNativeEngine.js';
+import { resolveUdpHost, splitHostPort } from './stun.js';
 
 export interface AgentNetSocketOptions extends Omit<PortableSocketOptions, 'client' | 'bindings'> {
   client: AgentNetClient;
@@ -84,6 +85,17 @@ async function interfaceAddresses(): Promise<string[]> {
   }
   return [...new Set(found)];
 }
+/**
+ * STUN and relay UDP servers for the native engine, resolved as the WASM transport resolves them (stun.ts `resolveUdpHost`):
+ * behind a transparent proxy whose DNS answers with Fake-IPs (198.18.0.0/15), the real address from DoH. A name that does not
+ * resolve now goes to the engine as it is, and the engine looks it up again itself.
+ */
+async function resolveUdpServer(server: string): Promise<string> {
+  const [host, port] = splitHostPort(server);
+  if (!host || !Number.isInteger(port) || port < 1 || port > 65_535) return server;
+  const address = await resolveUdpHost(host);
+  return address.includes(':') ? `[${address}]:${port}` : `${address}:${port}`;
+}
 /** A private key's raw bytes as base64url: the JWK `d` of an X25519 key is its secret, of an Ed25519 key its seed. */
 const rawPrivateKey = (key: KeyObject): string => {
   const raw = key.export({ format: 'jwk' }).d;
@@ -106,6 +118,6 @@ async function createNativeTransport(options: AgentNetSocketOptions, native: Non
     if (own.transportKey !== identity.transportKey) throw new Error('AGENT_NET_NATIVE_IDENTITY_MISMATCH');
   } catch (error) { await engine.destroy(); throw error; }
   return NativeTransport.create(engine, { ...request, stunServers: options.stunServers, relayUdpServer: options.relayUdpServer,
-    udpTraffic: options.udpTraffic, publicCandidatesOnly: options.publicCandidatesOnly },
+    udpTraffic: options.udpTraffic, publicCandidatesOnly: options.publicCandidatesOnly, resolveUdpServer },
     interfaceAddresses, true);
 }
