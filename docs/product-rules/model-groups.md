@@ -174,6 +174,8 @@
   自动换到组里下一个来源，不用先打开开关；没经过模型组的普通任务保持现状（开关默认关）。用户在设置里关掉开关后，
   经模型组开的任务也不再自动换，退回 §6.1 的提议；已经明确关过这个开关的用户升级后保持关。
 - 从新建页发送时，在首条消息派发前登记本机任务所用的模型组，使首轮故障也能接替。首条消息被接受后才提交本次选路历史。
+- 协同模式的 Worker：Lead 创建时可以指定一个模式（见 §6.4）；Lead 自己与选择器里的协同草稿仍按上文不提供。
+- 伙伴或任务用 `send_to_session` 在本机新建任务：可以指定一个模式（见 §6.5）；发给已有任务、在另一台电脑新建时不提供。
 - 伙伴可以用模型组（2026-11-20 用户裁决，见 §6.2），本机、远程控制它的电脑与手机都能选。其余选择器的接入见 §6.3。
   辅助模型现状走固定系统链、不经过模型组，是否接入待用户决定（§9）。
 - 配置按账号保存在本机（`model-groups.json`），只存用户建的内容。现状不随新电脑迁移（供应商连接 ID 各台不同）；
@@ -254,6 +256,79 @@
 
 跨端（手机、远程控制、其他电脑段）按[协议兼容规则](../dev-rules/protocol-compatibility.md)加能力判断，影响自建中转时同步适配。
 
+### 6.4 Lead 按模式创建 Worker
+
+用户让伙伴「用某个模式开 Worker」时，伙伴先用 `cindy_helper` 的 `list_model_groups` 查这台电脑上当前账号的模式
+（稳定 id、名称、选法、来源与例外，不含额度和凭证），再把模式 id 作为 `create_worker` / `create_workers` 的
+`model_group_id` 传给宿主，由宿主在创建时按这个模式的规则选一次来源。伙伴不自己从来源里挑一个模型代替。
+
+- **选一次、之后不换**：与新任务（§3、§4 的额度与例外、§4 推理强度）同一个选路，非空的首条任务带图片时图片例外
+  生效（没有首条任务时发出的是就绪占位，图片不随它发出，不触发图片例外）；
+  Worker 建好后不会因模式再换来源，也不挂撞配额时的提议或自动降级（§6.1 已把协同模式排除在外；两者都依据任务登记的模式，Worker 不登记）。
+- **推理强度**：与 §4 推理强度同一口径。模式指定了推理强度时按它，选中的模型不支持这一档时按模型默认档，
+  不因此创建失败；模式「不指定」时同样用模型默认档。都不继承 Worker 默认档或 Lead 的档位。
+- **模式决定的参数不能同时传**：模式决定引擎、模型、供应商连接、Agent 运行位置与推理强度，`agent`、`model`、
+  `provider_id`、`agent_device_id`、`effort` 与 `model_group_id` 同传即 `INVALID_PARAMS`，什么都不建；`fast`、角色、
+  名字、目录、worktree、首条任务、权限照常。先报冲突再选路，冲突不推进「轮流」。
+- **不换工作电脑**：Worker 的任务与文件仍在 Lead 这台电脑；只有 Agent 在选中来源的位置运行（本机来源就在本机，
+  即使 Lead 的 Agent 在另一台电脑），并照常经过原有的位置授权、分享暂停、目录与模型校验。Lead 所在的供应商组
+  不改写模式选中的来源。`execution_device_id`（Worker 在另一台电脑运行）与 SSH Lead 不支持模式：模式里的
+  「这台电脑」是记录它的电脑，套到别处会选错来源，因此返回 `INVALID_PARAMS`，不改用本机。
+- **选不到就不建**：模式已被删除返回 `MODEL_GROUP_NOT_FOUND`；模式里此刻没有能用的来源返回
+  `MODEL_GROUP_UNAVAILABLE`（附各原因的个数）。与新任务「沿用原来的模型」不同，Worker 没有用户选过的原模型，
+  不回退到 Worker 记忆或默认模型，由伙伴如实告诉用户、让用户换模式或指定模型。选中的来源过不了后续的位置或
+  模型校验时，按原有错误返回，不自动换模式里的下一个来源。
+- **只有建成才算这次选择**：Worker 建好并保留下来（首条任务或就绪占位已交出、没有回滚；首条任务发送失败但
+  Worker 保留时也算）才推进「轮流」、记进「最近的选择」。冲突、选不到、创建失败与回滚都不推进。选路凭据只在
+  宿主内部，不进工具回执。
+- **批量逐项**：`create_workers` 每项各自按模式选一次、各自落定后才推进，所以同一个「轮流」模式的几项依次换来源；
+  某项选不到或失败只记在那一项，不中止后面的项（达到 Worker 上限等原有的整批中止规则不变）。
+- **让用户看得见**：成功回执带 `model_group`（模式、选中的模型与来源、原因、起作用的例外）和实际的
+  `agent` / `model` / `provider_id` / `agent_device_id`，`defaults.source` 为 `model-group`；不传 `model_group_id`
+  时一切照旧。
+- **读取边界**：`list_model_groups` 只读这台电脑上当前账号的配置，不读别的电脑；共享中的任务与 SSH 任务不能读取，
+  共享中的 Lead 传 `model_group_id` 也返回 `MODEL_GROUP_UNAVAILABLE`、不选路；
+  不修改模式、不切换任何任务的模型。用户在界面里手动创建 Worker 的面板现状不提供模式（界面传来的参数不含它），2026-11-21 用户裁决要提供（§6.3「新建团队成员」）。
+
+实现：`main/maker-ipc/orcaWorkerModelGroup.ts`（冲突与选路）、`orcaWorkerCreationService.ts` 的
+`createModelGroupWorkerInTeam`、`orcaLifecycleService.ts`（落定后提交）、`main/model-groups/desktopResolver.ts`（与界面共用的
+选路实例）、`agentView.ts`；工具 `packages/lizi-mcps/src/xdt-helper/model_groups.ts`、`create_worker.ts`、
+`create_workers.ts`。
+
+### 6.5 send_to_session 按模式新建任务
+
+用户让伙伴（或普通任务里的 Agent）「用某个模式开个新任务」时，与 §6.4 一样先用 `list_model_groups` 查模式 id，再把它作为
+`send_to_session`（create，不传 `target_session_id`）的 `model_group_id` 传给宿主，由宿主在新建时按这个模式选一次来源。
+除下面写明的不同，规则与 §6.4 相同：同一个选路与 resolver 实例（轮流位置共用）、推理强度同 §4 口径（模式指定且模型支持就用，
+否则用模型默认档，不继承来源任务的档位）、选不到不回退、建成才提交、选路凭据不进回执。
+
+- **模式决定的参数不能同时传**：`agent_kind`、`model`、`effort`、`provider_device_id`（旧名 `agent_device_id`）与
+  `model_group_id` 同传即 `INVALID_ARGS`，什么都不建、不选路；`fast`、标题、项目、执行目录、worktree 照常。
+  `fast` 不传时按原有规则继承来源任务（选中的模型不支持就关掉）。错误码沿用本工具一贯的 `INVALID_ARGS`，与 Worker 工具的
+  `INVALID_PARAMS` 是同一种失败。
+- **只用于新建**：传了 `target_session_id`（含 `deviceId::sessionId`）即 `INVALID_ARGS`，不静默忽略——已有任务的模型不因模式改变，
+  忽略会让调用方以为用上了模式。
+- **只在这台电脑新建**：`device` 指向另一台电脑时返回 `INVALID_ARGS`，不改用本机的模式替那台选路（模式里的「这台电脑」属于
+  记录它的电脑）。来源任务是 SSH 任务时同样 `INVALID_ARGS`。用另一台电脑的模式在那台开新任务，等远程新任务读取那台模型组的
+  能力接入后再在这里补规则。没有来源任务（宿主自己发起的新建，如定时脚本任务）不提供模式。
+- **任务在哪**：任务、项目与文件仍按原有规则在这台电脑；只有 Agent 在选中来源的位置运行（另一台电脑或分享来的来源与
+  `provider_device_id` 同一条路径，照常经过目录、模型与预算校验）。选中的来源过不了这些校验时按原有错误返回
+  （如 `PROVIDER_ROUTE_UNAVAILABLE`），不换模式里的下一个来源。
+- **图片**：本工具不带图片，图片例外不生效；时段例外照常。
+- **选不到就不建**：模式已删除 → `MODEL_GROUP_NOT_FOUND`；此刻没有能用的来源（附各原因的个数），或调用方是共享中的任务 →
+  `MODEL_GROUP_UNAVAILABLE`。与界面新任务「沿用原来的模型」不同：调用方没有选过别的模型，不回退到来源任务的模型。
+- **只有建成才算这次选择**：任务建好且首条消息被接受（直接发出或进入它的输入队列）后才推进「轮流」、记进「最近的选择」；
+  冲突、选不到、后续校验失败、worktree 失败、创建或首条消息失败都不提交。
+- **之后不换**：任务建好后不会因模式再换来源，也不挂撞配额时的提议或自动降级（§6.1 已把伙伴等非本机直接开的任务排除在外；
+  两者都依据任务登记的模式），不登记 `model-group-session-bindings.json`。
+- **让调用方看得见**：成功回执带 `model_group`（模式 id 与名称、选中的模型名、来源名、`provider_device_id`、原因、起作用的例外）
+  和实际的 `agent_kind` / `model` / `provider_id` / `effort`；不传 `model_group_id` 时一切照旧。第一条消息下方的说明卡（§5）
+  目前只在界面新任务显示，本入口不写。
+
+实现：`main/maker-ipc/sendToSessionModelGroup.ts`（冲突与选路）、`sendToSessionExecutionConfig.ts` 的 `pinnedProviderId`
+（固定来源与推理强度口径）、`register.ts` 的 `sendToSessionInternal` create 分支（选路与落定后提交）、
+`main/mcp-integrations/mcp-providers.ts`（另一台电脑新建时拒绝）；工具 `packages/lizi-mcps/src/xdt-helper/send_to_session.ts`。
+
 ## 7. 每轮重新选（待实现，2026-11-21 用户裁决）
 
 ### 7.1 开关与缓存
@@ -329,5 +404,5 @@
 `apps/desktop/src/shared/modelGroups.ts`、`apps/desktop/src/main/model-groups/`、
 `apps/desktop/src/renderer/features/model-groups/`、设置页 `ModelGroupsSection.tsx`、
 选择器 `ModelGroupsPickerSection.tsx`；撞配额时的提议见 `main/model-groups/switchOffer.ts`、`sessionBindings.ts`，
-横幅入口 `components/chat/ErrorBanner.tsx`；远程来源的位置与目录读取接在 `main/model-groups/ipc.ts`
+横幅入口 `components/chat/ErrorBanner.tsx`；远程来源的位置与目录读取接在 `main/model-groups/desktopResolver.ts`
 （`readWorkerAgentLocations`、`readDeviceProviderCatalog`；只拿到上次留下的旧目录时按读不到处理）；回归见 `main/model-groups/__tests__/pick.test.ts`、`switchOffer.test.ts`。

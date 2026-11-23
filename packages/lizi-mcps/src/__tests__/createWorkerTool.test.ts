@@ -359,3 +359,41 @@ it('accepts omitted agent and returns the resolved route and branch fallback', a
   expect(result).toMatchObject({ agent: 'pi', model: 'test-model', provider_id: 'provider', agent_device_id: 'device',
     defaults: { source: 'memory' }, worktree_source: { source_branch: 'main', fallback_reason: 'saved branch missing' } });
 });
+
+/**
+ * 测试价值(model_group_id 透传与回执)
+ * - 生产入口与可观察结果：registerCreateWorkerTool 的真实 schema 与 handler——传给宿主的 modelGroupId、回执里的
+ *   model_group 与实际路线。
+ * - 规则依据：docs/product-rules/model-groups.md §6.4。
+ * - 现有覆盖缺口：此前工具没有模式参数；透传漏掉会让宿主按记忆建 Worker，用户以为在用模式。
+ * - 最小失败输入：{ role, label, model_group_id: 'r1' }(不传 agent)。
+ * - tier：unit，真实 registry。
+ */
+describe('create_worker with a model group mode', () => {
+  it('forwards model_group_id without an agent and reports the mode and the actual route', async () => {
+    const createWorker = vi.fn<CreateWorkerDeps['createWorker']>(async () => ({
+      ok: true as const, workerId: 'worker-1', workerSessionId: 'worker-session-1',
+      resolved: { agent: 'claude-code' as const, model: 'claude-opus-4-7', effort: 'high', fastMode: false, providerId: 'anthropic', agentDeviceId: 'mac-studio', role: 'developer', label: 'dev' },
+      defaults: { source: 'model-group' as const },
+      modelGroup: { routeId: 'r1', groupName: '主力编程', why: 'order' as const, modelName: 'Opus 4.7', sourceName: 'Anthropic',
+        exceptions: [{ type: 'hours' as const, viaRouteName: '夜间' }] },
+    }));
+    const registry = new XdtHelperToolRegistry();
+    registerCreateWorkerTool(registry, { sessionId: 'lead-1', createWorker });
+    const result = parse(await registry.call('create_worker', { role: 'developer', label: 'dev', model_group_id: ' r1 ' }));
+    expect(createWorker).toHaveBeenCalledWith(expect.objectContaining({ modelGroupId: 'r1', agent: undefined }));
+    expect(result).toMatchObject({
+      agent: 'claude-code', model: 'claude-opus-4-7', provider_id: 'anthropic',
+      model_group: { id: 'r1', name: '主力编程', why: 'order', model_name: 'Opus 4.7', source_name: 'Anthropic',
+        exceptions: [{ type: 'hours', via_route_name: '夜间' }] },
+    });
+    expect(JSON.stringify(result)).not.toContain('decision');
+  });
+
+  it('rejects an empty model_group_id before host creation', async () => {
+    const { registry, createWorker } = setup();
+    const result = await registry.call('create_worker', { role: 'developer', label: 'dev', model_group_id: '  ' });
+    expect(result.isError).toBe(true);
+    expect(createWorker).not.toHaveBeenCalled();
+  });
+});

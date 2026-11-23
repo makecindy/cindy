@@ -1206,3 +1206,58 @@ describe('Orca task authority is independent of task creator', () => {
     await expect(authority.assertCurrent()).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
   });
 });
+
+/**
+ * 测试价值(模式选路的提交时机)
+ * - 生产入口与可观察结果：createOrcaLifecycleService().createWorker——commitModelGroupDecision 是否被调用、
+ *   返回结果是否带出选路凭据。
+ * - 规则依据：docs/product-rules/model-groups.md §6.4(只有 Worker 落定才推进「轮流」；凭据不出宿主)。
+ * - 现有覆盖缺口：创建服务的用例只到「选出路线」，不覆盖就绪占位失败回滚后是否仍提交。
+ * - 最小失败输入：就绪占位被拒、Worker 已回滚，但「轮流」已前进；或回执里带出 decisionId。
+ * - tier：unit，注入依赖。
+ */
+describe('model group decision commit', () => {
+  const modelGroup = { routeId: 'r1', groupName: '主力编程', why: 'order' as const, modelName: 'GPT-5.4', sourceName: 'XD', decisionId: 'decision-1' };
+  const request = { leadSessionId: 'lead-1', role: 'reviewer', label: 'reviewer', modelGroupId: 'r1' };
+
+  it('commits once after the Worker is kept and keeps the decision out of the result', async () => {
+    const commitModelGroupDecision = vi.fn(() => true);
+    const { calls, deps, service } = createDeps({
+      getActiveTeamByLead: vi.fn(async () => activeTeam()),
+      createWorkerInTeam: vi.fn(async () => createdWorker({ modelGroup })),
+      commitModelGroupDecision: vi.fn((id: string) => { calls.push(`commit:${id}`); return commitModelGroupDecision(); }),
+    });
+    const result = await service.createWorker(request);
+    expect(result).toMatchObject({ ok: true, modelGroup: { routeId: 'r1', groupName: '主力编程' } });
+    expect(result.ok && result.modelGroup).not.toHaveProperty('decisionId');
+    expect(deps.commitModelGroupDecision).toHaveBeenCalledOnce();
+    expect(calls).toEqual([
+      'sendWorkerReadyPlaceholder:create_worker:create_worker/worker-session-1/worker-ready-placeholder',
+      'commit:decision-1',
+      'broadcastSessionCreated:worker-session-1',
+      'broadcastOrcaWorkerChanged:lead-1',
+    ]);
+  });
+
+  it('does not commit when the ready placeholder is refused and the Worker is rolled back', async () => {
+    const { deps, service } = createDeps({
+      getActiveTeamByLead: vi.fn(async () => activeTeam()),
+      createWorkerInTeam: vi.fn(async () => createdWorker({ modelGroup })),
+      sendWorkerReadyPlaceholder: vi.fn(async () => { throw new Error('ready placeholder cancelled'); }),
+      commitModelGroupDecision: vi.fn(() => true),
+    });
+    await expect(service.createWorker(request)).resolves.toMatchObject({ ok: false });
+    expect(deps.rollbackCreatedWorker).toHaveBeenCalledOnce();
+    expect(deps.commitModelGroupDecision).not.toHaveBeenCalled();
+  });
+
+  it('does not commit when Worker creation fails', async () => {
+    const { deps, service } = createDeps({
+      getActiveTeamByLead: vi.fn(async () => activeTeam()),
+      createWorkerInTeam: vi.fn(async () => ({ ok: false as const, errorCode: 'MODEL_GROUP_UNAVAILABLE' as const, message: 'no source' })),
+      commitModelGroupDecision: vi.fn(() => true),
+    });
+    await expect(service.createWorker(request)).resolves.toMatchObject({ ok: false });
+    expect(deps.commitModelGroupDecision).not.toHaveBeenCalled();
+  });
+});

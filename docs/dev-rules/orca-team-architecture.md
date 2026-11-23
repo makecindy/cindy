@@ -227,6 +227,21 @@ Worker 权限是 **Worker 创建偏好**，与 Agent、模型、effort、Fast �
 工具结果的 `worktree_source` 写明实际源分支、来源与记忆回退原因。旧 Host 缺少读取能力时，
 面板也使用当前分支，不新增远程协议或 relay 恢复行为。
 
+### Worker 按模型组的模式选来源（2026-11-16）
+
+`create_worker` / `create_workers` 可传 `model_group_id`（产品规则见
+[model-groups.md §6.4](../product-rules/model-groups.md#64-lead-按模式创建-worker)）。
+`OrcaWorkerCreationService.createWorker` 遇到它时改走 `createModelGroupWorkerInTeam`：先报参数冲突与
+`execution_device_id`，过创建准入、读到 Lead 后拒绝 SSH Lead，然后调用与界面共用的 `modelGroupResolver.resolve`（`main/model-groups/desktopResolver.ts`）
+选一次；选中的路线作为显式 agent／model／provider／位置／effort 交回 `createResolvedWorkerInTeam`，
+原有的位置授权、目录与模型校验照旧，不读 Worker 记忆，不跟随 Lead 的供应商组（`pinnedRoute`）；
+模式带的 effort 按非显式偏好归一，模型不支持时退到默认档而不是 `INVALID_PARAMS`；模式没带 effort（含
+resolver 已因模型不支持去掉的）时用模型默认档，不用 `defaults.effort ?? lead.effort`（`effortFromMode`）。
+图片例外只在非空 `initialTask` 带图片时生效。
+本机来源显式传 `agentDeviceId: null`，不能省略成「跟 Lead」。选路凭据 `decisionId` 只在宿主内流转：
+`OrcaLifecycleService.createWorker` 在 Worker 落定（未回滚）后才 `commit`，并在返回前去掉它。
+界面 IPC 的创建参数逐字段构造，不接收 `modelGroupId`。
+
 ### Codex Lead 机制
 
 Codex app-server 是单例进程，多 thread 共用同一批 MCP server。Codex Lead 的设计边界是：工具全局注册，身份在调用时通过 thread context 恢复，并由 handler / host service 拒绝越权；它不是 per-thread MCP 工具隔离。

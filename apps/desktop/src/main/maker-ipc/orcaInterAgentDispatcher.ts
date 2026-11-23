@@ -137,6 +137,9 @@ export type OrcaInterAgentSendToSessionInternalResult =
         | 'LEAD_NOT_SUPPORTED'
         // create + useWorktree 专用;dispatcher 恒走 jump,不会收到,仅为镜像 register.ts 联合形状。
         | 'WORKTREE_UNAVAILABLE'
+        // create + modelGroupId 专用;dispatcher 恒走 jump 且不传模式,不会收到,仅为镜像联合形状。
+        | 'MODEL_GROUP_NOT_FOUND'
+        | 'MODEL_GROUP_UNAVAILABLE'
         | 'INTERNAL';
       message: string;
     };

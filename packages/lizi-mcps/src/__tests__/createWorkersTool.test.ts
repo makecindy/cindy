@@ -363,3 +363,28 @@ it('keeps processing after an omitted-agent default fails and returns the next a
       provider_id: 'provider', agent_device_id: 'local', defaults: { source: 'original-policy', fallback_reason: 'saved provider disconnected' } },
   ] });
 });
+
+/**
+ * 测试价值(批量逐项按模式选路)
+ * - 生产入口与可观察结果：registerCreateWorkersTool——每项各自把 model_group_id 交给宿主，一项选不到不拦后面的项。
+ * - 规则依据：docs/product-rules/model-groups.md §6.4(批量逐项)。
+ * - 现有覆盖缺口：批量用例只覆盖目录与上限；模式失败若被当成中止原因，后面的 Worker 会被跳过。
+ * - 最小失败输入：三项同一模式，第二项返回 MODEL_GROUP_UNAVAILABLE。
+ * - tier：unit，真实 registry。
+ */
+describe('create_workers with a model group mode', () => {
+  it('routes each item on its own and keeps going after one item finds no source', async () => {
+    const createWorker = vi.fn<CreateWorkerDeps['createWorker']>()
+      .mockResolvedValueOnce(created(1, 5))
+      .mockResolvedValueOnce({ ok: false, errorCode: 'MODEL_GROUP_UNAVAILABLE', message: 'no source' })
+      .mockResolvedValueOnce(created(2, 5));
+    const result = parse(await setup(createWorker).call('create_workers', { workers: [1, 2, 3].map((index) => {
+      const { agent: _agent, ...rest } = worker(index);
+      return { ...rest, model_group_id: 'r1' };
+    }) }));
+    expect(createWorker).toHaveBeenCalledTimes(3);
+    for (const [request] of createWorker.mock.calls) expect(request).toMatchObject({ modelGroupId: 'r1' });
+    expect(result.results.map((item: { status: string }) => item.status)).toEqual(['created', 'failed', 'created']);
+    expect(result.results[1]).toMatchObject({ error_code: 'MODEL_GROUP_UNAVAILABLE' });
+  });
+});
