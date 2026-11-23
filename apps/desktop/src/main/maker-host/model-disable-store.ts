@@ -33,6 +33,7 @@ import {
   readCreatedSubscriptionProvidersIfReadable,
   type CreatedSubscriptionProvider,
 } from '../subscription-accounts/placement.js';
+import { readOpenAiLegacyAccountsIfReadable } from '../subscription-accounts/store.js';
 
 const log = desktopMakerLogger.child('model-disable-store');
 
@@ -61,7 +62,7 @@ interface ModelAccessPrefs {
 }
 
 const DEFAULTS: ModelAccessPrefs = { disabledModels: {}, disabledProviders: {}, hiddenProviders: {} };
-const LEGACY_SUBSCRIPTION_IMAGE_KEY_SUFFIX = `:${subscriptionImageModelId('openai')}`;
+const SUBSCRIPTION_IMAGE_ID_SUFFIX = subscriptionImageModelId('');
 
 /**
  * 单 section 条目总量硬上限(深防线,PR #744 review):正常路径已有 IPC 边界的尺寸 +
@@ -100,15 +101,25 @@ function sanitizeSection(raw: unknown): Record<string, true> {
 function normalize(raw: unknown): ModelAccessPrefs {
   if (!raw || typeof raw !== 'object') return { disabledModels: {}, disabledProviders: {}, hiddenProviders: {} };
   const disabledModels = sanitizeSection('disabledModels' in raw ? raw.disabledModels : undefined);
-  // A split used to copy the built-in image ID verbatim. Read it as the same
-  // disable on this standalone provider, and persist only the canonical key on
-  // the next model write. Enabling then removes the disable in that same write.
+  // Old splits copied the source's full image ID. Treat it as a disable on the
+  // standalone provider only when both namespaces are proven for this owner.
+  // The next model write persists the canonical keys; enabling clears the disable.
   let created: Readonly<Record<string, CreatedSubscriptionProvider>> | null | undefined;
+  let legacy: Readonly<Record<string, string>> | null | undefined;
   for (const key in disabledModels) {
-    if (!key.startsWith('openai-sub-') || !key.endsWith(LEGACY_SUBSCRIPTION_IMAGE_KEY_SUFFIX)) continue;
-    const providerId = key.slice(0, -LEGACY_SUBSCRIPTION_IMAGE_KEY_SUFFIX.length);
+    if (!key.startsWith('openai-sub-') || !key.endsWith(SUBSCRIPTION_IMAGE_ID_SUFFIX)) continue;
+    const separator = key.indexOf(':');
+    const sourceEnd = key.length - SUBSCRIPTION_IMAGE_ID_SUFFIX.length;
+    if (separator < 0 || separator + 1 >= sourceEnd) continue;
+    const providerId = key.slice(0, separator);
+    const sourceId = key.slice(separator + 1, sourceEnd);
+    if (sourceId === providerId) continue; // Already canonical.
     if (created === undefined) created = readCreatedSubscriptionProvidersIfReadable();
     if (created?.[providerId]?.kind !== 'openai') continue;
+    if (sourceId !== 'openai') {
+      if (legacy === undefined) legacy = readOpenAiLegacyAccountsIfReadable();
+      if (!legacy || !Object.hasOwn(legacy, sourceId)) continue;
+    }
     disabledModels[modelDisableKey(providerId, subscriptionImageModelId(providerId))] = true;
     delete disabledModels[key];
   }

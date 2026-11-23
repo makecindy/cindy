@@ -209,6 +209,7 @@ vi.mock('../legacyAccountAccess.js', () => ({
 }));
 vi.mock('../store.js', () => ({
   readPool: (p: SubscriptionProvider) => h.pools[p] ?? null,
+  readOpenAiLegacyAccountsIfReadable: () => h.pools.openai?.legacyCodexAccounts ?? {},
   readLegacyCodexAccountId: (id: string) => h.pools.openai?.legacyCodexAccounts?.[id],
   readLegacyCodexProviderId: (account: string) => Object.entries(h.pools.openai?.legacyCodexAccounts ?? {})
     .find(([, id]) => id === account)?.[0],
@@ -4418,39 +4419,53 @@ describe('native account assignment on the executing computer', () => {
     expect(await ids(kind)).toEqual(['second']);
   });
 
-  // #12129 review, unit: the pool movement tests mock the preference copy. A real
-  // split of a disabled parent image must persist a disable on the newly namespaced row.
-  it('keeps GPT Image Gen disabled when taking an OpenAI account out of the built-in pool', async () => {
+  // #12129 review, unit: a built-in or registered legacy pool with a disabled image
+  // must persist the new row's exact key; the placement-only cases mock that write.
+  it.each(['openai', 'codex-native-old'])('keeps GPT Image Gen disabled after splitting from %s', async sourceId => {
     const { copyProviderDisableOverrides, readModelDisableOverrides, setModelsDisabled } =
       await vi.importActual<typeof import('../../maker-host/model-disable-store.js')>('../../maker-host/model-disable-store.js');
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-split-model-prefs-'));
     h.modelPrefsDir = root;
     h.copyOverrides.mockImplementation(copyProviderDisableOverrides);
-    h.pools.openai = { strategy: 'order', accounts: [account('default'), account('second')] };
-    const builtinModel = 'openai/gpt-image-2';
+    const legacy = sourceId !== 'openai';
+    const originalAccount = legacy ? 'imported' : 'default';
+    h.pools.openai = {
+      strategy: 'order', accounts: [account(originalAccount), account('second')],
+      ...(legacy ? { legacyCodexAccounts: { [sourceId]: originalAccount } } : {}),
+    };
+    if (legacy) h.placement[`openai:${originalAccount}`] = sourceId;
+    const sourceImage = `${sourceId}/gpt-image-2`;
+    const similarModel = `${sourceId}/gpt-image-2-preview`;
     try {
-      setModelsDisabled('openai', [builtinModel, 'fixture-chat', 'other/gpt-image-2'], true);
+      if (legacy) {
+        await runSubscriptionAccountCommand({
+          action: 'place', providerId: 'openai', accountId: 'second', target: sourceId,
+        });
+      }
+      expect((await readSubscriptionPool(sourceId)).accounts.map(a => a.id)).toEqual([originalAccount, 'second']);
+      setModelsDisabled(sourceId, [sourceImage, 'fixture-chat', 'other/gpt-image-2', similarModel], true);
       await runSubscriptionAccountCommand({
-        action: 'place', providerId: 'openai', accountId: 'second', target: null,
+        action: 'place', providerId: sourceId, accountId: 'second', target: null,
       });
       const [providerId] = Object.keys(h.created);
       if (!providerId) throw new Error('Split did not create a provider');
       expect(providerId).toMatch(/^openai-sub-[a-f0-9]{8}$/);
       expect((await readSubscriptionPool(providerId)).accounts.map(a => a.id)).toEqual(['second']);
-      expect((await readSubscriptionPool('openai')).accounts.map(a => a.id)).toEqual(['default']);
+      expect((await readSubscriptionPool(sourceId)).accounts.map(a => a.id)).toEqual([originalAccount]);
       const modelId = `${providerId}/gpt-image-2`;
       expect(JSON.parse(fs.readFileSync(path.join(root, 'model-disable-prefs.json'), 'utf8'))).toMatchObject({
         disabledModels: { [`${providerId}:${modelId}`]: true },
       });
       const prefs = readModelDisableOverrides();
       expect(isModelDisabled(prefs, providerId, modelId)).toBe(true);
-      expect(isModelDisabled(prefs, 'openai', builtinModel)).toBe(true);
-      expect(isModelDisabled(prefs, providerId, builtinModel)).toBe(false);
+      expect(isModelDisabled(prefs, sourceId, sourceImage)).toBe(true);
+      expect(isModelDisabled(prefs, providerId, sourceImage)).toBe(false);
       expect(isModelDisabled(prefs, providerId, 'fixture-chat')).toBe(true);
       expect(isModelDisabled(prefs, providerId, 'other/gpt-image-2')).toBe(true);
+      expect(isModelDisabled(prefs, providerId, similarModel)).toBe(true);
       setModelsDisabled(providerId, [modelId], false);
       expect(isModelDisabled(readModelDisableOverrides(), providerId, modelId)).toBe(false);
-      expect(isModelDisabled(readModelDisableOverrides(), 'openai', builtinModel)).toBe(true);
+      expect(isModelDisabled(readModelDisableOverrides(), sourceId, sourceImage)).toBe(true);
     } finally {
       h.modelPrefsDir = null;
       fs.rmSync(root, { recursive: true, force: true });

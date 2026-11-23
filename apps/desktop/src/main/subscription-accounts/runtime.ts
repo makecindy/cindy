@@ -3305,7 +3305,7 @@ async function changeAccountPlacement(
     const { copyProviderDisableOverrides } = await import('../maker-host/model-disable-store.js');
     assertOwner(state);
     const copyOverrides = (targetId: string, created: boolean) => {
-      const renameModel = kind === 'openai' && created && (ref.providerId === kind || ref.created)
+      const renameModel = kind === 'openai' && created
         ? { from: subscriptionImageModelId(ref.providerId), to: subscriptionImageModelId(targetId) }
         : undefined;
       copyProviderDisableOverrides(ref.providerId, targetId, renameModel);

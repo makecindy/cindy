@@ -18,8 +18,16 @@ afterAll(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
 
 vi.mock('electron', () => ({ app: { getPath: () => '/tmp/never-used-here' } }));
 vi.mock('../logger-adapter.js', () => ({
-  desktopMakerLogger: { child: () => ({ info: () => {}, warn: () => {}, error: () => {} }) },
+  desktopMakerLogger: { info: () => {}, warn: () => {}, child: () => ({ info: () => {}, warn: () => {} }) },
 }));
+vi.mock('../../appSessionState.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../appSessionState.js')>();
+  return {
+    ...actual,
+    activeOwnerScopeKey: () => prefsDir,
+    ownerScopedUserDataPath: (...parts: string[]) => path.join(prefsDir, ...parts),
+  };
+});
 vi.mock('../../ownerContext.js', () => ({
   configureOwnerContext: () => {},
   ownerScopedPath: (name: string) => path.join(prefsDir, name),
@@ -101,21 +109,23 @@ describe('旧媒体 modelId 停用项迁移', () => {
     expect(readPrefsFile().disabledModels['ambiguous-xd:openai/gpt-image-2']).toBeUndefined();
   });
 
-  // #12129 review, unit: a legacy split saved the built-in image ID under
-  // the new provider. Test the actual store read/write and a cold reload.
-  it('reads a copied legacy image disable and does not restore it after enabling the canonical ID', async () => {
+  // #12129 review, unit: a split saved a built-in or native connection's image ID
+  // on the new provider. The legacy-source proof is the actual owner-scoped pool file.
+  it.each(['openai', 'codex-native-old'])('recovers a copied %s image disable and keeps manual enable after restart', async sourceId => {
     const provider = 'openai-sub-1234abcd';
     const other = 'openai-sub-5678abcd';
     const unregistered = 'openai-sub-9999abcd';
-    const oldId = 'openai/gpt-image-2';
+    const oldId = `${sourceId}/gpt-image-2`;
     const image = `${provider}/gpt-image-2`;
     const otherImage = `${other}/gpt-image-2`;
     prefsDir = fs.mkdtempSync(path.join(tmpDir, 'legacy-image-'));
     const file = path.join(prefsDir, 'model-disable-prefs.json');
     const unchanged = {
-      [`openai:${oldId}`]: true,
+      [`${sourceId}:${oldId}`]: true,
       [`${provider}:fixture-chat`]: true,
       [`${provider}:different/gpt-image-2`]: true,
+      [`${provider}:${sourceId}/gpt-image-2-preview`]: true,
+      [`${provider}:${sourceId}-unrelated/gpt-image-2`]: true,
       [`${unregistered}:${oldId}`]: true,
     };
     const legacy = {
@@ -125,6 +135,14 @@ describe('旧媒体 modelId 停用项迁移', () => {
       [`${other}:${otherImage}`]: true,
     };
     fs.writeFileSync(file, JSON.stringify({ disabledModels: legacy, hiddenProviders: { [other]: true } }));
+    if (sourceId !== 'openai') {
+      const accountId = 'cindy-123456789abc-12345678-1234-1234-1234-123456789abc';
+      fs.writeFileSync(path.join(prefsDir, 'subscription-accounts.json'), JSON.stringify({
+        pools: { openai: {
+          strategy: 'least', accounts: [{ id: accountId }], legacyCodexAccounts: { [sourceId]: accountId },
+        } },
+      }));
+    }
     try {
       const normalized = { ...unchanged, [`${provider}:${image}`]: true, [`${other}:${otherImage}`]: true };
       expect(readModelDisableOverrides().disabledModels).toEqual(normalized);
@@ -146,6 +164,16 @@ describe('旧媒体 modelId 停用项迁移', () => {
       expect(readPrefsFile().disabledModels[`${provider}:${oldId}`]).toBeUndefined();
       restarted.setModelsDisabled(provider, [image], false);
       expect(isDisabled()).toBe(false);
+      if (sourceId !== 'openai') {
+        // Same provider IDs in another owner without the native source registration
+        // cannot borrow the first owner's evidence.
+        prefsDir = fs.mkdtempSync(path.join(tmpDir, 'other-owner-'));
+        fs.writeFileSync(path.join(prefsDir, 'model-disable-prefs.json'), JSON.stringify({
+          disabledModels: { [`${provider}:${oldId}`]: true },
+        }));
+        expect(isDisabled()).toBe(false);
+        expect(readPrefsFile().disabledModels).toEqual({ [`${provider}:${oldId}`]: true });
+      }
     } finally {
       prefsDir = tmpDir;
     }

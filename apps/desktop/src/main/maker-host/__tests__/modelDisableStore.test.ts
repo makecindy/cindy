@@ -21,7 +21,10 @@ vi.mock('../override-settings-file.js', () => ({
   }),
   portableOverrideSettings: () => ({ readCustomized: () => ({}), applyPatch: async () => false }),
 }));
-vi.mock('../../appSessionState.js', () => ({ ownerScopedUserDataPath: () => 'unused' }));
+vi.mock('../../appSessionState.js', () => ({
+  ownerScopedUserDataPath: () => 'unused',
+  activeOwnerScopeKey: () => 'synthetic-owner',
+}));
 vi.mock('../../subscription-accounts/placement.js', () => ({ readCreatedSubscriptionProvidersIfReadable: () => ({}) }));
 vi.mock('../logger-adapter.js', () => ({
   desktopMakerLogger: { child: () => ({ info: vi.fn(), warn: vi.fn() }) },

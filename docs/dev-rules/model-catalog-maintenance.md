@@ -254,8 +254,9 @@ Claude 的模型发现不新增启动、续聊、换号或切模型的准入门�
 就绪使用现有账号刷新读到的图像 OAuth 材料，不发试生成请求；上游仍决定实际出图准入。
 生成与编辑只在所选供应商当前归属的账号内租用一次，发送前复核归属及鉴权，不能回落到内置 OpenAI
 或跟随已并出的账号。拿出账号时，GPT Image Gen 的停用设置随图像 ID 改到独立供应商名下；
-旧版已复制的内置图像 ID 按同一独立供应商的图像停用读取，下次写入模型偏好时归并到新 ID。
-手动启用清除该停用，重启不会重新关闭，也不影响内置来源。实现见 `active-catalog.ts`、
+旧版从内置 OpenAI 或当前 owner 已登记的旧 Codex 连接复制的图像停用，以同一独立供应商的新 ID
+生效，下次写入模型偏好时归并。不按名称或型号后缀猜测来源。手动启用清除该停用，重启不会
+重新关闭，也不影响原来源。实现见 `active-catalog.ts`、
 `codexImageAuthBinding.ts`、`subscription-accounts/runtime.ts` 和 `model-disable-store.ts`；
 回归见 `providerCatalogRealmReload.test.ts`、`subscription-accounts/__tests__/runtime.test.ts`
 和 `model-disable-store.test.ts`。
