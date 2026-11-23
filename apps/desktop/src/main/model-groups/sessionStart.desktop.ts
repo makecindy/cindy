@@ -1,6 +1,6 @@
 /**
  * 新建任务按模式选来源的桌面装配(sessionStart.ts)：选路用本机的模型组解析器，说明写在第一轮那条用户消息下面。
- * 依赖都是顶层静态导入(architecture-invariants §2)；解析器只在端口函数里读，模块加载时不调用。
+ * 依赖都是顶层静态导入(architecture-invariants §2)；端口都在调用时转调(§5)，模块加载时不取任何依赖的值。
  */
 import { randomUUID } from 'node:crypto';
 
@@ -35,7 +35,7 @@ export const modelGroupSessionStart = createModelGroupSessionStart({
       log.warn('model group start commit failed', { error: String(error) });
     }
   },
-  bind: bindModelGroupSession,
+  bind: (sessionId, selection, pickedKey) => bindModelGroupSession(sessionId, selection, pickedKey),
   // 派发钩子在那条用户消息落库之后才调，直接按 clientId 找。
   writeNote: (sessionId, note, { clientId, anchorClientId }) => {
     void (async () => {
@@ -50,9 +50,9 @@ export const modelGroupSessionStart = createModelGroupSessionStart({
     })().catch((error: unknown) => log.warn('model group start note failed', { sessionId, error: String(error) }));
   },
   t: (key, values) => t(key as never, values as never) as string,
-  locale: getResolvedMainLocale,
+  locale: () => getResolvedMainLocale(),
   // 主进程没有其他电脑的名单：写「另一台电脑」，与界面里名单查不到时的写法相同。
   locationName: () => t('bots.cloud.unknownDevice' as never) as string,
-  now: Date.now,
-  createToken: randomUUID,
+  now: () => Date.now(),
+  createToken: () => randomUUID(),
 });
