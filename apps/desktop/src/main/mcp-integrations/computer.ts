@@ -4129,7 +4129,7 @@ function getComputerMcpDeps(options: ComputerMcpDepsOptions = {}): ComputerMcpDe
       }
       if (options.isComputerUseEnabled && !options.isComputerUseEnabled(context)) {
         throw new ComputerDriverError(
-          'Computer Use is disabled in Settings. Tell the person this step needs it: Use cindy_helper get_settings_link with page=builtin-tools and show its returned device-bound Markdown link (macOS also asks for Accessibility and Screen Recording there). Only they can enable it; do not simulate input from the shell.',
+          'Computer automation is disabled in Settings > Automation. Tell the person this step needs it: Use cindy_helper get_settings_link with page=computer-use and show its returned device-bound Markdown link (macOS also asks for Accessibility and Screen Recording there). Only they can enable it; do not simulate input from the shell.',
           'COMPUTER_USE_DISABLED',
         );
       }

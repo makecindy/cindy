@@ -196,6 +196,12 @@ export interface IMUnsupportedEntry {
   type: string;
   /** Localised label suitable for showing the user. */
   label: string;
+  /**
+   * The model can fetch it with a channel tool (an original over the direct-delivery cap, or the
+   * original behind a preview). Such an entry still invokes the model and is not reported to the
+   * sender as unsupported.
+   */
+  retrievable?: boolean;
 }
 
 export interface IMMessageEvent {

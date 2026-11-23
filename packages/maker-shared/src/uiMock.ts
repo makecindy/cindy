@@ -1,4 +1,5 @@
 import { UI_MOCK_SHOWCASE_PROJECTS, UI_MOCK_SHOWCASE_TASKS } from './uiMockShowcase';
+import { richAnswerText } from './richAnswer';
 import { UI_MOCK_BIDI_TASK } from './uiMockBidi';
 export { UI_MOCK_SHOWCASE_PROJECTS };
 
@@ -657,5 +658,6 @@ function taskMessageRows(task: UiMockTask, endsAt: number): UiMockMessageRow[] {
 function previewOf(task: UiMockTask): string {
   const last = [...task.messages].reverse().find((message) => message.role === 'assistant' || message.role === 'user');
   const text = last && 'text' in last ? last.text : task.title;
-  return text.replace(/[#>*`|\-]/g, '').replace(/\s+/g, ' ').trim().slice(0, 140);
+  const readable = last?.role === 'assistant' ? richAnswerText(text) : text;
+  return readable.replace(/[#>*`|\-]/g, '').replace(/\s+/g, ' ').trim().slice(0, 140);
 }

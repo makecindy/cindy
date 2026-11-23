@@ -35,7 +35,17 @@
   "retryAccess": "액세스 재시도",
   "recheck": "다시 확인",
   "deviceRemovedTitle": "기기가 제거됨",
-  "deviceRemovedHint": "로그아웃한 후 다시 로그인하면 기기 목록에 추가됩니다.",
+  "deviceRemovedHint": "이 휴대폰이 계정에서 제거되었습니다. ‘다시 참여’를 탭하면 되돌릴 수 있습니다.",
+  "rejoin": {
+    "action": "다시 참여",
+    "busy": "다시 참여하는 중",
+    "doneTitle": "다시 참여함",
+    "agentNetUnavailable": "Agent-Net 서비스가 아직 다시 참여를 지원하지 않아 이 휴대폰은 당분간 Agent-Net 없이 연결됩니다.",
+    "failedTitle": "다시 참여하지 못함",
+    "failed": "네트워크를 확인한 후 다시 시도하세요.",
+    "unsupported": "서비스가 아직 다시 참여를 지원하지 않습니다. 로그아웃한 후 다시 로그인하세요.",
+    "agentNetUnsupported": "Agent-Net 서비스가 아직 다시 참여를 지원하지 않습니다. ‘암호화된 연결만 사용’을 끄면 Agent-Net 없이 이 휴대폰을 되돌릴 수 있습니다."
+  },
   "authFailedTitle": "로그인이 만료되었습니다",
   "authFailedHint": "로그인이 만료되었습니다. 로그아웃한 후 다시 로그인해 주세요.",
   "replacedTitle": "연결이 다른 곳에서 대체되었습니다",

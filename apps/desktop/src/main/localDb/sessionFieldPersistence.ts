@@ -140,6 +140,7 @@ export async function persistSessionFieldsWith(
   if (['model', 'providerId', 'effort', 'fastMode'].some((key) => key in clean)) {
     const [row] = await db.select({
       id: sessions.id, agentKind: sessions.agentKind, model: sessions.model,
+      agentDeviceId: sessions.agentDeviceId,
       providerId: sessions.providerId, effort: sessions.effort, fastMode: sessions.fastMode,
       scheduledModelBaseline: sessions.scheduledModelBaseline,
     }).from(sessions).where(eq(sessions.id, sessionId)).limit(1);

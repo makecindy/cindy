@@ -1300,7 +1300,7 @@ export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}
   }, [refresh, reloadCommittedMutationOnce, t]);
 
   return (
-    <div className="flex flex-col gap-[14px]">
+    <div className="flex flex-col gap-3.5">
       <div className="flex items-center justify-between">
         {showTitle ? (
           <h2

@@ -1042,6 +1042,7 @@ describe('Ghost manifest contract', () => {
       notify: true,
       fs: true,
       library: true,
+      form: true,
       tools: [
         {
           name: 'run_helper',
@@ -1089,6 +1090,7 @@ describe('Ghost manifest contract', () => {
     expect(result.manifest.notify).toBe(true);
     expect(result.manifest.fs).toBe(true);
     expect(result.manifest.library).toBe(true);
+    expect(result.manifest.form).toBe(true);
     expect(result.manifest.unknownField).toBe('ignored');
   });
 
@@ -2502,6 +2504,23 @@ describe('tool approval declaration', () => {
     expect(validateGhostManifest({ ...validManifest, tools: [{ name: 'run', description: 'Run', approval: 'bypass' }] }))
       .toMatchObject({ ok: false });
   });
+});
+
+// Unit: the installed manifest must preserve the explicit startup declaration.
+// Approval tests cover tool policies but cannot distinguish an opted-in tool
+// from a legacy tool with no startup claim.
+it('retains tool startup opt-in while ignoring unknown values for installed packages', () => {
+  const tools = [
+    { name: 'find', description: 'Find an item', exposure: 'startup' },
+    { name: 'open', description: 'Open an item' },
+    { name: 'list', description: 'List items', exposure: { legacy: true } },
+  ];
+  for (const validate of [validateGhostManifest, validateStoredGhostManifest]) {
+    expect(validate({ ...validManifest, schemaVersion: 3, minCindyVersion: '0.1.61', slots: undefined, tools })).toMatchObject({
+      ok: true,
+      manifest: { tools: [tools[0], tools[1], { name: 'list', description: 'List items' }] },
+    });
+  }
 });
 
 describe('readme declarations', () => {

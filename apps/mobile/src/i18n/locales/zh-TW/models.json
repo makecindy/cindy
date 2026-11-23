@@ -53,7 +53,8 @@
   },
   "switchOutcome": {
     "applied": "模型來源切換已生效。",
-    "failed": "模型來源切換失敗，請重新選擇。"
+    "failed": "模型來源切換失敗，請重新選擇。",
+    "previousSettingsRetained": "這次切換未完成，任務會繼續使用原來的設定。"
   },
   "agentSwitch": {
     "browseAccessibility": "瀏覽 {{agent}} 模型"
@@ -117,7 +118,10 @@
       "expiring": "快作廢的先用",
       "order": "按順序",
       "rotate": "輪流",
-      "cheapest": "最省錢"
+      "cheapest": "最省錢",
+      "drain": "用完再換",
+      "headroom": "餘量最多的先用",
+      "weighted": "按權重"
     },
     "sourceOnDevice": "{{provider}} · {{device}}",
     "why": {
@@ -130,6 +134,11 @@
       "soonestUntil": "所有來源的配額都用完了，它最早恢復（{{reset}}）",
       "cheapest": "標價最低",
       "cheapestFree": "訂閱還有配額，不另外花錢",
+      "drain": "接著用它，直到配額用完",
+      "drainNext": "上一個來源用完或用不了，換到它",
+      "headroom": "剩餘配額最多",
+      "headroomQuota": "還剩 {{left}}% 配額，比其他來源都多",
+      "weighted": "按權重這次分到它",
       "exceptionImage": "訊息裡有圖片，只在能看圖的來源裡選",
       "exceptionImageFallback": "訊息裡有圖片，但沒有能看圖的來源，照常選",
       "exceptionHours": "這個時段改走「{{name}}」",

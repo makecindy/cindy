@@ -48,7 +48,7 @@ export function SentAgentReferenceChip({
     const label = sentAgentReferenceDisplayLabel(reference);
     if (reference.kind === 'message') {
       return (
-        <span className="relative top-[-1px] -my-[1px] inline-flex max-w-[min(240px,55vw)] align-middle">
+        <span className="relative top-[-1px] -my-px inline-flex max-w-[min(240px,55vw)] align-middle">
           <QuoteChip quote={{ text: label }} />
         </span>
       );
@@ -73,7 +73,7 @@ export function SentAgentReferenceChip({
     return (
       <InlineReferenceChip
         ariaLabel={label}
-        className="relative top-[-1px] -my-[1px] max-w-[min(240px,55vw)] align-middle"
+        className="relative top-[-1px] -my-px max-w-[min(240px,55vw)] align-middle"
         icon={icon}
         label={label}
         tooltip={label}
@@ -121,7 +121,7 @@ export function SentAgentReferenceChip({
       icon={icon}
       tooltip={label}
       ariaLabel={label}
-      className="relative top-[-1px] -my-[1px] max-w-[min(240px,55vw)] align-middle"
+      className="relative top-[-1px] -my-px max-w-[min(240px,55vw)] align-middle"
     />
   );
 }

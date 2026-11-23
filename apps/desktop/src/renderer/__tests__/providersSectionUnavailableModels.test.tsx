@@ -325,6 +325,9 @@ describe('ProvidersSection — 双栏管理', () => {
     expect((ownDevicesState.catalogs.get('peer') as { providers: ProviderView[] }).providers[0]?.remoteInvocationEnabled).toBe(true);
     view.unmount();
     const reopened = render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+    // A disabled provider is folded into the 已停用 group, which starts closed after reopening.
+    expect(screen.queryByRole('button', { name: 'settings.providers.remote.rowLabel' })).toBeNull();
+    fireEvent.click(await screen.findByRole('button', { name: /settings\.providers\.pill\.suspended/ }));
     fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.remote.rowLabel' }));
     expect(await screen.findByText('settings.providers.detail.suspendedBanner')).toBeTruthy();
     fireEvent.keyDown(screen.getByRole('button', { name: 'settings.providers.detail.moreActionsAria' }), { key: 'ArrowDown' });
@@ -1136,9 +1139,13 @@ describe('ProvidersSection — 双栏管理', () => {
 
       const imageSwitch = await screen.findByRole('switch', { name: 'Gemini image test' });
       fireEvent.click(imageSwitch);
-      expect(setModelVisibilities).toHaveBeenCalledWith(
-        'gemini', [expect.objectContaining({ modelId: 'gemini-image-test' })], expect.any(Boolean),
-      );
+      // Functional models use the enable axis, including models managed on a bound connection.
+      expect(setModelDisable).toHaveBeenCalledWith({
+        kind: 'model',
+        providerId: 'gemini',
+        modelIds: ['gemini-image-test'],
+        disabled: true,
+      });
       if (legacyConnected) {
         fireEvent.click(screen.getByRole('button', { name: /^My old Gemini/ }));
         expect(screen.queryByText('Gemini image test')).toBeNull();

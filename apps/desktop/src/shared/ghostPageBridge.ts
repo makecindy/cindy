@@ -181,6 +181,9 @@ export function createGhostPageBridge(ports: { ping: () => Promise<{ ok: true; i
     ports.send({ ...req, type: 'workspace-request' }),
   confirm: (req: Record<string, unknown>): Promise<unknown> =>
     ports.send({ ...req, type: 'confirm-request' }),
+  // 主机画的表单弹窗(form 槽):回 { ok, outcome: 'submit' | 'cancel' | 'action', ... }。
+  form: (req: Record<string, unknown>): Promise<unknown> =>
+    ports.send({ ...req, type: 'form-request' }),
 };
   return { api, deliver(payload: unknown) {
     if (payload && typeof payload === 'object' && 'type' in payload && payload.type === 'ui-consumers' && 'consumers' in payload && Array.isArray(payload.consumers))

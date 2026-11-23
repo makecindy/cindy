@@ -342,6 +342,23 @@ describe('Auto-review wiring: native first, Cindy fallback', () => {
     await handle.close();
   });
 
+  // Review P1 (#12128): teammate channel lanes now load user/project settings, whose permissions.allow
+  // rules skip canUseTool in every mode. A non-owner call the channel policy must confirm is handed back
+  // to the approval chain at PreToolUse in Ask too (the other mode that accepts a turn policy); other calls are unchanged.
+  it('hands forced channel confirmations back to Cindy in Ask', async () => {
+    const { handle, preToolUse } = await startSession('default');
+    await handle.send({ type: 'user', content: 'guest request' }, {
+      turnPermissionPolicy: {
+        origin: { kind: 'im', channel: 'imessage', taskId: 'guest-turn' },
+        confirmationSurface: 'channel',
+        forceConfirmToolCall: (toolName, input) => toolName === 'Bash' && /\brm\b/.test(String((input as { command?: string }).command)),
+      },
+    });
+    expect(await preToolUse('Bash', { command: 'rm -rf build' })).toEqual(['ask']);
+    expect(await preToolUse('Bash', { command: 'ls' })).toEqual([]);
+    await handle.close();
+  });
+
   it('keeps SDK auto for official Claude OAuth without host MCPs', async () => {
     const { handle, queryPermissionMode, reviewAutoPermissionAction } = await startSession('auto', {
       providerId: 'anthropic',

@@ -1,13 +1,11 @@
 /**
  * visionCapability —— 模型视觉能力三态判定（纯逻辑，零依赖）。
  *
- * cindy 的模型目录（catalog / model-registry）目前**没有结构化**的「能否看图」元数据
- * （modalities 只在 Pi 自定义 provider 手动标记，内置目录为空）。图片输入配置需要区分
- * 「已知有视觉 / 已知无视觉 / 未知」三类模型，本模块维护一份保守名单 + 归一化判定。
+ * 模型设置在目录缺少图片输入元数据时，按型号 ID 兜底区分「已知有视觉 / 已知无视觉 / 未知」。
  *
  * 分类语义（供模型图片输入配置使用）：
  *  - vision：已知支持图片输入的多模态模型（claude / gpt / gemini / grok 等）；
- *  - no-vision：已知纯文本模型（deepseek 系列、glm-5.2 等，实测/厂商声明无视觉）；
+ *  - no-vision：已知纯文本模型（旧款 DeepSeek、glm-5.2 等）；
  *  - unknown：名单外 —— 不确定，不据此断言有无视觉能力，由模型配置与运行时处理。
  *
  * 归一化：runtime 的 body.model 形态多样 —— `deepseek/deepseek-v4-flash`、裸
@@ -40,7 +38,7 @@ const VISION_ID_PREFIXES: readonly string[] = [
 
 /** 已知纯文本（无视觉）模型 id 前缀（保守名单）。 */
 const NO_VISION_ID_PREFIXES: readonly string[] = [
-  // deepseek 官方仅文本/代码模态；deepseek-v4 系列用户明确指定为无视觉。
+  // 保守的家族默认值，已知视觉型号优先匹配。
   'deepseek/deepseek-',
   // 裸 id 形态（部分 runtime body.model 不带命名空间）。
   'deepseek-',
@@ -78,11 +76,20 @@ export function normalizeVisionModelId(model: string): string {
  */
 const EXPLICIT_VISION_MARKER = /(?:^|[-/])(?:vision|vl\d*)(?:[-.]|$)/i;
 
+// DeepSeek V4.1 Flash supports native image input under these exact IDs.
+const VISION_MODEL_IDS = new Set([
+  'deepseek-flash',
+  'deepseek/deepseek-flash',
+  'deepseek-v4.1-flash',
+  'deepseek/deepseek-v4.1-flash',
+]);
+
 /** 判定一个模型 id 的视觉能力（三态）。 */
 export function classifyVisionCapability(model: string): VisionCapability {
   const id = normalizeVisionModelId(model);
   // 显式标记优先于家族级结论 —— 家族说「纯文本」，型号名说「我是视觉变体」时，后者更具体。
   if (EXPLICIT_VISION_MARKER.test(id)) return 'vision';
+  if (VISION_MODEL_IDS.has(id.toLowerCase())) return 'vision';
   if (NO_VISION_ID_PREFIXES.some((p) => id.startsWith(p))) return 'no-vision';
   if (VISION_ID_PREFIXES.some((p) => id.startsWith(p))) return 'vision';
   return 'unknown';

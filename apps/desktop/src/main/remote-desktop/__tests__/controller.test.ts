@@ -170,6 +170,47 @@ it('does not allocate a lease after host setup was cancelled', async () => {
   expect(h.controller.state).toBeNull();
 });
 describe('remote desktop authority and lifecycle', () => {
+  // Unit: a late editable-field reply after a second click must not open the phone keyboard.
+  // Input sequence tests covered replayed clicks, but not a pending AX lookup.
+  it('probes a delivered left click once and drops the result after new input', async () => {
+    const h = harness();
+    let resolve!: (value: boolean) => void;
+    h.deps.editableAt = vi.fn(() => new Promise<boolean>((done) => { resolve = done; }));
+    const { lease } = await h.start();
+    await h.controller.request('phone', { op: 'control', lease, enabled: true });
+    h.controller.input(lease, 1, [{ kind: 'button', button: 0, down: false, x: 0.4, y: 0.8 }]);
+    const query = { op: 'editableClick', lease, sequence: 1 };
+    const first = h.controller.request('phone', query);
+    expect(await h.controller.request('phone', query)).toEqual({ editable: false });
+    await Promise.resolve();
+    expect(h.deps.editableAt).toHaveBeenCalledExactlyOnceWith('1', 0.4, 0.8);
+    h.controller.input(lease, 2, [{ kind: 'move', x: 0.5, y: 0.8 }]);
+    resolve(true);
+    expect(await first).toEqual({ editable: false });
+  });
+  // Unit: PR #11855 must observe native completion, including clicks held by an Agent.
+  // The older AX-only test missed a queued click that had not taken focus yet.
+  it.each(['delivered', 'failed', 'new-input', 'stopped'] as const)(
+    'waits for click delivery and rejects stale detection (%s)', async (outcome) => {
+      const h = harness();
+      let deliver!: (ok: boolean) => void;
+      h.deps.input = () => new Promise<boolean>(resolve => { deliver = resolve; });
+      h.deps.editableAt = vi.fn(async () => true);
+      const { lease } = await h.start();
+      await h.controller.request('phone', { op: 'control', lease, enabled: true });
+      h.controller.input(lease, 1, [{ kind: 'button', button: 0, down: false, x: 0.4, y: 0.8 }]);
+      const result = h.controller.request('phone', { op: 'editableClick', lease, sequence: 1 });
+      await Promise.resolve();
+      expect(h.deps.editableAt).not.toHaveBeenCalled();
+      const finish = deliver;
+      if (outcome === 'new-input')
+        h.controller.input(lease, 2, [{ kind: 'move', x: 0.5, y: 0.8 }]);
+      if (outcome === 'stopped') await h.controller.stop();
+      finish(outcome !== 'failed');
+      expect(await result).toEqual({ editable: outcome === 'delivered' });
+      expect(h.deps.editableAt).toHaveBeenCalledTimes(outcome === 'delivered' ? 1 : 0);
+    },
+  );
   it('registers the returned stop promise with the awaited quit phase', () => {
     const source = readFileSync(new URL('../index.ts', import.meta.url), 'utf8');
     const registration = source.slice(

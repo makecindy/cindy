@@ -83,7 +83,7 @@ function PreRunHookResultDetails({ result }: { result: NonNullable<ScheduleRun['
   return (
     <details
       open={defaultOpen}
-      className="group/precheck rounded-[8px] bg-[hsl(var(--content-area))] text-[var(--settings-section-desc)]"
+      className="group/precheck rounded-lg bg-[hsl(var(--content-area))] text-[var(--settings-section-desc)]"
     >
       <summary
         className={cn(
@@ -246,7 +246,7 @@ export function RunHistoryCard({
       onClick={handleCardClick}
       title={canMarkRead ? t('scheduler.runs.markReadTitle') : undefined}
       className={cn(
-        'group flex flex-col gap-2 rounded-xl border p-[14px_16px]',
+        'group flex flex-col gap-2 rounded-xl border py-3.5 px-4',
         'border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]',
         canMarkRead && 'cursor-pointer',
       )}
@@ -384,7 +384,7 @@ export function RunHistoryCard({
       ) : (
         <p
           className={cn(
-            'rounded-[8px] border px-2 py-1.5 font-mono text-11 break-words',
+            'rounded-lg border px-2 py-1.5 font-mono text-11 break-words',
             'border-[var(--cmd-palette-border)] bg-[hsl(var(--content-area))] text-[var(--settings-section-desc)]',
           )}
         >
@@ -399,7 +399,7 @@ export function RunHistoryCard({
       {run.status === 'skipped' && run.preRunHookResult?.status !== 'skipped' && run.resultText && (
         <p
           className={cn(
-            'rounded-[8px] px-2 py-1.5 font-mono text-11 break-words',
+            'rounded-lg px-2 py-1.5 font-mono text-11 break-words',
             'bg-[hsl(var(--content-area))] text-[var(--cmd-palette-item-meta)]',
           )}
         >

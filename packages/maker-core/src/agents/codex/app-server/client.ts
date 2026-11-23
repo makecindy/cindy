@@ -31,6 +31,7 @@ import {
   type JsonRpcErrorObject,
   type JsonRpcId,
 } from './protocol.js';
+import { isCodexResponseTimingLine, parseCodexResponseTiming, type CodexResponseTiming } from './response-timing.js';
 import type { Transport } from './transport.js';
 
 /**
@@ -377,6 +378,11 @@ export interface AppServerClientOptions {
    */
   onOversizedNotification?: (notification: OversizedNotification) => boolean;
   /**
+   * Server-reported generation time of one response, read from Codex's timing trace
+   * line on stderr (see response-timing.ts). Display only; the line is not logged.
+   */
+  onResponseTiming?: (timing: CodexResponseTiming) => void;
+  /**
    * Transport 异常退出 / IO 错误时调用; 上层 (CodexAgent) 用它 emit
    * `error` AgentEvent + end event queue。
    */
@@ -417,6 +423,7 @@ export class AppServerClient {
   private readonly logger: Logger;
   private readonly maxLineBytes: number;
   private readonly onOversizedNotification?: AppServerClientOptions['onOversizedNotification'];
+  private readonly onResponseTiming?: AppServerClientOptions['onResponseTiming'];
   private readonly onTransportError?: (err: Error) => void;
   private readonly onAuthInvalidated?: AppServerClientOptions['onAuthInvalidated'];
   private readonly captureCredentialGeneration?: () => string | null;
@@ -454,6 +461,7 @@ export class AppServerClient {
     this.logger = opts.logger.child('codex-app-server');
     this.maxLineBytes = opts.maxLineBytes ?? DEFAULT_MAX_LINE_BYTES;
     this.onOversizedNotification = opts.onOversizedNotification;
+    this.onResponseTiming = opts.onResponseTiming;
     this.onTransportError = opts.onTransportError;
     this.onAuthInvalidated = opts.onAuthInvalidated;
     this.captureCredentialGeneration = opts.captureCredentialGeneration;
@@ -769,6 +777,18 @@ export class AppServerClient {
   }
 
   private handleStderrLine(line: string): void {
+    // The timing trace carries thread and response ids: read it for the speed, never log it.
+    if (isCodexResponseTimingLine(line)) {
+      const timing = parseCodexResponseTiming(line);
+      if (timing && this.onResponseTiming) {
+        try {
+          this.onResponseTiming(timing);
+        } catch (e) {
+          this.logger.error('onResponseTiming handler threw', { message: (e as Error).message });
+        }
+      }
+      return;
+    }
     const logLine = normalizeStderrLine(line);
     const level = classifyStderrLine(line);
     this.logger[level]('stderr', { line: logLine });

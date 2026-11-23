@@ -1,5 +1,5 @@
 import { PROJECT_ARCHIVE_CHANNEL } from '../../shared/projectArchive.js';
-import { DL_HISTORY_QUERY_CHANNEL } from '@cindy/device-link';
+import { DL_HISTORY_QUERY_CHANNEL, TASK_ACTIVITY_SNAPSHOT } from '@cindy/device-link';
 import { currentDbRpcAdmissionClass, type DbRpcAdmissionClass } from '../localDb/client/rpcAdmission.js';
 
 /**
@@ -196,6 +196,7 @@ export async function assertRemoteBotInvocationAllowed(args: unknown[], channel 
 }
 
 export async function projectRemoteSessionResult(channel: string, value: unknown): Promise<unknown> {
+  if (channel === TASK_ACTIVITY_SNAPSHOT) return projectRemoteBotPush(value, channel);
   if (channel === 'local-db:conversations:search') {
     if (!lookup) throw new Error('[HOST_NOT_READY] History visibility is not ready');
     const row = record(value);
@@ -345,6 +346,13 @@ async function assertHistoryReferences(ids: unknown[], kind: 'session' | 'bot'):
  * readPushSessionAccess); it is never reused once issued.
  */
 export async function projectRemoteBotPush(value: unknown, channel = ''): Promise<unknown | null> {
+  if (channel === TASK_ACTIVITY_SNAPSHOT) {
+    const selected = record(record(value)?.selected);
+    if (!selected) return value;
+    if (!lookup || typeof selected.sessionId !== 'string') return { unavailable: true };
+    const [access] = await readPushSessionAccess(lookup, [selected.sessionId]);
+    return access === 'ordinary' || access === 'visible' || access === 'background' ? value : { unavailable: true };
+  }
   if (!lookup) return value;
   const ids = sessionIds(value);
   const row = record(value);
