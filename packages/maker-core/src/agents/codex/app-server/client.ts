@@ -30,6 +30,7 @@ import {
   type InitializeResponse,
   type JsonRpcErrorObject,
   type JsonRpcId,
+  type TurnInterruptParams,
 } from './protocol.js';
 import { isCodexResponseTimingLine, parseCodexResponseTiming, type CodexResponseTiming } from './response-timing.js';
 import type { Transport, TransportCloseInfo } from './transport.js';
@@ -50,7 +51,17 @@ type RecoveredItem = { id: string; type: string; status?: string };
 type RecoveredTurn = { id: string; status: string; items: RecoveredItem[] };
 type ObservedTurn = { id: string; completedItems: Set<string>; restoredItems: Set<string> };
 type RecoveryMessage = { line: string; message: { id?: JsonRpcId; method: string; params?: unknown } };
-type TransportRecovery = { controller: AbortController; messages: RecoveryMessage[]; size: number };
+type RecoveryInterrupt = {
+  params: TurnInterruptParams;
+  result: ReturnType<typeof Promise.withResolvers<unknown>>;
+};
+type TransportRecovery = {
+  controller: AbortController;
+  messages: RecoveryMessage[];
+  size: number;
+  ownedThreads: ReadonlySet<string>;
+  interrupts: Map<string, RecoveryInterrupt>;
+};
 
 /** 响应超过单行上限被丢弃: 只有对应的这一个请求失败, 连接继续可用。 */
 export class AppServerMessageTooLargeError extends Error {
@@ -370,6 +381,7 @@ export function detectAuthInvalidationReason(
 export interface AppServerClientOptions {
   /** Live thread owners to reattach when a reconnectable transport is replaced. */
   getSubscribedThreadIds?: () => string[];
+  getRecoveryRootThreadId?: (threadId: string) => string | undefined;
   /**
    * Transport 工厂; 在 start() 时调用一次, 之后由 client 独占 transport 生命周期。
    *
@@ -465,6 +477,7 @@ export class AppServerClient {
   private readonly restoredTerminals = new Map<string, string>();
   private serverRequestsInFlight = 0;
   private readonly getSubscribedThreadIds?: () => string[];
+  private readonly getRecoveryRootThreadId?: AppServerClientOptions['getRecoveryRootThreadId'];
   /** close() 调用后置 true, 阻止后续 request / 重复 close 的副作用。 */
   private closed = false;
   private closePromise: Promise<void> | null = null;
@@ -475,6 +488,7 @@ export class AppServerClient {
     }
     this.createTransport = opts.createTransport;
     this.getSubscribedThreadIds = opts.getSubscribedThreadIds;
+    this.getRecoveryRootThreadId = opts.getRecoveryRootThreadId;
     this.logger = opts.logger.child('codex-app-server');
     this.maxLineBytes = opts.maxLineBytes ?? DEFAULT_MAX_LINE_BYTES;
     this.onOversizedNotification = opts.onOversizedNotification;
@@ -565,7 +579,8 @@ export class AppServerClient {
   async close(opts?: { reason?: string; throwOnTransportError?: boolean }): Promise<void> {
     if (!this.closePromise) {
       this.closed = true;
-      this.recovery?.controller.abort();
+      const recovery = this.recovery;
+      recovery?.controller.abort();
       this.recovery = undefined;
       this.activeTurns.clear();
       this.restoredTerminals.clear();
@@ -581,6 +596,7 @@ export class AppServerClient {
 
       // reject 所有挂起 request — 包括正在 initialize 的调用。
       const err = new Error(`codex app-server closed: ${reason}`);
+      for (const interrupt of recovery?.interrupts.values() ?? []) interrupt.result.reject(err);
       for (const [, pending] of this.pending) {
         if (pending.timeoutId) clearTimeout(pending.timeoutId);
         pending.reject(err);
@@ -607,8 +623,23 @@ export class AppServerClient {
     params?: unknown,
     opts?: { timeoutMs?: number; extendWhileProgress?: RequestProgressDeadline },
   ): Promise<R> {
-    if (this.recovery) return Promise.reject(new Error('Codex SSH transport is reconnecting'));
-    return this.sendRequest<R>(method, params, opts);
+    const recovery = this.recovery;
+    if (!recovery) return this.sendRequest<R>(method, params, opts);
+
+    // Stop is a new user intent, not a replay of an uncertain write. Keep it
+    // only for the acknowledged turn this recovery is already tracking.
+    if (method === Method.TurnInterrupt && params && typeof params === 'object') {
+      const { threadId, turnId } = params as Partial<TurnInterruptParams>;
+      if (threadId && turnId && recovery.ownedThreads.has(threadId) && this.activeTurns.get(threadId)?.id === turnId) {
+        let interrupt = recovery.interrupts.get(threadId);
+        if (!interrupt) {
+          interrupt = { params: { threadId, turnId }, result: Promise.withResolvers<unknown>() };
+          recovery.interrupts.set(threadId, interrupt);
+        }
+        return interrupt.result.promise as Promise<R>;
+      }
+    }
+    return Promise.reject(new Error('Codex SSH transport is reconnecting'));
   }
 
   private sendRequest<R>(
@@ -868,18 +899,32 @@ export class AppServerClient {
       return;
     }
     const transport = this.transport;
-    const threadIds = this.getSubscribedThreadIds?.() ?? [];
     const init = this.initializeParams;
     if (!info.reconnectable || !transport?.reconnect || !init ||
         this.pending.size || this.writeFailureTombstones.size || this.serverRequestsInFlight ||
-        !this.activeTurns.size || threadIds.length > MAX_RECOVERY_THREADS ||
-        [...this.activeTurns.keys()].some((id) => !threadIds.includes(id))) {
+        !this.activeTurns.size) {
       this.handleTransportFailure(failure);
       return;
     }
-    const recovery: TransportRecovery = { controller: new AbortController(), messages: [], size: 0 };
+    const roots = new Set(this.getSubscribedThreadIds?.() ?? []);
+    const ownedThreads = new Set(roots);
+    let ownsActiveTurn = false;
+    for (const threadId of this.activeTurns.keys()) {
+      const rootId = this.getRecoveryRootThreadId?.(threadId);
+      if (roots.has(threadId) || (rootId && roots.has(rootId))) {
+        ownedThreads.add(threadId);
+        ownsActiveTurn = true;
+      }
+    }
+    if (!ownsActiveTurn || ownedThreads.size > MAX_RECOVERY_THREADS) {
+      this.handleTransportFailure(failure);
+      return;
+    }
+    const recovery: TransportRecovery = {
+      controller: new AbortController(), messages: [], size: 0, ownedThreads, interrupts: new Map(),
+    };
     this.recovery = recovery;
-    void this.recoverTransport(transport, init, threadIds, recovery).catch(() => {
+    void this.recoverTransport(transport, init, recovery).catch(() => {
       if (!this.closed) this.handleTransportFailure(failure);
     });
   }
@@ -909,7 +954,6 @@ export class AppServerClient {
   private async recoverTransport(
     previous: Transport,
     init: InitializeParams,
-    threadIds: string[],
     recovery: TransportRecovery,
   ): Promise<void> {
     const deadline = Date.now() + SSH_RECOVERY_TIMEOUT_MS;
@@ -927,13 +971,17 @@ export class AppServerClient {
     this.attachTransport(replacement);
     await request(Method.Initialize, init);
     const snapshots: Array<{ threadId: string; turn: RecoveredTurn; observed: ObservedTurn }> = [];
-    for (const threadId of threadIds) {
+    let outstandingInteraction = false;
+    for (const threadId of recovery.ownedThreads) {
       const { thread } = await request<{
         thread: { id: string; status: { type: string; activeFlags?: string[] } };
       }>(Method.ThreadResume, { threadId, excludeTurns: true });
-      if (thread.id !== threadId || !['active', 'idle'].includes(thread.status.type) ||
-          thread.status.activeFlags?.length) {
-        throw new Error('SSH recovery could not prove thread identity or has an outstanding interaction');
+      if (thread.id !== threadId || !['active', 'idle'].includes(thread.status.type)) {
+        throw new Error('SSH recovery could not prove thread identity');
+      }
+      outstandingInteraction ||= Boolean(thread.status.activeFlags?.length);
+      if (outstandingInteraction && recovery.interrupts.size === 0) {
+        throw new Error('SSH recovery found an outstanding interaction');
       }
       const observed = this.activeTurns.get(threadId);
       if (!observed) continue;
@@ -949,8 +997,33 @@ export class AppServerClient {
       }
       snapshots.push({ threadId, turn, observed });
     }
+    // Map iteration includes intents received while another interrupt is in
+    // flight; the same thread/turn shares one acknowledgement.
+    for (const { params, result } of recovery.interrupts.values()) {
+      const snapshot = snapshots.find(({ threadId }) => threadId === params.threadId);
+      if (snapshot?.turn.id !== params.turnId) {
+        throw new Error('SSH recovery could not confirm the turn to stop');
+      }
+      const alreadyCompleted = () => recovery.messages.some(({ message }) => {
+        if (message.method !== 'turn/completed') return false;
+        const event = message.params as { threadId?: string; turn?: { id: string } } | undefined;
+        return event?.threadId === params.threadId && event.turn?.id === params.turnId;
+      });
+      if (snapshot.turn.status !== 'inProgress' || alreadyCompleted()) {
+        result.resolve({});
+        continue;
+      }
+      try {
+        result.resolve(await request(Method.TurnInterrupt, params));
+      } catch (error) {
+        // The daemon can finish between the snapshot and the interrupt. Only
+        // settle without an acknowledgement when its terminal event proves it.
+        if (!alreadyCompleted()) throw error;
+        result.resolve({});
+      }
+    }
     signal.throwIfAborted();
-    if (recovery.messages.some(({ message }) => {
+    if (outstandingInteraction || recovery.messages.some(({ message }) => {
       if ('id' in message) return true;
       if (message.method !== 'thread/status/changed') return false;
       const params = message.params as { status?: { activeFlags?: string[] } } | undefined;

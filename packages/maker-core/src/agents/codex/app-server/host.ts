@@ -743,6 +743,7 @@ export class AppServerHost {
     const client = new AppServerClient({
       createTransport: () => this.opts.createTransport(this.modelProvider),
       getSubscribedThreadIds: () => [...this.subscribers.keys()],
+      getRecoveryRootThreadId: (threadId) => this.lineageRoots.get(threadId),
       logger: this.opts.logger,
       onTransportError: (err) => {
         // Keep the shared startPromise while recovering this one pre-protocol

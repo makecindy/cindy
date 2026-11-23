@@ -104,9 +104,14 @@ function completeModelRequest(response: ServerResponse) {
 }
 
 it.skipIf(!codexBinary).each([
-  { mode: 'active after reconnect', finishWhileDisconnected: false },
-  { mode: 'finished during disconnect', finishWhileDisconnected: true },
-])('resumes the original turn over a real sshd ($mode)', async ({ finishWhileDisconnected }) => {
+  'active after reconnect',
+  'finished during disconnect',
+  'first SSH reconnect fails',
+  'stop requested during disconnect',
+] as const)('recovers the original turn over a real sshd (%s)', async (mode) => {
+  const finishWhileDisconnected = mode === 'finished during disconnect';
+  const firstReconnectFails = mode === 'first SSH reconnect fails';
+  const stopWhileDisconnected = mode === 'stop requested during disconnect';
   // A short path also fits macOS's Unix-domain socket path limit.
   const root = await mkdtemp('/tmp/cindy-ssh-e2e-');
   const home = join(root, 'codex-home');
@@ -254,7 +259,17 @@ it.skipIf(!codexBinary).each([
     for (const active of sockets) active.destroy();
     await waitFor('SSH reconnecting', () => statuses.includes('reconnecting') || undefined);
     if (finishWhileDisconnected) completeModelRequest(response);
-    await delay(750);
+    let stop: Promise<{ error?: unknown }> | undefined;
+    if (stopWhileDisconnected) {
+      // Capture both outcomes immediately so an early rejection cannot become
+      // an unhandled promise while the fixture waits for the SSH reconnect.
+      stop = client.request('turn/interrupt', { threadId, turnId: turn.id }).then(() => ({}), (error) => ({ error }));
+    }
+    if (firstReconnectFails) {
+      await waitFor('the first SSH reconnect to fail', () => statuses.includes('failed') || undefined);
+    } else {
+      await delay(750);
+    }
     offline = false;
     await waitFor('SSH ready again', () => statuses.filter((status) => status === 'ready').length === 2 || undefined);
     expect(acceptedConnections).toBe(2);
@@ -264,14 +279,20 @@ it.skipIf(!codexBinary).each([
       return logs.includes('Codex SSH transport recovered') || undefined;
     });
     expect(failure).toBeUndefined();
-    if (finishWhileDisconnected) expect(completed).toHaveLength(1);
-    else {
+    if (stopWhileDisconnected) {
+      expect(await stop).toEqual({});
+    } else if (finishWhileDisconnected) {
+      expect(completed).toHaveLength(1);
+    } else {
       expect(completed).toHaveLength(0);
       completeModelRequest(response);
     }
     await waitFor('original turn completion', () => completed[0]);
-    expect(completed).toEqual([{ threadId, turn: expect.objectContaining({ id: turn.id, status: 'completed' }) }]);
-    expect(finalMessages).toEqual([output]);
+    expect(completed).toEqual([{
+      threadId,
+      turn: expect.objectContaining({ id: turn.id, status: stopWhileDisconnected ? 'interrupted' : 'completed' }),
+    }]);
+    expect(finalMessages).toEqual(stopWhileDisconnected ? [] : [output]);
     expect(modelRequests).toHaveLength(1);
     expect(daemon.child.exitCode).toBeNull();
   } catch (error) {

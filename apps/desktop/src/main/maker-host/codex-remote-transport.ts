@@ -561,7 +561,9 @@ exec "$CODEX" "$@"
         const abort = () => settle(new Error('SSH recovery cancelled'));
         const check = (snapshot: ReturnType<RemoteHost['snapshot']>) => {
           if (snapshot.status === 'ready' && snapshot.statusChangedAt > previousReadyAt) settle();
-          else if (snapshot.status === 'disconnected' || snapshot.status === 'failed') {
+          // RemoteHost also emits failed between automatic attempts. The
+          // caller's recovery deadline covers exhausted and permanent failures.
+          else if (snapshot.status === 'disconnected') {
             settle(new Error('SSH host did not recover'));
           }
         };

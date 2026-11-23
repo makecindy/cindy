@@ -809,21 +809,28 @@ describe('AppServerClient SSH recovery', () => {
 
     async writeLine(line: string): Promise<void> {
       await super.writeLine(line);
-      const { id, method } = JSON.parse(line) as { id?: number; method?: string };
+      const { id, method, params } = JSON.parse(line) as { id?: number; method?: string; params?: { threadId: string } };
       if (id !== undefined && method && Object.hasOwn(this.results, method)) {
-        this.emitLine({ id, result: this.results[method] });
+        const result = this.results[method];
+        this.emitLine({ id, result: typeof result === 'function' ? result(params) : result });
       }
     }
   }
 
-  async function startCase(snapshotStatus: 'inProgress' | 'completed', waitingOnApproval = false) {
+  async function startCase(
+    snapshotStatus: 'inProgress' | 'completed',
+    { waitingOnApproval = false, withChild = false }: { waitingOnApproval?: boolean; withChild?: boolean } = {},
+  ) {
     const initialize = { userAgent: 'test', platformFamily: 'unix', platformOs: 'linux', codexHome: '/tmp' };
     const replacement = new RespondingTransport({
       [Method.Initialize]: initialize,
-      [Method.ThreadResume]: {
-        thread: { id: threadId, status: { type: 'active', activeFlags: waitingOnApproval ? ['waitingOnApproval'] : [] } },
-      },
-      [Method.ThreadTurnsList]: { data: [{ id: turnId, status: snapshotStatus, items: [item] }] },
+      [Method.ThreadResume]: (params: { threadId: string }) => ({
+        thread: { id: params.threadId, status: { type: 'active', activeFlags: waitingOnApproval ? ['waitingOnApproval'] : [] } },
+      }),
+      [Method.ThreadTurnsList]: (params: { threadId: string }) => ({
+        data: [{ id: params.threadId === threadId ? turnId : 'child-turn', status: snapshotStatus, items: [item] }],
+      }),
+      [Method.TurnInterrupt]: {},
     });
     const transport = Object.assign(
       new RespondingTransport({ [Method.Initialize]: initialize, [Method.TurnStart]: { turn: { id: turnId } } }),
@@ -833,15 +840,24 @@ describe('AppServerClient SSH recovery', () => {
     const client = new AppServerClient({
       createTransport: () => transport, logger, onTransportError: fail,
       getSubscribedThreadIds: () => [threadId],
+      getRecoveryRootThreadId: (id) => withChild && id === 'owned-child' ? threadId : undefined,
     });
     const received: string[] = [];
+    const completedThreads: string[] = [];
     client.onNotification('item/completed', () => { received.push('item'); });
-    client.onNotification('turn/completed', () => { received.push('turn'); });
+    client.onNotification('turn/completed', (params) => {
+      completedThreads.push((params as { threadId: string }).threadId);
+      received.push('turn');
+    });
     client.start();
     await client.initialize({ name: 'test', version: '1' });
     await client.request(Method.TurnStart, { threadId, input: [] });
     transport.emitLine({ method: 'turn/started', params: { threadId, turn: { id: turnId } } });
-    return { client, transport, replacement, fail, received };
+    if (withChild) {
+      transport.emitLine({ method: 'turn/started', params: { threadId: 'owned-child', turn: { id: 'child-turn' } } });
+      transport.emitLine({ method: 'turn/started', params: { threadId: 'unowned-thread', turn: { id: 'unowned-turn' } } });
+    }
+    return { client, transport, replacement, fail, received, completedThreads };
   }
 
   it.each(['inProgress', 'completed'] as const)('preserves the original %s turn without replaying input', async (status) => {
@@ -864,12 +880,58 @@ describe('AppServerClient SSH recovery', () => {
   });
 
   it('uses the existing terminal error when the resumed thread is awaiting approval', async () => {
-    const { client, transport, replacement, fail, received } = await startCase('inProgress', true);
+    const { client, transport, replacement, fail, received } = await startCase('inProgress', { waitingOnApproval: true });
     try {
       transport.emitClose({ reason: 'proxy channel closed (exit code=null)', reconnectable: true });
       await vi.waitFor(() => expect(fail).toHaveBeenCalledTimes(1));
       expect(received).toEqual([]);
       expect(replacement.lines.map((line) => JSON.parse(line).method)).toEqual([Method.Initialize, Method.ThreadResume]);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it.each(['inProgress', 'completed'] as const)('settles the user Stop for the original %s turn', async (status) => {
+    const { client, transport, replacement, fail, received } = await startCase(status);
+    const deliveryOrder: string[] = [];
+    const write = replacement.writeLine.bind(replacement);
+    replacement.writeLine = async (line) => {
+      if (JSON.parse(line).method === Method.TurnInterrupt) deliveryOrder.push('interrupt sent');
+      await write(line);
+    };
+    client.onNotification('item/completed', () => { deliveryOrder.push('item delivered'); });
+    try {
+      transport.emitClose({ reason: 'SSH dropped', reconnectable: true });
+      const stop = client.request(Method.TurnInterrupt, { threadId, turnId });
+      const duplicateStop = client.request(Method.TurnInterrupt, { threadId, turnId });
+      await Promise.all([stop, duplicateStop]);
+      expect(stop).toBe(duplicateStop);
+      const writes = replacement.lines
+        .map((line) => JSON.parse(line))
+        .filter(({ method }) => method === Method.TurnInterrupt);
+      if (status === 'inProgress') {
+        expect(writes).toEqual([expect.objectContaining({ params: { threadId, turnId } })]);
+      } else {
+        expect(writes).toEqual([]);
+        expect(received).toContain('turn');
+      }
+      expect(deliveryOrder).toEqual(status === 'inProgress' ? ['interrupt sent', 'item delivered'] : ['item delivered']);
+      expect(fail).not.toHaveBeenCalled();
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('reattaches owned descendants and skips unrelated native threads', async () => {
+    const { client, transport, replacement, fail, completedThreads } = await startCase('completed', { withChild: true });
+    try {
+      transport.emitClose({ reason: 'SSH dropped', reconnectable: true });
+      await vi.waitFor(() => expect(completedThreads).toEqual([threadId, 'owned-child']));
+      const resumed = replacement.lines.map((line) => JSON.parse(line))
+        .filter(({ method }) => method === Method.ThreadResume)
+        .map(({ params }) => params.threadId);
+      expect(resumed).toEqual([threadId, 'owned-child']);
+      expect(fail).not.toHaveBeenCalled();
     } finally {
       await client.close();
     }
