@@ -4788,7 +4788,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   resetLogUploadCrashAuto: (): Promise<LogUploadSettingsPayload> =>
     ipcRenderer.invoke('log-upload:reset-crash-auto'),
   /** 手动上传一次。失败以 IPC 错误码返回(LOG_UPLOAD_* / PRIVACY_CONSENT_REQUIRED)。 */
-  uploadLogsNow: (): Promise<LogUploadResult> => ipcRenderer.invoke('log-upload:upload-now'),
+  uploadLogsNow: (consentVersion?: string): Promise<LogUploadResult> =>
+    ipcRenderer.invoke('log-upload:upload-now', consentVersion),
   onLogUploadSettingsChange: (
     callback: (payload: LogUploadSettingsPayload) => void,
   ): (() => void) => {

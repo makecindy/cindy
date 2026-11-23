@@ -36,6 +36,8 @@ vi.mock('@/contexts/LoginHandoffContext', () => ({ useLoginHandoff: () => mocks.
 vi.mock('@/lib/toast', () => ({ toast: { error: mocks.error, success: mocks.success } }));
 
 import { StartupLogSupport } from '../StartupLogSupport';
+import { UploadLogsRow } from '../LogSupportActions';
+import { LEGAL_TERMS_VERSION } from '../../../../shared/legalTermsVersion';
 import { parseStartupGateStallSnapshot } from '../../../../shared/startupGateStall';
 
 beforeAll(async () => {
@@ -100,11 +102,12 @@ describe('startup log support', () => {
     expect(mocks.uploadLogsNow).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { targetConfigured: false, privacyConsentAccepted: true },
-    { targetConfigured: true, privacyConsentAccepted: false },
-  ])('keeps local logs usable with upload unavailable: %o', async (settings) => {
-    mocks.getLogUploadSettings.mockResolvedValue({ ...settings, manualUploadAvailable: false });
+  it('keeps local logs usable when the upload target is unavailable', async () => {
+    mocks.getLogUploadSettings.mockResolvedValue({
+      targetConfigured: false,
+      privacyConsentAccepted: true,
+      manualUploadAvailable: false,
+    });
     openSupport();
     await waitFor(() => expect(mocks.getLogUploadSettings).toHaveBeenCalledOnce());
     expect(
@@ -118,6 +121,21 @@ describe('startup log support', () => {
     expect(mocks.openLogsDir).toHaveBeenCalledOnce();
   });
 
+  it('offers one-click consent and upload in About when consent is missing', async () => {
+    mocks.getLogUploadSettings.mockResolvedValue({
+      targetConfigured: true,
+      privacyConsentAccepted: false,
+      manualUploadAvailable: true,
+    });
+    render(<UploadLogsRow />);
+    const upload = await screen.findByRole('button', { name: '同意隐私协议并上传' });
+    expect((upload as HTMLButtonElement).disabled).toBe(false);
+    expect(mocks.uploadLogsNow).not.toHaveBeenCalled();
+    fireEvent.click(upload);
+    expect((await screen.findByRole('status')).textContent).toContain('ABCD-EFGH');
+    expect(mocks.uploadLogsNow).toHaveBeenCalledExactlyOnceWith(LEGAL_TERMS_VERSION);
+  });
+
   it('shows a selectable upload code even when clipboard copying fails', async () => {
     mocks.writeText.mockRejectedValue(new Error('clipboard unavailable'));
     openSupport();
@@ -126,6 +144,7 @@ describe('startup log support', () => {
     fireEvent.click(upload);
     await waitFor(() => expect(screen.getByRole('status').textContent).toContain('ABCD-EFGH'));
     expect(mocks.error).not.toHaveBeenCalled();
+    expect(mocks.uploadLogsNow).toHaveBeenCalledExactlyOnceWith();
   });
 
   it('reports an upload error and leaves the local log action available', async () => {

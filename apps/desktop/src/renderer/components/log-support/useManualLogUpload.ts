@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 
 import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
+import { LEGAL_TERMS_VERSION } from '../../../shared/legalTermsVersion';
 
 /** Owned by the surface host so dismissing its dialog does not discard an upload or its code. */
 export function useManualLogUpload() {
@@ -11,13 +12,15 @@ export function useManualLogUpload() {
   const inFlight = useRef(false);
   const [uploadCode, setUploadCode] = useState<string | null>(null);
 
-  const handleUpload = async () => {
+  const handleUpload = async (needsConsent: boolean) => {
     if (inFlight.current) return;
     inFlight.current = true;
     setUploadCode(null);
     setUploading(true);
     try {
-      const result = await window.electronAPI.uploadLogsNow();
+      const result = needsConsent
+        ? await window.electronAPI.uploadLogsNow(LEGAL_TERMS_VERSION)
+        : await window.electronAPI.uploadLogsNow();
       setUploadCode(result.uploadCode);
       toast.success(t('logSupport.uploaded', { code: result.uploadCode }));
       // 编号是这次上报唯一的可报凭据,顺手放进剪贴板,省得用户从 toast 里抄。

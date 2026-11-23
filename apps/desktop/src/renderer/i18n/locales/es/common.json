@@ -2844,7 +2844,8 @@
         "errorBusy": "Ya hay una carga en progreso, espera",
         "errorFailed": "Error al cargar el registro. Comprueba tu red y vuelve a intentarlo.",
         "unavailableNotConfigured": "La carga de registros no está configurada en esta compilación.",
-        "unavailableNoConsent": "Primero debes aceptar la Política de privacidad."
+        "unavailableNoConsent": "Al subir los registros, aceptas la <policy>Política de privacidad</policy>.",
+        "consentAndUploadButton": "Aceptar la Política de privacidad y subir"
       },
       "openLogsDirError": "No se pudo abrir el directorio de registros",
       "autoUpdateLabel": "Instalar actualizaciones mientras está inactivo",

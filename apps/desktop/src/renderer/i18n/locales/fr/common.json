@@ -2844,7 +2844,8 @@
         "errorBusy": "Un envoi est déjà en cours, veuillez patienter",
         "errorFailed": "Échec de l'envoi des journaux. Vérifiez votre connexion réseau et réessayez",
         "unavailableNotConfigured": "L'envoi des journaux n'est pas configuré dans cette version.",
-        "unavailableNoConsent": "Vous devez d'abord accepter la Politique de confidentialité."
+        "unavailableNoConsent": "En envoyant les journaux, vous acceptez la <policy>politique de confidentialité</policy>.",
+        "consentAndUploadButton": "Accepter la politique de confidentialité et envoyer"
       },
       "openLogsDirError": "Impossible d'ouvrir le répertoire des journaux",
       "autoUpdateLabel": "Installer les mises à jour en période d'inactivité",

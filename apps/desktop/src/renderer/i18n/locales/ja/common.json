@@ -2776,7 +2776,8 @@
         "errorBusy": "すでにアップロードが進行中です。しばらくお待ちください",
         "errorFailed": "ログのアップロードに失敗しました。ネットワークを確認して再試行してください",
         "unavailableNotConfigured": "このビルドではログアップロードが設定されていません。",
-        "unavailableNoConsent": "先に「プライバシーポリシー」への同意が必要です。"
+        "unavailableNoConsent": "アップロードすると<policy>プライバシーポリシー</policy>に同意したことになります。",
+        "consentAndUploadButton": "プライバシーポリシーに同意してアップロード"
       },
       "openLogsDirError": "ログディレクトリを開けませんでした",
       "autoUpdateLabel": "アイドル時に更新をインストール",

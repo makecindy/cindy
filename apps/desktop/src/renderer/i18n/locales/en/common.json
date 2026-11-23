@@ -2806,7 +2806,8 @@
         "errorBusy": "An upload is already in progress. Wait for it to finish.",
         "errorFailed": "Log upload failed. Check your network and try again",
         "unavailableNotConfigured": "Log upload is not configured in this build.",
-        "unavailableNoConsent": "You need to accept the Privacy Policy first."
+        "unavailableNoConsent": "By uploading, you agree to the <policy>Privacy Policy</policy>.",
+        "consentAndUploadButton": "Accept Privacy Policy and upload"
       },
       "openLogsDirError": "Failed to open logs directory",
       "autoUpdateLabel": "Install updates while idle",

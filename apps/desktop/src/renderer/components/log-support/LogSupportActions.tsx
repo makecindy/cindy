@@ -1,10 +1,11 @@
-import { useTranslation } from 'react-i18next';
+import { Trans, useTranslation } from 'react-i18next';
 import { FolderOpen, Upload } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { useLogUploadSettings } from '@/hooks/useLogUploadSettings';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
+import { LEGAL_LINKS } from '../../../shared/legalLinks';
 import { useManualLogUpload } from './useManualLogUpload';
 
 interface LogSupportRowProps {
@@ -85,11 +86,16 @@ export function UploadLogsActionRow({
   const { state } = useLogUploadSettings();
   const { uploading, uploadCode, handleUpload } = upload;
 
-  const unavailableReason = !state.targetConfigured
-    ? t('settings.about.logUpload.unavailableNotConfigured')
-    : !state.privacyConsentAccepted
-      ? t('settings.about.logUpload.unavailableNoConsent')
-      : null;
+  const needsConsent = state.targetConfigured && !state.privacyConsentAccepted;
+  const openPrivacyPolicy = async () => {
+    try {
+      const result = await window.electronAPI.openExternal(LEGAL_LINKS.privacyPolicy);
+      if (result.success) return;
+    } catch {
+      // Use the same localized feedback as the legal links in About.
+    }
+    toast.error(t('settings.about.legal.openFailed'));
+  };
   const descriptionClassName = inDialog
     ? 'text-12 leading-normal text-[var(--confirm-desc)]'
     : 'text-12 leading-[1.4] text-[var(--text-secondary)]';
@@ -136,23 +142,46 @@ export function UploadLogsActionRow({
               {t('logSupport.uploaded', { code: uploadCode })}
             </p>
           )}
-          {unavailableReason !== null && (
-            <p className={descriptionClassName}>{unavailableReason}</p>
+          {!state.targetConfigured && (
+            <p className={descriptionClassName}>
+              {t('settings.about.logUpload.unavailableNotConfigured')}
+            </p>
+          )}
+          {needsConsent && (
+            <p className={descriptionClassName}>
+              <Trans
+                i18nKey="settings.about.logUpload.unavailableNoConsent"
+                components={{
+                  policy: (
+                    <a
+                      href={LEGAL_LINKS.privacyPolicy}
+                      className="underline underline-offset-2"
+                      onClick={(event) => {
+                        event.preventDefault();
+                        void openPrivacyPolicy();
+                      }}
+                    />
+                  ),
+                }}
+              />
+            </p>
           )}
         </div>
         <Button
           variant="secondary"
           size="sm"
           type="button"
-          onClick={() => void handleUpload()}
-          disabled={!state.manualUploadAvailable || uploading || state.loading}
+          onClick={() => void handleUpload(needsConsent)}
+          disabled={(!state.manualUploadAvailable && !needsConsent) || uploading || state.loading}
           loading={uploading}
           palette={inDialog ? 'confirmation' : 'default'}
           className={inDialog ? 'px-3' : '-mr-1 px-2.5'}
           title={t('settings.about.logUpload.uploadTooltip')}
         >
           {!inDialog && <Upload size={13} />}
-          {t('settings.about.logUpload.uploadButton')}
+          {t(needsConsent
+            ? 'settings.about.logUpload.consentAndUploadButton'
+            : 'settings.about.logUpload.uploadButton')}
         </Button>
       </div>
     </div>

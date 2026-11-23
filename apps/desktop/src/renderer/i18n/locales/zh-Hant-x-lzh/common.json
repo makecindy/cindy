@@ -2776,7 +2776,8 @@
         "errorBusy": "已有一次上呈方行，請稍候",
         "errorFailed": "日誌上呈未成，請察網路後再試",
         "unavailableNotConfigured": "此版未設日誌上呈。",
-        "unavailableNoConsent": "須先允《隱私政策》。"
+        "unavailableNoConsent": "上傳即允<policy>《隱私政策》</policy>。",
+        "consentAndUploadButton": "允隱私之約並傳"
       },
       "openLogsDirError": "日誌目錄未能啟",
       "autoUpdateLabel": "閒時自裝更新",

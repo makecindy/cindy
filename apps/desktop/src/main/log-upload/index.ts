@@ -21,6 +21,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion';
+import { LEGAL_TERMS_VERSION } from '../../shared/legalTermsVersion';
 import {
   LOG_UPLOAD_SETTINGS_CHANGE_CHANNEL,
   type LogUploadReason,
@@ -171,9 +172,9 @@ function buildMeta(args: {
   };
 }
 
-function runnerDeps() {
+function runnerDeps(gate = gateDeps) {
   return {
-    gate: gateDeps,
+    gate,
     resolveTarget: currentTarget,
     collect: (request: { reason: LogUploadReason; anchors: number[] }) =>
       collectLogsFromDisk(request),
@@ -415,14 +416,28 @@ export function initLogUploadService(): void {
     return logUploadSettingsPayload();
   });
 
-  ipcMain.handle('log-upload:upload-now', async (event): Promise<LogUploadResult> => {
+  ipcMain.handle('log-upload:upload-now', async (event, consentVersion: unknown): Promise<LogUploadResult> => {
     assertTrustedAppRendererEvent(event);
+    if (consentVersion !== undefined && consentVersion !== LEGAL_TERMS_VERSION) {
+      return throwIpcError('PRIVACY_CONSENT_REQUIRED', 'current privacy policy consent is required');
+    }
     if (manualUploadInFlight) {
       return throwIpcError('LOG_UPLOAD_BUSY', 'a log upload is already in progress');
     }
     manualUploadInFlight = true;
     try {
-      const outcome = await runUpload(runnerDeps(), {
+      // Bind explicit consent to this request. Still read the existing record so a
+      // storage error remains unknown, and never write the analytics or crash settings.
+      const gate = consentVersion === LEGAL_TERMS_VERSION
+        ? {
+            ...gateDeps,
+            readPrivacyConsentAccepted: () => {
+              gateDeps.readPrivacyConsentAccepted();
+              return true;
+            },
+          }
+        : gateDeps;
+      const outcome = await runUpload(runnerDeps(gate), {
         reason: 'manual',
         anchors: [],
         claimed: [],
