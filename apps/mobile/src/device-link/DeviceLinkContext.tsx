@@ -620,9 +620,6 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<DeviceLinkStatus>('stopped');
   const [sharedTaskAvailable, setSharedTaskAvailable] = useState<boolean | undefined>();
   const [connectionIssue, setConnectionIssue] = useState<DeviceLinkConnectionIssue | null>(null);
-  // Bumped after 「重新加入」 (deviceRejoin.ts): a 4410 leaves the shared client stopped on 'device-removed' and connectNow ignores
-  // it, so this phone's own connection is rebuilt on the same path as an account change, without clearing account data.
-  const [connectionRebuild, setConnectionRebuild] = useState(0);
   const [presenceVersion, setPresenceVersion] = useState(0);
   const [connectionEpoch, setConnectionEpoch] = useState(0);
   // status callback 中先同步推进 ref，再触发 rehydrate；React state 的下一次 render
@@ -1276,7 +1273,10 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
           await ensureMobileAgentNetIdentity({ deviceId, deviceName: mobileDeviceName(), getAccessToken, rejoin: true });
         },
         clearAgentNetRefusal: clearMobileAgentNetIdentityRefusal,
-        restartConnection: () => { if (isMobileAuthOwnerCurrent(owner)) setConnectionRebuild(generation => generation + 1); },
+        // A 4410 stopped only the main connection (connectNow ignores it while 'device-removed'). start() brings that one
+        // back and is a no-op for the connections of tasks shared from other accounts, which keep running (2026-11-23 review:
+        // rebuilding the whole provider effect would close them too).
+        restartConnection: () => { if (isMobileAuthOwnerCurrent(owner)) routedRef.current?.start(); },
       });
     });
   }, [auth.isAuthenticated, auth.deviceId, auth.getAccessToken, auth.apiFetch]);
@@ -2216,7 +2216,6 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     auth.isAuthenticated,
     relayRouteGeneration,
     agentNetPreferences.generation,
-    connectionRebuild,
     clearPerAccountDeviceLinkState,
     clearOnePresenceWipeTimer,
     clearAllPresenceWipeTimers,

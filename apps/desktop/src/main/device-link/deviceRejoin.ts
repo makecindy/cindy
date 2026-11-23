@@ -20,8 +20,13 @@ export interface DeviceRejoinPorts {
   rejoinAgentNet(): Promise<'rejoined' | 'skipped'>;
   /** 「仅使用 Agent-Net」：Agent-Net 回不来就整台连不上。 */
   agentNetRequired(): boolean;
-  /** 重建本机自己的主连接（清掉「已移除」状态后重新连）。 */
+  /** 重建本机自己的连接（清掉「已移除」状态后重新连）。 */
   restartConnection(): void;
+  /**
+   * 点击时的账号与中转是否仍是当前的；变了就抛错。每个等待点之后都核对：中途切了账号，后面的入网与重连不能落到
+   * 新账号上（2026-11-23 review）。
+   */
+  assertCurrent(): void;
   warn(message: string, error?: unknown): void;
 }
 
@@ -32,18 +37,22 @@ export async function rejoinRemovedDevice(ports: DeviceRejoinPorts): Promise<{ a
   try {
     await ports.officialFetch(DEVICE_REJOIN_PATH, { method: 'POST', body: {}, timeoutMs: 10_000 });
   } catch (error) {
+    ports.assertCurrent();
     // 还没有这个接口的服务端：照旧只能退出后重新登录。
     if (error instanceof ServerApiError && error.statusCode === 404) throw new Error('DEVICE_REJOIN_UNSUPPORTED');
     throw error;
   }
+  ports.assertCurrent();
   let agentNet: AgentNetRejoinOutcome;
   try {
     agentNet = await ports.rejoinAgentNet();
   } catch (error) {
+    ports.assertCurrent();
     // Device Link 已经回来了：不是「仅使用 Agent-Net」时照常走 Device Link，下次重新加入再试 Agent-Net。
     ports.warn('agent-net rejoin failed; this device keeps its Device Link registration', error);
     agentNet = 'failed';
   }
+  ports.assertCurrent();
   ports.restartConnection();
   if (agentNet === 'failed' && ports.agentNetRequired()) throw new Error('AGENT_NET_REJOIN_FAILED');
   return { agentNet };

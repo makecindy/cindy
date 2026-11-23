@@ -674,6 +674,9 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
         // Same rule as the server repository's copy of this kernel (official enrollment).
         const rejoining = body.rejoin === true && !!existing && existing.revokedAt !== null;
         if (existing && !rejoining && (existing.revokedAt !== null || existing.certificate.signingKey !== c.signingKey || existing.certificate.transportKey !== c.transportKey)) return fail(403, 'DEVICE_REENROLLMENT_REQUIRES_APPROVAL');
+        // notBefore voids the old certificates only when this one is strictly newer. Replicas sign with their own
+        // clocks: a rejoin signed by a slower one must not let a pre-removal certificate pass again. The client retries.
+        if (rejoining && existing && c.issuedAt <= existing.certificate.issuedAt) return fail(409, 'CERTIFICATE_NOT_NEWER');
         if (!existing && Object.keys(n.devices).length >= 256) return fail(409, 'DEVICE_LIMIT');
         n.devices[c.deviceId] = { ...existing, certificate: c, name: existing?.name ?? name(enrollment.deviceName),
           reportedName: name(enrollment.deviceName), ...(!existing ? { customName: null } : {}), revokedAt: null,

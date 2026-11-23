@@ -216,14 +216,14 @@ import {
 } from './mobileNotify';
 import { createSubscriptionReplayScheduler, isPermanentSubscriptionReplayError } from './subscriptionReplayScheduler';
 import { getNotificationImageLabel, getSessionNotificationBody } from '../sessionNotificationCopy';
-import { deviceLinkApiFetch, officialDeviceLinkApiBase, officialDeviceLinkApiFetch, resolveDeviceLinkApiBase } from './deviceLinkApi.desktop.js';
+import { deviceLinkApiFetch, officialDeviceLinkApiBase, resolveDeviceLinkApiBase } from './deviceLinkApi.desktop.js';
 import { rejoinRemovedDevice, type AgentNetRejoinOutcome } from './deviceRejoin.js';
 import { activeSelfHostedRelay } from './selfHostedRelayRouting.js';
 import { currentRelayFrameAuth } from './selfHostedRelayFrameAuth.js';
 import { installAgentNetMediaRouting } from './agentNetMedia.js';
 import { bindAgentNetSharing, stopAgentNetSharing, agentNetSharingRoute } from './agentNetSharing.js';
 import { installAgentNetSharingPolicy } from './agentNetSharingPolicy.js';
-import { isAgentNetActive, agentNetAllowsLegacy, agentNetRequiresEncryption, createAgentNetOrLegacySocket, noteAgentNetIdentityRefused, rejoinOfficialAgentNet, agentNetShouldUseLegacyPeer, agentNetShouldProbeLegacyPeer, agentNetPeerSnapshot, agentNetPeerRoutes,
+import { isAgentNetActive, agentNetAllowsLegacy, agentNetRequiresEncryption, createAgentNetOrLegacySocket, noteAgentNetIdentityRefused, rejoinOfficialAgentNet, agentNetSelectionKey, agentNetShouldUseLegacyPeer, agentNetShouldProbeLegacyPeer, agentNetPeerSnapshot, agentNetPeerRoutes,
   agentNetTransportAttestation, verifyAgentNetTransportAttestation, agentNetPrefersPrimary, useAgentNetSessions, agentNetSession,
   agentNetPeerRoute, agentNetRelayStalled, agentNetPeerConnectedAt, connectAgentNetSessionPeer, agentNetPeerState, agentNetNotifyCoverage, agentNetListedPhones, agentNetNetworkChanged, agentNetRelayConnected, onAgentNetRelayChange, onAgentNetPathChange, agentNetRelayRoute } from './agentNetRuntime.js';
 import { AgentNetSessionLinks, agentNetSessionLane, outboundOnSession, routeSessionPeers, type PeerLinks } from '@cindy/agent-net';
@@ -2097,14 +2097,24 @@ function connectionIssueForRenderer(issue: ConnectionIssuePayload | null): Rende
   return issue?.kind === 'device-removed' && !activeSelfHostedRelay() ? { ...issue, rejoinable: true } : issue;
 }
 
-/** 设置页本机卡片的「重新加入」：这台设备被移除后，由用户在这台设备上让它回来（deviceRejoin.ts）。 */
+/**
+ * 设置页本机卡片的「重新加入」：这台设备被移除后，由用户在这台设备上让它回来（deviceRejoin.ts）。
+ * 账号与中转按点击时的为准：每一跳请求发出前、每个等待点之后都核对，中途切号就整个停下（2026-11-23 review）。
+ * 重连沿用 Agent-Net 拒绝身份时的同一条重建（restartDeviceLinkForRelayChange）：主连接可能从 Device Link 换回 Agent-Net。
+ */
 export function rejoinThisDevice(): Promise<{ agentNet: AgentNetRejoinOutcome }> {
+  const scope = activeOwnerScopeKey(), selection = agentNetSelectionKey();
+  const assertCurrent = () => {
+    if (activeOwnerScopeKey() !== scope || isAppSessionBoundaryPending() || agentNetSelectionKey() !== selection
+      || activeSelfHostedRelay()) throw new Error('DEVICE_REJOIN_SCOPE_CHANGED');
+  };
   return rejoinRemovedDevice({
     selfHostedRelaySelected: () => activeSelfHostedRelay() !== null,
-    officialFetch: (path, opts) => officialDeviceLinkApiFetch(path, opts),
+    officialFetch: (path, opts) => serverApiFetch(path, { ...opts, baseUrl: () => { assertCurrent(); return officialDeviceLinkApiBase(); } }),
     rejoinAgentNet: () => rejoinOfficialAgentNet(),
     agentNetRequired: () => agentNetRequiresEncryption(),
     restartConnection: () => restartDeviceLinkForRelayChange(),
+    assertCurrent,
     warn: (message, error) => log.warn(message, error),
   });
 }

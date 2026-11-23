@@ -21,6 +21,7 @@ function ports(overrides: Partial<DeviceRejoinPorts> = {}) {
     rejoinAgentNet: vi.fn(async () => { calls.push('agent-net'); return 'rejoined' as const; }),
     agentNetRequired: () => false,
     restartConnection: vi.fn(() => { calls.push('restart'); }),
+    assertCurrent: () => undefined,
     warn: vi.fn(),
     ...overrides,
   };
@@ -53,6 +54,18 @@ describe('rejoinRemovedDevice', () => {
     if (typeof outcome === 'string') await expect(result).rejects.toThrow(outcome);
     else await expect(result).resolves.toEqual(outcome);
     expect(calls).toEqual(['device-link ' + DEVICE_REJOIN_PATH, 'restart']);
+  });
+
+  // Review (Greptile P1, 2026-11-23): switching accounts while the Device Link request is in flight must not lift the
+  // removal for, or reconnect, the account that is current afterwards.
+  it('stops before Agent-Net and the reconnection when the account changes during the request', async () => {
+    let switched = false;
+    const { value, calls } = ports({
+      officialFetch: vi.fn(async () => { calls.push('device-link'); switched = true; return {}; }),
+      assertCurrent: () => { if (switched) throw new Error('DEVICE_REJOIN_SCOPE_CHANGED'); },
+    });
+    await expect(rejoinRemovedDevice(value)).rejects.toThrow('DEVICE_REJOIN_SCOPE_CHANGED');
+    expect(calls).toEqual(['device-link']);
   });
 
   it('does not touch the official service while a self-hosted relay is selected', async () => {

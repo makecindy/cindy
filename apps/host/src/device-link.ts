@@ -894,8 +894,11 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
           rejoinAgentNet: async () => (agentNet ? agentNet.rejoin() : 'skipped'),
           // A refused Agent-Net identity always falls back to the Device Link relay on this launcher (agentNetNode.ts `refusedFor`).
           agentNetRequired: () => false,
-          // Stopping clears "removed" (the client stopped itself on 4410); sync starts it again only while remote control is on.
-          restartConnection: () => { client.stop(); sync(); },
+          // Only the main connection stopped itself on 4410; sync starts it again while remote control is on, and leaves
+          // the connections of tasks shared from other accounts running (start is a no-op for those).
+          restartConnection: () => sync(),
+          // The Host's account may change while the requests are in flight: stop before touching the next one.
+          assertCurrent,
           warn: (message, error) => log.warn(`${message}: ${error instanceof Error ? error.message : String(error)}`),
         });
         return { ...this.state(), rejoin: { result: 'rejoined' as const, agentNet: agentNetOutcome,

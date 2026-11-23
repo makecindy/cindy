@@ -29,16 +29,19 @@ Agent-Net refuses this identity」（被拒后改走中转、签「没开」；�
 设备也能自己回来，移除只起到踢下线的作用。只能让自己这台回来，不能替别的设备恢复。只用于官方网络。
 - **线上格式（全部是新增，旧端不变）。** Device Link REST 新增 `POST /api/device-link/rejoin`（body `{}`，只认账号令牌里的设备号，清掉这台
   的删除记录，幂等，回 `{ deviceId, rejoined: true }`）；官方 Agent-Net 入网 `POST /api/agent-net/enroll` 的 body 可带 `rejoin: true`，
-  这台已被撤销时用这次的钥匙重新发证书并以 `notBefore` 作废移除前的证书，自定义名不变。没带 `rejoin` 的入网照旧
+  这台已被撤销时用这次的钥匙重新发证书并以 `notBefore` 作废移除前的证书，自定义名不变；新证书不比移除前的晚（副本时钟偏差）
+  时回 `409 CERTIFICATE_NOT_NEWER`，客户端按 Agent-Net 暂未恢复处理，再点一次即可。没带 `rejoin` 的入网照旧
   `403 DEVICE_REENROLLMENT_REQUIRES_APPROVAL`，所以被移除的设备不会在后台续签时自己回来，旧客户端认的错误码也不变。服务端实现在
   服务端仓 `device-link-server`（路由与 `db.ts` 的 `rejoinDevice`）和 `packages/agent-net-relay`；本仓 `packages/agent-net-relay/src/server.ts`
   的官方入网分支同步了同一规则。
-- **顺序。** 先恢复 Device Link 登记（其他电脑只认列表里的设备），再带 `rejoin` 入网，最后只重建本机自己的主连接
+- **顺序。** 先恢复 Device Link 登记（其他电脑只认列表里的设备），再带 `rejoin` 入网，最后重连本机自己的连接
   （`deviceRejoin.ts`；Desktop `agentNetOfficial.ts` 在 `rejoin` 时不论本地证书是否过期都重新入网，临时失败也不退回被撤销的旧证书）。
-  一次点击各发一次请求，不自动重试、不轮询；只重建本机的连接，不影响其他设备。
+  一次点击各发一次请求，不自动重试、不轮询；只动本机的连接，不影响其他设备（范围见下面「重连的范围」）。
 - **界面。** Desktop 设置页本机卡片在官方网络的「已移除」旁给「重新加入」（main 给连接问题带 `rejoinable`，自建中转不带）；
-  删除确认框改为说明那台设备点「重新加入」即可回来。手机在横幅与首页连接行给同样的按钮（`apps/mobile/src/device-link/deviceRejoin.ts`，
-  重建本机连接走与切换中转相同的路径，不清账号数据）。
+  删除确认框改为说明那台设备点「重新加入」即可回来。手机在横幅与首页连接行给同样的按钮（`apps/mobile/src/device-link/deviceRejoin.ts`）。
+- **重连的范围。** 4410 只停了主连接。手机与 Node Host 用 `start()` 只拉起这条主连接，别的账号分享来的任务连接照常运行
+  （2026-11-23 review）。Desktop 沿用 Agent-Net 拒绝身份时的同一条重建（`restartDeviceLinkForRelayChange`），因为主连接可能
+  从 Device Link 换回 Agent-Net。点击时的账号与中转在每个等待点之后核对，中途切号就整个停下，不替新账号入网或重连。
 - **Node Host。** `cindy-host remote rejoin` 走同一流程（`apps/host/src/device-link.ts` 的 `rejoin` 复用 `rejoinRemovedDevice`；
   `agentNetNode.ts` 的 `rejoin` 不论本地证书是否过期都带 `rejoin: true` 重新入网）。Host 没有自建中转和「仅使用 Agent-Net」，Agent-Net
   回不来时照常走 Device Link。控制通道不传错误原文，结果和提示放在返回的 `rejoin` 里：旧服务端提示用 `cindy-host login` 重新登录；

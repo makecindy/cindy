@@ -566,9 +566,10 @@ describe('independent V2 relay', () => {
   it('lets a removed device rejoin only when it asks to and keeps its certificate from before the removal void', async () => {
     const root = generateKeyPairSync('ed25519').privateKey, rootPublicKey = publicBytes(root);
     const identities: Record<string, Identity> = { first: generateIdentity('first'), phone: generateIdentity('phone') };
+    let signedAt: number | undefined; // a replica whose clock runs behind
     const f = await fixture({ mode: 'official', bootstrap: undefined, enroll: async (req) => {
       const identity = identities[String(req.headers['x-test-device'])];
-      const certificate = issueCertificate(root, { networkId: 'account:one', subject: 'account:one', identity, role: 'owner' });
+      const certificate = issueCertificate(root, { networkId: 'account:one', subject: 'account:one', identity, role: 'owner', now: signedAt });
       return { certificate, rootPublicKey, networkId: certificate.networkId, name: 'Account network', deviceName: identity.deviceId };
     } });
     const enroll = async (device: string, body: Record<string, unknown> = {}) => {
@@ -576,12 +577,19 @@ describe('independent V2 relay', () => {
       return { status: response.status, body: await response.json() as { certificate: ReturnType<typeof issueCertificate>; error?: { code: string } } };
     };
     const first = new AgentNetClient(f.relay.url, identities.first, (await enroll('first')).body.certificate, rootPublicKey);
-    const before = new AgentNetClient(f.relay.url, identities.phone, (await enroll('phone')).body.certificate, rootPublicKey);
+    const beforeCertificate = (await enroll('phone')).body.certificate;
+    const before = new AgentNetClient(f.relay.url, identities.phone, beforeCertificate, rootPublicKey);
     await first.request('PATCH', '/devices/phone', { name: 'My phone' });
     await first.request('DELETE', '/devices/phone');
     await expect(before.directory()).rejects.toMatchObject({ code: 'DEVICE_REVOKED' });
     expect(await enroll('phone')).toMatchObject({ status: 403, body: { error: { code: 'DEVICE_REENROLLMENT_REQUIRES_APPROVAL' } } });
     expect((await first.directory()).map((d) => d.certificate.deviceId)).toEqual(['first']);
+    // Review (Greptile P1): a rejoin certificate not newer than the one held before the removal is refused, so
+    // notBefore never lets that pre-removal certificate pass again.
+    signedAt = beforeCertificate.issuedAt - 1;
+    expect(await enroll('phone', { rejoin: true })).toMatchObject({ status: 409, body: { error: { code: 'CERTIFICATE_NOT_NEWER' } } });
+    await expect(before.directory()).rejects.toMatchObject({ code: 'DEVICE_REVOKED' });
+    signedAt = undefined;
 
     await new Promise((resolve) => setTimeout(resolve, 5)); // a strictly newer certificate
     const rejoined = await enroll('phone', { rejoin: true });
