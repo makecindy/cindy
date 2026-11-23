@@ -23,7 +23,7 @@ import { MIRROR_ATTACHMENT_MAX_BYTES } from '../companion-cloud/mirror.js';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { migrateLocalGroups, type ChatContentBlock } from './chatServerMigration.js';
-import { chatErrorDiagnostic, chatGroupFailure, contentShapes, detailsDiagnostic, missingGroupCode } from './chatServerErrors.js';
+import { chatErrorDiagnostic, chatGroupFailure, chatRetryDeadline, contentShapes, detailsDiagnostic, missingGroupCode } from './chatServerErrors.js';
 import { chatInviteShareBase, createChatInviteShare, notifyChatInviteRevoked, resolveChatInviteShare } from './chatInviteShares.js';
 import { createChatMedia } from './chatServerMedia.js';
 import { mergeChatReplyAttachments } from './chatServerReplyAttachments.js';
@@ -179,7 +179,8 @@ interface Running {
   capabilityNotices?: Map<BotGroupCapabilityNoticeCode, Promise<void>>;
 }
 export class ChatResponseError extends Error {
-  constructor(code: string, readonly status: number, readonly retryAt?: number, readonly details?: unknown) { super(code); }
+  constructor(code: string, readonly status: number, readonly retryAt?: number, readonly details?: unknown,
+    readonly serviceRetryAt?: number) { super(code); }
 }
 /**
  * The group's terminal result was definitely refused for its content — not for auth, permissions
@@ -195,8 +196,7 @@ function historyUpgradeRetryAt(error: unknown, failures: number): number {
   if (failures > HISTORY_UPGRADE_RETRY_DELAYS_MS.length && (
     error instanceof ChatResponseError ? !retryableResponse(error) : error instanceof Error && LOCAL_FILE_REFUSALS.has(error.message)
   )) return Infinity;
-  const retryAt = error instanceof Error && 'retryAt' in error ? error.retryAt : undefined;
-  return Math.max(Date.now() + delay, typeof retryAt === 'number' && Number.isFinite(retryAt) ? retryAt : 0);
+  return Math.max(Date.now() + delay, chatRetryDeadline(error));
 }
 function isTerminalHistoryUpgradeError(error: unknown): error is ChatResponseError {
   return error instanceof ChatResponseError && (
@@ -824,16 +824,19 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
             if (!current()) throw new Error('OWNER_CHANGED');
             if ((res.statusCode ?? 500) >= 300 && (res.statusCode ?? 500) < 400) throw new Error('CHAT_REDIRECT_REFUSED');
             const status = res.statusCode ?? 500;
-            const retryAt = (status === 429 || status === 503) ? retryAfterDeadline({ headers: {
+            const deadline = (status === 429 || status === 503) ? retryAfterDeadline({ headers: {
               get: name => { const header = res.headers[name.toLowerCase()]; return typeof header === 'string' ? header : null; },
             } }) : undefined;
+            const retryAt = status === 429 ? deadline : undefined;
+            // Only consumers that compare absolute deadlines opt in to 503 cooldowns.
+            const serviceRetryAt = status === 503 ? deadline : undefined;
             let value;
             try { value = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
             catch {
               // Older servers may return a non-JSON 404 for an unknown route.
-              if (successStatus && status >= 400) throw new ChatResponseError('REQUEST_FAILED', status, retryAt);
+              if (successStatus && status >= 400) throw new ChatResponseError('REQUEST_FAILED', status, retryAt, undefined, serviceRetryAt);
               if (successStatus) throw new Error('CHAT_RESPONSE_INVALID');
-              throw new ChatResponseError('INVALID_CHAT_RESPONSE', status >= 400 ? status : 502, retryAt);
+              throw new ChatResponseError('INVALID_CHAT_RESPONSE', status >= 400 ? status : 502, retryAt, undefined, serviceRetryAt);
             }
             const code = typeof value?.error?.code === 'string' ? value.error.code : 'REQUEST_FAILED';
             if (res.statusCode === 401 && !retried && CHAT_REFRESHABLE_ERROR_CODES.has(code)) {
@@ -841,7 +844,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
                 resolve(api<T>(route, method, data, actorId, true, successStatus, admit)); return;
               }
             }
-            if (status >= 400) throw new ChatResponseError(code, status, retryAt, value?.error?.details);
+            if (status >= 400) throw new ChatResponseError(code, status, retryAt, value?.error?.details, serviceRetryAt);
             if (successStatus && status !== successStatus) throw new Error('CHAT_RESPONSE_INVALID');
             resolve(value);
           } catch (error) { reject(error); }
