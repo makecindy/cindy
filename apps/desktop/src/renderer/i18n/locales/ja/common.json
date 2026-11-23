@@ -17999,7 +17999,8 @@
         "modelSelectorAria": "モデルセレクター",
         "categoryListAria": "{{category}} モデル",
         "effortListAria": "推論強度",
-        "boundLocationLocked": "連携したタスクは元のコンピューターで実行されます。そのコンピューターのモデルを選んでください。"
+        "boundLocationLocked": "連携したタスクは元のコンピューターで実行されます。そのコンピューターのモデルを選んでください。",
+        "modelGroupTitle": "モデルグループ「{{name}}」：新しいタスクを作るときにソースを選びます"
       }
     },
     "toast": {

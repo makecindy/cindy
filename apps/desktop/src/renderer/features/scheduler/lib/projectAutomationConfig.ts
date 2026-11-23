@@ -26,6 +26,8 @@ export interface ProjectScheduleConfig {
   /** Agent 运行位置，相对项目自动化所在电脑；省略 = 本机。 */
   agentDeviceId?: string;
   effort?: string;
+  /** 模型组(模式)id。与 main 侧同名字段同形。 */
+  modelGroup?: string;
   /** Codex Fast 模式开关，仅 Codex 有意义。详见 Schedule.fastMode。 */
   fastMode?: boolean | 'ultrafast';
   useWorktree?: boolean;
@@ -76,6 +78,7 @@ export function scheduleToProjectConfig(
     providerId: schedule.providerId || undefined,
     agentDeviceId: schedule.agentDeviceId,
     effort: schedule.effort,
+    modelGroup: schedule.modelGroup,
     fastMode: schedule.fastMode,
     useWorktree: schedule.useWorktree,
     persistentSession: schedule.persistentSession,
@@ -109,6 +112,8 @@ export function formToProjectConfig(
     providerId: form.providerId.trim() || undefined,
     agentDeviceId: form.model.trim() ? form.agentDeviceId?.trim() || undefined : undefined,
     effort: form.effort || undefined,
+    // 模型组(模式)：脚本与插件引擎任务不按模式选，与 buildScheduleInput 同源。
+    modelGroup: (form.executionMode ?? 'agent') !== 'script' && !form.pluginEngine && form.modelGroup ? form.modelGroup : undefined,
     // Codex / Pi 都生效(runner.ts:665);只认 codex 会丢弃 Pi 任务的 Fast(codex review)。
     fastMode: (form.agentKind === 'codex' || form.agentKind === 'pi') && form.fastMode ? true : undefined,
     useWorktree: form.useWorktree,

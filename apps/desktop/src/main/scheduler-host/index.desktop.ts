@@ -1,4 +1,5 @@
 import { projectForNewTask } from '../mcp-integrations/projectManagementCore.js';
+import { modelGroupSessionStart } from '../model-groups/sessionStart.desktop.js';
 import { app } from 'electron';
 import './pre-run-hook.desktop.js';
 import type { BrowserWindow } from 'electron';
@@ -90,6 +91,8 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
     });
     const promptRunner = new MakerScheduleRunner({
       projectForNewTask,
+      // 设了模式的定时任务新建任务时按模式选来源(model-groups.md §6.3)，选路记账由任务层做。
+      modelGroupStart: modelGroupSessionStart,
       maker: deps.maker,
       bootstrapSession: bootstrapScheduledSession,
       getDb: deps.getDb,
