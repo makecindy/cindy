@@ -3,7 +3,8 @@
     "shareName": "来自 {{owner}} 的分享",
     "numbered": "{{name}} ({{index}})",
     "unavailable": "已不可用的分享",
-    "offline": "{{name}} · 暂时离线"
+    "offline": "{{name}} · 暂时离线",
+    "offlineNote": "对方电脑不在线，上线后就能继续使用。"
   },
   "link": {
     "title": "供应商分享",

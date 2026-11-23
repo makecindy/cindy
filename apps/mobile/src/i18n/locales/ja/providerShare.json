@@ -3,7 +3,8 @@
     "shareName": "{{owner}} からの共有",
     "numbered": "{{name}} ({{index}})",
     "unavailable": "利用できなくなった共有",
-    "offline": "{{name}} · 一時的にオフライン"
+    "offline": "{{name}} · 一時的にオフライン",
+    "offlineNote": "相手のパソコンがオフラインです。オンラインに戻ると使えるようになります。"
   },
   "link": {
     "title": "プロバイダー共有",

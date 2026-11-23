@@ -165,6 +165,7 @@ describe('provider shares in the remote Agent catalogs', () => {
       deviceId: 'share:one',
       name: "来自 Magi 的分享",
       status: 'ready',
+      shareSource: { providerId: 'anthropic', providerLabel: 'Anthropic', offline: false },
       providers: [providers[0]],
       modelVisibilityOverrides: { 'claude-code:anthropic:claude-x': true },
     });

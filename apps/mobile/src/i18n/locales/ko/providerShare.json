@@ -3,7 +3,8 @@
     "shareName": "{{owner}}님의 공유",
     "numbered": "{{name}} ({{index}})",
     "unavailable": "사용할 수 없는 공유",
-    "offline": "{{name}} · 일시적으로 오프라인"
+    "offline": "{{name}} · 일시적으로 오프라인",
+    "offlineNote": "상대방 컴퓨터가 오프라인입니다. 다시 온라인이 되면 사용할 수 있습니다."
   },
   "link": {
     "title": "제공자 공유",

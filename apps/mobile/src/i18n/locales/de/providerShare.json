@@ -3,7 +3,8 @@
     "shareName": "Von {{owner}} freigegeben",
     "numbered": "{{name}} ({{index}})",
     "unavailable": "Freigabe nicht verfügbar",
-    "offline": "{{name}} · Vorübergehend offline"
+    "offline": "{{name}} · Vorübergehend offline",
+    "offlineNote": "Der freigebende Computer ist offline. Du kannst die Freigabe wieder nutzen, sobald er wieder online ist."
   },
   "link": {
     "title": "Anbieterfreigabe",

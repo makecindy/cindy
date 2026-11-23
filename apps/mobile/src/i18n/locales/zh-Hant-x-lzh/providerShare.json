@@ -3,7 +3,8 @@
     "shareName": "{{owner}} 所分享",
     "numbered": "{{name}} ({{index}})",
     "unavailable": "已不可用之分享",
-    "offline": "{{name}} · 暫離線"
+    "offline": "{{name}} · 暫離線",
+    "offlineNote": "彼機不在線，上線後即可續用。"
   },
   "link": {
     "title": "供方分享",

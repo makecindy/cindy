@@ -27,6 +27,12 @@ export interface RemoteAgentCatalog {
   offline?: true;
   /** 分享来的供应商的收藏身份。同账号电脑没有这个字段。 */
   favoriteSource?: ProviderShareFavoriteSource;
+  /**
+   * 分享来的供应商(同账号电脑没有这个字段)。分享者电脑离线、刚上线还在连接供应商时，供应商读成
+   * 未连接、没有可用模型；来源页仍按它列一行，不让分享一会儿有一会儿无(与 Desktop 模型选择器同口径)。
+   * offline = 分享者电脑暂时离线，打开时说明对方不在线。
+   */
+  shareSource?: { providerId: string; providerLabel: string; offline: boolean };
   providers: ProviderView[];
   modelVisibilityOverrides?: Record<string, boolean>;
 }
@@ -107,6 +113,7 @@ export function providerShareRemoteCatalogs(input: {
       // 已暂停 / 分享者电脑不在线的分享只因被选着才留在清单里:与留下的离线电脑一样标出,选不了。
       ...(reachable ? {} : { offline: true as const }),
       ...(share.favoriteSource ? { favoriteSource: share.favoriteSource } : {}),
+      shareSource: { providerId: share.providerId, providerLabel: share.providerLabel, offline: state === 'offline' },
       providers: payload
         ? remoteAgentProviders(payload.providers).filter((provider) => provider.id === share.providerId)
         : [],

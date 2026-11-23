@@ -3,7 +3,8 @@
     "shareName": "Partagé par {{owner}}",
     "numbered": "{{name}} ({{index}})",
     "unavailable": "Partage indisponible",
-    "offline": "{{name}} · Hors ligne pour le moment"
+    "offline": "{{name}} · Hors ligne pour le moment",
+    "offlineNote": "L'ordinateur de la personne est hors ligne. Vous pourrez l'utiliser à nouveau dès qu'il sera de nouveau en ligne."
   },
   "link": {
     "title": "Partage de fournisseurs",
