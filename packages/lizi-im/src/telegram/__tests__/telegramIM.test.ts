@@ -411,6 +411,19 @@ describe('TelegramIM', () => {
       expect(second.saveErrorStatus).toBeUndefined();
       expect(im.getStatus()).toEqual({ kind: 'connected', appId: String(BOT.id) });
       expect(ctx.secrets.get('telegram-bot-token')).toBe(payload.token);
+
+      // Replacing that saved binding is not a new binding: on timeout the previous one is
+      // restored and reconnected, so the result must not ask the UI to keep the draft.
+      stall = true;
+      const replacing = save({ token: '999:other-token-abcdefghijk', ownerUserId: '222' }) as Promise<{
+        saveTimedOut?: boolean;
+        ownerUserId: string | null;
+      }>;
+      await vi.advanceTimersByTimeAsync(15_000);
+      const replaced = await replacing;
+      expect(replaced.saveTimedOut).toBeUndefined();
+      expect(replaced.ownerUserId).toBe(OWNER_ID);
+      expect(ctx.secrets.get('telegram-bot-token')).toBe(payload.token);
     } finally {
       await im.dispose();
       vi.useRealTimers();

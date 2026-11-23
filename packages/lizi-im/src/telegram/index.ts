@@ -376,9 +376,10 @@ export interface TelegramConfigState {
   botUsername: string | null;
   saveErrorStatus?: IMStatus;
   /**
-   * 本次保存失败只是建连握手超时: 界面保留用户刚填的内容, 提示「连接超时, 请重试」,
-   * 用原输入直接重试。只出现在本机 set-config 的返回里, 不进跨设备状态投影
-   * (状态本身仍是 code='network', 旧控制端照常识别)。
+   * 新绑定(此前没有已保存的 token)这次保存失败只是建连握手超时: 凭证已回滚、什么都没存,
+   * 界面保留用户刚填的内容, 提示「连接超时, 请重试」, 用原输入直接重试。替换已有绑定时
+   * 旧凭证会恢复并重连, 不标这个字段, 界面照旧按已有绑定处理。只出现在本机 set-config
+   * 的返回里, 不进跨设备状态投影(状态本身仍是 code='network', 旧控制端照常识别)。
    */
   saveTimedOut?: boolean;
 }
@@ -733,7 +734,8 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       const outcome = await this.connectAttempt(token, false);
       if (outcome !== 'connected') {
         const failedStatus = this.status;
-        const timedOut = outcome === 'timed-out';
+        // 只有新绑定才标超时: 替换已有绑定时下面会恢复并重连旧凭证, 界面要按已有绑定显示。
+        const timedOut = outcome === 'timed-out' && !previousToken?.trim();
         const restored = await this.rollbackConfigOrFailClosed(
           previousToken,
           previousOwnerUserId,
