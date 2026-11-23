@@ -420,6 +420,7 @@
       "description": "僅限制遠端呼叫，不影響本機使用。儲存後，建立任務、切換模型及傳送下一輪訊息時生效。",
       "all": "全部模型",
       "selected": "已開放 {{count}} 個模型",
+      "selectionExcludesModels": "目前有模型未選取。新增模型需手動選取後才會開放。",
       "choose": "選擇模型",
       "memberTitle": "可用模型",
       "memberDescription": "設定 {{name}} 可以使用的模型，僅能選擇遠端已開放的模型。也適用於經此人轉分享的呼叫。",

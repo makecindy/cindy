@@ -420,6 +420,7 @@
       "description": "僅限遠端呼叫，不涉此機使用。存後，於立差事、易模型及遣下一輪訊時生效。",
       "all": "諸模型",
       "selected": "已開 {{count}} 個模型",
+      "selectionExcludesModels": "尚有模型未選。日後新增者，須親選而後開放。",
       "choose": "擇模型",
       "memberTitle": "可用模型",
       "memberDescription": "設 {{name}} 可用之模型，僅能擇遠端已開者。經此人轉分享之呼叫亦適用。",

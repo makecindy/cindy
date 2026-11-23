@@ -425,6 +425,7 @@
       "description": "Limite uniquement l'utilisation à distance. L'utilisation locale n'est pas modifiée. Les modifications enregistrées s'appliquent à la création d'une tâche, au changement de modèle ou à l'envoi du message suivant.",
       "all": "Tous les modèles",
       "selected": "{{count}} modèles autorisés",
+      "selectionExcludesModels": "Certains modèles ne sont pas sélectionnés. Pour autoriser les futurs modèles, sélectionnez-les manuellement.",
       "choose": "Choisir des modèles",
       "memberTitle": "Modèles autorisés",
       "memberDescription": "Choisissez les modèles que {{name}} peut utiliser, parmi ceux ouverts à l'utilisation à distance. Ces limites s'appliquent aussi à l'utilisation repartagée par cette personne.",
