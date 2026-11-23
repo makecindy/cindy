@@ -62,6 +62,7 @@ export function createHostSessionUpdate(deps: {
   publish(event: Record<string, unknown>): void;
   /** Making the task active again (task-restore.ts), the one Host route for it; it also serves sends. */
   restoreTaskToActive(sessionId: string, options?: { publish?: boolean }): Promise<void>;
+  onSoftDelete?(sessionId: string): Promise<void>;
   /** A model or provider change: the desktop's set-model, with the desktop IPC's arguments. */
   setModel(sessionId: string, model: unknown, providerId: unknown, revision: unknown, selection: unknown): Promise<unknown>;
   /** The working-directory move's ports (session-move.ts). */
@@ -75,7 +76,7 @@ export function createHostSessionUpdate(deps: {
   };
 }) {
   // Runs inside the move locks (below), as updateSessionInDb's `update`.
-  const applyUpdate = async (sessionId: string, patch: Record<string, unknown>, fields: string[], dbClient: DbClient) => {
+  const applyUpdate = async (sessionId: string, patch: Record<string, unknown>, fields: string[], dbClient: DbClient, options?: { deleteTarget?: 'side-chat' | 'task' }) => {
     const db = dbClient.drizzle;
     assertSessionWorkspaceKindPatch(patch);
     assertSessionContextWindowBudgetPatch(patch);
@@ -129,49 +130,60 @@ export function createHostSessionUpdate(deps: {
     }
     // The moved fields through the desktop's mapper (a move to a project or a dialogue drops the explicit
     // project), with a resume id the Claude transcript move persisted.
+    const terminal = patch.status === 'archived' || patch.status === 'deleted';
     const setObj = sessionPatchToRow({
       workingDir: patch.workingDir,
       workspaceKind: patch.workspaceKind,
-      snoozedUntil: patch.status === 'active' ? undefined : patch.snoozedUntil,
-      // The shared mapper clears both snooze fields on archive. Restore uses the transaction below.
-      status: patch.status === 'archived' || patch.status === 'deleted' ? patch.status : undefined,
+      snoozedUntil: patch.status !== undefined ? undefined : patch.snoozedUntil,
+      status: undefined,
     } as Parameters<typeof sessionPatchToRow>[0], { bumpUpdatedAt: false });
     await relocateClaudeTranscriptsForMove(explicitPorts<Parameters<typeof relocateClaudeTranscriptsForMove>[0]>({
       sid: sessionId, p: patch, beforeMove,
-      moveGuard: undefined, // see the entry below
+      moveGuard: undefined,
       dbClient, setObj,
     }));
-    const update: Record<string, unknown> = { ...(isSettingsOnly ? {} : { updatedAt: Date.now() }), ...setObj };
+    const update: Record<string, unknown> = { ...(isSettingsOnly || terminal ? {} : { updatedAt: Date.now() }), ...setObj };
     if (typeof patch.title === 'string') update.title = patch.title;
     if (patch.pinnedAt === null) { update.pinnedAt = null; update.summary = null; }
     else if (typeof patch.pinnedAt === 'string') update.pinnedAt = Date.parse(patch.pinnedAt) || null;
     if (typeof patch.notificationsMuted === 'boolean') update.notificationsMuted = patch.notificationsMuted;
-    // As writeSessionPatch: nothing to write is no write (a model pick alone is an intent, not a column).
+    let deletedSideChats: Array<{ sessionId: string }> = [];
+    if (terminal) {
+      const txResult = await dbClient.tx('sessions.setTerminalStatus', {
+        sessionId, status: patch.status,
+        ...(options?.deleteTarget ? { deleteTarget: options.deleteTarget } : {}),
+      }) as { deletedSideChats?: Array<{ sessionId: string }> } | undefined;
+      deletedSideChats = txResult?.deletedSideChats ?? [];
+    }
     if (Object.keys(update).length > 0) {
       await getDbClient().drizzle.update(sessionTable).set(update).where(eq(sessionTable.id, sessionId));
     }
-    // As the desktop's patchSessionMetaInDb: the other fields first, then the status transaction. The
-    // event below carries the whole patch, so the restore does not publish its own.
     if (patch.status === 'active') await deps.restoreTaskToActive(sessionId, { publish: false });
     const rows = await getDbClient().drizzle.select().from(sessionTable)
       .where(eq(sessionTable.id, sessionId)).limit(1);
     const row = rows[0];
     if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
-    // As patchSessionMetaInDb, under the task's route lock (main.ts): an archive clears the task's runtime
-    // override and axes (the runtime cleanup bindHostSessionRuntimeHooks installs); other statuses do nothing.
     cleanupSessionRuntimeForTerminalStatus(sessionId, patch.status);
+    if (patch.status === 'deleted') {
+      await deps.onSoftDelete?.(sessionId);
+      for (const child of deletedSideChats) {
+        cleanupSessionRuntimeForTerminalStatus(child.sessionId, 'deleted');
+        await deps.onSoftDelete?.(child.sessionId);
+        deps.publish({ type: 'session_changed', action: 'update', sessionId: child.sessionId, patch: { status: 'deleted' }, status: 'deleted' });
+      }
+    }
     await recordRecentWorkdirForMove({
       projectTargetChanged: patch.workspaceKind !== undefined || patch.workingDir !== undefined,
       row, dbClient, ownerScope: null,
       touchRecentWorkdir,
       broadcastRecentWorkdirsChanged: path => deps.move.broadcastRecentWorkdirsChanged(path),
     });
-    // As updateSessionInDb's broadcast: the project the mapper dropped goes out with the move.
     const published = setObj.projectDir !== undefined ? { ...patch, projectDir: row.projectDir } : patch;
     const result = sessionToCamel({ ...row, messageCount: 0 });
     const snooze = patch.snoozedUntil !== undefined || patch.status === 'active' || patch.status === 'archived' || patch.status === 'deleted'
       ? { snoozedUntil: result.snoozedUntil, snoozedAt: result.snoozedAt } : {};
-    deps.publish({ type: 'session_changed', action: 'update', sessionId, patch: { ...published, ...snooze }, status: row.status });
+    const clearedSummary = patch.pinnedAt === null ? { summary: null } : {};
+    deps.publish({ type: 'session_changed', action: 'update', sessionId, patch: { ...published, ...clearedSummary, ...snooze }, status: row.status });
     if (hasBudget) {
       // A mixed update keeps its other fields when the budget cannot be saved (updateSessionInDb).
       try {
@@ -184,7 +196,10 @@ export function createHostSessionUpdate(deps: {
     }
     return { ...result, ...(routeChange ? { runtimeSelection } : {}) };
   };
-  return async (sessionId: string, patch: Record<string, unknown>) => {
+  return async (sessionId: string, patch: Record<string, unknown>, options?: { deleteTarget?: 'side-chat' | 'task' }) => {
+    if (options?.deleteTarget !== undefined && ((options.deleteTarget !== 'side-chat' && options.deleteTarget !== 'task') || patch.status !== 'deleted')) {
+      throwIpcError('INVALID_PARAMS', 'deleteTarget requires status deleted');
+    }
     const fields = Object.keys(patch);
     const unknown = fields.filter(key => !UPDATABLE_FIELDS.has(key) && !Object.hasOwn(DEDICATED_ENTRIES, key));
     if (unknown.length > 0) throwIpcError('INVALID_PARAMS', `unsupported session field: ${unknown.join(', ')}`);
@@ -210,7 +225,7 @@ export function createHostSessionUpdate(deps: {
       // (host-tools.ts creates the MCP providers without moveSession).
       moveGuard: undefined,
       db: dbClient.drizzle,
-      update: () => applyUpdate(sessionId, patch, fields, dbClient),
+      update: () => applyUpdate(sessionId, patch, fields, dbClient, options),
     }));
   };
 }

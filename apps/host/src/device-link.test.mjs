@@ -140,7 +140,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     setSessionPlanMode: async () => ({}),
     listSessions: options => readHostSessionList(db.drizzle, options),
     getSession: id => readHostSession(db.drizzle, id),
-    updateSession: async (id, patch) => { metaPatches.push({ id, patch }); return { id, ...patch }; },
+    updateSession: async (id, patch, options) => { metaPatches.push({ id, patch, options }); return { id, ...patch }; },
     messagesList: (id, limit) => readMessagesList(id, { limit }),
     setSessionModel: async (id, model) => {
       if (model === 'release-refusal') throw holdError(releaseFailure());
@@ -280,7 +280,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   assert.equal(projection.ok, true, JSON.stringify(projection));
   assert.equal(projection.result.sessionId, 'task');
   assert.equal(projection.result.turnInProgress, false);
-  assert.equal(projection.result.inputDeliveryVersion, 1);
+  assert.equal(projection.result.inputDeliveryVersion, undefined);
   const removalPreview = await clients[0].invoke('host', { channel: 'worktree:removal-preview', args: ['task'] });
   assert.deepEqual(removalPreview, { ok: true, result: { hasWorktree: false, dirty: false } });
   const closed = await clients[0].invoke('host', { channel: 'maker:close-session', args: ['task'] });
@@ -288,9 +288,10 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   assert.deepEqual(closedSessions, ['task']);
   const archived = await clients[0].invoke('host', { channel: 'local-db:sessions:patch-meta', args: ['task', { status: 'archived', pinnedAt: null }] });
   assert.deepEqual(archived, { ok: true, result: { id: 'task', status: 'archived', pinnedAt: null } });
-  assert.deepEqual(metaPatches.at(-1), { id: 'task', patch: { status: 'archived', pinnedAt: null } });
+  assert.deepEqual(metaPatches.at(-1), { id: 'task', patch: { status: 'archived', pinnedAt: null }, options: undefined });
   const deleted = await clients[0].invoke('host', { channel: 'local-db:sessions:patch-meta', args: ['task', { status: 'deleted', deleteTarget: 'task' }] });
   assert.deepEqual(deleted, { ok: true, result: { id: 'task', status: 'deleted' } });
+  assert.deepEqual(metaPatches.at(-1), { id: 'task', patch: { status: 'deleted' }, options: { deleteTarget: 'task' } });
   const badField = await clients[0].invoke('host', { channel: 'local-db:sessions:patch-meta', args: ['task', { workingDir: '/tmp' }] });
   assert.equal(badField.ok, false);
   const badDiscard = await clients[0].invoke('host', { channel: 'local-db:sessions:patch-meta', args: ['task', { status: 'archived', discardWorktreeChanges: true }] });

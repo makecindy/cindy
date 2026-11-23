@@ -61,7 +61,7 @@ const VIEWS = ['prov-a', 'prov-b'].map(id => ({ id, connected: true, agents: ['c
   routing: { 'claude-code': {} }, models: { 'claude-code': Object.keys(WINDOWS).map(model) } }));
 const quiet = { debug() {}, info() {}, warn() {}, error() {} };
 
-async function fixture(t) {
+async function fixture(t, opts = {}) {
   // The development build refuses to migrate what it takes for the official shared profile
   // (XDT_OFFICIAL_SHARED_PROFILE=1 inside a Cindy task); this is a fixture profile.
   const sharedProfile = process.env.XDT_OFFICIAL_SHARED_PROFILE;
@@ -138,6 +138,7 @@ async function fixture(t) {
     publish: event => events.push(event),
     setModel: (...args) => selection.setModel(...args),
     move: sessionMove.move,
+    ...(opts.onSoftDelete ? { onSoftDelete: opts.onSoftDelete } : {}),
   });
   const task = async (id, { agentKind = 'claude-code', model = 'big', contextTokens = 0, workDir = root } = {}) => {
     await storage.create({ id, title: 'Window fixture', agentKind, model, workDir, providerId: 'prov-a' });
@@ -1061,8 +1062,9 @@ test('send: only a registered project becomes recent and is announced; an unchan
   assert.equal((await f.row('sent')).userSendAt, 6_000, 'the entry\'s own database is still stamped');
 });
 
-test('archive and soft-delete persist terminal status and clear pin summary/snooze', async t => {
-  const f = await fixture(t);
+test('archive and soft-delete use terminal transaction, guard deleteTarget, stop runtime and broadcast unpin summary', async t => {
+  const softDeleted = [];
+  const f = await fixture(t, { onSoftDelete: async id => { softDeleted.push(id); } });
   await f.task('arch');
   await f.database.drizzle.update(sessions).set({ pinnedAt: 1000, summary: 'pinned', snoozedUntil: Date.now() + 60_000, snoozedAt: 1000 }).where(eq(sessions.id, 'arch'));
   const archived = await f.update('arch', { status: 'archived', pinnedAt: null });
@@ -1070,8 +1072,17 @@ test('archive and soft-delete persist terminal status and clear pin summary/snoo
   assert.equal(archived.pinnedAt, null);
   assert.equal(archived.snoozedUntil, null);
   assert.equal((await f.row('arch')).summary, null);
+  assert.equal(movedEvents(f, 'arch').at(-1).patch.summary, null);
   await f.task('del');
-  const deleted = await f.update('del', { status: 'deleted' });
+  await f.task('child');
+  await f.database.drizzle.update(sessions).set({ parentSessionId: 'del', source: 'side-chat', sideChatPromoted: false }).where(eq(sessions.id, 'child'));
+  await assert.rejects(f.update('del', { status: 'deleted' }, { deleteTarget: 'side-chat' }), { code: 'PRECONDITION_FAILED' });
+  assert.equal((await f.row('del')).status, 'active');
+  const deleted = await f.update('del', { status: 'deleted' }, { deleteTarget: 'task' });
   assert.equal(deleted.status, 'deleted');
+  assert.equal((await f.row('del')).status, 'deleted');
+  assert.equal((await f.row('child')).status, 'deleted');
+  assert.deepEqual(softDeleted, ['del', 'child']);
+  await assert.rejects(f.update('del', { status: 'archived', pinnedAt: null }), { code: 'PRECONDITION_FAILED' });
   assert.equal((await f.row('del')).status, 'deleted');
 });

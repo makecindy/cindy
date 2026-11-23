@@ -299,9 +299,9 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
   registry.register(MAKER_INVOKE.INPUT_GET_PROJECTION, async ([sessionId]) => {
     assertCurrent();
     if (typeof sessionId !== 'string' || !sessionId) throwIpcError('INVALID_PARAMS', 'sessionId required');
-    const projection = await call('/api/input/projection', { sessionId }) as Record<string, unknown>;
+    const projection = await call('/api/input/projection', { sessionId });
     assertCurrent();
-    return { ...projection, inputDeliveryVersion: 1 };
+    return projection;
   });
   // The remote project/draft flow reads the Host-owned persisted mirror. The getter
   // hydrates the shared reader on first use after every Host restart.
@@ -515,7 +515,7 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
     if (patch.title !== undefined && typeof patch.title !== 'string') {
       throwIpcError('INVALID_PARAMS', 'title must be a string');
     }
-    return call('/api/sessions/update', { sessionId, patch });
+    return call('/api/sessions/update', { sessionId, patch, ...(deleteTarget ? { deleteTarget } : {}) });
   });
   registry.register(PROJECT_ARCHIVE_CHANNEL, ([input]) => {
     // The preview is a read. Like project-info writes at the service boundary,
