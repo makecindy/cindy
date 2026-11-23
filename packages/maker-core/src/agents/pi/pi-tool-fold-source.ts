@@ -631,7 +631,7 @@ export default function (pi) {
     return callSites.get(String(callId)) || null;
   }
 
-  // 定位与拼接分开：整批取回先只定位（缺项一次点名），再拼当前页用到的那几条。
+  // 定位与拼接分开：整批取回先只定位，再拼当前页用到的那几条。
   function resolve(callId) {
     var key = String(callId);
     var site = callSite(key);
@@ -716,7 +716,10 @@ export default function (pi) {
 
   // 整批取回按「成员游标」分页：from 指定起始成员，offset 只在这个成员内部生效。
   // 续读坐标必须是稳定身份——整批拼接后的字符偏移会随成员被压缩删掉而漂移，后一页就从
-  // 错位处读起。代价只与页本身有关：先只定位（缺项一次点名），再从 from 起拼到读满为止。
+  // 错位处读起。缺项也是成员：它的一行说明就是该成员的页内容，走同一个游标、同一条
+  // 读取预算（整行放行，不按偏移切开）。页尾不另附缺项清单——那是第二条不受预算约束的
+  // 输出路径（成批缺项配长调用 id 时一页就越过读取上限，而且每页重复）。代价只与页本身
+  // 有关：先只定位，再从 from 起拼到读满为止。
   function readBatch(refId, key, params) {
     var entry = refs.get(refId);
     var ids = entry ? entry.ids : [];
@@ -730,51 +733,55 @@ export default function (pi) {
     }
     var skip = params && typeof params.offset === 'number' && params.offset > 0 ? Math.floor(params.offset) : 0;
     var found = [];
-    var missing = [];
-    for (var i = at; i < ids.length; i++) {
-      var memberId = String(ids[i]);
-      var one = resolve(memberId);
-      found.push(one);
-      if (one.ok === true) continue;
-      // 缺项必须点名：静默跳过会让模型把半批内容当成整批原文。
-      var why = one.reason === 'evicted' ? 'full text evicted'
-        : one.reason === 'not-retained' ? 'full text not retained'
-          : 'not in this session';
-      missing.push(memberId + ' (' + why + ')');
-    }
+    for (var i = at; i < ids.length; i++) found.push(resolve(String(ids[i])));
     var parts = [];
     var size = 0;
-    var pending = found.length - missing.length;
+    var recovered = 0;
+    var shown = 0;
     var next = null;
+    var over = 0;
     for (var p = 0; p < found.length && next === null; p++) {
-      if (found[p].ok !== true) { skip = 0; continue; } // 游标成员已不在：成员内偏移随之作废，不能落到下一条成员头上
-      var member = renderOriginal(found[p]).text.slice(skip);
-      if (member === '') { skip = 0; continue; }
+      var memberId = String(ids[at + p]);
+      // 游标成员已不在：成员内偏移随之作废，不能落到下一条成员头上（缺项说明从不按偏移
+      // 切开，所以带偏移的缺项游标只可能是陈旧坐标）。
+      if (p === 0 && found[0].ok !== true) skip = 0;
+      var line = found[p].ok === true ? null : missingLine(memberId, found[p]);
+      var member = (line === null ? renderOriginal(found[p]).text : line).slice(skip);
+      if (member === '') { skip = 0; shown += 1; continue; }
       var gap = parts.length > 0 ? 2 : 0;
       var room = RECOVERY_READ_MAX_CHARS - size - gap;
-      if (room <= 0) { next = { id: String(ids[at + p]), offset: skip }; break; }
-      pending -= 1;
-      if (member.length <= room) {
+      if (room <= 0) { next = { id: memberId, offset: skip }; break; }
+      if (line === null) recovered += 1;
+      if (member.length <= room || line !== null) {
+        // 缺项说明整行放行：越过剩余空间也只越过这一行，下一条成员另起一页。
         parts.push(member);
         size += gap + member.length;
+        shown += 1;
+        if (member.length > room) over += gap + member.length - room;
       } else {
         parts.push(member.slice(0, room));
         size += gap + room;
-        next = { id: String(ids[at + p]), offset: skip + room };
+        next = { id: memberId, offset: skip + room };
       }
       skip = 0;
     }
+    // 出口不变量：除整行放行的那一条缺项说明外，页正文不越过读取上限。取回结果不经入库
+    // 截断，越界会原样进入下一次请求。
+    if (size - over > RECOVERY_READ_MAX_CHARS) throw new Error('tool-fold page overflow: ' + (size - over));
     var text = parts.join('\n\n');
-    if (missing.length > 0) {
-      var note = '[missing ' + missing.length + ' of ' + (ids.length - at) + ' round-trips in this batch: '
-        + missing.join(', ') + ' — read a single id or re-run that command]';
-      text = text ? text + '\n\n' + note : note;
-    }
     if (next !== null) {
-      text += '\n\n[truncated: ' + pending + ' round-trips not shown in batch ' + key + '. Call cindy_toolfold_read again with batch: '
+      text += '\n\n[truncated: ' + (ids.length - at - shown) + ' round-trips not shown in batch ' + key + '. Call cindy_toolfold_read again with batch: '
         + JSON.stringify(key) + ', from: ' + JSON.stringify(next.id) + ', offset: ' + next.offset + ' to continue.]';
     }
-    return { text: text, recovered: parts.length };
+    return { text: text, recovered: recovered };
+  }
+
+  // 缺项必须点名：静默跳过会让模型把半批内容当成整批原文。
+  function missingLine(memberId, one) {
+    var why = one.reason === 'evicted' ? 'full text evicted'
+      : one.reason === 'not-retained' ? 'full text not retained'
+        : 'not in this session';
+    return '[missing round-trip ' + memberId + ' (' + why + '); re-run that command]';
   }
 
   function pinOriginal(callId) {

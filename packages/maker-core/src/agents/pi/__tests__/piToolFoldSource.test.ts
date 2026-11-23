@@ -107,6 +107,26 @@ function projection(handler: Handler, messages: Message[]): Message[] {
   return changed ? changed.messages : messages;
 }
 
+/** 翻完整批并把页拼回去；每页都不得超过 limit（读取上限 + 最长调用 id 的一条续读提示）。 */
+async function readWholeBatch(tool: Tool, batchId: string, limit: number) {
+  const next = (body: string) => /from: ("(?:[^"\\]|\\.)*"), offset: (\d+) to continue\.\]$/.exec(body);
+  const pages: string[] = [];
+  let joined = '';
+  let params: Record<string, unknown> = { batch: batchId };
+  for (let guard = 0; guard < 60; guard += 1) {
+    const raw = String((await tool.execute('w' + guard, params)).content![0].text).replace(/^Cannot recover batch \S+: /, '');
+    const again = next(raw);
+    const body = raw.replace(/\n\n\[truncated: [^\n]*\]$/, '');
+    expect(raw.length).toBeLessThanOrEqual(limit);
+    pages.push(body);
+    // 成员内部续读的两页之间没有分隔；成员开头续读的补回成员之间的分隔。
+    joined += (pages.length > 1 && Number(params.offset) > 0 ? '' : (pages.length > 1 ? '\n\n' : '')) + body;
+    if (!again) break;
+    params = { batch: batchId, from: JSON.parse(again[1]), offset: Number(again[2]) };
+  }
+  return { pages, joined };
+}
+
 describe('cindy-tool-fold extension source', () => {
   it('leaves the transcript alone until the backlog reaches a batch', () => {
     const { context } = loadExtension({ CINDY_PI_TOOL_FOLD_KEEP: '8' });
@@ -560,8 +580,10 @@ describe('cindy-tool-fold extension source', () => {
     const read = await tool.execute('t-batch', { batch: batchId });
     const text = String(read.content![0].text);
     expect(text).toContain('B ok');
-    expect(text).toMatch(/missing 1 of \d+ round-trips/);
-    expect(text).toContain('p1 (full text evicted)');
+    // 缺项在它自己的成员位置上点名（p1 在 p2 之前），不是页尾另附的清单。
+    const named = '[missing round-trip p1 (full text evicted); re-run that command]';
+    expect(text).toContain(named);
+    expect(text.indexOf(named)).toBeLessThan(text.indexOf('B ok'));
   });
 
   it('keeps the batch id short no matter how long the provider id is', async () => {
@@ -1088,31 +1110,71 @@ describe('cindy-tool-fold extension source', () => {
     projection(context, pruned);
     let params: Record<string, unknown> = { batch: batchId, from: JSON.parse(resume[1]), offset: Number(resume[2]) };
     let joined = first.replace(/\n\n\[truncated: [^\n]*\]$/, '');
-    const notes: string[] = [];
     for (let guard = 0; guard < 40; guard += 1) {
       let body = await page(params);
+      expect(body.length).toBeLessThanOrEqual(4300);
       const again = next(body);
       const cut = /\n\n\[truncated: [^\n]*\]$/.exec(body);
       if (cut) body = body.slice(0, cut.index);
-      const note = /\n\n(\[missing [^\n]*\])$/.exec(body);
-      if (note) {
-        notes.push(note[1]);
-        body = body.slice(0, note.index);
-      }
       // 续读点落在成员内部时两页之间没有分隔；落在成员开头时补回成员之间的分隔。
       joined += (Number(params.offset) > 0 ? '' : '\n\n') + body;
       if (!again) break;
       params = { batch: batchId, from: JSON.parse(again[1]), offset: Number(again[2]) };
     }
-    // 分页拼回去与逐条读取逐字相同，只少被删的那一条；缺项被点名。
-    expect(joined).toBe(full.filter((_, index) => index !== 5).join('\n\n'));
-    expect(notes.join('\n')).toContain('missing 1 of');
-    expect(notes.join('\n')).toContain('call-5 (not in this session)');
-    // 游标成员自己被删：成员内偏移随之作废，下一条成员从头开始，不被截头。
+    // 分页拼回去与逐条读取逐字相同，只少被删的那一条；缺项在它的成员位置上被点名。
+    const gone = '[missing round-trip call-5 (not in this session); re-run that command]';
+    expect(joined).toBe([...full.slice(0, 5), gone, ...full.slice(6)].join('\n\n'));
+    // 游标成员自己被删：成员内偏移随之作废——缺项说明从头给出，下一条成员不被截头。
     const afterLoss = await page({ batch: batchId, from: 'call-5', offset: 10 });
-    expect(afterLoss.startsWith(full[6])).toBe(true);
-    expect(afterLoss).toContain('call-5 (not in this session)');
+    expect(afterLoss.startsWith(gone + '\n\n' + full[6].slice(0, 300))).toBe(true);
     expect((await tool.execute('x', { batch: batchId, from: 'call-99' })).isError).toBe(true);
+  });
+
+  it('keeps missing-member lines inside the read budget: a missing member is page content, not a footer', async () => {
+    // 回归：缺项清单曾挂在每页页尾、不受读取预算约束——成批缺项配长调用 id 时，一页就越过
+    // 读取上限，而且每页重复。取回结果不经入库截断，越界的说明会原样进入下一次请求。
+    const { context, tool } = loadExtension();
+    const ids = Array.from({ length: 100 }, (_, index) => 'call_' + index + '_' + 'z'.repeat(2000));
+    const messages: Message[] = [];
+    ids.forEach((id, index) => {
+      messages.push(call(id, 'bash', { command: 'run step ' + index + ' ' + 'c'.repeat(420) }));
+      messages.push(result(id, 'bash', 'step ' + index + ' ok ' + 'x'.repeat(500)));
+    });
+    const batchId = refsOf(projection(context, messages)!)[0];
+    expect(batchId).toBeTruthy();
+    // 压缩把整批成员都删了：100 条缺项、每条 id 2,000 字符，点名本身约 20 万字符。
+    projection(context, [{ role: 'user', content: [{ type: 'text', text: 'continue' }] }]);
+    const { pages, joined } = await readWholeBatch(tool, batchId, 120000 + 4096 + 300);
+    expect(pages.length).toBe(2);
+    const lines = ids.slice(0, 96).map((id) => '[missing round-trip ' + id + ' (not in this session); re-run that command]');
+    expect(joined).toBe(lines.join('\n\n'));
+    // 最新 4 条仍在上下文里，不进批；第一页点到第 58 条就停，不替后面 38 条点名。
+    expect(pages[0]).toContain(lines[57]);
+    expect(pages[0]).not.toContain(lines[58]);
+    expect(joined).not.toContain('call_96_');
+  });
+
+  it('emits a missing-member line whole even when it is longer than the room left on the page', async () => {
+    const { context, tool } = loadExtension({
+      CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: '1000', CINDY_PI_TOOL_FOLD_KEEP: '1',
+      CINDY_PI_TOOL_FOLD_MIN_PAIRS: '1', CINDY_PI_TOOL_FOLD_MIN_CHARS: '1',
+    });
+    const ids = ['a' + 'q'.repeat(500), 'b' + 'q'.repeat(1400), 'c' + 'q'.repeat(3000), 'd' + 'q'.repeat(10)];
+    const messages: Message[] = [];
+    ids.forEach((id, index) => {
+      messages.push(call(id, 'bash', { command: 'run step ' + index + ' ' + 'c'.repeat(420) }));
+      messages.push(result(id, 'bash', 'step ' + index + ' ok ' + 'x'.repeat(500)));
+    });
+    const batchId = refsOf(projection(context, messages)!)[0];
+    expect(batchId).toBeTruthy();
+    projection(context, [{ role: 'user', content: [{ type: 'text', text: 'continue' }] }]);
+    // 说明行 564 / 1,464 / 3,064 字符，预算 1,000：第一条放下后只剩 434，第二条整行放行
+    // （不按偏移切开——否则下一页的「游标成员已不在 → 偏移作废」会让它永远从头重发）；
+    // 第三条另起一页，整行放行。
+    const { pages, joined } = await readWholeBatch(tool, batchId, 1000 + 4096 + 300);
+    const lines = ids.slice(0, 3).map((id) => '[missing round-trip ' + id + ' (not in this session); re-run that command]');
+    expect(pages).toEqual([lines[0] + '\n\n' + lines[1], lines[2]]);
+    expect(joined).toBe(lines.join('\n\n'));
   });
 
   it('charges a text-only restore by the text it adds, not by the image it already shows', () => {
