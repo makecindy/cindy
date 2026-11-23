@@ -134,7 +134,7 @@ export async function readGitlabStatusToken(
   host: string,
   cli: ReturnType<typeof createGlabCliTokenSource>,
   ownerScope: () => string,
-  readPlugin: (host: string) => Promise<string | null>,
+  readPlugin: (host: string) => string | null | Promise<string | null>,
 ): Promise<GlabTokenResult> {
   if (!isPrHost(host)) return { ok: false, reason: 'no-token' };
   const scope = ownerScope();

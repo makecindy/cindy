@@ -323,7 +323,7 @@ it('saves a single PR with optional timed checks and can remove the rule', async
   await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({ prTrigger: null }), true));
 });
 
-// #12168, unit/jsdom: unlike GitHub, an MR needs a background check even with the task page closed.
+// PR 12168, unit/jsdom: an MR needs a background check even with the task page closed.
 it('enables periodic checks when a GitLab MR is entered in the PR editor', async () => {
   const form = mount(schedule({}));
   fireEvent.click(screen.getByRole('radio', { name: 'scheduler.prTrigger.label' }));

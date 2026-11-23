@@ -243,16 +243,13 @@ export async function readGithub(
 }
 
 /** main 启动期注册(bootstrap-electron 调一次)。 */
-export function registerGitContextIpc(): void {
+export function registerGitContextIpc(deps: { readGitlabPluginToken: (host: string) => string | null }): void {
   gitContextService = new GitContextService({
     onChanged: (snapshot) => broadcastToAllWindows(GIT_CONTEXT_PUSH.CHANGED, snapshot),
   });
   prStatusService = new PrStatusService({
     readToken: readGithubToken,
-    readGitlabToken: host => readGitlabStatusToken(host, glabCliTokenSource, activeOwnerScopeKey, async hostname => {
-      const { readGitlabPluginToken } = await import('../cindy-brain/index.js');
-      return readGitlabPluginToken(hostname);
-    }),
+    readGitlabToken: host => readGitlabStatusToken(host, glabCliTokenSource, activeOwnerScopeKey, deps.readGitlabPluginToken),
     fetchGitlab: (token, query) => fetchGitlabMrStatus(token, query, outboundFetch),
     rejectGitlabToken: (host) => glabCliTokenSource.rejectToken(host),
     invalidateGitlabTokenFailures: () => glabCliTokenSource.invalidateNegativeCache(),
