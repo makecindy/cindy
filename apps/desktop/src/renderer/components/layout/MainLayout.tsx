@@ -481,7 +481,9 @@ export function MainLayout() {
     onOpen: openNotice,
     onOpenVersion: openVersionNotice,
   } = useUpdateNotice();
-  // 协议更新确认挡着时,更新说明与启动恢复提示先不弹:它们会抢焦点却画在协议遮罩下面。
+  // 协议更新确认挡着时,所有会自动弹出的全局弹窗(更新说明、启动恢复、飞书冲突、分享审批、
+  // 中转审批、聊天邀请、共享任务、会话导入)都先不显示:Radix 模态会抢焦点并禁用页面其余部分的
+  // 指针事件,却画在协议遮罩下面。各自的状态保留,用户同意后再弹出。
   const legalTermsGateBlocking = useLegalTermsGateBlocking();
   const navigate = useNavigate();
   const location = useLocation();
@@ -2123,11 +2125,11 @@ export function MainLayout() {
       {!isSecondaryWindow() && <ChatInviteHost />}
       {/* 通话属于应用而不是任务页:切任务、换页面都不卸载;副窗只显示并转发操作。 */}
       {isSecondaryWindow() ? <RemoteVoiceCallSurface /> : <GlobalVoiceCallHost />}
-      {sharedTaskInvitation && <JoinSharedTaskDialog key={sharedTaskInvitation.id} open initialInvitation={sharedTaskInvitation.link}
+      {sharedTaskInvitation && !legalTermsGateBlocking && <JoinSharedTaskDialog key={sharedTaskInvitation.id} open initialInvitation={sharedTaskInvitation.link}
         onOpenChange={(open) => { if (!open) setSharedTaskInvitation(null); }} />}
       {/* 窗口级拖拽兜底:拖 .cshare 进窗口空白处 → 会话导入向导 */}
       <GlobalDropImportListener onOpenShareImport={openShareImport} />
-      {shareImportRequest && (
+      {shareImportRequest && !legalTermsGateBlocking && (
         <SessionShareImportWizard
           key={shareImportRequest.id}
           open
