@@ -596,6 +596,53 @@ describe('cindy-tool-fold extension source', () => {
     expect(String(callRead.content![0].text)).toContain('echo decoy two');
   });
 
+  it('spends the text-only expansion budget on the newest results first', () => {
+    const flag = Symbol.for('cindy.pi.textOnlyTurn');
+    const { context, toolResult } = loadExtension();
+    const messages: Message[] = [{ role: 'user', content: [{ type: 'text', text: 'go' }] }];
+    for (const tag of ['old', 'mid', 'new']) {
+      const body = tag + ' ' + 'z'.repeat(25000);
+      const preview = (toolResult({ toolName: 'bash', toolCallId: tag, content: [{ type: 'text', text: body }] }) as { content: Block[] }).content;
+      messages.push(call(tag, 'bash', { command: 'run ' + tag }), { role: 'toolResult', toolCallId: tag, toolName: 'bash', content: preview });
+    }
+    (globalThis as Record<symbol, unknown>)[flag] = true;
+    try {
+      const out = projection(context, messages)!;
+      const textOfBlocks = (m: Message) => (m.content as Block[]).map((b) => String(b?.text ?? '')).join('');
+      const newest = out.find((m) => m.role === 'toolResult' && m.toolCallId === 'new')!;
+      const oldest = out.find((m) => m.role === 'toolResult' && m.toolCallId === 'old')!;
+      expect(textOfBlocks(newest).length).toBeGreaterThan(20000);
+      expect(textOfBlocks(oldest).length).toBeLessThan(3000);
+    } finally {
+      delete (globalThis as Record<symbol, unknown>)[flag];
+    }
+  });
+
+  it('charges image bytes against the giant budget', async () => {
+    const { context, toolResult, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_GIANT_BUDGET: '100000' });
+    const admit = (id: string) => (toolResult({
+      toolName: 'mcp',
+      toolCallId: id,
+      content: [
+        { type: 'text', text: id + ' ' + 't'.repeat(21000) },
+        { type: 'image', data: 'i'.repeat(30000), mimeType: 'image/png' },
+      ],
+    }) as { content: Block[] }).content;
+    const first = admit('img-a');
+    const second = admit('img-b');
+    // 只按文本算两条共 42k 都会留下；算上图片各 51k，合计超 100k，最老的被挤掉。
+    projection(context, [
+      call('img-a', 'mcp', { cmd: 'run a' }),
+      { role: 'toolResult', toolCallId: 'img-a', toolName: 'mcp', content: first } as Message,
+      call('img-b', 'mcp', { cmd: 'run b' }),
+      { role: 'toolResult', toolCallId: 'img-b', toolName: 'mcp', content: second } as Message,
+    ]);
+    const gone = await tool.execute('t-img-a', { call_id: 'img-a' });
+    expect(gone.isError).toBe(true);
+    const live = await tool.execute('t-img-b', { call_id: 'img-b' });
+    expect(live.isError).toBeFalsy();
+  });
+
   it('keeps folding after a pin instead of reviving dropped originals', async () => {
     const { context, tool } = loadExtension();
     const messages = pairs(40);

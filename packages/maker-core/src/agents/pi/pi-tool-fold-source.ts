@@ -450,20 +450,26 @@ export default function (pi) {
   // 文本回合禁用了所有工具：被 ingest 截断、原文还留在 giants 里的结果，模型既看不到
   // 全文也调不了取回，只能瞎猜。放回时用入库时的块结构，图片与文字的位置关系不变。
   function expandRetained(messages) {
-    var out = null;
+    var picks = [];
     var left = PIN_BUDGET_CHARS;
-    for (var i = 0; i < messages.length; i++) {
+    // Start from the newest: on a text-only turn the model needs the result it just saw, and the
+    // oldest preview is the one most likely superseded. Tools are blocked, so nothing else can fetch it.
+    for (var i = messages.length - 1; i >= 0; i--) {
       var message = messages[i];
       if (!message || message.role !== 'toolResult' || !Array.isArray(message.content) || message.content.length === 0) continue;
       var giant = giants.get(String(message.toolCallId));
       if (!giant || !Array.isArray(giant.blocks) || giant.blocks.length === 0) continue;
-      var preview = textOf(message.content).length;
-      if (!(giant.text.length > preview) || giant.text.length - preview > left) continue;
-      left -= giant.text.length - preview;
-      if (out === null) out = messages.slice();
-      out[i] = Object.assign({}, message, { content: giant.blocks });
+      var added = giant.bytes - textOf(message.content).length;
+      if (!(added > 0) || added > left) continue;
+      left -= added;
+      picks.push({ at: i, blocks: giant.blocks });
     }
-    return out === null ? undefined : out;
+    if (picks.length === 0) return undefined;
+    var out = messages.slice();
+    for (var p = 0; p < picks.length; p++) {
+      out[picks[p].at] = Object.assign({}, messages[picks[p].at], { content: picks[p].blocks });
+    }
+    return out;
   }
 
   /**
@@ -496,19 +502,30 @@ export default function (pi) {
     return foldedIds[id] !== undefined && !pinned.has(id);
   }
 
+  /** Non-text blocks (images, attachments) occupy memory too: charge their serialized size. */
+  function giantCost(text, blocks) {
+    var total = text.length;
+    for (var i = 0; i < blocks.length; i++) {
+      if (blocks[i] && blocks[i].type !== 'text') total += JSON.stringify(blocks[i]).length;
+    }
+    return total;
+  }
+
   /** Admit a giant payload; evict oldest entries until the aggregate bound holds. */
   function admitGiant(id, text, blocks) {
-    if (text.length > GIANT_BUDGET_CHARS) return false; // a single payload over budget is never retained
+    var kept = blocks || [{ type: 'text', text: text }];
+    var cost = giantCost(text, kept);
+    if (cost > GIANT_BUDGET_CHARS) return false; // a single payload over budget is never retained
     if (giants.has(id)) {
-      giantBytes -= giants.get(id).text.length;
+      giantBytes -= giants.get(id).bytes;
       giants.delete(id);
     }
-    // 同时留住块结构：只存拼好的文本，还原时无法把文字放回图片/字幕之间的原位。
-    giants.set(id, { text: text, blocks: blocks || [{ type: 'text', text: text }] });
-    giantBytes += text.length;
+    // Also keep the block structure: a flattened string cannot put text back between images.
+    giants.set(id, { text: text, blocks: kept, bytes: cost });
+    giantBytes += cost;
     while (giants.size > 1 && (giants.size > GIANT_KEEP || giantBytes > GIANT_BUDGET_CHARS)) {
       var oldest = giants.keys().next().value;
-      giantBytes -= giants.get(oldest).text.length;
+      giantBytes -= giants.get(oldest).bytes;
       giants.delete(oldest);
     }
     var stored = giants.get(id);
