@@ -2,7 +2,8 @@
   "picker": {
     "shareName": "Compartido por {{owner}}",
     "numbered": "{{name}} ({{index}})",
-    "unavailable": "Proveedor compartido no disponible"
+    "unavailable": "Proveedor compartido no disponible",
+    "offline": "{{name}} · Sin conexión por ahora"
   },
   "link": {
     "title": "Uso compartido de proveedores",

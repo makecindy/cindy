@@ -2,7 +2,8 @@
   "picker": {
     "shareName": "Compartilhado por {{owner}}",
     "numbered": "{{name}} ({{index}})",
-    "unavailable": "Compartilhamento indisponível"
+    "unavailable": "Compartilhamento indisponível",
+    "offline": "{{name}} · Offline no momento"
   },
   "link": {
     "title": "Compartilhamento de provedores",

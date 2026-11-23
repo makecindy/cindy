@@ -17,7 +17,9 @@ vi.mock('react-i18next', () => ({
         ? `from ${options?.name}`
         : key === 'providerShare.picker.numbered'
           ? `${options?.name} (${options?.index})`
-          : key,
+          : key === 'providerShare.picker.offline'
+            ? `${options?.name} · offline`
+            : key,
   }),
 }));
 
@@ -566,6 +568,21 @@ describe('useProviderShareAgentDevices', () => {
     expect(result.current.isReceived('share:b')).toBe(true);
     expect(result.current.isReceived('share:zzz')).toBe(false);
     expect(invoke).not.toHaveBeenCalled();
+  });
+
+  // Gap (2026-11-23 field report, 用户裁决「保留并标注」): a share whose owner computer flapped
+  // offline disappeared from some entries and came back. Minimal input: online → offline → online.
+  it('keeps a share listed and marked while its owner computer is temporarily offline', async () => {
+    initial = [share({ shareId: 'a' })];
+    const { result } = renderHook(() => useProviderShareAgentDevices());
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    await act(async () => { push?.([share({ shareId: 'a', hostOnline: false, hostCapable: false })]); await Promise.resolve(); await Promise.resolve(); });
+    expect(result.current.devices).toEqual([{ deviceId: 'share:a', name: 'from Magi · offline' }]);
+    expect(result.current.nameFor('share:a')).toBe('from Magi · offline');
+    await act(async () => { push?.([share({ shareId: 'a', hostOnline: false, standbyOnline: true })]); await Promise.resolve(); await Promise.resolve(); });
+    expect(result.current.devices).toEqual([{ deviceId: 'share:a', name: 'from Magi' }]);
+    await act(async () => { push?.([share({ shareId: 'a' })]); await Promise.resolve(); await Promise.resolve(); });
+    expect(result.current.devices).toEqual([{ deviceId: 'share:a', name: 'from Magi' }]);
   });
 
   it('keeps the current paused or removed share so the task can see and leave it', async () => {

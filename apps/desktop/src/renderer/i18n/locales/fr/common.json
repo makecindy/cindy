@@ -698,6 +698,7 @@
     },
     "picker": {
       "unavailable": "Partage indisponible",
+      "offline": "{{name}} · Hors ligne pour le moment",
       "hostOutdated": "La version de Cindy sur l'ordinateur du propriétaire est trop ancienne pour lister ces modèles. Demandez-lui de mettre à jour Cindy, puis réessayez.",
       "numbered": "{{name}} ({{index}})"
     },

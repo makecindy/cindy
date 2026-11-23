@@ -140,8 +140,10 @@ import {
 } from '@/lib/remoteProviderGroups';
 import { providerGroupDeviceCount, type ProviderGroupConfig } from '../../../shared/providerGroup';
 import { useLocalProviderGroups } from '@/features/provider-group/useLocalProviderGroups';
-import { isProviderAccessDeniedError, readProviderShareGroupSize } from '@cindy/device-link';
+import { isProviderAccessDeniedError, providerSharePickerState, readProviderShareGroupSize } from '@cindy/device-link';
 import { SharedProviderGroupStatus } from '@/features/provider-share/SharedProviderGroupStatus';
+import { useProviderShareReceived } from '@/features/provider-share/providerShareStore';
+import { providerShareAgentDeviceId } from '@/features/provider-share/providerShareFormat';
 import { modelPriceDiscountLabelValues, modelPriceDetailRows } from '@/lib/modelPriceFormat';
 import { resolveModelPricePresentation } from '@/lib/modelPricePresentation';
 import {
@@ -1401,6 +1403,7 @@ function ModelSelectorContentView({
   const pluginEngineChoiceLabel = usePluginEngineChoiceLabel();
   const modelGroupRows = useModelGroupPickerRows(modelGroups?.config ?? MODEL_GROUPS_DEFAULTS);
   const favoriteModelGroupCount = useFavoriteModelGroupCount(modelGroups?.config ?? MODEL_GROUPS_DEFAULTS);
+  const { received: receivedShares } = useProviderShareReceived();
   // ── 远程 Agent:面板在本机目录与其他电脑的目录之间切换浏览 ─────────────────────
   // 打开时停在草稿当前的落点(Agent 在哪台电脑就先列哪台);左侧栏点到另一台电脑的供应商时,
   // 下面整套目录(能力 / 供应商 / 可见性 / 用量 / 收藏)都随 deviceId 换成那台电脑的。
@@ -1906,6 +1909,10 @@ function ModelSelectorContentView({
     remoteAgentDeviceId, currentProviderId, remoteDisable, remoteProviderGroups.hidden, remoteProviderGroups.groups, t]);
   const remoteAgentGroups = useMemo(() => {
     if (!remoteAgentDevices) return [];
+    // A share always has exactly one provider: key its rail cell by it whatever the catalog state
+    // (loading, failed, offline), so the cell is not remounted while the user is clicking it.
+    const shareProviderIdOf = (deviceId: string) =>
+      receivedShares.find((share) => providerShareAgentDeviceId(share.shareId) === deviceId)?.providerId ?? '';
     return remoteAgentDevices.flatMap((device) => {
       const catalog = remoteDeviceCatalogs.get(device.deviceId);
       // 只列那台电脑开了「允许被远程调用」的供应商；一个都没开的电脑整段不出现。
@@ -1920,7 +1927,7 @@ function ModelSelectorContentView({
       // failed, so the existing status/retry panel is reachable without cached models.
       if (shared.length === 0 && isProviderShareAgentDeviceId(device.deviceId)
         && (!catalog || catalog.loading || catalog.error)) {
-        return [{ deviceId: device.deviceId, providers: [], providerIds: [''], entries: [] }];
+        return [{ deviceId: device.deviceId, providers: [], providerIds: [shareProviderIdOf(device.deviceId)], entries: [] }];
       }
       if (!catalog || shared.length === 0) return [];
       const entries = unifiedModelEntries({
@@ -1943,11 +1950,22 @@ function ModelSelectorContentView({
           ((!hiddenThere.has(providerId) && !remoteDisable.isHidden(device.deviceId, providerId)) ||
             (remoteAgentDeviceId === device.deviceId && currentProviderId === providerId)),
       );
-      return entries.length > 0
-        ? [{ deviceId: device.deviceId, providers: shared, providerIds, entries }]
-        : [];
+      if (entries.length > 0) return [{ deviceId: device.deviceId, providers: shared, providerIds, entries }];
+      // A received share whose provider is listed but has no usable models right now (its owner
+      // computer went offline, so the provider reads as disconnected) stays in the rail like a
+      // loading or failed share, so it does not vanish and reappear with the owner's presence
+      // (2026-11-23 用户裁决「保留并标注」). The empty panel shows the existing status note.
+      if (isProviderShareAgentDeviceId(device.deviceId) && shared.length > 0) {
+        const listed = shared.map((provider) => provider.id).filter((providerId) =>
+          !runLocationFold.hiddenRemote.has(remoteProviderEntryKey(device.deviceId, providerId))
+          && !hiddenThere.has(providerId) && !remoteDisable.isHidden(device.deviceId, providerId));
+        return [{ deviceId: device.deviceId, providers: shared,
+          providerIds: listed.length > 0 ? listed : [shareProviderIdOf(device.deviceId)], entries: [] }];
+      }
+      return [];
     });
-  }, [remoteAgentDevices, remoteDeviceCatalogs, remoteProviderGroups, runLocationFold, remoteDisable, remoteAgentDeviceId, currentProviderId]);
+  }, [remoteAgentDevices, remoteDeviceCatalogs, remoteProviderGroups, runLocationFold, remoteDisable, remoteAgentDeviceId, currentProviderId,
+    receivedShares]);
   // 其他电脑的模式只在那台电脑已列在「其他电脑」那一段时出现：选了它，Agent 在那台运行，只能用那台开了
   // 「允许被远程调用」的来源(model-groups.md §3.1、§6.3)。
   const deviceModelGroupChoices = useMemo(() => {
@@ -3628,6 +3646,14 @@ function ModelSelectorContentView({
         remoteAgentGroups.find((group) => group.deviceId === remoteBrowse.deviceId)?.providerIds[0] ??
         null)
       : null;
+    // The owner computer of the browsed share is temporarily offline (providerSharePickerState, the
+    // same rule as the rail label and Mobile): say so above its last models instead of an empty list.
+    const browsedShareOffline = !!remoteBrowse && isProviderShareAgentDeviceId(remoteBrowse.deviceId)
+      && receivedShares.some((share) => providerShareAgentDeviceId(share.shareId) === remoteBrowse.deviceId
+        && providerSharePickerState(share) === 'offline');
+    const browsedShareOfflineNote = browsedShareOffline
+      ? <div role="status" className="px-3 py-2 text-13 text-[var(--text-secondary)]">{t('providerShare.received.offlineNote')}</div>
+      : null;
     const browsedShareGroupSize = remoteBrowse && isProviderShareAgentDeviceId(remoteBrowse.deviceId)
       ? readProviderShareGroupSize(remoteAgentGroups.find((group) => group.deviceId === remoteBrowse.deviceId)
         ?.providers.find((provider) => provider.id === remoteActiveProviderId))
@@ -3820,6 +3846,9 @@ function ModelSelectorContentView({
           {localCatalogNotice && <div className="shrink-0 p-2">{localCatalogNotice}</div>}
           {sshCodexNotice && <div className="shrink-0 p-2">{sshCodexNotice}</div>}
           <UnifiedModelPanel
+            // The offline note above already explains why this share lists no models; skip the
+            // generic "no matching models" line under it (a search still reports no results).
+            {...(browsedShareOffline && !query.trim() ? { emptyCatalogNotice: <></> } : {})}
             {...(!deviceId && !providersOverride && localProviders.loading && !localProviders.error && providers.length === 0
               ? {
                   emptyCatalogNotice: (
@@ -3970,15 +3999,18 @@ function ModelSelectorContentView({
                       (remoteModelListStatus === 'ready' && remoteActiveProviderId !== null),
                     ...(remoteBrowse && remoteActiveProviderId && browsedShareGroupSize !== null
                       ? {
-                          status: <SharedProviderGroupStatus
-                            key={JSON.stringify([remoteBrowse.deviceId, remoteActiveProviderId])}
-                            deviceId={modelCatalogKey(remoteBrowse.deviceId, remoteAgent.catalogHostDeviceId) ?? remoteBrowse.deviceId}
-                            providerId={remoteActiveProviderId}
-                            initialSize={browsedShareGroupSize}
-                            compact
-                          />,
+                          status: <>
+                            {browsedShareOfflineNote}
+                            <SharedProviderGroupStatus
+                              key={JSON.stringify([remoteBrowse.deviceId, remoteActiveProviderId])}
+                              deviceId={modelCatalogKey(remoteBrowse.deviceId, remoteAgent.catalogHostDeviceId) ?? remoteBrowse.deviceId}
+                              providerId={remoteActiveProviderId}
+                              initialSize={browsedShareGroupSize}
+                              compact
+                            />
+                          </>,
                         }
-                      : {}),
+                      : browsedShareOfflineNote ? { status: browsedShareOfflineNote } : {}),
                     ...(remoteBrowse && remoteModelListStatus === 'error'
                       ? {
                           failure: (

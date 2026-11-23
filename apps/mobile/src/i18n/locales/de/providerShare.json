@@ -2,7 +2,8 @@
   "picker": {
     "shareName": "Von {{owner}} freigegeben",
     "numbered": "{{name}} ({{index}})",
-    "unavailable": "Freigabe nicht verfügbar"
+    "unavailable": "Freigabe nicht verfügbar",
+    "offline": "{{name}} · Vorübergehend offline"
   },
   "link": {
     "title": "Anbieterfreigabe",

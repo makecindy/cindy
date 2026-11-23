@@ -7,6 +7,37 @@
 > `apps/desktop/src/main/{remote-agent,remote-ssh}/**`、`apps/desktop/src/main/remote-desktop*/**`、
 > `apps/mobile/src/remote-desktop/**`、`apps/desktop/src/preload/preload.ts`
 
+## 远程模型目录统一读取口径（2026-11-23）
+
+同一台电脑、同一份分享的模型目录在各入口给出一致结论，不再因各自的缓存与等待时长而一处有、一处无：
+
+- **一次读取供所有读者**：Main 的目录读取器（`packages/device-link/src/metadataContinuity.ts`）对
+  `maker:provider:list`、`maker:get-capabilities`、`maker:list-available-agents` 设 15 秒新鲜窗口
+  （`REMOTE_CATALOG_FRESH_MS`）：窗口内选择器、机器人、Orca、名单轮询等读者共用上一次实际读取，不再各自
+  发起。来源推送的变化通知与权限变化改变缓存键，立即失效；实时读取（发送前探测、执行）不经过它；
+  `maker:agent:status` 与供应商组视图保持实时。供应商组目录自带 15 秒缓存，且撤下路由需要对方当下的答复，
+  它的读取以 `ownFreshness` 跳过共享窗口（仍有既有的有界回退）。
+- **嵌套读取期限分层**：远控任务经任务电脑代读来源时，代读最多 20 秒，短于控制端默认 30 秒；来源的临时失败
+  保持临时错误码（见协议记录 `remote-agent.md`），控制端保留有界显示并可重试。
+- **分享在线状态一条规则**：`providerSharePickerState`（`packages/device-link/src/providerShareCatalog.ts`）
+  供 Desktop 选择器、收藏与 Mobile 选择器共用。分享者电脑暂时离线时照常列出并标「暂时离线」，不随在线状态
+  来回出现、消失；已暂停的分享仍只在任务正用着时保留。
+- **信任期到期后补读**：Desktop 供应商目录与 Agent 能力的有界快照到期时，若仍有界面在用，补读一次（同一来源
+  5 秒内最多一次），与 Mobile 一致；能力读取遇临时失败保留上一份有界快照，与供应商目录一致。
+- **手机恢复重试有界**：目录读取失败后的后台恢复最多 8 轮（约 2 分钟退避），之后等回到前台、打开选择器、
+  重连或目录变化再读，不在电脑长期离线时每 30 秒一直读下去。
+
+故障半径三问：① 证据是单个来源目录读取的慢、超时或在线状态变化，只影响这一来源的显示新鲜度，不等于链路或账号
+失效；② 只复用、补读或保留这一来源的目录快照，不重建链路、不重放创建或发送，不延长任何信任期（补读拿到的仍是
+主机转发的剩余预算）；③ 其他电脑、其他分享与同一电脑的其他目录各自按自己的缓存键与预算处理，互不失效。
+不改 wire 形状、channel 或字段，旧端行为不变，自建中转无需修改。
+
+实现与回归：`metadataContinuity.ts`、`providerMetadataContinuity.ts`、`controlledModelCatalog.ts`、
+`useDeviceProviders.ts`、`useAgentCapabilities.ts`、`useProviderShareAgentDevices.ts`、`providerShareFavorites.ts`，
+Mobile `remoteAgentCatalogs.ts`、`useDeviceProviders.ts`；`metadataContinuity.test.ts`、
+`providerMetadataContinuity.test.ts`（「shared catalog fresh window」）、`controlledModelCatalog.test.ts`、
+Mobile `remoteAgentCatalogs.test.ts`。
+
 ## 手机 Agent-Net 冷启动并行与前台直连快恢复（2026-11-22）
 
 手机 `openMobileAgentNetSocket` 在官方网络下将 `/api/device-link/devices` 准入列表预取（3 秒上限）

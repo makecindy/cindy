@@ -263,6 +263,7 @@ export function useRemoteAgentCatalogsWithStatus(input: RemoteAgentCatalogsInput
       keepDeviceIds: keepKey ? keepKey.split('\n') : [],
       keepOnly,
       deviceName: (share) => names.get(share.agentDeviceId) ?? t('providerShare.picker.shareName', { owner: share.ownerName }),
+      offlineName: (name) => t('providerShare.picker.offline', { name }),
       unavailableName: t('providerShare.picker.unavailable'),
     });
   }, [input.controlledDeviceId, input.enabled, keepKey, keepOnly, readShares, shareState, t]);

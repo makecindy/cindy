@@ -56,6 +56,13 @@ const expiry = new MetadataSnapshotExpiry();
 const subscriptionFetchedAt = new Map<string, number>();
 const inflight = new Map<string, Promise<DeviceProvidersPayload>>();
 const deviceGen = new Map<string, number>();
+/**
+ * When a mounted catalog's trust budget ends, read it once more (as Mobile does) instead of leaving
+ * the picker empty until the window is focused again. The host forwards its own remaining budget,
+ * so a re-read can never extend trust; this bound only stops a near-zero budget from looping.
+ */
+const EXPIRY_REREAD_MIN_INTERVAL_MS = 5_000;
+const expiryRereadAt = new Map<string, number>();
 export type DeviceProvidersEvent =
   | { status: 'loading'; retainDisplaySnapshot?: boolean }
   | ({ status: 'ready' } & DeviceProvidersPayload)
@@ -247,6 +254,16 @@ async function fetchDeviceProviders(deviceId: string): Promise<DeviceProvidersPa
           evictDeviceProviders(deviceId, { directOnly: true, deferNotify: true });
           queueMicrotask(() => {
             if (cache.has(deviceId)) return;
+            const now = performance.now();
+            const last = expiryRereadAt.get(deviceId);
+            if ((listeners.get(deviceId)?.size ?? 0) > 0
+              && (last === undefined || now - last >= EXPIRY_REREAD_MIN_INTERVAL_MS)) {
+              if (expiryRereadAt.size >= 256) expiryRereadAt.clear();
+              expiryRereadAt.set(deviceId, now);
+              // evictDeviceProviders above already announced `loading` to the mounted consumers.
+              void fetchDeviceProviders(deviceId).catch(() => undefined);
+              return;
+            }
             notifyDeviceProviders(deviceId, { status: 'error',
               error: '[MODEL_VISIBILITY_NOT_READY] Provider directory snapshot expired',
               unsupported: false });

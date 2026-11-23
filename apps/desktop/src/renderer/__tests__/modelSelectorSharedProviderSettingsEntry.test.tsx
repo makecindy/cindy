@@ -69,6 +69,12 @@ const catalogs = vi.hoisted(() => {
   };
 });
 
+const shareState = vi.hoisted(() => ({ received: [] as Array<Record<string, unknown>> }));
+vi.mock('@/features/provider-share/providerShareStore', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/features/provider-share/providerShareStore')>()),
+  useProviderShareReceived: () => ({ received: shareState.received, loaded: true }),
+}));
+
 vi.mock('@/hooks/useProviders', () => ({
   useProviders: () => ({ providers: catalogs.local, providerOrder: [] }),
 }));
@@ -152,6 +158,8 @@ async function browse(name: string) {
 beforeEach(() => {
   catalogs.shareError = null;
   catalogs.shareLoading = false;
+  catalogs.byDevice['share:abc'] = [{ ...(catalogs.byDevice['share:abc'][0] as object), connected: true }];
+  shareState.received = [];
   vi.clearAllMocks();
   resetEnginePrefs();
   resetFavorites();
@@ -183,6 +191,20 @@ describe('模型面板底部「配置模型」', () => {
       providerId: 's-shared', modelId: 's-model', agentDevice: share,
     }));
   });
+  // Gap (2026-11-23 real run): once the sharer's computer went offline its provider read as
+  // disconnected, the share had no listed models and vanished from the rail, coming back with the
+  // owner's presence. Minimal input: an active share whose owner is offline and provider disconnected.
+  it('keeps a share whose owner computer is offline in the rail and explains it instead of an empty list', async () => {
+    catalogs.byDevice['share:abc'] = [{ ...(catalogs.byDevice['share:abc'][0] as object), connected: false }];
+    shareState.received = [{ shareId: 'abc', memberId: 'm', providerId: 's-shared', providerLabel: 'S Shared',
+      hostDeviceId: 'host', deviceName: 'Cindy', owner: { displayName: 'Magi', avatarUrl: null, region: 'global' },
+      status: 'active', hostOnline: false, hostCapable: false }];
+    renderPanel();
+    await browse(SHARE_CELL);
+    expect(screen.getAllByRole('status').some((node) => node.textContent?.includes('providerShare.received.offlineNote'))).toBe(true);
+    expect(screen.queryByText('newChat.modelSelector.search.noResults')).toBeNull();
+  });
+
   it('本机目录照旧显示，打开供应商页不带目标', () => {
     const { onNavigateToProviders } = renderPanel();
     fireEvent.click(screen.getByRole('button', { name: ENTRY }));

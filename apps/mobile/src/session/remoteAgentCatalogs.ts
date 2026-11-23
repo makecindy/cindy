@@ -6,7 +6,7 @@ import { deviceDisplayName } from '@/device-link/deviceName';
  * 「其他电脑」标题。一个都没开的电脑不出现,列表不随设备数变长。
  * 别人分享给被控电脑的供应商(供应商分享)同样按「一台电脑」接在后面,见 providerShareRemoteCatalogs。
  */
-import type { DeviceView, ProviderShareFavoriteSource } from '@cindy/device-link';
+import { providerSharePickerState, type DeviceView, type ProviderShareFavoriteSource } from '@cindy/device-link';
 import type { ProviderView } from '@cindy/model-providers/registry';
 import { remoteInvocationModels } from '@cindy/model-providers';
 import type { NewSessionRemoteAgentPick } from './newSession';
@@ -68,7 +68,9 @@ export { isProviderShareAgentDeviceId, PROVIDER_SHARE_AGENT_DEVICE_PREFIX } from
  * (设备 id = `share:<shareId>`),名字由调用方写成「{电脑名} · 来自 {昵称} 的分享」,
  * 模型列表分组标题沿用「{供应商} · {电脑名}」,于是成为产品规则 §5.1 的写法。
  *
- * 与同账号电脑同口径:已暂停、分享者电脑不在线的分享不列(读不了目录,选了也用不了);
+ * 已暂停的分享不列;分享者电脑暂时离线的分享照常列出,名字后标「暂时离线」(providerSharePickerState,
+ * 与 Desktop 同一条规则,2026-11-23 用户裁决「保留并标注」),不随在线状态来回出现、消失。
+ * 目录仍在信任期内的离线分享可以选;没有可信目录时标成离线、选不了。
  * 任务当前(或挂着的)Agent 所在的分享始终保留,让用户看得到 Agent 在哪、换得走。
  * 已不在列表里的分享(被删除或已退出)在拿到过一次权威列表后保留一行「已不可用的分享」。
  * 目录只认被分享的那个供应商,并且同样要求开了「允许被远程调用」。
@@ -81,6 +83,8 @@ export function providerShareRemoteCatalogs(input: {
   /** 只要 keepDeviceIds 里的分享(选择器没打开、只为模型药丸取目录时)。 */
   keepOnly?: boolean;
   deviceName(share: ProviderShareCatalogEntry): string;
+  /** 分享者电脑暂时离线时的名字(「{名字} · 暂时离线」)。 */
+  offlineName(name: string): string;
   unavailableName: string;
 }): RemoteAgentCatalog[] {
   const keep = new Set(input.keepDeviceIds.filter(isProviderShareAgentDeviceId));
@@ -90,13 +94,15 @@ export function providerShareRemoteCatalogs(input: {
     if (seen.has(share.agentDeviceId)) continue;
     seen.add(share.agentDeviceId);
     const kept = keep.delete(share.agentDeviceId);
-    const reachable = share.status === 'active' && (share.hostOnline
-      || (share.payload?.providerContinuity?.remainingMs ?? 0) > 0);
-    if (!kept && (input.keepOnly || !reachable)) continue;
+    const state = providerSharePickerState(share);
+    const reachable = state === 'available'
+      || (state === 'offline' && (share.payload?.providerContinuity?.remainingMs ?? 0) > 0);
+    if (!kept && (input.keepOnly || state === 'paused')) continue;
     const payload = share.payload;
+    const name = input.deviceName(share);
     catalogs.push({
       deviceId: share.agentDeviceId,
-      name: input.deviceName(share),
+      name: state === 'offline' ? input.offlineName(name) : name,
       status: payload ? 'ready' : 'error',
       // 已暂停 / 分享者电脑不在线的分享只因被选着才留在清单里:与留下的离线电脑一样标出,选不了。
       ...(reachable ? {} : { offline: true as const }),

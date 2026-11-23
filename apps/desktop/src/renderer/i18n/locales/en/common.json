@@ -689,6 +689,7 @@
     },
     "picker": {
       "unavailable": "Unavailable share",
+      "offline": "{{name}} · Offline for now",
       "hostOutdated": "The Cindy version on the owner’s computer is too old to list these models. Ask them to update Cindy, then try again.",
       "numbered": "{{name}} ({{index}})"
     },
