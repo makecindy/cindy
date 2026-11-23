@@ -6,6 +6,10 @@ import type { TransportOptions } from './types.js';
 import { createCoreTransport } from './transport.js';
 import { LanDiscovery } from './lan.js';
 import { BonjourDiscovery } from './bonjour.js';
+import os from 'node:os';
+import type { KeyObject } from 'node:crypto';
+import { NativeTransport } from './nativeTransport.js';
+import { NodeNativeEngine, loadNodeNativeBinding, type NodeNativeBinding } from './nodeNativeEngine.js';
 
 export interface AgentNetSocketOptions extends Omit<PortableSocketOptions, 'client' | 'bindings'> {
   client: AgentNetClient;
@@ -19,6 +23,12 @@ export interface AgentNetSocketOptions extends Omit<PortableSocketOptions, 'clie
   publicCandidatesOnly?: boolean;
   tap?: TransportOptions['tap'];
   udpTraffic?: TransportOptions['udpTraffic'];
+  /**
+   * The native engine (packages/agent-net-native/node): its module, given as the path to load it from. The engine gets the
+   * client identity's own keys. Without it, or when it fails, the transport is the WASM core as before; `onFallback` says why.
+   * Tests and benchmarks that tap datagrams or bind an address keep the WASM core, which has those.
+   */
+  native?: { binding: NodeNativeBinding | string; onFallback?(code: string): void };
 }
 /** Node bindings; device-link routing and framing are shared with mobile. */
 export class AgentNetSocket extends PortableSocket {
@@ -44,12 +54,19 @@ export class AgentNetSocket extends PortableSocket {
         await client.request('POST', '/notify', { to: recipient.certificate.deviceId, ciphertext }, { signal });
         options.assertCurrent?.();
       },
-      createTransport: request => createCoreTransport({ ...request,
-        identity: options.client.identity.transportPrivateKey, module: options.module,
-        bindAddress: options.bindAddress, udp: options.udp, stunServers: options.stunServers, tap: options.tap,
-        udpTraffic: options.udpTraffic,
-        relayUdpServer: options.relayUdpServer, publicCandidatesOnly: options.publicCandidatesOnly,
-      }),
+      createTransport: async request => {
+        const native = options.native && !options.tap && !options.bindAddress ? options.native : undefined;
+        if (native) {
+          try { return await createNativeTransport(options, native, request); }
+          catch (error) { native.onFallback?.(error instanceof Error && /^[A-Z0-9_]{1,80}$/.test(error.message) ? error.message : 'AGENT_NET_NATIVE_FAILED'); }
+        }
+        return createCoreTransport({ ...request,
+          identity: options.client.identity.transportPrivateKey, module: options.module,
+          bindAddress: options.bindAddress, udp: options.udp, stunServers: options.stunServers, tap: options.tap,
+          udpTraffic: options.udpTraffic,
+          relayUdpServer: options.relayUdpServer, publicCandidatesOnly: options.publicCandidatesOnly,
+        });
+      },
       createDiscovery: request => {
         const lan = new LanDiscovery({ ...request, identity: options.client.identity, interfaceAddress: options.bindAddress });
         const bonjour = new BonjourDiscovery(lan, request.port);
@@ -57,4 +74,38 @@ export class AgentNetSocket extends PortableSocket {
       },
     } }) as Promise<AgentNetSocket>;
   }
+}
+
+/** This computer's IPv4 addresses, as the WASM transport announces them (transport.ts `gatherCandidates`); read again on network changes. */
+async function interfaceAddresses(): Promise<string[]> {
+  const found: string[] = [];
+  for (const entries of Object.values(os.networkInterfaces())) {
+    for (const entry of entries ?? []) if (entry.family === 'IPv4' && !entry.internal) found.push(entry.address);
+  }
+  return [...new Set(found)];
+}
+/** A private key's raw bytes as base64url: the JWK `d` of an X25519 key is its secret, of an Ed25519 key its seed. */
+const rawPrivateKey = (key: KeyObject): string => {
+  const raw = key.export({ format: 'jwk' }).d;
+  if (!raw) throw new Error('AGENT_NET_NATIVE_KEY_UNAVAILABLE');
+  return raw;
+};
+/**
+ * The transport on the native engine, with the client identity's own keys. Peers know this device by its transport key; one
+ * that came out different would make every peer refuse the handshake, so the engine's is checked here and the WASM core is
+ * used instead.
+ */
+async function createNativeTransport(options: AgentNetSocketOptions, native: NonNullable<AgentNetSocketOptions['native']>,
+  request: TransportOptions): Promise<NativeTransport> {
+  const binding = typeof native.binding === 'string' ? loadNodeNativeBinding(native.binding) : native.binding;
+  const identity = options.client.identity;
+  const engine = await NodeNativeEngine.create(binding, { deviceId: identity.deviceId, udp: options.udp !== false, enhancedTransport: true,
+    keys: { transport: rawPrivateKey(identity.transportPrivateKey), signing: rawPrivateKey(identity.signingPrivateKey) } });
+  try {
+    const own = await engine.command<{ transportKey?: string }>({ op: 'identity' });
+    if (own.transportKey !== identity.transportKey) throw new Error('AGENT_NET_NATIVE_IDENTITY_MISMATCH');
+  } catch (error) { await engine.destroy(); throw error; }
+  return NativeTransport.create(engine, { ...request, stunServers: options.stunServers, relayUdpServer: options.relayUdpServer,
+    udpTraffic: options.udpTraffic, publicCandidatesOnly: options.publicCandidatesOnly },
+    interfaceAddresses, true);
 }

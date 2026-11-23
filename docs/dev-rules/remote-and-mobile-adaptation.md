@@ -532,7 +532,56 @@ WebSocket；不关 WebSocket、不复位对端、不清队列，切换期间丢�
 
 还没解决的：限速线路上每 MiB 的 CPU 仍是 Device Link 的约 3 倍。一半是每一阵开头那一个往返里看时间，另一半是每个包都要在 JS 里
 走一轮（加密、发包、核心的十几次调用）。前者在 Windows 上要有比系统节拍细的计时器，后者要把收发包放到原生线程里，JS 只读写流，
-和手机的原生循环（[会话层方案](../agent-net-session-plan.md) 10.2 节 v2-4）是同一件事。
+和手机的原生循环（[会话层方案](../agent-net-session-plan.md) 10.2 节 v2-4）是同一件事。2026-11-23 起两者都由下一节的原生引擎解决。
+
+### 电脑端 Agent-Net 跑在原生引擎上（2026-11-23）
+
+Desktop 的 Agent-Net worker 有原生模块时，传输跑在手机同一个 Rust 引擎上（`packages/agent-net-native/node`，Node-API 模块）：
+收包、回确认、重传、按节奏发包都在引擎自己的线程里，不经 Main，也不经 worker 的 JS；引擎有东西给 JS 读时往 worker 监听的本机回环
+UDP 端口发一个字节叫醒它（最多一个在路上），数据连续进来时 JS 读完后 1 毫秒内到的合成一次读，空闲后的第一个包照旧马上叫醒。
+`NativeTransport`（手机在用的同一个传输层）在 worker 里驱动它（`socket.ts` 的 `native`），会话层、Device Link 帧和 Main 侧都不变。
+模块由打包时按目标平台从源码构建、放在 worker 包旁边（`forge.config.ts` 的 `stageAgentNetNative`；Windows 打包本来就要 Cargo，
+构建失败即打包失败，其它平台没有 Rust 时不带它）；开发时用 `node packages/agent-net-native/node/build.mjs` 生成。
+没有模块、加载失败、或引擎给出的传输公钥和这台设备的不一致（`AGENT_NET_NATIVE_IDENTITY_MISMATCH`）时照旧用 WASM，
+日志记 `agent-net native engine unavailable (<原因>); the transport runs on WASM`，正常时记 `agent-net transport runs on the native engine`。
+线上协议、中转与对端都不变：新旧版本、原生与 WASM 两端任意组合互通（`nodeNative.integration.test.ts` 直连与只经中转各一遍）。
+Node Host 仍用 WASM。
+
+切换前补上了原生路径比 WASM 路径少的几项，否则电脑端会退步：
+- **中转 UDP「只通登记、不通数据」时退回 WebSocket**、走 UDP 时的往返与停用原因（[协议记录](protocol-compatibility/agent-net-udp-relay.md)末段，
+  引擎能力位 `relay-udp-health`）；UDP 收发字节照旧进 UDP 流量表（`udpTraffic`）。
+- 名册上限 512 → 4096：超过时原生传输整个关掉，WASM 没有这个上限。
+- 引擎收走排队字节就告诉 socket（`onDrain`），和 WASM 一样；原来只在单条连接从 128 KB 以上落下时才报，几条连接加起来超过
+  128 KB 时 Main 要等每秒一次的状态才发下一大帧。
+- **Windows 上的短等待。** `WSAPoll` 的超时跟系统节拍走，1 毫秒的等待实际 15.5 毫秒，按节奏发包的引擎在 12.5 MB/s、往返 32 毫秒的
+  线路上比 WASM 慢 15–20%。现在套接字到包时置一个事件，再配一个高精度计时器，两个一起等（`packages/agent-net-native/src/wait.rs`），
+  1 毫秒的等待 1.57 毫秒，不改整个进程的计时器精度。只影响 Windows，手机不受影响。
+- 身份：电脑端有的身份是存下来的私钥、不是从种子派生的，引擎可以直接收这两把私钥（`create` 的 `keys`），worker 本来就持有它们。
+
+查到并修掉的两个崩溃：Node 在最后一个加载原生模块的 worker 结束时卸载模块，而模块起的线程（收发线程最多再等 250 毫秒、中转与 STUN
+的域名解析要等 DNS）还会回到已卸载的代码，整个进程崩溃（Electron 42，退出码 139，压测两轮之间必现）；模块现在把自己钉在进程里
+（`pin_module`）。原来用 Node-API 的 thread-safe function 叫醒 JS，Electron 结束 worker 时它被释放、收发线程再调用就崩，
+所以改成上面的回环 UDP：收发线程从不调用 Node。
+
+故障半径三问（中转 UDP 退回）：① 证据是这条中转会话上本机自己的收发——经 UDP 发出数据后 4 秒没有任何经中转的数据报进来且一直在重发、
+发往走中转对端的请求 60 秒内超时两次、中转连接上 5 秒里重传占发出的四分之一以上——与其它会话、其它对端无关；② 只切换这条会话的
+数据报走哪条路，不关 WebSocket、不复位对端、不清队列，冷却 30 秒、5 分钟、30 分钟后再试，停用期间登记每 15 秒一次；③ `udp_paths.rs`
+的 `tests` 逐条覆盖（含单个纯确认不触发、两次超时隔一分钟不算、连接关闭计数变小时从头算），`nativeTransport.test.ts` 覆盖 JS 怎么读、
+怎么报，`nodeNative.integration.test.ts` 用真实中转确认路由报 UDP 与往返；这些用例去掉对应实现时都失败。
+引擎启动失败只影响这一次打开：退回 WASM，账号、名册与重连节奏不变。
+
+实测（Windows，Electron 42 跑 `bulk-transfer.ts --modes worker-session --runs 2`，20 MiB、512 KiB 一块、4 块在途、边传边发小请求；
+每 MiB 的 CPU 是两台设备、Main 与两个 worker 合计；`--native <模块>` 跑原生引擎）：
+
+| 线路 | WASM | 原生引擎 |
+|---|---|---|
+| 不限速 | 40–46 MB/s，37–49 毫秒，小请求 6–14 毫秒 | 54–58 MB/s，12–26 毫秒，2–5 毫秒 |
+| 家宽 12.5 MB/s、往返 32 毫秒 | 11.9–12.4 MB/s，70–82 毫秒 | 13.9 MB/s，45–50 毫秒 |
+| 跨地区 6.25 MB/s、往返 200 毫秒 | 3.2–4.1 MB/s，89–134 毫秒 | 3.3–4.3 MB/s，51–61 毫秒 |
+
+只看引擎（两端各一个线程、回环 UDP、不经 JS）：每 MiB 7.5 毫秒对 WASM 的 15–21 毫秒，回环 260 MB/s 对 70–88 MB/s。
+每到一个包都把所有连接的状态拼成 JSON 一度吃掉了这些节省：引擎现在先用核心的 `has_unread` / `has_accepted` 和状态摘要判断有没有
+东西给 JS，没有就不拼（家宽 43–49 → 27–43 毫秒，跨地区 47–54 → 29–34 毫秒，只看引擎）。
 
 ### Agent-Net 会话层上的控制链路（跟着「Agent-Net (Beta)」开关）
 

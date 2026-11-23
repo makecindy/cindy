@@ -172,7 +172,8 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
       socket.worker.once('exit', () => { finish(new Error('AGENT_NET_WORKER_EXITED')); socket.dispose(1006); });
     });
     const { onDirectory: _directory, onDelegationRequests: _requests, onDelegations: _grants, onPathChanged: _path, tap: _tap, client: _client, workerFile: _file, assertCurrent: _guard,
-      log: _log, uplinkKeepalive: _keepalive, uplinkMaxQueueDelayMs: _queueDelay, networkChangeProbeMs: _probe, pathMoveLogIntervalMs: _moveLog, observeUdpTraffic, ...portable } = options;
+      log: _log, uplinkKeepalive: _keepalive, uplinkMaxQueueDelayMs: _queueDelay, networkChangeProbeMs: _probe, pathMoveLogIntervalMs: _moveLog, observeUdpTraffic,
+      native, ...portable } = options;
     if (observeUdpTraffic) {
       // Only two integers cross the thread boundary. Sampling doesn't copy packets or post per-datagram messages.
       const bytes = new BigUint64Array(new SharedArrayBuffer(2 * BigUint64Array.BYTES_PER_ELEMENT));
@@ -180,7 +181,10 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
       const stop = observeUdpTraffic(() => ({ sent: Number(Atomics.load(bytes, 0)), received: Number(Atomics.load(bytes, 1)) }));
       socket.worker.once('exit', stop);
     }
-    socket.worker.postMessage({ type: 'init', options: portable, client: workerClient(options.client), tap: !!options.tap });
+    // The worker loads the native engine itself (socket.ts `native`); only the module's path crosses, and it reports which
+    // engine it runs on (`engine`).
+    socket.worker.postMessage({ type: 'init', options: portable, client: workerClient(options.client), tap: !!options.tap,
+      nativeBinding: typeof native?.binding === 'string' ? native.binding : undefined });
     try { await ready; setImmediate(() => { if (!socket.closed) socket.emit('open'); }); return socket; }
     catch (error) { socket.dispose(1006); throw error; }
   }
@@ -249,6 +253,19 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
       : '';
     this.options.log?.info(`agent-net relayed datagrams now go over the relay ${via === 'udp' ? 'UDP port' : 'WebSocket'}${why}`);
     this.emit('relay-route', via);
+  }
+  /** The engine the worker's transport runs on, as it reported it: `native` (Rust, its own thread) or `wasm`. */
+  private engine: 'native' | 'wasm' | null = null;
+  engineInUse(): 'native' | 'wasm' | null { return this.engine; }
+  private noteEngine(engine: unknown, code: unknown): void {
+    if (engine !== 'native' && engine !== 'wasm') return;
+    this.engine = engine;
+    const reason = typeof code === 'string' && /^[A-Z0-9_]{1,80}$/.test(code) ? code : null;
+    if (engine === 'native') this.options.log?.info('agent-net transport runs on the native engine');
+    else if (reason) {
+      this.options.log?.warn(`agent-net native engine unavailable (${reason}); the transport runs on WASM`);
+      this.options.native?.onFallback?.(reason);
+    }
   }
   private readonly pingSentAt = new WeakMap<WebSocket, number>();
   private pingRelay(ws: WebSocket): void {
@@ -410,6 +427,7 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
     if (message.type === 'path') { this.logPath(message.id, message.path); this.options.onPathChanged?.(message.id, message.path); return; }
     if (message.type === 'frame-in') { this.emit('message', { toString: () => message.frame }); return; }
     if (message.type === 'tap') { this.options.tap?.(message.data, message.via); return; }
+    if (message.type === 'engine') { this.noteEngine(message.engine, message.code); return; }
     if (message.type === 'ws-open') {
       const expected = this.client.base.replace(/^http/, 'ws') + this.client.path('/ws');
       if (message.url !== expected || this.network.size >= 4 || this.network.has(message.id)) { this.dispose(1006); return; }

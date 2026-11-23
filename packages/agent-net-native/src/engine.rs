@@ -1,9 +1,11 @@
 use std::{cell::RefCell, collections::{BTreeMap, BTreeSet}, net::{SocketAddr, UdpSocket}, rc::Rc, time::Instant};
 use agent_net_core::{Config, Crypto, Endpoint, Incoming, PathAddress, Priority, RecoveryPolicy, StreamEvent};
 use serde_json::{Value, json};
-use crate::{bytes, crypto::NativeCrypto, encoded, text, udp_paths::{self, Credentials, Intercepted, RelayUdp, Stun}};
+use crate::{bytes, crypto::NativeCrypto, encoded, text, udp_paths::{self, Credentials, Intercepted, RelayUdp, Stun, Udp}};
 
-const MAX_PEERS: usize = 512;
+/// Admitted peers mirrored from JS: every device authorized in the account. 512 closed the transport of a computer in an
+/// account with more (2026-11-23 review of the Desktop's move to this engine; the WASM transport has no such limit).
+const MAX_PEERS: usize = 4096;
 const MAX_CONNECTIONS: usize = 256;
 const IO_SIZE: usize = 65_536;
 const PROLOGUE: &[u8] = b"cindy/agent-net/device-link/2";
@@ -28,7 +30,11 @@ const MAX_REPORTED_STREAMS: usize = 40;
 /// `stream-retired`（2026-11-22）：`buffered` 里核心已经收回的流报一次就不再报，名额（`MAX_REPORTED_STREAMS`）留给新开的流。
 /// `probe-grants`（2026-11-22）：核心回对端探测的确认带上所有流的额度。没有它的核心只带编号最小的两条，对端开的第 6 条流
 /// 最初的额度没送到时一直停在 128 个分片上；JS 只在有它的引擎上用会话 v2 的正文流（nativeTransport.ts `bodies`）。
-const FEATURES: [&str; 8] = ["stream-buffered", "stun", "relay-udp-v2", "native-wait", "binary-io", "stream-levels", "stream-retired", "probe-grants"];
+/// `relay-udp-health`（2026-11-23）：中转 UDP 只通登记、不通数据时退回 WebSocket（数据静默、发出的数据不被确认、`relayStalled`
+/// 报的请求超时；冷却 30 秒、5 分钟、30 分钟），`poll` 报 `relayRoute`（走 UDP 还是 WebSocket、登记往返、停用原因）与套接字的
+/// `udpTraffic`。和电脑端 WASM 传输（relayUdp.ts）一致。
+const FEATURES: [&str; 9] = ["stream-buffered", "stun", "relay-udp-v2", "native-wait", "binary-io", "stream-levels", "stream-retired", "probe-grants",
+    "relay-udp-health"];
 /// Relayed datagrams the application still has to carry over its relay WebSocket; beyond this the oldest go (the
 /// transport resends them). Only fills while the application does not poll.
 const MAX_OUTBOX: usize = 1024;
@@ -75,7 +81,11 @@ pub struct NativeEngine {
     relay_udp: Option<RelayUdp>,
     stun: Option<Stun>,
     local_streams: BTreeMap<u32, BTreeSet<u32>>,
-    udp: Option<UdpSocket>,
+    udp: Option<Udp>,
+    /// Per connection: retransmitted segments, packets sent and whether it was relayed at the last sample, and the growth on
+    /// connections relayed between two samples (relayUdp.ts `RelaySendCounters`): relay UDP's check for unacknowledged sends.
+    relay_sends: BTreeMap<u32, (u64, u64, bool)>,
+    relayed_totals: (u64, u64),
     clock: Instant,
     now: u64,
     streams: BTreeMap<u32, BTreeSet<u32>>,
@@ -88,10 +98,14 @@ pub struct NativeEngine {
     /// The bytes of the datagrams and stream data `collect` put in a result, which names them by index (`blob`) until `poll`
     /// or `io` hands them over: as base64 in the JSON or raw after the header.
     blobs: Vec<Vec<u8>>,
-    /// The connection states the application last saw (`signature`).
+    /// The connection states the application last saw (`signature`), and the same states as `state_hash` reads them.
     reported: String,
+    reported_hash: u64,
     media: crate::media::MediaCrypto,
     media_http: Option<crate::media_http::MediaHttp>,
+    /// Windows: the UDP socket's arrival event, shared by this engine's waiters (wait.rs).
+    #[cfg(windows)]
+    signal: Option<std::sync::Arc<crate::wait::SocketSignal>>,
 }
 
 impl NativeEngine {
@@ -109,12 +123,14 @@ impl NativeEngine {
         let udp = if udp_enabled {
             let socket = UdpSocket::bind("0.0.0.0:0").map_err(|_| "UDP_BIND_FAILED")?;
             socket.set_nonblocking(true).map_err(|_| "UDP_SETUP_FAILED")?;
-            Some(socket)
+            Some(Udp::new(socket))
         } else { None };
+        #[cfg(windows)]
+        let signal = udp.as_ref().and_then(|udp| crate::wait::SocketSignal::new(udp.socket())).map(std::sync::Arc::new);
         Ok(Self { crypto, device_id, enhanced_transport, endpoint, admitted, relay_tags: BTreeMap::new(), relay_links: BTreeMap::new(), relay_udp: None,
-            stun: None, local_streams: BTreeMap::new(), udp, clock: Instant::now(), now: 0,
+            stun: None, local_streams: BTreeMap::new(), udp, relay_sends: BTreeMap::new(), relayed_totals: (0, 0), clock: Instant::now(), now: 0,
             streams: BTreeMap::new(), finishing: BTreeMap::new(), poisoned: false, outbox: Vec::new(), stash: None, blobs: Vec::new(),
-            reported: String::new(), media: Default::default(), media_http: None })
+            reported: String::new(), reported_hash: 0, media: Default::default(), media_http: None, #[cfg(windows)] signal })
     }
     fn config(enhanced_transport: bool) -> Config {
         if !enhanced_transport { return Config { max_packet_size: MAX_PACKET_SIZE, ..Config::default() }; }
@@ -139,7 +155,7 @@ impl NativeEngine {
         if text(command, "op")?.starts_with("media") { return self.media.command(&self.crypto, command); }
         match text(command, "op")? {
             "identity" => Ok(json!({"deviceId":self.device_id,"signingKey":encoded(self.crypto.signing_public()),
-                "transportKey":encoded(&self.crypto.static_public()),"udpPort":self.udp.as_ref().and_then(|s| s.local_addr().ok()).map(|a|a.port()),
+                "transportKey":encoded(&self.crypto.static_public()),"udpPort":self.udp.as_ref().and_then(|s| s.socket().local_addr().ok()).map(|a|a.port()),
                 "features":if self.enhanced_transport { FEATURES.as_slice() } else { &[] }})),
             "sign" => {
                 let value = text(command, "text")?;
@@ -175,6 +191,7 @@ impl NativeEngine {
                 if !self.admitted.borrow().values().any(|id| *id == link) { return Err("PEER_NOT_ADMITTED"); }
                 let data = bytes(&command["data"])?;
                 if data.len() > IO_SIZE { return Err("DATAGRAM_TOO_LARGE"); }
+                if let Some(relay) = &mut self.relay_udp { relay.note_inbound(false); }
                 self.endpoint.on_datagram(self.now, from, &data);
                 Ok(Value::Null)
             },
@@ -236,6 +253,11 @@ impl NativeEngine {
                 Ok(Value::Null)
             },
             "relayUdp" => self.configure_relay_udp(command),
+            // Session requests to a relayed peer timed out (transport.ts `relayStalled`): relay UDP may carry registrations only.
+            "relayStalled" => {
+                if let (Some(relay), Some(udp)) = (&mut self.relay_udp, &self.udp) { relay.note_stall(self.now, udp); }
+                Ok(Value::Null)
+            },
             "poll" => self.poll(),
             _ => Err("UNKNOWN_NATIVE_OPERATION"),
         }
@@ -283,7 +305,8 @@ impl NativeEngine {
         for id in removed { self.endpoint.close(id); self.streams.remove(&id); self.finishing.remove(&id); self.local_streams.remove(&id); }
         Ok(Value::Null)
     }
-    pub(crate) fn poison(&mut self) { self.poisoned = true; }
+    /// After a panic inside an engine call: every later call fails (`NATIVE_ENGINE_FAILURE`) instead of using half-updated state.
+    pub fn poison(&mut self) { self.poisoned = true; }
     /// Everything the application reads: the state now, with what `pump` already collected in front of it.
     fn poll(&mut self) -> Result<Value, &'static str> {
         let mut result = self.read();
@@ -295,6 +318,7 @@ impl NativeEngine {
         let mut result = self.collect();
         if let Some(stash) = self.stash.take() { merge(&mut result, stash); }
         self.reported = signature(&result);
+        self.reported_hash = self.state_hash();
         result
     }
     /// `binary-io` builds (lib.rs `cindy_agent_net_io`): in one call, relayed datagrams (`datagrams`: `[link, length]`), stream
@@ -323,7 +347,10 @@ impl NativeEngine {
             let link = datagram[0].as_u64().and_then(|link| u32::try_from(link).ok()).ok_or("INVALID_NATIVE_IO")?;
             let data = next(&datagram[1])?;
             // As the `datagram` operation: only a relay link admitted right now, never a UDP source address.
-            if link > 0 && self.admitted.borrow().values().any(|id| *id == link) { self.endpoint.on_datagram(self.now, Address::Link(link), data); }
+            if link > 0 && self.admitted.borrow().values().any(|id| *id == link) {
+                if let Some(relay) = &mut self.relay_udp { relay.note_inbound(false); }
+                self.endpoint.on_datagram(self.now, Address::Link(link), data);
+            }
         }
         let mut written = Vec::with_capacity(writes.len());
         let mut short = BTreeSet::new();
@@ -355,17 +382,40 @@ impl NativeEngine {
         if self.poisoned { return Err("NATIVE_ENGINE_FAILURE"); }
         self.update_clock();
         self.network();
-        if self.stash.is_none() {
-            // Nothing is taken from the core unless there is something to hand over: an idle `collect` reads no stream.
+        // Nothing is taken from the core unless there is something to hand over: an idle `collect` reads no stream. It is not even
+        // built then: the engine takes a turn for every datagram, and building every connection's state as JSON on each one
+        // (acknowledgements included) cost as much CPU as the cryptography (2026-11-23, Desktop on this engine).
+        if self.stash.is_none() && (self.has_unread_work() || self.state_hash() != self.reported_hash) {
             let result = self.collect();
             if has_work(&result) || signature(&result) != self.reported { self.stash = Some(result); }
         }
         let wake = self.endpoint.next_wake().map_or(MAX_PUMP_WAKE_MS, |at| (at.saturating_sub(self.now) / 1000).min(MAX_PUMP_WAKE_MS));
         Ok((self.stash.is_some(), wake))
     }
+    /// What `collect` would hand over as work (`has_work`) can be there: a datagram for the relay WebSocket, an accepted connection,
+    /// stream data or events not read yet.
+    fn has_unread_work(&self) -> bool {
+        !self.outbox.is_empty() || self.endpoint.has_accepted()
+            || self.endpoint.ids().any(|id| self.endpoint.connection(id).is_some_and(|connection| connection.connection().has_unread()))
+    }
+    /// The states `signature` reads from a `collect` result, read from the engine itself: whether relay UDP is up, the mapped
+    /// addresses, and which connections exist, established or gone, over which path. Equal hashes, unchanged states.
+    fn state_hash(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.relay_udp.as_ref().is_some_and(|relay| relay.up(self.now)).hash(&mut hasher);
+        self.stun.as_ref().map(Stun::mapped).unwrap_or_default().hash(&mut hasher);
+        for id in self.endpoint.ids().take(MAX_CONNECTIONS) {
+            let Some(connection) = self.endpoint.connection(id) else { continue; };
+            (id, connection.is_established(), connection.is_dead(), connection.closed_by_peer()).hash(&mut hasher);
+            self.endpoint.peer_addr(id).map(|address| match address { Address::Udp(address) => (0u32, Some(address)), Address::Link(link) => (link, None) })
+                .hash(&mut hasher);
+        }
+        hasher.finish()
+    }
     /// A second handle on the UDP socket, to wait for a datagram on another thread while this engine stays usable.
     pub fn waiter(&self) -> Waiter {
-        Waiter { socket: self.udp.as_ref().and_then(|socket| socket.try_clone().ok()) }
+        Waiter { socket: self.udp.as_ref().and_then(|udp| udp.socket().try_clone().ok()), #[cfg(windows)] signal: self.signal.clone() }
     }
     fn network(&mut self) {
         let mut io = [0u8; IO_SIZE];
@@ -382,7 +432,10 @@ impl NativeEngine {
                                 Intercepted::Consumed => continue,
                                 Intercepted::Deliver(source, datagram) => {
                                     // Only a peer admitted right now: anyone else's relayed datagram is dropped here.
-                                    if let Some(link) = self.relay_links.get(&source) { self.endpoint.on_datagram(now, Address::Link(*link), datagram); }
+                                    if let Some(link) = self.relay_links.get(&source) {
+                                        relay.note_inbound(true);
+                                        self.endpoint.on_datagram(now, Address::Link(*link), datagram);
+                                    }
                                     continue;
                                 },
                             }
@@ -394,11 +447,34 @@ impl NativeEngine {
                     Err(_) => break,
                 }
             }
-            if let Some(relay) = &mut self.relay_udp { relay.tick(now, socket); }
-            if let Some(stun) = &mut self.stun { stun.tick(now, socket, NativeCrypto::random::<12>); }
+        }
+        if self.udp.is_some() {
+            let relayed_sends = if self.relay_udp.as_ref().is_some_and(|relay| relay.sample_due(now)) { Some(self.relayed_send_counters()) } else { None };
+            if let (Some(relay), Some(socket)) = (&mut self.relay_udp, &self.udp) { relay.tick(now, socket, relayed_sends); }
+            if let (Some(stun), Some(socket)) = (&mut self.stun, &self.udp) { stun.tick(now, socket, NativeCrypto::random::<12>); }
         }
         self.endpoint.tick(now);
         self.transmit(&mut io);
+    }
+    /// Retransmitted segments and packets sent so far on connections that stayed relayed between two samples (relayUdp.ts
+    /// `RelaySendCounters`): the core counts over a connection's whole life, through moves between direct and relayed paths, so
+    /// only growth while relayed at both samples counts, and a connection seen for the first time gives just its baseline.
+    fn relayed_send_counters(&mut self) -> (u64, u64) {
+        let mut next = BTreeMap::new();
+        let ids: Vec<u32> = self.endpoint.ids().collect();
+        for id in ids {
+            let relayed = matches!(self.endpoint.peer_addr(id), Some(Address::Link(_)));
+            let Some(connection) = self.endpoint.connection(id) else { continue; };
+            let stats = connection.stats();
+            let (retransmitted, sent) = (stats.retransmitted_segments, stats.packets_sent);
+            if let Some(&(before_retransmitted, before_sent, before_relayed)) = self.relay_sends.get(&id) && before_relayed && relayed {
+                self.relayed_totals.0 += retransmitted.saturating_sub(before_retransmitted);
+                self.relayed_totals.1 += sent.saturating_sub(before_sent);
+            }
+            next.insert(id, (retransmitted, sent, relayed));
+        }
+        self.relay_sends = next;
+        self.relayed_totals
     }
     /// Sends what the core has due now: directly, over relay UDP, or into the outbox for the application's relay WebSocket.
     fn transmit(&mut self, io: &mut [u8; IO_SIZE]) {
@@ -502,7 +578,9 @@ impl NativeEngine {
         let mapped: Vec<Value> = self.stun.as_ref().map(Stun::mapped).unwrap_or_default().into_iter()
             .map(|address| json!({"address":address.ip().to_string(),"port":address.port()})).collect();
         json!({"packets":packets,"accepted":accepted,"connections":connections,"mapped":mapped,
-            "relayUdp":self.relay_udp.as_ref().is_some_and(|relay| relay.up(now))})
+            "relayUdp":self.relay_udp.as_ref().is_some_and(|relay| relay.up(now)),
+            "relayRoute":self.relay_udp.as_ref().map(|relay| relay.route(now)),
+            "udpTraffic":self.udp.as_ref().map(Udp::traffic)})
     }
 }
 
@@ -559,36 +637,21 @@ fn signature(result: &Value) -> String {
 }
 
 /// Waits for a datagram on the engine's UDP socket from any thread; holds no engine state (lib.rs `cindy_agent_net_wait`).
-pub struct Waiter { socket: Option<UdpSocket> }
+pub struct Waiter {
+    socket: Option<UdpSocket>,
+    /// Windows: the socket's arrival event, for waits shorter than the system timer's tick (wait.rs).
+    #[cfg(windows)]
+    signal: Option<std::sync::Arc<crate::wait::SocketSignal>>,
+}
 impl Waiter {
     /// True when a datagram is waiting to be read; false after `timeout_ms` without one (or at once without UDP: the
     /// caller then only has its timers).
     pub fn wait(&self, timeout_ms: u32) -> bool {
+        #[cfg(windows)]
+        if let Some(signal) = &self.signal { return signal.wait(timeout_ms); }
         match &self.socket {
-            Some(socket) => readable(socket, timeout_ms),
+            Some(socket) => crate::wait::readable(socket, timeout_ms),
             None => { std::thread::sleep(std::time::Duration::from_millis(timeout_ms as u64)); false },
         }
     }
-}
-#[cfg(unix)]
-fn readable(socket: &UdpSocket, timeout_ms: u32) -> bool {
-    use std::os::fd::AsRawFd;
-    #[repr(C)] struct PollFd { fd: i32, events: i16, revents: i16 }
-    #[cfg(target_vendor = "apple")] type Count = std::ffi::c_uint;
-    #[cfg(not(target_vendor = "apple"))] type Count = std::ffi::c_ulong;
-    const POLLIN: i16 = 0x0001;
-    unsafe extern "C" { fn poll(fds: *mut PollFd, count: Count, timeout: i32) -> i32; }
-    let mut fd = PollFd { fd: socket.as_raw_fd(), events: POLLIN, revents: 0 };
-    // SAFETY: one initialized pollfd that outlives the call; the descriptor is this socket's.
-    unsafe { poll(&mut fd, 1, timeout_ms.min(i32::MAX as u32) as i32) > 0 && fd.revents & POLLIN != 0 }
-}
-#[cfg(windows)]
-fn readable(socket: &UdpSocket, timeout_ms: u32) -> bool {
-    use std::os::windows::io::AsRawSocket;
-    #[repr(C)] struct PollFd { fd: usize, events: i16, revents: i16 }
-    const POLLRDNORM: i16 = 0x0100;
-    #[link(name = "ws2_32")] unsafe extern "system" { fn WSAPoll(fds: *mut PollFd, count: u32, timeout: i32) -> i32; }
-    let mut fd = PollFd { fd: socket.as_raw_socket() as usize, events: POLLRDNORM, revents: 0 };
-    // SAFETY: one initialized WSAPOLLFD that outlives the call; the socket is this engine's.
-    unsafe { WSAPoll(&mut fd, 1, timeout_ms.min(i32::MAX as u32) as i32) > 0 && fd.revents & POLLRDNORM != 0 }
 }

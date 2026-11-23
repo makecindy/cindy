@@ -111,3 +111,12 @@ UDP port as well」（访客经 UDP 越权被断开）；`packages/agent-net/src
 （同一中转复用在途请求，成功结果保留 10 分钟，失败后 1 分钟内沿用已有结果）。旧安装包的原生库没有这项，照旧全走 WebSocket。中转协议没变，不递增 `RELAY_VERSION`。
 回归：`native.integration.test.ts`「carries sessions on the real native engine, relays them over UDP, ...」（1 MB 结果经 WebSocket 的不到
 256 KB；不下发凭据时失败）。
+
+**电脑端改用原生引擎、手机原生库补上「只通登记」的退回（2026-11-23）。** Desktop 的 Agent-Net worker 改跑原生引擎前核对发现，
+`udp_paths.rs` 只有登记、确认与 4 秒没确认的退回，没有上面三条「登记通了数据不通」的判断，也不报走 UDP 时的往返。现在同一套判断
+在原生库里实现（时间、门槛与冷却档位与 `relayUdp.ts` 相同）：数据静默与发出不被确认由引擎自己看，请求超时由 JS 经 `relayStalled`
+命令报给引擎；`poll` 多报 `relayRoute`（`via`、登记往返 `rttMs`、停用时的 `udpSuspension`）和引擎 UDP 套接字的收发字节
+`udpTraffic`，`NativeTransport.relayRoute()` 与 Desktop 的远程连接页、日志照旧读。这些随引擎能力位 `relay-udp-health` 出现：
+旧安装包的原生库不报它，JS 不发 `relayStalled`，路由只按 `relayUdp` 报走哪条路、不报往返，和以前一样。包格式、中转与自建中转都不变。
+回归：`udp_paths.rs` 的 `tests`（数据静默与冷却递增、单个纯确认不算、60 秒内两次请求超时、中转连接上发出的数据不被确认、确认停了不再报往返），
+`nativeTransport.test.ts`「reports the relay route, request timeouts and UDP traffic …」（有、无这项能力的引擎各一遍）。
