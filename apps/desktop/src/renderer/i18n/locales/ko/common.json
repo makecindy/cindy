@@ -12553,7 +12553,7 @@
         "messageReadAloud": "메시지 읽어주기",
         "callVoice": "실시간 통화 목소리",
         "readAloudVoice": "메시지를 읽어 줄 목소리",
-        "readAloudHint": "동료의 텍스트 답변 아래에 있는 스피커를 누르면 이 목소리로 읽어 줍니다.",
+        "readAloudHint": "동반자의 텍스트 답변 아래에 있는 스피커를 누르면 이 목소리로 읽어 줍니다.",
         "resetReadAloud": "읽어주기 설정 초기화",
         "title": "실시간 음성",
         "add": "실시간 음성 모델 추가",
