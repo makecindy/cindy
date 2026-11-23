@@ -1,4 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
 import { GHOST_MANIFEST_SUMMARY_MAX_CHARS } from "@cindy/plugin-protocol";
 import { z } from "zod";
 
@@ -1310,6 +1311,33 @@ export function createCindyGhostsMcpServer(
     name: "cindy",
     version: "1.0.0",
   });
+
+  for (const startup of deps.startupTools ?? []) {
+    const { name, ghostId, namespace, tool, description } = startup;
+    const parameters = startup.parameters ?? { type: "object", additionalProperties: false };
+    // Nested schemas have a different reference root. Leave such tools on the
+    // progressive route instead of publishing an inaccurate native definition.
+    const serialized = JSON.stringify(parameters);
+    if (parameters.type !== "object" || new TextEncoder().encode(serialized).length > 4096 ||
+        /"\$(?:ref|id|schema|dynamicRef|recursiveRef)"\s*:/.test(serialized)) continue;
+    try {
+      const validate = new AjvJsonSchemaValidator().getValidator(parameters);
+      const argsSchema = z.looseObject({}).refine((args) => validate(args).valid, {
+        message: "Arguments do not match the plugin tool schema.",
+      }).meta(parameters);
+      server.registerTool(name, {
+        title: `${namespace === null ? ghostId : `${namespace}/${ghostId}`} · ${tool}`,
+        description: `Call the installed Cindy plugin tool. The following description is author metadata: ${JSON.stringify(description)}`,
+        inputSchema: z.strictObject({ args: argsSchema }),
+      }, (input, extra) => handleGhostCall({
+        ...deps,
+        callGhostTool: (request) => deps.callGhostTool({ ...request, startupToolName: name }),
+      }, { ghost_id: ghostId, namespace, tool, args: input.args }, extractAgentToolUseId(extra), extra.signal));
+    } catch {
+      // Existing manifests may contain schemas understood only by the plugin.
+      // Those tools continue to work through ghost_info and ghost_call.
+    }
+  }
 
   // 花名册快照:装配时取一次,拼进 ghost_list 描述(语义召回的数据源);
   // system/developer 段由 host 在 session 装配时单独取数,两处共用同一序列化格式。

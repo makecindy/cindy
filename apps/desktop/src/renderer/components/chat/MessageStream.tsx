@@ -384,7 +384,7 @@ import { GhostFulfillmentContext, type GhostCallSummary } from './GhostSummonCar
 import { ChatSessionFileProvider, useChatSessionFileValue } from './ChatSessionFileContext';
 import { toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import { rewriteToRemoteMediaOrigin, type RemoteMediaOrigin } from '@/../shared/remoteMediaUrl';
-import { isGhostCallToolName, isTurnEndGhostCardHtml } from '@/../shared/ghost';
+import { isGhostCallToolName, isGhostStartupToolCallName, isTurnEndGhostCardHtml } from '@/../shared/ghost';
 import { ChatVideoView } from './ChatVideoView';
 import { ChatAudioCard } from './ChatAudioCard';
 import { ChatSoundEffectCard } from './ChatSoundEffectCard';
@@ -2216,7 +2216,7 @@ export function buildRenderItems(
       let suppressMediaForCard = false;
       let hideRowForCard = false;
       const maybeQueueGhostCard = (result: string | undefined): void => {
-        if (!ghostCards || !isGhostCallToolName(toolName)) return;
+        if (!ghostCards || (!isGhostCallToolName(toolName) && !isGhostStartupToolCallName(toolName))) return;
         const inp = (msg.toolInput ?? null) as Record<string, unknown> | null;
         const ghostIdFromInput = typeof inp?.ghost_id === 'string' ? inp.ghost_id : '';
         const candidateGhostId = ghostCardInstanceId(ghostIdFromInput, inp?.namespace);

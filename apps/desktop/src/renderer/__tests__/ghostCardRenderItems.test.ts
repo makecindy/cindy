@@ -55,6 +55,20 @@ function itemsOf(messages: ChatMessage[], snap?: GhostCardSnapshot, sessionId = 
 }
 
 describe('ghost_card · settled 配对', () => {
+  // Unit: the result uses the ordinary Host card id, while the named MCP call
+  // carries only args. Progressive ghost_call fixtures do not cover this route.
+  it('renders the Host card returned by a named startup plugin tool', () => {
+    const call: ChatMessage = {
+      ...mkGhostCall('startup'),
+      toolName: 'mcp__cindy__ghost_start_library_find_529157ba331ac99bbeaa',
+      toolInput: { args: { query: 'atlas' } },
+    };
+    const items = itemsOf([call, mkResult('result', 'tu-startup', { xdt_card_id: 'library-card' })],
+      snapshot({ 'library-card': readyEntry('library') }));
+    expect(items.find(item => item.type === 'ghost_card')).toMatchObject({
+      callId: 'library-card', ghostId: 'library', settled: true,
+    });
+  });
   // Unit regression: tool media and cindy-ui independently displayed the same
   // generated video. The existing Markdown image cases do not cover components.
   it('prefers a completed rich video over its tool fallback within the same turn', () => {

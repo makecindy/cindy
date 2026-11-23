@@ -3,7 +3,7 @@ import { isDataOwnerPushStamp, type DataOwnerPushStamp } from '../../shared/data
 import { ghostControlPointActive, type GhostControlPointData, type GhostControlPointFailureAction,
   type GhostControlPointId, type GhostControlPointResult, type GhostRuntimeControlPointResult,
   type InstalledGhost } from '../../shared/ghost.js';
-import { installedGhostStoragePart, resolvePluginInstanceQuery } from '../../shared/pluginIdentity.js';
+import { installedGhostLogicalIdentity, installedGhostStoragePart, resolvePluginInstanceQuery } from '../../shared/pluginIdentity.js';
 import type { PluginModelPickerRoute } from '../../shared/pluginModelPicker.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { getDbClient } from '../localDb/client/current.js';
@@ -20,6 +20,7 @@ import { createStaticPromptProvider } from './staticPrompt.js';
 import { GhostSubscriptionGateway, isGhostEligibleSessionRow, isGhostSessionSwitchEligibleRow,
   type GhostScreenResult, type GhostSubscriptionGatewayDeps } from './subscriptionGateway.js';
 import { createPluginToolLifecycle } from './toolLifecycleControl.js';
+import { startupGhostToolName } from './startupGhostTool.js';
 
 export const GHOST_HOOK_FUSED_CHANNEL = 'ghosts:hook-fused';
 
@@ -286,8 +287,7 @@ export function createRuntimePluginHost(ports: RuntimePluginHostPorts) {
     return owner === activeOwnerScopeKey() && available;
   }
 
-  const resolveToolApproval: GhostToolApprovalResolver = ({ ghostId, namespace, tool }) => {
-    const ghost = findGhostForInstanceId(ghostId, namespace);
+  function toolApproval(ghost: InstalledGhost | null, tool: string) {
     if (!ghost || ghost.approval.state !== 'approved') return null;
     const decl = ghost.manifest.tools?.find((candidate) => candidate.name === tool);
     if (!decl) return null;
@@ -295,10 +295,24 @@ export function createRuntimePluginHost(ports: RuntimePluginHostPorts) {
       ? 'each-call' as const
       : decl.approval === 'auto' && ghost.approvedAutoTools?.includes(tool) === true ? 'auto' as const : null;
     return { declared };
+  }
+
+  const resolveToolApproval: GhostToolApprovalResolver = ({ ghostId, namespace, tool }) => {
+    return toolApproval(findGhostForInstanceId(ghostId, namespace), tool);
   };
+  function resolveStartupToolApproval(name: string) {
+    for (const ghost of availableGhosts()) {
+      const tool = ghost.manifest.tools?.find(candidate => startupGhostToolName(ghost, candidate) === name);
+      if (tool) {
+        const facts = toolApproval(ghost, tool.name);
+        if (facts) return { ...facts, ...installedGhostLogicalIdentity(ghost), tool: tool.name };
+      }
+    }
+    return null;
+  }
 
   return { getGhostSubscriptionGateway, dropGhost, isGhostEligibleSession, hasEnabledUserMessageHookGhost,
     screenGhostUserMessage, getGhostRuntimePluginControl, ghostToolLifecycleControl, composeGhostRuntimeContext,
     ghostTaskSystemPrompt, searchGhostRuntimeMemories, screenGhostControlPoint, resolveGhostControlPointPlugin,
-    isPluginModelRouteAvailableNow, resolveToolApproval };
+    isPluginModelRouteAvailableNow, resolveToolApproval, resolveStartupToolApproval };
 }

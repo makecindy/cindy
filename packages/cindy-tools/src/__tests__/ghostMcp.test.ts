@@ -2273,6 +2273,38 @@ describe('personal community author MCP transport', () => {
     return { client, close: async () => { await client.close(); await server.close(); } };
   }
 
+  // Unit: the real MCP catalog pins the startup definition and sends only the
+  // approved target and validated arguments to the shared ghost_call handler.
+  // The existing ghost_call tests do not cover a startup MCP definition.
+  it('lists a named startup tool with its declared schema and invokes its pinned target', async () => {
+    const name = 'ghost_library_find_23cd';
+    const parameters = {
+      type: 'object', properties: { query: { type: 'string' } },
+      required: ['query'], additionalProperties: false,
+    } as const;
+    const callGhostTool = vi.fn<CindyGhostsMcpDeps['callGhostTool']>(async () => ({ ok: true, result: { found: true } }));
+    const startupTools: NonNullable<CindyGhostsMcpDeps['startupTools']>[number][] = [
+      { name, ghostId: 'library', namespace: 'local', tool: 'find', description: 'Find books', parameters },
+    ];
+    const { client, close } = await connected(fakeDeps({ callGhostTool, startupTools }));
+    try {
+      startupTools.length = 0;
+      const catalog = await client.listTools();
+      expect(catalog.tools.find(tool => tool.name === name)?.inputSchema.properties?.args)
+        .toMatchObject(parameters);
+      expect(callGhostTool).not.toHaveBeenCalled();
+      expect(await client.callTool({ name, arguments: { args: { query: 2 } } })).toMatchObject({ isError: true });
+      expect(callGhostTool).not.toHaveBeenCalled();
+      const result = await client.callTool({ name, arguments: { args: { query: 'atlas' } } });
+      expect(result.isError).toBeFalsy();
+      expect(callGhostTool).toHaveBeenCalledWith(expect.objectContaining({
+        ghostId: 'library', namespace: 'local', tool: 'find', args: { query: 'atlas' }, startupToolName: name,
+      }));
+    } finally {
+      await close();
+    }
+  });
+
   it('routes preparation, the same operation, and exact personal reads to the independent Host capability', async () => {
     const communityContribution = vi.fn<NonNullable<CindyGhostsMcpDeps['communityContribution']>>(async () => ({ ok: true, result: {} }));
     const forgePublish = vi.fn();

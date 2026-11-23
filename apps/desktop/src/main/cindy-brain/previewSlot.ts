@@ -27,6 +27,7 @@ import {
   type GhostPipePreviewResult,
   type InstalledGhost,
 } from '../../shared/ghost.js';
+import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
 
 /** 推给 renderer 的预览开页载荷(身份三件套由主机按已装清单填,不信自报)。 */
 export interface GhostPreviewOpenPush {
@@ -37,6 +38,7 @@ export interface GhostPreviewOpenPush {
   /** 目标会话(main 已兜底解析:显式指定或台前会话)。 */
   sessionId: string;
   url: string;
+  reuseExisting?: true;
 }
 
 export interface PreviewSlotDeps {
@@ -88,6 +90,9 @@ export class GhostPreviewSlot {
         return fail('INVALID_REQUEST', 'sessionId 形状不合法');
       }
     }
+    if (request.reuseExisting !== undefined && typeof request.reuseExisting !== 'boolean') {
+      return fail('INVALID_REQUEST', 'reuseExisting 必须是布尔值');
+    }
     if (!ghostPreviewUrlAllowed(ghost.manifest, request.url)) {
       return fail(
         'URL_NOT_ALLOWED',
@@ -116,11 +121,12 @@ export class GhostPreviewSlot {
     }
 
     const delivered = this.deps.broadcast({
-      ghostId,
+      ghostId: installedGhostStoragePart(ghost),
       name: ghost.manifest.name,
       ...(ghost.iconDataUrl ? { iconDataUrl: ghost.iconDataUrl } : {}),
       sessionId,
       url: request.url,
+      ...(request.reuseExisting === true ? { reuseExisting: true } : {}),
     });
     if (!delivered) {
       return fail('HOST_NOT_READY', '当前没有可用的宿主窗口');

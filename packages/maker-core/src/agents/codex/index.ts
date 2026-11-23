@@ -10190,6 +10190,7 @@ assertRouteCurrent();
       // inner action。查询继续静默，高风险 action 逐次确认且不得持久化授权。
       const approvalPolicy = mcpToolApprovalPolicy(params);
       const policyPermissionInput = mcpElicitationPermissionInput(params);
+      const reviewEvidence = this.deps.getMcpToolApprovalEvidence?.(mcpToolApprovalContext(params));
       const turnPolicyForcePrompt = forceTurnConfirmation(
         `mcp:${params.serverName}`,
         policyPermissionInput,
@@ -10231,7 +10232,8 @@ assertRouteCurrent();
           // against the review budget (see mcpToolReviewAction).
           autoReviewAction: policyPermissionInput.toolParams === undefined
             ? { kind: 'other' as const, description: undefined }
-            : mcpToolReviewAction(`mcp:${params.serverName}`, policyPermissionInput),
+            : mcpToolReviewAction(`mcp:${params.serverName}`, reviewEvidence === undefined
+              ? policyPermissionInput : { ...policyPermissionInput, toolParams: reviewEvidence }),
           ...(toolUseId ? { itemId: toolUseId } : {}),
         },
       );
