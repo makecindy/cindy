@@ -118,7 +118,7 @@ export function GhostInstallConsentContent({ facts, origin, communityMarket, cap
         {sourceNotice ? (
           <p className={sourceNotice === 'settings.ghosts.market.communityDisclaimer'
             ? 'mt-2 text-12 leading-[1.5] text-[var(--text-tertiary)]'
-            : 'mt-2 text-13 leading-5 text-[var(--confirm-desc)]'}>
+            : 'mt-2 text-13 leading-[1.54] text-[var(--confirm-desc)]'}>
             {t(sourceNotice)}
           </p>
         ) : null}

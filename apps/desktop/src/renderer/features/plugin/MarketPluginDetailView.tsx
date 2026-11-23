@@ -174,7 +174,7 @@ export function MarketPluginDetailView({
             ) : null}
           </div>
           {isCommunityPlugin ? (
-            <p id={communityDisclaimerId} className="mt-3 text-12 leading-5 text-[var(--text-tertiary)]">
+            <p id={communityDisclaimerId} className="mt-3 text-12 leading-[1.667] text-[var(--text-tertiary)]">
               {t('settings.ghosts.market.communityDisclaimer')}
             </p>
           ) : <PluginPublisherDescription origin={presentationOrigin} kind={detail.publisherKind} />}

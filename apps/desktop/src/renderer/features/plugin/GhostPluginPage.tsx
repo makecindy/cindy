@@ -1694,9 +1694,13 @@ function LocalGhostPluginPage({
     () => refreshMarket(true, true),
     marketDetail?.pluginId ? () => refreshVisibleMarketDetail(marketDetail.pluginId) : undefined,
   );
+  const visibleTodayItems = useMemo(
+    () => active && pluginCatalogVisible && !query.trim() && todayItems.length === 3 ? todayItems : [],
+    [active, pluginCatalogVisible, query, todayItems],
+  );
   const visibleMarketIcons = useMemo(
-    () => [...marketItems.map((item) => item.icon), ...todayItems.map((item) => item.icon), marketDetail?.icon],
-    [marketDetail?.icon, marketItems, todayItems],
+    () => [...marketItems.map((item) => item.icon), ...visibleTodayItems.map((item) => item.icon), marketDetail?.icon],
+    [marketDetail?.icon, marketItems, visibleTodayItems],
   );
   const refreshVisibleMarketIcons = useCallback(async () => {
     const memory = catalogMemoryRef.current;
@@ -1704,17 +1708,21 @@ function LocalGhostPluginPage({
     for (const [key, icon] of memory.marketIcons) {
       if (Date.parse(icon.expiresAt) <= renewBefore) memory.marketIcons.delete(key);
     }
-    const refreshes: Promise<void>[] = [refreshMarket(true, false, true), browserCache.current.refresh?.({ force: true, renewIcons: true }) ?? Promise.resolve()];
-    if (memory.todayPool.length > 0) {
-      refreshes.push(readPluginRecommendations(memory, true).then(items => {
+    const refreshBrowser = memory.browser.current.refresh?.({ force: true, renewIcons: true }) ?? Promise.resolve();
+    const refreshes = [refreshMarket(true, false, true), refreshBrowser];
+    if (visibleTodayItems.some(item => item.icon)) {
+      refreshes.push(refreshBrowser.catch(() => undefined).then(async () => {
+        if (catalogMemoryRef.current !== memory) return;
+        const items = await readPluginRecommendations(memory, visibleTodayItems);
         if (catalogMemoryRef.current === memory) setTodayPool(items);
       }));
     }
     if (marketDetail?.pluginId) {
       refreshes.push(refreshVisibleMarketDetail(marketDetail.pluginId));
     }
-    await Promise.all(refreshes);
-  }, [marketDetail?.pluginId, refreshMarket, refreshVisibleMarketDetail, setTodayPool]);
+    const failed = (await Promise.allSettled(refreshes)).find(result => result.status === 'rejected');
+    if (failed) throw failed.reason;
+  }, [marketDetail?.pluginId, refreshMarket, refreshVisibleMarketDetail, setTodayPool, visibleTodayItems]);
   const handleMarketIconLoadError = usePluginIconRefresh(
     visibleMarketIcons,
     refreshVisibleMarketIcons,

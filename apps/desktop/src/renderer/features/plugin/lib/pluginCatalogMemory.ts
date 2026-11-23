@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState, type Dispatch, type SetStateAction } from 'react';
-import { emptyPluginBrowserCache, mergePluginItems, reuseMarketIcon, samePluginValue, PLUGIN_CATALOG_REFRESH_MS, type MarketIconCache } from './pluginBrowserCache';
+import { emptyPluginBrowserCache, mergePluginItems, readReusedMarketIcon, reuseMarketIcon, samePluginValue, PLUGIN_CATALOG_REFRESH_MS, type MarketIconCache } from './pluginBrowserCache';
 import { ghostWebviewOwnerKey } from './ghostPluginViewModel';
 import { resolveSystemLocale } from '../../../../shared/locale';
 import type { PluginGridCache } from '../PluginVirtualGrid';
@@ -95,21 +95,33 @@ export function readLocalPluginSnapshot(memory: CatalogMemory, force = false, re
   return flight;
 }
 
-export function readPluginRecommendations(memory: CatalogMemory, renewIcons = false): Promise<PluginMarketItem[]> {
-  if (memory.recommendationsFlight) return memory.recommendationsFlight;
-  if (!renewIcons && memory.todayLoaded && Date.now() - memory.recommendationsAt < PLUGIN_CATALOG_REFRESH_MS) return Promise.resolve(memory.todayPool);
-  const flight = window.electronAPI.pluginMarket.recommendations().then(next => {
-    if (renewIcons) {
-      // The recommendation endpoint shuffles its results. Renew only the icons
-      // for releases already in this view so that cards stay in place.
-      const refreshed = new Map(next.map(item => [item.pluginId, item]));
-      return memory.todayPool.map(item => {
-        const match = refreshed.get(item.pluginId);
-        return match?.icon && match.releaseId === item.releaseId
-          ? reuseMarketIcon(memory.marketIcons, { ...item, icon: match.icon })
-          : item;
-      });
+async function renewRecommendationIcons(memory: CatalogMemory, visible: readonly PluginMarketItem[]): Promise<PluginMarketItem[]> {
+  const renewed = new Map(visible.filter(item => item.icon).map(item =>
+    [item, readReusedMarketIcon(memory.marketIcons, item, true)] as const));
+  const missing = [...renewed].filter(([item, cached]) => item === cached).map(([item]) => item);
+  if (missing.length) {
+    const result = await window.electronAPI.pluginMarket.lookup(missing.map(item => item.ghostId));
+    if (result.unavailableReason !== null) throw new Error(result.unavailableReason);
+    const currentById = new Map(result.items.filter(item =>
+      item.sourceType === 'server' && item.scope === 'public' && item.publisherKind === 'official',
+    ).map(item => [item.pluginId, item]));
+    for (const item of missing) {
+      const current = currentById.get(item.pluginId);
+      // A withdrawn or iconless release should not keep an expired URL in the timer.
+      renewed.set(item, current?.icon
+        ? reuseMarketIcon(memory.marketIcons, readReusedMarketIcon(memory.marketIcons, current, true))
+        : { ...item, icon: null });
     }
+  }
+  return memory.todayPool.map(item => renewed.get(item) ?? item);
+}
+
+export function readPluginRecommendations(memory: CatalogMemory, renewItems?: readonly PluginMarketItem[]): Promise<PluginMarketItem[]> {
+  // Renew the visible identities without drawing a new recommendation pool.
+  if (renewItems) return renewRecommendationIcons(memory, renewItems);
+  if (memory.recommendationsFlight) return memory.recommendationsFlight;
+  if (memory.todayLoaded && Date.now() - memory.recommendationsAt < PLUGIN_CATALOG_REFRESH_MS) return Promise.resolve(memory.todayPool);
+  const flight = window.electronAPI.pluginMarket.recommendations().then(next => {
     memory.recommendationsAt = Date.now();
     return mergePluginItems(memory.todayPool, next, false, memory.marketIcons);
   }).finally(() => { if (memory.recommendationsFlight === flight) memory.recommendationsFlight = null; });

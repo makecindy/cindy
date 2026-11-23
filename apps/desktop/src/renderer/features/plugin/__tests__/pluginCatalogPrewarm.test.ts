@@ -10,27 +10,43 @@ afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); resetPluginCatalogM
 it('reuses signed icons across recommendations and search results in the same catalog partition', async () => {
   const memory = pluginCatalogMemory('first-owner', 'local');
   const item = {
-    pluginId: 'plugin', releaseId: 'release-1', sourceType: 'server',
+    pluginId: 'plugin', ghostId: 'plugin-ghost', scope: 'public', publisherKind: 'official',
+    releaseId: 'release-1', sourceType: 'server',
     icon: { mimeType: 'image/png', sizeBytes: 1024, sha256: 'a'.repeat(64),
       url: 'https://icons.invalid/recommended', thumbnailUrl: 'https://icons.invalid/thumb-a',
       expiresAt: '2099-01-01T00:00:00Z' },
   } as PluginMarketItem;
   const searchItem = { ...item, icon: { ...item.icon!, url: 'https://icons.invalid/search' } };
-  const other = { ...item, pluginId: 'other-plugin', icon: null };
-  const newPick = { ...other, pluginId: 'new-pick' };
-  const recommendations = vi.fn().mockResolvedValueOnce([item, other]).mockResolvedValueOnce([other, newPick, searchItem]);
-  vi.stubGlobal('window', { electronAPI: { pluginMarket: { recommendations } } });
+  const other = { ...item, pluginId: 'other-plugin', ghostId: 'other-ghost' };
+  const withoutIcon = { ...item, pluginId: 'no-icon', icon: null };
+  const recommendations = vi.fn().mockResolvedValue([item, other, withoutIcon]);
+  const lookup = vi.fn()
+    .mockResolvedValueOnce({ items: [], unavailableReason: 'temporary outage' })
+    .mockResolvedValueOnce({ items: [searchItem], unavailableReason: null });
+  vi.stubGlobal('window', { electronAPI: { pluginMarket: { recommendations, lookup } } });
   memory.todayPool = await readPluginRecommendations(memory);
   const cachedPage = mergePluginItems([], [searchItem], false, memory.marketIcons);
   expect(cachedPage[0]?.icon).toBe(item.icon);
   expect(mergePluginItems([], [{ ...searchItem, releaseId: 'release-2' }], false, memory.marketIcons)[0]?.icon).toBe(searchItem.icon);
   expect(mergePluginItems([], [searchItem], false, pluginCatalogMemory('second-owner', 'local').marketIcons)[0]?.icon).toBe(searchItem.icon);
   forgetFailedMarketIcon(memory.marketIcons, cachedPage[0]!);
-  const renewed = await readPluginRecommendations(memory, true);
-  expect(renewed).toEqual([searchItem, other]);
+  await expect(readPluginRecommendations(memory, memory.todayPool)).rejects.toThrow('temporary outage');
+  expect(memory.todayPool[0]?.icon).toBe(item.icon);
+  const renewed = await readPluginRecommendations(memory, memory.todayPool);
+  expect(renewed).toEqual([searchItem, { ...other, icon: null }, withoutIcon]);
   expect(readReusedMarketIcon(memory.marketIcons, cachedPage[0]!).icon).toBe(searchItem.icon);
-  expect(memory.marketIcons.size).toBe(2);
-  expect(recommendations).toHaveBeenCalledTimes(2);
+  expect(lookup).toHaveBeenLastCalledWith(['plugin-ghost', 'other-ghost']);
+  expect(recommendations).toHaveBeenCalledOnce();
+
+  memory.todayPool = renewed;
+  const newRelease = { ...searchItem, releaseId: 'release-2', version: '2.0.0',
+    icon: { ...searchItem.icon!, sha256: 'b'.repeat(64), thumbnailUrl: undefined } };
+  lookup.mockResolvedValueOnce({ items: [newRelease], unavailableReason: null });
+  const updated = await readPluginRecommendations(memory, memory.todayPool);
+  expect(updated).toEqual([newRelease, ...renewed.slice(1)]);
+  expect(readReusedMarketIcon(memory.marketIcons, cachedPage[0]!).icon).toBe(searchItem.icon);
+  expect(lookup).toHaveBeenLastCalledWith(['plugin-ghost']);
+  expect(recommendations).toHaveBeenCalledOnce();
 });
 
 // Unit: login preheat must use the page's exact owner/language bucket, and must

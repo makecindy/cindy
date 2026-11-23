@@ -65,8 +65,8 @@ export function samePluginValue(a: unknown, b: unknown): boolean {
 }
 export type MarketIconCache = Map<string, NonNullable<PluginMarketItem['icon']>>;
 
-function marketIconKey(item: PluginMarketItem, icon: NonNullable<PluginMarketItem['icon']>) {
-  return JSON.stringify([item.pluginId, item.releaseId, icon.sha256, icon.mimeType, icon.sizeBytes, Boolean(icon.thumbnailUrl)]);
+function marketIconKey(item: PluginMarketItem, icon: NonNullable<PluginMarketItem['icon']>, hasThumbnail = Boolean(icon.thumbnailUrl)) {
+  return JSON.stringify([item.pluginId, item.releaseId, icon.sha256, icon.mimeType, icon.sizeBytes, hasThumbnail]);
 }
 
 export function forgetFailedMarketIcon(cache: MarketIconCache, item: PluginMarketItem): void {
@@ -75,10 +75,12 @@ export function forgetFailedMarketIcon(cache: MarketIconCache, item: PluginMarke
   if (cache.get(key) === item.icon) cache.delete(key);
 }
 
-export function readReusedMarketIcon(cache: MarketIconCache, item: PluginMarketItem): PluginMarketItem {
+export function readReusedMarketIcon(cache: MarketIconCache, item: PluginMarketItem, preferThumbnail = false): PluginMarketItem {
   if (item.sourceType !== 'server' || !item.icon) return item;
-  const cached = cache.get(marketIconKey(item, item.icon));
-  return cached && cached !== item.icon && Date.parse(cached.expiresAt) > Date.now() ? { ...item, icon: cached } : item;
+  const now = Date.now();
+  const thumbnail = preferThumbnail && !item.icon.thumbnailUrl ? cache.get(marketIconKey(item, item.icon, true)) : undefined;
+  const cached = thumbnail && Date.parse(thumbnail.expiresAt) > now ? thumbnail : cache.get(marketIconKey(item, item.icon));
+  return cached && cached !== item.icon && Date.parse(cached.expiresAt) > now ? { ...item, icon: cached } : item;
 }
 
 export function reuseMarketIcon(cache: MarketIconCache, item: PluginMarketItem): PluginMarketItem {
