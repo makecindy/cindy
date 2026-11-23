@@ -9,7 +9,7 @@
  */
 
 import path from 'node:path';
-import { isSkillDisabled, type ListCustomizationsOptions, type ListCustomizationsResult, type PluginEngineBriefingSkill } from '@cindy/maker-core';
+import { canonicalSkillPath, snapshotDisabledSkillPaths, type ListCustomizationsOptions, type ListCustomizationsResult, type PluginEngineBriefingSkill } from '@cindy/maker-core';
 
 export interface PluginEngineSkillPorts {
   listManagedSkills(): Promise<ReadonlyArray<{ name: string; description?: string; path?: string }>>;
@@ -23,12 +23,15 @@ export function createPluginEngineSkillLister(ports: PluginEngineSkillPorts) {
       ports.listManagedSkills(),
       ports.scanCustomizations('pi', { workingDirs: [workingDir], kinds: ['skill'] }),
     ]);
-    const disabled = ports.readDisabledSkillPaths();
+    // Each disabled path and each Skill is resolved once (not once per pair); with nothing turned off,
+    // nothing is resolved.
+    const disabledPaths = ports.readDisabledSkillPaths();
+    const disabled = disabledPaths.length ? new Set(snapshotDisabledSkillPaths(disabledPaths)) : null;
     const discovered = scanned.items
       .filter((item) => item.kind === 'skill' && item.enabled !== false)
       .map((item) => ({ name: item.name, description: item.description, path: item.mdPath ?? path.join(item.absolutePath, 'SKILL.md') }));
     return [...managed, ...discovered]
-      .filter((skill) => !skill.path || !isSkillDisabled(skill.path, disabled))
+      .filter((skill) => !disabled || !skill.path || !disabled.has(canonicalSkillPath(skill.path)))
       .map((skill) => ({ name: skill.name, ...(skill.description ? { description: skill.description } : {}), ...(skill.path ? { path: skill.path } : {}) }));
   };
 }
