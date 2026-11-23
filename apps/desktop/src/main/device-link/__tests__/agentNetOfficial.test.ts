@@ -9,7 +9,7 @@ import { enrollmentPayload } from '@cindy/agent-net-protocol';
 import { issueCertificate, publicBytes, verifySignature } from '@cindy/agent-net-relay';
 const state = vi.hoisted(() => ({
   subject: 'membership-a', scope: 'scope-a', base: 'https://agent-net.example.test', pending: false, unreadable: false,
-  root: null as any, secrets: new Map<string, any>(), writes: [] as any[], requests: 0,
+  root: null as any, secrets: new Map<string, any>(), writes: [] as any[], requests: 0, bodies: [] as any[],
   beforeIssue: null as null | (() => Promise<void>), relay: null as any,
 }));
 vi.mock('node:fs/promises', () => ({ default: { mkdir: vi.fn(async () => undefined) } }));
@@ -27,7 +27,7 @@ vi.mock('../crossProcessLock.js', () => ({ withCrossProcessLock: async (_path: s
 vi.mock('../../maker-host/outbound-fetch.desktop.js', () => ({ outboundFetch: vi.fn(), createOutboundHttpAgent: vi.fn() }));
 vi.mock('../../serverApiClient.desktop.js', () => ({ serverApiFetch: vi.fn(async (_path: string, options: any) => {
   options.baseUrl(); state.requests++;
-  const body = options.body;
+  const body = options.body; state.bodies.push(body);
   expect(verifySignature(body.signingKey, enrollmentPayload(body), body.signature)).toBe(true);
   await state.beforeIssue?.();
   const certificate = issueCertificate(state.root, { networkId: 'account:unit-network', subject: 'membership-a', role: 'owner',
@@ -38,9 +38,23 @@ import { currentOfficialAgentNetClient, ensureOfficialAgentNetClient, officialAg
 beforeEach(() => {
   state.subject = 'membership-a'; state.scope = 'scope-a'; state.pending = false; state.unreadable = false;
   state.base = 'https://agent-net.example.test'; state.root = generateKeyPairSync('ed25519').privateKey;
-  state.secrets.clear(); state.writes = []; state.requests = 0; state.beforeIssue = null; state.relay = null;
+  state.secrets.clear(); state.writes = []; state.requests = 0; state.bodies = []; state.beforeIssue = null; state.relay = null;
 });
 afterEach(() => vi.useRealTimers());
+// Bug (2026-11-23): after a removal the stored certificate is revoked but unexpired, so enrollment kept returning it and the
+// device never asked again. 「重新加入」 enrolls whatever the expiry, asks for the removal to be lifted and keeps the keys; a
+// temporary failure must not hand back the revoked certificate as if it had worked.
+it('enrolls again on rejoin while the stored certificate is unexpired, and never falls back to it', async () => {
+  const first = await ensureOfficialAgentNetClient('Unit device');
+  await ensureOfficialAgentNetClient('Unit device');
+  expect(state.requests).toBe(1);
+  const rejoined = await ensureOfficialAgentNetClient('Unit device', { rejoin: true });
+  expect(state.bodies.map((body) => body.rejoin)).toEqual([undefined, true]);
+  expect(rejoined.identity.signingKey).toBe(first.identity.signingKey);
+  expect(state.secrets.get(officialAgentNetSlot()).agentNet.certificate.signature).toBe(rejoined.certificate.signature);
+  state.beforeIssue = async () => { throw Object.assign(new Error('enrollment unavailable'), { status: 503, code: 'NETWORK_ERROR' }); };
+  await expect(ensureOfficialAgentNetClient('Unit device', { rejoin: true })).rejects.toMatchObject({ status: 503 });
+});
 it('single-flights account enrollment and keeps the signed identity in the existing encrypted vault', async () => {
   const [first, second] = await Promise.all([ensureOfficialAgentNetClient('Unit device'), ensureOfficialAgentNetClient('Unit device')]);
   expect(first).toBe(second); expect(state.requests).toBe(1);
@@ -110,4 +124,26 @@ it('does not retain a certificate past expiry or after an authoritative renewal 
     throw Object.assign(new Error('enrollment unavailable'), { status: 0, code: 'NETWORK_ERROR' });
   };
   await expect(ensureOfficialAgentNetClient('Unit device')).rejects.toMatchObject({ status: 0 });
+});
+
+// Hold an ordinary enrollment open while Rejoin and the next connection request their credentials.
+it('uses the rejoined certificate for a connection arriving during rejoin', async () => {
+  const waiting = Promise.withResolvers<void>();
+  const started = Promise.withResolvers<void>();
+  state.beforeIssue = async () => {
+    if (state.requests === 1) { started.resolve(); await waiting.promise; }
+  };
+  const ordinary = ensureOfficialAgentNetClient('Unit device');
+  await started.promise;
+  const rejoin = ensureOfficialAgentNetClient('Unit device', { rejoin: true });
+  const reconnect = ensureOfficialAgentNetClient('Unit device');
+  await new Promise<void>(resolve => setImmediate(resolve));
+  const startedBeforeRenewalFinished = state.requests;
+  waiting.resolve();
+  const [previous, restored, connected] = await Promise.all([ordinary, rejoin, reconnect]);
+  expect(startedBeforeRenewalFinished).toBe(1);
+  expect(connected.certificate.signature).toBe(restored.certificate.signature);
+  expect(previous.certificate.signature).not.toBe(restored.certificate.signature);
+  expect(currentOfficialAgentNetClient()?.certificate.signature).toBe(restored.certificate.signature);
+  expect(state.requests).toBe(2);
 });

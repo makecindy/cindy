@@ -24,6 +24,11 @@ export const DEVICE_LINK_INVOKE = {
   RENAME_DEVICE: 'device-link:rename-device',
   /** 删除离线设备档案 */
   DELETE_DEVICE: 'device-link:delete-device',
+  /**
+   * 本机被移除后「重新加入」(官方网络,只作用于本机)。不进 device-link 隧道 allowlist:
+   * 被移除的设备连不上别人,别的设备也不该替它决定。
+   */
+  REJOIN: 'device-link:rejoin',
   // —— 控制端:远程会话视图用 ——
   /** 与目标设备建立控制链路(进入远程设备视图时) */
   OPEN_LINK: 'device-link:open-link',

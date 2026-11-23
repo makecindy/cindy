@@ -35,6 +35,7 @@ import { readMessagesList } from './agent/history.ts';
 import * as broadcastTap from '../../desktop/src/main/device-link/broadcast-tap.ts';
 import { PHASE1_UNFORWARDED_USAGE_CHANNELS } from './agent/usage-push-channels.ts';
 import { redactEventForRenderer } from '../../desktop/src/main/maker-ipc/rendererEventRedaction.ts';
+import { ServerApiError } from '../../desktop/src/main/serverApiClient.ts';
 
 const waitFor = async condition => {
   const deadline = Date.now() + 5000;
@@ -883,4 +884,56 @@ test('Agent-Net control refuses profile hold and rechecks the owner inside the s
     assert.equal(fs.readFileSync(file, 'utf8'), before);
     assert.equal(fs.existsSync(file + '.lock'), false);
   });
+});
+
+// Test value (engineering-conventions §3.2)
+// - Production entry and observable result: `cindy-host remote rejoin` reaches createHostDeviceLink `rejoin` through the
+//   authenticated `/control/remote` route; the command line prints the `rejoin` result and its hint, and fails unless rejoined.
+// - Rule: 2026-11-23, a device removed in Cindy comes back by asking on that device (deviceRejoin.ts; protocol record
+//   agent-net-device-removal.md). The control channel turns thrown errors into a bare status, so every outcome is a result.
+// - Coverage gap: deviceRejoin.test.ts covers the order with injected ports, not the Host assembly or its hints.
+// - Minimal failing input: an older service answering 404, a profile held by the desktop, a service that supports rejoin.
+// - Tier: unit with an in-process loopback control server; the Device Link client stays stopped (remote control off).
+test('cindy-host remote rejoin reports why it could not rejoin, and asks the official service only when it may', async t => {
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'host-rejoin-'));
+  configureHostOwner({ userDataDir: profile, ownerId: 'rejoin-owner' });
+  fs.writeFileSync(path.join(profile, 'device-link-settings.json'), '{"agentNetEnabled":false,"remoteControlEnabled":false}');
+  let held = 'HOST_PROFILE_IN_USE_BY_DESKTOP: The desktop window is using this profile.';
+  const requests = [];
+  let answer = async () => ({ deviceId: 'host', rejoined: true });
+  const host = createHostDeviceLink({
+    profileDir: profile, worktree: createHostWorktreeLifecycle(profile), version: 'test', getWsUrl: () => 'ws://127.0.0.1:9',
+    getToken: async () => null, canRegister: () => true, profileHold: () => held,
+    invoke: async () => ({ status: 200, body: {} }), subscribe: () => () => {},
+    createRuntimeSession: async () => ({}), disableShareAvailability: async () => {},
+    agentNet: { base: () => null, subject: () => null, deviceId: () => null },
+    officialDeviceLinkFetch: async (route, opts) => { requests.push([route, opts]); return answer(); },
+  });
+  const server = createHostServer({ instanceId: 'fixture', token: 'fake-token', remoteControl: () => host.rejoin() });
+  t.after(async () => {
+    await new Promise(resolve => server.close(resolve));
+    await host.stop();
+    commitVolatileAppSession('signed-out', null, true);
+    fs.rmSync(profile, { recursive: true, force: true });
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const rejoin = async () => {
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/control/remote`, { method: 'POST',
+      headers: { authorization: 'Bearer fake-token', 'content-type': 'application/json' },
+      body: JSON.stringify({ instanceId: 'fixture', action: 'rejoin' }) });
+    assert.equal(response.status, 200);
+    return (await response.json()).rejoin;
+  };
+  // The desktop window owns this profile: nothing is asked of the service.
+  assert.deepEqual(await rejoin(), { result: 'failed', hint: `Could not rejoin: [PRECONDITION_FAILED] ${held}` });
+  assert.equal(requests.length, 0);
+  held = null;
+  // An older service without the endpoint: signing in again is still the way back there.
+  answer = async () => { throw new ServerApiError('NOT_FOUND', 404, 'Not Found'); };
+  assert.deepEqual(await rejoin(), { result: 'unsupported',
+    hint: 'The Cindy service does not support rejoining yet. Sign in again with cindy-host login.' });
+  answer = async () => ({ deviceId: 'host', rejoined: true });
+  assert.deepEqual(await rejoin(), { result: 'rejoined', agentNet: 'skipped' });
+  assert.deepEqual(requests.map(([route, opts]) => [route, opts.method, opts.body]),
+    [['/api/device-link/rejoin', 'POST', {}], ['/api/device-link/rejoin', 'POST', {}]]);
 });

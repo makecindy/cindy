@@ -129,6 +129,7 @@ vi.mock('../index', () => ({
   clearDeviceResponsiveness: vi.fn(),
   setRemoteControlEnabled: vi.fn(),
   setKeepAwakeEnabled: vi.fn(),
+  rejoinThisDevice: vi.fn(),
   openRemoteLink: vi.fn(),
   closeRemoteLink: vi.fn(),
   remoteInvoke: vi.fn(),

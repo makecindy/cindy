@@ -7014,6 +7014,15 @@
         "unstable": "連線反覆斷開又重連，請檢查網路；若持續如此，重啟 Cindy",
         "agent-net-relay-down": "連不上 Agent-Net 中轉，正在重新連線；已直連的電腦照常可用，其他裝置暫時連不上"
       },
+      "rejoin": {
+        "hint": "這台裝置已從帳號中移除，點「重新加入」即可回來。",
+        "action": "重新加入",
+        "done": "已重新加入",
+        "doneWithoutAgentNet": "已重新加入，Agent-Net 暫未恢復，先用 Device Link 連線",
+        "unsupported": "伺服器暫不支援重新加入，請在本裝置登出後重新登入",
+        "agentNetFailed": "Agent-Net 暫未恢復。關閉「僅使用 Agent-Net」後可先用 Device Link 連線",
+        "failed": "重新加入失敗，請檢查網路後重試"
+      },
       "refresh": "重新整理",
       "empty": "暫無其它裝置。在另一臺電腦上用同一帳號登入 {{appName}} 後，這裡會顯示該裝置。",
       "thisDevice": "本機",
@@ -7031,7 +7040,7 @@
       "renameCancel": "取消",
       "delete": "刪除",
       "deleteTitle": "刪除「{{name}}」？",
-      "deleteMessage": "將此裝置從帳號中移除並中斷遠端連線。裝置上的任務和檔案會保留，重新登入後可再次加入。",
+      "deleteMessage": "將此裝置從帳號中移除並中斷遠端連線。裝置上的任務和檔案會保留，之後在那台裝置上點「重新加入」即可回來。",
       "deleteOnlineHint": "目前伺服器尚不支援移除線上裝置，請待服務升級後重試。",
       "error": {
         "unavailable": "裝置互聯服務暫時無法使用（伺服器未啟用或網路異常）",

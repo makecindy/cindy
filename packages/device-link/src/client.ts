@@ -635,6 +635,9 @@ export interface DeviceLinkPeerTransportReset {
  * message 匹配:Node ws 是 "Unexpected server response: 401",RN 是
  * "Expected HTTP 101 response but was '401 Unauthorized'"。
  */
+// A local transport can confirm revocation before it has a socket to emit 4410.
+export class DeviceLinkRegistrationRemovedError extends Error {}
+
 export function classifyConnectionIssue(
   code?: number,
   reason?: string,
@@ -2850,6 +2853,10 @@ export class DeviceLinkClient {
         this.log.debug?.('stale createWebSocket rejection ignored', err);
         return;
       }
+      if (err instanceof DeviceLinkRegistrationRemovedError) {
+        this.markRegistrationRemoved();
+        return;
+      }
       this.log.warn('createWebSocket failed', err);
       this.scheduleReconnect();
       return;
@@ -2967,8 +2974,7 @@ export class DeviceLinkClient {
     this.failNonReliablePending(new DeviceLinkError('NOT_CONNECTED', 'relay connection lost'));
     if (this.stopped) return;
     if (code === 4410) {
-      this.stopConnection();
-      this.setConnectionIssue({ kind: 'device-removed', closeCode: code, at: Date.now() });
+      this.markRegistrationRemoved();
       return;
     }
     if (code === DUPLICATE_CONNECTION_CLOSE_CODE) {
@@ -6787,6 +6793,11 @@ export class DeviceLinkClient {
       if (!oldest) break;
       this.pendingInboundLinkOffers.delete(oldest);
     }
+  }
+
+  private markRegistrationRemoved(): void {
+    this.stopConnection();
+    this.setConnectionIssue({ kind: 'device-removed', closeCode: 4410, at: Date.now() });
   }
 
   private setConnectionIssue(issue: DeviceLinkConnectionIssue | null): void {
