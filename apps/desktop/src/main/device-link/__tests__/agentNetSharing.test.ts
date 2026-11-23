@@ -447,6 +447,33 @@ it('lets a cross-account session through only where the routed client accepts th
   stop();
   expect(state.sessionRoute!(visitor('own-task'))).toBeNull();
 });
+// Bug (2026-11-23): after the owner closed a joined task or removed this guest, only an explicit leave retired its
+// pin, so the scoped connection requested a transport every few seconds and the relay answered NOT_FOUND forever.
+// Gap: provider shares retired on absence from the received list; shared tasks did not. Minimal failure: a joined
+// task missing from its origin's successful list stays active. A failed list read must not retire anything.
+// Unit: real Main vault and list merge; HTTP boundary mocked.
+it('retires a joined task its origin no longer lists, but not when the list read fails', async () => {
+  const receipt = (resourceId: string) => ({ v: 2 as const, kind: 'shared-task' as const, resourceId, invitation: randomBytes(32).toString('base64url'),
+    networkId: 'private:remote', rootPublicKey: state.api.rootPublicKey, hostDeviceId: 'remote-host', region: 'global' as const });
+  for (const id of ['removed-task', 'kept-task']) {
+    state.http.mockResolvedValueOnce(Response.json({ sharedTaskId: id, memberId: id + '-member', status: 'joined', created: true }));
+    await joinAgentNetSharedTask(buildAgentNetSharingInvitation(receipt(id), 'https://friend.example.test'), 'Guest');
+  }
+  const friendList = 'https://friend.example.test/api/agent-net/sharing/shared-tasks';
+  let friendUp = false;
+  state.http.mockImplementation(async (url: string) => {
+    if (String(url) !== friendList) return Response.json({ sharedTasks: [] });
+    if (!friendUp) throw new TypeError('offline');
+    return Response.json({ sharedTasks: [{ sharedTaskId: 'kept-task', sessionId: 's', hostDeviceId: 'remote-host',
+      ownerAccountId: 'host-account', title: 'Kept', revision: 1 }] });
+  });
+  await listAgentNetSharedTasks(async () => null);
+  expect(agentNetSharingRoute('shared-task', 'removed-task')?.retired).toBeFalsy();
+  friendUp = true;
+  await listAgentNetSharedTasks(async () => null);
+  expect(agentNetSharingRoute('shared-task', 'removed-task')?.retired).toBe(true);
+  expect(agentNetSharingRoute('shared-task', 'kept-task')?.retired).toBeFalsy();
+});
 it('discards a late join after an account boundary without writing into the next owner vault', async () => {
   const receipt = { v: 2 as const, kind: 'shared-task' as const, resourceId: 'late-task', invitation: randomBytes(32).toString('base64url'),
     networkId: 'private:remote', rootPublicKey: state.api.rootPublicKey, hostDeviceId: 'remote-host', region: 'global' as const };

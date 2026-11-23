@@ -714,6 +714,13 @@ export async function listAgentNetSharedTasks(legacy: () => Promise<unknown>): P
         } catch { unavailable.add(row.sharedTaskId); }
       }
     }
+    // A joined task the authority no longer lists was closed or this member removed; retire its pin so its
+    // scoped connection stops requesting a transport the relay can only answer with NOT_FOUND.
+    if (origin) {
+      const ids = new Set(rows.map(row => (row as { sharedTaskId: string }).sharedTaskId));
+      for (const route of known) if (route.memberId && !route.retired && listIdentityKey(route) === listIdentityKey(origin)
+        && !ids.has(route.resourceId)) retireAgentNetSharingGuest('shared-task', route.resourceId);
+    }
   }
   return { sharedTasks: [...items.values()], unavailableSharedTaskIds: [...unavailable],
     ...(values.some(value => value.status === 'rejected') ? { authorityIncomplete: true } : {}) };
