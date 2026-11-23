@@ -153,6 +153,7 @@ const SCHEDULER_DDL = [
       provider_id TEXT,
       agent_device_id TEXT,
       effort TEXT,
+      model_group TEXT,
       fast_mode INTEGER NOT NULL DEFAULT 0,
       working_dir TEXT,
       workspace_kind TEXT NOT NULL DEFAULT 'project',

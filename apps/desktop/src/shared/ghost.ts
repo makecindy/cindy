@@ -614,9 +614,7 @@ export interface GhostTaskViewDecl {
 
 /**
  * 芯片型意识注册给 agent 的工具声明(卡槽②)。
- * 声明式而非运行时动态注册(规则 9:确定性;且会话中途增删工具会破坏
- * prompt 缓存前缀,规则 10)——主机在会话建立时按"已装且唤醒"的意识
- * 快照注入工具集。
+ * 默认按需发现。任务启动时的具名工具须显式声明，目录在运行期间固定。
  */
 export interface GhostToolDecl {
   /** 工具名:小写字母开头,允许小写/数字/下划线/连字符,≤64。 */
@@ -625,6 +623,8 @@ export interface GhostToolDecl {
   description: string;
   /** JSON Schema(object)形态的参数声明;可省略(无参工具)。 */
   parameters?: Record<string, unknown>;
+  /** Opt in to named exposure in the host's ordinary local task tool snapshot. */
+  exposure?: 'startup';
   /**
    * 调用审批要求(2026-11-02)。缺省 = 按会话权限档审批。
    * - `each-call`:即使本会话已允许过,每次调用仍按权限档重新审批。只收紧,不需确认。
@@ -5144,6 +5144,7 @@ function validateGhostManifestInput(
       tools.push({
         name: t.name,
         description: t.description,
+        ...(prepared.schemaVersion === 3 && t.exposure === 'startup' ? { exposure: 'startup' as const } : {}),
         ...(t.parameters !== undefined
           ? { parameters: t.parameters as Record<string, unknown> }
           : {}),
@@ -7868,6 +7869,8 @@ export interface GhostPipePreviewRequest {
   mobilePageId?: string;
   url: string;
   sessionId?: string;
+  /** 桌面侧栏可聚焦该插件实例在目标任务中已打开的同 URL 页签。 */
+  reuseExisting?: boolean;
 }
 
 /** preview 槽结构化返回。 */
@@ -10400,6 +10403,14 @@ export const GHOST_CALL_TOOL_NAMES: readonly string[] = [
 /** toolName 是否是 ghost_call(兼容新旧 server 名)。 */
 export function isGhostCallToolName(name: string | undefined | null): boolean {
   return typeof name === 'string' && GHOST_CALL_TOOL_NAMES.includes(name);
+}
+
+export const STARTUP_GHOST_TOOL_PREFIX = 'ghost_start_';
+
+/** Named calls use the same result card protocol without the ghost_call input envelope. */
+export function isGhostStartupToolCallName(name: string): boolean {
+  return name.startsWith(`mcp__cindy__${STARTUP_GHOST_TOOL_PREFIX}`) ||
+    name.startsWith(`mcp:cindy:${STARTUP_GHOST_TOOL_PREFIX}`);
 }
 
 /** Plugin-to-host routine protocol; source identity always comes from the authenticated pipe. */

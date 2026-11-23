@@ -3599,7 +3599,7 @@ describe('computer mcp integration', () => {
     const deps = getComputerMcpDeps({ isComputerUseEnabled, prepareRuntimeBeforeUse });
 
     await expect(deps.callTool('list_windows', {}, { agentKind: 'codex' }))
-      .rejects.toThrow('Computer Use is disabled');
+      .rejects.toThrow(/Computer automation is disabled.*page=computer-use/);
     expect(isComputerUseEnabled).toHaveBeenCalledWith({ agentKind: 'codex' });
     expect(prepareRuntimeBeforeUse).not.toHaveBeenCalled();
     expect(spawnMock).not.toHaveBeenCalled();

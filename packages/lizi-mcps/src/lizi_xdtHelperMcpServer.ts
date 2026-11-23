@@ -196,7 +196,7 @@ export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number]
   cindy: [
     `${BRAND_NAME} 能力说明、界面操作帮助（get_capabilities scope=help）与当前任务信息；`,
     `get_capabilities({key:"self-management"}) 是管理自己的任务、定时任务、项目、伙伴的工具索引；`,
-    `get_capabilities({key:"computer-use"}) 说明桌面操作没开时怎么引导用户开启。`,
+    `get_capabilities({key:"computer-use"}) 说明如何核实任务的桌面工具状态并定位自动操作电脑设置；`,
     `get_capabilities({key:"feishu-local-cli"}) 查看本机 Feishu CLI 的非秘密状态与结构化工具面；`,
     `本机。`,
   ].join(''),

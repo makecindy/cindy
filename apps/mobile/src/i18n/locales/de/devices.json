@@ -32,7 +32,7 @@
     "notFound": "Dieses Gerät gehört nicht mehr zu deinem Konto.",
     "deleteDevice": "Gerät löschen",
     "deleteTitle": "{{name}} löschen?",
-    "deleteMessage": "Dieses Gerät aus deinem Konto entfernen und den Fernzugriff trennen. Seine Sitzungen und Dateien bleiben erhalten. Melde dich auf dem Gerät erneut an, um es wieder hinzuzufügen.",
+    "deleteMessage": "Dieses Gerät aus deinem Konto entfernen und den Fernzugriff trennen. Seine Sitzungen und Dateien bleiben erhalten. Tippe auf dem Gerät auf „Wieder beitreten“, um es zurückzuholen.",
     "deleteFailed": "Das Gerät konnte nicht gelöscht werden.",
     "deleteOnline": "Dieser Server unterstützt das Entfernen von Online-Geräten noch nicht. Versuche es nach der Aktualisierung des Dienstes erneut.",
     "deleteRejectedWhileOffline": "Das Gerät konnte nicht gelöscht werden: Der Server führt es noch als online, obwohl es hier als offline angezeigt wird.",

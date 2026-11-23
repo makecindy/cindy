@@ -695,6 +695,7 @@
     },
     "picker": {
       "unavailable": "Unavailable share",
+      "offline": "{{name}} · Offline for now",
       "hostOutdated": "The Cindy version on the owner’s computer is too old to list these models. Ask them to update Cindy, then try again.",
       "numbered": "{{name}} ({{index}})"
     },
@@ -5425,6 +5426,29 @@
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 flash",
         "cindyQwen38Flash": "Qwen 3.8 Flash"
+      },
+      "health": {
+        "configTitle": "No auxiliary model is available",
+        "configDescription": "Automatic task naming, pinned task summaries, Help and plugin tasks such as subtitle translation are affected. Fix the issues below, or choose other available models under Custom.",
+        "runtimeTitle": "Recent auxiliary model requests failed",
+        "runtimeDescription": "The network or service may be temporarily unavailable. This notice clears on its own once requests succeed. If it keeps appearing, choose other available models under Custom.",
+        "fallback": "Plugin tasks are temporarily using {{model}} at a lower reasoning effort, which may be slower and use more quota.",
+        "candidate": "{{model}}: {{reason}}",
+        "openProviders": "Open Providers",
+        "customize": "Customize auxiliary models",
+        "issues": {
+          "signed_out": "Sign in to Cindy required",
+          "provider_disabled": "Provider disabled",
+          "model_disabled": "Model disabled",
+          "payment_required": "Not included in your plan or balance",
+          "no_credential": "Sign-in or API key missing",
+          "unavailable": "Currently unavailable"
+        },
+        "toast": {
+          "config": "No auxiliary model is available. Task naming, summaries and plugin tasks such as subtitle translation are affected.",
+          "runtime": "Recent auxiliary model requests failed. Task naming, summaries and plugin tasks such as subtitle translation may be affected.",
+          "open": "Open Settings"
+        }
       }
     },
     "compaction": {
@@ -6534,7 +6558,7 @@
           "defaultWorkspaceChip": "Default: {{name}}",
           "defaultWorkspaceAria": "Choose the default project for dispatched tasks",
           "defaultWorkspaceRadioAria": "Set “{{name}}” as the default project",
-          "defaultWorkspaceRowHint": "The selected project is the default: Telegram, Feishu / Lark and X conversations that have not picked a project run their tasks there.",
+          "defaultWorkspaceRowHint": "The selected project is the default: Telegram, Feishu / Lark, X and Discord conversations that have not picked a project run their tasks there.",
           "defaultProjectTag": "Default",
           "defaultProjectFullAccessWarning": "The default project “{{name}}” has Full access: an @mention from any group runs with full access inside it.",
           "sharedSettingsPointer": "Projects, models and permissions are shared by all official bots.",
@@ -6775,6 +6799,40 @@
           "workingDeviceThisComputer": "This computer",
           "workingDeviceUnknown": "Working computer not yet synced",
           "workingDeviceUnnamed": "Unnamed computer"
+        },
+        "discord": {
+          "description": "Link your Discord account and dispatch tasks to Cindy via the official bot, in direct messages or servers.",
+          "disabledHint": "Turn on the switch to get a link code, then send it to the Cindy bot in Discord.",
+          "toggleAria": "Toggle the Discord connection",
+          "connect": "Link Discord",
+          "openApp": "Add Cindy to Discord",
+          "cancel": "Cancel Linking",
+          "retry": "Retry Linking",
+          "openBot": "Open Bot",
+          "addToGroup": "Add to Server",
+          "unlink": "Unlink Discord",
+          "unlinkConfirmTitle": "Unlink Discord?",
+          "unlinkConfirmDescription": "Discord will no longer dispatch messages to this device. Your local projects and other channels are not affected.",
+          "status": {
+            "checking": "Checking server support…",
+            "unavailable": "Not available on this server",
+            "disabled": "Disabled",
+            "none": "Not linked",
+            "pending": "Send the link code to the Cindy bot",
+            "awaiting_confirmation": "Confirm the link in Discord",
+            "confirmed": "Linked as {{user}}",
+            "denied": "Linking was denied",
+            "expired": "Link code expired",
+            "failed": "Linking failed",
+            "revoked": "Link removed",
+            "superseded": "Linked to another device"
+          },
+          "bindCode": {
+            "label": "Link code",
+            "copy": "Copy code",
+            "copied": "Link code copied",
+            "hint": "Send this code to the Cindy bot in a Discord direct message, or run /bind with it in Discord. Haven't added Cindy yet? Add it to Discord first."
+          }
         }
       },
       "summary": {
@@ -6858,7 +6916,15 @@
           "encrypted": "End-to-end encrypted",
           "legacyConnection": "Older connection",
           "encryptionUnknown": "Not confirmed",
-          "legacyEncryptionHint": "The relay path on the older connection is not end-to-end encrypted."
+          "legacyEncryptionHint": "The relay path on the older connection is not end-to-end encrypted.",
+          "routePreference": "Route preference",
+          "routeAuto": "Auto",
+          "routeDirect": "Direct",
+          "routeRelay": "Relay",
+          "routeUnavailable": "Unavailable",
+          "routeMeasuring": "Measuring…",
+          "routeDirectUnavailableHint": "Direct connection is currently unavailable on this network",
+          "routePreferenceFailed": "Could not switch route. Try again."
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -6999,6 +7065,7 @@
         "providerTelegram": "Telegram",
         "providerX": "X",
         "providerFeishu": "Feishu / Lark",
+        "providerDiscord": "Discord",
         "requireConnected": "Editable once {{provider}} is connected (enable its switch above and wait for the connection).",
         "offlineLocal": "{{provider}} is offline. Changes are saved on this computer and sync to the chat model card when it reconnects.",
         "requireBinding": "Complete {{provider}} account linking first.",
@@ -7026,11 +7093,20 @@
       "connectionIssue": {
         "device-removed": "This device was removed from your account. Sign out and sign in again on this device.",
         "auth-failed": "Sign-in expired — sign in again",
-        "replaced": "Connection replaced by another instance of this device",
+        "replaced": "Connection taken over by another Cindy, either on this computer or on another computer recognized as this one",
         "too-many-connections": "Connection limit reached for this account",
         "version-mismatch": "Protocol version mismatch — update the app",
         "unstable": "Connection keeps dropping and reconnecting — check the network, or restart Cindy if it persists",
         "agent-net-relay-down": "Can't reach the Agent-Net relay, reconnecting. Computers connected directly still work; other devices can't connect for now"
+      },
+      "rejoin": {
+        "hint": "This device was removed from your account. Select Rejoin to bring it back.",
+        "action": "Rejoin",
+        "done": "Device rejoined",
+        "doneWithoutAgentNet": "Device rejoined. Agent-Net isn’t back yet, so Device Link is used for now",
+        "unsupported": "The server doesn’t support rejoining yet. Sign out and sign in again on this device",
+        "agentNetFailed": "Agent-Net isn’t back yet. Turn off “Use Only Agent-Net” to connect with Device Link for now",
+        "failed": "Couldn’t rejoin. Check your network and try again"
       },
       "refresh": "Refresh",
       "empty": "No other devices yet. Sign in to {{appName}} with the same account on another computer and it will show up here.",
@@ -7049,7 +7125,7 @@
       "renameCancel": "Cancel",
       "delete": "Delete",
       "deleteTitle": "Delete “{{name}}”?",
-      "deleteMessage": "Remove this device from your account and disconnect remote access. Its sessions and files are kept. Sign in again on that device to rejoin.",
+      "deleteMessage": "Remove this device from your account and disconnect remote access. Its sessions and files are kept. Select Rejoin on that device to bring it back.",
       "deleteOnlineHint": "This server does not yet support removing online devices. Retry after the service is upgraded.",
       "error": {
         "unavailable": "Device Link service is unavailable (not enabled on server or network error)",
@@ -7076,6 +7152,22 @@
       },
       "control": "Control",
       "standbyHint": "Another Cindy instance on this computer is using the remote connection. Close it and this instance takes over automatically.",
+      "identityConflict": {
+        "notice": "This computer and “{{name}}” are recognized as the same computer, so they keep pushing each other off remote connections and may get signed out. Giving one of them a new identity fixes it.",
+        "replace": "Give this computer a new identity",
+        "blockedSelfHostedRelay": "This computer is using your own relay, so it can’t get a new identity right now. Switch back to Cindy relay, then change it here.",
+        "confirmTitle": "Give this computer a new identity?",
+        "confirmRestart": "Cindy restarts right away, and tasks in progress are interrupted.",
+        "confirmNewDevice": "After the restart, sign in once more. This computer then appears as a new computer in the device list.",
+        "confirmKeptByOther": "Settings saved under the old identity, such as the device name, your buddies’ main computer and shared providers, stay with “{{name}}”. Set them up again on this computer.",
+        "confirmOtherUnaffected": "“{{name}}” stays as it is. Nothing needs to be done on that computer.",
+        "confirmAction": "Change identity and restart Cindy",
+        "failed": "Could not give this computer a new identity",
+        "toastTitle": "This computer and “{{name}}” are recognized as the same computer",
+        "toastBody": "They keep pushing each other off remote connections and may get signed out. Giving one of them a new identity fixes it.",
+        "toastAction": "Open Device Link",
+        "toastDismiss": "Not now"
+      },
       "apps": {
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
@@ -8621,7 +8713,7 @@
           "updated": "Plugin updated.",
           "empty": "No installable release is available.",
           "sign-in": "Sign in to GitHub to check for updates.",
-          "forbidden": "This GitHub sign-in cannot read the private repository.",
+          "forbidden": "Could not read the GitHub release. Check the repository link and your GitHub account’s access.",
           "unavailable": "Couldn't check or install the update. Try again."
         },
         "customSlotTitle": "Plugin custom settings area",
@@ -9684,6 +9776,12 @@
       "guidance": "Wait before requesting another code. Restarting, reinstalling, or changing networks does not guarantee that the limit will be lifted.",
       "support": "If this continues after waiting, privately send logs to feedback@cindy.app with your OS, Cindy version, error time, and the code below. Do not post logs publicly."
     }
+  },
+  "legalTermsUpdate": {
+    "title": "Terms Updated",
+    "body": "We've updated Cindy's <terms>Terms of Service</terms> and <privacy>Privacy Policy</privacy>. Agree to keep using Cindy, or log out.",
+    "agree": "Agree",
+    "disagree": "Logout"
   },
   "legacyMigration": {
     "title": "Migrate data from the previous version",
@@ -12530,6 +12628,7 @@
           "listenPortLabel": "Local listening port",
           "listenPortPlaceholder": "18747",
           "hint": "Connect to your BlueBubbles server on the local network. Only selected chats are handled. Stop any other automatic responder for these chats before connecting.",
+          "automationDenied": "macOS denied BlueBubbles access to Messages during a send. On the Mac running BlueBubbles, check System Settings → Privacy & Security → Automation.",
           "uncertain": "{{count}} deliveries need checking. Review the chat history before retrying to avoid duplicates."
         }
       },
@@ -13229,7 +13328,8 @@
           "subject": {
             "githubIssue": "The “Submit GitHub Issue” confirmation card",
             "renameSessions": "The “Rename tasks in bulk” confirmation card",
-            "pluginFileGrant": "The “Plugin file access” confirmation card"
+            "pluginFileGrant": "The “Plugin file access” confirmation card",
+            "mediaPathReveal": "The “Let the Agent get a media file’s location on the computer” confirmation card"
           }
         },
         "replyWords": {
@@ -14378,7 +14478,6 @@
       "regionAria": "Pending message queue",
       "listAria": "Queued messages",
       "pausedFooter": "Task stopped, queue paused",
-
       "steerUnsupportedNotice": "This engine doesn’t support steering. Queued messages will be sent after the current turn.",
       "resumeAction": "Continue sending",
       "resumeAria": "Continue sending queued messages",
@@ -15119,7 +15218,6 @@
     "runningStatus": {
       "currentRate": "Latest speed",
       "lastRequestRate": "Last request average",
-      "recentTokenRate": "Recent {{rate}} tok/s",
       "waitingSample": "Sampling",
       "averageRate": "Turn average",
       "rateHistory": "Generation speed history",
@@ -15891,7 +15989,7 @@
       "viewThread": "View thread context ({{count}})",
       "memberFromGroup": "{{name}} · from {{platform}} group “{{group}}”",
       "memberFromPlatform": "{{name}} · from a {{platform}} group",
-      "guestFromDm": "{{name}} · from {{platform}} DM (not the owner)",
+      "guestFromDm": "{{name}} · from {{platform}} DM",
       "unknownSender": "Group member"
     },
     "rewind": {
@@ -17696,6 +17794,7 @@
       }
     },
     "editor": {
+      "reviewModelReadFailed": "Could not read the automation’s model preference. Close and reopen the editor to retry.",
       "promptDialog": {
         "titleEdit": "Edit Automation",
         "titleCreate": "Create Automation",
@@ -18039,11 +18138,13 @@
         "effortHeading": "Reasoning Effort",
         "effortDefault": "Default",
         "followSession": "Follow session",
+        "followTeammate": "Follow buddy’s primary model",
         "modelListAria": "Model list",
         "modelSelectorAria": "Model selector",
         "categoryListAria": "{{category}} models",
         "effortListAria": "Reasoning effort",
-        "boundLocationLocked": "Bound tasks keep running where they are. Choose a model from that computer."
+        "boundLocationLocked": "Bound tasks keep running where they are. Choose a model from that computer.",
+        "modelGroupTitle": "Model group “{{name}}”: picks a source when a run starts a new task"
       }
     },
     "toast": {
@@ -20388,6 +20489,7 @@
       "totalDetail_other": "{{count}} cards × {{amount}}",
       "pay": "Continue to Payment",
       "refundNote": "Gift cards can't be exchanged for cash. Claimed or redeemed cards are non-refundable. To request a refund for a card that hasn't been claimed, contact support.",
+      "termsNote": "By selecting Continue to Payment, you agree to the <terms>Gift Card Terms</terms>.",
       "cancel": "Cancel",
       "loadFailed": "Couldn’t load the gift card purchase limits. Try again later.",
       "checkoutSubtitle_one": "Gift card {{amount}} × {{count}} · Issued as soon as payment succeeds",
@@ -22171,6 +22273,11 @@
     "lineNumbers": "Line numbers"
   },
   "subscriptionAccounts": {
+    "pluginSignIn": {
+      "method": "Sign-in method",
+      "secretHint": "The key goes only to the plugin, which keeps it in this account's own folder. Cindy doesn't store it or send it to other computers.",
+      "browserHint": "The plugin opens your browser. Finish signing in there, then come back."
+    },
     "placement": {
       "needsUpdate": "The computer running this needs a Cindy update before accounts can be moved this way.",
       "moveTo": "Move to…",
@@ -22314,6 +22421,18 @@
       "cheapest": {
         "title": "Cheapest",
         "hint": "Uses subscriptions with quota left first, at no extra cost; the rest go from lowest to highest listed price, and sources without a price come last."
+      },
+      "drain": {
+        "title": "Use until empty",
+        "hint": "Keeps using the last source until it runs out of quota or becomes unavailable, then moves to the next; it does not switch back when earlier ones recover."
+      },
+      "headroom": {
+        "title": "Most quota left",
+        "hint": "Uses the source with the largest share of quota left (weekly quota when there is one); sources without readable quota come last."
+      },
+      "weighted": {
+        "title": "By weight",
+        "hint": "Spreads new tasks across sources in proportion to their weights, interleaved; unavailable sources sit out this time."
       }
     },
     "picker": {
@@ -22341,6 +22460,11 @@
       "tight": "Its 5-hour quota is almost full, so it is skipped for now",
       "cheapest": "Lowest listed price",
       "cheapestFree": "Subscription quota left, no extra cost",
+      "drain": "Still using it until its quota runs out",
+      "drainNext": "The previous source ran out or became unavailable, so it moved to this one",
+      "headroom": "Most quota left",
+      "headroomQuota": "{{left}}% of its quota is left, more than any other source",
+      "weighted": "Its turn by weight",
       "noVision": "The message has images and it cannot see images",
       "exceptionImage": "The message has images, so only sources that can see images were considered",
       "exceptionImageFallback": "The message has images, but no source can see images, so it picked as usual",
@@ -22360,6 +22484,9 @@
       "effort": "Reasoning effort",
       "effortUnset": "Not set",
       "effortHint": "If the chosen model does not support this level, it runs at its own default.",
+      "weight": "Weight",
+      "weightAria": "Weight for “{{name}}”",
+      "weightHint": "With “By weight”, a higher weight gets more new tasks. 1–1000.",
       "sources": "Sources it can use",
       "sourcesHint": "Different models can sit together. The task shows which one was used.",
       "sourcesEmpty": "No sources yet. Add a connected model below.",
@@ -22392,6 +22519,7 @@
         "empty": "No exceptions yet. Every new task uses the pick rule above.",
         "imageRule": "When the message has images, use only sources that can see images",
         "hoursRule": "{{from}}–{{to}}: use “{{name}}” instead",
+        "hoursRuleDays": "{{days}} {{from}}–{{to}}: use “{{name}}” instead",
         "remove": "Remove this exception",
         "add": "Add an exception",
         "choose": "Choose a situation",
@@ -22400,6 +22528,9 @@
         "from": "From",
         "to": "To",
         "useRoute": "Use instead",
+        "days": "Days",
+        "daysHint": "No days selected means every day. A time range past midnight counts toward the day it starts.",
+        "dayRange": "{{from}}–{{to}}",
         "addHours": "Add",
         "sameHour": "Start and end cannot be the same time.",
         "full": "Up to {{count}} exceptions.",

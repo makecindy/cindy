@@ -34,13 +34,17 @@ import {
   ACP_PROTOCOL_VERSION,
   ACP_STEERING_METHOD,
   JSONRPC_METHOD_NOT_FOUND,
+  acpCindyErrorSignals,
   asNonEmptyString,
+  readAcpCindyError,
+  type AcpCindyError,
   asRecord,
   normalizeConfigOptions,
   normalizeInitializeResult,
   normalizePermissionOptions,
   normalizeStopReason,
   normalizeToolCallFields,
+  normalizeTurnUsage,
   type AcpAuthMethod,
   type AcpConfigOption,
   type AcpContentBlock,
@@ -154,6 +158,25 @@ export class AcpAuthRequiredError extends Error {
   }
 }
 
+/**
+ * The agent refused to open a session because of its account (`error.data._meta.cindy`): used up,
+ * signed out or overloaded. The message carries the stable account codes Cindy's failure policy
+ * and the chat's error copy already know, never the agent's own text.
+ */
+export class AcpAccountError extends Error {
+  readonly signals: Record<string, unknown>;
+  constructor(readonly classified: AcpCindyError, readonly cause?: unknown) {
+    super(classified.kind === 'usage-limit'
+      ? '[SUBSCRIPTION_ACCOUNT_LIMITED] The plugin engine account has reached its usage limit'
+        + (classified.resetsAt !== undefined ? `\nresetAtMs=${classified.resetsAt}` : '')
+      : classified.kind === 'auth-required'
+        ? '[SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED] The plugin engine account requires login'
+        : 'The plugin engine service is currently overloaded');
+    this.name = 'AcpAccountError';
+    this.signals = acpCindyErrorSignals(classified);
+  }
+}
+
 /** The agent cannot connect to an MCP server this task depends on. */
 export class AcpRequiredMcpUnavailableError extends Error {
   constructor(readonly servers: readonly string[]) {
@@ -185,7 +208,9 @@ export function filterMcpServers(
 }
 
 function authAware(error: unknown, init: AcpInitializeResult): unknown {
-  return error instanceof AcpRpcError && error.code === ACP_ERROR_AUTH_REQUIRED
+  const classified = error instanceof AcpRpcError ? readAcpCindyError(error.data) : null;
+  if (classified && classified.kind !== 'auth-required') return new AcpAccountError(classified, error);
+  return error instanceof AcpRpcError && (error.code === ACP_ERROR_AUTH_REQUIRED || classified?.kind === 'auth-required')
     ? new AcpAuthRequiredError(init.authMethods)
     : error;
 }
@@ -249,6 +274,12 @@ export async function openAcpSession(opts: OpenAcpSessionOptions): Promise<AcpSe
     if (init.protocolVersion !== ACP_PROTOCOL_VERSION) throw new AcpProtocolVersionError(init.protocolVersion);
 
     const { accepted, dropped } = filterMcpServers(opts.mcpServers ?? [], init.agentCapabilities.mcpCapabilities);
+    if (dropped.length > 0) {
+      opts.logger?.warn('acp: dropping MCP servers whose transport the agent did not advertise', {
+        dropped,
+        mcpCapabilities: init.agentCapabilities.mcpCapabilities,
+      });
+    }
     const missing = (opts.requiredMcpServers ?? []).filter((name) => !accepted.some((server) => server.name === name));
     if (missing.length > 0) throw new AcpRequiredMcpUnavailableError(missing);
     let sessionId: string;
@@ -268,7 +299,8 @@ export async function openAcpSession(opts: OpenAcpSessionOptions): Promise<AcpSe
         );
       } catch (error) {
         const mapped = authAware(error, init);
-        if (mapped instanceof AcpAuthRequiredError || error instanceof AcpConnectionClosedError) throw mapped;
+        if (mapped instanceof AcpAuthRequiredError || mapped instanceof AcpAccountError
+          || error instanceof AcpConnectionClosedError) throw mapped;
         throw new AcpResumeUnavailableError(opts.resumeSessionId, 'failed', error);
       }
       sessionId = opts.resumeSessionId;
@@ -734,7 +766,11 @@ export class AcpSession {
     this.usage = { ...this.usage, tokenUsage: 0 };
     this.emit([{ type: 'status', data: { status: 'running', ...this.usage, isRunning: true } }]);
     this.connection.request('session/prompt', { sessionId: this.id, prompt }, { timeoutMs: null }).then(
-      (result) => this.finishTurn(turn.token, { stopReason: normalizeStopReason(result) }),
+      (result) => {
+        // The prompt result is the only per-turn token report; `usage_update` only carries the context size.
+        const usage = normalizeTurnUsage(result);
+        this.finishTurn(turn.token, { stopReason: normalizeStopReason(result), ...(usage ? { usage } : {}) });
+      },
       (error: unknown) => this.finishTurn(turn.token, this.errorOutcome(error)),
     );
   }
@@ -779,8 +815,18 @@ export class AcpSession {
     if (error instanceof AcpConnectionClosedError) {
       return { error: 'The agent process ended unexpectedly.', reason: 'acp-agent-exited' };
     }
-    if (error instanceof AcpRpcError && error.code === ACP_ERROR_AUTH_REQUIRED) {
+    const classified = error instanceof AcpRpcError ? readAcpCindyError(error.data) : null;
+    if (error instanceof AcpRpcError && (error.code === ACP_ERROR_AUTH_REQUIRED || classified?.kind === 'auth-required')) {
       return { error: 'The agent needs you to sign in again.', reason: 'acp-auth-required' };
+    }
+    if (classified) {
+      return {
+        error: classified.kind === 'usage-limit'
+          ? 'The plugin engine account has reached its usage limit.'
+          : 'The plugin engine service is currently overloaded.',
+        reason: classified.kind === 'usage-limit' ? 'acp-usage-limit' : 'acp-overloaded',
+        signals: acpCindyErrorSignals(classified),
+      };
     }
     return { error: error instanceof Error ? error.message : String(error), reason: 'acp-request-failed' };
   }
