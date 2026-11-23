@@ -963,7 +963,8 @@ describe('transfer', () => {
   });
 
   it('does not move the home when a value is too large to upload', async () => {
-    const t = setup({ home: 'desk', devices: [device('laptop')], values: [
+    const t = setup({ home: 'desk', devices: [device('laptop')],
+      homeLink: { version: async () => COMPANION_CLOUD_VERSION, targets: async () => [], handOver: async () => ({ ok: true }) }, values: [
       { key: 'companion.profile.v1', value: { name: 'Mia' } },
       { key: 'companion.skill.v1:huge', value: { slug: 'huge', content: 'x'.repeat(70 * 1024) } }] });
     expect(await t.runtime.transfer('bot_mia', 'laptop')).toEqual({ ok: false, code: 'FAILED' });
@@ -973,16 +974,28 @@ describe('transfer', () => {
 
   // Regression: 127 shipped store readers but still advertised v2. Exercise the real
   // transfer decision with the shipped declaration, not a hardcoded v3 test peer.
+  // #12112, unit tier: an uploadable imported skill can still fail an old receiver's
+  // disk writer. Unlike the earlier store-only matrix, check that ownership stays here,
+  // including unchanged uploads and edits during the final flush.
   it.each([
-    { peer: 'current', version: COMPANION_CLOUD_VERSION, storeEnabled: true, succeeds: true },
-    { peer: 'old', version: 2, storeEnabled: true, succeeds: false },
-    { peer: 'current without server store', version: COMPANION_CLOUD_VERSION, storeEnabled: false, succeeds: false },
-  ])('hands large content only to a capable peer ($peer)', async ({ version, storeEnabled, succeeds }) => {
+    { peer: 'current', version: COMPANION_CLOUD_VERSION, storeEnabled: true },
+    { peer: 'old without store reader', version: 2, storeEnabled: true, failure: 'TARGET_OUTDATED' },
+    { peer: 'old with store reader', version: 4, storeEnabled: true, failure: 'TARGET_OUTDATED' },
+    { peer: 'current without server store', version: COMPANION_CLOUD_VERSION, storeEnabled: false, failure: 'FAILED' },
+    { peer: 'old at body limit', version: 4, storeEnabled: true, content: 'x'.repeat(65_536) },
+    { peer: 'old with large frontmatter', version: 4, storeEnabled: true, content: `---\r\nname: large\r\ndescription: ${'x'.repeat(71_560)}\r\n---\r\n\r\nsmall\r\n` },
+    { peer: 'old with multibyte body', version: 4, storeEnabled: true, content: '界'.repeat(21_846), failure: 'TARGET_OUTDATED' },
+    { peer: 'old after background upload', version: 4, storeEnabled: true, preflush: true, failure: 'TARGET_OUTDATED' },
+    { peer: 'old with edit during flush', version: 4, storeEnabled: true, editDuringFlush: true, failure: 'TARGET_OUTDATED' },
+  ])('hands large content only to a capable peer ($peer)', async ({ version, storeEnabled, failure, content, preflush, editDuringFlush }) => {
     const key = 'companion.skill.v1:large';
-    const value = { slug: 'large', content: 'x'.repeat(70 * 1024) };
+    const value = { slug: 'large', content: content ?? 'x'.repeat(71_560) };
+    const succeeds = !failure;
+    let reads = 0;
     let stored: unknown;
     const t = setup({ home: 'desk', devices: [device('laptop')],
-      values: [{ key: 'companion.profile.v1', value: MIA }, { key, value }],
+      readValues: async () => [{ key: 'companion.profile.v1', value: MIA },
+        { key, value: editDuringFlush && ++reads === 1 ? { ...value, content: 'small' } : value }],
       store: { enabled: () => storeEnabled },
       homeLink: { version: async () => version, targets: async () => [], handOver: async () => ({ ok: true }) },
       handler: (route, method, data) => {
@@ -998,7 +1011,11 @@ describe('transfer', () => {
         if (route.endsWith('/import') || method === 'PATCH') return {};
         throw new Error(`unexpected ${method} ${route}`);
       } });
-    expect(await t.runtime.switchHome('bot_mia', 'laptop')).toEqual(succeeds ? { ok: true } : { ok: false, code: 'FAILED' });
+    if (preflush) {
+      await t.runtime.syncNow();
+      expect(stored).toEqual({ companionStore: 1, prefRevision: 0, value });
+    }
+    expect(await t.runtime.switchHome('bot_mia', 'laptop')).toEqual(succeeds ? { ok: true } : { ok: false, code: failure });
     expect(t.actors[0]!.homeDeviceId).toBe(succeeds ? 'laptop' : 'desk');
     expect(t.state.isDemoted('bot_mia')).toBe(succeeds);
     expect(t.calls.some(call => call.method === 'PATCH')).toBe(succeeds);
@@ -1006,7 +1023,7 @@ describe('transfer', () => {
       expect(stored).toEqual({ companionStore: 1, prefRevision: 0, value });
       const uploaded = t.calls.findIndex(call => call.route === '/companion-store/entry' && call.method === 'POST');
       expect(uploaded).toBeLessThan(t.calls.findIndex(call => call.method === 'PATCH'));
-    } else expect(stored).toBeUndefined();
+    } else if (!preflush) expect(stored).toBeUndefined();
   });
 
   // Teammate V2 (cloud-companions.md §2.1 第 4 条, 2026-11-10 owner): a computer whose Cindy cannot run

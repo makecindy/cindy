@@ -5,6 +5,8 @@
  */
 import type { DeliverToCanonical } from './directRoom.js';
 import { randomUUID } from 'node:crypto';
+import { COMPANION_CLOUD_SKILL_SOURCE_VERSION } from '@cindy/device-link';
+import { parseBotSkillFile } from '../maker-ipc/botSkillStore.js';
 import { correctedProfile, profileRepairFields, profileRepairVersion, CompanionProfileRepairError, type ProfileCorrection } from './profileRepair.js';
 import type {
   CompanionProfileRepairRequest,
@@ -33,7 +35,7 @@ import { importCloudHistory } from './materialize.js';
 import type { CompanionCloudState } from './state.js';
 import { chatRejection, errorCode, isUnreachable, type CompanionApi, type CompanionLog } from './types.js';
 import { createCompanionStore, readCompanionRestoreValue, readPreference, type CompanionStoreTransfer } from './store.js';
-import { COMPANION_PROFILE_KEY, COMPANION_READ_INCOMPLETE, COMPANION_VALUE_TOO_LARGE, canonicalJson, createCompanionUploader, isCompanionProfileSnapshot, type CompanionPreferenceValue } from './uploader.js';
+import { COMPANION_PROFILE_KEY, COMPANION_READ_INCOMPLETE, COMPANION_SKILL_PREFIX, COMPANION_VALUE_TOO_LARGE, canonicalJson, createCompanionUploader, isCompanionProfileSnapshot, type CompanionPreferenceValue } from './uploader.js';
 
 /** Electron/database side of the feature, wired in register.ts. */
 export interface CompanionCloudHost {
@@ -187,6 +189,8 @@ const REMOTE_HAND_OVER_VERSION = 2;
  * still refuse values only the store holds; a computer taking over itself reads the store directly.
  */
 const COMPANION_CLOUD_STORE_READ_VERSION = 3;
+/** Shipped receivers before caps v5 enforced this limit, regardless of future editor limits. */
+const LEGACY_SKILL_MAX_BODY_BYTES = 64 * 1024;
 /**
  * Targets that run a V2 teammate (a project with rules, automations and project memory). An older
  * computer is listed as outdated but can still take one (2026-11-10 owner): it runs there as before,
@@ -740,7 +744,7 @@ export function startCompanionCloud(input: {
     publish();
   }
 
-  async function flush(botId: string, options: { preferencesOnly?: boolean } = {}) {
+  async function flush(botId: string, options: { preferencesOnly?: boolean; validateValues?: (values: CompanionPreferenceValue[]) => void } = {}) {
     const bot = pick(null).find(candidate => candidate.botId === botId);
     if (!bot) throw new Error('NOT_HOME');
     // The whole conversation backlog first: the old copy stops mirroring once demoted, and a long
@@ -761,6 +765,7 @@ export function startCompanionCloud(input: {
   /** A sync that must be complete (a hand-over, a merge) did not finish: why, as an action result. */
   function syncFailure(error: unknown): CompanionCloudActionResult {
     const code = errorCode(error);
+    if (code === 'TARGET_OUTDATED') return { ok: false, code: 'TARGET_OUTDATED' };
     return ['NOT_HOME', COMPANION_VALUE_TOO_LARGE, COMPANION_READ_INCOMPLETE, 'COMPANION_STILL_CHANGING', 'INVALID_AVATAR', 'AVATAR_UPLOAD_FAILED'].includes(code)
       ? { ok: false, code: 'FAILED' } : actionFailure(error, 'OFFLINE');
   }
@@ -837,7 +842,7 @@ export function startCompanionCloud(input: {
 
   /**
    * The cloud-companion version another computer declares (0: older than cloud companions or not
-   * reachable). Without the device-link probe every target counts as current.
+   * reachable). A missing or boolean-only probe conservatively assumes the legacy v4 capability.
    */
   async function targetVersion(deviceId: string): Promise<number> {
     if (input.host.homeLink) return input.host.homeLink.version(deviceId).catch(() => 0);
@@ -847,14 +852,24 @@ export function startCompanionCloud(input: {
   }
 
   /** Everything the new home needs reaches the server, then the home moves and this copy is demoted. */
-  async function handOver(actor: CompanionRuntimeActor, targetDeviceId: string, targetReadsStore: boolean): Promise<CompanionCloudActionResult> {
+  async function handOver(actor: CompanionRuntimeActor, targetDeviceId: string, targetVersion: number): Promise<CompanionCloudActionResult> {
     // A running turn would keep working here (tools, files, replies) after the target took over.
     const turnActive = async () => !!(await input.host.isBotBusy?.(actor.externalId));
     if (await turnActive()) return { ok: false, code: 'BUSY' };
     // An older target reads only the preferences: what only the store holds would not arrive, so
     // such a value still refuses the move, as before the store existed.
     try {
-      await flush(actor.externalId, { preferencesOnly: !targetReadsStore });
+      await flush(actor.externalId, {
+        preferencesOnly: targetVersion < COMPANION_CLOUD_STORE_READ_VERSION,
+        validateValues: targetVersion < COMPANION_CLOUD_SKILL_SOURCE_VERSION ? values => {
+          for (const { key, value } of values) {
+            if (!key.startsWith(COMPANION_SKILL_PREFIX)) continue;
+            const content = (value as { content?: unknown } | null)?.content;
+            if (typeof content === 'string' && Buffer.byteLength(parseBotSkillFile(content).body, 'utf8') > LEGACY_SKILL_MAX_BODY_BYTES)
+              throw new Error('TARGET_OUTDATED');
+          }
+        } : undefined,
+      });
       await checkProfileSources(actor);
     }
     catch (error) {
@@ -1089,7 +1104,7 @@ export function startCompanionCloud(input: {
       // past the flush, or past the move. Background sync resumes after the copy is demoted.
       // Still working: wait for (or stop) the turn first, outside the sync lock so its reply keeps syncing.
       if (!(await settleBusy(actor.externalId, options?.whenBusy))) return { ok: false, code: 'BUSY' };
-      return mirrors.exclusive(() => uploads.exclusive(() => handOver(actor, targetDeviceId, targetVersionNow >= COMPANION_CLOUD_STORE_READ_VERSION)));
+      return mirrors.exclusive(() => uploads.exclusive(() => handOver(actor, targetDeviceId, targetVersionNow)));
     },
 
     async homeChoices(botId) {

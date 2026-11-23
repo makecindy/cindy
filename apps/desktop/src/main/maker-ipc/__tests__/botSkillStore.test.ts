@@ -378,6 +378,20 @@ it('preserves a foreground edit when background learning uses an older snapshot'
 });
 
 describe('verbatim SKILL.md (cloud companions)', () => {
+  // #12112: moving the restore limit must not bypass the settings edit limit.
+  // Unit tier: the custom-frontmatter editor previously relied on the raw writer;
+  // include a short multibyte string over 64 KiB to protect byte (not character) counting.
+  it.each([
+    { label: 'boundary', body: 'x'.repeat(BOT_SKILL_MAX_BODY_BYTES), accepted: true },
+    { label: 'oversized', body: 'x'.repeat(BOT_SKILL_MAX_BODY_BYTES + 1), accepted: false },
+    { label: 'multibyte', body: '界'.repeat(Math.ceil(BOT_SKILL_MAX_BODY_BYTES / 3)), accepted: false },
+  ])('keeps the custom skill edit limit ($label)', ({ body, accepted }) => {
+    const source = '---\nname: brew\ndescription: Brew\nlicense: MIT\n---\n\nsteps\n';
+    const edit = () => patchCustomBotSkillSource(source, { name: 'brew', description: 'Brew', body, updatedAt: '2026-11-23' });
+    if (accepted) expect(parseBotSkillFile(edit()!).body).toBe(body);
+    else expect(edit).toThrow(expect.objectContaining({ errorCode: 'SKILL_BODY_TOO_LARGE' }));
+  });
+
   it('round-trips native frontmatter the settings model does not know', async () => {
     const source = '---\nname: brew\ndescription: Brew tea\nallowed-tools: Bash(git:*)\ndisable-model-invocation: true\nmetadata:\n  displayName: Brew\n---\n\nsteps\n';
     await saveBotSkillSource(userDataDir, 'bot_a', 'brew', source);
@@ -385,8 +399,9 @@ describe('verbatim SKILL.md (cloud companions)', () => {
     expect((await readBotSkill(userDataDir, 'bot_a', 'brew'))?.body).toBe('steps');
     expect(await readBotSkillSource(userDataDir, 'bot_a', 'missing')).toBeNull();
     await expect(saveBotSkillSource(userDataDir, 'bot_a', '../x', source)).rejects.toBeInstanceOf(BotSkillStoreError);
-    await expect(saveBotSkillSource(userDataDir, 'bot_a', 'big', `---\nname: big\n---\n${'x'.repeat(BOT_SKILL_MAX_BODY_BYTES + 1)}`))
-      .rejects.toBeInstanceOf(BotSkillStoreError);
+    const large = `---\nname: big\n---\n${'x'.repeat(BOT_SKILL_MAX_BODY_BYTES + 1)}`;
+    await saveBotSkillSource(userDataDir, 'bot_a', 'big', large);
+    expect(await readBotSkillSource(userDataDir, 'bot_a', 'big')).toBe(large);
   });
 
   it('applies the requested enabled state, moving the whole skill folder', async () => {

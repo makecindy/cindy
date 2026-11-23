@@ -225,11 +225,13 @@ export function createCompanionUploader(deps: {
    * a value the preferences cannot hold counts as not uploaded.
    */
   async function syncBot(botId: string, actorId: string, budget = Number.POSITIVE_INFINITY,
-    options: { requireAll?: boolean; preferencesOnly?: boolean } = {}): Promise<number> {
+    options: { requireAll?: boolean; preferencesOnly?: boolean; validateValues?: (values: CompanionPreferenceValue[]) => void } = {}): Promise<number> {
     const read = await deps.readValues(botId, actorId);
     const unread = read.filter(entry => entry.unread).map(entry => entry.key);
     if (unread.length && options.requireAll) throw new Error(COMPANION_READ_INCOMPLETE);
     const values = read.filter(entry => !entry.unread);
+    // Check the exact snapshot being flushed, including values already uploaded unchanged.
+    options.validateValues?.(values);
     if (deps.state.bot(botId)?.actorId !== actorId || !deps.state.bot(botId)?.prefsSeeded) await seed(botId, actorId);
     const desired = new Map<string, unknown>();
     for (const { key, value } of values) desired.set(key, value);
