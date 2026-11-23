@@ -335,6 +335,31 @@ describe('AcpSession turns', () => {
     expect(events.every((event) => event.turnScope === undefined)).toBe(true);
   });
 
+  // 2026-11-23: plugin engine usage pages counted turns but showed no tokens, because the per-turn
+  // `usage` of the prompt result was dropped. Inputs are what Antigravity (agy 1.5.15) returned for two
+  // turns (input excludes the cache), the same counts in the input-includes-cache form, and a result
+  // without usage. Production entry: AcpSession send → done event; unit, in-process fake agent.
+  it.each([
+    ['input excludes the cache (agy turn 1)',
+      { inputTokens: 11516, outputTokens: 27, cachedReadTokens: 0, cachedWriteTokens: 0, thoughtTokens: 25, totalTokens: 11543 },
+      { inputTokens: 11516, outputTokens: 27, cacheReadTokens: 0, cacheCreationTokens: 0 }],
+    ['input excludes the cache (agy turn 2)',
+      { inputTokens: 2161, outputTokens: 15, cachedReadTokens: 9459, cachedWriteTokens: 0, thoughtTokens: 12, totalTokens: 11635 },
+      { inputTokens: 2161, outputTokens: 15, cacheReadTokens: 9459, cacheCreationTokens: 0 }],
+    ['input includes the cache',
+      { inputTokens: 11620, outputTokens: 15, cachedReadTokens: 9459, totalTokens: 11635 },
+      { inputTokens: 2161, outputTokens: 15, cacheReadTokens: 9459, cacheCreationTokens: 0 }],
+    ['no usage reported', undefined, undefined],
+  ])('reports the turn tokens from the prompt result: %s', async (_name, reported, expected) => {
+    const agent = createFakeAgent();
+    const { session, events } = await open(agent);
+    await session.send({ type: 'user', content: 'hi' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn', ...(reported ? { usage: reported } : {}) });
+    await vi.waitFor(() => expect(events.at(-1)?.type).toBe('done'));
+    expect((events.at(-1)?.data as AcpRecord).usage).toEqual(expected);
+  });
+
   it('runs one prompt at a time, in send order even when the first message carries a slow image', async () => {
     const agent = createFakeAgent({ agentCapabilities: { promptCapabilities: { image: true } } });
     const image = deferred<Uint8Array>();
