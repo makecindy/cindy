@@ -7009,7 +7009,7 @@
       "connectionIssue": {
         "device-removed": "계정에서 이 기기가 제거되었습니다. 이 기기에서 로그아웃한 후 다시 로그인하세요.",
         "auth-failed": "로그인이 만료되었습니다. 다시 로그인해 주세요",
-        "replaced": "동일한 기기의 다른 연결로 대체되었습니다",
+        "replaced": "다른 Cindy가 연결을 가져갔습니다. 이 컴퓨터에 있거나, 같은 컴퓨터로 인식된 다른 컴퓨터에 있습니다",
         "too-many-connections": "이 계정의 동시 연결 수가 상한에 도달했습니다",
         "version-mismatch": "프로토콜 버전이 일치하지 않습니다. 앱을 업데이트해 주세요",
         "unstable": "연결이 끊김과 재연결을 반복하고 있습니다. 네트워크를 확인하고, 계속되면 Cindy를 다시 시작해 주세요",
@@ -7068,6 +7068,22 @@
       },
       "control": "제어",
       "standbyHint": "이 컴퓨터의 다른 Cindy 인스턴스가 원격 연결을 사용하고 있습니다. 그것을 닫으면 이 인스턴스가 자동으로 이어받습니다.",
+      "identityConflict": {
+        "notice": "이 컴퓨터와 “{{name}}” 컴퓨터가 같은 컴퓨터로 인식되고 있습니다. 서로 원격 연결을 빼앗고 로그아웃될 수도 있습니다. 둘 중 한 대에 새 기기 ID를 지정하면 해결됩니다.",
+        "replace": "이 컴퓨터에 새 기기 ID 지정",
+        "blockedSelfHostedRelay": "이 컴퓨터는 직접 운영하는 중계를 사용 중이라 지금은 기기 ID를 바꿀 수 없습니다. 공식 중계로 돌아가면 여기에서 바꿀 수 있습니다.",
+        "confirmTitle": "이 컴퓨터에 새 기기 ID를 지정할까요?",
+        "confirmRestart": "Cindy가 바로 다시 시작되며 진행 중인 작업은 중단됩니다.",
+        "confirmNewDevice": "다시 시작한 뒤 한 번 더 로그인해야 합니다. 이 컴퓨터는 기기 목록에 새 컴퓨터로 표시됩니다.",
+        "confirmKeptByOther": "기존 ID에 저장된 설정(기기 이름, 동반자의 주 컴퓨터, 공유한 제공자 등)은 “{{name}}” 컴퓨터에 남습니다. 이 컴퓨터에서는 다시 설정해야 합니다.",
+        "confirmOtherUnaffected": "“{{name}}” 컴퓨터는 그대로이며, 그 컴퓨터에서 따로 할 일은 없습니다.",
+        "confirmAction": "기기 ID 바꾸고 Cindy 다시 시작",
+        "failed": "이 컴퓨터의 기기 ID를 바꾸지 못했습니다",
+        "toastTitle": "이 컴퓨터와 “{{name}}” 컴퓨터가 같은 컴퓨터로 인식되고 있습니다",
+        "toastBody": "서로 원격 연결을 빼앗고 로그아웃될 수도 있습니다. 둘 중 한 대에 새 기기 ID를 지정하면 해결됩니다.",
+        "toastAction": "기기 연동 열기",
+        "toastDismiss": "나중에"
+      },
       "apps": {
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"

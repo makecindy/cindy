@@ -7119,7 +7119,7 @@
       "connectionIssue": {
         "device-removed": "Este dispositivo foi removido da sua conta. Saia e entre novamente neste dispositivo.",
         "auth-failed": "Login expirado — entre novamente",
-        "replaced": "Conexão substituída por outra instância deste dispositivo",
+        "replaced": "Outra instância do Cindy assumiu a conexão, neste computador ou em outro reconhecido como este",
         "too-many-connections": "Limite de conexões desta conta atingido",
         "version-mismatch": "Versão de protocolo incompatível — atualize o app",
         "unstable": "A conexão cai e reconecta repetidamente — verifique a rede ou reinicie o Cindy se o problema persistir",
@@ -7178,6 +7178,22 @@
       },
       "control": "Controle",
       "standbyHint": "Outra instância do Cindy neste computador está usando a conexão remota. Feche-a e esta instância assumirá automaticamente.",
+      "identityConflict": {
+        "notice": "Este computador e “{{name}}” são reconhecidos como o mesmo computador, então um tira o outro da conexão remota e a sessão pode ser encerrada. Dê uma nova identidade a um dos dois para resolver.",
+        "replace": "Dar uma nova identidade a este computador",
+        "blockedSelfHostedRelay": "Este computador usa seu próprio retransmissor, então não pode mudar de identidade agora. Volte ao retransmissor Cindy para mudá-la aqui.",
+        "confirmTitle": "Dar uma nova identidade a este computador?",
+        "confirmRestart": "O Cindy reinicia na hora e as tarefas em andamento são interrompidas.",
+        "confirmNewDevice": "Depois de reiniciar, faça login mais uma vez. Este computador aparecerá como um computador novo na lista de dispositivos.",
+        "confirmKeptByOther": "As configurações salvas com a identidade anterior, como o nome do dispositivo, o computador principal dos seus amigos e os provedores compartilhados, ficam em “{{name}}”. Configure-as de novo neste computador.",
+        "confirmOtherUnaffected": "“{{name}}” continua igual. Não é preciso fazer nada naquele computador.",
+        "confirmAction": "Mudar identidade e reiniciar o Cindy",
+        "failed": "Não foi possível dar uma nova identidade a este computador",
+        "toastTitle": "Este computador e “{{name}}” são reconhecidos como o mesmo computador",
+        "toastBody": "Um tira o outro da conexão remota e a sessão pode ser encerrada. Dê uma nova identidade a um dos dois para resolver.",
+        "toastAction": "Abrir Vinculação de dispositivos",
+        "toastDismiss": "Mais tarde"
+      },
       "apps": {
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
