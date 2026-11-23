@@ -22128,6 +22128,11 @@
     "lineNumbers": "行番号"
   },
   "subscriptionAccounts": {
+    "pluginSignIn": {
+      "method": "ログイン方法",
+      "secretHint": "キーはプラグインにだけ渡され、このアカウント専用のフォルダーに保存されます。Cindy は保存せず、ほかのコンピューターにも送信しません。",
+      "browserHint": "プラグインがブラウザーを開きます。そこでログインを完了してから、ここに戻ってください。"
+    },
     "placement": {
       "needsUpdate": "この操作を行うコンピューターの Cindy を更新すると、アカウントをこのように変更できます。",
       "moveTo": "移動先…",

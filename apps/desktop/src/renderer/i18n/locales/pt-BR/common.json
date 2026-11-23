@@ -22429,6 +22429,11 @@
     "lineNumbers": "Números de linha"
   },
   "subscriptionAccounts": {
+    "pluginSignIn": {
+      "method": "Método de login",
+      "secretHint": "A chave vai apenas para o plugin, que a guarda na pasta própria desta conta. O Cindy não a armazena nem a envia para outros computadores.",
+      "browserHint": "O plugin abrirá seu navegador. Conclua o login lá e depois volte aqui."
+    },
     "placement": {
       "needsUpdate": "É preciso atualizar o Cindy no computador que executa esta operação para mover contas assim.",
       "moveTo": "Mover para…",

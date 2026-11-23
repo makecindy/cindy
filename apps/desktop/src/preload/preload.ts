@@ -6829,8 +6829,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     listPluginEngines: (): Promise<import('../shared/pluginEngines.js').PluginEngineView[]> =>
       ipcRenderer.invoke('maker:list-plugin-engines'),
     /** Private account snapshot for one approved engine on this computer. */
-    getPluginEngineUsage: (key: string): Promise<import('@cindy/plugin-protocol').GhostHarnessUsage | null> =>
-      ipcRenderer.invoke('maker:get-plugin-engine-usage', key),
+    getPluginEngineUsage: (key: string, task?: { sessionId: string }): Promise<import('@cindy/plugin-protocol').GhostHarnessUsage | null> =>
+      task ? ipcRenderer.invoke('maker:get-plugin-engine-usage', key, task) : ipcRenderer.invoke('maker:get-plugin-engine-usage', key),
     /** Asks engine plugins to republish their models (cooldown in main); results arrive as a change push. */
     refreshPluginEngines: (targetGhostId?: string): Promise<void> => ipcRenderer.invoke('maker:refresh-plugin-engines', targetGhostId),
     /** Opens or closes one engine of this computer for the owner's other computers. */

@@ -1,3 +1,5 @@
+import path from 'node:path';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import { validateGhostManifest, type InstalledGhost } from '../../../shared/ghost.js';
@@ -83,6 +85,31 @@ describe('plugin harness registry', () => {
       return { updatedAt: 1234, balances: [row] };
     };
     expect(await registry.readUsage(key)).toBeNull();
+  });
+
+  // 引擎账号(subscription-account-pools.md 插件引擎的账号)：账号目录只给声明了登录方式的引擎，且只能是 Cindy
+  // 为这个引擎建的目录；Key 只交给要求 Key 的方式。最小失败输入：没声明账号的引擎带账号目录启动；目录在根之外。
+  it('starts an engine on an account directory only when its plugin keeps accounts apart', async () => {
+    const root = path.resolve('/data/owners/u/plugin-engine-accounts/dsh-plugin/dsh');
+    const account = path.join(root, 'cindy-0123456789ab-00000000-0000-4000-8000-00000000000a');
+    const r = setup([ghost()], { harnesses: [{ id: 'dsh', available: true }] });
+    r.deps.accountRoot = () => root;
+    const call = vi.fn(async (_ghost: string, method: string) => method === 'accountLogin' ? { ok: true } : { state: 'signed-in', identity: { email: 'a@example.com' }, token: 'x' });
+    r.deps.callAccount = call;
+    await expect(r.registry.spawn('dsh-plugin:dsh', { accountDir: account })).rejects.toThrow('cannot run on this account');
+    expect(await r.registry.readAccountStatus('dsh-plugin:dsh')).toBeNull();
+
+    r.publish({ harnesses: [{ id: 'dsh', available: true, accounts: { methods: [{ id: 'api-key', label: 'API Key', kind: 'secret' }] } }] });
+    r.registry.reconcile();
+    await expect(r.registry.spawn('dsh-plugin:dsh', { accountDir: path.join(root, '..', 'other') })).rejects.toThrow('cannot run on this account');
+    await expect(r.registry.spawn('dsh-plugin:dsh', { accountDir: account })).resolves.toBe(r.process);
+    expect(r.deps.spawn).toHaveBeenLastCalledWith('dsh-plugin', 'dsh', { accountDir: account });
+    // Only display fields of the status leave the worker.
+    expect(await r.registry.readAccountStatus('dsh-plugin:dsh', account)).toEqual({ state: 'signed-in', identity: { email: 'a@example.com' } });
+    expect(await r.registry.loginAccount('dsh-plugin:dsh', account, 'api-key')).toEqual({ ok: false, error: 'invalid-secret' });
+    expect(await r.registry.loginAccount('dsh-plugin:dsh', account, 'api-key', 'sk-1')).toEqual({ ok: true });
+    expect(call).toHaveBeenLastCalledWith('dsh-plugin', 'accountLogin',
+      { harnessId: 'dsh', accountDir: account, methodId: 'api-key', secret: 'sk-1' }, expect.objectContaining({ maxTotalMs: expect.any(Number) }));
   });
 
   it('lists only enabled, approved, declared, receipt-approved engines with a known protocol', () => {

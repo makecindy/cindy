@@ -23,6 +23,7 @@ export {
 export { AcpConnectionClosedError, AcpRequestTimeoutError, AcpRpcError } from './connection.js';
 export { ACP_PERMISSION_MODES, buildAcpCapabilities, describeAcpModels } from './capabilities.js';
 export {
+  AcpAccountError,
   AcpAuthRequiredError,
   AcpProtocolVersionError,
   AcpRequiredMcpUnavailableError,
