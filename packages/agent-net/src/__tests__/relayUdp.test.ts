@@ -333,14 +333,25 @@ it('backs off repeated uplink loss despite incoming UDP, then resets after susta
   expect(path.suspension).toEqual({ reason: 'unacked-sends', cooldownMs: RELAY_UDP_DATA_COOLDOWNS_MS[1] });
   expect(path.send('member', new Uint8Array(100))).toBe(false);
 
+  const exchangeAcknowledgedTraffic = (seconds: number) => {
+    for (let i = 0; i < seconds; i++) {
+      expect(path.send('member', new Uint8Array(1_350))).toBe(true);
+      counters.sent++;
+      counters.acknowledgedBytes += 1_350;
+      reply();
+      step(1_000);
+    }
+  };
+
+  // One healthy window isn't enough. Thirty seconds of confirmed traffic
+  // followed by another outage must still advance to the longest cooldown.
   step(RELAY_UDP_DATA_COOLDOWNS_MS[1]);
-  for (let i = 0; i < 70; i++) {
-    expect(path.send('member', new Uint8Array(1_350))).toBe(true);
-    counters.sent++;
-    counters.acknowledgedBytes += 1_350;
-    reply();
-    step(1_000);
-  }
+  exchangeAcknowledgedTraffic(30);
+  receiving(2, 4);
+  expect(path.suspension).toEqual({ reason: 'unacked-sends', cooldownMs: RELAY_UDP_DATA_COOLDOWNS_MS[2] });
+
+  step(RELAY_UDP_DATA_COOLDOWNS_MS[2]);
+  exchangeAcknowledgedTraffic(70);
   receiving(2, 4);
   expect(path.suspension).toEqual({ reason: 'unacked-sends', cooldownMs: RELAY_UDP_DATA_COOLDOWNS_MS[0] });
 });
