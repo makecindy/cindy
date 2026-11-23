@@ -47,6 +47,18 @@ function uploadServer() {
 }
 
 describe('media prepare conflict recovery', () => {
+  // #7401 / unit: the signed PUT uses a separate HTTP client from prepare and seal.
+  // A 503 with Retry-After must carry its deadline to the caller and skip sealing.
+  it.each([429, 503])('preserves a signed PUT retry deadline on %s', async status => {
+    const t = uploadServer();
+    const retryAt = Date.UTC(2030, 0, 1);
+    f.fetch.mockResolvedValueOnce(new Response(null, { status, headers: { 'Retry-After': new Date(retryAt).toUTCString() } }));
+    await expect(t.media().upload('room', 'source', [t.file], 'actor')).rejects.toMatchObject({
+      message: 'MEDIA_UPLOAD_FAILED', status, retryAt,
+    });
+    expect(t.sealed.size).toBe(0);
+  });
+
   it('recovers changed metadata once and reuses both old and recovered receipts after restart', async () => {
     const t = uploadServer();
     const original = await t.media().upload('room', 'source', [t.file], 'actor');

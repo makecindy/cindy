@@ -279,7 +279,7 @@ describe('Chat Server result delivery and refresh', () => {
         if (unarchiveLocation === 'on another device') {
           throw Object.assign(new Error('connect ENETUNREACH'), { code: 'ENETUNREACH', syscall: 'connect' });
         }
-        return { status: 503, body: { error: { code: 'UPSTREAM_FAILED' } } };
+        return { status: 503, headers: { 'retry-after': '600' }, body: { error: { code: 'UPSTREAM_FAILED' } } };
       }
       return response(route);
     });
@@ -293,7 +293,9 @@ describe('Chat Server result delivery and refresh', () => {
     try {
       await vi.advanceTimersByTimeAsync(2000);
       expect(requests()).toEqual([archived, recoverable]);
-      const delays = [60_000, 120_000, 240_000, 300_000, 300_000, 300_000];
+      // The 503 response's Retry-After overrides the local schedule from 60 to 300 seconds.
+      const delays = unarchiveLocation === 'locally' ? Array<number>(6).fill(600_000)
+        : [60_000, 120_000, 240_000, 300_000, 300_000, 300_000];
       for (const [index, delay] of delays.entries()) {
         await vi.advanceTimersByTimeAsync(delay - 1);
         expect(requests()).toEqual([archived, ...Array<string>(index + 1).fill(recoverable)]);

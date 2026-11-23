@@ -824,7 +824,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
             if (!current()) throw new Error('OWNER_CHANGED');
             if ((res.statusCode ?? 500) >= 300 && (res.statusCode ?? 500) < 400) throw new Error('CHAT_REDIRECT_REFUSED');
             const status = res.statusCode ?? 500;
-            const retryAt = status === 429 ? retryAfterDeadline({ headers: {
+            const retryAt = (status === 429 || status === 503) ? retryAfterDeadline({ headers: {
               get: name => { const header = res.headers[name.toLowerCase()]; return typeof header === 'string' ? header : null; },
             } }) : undefined;
             let value;

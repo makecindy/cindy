@@ -145,7 +145,7 @@ export function createChatMedia(api: ChatApi, current: () => boolean, endpoint: 
           const response = await net.fetch(signedUrl(upload.uploadUrl), { method: 'PUT', redirect: 'error',
             headers: { 'Content-Type': metadata.type }, body: new Uint8Array(bytes), signal: AbortSignal.timeout(60000) });
           if (!response.ok) throw Object.assign(new Error('MEDIA_UPLOAD_FAILED'), { status: response.status,
-            ...(response.status === 429 ? { retryAt: retryAfterDeadline(response) } : {}) });
+            ...(response.status === 429 || response.status === 503 ? { retryAt: retryAfterDeadline(response) } : {}) });
           await checkFile();
           stage = 'complete';
           await api(`/conversations/${roomId}/media/${upload.id}/complete`, 'POST', { operationId: `seal:${upload.id}` }, actorId);
