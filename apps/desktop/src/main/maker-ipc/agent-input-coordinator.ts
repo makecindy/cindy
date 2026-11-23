@@ -4006,7 +4006,10 @@ export class AgentInputCoordinator {
     // 接管态在补发这一刻结束:聊天流里的「重新连接中」活动行交棒给落库的
     // autoResume 行(渲染成「已重新连接」活动行,详情同样可展开)。
     state.autoResumePending = null;
-    if (!opts?.auto) state.autoResumeAttemptToken = null;
+    if (!opts?.auto) {
+      state.autoResumeAttemptToken = null;
+      if (recovery.kind === 'active-turn') state.workerRecoveryAbandonment += 1;
+    }
     state.usageLimitWait = null;
     state.recovery = null;
     if (recovery.kind === 'queue-head' && state.pendingQueue[0]?.clientId === recovery.clientId) {
@@ -4115,11 +4118,17 @@ export class AgentInputCoordinator {
 
   clearError(sessionId: string): AgentInputProjection {
     const state = this.getState(sessionId);
+    // Dismiss only the visible error. A steer write failure can be waiting
+    // behind a replacement turn's error.
+    if (state.error === null && state.detachedSteerPersistenceError !== null &&
+        this.toProjection(sessionId, state).error === state.detachedSteerPersistenceError) {
+      state.detachedSteerPersistenceError = null;
+    }
     if (state.autoResumePending) this.deps.onUserEnqueue?.(sessionId);
     this.cancelPreparedAutoResume(sessionId, state);
     const shouldDrainTail = state.recovery?.kind === 'active-turn';
+    if (shouldDrainTail) state.workerRecoveryAbandonment += 1;
     state.error = null;
-    state.detachedSteerPersistenceError = null;
     clearErrorProjectionSignals(state);
     state.stickyError = null;
     // 用户显式收下了这条错误 → 自愈提示也该撤掉(退避到点后的复核会发现 recovery

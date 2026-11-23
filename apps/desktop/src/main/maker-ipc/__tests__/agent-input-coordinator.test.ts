@@ -14641,10 +14641,11 @@ describe('Orca report durable recovery', () => {
   );
 
   // Unit regression for PR #12163: an EOF can queue Continue before the provider
-  // acknowledges a steer. The earlier cases settle the ACK before backoff expires.
+  // acknowledges a steer. Also exercise manual recovery consumption and
+  // dismissal of a replacement error while a separate write failure is pending.
   it.each([
     'before-backoff', 'after-backoff', 'after-close', 'after-takeover',
-    'before-stopped-write', 'before-replacement-failure',
+    'before-stopped-write', 'before-replacement-failure', 'after-dismissal', 'after-manual-retry',
   ] as const)('settles Worker recovery when steer ACK arrives %s', async timing => {
     vi.useFakeTimers();
     const ack = deferred<void>();
@@ -14652,6 +14653,8 @@ describe('Orca report durable recovery', () => {
       const workerInputs = new WeakSet<object>();
       const h = createHarness({ workerInputs });
       wireHostReportRecovery(h, workerInputs);
+      const manualRecovery = timing === 'after-dismissal' || timing === 'after-manual-retry';
+      if (manualRecovery) h.onResumableTurnError.mockReturnValueOnce(null);
       const runtime = { instanceId: 'worker-runtime' };
       h.setTurnSessionIdentity(runtime);
       h.setTurnGeneration(1);
@@ -14675,13 +14678,23 @@ describe('Orca report durable recovery', () => {
         h.coordinator.onSessionClosed('worker', { preserveAutoResumeIntent: true });
         h.setTurnSessionIdentity({ instanceId: 'replacement' });
       }
-      if (timing === 'after-backoff' || timing === 'after-takeover') {
+      if (timing === 'after-backoff' || timing === 'after-takeover' || manualRecovery) {
         h.setObservedCurrentTurnTerminal({
           kind: 'error', generation: 1, reason: 'session_event_loop_crashed',
           message: 'Session event loop stopped unexpectedly without a terminal event',
         });
       }
-      if (timing === 'after-backoff') {
+      if (manualRecovery) {
+        expect(h.coordinator.getProjection('worker').recovery?.kind).toBe('active-turn');
+        if (timing === 'after-dismissal') h.coordinator.clearError('worker');
+        else await h.coordinator.retryLastError('worker');
+        ack.resolve();
+        await expect(steering).resolves.toBe('steered');
+        expect(h.coordinator.getProjection('worker').recovery).toBeNull();
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(h.sendToAgent).toHaveBeenCalledTimes(timing === 'after-dismissal' ? 0 : 1);
+        return;
+      } else if (timing === 'after-backoff') {
         await vi.advanceTimersByTimeAsync(4_000);
         expect(h.coordinator.hasQueuedAutoResume('worker')).toBe(true);
         expect(h.sendToAgent).not.toHaveBeenCalled();
@@ -14712,6 +14725,10 @@ describe('Orca report durable recovery', () => {
         const projection = h.coordinator.getProjection('worker');
         expect(projection.error).toBe(timing === 'before-stopped-write'
           ? 'Failed to persist user message: steer row unavailable' : 'New turn failed');
+        if (timing === 'before-replacement-failure') {
+          expect(h.coordinator.clearError('worker').error).toBe('Failed to persist user message: steer row unavailable');
+          expect(h.coordinator.clearError('worker').error).toBeNull();
+        }
         await vi.advanceTimersByTimeAsync(10_000);
         expect(h.sendToAgent).toHaveBeenCalledTimes(timing === 'before-stopped-write' ? 0 : 1);
         return;
