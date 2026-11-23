@@ -7,6 +7,7 @@
  */
 
 import { EventEmitter } from 'node:events';
+import fs from 'node:fs/promises';
 import { OperationBudget } from '../../utils/operationBudget';
 import { enqueueGitRepoWrite } from '../../git-snapshot/gitRepoWriteQueue';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -191,6 +192,62 @@ afterEach(() => {
   setPlatform(realPlatform);
   vi.restoreAllMocks();
   vi.useRealTimers();
+});
+
+describe('macOS Git discovery', () => {
+  // #8454: even --version can start the Apple installer. Intercept the
+  // executable boundary while driving the real Git wrapper (unit tier).
+  it.each([
+    { selected: '/usr/bin/git', developerTools: false, blocked: true },
+    { selected: '/usr/bin/git', developerTools: true, blocked: false },
+    { selected: '/opt/homebrew/bin/git', developerTools: false, blocked: false },
+  ])('handles $selected with developer tools available=$developerTools', async ({
+    selected, developerTools, blocked,
+  }) => {
+    setPlatform('darwin');
+    vi.spyOn(fs, 'stat').mockResolvedValue({ isFile: () => true } as never);
+    vi.spyOn(fs, 'access').mockResolvedValue(undefined);
+    vi.spyOn(fs, 'realpath').mockResolvedValue(selected);
+    mocks.execFile.mockImplementation((_file, _args, _options, callback: ExecCb) => {
+      callback(developerTools ? null : Object.assign(new Error('no developer directory'), { code: 2 }),
+        developerTools ? '/Developer\n' : '', '');
+      return new EventEmitter();
+    });
+    mocks.spawn.mockImplementation(() => {
+      const child = Object.assign(new EventEmitter(), { stdout: new EventEmitter(), stderr: new EventEmitter() });
+      void Promise.resolve().then(() => {
+        child.stdout.emit('data', Buffer.from('git version fixture\n'));
+        child.emit('close', 0, null);
+      });
+      return child;
+    });
+    const version = () => gitExec(['--version'], undefined, {
+      avoidMacGitInstallPrompt: true,
+      extraEnv: { PATH: '/fixture/bin', DEVELOPER_DIR: `/fixture/${selected}/${developerTools}` },
+    });
+    if (blocked) {
+      const results = await Promise.allSettled([version(), version()]);
+      expect(results.map((result) =>
+        result.status === 'rejected' ? result.reason.cause?.code : result.status,
+      )).toEqual(['ENOENT', 'ENOENT']);
+      expect(mocks.spawn).not.toHaveBeenCalled();
+    } else {
+      await expect(version()).resolves.toMatchObject({ stdout: 'git version fixture\n' });
+    }
+    expect(mocks.execFile).toHaveBeenCalledTimes(selected === '/usr/bin/git' ? 1 : 0);
+  });
+
+  it('preserves raw Git failures for explicit worktree commands', async () => {
+    setPlatform('darwin');
+    const fake = installExecFileMock();
+    const pending = gitExec(['worktree', 'add', 'fixture'], '/repo');
+    fake.gitCb!(Object.assign(new Error('git failed'), { code: 128 }), '', 'fatal: branch already checked out\n');
+    await expect(pending).rejects.toMatchObject({
+      exitCode: 128,
+      stderr: 'fatal: branch already checked out\n',
+    });
+    expect(mocks.execFile).toHaveBeenCalledOnce();
+  });
 });
 
 describe('gitExec timeoutMs', () => {

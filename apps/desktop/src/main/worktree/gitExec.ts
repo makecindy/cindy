@@ -20,6 +20,7 @@ import { assertGitDirectoryReady, currentOperationBudget, quarantineGitDirectory
 import { killProcessTree } from '../scheduler-host/proc-util';
 import { withCrossProcessLock } from '../device-link/crossProcessLock';
 import { createLogger } from '../logger';
+import { resolveMacGitProbe } from './macGitProbe.js';
 import {
   beginExecFileDiagnostic,
   execFileWithDiagnostics,
@@ -76,6 +77,8 @@ export class GitExecError extends Error {
 export interface GitExecOpts {
   /** False for read-only probes: propagate ownership errors without changing global trust. Default true. */
   repairSafeDirectory?: boolean;
+  /** Directory discovery may run on window focus without an explicit Git action. */
+  avoidMacGitInstallPrompt?: boolean;
   /** 额外的环境变量, 会与 process.env 合并(后者优先级低)。常见: { LC_ALL: 'C' } */
   extraEnv?: Record<string, string>;
   /**
@@ -272,11 +275,30 @@ function execDetachedGit(
 /**
  * 执行一次 git, 不做 dubious-ownership 自动重试(底层用)。
  */
-function execFileOnce(
+async function execFileOnce(
   args: readonly string[],
   cwd?: string,
   opts?: GitExecOpts,
 ): Promise<GitExecResult> {
+  const env = opts?.extraEnv ? { ...process.env, ...opts.extraEnv } : undefined;
+  let file = 'git';
+  if (process.platform === 'darwin' && opts?.avoidMacGitInstallPrompt) {
+    opts.signal?.throwIfAborted();
+    remainingDeadlineMs(opts.deadlineAtMs, args);
+    const selected = await resolveMacGitProbe(cwd, env ?? process.env);
+    opts.signal?.throwIfAborted();
+    remainingDeadlineMs(opts.deadlineAtMs, args);
+    if (selected === null) {
+      throw new GitExecError({
+        args,
+        exitCode: null,
+        stdout: '',
+        stderr: '',
+        cause: Object.assign(new Error('Apple Git requires macOS developer tools'), { code: 'ENOENT' }),
+      });
+    }
+    file = selected ?? file;
+  }
   const pending = new Promise<GitExecResult>((resolve, reject) => {
     opts?.signal?.throwIfAborted();
     const remaining = remainingDeadlineMs(opts?.deadlineAtMs, args);
@@ -317,7 +339,7 @@ function execFileOnce(
       cwd,
       // 防止超大输出炸内存。listBranches/listFiles 这类正常情况远低于此。
       maxBuffer: 16 * 1024 * 1024,
-      env: opts?.extraEnv ? { ...process.env, ...opts.extraEnv } : undefined,
+      env,
       // POSIX 让 git 自成进程组长:超时收口可对**整组**发信号,连
       // git-remote-http/credential helper 后代一起;Windows 的 detached 语义是
       // 脱离控制台,树杀走 taskkill /T,不需要也不该开。
@@ -339,7 +361,7 @@ function execFileOnce(
     let child: ChildProcess;
     try {
       child = (process.platform === 'win32' ? execFile : execDetachedGit)(
-        'git',
+        file,
         [...args],
         spawnOptions,
         (err, stdout, stderr) => {
