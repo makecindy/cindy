@@ -16,6 +16,7 @@ import { BOT_TEMPLATE_PRESET_AVATARS, CINDY_DEFAULT_IDENTITY } from '../../../sh
 import { companionHomes, inactiveCompanionCopyIds } from '../../companion-cloud/homes.js';
 import fs from 'node:fs/promises';
 import { chooseAvatarSource } from '../../profileEdit.js';
+import { assistantSamplingSettlements } from '../../assistantSamplingSettlement.js';
 import { toSdrAvatarImage } from '../../hdrAvatarToSdr.js';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -1136,8 +1137,14 @@ async function countCanonicalUnread(
 async function readProfile(
   client: ReturnType<typeof getDbClient>,
   botId: string,
-  /** Renderer-owned read position for this Bot; omitted ⇒ no unread accounting. */
-  lastReadAt: number | null = null,
+  {
+    lastReadAt = null,
+    pendingSamplingOnly = false,
+  }: {
+    /** Renderer-owned read position; omitted means no unread accounting. */
+    lastReadAt?: number | null;
+    pendingSamplingOnly?: boolean;
+  } = {},
 ) {
   const owner = captureBotOperationOwner();
   const db = client.drizzle;
@@ -1200,7 +1207,13 @@ async function readProfile(
     .limit(1);
   const canonicalClearedAt = byId.get(canonicalSessionId ?? '')?.clearedAt ?? null;
   owner.assertCurrent();
-  if (canonicalSessionId) await flushAssistantSamplingMetadata(canonicalSessionId);
+  // A settings receipt reads the committed profile. With no sampling outcome
+  // to replay for this chat, it can use the committed preview without draining
+  // writes from other tasks. Ordinary roster/history reads keep their barrier.
+  if (canonicalSessionId &&
+      (!pendingSamplingOnly || assistantSamplingSettlements.list(canonicalSessionId).length > 0)) {
+    await flushAssistantSamplingMetadata(canonicalSessionId);
+  }
   owner.assertCurrent();
   const latestMessage = await readCanonicalChatPreview(db, canonicalSessionId, canonicalClearedAt);
   const unreadCount = await countCanonicalUnread(
@@ -2084,7 +2097,8 @@ export async function prepareImportedBotInvitation(botId: string, requestId: str
 
 /** Shared profile mutation for trusted settings and owner-bound capability selection. */
 export async function updateBotProfile(raw: unknown, expectedVersion?: number,
-  validateAdditions?: (update: BotCapabilityUpdate) => Promise<void>, restored?: RestoredBotOrigin) {
+  validateAdditions?: (update: BotCapabilityUpdate) => Promise<void>, restored?: RestoredBotOrigin,
+  receipt?: 'local-settings') {
   const body =
     raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
   const id = readText(body.id, 'botId', 128, true);
@@ -2378,7 +2392,9 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
     if (canonical) requestBotRuntimeEpochRefresh(canonical.sessionId,
       acceptsModelSelection ? 'model' : 'profile');
   }
-  const profile = await readProfile(client, id);
+  const profile = await readProfile(client, id, {
+    pendingSamplingOnly: receipt === 'local-settings' && acceptsSavedModel,
+  });
   owner.assertCurrent();
   broadcastBotProfileChanged({ botId: id, change: 'updated' });
   return profile;
@@ -2516,7 +2532,7 @@ export function registerBotIpc(onCreatedTopic?: (id: string, subject: string, in
       owner.assertCurrent();
       results.push(await (remote
         ? readRemoteBotProfile(client, id)
-        : readProfile(client, id, lastReadAtByBotId.get(id) ?? null)));
+        : readProfile(client, id, { lastReadAt: lastReadAtByBotId.get(id) })));
     }
     owner.assertCurrent();
     return results.filter((profile) => profile !== null);
@@ -2639,7 +2655,7 @@ export function registerBotIpc(onCreatedTopic?: (id: string, subject: string, in
 
   ipcMain.handle('local-db:bots:update', async (event, raw: unknown) => {
     assertTrustedAppRendererEvent(event);
-    return updateBotProfile(raw, undefined, validateBotCapabilityAdditions);
+    return updateBotProfile(raw, undefined, validateBotCapabilityAdditions, undefined, 'local-settings');
   });
 
   const createBotCanonicalSessionUnlocked = async (

@@ -18,7 +18,7 @@ import { materializeCompanion } from '../../../companion-cloud/materialize';
 import { companionHomes, companionSnapshot } from '../../../companion-cloud/homes';
 import { startCompanionCloud } from '../../../companion-cloud/runtime';
 import { fakeApi, memoryState } from '../../../companion-cloud/__tests__/fakes';
-import { clearSessionPersistState, noteSessionAgentKind, getAssistantSamplingRuntimeId } from '../../../messagePersistBroadcaster.desktop';
+import { clearSessionPersistState, enqueueDurableWrite, noteSessionAgentKind, getAssistantSamplingRuntimeId } from '../../../messagePersistBroadcaster.desktop';
 import { join, resolve } from 'node:path';
 import { existsSync, mkdirSync, promises as fsPromises, readFileSync, rmSync, writeFileSync } from 'node:fs';
 
@@ -5468,6 +5468,59 @@ describe('Bot self control uses the same profile authority as settings', () => {
 
 
 describe('Teammate model selection shares profile persistence and route reconciliation', () => {
+  // #12190, DB tier. An unrelated chat write can hold the shared queue after
+  // the settings transaction commits. Existing save cases leave that queue idle.
+  it('returns the local model settings receipt while an unrelated message write is pending', async () => {
+    const before = await invoke('local-db:bots:get', 'bot-1');
+    await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: before.currentVersion,
+    });
+    const route: BotModelRoute = { harness: 'codex', providerId: 'openai', model: 'gpt-6-astra', effort: 'high', fastMode: false };
+    let releaseWrite!: () => void;
+    const writeGate = new Promise<void>(resolve => { releaseWrite = resolve; });
+    const pendingWrite = enqueueDurableWrite('message:other-session', () => writeGate);
+    let receipt: Awaited<ReturnType<typeof invoke>> | undefined;
+    let saveError: unknown;
+    const save = invoke('local-db:bots:update', { id: 'bot-1',
+      acceptSavedModelSelectionVersion: before.currentVersion, capabilities: { modelChainOverride: [route] },
+    }).then(value => { receipt = value; }, error => { saveError = error; });
+    try {
+      const readVersion = h.sqlite!.prepare('SELECT current_version FROM bot_profiles WHERE id = ?').pluck();
+      await vi.waitFor(() => expect(readVersion.get('bot-1')).toBe(before.currentVersion + 1));
+      await vi.waitFor(() => {
+        if (saveError) throw saveError;
+        expect(receipt).toMatchObject({ currentVersion: before.currentVersion + 1,
+          capabilities: { modelChainOverride: [route] },
+        });
+      });
+    } finally {
+      releaseWrite();
+      await pendingWrite;
+      await save;
+    }
+    expect(await invoke('local-db:bots:get', 'bot-1')).toMatchObject({
+      currentVersion: before.currentVersion + 1, capabilities: { modelChainOverride: [route] },
+    });
+  });
+
+  it('replays a pending outcome for the canonical chat in the local model settings receipt', async () => {
+    const before = await invoke('local-db:bots:get', 'bot-1');
+    const created = await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: before.currentVersion,
+    });
+    const sessionId = created.canonicalSessionId as string;
+    const persistId = 'pending-model-save-preview';
+    await createMessage(sessionId, { clientId: persistId, role: 'assistant', content: 'Accepted reply',
+      agentMeta: { samplingAttemptPending: { runtimeId: 'retired' }, turnCompleted: true } });
+    const { assistantSamplingSettlements } = await import('../../../assistantSamplingSettlement.js');
+    assistantSamplingSettlements.put({ sessionId, persistId, patch: { samplingAttemptPending: false } });
+    const receipt = await invoke('local-db:bots:update', {
+      id: 'bot-1', acceptSavedModelSelectionVersion: before.currentVersion,
+    });
+    expect(receipt).toMatchObject({ currentVersion: before.currentVersion + 1, lastMessagePreview: 'Accepted reply' });
+    expect(assistantSamplingSettlements.list(sessionId)).toEqual([]);
+  });
+
   // #7177, DB tier: older clients leave an unversioned automation baseline
   // after a permanent choice. Existing cases only change the saved model.
   // Exercise the real IPC/transaction and cold send preparation: accepting the
