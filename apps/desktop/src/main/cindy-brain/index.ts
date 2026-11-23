@@ -9187,7 +9187,7 @@ export function registerGhostIpc(): void {
   if (ipcRegistered) return;
   ipcRegistered = true;
   // 插件工具审批按真实已装实例与 receipt 判定，调用参数里的名字只用来定位。
-  setGhostToolApprovalResolver(runtimePluginHost.resolveToolApproval);
+  setGhostToolApprovalResolver(runtimePluginHost.resolveToolApproval, runtimePluginHost.resolveStartupToolApproval);
   const readMail = createMailReader({
     plugins: () => availableGhosts().flatMap(g => {
       if (!g.enabled || g.approval.state !== 'approved' || g.manifest.mail !== true || !g.manifest.mailReader ||

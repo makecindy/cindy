@@ -33,6 +33,7 @@ import { installedGhostStoragePart } from '../../../shared/pluginIdentity';
 import type { CindyGhostsHostDeps } from '../ghost.desktop';
 import type { GhostInstallConsentPrompt } from '../../cindy-brain/ghostInstallConsent';
 import { beginHeadlessGhostSetupTurn } from '../ghostSetupInteractionSurface';
+import { STARTUP_GHOST_TOOLS_OWNER_KEY } from '../../cindy-brain/startupGhostTool';
 import type { InstalledGhost, GhostSetupAssessment } from '../../../shared/ghost';
 
 const tmpUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'ghost-workdir-gate-'));
@@ -2036,6 +2037,56 @@ describe('Manual-only Ghost discovery and read gates', () => {
 });
 
 describe('ghost_call 兜底拒绝', () => {
+  // Unit: existing workdir cases only exercise progressive discovery. A
+  // retained alias must still reject the smallest stale input, a new receipt
+  // revision for the same enabled plugin and tool.
+  it('pins the startup tool to its enabled installation and revokes it before dispatch', async () => {
+    const ghost: InstalledGhost = {
+      ...chipGhost('library', ['tool'], { tools: [
+        ...['recent', 'genres', 'authors'].map(name => ({
+          name, description: 'Query with a referenced schema', exposure: 'startup',
+          parameters: { type: 'object', $ref: '#/$defs/query' },
+        })),
+        { name: 'find', description: 'Find books', exposure: 'startup' },
+        { name: 'list', description: 'List books' },
+      ] }) as InstalledGhost,
+      dir: path.join(tmpUserData, 'library'),
+      approval: { state: 'approved', revision: 'first-revision' },
+    };
+    listMock.mockReturnValue([ghost]);
+    const ctx: LiziMcpSessionContext = {
+      agentKind: 'claude-code', sessionId: 's1', sessionInstanceId: 's1-instance', workingDir: WORKDIR,
+      vendorOptions: { [STARTUP_GHOST_TOOLS_OWNER_KEY]: 'cloud:member-1:7' },
+    };
+    const live = vi.fn(() => true);
+    const deps = getCindyGhostsMcpDeps(ctx, { isStartupToolSessionCurrent: live });
+    expect(deps.startupTools?.map(tool => tool.tool)).toEqual(['find']);
+    expect(dispatchMock).not.toHaveBeenCalled();
+    const { name: startupToolName, ghostId, namespace, tool } = deps.startupTools![0];
+    const request = { ghostId, namespace, tool, args: { query: 'atlas' }, startupToolName };
+    await expect(deps.callGhostTool(request)).resolves.toMatchObject({ ok: true });
+    expect(dispatchMock).toHaveBeenCalledWith(expect.objectContaining({
+      ghostId: installedGhostStoragePart(ghost), tool: 'find', args: { query: 'atlas' },
+    }));
+    expect(cardRegisterMock).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ startupToolName }));
+    expect(live).toHaveBeenCalledWith('s1', 's1-instance', WORKDIR);
+    dispatchMock.mockClear();
+    for (const installed of [
+      [{ ...ghost, approval: { state: 'approved', revision: 'second-revision' } }],
+      [{ ...ghost, enabled: false }], [],
+    ]) {
+      listMock.mockReturnValue(installed);
+      await expect(deps.callGhostTool(request)).resolves.toMatchObject({ ok: false });
+    }
+    expect(deps.startupTools?.map(tool => tool.name)).toEqual([startupToolName]);
+    const reopened = getCindyGhostsMcpDeps({ ...ctx }, { isStartupToolSessionCurrent: live });
+    expect(reopened.startupTools?.map(tool => tool.name)).toEqual([startupToolName]);
+    const nextTask = getCindyGhostsMcpDeps({ ...ctx, sessionId: 's2', sessionInstanceId: 's2-instance',
+      vendorOptions: { ...ctx.vendorOptions } }, { isStartupToolSessionCurrent: live });
+    expect(nextTask.startupTools).toBeUndefined();
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
   it('不存在优先于未登录与残留目录偏好返回 GHOST_NOT_FOUND', async () => {
     listMock.mockReturnValue([]);
     activeSessionAvailableMock.mockReturnValue(false);
