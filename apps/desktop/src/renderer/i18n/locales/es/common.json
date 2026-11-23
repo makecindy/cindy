@@ -4769,7 +4769,7 @@
     },
     "toolFold": {
       "cell": {
-        "title": "Plegado de cargas útiles de herramientas (experimental)",
+        "title": "Plegado de cargas útiles de herramientas",
         "description": "Las idas y vueltas de herramientas antiguas se pliegan en una sola línea y los resultados demasiado grandes se truncan antes; el modelo puede recuperar los originales cuando los necesite. Solo afecta a las sesiones del Agent Pi creadas después."
       },
       "toggleAria": "Alternar plegado de cargas útiles de herramientas",

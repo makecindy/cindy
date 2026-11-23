@@ -4713,7 +4713,7 @@
     },
     "toolFold": {
       "cell": {
-        "title": "Tool payload folding (experimental)",
+        "title": "Tool payload folding",
         "description": "Older tool round-trips are folded into one line and oversized results are truncated first; the model can fetch the originals when needed. Only applies to Pi agent sessions started afterwards."
       },
       "toggleAria": "Toggle tool payload folding",

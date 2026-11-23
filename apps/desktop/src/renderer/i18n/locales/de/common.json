@@ -4713,7 +4713,7 @@
     },
     "toolFold": {
       "cell": {
-        "title": "Tool-Nutzlasten falten (experimentell)",
+        "title": "Tool-Nutzlasten falten",
         "description": "Ältere Werkzeug-Roundtrips werden auf eine Zeile gefaltet und überlange Ergebnisse vorher gekürzt; das Modell kann die Originale bei Bedarf abrufen. Betrifft nur Pi-Agent-Sitzungen, die danach starten."
       },
       "toggleAria": "Tool-Nutzlasten falten umschalten",

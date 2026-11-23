@@ -4769,7 +4769,7 @@
     },
     "toolFold": {
       "cell": {
-        "title": "Repli des charges utiles d'outils (expérimental)",
+        "title": "Repli des charges utiles d'outils",
         "description": "Les allers-retours d'outils anciens sont repliés sur une ligne et les résultats trop volumineux sont tronqués avant ; le modèle peut récupérer les originaux si besoin. Seules les sessions d'Agent Pi créées ensuite sont concernées."
       },
       "toggleAria": "Activer/désactiver le repli des charges utiles d'outils",
