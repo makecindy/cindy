@@ -168,6 +168,7 @@ worktree 或 SSH Lead 时拒绝（INVALID_PARAMS）。`maker:worker:list` 与团
 
 同账号配对设备通过只读 `maker:get-plugin-engine-usage(key)` 查询执行电脑；SSH、分享访客与未配对调用没有账号用量入口。
 旧插件继续使用现有状态与模型，新插件在旧 Host 上仍可在自己的设置页获取用量。旧 Host 缺少该 channel 时控制端按无数据处理。
+支持区分 worker 错误的执行电脑会通过现有 invoke 错误返回临时读取失败。系统栏和小组件保留该引擎的上次读数、显示读取时间，并按已有失败节奏重试。成功的空读数和读取期间账号或授权失效仍返回空；旧版执行电脑返回的空值也按空读数处理。
 既有 Device Link invoke 帧和自建中转可原样转发，无需扩展中转协议。该变更不增加 manifest 权限、批准或安装迁移。
 
 ## 插话（2026-11-22）

@@ -71,6 +71,8 @@ export interface PluginHarness {
   defaultMode?: GhostHarnessMode;
 }
 
+export const PLUGIN_USAGE_WORKER_FAILURE = Symbol('plugin usage worker failure');
+
 export interface PluginHarnessRegistry {
   /** 已启用 + 已批准 + 已声明 + 协议已支持。 */
   list(): PluginHarness[];
@@ -102,7 +104,7 @@ export interface PluginHarnessRegistryDeps {
 }
 
 export interface ReconcilablePluginHarnessRegistry extends PluginHarnessRegistry {
-  readUsage(key: string): Promise<GhostHarnessUsage | null>;
+  readUsage(key: string, options?: { reportWorkerFailure: boolean }): Promise<GhostHarnessUsage | null>;
   /** 重算列表;内容变化才通知。`ghosts` 缺省时现读 deps.listGhosts()。 */
   reconcile(ghosts?: InstalledGhost[]): void;
   /** 丢弃缓存(不通知);下一次 list 现算。 */
@@ -191,7 +193,7 @@ export function createPluginHarnessRegistry(deps: PluginHarnessRegistryDeps): Re
         listeners.delete(listener);
       };
     },
-    async readUsage(key) {
+    async readUsage(key, options) {
       const read = deps.readUsage;
       const separator = key.lastIndexOf(':');
       if (!read || separator < 1 || key.length > 256) return null;
@@ -203,7 +205,11 @@ export function createPluginHarnessRegistry(deps: PluginHarnessRegistryDeps): Re
       const harness = find();
       if (!harness) return null;
       const raw = await read(ghostId, harness.harnessId);
-      return find() ? parseGhostHarnessUsage(raw) ?? null : null;
+      if (!find()) return null;
+      if (raw === PLUGIN_USAGE_WORKER_FAILURE && options?.reportWorkerFailure) {
+        throw new Error('Plugin usage worker unavailable');
+      }
+      return parseGhostHarnessUsage(raw) ?? null;
     },
     async spawn(key, options) {
       // 现算而不是读缓存:停用、撤权或刚发布的不可用状态都必须在启动这一刻生效。
@@ -274,8 +280,8 @@ export function reconcilePluginHarnesses(ghosts?: InstalledGhost[]): void {
   registry.reconcile(ghosts);
 }
 
-export function readPluginHarnessUsage(key: string): Promise<GhostHarnessUsage | null> {
-  return registry.readUsage(key);
+export function readPluginHarnessUsage(key: string, options?: { reportWorkerFailure: boolean }): Promise<GhostHarnessUsage | null> {
+  return registry.readUsage(key, options);
 }
 
 export function getPluginHarnessRegistry(): PluginHarnessRegistry {

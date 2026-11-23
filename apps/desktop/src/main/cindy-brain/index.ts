@@ -404,7 +404,7 @@ import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { createGhostKvStore, removeGhostKvBestEffort, type GhostKvStore } from './ghostKvStore.js';
 import { handleGhostModelsRequest } from './runtime/ghostModelsEndpoint.js';
 import { handleGhostHarnessesRequest } from './runtime/ghostHarnessesEndpoint.js';
-import { configurePluginHarnessRegistry, reconcilePluginHarnesses } from './pluginHarnesses.js';
+import { configurePluginHarnessRegistry, PLUGIN_USAGE_WORKER_FAILURE, reconcilePluginHarnesses } from './pluginHarnesses.js';
 import { ghostPublishedModelText, parseGhostPublishedModels } from '@cindy/plugin-protocol';
 import {
   handleGhostSetupStatusRequest,
@@ -9518,7 +9518,19 @@ export function registerGhostIpc(): void {
       const response = await getGhostNodeRuntimeBroker().handleRequest(ghostId, {
         type: 'node-request', method: 'usage', params: { harnessId }, timeoutMs: 26000,
       });
-      return response.ok && isDataOwnerBroadcastScopeCurrent(owner) ? response.result : null;
+      if (!isDataOwnerBroadcastScopeCurrent(owner)) return null;
+      if (response.ok) return response.result;
+      switch (response.errorCode) {
+        case 'TIMEOUT':
+        case 'RATE_LIMITED':
+        case 'PROCESS_START_FAILED':
+        case 'PROCESS_EXITED':
+        case 'PROTOCOL_ERROR':
+        case 'INTERNAL':
+          return PLUGIN_USAGE_WORKER_FAILURE;
+        default:
+          return null;
+      }
     },
     log,
   });

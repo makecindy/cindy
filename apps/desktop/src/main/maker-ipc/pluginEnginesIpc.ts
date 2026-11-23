@@ -327,8 +327,9 @@ export function registerPluginEnginesIpc(opts: RegisterPluginEnginesIpcOpts): ()
     requestPluginHarnessRefresh(Date.now(), targetGhostId);
   });
   opts.handle(PLUGIN_ENGINES_INVOKE.USAGE, (event, key) => {
-    if (!remote()) opts.assertTrusted(event);
-    return typeof key === 'string' ? readPluginHarnessUsage(key) : null;
+    const isRemote = remote();
+    if (!isRemote) opts.assertTrusted(event);
+    return typeof key === 'string' ? readPluginHarnessUsage(key, { reportWorkerFailure: isRemote }) : null;
   });
   // Opening this computer to the owner's other computers is decided at this computer only.
   opts.handle(PLUGIN_ENGINES_INVOKE.SET_REMOTE_USE, async (event, input) => {
