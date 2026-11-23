@@ -176,6 +176,7 @@ describe('removeWorktreeForSession', () => {
     storeSetMock.mockReset().mockImplementation(async (sessionId: string, meta: WorktreeMeta) => {
       storeMap.set(sessionId, meta);
     });
+    await import('../worktree/WorktreeManagerPorts.desktop');
     manager = await import('../worktree/WorktreeManager');
   });
 

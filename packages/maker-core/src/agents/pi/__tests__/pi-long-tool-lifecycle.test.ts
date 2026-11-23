@@ -267,9 +267,11 @@ describe('Pi long tool lifecycle through real stdio RPC', () => {
 
   // #8887: real PiAgent/Session and stdio, fake executable only. Two completed
   // requests followed by each lifecycle termination must retain 120 input tokens.
+  // #11735: app-quit must additionally cancel once, without a crash error or replay.
   it.each(['rpc', 'exit', 'exhausted', 'close', 'detach', 'stop'] as const)(
     'retains request receipts through retry and %s', async cause => {
       const { events, transport } = await start(false);
+      const write = vi.spyOn(transport, 'writeLine');
       await transport.writeLine(JSON.stringify({ type: 'fixture_usage_retry' }));
       await vi.waitFor(() => expect(events.filter(e => e.type === 'account_usage')).toHaveLength(2));
       expect(events.some(e => e.type === 'done')).toBe(false);
@@ -287,6 +289,11 @@ describe('Pi long tool lifecycle through real stdio RPC', () => {
       if (cause === 'exhausted') {
         expect(events.filter(e => e.type === 'done')).toHaveLength(1);
         expect(events.find(e => e.type === 'done')?.data).toMatchObject({ status: 'failed' });
+      } else if (cause === 'detach') {
+        expect(events.filter(e => e.type === 'error')).toEqual([]);
+        expect(events.filter(e => e.type === 'done')).toHaveLength(1);
+        expect(terminal.data).toMatchObject({ status: 'cancelled' });
+        expect(write.mock.calls.map(([line]) => JSON.parse(line).type)).not.toContain('prompt');
       } else if (cause !== 'stop') expect(events.filter(e => e.type === 'done')).toEqual([]);
     },
   );

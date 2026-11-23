@@ -97,7 +97,7 @@
   "manageSharing": "共有管理",
   "joinedTab": "参加した共有",
   "joinedEmptyTitle": "参加している共有セッションはありません",
-  "joinedEmptyHint": "仲間からの招待リンクを開いて共有セッションに参加できます。",
+  "joinedEmptyHint": "パートナーからの招待リンクを開いて共有セッションに参加できます。",
   "ownedManageIntro": "このアカウントの別のパソコンで開始した共有も含みます。",
   "retryAction": "再読み込み",
   "cancelOperation": "キャンセル",

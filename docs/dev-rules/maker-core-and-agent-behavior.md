@@ -452,7 +452,9 @@ Codex 0.153 的 unsubscribe 会延迟卸载 30 分钟，不能靠立即 resume �
 冻结输入。本地摘要再失败即正常报错，不循环切换。尚未结算的原生 exec continuation 无法跨
 线程迁移，不得重建后声称它仍可恢复。普通生成 502 与 stderr 文案不得触发此路径。
 
-Codex 的 120 秒 reconnect watchdog 只是 fallback 收口，不是根因诊断。stderr 仍只作诊断日志，
+Codex 的 120 秒 reconnect watchdog 只是 fallback 收口，不是根因诊断。stderr 仍只作诊断日志
+（唯一例外：每次响应的计时 trace 行只读来显示 tok/s，不驱动任何行为，见
+[实时生成速度](protocol-compatibility/live-generation-speed.md)），
 不得用 `remote compaction v2` 文案驱动恢复动作，也不得根据图片历史大小把重连超时
 改写为历史故障（包括读取已保存消息时）。收到当前 turn 的原生 `contextCompaction`
 开始事件后，取消短重连计时，压缩期间交给既有 upstream-idle 长超时保护；完成后恢复
@@ -934,8 +936,8 @@ Cindy reviewer 与 Codex native reviewer 使用同一份范围语义，但接入
 Agent developer 指令不会进入原生审批摘要，因此通过线程级 `auto_review.policy` 内联
 Markdown 接入；在创建或恢复线程时预装，不依赖初始权限模式，后续切到 Auto 即可使用。
 不修改用户配置文件，不改 sandbox／审批者，不覆盖用户或项目自定义策略，
-管理员策略仍由原生优先处理。当前覆盖已验证的 Codex 0.145.0、0.153.4、0.156.0、0.159.2 与 0.166.0，完整保留各版本
-默认租户策略；0.159.2 与 0.166.0 的原生 reviewer 请求已于 2026-11-03 抓取，租户策略
+管理员策略仍由原生优先处理。当前覆盖已验证的 Codex 0.145.0、0.153.4、0.156.0、0.159.2、0.166.0 与 0.167.2，完整保留各版本
+默认租户策略；0.159.2 与 0.166.0 的原生 reviewer 请求已于 2026-11-03 抓取，0.167.2 于 2026-11-21 抓取，租户策略
 与 0.153.4 逐行一致，因此复用同一文件。未知版本保留原生策略，不能拿旧版本策略覆盖新默认。
 `native-auto-review-policy.test.ts` 同时检查打包 pin 在已核验版本表内，升级运行时不能只改 pin。原生行为验证见
 `agents/codex/native-auto-review-policy.native.test.ts`（`packages/maker-core/src/` 下），

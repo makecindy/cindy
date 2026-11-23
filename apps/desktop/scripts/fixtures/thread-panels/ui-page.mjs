@@ -140,6 +140,19 @@ export default {
       assert.ok(layout.unused >= layout.toolbarWidth + 6, 'topic reserves room for the outer toolbar');
       assert.ok(layout.filesInside, 'loaded and pending file chips stay inside the bubble');
       assert.ok(layout.cellWidth > 50 && layout.tableScrolls, 'table keeps readable columns and scrolls inside the bubble');
+      // #11312 follow-up: the markdown inline-code wrap must not leak into
+      // thread table cells. Those cells deliberately stay `overflow-wrap: normal`
+      // so wide columns scroll instead of splitting a date/id/domain into single
+      // characters. Regression fails here: `code` painted one char per line.
+      assert.ok(await panel.locator('table code').evaluateAll(codes => codes.length > 0
+        && codes.every(code => {
+          const style = getComputedStyle(code);
+          const cell = code.closest('td');
+          const cellWidth = cell.getBoundingClientRect().width;
+          const codeWidth = code.getBoundingClientRect().width;
+          // A code box must not collapse to one character nor overflow its cell.
+          return style.overflowWrap === 'normal' && codeWidth > 8 && codeWidth <= cellWidth + 1;
+        })), 'inline code inside thread table cells keeps cell wrapping semantics');
       assert.ok(layout.actionsOutside, 'message actions stay outside the bubble and inside the panel');
       assert.ok(await panel.locator('table').evaluate(table => {
         const scroller = table.parentElement;

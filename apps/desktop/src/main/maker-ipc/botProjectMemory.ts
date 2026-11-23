@@ -75,7 +75,10 @@ export function unlinkedTeammateProjectMemoryDir(workspace: string): string {
 }
 
 async function exists(file: string): Promise<boolean> {
-  return fs.lstat(file).then(() => true, () => false);
+  return fs.lstat(file).then(() => true, (error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return false;
+    throw error;
+  });
 }
 
 /** The teammate finished its V2 upgrade here: its memories and skills were copied into the project. */

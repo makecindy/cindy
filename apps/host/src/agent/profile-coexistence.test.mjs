@@ -43,12 +43,14 @@ function profile(t) {
   return { dir, write };
 }
 
-/** The real ports, counting the OS identity queries. */
-function countingPorts() {
+/** Counting the OS identity queries, with optional controlled query responses. */
+function countingPorts(readProcessIdentities = nodeProfileScanPorts.readProcessIdentities) {
   const asked = [];
   return { asked, ports: { ...nodeProfileScanPorts, readProcessIdentities: async pids => {
     asked.push([...pids]);
-    return nodeProfileScanPorts.readProcessIdentities(pids);
+    return typeof readProcessIdentities === 'function'
+      ? readProcessIdentities(pids)
+      : readProcessIdentities;
   } } };
 }
 
@@ -82,17 +84,41 @@ test('an out-of-range registered PID does not block the profile', async t => {
 test('the same record asks the OS for its identity once; a changed record asks again', async t => {
   const child = await liveChild(t);
   const p = profile(t);
-  const { asked, ports } = countingPorts();
-  const scan = createDesktopScanner(p.dir, ports);
   const startedAtMs = Date.now();
+  const identity = { startedAtMs, command: process.execPath };
+  const { asked, ports } = countingPorts(async pids => new Map(pids.map(pid => [pid, identity])));
+  const scan = createDesktopScanner(p.dir, ports);
   p.write(child.pid, { startedAtMs });
   assert.deepEqual(await scan(), [child.pid]);
+  assert.equal(asked.length, 1);
   assert.deepEqual(await scan(), [child.pid]);
+  assert.equal(asked.length, 1);
   assert.deepEqual(await scan(), [child.pid]);
   assert.equal(asked.length, 1, 'three scans of the same record ask once');
   p.write(child.pid, { startedAtMs, state: 'starting' });
   await scan();
   assert.equal(asked.length, 2);
+});
+
+test('an unidentified live PID is queried again until its identity is known, then cached', async t => {
+  const child = await liveChild(t);
+  const p = profile(t);
+  const startedAtMs = Date.now();
+  const identity = { startedAtMs, command: process.execPath };
+  let calls = 0;
+  const { asked, ports } = countingPorts(async pids => {
+    calls += 1;
+    if (calls === 1) return new Map();
+    return new Map(pids.map(pid => [pid, identity]));
+  });
+  const scan = createDesktopScanner(p.dir, ports);
+  p.write(child.pid, { startedAtMs });
+  assert.deepEqual(await scan(), [child.pid]);
+  assert.equal(asked.length, 1);
+  assert.deepEqual(await scan(), [child.pid]);
+  assert.equal(asked.length, 2);
+  assert.deepEqual(await scan(), [child.pid]);
+  assert.equal(asked.length, 2, 'cached after identity is resolved on second query');
 });
 
 test('a record whose process ended, or whose PID now belongs to another program, does not block', async t => {

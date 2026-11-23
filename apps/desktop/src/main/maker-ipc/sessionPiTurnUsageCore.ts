@@ -1,3 +1,5 @@
+import { recordCompanyPiRoots } from '../usage/companyPiReceipts.js';
+import { takeCompanyTurn } from '../usage/companyTokenFacts.js';
 import { piModelBilling, captureTurnUsageContext, tokenAttribution, turnBillingSource, type TurnUsageContext } from './turnUsageContextCore.js';
 import { isOpenAiSubscriptionProviderId } from './turnUsagePorts.js';
 import { isClaudeSubscriptionProviderId, isXaiSubscriptionProviderId } from '../maker-host/subscription-account-kind.js';
@@ -32,8 +34,7 @@ import {
   XAI_MODEL_PREFIX,
   isSubscriptionDirectRoute,
 } from '../../shared/subscriptionModels.js';
-import { addRegionalMoney, type RegionalMoney } from '../../shared/regionalMoney.js';
-import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
+import { sumMoneyByCurrency, type RegionalMoney } from '../../shared/regionalMoney.js';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import {
   triggerClaudeSubscriptionUsageRefresh,
@@ -179,6 +180,11 @@ export function recordSessionPiTurnUsage(
           group.sdkCostUsd += segment.costUsd ?? 0;
           groupedSegments.set(model, group);
         }
+        if (!session.remoteHostId && !session.agentDeviceId && sessionProvider !== 'xd' && piSegmentsReliable &&
+            (turnContext.subscriptionKind !== null || turnContext.accessKind === 'subscription' || isCustomProviderRoute)) {
+          const record = takeCompanyTurn(turnContext);
+          if (record) recordCompanyPiRoots(record, effectiveSegments);
+        }
         // An explicitly incomplete segment payload must not be collapsed
         // into one synthetic request for pricing. Keep the aggregate token
         // fact under the selected model while leaving money unavailable.
@@ -259,7 +265,6 @@ export function recordSessionPiTurnUsage(
               money = computePriceQuoteTurnMoney(
                 group.tokens,
                 quote ?? undefined,
-                currentLedgerCurrency(),
                 pricingSegments,
               );
             } else {
@@ -314,10 +319,9 @@ export function recordSessionPiTurnUsage(
           }
           await Promise.allSettled(modelWrites);
           void rebroadcastTodaySpend();
-          const actualMoney = actualMonies.length > 0 ? addRegionalMoney(actualMonies) : null;
-          const estimatedMoney =
-            estimatedMonies.length > 0 ? addRegionalMoney(estimatedMonies) : null;
-          const messageMoney = actualMoney ?? estimatedMoney;
+          const actualAmounts = sumMoneyByCurrency(actualMonies);
+          const estimatedAmounts = sumMoneyByCurrency(estimatedMonies);
+          const messageMoney = actualAmounts[0] ?? estimatedAmounts[0];
           const turnUsageDetails = buildTurnUsageDetails({
             ...billing,
             perModelTokens,
@@ -331,15 +335,19 @@ export function recordSessionPiTurnUsage(
             stepContextTokens,
             trace,
           });
-          if (actualMoney && !identified) {
-            await recordTurnSpend(actualMoney);
-            await recordSessionTurnSpend(session.id, actualMoney);
+          if (!identified) {
+            for (const amount of actualAmounts) {
+              await recordTurnSpend(amount);
+              await recordSessionTurnSpend(session.id, amount);
+            }
           }
           if (messageMoney) {
             const changedScheduleId = await recordSchedulerTurnCost({
               sessionId: session.id,
               clientId: turnAssistantPersistId,
               money: messageMoney,
+              actualAmounts,
+              estimatedAmounts,
               turnUsageDetails,
               turnOrigin: event.turnOrigin,
             });

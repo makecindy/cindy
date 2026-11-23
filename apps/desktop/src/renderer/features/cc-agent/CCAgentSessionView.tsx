@@ -69,6 +69,7 @@ import {
   PLUGIN_ENGINE_DEFAULT_MODEL,
   isSamePluginEngineChoice,
   remotePluginEngineChoices,
+  resolvePluginEngineSessionSwitchEffort,
   type PluginEngineChoice,
   type PluginEngineSelection,
 } from '@/lib/pluginEngineSelection';
@@ -126,6 +127,7 @@ import {
   sessionSubscriptionPoolProvider,
 } from '@/components/new-chat/SessionSubscriptionAccount';
 import { bindModelGroupSession, isModelGroupSwitchOfferCurrent, resolveModelGroup, useModelGroups, useModelGroupSwitchOffer } from '@/features/model-groups/modelGroupsClient';
+import { bindDeviceModelGroupSession, resolveDeviceModelGroup, useDeviceModelGroups } from '@/features/model-groups/remoteModelGroups';
 import {
   beginAgentSwitchOperation,
   hasPendingAgentSendDispatch,
@@ -400,7 +402,7 @@ import {
   type BuiltInSkillDraftIntent,
 } from '@/lib/composerDraftStore';
 import { setLastWorkingDir } from '@/state/lastWorkingDir';
-import { consumeComposerMentionDrop } from '@/lib/composerDrop';
+import { consumeComposerMentionDrop, isComposerAttachmentDrag } from '@/lib/composerDrop';
 import { hasSplitGroupSessionType } from './splitGroupDnd';
 import { splitGroupStore } from './splitGroupStore';
 import {
@@ -2015,6 +2017,7 @@ function CCAgentSessionContent({
     // F-QUEUE-DEFER
     pendingQueue,
     steeringQueueClientIds,
+    steerUnsupported,
     queuePaused,
     queueEditLocks,
     queueInteractionLocks,
@@ -2284,14 +2287,16 @@ function CCAgentSessionContent({
     && !session.remoteHostId;
   const pluginEngineSwitchEligible = pluginEngineOnTaskComputer && !!sessionId && !readOnly
     && !session.orcaRole && !session.orcaRemoteLead
-    && (session.source ?? 'desktop') === 'desktop' && session.status !== 'archived';
+    && ((session.source ?? 'desktop') === 'desktop' || session.source === 'bot')
+    && session.status !== 'archived';
   const localPluginEngines = usePluginEngines(!pluginEngineDeviceId && (pluginEngineTask || pluginEngineSwitchEligible));
   const remotePluginCatalogue = useRemotePluginEngines(
     pluginEngineOnTaskComputer && !readOnly && (pluginEngineTask || pluginEngineSwitchEligible)
       && !remoteSessionUnavailable && !awaitingCreation ? pluginEngineDeviceId : undefined,
-    pluginEngineTask && viewVisible,
+    viewVisible ? (pluginEngineTask ? true : 'once') : false,
+    viewVisible,
   );
-  const readPluginEngineCatalogue = pluginEngineDeviceId ? remotePluginCatalogue.read : undefined;
+  const refreshPluginEngineCatalogue = pluginEngineDeviceId ? remotePluginCatalogue.refresh : undefined;
   const pluginEngines = remotePluginCatalogue.engines ?? localPluginEngines;
   // 任务自己的引擎(pluginEngine)在下面 selectableDevices 之后解析：引擎可能在自己的另一台电脑上。
   // 手动压缩通道判定(#1927/#1933 review):真实 Claude Code → maker:input:compact;
@@ -2365,17 +2370,28 @@ function CCAgentSessionContent({
   // 远程 Agent:本机任务的模型面板也列出其他电脑的供应商(选中 = 把 Agent 挪过去,下一条消息
   // 生效)。Agent 当前所在电脑与挂着的换位置目标即使掉线也保留,让用户看得到、换得回来。
   const { devices: selectableDevices } = useSelectableDevices();
-  // 插件引擎在自己的另一台电脑上运行的任务(任务、文件与命令留在任务所在电脑，Agent 在那台)：引擎的名称、
-  // 图标、模型、思考深度与权限档都读那台的列表，任务所在电脑没装这个插件也不会显示成「插件已停用或卸载」。
-  // 别人分享的来源不提供插件引擎。Agent 恰好就在正在看的这台电脑上(从另一台建的任务)时读本机的列表。
+  // 切到插件引擎的意图同样带位置(Agent 回到任务所在电脑时为 null)。
+  const pendingAgentDeviceId = storedAgentSwitchIntent?.agentDeviceId;
+  // 供应商分享：别人分享给我的供应商也是远程 Agent 的落点(`share:<id>`)，并进本机任务，
+  // 不进设备切换器。已暂停 / 已不在的分享只在它正是当前或即将使用的位置时保留。
+  const {
+    devices: providerShareDevices,
+    pluginEngineDevices: sharedPluginEngineDevices = [],
+    nameFor: providerShareDeviceName,
+    isReceived: isReceivedProviderShare,
+  } = useProviderShareAgentDevices([session?.agentDeviceId, pendingAgentDeviceId], remoteDeviceId);
+  // 插件引擎在自己的另一台电脑或好友分享(`share:<id>`)上运行的任务(任务、文件与命令留在任务所在电脑，
+  // Agent 在那台)：引擎的名称、图标、模型、思考深度与权限档都读那台的列表，免装插件即可使用。
+  // Agent 恰好就在正在看的这台电脑上(从另一台建的任务)时读本机的列表。
   const pluginEngineAgentDeviceId = pluginEngineTask && session?.agentDeviceId
-    && !isProviderShareAgentDeviceId(session.agentDeviceId) ? session.agentDeviceId : undefined;
+    ? session.agentDeviceId : undefined;
   const pluginEngineAgentIsThisComputer = !!pluginEngineAgentDeviceId && pluginEngineAgentDeviceId === selfDeviceId;
   const thisComputerPluginEngines = usePluginEngines(pluginEngineAgentIsThisComputer);
   const agentPluginCatalogue = useRemotePluginEngines(
     pluginEngineAgentDeviceId && !pluginEngineAgentIsThisComputer && !readOnly && !remoteSessionUnavailable && !awaitingCreation
       ? pluginEngineAgentDeviceId : undefined,
     pluginEngineTask && viewVisible,
+    viewVisible,
   );
   /** 那台电脑的引擎列表；undefined = 引擎就在任务所在电脑，null = 那台还没答复(或暂时连不上)。 */
   const agentDevicePluginEngines = pluginEngineAgentDeviceId
@@ -2383,6 +2399,8 @@ function CCAgentSessionContent({
     : undefined;
   const pluginEngineAgentDeviceName = pluginEngineAgentDeviceId
     ? selectableDevices.find((device) => device.deviceId === pluginEngineAgentDeviceId)?.name
+      ?? providerShareDeviceName?.(pluginEngineAgentDeviceId)
+      ?? undefined
     : undefined;
   const pluginEngine = useMemo<PluginEngineChoice | null>(() => {
     if (!pluginEngineTask) return null;
@@ -2394,21 +2412,27 @@ function CCAgentSessionContent({
       : null;
   }, [pluginEngineTask, pluginEngineAgentDeviceId, pluginEngineAgentDeviceName, pluginEngines, agentDevicePluginEngines, session?.providerId]);
   const pluginEngineChoiceLabel = usePluginEngineChoiceLabel();
-  // 切到插件引擎的意图同样带位置(Agent 回到任务所在电脑时为 null)。
-  const pendingAgentDeviceId = storedAgentSwitchIntent?.agentDeviceId;
-  // 本机普通任务也能切到自己另一台电脑开放的引擎。已选的远程引擎保留回显。
+  // 本机普通任务也能免装切到自己另一台电脑或好友分享开放的引擎。已选的远程引擎保留回显。
   const pendingPluginEngineDeviceId = pluginEngineSwitchIntent
     ? (pluginEngineSwitchIntent.agentDeviceId === undefined
         ? (session?.agentDeviceId ?? undefined)
         : (pluginEngineSwitchIntent.agentDeviceId ?? undefined))
     : undefined;
-  const canBrowseRemotePluginEngines = viewVisible && pluginEngineSwitchEligible && !pluginEngineDeviceId
-    && (localPluginEngines.length > 0 || !!pendingPluginEngineDeviceId);
+  const canBrowseRemotePluginEngines = viewVisible && pluginEngineSwitchEligible && !pluginEngineDeviceId;
   const switchPluginEngineDevicesKey = canBrowseRemotePluginEngines
-    ? JSON.stringify(selectableDevices
-      .filter((device) => !isProviderShareAgentDeviceId(device.deviceId) && !isSharedTaskPeer(device.deviceId)
-        && ((localPluginEngines.length > 0 && device.online) || device.deviceId === pendingPluginEngineDeviceId))
-      .map(({ deviceId: id, name }) => [id, name ?? null]))
+    ? JSON.stringify([
+        ...selectableDevices
+          .filter((device) => !isProviderShareAgentDeviceId(device.deviceId) && !isSharedTaskPeer(device.deviceId)
+            && (device.online || device.deviceId === pendingPluginEngineDeviceId))
+          .map(({ deviceId: id, name }): [string, string | null] => [id, name ?? null]),
+        ...sharedPluginEngineDevices
+          .map(({ deviceId: id, name }): [string, string | null] => [id, name || null]),
+        ...(pendingPluginEngineDeviceId
+          && isProviderShareAgentDeviceId(pendingPluginEngineDeviceId)
+          && !sharedPluginEngineDevices.some((item) => item.deviceId === pendingPluginEngineDeviceId)
+          ? [[pendingPluginEngineDeviceId, providerShareDeviceName?.(pendingPluginEngineDeviceId) ?? null] as [string, string | null]]
+          : []),
+      ])
     : '[]';
   const switchPluginEngineDevices = useMemo(
     () => (JSON.parse(switchPluginEngineDevicesKey) as Array<[string, string | null]>)
@@ -2462,13 +2486,6 @@ function CCAgentSessionContent({
     pendingAgentDeviceId,
     sshRemote: !!session?.remoteHostId,
   });
-  // 供应商分享：别人分享给我的供应商也是远程 Agent 的落点(`share:<id>`)，并进本机任务，
-  // 不进设备切换器。已暂停 / 已不在的分享只在它正是当前或即将使用的位置时保留。
-  const {
-    devices: providerShareDevices,
-    nameFor: providerShareDeviceName,
-    isReceived: isReceivedProviderShare,
-  } = useProviderShareAgentDevices([session?.agentDeviceId, pendingAgentDeviceId], remoteDeviceId);
   // 被控电脑上的任务 Agent 现在 / 挂着的位置是分享时:分享按账号授予,本机也收到了同一条就经本机
   // 的分享通道读它的目录,模型按钮按分享显示(否则只能读到被控电脑自己的目录,显示「模型信息暂
   // 不可用」)。本机没收到的分享读不到,维持原样。
@@ -2856,10 +2873,17 @@ function CCAgentSessionContent({
     };
   }, [modelGroupSwitchOffer, sessionId, t]);
   // 进行中的任务里选模式(model-groups.md §5)：只在任务所在的运行位置里按规则当场挑一个，走选择器同一条换模型路径
-  // 换过去；之后不会自己再换。远程控制别的电脑、SSH 与伙伴对话不提供，条件与撞配额的换来源提议相同。
-  const modelGroupsInTask = !!sessionId && !readOnly && !botChatIdentity && !remoteDeviceId && !session?.remoteHostId;
+  // 换过去；之后不会自己再换。远程控制另一台电脑时列那台的模式，由那台选(§6.3)，那台是旧版本时不列；
+  // 分享来的任务、SSH 与伙伴对话不提供。
+  const modelGroupsTaskDeviceId = remoteDeviceId && !isSharedTaskPeer(remoteDeviceId) ? remoteDeviceId : null;
+  const modelGroupsInTask = !!sessionId && !readOnly && !botChatIdentity && (!remoteDeviceId || !!modelGroupsTaskDeviceId)
+    && !session?.remoteHostId;
   // 任务视图挂着但看不见(聊天栏收起)时不读配置，重新看得见时再读。
-  const { config: modelGroupsConfig } = useModelGroups(modelGroupsInTask && viewVisible);
+  const localTaskModelGroups = useModelGroups(modelGroupsInTask && viewVisible && !modelGroupsTaskDeviceId);
+  const deviceTaskModelGroups = useDeviceModelGroups(
+    modelGroupsInTask ? modelGroupsTaskDeviceId : null, modelGroupsInTask && viewVisible,
+  );
+  const modelGroupsConfig = modelGroupsTaskDeviceId ? deviceTaskModelGroups.config : localTaskModelGroups.config;
   // 已挂着「下一条消息换到另一台电脑」时，按那个即将生效的位置挑：换模型时会沿用它，两边必须是同一台。
   const switchTaskByModelGroup = useCallback(async (selection: ModelGroupSelection) => {
     if (!sessionId) return;
@@ -2870,7 +2894,10 @@ function CCAgentSessionContent({
     try {
       // 选路期间切到了别的任务：换模型的入口已属于那个任务，这次作废，不动任何一个。
       const navigationVersion = sessionNavigationVersionRef.current;
-      const result = await resolveModelGroup(selection, undefined, { agentDeviceId: taskLocation });
+      // 远程控制的任务：由任务所在那台按它的模式选，位置是那台眼里的位置。
+      const result = modelGroupsTaskDeviceId
+        ? await resolveDeviceModelGroup(modelGroupsTaskDeviceId, selection, undefined, { agentDeviceId: taskLocation })
+        : await resolveModelGroup(selection, undefined, { agentDeviceId: taskLocation });
       if (sessionNavigationVersionRef.current !== navigationVersion) return;
       if (!result || result.outcome !== 'routed') {
         if (result) toast.warning(t('modelGroups.picker.switchUnavailable', { name: result.groupName }));
@@ -2885,20 +2912,22 @@ function CCAgentSessionContent({
       });
       if (!applied) return;
       // 记下是经哪个模式换的：之后撞配额，接着提议这个模式里的下一个来源。
-      bindModelGroupSession(sessionId, selection, result);
+      if (modelGroupsTaskDeviceId) void bindDeviceModelGroupSession(modelGroupsTaskDeviceId, sessionId, selection, result);
+      else bindModelGroupSession(sessionId, selection, result);
       toast.success(t('modelGroups.picker.switched', { name: result.groupName, model: `${result.modelName} · ${result.sourceName}` }));
     } finally {
       finishSwitch();
     }
-  }, [sessionId, taskLocation, t]);
-  const taskModelGroups = useMemo(() => (modelGroupsInTask
+  }, [sessionId, taskLocation, t, modelGroupsTaskDeviceId]);
+  const taskModelGroups = useMemo(() => (modelGroupsInTask && modelGroupsConfig
     ? {
         config: modelGroupsConfig,
         active: null,
         onSelect: (selection: ModelGroupSelection) => { void switchTaskByModelGroup(selection); },
-        onManage: () => navigate('/settings?tab=model-groups'),
+        // 管理入口只在本机：另一台电脑的模式在那台上改。
+        ...(modelGroupsTaskDeviceId ? {} : { onManage: () => navigate('/settings?tab=model-groups') }),
       }
-    : undefined), [modelGroupsInTask, modelGroupsConfig, switchTaskByModelGroup, navigate]);
+    : undefined), [modelGroupsInTask, modelGroupsConfig, switchTaskByModelGroup, navigate, modelGroupsTaskDeviceId]);
   // 本地隐藏态:点主按钮后立即隐藏,不等新消息入流(视觉连续性,规则 7)。
   // 「忽略/关闭」走 store 的乐观 errorDismissed 更新,无需本地态。
   // 按错误行 clientId 归属(不是 sessionId,review P2):续跑后同一会话再次以
@@ -3784,7 +3813,12 @@ function CCAgentSessionContent({
       try {
         const api = pluginEngineDeviceId ? makerApiForDevice(pluginEngineDeviceId) : makerApiFor(sessionId);
         const result = await api.setModel(
-          sessionId, modelId, session.providerId, expectedRevision, effort ? { effort, fastMode: false } : undefined);
+          sessionId,
+          modelId,
+          session.providerId,
+          expectedRevision,
+          { effort: (effort || null) as Effort | null, fastMode: false },
+        );
         if (result?.superseded) return false;
         // Device Link publishes the authoritative task patch from the controlled computer.
         if (!pluginEngineDeviceId) void refreshServerSession();
@@ -3809,19 +3843,43 @@ function CCAgentSessionContent({
             modelId: session.model || PLUGIN_ENGINE_DEFAULT_MODEL,
             effort: session.effort,
             onSelectModel: handlePluginEngineModelSelect,
-            // 引擎在另一台电脑上：打开模型菜单时重读那台的列表；就在这台时沿用本机的刷新。
+            // 引擎在另一台电脑上：打开模型菜单时请那台重报模型并复读列表；就在这台时沿用本机的刷新。
             readCatalogue: pluginEngineAgentDeviceId
-              ? (pluginEngineAgentIsThisComputer ? undefined : agentPluginCatalogue.read)
-              : readPluginEngineCatalogue,
+              ? (pluginEngineAgentIsThisComputer ? undefined : agentPluginCatalogue.refresh)
+              : refreshPluginEngineCatalogue,
             catalogueUnknown: pluginEngineAgentDeviceId
               ? agentDevicePluginEngines === null
               : !!pluginEngineDeviceId && remotePluginCatalogue.engines === null,
           }
         : undefined,
-    [pluginEngineTask, session, pluginEngine, pluginEngineChoiceLabel, handlePluginEngineModelSelect, readPluginEngineCatalogue,
+    [pluginEngineTask, session, pluginEngine, pluginEngineChoiceLabel, handlePluginEngineModelSelect, refreshPluginEngineCatalogue,
       pluginEngineDeviceId, remotePluginCatalogue.engines, pluginEngineAgentDeviceId, pluginEngineAgentIsThisComputer,
-      agentPluginCatalogue.read, agentDevicePluginEngines, t],
+      agentPluginCatalogue.refresh, agentDevicePluginEngines, t],
   );
+
+  const activeSessionPluginEngineChoice = useMemo<PluginEnginesPickerProps['active']>(() => {
+    if (!session) return null;
+    const intentDeviceId = pluginEngineSwitchIntent
+      ? (pluginEngineSwitchIntent.agentDeviceId === undefined ? (session.agentDeviceId ?? null) : pluginEngineSwitchIntent.agentDeviceId)
+      : null;
+    if (pluginEngineSwitchIntent?.providerId) {
+      return {
+        providerId: pluginEngineSwitchIntent.providerId,
+        ...(intentDeviceId ? { deviceId: intentDeviceId } : {}),
+        modelId: pluginEngineSwitchIntent.model,
+        ...(isPluginEngineEffort(pluginEngineSwitchIntent.effort) ? { effort: pluginEngineSwitchIntent.effort } : {}),
+      };
+    }
+    if (pluginEngineTask && !agentSwitchIntent && session.providerId) {
+      return {
+        providerId: session.providerId,
+        ...(pluginEngineAgentDeviceId ? { deviceId: pluginEngineAgentDeviceId } : {}),
+        modelId: session.model || PLUGIN_ENGINE_DEFAULT_MODEL,
+        ...(isPluginEngineEffort(session.effort) ? { effort: session.effort } : {}),
+      };
+    }
+    return null;
+  }, [session, pluginEngineSwitchIntent, pluginEngineTask, agentSwitchIntent, pluginEngineAgentDeviceId]);
 
   // 任务里选中插件引擎的一行(docs/plans/acp-plugin-bridge.md)：同一个引擎内换模型立即生效(上面的
   // set-model)；换到另一个引擎——从内置引擎或别的插件引擎——与内置引擎之间的切换一样登记意图，
@@ -3830,9 +3888,15 @@ function CCAgentSessionContent({
     if (!sessionId || !session || !pluginEngineSwitchEligible || remoteWritesBlocked) return false;
     if (hasPendingAgentSendDispatch(sessionId) || hasPendingAgentSwitchOperation(sessionId)) return false;
     const finishSwitch = beginAgentSwitchOperation(sessionId);
+    const targetEngine = switchablePluginEngines.find((item) => isSamePluginEngineChoice(item, selection));
+    const resolvedEffort = resolvePluginEngineSessionSwitchEffort(
+      selection,
+      targetEngine,
+      activeSessionPluginEngineChoice,
+    );
     const api = pluginEngineDeviceId ? makerApiForDevice(pluginEngineDeviceId) : makerApiFor(sessionId);
     const switchTo = () => api.switchSessionAgent(
-      sessionId, 'acp', selection.modelId, selection.providerId, selection.effort ?? '', false,
+      sessionId, 'acp', selection.modelId, selection.providerId, resolvedEffort ?? '', false,
       pluginEngineDeviceId ? undefined : { agentDeviceId: selection.deviceId ?? null },
     );
     try {
@@ -3846,15 +3910,14 @@ function CCAgentSessionContent({
           revision = result.sameEngineRevision;
           if (!pluginEngineDeviceId) makerChatStore.clearAgentSwitchIntent(sessionId);
         }
-        return await handlePluginEngineModelSelect(selection.modelId, selection.effort, revision);
+        return await handlePluginEngineModelSelect(selection.modelId, resolvedEffort, revision);
       }
       // 主进程先广播意图(sessions:patched)再回包，选择器随广播显示「下条：」。
       await switchTo();
       if (makerChatStore.getSnapshot(sessionId).agentStatus.isRunning) {
-        const engine = switchablePluginEngines.find((item) => isSamePluginEngineChoice(item, selection));
         toast.success(t('newChat.chatInput.agentSwitch.deferred', {
-          agent: engine ? pluginEngineChoiceLabel(engine) : t('newChat.pluginEngines.genericName'),
-          model: engine?.models.find((item) => item.id === selection.modelId)?.displayName
+          agent: targetEngine ? pluginEngineChoiceLabel(targetEngine) : t('newChat.pluginEngines.genericName'),
+          model: targetEngine?.models.find((item) => item.id === selection.modelId)?.displayName
             ?? t('newChat.pluginEngines.defaultModel'),
         }), { duration: 4000 });
       }
@@ -3869,25 +3932,25 @@ function CCAgentSessionContent({
       finishSwitch();
     }
   }, [sessionId, session, pluginEngineSwitchEligible, remoteWritesBlocked, pluginEngineDeviceId,
-    pluginEngineTask, pluginEngineAgentDeviceId, switchablePluginEngines, pluginEngineChoiceLabel,
-    handlePluginEngineModelSelect, t]);
+    pluginEngineTask, activeSessionPluginEngineChoice, pluginEngineAgentDeviceId, switchablePluginEngines,
+    pluginEngineChoiceLabel, handlePluginEngineModelSelect, t]);
   // 打开模型选择器时：本机已装插件引擎请插件重报模型，同时读取同账号其他电脑开放的引擎(与新建任务一致)。
   // 引用必须稳定——选择器在这个函数变化时重读，列表读回又会让下面的 picker 重算，不稳定就成了打开期间的循环读取。
   const hasLocalSessionPluginEnginesRef = useRef(false);
   hasLocalSessionPluginEnginesRef.current = localPluginEngines.length > 0;
   const readSessionPluginEngines = useCallback(() => {
     if (pluginEngineDeviceId) {
-      readPluginEngineCatalogue?.();
-      if (pluginEngineAgentDeviceId && !pluginEngineAgentIsThisComputer) agentPluginCatalogue.read();
+      refreshPluginEngineCatalogue?.();
+      if (pluginEngineAgentDeviceId && !pluginEngineAgentIsThisComputer) agentPluginCatalogue.refresh();
       return;
     }
     if (hasLocalSessionPluginEnginesRef.current) requestPluginEnginesRefresh();
     readDevicePluginEngines();
     if (pluginEngineAgentDeviceId && !pluginEngineAgentIsThisComputer && !activePluginEngineInDeviceList) {
-      agentPluginCatalogue.read();
+      agentPluginCatalogue.refresh();
     }
-  }, [pluginEngineDeviceId, readPluginEngineCatalogue, pluginEngineAgentDeviceId, pluginEngineAgentIsThisComputer,
-    agentPluginCatalogue.read, readDevicePluginEngines, activePluginEngineInDeviceList]);
+  }, [pluginEngineDeviceId, refreshPluginEngineCatalogue, pluginEngineAgentDeviceId, pluginEngineAgentIsThisComputer,
+    agentPluginCatalogue.refresh, readDevicePluginEngines, activePluginEngineInDeviceList]);
   // 普通任务的选择器列出本机及同账号其他电脑开放的插件引擎(本机须已装对应插件)：
   // 当前选中的是待切到的引擎，或任务自己的引擎；待切到内置引擎时不选中任何插件引擎。
   const pluginEngineSwitchPicker = useMemo<PluginEnginesPickerProps | undefined>(() => {
@@ -3895,33 +3958,14 @@ function CCAgentSessionContent({
       || (!pluginEngineTask && !pluginEngineDeviceId && switchablePluginEngines.length === 0 && switchPluginEngineDevices.length === 0)) {
       return undefined;
     }
-    const intentDeviceId = pluginEngineSwitchIntent
-      ? (pluginEngineSwitchIntent.agentDeviceId === undefined ? (session.agentDeviceId ?? null) : pluginEngineSwitchIntent.agentDeviceId)
-      : null;
-    const active = pluginEngineSwitchIntent?.providerId
-      ? {
-          providerId: pluginEngineSwitchIntent.providerId,
-          ...(intentDeviceId ? { deviceId: intentDeviceId } : {}),
-          modelId: pluginEngineSwitchIntent.model,
-          ...(isPluginEngineEffort(pluginEngineSwitchIntent.effort) ? { effort: pluginEngineSwitchIntent.effort } : {}),
-        }
-      : pluginEngineTask && !agentSwitchIntent && session.providerId
-        ? {
-            providerId: session.providerId,
-            ...(pluginEngineAgentDeviceId ? { deviceId: pluginEngineAgentDeviceId } : {}),
-            modelId: session.model || PLUGIN_ENGINE_DEFAULT_MODEL,
-            ...(isPluginEngineEffort(session.effort) ? { effort: session.effort } : {}),
-          }
-        : null;
     return {
       engines: switchablePluginEngines,
-      active,
+      active: activeSessionPluginEngineChoice,
       onSelect: handlePluginEngineSwitchSelect,
       readCatalogue: readSessionPluginEngines,
     };
   }, [pluginEngineSwitchEligible, pluginEngineDeviceId, switchablePluginEngines, switchPluginEngineDevices.length,
-    session, pluginEngineSwitchIntent, pluginEngineTask, agentSwitchIntent, handlePluginEngineSwitchSelect,
-    pluginEngineAgentDeviceId, readSessionPluginEngines]);
+    session, activeSessionPluginEngineChoice, pluginEngineTask, handlePluginEngineSwitchSelect, readSessionPluginEngines]);
 
   // effort 已在 ChatInput 中落库成功；直接 merge 确切值回 SSoT，避免额外 GET
   // 读取到旧快照后把菜单选中态反向覆盖。ChatInput 不维护第二条 local state。
@@ -5932,7 +5976,7 @@ function CCAgentSessionContent({
       steeringClientIds={steeringQueueClientIds} editLocks={queueEditLocks} interactionLocks={queueInteractionLocks}
       readOnly={readOnly || queueAbortPending}
       simplifiedBotConversation={Boolean(botChatIdentity)} localSend={isLocalUserSend(entry.clientId)} onEdit={beginQueueComposerEdit}
-      onSteer={steerQueuedMessage} onRemove={removeFromQueue} onMove={moveQueueItem} /> : null;
+      onSteer={steerUnsupported ? undefined : steerQueuedMessage} onRemove={removeFromQueue} onMove={moveQueueItem} /> : null;
   };
   const showErrorTailBanner = !readOnly && !!errorTailMsg && !errorTailBannerHidden
     && !syntheticContinuationPending && !error && !credentialSwitchWait
@@ -5955,6 +5999,7 @@ function CCAgentSessionContent({
               等待态由 main 权威维护,error 为空。 */}
             {credentialSwitchWait && !error && (
               <CredentialSwitchWaitBanner
+                sessionId={sessionId}
                 blockedBySessionIds={credentialSwitchWait.blockedBySessionIds}
                 onCancel={(() => {
                   // 取消目标 = 等待中的那条消息(clientId 绑定);老被控端缺省时回落队首。
@@ -6111,6 +6156,11 @@ function CCAgentSessionContent({
           <span>{t('newChat.pendingQueue.pausedFooter')}</span>
           <button type="button" disabled={readOnly} onClick={resumeQueue} className="min-h-8 rounded-lg px-2 hover:bg-[var(--surface-hover)]">{t('newChat.pendingQueue.resumeAction')}</button>
         </div>}
+        {steerUnsupported && pendingQueue.length > 0 && agentStatus.isRunning && !queuePaused && !queueAbortPending && (
+          <div role="status" className="flex min-h-8 items-center py-2 text-12 text-[var(--text-secondary)]">
+            {t('newChat.pendingQueue.steerUnsupportedNotice')}
+          </div>
+        )}
         {pendingMcpSetup ? <McpSetupPrompt key={pendingMcpSetup.requestId} request={pendingMcpSetup} teammate={!!botChatIdentity} /> : null}
       </>}
       key={sessionId}
@@ -6265,7 +6315,7 @@ function CCAgentSessionContent({
         data-plugin-ui-task={!session?.remoteHostId && !session?.deviceLinkDeviceId ? sessionId : undefined}
         aria-label={t('ccAgent.layout.chatDropAreaAria')}
         onDragEnter={(e) => {
-          if (hasSplitGroupSessionType(e.dataTransfer.types)) return;
+          if (isComposerAttachmentDrag(e.dataTransfer) || hasSplitGroupSessionType(e.dataTransfer.types)) return;
           e.preventDefault();
           e.stopPropagation();
           if (cindyMakeInputLocked) return;
@@ -6273,20 +6323,20 @@ function CCAgentSessionContent({
           if (dragCounterRef.current === 1) setIsDragOver(true);
         }}
         onDragOver={(e) => {
-          if (hasSplitGroupSessionType(e.dataTransfer.types)) return;
+          if (isComposerAttachmentDrag(e.dataTransfer) || hasSplitGroupSessionType(e.dataTransfer.types)) return;
           e.preventDefault();
           e.stopPropagation();
           e.dataTransfer.dropEffect = cindyMakeInputLocked ? 'none' : 'copy';
         }}
         onDragLeave={(e) => {
-          if (hasSplitGroupSessionType(e.dataTransfer.types)) return;
+          if (isComposerAttachmentDrag(e.dataTransfer) || hasSplitGroupSessionType(e.dataTransfer.types)) return;
           e.preventDefault();
           e.stopPropagation();
           dragCounterRef.current -= 1;
           if (dragCounterRef.current === 0) setIsDragOver(false);
         }}
         onDrop={(e) => {
-          if (hasSplitGroupSessionType(e.dataTransfer.types)) return;
+          if (isComposerAttachmentDrag(e.dataTransfer) || hasSplitGroupSessionType(e.dataTransfer.types)) return;
           e.preventDefault();
           e.stopPropagation();
           dragCounterRef.current = 0;
@@ -6397,7 +6447,7 @@ function CCAgentSessionContent({
           instead of floating over old messages. */}
         {isDragOver && (
           <div
-            className="pointer-events-none absolute inset-0 z-50"
+            className="pointer-events-none absolute inset-0 z-float"
             style={{
               backgroundColor: 'var(--drop-overlay-bg)',
               border: '2px dashed var(--drop-overlay-border)',
@@ -6520,7 +6570,7 @@ function CCAgentSessionContent({
               ) : null}
               <div
                 data-composer-center-group="true"
-                className="pointer-events-none relative z-10 col-start-1 row-start-1 flex max-w-full -translate-y-1 items-center justify-center gap-2"
+                className="pointer-events-none relative z-raised col-start-1 row-start-1 flex max-w-full -translate-y-1 items-center justify-center gap-2"
               >
                 <PinnedPlanPanel
                   sessionId={sessionId ?? null}
@@ -6594,7 +6644,7 @@ function CCAgentSessionContent({
             />
 
             <div
-              className="relative mx-auto flex flex-col items-center gap-[10px]"
+              className="relative mx-auto flex flex-col items-center gap-2.5"
               style={{ width: inputWidth }}
               data-chat-composer-stack
             >
@@ -6865,7 +6915,8 @@ function CCAgentSessionContent({
                   queueEditingClientId={activeQueueComposerEdit?.clientId ?? null}
                   onQueueEditSubmit={submitQueueComposerEdit}
                   onQueueEditCancel={cancelQueueComposerEdit}
-                  onQueueSteer={steerQueuedMessage}
+                  // Without same-turn input, Enter and Cmd/Ctrl+Enter both queue and the send tip offers no steer.
+                  onQueueSteer={steerUnsupported ? undefined : steerQueuedMessage}
                   steeringQueueClientIds={steeringQueueClientIds}
                   messages={sideChatMessages}
                   placeholder={
@@ -7087,6 +7138,7 @@ function CCAgentSessionContent({
                         sessionId={sessionId}
                         sessionInitialMoney={session?.totalMoney ?? null}
                         sessionInitialCostUsd={session?.totalCostUsd ?? null}
+                        sessionInitialUsdApproximate={session?.totalCostUsdIsApproximate}
                         sessionInitialTokens={session?.totalTokenUsage ?? null}
                         remoteHostId={session?.remoteHostId ?? null}
                         deviceLinkDeviceId={remoteDeviceId ?? null}
@@ -7231,7 +7283,7 @@ function CCAgentSessionContent({
           onClick={() => navigate('/cc-agent/scheduled')}
           aria-label={t('ccAgent.layout.backToAutomations')}
           className={cn(
-            'absolute left-[14px] top-[14px] z-40 inline-flex items-center justify-center',
+            'absolute left-[14px] top-[14px] z-page-top inline-flex items-center justify-center',
             'text-[var(--settings-section-desc)] transition-colors hover:text-foreground',
           )}
         >
@@ -7245,7 +7297,7 @@ function CCAgentSessionContent({
           aria-label={t('ccAgent.layout.backToReviewSource')}
           title={t('ccAgent.layout.backToReviewSource')}
           className={cn(
-            'absolute left-[14px] top-[14px] z-40 inline-flex items-center justify-center',
+            'absolute left-[14px] top-[14px] z-page-top inline-flex items-center justify-center',
             'text-[var(--settings-section-desc)] transition-colors hover:text-foreground',
           )}
         >
@@ -7273,7 +7325,7 @@ function HandoffSourcePill({
   return (
     <div
       className={cn(
-        'flex h-10 w-full items-center rounded-[12px] border border-[var(--cmd-palette-border)] bg-[hsl(var(--content-area))]',
+        'flex h-10 w-full items-center rounded-xl border border-[var(--cmd-palette-border)] bg-[hsl(var(--content-area))]',
         'text-13 leading-none text-muted-foreground',
       )}
     >
@@ -7295,7 +7347,7 @@ function HandoffSourcePill({
         onClick={onDismiss}
         aria-label={t('ccAgent.handoff.pill.dismissAria')}
         className={cn(
-          'mr-2 flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px]',
+          'mr-2 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg',
           'text-muted-foreground transition-colors hover:bg-[var(--cmd-palette-bg)] hover:text-foreground',
           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground',
         )}
@@ -7548,18 +7600,21 @@ export function RunningStatusBar({
       !backgroundTasksRunning &&
       !workflowWaiting,
   });
+  // The panel shows the turn's last reading at any age; the status bar only a live one.
   const latestRate = rateHistory.latestRate;
+  const liveRate = rateHistory.latestRateFresh ? latestRate : null;
   const usageMeta = resolveRunningUsageMeta({
     outputTokens: rateOutputTokens,
     generationDurationMs: rateDurationMs,
     generationReliable: rateReliable,
     tokenUsage: Math.max(tokenUsage, displayTokens),
-    latestRate,
+    latestRate: liveRate,
   });
   const latestRateText = latestRate !== null ? formatRecentOutputTokenRate(latestRate) : null;
+  const liveRateText = liveRate !== null ? formatRecentOutputTokenRate(liveRate) : null;
   const showRate = tokenSpeed?.measurement || !tokenSpeed || (tokenSpeed.streaming && tokenSpeed.rate > 0);
-  const rateText = !isHidden && !reconnecting && usageMeta.kind === 'rate' && showRate && latestRateText !== null
-    ? t(tokenSpeed?.measurement ? 'chat.runningStatus.recentTokenRate' : 'chat.runningStatus.tokenRate', { rate: latestRateText })
+  const rateText = !isHidden && !reconnecting && usageMeta.kind === 'rate' && showRate && liveRateText !== null
+    ? t('chat.runningStatus.tokenRate', { rate: liveRateText })
     : null;
   const averageRate = tokenSpeed?.measurement
     ? tokenSpeed.measurement.average === null ? null : formatRecentOutputTokenRate(tokenSpeed.measurement.average)
@@ -7593,7 +7648,7 @@ export function RunningStatusBar({
   return (
     <div
       className={cn(
-        'mx-auto grid select-none grid-cols-[minmax(0,1fr)_auto] items-center px-2 py-[6px]',
+        'mx-auto grid select-none grid-cols-[minmax(0,1fr)_auto] items-center px-2 py-1.5',
         className,
       )}
       style={{ width: inputWidth }}
@@ -7606,7 +7661,7 @@ export function RunningStatusBar({
         className={cn(
           // min-w-0(非 shrink-0):让内部 status span 的 truncate 真正生效 —— status 可变长
           // (turn-start 带用户名 / tool 进度长串),窄宽时左段截断而非把右段顶出界。
-          'flex min-w-0 items-center gap-[6px]',
+          'flex min-w-0 items-center gap-1.5',
           reconnecting && 'text-[var(--status-bar-accent)]',
           // 隐藏时一律摘所有动画类:动画即便 visibility:hidden 不画也照算样式/合成层，
           // 长期累积会复刻 0f8fa84 那次 breathing 在 :root 的内存泄漏。
@@ -7655,7 +7710,7 @@ export function RunningStatusBar({
         {(!suppressContent && (!preparing || backgroundTasksRunning) && (!isHidden || ratePanelPinned)) && (
           <div
             data-running-status-meta="true"
-            className="flex min-w-0 items-center gap-[6px]"
+            className="flex min-w-0 items-center gap-1.5"
             style={ratePanelPinned ? undefined : fadeStyle}
             aria-hidden={isHidden && !ratePanelPinned}
           >

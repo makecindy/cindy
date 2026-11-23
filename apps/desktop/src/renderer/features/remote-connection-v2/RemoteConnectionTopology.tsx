@@ -31,6 +31,7 @@ import { cn } from '@/lib/utils';
 import type { DeviceLinkLinkStatus } from '@/hooks/useDeviceLinkSettings';
 
 import type { RemoteSwitchEntry, RemoteSwitchTarget } from './agentNetRemoteSwitch';
+import type { DeviceLinkPeerPathPreference } from '../../../shared/deviceLinkIpc';
 import { DeviceNodePopover, HubNodePopover } from './DeviceNodePopover';
 import { PlatformGlyph } from './PlatformGlyph';
 import { TopologyFlowLayer, type FlowLine } from './TopologyFlow';
@@ -116,6 +117,8 @@ export interface RemoteConnectionTopologyProps {
   /** 远程切换连接方式(原型):各设备的切换状态与发起切换。 */
   switches?: ReadonlyMap<string, RemoteSwitchEntry>;
   onSwitch?: (node: TopologyNode, target: RemoteSwitchTarget) => void;
+  /** 手动切换本机到指定设备的 Agent-Net 选路偏好(auto / direct / relay)。 */
+  onPathPreferenceChange?: (node: TopologyNode, preference: DeviceLinkPeerPathPreference) => Promise<boolean | void> | void;
 }
 
 /**
@@ -324,6 +327,7 @@ export function RemoteConnectionTopology({
   ready = true,
   switches,
   onSwitch,
+  onPathPreferenceChange,
 }: RemoteConnectionTopologyProps) {
   const { t } = useTranslation();
   const reduced = useReducedMotion();
@@ -596,7 +600,7 @@ export function RemoteConnectionTopology({
               </span>
             </button>
           </PopoverTrigger>
-          <PopoverContent side={group.side === 1 ? 'right' : 'left'} align="center" className="w-64 p-3">
+          <PopoverContent side={group.side === 1 ? 'right' : 'left'} align="center" className="w-80 p-3.5">
             <DeviceNodePopover
               node={node}
               relayName={model.relay.name}
@@ -607,6 +611,7 @@ export function RemoteConnectionTopology({
               })}
               switchEntry={switchEntry}
               onSwitch={onSwitch}
+              onPathPreferenceChange={onPathPreferenceChange}
             />
           </PopoverContent>
         </Popover>,
@@ -661,7 +666,7 @@ export function RemoteConnectionTopology({
             <PlatformGlyph platform={model.self?.platform ?? null} isMobile={false} size={22} />
           </button>
         </PopoverTrigger>
-        <PopoverContent side="bottom" align="center" className="w-64 p-3">
+        <PopoverContent side="bottom" align="center" className="w-72 p-3.5">
           <HubNodePopover
             model={model}
             linkStatus={linkStatus}

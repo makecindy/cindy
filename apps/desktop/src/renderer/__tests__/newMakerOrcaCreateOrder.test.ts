@@ -305,17 +305,30 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
 
     it('副本在草稿路由登记 pending 的同一刻落下,不等会话视图消费', () => {
       // 消息在对端确认创建后登记；目标在目标交接时登记。
+      const pluginSendRemember = source.indexOf(
+        "rememberRecoverableHandoff(remoteSessionId, 'message', message)",
+      );
       const sendRemember = source.indexOf(
         "rememberRecoverableHandoff(remoteSessionId, 'message', message, currentBuiltInSkillIntent())",
       );
       const goalRemember = source.indexOf(
         "rememberRecoverableHandoff(remoteSessionId, 'goal', objective)",
       );
+      expect(pluginSendRemember).toBeGreaterThan(-1);
       expect(sendRemember).toBeGreaterThan(-1);
       expect(goalRemember).toBeGreaterThan(-1);
       // 副本要**紧贴提交点**:排在 commitRemoteSessionHandoff 之后,但在附件迁移那次
       // await 之前 —— 提交点之后每多一次 await,「对端会话已建好、正文却还没有第二份」
-      // 的窗口就长一分(codex P2 第五轮)。
+      // 的窗口就长一分(codex P2 第五轮)。普通远程首条与远程插件引擎首条两条互斥路径都守同一顺序。
+      const pluginSendCommit = source.lastIndexOf(
+        "logTag: 'draft send plugin engine',",
+        pluginSendRemember,
+      );
+      const pluginRehome = source.indexOf('await attachmentCopy', pluginSendCommit);
+      expect(pluginSendCommit).toBeGreaterThan(-1);
+      expect(pluginSendCommit).toBeLessThan(pluginSendRemember);
+      expect(pluginSendRemember).toBeLessThan(pluginRehome);
+
       const sendCommit = source.lastIndexOf("logTag: 'draft send',", sendRemember);
       const rehome = source.indexOf('await attachmentCopy', sendCommit);
       expect(sendCommit).toBeGreaterThan(-1);
@@ -324,9 +337,9 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
       expect(source.lastIndexOf('setPendingGoal(remoteSessionId, {', goalRemember)).toBeGreaterThan(
         -1,
       );
-      // 只落一次,别两处都落。
+      // 每条远程消息创建路径只落一次(插件引擎首条 + 普通首条共两处),别在同一路径内两处都落。
       expect(source.match(/rememberRecoverableHandoff\(remoteSessionId, 'message'/g)).toHaveLength(
-        1,
+        2,
       );
       // 会话视图不再自己落副本(落在那里要等 historyLoaded,等于没落)。
       expect(sessionViewSource).not.toContain('rememberRecoverableHandoff(');

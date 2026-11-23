@@ -525,10 +525,11 @@
           "오토메이션"
         ]
       },
-      "note": "scheduler 的模块名、单条实例与能力名统一用「自动化」；不再把「自动任务」「自动化任务」登记为用户可见译法，避免与产品条目 Session（同样叫「任务」）在『删除自动化和任务』等文案里相撞。Computer Use 是另一个概念，用「自动操作电脑 / 浏览器」，改成「自动化电脑」反而不通。因此 zh-CN 只保留「自动操作」这一语境豁免。术语门禁只扫描 locale，不扫描源码注释；历史注释与测试 fixture 的旧称按 docs/product-rules/task-and-conversation-naming.md §6.0.5 逐条判断，不借术语改名机械扩大代码改动。（2026-07 修正：ja 原声明 オートメーション 仅 37/121，主流是 自動化；ko 的 자동화 75/121 本就正确。）豁免通讯录授权提示的两个 key:那里指的是 macOS 系统设置里的面板名,日文官方标签是「オートメーション」而非产品术语「自動化」——照产品术语改会让用户按提示在系统设置里找不到对应项,授权恢复路径直接断掉。zh-CN 的「自动化」与 ko 的「자동화」恰好就是各自的 macOS 官方标签,不受影响。",
+      "note": "scheduler 的模块名、单条实例与能力名统一用「自动化」；不再把「自动任务」「自动化任务」登记为用户可见译法，避免与产品条目 Session（同样叫「任务」）在『删除自动化和任务』等文案里相撞。Computer Use 是另一个概念，用「自动操作电脑 / 浏览器」，改成「自动化电脑」反而不通。因此 zh-CN 只保留「自动操作」这一语境豁免。术语门禁只扫描 locale，不扫描源码注释；历史注释与测试 fixture 的旧称按 docs/product-rules/task-and-conversation-naming.md §6.0.5 逐条判断，不借术语改名机械扩大代码改动。（2026-07 修正：ja 原声明 オートメーション 仅 37/121，主流是 自動化；ko 的 자동화 75/121 本就正确。）通讯录和 iMessage 的授权提示引用了 macOS 系统设置面板名，日文官方标签是「オートメーション」而非产品术语「自動化」——照产品术语改会让用户按提示在系统设置里找不到对应项,授权恢复路径直接断掉。zh-CN 的「自动化」与 ko 的「자동화」恰好就是各自的 macOS 官方标签,不受影响。",
       "exempt": [
         "desktop:settings.contacts.import.permissionDenied",
-        "desktop:settings.contacts.ipcError.PERMISSION_DENIED"
+        "desktop:settings.contacts.ipcError.PERMISSION_DENIED",
+        "desktop:bots.channels.add.imessage.automationDenied"
       ]
     },
     {
@@ -4089,7 +4090,19 @@
         "zh-Hant-x-lzh": "同伴"
       },
       "checkCase": false,
-      "note": "Cindy 的持久 AI 伙伴。英文单数 Buddy、复数 Buddies，句中小写；V2 默认项目名为 Buddy <名字>。其它语言按本表自然变格。内部 teammate/bot 标识保持兼容。Telegram Bot、Discord Bot 等平台机器人不使用本术语。",
+      "forbidden": {
+        "en": ["teammate", "teammates", "Teammate", "Teammates"],
+        "ja": ["チームメイト", "パートナー"],
+        "ko": ["동료", "파트너"],
+        "es": ["compañero", "compañera", "compañeros", "compañeras", "Compañero", "Compañera", "Compañeros", "Compañeras", "amigo de equipo", "amigos de equipo", "Amigo de equipo", "Amigos de equipo"],
+        "fr": ["coéquipier", "coéquipière", "coéquipiers", "coéquipières", "Coéquipier", "Coéquipière", "Coéquipiers", "Coéquipières"],
+        "de": ["Teammitglied", "Teammitglieds", "Teammitglieder", "Teammitgliedern"],
+        "pt-PT": ["colega", "colegas", "Colega", "Colegas"],
+        "pt-BR": ["colega", "colegas", "Colega", "Colegas"],
+        "zh-Hant-x-lzh": ["同僚"],
+        "zh-Hans-x-lzh": ["同僚"]
+      },
+      "note": "Cindy 的持久 AI 伙伴。英文单数 Buddy、复数 Buddies，句中小写；V2 默认项目名为 Buddy <名字>。其它语言按本表自然变格。内部 teammate/bot 标识保持兼容。Telegram Bot、Discord Bot 等平台机器人不使用本术语。豁免理由（同形异义，逐组）：① desktop:sharedTask. 与 mobile/sharedTask 四键——邀请对象是用自己的 Cindy 账号加入的真人协作者（docs/product-rules/shared-task-mode.md）；② desktop:imBot.conflictDialog. 与 desktop:logic.toasts.feishuBotConflict——共用同一个 App ID 的真人同事；③ desktop:issueTracker.——仓库/组织里的真人成员；④ desktop:settings.agentIsland.skins.boli/muffin.description——桌宠角色的修辞用法。",
       "alsoAllowed": {
         "fr": [
           {
@@ -4131,7 +4144,20 @@
             "when": "按语法使用复数形式。"
           }
         ]
-      }
+      },
+      "exempt": [
+        "desktop:imBot.conflictDialog.",
+        "desktop:logic.toasts.feishuBotConflict",
+        "desktop:settings.agentIsland.skins.boli.description",
+        "desktop:settings.agentIsland.skins.muffin.description",
+        "desktop:settings.agentIsland.skins.chaku.description",
+        "desktop:issueTracker.",
+        "desktop:sharedTask.",
+        "mobile/sharedTask:invitationCopied",
+        "mobile/sharedTask:inviteBoxHint",
+        "mobile/sharedTask:joinedEmptyHint",
+        "mobile/sharedTask:startIntro"
+      ]
     },
     {
       "id": "teammate-core-skill",
