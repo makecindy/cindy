@@ -252,7 +252,7 @@ describe('Chat Server result delivery and refresh', () => {
   });
 
   // #7401 / unit: a pass can contain both a terminal group and a temporarily
-  // unavailable group. A 503 lasting beyond the original retry limit must still
+  // unavailable group. A 503 or a network error beyond the original retry limit must
   // recover, and the archived group must resume when opened after a remote unarchive.
   it.each(['locally', 'on another device'])('resumes mixed history imports after unarchiving %s', async unarchiveLocation => {
     const archived = '10000000-0000-4000-8000-000000000088';
@@ -275,7 +275,11 @@ describe('Chat Server result delivery and refresh', () => {
         return unarchived ? { body: { sourceId: null } } : { status: 409, body: { error: { code: 'CONVERSATION_ARCHIVED' } } };
       }
       if (route === `/conversations/${recoverable}/import?sourceId=${recoverable}`) {
-        return available ? { body: { sourceId: null } } : { status: 503, body: { error: { code: 'UPSTREAM_FAILED' } } };
+        if (available) return { body: { sourceId: null } };
+        if (unarchiveLocation === 'on another device') {
+          throw Object.assign(new Error('connect ENETUNREACH'), { code: 'ENETUNREACH', syscall: 'connect' });
+        }
+        return { status: 503, body: { error: { code: 'UPSTREAM_FAILED' } } };
       }
       return response(route);
     });

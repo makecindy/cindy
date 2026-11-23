@@ -193,9 +193,10 @@ const HISTORY_UPGRADE_RETRY_DELAYS_MS = [60_000, 120_000, 240_000, 300_000, 300_
 function historyUpgradeRetryAt(error: unknown, failures: number): number {
   const delay = HISTORY_UPGRADE_RETRY_DELAYS_MS[Math.min(failures, HISTORY_UPGRADE_RETRY_DELAYS_MS.length) - 1]!;
   if (failures > HISTORY_UPGRADE_RETRY_DELAYS_MS.length && (
-    error instanceof ChatResponseError ? !retryableResponse(error) : fileRefusedHere(error)
+    error instanceof ChatResponseError ? !retryableResponse(error) : error instanceof Error && LOCAL_FILE_REFUSALS.has(error.message)
   )) return Infinity;
-  return Math.max(Date.now() + delay, error instanceof ChatResponseError ? error.retryAt ?? 0 : 0);
+  const retryAt = error instanceof Error && 'retryAt' in error ? error.retryAt : undefined;
+  return Math.max(Date.now() + delay, typeof retryAt === 'number' && Number.isFinite(retryAt) ? retryAt : 0);
 }
 function isTerminalHistoryUpgradeError(error: unknown): error is ChatResponseError {
   return error instanceof ChatResponseError && (
