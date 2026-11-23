@@ -6,7 +6,7 @@
  *   - async 并发, 整体超时兜底
  *   - post-async 串行, 必须晚于 async (用于 db close 这种依赖 async 产物的清理)
  *
- * installQuitHandler 只覆盖不触发真实退出的异常分支；真实 process / app 信号路径仍走集成验证。
+ * installQuitHandler 通过模拟 Electron 事件和进程退出验证诊断；测试进程不会退出。
  */
 
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -21,8 +21,7 @@ const scanFork = vi.hoisted(() => vi.fn());
 const electronPaths = vi.hoisted(() => ({ userData: '' }));
 
 // lifecycle.ts 里 import { app } from 'electron' —— 用最小 stub 喂给它。
-// 真实退出路径 (信号 / before-quit) 不在本文件覆盖。getPath / getVersion /
-// crashReporter 只供 session-end 用例初始化真实 run marker。
+// getPath / getVersion / crashReporter 供退出诊断用例初始化真实 run marker。
 vi.mock('electron', () => ({
   utilityProcess: { fork: scanFork },
   app: {
@@ -839,6 +838,83 @@ describe('installQuitHandler', () => {
         err,
       );
     } finally {
+      snapshot.restore();
+    }
+  });
+
+  // #7210: exercise the installed before-quit handler and classify its real persisted marker.
+  // The existing exception tests start with an idle app. A pending disposer is the minimal
+  // condition needed to reproduce the race in this unit test.
+  it.each([
+    {
+      name: 'fatal exception during cleanup',
+      error: new TypeError('Object has been destroyed'),
+      exitCode: 1,
+      kind: 'crash-exit',
+      shutdownReason: 'uncaughtException',
+    },
+    {
+      name: 'recoverable network error during cleanup',
+      error: Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }),
+      exitCode: 0,
+      kind: 'clean',
+      shutdownReason: 'before-quit',
+    },
+  ])('records the outcome of $name on the next startup', async ({
+    error, exitCode, kind, shutdownReason,
+  }) => {
+    const snapshot = snapshotProcessListeners([
+      'SIGINT', 'SIGTERM', 'exit', 'uncaughtException', 'unhandledRejection',
+    ]);
+    const sigbreakBefore = new Set(process.listeners('SIGBREAK'));
+    const previousUserData = electronPaths.userData;
+    electronPaths.userData = watchdogTmpDir;
+    vi.useFakeTimers({ toFake: ['setInterval'] });
+    try {
+      const lifecycle = await freshLifecycle();
+      const diagnostics = await import('../startup-diagnostics');
+      const { app } = await import('electron');
+      diagnostics.initStartupDiagnostics();
+      lifecycle.installQuitHandler();
+
+      let finishCleanup!: () => void;
+      const cleanup = new Promise<void>((resolve) => { finishCleanup = resolve; });
+      const dispose = vi.fn(() => cleanup);
+      lifecycle.onQuit('pending-cleanup', dispose, 'post-async');
+
+      const [, beforeQuit] = (vi.mocked(app.on).mock.calls as unknown as Array<[
+        string, (event: { preventDefault(): void }) => void,
+      ]>).find(([event]) => event === 'before-quit')!;
+      const event = { preventDefault: vi.fn() };
+      beforeQuit(event);
+      expect(event.preventDefault).toHaveBeenCalledOnce();
+      expect(dispose).toHaveBeenCalledOnce();
+
+      const [uncaughtException] = snapshot.added('uncaughtException');
+      uncaughtException(error, 'uncaughtException');
+      expect(app.exit).not.toHaveBeenCalled();
+      finishCleanup();
+
+      await vi.waitFor(() => expect(app.exit).toHaveBeenCalledOnce());
+      const [actualExitCode = 0] = vi.mocked(app.exit).mock.calls[0];
+      for (const onExit of snapshot.added('exit')) onExit(actualExitCode);
+
+      const nextStart = new diagnostics.RunMarkerStore({
+        dir: join(watchdogTmpDir, 'diagnostics', 'run-markers'),
+        pid: process.pid + 1,
+        version: 'next',
+        isPidAlive: () => false,
+      });
+      expect(nextStart.analyzePreviousRuns()).toMatchObject([
+        { kind, marker: { exitCode, shutdownReason, disposedAt: expect.any(String) } },
+      ]);
+      expect(dispose).toHaveBeenCalledOnce();
+    } finally {
+      electronPaths.userData = previousUserData;
+      vi.useRealTimers();
+      for (const listener of process.listeners('SIGBREAK')) {
+        if (!sigbreakBefore.has(listener)) process.removeListener('SIGBREAK', listener);
+      }
       snapshot.restore();
     }
   });

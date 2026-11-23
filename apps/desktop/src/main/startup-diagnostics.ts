@@ -80,7 +80,7 @@ export interface RunMarker {
   heartbeatAt: string; // ISO
   heartbeatIntervalMs: number;
   state: RunMarkerState;
-  /** beginShutdown 的触发入口,e.g. 'before-quit' / 'uncaughtException' / 'update-relaunch' */
+  /** 退出原因,e.g. 'before-quit' / 'uncaughtException' / 'update-relaunch' */
   shutdownReason?: string;
   shutdownAt?: string;
   /** runQuitDisposers 全链跑完的时刻;缺失 = disposer chain 没跑完 */
@@ -252,6 +252,15 @@ export class RunMarkerStore {
       this.current.shutdownAt = this.now().toISOString();
       this.persist();
     }
+  }
+
+  /** 正常退出期间出现未捕获异常时更新归因，保留清理开始时间。 */
+  markUncaughtExceptionDuringQuit(): void {
+    if (this.current?.state !== 'shutdown-begin' || this.current.shutdownReason !== 'before-quit') {
+      return;
+    }
+    this.current.shutdownReason = 'uncaughtException';
+    this.persist();
   }
 
   /** runQuitDisposers 全链完成。 */
@@ -627,6 +636,10 @@ export function getPreviousRunReports(): readonly PreviousRunReport[] {
 /** lifecycle.beginShutdown → 记录 shutdown 入口。init 前调用是 no-op。 */
 export function noteShutdownBegin(reason: string): void {
   _store?.markShutdownBegin(reason);
+}
+
+export function noteUncaughtExceptionDuringQuit(): void {
+  _store?.markUncaughtExceptionDuringQuit();
 }
 
 /** powerMonitor 'suspend' → 记录挂起时刻。init 前调用是 no-op。 */

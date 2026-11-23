@@ -53,6 +53,7 @@ import {
   noteExpectedExit,
   noteQuitDisposersCompleted,
   noteShutdownBegin,
+  noteUncaughtExceptionDuringQuit,
   WINDOWS_SESSION_END_REASON,
 } from './startup-diagnostics';
 import { isGhostSandboxWebContentsId } from './cindy-brain/runtime/electronSandboxAdapter';
@@ -558,7 +559,9 @@ export function installQuitHandler(timeoutMs = 2000): void {
   );
 
   // ── Layer 1: graceful quit (before-quit) ────────────────────────────────
-  // preventDefault 阻断默认 quit, 等 disposer chain 跑完再 app.exit(0)。
+  // preventDefault 阻断默认 quit, 等 disposer chain 跑完再退出。
+  // undefined 表示清理尚未由 before-quit 启动。
+  let beforeQuitExitCode: number | undefined;
   app.on('before-quit', (e) => {
     // arm-first(review P1):本 handler 必然走向退出,而下面第一行 log 就是
     // 同步盘 IO——日志落在坏盘/网络盘上时会在布防前就挂死,watchdog 形同虚设。
@@ -567,7 +570,8 @@ export function installQuitHandler(timeoutMs = 2000): void {
     log.info('before-quit received');
     if (_isDisposing) return;
     e.preventDefault();
-    void beginShutdown(timeoutMs, 'before-quit').finally(() => app.exit(0));
+    beforeQuitExitCode = 0;
+    void beginShutdown(timeoutMs, 'before-quit').finally(() => app.exit(beforeQuitExitCode));
   });
 
   // ── Layer 2: Unix process signals ───────────────────────────────────────
@@ -625,7 +629,14 @@ export function installQuitHandler(timeoutMs = 2000): void {
     // 瞬时网络两个不退出的分支绝不能布防,否则 20s 后 watchdog 会误杀健康进程。
     armShutdownHardKillWatchdog();
     log.error('uncaughtException — shutting down', err);
-    if (_isDisposing) return;
+    if (_isDisposing) {
+      // 保留已启动的清理链和原预算，只更新最终退出结果。
+      if (beforeQuitExitCode === 0) {
+        beforeQuitExitCode = 1;
+        noteUncaughtExceptionDuringQuit();
+      }
+      return;
+    }
     void beginShutdown(timeoutMs, 'uncaughtException').finally(() => app.exit(1));
   });
 
