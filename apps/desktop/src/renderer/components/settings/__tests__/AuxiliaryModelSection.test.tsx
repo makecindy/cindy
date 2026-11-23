@@ -8,6 +8,7 @@ import type {
   AuxiliaryModelSettingsState,
 } from '../../../../shared/auxiliaryModelSettings';
 import { AUTO_AUXILIARY_MODEL_CHAIN } from '../../../../shared/auxiliaryModelChain';
+import zhCN from '../../../i18n/locales/zh-CN/common.json';
 import * as visibility from '@/state/modelVisibilityPrefs';
 import { beginProvidersRefresh, commitProvidersSnapshot, __testing as providerSnapshots } from '@/lib/providersSnapshotStore';
 
@@ -16,6 +17,8 @@ const FALLBACK_PIN = 'cat:anthropic:claude-code:claude-haiku-4-5';
 
 const h = vi.hoisted(() => ({
   get: vi.fn(),
+  test: vi.fn(),
+  routeHealth: vi.fn(),
   set: vi.fn(),
   health: vi.fn(),
   navigate: vi.fn(),
@@ -24,7 +27,8 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({ t: (key: string, data?: { slot: string; model: string }) =>
+    key === 'settings.auxiliaryModels.failedSlot' && data ? data.slot + ' · ' + data.model : key }),
 }));
 
 vi.mock('@/lib/logger', () => ({
@@ -174,6 +178,8 @@ function installApi(): void {
     value: {
       maker: {
         auxiliaryModelSettingsGet: h.get,
+        auxiliaryModelRouteHealthGet: h.routeHealth,
+        auxiliaryModelSettingsTest: h.test,
         auxiliaryModelSettingsSet: h.set,
         auxiliaryModelHealthGet: h.health,
       },
@@ -203,6 +209,8 @@ describe('AuxiliaryModelSection', () => {
     installApi();
     h.health.mockResolvedValue({ status: 'ok' });
     h.get.mockResolvedValue(state({ options: OPTIONS }));
+    h.routeHealth.mockResolvedValue([]);
+    h.test.mockResolvedValue({ ok: true, tested: [] });
     h.set.mockImplementation(async (patch: { models?: string[] }) => {
       const models = patch.models ?? [];
       return state({
@@ -272,6 +280,7 @@ describe('AuxiliaryModelSection', () => {
     let finishSave!: (next: AuxiliaryModelSettingsState) => void;
     h.set.mockImplementationOnce(() => new Promise<AuxiliaryModelSettingsState>(resolve => { finishSave = resolve; }));
     fireEvent.click(screen.getByRole('button', { name: 'settings.auxiliaryModels.preferred.ariaLabel:select' }));
+    fireEvent.click(screen.getByRole('button', { name: 'settings.auxiliaryModels.save' }));
     await act(async () => publishName('Cindy AI · 心动'));
     expect(panel()).toContain('Cindy AI · 心动');
     await act(async () => finishSave(state({ models: [PREFERRED_PIN], options: OPTIONS })));
@@ -412,12 +421,60 @@ describe('AuxiliaryModelSection', () => {
         name: 'settings.auxiliaryModels.preferred.ariaLabel:select',
       }),
     );
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.auxiliaryModels.save' }));
 
     await waitFor(() =>
       expect(h.set).toHaveBeenLastCalledWith({
         models: [PREFERRED_PIN, 'cat:xd:codex:tencent/hy3', 'cat:xd:codex:qwen/qwen3.8-flash'],
       }),
     );
+  });
+
+  it('keeps the previous chain when a selected model fails its real connection test', async () => {
+    h.set.mockResolvedValueOnce({ ok: false, model: PREFERRED_PIN, reason: 'permission_denied', httpStatus: 403, upstreamMessage: 'An updated provider message.' });
+    render(<AuxiliaryModelSection />);
+
+    await selectMode('settings.auxiliaryModels.customize');
+    fireEvent.click(await screen.findByRole('button', {
+      name: 'settings.auxiliaryModels.preferred.ariaLabel:select',
+    }));
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.auxiliaryModels.save' }));
+
+    expect(await screen.findByText('settings.auxiliaryModels.failedAuto')).toBeTruthy();
+    expect(screen.getByRole('alert').textContent).toContain('HTTP 403 · settings.auxiliaryModels.http.403');
+    expect(screen.getByText('An updated provider message.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'settings.auxiliaryModels.retryAction' }));
+    await screen.findByText('settings.auxiliaryModels.saveSuccess');
+    expect(h.set).toHaveBeenCalledWith({
+      models: [PREFERRED_PIN, 'cat:xd:codex:tencent/hy3', 'cat:xd:codex:qwen/qwen3.8-flash'],
+    });
+  });
+
+  // Unit: submit feedback stays beside Save through an unresolved request, a
+  // backup rejection, a draft edit and a write error. The transport is mocked.
+  it('keeps feedback above the selectors and distinguishes a write failure from a rejected backup', async () => {
+    h.get.mockResolvedValueOnce(state({ models: [PREFERRED_PIN], options: OPTIONS }));
+    const test = Promise.withResolvers<unknown>();
+    h.set.mockReturnValueOnce(test.promise);
+    render(<AuxiliaryModelSection />);
+    const backup = await screen.findByRole('button', { name: 'settings.auxiliaryModels.fallback1.ariaLabel:select-fallback' });
+    fireEvent.click(backup);
+    fireEvent.click(screen.getByRole('button', { name: 'settings.auxiliaryModels.save' }));
+    const pending = await screen.findByText('settings.auxiliaryModels.testingHint');
+    expect(pending.compareDocumentPosition(backup) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await act(async () => test.resolve({ ok: false, model: FALLBACK_PIN, reason: 'http_error', httpStatus: 422, upstreamMessage: 'Provider detail.' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('settings.auxiliaryModels.failedKeep');
+    expect(alert.textContent).toContain('settings.auxiliaryModels.fallback1.label · Claude Haiku 4.5');
+    expect(alert.textContent).toContain('HTTP 422');
+    expect(alert.compareDocumentPosition(backup) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'settings.auxiliaryModels.fallback1.ariaLabel:automatic' }));
+    expect(screen.queryByRole('alert')).toBeNull();
+    fireEvent.click(backup);
+    h.set.mockRejectedValueOnce(new Error('write failed'));
+    fireEvent.click(screen.getByRole('button', { name: 'settings.auxiliaryModels.save' }));
+    expect((await screen.findByRole('alert')).textContent).toBe('settings.auxiliaryModels.saveFailed');
+    expect(h.toastError).not.toHaveBeenCalled();
   });
 
   it('shows all supplier groups while keeping the exact selected catalog pin', async () => {
@@ -527,7 +584,22 @@ describe('AuxiliaryModelSection', () => {
         name: 'settings.auxiliaryModels.preferred.ariaLabel:automatic',
       }),
     );
+    expect(h.set).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'settings.auxiliaryModels.save' }));
     await waitFor(() => expect(h.set).toHaveBeenCalledWith({ models: [] }));
+  });
+
+  // Unit: a failed reset must leave Save bound to the visible draft.
+  it('preserves an edited backup when restoring defaults fails and Save is clicked', async () => {
+    h.get.mockResolvedValueOnce(state({ models: [PREFERRED_PIN], options: OPTIONS }));
+    h.set.mockRejectedValueOnce(new Error('write failed'));
+    render(<AuxiliaryModelSection />);
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.auxiliaryModels.fallback1.ariaLabel:select-fallback' }));
+    fireEvent.click(screen.getByRole('button', { name: 'settings.defaults.restore' }));
+    expect((await screen.findByRole('alert')).textContent).toBe('settings.defaults.restoreFailed');
+    fireEvent.click(screen.getByRole('button', { name: 'settings.auxiliaryModels.save' }));
+    await screen.findByText('settings.auxiliaryModels.saveSuccess');
+    expect(h.set.mock.calls).toEqual([[{ models: [] }], [{ models: [PREFERRED_PIN, FALLBACK_PIN] }]]);
   });
 
   it('persists an empty list when restore is used on a saved custom chain', async () => {
@@ -542,5 +614,26 @@ describe('AuxiliaryModelSection', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'settings.defaults.restore' }));
     await waitFor(() => expect(h.set).toHaveBeenCalledWith({ models: [] }));
+  });
+
+  // Unit: the settings snapshot must retain the provider detail after a successful fallback.
+  it('renders the most recent HTTP error as summary followed by literal message text', async () => {
+    const detail = 'Provider Message.\nTry Later!';
+    h.routeHealth.mockResolvedValueOnce([{ model: 'Small', providerId: 'test', reason: 'http_error',
+      status: 'monitoring', httpStatus: 503, upstreamMessage: detail, failureRate: 1, attemptCount: 1,
+      ownerStamp: { dataOwnerId: null, ownerGeneration: 0 } }]);
+    render(<AuxiliaryModelSection />);
+    const summary = await screen.findByText('HTTP 503 · settings.auxiliaryModels.http.server');
+    expect(summary.nextElementSibling?.textContent).toBe(detail);
+  });
+
+  it('keeps the auxiliary health copy localized in Simplified Chinese', () => {
+    const copy = zhCN.settings.auxiliaryModels;
+    expect(copy.viewSettings).toBe('查看设置');
+    expect(copy.healthRecent).toContain('最近成功率');
+    expect(copy.healthWarning).toContain('最近失败');
+    expect(copy.healthIsolated).toContain('暂时暂停');
+    expect(copy.healthRecovered).toContain('已恢复');
+    expect(copy.healthReasons.http_error).toBe('上游请求错误');
   });
 });

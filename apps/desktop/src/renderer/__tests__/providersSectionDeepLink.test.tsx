@@ -1561,3 +1561,59 @@ it('lists providers that plugins offer beside the ordinary ones and falls back w
     resetPluginEnginesStoreForTests();
   }
 });
+
+// 2026-11-23 user report: a plugin provider shared with four people stayed in the ordinary list and never
+// showed under 「我分享的供应商」, while ordinary providers did. unit/jsdom: real ProvidersSection, the
+// shared ids and engine list come from preload stand-ins. The outgoing-share test above only renders
+// ordinary providers. Minimal failing input: one engine whose providerId is in shared-provider-ids; it
+// is also hidden, so it must not land in the hidden group either, and it returns there when unshared.
+it('lists a shared plugin provider under my shared providers instead of the ordinary or hidden list', async () => {
+  resetProviderShareStoreForTests();
+  providersState.providers = [makeProvider('anthropic', { name: 'Anthropic', connected: true })];
+  const agy = {
+    key: 'agy-plugin:agy', providerId: 'acp-plugin:agy-plugin:agy', ghostId: 'agy-plugin', harnessId: 'agy', name: 'Antigravity',
+    availability: { state: 'available' }, models: [{ id: 'm1', displayName: 'Model One' }], hidden: true,
+    permissionModes: [{ id: 'ask', displayName: 'Ask' }], defaultPermissionMode: 'ask',
+    remoteUse: { supported: true, enabled: true, shareSupported: true },
+  };
+  let sharedIds = [agy.providerId];
+  let changed!: () => void;
+  Object.assign(window.electronAPI, {
+    providerShare: {
+      command: vi.fn(async (cmd: { action: string }) => {
+        if (cmd.action === 'received') return [];
+        if (cmd.action === 'shared-provider-ids') return { ready: true, providerIds: sharedIds };
+        throw new Error(`unexpected ${cmd.action}`);
+      }),
+      onReceivedChanged: () => () => undefined,
+      onOwnedChanged: (listener: () => void) => { changed = listener; return () => undefined; },
+    },
+  });
+  Object.assign((window.electronAPI as unknown as { maker: Record<string, unknown> }).maker, {
+    listPluginEngines: vi.fn(async () => [agy]),
+    onPluginEnginesChanged: vi.fn(() => () => undefined),
+    refreshPluginEngines: vi.fn(async () => undefined),
+    setPluginEnginePrefs: vi.fn(async () => null),
+  });
+  const rowsIn = (scope: HTMLElement | null) => scope
+    ? [...scope.querySelectorAll('[data-testid="plugin-engine-provider-row"]')].map((row) => row.getAttribute('data-plugin-engine'))
+    : [];
+  try {
+    renderAt('?tab=providers');
+    const owned = await screen.findByTestId('provider-share-owned');
+    await waitFor(() => expect(rowsIn(owned)).toEqual(['agy-plugin:agy']));
+    expect(screen.getAllByTestId('plugin-engine-provider-row')).toHaveLength(1);
+    expect(document.querySelector('[data-provider-rail-group="hidden"]')).toBeNull();
+
+    // No one uses the share any more: it goes back to the (collapsed) hidden group like any hidden engine.
+    sharedIds = [];
+    await act(async () => changed());
+    expect(screen.queryByTestId('provider-share-owned')).toBeNull();
+    expect(screen.queryAllByTestId('plugin-engine-provider-row')).toHaveLength(0);
+    expect(document.querySelector('[data-provider-rail-group="hidden"]')?.textContent).toContain('1');
+  } finally {
+    cleanup();
+    resetPluginEnginesStoreForTests();
+    resetProviderShareStoreForTests();
+  }
+});

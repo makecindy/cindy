@@ -140,7 +140,7 @@ import {
   type InteractionRouteLease,
 } from '../../maker-ipc/interactionRouter';
 import { beginGroupHistoryAccess, type GroupHistoryAccessScope } from './groupHistoryAccess';
-import { beginTelegramReplyMediaScope, beginChannelToolScope, type ChannelToolScope } from './channelToolScope';
+import { beginTelegramReplyMediaScope, beginChannelToolScope, readChannelToolScope, type ChannelToolScope } from './channelToolScope';
 import { agentHandoffPending } from '../../maker-ipc/agentHandoffPendingSingleton';
 import { prependHandoffToUserMessage, prependNoteToWireUserMessage } from '../../maker-ipc/agentHandoff';
 import { buildPlanReconcileNote, summarizeOpenPlan } from '../../maker-ipc/planReconcile';
@@ -243,6 +243,8 @@ function resolveTurnFileRoots(
 interface TurnState {
   /** Stable identity used by the central interaction router for this turn. */
   turnId: string;
+  imInputGeneration?: number;
+  questionRespondentId?: string;
   /** Direct Stop cancels this exact turn, independently of session disposal. */
   stopRequested?: boolean;
   userId: string;
@@ -366,7 +368,6 @@ interface QueuedSend {
   turnPermissionPolicy?: TurnPermissionPolicy;
   /** Main-verified owner sender (see ImRunAgentTurnArgs.requesterIsOwner). */
   requesterIsOwner?: boolean;
-  questionRespondentId?: string;
   /** 触发消息来自受保护群 —— 正文与附件不进会话存档(见 ImRunAgentTurnArgs)。 */
   protectedContent?: boolean;
   groupHistoryAccess?: GroupHistoryAccessScope;
@@ -1318,6 +1319,7 @@ export function createTurnRunner(
     });
     const turn: TurnState = {
       turnId: randomUUID(),
+      questionRespondentId: args.questionRespondentId,
       userId,
       scopeKey: target.scopeKey,
       initialMessageText: text,
@@ -1548,7 +1550,6 @@ export function createTurnRunner(
         && args.requesterIsOwner === true && target.botOwned)
         ? { turnPermissionPolicy: args.turnPermissionPolicy } : {}),
       ...(args.requesterIsOwner === true ? { requesterIsOwner: true } : {}),
-      questionRespondentId: args.questionRespondentId,
       ...(args.onEarlyReject ? { onEarlyReject: args.onEarlyReject } : {}),
       ...(args.protectedContent === true ? { protectedContent: true } : {}),
       ...(args.groupHistoryAccess ? { groupHistoryAccess: args.groupHistoryAccess } : {}),
@@ -1569,8 +1570,13 @@ export function createTurnRunner(
       state.makerSession.isTurnRunning()
     ) {
       if (args.queueMode === 'external') {
-        await completeTurnCallbackAfterAck(turn);
-        return { kind: 'busy', reason: 'session_running' };
+        try {
+          const steered = target.botOwned && adapter.steerWhileBusy
+            ? await steerCompanionInput(state, item, target.botOwned.botId) : null;
+          return steered ?? { kind: 'busy', reason: 'session_running' };
+        } finally {
+          await completeTurnCallbackAfterAck(turn);
+        }
       }
       state.sendQueue.push(item);
       log.info(`queued message for session=${row.id.slice(-8)} position=${state.sendQueue.length}`);
@@ -1593,6 +1599,87 @@ export function createTurnRunner(
       acceptedAt: dispatch.acceptedAt,
       terminal: turn.terminalPromise,
     };
+  }
+
+  async function steerCompanionInput(state: SessionState, item: QueuedSend, botId: string): Promise<ImTurnDispatch | null> {
+    const active = state.queue[0];
+    const session = state.makerSession;
+    const incoming = item.channelToolScope;
+    const identity = { sessionId: item.rowId, sessionInstanceId: session.instanceId };
+    const scope = readChannelToolScope(identity);
+    // Desktop, scheduled and other-chat turns never inherit this inbound delivery.
+    if (!active || active.imInputGeneration === undefined || incoming?.channel !== 'imessage'
+      || scope?.channel !== 'imessage' || scope.im !== incoming.im || scope.chatId !== incoming.chatId
+      || scope.botId !== incoming.botId || scope.requesterIsOwner !== incoming.requesterIsOwner
+      || !session.capabilities.sameTurnSteer.supported) return null;
+    const current = () => sessionStates.get(item.rowId) === state && state.makerSession === session
+      && !state.disposalIntent && state.queue[0] === active && !active.done && !active.stopRequested
+      && !active.notificationReply && active.scopeKey === item.turn.scopeKey && active.userId === item.turn.userId
+      && active.imInputGeneration === session.getTurnGeneration() && session.isTurnRunning()
+      && readChannelToolScope(identity) === scope && adapter.steerWhileBusy?.(botId, incoming.chatId) === true;
+    if (!current() || await deps.companion?.prepareSend?.(item.rowId)) return null;
+    try {
+      await session.steer(item.userMessage, {
+        [MAIN_OWNED_SEND_CONTEXT]: {
+          origin: { kind: 'im', channel, taskId: item.turn.userMessageId ?? undefined },
+          rawChannelText: item.text,
+          ...(item.autoReviewReferences ? { autoReviewReferences: item.autoReviewReferences } : {}),
+        },
+        beforeProviderStart: async () => {
+          await item.beforeProviderStart?.();
+          if (!current()) throw new Error('[NO_ACTIVE_TURN]');
+        },
+      });
+    } catch (error) {
+      // Retry only a definite pre-dispatch rejection. An unknown acknowledgement
+      // stays in the transport's durable dispatching state, preventing duplicate work.
+      if (/\[NO_ACTIVE_TURN\]|\bno active (?:\w+ )?turn\b/i.test(String(error))) return null;
+      throw error;
+    }
+    // Existing question cards keep their captured respondent. New questions follow
+    // the accepted input, even while its durable reply anchor is being written.
+    active.questionRespondentId = item.turn.questionRespondentId;
+    delete scope.inputClientId;
+    const persisted = await persistAcceptedInput(item);
+    if (persisted && readChannelToolScope(identity) === scope) scope.inputClientId = persisted.clientId;
+    await commitAcceptedRoute(item);
+    return { kind: 'accepted', sessionId: item.rowId, acceptedAt: Date.now(), terminal: active.terminalPromise };
+  }
+
+  async function commitAcceptedRoute(item: QueuedSend): Promise<void> {
+    try {
+      await item.onRouteResolved?.(item.rowId);
+    } catch (err) {
+      log.warn(`route-resolved callback failed for session=${item.rowId.slice(-8)}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  async function persistAcceptedInput(item: QueuedSend) {
+    const rowId = item.rowId;
+    const prePersisted =
+      item.prePersistedUserMessage?.sessionId === rowId ? item.prePersistedUserMessage : null;
+    // 受保护群的触发消息不进会话存档 —— 正文与附件都不落。turn 照常跑,
+    // agent 拿得到内容; 只是这一轮的输入不留在长期记录里。
+    const persisted = item.protectedContent
+      ? null
+      : await persistUserMessage({
+          sessionId: rowId,
+          text: item.text,
+          attachments: item.attachments,
+          source: createLocalImSource(
+            adapter.messageSourceIm?.() ?? channel,
+            item.text,
+            item.contextSnapshot,
+            item.messageOrigin,
+          ),
+          existingClientId: prePersisted?.clientId,
+        });
+    await adapter.onUserMessagePersisted?.({
+      sessionId: rowId,
+      userMessageId: item.turn.userMessageId,
+      persisted: persisted !== null,
+    });
+    return persisted;
   }
 
   /**
@@ -1964,6 +2051,9 @@ export function createTurnRunner(
               scope: item.groupHistoryAccess,
             });
           }
+          if (item.channelToolScope?.channel === 'imessage' && adapter.steerWhileBusy) {
+            item.turn.imInputGeneration = state.makerSession.getTurnGeneration();
+          }
           if (item.channelToolScope) {
             // A retried dispatch must not reuse an earlier input receipt.
             delete item.channelToolScope.inputClientId;
@@ -1973,11 +2063,13 @@ export function createTurnRunner(
               scope: item.channelToolScope,
             });
           }
-          const questionPresentation = item.questionRespondentId ? {
+          const questionPresentation = item.turn.questionRespondentId ? {
             questionTimeoutMs: IM_QUESTION_TIMEOUT_MS,
             presentQuestion: async (question: Extract<InteractionRequest, { kind: 'ask_user_question' }>, controls: import('../../maker-ipc/interactionRouter').QuestionControls) => {
+              const respondent = item.turn.questionRespondentId;
+              if (!respondent) throw new Error('IM_QUESTION_RESPONDENT_MISSING');
               if (question.delivery !== 'async') await finalizeActiveStream(rowId);
-              await presentImQuestion({ output, lane: userId, respondent: item.questionRespondentId!,
+              await presentImQuestion({ output, lane: userId, respondent,
                 scope: noticeScope, request: question, controls,
                 current: () => sessionStates.get(rowId)?.makerSession === noticeSession,
                 warn: () => log.warn('IM question update failed'),
@@ -2064,29 +2156,7 @@ export function createTurnRunner(
           // 已经提前落过库(群上下文拼装前, 见 persistInboundUserMessageEarly)就
           // 复用那条记录, 不再写第二条。sessionId 必须相符 —— 拼装期间路由若换到
           // 别的 session(/new 重置等), 那份预落库不属于本轮, 照常自己落一条。
-          const prePersisted =
-            item.prePersistedUserMessage?.sessionId === rowId ? item.prePersistedUserMessage : null;
-          // 受保护群的触发消息不进会话存档 —— 正文与附件都不落。turn 照常跑,
-          // agent 拿得到内容; 只是这一轮的输入不留在长期记录里。
-          const persisted = item.protectedContent
-            ? null
-            : await persistUserMessage({
-                sessionId: rowId,
-                text: item.text,
-                attachments: item.attachments,
-                source: createLocalImSource(
-                  adapter.messageSourceIm?.() ?? channel,
-                  item.text,
-                  item.contextSnapshot,
-                  item.messageOrigin,
-                ),
-                existingClientId: prePersisted?.clientId,
-              });
-          await adapter.onUserMessagePersisted?.({
-            sessionId: rowId,
-            userMessageId: item.turn.userMessageId,
-            persisted: persisted !== null,
-          });
+          const persisted = await persistAcceptedInput(item);
           if (persisted) {
             item.prePersistedUserMessage = { sessionId: rowId, clientId: persisted.clientId };
             if (item.channelToolScope) item.channelToolScope.inputClientId = persisted.clientId;
@@ -2116,15 +2186,7 @@ export function createTurnRunner(
       // Route side effects include the durable group cursor commit. The
       // provider has accepted this send now; invoking the callback here keeps
       // queued teardown and SESSION_RUNNING requeue paths from advancing it.
-      try {
-        await item.onRouteResolved?.(rowId);
-      } catch (err) {
-        log.warn(
-          `route-resolved callback failed for session=${rowId.slice(-8)}: ${
-            err instanceof Error ? err.message : String(err)
-          }`,
-        );
-      }
+      await commitAcceptedRoute(item);
       return { kind: 'accepted', acceptedAt: acceptedAt || Date.now() };
     } catch (err) {
       if (turnChangeSetStarted) clearPendingTurnChangeSets(rowId);

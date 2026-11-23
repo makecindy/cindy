@@ -651,6 +651,7 @@ pub extern "C" fn conn_stats(id: u32) -> i32 {
             security.connection_ids_retired,
             security.connection_id_packets,
             security.connection_id_retransmissions,
+            stats.acknowledged_bytes,
         ];
         write_f64s(io, &values)
     })

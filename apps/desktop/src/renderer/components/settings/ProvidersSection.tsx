@@ -3663,16 +3663,21 @@ export function ProvidersSection() {
   const activeRemoteProviders = ordinaryRemoteProviders.filter(entry => !entry.provider.suspended && !remoteHidden(entry));
   const hiddenRemoteProviders = ordinaryRemoteProviders.filter(remoteHidden);
   const suspendedRemoteProviders = ordinaryRemoteProviders.filter(entry => entry.provider.suspended);
-  const activeEngines = pluginEngines.filter(engine => pluginEngineRailGroup(engine) === 'active');
-  const hiddenEngines = pluginEngines.filter(engine => pluginEngineRailGroup(engine) === 'hidden');
-  const suspendedEngines = pluginEngines.filter(engine => pluginEngineRailGroup(engine) === 'suspended');
+  // 插件供应商的分享与本机供应商同一口径：已有人加入的放进「我分享的供应商」，不再留在常规列表或隐藏／停用分组。
+  const sharedEngines = pluginEngines.filter(engine => ownedShares.get(null)?.has(engine.providerId));
+  const ordinaryEngines = pluginEngines.filter(engine => !ownedShares.get(null)?.has(engine.providerId));
+  const activeEngines = ordinaryEngines.filter(engine => pluginEngineRailGroup(engine) === 'active');
+  const hiddenEngines = ordinaryEngines.filter(engine => pluginEngineRailGroup(engine) === 'hidden');
+  const suspendedEngines = ordinaryEngines.filter(engine => pluginEngineRailGroup(engine) === 'suspended');
   const [railGroupOpen, setRailGroupOpen] = useState<{ hidden: boolean; suspended: boolean }>(
     { hidden: false, suspended: false },
   );
   // 选中的供应商落进某个分组时(刚把它隐藏 / 停用,或从深链、搜索进来)把那一组打开一次;
   // 之后用户可以再收起,不反复弹开。
   const selectedLocalId = !otherDeviceSelected && !cindySigninActive ? effectiveSelected?.id ?? null : null;
-  const selectedEngineRailGroup = selectedEngine ? pluginEngineRailGroup(selectedEngine) : null;
+  const selectedEngineRailGroup = selectedEngine && !sharedEngines.some(engine => engine.key === selectedEngine.key)
+    ? pluginEngineRailGroup(selectedEngine)
+    : null;
   const selectedRailGroup: 'hidden' | 'suspended' | null =
     selectedEngineRailGroup === 'hidden' ||
     hiddenLocalProviders.some(provider => provider.id === selectedLocalId) ||
@@ -3845,7 +3850,7 @@ export function ProvidersSection() {
                   selectEngine(key);
                 }}
               />
-              {(sharedLocalProviders.length > 0 || sharedRemoteProviders.length > 0) && (
+              {(sharedLocalProviders.length > 0 || sharedEngines.length > 0 || sharedRemoteProviders.length > 0) && (
                 <div
                   data-testid="provider-share-owned"
                   role="group"
@@ -3856,6 +3861,7 @@ export function ProvidersSection() {
                     {t('providerShare.owned.title')}
                   </span>
                   {renderLocalProviderList(sharedLocalProviders)}
+                  {renderEngineRows(sharedEngines)}
                   {renderRemoteProviderRows(sharedRemoteProviders)}
                 </div>
               )}
@@ -4312,6 +4318,7 @@ export function ProvidersSection() {
             setWizard(null);
             if (reason !== 'connection-failed') toast.error(t('settings.providers.custom.nameSearchUnavailable'));
           } : undefined}
+          showOfficialModelPlugins
           onOpenCustomForm={() => {
             setWizard(null);
             setDialog({ mode: 'create' });

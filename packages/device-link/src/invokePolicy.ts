@@ -34,6 +34,7 @@ const BACKGROUND_INVOKE_CHANNELS = new Set([
   'maker:get-plugin-engine-usage',
   'maker:list-available-agents',
   'maker:agent:status',
+  'maker:model-context-limit:get',
   'git-context:pr-refs:list',
   'git-context:pr-status',
   'git-context:mr-status',

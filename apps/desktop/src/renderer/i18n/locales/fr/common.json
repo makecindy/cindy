@@ -4192,6 +4192,7 @@
         "refreshReconnect": "La liste des modèles n’a pas pu être actualisée. Reconnectez ce fournisseur, puis réessayez.",
         "refreshFetchDisabled": "La récupération du catalogue de modèles distant est désactivée : actualisation ignorée",
         "withdrawn": {
+          "rowStatus": "Absent lors de la dernière actualisation",
           "refreshFound": "Modèles qui ne sont plus proposés : {{count}}",
           "refreshAdded": "Nouveaux modèles : {{added}}. Plus proposés : {{count}}",
           "refreshSuspicious": "Modèles non renvoyés cette fois : {{count}}. La liste est peut-être incomplète",
@@ -4539,6 +4540,16 @@
         "groupLocal": "Modèles locaux",
         "metaLocalRecommended": "Recommandé · téléchargement dans Cindy",
         "metaLocalConnect": "Connecter un serveur local en cours d'exécution",
+        "configurePlugin": "Configurer",
+        "installAndConfigure": "Installer et configurer",
+        "pluginLoading": "Chargement de l’extension…",
+        "engineState": {
+          "available": "Prêt",
+          "unavailable": "Indisponible",
+          "unknown": "En attente de l’état du moteur"
+        },
+        "retryPlugin": "Réessayer",
+        "officialModelPlugins": "Plugins de modèles officiels",
         "moreLocal": "Autres serveurs locaux"
       },
       "local": {
@@ -4863,7 +4874,70 @@
         "hint": "Envoie un message privé via le bot Feishu ou Lark associé ; uniquement lorsque la fenêtre n'est pas au premier plan.",
         "disabledHint": "Configurez d'abord le bot et envoyez-lui un message privé une fois pour finaliser la liaison."
       },
-      "bind": "Lier"
+      "bind": "Lier",
+      "groups": {
+        "title": "Conversations de groupe",
+        "description": "Attribuez à un groupe où se trouve le bot son propre projet, modèle et autorisations.",
+        "rules": "Ce que vous ne définissez pas : un groupe lié à un projet suit ce projet dans Projets et modèles ; un groupe sans projet suit la Configuration des nouvelles conversations et le Mode d’autorisation des nouvelles tâches de groupe ci-dessus. La conversation principale d’un groupe et ses sujets partagent un même réglage.",
+        "expand": "Développer",
+        "collapse": "Réduire",
+        "groupCount_one": "{{count}} groupe",
+        "groupCount_other": "{{count}} groupes",
+        "groupCount_many": "{{count}} groupes",
+        "customCount_one": "{{count}} avec ses propres réglages",
+        "customCount_other": "{{count}} avec leurs propres réglages",
+        "customCount_many": "{{count}} avec leurs propres réglages",
+        "refresh": "Actualiser",
+        "loading": "Chargement des groupes…",
+        "loadFailed": "Impossible de charger les groupes. Réessayez dans un instant avec Actualiser.",
+        "saveFailed": "Impossible d’enregistrer les réglages du groupe",
+        "notConnected": "Les groupes s’affichent une fois le bot connecté. Seuls les groupes ayant leurs propres réglages sont listés ci-dessous.",
+        "empty": "Le bot n’est encore dans aucun groupe. Ajoutez-le à un groupe, puis revenez ici.",
+        "listPermission": "Impossible de lire les groupes du bot. Sur Feishu Open Platform, accordez à cette application l’autorisation de lire les informations des groupes. Les groupes où le bot a déjà servi sont listés ci-dessous.",
+        "listUnavailable": "Impossible de lire les groupes du bot pour le moment. Les groupes où le bot a déjà servi sont listés ci-dessous.",
+        "unnamed": "Groupe sans nom ({{id}})",
+        "summaryModel": "Modèle propre",
+        "summaryPermission": "Autorisations propres",
+        "expandAria": "Réglages de {{name}}",
+        "searchLabel": "Rechercher des groupes",
+        "searchPlaceholder": "Rechercher par nom de groupe",
+        "customHeading": "Réglages propres",
+        "followHeading": "Suivent les réglages du canal",
+        "showMore": "Afficher {{count}} de plus",
+        "showLess": "Afficher moins",
+        "noMatch": "Aucun groupe ne correspond à « {{query}} »",
+        "project": {
+          "label": "Projet",
+          "follow": "Conversation",
+          "missing": "{{name}} (retiré de la barre latérale)",
+          "hint": "S’applique quand le bot est mentionné pour la première fois dans le groupe, qu’un sujet commence ou que quelqu’un envoie /new. Les tâches en cours ne sont pas déplacées. Avec un projet, le modèle et les autorisations suivent ce projet dans Projets et modèles ; avec Conversation, les tâches restent dans le dossier de conversations du bot et suivent la Configuration des nouvelles conversations ci-dessus. Seuls les projets de la barre latérale de cet ordinateur peuvent être choisis."
+        },
+        "model": {
+          "label": "Modèle et effort de raisonnement",
+          "hintFollow": "Suit la Configuration des nouvelles conversations. Changer ici le modèle ou l’effort de raisonnement ne concerne que ce groupe.",
+          "hintFollowProject": "Suit le projet « {{project}} » dans Projets et modèles. Changer ici le modèle ou l’effort de raisonnement ne concerne que ce groupe.",
+          "hintProjectUnavailable": "Le modèle défini pour « {{project}} » dans Projets et modèles n’est pas disponible pour le moment. Choisissez-en un autre là-bas, ou un pour ce groupe ici.",
+          "hintFixed": "Ce groupe a son propre modèle. Les tâches de ce groupe dont le modèle n’a pas été modifié basculent à leur prochain message ; les nouvelles tâches utilisent ce modèle."
+        },
+        "permission": {
+          "label": "Autorisations",
+          "hintFollow": "Suit le Mode d’autorisation des nouvelles tâches de groupe. Ne concerne que les tâches créées dans ce groupe à partir de maintenant ; changez une tâche existante avec /permission dans le groupe.",
+          "hintFollowProject": "Suit les autorisations de « {{project}} » dans Projets et modèles. Ne concerne que les tâches créées dans ce groupe à partir de maintenant ; changez une tâche existante avec /permission dans le groupe.",
+          "hintFixed": "Ce groupe a son propre mode d’autorisation. Ne concerne que les tâches créées dans ce groupe à partir de maintenant ; changez une tâche existante avec /permission dans le groupe."
+        },
+        "fullAccessConfirm": {
+          "title": "Utiliser l’accès complet dans {{name}} ?",
+          "description": "Les nouvelles tâches de ce groupe s’exécuteront sans confirmation à chaque étape, quel que soit l’auteur de la mention du bot. Les messages du groupe sont contrôlés par ses membres : ne le faites que si vous faites confiance à tous.",
+          "confirm": "Utiliser l’accès complet",
+          "cancel": "Annuler"
+        },
+        "widerConfirm": {
+          "title": "Élargir les autorisations de {{name}} ?",
+          "description": "Les nouvelles tâches de ce groupe passeront de « {{current}} » à « {{next}} », quel que soit l’auteur de la mention du bot. Les messages du groupe sont contrôlés par ses membres : ne le faites que si vous faites confiance à tous.",
+          "confirm": "Modifier quand même",
+          "cancel": "Annuler"
+        }
+      }
     },
     "wechatBot": {
       "title": "WeChat personnel",
@@ -5480,6 +5554,69 @@
         "offline": "{{device}} est hors ligne.",
         "revoked": "L’accès aux modèles sur {{device}} a été révoqué.",
         "unavailable": "Les modèles auxiliaires de {{device}} sont actuellement indisponibles."
+      },
+      "testFailed": "Échec du test de connexion pour {{model}}",
+      "save": "Enregistrer les modèles auxiliaires",
+      "saving": "Enregistrement et test…",
+      "saveSuccess": "Test de connexion réussi, modèles auxiliaires activés",
+      "retrySave": "Échec du test de connexion. Corrigez la connexion et réessayez.",
+      "notice": {
+        "auto-title": "Impossible de donner automatiquement un titre à la conversation",
+        "title": "Impossible de générer un titre pour la conversation",
+        "task-summary": "Impossible de résumer la tâche",
+        "prompt-prediction": "Impossible de suggérer la suite du message",
+        "working-status": "Impossible de décrire la progression",
+        "tool-loop-review": "Impossible de vérifier si les outils répètent leurs actions",
+        "unavailable": "Une fonction auxiliaire n’a pas abouti",
+        "dismiss": "Fermer l’avis",
+        "unavailableBody": "Le modèle auxiliaire est temporairement indisponible.",
+        "recovered": "Modèle auxiliaire rétabli",
+        "recoveredBody": "La dernière requête auxiliaire a abouti.",
+        "details": "Détails",
+        "settings": "Réglages du modèle auxiliaire"
+      },
+      "viewSettings": "Voir les réglages",
+      "healthRecent": "{{model}} a un taux de réussite récent de {{rate}} % · état : {{status}}.",
+      "lastError": "Dernière erreur",
+      "healthPaused": "en pause",
+      "healthMonitoring": "surveillé",
+      "healthWarning": "{{model}} a échoué {{count}} fois récemment ({{reason}}).",
+      "healthIsolated": "{{model}} est temporairement en pause ({{reason}}). {{switched}}",
+      "healthSwitched": "Un modèle de secours est utilisé.",
+      "healthNoSwitch": "Aucun modèle de secours n’a traité cette demande.",
+      "healthRecovered": "Le modèle auxiliaire {{model}} est de nouveau disponible.",
+      "cannotEnable": "Impossible d’activer ce modèle",
+      "failedKeep": "Échec de l’enregistrement. La configuration précédente reste active.",
+      "failedAuto": "Échec de l’enregistrement. La sélection automatique reste active.",
+      "failedSlot": "{{slot}} · Échec du test de {{model}}",
+      "testingHint": "Test des modèles sélectionnés, dans l’ordre. Les modifications seront appliquées une fois tous les tests réussis.",
+      "draft": "Modifications non enregistrées",
+      "restored": "Sélection automatique rétablie",
+      "restoring": "Rétablissement de la sélection automatique…",
+      "retryAction": "Réessayer l’enregistrement",
+      "attempts": "{{failed}} échecs sur les {{total}} dernières tentatives.",
+      "http": {
+        "401": "Échec de l’authentification",
+        "403": "Accès refusé",
+        "404": "Ressource demandée introuvable",
+        "429": "Requête limitée",
+        "server": "Erreur du service fournisseur",
+        "other": "Échec de la requête"
+      },
+      "healthReasons": {
+        "http_error": "erreur de requête amont",
+        "timeout": "Délai dépassé",
+        "request_failed": "échec de la requête",
+        "empty_response": "réponse vide",
+        "model_unavailable": "Modèle indisponible",
+        "not_authenticated": "Authentification requise",
+        "auth_probe_failed": "échec de la vérification d’authentification",
+        "api_key_missing": "clé API manquante",
+        "endpoint_missing": "point de terminaison manquant",
+        "unsupported_transport": "protocole non pris en charge",
+        "agent_unavailable": "Agent indisponible",
+        "permission_denied": "Accès refusé (403). Vérifiez les droits du compte pour ce modèle.",
+        "quota": "Vérifiez le solde et le quota auprès du fournisseur."
       },
       "chain": {
         "cindyHy3": "Hy3",
@@ -6622,7 +6759,7 @@
           "defaultWorkspaceChip": "Par défaut : {{name}}",
           "defaultWorkspaceAria": "Choisir le projet par défaut des tâches transmises",
           "defaultWorkspaceRadioAria": "Définir « {{name}} » comme projet par défaut",
-          "defaultWorkspaceRowHint": "Le projet sélectionné est le projet par défaut : les conversations Telegram, Feishu / Lark et X qui n'ont pas choisi de projet y exécutent leurs tâches.",
+          "defaultWorkspaceRowHint": "Le projet sélectionné est le projet par défaut : les conversations Telegram, Feishu / Lark, X et Discord qui n'ont pas choisi de projet y exécutent leurs tâches.",
           "defaultProjectTag": "Par défaut",
           "defaultProjectFullAccessWarning": "Le projet par défaut « {{name}} » est en Accès complet : une @mention depuis n'importe quel groupe s'y exécute avec un accès complet.",
           "sharedSettingsPointer": "Les projets, modèles et autorisations sont partagés par tous les bots officiels.",
@@ -6867,6 +7004,40 @@
           "workingDeviceThisComputer": "Cet ordinateur",
           "workingDeviceUnknown": "Ordinateur de travail pas encore synchronisé",
           "workingDeviceUnnamed": "Ordinateur sans nom"
+        },
+        "discord": {
+          "description": "Associez votre compte Discord et transmettez des tâches à Cindy via le bot officiel, en message privé ou sur un serveur.",
+          "disabledHint": "Activez l'interrupteur pour obtenir un code d'association, puis envoyez-le au bot Cindy dans Discord.",
+          "toggleAria": "Activer/désactiver la connexion Discord",
+          "connect": "Associer Discord",
+          "openApp": "Ajouter Cindy à Discord",
+          "cancel": "Annuler l'association",
+          "retry": "Réessayer l'association",
+          "openBot": "Ouvrir le bot",
+          "addToGroup": "Ajouter à un serveur",
+          "unlink": "Dissocier Discord",
+          "unlinkConfirmTitle": "Dissocier Discord ?",
+          "unlinkConfirmDescription": "Discord ne transmettra plus de messages à cet appareil. Vos projets locaux et les autres canaux ne sont pas affectés.",
+          "status": {
+            "checking": "Vérification de la prise en charge par le serveur…",
+            "unavailable": "Indisponible sur ce serveur",
+            "disabled": "Désactivé",
+            "none": "Non associé",
+            "pending": "Envoyez le code au bot Cindy",
+            "awaiting_confirmation": "Confirmez l'association dans Discord",
+            "confirmed": "Associé en tant que {{user}}",
+            "denied": "Association refusée",
+            "expired": "Code d'association expiré",
+            "failed": "Échec de l'association",
+            "revoked": "Association supprimée",
+            "superseded": "Associé à un autre appareil"
+          },
+          "bindCode": {
+            "label": "Code d'association",
+            "copy": "Copier le code",
+            "copied": "Code d'association copié",
+            "hint": "Envoyez ce code au bot Cindy en message privé dans Discord, ou exécutez /bind avec ce code. Cindy n'est pas encore ajouté ? Ajoutez-le d'abord à Discord."
+          }
         }
       },
       "summary": {
@@ -7099,6 +7270,7 @@
         "providerTelegram": "Telegram",
         "providerX": "X",
         "providerFeishu": "Feishu / Lark",
+        "providerDiscord": "Discord",
         "requireConnected": "Modifiable une fois {{provider}} connecté (activez son interrupteur ci-dessus et attendez la connexion).",
         "offlineLocal": "{{provider}} est hors ligne. Les modifications sont enregistrées sur cet ordinateur et seront synchronisées avec la fiche du modèle dans la conversation à la reconnexion.",
         "requireBinding": "Terminez d'abord l'association du compte {{provider}}.",
@@ -7126,7 +7298,7 @@
       "connectionIssue": {
         "device-removed": "Cet appareil a été retiré de votre compte. Déconnectez-vous puis reconnectez-vous sur cet appareil.",
         "auth-failed": "Connexion expirée : veuillez vous reconnecter",
-        "replaced": "Connexion remplacée par une autre instance de cet appareil",
+        "replaced": "Connexion reprise par une autre instance de Cindy, sur cet ordinateur ou sur un autre ordinateur reconnu comme celui-ci",
         "too-many-connections": "Limite de connexions atteinte pour ce compte",
         "version-mismatch": "Version de protocole incompatible : veuillez mettre à jour l'application",
         "unstable": "La connexion se coupe et se rétablit sans cesse : vérifiez le réseau, ou redémarrez Cindy si le problème persiste",
@@ -7185,6 +7357,22 @@
       },
       "control": "Contrôler",
       "standbyHint": "Une autre instance de Cindy sur cet ordinateur utilise la connexion à distance. Fermez-la et cette instance prendra automatiquement le relais.",
+      "identityConflict": {
+        "notice": "Cet ordinateur et « {{name}} » sont reconnus comme le même ordinateur : ils s’évincent mutuellement de la connexion à distance et peuvent être déconnectés. Donner une nouvelle identité à l’un des deux règle le problème.",
+        "replace": "Donner une nouvelle identité à cet ordinateur",
+        "blockedSelfHostedRelay": "Cet ordinateur utilise votre propre relais : son identité ne peut pas être changée pour l’instant. Revenez au relais Cindy, puis changez-la ici.",
+        "confirmTitle": "Donner une nouvelle identité à cet ordinateur ?",
+        "confirmRestart": "Cindy redémarre immédiatement et les tâches en cours sont interrompues.",
+        "confirmNewDevice": "Après le redémarrage, reconnectez-vous une fois. Cet ordinateur apparaît alors comme un nouvel ordinateur dans la liste des appareils.",
+        "confirmKeptByOther": "Les réglages enregistrés sous l’ancienne identité, comme le nom de l’appareil, l’ordinateur principal de vos amis et les fournisseurs partagés, restent sur « {{name}} ». Reconfigurez-les sur cet ordinateur.",
+        "confirmOtherUnaffected": "« {{name}} » reste inchangé. Rien à faire sur cet ordinateur-là.",
+        "confirmAction": "Changer d’identité et redémarrer Cindy",
+        "failed": "Impossible de donner une nouvelle identité à cet ordinateur",
+        "toastTitle": "Cet ordinateur et « {{name}} » sont reconnus comme le même ordinateur",
+        "toastBody": "Ils s’évincent mutuellement de la connexion à distance et peuvent être déconnectés. Donner une nouvelle identité à l’un des deux règle le problème.",
+        "toastAction": "Ouvrir la liaison d’appareils",
+        "toastDismiss": "Plus tard"
+      },
       "apps": {
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
@@ -8532,6 +8720,8 @@
         "badgeDetail": "Lorsqu'il a du nouveau, il peut afficher un point vert sur l'entrée Plugins de la navigation de gauche et sur sa propre carte, avec un résumé d'une ligne. Ouvrir son panneau efface le point. Le point n'émet aucun son, ne vibre pas, n'atteint jamais le centre de notifications du système, et constitue une autorisation distincte des bannières système.",
         "confirm": "Peut vous demander une confirmation dans une boîte de dialogue",
         "confirmDetail": "Avant d'agir, il peut ouvrir une boîte de dialogue semblable à celles de Cindy pour vous demander votre accord. La question provient du plugin et la boîte de dialogue porte son nom ; vous seul pouvez cliquer sur confirmer ou annuler (le plugin ne le peut pas). Une seule boîte de dialogue à la fois, et les demandes trop fréquentes sont bloquées.",
+        "form": "Peut vous demander de remplir un formulaire",
+        "formDetail": "Il peut ouvrir un formulaire semblable à ceux de Cindy pour vous demander des informations. Le formulaire affiche le nom du plugin ; ce que vous saisissez ne lui est transmis que lorsque vous cliquez sur Enregistrer, et rien n'est transmis si vous annulez. Il ne s'ouvre que lorsque vous utilisez Cindy, un seul formulaire à la fois, et les demandes trop fréquentes sont bloquées.",
         "fsWrite": "Peut gérer ses fichiers privés",
         "fsWriteDetail": "Peut lire, écrire, lister et supprimer ses propres données privées. Pendant un appel Agent actif, il peut aussi lire, lister et surveiller le répertoire de travail de la tâche. Écritures et suppressions suivent les autorisations de la tâche ; autoriser une écriture n'autorise pas la suppression. La surveillance s'arrête à la fin de l'appel. Toutes les opérations sont exécutées par l'hôte.",
         "deviceSync": "Synchroniser les données du plugin entre vos ordinateurs",
@@ -8834,6 +9024,8 @@
         "slotNetwork": "Accès réseau",
         "slotNotify": "Bannières système",
         "slotBadge": "Badge de non-lu",
+        "slotConfirm": "Boîtes de dialogue de confirmation",
+        "slotForm": "Formulaires",
         "slotFs": "Écriture de fichiers",
         "slotLibrary": "Bibliothèque persistante",
         "slotSkill": "Skills de l'Agent",
@@ -8953,6 +9145,17 @@
       "saveAs": {
         "dialogTitle": "Plugin « {{name}} » · Enregistrer sous",
         "dialogMessage": "Le plugin « {{name}} » vous demande d'enregistrer une copie"
+      },
+      "form": {
+        "save": "Enregistrer",
+        "cancel": "Annuler",
+        "addItem": "Ajouter",
+        "removeItem": "Supprimer",
+        "removeNamed": "Supprimer {{name}}",
+        "required": "Ce champ est obligatoire",
+        "incomplete": "Des champs obligatoires sont vides",
+        "itemTitle": "{{label}} {{index}}",
+        "srDescription": "Le plugin « {{name}} » vous demande de remplir ce formulaire"
       },
       "confirm": {
         "dialogTitle": "Le plugin « {{name}} » a besoin de votre confirmation"
@@ -12879,16 +13082,22 @@
     "listSeparator": ", ",
     "crossAgentConvert": {
       "asking": {
-        "title": "Configuration d'espace de travail convertible détectée",
-        "description": "Cet espace de travail contient une configuration au niveau du projet pour {{sourceAgent}}. Générer une configuration équivalente pour {{targetAgent}} ? Les modifications sont écrites uniquement dans cet espace de travail.",
-        "primary": "Convertir",
-        "cancel": "Non merci"
+        "title": "Utiliser aussi ces réglages avec {{targetAgent}} ?",
+        "description": "Ce projet contient déjà les réglages suivants pour {{sourceAgent}}. Vous pouvez en enregistrer une copie dans le projet pour {{targetAgent}} ou démarrer la tâche sans les ajouter.",
+        "primary": "Ajouter à {{targetAgent}}",
+        "cancel": "Démarrer la tâche"
       },
       "running": {
-        "title": "Conversion de la configuration…",
-        "description": "Écriture de la configuration de l'espace de travail pour {{targetAgent}}. Veuillez ne pas fermer la fenêtre.",
-        "primary": "Convertir",
-        "cancel": "Non merci"
+        "title": "Ajout des réglages du projet…",
+        "description": "Enregistrement des réglages de {{targetAgent}} dans ce projet.",
+        "primary": "Ajout en cours…",
+        "cancel": "Démarrer la tâche"
+      },
+      "items": {
+        "agents-md": "Consignes et conventions du projet",
+        "agents": "Rôles d’assistant personnalisés",
+        "hooks": "Actions automatiques, comme l’exécution d’un script du projet",
+        "mcp": "Connexions à des outils externes"
       }
     },
     "confirmDialog": {
@@ -22584,6 +22793,18 @@
       "cheapest": {
         "title": "Le moins cher",
         "hint": "Utilise d'abord les abonnements qui ont encore du quota, sans coût supplémentaire ; le reste suit du prix affiché le plus bas au plus élevé, et les sources sans prix passent en dernier."
+      },
+      "drain": {
+        "title": "Épuiser puis passer",
+        "hint": "Continue d’utiliser la dernière source jusqu’à épuisement de son quota ou indisponibilité, puis passe à la suivante ; ne revient pas en arrière quand les précédentes se rétablissent."
+      },
+      "headroom": {
+        "title": "Le plus de quota restant",
+        "hint": "Utilise d’abord la source qui a la plus grande part de quota restant (le quota hebdomadaire s’il existe) ; les sources sans quota lisible passent en dernier."
+      },
+      "weighted": {
+        "title": "Par poids",
+        "hint": "Répartit les nouvelles tâches entre les sources selon leur poids, en alternance ; les sources indisponibles ne participent pas cette fois."
       }
     },
     "picker": {
@@ -22611,6 +22832,11 @@
       "tight": "Son quota de 5 heures est presque plein : ignorée pour l'instant",
       "cheapest": "Prix affiché le plus bas",
       "cheapestFree": "Il reste du quota d'abonnement, sans coût supplémentaire",
+      "drain": "Toujours utilisée jusqu’à épuisement de son quota",
+      "drainNext": "La source précédente était épuisée ou indisponible, d’où le passage à celle-ci",
+      "headroom": "Le plus de quota restant",
+      "headroomQuota": "Il lui reste {{left}} % de quota, plus que toute autre source",
+      "weighted": "Son tour selon le poids",
       "noVision": "Le message contient des images et cette source ne peut pas les voir",
       "exceptionImage": "Le message contient des images : seules les sources capables de les voir ont été prises en compte",
       "exceptionImageFallback": "Le message contient des images, mais aucune source ne peut les voir : choix habituel",
@@ -22630,6 +22856,9 @@
       "effort": "Effort de raisonnement",
       "effortUnset": "Non défini",
       "effortHint": "Si le modèle choisi ne prend pas en charge ce niveau, il s'exécute avec sa valeur par défaut.",
+      "weight": "Poids",
+      "weightAria": "Poids de « {{name}} »",
+      "weightHint": "Avec « Par poids », un poids plus élevé reçoit plus de nouvelles tâches. 1–1000.",
       "sources": "Sources utilisables",
       "sourcesHint": "Des modèles différents peuvent cohabiter. La tâche indique lequel a été utilisé.",
       "sourcesEmpty": "Aucune source pour l'instant. Ajoutez ci-dessous un modèle connecté.",
@@ -22662,6 +22891,7 @@
         "empty": "Aucune exception pour l'instant. Chaque nouvelle tâche suit la règle de choix ci-dessus.",
         "imageRule": "Quand le message contient des images, n'utiliser que les sources capables de les voir",
         "hoursRule": "{{from}}–{{to}} : utiliser « {{name}} »",
+        "hoursRuleDays": "{{days}} {{from}}–{{to}} : utiliser « {{name}} »",
         "remove": "Supprimer cette exception",
         "add": "Ajouter une exception",
         "choose": "Choisir une situation",
@@ -22670,6 +22900,9 @@
         "from": "De",
         "to": "À",
         "useRoute": "Utiliser à la place",
+        "days": "Jours",
+        "daysHint": "Aucun jour sélectionné signifie tous les jours. Une plage qui passe minuit compte pour le jour où elle commence.",
+        "dayRange": "{{from}}–{{to}}",
         "addHours": "Ajouter",
         "sameHour": "Le début et la fin ne peuvent pas être identiques.",
         "full": "Jusqu'à {{count}} exceptions.",

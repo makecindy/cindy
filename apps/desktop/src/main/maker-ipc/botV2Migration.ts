@@ -11,6 +11,7 @@
  * A receipt is written only after all steps succeed; a failure retries on the next start.
  * A teammate upgraded before its project memory lived inside the project gets that one move here.
  * Copies whose main computer is another one are skipped: that computer upgrades them.
+ * Each start also removes single-run V1 routine tasks that never reached the model and stayed empty.
  */
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
@@ -23,7 +24,7 @@ import { readBotProjectMode } from '../../shared/botProjectMode.js';
 import { companionHomes } from '../companion-cloud/homes.js';
 import { t } from '../i18n.desktop.js';
 import { getDbClient } from '../localDb/client/current.js';
-import { readBotSettingsProfile, setNewTeammateSetup, updateBotProfile } from '../localDb/ipc/bots.js';
+import { broadcastBotTaskListChanged, readBotSettingsProfile, setNewTeammateSetup, updateBotProfile } from '../localDb/ipc/bots.js';
 import { botProfiles } from '../localDb/schema.js';
 import { normalizeRecentWorkdirPath } from '../localDb/ipc/recentWorkdirsCore.js';
 import { createLogger } from '../logger.js';
@@ -33,7 +34,7 @@ import { botProfileDir, ensureBotWorkspaceDir } from './botProfileFolder.js';
 import { ensureBotProjectAutomations, ensureTeammateTemplate, ensureWorkspaceRepository, moveTeammateMemoryIntoProject, nameBotProject, prepareBotProjectWorkspace } from './botProjectMode.js';
 import { TEAMMATE_V2_RECEIPT_FILE, teammateWorkspaceDir } from './botProjectMemory.js';
 import { writeRoutineAutomations } from './botRoutineAutomations.js';
-import { readV1RoutineSlice, removeV1Routine } from './botV1Routines.js';
+import { readV1NeverDispatchedSessionIds, readV1RoutineSlice, removeV1Routine } from './botV1Routines.js';
 import {
   BOT_V2_CARRYOVER_FILE,
   buildCarryover,
@@ -314,12 +315,48 @@ setNewTeammateSetup(migrateTeammateToV2);
 
 let running: { scope: string; promise: Promise<void> } | null = null;
 
+/**
+ * Single-run V1 routine tasks in teammate history that never reached the model, as their run records
+ * prove, and have no message or other reference (botLegacyRoutineHistoryTx.ts). Without readable run
+ * records nothing is deleted. Safe to repeat; a failure retries on the next start.
+ */
+async function pruneEmptyLegacyRoutineHistory(ownerRoot: string, assertCurrent: () => void): Promise<void> {
+  try {
+    // Cheap check first, so the run records are read only while there is something to decide.
+    const candidate = await getDbClient().queryOne(`SELECT 1 FROM bot_session_links l
+      WHERE l.role = 'history' AND l.route_key GLOB 'routine:?*:?*' AND l.archived_at IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.session_id = l.session_id) LIMIT 1`);
+    if (!candidate) return;
+    assertCurrent();
+    const neverDispatched = await readV1NeverDispatchedSessionIds(ownerRoot);
+    if (!neverDispatched) {
+      log.warn('V1 routine run records unreadable; empty V1 routine runs kept');
+      return;
+    }
+    if (neverDispatched.size === 0) return;
+    assertCurrent();
+    const { removed, botIds } = await getDbClient().tx('bots.pruneEmptyLegacyRoutineHistory',
+      { neverDispatchedSessionIds: [...neverDispatched] });
+    if (removed === 0) return;
+    log.info('removed empty V1 routine runs from teammate history', { removed });
+    // A teammate's history already shown elsewhere would still list the removed tasks.
+    assertCurrent();
+    for (const botId of botIds) broadcastBotTaskListChanged(botId);
+  } catch (error) {
+    log.warn('empty V1 routine run cleanup failed; retries on next start', { error: String(error) });
+  }
+}
+
 /** Startup entry. Never throws; each teammate is independent and retries on the next start. */
 export function migrateTeammatesToV2(): Promise<void> {
   const scope = activeOwnerScopeKey();
   if (running?.scope === scope) return running.promise;
   const promise = (async () => {
     const ownerRoot = ownerScopedUserDataPath();
+    await pruneEmptyLegacyRoutineHistory(ownerRoot, () => {
+      if (activeOwnerScopeKey() !== scope) throw new Error('OWNER_CHANGED');
+    });
+    if (activeOwnerScopeKey() !== scope) return;
     const rows = await getDbClient().drizzle.select({ id: botProfiles.id }).from(botProfiles)
       .where(inArray(botProfiles.status, ['active', 'paused']));
     const elsewhere = new Set(companionHomes.snapshot().demotedBotIds);

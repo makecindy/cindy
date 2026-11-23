@@ -150,6 +150,7 @@ import {
 } from './thread-strip-controllers.js';
 import { createMakerLogger } from './logger-adapter.js';
 import { createCodexBedrockSearchCompatibilityRule } from './codex-bedrock-search-compat.js';
+import { createCodexWebSearchDialectRecoveryRule } from './codex-web-search-dialect.js';
 import { desktopAnthropicImageCodec } from './anthropic-image-codec.js';
 import { getLogDir } from '../logger.js';
 import { createCodexImageModelRewrite } from './codex-image-model-rewrite.js';
@@ -3919,7 +3920,7 @@ async function createCodexProxyHandle(
     oversizedRequestRecovery: attachmentRecovery,
     requestSizeController,
     debugDumpRequestBody: process.env.XDT_PROXY_DUMP_REQUEST_BODY === '1',
-    recoveryRules: [...CODEX_BODY_RECOVERY_RULES],
+    recoveryRules: [...CODEX_BODY_RECOVERY_RULES, createCodexWebSearchDialectRecoveryRule()],
     logger: log,
     resolveOutboundProxy: resolveDesktopOutboundProxy,
     // 仅 resolveWebSocketUpstream 真正返回 OAuth 上游时生效。已成功走过 WS 的单个 thread

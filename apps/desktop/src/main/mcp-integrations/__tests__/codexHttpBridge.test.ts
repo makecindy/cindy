@@ -282,6 +282,43 @@ describe('codexHttpBridge', () => {
     expect(await readRpcResponse(execution)).toMatchObject({ result: { content: [{ text: 'bot-parent' }] } });
   });
 
+  // Transport regression: ordinary helper tests do not pass a startup task
+  // into a server factory. The first cindy initialize must capture the same
+  // workdir that its subsequent registered task uses.
+  it('builds the cindy server from the bound startup task before Codex registers its thread', async () => {
+    const create = vi.fn((ctx?: import('@cindy/mcps').LiziMcpSessionContext) => {
+      const server = createTestServer();
+      if (ctx) server.tool('task_catalog', {}, async () => ({
+        content: [{ type: 'text' as const, text: ctx.workingDir }],
+      }));
+      return server;
+    });
+    bridge = await startCodexHttpBridge({ serverFactories: { cindy: create }, logger: noopLogger() });
+    const current = bridge;
+    const context = { agentKind: 'codex', sessionId: 'local-task', sessionInstanceId: 'instance', workingDir: '/task' };
+    const url = withMcpRouteIdentity(current.url('cindy'), { sessionInstanceId: 'instance' });
+    const headers: Record<string, string> = {
+      authorization: `Bearer ${current.token}`, accept: 'application/json, text/event-stream',
+      'content-type': 'application/json',
+    };
+    const request = (id: number, method: string, params: unknown) => fetch(url, {
+      method: 'POST', headers, body: JSON.stringify({ jsonrpc: '2.0', id, method, params }),
+    });
+    const initialized = await current.withDiscoveryContext(context, () => request(1, 'initialize', {
+      protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'plugin-startup-test', version: '1' },
+    }));
+    headers['mcp-session-id'] = initialized.headers.get('mcp-session-id')!;
+    await initialized.text();
+    expect(create).toHaveBeenCalledWith(context);
+    current.registerThreadContext('registered-thread', context);
+    expect(await readRpcResponse(await request(2, 'tools/list', {}))).toMatchObject({
+      result: { tools: expect.arrayContaining([expect.objectContaining({ name: 'task_catalog' })]) },
+    });
+    expect(await readRpcResponse(await request(3, 'tools/call', {
+      name: 'task_catalog', arguments: {}, _meta: { threadId: 'registered-thread' },
+    }))).toMatchObject({ result: { content: [{ text: '/task' }] } });
+  });
+
   it.each(['codex', 'claude-code'] as const)('serves live remote introspection and keeps Bot tasks scoped over the %s helper route', async (agentKind) => {
     let surface: 'bot' | 'default' = 'bot';
     const start = vi.fn(async () => ({ ok: true as const, agents: [{ id: 'remote-task' }], unavailableDevices: [] }));

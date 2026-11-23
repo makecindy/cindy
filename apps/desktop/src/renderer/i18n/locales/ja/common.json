@@ -4096,6 +4096,7 @@
         "refreshReconnect": "モデル一覧を更新できませんでした。このプロバイダーに再接続してから、もう一度お試しください。",
         "refreshFetchDisabled": "モデルカタログのリモート取得が無効のため、更新をスキップしました",
         "withdrawn": {
+          "rowStatus": "前回の更新で未掲載",
           "refreshFound": "提供元で提供終了したモデル：{{count}} 件",
           "refreshAdded": "新しいモデル {{added}} 件、提供終了したモデル {{count}} 件",
           "refreshSuspicious": "今回 {{count}} 件のモデルが返されませんでした。一覧が一時的に不完全な可能性があります",
@@ -4440,6 +4441,16 @@
         "groupLocal": "ローカルモデル",
         "metaLocalRecommended": "おすすめ · Cindy 内でダウンロード",
         "metaLocalConnect": "起動中のローカルサーバーに接続",
+        "configurePlugin": "設定",
+        "installAndConfigure": "インストールして設定",
+        "pluginLoading": "プラグインを読み込み中…",
+        "engineState": {
+          "available": "準備完了",
+          "unavailable": "利用不可",
+          "unknown": "エンジンの状態を確認中"
+        },
+        "retryPlugin": "再試行",
+        "officialModelPlugins": "公式モデルプラグイン",
         "moreLocal": "その他のローカルサーバー"
       },
       "local": {
@@ -4764,7 +4775,68 @@
         "hint": "連携済みの Feishu または Lark ボットを通じて DM を送信します。ウィンドウが非アクティブなときのみ送信されます。",
         "disabledHint": "先に Bot を設定し、DM を 1 回送信して連携を完了してください。"
       },
-      "bind": "連携"
+      "bind": "連携",
+      "groups": {
+        "title": "グループチャット",
+        "description": "ボットが参加しているグループごとに、プロジェクト・モデル・権限を個別に指定できます。",
+        "rules": "指定しない項目は、プロジェクトを設定したグループなら「プロジェクトとモデル」のそのプロジェクトに、設定していないグループなら上の「新規会話設定」と「グループで新規タスクを作成するときの権限モード」に従います。グループのメインとトピックは同じグループの設定を共有します。",
+        "expand": "展開",
+        "collapse": "折りたたむ",
+        "groupCount_one": "{{count}} 件のグループ",
+        "groupCount_other": "{{count}} 件のグループ",
+        "customCount_one": "{{count}} 件を個別に設定",
+        "customCount_other": "{{count}} 件を個別に設定",
+        "refresh": "再読み込み",
+        "loading": "グループを読み込んでいます…",
+        "loadFailed": "グループを読み込めませんでした。少し待ってから「再読み込み」でやり直してください。",
+        "saveFailed": "グループ設定を保存できませんでした",
+        "notConnected": "ボットが接続されるとグループが表示されます。下には個別に設定したグループだけを表示しています。",
+        "empty": "ボットはまだどのグループにも参加していません。グループに追加してから、ここで設定してください。",
+        "listPermission": "ボットが参加しているグループを読み取れません。Feishu Open Platform でこのアプリにグループ情報の取得権限を付与してください。下にはボットを使ったことのあるグループを表示しています。",
+        "listUnavailable": "今はボットが参加しているグループを読み取れません。下にはボットを使ったことのあるグループを表示しています。",
+        "unnamed": "名前のないグループ（{{id}}）",
+        "summaryModel": "モデルを個別に設定",
+        "summaryPermission": "権限を個別に設定",
+        "expandAria": "「{{name}}」の設定",
+        "searchLabel": "グループを検索",
+        "searchPlaceholder": "グループ名で検索",
+        "customHeading": "個別に設定",
+        "followHeading": "チャネル設定に従う",
+        "showMore": "さらに {{count}} 件表示",
+        "showLess": "折りたたむ",
+        "noMatch": "「{{query}}」を含むグループはありません",
+        "project": {
+          "label": "プロジェクト",
+          "follow": "会話",
+          "missing": "{{name}}（サイドバーにありません）",
+          "hint": "グループで初めてボットを @ したとき、新しいトピックを始めたとき、または /new を送ったときに反映されます。進行中のタスクは移動しません。プロジェクトを選ぶとモデルと権限は「プロジェクトとモデル」のそのプロジェクトに従い、「会話」を選ぶとタスクはボットの会話フォルダに置かれ、上の「新規会話設定」に従います。選べるのはサイドバーにあるこのコンピュータのプロジェクトだけです。"
+        },
+        "model": {
+          "label": "モデルと推論強度",
+          "hintFollow": "「新規会話設定」に従っています。ここでモデルや推論強度を変えると、このグループだけに反映されます。",
+          "hintFollowProject": "「プロジェクトとモデル」のプロジェクト「{{project}}」に従っています。ここでモデルや推論強度を変えると、このグループだけに反映されます。",
+          "hintProjectUnavailable": "「プロジェクトとモデル」で「{{project}}」に設定されたモデルは現在使えません。そちらで選び直すか、ここでこのグループ用に選んでください。",
+          "hintFixed": "このグループにはモデルを個別に設定しています。モデルを個別に変えていないタスクは次のメッセージで切り替わり、新しいタスクはこのモデルを使います。"
+        },
+        "permission": {
+          "label": "権限",
+          "hintFollow": "現在は「グループで新規タスクを作成するときの権限モード」に従っています。今後このグループで作成するタスクにだけ反映され、既存のタスクはグループで /permission を使って切り替えます。",
+          "hintFollowProject": "現在は「プロジェクトとモデル」の「{{project}}」の権限に従っています。今後このグループで作成するタスクにだけ反映され、既存のタスクはグループで /permission を使って切り替えます。",
+          "hintFixed": "このグループには個別の権限を設定しています。今後このグループで作成するタスクにだけ反映され、既存のタスクはグループで /permission を使って切り替えます。"
+        },
+        "fullAccessConfirm": {
+          "title": "「{{name}}」をフルアクセスで実行しますか？",
+          "description": "このグループで今後作成されるタスクは、誰がボットを @ しても手順ごとの確認なしで実行されます。グループのメッセージはメンバーが書き込めるため、全員を信頼できる場合だけ選んでください。",
+          "confirm": "フルアクセスにする",
+          "cancel": "キャンセル"
+        },
+        "widerConfirm": {
+          "title": "「{{name}}」の権限を広げますか？",
+          "description": "このグループで今後作成されるタスクは、誰がボットを @ しても「{{current}}」から「{{next}}」に変わります。グループのメッセージはメンバーが書き込めるため、全員を信頼できる場合だけ変更してください。",
+          "confirm": "このまま変更",
+          "cancel": "キャンセル"
+        }
+      }
     },
     "wechatBot": {
       "title": "個人 WeChat",
@@ -5379,6 +5451,69 @@
         "offline": "{{device}} はオフラインです。",
         "revoked": "{{device}} のモデル使用権限が取り消されました。",
         "unavailable": "{{device}} の補助モデルは現在利用できません。"
+      },
+      "testFailed": "モデル接続テストに失敗しました：{{model}}",
+      "save": "補助モデルを保存",
+      "saving": "保存してテスト中…",
+      "saveSuccess": "接続テストに成功し、補助モデルを有効にしました",
+      "retrySave": "接続テストに失敗しました。接続を修復して保存を再試行してください。",
+      "notice": {
+        "auto-title": "会話のタイトルを自動で生成できませんでした",
+        "title": "会話のタイトルを生成できませんでした",
+        "task-summary": "タスクの要約を作成できませんでした",
+        "prompt-prediction": "入力候補を生成できませんでした",
+        "working-status": "進捗状況の説明を生成できませんでした",
+        "tool-loop-review": "ツールが同じ操作を繰り返しているか確認できませんでした",
+        "unavailable": "補助機能の処理を完了できませんでした",
+        "dismiss": "通知を閉じる",
+        "unavailableBody": "補助モデルは一時的に利用できません。",
+        "recovered": "補助モデルが復旧しました",
+        "recoveredBody": "直近の補助リクエストに成功しました。",
+        "details": "詳細",
+        "settings": "補助モデルの設定"
+      },
+      "viewSettings": "設定を開く",
+      "healthRecent": "{{model}} の最近の成功率は {{rate}}% · 状態：{{status}}。",
+      "lastError": "最後のエラー",
+      "healthPaused": "一時停止中",
+      "healthMonitoring": "監視中",
+      "healthWarning": "{{model}} は最近 {{count}} 回失敗しました（{{reason}}）。",
+      "healthIsolated": "{{model}} を一時停止しました（{{reason}}）。{{switched}}",
+      "healthSwitched": "代替モデルを使用しています。",
+      "healthNoSwitch": "今回は予備モデルから結果を取得できませんでした。",
+      "healthRecovered": "補助モデル {{model}} が復旧しました。",
+      "cannotEnable": "このモデルを有効にできません",
+      "failedKeep": "保存できませんでした。以前の設定を引き続き使用します。",
+      "failedAuto": "保存できませんでした。引き続き自動選択を使用します。",
+      "failedSlot": "{{slot}} · {{model}} のテストに失敗しました",
+      "testingHint": "選択したモデルを順番にテストしています。すべて成功すると新しい設定が有効になります。",
+      "draft": "変更はまだ保存されていません",
+      "restored": "自動選択に戻しました",
+      "restoring": "自動選択に戻しています…",
+      "retryAction": "保存を再試行",
+      "attempts": "直近 {{total}} 回のうち {{failed}} 回失敗しました。",
+      "http": {
+        "401": "認証に失敗しました",
+        "403": "アクセスが拒否されました",
+        "404": "要求したリソースが見つかりません",
+        "429": "リクエストが制限されました",
+        "server": "プロバイダーのサービスエラー",
+        "other": "リクエストに失敗しました"
+      },
+      "healthReasons": {
+        "http_error": "上流リクエストエラー",
+        "timeout": "タイムアウトしました",
+        "request_failed": "リクエスト失敗",
+        "empty_response": "空の応答",
+        "model_unavailable": "モデルを利用できません",
+        "not_authenticated": "認証されていません",
+        "auth_probe_failed": "認証チェック失敗",
+        "api_key_missing": "API キーがない",
+        "endpoint_missing": "エンドポイントがない",
+        "unsupported_transport": "未対応のプロトコル",
+        "agent_unavailable": "Agent を利用できない",
+        "permission_denied": "アクセスが拒否されました（403）。このモデルの利用権限を確認してください。",
+        "quota": "プロバイダーで残高と利用枠を確認してください。"
       },
       "chain": {
         "cindyHy3": "Hy3",
@@ -6516,7 +6651,7 @@
           "defaultWorkspaceChip": "デフォルト: {{name}}",
           "defaultWorkspaceAria": "タスク発行時に使う既定のプロジェクトを選択",
           "defaultWorkspaceRadioAria": "「{{name}}」を既定のプロジェクトに設定",
-          "defaultWorkspaceRowHint": "選択中が既定のプロジェクトです。Telegram・Feishu / Lark・X でプロジェクトを個別に選んでいない会話のタスクはここで実行されます。",
+          "defaultWorkspaceRowHint": "選択中が既定のプロジェクトです。Telegram・Feishu / Lark・X・Discord でプロジェクトを個別に選んでいない会話のタスクはここで実行されます。",
           "defaultProjectTag": "既定",
           "defaultProjectFullAccessWarning": "既定のプロジェクト「{{name}}」の権限はフルアクセスです。どのグループから @ で呼ばれても、この中でフルアクセスで実行されます。",
           "sharedSettingsPointer": "プロジェクト・モデル・権限はすべての公式ボットで共通です。",
@@ -6757,6 +6892,40 @@
           "workingDeviceThisComputer": "このパソコン",
           "workingDeviceUnknown": "作業用パソコンはまだ同期されていません",
           "workingDeviceUnnamed": "名前のないパソコン"
+        },
+        "discord": {
+          "description": "Discord アカウントを連携し、DM やサーバーで公式 bot 経由で Cindy にタスクを依頼できます。",
+          "disabledHint": "スイッチをオンにすると連携コードが発行されます。Discord で Cindy bot に送信して連携を完了してください。",
+          "toggleAria": "Discord 接続を切り替える",
+          "connect": "Discord と連携",
+          "openApp": "Cindy を Discord に追加",
+          "cancel": "連携をキャンセル",
+          "retry": "連携を再試行",
+          "openBot": "Bot を開く",
+          "addToGroup": "サーバーに追加",
+          "unlink": "Discord の連携を解除",
+          "unlinkConfirmTitle": "Discord の連携を解除しますか？",
+          "unlinkConfirmDescription": "Discord からこのデバイスへメッセージを送れなくなります。ローカルプロジェクトとほかのチャネルには影響しません。",
+          "status": {
+            "checking": "サーバー対応を確認中…",
+            "unavailable": "このサーバーでは利用できません",
+            "disabled": "無効",
+            "none": "未連携",
+            "pending": "連携コードを Cindy bot に送信してください",
+            "awaiting_confirmation": "Discord で連携を確認してください",
+            "confirmed": "{{user}} と連携済み",
+            "denied": "連携が拒否されました",
+            "expired": "連携コードの期限が切れました",
+            "failed": "連携に失敗しました",
+            "revoked": "連携を解除しました",
+            "superseded": "別のデバイスに連携されています"
+          },
+          "bindCode": {
+            "label": "連携コード",
+            "copy": "コードをコピー",
+            "copied": "連携コードをコピーしました",
+            "hint": "Discord の DM でこのコードを Cindy bot に送信するか、Discord で /bind を実行してコードを入力してください。Cindy をまだ追加していない場合は、先に Discord に追加してください。"
+          }
         }
       },
       "summary": {
@@ -6989,6 +7158,7 @@
         "providerTelegram": "Telegram",
         "providerX": "X",
         "providerFeishu": "Feishu / Lark",
+        "providerDiscord": "Discord",
         "requireConnected": "{{provider}} 接続後に編集できます（上のスイッチをオンにして接続をお待ちください）。",
         "offlineLocal": "{{provider}} に接続できない間、変更はこのコンピューターに保存されます。再接続後にチャットのモデルカードへ同期します。",
         "requireBinding": "先に {{provider}} アカウントの連携を完了してください。",
@@ -7016,7 +7186,7 @@
       "connectionIssue": {
         "device-removed": "このデバイスはアカウントから削除されました。このデバイスでログアウトして再度ログインしてください。",
         "auth-failed": "ログインが無効になりました。再ログインしてください",
-        "replaced": "同じデバイスの別の接続に置き換えられました",
+        "replaced": "別の Cindy に接続を引き継がれました。このパソコン上か、同じパソコンとして認識された別のパソコン上にあります",
         "too-many-connections": "このアカウントの同時接続数が上限に達しました",
         "version-mismatch": "プロトコルバージョンが一致しません。アプリを更新してください",
         "unstable": "接続が切断と再接続を繰り返しています。ネットワークを確認し、続く場合は Cindy を再起動してください",
@@ -7075,6 +7245,22 @@
       },
       "control": "操作",
       "standbyHint": "このパソコンの別の Cindy インスタンスがリモート接続を使用しています。それを閉じると、このインスタンスが自動的に引き継ぎます。",
+      "identityConflict": {
+        "notice": "このパソコンと「{{name}}」が同じパソコンとして認識されています。互いにリモート接続を奪い合い、ログアウトされることもあります。どちらか一方に新しいデバイス ID を割り当てると解決します。",
+        "replace": "このパソコンに新しいデバイス ID を割り当てる",
+        "blockedSelfHostedRelay": "このパソコンは自分のリレーを使用中のため、今はデバイス ID を変更できません。公式リレーに戻すと、ここで変更できます。",
+        "confirmTitle": "このパソコンに新しいデバイス ID を割り当てますか？",
+        "confirmRestart": "Cindy はすぐに再起動し、実行中のタスクは中断されます。",
+        "confirmNewDevice": "再起動後にもう一度ログインが必要です。このパソコンはデバイス一覧に新しいパソコンとして表示されます。",
+        "confirmKeptByOther": "元の ID に保存されていた設定（デバイス名、仲間のメインのパソコン、共有したプロバイダーなど）は「{{name}}」に残ります。このパソコンでは設定し直してください。",
+        "confirmOtherUnaffected": "「{{name}}」はそのままです。あちらのパソコンで操作する必要はありません。",
+        "confirmAction": "デバイス ID を変更して Cindy を再起動",
+        "failed": "このパソコンのデバイス ID を変更できませんでした",
+        "toastTitle": "このパソコンと「{{name}}」が同じパソコンとして認識されています",
+        "toastBody": "互いにリモート接続を奪い合い、ログアウトされることもあります。どちらか一方に新しいデバイス ID を割り当てると解決します。",
+        "toastAction": "デバイス連携を開く",
+        "toastDismiss": "後で"
+      },
       "apps": {
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
@@ -8417,6 +8603,8 @@
         "badgeDetail": "新しい内容があるとき、左側ナビゲーションのプラグイン入口と自身のカードに緑の点を点灯し、一行の要約を添えられます。パネルを開くと消えます。音は鳴らず、振動もせず、システムの通知センターにも入らず、システム通知とは別個の権限です。",
         "confirm": "確認ダイアログで同意を求められます",
         "confirmDetail": "実行前に Cindy 自身と同じ確認ダイアログを開いて尋ねることができます。文面はプラグインが提供し、ダイアログにはその名前が表示されます。確認するかキャンセルするかはあなたがクリックして決め、プラグイン自身はクリックできません。同時に開けるのは 1 つまでで、頻繁な要求はブロックされます。",
+        "form": "フォームへの入力を求められます",
+        "formDetail": "Cindy 自身と同じ見た目のフォームを開いて入力を求めることができます。フォームにはプラグインの名前が表示され、入力内容は「保存」をクリックしたときだけプラグインに渡り、キャンセルすると何も渡りません。Cindy を見ているときだけ開き、同時に開けるのは 1 つまでで、頻繁な要求はブロックされます。",
         "fsWrite": "専用ファイルを管理できます",
         "fsWriteDetail": "専用データの読み書き、一覧表示、削除ができます。Agent の呼び出し中は、タスクの作業ディレクトリの読み取り、一覧表示、変更の監視もできます。書き込みと削除にはタスクの権限が適用され、書き込みの許可は削除の許可にはなりません。呼び出しが終わると監視も停止します。すべてのファイル操作はホストが実行します。",
         "deviceSync": "自分のパソコン間でプラグインのデータを同期",
@@ -8719,6 +8907,8 @@
         "slotNetwork": "ネットワークアクセス",
         "slotNotify": "システム通知",
         "slotBadge": "未読バッジ",
+        "slotConfirm": "確認ダイアログ",
+        "slotForm": "フォームダイアログ",
         "slotFs": "ファイル書き込み",
         "slotLibrary": "永続ライブラリ",
         "slotSkill": "Agent スキル",
@@ -8838,6 +9028,17 @@
       "saveAs": {
         "dialogTitle": "プラグイン「{{name}}」名前を付けて保存",
         "dialogMessage": "プラグイン「{{name}}」がコピーの保存先選択を求めています"
+      },
+      "form": {
+        "save": "保存",
+        "cancel": "キャンセル",
+        "addItem": "追加",
+        "removeItem": "削除",
+        "removeNamed": "「{{name}}」を削除",
+        "required": "この項目は必須です",
+        "incomplete": "未入力の必須項目があります",
+        "itemTitle": "{{label}} {{index}}",
+        "srDescription": "プラグイン「{{name}}」が入力を求めています"
       },
       "confirm": {
         "dialogTitle": "プラグイン「{{name}}」が確認を求めています"
@@ -12733,16 +12934,22 @@
     "listSeparator": "、",
     "crossAgentConvert": {
       "asking": {
-        "title": "変換できるワークスペース設定を検出",
-        "description": "このワークスペースには {{sourceAgent}} のプロジェクト設定があります。{{targetAgent}} 用の対応設定を生成しますか？変更はこのワークスペース内にのみ書き込まれます。",
-        "primary": "変換",
-        "cancel": "不要"
+        "title": "{{targetAgent}} でもこのプロジェクト設定を使いますか？",
+        "description": "このプロジェクトには {{sourceAgent}} 用の設定があります。以下の設定を {{targetAgent}} 用にプロジェクトに追加するか、そのままタスクを開始できます。",
+        "primary": "{{targetAgent}} に追加",
+        "cancel": "そのままタスクを開始"
       },
       "running": {
-        "title": "設定を変換中…",
-        "description": "{{targetAgent}} 用のワークスペース設定を書き込んでいます。ウィンドウを閉じないでください。",
-        "primary": "変換",
-        "cancel": "不要"
+        "title": "プロジェクト設定を追加中…",
+        "description": "{{targetAgent}} 用の設定をこのプロジェクトに保存しています。",
+        "primary": "追加中…",
+        "cancel": "そのままタスクを開始"
+      },
+      "items": {
+        "agents-md": "プロジェクトの指示と作業ルール",
+        "agents": "プロジェクト独自のアシスタントの役割",
+        "hooks": "スクリプトの実行などの自動処理",
+        "mcp": "外部ツールとの接続"
       }
     },
     "confirmDialog": {
@@ -22282,6 +22489,18 @@
       "cheapest": {
         "title": "最も安く",
         "hint": "クォータが残っているサブスクリプションを先に使い、追加費用はかかりません。残りは定価の安い順で、定価のないソースは後回しです。"
+      },
+      "drain": {
+        "title": "使い切ってから次へ",
+        "hint": "前回のソースをクォータがなくなるか使えなくなるまで使い続け、それから次へ移ります。前のソースが回復しても戻りません。"
+      },
+      "headroom": {
+        "title": "残りが多い順",
+        "hint": "残りクォータの割合が最も高いソースを先に使います（週間クォータがあればそれを見ます）。クォータを読めないソースは後回しです。"
+      },
+      "weighted": {
+        "title": "重み付け",
+        "hint": "新しいタスクを各ソースの重みに比例して交互に割り振ります。使えないソースは今回は対象外です。"
       }
     },
     "picker": {
@@ -22309,6 +22528,11 @@
       "tight": "5 時間のクォータがほぼ上限のため、今は使いません",
       "cheapest": "定価が最も安い",
       "cheapestFree": "サブスクリプションのクォータが残っており、追加費用なし",
+      "drain": "クォータがなくなるまで引き続き使用",
+      "drainNext": "前のソースを使い切ったか使えなくなったため、こちらに切り替え",
+      "headroom": "残りクォータが最も多い",
+      "headroomQuota": "残り {{left}}% で、ほかのどのソースよりも多い",
+      "weighted": "重みにより今回はこのソース",
       "noVision": "メッセージに画像があり、このソースは画像を扱えません",
       "exceptionImage": "メッセージに画像があるため、画像を扱えるソースの中から選択",
       "exceptionImageFallback": "メッセージに画像がありますが、画像を扱えるソースがないため通常どおり選択",
@@ -22328,6 +22552,9 @@
       "effort": "推論強度",
       "effortUnset": "指定しない",
       "effortHint": "選ばれたモデルがこのレベルに対応していない場合は、そのモデルの既定で実行します。",
+      "weight": "重み",
+      "weightAria": "「{{name}}」の重み",
+      "weightHint": "重み付けのとき、重みが大きいほど多くの新しいタスクを割り振ります。1–1000。",
       "sources": "使えるソース",
       "sourcesHint": "異なるモデルを一緒に入れられます。実際に使ったものはタスクに表示されます。",
       "sourcesEmpty": "ソースはまだありません。下から接続済みのモデルを追加してください。",
@@ -22360,6 +22587,7 @@
         "empty": "例外はまだありません。新しいタスクはすべて上の選び方に従います。",
         "imageRule": "メッセージに画像があるときは、画像を扱えるソースだけを使う",
         "hoursRule": "{{from}}–{{to}} は「{{name}}」を使う",
+        "hoursRuleDays": "{{days}} {{from}}–{{to}} は「{{name}}」を使う",
         "remove": "この例外を削除",
         "add": "例外を追加",
         "choose": "状況を選択",
@@ -22368,6 +22596,9 @@
         "from": "開始",
         "to": "終了",
         "useRoute": "代わりに使う",
+        "days": "曜日",
+        "daysHint": "何も選ばなければ毎日です。日付をまたぐ時間帯は開始した日として扱います。",
+        "dayRange": "{{from}}〜{{to}}",
         "addHours": "追加",
         "sameHour": "開始と終了を同じ時刻にはできません。",
         "full": "例外は最大 {{count}} 件です。",

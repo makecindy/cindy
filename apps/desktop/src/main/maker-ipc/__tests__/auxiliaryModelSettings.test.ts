@@ -22,6 +22,7 @@ vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
 
 vi.mock('../../cindyAiProviderName.js', () => ({ getCindyAiProviderName: () => 'Cindy AI · 心动' }));
 
+vi.mock('../../maker-host/index.js', () => ({ getMaker: () => ({}) }));
 vi.mock('electron', () => ({
   ipcMain: { handle: remoteMocks.handle },
 }));
@@ -46,6 +47,7 @@ vi.mock('../../maker-host/provider-order-store.js', () => ({
 vi.mock('../../utility-model/auxiliary-model-settings-store.js', () => ({
   readAuxiliaryModelSettings: remoteMocks.read,
   readAuxiliaryModelSettingsState: remoteMocks.state,
+  onAuxiliaryModelSettingsRead: vi.fn(),
   writeAuxiliaryModelSettingsPatch: remoteMocks.write,
 }));
 
@@ -54,8 +56,10 @@ vi.mock('../../utility-model/oneshotProviderUsability.js', () => ({
 }));
 
 vi.mock('../../utility-model/oneShotCandidates.js', () => ({
+  captureAuxiliaryRoutes: () => () => true,
   isUtilityRouteDisabled: () => false,
   isUtilityRoutePaymentRequired: () => false,
+  requestUtilityText: vi.fn(),
 }));
 
 vi.mock('../../security/trustedAppRenderer.js', () => ({
@@ -65,12 +69,17 @@ vi.mock('../../security/trustedAppRenderer.js', () => ({
 import {
   buildAuxiliaryModelOptions,
   parseAuxiliaryModelSettingsPatch,
+  saveAuxiliaryModelSettings,
+  testAuxiliaryModelSettings,
   registerAuxiliaryModelSettingsIpc,
 } from '../auxiliary-model-settings.js';
 import { setRemoteUtilityTextClient } from '../../utility-model/remote/registry.js';
+import { requestUtilityText } from '../../utility-model/oneShotCandidates.js';
 
 const PIN = 'cat:openrouter:codex:openai/gpt-5-mini';
 const PROFILE = 'codex-gpt-5.4-mini';
+const requestText = vi.mocked(requestUtilityText);
+const writeSettings = vi.mocked(writeAuxiliaryModelSettingsPatch);
 
 function catalog() {
   return {
@@ -136,8 +145,14 @@ describe('remote auxiliary settings save', () => {
     remoteMocks.read.mockReturnValue({ models: [] });
     remoteMocks.state.mockReturnValue({ value: { models: [] }, isCustomized: false, customizedKeys: [], defaults: { models: [] } });
     remoteMocks.write.mockResolvedValue(undefined);
-    setRemoteUtilityTextClient({ request: async () => ({ ok: false, reason: 'no_candidate', attempts: [] }),
-      readCapabilities: remoteMocks.caps });
+    // Saving tests each route first; the mocked request answers like a live route.
+    vi.mocked(requestUtilityText).mockResolvedValue({ ok: true, text: 'Title', providerId: 'provider',
+      model: 'model', transport: 'codex-responses' });
+    setRemoteUtilityTextClient({
+      request: async (route) => ({ ok: true, text: 'Remote title', providerId: route.providerId,
+        model: route.model, transport: 'codex-responses' }),
+      readCapabilities: remoteMocks.caps,
+    });
     registerAuxiliaryModelSettingsIpc();
   });
   function setHandler() {
@@ -147,7 +162,7 @@ describe('remote auxiliary settings save', () => {
     remoteMocks.caps.mockResolvedValue({ allowedRoutes: [{ providerId: route.providerId, agentKind: route.agentKind, model: route.model }] });
     await setHandler()({}, { models: [ref] });
     expect(remoteMocks.caps).toHaveBeenCalledWith('device-b');
-    expect(remoteMocks.write).toHaveBeenCalledWith({ models: [ref] });
+    expect(remoteMocks.write).toHaveBeenCalledWith({ models: [ref] }, expect.any(Function));
   });
   it('rejects a route not advertised by that device', async () => {
     remoteMocks.caps.mockResolvedValue({ allowedRoutes: [] });
@@ -157,6 +172,10 @@ describe('remote auxiliary settings save', () => {
 });
 
 describe('auxiliary model settings IPC helpers', () => {
+  beforeEach(() => {
+    requestText.mockReset();
+    writeSettings.mockReset();
+  });
   // Unit: a native Settings save must clear the observed config problem without
   // a later health read or model request (auxiliary-model-health.md, recovery).
   it('announces recovery when saving a usable replacement for a missing model', async () => {
@@ -166,6 +185,7 @@ describe('auxiliary model settings IPC helpers', () => {
     const write = vi.mocked(writeAuxiliaryModelSettingsPatch);
     const catalogRead = vi.mocked(getDesktopSelectableCatalog);
     const credentials = vi.mocked(hasOneshotProviderCredential);
+    requestText.mockResolvedValue({ ok: true, text: 'New title', providerId: 'openrouter', model: 'openai/gpt-5-mini', transport: 'litellm-chat-completions' });
     store.mockReturnValue({ models: [missing] });
     const saved = { value: { models: [PIN] }, isCustomized: true, customizedKeys: ['models'], defaults: { models: [] } };
     state.mockReturnValue(saved);
@@ -365,5 +385,60 @@ describe('auxiliary model settings IPC helpers', () => {
       agentKind: 'claude-code',
       modelId: 'old-model',
     });
+  });
+
+  it('tests every selected route before allowing the chain to be saved', async () => {
+    requestText.mockResolvedValue({
+      ok: true,
+      text: '连接测试',
+      providerId: 'openrouter',
+      model: 'openai/gpt-5-mini',
+      transport: 'litellm-chat-completions',
+    });
+
+    const result = await testAuxiliaryModelSettings(
+      { models: [PIN, PROFILE] },
+      new Set([PIN]),
+      new Set([PROFILE]),
+      { maker: {} as never, requestText },
+    );
+
+    expect(result).toEqual({ ok: true, tested: [PIN, PROFILE] });
+    expect(requestText).toHaveBeenCalledTimes(2);
+    expect(requestText.mock.calls[0]?.[2]).toMatchObject({
+      providerId: 'openrouter',
+      agentKind: 'codex',
+      model: 'openai/gpt-5-mini',
+      maxTokens: 32,
+      disableReasoning: true,
+      bypassAuxiliaryModelHealth: true,
+    });
+    expect(requestText.mock.calls[1]?.[2]).toMatchObject({
+      pinnedProfileId: PROFILE,
+      bypassAuxiliaryModelHealth: true,
+    });
+  });
+
+  it('stops at the first failed route and reports that selection', async () => {
+    requestText.mockResolvedValue({ ok: false, reason: 'all_candidates_failed', attempts: [] });
+    await expect(testAuxiliaryModelSettings(
+      { models: [PIN, PROFILE] },
+      new Set([PIN]),
+      new Set([PROFILE]),
+      { maker: {} as never, requestText },
+    )).resolves.toEqual({ ok: false, model: PIN, reason: 'request_failed' });
+    expect(requestText).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not persist a chain when the save-boundary test fails', async () => {
+    requestText.mockResolvedValueOnce({ ok: true, model: 'small', providerId: 'test', transport: 'litellm-chat-completions', text: 'Title' });
+    requestText.mockResolvedValueOnce({ ok: false, reason: 'all_candidates_failed', attempts: [{
+      status: 'failed', reason: 'http_error', httpStatus: 403,
+      providerId: 'provider', model: 'backup', transport: 'codex-responses',
+    }] });
+    await expect(saveAuxiliaryModelSettings(
+      { models: [PIN, PROFILE] }, new Set([PIN]), new Set(), { maker: {} as never, requestText },
+    )).resolves.toEqual({ ok: false, model: PROFILE, reason: 'permission_denied', httpStatus: 403 });
+    expect(writeSettings).not.toHaveBeenCalled();
   });
 });

@@ -7,7 +7,7 @@
 > **适用路径**：`apps/desktop/src/main/im/**`、`apps/desktop/src/main/hook-control/**`
 
 个人 IM 渠道（Telegram / 飞书 / 微信 / 钉钉 / Discord / 企业微信）与官方 hook（官方
-Telegram / Slack / X / 飞书 / Lark）是同一件事的两套实现：把渠道里的一条消息变成 Cindy 任务里的一轮，
+Telegram / Slack / X / 飞书 / Lark / Discord）是同一件事的两套实现：把渠道里的一条消息变成 Cindy 任务里的一轮，
 再把结果送回渠道。本文登记两套实现**今天各自在哪一步做了什么**、**持有哪些状态**、
 **合并后归谁**，以及迁移中必须守住的不变量。用户可见的两侧差异另见
 [`../product-rules/telegram-bot-parity.md`](../product-rules/telegram-bot-parity.md)；
@@ -89,6 +89,17 @@ Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询�
   名字跟随侧栏、含没有任务的项目、不含已移除的）；`/ctr` 另带不在任何项目里的对话任务目录。
   `/project` 在个人 Telegram 与个人飞书可用；用它切进项目的会话，启动时的托管目录归一与分组补写
   （`im/index.ts`、`feishu/legacySessionBackfill.ts`）都不得把它改回去。
+- **个人飞书机器人的按群设置**（2026-11-23）：设置页「飞书 / Lark 机器人 → 群聊」可给机器人所在的群单独
+  选项目、模型（含推理强度、来源、执行位置）与权限，存在 `owners/<账号>/feishu-group-settings.json`
+  （`im/feishu/groupSettingsStore.ts`），群主线与话题共用，伙伴连接不读。新任务（含群里 `/new`）的取值
+  顺序（用户裁决）：模型——群单独设的 > 群绑定项目在上面「项目与模型」里的那一行（与插件同一个解析
+  `resolveSharedImProjectConfig`）> 渠道「新对话配置」，只有没绑项目的群才用「新对话配置」；权限——
+  群单独设的 > 绑定项目那一行（没填按完全访问，同插件）> 渠道「群聊新建任务权限档」。群工作目录只在新建与
+  `/new` 时生效。选「对话」后，`/new` 会将该群任务移回托管对话目录；「跟随默认」也只在任务确实位于绑定项目目录时才按那一行切换，
+  还在对话目录里的旧任务仍跟随渠道。项目名表与解析经端口取用（`im/feishu/groupOverrides.ts`，由
+  `groupProjectPortsWiring.ts` 在 bootstrap 接上），不直接引用 hook-control，避免循环依赖。设置页把群
+  改成完全访问、换项目或恢复继承会让群里新任务的权限变宽时先确认；在个人飞书里用 `/model` 只改当前任务，不写回
+  「项目与模型」。
 
 ## 1. 入口账本
 
@@ -104,7 +115,7 @@ Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询�
 | 建任务 | `sessionRepo.createSession` 确定性 id upsert；`createFreshSession`（`/new` 轮换事务）；随后 `maker.createSession` —— 2026-10 起两处建行都经 `openChannelSession` → **`openSession`**（模型准入） | `session-runner` 新任务的 `maker.createSession`、`/new` 的 `desktopSessionStorage.create` —— 同样经 `openChannelSession` → **`openSession`** | **公共入口 `openSession`**（已完成，批次 2）；渠道专属建行在 commit 回调里。live session 仍各自 `maker.createSession`，未改用 register 内部的 `bootstrapSession`（会新增项目上下文 / Orca 指令注入等行为，见 §6） |
 | 默认配置 | `resolveImSessionDefaults(channel)` + 跟随渠道默认（`channelDefaultRouteSync`） | `resolveNewSessionConfig`（目录偏好 > 全局 IM 默认 > 清单首项；权限档规则见 `defaults.ts`）+ 共用 `createDefaultRouteFollower` 跟随默认 | 渠道策略（台账第三节「新会话的默认…从哪读」有意不同） |
 | 命令 | `messageHandler.processOne` → `slashCommands`（注册表 `botCommands.ts`） | 服务端分发命令，桌面只收 `query.*` | 渠道适配（官方命令分发在服务端） |
-| 排队与插话 | `SessionState.sendQueue`（内存、无上限、重启丢失）；无插话 | `dispatcher.queues`（内存、上限 20）+ `drainPolls`；无插话 | **公共入口 `AgentInputCoordinator`**（见 §5 批次 3 与 §6 待决项） |
+| 排队与插话 | `SessionState.sendQueue`（内存、无上限、重启丢失）；iMessage 精确匹配的聊天可插话 | `dispatcher.queues`（内存、上限 20）+ `drainPolls`；无插话 | **公共入口 `AgentInputCoordinator`**（见 §5 批次 3 与 §6 待决项） |
 | 输入拼装 | `prepareAgentTurnText`（群上下文 / ambient 提示）+ `buildImChannelNote` + `buildImUserMessage`；派发时前置交接 / 计划对账 / Goal 提示 | `buildContextPrefix` + `composeXPrompt` + `buildHookPromptNote`；同样前置交接 / 计划对账（仅 IM 来源）/ Goal 提示 | 共用流程（前置层同一份；渠道说明文案有意不同，见台账「入站上下文」） |
 | 用户消息落库 | 部分渠道提前落库（`persistInboundUserMessageEarly`），`onAccepted` 补 `imSource` | 只在 `onAccepted` 落库，`agentMeta.hookSource` | 共用流程（`onAccepted` 落库；提前落库保留为渠道能力） |
 | 发送 | 发送前应用任务待切换选择，再 `makerSession.send`，`MAIN_OWNED_SEND_CONTEXT.origin.kind='im'` | 复用任务先经 `acquirePendingAgentSwitchForImSend` 跟随默认并应用任务选择，再读 meta、建会话、挂观察器和 `session.send`；发送后释放锁，origin `hook`（Telegram / X / 飞书）或 `im`（Slack） | 待切换选择共用既有直发流程；Pi 管理命令授权来源按渠道各自声明（hook 不得伪装成本机命令） |
@@ -165,8 +176,8 @@ Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询�
    IM 写 `agentMeta.imSource`，hook 写 `agentMeta.hookSource`；新数据不得塞进 `origin`
    （coordinator 把任何 `origin.kind` 当非人工输入）。
 4. **Pi 管理命令授权来源**：个人 IM 用 `authenticated-im-command`；官方 hook 的 origin
-   是 `hook`，**不得**伪装成 `local-desktop-command`；官方 Telegram、官方飞书 / Lark 与对应个人 bot
-   共用 `source.im`（`telegram` / `feishu`），hook 路径（`session-runner.ts` 的 `mainOwnedChannelOrigin`）
+   是 `hook`，**不得**伪装成 `local-desktop-command`；官方 Telegram、官方飞书 / Lark、官方 Discord 与对应个人 bot
+   共用 `source.im`（`telegram` / `feishu` / `discord`），hook 路径（`session-runner.ts` 的 `mainOwnedChannelOrigin`）
    必须显式映射成 `{ kind: 'hook' }`，**不得**落到个人 bot 的可信 `im` 来源（回归：`session-runner.test.ts`
    「线程来源」表）；`MAIN_OWNED_SEND_CONTEXT` 是 Symbol，
    跨队列快照时必须由宿主在派发时重新盖章，不能指望它随队列项持久化。
@@ -318,10 +329,17 @@ inbound ──► admitted ──► queued? ──► dispatching ──► run
 | 排队消息在桌面端可见 / 可删 | 不可见 | 不可见 | 迁到 coordinator 后自然可见、可删（删除即视同撤回：IM 撤排队表情，hook 回 `turn.end(cancelled)`） |
 | 排队上限 | 无上限 | 每会话 20 | 各自保留：IM 不限，hook 仍按 20 拒收 |
 | 停止时同任务已排队的消息 | `/stop` 一并清掉 `sendQueue` | 服务端 `/stop` 只对正在跑的那一个 requestId 发 `task.cancel`；desktop hook 队列里同任务已排队的请求照常接着跑（本 PR 前即如此） | 未改：一并清掉等于替用户丢弃没被取消的请求、并以 cancelled 收口，属产品语义；随批次 3（hook 队列并入 coordinator）一起定 |
-| 插话（steer） | 无 | 无 | 不新增 |
+| 插话（steer） | iMessage 可按聊天开启，见下文；其他个人渠道无 | 无 | 通用迁移不扩大开启范围 |
 | 模型准入（`openSession`） | 只做凭证检查 | 新任务做路由检查 | 已按 Dash 指定改走 `openSession` 准入：新任务的模型 / 来源 / 推理强度 / Fast 不被支持时直接拒绝（文案「不会自动更换模型或供应商」），准入还会规范化来源与推理强度；渠道默认配置若指向已停用的模型，新任务会建不出来（以前会照建） |
 | live session 改走 `bootstrapSession` | 不注入项目上下文 / Orca 指令 | 同左 | 未改：改了等于给 IM / hook 任务新增项目上下文与 Orca 指令注入、目录授权准备等行为，属产品决定 |
 | 缺口 2b / 2e / 2f / 默认配置取值链 | 见台账 | 见台账 | 各自保留，合并只共享实现骨架 |
+
+iMessage 伙伴连接可通过当前账号目录的 `imessage/steering.json` 为指定聊天开启忙时插话。
+文件格式为 `{"routes":[{"connectionId":"…","botId":"…","chatSha256":"…"}]}`，
+摘要取原始 BlueBubbles chat GUID 的 UTF-8 SHA-256 小写十六进制。删除条目即可关闭，
+新聊天默认排队；聊天名单、群激活方式和权限仍由原连接管理。每次入站仍按原路由开轮或查找在途轮次。
+只有该连接、伙伴、聊天、发言权限和仍有效的 iMessage 轮次都匹配，且引擎支持同轮插话，才向其追加输入。
+主人私聊复用伙伴主任务时，来自桌面或定时执行的轮次继续排队。投递结果不明时保留原收件回执供核查。
 
 ### 同一 Cindy 电脑上的多个飞书机器人（2026-11-10，未发布）
 
@@ -350,6 +368,23 @@ inbound ──► admitted ──► queued? ──► dispatching ──► run
   用 `feishu-hook`，让 `cindy_feishu_bot` 追加官方会话提示而不把它当个人渠道；模型说明为
   `buildHookPromptNote('feishu')`。
 - 绑定链接只接受飞书 / Lark 网页授权页与打开机器人的 AppLink（`feishuDeepLink.ts`），关联码只随 pending 快照出现。
+
+### 官方 Discord（2026-11-23，未发布）
+
+官方 Discord 寄宿在 telegram-hook-server 的独立 `/discord` 路径，经 provider-neutral 状态机接入
+（`manager.ts` 的 `discordConfig`），与个人 Discord bot（`im/discord/**`、`cindy_discord`）互不相干：
+
+- lane：私信 `discord:dm:…`，服务器频道 / 子区 `discord:ch:…`（同频道每个用户一条）；`deriveLaneKind` 把
+  `discord:ch:` 视为群轮次，send 后持有 session turn lease。派发只接本机已确认绑定的应用与用户。
+- 出站全部由服务端渲染（进度、终稿、附件、交互按钮）；hello 只声明 provider-bind / provider-prefs /
+  `provider:discord`，不声明 `msg-op-v1`、`session-picker-v1`、`session-result-v1` 与任何 `telegram-*`。
+  后台轮次回传（`backgroundResults`）不覆盖 Discord。
+- 会话：`sessions.source` 与 `vendorOptions.source` 都用 `discord-hook`，不复用个人 bot 的 `discord`
+  （个人行会被启动回填强制归入「对话」并改写托管目录，`cindy_discord` 也只给个人任务用）；
+  origin 为 `{ kind: 'hook', source: 'discord' }`；模型说明为 `buildHookPromptNote('discord')`。
+- 项目与模型只读共用那一份（§0），不等并入、不吃服务端便签；Discord 没有 `/model` 卡，不是偏好镜像渠道。
+- 关联只靠一次性关联码（私信或 `/bind`），设置页把它排在动作行之前；`connectUrl` 只是添加应用，
+  本机不自动打开。协议约定见 [`protocol-compatibility/official-discord-channel.md`](protocol-compatibility/official-discord-channel.md)。
 
 ### 官方 X 的伙伴路由
 

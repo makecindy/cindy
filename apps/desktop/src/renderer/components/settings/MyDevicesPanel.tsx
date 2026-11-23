@@ -43,6 +43,7 @@ import {
 } from './myDevicesModel';
 import { appLabel, deviceLabel, platformLabel, relativeTime, selfDeviceName } from './deviceLabels';
 import { LocalNetworkPermission } from './LocalNetworkPermission';
+import { DeviceIdentityConflictRow, useDeviceIdentityConflict } from '@/features/device-link/DeviceIdentityConflict';
 import appI18n from 'i18next';
 
 function hardwareLabel(deviceInfo: DeviceLinkDeviceInfo | null | undefined): string | null {
@@ -253,6 +254,12 @@ export function MyDevicesPanel({
 
   // 连接问题(鉴权失效/被顶号/超限/版本不符/反复掉线)时不再显示笼统的 connecting 黄点。
   const activeConnectionIssue = resolveActiveConnectionIssue(s.linkStatus, s.connectionIssue);
+  const identityConflict = useDeviceIdentityConflict();
+  // 已确认另一台电脑在用本机身份时，下方的冲突说明已经讲清原因，不再叠一句笼统的「被取代 / 反复断开」。
+  const connectionIssueText = activeConnectionIssue
+    && !(identityConflict && (activeConnectionIssue.kind === 'replaced' || activeConnectionIssue.kind === 'unstable'))
+    ? t(`settings.devices.connectionIssue.${activeConnectionIssue.kind}`)
+    : null;
   const linkStatusColor = activeConnectionIssue
     ? 'var(--remote-status-disconnected)'
     : s.linkStatus === 'online'
@@ -382,9 +389,9 @@ export function MyDevicesPanel({
                     {t('settings.devices.rejoin.action')}
                   </Button>
                 </div>
-              ) : activeConnectionIssue ? (
+              ) : connectionIssueText ? (
                 <span className="text-11 text-[var(--error-fg)]">
-                  {t(`settings.devices.connectionIssue.${activeConnectionIssue.kind}`)}
+                  {connectionIssueText}
                 </span>
               ) : null}
               {s.standby ? (
@@ -407,6 +414,7 @@ export function MyDevicesPanel({
               </button>
             ) : null}
           </div>
+          <DeviceIdentityConflictRow conflict={identityConflict} />
           <div className="mt-3 border-t border-[var(--border-default)] pt-3">
             <ControlRow
               label={t('settings.devices.allowControl')}

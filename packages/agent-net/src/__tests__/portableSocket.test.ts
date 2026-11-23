@@ -820,6 +820,43 @@ it('reconnects the relay at once when the network changes during its backoff', a
   } finally { vi.useRealTimers(); socket.close(); }
 });
 
+/** 生产入口：AgentNetSocket 收到中转 4409。仅使用 Agent-Net 时外层 socket 不关闭，
+ * 宿主仍须收到事件；仅在确认身份冲突后延长中转重连，换网不提前重连。
+ * 最小输入：同一设备身份接管前后各一次。tier：unit，内存中转、假时钟。 */
+it('reports relay replacement and backs off only after the host confirms the identity conflict', async () => {
+  const local = generateIdentity('local');
+  const { bootstrap } = createPrivateNetwork('Duplicate identity', local);
+  const makeUplink = () => Object.assign(new EventEmitter(), { kind: 'agent-net' as const, devices: [], delegations: [],
+    send() {}, presence() {}, onDatagram() {}, close() {} });
+  const first = makeUplink(), second = makeUplink(), third = makeUplink();
+  const connect = vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(second).mockResolvedValueOnce(third);
+  const onRelayReplaced = vi.fn();
+  const socket = await AgentNetSocket.openWithBindings({
+    client: { base: 'https://relay.example.test', rootPublicKey: bootstrap.rootPublicKey, certificate: bootstrap.ownerCertificate, identity: local, connect },
+    userId: bootstrap.ownerCertificate.subject, onRelayReplaced,
+    bindings: { verifyCertificate, createTransport: async () => ({ id: 'local', dial: {}, close: async () => undefined,
+      connect: async () => { throw new Error('No peer dial needed'); } }) },
+  });
+  const closed = vi.fn();
+  socket.on('close', closed);
+  vi.useFakeTimers();
+  try {
+    first.emit('close', 4409);
+    expect(onRelayReplaced).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(connect).toHaveBeenCalledTimes(2);
+    socket.setDuplicateIdentityCooldown(true);
+    second.emit('close', 4409);
+    socket.networkChanged();
+    expect(onRelayReplaced).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(3_499);
+    expect(connect).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1_501);
+    expect(connect).toHaveBeenCalledTimes(3);
+    expect(closed).not.toHaveBeenCalled();
+  } finally { vi.useRealTimers(); socket.close(); }
+});
+
 /** 测试价值
  * - 生产入口与可观察结果：手机物理换网时的 `replaceRelayConnection`（DeviceLinkContext → notifyMobileAgentNetNetworkChanged）。
  *   旧的中转连接被关掉、马上连新的，传输层被告知换网（中转回来后再告知一次）；和对端的加密连接不关、照常可用。

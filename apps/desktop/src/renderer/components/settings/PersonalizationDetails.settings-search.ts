@@ -94,6 +94,7 @@ export const personalizationDetailsSettings = defineSettings({
     sectionKey: 'settings.sections.auxiliaryModels',
     descriptionKey: 'settings.auxiliaryModels.description',
     aliases: ['auxiliary model', '辅助模型'],
+    keywordKeys: ['settings.auxiliaryModels.testingHint'],
   },
   auxiliaryModelsPreferredLabel: {
     id: 'settings.auxiliaryModels.preferred.label',

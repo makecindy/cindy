@@ -7,7 +7,7 @@ import { identityFromSeed, publicBytes, verifyCertificate, type Identity } from 
 import { AgentNetClient, acceptEnrollment, createEnrollmentRequest } from '@cindy/agent-net-relay/client';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
-import { getActiveAuthRealm, getCurrentUserId, getDeviceId } from '../authManager.js';
+import { getActiveAuthRealm, getCurrentUserId, getDeviceId, getRetiredDeviceIds } from '../authManager.js';
 import { serverApiFetch } from '../serverApiClient.desktop.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 import { readRelaySecrets, writeRelaySecrets, relayDataPath, type RelaySecrets } from './selfHostedRelayConfig.js';
@@ -25,9 +25,22 @@ export function officialAgentNetSlot(base = officialAgentNetBase()): string {
   const hex = bytes.toString('hex');
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
-function identity(slot: string, secrets: RelaySecrets): Identity {
+/**
+ * Ignore enrollments issued to identities this computer gave up in an explicit conflict repair.
+ * An unrelated mismatched certificate still fails identity validation below.
+ */
+function currentEnrollment(secrets: RelaySecrets): RelaySecrets['agentNet'] {
   const stored = secrets.agentNet;
-  if (!stored) return identityFromSeed(slot, secrets.seed, getDeviceId());
+  return stored && getRetiredDeviceIds().includes(stored.certificate.deviceId) ? undefined : stored;
+}
+function identity(slot: string, secrets: RelaySecrets): Identity {
+  const stored = currentEnrollment(secrets);
+  if (!stored) {
+    const deviceId = getDeviceId();
+    // A cloned profile may share the old seed. Keep the other device's keys distinct from the new identity.
+    const context = getRetiredDeviceIds().length > 0 ? `${slot}/replacement/${deviceId}` : slot;
+    return identityFromSeed(context, secrets.seed, deviceId);
+  }
   const signingPrivateKey = createPrivateKey(stored.signingPrivateKey), transportPrivateKey = createPrivateKey(stored.transportPrivateKey);
   const c = stored.certificate;
   if (stored.version !== 2 || signingPrivateKey.asymmetricKeyType !== 'ed25519' || transportPrivateKey.asymmetricKeyType !== 'x25519'
@@ -37,7 +50,7 @@ function identity(slot: string, secrets: RelaySecrets): Identity {
   return { deviceId: c.deviceId, signingPrivateKey, transportPrivateKey, signingKey: c.signingKey, transportKey: c.transportKey };
 }
 function client(base: string, secrets: RelaySecrets): AgentNetClient | null {
-  const keys = identity(officialAgentNetSlot(base), secrets), stored = secrets.agentNet;
+  const keys = identity(officialAgentNetSlot(base), secrets), stored = currentEnrollment(secrets);
   if (!stored || stored.certificate.expiresAt <= Date.now()) return null;
   return new AgentNetClient(base, keys, stored.certificate, stored.rootPublicKey, undefined, {
     fetch: outboundFetch, createWebSocket: (url, options) => openLinkWebSocket('agent-net', url, options),
@@ -53,7 +66,7 @@ export function officialAgentNetStatementIdentity(): Identity | null {
   if (isAppSessionBoundaryPending() || activeSelfHostedRelay() || !getCurrentUserId()) return null;
   const base = officialAgentNetBase(); if (!base) return null;
   const slot = officialAgentNetSlot(base), secrets = readRelaySecrets(slot);
-  return secrets?.agentNet ? identity(slot, secrets) : null;
+  return secrets && currentEnrollment(secrets) ? identity(slot, secrets) : null;
 }
 export function currentOfficialAgentNetClient(): AgentNetClient | null {
   return isAppSessionBoundaryPending() || activeSelfHostedRelay() ? null : outgoingOfficialAgentNetClient();
