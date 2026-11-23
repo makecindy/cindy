@@ -440,4 +440,176 @@ describe('OwnRemoteProviderRows / OwnRemoteProviderDetail', () => {
     expect(screen.queryByTestId('provider-usage-module')).toBeNull();
     expect(screen.queryByText('quotaCard.noWindows')).toBeNull();
   });
+
+  // Test value: OwnRemoteProviderDetail previously called only the default-account quota reader and
+  // dropped additional accounts in a remote computer's subscription pool. Exercise the real detail,
+  // useGroupMemberAccounts, and QuotaHoverCard together; existing tests only stub the legacy single card.
+  // Minimal input: two accounts in one remote pool, a split pool push, an old-host rejection, and an all-paused pool.
+  // Tier: unit; in-memory deviceLink mocks without network or real waiting.
+  describe('remote subscription account pools', () => {
+    let originalApi: Window['electronAPI'];
+    const invoke = vi.fn();
+    let pushListeners: Set<(push: { deviceId: string; channel: string; payload?: unknown }, stamp?: unknown) => void>;
+
+    const poolAccount = (id: string, overrides: Record<string, unknown> = {}) => ({
+      id,
+      paused: false,
+      limit: 4,
+      weight: 1,
+      directory: `/remote/${id}`,
+      status: 'ready' as const,
+      running: 0,
+      ...overrides,
+    });
+
+    const claudeUsage = (fiveHour: number, sevenDay: number, extra: Record<string, unknown> = {}) => ({
+      claude: {
+        source: 'oauth-endpoint' as const,
+        updatedAt: Date.now(),
+        fiveHour: { utilization: fiveHour, resetsAt: null },
+        sevenDay: { utilization: sevenDay, resetsAt: null },
+        ...extra,
+      },
+    });
+
+    beforeEach(() => {
+      originalApi = window.electronAPI;
+      setDataOwnerGeneration('owner-1', 1);
+      invoke.mockReset();
+      pushListeners = new Set();
+      window.electronAPI = {
+        ...originalApi,
+        deviceLink: {
+          invoke,
+          onRemotePush: (listener: (push: { deviceId: string; channel: string; payload?: unknown }, stamp?: unknown) => void) => {
+            pushListeners.add(listener);
+            return () => pushListeners.delete(listener);
+          },
+          onPresenceChanged: () => () => undefined,
+          onStatusChanged: () => () => undefined,
+        },
+      } as unknown as Window['electronAPI'];
+    });
+
+    afterEach(() => {
+      cleanup();
+      window.electronAPI = originalApi;
+      setDataOwnerGeneration(null, 0);
+    });
+
+    it('lists every active subscription account on the remote computer, read-only, and clears on switching', async () => {
+      invoke.mockImplementation(async (deviceId: string) => deviceId === 'mini-a'
+        ? {
+            providerId: 'anthropic',
+            configured: true,
+            strategy: 'least',
+            accounts: [
+              poolAccount('default', {
+                identity: 'first@example.com',
+                plan: 'pro',
+                usage: claudeUsage(0, 13),
+              }),
+              poolAccount('work', {
+                identity: 'second@example.com',
+                plan: 'max',
+                planTier: 'max_5x',
+                usage: claudeUsage(15, 2),
+              }),
+              poolAccount('paused-acc', {
+                identity: 'paused@example.com',
+                paused: true,
+                usage: claudeUsage(50, 50),
+              }),
+            ],
+          }
+        : { providerId: 'anthropic', configured: true, strategy: 'least', accounts: [] });
+
+      const subscription: OwnRemoteProvider = {
+        ...entry,
+        provider: { ...entry.provider, auth: { method: 'oauth' as const, native: 'claude' as const } },
+      };
+      const { rerender } = render(<OwnRemoteProviderDetail entry={subscription} />);
+
+      await waitFor(() => expect(screen.getAllByTestId('own-remote-provider-account')).toHaveLength(2));
+      expect(invoke).toHaveBeenCalledWith('mini-a', 'maker:subscription-accounts', [{ action: 'read', providerId: 'anthropic' }]);
+      expect(usage.remoteClaude.mock.calls.every(([deviceId]) => deviceId === null)).toBe(true);
+      const rows = screen.getAllByTestId('own-remote-provider-account');
+      expect(rows[0].textContent).toContain('first@example.com');
+      expect(within(rows[0]).getByTestId('quota-plan-badge').textContent).toBe('Pro');
+      expect(rows[1].textContent).toContain('second@example.com');
+      expect(within(rows[1]).getByTestId('quota-plan-badge').textContent).toBe('Max 5×');
+      expect(screen.queryByText('paused@example.com')).toBeNull();
+      expect(screen.getAllByRole('button')).toEqual([screen.getByRole('button', { name: 'settings.providers.detail.moreActionsAria' })]);
+      expect(screen.queryByRole('link')).toBeNull();
+
+      // All-paused / empty pool on another computer clears accounts without falling back to the legacy card.
+      rerender(<OwnRemoteProviderDetail entry={{ ...subscription, key: ownRemoteProviderKey('mini-b', 'anthropic'), deviceId: 'mini-b' }} />);
+      await waitFor(() => expect(invoke).toHaveBeenCalledWith('mini-b', 'maker:subscription-accounts', [{ action: 'read', providerId: 'anthropic' }]));
+      expect(screen.queryByTestId('provider-usage-module')).toBeNull();
+      expect(screen.queryByRole('progressbar')).toBeNull();
+    });
+
+    it('reads a split remote subscription pool and refreshes on its pool-kind change push', async () => {
+      invoke.mockResolvedValueOnce({
+        providerId: 'claude-work',
+        kind: 'anthropic',
+        configured: true,
+        strategy: 'least',
+        accounts: [
+          poolAccount('acc-1', { identity: 'one@example.com', plan: 'pro', usage: claudeUsage(20, 40) }),
+          poolAccount('acc-2', { identity: 'two@example.com', status: 'signed-out' }),
+        ],
+      }).mockResolvedValueOnce({
+        providerId: 'claude-work',
+        kind: 'anthropic',
+        configured: true,
+        strategy: 'least',
+        accounts: [
+          poolAccount('acc-1', { identity: 'one@example.com', plan: 'pro', usage: claudeUsage(20, 40) }),
+          poolAccount('acc-2', { identity: 'two@example.com', plan: 'pro', usage: claudeUsage(10, 30) }),
+        ],
+      });
+
+      const split: OwnRemoteProvider = {
+        ...entry,
+        key: ownRemoteProviderKey('mini-a', 'claude-work'),
+        provider: provider('claude-work', {
+          name: 'Claude Work',
+          auth: { method: 'oauth', native: 'claude' },
+          subscriptionAccountPool: 'anthropic',
+        }) as unknown as OwnRemoteProvider['provider'],
+      };
+      render(<OwnRemoteProviderDetail entry={split} />);
+
+      await waitFor(() => expect(screen.getAllByTestId('own-remote-provider-account')).toHaveLength(2));
+      expect(invoke).toHaveBeenCalledWith('mini-a', 'maker:subscription-accounts', [{ action: 'read', providerId: 'claude-work' }]);
+      expect(screen.getAllByTestId('own-remote-provider-account')[1].textContent).toContain('subscriptionAccounts.signedOut');
+
+      await act(async () => {
+        pushListeners.forEach((listener) =>
+          listener({ deviceId: 'mini-a', channel: 'subscription-accounts:changed', payload: { providerId: 'anthropic' } }),
+        );
+      });
+      await waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
+      expect(screen.getAllByTestId('own-remote-provider-account')[1].textContent).not.toContain('subscriptionAccounts.signedOut');
+      expect(within(screen.getAllByTestId('own-remote-provider-account')[1]).getAllByRole('progressbar').length).toBe(2);
+    });
+
+    it('falls back to the single-account card on older hosts and skips pool reads for api-key or group entries', async () => {
+      invoke.mockRejectedValueOnce(new Error('CHANNEL_NOT_ALLOWED'));
+      const subscription: OwnRemoteProvider = {
+        ...entry,
+        provider: { ...entry.provider, auth: { method: 'oauth' as const, native: 'claude' as const } },
+      };
+      const { rerender } = render(<OwnRemoteProviderDetail entry={subscription} />);
+
+      await waitFor(() => expect(screen.getByRole('progressbar').getAttribute('aria-valuetext')).toBe('quotaCard.remainingPercent:{"percent":63}'));
+      expect(invoke).toHaveBeenCalledTimes(1);
+
+      invoke.mockClear();
+      rerender(<OwnRemoteProviderDetail entry={entry} />);
+      expect(invoke).not.toHaveBeenCalled();
+      expect(screen.queryByTestId('provider-usage-module')).toBeNull();
+    });
+  });
 });
