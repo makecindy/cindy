@@ -16,6 +16,7 @@ import { supplementalConversationEstimates } from '@cindy/maker-shared/usage-cos
  */
 
 import { eq, gte, desc, and, isNull, isNotNull, inArray, notInArray, or, sql } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/sqlite-core';
 import { runAsBackgroundDbRpc } from '../localDb/client/rpcAdmission.js';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import type { broadcastSessionPatched as BroadcastSessionPatched } from '../localDb/ipc/sessions.js';
@@ -55,8 +56,8 @@ import { normalizeTurnUsageDetails } from '../../shared/turnUsageDetails.js';
 export type SchedulerDrizzleDb = BetterSQLite3Database<typeof schema>;
 
 /** SQL counterpart of classifyScheduleFailure, shared by display and recovery. */
-function failureKindSql(alias: 'failed' | 'schedule_runs') {
-  const row = sql.raw(alias);
+function failureKindSql(table: 'failed' | 'schedule_runs' | 'newest_failure') {
+  const row = sql.raw(table);
   return sql<'precheck' | 'rate-limit' | 'execution'>`CASE
     WHEN CASE WHEN json_valid(${row}.pre_run_hook_result)
       THEN json_extract(${row}.pre_run_hook_result, '$.decision') = 'block' ELSE 0 END THEN CASE
@@ -78,14 +79,14 @@ function missingPluginField(raw: string | null): { missingPlugin?: ScheduleMissi
 }
 
 /** A success only recovers failures belonging to the same automation. */
-function failureRecoveredSql(alias: 'failed' | 'schedule_runs') {
-  const row = sql.raw(alias);
+function failureRecoveredSql(table: 'failed' | 'schedule_runs' | 'newest_failure') {
+  const row = sql.raw(table);
   return sql<boolean>`CASE WHEN ${row}.status IN ('failed', 'interrupted') THEN EXISTS (
     SELECT 1 FROM schedule_runs AS recovered
     WHERE recovered.schedule_id = ${row}.schedule_id
       AND recovered.fired_at >= ${row}.fired_at
       AND (recovered.status = 'success' OR (
-        ${failureKindSql(alias)} != 'execution'
+        ${failureKindSql(table)} != 'execution'
         AND recovered.status IN ('skipped', 'success', 'failed')
         AND CASE WHEN json_valid(recovered.pre_run_hook_result)
           THEN json_extract(recovered.pre_run_hook_result, '$.checkSucceeded') = 1 ELSE 0 END
@@ -817,7 +818,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
    * - 每个 session 只返回最新的 run 映射，读取量不随同一任务的运行次数增长。
    * - 额外包含全部 running 与未读终态 run，供运行标记对账和未读计数。
    * - 每个 session 保留最近一次尚未恢复的失败/中断；已读不等于恢复。
-   * - 每个启用的自动化额外保留最近一次无会话的未恢复失败，供自动化列表显示。
+   * - 每个启用的自动化额外保留最近一次未恢复失败，供自动化列表显示。
    * - 未读旧 run 先返回以累计 session 红点，最新映射最后返回以裁决 Automation 归属。
    * - 非最新 running 不携带 sessionId，只参与运行标记对账。
    * - 内部例行任务在 SQL 内排除，避免未读历史随运行次数累积到公共侧栏内存中。
@@ -861,7 +862,12 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       .where(and(unreadTerminalRunWhere(), publicScheduleRunWhere()))
       .orderBy(desc(scheduleRuns.firedAt), desc(scheduleRuns.id))
       .limit(SIDEBAR_UNREAD_RUN_LIMIT);
-    const [latestSessionRows, unreadRows, runningRows, latestFailedRows, latestSessionlessFailedRows] = await Promise.all([
+    const newestFailure = alias(scheduleRuns, 'newest_failure');
+    const latestSuccessAt = sql`COALESCE((
+      SELECT MAX(success.fired_at) FROM schedule_runs AS success
+      WHERE success.schedule_id = ${schedules.id} AND success.status = 'success'
+    ), 0)`;
+    const [latestSessionRows, unreadRows, runningRows, latestFailedRows, latestScheduleFailedRows] = await Promise.all([
       db
         .select(projection)
         .from(scheduleSessionLatestRuns)
@@ -898,28 +904,45 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         .innerJoin(schedules, eq(scheduleRuns.scheduleId, schedules.id))
         .where(publicScheduleRunWhere()),
       db
-        .select(projection)
+        .select({ ...projection, failureRecovered: sql<boolean>`0` })
         .from(schedules)
-        .innerJoin(scheduleRuns, eq(scheduleRuns.id, sql`(
+        .leftJoin(newestFailure, eq(newestFailure.id, sql`(
           SELECT failed.id FROM schedule_runs AS failed
           WHERE failed.schedule_id = ${schedules.id}
-            AND failed.session_id IS NULL
             AND failed.status IN ('failed', 'interrupted')
-            AND failed.fired_at >= COALESCE((
-              SELECT MAX(success.fired_at) FROM schedule_runs AS success
-              WHERE success.schedule_id = ${schedules.id} AND success.status = 'success'
-            ), 0)
-            AND NOT ${failureRecoveredSql('failed')}
+            AND failed.fired_at >= ${latestSuccessAt}
           ORDER BY failed.fired_at DESC, failed.id DESC LIMIT 1
         )`))
-        .where(and(eq(schedules.status, 'active'), publicScheduleRunWhere())),
+        // A newer recovery covers all older failures of the same kind. Only
+        // an older execution failure can survive a recovered precheck.
+        .innerJoin(scheduleRuns, eq(scheduleRuns.id, sql`CASE
+          WHEN NOT ${failureRecoveredSql('newest_failure')} THEN ${newestFailure.id}
+          WHEN ${failureKindSql('newest_failure')} != 'execution' THEN (
+            SELECT failed.id FROM schedule_runs AS failed
+            WHERE failed.schedule_id = ${schedules.id}
+              AND failed.status IN ('failed', 'interrupted')
+              AND failed.fired_at >= ${latestSuccessAt}
+              AND ${failureKindSql('failed')} = 'execution'
+            ORDER BY failed.fired_at DESC, failed.id DESC LIMIT 1
+          )
+        END`))
+        .where(and(eq(schedules.status, 'active'), publicScheduleRunWhere(), or(
+          eq(scheduleRuns.id, newestFailure.id),
+          sql`NOT ${failureRecoveredSql('schedule_runs')}`,
+        ))),
     ]);
     const latestRunIds = new Set(latestSessionRows.map((row) => row.runId));
     // SQL 按 fired_at 新→旧截 200 条；组装仍把其中较旧的未读放前面，红点累计后再用尾部最新映射裁决归属。
     const unreadOldestFirst = unreadRows.slice().reverse();
     const unreadRunIds = new Set(unreadOldestFirst.map((row) => row.runId));
+    const sessionFailureRunIds = new Set(latestFailedRows.map((row) => row.runId));
     const rows = [
-      ...latestSessionlessFailedRows.filter((row) => !unreadRunIds.has(row.runId)),
+      ...latestScheduleFailedRows
+        .filter((row) => !unreadRunIds.has(row.runId) && !latestRunIds.has(row.runId) &&
+          !sessionFailureRunIds.has(row.runId))
+        // Supplemental rows serve the automation list without changing
+        // ownership or alerts in the per-session sidebar.
+        .map((row) => ({ ...row, sessionId: null })),
       ...unreadOldestFirst.filter((row) => !latestRunIds.has(row.runId)),
       ...latestFailedRows.filter(
         (row) => !latestRunIds.has(row.runId) && !unreadRunIds.has(row.runId),
