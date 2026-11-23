@@ -60,6 +60,7 @@ const mocks = vi.hoisted(() => ({
     estimatedValueMoney: null,
     totalMoney: null,
   } as SessionUsageMoney,
+  sessionTokens: null as number | null,
   displaySnapshot: {
     messages: [] as Array<Record<string, unknown>>,
   },
@@ -83,6 +84,12 @@ vi.mock('react-i18next', () => ({
         'todaySpend.unit.day': '天',
         'todaySpend.unit.hour': '小时',
         'todaySpend.sessionCostLabel': '本任务 {{cost}}',
+        'todaySpend.codex.sessionValueLabel': '本任务价值 {{cost}}',
+        'todaySpend.codex.sessionTokensLine': '本任务已用 {{tokens}} token',
+        'todaySpend.codex.noUsageLabel': '暂无用量',
+        'todaySpend.codex.noUsageDetail': '本任务尚未产生用量。',
+        'todaySpend.codex.unavailableLabel': '用量暂不可用',
+        'todaySpend.codex.unavailableDetail': '用量数据暂时不可用。',
         'todaySpend.dailyLimitLabel': '今日 {{spend}}/{{limit}}',
         'todaySpend.monthlyLimitLabel': '本月 {{spend}}/{{limit}}',
         'todaySpend.creditLabel': '额度 {{used}}/{{total}}',
@@ -120,7 +127,7 @@ vi.mock('@/hooks/useClaudeSessionRoute', () => ({
 vi.mock('@/hooks/useSessionUsageMoney', () => ({
   useSessionUsageMoney: () => mocks.sessionUsage,
 }));
-vi.mock('@/hooks/useSessionTokens', () => ({ useSessionTokens: () => null }));
+vi.mock('@/hooks/useSessionTokens', () => ({ useSessionTokens: () => mocks.sessionTokens }));
 vi.mock('@/hooks/useAccountUsage', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/hooks/useAccountUsage')>();
   return {
@@ -260,6 +267,7 @@ beforeEach(() => {
     estimatedValueMoney: null,
     totalMoney: null,
   };
+  mocks.sessionTokens = null;
   mocks.displaySnapshot.messages = [];
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
@@ -985,5 +993,112 @@ describe('TodaySpendChip on a subscription account pool', () => {
     fireEvent.mouseEnter(screen.getAllByRole('button')[0]);
     act(() => vi.advanceTimersByTime(300));
     expect(screen.getByTestId('quota-hover-card').textContent).not.toContain('a@example.test');
+  });
+});
+
+/**
+ * SSH 远程 Codex 形态的用量回退（#12149）：
+ *   - 远程 Codex 没有账号快照镜像（`remoteHostId` 抑制本机额度读取）、反向隧道计费金额为 0，
+ *     订阅展示分支的额度段与金额段都为空 —— 此时回退显示会话已记录的 token，
+ *     不再渲染孤立的货币符号；
+ *   - 连 token 都没有时，区分「尚无用量」与「数据暂不可用」（与 codex-api 分支同一把尺子）。
+ * 并入本套件而非新开文件：全套件独立耗时由组件图 transform（~5.5s）主导，新开文件必然
+ * 超 §3.2 单文件 5 秒预算，且这些用例与远程会话渲染同属一个被测模块。
+ */
+describe('TodaySpendChip SSH remote Codex usage chip (#12149)', () => {
+  function renderSshCodexChip(props: { providerId?: string | null; modelId?: string } = {}) {
+    return render(
+      <TodaySpendChip
+        vendorKey="codex"
+        providerId={props.providerId ?? null}
+        modelId={props.modelId ?? 'gpt-6.1-sol'}
+        sessionId="session-ssh-codex-1"
+        remoteHostId="ssh-host-1"
+      />,
+    );
+  }
+
+  it('无额度窗口且金额为 0 时回退显示会话 token，不渲染孤立货币符号', () => {
+    mocks.sessionTokens = 500;
+
+    const { container } = renderSshCodexChip();
+
+    expect(container.textContent).toContain('本任务已用 500 token');
+    // 修复前该分支只输出一个货币符号（孤零零的 ¥/$）。
+    expect(container.textContent?.trim()).not.toMatch(/^[¥$]$/);
+    // SSH 远程不读本机 Codex 账号快照（额度事实在远端）。
+    expect(mocks.localCodexReadKinds.length).toBeGreaterThan(0);
+    expect(mocks.localCodexReadKinds.every((kind) => kind !== 'codex')).toBe(true);
+  });
+
+  it('既无会话 token 也无已完成轮次时显示「暂无用量」', () => {
+    mocks.sessionTokens = null;
+
+    const { container } = renderSshCodexChip();
+
+    expect(container.textContent).toContain('暂无用量');
+    expect(container.textContent?.trim()).not.toMatch(/^[¥$]$/);
+  });
+
+  it('有已完成轮次但 token 尚未恢复时显示「用量暂不可用」', () => {
+    mocks.sessionTokens = null;
+    mocks.displaySnapshot.messages = [
+      {
+        role: 'assistant',
+        clientId: 'msg-1',
+        turnUsageDetails: {
+          inputTokens: 1200,
+          outputTokens: 340,
+          cacheReadTokens: 0,
+          cacheCreateTokens: 0,
+          totalTokens: 1540,
+          cacheHitRate: null,
+        },
+      },
+    ];
+
+    const { container } = renderSshCodexChip();
+
+    expect(container.textContent).toContain('用量暂不可用');
+    expect(container.textContent?.trim()).not.toMatch(/^[¥$]$/);
+  });
+
+  it('有会话金额时保持原展示，不用 token 顶替', () => {
+    mocks.sessionTokens = 500;
+    mocks.sessionUsage = {
+      actualMoney: null,
+      estimatedValueMoney: null,
+      totalMoney: { amount: 1.25, currency: 'USD', kind: 'value-estimate', approximate: false },
+    } as SessionUsageMoney;
+
+    const { container } = renderSshCodexChip();
+
+    expect(container.textContent).toContain('本任务');
+    expect(container.textContent).not.toContain('本任务已用 500 token');
+  });
+
+  // codex 复评 P1：xai 账号 / xai/ 模型的 SSH 远程 Codex 归 usesXaiQuotaForm，远程下
+  // 本机额度读取同样被抑制、反向隧道计费为 0，两手空空——不得只按 usesCodexQuotaForm
+  // 回退而把这类会话漏成孤立货币符号。
+  it('xai 账号或 xai/ 模型的 SSH 远程 Codex 也回退会话 token', () => {
+    mocks.sessionTokens = 500;
+
+    const xaiProvider = renderSshCodexChip({ providerId: 'xai' });
+    expect(xaiProvider.container.textContent).toContain('本任务已用 500 token');
+    expect(xaiProvider.container.textContent?.trim()).not.toMatch(/^[¥$]$/);
+    cleanup();
+
+    const xaiModel = renderSshCodexChip({ modelId: 'xai/grok-4' });
+    expect(xaiModel.container.textContent).toContain('本任务已用 500 token');
+    expect(xaiModel.container.textContent?.trim()).not.toMatch(/^[¥$]$/);
+  });
+
+  it('xai 账号的 SSH 远程 Codex 无 token 时显示「暂无用量」', () => {
+    mocks.sessionTokens = null;
+
+    const { container } = renderSshCodexChip({ providerId: 'xai' });
+
+    expect(container.textContent).toContain('暂无用量');
+    expect(container.textContent?.trim()).not.toMatch(/^[¥$]$/);
   });
 });

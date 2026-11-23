@@ -3,6 +3,7 @@ import { PI_NATIVE_PROVIDER_ADAPTER_SOURCE } from './native-provider-adapter-sou
 import { PI_NATIVE_TOOL_CATALOG_SOURCE } from './native-tool-catalog-source.js';
 import { MAX_JSONL_BUFFER_CHARS } from './rpc-limits.js';
 import { assertToolLifecycleBudget } from '../shared/tool-lifecycle.js';
+import { PERMISSION_CONFIRMATION_TIMEOUT_GUIDANCE } from '../shared/auto-review-decision.js';
 /**
  * cindy-bridge —— 写进 pi agentHome/extensions/ 的扩展源码(字符串常量)。
  *
@@ -159,6 +160,7 @@ const TURN_CHANGE_CAPTURE_TITLE = 'cindy:turn-change-capture';
 const PERMISSION_ALLOW = 'allow';
 const PERMISSION_USER_DENY = 'user-deny';
 const PERMISSION_AUTO_REVIEW_DENY = 'auto-review-deny';
+const PERMISSION_CONFIRMATION_TIMEOUT_GUIDANCE = ${JSON.stringify(PERMISSION_CONFIRMATION_TIMEOUT_GUIDANCE)};
 function permissionDenialReason(decision: string | undefined): string {
   const source = decision?.split(':', 1)[0];
   const label = source === PERMISSION_AUTO_REVIEW_DENY ? 'Cindy Auto-review denied this tool call'
@@ -166,6 +168,10 @@ function permissionDenialReason(decision: string | undefined): string {
       : 'Cindy could not approve this tool call';
   const known = source === PERMISSION_AUTO_REVIEW_DENY || source === PERMISSION_USER_DENY || source === 'system-deny';
   const detail = known && decision?.includes(':') ? decision.slice(decision.indexOf(':') + 1).trim().slice(0, 240) : '';
+  // Same wording as formatPermissionDenial: a confirmation nobody answered is not the user saying no.
+  if (source === 'system-deny' && (detail === 'timeout' || detail.endsWith('_timeout'))) {
+    return label + ' (' + detail + '). ' + PERMISSION_CONFIRMATION_TIMEOUT_GUIDANCE;
+  }
   return detail ? label + ': ' + detail : label + '.';
 }
 const READONLY_BUILTINS = new Set(['read', 'grep', 'find', 'ls']);

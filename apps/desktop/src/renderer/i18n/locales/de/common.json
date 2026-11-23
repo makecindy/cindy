@@ -13261,7 +13261,8 @@
           "subject": {
             "githubIssue": "Die Bestätigungskarte „GitHub-Issue einreichen“",
             "renameSessions": "Die Bestätigungskarte „Mehrere Sitzungen umbenennen“",
-            "pluginFileGrant": "Die Bestätigungskarte „Plugin-Dateizugriff erlauben“"
+            "pluginFileGrant": "Die Bestätigungskarte „Plugin-Dateizugriff erlauben“",
+            "mediaPathReveal": "Die Bestätigungskarte „Agent den Speicherort einer Mediendatei auf dem Computer mitteilen“"
           }
         },
         "replyWords": {
@@ -17726,6 +17727,7 @@
       }
     },
     "editor": {
+      "reviewModelReadFailed": "Die Modelleinstellung konnte nicht gelesen werden. Schließe den Editor und öffne ihn erneut.",
       "promptDialog": {
         "titleEdit": "Automatisierung bearbeiten",
         "titleCreate": "Automatisierung erstellen",
@@ -18069,11 +18071,13 @@
         "effortHeading": "Denkintensität",
         "effortDefault": "Standard",
         "followSession": "Sitzung folgen",
+        "followTeammate": "Hauptmodell des Freundes folgen",
         "modelListAria": "Modellliste",
         "modelSelectorAria": "Modellauswahl",
         "categoryListAria": "{{category}}-Modelle",
         "effortListAria": "Denkintensität",
-        "boundLocationLocked": "Gebundene Aufgaben laufen weiterhin auf ihrem bisherigen Computer. Wähle ein Modell von diesem Computer."
+        "boundLocationLocked": "Gebundene Aufgaben laufen weiterhin auf ihrem bisherigen Computer. Wähle ein Modell von diesem Computer.",
+        "modelGroupTitle": "Modellgruppe „{{name}}“: wählt eine Quelle, wenn eine neue Aufgabe erstellt wird"
       }
     },
     "toast": {

@@ -13208,7 +13208,8 @@
           "subject": {
             "githubIssue": "‘GitHub 이슈 제출’ 확인 카드",
             "renameSessions": "‘작업 이름 일괄 변경’ 확인 카드",
-            "pluginFileGrant": "‘플러그인 파일 권한 부여’ 확인 카드"
+            "pluginFileGrant": "‘플러그인 파일 권한 부여’ 확인 카드",
+            "mediaPathReveal": "‘Agent에게 컴퓨터에 있는 미디어 파일 위치 알려 주기’ 확인 카드"
           }
         },
         "replyWords": {
@@ -17652,6 +17653,7 @@
       }
     },
     "editor": {
+      "reviewModelReadFailed": "자동화 모델 설정을 읽을 수 없습니다. 편집기를 닫고 다시 열어 주세요.",
       "promptDialog": {
         "titleEdit": "자동화 편집",
         "titleCreate": "자동화 만들기",
@@ -17995,11 +17997,13 @@
         "effortHeading": "추론 강도",
         "effortDefault": "기본값",
         "followSession": "세션 따르기",
+        "followTeammate": "동반자의 기본 모델 따르기",
         "modelListAria": "모델 목록",
         "modelSelectorAria": "모델 선택기",
         "categoryListAria": "{{category}} 모델",
         "effortListAria": "추론 강도",
-        "boundLocationLocked": "연결된 작업은 원래 컴퓨터에서 실행됩니다. 그 컴퓨터의 모델을 선택하세요."
+        "boundLocationLocked": "연결된 작업은 원래 컴퓨터에서 실행됩니다. 그 컴퓨터의 모델을 선택하세요.",
+        "modelGroupTitle": "모델 그룹 “{{name}}”: 새 작업을 만들 때 소스를 고릅니다"
       }
     },
     "toast": {

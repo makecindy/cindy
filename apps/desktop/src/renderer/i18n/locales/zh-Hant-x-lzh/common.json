@@ -13208,7 +13208,8 @@
           "subject": {
             "githubIssue": "「呈 GitHub Issue」之確認卡",
             "renameSessions": "「批次易差事之名」之確認卡",
-            "pluginFileGrant": "「法器卷帙授權」之確認卡"
+            "pluginFileGrant": "「法器卷帙授權」之確認卡",
+            "mediaPathReveal": "「許 Agent 知圖等媒體卷於機上之所在」之確認卡"
           }
         },
         "replyWords": {
@@ -17652,6 +17653,7 @@
       }
     },
     "editor": {
+      "reviewModelReadFailed": "未能讀取自動化模型設定，請關閉編輯器後重開再試。",
       "promptDialog": {
         "titleEdit": "修自運",
         "titleCreate": "立自運",
@@ -17995,11 +17997,13 @@
         "effortHeading": "思之深淺",
         "effortDefault": "常例",
         "followSession": "隨差事",
+        "followTeammate": "隨同伴主模型",
         "modelListAria": "模型錄",
         "modelSelectorAria": "擇模型",
         "categoryListAria": "{{category}} 模型",
         "effortListAria": "思之深淺",
-        "boundLocationLocked": "所繫差事仍於原機行之，請擇彼機之模型。"
+        "boundLocationLocked": "所繫差事仍於原機行之，請擇彼機之模型。",
+        "modelGroupTitle": "模型組「{{name}}」：新立任務則依式擇源"
       }
     },
     "toast": {

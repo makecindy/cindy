@@ -13372,7 +13372,8 @@
           "subject": {
             "githubIssue": "O cartão de confirmação “Enviar Issue do GitHub”",
             "renameSessions": "O cartão de confirmação “Renomear tarefas em lote”",
-            "pluginFileGrant": "O cartão de confirmação “Autorização de arquivos do plugin”"
+            "pluginFileGrant": "O cartão de confirmação “Autorização de arquivos do plugin”",
+            "mediaPathReveal": "O cartão de confirmação “Permitir que o Agent obtenha o local de um arquivo de mídia no computador”"
           }
         },
         "replyWords": {
@@ -17892,6 +17893,7 @@
       }
     },
     "editor": {
+      "reviewModelReadFailed": "Não foi possível ler o modelo da automação. Feche e reabra o editor para tentar novamente.",
       "promptDialog": {
         "titleEdit": "Editar automação",
         "titleCreate": "Criar automação",
@@ -18235,11 +18237,13 @@
         "effortHeading": "Esforço de raciocínio",
         "effortDefault": "Padrão",
         "followSession": "Seguir sessão",
+        "followTeammate": "Seguir o modelo principal do amigo",
         "modelListAria": "Lista de modelos",
         "modelSelectorAria": "Seletor de modelo",
         "categoryListAria": "Modelos de {{category}}",
         "effortListAria": "Esforço de raciocínio",
-        "boundLocationLocked": "As tarefas vinculadas continuam sendo executadas onde estão. Escolha um modelo desse computador."
+        "boundLocationLocked": "As tarefas vinculadas continuam sendo executadas onde estão. Escolha um modelo desse computador.",
+        "modelGroupTitle": "Grupo de modelos “{{name}}”: escolhe uma fonte ao criar uma nova tarefa"
       }
     },
     "toast": {

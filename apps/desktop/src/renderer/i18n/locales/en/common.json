@@ -13261,7 +13261,8 @@
           "subject": {
             "githubIssue": "The “Submit GitHub Issue” confirmation card",
             "renameSessions": "The “Rename tasks in bulk” confirmation card",
-            "pluginFileGrant": "The “Plugin file access” confirmation card"
+            "pluginFileGrant": "The “Plugin file access” confirmation card",
+            "mediaPathReveal": "The “Let the Agent get a media file’s location on the computer” confirmation card"
           }
         },
         "replyWords": {
@@ -17726,6 +17727,7 @@
       }
     },
     "editor": {
+      "reviewModelReadFailed": "Could not read the automation’s model preference. Close and reopen the editor to retry.",
       "promptDialog": {
         "titleEdit": "Edit Automation",
         "titleCreate": "Create Automation",
@@ -18069,11 +18071,13 @@
         "effortHeading": "Reasoning Effort",
         "effortDefault": "Default",
         "followSession": "Follow session",
+        "followTeammate": "Follow buddy’s primary model",
         "modelListAria": "Model list",
         "modelSelectorAria": "Model selector",
         "categoryListAria": "{{category}} models",
         "effortListAria": "Reasoning effort",
-        "boundLocationLocked": "Bound tasks keep running where they are. Choose a model from that computer."
+        "boundLocationLocked": "Bound tasks keep running where they are. Choose a model from that computer.",
+        "modelGroupTitle": "Model group “{{name}}”: picks a source when a run starts a new task"
       }
     },
     "toast": {

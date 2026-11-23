@@ -13372,7 +13372,8 @@
           "subject": {
             "githubIssue": "La tarjeta de confirmación “Enviar incidencia de GitHub”",
             "renameSessions": "La tarjeta de confirmación “Renombrar tareas en lote”",
-            "pluginFileGrant": "La tarjeta de confirmación “Autorizar archivos del complemento”"
+            "pluginFileGrant": "La tarjeta de confirmación “Autorizar archivos del complemento”",
+            "mediaPathReveal": "La tarjeta de confirmación “Permitir que el Agent obtenga la ubicación de un archivo multimedia en la computadora”"
           }
         },
         "replyWords": {
@@ -17892,6 +17893,7 @@
       }
     },
     "editor": {
+      "reviewModelReadFailed": "No se pudo leer el modelo de la automatización. Cierra y vuelve a abrir el editor para reintentar.",
       "promptDialog": {
         "titleEdit": "Editar automatización",
         "titleCreate": "Crear automatización",
@@ -18235,11 +18237,13 @@
         "effortHeading": "Intensidad de razonamiento",
         "effortDefault": "Predeterminado",
         "followSession": "Seguir sesión",
+        "followTeammate": "Seguir el modelo principal del amigo",
         "modelListAria": "Lista de modelos",
         "modelSelectorAria": "Selector de modelo",
         "categoryListAria": "Modelos de {{category}}",
         "effortListAria": "Intensidad de razonamiento",
-        "boundLocationLocked": "Las tareas vinculadas siguen ejecutándose donde están. Elige un modelo de esa computadora."
+        "boundLocationLocked": "Las tareas vinculadas siguen ejecutándose donde están. Elige un modelo de esa computadora.",
+        "modelGroupTitle": "Grupo de modelos «{{name}}»: elige una fuente al crear una tarea nueva"
       }
     },
     "toast": {

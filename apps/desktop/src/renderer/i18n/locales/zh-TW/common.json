@@ -13208,7 +13208,8 @@
           "subject": {
             "githubIssue": "「提交 GitHub Issue」的確認卡",
             "renameSessions": "「批次重新命名任務」的確認卡",
-            "pluginFileGrant": "「插件檔案授權」的確認卡"
+            "pluginFileGrant": "「插件檔案授權」的確認卡",
+            "mediaPathReveal": "「讓 Agent 取得圖片等媒體檔案在電腦上的位置」的確認卡"
           }
         },
         "replyWords": {
@@ -17652,6 +17653,7 @@
       }
     },
     "editor": {
+      "reviewModelReadFailed": "無法讀取自動化的模型設定，請關閉編輯器後重新開啟重試。",
       "promptDialog": {
         "titleEdit": "編輯自動化",
         "titleCreate": "建立自動化",
@@ -17995,11 +17997,13 @@
         "effortHeading": "推理強度",
         "effortDefault": "預設",
         "followSession": "跟隨任務",
+        "followTeammate": "跟隨夥伴主模型",
         "modelListAria": "模型列表",
         "modelSelectorAria": "模型選擇器",
         "categoryListAria": "{{category}} 模型",
         "effortListAria": "推理強度",
-        "boundLocationLocked": "繫結的任務在原來的電腦上執行，請選擇那台電腦上的模型。"
+        "boundLocationLocked": "繫結的任務在原來的電腦上執行，請選擇那台電腦上的模型。",
+        "modelGroupTitle": "模型組「{{name}}」：建立新任務時依模式選來源"
       }
     },
     "toast": {

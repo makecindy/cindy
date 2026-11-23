@@ -67,6 +67,7 @@ import {
   formatBotListTimestamp,
 } from './botListDisplay';
 import { botDeviceLabel, partitionBotRoster } from './botRosterDisplay';
+import { botOpenRoute } from './botNavigation';
 import { readCollapsedTeammateAvatars, writeCollapsedTeammateAvatars, readTeammatesViewMode, writeTeammatesViewMode, type TeammatesViewMode, readTeammatesSectionCollapsed, writeTeammatesSectionCollapsed } from './teammatesSectionPrefs';
 import { toast } from '@/lib/toast';
 import {
@@ -858,7 +859,7 @@ export function TeammatesSection() {
                   <button
                     type="button"
                     {...companionDragProps(`/bots/${encodeURIComponent(bot.id)}`, bot.name)}
-                    onClick={() => navigate(`/bots/${encodeURIComponent(bot.id)}`)}
+                    onClick={() => { const { to, state } = botOpenRoute(bot); if (state) navigate(to, { state }); else navigate(to); }}
                     aria-current={selected ? 'page' : undefined}
                     onContextMenu={(event) => {
                       event.preventDefault();

@@ -13208,7 +13208,8 @@
           "subject": {
             "githubIssue": "「GitHub Issue を提出」の確認カード",
             "renameSessions": "「タスク名の一括変更」の確認カード",
-            "pluginFileGrant": "「プラグインのファイル許可」の確認カード"
+            "pluginFileGrant": "「プラグインのファイル許可」の確認カード",
+            "mediaPathReveal": "「Agent にメディアファイルのパソコン上の場所を伝える」の確認カード"
           }
         },
         "replyWords": {
@@ -17652,6 +17653,7 @@
       }
     },
     "editor": {
+      "reviewModelReadFailed": "自動化のモデル設定を読み込めませんでした。エディターを閉じて開き直してください。",
       "promptDialog": {
         "titleEdit": "自動化を編集",
         "titleCreate": "自動化を作成",
@@ -17995,11 +17997,13 @@
         "effortHeading": "推論強度",
         "effortDefault": "デフォルト",
         "followSession": "セッションに従う",
+        "followTeammate": "仲間のメインモデルに従う",
         "modelListAria": "モデル一覧",
         "modelSelectorAria": "モデルセレクター",
         "categoryListAria": "{{category}} モデル",
         "effortListAria": "推論強度",
-        "boundLocationLocked": "連携したタスクは元のコンピューターで実行されます。そのコンピューターのモデルを選んでください。"
+        "boundLocationLocked": "連携したタスクは元のコンピューターで実行されます。そのコンピューターのモデルを選んでください。",
+        "modelGroupTitle": "モデルグループ「{{name}}」：新しいタスクを作るときにソースを選びます"
       }
     },
     "toast": {
