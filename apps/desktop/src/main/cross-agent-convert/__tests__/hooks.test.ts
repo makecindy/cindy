@@ -399,6 +399,23 @@ describe('convertHooks — to-codex', () => {
     const json = JSON.parse(await fs.readFile(path.join(wd, '.codex', 'hooks.json'), 'utf8'));
     expect(json).toEqual({ hooks: { Stop: commandGroup('true') } });
   });
+
+  // PR #12283, unit: the previous flat-format case used an inline command.
+  // A legacy relative script command must trigger the same upgrade through detect and convertHooks.
+  it.each(['present', 'missing'])('upgrades a flat hook with an unquoted command and a %s script', async (scriptState) => {
+    const legacy = { Stop: commandGroup('sh .codex/hooks/new.sh') };
+    await writeConfig('.claude/settings.json', JSON.stringify({ hooks: { Stop: commandGroup('sh .claude/hooks/new.sh') } }));
+    await writeConfig('.claude/hooks/new.sh', 'echo new');
+    await writeConfig('.codex/hooks.json', JSON.stringify(legacy));
+    if (scriptState === 'present') await writeConfig('.codex/hooks/new.sh', 'echo new');
+
+    const item = await pendingHooks();
+    expect(item?.subItems?.map(entry => entry.name)).toEqual(['new.sh']);
+    expect((await convertHooks(item!)).status).toBe('success');
+    expect(JSON.parse(await fs.readFile(toCodexItem().target, 'utf8'))).toEqual({ hooks: legacy });
+    expect(await fs.readFile(path.join(wd, '.codex/hooks/new.sh'), 'utf8')).toBe('echo new');
+    expect(await pendingHooks()).toBeUndefined();
+  });
 });
 
 describe('convertHooks — to-claude', () => {

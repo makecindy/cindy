@@ -60,13 +60,30 @@ async function readScript(wd: string, name: string): Promise<Script | undefined>
 
 type Adapted = { handler: Fields & { command: string }; script?: Script };
 
+function comparableCommand(command: string): string {
+  // Removing quotes is equivalent only for a plain relative path without spaces.
+  return command.replace(/^(python3?|sh|bash) "(\.codex\/hooks\/[\p{L}\p{N}_.-]+)"$/u, '$1 $2');
+}
+
+function comparableGroups(groups: unknown): unknown {
+  if (!Array.isArray(groups)) return groups;
+  return groups.map(group => {
+    if (!isPlainObject(group) || !Array.isArray(group.hooks)) return group;
+    const hooks = group.hooks.map(handler => isPlainObject(handler)
+      && handler.type === 'command' && typeof handler.command === 'string'
+      ? { ...handler, command: comparableCommand(handler.command) }
+      : handler);
+    return { ...group, hooks };
+  });
+}
+
 function referencesScript(groups: unknown, matcher: unknown, command: string): boolean {
   if (!Array.isArray(groups)) return false;
-  // Removing quotes is equivalent only for a plain relative path without spaces.
-  const unquoted = command.replace(/"(\.codex\/hooks\/[\p{L}\p{N}_.-]+)"/u, '$1');
+  const comparable = comparableCommand(command);
   return groups.some(group => isPlainObject(group) && (group.matcher ?? '') === (matcher ?? '')
     && Array.isArray(group.hooks) && group.hooks.some(handler => isPlainObject(handler)
-      && handler.type === 'command' && (handler.command === command || handler.command === unquoted)));
+      && handler.type === 'command' && typeof handler.command === 'string'
+      && comparableCommand(handler.command) === comparable));
 }
 
 async function adaptHandler(
@@ -161,7 +178,8 @@ export async function planCodexHooks(wd: string) {
         if (!action) continue;
         handlers.push(action.handler);
         adapted.push(action);
-        if (action.script?.missing && referencesScript(nativeGroups, group.matcher, action.handler.command)) {
+        if ((!flat || hasToml) && action.script?.missing
+          && referencesScript(nativeGroups, group.matcher, action.handler.command)) {
           missingReferences.push(action);
         }
         // Earlier versions left this Claude-only variable in an otherwise rewritten command.
@@ -178,7 +196,8 @@ export async function planCodexHooks(wd: string) {
     if (!adapted.length) continue;
     if (nativeGroups === undefined) updates[event] = additions;
     if (repairs.length) updates[event] = replacements;
-    const wrapEvent = flat && !hasToml && isDeepStrictEqual(nativeGroups, additions);
+    const wrapEvent = flat && !hasToml
+      && isDeepStrictEqual(comparableGroups(nativeGroups), comparableGroups(additions));
     wrapFlat ||= wrapEvent;
 
     const selected = nativeGroups === undefined || wrapEvent ? adapted : [...repairs, ...missingReferences];
