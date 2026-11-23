@@ -194,6 +194,8 @@ function botTaskDispatchHarness(
   };
   const dbClient = { drizzle: { select: () => dbChain } };
   const stubs: Record<string, unknown> = {
+    // The slice initializes the compact service, but these fixtures only dispatch sends.
+    createDeferredSessionCompact: () => ({}),
     getPluginHostToolCaller: () => undefined,
     sanitizeSourceName,
     getInstalledGhostName: () => 'Dashboard',
