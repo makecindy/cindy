@@ -324,6 +324,83 @@ describe('Pi MCP request lifecycle', () => {
     ]);
   });
 
+  // 测试价值：Pi 重连替换真实 MCP client 时，旧 Streamable HTTP 会话必须收到 DELETE，
+  // 否则真实 bridge 会把每次重连都保留到任务结束。最小失败输入是一次 initialize 后的
+  // tools/list 失败或 client 替换，tier unit，使用生成扩展的真实 HTTP client。
+  it('deletes replaced sessions and sessions whose discovery fails', async () => {
+    let initializeCount = 0;
+    let failDiscovery = false;
+    const methods: string[] = [];
+    const fetchImpl = vi.fn(async (_url: unknown, options?: RequestInit) => {
+      const method = options?.method ?? 'POST';
+      if (method === 'DELETE') {
+        methods.push('DELETE');
+        return new Response(null, { status: 204 });
+      }
+      const body = JSON.parse(String(options?.body));
+      methods.push(body.method);
+      if (body.method === 'initialize') {
+        initializeCount += 1;
+        return Response.json({ result: { serverInfo: { name: 'fixture' } } }, {
+          headers: { 'mcp-session-id': 'session-' + initializeCount },
+        });
+      }
+      if (body.method === 'tools/list' && failDiscovery) return new Response(null, { status: 503 });
+      return Response.json({ result: body.method === 'tools/list' ? { tools: [{ name: 'probe' }] } : {} });
+    });
+    const h = gatewayWithFetch(fetchImpl);
+    const first = await h.connect();
+    h.gateway.add('cindy', first.client, first.tools, first.displayName);
+    const second = await h.connect();
+    h.gateway.add('cindy', second.client, second.tools, second.displayName);
+    await vi.waitFor(() => expect(methods.filter(method => method === 'DELETE')).toHaveLength(1));
+
+    failDiscovery = true;
+    await expect(h.connect()).rejects.toThrow('HTTP 503');
+    await vi.waitFor(() => expect(methods.filter(method => method === 'DELETE')).toHaveLength(2));
+    expect(methods).toEqual([
+      'initialize', 'notifications/initialized', 'tools/list',
+      'initialize', 'notifications/initialized', 'tools/list', 'DELETE',
+      'initialize', 'notifications/initialized', 'tools/list', 'DELETE',
+    ]);
+  });
+
+  // 测试价值：客户端替换不能截断仍在途的 MCP 工具调用。最小失败输入是旧客户端
+  // 在 tools/call 等待响应时被新连接替换。Tier unit，真实扩展客户端 + 注入 fetch，
+  // 用虚拟时钟越过旧清理期限，覆盖之前只验证短调用的缺口。
+  it('waits for a long in-flight call before deleting a replaced session', async () => {
+    vi.useFakeTimers();
+    let finishCall!: (response: Response) => void;
+    const methods: string[] = [];
+    const fetchImpl = vi.fn(async (_url: unknown, options?: RequestInit) => {
+      const method = options?.method ?? 'POST';
+      if (method === 'DELETE') {
+        methods.push('DELETE');
+        return new Response(null, { status: 204 });
+      }
+      const body = JSON.parse(String(options?.body));
+      methods.push(body.method);
+      if (body.method === 'initialize') return Response.json({ result: {} }, {
+        headers: { 'mcp-session-id': 'in-flight-session' },
+      });
+      if (body.method === 'tools/list') return Response.json({ result: { tools: [{ name: 'probe' }] } });
+      if (body.id === undefined) return new Response(null, { status: 202 });
+      return new Promise<Response>(resolve => { finishCall = resolve; });
+    });
+    const h = gatewayWithFetch(fetchImpl);
+    const first = await h.connect();
+    h.gateway.add('cindy', first.client, first.tools, first.displayName);
+    const call = first.client.request('tools/call', { name: 'probe', arguments: {} });
+    await vi.waitFor(() => expect(methods).toContain('tools/call'));
+    const second = await h.connect();
+    h.gateway.add('cindy', second.client, second.tools, second.displayName);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(methods).not.toContain('DELETE');
+    finishCall(Response.json({ result: { content: [{ type: 'text', text: 'ok' }] } }));
+    await expect(call).resolves.toMatchObject({ content: [{ text: 'ok' }] });
+    await vi.waitFor(() => expect(methods).toContain('DELETE'));
+  });
+
   it('keeps stable ids authoritative when they collide with another display name', async () => {
     const h = gatewayWithFetch(vi.fn(async () => Response.json({ result: { content: [] } })));
     h.gateway.add('alpha', h.client, [{ name: 'first' }], 'First');

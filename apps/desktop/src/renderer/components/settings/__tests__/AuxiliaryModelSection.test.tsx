@@ -18,8 +18,10 @@ const FALLBACK_PIN = 'cat:anthropic:claude-code:claude-haiku-4-5';
 const h = vi.hoisted(() => ({
   get: vi.fn(),
   test: vi.fn(),
-  health: vi.fn(),
+  routeHealth: vi.fn(),
   set: vi.fn(),
+  health: vi.fn(),
+  navigate: vi.fn(),
   toastError: vi.fn(),
   authMode: 'cloud' as 'signed-out' | 'local' | 'cloud',
 }));
@@ -36,6 +38,8 @@ vi.mock('@/lib/logger', () => ({
 vi.mock('@/lib/toast', () => ({
   toast: { error: h.toastError },
 }));
+
+vi.mock('react-router-dom', () => ({ useNavigate: () => h.navigate }));
 
 vi.mock('@/contexts/AuthContext', () => ({
   useAuth: () => ({ mode: h.authMode }),
@@ -171,9 +175,10 @@ function installApi(): void {
     value: {
       maker: {
         auxiliaryModelSettingsGet: h.get,
-        auxiliaryModelHealthGet: h.health,
+        auxiliaryModelRouteHealthGet: h.routeHealth,
         auxiliaryModelSettingsTest: h.test,
         auxiliaryModelSettingsSet: h.set,
+        auxiliaryModelHealthGet: h.health,
       },
     },
   });
@@ -199,8 +204,9 @@ describe('AuxiliaryModelSection', () => {
       value: vi.fn(),
     });
     installApi();
+    h.health.mockResolvedValue({ status: 'ok' });
     h.get.mockResolvedValue(state({ options: OPTIONS }));
-    h.health.mockResolvedValue([]);
+    h.routeHealth.mockResolvedValue([]);
     h.test.mockResolvedValue({ ok: true, tested: [] });
     h.set.mockImplementation(async (patch: { models?: string[] }) => {
       const models = patch.models ?? [];
@@ -222,6 +228,30 @@ describe('AuxiliaryModelSection', () => {
     expect(screen.getByText(/settings.auxiliaryModels.chain.cindyDeepseekV4Flash/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'settings.auxiliaryModels.customize' })).toBeNull();
     expect(screen.queryByText('settings.auxiliaryModels.preferred.label')).toBeNull();
+  });
+
+  // docs/product-rules/auxiliary-model-health.md: when no auxiliary model can run, the
+  // section says why for each candidate and offers the two fixes; it shows nothing otherwise.
+  it('explains why no auxiliary model can run and offers the fixes', async () => {
+    h.health.mockResolvedValue({
+      status: 'unavailable',
+      kind: 'config',
+      candidates: [{ ref: 'a', label: 'DeepSeek v4 Flash · Cindy AI', issue: 'provider_disabled' }],
+      fallbackModel: 'GPT-6.2 Astra · OpenAI',
+      since: 1,
+    });
+    render(<AuxiliaryModelSection />);
+
+    expect(await screen.findByText('settings.auxiliaryModels.health.configTitle')).toBeTruthy();
+    expect(screen.getByText('settings.auxiliaryModels.health.candidate')).toBeTruthy();
+    expect(screen.getByText('settings.auxiliaryModels.health.fallback')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'settings.auxiliaryModels.health.openProviders' }));
+    expect(h.navigate).toHaveBeenCalledWith('/settings?tab=providers');
+    fireEvent.click(screen.getByRole('button', { name: 'settings.auxiliaryModels.health.customize' }));
+    expect(await screen.findByText('settings.auxiliaryModels.preferred.label')).toBeTruthy();
+    // Already customizing: the customize action is gone, the explanation stays.
+    expect(screen.queryByRole('button', { name: 'settings.auxiliaryModels.health.customize' })).toBeNull();
+    expect(h.set).not.toHaveBeenCalled();
   });
 
   // PR #7744: mounted auxiliary settings must follow the shared source-name snapshot.
@@ -586,7 +616,7 @@ describe('AuxiliaryModelSection', () => {
   // Unit: the settings snapshot must retain the provider detail after a successful fallback.
   it('renders the most recent HTTP error as summary followed by literal message text', async () => {
     const detail = 'Provider Message.\nTry Later!';
-    h.health.mockResolvedValueOnce([{ model: 'Small', providerId: 'test', reason: 'http_error',
+    h.routeHealth.mockResolvedValueOnce([{ model: 'Small', providerId: 'test', reason: 'http_error',
       status: 'monitoring', httpStatus: 503, upstreamMessage: detail, failureRate: 1, attemptCount: 1,
       ownerStamp: { dataOwnerId: null, ownerGeneration: 0 } }]);
     render(<AuxiliaryModelSection />);

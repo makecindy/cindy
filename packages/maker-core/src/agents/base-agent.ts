@@ -164,6 +164,8 @@ export interface PiExtraSpawnConfig {
    * close() 时调用且要求幂等。只要拿到 bridge（包括匿名会话）就应提供。
    */
   disposeSessionCtx?: () => void;
+  /** Close only the transports owned by a confirmed Agent process instance. */
+  closeSessionInstance?: () => void;
 }
 
 /** pi models.json 原生 provider 的 api 形态(BYOM 用;不过 anthropic-compat 代理)。 */
@@ -495,6 +497,8 @@ export interface RefreshLocalModelsOptions {
    * 捕获监听器,让调用方按发起时的登录代际决定是否采用。
    */
   onSupportedModels?: (models: unknown[]) => void;
+  /** Claude discovery hosts may classify failures instead of receiving false. */
+  throwOnError?: boolean;
   /** Codex: route a complete live snapshot to this caller instead of OAuth discovery. */
   onModelsListed?: (models: readonly CodexModelListItem[]) => void | Promise<void>;
 }
@@ -1362,6 +1366,8 @@ export interface AgentDeps {
    * Missing or failed classifiers cannot grant a trusted shortcut.
    */
   getMcpToolApprovalPolicy?: (context: McpToolApprovalContext) => McpToolApprovalPolicy;
+  /** Optional host-resolved review input for an alias. Never replaces execution input. */
+  getMcpToolApprovalEvidence?: (context: McpToolApprovalContext) => unknown;
 
   /**
    * Codex 专用钩子：resume / fork 外部本地 thread 前由 host 准备底层 session state。
@@ -3121,7 +3127,8 @@ export abstract class BaseAgent {
   }
 
   async requiresCodexThreadHostTransfer(
-    opts: Pick<StartSessionOptions, 'sessionId' | 'model' | 'providerId' | 'reviewMode' | 'remoteHostId'> & { threadId: string },
+    opts: Pick<StartSessionOptions, 'sessionId' | 'model' | 'providerId' | 'reviewMode' | 'remoteHostId' | typeof NATIVE_SUBSCRIPTION_ACCOUNT>
+      & { threadId: string },
   ): Promise<boolean> {
     void opts;
     return false;

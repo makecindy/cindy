@@ -5,7 +5,7 @@ import { cn } from '@/lib/utils';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
-import { useAuxiliaryModelHealth } from '@/hooks/useAuxiliaryModelHealth';
+import { useAuxiliaryRouteHealth } from '@/hooks/useAuxiliaryRouteHealth';
 import { isDataOwnerPushStampCurrent } from '@/contexts/dataOwnerGeneration';
 import { useAuth } from '@/contexts/AuthContext';
 import { toast } from '@/lib/toast';
@@ -100,7 +100,7 @@ export function AuxiliaryModelHealthBanner({ sessionId }: { sessionId: string })
       notification.current = { id, route, kind: noticeKind(event) };
     }
   }, [sessionId, t]);
-  const rows = useAuxiliaryModelHealth(onChange, sessionId);
+  const rows = useAuxiliaryRouteHealth(onChange, sessionId);
   useEffect(() => {
     const current = notification.current;
     if (current && !rows.some(row => row.sessionId === sessionId && noticeKind(row) === current.kind)) {

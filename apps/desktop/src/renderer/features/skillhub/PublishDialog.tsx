@@ -358,7 +358,7 @@ export function SelectInput({
           align="start"
           sideOffset={4}
           className={cn(
-            'z-[10010] w-[var(--radix-select-trigger-width)] overflow-hidden rounded-xl border p-1.5',
+            'w-[var(--radix-select-trigger-width)] overflow-hidden rounded-xl border p-1.5',
             'max-h-[min(15rem,var(--radix-select-content-available-height))]',
             'border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]',
           )}
@@ -985,7 +985,7 @@ export function PublishDialog({
       >
         <Dialog.Portal>
           <Dialog.Overlay
-            className="modal-scrim fixed inset-0 z-[10000]"
+            className="modal-scrim fixed inset-0 z-modal"
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           />
           <Dialog.Content
@@ -994,7 +994,7 @@ export function PublishDialog({
               if (isWorking && pubState.phase !== 'scanning') e.preventDefault();
             }}
             className={cn(
-              'modal-panel fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
+              'modal-panel fixed left-1/2 top-1/2 z-modal -translate-x-1/2 -translate-y-1/2',
               'w-full max-w-[480px]',
               'max-h-[90vh] overflow-y-auto',
             )}

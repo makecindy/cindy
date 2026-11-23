@@ -47,12 +47,12 @@ export function WorktreeCreatingOverlay({ branchName, startedAt }: WorktreeCreat
       aria-live="polite"
       className={cn(
         'flex w-full items-center justify-between gap-3',
-        'h-[90px] rounded-[12px] px-4',
+        'h-[90px] rounded-xl px-4',
         'bg-[hsl(var(--content-area))]',
         'border border-[hsl(var(--sidebar-border))]',
       )}
     >
-      <div className="flex min-w-0 flex-1 items-center gap-[10px]">
+      <div className="flex min-w-0 flex-1 items-center gap-2.5">
         <div
           className={cn(
             'flex h-8 w-8 shrink-0 items-center justify-center rounded-full',
@@ -61,7 +61,7 @@ export function WorktreeCreatingOverlay({ branchName, startedAt }: WorktreeCreat
         >
           <Spinner size={16} className="text-[var(--workingdir-icon)]" />
         </div>
-        <div className="flex min-w-0 flex-col gap-[2px]">
+        <div className="flex min-w-0 flex-col gap-0.5">
           <div
             className="truncate text-14 font-medium leading-tight text-[var(--msg-assistant-text)]"
             title={t('newChat.worktreeCreatingOverlay.heading')}

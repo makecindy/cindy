@@ -384,7 +384,7 @@ import { GhostFulfillmentContext, type GhostCallSummary } from './GhostSummonCar
 import { ChatSessionFileProvider, useChatSessionFileValue } from './ChatSessionFileContext';
 import { toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import { rewriteToRemoteMediaOrigin, type RemoteMediaOrigin } from '@/../shared/remoteMediaUrl';
-import { isGhostCallToolName, isTurnEndGhostCardHtml } from '@/../shared/ghost';
+import { isGhostCallToolName, isGhostStartupToolCallName, isTurnEndGhostCardHtml } from '@/../shared/ghost';
 import { ChatVideoView } from './ChatVideoView';
 import { ChatAudioCard } from './ChatAudioCard';
 import { ChatSoundEffectCard } from './ChatSoundEffectCard';
@@ -2216,7 +2216,8 @@ export function buildRenderItems(
       let suppressMediaForCard = false;
       let hideRowForCard = false;
       const maybeQueueGhostCard = (result: string | undefined): void => {
-        if (!ghostCards || !isGhostCallToolName(toolName)) return;
+        const namedPluginTool = isGhostStartupToolCallName(toolName);
+        if (!ghostCards || (!isGhostCallToolName(toolName) && !namedPluginTool)) return;
         const inp = (msg.toolInput ?? null) as Record<string, unknown> | null;
         const ghostIdFromInput = typeof inp?.ghost_id === 'string' ? inp.ghost_id : '';
         const candidateGhostId = ghostCardInstanceId(ghostIdFromInput, inp?.namespace);
@@ -2258,15 +2259,17 @@ export function buildRenderItems(
               typeof msg.toolUseId === 'string' &&
               lc.toolUseId === msg.toolUseId,
           ) ??
-          (candidateGhostId && i >= latestTurnStart
+          ((namedPluginTool || candidateGhostId) && i >= latestTurnStart
             ? guessableLiveCards.find(
                 (lc) =>
                   !claimedLiveCallIds.has(lc.callId) &&
                   !settledCardIds.has(lc.callId) &&
                   lc.toolUseId === null &&
-                  ((lc.logicalGhostId ?? lc.ghostId) === candidateGhostId ||
-                    (lc.logicalGhostId === undefined && inp?.namespace === undefined &&
-                      lc.ghostId === candidateGhostId)),
+                  (lc.startupToolName
+                    ? toolName === `mcp__cindy__${lc.startupToolName}` || toolName === `mcp:cindy:${lc.startupToolName}`
+                    : !namedPluginTool && ((lc.logicalGhostId ?? lc.ghostId) === candidateGhostId ||
+                      (lc.logicalGhostId === undefined && inp?.namespace === undefined &&
+                        lc.ghostId === candidateGhostId))),
               )
             : undefined);
         if (!live) return;
@@ -7323,6 +7326,7 @@ const MessageItem = memo(function MessageItem({
             delivery={message.delivery}
             goalBadge={message.goalBadge}
             blockedByGhost={message.blockedByGhost}
+            inputNotice={message.inputNotice}
             simplifiedBotConversation={simplifiedBotConversation}
             replyQuote={message.replyQuote}
           />
@@ -7341,7 +7345,7 @@ const MessageItem = memo(function MessageItem({
         return sessionId ? (
           <McpAppCard sessionId={sessionId} clientId={message.clientId}
             title={String(message.systemCardData?.title ?? '')}
-            plugin={message.systemCardData?.plugin} customMcp={message.systemCardData?.customMcp}
+            plugin={message.systemCardData?.plugin} customMcp={message.systemCardData?.customMcp} initialHeight={message.systemCardData?.initialHeight}
             fallbackText={String(message.systemCardData?.fallbackText ?? '')} />
         ) : null;
       }

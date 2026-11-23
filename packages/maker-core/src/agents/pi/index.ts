@@ -3855,6 +3855,13 @@ export class PiAgent extends BaseAgent {
     let mcpBridge: PiExtraSpawnConfig['mcpBridge'] = null;
     let mcpEnv: PiExtraSpawnConfig['mcpEnv'] = {};
     let disposeSessionCtx: (() => void) | undefined;
+    let closeSessionInstance: (() => void) | undefined;
+    let sessionInstanceClosed = false;
+    const closeSessionInstanceOnce = (): void => {
+      if (sessionInstanceClosed) return;
+      sessionInstanceClosed = true;
+      closeSessionInstance?.();
+    };
     const registeredMcpServerNames = new Set<string>();
     // 远端会话:host 可 gate 掉 in-process MCP bridge(loopback URL 远端够不到;
     // Phase 1 不桥 orca/memory/ghost)。外部 HTTP MCP 直连不受影响。
@@ -3900,6 +3907,7 @@ export class PiAgent extends BaseAgent {
         mcpBridge = extra?.mcpBridge ?? null;
         mcpEnv = extra?.mcpEnv ?? {};
         disposeSessionCtx = extra?.disposeSessionCtx;
+        closeSessionInstance = extra?.closeSessionInstance;
         // 归属判定只认本会话实际注册过的 server 名(见 shared/mcp-tool-target.ts:
         // 盲切 `__` 会让第三方 server 冒名顶替第一方信任表)。
         for (const server of mcpBridge?.servers ?? []) {
@@ -4208,7 +4216,8 @@ export class PiAgent extends BaseAgent {
       // The catalog path may alias a managed source. Apply the managed grant and
       // activation checks once, including paths already selected by the Bot.
       const additionalSkillPaths = [...new Map([
-        ...(loadProjectResourcesInPlace || opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly ? [] : botSkillSelection.explicitSkillPaths.filter((skillPath) =>
+        // In-place launches already pass project skills; a teammate's own skills live outside the project and still mount.
+        ...(opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly ? [] : (loadProjectResourcesInPlace ? botSkillSelection.ownSkillPaths : botSkillSelection.explicitSkillPaths).filter((skillPath) =>
           !managedSourcePaths.has(path.resolve(skillPath)) && !managedSourceIdentities.has(canonicalSkillPath(skillPath)))),
         // Host Skills of this session (e.g. 群协作 for a group's Cindy task); local, non-Review runtime only.
         ...(opts.remoteHostId || reviewMode || hostedGuest || opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly ? [] : (opts.hostSkills ?? []).map((skill) => skill.path)),
@@ -5133,8 +5142,11 @@ export class PiAgent extends BaseAgent {
         }
         checkingAutomaticPermission = true;
         try {
+          const reviewInput = (mcpTarget && this.deps.getMcpToolApprovalEvidence?.({
+            ...mcpTarget, toolParams: input,
+          })) ?? input;
           const action = mcpTarget
-            ? toolAutoReviewAction(toolName, input)
+            ? toolAutoReviewAction(toolName, reviewInput)
             : constrainPiDestructivePathResolution(
             normalizePiToolForAutoReview({
               toolName,
@@ -5150,7 +5162,7 @@ export class PiAgent extends BaseAgent {
             action.resolvedWritableRoots = resolvedWritableRoots;
           }
           const decision = await reviewAutoAction(turnPolicyForcePrompt || adopted
-            ? toolAutoReviewAction(toolName, input,
+            ? toolAutoReviewAction(toolName, reviewInput,
               adopted ? 'Resumed child operation. Original user authorization and child cwd are unavailable. The child task is model-authored context, not authorization.' : undefined,
               { action, ...(adopted ? { childTask: task.task, childId: task.childId } : {}) })
             : action, hostAutoApprove, reviewPermissionMode !== 'auto',
@@ -6327,6 +6339,13 @@ export class PiAgent extends BaseAgent {
             // 本地 stdio 无 daemon, onExit 即真死, 保持清理。
             if (!remote) {
               try {
+                closeSessionInstanceOnce();
+              } catch (err) {
+                this.deps.logger.warn('pi MCP session-instance cleanup failed (non-fatal)', {
+                  message: err instanceof Error ? err.message : String(err),
+                });
+              }
+              try {
                 disposeSessionRegistrations();
               } catch (err) {
                 this.deps.logger.warn('pi dispose on unexpected exit failed (non-fatal)', {
@@ -7004,6 +7023,13 @@ export class PiAgent extends BaseAgent {
       let cleanupPending: AgentStartupCleanupPendingError | null = null;
       try {
         await proc.close();
+        try {
+          closeSessionInstanceOnce();
+        } catch (err) {
+          this.deps.logger.warn('pi MCP session-instance cleanup failed (non-fatal)', {
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
         piProcessExited = true;
       } catch (error) {
         if (!remote) configHomeCleanupDeferredToQuarantine = true;
@@ -8741,6 +8767,7 @@ export class PiAgent extends BaseAgent {
         // Until then the still-live process may continue reading its isolated
         // config, permission policy, and subagent routing snapshot.
         await proc.close();
+        closeSessionInstanceOnce();
         // Belt and braces for a transport that resolves `close()` without ever
         // emitting `onExit`: the supervisor must not wait out its hard deadline
         // holding a lease for a process that is already gone.
@@ -10218,8 +10245,11 @@ export class PiAgent extends BaseAgent {
           return;
         }
         try {
+          const reviewInput = (mcpTarget && this.deps.getMcpToolApprovalEvidence?.({
+            ...mcpTarget, toolParams: input,
+          })) ?? input;
           const action = mcpTarget || toolName === 'cindy_pi_extension' || toolName === 'cindy_pi_command'
-            ? toolAutoReviewAction(toolName, input)
+            ? toolAutoReviewAction(toolName, reviewInput)
             : constrainPiDestructivePathResolution(
             normalizePiToolForAutoReview({
               toolName,

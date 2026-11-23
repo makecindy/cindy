@@ -53,6 +53,15 @@ it('preserves optional direct-switch generations and accepts legacy requests', (
   expect(() => parseRemoteAgentRequest({ ...request, generation: 'invalid' })).toThrow();
 });
 
+it('negotiates optional reporting on capable peers and bounds authorization messages', () => {
+  const caps = { version: 1, maxRuns: 10, uploadChunkBytes: 1024, maxPayloadBytes: 8192 };
+  expect(parseRemoteAgentCaps(caps).companyTokenReporting).toBeUndefined();
+  expect(parseRemoteAgentCaps({ ...caps, companyTokenReporting: true }).companyTokenReporting).toBe(true);
+  const grant = { op: 'company-reporting-grant', runId, grant: 'test' };
+  expect(parseRemoteAgentRequest(grant)).toEqual(grant);
+  expect(() => parseRemoteAgentRequest({ ...grant, grant: 'x'.repeat(8193) })).toThrow();
+});
+
 describe('subscription Fast policy wire compatibility', () => {
   it('advertises support only with an explicit capability', () => {
     const caps = { version: 1, maxRuns: 10, uploadChunkBytes: 1024, maxPayloadBytes: 8192 };

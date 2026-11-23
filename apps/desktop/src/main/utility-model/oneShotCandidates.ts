@@ -15,6 +15,7 @@ import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
 import { ensureManagedOllamaReadyForSession } from '../local-model-runtime/preflight.js';
 import { getUtilityModelChainProfiles } from './UtilityModelSelection.js';
 import { getEffectiveAuxiliaryModelChain } from './resolveAuxiliaryModelChain.js';
+import { reportAuxiliaryChainOutcome } from './auxiliaryChainOutcomeSink.js';
 // After the Desktop modules, so module evaluation keeps the former order.
 import { createOneShotCandidates } from './oneShotCandidatesCore.js';
 import { getDesktopSelectableCatalog } from '../maker-host/createDesktopProviderService.js';
@@ -66,6 +67,7 @@ const desktopOneShot = createOneShotCandidates({
   getEffectiveAuxiliaryModelChain: (...args) => getEffectiveAuxiliaryModelChain(...args),
   isAuxiliaryModelTemporarilyUnavailable,
   captureAuxiliaryHealthObserver,
+  reportAuxiliaryChainOutcome: (...args) => reportAuxiliaryChainOutcome(...args),
 });
 type Instance = typeof desktopOneShot;
 export const captureAuxiliaryRoutes = desktopOneShot.captureAuxiliaryRoutes;

@@ -1,6 +1,6 @@
 import { isSafeGhostRelativePath } from './internal/ghostPath.js';
 import { GHOST_TOOLS_MAX } from './internal/toolsLimit.js';
-import { validateWithStoredMcpApps, parseGhostMcpApps, type GhostMcpApps } from './toolUi.js';
+import { validateWithStoredMcpApps, ghostMcpAppsValidationError, parseGhostMcpApps, type GhostMcpApps } from './toolUi.js';
 import { parseGhostSecretCheck, type GhostSecretCheckDecl } from './secretCheck.js';
 import { parseGhostRoutineEvents, type GhostRoutineEvents } from './routineEvents.js';
 import { parseGhostModelsNeeds, type GhostModelsNeeds } from './pluginModels.js';
@@ -218,9 +218,7 @@ export interface GhostTaskViewDecl {
 
 /**
  * 芯片型意识注册给 agent 的工具声明(卡槽②)。
- * 声明式而非运行时动态注册(规则 9:确定性;且会话中途增删工具会破坏
- * prompt 缓存前缀,规则 10)——主机在会话建立时按"已装且唤醒"的意识
- * 快照注入工具集。
+ * 默认按需发现。任务启动时的具名工具须显式声明，目录在运行期间固定。
  */
 export interface GhostToolDecl {
   /** 工具名:小写字母开头,允许小写/数字/下划线/连字符,≤64。 */
@@ -229,6 +227,8 @@ export interface GhostToolDecl {
   description: string;
   /** JSON Schema(object)形态的参数声明;可省略(无参工具)。 */
   parameters?: Record<string, unknown>;
+  /** Opt in to named exposure in the host's ordinary local task tool snapshot. */
+  exposure?: 'startup';
   /** Host approval policy. `auto` requires explicit installation consent. */
   approval?: 'auto' | 'each-call';
 }
@@ -2050,6 +2050,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
       tools.push({
         name: t.name,
         description: t.description,
+        ...(prepared.schemaVersion === 3 && t.exposure === 'startup' ? { exposure: 'startup' as const } : {}),
         ...(t.approval !== undefined ? { approval: t.approval as 'auto' | 'each-call' } : {}),
         ...(t.parameters !== undefined
           ? { parameters: t.parameters as Record<string, unknown> }
@@ -4060,7 +4061,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
 
   if (raw.mcpApps !== undefined && raw.schemaVersion !== 3) return { ok: false, reason: 'mcpApps requires schemaVersion 3' };
   const parsedMcpApps = raw.mcpApps === undefined ? undefined : parseGhostMcpApps(raw.mcpApps, tools ?? [], network?.hosts ?? [], isSafeGhostRelativePath);
-  if (parsedMcpApps === null) return { ok: false, reason: 'mcpApps.ui 页面或工具声明无效，页面域名必须在 network.hosts 内' };
+  if (parsedMcpApps === null) return { ok: false, reason: ghostMcpAppsValidationError(raw.mcpApps) };
   const mcpApps = parsedMcpApps;
   return {
     ok: true,

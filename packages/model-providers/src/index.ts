@@ -13,6 +13,7 @@ export { remoteInvocationModels, withEffectiveModelContextWindows } from './remo
 export {
   BYOK_CREDENTIALS_PATH,
   BYOK_PROVIDERS_PATH,
+  BYOK_PROVIDERS_V1_PATH,
   isByokImageMode,
   isByokProviderId,
   parseByokCredentialsResponse,
@@ -179,6 +180,7 @@ export {
   isModelDisabled,
   isModelDisabledWithUniqueLegacyBasename,
   isProviderDisabled,
+  isProviderHidden,
 } from "./disableOverrides.js";
 export type { ModelDisableOverrides } from "./disableOverrides.js";
 

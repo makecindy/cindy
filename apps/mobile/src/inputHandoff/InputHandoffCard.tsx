@@ -17,6 +17,7 @@ import type {
 import {
   inputHandoffHeldElsewhere,
   inputHandoffStepKey,
+  isInputHandoffDeviceCode,
 } from "@cindy/device-link";
 import { useAuth } from "@/auth/AuthContext";
 import { Text } from "@/components/AppText";
@@ -437,9 +438,9 @@ export function InputHandoffCard({
               onDecide={decide}
               onError={setError}
             />
-          ) : (
+          ) : isInputHandoffDeviceCode(snapshot.deviceCode) ? (
             <InputHandoffDeviceCode snapshot={snapshot} />
-          )
+          ) : null
         }
         onChange={change}
         onSubmit={() => void submit({ kind: "submit" })}

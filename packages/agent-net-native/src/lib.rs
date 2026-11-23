@@ -73,6 +73,58 @@ pub unsafe extern "C" fn cindy_agent_net_command(handle: *mut NativeEngine, inpu
     CString::new(value.to_string()).expect("JSON cannot contain raw NUL").into_raw()
 }
 
+/// One `io` call (`binary-io` builds): the application's stream writes, plus a poll's stream data and datagrams back.
+const MAX_IO: usize = 4 * 1024 * 1024;
+
+/// Splits an `io` frame: a little-endian u32 header length, the JSON header, then the raw bytes the header lists.
+fn frame(input: &[u8]) -> Option<(&[u8], &[u8])> {
+    let length = u32::from_le_bytes(input.get(..4)?.try_into().ok()?) as usize;
+    let end = 4usize.checked_add(length).filter(|end| *end <= input.len())?;
+    Some((&input[4..end], &input[end..]))
+}
+
+/// `binary-io` builds (`NativeEngine::io`), serialized with the handle's other calls like a command. Input and output are
+/// frames: a little-endian u32 header length, the JSON header, then raw bytes. The output header is `{"ok":true,"value":…}`
+/// or `{"ok":false,"code":…}`. Returns an owned buffer of `*out_length` bytes, released exactly once with free_bytes; null
+/// only when `out_length` is null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cindy_agent_net_io(handle: *mut NativeEngine, input: *const u8, length: usize, out_length: *mut usize) -> *mut u8 {
+    if out_length.is_null() { return std::ptr::null_mut(); }
+    let result = if handle.is_null() || input.is_null() || length > MAX_IO {
+        Err("INVALID_NATIVE_COMMAND")
+    } else {
+        match catch_unwind(AssertUnwindSafe(|| {
+            let input = unsafe { std::slice::from_raw_parts(input, length) };
+            let (header, payload) = frame(input).ok_or("INVALID_NATIVE_IO")?;
+            let header: Value = serde_json::from_slice(header).map_err(|_| "INVALID_NATIVE_IO")?;
+            unsafe { &mut *handle }.io(&header, payload)
+        })) {
+            Ok(result) => result,
+            Err(_) => { unsafe { &mut *handle }.poison(); Err("NATIVE_ENGINE_FAILURE") },
+        }
+    };
+    let (header, payload) = match result {
+        Ok((value, payload)) => (json!({"ok":true,"value":value}), payload),
+        Err(code) => (json!({"ok":false,"code":code}), Vec::new()),
+    };
+    let header = header.to_string().into_bytes();
+    let mut output = Vec::with_capacity(4 + header.len() + payload.len());
+    output.extend_from_slice(&(header.len() as u32).to_le_bytes());
+    output.extend_from_slice(&header);
+    output.extend_from_slice(&payload);
+    let output = output.into_boxed_slice();
+    unsafe { *out_length = output.len(); }
+    Box::into_raw(output) as *mut u8
+}
+
+/// Releases an `io` result: the pointer and length `io` returned, exactly once.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cindy_agent_net_free_bytes(value: *mut u8, length: usize) {
+    if value.is_null() { return; }
+    let mut bytes = unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(value, length)) };
+    bytes.zeroize();
+}
+
 /// The engine's own turn (`NativeEngine::pump`), serialized with the handle's other calls like a command.
 /// Negative on failure; otherwise bit 0 says the application has something to read with the `poll` command, and the
 /// remaining bits are the milliseconds after which to call again when no datagram arrives first.

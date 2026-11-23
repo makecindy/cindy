@@ -3673,6 +3673,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
                 providerId={remoteAgentPillProvider.id}
                 routing={remoteAgentPillProvider.routing}
                 logoKind={remoteAgentPillProvider.logoKind}
+                customIcon={remoteAgentPillProvider.customIcon}
                 remote
               />
             ) : null
@@ -3685,6 +3686,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
               providerId={activeSourceProvider.id}
               routing={activeSourceProvider.routing}
               logoKind={activeSourceProvider.logoKind}
+              customIcon={activeSourceProvider.customIcon}
             />
           ) : null}
           <Text style={styles.modelPillText} numberOfLines={1}>{pillModelSummary}</Text>

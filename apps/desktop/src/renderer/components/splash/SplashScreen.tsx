@@ -369,7 +369,7 @@ export function SplashScreen() {
   return (
     <div
       className={cn(
-        'fixed inset-0 z-[9999] overflow-hidden',
+        'fixed inset-0 z-fullscreen overflow-hidden',
         (realPhase === 'fading_out' || shellCoverFading) && !fixture && !dbCleanupProgress
           ? 'pointer-events-none opacity-0'
           : 'opacity-100',
@@ -388,7 +388,7 @@ export function SplashScreen() {
       data-testid="splash-root"
     >
       {/* Toolbar:z-10(关闭/最小化,仅 Windows 原生 chrome) */}
-      <div className="relative z-10 flex h-[46px] shrink-0 items-center justify-end px-2">
+      <div className="relative z-raised flex h-[46px] shrink-0 items-center justify-end px-2">
         {!isMac && !dbCleanupProgress && (
           <div style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
             <WindowControls />

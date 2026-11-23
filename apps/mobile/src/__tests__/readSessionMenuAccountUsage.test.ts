@@ -54,7 +54,11 @@ describe("existing remote quota compatibility", () => {
       amounts: [{ id: 'balance', currency: 'EUR', amount: 0 }],
       windows: [{ id: '0', minutes: null, modelLabel: 'Week', remainingPercent: 0, resetsAt: 1893456000 }],
     });
-    expect(r.getPluginEngineUsage).toHaveBeenCalledWith('demo:engine');
+    // The controlled computer's own task names itself, so an engine with several accounts reports the
+    // task's account (plugin engine accounts, 2026-11-23); a task whose Agent runs elsewhere does not.
+    expect(r.getPluginEngineUsage).toHaveBeenCalledWith('demo:engine', 's1');
+    await readSessionMenuAccountUsage({ ...task, agentDeviceId: 'box' } as RemoteSession, r);
+    expect(r.getPluginEngineUsage).toHaveBeenLastCalledWith('demo:engine');
     expect(await readSessionMenuAccountUsage(task, { ...r, getPluginEngineUsage: undefined })).toMatchObject({ windows: [], amounts: [] });
     expect(r.getCodexRateLimits).not.toHaveBeenCalled();
     expect(r.getAccountUsage).not.toHaveBeenCalled();

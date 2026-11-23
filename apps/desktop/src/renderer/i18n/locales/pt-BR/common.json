@@ -343,7 +343,7 @@
     "invite": "Copiar convite",
     "invitationCopied": "Convite copiado. Cole-o em uma mensagem para seu colega.",
     "tabOwned": "Compartilhadas por mim",
-    "startIntro": "Convide alguém para ler tudo nesta tarefa e trabalhar com o mesmo Agent.",
+    "startIntro": "Convide um colega para ler tudo nesta tarefa e trabalhar com o mesmo Agent.",
     "runsOnThisDevice": "Executado neste dispositivo",
     "inviteNotice": "Qualquer pessoa com o link de convite pode participar após entrar, com o mesmo acesso ao Agent que o anfitrião.",
     "offlineAutoClose": "O compartilhamento termina automaticamente se o computador do anfitrião permanecer offline.",
@@ -356,7 +356,7 @@
     "hostOfflineNote": "O compartilhamento termina automaticamente se este computador permanecer offline. Para retomar, inicie o compartilhamento novamente e envie um novo link de convite.",
     "sharingBadge": "Compartilhando",
     "ownedEmptyTitle": "Nada está sendo compartilhado",
-    "ownedEmptyHint": "Abra qualquer tarefa e clique em “Compartilhar tarefa” para convidar alguém.",
+    "ownedEmptyHint": "Abra qualquer tarefa e clique em “Compartilhar tarefa” para convidar um colega.",
     "closeAll": "Parar todos os compartilhamentos ({{count}})",
     "closeAllTitle": "Parar todos os compartilhamentos?",
     "closeAllBody": "Todos os convidados perderão o acesso às tarefas abaixo, e os links de convite delas expirarão.",
@@ -576,7 +576,8 @@
       "calloutUnknown": "Se você não reconhece esta pessoa, recuse; o link para de funcionar após a recusa.",
       "approve": "Aprovar compartilhamento",
       "reject": "Recusar solicitação",
-      "later": "Decidir depois"
+      "later": "Decidir depois",
+      "calloutPluginEngine": "{{name}} pode usar sem instalar o plugin nem a CLI no próprio computador, usando o login e a cota da CLI deste computador."
     },
     "apply": {
       "loading": "Lendo link de compartilhamento…",
@@ -697,6 +698,7 @@
     },
     "picker": {
       "unavailable": "Compartilhamento indisponível",
+      "offline": "{{name}} · Offline no momento",
       "hostOutdated": "A versão do Cindy no computador do proprietário é antiga demais para listar estes modelos. Peça para atualizar o Cindy e tente novamente.",
       "numbered": "{{name}} ({{index}})"
     },
@@ -1005,7 +1007,7 @@
     "captureFailed": "Não foi possível capturar a tela",
     "permission": {
       "title": "Permissão de gravação de tela necessária",
-      "detail": "Para fazer capturas de tela, permita o acesso do {{appName}} em Ajustes do Sistema > Privacidade e Segurança > Gravação de Tela e Áudio do Sistema e reabra o {{appName}}.",
+      "detail": "Permita que {{appName}} grave a tela e tente novamente. Reabra o app se o macOS pedir.",
       "openSettings": "Abrir Ajustes do Sistema",
       "later": "Agora não"
     },
@@ -1172,12 +1174,12 @@
     "windowsError": "A autorização não foi concluída. Tente novamente neste computador.",
     "windowsErrorDetail": "Código de erro {{code}}",
     "permissionsTitle": "Permissões da área de trabalho remota",
-    "permissionsIntro": "A gravação de tela permite visualizar a área de trabalho. A acessibilidade também permite controlá-la. Conclua a autorização no computador; o status é atualizado automaticamente.",
+    "permissionsIntro": "No Mac que deseja controlar, permita a gravação da tela para ver a mesa. Para usar o teclado e o mouse, permita também que a Cindy controle apps. A verificação é automática.",
     "permissionsReady": "As permissões do sistema estão prontas. Você pode reconectar.",
     "screenRecording": "Gravação de tela",
-    "accessibility": "Acessibilidade",
-    "screenRecordingHelp": "Abra os Ajustes do Sistema e ative a gravação de tela para este app Cindy. Se o macOS solicitar uma reinicialização, reabra o Cindy antes de conectar.",
-    "accessibilityHelp": "Abra as configurações e ative a acessibilidade para o app indicado na solicitação do sistema. A permissão real de entrada será verificada automaticamente quando você voltar.",
+    "accessibility": "Controle do teclado e do mouse",
+    "screenRecordingHelp": "Permita que a cópia da Cindy em uso grave a tela em Gravação de Tela ou Gravação da Tela e Áudio do Sistema. Reabra a Cindy se o macOS pedir.",
+    "accessibilityHelp": "Em Privacidade e Segurança, selecione o app indicado pelo sistema. Se aparecer System & App Protection Override, escolha os apps que ele pode controlar. Em versões anteriores, ative Acessibilidade.",
     "permissionChecking": "Verificando…",
     "permissionGranted": "Concedida",
     "permissionUnknown": "Não confirmada",
@@ -1193,7 +1195,7 @@
     "title": "Área de trabalho remota",
     "allow": "Permitir área de trabalho remota",
     "allowHint": "Permita que seus dispositivos conectados à conta visualizem e operem todos os apps neste computador. Ative também o controle de dispositivos acima.",
-    "permissionHint": "No computador, permita a gravação de tela e a acessibilidade nas configurações do sistema e reconecte.",
+    "permissionHint": "No computador, permita a gravação de tela e a acessibilidade nas configurações do sistema e reconecte. No macOS 27.3 ou posterior, a permissão de controle fica em “System & App Protection Override”. Nas versões anteriores, abra Acessibilidade.",
     "inputUnsupported": "O ambiente de área de trabalho atual deste computador não oferece suporte ao controle remoto do teclado e do mouse no Cindy.",
     "controlUnavailable": "O controle remoto do teclado e do mouse está temporariamente indisponível. Reconecte para tentar novamente.",
     "beingControlled": "Sua área de trabalho está sendo controlada",
@@ -1310,7 +1312,7 @@
     "privacyScreen": "Tela de privacidade durante a conexão",
     "privacyScreenHint": "Cobre a tela deste computador durante o controle remoto. Se alguém clicar ou pressionar uma tecla no computador, pergunta antes de desconectar.",
     "privacyActive": "A tela de privacidade está ativada. Se alguém clicar ou pressionar uma tecla no computador, pergunta antes de desconectar.",
-    "privacyFailed": "Não foi possível ativar a tela de privacidade. A tela do computador ainda pode estar visível.",
+    "privacyFailed": "Não foi possível ativar a tela de privacidade. A tela do computador ainda pode estar visível. Se o computador remoto for um Mac, verifique nele a permissão de controle da cópia da Cindy em execução.",
     "hostMute": "Silenciar computador controlado",
     "hostMuteHint": "Silenciar o computador controlado enquanto estiver conectado",
     "hostMuteFailed": "Não foi possível alterar o estado de áudio do computador controlado",
@@ -1340,7 +1342,7 @@
     "credentialSigningRequired": "A versão de desenvolvimento para Mac está sem configuração de assinatura. Reinicie o Cindy no Mac com a assinatura configurada e tente novamente.",
     "credentialPasswordRejected": "A senha de login do Mac não foi aceita. Digite-a novamente.",
     "credentialIdentityChanged": "Não foi possível verificar a identidade do computador. Nenhuma senha foi enviada a um dispositivo não verificado.",
-    "credentialAccessibilityRequired": "Permita o Cindy em Ajustes do Sistema → Privacidade e Segurança → Acessibilidade no Mac e reconecte.",
+    "credentialAccessibilityRequired": "No Mac, verifique a permissão de controle da cópia do Cindy em execução e conecte-se novamente. No macOS 27.3 ou posterior, a permissão de controle fica em “System & App Protection Override”. Nas versões anteriores, abra Acessibilidade.",
     "credentialUnlockUnavailable": "Não foi possível desbloquear este Mac com segurança. Selecione sua conta na tela de bloqueio e reconecte; se ainda falhar, desbloqueie o Mac localmente.",
     "disconnecting": "Desconectando…",
     "loadingDisplayModes": "Carregando resoluções…",
@@ -1373,7 +1375,9 @@
       }
     },
     "lockOnExitHintPrivacy": "Mostra a tela de privacidade ao sair, para a IA continuar trabalhando; tocar no computador o bloqueia.",
-    "lockedEnablePrivacyHint": "Para a IA continuar usando este computador enquanto você está fora, ative a tela de privacidade nas Configurações dele → Geral → Quando você está fora."
+    "lockedEnablePrivacyHint": "Para a IA continuar usando este computador enquanto você está fora, ative a tela de privacidade nas Configurações dele → Geral → Quando você está fora.",
+    "revealCurrentApp": "Mostrar {{app}} no Finder",
+    "openPermissionInNewWindow": "Abrir em outra janela"
   },
   "ipcError": {
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
@@ -1864,6 +1868,8 @@
       "other": "Outro",
       "lowAlert": "Notificar quando estiver acabando",
       "privacy": "Ocultar informações pessoais",
+      "automaticCurrency": "Automática",
+      "usageCurrency": "Moeda de uso",
       "usageScope": "O uso abrange",
       "manageFoot": "Gerenciar provedores",
       "showSource": "Mostrar {{name}} no menu",
@@ -2538,8 +2544,8 @@
         "hint": "Quando a IA precisa da tela, este computador não a desliga nem se bloqueia. Uma tela de privacidade a cobre e a IA continua trabalhando por trás. Pressionar uma tecla ou clicar bloqueia na hora; desbloqueie com Touch ID ou sua senha. Sem tarefas em andamento, a tela apaga e bloqueia como de costume. Ao fim de um controle remoto, a tela de privacidade também protege este computador.",
         "permission": "Permita o Cindy em Ajustes do Sistema > Privacidade e Segurança > Acessibilidade para que ele bloqueie a tela assim que alguém tocar neste Mac. Até lá, a tela apaga e é bloqueada normalmente.",
         "preview": "Testar agora",
-        "previewStarting": "Solte o mouse e o teclado. Em 3 segundos a tela de privacidade aparece; pressione qualquer tecla para bloquear e depois desbloqueie para testar.",
-        "previewUnavailable": "Não foi possível mostrar a tela de privacidade. Reinicie o Cindy e tente de novo.",
+        "previewStarting": "Preparando a tela de privacidade. Solte o mouse e o teclado. Quando a tela estiver coberta, pressione uma tecla para testar o bloqueio.",
+        "previewUnavailable": "Não foi possível ativar a tela de privacidade. A tela do computador ainda pode estar visível.",
         "delay": {
           "30": "30 s",
           "60": "1 min",
@@ -2550,7 +2556,10 @@
           "system": "Sistema"
         },
         "hintWindows": "Quando a IA precisa da tela, este computador não a desliga nem se bloqueia. Uma tela de privacidade a cobre e a IA continua trabalhando por trás. Pressionar uma tecla ou clicar bloqueia na hora; desbloqueie com o Windows Hello ou sua senha. Sem tarefas em andamento, a tela apaga e bloqueia como de costume. Ao fim de um controle remoto, a tela de privacidade também protege este computador.",
-        "hintLinux": "Quando a IA precisa da tela, este computador não a desliga nem se bloqueia. Uma tela de privacidade a cobre e a IA continua trabalhando por trás. Pressionar uma tecla ou clicar bloqueia na hora; desbloqueie com sua senha. Sem tarefas em andamento, a tela apaga e bloqueia como de costume. Ao fim de um controle remoto, a tela de privacidade também protege este computador."
+        "hintLinux": "Quando a IA precisa da tela, este computador não a desliga nem se bloqueia. Uma tela de privacidade a cobre e a IA continua trabalhando por trás. Pressionar uma tecla ou clicar bloqueia na hora; desbloqueie com sua senha. Sem tarefas em andamento, a tela apaga e bloqueia como de costume. Ao fim de um controle remoto, a tela de privacidade também protege este computador.",
+        "permissionMissing": "A tela de privacidade está desativada. A Cindy precisa de permissão para bloquear o Mac quando alguém clicar ou pressionar uma tecla.",
+        "checkFailed": "O Cindy não conseguiu verificar as permissões da tela de privacidade neste computador.",
+        "saveFailed": "Não foi possível salvar a configuração da tela de privacidade."
       }
     },
     "agentIsland": {
@@ -3206,7 +3215,7 @@
         },
         "accessibility": {
           "label": "Entrada automática",
-          "tooltip": "A permissão de acessibilidade permite que a entrada por voz digite em outros apps, leia o texto próximo ao cursor como contexto para refinamento e detecte edições externas para o aprendizado do dicionário."
+          "tooltip": "Permita que a Cindy insira ditado nos apps escolhidos, leia o texto perto do cursor para aprimorá-lo e detecte alterações para o dicionário. Use Acessibilidade ou System & App Protection Override, conforme a opção exibida no Mac."
         }
       },
       "interactionSound": {
@@ -3806,6 +3815,7 @@
         "connecting": "Conectando…",
         "rename": "Renomear",
         "suspended": "Desativado",
+        "hidden": "Oculto",
         "unconfigured": "Não configurado"
       },
       "button": {
@@ -3816,7 +3826,9 @@
         "cancel": "Cancelar",
         "retry": "Descobrir modelos novamente",
         "retrying": "Tentando descobrir novamente…",
-        "enableProvider": "Ativar provedor"
+        "enableProvider": "Ativar provedor",
+        "showProvider": "Mostrar",
+        "hideInstead": "Ocultar em vez disso"
       },
       "anthropic": {
         "title": "Anthropic",
@@ -4202,7 +4214,7 @@
         "paymentRequired": "Pago",
         "paymentUnlock": "Pague para desbloquear",
         "enableModel": "Ativar este modelo",
-        "capabilityGroupHint": "Não exibido no seletor de modelos da conversa. A opção controla a visibilidade no recurso correspondente.",
+        "capabilityGroupHint": "Não exibido no seletor de modelos. A opção define se o recurso correspondente pode usar o modelo.",
         "accessWriteFailed": "Não foi possível salvar a alteração. Tente novamente.",
         "visibilityWriteFailed": "Não foi possível salvar a configuração de visibilidade do modelo. Tente novamente ou reinicie a Cindy se o problema persistir.",
         "disabledGroup": "Desativado",
@@ -4346,22 +4358,22 @@
           "aria": "Filtrar por tipo de modelo",
           "chat": "Conversa"
         },
-        "hiddenGroup": "Não exibido",
+        "hiddenGroup": "Ocultos",
         "management": {
           "brand": "Fabricante"
         },
         "manage": {
           "title": "Modelos",
-          "selected": "{{count}} selecionados",
-          "hint": "Use as opções para escolher seus modelos de conversa.",
+          "selected": "{{count}} exibidos",
+          "hint": "As opções definem quais modelos aparecem no seletor de modelos. Desativar uma apenas oculta o modelo; você ainda pode escolhê-lo em \"Ocultos\", no fim do seletor.",
           "menu": "Gerenciar",
           "arrange": "Organizar lista",
           "byBrand": "Agrupar por fabricante",
           "byName": "Ordenar por nome do modelo",
-          "selection": "Seleção de modelos",
-          "showAll": "Selecionar todos os modelos",
-          "hideAll": "Limpar seleção",
-          "reset": "Restaurar seleção padrão",
+          "selection": "Mostrar no seletor de modelos",
+          "showAll": "Mostrar todos os modelos",
+          "hideAll": "Ocultar todos os modelos",
+          "reset": "Restaurar visibilidade padrão",
           "connectionRequired": "Conecte-se para usar estes modelos. Suas seleções são salvas."
         },
         "modelCount_many": "{{count}} modelos"
@@ -4378,7 +4390,8 @@
         "groupNote": "{{device}} transformou este provedor em um grupo de provedores. Ao iniciar uma tarefa com ele, {{device}} atribui a tarefa a um dos computadores abaixo conforme a estratégia do grupo e a transfere para outro se esse computador tiver algum problema. Enquanto {{device}} estiver online, use Acesso remoto e compartilhamento aqui para gerenciar o grupo e seus compartilhamentos.",
         "groupMembersTitle": "Computadores do grupo",
         "groupMembersFailed": "Não foi possível obter o status dos computadores do grupo agora.",
-        "groupBadge_many": "Grupo de provedores · {{count}} computadores"
+        "groupBadge_many": "Grupo de provedores · {{count}} computadores",
+        "hiddenBanner": "Oculto do seletor de modelos neste computador. Os favoritos e as sessões que o usam não são afetados."
       },
       "genericOAuth": {
         "subtitle": "Conta de assinatura",
@@ -4422,7 +4435,8 @@
           "rejected": "Este provedor recusou a solicitação. A lista abaixo é da última atualização bem-sucedida. Tente novamente mais tarde ou use outro provedor.",
           "empty": "Este provedor não retornou modelos utilizáveis desta vez. A lista abaixo é da última atualização bem-sucedida. Verifique as permissões de acesso da sua conta e tente novamente."
         },
-        "suspendedBanner": "Este provedor está desativado. As credenciais foram mantidas; ative-o para usar seus modelos novamente.",
+        "suspendedBanner": "Este provedor está desativado: novas sessões e recursos em segundo plano não o usam mais. As credenciais foram mantidas. Se você só não quer vê-lo no seletor de modelos, oculte-o em vez disso.",
+        "hiddenBanner": "Oculto do seletor de modelos. As sessões e os recursos em segundo plano que o usam não são afetados, e você ainda pode escolhê-lo em \"Ocultos\", no fim do seletor.",
         "remoteAccess": {
           "label": "Permitir uso remoto",
           "description": "Quando ativado, seus outros computadores e as pessoas com quem você compartilha podem usar os modelos deste provedor. O Agent é executado neste computador, usando o login e a cota dele.",
@@ -4632,7 +4646,25 @@
       },
       "menu": {
         "disableProvider": "Desativar este provedor",
-        "enableProvider": "Ativar este provedor"
+        "enableProvider": "Ativar este provedor",
+        "hideProvider": "Ocultar do seletor de modelos",
+        "showProvider": "Mostrar no seletor de modelos"
+      },
+      "plugin": {
+        "title": "Provedores de plugins",
+        "badge": "Plugin",
+        "rowTip": "{{provider}} · Fornecido por um plugin",
+        "source": "Fornecido por um plugin",
+        "declaredName": "Nome no plugin: {{name}}",
+        "note": "Este provedor vem de um plugin instalado e executa tarefas com o mecanismo do próprio plugin. O login e a conexão são gerenciados no plugin. Se você desativar ou desinstalar o plugin, ele some desta lista.",
+        "openPlugin": "Abrir plugin",
+        "resetName": "Restaurar o nome do plugin",
+        "suspendedBanner": "Este provedor está desativado: novas tarefas e automações não o usam mais, e seus outros computadores e as pessoas com quem você compartilha também não podem usá-lo. O plugin em si não é afetado. Se você só não quer vê-lo no seletor de modelos, oculte-o em vez disso.",
+        "hiddenBanner": "Oculto do seletor de modelos. As tarefas e automações que já o usam não são afetadas.",
+        "unavailableBanner": "O plugin informa que este mecanismo não pode ser executado no momento. Abra o plugin para ver o motivo.",
+        "unavailableBannerReason": "Não pode ser executado no momento: {{reason}}",
+        "modelsEmpty": "Este mecanismo ainda não listou seus modelos, então novas tarefas usam o modelo padrão dele. Depois que uma tarefa for executada nele, os modelos aparecerão aqui.",
+        "modelSwitchAria": "Ativar {{model}}"
       },
       "builtinApiKey": {
         "subtitle": "Conexão por chave de API",
@@ -5509,6 +5541,29 @@
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 flash",
         "cindyQwen38Flash": "Qwen 3.8 Flash"
+      },
+      "health": {
+        "configTitle": "Nenhum modelo auxiliar está disponível",
+        "configDescription": "Afeta a nomeação automática de tarefas, os resumos de tarefas fixadas, a Ajuda e as tarefas de plugins, como a tradução de legendas. Corrija os problemas abaixo ou escolha outros modelos disponíveis em Personalizado.",
+        "runtimeTitle": "As últimas solicitações aos modelos auxiliares falharam",
+        "runtimeDescription": "A rede ou o serviço podem estar temporariamente indisponíveis. Este aviso some sozinho quando as solicitações voltarem a funcionar. Se continuar aparecendo, escolha outros modelos disponíveis em Personalizado.",
+        "fallback": "As tarefas de plugins estão usando temporariamente {{model}} com um esforço de raciocínio menor, o que pode ser mais lento e consumir mais cota.",
+        "candidate": "{{model}}: {{reason}}",
+        "openProviders": "Abrir provedores",
+        "customize": "Personalizar modelos auxiliares",
+        "issues": {
+          "signed_out": "É preciso entrar na Cindy",
+          "provider_disabled": "Provedor desativado",
+          "model_disabled": "Modelo desativado",
+          "payment_required": "Não incluído no seu plano ou saldo",
+          "no_credential": "Falta o login ou a chave",
+          "unavailable": "Indisponível no momento"
+        },
+        "toast": {
+          "config": "Nenhum modelo auxiliar está disponível. A nomeação de tarefas, os resumos e as tarefas de plugins, como a tradução de legendas, são afetados.",
+          "runtime": "As últimas solicitações aos modelos auxiliares falharam. A nomeação de tarefas, os resumos e as tarefas de plugins, como a tradução de legendas, podem ser afetados.",
+          "open": "Abrir configurações"
+        }
       }
     },
     "compaction": {
@@ -5869,10 +5924,10 @@
         "toggleAria": "Usar meus logins do navegador",
         "confirmTitle": "Permitir que o Agent use seus logins do navegador?",
         "confirmDescription": "O Agent poderá abrir sites com suas contas conectadas, incluindo e-mail, armazenamento na nuvem e consoles de trabalho. Você pode desativar a opção a qualquer momento; a cópia será excluída.",
-        "confirmDescriptionMac": "O Agent poderá abrir sites com suas contas conectadas, incluindo e-mail, armazenamento na nuvem e consoles de trabalho. A leitura dos arquivos de login do Chrome também exige Acesso Total ao Disco. Você pode desativar esta opção a qualquer momento; a cópia será excluída.",
+        "confirmDescriptionMac": "O Agent poderá abrir sites com suas contas conectadas, incluindo e-mail, armazenamento na nuvem e consoles de trabalho. Você pode desativar a opção a qualquer momento; a cópia será excluída. Se o macOS pedir uma pasta, selecione a pasta do perfil do navegador que deseja usar.",
         "confirm": "Usar meus logins",
-        "readDeniedTitle": "Acesso Total ao Disco necessário",
-        "readDeniedDescription": "Cindy precisa desta permissão para ler os arquivos de login do Chrome. Ative Cindy em Privacidade e Segurança → Acesso Total ao Disco e tente novamente.",
+        "readDeniedTitle": "Não foi possível ler o perfil do navegador",
+        "readDeniedDescription": "Selecione a cópia da Cindy em uso em Privacidade e Segurança → Acesso Total ao Disco. Se o macOS permitir escolher uma pasta, selecione apenas a do perfil do navegador e tente novamente.",
         "openFullDiskAccess": "Abrir Ajustes do Sistema",
         "readDeniedLater": "Agora não",
         "toast": {
@@ -6044,7 +6099,7 @@
         "permissionIntro": {
           "title": "Ativar automação do computador",
           "description": "{{appName}} instalará ou iniciará Cua Driver localmente para ler a tela e realizar ações como clicar e digitar. Ative apenas quando você tiver iniciado intencionalmente uma tarefa de automação do computador.",
-          "macosDescription": "{{appName}} instalará ou abrirá o fluxo de permissões do Cua Driver a seguir e poderá abrir os Ajustes do Sistema do macOS. Primeiro, conceda as permissões essenciais de Acessibilidade e Gravação de Tela ao CuaDriver. Durante o uso posterior, o macOS ainda poderá exibir confirmações adicionais para um aplicativo de destino ou uma ação específica. Aprove essas solicitações apenas quando você tiver iniciado intencionalmente uma tarefa do Computer Use. Depois, volte para {{appName}} e a verificação será feita automaticamente.",
+          "macosDescription": "{{appName}} instalará ou iniciará Cua Driver localmente para ler a tela e realizar ações como clicar e digitar. Ative apenas quando você tiver iniciado intencionalmente uma tarefa de automação do computador. Permita a gravação da tela para o CuaDriver. Em System & App Protection Override, escolha os apps que ele pode controlar. Em versões anteriores do macOS, ative Acessibilidade.",
           "confirm": "Continuar",
           "cancel": "Agora não"
         },
@@ -6065,8 +6120,8 @@
         },
         "permissions": {
           "title": "Acesso ao sistema",
-          "macosHint": "Computer Use precisa de Acessibilidade e Gravação de Tela. Durante o uso, o macOS ainda poderá exibir confirmações adicionais para um aplicativo de destino ou uma ação.",
-          "accessibilityLabel": "Acessibilidade",
+          "macosHint": "Permita a gravação da tela para o CuaDriver. Em System & App Protection Override, escolha os apps que ele pode controlar. Em versões anteriores, ative Acessibilidade.",
+          "accessibilityLabel": "Controle do teclado e do mouse",
           "screenRecordingLabel": "Gravação de Tela",
           "grant": "Conceder",
           "accessibility": "Acessibilidade: {{status}}",
@@ -6112,7 +6167,7 @@
           "toggleFailed": "Falha ao ativar ou desativar o controle direto do computador",
           "installFailed": "Falha ao instalar cua-driver",
           "permissionFailed": "As permissões do Computer Use estão incompletas",
-          "permissionPending": "Conceda as duas permissões do sistema, volte aqui e clique em Verificar novamente",
+          "permissionPending": "Conclua a autorização no Mac. Se o estado não for atualizado, verifique novamente.",
           "permissionSettingsOpened": "Configurações de permissões do sistema abertas. Após concedê-las, volte e clique em \"Verificar novamente\".",
           "permissionSettingsMonitoring": "Configurações de permissões do sistema abertas. Conclua as permissões e o status será atualizado automaticamente.",
           "openPermissionSettingsFailed": "Falha ao abrir as configurações de permissões do sistema"
@@ -6951,7 +7006,15 @@
           "encrypted": "Criptografia de ponta a ponta",
           "legacyConnection": "Conexão anterior",
           "encryptionUnknown": "Não confirmado",
-          "legacyEncryptionHint": "O caminho pelo retransmissor da conexão anterior não tem criptografia de ponta a ponta."
+          "legacyEncryptionHint": "O caminho pelo retransmissor da conexão anterior não tem criptografia de ponta a ponta.",
+          "routePreference": "Escolha de rota",
+          "routeAuto": "Auto",
+          "routeDirect": "Direta",
+          "routeRelay": "Retransmissão",
+          "routeUnavailable": "Indisponível",
+          "routeMeasuring": "Medindo…",
+          "routeDirectUnavailableHint": "A conexão direta não está disponível nesta rede no momento",
+          "routePreferenceFailed": "Não foi possível trocar a rota. Tente novamente."
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -7119,11 +7182,20 @@
       "connectionIssue": {
         "device-removed": "Este dispositivo foi removido da sua conta. Saia e entre novamente neste dispositivo.",
         "auth-failed": "Login expirado — entre novamente",
-        "replaced": "Conexão substituída por outra instância deste dispositivo",
+        "replaced": "Outra instância do Cindy assumiu a conexão, neste computador ou em outro reconhecido como este",
         "too-many-connections": "Limite de conexões desta conta atingido",
         "version-mismatch": "Versão de protocolo incompatível — atualize o app",
         "unstable": "A conexão cai e reconecta repetidamente — verifique a rede ou reinicie o Cindy se o problema persistir",
         "agent-net-relay-down": "Não é possível acessar o relay do Agent-Net; reconectando. Computadores conectados diretamente continuam funcionando; outros dispositivos não conseguem se conectar por enquanto"
+      },
+      "rejoin": {
+        "hint": "Este dispositivo foi removido da sua conta. Selecione “Reingressar” para trazê-lo de volta.",
+        "action": "Reingressar",
+        "done": "Reingresso concluído",
+        "doneWithoutAgentNet": "Reingresso concluído. O Agent-Net ainda não foi restaurado, então o Device Link será usado por enquanto",
+        "unsupported": "O servidor ainda não permite reingressar. Saia e entre novamente neste dispositivo",
+        "agentNetFailed": "O Agent-Net ainda não foi restaurado. Desative “Usar apenas Agent-Net” para se conectar pelo Device Link por enquanto",
+        "failed": "Não foi possível reingressar. Verifique sua rede e tente novamente"
       },
       "refresh": "Atualizar",
       "empty": "Nenhum outro dispositivo ainda. Entre no {{appName}} com a mesma conta em outro computador e ele aparecerá aqui.",
@@ -7142,7 +7214,7 @@
       "renameCancel": "Cancelar",
       "delete": "Excluir",
       "deleteTitle": "Excluir “{{name}}”?",
-      "deleteMessage": "Remova este dispositivo da sua conta e desconecte o acesso remoto. Suas sessões e arquivos serão mantidos. Entre novamente nesse dispositivo para adicioná-lo de novo.",
+      "deleteMessage": "Remova este dispositivo da sua conta e desconecte o acesso remoto. Suas sessões e arquivos serão mantidos. Selecione “Reingressar” nesse dispositivo para trazê-lo de volta.",
       "deleteOnlineHint": "Este servidor ainda não permite remover dispositivos online. Tente novamente após a atualização do serviço.",
       "error": {
         "unavailable": "O serviço Device Link está indisponível (não ativado no servidor ou erro de rede)",
@@ -7169,11 +7241,32 @@
       },
       "control": "Controle",
       "standbyHint": "Outra instância do Cindy neste computador está usando a conexão remota. Feche-a e esta instância assumirá automaticamente.",
+      "identityConflict": {
+        "notice": "Este computador e “{{name}}” são reconhecidos como o mesmo computador, então um tira o outro da conexão remota e a sessão pode ser encerrada. Dê uma nova identidade a um dos dois para resolver.",
+        "replace": "Dar uma nova identidade a este computador",
+        "blockedSelfHostedRelay": "Este computador usa seu próprio retransmissor, então não pode mudar de identidade agora. Volte ao retransmissor Cindy para mudá-la aqui.",
+        "confirmTitle": "Dar uma nova identidade a este computador?",
+        "confirmRestart": "O Cindy reinicia na hora e as tarefas em andamento são interrompidas.",
+        "confirmNewDevice": "Depois de reiniciar, faça login mais uma vez. Este computador aparecerá como um computador novo na lista de dispositivos.",
+        "confirmKeptByOther": "As configurações salvas com a identidade anterior, como o nome do dispositivo, o computador principal dos seus amigos e os provedores compartilhados, ficam em “{{name}}”. Configure-as de novo neste computador.",
+        "confirmOtherUnaffected": "“{{name}}” continua igual. Não é preciso fazer nada naquele computador.",
+        "confirmAction": "Mudar identidade e reiniciar o Cindy",
+        "failed": "Não foi possível dar uma nova identidade a este computador",
+        "toastTitle": "Este computador e “{{name}}” são reconhecidos como o mesmo computador",
+        "toastBody": "Um tira o outro da conexão remota e a sessão pode ser encerrada. Dê uma nova identidade a um dos dois para resolver.",
+        "toastAction": "Abrir Vinculação de dispositivos",
+        "toastDismiss": "Mais tarde"
+      },
       "apps": {
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
       },
-      "keepAwakeIncluded": "Incluído na tela de privacidade: este computador não entra em repouso."
+      "keepAwakeIncluded": "Incluído na tela de privacidade: este computador não entra em repouso.",
+      "localNetwork": {
+        "label": "Rede local",
+        "deniedHint": "Sem esta permissão, computadores e celulares na mesma rede não conseguem se conectar diretamente a este computador. Eles passam pelo relay, que é mais lento.",
+        "settingsHint": "Ative o Cindy em Ajustes do Sistema › Privacidade e Segurança › Rede Local. A mudança vale assim que você voltar."
+      }
     },
     "imBot": {
       "beta": "Beta",
@@ -8694,7 +8787,10 @@
           "description": "Quando ativado, seus outros computadores podem executar tarefas com este mecanismo. O Agent é executado neste computador, usando o login e a cota dele. Os arquivos e os comandos permanecem no computador em que a tarefa está.",
           "unsupported": "Este plugin ainda não permite usar o mecanismo dele a partir de outros computadores.",
           "remoteControlOff": "Este computador ainda não permite controle remoto, então outros computadores não podem usar este mecanismo.",
-          "ariaLabel": "Permitir que seus outros computadores usem {{engine}}"
+          "ariaLabel": "Permitir que seus outros computadores usem {{engine}}",
+          "descriptionShareable": "Quando ativado, seus outros computadores e as pessoas com quem você compartilha podem executar tarefas com este mecanismo sem instalar o plugin. O Agent é executado neste computador, usando o login e a cota dele. Os arquivos e os comandos permanecem no computador em que a tarefa está.",
+          "providerDisabled": "Este provedor está desativado em Provedores, então outros computadores não podem usar este mecanismo.",
+          "openProviders": "Abrir configurações de provedores"
         },
         "githubRelease": {
           "title": "Atualizações do plug-in",
@@ -8711,7 +8807,7 @@
           "updated": "Plug-in atualizado.",
           "empty": "Nenhuma versão disponível para instalação.",
           "sign-in": "Entre no GitHub para verificar atualizações.",
-          "forbidden": "Esta conta do GitHub não pode ler o repositório privado.",
+          "forbidden": "Não foi possível ler a versão publicada no GitHub. Verifique o link do repositório e as permissões da sua conta do GitHub.",
           "unavailable": "Não foi possível verificar ou instalar a atualização. Tente novamente."
         },
         "customSlotTitle": "Área de configurações personalizadas do plugin",
@@ -9774,6 +9870,12 @@
       "guidance": "Aguarde antes de solicitar outro código. Reiniciar, reinstalar ou trocar de rede não garante que o limite seja removido.",
       "support": "Se o problema continuar após a espera, envie os logs em particular para feedback@cindy.app com seu sistema operacional, a versão do Cindy, o horário do erro e o código abaixo. Não publique logs."
     }
+  },
+  "legalTermsUpdate": {
+    "title": "Termos atualizados",
+    "body": "Atualizamos os <terms>Termos de Serviço</terms> e a <privacy>Política de Privacidade</privacy> da Cindy. Aceite para continuar usando ou saia.",
+    "agree": "Aceitar",
+    "disagree": "Sair"
   },
   "legacyMigration": {
     "title": "Migrar dados da versão anterior",
@@ -11083,6 +11185,13 @@
         "enabled": "Ativado"
       },
       "close": "Fechar diálogo de download"
+    },
+    "localNetwork": {
+      "title": "Permitir acesso à rede local",
+      "relayOnly": "Seus outros dispositivos só conseguem acessar este computador pelo relay, que é mais lento. Permita o acesso para que os dispositivos na mesma rede se conectem diretamente.",
+      "controlEnabled": "Dispositivos na mesma rede só conseguem controlar este computador diretamente com acesso à rede local. Sem ele, passam pelo relay.",
+      "allow": "Permitir",
+      "dismiss": "Agora não"
     }
   },
   "bots": {
@@ -11213,6 +11322,11 @@
       "pinned": "Fixadas",
       "needsAttention": "Precisa de atenção",
       "duplicate": "Duplicar amigo",
+      "duplicating": "Duplicando amigo…",
+      "duplicateFailed": "Não foi possível duplicar o amigo.",
+      "duplicateModelRequired": "Para duplicar este amigo, primeiro escolha um modelo padrão para amigos nas Configurações.",
+      "pinFailed": "Não foi possível alterar a fixação do amigo.",
+      "hideFailed": "Não foi possível ocultar ou mostrar o amigo.",
       "moreActions": "Mais ações para {{name}}",
       "viewIcons": "Ícones",
       "showCollapsedTeammateAvatars": "Mostrar avatares quando recolhido",
@@ -11349,7 +11463,7 @@
     "image": "Adicionar imagem",
     "send": "Enviar mensagem",
     "roster": {
-      "create": "Convidar colega",
+      "create": "Convidar amigo",
       "customNamePlaceholder": "Dê um nome ao seu amigo",
       "customTitle": "Conheça alguém novo"
     },
@@ -11661,7 +11775,7 @@
         "stepTimeout": "{{name}} demorou demais, então esta etapa foi interrompida",
         "stepUnavailable": "{{name}} está indisponível e não pode executar esta etapa",
         "runtimeFailureReason": {
-          "unclaimed_timeout": "{{name}} não começou a processar dentro do prazo de espera. Esta solicitação foi encerrada.\nPeça ao proprietário do colega para verificar se a Cindy está funcionando e se o computador está conectado à rede."
+          "unclaimed_timeout": "{{name}} não começou a processar dentro do prazo de espera. Esta solicitação foi encerrada.\nPeça ao proprietário do amigo para verificar se a Cindy está funcionando e se o computador está conectado à rede."
         },
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}} não pode responder: o dispositivo do amigo atingiu o limite de sessões remotas.\nPeça ao proprietário do amigo para arquivar as sessões não utilizadas ou ao proprietário do computador remoto para aumentar o limite em Acesso remoto e compartilhamento.",
@@ -12262,46 +12376,15 @@
     },
     "guided": {
       "title": "Criar um amigo",
-      "reviewTitle": "Seu novo amigo",
-      "question": "Descreva brevemente suas expectativas.",
-      "placeholder": "Por exemplo, me ajude a praticar inglês com conversas do dia a dia e correções cuidadosas.",
       "generate": "Criar amigo",
-      "generating": "Dando forma ao seu amigo…",
-      "generationFailed": "Não foi possível gerar seu amigo. Sua ideia continua aqui; tente novamente.",
       "modelRequired": "Escolha um modelo disponível acima para continuar.",
       "modelFollowsDefault": "Segue o modelo padrão de amigos.",
       "modelForThisBot": "Esta seleção vale apenas para este amigo.",
-      "cindyDescription": "Posso ajudar você a usar Cindy, conectar suas ferramentas e realizar coisas juntos.",
-      "cindySummary": "Gerencie Cindy, conecte ferramentas e realize coisas.",
-      "openCindy": "Abrir Cindy",
-      "addCindy": "Adicionar Cindy",
-      "done": "Concluído",
-      "editName": "Editar nome",
       "duplicateName": "Esse nome já está em uso. Escolha um nome fácil de distinguir.",
-      "introduction": "Sobre mim",
-      "editIntroduction": "Editar apresentação",
-      "refine": "Ajustar amigo",
-      "refinePlaceholder": "O que você mudaria? Por exemplo, menos formal e um pouco mais divertido.",
-      "back": "Voltar",
-      "invite": "Convidar amigo",
       "portrait": "Retrato {{number}}",
       "upload": "Enviar imagem",
       "generateAvatar": "Gerar retrato",
-      "useAvatar": "Usar este retrato",
-      "examples": {
-        "english": {
-          "label": "Praticar inglês",
-          "prompt": "Pratique inglês comigo por meio de conversas do dia a dia. Tenha paciência e corrija expressões pouco naturais com cuidado."
-        },
-        "ideas": {
-          "label": "Explorar ideias",
-          "prompt": "Uma parceria criativa e imaginativa, com opiniões próprias, para me ajudar a transformar ideias de escrita e produtos em planos práticos."
-        },
-        "life": {
-          "label": "Conversar sobre a vida",
-          "prompt": "Uma companhia acolhedora e divertida, que ouve as pequenas coisas da minha vida sem se apressar em dar conselhos."
-        }
-      }
+      "useAvatar": "Usar este retrato"
     },
     "import": {
       "title": "Importar um amigo",
@@ -12676,6 +12759,7 @@
           "listenPortLabel": "Porta local de escuta",
           "listenPortPlaceholder": "18747",
           "hint": "Conecte-se ao seu servidor BlueBubbles na rede local. Apenas os chats selecionados são processados. Pare as outras respostas automáticas desses chats antes de conectar.",
+          "automationDenied": "Durante o envio, o macOS negou ao BlueBubbles o acesso ao Mensagens. No Mac que executa o BlueBubbles, verifique Ajustes do Sistema → Privacidade e Segurança → Automação.",
           "uncertain": "É preciso verificar {{count}} envios. Confira o histórico antes de tentar novamente para evitar duplicatas."
         }
       },
@@ -12923,7 +13007,7 @@
           "detachedBySlash": "🚪 Controle remoto encerrado — voltamos para nossa DM no Discord. Quando quiser controlar o desktop de novo, é só enviar /ctr.",
           "detachedByRevoke": "⚠️ Você retomou o controle pelo desktop, então as próximas mensagens voltam para nossa DM no Discord.",
           "notAttached": "🤷 Você não está controlando nenhuma sessão agora, então o /exctr não tem nada para fazer.",
-          "companionManagedCommand": "🧭 Este bot foi passado para um colega — modelo, permissões e diretório de trabalho seguem as configurações do colega. Para mudar, vá às configurações do colega no Cindy."
+          "companionManagedCommand": "🧭 Este bot foi passado para um amigo — modelo, permissões e diretório de trabalho seguem as configurações do amigo. Para mudar, vá às configurações do amigo no Cindy."
         },
         "agent": {
           "completedNoText": "✅ Pronto (o Agent não disse nada neste turno)",
@@ -13123,13 +13207,13 @@
           "help": "🤖 Veja o que eu posso fazer por você:\n\n/new         Criar uma nova sessão (as antigas são mantidas; nos grupos, é criada para o tópico atual do grupo)\n/project     Trabalhar em uma pasta de projeto (roda aqui no bot, sem assumir o desktop)\n/session     Listar as sessões recentes do desktop; toque em uma para assumir e continuar a conversa\n/model       Colocar outro modelo em campo\n/permission  Ajustar o modo de permissão (auto / bypass / ask etc.)\n/settings    Ver o projeto, o Agent, o modelo, o esforço de raciocínio e as permissões atuais\n/ctr         Assumir remotamente um projeto do desktop (envie de novo durante o controle para trocar de sessão)\n/exctr       Encerrar o controle e voltar para a conversa do Telegram\n/help        Ver o que eu sei fazer\n\nTem algo rodando que você quer parar? Envie /stop (ou `!stop`) — eu interrompo a execução atual na hora e também retiro as mensagens na fila. A sessão é mantida para você continuar.\n\nNo chat privado, é só me mandar uma mensagem. Nos grupos, eu só respondo quando você me menciona com @ ou responde a uma das minhas mensagens — e também lembro das mensagens recentes do grupo como contexto.",
           "unknownCommand": "Não reconheci o comando `{{cmd}}` 🤔\nComandos que eu entendo: /new, /session, /project, /model, /permission, /settings, /ctr, /exctr, /stop, /help",
           "settings": "⚙️ Configurações atuais\n\nProjeto: {{workspace}}\nAgent: {{agent}}\nModelo: {{model}}\nEsforço de raciocínio: {{effort}}\nPermissões: {{permission}}\n\nPara mudar, envie /project, /model ou /permission.",
-          "settingsCompanion": "⚙️ Configurações atuais (colega)\n\nProjeto: {{workspace}}\nAgent: {{agent}}\nModelo: {{model}}\nEsforço de raciocínio: {{effort}}\nPermissões: {{permission}}\n\nO modelo, as permissões e o diretório de trabalho seguem as configurações do colega. Altere-os nas configurações do colega no Cindy.",
+          "settingsCompanion": "⚙️ Configurações atuais (amigo)\n\nProjeto: {{workspace}}\nAgent: {{agent}}\nModelo: {{model}}\nEsforço de raciocínio: {{effort}}\nPermissões: {{permission}}\n\nO modelo, as permissões e o diretório de trabalho seguem as configurações do amigo. Altere-os nas configurações do amigo no Cindy.",
           "detachedBySlash": "🚪 Controle encerrado — voltamos para a conversa do Telegram. Da próxima vez que quiser controlar o desktop remotamente, envie /ctr",
           "detachedByRevoke": "⚠️ Você retomou o controle pelo desktop. As próximas mensagens voltam para a conversa do Telegram.",
           "notAttached": "🤷 Você não está controlando nenhuma sessão agora, então o /exctr não tem o que fazer.",
-          "companionDmNew": "🧭 Esta é a conversa principal do seu colega: ela segue direto e não abre novas sessões. Se quiser mudar de assunto, é só dizer; para trabalhos à parte, o colega abre tarefas em segundo plano por conta própria.",
+          "companionDmNew": "🧭 Esta é a conversa principal do seu amigo: ela segue direto e não abre novas sessões. Se quiser mudar de assunto, é só dizer; para trabalhos à parte, o amigo abre tarefas em segundo plano por conta própria.",
           "companionLaneNew": "🌱 Uma nova conversa foi iniciada para este grupo. O contexto anterior foi guardado — vamos começar do zero!",
-          "companionManagedCommand": "🧭 Esta conexão foi entregue a um colega, então o modelo, as permissões e o diretório de trabalho seguem as configurações dele. Altere-os nas configurações do colega no Cindy."
+          "companionManagedCommand": "🧭 Esta conexão foi entregue a um amigo, então o modelo, as permissões e o diretório de trabalho seguem as configurações dele. Altere-os nas configurações do amigo no Cindy."
         },
         "agent": {
           "completedNoText": "✅ Pronto! (o Agent não disse nada neste turno)",
@@ -13149,7 +13233,7 @@
           "scheduledTaskHeaderNamed": "🤖 Automação “{{name}}”",
           "unsupportedOnly": "🙏 Não consigo processar esta mensagem:\n{{list}}\n\nO que eu consigo processar: texto, imagens (jpg/png/gif/webp), PDF e arquivos de texto de código ou configuração.",
           "unsupportedNotice": "ℹ️ Não consigo processar o seguinte, então deixei de lado:\n{{list}}\n\nO resto chegou certinho e já estou processando.",
-          "companionUnavailable": "⏸ Seu colega não pode receber mensagens agora: {{reason}}",
+          "companionUnavailable": "⏸ Seu amigo não pode receber mensagens agora: {{reason}}",
           "authMissing": {
             "currentProvider": "provedor atual",
             "reasonGatewayKey": "é preciso configurar uma Cindy AI Key primeiro",
@@ -13346,7 +13430,7 @@
         },
         "slash": {
           "detachFailed": "❌ Não foi possível encerrar o controle: {{error}}",
-          "companionManaged": "🧭 Esta conexão foi entregue a um colega, então o modelo, as permissões e o diretório de trabalho seguem as configurações do colega. Altere-os nas configurações do colega no Cindy."
+          "companionManaged": "🧭 Esta conexão foi entregue a um amigo, então o modelo, as permissões e o diretório de trabalho seguem as configurações do amigo. Altere-os nas configurações do amigo no Cindy."
         },
         "turn": {
           "groupApprovalOwnerDm": "🔐 Uma tarefa em um chat em grupo precisa da sua autorização. O cartão de autorização não é publicado no grupo: confirme aqui.",
@@ -13377,7 +13461,8 @@
           "subject": {
             "githubIssue": "O cartão de confirmação “Enviar Issue do GitHub”",
             "renameSessions": "O cartão de confirmação “Renomear tarefas em lote”",
-            "pluginFileGrant": "O cartão de confirmação “Autorização de arquivos do plugin”"
+            "pluginFileGrant": "O cartão de confirmação “Autorização de arquivos do plugin”",
+            "mediaPathReveal": "O cartão de confirmação “Permitir que o Agent obtenha o local de um arquivo de mídia no computador”"
           }
         },
         "replyWords": {
@@ -13423,7 +13508,7 @@
           "detachedBySlash": "🚪 Controle remoto encerrado. As próximas mensagens voltam para a conversa do WeCom.",
           "detachedByRevoke": "⚠️ O controle remoto foi revogado no Cindy Desktop. As próximas mensagens voltam para a conversa do WeCom.",
           "notAttached": "No momento, você não está controlando nenhuma tarefa.",
-          "companionManagedCommand": "🧭 Esta conexão foi entregue a um colega: o modelo, as permissões e o diretório de trabalho seguem as configurações do colega. Altere-os nas configurações do colega no Cindy."
+          "companionManagedCommand": "🧭 Esta conexão foi entregue a um amigo: o modelo, as permissões e o diretório de trabalho seguem as configurações do amigo. Altere-os nas configurações do amigo no Cindy."
         },
         "agent": {
           "completedNoText": "✅ Tarefa concluída (sem saída de texto neste turno)",
@@ -13567,9 +13652,9 @@
           "detachedBySlash": "🚪 Controle remoto encerrado — voltamos para a nossa conversa privada. Quando quiser controlar o app desktop de novo, é só mandar /ctr",
           "detachedByRevoke": "⚠️ Você encerrou o controle remoto no app desktop. As próximas mensagens voltam para a nossa conversa privada.",
           "notAttached": "🤷 Você não está controlando nenhuma sessão agora, então /exctr não tem nada para fazer.",
-          "companionDmNew": "🧭 Esta é a conversa principal do seu colega: ela continua sempre e não abre uma nova sessão. Para mudar de assunto, é só falar; para trabalhos separados, o colega abre sozinho uma sessão em segundo plano.",
+          "companionDmNew": "🧭 Esta é a conversa principal do seu amigo: ela continua sempre e não abre uma nova sessão. Para mudar de assunto, é só falar; para trabalhos separados, o amigo abre sozinho uma sessão em segundo plano.",
           "companionLaneNew": "🌱 Comecei uma nova conversa para este grupo e deixei o contexto anterior de lado. Vamos começar do zero!",
-          "companionManagedCommand": "🧭 Esta conexão foi entregue a um colega, então o modelo, as permissões e o diretório de trabalho seguem as configurações dele. Altere nas configurações do colega no Cindy."
+          "companionManagedCommand": "🧭 Esta conexão foi entregue a um amigo, então o modelo, as permissões e o diretório de trabalho seguem as configurações dele. Altere nas configurações do amigo no Cindy."
         },
         "agent": {
           "completedNoText": "✅ Pronto (o Agent não disse nada neste turno)",
@@ -13589,7 +13674,7 @@
           "scheduledTaskHeaderNamed": "🤖 Automação “{{name}}”",
           "unsupportedOnly": "🙏 Não consigo processar esta mensagem:\n{{items}}\n\nO que eu consigo processar: texto, imagens (jpg/png/gif/webp), PDF e arquivos de texto de código ou configuração.",
           "unsupportedNotice": "ℹ️ Não consigo processar o seguinte, então deixei de lado:\n{{items}}\n\nO resto chegou certinho, já estou trabalhando nisso~",
-          "companionUnavailable": "⏸ Seu colega não pode receber mensagens agora: {{reason}}",
+          "companionUnavailable": "⏸ Seu amigo não pode receber mensagens agora: {{reason}}",
           "authMissing": {
             "defaultProvider": "provedor atual",
             "message": "⚠️ Esta conversa usa o provedor “{{provider}}” ({{model}}): {{reason}}.",
@@ -13845,19 +13930,19 @@
           "delayedReplyQuestion": "Mensagem original: {{question}}",
           "stillProcessing": "Ainda processando…",
           "ownerOnlyCommands": "Só o dono pode usar os comandos do bot.",
-          "companionManagedCommand": "Abra este colega no Cindy: o modelo é alterado nas configurações do colega e as permissões, abaixo da caixa de entrada da conversa.",
+          "companionManagedCommand": "Abra este amigo no Cindy: o modelo é alterado nas configurações do amigo e as permissões, abaixo da caixa de entrada da conversa.",
           "help": "Comandos disponíveis: /new nova conversa; /stop parar a execução atual; /stop all parar todas as execuções; /status ver o status; /help ver a ajuda.",
           "status_one": "A conexão do Cindy com o WeChat está funcionando. {{count}} mensagem na fila.",
           "status_other": "A conexão do Cindy com o WeChat está funcionando. {{count}} mensagens na fila.",
           "status_many": "A conexão do Cindy com o WeChat está funcionando. {{count}} mensagens na fila.",
           "stopped": "Tarefa interrompida.",
-          "companionDmNew": "Aqui você compartilha a mesma sessão de longa duração com o colega, então o histórico e a memória são mantidos. Para organizar o contexto, reinicie o colega no Cindy.",
+          "companionDmNew": "Aqui você compartilha a mesma sessão de longa duração com o amigo, então o histórico e a memória são mantidos. Para organizar o contexto, reinicie o amigo no Cindy.",
           "newConversation": "Nova conversa iniciada.",
           "unknownCommand": "Comando desconhecido. Envie /help para ver os comandos disponíveis.",
           "overloaded": "Há muitas tarefas do WeChat no momento. Tente de novo mais tarde."
         },
         "preDispatch": {
-          "companionPermissionUnsupported": "Esta mensagem precisa de confirmação de permissão a cada ação, mas o modelo ou o modo de permissão atual do colega não oferece suporte, então a mensagem não pode ser iniciada.\nO dono deve abrir este colega no Cindy, verificar o modelo nas configurações do colega e escolher “Permissões padrão” ou “Revisão automática” abaixo da caixa de entrada da conversa.",
+          "companionPermissionUnsupported": "Esta mensagem precisa de confirmação de permissão a cada ação, mas o modelo ou o modo de permissão atual do amigo não oferece suporte, então a mensagem não pode ser iniciada.\nO dono deve abrir este amigo no Cindy, verificar o modelo nas configurações do amigo e escolher “Permissões padrão” ou “Revisão automática” abaixo da caixa de entrada da conversa.",
           "missingAuth": "O Agent atual ainda não foi autorizado. Conecte primeiro um serviço de modelos no Cindy.",
           "generic": "Esta mensagem não pode ser iniciada agora. Tente de novo mais tarde."
         },
@@ -14326,6 +14411,8 @@
       "source": {
         "lastConfirmed": "Última atualização: {{time}}",
         "unconfirmed": "Lista de modelos desatualizada",
+        "unreachable": "Não foi possível conectar a {{source}}",
+        "unreachableDetail": "Sem conexão. Verifique sua rede.",
         "unavailable": "Modelo indisponível",
         "reconnect": "Reconectar",
         "manage": "Gerenciar fonte",
@@ -14349,6 +14436,8 @@
         "remoteFavoriteUnavailable": "{{source}} · Não é possível ler os modelos daquele computador agora",
         "favoritesGroup": "Favoritos",
         "recentGroup": "Recentes",
+        "hiddenGroup": "Ocultos ({{count}})",
+        "hiddenGroupHint": "Provedores e modelos ocultos ainda podem ser escolhidos",
         "recentEmpty": "Ainda não há modelos recentes — escolha um modelo e ele aparecerá aqui",
         "favoritesSaveFailed": "Não foi possível salvar as alterações nos favoritos",
         "favoritesCleanupFailed": "Não foi possível remover os favoritos de compartilhamentos de provedores revogados",
@@ -14526,6 +14615,7 @@
       "regionAria": "Fila de mensagens pendentes",
       "listAria": "Mensagens na fila",
       "pausedFooter": "Tarefa interrompida, fila pausada",
+      "steerUnsupportedNotice": "Este motor não permite orientar. As mensagens na fila serão enviadas quando o turno atual terminar.",
       "resumeAction": "Continuar envio",
       "resumeAria": "Continuar enviando mensagens da fila",
       "showMore_one": "mais {{count}}",
@@ -14674,6 +14764,7 @@
       "steerNotSent": "Mensagem não enviada. O encaminhamento está temporariamente indisponível; seu rascunho foi mantido.",
       "credentialSwitchApplied": "A troca de provedor de modelo entrou em vigor.",
       "credentialSwitchFailed": "Falha ao trocar o provedor de modelo. Escolha o modelo novamente.",
+      "credentialSwitchKeptSettings": "A troca não foi concluída. A tarefa continuará usando as configurações anteriores.",
       "modelSwitchContextGuard": {
         "warnToast": "Esta conversa já usa {{used}} — cerca de {{pct}}% da capacidade de {{total}} do novo modelo",
         "condensedToast": "As partes anteriores da conversa serão condensadas para caber no novo modelo. O histórico completo continua disponível.",
@@ -15244,7 +15335,6 @@
     "runningStatus": {
       "currentRate": "Última velocidade",
       "lastRequestRate": "Média da última solicitação",
-      "recentTokenRate": "Recente {{rate}} tok/s",
       "waitingSample": "Amostragem",
       "averageRate": "Média do turno",
       "rateHistory": "Histórico de velocidade de geração",
@@ -15948,6 +16038,7 @@
       }
     },
     "userMessage": {
+      "oversizedInputSkipped": "O contexto está cheio, por isso esta mensagem não pôde ser processada. As próximas mensagens serão processadas em ordem.",
       "attachmentPrefix": "Anexos: ",
       "attachmentAttachedAria": "{{name}} anexado",
       "saveAttachmentAs": "Salvar anexo {{name}} como",
@@ -16024,7 +16115,7 @@
       "viewThread": "Ver contexto do tópico ({{count}})",
       "memberFromGroup": "{{name}} · do grupo “{{group}}” no {{platform}}",
       "memberFromPlatform": "{{name}} · de um grupo no {{platform}}",
-      "guestFromDm": "{{name}} · de uma mensagem direta no {{platform}} (não é o proprietário)",
+      "guestFromDm": "{{name}} · de uma mensagem direta no {{platform}}",
       "unknownSender": "Membro do grupo"
     },
     "rewind": {
@@ -16672,6 +16763,9 @@
     },
     "sidebar": {
       "machineSwitcher": {
+        "addCloud": "Adicionar computador na nuvem",
+        "preparingCloud": "Preparando computador na nuvem",
+        "manageCloud": "Gerenciar computador na nuvem",
         "allMachines": "Todas",
         "localMachine": "Locais",
         "connecting": "Conectando…",
@@ -16808,6 +16902,9 @@
       "taskInfoSummaryNone": "Nenhum",
       "taskInfoSummarySeparator": ", ",
       "taskInfo": {
+        "harness": "Ícone do harness",
+        "project": "Ícone e nome do projeto",
+        "teammate": "Avatar do amigo",
         "time": "Tempo",
         "pr": "Status do PR",
         "worktree": "worktree",
@@ -17732,7 +17829,8 @@
         "title": "Importar automações do repositório",
         "description": "Origem: {{workingDir}}. Revise as definições abaixo. A importação aplica estas alterações e ativa novas automações, que podem executar comandos e iniciar Agents com acesso total. Importe apenas conteúdo confiável.",
         "accept": "Confirmar importação",
-        "removed": "Serão removidos: {{names}}"
+        "removed": "Serão removidos: {{names}}",
+        "fileMissing": "Importação ignorada. Não foi possível encontrar o arquivo de automações em {{projectName}}."
       },
       "toast": {
         "summary": "adicionados {{inserted}} · atualizados {{updated}} · removidos {{deleted}}",
@@ -17829,6 +17927,7 @@
       "openWorkdirFailed": "Falha ao abrir pasta"
     },
     "runs": {
+      "queueWaitTimeoutRecovery": "O tempo de espera expirou antes do envio da mensagem. Quando a sessão de destino estiver livre, escolha {{action}} para executá-la.",
       "status": {
         "running": "Em execução",
         "success": "Sucesso",
@@ -17883,6 +17982,7 @@
       }
     },
     "editor": {
+      "reviewModelReadFailed": "Não foi possível ler o modelo da automação. Feche e reabra o editor para tentar novamente.",
       "promptDialog": {
         "titleEdit": "Editar automação",
         "titleCreate": "Criar automação",
@@ -18226,11 +18326,13 @@
         "effortHeading": "Esforço de raciocínio",
         "effortDefault": "Padrão",
         "followSession": "Seguir sessão",
+        "followTeammate": "Seguir o modelo principal do amigo",
         "modelListAria": "Lista de modelos",
         "modelSelectorAria": "Seletor de modelo",
         "categoryListAria": "Modelos de {{category}}",
         "effortListAria": "Esforço de raciocínio",
-        "boundLocationLocked": "As tarefas vinculadas continuam sendo executadas onde estão. Escolha um modelo desse computador."
+        "boundLocationLocked": "As tarefas vinculadas continuam sendo executadas onde estão. Escolha um modelo desse computador.",
+        "modelGroupTitle": "Grupo de modelos “{{name}}”: escolhe uma fonte ao criar uma nova tarefa"
       }
     },
     "toast": {
@@ -18780,7 +18882,7 @@
       "expired": "Entrada manual encerrada por tempo de espera excedido."
     },
     "failure": {
-      "permission": "O Cindy não consegue ler a tela deste computador. Permita o acesso do Cindy em Acessibilidade nas Configurações do Sistema.",
+      "permission": "O Cindy não consegue ler a interface deste Mac. Verifique a permissão de controle da cópia do Cindy em execução. No macOS 27.3 ou posterior, a permissão de controle fica em “System & App Protection Override”. Nas versões anteriores, abra Acessibilidade.",
       "target_gone": "A janela de destino foi fechada.",
       "unreadable": "Não é possível ler esta tela. Você pode concluir esta etapa no computador host e devolver o controle ao Agent.",
       "action_failed": "Essa ação não teve efeito. Verifique a tela e tente novamente.",
@@ -20597,6 +20699,7 @@
       "totalDetail_other": "{{count}} cartões × {{amount}}",
       "pay": "Continuar para o pagamento",
       "refundNote": "Cartões-presente não podem ser trocados por dinheiro. Cartões resgatados não são reembolsáveis. Para pedir o reembolso de um cartão não resgatado, entre em contato com o suporte.",
+      "termsNote": "Ao selecionar Continuar para o pagamento, você aceita os <terms>Termos do cartão-presente</terms>.",
       "cancel": "Cancelar",
       "loadFailed": "Não foi possível carregar os limites de compra. Tente novamente mais tarde.",
       "checkoutSubtitle_one": "Cartão-presente {{amount}} × {{count}} · emitido assim que o pagamento for concluído",
@@ -20691,7 +20794,7 @@
     "epermGuidance": {
       "title": "Acesso à pasta do macOS negado",
       "message": "O Cindy não consegue acessar sua pasta {{folder}}",
-      "detail": "O macOS negou o acesso. Abra os Ajustes do Sistema para conceder permissão e execute o comando do seu Agent novamente.",
+      "detail": "Em Arquivos e Pastas, permita que a Cindy acesse esta pasta e tente novamente.",
       "openSystemSettings": "Abrir Ajustes do Sistema",
       "cancel": "Cancelar",
       "folderNames": {
@@ -21787,6 +21890,9 @@
     "actionFailed": "Não foi possível concluir a ação do plugin. Tente novamente."
   },
   "mcpApps": {
+    "composerDragFailed": "Não foi possível anexar o arquivo. Arraste-o de novo ou selecione “Adicionar à caixa de texto”.",
+    "composerAttachmentFormat": "Use uma imagem, um PDF ou um arquivo de texto simples de até 64 MiB.",
+    "composerAttachmentBusy": "Aguarde um momento antes de adicionar outro anexo.",
     "sharedTaskReadOnly": "Apenas o proprietário da sessão pode interagir com este cartão.",
     "retry": "Recarregar",
     "loadFailed": "Não foi possível carregar o aplicativo. Verifique a conexão e recarregue.",
@@ -21802,6 +21908,7 @@
       "reviewed": "Revisado",
       "verified-publisher": "Publicador verificado"
     },
+    "viewLimit": "Há muitas páginas abertas. Role outra página para fora da tela ou recolha-a para que esta abra automaticamente.",
     "pluginRevoked": "O plugin foi desativado ou alterado. Esta página não está mais disponível.",
     "pluginCspRejected": "A página solicitou um domínio não declarado e foi bloqueada.",
     "filesOnExecutionComputer": "Ver o conteúdo do arquivo no computador de execução",
@@ -22248,9 +22355,9 @@
       "pick": "Escolher uma a uma",
       "started": "A importação começou em segundo plano. Acompanhe o progresso em Configurações → Importação de sessões.",
       "startFailed": "A importação não começou. Importe novamente em Configurações → Importação de sessões.",
-      "teammatesHeading": "Colegas",
-      "teammatesHint": "Importe um Agent de outra ferramenta como colega, com a memória, as Skills e as automações dele.",
-      "importTeammate": "Importar como colega"
+      "teammatesHeading": "Amigos",
+      "teammatesHint": "Importe um Agent de outra ferramenta como amigo, com a memória, as Skills e as automações dele.",
+      "importTeammate": "Importar como amigo"
     },
     "finish": {
       "title": "Tudo pronto",
@@ -22401,6 +22508,11 @@
     "lineNumbers": "Números de linha"
   },
   "subscriptionAccounts": {
+    "pluginSignIn": {
+      "method": "Método de login",
+      "secretHint": "A chave vai apenas para o plugin, que a guarda na pasta própria desta conta. O Cindy não a armazena nem a envia para outros computadores.",
+      "browserHint": "O plugin abrirá seu navegador. Conclua o login lá e depois volte aqui."
+    },
     "placement": {
       "needsUpdate": "É preciso atualizar o Cindy no computador que executa esta operação para mover contas assim.",
       "moveTo": "Mover para…",
@@ -22545,6 +22657,18 @@
       "cheapest": {
         "title": "O mais barato",
         "hint": "Usa primeiro as assinaturas com cota disponível, sem custo adicional; o restante segue do menor para o maior preço de tabela, e as fontes sem preço ficam por último."
+      },
+      "drain": {
+        "title": "Esgotar e passar",
+        "hint": "Continua usando a última fonte até ela ficar sem cota ou indisponível e só então passa para a próxima; não volta quando as anteriores se recuperam."
+      },
+      "headroom": {
+        "title": "Mais cota restante",
+        "hint": "Usa primeiro a fonte com a maior proporção de cota restante (a semanal, se houver); fontes sem cota legível ficam por último."
+      },
+      "weighted": {
+        "title": "Por peso",
+        "hint": "Distribui as novas tarefas entre as fontes na proporção dos pesos, de forma intercalada; fontes indisponíveis ficam de fora desta vez."
       }
     },
     "picker": {
@@ -22572,6 +22696,11 @@
       "tight": "A cota de 5 horas está quase cheia, por isso é ignorada por agora",
       "cheapest": "Menor preço de tabela",
       "cheapestFree": "Ainda há cota de assinatura, sem custo adicional",
+      "drain": "Continua em uso até a cota acabar",
+      "drainNext": "A fonte anterior se esgotou ou ficou indisponível, então passou para esta",
+      "headroom": "Tem mais cota restante",
+      "headroomQuota": "Restam {{left}}% da cota, mais do que em qualquer outra fonte",
+      "weighted": "É a vez dela pelo peso",
       "noVision": "A mensagem tem imagens e esta fonte não consegue vê-las",
       "exceptionImage": "A mensagem tem imagens, então só foram consideradas as fontes que conseguem vê-las",
       "exceptionImageFallback": "A mensagem tem imagens, mas nenhuma fonte consegue vê-las, então escolheu como de costume",
@@ -22591,6 +22720,9 @@
       "effort": "Esforço de raciocínio",
       "effortUnset": "Não definido",
       "effortHint": "Se o modelo escolhido não oferecer suporte a este nível, roda com o seu padrão.",
+      "weight": "Peso",
+      "weightAria": "Peso de “{{name}}”",
+      "weightHint": "Com “Por peso”, um peso maior recebe mais tarefas novas. 1–1000.",
       "sources": "Fontes que pode usar",
       "sourcesHint": "Podem coexistir modelos diferentes. A tarefa indica qual foi usado.",
       "sourcesEmpty": "Ainda não há fontes. Adicione abaixo um modelo conectado.",
@@ -22623,6 +22755,7 @@
         "empty": "Ainda não há exceções. Cada nova tarefa segue a regra de escolha acima.",
         "imageRule": "Quando a mensagem tiver imagens, usar apenas fontes que consigam vê-las",
         "hoursRule": "{{from}}–{{to}}: usar “{{name}}”",
+        "hoursRuleDays": "{{days}} {{from}}–{{to}}: usar “{{name}}”",
         "remove": "Remover esta exceção",
         "add": "Adicionar uma exceção",
         "choose": "Escolher uma situação",
@@ -22631,6 +22764,9 @@
         "from": "De",
         "to": "Até",
         "useRoute": "Usar no lugar",
+        "days": "Dias",
+        "daysHint": "Sem dias selecionados, vale para todos os dias. Um intervalo que passa da meia-noite conta para o dia em que começa.",
+        "dayRange": "{{from}}–{{to}}",
         "addHours": "Adicionar",
         "sameHour": "O início e o fim não podem ser a mesma hora.",
         "full": "Até {{count}} exceções.",
@@ -22800,5 +22936,10 @@
       "auto": "Revisão automática",
       "bypassPermissions": "Acesso total"
     }
+  },
+  "macControlPermission": {
+    "pane": "System & App Protection Override",
+    "selectApp": "Em “System & App Protection Override”, clique em ⓘ ao lado de {{app}}. Se o app não estiver na lista, use + para adicionar a cópia em execução.",
+    "review": "$t(macControlPermission.selectApp)\nSe a opção estiver disponível, você pode limitar o controle aos apps que escolher. O controle total dá acesso a todos os apps e dados. Se concordar, leia e confirme cada item e permita o acesso no fim da janela."
   }
 }

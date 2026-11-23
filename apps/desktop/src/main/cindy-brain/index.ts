@@ -404,7 +404,9 @@ import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { createGhostKvStore, removeGhostKvBestEffort, type GhostKvStore } from './ghostKvStore.js';
 import { handleGhostModelsRequest } from './runtime/ghostModelsEndpoint.js';
 import { handleGhostHarnessesRequest } from './runtime/ghostHarnessesEndpoint.js';
-import { configurePluginHarnessRegistry, reconcilePluginHarnesses } from './pluginHarnesses.js';
+import { configurePluginHarnessRegistry, PLUGIN_USAGE_WORKER_FAILURE, reconcilePluginHarnesses } from './pluginHarnesses.js';
+import { pluginEngineAccountRoot } from '../plugin-engine-accounts/paths.js';
+import { forgetPluginEngineAccountsOfPlugin } from '../plugin-engine-accounts/store.js';
 import { ghostPublishedModelText, parseGhostPublishedModels } from '@cindy/plugin-protocol';
 import {
   handleGhostSetupStatusRequest,
@@ -625,9 +627,9 @@ import { ConnectionTokenProvider, type IssuedConnectionToken } from './connectio
 import { GhostFsSlot } from './fsSlot.js';
 import { HostStorageService } from './storageService.js';
 import { createHostStorageProviders } from './storageProviders.js';
-import { GhostLibrarySlot } from './librarySlot.js';
+import { GhostLibrarySlot, registerLibraryQuit } from './librarySlot.js';
 import { LibraryBindingStore, assertLibraryMetaOwner, relocateLibraryMetaOwner, validateLibraryCandidateLocation } from './libraryBinding.js';
-import { LibraryVault, statfsFreeBytes, DEFAULT_LIBRARY_LIMITS } from './libraryVault.js';
+import { LibraryVault, statfsFreeBytes, DEFAULT_LIBRARY_LIMITS, readLibraryUsageSnapshot } from './libraryVault.js';
 import { getGhostHandoffStore, isGhostHandoffBusy } from './handoffStore.desktop.js';
 export { getGhostHandoffStore } from './handoffStore.desktop.js';
 import { LibraryStagingStore, relocateLibraryStagingOwner } from './libraryStaging.js';
@@ -719,7 +721,6 @@ import { invalidateXaiBridgeAuth } from '../maker-host/xai-auth-invalidation-hos
 import {
   isModelDisabled,
   isModelDisabledWithUniqueLegacyBasename,
-  isOrganizationManagedProvider,
   isProviderDisabled,
   type MediaCapability,
   type ProviderView,
@@ -780,7 +781,7 @@ import { isProviderRouteMutationInProgress, getProviderRouteCredentialRevision }
 import { geminiImageAgent, geminiImageConnectionId, resolveGeminiImageKey, savedGeminiRouteMatches } from '../maker-host/gemini-image-connection.js';
 import { createGeminiImageChannel } from './geminiImageClient.js';
 import { createCodexImageChannel } from './codexImageClient.js';
-import { getCodexImageAuthBinding } from './codexImageAuthBinding.js';
+import { codexImageAccountKind, createAccountCodexImageChannel, getCodexImageAuthBinding } from './codexImageAuthBinding.js';
 import { createGatewayImageClient } from '../cindy-proxy-media/api/gatewayImageClient.js';
 import {
   createByokImageChannel,
@@ -5515,23 +5516,12 @@ function getImageChannelRegistry(): ImageChannelRegistry {
     registeredCustomImageAccounts,
   );
   for (const provider of imageProviders) {
-    if (
-      isOrganizationManagedProvider(provider) ||
-      provider.auth.native !== 'codex' ||
-      registeredCodexImageAccounts.has(provider.id)
-    )
-      continue;
+    if (!codexImageAccountKind(provider) || registeredCodexImageAccounts.has(provider.id)) continue;
     const providerId = provider.id;
     imageChannelRegistrySingleton.register(
       providerId,
-      createCodexImageChannel({
-        providerId,
-        hasOAuthLogin: () => getCodexImageAuthBinding().hasAuth?.(providerId) === true,
-        getAuth: () => getCodexImageAuthBinding().getAuth(providerId),
-        onAuthFailure: async (failure) => {
-          await getCodexImageAuthBinding().onAuthFailure(failure, providerId);
-        },
-        fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
+      createAccountCodexImageChannel(providerId, () => getActiveCatalog().providers.find(p => p.id === providerId), {
+        fetchImplementation: outboundFetch,
         beforeDispatch: (model) => assertMediaModelStillEnabled('image', model, providerId),
       }),
     );
@@ -5803,7 +5793,7 @@ configureProviderMediaRuntime({
       }
     };
     beforeDispatch();
-    const remoteAuth = await getCodexImageAuthBinding().acquireRemoteAuth?.(providerId, model);
+    const remoteAuth = await getCodexImageAuthBinding().acquireAuth?.(providerId, model, true);
     if (!remoteAuth) throw new Error('SHARED_IMAGE_UNAVAILABLE');
     try {
       const channel = createCodexImageChannel({
@@ -7290,16 +7280,17 @@ export async function getGhostLibraryOverview(ghostId: string): Promise<GhostLib
       if (meta?.ghostId !== storagePart) throw new Error('Library owner mismatch');
       orphaned = meta.orphaned !== undefined;
       try {
-        const usage = JSON.parse(
-          await fs.promises.readFile(path.join(root, '.cindy-library', 'usage.json'), 'utf8'),
-        ) as {
-          files?: number;
-          bytes?: number;
-        };
-        usedBytes = Number(usage.bytes ?? 0);
-        fileCount = Number(usage.files ?? 0);
+        const live = librarySlotSingleton?.getLiveUsageSnapshot(storagePart, root);
+        if (live) {
+          ({ usedBytes, fileCount } = live);
+        } else {
+          const usage = await readLibraryUsageSnapshot(root);
+          usedBytes = usage?.bytes ?? 0;
+          fileCount = usage?.files ?? 0;
+          if (usage?.checkpoint === 'dirty') reason = 'usage-checkpoint-dirty';
+        }
       } catch {
-        /* 账本缺失按 0 计;设置页可触发重扫 */
+        /* 暂无可展示的账本。 */
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || fs.existsSync(root)) {
@@ -7417,11 +7408,9 @@ async function findLegacyLibraryCandidate(
   let usedBytes = 0;
   let fileCount = 0;
   try {
-    const usage = JSON.parse(
-      await fs.promises.readFile(path.join(hostDir, 'usage.json'), 'utf8'),
-    ) as { files?: number; bytes?: number };
-    usedBytes = Number(usage.bytes ?? 0);
-    fileCount = Number(usage.files ?? 0);
+    const usage = await readLibraryUsageSnapshot(root);
+    usedBytes = usage?.bytes ?? 0;
+    fileCount = usage?.files ?? 0;
   } catch {
     /* 账本缺失按 0 计 */
   }
@@ -8233,7 +8222,10 @@ export async function updatePersonalLocalPlugins() {
           if (createHash('sha256').update(await fs.promises.readFile(backupFile)).digest('hex') !== backupHash)
             throw new Error('Previous personal plugin backup verification failed');
           const backupInspection = await manager.inspect(backupFile);
-          if ('rejection' in backupInspection) throwInstallError(backupInspection.rejection);
+          if ('rejection' in backupInspection) throwInstallError({
+            ...backupInspection.rejection,
+            reason: `Previous plugin backup cannot be imported; keeping the current installation: ${backupInspection.rejection.reason}`,
+          });
           if (!isCurrent()) throw new Error('Personal plugin owner changed');
           assertGhostRelocationIdle(instance);
           const updated = await updateLocalGhostPackageLocked(manager, file, inspected, inspected.packageSha256,
@@ -8889,6 +8881,10 @@ async function uninstallGhostAndCleanupLocked(
     removeGhostKvBestEffort(publishedModelsStore(), storagePart, log);
     removeGhostKvBestEffort(publishedHarnessesStore(), storagePart, log);
     if (storagePart) {
+      // 引擎账号(subscription-account-pools.md 插件引擎的账号)：Cindy 为它的引擎加的账号目录与设置随卸载删除，停用保留。
+      await forgetPluginEngineAccountsOfPlugin(storagePart).catch((err) => {
+        log.warn('plugin engine accounts cleanup failed', { id: storagePart, error: err instanceof Error ? err.message : String(err) });
+      });
       try {
         await fs.promises.rm(ownerScopedUserDataPath('ghost-fs', storagePart), {
           recursive: true,
@@ -9191,7 +9187,7 @@ export function registerGhostIpc(): void {
   if (ipcRegistered) return;
   ipcRegistered = true;
   // 插件工具审批按真实已装实例与 receipt 判定，调用参数里的名字只用来定位。
-  setGhostToolApprovalResolver(runtimePluginHost.resolveToolApproval);
+  setGhostToolApprovalResolver(runtimePluginHost.resolveToolApproval, runtimePluginHost.resolveStartupToolApproval);
   const readMail = createMailReader({
     plugins: () => availableGhosts().flatMap(g => {
       if (!g.enabled || g.approval.state !== 'approved' || g.manifest.mail !== true || !g.manifest.mailReader ||
@@ -9523,13 +9519,35 @@ export function registerGhostIpc(): void {
     uiLocale: () => currentGhostAppContext().context.uiLocale,
     spawn: (ghostId, harnessId, options) => getGhostNodeRuntimeBroker().spawnHarness(ghostId, harnessId, options),
     requestRefresh: (ghostId) => sendToGhostLogic(ghostId, { type: 'harnesses-refresh-requested' }),
-    readUsage: async (ghostId, harnessId) => {
+    readUsage: async (ghostId, harnessId, accountDir) => {
       const owner = captureDataOwnerBroadcastScope();
       const response = await getGhostNodeRuntimeBroker().handleRequest(ghostId, {
-        type: 'node-request', method: 'usage', params: { harnessId }, timeoutMs: 26000,
+        type: 'node-request', method: 'usage',
+        params: { harnessId, ...(accountDir !== undefined ? { accountDir } : {}) }, timeoutMs: 26000,
+      });
+      if (!isDataOwnerBroadcastScopeCurrent(owner)) return null;
+      if (response.ok) return response.result;
+      switch (response.errorCode) {
+        case 'TIMEOUT':
+        case 'RATE_LIMITED':
+        case 'PROCESS_START_FAILED':
+        case 'PROCESS_EXITED':
+        case 'PROTOCOL_ERROR':
+        case 'INTERNAL':
+          return PLUGIN_USAGE_WORKER_FAILURE;
+        default:
+          return null;
+      }
+    },
+    // 引擎账号(plugin-harnesses.md 引擎账号)：方法名与参数由注册表固定，回包按协议校验后才用。
+    callAccount: async (ghostId, method, params, timing) => {
+      const owner = captureDataOwnerBroadcastScope();
+      const response = await getGhostNodeRuntimeBroker().handleRequest(ghostId, {
+        type: 'node-request', method, params, ...timing,
       });
       return response.ok && isDataOwnerBroadcastScopeCurrent(owner) ? response.result : null;
     },
+    accountRoot: pluginEngineAccountRoot,
     log,
   });
   // /secrets 只写通道(network user 与 node.secretBindings 凭证一律由意识
@@ -9726,6 +9744,7 @@ export function registerGhostIpc(): void {
   const suspendPluginApps = () => { void revokePluginAppServers().catch(() => log.warn('plugin page revocation on suspend failed')); };
   powerMonitor.on('suspend', suspendPluginApps);
   onQuit('plugin-ui', async () => { powerMonitor.removeListener('suspend', suspendPluginApps); await revokePluginAppServers(); }, 'async');
+  registerLibraryQuit(onQuit, () => librarySlotSingleton);
   onQuit('plugin-downloads', async () => {
     await pluginDownloads.stopAndWait();
     await Promise.all([...anonymousDownloadRoots].map(async ([id, { root, scope }]) => {
@@ -10977,8 +10996,9 @@ export function registerGhostIpc(): void {
       updateKey: activeOwnerScopeKey(),
       tempRoot: app.getPath('temp'),
       isCurrentOwner: () => ghostOwnerScope.isStable(owner),
-      download: (file, asset, callbacks) => downloadGithubPluginRelease(
-        outboundFetch as typeof fetch, token, source.repository, asset, file, callbacks,
+      download: (file, _asset, callbacks) => downloadGithubPluginRelease(
+        outboundFetch as typeof fetch, check.authenticated ? token : null, source.repository,
+        release, file, callbacks,
       ),
       install: async file => {
         const { ghost } = await installLocalFile(event.sender, owner, file, {
@@ -11136,14 +11156,16 @@ export function registerGhostIpc(): void {
     if (!ghostOwnerScope.isStable(owner)) throwIpcError('PRECONDITION_FAILED', 'Plugin owner changed');
     if (action === 'sign-in') return openGithubSignIn();
     const token = await readLocalGithubToken();
-    const result = await checkGithubPluginRelease(outboundFetch as typeof fetch, token, repository, target.manifest.id, target.manifest.version);
+    const { check, authenticated } = await checkGithubPluginRelease(
+      outboundFetch as typeof fetch, token, repository, target.manifest.id, target.manifest.version,
+    );
     if (!ghostOwnerScope.isStable(owner)) throwIpcError('PRECONDITION_FAILED', 'Plugin owner changed');
-    if (action === 'check' || !token || typeof expectedAssetId !== 'number') return result;
+    if (action === 'check' || typeof expectedAssetId !== 'number') return check;
     const instance = installedGhostStoragePart(target);
     const approval = ghostInstallApprovalToken(target.approval);
     const ownerStamp = getGhostOwnerPushStamp();
     return installCheckedGithubPluginRelease({
-      check: result,
+      check,
       expectedAssetId,
       pending: githubReleaseUpdates,
       updateKey: JSON.stringify([activeOwnerScopeKey(), instance]),
@@ -11154,8 +11176,10 @@ export function registerGhostIpc(): void {
           sendGhostContentsPush(event.sender, GITHUB_PLUGIN_RELEASE_PROGRESS_CHANNEL, { instanceId: instance, progress }, ownerStamp);
         }
       },
-      download: (file, release, callbacks) =>
-        downloadGithubPluginRelease(outboundFetch as typeof fetch, token, repository, release, file, callbacks),
+      download: (file, release, callbacks) => downloadGithubPluginRelease(
+        outboundFetch as typeof fetch, authenticated ? token : null, repository,
+        { ...release, pluginId: target.manifest.id }, file, callbacks,
+      ),
       async install(file, release) {
         const updated = await updateLocalFile(event.sender, owner, file, {
           expectedPackageSha256: release.sha256,

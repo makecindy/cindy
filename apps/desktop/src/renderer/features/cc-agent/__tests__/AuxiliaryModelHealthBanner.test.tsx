@@ -34,7 +34,7 @@ it('shows the localized cause and actual counts, excludes other owners, and link
   const dismiss = vi.fn(async () => {});
   Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: {
     auxiliaryModelHealthDismiss: dismiss,
-    auxiliaryModelHealthGet: async (sessionId: string) => sessionId === 'chat' ? snapshot : [],
+    auxiliaryModelRouteHealthGet: async (sessionId: string) => sessionId === 'chat' ? snapshot : [],
     onAuxiliaryModelHealthChanged: (fn: typeof push) => { push = fn; return () => {}; },
   } } });
   render(<I18nextProvider i18n={i18n}><MemoryRouter><Routes>

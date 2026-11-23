@@ -29,6 +29,7 @@ import {
   readAuxiliaryModelSettingsState,
   writeAuxiliaryModelSettingsPatch,
 } from '../utility-model/auxiliary-model-settings-store.js';
+import { refreshAuxiliaryModelHealth, registerAuxiliaryModelHealthIpc } from '../utility-model/auxiliaryModelHealthService.js';
 import { hasOneshotProviderCredential } from '../utility-model/oneshotProviderUsability.js';
 import {
   buildTextOneshotPinOptions,
@@ -299,13 +300,14 @@ export async function saveAuxiliaryModelSettings(
 }
 
 export function registerAuxiliaryModelSettingsIpc(): void {
+  registerAuxiliaryModelHealthIpc();
   ipcMain.handle(MAKER_INVOKE.AUXILIARY_MODEL_HEALTH_DISMISS, (event, sessionId: unknown, noticeId: unknown) => {
     assertTrustedAppRendererEvent(event);
     const args = z.tuple([z.string().min(1).max(200), z.number().int().positive()]).safeParse([sessionId, noticeId]);
     if (!args.success) throwIpcError('INVALID_PARAMS', 'Invalid auxiliary notice');
     dismissAuxiliaryModelNotice(...args.data);
   });
-  ipcMain.handle(MAKER_INVOKE.AUXILIARY_MODEL_HEALTH_GET, (event, sessionId?: string) => {
+  ipcMain.handle(MAKER_INVOKE.AUXILIARY_MODEL_ROUTE_HEALTH_GET, (event, sessionId?: string) => {
     assertTrustedAppRendererEvent(event);
     return getAuxiliaryModelHealthSnapshot(sessionId);
   });
@@ -336,6 +338,7 @@ export function registerAuxiliaryModelSettingsIpc(): void {
       const persistedPins = new Set(readAuxiliaryModelSettings().models);
       const result = await saveAuxiliaryModelSettings(rawPatch, allowedPins, persistedPins);
       if (!result.ok) return result;
+      refreshAuxiliaryModelHealth();
       return settingsWire();
     } catch (error) {
       if (isIpcError(error)) throw error;

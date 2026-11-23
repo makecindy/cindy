@@ -11,7 +11,8 @@ mountPage({
   host: ctx => ({
     maker: {
       auxiliaryModelSettingsGet: async () => ({ models: ctx.case === 'modified' ? [...AUTO_AUXILIARY_MODEL_CHAIN] : [], options }),
-      auxiliaryModelHealthGet: async () => [],
+      auxiliaryModelRouteHealthGet: async () => [],
+      auxiliaryModelHealthGet: async () => ({ status: 'ok' }),
       auxiliaryModelSettingsSet: async () => ctx.case === 'testing' ? new Promise(() => {}) : ({
         ok: false, model: options[ctx.case === 'modified' ? 1 : 0].id, reason: 'http_error', httpStatus: 422,
         upstreamMessage: ctx.case === 'modified' ? 'Long provider detail. '.repeat(15) : 'The requested parameters are not supported by this model.',

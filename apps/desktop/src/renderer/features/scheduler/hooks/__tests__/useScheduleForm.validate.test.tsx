@@ -258,3 +258,26 @@ describe('saved automation model selection', () => {
     expect(result.current.toInput()).toMatchObject({ targetSessionId: 'new', agentKind: 'claude-code' });
   });
 });
+
+// Merge regression: a model-group choice must replace buddy inheritance without losing its
+// saved fallback route. Hook + real project serialization, unit; neither branch alone covers both modes.
+it('switches between buddy inheritance and a model group without retaining both choices', () => {
+  const { result } = renderHook(() => useScheduleForm(null));
+  act(() => {
+    result.current.setField('model', 'saved-fallback');
+    result.current.setField('providerId', 'saved-provider');
+    result.current.setField('followTeammateModel', true);
+    result.current.selectModelGroup('daily');
+  });
+  expect(formToProjectConfig(result.current.form, 'future-default-task')).toMatchObject({
+    modelGroup: 'daily', followTeammateModel: false, model: 'saved-fallback', providerId: 'saved-provider',
+  });
+  act(() => {
+    result.current.selectModelConfiguration(null);
+    result.current.setField('followTeammateModel', true);
+  });
+  const following = formToProjectConfig(result.current.form, 'future-default-task');
+  expect(following.followTeammateModel).toBe(true);
+  expect(following.modelGroup).toBeUndefined();
+  expect(following.model).toBeUndefined();
+});

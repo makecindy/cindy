@@ -545,7 +545,7 @@ describe('buildShareImageFooter', () => {
     const character = footer.querySelector('img');
     expect(character?.style.width).toBe('40px');
     expect(character?.style.height).toBe('40px');
-    expect(character?.style.borderRadius).toBe('8px');
+    expect(character?.style.borderRadius).toBe('var(--radius)');
     expect(character?.style.objectFit).toBe('cover');
     expect(character?.style.filter).toBe('');
     expect(character?.style.opacity).toBe('');

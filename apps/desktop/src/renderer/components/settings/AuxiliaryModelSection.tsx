@@ -25,10 +25,12 @@ import {
   AUTO_AUXILIARY_MODEL_CHAIN_I18N_KEYS,
 } from '../../../shared/auxiliaryModelChain';
 import type { AuxiliaryModelSettingsState } from '../../../shared/auxiliaryModelSettings';
-import { useAuxiliaryModelHealth } from '@/hooks/useAuxiliaryModelHealth';
+import { useAuxiliaryRouteHealth } from '@/hooks/useAuxiliaryRouteHealth';
 import type { AuxiliaryModelSettingsTestResult } from '../../../shared/auxiliaryModelSettings';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
+import { AuxiliaryModelHealthNotice } from './AuxiliaryModelHealthNotice';
+import { useAuxiliaryModelHealth } from '@/hooks/useAuxiliaryModelHealth';
 
 const log = createLogger('AuxiliaryModelSection');
 
@@ -47,10 +49,11 @@ export function AuxiliaryModelSection() {
   const [pending, setPending] = useState(false);
   const [saveState, setSaveState] = useState<'idle' | 'testing' | 'success' | 'failed' | 'restoring' | 'restored' | 'restoreFailed'>('idle');
   const [drafting, setDrafting] = useState(false);
-  const healthSnapshots = useAuxiliaryModelHealth();
+  const healthSnapshots = useAuxiliaryRouteHealth();
   const [failedTest, setFailedTest] = useState<Extract<AuxiliaryModelSettingsTestResult, { ok: false }> | null>(null);
   const pendingRef = useRef(false);
   const modelVisibilityVersion = useModelVisibilityVersion();
+  const health = useAuxiliaryModelHealth();
 
   useEffect(() => {
     let disposed = false;
@@ -104,10 +107,13 @@ export function AuxiliaryModelSection() {
     [],
   );
 
-  const options = useMemo(
-    () =>
-      (settings?.options ?? []).map((option) => ({
+  const options = useMemo(() => {
+    const providersById = new Map(providers.map((provider) => [provider.id, provider]));
+    return (settings?.options ?? []).map((option) => {
+      const customIcon = providersById.get(option.providerId)?.customIcon;
+      return {
         ...option,
+        ...(customIcon ? { customIcon } : {}),
         // Names follow the existing live catalog, independently of saved choices
         // or an in-flight save whose options may still carry the old locale.
         ...(option.providerId === 'xd' && cindyAiName ? {
@@ -121,9 +127,9 @@ export function AuxiliaryModelSection() {
             id: option.modelId,
             defaultEnabled: option.defaultEnabled,
           }),
-      })),
-    [cindyAiName, cindyAiProvider?.logoKind, modelVisibilityVersion, settings?.options],
-  );
+      };
+    });
+  }, [providers, cindyAiName, cindyAiProvider?.logoKind, modelVisibilityVersion, settings?.options]);
 
   if (!settings) return null;
 
@@ -293,6 +299,14 @@ export function AuxiliaryModelSection() {
             </div>
           </div>
         )}
+        {health?.status === 'unavailable' ? (
+          <SettingsBlock>
+            <AuxiliaryModelHealthNotice
+              health={health}
+              onCustomize={showCustom ? undefined : () => selectMode('custom')}
+            />
+          </SettingsBlock>
+        ) : null}
 
         {showCustom ? (
           <>

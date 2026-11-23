@@ -48,7 +48,11 @@ import {
   parseGhostNodeChildToHostMessage,
 } from '../../shared/ghost.js';
 import { isGhostOwnerScopeUsable, type GhostOwnerScope } from './ghostOwnerScope.js';
-import { GHOST_HARNESS_REMOTE_WORKSPACE_ARG } from '@cindy/plugin-protocol';
+import {
+  GHOST_HARNESS_ACCOUNT_DIR_ARG,
+  GHOST_HARNESS_GUEST_WORKSPACE_ARG,
+  GHOST_HARNESS_REMOTE_WORKSPACE_ARG,
+} from '@cindy/plugin-protocol';
 
 const DEFAULT_IDLE_TIMEOUT_MS = 2 * 60_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
@@ -1437,7 +1441,7 @@ export class GhostNodeRuntimeBroker {
   async spawnHarness(
     ghostId: string,
     harnessId: string,
-    options?: { remoteWorkspace?: boolean },
+    options?: { remoteWorkspace?: boolean; guestWorkspace?: boolean; accountDir?: string },
   ): Promise<NodeWorkerProcess> {
     const logRejection = (reason: string): void => {
       this.deps.log?.warn('ghost harness spawn rejected', { ghostId, harnessId, reason });
@@ -1465,9 +1469,17 @@ export class GhostNodeRuntimeBroker {
 
     let proc: NodeWorkerProcess;
     try {
-      // 唯一的启动参数由宿主固定给出(任务的文件与命令在另一台电脑),插件仍然没有参数面。
-      proc = this.deps.spawnChildProcess(resolved.entryPath, resolved.root, ghostId,
-        options?.remoteWorkspace ? [GHOST_HARNESS_REMOTE_WORKSPACE_ARG] : []);
+      // 唯一的启动参数由宿主固定给出(任务的文件与命令在另一台电脑，以及是否为跨账号分享访客),插件仍然没有参数面。
+      // 账号目录同样由宿主给出(注册表已核对它是这个引擎的账号目录),插件不能自选路径。
+      const entryArgs = [
+        ...(options?.guestWorkspace
+          ? [GHOST_HARNESS_REMOTE_WORKSPACE_ARG, GHOST_HARNESS_GUEST_WORKSPACE_ARG]
+          : options?.remoteWorkspace
+            ? [GHOST_HARNESS_REMOTE_WORKSPACE_ARG]
+            : []),
+        ...(options?.accountDir ? [GHOST_HARNESS_ACCOUNT_DIR_ARG, options.accountDir] : []),
+      ];
+      proc = this.deps.spawnChildProcess(resolved.entryPath, resolved.root, ghostId, entryArgs);
     } catch (error) {
       return reject(error instanceof Error ? error.message : 'Task engine failed to start');
     }

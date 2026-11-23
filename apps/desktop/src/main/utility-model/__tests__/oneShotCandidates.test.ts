@@ -164,6 +164,7 @@ import {
 import { __testing as health, dismissAuxiliaryModelNotice, setAuxiliaryModelHealthBroadcaster, getAuxiliaryModelHealthSnapshot } from '../auxiliary-model-health.js';
 import { resetUtilityReasoningMemory } from '../utilityReasoningPlan.js';
 import { AUTO_AUXILIARY_MODEL_CHAIN } from '../../../shared/auxiliaryModelChain.js';
+import { setAuxiliaryChainOutcomeListener } from '../auxiliaryChainOutcomeSink.js';
 
 const getProfiles = vi.mocked(getUtilityModelChainProfiles);
 const appCapabilities = vi.mocked(getAppCapabilities);
@@ -1235,6 +1236,56 @@ describe('utility one-shot candidates', () => {
       ],
     });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  // docs/product-rules/auxiliary-model-health.md: every default-chain request tells the
+  // health tracker whether the chain could run. Cancelled or superseded requests say
+  // nothing (an account switch must not raise a problem for the new account).
+  describe('auxiliary health outcome', () => {
+    const outcomes: string[] = [];
+    beforeEach(() => {
+      outcomes.length = 0;
+      setAuxiliaryChainOutcomeListener((outcome) => { outcomes.push(outcome); });
+    });
+    afterEach(() => setAuxiliaryChainOutcomeListener(null));
+
+    it.each([
+      ['no candidate can run', () => makerMock(false), [] as string[], 'no_candidate'],
+      ['every candidate failed', () => {
+        const maker = makerMock(true);
+        vi.mocked(maker.oneShot).mockRejectedValueOnce(new Error('codex down'));
+        return maker;
+      }, ['codex-gpt-5.4-mini'], 'failed'],
+      ['a candidate answered', () => makerMock(true), ['codex-gpt-5.4-mini'], 'success'],
+    ] as const)('%s', async (_name, makeMaker, refs, expected) => {
+      if (refs.length) chainState.refs = [...refs];
+      await requestUtilityText(makeMaker(), 'hello');
+      expect(outcomes).toEqual([expected]);
+    });
+
+    it('stays silent when the caller rejects the final LiteLLM dispatch', async () => {
+      chainState.refs = ['litellm-gpt-5.4-mini'];
+      readKey.mockReturnValue('proxy-key');
+      const beforeDispatch = vi.fn<() => Promise<boolean>>()
+        .mockResolvedValueOnce(true).mockResolvedValueOnce(true).mockResolvedValue(false);
+
+      const result = await requestUtilityText(makerMock(false), 'superseded', { beforeDispatch });
+
+      expect(result.ok).toBe(false);
+      expect(beforeDispatch).toHaveBeenCalledTimes(3);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(outcomes).toEqual([]);
+    });
+
+    it('stays silent when the account changes during the request', async () => {
+      const maker = makerMock(true);
+      vi.mocked(maker.getAgentAuthState).mockImplementation(async () => {
+        ownerState.key = 'owner-b';
+        return { authenticated: true };
+      });
+      await requestUtilityText(maker, 'hello');
+      expect(outcomes).toEqual([]);
+    });
   });
 
   it('falls through failed codex execution and succeeds on LiteLLM', async () => {
