@@ -126,6 +126,31 @@ export function simplifyBotRenderItems(
   return [...visible, ...fallbackReceipts];
 }
 
+function legacyIdleGapCard(item: RenderItem | undefined): item is MessageRenderItem {
+  return item?.type === 'message' && item.message.systemCardType === 'context-rebuild'
+    && item.message.systemCardData?.reason === 'idle-gap';
+}
+
+function collapseLegacyIdleGapCards(items: RenderItem[]): WorkGroupChildItem[] {
+  const visible: RenderItem[] = [];
+  let collapsedClientIds: string[] | undefined;
+  for (const item of items) {
+    const previous = visible.at(-1);
+    if (legacyIdleGapCard(previous) && legacyIdleGapCard(item)
+      && previous.message.systemCardData?.handoff === item.message.systemCardData?.handoff
+      && previous.message.systemCardData?.handoffCoverage === item.message.systemCardData?.handoffCoverage) {
+      // Keep the newest row and resolve the covered IDs when restoring the viewport.
+      collapsedClientIds ??= [];
+      collapsedClientIds.push(previous.message.clientId);
+      visible[visible.length - 1] = { ...item, collapsedClientIds };
+    } else {
+      collapsedClientIds = undefined;
+      visible.push(item);
+    }
+  }
+  return visible as WorkGroupChildItem[];
+}
+
 export function botProcessItems(
   items: readonly RenderItem[],
   isStreaming: boolean,
@@ -155,7 +180,7 @@ export function botProcessItems(
     streaming: item => item.type === 'work_group' ? item.isStreaming === true
       : liveItems.has(item),
     create: (children, key, streaming, start, end) => ({ type: 'work_group', teammateJournal: true, key,
-      children: children as WorkGroupChildItem[], isStreaming: streaming,
+      children: collapseLegacyIdleGapCards(children), isStreaming: streaming,
       ...(start !== null ? { startedAtMs: start } : {}),
       ...(start !== null && end !== null ? { durationMs: Math.max(0, end - start) } : {}) }),
   });

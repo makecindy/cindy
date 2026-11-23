@@ -6,7 +6,7 @@ import { createElement, useLayoutEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { flushSync } from 'react-dom';
 import { describe, expect, it } from 'vitest';
-import { findRestorableViewportItemIdx, pickIntersectingChildAnchor, readViewportChildAnchorClientId, viewportRestoreNeedsMoreContent } from '../components/chat/MessageStream';
+import { findRestorableViewportItemIdx, pickIntersectingChildAnchor, readViewportChildAnchorClientId, resolveViewportRestoreMessage, viewportRestoreNeedsMoreContent } from '../components/chat/MessageStream';
 import { findRenderItemElement, measureRestoredScrollGeometry, viewportAnchorCorrection } from '../components/chat/messageViewportCompensation';
 
 // Run the actual capture and positioning callbacks with a deterministic layout.
@@ -148,7 +148,7 @@ it('bounds synchronous expansion rounds through thousands of non-rendering rows'
     restoreSnapshotRef: { current: { viewportTopKey: 'anchor', offset: 0 } },
     scrollRef: { current: container }, itemsRef: { current: { children: [row] } },
     visibleRenderItemsRef: { current: [{ key: 'anchor' }] },
-    findRestorableViewportItemIdx, findRenderItemElement, viewportAnchorCorrection,
+    findRestorableViewportItemIdx, findRenderItemElement, viewportAnchorCorrection, resolveViewportRestoreMessage,
     viewportRestoreNeedsMoreContent, windowCoversEndRef: coversEnd,
     restoreLoadRef: { current: 'idle' }, anchoredForwardItemsRef: count,
     restoredScrollGeometryRef: { current: null }, measureRestoredScrollGeometry,
