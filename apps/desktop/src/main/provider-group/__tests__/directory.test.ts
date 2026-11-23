@@ -232,6 +232,28 @@ describe('resolveMembers', () => {
     expect(result[4]).not.toHaveProperty('claudeUsage');
   });
 
+  // Unit, PR #12195 review P1: created subscription providers classify as Claude/Codex, but the
+  // member computer's per-provider usage channels cannot resolve them. Minimal input: one created
+  // provider per family on a member computer; neither per-provider reader may be called.
+  it('does not read per-provider usage for providers created for subscription accounts', async () => {
+    const readClaudeUsage = vi.fn<NonNullable<ProviderGroupDirectoryDeps['readClaudeUsage']>>(async () => null);
+    const readCodexUsage = vi.fn<NonNullable<ProviderGroupDirectoryDeps['readCodexUsage']>>(async () => null);
+    const created = (id: string, family: 'anthropic' | 'openai') =>
+      view(id, id, { auth: { method: 'oauth' }, subscriptionPool: family } as unknown as Partial<ProviderView>);
+    const directory = createProviderGroupDirectory(deps({
+      readClaudeUsage, readCodexUsage,
+      readDeviceProviders: vi.fn(async () => [created('anthropic-sub-0000abcd', 'anthropic'), created('openai-sub-0000abcd', 'openai')]),
+    }));
+    const member = (providerId: string) => ({
+      key: `mini:${providerId}`, kind: 'device' as const, agentDeviceId: 'mini', providerId, limit: 4, weight: 1, paused: false,
+    });
+    const result = await directory.resolveMembers('anthropic', { strategy: 'usage', autoSwitch: true,
+      members: [member('anthropic-sub-0000abcd'), member('openai-sub-0000abcd')] });
+    expect(result.map(entry => entry.state)).toEqual(['ok', 'ok']);
+    expect(readClaudeUsage).not.toHaveBeenCalled();
+    expect(readCodexUsage).not.toHaveBeenCalled();
+  });
+
   // Unit/privacy: OpenAI quota reads are confined to usable same-account subscriptions.
   // The Claude-only fixture cannot detect querying API connections or a borrowed OpenAI share.
   it('reads OpenAI quota only for usable local/same-account subscriptions, never shares or API connections', async () => {

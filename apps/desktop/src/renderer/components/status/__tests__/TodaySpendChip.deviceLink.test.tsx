@@ -603,29 +603,45 @@ describe('TodaySpendChip remote Agent account', () => {
     expect(mocks.remoteHookDeviceIds).toContain('device-agent');
   });
 
-  // Unit: a provider Cindy created for one Claude account copies the built-in entry, so it has
-  // neither the `anthropic` id nor a native marker. Without the subscriptionPool check the chip
-  // never asked the Agent's computer for this account's quota.
-  it('Agent 在另一台电脑用 Cindy 新建的 Claude 订阅供应商:读那台这个账号的镜像', () => {
-    mocks.remoteClaudeSnapshot = agentSnapshot;
+  // Unit (#12191): a provider Cindy created for one Claude account copies the built-in entry, so it
+  // has neither the `anthropic` id nor a native marker. Without the subscriptionPool check the chip
+  // did not treat the task as a Claude subscription and never showed the bound account's quota.
+  // Minimal input: one created provider on the Agent's computer and its task-account reply.
+  it('Agent 在另一台电脑用 Cindy 新建的 Claude 订阅供应商:显示任务绑定账号的额度', async () => {
+    mocks.remoteClaudeSnapshot = { source: 'oauth-endpoint', fiveHour: { utilization: 90 } };
     mocks.deviceProviders = [{
       id: 'anthropic-sub-0000abcd', source: 'builtin', connected: true,
       auth: { method: 'oauth' }, subscriptionPool: 'anthropic',
     }];
+    const invoke = vi.fn().mockResolvedValue({
+      providerId: 'anthropic', routeProviderId: 'anthropic-sub-0000abcd', state: 'bound',
+      account: {
+        isDefault: false, number: 1, identity: 'created@example.test', paused: false, status: 'ready',
+        usage: { claude: { source: 'oauth-endpoint', fiveHour: { utilization: 30 } } },
+      },
+    });
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        openExternal: mocks.openExternal,
+        deviceLink: { invoke, onPresenceChanged: () => () => {}, onStatusChanged: () => () => {} },
+      },
+    });
 
     const { container } = render(
-      <TodaySpendChip
-        vendorKey="cc"
-        providerId="anthropic-sub-0000abcd"
-        modelId="claude-fable-5[1m]"
-        sessionId="session-created-claude-provider"
-        usageAccount={{ kind: 'device', deviceId: 'device-agent' }}
-      />,
+      <SessionSubscriptionAccountProvider providerId="anthropic" routeProviderId="anthropic-sub-0000abcd"
+        deviceId="device-agent" sessionId="session-created" nativeSessionId="sdk-created">
+        <TodaySpendChip vendorKey="cc" providerId="anthropic-sub-0000abcd" modelId="claude-fable-5[1m]"
+          sessionId="session-created" usageAccount={{ kind: 'device', deviceId: 'device-agent' }} />
+      </SessionSubscriptionAccountProvider>,
     );
+    await act(async () => {});
 
-    expect(container.textContent).toContain('5h 剩余 88%');
-    expect(mocks.remoteHookDeviceIds).toContain('device-agent');
-    expect(mocks.remoteProviderIds).toContain('anthropic-sub-0000abcd');
+    expect(container.textContent).toContain('5h 剩余 70%');
+    expect(container.textContent).not.toContain('剩余 10%');
+    expect(invoke).toHaveBeenCalledWith('device-agent', 'maker:subscription-accounts', [expect.objectContaining({
+      action: 'session', providerId: 'anthropic', routeProviderId: 'anthropic-sub-0000abcd',
+    })]);
   });
 
   it('远程控制的任务把 Agent 放在第三台电脑:读第三台,不读被控电脑', () => {

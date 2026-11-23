@@ -31,3 +31,12 @@ export function providerWeeklyQuotaSource(
   if (provider.id === 'xai') return 'xai';
   return null;
 }
+
+/**
+ * The reader to use on the per-provider usage channels (this computer's readers and
+ * `maker:usage:*` on another one). Those resolve built-in and native connections only: accounts
+ * of providers Cindy created for subscription accounts are read from the account pool instead.
+ */
+export function providerUsageReaderSource(provider: ProviderView): ReturnType<typeof providerWeeklyQuotaSource> {
+  return provider.subscriptionPool ? null : providerWeeklyQuotaSource(provider);
+}

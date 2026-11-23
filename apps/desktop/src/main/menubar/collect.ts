@@ -23,7 +23,7 @@ import { isSessionActivityRunning, type SessionActivitySnapshot } from '@cindy/m
 
 import type { MenubarModelUsage, MenubarUsageScope, MenubarUsageScopeData } from '../../shared/menubarQuota.js';
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
-import { providerWeeklyQuotaSource } from '../../shared/providerQuotaSource.js';
+import { providerUsageReaderSource } from '../../shared/providerQuotaSource.js';
 import { isSubscriptionProvider, isUnusedDefaultAccount, type SubscriptionAccountUsage, type SubscriptionPoolView } from '../../shared/subscriptionAccounts.js';
 import { formatModelShort } from '../../shared/usageModelLabel.js';
 import type { CodexAccountUsagePayload, RateLimitSnapshot, RateLimitWindow } from '../usageBroadcaster.js';
@@ -152,7 +152,7 @@ export async function collectMenubarInputs(deps: MenubarCollectDeps): Promise<Me
         return accounts;
       }
     }
-    const kind = providerWeeklyQuotaSource(provider);
+    const kind = providerUsageReaderSource(provider);
     // A Codex account waiting to be reconnected stays in the list without numbers instead
     // of falling into the hidden pay-as-you-go group.
     if (!kind && needsCodexReconnect(provider)) return codexSource(provider, null, deps.nowMs);
