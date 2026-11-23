@@ -31,6 +31,7 @@ export type CollectionImageProps = NonNullable<AttachmentCollectionItem['image']
 export function AttachmentCollectionPreview({
   items: openingItems,
   source,
+  initialItemId,
   onClose,
   initial,
   initialLine,
@@ -39,6 +40,7 @@ export function AttachmentCollectionPreview({
 }: {
   items: readonly AttachmentCollectionItem[];
   source: string;
+  initialItemId?: string;
   onClose(): void;
   initial?: ReactNode | ((imageProps: CollectionImageProps | undefined) => ReactNode);
   initialLine?: number;
@@ -52,12 +54,14 @@ export function AttachmentCollectionPreview({
     const live = openingItems.find((next) => next.id === item.id);
     return live ? { ...item, image: live.image } : item;
   });
-  const [start] = useState(() =>
-    Math.max(
-      0,
-      snapshot.findIndex((item) => item.source === source),
-    ),
-  );
+  const [start] = useState(() => {
+    const byId = initialItemId
+      ? snapshot.findIndex((item) => item.id === initialItemId)
+      : -1;
+    return byId >= 0
+      ? byId
+      : Math.max(0, snapshot.findIndex((item) => item.source === source));
+  });
   const [index, setIndex] = useState(start);
   const fileContext = useChatSessionFile();
   const [origin] = useState(fileContext);
@@ -143,7 +147,9 @@ export function AttachmentCollectionPreview({
               )}
             >
               {index === start && initial ? (
-                typeof initial === 'function' ? initial(item.image) : initial
+                typeof initial === 'function'
+                  ? initial((items.find((entry) => entry.id === initialItemId) ?? item).image)
+                  : initial
               ) : item.media && item.kind === 'image' ? (
                 <ImageLightbox
                   src={item.source}

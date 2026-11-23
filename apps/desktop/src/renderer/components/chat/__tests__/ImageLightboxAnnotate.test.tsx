@@ -1029,6 +1029,69 @@ describe('ImageLightbox annotate mode', () => {
     );
   });
 
+  // 测试价值
+  // - 生产入口与可观察结果：ImageLightbox 的附件集合宿主；删除无关附件后集合仍挂载，
+  //   当前笔迹不消失；同一 URL 的两个附件按 ID 使用各自的标注回调。
+  // - Bug／规则依据：#11952 round 13 review PRRT_kwDOTgdRUs66rONM、
+  //   PRRT_kwDOTgdRUs66rONO；docs/dev-rules/engineering-conventions.md §3.2。
+  // - 现有覆盖缺口：既有用例没有覆盖集合长度变化后的重挂载，也没有覆盖相同 URL 不同 ID。
+  // - 最小失败输入：A+B 集合画一笔后删除 B；或 A/B 同 URL 点击 B 并画一笔；
+  //   修复前分别丢失笔迹、写到 A 的回调。
+  // - tier：unit；复用现有 jsdom 文件，定向套件实测约 2.5s。
+  it('keeps an open collection and its draft when an unrelated attachment is removed', () => {
+    const onDraftChange = vi.fn();
+    const onSave = vi.fn();
+    const editA = { initialStrokes: [], onDraftChange, onSave };
+    function Host() {
+      const [items, setItems] = useState<AttachmentCollectionItem[]>([
+        { id: 'a', name: 'a.png', source: SRC, kind: 'image', media: true, image: { annotationEdit: editA } },
+        { id: 'b', name: 'b.txt', source: '/b.txt', kind: 'text' },
+      ]);
+      return (
+        <ConfirmDialogProvider>
+          <button type="button" onClick={() => setItems((current) => current.slice(0, 1))}>
+            remove b
+          </button>
+          <AttachmentCollectionContext.Provider value={items}>
+            <ImageLightbox src={SRC} initialItemId="a" onClose={vi.fn()} />
+          </AttachmentCollectionContext.Provider>
+        </ConfirmDialogProvider>
+      );
+    }
+    render(<Host />);
+    loadImage(lightboxImage());
+    openAnnotate();
+    drawStroke({ x: 10, y: 10 }, { x: 50, y: 50 });
+    expect(committedPaths('stroke')).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'remove b' }));
+    expect(screen.getByRole('button', { name: label('attachmentPreview.next') })).toBeTruthy();
+    expect(committedPaths('stroke')).toHaveLength(1);
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it('uses the clicked attachment ID for initial metadata when URLs repeat', () => {
+    const editA = { initialStrokes: [], onDraftChange: vi.fn(), onSave: vi.fn() };
+    const editB = { initialStrokes: [], onDraftChange: vi.fn(), onSave: vi.fn() };
+    const items: AttachmentCollectionItem[] = [
+      { id: 'a', name: 'a.png', source: SRC, kind: 'image', media: true, image: { annotationEdit: editA } },
+      { id: 'b', name: 'b.png', source: SRC, kind: 'image', media: true, image: { annotationEdit: editB } },
+    ];
+    render(
+      <ConfirmDialogProvider>
+        <AttachmentCollectionContext.Provider value={items}>
+          <ImageLightbox src={SRC} initialItemId="b" onClose={vi.fn()} />
+        </AttachmentCollectionContext.Provider>
+      </ConfirmDialogProvider>,
+    );
+    loadImage(lightboxImage());
+    openAnnotate();
+    drawStroke({ x: 10, y: 10 }, { x: 50, y: 50 });
+
+    expect(editB.onDraftChange).toHaveBeenCalled();
+    expect(editA.onDraftChange).not.toHaveBeenCalled();
+  });
+
   it('keeps a locked attachment preview read-only', () => {
     const onDraftChange = vi.fn();
     const onSave = vi.fn();

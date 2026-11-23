@@ -2819,7 +2819,9 @@ function renderItemKeyForClientId(items: readonly RenderItem[], clientId: string
  * 'tool_media' item(工具段外的产物流)与 'ghost_card' item 的回锚媒体
  * (卡正下方)。加新 kind 只需改 extractToolResultMedia + 这里加分支。
  */
-function ToolMediaList({ items, sessionId }: { items: ToolMediaItem[]; sessionId?: string }) {
+function ToolMediaList({ items, sessionId, renderItemKey }: {
+  items: ToolMediaItem[]; sessionId?: string; renderItemKey?: string;
+}) {
   const mediaKeyCounts = new Map<string, number>();
   return (
     <>
@@ -2834,6 +2836,7 @@ function ToolMediaList({ items, sessionId }: { items: ToolMediaItem[]; sessionId
             <div key={mediaKey} className="flex flex-col gap-1.5">
               <ChatImageView
                 src={m.url}
+                itemId={renderItemKey ? `${renderItemKey}:image:${i}` : undefined}
                 filename={`tool-image-${i + 1}`}
                 variant="tool-output"
                 modelFile={m.modelFile}
@@ -2915,9 +2918,9 @@ function ShareableToolMedia({
       {shareable && selectionActive ? <ShareMessageCheckbox clientId={shareId} /> : null}
       {replyColumnSpacer ? withAssistantAvatar(replyColumnSpacer, (
         <div className="flex flex-col gap-2">
-          <ToolMediaList items={items} sessionId={sessionId} />
+          <ToolMediaList items={items} sessionId={sessionId} renderItemKey={renderItemKey} />
         </div>
-      )) : <ToolMediaList items={items} sessionId={sessionId} />}
+      )) : <ToolMediaList items={items} sessionId={sessionId} renderItemKey={renderItemKey} />}
     </div>
   );
 }
@@ -2975,6 +2978,7 @@ function renderWorkGroupChild(
   return (
     <div data-message-client-id={item.message.clientId}>
       <MessageItem
+        renderItemKey={item.key}
         pluginUi={props.pluginUi}
         message={item.message}
         toolResult={props.singleResultMap.get(item.message.clientId)}
@@ -6928,6 +6932,7 @@ export function MessageStream({
                           />
                           {item.media && item.media.length > 0 ? (
                             <ShareableToolMedia
+                              renderItemKey={item.key}
                               shareId={`${item.key}:media`}
                               items={item.media}
                               sessionId={sessionId}
@@ -6988,6 +6993,7 @@ export function MessageStream({
                     const shareable = !pending && Boolean(sessionId) && Boolean(msg.clientId) && isShareableMessage(msg);
                     const messageNode = pending && renderPendingMessage ? renderPendingMessage(msg, pluginUi) : (
                       <MessageItem
+                        renderItemKey={item.key}
                         pluginUi={pluginUi}
                         message={msg}
                         toolResult={singleResultMap.get(msg.clientId)}
@@ -7184,6 +7190,7 @@ export function withAssistantAvatar(
 }
 
 const MessageItem = memo(function MessageItem({
+  renderItemKey,
   pluginUi,
   message,
   toolResult,
@@ -7210,6 +7217,7 @@ const MessageItem = memo(function MessageItem({
   canConfigureAutoReview,
   onDiagnoseError,
 }: {
+  renderItemKey?: string;
   pluginUi: PluginUiMessageCandidates;
   message: ChatMessage;
   toolResult?: string;
@@ -7297,6 +7305,7 @@ const MessageItem = memo(function MessageItem({
       return (
         <>
           <UserMessage
+            messageItemKey={renderItemKey}
             pluginUi={pluginUi}
             sharedAuthorName={message.sharedAuthorName}
             sharedAuthorMemberId={message.sharedAuthorMemberId}

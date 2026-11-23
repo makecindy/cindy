@@ -1,14 +1,24 @@
-import { createContext, useContext, type ComponentProps } from 'react';
+import { createContext, useContext } from 'react';
 import type { PreviewItem } from '@cindy/maker-shared/attachment-preview';
-import type { ImageLightbox } from './ImageLightbox';
+import type { AnnotationStroke } from './lightboxAnnotations';
+
+/** Image props accepted by a collection item, kept structural to avoid a type cycle. */
+export type AttachmentCollectionImageProps = {
+  src?: string;
+  annotationEdit?: {
+    initialStrokes?: readonly AnnotationStroke[];
+    onDraftChange?: (result: { strokes: AnnotationStroke[] }) => void;
+    onSave: (result: { strokes: AnnotationStroke[] }) => void | Promise<void>;
+  };
+  initialStrokes?: readonly AnnotationStroke[];
+  annotationFallbackSrc?: string;
+  annotationDisabled?: boolean;
+};
 
 export type AttachmentCollectionItem = PreviewItem & {
   /** Media URLs are already resolved by the opening surface; files retain host paths. */
   media?: boolean;
-  image?: Partial<Pick<
-    ComponentProps<typeof ImageLightbox>,
-    'src' | 'annotationEdit' | 'initialStrokes' | 'annotationFallbackSrc' | 'annotationDisabled'
-  >>;
+  image?: AttachmentCollectionImageProps;
 };
 
 export type PreviewLeaveOutcome = 'applied' | 'cancelled' | 'busy';

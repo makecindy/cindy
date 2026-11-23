@@ -74,6 +74,8 @@ interface ChatImageViewProps {
    */
   annotationSourceUrl?: string;
   annotationStrokes?: Array<{ points: Array<{ x: number; y: number }> }>;
+  /** Stable attachment ID for selecting the clicked item in a collection. */
+  itemId?: string;
 }
 
 /** 各 variant 的尺寸/边框/className 规范集中在这里,以后调样式只用动这一处。 */
@@ -113,6 +115,7 @@ export function ChatImageView({
   sessionId,
   annotationSourceUrl,
   annotationStrokes,
+  itemId,
 }: ChatImageViewProps) {
   const { t } = useTranslation();
   // 远程会话改写到 cindy-remote-media://;本地会话原样。下游一律用 displaySrc(渲染 +
@@ -355,6 +358,7 @@ export function ChatImageView({
           <ImageLightbox
             filename={filename}
             src={annotationSourceUrl}
+            initialItemId={itemId}
             initialStrokes={annotationStrokes}
             annotationFallbackSrc={displaySrc}
             onClose={closePreview}
@@ -362,7 +366,11 @@ export function ChatImageView({
         ) : (
           <ImageLightbox
             filename={filename}
-            src={displaySrc} enableGallery onClose={closePreview} />
+            src={displaySrc}
+            initialItemId={itemId}
+            enableGallery
+            onClose={closePreview}
+          />
         ))}
       {lightboxOpen === 'model' && modelFile && (
         <ModelLightbox

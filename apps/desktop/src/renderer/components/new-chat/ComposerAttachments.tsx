@@ -394,6 +394,7 @@ function ThumbnailItem({
       {lightboxSrc && (
         <ImageLightbox
           src={lightboxSrc}
+          initialItemId={file.id}
           onClose={() => setLightboxSrc(null)}
           onSourceChangeCancelled={(displayed) => setLightboxSrc(displayed.src)}
           annotationDisabled={annotationDisabled}

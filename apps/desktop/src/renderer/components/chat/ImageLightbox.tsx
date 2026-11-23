@@ -56,7 +56,7 @@ import {
   type PreviewResizeDirection,
   type PreviewWindowMode,
 } from './imagePreviewWindow';
-import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { FocusScope } from '@radix-ui/react-focus-scope';
 import { Button } from '@/components/ui/button';
@@ -143,11 +143,14 @@ import { containImageSize } from './imageDisplaySize';
 import {
   ActivePreviewCollection,
   AttachmentCollectionPreview,
-  useOpeningCollection,
   type CollectionImageProps,
   type PreviewLeaveGuard,
   type PreviewLeaveOutcome,
 } from './AttachmentCollection';
+import {
+  AttachmentCollectionContext,
+  type AttachmentCollectionItem,
+} from './AttachmentCollectionContext';
 import {
   PREVIEW_PANEL_CLASS,
   PreviewHeader,
@@ -386,6 +389,8 @@ interface ImageLightboxProps {
   autoAnnotate?: boolean;
   /** When the attachment owner cannot accept updates, the preview must stay read-only. */
   annotationDisabled?: boolean;
+  /** Stable attachment ID used to select the initial item in a collection. */
+  initialItemId?: string;
   /** Called when a source-retarget leave is rejected; hosts must restore their request to the displayed source snapshot. */
   onSourceChangeCancelled?: (displayed: ImageSourceSnapshot) => void;
 }
@@ -393,16 +398,18 @@ interface ImageLightboxProps {
 /** Source fields frozen until the mounted content accepts them. */
 export type ImageSourceSnapshot = Omit<
   ImageLightboxProps,
-  'onClose' | 'onSourceChangeCancelled'
+  'onClose' | 'onSourceChangeCancelled' | 'initialItemId'
 >;
 
 function sourceSnapshotFromProps({
   onClose,
   onSourceChangeCancelled,
+  initialItemId,
   ...source
 }: ImageLightboxProps): ImageSourceSnapshot {
   void onClose;
   void onSourceChangeCancelled;
+  void initialItemId;
   return source;
 }
 
@@ -531,9 +538,22 @@ export function ImageLightbox(props: ImageLightboxProps) {
   const sourceSettlementTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const contentLeaveGuardRef = useRef<PreviewLeaveGuard | null>(null);
   const collectionLeaveGuardRef = useRef<PreviewLeaveGuard | null>(null);
-  const items = useOpeningCollection(
-    activeSource.annotationFallbackSrc ?? activeSource.src,
-  );
+  const liveCollection = useContext(AttachmentCollectionContext);
+  const [openingCollection] = useState<readonly AttachmentCollectionItem[] | null>(() => {
+    const openingSource = activeSource.annotationFallbackSrc ?? activeSource.src;
+    return liveCollection &&
+      liveCollection.length > 1 &&
+      liveCollection.some((item) => item.source === openingSource)
+      ? liveCollection
+      : null;
+  });
+  const items: readonly AttachmentCollectionItem[] | null = useMemo(() => {
+    if (!openingCollection) return null;
+    return openingCollection.map((item): AttachmentCollectionItem => {
+      const live = liveCollection?.find((next) => next.id === item.id);
+      return live ? { ...item, image: live.image } : item;
+    });
+  }, [openingCollection, liveCollection]);
   const activeLeaveGuardRef = items ? collectionLeaveGuardRef : contentLeaveGuardRef;
   const [sourceToken, setSourceToken] = useState(0);
   const onSourceChangeCancelledRef = useRef(props.onSourceChangeCancelled);
@@ -683,6 +703,7 @@ export function ImageLightbox(props: ImageLightboxProps) {
       key={contentKey}
       items={items}
       source={activeSource.annotationFallbackSrc ?? activeSource.src}
+      initialItemId={props.initialItemId}
       onClose={props.onClose}
       leaveGuardRef={collectionLeaveGuardRef}
       initial={(imageProps) => (

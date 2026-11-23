@@ -203,6 +203,8 @@ interface UserMessageProps {
   messageClientId?: string;
   /** Queued messages carry their stable row id before they have history actions. */
   clientId?: string;
+  /** Render item key used to build stable attachment collection IDs. */
+  messageItemKey?: string;
   /** Whether this session currently has an in-flight SDK turn. Rewind uses it
    *  to select stop-then-rewind confirmation; fork is allowed from stable history. */
   sessionRunning?: boolean;
@@ -859,6 +861,7 @@ export function UserMessage({
   remoteHostId,
   messageClientId,
   clientId,
+  messageItemKey,
   sessionRunning,
   delivery,
   isFirstUserMessage,
@@ -1352,6 +1355,7 @@ export function UserMessage({
           return (
             <ChatImageView
               key={`img-${idx}`}
+              itemId={messageItemKey ? `${messageItemKey}:image:${idx}` : undefined}
               src={src}
               filename={filename ?? `image-${idx + 1}`}
               variant="user-attached"
