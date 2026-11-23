@@ -5376,6 +5376,29 @@
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 Flash",
         "cindyQwen38Flash": "Qwen 3.8 Flash"
+      },
+      "health": {
+        "configTitle": "辅佐模型皆不可用",
+        "configDescription": "差事自动命名、置顶差事摘要、Help 与法器差事（如字幕翻译）皆受其累。请治下列诸弊，或于自拟中择他可用之模型。",
+        "runtimeTitle": "辅佐模型近屡请而败",
+        "runtimeDescription": "或网络、或服务暂有不谐，复常则此示自去。若久而不去，可于自拟中择他可用之模型。",
+        "fallback": "法器差事暂改用 {{model}}，思之深浅从浅，或稍迟、所耗限额稍多。",
+        "candidate": "{{model}}：{{reason}}",
+        "openProviders": "启模型供方",
+        "customize": "自拟辅佐模型",
+        "issues": {
+          "signed_out": "须登门 Cindy",
+          "provider_disabled": "供方已停",
+          "model_disabled": "模型已停",
+          "payment_required": "今之方案或余额不及",
+          "no_credential": "缺登门之凭或密钥",
+          "unavailable": "今不可用"
+        },
+        "toast": {
+          "config": "辅佐模型皆不可用，差事命名、摘要与字幕翻译等法器差事皆受其累。",
+          "runtime": "辅佐模型近屡请而败，差事命名、摘要与字幕翻译等法器差事或受其累。",
+          "open": "往规制"
+        }
       }
     },
     "compaction": {
@@ -6809,7 +6832,15 @@
           "encrypted": "端对端加密",
           "legacyConnection": "旧版连接",
           "encryptionUnknown": "尚未核实",
-          "legacyEncryptionHint": "旧路经中继时，内容未施端对端加密。"
+          "legacyEncryptionHint": "旧路经中继时，内容未施端对端加密。",
+          "routePreference": "择路",
+          "routeAuto": "自动",
+          "routeDirect": "直连",
+          "routeRelay": "中继",
+          "routeUnavailable": "不可达",
+          "routeMeasuring": "测速中…",
+          "routeDirectUnavailableHint": "今网路未能直达此器",
+          "routePreferenceFailed": "易道未成，请复试之"
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -14319,7 +14350,6 @@
       "regionAria": "待遣之讯队列",
       "listAria": "队列之讯",
       "pausedFooter": "差事已止，队列暂停",
-
       "steerUnsupportedNotice": "此引擎不受插话，待遣之讯俟此轮毕乃遣。",
       "resumeAction": "续遣",
       "resumeAria": "续遣队列之讯",

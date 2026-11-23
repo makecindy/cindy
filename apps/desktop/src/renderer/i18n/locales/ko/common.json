@@ -5376,6 +5376,29 @@
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 flash",
         "cindyQwen38Flash": "Qwen 3.8 Flash"
+      },
+      "health": {
+        "configTitle": "사용할 수 있는 보조 모델이 없습니다",
+        "configDescription": "작업 자동 이름 지정, 고정된 작업 요약, Help, 자막 번역 같은 플러그인 작업에 영향을 줍니다. 아래 문제를 해결하거나 「사용자 지정」에서 사용할 수 있는 다른 모델을 선택하세요.",
+        "runtimeTitle": "최근 보조 모델 요청이 계속 실패했습니다",
+        "runtimeDescription": "네트워크나 서비스가 일시적으로 불안정할 수 있습니다. 요청이 성공하면 이 알림은 자동으로 사라집니다. 계속 표시되면 「사용자 지정」에서 사용할 수 있는 다른 모델을 선택하세요.",
+        "fallback": "플러그인 작업이 일시적으로 {{model}}을(를) 낮은 추론 강도로 사용하고 있습니다. 더 느리고 할당량을 더 많이 쓸 수 있습니다.",
+        "candidate": "{{model}}: {{reason}}",
+        "openProviders": "제공자 열기",
+        "customize": "보조 모델 사용자 지정",
+        "issues": {
+          "signed_out": "Cindy 로그인 필요",
+          "provider_disabled": "제공자 비활성화됨",
+          "model_disabled": "모델 비활성화됨",
+          "payment_required": "현재 요금제 또는 잔액으로 사용할 수 없음",
+          "no_credential": "로그인 정보 또는 키 없음",
+          "unavailable": "현재 사용할 수 없음"
+        },
+        "toast": {
+          "config": "사용할 수 있는 보조 모델이 없습니다. 작업 이름 지정, 요약, 자막 번역 같은 플러그인 작업에 영향을 줍니다.",
+          "runtime": "최근 보조 모델 요청이 계속 실패했습니다. 작업 이름 지정, 요약, 자막 번역 같은 플러그인 작업에 영향을 줄 수 있습니다.",
+          "open": "설정 열기"
+        }
       }
     },
     "compaction": {
@@ -6809,7 +6832,15 @@
           "encrypted": "종단 간 암호화",
           "legacyConnection": "이전 연결",
           "encryptionUnknown": "확인되지 않음",
-          "legacyEncryptionHint": "이전 연결의 중계 경로는 종단 간 암호화되지 않습니다."
+          "legacyEncryptionHint": "이전 연결의 중계 경로는 종단 간 암호화되지 않습니다.",
+          "routePreference": "경로 선택",
+          "routeAuto": "자동",
+          "routeDirect": "직접",
+          "routeRelay": "중계",
+          "routeUnavailable": "사용 불가",
+          "routeMeasuring": "측정 중…",
+          "routeDirectUnavailableHint": "현재 네트워크에서는 이 기기에 직접 연결할 수 없습니다",
+          "routePreferenceFailed": "경로를 전환하지 못했습니다. 다시 시도해 주세요."
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -14319,7 +14350,6 @@
       "regionAria": "전송 대기 중인 메시지 큐",
       "listAria": "큐의 메시지",
       "pausedFooter": "작업 중지됨, 대기열 일시정지",
-
       "steerUnsupportedNotice": "이 엔진은 끼어들기를 지원하지 않습니다. 대기 중인 메시지는 현재 턴이 끝난 후 전송됩니다.",
       "resumeAction": "계속 전송",
       "resumeAria": "대기열 메시지 전송 계속",

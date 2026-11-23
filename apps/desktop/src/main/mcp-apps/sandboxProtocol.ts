@@ -195,6 +195,11 @@ export function assertMcpAppDocumentCaller(id: string, caller: string): void {
   if (!entry || entry.owner !== getCurrentDbClientSnapshot() || entry.caller !== caller)
     throw new Error('MCP_APP_VIEW_UNAVAILABLE');
 }
+// Only the scheme hint may vary on a bridge's exact per-View wrapper URL.
+function isSandboxFrameUrl(url: string | undefined, id: string): boolean {
+  return url?.replace(/\?scheme=[^&#?]*$/, '') === `cindy-mcp-app://${id}/sandbox`;
+}
+
 export function registerMcpAppProtocol(): void {
   // Only Chromium's actual requesting frame can acquire this Main-only channel key.
   // It never appears in HTML, a renderer IPC response, or a JavaScript Request object.
@@ -224,7 +229,7 @@ export function registerMcpAppProtocol(): void {
       if (details.method !== 'POST' || !entry?.bridge || !frame ||
         entry.owner !== getCurrentDbClientSnapshot() ||
         entry.caller !== `renderer:${details.webContentsId}` ||
-        frame.url !== `cindy-mcp-app://${url.hostname}/sandbox` ||
+        !isSandboxFrameUrl(frame.url, url.hostname) ||
         (entry.bridge.frame && entry.bridge.frame !== frame)) {
         callback({ cancel: true }); return;
       }
@@ -350,7 +355,7 @@ export function registerMcpAppProtocol(): void {
       const bridge = entry.bridge;
       if (request.method !== 'POST' || !bridge ||
         request.headers.get(frameHeader) !== bridge.key ||
-        bridge.frame?.url !== `cindy-mcp-app://${id}/sandbox`)
+        !isSandboxFrameUrl(bridge.frame?.url, id))
         return new Response(null, { status: 403 });
       try {
         const text = await readBridgeBody(request);
@@ -377,7 +382,7 @@ export function registerMcpAppProtocol(): void {
     const resourceUrl = `cindy-mcp-app://${id}-view/resource`;
     return new Response(isSandbox
       ? entry.bridge
-        ? mcpAppDirectSandboxDocument(resourceUrl, `cindy-mcp-app://${id}/bridge`)
+        ? mcpAppDirectSandboxDocument(resourceUrl, `cindy-mcp-app://${id}/bridge`, url.search === '?scheme=dark' ? 'dark' : 'light')
         : mcpAppSandboxDocument('', resourceUrl)
       : entry.html, {
       headers: {

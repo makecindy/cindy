@@ -33,6 +33,7 @@
 | `/review`、成果快照、Finding 与复核生命周期 | [成果复核](review-product-direction.md) |
 | 区域、构建身份、端点与版本文案 | [区域与版本](region-and-editions.md) |
 | 模型资料、目录下发、窗口、价格与默认值 | [模型架构入口](../dev-rules/model-catalog-maintenance.md)、[资料优先级](model-metadata-precedence.md) |
+| 辅助模型全部不可用时的提示与插件任务的退回 | [辅助模型提示](auxiliary-model-health.md) |
 | 本地模型候选、包装、硬件与推荐 | [本地模型](local-model-selection.md) |
 | 供应商连接、状态、操作与用量 | [供应商设置](provider-settings.md) |
 | 跨账号供应商分享、申请、审批与管理 | [供应商分享](provider-sharing.md) |

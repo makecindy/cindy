@@ -64,7 +64,15 @@ function snapshot() {
   const known = [...ids];
   const peers = known.map((id) => {
     const route = current.peerSnapshot(id);
-    return [id, { available: current.supports(id), path: route?.path ?? null, rttMs: route?.rttMs ?? null, dialing: current.isDialing(id) }];
+    return [id, {
+      available: current.supports(id),
+      path: route?.path ?? null,
+      rttMs: route?.rttMs ?? null,
+      directRttMs: route?.directRttMs ?? null,
+      relayRttMs: route?.relayRttMs ?? null,
+      pathPreference: route?.pathPreference ?? 'auto',
+      dialing: current.isDialing(id),
+    }];
   });
   // 经中转的数据报现在走中转的 UDP 还是 WebSocket（快照每秒一次，远程连接页最多晚一秒看到切换）。
   send({ type: 'status', queued: current.bufferedAmount, known, peers, relayRoute: current.relayRoute() });
@@ -116,6 +124,11 @@ port.on('message', (message) => {
   if (message.type === 'renew') void socket.replaceClient(client(message.client)).then(() => send({ type: 'renewed', id: message.id }),
     (error) => send({ type: 'renewed', id: message.id, code: code(error) }));
   if (message.type === 'restrict' && message.rule && typeof message.rule === 'object') { socket.restrictPeers(message.rule); snapshot(); }
+  if (message.type === 'set-peer-path-preference' && typeof message.deviceId === 'string'
+    && (message.preference === 'auto' || message.preference === 'direct' || message.preference === 'relay')) {
+    socket.setPeerPathPreference(message.deviceId, message.preference);
+    snapshot();
+  }
   if (message.type === 'network-changed') socket.networkChanged();
   if (message.type === 'relay-stalled') socket.relayStalled();
   if (message.type === 'close') socket.close(message.code);

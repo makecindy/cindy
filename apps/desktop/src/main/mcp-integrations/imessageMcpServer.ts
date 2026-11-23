@@ -71,6 +71,20 @@ export function createIMessageMcpServer(deps: { getSessionContext(): LiziMcpSess
       scope.assertCurrent?.();
       return scope.im.sendFile(target, realFile, name);
     }));
+  server.tool('fetch_attachment', 'Download the full original of an attachment in the current chat into the task working directory, including files over 64 MiB and originals the channel only gave as a preview. Use message_id and attachment_guid from the attachment note or history.',
+    { message_id: z.string().min(1).max(512), attachment_guid: z.string().min(1).max(512) },
+    { readOnlyHint: true, destructiveHint: false },
+    ({ message_id, attachment_guid }) => scoped(undefined, async (scope, target) => {
+      const workingDir = deps.getSessionContext().workingDir;
+      if (!workingDir) throw new Error('WORKING_DIR_REQUIRED');
+      // The output directory must really be inside the task directory, not a link out of it.
+      const realWork = await fs.realpath(workingDir);
+      const dir = path.join(realWork, 'imessage-attachments');
+      await fs.mkdir(dir, { recursive: true });
+      if (!(await fs.lstat(dir)).isDirectory() || path.relative(realWork, await fs.realpath(dir)) !== 'imessage-attachments')
+        throw new Error('PERMISSION_DENIED');
+      return scope.im.fetchAttachment(target, message_id, attachment_guid, dir);
+    }, 'IMESSAGE_ATTACHMENT_UNAVAILABLE'));
   server.tool('history', 'Read one page of iMessage history from a connected conversation. Returns at most 100 messages; advance offset for the next page.',
     { chat_id: chat, after: z.number().int().min(0).default(0), before: z.number().int().min(0).optional(), offset: z.number().int().min(0).default(0) },
     { readOnlyHint: true, destructiveHint: false },

@@ -10,6 +10,7 @@ vi.mock('@/contexts/AuthContext', () => ({
   }),
 }));
 vi.mock('@/hooks/useAgentCapabilities', () => ({
+  getDeviceCapabilitiesGeneration: () => 0,
   getInterestedDeviceCapabilityTargets: () => [],
   prefetchDeviceCapabilities: vi.fn(),
   evictDeviceCapabilities: vi.fn(),
@@ -822,6 +823,9 @@ describe('stale device directory', () => {
   // setTimeout 溢出成「立刻触发」,退避变成对目录读的紧追循环。超过上限的等待必须按上限
   // 分片,每片到点按墙上时钟重新核对(Codex review #9360)。
   it('chunks a retry deadline beyond the 32-bit timer limit instead of tight-looping', async () => {
+    // Advance the retry timeouts without simulating weeks of periodic reconciliation.
+    vi.useRealTimers();
+    vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
     const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
     const listDevices = window.electronAPI.deviceLink.listDevices as unknown as ReturnType<typeof vi.fn>;
     const deadline = Date.now() + 3_000_000_000; // > 2^31 - 1(~24.8 天)
@@ -842,11 +846,15 @@ describe('stale device directory', () => {
       await vi.advanceTimersByTimeAsync(1_000_000);
     });
     expect(listDevices.mock.calls.length).toBe(initial);
-    // 分片走完、墙上期限到点之后,重读恢复(之后按自己的退避阶梯继续,这里不逐一数)。
+    // 第一片走完仍需等到服务端期限。
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(3_000_000_000);
+      await vi.advanceTimersByTimeAsync(deadline - Date.now() - 1);
     });
-    expect(listDevices.mock.calls.length).toBeGreaterThan(initial);
+    expect(listDevices.mock.calls.length).toBe(initial);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(listDevices.mock.calls.length).toBe(initial + 1);
   });
 
   // 账号边界:main 侧按 owner 记限流期限,渲染侧也得跟着清 —— 否则新账号的目录读失败时,

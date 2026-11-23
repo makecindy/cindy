@@ -7,6 +7,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { AcpAgent, type AcpLineTransport, type Logger } from '@cindy/maker-core';
 
 import { createCheckoutService } from '../worktree/checkout';
+import '../worktree/WorktreeManagerPorts.desktop';
 import { awaitBackgroundCheckout, createWorktree, detectCwd } from '../worktree/WorktreeManager';
 import { app } from 'electron';
 import type { WorktreeMeta } from '../worktree/types';

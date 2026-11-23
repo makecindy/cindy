@@ -5419,6 +5419,29 @@
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 flash",
         "cindyQwen38Flash": "Qwen 3.8 Flash"
+      },
+      "health": {
+        "configTitle": "No auxiliary model is available",
+        "configDescription": "Automatic task naming, pinned task summaries, Help and plugin tasks such as subtitle translation are affected. Fix the issues below, or choose other available models under Custom.",
+        "runtimeTitle": "Recent auxiliary model requests failed",
+        "runtimeDescription": "The network or service may be temporarily unavailable. This notice clears on its own once requests succeed. If it keeps appearing, choose other available models under Custom.",
+        "fallback": "Plugin tasks are temporarily using {{model}} at a lower reasoning effort, which may be slower and use more quota.",
+        "candidate": "{{model}}: {{reason}}",
+        "openProviders": "Open Providers",
+        "customize": "Customize auxiliary models",
+        "issues": {
+          "signed_out": "Sign in to Cindy required",
+          "provider_disabled": "Provider disabled",
+          "model_disabled": "Model disabled",
+          "payment_required": "Not included in your plan or balance",
+          "no_credential": "Sign-in or API key missing",
+          "unavailable": "Currently unavailable"
+        },
+        "toast": {
+          "config": "No auxiliary model is available. Task naming, summaries and plugin tasks such as subtitle translation are affected.",
+          "runtime": "Recent auxiliary model requests failed. Task naming, summaries and plugin tasks such as subtitle translation may be affected.",
+          "open": "Open Settings"
+        }
       }
     },
     "compaction": {
@@ -6852,7 +6875,15 @@
           "encrypted": "End-to-end encrypted",
           "legacyConnection": "Older connection",
           "encryptionUnknown": "Not confirmed",
-          "legacyEncryptionHint": "The relay path on the older connection is not end-to-end encrypted."
+          "legacyEncryptionHint": "The relay path on the older connection is not end-to-end encrypted.",
+          "routePreference": "Route preference",
+          "routeAuto": "Auto",
+          "routeDirect": "Direct",
+          "routeRelay": "Relay",
+          "routeUnavailable": "Unavailable",
+          "routeMeasuring": "Measuring…",
+          "routeDirectUnavailableHint": "Direct connection is currently unavailable on this network",
+          "routePreferenceFailed": "Could not switch route. Try again."
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -14373,7 +14404,6 @@
       "regionAria": "Pending message queue",
       "listAria": "Queued messages",
       "pausedFooter": "Task stopped, queue paused",
-
       "steerUnsupportedNotice": "This engine doesn’t support steering. Queued messages will be sent after the current turn.",
       "resumeAction": "Continue sending",
       "resumeAria": "Continue sending queued messages",

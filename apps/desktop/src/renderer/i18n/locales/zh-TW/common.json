@@ -5376,6 +5376,29 @@
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 Flash",
         "cindyQwen38Flash": "Qwen 3.8 Flash"
+      },
+      "health": {
+        "configTitle": "輔助模型皆無法使用",
+        "configDescription": "任務自動命名、置頂任務摘要、Help 與插件任務（如字幕翻譯）等功能會受影響。請修正下列問題，或自訂其他可用的模型。",
+        "runtimeTitle": "輔助模型最近多次請求失敗",
+        "runtimeDescription": "可能是網路或服務暫時異常，恢復後此提示會自動消失。若持續出現，可以自訂其他可用的模型。",
+        "fallback": "插件任務已暫時改用 {{model}}，並使用較低的推理強度，可能較慢、消耗較多配額。",
+        "candidate": "{{model}}：{{reason}}",
+        "openProviders": "開啟模型供應商",
+        "customize": "自訂輔助模型",
+        "issues": {
+          "signed_out": "需要登入 Cindy",
+          "provider_disabled": "供應商已停用",
+          "model_disabled": "模型已停用",
+          "payment_required": "目前方案或餘額不支援",
+          "no_credential": "缺少登入資訊或金鑰",
+          "unavailable": "目前無法使用"
+        },
+        "toast": {
+          "config": "輔助模型皆無法使用，任務命名、摘要與字幕翻譯等插件任務會受影響。",
+          "runtime": "輔助模型最近多次請求失敗，任務命名、摘要與字幕翻譯等插件任務可能受影響。",
+          "open": "前往設定"
+        }
       }
     },
     "compaction": {
@@ -6809,7 +6832,15 @@
           "encrypted": "端對端加密",
           "legacyConnection": "舊版連線",
           "encryptionUnknown": "尚未確認",
-          "legacyEncryptionHint": "舊版連線經過中繼時，內容未端對端加密。"
+          "legacyEncryptionHint": "舊版連線經過中繼時，內容未端對端加密。",
+          "routePreference": "路線選擇",
+          "routeAuto": "自動",
+          "routeDirect": "直連",
+          "routeRelay": "中繼",
+          "routeUnavailable": "無法使用",
+          "routeMeasuring": "測速中…",
+          "routeDirectUnavailableHint": "目前網路無法直連此裝置",
+          "routePreferenceFailed": "切換線路失敗，請重試"
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -14319,7 +14350,6 @@
       "regionAria": "待傳送訊息佇列",
       "listAria": "佇列訊息",
       "pausedFooter": "任務已停止，佇列暫停",
-
       "steerUnsupportedNotice": "目前引擎不支援插話，排隊中的訊息會在目前回合結束後送出。",
       "resumeAction": "繼續傳送",
       "resumeAria": "繼續傳送佇列訊息",

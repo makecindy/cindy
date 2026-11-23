@@ -783,7 +783,13 @@ import { botGroupFolderPath, createBotGroupWorkDir } from './botGroupWorkDir.js'
 import { createBotGroupAttachmentStore } from './botGroupAttachments.js';
 import { requestUtilityText } from '../utility-model/oneShotCandidates.js';
 import { getEffectiveAuxiliaryModelChainSnapshot, getEffectiveAuxiliaryModelRefs } from '../utility-model/resolveAuxiliaryModelChain.js';
-import { auxiliaryChainSessionCandidates, pluginTaskRouteAttempts, pluginTaskSelectionIsOpen } from './pluginTaskDefaultRoute.js';
+import {
+  auxiliaryChainSessionCandidates,
+  pluginTaskRouteAttempts,
+  pluginTaskSelectionIsOpen,
+  resolveLightestPluginTaskFallback,
+} from './pluginTaskDefaultRoute.js';
+import { reportPluginTaskAuxiliaryFallback } from '../utility-model/auxiliaryModelHealthService.js';
 import { findRepositoryFolders, folderRepositories } from './groupProjectFolder.js';
 import { runGit } from '../git-review/gitRunner.js';
 import { markGroupCindyTask } from './groupCollaborationSkill.js';
@@ -1061,6 +1067,7 @@ import {
   isLibraryExtraDirSlot,
   libraryExtraDirSlot,
   libraryRootFromSlot,
+  replaceUserExtraDirs,
   splitExtraDirSlots,
   validateExtraDirs,
 } from './extraDirsValidator.js';
@@ -4412,13 +4419,12 @@ export function applyDirectoryGrants(
     let dirsToApply = requestedDirs;
     if (axis === 'extraDirs') {
       const persisted = await readSessionExtraDirsFromDb(sessionId);
-      const { user: dbUser, library: dbLibrary } = splitExtraDirSlots(persisted);
+
       if (options.replaceLibrarySlot) {
         const { library } = splitExtraDirSlots(requestedDirs);
-        dirsToApply = [...dbUser, ...library];
+        dirsToApply = [...splitExtraDirSlots(persisted).user, ...library];
       } else {
-        const { user } = splitExtraDirSlots(requestedDirs);
-        dirsToApply = [...user, ...dbLibrary];
+        dirsToApply = replaceUserExtraDirs(requestedDirs, persisted);
       }
     }
     const result = await applyRemoteDirectoryGrantUpdate(axis, dirsToApply, {
@@ -14299,6 +14305,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               assertPlugin(pluginId);
               break;
             } catch { execution = undefined; }
+          }
+          if (execution) reportPluginTaskAuxiliaryFallback(null);
+          else {
+            execution = await resolveLightestPluginTaskFallback(resolveSessionExecution, selection);
+            assertPlugin(pluginId);
+            if (execution.providerId) reportPluginTaskAuxiliaryFallback({ ...execution, providerId: execution.providerId });
           }
         }
         execution ??= await resolveSessionExecution(selection, sourceSessionId);

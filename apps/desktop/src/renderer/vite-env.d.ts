@@ -341,6 +341,7 @@ type AuxiliaryModelSettingsPatch =
   import('../shared/auxiliaryModelSettings').AuxiliaryModelSettingsPatch;
 type AuxiliaryModelSettingsState =
   import('../shared/auxiliaryModelSettings').AuxiliaryModelSettingsState;
+type AuxiliaryModelHealth = import('../shared/auxiliaryModelHealth').AuxiliaryModelHealth;
 
 /** Agent 资源占用设置的 IPC wire 形状(main 侧 agentResourceSettingsWire)。 */
 type AgentResourceProcessPriority = 'normal' | 'low' | 'lowest';
@@ -4404,6 +4405,11 @@ interface ElectronAPI {
       displayBudget?: { remainingMs: number }; retryAtMs?: number }>;
     /** 远程连接拓扑:本机已建链对端的路径 / RTT 快照 */
     getPeerLinks: () => Promise<DeviceLinkPeerLinksSnapshot>;
+    /** 远程连接拓扑:设置本机到指定设备的 Agent-Net 线路偏好 */
+    setPeerPathPreference?: (
+      deviceId: string,
+      preference: 'auto' | 'direct' | 'relay',
+    ) => Promise<{ deviceId: string; preference: 'auto' | 'direct' | 'relay' }>;
     /** 对端链路拓扑变化,payload 为全量快照 */
     onPeerLinksChanged: (cb: (payload: DeviceLinkPeerLinksSnapshot) => void) => () => void;
     renameDevice: (
@@ -7011,6 +7017,7 @@ interface ElectronAPI {
     auxiliaryModelSettingsSet: (
       patch: AuxiliaryModelSettingsPatch,
     ) => Promise<AuxiliaryModelSettingsState>;
+    auxiliaryModelHealthGet: () => Promise<AuxiliaryModelHealth>;
 
     /** Agent 资源占用治理(命令并发上限/进程优先级/工具链限核)。 */
     agentResourceSettingsGet: () => Promise<AgentResourceSettingsWire>;

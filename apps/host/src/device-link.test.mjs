@@ -15,6 +15,7 @@ import { AgentNetWorkerSocket } from '@cindy/agent-net';
 import { createPrivateNetwork, generateIdentity, issueCertificate } from '@cindy/agent-net-relay';
 import { readDeviceLinkInvokeSourceDevice, readDeviceLinkModelSelectionOrigin } from '../../desktop/src/main/device-link/invoke-context.ts';
 import { createHostDeviceLink, HOST_DISPATCH_PORTS_WHILE_HELD } from './device-link.ts';
+import { createHostWorktreeLifecycle } from './agent/worktree-lifecycle.ts';
 import { createHostService } from './service.mjs';
 import { createHostServer } from './server.mjs';
 import { MCP_APPS_INVOKE } from '../../desktop/src/shared/mcpApps.ts';
@@ -61,6 +62,15 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     INSERT INTO sessions(id,title,source,status,working_dir,workspace_kind,created_at,updated_at)
     VALUES ('task','Shared task','desktop','active','/project','project',1,1)`);
   const db = createDbClientForHandle({ db: sqlite, drizzle: drizzle(sqlite) });
+  // The in-memory fixture has no database filename for the production all-database scan.
+  // Project the same current-database rows explicitly for the Worktree live-reference guard.
+  db.readLocalWorktreeReferences = async () => {
+    const rows = await db.drizzle.select({
+      id: sessions.id, status: sessions.status, source: sessions.source,
+      workingDir: sessions.workingDir, worktreePath: sessions.worktreePath,
+    }).from(sessions);
+    return rows.map(row => ({ ...row, currentDatabase: true }));
+  };
   setCurrentDbClient(db, 'test-headless-owner');
   const hub = createEventHub();
   const sockets = new Map();
@@ -119,6 +129,12 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
       'usd-model': { providerId: 'xd', modelId: 'usd-model', currency: 'USD', source: 'gateway', approximate: false, inputPerMtok: 3, outputPerMtok: 15 },
       'cny-model': { providerId: 'xd', modelId: 'cny-model', currency: 'CNY', source: 'gateway', approximate: false, inputPerMtok: 20, outputPerMtok: 80 },
     } }),
+    providers: async () => ({ providers: [] }),
+    setSessionEffort: async () => ({}),
+    setSessionFastMode: async () => ({}),
+    setSessionThinkingEnabled: async () => ({}),
+    setSessionPermissionMode: async () => ({}),
+    setSessionPlanMode: async () => ({}),
     listSessions: options => readHostSessionList(db.drizzle, options),
     getSession: id => readHostSession(db.drizzle, id),
     messagesList: (id, limit) => readMessagesList(id, { limit }),
@@ -136,9 +152,19 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
       return projection;
     } },
   });
-  host = createHostDeviceLink({ profileDir: profile, version: 'test', getWsUrl: () => url,
+  // The real lifecycle, with createWorktree recording what the channel asks of it.
+  const worktreeCreates = [];
+  const worktreeLifecycle = { ...createHostWorktreeLifecycle(profile), createWorktree: async (request, options) => {
+    worktreeCreates.push({ request, options });
+    return { ok: true, meta: { sessionId: request.sessionId, path: path.join(profile, 'created-worktree') } };
+  } };
+  host = createHostDeviceLink({ profileDir: profile, worktree: worktreeLifecycle, version: 'test', getWsUrl: () => url,
     getToken: async () => 'synthetic-host', canRegister: () => true,
     invoke: service, subscribe: hub.subscribe,
+    send: async (sessionId, message, createOpts, sendOpts) => ({ accepted: true, sessionId, message, createOpts, sendOpts }),
+    assertRemoteInputControlBoundary: async () => ({ expectedClearBoundaryMs: null, expectedInputGeneration: 0 }),
+    setExtraDirs: async (sessionId, dirs) => ({ dirs, rejectedCount: 0, changed: true }),
+    publish: event => hub.publish(event),
     isBusyForProjectArchive: () => {
       if (holdBeforeProjectWrite) held = projectHold;
       return false;
@@ -149,10 +175,16 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
       assert.equal(id, 'task'); assert.equal(dir, '/project');
       if (route) assert.deepEqual(route, { model: 'pi-test', nextInputChars: 45_000 });
     },
-    createRuntimeSession: async () => { throw new Error('Not part of this transport test'); },
-    createRuntimeSession: async () => { created++; throw new Error('Not part of this transport test'); },
+    createRuntimeSession: async () => {
+      created++;
+      throw new Error('Not part of this transport test');
+    },
     disableShareAvailability: async () => { throw new Error('This fixture owns no standby grants'); },
     profileHold: () => held,
+    isSessionClaimed: async sessionId => {
+      const rows = await db.drizzle.select({ id: sessions.id }).from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+      return rows.length > 0;
+    },
     mcpApps: { invoke: async () => { appCalls++; return {}; }, releaseCaller: async () => {} },
     requestPluginOauth: async () => { oauthCalls++; return { ok: true }; },
     invalidatePluginOauth: peer => { oauthCancelled.push(peer ?? 'all'); },
@@ -178,13 +210,18 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   /*
    * Test value (engineering-conventions §3.2)
    * - Production entry and observable result: createHostDeviceLink over the real loopback relay;
-   *   a mobile controller can create a project directory, list its parent and stat the result.
-   * - Bug/rule basis: the Host returned NOT_FOUND for fs:list-dir despite the existing allowlist
-   *   and desktop implementation; architecture-invariants §5 requires both launchers to be wired.
+   *   a mobile controller can create a project directory, list its parent, stat it, read and update
+   *   draft/worktree defaults, invoke maker:send, change task settings and read Git safety state.
+   * - Bug/rule basis: the Host returned NOT_FOUND for fs:list-dir and maker:get-new-maker-defaults
+   *   despite the existing allowlist and desktop implementation; architecture-invariants §5 requires
+   *   both launchers to be wired, including the draft step that follows adding a project.
    * - Existing coverage gap: this integration covered tasks and model controls, not the mobile
-   *   project-directory picker or the hold behavior of directory creation.
-   * - Minimal failing input: mkdir-p followed by list-dir on the parent; an unpatched Host fails
-   *   before any filesystem work, and mkdir-p must also be rejected during a desktop profile hold.
+   *   project/draft workflow, direct send, session settings or the hold behavior of those writes.
+   *   Real Git lifecycle behavior is covered by scripts/worktree-lifecycle.git-integration.mjs.
+   * - Minimal failing input: mkdir-p followed by list-dir on the parent and maker:get-new-maker-defaults;
+   *   an unpatched Host fails before any filesystem work or returns NOT_FOUND for the draft defaults.
+   *   maker:send, draft/worktree writes and session settings use the same registry, and writes must
+   *   also be rejected during a desktop profile hold.
    * - Tier: integration (real relay + temporary profile/filesystem); the whole file takes about
    *   10 seconds because it also reuses the existing multi-client/database/connection fixtures.
    */
@@ -200,6 +237,75 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   assert.deepEqual(stat.result, { kind: 'dir', resolvedPath: createdDir });
   const refused = await clients[2].invoke('host', { channel: 'maker:set-model', args: ['task', 'release-refusal'] });
   assert.deepEqual(refused, { ok: false, error: { code: 'IPC_ERROR', message: '[PRECONDITION_FAILED] ' + releaseFailure().message } });
+  // Regression (Greptile P1 on #12125): on the Host nothing else waits for the background checkout, and
+  // the controller starts the task as soon as worktree:create answers, so the channel must ask the
+  // manager to answer only after the whole tree is checked out. Before the fix the option was absent.
+  const createdWorktree = await clients[0].invoke('host', { channel: 'worktree:create', args: [{
+    sessionId: 'remote-worktree', baseRepo: profile, name: 'remote', sourceBranch: 'main' }] });
+  assert.equal(createdWorktree.ok, true, JSON.stringify(createdWorktree));
+  assert.equal(worktreeCreates.length, 1);
+  assert.equal(worktreeCreates[0].options.awaitFullCheckout, true);
+  const detected = await clients[0].invoke('host', { channel: 'worktree:detect-cwd', args: [{ cwd: profile }] });
+  assert.equal(detected.ok, true, JSON.stringify(detected));
+  assert.equal(detected.result.gitInstalled, true);
+  assert.equal(detected.result.isGitRepo, false);
+  assert.equal(detected.result.supportsRecoveryKeyDiscard, true);
+  assert.equal(detected.result.supportsCheckout, false);
+  // Adding a project continues into the remote draft: providers + defaults.
+  const [providers, defaults] = await Promise.all([
+    clients[0].invoke('host', { channel: 'maker:provider:list', args: [] }),
+    clients[0].invoke('host', { channel: 'maker:get-new-maker-defaults', args: ['pi'] }),
+  ]);
+  assert.equal(providers.ok, true, JSON.stringify(providers));
+  assert.equal(defaults.ok, true, JSON.stringify(defaults));
+  assert.equal(typeof defaults.result, 'object');
+  const sent = await clients[0].invoke('host', { channel: 'maker:send', args: ['task', 'hello', {}] });
+  assert.equal(sent.ok, true, JSON.stringify(sent));
+  assert.equal(sent.result.accepted, true);
+  assert.equal(sent.result.sessionId, 'task');
+  assert.equal(sent.result.message, 'hello');
+  assert.equal(sent.result.sendOpts.expectedClearBoundaryMs, null);
+  assert.equal(sent.result.sendOpts.expectedInputGeneration, 0);
+  const chosen = await clients[0].invoke('host', { channel: 'maker:apply-new-maker-draft-pref', args: [{
+    agent: 'pi', providerId: 'inferx', modelId: 'kimi-k3.1-pro', active: true,
+    markModelChoice: true, selectDraftAgent: true, effort: 'max', fast: true, thinking: false,
+  }] });
+  assert.equal(chosen.ok, true, JSON.stringify(chosen));
+  assert.equal(chosen.result.model, 'kimi-k3.1-pro');
+  assert.equal(chosen.result.providerId, 'inferx');
+  assert.equal(chosen.result.effort, 'max');
+  assert.equal(chosen.result.fastMode, true);
+  const worktree = await clients[0].invoke('host', { channel: 'maker:apply-new-maker-worktree-pref', args: [{ worktreeEnabled: true }] });
+  assert.equal(worktree.ok, true, JSON.stringify(worktree));
+  assert.equal(worktree.result.pi.worktreeEnabled, true);
+  const branch = await clients[0].invoke('host', { channel: 'maker:apply-new-maker-worktree-branch-pref', args: [{ baseRepo: '/project', sourceBranch: 'main' }] });
+  assert.equal(branch.ok, true, JSON.stringify(branch));
+  assert.equal(branch.result.sourceBranch, 'main');
+  const branchRead = await clients[0].invoke('host', { channel: 'maker:get-new-maker-worktree-branch-pref', args: [{ baseRepo: '/project' }] });
+  assert.equal(branchRead.ok, true, JSON.stringify(branchRead));
+  assert.equal(branchRead.result.sourceBranch, 'main');
+  const relativeBranch = await clients[0].invoke('host', { channel: 'maker:apply-new-maker-worktree-branch-pref', args: [{ baseRepo: 'relative/repo', sourceBranch: 'main' }] });
+  assert.equal(relativeBranch.ok, false, JSON.stringify(relativeBranch));
+  assert.match(relativeBranch.error?.message ?? '', /baseRepo must be absolute/);
+  const emptyBranch = await clients[0].invoke('host', { channel: 'maker:apply-new-maker-worktree-branch-pref', args: [{ baseRepo: '/project', sourceBranch: '' }] });
+  assert.equal(emptyBranch.ok, false, JSON.stringify(emptyBranch));
+  assert.match(emptyBranch.error?.message ?? '', /sourceBranch is invalid/);
+  const safety = await clients[0].invoke('host', { channel: 'maker:git-safety:get', args: [] });
+  assert.equal(safety.ok, true, JSON.stringify(safety));
+  assert.equal(safety.result.mode, 'existing-git');
+  for (const [channel, args] of [
+    ['maker:set-effort', ['task', 'low']],
+    ['maker:set-permission-mode', ['task', 'auto']],
+    ['maker:set-plan-mode', ['task', true]],
+    ['maker:set-fast-mode', ['task', true]],
+    ['maker:set-thinking-enabled', ['task', false]],
+  ]) {
+    const reply = await clients[0].invoke('host', { channel, args });
+    assert.equal(reply.ok, true, `${channel}: ${JSON.stringify(reply)}`);
+  }
+  const extraDirs = await clients[0].invoke('host', { channel: 'maker:set-extra-dirs', args: ['task', ['/project/library']] });
+  assert.equal(extraDirs.ok, true, JSON.stringify(extraDirs));
+  assert.deepEqual(extraDirs.result, ['/project/library']);
   // A full round trip from the desktop controller must preview and mutate the Host's project.
   const projectArchive = input => clients[2].invoke('host', { channel: 'local-db:sessions:project-archive',
     args: [{ directory: '/project', ...input }] });
@@ -334,7 +440,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   // page's call are refused with the typed reason, and none reaches its handler; reads still answer.
   held = 'HOST_PROFILE_IN_USE_BY_DESKTOP: held for this test';
   for (const [channel, args] of [['maker:input:enqueue', ['task', { clientId: 'held', text: 'refused' }]],
-    ['maker:create-session', [{}]], ['fs:mkdir-p', [{ path: path.join(profile, 'held-project') }]], ['maker:session:prewarm', ['task', { purpose: 'pi-skill-dispatch', workingDir: '/project' }]],
+    ['maker:send', ['task', 'held']], ['maker:set-extra-dirs', ['task', []]], ['maker:create-session', [{}]], ['fs:mkdir-p', [{ path: path.join(profile, 'held-project') }]], ['maker:session:prewarm', ['task', { purpose: 'pi-skill-dispatch', workingDir: '/project' }]],
     [MCP_APPS_INVOKE, ['task', {}]], [PLUGIN_OAUTH_CHANNEL, [{}]]]) {
     const reply = await clients[0].invoke('host', { channel, args });
     assert.equal(reply.ok, false, `${channel}: ${JSON.stringify(reply)}`);
@@ -531,7 +637,7 @@ test('Host device-link refuses provider-share guests and the platform features i
   });
   await once(wss, 'listening');
   const url = `ws://127.0.0.1:${wss.address().port}`;
-  host = createHostDeviceLink({ profileDir: profile, version: 'test', getWsUrl: () => url,
+  host = createHostDeviceLink({ profileDir: profile, worktree: createHostWorktreeLifecycle(profile), version: 'test', getWsUrl: () => url,
     getToken: async () => 'synthetic-host', canRegister: () => true,
     invoke: async route => { reached.push(route); return { status: 404, body: { message: `unexpected ${route}` } }; },
     subscribe: () => () => {},
@@ -647,7 +753,7 @@ test('keeps compatibility app callers alive when only the Agent-Net connection d
   let primary, compatibility;
   t.mock.method(AgentNetWorkerSocket, 'open', async () => (primary = wire()));
   const host = createHostDeviceLink({
-    profileDir: profile, version: 'test', getWsUrl: () => 'ws://127.0.0.1:9',
+    profileDir: profile, worktree: createHostWorktreeLifecycle(profile), version: 'test', getWsUrl: () => 'ws://127.0.0.1:9',
     getToken: async () => 'synthetic-host', canRegister: () => true,
     invoke: async () => ({ status: 200, body: {} }), subscribe: () => () => {},
     createRuntimeSession: async () => ({}), disableShareAvailability: async () => {},
@@ -725,7 +831,7 @@ test('Agent-Net control refuses profile hold and rechecks the owner inside the s
   let held = holdMessage;
   let canRegister = false;
   const host = createHostDeviceLink({
-    profileDir: profile, version: 'test', getWsUrl: () => 'ws://127.0.0.1:9',
+    profileDir: profile, worktree: createHostWorktreeLifecycle(profile), version: 'test', getWsUrl: () => 'ws://127.0.0.1:9',
     getToken: async () => null, canRegister: () => canRegister, profileHold: () => held,
     invoke: async () => ({ status: 200, body: {} }), subscribe: () => () => {},
     createRuntimeSession: async () => ({}), disableShareAvailability: async () => {},
