@@ -300,7 +300,7 @@
       "nodeChildSpawnDetail": "Only JS files declared inside its own package can be started (same local permissions as the main program); arbitrary commands cannot be executed. Sub-processes are closed together when the plugin is disabled or exits.",
       "skill": "Adds the skill “{{name}}” to your AI assistants",
       "skillDetail": "A skill is an instruction file the AI loads and follows as its own, with your full permissions, in Claude Code and Codex, across every project — it is not confined to this plugin's sandbox. It stays available while the plugin is enabled and is removed when the plugin is disabled or uninstalled; turning the plugin off for a single folder does not hide it. The full skill text cannot be previewed here — only install plugins you trust.",
-      "routineEvents": "Routine Events",
+      "routineEvents": "Automation events",
       "mcpUi": "Can display interactive pages in conversations",
       "mcpUiDomains": "Domains the pages can connect to: {{domains}}",
       "uiPageAccess": "Pages: {{pages}}\nDomains the pages can connect to: {{domains}}\nTools the pages can call: {{tools}}"

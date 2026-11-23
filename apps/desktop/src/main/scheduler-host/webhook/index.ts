@@ -10,7 +10,11 @@ import path from 'node:path';
 import { safeStorage } from 'electron';
 import {
   ScheduleWebhookQueue,
-  sameGithubAppScope,
+  isManagedWebhookSource,
+  sameManagedWebhookScope,
+  subscribedEventPlugins,
+  toPluginWebhookEvent,
+  type PluginPublishedEvent,
   scheduleWebhookEventMatches,
   isValidWebhookSecret,
   resolveScheduleWebhookFormat,
@@ -25,6 +29,13 @@ import { oauthSecureStorageAvailable } from '../../plugin-oauth/identityStore.js
 import { atomicWriteFileSync, readAtomicFileSync } from '../../utils/atomicWriteFile.js';
 import { createWebhookIngress, type WebhookDeliveryOutcome } from './ingress.js';
 import type { GithubAppStatus } from './github';
+import {
+  pluginEventSourceStatus,
+  setPluginEventSink,
+  setSubscribedEventPlugins,
+  type PluginEventPublishResult,
+  type PluginEventSourceStatus,
+} from './pluginEvents.js';
 import {
   ScheduleWebhookRemote,
   type RemoteWebhookBatch,
@@ -71,7 +82,12 @@ export interface ScheduleWebhookStatus {
   /** 今天的 Webhook 接收次数已用完时才有。 */
   quotaLimit?: number;
   quotaResetAt?: number;
+  /** 插件事件来源：每个选中插件的监听状态。有它时没有地址、密钥和账号要求。 */
+  plugins?: PluginEventSourceStatus[];
 }
+
+const isPluginSource = (schedule: Schedule | null | undefined): boolean =>
+  schedule?.webhookTrigger?.source?.preset === 'plugin';
 
 export interface ScheduleWebhookHostOptions {
   /** 开发版的本机接收服务。 */
@@ -144,6 +160,7 @@ export class ScheduleWebhookHost {
   private server: Server | null = null;
   private port: number | undefined;
   private stopped = false;
+  private releasePluginEvents: (() => void) | null = null;
   private refreshing: Promise<void> = Promise.resolve();
   private readonly onChanged = () => {
     this.refreshing = this.refreshing.then(() => this.refresh()).catch((error) => {
@@ -174,7 +191,8 @@ export class ScheduleWebhookHost {
       getSchedule: (id) => scheduler.get(id),
       isBusy: (id) => scheduler.getInflightCount(id) > 0,
       fire: async (id, webhook, onRunCreated) => {
-        if (this.remote && !this.options.local) {
+        // Plugin events never pass the server; they only need the local queue and scheduler.
+        if (this.remote && !this.options.local && !isPluginSource(await scheduler.get(id))) {
           // Offline disk backlog must observe account release before starting a new run.
           await this.remote.refresh();
           if (this.remote.problem(id) === 'released') return {};
@@ -193,7 +211,7 @@ export class ScheduleWebhookHost {
     this.deliver = createWebhookIngress({
       findSchedule: (endpointId) => {
         const schedule = this.byEndpoint.get(endpointId);
-        return schedule?.webhookTrigger?.source?.preset === 'github-app' ? undefined : schedule;
+        return isManagedWebhookSource(schedule?.webhookTrigger?.source) ? undefined : schedule;
       },
       readSecret: (endpointId) => this.readSecret(endpointId),
       accept: (id, event) => this.queue.accept(id, event),
@@ -210,6 +228,7 @@ export class ScheduleWebhookHost {
       return;
     }
     this.port = this.queue.port;
+    this.releasePluginEvents = setPluginEventSink((plugin, event) => this.acceptPluginEvent(plugin, event));
     this.scheduler.on('changed', this.onChanged);
     await this.refresh();
     if (!this.stopped) await this.sweepOrphans();
@@ -232,6 +251,8 @@ export class ScheduleWebhookHost {
 
   async stop(): Promise<void> {
     this.stopped = true;
+    this.releasePluginEvents?.();
+    this.releasePluginEvents = null;
     this.scheduler.off('changed', this.onChanged);
     this.remote?.stop();
     this.queue.stop();
@@ -302,6 +323,7 @@ export class ScheduleWebhookHost {
   }
 
   async restoreEndpoint(schedule: Schedule): Promise<void> {
+    if (isPluginSource(schedule)) throw new Error('PLUGIN_EVENT_SOURCE');
     if (schedule.webhookTrigger?.source?.preset === 'github-app') throw new Error('GITHUB_APP_MANAGED_CONNECTION');
     if (!schedule.webhookTrigger || this.receiver() !== 'cloud' || !this.remote) throw new Error('WEBHOOK_ACCOUNT_REQUIRED');
     await this.remote.restoreEndpoint(schedule.id);
@@ -316,6 +338,11 @@ export class ScheduleWebhookHost {
     if (!endpointId) return null;
     const receiver = this.receiver();
     const counters = this.queue.snapshot(schedule.id);
+    const source = schedule.webhookTrigger?.source;
+    if (source?.preset === 'plugin') {
+      // No account, address or secret: receiving depends only on the chosen plugins running here.
+      return { receiver, hasSecret: true, ...counters, plugins: source.sources.map((item) => pluginEventSourceStatus(item.plugin)) };
+    }
     if (receiver === 'local') {
       return {
         receiver,
@@ -355,6 +382,7 @@ export class ScheduleWebhookHost {
    * 用户动作触发，可以访问钥匙串。
    */
   async setSecret(schedule: Schedule, pasted?: string): Promise<{ secret?: string }> {
+    if (isPluginSource(schedule)) throw new Error('PLUGIN_EVENT_SOURCE');
     if (schedule.webhookTrigger?.source?.preset === 'github-app') throw new Error('GITHUB_APP_MANAGED_CONNECTION');
     const trigger = schedule.webhookTrigger;
     if (!trigger) throw new Error('Webhook trigger is not enabled for this schedule');
@@ -380,6 +408,7 @@ export class ScheduleWebhookHost {
 
   /** 换一个新地址，旧地址立即失效。地址泄露时使用，不签名的地址尤其需要。 */
   async rotateUrl(schedule: Schedule): Promise<{ url: string }> {
+    if (isPluginSource(schedule)) throw new Error('PLUGIN_EVENT_SOURCE');
     if (schedule.webhookTrigger?.source?.preset === 'github-app') throw new Error('GITHUB_APP_MANAGED_CONNECTION');
     if (!schedule.webhookTrigger) throw new Error('Webhook trigger is not enabled for this schedule');
     if (this.receiver() !== 'cloud' || !this.remote) throw new Error('WEBHOOK_ACCOUNT_REQUIRED');
@@ -429,22 +458,48 @@ export class ScheduleWebhookHost {
     }
     for (const [endpointId, schedule] of this.byEndpoint) {
       const replacement = next.get(endpointId);
-      const appSource = schedule.webhookTrigger?.source?.preset === 'github-app'
-        || replacement?.webhookTrigger?.source?.preset === 'github-app';
-      if (replacement?.id === schedule.id && !(appSource
-        && (replacement.status !== 'active' || !sameGithubAppScope(replacement.webhookTrigger ?? {}, schedule.webhookTrigger ?? {})))) continue;
+      const managed = isManagedWebhookSource(schedule.webhookTrigger?.source)
+        || isManagedWebhookSource(replacement?.webhookTrigger?.source);
+      if (replacement?.id === schedule.id && !(managed
+        && (replacement.status !== 'active' || !sameManagedWebhookScope(replacement.webhookTrigger ?? {}, schedule.webhookTrigger ?? {})))) continue;
       this.secrets.delete(endpointId);
       fs.rmSync(this.secretFile(endpointId), { force: true });
       await this.queue.forget(schedule.id);
     }
     this.byEndpoint = next;
+    if (this.releasePluginEvents) setSubscribedEventPlugins(subscribedEventPlugins(schedules));
     if (this.options.local) {
-      if (next.size > 0) await this.openServer();
+      const addressable = [...next.values()].some((schedule) => !isManagedWebhookSource(schedule.webhookTrigger?.source));
+      if (addressable) await this.openServer();
       else await this.closeServer();
       return;
     }
     if (this.receiver() === 'cloud') await this.remote?.sync(schedules);
     else this.remote?.pause();
+  }
+
+  /**
+   * 插件发布的事件：投给所有选了该插件、当前启用的自动化。来源由调用方从真实插件身份得到；
+   * 是否处理（包括自动化自己发出的消息）交给各自动化的条件、前置检查和提示词。
+   */
+  async acceptPluginEvent(plugin: string, published: PluginPublishedEvent): Promise<PluginEventPublishResult> {
+    if (this.stopped) throw new Error('schedule webhook host is stopped');
+    const event = toPluginWebhookEvent(plugin, published, Date.now());
+    let accepted = 0;
+    let matched = 0;
+    let duplicates = 0;
+    for (const schedule of await this.scheduler.list({ status: 'active' })) {
+      if (this.stopped) throw new Error('schedule webhook host is stopped');
+      const trigger = schedule.webhookTrigger;
+      if (trigger?.source?.preset !== 'plugin' || !trigger.source.sources.some((item) => item.plugin === plugin)) continue;
+      // The queue re-reads the schedule and applies event types and field conditions.
+      const [result] = await this.queue.acceptBatch(schedule.id, [event], 0, trigger.endpointId);
+      if (result === 'filtered') continue;
+      matched += 1;
+      if (result === 'queued') accepted += 1;
+      if (result === 'duplicate') duplicates += 1;
+    }
+    return { accepted, duplicate: matched > 0 && duplicates === matched };
   }
 
   /** 服务器已验签并筛选过；这里按当前配置再筛一次，配置可能刚改过。 */

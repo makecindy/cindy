@@ -562,6 +562,9 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
     if (form.webhookEnabled && form.webhookPreset === 'github-app' && !validGithubRepositories(form.webhookRepositories)) {
       return { key: 'scheduler.editor.webhook.repositoriesInvalid' };
     }
+    if (form.webhookEnabled && form.webhookPreset === 'plugin' && !form.webhookPluginSources?.length) {
+      return { key: 'scheduler.editor.webhook.plugin.required' };
+    }
     return null;
   }, [form]);
 

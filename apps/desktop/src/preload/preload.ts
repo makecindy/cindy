@@ -1635,6 +1635,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /** 任务「前置检查」可选的插件(仅本机窗口,不进 device-link)。 */
     listControlPointCandidates: (point: import('../shared/ghost').GhostControlPointId): Promise<GhostControlPointCandidate[]> =>
       ipcRenderer.invoke('ghosts:control-points:candidates', point),
+    /** 自动化「事件」触发可选的插件来源(仅本机窗口,不进 device-link)。 */
+    listEventSources: (): Promise<import('../shared/ghost').GhostEventSourceCandidate[]> =>
+      ipcRenderer.invoke('ghosts:event-sources'),
     runtimePlugins: (sessionId: string, settings?: import('../shared/pluginRuntime').RuntimePluginSettings): Promise<import('../shared/pluginRuntime').RuntimePluginSettings> =>
       ipcRenderer.invoke('maker:runtime-plugins', sessionId, settings),
     /** 新任务「让插件选」：第一条消息发出前问一次插件用哪个模型(仅本机窗口)。 */
@@ -8822,6 +8825,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         problem?: 'limit' | 'failed' | 'unsupported' | 'suspended' | 'quota' | 'released';
         quotaLimit?: number;
         quotaResetAt?: number;
+        /** 插件事件来源：每个选中插件的监听状态。 */
+        plugins?: Array<{ plugin: string; state: 'listening' | 'disconnected' | 'error' | 'stopped' | 'unknown'; reportedAt?: number; lastEventAt?: number }>;
       } | null> => ipcRenderer.invoke('maker:schedule:webhook-status', id),
       /** 设置签名密钥:传入时保存从发送方复制的密钥;不传时生成新密钥,明文只在这次返回。仅任务所在电脑可用。 */
       setWebhookSecret: (id: string, secret?: string): Promise<{ secret?: string }> =>

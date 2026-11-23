@@ -300,7 +300,7 @@
       "nodeChildSpawnDetail": "Nur JS-Dateien, die innerhalb des eigenen Pakets deklariert sind, können gestartet werden (mit denselben lokalen Berechtigungen wie das Hauptprogramm). Beliebige Befehle können nicht ausgeführt werden. Unterprozesse werden gemeinsam beendet, wenn das Plugin deaktiviert wird oder endet.",
       "skill": "Fügt deinen KI-Assistenten den Skill „{{name}}“ hinzu",
       "skillDetail": "Ein Skill ist eine Anweisungsdatei, die die KI in Claude Code und Codex projektübergreifend lädt und wie eigene Anweisungen mit deinen vollen Berechtigungen befolgt – sie ist nicht auf die Sandbox dieses Plugins beschränkt. Der Skill bleibt verfügbar, solange das Plugin aktiviert ist, und wird beim Deaktivieren oder Deinstallieren entfernt. Wenn du das Plugin nur für einen einzelnen Ordner ausschaltest, wird der Skill nicht ausgeblendet. Der vollständige Skill-Text kann hier nicht als Vorschau angezeigt werden – installiere nur Plugins, denen du vertraust.",
-      "routineEvents": "Routineereignisse",
+      "routineEvents": "Automatisierungsereignisse",
       "mcpUi": "Kann interaktive Seiten in Unterhaltungen anzeigen",
       "mcpUiDomains": "Domains, mit denen sich die Seiten verbinden können: {{domains}}",
       "uiPageAccess": "Seiten: {{pages}}\nDomains, mit denen sich die Seiten verbinden können: {{domains}}\nTools, die die Seiten aufrufen können: {{tools}}"

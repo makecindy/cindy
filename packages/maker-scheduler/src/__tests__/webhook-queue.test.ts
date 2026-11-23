@@ -71,6 +71,33 @@ describe('ScheduleWebhookQueue', () => {
     h.queue.stop();
   });
 
+  // Rule: docs/product-rules/plugin-event-triggers.md. A plugin event wakes only automations that
+  // chose that plugin (and event/conditions); it never wakes ordinary Webhook or GitHub App tasks,
+  // and messages the automation sent itself are not dropped by the host.
+  it('admits plugin events only for the chosen plugin, events and field conditions', async () => {
+    const h = setup();
+    const schedule = { id: 's1', status: 'active', webhookTrigger: { endpointId: 'e1', source: { preset: 'plugin', sources: [
+      { plugin: 'public/chat', events: ['message.received'], filters: [{ field: 'chatId', operator: 'equals', value: 'c1' }] },
+    ] } } } as Schedule;
+    h.setSchedule(schedule);
+    await h.queue.start();
+    const message = (deliveryId: string, overrides: Partial<ScheduleWebhookEvent> = {}): ScheduleWebhookEvent => ({
+      ...event(deliveryId, 'message.received'), source: 'plugin:public/chat', fields: { chatId: 'c1', fromSelf: true }, ...overrides,
+    });
+    expect(await h.queue.acceptBatch('s1', [
+      message('own-reply'),
+      message('other-plugin', { source: 'plugin:public/mail' }),
+      message('other-chat', { fields: { chatId: 'c2' } }),
+      message('other-type', { event: 'message.recalled' }),
+    ], 0, 'e1')).toEqual(['queued', 'filtered', 'filtered', 'filtered']);
+    await vi.advanceTimersByTimeAsync(LIMITS.debounceMs);
+    expect(h.fire.mock.calls[0]![1].events.map(item => [item.deliveryId, item.fields])).toEqual([['own-reply', { chatId: 'c1', fromSelf: true }]]);
+    // An ordinary Webhook task never accepts a plugin-sourced doorbell.
+    h.setSchedule({ id: 's1', status: 'active', webhookTrigger: { endpointId: 'e1' } } as Schedule);
+    expect(await h.queue.accept('s1', message('to-webhook-task'))).toBe('filtered');
+    h.queue.stop();
+  });
+
   // PR #9378 / security review: old on-disk recovery markers carry no scope.
   // Exercise restart through the real queue, including interrupted preparation.
   it.each(['pending', 'preparing'] as const)('filters legacy unscoped recovery markers from restored %s', async where => {

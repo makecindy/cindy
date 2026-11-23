@@ -12,6 +12,9 @@ import { SCHEDULE_WEBHOOK_PRESETS } from '@cindy/maker-scheduler/webhook-formats
 import { parseWebhookFormatText, validGithubRepositories } from '../lib/scheduleFormLogic';
 import { GithubAppCard } from '@/features/cc-agent/GithubAppCard';
 import { WebhookEventSelect } from './WebhookEventSelect';
+import { PluginEventSourceFields } from './PluginEventSourceFields';
+import type { SchedulePluginEventSource } from '@cindy/maker-scheduler/plugin-events';
+import type { GhostEventSourceCandidate } from '../../../../shared/ghost';
 
 const hintClass = 'text-12 leading-relaxed text-[var(--text-secondary)]';
 
@@ -27,6 +30,12 @@ interface WebhookSourceFieldsProps {
   onPresetChange(value: string): void;
   onSignedChange(value: boolean): void;
   onFormatChange(value: string): void;
+  /** 插件事件来源（preset=plugin）。 */
+  pluginSources?: readonly SchedulePluginEventSource[];
+  pluginCandidates?: readonly GhostEventSourceCandidate[] | null;
+  onPluginSourcesChange?(value: SchedulePluginEventSource[]): void;
+  /** 这台电脑能接收 Webhook 地址（已登录且有接收服务）；否则只能选插件事件。 */
+  addressSourcesAvailable?: boolean;
 }
 
 /** 发送方、是否验证签名，以及自定义格式。密钥和接收地址在任务详情里管理。 */
@@ -42,19 +51,27 @@ export function WebhookSourceFields({
   onPresetChange,
   onSignedChange,
   onFormatChange,
+  pluginSources = [],
+  pluginCandidates = null,
+  onPluginSourcesChange,
+  addressSourcesAvailable = true,
 }: WebhookSourceFieldsProps) {
   const { t } = useTranslation();
   const [advancedOpen, setAdvancedOpen] = useState(!signed);
   const connectionId = useId();
   const appSource = preset === 'github-app';
+  const pluginSource = preset === 'plugin';
   const githubSource = appSource || preset === 'github';
-  const known = appSource || preset === 'custom' || SCHEDULE_WEBHOOK_PRESETS.some((item) => item.id === preset);
-  const options = [
+  const known = appSource || pluginSource || preset === 'custom' || SCHEDULE_WEBHOOK_PRESETS.some((item) => item.id === preset);
+  const pluginOption = pluginSource || (pluginCandidates?.length ?? 0) > 0
+    ? [{ value: 'plugin', label: t('scheduler.editor.webhook.plugin.source') }] : [];
+  const options = addressSourcesAvailable || !pluginSource ? [
     ...SCHEDULE_WEBHOOK_PRESETS.map((item) => ({ value: item.id, label: item.label })),
     { value: 'custom', label: t('scheduler.editor.webhook.sourceCustom') },
+    ...pluginOption,
     // 更新的版本写入的发送方：照原样显示，不改就不会被覆盖。
     ...(known ? [] : [{ value: preset, label: preset }]),
-  ];
+  ] : pluginOption;
   const formatInvalid =
     preset === 'custom' && formatText.trim() !== '' && !parseWebhookFormatText(formatText);
 
@@ -91,6 +108,11 @@ export function WebhookSourceFields({
           })}
         </fieldset>
       )}
+      {pluginSource && (
+        <PluginEventSourceFields value={pluginSources} candidates={pluginCandidates}
+          onChange={(value) => onPluginSourcesChange?.(value)} />
+      )}
+      {pluginSource && footerAction}
       {appSource && <GithubAppCard automation repositories={repositories.split(/[\s,]+/).filter(Boolean)} />}
       {appSource && (
         <>
@@ -106,7 +128,7 @@ export function WebhookSourceFields({
           {footerAction}
         </>
       )}
-      <WebhookEventSelect key={preset} preset={preset} value={events} onChange={onEventsChange} />
+      {!pluginSource && <WebhookEventSelect key={preset} preset={preset} value={events} onChange={onEventsChange} />}
       {preset === 'github' && <p className={hintClass}>{t('scheduler.editor.webhook.manualSetupHint')}</p>}
       {preset === 'custom' ? (
         <FormField
@@ -126,12 +148,12 @@ export function WebhookSourceFields({
           )}
         </FormField>
       ) : null}
-      {!appSource && preset !== 'custom' && !signed && (
+      {!appSource && !pluginSource && preset !== 'custom' && !signed && (
         <p className="text-12 leading-relaxed text-[var(--text-primary)]">
           {t('scheduler.editor.webhook.unsignedWarning')}
         </p>
       )}
-      {!appSource && <div>
+      {!appSource && !pluginSource && <div>
         <div className="flex flex-wrap items-center gap-2">
           <Button
             variant="secondary"

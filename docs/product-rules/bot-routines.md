@@ -16,8 +16,9 @@
 > - 从旧电脑经云端伙伴同步来的例行任务，按例行任务 id 各转成一次项目自动化；本机不再上传例行任务，但仍拥有该前缀以清理自己的旧行。
 > - 已有的 `role = 'routine'` 运行任务作为历史照常在任务列表可见、可打开。
 > - 旧控制端调用例行任务设置操作得到 `UNSUPPORTED_CAPABILITY`，读 `routines` 集合与例行任务技能页得到 `NOT_FOUND`。
-> - 插件：声明 `routineEvents`、`will-routine-run` 的插件照常安装，钩子不再触发；`routine-request` 管子对
->   status / publish 返回稳定的空操作；`routineEvents` 不再让插件常驻。见 [插件安全与编写](../dev-rules/plugin-security-and-authoring.md)。
+> - 插件：声明 `routineEvents`、`will-routine-run` 的插件照常安装，`will-routine-run` 不再触发。`routine-request` 管子
+>   2026-11-08 起一度对 status / publish 返回空操作，2026-11-23 起改为叫醒选了该插件的普通自动化，
+>   见 [插件事件触发](plugin-event-triggers.md) 与 [插件安全与编写](../dev-rules/plugin-security-and-authoring.md)。
 
 ## 产品合同
 

@@ -269,11 +269,34 @@ it('sends the explicit local Harness and location when generating a bound hook',
 it('keeps the saved Webhook trigger while signed out', async () => {
   vi.stubGlobal('electronAPI', { maker: { schedule: { webhookReceiver: async () => 'signed-out' } } });
   const form = mount(schedule({ webhookTrigger: { endpointId: 'endpoint', events: ['check_suite'] } }));
-  expect(screen.getByRole('radio', { name: 'scheduler.cell.tagWebhook' }).hasAttribute('disabled')).toBe(true);
+  expect(screen.getByRole('radio', { name: 'scheduler.editor.trigger.event' }).hasAttribute('disabled')).toBe(true);
   form.save();
   // 没有保存过发送方的任务按默认的 GitHub 写回，接收行为不变。
   await waitFor(() => expect(form.onSubmit).toHaveBeenCalledWith(expect.objectContaining({
     webhookTrigger: { events: ['check_suite'], source: { preset: 'github' } },
+  }), true));
+});
+
+// docs/product-rules/plugin-event-triggers.md, unit/jsdom: plugin events need no account. Signed
+// out with an event-declaring plugin installed, the event trigger stays available, offers only
+// plugin events, and saves the chosen plugin without a stale top-level event filter.
+it('offers plugin events while signed out and saves the chosen plugin', async () => {
+  vi.stubGlobal('electronAPI', {
+    maker: { schedule: { webhookReceiver: async () => 'signed-out' } },
+    ghosts: {
+      listEventSources: async () => [{ plugin: 'public/chat', name: 'Chat', state: 'listening',
+        events: [{ type: 'message.received', name: 'Message', fields: ['chatId'] }, { type: 'mention', name: 'Mention', fields: [] }] }],
+      onChanged: () => () => undefined,
+    },
+  });
+  const form = mount(schedule());
+  const trigger = await screen.findByRole('radio', { name: 'scheduler.editor.trigger.event' });
+  await waitFor(() => expect(trigger.hasAttribute('disabled')).toBe(false));
+  fireEvent.click(trigger);
+  fireEvent.click(await screen.findByRole('checkbox', { name: 'Mention' }));
+  form.save();
+  await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
+    manual: true, webhookTrigger: { events: [], source: { preset: 'plugin', sources: [{ plugin: 'public/chat', events: ['mention'] }] } },
   }), true));
 });
 
@@ -284,7 +307,7 @@ it.each(['agent', 'script'] as const)('keeps Webhook and timed triggering separa
   const form = mount(schedule({ executionMode,
     ...(executionMode === 'script' ? { workspaceKind: 'project' as const, workingDir: '/test-project', scriptConfig: { command: 'node check.cjs', capabilities: [] } } : {}),
   }));
-  fireEvent.click(await screen.findByRole('radio', { name: 'scheduler.cell.tagWebhook' }));
+  fireEvent.click(await screen.findByRole('radio', { name: 'scheduler.editor.trigger.event' }));
   form.save();
   await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
     manual: true, webhookTrigger: expect.objectContaining({ source: { preset: 'github' } }), executionMode,
@@ -342,7 +365,7 @@ it('preserves both triggers when editing an existing timed Webhook', async () =>
   const form = mount(schedule({ preRunHook: { command: 'node check.mjs https://github.com/example/project/pull/85' },
     webhookTrigger: { endpointId: 'existing', events: ['issues.opened'], source: { preset: 'github' } } }));
   await screen.findByRole('button', { name: 'routines.advancedSettings' });
-  expect(screen.getByRole('radio', { name: 'scheduler.cell.tagWebhook' }).getAttribute('aria-checked')).toBe('true');
+  expect(screen.getByRole('radio', { name: 'scheduler.editor.trigger.event' }).getAttribute('aria-checked')).toBe('true');
   form.save();
   await waitFor(() => expect(form.onSubmit).toHaveBeenCalledWith(expect.objectContaining({
     manual: false, recurring: true, cronExpr: '0 9 * * *', webhookTrigger: { events: ['issues.opened'], source: { preset: 'github' } },

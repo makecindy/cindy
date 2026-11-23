@@ -300,7 +300,7 @@
       "nodeChildSpawnDetail": "只能启动它自己包里声明过的 JS 文件（与主程序同样的本机权限），不能执行任意命令；插件停用或退出时子进程一并关闭。",
       "skill": "为 AI 助手添加技能「{{name}}」",
       "skillDetail": "技能是一份指令文件，AI 会把它当作自己的指令加载执行，拥有你的全部权限，对 Claude Code 与 Codex、所有项目都生效——不受本插件沙箱约束。插件启用期间持续可用，停用或卸载即移除；仅对某个文件夹关闭本插件不会隐藏它。此处无法预览技能全文——请只安装你信任的插件。",
-      "routineEvents": "例行任务事件",
+      "routineEvents": "自动化事件",
       "mcpUi": "可在对话中显示交互页面",
       "mcpUiDomains": "页面可连接域名：{{domains}}",
       "uiPageAccess": "页面：{{pages}}\n页面可连接域名：{{domains}}\n页面可调用工具：{{tools}}"

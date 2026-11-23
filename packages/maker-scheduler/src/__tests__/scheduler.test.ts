@@ -4561,6 +4561,29 @@ describe('Scheduler', () => {
     expect(changed.webhookTrigger?.endpointId).not.toBe(sch.webhookTrigger?.endpointId);
   });
 
+  // Rule: docs/product-rules/plugin-event-triggers.md. The plugin source is saved through the same
+  // Scheduler entry as UI, MCP and remote edits; changing which plugins/events wake the task must
+  // retire the old queue identity, while reordering must not drop queued events.
+  it('stores plugin event sources, rotates queue identity only on real scope changes', async () => {
+    const source = { preset: 'plugin' as const, sources: [
+      { plugin: 'public/feishu', events: ['message.received', 'message.received'] },
+      { plugin: 'public/mail', filters: [{ field: 'label', operator: 'equals' as const, value: 'inbox' }] },
+    ] };
+    const sch = await h.scheduler.create({ ...baseInput, manual: true, webhookTrigger: { source } });
+    expect(sch.webhookTrigger?.source).toEqual({ preset: 'plugin', sources: [
+      { plugin: 'public/feishu', events: ['message.received'] },
+      { plugin: 'public/mail', filters: [{ field: 'label', operator: 'equals', value: 'inbox' }] },
+    ] });
+    const reordered = await h.scheduler.update(sch.id, { webhookTrigger: { source: { preset: 'plugin', sources: [...source.sources].reverse() } } });
+    expect(reordered.webhookTrigger?.endpointId).toBe(sch.webhookTrigger?.endpointId);
+    const changed = await h.scheduler.update(sch.id, { webhookTrigger: { source: { preset: 'plugin', sources: [{ plugin: 'public/feishu' }] } } });
+    expect(changed.webhookTrigger?.endpointId).not.toBe(sch.webhookTrigger?.endpointId);
+    await expect(h.scheduler.update(sch.id, { webhookTrigger: { events: ['message.received'] } })).rejects.toThrow('per plugin source');
+    await expect(h.scheduler.update(sch.id, { webhookTrigger: { source: { preset: 'plugin', sources: [] } } })).rejects.toThrow('plugin sources');
+    await expect(h.scheduler.update(sch.id, { webhookTrigger: { source: { preset: 'plugin', sources: [
+      { plugin: 'public/feishu', filters: [{ field: 'chatId', operator: 'regex', value: '.*' }] }] } } })).rejects.toThrow('operator');
+  });
+
   it('rejects malformed webhook event filters', async () => {
     await expect(h.scheduler.create({ ...baseInput, webhookTrigger: { events: ['a b'] } })).rejects.toThrow('filter');
   });

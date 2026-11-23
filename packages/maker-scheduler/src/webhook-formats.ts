@@ -3,6 +3,7 @@
  * 所以新增发送方只需在这里加预设。校验与 cindy-server 仓 webhook-server/src/core/format.ts 一致，两边一起改。
  * 不依赖 Node，Renderer 也会引用。
  */
+import { normalizePluginEventSources, samePluginEventScope, type SchedulePluginEventSource } from './plugin-events.js';
 
 export const WEBHOOK_FIELD_NAMES = [
   'event',
@@ -424,8 +425,29 @@ export function scheduleWebhookPreset(id: string): ScheduleWebhookPreset | undef
 /** 任务保存的发送方。缺省等于 GitHub 预设并签名。 */
 export type ScheduleWebhookSource =
   | { preset: 'github-app'; repositories: string[] }
+  /** 插件事件：本机插件经 routine-request 发布，不需要接收地址、密钥或账号。 */
+  | { preset: 'plugin'; sources: SchedulePluginEventSource[] }
   | { preset: ScheduleWebhookPresetId; signed?: boolean }
   | { preset: 'custom'; format: WebhookFormat };
+
+/** 由宿主管理、没有公网接收地址和密钥的来源：GitHub App 与插件事件。 */
+export function isManagedWebhookSource(source: ScheduleWebhookSource | undefined): boolean {
+  return source?.preset === 'github-app' || source?.preset === 'plugin';
+}
+
+/**
+ * 托管来源的范围是否相同。范围变了要更换本地队列身份，旧范围的待执行事件不得进入新范围；
+ * 任一方是托管来源而另一方不同类时也视为变化。
+ */
+export function sameManagedWebhookScope(
+  a: { source?: ScheduleWebhookSource; events?: readonly string[] },
+  b: { source?: ScheduleWebhookSource; events?: readonly string[] },
+): boolean {
+  if (a.source?.preset === 'plugin' && b.source?.preset === 'plugin') {
+    return samePluginEventScope(a.source.sources, b.source.sources);
+  }
+  return sameGithubAppScope(a, b);
+}
 
 /** Presentation order is not part of a managed subscription's queue identity. */
 export function sameGithubAppScope(
@@ -454,6 +476,10 @@ export function normalizeScheduleWebhookSource(value: unknown): ScheduleWebhookS
     }
     return { preset: 'github-app', repositories: [...new Set((value.repositories as string[]).map(repo => repo.toLowerCase()))] };
   }
+  if (value.preset === 'plugin') {
+    if (!hasOnlyKeys(value, ['preset', 'sources'])) throw new Error('invalid webhook source');
+    return { preset: 'plugin', sources: normalizePluginEventSources(value.sources) };
+  }
   if (value.preset === 'custom') {
     if (!hasOnlyKeys(value, ['preset', 'format'])) throw new Error('invalid webhook source');
     const format = parseWebhookFormat(value.format);
@@ -469,7 +495,7 @@ export function normalizeScheduleWebhookSource(value: unknown): ScheduleWebhookS
 /** 发给服务器的格式。来自更新版本、本机认不出的预设返回 null，这时不改服务器上的格式。 */
 export function resolveScheduleWebhookFormat(source: ScheduleWebhookSource | undefined): WebhookFormat | null {
   if (!source) return scheduleWebhookPreset(DEFAULT_SCHEDULE_WEBHOOK_PRESET)!.format;
-  if (source.preset === 'github-app') return null;
+  if (source.preset === 'github-app' || source.preset === 'plugin') return null;
   if (source.preset === 'custom') return parseWebhookFormat(source.format);
   const preset = scheduleWebhookPreset(source.preset);
   if (!preset) return null;

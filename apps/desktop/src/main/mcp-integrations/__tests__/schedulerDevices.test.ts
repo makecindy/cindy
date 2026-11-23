@@ -136,6 +136,23 @@ describe('desktop scheduler cross-device transport', () => {
     ]);
   });
 
+  // docs/product-rules/plugin-event-triggers.md, unit: plugin events need no account on the
+  // target, but a target that predates them would reject the unknown source after the write.
+  it.each([
+    { pluginEvents: true, ok: true },
+    { pluginEvents: false, ok: false },
+  ])('negotiates plugin event triggers without the receiver check: supported=$pluginEvents', async ({ pluginEvents, ok }) => {
+    const s = setup();
+    s.invoke.mockImplementation(async (_device, channel) => ({ ok: true, result:
+      channel === 'maker:get-capabilities' ? { supportsScheduleWebhookTrigger: true, supportsSchedulePluginEventTrigger: pluginEvents }
+      : channel === 'maker:schedule:webhook-receiver' ? 'signed-out' : { id: 's1' },
+    }));
+    const patch = { webhookTrigger: { source: { preset: 'plugin', sources: [{ plugin: 'public/chat' }] } } };
+    expect((await s.remote.invoke('mac', 'update', ['s1', patch])).ok).toBe(ok);
+    expect(s.invoke.mock.calls.map(([, channel]) => channel))
+      .toEqual(['maker:get-capabilities', ...(ok ? ['maker:schedule:update'] : [])]);
+  });
+
   it('does not write after ownership changes during the webhook receiver check', async () => {
     const s = setup();
     s.invoke.mockImplementation(async (_device, channel) => {

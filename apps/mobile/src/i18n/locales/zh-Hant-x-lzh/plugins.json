@@ -298,7 +298,7 @@
       "nodeChildSpawnDetail": "唯可啟其自身包內所申報之 JS 卷(與主程式同等本機權柄)，不能行任意命令；法器停用或退出時子程序一併闔。",
       "skill": "為 AI 助手增技藝「{{name}}」",
       "skillDetail": "技藝乃一指令之卷，AI 將視為己之指令載而行之，具君之全部權柄，於 Claude Code 與 Codex、諸案皆生效——不受本法器沙箱所約。法器啟用之間恆可用，停用或卸之即除；唯於某卷匣關此法器不能隱之。此處無從先覽技藝全文——請唯納君所信之法器。",
-      "routineEvents": "例行差事之事",
+      "routineEvents": "自動化之事",
       "mcpUi": "可於言談中示互動之頁",
       "mcpUiDomains": "頁可連之網域：{{domains}}",
       "uiPageAccess": "頁：{{pages}}\n頁可連之網域：{{domains}}\n頁可喚之工具：{{tools}}"

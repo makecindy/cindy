@@ -132,6 +132,13 @@ import { getBotAuthorizationService } from '../maker-ipc/botAuthorizationService
 import { isResidentBrowserGhost, spawnResidentGhost } from './residentGhost.js';
 import { handleRoutineRequest } from './routineSlot.js';
 import {
+  forgetPluginEventStatus,
+  onSubscribedEventPluginsChanged,
+  pluginEventSourceStatus,
+  setPluginRuntimeProbe,
+  subscribedEventPluginIds,
+} from '../scheduler-host/webhook/pluginEvents.js';
+import {
   app,
   BrowserWindow,
   clipboard,
@@ -499,6 +506,7 @@ import {
   ghostExternalLinkUrls,
   isGhostControlPointId,
   type GhostControlPointCandidate,
+  type GhostEventSourceCandidate,
   type GhostControlPointId,
   type GhostModelRoute,
   type GhostPickerModel,
@@ -3305,6 +3313,21 @@ export async function routeGhostNewTask(pluginId: string, data: GhostStartTaskPo
   }
   log.warn('plugin chose an unavailable model route', { pluginId, agentKind: base.agentKind, model: base.model });
   return kept('unavailable-route');
+}
+
+/** 自动化事件触发可选的插件：本机已启用、声明了事件的插件，附监听状态。 */
+export function ghostEventSourceCandidates(): GhostEventSourceCandidate[] {
+  return availableGhosts()
+    .filter((ghost) => ghost.enabled && ghost.manifest.routineEvents)
+    .map((ghost) => {
+      const plugin = installedGhostStoragePart(ghost);
+      return {
+        plugin,
+        name: ghost.manifest.name,
+        state: pluginEventSourceStatus(plugin).state,
+        events: ghost.manifest.routineEvents!.events.map((event) => ({ ...event, fields: [...event.fields] })),
+      };
+    });
 }
 
 /** 任务「前置检查」里可选的插件:已启用、声明了该节点且用户已批准。 */
@@ -8994,6 +9017,35 @@ export function builtinSeedYieldsToStoreVersion(id: string, storeVersion: string
   return seedVersion === null || !seedIsNewerThanStore(seedVersion, storeVersion);
 }
 
+let pluginEventListenersActive = false;
+
+/**
+ * Automations that chose a plugin's events keep that plugin listening; registered once per process.
+ * Removing the last subscription does not stop a running plugin (the user may also be using it);
+ * it is simply not started again on the next launch.
+ */
+function activatePluginEventListeners(): void {
+  if (pluginEventListenersActive) return;
+  pluginEventListenersActive = true;
+  setPluginRuntimeProbe((plugin) => {
+    const state = getGhostRuntime().stateOf(plugin);
+    if (state !== 'running' && state !== 'starting') {
+      // A stopped plugin's last "listening" report is stale.
+      if (state === 'off' || state === 'fused' || state === 'crashed') forgetPluginEventStatus(plugin);
+      return false;
+    }
+    return true;
+  });
+  const spawnSubscribed = (plugins: ReadonlySet<string>) => {
+    for (const plugin of plugins) {
+      const ghost = findGhostForPhysicalStoragePart(plugin);
+      if (ghost) spawnIfResident(ghost);
+    }
+  };
+  onSubscribedEventPluginsChanged(spawnSubscribed);
+  spawnSubscribed(subscribedEventPluginIds());
+}
+
 /**
  * launch: 'resident' 的意识在"唤醒且在场"时保持电子脑常驻——本函数是所有
  * "该在场了"时机的统一入口(应用启动扫描 / 装入即开 / 唤醒 / 更新换代后)。
@@ -9009,6 +9061,7 @@ function spawnIfResident(ghost: InstalledGhost, allowPendingLegacy = false): voi
   spawnResidentGhost(ghost, {
     isAvailable: isGhostAvailableForActiveSession,
     allowPendingLegacy,
+    eventSubscribed: subscribedEventPluginIds().has(storagePart),
     startNode: (installed) => getGhostNodeRuntimeBroker().startResident(installed),
     spawnBrowser: (installed) => getGhostRuntime().spawn(installed),
     warn: (message, fields) => log.warn(message, fields),
@@ -9927,6 +9980,8 @@ export function registerGhostIpc(): void {
     // The migration body has its own committed-owner gate, so signed-out runs
     // the common activation phase without touching legacy account data.
     const activationOutcome = activateGhostsAndMigrateLegacyAccounts();
+    // Plugins chosen by automation event triggers start listening once the owner's plugins are active.
+    activatePluginEventListeners();
     if (
       activeOwnerScopeKey() !== scope.scopeKey ||
       getActiveAppSession().dataOwnerId !== scope.dataOwnerId
@@ -11427,6 +11482,12 @@ export function registerGhostIpc(): void {
   ipcMain.handle('ghosts:models:list', (event) => {
     assertTrustedAppRendererEvent(event);
     return ghostPickerModels();
+  });
+
+  // 自动化「事件」触发的插件来源(仅本机窗口,不进 device-link)。
+  ipcMain.handle('ghosts:event-sources', (event) => {
+    assertTrustedAppRendererEvent(event);
+    return ghostEventSourceCandidates();
   });
 
   // 定时任务 / 例行任务编辑页的插件下拉。

@@ -302,7 +302,7 @@
       "nodeChildSpawnDetail": "Seuls les fichiers JS déclarés dans son propre paquet peuvent être lancés (avec les mêmes autorisations locales que le programme principal) ; aucune commande arbitraire ne peut être exécutée. Les sous-processus sont fermés en même temps lorsque le plugin est désactivé ou se termine.",
       "skill": "Ajoute la skill « {{name}} » à vos assistants IA",
       "skillDetail": "Une skill est un fichier d'instructions que l'IA charge et suit comme les siennes, avec toutes vos autorisations, dans Claude Code et Codex, dans tous les projets. Elle n'est pas confinée au bac à sable de ce plugin. Elle reste disponible tant que le plugin est activé et est retirée lorsque le plugin est désactivé ou désinstallé ; désactiver le plugin pour un seul dossier ne la masque pas. Le texte complet de la skill ne peut pas être prévisualisé ici : n'installez que des plugins de confiance.",
-      "routineEvents": "Événements de routine",
+      "routineEvents": "Événements d'automatisation",
       "mcpUi": "Peut afficher des pages interactives dans les conversations",
       "mcpUiDomains": "Domaines auxquels les pages peuvent se connecter : {{domains}}",
       "uiPageAccess": "Pages : {{pages}}\nDomaines auxquels les pages peuvent se connecter : {{domains}}\nOutils que les pages peuvent appeler : {{tools}}"

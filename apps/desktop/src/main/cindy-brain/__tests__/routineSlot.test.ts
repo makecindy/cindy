@@ -1,16 +1,19 @@
 /**
- * Teammate routines were removed, but installed plugins built for them keep calling the
- * `routine-request` pipe (plugin-security-and-authoring.md §5: upgrades must not break them).
- * The host still validates and bounds each request, then answers it as a no-op.
- * Unit tier: the production slot handler with in-memory plugin facts.
+ * Installed plugins built for teammate routines keep calling the `routine-request` pipe
+ * (plugin-security-and-authoring.md §5: upgrades must not break them). Since 2026-11-23 a published
+ * event is handed to the automations that chose this plugin (docs/product-rules/plugin-event-triggers.md);
+ * the host still validates and bounds each request first and derives the source from the plugin identity.
+ * Unit tier: the production slot handler with in-memory plugin facts and the real hand-off module.
  */
 import { afterEach, expect, it, vi } from 'vitest';
 import type { InstalledGhost } from '../../../shared/ghost.js';
+import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
 import { handleRoutineRequest } from '../routineSlot.js';
+import { pluginEventSourceStatus, resetPluginEventsForTest, setPluginEventSink } from '../../scheduler-host/webhook/pluginEvents.js';
 
 const warn = vi.hoisted(() => vi.fn());
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn }) }));
-afterEach(() => { warn.mockClear(); });
+afterEach(() => { warn.mockClear(); resetPluginEventsForTest(); });
 
 const ghost = {
   enabled: true,
@@ -23,11 +26,33 @@ const ghost = {
 const listening = { action: 'status', status: 'listening' };
 const publish = { action: 'publish', event: { id: 'event', type: 'new', occurredAt: 1, data: { label: 'inbox' } } };
 
-it('answers declared status reports and events as a no-op without any listener', async () => {
-  expect(await handleRoutineRequest(ghost, listening, () => true)).toEqual({ ok: true });
+it('hands declared events to automations under the host-derived source and records listening status', async () => {
+  // No automation host (passive instance or not started): the event was valid, nothing can run it.
   expect(await handleRoutineRequest(ghost, publish, () => true)).toEqual({ ok: true, accepted: 0, duplicate: false });
+  const sink = vi.fn(async () => ({ accepted: 2, duplicate: false }));
+  setPluginEventSink(sink);
+  expect(await handleRoutineRequest(ghost, listening, () => true)).toEqual({ ok: true });
+  expect(pluginEventSourceStatus(installedGhostStoragePart(ghost)).state).toBe('listening');
+  expect(await handleRoutineRequest(ghost, { ...publish, sourceId: 'plugin:someone-else' }, () => true))
+    .toEqual({ ok: true, accepted: 2, duplicate: false });
+  expect(sink).toHaveBeenCalledWith(installedGhostStoragePart(ghost), { id: 'event', type: 'new', occurredAt: 1, data: { label: 'inbox' } });
   expect(await handleRoutineRequest(ghost, { ...publish, event: { ...publish.event, type: 'undeclared' } }, () => true))
     .toEqual({ ok: false, message: 'Event type is undeclared' });
+  expect(await handleRoutineRequest(ghost, publish, () => false)).toEqual({ ok: false, message: 'Plugin owner or installation changed' });
+  expect(sink).toHaveBeenCalledOnce();
+  // A failed durable write is retryable and never leaks the underlying error to the plugin.
+  sink.mockRejectedValueOnce(new Error('/private/path EIO'));
+  expect(await handleRoutineRequest(ghost, publish, () => true)).toEqual({ ok: false, message: 'Routine request failed; please retry later' });
+});
+
+it('rate-limits publishing per plugin before events reach the queue', async () => {
+  const sink = vi.fn(async () => ({ accepted: 1, duplicate: false }));
+  setPluginEventSink(sink);
+  const busy = { ...ghost, manifest: { ...ghost.manifest, id: 'busy-mail' } } as InstalledGhost;
+  for (let i = 0; i < 60; i++) expect((await handleRoutineRequest(busy, publish, () => true)).ok).toBe(true);
+  expect(await handleRoutineRequest(busy, publish, () => true))
+    .toEqual({ ok: false, message: 'Routine request rate limit reached; retry after 60 seconds' });
+  expect(sink).toHaveBeenCalledTimes(60);
 });
 
 it('rejects disabled plugins, missing declarations and stale owners', async () => {

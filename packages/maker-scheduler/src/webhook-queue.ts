@@ -1,4 +1,6 @@
 import type { Schedule, ScheduleWebhookEvent } from './types.js';
+import { pluginEventMatches } from './plugin-events.js';
+import { isManagedWebhookSource } from './webhook-formats.js';
 
 /** Host policy, not user-configurable: bursts from one push collapse and wake at most once per gap. */
 export const SCHEDULE_WEBHOOK_LIMITS = {
@@ -58,6 +60,9 @@ export function scheduleWebhookEventMatches(allowed: readonly string[] | undefin
 
 function matchesTrigger(trigger: Schedule['webhookTrigger'], event: ScheduleWebhookEvent): boolean {
   const source = trigger?.source;
+  // Plugin events only ever match plugin sources, and only from the plugin the user chose.
+  if (source?.preset === 'plugin') return pluginEventMatches(source.sources, event);
+  if (event.source !== undefined) return false;
   return scheduleWebhookEventMatches(trigger?.events, event)
     && (source?.preset !== 'github-app' || source.repositories.some(repo => repo.toLowerCase() === event.repository?.toLowerCase()));
 }
@@ -255,7 +260,7 @@ export class ScheduleWebhookQueue {
           this.discardPending(endpoint);
           return;
         }
-        if (schedule.webhookTrigger?.source?.preset === 'github-app') {
+        if (isManagedWebhookSource(schedule.webhookTrigger?.source)) {
           // Recheck restored data too: earlier test builds persisted unscoped
           // github.reconcile markers that must never bypass selected filters.
           const retained = endpoint.pending.filter(event => matchesTrigger(schedule.webhookTrigger, event));

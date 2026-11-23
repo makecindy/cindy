@@ -45,6 +45,7 @@ import { applyTemplateParams } from '@cindy/maker-scheduler/template-engine';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ScriptCapabilityMultiSelect } from './ScriptCapabilityMultiSelect';
 import { WebhookSourceFields } from './WebhookSourceFields';
+import { usePluginEventSources } from './PluginEventSourceFields';
 import { WebhookAccountManager } from './WebhookAccountManager';
 
 import {
@@ -171,6 +172,10 @@ export function ScheduleFormDialog({
     );
     return () => { current = false; };
   }, []);
+  // 插件事件只在本机交接，不需要账号：有声明了事件的插件时也能选「事件」触发。
+  const pluginEventCandidates = usePluginEventSources();
+  const pluginEventsAvailable = (pluginEventCandidates?.length ?? 0) > 0;
+  const eventTriggerReady = webhookReceiverReady || pluginEventsAvailable;
   const { form, setField, selectModelConfiguration, selectPluginEngine, setDestination, setRunMode, selectBoundSession, applyTemplateAgentFields, reset, toInput, validate } = formApi;
   // "运行会话"三态(fresh / persistent / bound)与心跳形态派生值。
   // hasRealBinding = targetSessionId 为真实会话 id(B 已绑 / C 已选 / MCP 手绑),
@@ -335,7 +340,8 @@ export function ScheduleFormDialog({
     : t('scheduler.editor.promptDialog.create');
   // UI 三选一；manual 仅表示不启用定时，已有组合配置在未切换触发方式时原样保留。
   const triggerMode = form.prEnabled ? 'pr' : form.webhookEnabled ? 'webhook' : form.manual ? 'manually' : 'automatic';
-  const webhookSettingsVisible = !isProjectAutomationMode && webhookReceiverReady && form.webhookEnabled;
+  const webhookSettingsVisible = !isProjectAutomationMode && form.webhookEnabled
+    && (eventTriggerReady || form.webhookPreset === 'plugin');
 
   const initialId = initial?.id;
   useEffect(() => {
@@ -1204,6 +1210,10 @@ export function ScheduleFormDialog({
                             preserveTriggerScrollPosition();
                             if (mode === 'pr' || form.prEnabled) setField('prEnabled', mode === 'pr');
                             setField('webhookEnabled', mode === 'webhook');
+                            // Without an account only plugin events can be received here.
+                            if (mode === 'webhook' && !webhookReceiverReady && pluginEventsAvailable && form.webhookPreset !== 'plugin') {
+                              setField('webhookPreset', 'plugin');
+                            }
                             setField('manual', mode !== 'automatic');
                             setField('recurring', mode !== 'manually');
                           }}
@@ -1211,8 +1221,9 @@ export function ScheduleFormDialog({
                             { value: 'automatic', label: t('scheduler.editor.trigger.timed') },
                             ...(!isProjectAutomationMode ? [{ value: 'pr', label: t('scheduler.prTrigger.label') }] : []),
                             { value: 'manually', label: t('scheduler.editor.fields.manually') },
-                            ...(!isProjectAutomationMode && (webhookReceiverReady || form.webhookEnabled)
-                              ? [{ value: 'webhook', label: t('scheduler.cell.tagWebhook'), disabled: !webhookReceiverReady }]
+                            ...(!isProjectAutomationMode && (eventTriggerReady || form.webhookEnabled)
+                              ? [{ value: 'webhook', label: t('scheduler.editor.trigger.event'),
+                                disabled: !eventTriggerReady && form.webhookPreset !== 'plugin' }]
                               : []),
                           ]}
                         />
@@ -1325,7 +1336,8 @@ export function ScheduleFormDialog({
                         </div>
                       )}
                       {/* 项目配置不保存接收地址；未登录时保留已配置的触发方式。 */}
-                      {webhookSettingsVisible && form.webhookPreset !== 'github-app' && <WebhookAccountManager allowOpenSchedule={false} />}
+                      {webhookSettingsVisible && webhookReceiverReady && form.webhookPreset !== 'github-app' && form.webhookPreset !== 'plugin'
+                        && <WebhookAccountManager allowOpenSchedule={false} />}
                       {webhookSettingsVisible && (
                           <WebhookSourceFields
                             preset={form.webhookPreset ?? DEFAULT_SCHEDULE_WEBHOOK_PRESET}
@@ -1350,6 +1362,10 @@ export function ScheduleFormDialog({
                             }}
                             onSignedChange={(value) => setField('webhookSigned', value)}
                             onFormatChange={(value) => setField('webhookFormat', value)}
+                            pluginSources={form.webhookPluginSources ?? []}
+                            pluginCandidates={pluginEventCandidates}
+                            onPluginSourcesChange={(value) => setField('webhookPluginSources', value)}
+                            addressSourcesAvailable={webhookReceiverReady}
                           />
                       )}
                       {!isScriptMode && (

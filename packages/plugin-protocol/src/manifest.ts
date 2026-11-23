@@ -1061,7 +1061,7 @@ export interface GhostManifest {
    * hooks 非空时 launch 必须为 'resident'(校验强制)。
    */
   subscribe?: GhostSubscribeNeeds;
-  /** Autonomous publishing of declared events into user-configured routines. */
+  /** Autonomous publishing of declared events; they wake automations whose trigger chose this plugin. */
   routineEvents?: GhostRoutineEvents;
   /** Models this plugin may add to the model picker; the list is published at runtime. */
   models?: GhostModelsNeeds;

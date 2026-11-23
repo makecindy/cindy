@@ -1877,8 +1877,9 @@ export interface GhostManifest {
    */
   subscribe?: GhostSubscribeNeeds;
   /**
-   * Declared events for the removed teammate routines. Still parsed so older plugins install;
-   * the host answers their `routine-request` calls as a no-op (cindy-brain/routineSlot.ts).
+   * Events this plugin may publish through `routine-request` (cindy-brain/routineSlot.ts). Originally for
+   * teammate routines; since 2026-11-23 they wake automations whose trigger chose this plugin
+   * (docs/product-rules/plugin-event-triggers.md).
    */
   routineEvents?: GhostRoutineEvents;
   /** Models this plugin may add to the model picker; the list is published at runtime. */
@@ -7369,6 +7370,18 @@ export interface GhostResourceUsageResult {
 export type GhostStartTaskRouteResult =
   | { outcome: 'routed'; pluginName: string; route: GhostModelRoute; modelName: string; reason: string }
   | { outcome: 'kept'; pluginName: string; why: 'no-opinion' | 'failed' | 'unavailable-route'; modelName: string };
+
+/**
+ * 自动化「事件」触发可选的插件来源(Host 界面与 Agent 工具共用)。只含本机已启用、
+ * 声明了 routineEvents 的插件；state 为监听状态(见 scheduler-host/webhook/pluginEvents.ts)。
+ */
+export interface GhostEventSourceCandidate {
+  /** 插件实例 id,任务里保存的就是它(与前置检查相同)。 */
+  plugin: string;
+  name: string;
+  state: 'listening' | 'disconnected' | 'error' | 'stopped' | 'unknown';
+  events: Array<{ type: string; name: string; fields: string[] }>;
+}
 
 /** 任务「前置检查」可选的插件(Host 界面用)。 */
 export interface GhostControlPointCandidate {

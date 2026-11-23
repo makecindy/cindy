@@ -24,7 +24,7 @@ import { getGhostFsSlot, getGhostStorageService } from '../cindy-brain/index.js'
 import { createStorageToolExecutor } from '../cindy-brain/storageToolAccess.js';
 import { getDesktopHostTerminalService } from '../terminal/terminalService.desktop.js';
 import { getDefaultShellPref } from '../terminal/terminalPrefsStore.js';
-import { findGhostForInstanceId } from '../cindy-brain/index.js';
+import { findGhostForInstanceId, ghostEventSourceCandidates } from '../cindy-brain/index.js';
 import { searchGhostRuntimeMemories } from '../cindy-brain/index.js';
 import { getPiKernelManager } from '../agent-binaries/index.js';
 import { PiKernelError } from '../agent-binaries/pi-kernel-manager.js';
@@ -622,6 +622,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       // 仅 description 生成模式需要,tool-call 时才解引用。
       webhookStatus: (schedule) => getScheduleWebhookHost()?.status(schedule) ?? null,
       webhookReceiver: scheduleWebhookReceiver,
+      pluginEventSources: async () => ghostEventSourceCandidates(),
       webhookManagement: {
         list: async () => {
           const host = getScheduleWebhookHost();

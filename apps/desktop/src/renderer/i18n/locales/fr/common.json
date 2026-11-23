@@ -8560,7 +8560,7 @@
         "nodeChildSpawnDetail": "Seuls les fichiers JS déclarés dans son propre paquet peuvent être lancés (avec les mêmes autorisations locales que le programme principal) ; aucune commande arbitraire ne peut être exécutée. Les sous-processus sont fermés en même temps lorsque le plugin est désactivé ou se termine.",
         "skill": "Ajoute la skill « {{name}} » à vos assistants IA",
         "skillDetail": "Une skill est un fichier d'instructions que l'IA charge et suit comme les siennes, avec toutes vos autorisations, dans Claude Code et Codex, dans tous les projets. Elle n'est pas confinée au bac à sable de ce plugin. Elle reste disponible tant que le plugin est activé et est retirée lorsque le plugin est désactivé ou désinstallé ; désactiver le plugin pour un seul dossier ne la masque pas. Le texte complet de la skill ne peut pas être prévisualisé ici : n'installez que des plugins de confiance.",
-        "routineEvents": "Événements de routine",
+        "routineEvents": "Événements d'automatisation",
         "mcpUi": "Afficher des pages interactives dans la conversation",
         "mcpUiDomains": "Domaines accessibles aux pages : {{domains}}",
         "mcpAppOnly": "Page uniquement",
@@ -18154,11 +18154,30 @@
         "cindyConnectionTitle": "GitHub · Connexion via Cindy",
         "manualConnectionTitle": "GitHub · Webhook manuel",
         "githubAppHint": "Connectez GitHub App sur l’ordinateur qui exécute cette tâche et autorisez ces dépôts. Aucune URL Webhook ni clé secrète distincte n’est nécessaire.",
-        "githubAppPaused": "Cette tâche est en pause. Les événements ne la démarreront pas."
+        "githubAppPaused": "Cette tâche est en pause. Les événements ne la démarreront pas.",
+        "plugin": {
+          "source": "Événements de plugins",
+          "label": "Plugins et événements",
+          "empty": "Aucun plugin de cet ordinateur ne fournit encore d'événements. Installez et activez un plugin qui déclare des événements pour le choisir ici.",
+          "unavailable": "Plugin indisponible",
+          "remove": "Retirer",
+          "hint": "Les plugins ne filtrent aucun événement à votre place, pas même les messages envoyés par cette automatisation. Indiquez quoi traiter dans le prompt ou dans une vérification préalable. Les événements sont perdus tant que l'ordinateur est en veille ou éteint, ou que le plugin est désactivé.",
+          "offlineHint": "Les événements sont perdus tant que l'ordinateur est en veille ou éteint, ou que le plugin est désactivé. Si aucun ne doit être manqué, ajoutez aussi une vérification planifiée.",
+          "required": "Choisissez au moins un événement de plugin",
+          "filters": "Conditions sur les champs : {{count}}",
+          "state": {
+            "listening": "À l’écoute",
+            "disconnected": "Déconnecté",
+            "error": "Erreur de connexion",
+            "stopped": "Arrêté",
+            "unknown": "En attente du statut du plugin"
+          }
+        }
       },
       "trigger": {
         "label": "Mode de déclenchement",
-        "timed": "Planifié"
+        "timed": "Planifié",
+        "event": "Événement"
       },
       "runSettings": "Paramètres d’exécution"
     },
@@ -20754,7 +20773,7 @@
   "routines": {
     "hourly": "Toutes les heures",
     "everyMinutes": "Toutes les {{count}} minutes",
-    "pluginCapability": "Publie les événements déclarés vers vos routines. Seules les routines que vous configurez peuvent s'exécuter.",
+    "pluginCapability": "Publie les événements déclarés pour les automatisations. Seules les automatisations qui ont choisi ce plugin peuvent s'exécuter.",
     "advancedSettings": "Paramètres avancés"
   },
   "cindyMakeDoctor": {

@@ -30,6 +30,7 @@ import {
   scheduleWebhookPreset,
   type ScheduleWebhookSource,
 } from '@cindy/maker-scheduler/webhook-formats';
+import type { SchedulePluginEventSource } from '@cindy/maker-scheduler/plugin-events';
 import { parseScheduleDeadline } from '@cindy/maker-shared/schedule-form';
 
 /** Effort 白名单 — 与 Phase 2 mapper enum 一致;UI 提交前的最后一道关卡。 */
@@ -163,6 +164,8 @@ export interface ScheduleFormState {
   webhookSigned?: boolean;
   /** 自定义格式的 JSON 文本，原样保留用户输入。 */
   webhookFormat?: string;
+  /** 插件事件来源（preset=plugin）。界面不编辑字段条件，但原样保留 Agent 设置的 filters。 */
+  webhookPluginSources?: SchedulePluginEventSource[];
   agentKind: 'claude-code' | 'codex' | 'pi';
   modelAgentKind?: 'claude-code' | 'codex' | 'pi';
   /**
@@ -649,7 +652,10 @@ export function scheduleAgentKindForForm(form: ScheduleFormState): ScheduleFormS
 /** 编辑已有任务时，从它的发送方得到表单初值。 */
 export function webhookSourceFormFields(
   source: ScheduleWebhookSource | undefined,
-): Pick<ScheduleFormState, 'webhookPreset' | 'webhookSigned' | 'webhookFormat' | 'webhookRepositories'> {
+): Pick<ScheduleFormState, 'webhookPreset' | 'webhookSigned' | 'webhookFormat' | 'webhookRepositories' | 'webhookPluginSources'> {
+  if (source?.preset === 'plugin') {
+    return { webhookPreset: 'plugin', webhookPluginSources: source.sources.map((item) => ({ ...item })), webhookSigned: true, webhookFormat: '' };
+  }
   if (source?.preset === 'github-app') {
     return { webhookPreset: 'github-app', webhookRepositories: source.repositories.join('\n'), webhookSigned: true, webhookFormat: '' };
   }
@@ -683,6 +689,7 @@ function webhookSourceInput(form: ScheduleFormState): { source?: ScheduleWebhook
   const preset = form.webhookPreset;
   if (preset === undefined) return {};
   if (preset === 'github-app') return { source: { preset, repositories: parseGithubRepositories(form.webhookRepositories) } };
+  if (preset === 'plugin') return { source: { preset, sources: form.webhookPluginSources ?? [] } };
   if (preset === 'custom') {
     const source = parseWebhookFormatText(form.webhookFormat);
     return source ? { source } : {};
@@ -743,7 +750,10 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
     ...(form.webhookEnabled === undefined ? {} : {
       webhookTrigger: form.webhookEnabled
         ? {
-            events: (form.webhookEvents ?? '').split(',').map((name) => name.trim()).filter(Boolean),
+            // Plugin sources choose event types per plugin; the engine rejects a top-level filter.
+            events: form.webhookPreset === 'plugin'
+              ? []
+              : (form.webhookEvents ?? '').split(',').map((name) => name.trim()).filter(Boolean),
             ...webhookSourceInput(form),
           }
         : null,

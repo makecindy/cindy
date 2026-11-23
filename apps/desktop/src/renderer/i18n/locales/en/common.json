@@ -8488,7 +8488,7 @@
         "nodeChildSpawnDetail": "Only JS files declared inside its own package can be started (same local permissions as the main program); arbitrary commands cannot be executed. Sub-processes are closed together when the plugin is disabled or exits.",
         "skill": "Adds the skill “{{name}}” to your AI assistants",
         "skillDetail": "A skill is an instruction file the AI loads and follows as its own, with your full permissions, in Claude Code and Codex, across every project — it is not confined to this plugin's sandbox. It stays available while the plugin is enabled and is removed when the plugin is disabled or uninstalled; turning the plugin off for a single folder does not hide it. The full skill text cannot be previewed here — only install plugins you trust.",
-        "routineEvents": "Routine Events",
+        "routineEvents": "Automation events",
         "mcpUi": "Display interactive pages in the conversation",
         "mcpUiDomains": "Page network domains: {{domains}}",
         "mcpAppOnly": "Page only",
@@ -17988,11 +17988,30 @@
         "cindyConnectionTitle": "GitHub · Via Cindy",
         "manualConnectionTitle": "GitHub · Manual Webhook",
         "githubAppHint": "Connect GitHub App on the computer running this task and authorize these repositories. No separate Webhook URL or secret is needed.",
-        "githubAppPaused": "This task is paused. Events will not start it."
+        "githubAppPaused": "This task is paused. Events will not start it.",
+        "plugin": {
+          "source": "Plugin events",
+          "label": "Plugins and events",
+          "empty": "No plugin on this computer provides events yet. Install and enable a plugin that declares events to choose it here.",
+          "unavailable": "Plugin unavailable",
+          "remove": "Remove",
+          "hint": "Plugins don't filter any events for you, including messages this automation sends itself. Say what to handle in the prompt or a pre-run check. Events are missed while the computer is asleep or off, or while the plugin is disabled.",
+          "offlineHint": "Events are missed while the computer is asleep or off, or while the plugin is disabled. If none may be missed, also add a scheduled check.",
+          "required": "Choose at least one plugin event",
+          "filters": "Field conditions: {{count}}",
+          "state": {
+            "listening": "Listening",
+            "disconnected": "Disconnected",
+            "error": "Connection error",
+            "stopped": "Not running",
+            "unknown": "Waiting for the plugin to report"
+          }
+        }
       },
       "trigger": {
         "label": "Trigger mode",
-        "timed": "Scheduled"
+        "timed": "Scheduled",
+        "event": "Event"
       },
       "runSettings": "Run settings"
     },
@@ -20563,7 +20582,7 @@
   "routines": {
     "hourly": "Hourly",
     "everyMinutes": "Every {{count}} Minutes",
-    "pluginCapability": "Publishes declared events to your routines. Only routines you configure can run.",
+    "pluginCapability": "Publishes declared events to automations. Only automations that chose this plugin can run.",
     "advancedSettings": "Advanced settings"
   },
   "cindyMakeDoctor": {

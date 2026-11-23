@@ -8411,7 +8411,7 @@
         "nodeChildSpawnDetail": "仅能启其包内已申报之 JS 文件(与主程序同等本机权柄)，不能行任意命令；法器禁用或退出时，子处理程序一并关闭。",
         "skill": "为 AI 助手增技艺「{{name}}」",
         "skillDetail": "技艺乃一份指令文件，AI 将视为己之指令加载而行，具君之全部权柄，于 Claude Code 与 Codex、一切案中皆生效——不受本法器沙箱所约。法器启用期间持续可用，禁用或卸除即移除；仅对某卷匣关闭本法器，不能隐之。此处不能先览技艺全文——请仅纳君所信之法器。",
-        "routineEvents": "例行差事事件",
+        "routineEvents": "自动化之事",
         "mcpUi": "可于言谈中示交互页面",
         "mcpUiDomains": "页面可连之网域：{{domains}}",
         "mcpAppOnly": "唯页面可用",
@@ -17914,11 +17914,30 @@
         "cindyConnectionTitle": "GitHub · 经 Cindy 连接",
         "manualConnectionTitle": "GitHub · 手动 Webhook",
         "githubAppHint": "于执行此任务之电脑连接 GitHub App，授权所列仓库，无须另设 Webhook 地址或密钥。",
-        "githubAppPaused": "任务已暂停，事件不启之。"
+        "githubAppPaused": "任务已暂停，事件不启之。",
+        "plugin": {
+          "source": "法器之事",
+          "label": "择法器与事",
+          "empty": "本机尚无能报事之法器。装而启用申明有事之法器，乃可于此择之。",
+          "unavailable": "法器不可用",
+          "remove": "除之",
+          "hint": "法器不代汝滤事，虽此自动化自发之讯亦然；当否处之，宜于提示或前置检查中言明。机寐、机关或法器停用之时，事不可得。",
+          "offlineHint": "机寐、机关或法器停用之时，事不可得；不容遗漏者，宜另设定时之察。",
+          "required": "请至少择一法器之事",
+          "filters": "另有字段之约 {{count}} 条",
+          "state": {
+            "listening": "方听",
+            "disconnected": "已断",
+            "error": "连接有误",
+            "stopped": "未行",
+            "unknown": "待法器报其状"
+          }
+        }
       },
       "trigger": {
         "label": "触发方式",
-        "timed": "定时"
+        "timed": "定时",
+        "event": "事"
       },
       "runSettings": "运行设置"
     },
@@ -20480,7 +20499,7 @@
   "routines": {
     "hourly": "每时",
     "everyMinutes": "每 {{count}} 分",
-    "pluginCapability": "向例行差事呈已声明之事，唯触发君所设之例行差事",
+    "pluginCapability": "向自动化呈已声明之事，唯触发择此法器之自动化",
     "advancedSettings": "高级之设"
   },
   "cindyMakeDoctor": {

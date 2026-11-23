@@ -8488,7 +8488,7 @@
         "nodeChildSpawnDetail": "Nur JS-Dateien, die innerhalb des eigenen Pakets deklariert sind, können gestartet werden (mit denselben lokalen Berechtigungen wie das Hauptprogramm). Beliebige Befehle können nicht ausgeführt werden. Unterprozesse werden gemeinsam beendet, wenn das Plugin deaktiviert wird oder endet.",
         "skill": "Fügt deinen KI-Assistenten den Skill „{{name}}“ hinzu",
         "skillDetail": "Ein Skill ist eine Anweisungsdatei, die die KI in Claude Code und Codex projektübergreifend lädt und wie eigene Anweisungen mit deinen vollen Berechtigungen befolgt – sie ist nicht auf die Sandbox dieses Plugins beschränkt. Der Skill bleibt verfügbar, solange das Plugin aktiviert ist, und wird beim Deaktivieren oder Deinstallieren entfernt. Wenn du das Plugin nur für einen einzelnen Ordner ausschaltest, wird der Skill nicht ausgeblendet. Der vollständige Skill-Text kann hier nicht als Vorschau angezeigt werden – installiere nur Plugins, denen du vertraust.",
-        "routineEvents": "Routineereignisse",
+        "routineEvents": "Automatisierungsereignisse",
         "mcpUi": "Interaktive Seiten in der Unterhaltung anzeigen",
         "mcpUiDomains": "Netzwerkdomains der Seiten: {{domains}}",
         "mcpAppOnly": "Nur Seite",
@@ -17988,11 +17988,30 @@
         "cindyConnectionTitle": "GitHub · Verbindung über Cindy",
         "manualConnectionTitle": "GitHub · Manueller Webhook",
         "githubAppHint": "Verbinde GitHub App auf dem Computer, der diese Aufgabe ausführt, und autorisiere diese Repositorys. Eine eigene Webhook-URL oder ein eigenes Secret ist nicht erforderlich.",
-        "githubAppPaused": "Diese Aufgabe ist pausiert. Ereignisse starten sie nicht."
+        "githubAppPaused": "Diese Aufgabe ist pausiert. Ereignisse starten sie nicht.",
+        "plugin": {
+          "source": "Plugin-Ereignisse",
+          "label": "Plugins und Ereignisse",
+          "empty": "Auf diesem Computer stellt noch kein Plugin Ereignisse bereit. Installiere und aktiviere ein Plugin, das Ereignisse deklariert, um es hier auszuwählen.",
+          "unavailable": "Plugin nicht verfügbar",
+          "remove": "Entfernen",
+          "hint": "Plugins filtern keine Ereignisse für dich, auch nicht Nachrichten, die diese Automatisierung selbst sendet. Lege im Prompt oder in einer Vorabprüfung fest, was bearbeitet werden soll. Solange der Computer schläft oder aus ist oder das Plugin deaktiviert ist, gehen Ereignisse verloren.",
+          "offlineHint": "Solange der Computer schläft oder aus ist oder das Plugin deaktiviert ist, gehen Ereignisse verloren. Wenn nichts verloren gehen darf, füge zusätzlich eine geplante Prüfung hinzu.",
+          "required": "Wähle mindestens ein Plugin-Ereignis aus",
+          "filters": "Feldbedingungen: {{count}}",
+          "state": {
+            "listening": "Hört zu",
+            "disconnected": "Getrennt",
+            "error": "Verbindungsfehler",
+            "stopped": "Läuft nicht",
+            "unknown": "Warte auf Statusmeldung des Plugins"
+          }
+        }
       },
       "trigger": {
         "label": "Auslöseart",
-        "timed": "Zeitgesteuert"
+        "timed": "Zeitgesteuert",
+        "event": "Ereignis"
       },
       "runSettings": "Ausführungseinstellungen"
     },
@@ -20563,7 +20582,7 @@
   "routines": {
     "hourly": "Stündlich",
     "everyMinutes": "Alle {{count}} Minuten",
-    "pluginCapability": "Veröffentlicht deklarierte Ereignisse für deine Routinen. Nur von dir konfigurierte Routinen können ausgeführt werden.",
+    "pluginCapability": "Veröffentlicht deklarierte Ereignisse für Automatisierungen. Nur Automatisierungen, die dieses Plugin ausgewählt haben, können ausgeführt werden.",
     "advancedSettings": "Erweiterte Einstellungen"
   },
   "cindyMakeDoctor": {

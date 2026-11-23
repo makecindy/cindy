@@ -175,6 +175,16 @@ export interface ScheduleWebhookEvent {
   headSha?: string;
   conclusion?: string;
   receivedAt: number;
+  /** 插件事件：宿主根据真实插件身份生成的来源 `plugin:<id>`；Webhook 事件没有。 */
+  source?: string;
+  /** 插件事件：上游发生时间（毫秒）。 */
+  occurredAt?: number;
+  /** 插件事件：插件提交的简短说明，不可信。 */
+  subject?: string;
+  /** 插件事件：插件提交的平坦字段（有界副本），不可信。 */
+  fields?: Record<string, string | number | boolean>;
+  /** 插件事件的字段超出保存预算、有部分被截掉或丢弃。 */
+  fieldsTruncated?: true;
 }
 
 /**
