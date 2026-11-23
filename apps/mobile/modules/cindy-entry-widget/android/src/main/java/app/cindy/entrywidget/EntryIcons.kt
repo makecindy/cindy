@@ -30,11 +30,14 @@ internal object EntryIcons {
       textSize = SIZE * 0.46f
       typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
     }
-    // 伙伴名可能是 emoji 或其它组合字符，取用户看到的第一段而不是第一个 code unit。
-    val points = text.codePoints().toArray()
-    val cluster = if (points.isEmpty()) text else String(points, 0, minOf(points.size, 2))
+    // JS 已经按用户看到的字符切好了一段（ZWJ emoji 也是完整的），这里原样画整段 ——
+    // 再按 code point 截断就会把 `👨‍👩‍👧` 画成 `👨‍`，桌面显示的不再是用户选的头像。
+    // 万一更长，按可用宽度缩字号，而不是切字。
+    val available = SIZE * 0.86f
+    val width = paint.measureText(text)
+    if (width > available) paint.textSize = paint.textSize * available / width
     val metrics = paint.fontMetrics
-    canvas.drawText(cluster, radius, radius - (metrics.ascent + metrics.descent) / 2f, paint)
+    canvas.drawText(text, radius, radius - (metrics.ascent + metrics.descent) / 2f, paint)
     return bitmap
   }
 

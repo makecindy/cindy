@@ -133,8 +133,18 @@ describe('头像回退到字', () => {
     expect(desktopEntryGlyph(avatar, name)).toBe(expected);
   });
 
-  it('头像签名只随头像内容变化', () => {
-    expect(desktopEntryAvatarSignature({ kind: 'media', value: 'a' })).toBe('media:a');
-    expect(desktopEntryAvatarSignature(null)).toBe('');
+  it('头像签名跟着图标真正画出来的东西变', () => {
+    const media = { kind: 'media' as const, value: 'a', fallbackText: '阿' };
+    const signature = desktopEntryAvatarSignature(media, '阿明');
+    expect(desktopEntryAvatarSignature({ ...media }, '阿明')).toBe(signature);
+    // 底色、回退字、名字首字都真的画在图标上，任一变化都要让桌面重算。
+    expect(desktopEntryAvatarSignature({ ...media, color: '#112233' }, '阿明')).not.toBe(signature);
+    expect(desktopEntryAvatarSignature({ ...media, fallbackText: '贝' }, '阿明')).not.toBe(signature);
+    expect(desktopEntryAvatarSignature({ kind: 'media', value: 'a' }, 'bob'))
+      .not.toBe(desktopEntryAvatarSignature({ kind: 'media', value: 'a' }, 'alice'));
+    // 只改电脑名 / 标题以外不改图的内容时不重算：同一位伙伴同一份头像得到同一个签名。
+    expect(desktopEntryAvatarSignature({ kind: 'emoji', value: '🦊' }, '随便什么名字'))
+      .toBe(desktopEntryAvatarSignature({ kind: 'emoji', value: '🦊' }, '另一个名字'));
+    expect(desktopEntryAvatarSignature(null, '   ')).toBe('');
   });
 });

@@ -164,9 +164,16 @@ export function desktopEntryGlyph(
   return first.toUpperCase();
 }
 
-/** 头像内容签名：换了头像就要重新取图，但没换时不重算 base64。 */
+/**
+ * 图标签名：把真正画进图标的东西都算进去 —— 图片来源、回退的字（含走名字首字的情况）
+ * 与圆圈底色。只改名字首字、回退文字或颜色时图标也要重算，否则桌面会一直显示旧字。
+ * 只改电脑名不进来：它不参与图标绘制。
+ */
 export function desktopEntryAvatarSignature(
   avatar: DesktopEntryAvatar | null | undefined,
+  name: string,
 ): string {
-  return avatar ? `${avatar.kind ?? ''}:${avatar.value ?? ''}` : '';
+  const glyph = desktopEntryGlyph(avatar, name);
+  if (!avatar && !glyph) return '';
+  return [avatar?.kind ?? '', avatar?.value ?? '', avatar?.color ?? '', glyph].join(':');
 }

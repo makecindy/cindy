@@ -948,9 +948,12 @@ Android 17 / HyperOS）：系统按契约把 `CONFIRM_PIN_SHORTCUT` 交给桌面
 「Cindy 任务」和每位伙伴在桌面上各是一份 App Widget，由本地模块 `cindy-entry-widget` 的 `android/`
 提供：`EntryWidgetProvider` 画卡片，`EntryConfigActivity` 在添加组件与长按编辑（`widgetFeatures="reconfigurable"`）
 时列出「Cindy 任务」与伙伴。每份组件按 `appWidgetId` 记自己的目标（SharedPreferences `cindy-entry-widget`），
-目标清单与图标由 JS 侧 `useEntryWidgetSync` 写入：图标先落盘再换文件（`noBackupFilesDir/entry-widget-icons`），
-清单原子替换（`entry-widget-targets.json`），桌面重绘时不会读到半份名单。组件自己不联网、不读登录态；
-目标暂时没有时标准卡显示「打开 Cindy 完成设置」，紧凑版显示应用图标。
+目标清单与图标由 JS 侧 `useEntryWidgetSync` 写入（合并 / 清空的队列在 `entryWidgetWriter.ts`）：图标按「目标 + 内容指纹」
+写成新文件（`noBackupFilesDir/entry-widget-icons`），成功换掉快照（`entry-widget-targets.json`）之后才回收不再被引用的
+旧图标 —— 桌面重绘时碰到的要么是旧快照 + 旧图标、要么是新快照 + 新图标，不会读到半张 PNG 或已经被删掉的文件。等头像期间
+名单再变时合并到下一轮补写，不会丢掉最后一次变化。退登（含启动时发现已退登）清空快照并刷新组件，换账号丢掉上一个账号的
+图标缓存，在途的头像结果不再写回 —— 组件自己不联网、不读登录态，账号边界只能在写入侧保证。目标暂时没有时标准卡显示
+「打开 Cindy 完成设置」，紧凑版显示应用图标。
 
 尺寸：默认放上桌面 2×2（Android 12 起由 `targetCellWidth/Height` 决定，旧系统按 `minWidth/minHeight`
 = 110dp），`minResizeWidth/Height` = 40dp，可以一直缩到 1 格，横竖都可拖。版式按启动器报告的
@@ -977,8 +980,9 @@ Kotlin 与资源改动进入 Android runtime fingerprint，需要新原生包；
 `requireOptionalNativeModule` 返回 null，同步整体跳过。
 
 实现：`modules/cindy-entry-widget/`（Android-only）、`src/device-link/desktopEntry{Model,Icon,Intent,Scheme}.ts`、
-`useDesktopEntry{Rows,IconResolver}.ts`、`useEntryWidgetSync.ts`、`DesktopEntryHost.tsx`；回归：
-`desktopEntryModel.test.ts`（目标 ID、深链白名单、标题与图标签名）、`mobileNativeBoundaryContracts.test.ts`
+`useDesktopEntry{Rows,IconResolver}.ts`、`useEntryWidgetSync.ts`、`entryWidgetWriter.ts`、`DesktopEntryHost.tsx`；回归：
+`desktopEntryModel.test.ts`（目标 ID、深链白名单、标题与图标签名）、`entryWidgetWriter.test.ts`（合并补写、退登清空、
+换账号重取图）、`mobileNativeBoundaryContracts.test.ts`
 （三套版式的 view id）。
 
 ### 原则：鼓励为更好体验做原生更新，只拦意外冷更并守住旧包兼容
