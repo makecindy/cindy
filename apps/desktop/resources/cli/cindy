@@ -45,6 +45,12 @@ fi
 # app 的 open-file 管线落成工作目录。`--` 结束选项解析,避免以 - 开头的路径被 open
 # 当成自身选项。
 arg="$1"
+# 相对路径必须从当前目录解析。加 ./ 也能避免 cd 将 - 当成上一个目录，
+# 或让 cd、dirname、basename 将以 - 开头的文件名当成选项。
+case "$arg" in
+  ''|/*) ;;
+  *) arg="./$arg" ;;
+esac
 if [ -d "$arg" ]; then
   abs=$(cd "$arg" >/dev/null 2>&1 && pwd)
 elif [ -e "$arg" ]; then
