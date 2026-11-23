@@ -190,4 +190,29 @@ describe('createAgentNetNode', () => {
     await expect(broken.openSocket('account-a')).rejects.toThrow('KEYRING_LOCKED');
     expect(broken.active()).toBe(true);
   });
+
+  // 「重新加入」(2026-11-23, `cindy-host remote rejoin`): a removed Host's stored certificate is revoked but unexpired, so an
+  // ordinary enrollment returns it and never asks again. Rejoin enrolls whatever the expiry with `rejoin: true`, keeps the keys,
+  // lets Agent-Net run again and never hands back the revoked certificate when it fails; off and never joined, nothing to lift.
+  it('rejoins whatever the certificate expiry, clears the refusal, and never falls back to the revoked certificate', async () => {
+    const { state, ports } = fixture();
+    const bodies: Array<{ rejoin?: unknown }> = [];
+    const enroll = ports.enroll;
+    ports.enroll = async (base, body) => { bodies.push(body as { rejoin?: unknown }); return enroll(base, body); };
+    state.enabled = false;
+    expect(await createAgentNetNode(ports).rejoin()).toBe('skipped');
+    expect(state.enrollments).toBe(0);
+    state.enabled = true;
+    const node = createAgentNetNode(ports);
+    const joined = await node.member();
+    node.noteIdentityRefused('relay closed 4410');
+    expect(node.active()).toBe(false);
+    expect(await node.rejoin()).toBe('rejoined');
+    expect(node.active()).toBe(true);
+    expect(bodies.map((body) => body.rejoin)).toEqual([undefined, true]);
+    expect((await node.member()).identity.signingKey).toBe(joined.identity.signingKey);
+    expect(state.enrollments).toBe(2);
+    state.failEnrollment = true;
+    await expect(node.rejoin()).rejects.toThrow('ENROLLMENT_SERVICE_UNAVAILABLE');
+  });
 });
