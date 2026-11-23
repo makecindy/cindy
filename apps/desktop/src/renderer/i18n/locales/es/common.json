@@ -5477,6 +5477,29 @@
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 flash",
         "cindyQwen38Flash": "Qwen 3.8 Flash"
+      },
+      "health": {
+        "configTitle": "No hay ningún modelo auxiliar disponible",
+        "configDescription": "Afecta al nombrado automático de tareas, los resúmenes de tareas fijadas, la ayuda y las tareas de complementos, como la traducción de subtítulos. Corrige los problemas siguientes o elige otros modelos disponibles en Personalizado.",
+        "runtimeTitle": "Las últimas solicitudes a los modelos auxiliares fallaron",
+        "runtimeDescription": "Puede que la red o el servicio no estén disponibles temporalmente. Este aviso desaparece solo cuando las solicitudes vuelven a funcionar. Si sigue apareciendo, elige otros modelos disponibles en Personalizado.",
+        "fallback": "Las tareas de complementos usan temporalmente {{model}} con una intensidad de razonamiento menor, lo que puede ser más lento y consumir más cuota.",
+        "candidate": "{{model}}: {{reason}}",
+        "openProviders": "Abrir proveedores",
+        "customize": "Personalizar modelos auxiliares",
+        "issues": {
+          "signed_out": "Hay que iniciar sesión en Cindy",
+          "provider_disabled": "Proveedor desactivado",
+          "model_disabled": "Modelo desactivado",
+          "payment_required": "No lo incluye tu plan o saldo",
+          "no_credential": "Falta el inicio de sesión o la clave",
+          "unavailable": "Actualmente no disponible"
+        },
+        "toast": {
+          "config": "No hay ningún modelo auxiliar disponible. Afecta al nombrado de tareas, los resúmenes y las tareas de complementos, como la traducción de subtítulos.",
+          "runtime": "Las últimas solicitudes a los modelos auxiliares fallaron. Puede afectar al nombrado de tareas, los resúmenes y las tareas de complementos, como la traducción de subtítulos.",
+          "open": "Abrir configuración"
+        }
       }
     },
     "compaction": {

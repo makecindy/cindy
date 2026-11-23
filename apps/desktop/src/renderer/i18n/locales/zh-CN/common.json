@@ -5376,6 +5376,29 @@
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 Flash",
         "cindyQwen38Flash": "Qwen 3.8 Flash"
+      },
+      "health": {
+        "configTitle": "辅助模型都不可用",
+        "configDescription": "任务自动命名、置顶任务摘要、Help 和插件任务（如字幕翻译）等功能会受影响。修复下列问题，或自定义其他可用的模型。",
+        "runtimeTitle": "辅助模型最近多次请求失败",
+        "runtimeDescription": "可能是网络或服务暂时异常，恢复后此提示会自动消失。如果一直出现，可以自定义其他可用的模型。",
+        "fallback": "插件任务已临时改用 {{model}}，并使用较低的推理强度，可能更慢、消耗更多配额。",
+        "candidate": "{{model}}：{{reason}}",
+        "openProviders": "打开模型供应商",
+        "customize": "自定义辅助模型",
+        "issues": {
+          "signed_out": "需要登录 Cindy",
+          "provider_disabled": "供应商已停用",
+          "model_disabled": "模型已停用",
+          "payment_required": "当前套餐或余额不支持",
+          "no_credential": "缺少登录信息或密钥",
+          "unavailable": "当前不可用"
+        },
+        "toast": {
+          "config": "辅助模型都不可用，任务命名、摘要和字幕翻译等插件任务会受影响。",
+          "runtime": "辅助模型最近多次请求失败，任务命名、摘要和字幕翻译等插件任务可能受影响。",
+          "open": "去设置"
+        }
       }
     },
     "compaction": {

@@ -5376,6 +5376,29 @@
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 Flash",
         "cindyQwen38Flash": "Qwen 3.8 Flash"
+      },
+      "health": {
+        "configTitle": "輔佐模型皆不可用",
+        "configDescription": "差事自動命名、置頂差事摘要、Help 與法器差事（如字幕翻譯）皆受其累。請治下列諸弊，或於自擬中擇他可用之模型。",
+        "runtimeTitle": "輔佐模型近屢請而敗",
+        "runtimeDescription": "或網路、或服務暫有不諧，復常則此示自去。若久而不去，可於自擬中擇他可用之模型。",
+        "fallback": "法器差事暫改用 {{model}}，思之深淺從淺，或稍遲、所耗限額稍多。",
+        "candidate": "{{model}}：{{reason}}",
+        "openProviders": "啟模型供方",
+        "customize": "自擬輔佐模型",
+        "issues": {
+          "signed_out": "須登門 Cindy",
+          "provider_disabled": "供方已停",
+          "model_disabled": "模型已停",
+          "payment_required": "今之方案或餘額不及",
+          "no_credential": "缺登門之憑或金鑰",
+          "unavailable": "今不可用"
+        },
+        "toast": {
+          "config": "輔佐模型皆不可用，差事命名、摘要與字幕翻譯等法器差事皆受其累。",
+          "runtime": "輔佐模型近屢請而敗，差事命名、摘要與字幕翻譯等法器差事或受其累。",
+          "open": "往規制"
+        }
       }
     },
     "compaction": {

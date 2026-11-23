@@ -247,6 +247,7 @@ import type {
   AuxiliaryModelSettingsPatch,
   AuxiliaryModelSettingsState,
 } from '../shared/auxiliaryModelSettings';
+import type { AuxiliaryModelHealth } from '../shared/auxiliaryModelHealth';
 import {
   isModelVisibilityLegacyOwnerClaim,
   type ModelVisibilityLegacyOwnerClaim,
@@ -8200,6 +8201,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       patch: AuxiliaryModelSettingsPatch,
     ): Promise<AuxiliaryModelSettingsState> =>
       ipcRenderer.invoke('maker:auxiliary-model-settings:set', patch),
+    /** Whether any auxiliary model can run now; changes arrive as app-settings section `auxiliary-model-health`. */
+    auxiliaryModelHealthGet: (): Promise<AuxiliaryModelHealth> =>
+      ipcRenderer.invoke('maker:auxiliary-model-health:get'),
 
     // Agent 资源占用治理(命令并发上限/进程优先级/工具链限核)。
     // 并发上限即刻生效;优先级降档对在跑 agent 进程约 15s 内生效(watcher 轮询);

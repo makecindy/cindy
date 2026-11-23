@@ -5477,6 +5477,29 @@
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 flash",
         "cindyQwen38Flash": "Qwen 3.8 Flash"
+      },
+      "health": {
+        "configTitle": "Aucun modèle auxiliaire n’est disponible",
+        "configDescription": "Le nommage automatique des tâches, les résumés des tâches épinglées, l’Aide et les tâches de plugins comme la traduction des sous-titres sont concernés. Corrigez les problèmes ci-dessous ou choisissez d’autres modèles disponibles sous Personnalisé.",
+        "runtimeTitle": "Les dernières requêtes aux modèles auxiliaires ont échoué",
+        "runtimeDescription": "Le réseau ou le service est peut-être temporairement indisponible. Cet avis disparaît de lui-même dès que les requêtes aboutissent. S’il persiste, choisissez d’autres modèles disponibles sous Personnalisé.",
+        "fallback": "Les tâches de plugins utilisent temporairement {{model}} avec un effort de raisonnement plus faible, ce qui peut être plus lent et consommer davantage de quota.",
+        "candidate": "{{model}} : {{reason}}",
+        "openProviders": "Ouvrir les fournisseurs",
+        "customize": "Personnaliser les modèles auxiliaires",
+        "issues": {
+          "signed_out": "Connexion à Cindy requise",
+          "provider_disabled": "Fournisseur désactivé",
+          "model_disabled": "Modèle désactivé",
+          "payment_required": "Non inclus dans votre forfait ou votre solde",
+          "no_credential": "Connexion ou clé manquante",
+          "unavailable": "Actuellement indisponible"
+        },
+        "toast": {
+          "config": "Aucun modèle auxiliaire n’est disponible. Le nommage des tâches, les résumés et les tâches de plugins comme la traduction des sous-titres sont concernés.",
+          "runtime": "Les dernières requêtes aux modèles auxiliaires ont échoué. Le nommage des tâches, les résumés et les tâches de plugins comme la traduction des sous-titres peuvent être concernés.",
+          "open": "Ouvrir les paramètres"
+        }
       }
     },
     "compaction": {
