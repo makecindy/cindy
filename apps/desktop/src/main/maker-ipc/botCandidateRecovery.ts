@@ -1,6 +1,6 @@
 import { isNetworkishErrorMessage, isOverloadErrorMessage } from '@cindy/maker-core';
 import { extractNonSecretErrorSignals, matchesDeterministicUsageExhaustionText } from '@cindy/maker-shared/error-redaction';
-import { isRemoteAgentRouteLostReason, type InterruptedTurnErrorSignals } from './interruptedTurnAutoResume.js';
+import { isInterruptedTurnError, isRemoteAgentRouteLostReason, type InterruptedTurnErrorSignals } from './interruptedTurnAutoResume.js';
 import { isBillingDepletionError } from '../../shared/usageLimitRecovery.js';
 
 /** A model-specific rate limit leaves other models on the connection available. */
@@ -48,6 +48,55 @@ export function isBotCandidateUnavailable(signals: InterruptedTurnErrorSignals):
   const sessionLimit = (!tag || tag === 'unknown') && /\byou['’]ve hit your session limit\b/i.test(message);
   return sessionLimit || isNetworkishErrorMessage(message) || isOverloadErrorMessage(message, signals.errorStatus)
     || /invalid api key|missing bearer token|no available oauth accounts|credit balance too low|rate.limit exceeded|model.{0,80}(?:not found|does not exist|unavailable)|(?:failed to (?:start|spawn)|could not start) (?:the )?(?:agent|pi|codex|claude)/i.test(message);
+}
+
+/**
+ * How a model group answers a failed turn (model-groups.md §4.1):
+ * - `transient`: retry on the same source first; switch only after two same-source retries failed.
+ * - `model`: this model on this source can't serve; switch now, other models on the connection stay candidates.
+ * - `connection`: the whole connection (account, quota, login) can't serve; switch now and skip every model on it.
+ * `null`: switching would not help (or the failure is not a provider failure); leave it to the existing handling.
+ */
+export type ModelGroupFailureScope = 'transient' | 'model' | 'connection';
+
+/** Same-source retries a transient failure gets before the model group switches source (model-groups.md §4.1). */
+export const MODEL_GROUP_SAME_SOURCE_RETRIES = 2;
+
+export function modelGroupFailureScope(signals: InterruptedTurnErrorSignals): ModelGroupFailureScope | null {
+  const reason = signals.reason ?? '';
+  // A stream the provider cut mid-reply after its own retries, and an ACP agent's quota, are not in the
+  // candidate list above but are exactly what another source fixes.
+  if (reason === 'acp-usage-limit') return 'connection';
+  if (reason === 'upstream-stream-interrupted') return 'model';
+  if (!isBotCandidateUnavailable(signals)) return null;
+  const message = signals.message ?? '';
+  const tag = signals.sdkError ?? '';
+  if (isModelGroupConnectionOutOfCredit(signals)
+    || signals.usageLimit === true || signals.codexErrorInfo === 'usageLimitExceeded'
+    || matchesDeterministicUsageExhaustionText(message)
+    || ['provider_quota_limit', 'provider_auth_or_access', 'acp-auth-required'].includes(reason)
+    || ['authentication_failed', 'authentication_error', 'billing_error'].includes(tag)
+    || signals.errorStatus === 401
+    || /invalid api key|missing bearer token|no available oauth accounts|\byou['’]ve hit your session limit\b/i.test(message)) {
+    return 'connection';
+  }
+  if (isInterruptedTurnError(signals)
+    || ['provider_server_error', 'provider_rate_limit', 'upstream-overload', 'empty-response'].includes(reason)
+    || ['server_error', 'rate_limit'].includes(tag)
+    || [429, 500, 502, 503, 504, 529].includes(signals.errorStatus ?? 0)) {
+    return 'transient';
+  }
+  return 'model';
+}
+
+/**
+ * A model-group task's failed turn (model-groups.md §4). `retrySameSource`: a transient failure still within its
+ * same-source retries; `accountUnavailable`: the whole connection failed, so skip every model on it.
+ */
+export interface ModelGroupRecovery {
+  retrySameSource?: boolean;
+  accountUnavailable: boolean;
+  hasImages: boolean;
 }
 
 /** The Session reference is only a teardown lease, never proof that a route changed. */

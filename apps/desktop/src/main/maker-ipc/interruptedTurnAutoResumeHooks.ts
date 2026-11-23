@@ -9,7 +9,10 @@ import {
   type InterruptedTurnAutoResumeGuard,
   type InterruptedTurnErrorSignals,
 } from './interruptedTurnAutoResume.js';
-import { BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON, isBotCandidateUnavailable, isModelGroupConnectionOutOfCredit, canResumeAfterRuntimeFallback, type RuntimeFallbackResult } from './botCandidateRecovery.js';
+import {
+  BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON, MODEL_GROUP_SAME_SOURCE_RETRIES, canResumeAfterRuntimeFallback, isBotCandidateUnavailable,
+  modelGroupFailureScope, type ModelGroupRecovery, type RuntimeFallbackResult,
+} from './botCandidateRecovery.js';
 import { isAccountUsageLimitError } from './usageLimitAutoResume.js';
 
 type Hook<K extends keyof AgentInputCoordinatorDeps> = NonNullable<AgentInputCoordinatorDeps[K]>;
@@ -47,7 +50,7 @@ export interface InterruptedTurnAutoResumeHookPorts<RuntimeSession extends objec
     attemptToken: number,
     requireRouteChange: boolean,
     isCurrent: () => boolean,
-    groupRecovery?: { accountUnavailable: boolean; hasImages: boolean },
+    groupRecovery?: ModelGroupRecovery,
   ): Promise<RuntimeFallbackResult<RuntimeSession>>;
   pendingSessionRuntimeFallbackRebuilds: { delete(session: RuntimeSession): unknown };
   providerGroupHeldErrors: { stash(sessionId: string, holdId: number, detail: unknown): void };
@@ -87,7 +90,13 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
       : signals.reason === 'session_event_loop_crashed'
       ? !!item && workerInputs?.has(item.createOpts) === true && isUnexpectedWorkerStreamEnd(signals)
       : isInterruptedTurnError(signals) ||
-        (!!item && (botFallbackInputs.has(item.createOpts) || modelGroupInputs?.has(item.createOpts) === true) && isBotCandidateUnavailable(signals));
+        (!!item && botFallbackInputs.has(item.createOpts) && isBotCandidateUnavailable(signals)) ||
+        (!!item && modelGroupInputs?.has(item.createOpts) === true && modelGroupFailureScope(signals) !== null);
+  /**
+   * The episode attempt at which each session last switched source through its model group. A transient failure
+   * counts its same-source retries from there, so a new source gets its own retries before the group moves on.
+   */
+  const modelGroupSwitchedAt = new Map<string, number>();
   const hooks: {
     onResumableTurnErrorDiscarded: Hook<'onResumableTurnErrorDiscarded'>;
     onResumableTurnError: Hook<'onResumableTurnError'>;
@@ -120,12 +129,16 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
     ) => {
       if (!canRecoverTurn(signals, item) || inputCoordinator.isExecutionPaused(sessionId)) return null;
       const modelGroupInput = modelGroupInputs?.has(item.createOpts) === true;
-      const configuredInput = modelGroupInput || botFallbackInputs.has(item.createOpts);
-      const requireRouteChange = configuredInput && isBotCandidateUnavailable(signals);
+      // model-groups.md §4.1: a source problem switches now; a transient one retries the same source first.
+      const groupScope = modelGroupInput ? modelGroupFailureScope(signals) : null;
+      const groupSwitchesNow = groupScope === 'model' || groupScope === 'connection';
+      const requireRouteChange = modelGroupInput
+        ? groupSwitchesNow
+        : botFallbackInputs.has(item.createOpts) && isBotCandidateUnavailable(signals);
       const reportPreparation = signals.reason === 'orca-report-preparation';
       const localPreparation = signals.reason === 'scheduler-snapshot-preparation';
       const startupAdmission = signals.reason === BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON;
-      const sameRouteRetryable = reportPreparation || localPreparation || isInterruptedTurnError(signals);
+      const sameRouteRetryable = reportPreparation || localPreparation || isInterruptedTurnError(signals) || groupScope === 'transient';
       const erroredAt = Date.now();
       const decision = interruptedTurnAutoResumeGuard.onInterruptedTurn(sessionId, erroredAt);
       if (decision.action !== 'resume') {
@@ -148,6 +161,11 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
       // saveTurnStartedAtForDeferred 与 isRemoteAuthRetry 同款 —— 补落时 turn 开始时刻
       // 已被 resetTurnPersistState 清掉,不先存一份会让 /clear 竞态 cap 判错。
       saveTurnStartedAtForDeferred(sessionId);
+      // A new episode (the user stepped in) starts the count again.
+      const switchedAt = modelGroupSwitchedAt.get(sessionId) ?? 0;
+      const sameSourceFailures = decision.episodeAttempt > switchedAt ? decision.episodeAttempt - switchedAt : decision.episodeAttempt;
+      if (decision.episodeAttempt <= switchedAt) modelGroupSwitchedAt.delete(sessionId);
+      const groupSwitch = groupSwitchesNow || (groupScope === 'transient' && sameSourceFailures > MODEL_GROUP_SAME_SOURCE_RETRIES);
       log.info('interrupted-turn auto-resume scheduled', {
         sessionId,
         attempt: decision.attempt,
@@ -177,7 +195,8 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
       autoResumeBookkeeping.schedule(
         sessionId,
         decision.attemptToken,
-        decision.delayMs,
+        // A source problem is not waited out: the next source takes the turn at once.
+        groupSwitchesNow ? 0 : decision.delayMs,
         (attempt) => {
           return (async () => {
             let fallbackRebuildSession: RuntimeSession | null = null;
@@ -207,11 +226,13 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
                     ? () => ownsAttempt() && !inputCoordinator.isExecutionPaused(sessionId)
                     : isCurrent,
                   ...(modelGroupInput ? [{
-                    accountUnavailable: isModelGroupConnectionOutOfCredit(signals),
+                    retrySameSource: !groupSwitch,
+                    accountUnavailable: groupScope === 'connection',
                     hasImages: item.files?.some(file => file.category === 'image') === true,
                   }] as const : []),
                 );
               fallbackRebuildSession = fallback.session;
+              if (modelGroupInput && fallback.outcome === 'switched') modelGroupSwitchedAt.set(sessionId, decision.episodeAttempt);
               if (!mayContinue()) return;
               if (!canResumeAfterRuntimeFallback(requireRouteChange, fallback, sameRouteRetryable)) {
                 interruptedTurnAutoResumeGuard.noteResumeSendFailed(sessionId, decision.attemptToken);

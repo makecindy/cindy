@@ -5,7 +5,9 @@ import { sessions } from '../localDb/schema.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import { withRehydrateCloseSuppressed } from '../maker-host/rehydrateCloseSuppression.js';
 import type { getDesktopProviderService as getProviderServiceType } from '../maker-host/createDesktopProviderService.js';
-import type { RuntimeFallbackResult } from './botCandidateRecovery.js';
+import type { ModelGroupRecovery, RuntimeFallbackResult } from './botCandidateRecovery.js';
+
+export type { ModelGroupRecovery } from './botCandidateRecovery.js';
 import { hasExplicitSessionTaskModel } from './botDelegationHistory.js';
 import { isRemoteModelSwitchRouteChangeError } from './runtimeSetModel.js';
 import type { MakerSessionAgentSwitchHandlerDeps } from './sessionAgentSwitchHandler.js';
@@ -66,7 +68,7 @@ export interface SessionRuntimeFallbackPorts<RuntimeSession extends { agentKind:
     candidate: FallbackRouteProfile | null;
     routeLocked?: boolean;
   }>;
-  readModelGroupFallbackCandidate?(sessionId: string, current: SessionRuntimeProfile, visited: readonly string[], recovery: { accountUnavailable: boolean; hasImages: boolean }, generation: number): Promise<{
+  readModelGroupFallbackCandidate?(sessionId: string, current: SessionRuntimeProfile, visited: readonly string[], recovery: ModelGroupRecovery, generation: number): Promise<{
     candidate: SessionRuntimeProfile | null;
     bindCommittedRoute?(profile: SessionRuntimeProfile): void;
   } | null>;
@@ -107,7 +109,7 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
     attemptToken: number,
     requireRouteChange = false,
     isCurrent: () => boolean = () => true,
-    groupRecovery?: { accountUnavailable: boolean; hasImages: boolean },
+    groupRecovery?: ModelGroupRecovery,
   ): Promise<RuntimeFallbackResult<RuntimeSession>> => {
     const runtimeOwnerEpoch = captureSessionRuntimeControlOwnerEpoch();
     let runtimeSession: RuntimeSession | null = null;
@@ -152,6 +154,9 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
       const explicitTaskModel = await hasExplicitSessionTaskModel(sessionId);
       if (!isCurrent()) return { session: null, outcome: 'superseded' };
       if (explicitTaskModel) return { session: null, outcome: requireRouteChange ? 'exhausted' : 'unchanged' };
+      // A model group's transient failure gets its same-source retries first (model-groups.md §4.1); never the
+      // catalog-guessed fallback of ordinary tasks.
+      if (groupRecovery?.retrySameSource) return { session: null, outcome: 'unchanged' };
       // Bot routes are explicit and ordered. They switch on the first recoverable
       // failure and never depend on the generic Session fallback toggle/catalog
       // guesser. Ordinary Sessions keep their existing second-attempt behavior.
