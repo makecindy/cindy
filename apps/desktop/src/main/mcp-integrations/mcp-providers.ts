@@ -1387,8 +1387,13 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           const runtime = activeCompanionCloud();
           if (!runtime) return { ok: false, errorCode: 'NOT_ENABLED', message: 'Cloud companions are not available on this server' };
           const result = await runtime.switchHome(teammateId, targetDeviceId, whenBusy ? { whenBusy } : undefined);
-          return result.ok ? { ok: true, teammateId, homeDeviceId: targetDeviceId }
-            : { ok: false, errorCode: result.code, message: `The buddy did not move (${result.code})` };
+          if (result.ok) return { ok: true, teammateId, homeDeviceId: targetDeviceId };
+          if (result.code === 'SKILL_TARGET_OUTDATED') {
+            const skill = result.oversizedSkill;
+            const reason = skill ? `Skill "${skill.slug}" has a ${skill.bodyBytes}-byte body, above the target's 64 KiB limit.` : "A skill exceeds the target's 64 KiB limit.";
+            return { ok: false, errorCode: result.code, message: `${reason} The buddy is still on its original computer. Update Cindy on the target computer and retry.` };
+          }
+          return { ok: false, errorCode: result.code, message: `The buddy did not move (${result.code})` };
         },
       },
       botProfiles: {

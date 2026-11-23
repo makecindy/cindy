@@ -12260,6 +12260,8 @@
       "transferBusy": "{{name}}이(가) 아직 답장 중입니다. 답장이 끝난 뒤 옮겨 주세요",
       "targetUnavailable": "“{{device}}”은(는) 지금 사용할 수 없습니다. 온라인 상태이고 원격 제어가 켜져 있어야 합니다",
       "targetOutdated": "“{{device}}”의 Cindy가 이전 버전이라 아직 “{{name}}”을(를) 실행할 수 없습니다. 먼저 그 컴퓨터에서 Cindy를 업데이트하세요",
+      "skillTargetOutdated": "“{{name}}”에 본문이 64 KB를 초과하는 스킬이 있어 “{{device}}”의 이전 버전 Cindy가 받을 수 없습니다. 해당 컴퓨터의 Cindy를 업데이트한 후 동반자를 옮기세요. 동반자는 기존 컴퓨터에 그대로 있습니다",
+      "skillTargetOutdated_skill": "“{{device}}”의 이전 버전 Cindy는 “{{slug}}” 스킬을 받을 수 없습니다. 본문이 {{bodyBytes, number}}바이트로 64 KB 제한을 초과합니다. “{{name}}”은 기존 컴퓨터에서 계속 실행 중입니다. 대상 컴퓨터에서 Cindy를 업데이트한 후 다시 시도하세요.",
       "targetOutdatedItem": "“{{device}}”(으)로 옮기기 · 이전 버전 Cindy",
       "targetOutdatedMeta": "이전 버전 Cindy",
       "olderTargetNote": "“{{device}}”의 Cindy가 이전 버전이라 {{name}}은(는) 그곳에서 기존 방식으로 동작합니다. 채팅 기록은 계속 동기화되지만 프로젝트 규칙과 자동화는 그곳에서 적용되지 않습니다.",

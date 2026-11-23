@@ -957,6 +957,8 @@
     "timeout": "「{{device}}」の準備がまだ終わっていません。そのパソコンで Cindy が開いていてオンラインか確認して、もう一度お試しください。",
     "conflict": "{{name}} はすでに「{{device}}」に移っています。",
     "switchFailed": "メインのパソコンを変更できません。しばらくしてからもう一度お試しください。",
+    "skillTargetOutdated": "「{{name}}」には本文が 64 KB を超えるスキルがあるため、「{{device}}」の古い Cindy では受け取れません。先にそのパソコンの Cindy を更新してから移してください。仲間は元のパソコンに残っています",
+    "skillTargetOutdated_skill": "「{{device}}」の古い Cindy では、スキル「{{slug}}」を受け取れません。本文が {{bodyBytes, number}} バイトあり、上限の 64 KB を超えています。「{{name}}」は元のパソコンで引き続き動作しています。移行先の Cindy を更新してから、もう一度お試しください。",
     "unknownDevice": "別のパソコン",
     "runsOn": "「{{device}}」で実行中",
     "homeTitle": "メインのパソコン",

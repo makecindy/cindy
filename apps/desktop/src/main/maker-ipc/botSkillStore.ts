@@ -239,8 +239,6 @@ export function patchCustomBotSkillSource(source: string,
     return section !== 'metadata' || !['displayName', 'updatedAt'].includes(key);
   });
   if (!custom) return null;
-  if (Buffer.byteLength(edit.body.trim(), 'utf8') > BOT_SKILL_MAX_BODY_BYTES)
-    throw new BotSkillStoreError('SKILL_BODY_TOO_LARGE', 'Skill body too large');
   const unsupported = () => new BotSkillStoreError('INVALID_ARGS', 'This skill keeps a multi-line description or metadata; edit it in its SKILL.md');
   const at = lines.findIndex((line) => line.startsWith('description:'));
   const current = at < 0 ? '' : lines[at].slice('description:'.length);
@@ -267,7 +265,10 @@ export function patchCustomBotSkillSource(source: string,
       end++;
     }
   }
-  return `---\n${lines.join('\n')}\n---\n\n${edit.body.trim()}\n`;
+  const patched = `---\n${lines.join('\n')}\n---\n\n${edit.body.trim()}\n`;
+  if (Buffer.byteLength(parseBotSkillFile(patched).body, 'utf8') > BOT_SKILL_MAX_BODY_BYTES)
+    throw new BotSkillStoreError('SKILL_BODY_TOO_LARGE', 'Skill body too large');
+  return patched;
 }
 
 /** 解析 SKILL.md。frontmatter 缺失或残缺时尽力而为,不抛 —— 手写的技能也要能列出来。 */

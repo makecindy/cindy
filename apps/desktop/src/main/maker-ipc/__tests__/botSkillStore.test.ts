@@ -383,12 +383,13 @@ describe('verbatim SKILL.md (cloud companions)', () => {
   // include a short multibyte string over 64 KiB to protect byte (not character) counting.
   it.each([
     { label: 'boundary', body: 'x'.repeat(BOT_SKILL_MAX_BODY_BYTES), accepted: true },
+    { label: 'Windows newlines', body: 'x\r\n'.repeat(26_000) + 'x', accepted: true },
     { label: 'oversized', body: 'x'.repeat(BOT_SKILL_MAX_BODY_BYTES + 1), accepted: false },
     { label: 'multibyte', body: '界'.repeat(Math.ceil(BOT_SKILL_MAX_BODY_BYTES / 3)), accepted: false },
   ])('keeps the custom skill edit limit ($label)', ({ body, accepted }) => {
     const source = '---\nname: brew\ndescription: Brew\nlicense: MIT\n---\n\nsteps\n';
     const edit = () => patchCustomBotSkillSource(source, { name: 'brew', description: 'Brew', body, updatedAt: '2026-11-23' });
-    if (accepted) expect(parseBotSkillFile(edit()!).body).toBe(body);
+    if (accepted) expect(parseBotSkillFile(edit()!).body).toBe(body.replace(/\r\n/g, '\n'));
     else expect(edit).toThrow(expect.objectContaining({ errorCode: 'SKILL_BODY_TOO_LARGE' }));
   });
 

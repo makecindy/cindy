@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { COMPANION_CLOUD_VERSION } from '@cindy/device-link';
 import type { DeviceLinkDeviceView } from '../../../shared/deviceLinkIpc.js';
+import type { CompanionCloudActionResult } from '../../../shared/companionCloud.js';
 import { createCompanionHomeRegistry } from '../homes.js';
 import { restoreCloudAvatar } from '../avatarRestore.js';
 import { readTranscriptPage } from '../room.js';
@@ -979,15 +980,15 @@ describe('transfer', () => {
   // including unchanged uploads and edits during the final flush.
   it.each([
     { peer: 'current', version: COMPANION_CLOUD_VERSION, storeEnabled: true },
-    { peer: 'old without store reader', version: 2, storeEnabled: true, failure: 'TARGET_OUTDATED' },
-    { peer: 'old with store reader', version: 4, storeEnabled: true, failure: 'TARGET_OUTDATED' },
+    { peer: 'old without store reader', version: 2, storeEnabled: true, failure: 'SKILL_TARGET_OUTDATED' },
+    { peer: 'old with store reader', version: 4, storeEnabled: true, failure: 'SKILL_TARGET_OUTDATED' },
     { peer: 'current without server store', version: COMPANION_CLOUD_VERSION, storeEnabled: false, failure: 'FAILED' },
     { peer: 'old at body limit', version: 4, storeEnabled: true, content: 'x'.repeat(65_536) },
     { peer: 'old with large frontmatter', version: 4, storeEnabled: true, content: `---\r\nname: large\r\ndescription: ${'x'.repeat(71_560)}\r\n---\r\n\r\nsmall\r\n` },
-    { peer: 'old with multibyte body', version: 4, storeEnabled: true, content: '界'.repeat(21_846), failure: 'TARGET_OUTDATED' },
-    { peer: 'old after background upload', version: 4, storeEnabled: true, preflush: true, failure: 'TARGET_OUTDATED' },
-    { peer: 'old with edit during flush', version: 4, storeEnabled: true, editDuringFlush: true, failure: 'TARGET_OUTDATED' },
-  ])('hands large content only to a capable peer ($peer)', async ({ version, storeEnabled, failure, content, preflush, editDuringFlush }) => {
+    { peer: 'old with multibyte body', version: 4, storeEnabled: true, content: `---\nname: large\n---\n${'界'.repeat(21_846)}\n`, failure: 'SKILL_TARGET_OUTDATED', bodyBytes: 65_538 },
+    { peer: 'old after background upload', version: 4, storeEnabled: true, preflush: true, failure: 'SKILL_TARGET_OUTDATED' },
+    { peer: 'old with edit during flush', version: 4, storeEnabled: true, editDuringFlush: true, failure: 'SKILL_TARGET_OUTDATED' },
+  ])('hands large content only to a capable peer ($peer)', async ({ version, storeEnabled, failure, content, preflush, editDuringFlush, bodyBytes = 71_560 }) => {
     const key = 'companion.skill.v1:large';
     const value = { slug: 'large', content: content ?? 'x'.repeat(71_560) };
     const succeeds = !failure;
@@ -1015,7 +1016,12 @@ describe('transfer', () => {
       await t.runtime.syncNow();
       expect(stored).toEqual({ companionStore: 1, prefRevision: 0, value });
     }
-    expect(await t.runtime.switchHome('bot_mia', 'laptop')).toEqual(succeeds ? { ok: true } : { ok: false, code: failure });
+    const result = await t.runtime.switchHome('bot_mia', 'laptop');
+    if (failure === 'SKILL_TARGET_OUTDATED') {
+      expect(result).toEqual({ ok: false, code: failure, oversizedSkill: { slug: 'large', bodyBytes } });
+    } else {
+      expect(result).toEqual(succeeds ? { ok: true } : { ok: false, code: failure });
+    }
     expect(t.actors[0]!.homeDeviceId).toBe(succeeds ? 'laptop' : 'desk');
     expect(t.state.isDemoted('bot_mia')).toBe(succeeds);
     expect(t.calls.some(call => call.method === 'PATCH')).toBe(succeeds);
@@ -1108,7 +1114,7 @@ describe('switch home from any computer', () => {
   const link = (version: number, targets = [{ deviceId: 'desk', name: '', online: true }, { deviceId: 'tablet', name: 'Tablet', online: true }]) => ({
     version: vi.fn(async () => version),
     targets: vi.fn(async () => targets),
-    handOver: vi.fn(async (): Promise<{ ok: true } | { ok: false; code: 'BUSY' }> => ({ ok: true })),
+    handOver: vi.fn(async (): Promise<CompanionCloudActionResult> => ({ ok: true })),
   });
 
   it('says why this computer is not offered when it has not allowed same-account control', async () => {
@@ -1138,11 +1144,11 @@ describe('switch home from any computer', () => {
     expect(t.calls.some(call => call.method === 'PATCH')).toBe(false);
   });
 
-  it('passes the home\'s refusal through unchanged', async () => {
+  it.each(['BUSY', 'TARGET_OUTDATED', 'SKILL_TARGET_OUTDATED'] as const)('passes the home\'s refusal through unchanged (%s)', async code => {
     const homeLink = link(2);
-    homeLink.handOver.mockResolvedValue({ ok: false, code: 'BUSY' });
+    homeLink.handOver.mockResolvedValue({ ok: false, code });
     const t = setup({ home: 'laptop', devices: [device('laptop')], homeLink });
-    expect(await t.runtime.switchHome('bot_mia', 'tablet')).toEqual({ ok: false, code: 'BUSY' });
+    expect(await t.runtime.switchHome('bot_mia', 'tablet')).toEqual({ ok: false, code });
   });
 
   it('refuses a computer the home did not offer', async () => {

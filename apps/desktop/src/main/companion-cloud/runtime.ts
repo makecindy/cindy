@@ -5,7 +5,7 @@
  */
 import type { DeliverToCanonical } from './directRoom.js';
 import { randomUUID } from 'node:crypto';
-import { COMPANION_CLOUD_SKILL_SOURCE_VERSION } from '@cindy/device-link';
+import { COMPANION_CLOUD_LEGACY_SKILL_MAX_BODY_BYTES, COMPANION_CLOUD_SKILL_SOURCE_VERSION, type CompanionOversizedSkill } from '@cindy/device-link';
 import { parseBotSkillFile } from '../maker-ipc/botSkillStore.js';
 import { correctedProfile, profileRepairFields, profileRepairVersion, CompanionProfileRepairError, type ProfileCorrection } from './profileRepair.js';
 import type {
@@ -167,6 +167,23 @@ const union = (left: Only, right: Set<string> | null): Only =>
 
 export { isUnreachable };
 
+class SkillTargetOutdated extends Error {
+  constructor(readonly skill: CompanionOversizedSkill) { super('SKILL_TARGET_OUTDATED'); }
+}
+
+/** Check the same snapshot the receiver will restore, including skills already synced. */
+function checkLegacySkillSizes(values: CompanionPreferenceValue[]): void {
+  for (const { key, value } of values) {
+    if (!key.startsWith(COMPANION_SKILL_PREFIX)) continue;
+    const content = (value as { content?: unknown } | null)?.content;
+    if (typeof content !== 'string') continue;
+    const bodyBytes = Buffer.byteLength(parseBotSkillFile(content).body, 'utf8');
+    if (bodyBytes > COMPANION_CLOUD_LEGACY_SKILL_MAX_BODY_BYTES) {
+      throw new SkillTargetOutdated({ slug: key.slice(COMPANION_SKILL_PREFIX.length), bodyBytes });
+    }
+  }
+}
+
 function actionFailure(error: unknown, fallback: 'FAILED' | 'OFFLINE' = 'FAILED'): CompanionCloudActionResult {
   if (error instanceof CompanionProfileRepairError) return { ok: false, code: 'FAILED', profileRepairError: error.reason };
   if (error instanceof BotProfileSourceTooLong) return { ok: false, code: 'FAILED', profileFailure: error.failure };
@@ -189,8 +206,6 @@ const REMOTE_HAND_OVER_VERSION = 2;
  * still refuse values only the store holds; a computer taking over itself reads the store directly.
  */
 const COMPANION_CLOUD_STORE_READ_VERSION = 3;
-/** Shipped receivers before caps v5 enforced this limit, regardless of future editor limits. */
-const LEGACY_SKILL_MAX_BODY_BYTES = 64 * 1024;
 /**
  * Targets that run a V2 teammate (a project with rules, automations and project memory). An older
  * computer is listed as outdated but can still take one (2026-11-10 owner): it runs there as before,
@@ -765,7 +780,6 @@ export function startCompanionCloud(input: {
   /** A sync that must be complete (a hand-over, a merge) did not finish: why, as an action result. */
   function syncFailure(error: unknown): CompanionCloudActionResult {
     const code = errorCode(error);
-    if (code === 'TARGET_OUTDATED') return { ok: false, code: 'TARGET_OUTDATED' };
     return ['NOT_HOME', COMPANION_VALUE_TOO_LARGE, COMPANION_READ_INCOMPLETE, 'COMPANION_STILL_CHANGING', 'INVALID_AVATAR', 'AVATAR_UPLOAD_FAILED'].includes(code)
       ? { ok: false, code: 'FAILED' } : actionFailure(error, 'OFFLINE');
   }
@@ -861,19 +875,13 @@ export function startCompanionCloud(input: {
     try {
       await flush(actor.externalId, {
         preferencesOnly: targetVersion < COMPANION_CLOUD_STORE_READ_VERSION,
-        validateValues: targetVersion < COMPANION_CLOUD_SKILL_SOURCE_VERSION ? values => {
-          for (const { key, value } of values) {
-            if (!key.startsWith(COMPANION_SKILL_PREFIX)) continue;
-            const content = (value as { content?: unknown } | null)?.content;
-            if (typeof content === 'string' && Buffer.byteLength(parseBotSkillFile(content).body, 'utf8') > LEGACY_SKILL_MAX_BODY_BYTES)
-              throw new Error('TARGET_OUTDATED');
-          }
-        } : undefined,
+        validateValues: targetVersion < COMPANION_CLOUD_SKILL_SOURCE_VERSION ? checkLegacySkillSizes : undefined,
       });
       await checkProfileSources(actor);
     }
     catch (error) {
       input.log?.warn('Companion hand-over stopped: sync did not finish', { actorId: actor.id, code: errorCode(error) });
+      if (error instanceof SkillTargetOutdated) return { ok: false, code: 'SKILL_TARGET_OUTDATED', oversizedSkill: error.skill };
       return error instanceof BotProfileSourceTooLong ? actionFailure(error) : syncFailure(error);
     }
     // Checked again right before the move: a turn may have started during the flush.

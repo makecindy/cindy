@@ -149,6 +149,7 @@ import {
   resolveCollabDispatchResult,
 } from '../../maker-ipc/collabSendOutcome.js';
 import { createDesktopMcpProviders } from '../mcp-providers.js';
+import * as companionCloud from '../../companion-cloud/runtime.js';
 import { createDbClient } from '../../localDb/client/DbClient.js';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current.js';
 import type { FeishuBotMcpHostDeps, XdtHelperMcpDeps } from '@cindy/mcps';
@@ -313,6 +314,21 @@ describe('collab send outcome semantics', () => {
     mockState.invitationInput = null;
     mockState.invitationOwner = true;
     vi.clearAllMocks();
+  });
+
+  // #12112, unit: a move requested in chat must surface the same skill and upgrade action as the settings UI.
+  it('explains an incompatible skill when the owner moves the buddy from chat', async () => {
+    const active = vi.spyOn(companionCloud, 'activeCompanionCloud');
+    try {
+      vi.mocked(companionCloud.activeCompanionCloud, { partial: true }).mockReturnValue({ switchHome: vi.fn().mockResolvedValue({
+        ok: false, code: 'SKILL_TARGET_OUTDATED', oversizedSkill: { slug: 'research-paper-writing', bodyBytes: 71_560 },
+      }) });
+      createDesktopMcpProviders({ botCapabilities, getMakerMemoryManager: vi.fn(), lspPool: {} as never,
+        pluginRegistry: { isEnabled: () => true, getPlugins: () => [] } as never, invokeRemote: vi.fn() });
+      const tools = (mockState.capturedProvidersConfig!.xdtHelper as XdtHelperMcpDeps).teammateHome!;
+      const result = await tools.move({ callerSessionId: 'task', teammateId: 'bot', targetDeviceId: 'laptop' });
+      expect(result).toMatchObject({ ok: false, errorCode: 'SKILL_TARGET_OUTDATED', message: expect.stringMatching(/research-paper-writing.*71560.*Update Cindy/) });
+    } finally { active.mockRestore(); }
   });
 
   // Unit: actual Desktop provider + worker DB. Host tests inject caller facts;
