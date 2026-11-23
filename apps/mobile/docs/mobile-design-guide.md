@@ -108,6 +108,8 @@
 
 **登记例外**(只有这些可以偏离上表,新增例外先改本节):MCP App 卡片的第三方来源、本地安装、来源未知标签按 2026-11-16 定稿使用 `warningFg`、caption 字号/行高与常规字重；只用于宿主安装事实的例外来源，不用于插件名或普通自定义 MCP 标签。群聊正文 `@点名` 按用户 2026-11-04 裁决与 PC 对齐，使用专用 `groupMentionText`（数值正本 `tokens.ts`，对应 CINDY `msg-link`），不加下划线、底色或额外字重，详见根规范 §14.5；话题内“New”分界标签使用 `threadUnreadDivider` 红色、13/18 常规字重(2026-10-29 用户指定,与 0.5pt 横线同色);首页列表与队友行的节奏行高(18/28、15/26、13/22);代码 / diff 的紧凑行高;对话 Markdown 标题与长文 24 行高;与相邻图标 / 按钮对齐的文字;行内强调(Markdown strong 700、搜索命中、价格折扣);登录品牌画布(见根规范 §3 豁免表)。
 
+PR 卡片的「已合并」状态文字（`PluginCardActions.statusMergedText`）使用 `prMerged`，与合并图标及桌面端同义（根规范 §2 PR Status Colors）；仅限 PR 合并状态，不扩展为普通蓝色文字。检查通过仍使用 `statusDone`。
+
 **机器会拦什么**:阶梯外字号 / 行高 / 字重与裸数字、缺行高、浅色字配粗字重(`typographyTokenDiscipline.test.ts`);文字用了五档中性字色与已登记语义色以外的 token、占位字没用 `textPlaceholder`(`textColorDiscipline.test.ts`,存量按次数登记、只许减少);字号阶梯本身、文字三档与占位字对比度、深浅双模式同键(`themeTokens.test.ts`)。**拦不住、靠 review 的**:角色选错(比如把说明文字放 12 号、把标题写成 500)、例外被滥用。评审时对照上表逐行看。
 
 复古键帽的主、副印字使用 `retroKeyboardMaterials` 中与机身配套的 `ink` 和 `secondaryInk`，范围仅限实体键面，见下文「复古键盘的实体按压」。
@@ -456,7 +458,7 @@ iOS 使用原生 Form 二级页:顶部是与真实气泡同款的预览,预设�
 
 兑换礼品卡的底部面板（`src/gift-card/GiftCardSheet.tsx`）在「确认」与「到账」两步展示卡面，与桌面端兑换弹窗是同一张卡，登记见根规范 §15.7「gift card face」。这是手机上唯一带品牌图稿的面板内容，不作为其他卡片、确认面板带插画的先例。
 
-- **卡面 = 成品图 + 印在上面的金额**。四张成品图在 `assets/gift-cards/{cindy,cat,bell,leap}.webp`（1200×757，不含金额），与桌面端、分享网页、Platform 后台是同一份文件；`faceCode` 由服务端下发，本版本不认识的卡面按默认卡面显示。金额（币种符号 + 数字，小数末尾的 0 不印）的字形轮廓、位置、字号与两种图稿色都在 `@cindy/maker-shared/gift-card-amount`，用 `react-native-svg` 画成矢量；它属于卡面图稿，不是界面文字，`GiftCardFace.tsx` 自己不写任何颜色，也不加载额外字体。
+- **卡面 = 底图 + 印在上面的金额**。底图（1200×757，不含金额）、金额印法与各语言名称由服务端随卡下发（`@cindy/maker-shared/gift-card` 的 `GiftCardFaceStyle`），新卡面不用发版就能显示。`assets/gift-cards/{cindy,cat,bell,leap}.webp` 四张内置图只作兜底：认识的卡面在服务端底图到之前先显示内置图，服务端没给卡面（旧服务端）、给得不合法或底图取不到时用内置图；兜底时图与金额印法都用内置的，不混用。仍不认识的卡面按默认卡面显示，新卡面的底图还没到时只留同比例的中性占位。金额（币种符号 + 数字，小数末尾的 0 不印）的字形轮廓与内置卡面的印法在 `@cindy/maker-shared/gift-card-amount`，用 `react-native-svg` 画成矢量；它属于卡面图稿，不是界面文字，`GiftCardFace.tsx` 自己不写任何颜色，也不加载额外字体。
 - **处理**：容器圆角（`radius.container`）+ 1px `border`，深浅两种面板上都能和背景分开；不倾斜、无阴影、无动效。卡面最宽 420pt，在平板与横屏下居中。
 - **卡面以外全部走本文 token**：来源与到账说明 13/18 `textSecondary` 居中，留言 15/20 `textPrimary` 居中，条款行沿用「行标题 16/22 500 `textPrimary` + 行右侧取值 16/22 400 `textSecondary`」，报错 13/18 `errorText`。金额不在卡面下方重复；只有金额印不上卡面时（本版本没有轮廓的字符）才退回 24/30 600 `textPrimary` 的普通文字。兑换码输入框是 50pt 胶囊，等宽 15 号、自动大写。
 - **容器**：复用 `CompanionSheet`（iOS 系统 sheet，Android 兼容外壳）；主操作撑满宽度，领取请求在途时面板不可关闭。入口是设置页「礼品卡」分组与 `cindy://gift/<code>`、`cindycn://gift/<code>` 链接，两者共用根级 `GiftCardHost`，同时只呈现一张卡。

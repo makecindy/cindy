@@ -14,7 +14,8 @@
  * 列表按电脑缓存在内存里：打开模型选择器时读一次并请那台的插件重新上报模型，不轮询。
  */
 import { useCallback, useEffect, useSyncExternalStore } from 'react';
-import { createPluginHarnessUsageReader } from '@cindy/plugin-protocol';
+import { quotaLevelFromRemaining, type QuotaLevel } from '@cindy/maker-shared/quota-level';
+import { createPluginHarnessUsageReader, type GhostHarnessUsage } from '@cindy/plugin-protocol';
 
 import type { MobileAgentCapabilities, MobileChoiceOption, MobileModelOption } from '@cindy/maker-shared/agent-capabilities';
 
@@ -46,6 +47,12 @@ export interface MobilePluginEngine {
   /** 插件图标(data URL)；缺省 = 通用引擎标识。 */
   iconDataUrl?: string;
   availability: { state: 'available' | 'unavailable' | 'unknown'; message?: string };
+  /**
+   * 用户在那台电脑的「设置 → 模型供应商」里把它从模型选择器中隐藏了：选择器不再列出，已经在用它的任务
+   * 照常显示名字、图标和用量。旧电脑不带这个字段。用户在那里停用的引擎由那台电脑报成 unavailable。
+   */
+  hidden?: true;
+  defaultModelAllowed?: false;
   models: MobilePluginEngineModel[];
   permissionModes: { id: string; displayName: string }[];
   defaultPermissionMode: string;
@@ -56,6 +63,8 @@ export interface MobilePluginEngineSwitchIntent {
   providerId: string;
   model: string;
   effort?: string;
+  /** Null selects the task computer. Omission keeps the current execution computer. */
+  agentDeviceId?: string | null;
 }
 
 /** 选择器里选中的插件引擎行。 */
@@ -158,6 +167,8 @@ export function normalizePluginEngines(raw: unknown): MobilePluginEngine[] {
       ...(description ? { description } : {}),
       ...(iconDataUrl ? { iconDataUrl } : {}),
       availability: { state, ...(message ? { message } : {}) },
+      ...(item.hidden === true ? { hidden: true as const } : {}),
+      ...(item.defaultModelAllowed === false ? { defaultModelAllowed: false as const } : {}),
       models,
       permissionModes: modes,
       defaultPermissionMode: requestedDefault && modes.some((mode) => mode.id === requestedDefault)
@@ -182,10 +193,11 @@ export function isPluginEngineSelectable(engine: Pick<MobilePluginEngine, 'avail
 
 /** 引擎下列出的模型行：上报过的模型，或在还没上报时只有「默认模型」一项；当前选的是默认时它也保留。 */
 export function pluginEngineModelRows(
-  engine: Pick<MobilePluginEngine, 'models'>,
+  engine: Pick<MobilePluginEngine, 'models' | 'defaultModelAllowed'>,
   activeModelId?: string | null,
 ): (MobilePluginEngineModel & { isDefault: boolean })[] {
   const models = engine.models.map((model) => ({ ...model, isDefault: false }));
+  if (engine.defaultModelAllowed === false) return models;
   const defaultRow = { id: PLUGIN_ENGINE_DEFAULT_MODEL, displayName: '', efforts: [], isDefault: true };
   if (models.length === 0) return [defaultRow];
   return activeModelId === PLUGIN_ENGINE_DEFAULT_MODEL ? [defaultRow, ...models] : models;
@@ -287,11 +299,22 @@ export function normalizePluginEngineSwitchIntent(value: unknown): MobilePluginE
   if (item.targetAgentKind !== PLUGIN_ENGINE_AGENT_KIND) return null;
   if (!isPluginEngineProviderId(item.providerId)) return null;
   if (typeof item.model !== 'string' || item.model.length === 0) return null;
+  const agentDeviceId = item.agentDeviceId;
+  if (agentDeviceId != null && (typeof agentDeviceId !== 'string' || agentDeviceId.length === 0)) return null;
   return {
     providerId: item.providerId,
     model: item.model,
     ...(typeof item.effort === 'string' && item.effort ? { effort: item.effort } : {}),
+    ...(agentDeviceId !== undefined ? { agentDeviceId } : {}),
   };
+}
+
+/** The pending target has priority over the saved execution location, including an explicit return home. */
+export function pluginEngineExecutionDeviceId(
+  currentDeviceId: string | null | undefined,
+  intent: MobilePluginEngineSwitchIntent | null,
+): string | null {
+  return intent?.agentDeviceId === undefined ? currentDeviceId ?? null : intent.agentDeviceId;
 }
 
 // —— 模型选择器里的插件引擎分组 ——
@@ -313,10 +336,61 @@ export interface UnifiedMobilePluginEngineRow {
   disabled: boolean;
 }
 
+export interface UnifiedMobilePluginEngineQuota {
+  summary: string;
+  level: QuotaLevel;
+  accessibilityLabel: string;
+}
+
 export interface UnifiedMobilePluginEngineGroup {
   key: string;
+  providerId: string;
   title: string;
+  quota?: UnifiedMobilePluginEngineQuota;
   rows: UnifiedMobilePluginEngineRow[];
+}
+
+/** Formats a plugin engine's usage snapshot into a single-line picker header readout. */
+export function formatPluginEnginePickerQuota(
+  usage: GhostHarnessUsage | null | undefined,
+  now: number,
+  language: string,
+  countdown: (resetsAtSeconds: number, now: number) => string | null,
+): UnifiedMobilePluginEngineQuota | undefined {
+  if (!usage) return undefined;
+  const current = (usage.windows ?? []).filter((row) => !row.resetsAt || row.resetsAt > now);
+  const first = current.reduce<(typeof current)[number] | undefined>(
+    (lowest, row) => (!lowest || row.remainingPercent < lowest.remainingPercent ? row : lowest),
+    undefined,
+  );
+  if (first) {
+    const percent = `${Math.round(first.remainingPercent)}%`;
+    const reset = first.resetsAt ? countdown(first.resetsAt / 1000, now) : null;
+    const summary = reset ? `${percent} · ${reset}` : percent;
+    return {
+      summary,
+      level: quotaLevelFromRemaining(first.remainingPercent),
+      accessibilityLabel: [first.label, summary].filter(Boolean).join(' · '),
+    };
+  }
+  const balance = (usage.balances ?? []).find((row) => Number.isFinite(Number(row.amount)));
+  if (!balance) return undefined;
+  const amount = Number(balance.amount);
+  let formatted: string;
+  try {
+    formatted = new Intl.NumberFormat(language, {
+      style: 'currency',
+      currency: balance.currency,
+      currencyDisplay: 'code',
+    }).format(amount);
+  } catch {
+    formatted = `${balance.currency} ${balance.amount}`;
+  }
+  return {
+    summary: formatted,
+    level: amount <= 0 ? 'crit' : 'normal',
+    accessibilityLabel: formatted,
+  };
 }
 
 /** 插件引擎分组：引擎名命中搜索时整组列出，否则只列命中的模型；不可用的引擎可见但不能选。 */
@@ -334,6 +408,9 @@ export function buildPluginEngineGroups(
   for (const engine of options.engines) {
     const selectable = isPluginEngineSelectable(engine);
     const active = options.active?.providerId === engine.providerId ? options.active : null;
+    // 只装了插件但未登录 / 未就绪的引擎、用户在那台电脑上隐藏的引擎都不在模型选择器里占位；
+    // 仅当前任务已选该引擎时保留以便识别状态。
+    if ((!selectable || engine.hidden) && !active) continue;
     const engineMatches = !needle || engine.name.toLowerCase().includes(needle);
     const rows = pluginEngineModelRows(engine, active?.modelId)
       .filter((model) => engineMatches
@@ -357,7 +434,7 @@ export function buildPluginEngineGroups(
           disabled: !selectable,
         };
       });
-    if (rows.length) groups.push({ key: `plugin-engine:${engine.providerId}`, title: engine.name, rows });
+    if (rows.length) groups.push({ key: `plugin-engine:${engine.providerId}`, providerId: engine.providerId, title: engine.name, rows });
   }
   return groups;
 }

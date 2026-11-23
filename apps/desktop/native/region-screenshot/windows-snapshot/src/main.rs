@@ -68,8 +68,16 @@ fn main() {
             Some("frame") => match capture_region(&request) {
                 Some((width, height, pixels)) => {
                     if request.get("encoding").and_then(Value::as_str) == Some("bgra") {
-                        let header = json!({ "id": id, "width": width, "height": height,
+                        let mut header = json!({ "id": id, "width": width, "height": height,
                             "encoding": "bgra", "byteLength": pixels.len() });
+                        if request.get("displayProfile").and_then(Value::as_bool) == Some(true) {
+                            if request.get("verifySdr").and_then(Value::as_bool) == Some(true) {
+                                header["sdrVerified"] = json!(monitor_is_sdr(&request) == Some(true));
+                            }
+                            if let Some(profile) = display_profile(&request) {
+                                header["icc"] = json!(STANDARD.encode(profile));
+                            }
+                        }
                         if writeln!(stdout, "{header}")
                             .and_then(|_| stdout.write_all(&pixels))
                             .and_then(|_| stdout.flush()).is_err() { break; }
@@ -184,6 +192,61 @@ fn capture_region(request: &Value) -> Option<(i32, i32, Vec<u8>)> {
         ReleaseDC(HWND::default(), desktop);
         result
     }
+}
+
+// Chromium can serialize a custom SDR and a custom HDR curve in the same
+// textual form. Query the actual output when the host cannot distinguish them.
+fn monitor_is_sdr(request: &Value) -> Option<bool> {
+    use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1, IDXGIOutput6};
+    use windows::Win32::Graphics::Dxgi::Common::DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
+    let point = POINT { x: request["x"].as_i64()?.try_into().ok()?, y: request["y"].as_i64()?.try_into().ok()? };
+    unsafe {
+        let monitor = MonitorFromPoint(point, MONITOR_DEFAULTTONULL);
+        let factory: IDXGIFactory1 = CreateDXGIFactory1().ok()?;
+        for a in 0.. {
+            let Ok(adapter) = factory.EnumAdapters1(a) else { break };
+            for i in 0.. {
+                let Ok(output) = adapter.EnumOutputs(i) else { break };
+                if output.GetDesc().ok().is_some_and(|desc| desc.Monitor == monitor) {
+                    let desc = output.cast::<IDXGIOutput6>().ok()?.GetDesc1().ok()?;
+                    return Some(desc.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn display_profile(request: &Value) -> Option<Vec<u8>> {
+    use std::io::Read;
+    use std::os::windows::ffi::OsStringExt;
+    use windows::core::{PCWSTR, PWSTR};
+    use windows::Win32::UI::ColorSystem::GetICMProfileW;
+
+    let point = POINT { x: request["x"].as_i64()?.try_into().ok()?, y: request["y"].as_i64()?.try_into().ok()? };
+    let mut name = vec![0u16; 32768];
+    let mut length = name.len() as u32;
+    unsafe {
+        let monitor = MonitorFromPoint(point, MONITOR_DEFAULTTONULL);
+        let mut info = MONITORINFOEXW::default();
+        info.monitorInfo.cbSize = std::mem::size_of_val(&info) as u32;
+        if !GetMonitorInfoW(monitor, &mut info.monitorInfo).as_bool() { return None; }
+        let dc = CreateDCW(PCWSTR(info.szDevice.as_ptr()), PCWSTR(info.szDevice.as_ptr()), None, None);
+        if dc.0.is_null() { return None; }
+        let ok = GetICMProfileW(dc, &mut length, PWSTR(name.as_mut_ptr())).as_bool();
+        let _ = DeleteDC(dc);
+        if !ok { return None; }
+    }
+    let end = name.iter().position(|&c| c == 0)?;
+    let path = std::ffi::OsString::from_wide(&name[..end]);
+    let mut data = Vec::new();
+    const LIMIT: usize = 4 * 1024 * 1024;
+    std::fs::File::open(path).ok()?.take((LIMIT + 1) as u64).read_to_end(&mut data).ok()?;
+    if !(128..=LIMIT).contains(&data.len()) || data.get(36..40)? != b"acsp"
+        || data.get(16..20)? != b"RGB " || u32::from_be_bytes(data[..4].try_into().ok()?) as usize != data.len() {
+        return None;
+    }
+    Some(data)
 }
 
 fn create_automation() -> Option<IUIAutomation> {

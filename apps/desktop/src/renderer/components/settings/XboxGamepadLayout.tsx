@@ -345,6 +345,7 @@ function Hit({
   return (
     <Tip text={<KeyHint hint={hint} />} side="top">
       <button
+        data-settings-search-action="Open the key-mapping editor for this gamepad button"
         type="button"
         aria-label={label}
         aria-pressed={pressed}
@@ -355,7 +356,7 @@ function Hit({
         style={boxStyle(box)}
         className={cn(
           'absolute z-[1] border-0 bg-transparent',
-          round ? 'rounded-full' : 'rounded-[8px]',
+          round ? 'rounded-full' : 'rounded-lg',
           !disabled && 'cursor-pointer',
           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
           disabled && 'cursor-not-allowed opacity-60',

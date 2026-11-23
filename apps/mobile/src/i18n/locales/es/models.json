@@ -53,7 +53,8 @@
   },
   "switchOutcome": {
     "applied": "El cambio de proveedor de modelo ya está en vigor.",
-    "failed": "Error en el cambio de proveedor de modelo. Elige el modelo de nuevo."
+    "failed": "Error en el cambio de proveedor de modelo. Elige el modelo de nuevo.",
+    "previousSettingsRetained": "No se completó el cambio. La tarea seguirá usando la configuración anterior."
   },
   "agentSwitch": {
     "browseAccessibility": "Explorar modelos {{agent}}"
@@ -112,6 +113,48 @@
     "quotaResetIn": "Se restablece en {{duration}}",
     "quotaAverageHint": "Cuota semanal · Mismo peso por cuenta",
     "quotaResetHint": "Al ritmo actual, puede quedar cuota al restablecerse: amarillo si faltan hasta 24 horas y rojo si faltan hasta 6 horas."
+  },
+  "modelGroups": {
+    "title": "Grupos de modelos",
+    "sourceCount_one": "{{count}} fuente",
+    "sourceCount_many": "{{count}} fuentes",
+    "sourceCount_other": "{{count}} fuentes",
+    "strategy": {
+      "expiring": "Primero lo que caduca",
+      "order": "En orden",
+      "rotate": "Por turnos",
+      "cheapest": "Lo más barato",
+      "drain": "Agotar y pasar",
+      "headroom": "Más cuota restante",
+      "weighted": "Por peso"
+    },
+    "sourceOnDevice": "{{provider}} · {{device}}",
+    "why": {
+      "expiringQuota": "Le queda un {{left}}% de cuota y se restablece el {{reset}}, así que va primero",
+      "expiring": "Primera por cuota",
+      "order": "La primera fuente disponible",
+      "rotate": "Esta vez le toca",
+      "only": "La única disponible ahora",
+      "soonest": "Todas las fuentes agotaron su cuota; esta se recupera antes",
+      "soonestUntil": "Todas las fuentes agotaron su cuota; esta se recupera antes ({{reset}})",
+      "cheapest": "Precio de lista más bajo",
+      "cheapestFree": "Queda cuota de suscripción, sin coste adicional",
+      "drain": "Se sigue usando hasta que se agote su cuota",
+      "drainNext": "La fuente anterior se agotó o dejó de estar disponible, así que pasó a esta",
+      "headroom": "Le queda la mayor cuota",
+      "headroomQuota": "Le queda un {{left}} % de cuota, más que a cualquier otra fuente",
+      "weighted": "Le toca según su peso",
+      "exceptionImage": "El mensaje tiene imágenes, así que solo se consideraron las fuentes que pueden verlas",
+      "exceptionImageFallback": "El mensaje tiene imágenes, pero ninguna fuente puede verlas, así que se eligió como siempre",
+      "exceptionHours": "En este horario usa «{{name}}»",
+      "separator": "; "
+    },
+    "picker": {
+      "switched": "«{{name}}» cambió esta tarea a {{model}}",
+      "switchUnavailable": "«{{name}}» no tiene ahora ninguna fuente que esta tarea pueda usar. No se cambió el modelo.",
+      "chooseUnavailable": "«{{name}}» no tiene ahora ninguna fuente utilizable, así que no se seleccionó."
+    },
+    "anotherDevice": "Otro equipo"
   },
   "pluginEngines": {
     "genericName": "Motor de complemento",

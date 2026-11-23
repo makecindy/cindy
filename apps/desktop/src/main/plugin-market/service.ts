@@ -5,6 +5,7 @@ import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 
 import {
   compareCindyVersions,
+  pluginCatalogPublisherGroup,
   pluginHasToolUi,
   isValidPluginResourceId,
   isValidPluginNamespace,
@@ -47,6 +48,7 @@ import type {
   PluginMarketLocalIconRequest,
   PluginMarketLocalIconResult,
   PluginMarketSnapshot,
+  OfficialModelPluginPage,
   PluginMarketQuery,
   PluginMarketPage,
   PluginMarketCounts,
@@ -1045,6 +1047,8 @@ function removalNoticeKey(owner: ActiveAppSession): string {
  */
 export class PluginMarketService {
   private readonly snapshotFlights = new Map<string, MarketSnapshotFlight>();
+  private readonly officialEngineReads = new Map<string, Promise<VisiblePluginDetail>>();
+  private readonly officialEngineCapabilities = new Map<string, { digest: string; hasEngine: boolean }>();
   private readonly catalogFlights = new Map<string, Promise<MarketCatalog>>();
   private readonly localReadFlights = new Map<string, Promise<LocalInstallSnapshot>>();
   private readonly localRefreshContexts = new Map<string, { context: PluginMarketRefreshContext; lastUsed: number }>();
@@ -1307,6 +1311,55 @@ export class PluginMarketService {
       ...(result.organizationAccessError ? { organizationAccessError: result.organizationAccessError } : {}) };
   }
 
+  /** Provider discovery reads only public server metadata. Installation and local markets belong to the detail page. */
+  async officialModelPlugins(cursor: unknown = null, active = () => true): Promise<OfficialModelPluginPage> {
+    if (cursor !== null && (typeof cursor !== 'string' || !cursor || cursor.length > 4_096))
+      throwIpcError('INVALID_PARAMS', 'Invalid Plugin catalog cursor');
+    this.requireConfigured();
+    const endpoint = getClientEndpoint('pluginApiBaseUrl');
+    const owner = canCaptureMarketOwner() ? captureMarketOwner() : null;
+    const assertCurrent = () => {
+      if (owner) requireSameMarketOwner(owner);
+      else if (canCaptureMarketOwner() || isAppSessionBoundaryPending()) throwIpcError('PRECONDITION_FAILED', 'Plugin owner changed');
+      if (endpoint !== getClientEndpoint('pluginApiBaseUrl')) throwIpcError('PRECONDITION_FAILED', 'Plugin endpoint changed');
+    };
+    assertCurrent();
+    const page = await this.api.catalog({ scope: 'public', limit: 100, cursor, counts: cursor === null });
+    assertCurrent();
+    const candidates = (page.legacyQueryPlugins ?? page.plugins).filter(plugin => plugin.scope === 'public' && plugin.publisherKind === 'official');
+    const items: OfficialModelPluginPage['items'] = [];
+    let incomplete = false;
+    for (const plugin of candidates) {
+      if (!active()) break;
+      const key = JSON.stringify([endpoint, plugin.id]);
+      const digest = plugin.currentRelease.sha256;
+      let capability = this.officialEngineCapabilities.get(key);
+      if (capability?.digest !== digest) {
+        const flightKey = JSON.stringify([key, digest, owner?.dataOwnerId, getActiveAppSession().generation]);
+        let read = this.officialEngineReads.get(flightKey);
+        if (!read) {
+          read = this.api.detail(plugin.id).finally(() => this.officialEngineReads.delete(flightKey));
+          this.officialEngineReads.set(flightKey, read);
+        }
+        const detail = await read.catch(() => null);
+        assertCurrent();
+        if (!detail) {
+          incomplete = true;
+          continue;
+        }
+        if (detail.publisherKind !== 'official') continue;
+        try { assertDetailMatchesSummary(plugin, detail); } catch { continue; }
+        const manifest = validateNormalizedGhostManifest(detail.currentRelease.manifest);
+        if (!manifest.ok) continue;
+        capability = { digest, hasEngine: manifest.manifest.harnesses?.some(engine => engine.protocol === 'acp') === true };
+        this.officialEngineCapabilities.set(key, capability);
+      }
+      if (capability.hasEngine)
+        items.push({ pluginId: plugin.id, ghostId: plugin.ghostId, ...deliveryNamespaceFields(plugin), name: plugin.name, description: plugin.description });
+    }
+    return { items, incomplete, nextCursor: page.legacyQueryPlugins ? null : page.nextCursor, officialIds: candidates.map(plugin => plugin.id), totalOfficial: page.counts?.official ?? null };
+  }
+
   /** UI and Agent queries share target-owned pagination; they never run maintenance. */
   async query(input: PluginMarketQuery = {}): Promise<PluginMarketPage> {
     if (!input || typeof input !== 'object' || Array.isArray(input)) throwIpcError('INVALID_PARAMS', 'Invalid Plugin market query');
@@ -1372,7 +1425,7 @@ export class PluginMarketService {
       if (scope !== 'custom') items.push(...visible.map(plugin => this.toItem(plugin, local)).filter(item => !input.excludeInstalled || !isInstalled(item)));
       if (includeCounts && page.counts) {
         const queryCounts: PluginMarketCounts = !owner || owner.mode !== 'cloud'
-          ? { all: page.counts.public + custom.length, public: page.counts.public, organization: 0, personal: 0, custom: custom.length }
+          ? { ...page.counts, all: page.counts.public + custom.length, organization: 0, personal: 0, custom: custom.length }
           : { ...page.counts, custom: custom.length, all: page.counts.all + custom.length };
         counts = queryCounts;
         if (input.excludeInstalled && owner) {
@@ -1390,6 +1443,8 @@ export class PluginMarketService {
               if (!deducted.has(plugin.id) && isInstalled(this.toItem(plugin, local))) {
                 deducted.add(plugin.id);
                 queryCounts[plugin.scope]--; queryCounts.all--;
+                const group = pluginCatalogPublisherGroup(plugin.scope, plugin.publisherKind);
+                if (group && queryCounts[group] !== undefined) queryCounts[group]--;
               }
             };
             if (page.legacyQueryPlugins) {
@@ -1405,7 +1460,8 @@ export class PluginMarketService {
                 for (const row of result.results) if (row.status === 'available' && row.matchesQuery) deduct(row.plugin);
               }
             }
-            if (Object.values(queryCounts).some(value => value < 0)) throwIpcError('PLUGIN_LIST_CHANGED', 'Plugin query changed while counting installed matches');
+            if (Object.values(queryCounts).some(value => value < 0) || (queryCounts.official ?? 0) + (queryCounts.community ?? 0) > queryCounts.public)
+              throwIpcError('PLUGIN_LIST_CHANGED', 'Plugin query changed while counting installed matches');
           }
         }
       }

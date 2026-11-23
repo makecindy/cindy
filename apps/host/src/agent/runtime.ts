@@ -26,8 +26,9 @@ import { HOST_PROFILE_IN_USE_BY_DESKTOP } from './profile-coexistence.js';
 import { createMakerLogger } from '../../../desktop/src/main/maker-host/logger-adapter.js';
 import { getHostOutboundPathSnapshotFor, resolveHostOutboundProxy } from '../outbound-proxy.ts';
 import { readCodexLocalAuthState } from '../../../desktop/src/main/maker-host/codex-local-auth-state.js';
+import { removeLegacyCodexAuthAlias } from '../../../desktop/src/main/maker-host/codex-auth-link.js';
 import { codexSharedAuthLinkUnavailableReason } from '../../../desktop/src/shared/codexAuthReason.js';
-import { commitHostCodexDisconnectBoundary, readHostCodexInvalidation, readHostCodexRecoveryRequirement } from './codex-invalidation.js';
+import { commitHostCodexDisconnectBoundary, detachSuppressedLegacyCodexHardlink, readHostCodexInvalidation, readHostCodexRecoveryRequirement } from './codex-invalidation.js';
 import { createHostCodexSystemLogin, detectHostCodexCredentialScope, resolveHostSystemCodexAuthPath } from './codex-system-login.js';
 import { CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY, isAnthropicWireModel } from '../../../desktop/src/main/maker-host/claude-gateway-config.js';
 import { createPiAuthAdapter } from '../../../desktop/src/main/maker-host/pi-auth.js';
@@ -410,8 +411,12 @@ export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined,
       accountService.cancelCodexAccountLogin('openai');
       if (!current()) return;
       // The durable disconnect marker over the current file. auth.json stays: an explicit
-      // disconnect only stops Cindy's use of it (a shared login's link stays in place too).
+      // disconnect only stops Cindy's use of it (a shared login's link stays in place too),
+      // except an unmigrated legacy hardlink whose nlink>1 would block native Codex writes.
       commitHostCodexDisconnectBoundary(codexHome, systemAuthPath);
+      if (systemAuthPath && !isProfileHeld()) {
+        removeLegacyCodexAuthAlias(systemAuthPath, path.join(codexHome, 'auth.json'));
+      }
       // Waits for the cancelled login and retires the local Codex host (the account service).
       await accountService.retireCodexAccount('openai');
       if (!current()) return;
@@ -425,6 +430,9 @@ export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined,
       if (!current()) return;
       // Again at the end: an invalidation in between may have rewritten the marker.
       commitHostCodexDisconnectBoundary(codexHome, systemAuthPath);
+      if (systemAuthPath && !isProfileHeld()) {
+        removeLegacyCodexAuthAlias(systemAuthPath, path.join(codexHome, 'auth.json'));
+      }
       // Last, as on the desktop: the marker already disconnects if a step above fails.
       unbindNativeProviderAuth('openai', { revoked: true });
     } finally { if (current()) native?.onAuthBoundary?.(); }
@@ -456,7 +464,10 @@ export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined,
       if (opts?.credentialMode === 'gateway-key' || (['xd', 'cindy'] as Array<string | null | undefined>).includes(opts?.providerId)) return gatewayState;
       // As the desktop's readState: a server-invalidated login reports why until it is replaced.
       const invalidated = readHostCodexInvalidation(codexHome, systemAuthPath);
-      if (invalidated) return { authenticated: false, errorReason: invalidated.reason, credentialScope: invalidated.credentialScope };
+      if (invalidated) {
+        if (!isProfileHeld()) detachSuppressedLegacyCodexHardlink(codexHome, systemAuthPath);
+        return { authenticated: false, errorReason: invalidated.reason, credentialScope: invalidated.credentialScope };
+      }
       // Then the reconciliation with the system login, as readState does before reading auth.json.
       // Not while a desktop uses this profile: it can relink codex-home/auth.json and bind the login
       // to the account (codex-system-login.ts), both shared with that desktop. The state then comes
@@ -570,7 +581,10 @@ export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined,
         && !(opts?.providerId && accounts?.isCodexAccountProvider(opts.providerId));
       // Coexistence plan A: not while a desktop uses this profile (the reconciliation can relink
       // auth.json and bind the login, both that desktop's too); the spawn uses the files as they are.
-      if (reconcileForSpawn && !isProfileHeld() && !readHostCodexInvalidation(codexHome, systemAuthPath)) await systemLogin.reconcile();
+      if (reconcileForSpawn && !isProfileHeld()) {
+        if (readHostCodexInvalidation(codexHome, systemAuthPath)) detachSuppressedLegacyCodexHardlink(codexHome, systemAuthPath);
+        else await systemLogin.reconcile();
+      }
       if (opts?.providerId === 'openai' || opts?.credentialMode === 'oauth-bearer') {
         // Coexistence plan A: a login the upstream rejected while held fails with that reason.
         native?.assertNativeLoginUsable?.();
@@ -698,6 +712,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     binaryPath: options.binaryPath,
     logger: LOGGER,
     getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
+    getMcpToolApprovalEvidence: undefined,
     // As the desktop: first-party read-only tools go through the SDK allowedTools.
     claudeAllowedTools: getDesktopClaudeReadOnlyAllowedTools(),
     reviewAutoPermissionAction: autoReview.reviewAutoPermissionAction,
@@ -751,6 +766,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     prepareCodexExtraSpawnConfig: undefined, disableCodexPluginRuntime: undefined, onCodexLocalModelsListed: undefined,
     resolveCodexSubagentRoutingSignature: undefined, resolveCodexLocalAuthPolicy: undefined, isCodexAccountProvider: undefined,
     isolateCodexAccountSessions: undefined, registerCodexTextOnlyPolicy: undefined, registerCodexSystemPromptForThread: undefined,
+    getRejectedCodexDownshiftModel: undefined,
     getCodexSubagentIdentity: undefined, armCodexHttpRecovery: undefined, registerCodexChildThreadForParent: undefined,
   } satisfies { [K in keyof AgentDeps]?: undefined };
   // codexModelResolvers exists exactly when there is a Codex binary (above).
@@ -786,6 +802,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         // As the desktop: Host exit reaps the tool trees below these app-servers (main.ts stop).
         registerLocalCodexAppServerProcess: ({ pid, role }) => registerCodexProcessRole(pid, role),
         getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
+        getMcpToolApprovalEvidence: undefined,
         // As the desktop: a credential-mode switch of the shared local app-server refuses busy
         // sessions and soft-closes idle ones first.
         prepareCodexLocalCredentialModeSwitch: async (ctx) => {
@@ -858,6 +875,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         binaryPath: options.piBinaryPath,
         logger: LOGGER,
         getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
+        getMcpToolApprovalEvidence: undefined,
         reviewAutoPermissionAction: autoReview.reviewAutoPermissionAction,
         mcpProviders,
         resolvePiAgentHome: () => path.join(options.userDataDir, 'pi-agent-home'),

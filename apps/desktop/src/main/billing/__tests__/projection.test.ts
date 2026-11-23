@@ -1112,7 +1112,7 @@ describe('gift card purchase projection', () => {
     })).toEqual({
       currency: 'cny', dailyLimit: 5, windowHours: 24, remaining: 5, maxQuantityPerOrder: 5,
       maxOrderAmount: '1000', minFaceValue: '100', maxFaceValue: '1000',
-      faces: ['cindy', 'cat'], maxSenderNameLength: 40, maxMessageLength: 120, emailCooldownSeconds: null,
+      faces: ['cindy', 'cat'], faceCatalog: [], maxSenderNameLength: 40, maxMessageLength: 120, emailCooldownSeconds: null,
     });
     // 旧服务端没有单张面额范围：照常读出其余限制，范围为 null。
     expect(projectGiftCardPurchasePolicy({
@@ -1149,6 +1149,37 @@ describe('gift card purchase projection', () => {
     cardId: 'card_1', orderId: 'order_9', faceCode: 'cat', amount: '100', currency: BILLING_CURRENCY.toUpperCase(),
     senderName: '小鱼', message: null, codeTail: '7KQ2', status: 'UNCLAIMED',
     claimedAt: null, claimedByName: null, purchasedAt: now, ...overrides,
+  });
+
+  // 卡面改由服务端下发：新卡面的底图、印法与名称照单读进来，客户端不发版就能卖、能画。某一项卡面信息
+  // 不合法只丢弃这一项（界面退回内置卡面），不能让购买设置或「我买的礼品卡」整页读取失败。
+  it('reads server card faces and drops only the face details it cannot draw', () => {
+    const snow = {
+      code: 'snow',
+      names: { en: 'Snow · Night', 'zh-CN': '雪 · 夜色' },
+      imageUrl: 'https://model-access.example.com/api/public/gift-cards/faces/snow.webp?v=0123456789ab',
+      amount: { x: 80, baseline: 676, size: 228, maxWidth: 480, color: '#F3EDE2' },
+    };
+    const policy = projectGiftCardPurchasePolicy({
+      currency: 'CNY', dailyLimit: 5, windowHours: 24, remaining: 5, maxQuantityPerOrder: 5,
+      maxOrderAmount: '1000', faces: ['snow', 'cindy'], maxSenderNameLength: 40, maxMessageLength: 120,
+      faceCatalog: [snow, { ...snow, code: 'cindy', imageUrl: 'javascript:alert(1)' }, { ...snow, code: 'leap' }, snow],
+    });
+    expect(policy.faces).toEqual(['snow', 'cindy']);
+    expect(policy.faceCatalog).toEqual([snow]);
+    const list = projectPurchasedGiftCardList({
+      cards: [
+        purchasedCard({ faceCode: 'snow', face: snow }),
+        purchasedCard({ cardId: 'card_2', face: { ...snow, code: 'cat', amount: { ...snow.amount, color: 'red' } } }),
+        purchasedCard({ cardId: 'card_3', face: snow }),
+      ],
+      nextCursor: null,
+    });
+    expect(list.cards.map((card) => [card.cardId, card.faceCode, card.face])).toEqual([
+      ['card_1', 'snow', snow],
+      ['card_2', 'cat', null],
+      ['card_3', 'cat', null],
+    ]);
   });
 
   // 领取人昵称只属于「被别人领走」；其它状态即使服务端带了也不展示。

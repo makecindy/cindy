@@ -1,4 +1,4 @@
-import { chatErrorDiagnostic } from './chatServerErrors.js';
+import { chatErrorDiagnostic, chatRetryDeadline, rememberUploadRetryDeadline } from './chatServerErrors.js';
 import { retryAfterDeadline } from '@cindy/auth-client';
 import { net } from 'electron';
 import fs from 'node:fs/promises';
@@ -30,6 +30,7 @@ const MAX_SIZE = 100 * 1024 * 1024;
 const UPLOAD_CONCURRENCY = 3;
 /** The server's limit for one companion store value in the bucket. */
 const COMPANION_BLOB_MAX_BYTES = 100 * 1024 * 1024;
+
 export function createChatMedia(api: ChatApi, current: () => boolean, endpoint: string, log?: { warn(message: string, meta?: Record<string, unknown>): void }, options: { allowLoopback?: boolean } = {}) {
   // Images keep only in-flight transfers here; ordinary files retain service-local reuse.
   const cache = new Map<string, Promise<BotGroupAttachment>>();
@@ -89,7 +90,17 @@ export function createChatMedia(api: ChatApi, current: () => boolean, endpoint: 
       };
       await Promise.all(Array.from({ length: Math.min(UPLOAD_CONCURRENCY, attachments.length) }, worker));
       const failed = results.find(result => result.status === 'rejected');
-      if (failed) throw failed.reason;
+      if (failed) {
+        // Keep the first error's classification while honoring every upload's deadline.
+        if (failed.reason instanceof Error) {
+          let deadline = 0;
+          for (const result of results) {
+            if (result.status === 'rejected') deadline = Math.max(deadline, chatRetryDeadline(result.reason));
+          }
+          if (deadline) rememberUploadRetryDeadline(failed.reason, deadline);
+        }
+        throw failed.reason;
+      }
       return results.map(result => (result as PromiseFulfilledResult<ChatContentBlock>).value);
 
       async function uploadOne(attachment: ChatUploadAttachment): Promise<ChatContentBlock> {
@@ -148,7 +159,7 @@ export function createChatMedia(api: ChatApi, current: () => boolean, endpoint: 
           const response = await net.fetch(signedUrl(upload.uploadUrl), { method: 'PUT', redirect: 'error',
             headers: { 'Content-Type': metadata.type }, body: new Uint8Array(bytes), signal: AbortSignal.timeout(60000) });
           if (!response.ok) throw Object.assign(new Error('MEDIA_UPLOAD_FAILED'), { status: response.status,
-            ...(response.status === 429 ? { retryAt: retryAfterDeadline(response) } : {}) });
+            ...(response.status === 429 || response.status === 503 ? { retryAt: retryAfterDeadline(response) } : {}) });
           await checkFile();
           stage = 'complete';
           await api(`/conversations/${roomId}/media/${upload.id}/complete`, 'POST', { operationId: `seal:${upload.id}` }, actorId);

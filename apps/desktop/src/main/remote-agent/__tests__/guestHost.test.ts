@@ -29,6 +29,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { managedSkillDigest } from '../managedSkillDigest';
 import { createRemoteAgentHost, hostSessionIdFor, type HostedStartInput } from '../host/runHost';
 import { TunnelLinkActivity } from '../host/linkActivity';
+import { installExecutionReporting } from '../../usage/companyTokenFacts';
 import * as runTunnel from '../host/tunnel';
 
 const RUN_1 = '11111111-1111-4111-8111-111111111111';
@@ -223,10 +224,13 @@ describe('shared image authorization and relay', () => {
       if (request.action === 'start') return { accepted: true };
       return { state: 'complete', data: png.toString('base64'), mimeType: image.mimeType, size: png.length };
     });
-    const plan = vi.fn(async () => ({
+    const member = {
       kind: 'member' as const, sameAccount: true, memberKey: 'member-key', agentDeviceId: 'remote',
       providerId: 'openai-independent', imageModelId: 'openai-independent/gpt-image-2',
-    }));
+    };
+    const plan = vi.fn(async () => member).mockResolvedValueOnce({
+      ...member, memberKey: 'older-builtin', providerId: 'openai', imageModelId: 'openai/gpt-image-2',
+    });
     const groupRelay: NonNullable<Parameters<typeof createRemoteAgentHost>[0]['groupRelay']> = {
       plan, connect: () => ({ invoke, poller: {} as never }), noteStartFailure: () => false,
       noteRunFailure: () => false, trackRun: () => ({ setRunning() {}, release() {} }), async forget() {},
@@ -237,6 +241,7 @@ describe('shared image authorization and relay', () => {
       await expect(host.handle(GUEST, start)).resolves.toEqual({ accepted: true });
       await vi.waitFor(async () => expect(await host.handle(GUEST, read)).toMatchObject({ state: 'complete' }));
       expect(plan).toHaveBeenCalledWith(expect.objectContaining({ capability: 'image.generate', reserve: true }));
+      expect(invoke).not.toHaveBeenCalledWith([expect.objectContaining({ action: 'start', providerId: 'openai' })]);
       expect(invoke).toHaveBeenCalledWith([expect.objectContaining({
         action: 'start', providerId: 'openai-independent', model: 'openai-independent/gpt-image-2',
       })]);
@@ -928,6 +933,36 @@ describe('guest provider access and usage', () => {
     expect(started[0]!.input.guestProvider?.routeToken).toBe('route-2');
     expect(releases).toEqual([]);
     host.dispose();
+  });
+
+  it('records only the authorized executor turn and projects away session, provider and cost', async () => {
+    const record = vi.fn();
+    const redeem = vi.fn(async () => ({ receipt: RUN_2, record }));
+    installExecutionReporting({ available: () => true, direct: () => true, issue: async () => null,
+      challenge: nonce => ({ nonce, recipient: 'a'.repeat(64) }), redeem });
+    const events = [
+      { type: 'status', source: 'claude-code', data: { isRunning: true, providerInitiatedTurn: true } },
+      { type: 'done', data: { modelUsageCumulativeStartsAtZero: true,
+        modelUsage: { 'claude-opus': { inputTokens: 12, outputTokens: 3, costUSD: 0.02 } } } },
+    ] as AgentEvent[];
+    const host = makeHost([], { events, recordGuestUsage: vi.fn() });
+    try {
+      await host.handle(GUEST, { op: 'company-reporting-challenge', runId: RUN_1 });
+      await host.handle(OWNER, { op: 'company-reporting-grant', runId: RUN_1, grant: 'test' });
+      expect(redeem).not.toHaveBeenCalled();
+      await host.handle(GUEST, { op: 'company-reporting-grant', runId: RUN_1, grant: 'test' });
+      for (const runId of [RUN_1, RUN_2]) {
+        await host.handle(GUEST, { op: 'open', runId, agentKind: 'claude-code', payload: { json: openPayload(runId) } });
+        await vi.waitFor(async () => {
+          const poll = await host.handle(GUEST, {op:'poll', runs:[{runId,cursor:0}], waitMs:0}) as {runs:{data?:string}[]};
+          expect(Buffer.from(poll.runs[0]?.data ?? '', 'base64').toString()).toContain('"type":"done"');
+        }, {timeout:10000});
+      }
+      expect(record.mock.calls).toEqual([[[{ model: 'claude-opus', input: 12, output: 3, cacheRead: 0, cacheWrite: 0 }]]]);
+    } finally {
+      host.dispose();
+      installExecutionReporting(undefined);
+    }
   });
 
   it('meters guest turns into the guest ledger and same-account turns into the owner ledger', async () => {

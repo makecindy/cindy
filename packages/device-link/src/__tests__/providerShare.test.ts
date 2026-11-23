@@ -21,10 +21,10 @@ const BOTH = { sharedTask: true, providerShare: true };
 const TOKEN = 'a'.repeat(43);
 
 describe('provider share local handles', () => {
-  // Unit: cross-account catalogs must not reveal enterprise membership via branding.
+  // Unit: cross-account catalogs must not reveal enterprise membership via the built-in palette or uploaded SVG.
   it('removes organization branding from shared catalogs while preserving ordinary brands', async () => {
     const { scrubSharedProviderCatalog } = await import('../providerShareCatalog.js');
-    const enterprise = { id: 'byok-test', source: 'organization', name: 'Team provider', logoKind: 'openai-spectrum' };
+    const enterprise = { id: 'byok-test', source: 'organization', name: 'Team provider', logoKind: 'openai-spectrum', customIcon: '<svg/>' };
     const ordinary = { id: 'openai', source: 'builtin', name: 'OpenAI', logoKind: 'openai' };
     expect(scrubSharedProviderCatalog({ providers: [enterprise, ordinary] }).providers).toEqual([
       { id: enterprise.id, source: enterprise.source, name: enterprise.name }, ordinary,

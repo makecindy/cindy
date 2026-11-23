@@ -2,7 +2,7 @@ import { ghostCardSessionLinkId } from '@cindy/maker-shared/ghost-card-form';
 import { getGhostGithubReleaseRepository, declaredGhostHostToolGroups, isGhostCindyModelActionsDeclaration } from '@cindy/plugin-protocol';
 import { isValidGhostNetworkHostPattern as isValidPluginNetworkHostPattern, ghostNetworkTargetMatches } from '@cindy/plugin-protocol';
 export { ghostNetworkTargetMatches } from '@cindy/plugin-protocol';
-import { isSafeGhostRelativePath as isSafePluginUiPath, getPluginToolUi, validateWithStoredMcpApps, parseGhostMcpApps } from '@cindy/plugin-protocol';
+import { isSafeGhostRelativePath as isSafePluginUiPath, getPluginToolUi, validateWithStoredMcpApps, ghostMcpAppsValidationError, parseGhostMcpApps } from '@cindy/plugin-protocol';
 import { pluginHasToolUi, pluginToolVisible, pluginUiDomains, pluginUiPermissionsExpand } from '@cindy/plugin-protocol';
 import { getPluginHostUi, hostUiApprovalSubjects, HOST_UI_CAPABILITIES, isHostUiPosition, type GhostHostUi } from '@cindy/plugin-protocol';
 import { PLUGIN_APPEARANCE_FIELDS } from '@cindy/plugin-protocol/appearance';
@@ -118,6 +118,10 @@ const GHOST_ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
  * 超时/无窗口/载荷非法一律 fail closed 当「没同意」。壳、标题与身份头(图标+名字)
  * 由主机画,意识只供被净化的正文与按钮字——伪装不了主机文案、冒充不了别的意识,
  * 也点不了自己的按钮。桌面独占:本机对话框在 device-link 白名单里属永不放行类别。
+ * 'form' = 表单弹窗(2026-11-23):意识经管子请主机弹一个**主机画的**表单(文本、多行、
+ * 下拉、分段单选、开关、可增删的条目列表),拿回用户保存的值。确认弹窗只能问「是/否」,
+ * 要用户填一组设置时用本槽。护栏同 confirm(限速 + 全局单飞 + fail closed),另加
+ * 「只在用户正看着 Cindy 时弹」。字段、上限与校验见 shared/ghostForm.ts。桌面独占。
  * 'fs' = 写文件(2026-07-14):意识经管子请主机代写文件(创建/修改)。三档
  * 目的地:自己的私有数据目录(userData/ghost-fs/<id>,免确认)、当前会话
  * workdir(跟随会话 permission 模式:免批模式直写、逐条模式弹确认卡、
@@ -180,6 +184,7 @@ const LEGACY_GHOST_SLOTS = [
   'notify',
   'badge',
   'confirm',
+  'form',
   'fs',
   'library',
   'device-sync',
@@ -392,6 +397,13 @@ export const GHOST_NODE_CHILD_MODE_FLAG = '__cindy-node-child__';
  * stdio 字节一律 base64 中继(chunk 可能把多字节字符切两半,文本转发会
  * 出现乱码;base64 逐字节保真)。
  */
+
+/**
+ * 单条 stdio base64 中继帧的字符上限。接收端对超过上限的帧整段丢弃（没有断流、没有报错），
+ * 所以按字节写一条可能很大的消息时（例如插件引擎的 ACP 行里带 base64 图片），发送方必须
+ * 按 4 的整数倍切段：每段都是合法 base64，接收端依次喂进同一条 stdin，拼接后与原始字节一致。
+ */
+export const GHOST_NODE_STDIO_B64_MAX_CHARS = 2 * 1024 * 1024;
 
 /** worker → 主机:代启/喂 stdin/收 stdin/杀进程。 */
 export type GhostNodeChildToHostMessage =
@@ -607,9 +619,7 @@ export interface GhostTaskViewDecl {
 
 /**
  * 芯片型意识注册给 agent 的工具声明(卡槽②)。
- * 声明式而非运行时动态注册(规则 9:确定性;且会话中途增删工具会破坏
- * prompt 缓存前缀,规则 10)——主机在会话建立时按"已装且唤醒"的意识
- * 快照注入工具集。
+ * 默认按需发现。任务启动时的具名工具须显式声明，目录在运行期间固定。
  */
 export interface GhostToolDecl {
   /** 工具名:小写字母开头,允许小写/数字/下划线/连字符,≤64。 */
@@ -618,6 +628,8 @@ export interface GhostToolDecl {
   description: string;
   /** JSON Schema(object)形态的参数声明;可省略(无参工具)。 */
   parameters?: Record<string, unknown>;
+  /** Opt in to named exposure in the host's ordinary local task tool snapshot. */
+  exposure?: 'startup';
   /**
    * 调用审批要求(2026-11-02)。缺省 = 按会话权限档审批。
    * - `each-call`:即使本会话已允许过,每次调用仍按权限档重新审批。只收紧,不需确认。
@@ -1936,6 +1948,8 @@ export interface GhostManifest {
   notify?: true;
   badge?: true;
   confirm?: true;
+  /** 表单弹窗(form 槽):请主机弹表单并拿回用户保存的值。 */
+  form?: true;
   fs?: true;
   /** 持久作品库；卸载不删数据，位置和删除由 Host 设置页管理。 */
   library?: true;
@@ -2157,6 +2171,7 @@ export function ghostContentKeys(manifest: GhostManifest): string[] {
   if (manifest.notify === true) keys.push('slotNotify');
   if (manifest.badge === true) keys.push('slotBadge');
   if (manifest.confirm === true) keys.push('slotConfirm');
+  if (manifest.form === true) keys.push('slotForm');
   if (manifest.fs === true) keys.push('slotFs');
   if (manifest.library === true) keys.push('slotLibrary');
   // skill 是信任面最高的内容(给主 Agent 灌指令),详情页必须如实露出。
@@ -2935,6 +2950,16 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
       kind: 'confirm',
       labelKey: 'confirm',
       detailKey: 'confirmDetail',
+    });
+  }
+  // form 槽:能请主机弹一个表单让用户填(会打断操作)。独立 key,已装插件新增这一档时
+  // 扩权确认能拦下;图标与确认弹窗同组(都是主机弹窗来问你)。
+  if (manifest.form === true) {
+    items.push({
+      key: 'form',
+      kind: 'confirm',
+      labelKey: 'form',
+      detailKey: 'formDetail',
     });
   }
   // 常驻模式如实告知(用户要背一个后台进程);on-demand 是默认行为,不列。
@@ -3717,6 +3742,7 @@ const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
   'notify',
   'badge',
   'confirm',
+  'form',
   'fs',
   'library',
   'deviceSync',
@@ -3734,6 +3760,7 @@ const V3_BOOLEAN_CAPABILITY_FIELDS = [
   'notify',
   'badge',
   'confirm',
+  'form',
   'fs',
   'library',
   'deviceSync',
@@ -3763,6 +3790,7 @@ const V3_BOOLEAN_TO_LEGACY_SLOT: Record<(typeof V3_BOOLEAN_CAPABILITY_FIELDS)[nu
   notify: 'notify',
   badge: 'badge',
   confirm: 'confirm',
+  form: 'form',
   fs: 'fs',
   library: 'library',
   deviceSync: 'device-sync',
@@ -5137,6 +5165,7 @@ function validateGhostManifestInput(
       tools.push({
         name: t.name,
         description: t.description,
+        ...(prepared.schemaVersion === 3 && t.exposure === 'startup' ? { exposure: 'startup' as const } : {}),
         ...(t.parameters !== undefined
           ? { parameters: t.parameters as Record<string, unknown> }
           : {}),
@@ -7035,7 +7064,7 @@ function validateGhostManifestInput(
 
   if (raw.mcpApps !== undefined && raw.schemaVersion !== 3) return { ok: false, reason: 'mcpApps requires schemaVersion 3' };
   const parsedMcpApps = raw.mcpApps === undefined ? undefined : parseGhostMcpApps(raw.mcpApps, tools ?? [], network?.hosts ?? [], isSafePluginUiPath);
-  if (parsedMcpApps === null) return { ok: false, reason: 'mcpApps.ui 页面或工具声明无效，页面域名必须在 network.hosts 内' };
+  if (parsedMcpApps === null) return { ok: false, reason: ghostMcpAppsValidationError(raw.mcpApps) };
   const mcpApps = parsedMcpApps;
   return {
     ok: true,
@@ -7091,6 +7120,7 @@ function validateGhostManifestInput(
       ...(slots.includes('notify') ? { notify: true as const } : {}),
       ...(slots.includes('badge') ? { badge: true as const } : {}),
       ...(slots.includes('confirm') ? { confirm: true as const } : {}),
+      ...(slots.includes('form') ? { form: true as const } : {}),
       ...(slots.includes('fs') ? { fs: true as const } : {}),
       ...(slots.includes('device-sync') ? { deviceSync: true as const } : {}),
       ...(slots.includes('library') ? { library: true as const } : {}),
@@ -7242,8 +7272,9 @@ export function ghostManifestToAuthorFormat(manifest: GhostManifest): Record<str
  *
  * 上行(电子脑 → 主机,cindy.send(payload) = ipcRenderer.invoke):
  *   - tool-result:交卷。
- *   - host-request:读取宿主公开上下文。目前只支持 app-context(region + locale),
- *     无需声明卡槽、无用户数据与凭证内容。
+ *   - host-request:读取宿主只读信息：app-context、control-points、cindy-preference
+ *     与 resource-usage（本机、调用插件自身进程及共用 GPU 进程用量）。
+ *     不返回其它插件的配置、进程详情或凭证；未知 kind 明确拒绝。
  *   - cindy-request(旧名 model-request 兼容):cindy 槽代办(意识请 Cindy 本体干活;invoke 的返回值即结果,
  *     无需另配对)。gen_image / edit_image / gen_video / edit_video /
  *     deposit_media / release_media / oneshot_text / embed_text;须声明
@@ -7332,7 +7363,30 @@ export type GhostPipeHostRequest =
       /** 查询当前 Host 提供的控制节点目录，以及本插件在各节点的生效状态。 */
       type: 'host-request';
       kind: 'control-points';
+    }
+  | {
+      type: 'host-request';
+      kind: 'resource-usage';
     };
+
+/** 本机与本插件实例的实测资源用量；缺失指标为 null，内存单位为字节。 */
+export interface GhostResourceUsageResult {
+  ok: true;
+  capturedAt: string;
+  machine: {
+    memoryTotalBytes: number | null;
+    memoryAvailableBytes: number | null;
+    cpuBusyPercent: number | null;
+    cpuLogicalCores: number | null;
+    cpuLoadAverage1m: number | null;
+  };
+  plugin: {
+    memoryBytes: number | null;
+    cpuPercent: number | null;
+  };
+  /** Cindy 共用 GPU 进程的内存，不是显存，也不计入 plugin.memoryBytes。 */
+  gpu: { memoryBytes: number | null };
+}
 
 /** 新任务「让插件选」的结果(Host 界面用)。kept = 用用户原来选的模型。 */
 export type GhostStartTaskRouteResult =
@@ -7837,6 +7891,8 @@ export interface GhostPipePreviewRequest {
   mobilePageId?: string;
   url: string;
   sessionId?: string;
+  /** 桌面侧栏可聚焦该插件实例在目标任务中已打开的同 URL 页签。 */
+  reuseExisting?: boolean;
 }
 
 /** preview 槽结构化返回。 */
@@ -7925,6 +7981,7 @@ export type GhostPipeTaskViewResult =
  */
 export interface GhostPipeScheduleDraftRequest {
   type: 'schedule-request';
+  primaryDeviceOnly?: boolean;
   mobilePageId?: string;
   /** 预填的自动化名称(净化后按 GHOST_SCHEDULE_DRAFT_NAME_MAX_CHARS 截断)。 */
   name: string;
@@ -7971,6 +8028,7 @@ export type GhostPipeScheduleDraftResult =
  * 文本字段已由主机净化 + 截断;频率建议已钳到最小间隔之上。
  */
 export interface GhostScheduleDraftPush {
+  primaryHostKey?: string;
   /** 本次请求 id(renderer 去重用:重复推送不叠开多个面板)。 */
   requestId: string;
   ghostId: string;
@@ -10367,6 +10425,14 @@ export const GHOST_CALL_TOOL_NAMES: readonly string[] = [
 /** toolName 是否是 ghost_call(兼容新旧 server 名)。 */
 export function isGhostCallToolName(name: string | undefined | null): boolean {
   return typeof name === 'string' && GHOST_CALL_TOOL_NAMES.includes(name);
+}
+
+export const STARTUP_GHOST_TOOL_PREFIX = 'ghost_start_';
+
+/** Named calls use the same result card protocol without the ghost_call input envelope. */
+export function isGhostStartupToolCallName(name: string): boolean {
+  return name.startsWith(`mcp__cindy__${STARTUP_GHOST_TOOL_PREFIX}`) ||
+    name.startsWith(`mcp:cindy:${STARTUP_GHOST_TOOL_PREFIX}`);
 }
 
 /** Plugin-to-host routine protocol; source identity always comes from the authenticated pipe. */

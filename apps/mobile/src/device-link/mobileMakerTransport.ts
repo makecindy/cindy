@@ -40,7 +40,8 @@ import {
   MOBILE_REMOTE_INVOKE_CHANNELS,
 } from "@cindy/maker-shared/device-link-contract";
 import {
-  CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
+  providerPickerListArgs,
+  type ProviderPickerModel,
   ORCA_EXECUTION_DEVICES_CHANNEL,
   ORCA_WORKER_ROLES_APPLY,
   ORCA_WORKER_ROLES_GET,
@@ -506,9 +507,28 @@ export interface MobileMakerTransport {
    * 被控电脑上插件提供的执行引擎。旧电脑没有该 channel 时返回空列表；临时读取失败交给目录保留上一份结果。
    */
   listPluginEngines(): Promise<MobilePluginEngine[]>;
-  getPluginEngineUsage(key: string): Promise<GhostHarnessUsage | null>;
+  /**
+   * `sessionId`: the controlled computer's own task; an engine with several accounts reports that
+   * task's account (2026-11-23). Older computers ignore it and report the engine's original login.
+   */
+  getPluginEngineUsage(key: string, sessionId?: string): Promise<GhostHarnessUsage | null>;
   /** 请被控电脑的引擎插件重新上报模型(那台按插件冷却)；不回结果，失败忽略。 */
   refreshPluginEngines(): Promise<void>;
+  /**
+   * 被控电脑的模型组配置(model-groups.md §6.3)。旧电脑没有该 channel 时返回 null(不显示模型组)。
+   * 内容按不可信数据交给调用方解析。
+   */
+  listModelGroups(): Promise<unknown | null>;
+  /** 请被控电脑按它的模式选来源；返回那台的选路结果(按不可信数据解析)。 */
+  resolveModelGroup(request: { selection: { type: 'route'; id: string }; context?: { hasImages?: boolean }; location?: { agentDeviceId: string | null } }): Promise<unknown>;
+  commitModelGroupDecision(decisionId: string): Promise<void>;
+  bindModelGroupSession(request: {
+    sessionId: string;
+    selection: { type: 'route'; id: string };
+    route: { agentKind: 'cc' | 'codex' | 'pi'; providerId: string; model: string; agentDeviceId?: string };
+  }): Promise<void>;
+  /** 请被控电脑在任务里写模型组那一行说明(远程不能裸写消息)。 */
+  writeModelGroupRouteNote(request: { sessionId: string; note: Record<string, unknown> }): Promise<void>;
   getSessionTree(sessionId: string): Promise<unknown | null>;
   navigateSessionTree(
     sessionId: string,
@@ -519,7 +539,8 @@ export interface MobileMakerTransport {
    * 列被控端的供应商(来源)结构,用于 provider-aware 模型下拉(隧道 maker:provider:list)。
    * modelVisibilityOverrides = 被控端「模型显示/隐藏」override 快照(旧被控端不回传)。
    */
-  listProviders(): Promise<{
+  listProviders(retainedModel?: ProviderPickerModel): Promise<{
+    deferredProviderIds?: string[];
     providers: ProviderView[];
     providerOrder?: string[];
     modelVisibilityOverrides?: Record<string, boolean>;
@@ -639,7 +660,7 @@ export interface MobileMakerTransport {
   getSessionEstimatedValue(
     sessionId: string,
     options?: { includeBreakdown?: boolean; clientId?: string },
-  ): Promise<{ totalValueMoney?: unknown; totalValueUsd?: number; costBreakdown?: unknown }>;
+  ): Promise<{ totalValueMoney?: unknown; totalValueAmounts?: unknown[]; totalValueUsd?: number; costBreakdown?: unknown }>;
   /** Codex app-server authoritative windows plus banked reset credits and a bound reset offer. */
   getCodexRateLimits(providerId?: string): Promise<MobileCodexRateLimitsResult>;
   setCodexResetAutoUse(patch: Partial<CodexResetAutoUseSettings> | null, accountKey: string, providerId?: string): Promise<MobileCodexRateLimitsResult>;
@@ -1253,10 +1274,20 @@ export function createMobileMakerTransport({
           if (isPluginCatalogUnsupportedError(error)) return [];
           throw error;
         }),
-    getPluginEngineUsage: async key => {
+    listModelGroups: () =>
+      call<unknown>("model-groups:get", [])
+        .catch((error: unknown) => {
+          if (isPluginCatalogUnsupportedError(error)) return null;
+          throw error;
+        }),
+    resolveModelGroup: (request) => call<unknown>("model-groups:resolve", [request]),
+    commitModelGroupDecision: async (decisionId) => { await call("model-groups:commit", [decisionId]); },
+    bindModelGroupSession: async (request) => { await call("model-groups:bind-session", [request]); },
+    writeModelGroupRouteNote: async (request) => { await call("model-groups:route-note", [request]); },
+    getPluginEngineUsage: async (key, sessionId) => {
       if (isSharedTaskPeer(deviceId) || !isCurrent()) return null;
-      const read = pluginUsageReader.read(fileOwner, deviceId, key, () =>
-        isCurrent() ? call<unknown>("maker:get-plugin-engine-usage", [key]) : undefined);
+      const read = pluginUsageReader.read(fileOwner, deviceId, sessionId ? `${key}|task:${sessionId}` : key, () =>
+        isCurrent() ? call<unknown>("maker:get-plugin-engine-usage", sessionId ? [key, { sessionId }] : [key]) : undefined);
       const snapshot = await read.result;
       return isCurrent() ? snapshot : null;
     },
@@ -1267,12 +1298,7 @@ export function createMobileMakerTransport({
     getSessionTree: (sessionId) => call("maker:get-session-tree", [sessionId]),
     navigateSessionTree: (sessionId, entryId, options) =>
       call("maker:navigate-session-tree", [sessionId, entryId, options]),
-    listProviders: () =>
-      call("maker:provider:list", [
-        {
-          capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2],
-        },
-      ]),
+    listProviders: (retainedModel) => call("maker:provider:list", providerPickerListArgs(retainedModel)),
     getSession: (sessionId) => call("local-db:sessions:get", [sessionId]),
     prewarmSession: (sessionId, createOpts) =>
       call("maker:session:prewarm", [sessionId, createOpts]),

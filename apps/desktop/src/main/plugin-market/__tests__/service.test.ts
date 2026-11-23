@@ -1,3 +1,4 @@
+import { MarketSourceStore } from '../sources/store';
 import { compareCindyVersions, getPluginToolUi, parsePluginResolveRequest, pluginHasToolUi, pluginToolVisible } from '@cindy/plugin-protocol';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -525,7 +526,9 @@ function harness(items: VisiblePluginSummary[], removals: PluginRemovalNotice[] 
       const state = await api.read();
       const matches = state.plugins.filter(item => !options.query
         || [item.name, item.description, item.author, item.ghostId].some(text => text?.toLocaleLowerCase().includes(options.query!.toLocaleLowerCase())));
-      const counts = { all: matches.length, public: 0, organization: 0, personal: 0 };
+      const counts = { all: matches.length, public: 0, organization: 0, personal: 0,
+        official: matches.filter(item => item.scope === 'public' && item.publisherKind === 'official').length,
+        community: matches.filter(item => item.scope === 'public' && item.publisherKind === 'personal').length };
       for (const item of matches) counts[item.scope]++;
       const selected = matches.filter(item => !options.scope || options.scope === 'all' || options.scope === item.scope);
       const offset = Number(options.cursor ?? 0), limit = options.limit ?? 12;
@@ -831,6 +834,51 @@ it('finds canonical root and organization instance keys without listing', () => 
 });
 
 describe('PluginMarketService migration and defaultInstall', () => {
+  // Unit regression: even with custom sources configured, official engine discovery must not
+  // open a local source or enumerate installations for each candidate on the cold or warm path.
+  it('classifies public official engines by release without opening custom sources or scanning installations', async () => {
+    const engine = summary({ publisherKind: 'official' });
+    const community = summary({ id: `c${'b'.repeat(24)}`, publisherKind: 'personal' });
+    const tool = summary({ id: `c${'c'.repeat(24)}`, publisherKind: 'official' });
+    const h = harness([community, engine, tool]);
+    const sourceStore = new MarketSourceStore(() => { throw new Error('unexpected local source read'); });
+    const bindSources = vi.spyOn(sourceStore, 'bind').mockReturnValue(sourceStore);
+    const service = new PluginMarketService(h.api as unknown as PluginMarketApi, h.ledger, sourceStore);
+    h.api.detail.mockResolvedValueOnce(parsedDetail(engine, {
+      ...manifest(engine.ghostId), node: { entry: 'worker.js', protocol: 'json-rpc-stdio', entries: ['engine.js'] },
+      harnesses: [{ id: 'engine', name: 'Engine', protocol: 'acp', entry: 'engine.js' }],
+    }));
+    // Legacy servers already returned the entire catalog, including the engine after page one.
+    const firstPage = await h.api.catalog();
+    h.api.catalog.mockClear();
+    h.api.catalog.mockResolvedValueOnce({ ...firstPage, plugins: [community], nextCursor: 'legacy:1',
+      legacyQueryPlugins: [community, engine, tool] });
+    for (let open = 0; open < 2; open++) {
+      const page = await service.officialModelPlugins();
+      expect(page.items.map(item => item.pluginId)).toEqual([engine.id]);
+      expect(page.nextCursor).toBeNull();
+    }
+    expect(h.api.catalog).toHaveBeenCalledTimes(2);
+    expect(h.api.detail.mock.calls).toEqual([[engine.id], [tool.id]]);
+    expect(h.api.resolve).not.toHaveBeenCalled();
+    expect(bindSources).not.toHaveBeenCalled();
+    expect(runtime.listScans).toBe(0);
+  });
+
+  // A closed picker must not start the next manifest read while an already-sent one completes.
+  it('stops cold manifest reads after the picker closes', async () => {
+    const first = summary({ publisherKind: 'official' });
+    const next = summary({ id: `c${'c'.repeat(24)}`, publisherKind: 'official' });
+    const h = harness([first, next]);
+    let active = true;
+    h.api.detail.mockImplementationOnce(async () => {
+      active = false;
+      return detail(first);
+    });
+    await h.service.officialModelPlugins(null, () => active);
+    expect(h.api.detail.mock.calls).toEqual([[first.id]]);
+  });
+
   // Unit: the three new read paths must not invoke the synchronous disk scanner.
   // A held worker snapshot also proves simultaneous readers share one pending scan.
   it('shares background installation reads across catalog, lookup and recommendations without synchronous scans', async () => {
@@ -898,6 +946,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
   it('counts uninstalled market matches through bounded ID verification and retains source conflicts', async () => {
     const items = Array.from({ length: 4 }, (_, index) => summary({
       id: `c${String(index).padStart(24, '0')}`, ghostId: `tool-${index}`, name: `Tool ${index}`, namespace: null,
+      publisherKind: index % 2 ? 'personal' : 'official',
     }));
     const h = harness(items);
     runtime.ghosts = [items[0]!, items[1]!, items[3]!].map(item => ({ ...ghostEntry(item.ghostId), namespace: null }));
@@ -908,7 +957,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
     expect(first.items.map(item => [item.ghostId, item.installState])).toEqual([
       ['tool-2', 'not-installed'], ['tool-3', 'conflict'],
     ]);
-    expect(first.counts).toMatchObject({ all: 2, public: 2 });
+    expect(first.counts).toMatchObject({ all: 2, public: 2, official: 1, community: 1 });
     expect(h.api.resolve).toHaveBeenCalledExactlyOnceWith([
       { key: items[0]!.id, pluginId: items[0]!.id },
       { key: items[1]!.id, pluginId: items[1]!.id },
@@ -916,7 +965,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
 
     const searched = await h.service.query({ query: 'Tool 2', limit: 10, excludeInstalled: true });
     expect(searched.items.map(item => item.ghostId)).toEqual(['tool-2']);
-    expect(searched.counts).toMatchObject({ all: 1, public: 1 });
+    expect(searched.counts).toMatchObject({ all: 1, public: 1, official: 1, community: 0 });
     expect(h.api.resolve).toHaveBeenLastCalledWith(expect.any(Array), 'Tool 2');
     await h.service.query({ limit: 10, excludeInstalled: true, counts: false });
     expect(h.api.resolve).toHaveBeenCalledTimes(2);
@@ -1958,7 +2007,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
       dataOwnerId: 'local-v1',
       generation: 2,
     };
-    const publicPlugin = summary();
+    const publicPlugin = summary({ publisherKind: 'personal' });
     const organizationPlugin = summary({
       id: `c${'b'.repeat(24)}`,
       ghostId: 'cindy-team-only',
@@ -1969,6 +2018,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
 
     await expect(h.service.query()).resolves.toMatchObject({
       items: [{ pluginId: publicPlugin.id, scope: 'public' }],
+      counts: { all: 1, public: 1, official: 0, community: 1, organization: 0 },
       unavailableReason: null,
     });
     expect(h.api.read).toHaveBeenCalledTimes(1);

@@ -24,6 +24,9 @@ import { useBotTranslation } from './botPronounContext';
 import { Spinner } from '@/components/ui/spinner';
 import { useProviders } from '@/hooks/useProviders';
 import { useAvailableAgents } from '@/hooks/useAvailableAgents';
+import { useSelectableDevices } from '@/hooks/useControllableDevices';
+import { usePluginEngines } from '@/hooks/usePluginEngines';
+import { isPluginEngineSelectable } from '@/lib/pluginEngineSelection';
 import type { MakerVendor } from '@/lib/ccAgent.types';
 import * as sessionService from '@/lib/sessionService';
 import type { ConversationSearchJump } from '../../../shared/conversationSearchJump';
@@ -58,6 +61,7 @@ import { CindyMergeSetting } from './CindyMergeSetting';
 import { BotLifecycleSettings } from './BotLifecycleSettings';
 import { BotInvitationWelcome } from './BotInvitationWelcome';
 import { BotModelChainEditor } from './BotModelChainEditor';
+import { useProviderShareAgentDevices } from '@/features/provider-share/useProviderShareAgentDevices';
 import { BotCapabilitySettings } from './BotCapabilitySettings';
 import { BotMemorySettings } from './BotMemorySettings';
 import { CompanionVoiceSettings } from './voice/CompanionVoiceSettings';
@@ -796,6 +800,12 @@ export function BotsHomeView() {
   const profileLoadState = useBotProfilesLoadState();
   const providerOnboarding = useProviderOnboarding({ dismissible: false });
   useProviders();
+  const localPluginEngines = usePluginEngines(true);
+  const { pluginEngineDevices: sharedPluginEngineDevices = [] } = useProviderShareAgentDevices();
+  const { devices: selectableDevices } = useSelectableDevices();
+  const canChoosePluginEngine = localPluginEngines.some(isPluginEngineSelectable)
+    || sharedPluginEngineDevices.length > 0
+    || selectableDevices.some((device) => device.online);
   const { availableVendors, loaded: availableAgentsLoaded } = useAvailableAgents();
   const hiddenVendors = useMemo<MakerVendor[]>(() => {
     if (!availableAgentsLoaded) return [];
@@ -825,7 +835,9 @@ export function BotsHomeView() {
   const needsCanonicalCreation =
     !currentCanonicalId || unavailableCanonicalId === currentCanonicalId;
   const needsModelSelection = needsCanonicalCreation && modelUnavailable;
-  const needsProviderConnection = needsCanonicalCreation && providerOnboarding.visible;
+  const requiresProvider = providerOnboarding.visible && !canChoosePluginEngine
+    && selectedBot?.capabilities.modelChain[0]?.harness !== 'acp';
+  const needsProviderConnection = needsCanonicalCreation && requiresProvider;
   // `?add=1` 是阵容还在弹模态那阵子的入口。阵容页面化之后它只剩兼容职责:
   // 老书签、老深链通过 /bots/roster 复用同一个创建弹窗。
   const addRequested = searchParams.get('add') === '1';
@@ -927,9 +939,26 @@ export function BotsHomeView() {
   );
   useRegisterContentHeader(headerContent);
 
+  // The hand-off below keys on the fields that decide it, not on the row's
+  // identity: a roster refresh that only moves previews or unread counts must
+  // not restart the main-chat validation. It reads the latest row via this ref,
+  // synced by the effect declared just before it.
+  const selectedBotRef = useRef(selectedBot);
   useEffect(() => {
+    selectedBotRef.current = selectedBot;
+  });
+  const selectedBotId = selectedBot?.id;
+  const selectedBotStatus = selectedBot?.status;
+  // A profile save (version bump) still re-runs it, so creation that lost its
+  // version check to a concurrent save retries with the new version.
+  const selectedBotVersion = selectedBot?.currentVersion;
+  const selectedInvitationPending =
+    !!selectedBot?.invitation && selectedBot.invitation.stage !== 'ready' && !selectedBot.canonicalSessionId;
+
+  useEffect(() => {
+    const selectedBot = selectedBotRef.current;
     if (needsProviderConnection || needsModelSelection) return;
-    if (selectedBot?.invitation && selectedBot.invitation.stage !== 'ready' && !selectedBot.canonicalSessionId) return;
+    if (selectedInvitationPending) return;
     if (!selectedBot || shouldDeferCanonicalBotSessionNavigation({ settingsOpen, addRequested }))
       return;
     if (selectedBot.status !== 'active') {
@@ -938,10 +967,12 @@ export function BotsHomeView() {
     }
 
     const canonicalSessionId = canonicalBotSessionId(selectedBot);
+    // Creation's CAS needs the current profile version, which a later refresh may have advanced.
+    const latestBot = () => (selectedBotRef.current?.id === selectedBot.id ? selectedBotRef.current : selectedBot);
     let cancelled = false;
     // Read existing history even without a route; only reconstruction needs one.
     const deferReconstruction = () => {
-      if (!providerOnboarding.visible && !modelUnavailable) return false;
+      if (!requiresProvider && !modelUnavailable) return false;
       setUnavailableCanonicalId(canonicalSessionId ?? null);
       return true;
     };
@@ -953,7 +984,7 @@ export function BotsHomeView() {
           if (session.status !== 'active') {
             if (deferReconstruction()) return;
             setIsCreatingSession(true);
-            const next = await createCanonicalSession(selectedBot);
+            const next = await createCanonicalSession(latestBot());
             if (!cancelled) {
               setIsCreatingSession(false);
               if (next) navigate(`/bots/${selectedBot.id}/session/${next.id}`, { replace: true });
@@ -966,7 +997,7 @@ export function BotsHomeView() {
             // arbitrary existing Session. Preserve the existing task and create a
             // fresh Bot-owned Session instead.
             setIsCreatingSession(true);
-            const next = await createCanonicalSession(selectedBot);
+            const next = await createCanonicalSession(latestBot());
             if (!cancelled) {
               setIsCreatingSession(false);
               if (next) navigate(`/bots/${selectedBot.id}/session/${next.id}`, { replace: true });
@@ -989,7 +1020,7 @@ export function BotsHomeView() {
           // row disappeared. Passing null can never repair that state because
           // main correctly sees a non-null canonical pointer. Preserve the
           // observed id so a concurrent recovery still loses the CAS safely.
-          const next = await createCanonicalSession(selectedBot, canonicalSessionId, true).catch(
+          const next = await createCanonicalSession(latestBot(), canonicalSessionId, true).catch(
             () => null,
           );
           if (!cancelled) {
@@ -1007,7 +1038,7 @@ export function BotsHomeView() {
     const attemptToken = Symbol('bot-canonical-create');
     creatingBotRef.current = { botId: selectedBot.id, token: attemptToken };
     setIsCreatingSession(true);
-    void createCanonicalSession(selectedBot)
+    void createCanonicalSession(latestBot())
       .then((session) => {
         if (cancelled) return;
         navigate(`/bots/${selectedBot.id}/session/${session.id}`, { replace: true });
@@ -1031,11 +1062,15 @@ export function BotsHomeView() {
   }, [
     addRequested,
     createCanonicalSession,
-    selectedBot,
+    selectedBotId,
+    selectedBotStatus,
+    selectedBotVersion,
+    currentCanonicalId,
+    selectedInvitationPending,
     sessionId,
     settingsOpen,
     navigate,
-    providerOnboarding.visible,
+    requiresProvider,
     needsModelSelection,
     needsProviderConnection,
     modelUnavailable,

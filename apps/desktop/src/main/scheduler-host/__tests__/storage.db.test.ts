@@ -16,7 +16,7 @@ import * as schema from '../../localDb/schema';
 import { createDbClient } from '../../localDb/client/DbClient';
 import type { DbClient } from '../../localDb/client/DbClient';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current';
-import { recordScheduleRunCostDirect } from '../runCostLedger';
+import { recordScheduleRunCostDirect, applyScheduleRunCostMetaChange } from '../runCostLedger';
 import { DrizzleScheduleStorage, type SchedulerDrizzleDb } from '../storage.desktop';
 
 function actualMoneyFromLegacyUsd(amountUsd: number) {
@@ -106,6 +106,7 @@ const SCHEDULER_DDL = [
       created_at INTEGER NOT NULL DEFAULT 0,
       updated_at INTEGER NOT NULL DEFAULT 0,
       total_cost_usd REAL,
+      total_cost_usd_is_approximate INTEGER DEFAULT 0,
       total_cost_amount REAL NOT NULL DEFAULT 0,
       total_cost_currency TEXT,
       total_cost_is_approximate INTEGER NOT NULL DEFAULT 0
@@ -152,6 +153,7 @@ const SCHEDULER_DDL = [
       provider_id TEXT,
       agent_device_id TEXT,
       effort TEXT,
+      model_group TEXT,
       fast_mode INTEGER NOT NULL DEFAULT 0,
       working_dir TEXT,
       workspace_kind TEXT NOT NULL DEFAULT 'project',
@@ -162,6 +164,7 @@ const SCHEDULER_DDL = [
       pre_run_hook_command TEXT,
       pre_run_hook_timeout_ms INTEGER,
       pre_run_plugin_id TEXT,
+      primary_host_key TEXT,
       pre_run_plugin_on_failure TEXT,
       skip_log_session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
       notify_desktop INTEGER NOT NULL DEFAULT 1,
@@ -191,6 +194,7 @@ const SCHEDULER_DDL = [
       estimated_value_usd REAL NOT NULL DEFAULT 0,
       cost_amount REAL NOT NULL DEFAULT 0,
       estimated_value_amount REAL NOT NULL DEFAULT 0,
+      other_estimated_value_amount REAL NOT NULL DEFAULT 0,
       cost_currency TEXT,
       cost_is_approximate INTEGER NOT NULL DEFAULT 0,
       cost_attribution TEXT NOT NULL DEFAULT 'legacy',
@@ -318,6 +322,33 @@ it.each(['eligible', 'paused', 'archived', 'finished', 'manual-continue', 'runni
   } finally { h.close(); }
 });
 
+// DB tier: one scheduler turn has two native subscription quotes, including the path without an assistant row.
+it.each(['message', 'tool-only'])('reads both native estimates for a %s turn after repeated reads', async mode => {
+  const h = createStorageHarness();
+  try {
+    setCurrentDbClient({ drizzle: h.db } as unknown as DbClient, 'test-user');
+    h.sqlite.exec("INSERT INTO sessions (id, title) VALUES ('task', 'mixed')");
+    await h.storage.insert(baseSchedule({ targetSessionId: 'task' }));
+    await h.storage.insertRun({ id: 'run', scheduleId: 'sch-1', sessionId: 'task', firedAt: 1, status: 'success' });
+    const dollars = { currency: 'USD', amount: 2, approximate: true, kind: 'value-estimate' } as const;
+    const yuan = { ...dollars, currency: 'CNY', amount: 7 } as const;
+    const estimatedAmounts = [dollars, yuan];
+    if (mode === 'message') {
+      const meta = { origin: { kind: 'scheduler', scheduleId: 'sch-1', runId: 'run' },
+        turnCost: dollars, turnCostIsEstimate: true, turnUsageDetails: { estimatedAmounts } };
+      h.sqlite.prepare("INSERT INTO messages (id, client_id, session_id, role, content, agent_meta, created_at) VALUES ('m','m','task','assistant','',?,2)").run(JSON.stringify(meta));
+      await applyScheduleRunCostMetaChange({}, meta);
+      await applyScheduleRunCostMetaChange(meta, meta);
+    } else {
+      await recordScheduleRunCostDirect({ runId: 'run', money: dollars, estimatedAmounts });
+    }
+    for (let read = 0; read < 2; read++) {
+      expect(await h.storage.listRuns('sch-1')).toMatchObject([{ estimatedValueAmounts: [dollars, yuan], costMoney: { amount: 0 } }]);
+      expect(await h.storage.listCostSummaries()).toMatchObject([{ totalEstimatedValueAmounts: [dollars, yuan], totalMoney: { amount: 0 } }]);
+    }
+  } finally { clearCurrentDbClient(); h.close(); }
+});
+
 it.each(['api', 'subscription', 'tool-only'])('includes media in both run history and schedule totals for %s runs', async (mode) => {
   const harness = createStorageHarness();
   try {
@@ -413,6 +444,7 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
     const schedule = baseSchedule({
       id: 'sch-storage',
       name: 'storage smoke',
+      primaryHostKey: 'public/cindy-contacts',
       // DB tier: a PR checkout retains the creator project across insert/get/update.
       inheritedProjectDir: '/projects/app',
       workingDir: '/checkouts/pr',
@@ -441,6 +473,7 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       });
       expect(updated?.inheritedProjectDir).toBe('/projects/app');
       expect(updated?.workingDir).toBe('/checkouts/pr');
+      expect(updated?.primaryHostKey).toBe(schedule.primaryHostKey);
       expect(updated?.status).toBe('paused');
       expect(updated?.nextFireAt).toBeUndefined();
       expect(await harness.storage.listActive()).toEqual([]);

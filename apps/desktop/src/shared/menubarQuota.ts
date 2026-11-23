@@ -26,6 +26,7 @@ export interface MenubarSettings {
   lowAlert: boolean;
   privacy: boolean;
   scope: MenubarUsageScope;
+  currency?: 'USD' | 'CNY' | 'auto';
 }
 
 export const DEFAULT_MENUBAR_SETTINGS: MenubarSettings = {
@@ -37,6 +38,7 @@ export const DEFAULT_MENUBAR_SETTINGS: MenubarSettings = {
   lowAlert: true,
   privacy: false,
   scope: 'all',
+  currency: 'auto',
 };
 
 export type MenubarSettingsPatch = Partial<MenubarSettings>;
@@ -206,8 +208,9 @@ export interface MenubarView {
   presentation?: import('./quotaPanelDesign.js').QuotaPanelDesign;
   /** BCP 47 locale for dates and numbers. */
   locale: string;
-  /** Symbol of the usage ledger currency: "$" on Global, "¥" in mainland China. */
+  /** Symbol of the selected native usage currency. */
   moneySymbol: string;
+  taskMoneySymbol?: string;
   strings: MenubarStrings;
   /** Text after the menu bar icon for each mode; the active one is `settings.statusText`. */
   statusTextByMode: Record<MenubarStatusTextMode, string | null>;

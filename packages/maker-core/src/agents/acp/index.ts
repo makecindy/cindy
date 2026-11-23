@@ -23,8 +23,10 @@ export {
 export { AcpConnectionClosedError, AcpRequestTimeoutError, AcpRpcError } from './connection.js';
 export { ACP_PERMISSION_MODES, buildAcpCapabilities, describeAcpModels } from './capabilities.js';
 export {
+  AcpAccountError,
   AcpAuthRequiredError,
   AcpProtocolVersionError,
+  AcpRequiredMcpUnavailableError,
   AcpResumeUnavailableError,
   AcpSession,
   openAcpSession,
@@ -39,5 +41,6 @@ export {
   acpMcpServersFromBridge,
   acpProviderIdForHarness,
   type AcpAgentDeps,
+  type AcpEndpointConnectOptions,
   type AcpEndpointLauncher,
 } from './acp-agent.js';

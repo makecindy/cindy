@@ -65,6 +65,8 @@ export interface CodexHttpBridge {
    * 误删新 query 刚注册的 ctx。
    */
   unregisterSessionCtx(sessionId: string, expectedCtx?: LiziMcpSessionContext): void;
+  /** Close transports created by one confirmed Agent process instance. */
+  closeSessionInstance(sessionInstanceId: string): void;
   /**
    * per-session bearer token (pi 会话用)。按会话隔离,冻结伙伴仅能访问实际挂载的 server:
    * pi 每个会话在 spawn 前生成独立 token,经 env-file 交给远端进程 —— 单个
@@ -91,7 +93,7 @@ export interface StartCodexHttpBridgeOptions {
    * MCP SDK 的 McpServer/Protocol 实例只能 connect 一个 transport，所以每个
    * streamable-http session 必须拿到独立实例。
    */
-  serverFactories: Record<string, () => McpServer>;
+  serverFactories: Record<string, (startupContext?: LiziMcpSessionContext) => McpServer>;
   /** Built-in plugin id for each policy-controlled MCP server. */
   pluginIdByServerName?: Record<string, string>;
   /**
@@ -125,8 +127,11 @@ interface DispatchOpts {
   sessionTokenCtx?: LiziMcpSessionContext;
   /** 经 `?session=` 路由时的 Cindy sessionId;新建的 MCP 会话归它所有,随它注销而关闭。 */
   ownerSessionId?: string;
+  /** URL/session context instance that owns a newly initialized transport. */
+  ownerSessionInstanceId?: string;
   /** owner 的注册是否仍在;初始化请求跨越注销时据此自行关闭,不依赖注销时的那次扫描。 */
   isOwnerLive?: (sessionId: string) => boolean;
+  isInstanceGenerationCurrent?: () => boolean;
   /** Local Codex per-thread URL identity. null means an unbound legacy URL. */
   threadInstanceQuery: string | null;
 }
@@ -135,6 +140,7 @@ interface SessionTransport {
   transport: StreamableHTTPServerTransport;
   mcpServer: McpServer;
   ownerSessionId?: string;
+  ownerSessionInstanceId?: string;
 }
 
 /** One policy-controlled tools/call that must not reach its MCP transport. */
@@ -264,6 +270,7 @@ function countLiveBridgeMcpSessions(): number {
   return n;
 }
 
+
 async function startCodexHttpBridge(
   opts: StartCodexHttpBridgeOptions,
 ): Promise<CodexHttpBridge> {
@@ -285,6 +292,9 @@ async function startCodexHttpBridge(
   const threadContextStore = createCodexMcpThreadContextStore();
   const toolCancellation = new AppToolCancellation();
   const discoveryContexts = new Map<string, LiziMcpSessionContext>();
+  // Only in-flight handshakes can miss the instance cleanup scan. Drop their
+  // generation records when the last request settles so ended IDs cannot pile up.
+  const instanceHandshakes = new Map<string, { generation: number; pending: number }>();
   // sessionId → ctx (远端 cc 的身份通道, 经 ?session= query 路由, 见 interface 注释)。
   const sessionCtxById = new Map<string, LiziMcpSessionContext>();
   // sessionId → per-session bearer token 注册代次(pi 会话, 见 interface 注释)。
@@ -422,10 +432,11 @@ async function startCodexHttpBridge(
       // A process-wide daemon has no frozen mount policy. App facades
       // may attach upstream credentials only for an explicitly bound Session,
       // including Codex's short-lived discovery lease before thread/start returns.
-      const appContext = appServer
+      const boundContext = appServer || serverName === 'cindy'
         ? sessionTokenCtx ?? (instanceQuery === null ? undefined
           : threadContextStore.getContextForSessionInstanceId(instanceQuery) ?? discoveryContexts.get(instanceQuery))
         : undefined;
+      const appContext = appServer ? boundContext : undefined;
       if (appServer && (!appContext?.sessionId || (isScopedRemoteToken && !appContext.remoteHostId))) {
         res.statusCode = 401;
         res.end('MCP App server requires a bound Session');
@@ -449,25 +460,43 @@ async function startCodexHttpBridge(
         return;
       }
 
-      await dispatchToTransport({
-        req,
-        res,
-        createMcpServer,
-        transports,
-        serverName,
-        log,
-        threadContextStore,
-        toolCancellation,
-        discoveryContexts,
-        remoteAppServer,
-        appServer,
-        pluginId: opts.pluginIdByServerName?.[serverName],
-        sessionTokenCtx,
-        ownerSessionId: sessionQuery ?? undefined,
-        isOwnerLive: (id) => sessionCtxById.has(id),
-        threadInstanceQuery: sessionQuery === null ? instanceQuery : null,
-        remoteBotHelper: isScopedRemoteToken && serverName === REMOTE_BOT_HELPER_SERVER_NAME,
-      });
+      const ownerSessionInstanceId = sessionTokenCtx?.sessionInstanceId ?? instanceQuery ?? undefined;
+      const handshakeInstance = req.method === 'POST' && !req.headers['mcp-session-id']
+        ? ownerSessionInstanceId : undefined;
+      const handshake = handshakeInstance === undefined ? undefined
+        : instanceHandshakes.get(handshakeInstance) ?? { generation: 0, pending: 0 };
+      if (handshake && handshakeInstance !== undefined) {
+        handshake.pending++;
+        instanceHandshakes.set(handshakeInstance, handshake);
+      }
+      const generation = handshake?.generation;
+      try {
+        await dispatchToTransport({
+          req,
+          res,
+          createMcpServer: () => createMcpServer(serverName === 'cindy' ? boundContext : undefined),
+          transports,
+          serverName,
+          log,
+          threadContextStore,
+          toolCancellation,
+          discoveryContexts,
+          remoteAppServer,
+          appServer,
+          pluginId: opts.pluginIdByServerName?.[serverName],
+          sessionTokenCtx,
+          ownerSessionId: sessionQuery ?? undefined,
+          ownerSessionInstanceId,
+          isOwnerLive: (id) => sessionCtxById.has(id),
+          isInstanceGenerationCurrent: handshake ? () => handshake.generation === generation : undefined,
+          threadInstanceQuery: sessionQuery === null ? instanceQuery : null,
+          remoteBotHelper: isScopedRemoteToken && serverName === REMOTE_BOT_HELPER_SERVER_NAME,
+        });
+      } finally {
+        if (handshake && handshakeInstance !== undefined && --handshake.pending === 0) {
+          instanceHandshakes.delete(handshakeInstance);
+        }
+      }
     } catch (err) {
       log.error('request handler threw', {
         message: err instanceof Error ? err.message : String(err),
@@ -562,6 +591,25 @@ async function startCodexHttpBridge(
     if (closed > 0) log.info('closed MCP sessions of ended session', { session: prefixId(sessionId), closed });
   };
 
+  const closeSessionInstance = (sessionInstanceId: string): void => {
+    const handshake = instanceHandshakes.get(sessionInstanceId);
+    if (handshake) handshake.generation++;
+    let closed = 0;
+    for (const transports of transportsByServer.values()) {
+      for (const [mcpSessionId, entry] of transports) {
+        if (entry.ownerSessionInstanceId !== sessionInstanceId) continue;
+        transports.delete(mcpSessionId);
+        closed++;
+        void entry.transport.close().catch((e: unknown) => {
+          log.warn('transport close threw', { message: (e as Error).message });
+        });
+      }
+    }
+    if (closed > 0) log.info('closed MCP sessions of ended Agent instance', {
+      instance: prefixId(sessionInstanceId), closed,
+    });
+  };
+
   const shutdown = async (): Promise<void> => {
     liveBridges.delete(bridge);
     log.info('shutting down http bridge', {
@@ -638,6 +686,7 @@ async function startCodexHttpBridge(
       if (!sessionCtxById.delete(sessionId)) return;
       closeSessionOwnedTransports(sessionId);
     },
+    closeSessionInstance,
     registerSessionToken: (sessionId, sessionToken) => {
       const generation = nextTokenGeneration++;
       sessionTokenBySessionId.set(sessionId, { token: sessionToken, generation });
@@ -709,7 +758,9 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
     pluginId,
     sessionTokenCtx,
     ownerSessionId,
+    ownerSessionInstanceId,
     isOwnerLive,
+    isInstanceGenerationCurrent,
     threadInstanceQuery,
     remoteBotHelper,
     remoteAppServer,
@@ -724,6 +775,14 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
     if (!existing) {
       res.statusCode = 404;
       res.end('Unknown session');
+      return;
+    }
+    // A cindy transport created with a concrete task may expose its private
+    // startup catalog. The transport ID alone does not identify that task.
+    if (serverName === 'cindy' && existing.ownerSessionInstanceId &&
+        existing.ownerSessionInstanceId !== ownerSessionInstanceId) {
+      res.statusCode = 401;
+      res.end('Session instance mismatch');
       return;
     }
     let parsedBody: unknown;
@@ -893,7 +952,7 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => randomUUID(),
     onsessioninitialized: (newId) => {
-      transports.set(newId, { transport, mcpServer, ownerSessionId });
+      transports.set(newId, { transport, mcpServer, ownerSessionId, ownerSessionInstanceId });
       log.debug('mcp session initialized', { serverName, sessionId: newId });
     },
   });
@@ -907,10 +966,10 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
   try {
     await mcpServer.connect(transport);
     await transport.handleRequest(req, res, body);
-    // 注销时的扫描只看得到已入表的会话;这条 initialize 在 ctx 检查之后、入表之前若遇到
-    // 注销,会错过那次扫描。入表发生在 handleRequest 内,所以在它返回后复查 owner。
-    if (ownerSessionId !== undefined && isOwnerLive && !isOwnerLive(ownerSessionId)
-      && transport.sessionId) {
+    // The scan only sees transports already in the table. Recheck both
+    // lifetimes once initialize has inserted its transport.
+    const ownerGone = ownerSessionId !== undefined && isOwnerLive && !isOwnerLive(ownerSessionId);
+    if (transport.sessionId && (ownerGone || isInstanceGenerationCurrent?.() === false)) {
       transports.delete(transport.sessionId);
       void transport.close().catch((e: unknown) => {
         log.warn('transport close threw', { message: (e as Error).message });

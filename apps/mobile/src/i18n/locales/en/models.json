@@ -53,7 +53,8 @@
   },
   "switchOutcome": {
     "applied": "Model provider switch is now in effect.",
-    "failed": "Model provider switch failed. Choose the model again."
+    "failed": "Model provider switch failed. Choose the model again.",
+    "previousSettingsRetained": "The switch didn’t complete. The task will keep using its previous settings."
   },
   "agentSwitch": {
     "browseAccessibility": "Browse {{agent}} models"
@@ -110,6 +111,47 @@
     "quotaResetIn": "Resets in {{duration}}",
     "quotaAverageHint": "Weekly quota · Equal weight per account",
     "quotaResetHint": "At the current pace, quota may remain at reset: yellow within 24 hours, red within 6 hours."
+  },
+  "modelGroups": {
+    "title": "Model groups",
+    "sourceCount_one": "{{count}} source",
+    "sourceCount_other": "{{count}} sources",
+    "strategy": {
+      "expiring": "Expiring first",
+      "order": "In order",
+      "rotate": "Rotate",
+      "cheapest": "Cheapest",
+      "drain": "Use until empty",
+      "headroom": "Most quota left",
+      "weighted": "By weight"
+    },
+    "sourceOnDevice": "{{provider}} · {{device}}",
+    "why": {
+      "expiringQuota": "{{left}}% of its quota is left and resets {{reset}}, so it goes first",
+      "expiring": "First by quota",
+      "order": "The first available source",
+      "rotate": "Picked by rotation",
+      "only": "The only one available now",
+      "soonest": "Every source is out of quota; this one recovers first",
+      "soonestUntil": "Every source is out of quota; this one recovers first ({{reset}})",
+      "cheapest": "Lowest listed price",
+      "cheapestFree": "Subscription quota left, no extra cost",
+      "drain": "Still using it until its quota runs out",
+      "drainNext": "The previous source ran out or became unavailable, so it moved to this one",
+      "headroom": "Most quota left",
+      "headroomQuota": "{{left}}% of its quota is left, more than any other source",
+      "weighted": "Its turn by weight",
+      "exceptionImage": "The message has images, so only sources that can see images were considered",
+      "exceptionImageFallback": "The message has images, but no source can see images, so it picked as usual",
+      "exceptionHours": "During this time, it uses “{{name}}” instead",
+      "separator": "; "
+    },
+    "picker": {
+      "switched": "“{{name}}” switched this task to {{model}}",
+      "switchUnavailable": "“{{name}}” has no source this task can use right now. The model was not changed.",
+      "chooseUnavailable": "“{{name}}” has no source that can be used right now, so it was not selected."
+    },
+    "anotherDevice": "Another computer"
   },
   "pluginEngines": {
     "genericName": "Plugin engine",

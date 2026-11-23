@@ -1,3 +1,6 @@
+import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
+import type { ProviderListOptions } from '../maker-host/provider-service.js';
+import type { ProviderPickerVisibilityScope } from '../maker-host/model-visibility-mirror.js';
 import { isGeminiChatEndpoint } from '../../shared/geminiApiConnection.js';
 import { bindGeminiImageConnection, geminiImageConnectionId } from '../maker-host/gemini-image-connection.js';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
@@ -323,7 +326,7 @@ export interface ProviderHandlerDeps {
    * 服务 device-link（合成 event）与可能不受信的渲染上下文，所以默认纯读，只有确认 sender
    * 是本机主页面时才放行副作用（PR #548 review）。
    */
-  listProviders(opts?: { allowSideEffects?: boolean; snapshotOnly?: boolean }): Promise<ProviderView[]>;
+  listProviders(opts?: Partial<ProviderListOptions>): Promise<ProviderView[]>;
   /** Synchronous catalog ownership check; injected to keep this IPC module free of Host cycles. */
   isOrganizationManagedProviderId(providerId: string): boolean;
   /**
@@ -331,7 +334,7 @@ export interface ProviderHandlerDeps {
    * PROVIDER_LIST 附带回传,供 device-link 控制端(手机)按被控端用户开关过滤模型列表;
    * key = `${agent}:${providerId}:${modelId}`,与 renderer modelVisibilityPrefs.keyOf 一致。
    */
-  getModelVisibilityOverrides(providers: readonly ProviderView[], trusted: boolean): Record<string, boolean> | Promise<Record<string, boolean>>;
+  getModelVisibilityOverrides(providers: readonly ProviderView[], trusted: boolean, pickerScope?: ProviderPickerVisibilityScope): Record<string, boolean> | Promise<Record<string, boolean>>;
   /** CRUD 成功后重算 active-catalog（生产 = refreshCustomProvidersIntoCatalog）。 */
   refreshCatalog(): Promise<void>;
   /**
@@ -403,6 +406,8 @@ export interface ProviderHandlerDeps {
    * event 与不受信的子 frame 都会得到 false，于是退化为纯读。缺省视为不可信。
    */
   isTrustedSender?(event: unknown): boolean;
+  /** Main-owned Device Link context; only same-account linked reads, never mutations. */
+  isRemoteContextRead?(): boolean;
   /**
    * 通用 OAuth 登录 / 登出 / 取消（生产接 generic-oauth Runner + 目录描述符解析；
    * login 成功后由生产 deps 负责模型发现与 PROVIDER_CHANGED 广播）。
@@ -480,6 +485,9 @@ export interface ProviderHandlerDeps {
   setModelsDisabled(providerId: string, modelIds: readonly string[], disabled: boolean): void;
   setProviderDisabled(providerId: string, disabled: boolean): void;
   getDisabledProviders?(): Record<string, boolean>;
+  /** 供应商级「在模型选择器中隐藏」(生产 = model-disable-store 的 setProviderHidden)。 */
+  setProviderHidden?(providerId: string, hidden: boolean): void;
+  getHiddenProviders?(): Record<string, boolean>;
   listRemoteProviders?(deviceId: string): Promise<ProviderView[]>;
   /** Per-provider opt-in for remote Agent use; absent means disabled. */
   getRemoteProviderInvocationEnabled?(providerId: string): boolean;
@@ -1028,8 +1036,10 @@ export function registerProviderHandlers(
     providerId: string,
     mutations: readonly KeyMutation[],
     markCredentialStateUncertain?: () => void,
-  ): KeySnapshot[] => {
+    deferUnrecoverableRemovals = false,
+  ): { snapshots: KeySnapshot[]; deferredUnrecoverableAgents: AgentKind[] } => {
     const snapshots: KeySnapshot[] = [];
+    const deferredUnrecoverableAgents: AgentKind[] = [];
     try {
       for (const { agent, replacement } of mutations) {
         let previous: string | null | UnrecoverableProviderCredential;
@@ -1039,10 +1049,15 @@ export function registerProviderHandlers(
           throwIpcError('INTERNAL', `failed to read existing ${agent} provider credential`);
         }
         const unrecoverable = typeof previous === 'symbol';
-        // 旧密文存在但解不开：只有本次带了显式替换值才允许覆盖它。保留旧值、仅删除、
-        // 端点变更清理、删除整个 provider 这些语义拿不到可回滚的快照，维持严格失败且
-        // 不碰那份 blob（#3821）。文案对 update 与 delete 两条路径都成立。
+        // 旧密文存在但解不开：update 路径只有本次带了显式替换值才允许覆盖它；端点变更清理等
+        // 拿不到可回滚的快照，维持严格失败且不碰那份 blob（#3821）。delete / disconnect 路径
+        // 允许把不可解密旧密文的删除推迟到可回滚步骤提交之后，避免中途失败破坏旧文件，也不把
+        // 密钥损坏的供应商锁死在列表里。
         if (unrecoverable && replacement === null) {
+          if (deferUnrecoverableRemovals) {
+            deferredUnrecoverableAgents.push(agent);
+            continue;
+          }
           throwIpcError(
             'INTERNAL',
             `existing ${agent} provider credential cannot be decrypted; enter a new API key to replace it first`,
@@ -1059,7 +1074,7 @@ export function registerProviderHandlers(
         // 覆盖成功后才登记不可恢复快照：回滚语义是删掉新值；写入失败时旧文件原样保留。
         if (unrecoverable) snapshots.push({ agent, previous });
       }
-      return snapshots;
+      return { snapshots, deferredUnrecoverableAgents };
     } catch (error) {
       if (!restoreProviderKeys(providerId, snapshots)) {
         markCredentialStateUncertain?.();
@@ -1166,8 +1181,10 @@ export function registerProviderHandlers(
     providerId: string,
     mutations: readonly HeaderMutation[],
     markCredentialStateUncertain?: () => void,
-  ): HeaderSnapshot[] => {
+    deferUnrecoverableRemovals = false,
+  ): { snapshots: HeaderSnapshot[]; deferredUnrecoverableAgents: AgentKind[] } => {
     const snapshots: HeaderSnapshot[] = [];
+    const deferredUnrecoverableAgents: AgentKind[] = [];
     try {
       for (const { agent, replacement } of mutations) {
         let previous: Record<string, string> | null | UnrecoverableProviderCredential;
@@ -1177,8 +1194,13 @@ export function registerProviderHandlers(
           throwIpcError('INTERNAL', `failed to read existing ${agent} provider headers`);
         }
         const unrecoverable = typeof previous === 'symbol';
-        // 与 stageProviderKeys 同口径：解不开的旧密文头只能被显式新 headers 覆盖。
+        // 与 stageProviderKeys 同口径：update 路径解不开的旧密文头只能被显式新 headers 覆盖；
+        // delete / disconnect 路径推迟到提交后清理。
         if (unrecoverable && !replacement) {
+          if (deferUnrecoverableRemovals) {
+            deferredUnrecoverableAgents.push(agent);
+            continue;
+          }
           throwIpcError(
             'INTERNAL',
             `existing ${agent} provider headers cannot be decrypted; enter new headers to replace them first`,
@@ -1193,7 +1215,7 @@ export function registerProviderHandlers(
         }
         if (unrecoverable) snapshots.push({ agent, previous });
       }
-      return snapshots;
+      return { snapshots, deferredUnrecoverableAgents };
     } catch (error) {
       if (!restoreProviderHeaders(providerId, snapshots)) {
         markCredentialStateUncertain?.();
@@ -1207,19 +1229,35 @@ export function registerProviderHandlers(
     keyMutations: readonly KeyMutation[],
     headerMutations: readonly HeaderMutation[],
     markCredentialStateUncertain?: () => void,
-  ): { keySnapshots: KeySnapshot[]; headerSnapshots: HeaderSnapshot[] } => {
-    const keySnapshots = stageProviderKeys(providerId, keyMutations, markCredentialStateUncertain);
+    options?: { deferUnrecoverableRemovals?: boolean },
+  ): {
+    keySnapshots: KeySnapshot[];
+    headerSnapshots: HeaderSnapshot[];
+    deferredUnrecoverableKeyAgents: AgentKind[];
+    deferredUnrecoverableHeaderAgents: AgentKind[];
+  } => {
+    const deferUnrecoverableRemovals = options?.deferUnrecoverableRemovals === true;
+    const stagedKeys = stageProviderKeys(
+      providerId,
+      keyMutations,
+      markCredentialStateUncertain,
+      deferUnrecoverableRemovals,
+    );
     try {
+      const stagedHeaders = stageProviderHeaders(
+        providerId,
+        headerMutations,
+        markCredentialStateUncertain,
+        deferUnrecoverableRemovals,
+      );
       return {
-        keySnapshots,
-        headerSnapshots: stageProviderHeaders(
-          providerId,
-          headerMutations,
-          markCredentialStateUncertain,
-        ),
+        keySnapshots: stagedKeys.snapshots,
+        headerSnapshots: stagedHeaders.snapshots,
+        deferredUnrecoverableKeyAgents: stagedKeys.deferredUnrecoverableAgents,
+        deferredUnrecoverableHeaderAgents: stagedHeaders.deferredUnrecoverableAgents,
       };
     } catch (error) {
-      if (!restoreProviderKeys(providerId, keySnapshots)) {
+      if (!restoreProviderKeys(providerId, stagedKeys.snapshots)) {
         markCredentialStateUncertain?.();
         throwIpcError('INTERNAL', 'provider credential update failed and could not be rolled back');
       }
@@ -1289,18 +1327,31 @@ export function registerProviderHandlers(
       providerOrder: string[];
       modelVisibilityOverrides: Record<string, boolean>;
       disabledProviders?: Record<string, boolean>;
+      hiddenProviders?: Record<string, boolean>;
+      deferredProviderIds?: string[];
     }> => {
       // 只有本机主页面能顺带触发绑定自愈与清单拉取:这条通道也服务 device-link(合成
       // event)和可能不受信的渲染上下文,它们只该拿到只读快照(PR #548 review)。
       const ownerAtIngress = captureProviderOwnerSession();
       const dataOwnerId = ownerAtIngress?.dataOwnerId ?? null;
+      const invokeContext = getDeviceLinkInvokeContext();
+      const scope = invokeContext?.providerPicker;
+      let deferredProviderIds: string[] = [];
+      let catalogOrder: string[] = [];
       const providers = await deps.listProviders({
+        ...(scope ? { picker: { scope, describe: (order, deferred) => {
+          catalogOrder = order;
+          deferredProviderIds = deferred;
+        } } } : {}),
         allowSideEffects: trusted,
+        ...(trusted && !invokeContext ? { includeSubscriptionDisplayModels: true } : {}),
       });
       assertProviderMutationOwner(ownerAtIngress);
       let modelVisibilityOverrides: Record<string, boolean>;
       try {
-        modelVisibilityOverrides = await deps.getModelVisibilityOverrides(providers, trusted);
+        modelVisibilityOverrides = scope
+          ? await deps.getModelVisibilityOverrides(providers, trusted, { deferredProviderIds, retainedModel: scope === 'available' ? undefined : scope })
+          : await deps.getModelVisibilityOverrides(providers, trusted);
       } catch (error) {
         if (isIpcError(error) && error.code === 'MODEL_VISIBILITY_NOT_READY') {
           throwIpcError('MODEL_VISIBILITY_NOT_READY', 'Model preferences are still synchronizing. Retry shortly.');
@@ -1321,6 +1372,7 @@ export function registerProviderHandlers(
       return {
         dataOwnerId,
         ownerGeneration: ownerAtIngress?.generation ?? 0,
+        ...(scope === 'available' ? { deferredProviderIds } : {}),
         providers: providers.map((provider) => {
           const safe = withoutProviderHeaderCredentials(provider);
           const view = {
@@ -1342,9 +1394,10 @@ export function registerProviderHandlers(
             ? { ...located, remoteInvocationEnabled: remoteAccess(provider.id) }
             : located;
         }),
-        providerOrder,
+        providerOrder: scope === 'available' ? [...new Set([...providerOrder, ...catalogOrder])] : providerOrder,
         modelVisibilityOverrides,
         ...(trusted ? { disabledProviders: deps.getDisabledProviders?.() ?? {} } : {}),
+        ...(trusted ? { hiddenProviders: deps.getHiddenProviders?.() ?? {} } : {}),
       };
     };
   registry.handle(MAKER_INVOKE.PROVIDER_LIST, async (event) => {
@@ -1925,19 +1978,23 @@ export function registerProviderHandlers(
     ) {
       throwIpcError('INVALID_PARAMS', 'providerId required');
     }
-    if (i.kind !== 'model' && i.kind !== 'provider' && i.kind !== 'reset') {
-      throwIpcError('INVALID_PARAMS', 'kind must be "model", "provider" or "reset"');
+    if (
+      i.kind !== 'model' && i.kind !== 'provider' && i.kind !== 'provider-hidden' && i.kind !== 'reset'
+    ) {
+      throwIpcError('INVALID_PARAMS', 'kind must be "model", "provider", "provider-hidden" or "reset"');
     }
     if (i.remoteDeviceId !== undefined && (
-      i.kind !== 'provider' || typeof i.remoteDeviceId !== 'string' ||
+      (i.kind !== 'provider' && i.kind !== 'provider-hidden') || typeof i.remoteDeviceId !== 'string' ||
       !i.remoteDeviceId || i.remoteDeviceId.length > MAX_DISABLE_ID_LENGTH ||
       isProviderShareAgentDeviceId(i.remoteDeviceId)
     )) throwIpcError('INVALID_PARAMS', 'invalid remote provider disable target');
     const disableKey = typeof i.remoteDeviceId === 'string'
       ? remoteProviderDisableKey(i.remoteDeviceId, i.providerId as string)
       : i.providerId as string;
-    // reset = 删除整组 override(恢复默认),无 disabled 语义;其余两种必须显式带方向。
-    if (i.kind !== 'reset' && typeof i.disabled !== 'boolean') {
+    // reset = 删除整组 override(恢复默认),无 disabled 语义;其余必须显式带方向。
+    if (i.kind === 'provider-hidden') {
+      if (typeof i.hidden !== 'boolean') throwIpcError('INVALID_PARAMS', 'hidden required');
+    } else if (i.kind !== 'reset' && typeof i.disabled !== 'boolean') {
       throwIpcError('INVALID_PARAMS', 'disabled required');
     }
     if (
@@ -2000,6 +2057,16 @@ export function registerProviderHandlers(
         deps.broadcastChanged();
         return { ok: true };
       }
+      if (i.kind === 'provider-hidden') {
+        // 隐藏只改陈列:与停用同一串行队列、同样的目录成员校验(只在写入方向),
+        // 取消隐藏是删条目,目录漂移后也要能清掉。
+        if (!deps.setProviderHidden) throwIpcError('INTERNAL', 'provider visibility is not wired');
+        if (i.hidden) await requireCatalogProvider(i.providerId as string);
+        assertSameOwner();
+        persist(() => deps.setProviderHidden?.(disableKey, i.hidden as boolean));
+        deps.broadcastChanged();
+        return { ok: true };
+      }
       if (i.kind === 'model') {
         const modelIds = i.modelIds as string[];
         if (i.disabled) {
@@ -2033,6 +2100,10 @@ export function registerProviderHandlers(
       deps.broadcastChanged();
       return { ok: true };
     };
+    // 隐藏只改陈列,不收窄任何调用权限:不走「先撤销云端备用分享,再确认本机收窄」这一步。
+    // 否则一次纯显示操作会撤掉别人正在用的分享,服务器不可达时隐藏 / 取消隐藏还会直接失败。
+    // 账号复核与串行写入队列照常(都在 run / enqueueDisableWrite 里)。
+    if (i.kind === 'provider-hidden') return enqueueDisableWrite(run);
     return withAvailabilityPolicyMutation(disableKey, () => enqueueDisableWrite(run));
   };
   registry.handle(MAKER_INVOKE.MODEL_DISABLE_SET, async (event, input: unknown) => {
@@ -2334,6 +2405,7 @@ export function registerProviderHandlers(
   });
 
   const modelSettingsGetContext = async (input: unknown) => {
+    const owner = captureProviderOwnerSession();
     const targets = parseContextTargets(input);
     // 读不做目录成员校验:目录漂移后 UI 仍要能显示并清掉指向已下架 id 的陈旧 override。
     const view = readContextTargets(targets);
@@ -2342,12 +2414,14 @@ export function registerProviderHandlers(
       if (sessionId !== undefined && (typeof sessionId !== 'string' || sessionId.length === 0 || sessionId.length > 200)) {
         throwIpcError('INVALID_PARAMS', 'invalid context session id');
       }
-      return { ...view, codexContext: await deps.readCodexContextWindowInfo?.(targets[0]!, sessionId as string | undefined) ?? null };
+      const codexContext = await deps.readCodexContextWindowInfo?.(targets[0]!, sessionId as string | undefined) ?? null;
+      assertProviderMutationOwner(owner, 'active account changed during context read');
+      return { ...view, codexContext };
     }
     return view;
   };
   registry.handle(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_GET, async (event, input: unknown) => {
-    assertTrustedProviderMutationSender(event);
+    if (!deps.isRemoteContextRead?.()) assertTrustedProviderMutationSender(event);
     return modelSettingsGetContext(input);
   });
 
@@ -2855,6 +2929,7 @@ export function registerProviderHandlers(
                 'delete',
               ),
               commitRouteMutation,
+              { deferUnrecoverableRemovals: true },
             );
             try {
               // 停用 override 清理进事务(第二十轮):放在配置删除之前,后续任一步失败
@@ -2890,9 +2965,30 @@ export function registerProviderHandlers(
               }
               throw err;
             }
+            // DB 删除已提交后再清理不可解密的旧密文：失败只记告警、不阻断目录刷新。
+            assertProviderMutationOwner(ownerAtIngress);
+            for (const agent of credentialSnapshots.deferredUnrecoverableKeyAgents) {
+              const removed = deps.removeCustomProviderKey(providerId, agent);
+              if (!removed.success) {
+                log.warn('failed to remove undecryptable custom provider key after deletion', {
+                  providerId,
+                  agent,
+                  error: removed.error ?? 'remove_failed',
+                });
+              }
+            }
+            for (const agent of credentialSnapshots.deferredUnrecoverableHeaderAgents) {
+              const removed = deps.removeCustomProviderHeaders(providerId, agent);
+              if (!removed.success) {
+                log.warn('failed to remove undecryptable custom provider headers after deletion', {
+                  providerId,
+                  agent,
+                  error: removed.error ?? 'remove_failed',
+                });
+              }
+            }
             // 在队列内尝试刷新目录；刷新失败不撤销已经提交的删除。
             // 凭证/override 的恢复只覆盖删除本身失败的场景。
-            assertProviderMutationOwner(ownerAtIngress);
             await afterChange(codexHostPrepared, commitRouteMutation);
             assertProviderMutationOwner(ownerAtIngress);
             deps.broadcastPricingChanged();
@@ -3288,10 +3384,32 @@ export function registerProviderHandlers(
       if (preparation.confirmation) return preparation.confirmation;
       try {
         assertProviderMutationOwner(owner);
-        stageProviderCredentials(id,
+        const staged = stageProviderCredentials(id,
           (VALID_AGENTS as readonly AgentKind[]).map((agent) => ({ agent, replacement: null })),
           (VALID_AGENTS as readonly AgentKind[]).map((agent) => ({ agent, replacement: null })),
-          commitRouteMutation);
+          commitRouteMutation,
+          { deferUnrecoverableRemovals: true });
+        let removedAnyUnrecoverable = false;
+        for (const agent of staged.deferredUnrecoverableKeyAgents) {
+          if (!deps.removeCustomProviderKey(id, agent).success) {
+            if (!removedAnyUnrecoverable && restoreProviderCredentials(id, staged)) {
+              throwIpcError('INTERNAL', `failed to update ${agent} provider credential`);
+            }
+            commitRouteMutation();
+            throwIpcError('INTERNAL', 'provider credential update failed and could not be rolled back');
+          }
+          removedAnyUnrecoverable = true;
+        }
+        for (const agent of staged.deferredUnrecoverableHeaderAgents) {
+          if (!deps.removeCustomProviderHeaders(id, agent).success) {
+            if (!removedAnyUnrecoverable && restoreProviderCredentials(id, staged)) {
+              throwIpcError('INTERNAL', `failed to update ${agent} provider headers`);
+            }
+            commitRouteMutation();
+            throwIpcError('INTERNAL', 'provider header update failed and could not be rolled back');
+          }
+          removedAnyUnrecoverable = true;
+        }
         // Configuration and stable route ID remain available for reconnect. Publish even when
         // a later catalog refresh fails: the disconnected credential must never be reused.
         commitRouteMutation();

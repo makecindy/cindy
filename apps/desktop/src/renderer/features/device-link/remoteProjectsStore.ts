@@ -1020,7 +1020,7 @@ const actions = {
     if (!shard) return;
     const idx = shard.sessions.findIndex((s) => s.id === sessionId);
     if (idx === -1) {
-      if (patch.status === 'active') requestRemoteReseed(deviceId, 'active');
+      if (patch.status === 'active' || patch.sideChatPromoted === true) requestRemoteReseed(deviceId, 'active');
       if (patch.status === 'archived' && shard.loadedStatuses.has('archived')) {
         requestRemoteReseed(deviceId, 'archived');
       }

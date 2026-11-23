@@ -15,6 +15,7 @@ import {
   type DeviceLinkConnectionIssue,
   type DeviceLinkPeerRouteStateChanged,
   type DeviceLinkPeerTransportReset,
+  type DeviceLinkReplacedEvent,
   type DeviceLinkStatus,
   type InboundFrameHandler,
 } from './client.js';
@@ -207,6 +208,21 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
     return this.legacy?.onConnectionIssue(cb) ?? (() => undefined);
   }
 
+  /**
+   * The cross-account and compatibility connections register the same device identity on the official relay, so another
+   * computer with that identity replaces them too. Both the signal and the host's cool-down cover every such connection.
+   */
+  override onReplaced(cb: (event: DeviceLinkReplacedEvent, onOfficialCrossAccount?: boolean) => void): () => void {
+    const offs = [super.onReplaced(cb), this.crossAccount?.onReplaced((event) => cb(event, true)), this.legacy?.onReplaced(cb)];
+    return () => { for (const off of offs) off?.(); };
+  }
+
+  override setDuplicateIdentityCooldown(active: boolean): void {
+    super.setDuplicateIdentityCooldown(active);
+    this.crossAccount?.setDuplicateIdentityCooldown(active);
+    this.legacy?.setDuplicateIdentityCooldown(active);
+  }
+
   override crossAccountConnection(): DeviceLinkClient {
     if (this.primaryScopedPreference()) return this;
     if (this.legacyRunning && this.crossAccountUsesLegacy()) return this.legacy!;
@@ -273,8 +289,12 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
     for (const connection of this.extraScopedConnections()) connection.notifyNetworkChanged(options);
   }
 
-  override restartConnections(reason?: string): void {
-    this.restartConnection(reason);
+  /**
+   * `keepPrimary`：主连接是 Agent-Net 时由 host 传入（手机换网）。它自己从新地址继续发、在内部重连中转
+   * （AgentNetSocket），在这里重建只会关掉所有会话再从头连；其余走 Device Link 中转的连接照旧重建。
+   */
+  override restartConnections(reason?: string, options?: { keepPrimary?: boolean }): void {
+    if (!options?.keepPrimary) this.restartConnection(reason);
     if (this.crossAccountRunning) this.crossAccount?.restartConnection(reason);
     if (this.legacyRunning) this.legacy?.restartConnection(reason);
     for (const connection of this.extraScopedConnections()) connection.restartConnection(reason);

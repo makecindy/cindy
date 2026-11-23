@@ -16,14 +16,21 @@
  * Nothing here calls the plugin: the list is the main process's last known state. Opening a picker
  * only asks main to have the engine plugins republish their models (with a per-plugin cooldown).
  */
+import { quotaLevelFromRemaining } from '@cindy/maker-shared/quota-level';
+import type { GhostHarnessUsage } from '@cindy/plugin-protocol';
 import { SlidersHorizontal } from 'lucide-react';
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { EffortSlider } from '@/components/ui/effort-slider';
 import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
-
+import { Tip } from '@/components/ui/tooltip';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import { readPluginEngineUsage } from '@/hooks/pluginEngineUsage';
 import { requestPluginEnginesRefresh } from '@/hooks/usePluginEngines';
+import { QUOTA_TEXT_COLOR_CLASSES } from '../status/QuotaBar';
+import { pluginEngineUsageBalances } from '../status/pluginEngineUsageAccount';
+import { formatQuotaResetDuration } from '../status/usageCardModel';
 
 import {
   COMPOSER_MENU_ROW,
@@ -34,22 +41,29 @@ import {
 } from '@/components/ui/menu-row';
 import {
   isPluginEngineSelectable,
+  isSamePluginEngineChoice,
+  pluginEngineChoiceKey,
   pluginEngineModelRows,
   resolvePluginEngineEffort,
+  type PluginEngineChoice,
   type PluginEngineModelRow,
   type PluginEngineSelection,
 } from '@/lib/pluginEngineSelection';
 import { cn } from '@/lib/utils';
 
-import type { PluginEngineEffort, PluginEngineView } from '../../../shared/pluginEngines';
+import type { PluginEngineEffort } from '../../../shared/pluginEngines';
 import { UnifiedFlyoutHost } from './UnifiedFlyoutHost';
 
-/** New-task drafts: every engine on this computer, the draft's current choice and how to change it. */
+/**
+ * New-task drafts: every engine on this computer plus the ones other computers of the same account
+ * opened for remote use (`deviceId`), the draft's current choice and how to change it.
+ */
 export interface PluginEnginesPickerProps {
-  engines: readonly PluginEngineView[];
+  engines: readonly PluginEngineChoice[];
   /** Current engine choice (already resolved against the list); null = a built-in model is used. */
   active: PluginEngineSelection | null;
-  onSelect(selection: PluginEngineSelection): void;
+  /** Existing tasks wait for the host to accept the choice. False leaves the panel open. */
+  onSelect(selection: PluginEngineSelection): void | boolean | Promise<boolean>;
   /** Device Link picker reloads its own computer's list when opened. */
   readCatalogue?(): void;
 }
@@ -57,8 +71,12 @@ export interface PluginEnginesPickerProps {
 /** A task already running on a plugin engine: only that engine's models are offered. */
 export interface PluginEngineSessionPickerProps {
   providerId: string;
-  /** null when the plugin was turned off or removed; the task keeps its stored model. */
-  engine: PluginEngineView | null;
+  /**
+   * null when the plugin was turned off or removed; the task keeps its stored model. For a task
+   * whose agent runs on another computer of this account the engine comes from that computer's
+   * list and carries its `deviceId` / `deviceName`.
+   */
+  engine: PluginEngineChoice | null;
   /** Engine name, or the generic 「插件引擎」 label when the plugin is gone. */
   engineName: string;
   modelId: string;
@@ -78,7 +96,7 @@ export interface PluginEngineSessionPickerProps {
 export interface PluginEnginePendingSelection {
   providerId: string;
   /** null when the plugin was turned off or removed meanwhile. */
-  engine: PluginEngineView | null;
+  engine: PluginEngineChoice | null;
   engineName: string;
   modelId: string;
   effort?: string | null;
@@ -96,23 +114,43 @@ export function usePluginEngineModelLabel(): (row: Pick<PluginEngineModelRow, 'i
   return (row) => (row.isDefault ? t('newChat.pluginEngines.defaultModel') : row.name ?? row.id);
 }
 
+/** The model the picker's current choice has on this engine, or null when another engine is chosen. */
+export function activePluginEngineModelId(
+  active: PluginEngineSelection | null | undefined,
+  engine: PluginEngineChoice,
+): string | null {
+  return isSamePluginEngineChoice(active, engine) ? active!.modelId : null;
+}
+
+/**
+ * Group label of an engine: its name, followed by the computer it is on when that is another one
+ * (the same 「来源 · 电脑」 wording as a provider of another computer). The returned function is
+ * stable per language, so callers may keep it in hook dependencies.
+ */
+export function usePluginEngineChoiceLabel(): (engine: Pick<PluginEngineChoice, 'name' | 'deviceId' | 'deviceName'>) => string {
+  const { t } = useTranslation();
+  return useCallback((engine) => (engine.deviceId
+    ? t('newChat.modelSelector.unified.railRemoteProvider', { provider: engine.name, device: engine.deviceName || engine.deviceId })
+    : engine.name), [t]);
+}
+
 function engineMatches(
-  engine: PluginEngineView,
+  engine: PluginEngineChoice,
   rows: readonly PluginEngineModelRow[],
   needle: string,
   defaultLabel: string,
 ): PluginEngineModelRow[] {
   if (!needle) return [...rows];
-  if (engine.name.toLowerCase().includes(needle)) return [...rows];
+  if (engine.name.toLowerCase().includes(needle) || engine.deviceName?.toLowerCase().includes(needle)) return [...rows];
   return rows.filter((row) =>
     [row.isDefault ? defaultLabel : row.name, row.description].some((text) => text?.toLowerCase().includes(needle)));
 }
 
 /** How many rows match the picker's search; the panel uses it to decide whether the search is empty. */
 export function matchPluginEngineRows(
-  engines: readonly PluginEngineView[],
+  engines: readonly PluginEngineChoice[],
   query: string,
-  activeModelIdFor: (engine: PluginEngineView) => string | null,
+  activeModelIdFor: (engine: PluginEngineChoice) => string | null,
   defaultLabel: string,
 ): number {
   const needle = query.trim().toLowerCase();
@@ -124,7 +162,7 @@ export function matchPluginEngineRows(
 }
 
 interface EngineBlockProps {
-  engine: PluginEngineView;
+  engine: PluginEngineChoice;
   rows: readonly PluginEngineModelRow[];
   activeModelId: string | null;
   onChoose(modelId: string): void;
@@ -132,6 +170,112 @@ interface EngineBlockProps {
   effortOf(row: PluginEngineModelRow): PluginEngineEffort | null;
   /** Picks the row's model with this level; the picker stays open. */
   onChooseEffort(modelId: string, effort: PluginEngineEffort): void;
+}
+
+function pluginGroupQuotaTimeKey(
+  usage: GhostHarnessUsage,
+  now: number,
+  t: ReturnType<typeof useTranslation>['t'],
+): string {
+  return (usage.windows ?? [])
+    .filter((row) => !row.resetsAt || row.resetsAt > now)
+    .map((row) => [
+      row.label,
+      Math.round(row.remainingPercent),
+      row.resetsAt ? formatQuotaResetDuration(row.resetsAt / 1000, now, t) : null,
+    ])
+    .map((parts) => parts.join(':'))
+    .join('|');
+}
+
+/** Compact quota/balance readout on a plugin engine group header; reuses the 1-minute shared reader. */
+function PluginEngineGroupQuota({ engine }: { engine: PluginEngineChoice }) {
+  const { t, i18n } = useTranslation();
+  const targetKey = `${engine.deviceId ?? ''}:${engine.key}`;
+  const [reading, setReading] = useState<{ targetKey: string; usage: GhostHarnessUsage } | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const owner = getDataOwnerGeneration();
+    let active = true;
+    void readPluginEngineUsage(owner, engine.deviceId ?? null, engine.key).result.then((usage) => {
+      if (!active || !isDataOwnerGenerationCurrent(owner)) return;
+      setReading(usage ? { targetKey, usage } : null);
+      setNow(Date.now());
+    });
+    return () => { active = false; };
+  }, [engine.key, engine.deviceId, targetKey]);
+  const activeUsage = reading?.targetKey === targetKey ? reading.usage : null;
+  const hasTimedWindow = !!activeUsage?.windows?.some(
+    (row) => typeof row.resetsAt === 'number' && row.resetsAt > now,
+  );
+  const clockSnapshot = useRef({ usage: activeUsage, now, t });
+  clockSnapshot.current = { usage: activeUsage, now, t };
+  useEffect(() => {
+    if (!hasTimedWindow) return;
+    const syncClock = () => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      const { usage: currentUsage, now: prevNow, t: translate } = clockSnapshot.current;
+      if (!currentUsage) return;
+      const nextNow = Date.now();
+      if (
+        pluginGroupQuotaTimeKey(currentUsage, prevNow, translate) !==
+        pluginGroupQuotaTimeKey(currentUsage, nextNow, translate)
+      ) {
+        setNow(nextNow);
+      }
+    };
+    const timer = window.setInterval(syncClock, 1000);
+    const onVisibility = () => {
+      if (!document.hidden) syncClock();
+    };
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisibility);
+    }
+    return () => {
+      window.clearInterval(timer);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisibility);
+      }
+    };
+  }, [hasTimedWindow]);
+  if (!activeUsage) return null;
+  const usage = activeUsage;
+  const current = (usage.windows ?? []).filter((row) => !row.resetsAt || row.resetsAt > now);
+  const balances = pluginEngineUsageBalances(usage, i18n.language, t);
+  const first = current.reduce<(typeof current)[number] | undefined>((lowest, row) =>
+    !lowest || row.remainingPercent < lowest.remainingPercent ? row : lowest, undefined);
+  if (!first && !balances.length) return null;
+  const reset = first?.resetsAt ? formatQuotaResetDuration(first.resetsAt / 1000, now, t) : null;
+  const value = first ? `${Math.round(first.remainingPercent)}%` : balances[0]!;
+  const firstBalance = (usage.balances ?? []).find((row) => Number.isFinite(Number(row.amount)));
+  const level = first
+    ? quotaLevelFromRemaining(first.remainingPercent)
+    : firstBalance && Number(firstBalance.amount) <= 0 ? 'crit' : 'normal';
+  const details = (
+    <div className="space-y-1">
+      {current.map((row, index) => {
+        const rowReset = row.resetsAt ? formatQuotaResetDuration(row.resetsAt / 1000, now, t) : null;
+        return (
+          <div key={index}>
+            {[row.label, t('quotaCard.remainingPercent', { percent: Math.round(row.remainingPercent) }), rowReset].filter(Boolean).join(' · ')}
+          </div>
+        );
+      })}
+      {balances.map((line, index) => <div key={`b:${index}`}>{line}</div>)}
+    </div>
+  );
+  return (
+    <Tip text={details} side="bottom" contentClassName="max-w-[320px] break-words">
+      <span
+        data-plugin-engine-quota={engine.providerId}
+        aria-label={[first?.label, value, reset].filter(Boolean).join(' · ')}
+        className="ml-auto flex shrink-0 items-center gap-1 text-12 font-normal tabular-nums text-[var(--text-secondary)]"
+      >
+        <span className={QUOTA_TEXT_COLOR_CLASSES[level]}>{value}</span>
+        {reset && <span className="text-[var(--text-tertiary)]">· {reset}</span>}
+      </span>
+    </Tip>
+  );
 }
 
 /**
@@ -143,6 +287,8 @@ function EngineBlock({ engine, rows, activeModelId, onChoose, effortOf, onChoose
   const { t } = useTranslation();
   const labelOf = usePluginEngineModelLabel();
   const effortLabel = usePluginEngineEffortLabel();
+  // An engine of another computer carries that computer's name, like a provider of another computer.
+  const engineLabel = usePluginEngineChoiceLabel()(engine);
   // The configuration flyout of one row (reasoning level), placed like a built-in row's flyout.
   const [flyout, setFlyout] = useState<{ rowId: string; anchor: HTMLElement } | null>(null);
   const flyoutRef = useRef<HTMLDivElement>(null);
@@ -154,10 +300,16 @@ function EngineBlock({ engine, rows, activeModelId, onChoose, effortOf, onChoose
     ? undefined
     : engine.availability.message?.trim() || t('newChat.pluginEngines.unavailable');
   return (
-    <div role="group" aria-label={engine.name} data-plugin-engine={engine.providerId}>
+    <div
+      role="group"
+      aria-label={engineLabel}
+      data-plugin-engine={engine.providerId}
+      {...(engine.deviceId ? { 'data-plugin-engine-device': engine.deviceId } : {})}
+    >
       {/* Shared menu group label (DESIGN §4 Menu text): 12px / 500 meta, like the provider headings. */}
       <div className="flex items-center gap-1.5 px-2.5 pb-1 pt-2 text-12 font-medium leading-[1.33] text-[var(--cmd-palette-item-meta,var(--text-tertiary))]">
-        <span title={engine.name} className="truncate">{engine.name}</span>
+        <span title={engineLabel} className="truncate">{engineLabel}</span>
+        {selectable && engine.reportsUsage && <PluginEngineGroupQuota engine={engine} />}
       </div>
       {hint && (
         <div
@@ -175,7 +327,7 @@ function EngineBlock({ engine, rows, activeModelId, onChoose, effortOf, onChoose
         // shows its own description, else the engine it runs on.
         const description = row.isDefault
           ? t('newChat.pluginEngines.defaultModelHint')
-          : row.description || engine.name;
+          : row.description || engineLabel;
         const choose = () => {
           if (!selectable) return;
           onChoose(row.id);
@@ -309,7 +461,7 @@ function PluginEngineModelConfig({
   effortLabel,
   onChange,
 }: {
-  engine: PluginEngineView;
+  engine: PluginEngineChoice;
   row: PluginEngineModelRow;
   label: string;
   effort: PluginEngineEffort | null;
@@ -317,13 +469,14 @@ function PluginEngineModelConfig({
   onChange(effort: PluginEngineEffort): void;
 }) {
   const { t } = useTranslation();
+  const engineLabel = usePluginEngineChoiceLabel()(engine);
   return (
     <div role="group" aria-label={`${label} ${t('newChat.modelSelector.options')}`} data-plugin-engine-config className="flex flex-col">
       <span title={label} className="line-clamp-2 min-w-0 text-14 font-semibold leading-[1.35] text-[var(--model-item-text)]">
         {label}
       </span>
       <div className="truncate border-b border-[var(--model-dropdown-border)] pb-2.5 pt-1 text-12 text-[var(--text-tertiary)]">
-        {engine.name}
+        {engineLabel}
       </div>
       <div className="flex items-center gap-2 pt-3.5">
         <EffortSlider
@@ -349,11 +502,26 @@ export function PluginEnginesSection({
   onPicked(): void;
 }) {
   const { t } = useTranslation();
+  const sectionRef = useRef<HTMLDivElement>(null);
+  const selectionInFlight = useRef(false);
+  const choose = async (selection: PluginEngineSelection, dismiss: boolean) => {
+    if (selectionInFlight.current) return;
+    selectionInFlight.current = true;
+    try {
+      const selectionResult = picker.onSelect(selection);
+      const applied = typeof selectionResult === 'object' ? await selectionResult : selectionResult;
+      if (applied !== false && dismiss && sectionRef.current) onPicked();
+    } catch {
+      // Selection failures leave the panel open. The task's selection handler reports the error.
+    } finally {
+      selectionInFlight.current = false;
+    }
+  };
   const needle = query.trim().toLowerCase();
   const defaultLabel = t('newChat.pluginEngines.defaultModel').toLowerCase();
   const blocks = picker.engines
     .map((engine) => {
-      const activeModelId = picker.active?.providerId === engine.providerId ? picker.active.modelId : null;
+      const activeModelId = activePluginEngineModelId(picker.active, engine);
       return {
         engine,
         activeModelId,
@@ -366,21 +534,22 @@ export function PluginEnginesSection({
   return (
     // Each engine carries its own group label (like a provider), so the section has no visible
     // heading of its own; the 「插件引擎」 name stays for assistive technology and the rail tab.
-    <div role="group" aria-label={label} data-plugin-engines-section>
+    <div ref={sectionRef} role="group" aria-label={label} data-plugin-engines-section>
       {blocks.map(({ engine, rows, activeModelId }) => (
         <EngineBlock
-          key={engine.providerId}
+          key={pluginEngineChoiceKey(engine)}
           engine={engine}
           rows={rows}
           activeModelId={activeModelId}
-          onChoose={(modelId) => {
-            picker.onSelect({ providerId: engine.providerId, modelId });
-            onPicked();
-          }}
+          onChoose={(modelId) => { void choose({
+            providerId: engine.providerId, modelId, ...(engine.deviceId ? { deviceId: engine.deviceId } : {}),
+          }, true); }}
           // A row shows the level it would run with: the chosen one where it is offered, else its own.
           effortOf={(row) => resolvePluginEngineEffort(
-            engine, row.id, picker.active?.providerId === engine.providerId ? picker.active.effort : undefined)}
-          onChooseEffort={(modelId, effort) => picker.onSelect({ providerId: engine.providerId, modelId, effort })}
+            engine, row.id, isSamePluginEngineChoice(picker.active, engine) ? picker.active?.effort : undefined)}
+          onChooseEffort={(modelId, effort) => { void choose({
+            providerId: engine.providerId, modelId, effort, ...(engine.deviceId ? { deviceId: engine.deviceId } : {}),
+          }, false); }}
         />
       ))}
     </div>

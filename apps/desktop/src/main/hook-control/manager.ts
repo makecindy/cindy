@@ -30,6 +30,7 @@ import {
   HOOK_FEATURE_FEISHU_MULTI_APP,
   type FeishuBotAppInfo,
   HOOK_FEATURE_PROVIDER_BEHAVIOR,
+  HOOK_FEATURE_PROVIDER_DISCORD,
   HOOK_FEATURE_PROVIDER_FEISHU,
   HOOK_FEATURE_PROVIDER_PREFS,
   HOOK_FEATURE_PROVIDER_TELEGRAM,
@@ -117,8 +118,15 @@ import {
 import { parseTelegramConnectUrl } from './telegramDeepLink.js';
 import { parseXConnectUrl, xProfileUrlOrNull } from './xDeepLink.js';
 import { feishuBotUrlOrNull, parseFeishuConnectUrl } from './feishuDeepLink.js';
+import {
+  discordAddToServerUrlOrNull,
+  discordBotUrlOrNull,
+  isDiscordSnowflake,
+  parseDiscordConnectUrl,
+} from './discordDeepLink.js';
 import type { HookTransport, HookTransportOpts, HookTransportStatus } from './transport.js';
 import {
+  discordLaneIdentityOf,
   feishuLaneIdentityOf,
   providerForExternalKey,
   providerForTaskDispatch,
@@ -163,6 +171,8 @@ export interface HookControlManagerDeps {
   getXUrl: () => string;
   /** 官方飞书 / Lark 平级服务端点；空字符串表示当前环境尚未部署该服务。 */
   getFeishuUrl: () => string;
+  /** 官方 Discord 服务端点(telegram-hook-server 的 /discord 路径)；空字符串表示尚未开放。 */
+  getDiscordUrl: () => string;
   /** 登录 accessToken 源(transport 每次建连实时取; null = 未登录)。 */
   getAuthToken: () => Promise<string | null>;
   /** upgrade 401 后强制刷新一次登录凭证；成功后 transport 立即重连。 */
@@ -236,6 +246,8 @@ export interface HookControlManagerDeps {
   openXUrl?: (url: string) => void | Promise<void>;
   /** 飞书 / Lark URL 的 main 安全边界(语义同上, 校验走 validateFeishuExternalUrl)。 */
   openFeishuUrl?: (url: string) => void | Promise<void>;
+  /** Discord URL 的 main 安全边界(语义同上, 校验走 validateDiscordExternalUrl)。 */
+  openDiscordUrl?: (url: string) => void | Promise<void>;
   log: { info(msg: string): void; warn(msg: string): void };
 }
 
@@ -398,6 +410,8 @@ export class HookNotConnectedError extends Error {
           ? 'x provider connection is not connected'
           : provider === 'feishu'
             ? 'feishu provider connection is not connected'
+            : provider === 'discord'
+            ? 'discord provider connection is not connected'
             : provider === 'slack'
             ? 'slack hook connection is not connected'
             : 'hook connection is not connected',
@@ -421,6 +435,8 @@ export function hookNotConnectedIpcMessage(provider: HookProvider | null): strin
       ? 'X provider is not connected'
       : provider === 'feishu'
         ? 'Feishu provider is not connected'
+        : provider === 'discord'
+        ? 'Discord provider is not connected'
         : provider === 'slack'
         ? 'slack hook is not connected'
         : 'hook is not connected';
@@ -494,7 +510,8 @@ type ProviderBindRequest =
  * 从**客户端支持集**(IPC 契约的 ClientHookProvider)派生, 而不是协议全集:
  * 协议按 append-only 演进, 客户端尚未实现的 provider 不得漏进 renderer 可见
  * 类型。X 渠道已随 xConfig lane 与设置页落地(makecindy/cindy#691),
- * 官方飞书 / Lark 随 feishuConfig lane 落地, ClientHookProvider 已同步放宽。
+ * 官方飞书 / Lark 随 feishuConfig lane、官方 Discord 随 discordConfig lane 落地,
+ * ClientHookProvider 已同步放宽。
  */
 export type NeutralHookProvider = Exclude<ClientHookProvider, 'slack'>;
 
@@ -507,13 +524,14 @@ export type NeutralHookProvider = Exclude<ClientHookProvider, 'slack'>;
 function defaultWorkspaceOf(
   config: Pick<
     SlackHookConfigState,
-    'telegramDefaultWorkspace' | 'xDefaultWorkspace' | 'feishuDefaultWorkspace'
+    'telegramDefaultWorkspace' | 'xDefaultWorkspace' | 'feishuDefaultWorkspace' | 'discordDefaultWorkspace'
   >,
   provider: HookProvider | undefined,
 ): string | null {
   if (provider === 'telegram') return config.telegramDefaultWorkspace;
   if (provider === 'x') return config.xDefaultWorkspace;
   if (provider === 'feishu') return config.feishuDefaultWorkspace;
+  if (provider === 'discord') return config.discordDefaultWorkspace;
   return null;
 }
 
@@ -559,6 +577,12 @@ interface NeutralProviderConfig {
   normalizeBindingPayload?: (payload: ProviderBindStatusPayload) => ProviderBindStatusPayload;
   /** renderer 动作 → 待打开的 provider URL(null = 该动作当前不可用)。 */
   actionUrl: (action: ProviderOpenAction, binding: ProviderBindingView) => string | null;
+  /**
+   * 本机发起关联后是否自动打开 pending 的 connectUrl(缺省 true)。connectUrl 本身就能
+   * 完成关联的渠道(Telegram / X / 飞书)自动打开; 官方 Discord 的 connectUrl 只是
+   * 「添加应用」, 关联靠关联码, 自动弹浏览器会把用户从要复制的关联码前带走, 所以关掉。
+   */
+  autoOpenConnectUrl?: boolean;
   /** main 安全边界内打开 provider URL(未注入 = 不支持自动打开, 仅剩复制链接)。 */
   openUrl?: (url: string) => void | Promise<void>;
 }
@@ -623,6 +647,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     getTelegramUrl,
     getXUrl,
     getFeishuUrl,
+    getDiscordUrl,
     getAuthToken,
     refreshAuthToken,
     deviceInfo,
@@ -647,6 +672,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     openTelegramUrl,
     openXUrl,
     openFeishuUrl,
+    openDiscordUrl,
     log,
   } = deps;
   const id = SLACK_HOOK_CONNECTION_ID;
@@ -674,7 +700,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
   /** Optimistic row removal is not a revoke acknowledgment; wait for bind.state. */
   const pendingSlackUnlinks = new Set<string>();
 
-  // ── provider-neutral 连接线注册表(Telegram、X 与飞书; 新 provider 在此追加) ────
+  // ── provider-neutral 连接线注册表(Telegram、X、飞书与 Discord; 新 provider 在此追加) ────
 
   // 服务端用客户端 hello.features 判定 provider 协商结果，因此客户端要求
   // 服务端具备的基础能力也必须全部自报；共用一份清单避免双向契约再次漂移。
@@ -924,6 +950,92 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     ...(openFeishuUrl !== undefined ? { openUrl: openFeishuUrl } : {}),
   };
 
+  // 官方 Discord(寄宿在 telegram-hook-server 的独立 /discord 路径, 与个人 Discord bot
+  // 无关)。关联靠一次性关联码: 用户私信给机器人或在 Discord 里执行 /bind, connectUrl
+  // 只是「添加应用」。进度、终稿、附件与交互按钮都由服务端按 turn.progress / turn.end /
+  // interaction.request 渲染, 不声明 msg-op / session-picker / session-result / telegram-*:
+  // 服务端在 /discord 只宣告这三项基础能力, 双方都有才启用。
+  // scopeId 是 Discord 应用 id(机器人的用户 id 与它相同), scopeName 恒为 null, 所以
+  // 「打开机器人」与「添加到服务器」的链接由本机按 scopeId 生成, 不取服务端的 URL。
+  const discordProviderFeatures = [
+    HOOK_FEATURE_PROVIDER_BIND,
+    HOOK_FEATURE_PROVIDER_PREFS,
+    HOOK_FEATURE_PROVIDER_DISCORD,
+  ] as const;
+
+  /** 动作里的链接都由 scopeId 生成: 不是合法的应用 id 就连同动作一起去掉。 */
+  function discordLinkActions(scopeId: string | null, actions: readonly string[]): string[] {
+    return isDiscordSnowflake(scopeId)
+      ? [...actions]
+      : actions.filter((action) => action !== 'open_provider' && action !== 'add_to_group');
+  }
+
+  const discordConfig: NeutralProviderConfig = {
+    provider: 'discord',
+    label: 'Discord',
+    getUrl: getDiscordUrl,
+    notConfiguredError: 'Discord service endpoint is not configured',
+    requiredFeatures: discordProviderFeatures,
+    // 与 Telegram / 飞书相同: 服务端按 hello.features 判定协商结果, 客户端要求的基础能力必须全部自报。
+    helloFeatures: discordProviderFeatures,
+    isEnabled: () => store.get().discordEnabled,
+    setEnabled: (enabled) => {
+      store.setProviderEnabled('discord', enabled);
+    },
+    restoreCachedBinding: () => {
+      const cached = store.get().discordBindingCache;
+      if (cached === null) return null;
+      return {
+        provider: 'discord',
+        state: 'confirmed',
+        attemptId: null,
+        bindingId: cached.bindingId,
+        principalId: cached.principalId,
+        principalName: cached.principalName,
+        scopeId: cached.scopeId,
+        scopeName: cached.scopeName,
+        connectUrl: null,
+        bindCode: null,
+        expiresAt: null,
+        reason: null,
+        remediationUrl: null,
+        actions: discordLinkActions(cached.scopeId, ['revoke', 'open_provider', 'add_to_group']),
+      };
+    },
+    writeBindingCache: (entry) => {
+      store.setProviderBindingCache('discord', entry);
+    },
+    normalizePendingPayload: (payload) => {
+      // connectUrl 只能是本次宣告的应用的「添加应用」页(精确 host/path/参数); 关联码只在
+      // pending 时透传(协议已校验形状)。
+      const connectLink = parseDiscordConnectUrl(payload.connectUrl ?? '');
+      if (connectLink.applicationId !== payload.scopeId) {
+        throw new Error('Discord binding app does not match the negotiated scope');
+      }
+      return { ...payload, connectUrl: connectLink.url };
+    },
+    normalizeBindingPayload: (payload) => ({
+      ...payload,
+      // 服务端恒发 null; 本机不用它生成任何链接, 也不把网线上的 URL 放进快照。
+      remediationUrl: null,
+      actions: discordLinkActions(payload.scopeId, payload.actions),
+    }),
+    actionUrl: (action, bindingView) => {
+      if (action === 'connect' && bindingView.actions.includes('open_connect_url')) {
+        return bindingView.connectUrl;
+      }
+      if (action === 'provider' && bindingView.actions.includes('open_provider')) {
+        return discordBotUrlOrNull(bindingView.scopeId);
+      }
+      if (action === 'add-to-group' && bindingView.actions.includes('add_to_group')) {
+        return discordAddToServerUrlOrNull(bindingView.scopeId);
+      }
+      return null;
+    },
+    autoOpenConnectUrl: false,
+    ...(openDiscordUrl !== undefined ? { openUrl: openDiscordUrl } : {}),
+  };
+
   function createNeutralLane(config: NeutralProviderConfig): NeutralProviderLane {
     return {
       config,
@@ -952,9 +1064,10 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
   const telegramLane = createNeutralLane(telegramConfig);
   const xLane = createNeutralLane(xConfig);
   const feishuLane = createNeutralLane(feishuConfig);
+  const discordLane = createNeutralLane(discordConfig);
   restoreFeishuBindings();
   /** 全部 provider-neutral 线; 遍历顺序即启动 / hello 重发顺序。 */
-  const lanes: readonly NeutralProviderLane[] = [telegramLane, xLane, feishuLane];
+  const lanes: readonly NeutralProviderLane[] = [telegramLane, xLane, feishuLane, discordLane];
   // key 收窄到 NeutralHookProvider: 'slack' 走 legacy 线, 在编译期就挡在本表外
   const laneByProvider = new Map<NeutralHookProvider, NeutralProviderLane>(
     lanes.map((lane) => [lane.config.provider, lane]),
@@ -1495,6 +1608,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       telegram: laneView(telegramLane),
       x: laneView(xLane),
       feishu: laneView(feishuLane),
+      discord: laneView(discordLane),
     };
   }
 
@@ -1640,7 +1754,9 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         view.bindingId &&
         view.principalId &&
         view.scopeId &&
-        view.scopeName
+        // 官方 Discord 的 scope 是应用 id, 服务端不发机器人名(scopeName 恒 null),
+        // 链接都由 scopeId 生成, 缓存不需要名字。
+        (view.scopeName || lane.config.provider === 'discord')
       ) {
         lane.config.writeBindingCache({
           bindingId: view.bindingId,
@@ -2000,13 +2116,15 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       lane.openRequestId = null;
       // Auto-open is best-effort. The link remains in the view so
       // remote-control users can copy it when the local shell rejects.
-      void Promise.resolve()
-        .then(() => lane.config.openUrl?.(view.connectUrl!))
-        .catch((err: unknown) => {
-          log.warn(
-            `open ${label} binding URL failed (${err instanceof Error ? err.name : 'unknown'})`,
-          );
-        });
+      if (lane.config.autoOpenConnectUrl !== false) {
+        void Promise.resolve()
+          .then(() => lane.config.openUrl?.(view.connectUrl!))
+          .catch((err: unknown) => {
+            log.warn(
+              `open ${label} binding URL failed (${err instanceof Error ? err.name : 'unknown'})`,
+            );
+          });
+      }
     }
     if (view.state !== 'pending' && view.state !== 'none') lane.openRequestId = null;
     if (
@@ -2974,6 +3092,18 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
           lane === null ||
           lane.awaitingStateSnapshot ||
           !confirmedLaneBindings(lane).some((row) => row.scopeId === feishuLane.appId && row.principalId === feishuLane.openId));
+      // 官方 Discord 同理: 只接本机当前已确认绑定的应用与 Discord 用户的派发, 冷启动的缓存
+      // 绑定要等这条连接上服务端的绑定快照到了才作数。解绑 / 换绑后迟到的旧任务在这里被拒。
+      const discordIdentity =
+        provider === 'discord' ? discordLaneIdentityOf(msg.payload.externalKey) : null;
+      const discordBindingMismatch =
+        provider === 'discord' &&
+        (discordIdentity === null ||
+          lane === null ||
+          lane.awaitingStateSnapshot ||
+          lane.binding?.state !== 'confirmed' ||
+          lane.binding.scopeId !== discordIdentity.appId ||
+          lane.binding.principalId !== discordIdentity.userId);
       // 接收日志: 复用已有会话的派发在 dispatcher 里是静默路径(只有新建才留
       // worktree 痕迹), 没有这条就无法区分「没收到」和「静默复用」。lane
       // key 含 IM 用户/聊天标识，不写日志。
@@ -2984,7 +3114,8 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         provider !== expectedProvider ||
         (lane !== null && !laneCapabilityReady(lane)) ||
         telegramGroupPrincipalMismatch ||
-        feishuBindingMismatch
+        feishuBindingMismatch ||
+        discordBindingMismatch
       ) {
         log.warn(
           `task.dispatch rejected for unsupported or mismatched provider: requestId=${msg.payload.requestId}`,

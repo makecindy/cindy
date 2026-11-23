@@ -84,6 +84,16 @@ it('shows favorites before recommendations, with selected mark only on the model
   expect(test.view.groups[0].rows[0].config).toMatchObject({effort:'high',fast:true});
   expect(test.view.groups[1].rows[0].selected).toBe(true);
 });
+// 依据：伙伴已选模型组时，手机选择器曾同时给组和它挑出的具体模型打勾，并滚到那个模型（模拟器实测）。
+// 缺口：伙伴设置的选择器单测替身了本组件，看不到行的选中态。最小失败输入：带一个 selected 组行打开。tier: unit。
+it('marks only the chosen model group, not the concrete model it picked',async()=>{
+  test.prefs.favorites=[{uid:'fav',providerId:'account',modelId:'codex/model',agent:'codex',effort:'medium',fast:false}];
+  await mount(undefined,{unified:{scope:'user-device',agents:['codex','claude-code'],loadCapabilities:async()=>({hasFastMode:true}),onSelect:vi.fn(async()=>true),
+    modelGroups:{rows:[{id:'night',title:'Night',subtitle:'2 sources',selected:true}],onSelect:vi.fn(async()=>true)}}});
+  expect(test.view.modelGroups.rows).toEqual([expect.objectContaining({id:'night',selected:true})]);
+  expect(test.view.groups.map((g:any)=>g.key)).not.toContain('recommended');
+  expect(test.view.groups.flatMap((g:any)=>g.rows).some((row:any)=>row.selected)).toBe(false);
+});
 it('edits a favorite only through explicit editing and save, without changing the current task',async()=>{
   test.prefs.favorites=[{uid:'fav',providerId:'account',modelId:'codex/model',agent:'codex',effort:'high',fast:false}];
   const {onSelect}=await mount();
@@ -112,9 +122,10 @@ it('search spans all sources and clearing preserves the selected filter',async()
 });
 
 it('preserves remote provider branding in model rows and source choices',async()=>{
-  await mount(undefined,{providers:[{id:'account',name:'OpenAI · account',models:{},connected:true,logoKind:'openai'}]});
-  expect(test.view.groups[0].rows[0].providerMark).toMatchObject({providerId:'account',name:'OpenAI · account',logoKind:'openai'});
-  expect(test.view.filters.find((item:any)=>item.id==='account').providerMark).toMatchObject({logoKind:'openai'});
+  const customIcon = '<svg/>';
+  await mount(undefined,{providers:[{id:'account',name:'OpenAI · account',models:{},connected:true,logoKind:'openai',customIcon}]});
+  expect(test.view.groups[0].rows[0].providerMark).toMatchObject({providerId:'account',name:'OpenAI · account',logoKind:'openai',customIcon});
+  expect(test.view.filters.find((item:any)=>item.id==='account').providerMark).toMatchObject({logoKind:'openai',customIcon});
 });
 
 it('attaches account remaining quota only to the matching source filter',async()=>{
@@ -1196,4 +1207,30 @@ it('folds own duplicate subscriptions but keeps different workspaces and third-p
   expect(test.view.filters.map((filter: any) => filter.id)).not.toContain('second');
   expect(test.view.filters.some((filter: any) => filter.remote?.deviceId === 'peer')).toBe(false);
   expect(test.view.filters.some((filter: any) => filter.remote?.deviceId === 'share:friend')).toBe(true);
+});
+
+// Gap found on Android Phone (2026-11-23): while the sharer's computer was offline — and for about a
+// minute after it came back, while its provider reconnected — the shared provider read as disconnected
+// with no models, so the share vanished from the phone's Source page and blinked back later. Same rule as
+// the Desktop picker: the listed share keeps its row, and the offline case explains itself.
+it('keeps a listed share in the Source page while it has no models, and explains when the sharer is offline', async () => {
+  const shareFilter = 'remote:["share:friend","xd"]';
+  const catalog = (offline: boolean) => ({
+    deviceId: 'share:friend', name: offline ? 'Friend · Offline' : 'Friend', status: 'ready',
+    shareSource: { providerId: 'xd', providerLabel: 'Cindy AI', offline },
+    providers: [{ id: 'xd', name: 'Cindy AI', models: {}, connected: false, remoteInvocationEnabled: true }],
+  });
+  test.entriesFor = providers => providers.some((provider: any) => provider.id === 'xd') ? [] : test.entries;
+
+  await mountRemote(null, vi.fn(async () => true), catalog(true));
+  expect(test.view.filters.find((filter: any) => filter.id === shareFilter)?.remote)
+    .toMatchObject({ deviceId: 'share:friend', deviceName: 'Friend · Offline' });
+  await act(async () => test.view.onFilter(shareFilter));
+  expect(test.view.groups).toHaveLength(0);
+  expect(test.view.emptyHint).toBe('providerShare.picker.offlineNote');
+
+  await mountRemote(null, vi.fn(async () => true), catalog(false));
+  expect(test.view.filters.some((filter: any) => filter.id === shareFilter)).toBe(true);
+  await act(async () => test.view.onFilter(shareFilter));
+  expect(test.view.emptyHint).toBe('models.picker.noResults');
 });

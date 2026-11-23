@@ -1476,6 +1476,120 @@ describe('claude generation pause boundaries', () => {
     vi.useRealTimers();
   });
 
+  // Real Claude turns: a quarter finished without their speed chart. When the result aggregate
+  // and the request segments disagree (subagent output counted on one side only), the legacy
+  // counters fail closed, and the chart went with them although the meter only ever timed the
+  // parent's own requests. Unit tier through translateSdkMessage; smallest input: one parent
+  // request, one child request, and a result that leaves the child out.
+  it('keeps the parent speed chart when subagent output makes the turn aggregate disagree', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 10 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'tool_use', id: 'toolu-agent', name: 'Agent', input: {} },
+        },
+      },
+      queue,
+      ctx,
+    );
+    vi.setSystemTime(1_800);
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_delta',
+          usage: { output_tokens: 80 },
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.reliable).toBe(true);
+    expect(ctx.rt.generation.pendingToolIds.has('toolu-agent')).toBe(true);
+
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        parent_tool_use_id: 'toolu-agent',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 5 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        parent_tool_use_id: 'toolu-agent',
+        event: {
+          type: 'message_delta',
+          usage: { output_tokens: 500 },
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.reliable).toBe(true);
+    expect(ctx.rt.generation.sawSubagent).toBe(true);
+
+    translateSdkMessage(
+      {
+        type: 'user',
+        message: {
+          content: [{ type: 'tool_result', tool_use_id: 'toolu-agent', content: 'child done' }],
+        },
+      },
+      queue,
+      ctx,
+    );
+    vi.setSystemTime(2_200);
+    translateSdkMessage(
+      {
+        type: 'result',
+        stop_reason: 'end_turn',
+        total_cost_usd: 0,
+        num_turns: 1,
+        usage: { input_tokens: 15, output_tokens: 80 },
+      },
+      queue,
+      ctx,
+    );
+    queue.end();
+    const events: AgentEvent[] = [];
+    for await (const event of queue) events.push(event);
+
+    const doneStatus = events.find(
+      (event) => event.type === 'status' && (event.data as { status?: string }).status === 'Done',
+    );
+    // The legacy usage-paired timing still fails closed...
+    expect(doneStatus?.data).toMatchObject({ generationReliable: false });
+    // ...but the finished turn keeps the chart of the parent's own request.
+    const done = events.find((event) => event.type === 'done');
+    expect((done?.data as { generationTrace?: { requests: number } })?.generationTrace).toMatchObject({ requests: 1 });
+    resetClaudeGenerationTiming(ctx.rt.generation);
+    vi.useRealTimers();
+  });
+
   it('fails closed when a subagent is present but parent streamed output is incomplete', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
