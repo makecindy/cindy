@@ -189,6 +189,19 @@ it('keeps a programmatic reveal unexpanded across a route gap', async () => {
 
 // Bug: 就绪空档里换了任务（例如在设置页从系统岛跳到另一个任务），落到的那个任务的
 // 记忆状态不是用户这次要开栏，不能拉宽窗口；用户直接点名展开的落回仍要展开。
+// Codex P1: a cold start on a route without a sidebar (/settings, /bots) and a later
+// notification landing on a task must not expand the window for that task's saved state.
+it('does not expand on the first task landing after a taskless start', async () => {
+  const resize = vi.fn(async () => 800);
+  window.electronAPI = { windowSidebarExpansion: resize } as never;
+  const { rerender } = renderHook(
+    ({ ready, sessionKey }) => useSidebarPresentation(root, false, ready, width, false, sessionKey),
+    { initialProps: { ready: false, sessionKey: '' } },
+  );
+  act(() => { rerender({ ready: true, sessionKey: 'task-a' }); });
+  expect(resize).not.toHaveBeenCalled();
+});
+
 it('keeps the standalone width when a readiness gap lands on another task passively', async () => {
   const resize = vi.fn(async (requested: number) => (requested > 0 ? 401 : 0));
   window.electronAPI = { windowSidebarExpansion: resize } as never;

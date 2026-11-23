@@ -67,6 +67,8 @@ export function useSidebarPresentation(
   const ownsWidth = useRef(false);
   /** 最近一次就绪渲染所属的任务；设置页接管会先清空 sessionKey，不能拿空档里的值。 */
   const lastReadySession = useRef(sessionKey);
+  /** 这次挂载先停在「没有任务语境、也还没就绪」的路由（冷启动落在 /settings、/bots 等）。 */
+  const sawTasklessRender = useRef(false);
   /** 离开就绪区间时的快照；null = 还没经历过就绪区间（首次挂载）。 */
   const beforeGap = useRef<{ ownsWidth: boolean; sessionKey: string } | null>(null);
   const generation = useRef(0);
@@ -77,6 +79,7 @@ export function useSidebarPresentation(
   useLayoutEffect(() => {
     const wasCollapsed = previous.current;
     const turnedUser = userToggle && !previousUserToggle.current;
+    if (!sessionKey && !ready) sawTasklessRender.current = true;
     previousUserToggle.current = userToggle;
     previous.current = ready ? collapsed : null;
     if (ready) {
@@ -102,8 +105,11 @@ export function useSidebarPresentation(
     // 空档里换到了别的任务（系统岛 / 通知跳转）同理：那是那个任务的记忆状态，
     // 不是用户这次要开栏。只有用户直接点名要开（userToggle）才照常展开。
     const gap = beforeGap.current;
-    const relanded = openingFromMount && !userResize.current && gap !== null
-      && (gap.ownsWidth === false || gap.sessionKey !== sessionKey);
+    // 先落在没有侧栏的路由（/settings、/bots 等）、之后才被通知带到任务上，和离开就绪区间
+    // 再回来是同一种「落地」：这次展开来自任务自己的存档，不是用户开栏，窗口保持原宽。
+    const relanded = openingFromMount && !userResize.current
+      && (gap !== null ? gap.ownsWidth === false || gap.sessionKey !== sessionKey
+        : sawTasklessRender.current);
     // 启动时按存档恢复展开照常占窗口宽度；但同一帧里由视图强制的展示（首帧 Orca
     // workers 等程序动作）只是把面板放出来，不能顺手把窗口拉宽。
     const forcedReveal = openingFromMount && !userResize.current && passive.current;
