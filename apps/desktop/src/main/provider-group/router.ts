@@ -38,6 +38,8 @@ export function providerGroupImageModelId(
   providerId: string,
   model: string,
 ): string | undefined {
+  // Independent pools expose their image model for local Art, not the shared image invocation.
+  if (view.subscriptionPool === 'openai') return undefined;
   const sourcePrefix = `${providerId}/`;
   const memberModel = model.startsWith(sourcePrefix) ? `${view.id}/${model.slice(sourcePrefix.length)}` : model;
   return view.imageModels?.find(item => item.id === memberModel && !item.disabled

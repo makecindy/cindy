@@ -191,6 +191,9 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
 - 花名册在**会话装配时求值一次，会话内恒定**——这是 prompt 前缀缓存安全的前提，
   因此禁止时间戳、随机 boundary 等每次变化的内容。
 - 新会话才能看到插件变动；会话中途的变动靠 `ghost_list` 现查 + 运行期门禁兜底。
+- 普通本机任务的既有 `cindy` MCP 只为显式声明 `tools[].exposure: "startup"` 且已批准的
+  可用插件工具生成有界的具名快照。工具仍由同一 `ghost_call` 处理器执行并核对任务、账号、
+  工作目录和安装版本。作者契约见 [工具声明](../apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-tools.md#33-任务启动时的具名工具)。
 
 ### 3.4 fail-closed
 

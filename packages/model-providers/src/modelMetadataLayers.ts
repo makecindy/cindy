@@ -148,6 +148,15 @@ export function mergeModelMetadata(
         input: result.modalities.input.filter((modality) => modality !== 'image'),
       };
     }
+    // A higher-priority explicit enable restores image after a lower-layer denial.
+    // Same-layer modalities remain authoritative; never invent an output list.
+    if (fields.supportsImageInput === true && fields.modalities === undefined &&
+        result.modalities && !result.modalities.input.includes('image')) {
+      result.modalities = {
+        ...result.modalities,
+        input: [...result.modalities.input, 'image'],
+      };
+    }
   }
   return result;
 }
@@ -532,9 +541,10 @@ export function mergeDiscoveredRuntimeModels(
         ...(model.discoveredCost ? { discoveredCost: model.discoveredCost } : {}),
         ...(hideNew ? { defaultEnabled: false } : {}),
       });
-    else
+    else {
+      const { discoveredCost: _staleCost, ...existingModel } = models[index];
       models[index] = {
-        ...models[index],
+        ...existingModel,
         ...accountCapabilities,
         discoveredSource: model.discoveredSource,
         ...((model.opaqueModelId || models[index].opaqueModelId) ? { opaqueModelId: true as const } : {}),
@@ -543,6 +553,7 @@ export function mergeDiscoveredRuntimeModels(
         discoveredMetadata,
         ...(model.discoveredCost ? { discoveredCost: model.discoveredCost } : {}),
       };
+    }
   }
   return [...added, ...models];
 }

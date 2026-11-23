@@ -2040,6 +2040,50 @@ describe('Chat Server result delivery and refresh', () => {
       content: [expect.objectContaining({ data: expect.objectContaining({ state: 'idle', prUrl: 'https://github.com/makecindy/cindy/pull/42' }) })] }) }]);
     await vi.advanceTimersByTimeAsync(15_000);
     expect(edits).toHaveLength(1);
+    // An idle card is not read every 15 s heartbeat (each read is a session row, runtime and PR lookup),
+    // yet a turn its owner starts in the task, with no turn end yet, still shows within a minute.
+    vi.mocked(deps.readGroupTaskStatus!).mockClear();
+    state = 'running';
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(deps.readGroupTaskStatus).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(45_000);
+    expect(edits).toHaveLength(2);
+    expect(edits[1]!.body).toMatchObject({ content: [expect.objectContaining({ data: expect.objectContaining({ state: 'running' }) })] });
+  });
+
+  // #12011 review: a turn end's own full pass also restarted the one-minute clock of idle cards, so a
+  // turn the owner started right after it was seen only at the heartbeat after next (75 s). The minute
+  // counts from the previous minute check. Minimal timeline: heartbeat at 0 s, the turn ends at 1 s, the
+  // owner starts another at 2 s and it keeps running; by 62 s the same card reads running, and the
+  // only messages are the card and that turn's one Thread reply (#10163: progress edits the card).
+  it('shows a turn started right after a turn end within the minute', async () => {
+    const posted: Array<{ operationId: string }> = [];
+    const edits: Array<Record<string, unknown>> = [];
+    let state: 'running' | 'idle' = 'running';
+    deps.readGroupTaskStatus = vi.fn(async () => ({ title: 'Fix login', state }));
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route === '/executions/claim') { const next = claimed ? null : { ...execution, requester_id: selfId, access_mode: 'owner' }; claimed = true; return { body: { execution: next } }; }
+      if (route === `/conversations/${roomId}/messages` && method === 'POST') { posted.push(body); return { body: { id: '70000000-0000-4000-8000-000000000001', revision: 1 } }; }
+      if (method === 'PATCH' && route.includes('/messages/')) { edits.push(body); return { body: { revision: edits.length + 1 } }; }
+      return response(route);
+    });
+    await start();
+    reportGroupTaskCreated('lane', { taskId: 'task-1', deviceId: null, title: 'Fix login' });
+    await vi.advanceTimersByTimeAsync(0);
+    // 0 s: a heartbeat reads the card.
+    for (let step = 0; step < 16 && !vi.mocked(deps.readGroupTaskStatus!).mock.calls.length; step++) await vi.advanceTimersByTimeAsync(1_000);
+    expect(deps.readGroupTaskStatus).toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1_000);
+    state = 'idle';
+    await service.settleLaneTurn({ ...terminal, sessionId: 'task-1', activeInputClientId: 'created-with', resultMessageClientId: 'reply-1', resultText: 'Done' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(edits.at(-1)).toMatchObject({ content: [expect.objectContaining({ data: expect.objectContaining({ state: 'idle', summary: 'Done' }) })] });
+    await vi.advanceTimersByTimeAsync(1_000);
+    state = 'running';
+    await vi.advanceTimersByTimeAsync(59_000);
+    expect(edits).toHaveLength(2);
+    expect(edits[1]).toMatchObject({ content: [expect.objectContaining({ data: expect.objectContaining({ state: 'running' }) })] });
+    expect(posted.map(post => post.operationId.split(':')[0])).toEqual(['task-card', 'task-reply']);
   });
 
   // bot-group-chat.md §10 (#10009 review): the card is saved only once its POST returns, and a fast

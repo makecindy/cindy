@@ -319,6 +319,9 @@ export function terminalErrorText(data: unknown, options?: QuotaFailureNoticeOpt
     toolLoopFailureNotice(data) ??
     overloadFailureNotice(message, errorStatus, codexErrorInfo) ??
     (options ? quotaFailureNotice(data, options) : null) ??
+    (data && typeof data === 'object' && 'reason' in data && data.reason === 'UPSTREAM_OVERLOADED'
+      ? imText('imBot.text.shared.retry.overloadFailed')
+      : null) ??
     message
   );
 }

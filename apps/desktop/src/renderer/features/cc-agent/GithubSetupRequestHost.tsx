@@ -15,9 +15,9 @@ export function GithubSetupRequestHost() {
   useEffect(() => window.electronAPI.gitContext?.onGithubSetupOpen?.(() => setOpen(true)), []);
   return open ? <Dialog.Root open onOpenChange={setOpen}>
     <Dialog.Portal>
-      <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
+      <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
       <Dialog.Content aria-describedby={undefined} onPointerDownOutside={(e) => e.preventDefault()}
-        className="modal-panel fixed left-1/2 top-1/2 z-[10001] flex max-h-[85vh] w-[min(440px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 overflow-y-auto p-4 outline-none">
+        className="modal-panel fixed left-1/2 top-1/2 z-modal-raised flex max-h-[85vh] w-[min(440px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 overflow-y-auto p-4 outline-none">
         <Dialog.Title className="text-16 font-medium text-[var(--confirm-title)]">GitHub</Dialog.Title>
         <GithubAccountCard includeEvents onConnected={() => {}} />
         <Dialog.Close asChild><Button variant="secondary">{t('ccAgent.gitContext.pr.setup.connection.close')}</Button></Dialog.Close>

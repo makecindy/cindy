@@ -1,6 +1,6 @@
 {
   "schemaVersion": 6,
-  "updatedAt": "2026-11-21T13:30:00.000Z",
+  "updatedAt": "2026-11-23T12:43:05.384Z",
   "models": [
     {
       "id": "openai/gpt-6.2-sol",
@@ -5642,9 +5642,10 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.42
             }
           ]
         }
@@ -5671,9 +5672,10 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.21
             }
           ]
         }
@@ -5700,9 +5702,10 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.21
             }
           ]
         }
@@ -5729,9 +5732,10 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.42
             }
           ]
         }
@@ -5758,9 +5762,10 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.1
             }
           ]
         }
@@ -5787,9 +5792,10 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 1.5
             }
           ]
         }
@@ -5816,9 +5822,10 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 2
             }
           ]
         }
@@ -5845,9 +5852,10 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 2
             }
           ]
         }
@@ -5874,9 +5882,10 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 2
             }
           ]
         }
@@ -5903,9 +5912,10 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.23
             }
           ]
         }
@@ -5932,9 +5942,10 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.57
             }
           ]
         }
@@ -5961,9 +5972,10 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/deepseek-v4-pro",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 1
             }
           ]
         }
@@ -5990,9 +6002,10 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/glm-5-2",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 2
             }
           ]
         }
@@ -6019,9 +6032,10 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 4
             }
           ]
         }
@@ -6048,9 +6062,10 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/glm-5-3",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 2
             }
           ]
         }
@@ -6077,9 +6092,10 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 4
             }
           ]
         }
@@ -6164,9 +6180,11 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/kimi-k2-5",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.4,
+              "cacheWritePerMtok": 5
             }
           ]
         }
@@ -6193,9 +6211,11 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/kimi-k2-6",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.65,
+              "cacheWritePerMtok": 8.125
             }
           ]
         }
@@ -6222,9 +6242,11 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/kimi-k2-7-code",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.65,
+              "cacheWritePerMtok": 8.125
             }
           ]
         }
@@ -6251,9 +6273,10 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 2
             }
           ]
         }
@@ -6309,9 +6332,10 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/kimi-k2-6-by-moonshot",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 1.1
             }
           ]
         }
@@ -6338,9 +6362,10 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/kimi-k2-7-code-highspeed",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 2.6
             }
           ]
         }
@@ -6367,9 +6392,10 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/kimi-k2-7-code-by-moonshot",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 1.3
             }
           ]
         }
@@ -6396,9 +6422,10 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 1.3
             }
           ]
         }
@@ -6425,9 +6452,10 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 1.3
             }
           ]
         }
@@ -6454,9 +6482,10 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 2
             }
           ]
         }
@@ -6483,9 +6512,11 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/qwen-doc-turbo",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.06,
+              "cacheWritePerMtok": 0.75
             }
           ]
         }
@@ -6512,9 +6543,10 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/qwen-flash-character",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.05
             }
           ]
         }
@@ -6541,9 +6573,10 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/qwen-flash-character",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.036
             }
           ]
         }
@@ -6599,9 +6632,10 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/qwen-max",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.48
             }
           ]
         }
@@ -6802,9 +6836,11 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/qwen-plus-character",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.08,
+              "cacheWritePerMtok": 1
             }
           ]
         }
@@ -7182,10 +7218,12 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
+                "url": "https://help.aliyun.com/zh/model-studio/qwen3-7-max",
+                "verifiedAt": "2026-11-23"
               },
-              "maxInputTokens": 1000001
+              "maxInputTokens": 1000001,
+              "cacheReadPerMtok": 1.2,
+              "cacheWritePerMtok": 15
             }
           ]
         }
@@ -7212,10 +7250,12 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
+                "url": "https://help.aliyun.com/zh/model-studio/qwen3-7-max",
+                "verifiedAt": "2026-11-23"
               },
-              "maxInputTokens": 1000001
+              "maxInputTokens": 1000001,
+              "cacheReadPerMtok": 1.2,
+              "cacheWritePerMtok": 15
             }
           ]
         }
@@ -7272,10 +7312,12 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
+                "url": "https://help.aliyun.com/zh/model-studio/qwen3-8-2-4t-a95b",
+                "verifiedAt": "2026-11-23"
               },
-              "maxInputTokens": 1000001
+              "maxInputTokens": 1000001,
+              "cacheReadPerMtok": 1,
+              "cacheWritePerMtok": 15
             }
           ]
         }
@@ -7302,10 +7344,12 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
+                "url": "https://help.aliyun.com/zh/model-studio/qwen3-8-27b",
+                "verifiedAt": "2026-11-23"
               },
-              "maxInputTokens": 1000001
+              "maxInputTokens": 1000001,
+              "cacheReadPerMtok": 0.3,
+              "cacheWritePerMtok": 3.75
             }
           ]
         }
@@ -7332,10 +7376,12 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
+                "url": "https://help.aliyun.com/zh/model-studio/qwen3-8-max",
+                "verifiedAt": "2026-11-23"
               },
-              "maxInputTokens": 1000001
+              "maxInputTokens": 1000001,
+              "cacheReadPerMtok": 1,
+              "cacheWritePerMtok": 15
             }
           ]
         }
@@ -7508,9 +7554,10 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/step-3-7-flash",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.27
             }
           ]
         }
@@ -7537,9 +7584,10 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.35
             }
           ]
         }
@@ -7595,9 +7643,10 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/tongyi-xiaomi-analysis-flash",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.04
             }
           ]
         }
@@ -7624,9 +7673,10 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/tongyi-xiaomi-analysis-pro",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.2
             }
           ]
         }
@@ -7711,9 +7761,10 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 1.6
             }
           ]
         }
@@ -7740,9 +7791,10 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.8
             }
           ]
         }
@@ -7769,9 +7821,10 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 1.6
             }
           ]
         }
@@ -7798,9 +7851,10 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.2
             }
           ]
         }
@@ -7827,9 +7881,10 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/deepseek-v4-pro-by-vanchin",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 1
             }
           ]
         }
@@ -7856,9 +7911,10 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/deepseek-v4-pro-by-vanchin",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.3
             }
           ]
         }
@@ -7885,9 +7941,10 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.04
             }
           ]
         }
@@ -7914,9 +7971,10 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/mimo-v2-6-pro-ultraspeed",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.25
             }
           ]
         }
@@ -13083,8 +13141,9 @@
               "source": {
                 "kind": "provider-official",
                 "url": "https://help.aliyun.com/zh/model-studio/qwen3-8-max",
-                "verifiedAt": "2026-11-21"
-              }
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 1
             }
           ]
         }
@@ -13173,8 +13232,9 @@
               "source": {
                 "kind": "provider-official",
                 "url": "https://help.aliyun.com/zh/model-studio/qwen3-7-max",
-                "verifiedAt": "2026-11-21"
-              }
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 1.2
             }
           ]
         }
@@ -14385,9 +14445,11 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/qwen3-6-plus",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.2,
+              "cacheWritePerMtok": 2.5
             },
             {
               "currency": "CNY",
@@ -14399,9 +14461,11 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/qwen3-6-plus",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.8,
+              "cacheWritePerMtok": 10
             }
           ]
         }
@@ -14433,9 +14497,11 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/qwen3-7-flash",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.02,
+              "cacheWritePerMtok": 0.25
             },
             {
               "currency": "CNY",
@@ -14447,9 +14513,11 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/qwen3-7-flash",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.06,
+              "cacheWritePerMtok": 0.75
             },
             {
               "currency": "CNY",
@@ -14461,9 +14529,11 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/qwen3-7-flash",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.12,
+              "cacheWritePerMtok": 1.5
             }
           ]
         }
@@ -14501,6 +14571,21 @@
                 "kind": "provider-official",
                 "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
                 "verifiedAt": "2026-09-11"
+              },
+              "effectiveUntil": "2026-11-23"
+            },
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 0.8,
+              "outputPerMtok": 2.7,
+              "cacheReadPerMtok": 0.1,
+              "cacheWritePerMtok": 1.25,
+              "effectiveFrom": "2026-11-23",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/qwen3-8-flash",
+                "verifiedAt": "2026-11-23"
               }
             }
           ]
@@ -14533,9 +14618,11 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/qwen3-7-plus",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.2,
+              "cacheWritePerMtok": 2.5
             },
             {
               "currency": "CNY",
@@ -14547,9 +14634,11 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/qwen3-7-plus",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.6,
+              "cacheWritePerMtok": 7.5
             }
           ]
         }
@@ -14581,9 +14670,11 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/qwen3-6-flash",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.12,
+              "cacheWritePerMtok": 1.5
             },
             {
               "currency": "CNY",
@@ -14595,9 +14686,11 @@
               "effectiveFrom": "2026-11-21",
               "source": {
                 "kind": "provider-official",
-                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
-                "verifiedAt": "2026-11-21"
-              }
+                "url": "https://help.aliyun.com/zh/model-studio/qwen3-6-flash",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.48,
+              "cacheWritePerMtok": 6
             }
           ]
         }
@@ -19057,6 +19150,45 @@
       "inputBaseUrls": [
         "https://openhubs.zhidemai.com",
         "https://openhubs.zhidemai.com/v1"
+      ],
+      "defaultFor": [
+        "pi"
+      ]
+    },
+    {
+      "id": "tokenrhythm-anthropic-messages",
+      "providerId": "tokenrhythm",
+      "api": "anthropic-messages",
+      "baseUrl": "https://tokenrhythm.studio",
+      "inputBaseUrls": [
+        "https://tokenrhythm.studio",
+        "https://tokenrhythm.studio/v1"
+      ],
+      "defaultFor": [
+        "claude-code"
+      ]
+    },
+    {
+      "id": "tokenrhythm-openai-responses",
+      "providerId": "tokenrhythm",
+      "api": "openai-responses",
+      "baseUrl": "https://tokenrhythm.studio/v1",
+      "inputBaseUrls": [
+        "https://tokenrhythm.studio",
+        "https://tokenrhythm.studio/v1"
+      ],
+      "defaultFor": [
+        "codex"
+      ]
+    },
+    {
+      "id": "tokenrhythm-openai-completions",
+      "providerId": "tokenrhythm",
+      "api": "openai-completions",
+      "baseUrl": "https://tokenrhythm.studio/v1",
+      "inputBaseUrls": [
+        "https://tokenrhythm.studio",
+        "https://tokenrhythm.studio/v1"
       ],
       "defaultFor": [
         "pi"

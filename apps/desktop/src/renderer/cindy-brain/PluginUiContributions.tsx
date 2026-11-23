@@ -300,7 +300,7 @@ function EntryControl({ entry, sessionId, clientId, active, appearance }: { entr
     <PopoverContent align="start" side={action.position === 'composer.header' || action.position === 'composer.toolbar' || action.position === 'statusbar' ? 'top' : 'bottom'}
       aria-label={title} className="w-[min(26rem,calc(100vw-2rem))] max-h-[var(--radix-popover-content-available-height)] overflow-y-auto p-2">
       {open && active && <Suspense fallback={<Spinner size={16} />}><PluginUiView chrome="panel" ghost={entry.ghost} viewId={action.view}
-        sessionId={sessionId} input={action.arguments} onUnavailable={() => setOpen(false)} /></Suspense>}
+        sessionId={sessionId} composerPlacement={JSON.stringify([action.id, clientId])} input={action.arguments} onUnavailable={() => setOpen(false)} /></Suspense>}
     </PopoverContent>
   </Popover>;
   return <Button variant="secondary" tone="quiet" size="sm" disabled={pending || state?.disabled} title={controlTitle}
@@ -365,7 +365,7 @@ function PluginUiSidebarSection({ entry, sessionId }: { entry: PluginUiEntry; se
     </button>
     <SectionCollapse collapsed={!expanded} inert={!expanded}>
       {visible && available && <Suspense fallback={<Spinner size={16} />}><PluginUiView chrome="panel" sizing="sidebar-section" ghost={entry.ghost}
-        viewId={view!.id} sessionId={view!.scope === 'task' ? sessionId : null} input={entry.contribution.arguments} /></Suspense>}
+        viewId={view!.id} composerPlacement={JSON.stringify([entry.contribution.id])} sessionId={view!.scope === 'task' ? sessionId : null} input={entry.contribution.arguments} /></Suspense>}
     </SectionCollapse>
   </div>;
 }
@@ -374,7 +374,7 @@ function PluginUiSidebarSection({ entry, sessionId }: { entry: PluginUiEntry; se
 export function PluginUiBody({ children, position, ...target }: Target & { children: ReactNode; position: 'message.body' | 'tool.body' }) {
   const entries = useEntries(position, target);
   if (!entries.length || !target.sessionId) return <>{children}</>;
-  return <PluginUiBodyChoice entries={entries} sessionId={target.sessionId} context={target.context}>{children}</PluginUiBodyChoice>;
+  return <PluginUiBodyChoice entries={entries} sessionId={target.sessionId} clientId={target.clientId} context={target.context}>{children}</PluginUiBodyChoice>;
 }
 
 /** Return the original element itself when the list has no candidate for this body. */
@@ -382,8 +382,8 @@ export function renderPluginUiBody(options: (Target & { position: 'message.body'
   return options ? <PluginUiBody {...options}>{children}</PluginUiBody> : children;
 }
 
-function PluginUiBodyChoice({ children, entries, sessionId, context }: {
-  children: ReactNode; entries: readonly PluginUiEntry[]; sessionId: string; context?: Target['context'];
+function PluginUiBodyChoice({ children, entries, sessionId, clientId, context }: {
+  children: ReactNode; entries: readonly PluginUiEntry[]; sessionId: string; clientId?: string; context?: Target['context'];
 }) {
   const { t } = useTranslation();
   const [selected, setSelected] = useState('original');
@@ -396,6 +396,6 @@ function PluginUiBodyChoice({ children, entries, sessionId, context }: {
         }))]} onValueChange={setSelected} />
     </div>
     {entry?.contribution.view ? <Suspense fallback={children}><PluginUiView ghost={entry.ghost} viewId={entry.contribution.view}
-      sessionId={sessionId} input={entry.contribution.arguments} context={context} onUnavailable={() => setSelected('original')} /></Suspense> : children}
+      sessionId={sessionId} composerPlacement={JSON.stringify([entry.contribution.id, clientId])} input={entry.contribution.arguments} context={context} onUnavailable={() => setSelected('original')} /></Suspense> : children}
   </>;
 }

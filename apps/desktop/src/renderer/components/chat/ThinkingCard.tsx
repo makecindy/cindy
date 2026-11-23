@@ -181,7 +181,7 @@ export function ThinkingCard({
             <span className="text-14 text-[var(--msg-tool-card-chevron)] translate-y-[1px]">
               Thinking
             </span>
-            <div className="flex items-center gap-[3px] translate-y-[2px]">
+            <div className="flex items-center gap-0.5 translate-y-[2px]">
               <span className="thinking-dot thinking-dot-1" />
               <span className="thinking-dot thinking-dot-2" />
               <span className="thinking-dot thinking-dot-3" />

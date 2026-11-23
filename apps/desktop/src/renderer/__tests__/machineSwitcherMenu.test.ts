@@ -94,7 +94,7 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
       "const pinSearch = section === 'scrollable' && search.query.trim().length > 0",
     );
     // 搜索吸顶不改变导航行高度，也不在输入框外绘制额外背景。
-    expect(topNavSource).toContain("pinSearch && 'sticky top-0 z-30'");
+    expect(topNavSource).toContain("pinSearch && 'sticky top-0 z-page-overlay'");
     expect(topNavSource).toContain("if (section === 'scrollable')");
     expect(sidebarUpperSource).toContain('lastListScrollTopRef.current = el.scrollTop');
     expect(sidebarUpperSource).toContain(
@@ -117,9 +117,9 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(sidebarUpperSource).toContain("document.addEventListener('focusin', onFocusIn)");
     const inlineSearchSource = read('features', 'cc-agent', 'sidebar', 'SidebarInlineSearch.tsx');
     expect(inlineSearchSource).toContain('inputRef.current?.focus({ preventScroll: true })');
-    expect(sidebarUpperSource).not.toContain('absolute inset-0 z-20');
+    expect(sidebarUpperSource).not.toContain('absolute inset-0 z-page-float');
     expect(sidebarUpperSource).not.toContain(
-      "search.trimmed && 'sticky top-0 z-30 bg-[var(--cmd-palette-bg)]'",
+      "search.trimmed && 'sticky top-0 z-page-overlay bg-[var(--cmd-palette-bg)]'",
     );
 
     // 声明语义与 useRegisterSidebarUpper 一致:卸载不复位,避免切到 /settings 时闪变。
@@ -282,9 +282,9 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     const cardSource = read('features', 'cc-agent', 'sidebar', 'SessionCard.tsx');
     expect(cardSource).toContain('sourceLabel,');
     // Outside the inbox; the inbox leaves the project name to the row's project icon.
-    expect(cardSource).toContain('{sourceLabel && !inboxMode ? (');
+    expect(cardSource).toContain('{showProject && sourceLabel && !inboxMode ? (');
     const itemSource = read('features', 'cc-agent', 'sidebar', 'SessionItem.tsx');
-    expect(itemSource).toContain('{sourceLabel && !inboxMode ? (');
+    expect(itemSource).toContain('{showProject && sourceLabel && !inboxMode ? (');
   });
 
   // 2026-08-12 用户裁决:筛选各维度选中后菜单不关闭(常要连调几项);排序与显示
@@ -341,7 +341,7 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(infoMetaSource).toContain("piece.key === 'worktree' ?");
     // 菜单摘要的图标串同样按勾选顺序(遍历 taskInfoFields,不是遍历选项表)。
     const filterSource = read('features', 'cc-agent', 'sidebar', 'SidebarFilterPopover.tsx');
-    expect(filterSource).toContain('{taskInfoFields.map((field) => {');
+    expect(filterSource).toContain('{summaryFields.map((field) => {');
   });
 
   // 2026-08-12 用户裁决:任务信息行的当前选中项用图标表示,不再罗列短词。

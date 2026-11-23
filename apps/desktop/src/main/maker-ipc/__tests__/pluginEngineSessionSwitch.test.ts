@@ -14,6 +14,7 @@
  * - tier：unit(依赖注入，与 sessionAgentSwitchHandler.test.ts 同一套 harness 形状)。
  */
 import { describe, expect, it, vi } from 'vitest';
+import { providerShareGuestPeer } from '@cindy/device-link';
 
 import {
   applyPendingAgentSwitchIfIdle,
@@ -188,16 +189,33 @@ describe('switching a task onto a plugin engine', () => {
     expect(pendingSwitches.get('s1')).toBeUndefined();
   });
 
-  it('does not register a switch to a shared provider or use local admission for an unsupported remote target', async () => {
-    const admitRemotePluginEngineTarget = vi.fn();
+  it('switches to a shared plugin engine via remote admission, while rejecting raw wire peers or unwired remote targets', async () => {
+    const admitRemotePluginEngineTarget = vi.fn(async () => ({
+      model: 'deepseek-v4', effort: 'high', permissionMode: 'default', engineName: 'DeepSeek Harness',
+    }));
     const { deps, pendingSwitches } = makeDeps(makeRow(), { admitRemotePluginEngineTarget });
-    await expect(performSessionAgentSwitch(deps, {
-      sessionId: 's1', targetAgentKind: 'acp', model: 'default', providerId: ENGINE, agentDeviceId: 'share:s1',
-    })).rejects.toThrow('[PRECONDITION_FAILED]');
-    expect(admitRemotePluginEngineTarget).not.toHaveBeenCalled();
-    expect(pendingSwitches.get('s1')).toBeUndefined();
+    await performSessionAgentSwitch(deps, {
+      sessionId: 's1', targetAgentKind: 'acp', model: 'deepseek-v4', providerId: ENGINE, agentDeviceId: 'share:s1',
+    });
+    expect(admitRemotePluginEngineTarget).toHaveBeenCalledWith('share:s1', expect.objectContaining({ providerId: ENGINE, model: 'deepseek-v4' }));
+    expect(pendingSwitches.get('s1')).toMatchObject({
+      targetAgentKind: 'acp', providerId: ENGINE, model: 'deepseek-v4', targetAgentDeviceId: 'share:s1',
+    });
+    await applyPendingAgentSwitchIfIdle(deps, 's1');
+    expect(deps.admitPluginEngineTarget).not.toHaveBeenCalled();
+    expect(deps.applyAgentSwitchToDb).toHaveBeenLastCalledWith('s1', expect.objectContaining({
+      agentKind: 'acp', providerId: ENGINE, model: 'deepseek-v4', agentDeviceId: 'share:s1', sdkSessionId: null,
+    }));
 
-    // Without remote admission wired, targeting another computer is refused.
+    // Raw wire peers are never valid task agentDeviceId targets (rejected at parameter validation).
+    admitRemotePluginEngineTarget.mockClear();
+    await expect(performSessionAgentSwitch(deps, {
+      sessionId: 's1', targetAgentKind: 'acp', model: 'default', providerId: ENGINE,
+      agentDeviceId: providerShareGuestPeer('s1', 'm1', 'd1'),
+    })).rejects.toThrow('[INVALID_PARAMS]');
+    expect(admitRemotePluginEngineTarget).not.toHaveBeenCalled();
+
+    // Without remote admission wired, targeting another computer or share is refused.
     const { deps: noRemoteDeps, pendingSwitches: noRemotePending } = makeDeps(makeRow());
     await expect(performSessionAgentSwitch(noRemoteDeps, {
       sessionId: 's1', targetAgentKind: 'acp', model: 'default', providerId: ENGINE, agentDeviceId: 'mini',
@@ -293,5 +311,59 @@ describe('switching a plugin-engine task back to a built-in engine', () => {
     expect(deps.admitPluginEngineTarget).not.toHaveBeenCalled();
     expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
     expect(deps.insertBoundaryMessage).not.toHaveBeenCalled();
+  });
+
+  // Unit, real switch handler: a companion on a shared plugin keeps the active
+  // source when selected again, even if a different engine was queued earlier.
+  it('clears an older switch when reselecting the current shared companion engine', async () => {
+    const agentDeviceId = 'share:friend';
+    const { deps, pendingSwitches } = makeDeps({ ...pluginRow(), source: 'bot', agentDeviceId });
+    pendingSwitches.set('s1', { targetAgentKind: 'codex', model: 'other-model', providerId: null });
+
+    const result = await performSessionAgentSwitch(deps, {
+      sessionId: 's1', targetAgentKind: 'acp', model: 'deepseek-v4', providerId: ENGINE, agentDeviceId,
+      configStaged: true,
+    });
+
+    expect(result).toMatchObject({ switched: false, sameEngineRevision: expect.any(Number) });
+    expect(pendingSwitches.get('s1')).toBeUndefined();
+    expect(deps.admitPluginEngineTarget).not.toHaveBeenCalled();
+    expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
+  });
+
+  // A saved companion model must switch the existing chat across host, remote and shared plugin engines, discarding the previous SDK session.
+  it('runs the chosen host, remote and shared plugins on a companion chat', async () => {
+    const OTHER_ENGINE = 'acp-plugin:alternate:engine';
+    const botRow = makeRow({ source: 'bot', agentKind: 'pi', model: 'glm-5', providerId: 'xd' });
+    const admitRemotePluginEngineTarget = vi.fn(async (_deviceId: string, target: { model: string }) => ({
+      model: target.model, effort: '', permissionMode: 'default', engineName: 'Remote Engine',
+    }));
+    const { deps } = makeDeps(botRow, { admitRemotePluginEngineTarget });
+
+    await performSessionAgentSwitch(deps, {
+      sessionId: 's1', targetAgentKind: 'acp', model: 'deepseek-v4', providerId: ENGINE, applyNow: true,
+    });
+    expect(deps.applyAgentSwitchToDb).toHaveBeenLastCalledWith('s1', expect.objectContaining({
+      agentKind: 'acp', model: 'deepseek-v4', providerId: ENGINE, sdkSessionId: null,
+    }));
+
+    Object.assign(botRow, { agentKind: 'acp', model: 'deepseek-v4', providerId: ENGINE, sdkSessionId: 'acp-1' });
+    await performSessionAgentSwitch(deps, {
+      sessionId: 's1', targetAgentKind: 'acp', model: 'second-model', providerId: OTHER_ENGINE, agentDeviceId: 'share:friend', applyNow: true,
+    });
+    expect(deps.admitRemotePluginEngineTarget).toHaveBeenCalledWith('share:friend', expect.objectContaining({
+      providerId: OTHER_ENGINE, model: 'second-model',
+    }));
+    expect(deps.applyAgentSwitchToDb).toHaveBeenLastCalledWith('s1', expect.objectContaining({
+      agentKind: 'acp', model: 'second-model', providerId: OTHER_ENGINE, agentDeviceId: 'share:friend', sdkSessionId: null,
+    }));
+
+    Object.assign(botRow, { agentKind: 'acp', model: 'second-model', providerId: OTHER_ENGINE, agentDeviceId: 'share:friend', sdkSessionId: 'acp-2' });
+    await performSessionAgentSwitch(deps, {
+      sessionId: 's1', targetAgentKind: 'acp', model: 'second-model', providerId: OTHER_ENGINE, agentDeviceId: null, applyNow: true,
+    });
+    expect(deps.applyAgentSwitchToDb).toHaveBeenLastCalledWith('s1', expect.objectContaining({
+      agentKind: 'acp', model: 'second-model', providerId: OTHER_ENGINE, agentDeviceId: null, sdkSessionId: null,
+    }));
   });
 });

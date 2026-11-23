@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { serializeModelRoutes } from '@cindy/maker-shared/model-route';
 import { createBotRemoteSettingsResource, type BotRemoteSettingsDeps } from '../botRemoteSettingsResource.js';
 
 function fixture() {
@@ -175,12 +176,15 @@ describe('opaque teammate settings actions', () => {
   });
 });
 
-it('saves the complete model chain and can restore application defaults', async () => {
+it('saves a host plugin from a remote editor with a built-in backup and restores the companion default', async () => {
   const f = fixture();
-  const route = { harness: 'pi', model: 'selected', providerId: 'source', effort: 'high', fastMode: false };
+  const routes = [
+    { harness: 'acp' as const, model: 'default', providerId: 'acp-plugin:sample:engine', effort: '', fastMode: false },
+    { harness: 'pi' as const, model: 'selected', providerId: 'source', effort: 'high', fastMode: false },
+  ];
   const resource = await f.get();
-  await f.host.invoke(f.context, f.request(actionId(resource, 'models'), { followsDefault: false, modelChain: JSON.stringify([route]) }));
-  expect(f.deps.update).toHaveBeenLastCalledWith({ id: 'bot-a', acceptSavedModelSelectionVersion: 3, capabilities: { modelChainOverride: [route], modelOverride: null } }, 3);
+  await f.host.invoke(f.context, f.request(actionId(resource, 'models'), { followsDefault: false, modelChain: serializeModelRoutes(routes) }));
+  expect(f.deps.update).toHaveBeenLastCalledWith({ id: 'bot-a', acceptSavedModelSelectionVersion: 3, capabilities: { modelChainOverride: routes, modelOverride: null } }, 3);
   const fresh = await f.get();
   await f.host.invoke(f.context, f.request(actionId(fresh, 'models'), { followsDefault: true }));
   expect(f.deps.update).toHaveBeenLastCalledWith({ id: 'bot-a', acceptSavedModelSelectionVersion: 4, capabilities: { modelChainOverride: null, modelOverride: null } }, 4);

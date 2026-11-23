@@ -16,14 +16,21 @@
  * Nothing here calls the plugin: the list is the main process's last known state. Opening a picker
  * only asks main to have the engine plugins republish their models (with a per-plugin cooldown).
  */
+import { quotaLevelFromRemaining } from '@cindy/maker-shared/quota-level';
+import type { GhostHarnessUsage } from '@cindy/plugin-protocol';
 import { SlidersHorizontal } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { EffortSlider } from '@/components/ui/effort-slider';
 import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
-
+import { Tip } from '@/components/ui/tooltip';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import { readPluginEngineUsage } from '@/hooks/pluginEngineUsage';
 import { requestPluginEnginesRefresh } from '@/hooks/usePluginEngines';
+import { QUOTA_TEXT_COLOR_CLASSES } from '../status/QuotaBar';
+import { pluginEngineUsageBalances } from '../status/pluginEngineUsageAccount';
+import { formatQuotaResetDuration } from '../status/usageCardModel';
 
 import {
   COMPOSER_MENU_ROW,
@@ -165,6 +172,112 @@ interface EngineBlockProps {
   onChooseEffort(modelId: string, effort: PluginEngineEffort): void;
 }
 
+function pluginGroupQuotaTimeKey(
+  usage: GhostHarnessUsage,
+  now: number,
+  t: ReturnType<typeof useTranslation>['t'],
+): string {
+  return (usage.windows ?? [])
+    .filter((row) => !row.resetsAt || row.resetsAt > now)
+    .map((row) => [
+      row.label,
+      Math.round(row.remainingPercent),
+      row.resetsAt ? formatQuotaResetDuration(row.resetsAt / 1000, now, t) : null,
+    ])
+    .map((parts) => parts.join(':'))
+    .join('|');
+}
+
+/** Compact quota/balance readout on a plugin engine group header; reuses the 1-minute shared reader. */
+function PluginEngineGroupQuota({ engine }: { engine: PluginEngineChoice }) {
+  const { t, i18n } = useTranslation();
+  const targetKey = `${engine.deviceId ?? ''}:${engine.key}`;
+  const [reading, setReading] = useState<{ targetKey: string; usage: GhostHarnessUsage } | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const owner = getDataOwnerGeneration();
+    let active = true;
+    void readPluginEngineUsage(owner, engine.deviceId ?? null, engine.key).result.then((usage) => {
+      if (!active || !isDataOwnerGenerationCurrent(owner)) return;
+      setReading(usage ? { targetKey, usage } : null);
+      setNow(Date.now());
+    });
+    return () => { active = false; };
+  }, [engine.key, engine.deviceId, targetKey]);
+  const activeUsage = reading?.targetKey === targetKey ? reading.usage : null;
+  const hasTimedWindow = !!activeUsage?.windows?.some(
+    (row) => typeof row.resetsAt === 'number' && row.resetsAt > now,
+  );
+  const clockSnapshot = useRef({ usage: activeUsage, now, t });
+  clockSnapshot.current = { usage: activeUsage, now, t };
+  useEffect(() => {
+    if (!hasTimedWindow) return;
+    const syncClock = () => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      const { usage: currentUsage, now: prevNow, t: translate } = clockSnapshot.current;
+      if (!currentUsage) return;
+      const nextNow = Date.now();
+      if (
+        pluginGroupQuotaTimeKey(currentUsage, prevNow, translate) !==
+        pluginGroupQuotaTimeKey(currentUsage, nextNow, translate)
+      ) {
+        setNow(nextNow);
+      }
+    };
+    const timer = window.setInterval(syncClock, 1000);
+    const onVisibility = () => {
+      if (!document.hidden) syncClock();
+    };
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisibility);
+    }
+    return () => {
+      window.clearInterval(timer);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisibility);
+      }
+    };
+  }, [hasTimedWindow]);
+  if (!activeUsage) return null;
+  const usage = activeUsage;
+  const current = (usage.windows ?? []).filter((row) => !row.resetsAt || row.resetsAt > now);
+  const balances = pluginEngineUsageBalances(usage, i18n.language, t);
+  const first = current.reduce<(typeof current)[number] | undefined>((lowest, row) =>
+    !lowest || row.remainingPercent < lowest.remainingPercent ? row : lowest, undefined);
+  if (!first && !balances.length) return null;
+  const reset = first?.resetsAt ? formatQuotaResetDuration(first.resetsAt / 1000, now, t) : null;
+  const value = first ? `${Math.round(first.remainingPercent)}%` : balances[0]!;
+  const firstBalance = (usage.balances ?? []).find((row) => Number.isFinite(Number(row.amount)));
+  const level = first
+    ? quotaLevelFromRemaining(first.remainingPercent)
+    : firstBalance && Number(firstBalance.amount) <= 0 ? 'crit' : 'normal';
+  const details = (
+    <div className="space-y-1">
+      {current.map((row, index) => {
+        const rowReset = row.resetsAt ? formatQuotaResetDuration(row.resetsAt / 1000, now, t) : null;
+        return (
+          <div key={index}>
+            {[row.label, t('quotaCard.remainingPercent', { percent: Math.round(row.remainingPercent) }), rowReset].filter(Boolean).join(' · ')}
+          </div>
+        );
+      })}
+      {balances.map((line, index) => <div key={`b:${index}`}>{line}</div>)}
+    </div>
+  );
+  return (
+    <Tip text={details} side="bottom" contentClassName="max-w-[320px] break-words">
+      <span
+        data-plugin-engine-quota={engine.providerId}
+        aria-label={[first?.label, value, reset].filter(Boolean).join(' · ')}
+        className="ml-auto flex shrink-0 items-center gap-1 text-12 font-normal tabular-nums text-[var(--text-secondary)]"
+      >
+        <span className={QUOTA_TEXT_COLOR_CLASSES[level]}>{value}</span>
+        {reset && <span className="text-[var(--text-tertiary)]">· {reset}</span>}
+      </span>
+    </Tip>
+  );
+}
+
 /**
  * One engine, laid out like a provider in the built-in list: the engine name as the group label
  * (same shared menu group label as 「Anthropic」 etc.), its availability hint when it cannot run,
@@ -196,6 +309,7 @@ function EngineBlock({ engine, rows, activeModelId, onChoose, effortOf, onChoose
       {/* Shared menu group label (DESIGN §4 Menu text): 12px / 500 meta, like the provider headings. */}
       <div className="flex items-center gap-1.5 px-2.5 pb-1 pt-2 text-12 font-medium leading-[1.33] text-[var(--cmd-palette-item-meta,var(--text-tertiary))]">
         <span title={engineLabel} className="truncate">{engineLabel}</span>
+        {selectable && engine.reportsUsage && <PluginEngineGroupQuota engine={engine} />}
       </div>
       {hint && (
         <div

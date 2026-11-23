@@ -5,6 +5,7 @@ import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 
 import {
   compareCindyVersions,
+  pluginCatalogPublisherGroup,
   pluginHasToolUi,
   isValidPluginResourceId,
   isValidPluginNamespace,
@@ -1372,7 +1373,7 @@ export class PluginMarketService {
       if (scope !== 'custom') items.push(...visible.map(plugin => this.toItem(plugin, local)).filter(item => !input.excludeInstalled || !isInstalled(item)));
       if (includeCounts && page.counts) {
         const queryCounts: PluginMarketCounts = !owner || owner.mode !== 'cloud'
-          ? { all: page.counts.public + custom.length, public: page.counts.public, organization: 0, personal: 0, custom: custom.length }
+          ? { ...page.counts, all: page.counts.public + custom.length, organization: 0, personal: 0, custom: custom.length }
           : { ...page.counts, custom: custom.length, all: page.counts.all + custom.length };
         counts = queryCounts;
         if (input.excludeInstalled && owner) {
@@ -1390,6 +1391,8 @@ export class PluginMarketService {
               if (!deducted.has(plugin.id) && isInstalled(this.toItem(plugin, local))) {
                 deducted.add(plugin.id);
                 queryCounts[plugin.scope]--; queryCounts.all--;
+                const group = pluginCatalogPublisherGroup(plugin.scope, plugin.publisherKind);
+                if (group && queryCounts[group] !== undefined) queryCounts[group]--;
               }
             };
             if (page.legacyQueryPlugins) {
@@ -1405,7 +1408,8 @@ export class PluginMarketService {
                 for (const row of result.results) if (row.status === 'available' && row.matchesQuery) deduct(row.plugin);
               }
             }
-            if (Object.values(queryCounts).some(value => value < 0)) throwIpcError('PLUGIN_LIST_CHANGED', 'Plugin query changed while counting installed matches');
+            if (Object.values(queryCounts).some(value => value < 0) || (queryCounts.official ?? 0) + (queryCounts.community ?? 0) > queryCounts.public)
+              throwIpcError('PLUGIN_LIST_CHANGED', 'Plugin query changed while counting installed matches');
           }
         }
       }

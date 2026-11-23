@@ -96,7 +96,7 @@ export async function assertReviewSessionPatchAllowed({
 
 /**
  * From updateSessionInDb: the row before the move, the worktree ownership guard, and closing an
- * idle local Pi/Codex runtime. Returns the row snapshot the Claude transcript move reads later.
+ * idle local Pi/Codex runtime. Claude's runtime stays available for its transcript move.
  */
 export async function prepareSessionWorkingDirMove({
   db,
@@ -110,8 +110,8 @@ export async function prepareSessionWorkingDirMove({
   sid: string;
   p: Record<string, unknown>;
   moveGuard?: SessionWorkingDirMoveGuard;
-  /** Close a local Pi/Codex runtime only if its current turn is idle (false: it is running). */
-  opts: { closeIdleSessionForMove?: (sessionId: string) => Promise<boolean> };
+  /** Refuse busy tasks. On idle tasks only non-Claude engines close before transcript relocation. */
+  opts: { closeIdleSessionForMove?: (sessionId: string, storedAgentKind: string) => Promise<boolean> };
   /** Installed: its answer is the only ownership source. Null: the old cwd is read instead. */
   sessionWorktreeBindingLookup: SessionWorktreeBindingLookup | null;
 }) {
@@ -171,24 +171,22 @@ export async function prepareSessionWorkingDirMove({
       throwIpcError(WORKTREE_MOVE_BLOCKED_CODE, WORKTREE_MOVE_BLOCKED_MESSAGE);
     }
   }
-  const movingLocalNonClaudeSession =
+  const movingLocalSession =
     beforeMove &&
-    beforeMove.agentKind !== 'cc' &&
     !beforeMove.remoteHostId &&
     beforeMove.workingDir &&
     typeof p.workingDir === 'string' &&
     p.workingDir &&
     normalizeWorkingDirForStorage(beforeMove.workingDir) !== p.workingDir;
-  // Pi/Codex keep a live Maker handle whose cwd is fixed at bootstrap. Close it
-  // before persisting the new directory so the next send lazily recreates the
-  // runtime with the moved session's cwd instead of continuing in the old one.
-  if (movingLocalNonClaudeSession) {
+  // Refuse a running turn before any directory or transcript write. An idle Claude
+  // handle supplies the resume id and is closed by transcript relocation.
+  if (movingLocalSession) {
     await moveGuard?.beforeWrite?.();
     moveGuard?.assertCurrent();
     if (!opts.closeIdleSessionForMove) {
       throwIpcError('INTERNAL', '会话移动 runtime 操作未配置');
     }
-    const idle = await opts.closeIdleSessionForMove(sid);
+    const idle = await opts.closeIdleSessionForMove(sid, beforeMove.agentKind);
     if (idle === false) {
       throwIpcError('PRECONDITION_FAILED', '运行中的任务不能移动');
     }

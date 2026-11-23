@@ -440,17 +440,6 @@ function mergedQuote(
   };
 }
 
-export function currencyCanProjectToLedger(
-  currency: MoneyCurrency,
-  ledgerCurrency: MoneyCurrency,
-): boolean {
-  return currency === ledgerCurrency || (currency === 'USD' && ledgerCurrency === 'CNY');
-}
-
-function allowedCurrenciesForLedger(ledgerCurrency: MoneyCurrency): MoneyCurrency[] {
-  return ledgerCurrency === 'USD' ? ['USD'] : ['USD', 'CNY'];
-}
-
 function readEntries(): Record<string, StoredModelPriceOverride> {
   store.invalidateIfChanged();
   return store.read().entries;
@@ -480,25 +469,21 @@ function currentConnectionReference(
 export function readModelPriceOverrideView(
   target: ModelPriceOverrideTarget,
   registry: ModelRegistry | null | undefined,
-  ledgerCurrency: MoneyCurrency = currentLedgerCurrency(),
   displayedProvider?: Provider,
 ): ModelPriceOverrideView {
   const reference = currentConnectionReference(target, registry, displayedProvider);
-  const ledgerReference = reference && currencyCanProjectToLedger(reference.currency, ledgerCurrency) ? reference : null;
   const record = readEntries()[overrideKey(target)];
   const merged = mergedQuote(target, reference, record?.values, record?.baseReference);
   return {
     target,
     editable: target.providerId !== 'xd',
     reference: reference ?? null,
-    effective:
-      merged && currencyCanProjectToLedger(merged.currency, ledgerCurrency)
-        ? merged
-        : ledgerReference,
+    effective: merged ?? reference ?? null,
     override: record?.values ?? null,
     conflict: Boolean(record && !sameComparable(record.baseReference, comparable(reference))),
     registryUpdatedAt: registry?.updatedAt ?? null,
-    allowedCurrencies: allowedCurrenciesForLedger(ledgerCurrency),
+    // Report the currencies accepted by the price override save handler.
+    allowedCurrencies: currentLedgerCurrency() === 'USD' ? ['USD'] : ['USD', 'CNY'],
   };
 }
 
@@ -602,19 +587,12 @@ export function mergeStoredModelPriceOverride(
 export function applyModelPriceOverrides(
   pricing: ModelPricingCatalog,
   registry: ModelRegistry | null | undefined,
-  ledgerCurrency: MoneyCurrency = currentLedgerCurrency(),
   options: { at?: string | Date; entries?: ModelPriceOverridesSnapshot } = {},
 ): ModelPricingCatalog {
   const next: ModelPricingCatalog = Object.fromEntries(
     Object.entries(pricing).map(([providerId, quotes]) => [
       providerId,
-      Object.fromEntries(
-        Object.entries(quotes).filter(
-          ([, quote]) =>
-            quote.source === 'gateway' ||
-            currencyCanProjectToLedger(quote.currency, ledgerCurrency),
-        ),
-      ),
+      { ...quotes },
     ]),
   );
   for (const record of Object.values(options.entries ?? readEntries())) {
@@ -625,7 +603,7 @@ export function applyModelPriceOverrides(
       record.providerId, record.modelId, registry, { agent: record.agent, at: options.at },
     );
     const quote = mergedQuote(record, reference, record.values, record.baseReference);
-    if (!quote || !currencyCanProjectToLedger(quote.currency, ledgerCurrency)) continue;
+    if (!quote) continue;
     (next[record.providerId] ??= {})[key] = quote;
   }
   return next;
@@ -638,7 +616,6 @@ export const __testing = {
   sameComparable,
   comparable,
   mergedQuote,
-  currencyCanProjectToLedger,
 };
 
 /** New-computer setup: values the user changed here (docs/product-rules/new-device-setup-migration.md). */

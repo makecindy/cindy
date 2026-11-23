@@ -87,9 +87,9 @@ describe('independent subscription account reference prices', () => {
       .toMatchObject({ inputPerMtok: 0, outputPerMtok: 0.5 });
     // An API account with discovery-only pricing must show its actual rate in Settings too.
     const target = { providerId: 'router-account', agent: 'pi' as const, modelId: 'new/model' };
-    expect(readModelPriceOverrideView(target, accountCatalog.modelRegistry, 'USD').reference)
+    expect(readModelPriceOverrideView(target, accountCatalog.modelRegistry).reference)
       .toEqual(getModelPriceQuote(pricing, target.providerId, target.modelId, target.agent));
-    expect(readModelPriceOverrideView({ ...target, agent: 'codex' }, accountCatalog.modelRegistry, 'USD').reference)
+    expect(readModelPriceOverrideView({ ...target, agent: 'codex' }, accountCatalog.modelRegistry).reference)
       .toBeNull();
     expect(getModelPriceQuote(pricing, 'another-account', 'new/model', 'pi')).toBeUndefined();
     expect(getModelPriceQuote(pricing, 'router-account', 'new/model', 'codex')).toBeUndefined();
@@ -342,8 +342,8 @@ describe('API-key preset reference prices and static cost precedence', () => {
       },
     },
   });
-  it.each([['USD', 1.9437], ['CNY', 13]] as const)(
-    'estimates Kimi usage with a price supported by the %s ledger', async (currency, amount) => {
+  it.each(['USD', 'CNY'] as const)(
+    'preserves the Kimi CN tariff on a %s account', async (currency) => {
       const realStore = await vi.importActual<typeof import('../modelPriceOverrideStore.js')>('../modelPriceOverrideStore.js');
       vi.mocked(applyModelPriceOverrides).mockImplementationOnce(realStore.applyModelPriceOverrides);
       setActiveLedgerCurrency(currency);
@@ -353,11 +353,17 @@ describe('API-key preset reference prices and static cost precedence', () => {
           models: [{ id: 'kimi-k3.1-pro', name: 'Kimi K3.1 Pro' }],
         } } });
         const pricing = getReferenceModelPricing({ at: '2026-11-20', providers: [provider], overrides: {} });
+        const target = { providerId: provider.id, agent: 'pi' as const, modelId: 'kimi-k3.1-pro' };
+        expect(readModelPriceOverrideView(target, BUNDLED_CATALOG.modelRegistry, provider)).toMatchObject({
+          reference: { currency: 'CNY', inputPerMtok: 13 },
+          effective: { currency: 'CNY', inputPerMtok: 13 },
+          allowedCurrencies: currency === 'USD' ? ['USD'] : ['USD', 'CNY'],
+        });
         expect(resolveTurnCost({
           agent: 'pi', rawModel: 'kimi-k3.1-pro', pricing,
           tokens: { inputTokens: 1_000_000, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0 },
           context: { providerId: provider.id, billingRoute: 'provider-api', region: 'global' },
-        })).toMatchObject({ source: 'reference', money: { currency, amount, kind: 'value-estimate' } });
+        })).toMatchObject({ source: 'reference', money: { currency: 'CNY', amount: 13, kind: 'value-estimate' } });
       } finally {
         __resetActiveLedgerCurrencyForTesting();
       }
