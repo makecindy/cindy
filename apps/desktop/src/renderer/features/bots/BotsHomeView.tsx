@@ -255,9 +255,9 @@ export function BotSettings({
       && userContextSource.trim() !== savedSettingsRef.current.userContextSource);
   const canLeave = useCallback(async () => {
     if (avatarInFlight.current) return false;
-    await autosave.flush();
+    const errorKey = await autosave.flush();
     if (autosave.isDirty()) {
-      if (!sourceTooLong && autosave.errorKey !== BOT_LEAD_PLUGIN_ENGINE_ERROR_KEY) return false;
+      if (!sourceTooLong && errorKey !== BOT_LEAD_PLUGIN_ENGINE_ERROR_KEY) return false;
       const discard = await confirm({
         title: t('bots.memory.unsavedTitle'),
         description: t('bots.remoteSettings.leaveDescription'),
@@ -279,7 +279,7 @@ export function BotSettings({
     if (!((await voiceLeaveRef.current?.()) ?? true)) return false;
     if (!((await memoryLeaveRef.current?.()) ?? true)) return false;
     return (await capabilityLeaveRef.current?.()) ?? true;
-  }, [autosave.flush, autosave.isDirty, autosave.discard, autosave.errorKey, sourceTooLong, confirm, t]);
+  }, [autosave.flush, autosave.isDirty, autosave.discard, sourceTooLong, confirm, t]);
   useEffect(() => {
     if (!beforeCloseRef) return;
     beforeCloseRef.current = canLeave;

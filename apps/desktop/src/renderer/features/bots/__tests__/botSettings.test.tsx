@@ -904,6 +904,34 @@ describe('Bot settings profile consolidation', () => {
     expect(mocks.updateBotProfile).toHaveBeenCalledTimes(attempts);
   });
 
+  // #12276, unit. The first Back click must use the receipt from the pending save.
+  it.each(['rejected', 'saved'] as const)('handles Back during a model save that is %s', async (outcome) => {
+    let settle!: () => void;
+    if (outcome === 'rejected') {
+      const error = createIpcError('UNSUPPORTED_CAPABILITY', 'BOT_LEAD_PLUGIN_ENGINE_UNSUPPORTED: Choose a built-in engine.');
+      mocks.updateBotProfile.mockRejectedValue(error);
+      mocks.updateBotProfile.mockImplementationOnce(() => new Promise((_, reject) => {
+        settle = () => reject(error);
+      }));
+    } else {
+      mocks.updateBotProfile.mockImplementationOnce((id, patch) => new Promise(resolve => {
+        settle = () => resolve({ id, currentVersion: 2, ...patch });
+      }));
+    }
+    renderSettings({ capabilities: capabilities({ modelChainOverride: capabilities().modelChain }) });
+    fireEvent.click(screen.getByRole('button', { name: 'bots.settingsTabs.model' }));
+    fireEvent.click(within(screen.getByTestId('bot-primary-model-controls')).getByTestId('codex-model-selector'));
+    await waitFor(() => expect(mocks.updateBotProfile).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('button', { name: 'bots.settingsBack' }));
+    expect(screen.queryByRole('button', { name: 'bots.memory.discard' })).toBeNull();
+    await act(async () => { settle(); });
+    if (outcome === 'rejected') {
+      fireEvent.click(await screen.findByRole('button', { name: 'bots.memory.discard' }));
+    }
+    await screen.findByRole('button', { name: 'bots.settingsTabs.model' });
+    expect(screen.queryByRole('button', { name: 'bots.memory.discard' })).toBeNull();
+  });
+
   it('keeps a same-model choice through a failed save and a newer host profile', async () => {
     vi.useFakeTimers();
     const primary: BotModelRoute = { harness: 'pi', model: 'custom-model', providerId: 'custom', effort: 'high', fastMode: false };
