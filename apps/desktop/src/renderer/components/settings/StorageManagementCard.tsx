@@ -1148,7 +1148,7 @@ function DatabaseCleanupDialog({
                   </span>
                 </AlertDialog.Title>
                 {mode === 'scanning' && (
-                  <Button variant="secondary" onClick={onCancelScan}>
+                  <Button data-settings-search-action="Cancel the running database preview scan" variant="secondary" onClick={onCancelScan}>
                     {t('settings.about.storage.cancelButton')}
                   </Button>
                 )}
