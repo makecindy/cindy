@@ -143,7 +143,7 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
-async function startSessionWithStream(throughSession = false) {
+async function startSessionWithStream(throughSession = false, providerId?: string) {
   const configDir = await makeTempDir();
   process.env.CLAUDE_CONFIG_DIR = configDir;
   const workingDir = await makeTempDir();
@@ -166,6 +166,7 @@ async function startSessionWithStream(throughSession = false) {
   const handle = await agent.startSession({
     sessionId: 'session-auto-turn',
     model: 'claude-opus-4-6',
+    providerId,
     workingDir,
     permissionMode: 'acceptEdits',
   });
@@ -209,9 +210,9 @@ function assistantText(text: string): Record<string, unknown> {
 
 /** 等待条件成立(事件经 AsyncQueue 异步 fan-out,不能同步断言)。 */
 async function waitFor(cond: () => boolean, label: string): Promise<void> {
-  const deadline = Date.now() + 2000;
+  const deadline = performance.now() + 2000;
   while (!cond()) {
-    if (Date.now() > deadline) throw new Error(`timed out: ${label}`);
+    if (performance.now() > deadline) throw new Error(`timed out: ${label}`);
     await new Promise((r) => setTimeout(r, 10));
   }
 }
@@ -254,6 +255,61 @@ describe('ClaudeCodeAgent auto-continued turn in-flight tracking', () => {
     } finally {
       stream.end();
       await session!.close();
+    }
+  });
+
+  // #10748 / unit: exercise the native subscription Query through send, Stop
+  // and Session settlement. Reset-only translator tests cannot detect stale quota
+  // metadata crossing one of these boundaries into a non-quota failure.
+  it.each([
+    { boundary: 'settled', result: 'API Error: HTTP 429: Too Many Requests', http429: true },
+    { boundary: 'stopped', result: 'API Error: HTTP 429: Too Many Requests', http429: true },
+    { boundary: 'settled', result: 'API Error: The operation timed out.', http429: false },
+  ])('keeps SDK quota evidence out of $result after $boundary', async ({ boundary, result, http429 }) => {
+    const { session, stream, events } = await startSessionWithStream(true, 'anthropic');
+    const sdkSession = session!;
+    const resetsAt = 1794607200;
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1794574745138);
+    const failure = {
+      ...successResult(), is_error: true, terminal_reason: 'api_error', stop_reason: 'stop_sequence',
+    };
+    try {
+      await sdkSession.send('quota-limited turn');
+      stream.emit({
+        type: 'rate_limit_event',
+        rate_limit_info: { status: 'rejected', rateLimitType: 'seven_day', resetsAt },
+      });
+      // The fake SDK delivers the rejection before the stop acknowledgement.
+      await Promise.resolve();
+      if (boundary === 'stopped') await sdkSession.abort();
+      stream.emit({ ...failure, result: "You've hit your weekly limit · resets 5pm" });
+      await waitFor(() => events.some(e => e.type === 'done'), 'first SDK turn settled');
+      const firstErrors = events.filter(e => e.type === 'error');
+      if (boundary === 'stopped') {
+        expect(firstErrors).toHaveLength(0);
+      } else {
+        expect.soft(firstErrors.map(e => e.data)).toEqual([
+          expect.objectContaining({ isTerminal: true, usageLimit: true, usageResetAt: resetsAt * 1000 }),
+        ]);
+      }
+
+      events.length = 0;
+      await sdkSession.send('next turn');
+      stream.emit({ ...failure, result });
+      await waitFor(() => events.some(e => e.type === 'done'), 'second SDK turn settled');
+      const nextErrors = events.filter(e => e.type === 'error');
+      expect(nextErrors).toHaveLength(1);
+      expect(nextErrors[0].data).toMatchObject({ isTerminal: true, message: result });
+      expect(nextErrors[0].data).not.toHaveProperty('usageResetAt');
+      if (http429) {
+        expect(nextErrors[0].data).toMatchObject({ errorStatus: 429 });
+      } else {
+        expect(nextErrors[0].data).not.toHaveProperty('usageLimit');
+      }
+    } finally {
+      now.mockRestore();
+      stream.end();
+      await sdkSession.close();
     }
   });
 

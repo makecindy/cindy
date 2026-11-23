@@ -59,6 +59,11 @@ import { runSchedulerQueuedPreparation } from '../schedulerQueuedPreparation.js'
 import {
   createPiTranslateContext, disposePiTranslateContext, translatePiEvent,
 } from '../../../../../../packages/maker-core/src/agents/pi/translator.js';
+import { createAsyncQueue } from '../../../../../../packages/maker-core/src/agents/shared/async-queue.js';
+import { UsageTracker } from '../../../../../../packages/maker-core/src/agents/shared/usage-tracker.js';
+import { newRuntimeState, translateSdkMessage } from '../../../../../../packages/maker-core/src/agents/claude-code/translator.js';
+import { readTerminalTurnErrorSignals } from '../terminalTurnErrorSignals.js';
+import { resolveSessionUsageReset } from '../sessionUsageReset.js';
 import type { AgentEvent } from '../../../../../../packages/maker-core/src/types/events.js';
 import type { Logger } from '../../../../../../packages/maker-core/src/interfaces/logger.js';
 import {
@@ -18404,6 +18409,135 @@ describe('usage-limit wait (ordinary tasks)', () => {
       await h.coordinator.retryLastError(sid);
       await flush();
       expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    }
+  });
+
+  // #10748 / unit: SDK rejection + API-error result reaches the real desktop
+  // classifier and dispatch queue. The 5h/7d translator tests supply a rate_limit
+  // assistant tag and only assert the reset timestamp.
+  it.each([
+    { shape: 'result only', envelope: false, stop: false },
+    { shape: 'with prior transport error', envelope: true, stop: false },
+    { shape: 'Stop before reset', envelope: true, stop: true },
+  ])('honors the SDK weekly reset in the desktop queue ($shape)', async ({ envelope, stop }) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1794574745138);
+    const resetAt = 1794607200000;
+    const sid = 'claude-weekly-quota';
+    const weeklyMessage = "You've hit your weekly limit · resets 5pm (America/New_York)";
+    const h = createHarness();
+    const route = {
+      agentKind: 'claude-code', modelId: 'claude-opus-5-5[1m]', providerId: 'anthropic-synthetic-subscription',
+      agentDeviceId: null, remoteHostId: null, sdkSessionId: 'synthetic-sdk',
+    } as const;
+    const readLocalLimit = vi.fn(async () => null);
+    const interrupted = new InterruptedTurnAutoResumeGuard({ isEnabled: () => true, log: mocks.logger, random: () => 0 });
+    h.isResumableTurnErrorCandidate.mockImplementation(isInterruptedTurnError);
+    h.onResumableTurnError.mockImplementation((id, signals) => {
+      if (!isInterruptedTurnError(signals)) return null;
+      const decision = interrupted.onInterruptedTurn(id, Date.now());
+      return decision.action === 'resume' ? { ...decision, error: signals.message } : null;
+    });
+    const usage = new UsageLimitAutoResume({
+      now: Date.now,
+      random: () => 0,
+      setTimer: setTimeout,
+      clearTimer: handle => clearTimeout(handle as ReturnType<typeof setTimeout>),
+      isEligible: async () => true,
+      resolveResetAt: (_id, signals) => resolveSessionUsageReset(route, signals, {
+        now: Date.now, scopeKey: () => 'synthetic-owner', localFamilyOf: () => 'claude',
+        readLocalLimit, readRemoteProviders: async () => [], readRemoteLimit: async () => null,
+        unavailable: () => {},
+      }),
+      arm: (id, token, at) => h.coordinator.armUsageLimitWait(id, token, at),
+      isCurrent: (id, token) => h.coordinator.isUsageLimitWaitCurrent(id, token),
+      cancel: (id, token) => { h.coordinator.cancelUsageLimitWait(id, token); },
+      continueSession: (id, token, info) => h.coordinator.continueAfterUsageLimitReset(id, token, info),
+      log: () => {},
+    });
+    h.onUsageLimitedTurnError.mockImplementation((id, signals, _item, token) => usage.onTurnError(id, signals, token));
+    try {
+      const createOpts = {
+        agentKind: route.agentKind, model: route.modelId, providerId: route.providerId, workingDir: '/repo',
+      };
+      h.coordinator.enqueue(sid, makeItem('first', 'original task', { createOpts }));
+      await flush();
+      const queue = createAsyncQueue<AgentEvent>();
+      const context: Parameters<typeof translateSdkMessage>[2] = {
+        rt: newRuntimeState(), tracker: new UsageTracker(), log: mocks.logger,
+        turn: {
+          text: '', toolUses: 0, apiCalls: 0, sawCompactBoundary: false,
+          hasEmittedText: false, uiEmittedText: '', pendingApiError: null,
+          interruptRequested: false, generation: 0, interruptGeneration: 0, lastAssistantMsgHadSubstance: true,
+        },
+        getModel: () => route.modelId, getProviderId: () => route.providerId, nativeSubscription: true,
+        getEffort: () => 'high', getPermissionMode: () => 'auto', getSdkSessionId: () => 'synthetic-sdk',
+        getLogTitle: () => undefined, onSessionId: () => {},
+      };
+      const emit = (event: unknown) => translateSdkMessage(event, queue, context);
+      if (envelope) {
+        emit({
+          type: 'assistant', error: 'server_error', uuid: 'api-error',
+          message: { content: [{ type: 'text', text: 'API Error: Connection closed mid-response.' }] },
+        });
+      }
+      emit({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', rateLimitType: 'seven_day', resetsAt: resetAt / 1000 } });
+      emit({
+        type: 'result', is_error: true, terminal_reason: 'api_error', stop_reason: 'stop_sequence',
+        result: weeklyMessage, total_cost_usd: 0,
+      });
+      emit({ type: 'command_lifecycle', state: 'cancelled', command_uuid: 'synthetic-command' });
+      queue.end();
+      h.setRunning(false);
+      let terminal: ReturnType<typeof readTerminalTurnErrorSignals> | undefined;
+      for await (const event of queue) {
+        if (event.type === 'error') {
+          terminal = readTerminalTurnErrorSignals(event, event);
+          h.coordinator.onTurnEvent(sid, 'error', terminal.message, terminal.signals);
+        } else if (event.type === 'done') {
+          h.coordinator.onTurnEvent(sid, 'done');
+        }
+      }
+      await flush();
+      const resumeAt = resetAt + 60_000;
+      expect.soft(h.coordinator.isAutoResumePending(sid)).toBe(false);
+      expect.soft(h.coordinator.getProjection(sid).usageLimitWait).toEqual({ resumeAt });
+      expect.soft(readLocalLimit).not.toHaveBeenCalled();
+      if (stop) {
+        h.coordinator.stop(sid);
+        h.coordinator.enqueue(sid, makeItem('replacement', 'new user input', { createOpts }));
+        await vi.advanceTimersByTimeAsync(resumeAt - Date.now() + 1);
+        expect(h.sendToAgent.mock.calls.map(([, message]) => message)).toEqual([
+          { type: 'user', content: 'original task' }, { type: 'user', content: 'new user input' },
+        ]);
+        expect(h.coordinator.getProjection(sid).usageLimitWait).toBeNull();
+        return;
+      }
+
+      await vi.advanceTimersByTimeAsync(resumeAt - Date.now() - 1);
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect.soft(h.sendToAgent).toHaveBeenCalledTimes(2);
+      if (h.sendToAgent.mock.calls.length === 2) {
+        expect.soft(h.sendToAgent.mock.calls[1]?.[2]).toMatchObject({ providerId: route.providerId });
+        h.setRunning(false);
+        h.coordinator.onTurnEvent(sid, 'done');
+      }
+      await vi.advanceTimersByTimeAsync(1794618000000 - Date.now());
+      const plan = makeItem('later', 'one-time plan', {
+        createOpts,
+        origin: { kind: 'scheduler', scheduleId: 'one-time', scheduleName: 'One-time check', runId: 'run-1' },
+      });
+      h.coordinator.enqueue(sid, plan);
+      await vi.advanceTimersByTimeAsync(30 * 60_000);
+      const dispatchedPlans = h.sendToAgent.mock.calls.filter(([, , , opts]) => opts.origin?.kind === 'scheduler');
+      expect.soft(dispatchedPlans).toHaveLength(1);
+      expect.soft(dispatchedPlans[0]?.[1]).toEqual({ type: 'user', content: plan.text });
+      expect.soft(dispatchedPlans[0]?.[3].origin).toEqual(plan.origin);
+      expect(terminal?.signals).toMatchObject({ usageLimit: true, usageResetAt: resetAt });
+    } finally {
+      usage.dispose();
+      vi.useRealTimers();
     }
   });
 

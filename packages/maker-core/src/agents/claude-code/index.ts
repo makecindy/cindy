@@ -3413,6 +3413,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       turnState.uiEmittedText = '';
       runtimeState.streamStopTokenByKey.clear();
       turnState.pendingApiError = null;
+      turnState.rejectedSubscriptionWindows = undefined;
       turnState.lastAssistantRequestId = undefined;
       turnState.lastAssistantMsgHadSubstance = true;
       // 代际前进: 迟到的被打断 result 据此被 translator 识别为已被本 send 接管。
@@ -6115,6 +6116,7 @@ export class ClaudeCodeAgent extends BaseAgent {
               log,
               getModel: () => mutableModel,
               getProviderId: () => mutableProviderId,
+              nativeSubscription: nativeCliAuth,
               getModelContextWindow: () => appliedContextWindow,
               getEffort: () => mutableEffort,
               getPermissionMode: () => mutablePermissionMode,
