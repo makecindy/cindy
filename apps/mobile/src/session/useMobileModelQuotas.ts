@@ -426,6 +426,8 @@ export function useMobileModelQuotas(
   };
 }
 
+const EMPTY_PLUGIN_QUOTAS: Readonly<Record<string, GhostHarnessUsage>> = {};
+
 /**
  * Reads account usage for selectable plugin engines that declare `reportsUsage: true`,
  * sharing the 1-minute `pluginUsageReader` cache with the session menu.
@@ -475,5 +477,5 @@ function useMobilePluginEngineQuotas(
     };
   }, [binding, deviceId, invoke]);
 
-  return state?.binding === binding ? state.values : {};
+  return state?.binding === binding ? state.values : EMPTY_PLUGIN_QUOTAS;
 }

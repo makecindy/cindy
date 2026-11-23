@@ -370,3 +370,27 @@ it("advances display clock for plugin-only computers and refreshes now on reopen
     vi.useRealTimers();
   }
 });
+
+// Regression (#12247 review P1): when no plugin engines report usage (or while loading),
+// useMobilePluginEngineQuotas must return a stable empty reference so the visibility effect
+// never triggers a render -> setNow -> render feedback loop.
+it("keeps a stable empty pluginEngineQuotas reference and does not loop renders when no plugin reports usage", async () => {
+  setMobileAuthOwner("no-plugin-acct");
+  await act(async () => {
+    root.render(createElement(Probe, { sources: [], visible: true, pluginEngines: [] }));
+  });
+  const firstRef = view.pluginEngineQuotas;
+  const countAfterMount = renders;
+  // Advance time across several milliseconds and re-render with equivalent props: reference stays stable.
+  vi.advanceTimersByTime(5);
+  await act(async () => {
+    root.render(createElement(Probe, { sources: [], visible: true, pluginEngines: [] }));
+  });
+  expect(view.pluginEngineQuotas).toBe(firstRef);
+  expect(renders).toBe(countAfterMount + 1);
+  // No pending timers or extra effect-driven renders.
+  await act(async () => {
+    vi.advanceTimersByTime(5_000);
+  });
+  expect(renders).toBe(countAfterMount + 1);
+});
