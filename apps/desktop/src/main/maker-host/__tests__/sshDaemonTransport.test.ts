@@ -174,7 +174,7 @@ describe('SSH daemon proxy recovery', () => {
 
   it('waits for the new SSH generation before opening a proxy to the same daemon', async () => {
     let snapshot = { status: 'ready', statusChangedAt: 1 };
-    let onStatus: ((value: typeof snapshot) => void) | undefined;
+    const ready = Promise.withResolvers<void>();
     const exec = vi.fn();
     const channels: Array<{ disconnect: () => void }> = [];
     const execStream = vi.fn(async (_command: string) => {
@@ -201,7 +201,11 @@ describe('SSH daemon proxy recovery', () => {
     });
     const remoteHost = {
       exec, execStream, snapshot: () => snapshot,
-      onStatus(fn: typeof onStatus) { onStatus = fn; return () => { onStatus = undefined; }; },
+      waitForReconnect: vi.fn(async (previousReadyAt: number) => {
+        expect(previousReadyAt).toBe(snapshot.statusChangedAt - (snapshot.status === 'disconnected' ? 1 : 0));
+        if (snapshot.status === 'disconnected') throw new Error('SSH host was disconnected');
+        await ready.promise;
+      }),
     } as unknown as RemoteHost;
     const initial = createSshDaemonTransport({ remoteHost, socketPath: '/tmp/codex.sock', logger });
     let replacement: Awaited<ReturnType<NonNullable<typeof initial.reconnect>>> | undefined;
@@ -214,14 +218,14 @@ describe('SSH daemon proxy recovery', () => {
       const pending = initial.reconnect!(AbortSignal.timeout(1000));
       expect(execStream).toHaveBeenCalledTimes(1);
       snapshot = { status: 'ready', statusChangedAt: 2 };
-      onStatus?.(snapshot);
+      ready.resolve();
       replacement = await pending;
       await replacement.writeLine('replacement channel');
       expect(execStream).toHaveBeenCalledTimes(2);
       expect(execStream.mock.calls[1][0]).toBe(execStream.mock.calls[0][0]);
       expect(exec).not.toHaveBeenCalled();
       snapshot = { status: 'disconnected', statusChangedAt: 3 };
-      await expect(replacement.reconnect!(AbortSignal.timeout(1000))).rejects.toThrow('SSH host did not recover');
+      await expect(replacement.reconnect!(AbortSignal.timeout(1000))).rejects.toThrow('SSH host was disconnected');
       expect(execStream).toHaveBeenCalledTimes(2);
     } finally {
       await replacement?.close();

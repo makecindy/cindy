@@ -270,13 +270,27 @@ describe('RemoteHost arm/disconnect race', () => {
       const before = h.client;
       for (let i = 0; i < 20 && h.client === before; i += 1) await vi.advanceTimersByTimeAsync(1000);
       const client = h.client!;
+      expect(client).not.toBe(before);
       client.emit('error', unreachable());
       client.emit('close');
       await vi.advanceTimersByTimeAsync(0);
     };
     try {
+      const previousReadyAt = host.snapshot().statusChangedAt;
       h.client!.emit('close');
-      for (let attempt = 0; attempt < 5; attempt += 1) await failEachAttempt();
+      const onRecovered = vi.fn();
+      const onExhausted = vi.fn();
+      const waiting = host.waitForReconnect(previousReadyAt, new AbortController().signal).then(onRecovered, onExhausted);
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        await failEachAttempt();
+        expect(onExhausted).not.toHaveBeenCalled();
+      }
+      await failEachAttempt();
+      await waiting;
+      expect(onExhausted).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        message: 'SSH automatic reconnect attempts exhausted',
+      }));
+      expect(onRecovered).not.toHaveBeenCalled();
       expect(host.getStatus()).toBe('failed');
       const exhausted = h.client;
       await vi.advanceTimersByTimeAsync(10 * 60_000);

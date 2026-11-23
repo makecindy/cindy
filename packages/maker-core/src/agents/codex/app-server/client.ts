@@ -44,7 +44,10 @@ const DEFAULT_MAX_LINE_BYTES = 16 * 1024 * 1024;
 /** 识别超限行信封时, 行首和行尾各最多读这么多字符; diff / 文件内容这类大字段不在读取范围内。 */
 const OVERSIZED_ENVELOPE_PEEK_CHARS = 4_096;
 const MAX_STDERR_LOG_CHARS = 2_000;
-const SSH_RECOVERY_TIMEOUT_MS = 12_000;
+// Covers the SSH host's five 20 s attempts plus 31 s of backoff. The host
+// normally supplies the terminal result; this cap also covers wedged auth I/O.
+const SSH_RECONNECT_WAIT_TIMEOUT_MS = 150_000;
+const SSH_TURN_RESTORE_TIMEOUT_MS = 12_000;
 const MAX_RECOVERY_THREADS = 16;
 
 type RecoveredItem = { id: string; type: string; status?: string };
@@ -60,6 +63,7 @@ type TransportRecovery = {
   messages: RecoveryMessage[];
   size: number;
   ownedThreads: ReadonlySet<string>;
+  reconnected: boolean;
   interrupts: Map<string, RecoveryInterrupt>;
 };
 
@@ -921,11 +925,14 @@ export class AppServerClient {
       return;
     }
     const recovery: TransportRecovery = {
-      controller: new AbortController(), messages: [], size: 0, ownedThreads, interrupts: new Map(),
+      controller: new AbortController(), messages: [], size: 0, ownedThreads, reconnected: false, interrupts: new Map(),
     };
     this.recovery = recovery;
     void this.recoverTransport(transport, init, recovery).catch(() => {
-      if (!this.closed) this.handleTransportFailure(failure);
+      if (this.closed) return;
+      this.handleTransportFailure(recovery.reconnected
+        ? failure
+        : new Error('Codex SSH did not reconnect; the remote turn status could not be confirmed'));
     });
   }
 
@@ -956,18 +963,24 @@ export class AppServerClient {
     init: InitializeParams,
     recovery: TransportRecovery,
   ): Promise<void> {
-    const deadline = Date.now() + SSH_RECOVERY_TIMEOUT_MS;
-    const signal = AbortSignal.any([recovery.controller.signal, AbortSignal.timeout(SSH_RECOVERY_TIMEOUT_MS)]);
+    const reconnectSignal = AbortSignal.any([
+      recovery.controller.signal, AbortSignal.timeout(SSH_RECONNECT_WAIT_TIMEOUT_MS),
+    ]);
+    const replacement = await previous.reconnect!(reconnectSignal);
+    if (reconnectSignal.aborted || this.closed) {
+      await replacement.close('Codex SSH recovery was cancelled');
+      reconnectSignal.throwIfAborted();
+      return;
+    }
+    recovery.reconnected = true;
+    const deadline = Date.now() + SSH_TURN_RESTORE_TIMEOUT_MS;
+    const signal = AbortSignal.any([
+      recovery.controller.signal, AbortSignal.timeout(SSH_TURN_RESTORE_TIMEOUT_MS),
+    ]);
     const request = <R>(method: string, params: unknown): Promise<R> => {
       signal.throwIfAborted();
       return this.sendRequest<R>(method, params, { timeoutMs: Math.max(1, deadline - Date.now()) });
     };
-    const replacement = await previous.reconnect!(signal);
-    if (signal.aborted || this.closed) {
-      await replacement.close('Codex SSH recovery was cancelled');
-      signal.throwIfAborted();
-      return;
-    }
     this.attachTransport(replacement);
     await request(Method.Initialize, init);
     const snapshots: Array<{ threadId: string; turn: RecoveredTurn; observed: ObservedTurn }> = [];

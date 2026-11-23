@@ -550,28 +550,7 @@ exec "$CODEX" "$@"
   return {
     async reconnect(signal: AbortSignal): Promise<Transport> {
       if (!attachedSocketPath || sshReadyAt === undefined) throw new Error('Codex proxy never connected');
-      const previousReadyAt = sshReadyAt;
-      await new Promise<void>((resolve, reject) => {
-        const settle = (error?: Error) => {
-          stopListening();
-          signal.removeEventListener('abort', abort);
-          if (error) reject(error);
-          else resolve();
-        };
-        const abort = () => settle(new Error('SSH recovery cancelled'));
-        const check = (snapshot: ReturnType<RemoteHost['snapshot']>) => {
-          if (snapshot.status === 'ready' && snapshot.statusChangedAt > previousReadyAt) settle();
-          // RemoteHost also emits failed between automatic attempts. The
-          // caller's recovery deadline covers exhausted and permanent failures.
-          else if (snapshot.status === 'disconnected') {
-            settle(new Error('SSH host did not recover'));
-          }
-        };
-        const stopListening = opts.remoteHost.onStatus(check);
-        signal.addEventListener('abort', abort, { once: true });
-        if (signal.aborted) abort();
-        else check(opts.remoteHost.snapshot());
-      });
+      await opts.remoteHost.waitForReconnect(sshReadyAt, signal);
       signal.throwIfAborted();
       return createSshDaemonTransport({
         ...opts,

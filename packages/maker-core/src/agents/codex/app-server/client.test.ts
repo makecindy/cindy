@@ -819,7 +819,9 @@ describe('AppServerClient SSH recovery', () => {
 
   async function startCase(
     snapshotStatus: 'inProgress' | 'completed',
-    { waitingOnApproval = false, withChild = false }: { waitingOnApproval?: boolean; withChild?: boolean } = {},
+    { waitingOnApproval = false, withChild = false, withSecondRoot = false }: {
+      waitingOnApproval?: boolean; withChild?: boolean; withSecondRoot?: boolean;
+    } = {},
   ) {
     const initialize = { userAgent: 'test', platformFamily: 'unix', platformOs: 'linux', codexHome: '/tmp' };
     const replacement = new RespondingTransport({
@@ -828,7 +830,10 @@ describe('AppServerClient SSH recovery', () => {
         thread: { id: params.threadId, status: { type: 'active', activeFlags: waitingOnApproval ? ['waitingOnApproval'] : [] } },
       }),
       [Method.ThreadTurnsList]: (params: { threadId: string }) => ({
-        data: [{ id: params.threadId === threadId ? turnId : 'child-turn', status: snapshotStatus, items: [item] }],
+        data: [{
+          id: params.threadId === threadId ? turnId : params.threadId === 'second-root' ? 'second-turn' : 'child-turn',
+          status: snapshotStatus, items: [item],
+        }],
       }),
       [Method.TurnInterrupt]: {},
     });
@@ -839,7 +844,7 @@ describe('AppServerClient SSH recovery', () => {
     const fail = vi.fn();
     const client = new AppServerClient({
       createTransport: () => transport, logger, onTransportError: fail,
-      getSubscribedThreadIds: () => [threadId],
+      getSubscribedThreadIds: () => withSecondRoot ? [threadId, 'second-root'] : [threadId],
       getRecoveryRootThreadId: (id) => withChild && id === 'owned-child' ? threadId : undefined,
     });
     const received: string[] = [];
@@ -853,6 +858,9 @@ describe('AppServerClient SSH recovery', () => {
     await client.initialize({ name: 'test', version: '1' });
     await client.request(Method.TurnStart, { threadId, input: [] });
     transport.emitLine({ method: 'turn/started', params: { threadId, turn: { id: turnId } } });
+    if (withSecondRoot) {
+      transport.emitLine({ method: 'turn/started', params: { threadId: 'second-root', turn: { id: 'second-turn' } } });
+    }
     if (withChild) {
       transport.emitLine({ method: 'turn/started', params: { threadId: 'owned-child', turn: { id: 'child-turn' } } });
       transport.emitLine({ method: 'turn/started', params: { threadId: 'unowned-thread', turn: { id: 'unowned-turn' } } });
@@ -917,6 +925,41 @@ describe('AppServerClient SSH recovery', () => {
       }
       expect(deliveryOrder).toEqual(status === 'inProgress' ? ['interrupt sent', 'item delivered'] : ['item delivered']);
       expect(fail).not.toHaveBeenCalled();
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('stops only the requested turn when two tasks share the recovered connection', async () => {
+    const { client, transport, replacement, fail, completedThreads } = await startCase('inProgress', { withSecondRoot: true });
+    try {
+      transport.emitClose({ reason: 'SSH dropped', reconnectable: true });
+      await client.request(Method.TurnInterrupt, { threadId, turnId });
+      const interrupts = replacement.lines.map((line) => JSON.parse(line))
+        .filter(({ method }) => method === Method.TurnInterrupt)
+        .map(({ params }) => params);
+      expect(interrupts).toEqual([{ threadId, turnId }]);
+      replacement.emitLine({
+        method: 'turn/completed',
+        params: { threadId: 'second-root', turn: { id: 'second-turn', status: 'completed' } },
+      });
+      expect(completedThreads).toEqual(['second-root']);
+      expect(fail).not.toHaveBeenCalled();
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('ends recovery without acknowledging Stop when the host exhausts its retries', async () => {
+    const { client, transport, replacement, fail, completedThreads } = await startCase('inProgress');
+    transport.reconnect.mockRejectedValueOnce(new Error('SSH automatic reconnect attempts exhausted'));
+    try {
+      transport.emitClose({ reason: 'SSH dropped', reconnectable: true });
+      await expect(client.request(Method.TurnInterrupt, { threadId, turnId }))
+        .rejects.toThrow('remote turn status could not be confirmed');
+      expect(fail).toHaveBeenCalledTimes(1);
+      expect(replacement.lines).toEqual([]);
+      expect(completedThreads).toEqual([]);
     } finally {
       await client.close();
     }

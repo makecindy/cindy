@@ -61,8 +61,8 @@ async function stopProcess(process: ReturnType<typeof startProcess> | undefined)
   try { await process.exited; } finally { clearTimeout(force); }
 }
 
-async function waitFor<T>(description: string, value: () => T | undefined, process?: ChildProcess): Promise<T> {
-  const deadline = Date.now() + requestTimeoutMs;
+async function waitFor<T>(description: string, value: () => T | undefined, process?: ChildProcess, timeoutMs = requestTimeoutMs): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
   do {
     const result = value();
     if (result !== undefined) return result;
@@ -106,11 +106,11 @@ function completeModelRequest(response: ServerResponse) {
 it.skipIf(!codexBinary).each([
   'active after reconnect',
   'finished during disconnect',
-  'first SSH reconnect fails',
+  'first three SSH reconnects fail',
   'stop requested during disconnect',
 ] as const)('recovers the original turn over a real sshd (%s)', async (mode) => {
   const finishWhileDisconnected = mode === 'finished during disconnect';
-  const firstReconnectFails = mode === 'first SSH reconnect fails';
+  const lateReconnect = mode === 'first three SSH reconnects fail';
   const stopWhileDisconnected = mode === 'stop requested during disconnect';
   // A short path also fits macOS's Unix-domain socket path limit.
   const root = await mkdtemp('/tmp/cindy-ssh-e2e-');
@@ -265,13 +265,15 @@ it.skipIf(!codexBinary).each([
       // an unhandled promise while the fixture waits for the SSH reconnect.
       stop = client.request('turn/interrupt', { threadId, turnId: turn.id }).then(() => ({}), (error) => ({ error }));
     }
-    if (firstReconnectFails) {
-      await waitFor('the first SSH reconnect to fail', () => statuses.includes('failed') || undefined);
+    if (lateReconnect) {
+      await waitFor('three SSH reconnects to fail',
+        () => statuses.filter((status) => status === 'failed').length === 3 || undefined, undefined, 10_000);
     } else {
       await delay(750);
     }
     offline = false;
-    await waitFor('SSH ready again', () => statuses.filter((status) => status === 'ready').length === 2 || undefined);
+    await waitFor('SSH ready again',
+      () => statuses.filter((status) => status === 'ready').length === 2 || undefined, undefined, 10_000);
     expect(acceptedConnections).toBe(2);
 
     await waitFor('original Codex client to recover', () => {
@@ -310,4 +312,4 @@ it.skipIf(!codexBinary).each([
     ]);
     await rm(root, { recursive: true, force: true });
   }
-}, 30_000);
+}, 40_000);
