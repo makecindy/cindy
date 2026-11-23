@@ -233,6 +233,8 @@ export class NativeTransport implements Transport {
   private candidateList: Address[] = [];
   /** The relay UDP credentials last given to the engine (`undefined`: none given yet). */
   private relayCredentials: object | null | undefined = undefined;
+  /** The relay UDP server the engine was last given with them: a new address (moved, or Fake-IP avoided) goes to it as well. */
+  private relaySyncedServer: string | undefined;
   private relayUdpUp = false;
   /**
    * The credentials `relayUdpUp` is about and when they were first seen here, and the dials waiting for their path
@@ -264,7 +266,9 @@ export class NativeTransport implements Transport {
     this.waits = enhanced && this.features.has('native-wait') && typeof engine.wait === 'function';
     this.binary = enhanced && this.features.has('binary-io') && typeof engine.io === 'function';
     this.bodies = enhanced && this.features.has('probe-grants');
-    this.relayUdpServer = options.relayUdpServer;
+    // With `resolveUdpServer` the engine gets no server until it answered (`resolveUdpServers`): relayed datagrams stay on the
+    // WebSocket meanwhile, and the engine never looks the name up itself first (a Fake-IP).
+    this.relayUdpServer = options.resolveUdpServer ? undefined : options.relayUdpServer;
     this.relayUdpName = options.relayUdpServer;
     this.stunServers = (options.stunServers ?? []).slice(0, MAX_STUN_SERVERS);
     this.localAddresses = addresses;
@@ -288,8 +292,10 @@ export class NativeTransport implements Transport {
       const initial = typeof addresses === 'function' ? await addresses().catch((): string[] => []) : addresses;
       const transport = new NativeTransport(engine, options, identity, initial, enhanced ? read : null, enhanced);
       await transport.synchronizeAdmission();
-      await transport.resolveUdpServers();
-      await transport.startStun(transport.stunServers);
+      // Resolved in the background, as the WASM transport gathers STUN candidates: a slow DNS answer must not hold up a transport
+      // that can already reach peers over the relay WebSocket or the LAN.
+      if (options.resolveUdpServer) void transport.resolveUdpServers();
+      else await transport.startStun(transport.stunServers);
       if (transport.waits) transport.drive(); else transport.schedule();
       return transport;
     } catch (error) { await engine.destroy().catch(() => undefined); throw error; }
@@ -344,9 +350,15 @@ export class NativeTransport implements Transport {
   /** The relay UDP and STUN servers as `resolveUdpServer` gives them (unchanged without it, or when it fails). */
   private async resolveUdpServers(): Promise<void> {
     if (!this.options.resolveUdpServer) return;
-    if (this.relayUdpName) this.relayUdpServer = await this.resolveUdpServer(this.relayUdpName);
-    this.stunServers = await Promise.all(this.stunServers.map(server => this.resolveUdpServer(server)));
-    if (!this.udpRefresh && this.relayUdpName) {
+    const [relay, stun] = await Promise.all([this.relayUdpName ? this.resolveUdpServer(this.relayUdpName) : undefined,
+      Promise.all(this.stunServers.map(server => this.resolveUdpServer(server)))]);
+    if (this.closed) return;
+    // `configureUdpServer` may have set another server meanwhile: that one stands.
+    this.relayUdpServer ??= relay;
+    this.stunServers = stun;
+    this.wake();
+    await this.startStun(this.stunServers);
+    if (!this.udpRefresh && this.relayUdpName && !this.closed) {
       this.udpRefresh = setInterval(() => { void this.refreshUdpServer(); }, UDP_SERVER_REFRESH_MS);
       (this.udpRefresh as { unref?: () => void }).unref?.();
     }
@@ -377,8 +389,9 @@ export class NativeTransport implements Transport {
     if (!server || !read || !this.identity.udpPort || !this.supports('relay-udp-v2')) return;
     const credentials = read() ?? null;
     this.noteRelayCredentials(credentials);
-    if (credentials === this.relayCredentials) return;
+    if (credentials === this.relayCredentials && server === this.relaySyncedServer) return;
     this.relayCredentials = credentials;
+    this.relaySyncedServer = server;
     await this.call({ op: 'relayUdp', server, ...(credentials
       ? { session: toBase64Url(credentials.session), key: toBase64Url(credentials.key) } : { session: null }) });
   }
@@ -679,7 +692,8 @@ export class NativeTransport implements Transport {
   }
   private mirrorChanged(): boolean {
     return this.options.admissionVersion?.() !== this.mirroredVersion
-      || (this.options.relay?.udpCredentials?.() ?? null) !== (this.relayCredentials ?? null);
+      || (this.options.relay?.udpCredentials?.() ?? null) !== (this.relayCredentials ?? null)
+      || (this.relayUdpServer !== undefined && this.relayUdpServer !== this.relaySyncedServer);
   }
   private async poll(): Promise<void> {
     this.polledAt = now();

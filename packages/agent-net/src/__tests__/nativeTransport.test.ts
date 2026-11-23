@@ -905,9 +905,9 @@ it('tells the socket whenever the engine takes queued bytes, also from a connect
  * - Bug 依据：#12175（2026-11-22）给 WASM 传输加了透明代理 Fake-IP（198.18.0.0/15）避让：往 Fake-IP 发 STUN 和中转 UDP 会走代理的分流，
  *   端口和真实 IP 不同，对端端口受限时永远打不通。原生引擎自己用系统 DNS 解析，电脑改跑原生引擎后会回到这个问题。
  * - 现有覆盖缺口：stun.ts 的单测只测解析函数本身；没有测原生传输把解析结果交给引擎、并在换网后更新。
- * - 最小失败输入：中转 UDP 主机名解析成一个地址；换网后解析成另一个。tier：unit，引擎用替身。
+ * - 最小失败输入：中转 UDP 主机名解析成一个地址；换网后解析成另一个（凭据不变）；解析迟迟不回。tier：unit，引擎用替身。
  */
-it('hands the engine the STUN and relay UDP addresses resolveUdpServer gives, and the new one after a network change', async () => {
+it('hands the engine the STUN and relay UDP addresses resolveUdpServer gives, without waiting for them, and the new one after a network change', async () => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance'] });
   const local = generateIdentity('native');
   const commands: Record<string, unknown>[] = [];
@@ -920,13 +920,20 @@ it('hands the engine the STUN and relay UDP addresses resolveUdpServer gives, an
       return value as T;
     }, async destroy() {},
   };
-  let answer = '203.0.113.9';
+  // One relay WebSocket session: the same credentials throughout (review of #12184: a new address went nowhere while they stayed).
+  const credentials = { session: new Uint8Array(8), key: new Uint8Array(32) };
+  let answer = '203.0.113.9', answered!: () => void;
+  const firstAnswer = new Promise<void>(resolve => { answered = resolve; });
   const transport = await NativeTransport.create(engine, { admit: () => true, admittedPeers: () => [], onIncoming: () => undefined,
     relayUdpServer: 'relay.example:3478', stunServers: ['relay.example:3478'],
-    resolveUdpServer: async (server) => server.replace('relay.example', answer),
-    relay: { deviceId: local.deviceId, udpCredentials: () => ({ session: new Uint8Array(8), key: new Uint8Array(32) }),
+    resolveUdpServer: async (server) => { await firstAnswer; return server.replace('relay.example', answer); },
+    relay: { deviceId: local.deviceId, udpCredentials: () => credentials,
       uplink: { kind: 'agent-net', send: () => undefined, onDatagram: () => undefined, close: () => undefined } } });
   try {
+    // The transport is there before the name is resolved, and the engine is not handed the name meanwhile.
+    await vi.advanceTimersByTimeAsync(100);
+    expect(commands.filter(c => c.op === 'stun' || c.op === 'relayUdp')).toEqual([]);
+    answered();
     await vi.advanceTimersByTimeAsync(100);
     expect(commands.filter(c => c.op === 'stun').at(-1)).toMatchObject({ servers: ['203.0.113.9:3478'] });
     expect(commands.filter(c => c.op === 'relayUdp').at(-1)).toMatchObject({ server: '203.0.113.9:3478' });

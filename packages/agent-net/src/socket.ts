@@ -93,9 +93,16 @@ async function interfaceAddresses(): Promise<string[]> {
 async function resolveUdpServer(server: string): Promise<string> {
   const [host, port] = splitHostPort(server);
   if (!host || !Number.isInteger(port) || port < 1 || port > 65_535) return server;
-  const address = await resolveUdpHost(host);
-  return address.includes(':') ? `[${address}]:${port}` : `${address}:${port}`;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  // The system lookup has no timeout of its own; past this the engine gets the name and looks it up itself.
+  const late = new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), UDP_SERVER_RESOLVE_TIMEOUT_MS); });
+  try {
+    const address = await Promise.race([resolveUdpHost(host), late]);
+    if (!address) return server;
+    return address.includes(':') ? `[${address}]:${port}` : `${address}:${port}`;
+  } finally { clearTimeout(timer); }
 }
+const UDP_SERVER_RESOLVE_TIMEOUT_MS = 3_000;
 /** A private key's raw bytes as base64url: the JWK `d` of an X25519 key is its secret, of an Ed25519 key its seed. */
 const rawPrivateKey = (key: KeyObject): string => {
   const raw = key.export({ format: 'jwk' }).d;
