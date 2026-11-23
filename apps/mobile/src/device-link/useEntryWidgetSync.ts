@@ -53,7 +53,7 @@ export function useEntryWidgetSync(ready: boolean) {
       const scheme = desktopEntryScheme();
       const targets: EntryWidgetTarget[] = [{
         id: desktopEntryId({ kind: 'new-task' }),
-        title: desktopEntryTitle(t('settings.entryWidget.newTask'), 'Cindy'),
+        title: desktopEntryTitle(t('settings.entryWidget.cindyTask'), 'Cindy'),
         subtitle: '',
         url: desktopEntryDestinationUrl({ kind: 'new-task' }, scheme),
       }];

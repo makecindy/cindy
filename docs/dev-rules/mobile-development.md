@@ -945,9 +945,9 @@ Android 17 / HyperOS）：系统按契约把 `CONFIRM_PIN_SHORTCUT` 交给桌面
 
 ### Android 桌面入口组件
 
-「新建任务」和每位伙伴在桌面上各是一份 App Widget，由本地模块 `cindy-entry-widget` 的 `android/`
+「Cindy 任务」和每位伙伴在桌面上各是一份 App Widget，由本地模块 `cindy-entry-widget` 的 `android/`
 提供：`EntryWidgetProvider` 画卡片，`EntryConfigActivity` 在添加组件与长按编辑（`widgetFeatures="reconfigurable"`）
-时列出「新建任务」与伙伴。每份组件按 `appWidgetId` 记自己的目标（SharedPreferences `cindy-entry-widget`），
+时列出「Cindy 任务」与伙伴。每份组件按 `appWidgetId` 记自己的目标（SharedPreferences `cindy-entry-widget`），
 目标清单与图标由 JS 侧 `useEntryWidgetSync` 写入：图标先落盘再换文件（`noBackupFilesDir/entry-widget-icons`），
 清单原子替换（`entry-widget-targets.json`），桌面重绘时不会读到半份名单。组件自己不联网、不读登录态；
 目标暂时没有时标准卡显示「打开 Cindy 完成设置」，紧凑版显示应用图标。
@@ -955,13 +955,15 @@ Android 17 / HyperOS）：系统按契约把 `CONFIRM_PIN_SHORTCUT` 交给桌面
 尺寸：默认放上桌面 2×2（Android 12 起由 `targetCellWidth/Height` 决定，旧系统按 `minWidth/minHeight`
 = 110dp），`minResizeWidth/Height` = 40dp，可以一直缩到 1 格，横竖都可拖。版式按启动器报告的
 实际尺寸选（`OPTION_APPWIDGET_MIN/MAX_*`，与用量组件同一读法：竖屏用 MIN_WIDTH + MAX_HEIGHT，
-横屏反过来）：一格宽用 `cindy_entry_widget_compact`——这张不画卡片底色，按桌面图标的观感摆
-40dp 头像 + 一行带浅阴影的名字，高度 < 68dp 时只留头像；
+横屏反过来）：一格宽用 `cindy_entry_widget_compact`——这张不画卡片底色，按启动器给原生图标的那
+一套摆：头像用 `layout_weight` 吃掉名字以外的全部高度（启动器拉大格子时头像跟着变大，能长到与
+旁边的原生图标同尺寸），下面是一行图标名。图标名固定白字 + 阴影，故意不跟 App 主题翻转 —— 旁边
+原生图标始终是白字，跟着变深字就不是一套东西了。高度 < 56dp 时只留头像，整个高度都给头像；
 高度不足宽度的 62%（1 行高，如 2×1）用 `cindy_entry_widget_row`（头像在左、名字在右）；其余用
 标准卡 `cindy_entry_widget`（头像 + 名字，2 格见方才带电脑名）。三套版式共用同一组 view id，
 Provider 只碰当前版式里存在的 id —— RemoteViews 对不存在的 id 报错会让整次更新被桌面拒绝。
 版式只有一套：日夜差异全在 `values(-night)/colors.xml`，布局与卡片 drawable 只引用颜色名，
-不再各存一份 `layout-night`。
+不再各存一份 `layout-night`；夜间只覆盖卡片底板上的颜色，1 格版式的图标名沿用白天值。
 
 深链带 `desktopEntry=1` 标记，由根级 `DesktopEntryHost` 校验白名单（只允许伙伴会话与新建任务）再跳转；
 被篡改的链接直接丢弃。

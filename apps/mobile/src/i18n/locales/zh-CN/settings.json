@@ -560,6 +560,6 @@
     "wrongCode": "这不是 Cindy 的登录二维码"
   },
   "entryWidget": {
-    "newTask": "新建任务"
+    "cindyTask": "Cindy 任务"
   }
 }

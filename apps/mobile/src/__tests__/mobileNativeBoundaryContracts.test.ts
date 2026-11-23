@@ -284,20 +284,26 @@ describe('mobile native boundary contracts', () => {
       else expect(layout).not.toContain('cindy_entry_widget_subtitle');
     }
   });
-  // guard: 版式只有一套，日夜差异全在 values(-night)/colors.xml。少一份 night 定义时系统
-  // 会默默退回白天色，深色壁纸上的名字直接糊掉且没有任何报错。
-  it('defines every entry widget colour for both themes', () => {
+  // guard: 版式只有一套，日夜差异全在 values(-night)/colors.xml。夜间只覆盖该翻的几个，
+  // 少一份定义时系统会默默退回白天值；引用了一个压根没定义的名字则整份布局编译不过，
+  // 所以两头都要锁。
+  it('defines every entry widget colour, with night only overriding', () => {
     const dir = 'modules/cindy-entry-widget/android/src/main/res';
     const read = (path: string) => readFileSync(resolve(process.cwd(), dir, path), 'utf8');
+    const names = (xml: string, pattern: RegExp) => [...xml.matchAll(pattern)].map((match) => match[1]);
     const referenced = ['layout/cindy_entry_widget.xml', 'layout/cindy_entry_widget_compact.xml',
       'layout/cindy_entry_widget_row.xml', 'drawable/cindy_entry_widget_card.xml']
-      .flatMap((file) => [...read(file).matchAll(/@color\/([a-z0-9_]+)/g)].map((match) => match[1]));
+      .flatMap((file) => names(read(file), /@color\/([a-z0-9_]+)/g));
+    const day = names(read('values/colors.xml'), /<color name="([a-z0-9_]+)"/g);
+    const night = names(read('values-night/colors.xml'), /<color name="([a-z0-9_]+)"/g);
     expect(referenced.length).toBeGreaterThan(0);
-    for (const theme of ['values', 'values-night']) {
-      const declared = [...read(`${theme}/colors.xml`).matchAll(/<color name="([a-z0-9_]+)"/g)]
-        .map((match) => match[1]);
-      for (const colour of new Set(referenced)) expect(declared).toContain(colour);
+    for (const colour of new Set(referenced)) expect(day).toContain(colour);
+    // 坐在卡片底板上的三处必须随主题翻转；只补白天会让深色卡片上出现深色字。
+    for (const colour of ['cindy_entry_widget_card', 'cindy_entry_widget_text', 'cindy_entry_widget_text_secondary']) {
+      expect(night).toContain(colour);
     }
+    // 夜间只能覆盖白天已有的名字，不能凭空多出只在深色模式存在的颜色。
+    for (const colour of night) expect(day).toContain(colour);
   });
 });
 

@@ -560,6 +560,6 @@
     "wrongCode": "這不是 Cindy 的登入 QR 碼"
   },
   "entryWidget": {
-    "newTask": "新增任務"
+    "cindyTask": "Cindy 任務"
   }
 }

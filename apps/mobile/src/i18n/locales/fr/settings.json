@@ -560,6 +560,6 @@
     "wrongCode": "Ce n'est pas un code de connexion Cindy"
   },
   "entryWidget": {
-    "newTask": "Nouvelle tâche"
+    "cindyTask": "Tâche Cindy"
   }
 }

@@ -560,6 +560,6 @@
     "wrongCode": "Cindy 로그인 코드가 아닙니다"
   },
   "entryWidget": {
-    "newTask": "새 작업"
+    "cindyTask": "Cindy 작업"
   }
 }

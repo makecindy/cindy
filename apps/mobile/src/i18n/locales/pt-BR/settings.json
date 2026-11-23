@@ -560,6 +560,6 @@
     "wrongCode": "Este não é um código de entrada do Cindy"
   },
   "entryWidget": {
-    "newTask": "Nova tarefa"
+    "cindyTask": "Tarefa Cindy"
   }
 }

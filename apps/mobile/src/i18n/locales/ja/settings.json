@@ -560,6 +560,6 @@
     "wrongCode": "Cindy のログインコードではありません"
   },
   "entryWidget": {
-    "newTask": "新しいタスク"
+    "cindyTask": "Cindy タスク"
   }
 }

@@ -560,6 +560,6 @@
     "wrongCode": "此非 Cindy 登门之码"
   },
   "entryWidget": {
-    "newTask": "新开差事"
+    "cindyTask": "Cindy 差事"
   }
 }

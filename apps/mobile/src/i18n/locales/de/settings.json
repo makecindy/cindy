@@ -560,6 +560,6 @@
     "wrongCode": "Das ist kein Cindy-Anmeldecode"
   },
   "entryWidget": {
-    "newTask": "Neue Aufgabe"
+    "cindyTask": "Cindy-Aufgabe"
   }
 }
