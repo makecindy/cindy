@@ -516,24 +516,21 @@ export async function acquirePluginEngineAccount(
     const pendingKey = keys.map(key => `${engineKey}|${key}`).find(key => state.pendingStarts.has(key));
     const reserved = pendingKey ? state.pendingStarts.get(pendingKey) : undefined;
     const now = Date.now();
-    // The same account signed in twice (the plugin's fingerprint) counts once: its load adds up.
-    const fingerprints = new Map<string, string>();
-    const members = group.map((account): SchedulableMember & { id: string; snapshot?: StatusSnapshot; limited: boolean } => {
+    const exclude = rebind && binding
+      ? new Set([...(options.exclude ?? []), binding.accountId]) : options.exclude;
+    const members = group.map((account): SchedulableMember & { id: string; snapshot?: StatusSnapshot; fingerprint?: string; limited: boolean } => {
       const key = accountKey(engineKey, account.id);
       const snapshot = state.status.get(key);
       const usage = pluginUsageState(state.usage.get(key)?.usage, model, now);
       const loggingIn = [...state.logins.values()].some(login => login.engineKey === engineKey && login.accountId === account.id);
       const cooling = !pinnedTarget && group.length >= 2 ? accountCooling(state, engineKey, account.id, model) : undefined;
-      const fingerprint = snapshot?.status?.state === 'signed-in' ? snapshot.status.fingerprint : undefined;
-      const duplicateOf = fingerprint ? fingerprints.get(fingerprint) : undefined;
-      if (fingerprint && !duplicateOf) fingerprints.set(fingerprint, account.id);
       return {
         id: account.id,
         key: account.id,
         snapshot,
+        ...(snapshot?.status?.state === 'signed-in' && snapshot.status.fingerprint ? { fingerprint: snapshot.status.fingerprint } : {}),
         limited: usage.limited,
-        usable: !loggingIn && !duplicateOf && admissibleFor(snapshot, account) && offersModel(snapshot, model)
-          && !usage.limited && !cooling,
+        usable: !loggingIn && admissibleFor(snapshot, account) && offersModel(snapshot, model) && !usage.limited && !cooling,
         paused: account.paused,
         running: state.running.get(key)?.size ?? 0,
         limit: effectiveConcurrencyLimit(account),
@@ -542,17 +539,21 @@ export async function acquirePluginEngineAccount(
         fiveHourTight: usage.fiveHourTight,
       };
     });
+    // The same account signed in twice (the plugin's fingerprint) counts once: the first of them that
+    // can take this task stands for it and carries the others' load, so pausing one directory never
+    // blocks another that is still on.
+    const representatives = new Map<string, (typeof members)[number]>();
     for (const member of members) {
-      const fingerprint = member.snapshot?.status?.fingerprint;
-      const primary = fingerprint ? fingerprints.get(fingerprint) : undefined;
-      if (primary && primary !== member.id) {
-        const target = members.find(entry => entry.id === primary)!;
-        target.running += member.running;
-        target.limit = Math.min(target.limit, member.limit);
-      }
+      if (member.fingerprint && member.usable && !member.paused && !exclude?.has(member.id) && !representatives.has(member.fingerprint))
+        representatives.set(member.fingerprint, member);
     }
-    const exclude = rebind && binding
-      ? new Set([...(options.exclude ?? []), binding.accountId]) : options.exclude;
+    for (const member of members) {
+      const primary = member.fingerprint ? representatives.get(member.fingerprint) : undefined;
+      if (!primary || primary === member) continue;
+      member.usable = false;
+      primary.running += member.running;
+      if (!member.paused) primary.limit = Math.min(primary.limit, member.limit);
+    }
     const strategy = providerStrategy(latest, selectionSuffix);
     let choice = pinnedTarget ?? pickProviderGroupMember(members, strategy, {
       exclude, lastPicked: state.lastPicked.get(selectionProvider),

@@ -23,7 +23,8 @@ import {
  * - 现有覆盖缺口：新模块；内置账号池的测试只覆盖 Claude / Codex。
  * - 最小失败输入：两个已登录账号的引擎连开两个任务；第一个账号启动时报额度用完；绑定账号额度用完后再发送；
  *   空闲一分钟后绑定账号已退出登录再发送；重新登录只回「已登录」不回身份；插件登录失败的添加；
- *   各账号只列出自己的真实模型时用引擎默认模型（`default`）开任务；还没保存过账号设置时重启后重新登录原有登录。
+ *   各账号只列出自己的真实模型时用引擎默认模型（`default`）开任务；还没保存过账号设置时重启后重新登录原有登录；
+ *   同一登录加了两次并暂停其中排前的那个。
  * - tier：unit(内存设置文件、内存冷却、假的插件 worker；只有账号目录在 mkdtemp 临时目录里创建)。
  *   实测耗时：< 2s。
  */
@@ -267,6 +268,23 @@ describe('plugin engine account pool', () => {
     });
     await expect(runPluginEngineAccountCommand({ action: 'login', providerId: PROVIDER, accountId: 'default', loginKey: 'k1', methodId: 'api-key', secret: 'sk' }))
       .rejects.toThrow('account_mismatch');
+  });
+
+  // Review of #12242: the same login added twice counts once, and pausing the first of its directories
+  // left none to take tasks. Minimal input: A and B report one fingerprint, A paused; then both on.
+  it('lets the other directory of a login added twice take tasks when one is paused, and counts their load once', async () => {
+    h.status.set(A, { state: 'signed-in', identity: { email: 'a@example.com' }, fingerprint: 'same-login' });
+    h.status.set(B, { state: 'signed-in', identity: { email: 'a@example.com' }, fingerprint: 'same-login' });
+    await updatePluginEnginePool(ENGINE, pool => ({
+      ...pool, accounts: pool.accounts.map(account => account.id === A ? { ...account, paused: true } : account),
+    }));
+    const lease = await acquirePluginEngineAccount(PROVIDER, undefined, ['task:t1']);
+    expect(lease!.accountId).toBe(B);
+    // Both on, each limited to one task: the login runs one task, whichever directory took it.
+    await updatePluginEnginePool(ENGINE, pool => ({
+      ...pool, accounts: pool.accounts.map(account => ({ ...account, paused: false, limit: 1, limitSet: true as const })),
+    }));
+    await expect(acquirePluginEngineAccount(PROVIDER, undefined, ['task:t2'])).rejects.toThrow('SUBSCRIPTION_ACCOUNTS_FULL');
   });
 
   // Review of #12242: `default` asks for the engine's own starting model, so accounts that list their
