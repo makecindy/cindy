@@ -7,7 +7,10 @@ import type { DbTransport } from '../../localDb/client/DbTransport';
  * 因此由 test-workspaces 的 db tier 运行，不放进 fast unit tier。
  */
 
-import type { Schedule, ScheduleRun } from '@cindy/maker-scheduler';
+import { Scheduler, type Schedule, type ScheduleRun } from '@cindy/maker-scheduler';
+import { promises as fs } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import Database from 'better-sqlite3';
 import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
@@ -18,6 +21,8 @@ import type { DbClient } from '../../localDb/client/DbClient';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current';
 import { recordScheduleRunCostDirect, applyScheduleRunCostMetaChange } from '../runCostLedger';
 import { DrizzleScheduleStorage, type SchedulerDrizzleDb } from '../storage.desktop';
+import { ProjectAutomationLoader, type ProjectAutomationEvent } from '../project-automation-loader';
+import { PROJECT_AUTOMATION_REL_SEGMENTS } from '../../../shared/projectAutomationPaths';
 
 function actualMoneyFromLegacyUsd(amountUsd: number) {
   return {
@@ -292,6 +297,58 @@ function createStorageHarness(queries?: { query: string; params: unknown[] }[]) 
     storage: new DrizzleScheduleStorage(() => db),
   };
 }
+
+// DB tier: startup discovery and the open-window import query use real schedule and
+// session rows. Issue 11133 needs both rows to refer to the same physical workspace
+// through different paths, which single-path loader tests cannot reproduce.
+it('does not rediscover an imported buddy automation through a task cwd alias', async () => {
+  const h = createStorageHarness();
+  const root = await fs.mkdtemp(path.join(tmpdir(), 'cindy-automation-alias-'));
+  try {
+    const external = path.join(root, 'external');
+    await fs.mkdir(external);
+    const physical = await fs.realpath(external);
+    const linked = path.join(root, 'workspace');
+    await fs.symlink(physical, linked, 'junction');
+    const scheduler = new Scheduler({ storage: h.storage, runner: { fire: async () => { throw new Error('unexpected run'); } } });
+    const makeLoader = () => new ProjectAutomationLoader({
+      storage: h.storage,
+      scheduler,
+      getDb: () => h.db,
+      logger: {},
+      getTeammateProjectState: async (dir) => dir === (process.platform === 'win32' ? linked.toLowerCase() : linked)
+        ? 'active' : null,
+    });
+    h.sqlite.exec(`CREATE TABLE project_automation_consents (
+      working_dir TEXT PRIMARY KEY, consented_at INTEGER NOT NULL, config_hash TEXT NOT NULL
+    )`);
+    await makeLoader().upsertSchedule(linked, {
+      id: 'daily', name: 'Daily', prompt: 'Check', cronExpr: '0 9 * * *', manual: true,
+    });
+    const original = await h.storage.list();
+    expect(original).toMatchObject([{ workingDir: linked, projectConfigId: 'daily' }]);
+
+    const independent = path.join(root, 'ordinary');
+    const copiedManifest = path.join(independent, ...PROJECT_AUTOMATION_REL_SEGMENTS);
+    await fs.mkdir(path.dirname(copiedManifest), { recursive: true });
+    await fs.copyFile(path.join(linked, ...PROJECT_AUTOMATION_REL_SEGMENTS), copiedManifest);
+    const insertTask = h.sqlite.prepare('INSERT INTO sessions (id, title, working_dir) VALUES (?, ?, ?)');
+    insertTask.run('alias', 'Alias', physical);
+    insertTask.run('ordinary', 'Ordinary', independent);
+
+    const reopened = makeLoader();
+    const events: ProjectAutomationEvent[] = [];
+    reopened.onEvent((event) => events.push(event));
+    await reopened.reconcileAll();
+    expect(events.flatMap((event) => event.type === 'import-required' ? [event.pendingImport.workingDir] : []))
+      .toEqual([independent]);
+    expect((await reopened.listPendingImports()).map((preview) => preview.workingDir)).toEqual([independent]);
+    expect(await h.storage.list()).toEqual(original);
+  } finally {
+    h.close();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
 
 // DB-tier regression for app-exit recovery: claim the original run exactly once,
 // and respect user takeover/stop and the current task owner. The old storage had no

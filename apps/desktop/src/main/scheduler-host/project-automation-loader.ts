@@ -535,25 +535,44 @@ export class ProjectAutomationLoader {
   }
 
   private async listKnownWorkingDirs(): Promise<string[]> {
-    const found = new Map<string, string>();
-    const add = (workingDir: string | null | undefined) => {
-      if (!workingDir) return;
-      found.set(path.resolve(workingDir), workingDir);
-    };
-
+    const saved = new Map<string, string>();
     const projectSchedules = await this.deps.getDb()
       .select({ workingDir: schedules.workingDir })
       .from(schedules)
       .where(and(eq(schedules.source, 'project'), isNotNull(schedules.workingDir)));
-    for (const row of projectSchedules) add(row.workingDir);
+    for (const { workingDir } of projectSchedules) {
+      if (workingDir) saved.set(workingDirKey(workingDir), workingDir);
+    }
 
+    const discovered = new Map<string, string>();
     const projectSessions = await this.deps.getDb()
       .select({ workingDir: sessions.workingDir })
       .from(sessions)
       .where(isNotNull(sessions.workingDir));
-    for (const row of projectSessions) add(row.workingDir);
+    for (const { workingDir } of projectSessions) {
+      if (!workingDir) continue;
+      const key = workingDirKey(workingDir);
+      if (!saved.has(key)) discovered.set(key, workingDir);
+    }
+    if (saved.size === 0 || discovered.size === 0) {
+      return [...saved.values(), ...discovered.values()];
+    }
 
-    return [...found.values()];
+    // A task may record the real path of a workspace whose schedules use a
+    // symlink. Scan it under the saved directory so its schedule and approval
+    // identity stays consistent. Unresolved directories keep their own identity.
+    const savedPhysicalDirs = new Set<string>();
+    for (const workingDir of saved.values()) {
+      const physicalDir = await fs.realpath(workingDir).catch(() => null);
+      if (physicalDir) savedPhysicalDirs.add(workingDirKey(physicalDir));
+    }
+    if (savedPhysicalDirs.size > 0) {
+      for (const [key, workingDir] of discovered) {
+        const physicalDir = await fs.realpath(workingDir).catch(() => null);
+        if (physicalDir && savedPhysicalDirs.has(workingDirKey(physicalDir))) discovered.delete(key);
+      }
+    }
+    return [...saved.values(), ...discovered.values()];
   }
 
   private async getLastHash(workingDir: string): Promise<string | null> {
