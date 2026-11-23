@@ -1727,6 +1727,19 @@ interface ElectronAPI {
     /** confirm 槽回包:把用户的点击送回 main 结算挂起的管子请求。 */
     onConfirmDismissed?: (callback: (payload: { requestId: string }) => void) => () => void;
     resolveConfirm: (requestId: string, confirmed: boolean) => Promise<{ handled: boolean }>;
+    /** form 槽:插件请求弹主机画的表单(main 已资格审+净化+限速+单飞,且本窗口正获得焦点)。
+     *  收到即本窗口负责弹;答复用 resolveForm 回包。dismissed = main 那边超时或清理,收起表单。 */
+    onFormRequest?: (
+      callback: (payload: {
+        requestId: string;
+        ghostId: string;
+        ghostName: string;
+        iconDataUrl?: string;
+        spec: import('../shared/ghostForm').GhostFormSpec;
+      }) => void,
+    ) => () => void;
+    onFormDismissed?: (callback: (payload: { requestId: string }) => void) => () => void;
+    resolveForm?: (requestId: string, answer: import('../shared/ghostForm').GhostFormAnswer) => Promise<{ handled: boolean }>;
     onModelPickerRequest: (callback: (request: import('../shared/pluginModelPicker').PluginModelPickerPresentation) => void) => () => void;
     onModelPickerDismissed: (callback: (request: { requestId: string }) => void) => () => void;
     resolveModelPicker: (requestId: string, route: import('../shared/pluginTasks').PluginTaskRoute | null) => Promise<{ handled: boolean; accepted: boolean }>;
@@ -1805,6 +1818,8 @@ interface ElectronAPI {
 
   /** Plugin Protocol v2 市场；网络、下载与安装全部在 main 进程完成。 */
   pluginMarket: {
+    cancelOfficialModelPlugins: () => Promise<void>;
+    officialModelPlugins: (cursor: string | null) => Promise<import('../shared/pluginMarket').OfficialModelPluginPage>;
     query: (input: import('../shared/pluginMarket').PluginMarketQuery) => Promise<import('../shared/pluginMarket').PluginMarketPage>;
     lookup: (ghostIds: string[]) => Promise<import('../shared/pluginMarket').PluginMarketSnapshot>;
     recommendations: () => Promise<import('../shared/pluginMarket').PluginMarketItem[]>;
@@ -7022,6 +7037,18 @@ interface ElectronAPI {
       channel?: ImDefaultSettingsChannel,
     ) => Promise<ImDefaultSettingsState>;
     imDefaultSettingsReset: (channel?: ImDefaultSettingsChannel) => Promise<ImDefaultSettingsState>;
+    /** 个人飞书 / Lark 机器人所在的群与各群单独的项目、模型、权限。 */
+    feishuGroupSettingsList: (options?: {
+      /** 用户点了「刷新」：不复用 30 秒内的群名单。 */
+      refresh?: boolean;
+      /** 只给收起时的群数与头像用：不解析项目模型（`project.config` 都是 null）。 */
+      summary?: boolean;
+    }) => Promise<import('../shared/feishuGroupSettings').FeishuGroupSettingsList>;
+    feishuGroupSettingsSet: (
+      chatId: string,
+      patch: import('../shared/feishuGroupSettings').FeishuGroupSettingsPatch,
+      name: string | null,
+    ) => Promise<import('../shared/feishuGroupSettings').FeishuGroupSettingsView>;
 
     /** 子代理模型覆盖。null 表示不注入覆盖，仅对新建 agent 会话生效。 */
     subagentModelSettingsGet: () => Promise<SubagentModelSettingsState>;
@@ -7032,7 +7059,15 @@ interface ElectronAPI {
     auxiliaryModelSettingsGet: () => Promise<AuxiliaryModelSettingsState>;
     auxiliaryModelSettingsSet: (
       patch: AuxiliaryModelSettingsPatch,
-    ) => Promise<AuxiliaryModelSettingsState>;
+    ) => Promise<import('../shared/auxiliaryModelSettings').AuxiliaryModelSaveResult>;
+    auxiliaryModelSettingsTest: (
+      patch: AuxiliaryModelSettingsPatch,
+    ) => Promise<import('../shared/auxiliaryModelSettings').AuxiliaryModelSettingsTestResult>;
+    auxiliaryModelHealthDismiss: (sessionId: string, noticeId: number) => Promise<void>;
+    auxiliaryModelRouteHealthGet: (sessionId?: string) => Promise<import('../shared/auxiliaryModelHealth').AuxiliaryModelHealthSnapshot[]>;
+    onAuxiliaryModelHealthChanged: (
+      callback: (event: import('../shared/auxiliaryModelHealth').AuxiliaryModelHealthEvent) => void,
+    ) => () => void;
     auxiliaryModelHealthGet: () => Promise<AuxiliaryModelHealth>;
 
     /** Agent 资源占用治理(命令并发上限/进程优先级/工具链限核)。 */

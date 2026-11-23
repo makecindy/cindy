@@ -1255,12 +1255,16 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     },
     // 探测只在熔断器已经放行 half-open 单飞席位后到达这里；presence 的未知态
     // 必须允许这一个探测穿过，否则 relay 重连清空 presence 后熔断会永久自锁。
-    // 只有当代 presence 明确为 false 才阻止，且仍叠加 relay/owner/撤权/本机禁用门。
+    // 普通设备当代 presence 明确为 false 时仍阻止。分享主机没有普通设备的上线
+    // presence 边沿；若先等新握手清离线判定，又禁止负责建链的探测，就会永久自锁。
+    // 只让分享主机进入原有退避/单飞探测，不改 UI 离线状态或提前关闭熔断；
+    // relay/owner/撤权/本机禁用及真实建链/请求的分享授权检查仍然生效。
     isProbeEligible: (deviceId) =>
       isDeviceResponsivenessProbeEligible({
         relayOnline: client?.connectionFor(deviceId).getStatus() === 'online' || client?.hasOfflineDirectPath(deviceId) === true,
         ownsRelay: arbiter?.isOwner() === true,
-        presenceAvailable: client?.hasOfflineDirectPath(deviceId) ? true : presenceAvailableByDevice.get(deviceId),
+        presenceAvailable: parseProviderSharePeer(deviceId)?.role === 'host' || client?.hasOfflineDirectPath(deviceId)
+          ? true : presenceAvailableByDevice.get(deviceId),
         revoked: revokedByRemote.has(deviceId),
         locallyDisabled: readDeviceLinkSettings().disabledControlDeviceIds.includes(deviceId),
       }),
@@ -1386,6 +1390,14 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // 按对端找承载它的分享连接要问原客户端：分路层对走会话的跨账号对端给的是这条连接的视图，和 connection 比不相等（2026-11-17 review）。
     const carriedBy = (id: string) => routedClient.connectionFor(id) === connection;
     if (status !== 'online') {
+      // Availability belongs to this carrier generation, just as on the primary
+      // relay. A separate sharing reconnect must not retain an old offline gate.
+      for (const id of presenceOnlineByDevice.keys()) {
+        if (isScopedPeer(id) && carriedBy(id) && !hasOfflineDirectPath(id)) presenceOnlineByDevice.delete(id);
+      }
+      for (const id of presenceAvailableByDevice.keys()) {
+        if (isScopedPeer(id) && carriedBy(id) && !hasOfflineDirectPath(id)) presenceAvailableByDevice.delete(id);
+      }
       deactivateAllControllers('cross-account-relay-disconnected', 'cross-account', id => !carriedBy(id) || hasOfflineDirectPath(id));
       transportTimeoutReopen.disposeWhere(id => isScopedPeer(id) && carriedBy(id));
       return;
@@ -1545,6 +1557,13 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   startBusyReporting();
 
   client.onPeerStreamAccepted((peer, streamId) => {
+    // A fresh authorized provider-share handshake supersedes this route's old
+    // offline verdict. Do not close the breaker: only its bounded live caps
+    // probe can establish application health. Other peers and grants stay intact.
+    if (isProviderSharePeer(peer)) {
+      presenceOnlineByDevice.delete(peer);
+      presenceAvailableByDevice.delete(peer);
+    }
     // Shared routes can reconnect independently of the primary relay. Notify
     // views before replay can deliver a tokenless legacy completion snapshot.
     if (parseSharedTaskPeer(peer)?.role === 'host') {

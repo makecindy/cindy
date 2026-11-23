@@ -4144,6 +4144,7 @@
         "refreshReconnect": "Die Modellliste konnte nicht aktualisiert werden. Verbinde diesen Anbieter erneut und versuche es noch einmal.",
         "refreshFetchDisabled": "Abruf des Remote-Modellkatalogs ist deaktiviert – Aktualisierung übersprungen",
         "withdrawn": {
+          "rowStatus": "Beim letzten Abruf nicht gelistet",
           "refreshFound": "Nicht mehr angebotene Modelle: {{count}}",
           "refreshAdded": "Neue Modelle: {{added}}. Nicht mehr angeboten: {{count}}",
           "refreshSuspicious": "Diesmal nicht zurückgegebene Modelle: {{count}}. Die Liste ist möglicherweise unvollständig",
@@ -4489,6 +4490,16 @@
         "groupLocal": "Lokale Modelle",
         "metaLocalRecommended": "Empfohlen · in Cindy herunterladen",
         "metaLocalConnect": "Laufenden lokalen Server verbinden",
+        "configurePlugin": "Konfigurieren",
+        "installAndConfigure": "Installieren und konfigurieren",
+        "pluginLoading": "Plugin wird geladen…",
+        "engineState": {
+          "available": "Bereit",
+          "unavailable": "Nicht verfügbar",
+          "unknown": "Warten auf den Engine-Status"
+        },
+        "retryPlugin": "Erneut versuchen",
+        "officialModelPlugins": "Offizielle Modell-Plugins",
         "moreLocal": "Weitere lokale Server"
       },
       "local": {
@@ -4813,7 +4824,68 @@
         "hint": "Sendet eine private Nachricht über den verknüpften Feishu- oder Lark-Bot; nur, wenn das Fenster nicht fokussiert ist.",
         "disabledHint": "Richte zuerst den Bot ein und sende ihm einmal eine Direktnachricht, um die Verknüpfung abzuschließen."
       },
-      "bind": "Verknüpfen"
+      "bind": "Verknüpfen",
+      "groups": {
+        "title": "Gruppenchats",
+        "description": "Lege für eine Gruppe, in der der Bot ist, ein eigenes Projekt, Modell und eigene Berechtigungen fest.",
+        "rules": "Was du nicht festlegst: Eine Gruppe mit Projekt folgt diesem Projekt unter Projekte und Modelle; eine Gruppe ohne Projekt folgt oben der Konfiguration für neue Unterhaltungen und dem Berechtigungsmodus für neue Gruppenaufgaben. Der Hauptchat einer Gruppe und ihre Themen teilen sich eine Einstellung.",
+        "expand": "Ausklappen",
+        "collapse": "Einklappen",
+        "groupCount_one": "{{count}} Gruppe",
+        "groupCount_other": "{{count}} Gruppen",
+        "customCount_one": "{{count}} mit eigenen Einstellungen",
+        "customCount_other": "{{count}} mit eigenen Einstellungen",
+        "refresh": "Aktualisieren",
+        "loading": "Gruppen werden geladen …",
+        "loadFailed": "Gruppen konnten nicht geladen werden. Versuche es gleich noch einmal mit Aktualisieren.",
+        "saveFailed": "Gruppeneinstellungen konnten nicht gespeichert werden",
+        "notConnected": "Gruppen werden angezeigt, sobald der Bot verbunden ist. Unten stehen nur Gruppen mit eigenen Einstellungen.",
+        "empty": "Der Bot ist noch in keiner Gruppe. Füge ihn einer Gruppe hinzu und komm dann hierher zurück.",
+        "listPermission": "Die Gruppen des Bots können nicht gelesen werden. Erteile dieser App auf der Feishu Open Platform die Berechtigung, Gruppeninformationen zu lesen. Unten stehen die Gruppen, in denen der Bot schon verwendet wurde.",
+        "listUnavailable": "Die Gruppen des Bots können gerade nicht gelesen werden. Unten stehen die Gruppen, in denen der Bot schon verwendet wurde.",
+        "unnamed": "Unbenannte Gruppe ({{id}})",
+        "summaryModel": "Eigenes Modell",
+        "summaryPermission": "Eigene Berechtigungen",
+        "expandAria": "Einstellungen für {{name}}",
+        "searchLabel": "Gruppen durchsuchen",
+        "searchPlaceholder": "Nach Gruppenname suchen",
+        "customHeading": "Eigene Einstellungen",
+        "followHeading": "Folgen den Kanaleinstellungen",
+        "showMore": "{{count}} weitere anzeigen",
+        "showLess": "Weniger anzeigen",
+        "noMatch": "Keine Gruppe passt zu „{{query}}“",
+        "project": {
+          "label": "Projekt",
+          "follow": "Chat",
+          "missing": "{{name}} (nicht mehr in der Seitenleiste)",
+          "hint": "Gilt, sobald der Bot in der Gruppe zum ersten Mal erwähnt wird, ein Thema beginnt oder jemand /new sendet. Laufende Aufgaben werden nicht verschoben. Mit einem Projekt folgen Modell und Berechtigungen diesem Projekt unter Projekte und Modelle; mit Chat bleiben Aufgaben im Unterhaltungsordner des Bots und folgen oben der Konfiguration für neue Unterhaltungen. Nur Projekte aus der Seitenleiste dieses Computers sind wählbar."
+        },
+        "model": {
+          "label": "Modell und Denkintensität",
+          "hintFollow": "Folgt der Konfiguration für neue Unterhaltungen. Wenn du hier Modell oder Denkintensität änderst, gilt das nur für diese Gruppe.",
+          "hintFollowProject": "Folgt dem Projekt „{{project}}“ unter Projekte und Modelle. Wenn du hier Modell oder Denkintensität änderst, gilt das nur für diese Gruppe.",
+          "hintProjectUnavailable": "Das Modell, das für „{{project}}“ unter Projekte und Modelle eingestellt ist, ist gerade nicht verfügbar. Wähle dort ein anderes oder hier eines für diese Gruppe.",
+          "hintFixed": "Diese Gruppe hat ein eigenes Modell. Aufgaben in dieser Gruppe, deren Modell nicht geändert wurde, wechseln bei der nächsten Nachricht; neue Aufgaben nutzen dieses Modell."
+        },
+        "permission": {
+          "label": "Berechtigungen",
+          "hintFollow": "Folgt dem Berechtigungsmodus für neue Gruppenaufgaben. Gilt nur für Aufgaben, die ab jetzt in dieser Gruppe erstellt werden; bestehende Aufgaben wechselst du mit /permission in der Gruppe.",
+          "hintFollowProject": "Folgt den Berechtigungen von „{{project}}“ unter Projekte und Modelle. Gilt nur für Aufgaben, die ab jetzt in dieser Gruppe erstellt werden; bestehende Aufgaben wechselst du mit /permission in der Gruppe.",
+          "hintFixed": "Diese Gruppe hat einen eigenen Berechtigungsmodus. Gilt nur für Aufgaben, die ab jetzt in dieser Gruppe erstellt werden; bestehende Aufgaben wechselst du mit /permission in der Gruppe."
+        },
+        "fullAccessConfirm": {
+          "title": "Vollzugriff in {{name}} verwenden?",
+          "description": "Neue Aufgaben in dieser Gruppe laufen ohne Bestätigung einzelner Schritte, egal wer den Bot erwähnt. Gruppennachrichten kommen von den Mitgliedern – tu das nur, wenn du allen in der Gruppe vertraust.",
+          "confirm": "Vollzugriff verwenden",
+          "cancel": "Abbrechen"
+        },
+        "widerConfirm": {
+          "title": "Berechtigungen in {{name}} lockern?",
+          "description": "Neue Aufgaben in dieser Gruppe wechseln von „{{current}}“ zu „{{next}}“, egal wer den Bot erwähnt. Gruppennachrichten kommen von den Mitgliedern – tu das nur, wenn du allen in der Gruppe vertraust.",
+          "confirm": "Trotzdem ändern",
+          "cancel": "Abbrechen"
+        }
+      }
     },
     "wechatBot": {
       "title": "Persönliches WeChat",
@@ -5422,6 +5494,69 @@
       "budget": "Rabatt",
       "subscription": "Abo",
       "saveFailed": "Einstellungen für Hilfsmodelle konnten nicht gespeichert werden",
+      "testFailed": "Verbindungstest für {{model}} fehlgeschlagen",
+      "save": "Hilfsmodelle speichern",
+      "saving": "Speichern und testen…",
+      "saveSuccess": "Verbindungstest bestanden, Hilfsmodelle aktiviert",
+      "retrySave": "Verbindungstest fehlgeschlagen. Verbindung korrigieren und erneut speichern.",
+      "notice": {
+        "auto-title": "Der Chat konnte nicht automatisch benannt werden",
+        "title": "Kein Chat-Titel erstellt",
+        "task-summary": "Keine Aufgabenzusammenfassung erstellt",
+        "prompt-prediction": "Kein Eingabevorschlag erstellt",
+        "working-status": "Kein Fortschrittsbericht erstellt",
+        "tool-loop-review": "Wiederholte Werkzeugaufrufe konnten nicht geprüft werden",
+        "unavailable": "Eine Hilfsfunktion konnte nicht abgeschlossen werden",
+        "dismiss": "Hinweis schließen",
+        "unavailableBody": "Das Hilfsmodell ist vorübergehend nicht verfügbar.",
+        "recovered": "Hilfsmodell wieder verfügbar",
+        "recoveredBody": "Die letzte Hilfsanfrage war erfolgreich.",
+        "details": "Details",
+        "settings": "Hilfsmodell-Einstellungen"
+      },
+      "viewSettings": "Einstellungen öffnen",
+      "healthRecent": "{{model}} hat zuletzt eine Erfolgsrate von {{rate}} % · Status: {{status}}.",
+      "lastError": "Letzter Fehler",
+      "healthPaused": "pausiert",
+      "healthMonitoring": "wird überwacht",
+      "healthWarning": "{{model}} ist kürzlich {{count}}-mal fehlgeschlagen ({{reason}}).",
+      "healthIsolated": "{{model}} wurde vorübergehend pausiert ({{reason}}). {{switched}}",
+      "healthSwitched": "Ein Ersatzmodell wird verwendet.",
+      "healthNoSwitch": "Kein Ersatzmodell konnte diese Anfrage abschließen.",
+      "healthRecovered": "Das Hilfsmodell {{model}} ist wieder verfügbar.",
+      "cannotEnable": "Dieses Modell lässt sich nicht aktivieren",
+      "failedKeep": "Speichern fehlgeschlagen. Die bisherigen Einstellungen bleiben aktiv.",
+      "failedAuto": "Speichern fehlgeschlagen. Die automatische Auswahl bleibt aktiv.",
+      "failedSlot": "{{slot}} · Test für {{model}} fehlgeschlagen",
+      "testingHint": "Die gewählten Modelle werden nacheinander getestet. Die Änderungen werden wirksam, sobald alle Tests bestanden sind.",
+      "draft": "Ungespeicherte Änderungen",
+      "restored": "Automatische Auswahl wiederhergestellt",
+      "restoring": "Automatische Auswahl wird wiederhergestellt…",
+      "retryAction": "Erneut speichern",
+      "attempts": "{{failed}} der letzten {{total}} Versuche sind fehlgeschlagen.",
+      "http": {
+        "401": "Authentifizierung fehlgeschlagen",
+        "403": "Zugriff verweigert",
+        "404": "Angeforderte Ressource nicht gefunden",
+        "429": "Anfrage begrenzt",
+        "server": "Fehler beim Anbieter",
+        "other": "Anfrage fehlgeschlagen"
+      },
+      "healthReasons": {
+        "http_error": "Fehler bei der Upstream-Anfrage",
+        "timeout": "Zeitüberschreitung",
+        "request_failed": "Anfrage fehlgeschlagen",
+        "empty_response": "leere Antwort",
+        "model_unavailable": "Modell nicht verfügbar",
+        "not_authenticated": "Nicht authentifiziert",
+        "auth_probe_failed": "Authentifizierungsprüfung fehlgeschlagen",
+        "api_key_missing": "API-Schlüssel fehlt",
+        "endpoint_missing": "Endpunkt fehlt",
+        "unsupported_transport": "nicht unterstütztes Protokoll",
+        "agent_unavailable": "Agent nicht verfügbar",
+        "permission_denied": "Zugriff verweigert (403). Prüfen Sie die Modellberechtigung des Kontos.",
+        "quota": "Prüfen Sie Guthaben und Kontingent beim Anbieter."
+      },
       "chain": {
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 flash",
@@ -8510,6 +8645,8 @@
         "badgeDetail": "Bei Neuigkeiten kann es einen grünen Punkt am Eintrag „Plugins“ in der linken Navigation und auf seiner eigenen Karte anzeigen, zusammen mit einer einzeiligen Zusammenfassung. Beim Öffnen seines Panels verschwindet der Punkt. Der Punkt erzeugt weder Ton noch Vibration, erscheint nie in der Mitteilungszentrale deines Systems und erfordert eine eigene Berechtigung, unabhängig von Systemhinweisen.",
         "confirm": "Kann dich in einem Dialog um Bestätigung bitten",
         "confirmDetail": "Kann vor einer Aktion einen Dialog öffnen, der wie ein eigener Dialog von Cindy aussieht. Die Frage stammt vom Plugin und der Dialog ist mit dessen Namen gekennzeichnet. Nur du kannst bestätigen oder abbrechen – das Plugin kann es nicht. Es ist höchstens ein Dialog gleichzeitig möglich; zu häufige Anfragen werden blockiert.",
+        "form": "Kann dich bitten, ein Formular auszufüllen",
+        "formDetail": "Es kann ein Formular öffnen, das wie Cindys eigene aussieht, und dich um Angaben bitten. Das Formular zeigt den Namen des Plugins; deine Eingaben erhält es erst, wenn du auf Speichern klickst, und beim Abbrechen erhält es nichts. Es öffnet sich nur, während du Cindy verwendest, höchstens ein Formular gleichzeitig, und zu häufige Anfragen werden blockiert.",
         "fsWrite": "Kann eigene private Dateien verwalten",
         "fsWriteDetail": "Kann eigene private Daten lesen, schreiben, auflisten und löschen. Während eines aktiven Agent-Aufrufs kann es auch das Arbeitsverzeichnis der Aufgabe lesen, auflisten und überwachen. Schreiben und Löschen folgen den Aufgabenberechtigungen; eine Schreibfreigabe erlaubt kein Löschen. Die Überwachung endet mit dem Aufruf. Alle Dateivorgänge führt der Host aus.",
         "deviceSync": "Plugin-Daten zwischen deinen Computern synchronisieren",
@@ -8812,6 +8949,8 @@
         "slotNetwork": "Netzwerkzugriff",
         "slotNotify": "Systemhinweise",
         "slotBadge": "Ungelesen-Anzeige",
+        "slotConfirm": "Bestätigungsdialoge",
+        "slotForm": "Formulardialoge",
         "slotFs": "Dateien schreiben",
         "slotLibrary": "Dauerhafte Bibliothek",
         "slotSkill": "Agent-Skills",
@@ -8931,6 +9070,17 @@
       "saveAs": {
         "dialogTitle": "Plugin „{{name}}“ — Speichern unter",
         "dialogMessage": "Plugin „{{name}}“ bittet dich, eine Kopie zu speichern"
+      },
+      "form": {
+        "save": "Speichern",
+        "cancel": "Abbrechen",
+        "addItem": "Hinzufügen",
+        "removeItem": "Entfernen",
+        "removeNamed": "{{name}} entfernen",
+        "required": "Dieses Feld ist erforderlich",
+        "incomplete": "Pflichtfelder sind leer",
+        "itemTitle": "{{label}} {{index}}",
+        "srDescription": "Das Plugin „{{name}}“ bittet dich, dieses Formular auszufüllen"
       },
       "confirm": {
         "dialogTitle": "Plugin „{{name}}“ benötigt deine Bestätigung"
@@ -12829,16 +12979,22 @@
     "listSeparator": ", ",
     "crossAgentConvert": {
       "asking": {
-        "title": "Konvertierbare Arbeitsbereichskonfiguration erkannt",
-        "description": "Dieser Arbeitsbereich enthält eine projektweite Konfiguration für {{sourceAgent}}. Passende Konfiguration für {{targetAgent}} erstellen? Änderungen werden nur innerhalb dieses Arbeitsbereichs geschrieben.",
-        "primary": "Konvertieren",
-        "cancel": "Nein danke"
+        "title": "Diese Projekteinstellungen auch für {{targetAgent}} verwenden?",
+        "description": "Dieses Projekt enthält die folgenden Einstellungen für {{sourceAgent}}. Du kannst hier eine Kopie für {{targetAgent}} speichern oder die Aufgabe direkt starten.",
+        "primary": "Für {{targetAgent}} hinzufügen",
+        "cancel": "Aufgabe direkt starten"
       },
       "running": {
-        "title": "Konfiguration wird konvertiert…",
-        "description": "Arbeitsbereichskonfiguration für {{targetAgent}} wird geschrieben. Bitte schließe das Fenster nicht.",
-        "primary": "Konvertieren",
-        "cancel": "Nein danke"
+        "title": "Projekteinstellungen werden hinzugefügt…",
+        "description": "Die Einstellungen für {{targetAgent}} werden in diesem Projekt gespeichert.",
+        "primary": "Wird hinzugefügt…",
+        "cancel": "Aufgabe direkt starten"
+      },
+      "items": {
+        "agents-md": "Projektanweisungen und Richtlinien",
+        "agents": "Eigene Assistentenrollen",
+        "hooks": "Automatische Aktionen, etwa das Ausführen eines Projektskripts",
+        "mcp": "Verbindungen zu externen Werkzeugen"
       }
     },
     "confirmDialog": {

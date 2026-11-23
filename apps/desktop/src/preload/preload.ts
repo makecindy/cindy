@@ -239,6 +239,11 @@ import type {
   ImDefaultSettingsState,
 } from '../shared/imDefaultSettings';
 import type {
+  FeishuGroupSettingsList,
+  FeishuGroupSettingsPatch,
+  FeishuGroupSettingsView,
+} from '../shared/feishuGroupSettings';
+import type {
   SubagentModelSettingsPatch,
   SubagentModelSettingsState,
   SubagentModelSettingsWriteResult,
@@ -829,6 +834,10 @@ const fanOutGhostUnreadSnapshot = createIpcFanOut('ghosts:unread-snapshot');
 // main 只投单个窗口(不广播),所以这里落地的窗口就是该弹框的唯一归属。
 const fanOutGhostConfirmRequest = createIpcFanOut('ghosts:confirm-request');
 const fanOutGhostConfirmDismissed = createIpcFanOut('ghosts:confirm-dismissed');
+// 插件表单弹窗(form 槽:renderer 画主机表单,答复回 main)。main 只投获得焦点的那个窗口;
+// 超时或切账号时再发 dismissed 收起。
+const fanOutGhostFormRequest = createIpcFanOut('ghosts:form-request');
+const fanOutGhostFormDismissed = createIpcFanOut('ghosts:form-dismissed');
 const fanOutGhostModelPickerRequest = createIpcFanOut('ghosts:model-picker:request');
 const fanOutGhostModelPickerDismissed = createIpcFanOut('ghosts:model-picker:dismissed');
 const fanOutForgeOidcInstallConfirmRequest = createIpcFanOut('forge-oidc-install:confirm-request');
@@ -879,6 +888,7 @@ const fanOutMakerEvent = createIpcFanOut('maker:event');
 const fanOutMakerAgentsChanged = createIpcFanOut('maker:agents:changed');
 const fanOutMakerTurnChangeSetUpdated = createIpcFanOut('maker:turn-change-set:updated');
 const fanOutMakerStatusChanged = createIpcFanOut('maker:status-changed');
+const fanOutMakerAuxiliaryModelHealthChanged = createIpcFanOut('maker:auxiliary-model-health');
 const fanOutMakerInputProjection = createIpcFanOut('maker:input:projection');
 const fanOutMakerInteractionRequest = createIpcFanOut('maker:interaction-request');
 const fanOutMakerInteractionDismissed = createIpcFanOut('maker:interaction-dismissed');
@@ -1720,6 +1730,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // 管子请求。requestId 是 main 铸的,陌生/重复 id 由桥忽略。
     resolveConfirm: (requestId: string, confirmed: boolean): Promise<{ handled: boolean }> =>
       ipcRenderer.invoke('ghosts:confirm:resolve', { requestId, confirmed }),
+    onFormRequest: fanOutGhostFormRequest,
+    onFormDismissed: fanOutGhostFormDismissed,
+    // 表单弹窗回包(form 槽):main 只认投递目标窗口的回包,并按原表单收口 values。
+    resolveForm: (requestId: string, answer: import('../shared/ghostForm').GhostFormAnswer): Promise<{ handled: boolean }> =>
+      ipcRenderer.invoke('ghosts:form:resolve', { requestId, answer }),
     onForgeOidcInstallConfirmRequest: fanOutForgeOidcInstallConfirmRequest,
     resolveForgeOidcInstallConfirm: (
       requestId: string,
@@ -1858,6 +1873,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('plugin-market:lookup', ghostIds),
     query: (input: import('../shared/pluginMarket').PluginMarketQuery): Promise<import('../shared/pluginMarket').PluginMarketPage> =>
       ipcRenderer.invoke('plugin-market:query', input),
+    cancelOfficialModelPlugins: (): Promise<void> => ipcRenderer.invoke('plugin-market:cancel-official-model-plugins'),
+    officialModelPlugins: (cursor: string | null): Promise<import('../shared/pluginMarket').OfficialModelPluginPage> =>
+      ipcRenderer.invoke('plugin-market:official-model-plugins', cursor),
     recommendations: (): Promise<import('../shared/pluginMarket').PluginMarketItem[]> =>
       ipcRenderer.invoke('plugin-market:recommendations'),
     snapshot: (): Promise<import('../shared/pluginMarket').PluginMarketSnapshot> =>
@@ -8201,6 +8219,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:im-default-settings:set', patch, channel),
     imDefaultSettingsReset: (channel?: ImDefaultSettingsChannel): Promise<ImDefaultSettingsState> =>
       ipcRenderer.invoke('maker:im-default-settings:reset', channel),
+    /** 个人飞书 / Lark 机器人所在的群与各群单独的项目、模型、权限。 */
+    feishuGroupSettingsList: (options?: { refresh?: boolean; summary?: boolean }): Promise<FeishuGroupSettingsList> =>
+      ipcRenderer.invoke('maker:feishu-group-settings:list', {
+        refresh: options?.refresh === true,
+        summary: options?.summary === true,
+      }),
+    feishuGroupSettingsSet: (
+      chatId: string,
+      patch: FeishuGroupSettingsPatch,
+      name: string | null,
+    ): Promise<FeishuGroupSettingsView> =>
+      ipcRenderer.invoke('maker:feishu-group-settings:set', chatId, patch, name),
 
     /**
      * 子代理模型覆盖与 Codex 子代理护栏。null 表示不注入覆盖。Claude 字段对新建
@@ -8221,8 +8251,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:auxiliary-model-settings:get'),
     auxiliaryModelSettingsSet: (
       patch: AuxiliaryModelSettingsPatch,
-    ): Promise<AuxiliaryModelSettingsState> =>
+    ): Promise<import('../shared/auxiliaryModelSettings').AuxiliaryModelSaveResult> =>
       ipcRenderer.invoke('maker:auxiliary-model-settings:set', patch),
+    auxiliaryModelSettingsTest: (
+      patch: AuxiliaryModelSettingsPatch,
+    ): Promise<import('../shared/auxiliaryModelSettings').AuxiliaryModelSettingsTestResult> =>
+      ipcRenderer.invoke('maker:auxiliary-model-settings:test', patch),
+    auxiliaryModelHealthDismiss: (sessionId: string, noticeId: number): Promise<void> =>
+      ipcRenderer.invoke('maker:auxiliary-model-health:dismiss', sessionId, noticeId),
+    auxiliaryModelRouteHealthGet: (sessionId?: string): Promise<import('../shared/auxiliaryModelHealth').AuxiliaryModelHealthSnapshot[]> =>
+      ipcRenderer.invoke('maker:auxiliary-model-route-health:get', sessionId),
+    onAuxiliaryModelHealthChanged: fanOutMakerAuxiliaryModelHealthChanged,
     /** Whether any auxiliary model can run now; changes arrive as app-settings section `auxiliary-model-health`. */
     auxiliaryModelHealthGet: (): Promise<AuxiliaryModelHealth> =>
       ipcRenderer.invoke('maker:auxiliary-model-health:get'),

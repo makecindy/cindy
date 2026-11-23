@@ -92,6 +92,8 @@ import {
 } from '../cindy-brain/index.js';
 import { listPluginTargetCandidates, resolvePluginSessionTarget, resolvePluginTargetSession } from './pluginTargetCandidates.js';
 import { assertPluginObservableTask, listPluginObserveTasks } from './pluginObserveTasks.js';
+import { openPluginSession } from './pluginSessionNavigation.js';
+import { selectSessionWithCount } from '../localDb/sessionQueries.js';
 import { createPluginCompanionHost } from './pluginCompanionHost.js';
 import { createPluginTargetStore } from './pluginTargetStore.js';
 import { collectPluginAttachmentPayloadTexts, withPluginMessageAttachments } from '../cindy-media/pluginMessageAttachments.js';
@@ -101,6 +103,7 @@ import { createHash as pluginTaskConfigHash } from 'node:crypto';
 import { finishCompanionEnvironmentRemoval } from '../bot-import/runtime.js';
 import { setImportProbeConfirmation } from '../bot-import/probeAuthorization.js';
 import { requestHostInteraction, allowHostPagePermission } from './interactionRouter.js';
+import { schedulePendingInteractionTimeout, type PendingInteractionTimeoutEntry } from './interactionTimeout.js';
 import { createTaskActionConfirmation } from './taskActionConfirmation.js';
 import { readTaskActionInput } from './taskActionInput.js';
 import { registerMcpAppsIpc } from '../mcp-apps/ipc.js';
@@ -115,7 +118,7 @@ import { ensureManagedLlamaCppProvider } from '../local-model-runtime/managedLla
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
 import { countMachineRunningTasks } from '../machines/directory.js';
 import { configureLocalMachineActivity, readLocalMachineStatus } from '../machines/localStatus.js';
-import { getHostSourceDevice, getSelfDeviceId, onRemotePushChannel, remoteBackgroundInvoke, remoteInvoke as invokeBotPeer } from '../device-link/index.js';
+import { getHostSourceDevice, getRemoteLinkCloseEpoch, getSelfDeviceId, onRemotePushChannel, remoteBackgroundInvoke, remoteInvoke as invokeBotPeer } from '../device-link/index.js';
 import { getFeishuLocalDesktopPort } from '../feishu-local/desktopPort.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import { readDeviceProviderCatalog, readDeviceProviderViews, readRemoteProviderRoute, resolveDeviceHandoffWindow, type DeviceProviderCatalogRead } from '../remote-agent/controller/deviceCatalog.js';
@@ -219,7 +222,7 @@ import { ensureBotCanonicalSession } from './botCanonicalSessionEnsure.js';
  * 老的 cc-agent:* / codex:* IPC handler 完全不动，新链路与老链路并行。
  */
 
-import { readCodexContextWindowInfo } from '../maker-host/codex-context-window.js';
+import { readCodexContextWindowInfo, readCodexTaskContextWindowInfo } from '../maker-host/codex-context-window.js';
 import { readSshCodexModelList } from '../remote-ssh/codex-model-list.js';
 import { prepareCodexCustomContextCatalog } from '../maker-host/codex-custom-context-catalog.js';
 import { resolveConnectedDefaultProviderIdForModel } from '../maker-host/provider-route.js';
@@ -814,6 +817,7 @@ import { withSessionPermissionChange } from './sessionPermissionChange.js';
 import { retryBotWelcomePermissionDispatch, withBotPermissionChange } from './botPermissionDispatch.js';
 import { getPluginHostToolCaller } from '../mcp-integrations/hostToolCaller.js';
 import {
+  BotCapabilityRefreshDeferredError,
   botRuntimeRefreshNeedsReplacement,
   createBotCompactRuntimeRefreshCoordinator,
   prepareBotCapabilityEpochBeforeSend,
@@ -982,7 +986,7 @@ import {
 } from '../remote-ssh/index.js';
 import { recordSessionContextSnapshot } from '../sessionSpendBroadcaster.js';
 
-import { broadcastReferenceModelPricing } from '../usage/referenceModelPricing.js';
+import { broadcastReferenceModelPricing, displayPricingProvider } from '../usage/referenceModelPricing.js';
 import {
   clearModelPriceOverride,
   stageProviderModelPriceOverridesClear,
@@ -1300,6 +1304,7 @@ import {
   hasLocalAgentVisibleRuntime,
   takeOverLocalAgentVisibleSession,
 } from '../local-agent/visibleSessions.js';
+import { resolveLocalAgentClaudeSessionId } from '../local-agent/runtime.js';
 import { ingestChatImageFromPath } from '../cindy-media/chatAttachments.js';
 import { INPUT_HANDOFF_ENDED_PREFIX, UI_ACTION_TRIGGER_PREFIX, CONTINUE_AFTER_APP_EXIT_PROMPT } from '@cindy/maker-shared/synthetic-trigger';
 import {
@@ -3476,13 +3481,7 @@ async function prepareUserMessageForAgent(
  * do not expire. Native optional RPC questions have an idle timeout which stops
  * permanently when the user begins answering.
  */
-const PERMISSION_INTERACTION_TIMEOUT_MS = 10 * 60 * 1000;
-
-interface PendingInteractionEntry {
-  sharedPermission?: import('./sharedPermission').SharedPermission;
-  sessionId: string;
-  kind: InteractionRequest['kind'];
-  resolve: (decision: InteractionDecision) => void;
+interface PendingInteractionEntry extends PendingInteractionTimeoutEntry {
   /**
    * 原始 InteractionRequest —— 留着是为了 feishu 接管时能"重发"卡片到飞书,
    * 以及 GET_PENDING_INTERACTIONS 快照重建(新窗口/重连/刷新打开会话时重建面板)。
@@ -3493,12 +3492,6 @@ interface PendingInteractionEntry {
    * renderer,让重建出的 pending 复用同一条消息(按 requestId 去重,不产生重复气泡)。
    */
   persistId?: string;
-  timeoutId?: ReturnType<typeof setTimeout>;
-  timeoutDeadlineAt?: number;
-  timeoutRemainingMs?: number;
-  questionTimerSnoozed?: boolean;
-  /** IM owns presentation/timeouts; Host retains the execution and cancellation boundary. */
-  migrated?: boolean;
   deferredDecision?: InteractionDecision;
 }
 
@@ -3578,6 +3571,11 @@ const ghostSetupInteractionBridge = initGhostSetupInteractionBridge({
     // Setup waits are part of hasPendingAgentInteractionForSession, but bypass the router.
     // Refresh after the coordinator marks a terminal snapshot complete (before its UI grace).
     botGroupChatServiceHolder?.refreshPendingInteraction(value.sessionId);
+    if (value.request?.terminal === true || channel === MAKER_PUSH.INTERACTION_DISMISSED) {
+      if (!hasPendingAgentInteractionForSession(value.sessionId)) {
+        agentInputCoordinatorHolder?.onBotCapabilityRefreshReady(value.sessionId);
+      }
+    }
     if (channel === MAKER_PUSH.INTERACTION_REQUEST && value.request?.kind === 'plugin_setup') {
       if (!shouldNotifyAgentIslandForSession(value.sessionId)) return;
       if (value.request.terminal === true) {
@@ -3822,28 +3820,15 @@ function clearPendingInteraction(requestId: string): PendingInteractionEntry | n
   return entry;
 }
 
-/** Permission safety time counts only while its owning task can accept input. */
 function schedulePendingPermissionTimeout(requestId: string, entry: PendingInteractionEntry): void {
-  if (entry.migrated || entry.sharedPermission || (entry.kind !== 'permission' && !(entry.request.kind === 'ask_user_question' && entry.request.isBlocking === false && !entry.questionTimerSnoozed)) || entry.timeoutId !== undefined
-    || pendingInteractionResolvers.get(requestId) !== entry
-    || agentInputCoordinatorHolder?.isExecutionPaused(entry.sessionId)) return;
-  const remaining = entry.timeoutRemainingMs ?? (entry.kind === 'ask_user_question' ? 120_000 : PERMISSION_INTERACTION_TIMEOUT_MS);
-  entry.timeoutDeadlineAt = Date.now() + remaining;
-  entry.timeoutId = setTimeout(() => {
-    if (pendingInteractionResolvers.get(requestId) !== entry) return;
-    entry.timeoutId = undefined;
-    entry.timeoutRemainingMs = 0;
-    entry.timeoutDeadlineAt = undefined;
-    // Also guard an already-due callback at the pause boundary.
-    if (agentInputCoordinatorHolder?.isExecutionPaused(entry.sessionId)) return;
-    const pending = clearPendingInteraction(requestId);
-    if (!pending) return;
-    handleAgentIslandInteractionDismissed(entry.sessionId, requestId);
-    pending.resolve(entry.kind === 'ask_user_question'
-      ? { kind: 'ask_user_question', answers: {}, dismissed: true }
-      : { kind: 'permission', behavior: 'deny', reason: 'timeout' });
-    dismissRendererInteraction(pending, requestId, 'timeout', 'deny');
-  }, remaining);
+  schedulePendingInteractionTimeout(requestId, entry, {
+    getPending: id => pendingInteractionResolvers.get(id),
+    isExecutionPaused: sessionId => agentInputCoordinatorHolder?.isExecutionPaused(sessionId) ?? false,
+    clearPending: clearPendingInteraction,
+    dismiss: (pending, id) => handleAgentIslandInteractionDismissed(pending.sessionId, id),
+    publishTimeout: (pending, id) => dismissRendererInteraction(pending, id, 'timeout', 'deny'),
+    onInteractionTimedOut: sessionId => agentInputCoordinatorHolder?.onBotCapabilityRefreshReady(sessionId),
+  });
 }
 
 type RecoverableInteractionSnapshot =
@@ -3922,6 +3907,7 @@ const botCompactRuntimeRefreshCoordinator = createBotCompactRuntimeRefreshCoordi
   hasPendingInteraction: hasPendingAgentInteractionForSession,
   refresh: (session, boundary) =>
     botCompactRuntimeRefreshHandler?.(session, boundary) ?? Promise.resolve('deferred'),
+  onReady: (sessionId) => agentInputCoordinatorHolder?.onBotCapabilityRefreshReady(sessionId),
   onError: (sessionId, error) => {
     log.warn('Bot compact runtime refresh failed; lazy resume remains available', {
       sessionId,
@@ -4072,6 +4058,7 @@ function resolvePendingInteraction(requestId: string, decision: InteractionDecis
     (decision.kind !== 'ask_user_question' || decision.dismissed === true);
   if (plannedNoFollowUpTurn || askUserNoFollowUpTurn) {
     agentInputCoordinatorHolder?.onInteractionResolved(resolver.sessionId);
+    agentInputCoordinatorHolder?.onBotCapabilityRefreshReady(resolver.sessionId);
   }
   persistInteractionDecision(
     resolver.sessionId,
@@ -4400,12 +4387,13 @@ export function applyDirectoryGrants(
   options: ApplyDirectoryGrantsOptions,
 ): Promise<string[] | void> {
   return withSendToSessionLock(sessionId, async () => {
-    const [sourceRow] = await getDbClient()
-      .drizzle.select({ source: sessions.source })
+    const owner = getCurrentDbClientSnapshot();
+    const [taskRow] = await getDbClient()
+      .drizzle.select({ source: sessions.source, agentKind: sessions.agentKind })
       .from(sessions)
       .where(eq(sessions.id, sessionId))
       .limit(1);
-    if (sourceRow?.source === 'review') {
+    if (taskRow?.source === 'review') {
       throwIpcError('UNSUPPORTED_CAPABILITY', 'Review task settings are fixed to the source task');
     }
     const maker = getMaker();
@@ -4414,10 +4402,21 @@ export function applyDirectoryGrants(
       ? sess?.capabilities.extraDirs.supported
       : sess?.capabilities.writableDirs?.supported;
     const label = axis === 'extraDirs' ? 'set-extra-dirs' : 'set-writable-dirs';
-    if (sess && !supported) {
-      log.debug(`${label}: agent capability=false, no-op`, {
+    const agentKind = sess?.agentKind ?? taskRow?.agentKind;
+    const acpLibraryUpdate = options.replaceLibrarySlot && agentKind === 'acp';
+    // ACP does not implement directory grants. A cold task has only its stored engine kind.
+    if (sess ? !supported : acpLibraryUpdate) {
+      if (acpLibraryUpdate && requestedDirs.length === 0) {
+        // Revoke just the old host-owned slot without invoking an unsupported setter
+        // or revalidating the user's independent grants.
+        const { user, library } = splitExtraDirSlots(await readSessionExtraDirsFromDb(sessionId));
+        if (library.length && owner && getCurrentDbClientSnapshot() === owner && !isAppSessionBoundaryPending()) {
+          await persistSessionFields(sessionId, { extraDirs: user });
+        }
+      }
+      log.debug(`${label}: agent capability=false, skipped runtime update`, {
         sessionId,
-        agentKind: sess.agentKind,
+        agentKind,
       });
       return;
     }
@@ -4586,7 +4585,6 @@ async function syncLibraryReadonlyExtraDir(
       const remote = await sessionIsRemote(sessionId);
       if (generation !== libraryExtraDirSyncGeneration) return 'superseded';
       const nextRoot = !remote && grantRoot && sessionId === focused ? grantRoot : null;
-      if (nextRoot) focusedLocal = true;
       // 没有 Library 槽可撤、这次也不给：什么都不变，不碰运行中的会话。否则每次切换焦点都要把每个开着的任务的附加
       // 目录重新下发一遍，远程 Agent 那台恰好连不上时回滚失败、会话被关，正在跑的一轮就此中断(2026-10-11 实测)。
       // 运行时的 Library 槽只会来自已落库的那份(启动从库里读，改动先改运行时再落库，落库失败回滚)，库里没有即运行时没有。
@@ -4597,6 +4595,7 @@ async function syncLibraryReadonlyExtraDir(
       }
       try {
         const applied = await applyLibraryReadonlyExtraDir(sessionId, nextRoot);
+        if (nextRoot && applied !== undefined) focusedLocal = true;
         if (nextRoot && applied?.some(isLibraryExtraDirSlot)) granted = true;
       } catch (error) {
         log.warn('library extraDirs session sync failed', {
@@ -7593,6 +7592,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 改用不抛的判定决定「这次读取要不要放行本机绑定自愈 + 清单拉取」。
     isTrustedSender: (event) =>
       isTrustedAppRendererEvent(event as Parameters<typeof isTrustedAppRendererEvent>[0]),
+    isRemoteContextRead: () => isDeviceLinkInvoke()
+      && readDeviceLinkModelSelectionOrigin() === 'owner',
     // Independent subscription ids use the same account routing as native refresh;
     // their editable display names never select a provider or CLI profile.
     rediscoverModels: async (providerId) => {
@@ -7641,9 +7642,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     getLedgerCurrency: currentLedgerCurrency,
     readModelPriceOverride: (target) =>
-      readModelPriceOverrideView(target, getActiveCatalog().modelRegistry),
+      readModelPriceOverrideView(target, getActiveCatalog().modelRegistry, displayPricingProvider(target.providerId)),
     writeModelPriceOverride: (target, desired) =>
-      setModelPriceOverride(target, desired, getActiveCatalog().modelRegistry),
+      setModelPriceOverride(target, desired, getActiveCatalog().modelRegistry, displayPricingProvider(target.providerId)),
     clearModelPriceOverride,
     stageClearProviderModelPriceOverrides: stageProviderModelPriceOverridesClear,
     stageClearProviderModelCompaction: stageProviderModelCompactionClear,
@@ -7653,7 +7654,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     readCodexContextWindowInfo: async (target, sessionId) => {
       if (sessionId) {
         const session = maker.getSession(sessionId);
-        if (session) return session.agentKind === 'codex' ? session.getCodexContextWindowInfo() : null;
+        if (session || isDeviceLinkInvoke()) {
+          return readCodexTaskContextWindowInfo(target, sessionId, id => maker.getSession(id), getSessionProvider);
+        }
       }
       const configured = await readCodexContextWindowInfo({
         codexHome: getCodexHome(),
@@ -8018,7 +8021,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   setClaudeProxySessionIdResolver((sdkSessionId) => {
     if (isAppSessionBoundaryPending()) return null;
     const s = maker.listActiveSessions().find((x) => x.requestSessionId === sdkSessionId);
-    return s ? s.id : resolveRemoteAgentHostClaudeSessionId(sdkSessionId);
+    return s?.id
+      ?? resolveRemoteAgentHostClaudeSessionId(sdkSessionId)
+      ?? resolveLocalAgentClaudeSessionId(sdkSessionId);
   });
 
   // 会话移动转录迁移:活跃会话桥(查内存 sdkSessionId + 关闭 handle)。
@@ -9694,7 +9699,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // from the pre-switch row or close a healthy runtime after a failed switch.
       if (agentSwitchDeps.pendingSwitches?.get(expectedSession.id)) {
         await applyPendingAgentSwitchIfIdle(agentSwitchDeps, expectedSession.id, { bootstrapAfterSwitch: true });
-        return agentSwitchDeps.pendingSwitches?.get(expectedSession.id) ? 'deferred' : 'not-bot';
+        if (agentSwitchDeps.pendingSwitches?.get(expectedSession.id)) {
+          if (isRuntimeBusy()) return 'deferred';
+          // An idle retained intent has no runtime event to release the queue wait.
+          throw new Error('Pending agent switch did not apply during bot capability refresh');
+        }
+        return maker.getSession(expectedSession.id) !== expectedSession ? 'refreshed' : 'not-bot';
       }
 
       const createOpts = buildCreateOptsWithStderr({
@@ -9875,10 +9885,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       });
     }
     if (outcome === 'deferred') {
-      throwIpcError(
-        'PRECONDITION_FAILED',
-        '伙伴能力正在刷新，请稍后再发送',
-      );
+      throw new BotCapabilityRefreshDeferredError();
+    }
+    if (outcome === 'refresh-failed') {
+      throwIpcError('PRECONDITION_FAILED', '伙伴能力正在刷新，请稍后再发送');
     }
   }
 
@@ -15044,6 +15054,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       guard();
       openMainWindowSession(taskId, { focus: 'if-active' });
     },
+    openSession: (sessionId, deviceId, guard) => openPluginSession({
+      selfDeviceId: getSelfDeviceId,
+      closeEpoch: getRemoteLinkCloseEpoch,
+      readLocal: async id => {
+        const snapshot = getCurrentDbClientSnapshot();
+        if (!snapshot) throw new Error('HOST_NOT_READY');
+        return selectSessionWithCount(snapshot.client.drizzle, id);
+      },
+      readRemote: (device, id, preSend) => invokeBotPeer(device, 'local-db:sessions:get', [id], {
+        preSend, noResultCache: true,
+      }),
+      navigate: (id, device) => openMainWindowSession(id, { focus: 'if-active', deviceId: device }),
+    }, sessionId, deviceId, guard),
   });
   // cindy.companions: changes reach watching plugins as content-free notices (island activity, companion
   // homes, pushes from the computers companions run on); subscribed on first use, once the island service exists.
@@ -19070,7 +19093,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     installDesktopInteractionListener(session);
     pageApprovalSessions.set(request.requestId, session);
     try { return await requestHostInteraction(session, request, signal); }
-    finally { pageApprovalSessions.delete(request.requestId); }
+    finally {
+      pageApprovalSessions.delete(request.requestId);
+      // An App permission card can settle without a turn-ended event.
+      agentInputCoordinatorHolder?.onBotCapabilityRefreshReady(sessionId);
+    }
   }, async (sessionId, serverId, toolName, args, originDescription, toolDefinition) => {
     const session = maker.getSession(sessionId);
     if (!session) return { verdict: 'ask', unavailable: true };

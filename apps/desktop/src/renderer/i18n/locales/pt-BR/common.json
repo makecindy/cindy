@@ -4198,6 +4198,7 @@
         "refreshReconnect": "Não foi possível atualizar a lista de modelos. Reconecte este provedor e tente novamente.",
         "refreshFetchDisabled": "A busca no catálogo remoto de modelos está desativada — atualização ignorada",
         "withdrawn": {
+          "rowStatus": "Ausente na última atualização",
           "refreshFound": "Modelos que não são mais oferecidos: {{count}}",
           "refreshAdded": "Novos modelos: {{added}}. Não oferecidos mais: {{count}}",
           "refreshSuspicious": "Modelos não retornados desta vez: {{count}}. A lista pode estar incompleta",
@@ -4545,6 +4546,16 @@
         "groupLocal": "Modelos locais",
         "metaLocalRecommended": "Recomendado · baixe no Cindy",
         "metaLocalConnect": "Conectar um servidor local em execução",
+        "configurePlugin": "Configurar",
+        "installAndConfigure": "Instalar e configurar",
+        "pluginLoading": "Carregando o plugin…",
+        "engineState": {
+          "available": "Pronto",
+          "unavailable": "Indisponível",
+          "unknown": "Aguardando o estado do mecanismo"
+        },
+        "retryPlugin": "Tentar novamente",
+        "officialModelPlugins": "Plugins oficiais de modelos",
         "moreLocal": "Mais servidores locais"
       },
       "local": {
@@ -4869,7 +4880,70 @@
         "hint": "Envia uma mensagem privada pelo bot vinculado do Feishu ou Lark; apenas quando a janela está sem foco.",
         "disabledHint": "Primeiro configure o bot e envie uma mensagem privada a ele para concluir o vínculo."
       },
-      "bind": "Vincular"
+      "bind": "Vincular",
+      "groups": {
+        "title": "Conversas em grupo",
+        "description": "Defina um projeto, um modelo e permissões próprios para um grupo em que o bot está.",
+        "rules": "O que você não definir: um grupo com projeto segue esse projeto em Projetos e modelos; um grupo sem projeto segue a Configuração de novas conversas e o Modo de permissão para novas tarefas em grupo acima. A conversa principal de um grupo e seus tópicos compartilham a mesma configuração.",
+        "expand": "Expandir",
+        "collapse": "Recolher",
+        "groupCount_one": "{{count}} grupo",
+        "groupCount_other": "{{count}} grupos",
+        "groupCount_many": "{{count}} grupos",
+        "customCount_one": "{{count}} com configuração própria",
+        "customCount_other": "{{count}} com configuração própria",
+        "customCount_many": "{{count}} com configuração própria",
+        "refresh": "Atualizar",
+        "loading": "Carregando grupos…",
+        "loadFailed": "Não foi possível carregar os grupos. Tente de novo em instantes com Atualizar.",
+        "saveFailed": "Não foi possível salvar a configuração do grupo",
+        "notConnected": "Os grupos aparecem quando o bot está conectado. Abaixo aparecem só os grupos com configuração própria.",
+        "empty": "O bot ainda não está em nenhum grupo. Adicione-o a um grupo e volte aqui.",
+        "listPermission": "Não é possível ler os grupos do bot. Na Feishu Open Platform, conceda a este app a permissão para ler informações de grupos. Abaixo aparecem os grupos em que o bot já foi usado.",
+        "listUnavailable": "Não é possível ler os grupos do bot agora. Abaixo aparecem os grupos em que o bot já foi usado.",
+        "unnamed": "Grupo sem nome ({{id}})",
+        "summaryModel": "Modelo próprio",
+        "summaryPermission": "Permissões próprias",
+        "expandAria": "Configuração de {{name}}",
+        "searchLabel": "Buscar grupos",
+        "searchPlaceholder": "Buscar pelo nome do grupo",
+        "customHeading": "Configuração própria",
+        "followHeading": "Seguem a configuração do canal",
+        "showMore": "Mostrar mais {{count}}",
+        "showLess": "Mostrar menos",
+        "noMatch": "Nenhum grupo corresponde a \"{{query}}\"",
+        "project": {
+          "label": "Projeto",
+          "follow": "Conversa",
+          "missing": "{{name}} (não está mais na barra lateral)",
+          "hint": "Vale quando o bot é mencionado pela primeira vez no grupo, um tópico começa ou alguém envia /new. Tarefas em andamento não são movidas. Com um projeto, o modelo e as permissões seguem esse projeto em Projetos e modelos; com Conversa, as tarefas ficam na pasta de conversas do bot e seguem a Configuração de novas conversas acima. Só é possível escolher projetos da barra lateral deste computador."
+        },
+        "model": {
+          "label": "Modelo e esforço de raciocínio",
+          "hintFollow": "Segue a Configuração de novas conversas. Se você mudar aqui o modelo ou o esforço de raciocínio, vale só para este grupo.",
+          "hintFollowProject": "Segue o projeto \"{{project}}\" em Projetos e modelos. Se você mudar aqui o modelo ou o esforço de raciocínio, vale só para este grupo.",
+          "hintProjectUnavailable": "O modelo definido para \"{{project}}\" em Projetos e modelos não está disponível agora. Escolha outro lá ou um para este grupo aqui.",
+          "hintFixed": "Este grupo tem um modelo próprio. As tarefas deste grupo cujo modelo não foi alterado mudam na próxima mensagem; as novas tarefas usam este modelo."
+        },
+        "permission": {
+          "label": "Permissões",
+          "hintFollow": "Segue o Modo de permissão para novas tarefas em grupo. Só afeta as tarefas criadas neste grupo daqui em diante; mude uma tarefa existente com /permission no grupo.",
+          "hintFollowProject": "Segue as permissões de \"{{project}}\" em Projetos e modelos. Só afeta as tarefas criadas neste grupo daqui em diante; mude uma tarefa existente com /permission no grupo.",
+          "hintFixed": "Este grupo tem seu próprio modo de permissão. Só afeta as tarefas criadas neste grupo daqui em diante; mude uma tarefa existente com /permission no grupo."
+        },
+        "fullAccessConfirm": {
+          "title": "Usar Acesso total em {{name}}?",
+          "description": "As novas tarefas deste grupo vão rodar sem confirmar cada etapa, não importa quem mencione o bot. As mensagens do grupo são controladas pelos membros, então faça isso só se confiar em todos.",
+          "confirm": "Usar Acesso total",
+          "cancel": "Cancelar"
+        },
+        "widerConfirm": {
+          "title": "Ampliar as permissões de {{name}}?",
+          "description": "As novas tarefas deste grupo vão passar de \"{{current}}\" para \"{{next}}\", não importa quem mencione o bot. As mensagens do grupo são controladas pelos membros, então faça isso só se confiar em todos.",
+          "confirm": "Mudar mesmo assim",
+          "cancel": "Cancelar"
+        }
+      }
     },
     "wechatBot": {
       "title": "WeChat pessoal",
@@ -5480,6 +5554,69 @@
       "budget": "Desconto",
       "subscription": "Assinatura",
       "saveFailed": "Falha ao salvar as configurações de modelos auxiliares",
+      "testFailed": "Falha no teste de conexão de {{model}}",
+      "save": "Salvar modelos auxiliares",
+      "saving": "Salvando e testando…",
+      "saveSuccess": "Teste de conexão aprovado, modelos auxiliares ativados",
+      "retrySave": "Falha no teste de conexão. Corrija a conexão e tente salvar novamente.",
+      "notice": {
+        "auto-title": "Não foi possível dar um título à conversa automaticamente",
+        "title": "Não foi possível gerar um título para a conversa",
+        "task-summary": "Não foi possível resumir a tarefa",
+        "prompt-prediction": "Não foi possível sugerir o que digitar",
+        "working-status": "Não foi possível descrever o progresso",
+        "tool-loop-review": "Não foi possível verificar se as ferramentas repetiram ações",
+        "unavailable": "Uma função auxiliar não foi concluída",
+        "dismiss": "Fechar aviso",
+        "unavailableBody": "O modelo auxiliar está temporariamente indisponível.",
+        "recovered": "Modelo auxiliar restabelecido",
+        "recoveredBody": "A última solicitação auxiliar foi concluída com sucesso.",
+        "details": "Detalhes",
+        "settings": "Configurações do modelo auxiliar"
+      },
+      "viewSettings": "Ver configurações",
+      "healthRecent": "{{model}} teve taxa de sucesso recente de {{rate}}% · status: {{status}}.",
+      "lastError": "Último erro",
+      "healthPaused": "pausado",
+      "healthMonitoring": "em monitoramento",
+      "healthWarning": "{{model}} falhou {{count}} vezes recentemente ({{reason}}).",
+      "healthIsolated": "{{model}} foi pausado temporariamente ({{reason}}). {{switched}}",
+      "healthSwitched": "Um modelo reserva está sendo usado.",
+      "healthNoSwitch": "Nenhum modelo de reserva concluiu esta solicitação.",
+      "healthRecovered": "O modelo auxiliar {{model}} foi recuperado.",
+      "cannotEnable": "Não foi possível ativar este modelo",
+      "failedKeep": "Falha ao salvar. A configuração anterior continua ativa.",
+      "failedAuto": "Falha ao salvar. A seleção automática continua ativa.",
+      "failedSlot": "{{slot}} · {{model}} falhou no teste",
+      "testingHint": "Os modelos selecionados estão sendo testados em ordem. As alterações serão aplicadas quando todos passarem.",
+      "draft": "Alterações não salvas",
+      "restored": "Seleção automática restaurada",
+      "restoring": "Restaurando a seleção automática…",
+      "retryAction": "Tentar salvar novamente",
+      "attempts": "Falharam {{failed}} das últimas {{total}} tentativas.",
+      "http": {
+        "401": "Falha na autenticação",
+        "403": "Acesso negado",
+        "404": "Recurso solicitado não encontrado",
+        "429": "Solicitação limitada",
+        "server": "Erro no serviço do provedor",
+        "other": "Falha na solicitação"
+      },
+      "healthReasons": {
+        "http_error": "erro na solicitação upstream",
+        "timeout": "Tempo limite excedido",
+        "request_failed": "falha na solicitação",
+        "empty_response": "resposta vazia",
+        "model_unavailable": "Modelo indisponível",
+        "not_authenticated": "Autenticação necessária",
+        "auth_probe_failed": "falha na verificação de autenticação",
+        "api_key_missing": "chave de API ausente",
+        "endpoint_missing": "endpoint ausente",
+        "unsupported_transport": "protocolo sem suporte",
+        "agent_unavailable": "Agent indisponível",
+        "permission_denied": "Acesso negado (403). Verifique a permissão da conta para este modelo.",
+        "quota": "Verifique o saldo e a cota com o provedor."
+      },
       "chain": {
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 flash",
@@ -8582,6 +8719,8 @@
         "badgeDetail": "Quando houver novidades, pode mostrar um ponto verde na entrada Plugins da navegação à esquerda e no próprio cartão, com um resumo de uma linha. Abrir o painel remove o ponto. O ponto não emite som, não vibra, nunca aparece na central de notificações do sistema e é uma permissão separada das dicas do sistema.",
         "confirm": "Pode pedir sua confirmação em uma caixa de diálogo",
         "confirmDetail": "Antes de agir, ele pode abrir uma caixa de diálogo com a aparência da Cindy para fazer uma pergunta. A pergunta vem do plugin, identificado pelo nome na caixa de diálogo. Só você pode confirmar ou cancelar; o plugin não pode. Só pode haver uma caixa de diálogo por vez, e perguntas frequentes demais são bloqueadas.",
+        "form": "Pode pedir que você preencha um formulário",
+        "formDetail": "Ele pode abrir um formulário com a aparência dos formulários da Cindy para pedir informações. O formulário mostra o nome do plugin; o que você preencher só chega a ele quando você clica em Salvar, e nada é enviado se você cancelar. Só abre enquanto você está usando a Cindy, no máximo um formulário por vez, e pedidos frequentes demais são bloqueados.",
         "fsWrite": "Pode gerenciar seus arquivos privados",
         "fsWriteDetail": "Pode ler, gravar, listar e excluir seus próprios dados privados. Durante uma chamada ativa do Agent também pode ler, listar e monitorar o diretório de trabalho da tarefa. Gravações e exclusões seguem as permissões da tarefa; permitir uma gravação não permite excluir. O monitoramento termina com a chamada. O host executa todas as operações.",
         "deviceSync": "Sincronizar dados do plugin entre seus computadores",
@@ -8884,6 +9023,8 @@
         "slotNetwork": "Acesso à rede",
         "slotNotify": "Dicas do sistema",
         "slotBadge": "Indicador de não lidos",
+        "slotConfirm": "Caixas de diálogo de confirmação",
+        "slotForm": "Formulários",
         "slotFs": "Gravação de arquivos",
         "slotLibrary": "Biblioteca persistente",
         "slotSkill": "Skills do Agent",
@@ -9003,6 +9144,17 @@
       "saveAs": {
         "dialogTitle": "Plugin “{{name}}” — Salvar como",
         "dialogMessage": "O plugin “{{name}}” está solicitando que você salve uma cópia"
+      },
+      "form": {
+        "save": "Salvar",
+        "cancel": "Cancelar",
+        "addItem": "Adicionar",
+        "removeItem": "Remover",
+        "removeNamed": "Remover {{name}}",
+        "required": "Este campo é obrigatório",
+        "incomplete": "Há campos obrigatórios em branco",
+        "itemTitle": "{{label}} {{index}}",
+        "srDescription": "O plugin “{{name}}” pede que você preencha este formulário"
       },
       "confirm": {
         "dialogTitle": "O plugin “{{name}}” precisa da sua confirmação"
@@ -12929,16 +13081,22 @@
     "listSeparator": ", ",
     "crossAgentConvert": {
       "asking": {
-        "title": "Configuração de espaço de trabalho conversível detectada",
-        "description": "Este espaço de trabalho contém uma configuração de projeto para {{sourceAgent}}. Gerar uma configuração correspondente para {{targetAgent}}? As alterações serão gravadas apenas neste espaço de trabalho.",
-        "primary": "Converter",
-        "cancel": "Não, obrigado"
+        "title": "Usar estas configurações do projeto também com {{targetAgent}}?",
+        "description": "Este projeto já tem as configurações abaixo para {{sourceAgent}}. Você pode salvar aqui uma cópia para {{targetAgent}} ou iniciar a tarefa sem adicioná-las.",
+        "primary": "Adicionar a {{targetAgent}}",
+        "cancel": "Iniciar a tarefa"
       },
       "running": {
-        "title": "Convertendo configuração…",
-        "description": "Gravando configuração do espaço de trabalho para {{targetAgent}}. Não feche a janela.",
-        "primary": "Converter",
-        "cancel": "Não, obrigado"
+        "title": "Adicionando configurações do projeto…",
+        "description": "Salvando as configurações de {{targetAgent}} neste projeto.",
+        "primary": "Adicionando…",
+        "cancel": "Iniciar a tarefa"
+      },
+      "items": {
+        "agents-md": "Instruções e orientações do projeto",
+        "agents": "Funções personalizadas de assistente",
+        "hooks": "Ações automáticas, como executar um script do projeto",
+        "mcp": "Conexões com ferramentas externas"
       }
     },
     "confirmDialog": {

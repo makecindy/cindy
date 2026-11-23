@@ -6,10 +6,10 @@
  * reference later changes, the local patch wins and the UI exposes a conflict/reset state.
  */
 
-import type { AgentKind, ModelRegistry } from '@cindy/model-providers';
+import type { AgentKind, ModelRegistry, Provider } from '@cindy/model-providers';
 
-import { modelPricingKey } from '../../shared/modelPriceQuote.js';
-import { accountReferencePriceQuote as providerReferencePriceQuote } from './accountReferencePrice.js';
+import { modelCostQuote, modelPricingKey } from '../../shared/modelPriceQuote.js';
+import { accountReferencePriceQuote as providerReferencePriceQuote, providerRegistryTariffEndedAt, providerSnapshotReferencePriceQuote } from './accountReferencePrice.js';
 import type {
   ModelPriceOverrideDesiredQuote,
   ModelPriceOverrideTarget,
@@ -24,6 +24,8 @@ import type {
 import { ownerScopedUserDataPath } from '../appSessionState.js';
 import { createOverrideSettingsFile, portableOverrideSettings } from '../maker-host/override-settings-file.js';
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
+import { getActiveCatalog } from '../maker-host/active-catalog.js';
+import { currentLedgerCurrency } from './ledgerCurrency.js';
 
 const log = desktopMakerLogger.child('model-price-overrides');
 const STORE_VERSION = 1;
@@ -443,13 +445,33 @@ function readEntries(): Record<string, StoredModelPriceOverride> {
   return store.read().entries;
 }
 
+function currentConnectionReference(
+  target: ModelPriceOverrideTarget,
+  registry: ModelRegistry | null | undefined,
+  displayedProvider?: Provider,
+): ModelPriceQuote | undefined {
+  const { providerId, modelId, agent } = target;
+  const provider = displayedProvider ?? getActiveCatalog().providers.find(candidate => candidate.id === providerId);
+  const remote = provider
+    ? providerSnapshotReferencePriceQuote(provider, modelId, registry, {
+      agent, ...(provider.auth.method === 'oauth' && provider.auth.native ? { officialOnly: true } : {}),
+    })
+    : providerReferencePriceQuote(providerId, modelId, registry, { agent });
+  if (remote) return remote;
+  if (providerId === 'xd' || provider?.source !== 'user') return undefined;
+  const model = provider.models[agent]?.find(candidate => candidate.id === modelId);
+  if (!model?.cost || providerRegistryTariffEndedAt(provider, providerId, modelId, registry, undefined, agent)) {
+    return undefined;
+  }
+  return modelCostQuote(providerId, model);
+}
+
 export function readModelPriceOverrideView(
   target: ModelPriceOverrideTarget,
   registry: ModelRegistry | null | undefined,
+  displayedProvider?: Provider,
 ): ModelPriceOverrideView {
-  const reference = providerReferencePriceQuote(target.providerId, target.modelId, registry, {
-    agent: target.agent,
-  });
+  const reference = currentConnectionReference(target, registry, displayedProvider);
   const record = readEntries()[overrideKey(target)];
   const merged = mergedQuote(target, reference, record?.values, record?.baseReference);
   return {
@@ -460,7 +482,8 @@ export function readModelPriceOverrideView(
     override: record?.values ?? null,
     conflict: Boolean(record && !sameComparable(record.baseReference, comparable(reference))),
     registryUpdatedAt: registry?.updatedAt ?? null,
-    allowedCurrencies: ['USD', 'CNY'],
+    // Report the currencies accepted by the price override save handler.
+    allowedCurrencies: currentLedgerCurrency() === 'USD' ? ['USD'] : ['USD', 'CNY'],
   };
 }
 
@@ -468,13 +491,12 @@ export function setModelPriceOverride(
   target: ModelPriceOverrideTarget,
   desired: ModelPriceOverrideDesiredQuote,
   registry: ModelRegistry | null | undefined,
+  displayedProvider?: Provider,
 ): void {
   if (target.providerId === 'xd') {
     throw new Error('Cindy AI Gateway pricing cannot be overridden');
   }
-  const reference = providerReferencePriceQuote(target.providerId, target.modelId, registry, {
-    agent: target.agent,
-  });
+  const reference = currentConnectionReference(target, registry, displayedProvider);
   const baseReference = comparable(reference);
   const values = sparseValues(desired, baseReference);
   const entries = { ...readEntries() };

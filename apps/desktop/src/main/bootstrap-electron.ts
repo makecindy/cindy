@@ -1082,6 +1082,7 @@ import {
 import { registerWorkingStatusIpc } from './maker-ipc/workingStatus.js';
 import { registerMakerTitleIpc } from './maker-ipc/title.js';
 import { registerAuxiliaryModelSettingsIpc } from './maker-ipc/auxiliary-model-settings.js';
+import { setAuxiliaryModelHealthBroadcaster } from './utility-model/auxiliary-model-health.js';
 import { registerMakerHelpIpc } from './maker-ipc/help.js';
 import { registerHelpFeedbackIpc } from './maker-ipc/help-feedback.js';
 import { registerMyIssuesIpc } from './maker-ipc/my-issues.js';
@@ -1303,6 +1304,8 @@ import { getResolvedMainLocale, setMainClassicalStyle, setMainLocale, t } from '
 import { isClassicalReplyStyle } from '@cindy/maker-shared/classical-reply';
 import { registerModelGroupDecisionIpc } from './model-groups/decisionIpc.js';
 import { registerModelGroupsIpc } from './model-groups/ipc.js';
+import { registerFeishuGroupSettingsIpc } from './im/feishu/groupSettingsIpc.js';
+import { wireFeishuGroupProjectPorts } from './im/feishu/groupProjectPortsWiring.js';
 import { requireObject, requireString, throwIpcError } from './utils/ipcValidate.js';
 import { pickNativeAtResource } from './nativeAtResourcePicker.js';
 // Scheduler (Phase 3) — 启动单例需要 maker / localDb / mainWindow 都 ready，但
@@ -5744,6 +5747,8 @@ const registerIpcHandlers = () => {
     }
     return imDefaultSettingsWire(channel);
   });
+  wireFeishuGroupProjectPorts();
+  registerFeishuGroupSettingsIpc();
   registerModelGroupsIpc();
   registerModelGroupDecisionIpc();
   ipcMain.handle(MAKER_IPC_INVOKE.SUBAGENT_MODEL_SETTINGS_GET, async () => {
@@ -7320,6 +7325,11 @@ const registerIpcHandlers = () => {
       });
       registerMakerTitleIpc({ isSessionTurnPendingCompletion });
       registerWorkingStatusIpc();
+      setAuxiliaryModelHealthBroadcaster((channel, payload) => {
+        for (const win of BrowserWindow.getAllWindows()) {
+          if (isTrustedAppRendererWindow(win)) win.webContents.send(channel, payload);
+        }
+      });
       registerAuxiliaryModelSettingsIpc();
       registerMakerHelpIpc(ipcMaker);
       registerHelpFeedbackIpc();

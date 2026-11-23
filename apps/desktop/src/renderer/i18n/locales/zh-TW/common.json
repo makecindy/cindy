@@ -4102,6 +4102,7 @@
         "refreshReconnect": "模型列表重新整理失敗。重新連線此供應商後再試。",
         "refreshFetchDisabled": "模型目錄遠端擷取未啟用，已跳過重新整理",
         "withdrawn": {
+          "rowStatus": "上次重新整理未列出",
           "refreshFound": "有 {{count}} 個模型上游已不再提供",
           "refreshAdded": "新增 {{added}} 個模型，另有 {{count}} 個上游已不再提供",
           "refreshSuspicious": "這次有 {{count}} 個模型沒回傳，可能是上游暫時回傳不完整",
@@ -4446,6 +4447,16 @@
         "groupLocal": "本機模型",
         "metaLocalRecommended": "推薦 · 在 Cindy 內下載",
         "metaLocalConnect": "連接已執行的本機服務",
+        "configurePlugin": "設定",
+        "installAndConfigure": "安裝並設定",
+        "pluginLoading": "正在讀取插件…",
+        "engineState": {
+          "available": "已就緒",
+          "unavailable": "無法使用",
+          "unknown": "等待引擎回報狀態"
+        },
+        "retryPlugin": "重試",
+        "officialModelPlugins": "官方模型插件",
         "moreLocal": "更多本機服務"
       },
       "local": {
@@ -4770,7 +4781,68 @@
         "hint": "透過已繫結的飛書或 Lark 機器人私訊你一則訊息；僅在視窗失焦時傳送。",
         "disabledHint": "需要先設定 Bot 並傳送一則訊息給它，以完成繫結。"
       },
-      "bind": "繫結"
+      "bind": "繫結",
+      "groups": {
+        "title": "群組",
+        "description": "為機器人所在的某個群組單獨指定專案、模型與權限。",
+        "rules": "沒有單獨設定的項目：已選擇專案的群組跟隨「專案與模型」裡那個專案的設定，未選擇專案的群組跟隨上方的「新對話配置」與「群組新任務的權限模式」。群組主線與群組裡的話題共用同一個群組的設定。",
+        "expand": "展開",
+        "collapse": "收起",
+        "groupCount_one": "{{count}} 個群組",
+        "groupCount_other": "{{count}} 個群組",
+        "customCount_one": "{{count}} 個單獨設定",
+        "customCount_other": "{{count}} 個單獨設定",
+        "refresh": "重新整理",
+        "loading": "正在讀取群組列表…",
+        "loadFailed": "讀取群組列表失敗，請稍後點「重新整理」重試。",
+        "saveFailed": "儲存群組設定失敗",
+        "notConnected": "機器人連上後才能列出它所在的群組。下方只列出已單獨設定過的群組。",
+        "empty": "機器人還沒有加入任何群組。把機器人拉進群組後，再來這裡設定。",
+        "listPermission": "讀不到機器人所在的群組：請在飛書開放平台為這個應用開通「獲取群組資訊」權限。下方先列出機器人用過的群組。",
+        "listUnavailable": "暫時讀不到機器人所在的群組，下方先列出機器人用過的群組。",
+        "unnamed": "未命名的群組（{{id}}）",
+        "summaryModel": "單獨設定了模型",
+        "summaryPermission": "單獨設定了權限",
+        "expandAria": "設定「{{name}}」",
+        "searchLabel": "搜尋群組",
+        "searchPlaceholder": "依群組名稱搜尋",
+        "customHeading": "單獨設定",
+        "followHeading": "跟隨頻道設定",
+        "showMore": "再顯示 {{count}} 個",
+        "showLess": "收起",
+        "noMatch": "找不到名稱包含「{{query}}」的群組",
+        "project": {
+          "label": "專案",
+          "follow": "對話",
+          "missing": "{{name}}（已不在側欄）",
+          "hint": "在群組裡第一次 @ 機器人、開新話題或傳送 /new 時生效，進行中的任務不會被移走。選專案時，模型與權限預設跟隨這個專案在「專案與模型」裡的設定；選「對話」時任務放在機器人的對話目錄裡，跟隨上方的「新對話配置」。只能選擇側欄裡的本機專案。"
+        },
+        "model": {
+          "label": "模型和推理強度",
+          "hintFollow": "跟隨「新對話配置」。在這裡更換模型或推理強度，就只對這個群組生效。",
+          "hintFollowProject": "跟隨專案「{{project}}」在「專案與模型」裡的設定。在這裡更換模型或推理強度，就只對這個群組生效。",
+          "hintProjectUnavailable": "專案「{{project}}」在「專案與模型」裡設定的模型目前無法使用。可以到那裡重新選擇，或在這裡為這個群組單獨選一個。",
+          "hintFixed": "這個群組單獨設定了模型。群組裡沒有單獨改過模型的任務，收到下一則訊息時會切換過去；新任務直接使用它。"
+        },
+        "permission": {
+          "label": "權限",
+          "hintFollow": "目前跟隨「群組新任務的權限模式」。只影響之後在這個群組新建的任務，已有任務在群組裡用 /permission 切換。",
+          "hintFollowProject": "目前跟隨專案「{{project}}」在「專案與模型」裡的權限。只影響之後在這個群組新建的任務，已有任務在群組裡用 /permission 切換。",
+          "hintFixed": "這個群組單獨設定了權限。只影響之後在這個群組新建的任務，已有任務在群組裡用 /permission 切換。"
+        },
+        "fullAccessConfirm": {
+          "title": "讓「{{name}}」以完全存取執行？",
+          "description": "之後在這個群組新建的任務都會直接執行、不再逐項確認，群組裡任何人 @ 機器人都一樣。群組內容由成員控制，請確認群組成員都可信。",
+          "confirm": "改為完全存取",
+          "cancel": "取消"
+        },
+        "widerConfirm": {
+          "title": "放寬「{{name}}」的權限？",
+          "description": "之後在這個群組新建的任務會從「{{current}}」變成「{{next}}」，群組裡任何人 @ 機器人都一樣。群組內容由成員控制，請確認群組成員都可信。",
+          "confirm": "仍然變更",
+          "cancel": "取消"
+        }
+      }
     },
     "wechatBot": {
       "title": "個人微信",
@@ -5379,6 +5451,69 @@
       "budget": "折扣",
       "subscription": "訂閱",
       "saveFailed": "儲存輔助模型設定失敗",
+      "testFailed": "模型連線測試失敗：{{model}}",
+      "save": "儲存輔助模型",
+      "saving": "正在儲存並測試…",
+      "saveSuccess": "連線測試通過，輔助模型已啟用",
+      "retrySave": "連線測試失敗，請修復連線後重試儲存。",
+      "notice": {
+        "auto-title": "無法自動產生對話標題",
+        "title": "無法產生對話標題",
+        "task-summary": "無法產生任務摘要",
+        "prompt-prediction": "無法產生輸入建議",
+        "working-status": "無法產生進度說明",
+        "tool-loop-review": "無法檢查工具是否重複執行",
+        "unavailable": "一項輔助功能未能完成",
+        "dismiss": "關閉提示",
+        "unavailableBody": "輔助模型暫時無法使用。",
+        "recovered": "輔助模型已恢復",
+        "recoveredBody": "最近一次輔助請求已成功。",
+        "details": "詳細資料",
+        "settings": "輔助模型設定"
+      },
+      "viewSettings": "查看設定",
+      "healthRecent": "{{model}} 最近成功率 {{rate}}% · 目前狀態：{{status}}。",
+      "lastError": "最後錯誤",
+      "healthPaused": "已暫停",
+      "healthMonitoring": "監測中",
+      "healthWarning": "{{model}} 最近失敗 {{count}} 次（{{reason}}）。",
+      "healthIsolated": "{{model}} 已暫時暫停（{{reason}}）。{{switched}}",
+      "healthSwitched": "正在使用備用模型。",
+      "healthNoSwitch": "此次輔助請求未取得備用模型的結果。",
+      "healthRecovered": "輔助模型 {{model}} 已恢復。",
+      "cannotEnable": "無法啟用這個模型",
+      "failedKeep": "儲存失敗，仍使用原設定",
+      "failedAuto": "儲存失敗，仍使用自動選擇",
+      "failedSlot": "{{slot}} · {{model}} 測試失敗",
+      "testingHint": "正在逐一測試所選模型，全部通過後才會啟用新設定。",
+      "draft": "變更尚未儲存",
+      "restored": "已恢復自動選擇",
+      "restoring": "正在恢復自動選擇…",
+      "retryAction": "重新儲存",
+      "attempts": "最近 {{total}} 次請求中有 {{failed}} 次失敗。",
+      "http": {
+        "401": "驗證失敗",
+        "403": "存取遭拒",
+        "404": "找不到要求的資源",
+        "429": "請求受限",
+        "server": "供應商服務發生錯誤",
+        "other": "請求失敗"
+      },
+      "healthReasons": {
+        "http_error": "上游請求錯誤",
+        "timeout": "請求逾時",
+        "request_failed": "請求失敗",
+        "empty_response": "回應為空",
+        "model_unavailable": "模型無法使用",
+        "not_authenticated": "尚未驗證",
+        "auth_probe_failed": "驗證檢查失敗",
+        "api_key_missing": "缺少 API 金鑰",
+        "endpoint_missing": "缺少端點",
+        "unsupported_transport": "不支援的協定",
+        "agent_unavailable": "Agent 不可用",
+        "permission_denied": "供應商拒絕存取（403）。請確認帳號有權使用此模型。",
+        "quota": "請向供應商確認餘額與剩餘配額。"
+      },
       "chain": {
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 Flash",
@@ -8467,6 +8602,8 @@
         "badgeDetail": "有新內容時，它可以在左側導航的插件入口和自己的卡片上點亮一個綠點，並附一句話摘要；你開啟它的面板即清零。綠點不出聲、不震動，也不會進入系統通知中心，和上面的系統提示是兩項獨立權限。",
         "confirm": "可彈出確認框徵求你同意",
         "confirmDetail": "它動手前可以彈一個和 Cindy 同款的確認框來問你，問句由它提供、框上會標註它的名字；同意還是取消都由你親手點，它自己點不了。同時最多一個確認框，彈得太頻會被攔下。",
+        "form": "可彈出表單請你填寫",
+        "formDetail": "它可以彈一個和 Cindy 同款的表單請你填寫，表單上會標註它的名字；填好的內容只有你點「儲存」後才交給它，點取消什麼都不給。只在你正看著 Cindy 時彈出，同時最多一個表單，彈得太頻會被攔下。",
         "fsWrite": "可管理自己的私有檔案",
         "fsWriteDetail": "可讀寫、列舉和刪除自己的私有資料。當前 Agent 呼叫期間，也可讀取、列舉和監聽任務的工作目錄。寫入與刪除沿用任務權限；允許寫入不代表允許刪除。呼叫結束即停止監聽。檔案操作均由宿主執行。",
         "deviceSync": "在你的電腦間同步插件資料",
@@ -8769,6 +8906,8 @@
         "slotNetwork": "網路存取",
         "slotNotify": "系統提示",
         "slotBadge": "未讀角標",
+        "slotConfirm": "確認彈窗",
+        "slotForm": "表單彈窗",
         "slotFs": "寫檔案",
         "slotLibrary": "持久作品庫",
         "slotSkill": "Agent 技能",
@@ -8888,6 +9027,17 @@
       "saveAs": {
         "dialogTitle": "插件「{{name}}」另存為",
         "dialogMessage": "插件「{{name}}」請求你另存一份拷貝"
+      },
+      "form": {
+        "save": "儲存",
+        "cancel": "取消",
+        "addItem": "新增",
+        "removeItem": "刪除",
+        "removeNamed": "刪除「{{name}}」",
+        "required": "這一項必填",
+        "incomplete": "還有必填項沒填",
+        "itemTitle": "{{label}} {{index}}",
+        "srDescription": "插件「{{name}}」請你填寫"
       },
       "confirm": {
         "dialogTitle": "插件「{{name}}」請你確認"
@@ -12783,16 +12933,22 @@
     "listSeparator": "、",
     "crossAgentConvert": {
       "asking": {
-        "title": "偵測到可轉換的工作區設定",
-        "description": "目前工作區包含 {{sourceAgent}} 的專案層級設定。是否為 {{targetAgent}} 產生對應設定？這些變更只會寫入目前的工作區目錄。",
-        "primary": "轉換",
-        "cancel": "不要"
+        "title": "要讓 {{targetAgent}} 也使用這些專案設定嗎？",
+        "description": "這個專案已為 {{sourceAgent}} 設定好以下項目。你可以在專案裡為 {{targetAgent}} 加入一份，也可以直接開始任務。",
+        "primary": "加入 {{targetAgent}}",
+        "cancel": "直接開始任務"
       },
       "running": {
-        "title": "正在轉換設定…",
-        "description": "正在為 {{targetAgent}} 寫入工作區設定，請勿關閉視窗。",
-        "primary": "轉換",
-        "cancel": "不要"
+        "title": "正在加入專案設定…",
+        "description": "正在將 {{targetAgent}} 的設定儲存到目前的專案。",
+        "primary": "正在加入…",
+        "cancel": "直接開始任務"
+      },
+      "items": {
+        "agents-md": "專案說明與工作約定",
+        "agents": "專案自訂的助手角色",
+        "hooks": "自動執行的動作（例如執行專案指令碼）",
+        "mcp": "外部工具連線"
       }
     },
     "confirmDialog": {

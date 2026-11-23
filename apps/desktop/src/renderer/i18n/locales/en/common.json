@@ -4144,6 +4144,7 @@
         "refreshReconnect": "Model list couldn’t be refreshed. Reconnect this provider, then try again.",
         "refreshFetchDisabled": "Remote model catalog fetching is disabled — refresh skipped",
         "withdrawn": {
+          "rowStatus": "Not listed at last refresh",
           "refreshFound": "No longer offered upstream: {{count}}",
           "refreshAdded": "New models: {{added}}. No longer offered upstream: {{count}}",
           "refreshSuspicious": "Not returned this time: {{count}}. The upstream list may be incomplete",
@@ -4489,6 +4490,16 @@
         "groupLocal": "Local models",
         "metaLocalRecommended": "Recommended · download in Cindy",
         "metaLocalConnect": "Connect a running local server",
+        "configurePlugin": "Configure",
+        "installAndConfigure": "Install and configure",
+        "pluginLoading": "Loading plugin…",
+        "engineState": {
+          "available": "Ready",
+          "unavailable": "Unavailable",
+          "unknown": "Waiting for engine status"
+        },
+        "retryPlugin": "Retry",
+        "officialModelPlugins": "Official model plugins",
         "moreLocal": "More local servers"
       },
       "local": {
@@ -4813,7 +4824,68 @@
         "hint": "Sends a private message via the linked Feishu or Lark bot; only when the window is unfocused.",
         "disabledHint": "First set up the bot and DM it once to complete binding."
       },
-      "bind": "Bind"
+      "bind": "Bind",
+      "groups": {
+        "title": "Group chats",
+        "description": "Give a group the bot is in its own project, model and permissions.",
+        "rules": "Anything you don’t set: a group with a project follows that project in Projects and models; a group without one follows New Conversation Configuration and Permission mode for new group tasks above. A group’s main chat and its topics share one setting.",
+        "expand": "Expand",
+        "collapse": "Collapse",
+        "groupCount_one": "{{count}} group",
+        "groupCount_other": "{{count}} groups",
+        "customCount_one": "{{count}} customized",
+        "customCount_other": "{{count}} customized",
+        "refresh": "Refresh",
+        "loading": "Loading groups…",
+        "loadFailed": "Couldn’t load groups. Try Refresh in a moment.",
+        "saveFailed": "Couldn’t save group settings",
+        "notConnected": "Groups are listed once the bot is connected. Only groups with their own settings are shown below.",
+        "empty": "The bot isn’t in any group yet. Add it to a group, then come back here.",
+        "listPermission": "Can’t read the bot’s groups. In the Feishu Open Platform, give this app permission to read group information. Groups the bot has already been used in are listed below.",
+        "listUnavailable": "Can’t read the bot’s groups right now. Groups the bot has already been used in are listed below.",
+        "unnamed": "Unnamed group ({{id}})",
+        "summaryModel": "Own model",
+        "summaryPermission": "Own permissions",
+        "expandAria": "Settings for {{name}}",
+        "searchLabel": "Search groups",
+        "searchPlaceholder": "Search by group name",
+        "customHeading": "Own settings",
+        "followHeading": "Following channel settings",
+        "showMore": "Show {{count}} more",
+        "showLess": "Show less",
+        "noMatch": "No groups match “{{query}}”",
+        "project": {
+          "label": "Project",
+          "follow": "Chat",
+          "missing": "{{name}} (no longer in the sidebar)",
+          "hint": "Applies when the bot is first @mentioned in the group, a topic starts, or someone sends /new. Tasks in progress aren’t moved. With a project, the model and permissions follow that project in Projects and models; with Chat, tasks stay in the bot’s conversation folder and follow New Conversation Configuration above. Only projects in this computer’s sidebar can be chosen."
+        },
+        "model": {
+          "label": "Model and reasoning effort",
+          "hintFollow": "Follows New Conversation Configuration. Changing the model or reasoning effort here applies to this group only.",
+          "hintFollowProject": "Follows the project “{{project}}” in Projects and models. Changing the model or reasoning effort here applies to this group only.",
+          "hintProjectUnavailable": "The model set for “{{project}}” in Projects and models isn’t available right now. Choose another one there, or pick one for this group here.",
+          "hintFixed": "This group has its own model. Tasks in this group whose model hasn’t been changed switch on their next message; new tasks use this model."
+        },
+        "permission": {
+          "label": "Permissions",
+          "hintFollow": "Follows Permission mode for new group tasks. Only affects tasks created in this group from now on; switch an existing task with /permission in the group.",
+          "hintFollowProject": "Follows the permissions of “{{project}}” in Projects and models. Only affects tasks created in this group from now on; switch an existing task with /permission in the group.",
+          "hintFixed": "This group has its own permission mode. Only affects tasks created in this group from now on; switch an existing task with /permission in the group."
+        },
+        "fullAccessConfirm": {
+          "title": "Use Full access in {{name}}?",
+          "description": "New tasks in this group will run without per-step confirmation, no matter who @mentions the bot. Group messages are controlled by its members, so only do this if you trust everyone in the group.",
+          "confirm": "Use Full access",
+          "cancel": "Cancel"
+        },
+        "widerConfirm": {
+          "title": "Loosen permissions in {{name}}?",
+          "description": "New tasks in this group will go from {{current}} to {{next}}, no matter who @mentions the bot. Group messages are controlled by its members, so only do this if you trust everyone in the group.",
+          "confirm": "Change anyway",
+          "cancel": "Cancel"
+        }
+      }
     },
     "wechatBot": {
       "title": "Personal WeChat",
@@ -5422,6 +5494,69 @@
       "budget": "Discount",
       "subscription": "Subscription",
       "saveFailed": "Failed to save auxiliary model settings",
+      "testFailed": "Connection test failed for {{model}}",
+      "save": "Save auxiliary models",
+      "saving": "Saving and testing…",
+      "saveSuccess": "Connection test passed, auxiliary models enabled",
+      "retrySave": "Connection test failed. Fix the connection and retry saving.",
+      "notice": {
+        "auto-title": "Couldn’t automatically title this chat",
+        "title": "Couldn’t generate a chat title",
+        "task-summary": "Couldn’t summarize the task",
+        "prompt-prediction": "Couldn’t suggest what to type next",
+        "working-status": "Couldn’t generate a progress update",
+        "tool-loop-review": "Couldn’t check for repeated tool actions",
+        "unavailable": "An auxiliary feature couldn’t finish",
+        "dismiss": "Dismiss notice",
+        "unavailableBody": "The auxiliary model is temporarily unavailable.",
+        "recovered": "Auxiliary model recovered",
+        "recoveredBody": "The latest auxiliary request succeeded.",
+        "details": "Details",
+        "settings": "Auxiliary model settings"
+      },
+      "viewSettings": "View settings",
+      "healthRecent": "{{model}} recent success rate {{rate}}% · {{status}}.",
+      "lastError": "Last error",
+      "healthPaused": "paused",
+      "healthMonitoring": "being monitored",
+      "healthWarning": "{{model}} has failed {{count}} times recently ({{reason}}).",
+      "healthIsolated": "{{model}} is temporarily paused ({{reason}}). {{switched}}",
+      "healthSwitched": "A backup model is being used.",
+      "healthNoSwitch": "No backup model completed this request.",
+      "healthRecovered": "Auxiliary model {{model}} has recovered.",
+      "cannotEnable": "Unable to enable this model",
+      "failedKeep": "Save failed. Your previous settings are still active.",
+      "failedAuto": "Save failed. Automatic selection is still active.",
+      "failedSlot": "{{slot}} · {{model}} failed its test",
+      "testingHint": "Testing the selected models in order. Your changes take effect once every model passes.",
+      "draft": "Unsaved changes",
+      "restored": "Automatic selection restored",
+      "restoring": "Restoring automatic selection…",
+      "retryAction": "Retry save",
+      "attempts": "{{failed}} of the last {{total}} attempts failed.",
+      "http": {
+        "401": "Authentication failed",
+        "403": "Access denied",
+        "404": "Requested resource not found",
+        "429": "Request limited",
+        "server": "Provider service error",
+        "other": "Request failed"
+      },
+      "healthReasons": {
+        "http_error": "upstream request error",
+        "timeout": "The request timed out",
+        "request_failed": "request failed",
+        "empty_response": "empty response",
+        "model_unavailable": "Model unavailable",
+        "not_authenticated": "Not authenticated",
+        "auth_probe_failed": "authentication check failed",
+        "api_key_missing": "API key missing",
+        "endpoint_missing": "endpoint missing",
+        "unsupported_transport": "unsupported protocol",
+        "agent_unavailable": "agent unavailable",
+        "permission_denied": "The provider denied access (403). Check whether your account can use this model.",
+        "quota": "Check your balance or quota with the provider."
+      },
       "chain": {
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 flash",
@@ -8510,6 +8645,8 @@
         "badgeDetail": "When it has something new, it can show a green dot on the Plugins entry in the left navigation and on its own card, with a one-line summary. Opening its panel clears the dot. The dot makes no sound, does not vibrate, never reaches your system notification center, and is a permission separate from system tips.",
         "confirm": "Can ask for your confirmation in a dialog",
         "confirmDetail": "Before acting it can open a dialog that looks like Cindy's own to ask you. The question comes from the plugin and the dialog is labeled with its name; only you can click confirm or cancel — the plugin cannot. At most one dialog at a time, and asking too often is blocked.",
+        "form": "Can ask you to fill in a form",
+        "formDetail": "It can open a form that looks like Cindy's own and ask you to fill it in. The form is labeled with the plugin's name; what you enter reaches the plugin only after you click Save, and nothing is sent if you cancel. It opens only while you're looking at Cindy, at most one form at a time, and asking too often is blocked.",
         "fsWrite": "Can manage its private files",
         "fsWriteDetail": "Can read, write, list and delete its own private data. During an Agent call, it can also read, list and watch the task's working directory. Writes and deletions follow the task's permissions; approving a write does not approve deletion. Watching stops when the call ends. All file operations run in the host.",
         "deviceSync": "Sync plugin data between your computers",
@@ -8812,6 +8949,8 @@
         "slotNetwork": "Network access",
         "slotNotify": "System tips",
         "slotBadge": "Unread badge",
+        "slotConfirm": "Confirmation dialogs",
+        "slotForm": "Form dialogs",
         "slotFs": "File writing",
         "slotLibrary": "Durable library",
         "slotSkill": "Agent skills",
@@ -8931,6 +9070,17 @@
       "saveAs": {
         "dialogTitle": "Plugin “{{name}}” — Save As",
         "dialogMessage": "Plugin “{{name}}” is asking you to save a copy"
+      },
+      "form": {
+        "save": "Save",
+        "cancel": "Cancel",
+        "addItem": "Add",
+        "removeItem": "Remove",
+        "removeNamed": "Remove {{name}}",
+        "required": "This field is required",
+        "incomplete": "Some required fields are empty",
+        "itemTitle": "{{label}} {{index}}",
+        "srDescription": "Plugin “{{name}}” asks you to fill in this form"
       },
       "confirm": {
         "dialogTitle": "Plugin “{{name}}” needs your confirmation"
@@ -12829,16 +12979,22 @@
     "listSeparator": ", ",
     "crossAgentConvert": {
       "asking": {
-        "title": "Convertible workspace config detected",
-        "description": "This workspace contains project-level config for {{sourceAgent}}. Generate matching config for {{targetAgent}}? Changes are written only inside this workspace.",
-        "primary": "Convert",
-        "cancel": "No thanks"
+        "title": "Use these project settings with {{targetAgent}} too?",
+        "description": "This project already has these settings for {{sourceAgent}}. You can save a copy here for {{targetAgent}} or start the task without adding them.",
+        "primary": "Add to {{targetAgent}}",
+        "cancel": "Start task now"
       },
       "running": {
-        "title": "Converting config…",
-        "description": "Writing workspace config for {{targetAgent}}. Don’t close the window.",
-        "primary": "Convert",
-        "cancel": "No thanks"
+        "title": "Adding project settings…",
+        "description": "Saving settings for {{targetAgent}} in this project.",
+        "primary": "Adding…",
+        "cancel": "Start task now"
+      },
+      "items": {
+        "agents-md": "Project instructions and guidelines",
+        "agents": "Custom assistant roles",
+        "hooks": "Automatic actions, such as running a project script",
+        "mcp": "Connections to external tools"
       }
     },
     "confirmDialog": {

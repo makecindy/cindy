@@ -1042,6 +1042,7 @@ describe('Ghost manifest contract', () => {
       notify: true,
       fs: true,
       library: true,
+      form: true,
       tools: [
         {
           name: 'run_helper',
@@ -1089,6 +1090,7 @@ describe('Ghost manifest contract', () => {
     expect(result.manifest.notify).toBe(true);
     expect(result.manifest.fs).toBe(true);
     expect(result.manifest.library).toBe(true);
+    expect(result.manifest.form).toBe(true);
     expect(result.manifest.unknownField).toBe('ignored');
   });
 

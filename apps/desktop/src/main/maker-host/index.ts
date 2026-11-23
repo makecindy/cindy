@@ -40,6 +40,7 @@ import { withSubscriptionAccounts } from '../subscription-accounts/agent.js';
 import { onSubscriptionPoolCodexModelsChanged, onSubscriptionPoolClaudeModelsChanged } from '../subscription-accounts/runtime.js';
 import { NATIVE_SUBSCRIPTION_ACCOUNT } from '@cindy/maker-core';
 import { installPluginEngines } from './acp-host.js';
+import { createPluginEngineSkillLister } from './pluginEngineSkills.js';
 import { builtinAgentKindOrNull } from './engineKind.js';
 import { readCodexThreadStorageReadOnly, prepareCodexResumeSession, resolveCodexThreadStorage, recordCodexThreadLocation } from './codex-thread-storage.js';
 import { createSessionArchiveSync, prepareArchiveSessions } from './session-archive-sync.js';
@@ -2904,6 +2905,14 @@ export function getMaker(): Maker {
       appVersion: app.getVersion(),
       mcpProviders: piMcpProviders,
       makerMemory: makerMemoryManager,
+      getGhostRosterPrompt,
+      // Same Skill scope as the built-in Pi engine (Cindy-managed and plugin Skills, Pi's discovery
+      // directories, the user's enable switches), discovered in the isolated scan process.
+      listSessionSkills: createPluginEngineSkillLister({
+        listManagedSkills: listCindyManagedSkills,
+        scanCustomizations: scanLocalCustomizations,
+        readDisabledSkillPaths: () => readDisabledSkillPaths(),
+      }),
     });
     botRuntimeResourcePreflight = async (opts) => {
       const preflightOpts = { ...opts };
