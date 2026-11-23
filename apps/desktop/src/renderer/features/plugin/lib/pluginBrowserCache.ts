@@ -54,22 +54,57 @@ export function pluginBrowserKey(ownerKey: string, catalogKey: string, query = '
 export function samePluginValue(a: unknown, b: unknown): boolean {
   const content = (key: string, value: unknown) => {
     if (!value || typeof value !== 'object') return value;
-    if ('sha256' in value && 'mimeType' in value && 'sizeBytes' in value)
-      return { ...value, url: undefined, expiresAt: undefined };
+    if ('sha256' in value && 'mimeType' in value && 'sizeBytes' in value) {
+      const hasThumbnail = 'thumbnailUrl' in value && Boolean(value.thumbnailUrl);
+      return { ...value, url: undefined, expiresAt: undefined, thumbnailUrl: hasThumbnail };
+    }
     if (key === 'usageStatistics') return { ...value, asOf: undefined };
     return value;
   };
   return a === b || JSON.stringify(a, content) === JSON.stringify(b, content);
 }
-export function mergePluginItems(previous: PluginMarketItem[], next: PluginMarketItem[], renewIcons = false): PluginMarketItem[] {
+export type MarketIconCache = Map<string, NonNullable<PluginMarketItem['icon']>>;
+
+function marketIconKey(item: PluginMarketItem, icon: NonNullable<PluginMarketItem['icon']>) {
+  return JSON.stringify([item.pluginId, item.releaseId, icon.sha256, icon.mimeType, icon.sizeBytes, Boolean(icon.thumbnailUrl)]);
+}
+
+export function forgetFailedMarketIcon(cache: MarketIconCache, item: PluginMarketItem): void {
+  if (item.sourceType !== 'server' || !item.icon) return;
+  const key = marketIconKey(item, item.icon);
+  if (cache.get(key) === item.icon) cache.delete(key);
+}
+
+export function readReusedMarketIcon(cache: MarketIconCache, item: PluginMarketItem): PluginMarketItem {
+  if (item.sourceType !== 'server' || !item.icon) return item;
+  const cached = cache.get(marketIconKey(item, item.icon));
+  return cached && cached !== item.icon && Date.parse(cached.expiresAt) > Date.now() ? { ...item, icon: cached } : item;
+}
+
+export function reuseMarketIcon(cache: MarketIconCache, item: PluginMarketItem): PluginMarketItem {
+  const icon = item.icon;
+  if (item.sourceType !== 'server' || !icon) return item;
+  const key = marketIconKey(item, icon);
+  const saved = cache.get(key);
+  const reusable = saved && Date.parse(saved.expiresAt) > Date.now() ? saved : icon;
+  cache.delete(key);
+  cache.set(key, reusable);
+  if (cache.size > 256) cache.delete(cache.keys().next().value!);
+  return reusable === icon ? item : { ...item, icon: reusable };
+}
+
+export function mergePluginItems(previous: PluginMarketItem[], next: PluginMarketItem[], renewIcons = false, iconCache?: MarketIconCache): PluginMarketItem[] {
   const old = new Map(previous.map(item => [item.pluginId, item]));
-  const merged = next.map(item => {
+  const merged = next.map(incoming => {
+    const item = iconCache ? reuseMarketIcon(iconCache, incoming) : incoming;
     const existing = old.get(item.pluginId);
-    const same = !renewIcons || !item.icon ? samePluginValue(existing, item) : false;
-    if (!same || !existing) return item;
-    // Update transport metadata silently. Content and React identity stay fixed;
-    // explicit failed/expiring-image renewal below can request fresh props.
-    if (existing.icon && item.icon) Object.assign(existing.icon, item.icon);
+    const previousIcon = existing?.icon;
+    const icon = item.icon;
+    // Retain the signed address so Chromium can reuse the same image cache key.
+    const reusable = (!iconCache || item.sourceType !== 'server') && !renewIcons && previousIcon && icon &&
+      samePluginValue(previousIcon, icon) && Date.parse(previousIcon.expiresAt) > Date.now();
+    if (!existing || !samePluginValue(existing, item)) return reusable ? { ...item, icon: previousIcon } : item;
+    if (icon && !reusable && icon !== previousIcon) return item;
     if (existing.usageStatistics && item.usageStatistics) Object.assign(existing.usageStatistics, item.usageStatistics);
     return existing;
   });

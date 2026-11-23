@@ -2238,6 +2238,7 @@ export class PluginMarketService {
           prompt: context.consent.prompt,
           initiator: context.consent.initiator,
           origin: 'market',
+          communityMarket: plugin.scope === 'public' && plugin.publisherKind === 'personal' ? true : undefined,
         },
         beforeCommitInLock: assertCurrent,
         assertCurrent: assertScope,

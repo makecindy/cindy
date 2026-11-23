@@ -197,7 +197,8 @@ import {
   pluginMarketErrorKey,
   pluginMarketOrganizationAccessErrorKey,
 } from './lib/pluginMarketErrorKey';
-import { usePluginIconRefresh } from './lib/usePluginIconRefresh';
+import { ICON_REFRESH_LEAD_MS, usePluginIconRefresh } from './lib/usePluginIconRefresh';
+import { forgetFailedMarketIcon } from './lib/pluginBrowserCache';
 import { usePluginMarketIcon } from './lib/usePluginMarketIcon';
 import { usePluginMarketForegroundRefresh } from './lib/usePluginMarketForegroundRefresh';
 import { usePluginMarketLocaleRefresh } from './lib/usePluginMarketLocaleRefresh';
@@ -740,7 +741,8 @@ function LocalGhostPluginPage({
       if (!current()) return;
       setMarketSnapshot(snapshot);
       lastMarketRefreshAtRef.current = Date.now();
-      if (current()) await memory.browser.current.refresh?.();
+      // The icon renewal caller already refreshes catalog pages with fresh URLs.
+      if (!renewIcons && current()) await memory.browser.current.refresh?.();
       // Publish successful sources before reporting an official outage to the
       // existing icon-renewal retry hook. Failed sources retain their old data.
       if (preserveOnError && snapshot.unavailableReason !== null) {
@@ -920,10 +922,10 @@ function LocalGhostPluginPage({
     }
     return publishers;
   }, [marketItems]);
-  const todayItems = todayPool.filter(item => {
+  const todayItems = useMemo(() => todayPool.filter(item => {
     const latest = marketItems.find(current => current.pluginId === item.pluginId) ?? item;
     return !consumedToday.has(item.pluginId) && latest.installState !== 'installed' && latest.installState !== 'update-available';
-  }).slice(0, 3);
+  }).slice(0, 3), [todayPool, marketItems, consumedToday]);
   const customSourceNames = useMemo(
     () => marketSnapshot?.customSourceNames ?? [],
     [marketSnapshot?.customSourceNames],
@@ -1693,20 +1695,34 @@ function LocalGhostPluginPage({
     marketDetail?.pluginId ? () => refreshVisibleMarketDetail(marketDetail.pluginId) : undefined,
   );
   const visibleMarketIcons = useMemo(
-    () => [...marketItems.map((item) => item.icon), marketDetail?.icon],
-    [marketDetail?.icon, marketItems],
+    () => [...marketItems.map((item) => item.icon), ...todayItems.map((item) => item.icon), marketDetail?.icon],
+    [marketDetail?.icon, marketItems, todayItems],
   );
   const refreshVisibleMarketIcons = useCallback(async () => {
+    const memory = catalogMemoryRef.current;
+    const renewBefore = Date.now() + ICON_REFRESH_LEAD_MS;
+    for (const [key, icon] of memory.marketIcons) {
+      if (Date.parse(icon.expiresAt) <= renewBefore) memory.marketIcons.delete(key);
+    }
     const refreshes: Promise<void>[] = [refreshMarket(true, false, true), browserCache.current.refresh?.({ force: true, renewIcons: true }) ?? Promise.resolve()];
+    if (memory.todayPool.length > 0) {
+      refreshes.push(readPluginRecommendations(memory, true).then(items => {
+        if (catalogMemoryRef.current === memory) setTodayPool(items);
+      }));
+    }
     if (marketDetail?.pluginId) {
       refreshes.push(refreshVisibleMarketDetail(marketDetail.pluginId));
     }
     await Promise.all(refreshes);
-  }, [marketDetail?.pluginId, refreshMarket, refreshVisibleMarketDetail]);
+  }, [marketDetail?.pluginId, refreshMarket, refreshVisibleMarketDetail, setTodayPool]);
   const handleMarketIconLoadError = usePluginIconRefresh(
     visibleMarketIcons,
     refreshVisibleMarketIcons,
   );
+  const handleCardIconLoadError = (item: PluginMarketItem) => {
+    forgetFailedMarketIcon(catalogMemoryRef.current.marketIcons, item);
+    handleMarketIconLoadError();
+  };
 
   const runMarketInstallFlow = useCallback(
     async (marketDetailArg: PluginMarketDetail) => {
@@ -2306,7 +2322,7 @@ function LocalGhostPluginPage({
                   onSelect={() => void handleSelectMarket(item)}
                   onPrefetch={isCurrent => prefetchMarketDetail(item, isCurrent)}
                   onInstall={canOfferMarketInstall(mode, item.ghostId) ? () => void handleInstallMarketItem(item.pluginId) : undefined}
-                  onIconLoadError={handleMarketIconLoadError} />)}
+                  onIconLoadError={() => handleCardIconLoadError(item)} />)}
               </PluginRecommendationSlots>
             </section> : null}
             {!query.trim() ? <><div ref={secondaryTabs} className="mt-6 h-0" /><div className="sticky top-0 z-raised flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-default)] app-wallpaper-surface bg-[var(--surface)] py-3">
@@ -2460,7 +2476,7 @@ function LocalGhostPluginPage({
               ) : null}
             </section>
 
-            <PluginCatalogBrowser cacheRef={browserCache} ownerKey={catalogOwnerKey}
+            <PluginCatalogBrowser cacheRef={browserCache} ownerKey={catalogOwnerKey} iconCache={catalogMemory.marketIcons}
               prewarm={active && marketSnapshot !== null}
               filterHost={marketFiltersHost}
               catalogKey={marketLocale}
@@ -2485,7 +2501,7 @@ function LocalGhostPluginPage({
                 onPrefetch={isCurrent => prefetchMarketDetail(item, isCurrent)}
                 onInstall={canOfferMarketInstall(mode, item.ghostId) && item.installState !== 'installed' && item.installState !== 'update-available'
                   ? () => void handleInstallMarketItem(item.pluginId) : undefined}
-                onIconLoadError={handleMarketIconLoadError} />}
+                onIconLoadError={() => handleCardIconLoadError(item)} />}
             />
             </PluginCatalogPanels>
             </MyPublishesSectionVisibilityGate>

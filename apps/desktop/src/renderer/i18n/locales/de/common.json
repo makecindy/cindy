@@ -8012,6 +8012,7 @@
           "official": "Offiziell",
           "community": "Community"
         },
+        "communityDisclaimer": "Dieses Plugin wird von Mitgliedern der Community entwickelt und gepflegt. Cindy hat diese Version geprüft, kann die Sicherheit des Plugins aber nicht in jeder Nutzungssituation garantieren.",
         "publisherDescription": {
           "official": "Von Cindy veröffentlicht und gepflegt",
           "community": "Von Community-Entwicklern veröffentlicht und gepflegt",
@@ -8126,7 +8127,7 @@
             "authTitle": "Private Repositorys",
             "authBody": "Die Authentifizierung erfolgt vollständig über deine Git-Systemkonfiguration — Cindy speichert niemals Git-Zugangsdaten. SSH: Auf diesem Computer muss ein funktionierender Schlüssel eingerichtet sein. Falls die Organisation SAML SSO erzwingt, autorisiere den Schlüssel für diese Organisation über Configure SSO in deinen GitHub-SSH-Schlüsseleinstellungen. HTTPS: Verwende ein Personal Access Token, das vom Anmeldeinformationsmanager des Systems gespeichert wird.",
             "rulesTitle": "Installationsregeln",
-            "rulesBody": "Plugin-IDs sind global eindeutig, wer zuerst kommt, mahlt zuerst – Konflikte mit installierten Plugins werden explizit angezeigt. Plugins, deren IDs die offiziell reservierten Präfixe ({{reservedGhostIdPrefixes}}) verwenden, können nicht durch Hereinziehen eines Pakets, Auswählen einer Datei oder über einen benutzerdefinierten Plugin-Marktplatz installiert werden. Deklarierte Berechtigungen werden auf der Detailseite angezeigt; durch Klicken auf „Installieren“ wird die Installation abgeschlossen und das Plugin ohne einen weiteren Dialog zur Berechtigungsbestätigung aktiviert.",
+            "rulesBody": "Plugin-IDs sind global eindeutig, wer zuerst kommt, mahlt zuerst – Konflikte mit installierten Plugins werden explizit angezeigt. Plugins, deren IDs die offiziell reservierten Präfixe ({{reservedGhostIdPrefixes}}) verwenden, können nicht durch Hereinziehen eines Pakets, Auswählen einer Datei oder über einen benutzerdefinierten Plugin-Marktplatz installiert werden. Deklarierte Berechtigungen werden auf der Detailseite angezeigt. Bei der ersten manuellen Installation bittet dich Cindy, die angeforderten Berechtigungen zu bestätigen. Nach der Installation wird das Plugin automatisch aktiviert.",
             "copy": "Anleitung kopieren",
             "copied": "Anleitung in die Zwischenablage kopiert.",
             "copyFailed": "Kopieren fehlgeschlagen. Bitte versuche es erneut."
@@ -8239,6 +8240,8 @@
         "installMeta": "Version {{version}} · {{source}}",
         "updateMeta": "Version {{from}} → {{to}} · {{source}}",
         "installDescription": "Ohne deine Bestätigung wird nichts installiert. Das Plugin wird direkt nach der Installation aktiviert. Du kannst es jederzeit auf der Seite „Plugins“ deaktivieren oder deinstallieren.",
+        "customMarketSourceNotice": "Installiere nur aus einem Marktplatz, dem du vertraust, und prüfe die angeforderten Berechtigungen.",
+        "localFileSourceNotice": "Fahre mit der Installation nur fort, wenn du der Quelle der Datei vertraust.",
         "updateDescription": "Das Update startet erst nach deiner Bestätigung. Bis dahin bleibt die aktuelle Version verfügbar.",
         "grantsTitle": "Nach der Installation hat es folgende Berechtigungen:",
         "noPermissions": "Dieses Plugin gibt keine zusätzlichen Berechtigungen an.",

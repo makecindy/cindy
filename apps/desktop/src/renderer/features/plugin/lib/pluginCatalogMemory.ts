@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState, type Dispatch, type SetStateAction } from 'react';
-import { emptyPluginBrowserCache, mergePluginItems, samePluginValue, PLUGIN_CATALOG_REFRESH_MS } from './pluginBrowserCache';
+import { emptyPluginBrowserCache, mergePluginItems, reuseMarketIcon, samePluginValue, PLUGIN_CATALOG_REFRESH_MS, type MarketIconCache } from './pluginBrowserCache';
 import { ghostWebviewOwnerKey } from './ghostPluginViewModel';
 import { resolveSystemLocale } from '../../../../shared/locale';
 import type { PluginGridCache } from '../PluginVirtualGrid';
@@ -12,6 +12,7 @@ function emptyCatalogMemory() {
     query: '', catalogTab: 'installed' as 'installed' | 'market', originFilter: 'all' as PluginCatalogFilter,
     installedLimit: 10, marketTotal: null as number | null,
     browser: { current: emptyPluginBrowserCache() },
+    marketIcons: new Map() as MarketIconCache,
     installedGrid: { columns: 2, measurements: [] } as PluginGridCache, installedQuery: '',
     scroll: { offset: 0, anchor: null as { id: string; top: number } | null },
     todayPool: [] as PluginMarketItem[], consumedToday: new Set<string>(), todayLoaded: false,
@@ -94,12 +95,23 @@ export function readLocalPluginSnapshot(memory: CatalogMemory, force = false, re
   return flight;
 }
 
-export function readPluginRecommendations(memory: CatalogMemory): Promise<PluginMarketItem[]> {
+export function readPluginRecommendations(memory: CatalogMemory, renewIcons = false): Promise<PluginMarketItem[]> {
   if (memory.recommendationsFlight) return memory.recommendationsFlight;
-  if (memory.todayLoaded && Date.now() - memory.recommendationsAt < PLUGIN_CATALOG_REFRESH_MS) return Promise.resolve(memory.todayPool);
+  if (!renewIcons && memory.todayLoaded && Date.now() - memory.recommendationsAt < PLUGIN_CATALOG_REFRESH_MS) return Promise.resolve(memory.todayPool);
   const flight = window.electronAPI.pluginMarket.recommendations().then(next => {
+    if (renewIcons) {
+      // The recommendation endpoint shuffles its results. Renew only the icons
+      // for releases already in this view so that cards stay in place.
+      const refreshed = new Map(next.map(item => [item.pluginId, item]));
+      return memory.todayPool.map(item => {
+        const match = refreshed.get(item.pluginId);
+        return match?.icon && match.releaseId === item.releaseId
+          ? reuseMarketIcon(memory.marketIcons, { ...item, icon: match.icon })
+          : item;
+      });
+    }
     memory.recommendationsAt = Date.now();
-    return mergePluginItems(memory.todayPool, next);
+    return mergePluginItems(memory.todayPool, next, false, memory.marketIcons);
   }).finally(() => { if (memory.recommendationsFlight === flight) memory.recommendationsFlight = null; });
   memory.recommendationsFlight = flight;
   return flight;

@@ -8079,6 +8079,7 @@
           "official": "Oficial",
           "community": "Comunidad"
         },
+        "communityDisclaimer": "Este complemento lo desarrollan y mantienen miembros de la comunidad. Cindy ha revisado esta versión, pero no puede garantizar que sea seguro en todas las situaciones de uso.",
         "publisherDescription": {
           "official": "Publicado y mantenido por Cindy",
           "community": "Publicado y mantenido por desarrolladores de la comunidad",
@@ -8194,7 +8195,7 @@
             "authTitle": "Repositorios privados",
             "authBody": "La autenticación depende por completo de la configuración de Git de tu sistema: Cindy nunca almacena credenciales de Git. SSH: debes tener una clave funcional configurada en este equipo; si la organización exige SAML SSO, autoriza la clave para esa organización mediante Configure SSO en la configuración de claves SSH de GitHub. HTTPS: usa un Personal Access Token almacenado por el asistente de credenciales del sistema.",
             "rulesTitle": "Reglas de instalación",
-            "rulesBody": "Los identificadores de los complementos son únicos a nivel global y se asignan por orden de llegada; los conflictos con complementos instalados se señalan explícitamente. Los complementos cuyos identificadores usan los prefijos oficiales reservados ({{reservedGhostIdPrefixes}}) no se pueden instalar arrastrando un paquete, eligiendo un archivo ni usando un mercado de complementos personalizado. Los permisos declarados se muestran en la página de detalles; al hacer clic en Instalar, se completa la instalación y se habilita el complemento sin otro diálogo de confirmación de permisos.",
+            "rulesBody": "Los identificadores de los complementos son únicos a nivel global y se asignan por orden de llegada; los conflictos con complementos instalados se señalan explícitamente. Los complementos cuyos identificadores usan los prefijos oficiales reservados ({{reservedGhostIdPrefixes}}) no se pueden instalar arrastrando un paquete, eligiendo un archivo ni usando un mercado de complementos personalizado. Los permisos declarados se muestran en la página de detalles. Al instalar un complemento manualmente por primera vez, Cindy te pide que confirmes los permisos solicitados. El complemento se habilita automáticamente después de la instalación.",
             "copy": "Copiar guía",
             "copied": "Guía copiada al portapapeles.",
             "copyFailed": "No se pudo copiar. Inténtalo de nuevo."
@@ -8311,6 +8312,8 @@
         "installMeta": "Versión {{version}} · {{source}}",
         "updateMeta": "Versión {{from}} → {{to}} · {{source}}",
         "installDescription": "No se instala nada hasta que confirmes. El complemento se activa justo después de instalarse y puedes desactivarlo o desinstalarlo cuando quieras en la página Complementos.",
+        "customMarketSourceNotice": "Asegúrate de que confías en este mercado y revisa los permisos que solicita el complemento.",
+        "localFileSourceNotice": "Antes de continuar, comprueba que el archivo procede de una fuente de confianza.",
         "updateDescription": "La actualización comienza solo cuando confirmes. La versión actual seguirá disponible hasta entonces.",
         "grantsTitle": "Después de la instalación tendrá:",
         "noPermissions": "Este complemento no declara permisos adicionales.",

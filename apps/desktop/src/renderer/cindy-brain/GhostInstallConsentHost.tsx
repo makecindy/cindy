@@ -16,9 +16,10 @@ import { permissionItemIcon } from '@/features/plugin/lib/permissionItemIcon';
 import { permissionItemDetail } from '../../shared/ghostPermissionDetail';
 import { cn } from '@/lib/utils';
 import type { GhostPermissionItem } from '../../shared/ghost';
-import type {
-  GhostInstallConsentFacts,
-  GhostInstallConsentRequest,
+import {
+  ghostInstallSourceNoticeKey,
+  type GhostInstallConsentFacts,
+  type GhostInstallConsentRequest,
 } from '../../shared/ghostInstallConsent';
 
 type Translate = ReturnType<typeof useTranslation>['t'];
@@ -101,16 +102,26 @@ function ConsentSection({ title, children }: { title: string; children: ReactNod
   );
 }
 
-export function GhostInstallConsentContent({ facts, capabilityOnly = false, replacement = false, sourceChanged = false }: {
-  facts: GhostInstallConsentFacts; capabilityOnly?: boolean; replacement?: boolean; sourceChanged?: boolean;
+export function GhostInstallConsentContent({ facts, origin, communityMarket, capabilityOnly = false, replacement = false, sourceChanged = false }: {
+  facts: GhostInstallConsentFacts; origin?: GhostInstallConsentRequest['origin'];
+  communityMarket?: GhostInstallConsentRequest['communityMarket'];
+  capabilityOnly?: boolean; replacement?: boolean; sourceChanged?: boolean;
 }) {
   const { t } = useTranslation();
   if (facts.kind === 'install') {
+    const sourceNotice = ghostInstallSourceNoticeKey(origin, communityMarket);
     return (
       <div>
         <p className="text-13 leading-5 text-[var(--confirm-desc)]">
           {t('settings.ghosts.installConsent.installDescription')}
         </p>
+        {sourceNotice ? (
+          <p className={sourceNotice === 'settings.ghosts.market.communityDisclaimer'
+            ? 'mt-2 text-12 leading-[1.5] text-[var(--text-tertiary)]'
+            : 'mt-2 text-13 leading-5 text-[var(--confirm-desc)]'}>
+            {t(sourceNotice)}
+          </p>
+        ) : null}
         <div className="mt-3">
           {facts.permissions.length === 0 ? (
             <p className="text-13 leading-5 text-[var(--confirm-desc)]">
@@ -242,7 +253,7 @@ export function GhostInstallConsentHost() {
                     {request.target.sourceChanged && !replacement && <p>{t('settings.ghosts.installConsent.sourceChanged')}</p>}
                     {request.target.otherCopies > 0 && <p>{t('settings.ghosts.installConsent.otherCopies', { count: request.target.otherCopies })}</p>}
                   </div>}
-                  <GhostInstallConsentContent facts={facts} capabilityOnly={capabilityOnly}
+                  <GhostInstallConsentContent facts={facts} origin={request.origin} communityMarket={request.communityMarket} capabilityOnly={capabilityOnly}
                     replacement={replacement} sourceChanged={request.target?.sourceChanged} />
                 </>,
                 maxWidth: 460,
