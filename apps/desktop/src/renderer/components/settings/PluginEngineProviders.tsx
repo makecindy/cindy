@@ -41,6 +41,7 @@ import {
 } from '../../../shared/pluginEngines';
 import { providersSettings } from './ProvidersSection.settings-search';
 import { SettingsTextInput } from './SettingsTextInput';
+import { SubscriptionAccountsSection } from './SubscriptionAccountsSection';
 
 const AVATAR_STYLE = {
   backgroundColor: 'var(--settings-integration-avatar-bg)',
@@ -585,7 +586,12 @@ export function PluginEngineProviderDetail({
             onManageShare={onManageShare}
           />
         )}
-        {!engine.suspended && engine.reportsUsage && (
+        {/* Accounts (2026-11-23): the same account section as built-in providers, each account with its
+            own usage; an engine without account support keeps its single usage card. */}
+        {!engine.suspended && engine.accounts && (
+          <SubscriptionAccountsSection key={`accounts:${engine.providerId}`} providerId={engine.providerId} providerName={engine.name} />
+        )}
+        {!engine.suspended && !engine.accounts && engine.reportsUsage && (
           <PluginEngineUsage key={`usage:${engine.key}`} deviceId={null} engineKey={engine.key} />
         )}
         {!engine.suspended && <EngineModels engine={engine} />}

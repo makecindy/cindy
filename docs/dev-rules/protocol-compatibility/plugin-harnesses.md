@@ -171,6 +171,57 @@ worktree 或 SSH Lead 时拒绝（INVALID_PARAMS）。`maker:worker:list` 与团
 支持区分 worker 错误的执行电脑会通过现有 invoke 错误返回临时读取失败。系统栏和小组件保留该引擎的上次读数、显示读取时间，并按已有失败节奏重试。成功的空读数和读取期间账号或授权失效仍返回空；旧版执行电脑返回的空值也按空读数处理。
 既有 Device Link invoke 帧和自建中转可原样转发，无需扩展中转协议。该变更不增加 manifest 权限、批准或安装迁移。
 
+## 引擎账号（多账号，2026-11-23，未发布）
+
+产品规则见[插件引擎的账号](../../product-rules/subscription-account-pools.md#插件引擎的账号2026-11-23-用户裁决未发布)。
+全部为 append-only 可选字段、宿主固定参数和新的 worker 方法，不改 manifest、权限行、批准状态或安装布局；存量插件影响：无
+（旧插件不发布 `accounts`，引擎照旧单账号；回归见 `pluginHarnesses.test.ts` 与 `ghostHarnessesEndpoint.test.ts`）。
+
+1. **声明**：`PUT /harnesses` 条目追加可选 `accounts: { methods: [{ id: slug, label: ≤64, kind: 'browser' | 'secret', secretLabel?: ≤64 }] ≤4 }`，
+   只在 `available: true` 时保留，且主 worker 为 `json-rpc-stdio` 时注册表才投影。`methods` 为空数组表示只报告原有登录的身份、不能添加账号；
+   至少一项表示支持多账号。形状错误、重复 id 按整份 400；本版不认识的 `kind` 跳过（新插件在旧 Host 上不丢其它方式），`secretLabel` 只随 `secret` 保留。
+   旧 Host 丢弃该字段，插件照旧单账号。
+2. **启动参数**：任务分到 Cindy 添加的账号时，`spawnHarness` 在既有参数后追加两项 `--cindy-account-dir <绝对路径>`。目录由 Host 建在
+   `owners/<账号>/plugin-engine-accounts/<插件实例>/<引擎 id>/<账号 id>/`，注册表核对它是这个引擎根目录下的一级子目录、引擎声明了登录方式，
+   否则拒绝启动；插件没有参数面。入口必须让外部 Agent 的登录、写入的设置与会话历史只用这个目录，做不到就写 stderr 并以非零状态退出，
+   不得回落到原有登录。与 `--cindy-remote-workspace` / `--cindy-guest-workspace` 可同时出现，分享模式的隔离以这个目录为来源。原有登录不带此参数。
+3. **worker 方法**（主 JSON-RPC worker，经 broker `handleRequest`；注册表调用前后复核实例、批准、可用状态与 owner）：
+   - `accountStatus({ harnessId, accountDir? })` → `null` 或 `{ state: 'signed-in' | 'signed-out', identity?: { email?: ≤254, name?: ≤80, detail?: ≤80 }, plan?: ≤64, fingerprint?: ≤128, models?: string[] ≤200 }`。
+     不带 `accountDir` 指原有登录。文字字段为不含控制字符的纯文本，形状不对的可选字段丢弃、不拒整份；`fingerprint` 只用于识别同一账号重复登录
+     （调度只计一次），不显示、不出 Main；`models` 缺省表示与引擎清单相同。26 秒超时。
+   - `accountLogin({ harnessId, accountDir?, methodId, secret? })` → `{ ok: true }` 或 `{ ok: false, error: 'cancelled' | 'timeout' | 'busy' | 'unsupported' | 'invalid-secret' | 'failed', message?: ≤200 }`；
+     不带 `accountDir` 是重新登录原有登录。以 broker 的「有动静就续期」调用：沉默窗口 60 秒、最长 11 分钟，浏览器登录等待期间 worker 要定期发进度或写 stderr。
+     `secret` 只在 `kind: 'secret'` 时出现（1–4096 字符）；只来自本机窗口的 Cindy 弹窗，经 Main 直接交给 worker，Cindy 不落盘、不进日志与模型；
+     device-link 带 `secret` 的命令一律 `PERMISSION_DENIED`，Helper 的工具参数没有这个字段。Host 在登录返回后再用 `accountStatus` 确认。
+   - `accountLoginCancel({ harnessId, accountDir? })` → `{ ok: true }`，结束对应的登录等待。
+   - 既有 `usage` 追加可选参数 `accountDir`（只发给声明了登录方式的引擎；旧插件收不到，避免把原有登录的用量当成每个账号的用量）；
+     窗口追加可选 `windowMinutes`（1–527040，窗口长度，用于按急迫度排序）与 `models`（该窗口只约束这些模型，缺省约束全部模型）。
+4. **错误类型**：入口在 `session/new`、`session/load`、`session/resume`、`session/prompt` 的 JSON-RPC 错误里可带
+   `error.data._meta.cindy = { kind: 'usage-limit' | 'auth-required' | 'overloaded', resetsAt?: 毫秒, model?: string }`。maker-core 把会话打开时的分类映射为
+   `AcpAccountError`（消息用 Cindy 稳定码 `[SUBSCRIPTION_ACCOUNT_LIMITED]` / `[SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED]`，并立即结束这个入口进程，让账号池能换下一个账号），
+   运行中的分类映射为终态错误字段 `usageLimit` + `usageResetAt` / reason `acp-auth-required` / `errorStatus: 529`。既有 `-32000` 仍按需要重新登录处理；
+   不认识的 `kind` 按普通错误处理；旧 Cindy 忽略 `data`。插件给的 `resetsAt` 是普通任务等重置后自动继续的唯一时间来源，不解析插件错误原文。
+5. **拿出的单独供应商**：`providerId` 为 `acp-plugin:<插件实例>:<引擎 id>~<8 位小写字母数字>`。引擎 id 不含 `~`，maker-core
+   `acpHarnessKeyFromProviderId` 与新版注册表据此拆出引擎；旧端按引擎键查不到而判为不可用，不会落到其他引擎或账号。
+   `maker:list-plugin-engines` 把它列为一项：`key` 为 `<引擎键>~<后缀>`，追加可选 `accountProviderOf`（所属引擎键），沿用引擎的模型与模式，
+   `remoteUse` 恒为不支持（不对其他电脑与分享开放）；显示名、隐藏、停用按自己的键存在 `plugin-engine-prefs.json`。
+6. **Device Link 与 IPC**：账号管理沿用既有 `maker:subscription-accounts`（账号命令的 `providerId` 接受插件引擎 id，任务账号的 `session` 读取仍只接受内置供应商，`add`/`login` 追加可选
+   `methodId`；视图追加可选 `pluginEngine`、账号用量 `usage.plugin`、`authIssue: 'account-mismatch'`）与推送 `subscription-accounts:changed`
+   （插件引擎的 providerId 也会出现，旧界面按不认识的 providerId 忽略）。旧执行电脑以 `INVALID_PARAMS` 拒绝插件引擎 id，控制端按不支持处理。
+   `maker:list-plugin-engines` 视图追加可选 `accounts`（登录方式，不含秘密）。`maker:get-plugin-engine-usage` 追加可选第二参数 `{ sessionId }`：
+   读该任务所绑账号的用量（本机窗口：未分配时为空）；device-link 调用（手机、同账号远控）带上时，执行电脑认识这个任务就读它所绑账号，
+   不认识就按原来的读法读引擎原有登录；旧 Host 忽略多余参数。
+   均为既有 invoke 帧与 channel 的可选字段或新取值，没有新 channel、relay 帧或 allowlist 变化，官方与自建中转原样转发，无需修改。
+7. **存储**（均按 Cindy 账号隔离）：`owners/<账号>/plugin-engine-accounts.json`（各引擎的账号设置、拿出的供应商与归属、任务与原生会话绑定）、
+   `owners/<账号>/plugin-engine-account-cooling.json`（与 `subscription-account-cooling.json` 同格式，单独存放：旧版写内置账号冷却会丢掉它不认识的键），
+   以及上面的账号目录。卸载插件时删除它引擎的账号设置、绑定与目录；停用保留。
+
+实现见 `packages/plugin-protocol/src/pluginHarnesses.ts`、`cindy-brain/pluginHarnesses.ts`、`nodeRuntimeBroker.ts`（`spawnHarness`）、
+maker-core `agents/acp/{protocol,session,acp-agent}.ts`、`main/plugin-engine-accounts/`（`store`、`runtime`、`agent`、`failover`）、
+`subscription-accounts/{commands,service,ipc}.ts`、`maker-ipc/pluginEnginesIpc.ts` 与 renderer `SubscriptionAccountsSection.tsx`、`PluginEngineSignIn.tsx`；
+回归见 `plugin-engine-accounts/__tests__/runtime.test.ts`、`pluginHarnesses.test.ts`、`ghostHarnessesEndpoint.test.ts`、maker-core `acp-session.test.ts`
+「account classification」「account the host picked」与 renderer `SubscriptionAccountsSection.test.tsx`「for plugin engines」。
+
 ## 插话（2026-11-22）
 
 Cindy 与引擎入口之间的 ACP wire 追加一个可选扩展，沿用生态已有约定（claude-agent-acp 0.109、codex-acp、oh-my-pi），不自创方法：

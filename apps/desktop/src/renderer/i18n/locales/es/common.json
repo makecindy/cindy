@@ -698,6 +698,7 @@
     },
     "picker": {
       "unavailable": "Recurso compartido no disponible",
+      "offline": "{{name}} · Sin conexión por ahora",
       "hostOutdated": "La versión de Cindy en la computadora del propietario es demasiado antigua para enumerar estos modelos. Pídele que actualice Cindy y vuelve a intentarlo.",
       "numbered": "{{name}} ({{index}})"
     },
@@ -22427,6 +22428,11 @@
     "lineNumbers": "Números de línea"
   },
   "subscriptionAccounts": {
+    "pluginSignIn": {
+      "method": "Método de inicio de sesión",
+      "secretHint": "La clave solo va al plugin, que la guarda en la carpeta propia de esta cuenta. Cindy no la guarda ni la envía a otros ordenadores.",
+      "browserHint": "El plugin abrirá tu navegador. Inicia sesión allí y luego vuelve aquí."
+    },
     "placement": {
       "needsUpdate": "Hay que actualizar Cindy en el equipo que realiza esta operación para mover cuentas así.",
       "moveTo": "Mover a…",

@@ -405,6 +405,8 @@ import { createGhostKvStore, removeGhostKvBestEffort, type GhostKvStore } from '
 import { handleGhostModelsRequest } from './runtime/ghostModelsEndpoint.js';
 import { handleGhostHarnessesRequest } from './runtime/ghostHarnessesEndpoint.js';
 import { configurePluginHarnessRegistry, PLUGIN_USAGE_WORKER_FAILURE, reconcilePluginHarnesses } from './pluginHarnesses.js';
+import { pluginEngineAccountRoot } from '../plugin-engine-accounts/paths.js';
+import { forgetPluginEngineAccountsOfPlugin } from '../plugin-engine-accounts/store.js';
 import { ghostPublishedModelText, parseGhostPublishedModels } from '@cindy/plugin-protocol';
 import {
   handleGhostSetupStatusRequest,
@@ -8879,6 +8881,10 @@ async function uninstallGhostAndCleanupLocked(
     removeGhostKvBestEffort(publishedModelsStore(), storagePart, log);
     removeGhostKvBestEffort(publishedHarnessesStore(), storagePart, log);
     if (storagePart) {
+      // 引擎账号(subscription-account-pools.md 插件引擎的账号)：Cindy 为它的引擎加的账号目录与设置随卸载删除，停用保留。
+      await forgetPluginEngineAccountsOfPlugin(storagePart).catch((err) => {
+        log.warn('plugin engine accounts cleanup failed', { id: storagePart, error: err instanceof Error ? err.message : String(err) });
+      });
       try {
         await fs.promises.rm(ownerScopedUserDataPath('ghost-fs', storagePart), {
           recursive: true,
@@ -9513,10 +9519,11 @@ export function registerGhostIpc(): void {
     uiLocale: () => currentGhostAppContext().context.uiLocale,
     spawn: (ghostId, harnessId, options) => getGhostNodeRuntimeBroker().spawnHarness(ghostId, harnessId, options),
     requestRefresh: (ghostId) => sendToGhostLogic(ghostId, { type: 'harnesses-refresh-requested' }),
-    readUsage: async (ghostId, harnessId) => {
+    readUsage: async (ghostId, harnessId, accountDir) => {
       const owner = captureDataOwnerBroadcastScope();
       const response = await getGhostNodeRuntimeBroker().handleRequest(ghostId, {
-        type: 'node-request', method: 'usage', params: { harnessId }, timeoutMs: 26000,
+        type: 'node-request', method: 'usage',
+        params: { harnessId, ...(accountDir !== undefined ? { accountDir } : {}) }, timeoutMs: 26000,
       });
       if (!isDataOwnerBroadcastScopeCurrent(owner)) return null;
       if (response.ok) return response.result;
@@ -9532,6 +9539,15 @@ export function registerGhostIpc(): void {
           return null;
       }
     },
+    // 引擎账号(plugin-harnesses.md 引擎账号)：方法名与参数由注册表固定，回包按协议校验后才用。
+    callAccount: async (ghostId, method, params, timing) => {
+      const owner = captureDataOwnerBroadcastScope();
+      const response = await getGhostNodeRuntimeBroker().handleRequest(ghostId, {
+        type: 'node-request', method, params, ...timing,
+      });
+      return response.ok && isDataOwnerBroadcastScopeCurrent(owner) ? response.result : null;
+    },
+    accountRoot: pluginEngineAccountRoot,
     log,
   });
   // /secrets 只写通道(network user 与 node.secretBindings 凭证一律由意识

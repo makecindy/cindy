@@ -685,6 +685,7 @@
     },
     "picker": {
       "unavailable": "利用できなくなった共有",
+      "offline": "{{name}} · 一時的にオフライン",
       "hostOutdated": "共有した人のパソコンの Cindy が古いため、これらのモデルを読み込めません。相手に Cindy を更新してもらってから、もう一度お試しください。",
       "numbered": "{{name}} ({{index}})"
     },
@@ -22127,6 +22128,11 @@
     "lineNumbers": "行番号"
   },
   "subscriptionAccounts": {
+    "pluginSignIn": {
+      "method": "ログイン方法",
+      "secretHint": "キーはプラグインにだけ渡され、このアカウント専用のフォルダーに保存されます。Cindy は保存せず、ほかのコンピューターにも送信しません。",
+      "browserHint": "プラグインがブラウザーを開きます。そこでログインを完了してから、ここに戻ってください。"
+    },
     "placement": {
       "needsUpdate": "この操作を行うコンピューターの Cindy を更新すると、アカウントをこのように変更できます。",
       "moveTo": "移動先…",

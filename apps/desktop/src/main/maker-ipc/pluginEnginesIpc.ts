@@ -131,22 +131,38 @@ export interface PluginEngineSettingsAccess {
 }
 let settingsAccess: PluginEngineSettingsAccess | null = null;
 
+/**
+ * Providers the user took accounts of an engine out into (subscription-account-pools.md
+ * 插件引擎的账号), supplied by the desktop wiring for the same reason as the stores above.
+ */
+export interface PluginEngineAccountProvidersAccess {
+  /** The engine's taken-out providers that still hold accounts, with the account they show. */
+  list(engineKey: string): Array<{ suffix: string; identity?: string }>;
+  onChange(listener: () => void): () => void;
+}
+let accountProvidersAccess: PluginEngineAccountProvidersAccess | null = null;
+
 /** The user's settings for an engine, for admission (pluginEngineSessionAdmission.ts). */
 export function pluginEngineSettingsOf(harness: Pick<PluginHarness, 'key'>): PluginEngineSettings {
   return settingsAccess?.read(harness.key) ?? {};
 }
 
-function toView(harness: PluginHarness): PluginEngineView {
-  const settings = pluginEngineSettingsOf(harness);
+/**
+ * One provider of an engine: the engine itself, or a provider taken out of it (`key` =
+ * `<engine>~<suffix>`, `declared` = the name Cindy gives it). Models, modes and availability come
+ * from the engine; the name, hiding, turning off and model switches from that provider's own settings.
+ */
+function toView(harness: PluginHarness, key = harness.key, declared = harness.name): PluginEngineView {
+  const settings = pluginEngineSettingsOf({ key });
   const listed = engineModels(harness);
   const off = settings.disabledModels?.length ? new Set(settings.disabledModels) : null;
   const disabledModels = off ? listed.filter((model) => off.has(model.id)) : [];
   return {
-    key: harness.key,
-    providerId: pluginEngineProviderId(harness.key),
+    key,
+    providerId: pluginEngineProviderId(key),
     ghostId: harness.ghostId,
     harnessId: harness.harnessId,
-    name: settings.name ?? harness.name,
+    name: settings.name ?? declared,
     ...(harness.description ? { description: harness.description } : {}),
     ...(harness.iconDataUrl ? { iconDataUrl: harness.iconDataUrl } : {}),
     // Turned off by the user: reported like an engine its plugin cannot run, which every reader
@@ -163,13 +179,28 @@ function toView(harness: PluginHarness): PluginEngineView {
     ...(off ? { defaultModelAllowed: false } : {}),
     ...(settings.hidden ? { hidden: true as const } : {}),
     ...(settings.suspended ? { suspended: true as const } : {}),
-    ...(settings.name ? { declaredName: harness.name } : {}),
+    ...(settings.name ? { declaredName: declared } : {}),
     ...(disabledModels.length > 0 ? { disabledModels } : {}),
+    ...(harness.accounts ? { accounts: { methods: harness.accounts.methods.map((method) => ({ ...method })) } } : {}),
   };
 }
 
+/**
+ * A provider taken out of an engine runs that engine on its own accounts, as its own provider: it
+ * has its own name, hiding, turning off and model switches (under its own key), independent of the
+ * engine's provider. It is not offered to other computers or shared (taking out never widens access).
+ */
+function separateProviderViews(harness: PluginHarness): PluginEngineView[] {
+  if (!harness.accounts?.methods.length || !accountProvidersAccess) return [];
+  return accountProvidersAccess.list(harness.key).map(({ suffix, identity }, index) => ({
+    ...toView(harness, `${harness.key}~${suffix}`, identity ? `${harness.name} · ${identity}` : `${harness.name} ${index + 2}`),
+    accountProviderOf: harness.key,
+    remoteUse: { supported: false, enabled: false, shareSupported: false },
+  }));
+}
+
 export function listPluginEngineViews(): PluginEngineView[] {
-  return getPluginHarnessRegistry().list().map(toView);
+  return getPluginHarnessRegistry().list().flatMap((harness) => [toView(harness), ...separateProviderViews(harness)]);
 }
 
 const PREFS_FIELDS = new Set(['key', 'name', 'hidden', 'suspended', 'models', 'ownerStamp']);
@@ -268,7 +299,7 @@ export function pluginEngineDescriptors(views: readonly PluginEngineView[] = lis
 }
 
 export interface RegisterPluginEnginesIpcOpts {
-  handle(channel: string, listener: (event: IpcMainInvokeEvent, key?: unknown) => unknown): void;
+  handle(channel: string, listener: (event: IpcMainInvokeEvent, key?: unknown, extra?: unknown) => unknown): void;
   assertTrusted(event: IpcMainInvokeEvent): void;
   broadcast(channel: string, payload: unknown): void;
   /**
@@ -281,6 +312,13 @@ export interface RegisterPluginEnginesIpcOpts {
   remoteUse?: PluginEngineRemoteUseAccess;
   /** The user's per-engine settings; absent = engines are listed as declared and cannot be changed here. */
   settings?: PluginEngineSettingsAccess;
+  /** Providers taken out of engines; absent = only the engines themselves are listed. */
+  accountProviders?: PluginEngineAccountProvidersAccess;
+  /**
+   * The usage of the account a local task of an engine with accounts runs on; null = the task has
+   * no account yet (or the engine keeps none). Absent = every read is the engine's original login.
+   */
+  readTaskUsage?(key: string, sessionId: string, options: { fallbackToOriginal: boolean }): Promise<unknown>;
   isCurrentOwner?(stamp: DataOwnerPushStamp): boolean;
 }
 
@@ -309,6 +347,7 @@ export function registerPluginEnginesIpc(opts: RegisterPluginEnginesIpcOpts): ()
   const remote = () => opts.isDeviceLinkInvoke?.() === true;
   remoteUseAccess = opts.remoteUse ?? null;
   settingsAccess = opts.settings ?? null;
+  accountProvidersAccess = opts.accountProviders ?? null;
   opts.handle(PLUGIN_ENGINES_INVOKE.LIST, (event) => {
     if (remote()) return remotePluginEngineViews(listPluginEngineViews());
     opts.assertTrusted(event);
@@ -326,10 +365,19 @@ export function registerPluginEnginesIpc(opts: RegisterPluginEnginesIpcOpts): ()
     }
     requestPluginHarnessRefresh(Date.now(), targetGhostId);
   });
-  opts.handle(PLUGIN_ENGINES_INVOKE.USAGE, (event, key) => {
+  opts.handle(PLUGIN_ENGINES_INVOKE.USAGE, (event, key, task) => {
     const isRemote = remote();
     if (!isRemote) opts.assertTrusted(event);
-    return typeof key === 'string' ? readPluginHarnessUsage(key, { reportWorkerFailure: isRemote }) : null;
+    if (typeof key !== 'string') return null;
+    // A task of this computer names itself (2026-11-23): its account's usage, not the original
+    // login's. A phone or another computer may name a task this computer does not know (its Agent
+    // runs elsewhere); that keeps the engine-level read. Older hosts ignore the argument.
+    const sessionId = task && typeof task === 'object' ? (task as { sessionId?: unknown }).sessionId : undefined;
+    if (typeof sessionId === 'string' && sessionId && sessionId.length <= 256 && opts.readTaskUsage) {
+      const engine = getPluginHarnessRegistry().list().find((item) => item.key === key.replace(/~[a-z0-9]{8}$/, ''));
+      if (engine?.accounts?.methods.length) return opts.readTaskUsage(key, sessionId, { fallbackToOriginal: isRemote });
+    }
+    return readPluginHarnessUsage(key, undefined, { reportWorkerFailure: isRemote });
   });
   // Opening this computer to the owner's other computers is decided at this computer only.
   opts.handle(PLUGIN_ENGINES_INVOKE.SET_REMOTE_USE, async (event, input) => {
@@ -358,7 +406,9 @@ export function registerPluginEnginesIpc(opts: RegisterPluginEnginesIpcOpts): ()
     if (ownerStamp && !opts.isCurrentOwner?.(ownerStamp)) {
       throwIpcError('PERMISSION_DENIED', 'The account changed while editing the plugin engine');
     }
-    const harness = getPluginHarnessRegistry().list().find((item) => item.key === key);
+    // A taken-out provider's settings live under its own key; it lists its engine's models.
+    const engineKey = key.replace(/~[a-z0-9]{8}$/, '');
+    const harness = getPluginHarnessRegistry().list().find((item) => item.key === engineKey);
     // Setting something needs an engine this computer lists (and models it lists); undoing always
     // works, also for an engine whose plugin was turned off meanwhile.
     const sets = typeof patch.name === 'string' || patch.hidden === true || patch.suspended === true
@@ -369,7 +419,7 @@ export function registerPluginEnginesIpc(opts: RegisterPluginEnginesIpcOpts): ()
       if (patch.models.ids.some((id) => !listed.has(id))) throwIpcError('INVALID_PARAMS', 'Unknown plugin engine model');
     }
     // The plugin's own name is the default, not a display name to remember.
-    if (harness && patch.name === harness.name) patch.name = null;
+    if (harness && engineKey === key && patch.name === harness.name) patch.name = null;
     try {
       await access.update(key, patch);
     } catch {
@@ -377,7 +427,7 @@ export function registerPluginEnginesIpc(opts: RegisterPluginEnginesIpcOpts): ()
       throwIpcError('INTERNAL', 'Plugin engine settings could not be saved');
     }
     publish();
-    return harness ? toView(harness) : null;
+    return harness ? listPluginEngineViews().find((view) => view.key === key) ?? null : null;
   });
   let lastPayload = '';
   const publish = (): void => {
@@ -398,6 +448,7 @@ export function registerPluginEnginesIpc(opts: RegisterPluginEnginesIpcOpts): ()
   const offModels = onPluginHarnessModelsChanged(publish);
   const offRemoteUse = remoteUseAccess?.onChange(publish);
   const offSettings = settingsAccess?.onChange(publish);
+  const offAccountProviders = accountProvidersAccess?.onChange(publish);
   let disposed = false;
   return () => {
     if (disposed) return;
@@ -407,7 +458,9 @@ export function registerPluginEnginesIpc(opts: RegisterPluginEnginesIpcOpts): ()
     offModels();
     offRemoteUse?.();
     offSettings?.();
+    offAccountProviders?.();
     remoteUseAccess = null;
     settingsAccess = null;
+    accountProvidersAccess = null;
   };
 }

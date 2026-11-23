@@ -110,6 +110,7 @@ it.each([false, true])('uninstall cannot delete private data before MCP exits (f
     pluginTaskUninstaller: async (_id: string, run: () => Promise<void>) => run(), currentPluginUsageService: () => null,
     pluginDownloads: { removePlugin: async () => {} }, removeGhostSecrets: noop,
     removeGhostKvBestEffort: noop, createGhostKvStore: () => ({}), publishedModelsStore: () => ({}), publishedHarnessesStore: () => ({}), log: { warn: noop, info: noop },
+    forgetPluginEngineAccountsOfPlugin: async (id: string) => { expect(id).toBe('fixture'); events.push('engine-accounts-removed'); },
     fs: { promises: { rm: vi.fn(async (dir: string) => { expect(dir).toBe('/owner/ghost-fs/fixture'); events.push('data-removed'); }) } },
     getGhostHandoffStore: () => ({ removeInstance: async (id: string) => { expect(id).toBe('fixture'); events.push('handoff-removed'); } }),
     getGhostLibrarySlot: () => { throw new Error('no library'); },
@@ -121,5 +122,5 @@ it.each([false, true])('uninstall cannot delete private data before MCP exits (f
   const result = failed ? expect(work).rejects.toThrow('stop failed') : expect(work).resolves.toBeUndefined();
   await Promise.resolve(); expect(events).toEqual([]);
   finish(); await result;
-  expect(events).toEqual(failed ? [] : ['ui-revoked', 'package-removed', 'data-removed', 'handoff-removed']);
+  expect(events).toEqual(failed ? [] : ['ui-revoked', 'package-removed', 'engine-accounts-removed', 'data-removed', 'handoff-removed']);
 });
