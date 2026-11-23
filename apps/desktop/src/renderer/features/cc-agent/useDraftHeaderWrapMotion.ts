@@ -67,11 +67,19 @@ export function useDraftHeaderWrapMotion(
       const dy = start.top - chips.offsetTop;
       const dContent = start.contentTop - content.offsetTop;
       if (Math.abs(dx) >= 0.5 || Math.abs(dy) >= 0.5) {
+        // 折行与复原都走「先沿当前列上下、再沿目标行左右」两条腿:直接对角线插值会让
+        // 按钮排从 logo 右上角穿到 logo 左下角,200ms 里又压一次 logo。第一腿停在
+        // logo 右侧(折行)或 logo 下方(复原),第二腿才横移,两段都不经过品牌区。
+        const corner = stacked ? `translate(${dx}px, 0)` : `translate(0, ${dy}px)`;
         animations.push(
-          chips.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }], {
-            duration,
-            easing,
-          }),
+          chips.animate(
+            [
+              { transform: `translate(${dx}px, ${dy}px)` },
+              { transform: corner, offset: 0.5 },
+              { transform: 'none' },
+            ],
+            { duration, easing },
+          ),
         );
       }
       if (Math.abs(dContent) >= 0.5) {
