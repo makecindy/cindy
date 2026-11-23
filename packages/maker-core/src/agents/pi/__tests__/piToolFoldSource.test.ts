@@ -460,6 +460,56 @@ describe('cindy-tool-fold extension source', () => {
     }
   });
 
+  it('keeps the assistant text of a dropped round-trip', () => {
+    // 一条消息里既有正文又有调用时，正文是模型自己的计划与结论，折叠不能连它一起删。
+    const { context } = loadExtension();
+    const messages = pairs(40);
+    messages[22] = {
+      role: 'assistant',
+      content: [
+        { type: 'text', text: 'PLAN: rerun the flaky test before touching the parser' },
+        { type: 'toolCall', id: 'call-22', name: 'bash', arguments: { command: 'pnpm test' } },
+      ],
+    } as Message;
+    messages[23] = result('call-22', 'bash', 'ok '.repeat(200));
+    const view = projection(context, messages)!;
+    const text = view
+      .filter((message) => message.role === 'assistant')
+      .flatMap((message) => (message.content as Array<{ type: string; text?: string }>))
+      .map((block) => String(block.text ?? ''))
+      .join('\n');
+    expect(text).toContain('PLAN: rerun the flaky test');
+    expect(callIds(view)).not.toContain('call-22');
+    expect(text).toContain('read with cindy_toolfold_read(');
+  });
+
+  it('names the batch members it could not restore', async () => {
+    // 批里一条只剩入库摘要、原文又不在 giants 时，整批取回必须点名缺项，
+    // 静默跳过会让模型把半批内容当成整批原文。
+    const { context, tool } = loadExtension();
+    const preview = 'A ' + 'z'.repeat(1900) + '\n[truncated 28000 of 30001 chars; cindy_toolfold_read("p1") returns the full text]';
+    const messages: Message[] = [
+      { role: 'user', content: [{ type: 'text', text: 'run both' }] },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'toolCall', id: 'p1', name: 'bash', arguments: { command: 'run A' } },
+          { type: 'toolCall', id: 'p2', name: 'bash', arguments: { command: 'run B' } },
+        ],
+      } as Message,
+      { role: 'toolResult', toolCallId: 'p1', toolName: 'bash', content: [{ type: 'text', text: preview }] },
+      { role: 'toolResult', toolCallId: 'p2', toolName: 'bash', content: [{ type: 'text', text: 'B ok' }] },
+      ...pairs(40),
+    ];
+    const view = projection(context, messages)!;
+    const batchId = /cindy_toolfold_read\("([^"]+)"\)/.exec(records(view).join('\n'))![1];
+    const read = await tool.execute('t-batch', { call_id: batchId });
+    const text = String(read.content![0].text);
+    expect(text).toContain('B ok');
+    expect(text).toMatch(/missing 1 of \d+ round-trips/);
+    expect(text).toContain('p1 (full text evicted)');
+  });
+
   it('keeps a batch alias inside the recovery schema limit for huge provider ids', async () => {
     const { context, tool } = loadExtension();
     const messages = pairs(40);

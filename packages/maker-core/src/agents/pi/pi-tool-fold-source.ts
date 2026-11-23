@@ -641,11 +641,24 @@ export default function (pi) {
   function batchOriginal(batchId) {
     var ids = batchCalls[batchId] || [];
     var parts = [];
+    var missing = [];
     for (var i = 0; i < ids.length; i++) {
-      var original = findOriginal(String(ids[i]));
-      if (original && original.ok === true) parts.push(original.text);
+      var memberId = String(ids[i]);
+      var original = findOriginal(memberId);
+      if (original && original.ok === true) { parts.push(original.text); continue; }
+      // 缺项必须点名：静默跳过会让模型把半批内容当成整批原文。
+      var why = original && original.reason === 'evicted' ? 'full text evicted'
+        : original && original.reason === 'not-retained' ? 'full text not retained'
+          : 'not in this session';
+      missing.push(memberId + ' (' + why + ')');
     }
-    return parts.join('\n\n');
+    var text = parts.join('\n\n');
+    if (missing.length > 0) {
+      var note = '[missing ' + missing.length + ' of ' + ids.length + ' round-trips in this batch: '
+        + missing.join(', ') + ' — read a single id or re-run that command]';
+      text = text ? text + '\n\n' + note : note;
+    }
+    return { text: text, recovered: parts.length };
   }
 
   function pinOriginal(callId) {
@@ -692,7 +705,11 @@ export default function (pi) {
     execute: async function (_toolCallId, params) {
       var id = params && typeof params.call_id === 'string' ? params.call_id : '';
       if (!id) throw new Error('call_id is required');
-      if (batchCalls[id] && foldedIds[id] === undefined) return readSlice(id, batchOriginal(id), params);
+      if (batchCalls[id] && foldedIds[id] === undefined) {
+        var batch = batchOriginal(id);
+        if (batch.recovered === 0) return { content: [{ type: 'text', text: 'Cannot recover ' + id + ': ' + batch.text }], isError: true };
+        return readSlice(id, batch.text, params);
+      }
       var original = findOriginal(id);
       if (!original || original.ok !== true) {
         var reason = original && original.reason === 'not-retained'
@@ -833,7 +850,20 @@ export default function (pi) {
           var cname = String(unit.calls[nc].name || '?');
           group.names[cname] = (group.names[cname] || 0) + 1;
         }
-        dropped[unit.start] = true;
+        // 同一条 assistant 消息里除调用还有正文时，正文要留着：那是模型自己的计划与
+        // 结论，findOriginal 只还原调用参数与结果，取不回这些内容。
+        var keepBlocks = null;
+        for (var kb = 0; kb < assistant.content.length; kb++) {
+          var keptBlock = assistant.content[kb];
+          if (keptBlock && keptBlock.type === 'toolCall') continue;
+          if (keepBlocks === null) keepBlocks = [];
+          keepBlocks.push(keptBlock);
+        }
+        if (keepBlocks === null) {
+          dropped[unit.start] = true;
+        } else {
+          replaced[unit.start] = Object.assign({}, assistant, { content: keepBlocks });
+        }
         for (var d2 = 0; d2 < unit.indexes.length; d2++) dropped[unit.indexes[d2]] = true;
         dirty = true;
         continue;
