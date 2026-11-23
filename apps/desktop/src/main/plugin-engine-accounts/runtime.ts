@@ -39,7 +39,6 @@ import { PROVIDER_GROUP_DEFAULT_COOLDOWN_MS, PROVIDER_GROUP_LOCAL_PROVISIONAL_MS
 import {
   pickProviderGroupMember,
   providerGroupMembersFull,
-  providerGroupSchedulingCandidates,
   type SchedulableMember,
 } from '../provider-group/scheduler.js';
 import { quotaWindowsScheduleState } from '../provider-group/usage.js';
@@ -52,9 +51,7 @@ import {
   MAX_SUBSCRIPTION_ACCOUNTS,
   type SubscriptionAccountCommand,
   type SubscriptionAccountView,
-  type SubscriptionPoolScheduling,
   type SubscriptionPoolView,
-  type SubscriptionSessionAccount,
 } from '../../shared/subscriptionAccounts.js';
 import {
   newPluginEngineProviderSuffix,
@@ -397,6 +394,26 @@ export function readPluginEngineAccountBlocked(engineKey: string, accountId: str
   return pluginUsageState(state.usage.get(accountKey(engineKey, accountId))?.usage, model, Date.now()).limited;
 }
 
+/**
+ * Before a send that could move to another account: re-read the task's account when its last
+ * answer is older than the cache period (an idle task's sign-in may have lapsed since). Within the
+ * period nothing is asked; a slow plugin answer finishes in the background and this send goes on
+ * with what is known, like the selection reads.
+ */
+export async function refreshPluginEngineAccountForSend(engineKey: string, accountId: string): Promise<void> {
+  const ref = parsePluginEngineProviderId(pluginEngineProviderId(engineKey));
+  if (!ref) return;
+  const state = currentRuntime();
+  const read = Promise.all([readStatus(state, ref, accountId), readUsage(state, ref, accountId)]).catch(() => {});
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([read, new Promise<void>(resolve => { timer = setTimeout(resolve, SELECTION_READ_BUDGET_MS); })]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+  assertOwner(state);
+}
+
 /* ── Selection ─────────────────────────────────────────────────────────── */
 
 export interface PluginEngineAccountLease {
@@ -430,7 +447,6 @@ interface AcquireOptions {
   exclude?: ReadonlySet<string>;
   /** Check that the policy can select an account, reserving nothing. */
   dryRun?: boolean;
-  reportScheduling?(value: SubscriptionPoolScheduling): void;
 }
 
 /**
@@ -532,22 +548,6 @@ export async function acquirePluginEngineAccount(
     const exclude = rebind && binding
       ? new Set([...(options.exclude ?? []), binding.accountId]) : options.exclude;
     const strategy = providerStrategy(latest, selectionSuffix);
-    if (options.dryRun && options.reportScheduling) {
-      if (strategy === 'weight') return { scheduling: true as const };
-      const open = providerGroupSchedulingCandidates(members, { exclude });
-      const next = open.find(member => member.key === pickProviderGroupMember(members, strategy, {
-        exclude, lastPicked: state.lastPicked.get(selectionProvider), random: () => 0,
-      }));
-      if (!next && pending.size) return null;
-      options.reportScheduling({
-        version: 1, accounts: next && !pinnedTarget ? open.length : 0,
-        running: next?.running ?? 0,
-        totalRunning: members.reduce((sum, member) => sum + member.running, 0),
-        full: !pinnedTarget && providerGroupMembersFull(members, { exclude }),
-        urgency: next?.urgency ?? null, fiveHourTight: next?.fiveHourTight ?? false,
-      });
-      return { scheduling: true as const };
-    }
     let choice = pinnedTarget ?? pickProviderGroupMember(members, strategy, {
       exclude, lastPicked: state.lastPicked.get(selectionProvider),
     });
@@ -584,7 +584,7 @@ export async function acquirePluginEngineAccount(
     await Promise.race(pending);
     selection = select();
   }
-  if ('scheduling' in selection || options.dryRun) return null;
+  if (options.dryRun) return null;
   const { selected, pinned, reserved, pendingKey } = selection;
   const token = randomUUID();
   const key = accountKey(engineKey, selected);
@@ -689,15 +689,6 @@ export function pluginEngineFailureCause(error: unknown): unknown {
     current = cause;
   }
   return error;
-}
-
-/** Read-only scheduling facts, like the built-in pool's anonymous summary. */
-export async function readPluginEnginePoolScheduling(providerId: string, model: string): Promise<SubscriptionPoolScheduling | null> {
-  let summary: SubscriptionPoolScheduling | null = null;
-  await acquirePluginEngineAccount(providerId, model, [], {
-    resuming: false, dryRun: true, reportScheduling: value => { summary = value; },
-  });
-  return summary;
 }
 
 /**
@@ -819,44 +810,6 @@ export async function readPluginEnginePoolView(providerId: string, taskId?: stri
   };
 }
 
-/** Task-scoped account for the composer and model picker (built-in `session` read shape). */
-export async function readPluginEngineSessionAccount(
-  providerId: string,
-  sessionId: string | undefined,
-  nativeSessionId: string | undefined,
-  model?: string,
-): Promise<{ providerId: string; state: 'legacy' | 'unassigned' | 'unavailable' } | { providerId: string; state: 'bound'; account: SubscriptionSessionAccount }> {
-  const ref = parsePluginEngineProviderId(providerId);
-  if (!ref || !pluginEngineHasAccountPool(ref.engineKey)) return { providerId, state: 'legacy' };
-  const binding = readPluginEngineTaskAccount(ref.engineKey, sessionId, nativeSessionId);
-  if (!binding) return { providerId, state: 'unassigned' };
-  const pool = effectivePluginEnginePool(ref.engineKey);
-  const account = pool.accounts.find(entry => entry.id === binding.accountId);
-  if (!account) return { providerId, state: 'unavailable' };
-  const state = currentRuntime();
-  await Promise.all([readStatus(state, ref, account.id), readUsage(state, ref, account.id)]).catch(() => {});
-  assertOwner(state);
-  const view = accountView(state, ref, account);
-  const suffix = accountSuffix(pool, account.id);
-  const owner = pluginEngineProviderId(ref.engineKey, suffix);
-  const blocked = !!model && !account.paused && readPluginEngineAccountBlocked(ref.engineKey, account.id, model);
-  return {
-    providerId,
-    state: 'bound',
-    account: {
-      isDefault: account.id === 'default',
-      number: providerAccounts(pool, suffix).findIndex(entry => entry.id === account.id) + 1,
-      ...(view.identity ? { identity: view.identity } : {}),
-      ...(view.plan ? { plan: view.plan } : {}),
-      paused: account.paused,
-      status: view.status,
-      ...(view.usage ? { usage: view.usage, usageUpdatedAt: view.usage.plugin?.updatedAt } : {}),
-      ...(blocked ? { blocked: true as const, switchAvailable: sessionId ? await canSwitchPluginEngineAccount(providerId, sessionId, model) : false } : {}),
-      ...(owner !== providerId ? { ownerProviderId: owner } : {}),
-    },
-  };
-}
-
 /* ── Commands (settings, Helper) ───────────────────────────────────────── */
 
 async function withPool(
@@ -967,7 +920,8 @@ export async function runPluginEngineAccountCommand(
       }));
       await runLogin(state, ref, command.loginKey, account.id, false, method.id, command.secret);
       const identity = displayIdentity(state.status.get(accountKey(ref.engineKey, account.id))?.status);
-      if (original && identity && identity.toLowerCase() !== original.toLowerCase()) throw new Error('account_mismatch');
+      // No identity back cannot show it is the same account: the guard stays until it is.
+      if (original && identity?.toLowerCase() !== original.toLowerCase()) throw new Error('account_mismatch');
       await withPool(ref, current => ({
         ...current,
         accounts: current.accounts.map(entry => entry.id !== account.id ? entry

@@ -22,7 +22,7 @@ import {
  *   并发上限、暂停、任务固定账号、启动失败与发送前换号)；plugin-harnesses.md「引擎账号」。
  * - 现有覆盖缺口：新模块；内置账号池的测试只覆盖 Claude / Codex。
  * - 最小失败输入：两个已登录账号的引擎连开两个任务；第一个账号启动时报额度用完；绑定账号额度用完后再发送；
- *   插件登录失败的添加。
+ *   空闲一分钟后绑定账号已退出登录再发送；重新登录只回「已登录」不回身份；插件登录失败的添加。
  * - tier：unit(内存设置文件、内存冷却、假的插件 worker；只有账号目录在 mkdtemp 临时目录里创建)。
  *   实测耗时：< 2s。
  */
@@ -179,6 +179,58 @@ describe('plugin engine account pool', () => {
       ...pool, accounts: pool.accounts.map(account => account.id === moved ? { ...account, paused: true } : account),
     }));
     await expect(preparePluginEngineAccountForSend('t1', deps)).rejects.toThrow('No subscription account is available');
+  });
+
+  // An idle task's sign-in can lapse after its account was last read (review of #12242). Minimal
+  // input: a task bound to a signed-in account that the plugin reports signed out a minute later.
+  it('re-reads an idle task account before sending once its last answer is old, and moves the task when it signed out', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const deps = {
+        readSession: async () => ({ status: 'active', providerId: PROVIDER, agentKind: 'acp', model: null, sdkSessionId: 'native-1' }),
+        isRunning: () => false,
+        rebuild: async (_id: string, assertCurrent: () => void) => { assertCurrent(); },
+      };
+      const lease = await acquirePluginEngineAccount(PROVIDER, undefined, ['task:t1']);
+      await lease!.bind(['task:t1', 'native:native-1']);
+      lease!.release();
+      const from = lease!.accountId;
+      h.status.set(from, { state: 'signed-out' });
+      // Within the cache period the plugin is not asked again: the task stays.
+      expect(await preparePluginEngineAccountForSend('t1', deps)).toBe(false);
+      expect(readPluginEngineBinding(ENGINE, 'task:t1')?.accountId).toBe(from);
+      vi.setSystemTime(Date.now() + 61_000);
+      expect(await preparePluginEngineAccountForSend('t1', deps)).toBe(true);
+      expect(readPluginEngineBinding(ENGINE, 'task:t1')?.accountId).not.toBe(from);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // A re-login must come back as the same account (review of #12242). Minimal input: the plugin
+  // answers a re-login of a@example.com with "signed in" and no identity.
+  it('keeps a re-signed-in account out of new tasks until the plugin shows the same identity', async () => {
+    await updatePluginEnginePool(ENGINE, pool => ({
+      ...pool,
+      strategy: 'order',
+      accounts: pool.accounts.map(account => account.id === A ? { ...account, lastConfirmedIdentity: 'a@example.com' } : account),
+    }));
+    h.login.mockImplementationOnce(async (_key: string, dir: string) => {
+      h.status.set(path.basename(dir), { state: 'signed-in' });
+      return { ok: true };
+    });
+    await expect(runPluginEngineAccountCommand({ action: 'login', providerId: PROVIDER, accountId: A, loginKey: 'k1', methodId: 'api-key', secret: 'sk-a' }))
+      .rejects.toThrow('account_mismatch');
+    const elsewhere = await acquirePluginEngineAccount(PROVIDER, undefined, ['task:t1']);
+    expect(elsewhere!.accountId).toBe(B);
+    elsewhere!.release();
+
+    h.login.mockImplementationOnce(async (_key: string, dir: string) => {
+      h.status.set(path.basename(dir), { state: 'signed-in', identity: { email: 'A@example.com' } });
+      return { ok: true };
+    });
+    await runPluginEngineAccountCommand({ action: 'login', providerId: PROVIDER, accountId: A, loginKey: 'k2', methodId: 'api-key', secret: 'sk-a' });
+    expect((await acquirePluginEngineAccount(PROVIDER, undefined, ['task:t2']))!.accountId).toBe(A);
   });
 
   it('adds an account only after the plugin signs it in, and leaves nothing behind when the sign-in fails', async () => {

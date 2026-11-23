@@ -8,14 +8,10 @@ import {
   isSubscriptionPoolProviderIdShape,
 } from '../../shared/subscriptionAccounts.js';
 import {
-  parsePluginEngineSessionAccountQuery,
   parseSubscriptionAccountCommand,
   parseSubscriptionSessionAccountQuery,
 } from './commands.js';
-import {
-  onPluginEngineAccountsChanged,
-  readPluginEngineSessionAccount,
-} from '../plugin-engine-accounts/runtime.js';
+import { onPluginEngineAccountsChanged } from '../plugin-engine-accounts/runtime.js';
 export { parseSubscriptionAccountCommand } from './commands.js';
 import { executeSubscriptionAccountCommand } from './service.js';
 import {
@@ -98,16 +94,6 @@ export function registerSubscriptionAccountsIpc(): void {
     if (context?.sharedTask)
       throwIpcError('PERMISSION_DENIED', 'Account management requires the owner');
     if (!context) assertTrustedAppRendererEvent(event);
-    // Read-only task account for its usage display; same owner gate as `read`.
-    const pluginSession = parsePluginEngineSessionAccountQuery(raw);
-    if (pluginSession) {
-      try {
-        return await readPluginEngineSessionAccount(
-          pluginSession.providerId, pluginSession.sessionId, pluginSession.nativeSessionId, pluginSession.model);
-      } catch {
-        throwIpcError('SUBSCRIPTION_ACCOUNT_FAILED', 'Could not read the task account');
-      }
-    }
     const session = parseSubscriptionSessionAccountQuery(raw);
     if (session) {
       try {

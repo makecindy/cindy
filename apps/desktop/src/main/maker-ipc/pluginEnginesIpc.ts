@@ -147,17 +147,22 @@ export function pluginEngineSettingsOf(harness: Pick<PluginHarness, 'key'>): Plu
   return settingsAccess?.read(harness.key) ?? {};
 }
 
-function toView(harness: PluginHarness): PluginEngineView {
-  const settings = pluginEngineSettingsOf(harness);
+/**
+ * One provider of an engine: the engine itself, or a provider taken out of it (`key` =
+ * `<engine>~<suffix>`, `declared` = the name Cindy gives it). Models, modes and availability come
+ * from the engine; the name, hiding, turning off and model switches from that provider's own settings.
+ */
+function toView(harness: PluginHarness, key = harness.key, declared = harness.name): PluginEngineView {
+  const settings = pluginEngineSettingsOf({ key });
   const listed = engineModels(harness);
   const off = settings.disabledModels?.length ? new Set(settings.disabledModels) : null;
   const disabledModels = off ? listed.filter((model) => off.has(model.id)) : [];
   return {
-    key: harness.key,
-    providerId: pluginEngineProviderId(harness.key),
+    key,
+    providerId: pluginEngineProviderId(key),
     ghostId: harness.ghostId,
     harnessId: harness.harnessId,
-    name: settings.name ?? harness.name,
+    name: settings.name ?? declared,
     ...(harness.description ? { description: harness.description } : {}),
     ...(harness.iconDataUrl ? { iconDataUrl: harness.iconDataUrl } : {}),
     // Turned off by the user: reported like an engine its plugin cannot run, which every reader
@@ -174,49 +179,28 @@ function toView(harness: PluginHarness): PluginEngineView {
     ...(off ? { defaultModelAllowed: false } : {}),
     ...(settings.hidden ? { hidden: true as const } : {}),
     ...(settings.suspended ? { suspended: true as const } : {}),
-    ...(settings.name ? { declaredName: harness.name } : {}),
+    ...(settings.name ? { declaredName: declared } : {}),
     ...(disabledModels.length > 0 ? { disabledModels } : {}),
     ...(harness.accounts ? { accounts: { methods: harness.accounts.methods.map((method) => ({ ...method })) } } : {}),
   };
 }
 
 /**
- * A provider taken out of an engine runs that engine on its own accounts. It keeps the engine's
- * models and modes; its own display name, hiding and turning off live under its own key; it is
- * not offered to other computers or shared (taking out never widens access).
+ * A provider taken out of an engine runs that engine on its own accounts, as its own provider: it
+ * has its own name, hiding, turning off and model switches (under its own key), independent of the
+ * engine's provider. It is not offered to other computers or shared (taking out never widens access).
  */
-function separateProviderViews(harness: PluginHarness, base: PluginEngineView): PluginEngineView[] {
+function separateProviderViews(harness: PluginHarness): PluginEngineView[] {
   if (!harness.accounts?.methods.length || !accountProvidersAccess) return [];
-  return accountProvidersAccess.list(harness.key).map(({ suffix, identity }, index) => {
-    const key = `${harness.key}~${suffix}`;
-    const settings = settingsAccess?.read(key) ?? {};
-    const declared = identity ? `${harness.name} · ${identity}` : `${harness.name} ${index + 2}`;
-    const view: PluginEngineView = {
-      ...base,
-      key,
-      providerId: pluginEngineProviderId(key),
-      name: settings.name ?? declared,
-      accountProviderOf: harness.key,
-      remoteUse: { supported: false, enabled: false, shareSupported: false },
-      ...(base.suspended || settings.suspended ? { availability: { state: 'unavailable', reason: 'suspended' } } : {}),
-    };
-    delete view.hidden;
-    delete view.suspended;
-    delete view.declaredName;
-    return {
-      ...view,
-      ...(settings.hidden ? { hidden: true as const } : {}),
-      ...(settings.suspended ? { suspended: true as const } : {}),
-      ...(settings.name ? { declaredName: declared } : {}),
-    };
-  });
+  return accountProvidersAccess.list(harness.key).map(({ suffix, identity }, index) => ({
+    ...toView(harness, `${harness.key}~${suffix}`, identity ? `${harness.name} · ${identity}` : `${harness.name} ${index + 2}`),
+    accountProviderOf: harness.key,
+    remoteUse: { supported: false, enabled: false, shareSupported: false },
+  }));
 }
 
 export function listPluginEngineViews(): PluginEngineView[] {
-  return getPluginHarnessRegistry().list().flatMap((harness) => {
-    const base = toView(harness);
-    return [base, ...separateProviderViews(harness, base)];
-  });
+  return getPluginHarnessRegistry().list().flatMap((harness) => [toView(harness), ...separateProviderViews(harness)]);
 }
 
 const PREFS_FIELDS = new Set(['key', 'name', 'hidden', 'suspended', 'models', 'ownerStamp']);

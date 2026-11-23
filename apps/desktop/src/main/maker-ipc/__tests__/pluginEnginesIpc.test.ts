@@ -309,8 +309,9 @@ describe('plugin engines with the settings from Settings → Model providers', (
 
 /*
  * 插件引擎的账号(subscription-account-pools.md 插件引擎的账号，2026-11-23)。生产入口同上。可观察结果：拿出来的单独供应商
- * 作为一项列出(沿用引擎的模型，不对其他电脑开放，显示名按自己的键保存)；任务输入框的用量按任务所在账号读，
- * 另一台电脑问起这台不认识的任务时保留引擎原有的读法。最小失败输入：引擎有一个拿出来的供应商；带 sessionId 的用量读取。
+ * 作为一项列出(沿用引擎的模型清单，不对其他电脑开放，显示名、模型开关与停用按自己的键保存，与引擎互不影响)；
+ * 任务输入框的用量按任务所在账号读，另一台电脑问起这台不认识的任务时保留引擎原有的读法。最小失败输入：引擎有一个
+ * 拿出来的供应商；只在其中一方关掉模型或停用；带 sessionId 的用量读取。
  */
 describe('plugin engines with accounts', () => {
   it('lists a provider taken out of an engine on its own, closed to other computers, and reads a task account usage', async () => {
@@ -342,6 +343,18 @@ describe('plugin engines with accounts', () => {
 
     await handlers.get(PLUGIN_ENGINES_INVOKE.SET_PREFS)!({}, { key: `${KEY}~ab12cd34`, name: 'Work key' });
     expect(list().map(view => view.name)).toEqual(['DeepSeek Harness', 'Work key']);
+
+    // Its own model switches and turning off, independent of the engine's (review of #12242).
+    await handlers.get(PLUGIN_ENGINES_INVOKE.SET_PREFS)!({}, { key: KEY, models: { ids: ['deepseek-lite'], disabled: true } });
+    await handlers.get(PLUGIN_ENGINES_INVOKE.SET_PREFS)!({}, { key: `${KEY}~ab12cd34`, models: { ids: ['deepseek-v4'], disabled: true } });
+    let [base, own] = list();
+    expect(base!.models.map(model => model.id)).toEqual(['deepseek-v4']);
+    expect(own!.models.map(model => model.id)).toEqual(['deepseek-lite']);
+    expect(own).toMatchObject({ defaultModelAllowed: false, disabledModels: [{ id: 'deepseek-v4' }] });
+    await handlers.get(PLUGIN_ENGINES_INVOKE.SET_PREFS)!({}, { key: `${KEY}~ab12cd34`, suspended: true });
+    [base, own] = list();
+    expect(base!.availability.state).toBe('available');
+    expect(own).toMatchObject({ suspended: true, availability: { state: 'unavailable', reason: 'suspended' } });
 
     const usage = handlers.get(PLUGIN_ENGINES_INVOKE.USAGE)!;
     await usage({}, KEY, { sessionId: 's1' });

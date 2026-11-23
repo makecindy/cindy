@@ -19,6 +19,7 @@ import {
   pluginEngineHasAccountPool,
   readPluginEngineAccountBlocked,
   readPluginEngineTaskAccount,
+  refreshPluginEngineAccountForSend,
 } from './runtime.js';
 import { effectivePluginEnginePool } from './store.js';
 
@@ -113,6 +114,11 @@ export async function preparePluginEngineAccountForSend(sessionId: string, deps:
   const pool = effectivePluginEnginePool(task.engineKey);
   const account = pool.accounts.find(entry => entry.id === task.accountId);
   if (account && !account.paused) {
+    if (deps.isRunning(sessionId)) return false;
+    // Only a provider with another account can move the task: then check what its account says now.
+    const placement = pool.placement?.[task.accountId] ?? null;
+    if (pool.accounts.filter(entry => (pool.placement?.[entry.id] ?? null) === placement).length < 2) return false;
+    await refreshPluginEngineAccountForSend(task.engineKey, task.accountId);
     // Blocked for this model: move only when another account can take it right now.
     if (!readPluginEngineAccountBlocked(task.engineKey, task.accountId, task.model) || deps.isRunning(sessionId)) return false;
     try {

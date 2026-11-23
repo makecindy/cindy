@@ -11,35 +11,6 @@ import { PROVIDER_GROUP_STRATEGIES } from '../../shared/providerGroup.js';
 import { accountIdValid } from './store.js';
 import { GHOST_HARNESS_ACCOUNT_SECRET_MAX } from '@cindy/plugin-protocol';
 
-/**
- * A plugin engine task's account, for its composer and model picker (2026-11-23). Same `session`
- * action as built-in providers; older hosts reject the plugin provider id.
- */
-export function parsePluginEngineSessionAccountQuery(
-  raw: unknown,
-): { providerId: string; sessionId?: string; nativeSessionId?: string; model?: string } | null {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
-  const value = raw as Record<string, unknown>;
-  if (value.action !== 'session' || !isPluginEngineProviderIdShape(value.providerId)) return null;
-  const id = (item: unknown) => {
-    if (item === undefined || item === null) return undefined;
-    if (typeof item !== 'string' || !item || item.length > 256) throwIpcError('INVALID_PARAMS', 'Invalid subscription session');
-    return item;
-  };
-  const sessionId = id(value.sessionId);
-  const nativeSessionId = id(value.nativeSessionId);
-  if (!sessionId && !nativeSessionId) throwIpcError('INVALID_PARAMS', 'Invalid subscription session');
-  const model = value.model;
-  if (model !== undefined && model !== null && (typeof model !== 'string' || !model.trim() || model.length > 512))
-    throwIpcError('INVALID_PARAMS', 'Invalid subscription model');
-  return {
-    providerId: value.providerId,
-    ...(sessionId ? { sessionId } : {}),
-    ...(nativeSessionId ? { nativeSessionId } : {}),
-    ...(typeof model === 'string' ? { model } : {}),
-  };
-}
-
 /** A plugin engine sign-in choice; secrets only for plugin engines (the caller restricts origins). */
 function pluginLoginFields(value: Record<string, unknown>, providerId: string): { methodId?: string; secret?: string } {
   const { methodId, secret } = value;
