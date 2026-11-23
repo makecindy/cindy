@@ -29,7 +29,7 @@ import { RemoteProviderGroupMembers } from '@/features/provider-group/RemoteProv
 import { ProviderShareEntryButton } from '@/features/provider-share/ProviderShareEntryButton';
 import { useOwnedProviderShares } from '@/features/provider-share/useOwnedProviderShares';
 import { useLocalProviderGroups } from '@/features/provider-group/useLocalProviderGroups';
-import { useControllableDevices } from '@/hooks/useControllableDevices';
+import { useControllableDevices, type ControllableDevice } from '@/hooks/useControllableDevices';
 import { useDevicesProviders } from '@/hooks/useDevicesProviders';
 import { providerDisplayName } from '@/lib/providerDisplayName';
 import { providerMonogram } from '@/lib/providerModels';
@@ -61,6 +61,8 @@ export interface OwnRemoteProviderList {
   ownedShares: ReturnType<typeof useOwnedProviderShares>;
   /** 被其他电脑的供应商组收进去的分享(「分享给我的供应商」里不再单独列出)。 */
   hiddenShareIds: ReadonlySet<string>;
+  /** 这份列表依据的在线、允许远程控制的同账号电脑；其他电脑的插件引擎沿用同一份，不再另读。 */
+  devices: readonly ControllableDevice[];
 }
 
 /**
@@ -127,7 +129,7 @@ export function useOwnRemoteProviderList(): OwnRemoteProviderList {
       !provider.subscriptionPoolAlias || group || ownedShares.get(deviceId)?.has(provider.id)),
     [entries, ownedShares],
   );
-  return { entries: visibleEntries, hiddenShareIds, ownedShares };
+  return { entries: visibleEntries, hiddenShareIds, ownedShares, devices };
 }
 
 export function useOwnRemoteProviders(): readonly OwnRemoteProvider[] {
