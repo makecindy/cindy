@@ -78,6 +78,8 @@ export function imLabel(im: string, t: TFunction): string {
       return t('settings.feishuBot.services.feishu');
     case 'lark':
       return t('settings.feishuBot.services.lark');
+    case 'imessage':
+      return t('bots.channels.platform.imessage');
     case 'discord':
       return t('settings.about.social.discordLabel');
     case 'wechat':

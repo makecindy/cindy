@@ -9,6 +9,7 @@ export function ComputerPermissionRow({
   icon,
   granted,
   pending,
+  disabled = pending,
   actionLabel,
   onAction,
   compact = false,
@@ -20,6 +21,7 @@ export function ComputerPermissionRow({
   icon?: ReactNode;
   granted: boolean;
   pending: boolean;
+  disabled?: boolean;
   actionLabel: string;
   onAction: () => void;
 }) {
@@ -27,7 +29,7 @@ export function ComputerPermissionRow({
     <button data-settings-search-action="Grant or open the listed computer permission"
       type="button"
       onClick={onAction}
-      disabled={pending}
+      disabled={disabled}
       className={cn(
         'flex w-full min-w-0 items-center text-left',
         compact
@@ -59,7 +61,7 @@ export function ComputerPermissionRow({
           {icon}
         </span>
       )}
-      <span className="min-w-0 flex-1 truncate text-13 font-medium text-[var(--settings-section-title)]">
+      <span className="min-w-0 flex-1 break-words text-13 font-medium text-[var(--settings-section-title)]">
         {label}
       </span>
       <span

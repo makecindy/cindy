@@ -2275,16 +2275,22 @@ export class ClaudeCodeAgent extends BaseAgent {
     // everything else stays with the native classifier so no call is reviewed twice.
     const nativeAutoPolicyHook: HookCallback = async (input) => {
       if (input.hook_event_name !== 'PreToolUse') return { continue: true };
-      if (
-        mutablePermissionMode !== 'auto' || mutablePlanMode || planTurnActive
-        || !usesNativeClaudeAutoReview()
-      ) return { continue: true };
       const pre = input as PreToolUseHookInput;
       const toolName = pre.tool_name;
       const decide = (permissionDecision: 'allow' | 'ask', reason: string) => ({
         continue: true,
         hookSpecificOutput: { hookEventName: 'PreToolUse' as const, permissionDecision, permissionDecisionReason: reason },
       });
+      // A user or project `permissions.allow` rule skips canUseTool in every mode, which is where a
+      // channel turn's forced confirmation (non-owner destructive call) is decided. Hand those calls
+      // back to the approval chain in Ask as well as Auto (the modes that accept a turn policy).
+      if (!mutablePlanMode && !planTurnActive && forceTurnConfirmation(toolName, pre.tool_input)) {
+        return decide('ask', 'This channel turn requires confirmation for this action.');
+      }
+      if (
+        mutablePermissionMode !== 'auto' || mutablePlanMode || planTurnActive
+        || !usesNativeClaudeAutoReview()
+      ) return { continue: true };
       const isMcp = resolveMcpToolTarget(toolName, registeredMcpServerNames) !== null;
       const mcpPolicy = isMcp ? classifyMcpApprovalPolicy(toolName, pre.tool_input) : null;
       // Requester authority (owner / group guest) and forceConfirmToolCall are only known to

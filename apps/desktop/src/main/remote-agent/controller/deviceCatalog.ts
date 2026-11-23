@@ -12,6 +12,7 @@ import { effectiveSourceIdForModel, getModel, isModelSelectableForNewRoute, isMo
 
 import { remoteProviderDisableKey, isProviderDisabled } from '@cindy/model-providers';
 import { readModelDisableOverrides } from '../../maker-host/model-disable-store.js';
+import { PLUGIN_ENGINES_INVOKE, parseOfferedPluginEngines } from '../../../shared/pluginEngines.js';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare.js';
 import { resolveVerifiedContextWindow } from '../../../shared/sessionContextWindow.js';
 
@@ -151,4 +152,14 @@ export async function readRemoteProviderRoute(route: {
     provider, model,
     verifiedContextWindow: resolveDeviceHandoffWindow(catalog, route.agentDeviceId, route.agentKind, route.model, providerId),
   };
+}
+
+/** Read the authorized plugin engine catalog for one execution location. */
+export async function readRemotePluginEngines(deviceId: string) {
+  const { remoteBackgroundInvoke } = await import('../../device-link');
+  const reply = await remoteBackgroundInvoke(deviceId, PLUGIN_ENGINES_INVOKE.LIST, []);
+  if (!reply.ok) {
+    throw new Error('[REMOTE_AGENT_UNAVAILABLE] Selected remote plugin engine is unavailable.');
+  }
+  return parseOfferedPluginEngines(reply.result);
 }

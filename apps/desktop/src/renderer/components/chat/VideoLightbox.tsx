@@ -77,6 +77,9 @@ function releaseMediaElement(el: HTMLMediaElement | null): void {
   } catch {
     /* 元素已 detach — 静默 */
   }
+  // The playback bus may have released this element first; a second load()
+  // would only run the load algorithm again on an already-empty element.
+  if (el.getAttribute('src') === null && el.srcObject === null) return;
   el.removeAttribute('src');
   el.load();
 }

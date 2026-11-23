@@ -122,7 +122,7 @@ function SessionPreviewCard({ preview }: { preview: PreviewState }) {
       className={cn(
         'pointer-events-none fixed z-fullscreen rounded-xl',
         'bg-[var(--surface-elevated)] border border-sidebar-border',
-        'px-3 pb-[11px] pt-2.5',
+        'px-3 pb-2.5 pt-2.5',
       )}
       style={{
         left: preview.anchorRight + 10,
@@ -150,7 +150,7 @@ function SessionPreviewCard({ preview }: { preview: PreviewState }) {
           {body}
         </div>
       )}
-      <div className="mt-[7px] text-10 leading-none text-[var(--text-tertiary)]">{meta}</div>
+      <div className="mt-1.5 text-10 leading-none text-[var(--text-tertiary)]">{meta}</div>
     </div>,
     document.body,
   );
@@ -289,7 +289,7 @@ export function RailNav({
         getId={(s) => s.id}
         onReorder={onReorderPinned}
         reducedMotion={reducedMotion}
-        className="flex w-full shrink-0 flex-col items-center gap-[3px]"
+        className="flex w-full shrink-0 flex-col items-center gap-0.5"
         filter="input, textarea, select, a, [data-no-drag]"
         renderItem={(session) => {
         const isActive = session.id === activeSessionId;
@@ -363,7 +363,7 @@ export function RailNav({
       />
 
       {pinnedSessions.length > 0 && (
-        <div className="my-[7px] h-px w-[22px] shrink-0 bg-sidebar-border" aria-hidden />
+        <div className="my-1.5 h-px w-[22px] shrink-0 bg-sidebar-border" aria-hidden />
       )}
 
       {/* ── 项目 / 对话:功能钮同款圆钮;hover/点击经 railPanelStore 通知

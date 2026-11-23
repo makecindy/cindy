@@ -336,6 +336,8 @@ userData 路径的摘要，使同一沙箱跨重启保持身份、不同沙箱�
 
 ## Computer Use 的窗口与桌面目标
 
+macOS 的录屏、控制其他 App、麦克风、文件访问等申请入口和发行包验证场景见 [Mac 客户端的系统权限](macos-system-permissions.md)。
+
 普通控件继续使用 `get_window_state` 和窗口内元素／坐标。macOS 菜单栏、状态栏图标不属于
 设置窗口：不能删除 `window_id` 或关闭驱动的窗口归属检查来让窗口 token 越界操作。
 经用户允许占用前台键鼠后，先通过 `cindy_computer.get_desktop_state` 取得桌面截图，再以

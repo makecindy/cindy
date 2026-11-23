@@ -512,6 +512,13 @@ function botsUpdateProfile(db: Database.Database, args: unknown): { currentVersi
     } else if (clearAvatarRefs) {
       db.prepare("DELETE FROM media_refs WHERE ref_kind = 'bot-avatar' AND ref_id = ?").run(id);
     }
+    // The canonical chat is the buddy. A later rename must replace the name
+    // captured when the template was installed, or hand-off chips keep the old one.
+    if (p.displayName !== undefined && expectString(p.displayName, 'displayName') !== current.displayName) {
+      db.prepare(`UPDATE sessions SET title = ?, updated_at = ? WHERE id IN
+        (SELECT session_id FROM bot_session_links WHERE bot_id = ? AND role = 'canonical' AND archived_at IS NULL)`)
+        .run(expectString(p.displayName, 'displayName'), now, id);
+    }
     if (changed) {
       db.prepare(`INSERT INTO bot_profile_versions
         (id, bot_id, version, identity_source, capabilities_json, created_at)
@@ -1018,6 +1025,7 @@ function botsArchiveChannelLanes(
   const routeKey = nullableString(p.routeKey);
   const routeKeyPrefix = nullableString(p.routeKeyPrefix);
   const exceptBotId = nullableString(p.exceptBotId);
+  const botId = nullableString(p.botId);
   const now = expectNumber(p.now, 'now');
   if ((routeKey === null) === (routeKeyPrefix === null)) {
     throw new Error('Exactly one of routeKey / routeKeyPrefix is required');
@@ -1029,7 +1037,7 @@ function botsArchiveChannelLanes(
       WHERE role = 'channel' AND archived_at IS NULL
         AND (route_key = ? OR (? IS NOT NULL AND substr(route_key, 1, length(?)) = ?))`)
       .all(routeKey, routeKeyPrefix, routeKeyPrefix, routeKeyPrefix) as Array<{ botId: string; sessionId: string }>;
-    const targets = exceptBotId ? rows.filter((row) => row.botId !== exceptBotId) : rows;
+    const targets = rows.filter(row => (!botId || row.botId === botId) && row.botId !== exceptBotId);
     const archiveLink = db.prepare('UPDATE bot_session_links SET archived_at = ? WHERE session_id = ?');
     const archiveSession = db.prepare(`UPDATE sessions SET status = 'archived', updated_at = ?
       WHERE id = ? AND status = 'active'`);

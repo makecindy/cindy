@@ -172,8 +172,6 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
 }: SessionCardProps & SidebarNavigationProps) {
   const { t } = useTranslation();
   const followers = useSessionFollowers(session);
-  // 标题后常显的标记:任务标签色球与「伙伴在跟进」头像。浮出操作钮与归档确认胶囊按它让位。
-  const hasTitleMarks = !!session.tags?.length || followers.length > 0;
   const cindyMakeActivity = useCindyMakeActivity(session);
   const cindyMakePreparing = cindyMakeActivity === 'building' ? undefined : cindyMakeActivity;
   // mod+1..9 序号徽标:模块 store 按 sessionId 精准订阅,非按住态恒为 null。
@@ -293,6 +291,10 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   const cardPreview = awaitingText ?? preparationText ?? bodyPreview;
   // 任务信息复选(C / C' 期):卡片右下角信息槽内容,与整理菜单同源共享状态。
   const { fields: taskInfoFields } = useTaskInfoFields();
+  const showProject = taskInfoFields.includes('project');
+  const showTeammate = taskInfoFields.includes('teammate');
+  const hasTitleMarks = !!session.tags?.length || (showTeammate && followers.length > 0);
+  const inboxProject = inboxMode ? sessionTaskProjectIconDirectory(session) : null;
   const cardPrRefs = usePrRefsForSession(session.id);
   const cardInfoPrRef = taskInfoFields.includes('pr') ? cardPrRefs[0] : undefined;
   const cardInfoWorktree = useTaskInfoWorktree(session, taskInfoFields.includes('worktree'));
@@ -591,10 +593,12 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   ) : null;
 
   const statusIconNode = (
-    <span className={cn(CARD_TITLE_STATUS_SLOT_CLASS, inboxMode && "!w-[18px]")} aria-hidden>
+    <span className={cn(CARD_TITLE_STATUS_SLOT_CLASS, "empty:hidden", inboxMode && "!w-[18px]")} aria-hidden>
       <SessionStatusIcon
-          identityIcon={inboxMode && sessionTaskProjectIconDirectory(session) ? (
-            <ResolvedProjectIcon directory={sessionTaskProjectIconDirectory(session)!}
+          hasSeparateStatusIndicator={rightStatusKind !== 'time'}
+          hideHarness={inboxProject ? !showProject : !taskInfoFields.includes('harness')}
+          identityIcon={showProject && inboxProject ? (
+            <ResolvedProjectIcon directory={inboxProject}
               remoteHostId={session.remoteHostId} deviceId={session.deviceLinkDeviceId}
               name={sourceLabel} size={18} />
           ) : undefined}
@@ -650,11 +654,6 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
       {showScheduleBindingBadge || showAutomationTimer ? (
         <span className={CARD_TITLE_META_SLOT_CLASS}>{renderAutomationMeta(10)}</span>
       ) : null}
-      <span
-        className="inline-block"
-        style={{ width: showScheduleBindingBadge || showAutomationTimer ? 7 : 6 }}
-        aria-hidden
-      />
     </>
   );
 
@@ -783,7 +782,10 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
               draggable={splitDragHandleActive}
               className="relative flex h-[22px] min-w-0 flex-1 items-center gap-0"
             >
-              <span className="flex shrink-0 items-center">{titlePrefixNode}</span>
+              <span className={cn(
+                'flex shrink-0 items-center',
+                showScheduleBindingBadge || showAutomationTimer ? 'mr-[7px]' : 'has-[>:not(:empty)]:mr-1.5',
+              )}>{titlePrefixNode}</span>
               {isEditing ? (
                 <SessionRenameInput
                   sessionId={session.id}
@@ -822,7 +824,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
                   </SidebarTitleMarquee>
                   {/* 任务标签常显、紧跟标题，不属于任务信息复选。 */}
                   <TaskTagDots tags={session.tags} />
-                  <BotFollowMark followers={followers} />
+                  {showTeammate && <BotFollowMark followers={followers} />}
                   {remoteIconKind && (
                     <RemoteProjectIcon
                       kind={remoteIconKind}
@@ -837,7 +839,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
                     />
                   )}
                   {/* Agent 在另一台电脑运行(任务在本机)的标识在 Agent 图标上(信号波纹)。 */}
-                  {sourceLabel && !inboxMode ? (
+                  {showProject && sourceLabel && !inboxMode ? (
                     <span
                       title={sourceLabel}
                       data-project-source
@@ -1048,7 +1050,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
             {!isEditing && hasTitleMarks ? (
               <span className="flex h-[1.22em] shrink-0 items-center gap-1.5 text-12">
                 <TaskTagDots tags={session.tags} />
-                <BotFollowMark followers={followers} />
+                {showTeammate && <BotFollowMark followers={followers} />}
               </span>
             ) : null}
             {/* 归档确认胶囊的隐形同款占位:与胶囊同文案同样式,按实际宽度让位。
@@ -1117,6 +1119,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
             )}
           >
             <SessionStatusIcon
+              hideHarness={!taskInfoFields.includes('harness')}
               session={session}
               isRunning={leftIconRunning}
               isAttached={isAttached}

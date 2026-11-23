@@ -55,6 +55,8 @@ export interface AttachedFileInput {
 }
 
 export interface AttachedFile {
+  /** Opaque local card/resource identity, independent of each attachment occurrence. */
+  mcpAppResourceKey?: string;
   id: string;
   name: string;
   path: string;

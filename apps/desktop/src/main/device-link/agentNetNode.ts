@@ -302,6 +302,8 @@ export function createAgentNetNode(ports: AgentNetNodePorts) {
     /** Connects to it before the first link so the session exists before the first message (PortableSocket.connectSession). */
     connect(peer: string): Promise<boolean> { return socket?.connectSession?.(peer) ?? Promise.resolve(false); },
     route(peer: string) { return { path: socket?.pathTo(peer) ?? null, rttMs: socket?.peerSnapshot(peer)?.rttMs ?? null }; },
+    /** Session requests to this relayed peer timed out: the socket judges whether relay UDP carries data (relayUdp.ts noteStall). */
+    relayStalled(_peer: string): void { socket?.relayStalled?.(); },
     /** A peer this node has never seen in its signed directory is an older (Device Link only) device. */
     shouldUseLegacyPeer(peer: string): boolean { return socket?.knowsPeer(peer) === false; },
     shouldProbeLegacyPeer(peer: string): boolean { return !!socket?.knowsPeer(peer) && !socket.supports(peer); },

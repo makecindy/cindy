@@ -32,6 +32,8 @@ import type { AcpLineTransport, AcpTransportClosed } from './line-transport.js';
 import {
   ACP_ERROR_AUTH_REQUIRED,
   ACP_PROTOCOL_VERSION,
+  ACP_STEERING_METHOD,
+  JSONRPC_METHOD_NOT_FOUND,
   asNonEmptyString,
   asRecord,
   normalizeConfigOptions,
@@ -52,6 +54,8 @@ import { acpToolDisplayName, AcpUpdateTranslator, type AcpTurnOutcome } from './
 
 const DEFAULT_CANCEL_GRACE_MS = 15_000;
 const SESSION_CLOSE_TIMEOUT_MS = 5_000;
+/** Matched by the host's no-active-turn handling, which then delivers the message as the next turn. */
+const NO_ACTIVE_TURN_TO_STEER = 'No active turn to steer';
 /**
  * Work an agent does after answering a prompt (between turns) counts as live for
  * this long after its last update, so the runtime is not reclaimed mid-task.
@@ -245,6 +249,12 @@ export async function openAcpSession(opts: OpenAcpSessionOptions): Promise<AcpSe
     if (init.protocolVersion !== ACP_PROTOCOL_VERSION) throw new AcpProtocolVersionError(init.protocolVersion);
 
     const { accepted, dropped } = filterMcpServers(opts.mcpServers ?? [], init.agentCapabilities.mcpCapabilities);
+    if (dropped.length > 0) {
+      opts.logger?.warn('acp: dropping MCP servers whose transport the agent did not advertise', {
+        dropped,
+        mcpCapabilities: init.agentCapabilities.mcpCapabilities,
+      });
+    }
     const missing = (opts.requiredMcpServers ?? []).filter((name) => !accepted.some((server) => server.name === name));
     if (missing.length > 0) throw new AcpRequiredMcpUnavailableError(missing);
     let sessionId: string;
@@ -372,6 +382,8 @@ export class AcpSession {
   private readonly requireSelectedModel: boolean;
   private readonly initialModel: string;
   private capabilitiesSnapshot: Capabilities;
+  /** Advertised `_session/steering`, and has not answered it with method-not-found. */
+  private steeringOffered: boolean;
   private permissionMode: 'ask' | 'bypassPermissions' = 'ask';
   private resolver: InteractionResolver | null = null;
   private turn: ActiveTurn | null = null;
@@ -398,7 +410,8 @@ export class AcpSession {
     this.configOptions = init.configOptions;
     this.requireSelectedModel = init.options.requireSelectedModel === true;
     this.initialModel = this.model;
-    this.capabilitiesSnapshot = buildAcpCapabilities(init.init, init.configOptions);
+    this.steeringOffered = init.init.steering;
+    this.capabilitiesSnapshot = this.buildCapabilities();
     this.logger = init.options.logger;
     this.readImage = init.options.readFile ?? ((path) => fsReadFile(path));
     this.cancelGraceMs = init.options.cancelGraceMs ?? DEFAULT_CANCEL_GRACE_MS;
@@ -499,9 +512,63 @@ export class AcpSession {
     return accepted;
   }
 
-  /** Same-turn steering is not part of ACP v1; the input becomes the next turn. */
+  /**
+   * Adds the message to the running turn through ACP_STEERING_METHOD. Agents that do
+   * not offer it get the message as the next turn, as ACP v1 allows one prompt at a time.
+   *
+   * Rejections tell the host what happened: no active turn (the agent's turn already
+   * ended, so the host sends it as the next turn), "delivery uncertain" (sent, no
+   * answer; the agent may have it, so it must not be sent again), or the agent's error.
+   */
   async steer(message: UserMessage): Promise<void> {
-    await this.send(message);
+    if (!this.steeringOffered) {
+      await this.send(message);
+      return;
+    }
+    const turn = this.turn;
+    if (this.ended || this.closing) throw new Error('ACP session is closed');
+    if (!turn || turn.cancelTimer) throw new Error(NO_ACTIVE_TURN_TO_STEER);
+    const prompt = await this.toPrompt(message);
+    if (prompt.length === 0) throw new Error('Cannot send an empty message');
+    if (this.ended || this.closing || this.connection.closed) throw new Error('ACP session is closed');
+    // Attachments are read asynchronously: the turn may have ended or been stopped meanwhile.
+    if (this.turn !== turn || turn.cancelTimer) throw new Error(NO_ACTIVE_TURN_TO_STEER);
+    let result: AcpRecord;
+    try {
+      result = await this.connection.request(ACP_STEERING_METHOD, {
+        sessionId: this.id,
+        prompt,
+        // Without this an agent whose turn just ended starts a turn of its own, which Cindy does not track.
+        _meta: { steering: { idleBehavior: 'promptRequired' } },
+      }, {
+        onResult: (reply) => {
+          // Finish the old segment before the decoder handles any following update.
+          if (reply.outcome === 'injected' && this.turn === turn) this.emit(this.translator.flushPending());
+        },
+      });
+    } catch (error) {
+      if (!(error instanceof AcpRpcError)) {
+        throw new Error(`ACP steering delivery uncertain: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      if (error.code === JSONRPC_METHOD_NOT_FOUND) {
+        this.logger?.warn('acp: agent advertised steering but does not handle it; later messages wait for the next turn');
+        this.steeringOffered = false;
+        this.refreshCapabilities();
+      }
+      throw error;
+    }
+    switch (result.outcome) {
+      case 'injected':
+        return;
+      case 'promptRequired':
+        throw new Error(NO_ACTIVE_TURN_TO_STEER);
+      case 'startedNewTurn':
+        // Agents older than the idle opt-in run it themselves; its output arrives as background work.
+        this.logger?.info('acp: agent started the steered message as its own turn');
+        return;
+      default:
+        throw new Error(`ACP agent did not take the steered message (outcome: ${String(result.outcome)})`);
+    }
   }
 
   async abort(): Promise<void> {
@@ -840,8 +907,12 @@ export class AcpSession {
     this.configOptions = this.configOptions.map((entry) => entry.id === option.id ? { ...entry, currentValue: modeId } : entry);
   }
 
+  private buildCapabilities(): Capabilities {
+    return buildAcpCapabilities({ ...this.initializeResult, steering: this.steeringOffered }, this.configOptions);
+  }
+
   private refreshCapabilities(): void {
-    this.capabilitiesSnapshot = buildAcpCapabilities(this.initializeResult, this.configOptions);
+    this.capabilitiesSnapshot = this.buildCapabilities();
     for (const listener of this.capabilityListeners) {
       try {
         listener(this.capabilitiesSnapshot);
