@@ -12633,6 +12633,7 @@
           "listenPortLabel": "Port local de réception",
           "listenPortPlaceholder": "18747",
           "hint": "Connexion à BlueBubbles sur le réseau local. Seules les discussions sélectionnées sont traitées. Arrêtez leurs autres réponses automatiques avant la connexion.",
+          "automationDenied": "Lors de l’envoi, macOS a refusé à BlueBubbles l’accès à Messages. Sur le Mac qui exécute BlueBubbles, ouvrez Réglages Système → Confidentialité et sécurité → Automatisation.",
           "uncertain": "{{count}} envois sont à vérifier. Consultez l’historique avant de réessayer pour éviter les doublons."
         }
       },
@@ -15208,7 +15209,6 @@
     "runningStatus": {
       "currentRate": "Vitesse récente",
       "lastRequestRate": "Moyenne de la dernière requête",
-      "recentTokenRate": "Dernière mesure {{rate}} tok/s",
       "waitingSample": "Échantillonnage",
       "averageRate": "Moyenne du tour",
       "rateHistory": "Historique de la vitesse de génération",
@@ -15989,7 +15989,7 @@
       "viewThread": "Voir le contexte du fil ({{count}})",
       "memberFromGroup": "{{name}} · depuis le groupe {{platform}} « {{group}} »",
       "memberFromPlatform": "{{name}} · depuis un groupe {{platform}}",
-      "guestFromDm": "{{name}} · depuis un message privé {{platform}} (pas le propriétaire)",
+      "guestFromDm": "{{name}} · depuis un message privé {{platform}}",
       "unknownSender": "Membre du groupe"
     },
     "rewind": {
