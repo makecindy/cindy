@@ -159,7 +159,7 @@ function LegalTermsUpdateDialog({ onAccept }: { onAccept: () => Promise<void> })
     >
       <div
         className="modal-panel fixed inset-0 m-auto flex h-fit w-full select-none flex-col p-4"
-        style={{ ...WINDOW_NO_DRAG_STYLE, maxWidth: 400, zIndex }}
+        style={{ ...WINDOW_NO_DRAG_STYLE, maxWidth: 'min(400px, calc(100vw - 32px))', zIndex }}
       >
         <h2 id="legal-terms-update-title" className="text-lg font-medium text-[var(--confirm-title)]">
           {t('legalTermsUpdate.title')}

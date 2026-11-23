@@ -127,7 +127,7 @@ export function DetachedLegalTermsUpdateBlocker() {
       style={{ zIndex: Z_INDEX_LAYERS['blocking-gate'] }}
     >
       {open && (
-        <div className="modal-panel w-full max-w-[400px] p-4">
+        <div className="modal-panel w-full max-w-[min(400px,calc(100vw-32px))] p-4">
           <h2 id="detached-legal-terms-title" className="text-lg font-medium text-[var(--confirm-title)]">
             {t('legalTermsUpdate.title')}
           </h2>
