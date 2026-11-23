@@ -149,6 +149,36 @@ export default function (pi) {
   var refSeq = 0;
   var refs = new Map();
   var refByKey = Object.create(null);
+  // The tool's name, its call examples and its parameter schema are three faces of one
+  // contract: the name is defined once.
+  var READ_TOOL = 'cindy_toolfold_read';
+
+  // -----------------------------------------------------------------------
+  // How the host tells the model to call the read tool. Every example comes
+  // from here: the arguments are printed as the JSON object the schema
+  // accepts, so a model that copies an example has sent valid arguments. A
+  // hand-written variant such as cindy_toolfold_read("<id>") is not an
+  // instance of the schema, and pi rejects it before execute runs.
+  // -----------------------------------------------------------------------
+  function readCall(args) {
+    var out = {};
+    ['batch', 'call_id', 'at', 'offset'].forEach(function (name) {
+      if (args[name] !== undefined) out[name] = args[name];
+    });
+    return READ_TOOL + '(' + JSON.stringify(out) + ')';
+  }
+
+  // The endings an ingest marker can have. Emitting and recognizing share this
+  // one definition. legacyNamed is the shape earlier versions persisted:
+  // resumed sessions still carry it, and not recognizing it would make
+  // resolve() hand the truncated preview back as if it were the full text.
+  function truncationTails(id) {
+    return {
+      named: readCall({ call_id: id }) + ' returns the full text',
+      legacyNamed: READ_TOOL + '("' + id + '") returns the full text',
+      evicted: 'full text not retained (call "' + id + '"); re-run if needed',
+    };
+  }
   // Pins: callId -> { ts, chars }. ts is a monotonic recovery clock so the eviction
   // victim is the least-recently-recovered entry, not the earliest-pinned one.
   var pinned = new Map();
@@ -396,7 +426,7 @@ export default function (pi) {
       if (tail && tail !== head) summary += ' \u00b7 last: ' + tail;
     }
     if (typeof result.toolCallId === 'string' && result.toolCallId) {
-      summary += ' \u00b7 full: cindy_toolfold_read("' + result.toolCallId + '")';
+      summary += ' \u00b7 full: ' + readCall({ call_id: result.toolCallId });
     }
     // Never trade content for a longer summary. Estimating this was wrong once already
     // (a batch of "ok" results grew); the text is in hand here, so compare exactly.
@@ -424,7 +454,7 @@ export default function (pi) {
     var tally = [];
     for (var n = 0; n < names.length; n++) tally.push(names[n] + ' ' + batch.names[names[n]]);
     return '[folded] ' + batch.dropped + (batch.dropped === 1 ? ' round-trip, ' : ' round-trips, ') + tally.join(', ') + ', ' + batch.chars +
-      ' chars, read with cindy_toolfold_read({ batch: "' + batch.ref + '" })';
+      ' chars, read with ' + readCall({ batch: batch.ref });
   }
 
   function allFolded(trip) {
@@ -574,15 +604,13 @@ export default function (pi) {
       if (b.text.length <= room) { kept += b.text.length; parts.push(b); }
       else { truncated += b.text.length - room; parts.push({ type: 'text', text: b.text.slice(0, room) }); kept = INGEST_KEEP; }
     }
-    parts.push({ type: 'text', text: '[truncated ' + truncated + ' of ' + total
-      + ' chars; ' + (retained
-        ? 'cindy_toolfold_read("' + id + '") returns the full text]'
-        : 'full text not retained (call "' + id + '"); re-run if needed]') });
+    var tails = truncationTails(id);
+    parts.push({ type: 'text', text: '[truncated ' + truncated + ' of ' + total + ' chars; ' + (retained ? tails.named : tails.evicted) + ']' });
     return isString ? [{ type: 'text', text: textOf(parts) }] : parts;
   }
 
   pi.on('tool_result', function (event) {
-    if (event && event.toolName === 'cindy_toolfold_read') return undefined;
+    if (event && event.toolName === READ_TOOL) return undefined;
     var id = String((event && event.toolCallId) || '');
     if (!id) return undefined;
     var parts = clipContent(event && event.content, id);
@@ -643,6 +671,7 @@ export default function (pi) {
       var resultText = textOf(resultMsg.content);
       var marker = '[truncated ';
       var shape = /^\[truncated \d+ of \d+ chars; (.+)\]$/;
+      var tails = truncationTails(key);
       var markerAt = resultText.indexOf(marker);
       while (markerAt !== -1) {
         var markerEnd = resultText.indexOf(']', markerAt);
@@ -652,9 +681,7 @@ export default function (pi) {
         var endsText = resultText.slice(markerEnd + 1).trim().length === 0;
         var tail = shape.exec(markerBody);
         var tailText = tail ? tail[1] : '';
-        var named = 'cindy_toolfold_read("' + key + '") returns the full text';
-        var evictedNow = 'full text not retained (call "' + key + '"); re-run if needed';
-        if (endsText && (tailText === named || tailText === evictedNow)) truncatedPreview = markerBody;
+        if (endsText && (tailText === tails.named || tailText === tails.legacyNamed || tailText === tails.evicted)) truncatedPreview = markerBody;
         markerAt = resultText.indexOf(marker, markerAt + 1);
       }
     }
@@ -705,7 +732,7 @@ export default function (pi) {
     return {
       content: [{
         type: 'text',
-        text: rest.slice(0, RECOVERY_READ_MAX_CHARS) + '\n\n[truncated: ' + raw.length + ' chars total, ' + (raw.length - next) + ' remaining. Call cindy_toolfold_read again with offset: ' + next + ' to continue.]',
+        text: rest.slice(0, RECOVERY_READ_MAX_CHARS) + '\n\n[truncated: ' + raw.length + ' chars total, ' + (raw.length - next) + ' remaining. Call ' + readCall({ call_id: id, offset: next }) + ' to continue.]',
       }],
     };
   }
@@ -773,8 +800,7 @@ export default function (pi) {
     if (size - over > RECOVERY_READ_MAX_CHARS) throw new Error('tool-fold page overflow: ' + (size - over));
     var text = (stale === null ? '' : stale + '\n\n') + parts.join('\n\n');
     if (next !== null) {
-      text += '\n\n[truncated: ' + (ids.length - at - shown) + ' round-trips not shown in batch ' + key + '. Call cindy_toolfold_read again with batch: '
-        + JSON.stringify(key) + ', at: ' + next.at + ', offset: ' + next.offset + ' to continue.]';
+      text += '\n\n[truncated: ' + (ids.length - at - shown) + ' round-trips not shown in batch ' + key + '. Call ' + readCall({ batch: key, at: next.at, offset: next.offset }) + ' to continue.]';
     }
     return { text: text, recovered: recovered };
   }
@@ -814,7 +840,7 @@ export default function (pi) {
   }
 
   pi.registerTool({
-    name: 'cindy_toolfold_read',
+    name: READ_TOOL,
     label: 'Read a folded tool result',
     description: 'Return the full original text of one folded or truncated tool round-trip (call arguments plus the complete result). Pass the id shown inside the "[folded]" record: a batch id returns the round-trips of that batch, a single call id returns just that one. A long read stops at the per-read limit and ends with the exact arguments for the next page. The folded original is also restored in the conversation until your next user message, so read once and continue instead of re-running the command.',
     parameters: {
@@ -1009,7 +1035,8 @@ export default function (pi) {
         } else {
           outline[unit.start] = { message: Object.assign({}, assistant, { content: keepBlocks }) };
         }
-        for (var d2 = 0; d2 < unit.indexes.length; d2++) outline[unit.indexes[d2]] = 'drop';        dirty = true;
+        for (var d2 = 0; d2 < unit.indexes.length; d2++) outline[unit.indexes[d2]] = 'drop';
+          dirty = true;
         continue;
       }
       var blocks = assistant.content;
