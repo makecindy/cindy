@@ -1,4 +1,7 @@
 import type { ImContextSnapshot } from '../../../shared/imMessageSource';
+import type { ImDefaultAgentKind, ImDefaultEffort } from '../../../shared/imDefaultSettings';
+import type { ProviderView } from '@cindy/model-providers';
+import type { ResolvedImSessionDefaults } from '../defaultSessionSettings';
 /**
  * main/im/shared/types.ts
  * ---------------------------------------------------------------------------
@@ -41,6 +44,28 @@ export type ImChannelName =
   | 'dingtalk'
   | 'wecom'
   | 'imessage';
+
+/**
+ * 路由键所在项目的默认设置(个人飞书 bot: 群绑定了项目 →「项目与模型」里那个项目的一行,
+ * 与插件、官方机器人同一份、同一个解析)。见 ImSessionNamespace.laneProjectDefaultsFor。
+ */
+export interface ImLaneProjectDefaults {
+  /** 这一行此刻的设置指纹(与 resolve 结果的 fingerprint 同一口径); 跟随记录据此判断要不要换。 */
+  fingerprint: string;
+  /** 项目设置的权限档; 路由键自己没单独设置权限时用它。null = 项目的档位不可用, 回到渠道设置。 */
+  permissionMode: PermissionMode | null;
+  /** 按这一行解析新任务的路由; 模型不可用时抛错(同插件与官方机器人)。 */
+  resolve(providerSnapshot?: ProviderView[] | null): Promise<ResolvedImSessionDefaults>;
+}
+
+/** 按路由键覆写的新任务模型路由(见 ImSessionNamespace.routeOverrideFor)。 */
+export interface ImLaneRouteOverride {
+  agentKind: ImDefaultAgentKind;
+  model: string;
+  providerId: string | null;
+  agentDeviceId: string | null;
+  effort: ImDefaultEffort;
+}
 
 /**
  * IM 编排层的产品默认配置(由 main/im/index.ts 产品接线层注入)。
@@ -103,8 +128,28 @@ export interface ImSessionNamespace {
    *     那是用户对群的显式选择)。
    * 返回 null/缺省 = 用渠道默认。只影响**新建**行(含 `/new` 重开上下文);
    * 已存在行的权限归 owner 管(`/permission`)。
+   * `projectPermissionMode`: 新任务落在路由键绑定的项目里时, 那个项目设置的权限档
+   * (laneProjectDefaultsFor); 渠道按自己的优先级决定是否采用。
    */
-  permissionModeFor?(userId: string): PermissionMode | null;
+  permissionModeFor?(userId: string, projectPermissionMode?: PermissionMode | null): PermissionMode | null;
+  /**
+   * 按路由键覆写新任务的模型路由(个人飞书 bot 的按群设置: 群 / 话题 lane → 该群固定的
+   * Agent、模型、来源、执行位置与推理强度)。返回 null/缺省 = 用渠道「新对话配置」。
+   * 建任务、`/new` 与「跟随默认」的切换都按它解析, 跟随记录的指纹随之变化。
+   */
+  routeOverrideFor?(botContextId: string, userId: string): ImLaneRouteOverride | null;
+  /**
+   * 按路由键给新任务指定项目目录(个人飞书 bot 的按群项目)。返回 null/缺省 = 用
+   * `ensureWorkingDir`。只在建任务与 `/new` 时生效, 已有任务的目录不被悄悄挪动。
+   * 返回的目录必须仍是侧栏里的本机项目且确实存在。
+   */
+  laneWorkingDirFor?(botContextId: string, userId: string): Promise<string | null>;
+  /**
+   * 任务落在路由键绑定的项目目录 `workingDir` 里、且没有 routeOverrideFor 时, 模型路由与权限
+   * 跟随这个项目的设置(个人飞书 bot: 群绑定的项目 →「项目与模型」)。返回 null/缺省 = 用渠道
+   * 「新对话配置」。建任务、`/new` 与「跟随默认」都按它; 还留在别的目录里的任务不受影响。
+   */
+  laneProjectDefaultsFor?(botContextId: string, userId: string, workingDir: string): ImLaneProjectDefaults | null;
   /**
    * 建行/复活行后异步解析正式标题(飞书群 lane → 拉群名拼 `[飞书·群] {群名}`)。
    * 返回 null/缺省 = 保持 defaultTitle。幂等(值稳定), 失败不阻塞建行。

@@ -49,6 +49,13 @@ vi.mock('../../../maker-host/index.js', () => ({
 vi.mock('../../defaultSettingsStore', () => ({
   readImDefaultSettings: (channel?: string) => scopeMocks.readImDefaultSettings(channel),
 }));
+// 按群项目只认侧栏的本机项目; 侧栏清单来自数据库, 单测钉住清单内容。
+const projectMocks = vi.hoisted(() => ({
+  projects: [] as Array<{ workingDir: string; displayName: string; latestActivityMs: number }>,
+}));
+vi.mock('../../shared/controlProjects', () => ({
+  listProjectsForControl: vi.fn(async () => projectMocks.projects),
+}));
 
 import type {
   FeishuChatHistoryPage,
@@ -61,6 +68,9 @@ import type {
 import { getResolvedMainLocale, setMainLocale } from '../../../i18n.desktop';
 import { buildFeishuAdapter, feishuToolsHint } from '../adapter';
 import { formatHistoryTime } from '../groupContext';
+import { writeFeishuGroupSettings } from '../groupSettingsStore';
+import { setFeishuGroupProjectPorts } from '../groupOverrides';
+import fs from 'node:fs/promises';
 
 const getService = vi.fn<() => 'feishu' | 'lark'>(() => 'feishu');
 const fetchChatHistoryPage = vi.fn<
@@ -78,7 +88,9 @@ const sendMarkdownText = vi.fn<(_userId: string, _text: string) => Promise<{ mes
 );
 const getChatName = vi.fn<(chatId: string) => Promise<string | null>>(async () => null);
 const getStatus = vi.fn<() => IMStatus>(() => ({ kind: 'connected', appId: 'cli_abc' }));
+const getBotAppId = vi.fn<() => string | null>(() => 'cli_abc');
 const fakeIm = {
+  getBotAppId,
   getService,
   fetchChatHistoryPage,
   downloadMessageAttachments,
@@ -334,6 +346,125 @@ describe('feishu group lane adapter hooks', () => {
     // 设置改回自动审批时群里也跟着回自动审批(没有"只在手动改过才生效"的门)。
     scopeMocks.readImDefaultSettings.mockReturnValue({ groupPermissionMode: 'auto' });
     expect(adapter.sessions.permissionModeFor?.('g/oc_chat1/omt_t1')).toBe('auto');
+  });
+
+  /**
+   * 设置页「群聊」的按群设置(2026-11-23 用户需求: 内置飞书能给某个群单独配项目、模型、权限)。
+   * 生产入口: 个人 bot adapter 的 sessions 钩子 —— sessionRepo.prepareNewSession 与 `/new`
+   * 据此决定群任务的目录、模型路由与权限档。
+   * 缺口: 上一条只覆盖渠道级「群聊新建任务权限档」, 没有按群覆写与伙伴连接不读的分支。
+   * 最小失败输入: 给 oc_g1 存项目 / 模型 / 权限后, 用该群主线、话题、别的群、私聊与伙伴
+   * 连接各问一次。tier: unit(真实存储文件写在临时目录)。
+   */
+  it('按群设置: 只作用于该群的主线与话题; 私聊、别的群与伙伴连接仍按渠道设置', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'feishu-group-settings-'));
+    const projectDir = path.join(root, 'project-a');
+    await fs.mkdir(projectDir);
+    const previous = { root: scopeMocks.root, join: scopeMocks.join };
+    scopeMocks.root = root;
+    scopeMocks.join = path.join;
+    try {
+      scopeMocks.readImDefaultSettings.mockReturnValue({ groupPermissionMode: 'auto' });
+      projectMocks.projects = [{ workingDir: projectDir, displayName: 'project-a', latestActivityMs: 1 }];
+      const route = {
+        agentKind: 'codex' as const,
+        model: 'gpt-6.2-sol',
+        providerId: 'share-provider',
+        agentDeviceId: 'share:s1',
+        effort: 'low' as const,
+      };
+      writeFeishuGroupSettings('cli_abc', 'oc_g1', { projectDir, route, permissionMode: 'plan' }, '项目群');
+
+      for (const lane of ['g/oc_g1', 'g/oc_g1/omt_t1']) {
+        expect(adapter.sessions.permissionModeFor?.(lane)).toBe('plan');
+        expect(adapter.sessions.routeOverrideFor?.('cli_abc', lane)).toEqual(route);
+        expect(await adapter.sessions.laneWorkingDirFor?.('cli_abc', lane)).toBe(projectDir);
+      }
+      // 别的群与私聊不受影响。
+      expect(adapter.sessions.permissionModeFor?.('g/oc_other')).toBe('auto');
+      expect(adapter.sessions.routeOverrideFor?.('cli_abc', 'g/oc_other')).toBeNull();
+      expect(await adapter.sessions.laneWorkingDirFor?.('cli_abc', 'ou_owner')).toBeNull();
+      // 项目从侧栏移除后不再按旧目录执行。
+      projectMocks.projects = [];
+      expect(await adapter.sessions.laneWorkingDirFor?.('cli_abc', 'g/oc_g1')).toBeNull();
+      // 伙伴连接的群任务归伙伴设置管, 不读按群设置。
+      const companionAdapter = buildFeishuAdapter(fakeIm, CONFIG, { companionBotId: 'bot-1' });
+      expect(companionAdapter.sessions.permissionModeFor?.('g/oc_g1')).toBe('auto');
+      expect(companionAdapter.sessions.routeOverrideFor).toBeUndefined();
+      expect(companionAdapter.sessions.laneWorkingDirFor).toBeUndefined();
+    } finally {
+      scopeMocks.root = previous.root;
+      scopeMocks.join = previous.join;
+      projectMocks.projects = [];
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * 绑定了项目的群跟随「项目与模型」里那个项目(2026-11-23 用户裁决: 只有没绑项目的群才用
+   * 「新对话配置」; 权限也跟随项目)。生产入口: adapter 的 laneProjectDefaultsFor / permissionModeFor,
+   * sessionRepo 建任务与「跟随默认」据此取路由和权限。
+   * 缺口: 上一条只覆盖群自己固定的设置。最小失败输入: oc_g2 绑定项目后, 分别问项目目录与对话
+   * 目录里的任务, 再加上群自己的权限档。tier: unit(真实存储文件写在临时目录, 项目表经端口给出)。
+   */
+  it('绑定项目的群: 任务在项目目录里时模型与权限跟随项目; 群自己设的权限优先', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'feishu-group-project-'));
+    const projectDir = path.join(root, 'cindy');
+    await fs.mkdir(projectDir);
+    const previous = { root: scopeMocks.root, join: scopeMocks.join };
+    scopeMocks.root = root;
+    scopeMocks.join = path.join;
+    const resolveProject = vi.fn(async () => ({
+      agentKind: 'claude-code',
+      model: 'claude-opus-5-5',
+      effort: 'xhigh',
+      providerId: 'anthropic',
+      agentDeviceId: null,
+      fingerprint: 'fp-resolved',
+    }));
+    setFeishuGroupProjectPorts({
+      projectWorkspaces: () => ({ cindy: projectDir }),
+      syncProjectWorkspaces: async () => {},
+      projectPermissionMode: () => null,
+      projectFingerprint: () => 'fp-raw',
+      resolveProject,
+      listProviders: async () => [],
+    });
+    try {
+      scopeMocks.readImDefaultSettings.mockReturnValue({ groupPermissionMode: 'auto' });
+      writeFeishuGroupSettings('cli_abc', 'oc_g2', { projectDir }, '项目群');
+
+      const project = adapter.sessions.laneProjectDefaultsFor?.('cli_abc', 'g/oc_g2/omt_t1', projectDir);
+      expect(project?.fingerprint).toBe('feishu-group-project:fp-raw');
+      // 「项目与模型」里没填权限 = 完全访问(同插件与官方机器人)。
+      expect(project?.permissionMode).toBe('bypassPermissions');
+      expect(await project!.resolve([])).toMatchObject({
+        agentKind: 'claude-code',
+        model: 'claude-opus-5-5',
+        effort: 'xhigh',
+        providerId: 'anthropic',
+        permissionMode: 'bypassPermissions',
+        fingerprint: 'feishu-group-project:fp-resolved',
+      });
+      expect(resolveProject).toHaveBeenCalledWith('cindy', []);
+      // 还在对话目录里的任务、没绑项目的群, 都仍按渠道设置。
+      expect(adapter.sessions.laneProjectDefaultsFor?.('cli_abc', 'g/oc_g2', '/tmp/im-dialogue')).toBeNull();
+      expect(adapter.sessions.laneProjectDefaultsFor?.('cli_abc', 'g/oc_other', projectDir)).toBeNull();
+
+      // 权限: 群自己设的 > 绑定项目的 > 渠道「群聊新建任务权限档」。
+      expect(adapter.sessions.permissionModeFor?.('g/oc_g2', 'bypassPermissions')).toBe('bypassPermissions');
+      expect(adapter.sessions.permissionModeFor?.('g/oc_g2', null)).toBe('auto');
+      writeFeishuGroupSettings('cli_abc', 'oc_g2', { permissionMode: 'ask' }, '项目群');
+      expect(adapter.sessions.permissionModeFor?.('g/oc_g2', 'bypassPermissions')).toBe('ask');
+
+      const companionAdapter = buildFeishuAdapter(fakeIm, CONFIG, { companionBotId: 'bot-1' });
+      expect(companionAdapter.sessions.laneProjectDefaultsFor).toBeUndefined();
+    } finally {
+      setFeishuGroupProjectPorts(null);
+      scopeMocks.root = previous.root;
+      scopeMocks.join = previous.join;
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   it('turnPolicyOptionalForMode: 仅完全访问档可选(护栏取缔), 其余档保持挂策略', () => {

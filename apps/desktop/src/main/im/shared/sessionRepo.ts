@@ -84,6 +84,11 @@ export interface ImSessionRow {
    * 建任务 / `/new` 把它连同路由写进 `im_default_route`(跟随记录)。
    */
   defaultRouteFingerprint?: string;
+  /**
+   * 仅 prepareNewSession 产出的行带: 工作目录来自路由键的项目设置(个人飞书 bot 的按群
+   * 项目)。`/new` 重置已有行时据此把行挪进这个项目; 没有它时 `/new` 不动目录。
+   */
+  laneWorkingDir?: boolean;
 }
 
 export interface SessionModelRouteSnapshot {
@@ -397,15 +402,28 @@ export function createImSessionRepo(
     async prepareNewSession(botContextId, userId, scopeKey, providerSnapshot) {
       const assertAccount = captureChannelAccount();
       const id = ns.sessionIdFor(botContextId, userId, scopeKey);
-      const workingDir = ns.ensureWorkingDir(botContextId, userId);
+      // 路由键自己的项目与模型(个人飞书 bot 的按群设置); 没有就用渠道的。
+      const laneWorkingDir = (await ns.laneWorkingDirFor?.(botContextId, userId)) ?? null;
+      const workingDir = laneWorkingDir ?? ns.ensureWorkingDir(botContextId, userId);
+      // 模型路由的优先级: 路由键自己固定的 > 绑定项目的设置 > 渠道「新对话配置」。
+      const routeOverride = ns.routeOverrideFor?.(botContextId, userId) ?? null;
+      const laneProject = laneWorkingDir
+        ? ns.laneProjectDefaultsFor?.(botContextId, userId, laneWorkingDir) ?? null
+        : null;
       const row = rowFromDefaults(
         id,
         workingDir,
-        await resolveImSessionDefaults(config, providerSnapshot, ns.source),
+        !routeOverride && laneProject
+          ? await laneProject.resolve(providerSnapshot)
+          : await resolveImSessionDefaults(config, providerSnapshot, ns.source, routeOverride),
       );
+      if (laneWorkingDir) {
+        row.workspaceKind = 'project';
+        row.laneWorkingDir = true;
+      }
       // 渠道可按 userId 覆写新会话权限档(telegram guest lane → 只读探索;
-      // feishu 群 lane → 渠道设置「群聊新建任务权限档」)。
-      const overridden = ns.permissionModeFor?.(userId) ?? null;
+      // feishu 群 lane → 这个群单独设置的 > 绑定项目的 > 渠道「群聊新建任务权限档」)。
+      const overridden = ns.permissionModeFor?.(userId, laneProject?.permissionMode ?? null) ?? null;
       if (overridden) row.permissionMode = overridden;
       preparedAccounts.set(row, assertAccount);
       return row;
@@ -752,6 +770,11 @@ export async function resetSessionToDefaults(
     prepared ??
     rowFromDefaults(sessionId, '', await resolveImSessionDefaults(config, undefined, channel));
   const db = getDbClient().drizzle;
+  const laneDir = defaults.laneWorkingDir && defaults.workingDir ? defaults.workingDir : null;
+  const previousDir = laneDir
+    ? (await db.select({ workingDir: sessions.workingDir }).from(sessions).where(eq(sessions.id, sessionId)).limit(1))[0]
+        ?.workingDir ?? null
+    : null;
   await db
     .update(sessions)
     .set({
@@ -767,6 +790,8 @@ export async function resetSessionToDefaults(
       // It applies only at the explicit `/new` boundary; existing context is
       // never moved silently.
       ...(channel === 'wechat' && defaults.workingDir ? { workingDir: defaults.workingDir } : {}),
+      // 个人飞书 bot 的按群项目同一规则: 只在显式 `/new` 时把这一路挪进群设置的项目。
+      ...(laneDir ? { workingDir: laneDir, workspaceKind: 'project' as const } : {}),
       sdkSessionId: null,
       clearedAt: Date.now(),
       updatedAt: Date.now(),
@@ -775,6 +800,9 @@ export async function resetSessionToDefaults(
     })
     .where(eq(sessions.id, sessionId));
   setSessionProvider(sessionId, defaults.providerId);
+  // 挪进项目后侧栏要换分组, patched 增量覆盖不了归组变化(同 switchSessionWorkingDir);
+  // 本来就在这个项目里的 `/new` 不必让侧栏重排。
+  if (laneDir && previousDir !== laneDir) broadcastSessionCreated(sessionId);
 }
 
 /**

@@ -273,9 +273,23 @@ export function sharedImProjectFingerprint(alias: string): string {
     'slack', { alias, teamId: null }, true));
 }
 
-export function resolveSharedImProjectConfig(alias: string, log: { warn(msg: string): void }) {
+/**
+ * 共享项目设置的「默认设置指纹」, 与 resolveSharedImProjectConfig 返回的 fingerprint 同一口径
+ * (固定模型时相等): 个人飞书 bot 绑定了项目的群任务跟随这一行时, 每条消息只比这个, 不必每次解析。
+ */
+export function sharedImProjectDefaultsFingerprint(alias: string): string {
+  return hookDefaultsFingerprint(hookDefaultInputs({ agentKind: null, model: null, effort: null, permissionMode: null },
+    'slack', { alias, teamId: null }, true));
+}
+
+/** `providerSnapshot`: 一次解析多个项目时共用同一份供应商目录(缺省现取)。 */
+export function resolveSharedImProjectConfig(
+  alias: string,
+  log: { warn(msg: string): void },
+  providerSnapshot?: ProviderView[],
+) {
   return resolveNewSessionConfig({ agentKind: null, model: null, effort: null, permissionMode: null },
-    log, 'slack', { alias, teamId: null }, undefined, true);
+    log, 'slack', { alias, teamId: null }, providerSnapshot, true);
 }
 
 /**
