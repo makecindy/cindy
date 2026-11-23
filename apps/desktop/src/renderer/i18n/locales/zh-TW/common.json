@@ -8612,7 +8612,7 @@
           "updated": "插件已更新。",
           "empty": "暫無可安裝的版本。",
           "sign-in": "請登入 GitHub 後檢查更新。",
-          "forbidden": "目前的 GitHub 登入無權讀取此私人儲存庫。",
+          "forbidden": "無法讀取 GitHub Release。請檢查儲存庫連結與 GitHub 帳號的存取權限。",
           "unavailable": "無法檢查或安裝更新，請重試。"
         },
         "customSlotTitle": "插件自訂設定區",
@@ -9675,6 +9675,12 @@
       "guidance": "請等待後再取得驗證碼。重新啟動、重新安裝或切換網路不保證解除限制。",
       "support": "等待後仍無法登入，請將記錄私下寄給 feedback@cindy.app，並提供作業系統、Cindy 版本、出錯時間和下方錯誤碼。請勿公開發布記錄。"
     }
+  },
+  "legalTermsUpdate": {
+    "title": "服務條款和隱私政策已更新",
+    "body": "Cindy 的<terms>服務條款</terms>和<privacy>隱私政策</privacy>已更新，請閱讀並同意後繼續使用。",
+    "agree": "同意",
+    "disagree": "退出登入"
   },
   "legacyMigration": {
     "title": "遷移舊版本資料",
@@ -17655,6 +17661,7 @@
       }
     },
     "editor": {
+      "reviewModelReadFailed": "無法讀取自動化的模型設定，請關閉編輯器後重新開啟重試。",
       "promptDialog": {
         "titleEdit": "編輯自動化",
         "titleCreate": "建立自動化",
@@ -17998,11 +18005,13 @@
         "effortHeading": "推理強度",
         "effortDefault": "預設",
         "followSession": "跟隨任務",
+        "followTeammate": "跟隨夥伴主模型",
         "modelListAria": "模型列表",
         "modelSelectorAria": "模型選擇器",
         "categoryListAria": "{{category}} 模型",
         "effortListAria": "推理強度",
-        "boundLocationLocked": "繫結的任務在原來的電腦上執行，請選擇那台電腦上的模型。"
+        "boundLocationLocked": "繫結的任務在原來的電腦上執行，請選擇那台電腦上的模型。",
+        "modelGroupTitle": "模型組「{{name}}」：建立新任務時依模式選來源"
       }
     },
     "toast": {
@@ -20341,6 +20350,7 @@
       "totalDetail_other": "{{count}} 張 × {{amount}}",
       "pay": "前往付款",
       "refundNote": "禮品卡不能兌換現金。卡被領取或兌換後不退款；未領取的卡如需退款，請聯絡支援人員。",
+      "termsNote": "點擊「前往付款」即表示你已閱讀並同意<terms>《禮品卡購買與使用條款》</terms>。",
       "cancel": "取消",
       "loadFailed": "暫時無法讀取購買限制，請稍後重試。",
       "checkoutSubtitle_other": "禮品卡 {{amount}} × {{count}} · 付款成功後立即產生",

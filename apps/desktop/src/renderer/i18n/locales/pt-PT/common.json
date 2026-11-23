@@ -8727,7 +8727,7 @@
           "updated": "Plugin atualizado.",
           "empty": "Nenhuma versão disponível para instalar.",
           "sign-in": "Inicie sessão no GitHub para procurar atualizações.",
-          "forbidden": "Esta conta do GitHub não tem acesso de leitura ao repositório privado.",
+          "forbidden": "Não foi possível ler a versão publicada no GitHub. Verifique a ligação do repositório e as permissões da sua conta do GitHub.",
           "unavailable": "Não foi possível verificar ou instalar a atualização. Tente novamente."
         },
         "customSlotTitle": "Área de definições personalizadas do plugin",
@@ -9790,6 +9790,12 @@
       "guidance": "Aguarde antes de pedir outro código. Reiniciar, reinstalar ou mudar de rede não garante que o limite seja levantado.",
       "support": "Se o problema continuar após aguardar, envie os registos em privado para feedback@cindy.app com o seu sistema operativo, a versão de Cindy, a hora do erro e o código abaixo. Não publique registos."
     }
+  },
+  "legalTermsUpdate": {
+    "title": "Termos atualizados",
+    "body": "Atualizámos os <terms>Termos de Serviço</terms> e a <privacy>Política de Privacidade</privacy> da Cindy. Aceite para continuar a utilizar ou termine sessão.",
+    "agree": "Aceitar",
+    "disagree": "Terminar sessão"
   },
   "legacyMigration": {
     "title": "Migrar dados da versão anterior",
@@ -17895,6 +17901,7 @@
       }
     },
     "editor": {
+      "reviewModelReadFailed": "Não foi possível ler o modelo da automação. Feche e volte a abrir o editor para tentar novamente.",
       "promptDialog": {
         "titleEdit": "Editar automatização",
         "titleCreate": "Criar automatização",
@@ -18238,11 +18245,13 @@
         "effortHeading": "Esforço de raciocínio",
         "effortDefault": "Predefinido",
         "followSession": "Seguir sessão",
+        "followTeammate": "Seguir o modelo principal do amigo",
         "modelListAria": "Lista de modelos",
         "modelSelectorAria": "Seletor de modelo",
         "categoryListAria": "Modelos de {{category}}",
         "effortListAria": "Esforço de raciocínio",
-        "boundLocationLocked": "As tarefas associadas continuam a ser executadas onde estão. Escolha um modelo desse computador."
+        "boundLocationLocked": "As tarefas associadas continuam a ser executadas onde estão. Escolha um modelo desse computador.",
+        "modelGroupTitle": "Grupo de modelos «{{name}}»: escolhe uma fonte ao criar uma nova tarefa"
       }
     },
     "toast": {
@@ -20609,6 +20618,7 @@
       "totalDetail_other": "{{count}} cartões × {{amount}}",
       "pay": "Continuar para o pagamento",
       "refundNote": "Os cartões de oferta não podem ser trocados por dinheiro. Os cartões utilizados não são reembolsáveis. Para pedir o reembolso de um cartão por utilizar, contacte o suporte.",
+      "termsNote": "Ao selecionar Continuar para o pagamento, aceita os <terms>Termos do cartão de oferta</terms>.",
       "cancel": "Cancelar",
       "loadFailed": "Não foi possível carregar os limites de compra. Tente novamente mais tarde.",
       "checkoutSubtitle_one": "Cartão de oferta {{amount}} × {{count}} · emitido assim que o pagamento for concluído",
