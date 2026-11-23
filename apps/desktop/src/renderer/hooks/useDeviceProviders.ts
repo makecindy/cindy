@@ -439,10 +439,8 @@ export function evictControlledDeviceProviders(taskDeviceId: string): void {
   }
 }
 
-export function refreshControlledDeviceProviders(taskDeviceId: string): void {
-  for (const key of listeners.keys()) {
-    if (parseModelCatalogKey(key)?.taskDeviceId === taskDeviceId) void prefetchDeviceProviders(key);
-  }
+export function getMountedControlledDeviceProviderTargets(taskDeviceId: string): string[] {
+  return [...listeners.keys()].filter(key => parseModelCatalogKey(key)?.taskDeviceId === taskDeviceId);
 }
 
 /** device-link:被控设备下线 / 断链时驱逐其供应商缓存(只清该设备的 key + 代际自增)。 */
@@ -481,12 +479,21 @@ export function getDeviceProvidersGeneration(deviceId: string): number {
   return deviceGen.get(deviceId) ?? 0;
 }
 
+const routedProviderGenerations = new Map<string, number>();
+
+export function getRoutedProviderGeneration(deviceId: string): number {
+  return routedProviderGenerations.get(deviceId) ?? 0;
+}
+
 export function evictDeviceProviders(
   deviceId: string,
   options?: { retainDisplaySnapshot?: boolean; directOnly?: boolean; deferNotify?: boolean },
 ): number {
   // A provisional direct target must not evict the host's healthy routed aliases.
   if (!options?.directOnly) {
+    if (!parseModelCatalogKey(deviceId)) {
+      routedProviderGenerations.set(deviceId, getRoutedProviderGeneration(deviceId) + 1);
+    }
     for (const key of new Set([...cache.keys(), ...inflight.keys(), ...listeners.keys()])) {
       const route = parseModelCatalogKey(key);
       if (route && (route.taskDeviceId === deviceId || route.agentDeviceId === deviceId)) {
