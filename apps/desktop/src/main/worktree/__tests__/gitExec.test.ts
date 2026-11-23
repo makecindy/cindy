@@ -7,6 +7,7 @@
  */
 
 import { EventEmitter } from 'node:events';
+import path from 'node:path';
 import { OperationBudget } from '../../utils/operationBudget';
 import { enqueueGitRepoWrite } from '../../git-snapshot/gitRepoWriteQueue';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -29,7 +30,9 @@ vi.mock('../../logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 vi.mock('../../workdir-probe-host/index.js', () => ({
-  realpathWorkingDirectory: async (cwd: string) => cwd,
+  // detectCwd schedules using the test runner's path format, but this fixture
+  // supplies the canonical cwd a macOS filesystem would return.
+  realpathWorkingDirectory: async (cwd: string) => path.posix.join('/', path.basename(cwd)),
 }));
 
 import { detectCwd } from '../detectCwd';
@@ -277,8 +280,8 @@ describe('macOS Git discovery', () => {
       expect((await results).map((result) =>
         result.status === 'rejected' && result.reason.timedOut,
       )).toEqual([true, true, true, true]);
-      expect(stalledSignals.every((signal) => signal.aborted)).toBe(true);
-      await expect(healthy).resolves.toMatchObject({ isGitRepo: true, repoRoot: '/healthy' });
+      expect(stalledSignals.map((signal) => signal.aborted)).toEqual([true, true, true, true]);
+      await expect(healthy).resolves.toMatchObject({ isGitRepo: true, repoRoot: path.resolve('/healthy') });
       expect(mocks.spawn).toHaveBeenCalledExactlyOnceWith(
         '/healthy/bin/git', expect.any(Array), expect.objectContaining({ cwd: '/healthy' }),
       );
