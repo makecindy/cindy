@@ -8023,7 +8023,6 @@
         "search": "Buscar plugins",
         "clearSearch": "Limpar busca de plugins",
         "secondaryTabsAria": "Seções da página do plugin",
-        "overviewTab": "Visão geral",
         "addPlugin": "Adicionar plugin",
         "addPluginAria": "Opções de adição de plugin",
         "githubInstall": {
@@ -8978,8 +8977,6 @@
         "skip": "Pular"
       },
       "publish": {
-        "section": "Minhas publicações",
-        "action": "Publicar plugin…",
         "confirmTitle": "Publicar {{name}}",
         "confirmDescription": "Após sua confirmação, o pacote será enviado para a organização atual.",
         "org": "Organização",
@@ -8988,33 +8985,18 @@
         "size": "Tamanho",
         "confirm": "Publicar",
         "cancel": "Cancelar",
-        "disabled": "Esta organização não habilitou a publicação por membros. Entre em contato com um administrador.",
-        "loadFailed": "Não foi possível carregar suas publicações",
-        "startFailed": "Não foi possível iniciar a publicação",
-        "empty": "Nenhuma publicação ainda",
-        "unknownPlugin": "Plugin",
-        "uploading": "Publicando",
-        "badge": {
-          "validating": "Verificando",
-          "processing": "Processando",
-          "pending": "Revisão pendente",
-          "approved": "Publicado",
-          "rejected": "Rejeitado",
-          "failed": "Falhou",
-          "expired": "Expirado"
-        },
-        "stage": {
-          "confirming": "Aguardando confirmação",
-          "hashing": "Verificando o arquivo",
-          "preparing": "Criando o envio",
-          "uploading": "Enviando",
-          "committing": "Submetendo",
-          "processing": "Processando",
-          "succeeded": "Concluído",
-          "failed": "Falhou",
-          "expired": "Expirado",
-          "cancelled": "Cancelado",
-          "cancelledTracking": "Acompanhamento interrompido. O servidor ainda está processando."
+        "progress": {
+          "title": "Publicações para a equipe",
+          "dismiss": "Dispensar este resultado",
+          "publishing": "Publicando {{name}}…",
+          "uploading": "Enviando {{name}} · {{percent}}%",
+          "submitted": "{{name}} {{version}} foi enviado para análise",
+          "published": "{{name}} {{version}} foi publicado",
+          "failed": "Não foi possível publicar {{name}}. Tente mais tarde.",
+          "audienceUnsupported": "{{name}} não foi publicado: este serviço ainda não permite definir a visibilidade. Escolha todos os membros ou tente mais tarde.",
+          "networkUnreachable": "Não foi possível publicar {{name}}: sem conexão de rede. Você pode tentar de novo.",
+          "versionExists": "A versão {{version}} de {{name}} já foi usada. Altere a versão e publique novamente.",
+          "expired": "O envio de {{name}} expirou. Publique novamente."
         }
       },
       "retirement": {
@@ -9240,7 +9222,15 @@
           "RELEASE_NOTES_REQUIRED": "Não enviado para análise: preencha ghost.json.releaseNotes no código-fonte do plugin, instale o plugin atualizado e envie-o para análise.",
           "VERSION_ALREADY_SUBMITTED": "Esta versão já foi enviada. Altere o número da versão e instale o plugin atualizado antes de enviar para análise novamente.",
           "PLUGIN_PENDING_RELEASE_EXISTS": "Outra versão está em análise. Visualize ou cancele essa análise primeiro.",
-          "CONTRIBUTION_PACKAGE_CHANGED": "O plugin instalado mudou após a exibição do resumo. Atualize e confira novamente."
+          "CONTRIBUTION_PACKAGE_CHANGED": "O plugin instalado mudou após a exibição do resumo. Atualize e confira novamente.",
+          "PLUGIN_DISABLED_BY_ADMIN": "Retirado por um administrador. Só um administrador pode publicá-lo novamente.",
+          "PLUGIN_REVIEW_REQUIRED": "Ainda não há versão aprovada, então ele não pode ser publicado.",
+          "PLUGIN_REVIEW_FINAL": "Esta versão já foi analisada, então a análise não pode ser cancelada.",
+          "PLUGIN_REVIEW_STATE_CHANGED": "O status da análise mudou. Atualize e tente novamente.",
+          "PLUGIN_AUDIENCE_VALIDATION_UNAVAILABLE": "Não foi possível verificar a visibilidade agora. Tente novamente mais tarde.",
+          "PLUGIN_MEMBER_LOOKUP_UNAVAILABLE": "Não foi possível confirmar o membro agora. Tente novamente mais tarde.",
+          "PLUGIN_MAINTAINER_EXISTS": "Este membro já é mantenedor.",
+          "COMMON_PLUGIN_MANAGED": "Este plugin é gerenciado pelos administradores e não pode ser alterado aqui."
         },
         "installForAccount": "Não foi possível encontrar a instalação do plugin selecionada originalmente. Selecione o plugin novamente na conta atual e confira-o antes de enviar para análise.",
         "releaseSha": "SHA-256 do pacote da versão",
@@ -9287,7 +9277,40 @@
         "cancelReviewAlreadyFinal": "A análise já foi concluída e, por isso, não foi cancelada. O resultado real é exibido abaixo.",
         "viewPendingVersion": "Ver versão em análise",
         "submitFailed": "Falha no envio",
-        "viewDetails": "Ver detalhes"
+        "viewDetails": "Ver detalhes",
+        "publishTo": "Publicar em",
+        "target": {
+          "team": "Da equipe",
+          "teamHint": "Membros de {{org}} podem instalar",
+          "public": "Marketplace público"
+        },
+        "next": "Avançar",
+        "teamStartFailed": "Não foi possível iniciar a publicação. Tente novamente mais tarde.",
+        "introWithTeam": "Gerencie versões, atualizações e análises de plugins do marketplace público e da equipe",
+        "team": {
+          "delist": "Retirar",
+          "list": "Publicar",
+          "delistTitle": "Retirar {{name}}?",
+          "delistDescription": "Os membros deixarão de vê-lo no marketplace de plugins e não poderão instalá-lo. As instalações existentes continuam funcionando, mas deixam de receber atualizações.",
+          "listTitle": "Publicar {{name}}?",
+          "listDescription": "Membros dentro do escopo de visibilidade poderão encontrá-lo e instalá-lo no marketplace de plugins.",
+          "delistedByAdmin": "Retirado por um administrador. Só um administrador pode publicá-lo novamente.",
+          "edit": "Editar",
+          "save": "Salvar",
+          "editAudienceTitle": "Editar a visibilidade de {{name}}",
+          "maintainers": "Mantenedores",
+          "addMaintainer": "Adicionar mantenedor",
+          "add": "Adicionar",
+          "searchMaintainer": "Pesquise membros por nome ou e-mail",
+          "removeMaintainer": "Remover",
+          "removeMaintainerTitle": "Remover {{name}} dos mantenedores?",
+          "removeMaintainerDescription": "Você pode adicioná-lo de novo depois.",
+          "role": {
+            "creator": "Criador",
+            "maintainer": "Mantenedor"
+          },
+          "decidedAt": "Decidido em"
+        }
       },
       "fileTransfer": {
         "reading": "Lendo arquivos",
@@ -9296,6 +9319,59 @@
         "importing": "Importando arquivos",
         "finished": "Operação de arquivo concluída",
         "importFinished": "Importação de arquivos concluída"
+      },
+      "audience": {
+        "title": "Visibilidade",
+        "all": "Todos os membros",
+        "specified": "Departamentos e membros específicos",
+        "choose": "Escolher departamentos e membros",
+        "keepCurrent": "Manter a visibilidade atual",
+        "requireOne": "Escolha pelo menos um departamento, membro ou e-mail",
+        "notFound": "Não encontrado",
+        "ambiguous": "Várias pessoas têm esse nome. Escolha no seletor.",
+        "impact": "Membros fora do escopo mantêm o plugin instalado, mas deixam de receber atualizações.",
+        "unresolvedLabel": "Nomes não encontrados",
+        "selectedLabel": "Escopo selecionado",
+        "roleLabels": {
+          "owner": "Proprietário",
+          "admin": "Administrador",
+          "finance": "Financeiro",
+          "department_manager": "Administrador de departamento",
+          "member": "Membro"
+        },
+        "picker": {
+          "title": "Escolher departamentos e membros",
+          "search": "Pesquise departamentos, nomes de membros ou e-mails",
+          "departments": "Departamentos",
+          "members": "Membros",
+          "emails": "E-mails",
+          "roles": "Funções",
+          "included": "Incluído",
+          "loadMore": "Carregar mais",
+          "retry": "Tentar novamente",
+          "loading": "Carregando…",
+          "loadFailed": "Não foi possível carregar",
+          "noMembers": "Nenhum membro correspondente",
+          "addEmail": "Adicionar por e-mail {{email}}",
+          "selected": "{{count}} selecionados",
+          "clear": "Limpar",
+          "noneSelected": "Nenhum departamento ou membro selecionado",
+          "remove": "Remover {{name}}",
+          "unknownDepartment": "Departamento removido",
+          "memberId": "Membro {{id}}",
+          "searchMembersOnly": "Pesquise membros por nome ou e-mail",
+          "expand": "Expandir {{name}}",
+          "collapse": "Recolher {{name}}",
+          "cancel": "Cancelar",
+          "done": "Concluir"
+        },
+        "namesMore": "{{names}} e {{count}} no total",
+        "separator": ", ",
+        "blocked": "Não é possível publicar com a visibilidade solicitada",
+        "blockedUnsupported": "Este serviço ainda não permite definir a visibilidade. Cancele e publique sem ela ou tente mais tarde.",
+        "blockedLocked": "Não foi possível ler a visibilidade atual deste plugin. Tente mais tarde ou cancele e publique sem defini-la.",
+        "blockedLegacyRoles": "A visibilidade atual deste plugin inclui condições de função antigas e não pode ser alterada ao publicar. Cancele e publique sem defini-la, depois altere-a nos detalhes do plugin.",
+        "legacyRolesNote": "A visibilidade atual inclui condições de função antigas. Altere-a nos detalhes do plugin depois de publicar."
       }
     },
     "mcp": {

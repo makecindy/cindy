@@ -7913,7 +7913,6 @@
         "search": "プラグインを検索",
         "clearSearch": "プラグイン検索をクリア",
         "secondaryTabsAria": "プラグインページのセクション",
-        "overviewTab": "概要",
         "addPlugin": "プラグインを追加",
         "addPluginAria": "プラグイン追加オプション",
         "githubInstall": {
@@ -8863,8 +8862,6 @@
         "skip": "スキップ"
       },
       "publish": {
-        "section": "自分の公開履歴",
-        "action": "プラグインを公開…",
         "confirmTitle": "{{name}} を公開",
         "confirmDescription": "確認後、現在の組織へアップロードします。",
         "org": "組織",
@@ -8873,33 +8870,18 @@
         "size": "サイズ",
         "confirm": "公開",
         "cancel": "キャンセル",
-        "disabled": "この組織ではメンバー公開が有効になっていません。管理者に連絡してください。",
-        "loadFailed": "公開一覧を読み込めません",
-        "startFailed": "公開を開始できません",
-        "empty": "公開履歴はまだありません",
-        "unknownPlugin": "プラグイン",
-        "uploading": "公開中",
-        "badge": {
-          "validating": "検証中",
-          "processing": "処理中",
-          "pending": "審査待ち",
-          "approved": "公開済み",
-          "rejected": "却下",
-          "failed": "失敗",
-          "expired": "期限切れ"
-        },
-        "stage": {
-          "confirming": "確認待ち",
-          "hashing": "ファイルを検証中",
-          "preparing": "アップロードを作成中",
-          "uploading": "アップロード中",
-          "committing": "送信中",
-          "processing": "処理中",
-          "succeeded": "完了",
-          "failed": "失敗",
-          "expired": "期限切れ",
-          "cancelled": "キャンセル済み",
-          "cancelledTracking": "追跡を停止しました。サーバー側では処理が続いています。"
+        "progress": {
+          "title": "チーム共有への公開状況",
+          "dismiss": "この結果を閉じる",
+          "publishing": "{{name}} を公開しています…",
+          "uploading": "{{name}} をアップロード中 · {{percent}}%",
+          "submitted": "{{name}} {{version}} を審査に提出しました",
+          "published": "{{name}} {{version}} を公開しました",
+          "failed": "{{name}} を公開できませんでした。しばらくしてから再試行してください。",
+          "audienceUnsupported": "{{name}} は公開されませんでした：サービスが公開範囲の指定に対応していません。全メンバーを選ぶか、しばらくしてから再試行してください。",
+          "networkUnreachable": "{{name}} を公開できませんでした：ネットワークに接続できません。再試行できます。",
+          "versionExists": "{{name}} {{version}} は使用済みのバージョンです。バージョンを変更して公開し直してください。",
+          "expired": "{{name}} のアップロードが期限切れになりました。公開し直してください。"
         }
       },
       "retirement": {
@@ -9125,7 +9107,15 @@
           "RELEASE_NOTES_REQUIRED": "審査未提出：プラグインのソースにある ghost.json.releaseNotes に更新内容を記載し、更新したプラグインをインストールしてから審査に提出してください。",
           "VERSION_ALREADY_SUBMITTED": "このバージョンは提出済みです。バージョン番号を変更して更新をインストールしてから、審査に再提出してください。",
           "PLUGIN_PENDING_RELEASE_EXISTS": "別のバージョンが審査中です。その審査を確認するか取り消してください。",
-          "CONTRIBUTION_PACKAGE_CHANGED": "概要の表示後にインストール済みプラグインが変わりました。再読み込みして確認してください。"
+          "CONTRIBUTION_PACKAGE_CHANGED": "概要の表示後にインストール済みプラグインが変わりました。再読み込みして確認してください。",
+          "PLUGIN_DISABLED_BY_ADMIN": "管理者が公開を停止しました。再公開は管理者のみが行えます",
+          "PLUGIN_REVIEW_REQUIRED": "審査を通過したバージョンがまだないため、公開できません。",
+          "PLUGIN_REVIEW_FINAL": "このバージョンは審査が完了しているため、審査を取り消せません。",
+          "PLUGIN_REVIEW_STATE_CHANGED": "審査状況が変わりました。更新してからもう一度お試しください。",
+          "PLUGIN_AUDIENCE_VALIDATION_UNAVAILABLE": "現在、公開範囲を確認できません。しばらくしてから再試行してください。",
+          "PLUGIN_MEMBER_LOOKUP_UNAVAILABLE": "現在、メンバーを確認できません。しばらくしてから再試行してください。",
+          "PLUGIN_MAINTAINER_EXISTS": "このメンバーはすでにメンテナーです。",
+          "COMMON_PLUGIN_MANAGED": "このプラグインは管理者が一括管理しているため、ここでは変更できません。"
         },
         "installForAccount": "選択した元のプラグインのインストールが見つかりません。現在のアカウントで選び直し、確認してから審査に提出してください。",
         "releaseSha": "リリースパッケージの SHA-256",
@@ -9172,7 +9162,40 @@
         "cancelReviewAlreadyFinal": "審査は完了しているため取り消されませんでした。実際の結果を下に表示します。",
         "viewPendingVersion": "審査中のバージョンを表示",
         "submitFailed": "提出に失敗",
-        "viewDetails": "詳細を見る"
+        "viewDetails": "詳細を見る",
+        "publishTo": "公開先",
+        "target": {
+          "team": "チーム共有",
+          "teamHint": "{{org}} のメンバーがインストールできます",
+          "public": "公開マーケット"
+        },
+        "next": "次へ",
+        "teamStartFailed": "公開を開始できませんでした。しばらくしてから再試行してください。",
+        "introWithTeam": "公開マーケットとチーム共有のプラグインの公開・更新・審査状況を管理",
+        "team": {
+          "delist": "公開を停止",
+          "list": "公開",
+          "delistTitle": "{{name}} の公開を停止しますか？",
+          "delistDescription": "停止すると、メンバーはプラグインマーケットで見つけたり新しくインストールしたりできなくなります。インストール済みのものは残って使い続けられますが、更新は届かなくなります。",
+          "listTitle": "{{name}} を公開しますか？",
+          "listDescription": "公開範囲内のメンバーがプラグインマーケットで見つけてインストールできるようになります。",
+          "delistedByAdmin": "管理者が公開を停止しました。再公開は管理者のみが行えます",
+          "edit": "編集",
+          "save": "保存",
+          "editAudienceTitle": "{{name}} の公開範囲を編集",
+          "maintainers": "メンテナー",
+          "addMaintainer": "メンテナーを追加",
+          "add": "追加",
+          "searchMaintainer": "名前またはメールアドレスでメンバーを検索",
+          "removeMaintainer": "削除",
+          "removeMaintainerTitle": "{{name}} をメンテナーから外しますか？",
+          "removeMaintainerDescription": "あとで再び追加できます。",
+          "role": {
+            "creator": "作成者",
+            "maintainer": "メンテナー"
+          },
+          "decidedAt": "処理日時"
+        }
       },
       "fileTransfer": {
         "reading": "ファイルを読み込み中",
@@ -9181,6 +9204,59 @@
         "importing": "ファイルをインポート中",
         "finished": "ファイル処理が終了しました",
         "importFinished": "ファイルのインポートが終了しました"
+      },
+      "audience": {
+        "title": "公開範囲",
+        "all": "全メンバー",
+        "specified": "部門とメンバーを指定",
+        "choose": "部門とメンバーを選択",
+        "keepCurrent": "現在の公開範囲を維持",
+        "requireOne": "部門・メンバー・メールアドレスを 1 つ以上選択してください",
+        "notFound": "見つかりません",
+        "ambiguous": "同名のメンバーが複数います。選択画面で選んでください",
+        "impact": "範囲外のメンバーはインストール済みのプラグインを引き続き使えますが、更新は届かなくなります",
+        "unresolvedLabel": "一致しなかった名前",
+        "selectedLabel": "選択中の範囲",
+        "roleLabels": {
+          "owner": "オーナー",
+          "admin": "管理者",
+          "finance": "経理",
+          "department_manager": "部門管理者",
+          "member": "一般メンバー"
+        },
+        "picker": {
+          "title": "部門とメンバーを選択",
+          "search": "部門、メンバー名、メールアドレスを検索",
+          "departments": "部門",
+          "members": "メンバー",
+          "emails": "メールアドレス",
+          "roles": "ロール",
+          "included": "含まれています",
+          "loadMore": "さらに表示",
+          "retry": "再試行",
+          "loading": "読み込み中…",
+          "loadFailed": "読み込めませんでした",
+          "noMembers": "一致するメンバーはいません",
+          "addEmail": "メールアドレスで追加 {{email}}",
+          "selected": "{{count}} 件を選択中",
+          "clear": "クリア",
+          "noneSelected": "部門またはメンバーが選択されていません",
+          "remove": "{{name}} を削除",
+          "unknownDepartment": "無効になった部門",
+          "memberId": "メンバー {{id}}",
+          "searchMembersOnly": "名前またはメールアドレスでメンバーを検索",
+          "expand": "{{name}} を展開",
+          "collapse": "{{name}} を折りたたむ",
+          "cancel": "キャンセル",
+          "done": "完了"
+        },
+        "namesMore": "{{names}} など {{count}} 件",
+        "separator": "、",
+        "blocked": "指定された公開範囲では公開できません",
+        "blockedUnsupported": "現在のサービスは公開範囲の指定に対応していません。キャンセルして範囲を指定せずに公開し直すか、しばらくしてから再試行してください。",
+        "blockedLocked": "このプラグインの現在の公開範囲を読み込めませんでした。しばらくしてから再試行するか、キャンセルして範囲を指定せずに公開してください。",
+        "blockedLegacyRoles": "このプラグインの現在の公開範囲には以前のロール条件が含まれているため、公開時には変更できません。キャンセルして範囲を指定せずに公開し、その後プラグインの詳細で変更してください。",
+        "legacyRolesNote": "現在の公開範囲に以前のロール条件が含まれています。公開後にプラグインの詳細で範囲を変更してください。"
       }
     },
     "mcp": {

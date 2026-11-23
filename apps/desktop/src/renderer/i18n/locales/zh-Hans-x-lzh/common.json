@@ -7913,7 +7913,6 @@
         "search": "寻法器",
         "clearSearch": "清法器之寻",
         "secondaryTabsAria": "法器页内容",
-        "overviewTab": "综览",
         "addPlugin": "增法器",
         "addPluginAria": "增法器之选",
         "githubInstall": {
@@ -8849,8 +8848,6 @@
         "skip": "略"
       },
       "publish": {
-        "section": "吾之发布",
-        "action": "发布法器…",
         "confirmTitle": "发布 {{name}}",
         "confirmDescription": "确认后，即上呈至当前组织。",
         "org": "组织",
@@ -8859,33 +8856,18 @@
         "size": "体量",
         "confirm": "发布",
         "cancel": "罢",
-        "disabled": "此企业未启成员发布，请联系管理员",
-        "loadFailed": "发布录暂不可用",
-        "startFailed": "未能始发布",
-        "empty": "尚无发布之记",
-        "unknownPlugin": "法器",
-        "uploading": "方发布",
-        "badge": {
-          "validating": "方校",
-          "processing": "方理",
-          "pending": "待审",
-          "approved": "已陈列",
-          "rejected": "见驳",
-          "failed": "未成",
-          "expired": "已逾期"
-        },
-        "stage": {
-          "confirming": "候确认",
-          "hashing": "方校卷",
-          "preparing": "方立上呈",
-          "uploading": "方上呈",
-          "committing": "方呈递",
-          "processing": "方理",
-          "succeeded": "毕",
-          "failed": "未成",
-          "expired": "已逾期",
-          "cancelled": "已罢",
-          "cancelledTracking": "已止追踪，服务器犹在处理"
+        "progress": {
+          "title": "团队共享发布之进度",
+          "dismiss": "去此条",
+          "publishing": "方发布 {{name}}…",
+          "uploading": "方上传 {{name}} · {{percent}}%",
+          "submitted": "{{name}} {{version}} 已呈审",
+          "published": "{{name}} {{version}} 已发布",
+          "failed": "{{name}} 发布未成，请稍后再试",
+          "audienceUnsupported": "{{name}} 未发布：服务尚不能指可见之域，可改择全体之众或稍后再试",
+          "networkUnreachable": "{{name}} 发布未成：网络不通，可再试",
+          "versionExists": "{{name}} {{version}} 此版本号已用，请改版本号后复发布",
+          "expired": "{{name}} 上传已逾时，请复发布"
         }
       },
       "retirement": {
@@ -9111,7 +9093,15 @@
           "RELEASE_NOTES_REQUIRED": "尚未送审：请于法器源代码之 ghost.json.releaseNotes 中补齐更新说明，安装更新后，重新呈审。",
           "VERSION_ALREADY_SUBMITTED": "此版已送审，请改版本号并安装更新后，重新呈审。",
           "PLUGIN_PENDING_RELEASE_EXISTS": "此法器已有一版方在审核，请先观之或罢其审。",
-          "CONTRIBUTION_PACKAGE_CHANGED": "此机法器于摘要显示后已变，请重整摘要后核对。"
+          "CONTRIBUTION_PACKAGE_CHANGED": "此机法器于摘要显示后已变，请重整摘要后核对。",
+          "PLUGIN_DISABLED_BY_ADMIN": "管理已下架，须由管理复上架",
+          "PLUGIN_REVIEW_REQUIRED": "尚无审核通过之版本，暂不可上架。",
+          "PLUGIN_REVIEW_FINAL": "此版本审核已毕，不可撤其提审。",
+          "PLUGIN_REVIEW_STATE_CHANGED": "审核之状已变，请刷新后再试。",
+          "PLUGIN_AUDIENCE_VALIDATION_UNAVAILABLE": "暂不能核可见之域，请稍后再试。",
+          "PLUGIN_MEMBER_LOOKUP_UNAVAILABLE": "暂不能核其人之身份，请稍后再试。",
+          "PLUGIN_MAINTAINER_EXISTS": "此人已为维护者。",
+          "COMMON_PLUGIN_MANAGED": "此法器由管理统理，不可于此改之。"
         },
         "installForAccount": "原所选之法器安装无从寻得。请于目前名籍下重选法器，确认后再呈审。",
         "releaseSha": "实际版本包 SHA-256",
@@ -9158,7 +9148,40 @@
         "cancelReviewAlreadyFinal": "审核已毕，此次未能罢之。下方所示为实际审核之果。",
         "viewPendingVersion": "观方审之版",
         "submitFailed": "提交未成",
-        "viewDetails": "观详情"
+        "viewDetails": "观详情",
+        "publishTo": "发布于",
+        "target": {
+          "team": "团队同享",
+          "teamHint": "{{org}}之众可装",
+          "public": "公开市场"
+        },
+        "next": "次步",
+        "teamStartFailed": "未能始发布，请稍后再试",
+        "introWithTeam": "理公开市场与团队同享法器之发布、更新与审核之状",
+        "team": {
+          "delist": "下架",
+          "list": "上架",
+          "delistTitle": "下架 {{name}} 乎？",
+          "delistDescription": "下架之后，众于法器市不得见、不得新装；已装者仍存可用，然不复得更新。",
+          "listTitle": "上架 {{name}} 乎？",
+          "listDescription": "上架之后，可见之域内之人得于法器市见而装之。",
+          "delistedByAdmin": "管理已下架，须由管理复上架",
+          "edit": "改",
+          "save": "存",
+          "editAudienceTitle": "改 {{name}} 之可见之域",
+          "maintainers": "维护者",
+          "addMaintainer": "添维护者",
+          "add": "添",
+          "searchMaintainer": "以名或邮址寻人",
+          "removeMaintainer": "除",
+          "removeMaintainerTitle": "除 {{name}} 之维护者身份乎？",
+          "removeMaintainerDescription": "后可复添。",
+          "role": {
+            "creator": "创者",
+            "maintainer": "维护者"
+          },
+          "decidedAt": "处理之时"
+        }
       },
       "fileTransfer": {
         "reading": "方读卷",
@@ -9181,6 +9204,59 @@
         "descriptionWithStartTask": "仅于君所择之差事介入：运行前仅能略过或止此番，开新差事时仅为首言择模型一次。皆不能代君准允。",
         "titleWithStartTask": "法器介入之时",
         "usageStartTask": "用法：于新任务之模型择器中，择其所供之模型。"
+      },
+      "audience": {
+        "title": "可见之域",
+        "all": "全体之众",
+        "specified": "择部与人",
+        "choose": "择部与人",
+        "keepCurrent": "仍旧域",
+        "requireOne": "请至少择一部、一人或一邮",
+        "notFound": "未寻得",
+        "ambiguous": "同名者众，请于择器中择之",
+        "impact": "域外之人，已装之法器仍存，然不复得更新",
+        "unresolvedLabel": "未合之名",
+        "selectedLabel": "已择之域",
+        "roleLabels": {
+          "owner": "总管",
+          "admin": "管理",
+          "finance": "司财",
+          "department_manager": "部之管理",
+          "member": "寻常之众"
+        },
+        "picker": {
+          "title": "择部与人",
+          "search": "寻部、人名或邮址",
+          "departments": "部",
+          "members": "人",
+          "emails": "邮址",
+          "roles": "职",
+          "included": "已含",
+          "loadMore": "载更多",
+          "retry": "再试",
+          "loading": "载入中…",
+          "loadFailed": "载入未成",
+          "noMembers": "无相合之人",
+          "addEmail": "以邮址添 {{email}}",
+          "selected": "已择 {{count}} 项",
+          "clear": "尽除",
+          "noneSelected": "未择部或人",
+          "remove": "除 {{name}}",
+          "unknownDepartment": "已废之部",
+          "memberId": "人 {{id}}",
+          "searchMembersOnly": "以名或邮址寻人",
+          "expand": "展 {{name}}",
+          "collapse": "收 {{name}}",
+          "cancel": "罢",
+          "done": "毕"
+        },
+        "namesMore": "{{names}} 等 {{count}} 项",
+        "separator": "、",
+        "blocked": "不能依君所指之域发布",
+        "blockedUnsupported": "今服务尚不能指可见之域。可罢而不指域复发布，或稍后再试。",
+        "blockedLocked": "暂不能读此法器今之可见之域。可稍后再试，或罢而不指域发布。",
+        "blockedLegacyRoles": "此法器今之域含旧之角色条件，发布时不可改。可罢而不指域发布，既发布后至法器详情改其域。",
+        "legacyRolesNote": "今之域含旧之角色条件，请于发布后至法器详情改其域。"
       }
     },
     "mcp": {

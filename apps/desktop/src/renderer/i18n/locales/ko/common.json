@@ -7913,7 +7913,6 @@
         "search": "플러그인 검색",
         "clearSearch": "플러그인 검색 지우기",
         "secondaryTabsAria": "플러그인 페이지 섹션",
-        "overviewTab": "개요",
         "addPlugin": "플러그인 추가",
         "addPluginAria": "플러그인 추가 옵션",
         "githubInstall": {
@@ -8863,8 +8862,6 @@
         "skip": "건너뛰기"
       },
       "publish": {
-        "section": "내 게시",
-        "action": "플러그인 게시…",
         "confirmTitle": "{{name}} 게시",
         "confirmDescription": "확인하면 현재 조직으로 업로드가 시작됩니다.",
         "org": "조직",
@@ -8873,33 +8870,18 @@
         "size": "크기",
         "confirm": "게시",
         "cancel": "취소",
-        "disabled": "이 조직은 구성원 게시를 켜지 않았습니다. 관리자에게 문의하세요.",
-        "loadFailed": "게시 목록을 불러올 수 없습니다",
-        "startFailed": "게시를 시작할 수 없습니다",
-        "empty": "아직 게시 기록이 없습니다",
-        "unknownPlugin": "플러그인",
-        "uploading": "게시 중",
-        "badge": {
-          "validating": "검사 중",
-          "processing": "처리 중",
-          "pending": "검토 대기",
-          "approved": "게시됨",
-          "rejected": "거절됨",
-          "failed": "실패",
-          "expired": "만료됨"
-        },
-        "stage": {
-          "confirming": "확인 대기",
-          "hashing": "파일 검사 중",
-          "preparing": "업로드 생성 중",
-          "uploading": "업로드 중",
-          "committing": "제출 중",
-          "processing": "처리 중",
-          "succeeded": "완료",
-          "failed": "실패",
-          "expired": "만료됨",
-          "cancelled": "취소됨",
-          "cancelledTracking": "추적을 멈췄습니다. 서버는 계속 처리 중입니다."
+        "progress": {
+          "title": "팀 공유 게시 진행 상황",
+          "dismiss": "이 결과 닫기",
+          "publishing": "{{name}} 게시 중…",
+          "uploading": "{{name}} 업로드 중 · {{percent}}%",
+          "submitted": "{{name}} {{version}} 심사를 요청했습니다",
+          "published": "{{name}} {{version}}을(를) 게시했습니다",
+          "failed": "{{name}}을(를) 게시하지 못했습니다. 잠시 후 다시 시도하세요.",
+          "audienceUnsupported": "{{name}}을(를) 게시하지 않았습니다: 서비스가 공개 범위 지정을 지원하지 않습니다. 전체 구성원을 선택하거나 잠시 후 다시 시도하세요.",
+          "networkUnreachable": "{{name}}을(를) 게시하지 못했습니다: 네트워크에 연결할 수 없습니다. 다시 시도할 수 있습니다.",
+          "versionExists": "{{name}} {{version}}은(는) 이미 사용한 버전입니다. 버전을 바꾼 뒤 다시 게시하세요.",
+          "expired": "{{name}} 업로드가 만료되었습니다. 다시 게시하세요."
         }
       },
       "retirement": {
@@ -9125,7 +9107,15 @@
           "RELEASE_NOTES_REQUIRED": "아직 심사에 제출되지 않았습니다. 플러그인 소스의 ghost.json.releaseNotes에 업데이트 내용을 작성하고, 업데이트한 플러그인을 설치한 후 심사를 요청하세요.",
           "VERSION_ALREADY_SUBMITTED": "이미 심사를 요청한 버전입니다. 버전 번호를 변경하고 업데이트를 설치한 후 다시 심사를 요청하세요.",
           "PLUGIN_PENDING_RELEASE_EXISTS": "다른 버전이 심사 중입니다. 먼저 해당 심사를 확인하거나 취소하세요.",
-          "CONTRIBUTION_PACKAGE_CHANGED": "요약을 표시한 뒤 설치된 플러그인이 변경되었습니다. 새로고침하고 다시 확인하세요."
+          "CONTRIBUTION_PACKAGE_CHANGED": "요약을 표시한 뒤 설치된 플러그인이 변경되었습니다. 새로고침하고 다시 확인하세요.",
+          "PLUGIN_DISABLED_BY_ADMIN": "관리자가 게시를 중단했습니다. 관리자만 다시 게시할 수 있습니다",
+          "PLUGIN_REVIEW_REQUIRED": "심사를 통과한 버전이 아직 없어 게시할 수 없습니다.",
+          "PLUGIN_REVIEW_FINAL": "이 버전은 이미 심사가 끝나 심사 요청을 취소할 수 없습니다.",
+          "PLUGIN_REVIEW_STATE_CHANGED": "심사 상태가 바뀌었습니다. 새로고침한 후 다시 시도하세요.",
+          "PLUGIN_AUDIENCE_VALIDATION_UNAVAILABLE": "지금은 공개 범위를 확인할 수 없습니다. 잠시 후 다시 시도하세요.",
+          "PLUGIN_MEMBER_LOOKUP_UNAVAILABLE": "지금은 구성원을 확인할 수 없습니다. 잠시 후 다시 시도하세요.",
+          "PLUGIN_MAINTAINER_EXISTS": "이미 유지 관리자인 구성원입니다.",
+          "COMMON_PLUGIN_MANAGED": "이 플러그인은 관리자가 일괄 관리하므로 여기에서 변경할 수 없습니다."
         },
         "installForAccount": "처음 선택한 플러그인 설치를 찾을 수 없습니다. 현재 계정에서 플러그인을 다시 선택하고 확인한 후 심사를 요청하세요.",
         "releaseSha": "릴리스 패키지 SHA-256",
@@ -9172,7 +9162,40 @@
         "cancelReviewAlreadyFinal": "심사가 이미 완료되어 취소되지 않았습니다. 아래에 실제 결과가 표시됩니다.",
         "viewPendingVersion": "심사 중인 버전 보기",
         "submitFailed": "제출 실패",
-        "viewDetails": "상세 보기"
+        "viewDetails": "상세 보기",
+        "publishTo": "게시 대상",
+        "target": {
+          "team": "팀 공유",
+          "teamHint": "{{org}} 구성원이 설치할 수 있습니다",
+          "public": "공개 마켓"
+        },
+        "next": "다음",
+        "teamStartFailed": "게시를 시작할 수 없습니다. 잠시 후 다시 시도하세요.",
+        "introWithTeam": "공개 마켓 및 팀 공유 플러그인의 게시, 업데이트 및 심사 상태 관리",
+        "team": {
+          "delist": "게시 중단",
+          "list": "게시",
+          "delistTitle": "{{name}}의 게시를 중단할까요?",
+          "delistDescription": "중단하면 구성원이 플러그인 마켓에서 찾거나 새로 설치할 수 없습니다. 이미 설치한 플러그인은 계속 사용할 수 있지만 더 이상 업데이트를 받지 않습니다.",
+          "listTitle": "{{name}}을(를) 게시할까요?",
+          "listDescription": "공개 범위 안의 구성원이 플러그인 마켓에서 찾아 설치할 수 있습니다.",
+          "delistedByAdmin": "관리자가 게시를 중단했습니다. 관리자만 다시 게시할 수 있습니다",
+          "edit": "편집",
+          "save": "저장",
+          "editAudienceTitle": "{{name}} 공개 범위 편집",
+          "maintainers": "유지 관리자",
+          "addMaintainer": "유지 관리자 추가",
+          "add": "추가",
+          "searchMaintainer": "이름 또는 이메일로 구성원 검색",
+          "removeMaintainer": "제거",
+          "removeMaintainerTitle": "{{name}}을(를) 유지 관리자에서 제거할까요?",
+          "removeMaintainerDescription": "나중에 다시 추가할 수 있습니다.",
+          "role": {
+            "creator": "만든 사람",
+            "maintainer": "유지 관리자"
+          },
+          "decidedAt": "처리 시간"
+        }
       },
       "fileTransfer": {
         "reading": "파일 읽는 중",
@@ -9181,6 +9204,59 @@
         "importing": "파일 가져오는 중",
         "finished": "파일 작업 종료",
         "importFinished": "파일 가져오기 종료"
+      },
+      "audience": {
+        "title": "공개 범위",
+        "all": "전체 구성원",
+        "specified": "부서 및 구성원 지정",
+        "choose": "부서 및 구성원 선택",
+        "keepCurrent": "현재 범위 유지",
+        "requireOne": "부서, 구성원 또는 이메일을 하나 이상 선택하세요",
+        "notFound": "찾을 수 없음",
+        "ambiguous": "동명이인이 여러 명입니다. 선택기에서 고르세요",
+        "impact": "범위 밖의 구성원은 설치한 플러그인을 계속 사용할 수 있지만 더 이상 업데이트를 받지 않습니다",
+        "unresolvedLabel": "일치하지 않은 이름",
+        "selectedLabel": "선택한 범위",
+        "roleLabels": {
+          "owner": "소유자",
+          "admin": "관리자",
+          "finance": "재무",
+          "department_manager": "부서 관리자",
+          "member": "일반 구성원"
+        },
+        "picker": {
+          "title": "부서 및 구성원 선택",
+          "search": "부서, 구성원 이름 또는 이메일 검색",
+          "departments": "부서",
+          "members": "구성원",
+          "emails": "이메일",
+          "roles": "역할",
+          "included": "포함됨",
+          "loadMore": "더 보기",
+          "retry": "다시 시도",
+          "loading": "불러오는 중…",
+          "loadFailed": "불러오지 못했습니다",
+          "noMembers": "일치하는 구성원이 없습니다",
+          "addEmail": "이메일로 추가 {{email}}",
+          "selected": "{{count}}개 선택됨",
+          "clear": "모두 지우기",
+          "noneSelected": "선택한 부서나 구성원이 없습니다",
+          "remove": "{{name}} 제거",
+          "unknownDepartment": "삭제된 부서",
+          "memberId": "구성원 {{id}}",
+          "searchMembersOnly": "이름이나 이메일로 구성원 검색",
+          "expand": "{{name}} 펼치기",
+          "collapse": "{{name}} 접기",
+          "cancel": "취소",
+          "done": "완료"
+        },
+        "namesMore": "{{names}} 외 총 {{count}}개",
+        "separator": ", ",
+        "blocked": "요청한 공개 범위로 게시할 수 없습니다",
+        "blockedUnsupported": "현재 서비스는 공개 범위 지정을 지원하지 않습니다. 취소한 뒤 범위 없이 다시 게시하거나 잠시 후 다시 시도하세요.",
+        "blockedLocked": "이 플러그인의 현재 공개 범위를 읽을 수 없습니다. 잠시 후 다시 시도하거나 취소한 뒤 범위 없이 게시하세요.",
+        "blockedLegacyRoles": "이 플러그인의 현재 공개 범위에 이전 역할 조건이 포함되어 있어 게시 중에는 변경할 수 없습니다. 취소한 뒤 범위 없이 게시하고, 이후 플러그인 세부 정보에서 변경하세요.",
+        "legacyRolesNote": "현재 공개 범위에 이전 역할 조건이 포함되어 있습니다. 게시 후 플러그인 세부 정보에서 범위를 변경하세요."
       }
     },
     "mcp": {
