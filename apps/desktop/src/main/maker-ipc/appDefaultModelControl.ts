@@ -106,9 +106,12 @@ export async function inspectAppDefaultModel() {
 export function teammatePluginEngineModelChoices(engines: ReturnType<typeof listPluginEngineViews> = listPluginEngineViews()) {
   return engines.filter(engine => engine.availability.state !== 'unavailable' && !engine.hidden && !engine.suspended)
     .flatMap(engine => {
-      const models = engine.models.length > 0 || engine.defaultModelAllowed === false
+      // The engine default stays a choice whenever the engine allows it, as the saved-chain check
+      // (`resolveAvailableTaskModels`) does: a chain saved with it must stay editable once the engine
+      // reports its models.
+      const models = engine.defaultModelAllowed === false || engine.models.some(model => model.id === PLUGIN_ENGINE_DEFAULT_MODEL)
         ? engine.models
-        : [{ id: PLUGIN_ENGINE_DEFAULT_MODEL, displayName: PLUGIN_ENGINE_DEFAULT_MODEL }];
+        : [{ id: PLUGIN_ENGINE_DEFAULT_MODEL, displayName: PLUGIN_ENGINE_DEFAULT_MODEL }, ...engine.models];
       return models.map(model => {
         const efforts = (model.efforts ?? []).filter(isPluginEngineEffort);
         const route: BotModelRoute = { harness: 'acp', providerId: engine.providerId, model: model.id, effort: '', fastMode: false };

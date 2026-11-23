@@ -60,17 +60,22 @@ it('offers this computer\'s plugin engines to a teammate chain, never to the app
     { providerId: 'acp-plugin:agy:agy', name: 'Antigravity', availability: { state: 'available' },
       models: [{ id: 'gemini-3-pro', displayName: 'Gemini 3 Pro', efforts: ['low', 'high', 'bogus'] }] },
     { providerId: 'acp-plugin:dsh:dsh', name: 'DSH', availability: { state: 'unknown' }, models: [] },
+    { providerId: 'acp-plugin:shared:x', name: 'Shared', defaultModelAllowed: false, availability: { state: 'available' }, models: [{ id: 'only', displayName: 'Only' }] },
     { providerId: 'acp-plugin:hidden:x', name: 'Hidden', hidden: true, availability: { state: 'available' }, models: [{ id: 'm', displayName: 'M' }] },
     { providerId: 'acp-plugin:off:x', name: 'Off', availability: { state: 'unavailable' }, models: [{ id: 'm', displayName: 'M' }] },
   ]);
   const { available } = await inspectTeammateModelChoices();
   const engines = available.filter(item => item.route.harness === 'acp');
   expect(engines).toEqual([
+    // Review (#12295): the engine default stays offered after the engine reports models, so a chain
+    // saved with it can still be edited.
+    expect.objectContaining({ id: JSON.stringify(['acp', 'acp-plugin:agy:agy', 'default']), teammateOnly: true }),
     expect.objectContaining({ id: JSON.stringify(['acp', 'acp-plugin:agy:agy', 'gemini-3-pro']), teammateOnly: true, engine: 'Antigravity',
       displayName: 'Gemini 3 Pro', efforts: ['low', 'high'], supportsFastMode: false,
       route: { harness: 'acp', providerId: 'acp-plugin:agy:agy', model: 'gemini-3-pro', effort: '', fastMode: false } }),
     expect.objectContaining({ id: JSON.stringify(['acp', 'acp-plugin:dsh:dsh', 'default']), teammateOnly: true,
       route: { harness: 'acp', providerId: 'acp-plugin:dsh:dsh', model: 'default', effort: '', fastMode: false } }),
+    expect.objectContaining({ id: JSON.stringify(['acp', 'acp-plugin:shared:x', 'only']), teammateOnly: true }),
   ]);
   expect(available.some(item => item.id === id)).toBe(true);
   expect((await inspectAppDefaultModel()).available.map(item => item.route.harness)).toEqual(['codex']);

@@ -5761,7 +5761,7 @@ describe('Teammate model selection shares profile persistence and route reconcil
       const appDefault = getSelectedNewMakerRoute(h.ownerScopeKey);
       const listed = await service.models({ callerSessionId: sessionId });
       if (!listed.ok) throw new Error(listed.message);
-      const choice = listed.available.find(item => item.route.harness === 'acp');
+      const choice = listed.available.find(item => item.route.harness === 'acp' && item.route.model === 'gemini-3-pro');
       expect(choice).toMatchObject({ teammateOnly: true, route: { providerId: 'acp-plugin:agy:agy', model: 'gemini-3-pro' } });
       expect(await service.updateProfile({ callerSessionId: sessionId, expectedVersion: 1,
         modelChain: [{ id: choice!.id, effort: 'high', fastMode: false }] })).toMatchObject({ ok: true, effective: 'next-turn' });
