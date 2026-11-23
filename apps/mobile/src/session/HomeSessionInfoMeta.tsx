@@ -20,6 +20,7 @@ import {
   buildHomeSessionInfoPieces,
   DEFAULT_HOME_TASK_INFO_FIELDS,
   type HomeListViewMode,
+  type HomePinnedView,
   type HomeTaskInfoField,
 } from './homeDisplaySettings';
 import {
@@ -42,6 +43,7 @@ import { formatRemoteSessionSidebarTime, type RemoteSessionListItem } from './se
  */
 export interface HomeRowDisplay {
   viewMode: HomeListViewMode;
+  pinnedView?: HomePinnedView;
   taskInfoFields: readonly HomeTaskInfoField[];
 }
 

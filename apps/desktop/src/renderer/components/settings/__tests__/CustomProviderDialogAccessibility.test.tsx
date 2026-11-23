@@ -61,7 +61,7 @@ async function selectDiscoveredModels() {
   fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.fetch.button' }));
   await act(async () => {});
   for (const checkbox of screen.getAllByRole('checkbox')) {
-    if (checkbox.getAttribute('aria-checked') !== 'true') fireEvent.click(checkbox);
+    if (!(checkbox as HTMLInputElement).checked) fireEvent.click(checkbox);
   }
   fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.fetch.confirm' }));
   await act(async () => {});
@@ -2333,7 +2333,7 @@ describe('new-connection identification', () => {
     fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.fetch.button' }));
     await act(async () => {});
     expect(screen.getAllByRole('checkbox')).toHaveLength(84);
-    expect(screen.getAllByRole('checkbox').every(row => row.getAttribute('aria-checked') === 'false')).toBe(true);
+    expect(screen.getAllByRole('checkbox').every(row => !(row as HTMLInputElement).checked)).toBe(true);
     expect(fetchProviderModels).toHaveBeenCalledOnce();
   });
   it.each([
@@ -3086,7 +3086,7 @@ describe('model summary and explicit model selection', () => {
     expect(screen.getByText(`${availableLabel}:84`)).toBeTruthy();
     fireEvent.click(fetchButton());
     const reopened = await screen.findByRole('dialog', { name: 'settings.providers.custom.fetch.pickerTitle' });
-    expect(within(reopened).getAllByRole('checkbox').every(row => row.getAttribute('aria-checked') === 'false')).toBe(true);
+    expect(within(reopened).getAllByRole('checkbox').every(row => !(row as HTMLInputElement).checked)).toBe(true);
     fireEvent.click(within(reopened).getByRole('checkbox', { name: /summary-1$/ }));
     fireEvent.click(within(reopened).getByRole('button', { name: 'settings.providers.custom.fetch.confirm' }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'settings.providers.custom.fetch.pickerTitle' })).toBeNull());
@@ -3101,7 +3101,7 @@ describe('model summary and explicit model selection', () => {
     expect(screen.getByText(`${selectedLabel}:1`)).toBeTruthy();
     fireEvent.click(fetchButton());
     const picker = await screen.findByRole('dialog', { name: 'settings.providers.custom.fetch.pickerTitle' });
-    expect(within(picker).getByRole('checkbox', { name: /summary-0$/ }).getAttribute('aria-checked')).toBe('true');
+    expect((within(picker).getByRole('checkbox', { name: /summary-0$/ }) as HTMLInputElement).checked).toBe(true);
     fireEvent.click(within(picker).getByRole('checkbox', { name: /summary-1$/ }));
     fireEvent.click(within(picker).getByRole('button', { name: 'settings.providers.custom.cancel' }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'settings.providers.custom.fetch.pickerTitle' })).toBeNull());

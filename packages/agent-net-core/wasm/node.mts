@@ -218,6 +218,10 @@ interface Exports {
   close(id: number): number;
   local_address_change(now: number): void;
   probe(id: number, now: number): number;
+  /** 下面三个是 2026-11-22 加的（仅测速探测、动态切换中继优先级、取路径探测往返），旧核心没有。 */
+  measure_probe?(id: number, now: number): number;
+  conn_set_prefer_relay?(id: number, prefer: number): number;
+  conn_poll_probe_rtt?(id: number): number;
   conn_state(id: number): number;
   conn_remote_static(id: number): number;
   conn_remote_payload(id: number): number;
@@ -400,6 +404,7 @@ export class SendStream {
     this.queued = 0;
     this.finishing = true;
     this.finished = true;
+    this.connection.sendStreams.delete(this.id);
     this.connection.endpoint.schedule();
     return Math.max(0, dropped) + local;
   }
@@ -441,6 +446,9 @@ export class SendStream {
     if (this.queue.length === 0 && this.finishing && !this.finished) {
       this.finished = core.conn_finish(this.connection.id, this.id) === 1;
     }
+    // 交完了：这里再没有它的事（进度、缓冲和放弃都按流号直接问核心），不再留在连接的表里。会话一条大消息一条流，
+    // 长连着的连接上流越来越多，每一轮都要过一遍这张表（2026-11-22）。
+    if (this.finished && this.queue.length === 0) this.connection.sendStreams.delete(this.id);
     return moved;
   }
 }
@@ -555,6 +563,24 @@ export class Connection extends EventEmitter {
     });
     this.endpoint.schedule();
     return started === 1;
+  }
+
+  /** 仅探测到 `address` 的可达性与往返时间（不切数据路径）；结果经 `probe-rtt` 事件通知。 */
+  measure(address: PeerAddress): boolean {
+    const started = this.endpoint.call((core, _io, addr) => {
+      if (!core.measure_probe) return 0;
+      this.endpoint.encode(addr(), address);
+      return core.measure_probe(this.id, this.endpoint.now());
+    });
+    this.endpoint.schedule();
+    return started === 1;
+  }
+
+  /** 动态切换这条连接是否优先走中继（不改变当前活动路径，需再 `probe` 目标路径以切换）。 */
+  setPreferRelay(prefer: boolean): void {
+    this.endpoint.call((core) => {
+      core.conn_set_prefer_relay?.(this.id, prefer ? 1 : 0);
+    });
   }
 
   /** 发送方向的进展；核心不提供（旧版）或连接关了时是 `null`。 */
@@ -918,6 +944,18 @@ export class Endpoint extends EventEmitter {
           connection.emit('stream', stream);
         }
       }
+      if (this.core?.conn_poll_probe_rtt) {
+        for (;;) {
+          if (connection.closed) return;
+          const sample = this.call((core, _io, addr) => {
+            const rttUs = core.conn_poll_probe_rtt!(connection.id);
+            return rttUs >= 0 ? { address: decodeAddress(addr()), rttUs } : null;
+          });
+          if (!sample) break;
+          progressed = true;
+          connection.emit('probe-rtt', sample.address, sample.rttUs);
+        }
+      }
       for (const id of [0, ...connection.recvStreams.keys()]) {
         for (;;) {
           if (connection.closed) return;
@@ -959,8 +997,13 @@ export class Endpoint extends EventEmitter {
     }
   }
 
+  /**
+   * 短于计时器精度的等待由核心判断等不等得起，计时器准的系统（Linux、macOS，精度 1 毫秒）也一样。原来这些系统一律当作等不起：
+   * 两毫秒没有包到达就一轮一轮看时间，按速率发包的整段传输都占满一个核（2026-11-22，Linux、Electron 42、20 Mbit 的 4G 线路：
+   * 每 MiB 285–470 毫秒 CPU，Device Link 43–46）。按 1 毫秒的计时器醒来时，核心把这期间攒下的包补发（最多一毫秒的量）。
+   */
   private needsFineTimer(): boolean {
-    return TIMER_GRANULARITY_US <= 1_000 || this.call((core) => core.fine_timer(TIMER_GRANULARITY_US)) === 1;
+    return this.call((core) => core.fine_timer(TIMER_GRANULARITY_US)) === 1;
   }
 
   private armTimer(): void {

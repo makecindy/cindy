@@ -94,7 +94,7 @@ export function GiftCardPurchasedDialog({
             {first && (
               <>
                 <GiftCardStack
-                  className="mx-[22px]"
+                  className="mx-5"
                   faceCode={first.faceCode}
                   face={first.face}
                   amount={first.amount}

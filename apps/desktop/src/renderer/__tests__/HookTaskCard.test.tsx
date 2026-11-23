@@ -39,6 +39,18 @@ afterEach(async () => {
 });
 
 describe('HookTaskCard attached context', () => {
+  // Unit regression: a direct iMessage used to label its sender “非主人” and show the raw channel ID.
+  it('shows the sender and branded direct-message source in the rendered heading', () => {
+    render(
+      <HookTaskCard
+        im="imessage"
+        origin={{ chat: { kind: 'direct' }, sender: { name: 'Alex', isOwner: false } }}
+        userText="你好"
+      />,
+    );
+    expect(screen.getByText('Alex · 来自 iMessage 私聊')).toBeTruthy();
+  });
+
   it.each(['telegram', 'feishu', 'slack', 'discord', 'wechat', 'wecom', 'dingtalk', 'x', 'future'])(
     'shows accurate group counts and their total for %s',
     (im) => {

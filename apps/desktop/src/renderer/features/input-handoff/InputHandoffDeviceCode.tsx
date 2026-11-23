@@ -18,7 +18,7 @@ export function InputHandoffDeviceCode({ snapshot }: { snapshot: InputHandoffSna
   return (
     <div
       aria-live="polite"
-      className="mb-4 flex flex-col gap-3 rounded-[10px] border border-[var(--border-default)] bg-[var(--surface-card-ivory)] p-3"
+      className="mb-4 flex flex-col gap-3 rounded-xl border border-[var(--border-default)] bg-[var(--surface-card-ivory)] p-3"
     >
       <span className="text-12 text-[var(--text-secondary)]">
         {t('inputHandoff.deviceCode.prompt')}

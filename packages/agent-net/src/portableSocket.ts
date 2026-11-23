@@ -9,7 +9,7 @@ import {
 import type { WsLike } from '@cindy/device-link';
 import { CERT_LIFETIME_MS, delegationEndpointCertificate, delegationVisibleTo, type Delegation, type DeviceView } from '@cindy/agent-net-protocol';
 import { frameMatchesDelegation, scopedFrame, delegatedPeerKey, delegatedPeerTarget, type ScopedPeerTarget } from './scopedRoutes.js';
-import { DRAIN_LOW_WATER_BYTES, MAX_CHANNEL_PENDING_BYTES, type PeerChannel, type RelayRoute, type RosterEntry, type SessionWire, type Transport } from './types.js';
+import { AGENT_NET_SESSION_V2, DRAIN_LOW_WATER_BYTES, MAX_CHANNEL_PENDING_BYTES, type PathPreference, type PeerChannel, type RelayRoute, type RosterEntry, type SessionWire, type Transport } from './types.js';
 import { SessionPeer, type SessionConfig, type SessionRole } from './session/peer.js';
 export type { SessionHandlers } from './session/peer.js';
 
@@ -151,6 +151,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
   private lan: SocketDiscovery | null = null;
   private lanCandidates = new Map<string, { address: string; port: number }>();
   private readonly rememberedCandidates = new Set<string>();
+  private readonly peerPathPreferences = new Map<string, PathPreference>();
   private openingRelay: Promise<void> | null = null;
   private directoryRevision = 0;
   private directoryRefresh: ReturnType<typeof setInterval> | undefined;
@@ -164,6 +165,11 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     const socket = new this(options);
     socket.rosterValidUntil = options.directoryExpiresAt ?? 0;
     if (options.peerRule) socket.peerRule = peerRuleOf(options.peerRule);
+    if (options.initialPeerPathPreferences) {
+      for (const [id, pref] of Object.entries(options.initialPeerPathPreferences)) {
+        if (pref === 'direct' || pref === 'relay') socket.peerPathPreferences.set(id, pref);
+      }
+    }
     // A cached online bit is not current liveness. Wait for authenticated
     // discovery instead of occupying the first cold-start dial with a dead relay.
     socket.updateDirectory((options.cachedDirectory ?? []).map(view => ({ ...view, online: false })), false);
@@ -330,7 +336,8 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     const scope = this.sessionConfig ? this.sessionScope(deviceId) : null;
     if (!scope) return;
     // Between devices of one account presence travels on the session too, so nothing on the connection is a Device Link frame.
-    peer.channel.declareSessions?.(scope.role === 'both' ? [SESSION_PRESENCE_FEATURE] : []);
+    // Session v2 (large messages on body streams of their own) whenever this channel reads body streams.
+    peer.channel.declareSessions?.([...(scope.role === 'both' ? [SESSION_PRESENCE_FEATURE] : []), ...(peer.channel.sessionBodies ? [AGENT_NET_SESSION_V2] : [])]);
     peer.channel.onSessionCapable?.(() => {
       const config = this.sessionConfig, wire = peer.channel.sessionWire?.();
       if (!config || !wire || this.closed || this.peers.get(deviceId) !== peer || this.sessions.has(scope.key)
@@ -344,16 +351,32 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
         if (!current()) { session.dispose('UNAUTHORIZED'); return; }
         return handler(...args);
       });
+      const unauthorized = () => { queueMicrotask(() => session.dispose('UNAUTHORIZED')); return new Error('UNAUTHORIZED'); };
       const checked: SessionWire = {
         write: (lane, bytes) => {
-          if (!current()) { queueMicrotask(() => session.dispose('UNAUTHORIZED')); throw new Error('UNAUTHORIZED'); }
+          if (!current()) throw unauthorized();
           wire.write(lane, bytes);
         },
         get bufferedAmount() { return wire.bufferedAmount; },
         onData: (handler) => wire.onData(handler),
+        ...(wire.openBody ? {
+          openBody: (lane: Parameters<NonNullable<SessionWire['openBody']>>[0], key: number) => {
+            if (!current()) throw unauthorized();
+            const body = wire.openBody!(lane, key);
+            return body && {
+              write: (bytes: Uint8Array) => { if (!current()) throw unauthorized(); body.write(bytes); },
+              finish: () => body.finish(),
+              abandon: () => body.abandon(),
+            };
+          },
+        } : {}),
+        ...(wire.onBody ? { onBody: (handler: Parameters<NonNullable<SessionWire['onBody']>>[0]) => wire.onBody!(handler) } : {}),
       };
+      // Session v2 only when both ends declared it: an older node closes the connection on a body stream.
+      const bodies = !!wire.openBody && peer.channel.sessionBodies === true
+        && peer.channel.sessionFeatures?.().includes(AGENT_NET_SESSION_V2) === true;
       session = new SessionPeer({
-        wire: checked, role: scope.role, laneFor: config.laneFor,
+        wire: checked, role: scope.role, laneFor: config.laneFor, bodies,
         onOpen: guard(handlers.onOpen), onClose: guard(handlers.onClose), onRequest: guard(handlers.onRequest),
         onPush: guard(handlers.onPush),
         // This socket keeps presence for its Device Link client: a peer's session presence becomes the same local event as its frame.
@@ -432,11 +455,26 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
   pathTo(deviceId: string): 'direct' | 'relay' | null { return this.peers.get(this.sessionDevice(deviceId) ?? deviceId)?.channel.path?.() ?? null; }
   /** A local dial can be in progress even when the cached directory marks the peer offline. */
   isDialing(deviceId: string): boolean { return this.dialing.has(deviceId) && this.authorized(deviceId); }
-  peerSnapshot(deviceId: string): { path: 'direct' | 'relay'; rttMs: number | null } | null {
-    const channel = this.peers.get(this.sessionDevice(deviceId) ?? deviceId)?.channel, path = channel?.path?.();
+  peerSnapshot(deviceId: string): { path: 'direct' | 'relay'; rttMs: number | null; directRttMs?: number | null; relayRttMs?: number | null; pathPreference?: PathPreference } | null {
+    const resolvedId = this.sessionDevice(deviceId) ?? deviceId;
+    const channel = this.peers.get(resolvedId)?.channel, path = channel?.path?.();
     if (!channel || !path) return null;
     const rtt = channel.stats?.()?.srttUs;
-    return { path, rttMs: typeof rtt === 'number' && rtt > 0 ? rtt / 1000 : null };
+    const metrics = channel.pathMetrics?.();
+    return {
+      path,
+      rttMs: typeof rtt === 'number' && rtt > 0 ? rtt / 1000 : null,
+      ...(metrics ? {
+        directRttMs: metrics.directRttMs,
+        relayRttMs: metrics.relayRttMs,
+        pathPreference: this.peerPathPreferences.get(resolvedId) ?? metrics.preference,
+      } : {}),
+    };
+  }
+  setPeerPathPreference(deviceId: string, preference: PathPreference): void {
+    if (preference === 'auto') this.peerPathPreferences.delete(deviceId);
+    else this.peerPathPreferences.set(deviceId, preference);
+    this.peers.get(deviceId)?.channel.setPathPreference?.(preference);
   }
   async dial(deviceId: string): Promise<void> {
     if (this.closed || this.peers.has(deviceId)) return;
@@ -903,6 +941,8 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     }
     const peer: Peer = { deviceId, key: channel.remoteId, channel, outbound, since: now };
     this.peers.set(deviceId, peer); previous?.channel.close();
+    const savedPreference = this.peerPathPreferences.get(deviceId);
+    if (savedPreference) channel.setPathPreference?.(savedPreference);
     const frames = new Frames();
     channel.onData((bytes) => {
       // The replaced, authenticated channel still drains already-written RPCs.

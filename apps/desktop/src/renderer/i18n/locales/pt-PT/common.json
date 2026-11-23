@@ -1006,7 +1006,7 @@
     "captureFailed": "Não foi possível capturar o ecrã",
     "permission": {
       "title": "Permissão de gravação do ecrã necessária",
-      "detail": "Para fazer capturas de ecrã, autorize {{appName}} em Definições do Sistema > Privacidade e segurança > Gravação do ecrã e do áudio do sistema e, em seguida, volte a abrir {{appName}}.",
+      "detail": "Permita que {{appName}} grave o ecrã e tente novamente. Volte a abrir a aplicação se o macOS o pedir.",
       "openSettings": "Abrir Definições do Sistema",
       "later": "Agora não"
     },
@@ -1173,12 +1173,12 @@
     "windowsError": "A autorização não foi concluída. Tente novamente neste computador.",
     "windowsErrorDetail": "Código de erro {{code}}",
     "permissionsTitle": "Permissões do ambiente de trabalho remoto",
-    "permissionsIntro": "A gravação do ecrã permite ver o ambiente de trabalho. A acessibilidade também permite o controlo. Conclua a autorização no computador; o estado é atualizado automaticamente.",
+    "permissionsIntro": "No Mac que pretende controlar, permita a gravação do ecrã para ver a secretária. Para usar o teclado e o rato, permita também que a Cindy controle aplicações. A verificação é automática.",
     "permissionsReady": "As permissões do sistema estão prontas. Pode voltar a ligar.",
     "screenRecording": "Gravação do ecrã",
-    "accessibility": "Acessibilidade",
-    "screenRecordingHelp": "Abra as Definições do Sistema e ative a gravação do ecrã para esta aplicação Cindy. Se o macOS pedir para reiniciar, volte a abrir Cindy antes de ligar.",
-    "accessibilityHelp": "Abra as definições e ative a acessibilidade para a aplicação identificada no pedido do sistema. A permissão efetiva de entrada é verificada automaticamente quando regressar.",
+    "accessibility": "Controlo do teclado e do rato",
+    "screenRecordingHelp": "Permita que a cópia da Cindy em utilização grave o ecrã em Gravação do ecrã ou Gravação do ecrã e áudio do sistema. Volte a abrir a Cindy se o macOS o pedir.",
+    "accessibilityHelp": "Em Privacidade e segurança, selecione a aplicação indicada pelo sistema. Se aparecer System & App Protection Override, escolha as aplicações que pode controlar. Nas versões anteriores, ative Acessibilidade.",
     "permissionChecking": "A verificar…",
     "permissionGranted": "Concedida",
     "permissionUnknown": "Por confirmar",
@@ -1374,7 +1374,9 @@
       }
     },
     "lockOnExitHintPrivacy": "Mostra o ecrã de privacidade ao sair, para a IA continuar a trabalhar; tocar no computador bloqueia-o.",
-    "lockedEnablePrivacyHint": "Para a IA continuar a utilizar este computador enquanto se ausenta, ative o ecrã de privacidade nas respetivas Definições → Geral → Quando se ausenta."
+    "lockedEnablePrivacyHint": "Para a IA continuar a utilizar este computador enquanto se ausenta, ative o ecrã de privacidade nas respetivas Definições → Geral → Quando se ausenta.",
+    "revealCurrentApp": "Mostrar {{app}} no Finder",
+    "openPermissionInNewWindow": "Abrir noutra janela"
   },
   "ipcError": {
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
@@ -3212,7 +3214,7 @@
         },
         "accessibility": {
           "label": "Introdução automática",
-          "tooltip": "A permissão de acessibilidade permite que a introdução por voz escreva noutras aplicações, leia texto próximo do cursor como contexto para aperfeiçoamento e detete edições externas para aprendizagem do dicionário."
+          "tooltip": "Permita que a Cindy insira ditado nas aplicações selecionadas, leia o texto junto ao cursor para o aperfeiçoar e detete alterações para o dicionário. Use Acessibilidade ou System & App Protection Override, consoante a opção apresentada no Mac."
         }
       },
       "interactionSound": {
@@ -5475,6 +5477,29 @@
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 flash",
         "cindyQwen38Flash": "Qwen 3.8 Flash"
+      },
+      "health": {
+        "configTitle": "Nenhum modelo auxiliar está disponível",
+        "configDescription": "Afeta a atribuição automática de nomes às tarefas, os resumos de tarefas afixadas, a Ajuda e as tarefas de plugins, como a tradução de legendas. Corrija os problemas abaixo ou escolha outros modelos disponíveis em Personalizado.",
+        "runtimeTitle": "Os últimos pedidos aos modelos auxiliares falharam",
+        "runtimeDescription": "A rede ou o serviço podem estar temporariamente indisponíveis. Este aviso desaparece sozinho quando os pedidos voltarem a ter êxito. Se continuar a aparecer, escolha outros modelos disponíveis em Personalizado.",
+        "fallback": "As tarefas de plugins estão a utilizar temporariamente {{model}} com um esforço de raciocínio mais baixo, o que pode ser mais lento e consumir mais quota.",
+        "candidate": "{{model}}: {{reason}}",
+        "openProviders": "Abrir fornecedores",
+        "customize": "Personalizar modelos auxiliares",
+        "issues": {
+          "signed_out": "É necessário iniciar sessão na Cindy",
+          "provider_disabled": "Fornecedor desativado",
+          "model_disabled": "Modelo desativado",
+          "payment_required": "Não incluído no seu plano ou saldo",
+          "no_credential": "Falta o início de sessão ou a chave",
+          "unavailable": "Atualmente indisponível"
+        },
+        "toast": {
+          "config": "Nenhum modelo auxiliar está disponível. A atribuição de nomes às tarefas, os resumos e as tarefas de plugins, como a tradução de legendas, são afetados.",
+          "runtime": "Os últimos pedidos aos modelos auxiliares falharam. A atribuição de nomes às tarefas, os resumos e as tarefas de plugins, como a tradução de legendas, podem ser afetados.",
+          "open": "Abrir definições"
+        }
       }
     },
     "compaction": {
@@ -5835,10 +5860,10 @@
         "toggleAria": "Usar os meus inícios de sessão do navegador",
         "confirmTitle": "Permitir que o Agent use os seus inícios de sessão do navegador?",
         "confirmDescription": "O Agent poderá abrir sites com as suas contas com sessão iniciada, incluindo e-mail, armazenamento na nuvem e consolas de trabalho. Pode desativar esta opção a qualquer momento; a cópia será eliminada.",
-        "confirmDescriptionMac": "O Agent poderá abrir sites com as suas contas com sessão iniciada, incluindo e-mail, armazenamento na nuvem e consolas de trabalho. A leitura dos ficheiros de início de sessão do Chrome também requer Acesso total ao disco. Pode desativar esta opção a qualquer momento; a cópia será eliminada.",
+        "confirmDescriptionMac": "O Agent poderá abrir sites com as suas contas com sessão iniciada, incluindo e-mail, armazenamento na nuvem e consolas de trabalho. Pode desativar esta opção a qualquer momento; a cópia será eliminada. Se o macOS pedir uma pasta, selecione a pasta do perfil do navegador que pretende usar.",
         "confirm": "Usar os meus inícios de sessão",
-        "readDeniedTitle": "É necessário Acesso total ao disco",
-        "readDeniedDescription": "A Cindy precisa desta permissão para ler os ficheiros de início de sessão do Chrome. Ative a Cindy em Privacidade e segurança → Acesso total ao disco e tente novamente.",
+        "readDeniedTitle": "Não foi possível ler o perfil do navegador",
+        "readDeniedDescription": "Selecione a cópia da Cindy em utilização em Privacidade e segurança → Acesso total ao disco. Se o macOS permitir escolher uma pasta, selecione apenas a do perfil do navegador e tente novamente.",
         "openFullDiskAccess": "Abrir Definições do Sistema",
         "readDeniedLater": "Agora não",
         "toast": {
@@ -6010,7 +6035,7 @@
         "permissionIntro": {
           "title": "Ativar automatização do computador",
           "description": "O {{appName}} instalará ou iniciará o Cua Driver localmente para ler o ecrã e realizar ações como clicar e escrever. Ative apenas quando tiver iniciado intencionalmente uma tarefa de automatização do computador.",
-          "macosDescription": "O {{appName}} irá instalar ou abrir o processo de permissões do Cua Driver e poderá abrir as Definições do Sistema do macOS. Primeiro, conceda ao CuaDriver as permissões essenciais de Acessibilidade e Gravação do ecrã. Durante a utilização posterior, o macOS poderá ainda apresentar confirmações adicionais para uma aplicação de destino ou uma ação específica. Aprove esses pedidos apenas quando tiver iniciado intencionalmente uma tarefa de Computer Use. Depois, volte ao {{appName}} e a verificação será feita automaticamente.",
+          "macosDescription": "O {{appName}} instalará ou iniciará o Cua Driver localmente para ler o ecrã e realizar ações como clicar e escrever. Ative apenas quando tiver iniciado intencionalmente uma tarefa de automatização do computador. Permita a gravação do ecrã ao CuaDriver. Em System & App Protection Override, escolha as aplicações que pode controlar. Nas versões anteriores do macOS, ative Acessibilidade.",
           "confirm": "Continuar",
           "cancel": "Agora não"
         },
@@ -6031,8 +6056,8 @@
         },
         "permissions": {
           "title": "Acesso ao sistema",
-          "macosHint": "O Computer Use requer Acessibilidade e Gravação do ecrã. Durante a utilização, o macOS poderá ainda apresentar confirmações adicionais para uma aplicação de destino ou ação.",
-          "accessibilityLabel": "Acessibilidade",
+          "macosHint": "Permita a gravação do ecrã ao CuaDriver. Em System & App Protection Override, escolha as aplicações que pode controlar. Nas versões anteriores, ative Acessibilidade.",
+          "accessibilityLabel": "Controlo do teclado e do rato",
           "screenRecordingLabel": "Gravação do ecrã",
           "grant": "Conceder",
           "accessibility": "Acessibilidade: {{status}}",
@@ -6078,7 +6103,7 @@
           "toggleFailed": "Falha ao ativar ou desativar o controlo direto do computador",
           "installFailed": "Falha ao instalar cua-driver",
           "permissionFailed": "As permissões do Computer Use não estão concluídas",
-          "permissionPending": "Conceda as duas permissões do sistema, volte aqui e clique em Verificar novamente",
+          "permissionPending": "Conclua a autorização no Mac. Se o estado não for atualizado, volte a verificar.",
           "permissionSettingsOpened": "As definições de permissões do sistema foram abertas. Após conceder as permissões, volte e clique em \"Verificar novamente\".",
           "permissionSettingsMonitoring": "As definições de permissões do sistema foram abertas. Conclua as permissões e o estado será atualizado automaticamente.",
           "openPermissionSettingsFailed": "Falha ao abrir as definições de permissões do sistema"
@@ -6917,7 +6942,15 @@
           "encrypted": "Encriptação ponto a ponto",
           "legacyConnection": "Ligação anterior",
           "encryptionUnknown": "Não confirmado",
-          "legacyEncryptionHint": "O caminho via relay da ligação anterior não tem encriptação ponto a ponto."
+          "legacyEncryptionHint": "O caminho via relay da ligação anterior não tem encriptação ponto a ponto.",
+          "routePreference": "Escolha de rota",
+          "routeAuto": "Auto",
+          "routeDirect": "Direta",
+          "routeRelay": "Retransmissão",
+          "routeUnavailable": "Indisponível",
+          "routeMeasuring": "A medir…",
+          "routeDirectUnavailableHint": "A ligação direta não está disponível nesta rede de momento",
+          "routePreferenceFailed": "Não foi possível alterar a rota. Tente novamente."
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -8685,7 +8718,7 @@
           "updated": "Plugin atualizado.",
           "empty": "Nenhuma versão disponível para instalar.",
           "sign-in": "Inicie sessão no GitHub para procurar atualizações.",
-          "forbidden": "Esta conta do GitHub não tem acesso de leitura ao repositório privado.",
+          "forbidden": "Não foi possível ler a versão publicada no GitHub. Verifique a ligação do repositório e as permissões da sua conta do GitHub.",
           "unavailable": "Não foi possível verificar ou instalar a atualização. Tente novamente."
         },
         "customSlotTitle": "Área de definições personalizadas do plugin",
@@ -9748,6 +9781,12 @@
       "guidance": "Aguarde antes de pedir outro código. Reiniciar, reinstalar ou mudar de rede não garante que o limite seja levantado.",
       "support": "Se o problema continuar após aguardar, envie os registos em privado para feedback@cindy.app com o seu sistema operativo, a versão de Cindy, a hora do erro e o código abaixo. Não publique registos."
     }
+  },
+  "legalTermsUpdate": {
+    "title": "Termos atualizados",
+    "body": "Atualizámos os <terms>Termos de Serviço</terms> e a <privacy>Política de Privacidade</privacy> da Cindy. Aceite para continuar a utilizar ou termine sessão.",
+    "agree": "Aceitar",
+    "disagree": "Terminar sessão"
   },
   "legacyMigration": {
     "title": "Migrar dados da versão anterior",
@@ -11194,6 +11233,11 @@
       "pinned": "Fixadas",
       "needsAttention": "Precisa de atenção",
       "duplicate": "Duplicar amigo",
+      "duplicating": "A duplicar o amigo…",
+      "duplicateFailed": "Não foi possível duplicar o amigo.",
+      "duplicateModelRequired": "Para duplicar este amigo, escolha primeiro um modelo predefinido para amigos nas Definições.",
+      "pinFailed": "Não foi possível alterar a fixação do amigo.",
+      "hideFailed": "Não foi possível ocultar ou mostrar o amigo.",
       "moreActions": "Mais ações para {{name}}",
       "viewIcons": "Ícones",
       "showCollapsedTeammateAvatars": "Mostrar avatares quando recolhido",
@@ -12243,46 +12287,15 @@
     },
     "guided": {
       "title": "Criar um amigo",
-      "reviewTitle": "O teu novo amigo",
-      "question": "Descreva brevemente as suas expectativas.",
-      "placeholder": "Por exemplo, ajudar-me a praticar inglês através de conversas do dia a dia e correções cuidadas.",
       "generate": "Criar amigo",
-      "generating": "A dar forma ao teu amigo…",
-      "generationFailed": "Não foi possível gerar o teu amigo. A tua ideia continua aqui; tenta novamente.",
       "modelRequired": "Escolha um modelo disponível acima para continuar.",
       "modelFollowsDefault": "Segue o modelo predefinido para amigos.",
       "modelForThisBot": "Esta seleção aplica-se apenas a este amigo.",
-      "cindyDescription": "Posso ajudar a utilizar Cindy, ligar as suas ferramentas e realizar tarefas em conjunto.",
-      "cindySummary": "Gerir Cindy, ligar ferramentas e realizar tarefas.",
-      "openCindy": "Abrir Cindy",
-      "addCindy": "Adicionar Cindy",
-      "done": "Concluído",
-      "editName": "Editar nome",
       "duplicateName": "Esse nome já está a ser utilizado. Escolha um nome que consiga distinguir facilmente.",
-      "introduction": "Sobre mim",
-      "editIntroduction": "Editar apresentação",
-      "refine": "Ajustar amigo",
-      "refinePlaceholder": "O que mudaria? Por exemplo, menos formal e um pouco mais divertido.",
-      "back": "Voltar",
-      "invite": "Convidar amigo",
       "portrait": "Retrato {{number}}",
       "upload": "Carregar imagem",
       "generateAvatar": "Gerar retrato",
-      "useAvatar": "Utilizar este retrato",
-      "examples": {
-        "english": {
-          "label": "Praticar inglês",
-          "prompt": "Pratica inglês comigo através de conversas do dia a dia. Tem paciência e corrige com cuidado as expressões pouco naturais."
-        },
-        "ideas": {
-          "label": "Explorar ideias",
-          "prompt": "Um parceiro criativo e imaginativo, com opiniões próprias, que me ajuda a transformar ideias de escrita e de produtos em planos práticos."
-        },
-        "life": {
-          "label": "Falar sobre a vida",
-          "prompt": "Um amigo afetuoso e divertido que ouve as pequenas coisas da minha vida sem se apressar a dar conselhos."
-        }
-      }
+      "useAvatar": "Utilizar este retrato"
     },
     "import": {
       "title": "Importar um amigo",
@@ -12657,6 +12670,7 @@
           "listenPortLabel": "Porta local de escuta",
           "listenPortPlaceholder": "18747",
           "hint": "Ligue-se ao seu servidor BlueBubbles na rede local. Apenas as conversas selecionadas são processadas. Pare as outras respostas automáticas destas conversas antes de ligar.",
+          "automationDenied": "Durante o envio, o macOS negou ao BlueBubbles o acesso à aplicação Mensagens. No Mac que executa o BlueBubbles, consulte Definições do Sistema → Privacidade e segurança → Automatização.",
           "uncertain": "É necessário verificar {{count}} envios. Consulte o histórico antes de tentar novamente para evitar duplicados."
         }
       },
@@ -14511,7 +14525,6 @@
       "regionAria": "Fila de mensagens pendentes",
       "listAria": "Mensagens em fila",
       "pausedFooter": "Tarefa parada, fila em pausa",
-
       "steerUnsupportedNotice": "Este motor não permite orientar. As mensagens em fila serão enviadas quando o turno atual terminar.",
       "resumeAction": "Continuar a enviar",
       "resumeAria": "Continuar a enviar mensagens em fila",
@@ -15232,7 +15245,6 @@
     "runningStatus": {
       "currentRate": "Velocidade mais recente",
       "lastRequestRate": "Média do último pedido",
-      "recentTokenRate": "Recente {{rate}} tok/s",
       "waitingSample": "Amostragem",
       "averageRate": "Média do turno",
       "rateHistory": "Histórico de velocidade de geração",
@@ -16013,7 +16025,7 @@
       "viewThread": "Ver contexto do tópico ({{count}})",
       "memberFromGroup": "{{name}} · do grupo “{{group}}” em {{platform}}",
       "memberFromPlatform": "{{name}} · de um grupo em {{platform}}",
-      "guestFromDm": "{{name}} · de uma mensagem direta em {{platform}} (não é o proprietário)",
+      "guestFromDm": "{{name}} · de uma mensagem direta em {{platform}}",
       "unknownSender": "Membro do grupo"
     },
     "rewind": {
@@ -17880,6 +17892,7 @@
       }
     },
     "editor": {
+      "reviewModelReadFailed": "Não foi possível ler o modelo da automação. Feche e volte a abrir o editor para tentar novamente.",
       "promptDialog": {
         "titleEdit": "Editar automatização",
         "titleCreate": "Criar automatização",
@@ -18223,11 +18236,13 @@
         "effortHeading": "Esforço de raciocínio",
         "effortDefault": "Predefinido",
         "followSession": "Seguir sessão",
+        "followTeammate": "Seguir o modelo principal do amigo",
         "modelListAria": "Lista de modelos",
         "modelSelectorAria": "Seletor de modelo",
         "categoryListAria": "Modelos de {{category}}",
         "effortListAria": "Esforço de raciocínio",
-        "boundLocationLocked": "As tarefas associadas continuam a ser executadas onde estão. Escolha um modelo desse computador."
+        "boundLocationLocked": "As tarefas associadas continuam a ser executadas onde estão. Escolha um modelo desse computador.",
+        "modelGroupTitle": "Grupo de modelos «{{name}}»: escolhe uma fonte ao criar uma nova tarefa"
       }
     },
     "toast": {
@@ -20594,6 +20609,7 @@
       "totalDetail_other": "{{count}} cartões × {{amount}}",
       "pay": "Continuar para o pagamento",
       "refundNote": "Os cartões de oferta não podem ser trocados por dinheiro. Os cartões utilizados não são reembolsáveis. Para pedir o reembolso de um cartão por utilizar, contacte o suporte.",
+      "termsNote": "Ao selecionar Continuar para o pagamento, aceita os <terms>Termos do cartão de oferta</terms>.",
       "cancel": "Cancelar",
       "loadFailed": "Não foi possível carregar os limites de compra. Tente novamente mais tarde.",
       "checkoutSubtitle_one": "Cartão de oferta {{amount}} × {{count}} · emitido assim que o pagamento for concluído",
@@ -20688,7 +20704,7 @@
     "epermGuidance": {
       "title": "Acesso à pasta do macOS negado",
       "message": "O Cindy não consegue aceder à sua pasta {{folder}}",
-      "detail": "O macOS negou o acesso. Abra as Definições do Sistema para conceder permissão e, em seguida, execute novamente o comando do seu Agent.",
+      "detail": "Em Ficheiros e pastas, permita que a Cindy aceda a esta pasta e tente novamente.",
       "openSystemSettings": "Abrir Definições do Sistema",
       "cancel": "Cancelar",
       "folderNames": {
@@ -21784,6 +21800,9 @@
     "actionFailed": "Não foi possível concluir a ação do plugin. Tente novamente."
   },
   "mcpApps": {
+    "composerDragFailed": "Não foi possível adicionar o anexo. Arraste-o novamente ou selecione «Adicionar à caixa de texto».",
+    "composerAttachmentFormat": "Utilize uma imagem, um PDF ou um ficheiro de texto simples até 64 MiB.",
+    "composerAttachmentBusy": "Aguarde um momento antes de adicionar outro anexo.",
     "sharedTaskReadOnly": "Só o proprietário da sessão pode interagir com este cartão.",
     "retry": "Recarregar",
     "loadFailed": "Não foi possível carregar a aplicação. Verifique a ligação e recarregue.",

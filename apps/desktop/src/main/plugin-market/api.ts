@@ -13,6 +13,7 @@ import {
   type PluginUsageEventInput,
   type PluginUsageAck,
   parsePluginCatalogPage,
+  pluginCatalogPublisherGroup,
   parsePluginReadPage,
   parsePluginRecommendations,
   parsePluginResolveRequest,
@@ -208,12 +209,12 @@ export class PluginMarketApi {
     const visible = scope === 'all' ? catalog.plugins : catalog.plugins.filter(plugin => plugin.scope === scope);
     const plugins = visible.slice(offset, offset + limit);
     const next = offset + plugins.length;
-    const counts = options.counts === false ? null : {
-      all: catalog.plugins.length,
-      public: catalog.plugins.filter(plugin => plugin.scope === 'public').length,
-      organization: catalog.plugins.filter(plugin => plugin.scope === 'organization').length,
-      personal: catalog.plugins.filter(plugin => plugin.scope === 'personal').length,
-    };
+    const counts = options.counts === false ? null : { all: catalog.plugins.length, public: 0, organization: 0, personal: 0, official: 0, community: 0 };
+    if (counts) for (const plugin of catalog.plugins) {
+      counts[plugin.scope]++;
+      const group = pluginCatalogPublisherGroup(plugin.scope, plugin.publisherKind);
+      if (group) counts[group]++;
+    }
     return {
       schemaVersion: 2,
       plugins,

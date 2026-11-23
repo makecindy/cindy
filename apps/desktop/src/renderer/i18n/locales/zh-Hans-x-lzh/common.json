@@ -977,7 +977,7 @@
     "captureFailed": "不能截取屏幕",
     "permission": {
       "title": "须屏幕录制之权柄",
-      "detail": "截屏须于「系统设置 > 隐私与安全性 > 屏幕与系统录音」中许 {{appName}}，启后请重启 {{appName}}。",
+      "detail": "许 {{appName}} 录屏，再试之。若 macOS 有请，再启此应用。",
       "openSettings": "启系统设置",
       "later": "暂不启"
     },
@@ -1144,12 +1144,12 @@
     "windowsError": "授权未竟，请于此机再试。",
     "windowsErrorDetail": "错误码 {{code}}",
     "permissionsTitle": "远程桌面权柄",
-    "permissionsIntro": "览桌面须屏幕录制权限；操作桌面另须辅助功能权限。请于机上完成授权，结果将自动更新。",
+    "permissionsIntro": "请于受控 Mac 授权。观其桌面须录屏，用键鼠须许 Cindy 控制应用。毕则自验。",
     "permissionsReady": "系统权柄已备，可重连。",
     "screenRecording": "屏幕录制",
-    "accessibility": "辅助功能",
-    "screenRecordingHelp": "启系统设置，为今之 Cindy 启用屏幕录制。若系统令重启，请重启 Cindy 而后连接。",
-    "accessibilityHelp": "点启设置后，为系统授权提示所指之应用程序启用辅助功能。归来后将自动检测实际输入权限。",
+    "accessibility": "键鼠操控",
+    "screenRecordingHelp": "于「屏幕录制」或「录屏与系统录音」许今所用之 Cindy 录屏。若 macOS 有请，再启 Cindy。",
+    "accessibilityHelp": "于「隐私与安全性」选系统所示之应用。若见「System & App Protection Override」，选可控之应用；旧版于「辅助功能」开启。",
     "permissionChecking": "方察…",
     "permissionGranted": "已授",
     "permissionUnknown": "未明",
@@ -1343,7 +1343,9 @@
       }
     },
     "lockOnExitHintPrivacy": "退出远程桌面后覆以隐私画面，AI 可续作；有人触机即锁屏。",
-    "lockedEnablePrivacyHint": "欲令 AI 于君离座时续用此机，可于其「规制 → 通则 → 离座之时」中启隐私画面。"
+    "lockedEnablePrivacyHint": "欲令 AI 于君离座时续用此机，可于其「规制 → 通则 → 离座之时」中启隐私画面。",
+    "revealCurrentApp": "于访达中显示 {{app}}",
+    "openPermissionInNewWindow": "另启一窗"
   },
   "ipcError": {
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
@@ -3144,7 +3146,7 @@
         },
         "accessibility": {
           "label": "自书",
-          "tooltip": "辅助功能权限用以于他 App 中自输语音所得、读光标附近文字为润色上下文，并识外部修改以进词典。"
+          "tooltip": "许 Cindy 于所选应用录入语音所得、读光标近文、辨其改动。视 Mac 所示，于「辅助功能」或「System & App Protection Override」授权。"
         }
       },
       "interactionSound": {
@@ -5374,6 +5376,29 @@
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 Flash",
         "cindyQwen38Flash": "Qwen 3.8 Flash"
+      },
+      "health": {
+        "configTitle": "辅佐模型皆不可用",
+        "configDescription": "差事自动命名、置顶差事摘要、Help 与法器差事（如字幕翻译）皆受其累。请治下列诸弊，或于自拟中择他可用之模型。",
+        "runtimeTitle": "辅佐模型近屡请而败",
+        "runtimeDescription": "或网络、或服务暂有不谐，复常则此示自去。若久而不去，可于自拟中择他可用之模型。",
+        "fallback": "法器差事暂改用 {{model}}，思之深浅从浅，或稍迟、所耗限额稍多。",
+        "candidate": "{{model}}：{{reason}}",
+        "openProviders": "启模型供方",
+        "customize": "自拟辅佐模型",
+        "issues": {
+          "signed_out": "须登门 Cindy",
+          "provider_disabled": "供方已停",
+          "model_disabled": "模型已停",
+          "payment_required": "今之方案或余额不及",
+          "no_credential": "缺登门之凭或密钥",
+          "unavailable": "今不可用"
+        },
+        "toast": {
+          "config": "辅佐模型皆不可用，差事命名、摘要与字幕翻译等法器差事皆受其累。",
+          "runtime": "辅佐模型近屡请而败，差事命名、摘要与字幕翻译等法器差事或受其累。",
+          "open": "往规制"
+        }
       }
     },
     "compaction": {
@@ -5734,10 +5759,10 @@
         "toggleAria": "用我之浏览器登录态",
         "confirmTitle": "许 Agent 用君之浏览器登录态乎？",
         "confirmDescription": "Agent 将能以君已登录之身分开网页，信箱、云端硬盘与公司后台皆在其列。可随时关之，拷贝即删。",
-        "confirmDescriptionMac": "Agent 将能以君已登录之身分开网页，信箱、云端硬盘与公司后台皆在其列。读 Chrome 登录档另需「完全磁盘访问权限」。可随时关之，拷贝即删。",
+        "confirmDescriptionMac": "Agent 将能以君已登录之身分开网页，信箱、云端硬盘与公司后台皆在其列。可随时关之，拷贝即删。 若问文件夹之权，选所需浏览器资料夹。",
         "confirm": "用我之登录态",
-        "readDeniedTitle": "需完全磁盘访问权限",
-        "readDeniedDescription": "读 Chrome 登录档，需系统许 Cindy 为之。请于「隐私与安全性 → 完全磁盘访问权限」中打开 Cindy，再归此处重试。",
+        "readDeniedTitle": "浏览器资料未能读取",
+        "readDeniedDescription": "于「隐私与安全性 → 完全磁盘访问权限」选今所用之 Cindy。若可选文件夹，惟取所需之浏览器资料夹，再试之。",
         "openFullDiskAccess": "开系统设置",
         "readDeniedLater": "容后",
         "toast": {
@@ -5909,7 +5934,7 @@
         "permissionIntro": {
           "title": "启代操此机",
           "description": "{{appName}} 将于此机安装或启动 Cua Driver，用以读屏幕并行点击、输入等操作。请仅于君亲自发起代操此机之差事时启用。",
-          "macosDescription": "其次 {{appName}} 将安装或打开 Cua Driver 之授权流程，或跳至 macOS 系统设置。请先为 CuaDriver 授「辅助功能」与「屏幕录制」二项核心权限；此后使用之际，macOS 或仍依目标 App 或具体动作另弹确认。唯君亲自发起 Computer Use 差事时，方宜确认此等请求。毕后归 {{appName}}，将自行检查并启用。",
+          "macosDescription": "{{appName}} 将于此机安装或启动 Cua Driver，用以读屏幕并行点击、输入等操作。请仅于君亲自发起代操此机之差事时启用。为 CuaDriver 开录屏。若见「System & App Protection Override」，选其可控之应用；macOS 旧版于「辅助功能」开启。",
           "confirm": "续",
           "cancel": "容后"
         },
@@ -5930,8 +5955,8 @@
         },
         "permissions": {
           "title": "系统权柄",
-          "macosHint": "代操此机需「辅助功能」与「屏幕录制」。实际使用时，macOS 或仍依目标 App 或具体动作另弹确认。",
-          "accessibilityLabel": "辅助功能",
+          "macosHint": "为 CuaDriver 开录屏。若见「System & App Protection Override」，选其可控之应用；旧版于「辅助功能」开启。",
+          "accessibilityLabel": "键鼠操控",
           "screenRecordingLabel": "屏幕录制",
           "grant": "往授",
           "accessibility": "辅助功能：{{status}}",
@@ -5977,7 +6002,7 @@
           "toggleFailed": "切换径操此机未成",
           "installFailed": "cua-driver 安装未成",
           "permissionFailed": "代操此机之权限未备",
-          "permissionPending": "请完成此二项系统权限，再归此处点“再察”",
+          "permissionPending": "于 Mac 授权。状态若未更，点「重新检查」。",
           "permissionSettingsOpened": "系统权限设置已开。授权毕，请归此处点“再察”。",
           "permissionSettingsMonitoring": "系统权限设置已开。授权毕，状态将自行更新。",
           "openPermissionSettingsFailed": "无法开系统权限设置"
@@ -6807,7 +6832,15 @@
           "encrypted": "端对端加密",
           "legacyConnection": "旧版连接",
           "encryptionUnknown": "尚未核实",
-          "legacyEncryptionHint": "旧路经中继时，内容未施端对端加密。"
+          "legacyEncryptionHint": "旧路经中继时，内容未施端对端加密。",
+          "routePreference": "择路",
+          "routeAuto": "自动",
+          "routeDirect": "直连",
+          "routeRelay": "中继",
+          "routeUnavailable": "不可达",
+          "routeMeasuring": "测速中…",
+          "routeDirectUnavailableHint": "今网路未能直达此器",
+          "routePreferenceFailed": "易道未成，请复试之"
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -8556,7 +8589,7 @@
           "updated": "法器已更新。",
           "empty": "暂无可安装的版本。",
           "sign-in": "请登录 GitHub 后检查更新。",
-          "forbidden": "当前 GitHub 登录无权读取此私有仓库。",
+          "forbidden": "无法读取 GitHub Release。请检查仓库链接和 GitHub 账号的访问权限。",
           "unavailable": "无法检查或安装更新，请重试。"
         },
         "customSlotTitle": "法器自订设置区",
@@ -9633,6 +9666,12 @@
       "guidance": "请稍待再取验证码。重新启动、重新安装或切换网络，皆不保解除限制。",
       "support": "稍待之后仍无法登录，请将记录私下寄予 feedback@cindy.app，并附操作系统、Cindy 版本、出错时间及下方错误码。请勿公开发布记录。"
     }
+  },
+  "legalTermsUpdate": {
+    "title": "服务条款与隐私政策已更",
+    "body": "Cindy 之<terms>服务条款</terms>与<privacy>隐私政策</privacy>已更，请阅而允之，方可续用。",
+    "agree": "允",
+    "disagree": "辞出"
   },
   "legacyMigration": {
     "title": "迁旧版之数据",
@@ -11065,6 +11104,11 @@
       "pinned": "已置首",
       "needsAttention": "待处置",
       "duplicate": "拷贝同伴",
+      "duplicating": "正拷贝同伴…",
+      "duplicateFailed": "未能拷贝同伴",
+      "duplicateModelRequired": "拷贝之前，请先于规制中为同伴择常例模型",
+      "pinFailed": "同伴置首未能更易",
+      "hideFailed": "同伴隐显未能更易",
       "moreActions": "{{name}} 之余事",
       "viewIcons": "图标",
       "showCollapsedTeammateAvatars": "收时示头像",
@@ -12099,46 +12143,15 @@
     },
     "guided": {
       "title": "立同伴",
-      "reviewTitle": "君之新同伴",
-      "question": "略述君之所期",
-      "placeholder": "如：伴吾习英语，可话家常，亦能认真纠吾措辞。",
       "generate": "造同伴",
-      "generating": "方构思同伴…",
-      "generationFailed": "暂不能成，君之所想已留，请再试。",
       "modelRequired": "请于上方择可用模型，乃续。",
       "modelFollowsDefault": "从同伴预设模型。",
       "modelForThisBot": "此择仅用于此同伴。",
-      "cindyDescription": "吾可助君用 Cindy、接器具，亦与君共成其事。",
-      "cindySummary": "掌 Cindy，接器具，成其事。",
-      "openCindy": "启 Cindy",
-      "addCindy": "纳 Cindy",
-      "done": "毕",
-      "editName": "修名",
       "duplicateName": "已有同名同伴，易一易辨之名可也。",
-      "introduction": "自述",
-      "editIntroduction": "修自述",
-      "refine": "调同伴",
-      "refinePlaceholder": "尚欲改何处？如：少些客套，多些诙谐。",
-      "back": "归",
-      "invite": "邀同伴",
       "portrait": "像 {{number}}",
       "upload": "上呈图",
       "generateAvatar": "造像",
-      "useAvatar": "用此",
-      "examples": {
-        "english": {
-          "label": "习英语",
-          "prompt": "伴吾习英语，自日常话题始，耐心而不敷衍，认真纠不自然之措辞。"
-        },
-        "ideas": {
-          "label": "共思妙策",
-          "prompt": "一富想像亦有主见之创作同伴，伴吾论文章与产品之思，助吾化想法为实策。"
-        },
-        "life": {
-          "label": "闲话生活",
-          "prompt": "一温厚诙谐之同伴，愿听吾生活琐事，不急于献策。"
-        }
-      }
+      "useAvatar": "用此"
     },
     "import": {
       "title": "纳同伴",
@@ -12511,6 +12524,7 @@
           "listenPortLabel": "本机侦听端口",
           "listenPortPlaceholder": "18747",
           "hint": "于本地网络接 BlueBubbles，仅理所选言谈。接入前，须先停此等言谈中其余自动应答程序。",
+          "automationDenied": "发讯时，macOS 禁 BlueBubbles 控制“信息”。请于运行 BlueBubbles 之 Mac 查“系统设置 → 隐私与安全性 → 自动化”。",
           "uncertain": "{{count}} 则讯尚待核验。先查言谈记录，再议重试，勿重答。"
         }
       },
@@ -14342,7 +14356,6 @@
       "regionAria": "待遣之讯队列",
       "listAria": "队列之讯",
       "pausedFooter": "差事已止，队列暂停",
-
       "steerUnsupportedNotice": "此引擎不受插话，待遣之讯俟此轮毕乃遣。",
       "resumeAction": "续遣",
       "resumeAria": "续遣队列之讯",
@@ -15064,7 +15077,6 @@
     "runningStatus": {
       "currentRate": "近速",
       "lastRequestRate": "前请均速",
-      "recentTokenRate": "近速 {{rate}} tok/s",
       "waitingSample": "方采样",
       "averageRate": "本轮均速",
       "rateHistory": "生成速率史",
@@ -15835,7 +15847,7 @@
       "viewThread": "览 thread 上下文 ({{count}})",
       "memberFromGroup": "{{name}} · 自 {{platform}} 群议「{{group}}」来",
       "memberFromPlatform": "{{name}} · 自 {{platform}} 群议来",
-      "guestFromDm": "{{name}} · 自 {{platform}} 私讯来（非主人）",
+      "guestFromDm": "{{name}} · 自 {{platform}} 私讯来",
       "unknownSender": "群议中人"
     },
     "rewind": {
@@ -17640,6 +17652,7 @@
       }
     },
     "editor": {
+      "reviewModelReadFailed": "未能读取自动化模型设置，请关闭编辑器后重开再试。",
       "promptDialog": {
         "titleEdit": "修自运",
         "titleCreate": "立自运",
@@ -17983,11 +17996,13 @@
         "effortHeading": "思之深浅",
         "effortDefault": "常例",
         "followSession": "随差事",
+        "followTeammate": "随同伴主模型",
         "modelListAria": "模型录",
         "modelSelectorAria": "择模型",
         "categoryListAria": "{{category}} 模型",
         "effortListAria": "思之深浅",
-        "boundLocationLocked": "所系差事仍于原机行之，请择彼机之模型。"
+        "boundLocationLocked": "所系差事仍于原机行之，请择彼机之模型。",
+        "modelGroupTitle": "模型组「{{name}}」：新立任务则依式择源"
       }
     },
     "toast": {
@@ -20326,6 +20341,7 @@
       "totalDetail_other": "{{count}} 张 × {{amount}}",
       "pay": "去支付",
       "refundNote": "礼品卡不能兑换现金。卡被领取或兑换后不退款；未领取的卡如需退款，请联系支持人员。",
+      "termsNote": "点「去支付」，即为已阅并允<terms>《礼品卡购买与使用条款》</terms>。",
       "cancel": "取消",
       "loadFailed": "暂时无法读取购买限制，请稍后重试。",
       "checkoutSubtitle_other": "礼品卡 {{amount}} × {{count}} · 付款成功后立即生成",
@@ -20414,7 +20430,7 @@
     "epermGuidance": {
       "title": "macOS 拒入文件夹",
       "message": "Cindy 无从入君之“{{folder}}”文件夹",
-      "detail": "macOS 已拒其入。请开“系统设置”授以权柄，再行 Agent 命令。",
+      "detail": "于「文件与文件夹」许 Cindy 取用此夹，再试之。",
       "openSystemSettings": "开系统设置",
       "cancel": "罢",
       "folderNames": {
@@ -21499,6 +21515,9 @@
     "actionFailed": "此法器操作未成，请重试。"
   },
   "mcpApps": {
+    "composerDragFailed": "附件未入，请再拖之，或按「加到输入框」。",
+    "composerAttachmentFormat": "可纳图、PDF 及纯文，每件以 64 MiB 为限。",
+    "composerAttachmentBusy": "请稍候再添附件。",
     "sharedTaskReadOnly": "此卡唯差事之主可操作。",
     "retry": "重载",
     "loadFailed": "应用程序加载未成。请察连接后重载。",

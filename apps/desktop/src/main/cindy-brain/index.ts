@@ -719,7 +719,6 @@ import { invalidateXaiBridgeAuth } from '../maker-host/xai-auth-invalidation-hos
 import {
   isModelDisabled,
   isModelDisabledWithUniqueLegacyBasename,
-  isOrganizationManagedProvider,
   isProviderDisabled,
   type MediaCapability,
   type ProviderView,
@@ -780,7 +779,7 @@ import { isProviderRouteMutationInProgress, getProviderRouteCredentialRevision }
 import { geminiImageAgent, geminiImageConnectionId, resolveGeminiImageKey, savedGeminiRouteMatches } from '../maker-host/gemini-image-connection.js';
 import { createGeminiImageChannel } from './geminiImageClient.js';
 import { createCodexImageChannel } from './codexImageClient.js';
-import { getCodexImageAuthBinding } from './codexImageAuthBinding.js';
+import { codexImageAccountKind, createAccountCodexImageChannel, getCodexImageAuthBinding } from './codexImageAuthBinding.js';
 import { createGatewayImageClient } from '../cindy-proxy-media/api/gatewayImageClient.js';
 import {
   createByokImageChannel,
@@ -5515,23 +5514,12 @@ function getImageChannelRegistry(): ImageChannelRegistry {
     registeredCustomImageAccounts,
   );
   for (const provider of imageProviders) {
-    if (
-      isOrganizationManagedProvider(provider) ||
-      provider.auth.native !== 'codex' ||
-      registeredCodexImageAccounts.has(provider.id)
-    )
-      continue;
+    if (!codexImageAccountKind(provider) || registeredCodexImageAccounts.has(provider.id)) continue;
     const providerId = provider.id;
     imageChannelRegistrySingleton.register(
       providerId,
-      createCodexImageChannel({
-        providerId,
-        hasOAuthLogin: () => getCodexImageAuthBinding().hasAuth?.(providerId) === true,
-        getAuth: () => getCodexImageAuthBinding().getAuth(providerId),
-        onAuthFailure: async (failure) => {
-          await getCodexImageAuthBinding().onAuthFailure(failure, providerId);
-        },
-        fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
+      createAccountCodexImageChannel(providerId, () => getActiveCatalog().providers.find(p => p.id === providerId), {
+        fetchImplementation: outboundFetch,
         beforeDispatch: (model) => assertMediaModelStillEnabled('image', model, providerId),
       }),
     );
@@ -5803,7 +5791,7 @@ configureProviderMediaRuntime({
       }
     };
     beforeDispatch();
-    const remoteAuth = await getCodexImageAuthBinding().acquireRemoteAuth?.(providerId, model);
+    const remoteAuth = await getCodexImageAuthBinding().acquireAuth?.(providerId, model, true);
     if (!remoteAuth) throw new Error('SHARED_IMAGE_UNAVAILABLE');
     try {
       const channel = createCodexImageChannel({
@@ -10980,8 +10968,9 @@ export function registerGhostIpc(): void {
       updateKey: activeOwnerScopeKey(),
       tempRoot: app.getPath('temp'),
       isCurrentOwner: () => ghostOwnerScope.isStable(owner),
-      download: (file, asset, callbacks) => downloadGithubPluginRelease(
-        outboundFetch as typeof fetch, token, source.repository, asset, file, callbacks,
+      download: (file, _asset, callbacks) => downloadGithubPluginRelease(
+        outboundFetch as typeof fetch, check.authenticated ? token : null, source.repository,
+        release, file, callbacks,
       ),
       install: async file => {
         const { ghost } = await installLocalFile(event.sender, owner, file, {
@@ -11139,14 +11128,16 @@ export function registerGhostIpc(): void {
     if (!ghostOwnerScope.isStable(owner)) throwIpcError('PRECONDITION_FAILED', 'Plugin owner changed');
     if (action === 'sign-in') return openGithubSignIn();
     const token = await readLocalGithubToken();
-    const result = await checkGithubPluginRelease(outboundFetch as typeof fetch, token, repository, target.manifest.id, target.manifest.version);
+    const { check, authenticated } = await checkGithubPluginRelease(
+      outboundFetch as typeof fetch, token, repository, target.manifest.id, target.manifest.version,
+    );
     if (!ghostOwnerScope.isStable(owner)) throwIpcError('PRECONDITION_FAILED', 'Plugin owner changed');
-    if (action === 'check' || !token || typeof expectedAssetId !== 'number') return result;
+    if (action === 'check' || typeof expectedAssetId !== 'number') return check;
     const instance = installedGhostStoragePart(target);
     const approval = ghostInstallApprovalToken(target.approval);
     const ownerStamp = getGhostOwnerPushStamp();
     return installCheckedGithubPluginRelease({
-      check: result,
+      check,
       expectedAssetId,
       pending: githubReleaseUpdates,
       updateKey: JSON.stringify([activeOwnerScopeKey(), instance]),
@@ -11157,8 +11148,10 @@ export function registerGhostIpc(): void {
           sendGhostContentsPush(event.sender, GITHUB_PLUGIN_RELEASE_PROGRESS_CHANNEL, { instanceId: instance, progress }, ownerStamp);
         }
       },
-      download: (file, release, callbacks) =>
-        downloadGithubPluginRelease(outboundFetch as typeof fetch, token, repository, release, file, callbacks),
+      download: (file, release, callbacks) => downloadGithubPluginRelease(
+        outboundFetch as typeof fetch, authenticated ? token : null, repository,
+        { ...release, pluginId: target.manifest.id }, file, callbacks,
+      ),
       async install(file, release) {
         const updated = await updateLocalFile(event.sender, owner, file, {
           expectedPackageSha256: release.sha256,

@@ -977,7 +977,7 @@
     "captureFailed": "画面をキャプチャできませんでした",
     "permission": {
       "title": "画面収録の許可が必要です",
-      "detail": "スクリーンショットを撮るには、「システム設定 > プライバシーとセキュリティ > 画面収録とシステムオーディオ録音」で {{appName}} を許可し、{{appName}} を開き直してください。",
+      "detail": "{{appName}} に画面収録を許可して、もう一度お試しください。macOS に求められた場合はアプリを開き直してください。",
       "openSettings": "システム設定を開く",
       "later": "今はしない"
     },
@@ -1144,12 +1144,12 @@
     "windowsError": "承認が完了していません。このコンピューターで再試行してください。",
     "windowsErrorDetail": "エラーコード {{code}}",
     "permissionsTitle": "リモートデスクトップの権限",
-    "permissionsIntro": "画面の表示には画面収録、操作にはアクセシビリティの権限も必要です。コンピューターで許可すると、状態が自動更新されます。",
+    "permissionsIntro": "接続先の Mac で画面収録を許可するとデスクトップを表示できます。キーボードとマウスを使うには、Cindy にアプリの操作も許可してください。許可の状態は自動で確認されます。",
     "permissionsReady": "システム権限の準備ができました。再接続できます。",
     "screenRecording": "画面収録",
-    "accessibility": "アクセシビリティ",
-    "screenRecordingHelp": "システム設定を開き、この Cindy の画面収録を許可してください。再起動を求められた場合は、Cindy を開き直してから接続してください。",
-    "accessibilityHelp": "設定を開き、システムの許可ダイアログに表示されたアプリのアクセシビリティを有効にしてください。戻ると実際の入力権限を自動確認します。",
+    "accessibility": "キーボードとマウスの操作",
+    "screenRecordingHelp": "「画面収録」または「画面収録とシステムオーディオ録音」で、現在起動中の Cindy に画面収録を許可してください。macOS に求められた場合は Cindy を開き直してください。",
+    "accessibilityHelp": "「プライバシーとセキュリティ」で、システムの案内に表示されたアプリを選択します。「System & App Protection Override」がある場合は操作を許可するアプリを選び、以前のバージョンでは「アクセシビリティ」を有効にしてください。",
     "permissionChecking": "確認中…",
     "permissionGranted": "許可済み",
     "permissionUnknown": "未確認",
@@ -1343,7 +1343,9 @@
       }
     },
     "lockOnExitHintPrivacy": "終了時にプライバシースクリーンを表示し、AI は作業を続けられます。パソコンに触れるとロックされます。",
-    "lockedEnablePrivacyHint": "離席中もこのパソコンを AI に使わせるには、このパソコンの「設定 → 一般 → 離席中」でプライバシースクリーンをオンにしてください。"
+    "lockedEnablePrivacyHint": "離席中もこのパソコンを AI に使わせるには、このパソコンの「設定 → 一般 → 離席中」でプライバシースクリーンをオンにしてください。",
+    "revealCurrentApp": "{{app}} を Finder に表示",
+    "openPermissionInNewWindow": "新しいウインドウで開く"
   },
   "ipcError": {
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
@@ -3144,7 +3146,7 @@
         },
         "accessibility": {
           "label": "自動入力",
-          "tooltip": "アクセシビリティ権限は、他のアプリへの自動入力、整形用のカーソル周辺テキストの取得、外部での修正検出による辞書学習に使います。"
+          "tooltip": "選択したアプリへの音声入力、文章の推敲に使うカーソル付近の文字の読み取り、辞書用の修正検出を Cindy に許可します。Mac に表示される「アクセシビリティ」または「System & App Protection Override」で許可してください。"
         }
       },
       "interactionSound": {
@@ -5374,6 +5376,29 @@
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 flash",
         "cindyQwen38Flash": "Qwen 3.8 Flash"
+      },
+      "health": {
+        "configTitle": "利用できる補助モデルがありません",
+        "configDescription": "タスクの自動命名、ピン留めタスクの要約、Help、字幕翻訳などのプラグインタスクに影響します。以下の問題を解決するか、「カスタム」で利用できる他のモデルを選択してください。",
+        "runtimeTitle": "補助モデルへのリクエストが続けて失敗しています",
+        "runtimeDescription": "ネットワークやサービスが一時的に不安定な可能性があります。リクエストが成功すると、この通知は自動的に消えます。表示が続く場合は、「カスタム」で利用できる他のモデルを選択してください。",
+        "fallback": "プラグインタスクは一時的に {{model}} を低い推論強度で使用しています。時間がかかり、クォータの消費が増える場合があります。",
+        "candidate": "{{model}}：{{reason}}",
+        "openProviders": "プロバイダーを開く",
+        "customize": "補助モデルをカスタマイズ",
+        "issues": {
+          "signed_out": "Cindy へのログインが必要",
+          "provider_disabled": "プロバイダーが無効",
+          "model_disabled": "モデルが無効",
+          "payment_required": "現在のプランまたは残高では利用不可",
+          "no_credential": "ログイン情報またはキーがありません",
+          "unavailable": "現在利用不可"
+        },
+        "toast": {
+          "config": "利用できる補助モデルがありません。タスクの命名、要約、字幕翻訳などのプラグインタスクに影響します。",
+          "runtime": "補助モデルへのリクエストが続けて失敗しています。タスクの命名、要約、字幕翻訳などのプラグインタスクに影響する可能性があります。",
+          "open": "設定を開く"
+        }
       }
     },
     "compaction": {
@@ -5734,10 +5759,10 @@
         "toggleAria": "ブラウザのログイン状態を使う",
         "confirmTitle": "Agent にブラウザのログイン状態を使わせますか？",
         "confirmDescription": "Agent はメール、クラウド、社内コンソールなど、すでにログインしているサイトであなたとして操作できます。いつでもオフにでき、コピーは削除されます。",
-        "confirmDescriptionMac": "Agent はメール、クラウド、社内コンソールなど、すでにログインしているサイトであなたとして操作できます。Chrome のログインファイルを読むには「フルディスクアクセス」も必要です。いつでもオフにでき、コピーは削除されます。",
+        "confirmDescriptionMac": "Agent はメール、クラウド、社内コンソールなど、すでにログインしているサイトであなたとして操作できます。いつでもオフにでき、コピーは削除されます。 macOS にフォルダの選択を求められた場合は、使用するブラウザプロファイルのフォルダを選んでください。",
         "confirm": "ログイン状態を使う",
-        "readDeniedTitle": "フルディスクアクセスが必要です",
-        "readDeniedDescription": "Chrome のログインファイルを読むには、システムが Cindy を許可する必要があります。「プライバシーとセキュリティ → フルディスクアクセス」で Cindy をオンにしてから、もう一度お試しください。",
+        "readDeniedTitle": "ブラウザプロファイルを読み取れません",
+        "readDeniedDescription": "「プライバシーとセキュリティ → フルディスクアクセス」で現在起動中の Cindy を選択します。フォルダを選択できる場合は必要なブラウザプロファイルのフォルダだけを選んで、もう一度お試しください。",
         "openFullDiskAccess": "システム設定を開く",
         "readDeniedLater": "あとで",
         "toast": {
@@ -5909,7 +5934,7 @@
         "permissionIntro": {
           "title": "コンピュータ自動操作を有効化",
           "description": "{{appName}} は Cua Driver をローカルにインストールまたは起動し、画面の読み取りやクリック、入力などを行います。自分でコンピュータ自動操作タスクを開始した場合にのみ有効にしてください。",
-          "macosDescription": "次に {{appName}} は Cua Driver のインストールまたは権限付与フローを開き、必要に応じて macOS のシステム設定へ移動します。まず CuaDriver に「アクセシビリティ」と「画面収録」の基本権限を許可してください。その後の使用中に、macOS が対象アプリや具体的な操作ごとに追加の確認を表示することがあります。自分で Computer Use タスクを開始した場合にのみ承認してください。完了後 {{appName}} に戻ると、自動で確認して有効化します。",
+          "macosDescription": "{{appName}} は Cua Driver をローカルにインストールまたは起動し、画面の読み取りやクリック、入力などを行います。自分でコンピュータ自動操作タスクを開始した場合にのみ有効にしてください。 CuaDriver に画面収録を許可してください。「System & App Protection Override」で操作を許可するアプリを選びます。以前の macOS では「アクセシビリティ」を有効にしてください。",
           "confirm": "続行",
           "cancel": "後で"
         },
@@ -5930,8 +5955,8 @@
         },
         "permissions": {
           "title": "システム権限",
-          "macosHint": "コンピュータ操作には「アクセシビリティ」と「画面収録」が必要です。実際の使用中には、対象アプリや操作ごとに追加確認が表示されることがあります。",
-          "accessibilityLabel": "アクセシビリティ",
+          "macosHint": "CuaDriver に画面収録を許可してください。「System & App Protection Override」で操作を許可するアプリを選びます。以前のバージョンでは「アクセシビリティ」を有効にしてください。",
+          "accessibilityLabel": "キーボードとマウスの操作",
           "screenRecordingLabel": "画面収録",
           "grant": "許可する",
           "accessibility": "アクセシビリティ：{{status}}",
@@ -5977,7 +6002,7 @@
           "toggleFailed": "コンピュータの直接操作の切り替えに失敗しました",
           "installFailed": "cua-driver のインストールに失敗しました",
           "permissionFailed": "コンピュータ操作の権限が完了していません",
-          "permissionPending": "2つのシステム権限を許可したら、ここに戻って「再確認」を押してください",
+          "permissionPending": "Mac で許可を完了してください。状態が更新されない場合は再確認してください。",
           "permissionSettingsOpened": "システム権限設定を開きました。許可が完了したら、ここに戻って「再確認」を押してください。",
           "permissionSettingsMonitoring": "システムの権限設定を開きました。権限を付与すると、状態は自動的に更新されます。",
           "openPermissionSettingsFailed": "システム権限設定を開けませんでした"
@@ -6807,7 +6832,15 @@
           "encrypted": "エンドツーエンド暗号化",
           "legacyConnection": "旧接続",
           "encryptionUnknown": "未確認",
-          "legacyEncryptionHint": "旧接続の中継経路はエンドツーエンド暗号化されていません。"
+          "legacyEncryptionHint": "旧接続の中継経路はエンドツーエンド暗号化されていません。",
+          "routePreference": "経路の選択",
+          "routeAuto": "自動",
+          "routeDirect": "直接",
+          "routeRelay": "中継",
+          "routeUnavailable": "利用不可",
+          "routeMeasuring": "計測中…",
+          "routeDirectUnavailableHint": "現在のネットワークではこのデバイスに直接接続できません",
+          "routePreferenceFailed": "ルートの切り替えに失敗しました。もう一度お試しください。"
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -8570,7 +8603,7 @@
           "updated": "プラグインを更新しました。",
           "empty": "インストールできるリリースはありません。",
           "sign-in": "更新を確認するには GitHub にログインしてください。",
-          "forbidden": "この GitHub アカウントには非公開リポジトリの読み取り権限がありません。",
+          "forbidden": "GitHub のリリース情報を取得できませんでした。リポジトリのリンクと GitHub アカウントのアクセス権限を確認してください。",
           "unavailable": "更新を確認またはインストールできませんでした。もう一度お試しください。"
         },
         "customSlotTitle": "プラグインのカスタム設定エリア",
@@ -9633,6 +9666,12 @@
       "guidance": "しばらく待ってから認証コードを取得してください。再起動、再インストール、ネットワークの変更で制限が解除されるとは限りません。",
       "support": "待ってもログインできない場合は、OS、Cindy のバージョン、発生時刻、下のエラーコードとログを feedback@cindy.app に非公開で送ってください。ログを公開しないでください。"
     }
+  },
+  "legalTermsUpdate": {
+    "title": "利用規約を更新しました",
+    "body": "Cindyの<terms>利用規約</terms>と<privacy>プライバシーポリシー</privacy>を更新しました。引き続き利用するには同意してください。",
+    "agree": "同意する",
+    "disagree": "ログアウト"
   },
   "legacyMigration": {
     "title": "旧バージョンのデータを移行",
@@ -11065,6 +11104,11 @@
       "pinned": "固定済み",
       "needsAttention": "対応が必要",
       "duplicate": "仲間を複製",
+      "duplicating": "仲間を複製しています…",
+      "duplicateFailed": "仲間を複製できませんでした。",
+      "duplicateModelRequired": "複製する前に、設定で仲間のデフォルトのモデルを選択してください。",
+      "pinFailed": "仲間の固定を変更できませんでした。",
+      "hideFailed": "仲間の表示・非表示を変更できませんでした。",
       "moreActions": "{{name}} のその他の操作",
       "viewIcons": "アイコン",
       "showCollapsedTeammateAvatars": "折りたたみ時にアバターを表示",
@@ -12099,46 +12143,15 @@
     },
     "guided": {
       "title": "仲間を作成",
-      "reviewTitle": "新しい仲間",
-      "question": "期待することを簡単に書いてください。",
-      "placeholder": "例えば、日常の話をしながら英会話を練習して、表現を丁寧に直してほしい。",
       "generate": "仲間を生成",
-      "generating": "仲間の人物像を考えています…",
-      "generationFailed": "生成できませんでした。入力内容は残っています。もう一度お試しください。",
       "modelRequired": "上で利用可能なモデルを選択して続けてください。",
       "modelFollowsDefault": "仲間の既定モデルに従います。",
       "modelForThisBot": "この選択はこの仲間にのみ適用されます。",
-      "cindyDescription": "Cindy の使い方やツールの接続をお手伝いし、一緒にやり遂げます。",
-      "cindySummary": "Cindy の管理、ツールの接続、仕事のお手伝い。",
-      "openCindy": "Cindy を開く",
-      "addCindy": "Cindy を追加",
-      "done": "完了",
-      "editName": "名前を編集",
       "duplicateName": "同じ名前の仲間がいます。区別しやすい名前を選んでください。",
-      "introduction": "自己紹介",
-      "editIntroduction": "自己紹介を編集",
-      "refine": "仲間を調整",
-      "refinePlaceholder": "何を変えたいですか？例えば、もっと気さくでユーモアのある感じに。",
-      "back": "戻る",
-      "invite": "仲間を招待",
       "portrait": "アバター {{number}}",
       "upload": "画像をアップロード",
       "generateAvatar": "アバターを生成",
-      "useAvatar": "この画像を使う",
-      "examples": {
-        "english": {
-          "label": "英会話の練習",
-          "prompt": "日常の会話で英語を練習したい。辛抱強く聞いて、不自然な表現を丁寧に直してほしい。"
-        },
-        "ideas": {
-          "label": "アイデアを考える",
-          "prompt": "想像力と自分の意見を持つ創作仲間。文章や製品のアイデアを具体的な計画にしてほしい。"
-        },
-        "life": {
-          "label": "日々の話",
-          "prompt": "温かくユーモアがあり、すぐに助言せず日々の小さな話を聞いてくれる仲間。"
-        }
-      }
+      "useAvatar": "この画像を使う"
     },
     "import": {
       "title": "仲間をインポート",
@@ -12511,6 +12524,7 @@
           "listenPortLabel": "ローカル待受ポート",
           "listenPortPlaceholder": "18747",
           "hint": "ローカルネットワークで BlueBubbles に接続し、選択したチャットのみ処理します。接続前に、これらのチャットの他の自動応答を停止してください。",
+          "automationDenied": "送信時に、macOS が BlueBubbles による「メッセージ」の操作を拒否しました。BlueBubbles を実行している Mac で「システム設定」→「プライバシーとセキュリティ」→「オートメーション」を確認してください。",
           "uncertain": "{{count}} 件の処理結果の確認が必要です。重複を避けるため、再試行前にチャット履歴を確認してください。"
         }
       },
@@ -14342,7 +14356,6 @@
       "regionAria": "送信待ちメッセージのキュー",
       "listAria": "キュー内のメッセージ",
       "pausedFooter": "タスク停止、キューは一時停止中",
-
       "steerUnsupportedNotice": "このエンジンは割り込みに対応していません。キュー内のメッセージは現在のターンが終わってから送信されます。",
       "resumeAction": "送信を続ける",
       "resumeAria": "キューの送信を続ける",
@@ -15073,7 +15086,6 @@
     "runningStatus": {
       "currentRate": "直近の速度",
       "lastRequestRate": "直近のリクエストの平均",
-      "recentTokenRate": "直近 {{rate}} tok/s",
       "waitingSample": "計測中",
       "averageRate": "このターンの平均",
       "rateHistory": "生成速度の推移",
@@ -15844,7 +15856,7 @@
       "viewThread": "スレッドのコンテキストを表示（{{count}}）",
       "memberFromGroup": "{{name}} · {{platform}} グループ「{{group}}」から",
       "memberFromPlatform": "{{name}} · {{platform}} グループから",
-      "guestFromDm": "{{name}} · {{platform}} の DM から（オーナー以外）",
+      "guestFromDm": "{{name}} · {{platform}} の DM から",
       "unknownSender": "グループメンバー"
     },
     "rewind": {
@@ -17640,6 +17652,7 @@
       }
     },
     "editor": {
+      "reviewModelReadFailed": "自動化のモデル設定を読み込めませんでした。エディターを閉じて開き直してください。",
       "promptDialog": {
         "titleEdit": "自動化を編集",
         "titleCreate": "自動化を作成",
@@ -17983,11 +17996,13 @@
         "effortHeading": "推論強度",
         "effortDefault": "デフォルト",
         "followSession": "セッションに従う",
+        "followTeammate": "仲間のメインモデルに従う",
         "modelListAria": "モデル一覧",
         "modelSelectorAria": "モデルセレクター",
         "categoryListAria": "{{category}} モデル",
         "effortListAria": "推論強度",
-        "boundLocationLocked": "連携したタスクは元のコンピューターで実行されます。そのコンピューターのモデルを選んでください。"
+        "boundLocationLocked": "連携したタスクは元のコンピューターで実行されます。そのコンピューターのモデルを選んでください。",
+        "modelGroupTitle": "モデルグループ「{{name}}」：新しいタスクを作るときにソースを選びます"
       }
     },
     "toast": {
@@ -20326,6 +20341,7 @@
       "totalDetail_other": "{{count}} 枚 × {{amount}}",
       "pay": "支払いへ進む",
       "refundNote": "ギフトカードは現金に交換できません。受け取り済みまたは使用済みのカードは返金できません。未受け取りのカードの返金はサポートにお問い合わせください。",
+      "termsNote": "「支払いへ進む」を選択すると、<terms>ギフトカード利用規約</terms>に同意したものとみなされます。",
       "cancel": "キャンセル",
       "loadFailed": "購入制限を読み込めませんでした。しばらくしてからお試しください。",
       "checkoutSubtitle_other": "ギフトカード {{amount}} × {{count}}・支払いが完了するとすぐに発行されます",
@@ -20414,7 +20430,7 @@
     "epermGuidance": {
       "title": "macOS のフォルダアクセスが拒否されました",
       "message": "Cindy は「{{folder}}」フォルダにアクセスできません",
-      "detail": "macOS によりアクセスが拒否されました。「システム設定」を開いて権限を付与し、Agent のコマンドをもう一度実行してください。",
+      "detail": "「ファイルとフォルダ」で Cindy にこのフォルダへのアクセスを許可し、もう一度お試しください。",
       "openSystemSettings": "システム設定を開く",
       "cancel": "キャンセル",
       "folderNames": {
@@ -21499,6 +21515,9 @@
     "actionFailed": "プラグインの操作を完了できませんでした。もう一度お試しください。"
   },
   "mcpApps": {
+    "composerDragFailed": "添付できませんでした。もう一度ドラッグするか、「入力欄に追加」を選んでください。",
+    "composerAttachmentFormat": "画像、PDF、プレーンテキストに対応しています。1 件あたり最大 64 MiB です。",
+    "composerAttachmentBusy": "しばらく待ってから添付してください。",
     "sharedTaskReadOnly": "このカードを操作できるのはセッションのオーナーだけです。",
     "retry": "再読み込み",
     "loadFailed": "アプリを読み込めませんでした。接続を確認して再読み込みしてください。",

@@ -37,9 +37,10 @@ vi.mock('../../localDb/ipc/projectAliases.js', () => ({
 vi.mock('../../localDb/ipc/recentWorkdirs.js', () => ({ normalizeRecentWorkdirPath: (p: string) => p, upsertRecentWorkdir: async () => false }));
 vi.mock('../../worktree/WorktreeManager.js', () => ({ detectCwd: async () => ({ gitInstalled: false }) }));
 
-import { BOT_PROJECT_MEMORY_REVIEW_ID, ensureBotProjectAutomations, moveTeammateMemoryIntoProject, nameBotProject, prepareBotProjectWorkspace } from '../botProjectMode.js';
+import { BOT_PROJECT_MEMORY_REVIEW_ID, createBotDefaultProjectSchedule, ensureBotProjectAutomations, moveTeammateMemoryIntoProject, nameBotProject, prepareBotProjectWorkspace } from '../botProjectMode.js';
 import { legacyTeammateProjectMemoryDir, teammateProjectMemoryDir, teammateWorkspaceDir } from '../botProjectMemory.js';
-import { OWN_RULES_HEADING } from '../botProjectTemplate.js';
+import { importBotSkillFiles } from '../botSkillStore.js';
+import { OWN_RULES_HEADING, importedStandardSkill } from '../botProjectTemplate.js';
 
 // Evaluate the actual generated check with real SQLite, in-process. The hook
 // protocol has its own process tests; retain one real spawn below. Repeated
@@ -70,6 +71,19 @@ async function runMemoryCheck(workingDir: string, firedAt: number,
   return exitCode;
 }
 
+// User decision 2026-11-16 / unit: new supplied tasks must acquire the same model policy
+// through the creation entry, without adding their IDs to the runner or editor.
+// Existing review-only coverage misses a new task definition and an unmarked old snapshot.
+it('gives a new default task model inheritance while retaining every existing model preference', () => {
+  const defaults = { id: 'future-default-task', name: 'Future default', prompt: 'Do useful work', cronExpr: '0 9 * * *' };
+  expect(createBotDefaultProjectSchedule(defaults)).toMatchObject({ ...defaults, followTeammateModel: true });
+  const chosen = { ...defaults, model: 'chosen-c', providerId: 'custom', fastMode: 'ultrafast' as const };
+  expect(createBotDefaultProjectSchedule(defaults, chosen)).toMatchObject(chosen);
+  expect(createBotDefaultProjectSchedule(defaults, chosen).followTeammateModel).toBeUndefined();
+  expect(createBotDefaultProjectSchedule(defaults, { ...defaults, followTeammateModel: false }).followTeammateModel).toBe(false);
+  expect(createBotDefaultProjectSchedule(defaults, { ...defaults, followTeammateModel: true }).followTeammateModel).toBe(true);
+});
+
 // Teammate V2 (2026-11-06): the nightly review is the project's own automation,
 // added once on the teammate's model; an owner's later edit or removal is kept.
 describe('ensureBotProjectAutomations', () => {
@@ -88,12 +102,13 @@ describe('ensureBotProjectAutomations', () => {
     const route = { harness: 'pi' as const, model: 'm1', providerId: 'p1', effort: 'medium', fastMode: false };
     await expect(ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir, route })).resolves.toBe(true);
     expect(loader.upsertSchedule).toHaveBeenCalledWith(workingDir, expect.objectContaining({
-      id: BOT_PROJECT_MEMORY_REVIEW_ID, agentKind: 'pi', model: 'm1', providerId: 'p1',
+      id: BOT_PROJECT_MEMORY_REVIEW_ID, followTeammateModel: true,
       name: 'Mimi · Review memory', persistentSession: true, silentWhenIdle: true,
       prompt: expect.stringContaining('teammate id bot-1'),
     }), { keepUnreadable: true });
 
     const supplied = loader.upsertSchedule.mock.calls[0]![1];
+    expect(supplied.model).toBeUndefined();
     // Restoring an already-upgraded project on this computer recreates only its local check.
     const checkFile = path.join(root, '.memory-review-check-v1.cjs');
     await fs.rm(checkFile);
@@ -395,7 +410,12 @@ describe('ensureBotProjectAutomations', () => {
       const first: string[] = [];
       expect(await check(firedAt, 'r2', first)).toBe(0); // 20 accumulated, none in the last day.
       expect(first.join('\n')).toContain(`Review conversations since ${new Date(created).toISOString()}.`);
-      finish.run('r2', 'failed', firedAt + 60_000);
+      // #12080's skip is kept: 20 accumulated, but the previous review is still running.
+      finish.run('r2', 'running', null);
+      const running: string[] = [];
+      expect(await check(firedAt + day / 2, 'r2b', running)).toBe(2);
+      expect(running.join('\n')).toContain('still running');
+      db.prepare("UPDATE schedule_runs SET status = 'failed', finished_at = ? WHERE id = 'r2'").run(firedAt + 60_000);
       expect(await check(firedAt + day, 'r3')).toBe(0); // A failed review does not reset the count.
       finish.run('r3', 'success', firedAt + day + 60_000);
       for (let i = 0; i < 9; i++) message.run(firedAt + day + 3_600_000);
@@ -593,6 +613,32 @@ describe('prepareBotProjectWorkspace', () => {
     const text = await fs.readFile(path.join(skill, 'SKILL.md'), 'utf8');
     expect(text.slice(text.indexOf(OWN_RULES_HEADING))).toContain('Owner-specific handover');
     await expect(fs.readFile(path.join(skill, 'checklist.md'), 'utf8')).resolves.toBe('company checklist');
+  });
+
+  // Unit, real project preparation and importer publication. A same-named imported skill used to
+  // be rejected by its freshly installed starter. A completed migration must also honor deletions.
+  it.each([true, false])('adopts imported hand-off rules and keeps its enabled=%s choice on restart', async enabled => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'teammate-import-settings-'));
+    const botId = 'imported';
+    const profile = path.join(root, 'bots', botId);
+    const args = { botId, ownerRoot: root, displayName: 'Fixture' };
+    const { workingDir } = await prepareBotProjectWorkspace(args);
+    const files = [{ name: 'SKILL.md', bytes: Buffer.from('---\nname: hand-off\n---\nInclude the project reference.'), executable: false },
+      { name: 'example.txt', bytes: Buffer.from('Example'), executable: false }];
+    const publish = () => importBotSkillFiles(root, botId, 'hand-off', files, () => {}, enabled, importedStandardSkill('hand-off'));
+    await publish();
+    await publish();
+    const folder = path.join(enabled ? path.join(workingDir, '.agents/skills') : path.join(profile, 'disabled-skills'), 'hand-off');
+    const content = await fs.readFile(path.join(folder, 'SKILL.md'), 'utf8');
+    expect(content.slice(content.indexOf(OWN_RULES_HEADING))).toContain('Include the project reference.');
+    expect(await fs.readFile(path.join(folder, 'example.txt'), 'utf8')).toBe('Example');
+    await fs.mkdir(path.join(profile, 'memories'), { recursive: true });
+    await fs.writeFile(path.join(profile, 'memories', 'project_previous.md'), 'Removed in the project');
+    await fs.writeFile(path.join(profile, 'v2-migration.json'), '{}');
+    await prepareBotProjectWorkspace(args);
+    await expect(fs.stat(path.join(teammateProjectMemoryDir(workingDir), 'project_previous.md'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await fs.readFile(path.join(folder, 'SKILL.md'), 'utf8')).toBe(content);
+    if (!enabled) await expect(fs.stat(path.join(workingDir, '.agents/skills/hand-off'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   // QA recheck: with the project's Skills folder linked elsewhere, the starter template wrote through the link.

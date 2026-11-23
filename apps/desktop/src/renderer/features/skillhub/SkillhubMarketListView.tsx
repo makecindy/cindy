@@ -374,7 +374,7 @@ function SkillhubMarketListViewInner({ active }: { active: boolean }) {
                         </span>
                         <span
                           className="inline-flex items-center justify-center rounded-full bg-[var(--chat-input-chip-bg)] text-[var(--settings-section-desc)]"
-                          style={{ height: '18px', padding: '0 7px', fontSize: '11px' }}
+                          style={{ height: '18px', padding: '0 var(--space-1_5)', fontSize: '11px' }}
                         >
                           {group.skills.length}
                         </span>

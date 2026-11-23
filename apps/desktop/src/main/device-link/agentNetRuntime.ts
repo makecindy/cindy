@@ -4,7 +4,7 @@ import { createPrivateKey, randomUUID } from 'node:crypto';
 import { app } from 'electron';
 import { currentLinkTraffic } from './linkTraffic.desktop.js';
 import { openLinkWebSocket } from './linkWebSocket.desktop.js';
-import { AgentNetWorkerSocket, type AgentNetAppSocket, type RelayRoute, type SessionConfig, type SessionHandle } from '@cindy/agent-net';
+import { AgentNetWorkerSocket, type AgentNetAppSocket, type PathPreference, type RelayRoute, type SessionConfig, type SessionHandle } from '@cindy/agent-net';
 import { isScopedPeer } from '@cindy/device-link';
 import { approveJoin, identityFromSeed, issueCertificate, publicBytes, signTenantJoinRequest, verifyCertificate, type Bootstrap, type Identity, type JoinRequest, type DeviceCertificate, type TenantJoinRequest } from '@cindy/agent-net-relay';
 import { AgentNetClient, createDelegationApprover, createTransportModeProof } from '@cindy/agent-net-relay/client';
@@ -377,6 +377,10 @@ export function agentNetPeerSnapshot(id: string) { return current?.peerSnapshot(
 export function agentNetPeerRoutes() {
   return current?.peerRoutes().filter(({ deviceId }) => !isScopedPeer(deviceId) && agentNetDeviceAccepted(deviceId)) ?? [];
 }
+export function setAgentNetPeerPathPreference(deviceId: string, preference: PathPreference): void {
+  current?.setPeerPathPreference?.(deviceId, preference);
+  pathChanged();
+}
 export function currentAgentNetScopedTarget(peer: string) { return current?.scopedPeerTarget(peer) ?? null; }
 export function agentNetMediaTarget(peer: string) {
   if (!current?.knowsPeer(peer)) return null;
@@ -569,7 +573,9 @@ export async function createAgentNetAppSocket(): Promise<AgentNetAppSocket | nul
   const connectedAt = new Map<string, number>();
   const notifyCovered = new Set<string>();
   let socket: AgentNetWorkerSocket;
+  const initialPeerPathPreferences = readDeviceLinkSettings().peerPathPreferences;
   try { socket = await AgentNetWorkerSocket.open({ workerFile, assertCurrent: assertOwner, client: api, module, log: agentNetLog, userId: api.certificate.subject, cachedDirectory, directoryExpiresAt, stunServers, relayUdpServer,
+    ...(initialPeerPathPreferences ? { initialPeerPathPreferences } : {}),
     observeUdpTraffic: read => currentLinkTraffic().track('agent-net', read),
     ...(members ? { peerRule: members.rule() } : {}),
     scoped: true, onDelegationRequests: requests => approver.update(requests),
