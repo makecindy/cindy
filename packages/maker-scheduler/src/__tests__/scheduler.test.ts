@@ -4036,6 +4036,43 @@ describe('Scheduler', () => {
       .rejects.toThrow('agentDeviceId requires an explicit model');
   });
 
+  // model-groups.md §6.3: a schedule with a mode re-picks every run; its concrete model is the fallback.
+  // Gap: clients that only know concrete models (older phones, tools) could change the model while the
+  // mode stayed, so the newly chosen model never ran. Minimal input: one schedule with a mode, then an echo,
+  // a model change, an explicit keep and an explicit clear. Tier: unit, real engine with in-memory storage.
+  it('update() 改了具体模型却没提模式时去掉模式，原样回传或显式给了按调用方', async () => {
+    const sch = await h.scheduler.create({
+      ...baseInput, modelAgentKind: 'codex', agentKind: 'codex', model: 'gpt-saved', providerId: 'openai', modelGroup: '  daily  ',
+    });
+    expect(sch.modelGroup).toBe('daily');
+    const echoed = await h.scheduler.update(sch.id, { name: 'renamed', model: 'gpt-saved', providerId: 'openai' });
+    expect(echoed.modelGroup).toBe('daily');
+    const kept = await h.scheduler.update(sch.id, { model: 'gpt-other', modelGroup: 'daily' });
+    expect(kept.modelGroup).toBe('daily');
+    const changed = await h.scheduler.update(sch.id, { model: 'gpt-third' });
+    expect(changed.modelGroup).toBeUndefined();
+    const again = await h.scheduler.update(sch.id, { modelGroup: 'review' });
+    expect(again.modelGroup).toBe('review');
+    const cleared = await h.scheduler.update(sch.id, { modelGroup: undefined });
+    expect(cleared.modelGroup).toBeUndefined();
+    await expect(h.scheduler.create({ ...baseInput, modelGroup: 'x'.repeat(65) })).rejects.toThrow('modelGroup');
+  });
+
+  // PR #11881 review r4653462650: a client that only moves the same model to another computer changed no
+  // model field, so the mode stayed and its pick overrode the chosen computer. Minimal input: a mode
+  // schedule whose run location alone is echoed, then changed. Tier: unit, real engine, in-memory storage.
+  it('update() 只换了运行位置却没提模式时也去掉模式，原样回传保留', async () => {
+    const sch = await h.scheduler.create({
+      ...baseInput, modelAgentKind: 'codex', agentKind: 'codex', model: 'gpt-saved', providerId: 'openai',
+      modelAgentDeviceId: '', modelGroup: 'daily',
+    });
+    const echoed = await h.scheduler.update(sch.id, { model: 'gpt-saved', providerId: 'openai', modelAgentDeviceId: '' });
+    expect(echoed.modelGroup).toBe('daily');
+    const moved = await h.scheduler.update(sch.id, { model: 'gpt-saved', providerId: 'openai', modelAgentDeviceId: 'desk-2' });
+    expect(moved.modelGroup).toBeUndefined();
+    expect(moved.modelAgentDeviceId).toBe('desk-2');
+  });
+
   it('update() 给了真实 workingDir 时翻成 project(与 create 推断对称)', async () => {
     // 对话任务后来被显式改了项目目录 → 不能仍留 dialogue,否则 fire 时
     // 新目录会被管理工作区分配覆盖,显式设置被静默丢弃

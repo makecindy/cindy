@@ -8718,7 +8718,7 @@
           "updated": "Plugin mis à jour.",
           "empty": "Aucune version installable disponible.",
           "sign-in": "Connectez-vous à GitHub pour rechercher des mises à jour.",
-          "forbidden": "Ce compte GitHub ne peut pas lire le dépôt privé.",
+          "forbidden": "Impossible de lire la version publiée sur GitHub. Vérifiez le lien du dépôt et les droits d’accès de votre compte GitHub.",
           "unavailable": "Impossible de vérifier ou d’installer la mise à jour. Réessayez."
         },
         "customSlotTitle": "Zone de paramètres personnalisés du plugin",
@@ -9781,6 +9781,12 @@
       "guidance": "Patientez avant de demander un autre code. Redémarrer, réinstaller ou changer de réseau ne garantit pas la levée de la limite.",
       "support": "Si le problème persiste après l'attente, envoyez en privé les journaux à feedback@cindy.app en indiquant votre système d'exploitation, votre version de Cindy, l'heure de l'erreur et le code ci-dessous. Ne publiez pas les journaux publiquement."
     }
+  },
+  "legalTermsUpdate": {
+    "title": "Conditions mises à jour",
+    "body": "Nous avons mis à jour les <terms>Conditions d'utilisation</terms> et la <privacy>Politique de confidentialité</privacy>. Acceptez pour continuer ou déconnectez-vous.",
+    "agree": "Accepter",
+    "disagree": "Déconnexion"
   },
   "legacyMigration": {
     "title": "Migrer les données de la version précédente",
@@ -17886,6 +17892,7 @@
       }
     },
     "editor": {
+      "reviewModelReadFailed": "Impossible de lire le modèle de l’automatisation. Fermez puis rouvrez l’éditeur pour réessayer.",
       "promptDialog": {
         "titleEdit": "Modifier l'automatisation",
         "titleCreate": "Créer une automatisation",
@@ -18229,11 +18236,13 @@
         "effortHeading": "Effort de raisonnement",
         "effortDefault": "Par défaut",
         "followSession": "Suivre la session",
+        "followTeammate": "Suivre le modèle principal de l’ami",
         "modelListAria": "Liste des modèles",
         "modelSelectorAria": "Sélecteur de modèle",
         "categoryListAria": "Modèles {{category}}",
         "effortListAria": "Effort de raisonnement",
-        "boundLocationLocked": "Les tâches liées continuent de s'exécuter là où elles se trouvent. Choisissez un modèle de cet ordinateur."
+        "boundLocationLocked": "Les tâches liées continuent de s'exécuter là où elles se trouvent. Choisissez un modèle de cet ordinateur.",
+        "modelGroupTitle": "Groupe de modèles « {{name}} » : choisit une source à la création d’une nouvelle tâche"
       }
     },
     "toast": {
@@ -20600,6 +20609,7 @@
       "totalDetail_other": "{{count}} cartes × {{amount}}",
       "pay": "Continuer vers le paiement",
       "refundNote": "Les cartes cadeaux ne peuvent pas être échangées contre de l’argent. Une carte récupérée ou utilisée n’est pas remboursable. Pour demander le remboursement d’une carte non récupérée, contactez le support.",
+      "termsNote": "En sélectionnant Continuer vers le paiement, vous acceptez les <terms>Conditions des cartes cadeaux</terms>.",
       "cancel": "Annuler",
       "loadFailed": "Impossible de charger les limites d’achat. Réessayez plus tard.",
       "checkoutSubtitle_one": "Carte cadeau {{amount}} × {{count}} · émise dès le paiement réussi",

@@ -8646,7 +8646,7 @@
           "updated": "Plugin updated.",
           "empty": "No installable release is available.",
           "sign-in": "Sign in to GitHub to check for updates.",
-          "forbidden": "This GitHub sign-in cannot read the private repository.",
+          "forbidden": "Could not read the GitHub release. Check the repository link and your GitHub account’s access.",
           "unavailable": "Couldn't check or install the update. Try again."
         },
         "customSlotTitle": "Plugin custom settings area",
@@ -9709,6 +9709,12 @@
       "guidance": "Wait before requesting another code. Restarting, reinstalling, or changing networks does not guarantee that the limit will be lifted.",
       "support": "If this continues after waiting, privately send logs to feedback@cindy.app with your OS, Cindy version, error time, and the code below. Do not post logs publicly."
     }
+  },
+  "legalTermsUpdate": {
+    "title": "Terms Updated",
+    "body": "We've updated Cindy's <terms>Terms of Service</terms> and <privacy>Privacy Policy</privacy>. Agree to keep using Cindy, or log out.",
+    "agree": "Agree",
+    "disagree": "Logout"
   },
   "legacyMigration": {
     "title": "Migrate data from the previous version",
@@ -17720,6 +17726,7 @@
       }
     },
     "editor": {
+      "reviewModelReadFailed": "Could not read the automation’s model preference. Close and reopen the editor to retry.",
       "promptDialog": {
         "titleEdit": "Edit Automation",
         "titleCreate": "Create Automation",
@@ -18063,11 +18070,13 @@
         "effortHeading": "Reasoning Effort",
         "effortDefault": "Default",
         "followSession": "Follow session",
+        "followTeammate": "Follow buddy’s primary model",
         "modelListAria": "Model list",
         "modelSelectorAria": "Model selector",
         "categoryListAria": "{{category}} models",
         "effortListAria": "Reasoning effort",
-        "boundLocationLocked": "Bound tasks keep running where they are. Choose a model from that computer."
+        "boundLocationLocked": "Bound tasks keep running where they are. Choose a model from that computer.",
+        "modelGroupTitle": "Model group “{{name}}”: picks a source when a run starts a new task"
       }
     },
     "toast": {
@@ -20412,6 +20421,7 @@
       "totalDetail_other": "{{count}} cards × {{amount}}",
       "pay": "Continue to Payment",
       "refundNote": "Gift cards can't be exchanged for cash. Claimed or redeemed cards are non-refundable. To request a refund for a card that hasn't been claimed, contact support.",
+      "termsNote": "By selecting Continue to Payment, you agree to the <terms>Gift Card Terms</terms>.",
       "cancel": "Cancel",
       "loadFailed": "Couldn’t load the gift card purchase limits. Try again later.",
       "checkoutSubtitle_one": "Gift card {{amount}} × {{count}} · Issued as soon as payment succeeds",
