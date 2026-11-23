@@ -31,6 +31,8 @@ export interface LogUploadSettingsPayload {
    * 刻意**不看**「使用统计」开关——那是行为埋点的偏好，与排障上传不是一件事。
    */
   manualUploadAvailable: boolean;
+  /** 当前同意记录可读但未同意，手动上传可在本次请求内取得明确同意。 */
+  manualUploadConsentRequired: boolean;
 }
 
 /** 手动上传成功的结果。编号短、可读，用户报障时口述给我们。 */

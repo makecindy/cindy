@@ -9,6 +9,7 @@ export interface LogUploadSettingsState {
   crashAutoUploadCustomized: boolean;
   /** 手动上传是否可用 = 已配置目标 && 已同意隐私政策。 */
   manualUploadAvailable: boolean;
+  manualUploadConsentRequired: boolean;
   loading: boolean;
 }
 
@@ -18,6 +19,7 @@ const INITIAL: LogUploadSettingsState = {
   crashAutoUploadEnabled: false,
   crashAutoUploadCustomized: false,
   manualUploadAvailable: false,
+  manualUploadConsentRequired: false,
   loading: true,
 };
 
@@ -28,6 +30,7 @@ function normalize(payload: LogUploadSettingsPayload): LogUploadSettingsState {
     crashAutoUploadEnabled: payload.crashAutoUploadEnabled === true,
     crashAutoUploadCustomized: payload.crashAutoUploadCustomized === true,
     manualUploadAvailable: payload.manualUploadAvailable === true,
+    manualUploadConsentRequired: payload.manualUploadConsentRequired === true,
     loading: false,
   };
 }

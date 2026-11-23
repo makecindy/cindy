@@ -4802,7 +4802,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         typeof raw.privacyConsentAccepted !== 'boolean' ||
         typeof raw.crashAutoUploadEnabled !== 'boolean' ||
         typeof raw.crashAutoUploadCustomized !== 'boolean' ||
-        typeof raw.manualUploadAvailable !== 'boolean'
+        typeof raw.manualUploadAvailable !== 'boolean' ||
+        typeof raw.manualUploadConsentRequired !== 'boolean'
       ) {
         return;
       }
@@ -4812,6 +4813,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         crashAutoUploadEnabled: raw.crashAutoUploadEnabled,
         crashAutoUploadCustomized: raw.crashAutoUploadCustomized,
         manualUploadAvailable: raw.manualUploadAvailable,
+        manualUploadConsentRequired: raw.manualUploadConsentRequired,
       });
     };
     ipcRenderer.on(LOG_UPLOAD_SETTINGS_CHANGE_CHANNEL, handler);

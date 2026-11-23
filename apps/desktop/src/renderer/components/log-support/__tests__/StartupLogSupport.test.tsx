@@ -68,6 +68,7 @@ beforeEach(() => {
     targetConfigured: true,
     privacyConsentAccepted: true,
     manualUploadAvailable: true,
+    manualUploadConsentRequired: false,
     crashAutoUploadEnabled: false,
     crashAutoUploadCustomized: false,
   });
@@ -125,7 +126,8 @@ describe('startup log support', () => {
     mocks.getLogUploadSettings.mockResolvedValue({
       targetConfigured: true,
       privacyConsentAccepted: false,
-      manualUploadAvailable: true,
+      manualUploadAvailable: false,
+      manualUploadConsentRequired: true,
     });
     render(<UploadLogsRow />);
     const upload = await screen.findByRole('button', { name: '同意隐私协议并上传' });
@@ -134,6 +136,20 @@ describe('startup log support', () => {
     fireEvent.click(upload);
     expect((await screen.findByRole('status')).textContent).toContain('ABCD-EFGH');
     expect(mocks.uploadLogsNow).toHaveBeenCalledExactlyOnceWith(LEGAL_TERMS_VERSION);
+  });
+
+  it('keeps upload disabled when main cannot verify the consent record', async () => {
+    mocks.getLogUploadSettings.mockResolvedValue({
+      targetConfigured: true,
+      privacyConsentAccepted: false,
+      manualUploadAvailable: false,
+      manualUploadConsentRequired: false,
+    });
+    render(<UploadLogsRow />);
+    await screen.findByText(zhCN.settings.about.logUpload.errorFailed);
+    expect(screen.queryByRole('button', { name: '同意隐私协议并上传' })).toBeNull();
+    const upload = screen.getByRole('button', { name: zhCN.settings.about.logUpload.uploadButton });
+    expect((upload as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('shows a selectable upload code even when clipboard copying fails', async () => {

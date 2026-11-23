@@ -216,6 +216,7 @@ export async function uploadPerformanceTraceReport(
 
 export function logUploadSettingsPayload(): LogUploadSettingsPayload {
   const targetConfigured = currentTarget() !== null;
+  const consentReadable = targetConfigured && isAnalyticsConsentRecordReadable();
   // 展示用的读取不强制现读盘:设置页由广播驱动,自己这一侧的写入会立刻广播。
   const privacyConsentAccepted = readAnalyticsSettings().privacyConsentAccepted;
   return {
@@ -223,7 +224,8 @@ export function logUploadSettingsPayload(): LogUploadSettingsPayload {
     privacyConsentAccepted,
     crashAutoUploadEnabled: isCrashAutoUploadEnabled(),
     crashAutoUploadCustomized: isCrashAutoUploadCustomized(),
-    manualUploadAvailable: targetConfigured && privacyConsentAccepted,
+    manualUploadAvailable: consentReadable && privacyConsentAccepted,
+    manualUploadConsentRequired: consentReadable && !privacyConsentAccepted,
   };
 }
 

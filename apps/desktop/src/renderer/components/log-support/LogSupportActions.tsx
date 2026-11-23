@@ -86,7 +86,7 @@ export function UploadLogsActionRow({
   const { state } = useLogUploadSettings();
   const { uploading, uploadCode, handleUpload } = upload;
 
-  const needsConsent = state.targetConfigured && !state.privacyConsentAccepted;
+  const needsConsent = state.manualUploadConsentRequired;
   const openPrivacyPolicy = async () => {
     try {
       const result = await window.electronAPI.openExternal(LEGAL_LINKS.privacyPolicy);
@@ -146,6 +146,9 @@ export function UploadLogsActionRow({
             <p className={descriptionClassName}>
               {t('settings.about.logUpload.unavailableNotConfigured')}
             </p>
+          )}
+          {state.targetConfigured && !state.manualUploadAvailable && !needsConsent && (
+            <p className={descriptionClassName}>{t('settings.about.logUpload.errorFailed')}</p>
           )}
           {needsConsent && (
             <p className={descriptionClassName}>

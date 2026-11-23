@@ -80,6 +80,19 @@ beforeEach(() => {
 });
 
 describe('manual log upload IPC', () => {
+  it.each([
+    [true, false, false, true],
+    [true, true, true, false],
+    [false, false, false, false],
+  ])('projects manual upload and consent actions from the readable local record', (readable, accepted, available, offersConsent) => {
+    mocks.consentReadable.mockReturnValue(readable);
+    mocks.readAnalytics.mockReturnValue({ privacyConsentAccepted: accepted });
+    expect(mocks.handlers.get('log-upload:settings-get')!({})).toMatchObject({
+      manualUploadAvailable: available,
+      manualUploadConsentRequired: offersConsent,
+    });
+  });
+
   it('uses explicit current-policy consent once and leaves the next plain request blocked', async () => {
     await expect(upload(LEGAL_TERMS_VERSION)).resolves.toMatchObject({ recordCount: 1 });
     await expect(upload()).rejects.toThrow('[PRIVACY_CONSENT_REQUIRED]');
