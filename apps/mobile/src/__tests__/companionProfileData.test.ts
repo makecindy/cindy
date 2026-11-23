@@ -107,7 +107,8 @@ describe('host model groups', () => {
         { agentKind: 'pi', providerId: 'xd', model: 'glm' },
         { agentKind: 'codex', providerId: 'openai', model: 'sol', agentDeviceId: 'mac-2' },
       ] },
-      { id: 'bad', name: 'Bad', strategy: 'fastest', candidates: [] },
+      // A blank name is malformed. An unknown strategy is not: the group stays, only its label is left out (hostModelGroups.test.ts).
+      { id: 'bad', name: '  ', strategy: 'order', candidates: [] },
     ] };
     expect(parseCompanionProfileData(input, ref).panels[0].modelGroups).toEqual([{ id: 'night', name: 'Night', strategy: 'order', sources: 2,
       effort: 'high', fallback: { harness: 'pi', model: 'glm', providerId: 'xd' } }]);

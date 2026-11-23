@@ -22593,6 +22593,18 @@
       "cheapest": {
         "title": "Le moins cher",
         "hint": "Utilise d'abord les abonnements qui ont encore du quota, sans coût supplémentaire ; le reste suit du prix affiché le plus bas au plus élevé, et les sources sans prix passent en dernier."
+      },
+      "drain": {
+        "title": "Épuiser puis passer",
+        "hint": "Continue d’utiliser la dernière source jusqu’à épuisement de son quota ou indisponibilité, puis passe à la suivante ; ne revient pas en arrière quand les précédentes se rétablissent."
+      },
+      "headroom": {
+        "title": "Le plus de quota restant",
+        "hint": "Utilise d’abord la source qui a la plus grande part de quota restant (le quota hebdomadaire s’il existe) ; les sources sans quota lisible passent en dernier."
+      },
+      "weighted": {
+        "title": "Par poids",
+        "hint": "Répartit les nouvelles tâches entre les sources selon leur poids, en alternance ; les sources indisponibles ne participent pas cette fois."
       }
     },
     "picker": {
@@ -22620,6 +22632,11 @@
       "tight": "Son quota de 5 heures est presque plein : ignorée pour l'instant",
       "cheapest": "Prix affiché le plus bas",
       "cheapestFree": "Il reste du quota d'abonnement, sans coût supplémentaire",
+      "drain": "Toujours utilisée jusqu’à épuisement de son quota",
+      "drainNext": "La source précédente était épuisée ou indisponible, d’où le passage à celle-ci",
+      "headroom": "Le plus de quota restant",
+      "headroomQuota": "Il lui reste {{left}} % de quota, plus que toute autre source",
+      "weighted": "Son tour selon le poids",
       "noVision": "Le message contient des images et cette source ne peut pas les voir",
       "exceptionImage": "Le message contient des images : seules les sources capables de les voir ont été prises en compte",
       "exceptionImageFallback": "Le message contient des images, mais aucune source ne peut les voir : choix habituel",
@@ -22639,6 +22656,9 @@
       "effort": "Effort de raisonnement",
       "effortUnset": "Non défini",
       "effortHint": "Si le modèle choisi ne prend pas en charge ce niveau, il s'exécute avec sa valeur par défaut.",
+      "weight": "Poids",
+      "weightAria": "Poids de « {{name}} »",
+      "weightHint": "Avec « Par poids », un poids plus élevé reçoit plus de nouvelles tâches. 1–1000.",
       "sources": "Sources utilisables",
       "sourcesHint": "Des modèles différents peuvent cohabiter. La tâche indique lequel a été utilisé.",
       "sourcesEmpty": "Aucune source pour l'instant. Ajoutez ci-dessous un modèle connecté.",
@@ -22671,6 +22691,7 @@
         "empty": "Aucune exception pour l'instant. Chaque nouvelle tâche suit la règle de choix ci-dessus.",
         "imageRule": "Quand le message contient des images, n'utiliser que les sources capables de les voir",
         "hoursRule": "{{from}}–{{to}} : utiliser « {{name}} »",
+        "hoursRuleDays": "{{days}} {{from}}–{{to}} : utiliser « {{name}} »",
         "remove": "Supprimer cette exception",
         "add": "Ajouter une exception",
         "choose": "Choisir une situation",
@@ -22679,6 +22700,9 @@
         "from": "De",
         "to": "À",
         "useRoute": "Utiliser à la place",
+        "days": "Jours",
+        "daysHint": "Aucun jour sélectionné signifie tous les jours. Une plage qui passe minuit compte pour le jour où elle commence.",
+        "dayRange": "{{from}}–{{to}}",
         "addHours": "Ajouter",
         "sameHour": "Le début et la fin ne peuvent pas être identiques.",
         "full": "Jusqu'à {{count}} exceptions.",
