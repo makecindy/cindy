@@ -76,9 +76,10 @@ beforeEach(() => { state.owner = 'membership-a'; state.pending = false; state.en
   state.official = false; state.officialApi = null; state.officialEnsure.mockReset(); });
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 // A still-valid cached certificate skips enrollment, so a failed first relay connection must also reveal confirmed removal.
-it('shows confirmed removal after an encrypted-only desktop starts on a cached identity', async () => {
+it.each([true, false])('routes confirmed removal on a cached desktop identity (encrypted only=%s)', async (onlyEncrypted) => {
   state.official = true;
-  state.onlyEncrypted = true;
+  state.onlyEncrypted = onlyEncrypted;
+  state.owner = 'cached-removal-' + onlyEncrypted;
   const root = generateKeyPairSync('ed25519').privateKey;
   const identity = generateIdentity('device-a');
   const certificate = issueCertificate(root, { networkId: 'account:unit', subject: state.owner, identity, role: 'owner' });
@@ -90,11 +91,15 @@ it('shows confirmed removal after an encrypted-only desktop starts on a cached i
   vi.spyOn(fs, 'existsSync').mockReturnValue(true);
   const socket = Object.assign(new EventEmitter(), { close: vi.fn(), relayConnected: () => false });
   vi.spyOn(AgentNetWorkerSocket, 'open').mockResolvedValue(socket as unknown as AgentNetWorkerSocket);
-  const legacy = vi.fn();
-  await expect(createAgentNetOrLegacySocket(legacy)).rejects.toBeInstanceOf(DeviceLinkRegistrationRemovedError);
+  const legacy = vi.fn(() => 'device-link');
+  if (onlyEncrypted) await expect(createAgentNetOrLegacySocket(legacy)).rejects.toBeInstanceOf(DeviceLinkRegistrationRemovedError);
+  else {
+    await expect(createAgentNetOrLegacySocket(legacy)).rejects.toThrow('AGENT_NET_IDENTITY_REFUSED');
+    expect(await createAgentNetOrLegacySocket(legacy)).toBe('device-link');
+  }
   expect(directory).toHaveBeenCalledOnce();
   expect(socket.close).toHaveBeenCalledOnce();
-  expect(legacy).not.toHaveBeenCalled();
+  expect(legacy).toHaveBeenCalledTimes(onlyEncrypted ? 0 : 1);
 });
 
 // Privacy failure: an unpaired V2 device previously looked inactive and could use the V1 factory despite encrypted-only.
@@ -321,6 +326,7 @@ it('keeps a healthy socket when early renewal returns the unchanged valid certif
   vi.mocked(outboundFetch).mockResolvedValue(Response.json({}));
   const socket = new EventEmitter() as any;
   socket.close = vi.fn(() => socket.emit('close', 1000)); socket.replaceClient = vi.fn(async () => {});
+  socket.relayConnected = () => true;
   vi.spyOn(AgentNetWorkerSocket, 'open').mockResolvedValue(socket);
   vi.useFakeTimers();
   try {

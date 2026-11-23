@@ -596,7 +596,7 @@ export async function createAgentNetAppSocket(): Promise<AgentNetAppSocket | nul
     try { await api.directory(AbortSignal.timeout(3000)); }
     catch (error) {
       assertOwner();
-      if ((error as { code?: unknown } | null)?.code === 'DEVICE_REVOKED') throw new DeviceLinkRegistrationRemovedError();
+      if ((error as { code?: unknown } | null)?.code === 'DEVICE_REVOKED') throw error;
     }
   };
   let socket: AgentNetWorkerSocket;
@@ -623,7 +623,7 @@ export async function createAgentNetAppSocket(): Promise<AgentNetAppSocket | nul
     throw error;
   }
   socket.once('close', () => approver.close());
-  if (!relay && agentNetRequiresEncryption() && socket.relayConnected() === false) {
+  if (!relay && socket.relayConnected() === false) {
     try { await checkRemoval(); } catch (error) { socket.close(); throw error; }
   }
   try {
