@@ -258,6 +258,10 @@ it.skipIf(!codexBinary).each([
     offline = true;
     for (const active of sockets) active.destroy();
     await waitFor('SSH reconnecting', () => statuses.includes('reconnecting') || undefined);
+    // A second task on the same host joins the outstanding reconnect round.
+    const newTaskConnection = lateReconnect
+      ? remoteHost.connect().then(() => ({}), (error: unknown) => ({ error }))
+      : undefined;
     if (finishWhileDisconnected) completeModelRequest(response);
     let stop: Promise<{ error?: unknown }> | undefined;
     if (stopWhileDisconnected) {
@@ -275,6 +279,7 @@ it.skipIf(!codexBinary).each([
     await waitFor('SSH ready again',
       () => statuses.filter((status) => status === 'ready').length === 2 || undefined, undefined, 10_000);
     expect(acceptedConnections).toBe(2);
+    if (newTaskConnection) expect(await newTaskConnection).toEqual({});
 
     await waitFor('original Codex client to recover', () => {
       if (failure) throw failure;

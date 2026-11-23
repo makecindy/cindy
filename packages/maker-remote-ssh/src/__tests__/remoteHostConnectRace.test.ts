@@ -326,6 +326,81 @@ describe('RemoteHost arm/disconnect race', () => {
     }
   });
 
+  // Unit regression for PR #12236: a second connect during backoff used to
+  // replace the automatic round and orphan the original task's waiter.
+  it.each(['success', 'exhaustion', 'disconnect'] as const)(
+    'shares an automatic reconnect round with a new task until %s', async (outcome) => {
+      vi.useFakeTimers();
+      const host = new RemoteHost(HOST_CONFIG, { logger: noopLogger });
+      try {
+        const connecting = host.connect();
+        await vi.advanceTimersByTimeAsync(0);
+        const original = h.client!;
+        original.emit('ready');
+        await connecting;
+        const previousReadyAt = host.snapshot().statusChangedAt;
+        const connectionCount = h.createClient.mock.calls.length;
+        original.emit('close');
+        expect(host.getStatus()).toBe('reconnecting');
+
+        const originalResult = vi.fn();
+        const newTaskResult = vi.fn();
+        const originalWait = host.waitForReconnect(previousReadyAt, new AbortController().signal)
+          .then(() => originalResult('ready'), (error: Error) => originalResult(error.message));
+        const newTask = host.connect()
+          .then(() => newTaskResult('ready'), (error: Error) => newTaskResult(error.message));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(h.createClient).toHaveBeenCalledTimes(connectionCount);
+        expect(host.getStatus()).toBe('reconnecting');
+
+        if (outcome === 'disconnect') {
+          await host.disconnect();
+          await Promise.all([originalWait, newTask]);
+          expect(originalResult).toHaveBeenCalledExactlyOnceWith('SSH host was disconnected');
+          expect(newTaskResult).toHaveBeenCalledExactlyOnceWith('SSH host was disconnected');
+          await vi.advanceTimersByTimeAsync(60_000);
+          expect(h.createClient).toHaveBeenCalledTimes(connectionCount);
+          return;
+        }
+
+        // A task joining inside the transient failed notification must also
+        // share the round, before the next backoff is scheduled.
+        let lateJoiner: Promise<void> | undefined;
+        const duringFailureResult = vi.fn();
+        host.onStatus(({ status }) => {
+          if (status === 'failed' && !lateJoiner) {
+            lateJoiner = host.connect()
+              .then(() => duringFailureResult('ready'), (error: Error) => duringFailureResult(error.message));
+          }
+        });
+        const backoffs = outcome === 'success' ? [1000, 2000] : [1000, 2000, 4000, 8000, 16000];
+        for (const [index, backoff] of backoffs.entries()) {
+          await vi.advanceTimersByTimeAsync(backoff);
+          expect(h.createClient).toHaveBeenCalledTimes(connectionCount + index + 1);
+          expect(originalResult).not.toHaveBeenCalled();
+          expect(newTaskResult).not.toHaveBeenCalled();
+          if (outcome === 'success' && index === backoffs.length - 1) {
+            h.client!.emit('ready');
+          } else {
+            h.client!.emit('error', new Error('connect ECONNREFUSED'));
+            h.client!.emit('close');
+          }
+          await vi.advanceTimersByTimeAsync(0);
+        }
+        await Promise.all([originalWait, newTask, lateJoiner]);
+        const expected = outcome === 'success' ? 'ready' : 'SSH automatic reconnect attempts exhausted';
+        expect(originalResult).toHaveBeenCalledExactlyOnceWith(expected);
+        expect(newTaskResult).toHaveBeenCalledExactlyOnceWith(expected);
+        expect(duringFailureResult).toHaveBeenCalledExactlyOnceWith(expected);
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(h.createClient).toHaveBeenCalledTimes(connectionCount + backoffs.length);
+      } finally {
+        await host.disconnect();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it('a stale host verifier cannot persist trust or write errors for a replacement endpoint', async () => {
     let finishGet!: (fingerprint: string | null) => void;
     const store: HostKeyStore = {

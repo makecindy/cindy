@@ -417,6 +417,7 @@ export class RemoteHost {
   private client: Client | null = null;
   private reconnectAttempts = 0;
   private reconnectFailure: Error | undefined;
+  private reconnectRound?: { promise: Promise<Error | undefined>; finish: (error?: Error) => void };
   private reconnectTimer: NodeJS.Timeout | null = null;
   /**
    * Monotonic connection-attempt generation. disconnect() advances it before
@@ -532,11 +533,18 @@ export class RemoteHost {
   }
 
   /**
-   * Open the connection. Idempotent — if already ready/connecting, returns
-   * the in-flight promise. Throws on definitive failure (auth, network).
+   * Open the connection or join its in-flight attempt or automatic reconnect round.
+   * Throws on definitive failure.
    */
   async connect(): Promise<void> {
     if (this.status === 'ready') return;
+    // The round spans retry delays, handshakes, and intermediate failed statuses.
+    if (this.reconnectRound) {
+      const error = await this.reconnectRound.promise;
+      if (error) throw error;
+      if (this.getStatus() === 'ready') return;
+      throw new Error(this.lastError ?? 'SSH host was disconnected');
+    }
     if (this.status === 'connecting' || this.status === 'authenticating') {
       // Share the actual in-flight attempt instead of waiting only for a
       // future status event. A disconnect can invalidate an attempt after it
@@ -554,11 +562,6 @@ export class RemoteHost {
       throw new Error(this.lastError ?? 'connect failed');
     }
 
-    // 'reconnecting' / 'disconnected' / 'failed' 都走立即新建连接路径。
-    // 关键: 'reconnecting' 状态下 reconnectTimer 仍在跑, 它稍后还会再调一次
-    // doConnect() 覆盖我们刚建好的 SSH client, 产生泄漏的旧连接 + 乱序的
-    // status/channel 事件。必须在 doConnect() 前显式清掉 timer 才安全。
-    this.clearReconnectTimer();
     this.userDisconnected = false;
     this.networkRecoveryArmed = false;
     this.readySinceConnect = false;
@@ -593,6 +596,7 @@ export class RemoteHost {
     this.networkRecoveryArmed = false;
     this.connectionEpoch += 1;
     this.clearReconnectTimer();
+    this.finishReconnectRound(new Error('SSH host was disconnected'));
     this.markForwardsDisarmed();
     if (this.client) {
       try {
@@ -1435,6 +1439,7 @@ export class RemoteHost {
         this.reconnectAttempts = 0;
         this.networkRecoveryArmed = false;
         this.readySinceConnect = true;
+        this.finishReconnectRound();
         this.setStatus('ready');
         this.log.info('ssh ready', { id: this.id, auth: auth.label });
         // 后台重挂已登记的 remote forwards; 不阻塞 connect 返回 (session
@@ -1590,13 +1595,18 @@ export class RemoteHost {
   private scheduleReconnect(): void {
     this.clearReconnectTimer();
     this.reconnectFailure = undefined;
+    if (!this.reconnectRound) {
+      // A round may have no connect() callers. Resolve with its failure, if any.
+      let finish!: (error?: Error) => void;
+      const promise = new Promise<Error | undefined>((resolve) => { finish = resolve; });
+      this.reconnectRound = { promise, finish };
+    }
     this.reconnectAttempts += 1;
     // Exponential backoff capped at 30s. attempt=1 → 1s, 2 → 2s, 3 → 4s, ...
     const delay = Math.min(
       RECONNECT_BASE_DELAY_MS * 2 ** (this.reconnectAttempts - 1),
       30_000,
     );
-    this.setStatus('reconnecting');
     this.log.info('ssh scheduling reconnect', {
       id: this.id,
       attempt: this.reconnectAttempts,
@@ -1626,11 +1636,18 @@ export class RemoteHost {
         this.finishReconnectFailure(new Error('SSH automatic reconnect attempts exhausted'));
       });
     }, delay);
+    this.setStatus('reconnecting');
   }
 
+  private finishReconnectRound(error?: Error): void {
+    const round = this.reconnectRound;
+    this.reconnectRound = undefined;
+    round?.finish(error);
+  }
 
   private finishReconnectFailure(error: Error): void {
     this.reconnectFailure = error;
+    this.finishReconnectRound(error);
     this.setStatus('failed');
     // The last attempt may already have emitted failed, so status alone
     // cannot tell task recovery when the round actually ends.
