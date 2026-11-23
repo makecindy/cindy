@@ -2482,6 +2482,29 @@
           "wireProtocol": "openai-chat"
         }
       }
+    },
+    {
+      "id": "tokenrhythm",
+      "name": "基元律动 · Token Rhythm",
+      "docsUrl": "https://tokenrhythm.studio/docs/api-integration",
+      "models": [],
+      "runtimes": {
+        "claude-code": {
+          "baseUrl": "https://tokenrhythm.studio",
+          "modelsUrl": "https://tokenrhythm.studio/v1/models",
+          "wireProtocol": "anthropic-messages"
+        },
+        "codex": {
+          "baseUrl": "https://tokenrhythm.studio/v1",
+          "modelsUrl": "https://tokenrhythm.studio/v1/models",
+          "wireProtocol": "openai-responses"
+        },
+        "pi": {
+          "baseUrl": "https://tokenrhythm.studio/v1",
+          "modelsUrl": "https://tokenrhythm.studio/v1/models",
+          "wireProtocol": "openai-chat"
+        }
+      }
     }
   ]
 }
