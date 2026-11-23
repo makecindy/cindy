@@ -65,6 +65,7 @@ import { UnifiedModelList } from '@/components/settings/UnifiedModelList';
 import { speechModels } from '../../main/voice-conversation/models';
 import { __resetForTest as resetVisibility, setModelVisibilityOwner } from '@/state/modelVisibilityPrefs';
 import { createCustomProvider, updateCustomProvider, deleteCustomProvider, readCustomProviderKey } from '@/lib/customProviders';
+import { fetchProviderModels as fetchModelsThroughMain } from '../../main/maker-host/provider-model-fetch';
 
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
   useConfirmDialog: () => ({ confirm: vi.fn() }),
@@ -363,6 +364,31 @@ afterEach(() => {
   closeFirstRunGuide();
   cleanup();
   vi.clearAllMocks();
+});
+
+it('uses two real HTTP reads for the Token Rhythm wizard three-engine discovery', async () => {
+  const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'tokenrhythm')!;
+  window.electronAPI.maker.listProviderPresets = vi.fn(async () => ({ presets: [preset], modelRegistry: BUNDLED_CATALOG.modelRegistry }));
+  const transport = vi.fn<typeof fetch>(async () => new Response('{"data":[{"id":"future-account-model"}]}'));
+  window.electronAPI.maker.fetchProviderModels = vi.fn(input => fetchModelsThroughMain(input, transport));
+  renderWizard('tokenrhythm');
+  fireEvent.change(await screen.findByPlaceholderText('sk-…'), { target: { value: 'fake-tokenrhythm-key' } });
+  fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+  await screen.findByText('future-account-model');
+  expect(window.electronAPI.maker.fetchProviderModels).toHaveBeenCalledTimes(3);
+  expect(transport).toHaveBeenCalledTimes(2);
+  for (const [url, init] of transport.mock.calls) {
+    expect(String(url)).toBe('https://tokenrhythm.studio/v1/models');
+    expect(new Headers(init?.headers).get('authorization')).toBe('Bearer fake-tokenrhythm-key');
+  }
+  fireEvent.click(screen.getByText('future-account-model'));
+  fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+  await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+  const [saved, keys] = vi.mocked(createCustomProvider).mock.calls[0];
+  for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+    expect(saved.runtimes[agent]!.models.map(model => model.id)).toEqual(['future-account-model']);
+    expect(keys![agent]).toBe('fake-tokenrhythm-key');
+  }
 });
 
 // #8485 unit: the editable vLLM preset can discover Magpie, too. Existing form
