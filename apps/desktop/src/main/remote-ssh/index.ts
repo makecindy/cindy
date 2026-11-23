@@ -2334,7 +2334,8 @@ printf '%s\\n' "$abs"
   if (result.exitCode !== 0) {
     throw new Error(`bash exit=${result.exitCode}: ${result.stderr.trim().slice(0, 200) || '(no stderr)'}`);
   }
-  const resolvedPath = result.stdout.trim().split(/\r?\n/).pop() ?? '';
+  // Remove the shell line terminator while preserving whitespace in the path.
+  const resolvedPath = result.stdout.replace(/\r?\n$/, '').split(/\r?\n/).pop() ?? '';
   if (!resolvedPath) {
     throw new Error('mkdir succeeded but resolved path is empty');
   }

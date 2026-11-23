@@ -308,6 +308,23 @@ describe('remote SSH mutation runtime semantics', () => {
     }
   });
 
+  it('returns the exact SSH directory name after creating a missing directory', async () => {
+    const target = host('mkdir-host');
+    await getRemoteSshPool().hydrate([target]);
+    const remote = getRemoteSshPool().get(target.id)!;
+    const status = vi.spyOn(remote, 'getStatus').mockReturnValue('ready');
+    const exec = vi.spyOn(remote, 'exec').mockResolvedValue({
+      exitCode: 0, signal: null, stdout: 'Welcome\r\n/remote/project \r\n', stderr: '',
+    });
+    try {
+      await expect(handler(REMOTE_SSH_INVOKE.MKDIR_P_REMOTE)({}, { id: target.id, path: '/remote/project ' }))
+        .resolves.toEqual({ resolvedPath: '/remote/project ' });
+    } finally {
+      exec.mockRestore();
+      status.mockRestore();
+    }
+  });
+
   it.each([true, false])('reconnects only the selected Worker host before probing (success=%s)', async (succeeds) => {
     const pool = getRemoteSshPool();
     await pool.hydrate([host('worker-dir'), host('unrelated')]);
