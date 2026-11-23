@@ -447,7 +447,9 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
    目前注入三份:Cindy-owned `cindy-bridge`(权限门 / MCP 桥)、`cindy-subagent`(子代理)、
    `cindy-tool-fold`(**实验功能,默认不注入** —— 设置 → 通用 → 实验性功能里显式打开后,之后
    启动的 Pi Agent 会话才加载:在 `context` 钩子里把较老的「工具调用 + 结果」折掉,只留最近 4 次
-   原文;整段老往返连同调用块与结果消息一起消失,每批折叠只留**一条** assistant 文本记录
+   原文;老往返的调用块与结果消息一起消失,**同一条 assistant 消息里的其它块(正文)留在原位**
+   ——整条删除会吞掉模型自己写的计划与结论,而它们无法从 `findOriginal` 取回;每批折叠只留**一条**
+   assistant 文本记录
    (形如 `[folded] 32 round-trips, bash 32, 786432 chars, read with cindy_toolfold_read("batch:call_x")`,
    批次 id 用 `batch:` 前缀与真实调用 id 区分)。记录里**不放命令原文、不放单条统计**:历史里一旦出现
    「命令 → 结论」的完整模板,模型会把它当成自己叙述工具调用的模板,预写并不存在的观察
@@ -459,8 +461,10 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
    钉住到下一条用户消息或钉住预算耗尽(按最近取回时间戳 LRU)。折叠按批进行以保住前缀缓存,
    扩展自身另认 `CINDY_PI_TOOL_FOLD=off` 作进程内总闸;宿主 `text-only` 回合会禁用全部工具,
    这时扩展按 bridge 发布的 `cindy.pi.textOnlyTurn` 标记整段不折叠,并把仍在钉住预算内的入库原文
-   放回(否则模型既看不到被截断的尾部、也调不了取回);批次 id 为 `batch:`+首条 call id,
-   超过取回参数 4096 字符上限时只保留尾部;受邀者/Review/仅宿主工具会话因工具门不放行 `cindy_toolfold_read`
+   放回(否则模型既看不到被截断的尾部、也调不了取回);批次 id 取 `batch:`+首条 call id,但该形式
+   超过取回参数 4096 字符上限、或正好等于某条在用调用 id 时,改用整批成员 id 列表的指纹
+   (只截断拼接会让仅前缀不同的两个 id 撞名,provider 给的字面量 `batch:x` 也会遮住 `x` 的批);
+   按批取回时无法恢复的成员逐个点名并给出原因,整批都取不回则直接报错;受邀者/Review/仅宿主工具会话因工具门不放行 `cindy_toolfold_read`
    而不加载该扩展;远端会话的折叠配置键需显式转发进 spawn env)。
 11. **正式包后台脚本启动边界**:Desktop 正式包保持 `RunAsNode=false`,因此 Main 的
    `process.execPath` 是 Cindy 应用程序,**不是 Node 可执行文件**。Pi Subagent 的 durable
