@@ -1,0 +1,58 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const manageAppPreferences = vi.hoisted(() => vi.fn());
+vi.mock('../preferences.js', () => ({ manageAppPreferences }));
+
+import { configureModelSettingsActions, manageAppModels } from '../models.js';
+
+// #12181: a provider that left the catalog keeps its per-model visibility
+// overrides. value=null is documented as "delete the override and follow the
+// default", so removing an orphan entry must not require re-adding the provider.
+const orphan = { providerId: 'magpie-bac7deb4', agent: 'pi' as const, modelId: 'old-model' };
+const live = { providerId: 'relay', agent: 'pi' as const, modelId: 'kept' };
+
+describe('model visibility override cleanup', () => {
+  beforeEach(() => {
+    manageAppPreferences.mockReset();
+    configureModelSettingsActions({
+      owner: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }),
+      list: async () => ({ providers: [{ id: 'relay', models: { pi: [{ id: 'kept', defaultEnabled: true }] } }],
+        modelVisibilityOverrides: { 'pi:magpie-bac7deb4:old-model': false } }),
+    } as unknown as Parameters<typeof configureModelSettingsActions>[0]);
+  });
+
+  it('removes an override whose provider is no longer in the catalog', async () => {
+    manageAppPreferences.mockResolvedValue({ modelVisibility: { visible: true, customized: false } });
+
+    const result = await manageAppModels({ operation: 'set', target: orphan, change: { setting: 'visible', value: null } },
+      async () => {});
+
+    expect(manageAppPreferences).toHaveBeenCalledWith('model-visibility', undefined,
+      { target: orphan, visible: null, defaultEnabled: undefined });
+    expect(result).toMatchObject({ setting: 'visible', result: { customized: false } });
+  });
+
+  it('keeps refusing an explicit on/off choice for a model outside the catalog', async () => {
+    await expect(manageAppModels({ operation: 'set', target: orphan, change: { setting: 'visible', value: true } },
+      async () => {})).rejects.toThrow('MODEL_NOT_IN_CATALOG');
+    expect(manageAppPreferences).not.toHaveBeenCalled();
+  });
+
+  it('reports failure when the override survives the reset', async () => {
+    manageAppPreferences.mockResolvedValue({ modelVisibility: { visible: false, customized: true } });
+
+    await expect(manageAppModels({ operation: 'set', target: orphan, change: { setting: 'visible', value: null } },
+      async () => {})).rejects.toThrow('MODEL_VISIBILITY_NOT_CONFIRMED');
+  });
+
+  it('still applies and confirms an explicit choice for a catalog model', async () => {
+    manageAppPreferences.mockResolvedValue({ modelVisibility: { visible: false, customized: true } });
+
+    const result = await manageAppModels({ operation: 'set', target: live, change: { setting: 'visible', value: false } },
+      async () => {});
+
+    expect(manageAppPreferences).toHaveBeenCalledWith('model-visibility', undefined,
+      { target: live, visible: false, defaultEnabled: true });
+    expect(result).toMatchObject({ result: { visible: false, customized: true } });
+  });
+});

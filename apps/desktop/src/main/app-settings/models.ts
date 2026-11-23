@@ -108,10 +108,15 @@ export async function manageAppModels(input: AppModelsRequest, assertCurrent: ()
         const catalog = await api.list(false);
         await guard();
         const model = catalog.providers.find(provider => provider.id === target.providerId)?.models[target.agent]?.find(model => model.id === target.modelId);
-        if (!model) throw new Error('MODEL_NOT_IN_CATALOG');
+        // A provider that left the catalog keeps its overrides. value=null only removes the
+        // stored choice, so it must stay available for those orphan keys; an explicit on/off
+        // choice still needs a catalog entry to resolve the default.
+        if (!model && change.value !== null) throw new Error('MODEL_NOT_IN_CATALOG');
         await guard();
-        const receipt = await manageAppPreferences('model-visibility', undefined, { target, visible: change.value, defaultEnabled: model.defaultEnabled });
-        if (!receipt.modelVisibility || (change.value !== null && receipt.modelVisibility.visible !== change.value)) throw new Error('MODEL_VISIBILITY_NOT_CONFIRMED');
+        const receipt = await manageAppPreferences('model-visibility', undefined, { target, visible: change.value, defaultEnabled: model?.defaultEnabled });
+        if (!receipt.modelVisibility || (change.value === null
+          ? receipt.modelVisibility.customized !== false
+          : receipt.modelVisibility.visible !== change.value)) throw new Error('MODEL_VISIBILITY_NOT_CONFIRMED');
         result = receipt.modelVisibility;
         break;
       }
