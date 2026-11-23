@@ -948,6 +948,18 @@ export async function forkSessionAtMessage(
     )
     .orderBy(asc(messages.createdAt), asc(messageRowid));
 
+  // An open-ended assistant turn must stop at the history selected above,
+  // even if the parent appends at the same millisecond while native fork waits.
+  // Keep the original turn boundary for native rollback/anchor calculations.
+  const lastSourceMessage = sourceMessages.at(-1);
+  const snapshotBoundary = copyBoundary.createdAt === Number.MAX_SAFE_INTEGER && lastSourceMessage
+    ? { createdAt: lastSourceMessage.createdAt, rowid: lastSourceMessage.rowid + 1 }
+    : copyBoundary;
+  const sourceMessagesDigest = computeForkSourceMessagesDigest(sourceMessages.map(row => ({
+    client_id: row.clientId, role: row.role, content: row.content, tool_use_id: row.toolUseId,
+    agent_meta: row.agentMeta, agent_kind: row.agentKind, created_at: row.createdAt,
+  })));
+
   // 3. 计算 agent 侧截断信息。
   //
   // Claude: 反向找最近一条 assistant 且 agentMeta.uuid 存在 + **不是 subagent**
@@ -1126,8 +1138,9 @@ export async function forkSessionAtMessage(
     await dbClient.tx('fork.session', {
       sourceSessionId,
       sourceClearedAt: source.clearedAt,
-      targetCreatedAt: copyBoundary.createdAt,
-      targetRowid: copyBoundary.rowid,
+      targetCreatedAt: snapshotBoundary.createdAt,
+      targetRowid: snapshotBoundary.rowid,
+      sourceMessagesDigest,
       newSession: {
         id: newSessionId,
         ...(options.sideChat ? { source: 'side-chat' as const } : {}),
