@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
 vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
   getDesktopSelectableCatalog: () => ({ providers: [] }),
@@ -37,8 +37,10 @@ vi.mock('../../utility-model/oneshotProviderUsability.js', () => ({
 }));
 
 vi.mock('../../utility-model/oneShotCandidates.js', () => ({
+  captureAuxiliaryRoutes: () => () => true,
   isUtilityRouteDisabled: () => false,
   isUtilityRoutePaymentRequired: () => false,
+  requestUtilityText: vi.fn(),
 }));
 
 vi.mock('../../security/trustedAppRenderer.js', () => ({
@@ -48,10 +50,16 @@ vi.mock('../../security/trustedAppRenderer.js', () => ({
 import {
   buildAuxiliaryModelOptions,
   parseAuxiliaryModelSettingsPatch,
+  saveAuxiliaryModelSettings,
+  testAuxiliaryModelSettings,
 } from '../auxiliary-model-settings.js';
+import { requestUtilityText } from '../../utility-model/oneShotCandidates.js';
+import { writeAuxiliaryModelSettingsPatch } from '../../utility-model/auxiliary-model-settings-store.js';
 
 const PIN = 'cat:openrouter:codex:openai/gpt-5-mini';
 const PROFILE = 'codex-gpt-5.4-mini';
+const requestText = vi.mocked(requestUtilityText);
+const writeSettings = vi.mocked(writeAuxiliaryModelSettingsPatch);
 
 function catalog() {
   return {
@@ -106,6 +114,10 @@ function builtinCodexCatalog() {
 }
 
 describe('auxiliary model settings IPC helpers', () => {
+  beforeEach(() => {
+    requestText.mockReset();
+    writeSettings.mockReset();
+  });
   // Unit: retain experimental remote settings for removal, but reject new selections.
   // Existing persisted-route cases do not distinguish execution computers.
   it('keeps a remote selection unavailable even when the local route is usable', () => {
@@ -276,5 +288,60 @@ describe('auxiliary model settings IPC helpers', () => {
       agentKind: 'claude-code',
       modelId: 'old-model',
     });
+  });
+
+  it('tests every selected route before allowing the chain to be saved', async () => {
+    requestText.mockResolvedValue({
+      ok: true,
+      text: '连接测试',
+      providerId: 'openrouter',
+      model: 'openai/gpt-5-mini',
+      transport: 'litellm-chat-completions',
+    });
+
+    const result = await testAuxiliaryModelSettings(
+      { models: [PIN, PROFILE] },
+      new Set([PIN]),
+      new Set([PROFILE]),
+      { maker: {} as never, requestText },
+    );
+
+    expect(result).toEqual({ ok: true, tested: [PIN, PROFILE] });
+    expect(requestText).toHaveBeenCalledTimes(2);
+    expect(requestText.mock.calls[0]?.[2]).toMatchObject({
+      providerId: 'openrouter',
+      agentKind: 'codex',
+      model: 'openai/gpt-5-mini',
+      maxTokens: 32,
+      disableReasoning: true,
+      bypassAuxiliaryModelHealth: true,
+    });
+    expect(requestText.mock.calls[1]?.[2]).toMatchObject({
+      pinnedProfileId: PROFILE,
+      bypassAuxiliaryModelHealth: true,
+    });
+  });
+
+  it('stops at the first failed route and reports that selection', async () => {
+    requestText.mockResolvedValue({ ok: false, reason: 'all_candidates_failed', attempts: [] });
+    await expect(testAuxiliaryModelSettings(
+      { models: [PIN, PROFILE] },
+      new Set([PIN]),
+      new Set([PROFILE]),
+      { maker: {} as never, requestText },
+    )).resolves.toEqual({ ok: false, model: PIN, reason: 'request_failed' });
+    expect(requestText).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not persist a chain when the save-boundary test fails', async () => {
+    requestText.mockResolvedValueOnce({ ok: true, model: 'small', providerId: 'test', transport: 'litellm-chat-completions', text: 'Title' });
+    requestText.mockResolvedValueOnce({ ok: false, reason: 'all_candidates_failed', attempts: [{
+      status: 'failed', reason: 'http_error', httpStatus: 403,
+      providerId: 'provider', model: 'backup', transport: 'codex-responses',
+    }] });
+    await expect(saveAuxiliaryModelSettings(
+      { models: [PIN, PROFILE] }, new Set([PIN]), new Set(), { maker: {} as never, requestText },
+    )).resolves.toEqual({ ok: false, model: PROFILE, reason: 'permission_denied', httpStatus: 403 });
+    expect(writeSettings).not.toHaveBeenCalled();
   });
 });
