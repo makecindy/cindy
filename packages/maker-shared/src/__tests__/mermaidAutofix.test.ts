@@ -76,6 +76,29 @@ describe('repairMermaidSource', () => {
     expect(repairMermaidSource(src)).toBe(src);
   });
 
+  it('保留 #7687 原报中两种形状标签的 Unicode 箭头', () => {
+    const src = 'flowchart TD\nA([stadium → text]) --> B[[subroutine ⟶ text]]';
+    expect(repairMermaidSource(src)).toBe(src);
+  });
+
+  it.each([
+    'A([before → "quoted ])" after → text])',
+    'A([输入 (含括号) → 输出])',
+    'A.([stadium → text])',
+    "A'([stadium → text])",
+    'A`([stadium → text])',
+    'A[[outer [inner] → text]]',
+    'A[(database → text)]',
+    'A{{hexagon ➔ text}}',
+    'A((circle ➜ text))',
+    'A[/parallelogram ⇒ text/]',
+    'A[\\trapezoid ⟹ text/]',
+  ])('保留 %s 的标签并修复同一行的边', (node) => {
+    expect(repairMermaidSource(`flowchart TD\n${node} → B`)).toBe(
+      `flowchart TD\n${node} --> B`,
+    );
+  });
+
   it('已引号的节点标签内容不被二次改写', () => {
     const src = 'flowchart TD\nA["call foo(x:y)"] --> B';
     expect(repairMermaidSource(src)).toBe(src);

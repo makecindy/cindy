@@ -11,9 +11,8 @@
  *
  * 内容保真:parse 失败是**整文档**粒度的,失败文档里可能混着合法行,所以修复
  * 不能改变任何标签的**渲染文本**。为此所有"加引号"pass(不改渲染文本)先跑,
- * unicode 箭头替换(会改文本)最后跑——标签先被引号包住,箭头替换按引号二分
- * 跳过引号内内容,就摸不到标签内部了;unicode 箭头本身也算入"标签需要加引号"
- * 的危险字符。残余风险:旧式 `A -- text --> B` 的裸边文本没有可靠定界符,
+ * unicode 箭头替换(会改文本)最后跑——箭头替换会跳过引号段和保留原有定界符的形状变体标签;
+ * unicode 箭头本身也算入"标签需要加引号"的危险字符。残余风险:旧式 `A -- text --> B` 的裸边文本没有可靠定界符,
  * 其中的 unicode 箭头仍会被替换——接受(该写法罕见且修复仅在失败后运行)。
  *
  * 修复项:
@@ -23,7 +22,7 @@
  *      - `subgraph Id[...]` 缺空格 → `subgraph Id [...]`
  *      - 未加引号的边标签 `-->|text|` → `-->|"text"|`(引号混用易翻车,统一补齐)
  *      - 含危险字符的节点标签 `Id[text]` / `Id(text)` / `Id{text}` → 标签加引号
- *      - unicode 箭头(→ ⟶ ➔ ➜ ⇒ ⟹)→ `-->`(仅引号外,最后执行)
+ *      - unicode 箭头(→ ⟶ ➔ ➜ ⇒ ⟹)→ `-->`(跳过引号和形状变体标签,最后执行)
  *
  * 性能:节点标签正则是 O(行长²) 的回溯形态,病态输入(模型把 base64 / 长日志
  * 误标进 mermaid 围栏)会把渲染线程冻住秒级。合法 mermaid 不存在超长单行,
@@ -53,6 +52,62 @@ const SHAPE_MODIFIER_HEAD = new Set(['(', '{', '[', '/', '\\']);
 function mapOutsideQuotes(line: string, fn: (segment: string) => string): string {
   const parts = line.split('"');
   return parts.map((p, i) => (i % 2 === 0 ? fn(p) : p)).join('"');
+}
+
+/** 形状修饰符必须成对保留，标签内使用普通括号不会提前结束形状。 */
+const SHAPE_ENDS = new Map([
+  ['([', '])'],
+  ['[(', ')]'],
+  ['[[', ']]'],
+  ['{{', '}}'],
+  ['((', '))'],
+  ['(((', ')))'],
+  ['[/', ']'],
+  ['[\\', ']'],
+]);
+const LABEL_BRACKET_ENDS = new Map([['(', ')'], ['[', ']'], ['{', '}']]);
+
+function findShapeEnd(line: string, start: number, end: string): number {
+  const brackets: string[] = [];
+  for (let i = start; i < line.length; i++) {
+    const char = line[i];
+    if (brackets.length === 0 && line.startsWith(end, i)) {
+      // 斜边矩形的两个斜边可以同向或反向，但必须紧贴成对的方括号。
+      if (end !== ']' || (i > start && (line[i - 1] === '/' || line[i - 1] === '\\'))) {
+        return i + end.length;
+      }
+    }
+    if (char === '"') {
+      const quoteEnd = line.indexOf('"', i + 1);
+      if (quoteEnd !== -1) i = quoteEnd;
+      continue;
+    }
+    const bracketEnd = LABEL_BRACKET_ENDS.get(char);
+    if (bracketEnd) brackets.push(bracketEnd);
+    else if (char === brackets[brackets.length - 1]) brackets.pop();
+  }
+  return -1;
+}
+
+function replaceArrowsOutsideLabels(line: string): string {
+  if (line.search(UNICODE_ARROW_RE) === -1) return line;
+  // 先跳过完整引号段或节点形状，再继续同一行的边。未闭合形状沿用普通扫描。
+  const protectedStarts = /"[^"]*(?:"|$)|(?<=[\p{L}\p{N}\p{M}_.!?#$%*+/:&'`\\-])(?:\({2,3}|\(\[|\[[[(\/\\]|\{\{)/gu;
+  let result = '';
+  let start = 0;
+  for (let match = protectedStarts.exec(line); match; match = protectedStarts.exec(line)) {
+    const token = match[0];
+    const shapeEnd = SHAPE_ENDS.get(token);
+    if (shapeEnd) {
+      const end = findShapeEnd(line, protectedStarts.lastIndex, shapeEnd);
+      if (end === -1) continue;
+      protectedStarts.lastIndex = end;
+    }
+    result += line.slice(start, match.index).replace(UNICODE_ARROW_RE, '-->');
+    result += line.slice(match.index, protectedStarts.lastIndex);
+    start = protectedStarts.lastIndex;
+  }
+  return result + line.slice(start).replace(UNICODE_ARROW_RE, '-->');
 }
 
 /** 图类型判定:跳过 YAML frontmatter 与 `%%` 注释后,看首个有效行。 */
@@ -119,8 +174,7 @@ export function repairMermaidSource(source: string): string {
       fixed = mapOutsideQuotes(fixed, quoteSquareLabels);
       fixed = mapOutsideQuotes(fixed, quoteRoundLabels);
       fixed = mapOutsideQuotes(fixed, quoteCurlyLabels);
-      fixed = mapOutsideQuotes(fixed, (s) => s.replace(UNICODE_ARROW_RE, '-->'));
-      return fixed;
+      return replaceArrowsOutsideLabels(fixed);
     })
     .join('\n');
 }
