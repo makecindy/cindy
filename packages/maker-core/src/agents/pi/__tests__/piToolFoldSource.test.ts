@@ -93,7 +93,9 @@ describe('cindy-tool-fold extension source', () => {
     expect(out).toHaveLength(16);
     expect(callIds(out)).toEqual(Array.from({ length: 8 }, (_, index) => `call-${index + 32}`));
     const foldedText = records(out).join('\n');
-    expect(foldedText.match(/cindy_toolfold_read/g)).toHaveLength(32);
+    // One batch, one line: the per-trip records are gone, so there is nothing shaped like
+    // "command -> conclusion" for the model to re-use as its own narration template.
+    expect(foldedText.match(/cindy_toolfold_read/g)).toHaveLength(1);
     // The records ride on the next assistant message, so the resident pair keeps its
     // original call block while the tail of the window is untouched.
     // Records ride on the next assistant message, so no two assistant messages end up
@@ -104,13 +106,10 @@ describe('cindy-tool-fold extension source', () => {
     expect((resident.content as Block[]).find((block) => block.type === 'toolCall')).toEqual((messages[64].content as Block[])[0]);
     expect(out.slice(out.length - 14)).toEqual(messages.slice(66));
     const first = foldedText.slice(foldedText.indexOf('[folded]'));
-    expect(first).toContain('[folded] bash');
-    // The status trails the subject so the line never opens like a result the model can continue.
-    expect(first).not.toMatch(/^\[folded\] (ok|error)/);
-    expect(first).toContain('\u00b7 ok \u00b7 ');
-    expect(first).toContain('cindy_toolfold_read("call-0")');
-    expect(first).toContain('run step 0');
-    expect(first).toContain('step 0 ok');
+    expect(first).toMatch(/^\[folded\] 32 round-trips, bash 32, \d+ chars, read with cindy_toolfold_read\("batch:call-0"\)$/m);
+    // No command text and no per-call statistics survive in assistant position.
+    expect(first).not.toContain('run step 0');
+    expect(first).not.toContain('ok');
     // Protocol shape survives: every remaining result still answers an existing call.
     const ids = new Set<string>();
     for (const message of out) {
@@ -126,19 +125,21 @@ describe('cindy-tool-fold extension source', () => {
     }
   });
 
-  it('names the subject in the record because the call block carrying it is gone', () => {
-    const { context } = loadExtension({ CINDY_PI_TOOL_FOLD_KEEP: '8' });
+  it('keeps the subject out of the assistant record and behind the batch pointer', async () => {
+    const { context, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_KEEP: '8' });
     const messages = pairs(40);
     // A `read`-sized argument object: smaller than any pointer that would replace it.
     const args = { path: 'packages/maker-core/src/agents/pi/pi-tool-fold-source.ts', offset: 1, limit: 40 };
     messages[0] = call('call-0', 'read', args);
     const out = projection(context, messages);
     const record = records(out)[0];
-    expect(record).toContain('[folded] read');
-    expect(record).toContain('\u00b7 ok \u00b7 ');
-    // The path moved into the record; there is no call block left to show it.
-    expect(record).toContain(args.path);
+    expect(record).toContain('read 1');
+    // The path is recoverable but never sits in assistant position: a record that carries
+    // "command -> conclusion" is exactly what the model re-uses as its own narration.
+    expect(record).not.toContain(args.path);
     expect(callIds(out)).not.toContain('call-0');
+    const batch = await tool.execute('t-batch', { call_id: 'batch:call-0' });
+    expect(String(batch.content![0].text)).toContain(args.path);
   });
 
   it('collapses a trip even when the argument budget is switched off', () => {
@@ -147,7 +148,8 @@ describe('cindy-tool-fold extension source', () => {
     const out = projection(context, messages);
     // ARG_CHARS only governs the fallback shape; a collapsed trip drops its arguments too.
     expect(callIds(out)).not.toContain('call-0');
-    expect(records(out)[0]).toContain('run step 0');
+    expect(records(out)[0]).toMatch(/^\[folded\] 32 round-trips, bash 32,/);
+    expect(records(out).join('\n')).not.toContain('run step 0');
   });
 
   it('leaves no command text in the pointer when a pinned sibling forces the pair shape', async () => {
@@ -185,31 +187,45 @@ describe('cindy-tool-fold extension source', () => {
     expect(projection(context, messages)).toBe(messages);
   });
 
-  it('folds a large argument even when its own result is smaller than the record', () => {
-    const { context } = loadExtension({ CINDY_PI_TOOL_FOLD_KEEP: '8' });
-    const messages: Message[] = [
-      call('call-big', 'write', { path: 'a.ts', content: 'x'.repeat(400) }),
-      result('call-big', 'write', 'ok'),
-      ...pairs(40),
-    ];
-    const out = projection(context, messages);
-    expect(out![0].content![0].arguments).toEqual({ __folded: true, call: 'call-big' });
-    // The tiny result stays verbatim: replacing it would make the projection longer.
-    expect(out![1]).toBe(messages[1]);
+  it('folds a large argument even when its own result is smaller than the record', async () => {
+    const { context, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_KEEP: '1' });
+    const messages: Message[] = [];
+    for (let index = 0; index < 40; index += 1) {
+      messages.push({ role: 'assistant', content: [
+        { type: 'toolCall', id: `pin-${index}`, name: 'bash', arguments: { command: `echo pin ${index}` } },
+        { type: 'toolCall', id: `big-${index}`, name: 'write', arguments: { path: 'a.ts', content: 'x'.repeat(400) } },
+      ] as Block[] });
+      messages.push(result(`pin-${index}`, 'bash', 'ok'));
+      messages.push(result(`big-${index}`, 'write', 'ok'));
+    }
+    projection(context, messages);
+    // Pinning one call keeps its trip verbatim, so the sibling falls back to the pointer
+    // shape — and its oversized argument must still be folded there.
+    await tool.execute('t-big', { call_id: 'pin-0' });
+    const out = projection(context, messages)!;
+    const block = (out[0].content as Block[]).find((item) => item.type === 'toolCall' && item.id === 'big-0')!;
+    expect(block.arguments).toEqual({ __folded: true, call: 'big-0' });
   });
 
-  it('leaves arguments alone when the pointer repeats an id longer than they are', () => {
-    const { context } = loadExtension({ CINDY_PI_TOOL_FOLD_KEEP: '8' });
+  it('leaves arguments alone when the pointer repeats an id longer than they are', async () => {
+    const { context, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_KEEP: '1' });
     const longId = `call_${'x'.repeat(2000)}`;
     const args = { command: 'y'.repeat(240) };
     const messages: Message[] = [
-      call(longId, 'bash', args),
+      { role: 'assistant', content: [
+        { type: 'toolCall', id: 'pin-0', name: 'bash', arguments: { command: 'echo pin' } },
+        { type: 'toolCall', id: longId, name: 'bash', arguments: args },
+      ] as Block[] },
+      result('pin-0', 'bash', 'ok'),
       result(longId, 'bash', 'ok'),
       ...pairs(40),
     ];
-    const out = projection(context, messages);
+    projection(context, messages);
+    await tool.execute('t-long', { call_id: 'pin-0' });
+    const out = projection(context, messages)!;
     // The pointer would carry the 2 KB id twice, so this block stays verbatim.
-    expect(out![0].content![0].arguments).toEqual(args);
+    const block = (out[0].content as Block[]).find((item) => item.type === 'toolCall' && item.id === longId)!;
+    expect(block.arguments).toEqual(args);
   });
 
   it('keeps a record inside a turn when the next message is already a user turn', () => {
@@ -221,13 +237,13 @@ describe('cindy-tool-fold extension source', () => {
       if (index === 20) messages.push({ role: 'user', content: [{ type: 'text', text: 'next turn' }] });
     }
     const out = projection(context, messages);
-    // The folded trip that ends a turn cannot merge forward into an assistant message:
-    // it stays a record of its own, followed by the user message.
+    // One line per batch, anchored at the batch's tail: the whole span before the user
+    // turn is gone and a single pointer sits after it.
     const at = out.findIndex((message) => message.role === 'user');
-    expect(at).toBeGreaterThan(0);
-    expect(out[at - 1].role).toBe('assistant');
-    expect(isRecord(out[at - 1])).toBe(true);
-    expect(callIds(out)).toContain('call-32');
+    expect(at).toBe(0);
+    expect(isRecord(out[at + 1])).toBe(true);
+    expect(records(out).join('\n')).toMatch(/^\[folded\] 32 round-trips,/m);
+    expect(callIds(out)).not.toContain('call-0');
   });
 
   it('never projects more characters than the request carried', () => {
@@ -288,7 +304,9 @@ describe('cindy-tool-fold extension source', () => {
     const nextTurn = [...messages, { role: 'user', content: [{ type: 'text', text: 'next turn' }] }];
     const released = projection(context, nextTurn);
     expect(callIds(released)).not.toContain('call-5');
-    expect(records(released).join('\n')).toContain('call-5');
+    // The batch pointer still reaches the released trip's original text.
+    const again = await tool.execute('t2', { call_id: 'call-5' });
+    expect(String(again.content![0].text)).toContain('run step 5');
   });
 
   it('clears pins when compaction drops a user message and a new turn replaces it', async () => {
@@ -532,7 +550,7 @@ describe('cindy-tool-fold extension source', () => {
     // The recovery was over the per-read budget, so it is not pinned back in: the trip
     // stays collapsed instead of paying twice for the same text.
     expect(callIds(view)).not.toContain('call-2');
-    expect(records(view).join('\n')).toContain('call-2');
+    expect(records(view).join('\n')).toContain('read with cindy_toolfold_read("batch:call-0")');
   });
 
   it('bounds retained giant payloads by aggregate characters, not just entry count', async () => {
@@ -648,7 +666,8 @@ describe('cindy-tool-fold extension source', () => {
     expect(isRecord(out[0])).toBe(true);
     // The whole parallel trip is gone: no pointer left behind for any of its 32 calls.
     expect(callIds(out)).toEqual(['tail-1']);
-    expect(records(out).join('\n')).toContain('parallel 0 ok');
+    expect(records(out).join('\n')).toMatch(/^\[folded\] 1 round-trip, bash 32,/m);
+    expect(records(out).join('\n')).not.toContain('parallel 0 ok');
   });
 
   it('keeps live fold marks when the registry cap is pruned', () => {

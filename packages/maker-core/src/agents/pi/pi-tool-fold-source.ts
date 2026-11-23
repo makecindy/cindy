@@ -18,6 +18,11 @@
  *     transcript 里没有的，单独留在内存 giants 表（有上限）。
  *  4. 钉住防抖动：取回过的往返在投影里恢复原文，直到下一条 user 消息（轮次边界）或超出
  *     钉住预算（按最近取回时间戳 LRU 驱逐）。没有这两条，取回→再折→再取回会把缓存反复打穿。
+ *  5. 记录行必须是**不可复述**的：每批只留一条、不带命令原文、不带单条统计。记录落在 assistant
+ *     位置（唯一不破坏调用/结果配对的位置），而 assistant 位置是模型最会延续的语气；一旦记录里
+ *     同时有「命令 + 结论 + 规模」，它就成了模型叙述工具调用的现成模板，被用来预告还没做的调用
+ *     （实测 17 条，其中 2 条写成「ok」但命令从未执行）。批次 id 用 batch: 前缀，和真实调用 id
+ *     分开，取回一次拿整批。
  *
  * 约束（与 cindy-bridge 同）：这段代码跑在 pi 子进程里，不能 import cindy 模块；模板里
  * 不得出现模板字符串，否则美元花括号会被外层 String.raw 插值 —— 一律用字符串拼接。
@@ -135,6 +140,10 @@ export default function (pi) {
   // a restart simply re-folds on the next batch.
   var foldedIds = Object.create(null);
   var foldedSize = 0;
+  // Which admitted batch a call belongs to, and each batch's member ids in transcript
+  // order. One batch renders one record line; the ids let cindy_toolfold_read open it.
+  var foldedBatch = Object.create(null);
+  var batchCalls = Object.create(null);
   // Pins: callId -> { ts, chars }. ts is a monotonic recovery clock so the eviction
   // victim is the least-recently-recovered entry, not the earliest-pinned one.
   var pinned = new Map();
@@ -158,11 +167,16 @@ export default function (pi) {
   var giants = new Map();
   var giantBytes = 0;
 
-  function markFolded(id, chars) {
+  function markFolded(id, chars, batch) {
     var key = String(id);
     if (foldedIds[key] !== undefined) return;
     foldedIds[key] = chars;
+    if (batch) foldedBatch[key] = String(batch);
     foldedSize += 1;
+  }
+
+  function batchOf(id) {
+    return foldedBatch[String(id)] || String(id);
   }
 
   function oneLine(value) {
@@ -387,40 +401,42 @@ export default function (pi) {
    * what the model kept re-sending (795 validation failures, 121 of them in one day).
    * Returns null when this trip must keep its pair.
    */
-  function tripRecordMessage(unit, assistant) {
-    var lines = [];
-    var recordChars = 0;
-    for (var k = 0; k < assistant.content.length; k++) {
-      var block = assistant.content[k];
-      if (!block || block.type !== 'toolCall') continue;
-      var id = String(block.id);
-      if (!foldable(id)) return null;
-      var res = null;
-      for (var r = 0; r < unit.results.length; r++) {
-        if (String(unit.results[r].toolCallId) === id) res = unit.results[r];
-      }
-      if (!res) return null;
-      var record = foldedResult(res, block, true);
-      if (!record) return null;
-      var line = record.content[0].text;
-      lines.push(line);
-      recordChars += line.length + 1;
-    }
-    // Arguments disappear as well, so the record competes with the whole trip, not one result.
-    if (lines.length === 0 || recordChars >= unit.chars) return null;
-    var kept = [];
-    for (var b = 0; b < assistant.content.length; b++) {
-      var other = assistant.content[b];
-      if (other && other.type === 'toolCall') continue;
-      kept.push(other);
-    }
-    kept.push({ type: 'text', text: lines.join('\n') });
-    return Object.assign({}, assistant, { content: kept });
+  /**
+   * One record line per folded batch. Never per round-trip: a line carrying "command → ok →
+   * size → pointer" is a complete summary in the assistant's own voice, so a model that is
+   * about to run a batch of queries writes those lines first as if they had already run
+   * (observed: four invented records with fabricated ids ahead of the real run). One
+   * aggregate line cannot describe any single action, so copying it buys nothing.
+   */
+  function batchRecordText(batch) {
+    var names = [];
+    for (var name in batch.names) names.push(name);
+    names.sort();
+    var tally = [];
+    for (var n = 0; n < names.length; n++) tally.push(names[n] + ' ' + batch.names[names[n]]);
+    return '[folded] ' + batch.dropped + (batch.dropped === 1 ? ' round-trip, ' : ' round-trips, ') + tally.join(', ') + ', ' + batch.chars +
+      ' chars, read with cindy_toolfold_read("' + batch.first + '")';
   }
 
   function allFolded(trip) {
     for (var i = 0; i < trip.calls.length; i++) if (foldedIds[String(trip.calls[i].id)] === undefined) return false;
     return true;
+  }
+
+  // A trip can disappear only when every call in it is marked and belongs to the same
+  // admitted batch, and every call has its result. Anything else keeps the per-call
+  // pointer plus per-result record fallback.
+  function droppableBatch(unit) {
+    if (unit.results.length < unit.calls.length) return null;
+    var batchId = null;
+    for (var i = 0; i < unit.calls.length; i++) {
+      var id = String(unit.calls[i].id);
+      if (!foldable(id)) return null;
+      var of = batchOf(id);
+      if (batchId === null) batchId = of;
+      else if (batchId !== of) return null;
+    }
+    return batchId;
   }
 
   function textOnlyTurnActive() {
@@ -569,8 +585,7 @@ export default function (pi) {
     return { ok: true, text: bits.join('\n'), result: resultText };
   }
 
-  function readSlice(id, raw, params) {
-    var offset = typeof params.offset === 'number' && params.offset > 0 ? Math.floor(params.offset) : 0;
+  function readSlice(id, raw, params) {    var offset = typeof params.offset === 'number' && params.offset > 0 ? Math.floor(params.offset) : 0;
     if (offset >= raw.length && raw.length > 0) {
       return { content: [{ type: 'text', text: 'Offset ' + offset + ' is past the end of ' + id + ' (' + raw.length + ' chars).' }], isError: true };
     }
@@ -583,6 +598,18 @@ export default function (pi) {
         text: rest.slice(0, RECOVERY_READ_MAX_CHARS) + '\n\n[truncated: ' + raw.length + ' chars total, ' + (raw.length - next) + ' remaining. Call cindy_toolfold_read again with offset: ' + next + ' to continue.]',
       }],
     };
+  }
+
+  // 整批取回：按批内顺序把每条往返的原文拼起来，交给同一条分页逻辑。
+  // shortcut: 一次拼完整批；批总量到几 MB 时会有几十毫秒开销，需要再优化时改成分段拼。
+  function batchOriginal(batchId) {
+    var ids = batchCalls[batchId] || [];
+    var parts = [];
+    for (var i = 0; i < ids.length; i++) {
+      var original = findOriginal(String(ids[i]));
+      if (original && original.ok === true) parts.push(original.text);
+    }
+    return parts.join('\n\n');
   }
 
   function pinOriginal(callId) {
@@ -614,13 +641,13 @@ export default function (pi) {
   pi.registerTool({
     name: 'cindy_toolfold_read',
     label: 'Read a folded tool result',
-    description: 'Return the full original text of one folded or truncated tool round-trip (call arguments plus the complete result). Pass the id shown inside the "[folded]" or "[truncated]" record. The folded original is also restored in the conversation until your next user message, so read once and continue instead of re-running the command.',
+    description: 'Return the full original text of one folded or truncated tool round-trip (call arguments plus the complete result). Pass the id shown inside the "[folded]" record: a batch id returns every round-trip in that batch, a single call id returns just that one. The folded original is also restored in the conversation until your next user message, so read once and continue instead of re-running the command.',
     parameters: {
       type: 'object',
       properties: {
         // 上限按 Pi 可能发出的最长调用 id 定：Gemini 历史里出现过 2,000+ 字符的 id，
         // 折叠/截断提示写的是完整 id，约束必须容得下它，否则提示要求的值取不回原文。
-        call_id: { type: 'string', minLength: 1, maxLength: 4096, description: 'Tool call id from the folded or truncated record.' },
+        call_id: { type: 'string', minLength: 1, maxLength: 4096, description: 'Batch or tool call id from the folded or truncated record.' },
         offset: { type: 'integer', minimum: 0, description: 'Character offset to continue from when the previous read stopped at the per-read limit.' },
       },
       required: ['call_id'],
@@ -629,6 +656,7 @@ export default function (pi) {
     execute: async function (_toolCallId, params) {
       var id = params && typeof params.call_id === 'string' ? params.call_id : '';
       if (!id) throw new Error('call_id is required');
+      if (batchCalls[id] && foldedIds[id] === undefined) return readSlice(id, batchOriginal(id), params);
       var original = findOriginal(id);
       if (!original || original.ok !== true) {
         var reason = original && original.reason === 'not-retained'
@@ -724,14 +752,30 @@ export default function (pi) {
         }
         foldedIds = pruned;
         foldedSize = prunedSize;
+        var prunedBatch = Object.create(null);
+        for (var pb2 in pruned) if (foldedBatch[pb2] !== undefined) prunedBatch[pb2] = foldedBatch[pb2];
+        foldedBatch = prunedBatch;
+        var liveBatches = Object.create(null);
+        for (var pb3 in prunedBatch) liveBatches[prunedBatch[pb3]] = true;
+        for (var pb4 in batchCalls) if (!liveBatches[pb4]) delete batchCalls[pb4];
       }
+      // One batch, one id: the batch is named after its first call, prefixed so it can never
+      // collide with a real call id (the same string is also a call the reader may open).
+      var batchId = 'batch:' + String(candidates[0].calls[0].id);
+      var batchIds = [];
       for (var m = 0; m < candidates.length; m++) {
-        for (var mi = 0; mi < candidates[m].calls.length; mi++) markFolded(candidates[m].calls[mi].id, candidates[m].sizes[candidates[m].calls[mi].id] || 0);
+        for (var mi = 0; mi < candidates[m].calls.length; mi++) {
+          var bc = String(candidates[m].calls[mi].id);
+          markFolded(bc, candidates[m].sizes[bc] || 0, batchId);
+          batchIds.push(bc);
+        }
       }
+      batchCalls[batchId] = batchIds;
     }
 
     var replaced = Object.create(null);
     var dropped = Object.create(null);
+    var groups = Object.create(null);
     var synthetic = new Set();
     var dirty = false;
     for (var g = 0; g < trips.length; g++) {
@@ -739,11 +783,19 @@ export default function (pi) {
       if (unit.hasImage || unit.removable < 80) continue;
       var assistant = messages[unit.start];
       if (!assistant || !Array.isArray(assistant.content)) continue;
-      var tripRecord = tripRecordMessage(unit, assistant);
-      if (tripRecord) {
-        replaced[unit.start] = tripRecord;
-        synthetic.add(tripRecord);
-        for (var d = 0; d < unit.indexes.length; d++) dropped[unit.indexes[d]] = true;
+      var groupId = droppableBatch(unit);
+      if (groupId !== null) {
+        var group = groups[groupId];
+        if (!group) group = groups[groupId] = { first: groupId, dropped: 0, chars: 0, names: Object.create(null), slot: -1 };
+        group.slot = Math.max(group.slot, unit.end);
+        group.dropped += 1;
+        group.chars += unit.chars;
+        for (var nc = 0; nc < unit.calls.length; nc++) {
+          var cname = String(unit.calls[nc].name || '?');
+          group.names[cname] = (group.names[cname] || 0) + 1;
+        }
+        dropped[unit.start] = true;
+        for (var d2 = 0; d2 < unit.indexes.length; d2++) dropped[unit.indexes[d2]] = true;
         dirty = true;
         continue;
       }
@@ -787,8 +839,18 @@ export default function (pi) {
     }
 
     if (!dirty) return undefined;
+    // One marker per batch, at the last slot it replaced: earlier markers keep their bytes,
+    // so folding a new batch never rewrites an old one.
+    var markers = Object.create(null);
+    for (var batchKey in groups) {
+      var batchGroup = groups[batchKey];
+      var marker = { role: 'assistant', content: [{ type: 'text', text: batchRecordText(batchGroup) }] };
+      markers[batchGroup.slot] = marker;
+      synthetic.add(marker);
+    }
     var final = [];
     for (var fi = 0; fi < messages.length; fi++) {
+      if (markers[fi]) final.push(markers[fi]);
       if (dropped[fi]) continue;
       final.push(replaced[fi] || messages[fi]);
     }
