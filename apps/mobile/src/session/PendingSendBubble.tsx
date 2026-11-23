@@ -315,7 +315,13 @@ export function PendingSendBubble({
   /** 当前查看设备:排队消息就是本机发的时不显示设备标签(与已发送消息同一规则)。 */
   viewerDeviceId?: string | null;
   renderImage: (uri: string | null, sourceUri: string | null, onError: () => void) => ReactNode;
-  renderText: (text: string, index: number) => ReactNode;
+  /**
+   * `longMessage` 来自气泡的实测收起判定(measureBody + onTextLayout),由宿主决定
+   * 长正文展开后挂哪种原生文本根:普通任务回退 RN Text,伙伴用有界文本分组,避免巨型
+   * iOS UITextView 展开后空白的回归。text 只是单块 token,判定必须按整条 displayBody,
+   * 因此这个状态由气泡单点持有并透传给宿主;结构化 atom 与普通正文两条路径共用同一判定。
+   */
+  renderText: (text: string, index: number, longMessage: boolean) => ReactNode;
   renderFile: (name: string, index: number) => ReactNode;
   /** 伙伴私聊的引用回复块;普通任务不传。 */
   renderReplyQuote?: (quote: NonNullable<MobilePendingSendItem['replyQuote']>) => ReactNode;
@@ -555,13 +561,13 @@ export function PendingSendBubble({
                   maxVisibleLines={collapsedLines}
                   numberOfLines={collapsedLines}
                   renderText={collapsedLines ? undefined : (text, index) => (
-                    <View key={`text:${index}`} style={styles.textChunk}>{renderText(text, index)}</View>
+                    <View key={`text:${index}`} style={styles.textChunk}>{renderText(text, index, shouldCollapse)}</View>
                   )}
                   testID="pendingSend.sentInlineAtoms"
                   textStyle={styles.bubbleText}
                   tokens={item.sentInlineTokens}
                 />
-              ) : item.text && !collapsedLines ? renderText(item.text, 0) : item.text ? (
+              ) : item.text && !collapsedLines ? renderText(item.text, 0, shouldCollapse) : item.text ? (
                 <Text numberOfLines={collapsedLines} style={styles.bubbleText}>
                   {item.text}
                 </Text>

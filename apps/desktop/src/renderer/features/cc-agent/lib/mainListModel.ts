@@ -62,6 +62,8 @@ export interface MainListPriorityContext {
    * 让新任务立刻排在运行中档顶,而不是先沉到其余档再跳上来。
    */
   runningSessionIds: ReadonlySet<string>;
+  /** Remote rows use their own device’s activity; the controller may still list the ID as running. */
+  remoteRunningByRow?: ReadonlyMap<string, boolean>;
   /** 需关注(等待确认 / 完成未读等 attention 通知)的 sessionIds。 */
   attentionSessionIds: ReadonlySet<string>;
   /**
@@ -100,18 +102,20 @@ export function naturalPriorityRankForId(
     MainListPriorityContext,
     'runningSessionIds' | 'attentionSessionIds' | 'waitingSessionIds'
   >,
+  running = ctx.runningSessionIds.has(sessionId),
 ): number {
   const waiting = ctx.waitingSessionIds?.has(sessionId) === true;
   const unread = ctx.attentionSessionIds.has(sessionId) && !waiting;
   return liveTaskPriorityRank({
     waiting,
     unread,
-    running: ctx.runningSessionIds.has(sessionId),
+    running,
   });
 }
 
 export function sessionNaturalPriorityRank(session: Session, ctx: MainListPriorityContext): number {
-  return naturalPriorityRankForId(session.id, ctx);
+  const remoteRunning = session.deviceLinkDeviceId ? ctx.remoteRunningByRow?.get(sessionRowKey(session)) : undefined;
+  return naturalPriorityRankForId(session.id, ctx, remoteRunning);
 }
 
 function viewedPriorityRank(natural: number, held: number | undefined): number {

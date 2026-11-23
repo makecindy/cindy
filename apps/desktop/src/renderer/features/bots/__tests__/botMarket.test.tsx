@@ -81,7 +81,7 @@ it('makes the whole list row open the detail without nesting buttons, while the 
   expect(open.className).toContain('cursor-pointer');
   expect(open.closest('button')).toBe(open);
   const invite = screen.getByRole('button', { name: 'bots.market.invite' });
-  expect(invite.closest('div.relative.z-10')).toBeTruthy();
+  expect(invite.closest('div.relative.z-raised')).toBeTruthy();
   expect(open.contains(invite)).toBe(false);
   // The invite action does not open the detail; it only invites.
   fireEvent.click(invite);

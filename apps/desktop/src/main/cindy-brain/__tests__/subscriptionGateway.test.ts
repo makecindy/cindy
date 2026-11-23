@@ -36,6 +36,7 @@ import {
 } from '../../../shared/ghost';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
 import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixture.js';
+import { createSubscriptionGatewayReader } from '../runtimePluginHostCore.js';
 import { GhostNotificationIndex } from '../ghostNotificationIndex.js';
 import { GhostTaskEventIndex } from '../taskEventIndex.js';
 import { decodeCursor } from '@cindy/mcps/history-cursor';
@@ -57,9 +58,6 @@ const createSessionNotification = createGhostProductionCallbacks<{
   ): void;
 }>({ functions: ['notifyGhostSessionEvent'] });
 
-const createSubscriptionGateway = createGhostProductionCallbacks<{ getGhostSubscriptionGateway(): GhostSubscriptionGateway }>({
-  functions: ['getGhostSubscriptionGateway'], initialize: 'let subscriptionGatewaySingleton = null;',
-});
 
 describe('did-session-switched primary session resolution', () => {
   it('allows ordinary sessions and Orca leads, but never workers or background sessions', () => {
@@ -340,11 +338,11 @@ describe('indexed task content and state events', () => {
     const g = ghost('reader', { topics: [topic] });
     let running = !cold;
     const lookup = vi.fn(() => g), send = vi.fn(() => true);
-    const api = createSubscriptionGateway({ GhostSubscriptionGateway, availableGhosts: () => [g],
+    const api = createSubscriptionGatewayReader({ availableGhosts: () => [g],
       listGhostNotificationCandidates: async () => [g], findGhostNotificationTarget: lookup,
       getGhostRuntime: () => ({ stateOf: () => running ? 'running' : 'stopped',
         spawn: async () => { running = true; return { ok: true }; } }),
-      sendToGhostLogic: send, ghostOwnerScope: undefined, log: {} });
+      sendToGhostLogic: send, broadcastGhostWindowPush: vi.fn(), log: { info: vi.fn(), warn: vi.fn() } });
     api.getGhostSubscriptionGateway().publishIndexed([g], topic, name, { sessionId: 'task' });
     await new Promise<void>(resolve => setImmediate(resolve));
     expect(send).toHaveBeenCalledOnce();
@@ -386,10 +384,10 @@ describe('indexed task content and state events', () => {
     const g = ghost('reader', { topics: ['tool-execution'] });
     let live = g;
     const lookup = vi.fn(() => live), send = vi.fn(() => true);
-    const api = createSubscriptionGateway({ GhostSubscriptionGateway, availableGhosts: () => [g],
+    const api = createSubscriptionGatewayReader({ availableGhosts: () => [g],
       listGhostNotificationCandidates: async () => [g], findGhostNotificationTarget: lookup,
-      getGhostRuntime: () => ({ stateOf: () => 'running' }), sendToGhostLogic: send,
-      ghostOwnerScope: undefined, log: {} });
+      getGhostRuntime: () => ({ stateOf: () => 'running', spawn: async () => ({ ok: true as const }) }), sendToGhostLogic: send,
+      broadcastGhostWindowPush: vi.fn(), log: { info: vi.fn(), warn: vi.fn() } });
     api.getGhostSubscriptionGateway().publishIndexed([g], 'tool-execution', 'did-tool-execution', { sessionId: 'task' });
     live = change === 'disabled' ? { ...g, enabled: false } : { ...g, approval: { state: 'legacy-unapproved' } };
     await new Promise<void>(resolve => setImmediate(resolve));

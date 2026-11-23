@@ -437,19 +437,21 @@ describe('Magpie sources through preset discovery', () => {
     }
   });
 
-  it.each(['finish', 'return'] as const)('lets refreshed sources replace old draft fields on %s, including successful removal', async action => {
+  it.each(['finish', 'return'] as const)('lets refreshed sources and pricing replace old draft fields on %s, including successful removal', async action => {
     const agents = ['codex', 'pi'] as const;
     const oldSource = { kind: 'magpie' as const, providerId: 'Old source', snapshotId: 'old-receipt' };
     const config: CustomProviderConfig = { id: 'draft', name: 'Gateway', auth: { method: 'none' }, runtimes: Object.fromEntries(
       agents.map(agent => [agent, { baseUrl, wireProtocol: 'openai-chat', models: [
-        { id: 'foo', name: 'Foo', opaqueModelId: true, discoveredSource: oldSource, discoverySnapshotId: 'old-receipt' },
+        { id: 'foo', name: 'Foo', opaqueModelId: true, discoveredSource: oldSource,
+          discoverySnapshotId: 'old-receipt', discoveredCost: { input: 2, output: 8 } },
       ] }]),
     ) };
     const preset = { id: 'vllm', name: 'vLLM', authMethod: 'none' as const, runtimes: Object.fromEntries(
       agents.map(agent => [agent, { baseUrl, wireProtocol: 'openai-chat' as const, baseUrlEditable: true, models: [] }]),
     ) };
     vi.mocked(window.electronAPI.maker.fetchProviderModels).mockImplementation(async ({ agent }) => ({ ok: true, models: [
-      { id: 'foo', name: 'Foo', discoverySnapshotId: `receipt-${agent}`, ...(agent === 'pi' ? { discoveredSource: source(agent) } : {}) },
+      { id: 'foo', name: 'Foo', discoverySnapshotId: `receipt-${agent}`,
+        ...(agent === 'pi' ? { discoveredSource: source(agent), discoveredCost: { input: 3, output: 15 } } : {}) },
     ] }));
     const onReturnCustom = vi.fn();
     render(<AddProviderWizard providers={[]} detected={{ agent: 'pi', apiKey: '', keys: {}, config, preset }}
@@ -472,6 +474,7 @@ describe('Magpie sources through preset discovery', () => {
       expect(model.opaqueModelId).toBe(true);
       expect(model.discoverySnapshotId).toBe(`receipt-${agent}`);
       expect(model.discoveredSource).toEqual(agent === 'pi' ? source(agent) : undefined);
+      expect(model.discoveredCost).toEqual(agent === 'pi' ? { input: 3, output: 15 } : undefined);
     }
   });
 });
@@ -2740,4 +2743,32 @@ it('respects an explicitly empty live directory for a bundled search target', as
     onEntryUnavailable={unavailable} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={vi.fn()} />);
   await waitFor(() => expect(unavailable).toHaveBeenCalledOnce());
   expect(screen.queryByDisplayValue('DeepSeek')).toBeNull();
+});
+
+it('offers one Google Gemini API setup and saves a shared key with all chat models unchecked', async () => {
+  const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'google-gemini-api')!;
+  const legacy = { ...anthropicProvider, id: 'gemini', name: 'Google Gemini',
+    auth: { method: 'apiKey' }, imageModels: [{ id: 'fixture', name: 'Fixture' }] } as ProviderView;
+  vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue({ presets: [preset] });
+  vi.mocked(createCustomProvider).mockResolvedValueOnce({ ok: true });
+  const onDone = vi.fn();
+  render(<AddProviderWizard providers={[legacy]} onOpenCustomForm={vi.fn()} onDone={onDone} onClose={vi.fn()} />);
+  const row = await screen.findByRole('button', { name: /Google Gemini API/ });
+  expect(screen.queryByText('Google Gemini', { exact: true })).toBeNull();
+  fireEvent.click(row);
+  expect(await screen.findByText('settings.providers.wizard.geminiImageKeyNote')).toBeTruthy();
+  fireEvent.change(await screen.findByPlaceholderText('sk-…'), { target: { value: 'fake-gemini-key' } });
+  fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+  const finish = await screen.findByRole('button', { name: 'settings.providers.wizard.finish' });
+  await waitFor(() => expect(finish.hasAttribute('disabled')).toBe(false));
+  for (const model of preset.runtimes.codex!.models.filter(model => model.defaultEnabled !== false)) {
+    fireEvent.click(screen.getByText(model.name));
+  }
+  fireEvent.click(finish);
+  await waitFor(() => expect(onDone).toHaveBeenCalledOnce());
+  const [config, keys, options] = vi.mocked(createCustomProvider).mock.calls[0];
+  expect(config.name).toBe('Google Gemini API');
+  expect(options).toEqual({ bindGeminiImages: true });
+  expect(config.runtimes.codex!.models.every(model => model.defaultEnabled === false)).toBe(true);
+  expect(keys).toEqual(Object.fromEntries(Object.keys(preset.runtimes).map(agent => [agent, 'fake-gemini-key'])));
 });

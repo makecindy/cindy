@@ -19,8 +19,9 @@ import {
   prefetchDeviceCapabilities,
   useAgentCapabilities,
 } from '@/hooks/useAgentCapabilities';
-import { CONTROLLED_MODEL_CATALOG_CHANNEL, modelCatalogKey } from '../../shared/controlledModelCatalog';
+import { CONTROLLED_MODEL_CATALOG_CHANNEL, CONTROLLED_MODEL_CATALOG_CHANGED, modelCatalogKey } from '../../shared/controlledModelCatalog';
 import { useControlledModelLocations } from '@/hooks/useControlledModelLocations';
+import { useRemotePluginEngines } from '@/hooks/usePluginEngines';
 import type { ProviderShareReceivedSnapshot, ProviderShareRegionBudget } from '../../shared/providerShare';
 
 // This mounted fixture uses empty model lists and does not exercise the full
@@ -1009,6 +1010,96 @@ describe('provider share catalog identity changes', () => {
       await act(async () => { evictAllRemoteCapabilities(); });
       vi.useRealTimers();
     }
+  });
+
+  // #10711 P2 / unit: the task-host discovery listener shares the source's active route read.
+  it('queues discovery-driven catalog reads behind a refresh from the share source', async () => {
+    const target = modelCatalogKey('share:a', 'host')!;
+    let finish!: () => void;
+    const blocked = new Promise<void>(resolve => { finish = resolve; });
+    let revision = 'initial';
+    let remotePush: ((push: { deviceId: string; channel: string }) => void) | undefined;
+    const invoke = vi.fn(async (_device: string, channel: string, args: unknown[]) => {
+      const request = args[0] as { op?: string; channel?: string } | undefined;
+      if (request?.op === 'locations') {
+        return { status: 'complete', locations: [{ agentDeviceId: 'share:a', name: 'A' }] };
+      }
+      const value = revision;
+      if (request?.op === 'read' && value === 'blocked') await blocked;
+      return (request?.channel ?? channel) === 'maker:provider:list'
+        ? { providers: [provider(value)] }
+        : capabilities;
+    });
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: { deviceLink: { invoke, onRemotePush: (callback: typeof remotePush) => {
+        remotePush = callback;
+        return () => undefined;
+      } } },
+    });
+    const locationHook = await renderHookFixture(() => useControlledModelLocations('host'));
+    const catalogHook = await renderHookFixture(() => providers.useDeviceProviders(target));
+    const routedReads = () => invoke.mock.calls.filter(([, channel, args]) =>
+      channel === CONTROLLED_MODEL_CATALOG_CHANNEL && (args[0] as { op?: string })?.op === 'read');
+    await flushMounted();
+    expect(catalogHook.result.current.providers[0]?.id).toBe('initial');
+    const initial = routedReads().length;
+    revision = 'blocked';
+    let pending!: Promise<void>;
+    await act(async () => { pending = refreshRemoteCatalogSnapshot('share:a'); });
+    try {
+      expect(routedReads()).toHaveLength(initial + 4);
+      revision = 'latest';
+      await act(async () => { remotePush?.({ deviceId: 'host', channel: CONTROLLED_MODEL_CATALOG_CHANGED }); });
+      await flushMounted();
+      expect(locationHook.result.current).toHaveLength(1);
+      expect(routedReads()).toHaveLength(initial + 4);
+    } finally {
+      await act(async () => { finish(); await pending; });
+    }
+    await flushMounted();
+    expect(routedReads()).toHaveLength(initial + 5);
+    expect(catalogHook.result.current.providers[0]?.id).toBe('latest');
+  });
+
+  it('retires a revoked controlled plugin share and drops an engine reply already in flight', async () => {
+    let granted = true;
+    let hold = false;
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    let remotePush: ((push: { deviceId: string; channel: string }) => void) | undefined;
+    const invoke = vi.fn(async (_device: string, _channel: string, args: unknown[]) => {
+      const request = args[0] as { op: string };
+      if (request.op === 'locations') {
+        return { status: 'complete', locations: granted ? [{ agentDeviceId: 'share:plugin', name: 'Plugin' }] : [] };
+      }
+      if (hold) await blocked;
+      return [{
+        key: 'test-plugin:engine', providerId: 'acp-plugin:test-plugin:engine', name: 'Engine',
+        availability: { state: 'available' }, models: [],
+        remoteUse: { supported: true, enabled: true },
+      }];
+    });
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: { deviceLink: { invoke, onRemotePush: (callback: typeof remotePush) => {
+        remotePush = callback;
+        return () => undefined;
+      } } },
+    });
+    const hook = await renderHookFixture(() => ({
+      locations: useControlledModelLocations('host'),
+      catalogue: useRemotePluginEngines(modelCatalogKey('share:plugin', 'host'), true),
+    }));
+    expect(hook.result.current.catalogue.engines?.[0]?.name).toBe('Engine');
+    hold = true;
+    await act(async () => { hook.result.current.catalogue.read(); });
+    granted = false;
+    await act(async () => { remotePush?.({ deviceId: 'host', channel: CONTROLLED_MODEL_CATALOG_CHANGED }); });
+    expect(hook.result.current.locations).toEqual([]);
+    expect(hook.result.current.catalogue.engines).toBeNull();
+    await act(async () => { release(); });
+    expect(hook.result.current.catalogue.engines).toBeNull();
   });
 
   it('retires only the denied route on a zero-budget provider push and keeps a healthy neighbor', async () => {

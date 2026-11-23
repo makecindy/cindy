@@ -16,7 +16,7 @@
  * 这里用 `111` 开头的 0xE1–0xE4。
  * 对端用 8 字节摘要表示（设备号的 SHA-256 前 8 字节）。
  */
-import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, createSecretKey, timingSafeEqual, type KeyObject } from 'node:crypto';
 
 export const UDP_RELAY_HEADER = 'x-agent-net-udp';
 /**
@@ -64,8 +64,20 @@ export function isUdpRelayPacket(packet: Uint8Array): boolean {
   return packet.length > 0 && packet[0] >= UDP_RELAY_REGISTER && packet[0] <= UDP_RELAY_DOWN;
 }
 
+/**
+ * 每把会话密钥只建一次密钥对象。`createHmac` 拿到原始字节时每次调用都新建一个密钥对象，比算 HMAC 本身还贵：每个经 UDP 中转的
+ * 数据报在设备上算一次、在中转上验一次再算一次，2026-11-21 剖面里它占了 Agent-Net 线程六成的 CPU（单次 13 微秒，用密钥对象 2 微秒；
+ * Electron 里 3.4 对 1.3 微秒）。按密钥这个数组本身记：凭据对象在一条中转会话里不换，会话结束后随它一起回收。
+ */
+const macKeys = new WeakMap<Uint8Array, KeyObject>();
+function macKey(key: Uint8Array): KeyObject {
+  let cached = macKeys.get(key);
+  if (!cached) { cached = createSecretKey(key); macKeys.set(key, cached); }
+  return cached;
+}
+
 function mac(key: Uint8Array, ...parts: Uint8Array[]): Buffer {
-  const hmac = createHmac('sha256', key);
+  const hmac = createHmac('sha256', macKey(key));
   for (const part of parts) hmac.update(part);
   return hmac.digest().subarray(0, MAC_BYTES);
 }

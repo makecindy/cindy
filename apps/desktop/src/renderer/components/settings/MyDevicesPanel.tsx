@@ -31,7 +31,7 @@ import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 
 import { Switch } from '@/components/ui/switch';
-import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { useDeleteDeviceDialog } from './useDeleteDeviceDialog';
 import type { DeviceLinkSettings } from '@/hooks/useDeviceLinkSettings';
 import { revokedDevicesStore } from '@/features/device-link/revokedDevicesStore';
 import { compareDevicesByName } from '@/features/device-link/deviceSort';
@@ -41,7 +41,8 @@ import {
   inboundToggleState,
   resolveActiveConnectionIssue,
 } from './myDevicesModel';
-import { appLabel, deviceLabel, platformLabel, relativeTime } from './deviceLabels';
+import { appLabel, deviceLabel, platformLabel, relativeTime, selfDeviceName } from './deviceLabels';
+import { LocalNetworkPermission } from './LocalNetworkPermission';
 import appI18n from 'i18next';
 
 function hardwareLabel(deviceInfo: DeviceLinkDeviceInfo | null | undefined): string | null {
@@ -223,9 +224,7 @@ export function MyDevicesPanel({
   const { t } = useTranslation();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
-  const [deleteTarget, setDeleteTarget] = useState<DeviceLinkDeviceView | null>(null);
-  const [deleting, setDeleting] = useState(false);
-  const deletePending = useRef(false);
+  const { requestDelete, deleting, dialog } = useDeleteDeviceDialog(s.remove);
   // 被对方撤销了本机访问权限的设备(控制端内存推导)。
   const revokedByPeer = useSyncExternalStore(
     revokedDevicesStore.subscribe,
@@ -233,6 +232,7 @@ export function MyDevicesPanel({
   );
 
   const self = (s.devices ?? []).find((d) => d.isSelf);
+  const selfName = self ? selfDeviceName(self) : '';
   // 与切换栏同一排序规则:按稳定身份(名字 → deviceId),不跟服务端的「在线/lastSeen 倒序」——
   // 短期上下线 / 心跳不再让顺序跳动,设备只在原位改在线点。本机单独置顶(下面单独渲染)。
   const others = (s.devices ?? []).filter((d) => !d.isSelf).sort(compareDevicesByName);
@@ -263,11 +263,11 @@ export function MyDevicesPanel({
 
   const handleRename = async (deviceId: string) => {
     const name = editingName.trim();
-    const currentName =
-      (self?.deviceId === deviceId ? self : others.find((d) => d.deviceId === deviceId))
-        ?.name.trim() ?? '';
+    const currentName = self?.deviceId === deviceId
+      ? selfName
+      : others.find((d) => d.deviceId === deviceId)?.name.trim() ?? '';
     setEditingId(null);
-    if (name && name === currentName) return;
+    if (name === currentName) return;
     await s.rename(deviceId, name || null);
   };
 
@@ -276,26 +276,6 @@ export function MyDevicesPanel({
   const onInboundChange = async (deviceId: string, next: boolean) => {
     if (next) await s.restore(deviceId);
     else await s.revoke(deviceId);
-  };
-
-  // 删除设备:**仅删除真正成功时**才连带清掉「已撤销」标记(s.remove 内部 catch + toast,会吞掉
-  // 失败,故必须看返回值)。否则若删的是被对方撤销过的设备,切换栏的 buildSwitcherDevices 仍会拿
-  // revoked id 单独撑起一颗陈旧 rejected chip,直到登出 / 停服才消失;而删除失败时清掉则会错误地
-  // 抹掉一台仍存在、仍被撤销的设备的被拒状态。
-  const handleDelete = async () => {
-    if (!deleteTarget || deletePending.current) return;
-    const { deviceId } = deleteTarget;
-    deletePending.current = true;
-    setDeleting(true);
-    try {
-      if (await s.remove(deviceId)) {
-        revokedDevicesStore.clearRevoked(deviceId);
-        setDeleteTarget(null);
-      }
-    } finally {
-      deletePending.current = false;
-      setDeleting(false);
-    }
   };
 
   const cardClass = 'rounded-xl border border-[var(--border-default)] px-4 py-3';
@@ -374,7 +354,7 @@ export function MyDevicesPanel({
                 </div>
               ) : (
                 <span className="truncate text-13 font-medium text-[var(--text-primary)]">
-                  {self?.name?.trim() && self.name.trim() !== self.deviceId ? self.name.trim() : t('settings.devices.thisDevice')}
+                  {selfName || t('settings.devices.thisDevice')}
                 </span>
               )}
               <span className="text-11 text-[var(--text-tertiary)]">
@@ -384,7 +364,25 @@ export function MyDevicesPanel({
                     })
                   : `${t('settings.devices.thisDevice')} · ${t(`settings.devices.linkStatus.${s.linkStatus}`)}`}
               </span>
-              {activeConnectionIssue ? (
+              {activeConnectionIssue?.kind === 'device-removed' && activeConnectionIssue.rejoinable ? (
+                // 官方网络上被移除:在本机点「重新加入」就回来,不需要重新登录。
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-11 text-[var(--error-fg)]">
+                    {t('settings.devices.rejoin.hint')}
+                  </span>
+                  <Button data-setting-id={remoteControlSettings.devices.id}
+                    variant="secondary"
+                    size="sm"
+                    compact
+                    loading={s.rejoining}
+                    disabled={s.rejoining}
+                    type="button"
+                    onClick={() => void s.rejoin()}
+                  >
+                    {t('settings.devices.rejoin.action')}
+                  </Button>
+                </div>
+              ) : activeConnectionIssue ? (
                 <span className="text-11 text-[var(--error-fg)]">
                   {t(`settings.devices.connectionIssue.${activeConnectionIssue.kind}`)}
                 </span>
@@ -400,7 +398,7 @@ export function MyDevicesPanel({
                 type="button"
                 onClick={() => {
                   setEditingId(self.deviceId);
-                  setEditingName(self.name);
+                  setEditingName(selfName);
                 }}
                 aria-label={t('settings.devices.rename')}
                 className="shrink-0 rounded-md p-1.5 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-primary)]"
@@ -421,6 +419,7 @@ export function MyDevicesPanel({
               />
             </ControlRow>
           </div>
+          <LocalNetworkPermission />
           {s.enabled && selfSettings && <div className="mt-3">{selfSettings}</div>}
         </li>
         )}
@@ -528,7 +527,7 @@ export function MyDevicesPanel({
                       </button>
                       <button data-settings-search-action="Open confirmation to remove this device"
                         type="button"
-                        onClick={() => setDeleteTarget(d)}
+                        onClick={() => requestDelete(d)}
                         disabled={deleting}
                         aria-label={t('settings.devices.delete')}
                         className="rounded-md p-1.5 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-40"
@@ -570,19 +569,7 @@ export function MyDevicesPanel({
           })
         )}
       </ul>
-      <ConfirmDialog
-        open={deleteTarget !== null}
-        onOpenChange={(open) => {
-          if (!open && !deletePending.current) setDeleteTarget(null);
-        }}
-        title={t('settings.devices.deleteTitle', { name: deleteTarget?.name ?? '' })}
-        description={t('settings.devices.deleteMessage')}
-        confirmText={t('settings.devices.delete')}
-        confirmVariant="destructive"
-        autoFocusConfirm
-        loading={deleting}
-        onConfirm={() => void handleDelete()}
-      />
+      {dialog}
     </div>
   );
 }

@@ -221,6 +221,22 @@ describe('remoteProjectsStore', () => {
     expect(reseed.mock.calls).toEqual([['dev-A', 'active'], ['dev-A', 'archived']]);
   });
 
+  // Unit: the controller may never have opened the hidden follow-up. Its
+  // first-worker patch must make the existing task visible on the right device.
+  it('loads a newly linked side chat missing from the controller task list', () => {
+    remoteProjectsStore.setDeviceSessions('dev-A', 'A', [mk('parent')]);
+    remoteProjectsStore.setDeviceSessions('dev-B', 'B', [mk('unrelated')]);
+    const reseed = vi.fn((deviceId: string) => {
+      remoteProjectsStore.setDeviceSessions(deviceId, 'A', [mk('parent'), mk('child', { source: 'desktop', parentSessionId: 'parent' })]);
+    });
+    setRemoteReseedImpl(reseed);
+    remoteProjectsStore.applyPatch('dev-A', 'child', { source: 'desktop', sideChatPromoted: true });
+    expect(reseed).toHaveBeenCalledExactlyOnceWith('dev-A', 'active');
+    expect(remoteProjectsStore.getVisibleMergedRemoteSessions()).toContainEqual(expect.objectContaining({
+      id: 'child', parentSessionId: 'parent', deviceLinkDeviceId: 'dev-A',
+    }));
+  });
+
   it('requeues both loaded buckets after invalidating a refresh that may contain new tasks', () => {
     const reseed = vi.fn();
     setRemoteReseedImpl(reseed);

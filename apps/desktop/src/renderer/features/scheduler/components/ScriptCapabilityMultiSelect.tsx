@@ -114,8 +114,7 @@ export function ScriptCapabilityMultiSelect({ value, onChange }: Props) {
         align="start"
         sideOffset={6}
         className={cn(
-          // z-[10010]:宿主弹窗(ScheduleFormDialog)整体在 z-[10000],默认 z-50 会被盖住
-          'z-[10010] w-[var(--radix-popover-trigger-width)] rounded-xl border border-[var(--cmd-palette-border)] bg-popover p-0 text-popover-foreground',
+          'w-[var(--radix-popover-trigger-width)] rounded-xl border border-[var(--cmd-palette-border)] bg-popover p-0 text-popover-foreground',
           'shadow-[shadow:var(--shadow-menu)]',
         )}
       >

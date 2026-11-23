@@ -227,6 +227,8 @@ async function refreshMobilePassportSingleFlight(
 // 2026-07 产品 /api/user/me 退役:身份完全以 auth-server membership 为准,
 // 原产品增强字段(role/isCanary/feishuId)一并下线(与 desktop 同步)。
 export interface MobileUser {
+  tapdbChargeAlias?: string;
+  tapdbUsageAlias?: string;
   id: string;
   name: string;
   avatar: string | null;
@@ -962,6 +964,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     org: string,
     did: string,
     expectedLoginFlowEpoch: number,
+    options: { allowPartialSuccess?: boolean } = {},
   ): Promise<SsoOrgDiscovery> => {
     const realmConfig = getMobileEndpointRealmConfig();
     let discovery: SsoOrgDiscovery;
@@ -985,7 +988,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const selected = await discoverSsoOrgRealm(org, {
         cn: authClientFor(did, 'cn'),
         global: authClientFor(did, 'global'),
-      });
+      }, options);
       assertLoginFlowCurrent(expectedLoginFlowEpoch);
       discovery = selected.discovery;
     } else {
@@ -1729,12 +1732,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     user,
   ]);
 
-  // 存量同意迁移已在冷启动流程里 await 完成(见上方 initialize),这里只负责绑定
-  // 账号标识 —— initialized 变 true 时迁移必然已经落盘。
+  // Bind the retention alias on real foreground visits. A background refresh or
+  // delayed receipt is not a return visit. Account changes also invalidate pending writes.
+  useEffect(() => {
+    if (!initialized) return;
+    if (!user?.id) { void clearTapdbUser(); return; }
+    const bind = () => { void setTapdbUser(user.tapdbChargeAlias, user.tapdbUsageAlias); };
+    if (AppState.currentState === 'active') bind();
+    else void clearTapdbUser();
+    const foreground = AppState.addEventListener('change', state => {
+      if (state === 'active') bind();
+    });
+    return () => foreground.remove();
+  }, [initialized, user?.id, user?.tapdbChargeAlias, user?.tapdbUsageAlias]);
+
   useEffect(() => {
     if (!initialized) return;
     if (user?.id) {
-      void setTapdbUser(user.id);
       // THEMIS 安全 SDK 上报绑定用户 ID(构建期注入原生模块,缺模块时静默降级)。
       // 用 requireNativeModule 而非 require('xdt-themis'):前者是 expo-modules-core
       // 的运行时查找(不受 Metro 静态解析影响),模块缺失时抛出可捕获的错误。
@@ -1745,7 +1759,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // xdt-themis is build-time injected; absent in dev / unconfigured regions.
       }
     } else {
-      void clearTapdbUser();
       // 登出时清除 THEMIS 用户绑定,避免崩溃/强杀上报误归于上一个账号。
       try {
         // eslint-disable-next-line @typescript-eslint/no-unsafe-call,@typescript-eslint/no-unsafe-member-access
@@ -2137,9 +2150,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             throw authCodeError('USER_CANCELLED');
           };
 
-          const discoverOrganization = async (org: string): Promise<SsoOrgDiscovery> => {
+          const discoverOrganization = async (
+            org: string,
+            options: { allowPartialSuccess?: boolean } = {},
+          ): Promise<SsoOrgDiscovery> => {
             pendingAuthRealmRef.current = null;
-            const discovery = await lookupOrganizationRealm(org, did, expectedLoginFlowEpoch);
+            const discovery = await lookupOrganizationRealm(org, did, expectedLoginFlowEpoch, options);
             assertLoginFlowCurrent(expectedLoginFlowEpoch);
             pendingAuthRealmRef.current = discovery.region;
             return discovery;
@@ -2315,7 +2331,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // 多连接才映射进 method-choice，复用连接选择 UI 与 start-sso 流程。
           if (action.type === 'discover-sso-org') {
             const org = action.org.trim().toLowerCase();
-            const discovery = await discoverOrganization(org);
+            const discovery = await discoverOrganization(org, { allowPartialSuccess: true });
             const methods = ssoOrgDiscoveryToMethods(discovery);
             // A sole same-region connection auto-starts browser authorization
             // below. Persist the successful discovery first so cancel/timeout

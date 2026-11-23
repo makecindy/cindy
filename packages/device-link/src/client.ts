@@ -635,6 +635,9 @@ export interface DeviceLinkPeerTransportReset {
  * message 匹配:Node ws 是 "Unexpected server response: 401",RN 是
  * "Expected HTTP 101 response but was '401 Unauthorized'"。
  */
+// A local transport can confirm revocation before it has a socket to emit 4410.
+export class DeviceLinkRegistrationRemovedError extends Error {}
+
 export function classifyConnectionIssue(
   code?: number,
   reason?: string,
@@ -1243,9 +1246,12 @@ export class DeviceLinkClient {
     void this.connect(reason);
   }
 
-  /** host 的整体恢复入口(系统唤醒等):作用于本机全部连接。 */
-  restartConnections(reason?: string): void {
-    this.restartConnection(reason);
+  /**
+   * host 的整体恢复入口(系统唤醒、换网等):作用于本机全部连接。`keepPrimary` 时不重建主连接
+   * (见 RoutedDeviceLinkClient);这里只有这一条。
+   */
+  restartConnections(reason?: string, options?: { keepPrimary?: boolean }): void {
+    if (!options?.keepPrimary) this.restartConnection(reason);
   }
 
   /** host 的整体睡眠入口:作用于本机全部连接(与 restartConnections 对称)。 */
@@ -2189,7 +2195,7 @@ export class DeviceLinkClient {
         return { ok: false as const, error: { code: 'IPC_ERROR' as const, message: 'GITHUB_READ_UNSUPPORTED: update the target computer to use GitHub queries' } };
       }
       if (resolveInvokePriority(payload.channel, options?.background, payload.args) === 'background'
-        && (this.networkProbeTimer || this.networkChangeTimer)) {
+        && (this.networkProbeTimer || (this.networkChangeTimer && this.lastInboundAt <= this.networkChangeHintedAt))) {
         throw new DeviceLinkError('BACKPRESSURE', 'background refresh paused while checking relay connectivity');
       }
       // Prepare at dispatch, not when joining the admission queue. Earlier
@@ -2847,6 +2853,10 @@ export class DeviceLinkClient {
         this.log.debug?.('stale createWebSocket rejection ignored', err);
         return;
       }
+      if (err instanceof DeviceLinkRegistrationRemovedError) {
+        this.markRegistrationRemoved();
+        return;
+      }
       this.log.warn('createWebSocket failed', err);
       this.scheduleReconnect();
       return;
@@ -2964,8 +2974,7 @@ export class DeviceLinkClient {
     this.failNonReliablePending(new DeviceLinkError('NOT_CONNECTED', 'relay connection lost'));
     if (this.stopped) return;
     if (code === 4410) {
-      this.stopConnection();
-      this.setConnectionIssue({ kind: 'device-removed', closeCode: code, at: Date.now() });
+      this.markRegistrationRemoved();
       return;
     }
     if (code === DUPLICATE_CONNECTION_CLOSE_CODE) {
@@ -6098,7 +6107,7 @@ export class DeviceLinkClient {
       if (pending.envelope.kind === 'invoke' && pending.envelope.id
         && this.pending.get(pending.envelope.id)?.expireIfOverdue()) continue;
       if (opts.onlyUnsent && pending.sent) continue;
-      // Cumulative ACK cannot confirm a tail while a byte-paced head is still
+      // Cumulative ACK cannot confirm a tail while the stream head is still
       // missing. Allow one early tail retry to fill the receiver's buffer, but
       // do not burn its whole retry budget (and reset this healthy slow link)
       // before the head has finished. ACK removal naturally releases this hold;
@@ -6107,7 +6116,8 @@ export class DeviceLinkClient {
         !opts.ignoreInterval
         && head
         && pending !== head
-        && head.bytes > RELIABLE_RETRY_BYTES_PER_INTERVAL
+        && (head.bytes > RELIABLE_RETRY_BYTES_PER_INTERVAL
+          || (pending.path === 'relay' && head.path === 'relay' && pending.envelope.kind === 'push'))
         && pending.attempts >= Math.min(2, this.timing.transportMaxRetryAttempts)
       ) continue;
       // A local ws write is not a delivery receipt: relay -> mobile can still be
@@ -6783,6 +6793,11 @@ export class DeviceLinkClient {
       if (!oldest) break;
       this.pendingInboundLinkOffers.delete(oldest);
     }
+  }
+
+  private markRegistrationRemoved(): void {
+    this.stopConnection();
+    this.setConnectionIssue({ kind: 'device-removed', closeCode: 4410, at: Date.now() });
   }
 
   private setConnectionIssue(issue: DeviceLinkConnectionIssue | null): void {

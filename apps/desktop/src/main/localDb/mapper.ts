@@ -65,6 +65,9 @@ import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 import { isSyntheticTriggerText } from '../../shared/interruptedTurn.js';
 import {
   addRegionalMoney,
+  addCompatibleRegionalMoney,
+  mixedEstimateAmounts,
+  asValueEstimateMoney,
   legacyUsdMoney,
   normalizeRegionalMoney,
   usdMoney,
@@ -105,10 +108,10 @@ type ProjectAutomationConsentInsert = typeof projectAutomationConsents.$inferIns
 type ScheduleRunRow = typeof scheduleRuns.$inferSelect;
 type ScheduleRunInsert = typeof scheduleRuns.$inferInsert;
 
-type SessionRuntimeFields = Pick<Session, 'id' | 'agentKind' | 'model' | 'providerId' | 'effort' | 'fastMode'> & {
+type SessionRuntimeFields = Pick<Session, 'id' | 'agentKind' | 'agentDeviceId' | 'model' | 'providerId' | 'effort' | 'fastMode'> & {
   scheduledModelBaseline?: string | null;
 };
-type SessionRuntimeProjector = (session: SessionRuntimeFields) => Partial<Session>;
+export type SessionRuntimeProjector = (session: SessionRuntimeFields) => Partial<Session>;
 let sessionRuntimeProjector: SessionRuntimeProjector | null = null;
 
 export function setSessionRuntimeProjector(projector: SessionRuntimeProjector | null): void {
@@ -134,6 +137,7 @@ export function projectSessionRuntimeFields(session: SessionRuntimeFields): Part
  * preview 落 null，渲染端兜底隐藏。
  */
 export type SessionRowWithCount = SessionRow & {
+  orcaLeadSessionId?: string | null;
   companion?: Session['companion'];
   tags?: import('@cindy/maker-shared').TaskTag[];
   messageCount: number;
@@ -253,7 +257,7 @@ export function boundSerializedMessageContent(
  * 出口处补一个空字符串 `userId: ''`，避免类型缺失；上层消费如果需要用户 id 应该读 AuthContext。
  */
 export function sessionToCamel(row: SessionRowWithCount): Session {
-  const legacyMoney = row.totalCostUsd > 0 ? legacyUsdMoney(row.totalCostUsd) : undefined;
+  const legacyMoney = row.totalCostUsd > 0 ? { ...legacyUsdMoney(row.totalCostUsd), approximate: !!row.totalCostUsdIsApproximate } : undefined;
   const currentMoney =
     row.totalCostCurrency && row.totalCostAmount > 0
       ? normalizeRegionalMoney({
@@ -291,6 +295,7 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     sdkSessionId: row.sdkSessionId,
     totalTokenUsage: row.totalTokenUsage,
     totalCostUsd: legacyUsdProjection,
+    ...(row.totalCostUsdIsApproximate && { totalCostUsdIsApproximate: true }),
     totalMoney,
     contextTokens: row.contextTokens,
     contextWindow: row.contextWindow,
@@ -305,7 +310,9 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     userSendAt: msToIso(row.userSendAt),
     lastActivityAt: msToIso(row.lastActivityAt),
     agentKind: row.agentKind as AgentKind,
-    source: normalizeSessionSource(row.source),
+    source: row.source === 'side-chat' && row.sideChatPromoted ? 'desktop' : normalizeSessionSource(row.source),
+    ...(row.source === 'side-chat' && row.sideChatPromoted && { sideChatPromoted: true as const }),
+    ...(row.orcaLeadSessionId ? { orcaLeadSessionId: row.orcaLeadSessionId } : {}),
     orcaRole: row.orcaRole as OrcaRole | null,
     parentSessionId: row.parentSessionId,
     forkedAtMessageId: row.forkedAtMessageId,
@@ -437,7 +444,7 @@ export function sessionCreateToRow(
         permissionMode?: string;
         fastMode?: boolean | 'ultrafast';
         planModeEnabled?: boolean;
-        agentKind?: AgentKind;
+        agentKind?: AgentKind | 'acp';
         orcaRole?: OrcaRole | null;
         parentSessionId?: string | null;
         forkedAtMessageId?: string | null;
@@ -540,7 +547,7 @@ export function sessionPatchToRow(
     extraDirs?: string[];
     writableDirs?: string[];
   },
-  opts?: { bumpUpdatedAt?: boolean },
+  opts?: { bumpUpdatedAt?: boolean; allowEmptyEffort?: boolean },
 ): Partial<SessionInsert> {
   const out: Partial<SessionInsert> = {};
   if (patch.title !== undefined) out.title = patch.title;
@@ -552,7 +559,9 @@ export function sessionPatchToRow(
   if (patch.workspaceKind === 'dialogue'
     || (patch.workspaceKind === 'project' && patch.workingDir !== undefined)) out.projectDir = null;
   if (patch.model !== undefined) out.model = patch.model;
-  const persistableEffort = persistableSessionEffort(patch.effort);
+  const persistableEffort = opts?.allowEmptyEffort && patch.effort === ''
+    ? ('' as SessionInsert['effort'])
+    : persistableSessionEffort(patch.effort);
   if (persistableEffort !== undefined) out.effort = persistableEffort;
   if (patch.permissionMode !== undefined)
     out.permissionMode = patch.permissionMode as SessionInsert['permissionMode'];
@@ -593,7 +602,7 @@ export function messageCreateToRow(
     content: unknown;
     toolUseId?: string;
     agentMeta?: AgentMeta | null;
-    agentKind?: 'cc' | 'codex' | 'pi' | null;
+    agentKind?: 'cc' | 'codex' | 'pi' | 'acp' | null;
     createdAt?: number;
   },
   now: number,
@@ -825,8 +834,10 @@ export function scheduleToCamel(row: ScheduleRow): Schedule {
     providerId: row.providerId ?? undefined,
     agentDeviceId: row.agentDeviceId ?? undefined,
     effort: row.effort ?? undefined,
+    modelGroup: row.modelGroup ?? undefined,
     fastMode: (row.fastMode ?? false),
     workspaceKind: normalizeWorkspaceKind(row.workspaceKind),
+    inheritedProjectDir: row.inheritedProjectDir ?? undefined,
     workingDir: row.workingDir ?? undefined,
     useWorktree: !!row.useWorktree,
     targetSessionId: row.targetSessionId ?? undefined,
@@ -839,6 +850,7 @@ export function scheduleToCamel(row: ScheduleRow): Schedule {
           timeoutMs: row.preRunHookTimeoutMs ?? undefined,
         }
       : undefined,
+    primaryHostKey: row.primaryHostKey ?? undefined,
     preRunPlugin: row.preRunPluginId
       ? {
           pluginId: row.preRunPluginId,
@@ -887,8 +899,10 @@ export function scheduleCreateToRow(s: Schedule): ScheduleInsert {
     providerId: s.providerId ?? null,
     agentDeviceId: s.agentDeviceId ?? null,
     effort: (s.effort as ScheduleInsert['effort']) ?? null,
+    modelGroup: s.modelGroup ?? null,
     fastMode: (s.fastMode ?? false),
     workspaceKind: s.workspaceKind ?? 'project',
+    inheritedProjectDir: s.inheritedProjectDir ?? null,
     workingDir: s.workingDir ?? null,
     useWorktree: s.useWorktree,
     targetSessionId: s.targetSessionId ?? null,
@@ -896,6 +910,7 @@ export function scheduleCreateToRow(s: Schedule): ScheduleInsert {
     silentWhenIdle: !!s.silentWhenIdle,
     preRunHookCommand: s.preRunHook?.command ?? null,
     preRunHookTimeoutMs: s.preRunHook?.timeoutMs ?? null,
+    primaryHostKey: s.primaryHostKey ?? null,
     preRunPluginId: s.preRunPlugin?.pluginId ?? null,
     preRunPluginOnFailure: s.preRunPlugin?.onFailure ?? null,
     notifyDesktop: s.notify.desktop,
@@ -948,8 +963,10 @@ export function schedulePatchToRow(patch: Partial<Schedule>): Partial<ScheduleIn
   if (hasKey(patch, 'providerId')) out.providerId = patch.providerId ?? null;
   if (hasKey(patch, 'agentDeviceId')) out.agentDeviceId = patch.agentDeviceId ?? null;
   if (hasKey(patch, 'effort')) out.effort = (patch.effort as ScheduleInsert['effort']) ?? null;
+  if (hasKey(patch, 'modelGroup')) out.modelGroup = patch.modelGroup ?? null;
   if (hasKey(patch, 'fastMode')) out.fastMode = (patch.fastMode ?? false);
   if (hasKey(patch, 'workspaceKind')) out.workspaceKind = patch.workspaceKind ?? 'project';
+  if (hasKey(patch, 'inheritedProjectDir')) out.inheritedProjectDir = patch.inheritedProjectDir ?? null;
   if (hasKey(patch, 'workingDir')) out.workingDir = patch.workingDir ?? null;
   if (hasKey(patch, 'useWorktree')) out.useWorktree = patch.useWorktree as boolean;
   if (hasKey(patch, 'targetSessionId')) out.targetSessionId = patch.targetSessionId ?? null;
@@ -1046,12 +1063,16 @@ export function scheduleRunToCamel(row: ScheduleRunRow): ScheduleRun {
           estimateReasons: ['subscription-value'],
         })
       : undefined;
-  const estimatedValueMoney =
-    legacyEstimate && currentEstimate
-      ? legacyEstimate.currency === currentEstimate.currency
-        ? addRegionalMoney([legacyEstimate, currentEstimate])
-        : currentEstimate
-      : (currentEstimate ?? legacyEstimate ?? zeroUsageMoney('value-estimate'));
+  const estimateAmounts = [
+    ...(currentEstimate ? [currentEstimate] : []),
+    ...(legacyEstimate ? [legacyEstimate] : []),
+    ...(row.otherEstimatedValueAmount > 0 && row.costCurrency ? [{
+      ...asValueEstimateMoney(legacyUsdMoney(row.otherEstimatedValueAmount)),
+      currency: row.costCurrency === 'USD' ? 'CNY' as const : 'USD' as const,
+    }] : []),
+  ];
+  const estimatedValueMoney = addCompatibleRegionalMoney(estimateAmounts, currentEstimate?.currency)
+    ?? zeroUsageMoney('value-estimate');
   return {
     id: row.id,
     scheduleId: row.scheduleId,
@@ -1064,6 +1085,7 @@ export function scheduleRunToCamel(row: ScheduleRunRow): ScheduleRun {
     estimatedValueUsd: row.estimatedValueUsd,
     costMoney,
     estimatedValueMoney,
+    ...mixedEstimateAmounts(estimateAmounts),
     costAttribution: row.costAttribution,
     resultText: row.resultText ?? undefined,
     preRunHookResult: parsePreRunHookResult(row.preRunHookResult),

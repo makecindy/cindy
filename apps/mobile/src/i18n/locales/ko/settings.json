@@ -62,6 +62,28 @@
       "dark": "다크"
     },
     "saveFailed": "표시 모드를 저장하지 못했습니다. 다시 열면 이전 설정으로 돌아갑니다.",
+    "wallpaper": {
+      "title": "배경화면",
+      "choose": "사진 또는 동영상 선택",
+      "replace": "배경화면 교체",
+      "remove": "배경화면 제거",
+      "importing": "처리 중…",
+      "tooLarge": "20MB 이하의 사진이나 100MB 이하의 동영상을 선택하세요.",
+      "importFailed": "사진 또는 동영상을 가져오지 못했습니다.",
+      "saveFailed": "배경화면 설정을 저장하지 못했습니다.",
+      "static": "정적",
+      "dynamic": "동적",
+      "motionLabel": "표시 방식",
+      "options": {
+        "none": "없음",
+        "custom": "사용자 지정 배경화면",
+        "cindy-whisper": "속삭임",
+        "cindy-night-glance": "밤의 눈길",
+        "cindy-scarlet-stroll": "붉은 밤 산책",
+        "cindy-neon": "네온 옆모습",
+        "cindy-prism": "프리즘 조각"
+      }
+    },
     "userBubble": {
       "title": "내 메시지 말풍선 색상",
       "presets": "색상",
@@ -263,7 +285,7 @@
     "openUserAgreement": "이용약관 열기",
     "appFilingNumber": "앱 등록 번호",
     "analytics": "사용 통계",
-    "analyticsHint": "실행 및 지속 사용 현황 파악에 사용합니다. 기기 모델, OS·앱 버전, 기기 식별자 등의 정보와 로그인 후 계정 ID를 전송하며, 대화·파일·프롬프트는 포함하지 않습니다.",
+    "analyticsHint": "이 설정을 켜면 계정 ID 대신 가명을 사용하고, 기기 식별자와 함께 앱 실행과 재방문 현황을 파악해 제품을 개선하는 데 활용합니다. 결제에는 별도의 가명을 사용합니다. 대화, 파일, 프롬프트는 이 통계에 포함되지 않습니다.\n이전 버전의 기록에는 원래 계정 ID가 있습니다. 이 기록을 볼 수 있는 사람은 같은 기기 식별자를 통해 새 가명을 원래 계정과 연결할 수도 있습니다.",
     "analyticsSaveFailed": "설정을 저장하지 못했습니다. 다시 시작하면 이전 값으로 되돌아갈 수 있습니다.",
     "analyticsReset": "기본값으로 되돌리기",
     "analyticsResetAction": "되돌리기"

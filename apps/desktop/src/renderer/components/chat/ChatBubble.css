@@ -13,7 +13,7 @@
   .chat-bubble-toolbar:not(:where(.thread-panel:not(.thread-panel-inline-actions) *)) {
     position: relative;
     inset: auto;
-    margin: 8px 0 0 auto;
+    margin: var(--space-2) 0 0 auto;
     max-width: 100%;
     opacity: 1;
     pointer-events: auto;

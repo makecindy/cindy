@@ -345,7 +345,7 @@ function PluginSetupPromptStateful({
               submitStepAction(step);
             }}
             className={cn(
-              'h-9 min-w-0 flex-1 rounded-[9999px] border bg-[var(--surface-elevated)] px-3',
+              'h-9 min-w-0 flex-1 rounded-full border bg-[var(--surface-elevated)] px-3',
               'text-14 text-[var(--text-primary)] placeholder:text-[var(--text-placeholder)]',
               'outline-none transition-colors focus-visible:border-[var(--focus-ring)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
               context.error ? 'border-[var(--error-border)]' : 'border-[var(--border-default)]',
@@ -450,7 +450,7 @@ function PluginSetupPromptStateful({
           }
           onClick={submitCurrentAction}
         >
-          <span className="flex items-center gap-[7px]">
+          <span className="flex items-center gap-1.5">
             {busy ? (
               <span className="inline-flex animate-spin motion-reduce:animate-none">
                 <LoaderCircle aria-hidden="true" size={14} />
@@ -494,7 +494,7 @@ function PluginSetupPromptStateful({
       restoreAriaLabel={t('newChat.pluginSetup.restoreAria', { name: pending.ghost.name })}
       minimizeAriaLabel={t('newChat.pluginSetup.minimizeAria', { name: pending.ghost.name })}
       headerLeading={
-        <div className="flex min-w-0 items-center gap-[10px]">
+        <div className="flex min-w-0 items-center gap-2.5">
           {(!compact || (pending.ghost.iconDataUrl && !iconFailed)) ? <span className="h-6 w-6 shrink-0">
             {compact ? <img src={pending.ghost.iconDataUrl} alt="" className="h-6 w-6 rounded-lg object-contain" onError={() => setIconFailed(true)} /> : <GhostPluginIcon
               iconId={pending.ghost.id}
@@ -511,14 +511,14 @@ function PluginSetupPromptStateful({
       }
       footer={terminal ? undefined : footer}
     >
-      <div className="flex flex-col gap-[10px]" role="status" aria-live="polite" aria-label={title}>
+      <div className="flex flex-col gap-2.5" role="status" aria-live="polite" aria-label={title}>
         {commandErrorMessage ? <p role="alert" className="text-13 text-[var(--error-fg)]">{commandErrorMessage}</p> : null}
         {!compactInlineForm && pending.intro ? (
           <p className="text-14 leading-5 text-[var(--ask-option-desc)]">{pending.intro}</p>
         ) : null}
 
         {remote && !terminal && !connectionForm() ? (
-          <div className="rounded-[12px] border border-[var(--ask-option-border)] bg-[var(--ask-option-list-bg)] px-3 py-2.5 text-13 text-[var(--ask-option-desc)]">
+          <div className="rounded-xl border border-[var(--ask-option-border)] bg-[var(--ask-option-list-bg)] px-3 py-2.5 text-13 text-[var(--ask-option-desc)]">
             {t(pending.remoteSecret && currentStep?.action?.kind === 'inline_form'
               ? 'newChat.pluginSetup.remoteSecretHint' : pending.remoteOauth && pending.steps.some(s => s.action?.kind === 'oauth_connect')
               ? 'newChat.pluginSetup.remoteOauthHint' : 'newChat.pluginSetup.completeOnDesktop')}
@@ -541,7 +541,7 @@ function PluginSetupPromptStateful({
               <p className="text-14 leading-5 text-[var(--ask-option-desc)]">{inlineLead}</p>
             ) : null}
             <div>
-              <div className="mb-[6px]">
+              <div className="mb-1.5">
                 <label
                   htmlFor={inlineFormContext(currentStep)?.fieldInputId}
                   className="min-w-0 text-13 font-medium text-[var(--ask-option-label)]"
@@ -569,7 +569,7 @@ function PluginSetupPromptStateful({
               className={cn(
                 flatStepList
                   ? 'overflow-hidden'
-                  : 'overflow-hidden rounded-[12px] border border-[var(--ask-option-border)] bg-[var(--ask-option-list-bg)]',
+                  : 'overflow-hidden rounded-xl border border-[var(--ask-option-border)] bg-[var(--ask-option-list-bg)]',
               )}
             >
               {pending.steps.map((step, index) => {
@@ -681,7 +681,7 @@ function PluginSetupPromptStateful({
 
 /** Transcript variant shares all setup controls without the floating prompt chrome. */
 function AuthorizationShell({ headerLeading, footer, children }: ComponentProps<typeof InteractionPromptCardShell>) {
-  return <section className="rounded-[12px] border border-[var(--border-default)] bg-[var(--surface-elevated)] p-4">
+  return <section className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-4">
     {headerLeading}
     <div className="mt-3 empty:hidden">{children}</div>
     {footer ? <div className="mt-4">{footer}</div> : null}

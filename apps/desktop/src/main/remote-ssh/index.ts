@@ -730,8 +730,9 @@ async function invalidateHostRuntimeState(hostId: string): Promise<void> {
   } catch (error) {
     rememberFailure(error);
   }
+  let mcpInvalidation = Promise.resolve();
   try {
-    invalidateRemoteCodexMcpEndpointState(hostId);
+    mcpInvalidation = invalidateRemoteCodexMcpEndpointState(hostId);
   } catch (error) {
     rememberFailure(error);
   }
@@ -760,6 +761,7 @@ async function invalidateHostRuntimeState(hostId: string): Promise<void> {
 
   const cleanupResults = await Promise.allSettled([
     fileBrowserInvalidation,
+    mcpInvalidation,
     clearAgentProxyTunnelStateAndWait(hostId),
     oldHost?.closeAllRemoteForwards().catch((error) => {
       log.warn('failed to clear remote forwards during endpoint invalidation', {
@@ -1416,7 +1418,7 @@ export async function removeRemoteSshHost(args: unknown) {
       () => removeRemoteMcpForwardPref(id),
     ]) {
       try {
-        cleanup();
+        await cleanup();
       } catch (error) {
         log.warn('failed to clean removed SSH host local state', {
           hostId: id,

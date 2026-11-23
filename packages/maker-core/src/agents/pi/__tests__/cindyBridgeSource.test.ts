@@ -28,6 +28,7 @@ import {
   CINDY_PI_BASH_DEFAULT_TIMEOUT_SECONDS,
   CINDY_PI_BASH_MAX_TIMEOUT_SECONDS,
 } from '../cindy-bridge-source.js';
+import { formatPermissionDenial } from '../../shared/auto-review-decision.js';
 
 it('strips Fast control paths from shell environments without mutating the runner environment', () => {
   const source = CINDY_BRIDGE_EXTENSION_SOURCE;
@@ -659,6 +660,77 @@ describe('cindy-bridge extension source', () => {
     expect(adapt({ reasoning: { effort: 'max' } }, model).reasoning.effort).toBe('max');
     expect(adapt(original, { ...model, id: 'gpt-5.5' })).toBeUndefined();
     expect(adapt(original, { ...model, api: 'openai-codex-responses' })).toBeUndefined();
+  });
+
+  it('executes the registered native provider request hook and preserves explicit ceilings', async () => {
+    const helperStart = CINDY_BRIDGE_EXTENSION_SOURCE.indexOf('function reserveLargeCompletionHeadroom(');
+    const helperEnd = CINDY_BRIDGE_EXTENSION_SOURCE.indexOf('function boundedChatToolIds(', helperStart);
+    const hookStart = CINDY_BRIDGE_EXTENSION_SOURCE.lastIndexOf("pi.on('before_provider_request'");
+    const hookEnd = CINDY_BRIDGE_EXTENSION_SOURCE.indexOf('  const mcpGateway', hookStart);
+    const hook = CINDY_BRIDGE_EXTENSION_SOURCE.slice(hookStart, hookEnd);
+    const compiled = ts.transpileModule(
+      CINDY_BRIDGE_EXTENSION_SOURCE.slice(helperStart, helperEnd) + '\n' + hook,
+      { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } },
+    ).outputText;
+    let callback!: (event: any, ctx: any) => Promise<Record<string, unknown>>;
+    const sandbox: any = {
+      process: { env: {} },
+      pi: { on: (name: string, handler: (event: any, ctx: any) => Promise<Record<string, unknown>>) => {
+        if (name === 'before_provider_request') callback = handler;
+      } },
+      runtimeRequestModel: () => undefined,
+      astraResponsesPayload: () => undefined,
+      nativeFastPayload: async () => undefined,
+      modelRequestControlActive: false,
+      runtimeModelControl: async () => ({ request: undefined }),
+      boundedChatToolIds: (payload: Record<string, unknown>) => payload,
+      projectPiRequestDiagnostics: () => ({}),
+      performance,
+    };
+    runInNewContext(compiled, sandbox);
+    const payload = { max_tokens: 1_010_781, messages: [{ role: 'user', content: 'hello' }] };
+    const model = { api: 'openai-completions', contextWindow: 1_048_576, maxTokens: 1_048_576 };
+    const ctx = (tokens: number | null) => ({
+      model, getContextUsage: () => ({ contextWindow: model.contextWindow, tokens }), ui: { notify: vi.fn() },
+    });
+    // Old wire budgets from #9252 and Pi 1.5.2 budgets for the same estimates.
+    for (const [estimate, actual, oldBudget, nativeBudget] of [
+      [33_699, 39_671, 1_010_781, 1_009_822],
+      [33_607, 39_948, 1_010_873, 1_009_927],
+    ]) {
+      for (const [field, budget] of [['max_tokens', oldBudget], ['max_completion_tokens', nativeBudget]] as const) {
+        const request = { [field]: budget };
+        const result = await callback({ payload: request }, ctx(estimate));
+        expect(result[field]).toBe(model.contextWindow - estimate - 16_384);
+        expect(actual + Number(result[field])).toBeLessThanOrEqual(model.contextWindow);
+        expect(request[field]).toBe(budget);
+      }
+    }
+    for (const field of ['max_tokens', 'max_completion_tokens']) {
+      for (const budget of [65_536, 70_000, 384_000]) {
+        const short = { [field]: budget };
+        expect(await callback({ payload: short }, { ...ctx(100), model: { ...model, maxTokens: 384_000 } })).toBe(short);
+      }
+    }
+    // The native 15% reserve already covers long inputs.
+    const long = { max_tokens: 243_576 };
+    expect(await callback({ payload: long }, ctx(700_000))).toBe(long);
+    const legacy = await callback({ payload: { max_tokens: 344_480 } }, ctx(700_000));
+    expect(730_000 + Number(legacy.max_tokens)).toBeLessThanOrEqual(model.contextWindow);
+    expect(await callback({ payload }, ctx(null))).toBe(payload);
+    expect(await callback({ payload }, { model })).toBe(payload);
+    expect(await callback({ payload }, { ...ctx(33_699), getContextUsage: () => ({ tokens: 33_699, contextWindow: 128_000 }) })).toBe(payload);
+    expect(await callback({ payload }, { ...ctx(33_699), model: { ...model, api: 'openai-responses' } })).toBe(payload);
+    sandbox.modelRequestControlActive = true;
+    sandbox.runtimeModelControl = vi.fn(async () => ({ request: { max_tokens: 70_000, messages: [{ role: 'user', content: 'short' }] } }));
+    const explicit = await callback({ payload: { max_tokens: 384_000, messages: [{ role: 'user', content: 'short' }] } }, {
+      model: { api: 'openai-completions', contextWindow: 1_048_576, maxTokens: 384_000 },
+      ui: { notify: vi.fn() },
+    });
+    expect(explicit.max_tokens).toBe(70_000);
+    expect(sandbox.runtimeModelControl).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      phase: 'payload', request: expect.objectContaining({ max_tokens: 384_000 }),
+    }));
   });
 
   it('is valid standalone TypeScript for the Pi runtime to load', () => {
@@ -1537,6 +1609,8 @@ describe('cindy-bridge extension source', () => {
     expect(decode('user-deny')).toBe('User denied this tool call via Cindy.');
     expect(decode('user-deny:Do not publish.')).toBe('User denied this tool call via Cindy: Do not publish.');
     expect(decode('system-deny:session_closed')).toBe('Cindy could not approve this tool call: session_closed');
+    expect(decode('system-deny:interaction_timeout')).toBe(formatPermissionDenial('system', 'interaction_timeout'));
+    expect(decode('system-deny:timeout')).toContain('the user did not reject it');
     expect(decode(undefined)).toBe('Cindy could not approve this tool call.');
     expect(decode('auto-review-deny:' + 'x'.repeat(500))).toBe('Cindy Auto-review denied this tool call: ' + 'x'.repeat(240));
   });

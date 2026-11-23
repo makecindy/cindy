@@ -143,6 +143,8 @@ describe('TodaySpendChip dashboard routing', () => {
     );
     expect(compact(source)).toContain(compact('const codexApiHasTokenFallback = isCodexApi'));
     expect(compact(source)).toContain(compact('const codexApiEmptyState = isCodexApi'));
+    // 单一调用点契约：订阅分支与 codex-api 分支共用 codexEmptyState（#12149），
+    // 任一处内联第二份 getCodexApiEmptyState 调用都会在此打红（失效后果：空态判定分叉）。
     expect(source.match(/getCodexApiEmptyState\(latestTurnUsage\)/g)).toHaveLength(1);
     expect(compact(source)).toContain(compact('todaySpend.codex.sessionTokensLine'));
     expect(compact(source)).toContain(compact('todaySpend.codex.noUsageLabel'));

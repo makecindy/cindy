@@ -196,9 +196,17 @@ export interface IMUnsupportedEntry {
   type: string;
   /** Localised label suitable for showing the user. */
   label: string;
+  /**
+   * The model can fetch it with a channel tool (an original over the direct-delivery cap, or the
+   * original behind a preview). Such an entry still invokes the model and is not reported to the
+   * sender as unsupported.
+   */
+  retrievable?: boolean;
 }
 
 export interface IMMessageEvent {
+  /** In-process ingress lease. Recheck before admitting queued work; never serialize to models or clients. */
+  assertCurrent?(): void;
   /** In-process durable transport handoff; never serialized to the model or remote clients. */
   delivery?: {
     /** A queued retry was withdrawn by a later owner stop command. */

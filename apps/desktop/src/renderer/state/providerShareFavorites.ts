@@ -44,16 +44,22 @@ export function getProviderShareFavoriteRegions(ownerId: string | null): Source[
   return providerShareFavoriteRegionsOf(accessHostModelFavorites(ownerId));
 }
 
-/** 可用来源立即发布；仅清理 Main 已确认完整名单的区域，未知区域的收藏保留。 */
+/** 可用来源立即发布；删除收藏需要退出回执或 Main 对成员终止的确认。 */
 export function reconcileProviderShareFavorites(next: ProviderShareReceivedSnapshot): boolean {
   if (!next || !isDataOwnerPushStampCurrent(next.ownerStamp)) return false;
   let cleanupFailed = false;
   try {
     const items = accessHostModelFavorites(next.ownerStamp.dataOwnerId);
-    const sources = new Set(next.received.map(providerShareFavoriteSource));
+    const received = new Map(next.received.map(share => [share.shareId, share]));
+    const left = new Set(next.leftMemberIds);
     for (const item of items) {
       const source = parseProviderShareFavoriteSource(item.providerId);
-      if (!source || !next.confirmedRegions.includes(source.region) || sources.has(item.providerId)) continue;
+      if (!source) continue;
+      const current = received.get(source.shareId);
+      const replaced = next.confirmedRegions.includes(source.region) && current?.owner.region === source.region
+        && current.memberId !== source.memberId;
+      // List omission suspends the projection; the favorite cannot grant access.
+      if (!left.has(source.memberId) && !replaced) continue;
       accessHostModelFavorites(next.ownerStamp.dataOwnerId, { kind: 'remove', expected: item });
     }
   } catch {
@@ -76,7 +82,8 @@ export function useProviderShareFavoriteSources(routed?: ReadonlyMap<string, Con
     ? state.membership : null;
   return useMemo(() => routed ? new Map([...routed].map(([deviceId, share]) => [providerShareFavoriteSource(share), deviceId])) : new Map(
     (current?.received ?? [])
-      .filter((share) => share.status === 'active' && share.hostOnline && share.hostCapable)
+      .filter((share) => share.status === 'active' && share.hostOnline && share.hostCapable
+        && !current?.unavailableShareIds?.includes(share.shareId) && !current?.leftMemberIds?.includes(share.memberId))
       .map((share) => [providerShareFavoriteSource(share), `share:${share.shareId}`]),
   ), [current, routed]);
 }
@@ -94,7 +101,9 @@ export function useProviderShareFavorites(
     ? state.membership : null;
   const routedRef = useRef(routed);
   routedRef.current = routed;
-  const share = routed ? routed.get(deviceId ?? '') : membership?.received.find((item) => `share:${item.shareId}` === deviceId);
+  const share = routed ? routed.get(deviceId ?? '') : membership?.received.find((item) =>
+    `share:${item.shareId}` === deviceId && item.status === 'active'
+    && !membership.unavailableShareIds?.includes(item.shareId) && !membership.leftMemberIds?.includes(item.memberId));
   const source = share ? providerShareFavoriteSource(share) : null;
   const project = (item: ModelFavoriteItem): ModelFavoriteItem => ({ ...item, providerId: share!.providerId });
   const assertCurrent = () => {
@@ -107,7 +116,8 @@ export function useProviderShareFavorites(
     const current = snapshot.membership;
     if (!source || !share || !current || !isDataOwnerGenerationCurrent(owner) || !isDataOwnerPushStampCurrent(current.ownerStamp) ||
         current.ownerStamp.dataOwnerId !== owner.dataOwnerId ||
-        !current.received.some((item) => providerShareFavoriteSource(item) === source))
+        current.unavailableShareIds?.includes(share.shareId) || current.leftMemberIds?.includes(share.memberId) ||
+        !current.received.some((item) => item.status === 'active' && providerShareFavoriteSource(item) === source))
       throw new Error('Shared favorite source unavailable');
   };
   const expected = (uid: string) => {
@@ -135,7 +145,12 @@ export function useProviderShareFavorites(
       const item = { ...before, ...patch };
       accessHostModelFavorites(owner.dataOwnerId, {
         kind: 'update', expected: before,
-        item: { ...item, effort: item.effort ?? undefined, fast: item.fast ? true : undefined },
+        // 速度是三态。收成 true 后，星标对不上 ultrafast，再点会再加一条。
+        item: {
+          ...item,
+          effort: item.effort ?? undefined,
+          fast: item.fast === 'ultrafast' ? 'ultrafast' : item.fast ? true : undefined,
+        },
       });
     },
     remove: (uid) => {

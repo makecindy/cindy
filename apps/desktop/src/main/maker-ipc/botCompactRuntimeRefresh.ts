@@ -3,6 +3,7 @@ export interface BotCompactRuntimeSession {
   readonly instanceId: string;
   isTurnRunning(): boolean;
   listBackgroundTasks(): ReadonlyArray<unknown>;
+  countPendingWakeContinuations?(): number;
 }
 
 export interface BotCompactBoundary {
@@ -46,19 +47,38 @@ export interface BotCompactRuntimeRefreshDeps {
 }
 
 /**
+ * A resource/profile refresh signal may keep the live runtime only when the
+ * preflight compared against an applied baseline and found it unchanged. No
+ * hydrated Profile or no applied baseline (e.g. its first write failed) is not
+ * proof of "unchanged", so it keeps the previous rebuild.
+ */
+export function botRuntimeRefreshNeedsReplacement(snapshot: {
+  runtimeEpochChanged: boolean;
+  runtimeEpochBaseline: boolean;
+} | null | undefined): boolean {
+  return !snapshot || !snapshot.runtimeEpochBaseline || snapshot.runtimeEpochChanged;
+}
+
+/**
  * Preserve the live runtime when a frozen Bot resource changed. The preflight
  * must finish before close, and ownership is checked again immediately before
- * the destructive half of the swap.
+ * the destructive half of the swap. The preflight reports whether the runtime
+ * epoch changed; an unchanged epoch keeps the live runtime and returns null,
+ * matching the comparison made before a send.
  */
 export async function replaceBotRuntimeAfterPreflight<T>(deps: {
-  preflight(): Promise<void>;
+  preflight(): Promise<boolean>;
   isCurrentOwner(): boolean;
+  isIdle?(): boolean;
   close(): Promise<void>;
   bootstrap(): Promise<T>;
-}): Promise<T> {
-  await deps.preflight();
+}): Promise<T | null> {
+  if (!await deps.preflight()) return null;
   if (!deps.isCurrentOwner()) {
     throw new Error('Bot runtime owner changed before compact refresh');
+  }
+  if (deps.isIdle && !deps.isIdle()) {
+    throw new Error('Bot runtime became busy before compact refresh');
   }
   await deps.close();
   return deps.bootstrap();
@@ -116,6 +136,7 @@ export function createBotCompactRuntimeRefreshCoordinator(
     if (
       session.isTurnRunning()
       || session.listBackgroundTasks().length > 0
+      || (session.countPendingWakeContinuations?.() ?? 0) > 0
       || deps.hasPendingInteraction(session.id)
     ) {
       return 'deferred';
@@ -149,7 +170,8 @@ export function createBotCompactRuntimeRefreshCoordinator(
     return !session.isTurnRunning()
       && !deps.hasPendingInteraction(session.id)
       && !inFlight.has(session.id)
-      && session.listBackgroundTasks().length > 0;
+      && (session.listBackgroundTasks().length > 0
+        || (session.countPendingWakeContinuations?.() ?? 0) > 0);
   }
 
   function clearForClosedSession(session: BotCompactRuntimeSession): void {

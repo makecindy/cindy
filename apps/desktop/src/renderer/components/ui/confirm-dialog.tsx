@@ -9,6 +9,8 @@ import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/win
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Tooltip } from '@/components/ui/tooltip';
+import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
+import { useHeldWhileBlockingPrompt } from '@/components/ui/blocking-prompt-hold';
 
 // 长按钮文案在面板内换行、按钮纵向长高,不冲出弹窗也不截断(DESIGN.md §4)。
 const CONFIRM_ACTION_CLASS =
@@ -58,6 +60,8 @@ export interface ConfirmDialogProps {
    * 把这个开关打开,让默认焦点落到主按钮,避免取消按钮天然带 focus ring。
    */
   autoFocusConfirm?: boolean;
+  /** Return focus to a surviving control when the original opener was inside a popover. */
+  restoreFocusTarget?: () => HTMLElement | null;
   /** Disable the primary action until caller-owned validation has passed. */
   confirmDisabled?: boolean;
   /** 要求逐字输入 expected 才能确认；匹配不做 trim 或大小写折叠。 */
@@ -100,7 +104,7 @@ export interface ConfirmDialogProps {
 }
 
 export function ConfirmDialog({
-  open,
+  open: requestedOpen,
   onOpenChange,
   title,
   description: defaultDescription,
@@ -116,6 +120,7 @@ export function ConfirmDialog({
   dontShowAgainLabel,
   checkboxDefaultChecked = false,
   autoFocusConfirm,
+  restoreFocusTarget,
   confirmDisabled = false,
   requireTypedConfirmation,
   contentSelectable = false,
@@ -127,9 +132,11 @@ export function ConfirmDialog({
   onConfirm,
   onCancel,
   onTertiary,
-  zIndex = 10000,
+  zIndex = Z_INDEX_LAYERS.modal,
 }: ConfirmDialogProps) {
   const { t } = useTranslation();
+  // 登录过期等阻断提示显示期间,独立挂载的确认框(如关窗确认)暂缓到它关闭后再出现。
+  const open = useHeldWhileBlockingPrompt(requestedOpen);
   // describeContent 用:让 aria-describedby 覆盖整个「description + content」滚动区。
   const bodyId = useId();
   const resolvedCancelText = cancelText ?? t('commonUi.confirmDialog.cancel');
@@ -186,7 +193,7 @@ export function ConfirmDialog({
             套一层 Presence)。 */}
         <AlertDialog.Overlay
           className={cn(
-            'modal-scrim fixed inset-0 z-[10000]',
+            'modal-scrim fixed inset-0 z-modal',
           )}
           style={{ ...WINDOW_DRAG_STYLE, zIndex }}
         >
@@ -196,7 +203,7 @@ export function ConfirmDialog({
               // 命中区域按布局矩形计算、不跟随 transform（ChromeActions.tsx 的既有结论），
               // transform 定位会让 no-drag 挖洞与弹窗视觉位置错位，点弹窗内容会变成拖窗。
               // inset-0 + m-auto + h-fit：布局矩形即视觉矩形，挖洞与弹窗严格重合。
-              'modal-panel fixed inset-0 z-[10000] m-auto h-fit',
+              'modal-panel fixed inset-0 z-modal m-auto h-fit',
               'flex max-h-[85vh] flex-col',
               'w-full p-4',
               contentSelectable ? 'select-text' : 'select-none',
@@ -213,6 +220,13 @@ export function ConfirmDialog({
                 : {})}
             onEscapeKeyDown={(e) => {
               if (loading) e.preventDefault();
+            }}
+            onCloseAutoFocus={(event) => {
+              const target = restoreFocusTarget?.();
+              if (target?.isConnected) {
+                event.preventDefault();
+                target.focus();
+              }
             }}
             onOpenAutoFocus={
               requireTypedConfirmation || autoFocusConfirm

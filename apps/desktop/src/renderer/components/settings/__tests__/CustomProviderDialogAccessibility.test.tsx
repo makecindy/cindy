@@ -61,7 +61,7 @@ async function selectDiscoveredModels() {
   fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.fetch.button' }));
   await act(async () => {});
   for (const checkbox of screen.getAllByRole('checkbox')) {
-    if (checkbox.getAttribute('aria-checked') !== 'true') fireEvent.click(checkbox);
+    if (!(checkbox as HTMLInputElement).checked) fireEvent.click(checkbox);
   }
   fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.fetch.confirm' }));
   await act(async () => {});
@@ -655,12 +655,16 @@ describe('ProviderConnectionDialog accessibility', () => {
 
   // #8679: the failure line alone ("upstream 5xx") never said which model the probe used. The saved
   // provider's probe model is chosen by Main, so the label must follow the result, not the form's first row.
-  it('测试连接失败时标明主进程返回的被测模型', async () => {
+  // #11007 unit: project the structured certificate result through the actual dialog;
+  // previous UNKNOWN-only coverage could not detect a lost diagnostic code at this boundary.
+  it.each(['UNKNOWN', 'CERT_ERROR'] as const)('测试连接失败时显示 %s 及主进程返回的被测模型', async code => {
     window.electronAPI.maker.testProviderConnection = vi.fn(async () => ({
-      ok: false, code: 'UNKNOWN' as const, latencyMs: 1, modelId: 'probed-by-main',
+      ok: false, code, ...(code === 'CERT_ERROR' ? { decision: 'blocked' as const } : {}),
+      latencyMs: 1, modelId: 'probed-by-main',
     }));
     await openFailingTest();
     expect(await screen.findByText('settings.providers.custom.test.model:probed-by-main')).toBeTruthy();
+    expect(await screen.findByText('providerError.' + code)).toBeTruthy();
   });
 
   // The probe can throw after the response headers (first stream frame lost); Main rethrows unchanged and
@@ -1914,15 +1918,15 @@ describe('DS-6 field errors and save ownership', () => {
     );
     await waitForInitialDialogFocus();
 
-    // Tip 经 Portal 渲染到 body,默认 z-[60] 会被 z-[10000] 模态层盖住;
-    // 弹窗内必须把提示抬到 z-[10001](review P2)。Radix Tooltip 1.2 的
+    // Tip 经 Portal 渲染到 body;默认在 tooltip 层(10011),高于 modal 层(10000/10001),
+    // 弹窗内不需要再抬层级(DESIGN.md §6 层级刻度,review P2)。Radix Tooltip 1.2 的
     // role="tooltip" 挂在 Content 内的 sr-only 副本上,带 z class 的可见层
     // 是它的父节点(Popper.Content)。
     const eye = screen.getByRole('button', { name: 'settings.apiKey.showKey' });
     await user.hover(eye);
     const eyeTip = await screen.findByRole('tooltip');
     expect(eyeTip.textContent).toBe('settings.apiKey.showKey');
-    expect(eyeTip.parentElement!.className).toContain('z-[10001]');
+    expect(eyeTip.parentElement!.className).toContain('z-tooltip');
     // 模态 open 时 Radix 会把 body 置 pointer-events:none,userEvent.unhover 的
     // 交互前检查会拒绝;直接派发 pointerleave 关闭提示(Radix 监听 pointer 事件)。
     fireEvent.pointerLeave(eye);
@@ -2329,7 +2333,7 @@ describe('new-connection identification', () => {
     fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.fetch.button' }));
     await act(async () => {});
     expect(screen.getAllByRole('checkbox')).toHaveLength(84);
-    expect(screen.getAllByRole('checkbox').every(row => row.getAttribute('aria-checked') === 'false')).toBe(true);
+    expect(screen.getAllByRole('checkbox').every(row => !(row as HTMLInputElement).checked)).toBe(true);
     expect(fetchProviderModels).toHaveBeenCalledOnce();
   });
   it.each([
@@ -2982,13 +2986,16 @@ describe('Magpie source metadata through the connection form', () => {
     expect(entries.map(entry => entry.capabilities[agent]!.wireModelId)).toEqual(discovered.map(model => model.id));
   });
 
-  it('clears a disappeared source on successful refresh while retaining opaque identity and unlisted manual rows', async () => {
+  it('clears a disappeared source and stale discoveredCost on successful refresh while retaining opaque identity and unlisted manual rows', async () => {
     customProviderMocks.readCustomProviderKey.mockResolvedValue(null);
     window.electronAPI.maker.fetchProviderModels = vi.fn().mockResolvedValue({ ok: true, models: [
       { id: 'foo', name: 'foo', discoverySnapshotId: 'snapshot-no-source' },
     ] });
     const initial: CustomProviderConfig = { id: 'magpie-form', name: 'Magpie', auth: { method: 'none' }, runtimes: {
-      codex: { baseUrl: 'http://127.0.0.1:1234/v1', models: [discovered[1], { ...discovered[0], name: 'Manual override' }] },
+      codex: { baseUrl: 'http://127.0.0.1:1234/v1', models: [
+        { ...discovered[1], discoveredCost: { input: 2, output: 8 } },
+        { ...discovered[0], name: 'Manual override', discoveredCost: { input: 1, output: 4 } },
+      ] },
     } };
     render(<ProviderConnectionDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
     await waitFor(() => expect(customProviderMocks.readCustomProviderKey).toHaveBeenCalled());
@@ -3000,7 +3007,10 @@ describe('Magpie source metadata through the connection form', () => {
     const models = customProviderMocks.updateCustomProvider.mock.calls[0][0].runtimes.codex.models;
     expect(models.find((model: { id: string }) => model.id === 'foo')).toMatchObject({ opaqueModelId: true, discoverySnapshotId: 'snapshot-no-source' });
     expect(models.find((model: { id: string }) => model.id === 'foo').discoveredSource).toBeUndefined();
-    expect(models.find((model: { id: string }) => model.id === 'chatgpt/foo')).toMatchObject({ ...discovered[0], name: 'Manual override' });
+    expect(models.find((model: { id: string }) => model.id === 'foo').discoveredCost).toBeUndefined();
+    expect(models.find((model: { id: string }) => model.id === 'chatgpt/foo')).toMatchObject({
+      ...discovered[0], name: 'Manual override', discoveredCost: { input: 1, output: 4 },
+    });
   });
 });
 
@@ -3082,7 +3092,7 @@ describe('model summary and explicit model selection', () => {
     expect(screen.getByText(`${availableLabel}:84`)).toBeTruthy();
     fireEvent.click(fetchButton());
     const reopened = await screen.findByRole('dialog', { name: 'settings.providers.custom.fetch.pickerTitle' });
-    expect(within(reopened).getAllByRole('checkbox').every(row => row.getAttribute('aria-checked') === 'false')).toBe(true);
+    expect(within(reopened).getAllByRole('checkbox').every(row => !(row as HTMLInputElement).checked)).toBe(true);
     fireEvent.click(within(reopened).getByRole('checkbox', { name: /summary-1$/ }));
     fireEvent.click(within(reopened).getByRole('button', { name: 'settings.providers.custom.fetch.confirm' }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'settings.providers.custom.fetch.pickerTitle' })).toBeNull());
@@ -3097,7 +3107,7 @@ describe('model summary and explicit model selection', () => {
     expect(screen.getByText(`${selectedLabel}:1`)).toBeTruthy();
     fireEvent.click(fetchButton());
     const picker = await screen.findByRole('dialog', { name: 'settings.providers.custom.fetch.pickerTitle' });
-    expect(within(picker).getByRole('checkbox', { name: /summary-0$/ }).getAttribute('aria-checked')).toBe('true');
+    expect((within(picker).getByRole('checkbox', { name: /summary-0$/ }) as HTMLInputElement).checked).toBe(true);
     fireEvent.click(within(picker).getByRole('checkbox', { name: /summary-1$/ }));
     fireEvent.click(within(picker).getByRole('button', { name: 'settings.providers.custom.cancel' }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'settings.providers.custom.fetch.pickerTitle' })).toBeNull());

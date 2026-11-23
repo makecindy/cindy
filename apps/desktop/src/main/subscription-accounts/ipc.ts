@@ -57,13 +57,16 @@ export function registerSubscriptionAccountsIpc(): void {
     if (context?.sharedTask) throwIpcError('PERMISSION_DENIED', 'Account quota requires the owner');
     if (!context) assertTrustedAppRendererEvent(event);
     const scheduling = scope && typeof scope === 'object' && !Array.isArray(scope)
-      ? scope as { scheduling?: unknown; ownComputer?: unknown } : null;
+      ? scope as { scheduling?: unknown; ownComputer?: unknown; capability?: unknown } : null;
     if (scheduling?.scheduling === 1) {
       if (context && !isOwnComputerContext(context)) throwIpcError('PERMISSION_DENIED', 'Account scheduling requires the owner');
       if (!isSubscriptionPoolProviderIdShape(providerId) || typeof model !== 'string' || !model.trim() || model.length > 512
-        || typeof scheduling.ownComputer !== 'boolean') throwIpcError('INVALID_PARAMS', 'Invalid subscription scheduling query');
+        || typeof scheduling.ownComputer !== 'boolean'
+        || (scheduling.capability !== undefined && scheduling.capability !== 'image.generate'))
+        throwIpcError('INVALID_PARAMS', 'Invalid subscription scheduling query');
       return { providerId, model, scheduling: await readSubscriptionPoolScheduling(providerId, model, {
         remote: !!context, ownComputer: isOwnComputerContext(context) && scheduling.ownComputer === true,
+        ...(scheduling.capability === 'image.generate' ? { capability: scheduling.capability } : {}),
       }) };
     }
     if (!isSubscriptionPoolProviderIdShape(providerId))
@@ -112,6 +115,7 @@ export function registerSubscriptionAccountsIpc(): void {
             : KNOWN_FAILURE_REASONS.has(reason) ? reason
               : error instanceof Error ? error.name : typeof error,
         });
+      if (reason === 'Account not found') throwIpcError('NOT_FOUND', 'Subscription account not found');
       if (unreachable)
         throwIpcError(
           'SUBSCRIPTION_ACCOUNT_UNREACHABLE',

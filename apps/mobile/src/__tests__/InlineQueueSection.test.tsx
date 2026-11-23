@@ -20,7 +20,7 @@ vi.mock('@/components/AppText', async () => ({ Text: (await import('react-native
 vi.mock('lucide-react-native', () => ({ Pause: () => null, Play: () => null, Split: () => null, CircleAlert: () => null, X: () => null, ChevronRight: () => null, ChevronDown: () => null }));
 vi.mock('react-i18next', async (importOriginal) => ({
   ...await importOriginal<typeof import('react-i18next')>(),
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({ i18n: { language: 'en' }, t: (key: string, opts?: { seconds?: number }) => opts?.seconds === undefined ? key : key + ' ' + opts.seconds }),
 }));
 vi.mock('@/theme', async () => {
   const tokens = await import('@/theme/tokens');
@@ -141,4 +141,23 @@ it('wires queue controls to the session availability gate', () => {
   const source = readFileSync('app/sessions/[sessionId].tsx', 'utf8');
   expect(source).toContain('readOnlyReason={queueAvailabilityReason}');
   expect(source).not.toContain('errorRecoveryReadOnlyReason');
+});
+
+it('counts down the executing host’s Gemini retry and offers cancellation', async () => {
+  vi.useFakeTimers();
+  try {
+    const error = JSON.stringify({ error: { code: 429, status: 'RESOURCE_EXHAUSTED',
+      message: 'Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_paid_tier_input_token_count. Generate content input tokens per minute limit exceeded. Please retry in 56.6s.' } });
+    const props = { projection: { ...projection, error, usageLimitWait: { resumeAt: Date.now() + 56_599 } }, onCancelUsageLimitWait: vi.fn() };
+    await show(props);
+    expect(host.textContent).toContain(i18n.t('chat.geminiRateLimit.title'));
+    expect(host.textContent).toContain('chat.geminiRateLimit.retryIn 57');
+    await act(async () => vi.advanceTimersByTime(1000));
+    expect(host.textContent).toContain('chat.geminiRateLimit.retryIn 56');
+    await act(async () => button('cancelUsageLimitWait').click());
+    expect(props.onCancelUsageLimitWait).toHaveBeenCalledOnce();
+    await show({ ...props, projection: { ...props.projection, usageLimitWait: null, errorReason: 'gemini-input-retry-exhausted' } });
+    expect(host.textContent).toContain(i18n.t('chat.geminiRateLimit.exhausted'));
+    expect(host.textContent).not.toContain('chat.geminiRateLimit.retryIn');
+  } finally { vi.useRealTimers(); }
 });

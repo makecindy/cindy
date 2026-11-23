@@ -353,14 +353,14 @@ export function MobileDownloadDialog({
       <Dialog.Portal>
         <Dialog.Overlay
           className={cn(
-            'modal-scrim fixed inset-0 z-[10000]',
+            'modal-scrim fixed inset-0 z-modal',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
           className={cn(
-            'modal-panel fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
+            'modal-panel fixed left-1/2 top-1/2 z-modal -translate-x-1/2 -translate-y-1/2',
             'max-h-[calc(100vh-32px)] w-[400px] max-w-[calc(100vw-32px)] overflow-y-auto overscroll-contain',
             'select-none p-4',
           )}
@@ -382,14 +382,13 @@ export function MobileDownloadDialog({
             <Tip
               text={t('sidebar.mobileDownload.close')}
               side="bottom"
-              contentClassName="z-[10001]"
             >
               <button
                 ref={closeActionRef}
                 type="button"
                 aria-label={t('sidebar.mobileDownload.close')}
                 className={cn(
-                  'absolute right-3 top-3 z-10 flex h-8 w-8 items-center justify-center rounded-full',
+                  'absolute right-3 top-3 z-raised flex h-8 w-8 items-center justify-center rounded-full',
                   'text-[var(--confirm-desc)] transition-colors',
                   'hover:bg-[var(--surface-hover)] hover:text-[var(--confirm-title)]',
                   'active:scale-[0.98]',

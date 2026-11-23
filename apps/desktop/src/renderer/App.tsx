@@ -490,7 +490,7 @@ export function App() {
     <ThemeProvider>
       <FontSettingsProvider>
         <WallpaperSettingsProvider>
-          <LocaleProvider>
+          <LocaleProvider syncHostOnMount={!isSecondaryWindow()}>
             <AppPreferenceControl />
             <ConfirmDialogProvider>
               <EnvCheckProvider>

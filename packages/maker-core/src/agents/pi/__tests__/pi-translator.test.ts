@@ -2629,11 +2629,13 @@ describe('pi translator live token speed', () => {
     }
   });
 
+  // Also: the finished turn keeps the parent's speed chart. Child output makes the usage
+  // counters incomparable and clears their timing, which used to drop the chart as well.
   it('keeps delegated subagent output out of the parent generation meter', () => {
     vi.useFakeTimers();
     try {
       const ctx = createPiTranslateContext(noopLogger);
-      const { queue } = makeQueue();
+      const { queue, events } = makeQueue();
       vi.setSystemTime(1_000);
       translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
       translatePiEvent(ev({ type: 'message_start', message: { role: 'assistant' } }), queue, ctx);
@@ -2671,6 +2673,10 @@ describe('pi translator live token speed', () => {
       expect(ctx.tokenSpeed.snapshot()).toMatchObject({ tokens: 4 });
       translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
       expect(ctx.tokenSpeed.snapshot()?.tokens).toBe(4);
+      const done = events.find((event) => event.type === 'done');
+      const usage = (done?.data as { usage?: { durationMs?: number; generationTrace?: { requests: number } } })?.usage;
+      expect(usage?.durationMs).toBeUndefined();
+      expect(usage?.generationTrace).toMatchObject({ requests: 1 });
     } finally {
       vi.useRealTimers();
     }
@@ -2944,6 +2950,9 @@ describe('pi translator live token speed', () => {
       expect(settled.elapsedMs).toBe(2_500);
       // 18 tokens over 2.5s of generation.
       expect(settled.average).toBeCloseTo(18_000 / 2_500, 6);
+      // The middle request had no report and the following retry lasted only 500 ms.
+      // Combining them would produce a spurious calibrated average.
+      expect(settled.measurement?.average).toBeNull();
       expect(settled.rate).toBe(settled.average);
       disposePiTranslateContext(ctx);
     } finally {
@@ -3033,6 +3042,7 @@ describe('pi translator live token speed', () => {
       const summarySnap = ctx.tokenSpeed.snapshot(15_950);
       expect(summarySnap?.rate).toBeGreaterThan(25);
       expect(summarySnap?.rate).toBeLessThan(35);
+      expect(summarySnap?.measurement?.latest).toBeNull();
 
       send({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'stop', timestamp: 1_000, usage: { input: 10, output: 500 } } }, 16_000);
       send({ type: 'agent_settled' }, 16_000);
@@ -3047,6 +3057,7 @@ describe('pi translator live token speed', () => {
       const verbatimSnap = ctx.tokenSpeed.snapshot(22_500);
       expect(verbatimSnap?.streaming).toBe(true);
       expect(verbatimSnap?.rate).toBeGreaterThan(80);
+      expect(verbatimSnap?.measurement?.latest?.kind).toBe('stream');
       disposePiTranslateContext(ctx);
     } finally {
       vi.useRealTimers();

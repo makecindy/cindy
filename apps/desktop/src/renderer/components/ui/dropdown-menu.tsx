@@ -102,7 +102,7 @@ const DropdownMenuSubContent = React.forwardRef<
       ref={useMenuPanel(ref, { highlight: hoverHighlight })}
       {...{ [MENU_PANEL_ATTR]: '' }}
       className={cn(
-        'relative z-50 min-w-[8rem] overflow-hidden rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-1 text-[var(--cmd-palette-item-text)] shadow-[shadow:var(--shadow-menu)] origin-[var(--radix-dropdown-menu-content-transform-origin)] data-[state=open]:animate-float-in data-[state=closed]:animate-float-out',
+        'relative z-dropdown min-w-[8rem] overflow-hidden rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-1 text-[var(--cmd-palette-item-text)] shadow-[shadow:var(--shadow-menu)] origin-[var(--radix-dropdown-menu-content-transform-origin)] data-[state=open]:animate-float-in data-[state=closed]:animate-float-out',
         className,
       )}
       {...props}
@@ -129,7 +129,7 @@ const DropdownMenuContent = React.forwardRef<
       {...{ [MENU_PANEL_ATTR]: '' }}
       sideOffset={sideOffset}
       className={cn(
-        'relative z-50 min-w-[8rem] overflow-hidden rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-1 text-[var(--cmd-palette-item-text)] shadow-[shadow:var(--shadow-menu)]',
+        'relative z-dropdown min-w-[8rem] overflow-hidden rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-1 text-[var(--cmd-palette-item-text)] shadow-[shadow:var(--shadow-menu)]',
         'origin-[var(--radix-dropdown-menu-content-transform-origin)] data-[state=open]:animate-float-in data-[state=closed]:animate-float-out',
         className,
       )}

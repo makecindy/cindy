@@ -1,3 +1,4 @@
+import { normalizeAutoTitle } from '@cindy/maker-shared/session-title';
 import { createProjectToolCallbacks } from './projectToolCallbacks.js';
 import { resolveAutomaticProjectIcon } from '../projectAutomaticIcon.desktop.js';
 import { readSubscriptionSessionAccount, readSubscriptionUsage } from '../subscription-accounts/runtime.js';
@@ -14,6 +15,9 @@ import { randomUUID } from 'node:crypto';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import { gateBuiltinMcpProviders } from './provider-gate.js';
 import { createIMessageMcpServer } from './imessageMcpServer';
+import { resolveIMessageLaneScope } from '../im/imessage/laneScope';
+import { createDiscordMcpServer } from './discordMcpServer';
+import { DiscordOperationError } from '@cindy/im';
 import { createTerminalToolExecutor } from '../terminal/terminalToolAccess.js';
 import { createFileToolExecutor } from '../cindy-brain/fileToolAccess.js';
 import { getGhostFsSlot, getGhostStorageService } from '../cindy-brain/index.js';
@@ -98,8 +102,9 @@ import { inspectPdf } from '../doc-tools/pdfInspector.js';
 import { getAndroidMcpDeps } from './android.js';
 import { getBrowserMcpDeps } from './browser.desktop.js';
 import { getComputerMcpDeps } from './computer.desktop.js';
-import { feishuIm, wechatIm } from '../im';
-import { getBotFeishuTransport } from '../im/shared/botImConnectionRuntime';
+import { discordIm, feishuIm, wechatIm } from '../im';
+import { directDeliveryFile, prepareDirectDelivery } from '../im/imessage/directDelivery';
+import { getBotFeishuTransport, getBotIMessageDirectTarget, getBotIMessageLaneTarget } from '../im/shared/botImConnectionRuntime';
 import { createFeishuTransportResolver } from './feishuTransportRouting';
 import { readChannelToolScope } from '../im/shared/channelToolScope';
 import { hasImChannelVendorOptions } from '../../shared/botImConnection.js';
@@ -150,7 +155,8 @@ import { createDesktopTaskActionAuthorizer } from '../maker-ipc/taskActionHost.j
 import { forkTaskAtMessage } from '../maker-ipc/fork.js';
 import { commitTaskRewind } from '../maker-ipc/rewind.js';
 import { authorizeGroupTool, reportGroupTaskCreated } from '../maker-ipc/botGroupToolAuthorization.js';
-import { createSharedTaskTools } from './sharedTaskTools.js';
+import { createSharedTaskTools, type SharedTaskCallerAccess } from './sharedTaskTools.js';
+import { createSharedTaskProgressReader } from './sharedTaskProgress.js';
 import { assertTaskActionCurrent, captureTaskActionSyncGuard } from '../maker-ipc/taskActionAuthorization.js';
 import {
   getSessionRowSnapshot,
@@ -158,6 +164,7 @@ import {
   patchSessionMetaInDb,
   renameSessionTitlesInDb,
   setSessionsStatusInDb,
+  setSessionsSnoozeInDb,
 } from '../localDb/ipc/sessions.js';
 import { getInputHandoffService } from '../input-handoff/service.js';
 import { isInputHandoffDisabledForSession } from '../input-handoff/botPolicy.js';
@@ -171,7 +178,7 @@ import {
 import { botSessionLinks, sessions } from '../localDb/schema.js';
 import { createSchedulerRemoteDeps } from './schedulerDevices.js';
 import { createRemoteSessionHandoff } from './sessionHandoffRemote.js';
-import { createRemoteSessionsStatusSetter, remoteSessionMutationFailure } from './sessionStatusRemote.js';
+import { createRemoteSessionsSnoozeSetter, createRemoteSessionsStatusSetter, remoteSessionMutationFailure } from './sessionStatusRemote.js';
 import { DeviceLinkError } from '@cindy/device-link';
 import { MAKER_INVOKE } from '../maker-ipc/channels.js';
 import { isCindyLearnSkillEnabled } from '../skillhub/activationPreferences.js';
@@ -182,6 +189,7 @@ import { consumeLearnInvocationGrant } from '../learn-host/invocationGrant.js';
 import { createSkillhubAgentTools } from '../skillhub/agentTools.js';
 import { startGrokDeviceLogin, grokDeviceLoginStatus, cancelGrokDeviceLogin } from '../maker-host/grok-device-login-service.js';
 import { resolveSessionTeammate } from '../maker-ipc/sessionTeammate.js';
+import { readModelGroupsConfig } from '../model-groups/store.js';
 
 export interface DesktopMcpProvidersDeps {
   askUserQuestionAsync?: XdtHelperMcpDeps['askUserQuestionAsync'];
@@ -411,6 +419,29 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
   };
 
   const sessionShare = createDesktopSessionShareCallbacks();
+  const sharedTaskCallerAccess: SharedTaskCallerAccess = {
+    caller: context => {
+      const sessionId = context.sessionId ?? '';
+      const session = getTaskActionSession(sessionId);
+      const input = getTaskActionInputState(sessionId);
+      const lane = readChannelToolScope({ sessionId, sessionInstanceId: context.sessionInstanceId });
+      return {
+        key: JSON.stringify([activeOwnerScopeKey(), getCurrentDbClientSnapshot()?.clientEpoch, input.key, input.boundary,
+          lane?.channel, lane?.botId, lane?.chatId, lane?.inputClientId,
+          session?.stablePermissionModeState, session?.stablePlanModeState]),
+        accountScoped: lane ? lane.requesterIsOwner : isActiveInputAccountScoped(sessionId),
+        current: !isAppSessionBoundaryPending() && !!tryGetDbClient() &&
+          !!context.sessionInstanceId && session?.instanceId === context.sessionInstanceId &&
+          input.permission?.isCurrent?.() === true,
+        planMode: input.permission?.planModeEnabled !== false || input.permission?.permissionMode === 'plan',
+      };
+    },
+    captureGroupAccess: async context => {
+      const [link] = await getDbClient().drizzle.select({ botId: botSessionLinks.botId, role: botSessionLinks.role })
+        .from(botSessionLinks).where(eq(botSessionLinks.sessionId, context.sessionId!)).limit(1);
+      return link?.role === 'group' ? authorizeGroupTool(context.sessionId!, link.botId, 'owner-action') : null;
+    },
+  };
   const withAccountDataAccess = async <T>(sessionId: string | undefined, operation: (assertCurrent: () => Promise<void>) => Promise<T>): Promise<T> => {
     const dbClient = tryGetDbClient();
     const plugin = !sessionId ? getPluginHostToolCaller() : undefined;
@@ -571,6 +602,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       logger: createLogger('mcp/cindy_slack'),
     },
     scheduler: {
+      getSessionProject: readCurrentSessionProject,
       withAccountDataAccess,
       authorizeCall: authorizeTaskToolCall,
       getScheduler: () => getScheduler(),
@@ -651,7 +683,18 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         },
       },
       // 运行位置与模型:与协同 Worker 的 list_available_models 同一份 host 实现。
-      listModels: wrap((s, params) => s.listAvailableModels(params)),
+      // 本机还列出用户的模型组(模式)，定时任务的 modelGroup 传其 id(model-groups.md §6.3)。
+      listModels: wrap(async (s, params) => {
+        const result = await s.listAvailableModels(params);
+        if (!result.ok || params.agentDeviceId) return result;
+        const modelGroups = readModelGroupsConfig().routes.map((route) => ({
+          id: route.id,
+          name: route.name,
+          strategy: route.strategy,
+          sources: route.candidates.filter((candidate) => !candidate.off).length,
+        }));
+        return modelGroups.length > 0 ? { ...result, modelGroups } : result;
+      }),
       logger: createLogger('mcp/cindy_scheduler'),
     },
     // cindy_ssh: agent 直接在已配置 SSH 主机上执行命令(远端零安装)。
@@ -1077,7 +1120,12 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           return result.ok ? { ok: true as const, sessionId, status: 'deleted' as const } : result;
         }
         try {
-          await patchSessionMetaInDb(sessionId, { status: 'deleted' }, { beforeWrite: captureTaskActionSyncGuard() });
+          const guard = captureTaskActionSyncGuard();
+          const row = await getSessionRowSnapshotStrict(sessionId);
+          await assertCurrent();
+          await patchSessionMetaInDb(sessionId, {
+            status: 'deleted', ...(row?.sideChatPromoted && { deleteTarget: 'task' as const }),
+          }, { beforeWrite: guard });
           return { ok: true as const, sessionId, status: 'deleted' as const };
         } catch (error) {
           return { ok: false as const, errorCode: isIpcError(error) ? error.code : 'INTERNAL', message: error instanceof Error ? error.message : 'Task deletion failed.' };
@@ -1136,6 +1184,30 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           return { ok: false, errorCode: 'INTERNAL', message };
         }
       },
+      setSessionsSnooze: async ({ sessionIds, snoozedUntil }) => {
+        if (!tryGetDbClient()) {
+          return { ok: false, errorCode: 'HOST_NOT_READY', message: 'localDb not ready', changed: [] };
+        }
+        const codeOf = (err: unknown) => isIpcError(err) && ['NOT_FOUND', 'PRECONDITION_FAILED', 'INVALID_PARAMS'].includes(err.code)
+          ? (err.code === 'INVALID_PARAMS' ? 'INVALID_ARGS' : err.code) : 'INTERNAL';
+        try {
+          // Like deletion: the sync guard runs inside patch-meta, right before each write.
+          const guard = captureTaskActionSyncGuard();
+          const { changed, error } = await setSessionsSnoozeInDb(sessionIds, snoozedUntil, assertTaskActionCurrent, guard);
+          if (!error) return { ok: true, changed };
+          const index = sessionIds.indexOf(error.sessionId);
+          return {
+            ok: false, errorCode: codeOf(error.cause), changed,
+            message: error.cause instanceof Error ? error.cause.message : String(error.cause),
+            failedSessionId: error.sessionId, remainingSessionIds: sessionIds.slice(index + 1),
+          };
+        } catch (err) {
+          return { ok: false, errorCode: codeOf(err), message: err instanceof Error ? err.message : String(err), changed: [] };
+        }
+      },
+      setRemoteSessionsSnooze: deps.historyRemote
+        ? createRemoteSessionsSnoozeSetter({ captureAccess: deps.historyRemote.captureAccess, invoke: deps.invokeRemote })
+        : undefined,
       listAvailableModels: async params => {
         if (params.callerSessionId && isSessionSharedTaskActive(params.callerSessionId))
           return { ok: false, errorCode: 'PERMISSION_DENIED', message: 'Not available in a shared task' };
@@ -1187,7 +1259,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
                 .from(sessions).where(eq(sessions.id, dispatcherSessionId)).limit(1);
               if (!source) throw new Error('Source task is unavailable');
               recordCreation = await captureBotCreatedTaskResponsibility(dispatcherSessionId, { remoteDeviceId: device });
-              return { title: title?.trim() || message.split('\n')[0].slice(0, 60), projectDir, workingDir,
+              return { title: title?.trim() || undefined, projectDir, workingDir,
                 useWorktree, agentKind, model, effort, fast, agentDeviceId,
                 permissionMode: permissionModeOrAsk(source.permissionMode) };
             },
@@ -1197,7 +1269,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
               ? { recoverySessionId: qualifiedId, message: `${result.message} Recovery target_session_id: ${qualifiedId}. Do not repeat create.` } : {}) };
           const accepted = { ...result, targetSessionId: qualifiedId, targetDeviceId: device };
           // Opened from a group: the group shows the task as a card (bot-group-chat.md §10).
-          reportGroupTaskCreated(dispatcherSessionId, { taskId: id, deviceId: device, title: title?.trim() || message.split('\n')[0].slice(0, 60) });
+          reportGroupTaskCreated(dispatcherSessionId, { taskId: id, deviceId: device, title: result.targetTitle || title?.trim() || normalizeAutoTitle(message) });
           if (recordCreation) {
             try { await (recordCreation as (sessionId: string) => Promise<void>)(qualifiedId); }
             catch { return { ...accepted, responsibilityRecorded: false }; }
@@ -1237,7 +1309,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           });
           if (result.ok && result.wakeKind === 'created' && dispatcherSessionId)
             reportGroupTaskCreated(dispatcherSessionId, { taskId: result.targetSessionId, deviceId: null,
-              title: title?.trim() || message.split('\n')[0].slice(0, 60) });
+              title: result.targetTitle || title?.trim() || normalizeAutoTitle(message) });
           if (result.ok && result.wakeKind === 'created' && recordCreation) {
             try { await recordCreation(result.targetSessionId); }
             catch { return { ...result, responsibilityRecorded: false }; }
@@ -1524,6 +1596,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       }),
       history: {
         ...createHistoryToolCallbacks({ authorizeCall: authorizeTaskToolCall, invokeRemote: deps.invokeRemote }),
+        readSharedTaskProgress: createSharedTaskProgressReader({ ...sharedTaskCallerAccess, invoke: deps.invokeRemote }),
         readSessionAttachment: (args, context) => withAccountDataAccess(context?.sessionId, async assertCurrent => {
           const result = await readDesktopHistoryAttachment(args, context);
           await assertCurrent();
@@ -1553,27 +1626,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       mcpSetup: (context, proposal) => requestMcpSetupForSession(
         context.sessionId!, context.sessionInstanceId!, proposal),
       ...(deps.captureSharedTaskCommand ? { sharedTask: createSharedTaskTools({
-        caller: context => {
-          const sessionId = context.sessionId ?? '';
-          const session = getTaskActionSession(sessionId);
-          const input = getTaskActionInputState(sessionId);
-          const lane = readChannelToolScope({ sessionId, sessionInstanceId: context.sessionInstanceId });
-          return {
-            key: JSON.stringify([activeOwnerScopeKey(), getCurrentDbClientSnapshot()?.clientEpoch, input.key, input.boundary,
-              lane?.channel, lane?.botId, lane?.chatId, lane?.inputClientId,
-              session?.stablePermissionModeState, session?.stablePlanModeState]),
-            accountScoped: lane ? lane.requesterIsOwner : isActiveInputAccountScoped(sessionId),
-            current: !isAppSessionBoundaryPending() && !!tryGetDbClient() &&
-              !!context.sessionInstanceId && session?.instanceId === context.sessionInstanceId &&
-              input.permission?.isCurrent?.() === true,
-            planMode: input.permission?.planModeEnabled !== false || input.permission?.permissionMode === 'plan',
-          };
-        },
-        captureGroupAccess: async context => {
-          const [link] = await getDbClient().drizzle.select({ botId: botSessionLinks.botId, role: botSessionLinks.role })
-            .from(botSessionLinks).where(eq(botSessionLinks.sessionId, context.sessionId!)).limit(1);
-          return link?.role === 'group' ? authorizeGroupTool(context.sessionId!, link.botId, 'owner-action') : null;
-        },
+        ...sharedTaskCallerAccess,
         assertActionCurrent: assertTaskActionCurrent,
         captureCommand: deps.captureSharedTaskCommand,
       }) } : {}),
@@ -1650,7 +1703,88 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     isEnabled: ctx => hasImChannelVendorOptions(ctx.vendorOptions, 'imessage')
       || ((ctx.agentKind === 'codex' || ctx.agentKind === 'pi') && !ctx.workingDir),
     toClaudeSdkConfig: ctx => ({ type: 'sdk', name: 'cindy_imessage',
-      instance: createIMessageMcpServer({ getSessionContext: () => resolveLiziMcpSessionContext(ctx) }) }),
+      instance: createIMessageMcpServer({
+        getSessionContext: () => resolveLiziMcpSessionContext(ctx),
+        sendDirectDelivery: async (context, targetSessionId, text) => {
+          const db = tryGetDbClient();
+          const session = context.sessionId;
+          if (!db || !session || !context.sessionInstanceId) throw new Error('OWNER_INPUT_REQUIRED');
+          const owner = activeOwnerScopeKey();
+          const boundary = getTaskActionInputState(session).boundary;
+          const assertCurrent = () => {
+            const input = getTaskActionInputState(session);
+            if (isAppSessionBoundaryPending() || owner !== activeOwnerScopeKey() || db !== tryGetDbClient() ||
+                !input.ownerInput || input.boundary !== boundary || getTaskActionSession(session)?.instanceId !== context.sessionInstanceId) {
+              throw new Error('OWNER_INPUT_REQUIRED');
+            }
+          };
+          assertCurrent();
+          const link = await db.queryOne<{ botId: string; role: string; routeKey: string | null }>(
+            `SELECT src.bot_id AS botId, dest.role, dest.route_key AS routeKey FROM bot_session_links src
+             JOIN bot_profiles p ON p.id = src.bot_id AND p.status = 'active'
+             JOIN bot_session_links dest ON dest.bot_id = p.id AND dest.archived_at IS NULL
+             JOIN sessions s ON s.id = dest.session_id AND s.status = 'active' AND s.source = 'bot'
+             WHERE src.session_id = ? AND src.role = 'canonical' AND src.archived_at IS NULL
+             AND dest.session_id = ? AND dest.role IN ('canonical', 'channel')`, [session, targetSessionId]);
+          assertCurrent();
+          if (!link || (link.role === 'channel' && !link.routeKey)) throw new Error('PRIVATE_CHAT_NOT_CONNECTED');
+          const target = getBotIMessageDirectTarget(link.botId, link.role === 'canonical' ? null : link.routeKey);
+          if (!target) throw new Error('PRIVATE_CHAT_NOT_CONNECTED');
+          const file = directDeliveryFile(link.botId, target.connection, target.origin, target.chat);
+          const record = prepareDirectDelivery(file, text);
+          const receipt = await target.im.sendDirectDelivery(target.chat, text, record.requestId);
+          assertCurrent();
+          return receipt;
+        },
+        laneScope: (context) => resolveIMessageLaneScope(context, {
+          session: getTaskActionSession,
+          input: id => getTaskActionInputState(id),
+          channelLink: async id => (await tryGetDbClient()?.queryOne<{ botId: string; routeKey: string | null }>(
+            `SELECT l.bot_id AS botId, l.route_key AS routeKey FROM bot_session_links l
+             JOIN bot_profiles p ON p.id = l.bot_id AND p.status = 'active'
+             JOIN sessions s ON s.id = l.session_id AND s.status = 'active' AND s.source = 'bot'
+             WHERE l.session_id = ? AND l.role = 'channel' AND l.archived_at IS NULL`, [id])) ?? null,
+          target: getBotIMessageLaneTarget,
+          boundary: () => isAppSessionBoundaryPending() ? Symbol('pending') : `${activeOwnerScopeKey()}`,
+        }),
+      }) }),
+  });
+
+  gated.push({
+    name: 'cindy_discord',
+    capability: { title: 'Discord', description: 'Use the already configured Discord bot: allowed channels and threads, history, search, messages, reactions and attachments.', source: 'builtin', discovery: { tool: 'list_tools' } },
+    // Stable for all three harnesses; authorization is checked at every invocation.
+    isEnabled: () => true,
+    toClaudeSdkConfig: ctx => ({ type: 'sdk', name: 'cindy_discord', instance: createDiscordMcpServer({
+      getSessionContext: () => resolveLiziMcpSessionContext(ctx),
+      personalAccess: async context => {
+        const db = tryGetDbClient();
+        const owner = activeOwnerScopeKey();
+        const sessionId = context.sessionId;
+        if (!db || !sessionId || !context.sessionInstanceId) throw new DiscordOperationError('DISCORD_CALLER_UNAVAILABLE');
+        const input = getTaskActionInputState(sessionId);
+        const assertCurrent = () => {
+          if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== owner || db !== tryGetDbClient() ||
+              getTaskActionSession(sessionId)?.instanceId !== context.sessionInstanceId ||
+              getTaskActionInputState(sessionId).boundary !== input.boundary || !isActiveInputAccountScoped(sessionId)) {
+            throw new DiscordOperationError('DISCORD_CALLER_CHANGED');
+          }
+        };
+        assertCurrent();
+        const row = await db.queryOne<{ source: string; status: string; botId: string | null }>(
+          'SELECT s.source, s.status, b.bot_id AS botId FROM sessions s LEFT JOIN bot_session_links b ON b.session_id = s.id WHERE s.id = ? LIMIT 1', [sessionId]);
+        assertCurrent();
+        if (!row || row.botId || !['active', 'archived'].includes(row.status) || !['desktop', 'scheduler', 'plugin', 'cindy-make', 'learn'].includes(row.source)) {
+          throw new DiscordOperationError('DISCORD_TRIGGER_TRANSPORT_REQUIRED');
+        }
+        return { im: discordIm, assertCurrent };
+      },
+      authorizeFile: async (context, file) => (await authorizeDesktopSessionPath({
+        sessionId: context.sessionId, sessionInstanceId: context.sessionInstanceId,
+        workingDir: context.workingDir ?? '', remoteHostId: context.remoteHostId,
+        path: file, toolName: 'cindy_discord.send_file', operation: 'read',
+      }, deps.getLiveSessionGrantState)).allowed,
+    }) }),
   });
 
   // cindy_telegram_bot: 个人 / 伙伴 Telegram bot 轮次里的 Bot API 直通。只挂在带 Telegram 渠道

@@ -13,6 +13,9 @@
 原点选对应的重试不会派发到改选目标。
 远控端仅向声明 `supportsQueueHeadRetry` 的任务电脑发送这个选项。旧端仍可手动重试。
 
+插件提供的引擎（2026-11-20）：`open.agentKind` 新增取值 `acp`，运行端以 `caps.pluginEngines` 声明支持，只对同账号
+控制端开放；字段、旧端降级与拒绝条件见[插件任务执行引擎](plugin-harnesses.md)「自己的其他电脑使用插件引擎」。
+
 ## 托管请求的附件预算与保存（2026-11-17）
 
 `open.acceptsAttachmentPreservation?: true` 表示任务所在电脑能接收被请求预算移出的附件。
@@ -207,6 +210,12 @@ Codex 原生图片恢复（#6412）在既有 `maker:remote-agent:v1` 上追加�
   旧控制端的大块仍正常接收，新控制端的小块也符合旧接收端的原协议；不新增字段、能力位或重试。
   官方与自建中转继续转发原有 invoke，无需服务端或中转升级。单次 `poll`
   每个任务最多 512KB、合计 1.5MB(B 轮流决定从哪个任务开始取，积压多的任务不会一直挤占额度)；`push` 单帧 1MB、单次合计 3MB，超长 WebSocket 消息拆段(`more: true`)。
+  2026-11-19 两处只在 A 端生效、旧 B 照常工作的改动：`upload` 块同时在途（每台 B 最多 4 块，B 本来就按
+  `(uploadId, index)` 存块、引用时才检查齐全），链路类错误按同一块号重发最多 2 次；`poll` 可选 `maxBytes`，
+  B 在 64KB–1.5MB 之间取（超出范围按范围取，不拒绝），A 超时就减半、按实测回程速度定下一次，旧 B 忽略该字段。
+  都不新增 op、能力位或中转字段，官方与自建中转照常转发。Agent-Net 会话上 A 把 `upload` 块放后台通道，
+  这是发送端的通道选择，旧 B 的会话层本来就收三个通道。恢复规则见
+  [远程与手机适配](../remote-and-mobile-adaptation.md)「远程 Agent 的拉取与恢复」。
 - **前向兼容**：A 解析事件流时忽略不认识的行类型；B 对不认识的 op / 方法回 `REMOTE_AGENT_INVALID`
   / `REMOTE_AGENT_UNSUPPORTED`。旧版 B 回 `CHANNEL_NOT_ALLOWED`，A 提示对方版本过旧，不回退到本机运行。
 - **凭证**：模型请求只由 B 上的 Agent 用 B 自己的登录与供应商发出，任何凭证不进事件流；B 本机
@@ -366,7 +375,9 @@ Codex 原生图片恢复（#6412）在既有 `maker:remote-agent:v1` 上追加�
   各电脑自行向官方分享服务查询本账号的跨区分享，不新增成员授权。查询失败时仅保留当前位置，不改读控制端的授权。
   #8010 新增同账号只读 `maker:model-catalog:read`：`op: locations` 列任务所在电脑可用的来源；
   `op: read` 只代读固定的 `maker:provider:list`、`maker:get-capabilities`、`maker:list-available-agents`、
-  `maker:agent:status`。来源必须在主机当前名单中，回包前复核名单与账号代次；不接受任意 IPC 或写操作。
+  `maker:agent:status`，以及 2026-11-23 起的 `maker:list-plugin-engines`(远程控制下列出来源的插件引擎，见
+  [插件引擎](plugin-harnesses.md)「远程控制下同样可选」；旧主机回 `INVALID_PARAMS`，控制端只列被控电脑自己的引擎)。
+  来源必须在主机当前名单中，回包前复核名单与账号代次；不接受任意 IPC 或写操作。
   控制端自身和仅被控电脑加载的分享也参与候选。创建、换位置与发送沿用真实 `agentDeviceId`；
   Renderer 的 `(任务电脑, 来源电脑)` 目录缓存键仅用于读取，不作为运行设备传送或落盘。
   旧主机明确不支持新通道时保留原直接读取与两端分享交集行为；连接失败不触发此降级。
@@ -576,3 +587,8 @@ Codex 原生图片恢复（#6412）在既有 `maker:remote-agent:v1` 上追加�
 但不会获得新的文件优先提示。此兼容退化不丢记录；只有两端均升级才具备新提示行为。
 共享任务的虚拟路径映射复用 runHost 对所有字符串选项的投影。实机跨电脑/跨账号验证须单独记录，
 本次只验证编解码和现有宿主回归，不能据此宣称全矩阵实测。
+
+共享文生图沿用 `caps.sharedImageGeneration`。支持内置 OpenAI 订阅的执行端另报
+`sharedBuiltinOpenAiImage: true`。0.1.143 只报前者，接收端对这类分享端保留原有
+Codex 原生账号选项，隐藏内置订阅。供应商组选择内置 OpenAI 执行端时也复核新能力，
+缺少该声明则继续选择其他成员。两个字段都是可选能力，中转按原通道透传。

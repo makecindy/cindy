@@ -11,7 +11,9 @@
  */
 
 import path from 'node:path';
-import { readBotImConnection } from './shared/botImConnectionStore';
+import { botProfiles } from '../localDb/schema';
+import { eq } from 'drizzle-orm';
+import { authorizedIMessageRoute, readBotImConnection } from './shared/botImConnectionStore';
 import { app, ipcMain, BrowserWindow, net, shell } from 'electron';
 
 import {
@@ -48,6 +50,7 @@ import { pinBlob } from '../cindy-media/ledger';
 import { t } from '../i18n.desktop';
 import { discordUiText } from './discord/uiText';
 import { discordChannelAccessStore } from './discord/channelAccessStore';
+import { discordFinalTextStorage } from './discord/finalTextStorage';
 import { telegramUiText } from './telegram/uiText';
 import {
   patchTelegramBehavior,
@@ -216,6 +219,7 @@ export function createBotFeishuIM(secretKeyPrefix: string): FeishuIM {
   });
 }
 export const discordIm = createDiscordIM(host, {
+  finalTextStorage: () => discordFinalTextStorage('personal', true),
   channelAccess: discordChannelAccessStore,
   ownerOnlyCardNotice: () => t('settings.discordBot.channels.ownerOnlyCardNotice'),
   resolveImageUrl: resolveManagedImageAbsPath,
@@ -276,6 +280,7 @@ export function createBotDiscordIM(
   options: { channelAccess?: DiscordChannelAccessStore } = {},
 ): DiscordIM {
   return createDiscordIM(host, {
+    finalTextStorage: () => discordFinalTextStorage(secretKeyPrefix, false),
     // 服务器频道白名单按连接各一份、由连接记录提供（缺省 = 不开放任何频道）。
     ...(options.channelAccess ? { channelAccess: options.channelAccess } : {}),
     ownerOnlyCardNotice: () => t('settings.discordBot.channels.ownerOnlyCardNotice'),
@@ -403,6 +408,13 @@ export function createBotIMessageIM(secretKeyPrefix: string, connectionId: strin
     secretPrefix: secretKeyPrefix,
     storage: blueBubblesStateStorage(connectionId),
     contextId: () => readBotImConnection(connectionId)?.botContextId ?? null,
+    delegatedGroupAlias: async (chat, authorization) => {
+      const route = authorizedIMessageRoute(readBotImConnection(connectionId), chat, authorization);
+      if (!route) return undefined;
+      const [bot] = await getDbClient().drizzle.select({ name: botProfiles.displayName })
+        .from(botProfiles).where(eq(botProfiles.id, route.botId)).limit(1);
+      return bot?.name;
+    },
     receiver: (listenHost, port) => {
       const key = `${listenHost}:${port}`;
       let receiver = localImReceivers.get(key);

@@ -2,13 +2,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createPrivateKey, randomUUID } from 'node:crypto';
 import { app } from 'electron';
-import WebSocket from 'ws';
-import { AgentNetWorkerSocket, type AgentNetAppSocket, type RelayRoute, type SessionConfig, type SessionHandle } from '@cindy/agent-net';
-import { isScopedPeer } from '@cindy/device-link';
+import { currentLinkTraffic } from './linkTraffic.desktop.js';
+import { openLinkWebSocket } from './linkWebSocket.desktop.js';
+import { AgentNetWorkerSocket, type AgentNetAppSocket, type PathPreference, type RelayRoute, type SessionConfig, type SessionHandle } from '@cindy/agent-net';
+import { DeviceLinkRegistrationRemovedError, isScopedPeer } from '@cindy/device-link';
 import { approveJoin, identityFromSeed, issueCertificate, publicBytes, signTenantJoinRequest, verifyCertificate, type Bootstrap, type Identity, type JoinRequest, type DeviceCertificate, type TenantJoinRequest } from '@cindy/agent-net-relay';
 import { AgentNetClient, createDelegationApprover, createTransportModeProof } from '@cindy/agent-net-relay/client';
 import { CERT_LIFETIME_MS, agentNetStunServer, type DeviceView } from '@cindy/agent-net-protocol';
-import { createOutboundHttpAgent, outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
+import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { readDeviceLinkSettings } from './settings-store.desktop.js';
 import { activeSelfHostedRelay, isAgentNetOnlyRelay } from './selfHostedRelayRouting.js';
@@ -128,6 +129,8 @@ function relayChanged(): void {
 }
 /** 这台电脑换了网络：Agent-Net 主连接马上探测中转、从新地址发包（AgentNetWorkerSocket.networkChanged）。Agent-Net 关着时什么也不做。 */
 export function agentNetNetworkChanged(): void { current?.networkChanged?.(); }
+/** 发往这个对端的会话请求超时、它此刻走中转：让承载它的连接判断中转 UDP 是否只通登记（relayUdp.ts noteStall）。 */
+export function agentNetRelayStalled(peer: string): void { sessionSocket(peer)?.relayStalled?.(); }
 /** 本机在官方 Device Link 里删掉了这台设备：Agent-Net 上马上不认它。 */
 export function agentNetNoteDeviceRemoved(deviceId: string): void { currentMembership()?.noteRemoved(deviceId); }
 /** 官方 Agent-Net 上认不认这台设备：Device Link 里删掉了、还没重新登录的不认（packages/agent-net/src/membership.ts）；自建中转上都认。 */
@@ -318,6 +321,7 @@ export function isAgentNetActive(): boolean {
  * which decides by itself (a device still removed there gets Device Link's own "removed"; one that signed in again connects),
  * and its signed statement says "off". Not with 「仅使用 Agent-Net」, where there is no Device Link to fall back to (2026-11-17:
  * a deleted device that signed in again could otherwise never connect while its Agent-Net switch was on).
+ * 「重新加入」 on this device lifts the revocation (`rejoinOfficialAgentNet`) and forgets the refusal.
  */
 let refusedSelection: string | null = null;
 const refusalScope = () => JSON.stringify([activeOwnerScopeKey(), agentNetSelectionKey()]);
@@ -325,7 +329,7 @@ export function agentNetIdentityRefused(): boolean { return refusedSelection !==
 /** The Agent-Net service refused this identity (relay 401/403, or a re-enrollment that needs approval). */
 export function isAgentNetIdentityRefusal(error: unknown): boolean {
   const message = error instanceof Error ? error.message : '';
-  return /^AGENT_NET_UPGRADE_(401|403)$/.test(message) || (error as { code?: unknown } | null)?.code === 'DEVICE_REENROLLMENT_REQUIRES_APPROVAL';
+  return /^AGENT_NET_UPGRADE_(401|403)$/.test(message) || ['DEVICE_REVOKED', 'DEVICE_REENROLLMENT_REQUIRES_APPROVAL'].includes(String((error as { code?: unknown } | null)?.code));
 }
 /** Record a refusal (see `refusedSelection`); false when 「仅使用 Agent-Net」 leaves no Device Link to run on. */
 export function noteAgentNetIdentityRefused(reason: string): boolean {
@@ -333,6 +337,18 @@ export function noteAgentNetIdentityRefused(reason: string): boolean {
   if (!agentNetIdentityRefused()) agentNetLog.warn(`agent-net refused this device (${reason}); running on Device Link until the account or selection changes`);
   refusedSelection = refusalScope();
   return true;
+}
+/**
+ * 「重新加入」 (deviceRejoin.ts): asks the official Agent-Net service to take this removed device back, enrolling again even
+ * while its revoked certificate has not expired, then forgets the refusal so the next connection uses Agent-Net again.
+ * 'skipped' when there is nothing to lift: a self-hosted relay is selected, or this device never enrolled and has Agent-Net off.
+ */
+export async function rejoinOfficialAgentNet(): Promise<'rejoined' | 'skipped'> {
+  if (activeSelfHostedRelay() || !officialAgentNetBase()) return 'skipped';
+  if (!readRelaySecrets(officialAgentNetSlot())?.agentNet && readDeviceLinkSettings().agentNetEnabled !== true) return 'skipped';
+  await ensureOfficialAgentNetClient(deviceName(), { rejoin: true });
+  refusedSelection = null;
+  return 'rejoined';
 }
 export function agentNetSupportsPeer(id: string): boolean { return current?.supports(id) ?? false; }
 export function agentNetRequiresEncryption(): boolean {
@@ -355,9 +371,15 @@ export async function createAgentNetOrLegacySocket<T>(
   legacy: () => T | Promise<T>,
   onTransport?: (encrypted: boolean) => void,
 ): Promise<AgentNetAppSocket | T> {
+  const scope = refusalScope();
   let encrypted: AgentNetAppSocket | null;
   try { encrypted = await createAgentNetAppSocket(); }
   catch (error) {
+    if (scope !== refusalScope() || isAppSessionBoundaryPending()) throw error;
+    if (!activeSelfHostedRelay() && agentNetRequiresEncryption()
+      && (error as { code?: unknown } | null)?.code === 'DEVICE_REVOKED') {
+      throw new DeviceLinkRegistrationRemovedError();
+    }
     if (!isAgentNetIdentityRefusal(error) || !noteAgentNetIdentityRefused(error instanceof Error ? error.message : 'refused')) throw error;
     // This attempt's credentials were taken for Agent-Net; the next one (Device Link's usual retry) runs on Device Link.
     throw new Error('AGENT_NET_IDENTITY_REFUSED');
@@ -373,6 +395,10 @@ export function agentNetShouldProbeLegacyPeer(id: string): boolean { return !!cu
 export function agentNetPeerSnapshot(id: string) { return current?.peerSnapshot(id) ?? null; }
 export function agentNetPeerRoutes() {
   return current?.peerRoutes().filter(({ deviceId }) => !isScopedPeer(deviceId) && agentNetDeviceAccepted(deviceId)) ?? [];
+}
+export function setAgentNetPeerPathPreference(deviceId: string, preference: PathPreference): void {
+  current?.setPeerPathPreference?.(deviceId, preference);
+  pathChanged();
 }
 export function currentAgentNetScopedTarget(peer: string) { return current?.scopedPeerTarget(peer) ?? null; }
 export function agentNetMediaTarget(peer: string) {
@@ -439,7 +465,7 @@ export function outgoingAgentNetClientForRelay(relayId: string, baseUrl: string)
     || stored.certificate.networkId !== 'private:' + relayId) throw new Error('AGENT_NET_IDENTITY_MISMATCH');
   return new AgentNetClient(baseUrl, decodeIdentity(secrets), stored.certificate, stored.rootPublicKey, undefined, {
     ownerPinnedHttp: true, fetch: outboundFetch,
-    createWebSocket: async (url, options) => new WebSocket(url, { ...options, agent: await createOutboundHttpAgent(url) }),
+    createWebSocket: (url, options) => openLinkWebSocket('agent-net', url, options),
   });
 }
 export function currentAgentNetClient(): AgentNetClient | null {
@@ -492,6 +518,7 @@ export async function openScopedAgentNetAppSocket(api: AgentNetClient, assertCur
   const connectedAt = new Map<string, number>();
   try {
     const socket = await AgentNetWorkerSocket.open({ workerFile, client: api, assertCurrent, module, log: agentNetLog,
+      observeUdpTraffic: read => currentLinkTraffic().track('agent-net', read),
       userId: authManager.getCurrentUserId() ?? '', scoped: true,
       onDelegationRequests: requests => approver?.update(requests),
       onPathChanged(deviceId, route) { if (route) connectedAt.set(deviceId, performance.now()); else connectedAt.delete(deviceId); } });
@@ -564,8 +591,19 @@ export async function createAgentNetAppSocket(): Promise<AgentNetAppSocket | nul
   // 每次和对端换上一条连接都会报一次路径（之前的连接带着它的会话一起关了），断开时报 null。
   const connectedAt = new Map<string, number>();
   const notifyCovered = new Set<string>();
+  // The cached directory can keep the worker alive after a failed relay handshake.
+  const checkRemoval = async () => {
+    try { await api.directory(AbortSignal.timeout(3000)); }
+    catch (error) {
+      assertOwner();
+      if ((error as { code?: unknown } | null)?.code === 'DEVICE_REVOKED') throw error;
+    }
+  };
   let socket: AgentNetWorkerSocket;
+  const initialPeerPathPreferences = readDeviceLinkSettings().peerPathPreferences;
   try { socket = await AgentNetWorkerSocket.open({ workerFile, assertCurrent: assertOwner, client: api, module, log: agentNetLog, userId: api.certificate.subject, cachedDirectory, directoryExpiresAt, stunServers, relayUdpServer,
+    ...(initialPeerPathPreferences ? { initialPeerPathPreferences } : {}),
+    observeUdpTraffic: read => currentLinkTraffic().track('agent-net', read),
     ...(members ? { peerRule: members.rule() } : {}),
     scoped: true, onDelegationRequests: requests => approver.update(requests),
     onPathChanged(deviceId, route) { if (route) connectedAt.set(deviceId, performance.now()); else connectedAt.delete(deviceId); },
@@ -578,8 +616,16 @@ export async function createAgentNetAppSocket(): Promise<AgentNetAppSocket | nul
       // The owner-scope check above still fails closed; only this optional public cache is best effort.
       writeAgentNetDirectoryCache(directoryFile, directory);
     },
-  }); } catch (error) { approver.close(); throw error; }
+  }); } catch (error) {
+    approver.close();
+    assertOwner();
+    if (!relay && agentNetRequiresEncryption() && isAgentNetIdentityRefusal(error)) await checkRemoval();
+    throw error;
+  }
   socket.once('close', () => approver.close());
+  if (!relay && socket.relayConnected() === false) {
+    try { await checkRemoval(); } catch (error) { socket.close(); throw error; }
+  }
   try {
     assertOwner();
     if (attempt !== socketAttempt) throw new Error('AGENT_NET_CONNECTION_SUPERSEDED');

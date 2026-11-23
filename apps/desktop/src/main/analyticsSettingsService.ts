@@ -6,6 +6,8 @@
  *  - 状态变化时广播 `analytics:settings-change`,让 renderer 的 tapdbClient 即时
  *    初始化或 opt-out,不必等下次冷启动
  *  - 承接一次性存量迁移:本次改动之前就已登录的用户视为已同意
+ *  - 协议版本:同意过旧版协议的个人账号需要重新确认(legalTermsUpdateRequired),
+ *    任何一次明示同意都记录当前版本(legal-terms-store)
  *
  * 为什么 gate 放在 main:同意状态是持久真相,必须由 main 持有(见
  * docs/dev-rules/electron-security-and-process-boundaries.md §2)。renderer 只拿
@@ -25,6 +27,7 @@ import {
   readAnalyticsSettings,
   setAnalyticsEnabled,
 } from './analytics-settings-store';
+import { acceptCurrentLegalTerms, readLegalTermsConsentStatus } from './legal-terms-store';
 import { createLogger } from './logger';
 import { onQuit } from './lifecycle';
 import { assertTrustedAppRendererEvent } from './security/trustedAppRenderer.js';
@@ -36,6 +39,13 @@ import {
 
 const log = createLogger('analytics-settings');
 
+interface ProductTokens {
+  prepare(): void;
+  interrupt(): void;
+  revokeAll(): void;
+  report(): Promise<void>;
+}
+let productTokens: ProductTokens | undefined;
 let ipcRegistered = false;
 /** 存量迁移只评估一次;评估过就不再看任何后续登录。 */
 let migrationEvaluated = false;
@@ -88,10 +98,27 @@ export function analyticsSettingsPayload(): AnalyticsSettingsPayload {
     analyticsEnabled: value.analyticsEnabled,
     analyticsEnabledCustomized: isAnalyticsEnabledCustomized(),
     allowed: isReportingAllowedNow(),
+    legalTermsUpdateRequired: isLegalTermsUpdateRequired(value.privacyConsentAccepted),
   };
 }
 
+/**
+ * 只问同意过隐私政策的人:「跳过登录」与企业 SSO 被登录页协议门豁免。设备上的同意记录不区分
+ * 当前是哪类账号,所以 renderer 还要只对个人账号(membershipKind === 'personal')弹窗。
+ * 记录读不了按「不需要」处理(fail open):弹窗会挡住整个应用,一次读取故障不能把用户锁在外面。
+ */
+function isLegalTermsUpdateRequired(privacyConsentAccepted: boolean): boolean {
+  if (!privacyConsentAccepted) return false;
+  try {
+    return readLegalTermsConsentStatus() === 'outdated';
+  } catch (err) {
+    log.warn('read legal terms consent failed (non-fatal)', err);
+    return false;
+  }
+}
+
 function broadcastSettingsChange(): void {
+  productTokens?.prepare();
   const payload = analyticsSettingsPayload();
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
@@ -99,6 +126,26 @@ function broadcastSettingsChange(): void {
       win.webContents.send(ANALYTICS_SETTINGS_CHANGE_CHANNEL, payload);
     } catch (err) {
       log.warn(`broadcast '${ANALYTICS_SETTINGS_CHANGE_CHANNEL}' failed (non-fatal)`, err);
+    }
+  }
+}
+
+type PermissionListener = (allowed: boolean, explicitEnabled?: boolean) => void;
+const permissionListeners = new Set<PermissionListener>();
+export function onAnalyticsPermissionChange(listener: PermissionListener): () => void {
+  permissionListeners.add(listener);
+  return () => { permissionListeners.delete(listener); };
+}
+
+function applyPermissionChange(explicitEnabled?: boolean): void {
+  broadcastSettingsChange();
+  const allowed = isReportingAllowedNow();
+  for (const listener of permissionListeners) {
+    try {
+      listener(allowed, explicitEnabled);
+    } catch (err) {
+      log.warn('Could not apply usage statistics preference to local reporting', err);
+      if (explicitEnabled !== undefined) throwIpcError('INTERNAL', 'failed to apply analytics preference');
     }
   }
 }
@@ -136,7 +183,7 @@ function broadcastSettingsChange(): void {
  */
 function migrateOrLog(): void {
   try {
-    if (migrateExistingLoginAsConsented(true)) broadcastSettingsChange();
+    if (migrateExistingLoginAsConsented(true)) applyPermissionChange();
   } catch (err) {
     log.warn('existing-login consent migration failed (non-fatal)', err);
   }
@@ -233,12 +280,19 @@ export function noteAuthColdStartState(
   closeMigrationWindowOrLog();
 }
 
-export function initAnalyticsSettingsService(): void {
+export function initAnalyticsSettingsService(reporter?: ProductTokens): void {
   if (ipcRegistered) {
     log.warn('initAnalyticsSettingsService called twice, ignoring');
     return;
   }
   ipcRegistered = true;
+  productTokens = reporter;
+  reporter?.prepare();
+  // Jitter separates release/restart waves. Idle accounts send no requests.
+  const interval = reporter && setInterval(() => void reporter.report(), (45 + Math.random()*30)*60_000);
+  interval?.unref();
+  const first = reporter && setTimeout(() => void reporter.report(), (1 + Math.random()*4)*60_000);
+  first?.unref();
 
   // 进出本地模式要**即时**改变上报结论(见 isReportingAllowedNow):renderer 的
   // tapdbClient 只在收到广播或首次读取时更新,已经 init 过的 SDK 不会自己 opt-out。
@@ -246,12 +300,13 @@ export function initAnalyticsSettingsService(): void {
   // 同值早返回,不会造成无用功);notifyAuthListeners 只在登录 / 登出 / 身份或 realm
   // 切换时触发,周期性 refresh 不触发,无广播风暴。
   unsubscribeAuthState = authManager.onAuthStateChange(() => {
+    productTokens?.interrupt();
     // 进入本地模式 = 用户主动点了「跳过登录」,这一刻**毫无歧义**:本机不是「改版前
     // 就已登录的存量账号」。所以在这里直接封窗,不走冷启动那条路径的凭证探测闸——
     // 那道闸在密钥链暂不可用时会保守地拒绝关窗,而此处的确定性不依赖任何探测。
     // 幂等(closeLegacyConsentMigration 自带 no-op 早返回),不写用户偏好。
     if (authManager.isLocalMode()) sealMigrationWindowOrLog();
-    broadcastSettingsChange();
+    applyPermissionChange();
   });
 
   ipcMain.handle('analytics:settings-get', (event) => {
@@ -263,8 +318,9 @@ export function initAnalyticsSettingsService(): void {
     assertTrustedAppRendererEvent(event);
     // payload 只信运行时校验过的布尔;非布尔一律当关闭处理(fail closed)。
     const enabled = rawEnabled === true;
+    if (!enabled) writeOrThrowIpcError(() => productTokens?.revokeAll(), 'clear token reporting grants failed');
     writeOrThrowIpcError(() => setAnalyticsEnabled(enabled), 'write analytics setting failed');
-    broadcastSettingsChange();
+    applyPermissionChange(enabled);
     return analyticsSettingsPayload();
   });
 
@@ -276,18 +332,32 @@ export function initAnalyticsSettingsService(): void {
       () => clearAnalyticsEnabledOverride(),
       'clear analytics enabled override failed',
     );
-    broadcastSettingsChange();
+    applyPermissionChange();
     return analyticsSettingsPayload();
   });
 
   ipcMain.handle('analytics:consent-accept', (event) => {
     assertTrustedAppRendererEvent(event);
     writeOrThrowIpcError(() => acceptPrivacyConsent(), 'record privacy consent failed');
+    // 登录页展示的就是当前版本协议:新用户与重新登录的老用户在这里同意后不再弹更新确认。
+    writeOrThrowIpcError(() => acceptCurrentLegalTerms(), 'record legal terms consent failed');
+    applyPermissionChange();
+    return analyticsSettingsPayload();
+  });
+
+  // 主界面「协议更新」确认弹窗点「同意」:只改协议版本记录,不影响统计授权,广播即可。
+  ipcMain.handle('analytics:legal-terms-accept', (event) => {
+    assertTrustedAppRendererEvent(event);
+    writeOrThrowIpcError(() => acceptCurrentLegalTerms(), 'record legal terms consent failed');
     broadcastSettingsChange();
     return analyticsSettingsPayload();
   });
 
   onQuit('analytics-settings', () => {
+    productTokens?.interrupt();
+    if (interval) clearInterval(interval);
+    if (first) clearTimeout(first);
+    productTokens = undefined;
     ipcRegistered = false;
     unsubscribeAuthState?.();
     unsubscribeAuthState = null;
