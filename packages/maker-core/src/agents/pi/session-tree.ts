@@ -213,16 +213,32 @@ export function piRetryBranch(data: unknown, entryId: string): {
   return { parentId: typeof entry.parentId === 'string' ? entry.parentId : null, requestTooLarge };
 }
 
-function rawNodeMap(data: unknown): Map<string, UnknownRecord> {
+function rawNodeMap(data: unknown, nativeCalls?: Map<string, Set<string>>): Map<string, UnknownRecord> {
   const payload = recordOf(data);
   const map = new Map<string, UnknownRecord>();
-  const walk = (nodes: unknown): void => {
+  const walk = (nodes: unknown, assistantEntryId?: string): void => {
     if (!Array.isArray(nodes)) return;
     for (const raw of nodes) {
       const node = recordOf(raw);
       const entry = recordOf(node?.entry);
-      if (entry && typeof entry.id === 'string') map.set(entry.id, entry);
-      walk(node?.children);
+      let owningAssistant = assistantEntryId;
+      if (entry && typeof entry.id === 'string') {
+        map.set(entry.id, entry);
+        if (nativeCalls) {
+          const role = entry.type === 'message' ? recordOf(entry.message)?.role : undefined;
+          if (role === 'assistant') owningAssistant = entry.id;
+          if (role === 'user') owningAssistant = undefined;
+          if (owningAssistant && isNativeSubagentCallEntry(entry)) {
+            const callId = recordOf(entry.data)?.toolCallId;
+            if (typeof callId === 'string' && callId) {
+              let calls = nativeCalls.get(owningAssistant);
+              if (!calls) nativeCalls.set(owningAssistant, calls = new Set());
+              calls.add(callId);
+            }
+          }
+        }
+      }
+      walk(node?.children, owningAssistant);
     }
   };
   walk(payload?.tree);
@@ -273,30 +289,12 @@ export function activePiHistoryFromTree(
   data: unknown,
   snapshot: SessionTreeSnapshot = normalizePiSessionTree(data),
 ): SessionTreeHistoryMessage[] {
-  const entries = rawNodeMap(data);
-  const out: SessionTreeHistoryMessage[] = [];
-  // A Pi branch can include calls from before and after the registration rename.
-  // Read provenance only from the active path and bind it to the assistant entry
-  // as well as the call ID, since a provider can reuse call IDs in later turns.
+  // A tool result's provenance can be below the selected branch tip. Associate
+  // it with the originating assistant entry so rewinding past the result keeps
+  // the tool's identity, even when a different turn reuses its call ID.
   const nativeCalls = new Map<string, Set<string>>();
-  const rawPath = activePathIds(rawPiSessionTreeLeafId(data), id => {
-    const entry = entries.get(id);
-    if (entry) return typeof entry.parentId === 'string' ? entry.parentId : null;
-  });
-  let assistantEntryId: string | undefined;
-  for (const entryId of rawPath) {
-    const entry = entries.get(entryId);
-    if (entry?.type === 'message' && recordOf(entry.message)?.role === 'assistant') {
-      assistantEntryId = entryId;
-    }
-    if (!assistantEntryId || !isNativeSubagentCallEntry(entry)) continue;
-    const toolCallId = recordOf(entry?.data)?.toolCallId;
-    if (typeof toolCallId !== 'string' || !toolCallId) continue;
-    let callIds = nativeCalls.get(assistantEntryId);
-    if (!callIds) nativeCalls.set(assistantEntryId, callIds = new Set());
-    callIds.add(toolCallId);
-  }
-
+  const entries = rawNodeMap(data, nativeCalls);
+  const out: SessionTreeHistoryMessage[] = [];
   let lastCreatedAt = 0;
   const push = (message: Omit<SessionTreeHistoryMessage, 'createdAt'>, timestamp: number): void => {
     const createdAt = Math.max(timestamp, lastCreatedAt + 1);

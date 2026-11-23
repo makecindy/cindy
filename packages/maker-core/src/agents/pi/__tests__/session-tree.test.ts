@@ -159,12 +159,15 @@ describe('pi session tree adapter', () => {
     ]);
     // A stopped turn can leave the metadata as the raw leaf.
     expect(normalizePiSessionTree({ ...data, leafId: '3' }).leafId).toBe('2');
-    expect(activePiHistoryFromTree(data, snapshot).filter(message => message.role === 'tool_use')
-      .map(message => message.content)).toEqual([
+    const expectedCalls = [
       { toolUseId: 'same-call-id', toolName: 'subagent', input: {} },
       { toolUseId: 'same-call-id', toolName: 'dynamic:subagent', input: {} },
       { toolUseId: 'built-in', toolName: 'subagent', input: {} },
-    ]);
+    ];
+    for (const leafId of ['4', '2']) {
+      expect(activePiHistoryFromTree({ ...data, leafId }).filter(message => message.role === 'tool_use')
+        .map(message => message.content)).toEqual(expectedCalls);
+    }
   });
 
   it('restores gateway calls using the same tool contract as live events', () => {
