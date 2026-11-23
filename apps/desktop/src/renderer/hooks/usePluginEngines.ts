@@ -411,6 +411,24 @@ export function evictRemotePluginEngines(deviceId: string): void {
   existingDeviceCatalogue(getDataOwnerGeneration(), deviceId)?.evict();
 }
 
+/** Drop data and in-flight reads routed through this task computer. */
+export function evictControlledPluginEngines(taskDeviceId: string): void {
+  const catalogues = deviceCatalogues.get(getDataOwnerGeneration());
+  for (const [key, catalogue] of catalogues ?? []) {
+    if (parseModelCatalogKey(key)?.taskDeviceId === taskDeviceId) catalogue.evict();
+  }
+}
+
+/** Only active task headers reload after the host confirms which sources are still available. */
+export function refreshControlledPluginEngines(taskDeviceId: string, sourceIds: ReadonlySet<string>): void {
+  const catalogues = deviceCatalogues.get(getDataOwnerGeneration());
+  for (const [key, catalogue] of catalogues ?? []) {
+    const route = parseModelCatalogKey(key);
+    if (route?.taskDeviceId === taskDeviceId && sourceIds.has(route.agentDeviceId)
+      && catalogue.hasPrefetchSubscribers()) catalogue.ensureLoaded();
+  }
+}
+
 function unreadSnapshot(): null {
   return null;
 }
