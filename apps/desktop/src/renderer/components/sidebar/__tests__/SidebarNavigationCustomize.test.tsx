@@ -13,7 +13,13 @@ import {
   setSidebarNavigationPrefs,
 } from '../sidebarNavigationPrefs';
 
-type MainViewMock = { ghostId: string; instanceId: string; title: string; icon: 'globe' };
+type MainViewMock = {
+  ghostId: string;
+  instanceId: string;
+  title: string;
+  icon: 'globe';
+  installedGhost: { iconDataUrl?: string };
+};
 const OWNER = 'owner-1';
 const PREFS_KEY = `sidebar-navigation:v2.owner.${OWNER}`;
 const mainViewsMock = vi.hoisted(() => ({
@@ -25,7 +31,13 @@ const visibilityMock = vi.hoisted(() => ({
     async () => true,
   ),
 }));
-const SITES: MainViewMock = { ghostId: 'xd-sites', instanceId: 'xd-sites', title: '站点', icon: 'globe' };
+const SITES: MainViewMock = {
+  ghostId: 'xd-sites',
+  instanceId: 'xd-sites',
+  title: '站点',
+  icon: 'globe',
+  installedGhost: {},
+};
 
 vi.mock('@/cindy-brain/ghostMainViews', () => ({
   useGhostMainViews: () => ({
@@ -281,7 +293,9 @@ describe('sidebar navigation customization', () => {
   });
 
   it('drops every plugin placement on reset, including ones switched off for now', () => {
-    const off = { ghostId: 'off', instanceId: 'off', title: 'Off', icon: 'globe' as const };
+    const off = {
+      ghostId: 'off', instanceId: 'off', title: 'Off', icon: 'globe' as const, installedGhost: {},
+    };
     mainViewsMock.routeCapable = [SITES, off];
     mainViewsMock.sidebarVisible = [SITES];
     setSidebarNavigationPrefs(OWNER, {
@@ -347,6 +361,17 @@ describe('sidebar navigation customization', () => {
     expect(screen.queryByRole('checkbox', { name: 'sidebar.navigation.items.bots' })).toBeNull();
     expect(rowOf('sidebar.navigation.items.search').querySelector('.lucide-search')).not.toBeNull();
     expect(rowOf('站点').querySelector('.lucide-globe')).not.toBeNull();
+  });
+  it('shows the installed logo and falls back to the declared icon when it fails', () => {
+    const app = { ...SITES, installedGhost: { iconDataUrl: 'data:image/png;base64,logo' } };
+    mainViewsMock.routeCapable = [app];
+    mainViewsMock.sidebarVisible = [app];
+    render(<SidebarNavigationCustomize onDone={() => {}} />);
+    const row = screen.getByRole('checkbox', { name: '站点' }).parentElement!;
+    const image = row.querySelector('img')!;
+    expect(image.getAttribute('src')).toBe(app.installedGhost.iconDataUrl);
+    fireEvent.error(image);
+    expect(row.querySelector('.lucide-globe')).not.toBeNull();
   });
   it('keeps a separate layout for each account', () => {
     setSidebarNavigationPrefs(OWNER, {

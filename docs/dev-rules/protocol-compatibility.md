@@ -77,9 +77,9 @@ Ghost manifest、自建中转同步维护与 Review 清单。每项具体能力�
 - `mainView` 是通用的 Cindy Host 界面能力，不是 `xd-sites` 专用 API；v2 的 `main-view`
   只保留输入兼容。协议中不出现 `xd-sites` 的端点、OIDC 流程或业务模型。具体插件可通过
   其它已声明且经运行时守门的能力调用自己的服务，基座只负责声明校验、导航和沙箱承载。
-- `mainView.icon` 是主视图入口的 Host 系统图标枚举，只作用于该入口；根级 `icon` 仍是插件
-  品牌图片协议。字段白名单、默认回退与完整枚举见 `FORGE_GUIDE` §4.20，不能用图片路径或
-  未声明别名绕过枚举。
+- 左侧导航优先显示根级 `icon` 品牌图，失败时回退 `mainView.preferredIcon` /
+  `mainView.icon` 系统图标；旧 Host 仍显示系统图标。枚举见 `FORGE_GUIDE` §4.20，
+  不接受图片路径或别名。
 - Plugin Market、仓库 CI 与 Desktop 不得用当前 Host 能力清单拒绝未知扩展字段、
   能力动作或订阅事件；未知声明保留为数据，由实际运行客户端决定是否支持。
   已知字段形状、安全路径和整体协议格式仍须校验。新增能力不要求发布入口先登记；

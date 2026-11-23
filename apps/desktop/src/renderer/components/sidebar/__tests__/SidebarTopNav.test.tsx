@@ -47,6 +47,7 @@ vi.mock('@/cindy-brain/ghostMainViews', () => ({
 vi.mock('../GhostMainViewNavEntries', () => ({
   GhostMainViewNavEntry: ({ item, variant }: { item: { title: string }; variant: string }) =>
     <button aria-label={item.title} data-variant={variant} />,
+  GhostMainViewNavIcon: () => null,
   MAIN_VIEW_ICONS: { globe: () => null },
 }));
 vi.mock('@/features/cc-agent/sidebar/SidebarInlineSearch', () => ({

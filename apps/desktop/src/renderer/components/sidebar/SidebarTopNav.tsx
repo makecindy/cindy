@@ -48,7 +48,7 @@ import { SidebarInlineSearch } from '@/features/cc-agent/sidebar/SidebarInlineSe
 import { SidebarIconButton, SIDEBAR_RAIL_ICON_BUTTON_CLASS } from './SidebarIconButton';
 import { Tip } from '@/components/ui/tooltip';
 import { useConversationSearchContext } from '@/features/cc-agent/sidebar/conversationSearchContext';
-import { GhostMainViewNavEntry, MAIN_VIEW_ICONS } from './GhostMainViewNavEntries';
+import { GhostMainViewNavEntry, GhostMainViewNavIcon } from './GhostMainViewNavEntries';
 import { makeGenericNewMakerRouteState } from '@/features/cc-agent/lib/genericNewMakerRouteState';
 import {
   DropdownMenu,
@@ -256,7 +256,6 @@ function SidebarNavigationMoreMenu({
         {hiddenIds.map((id) => {
           const app = appFor(id);
           if (app) {
-            const AppIcon = MAIN_VIEW_ICONS[app.icon];
             const manageLabel = t('settings.ghosts.page.manageAria', { name: app.manifest.name });
             const ghostId = encodeURIComponent(app.instanceId);
             return (
@@ -269,7 +268,7 @@ function SidebarNavigationMoreMenu({
                 }}
                 className="group/more-app gap-2.5"
               >
-                <AppIcon size={16} strokeWidth={1.8} />
+                <GhostMainViewNavIcon item={app} size={16} />
                 <span className="min-w-0 flex-1 truncate">{app.title}</span>
                 {unseen.has(id) && <NewTag />}
                 {/* Same manage action as the plugin's sidebar row, revealed with the item. */}

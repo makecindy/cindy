@@ -1327,7 +1327,8 @@ panel / mainView 同一 Ghost WebView 沙箱（专属分区，仅有下述页面
 `mainView.icon` 只接受 Cindy 系统线性图标
 `puzzle`、`globe`、`code`、`folder`、`database`、`chart-column`、`image`、
 `message-circle`、`calendar-days`，缺省回退 `puzzle`。枚举值直接等于图标名，不设别名；
-该字段只控制主视图侧边栏入口，不替代或修改根级 `icon` 品牌图片协议。后续扩展该枚举时也
+新版 Host 的左侧导航、更多菜单及自定义列表优先使用已加载的根级 `icon` 品牌图片；
+图片缺失或加载失败时回退到该系统图标，不修改品牌图片协议。后续扩展该枚举时也
 必须遵守第 5 节的存量兼容红线，并核对第 7 节的旧客户端降级缺口。
 新的导航符号通过可选 `mainView.preferredIcon` 渐进提供。旧客户端忽略此提示，未知名称回退至 `mainView.icon` 或拼图。
 

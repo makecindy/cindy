@@ -40,6 +40,34 @@ const RAIL_ACTIVE_CLASS =
 export { MAIN_VIEW_ICONS } from '@/cindy-brain/mainViewIcons';
 import { MAIN_VIEW_ICONS } from '@/cindy-brain/mainViewIcons';
 
+export function GhostMainViewNavIcon({
+  item,
+  size = 15,
+}: {
+  item: GhostMainViewItem;
+  size?: number;
+}) {
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const iconDataUrl = item.installedGhost.iconDataUrl;
+  const Icon = MAIN_VIEW_ICONS[item.icon];
+  return iconDataUrl && iconDataUrl !== failedSrc ? (
+    <img
+      src={iconDataUrl}
+      alt=""
+      aria-hidden="true"
+      width={size}
+      height={size}
+      style={{ width: size, height: size }}
+      draggable={false}
+      referrerPolicy="no-referrer"
+      onError={() => setFailedSrc(iconDataUrl)}
+      className="shrink-0 object-contain"
+    />
+  ) : (
+    <Icon aria-hidden="true" size={size} strokeWidth={1.8} className="shrink-0" />
+  );
+}
+
 /** Expanded and rail variants consume the exact same sorted visibility projection. */
 export function GhostMainViewNavEntries({ variant }: { variant: 'row' | 'rail' }) {
   const { sidebarVisible } = useGhostMainViews();
@@ -60,15 +88,7 @@ export function GhostMainViewNavEntry({
   const navigate = useNavigate();
   const activeMatch = useMatch('/apps/:ghostId');
   const active = activeMatch?.params.ghostId === item.instanceId;
-  const Icon = MAIN_VIEW_ICONS[item.icon];
-  const icon = (
-    <Icon
-      aria-hidden="true"
-      size={variant === 'row' ? 15 : 18}
-      strokeWidth={1.8}
-      className="shrink-0"
-    />
-  );
+  const icon = <GhostMainViewNavIcon item={item} size={variant === 'row' ? 15 : 18} />;
   const openPage = () => navigate(`/apps/${encodeURIComponent(item.instanceId)}`);
   // 点击:已在侧边栏 / 窗口里就聚焦;否则按用户放置记忆 → 插件声明 → 内置默认(页面)。
   const open = () => {
