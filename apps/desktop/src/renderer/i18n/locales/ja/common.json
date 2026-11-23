@@ -18092,6 +18092,7 @@
       "timingMode": {
         "cron": "Cron スケジュール",
         "interval": "相対間隔",
+        "label": "タイミング方式",
         "cronHint": "カレンダー時刻の固定スロットで実行します。",
         "intervalHint": "前回の実行完了後に指定時間待ってから実行します。",
         "intervalUnsupportedHint": "現在の正確な間隔は保持されます。分または時間のプリセットを選ぶと置き換わります。",

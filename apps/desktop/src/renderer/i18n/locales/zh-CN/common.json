@@ -18092,6 +18092,7 @@
       "timingMode": {
         "cron": "Cron 定时",
         "interval": "相对间隔",
+        "label": "计时方式",
         "cronHint": "按照日历时钟的固定时间槽位运行。",
         "intervalHint": "上一次运行完成后，再等待指定时长。",
         "intervalUnsupportedHint": "当前精确间隔会原样保留；选择分钟或小时预设后才会替换。",

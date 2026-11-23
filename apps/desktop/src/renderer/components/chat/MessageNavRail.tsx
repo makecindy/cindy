@@ -784,6 +784,7 @@ export function MessageNavRail({
                   // --focus-ring token(AgentTaskCard 同款),键盘 Tab 可见
                   // (PR #830 review:纯 outline-none 会让键盘用户丢焦点)。
                   className={cn(
+                    // 导航刻度行没有框：圆角只塑形键盘焦点环（DESIGN.md §5 无框文字按钮登记）
                     'group flex w-full items-center rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
                     tickEvents,
                   )}

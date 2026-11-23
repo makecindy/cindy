@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Folder, ChevronDown, Check } from 'lucide-react';
+import { Folder, ChevronDown } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
   FolderPickerPopover,
@@ -8,6 +8,7 @@ import {
 import { BranchWorktreeChip } from '@/components/new-chat/WorktreeChipsRow';
 import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { workingDirEquals } from '../../../shared/workingDir';
 import type {
   WorkerProjectContext,
@@ -290,19 +291,11 @@ export function WorkerProjectField({
           ) : canWorktree ? (
             <>
               <label className="flex min-h-8 cursor-pointer items-center gap-2">
-                <input
-                  className="peer sr-only"
-                  type="checkbox"
+                <Checkbox
                   checked={checked}
                   disabled={disabled}
                   onChange={(event) => selection.setChecked(event.target.checked)}
                 />
-                <span
-                  aria-hidden
-                  className={`inline-flex size-3.5 shrink-0 items-center justify-center rounded border peer-focus-visible:ring-2 peer-focus-visible:ring-[var(--focus-ring)] ${checked ? 'border-[var(--create-agent-send-bg)] bg-[var(--create-agent-send-bg)] text-[var(--create-agent-send-icon)]' : 'border-[var(--text-secondary)]'}`}
-                >
-                  {checked && <Check size={10} />}
-                </span>
                 {t('orca.workerProject.newWorktree')}
               </label>
               {checked && (

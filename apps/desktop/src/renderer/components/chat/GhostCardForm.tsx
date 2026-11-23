@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, useState } from 'react';
+import { Button } from '@/components/ui/button';
 import { Input, Textarea, type TextareaProps } from '@/components/ui/input';
 import {
   GHOST_CARD_FORM_MAX_VALUE,
@@ -102,7 +103,7 @@ export function GhostCardForm({
                   title={t('chat.ghostCall.mailAttach')}
                   className={
                     (files.length ? 'mt-3 ' : '') +
-                    'shrink-0 rounded p-1 text-muted-foreground hover:bg-[var(--surface-hover)] disabled:opacity-40'
+                    'shrink-0 rounded-lg p-1 text-muted-foreground hover:bg-[var(--surface-hover)] disabled:opacity-40'
                   }
                 >
                   <Paperclip className="h-4 w-4" />
@@ -128,7 +129,7 @@ export function GhostCardForm({
                           <img
                             src={previewUrl}
                             alt=""
-                            className="h-9 w-9 shrink-0 rounded object-cover"
+                            className="h-9 w-9 shrink-0 rounded-lg object-cover"
                           />
                         ) : (
                           <FileTypeIcon name={file.filename} mimeType={file.mimeType} size={20} />
@@ -142,10 +143,12 @@ export function GhostCardForm({
                         </span>
                       </button>
                       {!readOnly && canInsertMailImage(values, file) && (
-                        <button
-                          type="button"
+                        <Button
+                          variant="secondary"
+                          tone="quiet"
+                          size="sm"
+                          compact
                           disabled={disabled}
-                          className="shrink-0 rounded px-2 py-2 text-muted-foreground hover:bg-[var(--surface-hover)] disabled:opacity-40"
                           onClick={() => {
                             const next = insertMailImage(values, field.name, file.key);
                             setValues(next);
@@ -153,13 +156,13 @@ export function GhostCardForm({
                           }}
                         >
                           {t('chat.ghostCall.mailInsertImage')}
-                        </button>
+                        </Button>
                       )}
                       {!readOnly && (
                         <button
                           type="button"
                           disabled={disabled}
-                          className="mr-1 rounded p-2 text-muted-foreground hover:bg-[var(--surface-hover)] disabled:opacity-40"
+                          className="mr-1 rounded-lg p-2 text-muted-foreground hover:bg-[var(--surface-hover)] disabled:opacity-40"
                           title={t('chat.ghostCall.mailRemoveAttachment', { name: file.filename })}
                           aria-label={t('chat.ghostCall.mailRemoveAttachment', {
                             name: file.filename,
@@ -251,7 +254,7 @@ export function GhostCardForm({
                     onClick={onEnlarge}
                     title={t('chat.ghostCall.mailEnlarge')}
                     aria-label={t('chat.ghostCall.mailEnlarge')}
-                    className="rounded p-1 text-muted-foreground hover:bg-[var(--surface-hover)]"
+                    className="rounded-lg p-1 text-muted-foreground hover:bg-[var(--surface-hover)]"
                   >
                     <Maximize2 className="h-3.5 w-3.5" />
                   </button>

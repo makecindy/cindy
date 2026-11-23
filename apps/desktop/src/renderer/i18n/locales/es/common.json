@@ -18334,6 +18334,7 @@
       "timingMode": {
         "cron": "Cron",
         "interval": "Intervalo relativo",
+        "label": "Modo de programación",
         "cronHint": "Se ejecuta en horarios fijos del calendario.",
         "intervalHint": "Espera este tiempo después de que finalice la ejecución anterior.",
         "intervalUnsupportedHint": "Se conserva este intervalo exacto. Si eliges una opción predefinida de minutos u horas, lo reemplazarás.",

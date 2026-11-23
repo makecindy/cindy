@@ -18092,6 +18092,7 @@
       "timingMode": {
         "cron": "Cron 定時",
         "interval": "相隔",
+        "label": "計時之法",
         "cronHint": "依曆鐘定刻而行，如晨鐘暮鼓。",
         "intervalHint": "前次行畢，再候所定之時長。",
         "intervalUnsupportedHint": "今之精確間隔照舊保留；擇分或時之預設，方易之。",

@@ -18092,6 +18092,7 @@
       "timingMode": {
         "cron": "Cron 일정",
         "interval": "상대 간격",
+        "label": "타이밍 방식",
         "cronHint": "달력 시계의 고정 시간대에 실행합니다.",
         "intervalHint": "이전 실행이 끝난 뒤 지정된 시간만큼 기다립니다.",
         "intervalUnsupportedHint": "현재 정확한 간격은 그대로 유지됩니다. 분 또는 시간 프리셋을 선택하면 대체됩니다.",

@@ -18334,6 +18334,7 @@
       "timingMode": {
         "cron": "Cron",
         "interval": "Intervalle relatif",
+        "label": "Mode de planification",
         "cronHint": "S'exécute à des créneaux horaires du calendrier.",
         "intervalHint": "Attend ce délai après la fin de l'exécution précédente.",
         "intervalUnsupportedHint": "Cet intervalle exact est conservé. Choisir un préréglage en minutes ou en heures le remplacera.",

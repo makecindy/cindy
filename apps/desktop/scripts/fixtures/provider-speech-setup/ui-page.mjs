@@ -96,7 +96,7 @@ export default {
             : 'speech-2.8-turbo';
     const recommended = page.getByRole('checkbox', { name: new RegExp(recommendedId) });
     await recommended.waitFor();
-    assert.equal(await recommended.getAttribute('aria-checked'), 'true');
+    assert.equal(await recommended.isChecked(), true);
     if (ui.case.startsWith('token-plan'))
       assert.equal(await page.getByRole('checkbox', { name: /cosyvoice/ }).count(), 0);
     if (ui.case === 'bailian') {
