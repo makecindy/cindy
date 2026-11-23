@@ -1,21 +1,16 @@
 name: Host release (Linux)
-run-name: ${{ github.event_name == 'workflow_dispatch' && format('Host release {0}', inputs.ref) || github.event.pull_request.title }}
+run-name: ${{ github.event_name == 'workflow_dispatch' && format('Host release {0}', github.ref_name) || github.event.pull_request.title }}
 
 # Builds the standalone Cindy Host for Linux from one commit, as both editions, and keeps the
 # result as a workflow artifact. Nothing is published: no GitHub Release, CDN or registry write.
 # Whoever needs the package (for example the cloud image recipes) downloads the artifact of the
 # run and pins the digests from its summary. See docs/host/README.md, "Linux 发布包".
 on:
+  # Run it from the release tag to build ("Use workflow from" in the Actions page, or
+  # `gh workflow run host-release.yml --ref v<version>`). The job builds the commit it runs on and
+  # takes the version from the tag; there is no input naming another ref, so it never checks out
+  # code other than its own. Run from a branch, it builds an unversioned package.
   workflow_dispatch:
-    inputs:
-      ref:
-        description: Tag or commit to build, for example v0.1.144
-        required: true
-        type: string
-      version:
-        description: Release version. Leave empty when ref is a v<version> tag
-        required: false
-        type: string
   # Changes to the builder or to this workflow build an unversioned package, so a broken release
   # build is found in review instead of at the next release.
   pull_request:
@@ -29,7 +24,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: host-release-${{ github.event.pull_request.number || inputs.ref }}
+  group: host-release-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -51,36 +46,22 @@ jobs:
       XDT_SKIP_AGENT_BIN_INSTALL: '1'
       HOST_ARCH: ${{ matrix.target.arch }}
     steps:
-      # Dependencies, two unpacked releases (about 2 GB each) and their archives do not fit
-      # beside the toolchains a hosted runner preinstalls; this job uses neither of these two.
-      - name: Free runner disk space
-        run: |
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet
-          df -h /
-
       - name: Checkout client
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.ref }}
           lfs: true
 
       - name: Resolve the release version
         env:
           EVENT_NAME: ${{ github.event_name }}
-          INPUT_REF: ${{ inputs.ref }}
-          INPUT_VERSION: ${{ inputs.version }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          if [ "$EVENT_NAME" = workflow_dispatch ]; then
-            version="$INPUT_VERSION"
-            if [ -z "$version" ]; then
-              case "$INPUT_REF" in
-                v[0-9]*) version="${INPUT_REF#v}" ;;
-                *) echo "::error::Give a version when ref is not a v<version> tag"; exit 1 ;;
-              esac
-            fi
-            if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
-              echo "::error::Not a release version: $version"; exit 1
+          if [ "$EVENT_NAME" = workflow_dispatch ] && [ "$REF_TYPE" = tag ]; then
+            version="${REF_NAME#v}"
+            if [ "$version" = "$REF_NAME" ] || ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+              echo "::error::Not a release tag: $REF_NAME (expected v<version>)"; exit 1
             fi
             # The Host and the web client read the version from the desktop manifest, as the
             # desktop packaging does (writePackageVersion). This checkout is discarded afterwards.
@@ -107,12 +88,11 @@ jobs:
           run_install: false
 
       # The release bundles the Node that builds it, so use the version the repository pins.
+      # No dependency cache: a release is installed from the lockfile alone.
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
