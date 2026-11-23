@@ -68,22 +68,17 @@ async function resolveBinary(binaryName: string, paths?: WindowsHelperPaths): Pr
 }
 
 // Launchers supply trusted native source/resource paths for their own profile.
-export function createWindowsRustHelper(binaryName: string) {
-  let paths: WindowsHelperPaths | undefined;
+export function createWindowsHelperResolver(binaryName: string, config?: WindowsHelperPaths): () => Promise<string> {
+  const paths = config && { ...config };
   let resolving: Promise<string> | undefined;
-  return {
-    configure(config: WindowsHelperPaths) {
-      paths = { ...config };
-      resolving = undefined;
-    },
-    resolve(): Promise<string> {
-      if (!resolving) {
-        const attempt = resolveBinary(binaryName, paths);
-        resolving = attempt;
+  return () => {
+    if (!resolving) {
+      resolving = resolveBinary(binaryName, paths).catch((error: unknown) => {
         // A compiler installed after the first attempt can serve later launches.
-        void attempt.catch(() => { if (resolving === attempt) resolving = undefined; });
-      }
-      return resolving;
-    },
+        resolving = undefined;
+        throw error;
+      });
+    }
+    return resolving;
   };
 }
