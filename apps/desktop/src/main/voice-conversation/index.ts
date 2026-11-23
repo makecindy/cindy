@@ -167,12 +167,15 @@ export function registerVoiceConversationIpc(deps: {
       if (target && !target.isDestroyed()) target.send('voice-conversation:event', event);
     },
   });
+  const catalogRequests = new Map<number, { id: string; controller: AbortController }>();
   const observed = new Set<number>();
   const observe = (event: IpcMainInvokeEvent): void => {
     if (observed.has(event.sender.id)) return;
     const sender = event.sender.id;
     observed.add(sender);
     const released = () => {
+      catalogRequests.get(sender)?.controller.abort();
+      catalogRequests.delete(sender);
       void service.end(sender);
       voiceCallCoordinator.windowGone(sender);
     };
@@ -211,7 +214,8 @@ export function registerVoiceConversationIpc(deps: {
     await waitForModelVisibilityMirror();
     return realtimeModels(catalogDeps());
   });
-  handle('realtime-custom-voices', (_event, raw) => {
+  handle('realtime-custom-voices', async (event, raw, requestId) => {
+    const id = boundedString(requestId, 'requestId', 64);
     const model = normalizeSpeechModelSelection(raw);
     if (!model?.providerId || !model.agent) throw new Error('invalid_realtime_model');
     const route = { providerId: model.providerId, agent: model.agent, modelId: model.modelId, protocol: 'qwen-audio-realtime' as const };
@@ -219,10 +223,25 @@ export function registerVoiceConversationIpc(deps: {
     const owner = activeOwnerScopeKey();
     const connection = resolve();
     const identity = JSON.stringify(connection);
-    return loadSpeechVoices(connection, route.modelId, outboundFetch, () => {
-      if (activeOwnerScopeKey() !== owner || JSON.stringify(resolve()) !== identity)
-        throw new Error('connection_changed');
-    });
+    const sender = event.sender.id;
+    observe(event);
+    catalogRequests.get(sender)?.controller.abort();
+    const controller = new AbortController();
+    catalogRequests.set(sender, { id, controller });
+    try {
+      const catalog = await loadSpeechVoices(connection, route.modelId, outboundFetch, () => {
+        if (activeOwnerScopeKey() !== owner || JSON.stringify(resolve()) !== identity)
+          throw new Error('connection_changed');
+      }, undefined, controller.signal);
+      return controller.signal.aborted ? { source: 'manual', voices: [] } : catalog;
+    } finally {
+      if (catalogRequests.get(sender)?.controller === controller) catalogRequests.delete(sender);
+    }
+  });
+  handle('cancel-realtime-custom-voices', (event, rawId) => {
+    const id = boundedString(rawId, 'requestId', 64);
+    const request = catalogRequests.get(event.sender.id);
+    if (request?.id === id) request.controller.abort();
   });
   handle('voices', (_event, raw) => {
     const selection = normalizeSpeechModelSelection(raw);

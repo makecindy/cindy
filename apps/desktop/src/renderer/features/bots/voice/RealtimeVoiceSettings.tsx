@@ -16,11 +16,12 @@ import {
 import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 
 /** Independent from TTS: changing call transport must not change message read-aloud. */
-export function RealtimeVoiceSettings({ botId, disabled, preview, previewDisabled, children }: {
+export function RealtimeVoiceSettings({ botId, disabled, preview, previewDisabled, beforeLeaveRef, children }: {
   botId: string;
   disabled: boolean;
   preview: VoicePreviewController;
   previewDisabled: boolean;
+  beforeLeaveRef: { current: (() => Promise<boolean>) | null };
   children: (readAloudOnly: boolean, hidden: boolean) => ReactNode;
 }) {
   const { t } = useTranslation();
@@ -34,6 +35,20 @@ export function RealtimeVoiceSettings({ botId, disabled, preview, previewDisable
   const [error, setError] = useState(false);
   const version = useRef(0);
   const saveLock = useRef(false);
+  const lastWrite = useRef<Promise<boolean> | null>(null);
+  const manualInput = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    beforeLeaveRef.current = async () => {
+      // Keyboard dismissal can precede the manual input's blur.
+      manualInput.current?.blur();
+      const write = lastWrite.current;
+      if (!write) return true;
+      const allowed = await write;
+      if (lastWrite.current === write) lastWrite.current = null;
+      return allowed;
+    };
+    return () => { beforeLeaveRef.current = null; };
+  }, [beforeLeaveRef]);
   const loadedOwner = useRef<ReturnType<typeof getDataOwnerGeneration> | null>(null);
   const [api] = useState(() => window.electronAPI.voiceConversation);
   useEffect(() => {
@@ -47,6 +62,7 @@ export function RealtimeVoiceSettings({ botId, disabled, preview, previewDisable
       setError(false);
       setSelection(null);
       saveLock.current = false;
+      lastWrite.current = null;
       setSaving(false);
       previousSelection.current = null;
       setReadAloudOpen(false);
@@ -79,7 +95,7 @@ export function RealtimeVoiceSettings({ botId, disabled, preview, previewDisable
     (m) => selection && voiceModelKey(m) === voiceModelKey(selection),
   );
   const visible = models.filter((m) => m.pickerVisible !== false || m === selectedModel);
-  const save = async (value: RealtimeVoiceSelection | null) => {
+  const save = (value: RealtimeVoiceSelection | null) => {
     if (
       saveLock.current ||
       disabled ||
@@ -98,21 +114,22 @@ export function RealtimeVoiceSettings({ botId, disabled, preview, previewDisable
     saveLock.current = true;
     setSaving(true);
     setError(false);
-    try {
-      const result = await api.setRealtimePreference(botId, value);
+    lastWrite.current = api.setRealtimePreference(botId, value).then(result => {
       if (current()) {
         previousSelection.current = result.realtimeSelection ?? result.previousRealtimeSelection ?? previousSelection.current;
         setSelection(result.realtimeSelection ?? null);
         if (!value) setReadAloudOpen(false);
       }
-    } catch {
+      return true;
+    }).catch(() => {
       if (current()) setError(true);
-    } finally {
+      return !current();
+    }).finally(() => {
       if (current()) {
         saveLock.current = false;
         setSaving(false);
       }
-    }
+    });
   };
   if (!api.realtimeModels || !api.setRealtimePreference) return children(false, false);
   const chooseRoute = (next: RealtimeVoiceSelection, protocolConfirmed: boolean) => {
@@ -199,7 +216,7 @@ export function RealtimeVoiceSettings({ botId, disabled, preview, previewDisable
             )}
             <RealtimeVoicePicker key={JSON.stringify([voiceModelKey(selection), selection.protocol])}
               preview={preview} previewDisabled={previewDisabled || !selectedModel || loading || saving}
-              model={selectedModel} selection={selection} disabled={disabled || saving || !selectedModel}
+              manualInput={manualInput} model={selectedModel} selection={selection} disabled={disabled || saving || !selectedModel}
               onSelect={(voice) => void save({ ...selection, voice })}
             />
           </div>

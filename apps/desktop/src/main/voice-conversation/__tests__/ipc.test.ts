@@ -125,6 +125,38 @@ const startInput = () => ({
 });
 const start = () => call('start', startInput());
 
+it('cancels only the matching window and realtime catalog request before fetching private voice details', async () => {
+  const modelId = 'qwen-audio-3.1-realtime-flash';
+  const provider = buildUserProvider({
+    id: 'byok', name: 'Bailian',
+    runtimes: { codex: { baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+      wireProtocol: 'openai-chat', models: [{ id: modelId, name: modelId, mode: 'realtime' }] } },
+  }, { modelRegistry: BUNDLED_CATALOG.modelRegistry });
+  h.catalog = { ...BUNDLED_CATALOG, providers: [provider] };
+  h.readKey.mockReturnValue('test-key');
+  const route = { providerId: provider.id, modelId, agent: 'codex' };
+  const requests: { signal: AbortSignal; complete(): void }[] = [];
+  vi.mocked(outboundFetch).mockImplementation((_url, init) => new Promise(resolve => {
+    requests.push({ signal: init!.signal!, complete: () => resolve(Response.json({
+      output: { voice_list: [{ voice_id: 'needs-details' }] },
+    })) });
+  }));
+  const first = call('realtime-custom-voices', route, 'first');
+  expect(requests).toHaveLength(1);
+  const second = call('realtime-custom-voices', route, 'second');
+  expect(requests[0].signal.aborted).toBe(true);
+  requests[0].complete();
+  await first;
+  await call('cancel-realtime-custom-voices', 'first');
+  await h.handlers.get('voice-conversation:cancel-realtime-custom-voices')!(sender(2), 'second');
+  expect(requests[1].signal.aborted).toBe(false);
+  await call('cancel-realtime-custom-voices', 'second');
+  expect(requests[1].signal.aborted).toBe(true);
+  requests[1].complete();
+  await second;
+  expect(outboundFetch).toHaveBeenCalledTimes(2);
+});
+
 // PR #6900 unit: injected model tests missed production credential-store wiring.
 // Exercise real IPC -> catalog -> voice query/synthesis with a legacy display ID,
 // then remove its login. Only the stored ID is read, never an API-key fallback.
@@ -302,7 +334,7 @@ it('rejects an untrusted sender before returning models or opening a connection'
   });
   await expect(call('models')).rejects.toThrow('untrusted frame');
   await expect(start()).rejects.toThrow('untrusted frame');
-  for (const name of ['voices', 'realtime-custom-voices', 'preview', 'read-preview', 'stop-preview', 'start-playback']) {
+  for (const name of ['voices', 'realtime-custom-voices', 'cancel-realtime-custom-voices', 'preview', 'read-preview', 'stop-preview', 'start-playback']) {
     await expect(call(name, {})).rejects.toThrow('untrusted frame');
   }
 });

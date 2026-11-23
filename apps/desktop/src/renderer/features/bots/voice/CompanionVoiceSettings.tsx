@@ -83,15 +83,16 @@ export function CompanionVoiceSettings(props: Props) {
       }),
     [props.botId, props.sessionId, target.voice],
   );
+  const realtimeLeaveRef = useRef<(() => Promise<boolean>) | null>(null);
   const callOpen = useVoiceCallSummary().open;
   const previewBlocked = blocked || callOpen;
   const speechControls = (readAloudOnly: boolean, hidden: boolean) => (
-    <SpeechSettings {...props} blocked={blocked} preview={preview} previewBlocked={previewBlocked} readAloudOnly={readAloudOnly} hidden={hidden} />
+    <SpeechSettings {...props} realtimeLeaveRef={realtimeLeaveRef} blocked={blocked} preview={preview} previewBlocked={previewBlocked} readAloudOnly={readAloudOnly} hidden={hidden} />
   );
   return (
     <div className="space-y-4 pt-3">
       {target.kind === 'local' ? (
-        <RealtimeVoiceSettings key={props.botId} botId={props.botId} disabled={blocked}
+        <RealtimeVoiceSettings key={props.botId} botId={props.botId} disabled={blocked} beforeLeaveRef={realtimeLeaveRef}
           preview={preview} previewDisabled={previewBlocked || !props.sessionId || !target.voice.previewApi}>
           {speechControls}
         </RealtimeVoiceSettings>
@@ -103,7 +104,7 @@ export function CompanionVoiceSettings(props: Props) {
   );
 }
 
-function SpeechSettings(props: Props & { blocked: boolean; preview: VoicePreviewController; previewBlocked: boolean; readAloudOnly: boolean; hidden: boolean }) {
+function SpeechSettings(props: Props & { realtimeLeaveRef: NonNullable<Props['beforeLeaveRef']>; blocked: boolean; preview: VoicePreviewController; previewBlocked: boolean; readAloudOnly: boolean; hidden: boolean }) {
   const { t } = useTranslation();
   const target = useBotSettingsTarget();
   const voiceApi = target.voice;
@@ -280,9 +281,12 @@ function SpeechSettings(props: Props & { blocked: boolean; preview: VoicePreview
     if (!ref) return;
     ref.current = async () => {
       const version = preferenceVersion.current;
+      const speechWriteAtLeave = pendingSave.current;
+      if (props.realtimeLeaveRef.current && !(await props.realtimeLeaveRef.current())) return false;
       await preview.stop();
       if (version !== preferenceVersion.current) return true;
-      if (pendingSave.current && !(await pendingSave.current)) return false;
+      const speechWrite = speechWriteAtLeave ?? pendingSave.current;
+      if (speechWrite && !(await speechWrite)) return false;
       // Flush a valid manual ID before the drawer/page unmounts. Incomplete
       // choices stay a local draft and never overwrite the last usable route.
       if (ready && dirty.current && selection && protocol) return persist(selection);
@@ -291,7 +295,7 @@ function SpeechSettings(props: Props & { blocked: boolean; preview: VoicePreview
     return () => {
       ref.current = null;
     };
-  }, [props.beforeLeaveRef, persist, ready, selection, protocol, preview]);
+  }, [props.beforeLeaveRef, props.realtimeLeaveRef, persist, ready, selection, protocol, preview]);
   const carrySpeed = (next: VoiceConversationSelection): VoiceConversationSelection => {
     const previousSpeed = speed ?? preference?.speed;
     const nextSpeed = resolveVoiceConfiguration(models, next, undefined, previousSpeed).speed;

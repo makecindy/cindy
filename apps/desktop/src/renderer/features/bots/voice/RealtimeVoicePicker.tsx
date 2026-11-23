@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useEffect, useState, useSyncExternalStore, type RefObject } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
@@ -20,10 +20,11 @@ type Props = {
   disabled: boolean;
   preview: VoicePreviewController;
   previewDisabled: boolean;
+  manualInput: RefObject<HTMLInputElement | null>;
   onSelect(voice: string): void;
 };
 
-export function RealtimeVoicePicker({ model, selection, disabled, preview, previewDisabled, onSelect }: Props) {
+export function RealtimeVoicePicker({ model, selection, disabled, preview, previewDisabled, manualInput, onSelect }: Props) {
   const { t } = useTranslation();
   const { modelId, protocol, providerId, agent, voice } = selection;
   const system = model?.systemVoices ?? realtimeSystemVoices(protocol, modelId);
@@ -43,11 +44,13 @@ export function RealtimeVoicePicker({ model, selection, disabled, preview, previ
     const accept = (catalog: SpeechVoiceCatalog) => {
       if (active && owner === getDataOwnerGeneration()) setResult({ owner, revision, catalog });
     };
-    list({ providerId, agent, modelId }).then(accept, () =>
+    const requestId = crypto.randomUUID();
+    list({ providerId, agent, modelId }, requestId).then(accept, () =>
       accept({ source: 'manual', voices: [], customVoicesUnavailable: true }),
     );
     return () => {
       active = false;
+      void window.electronAPI.voiceConversation.cancelRealtimeCustomVoices?.(requestId).catch(() => undefined);
     };
   }, [list, providerId, agent, modelId, revision, owner]);
 
@@ -137,6 +140,7 @@ export function RealtimeVoicePicker({ model, selection, disabled, preview, previ
           {(control) => (
             <SettingsTextInput
               {...control}
+              inputRef={manualInput}
               value={manualDraft ?? voice}
               disabled={disabled}
               maxLength={128}

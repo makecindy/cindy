@@ -206,7 +206,8 @@ export type VoiceConversationStart = VoiceCallSelection & {
   sessionId: string;
 };
 export interface VoiceConversationApi {
-  realtimeCustomVoices?(route: Pick<RealtimeVoiceSelection, 'providerId' | 'agent' | 'modelId'>): Promise<SpeechVoiceCatalog>;
+  realtimeCustomVoices?(route: Pick<RealtimeVoiceSelection, 'providerId' | 'agent' | 'modelId'>, requestId: string): Promise<SpeechVoiceCatalog>;
+  cancelRealtimeCustomVoices?(requestId: string): Promise<void>;
   realtimeModels?(): Promise<RealtimeVoiceModel[]>;
   setRealtimePreference?(botId: string, selection: RealtimeVoiceSelection | null): Promise<VoiceConversationPreference>;
   setRealtimeQuestion?(callId: string, pending: boolean): Promise<void>;

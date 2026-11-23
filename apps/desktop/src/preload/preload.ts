@@ -1949,7 +1949,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('plugin-publisher:resolve-confirm', { requestId, confirmed }),
   },
   voiceConversation: {
-    realtimeCustomVoices: (route) => ipcRenderer.invoke('voice-conversation:realtime-custom-voices', route),
+    realtimeCustomVoices: (route, id) => ipcRenderer.invoke('voice-conversation:realtime-custom-voices', route, id),
+    cancelRealtimeCustomVoices: (id) => ipcRenderer.invoke('voice-conversation:cancel-realtime-custom-voices', id),
     realtimeModels: () => ipcRenderer.invoke('voice-conversation:realtime-models'),
     setRealtimePreference: (botId, selection) => ipcRenderer.invoke('voice-conversation:set-realtime-preference', botId, selection),
     setRealtimeQuestion: (callId, pending) => ipcRenderer.invoke('voice-conversation:realtime-question', callId, pending),

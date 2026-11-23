@@ -53,6 +53,7 @@ export async function loadSpeechVoices(
   fetcher: typeof fetch,
   assertCurrent: () => void,
   providerId?: string,
+  cancelSignal?: AbortSignal,
 ): Promise<SpeechVoiceCatalog> {
   assertCurrent();
   if (providerId === 'xd' && connection.protocol === 'openai') {
@@ -73,6 +74,7 @@ export async function loadSpeechVoices(
     return { source: voices.length ? 'reference' : 'manual', voices };
   }
   const controller = new AbortController();
+  const signal = cancelSignal ? AbortSignal.any([controller.signal, cancelSignal]) : controller.signal;
   const timer = setTimeout(() => controller.abort(), 15_000);
   const voices = new Map<string, SpeechVoice>();
   const append = (raw: unknown, nameKey: string): void => {
@@ -84,15 +86,16 @@ export async function loadSpeechVoices(
   };
   const request = async (url: URL, body?: unknown): Promise<RecordValue> => {
     assertCurrent();
-    controller.signal.throwIfAborted();
+    signal.throwIfAborted();
     const response = await fetcher(url.toString(), {
       method: body ? 'POST' : 'GET',
       headers: { ...connection.headers, ...(body ? { 'content-type': 'application/json' } : {}) },
       ...(body ? { body: JSON.stringify(body) } : {}),
       redirect: 'error',
-      signal: controller.signal,
+      signal,
     });
-    const json = await readJson(response, controller.signal);
+    const json = await readJson(response, signal);
+    signal.throwIfAborted();
     assertCurrent();
     return json;
   };

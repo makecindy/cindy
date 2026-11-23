@@ -184,6 +184,55 @@ const closeVoices = () =>
     key: 'Escape',
   });
 
+it.each(['name', 'manual'] as const)('waits for the %s realtime voice write before leaving and allows retry after failure', async method => {
+  const api = window.electronAPI.voiceConversation;
+  const model = { id: 'gpt-realtime-2', name: 'Realtime', providerId: 'openai', providerName: 'OpenAI', agent: 'codex' as const, protocol: 'openai-realtime' as const, protocolLocked: true };
+  const original = { mode: 'realtime' as const, providerId: model.providerId, agent: model.agent, protocol: model.protocol, modelId: model.id, voice: 'marin' };
+  let saved = original;
+  api.realtimeModels = vi.fn(async () => [model]);
+  vi.mocked(api.preference).mockImplementation(async () => ({ selection: null, customized: true, realtimeSelection: saved }));
+  let finish!: (ok: boolean) => void;
+  api.setRealtimePreference = vi.fn<NonNullable<typeof api.setRealtimePreference>>((_bot, value) => new Promise((resolve, reject) => {
+    finish = ok => {
+      if (!ok) return reject(new Error('write failed'));
+      saved = { ...original, voice: value!.voice };
+      resolve({ selection: null, customized: true, realtimeSelection: saved });
+    };
+  }));
+  const beforeLeaveRef = { current: null as (() => Promise<boolean>) | null };
+  const open = () => render(<CompanionVoiceSettings botId="bot" sessionId="canonical" beforeLeaveRef={beforeLeaveRef} />);
+  const page = open();
+  const choose = async () => {
+    if (method === 'name') {
+      fireEvent.click((await openVoices(callVoiceLabel)).getByRole('button', { name: 'cedar' }));
+    } else {
+      if (!screen.queryByRole('textbox', { name: 'bots.voiceMode.voiceId' })) {
+        fireEvent.click((await openVoices(callVoiceLabel)).getByRole('button', { name: 'bots.voiceMode.manualVoice' }));
+      }
+      const input = screen.getByRole('textbox', { name: 'bots.voiceMode.voiceId' });
+      input.focus();
+      fireEvent.change(input, { target: { value: 'custom-id' } });
+    }
+  };
+  for (const succeeds of [false, true]) {
+    await choose();
+    let leave!: Promise<boolean>;
+    act(() => { leave = beforeLeaveRef.current!(); });
+    expect(api.setRealtimePreference).toHaveBeenCalledTimes(succeeds ? 2 : 1);
+    let settled = false;
+    void leave.then(() => { settled = true; });
+    await act(async () => {});
+    expect(settled).toBe(false);
+    await act(async () => { finish(succeeds); expect(await leave).toBe(succeeds); });
+    if (!succeeds) expect(await screen.findByRole('alert')).toBeTruthy();
+  }
+  page.unmount();
+  open();
+  await screen.findByRole('button', { name: callVoiceLabel });
+  expect(voicePicker(callVoiceLabel).value).toBe('voice:' + (method === 'name' ? 'cedar' : 'custom-id'));
+  expect(api.setPreference).not.toHaveBeenCalled();
+});
+
 it('auditions an unselected realtime private voice and keeps selection, microphone and preferences untouched', async () => {
   const api = window.electronAPI.voiceConversation;
   const model = { id: 'qwen-audio-3.1-realtime-flash', name: 'Qwen', providerId: 'bailian', providerName: 'Bailian', agent: 'codex' as const, protocol: 'qwen-audio-realtime' as const, protocolLocked: true, hasCustomVoiceCatalog: true };
@@ -224,7 +273,8 @@ it('loads realtime voices silently and keeps custom choices visible while refres
   vi.mocked(api.preference).mockResolvedValue({ selection: null, customized: true, realtimeSelection: realtime });
   let finish!: (value: SpeechVoiceCatalog) => void;
   api.realtimeCustomVoices = vi.fn(() => new Promise<SpeechVoiceCatalog>(resolve => { finish = resolve; }));
-  renderSettings();
+  api.cancelRealtimeCustomVoices = vi.fn(async () => {});
+  const page = renderSettings();
   const refresh = await screen.findByRole('button', { name: 'bots.voiceMode.realtime.refreshMyVoices' });
   const picker = voicePicker(callVoiceLabel);
   expect(screen.queryByText('bots.voiceMode.voicesLoading')).toBeNull();
@@ -235,11 +285,16 @@ it('loads realtime voices silently and keeps custom choices visible while refres
   fireEvent.click(refresh);
   await waitFor(() => expect(api.realtimeCustomVoices).toHaveBeenCalledTimes(2));
   expect(screen.queryByText('bots.voiceMode.voicesLoading')).toBeNull();
+  const [first, second] = vi.mocked(api.realtimeCustomVoices).mock.calls;
+  expect(second[1]).not.toBe(first[1]);
+  expect(api.cancelRealtimeCustomVoices).toHaveBeenCalledWith(first[1]);
   expect(picker.textContent).toContain('Buddy');
   expect((await openVoices(callVoiceLabel)).getByRole('button', { name: 'Buddy' })).toBeTruthy();
   await act(async () => finish({ source: 'provider', voices: [{ id: 'my-voice', name: 'Updated voice' }] }));
   expect(picker.textContent).toContain('Updated voice');
   expect(picker.value).toBe('voice:my-voice');
+  page.unmount();
+  expect(api.cancelRealtimeCustomVoices).toHaveBeenLastCalledWith(second[1]);
   expect(api.setRealtimePreference).not.toHaveBeenCalled();
 });
 
