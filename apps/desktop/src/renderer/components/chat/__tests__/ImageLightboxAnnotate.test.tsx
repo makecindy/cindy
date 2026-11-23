@@ -15,6 +15,7 @@
  * - 集合重新挂载图片时读取最新草稿；宿主换图经过当前集合图片的离开守卫。
  * - 附件更新被锁定时预览只读，不能把空回调当作保存成功；解锁后当前草稿
  *   写入器恢复，once-bound 快捷键不会沿用锁定首帧的空写入器。
+ * - 异步换图保存期间返回当前图或再切到第三张时，结算最新宿主请求。
  * - 历史标注图原图丢失时退回烧录图,而不是提示丢失并关闭。
  */
 
@@ -840,6 +841,127 @@ describe('ImageLightbox annotate mode', () => {
     });
     await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
     expect(lightboxImage().getAttribute('src')).toBe(NEXT_SRC);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：ImageLightbox 的宿主换图 effect；异步保存期间返回 A
+  //   或再切到 C 后，显示的图片与宿主 src 都等于最新请求。
+  // - Bug／规则依据：#11952 round 11 review PRRT_kwDOTgdRUs66qFSo；
+  //   docs/dev-rules/engineering-conventions.md §3.2。
+  // - 现有覆盖缺口：既有用例只覆盖 B->C 保存成功，未覆盖返回当前图与旧守卫取消。
+  // - 最小失败输入：A 有未保存笔迹 -> 请求 B 并保存 -> 保存未完成时请求 A/C；
+  //   修复前分别显示 B 或把宿主重置到 A。
+  // - tier：unit；复用现有 jsdom 文件，定向套件实测约 2.5s。
+  it('settles a save back to the latest host source when the request returns to the displayed image', async () => {
+    let resolveSave: (() => void) | undefined;
+    const onSave = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveSave = resolve;
+        }),
+    );
+    const onSourceChangeCancelled = vi.fn();
+    function Host() {
+      const [source, setSource] = useState(SRC);
+      return (
+        <ConfirmDialogProvider>
+          <button type="button" onClick={() => setSource(NEXT_SRC)}>
+            open next
+          </button>
+          <button type="button" onClick={() => setSource(SRC)}>
+            return first
+          </button>
+          <ImageLightbox
+            src={source}
+            onClose={vi.fn()}
+            annotationEdit={{ onSave, onDraftChange: vi.fn() }}
+            onSourceChangeCancelled={(displayed) => {
+              onSourceChangeCancelled(displayed);
+              setSource(displayed.src);
+            }}
+          />
+        </ConfirmDialogProvider>
+      );
+    }
+    render(<Host />);
+    loadImage(lightboxImage());
+    openAnnotate();
+    drawStroke({ x: 10, y: 10 }, { x: 50, y: 50 });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'open next' }));
+    });
+    const dialog = await screen.findByRole('alertdialog');
+    await act(async () => {
+      fireEvent.click(
+        within(dialog).getByRole('button', { name: label('chat.media.annotateSave') }),
+      );
+    });
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'return first' }));
+    });
+    await act(async () => {
+      resolveSave?.();
+    });
+    await waitFor(() => expect(lightboxImage().getAttribute('src')).toBe(SRC));
+    expect(onSourceChangeCancelled).not.toHaveBeenCalled();
+  });
+
+  it('keeps the newest source request after a stale leave guard is cancelled', async () => {
+    const onSourceChangeCancelled = vi.fn();
+    function Host() {
+      const [source, setSource] = useState(SRC);
+      return (
+        <ConfirmDialogProvider>
+          <button type="button" onClick={() => setSource(NEXT_SRC)}>
+            open next
+          </button>
+          <button type="button" onClick={() => setSource(THIRD_SRC)}>
+            open third
+          </button>
+          <ImageLightbox
+            src={source}
+            onClose={vi.fn()}
+            annotationEdit={{ onSave: vi.fn(), onDraftChange: vi.fn() }}
+            onSourceChangeCancelled={(displayed) => {
+              onSourceChangeCancelled(displayed);
+              setSource(displayed.src);
+            }}
+          />
+        </ConfirmDialogProvider>
+      );
+    }
+    render(<Host />);
+    loadImage(lightboxImage());
+    openAnnotate();
+    drawStroke({ x: 10, y: 10 }, { x: 50, y: 50 });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'open next' }));
+    });
+    const firstDialog = await screen.findByRole('alertdialog');
+    await act(async () => {
+      fireEvent.click(screen.getByText('open third'));
+    });
+    await act(async () => {
+      fireEvent.click(
+        within(firstDialog).getByRole('button', {
+          name: label('chat.media.annotateDiscardConfirmCancel'),
+        }),
+      );
+    });
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeNull());
+    const latestDialog = await screen.findByRole('alertdialog');
+    await act(async () => {
+      fireEvent.click(
+        within(latestDialog).getByRole('button', {
+          name: label('chat.media.annotateDiscardConfirmAction'),
+        }),
+      );
+    });
+    await waitFor(() => expect(lightboxImage().getAttribute('src')).toBe(THIRD_SRC));
+    expect(onSourceChangeCancelled).not.toHaveBeenCalled();
   });
 
   it('keeps a locked attachment preview read-only', () => {

@@ -386,6 +386,8 @@ interface ImageLightboxProps {
   autoAnnotate?: boolean;
   /** When the attachment owner cannot accept updates, the preview must stay read-only. */
   annotationDisabled?: boolean;
+  /** Stable attachment ID used to coordinate one writable preview owner. */
+  previewOwnerId?: string;
   /** Called when a source-retarget leave is rejected; hosts must restore their request to the displayed source snapshot. */
   onSourceChangeCancelled?: (displayed: ImageSourceSnapshot) => void;
 }
@@ -393,16 +395,18 @@ interface ImageLightboxProps {
 /** Source fields frozen until the mounted content accepts them. */
 export type ImageSourceSnapshot = Omit<
   ImageLightboxProps,
-  'onClose' | 'onSourceChangeCancelled'
+  'onClose' | 'onSourceChangeCancelled' | 'previewOwnerId'
 >;
 
 function sourceSnapshotFromProps({
   onClose,
   onSourceChangeCancelled,
+  previewOwnerId,
   ...source
 }: ImageLightboxProps): ImageSourceSnapshot {
   void onClose;
   void onSourceChangeCancelled;
+  void previewOwnerId;
   return source;
 }
 
@@ -511,6 +515,10 @@ export function ImageLightbox(props: ImageLightboxProps) {
   const [activeSource, setActiveSource] = useState(() => sourceSnapshotFromProps(props));
   const activeSourceRef = useRef(activeSource);
   const pendingSourceRef = useRef<ImageSourceSnapshot | null>(null);
+  const sourceGuardInFlightRef = useRef(false);
+  const busySettlePendingRef = useRef(false);
+  const settleSourceRef = useRef<(() => void) | null>(null);
+  const sourceSettlementTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const contentLeaveGuardRef = useRef<PreviewLeaveGuard | null>(null);
   const collectionLeaveGuardRef = useRef<PreviewLeaveGuard | null>(null);
   const items = useOpeningCollection(
@@ -520,31 +528,76 @@ export function ImageLightbox(props: ImageLightboxProps) {
   const [sourceToken, setSourceToken] = useState(0);
   const onSourceChangeCancelledRef = useRef(props.onSourceChangeCancelled);
   onSourceChangeCancelledRef.current = props.onSourceChangeCancelled;
+  useEffect(
+    () => () => {
+      if (sourceSettlementTimerRef.current) clearTimeout(sourceSettlementTimerRef.current);
+    },
+    [],
+  );
   useEffect(() => {
-    const requested = requestedSourceRef.current;
-    if (imageSourceKey(requested) === imageSourceKey(activeSourceRef.current)) {
-      pendingSourceRef.current = null;
-      return;
-    }
-    pendingSourceRef.current = requested;
-    const leave = () => {
-      const next = pendingSourceRef.current ?? requested;
+    let disposed = false;
+    const scheduleSettle = () => {
+      if (sourceSettlementTimerRef.current) clearTimeout(sourceSettlementTimerRef.current);
+      sourceSettlementTimerRef.current = setTimeout(() => {
+        sourceSettlementTimerRef.current = null;
+        settleSourceRef.current?.();
+      }, 0);
+    };
+    const applySource = (next: ImageSourceSnapshot) => {
       pendingSourceRef.current = null;
       if (imageSourceKey(next) === imageSourceKey(activeSourceRef.current)) return;
       activeSourceRef.current = next;
       setActiveSource(next);
       setSourceToken((token) => token + 1);
     };
-    const guard = activeLeaveGuardRef.current;
-    if (!guard) {
-      leave();
-      return;
-    }
-    void guard(leave).then((outcome) => {
-      if (outcome === 'applied' || outcome === 'busy') return;
-      pendingSourceRef.current = null;
-      onSourceChangeCancelledRef.current?.(activeSourceRef.current);
-    });
+    const settle = () => {
+      if (disposed) return;
+      const requested = requestedSourceRef.current;
+      pendingSourceRef.current = requested;
+      if (sourceGuardInFlightRef.current) return;
+      if (imageSourceKey(requested) === imageSourceKey(activeSourceRef.current)) {
+        pendingSourceRef.current = null;
+        return;
+      }
+      const leave = () => {
+        applySource(requestedSourceRef.current);
+      };
+      const guard = activeLeaveGuardRef.current;
+      if (!guard) {
+        leave();
+        return;
+      }
+      sourceGuardInFlightRef.current = true;
+      void guard(leave).then((outcome) => {
+        sourceGuardInFlightRef.current = false;
+        const wasBusySettlePending = busySettlePendingRef.current;
+        if (outcome !== 'busy') busySettlePendingRef.current = false;
+        if (disposed) {
+          scheduleSettle();
+          return;
+        }
+        if (outcome === 'applied') {
+          if (pendingSourceRef.current || wasBusySettlePending) scheduleSettle();
+          return;
+        }
+        if (outcome === 'busy') {
+          if (!busySettlePendingRef.current) {
+            busySettlePendingRef.current = true;
+            scheduleSettle();
+          }
+          return;
+        }
+        pendingSourceRef.current = null;
+        onSourceChangeCancelledRef.current?.(activeSourceRef.current);
+        if (wasBusySettlePending) scheduleSettle();
+      });
+    };
+    settleSourceRef.current = settle;
+    settle();
+    return () => {
+      disposed = true;
+      if (settleSourceRef.current === settle) settleSourceRef.current = null;
+    };
   }, [requestedKey, activeLeaveGuardRef]);
 
   const annotationDisabled = Boolean(requestedSourceRef.current.annotationDisabled);
@@ -556,6 +609,7 @@ export function ImageLightbox(props: ImageLightboxProps) {
   const contentProps: ImageLightboxContentProps = {
     ...activeSource,
     onClose: props.onClose,
+    previewOwnerId: props.previewOwnerId,
     annotationDisabled,
     initialStrokes: activeSource.initialStrokes ?? acceptedAnnotationEdit?.initialStrokes,
     annotationEdit:
@@ -609,6 +663,7 @@ export function ImageLightbox(props: ImageLightboxProps) {
     return {
       ...contentProps,
       ...imageProps,
+      previewOwnerId: props.previewOwnerId,
       annotationDisabled: collectionAnnotationDisabled,
       initialStrokes: imageProps?.initialStrokes ?? contentProps.initialStrokes,
       annotationEdit,
@@ -651,6 +706,7 @@ function ImageLightboxContent({
   annotationFallbackSrc,
   autoAnnotate = false,
   annotationDisabled = false,
+  previewOwnerId,
   leaveGuardRef,
 }: ImageLightboxContentProps) {
   const { t } = useTranslation();
@@ -1823,6 +1879,8 @@ function ImageLightboxContent({
     void requestClose();
   };
 
+  const currentPreviewOwnerId =
+    activeCollection?.items[activeCollection.index]?.id ?? previewOwnerId;
   const panelStyle = {
     position: 'fixed',
     left: panelRect.x,
@@ -1857,6 +1915,7 @@ function ImageLightboxContent({
     <div
       ref={overlayRef}
       data-lightbox-layer
+      data-preview-owner-id={currentPreviewOwnerId}
       data-preview-window-mode={panelMode}
       role="dialog"
       aria-modal={false}

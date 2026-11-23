@@ -27,6 +27,16 @@ export const ActivePreviewCollection = createContext<{
   restoreFocus?(event: Event): void;
 } | null>(null);
 
+/** One writable image preview owner for the attachment-tray coordinator. */
+export type AttachmentPreviewOwner = {
+  activeId: string | null;
+  open(id: string): void;
+  close(id: string): void;
+  onActiveIdChange(id: string): void;
+};
+
+export const AttachmentPreviewOwnerContext = createContext<AttachmentPreviewOwner | null>(null);
+
 export function useOpeningCollection(source: string) {
   const items = useContext(AttachmentCollectionContext);
   return items && items.length > 1 && items.some((item) => item.source === source) ? items : null;
