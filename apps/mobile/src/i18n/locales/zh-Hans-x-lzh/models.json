@@ -53,7 +53,8 @@
   },
   "switchOutcome": {
     "applied": "模型来源之易已生效。",
-    "failed": "模型来源之易未成，请重择。"
+    "failed": "模型来源之易未成，请重择。",
+    "previousSettingsRetained": "此次更易未成，任务仍循旧设。"
   },
   "agentSwitch": {
     "browseAccessibility": "览 {{agent}} 模型"
@@ -109,6 +110,38 @@
     "quotaResetIn": "{{duration}}后复初",
     "quotaAverageHint": "周限额 · 诸名籍等权均值",
     "quotaResetHint": "依今耗速，重置或尚有余：距 24 小时以内示黄，6 小时以内示红。"
+  },
+  "modelGroups": {
+    "title": "模型组",
+    "sourceCount_other": "{{count}} 源",
+    "strategy": {
+      "expiring": "将废者先用",
+      "order": "依序",
+      "rotate": "轮值",
+      "cheapest": "最省"
+    },
+    "sourceOnDevice": "{{provider}} · {{device}}",
+    "why": {
+      "expiringQuota": "限额尚余 {{left}}%，{{reset}} 重设，故先用之",
+      "expiring": "依限额居首",
+      "order": "居首之可用者",
+      "rotate": "此番轮至彼",
+      "only": "今唯彼可用",
+      "soonest": "诸源限额皆尽，彼最先复",
+      "soonestUntil": "诸源限额皆尽，彼最先复（{{reset}}）",
+      "cheapest": "标价最低",
+      "cheapestFree": "订阅尚有限额，不另费钱",
+      "exceptionImage": "讯中有图，唯于能观图之源中择",
+      "exceptionImageFallback": "讯中有图，然无能观图之源，照常择之",
+      "exceptionHours": "此时段改行「{{name}}」",
+      "separator": "；"
+    },
+    "picker": {
+      "switched": "「{{name}}」已将此差事易为 {{model}}",
+      "switchUnavailable": "「{{name}}」今无可供此差事之源，模型未易。",
+      "chooseUnavailable": "「{{name}}」今无可用之源，未取之。"
+    },
+    "anotherDevice": "他机"
   },
   "pluginEngines": {
     "genericName": "法器引擎",

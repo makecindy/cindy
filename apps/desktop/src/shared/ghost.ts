@@ -2,7 +2,7 @@ import { ghostCardSessionLinkId } from '@cindy/maker-shared/ghost-card-form';
 import { getGhostGithubReleaseRepository, declaredGhostHostToolGroups, isGhostCindyModelActionsDeclaration } from '@cindy/plugin-protocol';
 import { isValidGhostNetworkHostPattern as isValidPluginNetworkHostPattern, ghostNetworkTargetMatches } from '@cindy/plugin-protocol';
 export { ghostNetworkTargetMatches } from '@cindy/plugin-protocol';
-import { isSafeGhostRelativePath as isSafePluginUiPath, getPluginToolUi, validateWithStoredMcpApps, parseGhostMcpApps } from '@cindy/plugin-protocol';
+import { isSafeGhostRelativePath as isSafePluginUiPath, getPluginToolUi, validateWithStoredMcpApps, ghostMcpAppsValidationError, parseGhostMcpApps } from '@cindy/plugin-protocol';
 import { pluginHasToolUi, pluginToolVisible, pluginUiDomains, pluginUiPermissionsExpand } from '@cindy/plugin-protocol';
 import { getPluginHostUi, hostUiApprovalSubjects, HOST_UI_CAPABILITIES, isHostUiPosition, type GhostHostUi } from '@cindy/plugin-protocol';
 import { PLUGIN_APPEARANCE_FIELDS } from '@cindy/plugin-protocol/appearance';
@@ -392,6 +392,13 @@ export const GHOST_NODE_CHILD_MODE_FLAG = '__cindy-node-child__';
  * stdio 字节一律 base64 中继(chunk 可能把多字节字符切两半,文本转发会
  * 出现乱码;base64 逐字节保真)。
  */
+
+/**
+ * 单条 stdio base64 中继帧的字符上限。接收端对超过上限的帧整段丢弃（没有断流、没有报错），
+ * 所以按字节写一条可能很大的消息时（例如插件引擎的 ACP 行里带 base64 图片），发送方必须
+ * 按 4 的整数倍切段：每段都是合法 base64，接收端依次喂进同一条 stdin，拼接后与原始字节一致。
+ */
+export const GHOST_NODE_STDIO_B64_MAX_CHARS = 2 * 1024 * 1024;
 
 /** worker → 主机:代启/喂 stdin/收 stdin/杀进程。 */
 export type GhostNodeChildToHostMessage =
@@ -7035,7 +7042,7 @@ function validateGhostManifestInput(
 
   if (raw.mcpApps !== undefined && raw.schemaVersion !== 3) return { ok: false, reason: 'mcpApps requires schemaVersion 3' };
   const parsedMcpApps = raw.mcpApps === undefined ? undefined : parseGhostMcpApps(raw.mcpApps, tools ?? [], network?.hosts ?? [], isSafePluginUiPath);
-  if (parsedMcpApps === null) return { ok: false, reason: 'mcpApps.ui 页面或工具声明无效，页面域名必须在 network.hosts 内' };
+  if (parsedMcpApps === null) return { ok: false, reason: ghostMcpAppsValidationError(raw.mcpApps) };
   const mcpApps = parsedMcpApps;
   return {
     ok: true,
@@ -7242,8 +7249,9 @@ export function ghostManifestToAuthorFormat(manifest: GhostManifest): Record<str
  *
  * 上行(电子脑 → 主机,cindy.send(payload) = ipcRenderer.invoke):
  *   - tool-result:交卷。
- *   - host-request:读取宿主公开上下文。目前只支持 app-context(region + locale),
- *     无需声明卡槽、无用户数据与凭证内容。
+ *   - host-request:读取宿主只读信息：app-context、control-points、cindy-preference
+ *     与 resource-usage（本机、调用插件自身进程及共用 GPU 进程用量）。
+ *     不返回其它插件的配置、进程详情或凭证；未知 kind 明确拒绝。
  *   - cindy-request(旧名 model-request 兼容):cindy 槽代办(意识请 Cindy 本体干活;invoke 的返回值即结果,
  *     无需另配对)。gen_image / edit_image / gen_video / edit_video /
  *     deposit_media / release_media / oneshot_text / embed_text;须声明
@@ -7332,7 +7340,30 @@ export type GhostPipeHostRequest =
       /** 查询当前 Host 提供的控制节点目录，以及本插件在各节点的生效状态。 */
       type: 'host-request';
       kind: 'control-points';
+    }
+  | {
+      type: 'host-request';
+      kind: 'resource-usage';
     };
+
+/** 本机与本插件实例的实测资源用量；缺失指标为 null，内存单位为字节。 */
+export interface GhostResourceUsageResult {
+  ok: true;
+  capturedAt: string;
+  machine: {
+    memoryTotalBytes: number | null;
+    memoryAvailableBytes: number | null;
+    cpuBusyPercent: number | null;
+    cpuLogicalCores: number | null;
+    cpuLoadAverage1m: number | null;
+  };
+  plugin: {
+    memoryBytes: number | null;
+    cpuPercent: number | null;
+  };
+  /** Cindy 共用 GPU 进程的内存，不是显存，也不计入 plugin.memoryBytes。 */
+  gpu: { memoryBytes: number | null };
+}
 
 /** 新任务「让插件选」的结果(Host 界面用)。kept = 用用户原来选的模型。 */
 export type GhostStartTaskRouteResult =
@@ -7925,6 +7956,7 @@ export type GhostPipeTaskViewResult =
  */
 export interface GhostPipeScheduleDraftRequest {
   type: 'schedule-request';
+  primaryDeviceOnly?: boolean;
   mobilePageId?: string;
   /** 预填的自动化名称(净化后按 GHOST_SCHEDULE_DRAFT_NAME_MAX_CHARS 截断)。 */
   name: string;
@@ -7971,6 +8003,7 @@ export type GhostPipeScheduleDraftResult =
  * 文本字段已由主机净化 + 截断;频率建议已钳到最小间隔之上。
  */
 export interface GhostScheduleDraftPush {
+  primaryHostKey?: string;
   /** 本次请求 id(renderer 去重用:重复推送不叠开多个面板)。 */
   requestId: string;
   ghostId: string;

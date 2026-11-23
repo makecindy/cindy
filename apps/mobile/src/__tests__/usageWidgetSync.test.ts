@@ -79,6 +79,23 @@ describe('refreshUsageWidgetStore', () => {
     const pinned = await refreshUsageWidgetStore(previous, [device('a'), device('b')], answer() as never, ['a'], () => 9);
     expect(pinned.states.a).toEqual({ kind: 'update-desktop', receivedAtMs: 9 });
   });
+
+  // Regression (2026-11-22 phone log): right after the phone reconnects, the roster briefly
+  // shows the computer as offline and not controllable. That refresh used to drop the kept
+  // reading and the automatic choice, so the drawer said there was no quota until the next
+  // answer. Minimum input: kept reading for 'mac', roster row { online: false,
+  // remoteControlEnabled: false }. Tier: unit, in-process fake invoke.
+  it('keeps the reading of a computer that is briefly unreachable, drops one that left the account', async () => {
+    const kept = { kind: 'snapshot' as const, receivedAtMs: 5, deviceName: 'mac', snapshot: snapshot as never };
+    const previous = { version: 2 as const, autoDeviceId: 'mac', computers: [{ id: 'mac', name: 'mac' }],
+      states: { mac: kept, gone: kept } };
+    const invoke = vi.fn();
+    const store = await refreshUsageWidgetStore(previous,
+      [device('mac', { online: false, remoteControlEnabled: false })], invoke as never, [], () => 9);
+    expect(invoke).not.toHaveBeenCalled();
+    expect(store.autoDeviceId).toBe('mac');
+    expect(store.states).toEqual({ mac: kept });
+  });
 });
 
 // Production refreshUsageWidgets: late reads cannot write or issue another peer request

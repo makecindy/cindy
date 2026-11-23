@@ -40,6 +40,7 @@ import { useIsFocused } from "expo-router";
 import { useTranslation } from "react-i18next";
 import {
   REMOTE_RESOURCE_INVOKE_CHANNEL,
+  type PluginModelPickerRequest,
   type PluginPageConfirm,
   type PluginPagePoll,
   type PluginNativeIntent as NativeIntent,
@@ -68,6 +69,7 @@ import { MobileMailHtmlPreview } from "./MobileMailHtmlPreview";
 import { pickMobileMailAttachment } from "./mobileMailAttachment";
 import { PluginCardRecipients } from "./PluginCardRecipients";
 import { invokePlugin } from "./pluginClient";
+import { PluginModelPicker } from "./PluginModelPicker";
 import { PluginNativeIntent } from "./PluginNativeIntent";
 import { FileTypeIcon } from '@/components/FileTypeIcon';
 import { Check, CircleMinus, CircleX, Clock, ExternalLink, Settings, ChevronDown } from 'lucide-react-native';
@@ -368,6 +370,9 @@ function CardControls({
     setFormState({ key: formKey, values: formValues, base: incoming });
   }
   const [confirm, setConfirm] = useState<PluginPageConfirm>();
+  const [modelRequest, setModelRequest] = useState<PluginModelPickerRequest>();
+  // A poll already in flight can still list the request just answered.
+  const lastAnsweredModel = useRef<string | undefined>(undefined);
   const [previewIntent, setPreviewIntent] = useState<Extract<NativeIntent, { kind: 'preview' }>>();
   const dismissedPreviews = useRef(new Set<string>());
   const [busyAction, setBusyAction] = useState<string>(),
@@ -401,6 +406,7 @@ function CardControls({
   useEffect(() => {
     if (!lease) return;
     if (!focused || !foreground || status !== "online") {
+      setModelRequest(undefined);
       // The host discards preview resources on suspend. Resume only from a fresh receipt.
       setPreviewIntent(undefined);
       if (current() && status === "online")
@@ -423,6 +429,7 @@ function CardControls({
         );
         if (!disposed && current()) {
           setConfirm(result.confirms[0]);
+          setModelRequest(result.modelPickers?.find(request => request.requestId !== lastAnsweredModel.current));
           setPreviewIntent(result.intents?.find(
             (intent): intent is Extract<NativeIntent, { kind: 'preview' }> =>
               intent.kind === 'preview' && !dismissedPreviews.current.has(intent.id),
@@ -433,6 +440,7 @@ function CardControls({
           // A failed read says nothing about the delivery of a card action. Keep
           // that separate unknown state intact, and hide stale interaction UI.
           setConfirm(undefined);
+          setModelRequest(undefined);
           setPreviewIntent(undefined);
           if (error instanceof Error && error.message.startsWith('[NOT_FOUND] ')
             && page.current === lease) {
@@ -669,6 +677,23 @@ function CardControls({
   }
   return (
     <View style={[styles.root, mail && !history && styles.mailCard]}>
+      {modelRequest && lease && focused && foreground && status === 'online' && current() && !previewIntent && !confirm && !prompt ? (
+        <PluginModelPicker key={modelRequest.requestId} request={modelRequest} deviceId={deviceId}
+          onAnswer={async route => {
+            if (!current() || page.current !== lease || !focusedRef.current || AppState.currentState !== 'active')
+              return { handled: false, accepted: false };
+            const { requestId } = modelRequest;
+            const result = await invokePlugin<{ handled: boolean; accepted: boolean }>(
+              invoke, deviceId, pluginId, 'answer-model-picker', { pageId: lease, requestId, route },
+            );
+            if (current() && page.current === lease && (result.accepted || !result.handled)) {
+              lastAnsweredModel.current = requestId;
+              setModelRequest(pending => pending?.requestId === requestId ? undefined : pending);
+            }
+            return result;
+          }}
+        />
+      ) : null}
       {previewIntent && lease && focused && foreground && status === 'online' && current() ? (
         <PluginNativeIntent
           key={previewIntent.id}
@@ -1054,7 +1079,7 @@ function PrStatusRow({ slot }: { slot: PrStatusSlot }) {
           );
         }
         const color = key === "threadsOpen" ? styles.statusAccentText : tone === "bad" ? styles.statusBadText
-          : key === "mergeReady" || key === "merged" ? styles.statusGoodText : undefined;
+          : key === "merged" ? styles.statusMergedText : key === "mergeReady" ? styles.statusGoodText : undefined;
         return (
           <Text key={key} style={[styles.note, color]}>
             {t(`plugins.prStatus.${key}`, count === undefined ? undefined : { count })}
@@ -1174,6 +1199,7 @@ const makeStyles = (c: ThemeColors) =>
     statusItem: { flexDirection: "row", alignItems: "center", gap: spacing.xs },
     statusDot: { width: 7, height: 7, borderRadius: radius.pill },
     statusGoodText: { color: c.statusDone },
+    statusMergedText: { color: c.prMerged },
     statusBadText: { color: c.errorText },
     statusAccentText: { color: c.statusAccent },
     statusCount: { fontWeight: fontWeight.medium, fontVariant: ["tabular-nums"] },

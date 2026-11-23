@@ -24,7 +24,6 @@ import type {
 import { ownerScopedUserDataPath } from '../appSessionState.js';
 import { createOverrideSettingsFile, portableOverrideSettings } from '../maker-host/override-settings-file.js';
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
-import { currentLedgerCurrency } from './ledgerCurrency.js';
 
 const log = desktopMakerLogger.child('model-price-overrides');
 const STORE_VERSION = 1;
@@ -439,17 +438,6 @@ function mergedQuote(
   };
 }
 
-function currencyCanProjectToLedger(
-  currency: MoneyCurrency,
-  ledgerCurrency: MoneyCurrency,
-): boolean {
-  return currency === ledgerCurrency || (currency === 'USD' && ledgerCurrency === 'CNY');
-}
-
-function allowedCurrenciesForLedger(ledgerCurrency: MoneyCurrency): MoneyCurrency[] {
-  return ledgerCurrency === 'USD' ? ['USD'] : ['USD', 'CNY'];
-}
-
 function readEntries(): Record<string, StoredModelPriceOverride> {
   store.invalidateIfChanged();
   return store.read().entries;
@@ -458,29 +446,21 @@ function readEntries(): Record<string, StoredModelPriceOverride> {
 export function readModelPriceOverrideView(
   target: ModelPriceOverrideTarget,
   registry: ModelRegistry | null | undefined,
-  ledgerCurrency: MoneyCurrency = currentLedgerCurrency(),
 ): ModelPriceOverrideView {
-  const remoteReference = providerReferencePriceQuote(target.providerId, target.modelId, registry, {
+  const reference = providerReferencePriceQuote(target.providerId, target.modelId, registry, {
     agent: target.agent,
   });
-  const reference =
-    remoteReference && currencyCanProjectToLedger(remoteReference.currency, ledgerCurrency)
-      ? remoteReference
-      : undefined;
   const record = readEntries()[overrideKey(target)];
   const merged = mergedQuote(target, reference, record?.values, record?.baseReference);
   return {
     target,
     editable: target.providerId !== 'xd',
     reference: reference ?? null,
-    effective:
-      merged && currencyCanProjectToLedger(merged.currency, ledgerCurrency)
-        ? merged
-        : (reference ?? null),
+    effective: merged ?? reference ?? null,
     override: record?.values ?? null,
-    conflict: Boolean(record && !sameComparable(record.baseReference, comparable(remoteReference))),
+    conflict: Boolean(record && !sameComparable(record.baseReference, comparable(reference))),
     registryUpdatedAt: registry?.updatedAt ?? null,
-    allowedCurrencies: allowedCurrenciesForLedger(ledgerCurrency),
+    allowedCurrencies: ['USD', 'CNY'],
   };
 }
 
@@ -585,30 +565,24 @@ export function mergeStoredModelPriceOverride(
 export function applyModelPriceOverrides(
   pricing: ModelPricingCatalog,
   registry: ModelRegistry | null | undefined,
-  ledgerCurrency: MoneyCurrency = currentLedgerCurrency(),
   options: { at?: string | Date; entries?: ModelPriceOverridesSnapshot } = {},
 ): ModelPricingCatalog {
   const next: ModelPricingCatalog = Object.fromEntries(
     Object.entries(pricing).map(([providerId, quotes]) => [
       providerId,
-      Object.fromEntries(
-        Object.entries(quotes).filter(
-          ([, quote]) =>
-            quote.source === 'gateway' ||
-            currencyCanProjectToLedger(quote.currency, ledgerCurrency),
-        ),
-      ),
+      { ...quotes },
     ]),
   );
   for (const record of Object.values(options.entries ?? readEntries())) {
     if (record.providerId === 'xd') continue;
-    const reference = providerReferencePriceQuote(record.providerId, record.modelId, registry, {
-      agent: record.agent,
-      at: options.at,
-    });
+    const key = modelPricingKey(record.modelId, record.agent);
+    // The projection already checked this engine's endpoint and historical tariff date.
+    const reference = pricing[record.providerId]?.[key] ?? providerReferencePriceQuote(
+      record.providerId, record.modelId, registry, { agent: record.agent, at: options.at },
+    );
     const quote = mergedQuote(record, reference, record.values, record.baseReference);
-    if (!quote || !currencyCanProjectToLedger(quote.currency, ledgerCurrency)) continue;
-    (next[record.providerId] ??= {})[modelPricingKey(record.modelId, record.agent)] = quote;
+    if (!quote) continue;
+    (next[record.providerId] ??= {})[key] = quote;
   }
   return next;
 }
@@ -620,7 +594,6 @@ export const __testing = {
   sameComparable,
   comparable,
   mergedQuote,
-  currencyCanProjectToLedger,
 };
 
 /** New-computer setup: values the user changed here (docs/product-rules/new-device-setup-migration.md). */

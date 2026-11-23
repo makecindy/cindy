@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { CompanionCallDialogue } from './dialogue.js';
 import { normalizeRealtimeVoiceSelection } from '../../shared/realtimeVoice.js';
 import { loadSpeechVoices } from './voices.js';
@@ -46,11 +47,22 @@ const log = createLogger('voice-conversation');
 
 /** What a remote Desktop's voice settings page needs; the IPC channels stay local to this window. */
 export interface VoiceSettingsHostApi {
+  selfPreference(botId: string): Promise<ReturnType<typeof selfVoicePreference>>;
   models(): ReturnType<VoiceConversationService['models']>;
   voices(selection: unknown): ReturnType<VoiceConversationService['voices']>;
   preference(botId: unknown): Promise<VoiceConversationPreference>;
-  setPreference(botId: unknown, value: unknown, sentencePlayback: unknown): Promise<VoiceConversationPreference>;
+  setPreference(botId: unknown, value: unknown, sentencePlayback: unknown, expectedRevision?: string): Promise<VoiceConversationPreference>;
 }
+function selfVoicePreference(settings: VoiceInputSettings, botId: string) {
+  const value = companionVoicePreference(settings, botId);
+  const sources = {
+    selection: Object.hasOwn(settings.conversationSelections ?? {}, botId) ? 'teammate' : 'device',
+    sentencePlayback: Object.hasOwn(settings.conversationSentencePlayback ?? {}, botId) ? 'teammate' : 'device',
+  };
+  const revision = createHash('sha256').update(JSON.stringify([value, sources])).digest('hex');
+  return { ...value, sources, revision };
+}
+
 let settingsApi: VoiceSettingsHostApi | null = null;
 export function getVoiceSettingsHostApi(): VoiceSettingsHostApi | null {
   return settingsApi;
@@ -239,10 +251,10 @@ export function registerVoiceConversationIpc(deps: {
   handle('stop-preview', (event, id) =>
     service.stopPreview(event.sender.id, boundedString(id, 'previewId', 64)),
   );
-  const preferenceBot = async (
+  const preferenceBot = async <T>(
     raw: unknown,
-    action: (botId: string) => VoiceConversationPreference,
-  ): Promise<VoiceConversationPreference> => {
+    action: (botId: string) => T,
+  ): Promise<T> => {
     if (isAppSessionBoundaryPending()) throw new Error('changing_account');
     const owner = activeOwnerScopeKey();
     const botId = boundedString(raw, 'botId', 256);
@@ -253,9 +265,11 @@ export function registerVoiceConversationIpc(deps: {
   };
   const readPreference = (raw: unknown) =>
     preferenceBot(raw, (botId) => companionVoicePreference(deps.getSettings(), botId));
-  const writePreference = (raw: unknown, value: unknown, sentencePlayback: unknown) =>
+  const writePreference = (raw: unknown, value: unknown, sentencePlayback: unknown, expectedRevision?: string) =>
     preferenceBot(raw, (botId) => {
       const settings = deps.getSettings();
+      if (expectedRevision !== undefined && expectedRevision !== selfVoicePreference(settings, botId).revision)
+        throw new Error('VOICE_PREFERENCE_CHANGED');
       const patch: Partial<VoiceInputSettings> = {};
       if (value !== undefined) {
         const selection = value === null ? null : normalizeVoiceConversationSelection(value);
@@ -301,6 +315,7 @@ export function registerVoiceConversationIpc(deps: {
       return service.voices(selection!);
     },
     preference: readPreference,
+    selfPreference: raw => preferenceBot(raw, botId => selfVoicePreference(deps.getSettings(), botId)),
     setPreference: writePreference,
   };
   for (const operation of ['start', 'start-playback'] as const) {

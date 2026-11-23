@@ -400,7 +400,7 @@ describe('CreateWorkerPopover', () => {
   it('centers the setup and uses one model picker without a competing Harness control', () => {
     render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={vi.fn()} />);
 
-    const panel = screen.getByText('orca.createWorker.title').closest('.relative.z-10');
+    const panel = screen.getByText('orca.createWorker.title').closest('.relative.z-raised');
     const overlay = panel?.parentElement;
     expect(overlay?.className).toContain('items-center');
     expect(overlay?.className).not.toContain('items-start');
@@ -428,7 +428,7 @@ describe('CreateWorkerPopover', () => {
       'orca.createWorker.initialTaskPlaceholder',
     ) as HTMLTextAreaElement;
     fireEvent.change(initialTask, { target: { value: 'Draft a plan' } });
-    const panel = screen.getByText('orca.createWorker.title').closest('.relative.z-10');
+    const panel = screen.getByText('orca.createWorker.title').closest('.relative.z-raised');
     fireEvent.click(panel!.closest('.modal-scrim')!);
 
     expect(onClose).not.toHaveBeenCalled();

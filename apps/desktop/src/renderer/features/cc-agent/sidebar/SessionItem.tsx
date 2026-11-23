@@ -27,9 +27,6 @@ import { Button } from '@/components/ui/button';
  *     用户走右键菜单（Unarchive / Delete，仍保留原 ConfirmDialog 弹窗）。
  *   - 选中态 bg-sidebar-item-active + font-semibold
  *
- * 关于 indented prop（缩进控制）：
- *   - indented=true（分组内子 session）：`pl-5`，在普通行 12px 内边距上增加 8px 层级缩进。
- *   - indented=false（Pinned / Unclassified / Dialogue 顶层 session）：`pl-3`。
  *   2026-07 用户定稿的文字列对齐:状态图标包在 15px 定宽槽内;普通会话行使用
  *   gap-2.5(10px),与顶部导航行 / 项目行同构。自动任务行因中间还有 Timer,
  *   Agent → Timer 沿用原 Clock 的 gap-1.5(6px),Timer → 标题同为 6px。
@@ -282,8 +279,6 @@ export interface SessionItemProps {
   onTogglePin: (sessionId: string, currentlyPinned: boolean) => void;
   onMoveSession?: (sessionId: string, target: SessionMoveTarget) => void;
   projectOptions?: readonly FolderPickerOption[];
-  /** 在 ProjectNode 内部渲染时为 true，行不再额外缩进（缩进由父容器 padding 承担）。 */
-  indented?: boolean;
   /**
    * 模糊搜索命中字符在 title 中的下标数组(严格升序)。
    * 来自 useSessionSearch.matchMap;不传 / undefined → 走原 `<span>` 渲染路径,零成本。
@@ -346,7 +341,6 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
   onTogglePin,
   onMoveSession,
   projectOptions = [],
-  indented = false,
   matchIndices,
   sourceLabel,
   insideAutomationGroup = false,
@@ -361,6 +355,9 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
   const prRefs = usePrRefsForSession(session.id);
   // 任务信息复选(C 期):行右侧信息槽内容,与整理菜单同源共享状态。
   const { fields: taskInfoFields } = useTaskInfoFields();
+  const showProject = taskInfoFields.includes('project');
+  const showTeammate = taskInfoFields.includes('teammate');
+  const inboxProject = inboxMode ? sessionTaskProjectIconDirectory(session) : null;
   // 勾选 pr 且行渲染时注册为 PR 消费者:注册即拉取(远程会话含引用补拉),
   // 此后 Provider 周期/聚焦统一刷新,失败自愈(usePrActions 的 value 恒定)。
   const { registerPrConsumer } = usePrActions();
@@ -1011,11 +1008,8 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
         'group relative flex h-8 w-full items-center rounded-full',
         !isEditing && hasAutomationMeta ? 'gap-1.5' : 'gap-2.5',
         'select-none',
-        // 缩进 + padding(见文件头注释的文字列对齐口径):
-        //   indented=true → 左 20px（普通行 12px + 子层级缩进 8px）
-        //   indented=false → 左 12px（Pinned / Unclassified / Dialogue 段）
         // 右侧信息槽按内容收缩；hover 时 archive 快捷按钮覆盖同一槽位。
-        indented ? 'pl-5 pr-2' : 'pl-3 pr-2',
+        'pl-3 pr-2',
         // 注意:不加 transition-colors —— 行 bg 的 hover/active 变化要瞬时,
         // 否则归档/取消归档后 DOM 列表重排,原 hover bg 在前一个屏幕位置上要
         // 跑完 150ms 渐变才褪掉,视觉上像是"旧行仍然选中,延迟才切到新行"。
@@ -1044,10 +1038,12 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
           保证两处完全一致。
           外包 15px 定宽槽:状态图标本体 12px,槽宽与顶部导航/文件夹图标(15)一致,
           让会话标题与其它行落在同一文字列(见文件头注释)。 */}
-      <span className={cn("flex shrink-0 items-center justify-center", inboxMode ? "w-[18px]" : "w-[15px]")}>
+      <span className={cn("flex shrink-0 items-center justify-center empty:hidden", inboxMode ? "w-[18px]" : "w-[15px]")}>
         <SessionStatusIcon
-          identityIcon={inboxMode && sessionTaskProjectIconDirectory(session) ? (
-            <ResolvedProjectIcon directory={sessionTaskProjectIconDirectory(session)!}
+          hasSeparateStatusIndicator={showRightStatus}
+          hideHarness={inboxProject ? !showProject : !taskInfoFields.includes('harness')}
+          identityIcon={showProject && inboxProject ? (
+            <ResolvedProjectIcon directory={inboxProject}
               remoteHostId={session.remoteHostId} deviceId={session.deviceLinkDeviceId}
               name={sourceLabel} size={18} />
           ) : undefined}
@@ -1121,7 +1117,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
           {/* 任务标签常显、紧跟标题，不属于任务信息复选；标题过长时标题截断让位。 */}
           <TaskTagDots tags={session.tags} />
           {/* 这件任务所在的项目交给了伙伴时，显示伙伴头像（伙伴在跟进）。 */}
-          <BotFollowMark followers={followers} />
+          {showTeammate && <BotFollowMark followers={followers} />}
           {remoteIconKind && (
             <RemoteProjectIcon
               kind={remoteIconKind}
@@ -1134,7 +1130,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
             />
           )}
           {/* Agent 在另一台电脑运行(任务在本机)的标识在左侧 Agent 图标上(信号波纹)。 */}
-          {sourceLabel && !inboxMode ? (
+          {showProject && sourceLabel && !inboxMode ? (
             <span
               title={sourceLabel}
               data-project-source
@@ -1297,7 +1293,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
       {!isEditing && ordinalBadgeLabel != null && (
         <span
           className={cn(
-            'pointer-events-none absolute inset-y-0 right-2 z-20 flex items-center',
+            'pointer-events-none absolute inset-y-0 right-2 z-page-float flex items-center',
             isActive ? 'text-sidebar-item-active-foreground' : 'text-sidebar-action-icon',
           )}
         >

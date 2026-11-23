@@ -194,7 +194,7 @@ export function AddSpeechModelsDialog({
       }}
     >
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
         <Dialog.Content
           aria-describedby={undefined}
           onOpenAutoFocus={dialog.onOpenAutoFocus}
@@ -203,7 +203,7 @@ export function AddSpeechModelsDialog({
           }}
           onPointerDownOutside={(event) => event.preventDefault()}
           onCloseAutoFocus={dialog.onCloseAutoFocus}
-          className="modal-panel fixed left-1/2 top-1/2 z-[10001] flex max-h-[85vh] w-[min(600px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col text-[var(--text-primary)]"
+          className="modal-panel fixed left-1/2 top-1/2 z-modal-raised flex max-h-[85vh] w-[min(600px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col text-[var(--text-primary)]"
         >
           <div className="p-5">
             <Dialog.Title className="text-16 font-medium">

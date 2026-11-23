@@ -131,7 +131,7 @@ export function SpeechVoiceMenu(props: Props) {
         collisionPadding={8}
         aria-label={props.label}
         className={cn(
-          'z-[10010] flex max-h-[var(--radix-popover-content-available-height)] w-[var(--radix-popover-trigger-width)] flex-col overflow-hidden border-[var(--border-default)] bg-[var(--surface-elevated)] p-1.5 text-[var(--text-primary)] [-webkit-app-region:no-drag]',
+          'flex max-h-[var(--radix-popover-content-available-height)] w-[var(--radix-popover-trigger-width)] flex-col overflow-hidden border-[var(--border-default)] bg-[var(--surface-elevated)] p-1.5 text-[var(--text-primary)] [-webkit-app-region:no-drag]',
           props.groups && 'min-w-[min(16rem,var(--radix-popover-content-available-width))]',
         )}
         onOpenAutoFocus={(event) => {

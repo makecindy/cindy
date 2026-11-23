@@ -3,6 +3,8 @@ import { app, dialog, ipcMain, screen, BrowserWindow, type Display, type OpenDia
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { release as getOsRelease } from 'node:os';
+import { TASK_ACTIVITY_SNAPSHOT } from '@cindy/device-link';
+import { projectHostTaskActivity } from '../device-link/taskActivity.js';
 import { SESSION_ACTIVITY_CHANNEL, type SessionActivityPayload } from '@cindy/device-link';
 import {
   isTerminalAgentErrorEvent,
@@ -142,6 +144,7 @@ import {
   setAgentIslandLayoutDragActive,
   setAgentIslandMeasuredContentHeight,
   setAgentIslandPointerZones,
+  setAgentIslandSessionBackgroundWork,
   setAgentIslandSessionDisplaySuppressed,
   setAgentIslandStrings,
   setAgentIslandToolWording,
@@ -641,6 +644,10 @@ export class AgentIslandService {
       }
       this.setCompanionChats(chats);
       return { ok: true };
+    });
+    ipcMain.handle(TASK_ACTIVITY_SNAPSHOT, event => {
+      if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
+      return this.getForegroundTaskActivity();
     });
     ipcMain.handle('agent-island:completion-action', (event, sessionId: unknown, action: unknown, token: unknown) => {
       if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
@@ -1143,6 +1150,16 @@ export class AgentIslandService {
     setAgentIslandAppFocused(this.state, focused, now);
   }
 
+  /** A plugin engine started or stopped working after its turn (see setAgentIslandSessionBackgroundWork). */
+  setSessionBackgroundWork(
+    meta: AgentIslandSessionMeta,
+    active: boolean,
+    options: { turnStarting?: boolean } = {},
+  ): void {
+    const hydrated = this.hydrateMeta(meta);
+    if (setAgentIslandSessionBackgroundWork(this.state, hydrated, active, Date.now(), options)) this.publish();
+  }
+
   handleAgentEvent(
     meta: AgentIslandSessionMeta,
     event: AgentEvent,
@@ -1302,7 +1319,7 @@ export class AgentIslandService {
       if (changed) this.publish();
       return;
     }
-    if (event.type === 'completed' || event.type === 'failed' || event.type === 'deferred') {
+    if (event.type === 'completed' || event.type === 'failed' || event.type === 'deferred' || event.type === 'skipped') {
       this.clearSilencedScheduleRun(event.runId);
     }
   }
@@ -2098,6 +2115,19 @@ export class AgentIslandService {
       if (task.sourceDeviceId === null && task.running && task.phase === 'running') count++;
     }
     return count;
+  }
+
+  private foregroundSummaryKey = '';
+  private foregroundRevision = 0;
+
+  getForegroundTaskActivity() {
+    const summary = projectHostTaskActivity(this.getLocalTaskActivitySnapshots());
+    const key = JSON.stringify(summary);
+    if (key !== this.foregroundSummaryKey) {
+      this.foregroundSummaryKey = key;
+      this.foregroundRevision++;
+    }
+    return { ...summary, revision: this.foregroundRevision };
   }
 
   getLocalTaskActivitySnapshots(): AgentIslandSessionSnapshot[] {

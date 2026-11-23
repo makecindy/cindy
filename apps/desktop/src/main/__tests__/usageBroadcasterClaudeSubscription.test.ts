@@ -20,6 +20,7 @@ vi.mock('electron', () => ({
   BrowserWindow: { getAllWindows: () => [] },
 }));
 vi.mock('../appSessionState.js', () => ({
+  getDataOwnerLifetime: () => 0,
   activeOwnerScopeKey: () => mocks.getCurrentDbClientUserId() ?? '',
   isAppSessionBoundaryPending: () => false,
 }));

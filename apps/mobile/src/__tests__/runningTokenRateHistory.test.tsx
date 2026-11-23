@@ -16,9 +16,13 @@ const initial: Input = {
 let root: ReturnType<typeof createRoot>;
 let host: HTMLDivElement;
 let current: Input;
+// What the status pill shows: a reading only while it is live. The card keeps the last one
+// (panelRate), so a finished or paused turn does not turn into a dash.
+let panelRate: number | null = null;
 function Probe(props: Input) {
   const history = useRunningTokenRateHistory(props);
-  return <span>{history.latestRate ?? 'waiting'}</span>;
+  panelRate = history.latestRate;
+  return <span>{history.latestRateFresh ? history.latestRate : 'waiting'}</span>;
 }
 function report(patch: Partial<Input> = {}) {
   current = { ...current, ...patch };
@@ -59,6 +63,7 @@ it('expires stale samples after 60 seconds and resumes on a new paired report', 
   expect(host.textContent).toBe('50');
   act(() => vi.advanceTimersByTime(1));
   expect(host.textContent).toBe('waiting');
+  expect(panelRate).toBe(50);
   expect(report({ outputTokens: 1140, generationDurationMs: 14_000 })).toBe('20');
 });
 

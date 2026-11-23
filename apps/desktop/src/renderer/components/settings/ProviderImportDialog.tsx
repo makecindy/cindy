@@ -11,6 +11,7 @@ import { ChevronDown, Download, FileUp } from 'lucide-react';
 import type { ProviderImportPreview } from '../../../shared/providerImport';
 import { PROVIDER_IMPORT_EXAMPLE_JSON, PROVIDER_IMPORT_BATCH_EXAMPLE_JSON } from '../../../shared/providerImportExample';
 import { OAuthBrowserLink, OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
+import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
 
 interface ProviderImportDialogProps {
   importId: string;
@@ -430,7 +431,7 @@ export function ProviderImportDialog({ importId, onClose, onDone }: ProviderImpo
       />
       <ConfirmDialog
         open={busyCount !== null}
-        zIndex={10002}
+        zIndex={Z_INDEX_LAYERS['modal-nested']}
         onOpenChange={(open) => {
           if (!open && !savingRef.current) setBusyCount(null);
         }}

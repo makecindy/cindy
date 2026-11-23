@@ -58,7 +58,9 @@ describe('remote desktop state polling', () => {
       }
     },
   );
-  it('does not probe Windows for routine polls, but checks fresh status on explicit requests', async () => {
+  // Unit: the mounted settings page requests service status even while its row is hidden.
+  it('checks fresh Windows status only when explicitly requested for an enabled desktop', async () => {
+    let enabled = true;
     const readWindowsDesktopSupport = vi.fn(async () => 'ready');
     const assertTrustedAppRendererEvent = vi.fn();
     let handler: (event: unknown, check?: unknown) => Promise<Record<string, unknown>>;
@@ -70,7 +72,7 @@ describe('remote desktop state polling', () => {
       },
       DESKTOP_LOCAL: { STATE: 'state' },
       assertTrustedAppRendererEvent,
-      readDeviceLinkSettings: () => ({ remoteDesktopEnabled: false }),
+      readDeviceLinkSettings: () => ({ remoteDesktopEnabled: enabled }),
       remoteDesktop: { state: null },
       liveSession: null,
       controlledOverlay: { visible: false },
@@ -83,13 +85,16 @@ describe('remote desktop state polling', () => {
     for (let poll = 0; poll < 60; poll++) {
       expect(await handler!({}, poll % 2 ? false : undefined)).not.toHaveProperty('windowsSupport');
     }
+    enabled = false;
+    expect(await handler!({}, true)).not.toHaveProperty('windowsSupport');
     expect(readWindowsDesktopSupport).not.toHaveBeenCalled();
+    enabled = true;
     expect(await handler!({}, true)).toHaveProperty('windowsSupport', 'ready');
     readWindowsDesktopSupport.mockResolvedValue('missing');
     expect(await handler!({}, true)).toHaveProperty('windowsSupport', 'missing');
     expect(readWindowsDesktopSupport).toHaveBeenCalledTimes(2);
     await expect(handler!({}, 'true')).rejects.toThrow('INVALID_PARAMS');
     expect(readWindowsDesktopSupport).toHaveBeenCalledTimes(2);
-    expect(assertTrustedAppRendererEvent).toHaveBeenCalledTimes(63);
+    expect(assertTrustedAppRendererEvent).toHaveBeenCalledTimes(64);
   });
 });

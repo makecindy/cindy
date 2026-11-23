@@ -228,8 +228,9 @@ function Fixture({ kind }: { kind: string }) {
             retryText="original message"
           />
         )}
-        {kind === 'credential' && (
-          <CredentialSwitchWaitBanner blockedBySessionIds={[]} onCancel={noop} />
+        {(kind === 'credential' || kind === 'own-credential') && (
+          <CredentialSwitchWaitBanner sessionId="queue-gallery"
+            blockedBySessionIds={kind === 'own-credential' ? ['queue-gallery'] : []} onCancel={noop} />
         )}
       </div>
       <div className="mx-auto w-full max-w-[880px] shrink-0 px-6 pb-5 pt-3">

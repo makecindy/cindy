@@ -215,7 +215,15 @@ void mountPage({
           stored = appendSpeechModels(stored, config, [], options.appendRealtimeModelsOnly ? 'realtime' : 'audio_speech');
           return { ok: true };
         },
-        setModelDisable: forbid('setModelDisable'),
+        // A speech model's switch is access now: turning it off writes the disable axis. Only the
+        // case that exercises the switch may do so; every other case still forbids the write.
+        setModelDisable: ctx.case === 'speech-visibility'
+          ? async (input: { kind: string; disabled?: boolean }) => {
+              (window as unknown as { speechDisableWrites: unknown[] }).speechDisableWrites ??= [];
+              (window as unknown as { speechDisableWrites: unknown[] }).speechDisableWrites.push(input);
+              return { ok: true };
+            }
+          : forbid('setModelDisable'),
       },
     };
   },
