@@ -93,7 +93,7 @@ export interface RunMarker {
 
 export type PreviousRunReportKind =
   | 'clean' // exited + exitCode 0 — 正常退出
-  | 'crash-exit' // exited + exitCode !== 0 — 经过 lifecycle 的崩溃退出
+  | 'crash-exit' // exited + 非零退出码或未捕获异常 — 经过 lifecycle 的崩溃退出
   | 'shutdown-incomplete' // shutdown-begin — 开始 shutdown 但没跑完
   | 'abnormal' // running — 无任何退出记录(crash / kill / hang)
   | 'ended-asleep' // running 且停在睡眠中,之后系统重启过 — 系统结束了进程,不是崩溃
@@ -125,7 +125,10 @@ function endedWhileAsleep(marker: RunMarker, bootTimeMs: number | null): boolean
 /** pid 已不属于写标记的实例时,按标记最后状态给出它的退出结论。 */
 function classifyEndedRun(marker: RunMarker, bootTimeMs: number | null): PreviousRunReportKind {
   if (marker.state === 'exited') {
-    return marker.exitCode != null && marker.exitCode !== 0 ? 'crash-exit' : 'clean';
+    // Electron 进入 app.exit 后可能已锁定退出码，销毁窗口期间仍可能出现异常。
+    const failed = marker.shutdownReason === 'uncaughtException' ||
+      (marker.exitCode != null && marker.exitCode !== 0);
+    return failed ? 'crash-exit' : 'clean';
   }
   if (marker.state === 'shutdown-begin') return 'shutdown-incomplete';
   return endedWhileAsleep(marker, bootTimeMs) ? 'ended-asleep' : 'abnormal';
@@ -256,9 +259,7 @@ export class RunMarkerStore {
 
   /** 正常退出期间出现未捕获异常时更新归因，保留清理开始时间。 */
   markUncaughtExceptionDuringQuit(): void {
-    if (this.current?.state !== 'shutdown-begin' || this.current.shutdownReason !== 'before-quit') {
-      return;
-    }
+    if (this.current?.shutdownReason !== 'before-quit') return;
     this.current.shutdownReason = 'uncaughtException';
     this.persist();
   }
@@ -455,8 +456,8 @@ function logPreviousRunReports(reports: PreviousRunReport[]): boolean {
       case 'crash-exit':
         hadAbnormal = true;
         log.error(
-          `[exit-diagnosis] previous run exited with non-zero code: pid=${m!.pid} v=${m!.version} ` +
-            `exitCode=${m!.exitCode} reason=${m!.shutdownReason ?? '?'} ` +
+          `[exit-diagnosis] previous run exited abnormally: pid=${m!.pid} v=${m!.version} ` +
+            `exitCode=${m!.exitCode ?? '?'} reason=${m!.shutdownReason ?? '?'} ` +
             `disposersCompleted=${m!.disposedAt ? 'yes' : 'no'} exitedAt=${m!.exitedAt ?? '?'} — ` +
             `process went through lifecycle shutdown but exited abnormally (renderer crash / uncaughtException / fatal signal)`,
         );

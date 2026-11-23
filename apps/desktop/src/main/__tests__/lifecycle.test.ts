@@ -848,20 +848,38 @@ describe('installQuitHandler', () => {
   it.each([
     {
       name: 'fatal exception during cleanup',
+      timing: 'cleanup',
       error: new TypeError('Object has been destroyed'),
       exitCode: 1,
       kind: 'crash-exit',
       shutdownReason: 'uncaughtException',
     },
     {
+      name: 'fatal exception in app.exit before the exit event',
+      timing: 'before-exit-event',
+      error: new TypeError('Object has been destroyed'),
+      exitCode: 0,
+      kind: 'crash-exit',
+      shutdownReason: 'uncaughtException',
+    },
+    {
+      name: 'fatal exception in app.exit after the exit event',
+      timing: 'after-exit-event',
+      error: new TypeError('Object has been destroyed'),
+      exitCode: 0,
+      kind: 'crash-exit',
+      shutdownReason: 'uncaughtException',
+    },
+    {
       name: 'recoverable network error during cleanup',
+      timing: 'cleanup',
       error: Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }),
       exitCode: 0,
       kind: 'clean',
       shutdownReason: 'before-quit',
     },
   ])('records the outcome of $name on the next startup', async ({
-    error, exitCode, kind, shutdownReason,
+    error, exitCode, kind, shutdownReason, timing,
   }) => {
     const snapshot = snapshotProcessListeners([
       'SIGINT', 'SIGTERM', 'exit', 'uncaughtException', 'unhandledRejection',
@@ -891,16 +909,19 @@ describe('installQuitHandler', () => {
       expect(dispose).toHaveBeenCalledOnce();
 
       const [uncaughtException] = snapshot.added('uncaughtException');
-      uncaughtException(error, 'uncaughtException');
+      const raiseError = () => uncaughtException(error, 'uncaughtException');
+      vi.mocked(app.exit).mockImplementationOnce((actualExitCode = 0) => {
+        if (timing === 'before-exit-event') raiseError();
+        for (const onExit of snapshot.added('exit')) onExit(actualExitCode);
+        if (timing === 'after-exit-event') raiseError();
+      });
+      if (timing === 'cleanup') raiseError();
       const repeatedQuit = { preventDefault: vi.fn() };
       beforeQuit(repeatedQuit);
       expect(app.exit).not.toHaveBeenCalled();
       finishCleanup();
 
       await vi.waitFor(() => expect(app.exit).toHaveBeenCalledOnce());
-      const [actualExitCode = 0] = vi.mocked(app.exit).mock.calls[0];
-      for (const onExit of snapshot.added('exit')) onExit(actualExitCode);
-
       const nextStart = new diagnostics.RunMarkerStore({
         dir: join(watchdogTmpDir, 'diagnostics', 'run-markers'),
         pid: process.pid + 1,
