@@ -7,6 +7,8 @@ import { createBackgroundConnection } from './backgroundConnection';
 import { invokeWithHistoryViewCapability } from './historyViewCapability';
 import { createRecoveryDiagnostics, settleMeasuredSnapshot, type RecoveryPhase } from './recoveryDiagnostics';
 import { confirmTrackedSubscription, releaseTrackedSubscription, SubscriptionAcknowledgements } from './subscriptionAcknowledgements';
+import { TASK_ACTIVITY_CAPABILITY, TASK_ACTIVITY_SNAPSHOT } from '@cindy/device-link';
+import { receiveHostTaskActivity } from '../widgets/foregroundTaskActivity';
 import { AppState, Platform } from 'react-native';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { dispatchCredentialSwitchOutcome } from '@/session/credentialSwitchOutcome';
@@ -63,7 +65,7 @@ import {
   suspendRemoteProjectAliases,
   suspendRemoteProjectAliasesForReleasedTopics,
 } from '@/session/remoteProjectAliases';
-import { deviceLinkWsUrl, DEVICE_LINK_API_BASE_URL, getOfficialDeviceLinkApiBaseUrl } from '@/config/env';
+import { deviceLinkWsUrl, DEVICE_LINK_API_BASE_URL, getOfficialAgentNetApiBaseUrl, getOfficialDeviceLinkApiBaseUrl } from '@/config/env';
 import { MOBILE_VISUAL_MOCK_ENABLED } from '@/config/env';
 import { useAuth } from '@/auth/AuthContext';
 import { useSelfHostedRelayRouteGeneration } from './selfHostedRelay';
@@ -72,11 +74,15 @@ import { getMobileAgentNetPreferences, useMobileAgentNetPreferences, waitForMobi
 import { isMobileAgentNetActive, openMobileAgentNetSocket, mobileAgentNetShouldUseLegacyPeer,
   mobileAgentNetShouldProbeLegacyPeer, mobileAgentNetPrefersPrimary, verifyMobileAgentNetTransportProof,
   connectMobileAgentNetSessionPeer, mobileAgentNetPeerConnectedAt, mobileAgentNetPeerRoute, mobileAgentNetPeerState,
-  mobileAgentNetSession, notifyMobileAgentNetNetworkChanged, useMobileAgentNetSessions } from './agentNetRuntime';
+  mobileAgentNetSession, notifyMobileAgentNetNetworkChanged, useMobileAgentNetSessions,
+  clearMobileAgentNetIdentityRefusal } from './agentNetRuntime';
 import { AgentNetSessionLinks, agentNetSessionLane, outboundOnSession, routeSessionPeers, type PeerLinks } from '@cindy/agent-net/portable';
 import { installPeerStreamTransport } from './peerFileRegistry';
 import { mobileAgentNetTransportProof } from './agentNetMode';
-import { loadExistingMobileAgentNetModeIdentity } from './agentNetIdentity';
+import { ensureMobileAgentNetIdentity, hasStoredMobileOfficialAgentNetIdentity,
+  loadExistingMobileAgentNetModeIdentity } from './agentNetIdentity';
+import { MobileAgentNetEngine } from './agentNetNative';
+import { registerMobileDeviceRejoin, rejoinRemovedMobileDevice } from './deviceRejoin';
 import { currentSelfHostedRelayFrameAuth } from './selfHostedRelayFrameAuth';
 import {
   getActiveSelfHostedRelay,
@@ -313,6 +319,7 @@ function lowPriorityReadGateFor(client: PeerLinks): LowPriorityReadGate {
  * 被控端按能力缺失降级)。被控端只在看到对应能力后才发送新 wire 形状。
  */
 const CONTROLLER_CAPABILITIES = [
+  ...(Platform.OS === 'ios' ? [TASK_ACTIVITY_CAPABILITY] : []),
   CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1,
   SHARED_TASK_CAPABILITY,
   CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1,
@@ -1242,6 +1249,37 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       return runPeerRecovery(client, deviceId);
     };
   }, [runPeerRecovery]);
+
+  // 「重新加入」 for this phone after it was removed on the official network (deviceRejoin.ts): one tap runs one attempt.
+  useEffect(() => {
+    if (!auth.isAuthenticated || !auth.deviceId) return;
+    const deviceId = auth.deviceId, getAccessToken = auth.getAccessToken, apiFetch = auth.apiFetch;
+    return registerMobileDeviceRejoin(() => {
+      const owner = getMobileAuthOwner();
+      const assertCurrent = () => {
+        if (!isMobileAuthOwnerCurrent(owner) || getActiveSelfHostedRelay()) throw new Error('DEVICE_REJOIN_SCOPE_CHANGED');
+      };
+      assertCurrent();
+      return rejoinRemovedMobileDevice({
+        rejoinDeviceLink: async () => {
+          await apiFetch('/api/device-link/rejoin', { baseUrl: getOfficialDeviceLinkApiBaseUrl(), method: 'POST', body: {},
+            timeoutMs: 15_000, cache: 'no-store', assertCurrent });
+        },
+        agentNetInvolved: async () => MobileAgentNetEngine.available() && !!getOfficialAgentNetApiBaseUrl()
+          && (getMobileAgentNetPreferences().enabled || await hasStoredMobileOfficialAgentNetIdentity()),
+        agentNetRequired: mobileAgentNetRequiresEncryption,
+        rejoinAgentNet: async () => {
+          assertCurrent();
+          await ensureMobileAgentNetIdentity({ deviceId, deviceName: mobileDeviceName(), getAccessToken, rejoin: true });
+        },
+        clearAgentNetRefusal: clearMobileAgentNetIdentityRefusal,
+        // A 4410 stopped only the main connection (connectNow ignores it while 'device-removed'). start() brings that one
+        // back and is a no-op for the connections of tasks shared from other accounts, which keep running (2026-11-23 review:
+        // rebuilding the whole provider effect would close them too).
+        restartConnection: () => { if (isMobileAuthOwnerCurrent(owner)) routedRef.current?.start(); },
+      });
+    });
+  }, [auth.isAuthenticated, auth.deviceId, auth.getAccessToken, auth.apiFetch]);
 
   useEffect(() => {
     const accountGenerationChanged =
@@ -2487,6 +2525,10 @@ export function routeFrame(env: Envelope, handlers: RouteFrameHandlers = {}): vo
   if (env.kind !== 'push' || !env.src) return;
   const rawPush = env.payload as PushPayload;
   const push = { ...rawPush, payload: decodeModelSpeedPayload(rawPush.channel, rawPush.payload) };
+  if (push.channel === TASK_ACTIVITY_SNAPSHOT) {
+    if (!isScopedPeer(env.src)) receiveHostTaskActivity(env.src, push.payload);
+    return;
+  }
   recordDeviceLinkPush(push.channel, push.payload);
   dispatchCredentialSwitchOutcome(env.src, push.channel, push.payload);
   if (push.channel === 'local-db:task-tags:changed') {

@@ -51,7 +51,7 @@ import {
   COMPANION_CLOUD_MERGE_TIMEOUT_MS,
   COMPANION_CLOUD_TARGETS_CHANNEL,
 } from './companionCloud.js';
-import { SESSION_ACTIVITY_CHANNEL, SESSION_SYNC_CHANNEL } from './topics.js';
+import { TASK_ACTIVITY_SNAPSHOT, SESSION_ACTIVITY_CHANNEL, SESSION_SYNC_CHANNEL } from './topics.js';
 import { REMOTE_DESKTOP_INVOKE_MS } from './remoteDesktopIce.js';
 import {
   REMOTE_RESOURCE_CHANGED_CHANNEL,
@@ -268,6 +268,9 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // 菜单时拉一次,才能给出「更大」的档位。无 event.sender / 无本机副作用,不写任何存储。
   // 老被控端无 handler → CHANNEL_NOT_ALLOWED → 控制端退回「只允许收紧」。
   'maker:get-context-window-bounds',
+  // Same-account, read-only native window numbers. No config contents, paths or
+  // credentials; no settings writes. Old hosts reject this channel as unsupported.
+  'maker:model-context-limit:get',
   'maker:set-extra-dirs',
   'maker:set-writable-dirs',
   // Pi 原生分支树:只读快照 + 当前会话内导航。导航业务 handler 在被控端原子同步
@@ -504,6 +507,7 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   'notification:clear-session-attention',
   // Completed-card action, guarded by an owner-issued token before any mutation.
   // Old hosts reject this channel; callers must not fall back to unguarded writes.
+  TASK_ACTIVITY_SNAPSHOT,
   'agent-island:completion-action',
   // —— Project automation ——
   'maker:project-automation:reconcile',
@@ -915,6 +919,7 @@ export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
   'local-db:sessions:created',
   'local-db:task-tags:changed',
   'local-db:sessions:patched',
+  TASK_ACTIVITY_SNAPSHOT,
   SESSION_ACTIVITY_CHANNEL,
   SESSION_SYNC_CHANNEL,
   'local-db:messages:created',

@@ -19,11 +19,15 @@ export const SESSION_ROW_LONG_PRESS_MS = 400;
 /** Shared by the full home list and its persistent, narrow task pane. */
 export function SessionStatusMark({
   identityIcon,
+  hideIdentity = false,
+  singleLine = false,
   item,
   running,
   showDraftIndicator,
 }: {
   identityIcon?: ReactNode;
+  hideIdentity?: boolean;
+  singleLine?: boolean;
   item: RemoteSessionListItem;
   running: boolean;
   showDraftIndicator: boolean;
@@ -43,39 +47,42 @@ export function SessionStatusMark({
     // 列表行的共享类型只声明展示字段；任务行实际是完整的 RemoteSession。
     pluginEngineTask ? (item.session as { providerId?: string | null }).providerId : null,
   );
+  if (hideIdentity && !identityIcon && !archived && !orcaLead && !attached && !showDraftIndicator) return null;
   return (
-    <View style={styles.sessionStatusMark}>
-      {identityIcon ?? (archived ? (
-        <Archive color={colors.textTertiary} size={iconSize.lg} strokeWidth={iconStroke.thin} />
-      ) : orcaLead ? (
-        // 与桌面 SessionStatusIcon /「+」菜单协同项同款 UsersRound，不再用旧 Puzzle。
-        <SessionStatusPulse running={running}>
-          <UsersRound color={glyphColor} size={iconSize.action} strokeWidth={iconStroke.thin} />
-        </SessionStatusPulse>
-      ) : attached ? (
-        <SessionStatusPulse running={running}>
-          <RadioTower color={glyphColor} size={iconSize.lg} strokeWidth={iconStroke.thin} />
-        </SessionStatusPulse>
-      ) : (
-        <MobileVendorIcon
-          color={glyphColor}
-          running={running}
-          // Claude 星标 logo 视觉重量偏小,+1px 光学补偿对齐 Codex 标(刻意非阶梯值)。
-          size={isClaudeCodeAgentKind(item.session.agentKind) ? 19 : iconSize.lg}
-          vendor={item.session.agentKind}
-          pluginEngine={pluginEngineTask
-            ? { iconDataUrl: pluginEngine?.iconDataUrl, name: pluginEngine?.name ?? t('models.pluginEngines.genericName') }
-            : null}
-          // Agent 在被控电脑之外的另一台电脑运行(远程供应商):与桌面侧栏同一个波纹标识。
-          remote={sessionAgentRunsOnOtherComputer(item.session)}
-        />
-      ))}
-      {!archived && showDraftIndicator ? (
-        <View style={styles.sessionDraftIndicator}>
-          {/* 9px:Pencil 微徽标,徽标容器几何依赖(designTokenDiscipline ALLOWLIST 登记豁免)。 */}
-          <Pencil color={colors.textSecondary} size={9} strokeWidth={iconStroke.medium} />
-        </View>
-      ) : null}
+    <View style={[styles.sessionIconCell, singleLine && styles.sessionIconCellSingleLine]}>
+      <View style={styles.sessionStatusMark}>
+        {identityIcon ?? (archived ? (
+          <Archive color={colors.textTertiary} size={iconSize.lg} strokeWidth={iconStroke.thin} />
+        ) : orcaLead ? (
+          // 与桌面 SessionStatusIcon /「+」菜单协同项同款 UsersRound，不再用旧 Puzzle。
+          <SessionStatusPulse running={running}>
+            <UsersRound color={glyphColor} size={iconSize.action} strokeWidth={iconStroke.thin} />
+          </SessionStatusPulse>
+        ) : attached ? (
+          <SessionStatusPulse running={running}>
+            <RadioTower color={glyphColor} size={iconSize.lg} strokeWidth={iconStroke.thin} />
+          </SessionStatusPulse>
+        ) : hideIdentity ? null : (
+          <MobileVendorIcon
+            color={glyphColor}
+            running={running}
+            // Claude 星标 logo 视觉重量偏小,+1px 光学补偿对齐 Codex 标(刻意非阶梯值)。
+            size={isClaudeCodeAgentKind(item.session.agentKind) ? 19 : iconSize.lg}
+            vendor={item.session.agentKind}
+            pluginEngine={pluginEngineTask
+              ? { iconDataUrl: pluginEngine?.iconDataUrl, name: pluginEngine?.name ?? t('models.pluginEngines.genericName') }
+              : null}
+            // Agent 在被控电脑之外的另一台电脑运行(远程供应商):与桌面侧栏同一个波纹标识。
+            remote={sessionAgentRunsOnOtherComputer(item.session)}
+          />
+        ))}
+        {!archived && showDraftIndicator ? (
+          <View style={styles.sessionDraftIndicator}>
+            {/* 9px:Pencil 微徽标,徽标容器几何依赖(designTokenDiscipline ALLOWLIST 登记豁免)。 */}
+            <Pencil color={colors.textSecondary} size={9} strokeWidth={iconStroke.medium} />
+          </View>
+        ) : null}
+      </View>
     </View>
   );
 }

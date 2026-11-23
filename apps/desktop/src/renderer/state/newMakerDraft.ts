@@ -878,6 +878,7 @@ export function setNewMakerDraftOwner(ownerId: string | null): void {
   const normalized = typeof ownerId === 'string' && ownerId.trim().length > 0 ? ownerId : null;
   if (activeDataOwnerId === normalized) return;
   resetRemoteDraftEngineFollow();
+  pendingLocalPluginEngineNavigation = false;
   activeDataOwnerId = normalized;
   currentDraft = loadFromStorage();
   preferenceSyncFallback = null;
@@ -1104,6 +1105,55 @@ export function applyAppDefaultModelSelection(selection: AppDefaultModelSelectio
     effortByModel: next.effortByModel, fastModeByModel: next.fastModeByModel };
   preferenceSyncFallback = null;
   emit();
+  return true;
+}
+
+let pendingLocalPluginEngineNavigation = false;
+
+/** Consumes the one-shot local navigation flag set when preselecting a local plugin engine. */
+export function consumePendingLocalPluginEngineNavigation(): boolean {
+  if (!pendingLocalPluginEngineNavigation) return false;
+  pendingLocalPluginEngineNavigation = false;
+  return true;
+}
+
+/**
+ * Preselects a local plugin engine on the new-task draft (for example from the quota panel's
+ * "New task" action), routing the draft onto this computer and clearing mutually exclusive
+ * selections without touching Claude/Codex/Pi prefs.
+ */
+export function applyPluginEngineDraftRoute(route: {
+  providerId: string;
+  modelId: string;
+  effort?: string;
+}): boolean {
+  if (!pluginEngineKeyFromProviderId(route.providerId) || !route.modelId.trim()) return false;
+  const current = getDraft();
+  const previous = current.pluginEngine;
+  const effort = isPluginEngineEffort(route.effort) ? route.effort : previous?.effort;
+  const leavesRemoteTask = !!current.deviceLinkDeviceId || !!current.remoteHostId;
+  patchDraft({
+    ...(current.vendor === 'orca' ? { vendor: 'cc' } : {}),
+    pluginEngine: {
+      providerId: route.providerId,
+      modelId: route.modelId,
+      ...(previous?.permissionMode ? { permissionMode: previous.permissionMode } : {}),
+      ...(effort ? { effort } : {}),
+    },
+    pluginModel: null,
+    modelGroup: null,
+    ...(current.agentDeviceId ? { agentDeviceId: null, agentDeviceName: null } : {}),
+    ...(leavesRemoteTask
+      ? {
+          deviceLinkDeviceId: null,
+          deviceLinkDeviceName: null,
+          remoteHostId: null,
+          workingDir: null,
+          explicitNoProject: false,
+        }
+      : {}),
+  });
+  pendingLocalPluginEngineNavigation = true;
   return true;
 }
 
@@ -1465,6 +1515,7 @@ export function __resetForTest(): void {
  */
 export function __reloadForTest(): void {
   resetRemoteDraftEngineFollow();
+  pendingLocalPluginEngineNavigation = false;
   activeDataOwnerId = null;
   preferenceSyncFallback = null;
   listeners.clear();

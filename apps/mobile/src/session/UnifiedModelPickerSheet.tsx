@@ -20,6 +20,7 @@ import type { MobileAgentCapabilities } from "./agentCapabilities";
 import type { ModelPickerSheetProps } from "./ModelPickerSheet";
 import {
   buildPluginEngineGroups,
+  formatPluginEnginePickerQuota,
   type MobilePluginEngine,
   type MobilePluginEngineSelection,
   type PluginEngineEffort,
@@ -33,6 +34,7 @@ import {
   addModelFavorite,
   matchesEntry,
   mobileUnifiedEntries,
+  listedMobileEntries,
   modelKey,
   resolveMobileModelConfig,
   sameConfiguration,
@@ -317,13 +319,14 @@ const ALL_AGENTS: readonly AgentKind[] = ["claude-code", "codex", "pi"];
 export function UnifiedModelPickerSheet(
   p: ModelPickerSheetProps & { unified: UnifiedMobilePickerOptions },
 ) {
-  const { t } = useTranslation();
-  const { quotas, now, quotaOf } = useMobileModelQuotas(
+  const { t, i18n } = useTranslation();
+  const { quotas, pluginEngineQuotas, now, quotaOf } = useMobileModelQuotas(
     p.unified.scope,
     p.visible,
     p.providers,
     p.unified.remote?.catalogs ?? NO_REMOTE_CATALOGS,
     p.subscriptionTaskId,
+    p.unified.pluginEngines?.engines,
   );
   const prefs = useMobileModelPreferences(p.unified.scope, p.visible, p.unified.preferenceScope === 'request');
   const rememberRemote = p.unified.preferenceScope !== 'request';
@@ -757,7 +760,11 @@ export function UnifiedModelPickerSheet(
       : undefined;
     return baseProviderId ? unavailableOn(providerName(baseProviderId), p.unified.remote?.hostDeviceName) : undefined;
   };
-  const rows = entries.map((entry) => makeRow(entry));
+  // Providers hidden from the picker stay in `entries` for favorites; only the regular list drops them.
+  const currentPick = { providerId: p.selectedProviderId, modelId: p.activeModelId };
+  const allRows = entries.map((entry) => makeRow(entry));
+  const listedLocal = new Set(listedMobileEntries(entries, p.providers, selectedDeviceId === null ? currentPick : null));
+  const rows = allRows.filter((row) => listedLocal.has(row.entry));
   const makeRemoteRow = (
     directory: (typeof remoteDirectories)[number],
     entry: UnifiedModelEntry,
@@ -820,9 +827,18 @@ export function UnifiedModelPickerSheet(
       quotaLabel: modelQuotaLabel(entry.providerId, entry.modelId, catalog.deviceId),
     };
   };
-  const remoteRows = remoteDirectories.map((directory) => ({
+  const allRemoteRows = remoteDirectories.map((directory) => ({
     catalog: directory.catalog,
+    listed: new Set(listedMobileEntries(
+      directory.entries,
+      directory.catalog.providers,
+      directory.catalog.deviceId === selectedDeviceId ? currentPick : null,
+    )),
     rows: directory.entries.map((entry) => makeRemoteRow(directory, entry)),
+  }));
+  const remoteRows = allRemoteRows.map(({ catalog, listed, rows: deviceRows }) => ({
+    catalog,
+    rows: deviceRows.filter((row) => listed.has(row.entry)),
   }));
   // 收藏和本机收藏排在同一节里:位置编在 providerId 里的,到那台电脑的目录里找模型,
   // 点开即在那台运行。那台电脑离线(包括只因任务的 Agent 在那台、靠缓存留在列表里)或没开放远程调用时
@@ -958,6 +974,14 @@ export function UnifiedModelPickerSheet(
         unavailable: (name, hint) => hint
           ? t("models.pluginEngines.unavailableWithHint", { engine: name, hint })
           : t("models.pluginEngines.unavailable", { engine: name }),
+      }).map((group) => {
+        const quota = formatPluginEnginePickerQuota(
+          pluginEngineQuotas?.[group.providerId],
+          now,
+          i18n.language,
+          (resetsAtSeconds, currentNow) => formatQuotaResetCountdown(resetsAtSeconds, currentNow, t, null),
+        );
+        return quota ? { ...group, quota } : group;
       })
     : [];
   // Recommended/favorites can contain the only rows for a source. Keep its
@@ -972,9 +996,10 @@ export function UnifiedModelPickerSheet(
   }
   const sourceRow = target
     ? (target.deviceId
-        ? remoteRows.find((item) => item.catalog.deviceId === target.deviceId)
+        // A favorite may point into a provider hidden from the regular list: look it up in the full rows.
+        ? allRemoteRows.find((item) => item.catalog.deviceId === target.deviceId)
             ?.rows
-        : rows
+        : allRows
       )?.find(
         (row) =>
           row.entry.providerId === target.providerId &&
@@ -1357,9 +1382,10 @@ export function UnifiedModelPickerSheet(
       ].join(" · "),
     };
   };
-  const remoteFilters = remoteDirectories.flatMap(({ catalog, entries }) =>
+  const remoteFilters = remoteDirectories.flatMap(({ catalog }) =>
     catalog.providers
-      .filter((provider) => !hiddenSources.has(remoteFilterId(catalog.deviceId, provider.id)) && entries.some((e) => e.providerId === provider.id))
+      .filter((provider) => !hiddenSources.has(remoteFilterId(catalog.deviceId, provider.id))
+        && remoteRows.some((group) => group.catalog === catalog && group.rows.some((row) => row.entry.providerId === provider.id)))
       .map((provider) => ({
         id: remoteFilterId(catalog.deviceId, provider.id),
         label: remoteProviderLabel(catalog, provider.id),
@@ -1379,6 +1405,39 @@ export function UnifiedModelPickerSheet(
         },
       })),
   );
+  // 分享者电脑离线或刚上线还在连接供应商时，分享来的供应商读成未连接、没有可用模型；来源页仍在原位置
+  // 列出这一行，不让分享一会儿有一会儿无。离线时块标题已带「暂时离线」，打开后用说明代替「没有结果」
+  // (providerSharePickerState，与 Desktop 模型选择器同口径)。
+  const offlineShareFilterIds = new Set<string>();
+  const sourceFilters = remoteCatalogs.flatMap((catalog) => {
+    const listed = remoteFilters.filter((item) => item.remote.deviceId === catalog.deviceId);
+    const share = catalog.shareSource;
+    if (!share) return listed;
+    const id = remoteFilterId(catalog.deviceId, share.providerId);
+    if (hiddenSources.has(id) || listed.some((item) => item.id === id)) return listed;
+    if (share.offline) offlineShareFilterIds.add(id);
+    const provider = catalog.providers.find((item) => item.id === share.providerId);
+    return [...listed, {
+      id,
+      label: provider
+        ? remoteProviderLabel(catalog, provider.id)
+        : t("models.unified.remoteProvider", { provider: share.providerLabel, device: catalog.name }),
+      providerMark: provider
+        ? {
+            providerId: provider.id,
+            name: provider.name,
+            routing: provider.routing,
+            logoKind: provider.logoKind,
+            customIcon: provider.customIcon,
+          }
+        : { providerId: share.providerId, name: share.providerLabel },
+      remote: {
+        deviceId: catalog.deviceId,
+        deviceName: catalog.name,
+        providerLabel: provider ? remoteProviderName(catalog, provider.id) : share.providerLabel,
+      },
+    }];
+  });
   const selectedCatalogStatus = selectedCatalog?.status;
   // 那台被收进组里时同样先停在它上面,随即按 shownFilter 改看组那一项。
   const selectedRemoteFilter =
@@ -1441,7 +1500,7 @@ export function UnifiedModelPickerSheet(
           : []),
         ...p.providers
           .filter((provider) =>
-            !hiddenSources.has(provider.id) && entries.some((e) => e.providerId === provider.id),
+            !hiddenSources.has(provider.id) && rows.some((row) => row.entry.providerId === provider.id),
           )
           .map((provider) => ({
             id: provider.id,
@@ -1456,7 +1515,7 @@ export function UnifiedModelPickerSheet(
               customIcon: provider.customIcon,
             },
           })),
-        ...remoteFilters,
+        ...sourceFilters,
       ]}
       groups={groups}
       {...(modelGroupRows.length
@@ -1469,7 +1528,9 @@ export function UnifiedModelPickerSheet(
       error={error ?? (selectedDeviceId === null && p.providersReady && modelNeedsReselection(p.modelVisibilityOverrides, p.agentKind, p.activeModelId, p.selectedProviderId)
         ? t('session.common.modelHiddenReselect', { model: p.activeModelId }) : null)}
       loading={!!p.loading}
-      emptyHint={p.emptyHint ?? t("models.picker.noResults")}
+      emptyHint={!query.trim() && offlineShareFilterIds.has(shownFilter)
+        ? t("providerShare.picker.offlineNote")
+        : (p.emptyHint ?? t("models.picker.noResults"))}
       onSelect={select}
       onOptions={(row) => {
         if (lock.current) return;

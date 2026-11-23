@@ -1,3 +1,4 @@
+import { readRemotePluginEngines } from '../remote-agent/controller/deviceCatalog.js';
 import { randomUUID } from 'node:crypto';
 import { effectiveSourceIdForModel, isModelVisible, isModelSelectableForNewRoute, type ProviderView } from '@cindy/model-providers';
 import type { resolveNewMakerDefaultTuple } from '../../shared/newMakerDefaultTuple.js';
@@ -96,6 +97,37 @@ export async function inspectAppDefaultModel() {
   return { current, available };
 }
 
+/**
+ * This computer's plugin engines as choices for a teammate's own model chain, the same engines
+ * the teammate settings editor lists: available, not hidden from this computer's pickers, with
+ * the models the user left on (or the engine default). Never valid as the application default,
+ * which only routes built-in engines (`normalizeModelRoute`).
+ */
+export function teammatePluginEngineModelChoices(engines: ReturnType<typeof listPluginEngineViews> = listPluginEngineViews()) {
+  return engines.filter(engine => engine.availability.state !== 'unavailable' && !engine.hidden && !engine.suspended)
+    .flatMap(engine => {
+      // The engine default stays a choice whenever the engine allows it, as the saved-chain check
+      // (`resolveAvailableTaskModels`) does: a chain saved with it must stay editable once the engine
+      // reports its models.
+      const models = engine.defaultModelAllowed === false || engine.models.some(model => model.id === PLUGIN_ENGINE_DEFAULT_MODEL)
+        ? engine.models
+        : [{ id: PLUGIN_ENGINE_DEFAULT_MODEL, displayName: PLUGIN_ENGINE_DEFAULT_MODEL }, ...engine.models];
+      return models.map(model => {
+        const efforts = (model.efforts ?? []).filter(isPluginEngineEffort);
+        const route: BotModelRoute = { harness: 'acp', providerId: engine.providerId, model: model.id, effort: '', fastMode: false };
+        return { id: JSON.stringify([route.harness, route.providerId, route.model]), route, efforts,
+          supportsFastMode: false, supportsUltrafastMode: false, teammateOnly: true as const,
+          engine: engine.name, ...(model.displayName && model.displayName !== model.id ? { displayName: model.displayName } : {}) };
+      });
+    });
+}
+
+/** Model choices for a teammate's own chain: the application's choices plus this computer's plugin engines. */
+export async function inspectTeammateModelChoices() {
+  const { current, available } = await inspectAppDefaultModel();
+  return { current, available: [...available, ...teammatePluginEngineModelChoices()] };
+}
+
 export interface TaskModelSelection {
   id: string;
   effort?: string;
@@ -123,14 +155,30 @@ export async function resolveTaskModelSelection(selection: TaskModelSelection): 
 export async function resolveAvailableTaskModels(routes: readonly BotModelRoute[]): Promise<Array<BotModelRoute | null>> {
   const owner = activeOwnerScopeKey();
   const local = routes.some(route => route.harness !== 'acp' && !route.agentDeviceId) ? await readSelection() : null;
-  const engines = routes.some(route => route.harness === 'acp') ? listPluginEngineViews() : [];
-  if (activeOwnerScopeKey() !== owner || isAppSessionBoundaryPending()) throw new Error('Account changed during model lookup');
+  const assertOwner = () => {
+    if (activeOwnerScopeKey() !== owner || isAppSessionBoundaryPending()) throw new Error('Account changed during model lookup');
+  };
+  const localEngines = routes.some(route => route.harness === 'acp' && !route.agentDeviceId) ? listPluginEngineViews() : [];
+  const remoteEngineCatalogs = new Map<string, Promise<typeof localEngines>>();
+  const readEngines = (deviceId: string) => {
+    let pending = remoteEngineCatalogs.get(deviceId);
+    if (!pending) {
+      assertOwner();
+      pending = readRemotePluginEngines(deviceId).catch(() => []);
+      remoteEngineCatalogs.set(deviceId, pending);
+    }
+    return pending;
+  };
+  assertOwner();
   return Promise.all(routes.map(async route => {
     if (route.harness === 'acp') {
+      if (route.fastMode) return null;
+      const engines = route.agentDeviceId ? await readEngines(route.agentDeviceId) : localEngines;
+      assertOwner();
       const engine = engines.find(item => item.providerId === route.providerId && item.availability.state !== 'unavailable');
-      if (!engine || route.agentDeviceId || route.fastMode) return null;
+      if (!engine) return null;
       const offered = engine.models.find(model => model.id === route.model);
-      if (!offered && route.model !== PLUGIN_ENGINE_DEFAULT_MODEL) return null;
+      if (!offered && (route.model !== PLUGIN_ENGINE_DEFAULT_MODEL || engine.defaultModelAllowed === false)) return null;
       if (route.effort && (!isPluginEngineEffort(route.effort) || !offered?.efforts?.includes(route.effort))) return null;
       return route;
     }

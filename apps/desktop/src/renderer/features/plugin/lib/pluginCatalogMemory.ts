@@ -5,10 +5,11 @@ import { resolveSystemLocale } from '../../../../shared/locale';
 import type { PluginGridCache } from '../PluginVirtualGrid';
 import type { PluginMarketItem, PluginMarketSnapshot } from '../../../../shared/pluginMarket';
 import type { PluginManagementSnapshot } from '../../../../shared/pluginManagement';
+import type { PluginCatalogFilter } from './pluginMarketPresentation';
 
 function emptyCatalogMemory() {
   return {
-    query: '', catalogTab: 'installed' as 'installed' | 'market', originFilter: 'all' as 'all' | 'public' | 'organization' | 'personal' | 'custom' | 'local',
+    query: '', catalogTab: 'installed' as 'installed' | 'market', originFilter: 'all' as PluginCatalogFilter,
     installedLimit: 10, marketTotal: null as number | null,
     browser: { current: emptyPluginBrowserCache() },
     installedGrid: { columns: 2, measurements: [] } as PluginGridCache, installedQuery: '',

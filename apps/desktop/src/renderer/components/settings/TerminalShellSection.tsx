@@ -146,7 +146,7 @@ export function TerminalShellSection() {
                 align="start"
                 sideOffset={4}
                 className={cn(
-                  'z-[10010] w-[var(--radix-select-trigger-width)] overflow-hidden rounded-xl border p-1.5',
+                  'w-[var(--radix-select-trigger-width)] overflow-hidden rounded-xl border p-1.5',
                   'max-h-[min(15rem,var(--radix-select-content-available-height))]',
                   'border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]',
                 )}

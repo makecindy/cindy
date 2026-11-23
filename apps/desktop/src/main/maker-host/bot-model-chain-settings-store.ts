@@ -23,7 +23,7 @@ import {
 
 import { getModelVisibilityOverride, waitForModelVisibilityMirror } from './model-visibility-mirror.js';
 import { readModelGroupsConfig } from '../model-groups/store.js';
-import type { ModelGroupsConfig } from '../../shared/modelGroups.js';
+import { modelGroupsConfigForRemote, type ModelGroupsConfig } from '../../shared/modelGroups.js';
 
 const log = desktopMakerLogger.child('bot-model-chain-settings-store');
 
@@ -252,7 +252,7 @@ export async function readEffectiveBotPrimaryRoute(
  * 只有来源的供应商连接 id 与模型 id，与同账号可读的模型目录同一层级，不含凭证。
  */
 export function listBotModelGroupsForRemote(): ModelGroupsConfig {
-  return readModelGroupsConfig();
+  return modelGroupsConfigForRemote(readModelGroupsConfig());
 }
 
 /**

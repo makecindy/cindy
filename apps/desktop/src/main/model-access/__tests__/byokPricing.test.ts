@@ -85,7 +85,7 @@ describe('enterprise discounted reference money', () => {
   it.each([undefined, 0, 0.2, 1])('applies discount %s once across input, output, caches and request tiers', (discount) => {
     const pricing = buildByokPricing([provider(pricedModel(discount))]);
     const quote = pricing['byok-a'][modelPricingKey(model.id, 'claude-code')];
-    const money = computePriceQuoteTurnMoney(tokens, quote, 'USD');
+    const money = computePriceQuoteTurnMoney(tokens, quote);
     expect(money?.amount).toBeCloseTo(0.00035 * (1 - (discount ?? 0)), 10);
     const resolved = resolveTurnCost({
       rawModel: model.id, tokens, pricing, context, sdkCostDelta: 99,
@@ -167,7 +167,7 @@ describe('enterprise threshold reference money', () => {
     // The same directory rates must retain Cindy AI's existing overlay behavior.
     const gatewayQuote = gatewayModelPriceQuote(entry, 'USD');
     expect(computePriceQuoteTurnMoney({ inputTokens: prompt - cached, outputTokens: 10,
-      cacheReadTokens: cached, cacheCreateTokens: 0 }, gatewayQuote, 'USD')?.amount).toBeCloseTo(amount, 12);
+      cacheReadTokens: cached, cacheCreateTokens: 0 }, gatewayQuote)?.amount).toBeCloseTo(amount, 12);
   });
 
   it('keeps the base price when the directory has no threshold fields', () => {
