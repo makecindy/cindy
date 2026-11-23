@@ -2100,8 +2100,7 @@ function connectionIssueForRenderer(issue: ConnectionIssuePayload | null): Rende
 /**
  * 设置页本机卡片的「重新加入」：这台设备被移除后，由用户在这台设备上让它回来（deviceRejoin.ts）。
  * 账号与中转按点击时的为准：每一跳请求发出前、每个等待点之后都核对，中途切号就整个停下（2026-11-23 review）。
- * 重连只拉起被 4410 停下的主连接，别的账号分享来的任务与供应商连接照常运行（2026-11-23 review）。只有 Agent-Net 是否启用
- * 因此变了（解除了对这台身份的拒绝）时，依赖它的整套运行环境按 Agent-Net 拒绝身份时的同一条路径重建。
+ * 重连只恢复主连接，独立的共享任务与供应商连接继续运行。
  */
 export function rejoinThisDevice(): Promise<{ agentNet: AgentNetRejoinOutcome }> {
   const scope = activeOwnerScopeKey(), selection = agentNetSelectionKey(), agentNetWasActive = isAgentNetActive();
@@ -2115,9 +2114,10 @@ export function rejoinThisDevice(): Promise<{ agentNet: AgentNetRejoinOutcome }>
     rejoinAgentNet: () => rejoinOfficialAgentNet(),
     agentNetRequired: () => agentNetRequiresEncryption(),
     restartConnection: () => {
-      if (isAgentNetActive() !== agentNetWasActive) { restartDeviceLinkForRelayChange(); return; }
-      // start() brings back only the stopped main connection; running scoped connections are left as they are.
-      if (client && arbiter?.isOwner() && authManager.getAuthState().isAuthenticated) client.start();
+      if (!client || !arbiter?.isOwner() || !authManager.getAuthState().isAuthenticated) return;
+      // A running Device Link primary can switch back to Agent-Net without releasing ownership or tearing down scoped connections.
+      if (isAgentNetActive() !== agentNetWasActive) client.restartConnection('device-rejoin');
+      client.start();
     },
     assertCurrent,
     warn: (message, error) => log.warn(message, error),

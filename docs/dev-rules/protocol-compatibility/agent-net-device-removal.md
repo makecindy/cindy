@@ -41,8 +41,7 @@ Agent-Net refuses this identity」（被拒后改走中转、签「没开」；�
 - **界面。** Desktop 设置页本机卡片在官方网络的「已移除」旁给「重新加入」（main 给连接问题带 `rejoinable`，自建中转不带）；
   删除确认框改为说明那台设备点「重新加入」即可回来。手机在横幅与首页连接行给同样的按钮（`apps/mobile/src/device-link/deviceRejoin.ts`）。
 - **重连的范围。** 4410 只停了主连接。手机、Node Host 与 Desktop 都用 `start()` 只拉起这条主连接，别的账号分享来的任务与
-  供应商连接照常运行（2026-11-23 review）。只有 Desktop 的 Agent-Net 是否启用因此变了（解除了对这台身份的拒绝，主连接要从
-  Device Link 换回 Agent-Net）时，才按 Agent-Net 拒绝身份时的同一条路径整套重建（`restartDeviceLinkForRelayChange`）。点击时的
+  供应商连接照常运行（2026-11-23 review）。如果桌面主连接仍在运行，但需由 Device Link 切回 Agent-Net，则单独重启主连接。点击时的
   账号与中转在每个等待点之后核对，中途切号就整个停下，不替新账号入网或重连。
 - **Node Host。** `cindy-host remote rejoin` 走同一流程（`apps/host/src/device-link.ts` 的 `rejoin` 复用 `rejoinRemovedDevice`；
   `agentNetNode.ts` 的 `rejoin` 不论本地证书是否过期都带 `rejoin: true` 重新入网）。Host 没有自建中转和「仅使用 Agent-Net」，Agent-Net
