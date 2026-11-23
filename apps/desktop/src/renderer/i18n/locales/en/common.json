@@ -4807,7 +4807,68 @@
         "hint": "Sends a private message via the linked Feishu or Lark bot; only when the window is unfocused.",
         "disabledHint": "First set up the bot and DM it once to complete binding."
       },
-      "bind": "Bind"
+      "bind": "Bind",
+      "groups": {
+        "title": "Group chats",
+        "description": "Give a group the bot is in its own project, model and permissions.",
+        "rules": "Anything you don’t set: a group with a project follows that project in Projects and models; a group without one follows New Conversation Configuration and Permission mode for new group tasks above. A group’s main chat and its topics share one setting.",
+        "expand": "Expand",
+        "collapse": "Collapse",
+        "groupCount_one": "{{count}} group",
+        "groupCount_other": "{{count}} groups",
+        "customCount_one": "{{count}} customized",
+        "customCount_other": "{{count}} customized",
+        "refresh": "Refresh",
+        "loading": "Loading groups…",
+        "loadFailed": "Couldn’t load groups. Try Refresh in a moment.",
+        "saveFailed": "Couldn’t save group settings",
+        "notConnected": "Groups are listed once the bot is connected. Only groups with their own settings are shown below.",
+        "empty": "The bot isn’t in any group yet. Add it to a group, then come back here.",
+        "listPermission": "Can’t read the bot’s groups. In the Feishu Open Platform, give this app permission to read group information. Groups the bot has already been used in are listed below.",
+        "listUnavailable": "Can’t read the bot’s groups right now. Groups the bot has already been used in are listed below.",
+        "unnamed": "Unnamed group ({{id}})",
+        "summaryModel": "Own model",
+        "summaryPermission": "Own permissions",
+        "expandAria": "Settings for {{name}}",
+        "searchLabel": "Search groups",
+        "searchPlaceholder": "Search by group name",
+        "customHeading": "Own settings",
+        "followHeading": "Following channel settings",
+        "showMore": "Show {{count}} more",
+        "showLess": "Show less",
+        "noMatch": "No groups match “{{query}}”",
+        "project": {
+          "label": "Project",
+          "follow": "Chat",
+          "missing": "{{name}} (no longer in the sidebar)",
+          "hint": "Applies when the bot is first @mentioned in the group, a topic starts, or someone sends /new. Tasks in progress aren’t moved. With a project, the model and permissions follow that project in Projects and models; with Chat, tasks stay in the bot’s conversation folder and follow New Conversation Configuration above. Only projects in this computer’s sidebar can be chosen."
+        },
+        "model": {
+          "label": "Model and reasoning effort",
+          "hintFollow": "Follows New Conversation Configuration. Changing the model or reasoning effort here applies to this group only.",
+          "hintFollowProject": "Follows the project “{{project}}” in Projects and models. Changing the model or reasoning effort here applies to this group only.",
+          "hintProjectUnavailable": "The model set for “{{project}}” in Projects and models isn’t available right now. Choose another one there, or pick one for this group here.",
+          "hintFixed": "This group has its own model. Tasks in this group whose model hasn’t been changed switch on their next message; new tasks use this model."
+        },
+        "permission": {
+          "label": "Permissions",
+          "hintFollow": "Follows Permission mode for new group tasks. Only affects tasks created in this group from now on; switch an existing task with /permission in the group.",
+          "hintFollowProject": "Follows the permissions of “{{project}}” in Projects and models. Only affects tasks created in this group from now on; switch an existing task with /permission in the group.",
+          "hintFixed": "This group has its own permission mode. Only affects tasks created in this group from now on; switch an existing task with /permission in the group."
+        },
+        "fullAccessConfirm": {
+          "title": "Use Full access in {{name}}?",
+          "description": "New tasks in this group will run without per-step confirmation, no matter who @mentions the bot. Group messages are controlled by its members, so only do this if you trust everyone in the group.",
+          "confirm": "Use Full access",
+          "cancel": "Cancel"
+        },
+        "widerConfirm": {
+          "title": "Loosen permissions in {{name}}?",
+          "description": "New tasks in this group will go from {{current}} to {{next}}, no matter who @mentions the bot. Group messages are controlled by its members, so only do this if you trust everyone in the group.",
+          "confirm": "Change anyway",
+          "cancel": "Cancel"
+        }
+      }
     },
     "wechatBot": {
       "title": "Personal WeChat",
