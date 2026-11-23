@@ -64,6 +64,8 @@ let initialized = false;
 let registeredAccelerator: string | null = null;
 let recording = false;
 let starting = false;
+/** 启动代次：遮罩升起时作废还在等帧的那一次启动，晚到的结果不能再画浮层。 */
+let startGeneration = 0;
 let active: RegionScreenshotSession | null = null;
 const pool = new OverlayPool();
 const recordingPreview = new RecordingPreview();
@@ -125,6 +127,10 @@ export function initRegionScreenshot(): void {
  * (docs/product-rules/privacy-screen.md).
  */
 export function closeActiveRegionScreenshot(): void {
+  // A capture that is still waiting for frames has no session yet (`active` is assigned
+  // only after the awaits), so invalidate that start too: its late frozen overlay would
+  // otherwise appear above the lowered masks.
+  startGeneration++;
   active?.close();
 }
 
@@ -236,6 +242,7 @@ async function startRegionScreenshot(): Promise<void> {
     return;
   }
   starting = true;
+  const generation = ++startGeneration;
   const startedAt = Date.now();
   let helper: SnapshotHelper | null = null;
   let abandoned = false;
@@ -282,7 +289,14 @@ async function startRegionScreenshot(): Promise<void> {
     ]);
     const { captures, backend, fallbackReason } = capture;
     helper = await helperReady;
-    if (isAppSessionBoundaryPending() || ownerScope !== activeOwnerScopeKey()) return;
+    // The cover may have risen while this start was waiting for frames: its overlays draw
+    // above the masks, so nothing may be shown from a superseded start.
+    if (
+      isAppSessionBoundaryPending() ||
+      ownerScope !== activeOwnerScopeKey() ||
+      generation !== startGeneration
+    )
+      return;
     const capturedAt = Date.now();
     if (captures.length === 0) {
       log.warn('no display could be captured');
