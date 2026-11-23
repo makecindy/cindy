@@ -8646,7 +8646,7 @@
           "updated": "Plugin updated.",
           "empty": "No installable release is available.",
           "sign-in": "Sign in to GitHub to check for updates.",
-          "forbidden": "This GitHub sign-in cannot read the private repository.",
+          "forbidden": "Could not read the GitHub release. Check the repository link and your GitHub account’s access.",
           "unavailable": "Couldn't check or install the update. Try again."
         },
         "customSlotTitle": "Plugin custom settings area",
