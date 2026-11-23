@@ -1,3 +1,4 @@
+import { BILLING_CHANNEL_IDS } from '../../shared/billing.js';
 import type {
   BillingCatalog,
   BillingCatalogOffer,
@@ -72,7 +73,7 @@ const FULFILLMENT_STATUSES = new Set<BillingFulfillmentStatus>([
   'SUCCEEDED',
   'FAILED',
 ]);
-const SUPPORTED_PROVIDERS = new Set(['alipay', 'stripe']);
+const SUPPORTED_PROVIDERS = new Set<string>(BILLING_CHANNEL_IDS);
 const SUBSCRIPTION_CAPABILITIES = new Set([
   'MERCHANT_INITIATED_MANDATE',
   'PROVIDER_MANAGED_SUBSCRIPTION',

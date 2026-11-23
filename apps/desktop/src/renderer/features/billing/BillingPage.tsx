@@ -744,6 +744,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     };
   }, [catalog, currentPlan, currentProvider]);
   const showPlanChangeEntry =
+    (currentProvider !== 'antom_alipay_cn' && currentProvider !== 'antom_alipay_hk') &&
     currentPlan !== null &&
     currentSubscription !== null &&
     PLAN_CHANGE_ENTRY_STATUSES.includes(currentSubscription.status) &&
@@ -2928,6 +2929,7 @@ function PaymentOptionRow({
 }) {
   const { t } = useTranslation();
   const Icon = option.paymentAction === 'QR_CODE' ? CircleDollarSign : CreditCard;
+  const isAntomWallet = option.provider === 'antom_alipay_cn' || option.provider === 'antom_alipay_hk';
   return (
     <button
       type="button"
@@ -2943,8 +2945,8 @@ function PaymentOptionRow({
           : 'bg-[var(--surface-elevated)] enabled:hover:bg-[var(--surface-hover-soft)]',
       )}
     >
-      {option.provider === 'alipay' ? (
-        <AlipayIcon className="size-4 shrink-0 text-[var(--text-secondary)]" />
+      {option.provider === 'alipay' || isAntomWallet ? (
+        <AlipayIcon hongKong={option.provider === 'antom_alipay_hk'} />
       ) : (
         <Icon size={16} className="shrink-0 text-[var(--text-secondary)]" />
       )}
@@ -2959,6 +2961,11 @@ function PaymentOptionRow({
               : t('billing.paymentActions.REDIRECT')}
           </p>
         </div>
+        {isAntomWallet && (
+          <p className="text-11 leading-4 text-[var(--text-secondary)]">
+            {t('billing.alipayPlusPartner')}
+          </p>
+        )}
         {detail && (
           <p className="mt-1 break-words text-12 text-[var(--text-secondary)]">{detail}</p>
         )}

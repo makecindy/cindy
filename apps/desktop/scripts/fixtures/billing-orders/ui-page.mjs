@@ -7,6 +7,8 @@ export default {
   real: 'Existing BillingSettingsSection, OrderHistoryCard, BillingRequestDialog, billing money/date formatting and localized strings',
   notCovered: 'Real payment/provider traffic, main/preload IPC, account loading, subscription actions and native mail application',
   cases: {
+    'wallets-topup': { about: 'Wallet names and acceptance marks when selecting a top-up payment method' },
+    'wallets-subscription': { about: 'Wallet names and acceptance marks when selecting a subscription payment method' },
     default: { about: 'Paid renewal, tax-inclusive top-up and partially refunded upgrade in the existing list' },
     narrow: { about: 'Narrow existing list with long historical product name', viewport: { width: 560, height: 900 } },
     legacy: { about: 'Missing historical payment facts and a zero-paid settled invoice' },
@@ -24,6 +26,34 @@ export default {
     'support-footer-narrow': { about: 'Footer help remains readable at 360px', viewport: { width: 360, height: 900 } },
   },
   async check(page, ui) {
+    if (ui.case.startsWith('wallets-')) {
+      const subscription = ui.case === 'wallets-subscription';
+      const action = subscription ? 'billing.settings.subscriptionCard.action' : 'billing.settings.topupCard.action';
+      await page.getByRole('button', { name: await ui.t(action), exact: true }).click();
+      const dialog = page.getByRole('dialog');
+      const plan = subscription ? await ui.t('billing.comparison.select', { name: 'Plus' }) : 'Credits';
+      await dialog.getByRole('button', { name: plan, exact: subscription }).click();
+      const partner = page.getByText(await ui.t('billing.alipayPlusPartner'), { exact: true });
+      const alipay = await ui.t('billing.providers.alipay');
+      const hk = await ui.t('billing.providers.antom_alipay_hk');
+      const channels = dialog.getByRole('button').filter({ has: page.locator('img') });
+      assert.equal(await channels.count(), 3);
+      const mainland = channels.filter({ has: page.getByText(alipay, { exact: true }) });
+      const direct = mainland.filter({ hasNot: partner });
+      const antom = mainland.filter({ has: partner });
+      const hongKong = channels.filter({ has: page.getByText(hk, { exact: true }) }).filter({ has: partner });
+      for (const row of [direct, antom, hongKong]) {
+        assert.equal(await row.isVisible(), true);
+        assert.equal(await row.locator('img').count(), 1);
+        await row.locator('img').evaluateAll((images) => Promise.all(images.map((img) => img.decode())));
+        const bounds = await row.boundingBox();
+        assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= ui.viewport.width);
+      }
+      await antom.click();
+      assert.equal(await antom.getAttribute('aria-pressed'), 'true');
+      await ui.capture('wallets');
+      return;
+    }
     if (ui.case.startsWith('support-footer')) {
       const next = page.getByRole('button', { name: await ui.t('billing.orders.history.next'), exact: true });
       await next.waitFor();

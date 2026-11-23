@@ -19881,8 +19881,11 @@
       "QR_CODE": "掃碼支付",
       "REDIRECT": "前往支付頁面"
     },
+    "alipayPlusPartner": "Alipay+™ Partner",
     "providers": {
       "alipay": "支付寶",
+      "antom_alipay_cn": "支付寶",
+      "antom_alipay_hk": "AlipayHK",
       "stripe": "Stripe"
     },
     "currentSubscription": {

@@ -19881,8 +19881,11 @@
       "QR_CODE": "QR 코드 결제",
       "REDIRECT": "결제 페이지 열기"
     },
+    "alipayPlusPartner": "Alipay+™ Partner",
     "providers": {
       "alipay": "Alipay",
+      "antom_alipay_cn": "Alipay",
+      "antom_alipay_hk": "AlipayHK",
       "stripe": "Stripe"
     },
     "currentSubscription": {

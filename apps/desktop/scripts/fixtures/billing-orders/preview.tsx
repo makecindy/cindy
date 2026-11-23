@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { mountPage, type UiPageContext } from '../../ui-page/harness';
 import { BillingSettingsSection, OrderHistoryCard } from '../../../src/renderer/features/billing/BillingPage';
-import type { BillingPaymentHistoryRecord } from '../../../src/shared/billing';
+import type { BillingCatalogProduct, BillingPaymentHistoryRecord } from '../../../src/shared/billing';
 
 const base: BillingPaymentHistoryRecord = {
   recordId: 'SUBSCRIPTION_INVOICE:invoice_cycle_fixture', sourceType: 'SUBSCRIPTION_INVOICE',
@@ -19,11 +19,27 @@ const topup: BillingPaymentHistoryRecord = {
   currency: 'usd', provider: 'stripe', providerTransactionId: 'pi_topup_fixture', periodStartAt: null, periodEndAt: null,
 };
 
+function walletProduct(subscription: boolean): BillingCatalogProduct {
+  const code = subscription ? 'plus' : 'credits';
+  return {
+    code, name: subscription ? 'Plus' : 'Credits', kind: subscription ? 'SUBSCRIPTION' : 'CREDIT_TOPUP',
+    level: subscription ? 1 : null, sortOrder: 1,
+    offers: [{
+      code, currency: 'cny', amount: '1.00', creditAmount: '2.00', interval: subscription ? 'MONTH' : null,
+      minAmount: null, maxAmount: null, rolloverCap: null,
+      purchaseOptions: ['alipay', 'antom_alipay_cn', 'antom_alipay_hk'].map((provider) => ({
+        id: provider, provider, capability: subscription ? 'MERCHANT_INITIATED_MANDATE' : 'ONE_TIME_PAYMENT',
+        paymentAction: subscription && provider !== 'alipay' ? 'REDIRECT' : 'QR_CODE',
+      })),
+    }],
+  };
+}
+
 function Preview({ ctx }: { ctx: UiPageContext }) {
   const { t } = useTranslation();
   const [page, setPage] = useState(1);
   const [error, setError] = useState(ctx.case === 'error');
-  if (ctx.case.startsWith('support-footer')) {
+  if (ctx.case.startsWith('support-footer') || ctx.case.startsWith('wallets-')) {
     return (
       <main data-ui-page-subject className="h-screen overflow-auto p-5">
         <BillingSettingsSection accountId="billing-preview" />
@@ -58,9 +74,11 @@ function Preview({ ctx }: { ctx: UiPageContext }) {
 
 void mountPage({
   route: '/settings?tab=billing',
-  host: {
+  host: (ctx) => ({
     billing: {
-      getCatalog: async () => ({ products: [] }),
+      getCatalog: async () => ({
+        products: ctx.case.startsWith('wallets-') ? [walletProduct(ctx.case === 'wallets-subscription')] : [],
+      }),
       getCurrentSubscription: async () => ({ subscription: null }),
       getCreditUsage: async () => ({
         available: '20',
@@ -73,6 +91,6 @@ void mountPage({
       }),
       listPaymentHistory: async () => ({ records: [base, topup], nextCursor: 'earlier_fixture' }),
     },
-  },
+  }),
   render: (ctx) => <Preview ctx={ctx} />,
 });

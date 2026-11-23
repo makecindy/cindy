@@ -19958,8 +19958,11 @@
       "QR_CODE": "Zum Bezahlen scannen",
       "REDIRECT": "Zahlungsseite öffnen"
     },
+    "alipayPlusPartner": "Alipay+™ Partner",
     "providers": {
       "alipay": "Alipay",
+      "antom_alipay_cn": "Alipay",
+      "antom_alipay_hk": "AlipayHK",
       "stripe": "Stripe"
     },
     "currentSubscription": {

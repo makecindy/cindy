@@ -20143,8 +20143,11 @@
       "QR_CODE": "Scanner pour payer",
       "REDIRECT": "Ouvrir la page de paiement"
     },
+    "alipayPlusPartner": "Alipay+™ Partner",
     "providers": {
       "alipay": "Alipay",
+      "antom_alipay_cn": "Alipay",
+      "antom_alipay_hk": "AlipayHK",
       "stripe": "Stripe"
     },
     "currentSubscription": {

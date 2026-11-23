@@ -93,6 +93,9 @@ vi.mock('react-i18next', async (importOriginal) => ({
       if (providerLabels[key]) return providerLabels[key];
       if (
         [
+          'billing.alipayPlusPartner',
+          'billing.providers.antom_alipay_cn',
+          'billing.providers.antom_alipay_hk',
           'billing.settings.supportHint',
           'billing.usage.promotionalDetails.rolloverName',
           'billing.orders.invoice.personalInvoicePolicy',
@@ -1322,6 +1325,34 @@ describe('BillingPage remote catalog rendering', () => {
       purchaseOptionId: 'listing_stripe',
     });
   });
+
+  it.each([
+    ['alipay', /^alipay billing\.paymentActions\.QR_CODE$/i],
+    ['antom_alipay_cn', /^Alipay billing\.paymentActions\.QR_CODE Alipay\+™ Partner$/],
+    ['antom_alipay_hk', /^AlipayHK billing\.paymentActions\.QR_CODE Alipay\+™ Partner$/],
+  ] as const)(
+    'selects the correct top-up route by its wallet name and partner subtitle: %s',
+    async (provider, accessibleName) => {
+      const catalog = await window.electronAPI.billing.getCatalog();
+      const topup = catalog.products.find((product) => product.kind === 'CREDIT_TOPUP')!;
+      topup.offers[0]!.purchaseOptions = ['alipay', 'antom_alipay_cn', 'antom_alipay_hk'].map((wallet) => ({
+        id: `listing_${wallet}`,
+        provider: wallet,
+        capability: 'ONE_TIME_PAYMENT',
+        paymentAction: 'QR_CODE',
+      }));
+      vi.mocked(window.electronAPI.billing.getCatalog).mockResolvedValue(catalog);
+      render(<BillingPage />);
+      fireEvent.click(await screen.findByText('billing.settings.topupCard.action'));
+      fireEvent.click((await screen.findByText('Configured top-up')).closest('button')!);
+      fireEvent.click(await screen.findByRole('button', { name: accessibleName }));
+      fireEvent.change(screen.getByPlaceholderText('billing.amount.placeholder'), { target: { value: '20' } });
+      fireEvent.click(screen.getByText('billing.actions.pay'));
+      expect(checkout.startTopup).toHaveBeenCalledWith(expect.objectContaining({
+        purchaseOptionId: `listing_${provider}`,
+      }));
+    },
+  );
 
   it('keeps the subscription empty state instead of showing a misleading FREE-only catalog', async () => {
     window.electronAPI.billing.getCatalog = vi.fn(async () => ({ products: [] }));

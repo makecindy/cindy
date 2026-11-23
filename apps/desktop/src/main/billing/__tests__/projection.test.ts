@@ -446,6 +446,18 @@ describe('billing response projection', () => {
                   merchantId: 'hidden',
                 },
                 {
+                  id: 'listing_antom_cn',
+                  provider: 'antom_alipay_cn',
+                  capability: 'ONE_TIME_PAYMENT',
+                  paymentAction: 'QR_CODE',
+                },
+                {
+                  id: 'listing_antom_hk',
+                  provider: 'antom_alipay_hk',
+                  capability: 'ONE_TIME_PAYMENT',
+                  paymentAction: 'QR_CODE',
+                },
+                {
                   id: 'listing_future',
                   provider: 'future_provider',
                   capability: 'ONE_TIME_PAYMENT',
@@ -502,6 +514,18 @@ describe('billing response projection', () => {
                 {
                   id: 'listing_alipay',
                   provider: 'alipay',
+                  capability: 'ONE_TIME_PAYMENT',
+                  paymentAction: 'QR_CODE',
+                },
+                {
+                  id: 'listing_antom_cn',
+                  provider: 'antom_alipay_cn',
+                  capability: 'ONE_TIME_PAYMENT',
+                  paymentAction: 'QR_CODE',
+                },
+                {
+                  id: 'listing_antom_hk',
+                  provider: 'antom_alipay_hk',
                   capability: 'ONE_TIME_PAYMENT',
                   paymentAction: 'QR_CODE',
                 },

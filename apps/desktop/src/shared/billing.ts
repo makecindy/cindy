@@ -14,6 +14,8 @@ import type {
 
 import type { ModelAccessBalance, ModelAccessCreditUsage } from './modelAccess';
 
+export const BILLING_CHANNEL_IDS = ['alipay', 'stripe', 'antom_alipay_cn', 'antom_alipay_hk'] as const;
+
 export const BILLING_SUPPORT_EMAIL = 'xd-billing@xd.com';
 export const BILLING_FEEDBACK_EMAIL = 'feedback@cindy.app';
 

@@ -1,12 +1,12 @@
-import type { BillingCatalogProduct, BillingPurchaseOption } from '../../../shared/billing';
+import { BILLING_CHANNEL_IDS, type BillingCatalogProduct, type BillingPurchaseOption } from '../../../shared/billing';
 
-export type SupportedBillingProvider = 'alipay' | 'stripe';
+export type SupportedBillingProvider = (typeof BILLING_CHANNEL_IDS)[number];
 
 export type SupportedPurchaseOption = BillingPurchaseOption & {
   provider: SupportedBillingProvider;
 };
 
-export const SUPPORTED_BILLING_PROVIDERS = new Set<SupportedBillingProvider>(['alipay', 'stripe']);
+export const SUPPORTED_BILLING_PROVIDERS = new Set<SupportedBillingProvider>(BILLING_CHANNEL_IDS);
 
 const SUPPORTED_PAYMENT_ACTIONS = new Set<BillingPurchaseOption['paymentAction']>([
   'QR_CODE',
