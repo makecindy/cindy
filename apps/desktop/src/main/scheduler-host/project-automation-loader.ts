@@ -560,15 +560,16 @@ export class ProjectAutomationLoader {
 
     // A task may record the real path of a workspace whose schedules use a
     // symlink. Scan it under the saved directory so its schedule and approval
-    // identity stays consistent. Unresolved directories keep their own identity.
+    // identity stays consistent. Resolve dot segments as manifest reads do.
+    // Unresolved directories keep their own identity.
     const savedPhysicalDirs = new Set<string>();
     for (const workingDir of saved.values()) {
-      const physicalDir = await fs.realpath(workingDir).catch(() => null);
+      const physicalDir = await fs.realpath(path.resolve(workingDir)).catch(() => null);
       if (physicalDir) savedPhysicalDirs.add(workingDirKey(physicalDir));
     }
     if (savedPhysicalDirs.size > 0) {
       for (const [key, workingDir] of discovered) {
-        const physicalDir = await fs.realpath(workingDir).catch(() => null);
+        const physicalDir = await fs.realpath(path.resolve(workingDir)).catch(() => null);
         if (physicalDir && savedPhysicalDirs.has(workingDirKey(physicalDir))) discovered.delete(key);
       }
     }

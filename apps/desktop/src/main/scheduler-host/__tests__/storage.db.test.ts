@@ -301,54 +301,84 @@ function createStorageHarness(queries?: { query: string; params: unknown[] }[]) 
 // DB tier: startup discovery and the open-window import query use real schedule and
 // session rows. Issue 11133 needs both rows to refer to the same physical workspace
 // through different paths, which single-path loader tests cannot reproduce.
-it('does not rediscover an imported buddy automation through a task cwd alias', async () => {
-  const h = createStorageHarness();
-  const root = await fs.mkdtemp(path.join(tmpdir(), 'cindy-automation-alias-'));
-  try {
-    const external = path.join(root, 'external');
-    await fs.mkdir(external);
-    const physical = await fs.realpath(external);
-    const linked = path.join(root, 'workspace');
-    await fs.symlink(physical, linked, 'junction');
-    const scheduler = new Scheduler({ storage: h.storage, runner: { fire: async () => { throw new Error('unexpected run'); } } });
-    const makeLoader = () => new ProjectAutomationLoader({
-      storage: h.storage,
-      scheduler,
-      getDb: () => h.db,
-      logger: {},
-      getTeammateProjectState: async (dir) => dir === (process.platform === 'win32' ? linked.toLowerCase() : linked)
-        ? 'active' : null,
-    });
-    h.sqlite.exec(`CREATE TABLE project_automation_consents (
-      working_dir TEXT PRIMARY KEY, consented_at INTEGER NOT NULL, config_hash TEXT NOT NULL
-    )`);
-    await makeLoader().upsertSchedule(linked, {
-      id: 'daily', name: 'Daily', prompt: 'Check', cronExpr: '0 9 * * *', manual: true,
-    });
-    const original = await h.storage.list();
-    expect(original).toMatchObject([{ workingDir: linked, projectConfigId: 'daily' }]);
+it.for(['plain', 'saved-parent', 'discovered-parent'] as const)(
+  'keeps distinct automation projects while ignoring an imported task cwd alias (%s)',
+  async (pathForm, context) => {
+    const h = createStorageHarness();
+    const root = await fs.mkdtemp(path.join(tmpdir(), 'cindy-automation-alias-'));
+    try {
+      const external = path.join(root, 'external');
+      await fs.mkdir(external);
+      const physical = await fs.realpath(external);
+      const linked = path.join(root, 'workspace');
+      const linkType = process.platform === 'win32' ? 'junction' : 'dir';
+      // The fixture link also probes this volume's actual directory-link support.
+      try {
+        await fs.symlink(physical, linked, linkType);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code && ['EPERM', 'EACCES', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS'].includes(code)) {
+          context.skip();
+          return;
+        }
+        throw error;
+      }
+      const independent = path.join(root, 'ordinary');
+      await fs.mkdir(independent);
+      let savedDir = linked;
+      let discoveredDir = independent;
+      if (pathForm !== 'plain') {
+        // The manifest reader resolves '..' lexically. Following the link first
+        // instead would make the independent workspace appear to be an alias.
+        const from = pathForm === 'saved-parent' ? linked : independent;
+        const to = pathForm === 'saved-parent' ? independent : physical;
+        const child = path.join(to, 'child');
+        const hop = path.join(from, 'hop');
+        await fs.mkdir(child);
+        await fs.symlink(child, hop, linkType);
+        const withParent = `${hop}${path.sep}..`;
+        if (pathForm === 'saved-parent') savedDir = withParent;
+        else discoveredDir = withParent;
+      }
+      const scheduler = new Scheduler({ storage: h.storage, runner: { fire: async () => { throw new Error('unexpected run'); } } });
+      const makeLoader = () => new ProjectAutomationLoader({
+        storage: h.storage,
+        scheduler,
+        getDb: () => h.db,
+        logger: {},
+        getTeammateProjectState: async (dir) => dir === (process.platform === 'win32' ? linked.toLowerCase() : linked)
+          ? 'active' : null,
+      });
+      h.sqlite.exec(`CREATE TABLE project_automation_consents (
+        working_dir TEXT PRIMARY KEY, consented_at INTEGER NOT NULL, config_hash TEXT NOT NULL
+      )`);
+      await makeLoader().upsertSchedule(savedDir, {
+        id: 'daily', name: 'Daily', prompt: 'Check', cronExpr: '0 9 * * *', manual: true,
+      });
+      const original = await h.storage.list();
+      expect(original).toMatchObject([{ workingDir: savedDir, projectConfigId: 'daily' }]);
 
-    const independent = path.join(root, 'ordinary');
-    const copiedManifest = path.join(independent, ...PROJECT_AUTOMATION_REL_SEGMENTS);
-    await fs.mkdir(path.dirname(copiedManifest), { recursive: true });
-    await fs.copyFile(path.join(linked, ...PROJECT_AUTOMATION_REL_SEGMENTS), copiedManifest);
-    const insertTask = h.sqlite.prepare('INSERT INTO sessions (id, title, working_dir) VALUES (?, ?, ?)');
-    insertTask.run('alias', 'Alias', physical);
-    insertTask.run('ordinary', 'Ordinary', independent);
+      const copiedManifest = path.join(independent, ...PROJECT_AUTOMATION_REL_SEGMENTS);
+      await fs.mkdir(path.dirname(copiedManifest), { recursive: true });
+      await fs.copyFile(path.join(linked, ...PROJECT_AUTOMATION_REL_SEGMENTS), copiedManifest);
+      const insertTask = h.sqlite.prepare('INSERT INTO sessions (id, title, working_dir) VALUES (?, ?, ?)');
+      insertTask.run('alias', 'Alias', physical);
+      insertTask.run('ordinary', 'Ordinary', discoveredDir);
 
-    const reopened = makeLoader();
-    const events: ProjectAutomationEvent[] = [];
-    reopened.onEvent((event) => events.push(event));
-    await reopened.reconcileAll();
-    expect(events.flatMap((event) => event.type === 'import-required' ? [event.pendingImport.workingDir] : []))
-      .toEqual([independent]);
-    expect((await reopened.listPendingImports()).map((preview) => preview.workingDir)).toEqual([independent]);
-    expect(await h.storage.list()).toEqual(original);
-  } finally {
-    h.close();
-    await fs.rm(root, { recursive: true, force: true });
-  }
-});
+      const reopened = makeLoader();
+      const events: ProjectAutomationEvent[] = [];
+      reopened.onEvent((event) => events.push(event));
+      await reopened.reconcileAll();
+      expect(events.flatMap((event) => event.type === 'import-required' ? [event.pendingImport.workingDir] : []))
+        .toEqual([discoveredDir]);
+      expect((await reopened.listPendingImports()).map((preview) => preview.workingDir)).toEqual([discoveredDir]);
+      expect(await h.storage.list()).toEqual(original);
+    } finally {
+      h.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  },
+);
 
 // DB-tier regression for app-exit recovery: claim the original run exactly once,
 // and respect user takeover/stop and the current task owner. The old storage had no
