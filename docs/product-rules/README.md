@@ -22,6 +22,8 @@
 | 邮件卡的收件人与编辑、发送确认、深浅色、已读标记与头像权限 | [邮件卡](mail-card.md) |
 | 目标运行、补充消息、停止与手机 `/goal` | [目标模式](goal-mode.md) |
 | 自动任务与目标任务的生命线：归档后恢复、归档前确认、失败后手动继续 | [归档与自动化](archive-pauses-automations.md) |
+| 自动化被 Webhook、GitHub App 事件叫醒：接收地址、发送方、合并与可靠性 | [Webhook 触发](schedule-webhook-trigger.md) |
+| 插件提供的事件（消息、邮件等）叫醒自动化（方案，未实现） | [插件事件触发](plugin-event-triggers.md) |
 | 用量上限、重置时刻与自动继续 | [用量上限](usage-limit-auto-continue.md) |
 | 任务模型、来源、推理强度与 Fast | [运行时控制](session-runtime-control.md) |
 | 共享任务、跨账号访客与成员权限 | [共享任务](shared-task-mode.md) |
