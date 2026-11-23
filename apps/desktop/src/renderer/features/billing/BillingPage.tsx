@@ -3030,7 +3030,10 @@ function BillingOfferDialog({
 
                   {kind === 'SUBSCRIPTION' && selected && subscriptionPurchaseBlocked && (
                     <p className="mt-4 text-12 leading-5 text-[var(--text-secondary)]">
-                      {subscriptionCancelAtPeriodEnd && formattedSubscriptionPeriodEndAt
+                      {subscriptionCancelAtPeriodEnd &&
+                      formattedSubscriptionPeriodEndAt &&
+                      subscriptionPeriodEndAt &&
+                      Date.parse(subscriptionPeriodEndAt) > Date.now()
                         ? t('billing.currentSubscription.purchaseBlockedUntilPeriodEnd', {
                             date: formattedSubscriptionPeriodEndAt,
                           })

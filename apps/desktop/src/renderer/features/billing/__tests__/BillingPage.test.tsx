@@ -3762,7 +3762,11 @@ describe('BillingPage plan change', () => {
   it('shows the period-end copy in the purchase dialog when the live subscription is scheduled to cancel', async () => {
     const billing = billingMocks();
     billing.getCurrentSubscription = vi.fn(async () => ({
-      subscription: { ...activeSubscription(null, 'MONTH', 'ACTIVE', true), effectivePlan: null },
+      subscription: {
+        ...activeSubscription(null, 'MONTH', 'ACTIVE', true),
+        effectivePlan: null,
+        currentPeriodEndAt: new Date(Date.now() + 86_400_000).toISOString(),
+      },
     }));
     install(billing);
 
@@ -3780,25 +3784,45 @@ describe('BillingPage plan change', () => {
     expect(screen.queryByText('billing.currentSubscription.purchaseBlocked')).toBeNull();
   });
 
-  it('falls back to the generic copy when the scheduled-cancel subscription has an unparseable period end', async () => {
-    const billing = billingMocks();
-    billing.getCurrentSubscription = vi.fn(async () => ({
-      subscription: {
-        ...activeSubscription(null, 'MONTH', 'ACTIVE', true),
-        effectivePlan: null,
-        currentPeriodEndAt: 'not-a-valid-date',
-      },
-    }));
-    install(billing);
+  // #11661: BillingPage -> manage subscription -> view plans must not promise
+  // future purchase availability for an elapsed period. Existing coverage only
+  // exercised future/invalid dates; include the exact instant and missing date.
+  // Unit tier: real component interaction, synthetic billing API, no payment.
+  it.each([
+    ['expired', '2026-11-19T12:00:00.000Z'],
+    ['just elapsed', '2026-11-20T11:59:59.999Z'],
+    ['exactly now', '2026-11-20T12:00:00.000Z'],
+    ['invalid', 'not-a-valid-date'],
+    ['missing', null],
+  ])('keeps purchase blocked with generic copy for a %s period end', async (_case, periodEnd) => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-11-20T12:00:00.000Z'));
+    try {
+      const billing = billingMocks();
+      billing.getCurrentSubscription = vi.fn(async () => ({
+        subscription: {
+          ...activeSubscription(null, 'MONTH', 'UNPAID', true),
+          provider: 'alipay',
+          effectivePlan: null,
+          currentPeriodEndAt: periodEnd,
+        },
+      }));
+      install(billing);
 
-    render(<BillingPage />);
+      render(<BillingPage />);
 
-    await selectSubscriptionManagementAction('billing.settings.subscriptionCard.action');
-    fireEvent.click(
-      within(await screen.findByRole('dialog')).getByRole('button', { name: /Plus plan/ }),
-    );
-    expect(screen.getByText('billing.currentSubscription.purchaseBlocked')).toBeTruthy();
-    expect(screen.queryByText(/purchaseBlockedUntilPeriodEnd/)).toBeNull();
+      await selectSubscriptionManagementAction('billing.settings.subscriptionCard.action');
+      fireEvent.click(
+        within(await screen.findByRole('dialog')).getByRole('button', { name: /Plus plan/ }),
+      );
+      expect(screen.getByText('billing.currentSubscription.purchaseBlocked')).toBeTruthy();
+      expect(screen.queryByText(/purchaseBlockedUntilPeriodEnd/)).toBeNull();
+      expect(screen.queryByText('billing.actions.pay')).toBeNull();
+      expect(checkout.startSubscription).not.toHaveBeenCalled();
+      expect(billing.cancelCurrentSubscription).not.toHaveBeenCalled();
+      expect(billing.resumeCurrentSubscription).not.toHaveBeenCalled();
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it('shows the resume action only for resumable canceled subscriptions', async () => {
