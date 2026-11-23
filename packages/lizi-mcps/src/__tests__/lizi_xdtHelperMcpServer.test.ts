@@ -1069,6 +1069,53 @@ describe("cindy_helper MCP server", () => {
     } finally { await client.close(); await server.close(); }
   });
 
+  // Unit, #11585: the project task's ordinary helper surface hid its selected partner's notes.
+  it('discovers and calls only the companion notes granted by the current host context', async () => {
+    let enabled = true;
+    let surface: 'default' | 'bot' | 'restricted' = 'default';
+    const notes = vi.fn(async () => []);
+    const sendToUser = vi.fn(async () => ({ ok: true as const, messageId: 'saved', targetSessionId: 'owner', delivered: true }));
+    const server = createXdtHelperMcpServer({
+      resolveSurface: async () => surface,
+      botMessaging: { sendToUser },
+      projectCompanionMemory: notes,
+      canUseProjectCompanionMemory: async () => enabled,
+    }, { agentKind: 'codex', workingDir: '/project', sessionId: 'project-task' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'project-notes', version: '1' });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    const name = 'project_companion_memory';
+    const lookup = () => client.callTool({ name: 'list_tools', arguments: { name } }).then(parsePayload);
+    const search = () => client.callTool({ name: 'call_tool', arguments: { name, args: { request: { action: 'search' } } } }).then(parsePayload);
+    try {
+      expect(await lookup()).toMatchObject({ ok: true, tool: { name } });
+      const catalog = parsePayload(await client.callTool({ name: 'list_tools', arguments: { query: name } }));
+      expect(catalog.items).toEqual(expect.arrayContaining([
+        expect.objectContaining({ key: 'teammates.project_notes', availability: 'available' }),
+      ]));
+      expect(await search()).toMatchObject({ ok: true });
+      expect(parsePayload(await client.callTool({ name: 'list_tools', arguments: { name: 'send_to_user' } })))
+        .toMatchObject({ errorCode: 'CAPABILITY_NOT_AVAILABLE' });
+      expect(parsePayload(await client.callTool({ name: 'call_tool', arguments: {
+        name: 'send_to_user', args: { message: 'test', idempotency_key: 'test' },
+      } }))).toMatchObject({ errorCode: 'CAPABILITY_NOT_AVAILABLE' });
+      expect(sendToUser).not.toHaveBeenCalled();
+      for (surface of ['default', 'bot', 'restricted'] as const) {
+        enabled = surface !== 'default';
+        expect(await lookup()).toMatchObject({ errorCode: 'CAPABILITY_NOT_AVAILABLE' });
+        expect(await search()).toMatchObject({ errorCode: 'CAPABILITY_NOT_AVAILABLE' });
+      }
+      expect(notes).toHaveBeenCalledTimes(1);
+      surface = 'default';
+      enabled = true;
+      expect(await search()).toMatchObject({ ok: true });
+      expect(notes).toHaveBeenCalledTimes(2);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
   // V2 retired send_to_agent / check_agent_message; teammates are reached through
   // send_to_session with the main-chat address list_agents returns.
   it.each(["bot", "default"] as const)("discovers teammates from %s without the retired message tools", async surface => {

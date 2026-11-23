@@ -63,7 +63,7 @@ export function startSharedTaskRuntime(options: {
     ownerAccountId, hostDeviceId: getDeviceId(), creationState, isCurrent: current,
     async readSession(sessionId) {
       const rows = await db.client.query<{ id: string; title: string; status: string; source: string | null }>(
-        'SELECT id, title, status, source FROM sessions WHERE id = ? LIMIT 1', [sessionId]);
+        'SELECT id, title, status, source FROM sessions WHERE id = ? AND NOT EXISTS (SELECT 1 FROM project_task_companions WHERE session_id = sessions.id AND bot_id IS NOT NULL) LIMIT 1', [sessionId]);
       return rows[0] ?? null;
     },
     revoke: (sharedTaskId, memberId) => {

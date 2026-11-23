@@ -11,6 +11,7 @@ import { sessionCreateToRow, sessionToCamel, normalizeRemoteHostId } from '../ma
 import { ensureDialogueWorkspaceDir } from '../dialogueWorkspace.js';
 import { resolveBusinessSessionId } from '../../sessionIds.js';
 import { normalizeWorkingDirForStorage } from '../../../shared/workingDir.js';
+import { supportsProjectTaskCompanion } from '../../../shared/projectTaskCompanion.js';
 import { isRetainableProjectSession } from '../../../shared/sessionSource.js';
 import { requireObject, requireString, throwIpcError } from '../../utils/ipcValidate.js';
 import { isDeviceLinkInvoke } from '../../device-link/invoke-context.js';
@@ -28,6 +29,7 @@ import type { CreateWorktreeReq, CreateWorktreeResp } from '../../worktree/types
 
 const log = createLogger('local-db-sessions');
 export interface UserSessionCreatePorts {
+  validateProjectCompanion?: (botId: string) => Promise<unknown>;
   senderId: number;
   userDataDir: string;
   notifyPluginSessionCreated(input: { sessionId: string; workdir?: string }): void;
@@ -63,7 +65,7 @@ export async function createUserSession(body: unknown, ports: UserSessionCreateP
     const id = resolveBusinessSessionId(bodyObj.id);
     // 未发送任务（新建页开始输入时先建出来，见 provisionalSessions.ts）：只给本机普通任务，
     // 延后的创建副作用在第一次发送转正时补做。
-    const { provisional: provisionalFlag, localPluginWorktree, ...sessionBody } = bodyObj;
+    const { provisional: provisionalFlag, localPluginWorktree, projectCompanionId, ...sessionBody } = bodyObj;
     const provisional = provisionalFlag === true;
     if (provisional && (
       bodyObj.remoteHostId || bodyObj.agentDeviceId || bodyObj.orcaRole || bodyObj.source !== undefined
@@ -158,10 +160,21 @@ export async function createUserSession(body: unknown, ports: UserSessionCreateP
       : requestedKind === 'dialogue' ? { projectDir: null, workspaceKind: 'dialogue' as const } : undefined;
     assertOwner();
     const workspaceKind = membership?.workspaceKind ?? requestedKind;
+    const projectWorkingDir = explicitWorkingDir ?? membership?.projectDir ?? undefined;
+    if (projectCompanionId !== undefined) {
+      if (typeof projectCompanionId !== 'string' || !projectCompanionId.trim() || projectCompanionId.length > 256)
+        throwIpcError('INVALID_PARAMS', 'Invalid conversation partner');
+      if (!ports.validateProjectCompanion || !supportsProjectTaskCompanion({
+        agentKind: createBody?.agentKind, status: 'active', workspaceKind, workingDir: projectWorkingDir, source: createBody?.source ?? 'desktop',
+        remoteHostId: createBody?.remoteHostId, agentDeviceId: createBody?.agentDeviceId, orcaRole: createBody?.orcaRole,
+      })) throwIpcError('PRECONDITION_FAILED', 'Conversation partners require a local project task');
+      await ports.validateProjectCompanion(projectCompanionId);
+      assertOwner();
+    }
     const workingDir =
       workspaceKind === 'dialogue' && !explicitWorkingDir
         ? ensureDialogueWorkspaceDir(id, now)
-        : explicitWorkingDir ?? membership?.projectDir ?? undefined;
+        : projectWorkingDir;
     if (workspaceKind === 'dialogue' && !explicitWorkingDir) {
       log.info('[localDb] allocated dialogue workspace', { sessionId: id, workingDir });
     }
@@ -242,7 +255,17 @@ export async function createUserSession(body: unknown, ports: UserSessionCreateP
         }
         const resource = !prepared.remoteHostId && prepared.workingDir
           ? managedWorktreeRoot(prepared.workingDir) : null;
-        const insert = async () => { assertCurrent(); await db.insert(sessions).values(prepared); };
+        const insert = async () => {
+          assertCurrent();
+          const statement = db.insert(sessions).values(prepared);
+          if (typeof projectCompanionId === 'string') {
+            if (!supportsProjectTaskCompanion({ ...prepared, status: prepared.status ?? 'active', source: prepared.source ?? 'desktop' }))
+              throwIpcError('PRECONDITION_FAILED', 'Conversation partners require a local project task');
+            await owner!.client.tx('sessions.openWithCompanion', { sessionId: id, botId: projectCompanionId, insert: statement.toSQL() });
+          } else {
+            await statement;
+          }
+        };
         if (resource) await withWorktreeMutation([resource], insert);
         else await insert();
       }));

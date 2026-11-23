@@ -321,6 +321,7 @@ export interface CcMeta {
    * normal task transcript through this metadata field.
    */
   /** Automatic reply to a private Bot message; retained without unread attention. */
+  projectCompanion?: { botId: string; displayName: string; profileVersion: number; revision: number };
   botPrivateReply?: boolean;
   /** The accepted user input (clientId) the turn that wrote this row answers. */
   replyToClientId?: string;

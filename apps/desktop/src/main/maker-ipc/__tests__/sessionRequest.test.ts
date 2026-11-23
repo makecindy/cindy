@@ -33,9 +33,16 @@ describe('session IPC request parsing', () => {
 
   // model-groups/sessionStart.ts: the mode token is handed over only inside main. A renderer or another device
   // passing one could settle someone else's pick on its own task. Minimal input: an IPC body carrying the field.
-  it('drops a model group token supplied by the caller', () => {
-    const opts = readCreateSessionOpts({ agentKind: 'codex', model: 'gpt-5.4', workingDir: '/workspace', modelGroupStart: 'tok' });
+  it('drops host-owned model group and companion state supplied by the caller', () => {
+    const opts = readCreateSessionOpts({
+      agentKind: 'codex',
+      model: 'gpt-5.4',
+      workingDir: '/workspace',
+      modelGroupStart: 'tok',
+      projectCompanion: { botId: 'unverified', revision: 1 },
+    });
     expect('modelGroupStart' in opts).toBe(false);
+    expect('projectCompanion' in opts).toBe(false);
   });
 
   it('rejects invalid create-session required fields before Maker side effects', () => {

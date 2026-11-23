@@ -1,4 +1,13 @@
 {
+  "projectCompanion": {
+    "localModel": "請選用在本機執行的模型，與這位夥伴對話。",
+    "title": "對話夥伴",
+    "default": "預設助理",
+    "changed": "另一個視窗已變更對話夥伴。",
+    "busy": "請等目前的回覆及待傳訊息處理完成，再切換夥伴。",
+    "failed": "無法選擇這位夥伴，請確認夥伴已在這台電腦上啟用。",
+    "unavailable": "夥伴無法使用"
+  },
   "runtimePlugins": {
     "save": "儲存",
     "promptUnsupported": "目前 Pi 執行位置不支援系統提示詞片段。",

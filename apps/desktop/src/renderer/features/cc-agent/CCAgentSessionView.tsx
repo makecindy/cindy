@@ -228,6 +228,7 @@ import { useCCAgentChat } from '@/hooks/useCCAgentChat';
 import { ackErrorAlertHandled } from '@/lib/errorAlertAck';
 import { cleanupRemovedCachedImage, useAttachments } from '@/hooks/useAttachments';
 import { useCCSessions } from '@/hooks/useCCSessions';
+import { useProjectTaskCompanion } from './hooks/useProjectTaskCompanion';
 import { SessionContentHeaderRegistration } from './SessionContentHeader';
 import { LinkedSideChatOrigin } from './LinkedSideChatOrigin';
 import { resolveSessionInterruptCandidate } from './sessionInterruptBannerModel';
@@ -1234,6 +1235,7 @@ function CCAgentSessionContent({
   // 冷启动 / bootstrap 竞态期间宁可暂时禁用系统文件打开，也不能把被控端 file:// 交给控制端。
   const rightSidebarDeviceLinkDeviceId =
     remoteDeviceId ?? session?.deviceLinkDeviceId ?? (session ? null : undefined);
+  const projectCompanion = useProjectTaskCompanion(session, rightSidebarDeviceLinkDeviceId === null);
   const composerBotMentions = useTaskBotMentions(
     rightSidebarDeviceLinkDeviceId,
     session?.remoteHostId,
@@ -6971,7 +6973,9 @@ function CCAgentSessionContent({
                           name: botChatIdentity.name,
                           device: deviceDisplayName(botChatIdentity.deviceId ?? '', botChatIdentity.deviceName),
                         })
-                      : t('ccAgent.layout.chatPlaceholder')
+                      : projectCompanion?.displayName
+                        ? t(botComposerPlaceholderKey(projectCompanion.displayName), { name: projectCompanion.displayName })
+                        : t('ccAgent.layout.chatPlaceholder')
                   }
                   folderPickerOpen={folderPickerOpen}
                   onFolderPickerOpenChange={handleFolderPickerOpenChange}

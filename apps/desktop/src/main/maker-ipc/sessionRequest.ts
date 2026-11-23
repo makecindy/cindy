@@ -169,6 +169,8 @@ export function readCreateSessionOpts(
   // 模型组凭据只由 main 内部的入口交给 bootstrapSession，界面与其他设备传来的一律不认。
   const callerOpts: Record<string, unknown> = { ...body };
   delete callerOpts.modelGroupStart;
+  // Only the host may attach a conversation partner after resolving the owning database.
+  delete callerOpts.projectCompanion;
   return {
     ...callerOpts,
     id,

@@ -5213,6 +5213,7 @@ interface ElectronAPI {
         /** Only the Cindy Make purpose may be requested; Main validates the checkout. */
         source?: 'cindy-make';
         provisional?: boolean;
+        projectCompanionId?: string;
       }) => Promise<import('@/lib/ccAgent.types').Session>;
       get: (id: string) => Promise<import('@/lib/ccAgent.types').Session>;
       getMany: (ids: string[]) => Promise<import('@/lib/ccAgent.types').Session[]>;
@@ -5839,6 +5840,7 @@ interface ElectronAPI {
    * apps/desktop/src/main/maker-ipc/ 的 handlers + apps/desktop/src/main/maker-host/。
    */
   maker: {
+    projectTaskCompanion: (sessionId: string, change?: { botId: string | null; expectedRevision: number }) => Promise<import('../shared/projectTaskCompanion').ProjectTaskCompanionSelection>;
     listAvailableAgents: () => Promise<Array<'claude-code' | 'codex' | 'pi'>>;
     /**
      * Plugin-provided task engines (docs/plans/acp-plugin-bridge.md). Local only: not

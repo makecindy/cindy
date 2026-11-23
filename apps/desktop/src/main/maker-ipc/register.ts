@@ -5,6 +5,8 @@ import { desktopContextRecoveryAbortSignal } from './contextRecoveryAssembly.des
 import { createSessionContextWindowBudgetReconcile } from './sessionContextWindowBudgetReconcile.js';
 import { appliedContextWindowBudgets, pendingSessionContextWindowBudgetReconciles } from './sessionContextWindowBudgetState.js';
 import { needsSubscriptionAccountHandoff, hasRestoredPooledCodexQuota } from '../subscription-accounts/runtime.js';
+import { projectCompanionHandoffHistory } from '../localDb/projectCompanionTranscript.js';
+import { captureProjectCompanionOwner, readProjectCompanionProfile, readProjectCompanionSelection, readProjectCompanionTask, verifyProjectCompanion } from './projectTaskCompanion.js';
 import { prepareSubscriptionAccountForSend } from '../subscription-accounts/prepareSend.js';
 import { accountProviderId, readMergedProviderAccount, resolveSubscriptionPoolProvider as resolveSubscriptionPoolProviderRef } from '../subscription-accounts/placement.js';
 import { legacyCodexAccountCanRun } from '../subscription-accounts/legacyAccountAccess.js';
@@ -5059,6 +5061,10 @@ export function isActiveInputAccountScoped(sessionId: string): boolean {
 /** Live permission authority for Host task actions; never reconstructed from DB defaults. */
 export function getTaskActionSession(sessionId: string) {
   return getMakerIfReady()?.getSession(sessionId);
+}
+
+export function isLocalProjectCompanionInput(sessionId: string): boolean {
+  return agentInputCoordinatorHolder?.isLocalProjectCompanionInput(sessionId) ?? false;
 }
 
 /** Owner-authored active input (see AgentInputCoordinator.isActiveInputOwnerAuthored). */
@@ -11438,6 +11444,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
 
   const agentSwitchDeps: MakerSessionAgentSwitchHandlerDeps = {
+    assertCompanionSwitchTargetAllowed: async sessionId => {
+      if ((await readProjectCompanionSelection(sessionId)).botId) throwIpcError('PRECONDITION_FAILED', 'Select the default assistant before switching to this computer or engine');
+    },
     readOwnerGeneration: () => getActiveAppSession().generation,
     resolveHandoffWindow: ({ sessionId, agent, model, providerId, agentDeviceId }) =>
       resolveDesktopHandoffWindow(sessionId, { agentKind: agent, model, providerId, agentDeviceId }),
@@ -18228,6 +18237,68 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   pluginTargetReviewReady = true;
 
+  ipcMain.handle('maker:project-task-companion', async (event, sessionId: unknown, change?: unknown) => {
+    assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
+    if (typeof sessionId !== 'string' || !sessionId || isDeviceLinkInvoke())
+      throwIpcError('INVALID_PARAMS', 'A local task is required');
+    const assertCurrent = captureProjectCompanionOwner();
+    if (change === undefined) {
+      await readProjectCompanionTask(sessionId);
+      assertCurrent();
+      const selection = await readProjectCompanionSelection(sessionId);
+      assertCurrent();
+      return selection;
+    }
+    if (!change || typeof change !== 'object') throwIpcError('INVALID_PARAMS', 'Invalid partner selection');
+    const { botId, expectedRevision } = change as Record<string, unknown>;
+    if ((botId !== null && (typeof botId !== 'string' || !botId || botId.length > 256))
+      || typeof expectedRevision !== 'number' || !Number.isSafeInteger(expectedRevision) || expectedRevision < 0)
+      throwIpcError('INVALID_PARAMS', 'Invalid partner selection');
+    return withSessionRestartLock(sessionId, async () => {
+      assertCurrent();
+      const task = await readProjectCompanionTask(sessionId);
+      const current = await readProjectCompanionSelection(sessionId);
+      assertCurrent();
+      if (current.revision !== expectedRevision) return current;
+      const profile = botId ? await readProjectCompanionProfile(botId) : null;
+      const live = maker.getSession(sessionId);
+      if (current.botId === botId && (!live || live.projectCompanion?.profileVersion === profile?.profileVersion))
+        return current;
+      await inputCoordinator.ensureQueueRestored(sessionId);
+      const assertIdle = () => {
+        assertCurrent();
+        const queue = inputCoordinator.getQueueControlSnapshot(sessionId);
+        if (!inputCoordinator.isQueueRestored(sessionId) || inputCoordinator.getActiveInputClientId(sessionId)
+          || queue.pendingQueue.length || queue.steeringQueueClientIds.length || live?.isTurnRunning()
+          || live?.getTurnControlSnapshot().pendingInteractionCount || live?.listBackgroundTasks().length)
+          throwIpcError('PRECONDITION_FAILED', 'PROJECT_COMPANION_TASK_BUSY');
+      };
+      assertIdle();
+      await withRehydrateCloseSuppressed(sessionId, async () => {
+        if (live) await maker.closeSession(sessionId, 'agent-switch');
+        await drainPersistQueue();
+        const history = await listMessagesForAgentHandoff(sessionId, null, undefined, 'replay');
+        const { handoff, handoffCoverage } = buildHandoff(projectCompanionHandoffHistory(history), {
+          targetContextWindow: await resolveDesktopHandoffWindow(sessionId, { ...task, agentKind: dbToMakerAgentKind(task.agentKind) }),
+          fromLabel: current.displayName ?? 'Cindy', toLabel: profile?.displayName ?? 'Cindy',
+          sessionId, reason: 'native-session-recovery', includeToolResults: false,
+        });
+        const generation = agentHandoffPending.readGeneration(sessionId);
+        assertIdle();
+        await commitContextRebuild(sessionId, handoff, {
+          reason: 'native-session-recovery', handoffCoverage, sourceUserClientId: null, expectedClearedAt: task.clearedAt,
+          sourceAgentKind: task.agentKind === 'pi' || task.agentKind === 'codex' ? task.agentKind : 'cc',
+          sourceModel: task.model, sourceProviderId: task.providerId,
+          projectCompanion: { botId, expectedRevision },
+        });
+        assertCurrent();
+        agentHandoffPending.set(sessionId, handoff, generation);
+        broadcastSessionPatched(sessionId, { sdkSessionId: null, contextTokens: 0 });
+      });
+      return { botId, revision: expectedRevision + 1, displayName: profile?.displayName ?? null };
+    });
+  });
+
   const runtimePluginControl = getGhostRuntimePluginControl();
   runtimePluginBudgetClearer = runtimePluginControl.forgetSession;
   const prepareRuntimeTurn = createPrepareTaskRuntimePluginTurn({
@@ -18817,7 +18888,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const makerAgentKind = dbToMakerAgentKind(agentKind);
       return resolveConfiguredContextWindow(catalog, makerAgentKind, providerId, modelId, undefined, 'required');
     },
-    listMessages: (sessionId) => listMessagesForAgentHandoff(sessionId, 400),
+    listMessages: (sessionId) => listMessagesForAgentHandoff(sessionId, 400, undefined, 'recovery'),
     listReplayMessages: (sessionId) => listMessagesForAgentHandoff(sessionId, null, undefined, 'replay'),
     // 伙伴自有会话(当前 + 恢复前旧对话整体优先,后台任务补足),写进回忆指引限定 history 工具范围。
     listCompanionSessionIds: (sessionId) => listBotRecallSessionIds(sessionId, COMPANION_SESSION_IDS_LIMIT),
@@ -18908,6 +18979,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     maker,
     assertInputAllowed: async sessionId => {
       await assertReviewExternalInputAllowed(sessionId);
+      const live = maker.getSession(sessionId);
+      if (live?.projectCompanion) {
+        if (isDeviceLinkInvoke()) throwIpcError('PRECONDITION_FAILED', 'Conversation partner requires the local computer');
+        await verifyProjectCompanion(sessionId, live.projectCompanion);
+      }
       const [botInput] = await getDbClient()
         .drizzle.select({
           source: sessions.source,

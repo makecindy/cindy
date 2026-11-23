@@ -425,6 +425,14 @@ export const botProfiles = sqliteTable(
   }),
 );
 
+/** A project's conversation partner is independent of canonical Bot ownership.
+ * Keep the selected ID after deletion so an unavailable partner never silently becomes Cindy. */
+export const projectTaskCompanions = sqliteTable('project_task_companions', {
+  sessionId: text('session_id').primaryKey().references(() => sessions.id, { onDelete: 'cascade' }),
+  botId: text('bot_id'),
+  revision: integer('revision').notNull(),
+});
+
 /** Immutable-ish Profile snapshots used for runtime binding, audit and rollback. */
 export const botProfileVersions = sqliteTable(
   'bot_profile_versions',

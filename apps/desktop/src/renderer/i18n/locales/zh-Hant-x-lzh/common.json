@@ -1,4 +1,13 @@
 {
+  "projectCompanion": {
+    "localModel": "欲與此伴交談，請擇本機之模型。",
+    "title": "對談之伴",
+    "default": "預設助手",
+    "changed": "他窗已易其伴。",
+    "busy": "俟此輪畢、待發之言盡，乃可易伴。",
+    "failed": "未能擇此伴，請察其於本機可用否。",
+    "unavailable": "此伴不可用"
+  },
   "runtimePlugins": {
     "save": "存之",
     "promptUnsupported": "此 Pi 所在之處不支援系統提示詞片段。",

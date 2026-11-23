@@ -1050,6 +1050,7 @@ export function commitContextRebuild(
     sourceProviderId?: string | null;
     expectedClearedAt?: number | null;
     expectedSdkSessionId?: string;
+    projectCompanion?: ContextRebuildArgs['projectCompanion'];
     replacementRoute?: ContextRebuildArgs['replacementRoute'];
   },
 ): Promise<{ updatedAt: number }> {

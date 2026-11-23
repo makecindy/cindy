@@ -2119,6 +2119,8 @@ export interface StartSessionOptions {
    * Harness adapters place it before the user personalization segment.
    */
   botProfilePrompt?: string;
+  /** Host attribution for an ordinary project task using a companion identity. */
+  projectCompanion?: Readonly<{ botId: string; displayName: string; profileVersion: number; revision: number }>;
   /**
    * Stable profile-binding metadata rendered separately from the Bot SOUL.
    * Hermes keeps the active-profile marker outside the identity document so

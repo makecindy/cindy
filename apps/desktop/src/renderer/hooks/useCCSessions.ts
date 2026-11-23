@@ -60,6 +60,7 @@ interface UseCCSessionsReturn {
     workingDir?: string;
     localPluginWorktree?: NonNullable<Parameters<typeof sessionService.create>[0]>['localPluginWorktree'];
     workspaceKind?: WorkspaceKind;
+    projectCompanionId?: string;
     permissionMode?: string;
     fastMode?: boolean | 'ultrafast';
     /** 计划模式一级开关(与 permissionMode 正交); 草稿开着时随建会话落库。 */
@@ -171,6 +172,7 @@ export function useCCSessions(options?: UseCCSessionsOptions): UseCCSessionsRetu
       workingDir?: string;
       localPluginWorktree?: NonNullable<Parameters<typeof sessionService.create>[0]>['localPluginWorktree'];
       workspaceKind?: WorkspaceKind;
+      projectCompanionId?: string;
       permissionMode?: string;
       fastMode?: boolean | 'ultrafast';
       planModeEnabled?: boolean;

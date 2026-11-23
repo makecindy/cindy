@@ -1526,6 +1526,25 @@ export class AgentInputCoordinator {
       retrySourceClientId: item.retrySourceClientId ?? item.supersedesUserClientId };
   }
 
+  /** A project partner can also answer the owner's attachment or retry of their own input. */
+  isLocalProjectCompanionInput(sessionId: string): boolean {
+    const item = this.states.get(sessionId)?.activeTurn?.item;
+    return !!item && this.isLocalCompanionSource(item)
+      && (this.inputHasOwnerAuthor(item, true) || this.hasLocalCompanionAttachment(item));
+  }
+
+  private isLocalCompanionSource(item: AgentInputQueuedMessage): boolean {
+    const kind = (item.origin as { kind?: string } | undefined)?.kind;
+    return !item.fromDeviceLinkClient && !item.fromMobileClient && !item.sourcePlugin
+      && !item.sharedTaskAuthor && !item.botTaskCoordination && !item.clientId.startsWith('plugin-task:')
+      && typeof item.autoReviewUserText !== 'object' && (kind === undefined || kind === 'desktop');
+  }
+
+  private hasLocalCompanionAttachment(item: AgentInputQueuedMessage): boolean {
+    if (item.retrySourceClientId) return item.localCompanionAttachmentSourceId === item.retrySourceClientId;
+    return !item.originalSyntheticTrigger && !item.autoResume && !!item.files?.length;
+  }
+
   /** Account-scoped tools use the task's account; shared guests keep their own identity. */
   isActiveInputAccountScoped(sessionId: string): boolean {
     const item = this.states.get(sessionId)?.activeTurn?.item;
@@ -2242,6 +2261,7 @@ export class AgentInputCoordinator {
   ): AgentInputProjection {
     const state = this.getState(sessionId);
     item = captureOriginalSyntheticTrigger(item);
+    delete item.localCompanionAttachmentSourceId;
     assertSharedTaskQueueMutation(getDeviceLinkInvokeContext()?.sharedTask, sessionId, 'input.send');
     // 幂等去重(弱网重发防线,PR #881):同 clientId 重复投递说明是控制端(手机
     // 断连自动重试 / 用户对 ack 丢失的消息重发)在补发同一条消息,不是新消息。
@@ -2467,6 +2487,7 @@ export class AgentInputCoordinator {
   ): { projection: AgentInputProjection; reserved: boolean } {
     const state = this.getState(sessionId);
     item = captureOriginalSyntheticTrigger(item);
+    delete item.localCompanionAttachmentSourceId;
     if (this.isDuplicateEnqueueClientId(state, item.clientId)) {
       log.info('priority enqueue ignored: duplicate clientId', {
         sessionId,
@@ -4016,6 +4037,11 @@ export class AgentInputCoordinator {
           attemptToken,
         });
       }
+      if (this.isLocalCompanionSource(recovery.item) && this.hasLocalCompanionAttachment(recovery.item)) {
+        item.localCompanionAttachmentSourceId = recovery.item.localCompanionAttachmentSourceId ?? recovery.item.clientId;
+      } else {
+        delete item.localCompanionAttachmentSourceId;
+      }
       if (quotaOrigin) this.quotaScheduleOrigins.set(item, quotaOrigin);
       // Manual retry is a user takeover. The old scheduler waiter settles as
       // failed; its FireContext must not be inherited by the user's new turn.
@@ -4242,6 +4268,7 @@ export class AgentInputCoordinator {
       }
       // Editing content cannot erase or forge the host's stable retry lineage.
       replacement.retrySourceClientId = current.retrySourceClientId;
+      replacement.localCompanionAttachmentSourceId = current.localCompanionAttachmentSourceId;
     }
     return replacement;
   }
@@ -4343,6 +4370,7 @@ export class AgentInputCoordinator {
         this.restoredOrcaReports.add(replacement);
       }
       replacement.retrySourceClientId = survivor.retrySourceClientId;
+      replacement.localCompanionAttachmentSourceId = survivor.localCompanionAttachmentSourceId;
     }
 
     const removed = presentTargets.slice(1);

@@ -93,6 +93,24 @@ const DRIZZLE_PROXY_SCHEMA = [
 ];
 
 describe('drizzle proxy', () => {
+  // DB tier, #11585: raw SQL fixtures miss the renderer-created draft's compiled
+  // INSERT crossing the worker boundary together with its first partner.
+  it('opens a companion draft from a compiled Drizzle insert in the worker', async () => {
+    const client = await createDbClient({ useInlineWorker: true });
+    try {
+      await applyDrizzleProxySchema(client);
+      await client.exec("CREATE TABLE bot_profiles (id TEXT PRIMARY KEY, status TEXT NOT NULL)");
+      await client.exec("CREATE TABLE project_task_companions (session_id TEXT PRIMARY KEY, bot_id TEXT, revision INTEGER)");
+      await client.exec("INSERT INTO bot_profiles VALUES ('speaker', 'active')");
+      const insert = client.drizzle.insert(sessions).values({ id: 'draft', createdAt: 1, updatedAt: 1 }).toSQL();
+      await client.tx('sessions.openWithCompanion', { sessionId: 'draft', botId: 'speaker', insert });
+      expect(await client.queryOne(
+        'SELECT bot_id FROM project_task_companions JOIN sessions ON sessions.id = session_id WHERE sessions.id = ?',
+        ['draft'],
+      )).toEqual({ bot_id: 'speaker' });
+    } finally { await client.dispose(); }
+  });
+
   // Storage integration: the eval worker must own its codec, including legacy numeric fork inputs.
   // Existing Drizzle round trips do not execute the inline fork transaction.
   it('preserves speed when the inline worker forks a session', async () => {

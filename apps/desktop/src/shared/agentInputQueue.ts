@@ -503,6 +503,8 @@ export interface AgentInputQueuedMessage {
   supersedesUserClientId?: string;
   /** Stable retry provenance; unlike supersedes, never hides a user message. */
   retrySourceClientId?: string;
+  /** Set by main when cloning a confirmed local attachment turn. Only for companion routing. */
+  localCompanionAttachmentSourceId?: string;
 }
 
 export type AgentInputDelivery = 'turn' | 'steer';
