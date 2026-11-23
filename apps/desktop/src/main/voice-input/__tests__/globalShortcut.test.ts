@@ -5,6 +5,9 @@ import type { BrowserWindow } from 'electron';
 import type { VoiceInputShortcut } from '../../../shared/voiceInputData.js';
 import type { GlobalVoiceInputIpcDeps } from '../global.js';
 
+// Shortcut tests switch process.platform independently of the native sharp binary.
+vi.mock('../../app-icon.js', () => ({ restoreDockIconAfterShow: vi.fn() }));
+
 const mocks = vi.hoisted(() => {
   const handlers = new Map<string, (...args: unknown[]) => unknown>();
   const registeredShortcuts = new Map<string, () => void>();

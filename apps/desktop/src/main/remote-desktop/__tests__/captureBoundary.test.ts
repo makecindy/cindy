@@ -10,6 +10,9 @@ vi.hoisted(() => {
   vi.stubGlobal('process', { ...process, platform: 'darwin', getSystemVersion: () => '26.0' });
 });
 
+// The simulated platform is for capture behavior. Dock artwork loads native sharp.
+vi.mock('../../app-icon.js', () => ({ restoreDockIconAfterShow: vi.fn() }));
+
 const h = vi.hoisted(() => ({
   wayland: false,
   hyprland: false,
