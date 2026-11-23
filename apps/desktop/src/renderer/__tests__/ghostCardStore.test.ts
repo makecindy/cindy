@@ -64,6 +64,43 @@ describe('ghostCardStore', () => {
     },
   );
 
+  // Unit: at the first over-budget entry a fork can still reference the source card,
+  // including when its push races the fork's first history lookup.
+  it.each([true, false])('protects a fork reference across a racing push (%s)', async racing => {
+    const saved = { ghostId: 'g1', html: '<p>x</p>', height: 240 };
+    mockApi(async () => ({ card: saved }));
+    const closeSource = retainLocalCardSession('source');
+    const closeFork = retainLocalCardSession('fork');
+    if (racing) ensureCard('shared', 'fork');
+    ingestCardPush(push('shared', { sessionId: racing ? null : 'source' }));
+    if (!racing) ensureCard('shared', 'fork');
+    closeSource();
+    for (let i = 0; i < 512; i++) ingestCardPush(push(String(i), { sessionId: 'fork' }));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(getGhostCardEntry('shared')?.status).toBe('ready');
+    closeFork();
+    await vi.waitFor(() => expect(getGhostCardEntry('shared')).toBeUndefined());
+  });
+
+  // Unit: an idle window must retry an unsaved card after persistence recovers.
+  it('retries the history check without another push or view change', async () => {
+    vi.useFakeTimers();
+    try {
+      let persisted = false;
+      mockApi(async () => ({ card: persisted ? { ghostId: 'g1', html: '<p>x</p>', height: 240 } : null }));
+      retainLocalCardSession('open');
+      ingestCardPush(push('retry', { sessionId: 'closed' }));
+      for (let i = 0; i < 512; i++) ingestCardPush(push(String(i), { sessionId: 'open' }));
+      await vi.advanceTimersByTimeAsync(1);
+      expect(getGhostCardEntry('retry')?.status).toBe('ready');
+      persisted = true;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(getGhostCardEntry('retry')).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // Unit: two consumers can share an active task. Crossing the 512-card limit by
   // one must preserve both their history and a push whose database write failed.
   it('keeps the last visible view and restores evicted history after it closes', async () => {

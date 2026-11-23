@@ -86,6 +86,8 @@ const loadedSessions = new Set<string>();
 // A stream or PR preview can display turn cards and spawned cards without individual
 // lookups. Keep its session together until the last view releases it.
 const localViews = new Map<string, number>();
+const viewedIds = new Map<string, Set<string>>();
+let retryTimer: ReturnType<typeof setTimeout> | undefined;
 const cacheSizes = new Map<string, number>();
 const historyEntries = new WeakSet<GhostCardEntry>();
 const verifyAfter = new WeakMap<GhostCardEntry, number>();
@@ -111,11 +113,14 @@ function overBudget(): boolean {
   return cacheBytes > 16 * 1024 * 1024 || cacheSizes.size > 512;
 }
 
-function protectedCard(entry: Extract<GhostCardEntry, { status: 'ready' }>): boolean {
+function protectedCard(id: string, entry: Extract<GhostCardEntry, { status: 'ready' }>): boolean {
   // Remote HTML has no local history backing; keep the last successful read for offline views.
   if (entry.remote || entry.state === 'working') return true;
   if (entry.animatedHtml && entry.state !== 'done') return true;
-  return !!entry.sessionId && localViews.has(entry.sessionId);
+  if (entry.sessionId && localViews.has(entry.sessionId)) return true;
+  const root = ghostCardRootCallId(id);
+  for (const ids of viewedIds.values()) if (ids.has(id) || ids.has(root)) return true;
+  return false;
 }
 
 function scheduleTrim(): void {
@@ -126,21 +131,29 @@ function scheduleTrim(): void {
 
 async function trimHistory(): Promise<void> {
   let changed = false;
+  let earliestRetry = Infinity;
+  clearTimeout(retryTimer);
   try {
     for (const [id, size] of cacheSizes) {
       if (!overBudget()) break;
       const entry = byCallId.get(id);
-      if (entry?.status !== 'ready' || protectedCard(entry)) continue;
+      if (entry?.status !== 'ready' || protectedCard(id, entry)) continue;
       // Push delivery may precede (or survive failure of) its DB write. Check only
       // under pressure, one local read at a time, and recheck identity after awaiting.
       if (!historyEntries.has(entry)) {
-        if ((verifyAfter.get(entry) ?? 0) > Date.now()) continue;
-        const saved = await window.electronAPI?.ghosts?.getCard?.(id).catch(() => null);
-        if (!saved?.card || saved.card.html !== entry.html || saved.card.ghostId !== entry.ghostId) {
-          verifyAfter.set(entry, Date.now() + 60_000);
+        const retryAt = verifyAfter.get(entry) ?? 0;
+        if (retryAt > Date.now()) {
+          earliestRetry = Math.min(earliestRetry, retryAt);
           continue;
         }
-        if (byCallId.get(id) !== entry || protectedCard(entry)) continue;
+        const saved = await window.electronAPI?.ghosts?.getCard?.(id).catch(() => null);
+        if (!saved?.card || saved.card.html !== entry.html || saved.card.ghostId !== entry.ghostId) {
+          const next = Date.now() + 60_000;
+          verifyAfter.set(entry, next);
+          earliestRetry = Math.min(earliestRetry, next);
+          continue;
+        }
+        if (byCallId.get(id) !== entry || protectedCard(id, entry)) continue;
       }
       if (entry.sessionId) loadedSessions.delete(entry.sessionId);
       cacheSizes.delete(id);
@@ -150,17 +163,23 @@ async function trimHistory(): Promise<void> {
     }
   } finally {
     trimScheduled = false;
+    if (overBudget() && Number.isFinite(earliestRetry))
+      retryTimer = setTimeout(scheduleTrim, Math.max(0, earliestRetry - Date.now()));
     if (changed) bump();
   }
 }
 
 export function retainLocalCardSession(sessionId: string): () => void {
   localViews.set(sessionId, (localViews.get(sessionId) ?? 0) + 1);
+  if (!viewedIds.has(sessionId)) viewedIds.set(sessionId, new Set());
   ensureSessionCards(sessionId);
   return () => {
     const count = (localViews.get(sessionId) ?? 1) - 1;
     if (count) localViews.set(sessionId, count);
-    else localViews.delete(sessionId);
+    else {
+      localViews.delete(sessionId);
+      viewedIds.delete(sessionId);
+    }
     scheduleTrim();
   };
 }
@@ -333,6 +352,7 @@ export function listSpawnCards(
  */
 export function ensureCard(callId: string, sessionId?: string): void {
   if (!callId) return;
+  if (sessionId) viewedIds.get(sessionId)?.add(callId);
   const existing = byCallId.get(callId);
   if (existing) {
     if (existing.status === 'ready' && !existing.sessionId && sessionId)
@@ -552,6 +572,8 @@ export function __resetGhostCardStoreForTest(): void {
   cacheSizes.clear();
   cacheBytes = 0;
   localViews.clear();
+  viewedIds.clear();
+  clearTimeout(retryTimer);
   liveCards = [];
   version = 0;
   snapshot = { version, byCallId, liveCards };
