@@ -1,5 +1,7 @@
 import { throwIpcError } from '../utils/ipcValidate.js';
 import {
+  isAccountProviderIdShape,
+  isPluginEngineProviderIdShape,
   isSubscriptionPoolProviderIdShape,
   isSubscriptionProvider,
   type SubscriptionAccountCommand,
@@ -7,6 +9,48 @@ import {
 } from '../../shared/subscriptionAccounts.js';
 import { PROVIDER_GROUP_STRATEGIES } from '../../shared/providerGroup.js';
 import { accountIdValid } from './store.js';
+import { GHOST_HARNESS_ACCOUNT_SECRET_MAX } from '@cindy/plugin-protocol';
+
+/**
+ * A plugin engine task's account, for its composer and model picker (2026-11-23). Same `session`
+ * action as built-in providers; older hosts reject the plugin provider id.
+ */
+export function parsePluginEngineSessionAccountQuery(
+  raw: unknown,
+): { providerId: string; sessionId?: string; nativeSessionId?: string; model?: string } | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const value = raw as Record<string, unknown>;
+  if (value.action !== 'session' || !isPluginEngineProviderIdShape(value.providerId)) return null;
+  const id = (item: unknown) => {
+    if (item === undefined || item === null) return undefined;
+    if (typeof item !== 'string' || !item || item.length > 256) throwIpcError('INVALID_PARAMS', 'Invalid subscription session');
+    return item;
+  };
+  const sessionId = id(value.sessionId);
+  const nativeSessionId = id(value.nativeSessionId);
+  if (!sessionId && !nativeSessionId) throwIpcError('INVALID_PARAMS', 'Invalid subscription session');
+  const model = value.model;
+  if (model !== undefined && model !== null && (typeof model !== 'string' || !model.trim() || model.length > 512))
+    throwIpcError('INVALID_PARAMS', 'Invalid subscription model');
+  return {
+    providerId: value.providerId,
+    ...(sessionId ? { sessionId } : {}),
+    ...(nativeSessionId ? { nativeSessionId } : {}),
+    ...(typeof model === 'string' ? { model } : {}),
+  };
+}
+
+/** A plugin engine sign-in choice; secrets only for plugin engines (the caller restricts origins). */
+function pluginLoginFields(value: Record<string, unknown>, providerId: string): { methodId?: string; secret?: string } {
+  const { methodId, secret } = value;
+  if (methodId === undefined && secret === undefined) return {};
+  if (!isPluginEngineProviderIdShape(providerId)) throwIpcError('INVALID_PARAMS', 'Invalid account command');
+  if (methodId !== undefined && (typeof methodId !== 'string' || !/^[a-z0-9][a-z0-9-]{0,31}$/.test(methodId)))
+    throwIpcError('INVALID_PARAMS', 'Invalid sign-in method');
+  if (secret !== undefined && (typeof secret !== 'string' || !secret.trim() || secret.length > GHOST_HARNESS_ACCOUNT_SECRET_MAX))
+    throwIpcError('INVALID_PARAMS', 'Invalid secret');
+  return { ...(typeof methodId === 'string' ? { methodId } : {}), ...(typeof secret === 'string' ? { secret } : {}) };
+}
 
 /** null when `raw` is not a session read; it never reaches the management command executor. */
 export function parseSubscriptionSessionAccountQuery(
@@ -59,7 +103,7 @@ export function parseSubscriptionAccountCommand(raw: unknown): SubscriptionAccou
   // Other commands may name any provider that owns accounts (2026-11-13); the executing host
   // resolves it against its own records and rejects unknown ones.
   const builtinOnly = value.action === 'preview' || value.action === 'connect' || value.action === 'create';
-  if (builtinOnly ? !isSubscriptionProvider(value.providerId) : !isSubscriptionPoolProviderIdShape(value.providerId))
+  if (builtinOnly ? !isSubscriptionProvider(value.providerId) : !isAccountProviderIdShape(value.providerId))
     throwIpcError('INVALID_PARAMS', 'Invalid subscription provider');
   const providerId = value.providerId as string;
   const loginKey = value.loginKey;
@@ -81,17 +125,21 @@ export function parseSubscriptionAccountCommand(raw: unknown): SubscriptionAccou
     return { action: 'connect', providerId, loginKey, target: value.target };
   if (value.action === 'create' && isSubscriptionProvider(providerId) && validLoginKey)
     return { action: 'create', providerId, loginKey };
-  if (value.action === 'place' && accountIdValid(accountId) && accountId !== 'default'
-    && (value.target === null || isSubscriptionPoolProviderIdShape(value.target)))
+  // Plugin engines may move their original login too: it is an ordinary account there.
+  if (value.action === 'place' && accountIdValid(accountId)
+    && (accountId !== 'default' || isPluginEngineProviderIdShape(providerId))
+    && (value.target === null || isAccountProviderIdShape(value.target)))
     return { action: 'place', providerId, accountId, target: value.target };
-  if (value.action === 'merge' && isSubscriptionPoolProviderIdShape(value.target) && value.target !== providerId)
+  if (value.action === 'merge' && isAccountProviderIdShape(value.target) && value.target !== providerId)
     return { action: 'merge', providerId, target: value.target };
   if (value.action === 'remove-provider' && !isSubscriptionProvider(providerId))
     return { action: 'remove-provider', providerId };
-  if ((value.action === 'add' || value.action === 'cancel') && validLoginKey)
-    return { action: value.action, providerId, loginKey };
+  if (value.action === 'add' && validLoginKey)
+    return { action: 'add', providerId, loginKey, ...pluginLoginFields(value, providerId) };
+  if (value.action === 'cancel' && validLoginKey)
+    return { action: 'cancel', providerId, loginKey };
   if (value.action === 'login' && accountIdValid(accountId) && validLoginKey)
-    return { action: 'login', providerId, accountId, loginKey };
+    return { action: 'login', providerId, accountId, loginKey, ...pluginLoginFields(value, providerId) };
   if (value.action === 'remove' && accountIdValid(accountId))
     return { action: 'remove', providerId, accountId };
   if (value.action === 'configure') {

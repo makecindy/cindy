@@ -306,3 +306,51 @@ describe('plugin engines with the settings from Settings → Model providers', (
     expect(ipc.list()[0]).not.toHaveProperty('declaredName');
   });
 });
+
+/*
+ * 插件引擎的账号(subscription-account-pools.md 插件引擎的账号，2026-11-23)。生产入口同上。可观察结果：拿出来的单独供应商
+ * 作为一项列出(沿用引擎的模型，不对其他电脑开放，显示名按自己的键保存)；任务输入框的用量按任务所在账号读，
+ * 另一台电脑问起这台不认识的任务时保留引擎原有的读法。最小失败输入：引擎有一个拿出来的供应商；带 sessionId 的用量读取。
+ */
+describe('plugin engines with accounts', () => {
+  it('lists a provider taken out of an engine on its own, closed to other computers, and reads a task account usage', async () => {
+    host.owner = `account-${caseIndex += 1}`;
+    host.harnesses = [dsh({ accounts: { methods: [{ id: 'api-key', label: 'API Key', kind: 'secret' }] } })];
+    const handlers = new Map<string, (event: unknown, ...input: unknown[]) => unknown>();
+    const readTaskUsage = vi.fn(async () => ({ updatedAt: 1, balances: [{ currency: 'CNY', amount: '1.00' }] }));
+    let deviceLink = false;
+    disposers.push(registerPluginEnginesIpc({
+      handle: (channel, listener) => { handlers.set(channel, listener as (event: unknown, ...input: unknown[]) => unknown); },
+      assertTrusted: () => {},
+      broadcast: () => {},
+      isDeviceLinkInvoke: () => deviceLink,
+      remoteUse: { read: pluginEngineRemoteUse, set: setPluginEngineRemoteUse, onChange: () => () => {} },
+      settings: { read: readPluginEnginePrefs, update: updatePluginEnginePrefs, onChange: onPluginEnginePrefsChanged },
+      accountProviders: { list: () => [{ suffix: 'ab12cd34', identity: 'b@example.com' }], onChange: () => () => {} },
+      readTaskUsage,
+    }));
+    await setPluginEngineRemoteUse(KEY, true);
+    const list = () => handlers.get(PLUGIN_ENGINES_INVOKE.LIST)!({}) as PluginEngineView[];
+    const [engine, separate] = list();
+    expect(engine).toMatchObject({ key: KEY, remoteUse: { enabled: true } });
+    expect(engine).not.toHaveProperty('accountProviderOf');
+    expect(separate).toMatchObject({
+      key: `${KEY}~ab12cd34`, providerId: `acp-plugin:${KEY}~ab12cd34`, name: 'DeepSeek Harness · b@example.com',
+      accountProviderOf: KEY, remoteUse: { supported: false, enabled: false }, models: engine!.models,
+    });
+    expect(isPluginEngineOfferedRemotely(separate!.providerId)).toBe(false);
+
+    await handlers.get(PLUGIN_ENGINES_INVOKE.SET_PREFS)!({}, { key: `${KEY}~ab12cd34`, name: 'Work key' });
+    expect(list().map(view => view.name)).toEqual(['DeepSeek Harness', 'Work key']);
+
+    const usage = handlers.get(PLUGIN_ENGINES_INVOKE.USAGE)!;
+    await usage({}, KEY, { sessionId: 's1' });
+    expect(readTaskUsage).toHaveBeenLastCalledWith(KEY, 's1', { fallbackToOriginal: false });
+    deviceLink = true;
+    await usage({}, KEY, { sessionId: 's1' });
+    expect(readTaskUsage).toHaveBeenLastCalledWith(KEY, 's1', { fallbackToOriginal: true });
+    deviceLink = false;
+    expect(await usage({}, KEY)).toBeNull();
+    expect(readTaskUsage).toHaveBeenCalledTimes(2);
+  });
+});

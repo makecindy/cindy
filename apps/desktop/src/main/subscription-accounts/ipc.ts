@@ -8,9 +8,14 @@ import {
   isSubscriptionPoolProviderIdShape,
 } from '../../shared/subscriptionAccounts.js';
 import {
+  parsePluginEngineSessionAccountQuery,
   parseSubscriptionAccountCommand,
   parseSubscriptionSessionAccountQuery,
 } from './commands.js';
+import {
+  onPluginEngineAccountsChanged,
+  readPluginEngineSessionAccount,
+} from '../plugin-engine-accounts/runtime.js';
 export { parseSubscriptionAccountCommand } from './commands.js';
 import { executeSubscriptionAccountCommand } from './service.js';
 import {
@@ -52,6 +57,10 @@ export function registerSubscriptionAccountsIpc(): void {
     broadcast('subscription-accounts:changed', { providerId, ...(resetAccountId ? { resetAccountId } : {}),
       ...(change ? { change } : {}) }),
   );
+  // Plugin engine accounts use the same push (older views ignore provider ids they do not show).
+  onPluginEngineAccountsChanged((providerId, change) =>
+    broadcast('subscription-accounts:changed', { providerId, ...(change ? { change } : {}) }),
+  );
   ipcMain.handle('maker:subscription-pool:quota', async (event, providerId: unknown, model?: unknown, scope?: unknown) => {
     const context = getDeviceLinkInvokeContext();
     if (context?.sharedTask) throwIpcError('PERMISSION_DENIED', 'Account quota requires the owner');
@@ -90,6 +99,15 @@ export function registerSubscriptionAccountsIpc(): void {
       throwIpcError('PERMISSION_DENIED', 'Account management requires the owner');
     if (!context) assertTrustedAppRendererEvent(event);
     // Read-only task account for its usage display; same owner gate as `read`.
+    const pluginSession = parsePluginEngineSessionAccountQuery(raw);
+    if (pluginSession) {
+      try {
+        return await readPluginEngineSessionAccount(
+          pluginSession.providerId, pluginSession.sessionId, pluginSession.nativeSessionId, pluginSession.model);
+      } catch {
+        throwIpcError('SUBSCRIPTION_ACCOUNT_FAILED', 'Could not read the task account');
+      }
+    }
     const session = parseSubscriptionSessionAccountQuery(raw);
     if (session) {
       try {
@@ -101,6 +119,10 @@ export function registerSubscriptionAccountsIpc(): void {
       }
     }
     const command = parseSubscriptionAccountCommand(raw);
+    // A secret (a plugin engine's API key) is typed into this computer's own window only: it never
+    // travels between computers (plugin-security-and-authoring.md 内联凭证只走本机).
+    if (context && 'secret' in command && command.secret !== undefined)
+      throwIpcError('PERMISSION_DENIED', 'Enter the key on the computer that has the plugin');
     try {
       return await executeSubscriptionAccountCommand(command);
     } catch (error) {

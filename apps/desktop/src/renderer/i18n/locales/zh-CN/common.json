@@ -22114,6 +22114,11 @@
     "lineNumbers": "行号"
   },
   "subscriptionAccounts": {
+    "pluginSignIn": {
+      "method": "登录方式",
+      "secretHint": "Key 只交给插件，保存在这个账号自己的文件夹里；Cindy 不保存，也不会发到其他电脑。",
+      "browserHint": "插件会打开浏览器，在那里完成登录后回到这里。"
+    },
     "placement": {
       "needsUpdate": "执行这项操作的电脑需要先更新 Cindy，才能这样调整账号。",
       "moveTo": "移到…",

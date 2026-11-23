@@ -56,7 +56,9 @@ export function admitPluginEngineSession(
     throw new Error('插件引擎不能在 SSH 工作区里运行。请在新建任务时选择本机或你的另一台电脑。');
   }
   if (typeof body.agentDeviceId === 'string' && body.agentDeviceId.trim()) return admitPluginEngineSessionElsewhere(body);
-  const harness = harnesses.find((item) => item.key === key);
+  // A provider taken out of an engine (`<engine>~<suffix>`) runs that engine; its own accounts are
+  // checked when the runtime starts (plugin-engine-accounts).
+  const harness = harnesses.find((item) => item.key === key.replace(/~[a-z0-9]{8}$/, ''));
   if (!harness) {
     throw new Error('提供这个引擎的插件已停用或卸载。请在新建任务时重新选择模型。');
   }

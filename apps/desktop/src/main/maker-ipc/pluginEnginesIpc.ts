@@ -131,6 +131,17 @@ export interface PluginEngineSettingsAccess {
 }
 let settingsAccess: PluginEngineSettingsAccess | null = null;
 
+/**
+ * Providers the user took accounts of an engine out into (subscription-account-pools.md
+ * 插件引擎的账号), supplied by the desktop wiring for the same reason as the stores above.
+ */
+export interface PluginEngineAccountProvidersAccess {
+  /** The engine's taken-out providers that still hold accounts, with the account they show. */
+  list(engineKey: string): Array<{ suffix: string; identity?: string }>;
+  onChange(listener: () => void): () => void;
+}
+let accountProvidersAccess: PluginEngineAccountProvidersAccess | null = null;
+
 /** The user's settings for an engine, for admission (pluginEngineSessionAdmission.ts). */
 export function pluginEngineSettingsOf(harness: Pick<PluginHarness, 'key'>): PluginEngineSettings {
   return settingsAccess?.read(harness.key) ?? {};
@@ -165,11 +176,47 @@ function toView(harness: PluginHarness): PluginEngineView {
     ...(settings.suspended ? { suspended: true as const } : {}),
     ...(settings.name ? { declaredName: harness.name } : {}),
     ...(disabledModels.length > 0 ? { disabledModels } : {}),
+    ...(harness.accounts ? { accounts: { methods: harness.accounts.methods.map((method) => ({ ...method })) } } : {}),
   };
 }
 
+/**
+ * A provider taken out of an engine runs that engine on its own accounts. It keeps the engine's
+ * models and modes; its own display name, hiding and turning off live under its own key; it is
+ * not offered to other computers or shared (taking out never widens access).
+ */
+function separateProviderViews(harness: PluginHarness, base: PluginEngineView): PluginEngineView[] {
+  if (!harness.accounts?.methods.length || !accountProvidersAccess) return [];
+  return accountProvidersAccess.list(harness.key).map(({ suffix, identity }, index) => {
+    const key = `${harness.key}~${suffix}`;
+    const settings = settingsAccess?.read(key) ?? {};
+    const declared = identity ? `${harness.name} · ${identity}` : `${harness.name} ${index + 2}`;
+    const view: PluginEngineView = {
+      ...base,
+      key,
+      providerId: pluginEngineProviderId(key),
+      name: settings.name ?? declared,
+      accountProviderOf: harness.key,
+      remoteUse: { supported: false, enabled: false, shareSupported: false },
+      ...(base.suspended || settings.suspended ? { availability: { state: 'unavailable', reason: 'suspended' } } : {}),
+    };
+    delete view.hidden;
+    delete view.suspended;
+    delete view.declaredName;
+    return {
+      ...view,
+      ...(settings.hidden ? { hidden: true as const } : {}),
+      ...(settings.suspended ? { suspended: true as const } : {}),
+      ...(settings.name ? { declaredName: declared } : {}),
+    };
+  });
+}
+
 export function listPluginEngineViews(): PluginEngineView[] {
-  return getPluginHarnessRegistry().list().map(toView);
+  return getPluginHarnessRegistry().list().flatMap((harness) => {
+    const base = toView(harness);
+    return [base, ...separateProviderViews(harness, base)];
+  });
 }
 
 const PREFS_FIELDS = new Set(['key', 'name', 'hidden', 'suspended', 'models', 'ownerStamp']);
@@ -268,7 +315,7 @@ export function pluginEngineDescriptors(views: readonly PluginEngineView[] = lis
 }
 
 export interface RegisterPluginEnginesIpcOpts {
-  handle(channel: string, listener: (event: IpcMainInvokeEvent, key?: unknown) => unknown): void;
+  handle(channel: string, listener: (event: IpcMainInvokeEvent, key?: unknown, extra?: unknown) => unknown): void;
   assertTrusted(event: IpcMainInvokeEvent): void;
   broadcast(channel: string, payload: unknown): void;
   /**
@@ -281,6 +328,13 @@ export interface RegisterPluginEnginesIpcOpts {
   remoteUse?: PluginEngineRemoteUseAccess;
   /** The user's per-engine settings; absent = engines are listed as declared and cannot be changed here. */
   settings?: PluginEngineSettingsAccess;
+  /** Providers taken out of engines; absent = only the engines themselves are listed. */
+  accountProviders?: PluginEngineAccountProvidersAccess;
+  /**
+   * The usage of the account a local task of an engine with accounts runs on; null = the task has
+   * no account yet (or the engine keeps none). Absent = every read is the engine's original login.
+   */
+  readTaskUsage?(key: string, sessionId: string, options: { fallbackToOriginal: boolean }): Promise<unknown>;
   isCurrentOwner?(stamp: DataOwnerPushStamp): boolean;
 }
 
@@ -289,6 +343,7 @@ export function registerPluginEnginesIpc(opts: RegisterPluginEnginesIpcOpts): ()
   const remote = () => opts.isDeviceLinkInvoke?.() === true;
   remoteUseAccess = opts.remoteUse ?? null;
   settingsAccess = opts.settings ?? null;
+  accountProvidersAccess = opts.accountProviders ?? null;
   opts.handle(PLUGIN_ENGINES_INVOKE.LIST, (event) => {
     if (remote()) return remotePluginEngineViews(listPluginEngineViews());
     opts.assertTrusted(event);
@@ -306,9 +361,18 @@ export function registerPluginEnginesIpc(opts: RegisterPluginEnginesIpcOpts): ()
     }
     requestPluginHarnessRefresh(Date.now(), targetGhostId);
   });
-  opts.handle(PLUGIN_ENGINES_INVOKE.USAGE, (event, key) => {
+  opts.handle(PLUGIN_ENGINES_INVOKE.USAGE, (event, key, task) => {
     if (!remote()) opts.assertTrusted(event);
-    return typeof key === 'string' ? readPluginHarnessUsage(key) : null;
+    if (typeof key !== 'string') return null;
+    // A task of this computer names itself (2026-11-23): its account's usage, not the original
+    // login's. A phone or another computer may name a task this computer does not know (its Agent
+    // runs elsewhere); that keeps the engine-level read. Older hosts ignore the argument.
+    const sessionId = task && typeof task === 'object' ? (task as { sessionId?: unknown }).sessionId : undefined;
+    if (typeof sessionId === 'string' && sessionId && sessionId.length <= 256 && opts.readTaskUsage) {
+      const engine = getPluginHarnessRegistry().list().find((item) => item.key === key.replace(/~[a-z0-9]{8}$/, ''));
+      if (engine?.accounts?.methods.length) return opts.readTaskUsage(key, sessionId, { fallbackToOriginal: remote() });
+    }
+    return readPluginHarnessUsage(key);
   });
   // Opening this computer to the owner's other computers is decided at this computer only.
   opts.handle(PLUGIN_ENGINES_INVOKE.SET_REMOTE_USE, async (event, input) => {
@@ -337,7 +401,9 @@ export function registerPluginEnginesIpc(opts: RegisterPluginEnginesIpcOpts): ()
     if (ownerStamp && !opts.isCurrentOwner?.(ownerStamp)) {
       throwIpcError('PERMISSION_DENIED', 'The account changed while editing the plugin engine');
     }
-    const harness = getPluginHarnessRegistry().list().find((item) => item.key === key);
+    // A taken-out provider's settings live under its own key; it lists its engine's models.
+    const engineKey = key.replace(/~[a-z0-9]{8}$/, '');
+    const harness = getPluginHarnessRegistry().list().find((item) => item.key === engineKey);
     // Setting something needs an engine this computer lists (and models it lists); undoing always
     // works, also for an engine whose plugin was turned off meanwhile.
     const sets = typeof patch.name === 'string' || patch.hidden === true || patch.suspended === true
@@ -348,7 +414,7 @@ export function registerPluginEnginesIpc(opts: RegisterPluginEnginesIpcOpts): ()
       if (patch.models.ids.some((id) => !listed.has(id))) throwIpcError('INVALID_PARAMS', 'Unknown plugin engine model');
     }
     // The plugin's own name is the default, not a display name to remember.
-    if (harness && patch.name === harness.name) patch.name = null;
+    if (harness && engineKey === key && patch.name === harness.name) patch.name = null;
     try {
       await access.update(key, patch);
     } catch {
@@ -356,7 +422,7 @@ export function registerPluginEnginesIpc(opts: RegisterPluginEnginesIpcOpts): ()
       throwIpcError('INTERNAL', 'Plugin engine settings could not be saved');
     }
     publish();
-    return harness ? toView(harness) : null;
+    return harness ? listPluginEngineViews().find((view) => view.key === key) ?? null : null;
   });
   let lastPayload = '';
   const publish = (): void => {
@@ -370,12 +436,15 @@ export function registerPluginEnginesIpc(opts: RegisterPluginEnginesIpcOpts): ()
   const offModels = onPluginHarnessModelsChanged(publish);
   const offRemoteUse = remoteUseAccess?.onChange(publish);
   const offSettings = settingsAccess?.onChange(publish);
+  const offAccountProviders = accountProvidersAccess?.onChange(publish);
   return () => {
     offRegistry();
     offModels();
     offRemoteUse?.();
     offSettings?.();
+    offAccountProviders?.();
     remoteUseAccess = null;
     settingsAccess = null;
+    accountProvidersAccess = null;
   };
 }

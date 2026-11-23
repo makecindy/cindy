@@ -3,6 +3,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, it, vi } from "vitest";
 
 import { createXdtHelperMcpServer } from "../lizi_xdtHelperMcpServer.js";
+import { appProviderChange } from "../xdt-helper/app_models.js";
 import type { LiziMcpSessionContext } from '../types.js';
 
 const TARGET_SESSION_ID = "11111111-1111-4111-8111-111111111111";
@@ -2101,4 +2102,18 @@ it('names snooze_sessions and its cross-computer scope in the control overview',
     expect(control?.description).toMatch(/snooze_sessions[^；]*支持本机与跨电脑（deviceId::sessionId）/);
     expect(server.hostTools.describe('snooze_sessions')).toMatchObject({ category: 'control' });
   } finally { await client.close(); await server.close(); }
+});
+
+// Unit / plugin engine accounts (subscription-account-pools.md 插件引擎的账号, 2026-11-23): the
+// configure_model_provider input contract the model sees. Plugin engine providers (and providers
+// taken out of them) are accepted with a sign-in methodId; a key can never be passed by an Agent.
+// Minimal inputs: a plugin engine add with methodId; the same with a secret; a malformed plugin id.
+it('accepts plugin engine providers for account management but never a secret', () => {
+  const change = (command: Record<string, unknown>, providerId = 'acp-plugin:zcode-plugin:zcode') =>
+    appProviderChange.safeParse({ action: 'subscriptionAccounts', providerId, command });
+  expect(change({ action: 'add', loginKey: 'k1', methodId: 'zai' }).success).toBe(true);
+  expect(change({ action: 'place', accountId: 'a', target: 'acp-plugin:zcode-plugin:zcode~ab12cd34' }).success).toBe(true);
+  expect(change({ action: 'read' }, 'acp-plugin:zcode-plugin:zcode~ab12cd34').success).toBe(true);
+  expect(change({ action: 'add', loginKey: 'k1', methodId: 'api-key', secret: 'sk-1' }).success).toBe(false);
+  expect(change({ action: 'read' }, 'acp-plugin:zcode-plugin:ZCode').success).toBe(false);
 });

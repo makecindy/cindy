@@ -407,6 +407,8 @@ function normalizeOverflowDbAgentKind(value: string): 'cc' | 'codex' | 'pi' {
 export function engineLabelForOverflow(agentKind: string): string {
   if (agentKind === 'codex') return 'Codex';
   if (agentKind === 'pi') return 'Pi';
+  // A plugin engine task handed to another account of its engine (plugin engine accounts, 2026-11-23).
+  if (agentKind === 'acp') return 'the plugin engine';
   return 'Claude Code';
 }
 
