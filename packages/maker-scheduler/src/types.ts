@@ -316,8 +316,8 @@ export interface Schedule {
   agentDeviceId?: string;
   effort?: string;
   /**
-   * 模型组(模式)id，model-groups.json 里的路线。设了时每次运行按模式的规则重新选一个来源
-   * (额度与时段按运行那一刻算，model-groups.md §6.3)，本次运行用选出的来源；上面的具体模型字段是
+   * 模型组(模式)id，model-groups.json 里的路线。设了时每次新建任务按模式的规则选一个来源(发到已有任务时按那个任务自己的模式)
+   * (额度与时段按新建那一刻算，model-groups.md §6.3)，这次新建的任务用选出的来源；上面的具体模型字段是
    * 选不出来时沿用的模型(模式已删除、里面都用不了)。没设时与原来一致。
    */
   modelGroup?: string;

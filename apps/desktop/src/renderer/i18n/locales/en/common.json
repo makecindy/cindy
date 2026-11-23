@@ -18068,7 +18068,7 @@
         "categoryListAria": "{{category}} models",
         "effortListAria": "Reasoning effort",
         "boundLocationLocked": "Bound tasks keep running where they are. Choose a model from that computer.",
-        "modelGroupTitle": "Model group “{{name}}”: picks a source on every run"
+        "modelGroupTitle": "Model group “{{name}}”: picks a source when a run starts a new task"
       }
     },
     "toast": {

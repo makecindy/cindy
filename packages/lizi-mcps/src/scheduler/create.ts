@@ -136,7 +136,7 @@ export function registerScheduleCreateTool(
         .min(1)
         .max(64)
         .optional()
-        .describe('可选：用户的模型组(模式) id，取 schedule_list_models 返回的 modelGroups[].id。设了时每次运行按模式的规则重新选一个来源；同时传的 model / providerId 是模式里都用不了时沿用的模型。用户要求「用某个模式」时才设，脚本任务不用'),
+        .describe('可选：用户的模型组(模式) id，取 schedule_list_models 返回的 modelGroups[].id。设了时每次新建任务按模式的规则选一个来源(发到已有任务时按那个任务自己的模式)；同时传的 model / providerId 是模式里都用不了时沿用的模型。用户要求「用某个模式」时才设，脚本任务不用'),
       workingDir: z
         .string()
         .optional()

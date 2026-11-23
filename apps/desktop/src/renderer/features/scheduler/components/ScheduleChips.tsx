@@ -1076,7 +1076,7 @@ export function ModelEffortChip({
    * active 有值时触发器显示「引擎 · 模型 · 思考深度」。
    */
   pluginEngines?: PluginEnginesPickerProps;
-  /** 模型组(model-groups.md §6.3)：选着模式时触发器写模式名，来源在每次运行时按模式选。 */
+  /** 模型组(model-groups.md §6.3)：选着模式时触发器写模式名，来源在新建任务时按模式选。 */
   modelGroups?: ModelGroupsPickerProps;
 }) {
   const { t } = useTranslation();

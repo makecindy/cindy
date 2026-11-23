@@ -173,7 +173,7 @@ export interface ScheduleFormState {
   pluginEngine?: PluginEngineSelection | null;
   modelAgentDeviceId?: string;
   /**
-   * 模型组(模式)id：设了时每次运行按模式重新选来源(model-groups.md §6.3)，下面的具体模型是选不出来时沿用的。
+   * 模型组(模式)id：设了时新建任务按模式选来源(model-groups.md §6.3)，下面的具体模型是选不出来时沿用的。
    * 选任何一个具体模型或插件引擎都会清掉它。
    */
   modelGroup?: string;

@@ -17994,7 +17994,7 @@
         "categoryListAria": "{{category}} 模型",
         "effortListAria": "推理强度",
         "boundLocationLocked": "绑定的任务在原来的电脑上运行，请选择那台电脑上的模型。",
-        "modelGroupTitle": "模型组「{{name}}」：每次运行时按模式选来源"
+        "modelGroupTitle": "模型组「{{name}}」：新建任务时按模式选来源"
       }
     },
     "toast": {

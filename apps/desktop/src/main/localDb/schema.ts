@@ -1544,7 +1544,7 @@ export const schedules = sqliteTable(
       enum: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
     }),
     /**
-     * 模型组(模式)id：设了时每次运行按模式重新选来源，上面的具体模型是选不出来时沿用的
+     * 模型组(模式)id：设了时新建任务按模式选来源(发到已有任务按那个任务自己的模式)，上面的具体模型是选不出来时沿用的
      * (model-groups.md §6.3)。NULL = 没选模式，与原来一致。
      */
     modelGroup: text('model_group'),

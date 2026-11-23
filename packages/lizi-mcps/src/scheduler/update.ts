@@ -77,7 +77,7 @@ export function registerScheduleUpdateTool(
         .max(64)
         .nullable()
         .optional()
-        .describe('模型组(模式) id，取 schedule_list_models 的 modelGroups[].id；每次运行按模式重新选来源。传 null = 去掉模式、按 model 运行；省略 = 不修改，但本次改了 agentKind / modelAgentKind / model / providerId 时会一并去掉模式(选了具体模型)，要保留须一并重传。'),
+        .describe('模型组(模式) id，取 schedule_list_models 的 modelGroups[].id；新建任务时按模式选来源，发到已有任务时按那个任务自己的模式。传 null = 去掉模式、按 model 运行；省略 = 不修改，但本次改了 agentKind / modelAgentKind / model / providerId 时会一并去掉模式(选了具体模型)，要保留须一并重传。'),
       workingDir: z
         .string()
         .nullable()

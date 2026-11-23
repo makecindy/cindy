@@ -329,7 +329,7 @@ export function ScheduleFormDialog({
       : undefined,
     [pluginEnginesAllowed, pluginEngineList, pluginEngineChoice, selectPluginEngine],
   );
-  // 模型组(model-groups.md §6.3)：每次运行按模式重新选来源。脚本不跑 Agent，不提供；记住的模式后来被删掉时按没选处理。
+  // 模型组(model-groups.md §6.3)：新建任务时按模式选来源。脚本不跑 Agent，不提供；记住的模式后来被删掉时按没选处理。
   const modelGroupsAllowed = !isScriptMode;
   const navigateToModelGroups = useNavigate();
   const { config: modelGroupsConfig } = useModelGroups(modelGroupsAllowed);
@@ -666,7 +666,7 @@ export function ScheduleFormDialog({
     form.agentKind, form.model, form.providerId, form.effort, setField]);
 
   // 选着插件引擎时内置模型字段只是切回内置时的初值，不参与可用性判断(插件引擎另判，见下)。
-  // 选着还在的模式时同理：每次运行由模式选来源，存下的具体模型只在模式被删后才用。
+  // 选着还在的模式时同理：新建任务由模式选来源，存下的具体模型只在模式被删后才用。
   const modelUnavailable = !isScriptMode && !pluginEngineChoice && !scheduleModelGroups?.active && modelCatalogReady && (
     (!!form.model.trim() && (
       (agentsLoaded && !availableVendors.has(form.agentKind === 'claude-code' ? 'cc' : form.agentKind))

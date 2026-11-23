@@ -18068,7 +18068,7 @@
         "categoryListAria": "{{category}}-Modelle",
         "effortListAria": "Denkintensität",
         "boundLocationLocked": "Gebundene Aufgaben laufen weiterhin auf ihrem bisherigen Computer. Wähle ein Modell von diesem Computer.",
-        "modelGroupTitle": "Modellgruppe „{{name}}“: wählt bei jedem Lauf eine Quelle"
+        "modelGroupTitle": "Modellgruppe „{{name}}“: wählt eine Quelle, wenn eine neue Aufgabe erstellt wird"
       }
     },
     "toast": {

@@ -91,7 +91,7 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
     });
     const promptRunner = new MakerScheduleRunner({
       projectForNewTask,
-      // 设了模式的定时任务每次运行前按模式重新选来源(model-groups.md §6.3)。
+      // 设了模式的定时任务新建任务时按模式选来源(model-groups.md §6.3)，选路记账由任务层做。
       modelGroupStart: modelGroupSessionStart,
       maker: deps.maker,
       bootstrapSession: bootstrapScheduledSession,

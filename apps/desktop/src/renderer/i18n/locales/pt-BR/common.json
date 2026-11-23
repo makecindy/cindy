@@ -18234,7 +18234,7 @@
         "categoryListAria": "Modelos de {{category}}",
         "effortListAria": "Esforço de raciocínio",
         "boundLocationLocked": "As tarefas vinculadas continuam sendo executadas onde estão. Escolha um modelo desse computador.",
-        "modelGroupTitle": "Grupo de modelos “{{name}}”: escolhe uma fonte a cada execução"
+        "modelGroupTitle": "Grupo de modelos “{{name}}”: escolhe uma fonte ao criar uma nova tarefa"
       }
     },
     "toast": {
