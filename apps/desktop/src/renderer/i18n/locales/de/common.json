@@ -4138,6 +4138,7 @@
         "refreshReconnect": "Die Modellliste konnte nicht aktualisiert werden. Verbinde diesen Anbieter erneut und versuche es noch einmal.",
         "refreshFetchDisabled": "Abruf des Remote-Modellkatalogs ist deaktiviert – Aktualisierung übersprungen",
         "withdrawn": {
+          "rowStatus": "Beim letzten Abruf nicht gelistet",
           "refreshFound": "Nicht mehr angebotene Modelle: {{count}}",
           "refreshAdded": "Neue Modelle: {{added}}. Nicht mehr angeboten: {{count}}",
           "refreshSuspicious": "Diesmal nicht zurückgegebene Modelle: {{count}}. Die Liste ist möglicherweise unvollständig",

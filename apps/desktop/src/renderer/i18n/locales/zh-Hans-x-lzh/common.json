@@ -4096,6 +4096,7 @@
         "refreshReconnect": "模型清单重整未成。请重连此供方，再试。",
         "refreshFetchDisabled": "模型目录远程获取未启，已略重整",
         "withdrawn": {
+          "rowStatus": "上次刷新未列",
           "refreshFound": "上游已不复供 {{count}} 个模型",
           "refreshAdded": "新得 {{added}} 个模型，另有 {{count}} 个上游已不复供",
           "refreshSuspicious": "此番 {{count}} 个模型未见回传，或上游一时未全",

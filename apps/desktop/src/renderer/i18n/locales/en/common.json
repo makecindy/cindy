@@ -4138,6 +4138,7 @@
         "refreshReconnect": "Model list couldn’t be refreshed. Reconnect this provider, then try again.",
         "refreshFetchDisabled": "Remote model catalog fetching is disabled — refresh skipped",
         "withdrawn": {
+          "rowStatus": "Not listed at last refresh",
           "refreshFound": "No longer offered upstream: {{count}}",
           "refreshAdded": "New models: {{added}}. No longer offered upstream: {{count}}",
           "refreshSuspicious": "Not returned this time: {{count}}. The upstream list may be incomplete",
