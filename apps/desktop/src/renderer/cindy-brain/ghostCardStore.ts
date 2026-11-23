@@ -116,7 +116,6 @@ function overBudget(): boolean {
 function protectedCard(id: string, entry: Extract<GhostCardEntry, { status: 'ready' }>): boolean {
   // Remote HTML has no local history backing; keep the last successful read for offline views.
   if (entry.remote || entry.state === 'working') return true;
-  if (entry.animatedHtml && entry.state !== 'done') return true;
   if (entry.sessionId && localViews.has(entry.sessionId)) return true;
   const root = ghostCardRootCallId(id);
   for (const ids of viewedIds.values()) if (ids.has(id) || ids.has(root)) return true;

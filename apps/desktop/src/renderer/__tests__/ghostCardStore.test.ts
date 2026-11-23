@@ -54,10 +54,14 @@ const push = (callId: string, over: Partial<Parameters<typeof ingestCardPush>[0]
 describe('ghostCardStore', () => {
   // Unit: the 513th saved card crosses the budget. Finished animations and cards
   // from callers without a session ID must be recoverable by call ID alone.
-  it.each([{ sessionId: 'old', animatedHtml: '<b>live</b>' }, { sessionId: null }])(
+  it.each([
+    { sessionId: 'old', animatedHtml: '<b>live</b>', state: 'done' as const },
+    { sessionId: 'old', animatedHtml: '<b>live</b>', state: null },
+    { sessionId: null },
+  ])(
     'reclaims finished historical pushes %o', async (extra) => {
       mockApi(async () => ({ card: { ghostId: 'g1', html: '<p>x</p>', height: 240 } }));
-      for (let i = 0; i <= 512; i++) ingestCardPush(push(String(i), { ...extra, state: 'done' }));
+      for (let i = 0; i <= 512; i++) ingestCardPush(push(String(i), extra));
       await vi.waitFor(() => expect(getGhostCardEntry('0')).toBeUndefined());
       ensureCard('0', 'reopened');
       await vi.waitFor(() => expect(getGhostCardEntry('0')).toMatchObject({ status: 'ready', html: '<p>x</p>' }));
