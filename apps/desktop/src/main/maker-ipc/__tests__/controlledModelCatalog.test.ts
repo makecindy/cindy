@@ -129,6 +129,37 @@ describe('controlled model catalogs', () => {
     }] });
     expect(f.invoke).toHaveBeenCalledWith('share:b-only', 'maker:provider:list', args, f.assertOwner);
   });
+  // 2026-11-23 用户反馈：A 远控 B 新建任务时看不到 B 收到的插件供应商分享（内置供应商分享可以）。
+  // 生产入口与可观察结果：renderer invokeModelCatalog → B 的 maker:model-catalog:read 代读 maker:list-plugin-engines，
+  // 控制端拿到的是该来源开放的引擎；用量标记不经 B 转出，分享只保留授予的那一个引擎，内置供应商分享不发请求。
+  // 覆盖缺口：此前这个通道只代读四个内置目录 channel，插件引擎列表一律 INVALID_PARAMS。
+  // 最小失败输入与 tier：unit；agentDeviceId='share:plugin'、channel='maker:list-plugin-engines'、args=[]。
+  it.each([
+    { source: 'device-a', providers: ['acp-plugin:dsh:dsh', 'acp-plugin:agy:agy'] },
+    { source: 'share:plugin', providers: ['acp-plugin:dsh:dsh'] },
+    { source: 'share:builtin', providers: [], forwarded: false },
+  ])('reads the plugin engines $source offers through B', async ({ source, providers, forwarded = true }) => {
+    const f = fixture();
+    f.locations.mockResolvedValue({ status: 'complete', locations: [
+      { agentDeviceId: 'device-a', name: 'A' },
+      { agentDeviceId: 'share:plugin', name: 'DSH · Owner', favoriteSource: {
+        shareId: 'plugin', memberId: 'm1', providerId: 'acp-plugin:dsh:dsh', owner: { region: 'cn' } } },
+      { agentDeviceId: 'share:builtin', name: 'Anthropic · Owner', favoriteSource: {
+        shareId: 'builtin', memberId: 'm2', providerId: 'anthropic', owner: { region: 'cn' } } },
+    ] });
+    const engineView = (key: string) => ({
+      key, providerId: `acp-plugin:${key}`, name: key, models: [{ id: 'm', displayName: 'M' }],
+      availability: { state: 'available' }, remoteUse: { supported: true, shareSupported: true, enabled: true },
+      permissionModes: [], defaultPermissionMode: 'ask', reportsUsage: true,
+    });
+    f.invoke.mockResolvedValue({ ok: true, result: [engineView('dsh:dsh'), engineView('agy:agy'), { key: 'broken' }] });
+    const link = { invoke: vi.fn(async (_host: string, _endpoint: string, payload: unknown[]) => f.read(payload[0])) };
+    const engines = await invokeModelCatalog(link, modelCatalogKey(source, 'device-b')!, 'maker:list-plugin-engines', []) as Array<Record<string, unknown>>;
+    expect(engines.map(engine => engine.providerId)).toEqual(providers);
+    expect(engines.some(engine => 'reportsUsage' in engine)).toBe(false);
+    expect(f.invoke).toHaveBeenCalledTimes(forwarded ? 1 : 0);
+    await expect(f.read({ ...request(source), channel: 'maker:list-plugin-engines', args: [{}] })).rejects.toThrow('INVALID_PARAMS');
+  });
   it('discards results after source revocation', async () => {
     const f = fixture();
     f.invoke.mockImplementation(async () => {

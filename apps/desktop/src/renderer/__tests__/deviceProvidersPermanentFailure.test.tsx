@@ -21,6 +21,7 @@ import {
 } from '@/hooks/useAgentCapabilities';
 import { CONTROLLED_MODEL_CATALOG_CHANNEL, CONTROLLED_MODEL_CATALOG_CHANGED, modelCatalogKey } from '../../shared/controlledModelCatalog';
 import { useControlledModelLocations } from '@/hooks/useControlledModelLocations';
+import { useRemotePluginEngines } from '@/hooks/usePluginEngines';
 import type { ProviderShareReceivedSnapshot, ProviderShareRegionBudget } from '../../shared/providerShare';
 
 // This mounted fixture uses empty model lists and does not exercise the full
@@ -1059,6 +1060,46 @@ describe('provider share catalog identity changes', () => {
     await flushMounted();
     expect(routedReads()).toHaveLength(initial + 5);
     expect(catalogHook.result.current.providers[0]?.id).toBe('latest');
+  });
+
+  it('retires a revoked controlled plugin share and drops an engine reply already in flight', async () => {
+    let granted = true;
+    let hold = false;
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    let remotePush: ((push: { deviceId: string; channel: string }) => void) | undefined;
+    const invoke = vi.fn(async (_device: string, _channel: string, args: unknown[]) => {
+      const request = args[0] as { op: string };
+      if (request.op === 'locations') {
+        return { status: 'complete', locations: granted ? [{ agentDeviceId: 'share:plugin', name: 'Plugin' }] : [] };
+      }
+      if (hold) await blocked;
+      return [{
+        key: 'test-plugin:engine', providerId: 'acp-plugin:test-plugin:engine', name: 'Engine',
+        availability: { state: 'available' }, models: [],
+        remoteUse: { supported: true, enabled: true },
+      }];
+    });
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: { deviceLink: { invoke, onRemotePush: (callback: typeof remotePush) => {
+        remotePush = callback;
+        return () => undefined;
+      } } },
+    });
+    const hook = await renderHookFixture(() => ({
+      locations: useControlledModelLocations('host'),
+      catalogue: useRemotePluginEngines(modelCatalogKey('share:plugin', 'host'), true),
+    }));
+    expect(hook.result.current.catalogue.engines?.[0]?.name).toBe('Engine');
+    hold = true;
+    await act(async () => { hook.result.current.catalogue.read(); });
+    granted = false;
+    await act(async () => { remotePush?.({ deviceId: 'host', channel: CONTROLLED_MODEL_CATALOG_CHANGED }); });
+    expect(hook.result.current.locations).toEqual([]);
+    expect(hook.result.current.catalogue.engines).toBeNull();
+    await act(async () => { release(); });
+    expect(hook.result.current.catalogue.engines).toBeNull();
   });
 
   it('retires only the denied route on a zero-budget provider push and keeps a healthy neighbor', async () => {
