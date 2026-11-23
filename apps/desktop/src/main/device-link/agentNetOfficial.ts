@@ -108,9 +108,9 @@ export function ensureOfficialAgentNetClient(name: string, options: { rejoin?: b
     const request = createEnrollmentRequest(keys, name.trim().slice(0, 64) || 'Cindy');
     let response: unknown;
     try { response = await serverApiFetch('/api/agent-net/enroll', {
-      baseUrl: () => { assertCurrent(); return base; }, method: 'POST', body: rejoin ? { ...request, rejoin: true } : request,
+      baseUrl: () => { assertCurrent(); return base; }, method: 'POST', body: rejoin ? { ...request, rejoin: true } : { ...request, reportRevocation: true },
       timeoutMs: 10_000, cache: 'no-store', logLabel: '/api/agent-net/enroll', redactErrorDetails: true,
-      allowedRedactedErrorCodes: ['DEVICE_REENROLLMENT_REQUIRES_APPROVAL', 'ACCOUNT_AUTH_INVALID', 'ENROLLMENT_PROOF_INVALID'],
+      allowedRedactedErrorCodes: ['DEVICE_REVOKED', 'DEVICE_REENROLLMENT_REQUIRES_APPROVAL', 'ACCOUNT_AUTH_INVALID', 'ENROLLMENT_PROOF_INVALID'],
     }); } catch (error) {
       assertCurrent();
       // Early renewal is optional while the original identity is still valid.

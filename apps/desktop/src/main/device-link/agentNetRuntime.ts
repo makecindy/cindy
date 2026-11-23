@@ -5,7 +5,7 @@ import { app } from 'electron';
 import { currentLinkTraffic } from './linkTraffic.desktop.js';
 import { openLinkWebSocket } from './linkWebSocket.desktop.js';
 import { AgentNetWorkerSocket, type AgentNetAppSocket, type PathPreference, type RelayRoute, type SessionConfig, type SessionHandle } from '@cindy/agent-net';
-import { isScopedPeer } from '@cindy/device-link';
+import { DeviceLinkRegistrationRemovedError, isScopedPeer } from '@cindy/device-link';
 import { approveJoin, identityFromSeed, issueCertificate, publicBytes, signTenantJoinRequest, verifyCertificate, type Bootstrap, type Identity, type JoinRequest, type DeviceCertificate, type TenantJoinRequest } from '@cindy/agent-net-relay';
 import { AgentNetClient, createDelegationApprover, createTransportModeProof } from '@cindy/agent-net-relay/client';
 import { CERT_LIFETIME_MS, agentNetStunServer, type DeviceView } from '@cindy/agent-net-protocol';
@@ -329,7 +329,7 @@ export function agentNetIdentityRefused(): boolean { return refusedSelection !==
 /** The Agent-Net service refused this identity (relay 401/403, or a re-enrollment that needs approval). */
 export function isAgentNetIdentityRefusal(error: unknown): boolean {
   const message = error instanceof Error ? error.message : '';
-  return /^AGENT_NET_UPGRADE_(401|403)$/.test(message) || (error as { code?: unknown } | null)?.code === 'DEVICE_REENROLLMENT_REQUIRES_APPROVAL';
+  return /^AGENT_NET_UPGRADE_(401|403)$/.test(message) || ['DEVICE_REVOKED', 'DEVICE_REENROLLMENT_REQUIRES_APPROVAL'].includes(String((error as { code?: unknown } | null)?.code));
 }
 /** Record a refusal (see `refusedSelection`); false when 「仅使用 Agent-Net」 leaves no Device Link to run on. */
 export function noteAgentNetIdentityRefused(reason: string): boolean {
@@ -371,9 +371,15 @@ export async function createAgentNetOrLegacySocket<T>(
   legacy: () => T | Promise<T>,
   onTransport?: (encrypted: boolean) => void,
 ): Promise<AgentNetAppSocket | T> {
+  const scope = refusalScope();
   let encrypted: AgentNetAppSocket | null;
   try { encrypted = await createAgentNetAppSocket(); }
   catch (error) {
+    if (scope !== refusalScope() || isAppSessionBoundaryPending()) throw error;
+    if (!activeSelfHostedRelay() && agentNetRequiresEncryption()
+      && (error as { code?: unknown } | null)?.code === 'DEVICE_REVOKED') {
+      throw new DeviceLinkRegistrationRemovedError();
+    }
     if (!isAgentNetIdentityRefusal(error) || !noteAgentNetIdentityRefused(error instanceof Error ? error.message : 'refused')) throw error;
     // This attempt's credentials were taken for Agent-Net; the next one (Device Link's usual retry) runs on Device Link.
     throw new Error('AGENT_NET_IDENTITY_REFUSED');
@@ -585,6 +591,14 @@ export async function createAgentNetAppSocket(): Promise<AgentNetAppSocket | nul
   // 每次和对端换上一条连接都会报一次路径（之前的连接带着它的会话一起关了），断开时报 null。
   const connectedAt = new Map<string, number>();
   const notifyCovered = new Set<string>();
+  // The cached directory can keep the worker alive after a failed relay handshake.
+  const checkRemoval = async () => {
+    try { await api.directory(AbortSignal.timeout(3000)); }
+    catch (error) {
+      assertOwner();
+      if ((error as { code?: unknown } | null)?.code === 'DEVICE_REVOKED') throw new DeviceLinkRegistrationRemovedError();
+    }
+  };
   let socket: AgentNetWorkerSocket;
   const initialPeerPathPreferences = readDeviceLinkSettings().peerPathPreferences;
   try { socket = await AgentNetWorkerSocket.open({ workerFile, assertCurrent: assertOwner, client: api, module, log: agentNetLog, userId: api.certificate.subject, cachedDirectory, directoryExpiresAt, stunServers, relayUdpServer,
@@ -602,8 +616,16 @@ export async function createAgentNetAppSocket(): Promise<AgentNetAppSocket | nul
       // The owner-scope check above still fails closed; only this optional public cache is best effort.
       writeAgentNetDirectoryCache(directoryFile, directory);
     },
-  }); } catch (error) { approver.close(); throw error; }
+  }); } catch (error) {
+    approver.close();
+    assertOwner();
+    if (!relay && agentNetRequiresEncryption() && isAgentNetIdentityRefusal(error)) await checkRemoval();
+    throw error;
+  }
   socket.once('close', () => approver.close());
+  if (!relay && agentNetRequiresEncryption() && socket.relayConnected() === false) {
+    try { await checkRemoval(); } catch (error) { socket.close(); throw error; }
+  }
   try {
     assertOwner();
     if (attempt !== socketAttempt) throw new Error('AGENT_NET_CONNECTION_SUPERSEDED');

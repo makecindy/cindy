@@ -569,8 +569,9 @@ describe('independent V2 relay', () => {
     let signedAt: number | undefined; // a replica whose clock runs behind
     const f = await fixture({ mode: 'official', bootstrap: undefined, enroll: async (req) => {
       const identity = identities[String(req.headers['x-test-device'])];
-      const certificate = issueCertificate(root, { networkId: 'account:one', subject: 'account:one', identity, role: 'owner', now: signedAt });
-      return { certificate, rootPublicKey, networkId: certificate.networkId, name: 'Account network', deviceName: identity.deviceId };
+      const issueWithSerial = (serial?: string) => issueCertificate(root, { networkId: 'account:one', subject: 'account:one', identity, role: 'owner', now: signedAt, serial });
+      const certificate = issueWithSerial();
+      return { certificate, rootPublicKey, networkId: certificate.networkId, name: 'Account network', deviceName: identity.deviceId, issueWithSerial };
     } });
     const enroll = async (device: string, body: Record<string, unknown> = {}) => {
       const response = await fetch(f.relay.url + API + '/enroll', { method: 'POST', headers: { 'x-test-device': device }, body: JSON.stringify(body) });

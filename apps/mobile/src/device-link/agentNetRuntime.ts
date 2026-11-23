@@ -20,7 +20,7 @@ import { readMobileAgentNetDirectory, writeMobileAgentNetDirectory } from './age
 import { verifyMobileAgentNetModeProof } from './agentNetMode';
 import { connectMobileAgentNetSharingSession, mobileAgentNetSharingMediaTarget, mobileAgentNetSharingReachable,
   mobileAgentNetSharingSession, setMobileAgentNetPrivateSharingSupport, useMobileAgentNetSharingSessions } from './agentNetSharing';
-import { isScopedPeer } from '@cindy/device-link';
+import { DeviceLinkRegistrationRemovedError, isScopedPeer } from '@cindy/device-link';
 
 let current: { socket: AgentNetSocket; guard(): void } | null = null;
 let openAttempt = 0;
@@ -305,6 +305,11 @@ export async function openMobileAgentNetSocket(options: MobileAgentNetEnrollment
   try {
     identity = await ensureMobileAgentNetIdentity(options); guard();
   } catch (error) {
+    guard();
+    if (official && mobileAgentNetRequiresEncryption()
+      && (error as { code?: unknown } | null)?.code === 'DEVICE_REVOKED') {
+      throw new DeviceLinkRegistrationRemovedError();
+    }
     if (isMobileIdentityRefusal(error) && noteMobileIdentityRefused()) throw new Error('AGENT_NET_IDENTITY_REFUSED');
     throw error;
   }
@@ -440,7 +445,7 @@ export async function openMobileAgentNetSocket(options: MobileAgentNetEnrollment
       if (renewal) clearTimeout(renewal); foreground.remove();
       if (current?.socket === socket) { current = null; peerConnectedAt.clear(); }
     });
-    if (!mobileAgentNetRequiresEncryption() && typeof identity.api.directory === 'function') {
+    if ((!mobileAgentNetRequiresEncryption() || official) && typeof identity.api.directory === 'function') {
       // On React Native / server.ts `!active(principal)` (`socket.destroy()`), a revoked identity fails the WS upgrade as a
       // generic socket error and `cachedDirectory` keeps `openWithBindings` alive, hiding Device Link's 4410 removal state or
       // stranding a re-signed-in phone. Confirm once via `/directory` only when the initial WS relay attempt failed without an
@@ -449,7 +454,9 @@ export async function openMobileAgentNetSocket(options: MobileAgentNetEnrollment
         if (!scopeCurrent() || current?.socket !== socket || mobileAgentNetIdentityRefused() || socket.relayConnected?.() !== false) return;
         try { await identity.api.directory!(); }
         catch (error) {
-          if (scopeCurrent() && current?.socket === socket && isMobileIdentityRefusal(error) && noteMobileIdentityRefused()) socket.close(1006);
+          if (!scopeCurrent() || current?.socket !== socket || !isMobileIdentityRefusal(error)) return;
+          if (noteMobileIdentityRefused()) socket.close(1006);
+          else if (official && (error as { code?: unknown } | null)?.code === 'DEVICE_REVOKED') socket.close(4410);
         }
       });
     }

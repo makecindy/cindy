@@ -7,7 +7,7 @@ import { PROVIDER_SHARE_DIRECT_SIGNAL_CAPABILITY } from '@cindy/device-link-prot
 import { gunzipSync, gzipSync } from 'node:zlib';
 import { describe, it, expect, vi } from 'vitest';
 import { REMOTE_AGENT_CHANNEL, REMOTE_AGENT_READ_WAIT_MS } from '../remoteAgent.js';
-import { DeviceLinkClient, SYSTEM_SUSPEND_RECONNECT_HOLD_MS, computeReconnectDelayMs, type WsLike } from '../client.js';
+import { DeviceLinkClient, DeviceLinkRegistrationRemovedError, SYSTEM_SUSPEND_RECONNECT_HOLD_MS, computeReconnectDelayMs, type WsLike } from '../client.js';
 import {
   PROTOCOL_VERSION,
   DeviceLinkError,
@@ -127,6 +127,7 @@ function makeHarness(opts?: {
   invokeMetrics?: ConstructorParameters<typeof DeviceLinkClient>[0]['invokeMetrics'];
   frameAuth?: ConstructorParameters<typeof DeviceLinkClient>[0]['frameAuth'];
   transportAllowed?: () => boolean;
+  beforeSocket?: () => void;
 }): Harness {
   const sockets: FakeWs[] = [];
   const client = new DeviceLinkClient({
@@ -141,6 +142,7 @@ function makeHarness(opts?: {
       busy: false,
     }),
     createWebSocket: () => {
+      opts?.beforeSocket?.();
       const ws = new FakeWs();
       sockets.push(ws);
       return ws;
@@ -12342,21 +12344,27 @@ describe('host-triggered recovery of previously reliable links', () => {
   });
 });
 
-it('stops automatic reconnect after device removal and permits a new login lifecycle', async () => {
-  const h = makeHarness();
+// The same recovery entry must be visible when an official refusal happens before a socket exists.
+it.each(['socket close', 'factory refusal'])('stops automatic reconnect after device removal (%s)', async (source) => {
+  let removed = source === 'factory refusal';
+  const h = makeHarness({ beforeSocket: () => { if (removed) throw new DeviceLinkRegistrationRemovedError(); } });
   h.client.start();
   await tick();
-  h.current().ack();
-  h.current().emit('close', 4410, 'device removed');
+  if (source === 'socket close') {
+    h.current().ack();
+    h.current().emit('close', 4410, 'device removed');
+  }
+  const initialSockets = h.sockets.length;
   expect(h.client.getStatus()).toBe('stopped');
   expect(h.client.getConnectionIssue()?.kind).toBe('device-removed');
   h.client.connectNow('foreground');
   h.client.restartConnection('token-refresh');
   await tick(50);
-  expect(h.sockets).toHaveLength(1);
+  expect(h.sockets).toHaveLength(initialSockets);
+  removed = false;
   h.client.start();
   await tick();
-  expect(h.sockets).toHaveLength(2);
+  expect(h.sockets).toHaveLength(initialSockets + 1);
   h.current().ack();
   expect(h.client.getStatus()).toBe('online');
   expect(h.client.getConnectionIssue()).toBeNull();

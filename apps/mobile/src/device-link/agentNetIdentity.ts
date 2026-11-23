@@ -235,7 +235,7 @@ export async function ensureMobileAgentNetIdentity(options: MobileAgentNetEnroll
           if (!token) throw new Error('AGENT_NET_ACCOUNT_AUTH_REQUIRED');
           // `rejoin` is outside the signed enrollment payload: the account token already authorizes it, and services that
           // predate it ignore the field and keep refusing a revoked device (403 DEVICE_REENROLLMENT_REQUIRES_APPROVAL).
-          const result = await post(base, '/enroll', { ...request, signature, ...(rejoin ? { rejoin: true } : {}) }, guard,
+          const result = await post(base, '/enroll', { ...request, signature, ...(rejoin ? { rejoin: true } : { reportRevocation: true }) }, guard,
             'Bearer ' + token) as {
             rootPublicKey?: string; certificate?: DeviceCertificate;
           };

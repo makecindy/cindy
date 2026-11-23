@@ -34,6 +34,7 @@ Agent-Net refuses this identity」（被拒后改走中转、签「没开」；�
   `403 DEVICE_REENROLLMENT_REQUIRES_APPROVAL`，所以被移除的设备不会在后台续签时自己回来，旧客户端认的错误码也不变。服务端实现在
   服务端仓 `device-link-server`（路由与 `db.ts` 的 `rejoinDevice`）和 `packages/agent-net-relay`；本仓 `packages/agent-net-relay/src/server.ts`
   的官方入网分支同步了同一规则。
+- **冷启动。** 官方入网可带 `reportRevocation: true`，区分已撤销（`403 DEVICE_REVOKED`）与钥匙不匹配。仅加密设备的明确撤销进入现有「已移除」恢复入口。手机首次握手错误时仍只做一次目录验证，普通网络错误不标记为移除。仅走 Agent-Net、从未通过 Device Link 登记的设备，在显式恢复时按账号令牌的本机设备号补齐名单。官方证书的签名序列号记录每次重新加入后的新成员代次，正常续签沿用，旧证书与旧委托不因副本时钟先后而重新有效。
 - **顺序。** 先恢复 Device Link 登记（其他电脑只认列表里的设备），再带 `rejoin` 入网，最后重连本机自己的连接
   （`deviceRejoin.ts`；Desktop `agentNetOfficial.ts` 在 `rejoin` 时不论本地证书是否过期都重新入网，临时失败也不退回被撤销的旧证书）。
   一次点击各发一次请求，不自动重试、不轮询；只动本机的连接，不影响其他设备（范围见下面「重连的范围」）。
