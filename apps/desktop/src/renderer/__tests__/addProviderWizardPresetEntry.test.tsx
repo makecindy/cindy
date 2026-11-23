@@ -754,6 +754,31 @@ it.each(['delayed', 'failed'] as const)('waits for a %s catalog before building 
 });
 
 describe('AddProviderWizard — preset 直达', () => {
+  it('opens the official ACP listing by market ID when names collide across sources and pages', async () => {
+    const engine = { sourceType: 'server', scope: 'public', publisherKind: 'official', name: 'Antigravity', ghostId: 'engine', pluginId: 'official-engine', releaseId: 'r1' };
+    const tool = { ...engine, pluginId: 'official-image-tool', name: 'Image tool' };
+    const query = vi.fn()
+      .mockResolvedValueOnce({ items: [{ ...engine, publisherKind: 'personal' }, { ...engine, sourceType: 'local-market' }, tool], nextCursor: 'next' })
+      .mockResolvedValueOnce({ items: [engine], nextCursor: null });
+    const detail = vi.fn(async (id: string) => id === tool.pluginId
+      ? { ...tool, manifest: {} }
+      : { ...engine, manifest: { harnesses: [{ protocol: 'acp' }] } });
+    Object.assign(window.electronAPI, { pluginMarket: { query, detail } });
+    const open = vi.fn();
+    render(<AddProviderWizard providers={[]} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={vi.fn()} onOpenMarketPlugin={open} />);
+    await screen.findByText('settings.providers.wizard.officialModelPlugins');
+    const search = screen.getByRole('textbox', { name: 'settings.providers.wizard.searchPlaceholder' });
+    fireEvent.change(search, { target: { value: 'deepseek' } });
+    expect(screen.queryByText('Antigravity')).toBeNull();
+    expect(screen.getByText('DeepSeek')).toBeTruthy();
+    fireEvent.change(search, { target: { value: 'antigravity' } });
+    expect(screen.queryByText('Image tool')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Antigravity/ }));
+    await waitFor(() => expect(open).toHaveBeenCalledWith('official-engine'));
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(detail.mock.calls).toEqual([[tool.pluginId, false], [engine.pluginId, false]]);
+  });
+
   it('opens custom configuration from the header and leaves only cancel below the list', async () => {
     const onOpenCustomForm = vi.fn();
     const onClose = vi.fn();

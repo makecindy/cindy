@@ -51,6 +51,7 @@ import { localCliDisplayName, type LocalCliDetection } from '../../../shared/loc
 import { useProviderOAuthDeviceCode } from '@/hooks/useProviderOAuthDeviceCode';
 import { isSubscriptionProvider } from '../../../shared/subscriptionAccounts';
 import { SubscriptionSignInChoices, type SubscriptionSignInTarget } from './SubscriptionSignInChoices';
+import { useOfficialModelPlugins } from './useOfficialModelPlugins';
 import { cardIcon, ProviderRow } from './ProviderRow';
 import { LocalOllamaInstall, offersManagedOllamaInstall } from './LocalOllamaInstall';
 import { MANAGED_LLAMACPP_PROVIDER_ID } from '../../../shared/llamaCpp';
@@ -92,6 +93,7 @@ interface AddProviderWizardProps {
   onReturnCustom?: (draft: DetectedProviderDraft) => void;
   providers: ProviderView[];
   entry?: WizardEntry;
+  onOpenMarketPlugin?: (pluginId: string) => void;
   /** 连接失败已在向导内提示；父级只恢复草稿，不再提示目录目标失效。 */
   onEntryUnavailable?: (reason?: 'target-unavailable' | 'connection-failed') => void;
   /** 「自定义端点」卡片 → 关闭向导并打开完整表单。 */
@@ -309,6 +311,7 @@ export function AddProviderWizard({
   providers,
   entry,
   onEntryUnavailable,
+  onOpenMarketPlugin,
   onOpenCustomForm: openCustomForm,
   onClose: notifyClosed,
   onDone: notifyDone,
@@ -507,6 +510,9 @@ export function AddProviderWizard({
     [presets],
   );
   const q = query.trim().toLowerCase();
+  const officialPlugins = useOfficialModelPlugins(step === 1 && !!onOpenMarketPlugin, i18n.language);
+  const matchingPlugins = officialPlugins.filter(item =>
+    !q || [item.name, item.ghostId, item.description].some(value => value?.toLowerCase().includes(q)));
   const filteredOauth = q
     ? oauthChoices.filter((p) => p.name.toLowerCase().includes(q))
     : oauthChoices;
@@ -1821,6 +1827,20 @@ export function AddProviderWizard({
                         />
                       );
                     })}
+                  </>
+                )}
+                {onOpenMarketPlugin && matchingPlugins.length > 0 && (
+                  <>
+                    <GroupLabel>{t('settings.providers.wizard.officialModelPlugins')}</GroupLabel>
+                    {matchingPlugins.map(item => (
+                      <ProviderRow
+                        key={item.pluginId}
+                        icon={cardIcon({ name: item.name })}
+                        name={item.name}
+                        meta={t('settings.providers.plugin.openPlugin')}
+                        onClick={() => dialog.close(() => onOpenMarketPlugin(item.pluginId))}
+                      />
+                    ))}
                   </>
                 )}
                 {listedLocalPresets.length > 0 && (

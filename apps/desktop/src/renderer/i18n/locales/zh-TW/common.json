@@ -4439,6 +4439,7 @@
         "groupLocal": "本機模型",
         "metaLocalRecommended": "推薦 · 在 Cindy 內下載",
         "metaLocalConnect": "連接已執行的本機服務",
+        "officialModelPlugins": "官方模型插件",
         "moreLocal": "更多本機服務"
       },
       "local": {

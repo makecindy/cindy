@@ -4439,6 +4439,7 @@
         "groupLocal": "로컬 모델",
         "metaLocalRecommended": "추천 · Cindy에서 다운로드",
         "metaLocalConnect": "실행 중인 로컬 서버에 연결",
+        "officialModelPlugins": "공식 모델 플러그인",
         "moreLocal": "기타 로컬 서버"
       },
       "local": {

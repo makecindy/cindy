@@ -11,6 +11,9 @@ function Page({ scenario }: { scenario: string }) {
   const item = cases.find(c => c.id === scenario) ?? cases[0];
   const [detected, setDetected] = useState<DetectedProviderDraft>();
   const [draft, setDraft] = useState<DetectedProviderDraft>();
+  if (scenario === 'official-model-plugins') return <AddProviderWizard providers={[]}
+    onOpenMarketPlugin={id => { Object.assign(evidence, { pluginId: id }); }} onClose={() => undefined}
+    onDone={() => undefined} onOpenCustomForm={() => undefined} />;
   return item.kind === 'wizard' || detected ? <AddProviderWizard providers={[]}
     entry={item.kind === 'wizard' ? { kind: 'preset', presetId: item.providerId } : undefined}
     detected={detected} onClose={() => undefined} onDone={() => undefined} onOpenCustomForm={() => undefined}
@@ -21,7 +24,12 @@ const models = [{ id: 'ui-catalog-probe', name: 'UI catalog probe', discoveredMe
 mountPage({
   host: ctx => {
     const item = cases.find(c => c.id === ctx.case) ?? cases[0];
-    return { maker: {
+    const engine = { name: 'Antigravity', ghostId: 'cindy-antigravity-acp', pluginId: 'official-engine',
+      sourceType: 'server', scope: 'public', publisherKind: 'official', releaseId: 'official-release' };
+    return { ...(ctx.case === 'official-model-plugins' ? { pluginMarket: {
+      query: async () => ({ items: [engine, { ...engine, pluginId: 'community-engine', publisherKind: 'personal' }], nextCursor: null }),
+      detail: async () => ({ ...engine, manifest: { harnesses: [{ protocol: 'acp' }] } }),
+    } } : {}), maker: {
       listProviderPresets: async () => ({ presets: ctx.case === 'wizard-deepseek-retained' ? [retainedPreset] : presets, modelRegistry: BUNDLED_CATALOG.modelRegistry }),
       fetchProviderModels: async (input: unknown) => { evidence.fetches.push(input); return ctx.case === 'wizard-deepseek-retained' ? { ok: false } : { ok: true, models }; },
       detectProvider: async (input: { cancel?: boolean }) => ({ candidates: !input.cancel && deployments.includes(item.providerId) ? [item.providerId] : [], reason: 'matched', catalog: { ok: true, models } }),

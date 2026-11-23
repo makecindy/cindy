@@ -189,10 +189,10 @@ export function registerPluginMarketIpc(): void {
     assertTrustedAppRendererEvent(event);
     return invokePluginMarket(async () => service().consumeRemovalNotice());
   });
-  ipcMain.handle('plugin-market:detail', (event, pluginId: unknown) => {
+  ipcMain.handle('plugin-market:detail', (event, pluginId: unknown, includeReadme?: unknown) => {
     assertTrustedAppRendererEvent(event);
     return invokePluginMarket(() =>
-      service().detail(requireString(pluginId, 'pluginId'), { includeReadme: true }),
+      service().detail(requireString(pluginId, 'pluginId'), { includeReadme: includeReadme !== false }),
     );
   });
   ipcMain.handle('plugin-market:prepare-share', (event, pluginId: unknown, options: unknown) => {

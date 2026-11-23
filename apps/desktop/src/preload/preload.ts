@@ -1860,8 +1860,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('plugin-market:recommendations'),
     snapshot: (): Promise<import('../shared/pluginMarket').PluginMarketSnapshot> =>
       ipcRenderer.invoke('plugin-market:snapshot'),
-    detail: (pluginId: string): Promise<import('../shared/pluginMarket').PluginMarketDetail> =>
-      ipcRenderer.invoke('plugin-market:detail', pluginId),
+    detail: (pluginId: string, includeReadme = true): Promise<import('../shared/pluginMarket').PluginMarketDetail> =>
+      ipcRenderer.invoke('plugin-market:detail', pluginId, includeReadme),
     prepareShare: (pluginId: string, options?: import('../shared/share').ShareOptions): Promise<import('../shared/share').ShareContent> =>
       ipcRenderer.invoke('plugin-market:prepare-share', pluginId, options),
     prepareLocalShare: (instanceId: string, operationId: string, options: import('../shared/share').ShareOptions, expected: import('../shared/share').LocalPluginShareBinding, uploadConfirmed: boolean): Promise<import('../shared/share').SharePreparation> =>
