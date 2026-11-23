@@ -53,6 +53,7 @@ import {
   type SubscriptionAccountView,
   type SubscriptionPoolView,
 } from '../../shared/subscriptionAccounts.js';
+import { PLUGIN_ENGINE_DEFAULT_MODEL } from '../../shared/pluginEngines.js';
 import {
   newPluginEngineProviderSuffix,
   parsePluginEngineProviderId,
@@ -374,9 +375,10 @@ function admissibleFor(snapshot: StatusSnapshot | undefined, account: PluginEngi
   return account.id === 'default' && !account.reloginIdentity && (!snapshot || snapshot.failed);
 }
 
+/** `default` asks for whatever model the engine starts with, not for a model named so. */
 function offersModel(snapshot: StatusSnapshot | undefined, model: string | undefined): boolean {
   const models = snapshot?.status?.models;
-  return !model || !models || models.includes(model);
+  return !model || model === PLUGIN_ENGINE_DEFAULT_MODEL || !models || models.includes(model);
 }
 
 /**

@@ -22,7 +22,8 @@ import {
  *   并发上限、暂停、任务固定账号、启动失败与发送前换号)；plugin-harnesses.md「引擎账号」。
  * - 现有覆盖缺口：新模块；内置账号池的测试只覆盖 Claude / Codex。
  * - 最小失败输入：两个已登录账号的引擎连开两个任务；第一个账号启动时报额度用完；绑定账号额度用完后再发送；
- *   空闲一分钟后绑定账号已退出登录再发送；重新登录只回「已登录」不回身份；插件登录失败的添加。
+ *   空闲一分钟后绑定账号已退出登录再发送；重新登录只回「已登录」不回身份；插件登录失败的添加；
+ *   各账号只列出自己的真实模型时用引擎默认模型（`default`）开任务。
  * - tier：unit(内存设置文件、内存冷却、假的插件 worker；只有账号目录在 mkdtemp 临时目录里创建)。
  *   实测耗时：< 2s。
  */
@@ -30,7 +31,7 @@ const h = vi.hoisted(() => ({
   root: '',
   files: new Map<string, unknown>(),
   cooling: {} as Record<string, Record<string, unknown>>,
-  status: new Map<string, { state: 'signed-in' | 'signed-out'; identity?: { email?: string }; fingerprint?: string }>(),
+  status: new Map<string, { state: 'signed-in' | 'signed-out'; identity?: { email?: string }; fingerprint?: string; models?: string[] }>(),
   login: vi.fn(),
   harnesses: [] as Array<Record<string, unknown>>,
 }));
@@ -248,6 +249,17 @@ describe('plugin engine account pool', () => {
       .rejects.toThrow('login_failed');
     const after = await runPluginEngineAccountCommand({ action: 'read', providerId: PROVIDER });
     expect(after.accounts).toHaveLength(4);
+  });
+
+  // Review of #12242: `default` asks for the engine's own starting model, so accounts that list their
+  // real models must still take it. Minimal input: each account lists one model, none named `default`.
+  it('starts the engine default model on accounts that list their own models, and matches named models', async () => {
+    h.status.set(A, { state: 'signed-in', identity: { email: 'a@example.com' }, models: ['deepseek-chat'] });
+    h.status.set(B, { state: 'signed-in', identity: { email: 'b@example.com' }, models: ['deepseek-reasoner'] });
+    const lease = await acquirePluginEngineAccount(PROVIDER, 'default', ['task:t1']);
+    expect([A, B]).toContain(lease!.accountId);
+    lease!.release();
+    expect((await acquirePluginEngineAccount(PROVIDER, 'deepseek-reasoner', ['task:t2']))!.accountId).toBe(B);
   });
 
   // ZCode reports nothing for an original login that runs on other providers: it kept starting tasks
