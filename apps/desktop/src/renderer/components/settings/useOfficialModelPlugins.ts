@@ -17,6 +17,8 @@ export function useOfficialModelPlugins(enabled: boolean, locale: string): Offic
       const engines: OfficialModelPlugin[] = [];
       const seen = new Set<string>();
       const cursors = new Set<string>();
+      const officialIds = new Set<string>();
+      let totalOfficial: number | null = null;
       let cursor: string | null = null;
       setResult({ owner, locale, items: [] });
       do {
@@ -28,6 +30,9 @@ export function useOfficialModelPlugins(enabled: boolean, locale: string): Offic
           engines.push(item);
         }
         setResult({ owner, locale, items: [...engines] });
+        for (const id of page.officialIds) officialIds.add(id);
+        totalOfficial ??= page.totalOfficial;
+        if (totalOfficial !== null && officialIds.size >= totalOfficial) return;
         cursor = page.nextCursor;
         if (!cursor || cursors.has(cursor)) return;
         cursors.add(cursor);
@@ -35,7 +40,10 @@ export function useOfficialModelPlugins(enabled: boolean, locale: string): Offic
     }
     // The existing provider catalog stays usable offline.
     void discover().catch(() => undefined);
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      void market.cancelOfficialModelPlugins().catch(() => undefined);
+    };
   }, [enabled, locale, owner]);
 
   return enabled && result?.owner === owner && result.locale === locale ? result.items : [];

@@ -1856,6 +1856,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('plugin-market:lookup', ghostIds),
     query: (input: import('../shared/pluginMarket').PluginMarketQuery): Promise<import('../shared/pluginMarket').PluginMarketPage> =>
       ipcRenderer.invoke('plugin-market:query', input),
+    cancelOfficialModelPlugins: (): Promise<void> => ipcRenderer.invoke('plugin-market:cancel-official-model-plugins'),
     officialModelPlugins: (cursor: string | null): Promise<import('../shared/pluginMarket').OfficialModelPluginPage> =>
       ipcRenderer.invoke('plugin-market:official-model-plugins', cursor),
     recommendations: (): Promise<import('../shared/pluginMarket').PluginMarketItem[]> =>

@@ -1047,6 +1047,7 @@ function removalNoticeKey(owner: ActiveAppSession): string {
  */
 export class PluginMarketService {
   private readonly snapshotFlights = new Map<string, MarketSnapshotFlight>();
+  private readonly officialEngineReads = new Map<string, Promise<VisiblePluginDetail>>();
   private readonly officialEngineCapabilities = new Map<string, { digest: string; hasEngine: boolean }>();
   private readonly catalogFlights = new Map<string, Promise<MarketCatalog>>();
   private readonly localReadFlights = new Map<string, Promise<LocalInstallSnapshot>>();
@@ -1311,7 +1312,7 @@ export class PluginMarketService {
   }
 
   /** Provider discovery reads only public server metadata. Installation and local markets belong to the detail page. */
-  async officialModelPlugins(cursor: unknown = null): Promise<OfficialModelPluginPage> {
+  async officialModelPlugins(cursor: unknown = null, active = () => true): Promise<OfficialModelPluginPage> {
     if (cursor !== null && (typeof cursor !== 'string' || !cursor || cursor.length > 128))
       throwIpcError('INVALID_PARAMS', 'Invalid Plugin catalog cursor');
     this.requireConfigured();
@@ -1328,11 +1329,18 @@ export class PluginMarketService {
     const candidates = page.plugins.filter(plugin => plugin.scope === 'public' && plugin.publisherKind === 'official');
     const items: OfficialModelPluginPage['items'] = [];
     for (const plugin of candidates) {
+      if (!active()) break;
       const key = JSON.stringify([endpoint, plugin.id]);
       const digest = plugin.currentRelease.sha256;
       let capability = this.officialEngineCapabilities.get(key);
       if (capability?.digest !== digest) {
-        const detail = await this.api.detail(plugin.id).catch(() => null);
+        const flightKey = JSON.stringify([key, digest, owner?.dataOwnerId, getActiveAppSession().generation]);
+        let read = this.officialEngineReads.get(flightKey);
+        if (!read) {
+          read = this.api.detail(plugin.id).finally(() => this.officialEngineReads.delete(flightKey));
+          this.officialEngineReads.set(flightKey, read);
+        }
+        const detail = await read.catch(() => null);
         assertCurrent();
         if (!detail || detail.publisherKind !== 'official') continue;
         try { assertDetailMatchesSummary(plugin, detail); } catch { continue; }
@@ -1344,8 +1352,7 @@ export class PluginMarketService {
       if (capability.hasEngine)
         items.push({ pluginId: plugin.id, ghostId: plugin.ghostId, name: plugin.name, description: plugin.description });
     }
-    const allOfficialOnFirstPage = cursor === null && page.counts?.official === candidates.length;
-    return { items, nextCursor: allOfficialOnFirstPage ? null : page.nextCursor };
+    return { items, nextCursor: page.nextCursor, officialIds: candidates.map(plugin => plugin.id), totalOfficial: page.counts?.official ?? null };
   }
 
   /** UI and Agent queries share target-owned pagination; they never run maintenance. */

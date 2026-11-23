@@ -27,7 +27,8 @@ mountPage({
     const engine = { name: 'Antigravity', ghostId: 'cindy-antigravity-acp', pluginId: 'official-engine',
       sourceType: 'server', scope: 'public', publisherKind: 'official', releaseId: 'official-release' };
     return { ...(ctx.case === 'official-model-plugins' ? { pluginMarket: {
-      officialModelPlugins: async () => ({ items: [engine], nextCursor: null }),
+      officialModelPlugins: async () => ({ items: [engine], officialIds: [engine.pluginId], totalOfficial: 1, nextCursor: null }),
+      cancelOfficialModelPlugins: async () => {},
     } } : {}), maker: {
       listProviderPresets: async () => ({ presets: ctx.case === 'wizard-deepseek-retained' ? [retainedPreset] : presets, modelRegistry: BUNDLED_CATALOG.modelRegistry }),
       fetchProviderModels: async (input: unknown) => { evidence.fetches.push(input); return ctx.case === 'wizard-deepseek-retained' ? { ok: false } : { ok: true, models }; },

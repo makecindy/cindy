@@ -755,10 +755,10 @@ it.each(['delayed', 'failed'] as const)('waits for a %s catalog before building 
 
 describe('AddProviderWizard — preset 直达', () => {
   it('searches paginated official model plugins locally and opens the exact market resource', async () => {
-    const query = vi.fn().mockResolvedValueOnce({ items: [], nextCursor: 'next' }).mockResolvedValueOnce({
-      items: [{ name: 'Antigravity', ghostId: 'engine', pluginId: 'official-engine' }], nextCursor: null,
+    const query = vi.fn().mockResolvedValueOnce({ items: [], officialIds: ['tool'], totalOfficial: 2, nextCursor: 'next' }).mockResolvedValueOnce({
+      items: [{ name: 'Antigravity', ghostId: 'engine', pluginId: 'official-engine' }], officialIds: ['official-engine'], totalOfficial: null, nextCursor: 'community-only',
     });
-    Object.assign(window.electronAPI, { pluginMarket: { officialModelPlugins: query } });
+    Object.assign(window.electronAPI, { pluginMarket: { officialModelPlugins: query, cancelOfficialModelPlugins: vi.fn().mockResolvedValue(undefined) } });
     const open = vi.fn();
     render(<AddProviderWizard providers={[]} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={vi.fn()} onOpenMarketPlugin={open} />);
     await screen.findByText('settings.providers.wizard.officialModelPlugins');

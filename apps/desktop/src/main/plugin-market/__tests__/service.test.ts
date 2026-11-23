@@ -857,6 +857,20 @@ describe('PluginMarketService migration and defaultInstall', () => {
     expect(runtime.listScans).toBe(0);
   });
 
+  // A closed picker must not start the next manifest read while an already-sent one completes.
+  it('stops cold manifest reads after the picker closes', async () => {
+    const first = summary({ publisherKind: 'official' });
+    const next = summary({ id: `c${'c'.repeat(24)}`, publisherKind: 'official' });
+    const h = harness([first, next]);
+    let active = true;
+    h.api.detail.mockImplementationOnce(async () => {
+      active = false;
+      return detail(first);
+    });
+    await h.service.officialModelPlugins(null, () => active);
+    expect(h.api.detail.mock.calls).toEqual([[first.id]]);
+  });
+
   // Unit: the three new read paths must not invoke the synchronous disk scanner.
   // A held worker snapshot also proves simultaneous readers share one pending scan.
   it('shares background installation reads across catalog, lookup and recommendations without synchronous scans', async () => {
