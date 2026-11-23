@@ -38,6 +38,10 @@ export function mobileAgentNetIdentityRefused(): boolean {
   const scope = refusalScope();
   return scope !== null && refusedSelection === scope;
 }
+/** After this removed phone rejoined (deviceRejoin.ts): its next connection tries Agent-Net again instead of running as with it off. */
+export function clearMobileAgentNetIdentityRefusal(): void {
+  refusedSelection = null;
+}
 function isMobileIdentityRefusal(error: unknown): boolean {
   const message = error instanceof Error ? error.message : '';
   const status = (error as { status?: unknown } | null)?.status;

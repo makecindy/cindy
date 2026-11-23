@@ -65,7 +65,7 @@ import {
   suspendRemoteProjectAliases,
   suspendRemoteProjectAliasesForReleasedTopics,
 } from '@/session/remoteProjectAliases';
-import { deviceLinkWsUrl, DEVICE_LINK_API_BASE_URL, getOfficialDeviceLinkApiBaseUrl } from '@/config/env';
+import { deviceLinkWsUrl, DEVICE_LINK_API_BASE_URL, getOfficialAgentNetApiBaseUrl, getOfficialDeviceLinkApiBaseUrl } from '@/config/env';
 import { MOBILE_VISUAL_MOCK_ENABLED } from '@/config/env';
 import { useAuth } from '@/auth/AuthContext';
 import { useSelfHostedRelayRouteGeneration } from './selfHostedRelay';
@@ -74,11 +74,15 @@ import { getMobileAgentNetPreferences, useMobileAgentNetPreferences, waitForMobi
 import { isMobileAgentNetActive, openMobileAgentNetSocket, mobileAgentNetShouldUseLegacyPeer,
   mobileAgentNetShouldProbeLegacyPeer, mobileAgentNetPrefersPrimary, verifyMobileAgentNetTransportProof,
   connectMobileAgentNetSessionPeer, mobileAgentNetPeerConnectedAt, mobileAgentNetPeerRoute, mobileAgentNetPeerState,
-  mobileAgentNetSession, notifyMobileAgentNetNetworkChanged, useMobileAgentNetSessions } from './agentNetRuntime';
+  mobileAgentNetSession, notifyMobileAgentNetNetworkChanged, useMobileAgentNetSessions,
+  clearMobileAgentNetIdentityRefusal } from './agentNetRuntime';
 import { AgentNetSessionLinks, agentNetSessionLane, outboundOnSession, routeSessionPeers, type PeerLinks } from '@cindy/agent-net/portable';
 import { installPeerStreamTransport } from './peerFileRegistry';
 import { mobileAgentNetTransportProof } from './agentNetMode';
-import { loadExistingMobileAgentNetModeIdentity } from './agentNetIdentity';
+import { ensureMobileAgentNetIdentity, hasStoredMobileOfficialAgentNetIdentity,
+  loadExistingMobileAgentNetModeIdentity } from './agentNetIdentity';
+import { MobileAgentNetEngine } from './agentNetNative';
+import { registerMobileDeviceRejoin, rejoinRemovedMobileDevice } from './deviceRejoin';
 import { currentSelfHostedRelayFrameAuth } from './selfHostedRelayFrameAuth';
 import {
   getActiveSelfHostedRelay,
@@ -616,6 +620,9 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<DeviceLinkStatus>('stopped');
   const [sharedTaskAvailable, setSharedTaskAvailable] = useState<boolean | undefined>();
   const [connectionIssue, setConnectionIssue] = useState<DeviceLinkConnectionIssue | null>(null);
+  // Bumped after 「重新加入」 (deviceRejoin.ts): a 4410 leaves the shared client stopped on 'device-removed' and connectNow ignores
+  // it, so this phone's own connection is rebuilt on the same path as an account change, without clearing account data.
+  const [connectionRebuild, setConnectionRebuild] = useState(0);
   const [presenceVersion, setPresenceVersion] = useState(0);
   const [connectionEpoch, setConnectionEpoch] = useState(0);
   // status callback 中先同步推进 ref，再触发 rehydrate；React state 的下一次 render
@@ -1245,6 +1252,34 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       return runPeerRecovery(client, deviceId);
     };
   }, [runPeerRecovery]);
+
+  // 「重新加入」 for this phone after it was removed on the official network (deviceRejoin.ts): one tap runs one attempt.
+  useEffect(() => {
+    if (!auth.isAuthenticated || !auth.deviceId) return;
+    const deviceId = auth.deviceId, getAccessToken = auth.getAccessToken, apiFetch = auth.apiFetch;
+    return registerMobileDeviceRejoin(() => {
+      const owner = getMobileAuthOwner();
+      const assertCurrent = () => {
+        if (!isMobileAuthOwnerCurrent(owner) || getActiveSelfHostedRelay()) throw new Error('DEVICE_REJOIN_SCOPE_CHANGED');
+      };
+      assertCurrent();
+      return rejoinRemovedMobileDevice({
+        rejoinDeviceLink: async () => {
+          await apiFetch('/api/device-link/rejoin', { baseUrl: getOfficialDeviceLinkApiBaseUrl(), method: 'POST', body: {},
+            timeoutMs: 15_000, cache: 'no-store', assertCurrent });
+        },
+        agentNetInvolved: async () => MobileAgentNetEngine.available() && !!getOfficialAgentNetApiBaseUrl()
+          && (getMobileAgentNetPreferences().enabled || await hasStoredMobileOfficialAgentNetIdentity()),
+        agentNetRequired: mobileAgentNetRequiresEncryption,
+        rejoinAgentNet: async () => {
+          assertCurrent();
+          await ensureMobileAgentNetIdentity({ deviceId, deviceName: mobileDeviceName(), getAccessToken, rejoin: true });
+        },
+        clearAgentNetRefusal: clearMobileAgentNetIdentityRefusal,
+        restartConnection: () => { if (isMobileAuthOwnerCurrent(owner)) setConnectionRebuild(generation => generation + 1); },
+      });
+    });
+  }, [auth.isAuthenticated, auth.deviceId, auth.getAccessToken, auth.apiFetch]);
 
   useEffect(() => {
     const accountGenerationChanged =
@@ -2181,6 +2216,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     auth.isAuthenticated,
     relayRouteGeneration,
     agentNetPreferences.generation,
+    connectionRebuild,
     clearPerAccountDeviceLinkState,
     clearOnePresenceWipeTimer,
     clearAllPresenceWipeTimers,
