@@ -2,8 +2,9 @@ import { catalogModelMetadata, mergeDiscoveredRuntimeModels, isOpenRouterModelsU
 /**
  * customProviders —— 自定义供应商「配置 + per-runtime 密钥」的 renderer 侧写入编排。
  *
- * 配置走 maker IPC（入 localDb）；密钥按 runtime 走通用 safeStorage IPC（`provider_key_<id>_<agent>`，
- * 本地加密，与内置 XD 网关 key 同机制；main 路由 resolve 时按 (id, agent) 读出注入鉴权头）。
+ * 配置走 maker IPC（入 localDb）；密钥按 runtime 存（`provider_key_<id>_<agent>`，本地加密），随配置一起
+ * 交给 main 写入或清除；renderer 只经通用 safeStorage IPC 读取，用于编辑态回填。main 路由 resolve 时按
+ * (id, agent) 读出注入鉴权头。
  *
  * 顺序约定：
  *   - create / update / delete：配置 + 密钥一次提交给 main，由 main 的 per-provider queue
