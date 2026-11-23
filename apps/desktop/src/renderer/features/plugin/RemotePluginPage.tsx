@@ -84,6 +84,7 @@ export function RemotePluginPage({
   embedded,
   deviceControl,
   onSelectCatalogTab,
+  hideManagingNotice = false,
 }: {
   device: { deviceId: string; name: string };
   online: boolean;
@@ -91,6 +92,11 @@ export function RemotePluginPage({
   embedded?: boolean;
   deviceControl?: CatalogDeviceControl;
   onSelectCatalogTab?: (tab: 'plugins' | 'skills') => void;
+  /**
+   * Leaves the notice out while it only says which computer is managed, for a page fixed to that
+   * computer that already names it (cloud settings). Offline, loading and failures still show.
+   */
+  hideManagingNotice?: boolean;
 }) {
   const { t, i18n } = useTranslation();
   const { confirm } = useConfirmDialog();
@@ -657,7 +663,9 @@ export function RemotePluginPage({
     </>
   ) : null;
   const targetProblem = !online || unsupported || !snapshot;
-  const notice = (
+  const managingOnly =
+    !project && !targetProblem && projectReadStatus === null && !!snapshot?.projects;
+  const notice = hideManagingNotice && managingOnly ? null : (
     <CatalogManagementNotice
       title={
         project

@@ -14,8 +14,23 @@ import { createAppSettingsService, type AppSettingsSection } from './service.js'
 import { taskManagementStore } from '../task-management/store.js';
 import { taskArchiveEngine, updateTaskArchiveSettings } from '../task-management/service.js';
 import { DEFAULT_TASK_ARCHIVE_SETTINGS } from '../../shared/taskManagement.js';
+import { getInstanceConfig } from '../instance-runtime/config.js';
 
 const numberIn = (range: { min: number; max: number }) => z.number().min(range.min).max(range.max);
+
+/**
+ * Preferences the cloud settings page also manages on a managed cloud instance. Elsewhere the
+ * preferences section keeps its ordinary fields, so Agents can neither read nor change these.
+ */
+const CLOUD_INSTANCE_PREFERENCES = {
+  sidebarPinned: true, sidebarTasks: true, feishuNotifications: true, swallowActivationClick: true, networkDebug: true,
+} as const;
+const desktopPreferenceSchema = appPreferenceSchema.omit(CLOUD_INSTANCE_PREFERENCES);
+const isManagedCloudInstance = () => getInstanceConfig() !== null;
+function withoutCloudOnlyPreferences<T extends { value?: Record<string, unknown> }>(state: T): T {
+  if (isManagedCloudInstance() || !state.value) return state;
+  return { ...state, value: Object.fromEntries(Object.entries(state.value).filter(([key]) => !Object.hasOwn(CLOUD_INSTANCE_PREFERENCES, key))) };
+}
 
 /** Shared host operations; discovery only serializes their registered metadata. */
 export const appSettingsSections: AppSettingsSection[] = [{
@@ -27,10 +42,15 @@ export const appSettingsSections: AppSettingsSection[] = [{
   reset: async () => { await updateTaskArchiveSettings(null); },
 }, {
   id: 'preferences', title: '语言、主题与使用偏好',
-  description: '界面语言、明暗主题、主题家族、通知、发送快捷键、运行中发送方式、链接打开方式、流式动效、消息导航、文件显示、首页偏好，以及新建 worktree 是否用模型按任务取名（worktreeModelNaming）。', effective: 'immediate',
-  schema: appPreferenceSchema,
-  read: async () => manageAppPreferences('get'),
-  update: async patch => manageAppPreferences('update', patch),
+  get description() {
+    return isManagedCloudInstance()
+      ? '界面语言、明暗主题、主题家族、通知与飞书提醒、发送快捷键、运行中发送方式、链接打开方式、流式动效、消息导航、文件显示、首页、侧栏显示样式、切回窗口防误触、网络诊断日志，以及新建 worktree 是否用模型按任务取名（worktreeModelNaming）。'
+      : '界面语言、明暗主题、主题家族、通知、发送快捷键、运行中发送方式、链接打开方式、流式动效、消息导航、文件显示、首页偏好，以及新建 worktree 是否用模型按任务取名（worktreeModelNaming）。';
+  },
+  effective: 'immediate',
+  get schema() { return isManagedCloudInstance() ? appPreferenceSchema : desktopPreferenceSchema; },
+  read: async () => withoutCloudOnlyPreferences(await manageAppPreferences('get')),
+  update: async patch => withoutCloudOnlyPreferences(await manageAppPreferences('update', patch)),
 }, {
   id: 'appearance', title: '外观、字体与壁纸',
   description: '界面、代码、终端字体和字号，窗口缩放，壁纸及动态效果，macOS Dock 图标。', effective: 'immediate',

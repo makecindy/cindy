@@ -9,7 +9,10 @@ import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js
 
 const replySchema = z.strictObject({ requestId: z.string().uuid(), ok: z.boolean(),
   state: appPreferenceSchema.required().optional(), themeFamilies: z.array(z.string().max(256)).max(256).optional(),
-  modelVisibility: z.strictObject({ visible: z.boolean(), customized: z.boolean() }).optional() });
+  modelVisibility: z.strictObject({ visible: z.boolean(), customized: z.boolean() }).optional(),
+  modelEngines: z.record(z.string().max(4096), z.enum(['cc', 'codex', 'pi'])).optional(),
+  userPrompt: z.string().max(8000).optional(),
+  modelEfforts: z.record(z.string().max(4096), z.record(z.string().max(4096), z.string().max(64))).optional() });
 const pending = new Map<string, { senderId: number; settle: (value: unknown) => void }>();
 export function registerPreferenceControlIpc(): void {
   ipcMain.on(APP_PREFERENCE_REPLY, (event, raw: unknown) => {
@@ -22,7 +25,10 @@ export function registerPreferenceControlIpc(): void {
 }
 
 /** Finite host→main-window request; no arbitrary renderer command or storage key. */
-export async function manageAppPreferences(operation: AppPreferenceRequest['operation'], patch?: Record<string, unknown>, modelVisibility?: AppPreferenceRequest['modelVisibility']) {
+/** Fields the cloud build adds to a request; each belongs to its own operation. */
+export type AppPreferenceExtras = Pick<AppPreferenceRequest, 'modelEngine' | 'userPrompt' | 'modelEffort'>;
+export async function manageAppPreferences(operation: AppPreferenceRequest['operation'], patch?: Record<string, unknown>, modelVisibility?: AppPreferenceRequest['modelVisibility'], extras: AppPreferenceExtras = {}) {
+  if (extras.userPrompt !== undefined && extras.userPrompt.length > 8000) throw new Error('USER_PROMPT_TOO_LONG');
   const window = getDeepLinkMainWindow();
   if (!window || window.isDestroyed()) throw new Error('PREFERENCE_WINDOW_NOT_READY');
   const parsedPatch = patch === undefined ? undefined : appPreferenceSchema.parse(patch);
@@ -42,11 +48,15 @@ export async function manageAppPreferences(operation: AppPreferenceRequest['oper
     } });
     try {
       window.webContents.send(APP_PREFERENCE_REQUEST, { requestId, ownerStamp: getActiveDataOwnerPushStamp(),
-        expiresAt: Date.now() + 5000, operation, ...(modelVisibility ? { modelVisibility } : {}), ...(parsedPatch ? { patch: parsedPatch } : {}) } satisfies AppPreferenceRequest);
+        expiresAt: Date.now() + 5000, operation, ...(modelVisibility ? { modelVisibility } : {}),
+        ...Object.fromEntries(Object.entries(extras).filter(([, value]) => value !== undefined)),
+        ...(parsedPatch ? { patch: parsedPatch } : {}) } satisfies AppPreferenceRequest);
     } catch (error) { pending.delete(requestId); clearTimeout(timer); reject(error); }
   });
   assertOwner();
   if (parsedPatch && Object.entries(parsedPatch).some(([key, value]) => reply.state?.[key as keyof typeof parsedPatch] !== value))
     throw new Error('PREFERENCE_READBACK_MISMATCH');
-  return { value: reply.state, themeFamilies: reply.themeFamilies, ...(reply.modelVisibility ? { modelVisibility: reply.modelVisibility } : {}) };
+  return { value: reply.state, themeFamilies: reply.themeFamilies, ...(reply.modelVisibility ? { modelVisibility: reply.modelVisibility } : {}),
+    ...(reply.modelEngines ? { modelEngines: reply.modelEngines } : {}), ...(reply.userPrompt !== undefined ? { userPrompt: reply.userPrompt } : {}),
+    ...(reply.modelEfforts ? { modelEfforts: reply.modelEfforts } : {}) };
 }

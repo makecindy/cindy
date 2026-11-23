@@ -191,6 +191,10 @@ import { removeBotImConnectionsForBot } from '../im/shared/botImConnectionRuntim
 import { configureBotImLaneRuntime } from '../im/shared/botImLaneRuntime.js';
 import { markImSessionManualRouteOverride } from '../im/shared/manualRouteOverride.js';
 import { configureAppDefaultModelSelection, inspectAppDefaultModel } from './appDefaultModelControl.js';
+import { configureCloudMemoryManagement, configureCloudMcpCredentials } from '../host-settings/managementData.js';
+import { cloudMcpCredentialStore } from '../secrets/providerSecretStore.js';
+import { cloudManagementProviderRegistry, isCloudManagementInvocation, cloudManagementExecution, registerPrivateCloudManagementCall } from '../host-settings/managementCalls.js';
+import { configureAdditionalModelRuntime } from '../host-settings/additionalRuntime.js';
 import type { BuiltinApiKeyBridgeDeps } from '../secrets/builtinApiKeyBridge.js';
 import { setBotInvitationWelcomeDispatch } from './botInvitation.js';
 import { createQueuedDispatchReceipts } from './queuedDispatchReceipts.js';
@@ -1126,6 +1130,8 @@ import { resolveOrcaImageAttachmentInput } from './orcaImageAttachments.js';
 import { buildOrcaQueueDispatchNote } from './orcaQueueNote.js';
 import { createOrcaWorkerReportQueue, type OrcaWorkerReportQueue } from './orcaWorkerReportQueue.js';
 import { OrcaWorkerPermissionConfirmBridge } from './orcaWorkerPermissionConfirmBridge.js';
+import { captureHostPersonalization } from '../host-settings/startup.js';
+import { getInstanceConfig } from '../instance-runtime/config.js';
 import { assertTaskActionCurrent, runTaskActionRequest, runTaskActionRewindBoundary, captureTaskActionGuard, bindTaskActionInput, hasTaskActionAuthorization, taskActionInputGuard, settleTaskActionInput, type TaskActionDeliveryGuard, type TaskActionConfirmation } from './taskActionAuthorization.js';
 import {
   getOrcaWorkspaceInfoReadOnly,
@@ -6608,6 +6614,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return live ? live.runHostInteraction(request, () => requestHostInteraction(target, request, signal))
       : requestHostInteraction(target, request, signal);
   });
+  configureCloudMemoryManagement(maker);
+  configureCloudMcpCredentials(cloudMcpCredentialStore);
   // Catalog updates and explicit budget edits share one serial refresh boundary.
   let contextRefresh = Promise.resolve();
   /**
@@ -6668,6 +6676,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     contextRefresh = next.catch(() => {});
     return next;
   };
+  configureAdditionalModelRuntime({ pricingChanged: broadcastReferenceModelPricing, refreshTools: async () => { await refreshCodexMcpEnvironment({ restartCodex: restartCodexAfterAuthModeChange, shutdownCodexEnvironment, onDeferred: () => deferredCodexRestartHolder?.schedule('Codex Browser capability routing changed'), logger: log }); }, refreshContext: () => refreshContextSettings(), accessChanged: () => { broadcastToAllWindows(MAKER_PUSH.PROVIDER_CHANGED, {}); } });
   const contextWindowBudgetReconcile = createSessionContextWindowBudgetReconcile({
     getMakerIfReady, readStoredSessionContextWindowBudget, contextWindowBudgetChangesEffectiveWindow,
     getPendingCredentialSwitchTarget, registerPendingCredentialSwitchForSession, runtimeMutationDeps, log,
@@ -7458,8 +7467,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   options.onProviderModelAutoRefreshConfigured();
 
   registerLocalModelHandlers(createElectronIpcHandlerRegistry(), {
-    assertTrustedSender: (event) =>
-      assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]),
+    assertTrustedSender: (event) => {
+      if (!isCloudManagementInvocation(event)) assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
+    },
     refreshCatalog: () => refreshCustomProvidersIntoCatalog(),
     broadcastChanged: () => broadcastToAllWindows(MAKER_PUSH.PROVIDER_CHANGED, {}),
     broadcastStatus: (status) => broadcastToAllWindows(MAKER_PUSH.LOCAL_MODEL_STATUS, status),
@@ -7489,7 +7499,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return { dataOwnerId: session.dataOwnerId, generation: session.generation };
   });
 
-  configureModelSettingsActions(registerProviderHandlers(createElectronIpcHandlerRegistry(), {
+  configureModelSettingsActions(registerProviderHandlers(cloudManagementProviderRegistry(createElectronIpcHandlerRegistry()), {
+    registerCloudCredentialReplacement: handler => registerPrivateCloudManagementCall('cloud:provider:key-replace', handler),
     listProviders: (opts) => getDesktopProviderService(opts?.picker ? { allowSideEffects: false } : undefined).listProviders(opts),
     isOrganizationManagedProviderId: (providerId) =>
       getActiveCatalog().providers.some(
@@ -7585,8 +7596,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return result.response === 1;
     },
     // 重新发现会用订阅凭证发起真实上游请求，限主页面 sender（子 frame / WebView 拒绝）。
-    assertTrustedSender: (event) =>
-      assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]),
+    assertTrustedSender: (event) => {
+      if (!isCloudManagementInvocation(event)) assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
+    },
     // provider:list 是只读通道且要服务 device-link（合成 event），不能加会抛的 guard；
     // 改用不抛的判定决定「这次读取要不要放行本机绑定自愈 + 清单拉取」。
     isTrustedSender: (event) =>
@@ -7763,6 +7775,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 通用 OAuth（目录 auth.oauth 描述符驱动）：login 成功后 best-effort 拉动态模型发现
     // (additions-only merge 进 active-catalog) 并广播 PROVIDER_CHANGED 让 UI 刷新连接态。
     oauthLogin: async (providerId, isCurrent, onBrowserUrl, method, onDeviceCode) => {
+      const cloudExecution = cloudManagementExecution();
+      const originalIsCurrent = isCurrent;
+      isCurrent = () => {
+        try { cloudExecution?.assertCurrent(); return originalIsCurrent(); } catch { return false; }
+      };
       if (subscriptionAccountKind(providerId)) {
         const result = await loginSubscriptionAccount(providerId, isCurrent, {
           method,
@@ -7965,7 +7982,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 与 codex 分支独立(不依赖 codexRestarted),下一次 startSession lazy 重建。
       invalidatePiEnvironment();
     };
-  registerMcpHandlers(createElectronIpcHandlerRegistry(), {
+  registerMcpHandlers(cloudManagementProviderRegistry(createElectronIpcHandlerRegistry()), {
     listDuplicates: () => listMcpDuplicates(),
     chooseDuplicate: saveMcpDuplicateChoice,
     listMcpServers: listBotRuntimeMcpServers,
@@ -9080,6 +9097,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       makerMemoryEnabled: o.makerMemoryEnabled,
       displayReasoning: o.displayReasoning,
     };
+    // 托管云实例用实例自己保存的个性化正文，不用控制端传来的副本。
+    if (getInstanceConfig()) await captureHostPersonalization(o);
     assertAccess?.();
     // Plugin engines bring their own models and sign-in: never wait on (or fail with) the Cindy
     // account's provider catalog, same as the maker-host lifecycle hook.

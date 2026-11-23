@@ -227,6 +227,21 @@ describe('WechatIM host boundary', () => {
     expect(createTransport).not.toHaveBeenCalled();
   });
 
+  it('an old cloud cancellation never aborts a newer native authorization', async () => {
+    const signals: AbortSignal[] = [];
+    const transport = { beginAuthorization: vi.fn(async (signal: AbortSignal) => {
+      signals.push(signal); return {id:'challenge',qrCodeUrl:'https://example.invalid/qr',createdAt:1};
+    }), waitAuthorization: vi.fn((_challenge: unknown, signal: AbortSignal) => new Promise((_resolve,reject) => {
+      signal.addEventListener('abort',()=>reject(new WechatIlinkError('ABORTED','cancelled',false)),{once:true});
+    })) } as unknown as WechatTransport;
+    const im = new WechatIM(deps({createTransport:()=>transport}));
+    const old = new AbortController(); await im.authorize(old.signal);
+    await vi.waitFor(()=>expect(signals).toHaveLength(1));
+    await im.authorize(); await vi.waitFor(()=>expect(signals).toHaveLength(2));
+    expect(signals[0]!.aborted).toBe(true); old.abort(); expect(signals[1]!.aborted).toBe(false);
+    im.cancelAuthorization(); expect(signals[1]!.aborted).toBe(true);
+  });
+
   it('never emulates rich cards for the chunked-text WeChat channel', async () => {
     const im = new WechatIM(deps());
 

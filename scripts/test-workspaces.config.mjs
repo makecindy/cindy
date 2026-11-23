@@ -177,6 +177,8 @@ const desktopGuardInclude = [
   'src/renderer/components/settings/__tests__/settingsSearchCatalog.guard.test.ts',
   // User copy rule (2026-11-18): the Cindy background service is never called "Host" in any locale.
   'src/renderer/i18n/__tests__/hostWordInCopy.guard.test.ts',
+  // Cloud snapshot coverage is a cross-repository protocol contract.
+  'src/shared/__tests__/settingsReadCatalog.test.ts',
   // Cross-file host/engine prompt ownership and remote-authorization isolation.
   'src/main/plugin-oauth/__tests__/runtimePrompt.test.ts',
   // Cross-hook voice stop/refine ownership and composer hydration race wiring.
@@ -211,6 +213,8 @@ const desktopGuardInclude = [
   'src/renderer/__tests__/xUsageGuideRiskContrast.test.ts',
   'src/main/__tests__/authHostedCallback.contract.test.ts',
   'src/main/__tests__/loginScenarioHarness.contract.test.ts',
+  // Managed cloud login acknowledges durable instance credentials before publishing the owner.
+  'src/main/instance-runtime/__tests__/loginPublication.test.ts',
   // DESIGN.md §16.2 copy budget: locale catalogs against the login layout tokens.
   'src/renderer/components/login/__tests__/loginConsentCopyBudget.test.ts',
   'src/main/__tests__/officialProfileMigrationPolicy.contract.test.ts',

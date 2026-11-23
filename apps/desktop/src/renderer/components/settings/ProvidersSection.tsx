@@ -42,7 +42,6 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useRemoteControlEnabled } from '@/hooks/useRemoteControlEnabled';
 import {
-  Check,
   Copy,
   Gift,
   GripVertical,
@@ -147,6 +146,8 @@ import {
   MANAGED_LMSTUDIO_PROVIDER_ID,
   MANAGED_OLLAMA_PROVIDER_ID,
 } from '../../../shared/localModelRuntime';
+import { ProviderListEntry } from './ProviderListEntry';
+import { ProviderAccountHeader, ConnectedPill } from './ProviderAccountHeader';
 import { OAuthBrowserLink, OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
 import { ProviderImportDialog, ProviderImportBatchDialog, ProviderImportFileButton } from './ProviderImportDialog';
 import { SettingsTextInput } from './SettingsTextInput';
@@ -344,22 +345,6 @@ function providerIcon(p: ProviderView, size: number): ReactNode {
 // ---------------------------------------------------------------------------
 // 通用小件(与重构前一致)
 // ---------------------------------------------------------------------------
-
-function ConnectedPill() {
-  const { t } = useTranslation();
-  return (
-    <span
-      className="flex h-[22px] shrink-0 items-center gap-1 rounded-full px-2.5 text-11 font-medium"
-      style={{
-        backgroundColor: 'var(--settings-btn-secondary-bg)',
-        color: 'var(--settings-section-desc)',
-      }}
-    >
-      <Check size={12} strokeWidth={2.5} />
-      {t('settings.providers.pill.connected')}
-    </span>
-  );
-}
 
 /** OpenAI OAuth 仍可恢复但需要用户重新连接；使用中性 chip，避免表现成全局故障。 */
 function ReconnectRequiredPill() {
@@ -801,36 +786,17 @@ function DetailHeader({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="shrink-0 px-5 py-4">
-        {/* 可折行:最小窗口(右栏 ~275px)放不下「状态 + 操作」时整组换行,
-            不被卡片 overflow-hidden 裁掉(PR #1102 review 第三轮)。 */}
-        <div className="flex flex-wrap items-center gap-3 gap-y-2">
-          <div
-            data-testid="provider-detail-identity"
-            className="flex min-w-0 flex-auto basis-[220px] items-center gap-3"
-          >
-            <div
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
-              style={{
-                backgroundColor: 'var(--settings-integration-avatar-bg)',
-                border: '1px solid var(--settings-integration-avatar-border)',
-                color: 'var(--settings-integration-avatar-icon)',
-              }}
-            >
-              {icon}
-            </div>
-
-            <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-              <div
-                data-testid="provider-detail-metadata"
-                className="flex min-w-0 flex-wrap items-center gap-2"
-              >
-                <span
-                  className="min-w-0 truncate text-14 font-medium leading-tight"
-                  style={{ color: 'var(--settings-section-title)' }}
-                >
-                  {provider ? providerDisplayName(provider, t) : title}
-                </span>
+      <ProviderAccountHeader
+        icon={icon}
+        title={provider ? providerDisplayName(provider, t) : title}
+        subtitle={provider ? (
+          <ProviderRunLocationSubtitle
+            provider={provider}
+            subtitle={`${subtitle}${singleAgentNote ? ` · ${singleAgentNote}` : ''}`}
+          />
+        ) : `${subtitle}${singleAgentNote ? ` · ${singleAgentNote}` : ''}`}
+        status={provider ? <ProviderOwnComputersStatus provider={provider} /> : undefined}
+        badges={<>
                 {identityBadge}
                 {subscriptionProduct && (
                   <CustomTag
@@ -853,36 +819,8 @@ function DetailHeader({
                   <CustomTag label={t('settings.providers.pill.hidden')} />
                 ) : null}
                 {badge}
-              </div>
-              <span
-                className="flex min-w-0 items-center gap-1 text-13 leading-tight"
-                style={{ color: 'var(--settings-integration-subtitle)' }}
-              >
-                {provider ? (
-                  <ProviderRunLocationSubtitle
-                    provider={provider}
-                    subtitle={`${subtitle}${singleAgentNote ? ` · ${singleAgentNote}` : ''}`}
-                  />
-                ) : (
-                  <span className="min-w-0 truncate">
-                    {subtitle}
-                    {singleAgentNote ? ` · ${singleAgentNote}` : ''}
-                  </span>
-                )}
-              </span>
-              {provider ? (
-                <span className="flex min-w-0" style={{ color: 'var(--settings-integration-subtitle)' }}>
-                  <ProviderOwnComputersStatus provider={provider} />
-                </span>
-              ) : null}
-            </div>
-          </div>
-
-          <div className="flex shrink-0 items-center gap-2.5">
-            <div
-              data-testid="provider-detail-actions"
-              className="flex shrink-0 items-center gap-2.5"
-            >
+        </>}
+        actions={<>
               {borrowing && (status || primaryAction) && (
                 <span className="text-12 text-[var(--text-secondary)]">
                   {t('settings.providers.detail.runLocation.optionLocal')}
@@ -898,7 +836,8 @@ function DetailHeader({
                 </span>
               ) : null}
               {primaryAction && <PillButton {...primaryAction} />}
-            </div>
+        </>}
+        menu={<>
             {/* 供应商级低频动作(停用/启用):所有供应商详情头统一入口。停用 = 保留凭证、
               整体不可路由(model-disable-store);恢复入口在菜单与下方的已停用条带都有。 */}
             {provider && (
@@ -977,9 +916,8 @@ function DetailHeader({
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
-          </div>
-        </div>
-      </div>
+        </>}
+      />
       <div
         data-testid="provider-detail-scroll"
         ref={detailScrollRef}
@@ -2559,31 +2497,11 @@ function ListRow({
         </button>
       )}
       <Tip text={title} side="right" contentClassName="max-w-[360px] break-words">
-        <button data-settings-search-action="Select the provider whose details are displayed"
-          type="button"
-          onClick={onSelect}
+        <ProviderListEntry data-settings-search-action="Select the provider whose details are displayed"
+          title={title} icon={providerIcon(provider, 14)} selected={selected} onSelect={onSelect}
           onDoubleClick={provider.id === 'xd' ? undefined : () => void management.rename()}
-          aria-current={selected}
-          className="flex min-w-0 flex-1 items-center gap-2.5 py-2 pl-3 pr-2.5 text-left"
-        >
-          <div
-            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg"
-            style={{
-              backgroundColor: 'var(--settings-integration-avatar-bg)',
-              border: '1px solid var(--settings-integration-avatar-border)',
-              color: 'var(--settings-integration-avatar-icon)',
-            }}
-          >
-            {providerIcon(provider, 14)}
-          </div>
-          <span
-            className="min-w-0 flex-1 truncate text-13 font-medium"
-            style={{
-              color: provider.suspended ? 'var(--text-tertiary)' : 'var(--settings-section-title)',
-            }}
-          >
-            {title}
-          </span>
+          muted={provider.suspended}
+          annotation={<>
           {reconnectRequired ? (
             <span
               className="shrink-0 select-none text-11"
@@ -2618,10 +2536,8 @@ function ListRow({
               </span>
             )
           )}
-          <span
-            className="h-1.5 w-1.5 shrink-0 rounded-full"
-            style={{
-              backgroundColor: reconnectRequired
+          </>}
+          statusColor={reconnectRequired
                 ? 'var(--remote-status-failed)'
                 : isManagedLocalProvider(provider.id)
                   ? localLive
@@ -2629,10 +2545,8 @@ function ListRow({
                     : 'var(--border-default)'
                   : (provider.connected || borrowing) && !provider.suspended
                     ? 'var(--remote-status-ready)'
-                    : 'var(--border-default)',
-            }}
-          />
-        </button>
+                    : 'var(--border-default)'}
+        />
       </Tip>
     </div>
   );

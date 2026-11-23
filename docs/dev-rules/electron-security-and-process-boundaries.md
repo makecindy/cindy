@@ -264,7 +264,8 @@ auth-server）+ origin 命中 `setLoginCaptchaOriginResolver` 注入的 auth 端
 也不需要新增 preload / IPC 注入面。主窗 CSP 保持不动：挑战页是独立 origin 的 guest
 文档，`installContentSecurityPolicy` 只注入 app 自有文档，`frame-src 'none'` 也不约束
 `<webview>`。回归用例钉在 `main/__tests__/webview-security.test.ts` 的 captcha 分区
-测试组。
+测试组。云端登录辅助窗口复用该分支；其安全窗口工厂只为登录启用 captcha，
+并拒绝其他 partition 的 webview，不获得主窗口的通用浏览器能力。
 
 ## 4．preload 与 Context Bridge
 

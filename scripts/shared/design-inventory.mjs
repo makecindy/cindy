@@ -695,6 +695,17 @@ export function catalogSurfaces() {
       routeEntryComponents: { '/settings': 'SettingsView' },
     },
     {
+      id: 'desktop.cloud.settings',
+      platform: 'desktop',
+      title: '云实例设置',
+      productionEntry:
+        'hash `/cloud-settings`（CloudSettingsRoute → CloudSettingsView；只在配置了云实例服务的客户端出现入口）',
+      reachableComponents: ['CloudSettingsRoute', 'CloudSettingsView', 'CloudPluginManagement'],
+      styleRoots: ['apps/desktop/src/renderer/features/cloud-settings'],
+      routerPaths: ['/cloud-settings'],
+      routeEntryComponents: { '/cloud-settings': 'CloudSettingsRoute' },
+    },
+    {
       id: 'desktop.plugins.installed',
       platform: 'desktop',
       title: '已装插件',
@@ -919,6 +930,25 @@ export function catalogSurfaces() {
       ],
       routerPaths: [],
       rendererEntryModules: { remoteDesktopViewer: './remote-desktop-viewer-entry' },
+    },
+    {
+      id: 'desktop.window.cloud-login',
+      platform: 'desktop',
+      title: '云实例登录窗口',
+      productionEntry:
+        '`?cloudLoginWindow=1` → renderer/cloud-login-entry.tsx（不走 router.tsx；只在配置了云实例服务的客户端创建）',
+      reachableComponents: ['CloudLoginWindowRoot', 'CloudInstanceLoginFlow', 'LoginPageView', 'LoginBrandStage'],
+      styleRoots: [
+        'apps/desktop/src/renderer/cloud-login-entry.tsx',
+        'apps/desktop/src/renderer/features/cloud-settings/CloudLoginWindowRoot.tsx',
+        'apps/desktop/src/renderer/features/cloud-settings/CloudInstanceLoginPage.tsx',
+        'apps/desktop/src/main/cloud-settings-client/login-window.ts',
+        'apps/desktop/src/renderer/styles/globals.css',
+        'apps/desktop/src/renderer/styles/generated/tokens.css',
+      ],
+      extraStyleRoots: ['desktop.auth.login'],
+      routerPaths: [],
+      rendererEntryModules: { cloudLoginWindow: './cloud-login-entry' },
     },
     {
       id: 'desktop.window.voice-overlay',

@@ -681,6 +681,18 @@ describe('selected plugin host', () => {
     await screen.findByTestId('original-settings');
     expect((screen.getByText('Disable') as HTMLButtonElement).disabled).toBe(false);
   });
+  // A page fixed to a computer it already names (cloud settings) leaves out only the
+  // plain 「正在管理」 notice; what this page alone knows still shows here.
+  it('leaves the plain managing notice to the hosting page and keeps offline', async () => {
+    projects();
+    const device = { deviceId: 'computer-a', name: 'A' };
+    const ui = render(<RemotePluginPage device={device} online hideManagingNotice />);
+    await screen.findByText('computer-a');
+    expect(screen.queryByText('settings.ghosts.remote.managingDescription')).toBeNull();
+    expect(screen.queryByRole('status')).toBeNull();
+    ui.rerender(<RemotePluginPage device={device} online={false} hideManagingNotice />);
+    expect(screen.getByText('settings.ghosts.remote.offlineNotice')).toBeTruthy();
+  });
   it('project read failure retains the target with retry and blocks project actions', async () => {
     projects();
     const normal = invoke.getMockImplementation()!;

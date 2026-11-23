@@ -115,6 +115,7 @@ export function sharedAccountRegisterWiring(ports: Record<string, unknown> & {
   type Row = Awaited<ReturnType<typeof ports.getSessionRowSnapshotStrict>>;
   const same = (field: keyof Row, value: unknown) => (row: Row) => row[field] === value;
   const bindings = {
+    getInstanceConfig: () => null,
     currentSessionCreationSignal: noop,
     captureDataOwnerBroadcastScope: noop,
     isDataOwnerBroadcastScopeCurrent: () => true,

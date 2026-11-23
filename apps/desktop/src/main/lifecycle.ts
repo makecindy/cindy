@@ -58,6 +58,7 @@ import {
 } from './startup-diagnostics';
 import { isGhostSandboxWebContentsId } from './cindy-brain/runtime/electronSandboxAdapter';
 import { isRsbNativePopupWebContentsId } from './rsb-browser-bridge/native-popup-surfaces';
+import { isCloudLoginWindow } from './cloud-settings-client/login-window-registry.js';
 import { isResourceUsageWebContentsId } from './resource-usage-window/registry.js';
 import { isRemoteDesktopViewer } from './remote-desktop-viewer/registry.js';
 import { isRsbWindowWebContentsId } from './right-sidebar-window/registry.js';
@@ -690,7 +691,7 @@ export function installQuitHandler(timeoutMs = 2000): void {
       );
       return;
     }
-    if (isResourceUsageWebContentsId(webContents.id) || isRemoteDesktopViewer(webContents.id)) {
+    if (isResourceUsageWebContentsId(webContents.id) || isRemoteDesktopViewer(webContents.id) || isCloudLoginWindow(webContents.id)) {
       log.warn(
         `resource usage render-process-gone (isolated, no shutdown): reason=${details.reason} exitCode=${details.exitCode}`,
       );
