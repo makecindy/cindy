@@ -44,18 +44,6 @@ function foregroundLayer(): HTMLElement | null {
   return foreground;
 }
 
-/** Focus and raise the registered preview that owns this attachment ID. */
-export function focusPreviewOwner(ownerId: string | null): boolean {
-  if (!ownerId) return false;
-  const panel = Array.from(document.querySelectorAll<HTMLElement>('[data-lightbox-layer]')).find(
-    (layer) => layer.dataset.previewOwnerId === ownerId,
-  );
-  if (!panel) return false;
-  activateLightboxLayer(panel);
-  if (!panel.contains(document.activeElement)) panel.focus({ preventScroll: true });
-  return true;
-}
-
 export function isLightboxCovered(element: HTMLElement): boolean {
   const foreground = foregroundLayer();
   return foreground !== null && !foreground.contains(element);

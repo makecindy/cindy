@@ -1,18 +1,15 @@
-import { lazy, Suspense, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   AttachmentCollectionContext,
   ActivePreviewCollection,
-  AttachmentPreviewOwnerContext,
   type AttachmentCollectionItem,
   type PreviewLeaveGuard,
 } from './AttachmentCollectionContext';
 export {
   AttachmentCollectionContext,
   ActivePreviewCollection,
-  AttachmentPreviewOwnerContext,
   useOpeningCollection,
   type AttachmentCollectionItem,
-  type AttachmentPreviewOwner,
   type PreviewLeaveGuard,
   type PreviewLeaveOutcome,
 } from './AttachmentCollectionContext';
@@ -67,11 +64,6 @@ export function AttachmentCollectionPreview({
   const beforeLeave = useRef<PreviewLeaveGuard | null>(null);
   const scopeRef = useRef<HTMLElement | null>(null);
   const item = items[index]!;
-  const previewOwner = useContext(AttachmentPreviewOwnerContext);
-  const onActiveIdChange = previewOwner?.onActiveIdChange;
-  useEffect(() => {
-    if (item.id) onActiveIdChange?.(item.id);
-  }, [item.id, onActiveIdChange]);
   const closing = useRef(false);
   const close = () => {
     closing.current = true;
@@ -156,7 +148,6 @@ export function AttachmentCollectionPreview({
                 <ImageLightbox
                   src={item.source}
                   filename={item.name}
-                  previewOwnerId={item.id}
                   {...item.image}
                   onClose={close}
                 />

@@ -12,7 +12,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 
-import { ImageLightbox } from '@/components/chat/ImageLightbox';
+import { ImageLightbox, imageSourceSnapshotFields } from '@/components/chat/ImageLightbox';
 
 import {
   MD_IMAGE_LIGHTBOX_EVENT,
@@ -28,7 +28,16 @@ export function MarkdownImageLightboxHost({
 }) {
   const sessionRef = useRef(sessionId);
   sessionRef.current = sessionId;
-  const [media, setMedia] = useState<{ src: string; sessionId?: string } | null>(null);
+  const [media, setMedia] = useState<{
+    src: string;
+    sessionId?: string;
+    galleryId?: string;
+    filename?: string;
+    enableGallery?: boolean;
+    annotationFallbackSrc?: string;
+    autoAnnotate?: boolean;
+    annotationDisabled?: boolean;
+  } | null>(null);
 
   useEffect(() => {
     const onOpen = (ev: Event) => {
@@ -43,10 +52,14 @@ export function MarkdownImageLightboxHost({
   return (
     <ImageLightbox
       src={media.src}
+      galleryId={media.galleryId}
+      filename={media.filename}
+      enableGallery={media.enableGallery}
+      annotationFallbackSrc={media.annotationFallbackSrc}
+      autoAnnotate={media.autoAnnotate}
+      annotationDisabled={media.annotationDisabled}
       onClose={() => setMedia(null)}
-      onSourceChangeCancelled={(displayed) =>
-        setMedia({ src: displayed.src, sessionId: displayed.sessionId })
-      }
+      onSourceChangeCancelled={(displayed) => setMedia(imageSourceSnapshotFields(displayed))}
       sessionId={media.sessionId}
     />
   );

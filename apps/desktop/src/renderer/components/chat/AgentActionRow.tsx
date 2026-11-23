@@ -106,7 +106,7 @@ import {
   ACTIVITY_ROW_HOVER_SURFACE_CLASS,
   ACTIVITY_ROW_RADIUS_CLASS,
 } from './activityRowChrome';
-import { ImageLightbox } from './ImageLightbox';
+import { ImageLightbox, imageSourceSnapshotFields } from './ImageLightbox';
 import { TextLightbox } from './lazyPreviewLightboxes';
 import { ToolPayloadLightbox, type ToolPayloadMode } from './ToolPayloadLightbox';
 import { useFileChipContextMenu } from './useFileChipContextMenu';
@@ -761,7 +761,9 @@ export interface AgentActionRowProps {
 type LightboxState =
   | { kind: 'none' }
   | { kind: 'file'; path: string; name: string }
-  | { kind: 'image'; src: string; sessionId?: string }
+  | { kind: 'image'; src: string; sessionId?: string; galleryId?: string;
+      filename?: string; enableGallery?: boolean; annotationFallbackSrc?: string;
+      autoAnnotate?: boolean; annotationDisabled?: boolean }
   | { kind: 'payload'; payload: ToolPayloadMode };
 
 function fileChangeVerbKey(descriptor: FileChangeDescriptor): string {
@@ -1255,11 +1257,17 @@ export function AgentActionRow({
       {lightbox.kind === 'image' && (
         <ImageLightbox
           src={lightbox.src}
+          galleryId={lightbox.galleryId}
+          filename={lightbox.filename}
+          enableGallery={lightbox.enableGallery}
+          annotationFallbackSrc={lightbox.annotationFallbackSrc}
+          autoAnnotate={lightbox.autoAnnotate}
+          annotationDisabled={lightbox.annotationDisabled}
           onClose={closeLightbox}
           onSourceChangeCancelled={(displayed) =>
             setLightbox((current) =>
               current.kind === 'image'
-                ? { ...current, src: displayed.src, sessionId: displayed.sessionId }
+                ? { ...current, ...imageSourceSnapshotFields(displayed) }
                 : current,
             )
           }

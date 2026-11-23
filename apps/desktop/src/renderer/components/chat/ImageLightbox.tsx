@@ -386,8 +386,6 @@ interface ImageLightboxProps {
   autoAnnotate?: boolean;
   /** When the attachment owner cannot accept updates, the preview must stay read-only. */
   annotationDisabled?: boolean;
-  /** Stable attachment ID used to coordinate one writable preview owner. */
-  previewOwnerId?: string;
   /** Called when a source-retarget leave is rejected; hosts must restore their request to the displayed source snapshot. */
   onSourceChangeCancelled?: (displayed: ImageSourceSnapshot) => void;
 }
@@ -395,18 +393,16 @@ interface ImageLightboxProps {
 /** Source fields frozen until the mounted content accepts them. */
 export type ImageSourceSnapshot = Omit<
   ImageLightboxProps,
-  'onClose' | 'onSourceChangeCancelled' | 'previewOwnerId'
+  'onClose' | 'onSourceChangeCancelled'
 >;
 
 function sourceSnapshotFromProps({
   onClose,
   onSourceChangeCancelled,
-  previewOwnerId,
   ...source
 }: ImageLightboxProps): ImageSourceSnapshot {
   void onClose;
   void onSourceChangeCancelled;
-  void previewOwnerId;
   return source;
 }
 
@@ -421,6 +417,20 @@ function imageSourceKey(source: ImageSourceSnapshot): string {
     source.annotationFallbackSrc ?? null,
     source.autoAnnotate ?? false,
   ]);
+}
+
+/** Single projection used by hosts to restore the displayed source identity after a rejected retarget. */
+export function imageSourceSnapshotFields(displayed: ImageSourceSnapshot) {
+  return {
+    src: displayed.src,
+    sessionId: displayed.sessionId,
+    filename: displayed.filename,
+    galleryId: displayed.galleryId,
+    enableGallery: displayed.enableGallery,
+    annotationFallbackSrc: displayed.annotationFallbackSrc,
+    autoAnnotate: displayed.autoAnnotate,
+    annotationDisabled: displayed.annotationDisabled,
+  };
 }
 
 /** `xdt-file://local/?path=<enc>` → 绝对路径;非该 scheme 或解析失败返回 null。 */
@@ -609,7 +619,6 @@ export function ImageLightbox(props: ImageLightboxProps) {
   const contentProps: ImageLightboxContentProps = {
     ...activeSource,
     onClose: props.onClose,
-    previewOwnerId: props.previewOwnerId,
     annotationDisabled,
     initialStrokes: activeSource.initialStrokes ?? acceptedAnnotationEdit?.initialStrokes,
     annotationEdit:
@@ -663,7 +672,6 @@ export function ImageLightbox(props: ImageLightboxProps) {
     return {
       ...contentProps,
       ...imageProps,
-      previewOwnerId: props.previewOwnerId,
       annotationDisabled: collectionAnnotationDisabled,
       initialStrokes: imageProps?.initialStrokes ?? contentProps.initialStrokes,
       annotationEdit,
@@ -706,7 +714,6 @@ function ImageLightboxContent({
   annotationFallbackSrc,
   autoAnnotate = false,
   annotationDisabled = false,
-  previewOwnerId,
   leaveGuardRef,
 }: ImageLightboxContentProps) {
   const { t } = useTranslation();
@@ -1879,8 +1886,6 @@ function ImageLightboxContent({
     void requestClose();
   };
 
-  const currentPreviewOwnerId =
-    activeCollection?.items[activeCollection.index]?.id ?? previewOwnerId;
   const panelStyle = {
     position: 'fixed',
     left: panelRect.x,
@@ -1915,7 +1920,6 @@ function ImageLightboxContent({
     <div
       ref={overlayRef}
       data-lightbox-layer
-      data-preview-owner-id={currentPreviewOwnerId}
       data-preview-window-mode={panelMode}
       role="dialog"
       aria-modal={false}

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 
-import { ImageLightbox } from '@/components/chat/ImageLightbox';
+import { ImageLightbox, imageSourceSnapshotFields } from '@/components/chat/ImageLightbox';
 import { VideoLightbox } from '@/components/chat/VideoLightbox';
 
 /**
@@ -25,6 +25,12 @@ export function GhostMediaLightboxHost({
 }): ReactNode {
   const [media, setMedia] = useState<{ src: string; kind: 'image' | 'video';
     originSessionId?: string;
+    galleryId?: string;
+    filename?: string;
+    enableGallery?: boolean;
+    annotationFallbackSrc?: string;
+    autoAnnotate?: boolean;
+    annotationDisabled?: boolean;
   } | null>(null);
 
   const openingSession = useRef(sessionId);
@@ -52,11 +58,21 @@ export function GhostMediaLightboxHost({
   return (
     <ImageLightbox
       src={media.src}
+      galleryId={media.galleryId}
+      filename={media.filename}
+      enableGallery={media.enableGallery}
+      annotationFallbackSrc={media.annotationFallbackSrc}
+      autoAnnotate={media.autoAnnotate}
+      annotationDisabled={media.annotationDisabled}
       onClose={() => setMedia(null)}
       onSourceChangeCancelled={(displayed) =>
         setMedia((current) =>
           current
-            ? { ...current, src: displayed.src, originSessionId: displayed.sessionId }
+            ? {
+                ...current,
+                ...imageSourceSnapshotFields(displayed),
+                originSessionId: displayed.sessionId,
+              }
             : current,
         )
       }

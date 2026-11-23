@@ -31,7 +31,7 @@ import {
   type AttachmentCollectionItem,
 } from '@/components/chat/AttachmentCollectionContext';
 import { galleryImagePreviewItem } from '@/components/chat/ImageGalleryContext';
-import { ImageLightbox } from '@/components/chat/ImageLightbox';
+import { ImageLightbox, imageSourceSnapshotFields } from '@/components/chat/ImageLightbox';
 import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
 
 const SRC = 'cindy-media://blobs/source.png';
@@ -962,6 +962,71 @@ describe('ImageLightbox annotate mode', () => {
     });
     await waitFor(() => expect(lightboxImage().getAttribute('src')).toBe(THIRD_SRC));
     expect(onSourceChangeCancelled).not.toHaveBeenCalled();
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：ImageLightbox 拒绝换图后，宿主用完整显示快照恢复请求；
+  //   不会再因残留的 galleryId 触发第二次保存／放弃确认。
+  // - Bug／规则依据：#11952 round 12 review PRRT_kwDOTgdRUs66qqGK；
+  //   docs/dev-rules/engineering-conventions.md §3.2。
+  // - 现有覆盖缺口：既有取消用例只断言 src/sessionId，没有把 galleryId 纳入源身份。
+  // - 最小失败输入：A(gallery-A) 有未保存笔迹 -> 请求 B(gallery-B) -> 取消；
+  //   修复前宿主保留 gallery-B，换图守卫再次弹出。
+  // - tier：unit；复用现有 jsdom 文件，定向套件实测约 2.5s。
+  it('restores the full displayed source identity when a plugin image retarget is cancelled', async () => {
+    const onSourceChangeCancelled = vi.fn();
+    function Host() {
+      const [source, setSource] = useState(() =>
+        imageSourceSnapshotFields({ src: SRC, galleryId: 'gallery-A', sessionId: 'task-A' }),
+      );
+      return (
+        <ConfirmDialogProvider>
+          <button
+            type="button"
+            onClick={() =>
+              setSource(
+                imageSourceSnapshotFields({
+                  src: NEXT_SRC,
+                  galleryId: 'gallery-B',
+                  sessionId: 'task-A',
+                }),
+              )
+            }
+          >
+            open next
+          </button>
+          <ImageLightbox
+            {...source}
+            onClose={vi.fn()}
+            annotationEdit={{ onSave: vi.fn(), onDraftChange: vi.fn() }}
+            onSourceChangeCancelled={(displayed) => {
+              onSourceChangeCancelled(displayed);
+              setSource(imageSourceSnapshotFields(displayed));
+            }}
+          />
+        </ConfirmDialogProvider>
+      );
+    }
+    render(<Host />);
+    loadImage(lightboxImage());
+    openAnnotate();
+    drawStroke({ x: 10, y: 10 }, { x: 50, y: 50 });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'open next' }));
+    });
+    const dialog = await screen.findByRole('alertdialog');
+    await act(async () => {
+      fireEvent.click(
+        within(dialog).getByRole('button', {
+          name: label('chat.media.annotateDiscardConfirmCancel'),
+        }),
+      );
+    });
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(onSourceChangeCancelled).toHaveBeenCalledWith(
+      expect.objectContaining({ src: SRC, galleryId: 'gallery-A', sessionId: 'task-A' }),
+    );
   });
 
   it('keeps a locked attachment preview read-only', () => {

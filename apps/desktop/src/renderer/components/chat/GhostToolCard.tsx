@@ -43,7 +43,7 @@ import { useCallback, useEffect, useLayoutEffect, useId, useMemo, useRef, useSta
 import { useTranslation } from 'react-i18next';
 import { Check, ChevronDown, Copy, FolderOpen, Ghost, Loader2 } from 'lucide-react';
 
-import { ImageLightbox } from './ImageLightbox';
+import { ImageLightbox, imageSourceSnapshotFields } from './ImageLightbox';
 import { mailCardFooterHtml, updateMailCardDocument } from './mailCardFooter';
 import { ModelLightbox } from './ModelLightbox';
 import { GhostCardLinkConfirm, GhostCardPromptPanel } from './GhostCardHostPrompts';
@@ -354,7 +354,16 @@ function GhostCardCanvas({
       setFormBusy(false);
     }
   }, [html, mail]);
-  const [lightbox, setLightbox] = useState<{ src: string; galleryId: string; sessionId?: string } | null>(null);
+  const [lightbox, setLightbox] = useState<{
+    src: string;
+    galleryId?: string;
+    sessionId?: string;
+    filename?: string;
+    enableGallery?: boolean;
+    annotationFallbackSrc?: string;
+    autoAnnotate?: boolean;
+    annotationDisabled?: boolean;
+  } | null>(null);
   // data-ghost-model 声明的 3D 预览:点击开应用内 3D 查看器(GLB 已在媒体
   // 总仓,blob 来源直读,预览图作 poster)。
   const [modelView, setModelView] = useState<{ url: string; poster: string } | null>(null);
@@ -686,7 +695,7 @@ function GhostCardCanvas({
           // GhostMediaLightboxHost 同坑同解:blur 掉 iframe,键盘立即归位)。
           iframeRef.current?.blur();
           if (modelUrl) setModelView({ url: modelUrl, poster: img.src });
-          else if (galleryId) setLightbox({ src: img.src, galleryId, sessionId });
+          else if (galleryId) setLightbox({ src: img.src, galleryId, sessionId, enableGallery: true });
         });
       }
       // 右键 → 宿主图片菜单(复制图片 / 打开所在目录,与基座 ChatImageView 同
@@ -1187,13 +1196,15 @@ function GhostCardCanvas({
         <ImageLightbox
           src={lightbox.src}
           galleryId={lightbox.galleryId}
-          enableGallery
+          filename={lightbox.filename}
+          enableGallery={lightbox.enableGallery ?? true}
+          annotationFallbackSrc={lightbox.annotationFallbackSrc}
+          autoAnnotate={lightbox.autoAnnotate}
+          annotationDisabled={lightbox.annotationDisabled}
           onClose={() => setLightbox(null)}
           onSourceChangeCancelled={(displayed) =>
             setLightbox((current) =>
-              current
-                ? { ...current, src: displayed.src, sessionId: displayed.sessionId }
-                : current,
+              current ? { ...current, ...imageSourceSnapshotFields(displayed) } : current,
             )
           }
           sessionId={lightbox.sessionId}

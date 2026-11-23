@@ -11,14 +11,12 @@ import { attachmentPreviewKind } from '@cindy/maker-shared/attachment-preview';
  * `useAttachments`. Used by ChatInput and the bot group chat composer so both
  * show attached files the same way.
  */
-import { useCallback, useContext, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Pen, TriangleAlert, X } from 'lucide-react';
 
 import { useStableTranslation as useTranslation } from '@/hooks/useStableTranslation';
 import { ImageLightbox } from '@/components/chat/ImageLightbox';
-import { AttachmentPreviewOwnerContext } from '@/components/chat/AttachmentCollectionContext';
-import { focusPreviewOwner } from '@/lib/lightboxLayer';
 import { AnnotationStrokesSvg } from '@/components/chat/AnnotationStrokesSvg';
 import { ImageHoverPreview } from '@/components/chat/ImageHoverPreview';
 import { formatBytes } from '@/components/chat/formatBytes';
@@ -110,28 +108,6 @@ export function ThumbnailStrip({
   /** Composer mutation lock: keep annotation read-only instead of writing to a no-op callback. */
   annotationDisabled?: boolean;
 }) {
-  // One writable image preview owner for the whole tray, including collection
-  // navigation that changes the displayed attachment without remounting the host.
-  const [activePreviewId, setActivePreviewId] = useState<string | null>(null);
-  const openPreview = useCallback((id: string) => {
-    if (focusPreviewOwner(id)) return;
-    setActivePreviewId(id);
-  }, []);
-  const closePreview = useCallback((id: string) => {
-    setActivePreviewId((current) => (current === id ? null : current));
-  }, []);
-  const onActiveIdChange = useCallback((id: string) => {
-    setActivePreviewId(id);
-  }, []);
-  const previewOwner = useMemo(
-    () => ({
-      activeId: activePreviewId,
-      open: openPreview,
-      close: closePreview,
-      onActiveIdChange,
-    }),
-    [activePreviewId, openPreview, closePreview, onActiveIdChange],
-  );
   const collection: AttachmentCollectionItem[] = attachments.flatMap((file) => {
     const media = file.category === 'image' && Boolean(file.url || file.base64);
     const source = media ? (file.url ?? `data:${file.mimeType};base64,${file.base64}`) : file.path;
@@ -164,19 +140,17 @@ export function ThumbnailStrip({
   });
   return (
     <AttachmentCollectionContext.Provider value={collection}>
-      <AttachmentPreviewOwnerContext.Provider value={previewOwner}>
-        <div className="scrollbar-hide flex items-center gap-2 overflow-x-auto pb-2 pl-0 pr-2 pt-2">
-          {attachments.map((file) => (
-            <ThumbnailItem
-              key={file.id}
-              file={file}
-              onRemove={onRemove}
-              onUpdate={onUpdate}
-              annotationDisabled={annotationDisabled}
-            />
-          ))}
-        </div>
-      </AttachmentPreviewOwnerContext.Provider>
+      <div className="scrollbar-hide flex items-center gap-2 overflow-x-auto pb-2 pl-0 pr-2 pt-2">
+      {attachments.map((file) => (
+        <ThumbnailItem
+          key={file.id}
+          file={file}
+          onRemove={onRemove}
+          onUpdate={onUpdate}
+          annotationDisabled={annotationDisabled}
+        />
+      ))}
+    </div>
     </AttachmentCollectionContext.Provider>
   );
 }
@@ -199,14 +173,10 @@ function ThumbnailItem({
 
   // attachment-thumb-click (2026-04-19): mirror UserMessage behaviour — clicking
   // a thumbnail opens the same overlay used in the message stream:
-  //   - image  → ImageLightbox (floating image preview)
+  //   - image  → ImageLightbox (full-screen image preview)
   //   - other  → TextLightbox (file content / oversize CTA)
-  // The tray owns one writable image preview; collection navigation updates the
-  // same owner ID instead of mounting a second editor for that attachment.
-  const owner = useContext(AttachmentPreviewOwnerContext);
-  const previewOpen = owner?.activeId === file.id;
-  const imageSrc =
-    file.url ?? (file.base64 ? `data:${file.mimeType};base64,${file.base64}` : null);
+  // Lightbox state is local to each item so multiple thumbnails don't fight.
+  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   const [textLightboxOpen, setTextLightboxOpen] = useState(false);
   // 缩略图自然尺寸:标注叠加层的 viewBox 基准(onLoad 取得,换图时重置)。
   const [thumbNaturalSize, setThumbNaturalSize] = useState<{
@@ -241,7 +211,8 @@ function ThumbnailItem({
     if (file.category === 'image') {
       // 惰性烧录:托盘附件的 url/base64 恒为原图,已有笔迹由 lightbox 以矢量
       // 叠加显示(可继续编辑/撤销)。
-      if (imageSrc) owner?.open(file.id);
+      const src = file.url ?? (file.base64 ? `data:${file.mimeType};base64,${file.base64}` : null);
+      if (src) setLightboxSrc(src);
       return;
     }
     // Historical composer drafts may still contain an executable's original
@@ -253,7 +224,7 @@ function ThumbnailItem({
     if (!file.path) return;
     if (!(await shouldOpenTextLightbox(file.path))) return;
     setTextLightboxOpen(true);
-  }, [file, imageSrc, isDownloadOnly, owner]);
+  }, [file, isDownloadOnly]);
 
   // 图片缩略图恒为 56×56 方块;其余附件走横向文件卡,宽度随文件名自适应
   // (上限 220px)。判定条件必须与下面渲染分支一致——缓存写失败、既无 url 也无
@@ -420,11 +391,11 @@ function ThumbnailItem({
         )}
 
       {/* attachment-thumb-click (2026-04-19): lightboxes mirroring UserMessage. */}
-      {previewOpen && imageSrc && (
+      {lightboxSrc && (
         <ImageLightbox
-          src={imageSrc}
-          previewOwnerId={file.id}
-          onClose={() => owner?.close(owner.activeId ?? file.id)}
+          src={lightboxSrc}
+          onClose={() => setLightboxSrc(null)}
+          onSourceChangeCancelled={(displayed) => setLightboxSrc(displayed.src)}
           annotationDisabled={annotationDisabled}
           initialStrokes={file.annotationStrokes}
           // 托盘图片的标注编辑:惰性烧录只写回矢量笔迹,不再依赖会话缓存,

@@ -42,7 +42,7 @@ import { cn } from '@/lib/utils';
 import { isGlobalDropIntercepted } from '@/lib/globalDropIntercept';
 import { useFileBrowserPreference } from '@/hooks/useFileBrowserPreference';
 import { toast } from '@/lib/toast';
-import { ImageLightbox } from '@/components/chat/ImageLightbox';
+import { ImageLightbox, imageSourceSnapshotFields } from '@/components/chat/ImageLightbox';
 import {
   useSessionScopedTreeWidth,
   TREE_MIN_WIDTH,
@@ -171,7 +171,16 @@ function FileBrowserBodyWithWorkdir({
   const [directoryFilter, setDirectoryFilter] = useState('');
   const [grid, setGrid] = useState(false);
   const [externalFile, setExternalFile] = useState<ExternalFileSelection | null>(null);
-  const [imageLightbox, setImageLightbox] = useState<{ src: string; sessionId?: string } | null>(null);
+  const [imageLightbox, setImageLightbox] = useState<{
+    src: string;
+    sessionId?: string;
+    galleryId?: string;
+    filename?: string;
+    enableGallery?: boolean;
+    annotationFallbackSrc?: string;
+    autoAnnotate?: boolean;
+    annotationDisabled?: boolean;
+  } | null>(null);
   const externalFileContent = useFileContent(externalFile?.workdir ?? workdir, externalFile?.relPath ?? null, null, null, visible);
   const fileDragDepthRef = useRef(0);
   const [isDraggingFile, setIsDraggingFile] = useState(false);
@@ -803,10 +812,16 @@ function FileBrowserBodyWithWorkdir({
       {imageLightbox ? (
         <ImageLightbox
           src={imageLightbox.src}
+          galleryId={imageLightbox.galleryId}
+          filename={imageLightbox.filename}
+          enableGallery={imageLightbox.enableGallery}
+          annotationFallbackSrc={imageLightbox.annotationFallbackSrc}
+          autoAnnotate={imageLightbox.autoAnnotate}
+          annotationDisabled={imageLightbox.annotationDisabled}
           sessionId={imageLightbox.sessionId}
           onClose={() => setImageLightbox(null)}
           onSourceChangeCancelled={(displayed) =>
-            setImageLightbox({ src: displayed.src, sessionId: displayed.sessionId })
+            setImageLightbox(imageSourceSnapshotFields(displayed))
           }
         />
       ) : null}
