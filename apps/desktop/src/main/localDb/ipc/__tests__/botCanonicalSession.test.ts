@@ -5472,12 +5472,23 @@ describe('Teammate model selection shares profile persistence and route reconcil
   // the settings transaction commits. Existing save cases leave that queue idle.
   it('returns the local model settings receipt while an unrelated message write is pending', async () => {
     const before = await invoke('local-db:bots:get', 'bot-1');
-    await invoke('local-db:bots:create-canonical-session', {
+    const created = await invoke('local-db:bots:create-canonical-session', {
       botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: before.currentVersion,
     });
+    const sessionId = created.canonicalSessionId as string;
+    noteSessionAgentKind(sessionId, 'codex');
+    const runtimeId = getAssistantSamplingRuntimeId(sessionId);
+    if (!runtimeId) throw new Error('Expected an active sampling runtime');
+    await createMessage(sessionId, { clientId: 'still-sampling', role: 'assistant', content: 'Unconfirmed',
+      agentMeta: { samplingAttemptPending: { runtimeId } } });
     const route: BotModelRoute = { harness: 'codex', providerId: 'openai', model: 'gpt-6-astra', effort: 'high', fastMode: false };
     let releaseWrite!: () => void;
     const writeGate = new Promise<void>(resolve => { releaseWrite = resolve; });
+    const { assistantSamplingSettlements } = await import('../../../assistantSamplingSettlement.js');
+    const unrelated = Array.from({ length: 300 }, (_, index) => assistantSamplingSettlements.put({
+      sessionId: 'other-session', persistId: `message-${index}`, patch: { samplingAttemptPending: false },
+    }));
+    const enumerateSettlements = vi.spyOn(assistantSamplingSettlements, 'list');
     const pendingWrite = enqueueDurableWrite('message:other-session', () => writeGate);
     let receipt: Awaited<ReturnType<typeof invoke>> | undefined;
     let saveError: unknown;
@@ -5489,21 +5500,25 @@ describe('Teammate model selection shares profile persistence and route reconcil
       await vi.waitFor(() => expect(readVersion.get('bot-1')).toBe(before.currentVersion + 1));
       await vi.waitFor(() => {
         if (saveError) throw saveError;
-        expect(receipt).toMatchObject({ currentVersion: before.currentVersion + 1,
+        expect(receipt).toMatchObject({ currentVersion: before.currentVersion + 1, lastMessagePreview: null,
           capabilities: { modelChainOverride: [route] },
         });
       });
+      expect(enumerateSettlements).not.toHaveBeenCalled();
     } finally {
       releaseWrite();
       await pendingWrite;
       await save;
+      enumerateSettlements.mockRestore();
+      for (const entry of unrelated) assistantSamplingSettlements.acknowledge(entry);
+      clearSessionPersistState(sessionId);
     }
     expect(await invoke('local-db:bots:get', 'bot-1')).toMatchObject({
       currentVersion: before.currentVersion + 1, capabilities: { modelChainOverride: [route] },
     });
   });
 
-  it('replays a pending outcome for the canonical chat in the local model settings receipt', async () => {
+  it.each(['live', 'recovered'])('replays a %s canonical chat outcome in the local model settings receipt', async source => {
     const before = await invoke('local-db:bots:get', 'bot-1');
     const created = await invoke('local-db:bots:create-canonical-session', {
       botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: before.currentVersion,
@@ -5512,8 +5527,11 @@ describe('Teammate model selection shares profile persistence and route reconcil
     const persistId = 'pending-model-save-preview';
     await createMessage(sessionId, { clientId: persistId, role: 'assistant', content: 'Accepted reply',
       agentMeta: { samplingAttemptPending: { runtimeId: 'retired' }, turnCompleted: true } });
-    const { assistantSamplingSettlements } = await import('../../../assistantSamplingSettlement.js');
-    assistantSamplingSettlements.put({ sessionId, persistId, patch: { samplingAttemptPending: false } });
+    const { assistantSamplingSettlements, createAssistantSamplingSettlementStore } = await import('../../../assistantSamplingSettlement.js');
+    const writer = source === 'live' ? assistantSamplingSettlements : createAssistantSamplingSettlementStore(
+      () => join(h.userDataDir, 'sampling-settlements', createHash('sha256').update(h.ownerScopeKey).digest('hex')),
+    );
+    writer.put({ sessionId, persistId, patch: { samplingAttemptPending: false } });
     const receipt = await invoke('local-db:bots:update', {
       id: 'bot-1', acceptSavedModelSelectionVersion: before.currentVersion,
     });

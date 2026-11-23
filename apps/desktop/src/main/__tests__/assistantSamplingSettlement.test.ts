@@ -18,17 +18,27 @@ it('recovers immutable accepted/failed intents across restart without crossing o
   const store = createAssistantSamplingSettlementStore(directory);
   const accepted = store.put({ sessionId: 's', persistId: 'accepted', patch: { samplingAttemptPending: false } });
   const failed = store.put({ sessionId: 's', persistId: 'failed', patch: { samplingAttemptPending: false, failedSamplingAttempt: { itemId: 'failed' } } });
+  expect(store.hasPendingWrite('s')).toBe(true);
+  expect(store.hasPendingWrite('unrelated')).toBe(false);
   const restarted = createAssistantSamplingSettlementStore(directory);
   owner = 'b';
+  expect(store.hasPendingWrite('s')).toBe(false);
   expect(restarted.list('s')).toEqual([]);
   const other = restarted.put({ sessionId: 's', persistId: 'other-owner', patch: { samplingAttemptPending: false } });
   owner = 'a';
+  expect(restarted.hasPendingWrite('s')).toBe(false);
   expect(restarted.list('s').map(entry => entry.persistId).sort()).toEqual(['accepted', 'failed']);
   // Acknowledge only a known durable DB update, keeping unrelated intents intact.
   restarted.acknowledge(accepted);
   expect(restarted.list('s')).toEqual([failed]);
   restarted.acknowledge(failed);
   expect(restarted.list('s')).toEqual([]);
+  // The original process may still be open while a second instance replays.
+  expect(store.list('s')).toEqual([]);
+  expect(store.hasPendingWrite('s')).toBe(false);
   owner = 'b';
   expect(restarted.list('s')).toEqual([other]);
+  expect(restarted.hasPendingWrite('s')).toBe(true);
+  restarted.acknowledge(other);
+  expect(restarted.hasPendingWrite('s')).toBe(false);
 });

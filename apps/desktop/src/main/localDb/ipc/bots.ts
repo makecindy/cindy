@@ -26,7 +26,7 @@ import type { OpenDialogOptions } from 'electron';
 import { and, desc, eq, gt, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 
 import { getDbClient, tryGetDbClient } from '../client/current';
-import { flushAssistantSamplingMetadata } from '../../messagePersistBroadcaster.desktop.js';
+import { flushAssistantSamplingMetadata, getAssistantSamplingRuntimeId } from '../../messagePersistBroadcaster.desktop.js';
 import { notifyAgentIslandCompanionChanged } from '../agentIslandSessionPatch.js';
 import type {
   BotsReplaceCanonicalSessionResult,
@@ -1207,12 +1207,25 @@ async function readProfile(
     .limit(1);
   const canonicalClearedAt = byId.get(canonicalSessionId ?? '')?.clearedAt ?? null;
   owner.assertCurrent();
-  // A settings receipt reads the committed profile. With no sampling outcome
-  // to replay for this chat, it can use the committed preview without draining
-  // writes from other tasks. Ordinary roster/history reads keep their barrier.
-  if (canonicalSessionId &&
-      (!pendingSamplingOnly || assistantSamplingSettlements.list(canonicalSessionId).length > 0)) {
-    await flushAssistantSamplingMetadata(canonicalSessionId);
+  if (canonicalSessionId) {
+    let needsSettlement = !pendingSamplingOnly || assistantSamplingSettlements.hasPendingWrite(canonicalSessionId);
+    if (!needsSettlement) {
+      // Outcomes left by a prior process can affect this preview only if its
+      // pending assistant row is already on disk. Detect that case through the
+      // session's message index and keep the existing durable replay barrier.
+      const runtimeId = getAssistantSamplingRuntimeId(canonicalSessionId);
+      const [pendingReply] = await db.select({ id: messages.id }).from(messages).where(and(
+        eq(messages.sessionId, canonicalSessionId),
+        eq(messages.role, 'assistant'),
+        isNull(messages.rewindAt),
+        ...(canonicalClearedAt !== null ? [gt(messages.createdAt, canonicalClearedAt)] : []),
+        sql`COALESCE(json_extract(${messages.agentMeta}, '$.samplingAttemptPending'), 0) != 0`,
+        ...(runtimeId ? [sql`json_extract(${messages.agentMeta}, '$.samplingAttemptPending.runtimeId') IS NOT ${runtimeId}`] : []),
+      )).limit(1);
+      owner.assertCurrent();
+      needsSettlement = !!pendingReply || assistantSamplingSettlements.hasPendingWrite(canonicalSessionId);
+    }
+    if (needsSettlement) await flushAssistantSamplingMetadata(canonicalSessionId);
   }
   owner.assertCurrent();
   const latestMessage = await readCanonicalChatPreview(db, canonicalSessionId, canonicalClearedAt);
