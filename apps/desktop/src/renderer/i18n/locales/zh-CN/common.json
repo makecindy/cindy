@@ -17575,7 +17575,8 @@
         "pause": "暂停",
         "deleteAutomation": "删除自动化"
       },
-      "tagWebhook": "Webhook"
+      "tagWebhook": "Webhook",
+      "tagPluginEvent": "插件事件"
     },
     "detail": {
       "manualTrigger": "手动触发",
@@ -18224,7 +18225,8 @@
         "reconnectConfirm": "重新连接 Webhook？",
         "reconnectConfirmHint": "将占用一个名额并生成新的接收地址。请把新地址和密钥更新到发送方。",
         "reconnectFailed": "暂时无法重新连接，请检查剩余名额后重试。"
-      }
+      },
+      "pluginTitle": "插件事件触发"
     }
   },
   "issueTracker": {

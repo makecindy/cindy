@@ -340,8 +340,9 @@ export function ScheduleFormDialog({
     : t('scheduler.editor.promptDialog.create');
   // UI 三选一；manual 仅表示不启用定时，已有组合配置在未切换触发方式时原样保留。
   const triggerMode = form.prEnabled ? 'pr' : form.webhookEnabled ? 'webhook' : form.manual ? 'manually' : 'automatic';
+  // Address-based senders still need an account; a saved one stays hidden (and preserved) while signed out.
   const webhookSettingsVisible = !isProjectAutomationMode && form.webhookEnabled
-    && (eventTriggerReady || form.webhookPreset === 'plugin');
+    && (webhookReceiverReady || form.webhookPreset === 'plugin');
 
   const initialId = initial?.id;
   useEffect(() => {

@@ -17575,7 +17575,8 @@
         "pause": "暫停",
         "deleteAutomation": "刪除自動化"
       },
-      "tagWebhook": "Webhook"
+      "tagWebhook": "Webhook",
+      "tagPluginEvent": "插件事件"
     },
     "detail": {
       "manualTrigger": "手動觸發",
@@ -18224,7 +18225,8 @@
         "reconnectConfirm": "重新連線 Webhook？",
         "reconnectConfirmHint": "將占用一個名額並產生新的接收位址。請將新位址和金鑰更新至傳送方。",
         "reconnectFailed": "暫時無法重新連線，請檢查剩餘名額後再試。"
-      }
+      },
+      "pluginTitle": "插件事件觸發"
     }
   },
   "issueTracker": {

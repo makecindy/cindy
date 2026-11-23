@@ -17575,7 +17575,8 @@
         "pause": "一時停止",
         "deleteAutomation": "自動化を削除"
       },
-      "tagWebhook": "Webhook"
+      "tagWebhook": "Webhook",
+      "tagPluginEvent": "プラグインイベント"
     },
     "detail": {
       "manualTrigger": "手動トリガー",
@@ -18224,7 +18225,8 @@
         "reconnectConfirm": "Webhook に再接続しますか？",
         "reconnectConfirmHint": "枠を1つ使用して新しい受信アドレスを作成します。新しいアドレスとシークレットを送信元に設定してください。",
         "reconnectFailed": "再接続できません。空き枠を確認して再試行してください。"
-      }
+      },
+      "pluginTitle": "プラグインイベントで実行"
     }
   },
   "issueTracker": {

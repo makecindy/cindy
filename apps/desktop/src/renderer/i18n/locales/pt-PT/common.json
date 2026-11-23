@@ -17815,7 +17815,8 @@
         "pause": "Pausar",
         "deleteAutomation": "Eliminar automatização"
       },
-      "tagWebhook": "Webhook"
+      "tagWebhook": "Webhook",
+      "tagPluginEvent": "Evento de plugin"
     },
     "detail": {
       "manualTrigger": "Acionamento manual",
@@ -18464,7 +18465,8 @@
         "reconnectConfirm": "Voltar a ligar o Webhook?",
         "reconnectConfirmHint": "Será usada uma vaga e criado um novo endereço de receção. Atualize o endereço e o segredo no remetente.",
         "reconnectFailed": "Não foi possível voltar a ligar. Verifique as vagas disponíveis antes de tentar novamente."
-      }
+      },
+      "pluginTitle": "Acionado por evento de plugin"
     }
   },
   "issueTracker": {

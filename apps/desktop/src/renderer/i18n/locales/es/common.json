@@ -17815,7 +17815,8 @@
         "pause": "Pausar",
         "deleteAutomation": "Eliminar automatización"
       },
-      "tagWebhook": "Webhook"
+      "tagWebhook": "Webhook",
+      "tagPluginEvent": "Evento de complemento"
     },
     "detail": {
       "manualTrigger": "Activación manual",
@@ -18464,7 +18465,8 @@
         "reconnectConfirm": "¿Reconectar Webhook?",
         "reconnectConfirmHint": "Se usará una plaza y se creará una nueva dirección de recepción. Actualiza la dirección y el secreto en el remitente.",
         "reconnectFailed": "No se pudo reconectar. Comprueba las plazas disponibles antes de intentarlo de nuevo."
-      }
+      },
+      "pluginTitle": "Activador por evento de complemento"
     }
   },
   "issueTracker": {

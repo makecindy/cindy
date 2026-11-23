@@ -17649,7 +17649,8 @@
         "pause": "Pausieren",
         "deleteAutomation": "Automatisierung löschen"
       },
-      "tagWebhook": "Webhook"
+      "tagWebhook": "Webhook",
+      "tagPluginEvent": "Plugin-Ereignis"
     },
     "detail": {
       "manualTrigger": "Manueller Auslöser",
@@ -18298,7 +18299,8 @@
         "reconnectConfirm": "Webhook erneut verbinden?",
         "reconnectConfirmHint": "Dies belegt einen Platz und erstellt eine neue Empfangsadresse. Neue Adresse und neues Secret beim Absender eintragen.",
         "reconnectFailed": "Verbindung fehlgeschlagen. Verfügbare Plätze prüfen und erneut versuchen."
-      }
+      },
+      "pluginTitle": "Plugin-Ereignis-Auslöser"
     }
   },
   "issueTracker": {

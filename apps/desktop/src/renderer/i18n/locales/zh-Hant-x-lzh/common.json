@@ -17575,7 +17575,8 @@
         "pause": "暫止",
         "deleteAutomation": "刪自運"
       },
-      "tagWebhook": "Webhook"
+      "tagWebhook": "Webhook",
+      "tagPluginEvent": "法器之事"
     },
     "detail": {
       "manualTrigger": "手觸",
@@ -18224,7 +18225,8 @@
         "reconnectConfirm": "重連 Webhook 乎？",
         "reconnectConfirmHint": "此舉將占一名額並生新受信之址。請以新址與密鑰更設發信方。",
         "reconnectFailed": "暫未能重連，請察所餘名額後再試。"
-      }
+      },
+      "pluginTitle": "法器之事觸發"
     }
   },
   "issueTracker": {

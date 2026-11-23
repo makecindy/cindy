@@ -17649,7 +17649,8 @@
         "pause": "Pause",
         "deleteAutomation": "Delete Automation"
       },
-      "tagWebhook": "Webhook"
+      "tagWebhook": "Webhook",
+      "tagPluginEvent": "Plugin event"
     },
     "detail": {
       "manualTrigger": "Manual trigger",
@@ -18298,7 +18299,8 @@
         "reconnectConfirm": "Reconnect Webhook?",
         "reconnectConfirmHint": "This uses one slot and creates a new receiving address. Update the sender with the new address and secret.",
         "reconnectFailed": "Could not reconnect. Check the available slots before trying again."
-      }
+      },
+      "pluginTitle": "Plugin event trigger"
     }
   },
   "issueTracker": {

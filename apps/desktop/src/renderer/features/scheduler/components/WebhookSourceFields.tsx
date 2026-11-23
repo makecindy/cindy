@@ -65,7 +65,7 @@ export function WebhookSourceFields({
   const known = appSource || pluginSource || preset === 'custom' || SCHEDULE_WEBHOOK_PRESETS.some((item) => item.id === preset);
   const pluginOption = pluginSource || (pluginCandidates?.length ?? 0) > 0
     ? [{ value: 'plugin', label: t('scheduler.editor.webhook.plugin.source') }] : [];
-  const options = addressSourcesAvailable || !pluginSource ? [
+  const options = addressSourcesAvailable ? [
     ...SCHEDULE_WEBHOOK_PRESETS.map((item) => ({ value: item.id, label: item.label })),
     { value: 'custom', label: t('scheduler.editor.webhook.sourceCustom') },
     ...pluginOption,

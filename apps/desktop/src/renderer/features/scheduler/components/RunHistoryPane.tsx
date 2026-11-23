@@ -227,8 +227,9 @@ export function RunHistoryPane({
     : s.intervalMs ? formatIntervalDuration(s.intervalMs, appI18n.language) : summarizeConfig(cronToConfig(s.cronExpr), t);
   const rules = schedulePrTriggers(s);
   const prText = rules.map(rule => `${rule.url.replace('https://github.com/', '').replace('/pull/', '#')} · ${t(`scheduler.prTrigger.${rule.change}`)}`).join(', ');
+  const eventTitle = t(s.webhookTrigger?.source?.preset === 'plugin' ? 'scheduler.webhook.pluginTitle' : 'scheduler.webhook.title');
   const cronText = prText ? (s.manual ? prText : `${timingText} · ${prText}`) : s.webhookTrigger
-    ? s.manual ? t('scheduler.webhook.title') : `${timingText} · ${t('scheduler.webhook.title')}`
+    ? s.manual ? eventTitle : `${timingText} · ${eventTitle}`
     : timingText;
   const agentText = s.agentKind === 'acp'
     ? pluginEngineName ?? t('newChat.pluginEngines.genericName')

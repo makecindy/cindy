@@ -66,7 +66,7 @@ export default {
     // jsdom form tests cannot observe rendered geometry; sample actual paint frames.
     await page.emulateMedia({ reducedMotion: 'no-preference' });
     for (const [key, capture] of [['scheduler.editor.fields.manually', 'manual'],
-      ['scheduler.editor.trigger.timed', 'timed'], ['scheduler.cell.tagWebhook', 'webhook']]) {
+      ['scheduler.editor.trigger.timed', 'timed'], ['scheduler.editor.trigger.event', 'webhook']]) {
       const label = await ui.t(key);
       const choice = page.getByRole('radio', { name: label, exact: true });
       // UI regression: removing Webhook fields used to clamp scrollTop and move
