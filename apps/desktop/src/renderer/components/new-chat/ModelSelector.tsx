@@ -163,6 +163,7 @@ import {
   isSubscriptionDirectModel,
 } from '../../../shared/subscriptionModels';
 import { extractIpcError } from '@/utils/ipcError';
+import { isDeviceUnresponsiveRemoteError, isTransientRemoteError } from '@cindy/maker-shared/device-link-contract';
 import { isModelEnabled, useModelVisibilityVersion } from '@/state/modelVisibilityPrefs';
 import { seedDefaultFavorite } from '@/state/modelFavorites';
 import { useProviderModelMemoryVersion } from '@/state/providerModelMemory';
@@ -1266,6 +1267,21 @@ interface RemoteProviderLoadState {
   loading?: boolean;
   error?: string | null;
   unsupported?: boolean;
+  /** The bounded catalog still on screen, if any (kept across a temporary read failure). */
+  providers?: readonly unknown[];
+}
+
+/**
+ * A temporary read failure (timeout, offline blip, busy link) while a bounded snapshot is still on
+ * screen is not a broken source: the snapshot is within its host trust budget (an expired budget,
+ * a refusal or an unsupported target report non-temporary errors and clear it) and the read is
+ * retried in the background. Showing it as a failure made the task pill blink red on every blip
+ * and only clear when the picker was opened (2026-11-23 field report).
+ */
+function isTemporaryFailureWithSnapshot(error: string | null | undefined, hasSnapshot: boolean): boolean {
+  if (!error || !hasSnapshot) return false;
+  if (extractIpcError(new Error(error))?.code === 'MODEL_VISIBILITY_NOT_READY') return false;
+  return isTransientRemoteError(error) || isDeviceUnresponsiveRemoteError(error);
 }
 
 /**
@@ -1291,8 +1307,10 @@ export function resolveRemoteModelListStatus({
   const required = agentKind
     ? [agentKind === 'claude-code' ? cc : agentKind === 'codex' ? codex : pi]
     : [cc, codex, pi];
-  if (required.some((state) => !!state.error)) return 'error';
-  if (providers.error && !providers.unsupported) return 'error';
+  if (required.some((state) => !!state.error
+    && !isTemporaryFailureWithSnapshot(state.error, state.capabilities != null))) return 'error';
+  if (providers.error && !providers.unsupported
+    && !isTemporaryFailureWithSnapshot(providers.error, (providers.providers?.length ?? 0) > 0)) return 'error';
   if (providers.loading || required.some((state) => state.loading || state.capabilities == null)) {
     return 'loading';
   }
