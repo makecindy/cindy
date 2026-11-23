@@ -6809,7 +6809,14 @@
           "encrypted": "端对端加密",
           "legacyConnection": "旧版连接",
           "encryptionUnknown": "尚未核实",
-          "legacyEncryptionHint": "旧路经中继时，内容未施端对端加密。"
+          "legacyEncryptionHint": "旧路经中继时，内容未施端对端加密。",
+          "routePreference": "择路",
+          "routeAuto": "自动",
+          "routeDirect": "直连",
+          "routeRelay": "中继",
+          "routeUnavailable": "不可达",
+          "routeMeasuring": "测速中…",
+          "routeDirectUnavailableHint": "今网路未能直达此器"
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -14319,7 +14326,6 @@
       "regionAria": "待遣之讯队列",
       "listAria": "队列之讯",
       "pausedFooter": "差事已止，队列暂停",
-
       "steerUnsupportedNotice": "此引擎不受插话，待遣之讯俟此轮毕乃遣。",
       "resumeAction": "续遣",
       "resumeAria": "续遣队列之讯",

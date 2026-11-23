@@ -6809,7 +6809,14 @@
           "encrypted": "종단 간 암호화",
           "legacyConnection": "이전 연결",
           "encryptionUnknown": "확인되지 않음",
-          "legacyEncryptionHint": "이전 연결의 중계 경로는 종단 간 암호화되지 않습니다."
+          "legacyEncryptionHint": "이전 연결의 중계 경로는 종단 간 암호화되지 않습니다.",
+          "routePreference": "경로 선택",
+          "routeAuto": "자동",
+          "routeDirect": "직접",
+          "routeRelay": "중계",
+          "routeUnavailable": "사용 불가",
+          "routeMeasuring": "측정 중…",
+          "routeDirectUnavailableHint": "현재 네트워크에서는 이 기기에 직접 연결할 수 없습니다"
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -14319,7 +14326,6 @@
       "regionAria": "전송 대기 중인 메시지 큐",
       "listAria": "큐의 메시지",
       "pausedFooter": "작업 중지됨, 대기열 일시정지",
-
       "steerUnsupportedNotice": "이 엔진은 끼어들기를 지원하지 않습니다. 대기 중인 메시지는 현재 턴이 끝난 후 전송됩니다.",
       "resumeAction": "계속 전송",
       "resumeAria": "대기열 메시지 전송 계속",

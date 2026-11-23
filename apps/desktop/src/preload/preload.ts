@@ -5319,6 +5319,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('device-link:set-device-control-enabled', { deviceId, enabled }),
     /** 远程连接拓扑:本机已建链对端的路径 / RTT 快照(轮询 + onPeerLinksChanged) */
     getPeerLinks: (): Promise<DeviceLinkPeerLinksSnapshot> => ipcRenderer.invoke('device-link:get-peer-links'),
+    /** 远程连接拓扑:设置本机到指定设备的 Agent-Net 线路偏好(auto / direct / relay) */
+    setPeerPathPreference: (
+      deviceId: string,
+      preference: 'auto' | 'direct' | 'relay',
+    ): Promise<{ deviceId: string; preference: 'auto' | 'direct' | 'relay' }> =>
+      ipcRenderer.invoke('device-link:set-peer-path-preference', { deviceId, preference }),
     /** 对端链路拓扑变化(建链 / 断链 / 直连↔relay),payload 为全量快照 */
     onPeerLinksChanged: fanOutDeviceLinkPeerLinksChanged,
     listDevices: (): Promise<{

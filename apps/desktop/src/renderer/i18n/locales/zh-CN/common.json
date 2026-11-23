@@ -6809,7 +6809,14 @@
           "encrypted": "端到端加密",
           "legacyConnection": "旧版连接",
           "encryptionUnknown": "尚未确认",
-          "legacyEncryptionHint": "旧版连接经过中转时，内容未端到端加密。"
+          "legacyEncryptionHint": "旧版连接经过中转时，内容未端到端加密。",
+          "routePreference": "线路选择",
+          "routeAuto": "自动",
+          "routeDirect": "直连",
+          "routeRelay": "中转",
+          "routeUnavailable": "不可用",
+          "routeMeasuring": "测速中…",
+          "routeDirectUnavailableHint": "当前网络无法直连此设备"
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -14319,7 +14326,6 @@
       "regionAria": "待发送消息队列",
       "listAria": "队列消息",
       "pausedFooter": "任务已停止，队列暂停",
-
       "steerUnsupportedNotice": "当前引擎不支持插话，排队的消息会在当前这一轮结束后发送。",
       "resumeAction": "继续发送",
       "resumeAria": "继续发送队列消息",

@@ -17,12 +17,17 @@
  *   对端一直重发（总有数据进来）而本机发往它的请求 60 秒内超时两次；本机只被控、请求一直进得来，自己发出的结果在
  *   中转连接上 5 秒里重传 10 个分片、占发出包数一半（审查 P1：只切控制端，被控端仍沿坏掉的上行回结果）；
  *   一条发过 1000 包、重传过 400 个分片的长期直连切到中转（审查 P2：生命周期累计不该算成最近 5 秒的中转重传）。
+ *   2026-11-22 真机（Surge/Clash Fake-IP 透明网关）：系统 DNS 与普通 UDP/53 都把 `agent-net-stun.cindy.com.cn` 解析到
+ *   `198.18.0.0/15`，STUN 走 Fake-IP 分配的外部端口与真实 IP 探测对端的 NAT 端口不同，对端在端口受限锥形 NAT 后无法直连。
+ *   最小失败输入：`systemLookup` 返回 `198.18.38.213`，`resolveUdpHost` / `StunClient` 须改走真实 IP（拿不到再回退）。
  * - tier：unit；本机约 130 毫秒（假计时器）。
  */
 import { afterEach, expect, it, vi } from 'vitest';
 import { encodeUdpDown, encodeUdpRegisterAck, verifyUdpRegister, verifyUdpUp, type UdpRelayCredentials } from '@cindy/agent-net-relay';
 import { UDP_RELAY_DOWN, UDP_RELAY_REGISTER_ACK, udpRelayPeerHash } from '@cindy/agent-net-relay/client';
 import { RELAY_UDP_DATA_COOLDOWNS_MS, RelaySendCounters, RelayUdpPath, type RelayUdpOptions } from '../relayUdp.js';
+import { StunClient, isFakeIp, parseDohIpv4, resolveUdpHost } from '../stun.js';
+import { AUTO_SWITCH_COOLDOWN_MS, decideAutoPreferRelay } from '../transport.js';
 
 const paths: RelayUdpPath[] = [];
 afterEach(() => { for (const path of paths.splice(0)) path.close(); vi.useRealTimers(); });
@@ -338,4 +343,94 @@ it('counts only the growth a connection made while it stayed on the relay, not i
     .toEqual({ retransmitted: 9, sent: 70 });
   expect(counters.sample([{ key: relayed, relay: true, retransmitted: 4, sent: 180 }, { key: direct, relay: false, retransmitted: 500, sent: 1_200 }]))
     .toEqual({ retransmitted: 9, sent: 90 });
+});
+
+it('detects RFC 2544 Fake-IP addresses and parses real IPv4 answers from DoH JSON', () => {
+  expect([
+    isFakeIp('198.18.0.1'),
+    isFakeIp('198.18.38.213'),
+    isFakeIp('198.19.255.254'),
+    isFakeIp('198.17.255.255'),
+    isFakeIp('198.20.0.1'),
+    isFakeIp('106.15.77.85'),
+    isFakeIp('not-an-ip'),
+  ]).toEqual([true, true, true, false, false, false, false]);
+
+  expect(parseDohIpv4(JSON.stringify({
+    Status: 0,
+    Answer: [
+      { type: 5, data: 'nlb.example.test.' },
+      { type: 1, data: '198.18.0.2' },
+      { type: 1, data: '106.15.77.85' },
+      { type: 1, data: '47.102.146.103' },
+    ],
+  }))).toBe('106.15.77.85');
+  expect(parseDohIpv4(JSON.stringify({ Status: 3, Answer: [{ type: 1, data: '106.15.77.85' }] }))).toBeNull();
+  expect(parseDohIpv4('{bad-json')).toBeNull();
+});
+
+it('bypasses Fake-IP via real-IP lookup, deduplicates concurrent lookups, and falls back when unavailable', async () => {
+  const resolveReal = vi.fn(async () => '47.102.146.103');
+  const systemLookup = vi.fn(async () => '106.15.77.85');
+  // IPv4 literal and normal DNS answers never touch the DoH path.
+  expect(await resolveUdpHost('106.15.77.85', { systemLookup, resolveReal })).toBe('106.15.77.85');
+  expect(systemLookup).not.toHaveBeenCalled();
+  expect(await resolveUdpHost('stun.example.test', { systemLookup, resolveReal })).toBe('106.15.77.85');
+  expect(resolveReal).not.toHaveBeenCalled();
+
+  // Fake-IP triggers real-IP lookup, shared between concurrent STUN + relay UDP calls for the same host.
+  let release!: (ip: string | null) => void;
+  const concurrentReal = vi.fn(() => new Promise<string | null>((resolve) => { release = resolve; }));
+  const fakeLookup = async () => '198.18.38.213';
+  const a = resolveUdpHost('agent-net-stun.example.test', { systemLookup: fakeLookup, resolveReal: concurrentReal });
+  const b = resolveUdpHost('agent-net-stun.example.test', { systemLookup: fakeLookup, resolveReal: concurrentReal });
+  await vi.waitFor(() => expect(concurrentReal).toHaveBeenCalledTimes(1));
+  release('47.102.146.103');
+  expect(await Promise.all([a, b])).toEqual(['47.102.146.103', '47.102.146.103']);
+
+  // Unreachable DoH or a Fake-IP answer falls back to the system result without breaking private relays.
+  expect(await resolveUdpHost('private.lan', { systemLookup: fakeLookup, resolveReal: async () => null })).toBe('198.18.38.213');
+  expect(await resolveUdpHost('private.lan', { systemLookup: fakeLookup, resolveReal: async () => '198.19.1.2' })).toBe('198.18.38.213');
+});
+
+it('sends STUN binding requests to the resolved real IP instead of a Fake-IP and parses XOR-MAPPED-ADDRESS', async () => {
+  const sentTo: Array<{ address: string; port: number }> = [];
+  let client!: StunClient;
+  client = new StunClient((to, datagram) => {
+    sentTo.push(to);
+    // Reply with a minimal RFC 5389 Binding Success carrying XOR-MAPPED-ADDRESS = 114.86.77.98:18024.
+    const reply = Buffer.alloc(32);
+    reply.writeUInt16BE(0x0101, 0);
+    reply.writeUInt16BE(12, 2);
+    reply.writeUInt32BE(0x2112a442, 4);
+    Buffer.from(datagram.buffer, datagram.byteOffset + 8, 12).copy(reply, 8);
+    reply.writeUInt16BE(0x0020, 20);
+    reply.writeUInt16BE(8, 22);
+    reply[25] = 0x01;
+    reply.writeUInt16BE(18024 ^ 0x2112, 26);
+    reply.writeUInt32BE(((114 << 24) | (86 << 16) | (77 << 8) | 98) >>> 0 ^ 0x2112a442, 28);
+    queueMicrotask(() => client.intercept(reply));
+  }, (host) => resolveUdpHost(host, {
+    systemLookup: async () => '198.18.38.213',
+    resolveReal: async () => '106.15.77.85',
+  }));
+
+  const mapped = await client.query('agent-net-stun.example.test:3479');
+  expect(sentTo).toEqual([{ address: '106.15.77.85', port: 3479 }]);
+  expect(mapped).toEqual({ address: '114.86.77.98', port: 18024 });
+  client.close();
+});
+
+// 2026-11-22 真机跨国直连（上海电信 163 ↔ 新加坡 StarHub 220ms vs 阿里云上海中转 86ms）：
+// 自动选路只在直连明显慢于中转（>1.5x 且慢 >=40ms）时选中转，并用滞回+冷却防止来回抖动。tier: unit。
+it('selects relay in auto mode only when direct is significantly slower, with hysteresis and cooldown', () => {
+  expect(decideAutoPreferRelay({ currentPreferRelay: false, directRttMs: 220, relayRttMs: null, msSinceLastSwitch: Infinity })).toBe(false);
+  expect(decideAutoPreferRelay({ currentPreferRelay: true, directRttMs: null, relayRttMs: 86, msSinceLastSwitch: Infinity })).toBe(true);
+  expect(decideAutoPreferRelay({ currentPreferRelay: false, directRttMs: 25, relayRttMs: 15, msSinceLastSwitch: Infinity })).toBe(false);
+  expect(decideAutoPreferRelay({ currentPreferRelay: false, directRttMs: 95, relayRttMs: 86, msSinceLastSwitch: Infinity })).toBe(false);
+  expect(decideAutoPreferRelay({ currentPreferRelay: false, directRttMs: 120, relayRttMs: 86, msSinceLastSwitch: Infinity })).toBe(false);
+  expect(decideAutoPreferRelay({ currentPreferRelay: false, directRttMs: 220, relayRttMs: 86, msSinceLastSwitch: Infinity })).toBe(true);
+  expect(decideAutoPreferRelay({ currentPreferRelay: true, directRttMs: 60, relayRttMs: 86, msSinceLastSwitch: AUTO_SWITCH_COOLDOWN_MS - 1 })).toBe(true);
+  expect(decideAutoPreferRelay({ currentPreferRelay: true, directRttMs: 140, relayRttMs: 86, msSinceLastSwitch: AUTO_SWITCH_COOLDOWN_MS })).toBe(true);
+  expect(decideAutoPreferRelay({ currentPreferRelay: true, directRttMs: 105, relayRttMs: 86, msSinceLastSwitch: AUTO_SWITCH_COOLDOWN_MS })).toBe(false);
 });

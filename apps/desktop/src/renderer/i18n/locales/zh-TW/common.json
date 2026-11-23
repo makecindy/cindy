@@ -6809,7 +6809,14 @@
           "encrypted": "端對端加密",
           "legacyConnection": "舊版連線",
           "encryptionUnknown": "尚未確認",
-          "legacyEncryptionHint": "舊版連線經過中繼時，內容未端對端加密。"
+          "legacyEncryptionHint": "舊版連線經過中繼時，內容未端對端加密。",
+          "routePreference": "路線選擇",
+          "routeAuto": "自動",
+          "routeDirect": "直連",
+          "routeRelay": "中繼",
+          "routeUnavailable": "無法使用",
+          "routeMeasuring": "測速中…",
+          "routeDirectUnavailableHint": "目前網路無法直連此裝置"
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -14319,7 +14326,6 @@
       "regionAria": "待傳送訊息佇列",
       "listAria": "佇列訊息",
       "pausedFooter": "任務已停止，佇列暫停",
-
       "steerUnsupportedNotice": "目前引擎不支援插話，排隊中的訊息會在目前回合結束後送出。",
       "resumeAction": "繼續傳送",
       "resumeAria": "繼續傳送佇列訊息",
