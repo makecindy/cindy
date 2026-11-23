@@ -85,10 +85,13 @@ export function useDraftHeaderWrapMotion(
       if (Math.abs(dContent) >= 0.5) {
         // 输入区用 margin 平移,不用 transform:transform 会让输入框内的浮层锚点在动画
         // 期间暂时跟丢;两种写法结束时都回到静态值,不留定位上下文。
+        // 与按钮排同一条折线:输入区只在纵向那一腿跟着走,横移阶段不动,否则中段会追到
+        // 按钮排底下(按钮排已经在新一行,输入区还差一截)。
         animations.push(
           content.animate(
             [
               { marginTop: `${baseMargin + dContent}px` },
+              { marginTop: `${baseMargin + (stacked ? 0 : dContent)}px`, offset: 0.5 },
               { marginTop: `${baseMargin}px` },
             ],
             { duration, easing },
