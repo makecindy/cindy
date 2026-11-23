@@ -14642,7 +14642,7 @@ describe('Orca report durable recovery', () => {
 
   // Unit regression for PR #12163: an EOF can queue Continue before the provider
   // acknowledges a steer. The earlier cases settle the ACK before backoff expires.
-  it.each(['before-backoff', 'after-backoff', 'after-close'] as const)('retains Worker recovery when steer ACK arrives %s', async timing => {
+  it.each(['before-backoff', 'after-backoff', 'after-close', 'after-takeover', 'before-stopped-write'] as const)('settles Worker recovery when steer ACK arrives %s', async timing => {
     vi.useFakeTimers();
     const ack = deferred<void>();
     try {
@@ -14672,14 +14672,35 @@ describe('Orca report durable recovery', () => {
         h.coordinator.onSessionClosed('worker', { preserveAutoResumeIntent: true });
         h.setTurnSessionIdentity({ instanceId: 'replacement' });
       }
-      if (timing === 'after-backoff') {
-        await vi.advanceTimersByTimeAsync(4_000);
-        expect(h.coordinator.hasQueuedAutoResume('worker')).toBe(true);
-        expect(h.sendToAgent).not.toHaveBeenCalled();
+      if (timing === 'after-backoff' || timing === 'after-takeover') {
         h.setObservedCurrentTurnTerminal({
           kind: 'error', generation: 1, reason: 'session_event_loop_crashed',
           message: 'Session event loop stopped unexpectedly without a terminal event',
         });
+      }
+      if (timing === 'after-backoff') {
+        await vi.advanceTimersByTimeAsync(4_000);
+        expect(h.coordinator.hasQueuedAutoResume('worker')).toBe(true);
+        expect(h.sendToAgent).not.toHaveBeenCalled();
+      } else if (timing === 'after-takeover') {
+        h.coordinator.enqueue('worker', makeItem('takeover', 'My next instruction'));
+      } else if (timing === 'before-stopped-write') {
+        const savingSteer = deferred<void>();
+        const steerWrite = deferred<void>();
+        mocks.createMessage.mockImplementationOnce(async () => {
+          savingSteer.resolve();
+          await steerWrite.promise;
+          return {};
+        });
+        ack.resolve();
+        await savingSteer.promise;
+        h.coordinator.stop('worker');
+        steerWrite.reject(new Error('steer row unavailable'));
+        await expect(steering).resolves.toBe('steered');
+        expect(h.coordinator.getProjection('worker').error).toContain('steer row unavailable');
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(h.sendToAgent).not.toHaveBeenCalled();
+        return;
       } else {
         mocks.createMessage.mockRejectedValueOnce(new Error('steer row unavailable'));
       }
@@ -14687,7 +14708,9 @@ describe('Orca report durable recovery', () => {
       await expect(steering).resolves.toBe('steered');
       await vi.advanceTimersByTimeAsync(10_000);
       expect(h.sendToAgent).toHaveBeenCalledOnce();
-      expect(h.sendToAgent.mock.lastCall?.[1]).toEqual({ type: 'user', content: CONTINUE_AFTER_ERROR_PROMPT });
+      expect(h.sendToAgent.mock.lastCall?.[1]).toEqual({
+        type: 'user', content: timing === 'after-takeover' ? 'My next instruction' : CONTINUE_AFTER_ERROR_PROMPT,
+      });
     } finally {
       ack.resolve();
       vi.useRealTimers();

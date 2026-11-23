@@ -769,7 +769,12 @@ interface ActiveTurn {
   /** maker-core turn generation captured at vendor dispatch; leftover reclaim must match it. */
   vendorTurnGeneration: number | null;
   /** Already-durable Worker input for stream failure while a steer row is still being saved. */
-  workerRecoverySource?: { runtime: object; item: AgentInputQueuedMessage; signal: AbortSignal };
+  workerRecoverySource?: {
+    runtime: object;
+    item: AgentInputQueuedMessage;
+    signal: AbortSignal;
+    recoveryAbandonment: number;
+  };
   /**
    * `vendorTurnGeneration` before a host continuation adopted a newer one
    * (见 noteHostTurnContinuation)。续跑 send 在派发确认前失败时用它还原绑定；
@@ -878,6 +883,7 @@ interface SessionInputState {
   autoResumePending: AutoResumeInfo | null;
   /** 最新自动接管 attempt；展示态落库后仍保留到 vendor accepted 或明确失败。 */
   autoResumeAttemptToken: number | null;
+  workerRecoveryAbandonment: number;
   /**
    * 账号限额等待计划。终态错误那一刻登记候选（`resumeAt: null`，绑定当时的 recovery），
    * host 求出重置时刻后用同一令牌 `armUsageLimitWait` 才生效。只在那个 recovery 仍在、
@@ -1014,6 +1020,7 @@ function createInitialInputState(
     stickyError: null,
     autoResumePending: null,
     autoResumeAttemptToken: null,
+    workerRecoveryAbandonment: 0,
     usageLimitWait: null,
     providerGroupSwitchHold: null,
     recovery: null,
@@ -3087,7 +3094,12 @@ export class AgentInputCoordinator {
           workerSource = receipt.item;
         }
         if (workerSource && workerInputs.has(workerSource.createOpts)) {
-          workerRecoverySource = { runtime: steerRuntime, item: workerSource, signal: inputBoundarySignal };
+          workerRecoverySource = {
+            runtime: steerRuntime,
+            item: workerSource,
+            signal: inputBoundarySignal,
+            recoveryAbandonment: current.workerRecoveryAbandonment,
+          };
         }
       }
       await this.deps.steerToAgent(sessionId, buildMakerUserMessage(item, referenceContexts, {
@@ -3288,20 +3300,11 @@ export class AgentInputCoordinator {
       steerGeneration,
       steerRequestToken,
     );
-    const workerSourceClientId = workerRecoverySource?.item.clientId;
-    const preservesWorkerRecovery = workerSourceClientId !== undefined && (
-      (accepted.recovery?.kind === 'active-turn' &&
-        accepted.recovery.item.clientId === workerSourceClientId &&
-        isContinuationOnlyAutoResumeReason(accepted.autoResumePending?.reason)) ||
-      // After backoff the retry owns the original recovery until vendor dispatch.
-      (accepted.autoResumeAttemptToken !== null &&
-        Array.from(this.pendingAutoResumeRecoveries.values()).some((pending) =>
-          pending.stateRef === accepted && pending.attemptToken === accepted.autoResumeAttemptToken &&
-          pending.recovery.item.clientId === workerSourceClientId &&
-          isContinuationOnlyAutoResumeReason(pending.autoResumeInfo?.reason),
-        ))
-    );
-    if (!ownsCurrentSteerMarker || preservesWorkerRecovery) {
+    const preservesWorkerRecovery = workerRecoverySource !== undefined &&
+      this.hasMatchingWorkerRecovery(accepted, workerRecoverySource);
+    const abandonedWorkerRecovery = workerRecoverySource !== undefined &&
+      workerRecoverySource.recoveryAbandonment !== accepted.workerRecoveryAbandonment;
+    if (!ownsCurrentSteerMarker || preservesWorkerRecovery || abandonedWorkerRecovery) {
       const releasedSteerMarker = this.clearSteeringMarker(accepted, item.clientId, {
         generation: steerGeneration, token: steerRequestToken,
       });
@@ -3322,10 +3325,8 @@ export class AgentInputCoordinator {
         return finishSteerRequest(true);
       }
 
-      // Stop/close clears the visible marker and direct item before the provider promise must
-      // settle. A resolved provider call has crossed the irreversible boundary nonetheless:
-      // persist it and remember the clientId without rebuilding activeTurn or releasing the
-      // Stop/close boundary that now owns the session lifecycle.
+      // Persist provider-accepted text without rebuilding activeTurn or
+      // replaying the terminal event after recovery or user takeover.
       this.clearDirectSteeringItem(accepted, item.clientId);
       this.rememberEnqueuedClientId(accepted, item.clientId);
       if (opts?.removeFromQueue) {
@@ -3361,7 +3362,7 @@ export class AgentInputCoordinator {
         persisted,
       });
       this.emit(sessionId);
-      if (preservesWorkerRecovery && releasedSteerMarker) {
+      if ((preservesWorkerRecovery || abandonedWorkerRecovery) && releasedSteerMarker) {
         this.scheduleDrain(sessionId, 'steer-persistence-settled');
       }
       return finishSteerRequest(true);
@@ -7211,6 +7212,9 @@ export class AgentInputCoordinator {
     const queuedClientIds = state.pendingQueue
       .filter((item) => item.autoResume)
       .map((item) => item.clientId);
+    if (this.isContinuationOnlyAutoResume(sessionId)) {
+      state.workerRecoveryAbandonment += 1;
+    }
     this.supersedePendingAutoResumeRecoveries(sessionId);
     for (const clientId of queuedClientIds) this.remove(sessionId, clientId);
 
@@ -7562,10 +7566,30 @@ export class AgentInputCoordinator {
    */
   private abandonActiveTurnRecoveryForUserAction(state: SessionInputState): void {
     if (state.recovery?.kind !== 'active-turn') return;
+    state.workerRecoveryAbandonment += 1;
     state.error = null;
     clearErrorProjectionSignals(state);
     state.stickyError = null;
     state.recovery = null;
+  }
+
+  private hasMatchingWorkerRecovery(
+    state: SessionInputState,
+    source: NonNullable<ActiveTurn['workerRecoverySource']>,
+  ): boolean {
+    if (source.recoveryAbandonment !== state.workerRecoveryAbandonment) return false;
+    if (
+      state.recovery?.kind === 'active-turn' &&
+      state.recovery.item.clientId === source.item.clientId &&
+      isContinuationOnlyAutoResumeReason(state.autoResumePending?.reason)
+    ) return true;
+    // After backoff the queued or preparing retry still owns the original recovery.
+    return state.autoResumeAttemptToken !== null &&
+      Array.from(this.pendingAutoResumeRecoveries.values()).some((pending) =>
+        pending.stateRef === state && pending.attemptToken === state.autoResumeAttemptToken &&
+        pending.recovery.item.clientId === source.item.clientId &&
+        isContinuationOnlyAutoResumeReason(pending.autoResumeInfo?.reason),
+      );
   }
 
   private removePendingCompactWaitClientId(state: SessionInputState, clientId: string): void {
@@ -8532,15 +8556,22 @@ export class AgentInputCoordinator {
         retainForRetry: false,
       });
       if (!this.isTurnGenerationCurrent(sessionId, active)) return 'stale';
+      const state = this.getState(sessionId);
       if (active.workerRecoverySource && !this.isActiveTurnCurrent(sessionId, active)) {
-        // The detached steer write cannot replace the failure/recovery of the
-        // durable Worker input or that of a subsequent turn.
+        // Keep a matching continuation intact. Otherwise surface the lost row
+        // without changing the active turn or another input's recovery.
+        active.persisting = false;
+        if (!this.hasMatchingWorkerRecovery(state, active.workerRecoverySource)) {
+          state.error = `Failed to persist user message: ${errorMessage(err)}`;
+          clearErrorProjectionSignals(state);
+          state.stickyError = state.error;
+          this.emit(sessionId);
+        }
         log.error('persist accepted Worker steer failed after turn settled', {
           sessionId, clientId: item.clientId, error: errorMessage(err),
         });
         return 'failed';
       }
-      const state = this.getState(sessionId);
       state.error = `Failed to persist user message: ${errorMessage(err)}`;
       clearErrorProjectionSignals(state);
       state.stickyError = state.error;
