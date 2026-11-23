@@ -13,7 +13,8 @@ import { batchAutoReviewProjection, readAutoReviewProjectionTransaction } from '
 import { CLOSE_SHARED_TASKS_FOR_SESSION_SQL } from '../../sharedTaskClosureSql.js';
 import { IDLE_ARCHIVE_GUARD_SQL } from '../../../task-management/eligibility.js';
 import { assertSessionDeleteTarget, COMMITTED_SIDE_CHAT_WORKER_SQL, ORCA_WORKER_LINK_TEAM_SQL, SIDE_CHAT_CLOSE_TARGET_SQL } from '../../sessionDeleteTarget.js';
-import { botProfileModelSelectionChanged } from '../../../../shared/botModelChain.js';
+import { BOT_LEAD_PLUGIN_ENGINE_UNSUPPORTED, botProfileModelSelectionChanged } from '../../../../shared/botModelChain.js';
+import { throwIpcError } from '../../../utils/ipcValidate.js';
 import { dbToMakerAgentKind } from '../../../../shared/agentKindConversion.js';
 import { parseScheduledModelBaseline } from '../../../../shared/scheduledModelBaseline.js';
 import { normalizeBotName } from '../../../../shared/botCreation.js';
@@ -401,6 +402,7 @@ function botsUpdateProfile(db: Database.Database, args: unknown): { currentVersi
   const expectedVersion = expectNumber(p.expectedCurrentVersion, 'expectedCurrentVersion');
   const now = expectNumber(p.now, 'now');
   const allowDuplicateName = expectOptionalFlag(p.allowDuplicateName, 'allowDuplicateName');
+  const rejectPluginPrimaryForLocalLead = expectOptionalFlag(p.rejectPluginPrimaryForLocalLead, 'rejectPluginPrimaryForLocalLead');
   const inactive = inactiveCindyIds(p.inactiveCindyIds);
   const avatarRef = p.botAvatarRef === undefined
     ? null
@@ -423,6 +425,17 @@ function botsUpdateProfile(db: Database.Database, args: unknown): { currentVersi
     if (!current) throw Object.assign(new Error('Bot 不存在'), { code: 'NOT_FOUND' });
     if (current.currentVersion !== expectedVersion) {
       throw Object.assign(new Error('Bot Profile 已被另一处更新，请刷新后重试'), { code: 'PRECONDITION_FAILED' });
+    }
+    // Check the authoritative link and current role in the same commit as the choice.
+    if (rejectPluginPrimaryForLocalLead && db.prepare(`
+      SELECT 1 FROM bot_session_links l JOIN sessions s ON s.id = l.session_id
+      WHERE l.bot_id = ? AND l.role = 'canonical' AND l.archived_at IS NULL
+        AND s.source = 'bot' AND s.status = 'active' AND s.orca_role = 'lead'
+        AND s.remote_host_id IS NULL AND s.orca_remote_lead IS NULL
+      LIMIT 1
+    `).get(id)) {
+      throwIpcError('UNSUPPORTED_CAPABILITY',
+        `${BOT_LEAD_PLUGIN_ENGINE_UNSUPPORTED}: Choose a built-in engine for this companion chat while it leads a collaboration.`);
     }
     if (p.expectedAvatar !== undefined && current.avatar !== expectString(p.expectedAvatar, 'expectedAvatar')) {
       throw Object.assign(new Error('Buddy avatar changed during update'), { code: 'PRECONDITION_FAILED' });

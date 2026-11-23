@@ -11316,6 +11316,7 @@
       "saved": "Gespeichert",
       "unconfirmed": "Speichern nicht bestätigt",
       "savedModel": "Gespeichert · ab nächstem Zug",
+      "leadPluginEngineUnsupported": "Dieser Chat ist der Lead der Zusammenarbeit. Wähle eine integrierte Engine.",
       "retry": "Erneut speichern"
     },
     "retry": "Erneut versuchen",

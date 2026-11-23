@@ -11402,6 +11402,7 @@
       "saved": "Guardado",
       "unconfirmed": "Guardado sin confirmar",
       "savedModel": "Guardado · desde el próximo turno",
+      "leadPluginEngineUnsupported": "Este chat es el Lead de la colaboración. Elige un motor integrado.",
       "retry": "Guardar de nuevo"
     },
     "retry": "Reintentar",

@@ -67,6 +67,7 @@ import { BotMemorySettings } from './BotMemorySettings';
 import { CompanionVoiceSettings } from './voice/CompanionVoiceSettings';
 import { BotChannelsPage } from './BotChannelsPage';
 import {
+  BOT_LEAD_PLUGIN_ENGINE_ERROR_KEY,
   botSettingsChanges,
   normalizeBotSettingsPayload,
   reconcileBotSettingsDraft,
@@ -256,7 +257,7 @@ export function BotSettings({
     if (avatarInFlight.current) return false;
     await autosave.flush();
     if (autosave.isDirty()) {
-      if (!sourceTooLong) return false;
+      if (!sourceTooLong && autosave.errorKey !== BOT_LEAD_PLUGIN_ENGINE_ERROR_KEY) return false;
       const discard = await confirm({
         title: t('bots.memory.unsavedTitle'),
         description: t('bots.remoteSettings.leaveDescription'),
@@ -278,7 +279,7 @@ export function BotSettings({
     if (!((await voiceLeaveRef.current?.()) ?? true)) return false;
     if (!((await memoryLeaveRef.current?.()) ?? true)) return false;
     return (await capabilityLeaveRef.current?.()) ?? true;
-  }, [autosave.flush, autosave.isDirty, autosave.discard, sourceTooLong, confirm, t]);
+  }, [autosave.flush, autosave.isDirty, autosave.discard, autosave.errorKey, sourceTooLong, confirm, t]);
   useEffect(() => {
     if (!beforeCloseRef) return;
     beforeCloseRef.current = canLeave;

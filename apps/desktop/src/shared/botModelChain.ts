@@ -1,6 +1,7 @@
 import { normalizeCompanionModelRoute, modelRouteLocationKey, type CompanionModelRoute } from '@cindy/maker-shared/model-route';
 
 export const BOT_MODEL_CHAIN_MAX = 5;
+export const BOT_LEAD_PLUGIN_ENGINE_UNSUPPORTED = 'BOT_LEAD_PLUGIN_ENGINE_UNSUPPORTED';
 
 export type BotHarness = CompanionModelRoute['harness'];
 

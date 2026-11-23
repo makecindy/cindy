@@ -11271,6 +11271,7 @@
       "saved": "保存しました",
       "unconfirmed": "保存を確認できません",
       "savedModel": "保存済み・次のターンから適用",
+      "leadPluginEngineUnsupported": "この会話は協同の Lead です。組み込みのエンジンを選択してください。",
       "retry": "再保存"
     },
     "retry": "再試行",

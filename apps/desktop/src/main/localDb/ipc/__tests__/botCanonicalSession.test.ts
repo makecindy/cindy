@@ -5724,6 +5724,45 @@ describe('Teammate model selection shares profile persistence and route reconcil
       id: JSON.stringify(['pi', 'xd', model.id]), model };
   }
 
+  // #12276, DB tier. Use the settings IPC with a built-in canonical session
+  // and an ACP primary. Before the fix the save advanced the profile version,
+  // even though the ordinary session switch could never apply it to the Lead.
+  it('rejects a plugin primary for a local canonical Lead and accepts a built-in recovery', async () => {
+    const { sessionId } = await setupModelControl();
+    const getProfile = () => invoke('local-db:bots:get', 'bot-1');
+    const save = (modelChainOverride: BotModelRoute[]) =>
+      invoke('local-db:bots:update', { id: 'bot-1', capabilities: { modelChainOverride } });
+    const setLead = (role: 'lead' | null) =>
+      h.sqlite!.prepare('UPDATE sessions SET orca_role = ? WHERE id = ?').run(role, sessionId);
+    const plugin: BotModelRoute = {
+      harness: 'acp', providerId: 'acp-plugin:fixture:echo', model: 'default', effort: '', fastMode: false,
+    };
+    const before = await getProfile();
+    const [builtIn] = before.capabilities.modelChain as BotModelRoute[];
+    if (!builtIn || builtIn.harness === 'acp') throw new Error('Expected a built-in fixture route');
+    setLead('lead');
+    h.requestRuntimeRefresh.mockClear();
+    await expect(save([plugin, builtIn])).rejects.toThrow('BOT_LEAD_PLUGIN_ENGINE_UNSUPPORTED');
+    const rejected = await getProfile();
+    expect(rejected.currentVersion).toBe(before.currentVersion);
+    expect(rejected.capabilities.modelChain).toEqual(before.capabilities.modelChain);
+    expect(h.requestRuntimeRefresh).not.toHaveBeenCalled();
+
+    await expect(save([builtIn, plugin])).resolves.toMatchObject({
+      capabilities: { modelChain: [builtIn, plugin] },
+    });
+    setLead(null);
+    await expect(save([plugin, builtIn])).resolves.toMatchObject({
+      capabilities: { modelChain: [plugin, builtIn] },
+    });
+    // Simulate a profile saved by an older build while the actual session kept its built-in route.
+    setLead('lead');
+    await expect(save([builtIn])).resolves.toMatchObject({
+      canonicalSessionId: sessionId,
+      capabilities: { modelChain: [builtIn] },
+    });
+  });
+
   // #7177, DB tier: an explicit same-value tool selection must reach the
   // acceptance transaction; a plain metadata edit must retain the old scope.
   it('reaccepts the same model through the teammate tool without treating a rename as recovery', async () => {

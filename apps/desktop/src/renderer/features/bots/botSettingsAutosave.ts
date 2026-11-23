@@ -26,9 +26,11 @@ import type { BotCapabilities, BotProfileUpdatePatch } from './botStore';
 import { reconcileBotCapabilityList } from '../../../shared/botCapabilitySelection';
 import { extractIpcError } from '../../../shared/ipcError';
 import { readBotProfileSource, BotProfileSourceTooLong } from '../../../shared/botProfileSources';
+import { BOT_LEAD_PLUGIN_ENGINE_UNSUPPORTED } from '../../../shared/botModelChain';
 
 /** Bounds the UI wait, not the host transaction: a timeout cannot cancel a write. */
 export const BOT_SETTINGS_SAVE_WAIT_MS = 30_000;
+export const BOT_LEAD_PLUGIN_ENGINE_ERROR_KEY = 'bots.autosave.leadPluginEngineUnsupported';
 export class BotSettingsSaveUnconfirmed extends Error {}
 
 /** Only recognized causes become localized copy; never display raw host errors. */
@@ -51,7 +53,8 @@ export function botSettingsSaveErrorKey(error: unknown): string | null {
     case 'DEVICE_LINK_DEVICE_UNRESPONSIVE':
       return 'bots.remoteSettings.saveFailed';
     case 'UNSUPPORTED_CAPABILITY':
-      return 'bots.remoteSettings.unsupported';
+      return failure.message.replace(/^\[UNSUPPORTED_CAPABILITY\]\s*/, '').startsWith(`${BOT_LEAD_PLUGIN_ENGINE_UNSUPPORTED}:`)
+        ? BOT_LEAD_PLUGIN_ENGINE_ERROR_KEY : 'bots.remoteSettings.unsupported';
     case 'PRECONDITION_FAILED':
       return /伙伴配置已更新/.test(failure.message) ? 'bots.remoteSettings.conflict' : 'ipcError.PRECONDITION_FAILED';
     default:

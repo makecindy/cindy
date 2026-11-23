@@ -11402,6 +11402,7 @@
       "saved": "Salvo",
       "unconfirmed": "Salvamento não confirmado",
       "savedModel": "Salvo · a partir do próximo turno",
+      "leadPluginEngineUnsupported": "Esta conversa é o Lead da colaboração. Escolha um motor integrado.",
       "retry": "Salvar novamente"
     },
     "retry": "Tentar novamente",

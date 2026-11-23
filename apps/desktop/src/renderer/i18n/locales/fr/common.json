@@ -11402,6 +11402,7 @@
       "saved": "Enregistré",
       "unconfirmed": "Enregistrement non confirmé",
       "savedModel": "Enregistré · dès le prochain tour",
+      "leadPluginEngineUnsupported": "Cette conversation est le Lead de la collaboration. Choisissez un moteur intégré.",
       "retry": "Enregistrer à nouveau"
     },
     "retry": "Réessayer",

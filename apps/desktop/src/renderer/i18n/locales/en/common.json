@@ -11316,6 +11316,7 @@
       "saved": "Saved",
       "unconfirmed": "Save not confirmed",
       "savedModel": "Saved · applies next turn",
+      "leadPluginEngineUnsupported": "This chat is the collaboration Lead. Choose a built-in engine.",
       "retry": "Save Again"
     },
     "retry": "Retry",

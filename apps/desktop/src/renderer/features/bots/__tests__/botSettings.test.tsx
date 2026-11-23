@@ -884,6 +884,26 @@ describe('Bot settings profile consolidation', () => {
     expect(mocks.updateBotProfile).toHaveBeenCalledTimes(2);
   });
 
+  // #12276, unit. A permanent Lead rejection is actionable and the user can
+  // discard the rejected draft to leave settings and use the saved route.
+  it('lets a Lead discard an unsupported model choice and leave the model page', async () => {
+    mocks.updateBotProfile.mockRejectedValue(createIpcError(
+      'UNSUPPORTED_CAPABILITY', 'BOT_LEAD_PLUGIN_ENGINE_UNSUPPORTED: Choose a built-in engine.',
+    ));
+    const view = renderSettings({ capabilities: capabilities({ modelChainOverride: capabilities().modelChain }) });
+    fireEvent.click(screen.getByRole('button', { name: 'bots.settingsTabs.model' }));
+    fireEvent.click(within(screen.getByTestId('bot-primary-model-controls')).getByTestId('codex-model-selector'));
+    expect((await screen.findByRole('alert')).textContent).toContain('bots.autosave.leadPluginEngineUnsupported');
+    expect(screen.queryByText('bots.autosave.retry')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'bots.settingsBack' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.memory.discard' }));
+    await screen.findByRole('button', { name: 'bots.settingsTabs.model' });
+    const attempts = mocks.updateBotProfile.mock.calls.length;
+    view.unmount();
+    expect(mocks.updateBotProfile).toHaveBeenCalledTimes(attempts);
+  });
+
   it('keeps a same-model choice through a failed save and a newer host profile', async () => {
     vi.useFakeTimers();
     const primary: BotModelRoute = { harness: 'pi', model: 'custom-model', providerId: 'custom', effort: 'high', fastMode: false };

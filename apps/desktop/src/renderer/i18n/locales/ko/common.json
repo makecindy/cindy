@@ -11271,6 +11271,7 @@
       "saved": "저장됨",
       "unconfirmed": "저장을 확인하지 못함",
       "savedModel": "저장됨 · 다음 턴부터 적용",
+      "leadPluginEngineUnsupported": "이 대화는 협업의 Lead입니다. 내장 엔진을 선택하세요.",
       "retry": "다시 저장"
     },
     "retry": "다시 시도",

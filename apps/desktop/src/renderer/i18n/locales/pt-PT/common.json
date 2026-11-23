@@ -11402,6 +11402,7 @@
       "saved": "Guardado",
       "unconfirmed": "Gravação não confirmada",
       "savedModel": "Guardado · a partir do próximo turno",
+      "leadPluginEngineUnsupported": "Esta conversa é o Lead da colaboração. Escolhe um motor integrado.",
       "retry": "Guardar novamente"
     },
     "retry": "Tentar novamente",

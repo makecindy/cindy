@@ -11271,6 +11271,7 @@
       "saved": "已存",
       "unconfirmed": "尚未核實存否",
       "savedModel": "已存，下輪生效",
+      "leadPluginEngineUnsupported": "此對話為協同 Lead，請選內建引擎",
       "retry": "再存"
     },
     "retry": "再試",

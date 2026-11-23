@@ -2219,6 +2219,7 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
   // Compare the same representation so unrelated edits do not validate stale routes.
   const modelSelectionChanged = botProfileModelSelectionChanged(normalizeBotModelCapabilitiesOrThrow(previous), normalizedNextConfig);
   const acceptsModelSelection = modelSelectionChanged || acceptsSavedModel;
+  let pluginPrimarySelected = false;
   if (acceptsModelSelection) {
     const primary = (await readEffectiveBotModelChain(normalizedNextConfig))[0];
     owner.assertCurrent();
@@ -2226,6 +2227,7 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
       throwIpcError('INVALID_PARAMS', 'Model route unavailable');
     }
     owner.assertCurrent();
+    pluginPrimarySelected = primary.harness === 'acp';
   }
   const nextIdentitySource =
     body.identitySource !== undefined
@@ -2258,6 +2260,7 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
       await client.tx('bots.updateProfile', {
         id,
         ...(acceptsModelSelection ? { clearScheduledModelBaseline: true } : {}),
+        ...(pluginPrimarySelected ? { rejectPluginPrimaryForLocalLead: true } : {}),
         ...(changesPermissions ? { canonicalPermissionMode: botSessionPermissionMode(normalizedNextConfig) } : {}),
         ...(restored?.allowSameName === true ? { allowDuplicateName: true } : {}),
         ...(restored?.templateId === 'cindy' ? { inactiveCindyIds: inactiveCompanionCopyIds(companionHomes.snapshot()) } : {}),

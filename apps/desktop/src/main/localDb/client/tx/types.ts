@@ -683,6 +683,8 @@ export interface BotsUpdateProfileArgs {
   inactiveCindyIds?: string[];
   /** A saved model choice supersedes automation restores in the same commit. */
   clearScheduledModelBaseline?: boolean;
+  /** A selected plugin primary cannot be applied to an active local canonical Lead. */
+  rejectPluginPrimaryForLocalLead?: boolean;
   /** Explicit settings changes also update the permanent chat in this transaction. */
   canonicalPermissionMode?: 'ask' | 'auto' | 'bypassPermissions';
   displayName?: string;
