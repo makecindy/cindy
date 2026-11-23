@@ -13,6 +13,7 @@
   "cardLabel": "Kartu hadiah Cindy, {{amount}}",
   "fields": {
     "validity": "Masa berlaku",
+    "validityValue_one": "Berlaku {{count}} hari setelah diklaim",
     "validityValue_other": "Berlaku {{count}} hari setelah diklaim",
     "claimBy": "Batas klaim",
     "destination": "Disimpan ke",

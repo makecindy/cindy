@@ -307,7 +307,6 @@
     "tokenRate": "{{rate}} tok/s",
     "currentRate": "Kecepatan terbaru",
     "lastRequestRate": "Rata-rata permintaan terakhir",
-    "recentTokenRate": "Terbaru {{rate}} tok/s",
     "averageRate": "Rata-rata giliran",
     "rateHistory": "Riwayat kecepatan pembuatan",
     "outputTotal": "Output total",

@@ -62,6 +62,7 @@
   "unified": {
     "remoteCopyUnavailableOn": "{{provider}} di '{{device}}' sedang tidak tersedia.",
     "remoteCopyUnavailableOnTaskComputer": "{{provider}} di komputer tempat tugas berada sedang tidak tersedia.",
+    "accountCount_one": "{{count}} akun",
     "accountCount_other": "{{count}} akun",
     "accountFallback": "Akun {{index}}",
     "favoriteConfiguration": "Favoritkan konfigurasi ini",
@@ -113,6 +114,7 @@
   },
   "modelGroups": {
     "title": "Grup model",
+    "sourceCount_one": "{{count}} sumber",
     "sourceCount_other": "{{count}} sumber",
     "strategy": {
       "expiring": "Kedaluwarsa lebih dulu",
