@@ -32,6 +32,7 @@ import {
   isAutoReviewNewUserInput,
   resolveAutoReviewDecision,
   formatPermissionDenial,
+  PERMISSION_CONFIRMATION_TIMEOUT_GUIDANCE,
   toolAutoReviewAction,
   type AutoReviewRequest,
 } from './auto-review-decision.js';
@@ -822,6 +823,23 @@ it.each([
   expect(formatPermissionDenial(source, '  Only inspect.  ')).toBe(label + ': Only inspect.');
   expect(formatPermissionDenial(source, ' ')).toBe(label + '.');
   expect(formatPermissionDenial(source, 'x'.repeat(500))).toBe(label + ': ' + 'x'.repeat(240));
+});
+
+// 2026-11-21: Claude got "could not approve this tool call: timeout" and Codex "user rejected",
+// so teammates read an unanswered confirmation as the owner saying no.
+it.each(['timeout', 'interaction_timeout', 'hook_interaction_timeout', 'wechat_interaction_timeout'])(
+  'says an unanswered confirmation (%s) is not a user rejection',
+  (reason) => {
+    const text = formatPermissionDenial('system', reason);
+    expect(text).toBe(`Cindy could not approve this tool call (${reason}). ${PERMISSION_CONFIRMATION_TIMEOUT_GUIDANCE}`);
+    expect(text).toContain('the user did not reject it');
+    expect(text).toContain('Do not retry the same call automatically');
+  },
+);
+
+it('keeps other system and user denials free of the timeout guidance', () => {
+  expect(formatPermissionDenial('system', 'session_closed')).toBe('Cindy could not approve this tool call: session_closed');
+  expect(formatPermissionDenial('user', 'timeout')).toBe('User denied this tool call via Cindy: timeout');
 });
 
 

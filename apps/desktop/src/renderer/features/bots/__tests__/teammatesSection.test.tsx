@@ -948,6 +948,17 @@ describe('TeammatesSection rows', () => {
     expect(mocks.navigate).toHaveBeenCalledWith('/bots/bot-1');
   });
 
+  // A healthy main chat skips the /bots/:botId spinner hand-off; the state lets the
+  // chat gate hand back to that page if its fresh read disagrees (see botOpenRoute).
+  it('opens a healthy main chat straight from the row', async () => {
+    mocks.profiles = [{ ...bot({ id: 'bot-1', name: 'PR steward' }), sessions: [
+      { id: 'main', kind: 'chat', role: 'canonical', status: 'active', title: '', updatedAt: 1 },
+    ] }];
+    await renderSidebar();
+    fireEvent.click(screen.getByText('PR steward'));
+    expect(mocks.navigate).toHaveBeenCalledWith('/bots/bot-1/session/main', { state: { botDirectEntry: true } });
+  });
+
   it('keeps legacy stopped Bots reachable for deletion without presenting archive or restore', async () => {
     mocks.profiles = [
       { ...bot({ id: 'legacy-stopped', name: 'Legacy stopped' }), status: 'archived' },

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 6,
-  "updatedAt": "2026-11-20T08:00:00.000Z",
+  "updatedAt": "2026-11-23T07:59:13.000Z",
   "models": [
     {
       "id": "openai/gpt-6.2-sol",
@@ -14694,6 +14694,45 @@
       "inputBaseUrls": [
         "https://openhubs.zhidemai.com",
         "https://openhubs.zhidemai.com/v1"
+      ],
+      "defaultFor": [
+        "pi"
+      ]
+    },
+    {
+      "id": "tokenrhythm-anthropic-messages",
+      "providerId": "tokenrhythm",
+      "api": "anthropic-messages",
+      "baseUrl": "https://tokenrhythm.studio",
+      "inputBaseUrls": [
+        "https://tokenrhythm.studio",
+        "https://tokenrhythm.studio/v1"
+      ],
+      "defaultFor": [
+        "claude-code"
+      ]
+    },
+    {
+      "id": "tokenrhythm-openai-responses",
+      "providerId": "tokenrhythm",
+      "api": "openai-responses",
+      "baseUrl": "https://tokenrhythm.studio/v1",
+      "inputBaseUrls": [
+        "https://tokenrhythm.studio",
+        "https://tokenrhythm.studio/v1"
+      ],
+      "defaultFor": [
+        "codex"
+      ]
+    },
+    {
+      "id": "tokenrhythm-openai-completions",
+      "providerId": "tokenrhythm",
+      "api": "openai-completions",
+      "baseUrl": "https://tokenrhythm.studio/v1",
+      "inputBaseUrls": [
+        "https://tokenrhythm.studio",
+        "https://tokenrhythm.studio/v1"
       ],
       "defaultFor": [
         "pi"

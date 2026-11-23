@@ -35,6 +35,7 @@ export function getModelContextWindow(
 
 export function ContextCapacityRing({
   isRunning,
+  visible = true,
   sessionId,
   providerId,
   contextTokens,
@@ -49,6 +50,7 @@ export function ContextCapacityRing({
   disabled,
 }: {
   isRunning?: boolean;
+  visible?: boolean;
   sessionId?: string;
   providerId?: string | null;
   contextTokens: number;
@@ -69,10 +71,11 @@ export function ContextCapacityRing({
   const { t } = useTranslation();
   const [contextInspection, setContextInspection] = useState(0);
   const codexContext = useCodexContextWindow({
-    enabled: !reportedOnly && vendorKey === 'codex' && !deviceId && Boolean(sessionId),
+    enabled: visible && !reportedOnly && vendorKey === 'codex' && Boolean(sessionId),
     providerId,
     modelId: model,
     sessionId,
+    deviceId,
     reportedWindow: sdkContextWindow,
     refreshKey: `${isRunning}:${contextInspection}`,
   });

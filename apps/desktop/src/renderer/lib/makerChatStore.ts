@@ -67,6 +67,7 @@ import {
   type DataOwnerGeneration,
 } from '@/contexts/dataOwnerGeneration';
 import { isDataOwnerPushStamp } from '../../shared/dataOwnerPush';
+import { isPluginInstanceKey } from '../../shared/pluginIdentity';
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion';
 import { isPluginEngineKind, pluginEngineKeyFromProviderId } from '../../shared/pluginEngines';
 import {
@@ -10257,17 +10258,22 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       if (!isCurrentLocalLiveIngress(ownerStamp)) return;
       if (isSidebarWindow() || isSecondaryWindow()) return;
       const p = raw as {
+        ghostId?: string;
         name?: string;
         iconDataUrl?: string;
         sessionId?: string;
         url?: string;
+        reuseExisting?: true;
       } | null;
       if (!p || typeof p.name !== 'string') return;
       if (typeof p.sessionId !== 'string' || typeof p.url !== 'string') return;
       // userInitiated:false —— 这是插件在后台干完活自己要求开的页,不是用户点的。
       // 标签照常落地、内容照常加载,但不得把侧边栏子窗口抢到前台打断用户
       // (detached 形态 + Windows 上 focus() 即抢前台)。
-      void openUrlInSidebarBrowser(p.sessionId, p.url, { userInitiated: false }).catch(() => {
+      const pluginPreview = isPluginInstanceKey(p.ghostId) && isDataOwnerPushStampCurrent(ownerStamp)
+        ? { instanceId: p.ghostId, ownerStamp, ...(p.reuseExisting === true ? { reuseExisting: true as const } : {}) }
+        : undefined;
+      void openUrlInSidebarBrowser(p.sessionId, p.url, { userInitiated: false, pluginPreview }).catch(() => {
         /* 标签落地失败(会话桶异常等)不致命,静默 */
       });
       toast.info(i18n.t('chat.ghostPreview.opened'), {

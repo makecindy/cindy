@@ -685,6 +685,7 @@
     },
     "picker": {
       "unavailable": "사용할 수 없는 공유",
+      "offline": "{{name}} · 일시적으로 오프라인",
       "hostOutdated": "공유한 사람의 컴퓨터에 있는 Cindy 버전이 오래되어 이 모델을 불러올 수 없습니다. 상대방에게 Cindy를 업데이트해 달라고 한 뒤 다시 시도하세요.",
       "numbered": "{{name}} ({{index}})"
     },
@@ -4763,7 +4764,68 @@
         "hint": "연동된 Feishu 또는 Lark 봇을 통해 DM을 보냅니다. 창이 비활성 상태일 때만 전송됩니다.",
         "disabledHint": "먼저 봇을 설정한 뒤 봇에게 DM을 한 번 보내 연동을 완료하세요."
       },
-      "bind": "연동"
+      "bind": "연동",
+      "groups": {
+        "title": "그룹 채팅",
+        "description": "봇이 들어 있는 그룹마다 프로젝트, 모델, 권한을 따로 지정합니다.",
+        "rules": "따로 지정하지 않은 항목은 프로젝트를 정한 그룹이면 프로젝트 및 모델의 그 프로젝트를, 정하지 않은 그룹이면 위의 새 대화 설정과 그룹에서 새 작업을 만들 때의 권한 모드를 따릅니다. 그룹의 메인 채팅과 스레드는 같은 그룹 설정을 함께 씁니다.",
+        "expand": "펼치기",
+        "collapse": "접기",
+        "groupCount_one": "그룹 {{count}}개",
+        "groupCount_other": "그룹 {{count}}개",
+        "customCount_one": "{{count}}개 따로 설정함",
+        "customCount_other": "{{count}}개 따로 설정함",
+        "refresh": "새로 고침",
+        "loading": "그룹을 불러오는 중…",
+        "loadFailed": "그룹을 불러오지 못했습니다. 잠시 후 새로 고침으로 다시 시도하세요.",
+        "saveFailed": "그룹 설정을 저장하지 못했습니다",
+        "notConnected": "봇이 연결되면 그룹이 표시됩니다. 아래에는 따로 설정한 그룹만 표시됩니다.",
+        "empty": "봇이 아직 어떤 그룹에도 들어 있지 않습니다. 그룹에 추가한 뒤 여기서 설정하세요.",
+        "listPermission": "봇이 들어 있는 그룹을 읽을 수 없습니다. Feishu Open Platform에서 이 앱에 그룹 정보 읽기 권한을 부여하세요. 아래에는 봇을 사용한 적이 있는 그룹을 표시합니다.",
+        "listUnavailable": "지금은 봇이 들어 있는 그룹을 읽을 수 없습니다. 아래에는 봇을 사용한 적이 있는 그룹을 표시합니다.",
+        "unnamed": "이름 없는 그룹({{id}})",
+        "summaryModel": "모델 따로 설정",
+        "summaryPermission": "권한 따로 설정",
+        "expandAria": "{{name}} 설정",
+        "searchLabel": "그룹 검색",
+        "searchPlaceholder": "그룹 이름으로 검색",
+        "customHeading": "따로 설정함",
+        "followHeading": "채널 설정을 따름",
+        "showMore": "{{count}}개 더 보기",
+        "showLess": "접기",
+        "noMatch": "'{{query}}'이(가) 포함된 그룹이 없습니다",
+        "project": {
+          "label": "프로젝트",
+          "follow": "대화",
+          "missing": "{{name}}(사이드바에서 제거됨)",
+          "hint": "그룹에서 봇을 처음 @할 때, 새 스레드를 시작할 때 또는 /new를 보낼 때 적용됩니다. 진행 중인 작업은 옮겨지지 않습니다. 프로젝트를 고르면 모델과 권한이 프로젝트 및 모델의 그 프로젝트를 따르고, '대화'를 고르면 작업이 봇의 대화 폴더에 남아 위의 새 대화 설정을 따릅니다. 이 컴퓨터 사이드바의 프로젝트만 선택할 수 있습니다."
+        },
+        "model": {
+          "label": "모델과 추론 강도",
+          "hintFollow": "새 대화 설정을 따릅니다. 여기서 모델이나 추론 강도를 바꾸면 이 그룹에만 적용됩니다.",
+          "hintFollowProject": "프로젝트 및 모델의 프로젝트 '{{project}}'을(를) 따릅니다. 여기서 모델이나 추론 강도를 바꾸면 이 그룹에만 적용됩니다.",
+          "hintProjectUnavailable": "프로젝트 및 모델에서 '{{project}}'에 설정한 모델을 지금 사용할 수 없습니다. 그곳에서 다시 고르거나 여기서 이 그룹에 쓸 모델을 고르세요.",
+          "hintFixed": "이 그룹에 모델을 따로 설정했습니다. 모델을 따로 바꾸지 않은 작업은 다음 메시지부터 바뀌고, 새 작업은 이 모델을 사용합니다."
+        },
+        "permission": {
+          "label": "권한",
+          "hintFollow": "지금은 그룹에서 새 작업을 만들 때의 권한 모드를 따릅니다. 이후 이 그룹에서 만드는 작업에만 적용되며, 기존 작업은 그룹에서 /permission으로 전환합니다.",
+          "hintFollowProject": "지금은 프로젝트 및 모델의 '{{project}}' 권한을 따릅니다. 이후 이 그룹에서 만드는 작업에만 적용되며, 기존 작업은 그룹에서 /permission으로 전환합니다.",
+          "hintFixed": "이 그룹에 권한을 따로 설정했습니다. 이후 이 그룹에서 만드는 작업에만 적용되며, 기존 작업은 그룹에서 /permission으로 전환합니다."
+        },
+        "fullAccessConfirm": {
+          "title": "{{name}}에서 전체 액세스로 실행할까요?",
+          "description": "이 그룹에서 새로 만드는 작업은 누가 봇을 @하든 단계별 확인 없이 바로 실행됩니다. 그룹 메시지는 멤버가 작성하므로 모든 멤버를 신뢰할 때만 선택하세요.",
+          "confirm": "전체 액세스로 변경",
+          "cancel": "취소"
+        },
+        "widerConfirm": {
+          "title": "{{name}}의 권한을 넓힐까요?",
+          "description": "이 그룹에서 새로 만드는 작업은 누가 봇을 @하든 '{{current}}'에서 '{{next}}'(으)로 바뀝니다. 그룹 메시지는 멤버가 작성하므로 모든 멤버를 신뢰할 때만 바꾸세요.",
+          "confirm": "그래도 변경",
+          "cancel": "취소"
+        }
+      }
     },
     "wechatBot": {
       "title": "개인 WeChat",
@@ -6508,7 +6570,7 @@
           "defaultWorkspaceChip": "기본값: {{name}}",
           "defaultWorkspaceAria": "작업을 보낼 때 사용할 기본 프로젝트 선택",
           "defaultWorkspaceRadioAria": "\"{{name}}\"을(를) 기본 프로젝트로 설정",
-          "defaultWorkspaceRowHint": "선택한 프로젝트가 기본 프로젝트입니다. Telegram, Feishu / Lark, X에서 프로젝트를 따로 고르지 않은 대화의 작업은 여기에서 실행됩니다.",
+          "defaultWorkspaceRowHint": "선택한 프로젝트가 기본 프로젝트입니다. Telegram, Feishu / Lark, X, Discord에서 프로젝트를 따로 고르지 않은 대화의 작업은 여기에서 실행됩니다.",
           "defaultProjectTag": "기본",
           "defaultProjectFullAccessWarning": "기본 프로젝트 ‘{{name}}’의 권한이 전체 액세스입니다. 어느 그룹에서 @로 불러도 이 안에서 전체 액세스로 실행됩니다.",
           "sharedSettingsPointer": "프로젝트, 모델, 권한은 모든 공식 봇이 함께 씁니다.",
@@ -6749,6 +6811,40 @@
           "workingDeviceThisComputer": "이 컴퓨터",
           "workingDeviceUnknown": "작업 컴퓨터가 아직 동기화되지 않았습니다",
           "workingDeviceUnnamed": "이름 없는 컴퓨터"
+        },
+        "discord": {
+          "description": "Discord 계정을 연결하고 DM이나 서버에서 공식 bot을 통해 Cindy에게 작업을 맡기세요.",
+          "disabledHint": "스위치를 켜면 연동 코드가 발급됩니다. Discord에서 Cindy 봇에게 보내 연결을 완료하세요.",
+          "toggleAria": "Discord 연결 전환",
+          "connect": "Discord 연결",
+          "openApp": "Discord에 Cindy 추가",
+          "cancel": "연결 취소",
+          "retry": "연결 다시 시도",
+          "openBot": "봇 열기",
+          "addToGroup": "서버에 추가",
+          "unlink": "Discord 연결 해제",
+          "unlinkConfirmTitle": "Discord 연결을 해제할까요?",
+          "unlinkConfirmDescription": "Discord에서 이 기기로 더 이상 메시지를 보낼 수 없습니다. 로컬 프로젝트와 다른 채널에는 영향을 주지 않습니다.",
+          "status": {
+            "checking": "서버 지원 확인 중…",
+            "unavailable": "이 서버에서는 사용할 수 없음",
+            "disabled": "사용 안 함",
+            "none": "연결되지 않음",
+            "pending": "Cindy 봇에게 연동 코드를 보내세요",
+            "awaiting_confirmation": "Discord에서 연결을 확인해 주세요",
+            "confirmed": "{{user}} 계정이 연결됨",
+            "denied": "연결이 거부됨",
+            "expired": "연동 코드가 만료됨",
+            "failed": "연결 실패",
+            "revoked": "연결 해제됨",
+            "superseded": "다른 기기에 연결됨"
+          },
+          "bindCode": {
+            "label": "연동 코드",
+            "copy": "코드 복사",
+            "copied": "연동 코드를 복사했습니다",
+            "hint": "Discord DM으로 이 코드를 Cindy 봇에게 보내거나 Discord에서 /bind를 실행해 코드를 입력하세요. 아직 Cindy를 추가하지 않았다면 먼저 Discord에 추가하세요."
+          }
         }
       },
       "summary": {
@@ -6981,6 +7077,7 @@
         "providerTelegram": "Telegram",
         "providerX": "X",
         "providerFeishu": "Feishu / Lark",
+        "providerDiscord": "Discord",
         "requireConnected": "{{provider}} 연결 후 편집할 수 있습니다(위의 스위치를 켜고 연결을 기다려 주세요).",
         "offlineLocal": "{{provider}}에 연결되지 않은 동안 변경 사항은 이 컴퓨터에 저장되며, 다시 연결되면 채팅의 모델 카드로 동기화됩니다.",
         "requireBinding": "먼저 {{provider}} 계정 연결을 완료해 주세요.",
@@ -7008,11 +7105,20 @@
       "connectionIssue": {
         "device-removed": "계정에서 이 기기가 제거되었습니다. 이 기기에서 로그아웃한 후 다시 로그인하세요.",
         "auth-failed": "로그인이 만료되었습니다. 다시 로그인해 주세요",
-        "replaced": "동일한 기기의 다른 연결로 대체되었습니다",
+        "replaced": "다른 Cindy가 연결을 가져갔습니다. 이 컴퓨터에 있거나, 같은 컴퓨터로 인식된 다른 컴퓨터에 있습니다",
         "too-many-connections": "이 계정의 동시 연결 수가 상한에 도달했습니다",
         "version-mismatch": "프로토콜 버전이 일치하지 않습니다. 앱을 업데이트해 주세요",
         "unstable": "연결이 끊김과 재연결을 반복하고 있습니다. 네트워크를 확인하고, 계속되면 Cindy를 다시 시작해 주세요",
         "agent-net-relay-down": "Agent-Net 중계에 연결할 수 없어 다시 연결하는 중입니다. 직접 연결된 컴퓨터는 계속 사용할 수 있지만 다른 기기는 잠시 연결할 수 없습니다"
+      },
+      "rejoin": {
+        "hint": "계정에서 이 기기가 제거되었습니다. “다시 참여”를 선택하면 되돌릴 수 있습니다.",
+        "action": "다시 참여",
+        "done": "다시 참여했습니다",
+        "doneWithoutAgentNet": "다시 참여했습니다. Agent-Net은 아직 복구되지 않아 당분간 Device Link로 연결합니다",
+        "unsupported": "서버가 아직 다시 참여를 지원하지 않습니다. 이 기기에서 로그아웃한 후 다시 로그인하세요",
+        "agentNetFailed": "Agent-Net이 아직 복구되지 않았습니다. “Agent-Net만 사용”을 끄면 당분간 Device Link로 연결할 수 있습니다",
+        "failed": "다시 참여하지 못했습니다. 네트워크를 확인한 후 다시 시도하세요"
       },
       "refresh": "새로고침",
       "empty": "아직 다른 기기가 없습니다. 다른 컴퓨터에서 같은 계정으로 {{appName}}에 로그인하면 여기에 표시됩니다.",
@@ -7031,7 +7137,7 @@
       "renameCancel": "취소",
       "delete": "삭제",
       "deleteTitle": "“{{name}}” 기기를 삭제할까요?",
-      "deleteMessage": "계정에서 이 기기를 제거하고 원격 연결을 끊습니다. 기기의 세션과 파일은 유지됩니다. 해당 기기에서 다시 로그인하면 추가할 수 있습니다.",
+      "deleteMessage": "계정에서 이 기기를 제거하고 원격 연결을 끊습니다. 기기의 세션과 파일은 유지됩니다. 해당 기기에서 “다시 참여”를 선택하면 되돌릴 수 있습니다.",
       "deleteOnlineHint": "현재 서버는 온라인 기기 제거를 지원하지 않습니다. 서비스 업데이트 후 다시 시도하세요.",
       "error": {
         "unavailable": "기기 연동 서비스를 사용할 수 없습니다(서버 미활성화 또는 네트워크 오류)",
@@ -7058,6 +7164,22 @@
       },
       "control": "제어",
       "standbyHint": "이 컴퓨터의 다른 Cindy 인스턴스가 원격 연결을 사용하고 있습니다. 그것을 닫으면 이 인스턴스가 자동으로 이어받습니다.",
+      "identityConflict": {
+        "notice": "이 컴퓨터와 “{{name}}” 컴퓨터가 같은 컴퓨터로 인식되고 있습니다. 서로 원격 연결을 빼앗고 로그아웃될 수도 있습니다. 둘 중 한 대에 새 기기 ID를 지정하면 해결됩니다.",
+        "replace": "이 컴퓨터에 새 기기 ID 지정",
+        "blockedSelfHostedRelay": "이 컴퓨터는 직접 운영하는 중계를 사용 중이라 지금은 기기 ID를 바꿀 수 없습니다. 공식 중계로 돌아가면 여기에서 바꿀 수 있습니다.",
+        "confirmTitle": "이 컴퓨터에 새 기기 ID를 지정할까요?",
+        "confirmRestart": "Cindy가 바로 다시 시작되며 진행 중인 작업은 중단됩니다.",
+        "confirmNewDevice": "다시 시작한 뒤 한 번 더 로그인해야 합니다. 이 컴퓨터는 기기 목록에 새 컴퓨터로 표시됩니다.",
+        "confirmKeptByOther": "기존 ID에 저장된 설정(기기 이름, 동반자의 주 컴퓨터, 공유한 제공자 등)은 “{{name}}” 컴퓨터에 남습니다. 이 컴퓨터에서는 다시 설정해야 합니다.",
+        "confirmOtherUnaffected": "“{{name}}” 컴퓨터는 그대로이며, 그 컴퓨터에서 따로 할 일은 없습니다.",
+        "confirmAction": "기기 ID 바꾸고 Cindy 다시 시작",
+        "failed": "이 컴퓨터의 기기 ID를 바꾸지 못했습니다",
+        "toastTitle": "이 컴퓨터와 “{{name}}” 컴퓨터가 같은 컴퓨터로 인식되고 있습니다",
+        "toastBody": "서로 원격 연결을 빼앗고 로그아웃될 수도 있습니다. 둘 중 한 대에 새 기기 ID를 지정하면 해결됩니다.",
+        "toastAction": "기기 연동 열기",
+        "toastDismiss": "나중에"
+      },
       "apps": {
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
@@ -8400,6 +8522,8 @@
         "badgeDetail": "새 내용이 있으면 왼쪽 내비게이션의 플러그인 항목과 자체 카드에 초록 점을 켜고 한 줄 요약을 함께 표시할 수 있습니다. 패널을 열면 사라집니다. 소리를 내지 않고 진동하지도 않으며 시스템 알림 센터에도 들어가지 않고, 시스템 알림과는 별개의 권한입니다.",
         "confirm": "확인 대화상자로 동의를 요청할 수 있음",
         "confirmDetail": "작업 전에 Cindy 자체와 동일한 확인 대화상자를 열어 물어볼 수 있습니다. 질문 내용은 플러그인이 제공하며 대화상자에는 그 이름이 표시됩니다. 확인이든 취소든 직접 클릭해야 하고 플러그인은 스스로 누를 수 없습니다. 동시에 하나만 열 수 있으며 너무 자주 요청하면 차단됩니다.",
+        "form": "양식 입력을 요청할 수 있음",
+        "formDetail": "Cindy 자체와 같은 모양의 양식을 열어 입력을 요청할 수 있습니다. 양식에는 플러그인 이름이 표시되며, 입력한 내용은 \"저장\"을 클릭해야만 플러그인에 전달되고 취소하면 아무것도 전달되지 않습니다. Cindy를 보고 있을 때만 열리고, 한 번에 하나까지만 열 수 있으며, 너무 자주 요청하면 차단됩니다.",
         "fsWrite": "전용 파일을 관리할 수 있음",
         "fsWriteDetail": "전용 데이터를 읽고 쓰고, 목록을 조회하고 삭제할 수 있습니다. Agent 호출 중에는 작업의 작업 디렉터리를 읽고, 목록을 조회하고, 변경을 감시할 수도 있습니다. 쓰기와 삭제는 작업 권한을 따르며, 쓰기 허용이 삭제 허용을 뜻하지는 않습니다. 호출이 끝나면 감시도 중지됩니다. 모든 파일 작업은 호스트에서 실행됩니다.",
         "deviceSync": "내 컴퓨터 간 플러그인 데이터 동기화",
@@ -8702,6 +8826,8 @@
         "slotNetwork": "네트워크 접근",
         "slotNotify": "시스템 알림",
         "slotBadge": "읽지 않음 배지",
+        "slotConfirm": "확인 대화상자",
+        "slotForm": "양식 대화상자",
         "slotFs": "파일 쓰기",
         "slotLibrary": "영구 라이브러리",
         "slotSkill": "Agent 스킬",
@@ -8821,6 +8947,17 @@
       "saveAs": {
         "dialogTitle": "플러그인 \"{{name}}\" 다른 이름으로 저장",
         "dialogMessage": "플러그인 \"{{name}}\"이(가) 복사본 저장을 요청합니다"
+      },
+      "form": {
+        "save": "저장",
+        "cancel": "취소",
+        "addItem": "추가",
+        "removeItem": "삭제",
+        "removeNamed": "{{name}} 삭제",
+        "required": "필수 항목입니다",
+        "incomplete": "입력하지 않은 필수 항목이 있습니다",
+        "itemTitle": "{{label}} {{index}}",
+        "srDescription": "플러그인 \"{{name}}\"이(가) 입력을 요청합니다"
       },
       "confirm": {
         "dialogTitle": "플러그인 \"{{name}}\"이(가) 확인을 요청합니다"
@@ -12716,16 +12853,22 @@
     "listSeparator": ", ",
     "crossAgentConvert": {
       "asking": {
-        "title": "변환 가능한 워크스페이스 설정 감지됨",
-        "description": "이 워크스페이스에 {{sourceAgent}} 프로젝트 설정이 있습니다. {{targetAgent}}용 대응 설정을 생성할까요? 변경 사항은 이 워크스페이스 안에만 기록됩니다.",
-        "primary": "변환",
-        "cancel": "아니요"
+        "title": "{{targetAgent}}에서도 이 프로젝트 설정을 사용할까요?",
+        "description": "이 프로젝트에는 아래와 같은 {{sourceAgent}}용 설정이 있습니다. 프로젝트에 {{targetAgent}}용으로도 추가하거나 바로 작업을 시작할 수 있습니다.",
+        "primary": "{{targetAgent}}에 추가",
+        "cancel": "바로 작업 시작"
       },
       "running": {
-        "title": "설정 변환 중…",
-        "description": "{{targetAgent}}용 워크스페이스 설정을 기록하고 있습니다. 창을 닫지 마세요.",
-        "primary": "변환",
-        "cancel": "아니요"
+        "title": "프로젝트 설정 추가 중…",
+        "description": "이 프로젝트에 {{targetAgent}}용 설정을 저장하고 있습니다.",
+        "primary": "추가 중…",
+        "cancel": "바로 작업 시작"
+      },
+      "items": {
+        "agents-md": "프로젝트 지침 및 작업 규칙",
+        "agents": "프로젝트에서 정의한 도우미 역할",
+        "hooks": "프로젝트 스크립트 실행과 같은 자동 작업",
+        "mcp": "외부 도구 연결"
       }
     },
     "confirmDialog": {
@@ -13208,7 +13351,8 @@
           "subject": {
             "githubIssue": "‘GitHub 이슈 제출’ 확인 카드",
             "renameSessions": "‘작업 이름 일괄 변경’ 확인 카드",
-            "pluginFileGrant": "‘플러그인 파일 권한 부여’ 확인 카드"
+            "pluginFileGrant": "‘플러그인 파일 권한 부여’ 확인 카드",
+            "mediaPathReveal": "‘Agent에게 컴퓨터에 있는 미디어 파일 위치 알려 주기’ 확인 카드"
           }
         },
         "replyWords": {
@@ -22117,6 +22261,11 @@
     "lineNumbers": "줄 번호"
   },
   "subscriptionAccounts": {
+    "pluginSignIn": {
+      "method": "로그인 방법",
+      "secretHint": "키는 플러그인에만 전달되며 이 계정 전용 폴더에 저장됩니다. Cindy는 키를 저장하지 않고 다른 컴퓨터로 보내지도 않습니다.",
+      "browserHint": "플러그인이 브라우저를 엽니다. 브라우저에서 로그인을 마친 뒤 여기로 돌아오세요."
+    },
     "placement": {
       "needsUpdate": "이 작업을 실행하는 컴퓨터의 Cindy를 업데이트해야 계정을 이렇게 조정할 수 있습니다.",
       "moveTo": "이동…",
@@ -22259,6 +22408,18 @@
       "cheapest": {
         "title": "가장 저렴하게",
         "hint": "할당량이 남은 구독을 먼저 써서 추가 비용이 들지 않습니다. 나머지는 표시 가격이 낮은 순서이며, 가격이 없는 소스는 뒤로 갑니다."
+      },
+      "drain": {
+        "title": "다 쓰고 다음으로",
+        "hint": "지난번 소스를 할당량이 다 떨어지거나 쓸 수 없을 때까지 계속 쓰고, 그다음 소스로 넘어갑니다. 앞의 소스가 회복돼도 되돌아가지 않습니다."
+      },
+      "headroom": {
+        "title": "남은 양이 많은 순",
+        "hint": "남은 할당량 비율이 가장 높은 소스를 먼저 씁니다(주간 할당량이 있으면 그것을 봅니다). 할당량을 읽을 수 없는 소스는 뒤로 갑니다."
+      },
+      "weighted": {
+        "title": "가중치",
+        "hint": "새 작업을 각 소스의 가중치 비율대로 번갈아 배분합니다. 쓸 수 없는 소스는 이번에 빠집니다."
       }
     },
     "picker": {
@@ -22286,6 +22447,11 @@
       "tight": "5시간 할당량이 거의 차서 지금은 쓰지 않음",
       "cheapest": "표시 가격이 가장 낮음",
       "cheapestFree": "구독 할당량이 남아 추가 비용 없음",
+      "drain": "할당량이 다 떨어질 때까지 계속 사용",
+      "drainNext": "이전 소스를 다 썼거나 쓸 수 없어 이 소스로 바꿈",
+      "headroom": "남은 할당량이 가장 많음",
+      "headroomQuota": "할당량이 {{left}}% 남아 다른 어떤 소스보다 많음",
+      "weighted": "가중치에 따라 이번 차례",
       "noVision": "메시지에 이미지가 있는데 이 소스는 이미지를 볼 수 없음",
       "exceptionImage": "메시지에 이미지가 있어 이미지를 볼 수 있는 소스 중에서 선택",
       "exceptionImageFallback": "메시지에 이미지가 있지만 이미지를 볼 수 있는 소스가 없어 평소대로 선택",
@@ -22305,6 +22471,9 @@
       "effort": "추론 강도",
       "effortUnset": "지정 안 함",
       "effortHint": "선택된 모델이 이 단계를 지원하지 않으면 해당 모델의 기본값으로 실행합니다.",
+      "weight": "가중치",
+      "weightAria": "“{{name}}”의 가중치",
+      "weightHint": "가중치 배분일 때 가중치가 클수록 새 작업을 더 많이 받습니다. 1–1000.",
       "sources": "쓸 수 있는 소스",
       "sourcesHint": "서로 다른 모델을 함께 넣을 수 있습니다. 실제로 쓴 모델은 작업에 표시됩니다.",
       "sourcesEmpty": "아직 소스가 없습니다. 아래에서 연결된 모델을 추가하세요.",
@@ -22337,6 +22506,7 @@
         "empty": "아직 예외가 없습니다. 새 작업은 모두 위의 선택 방식을 따릅니다.",
         "imageRule": "메시지에 이미지가 있으면 이미지를 볼 수 있는 소스만 사용",
         "hoursRule": "{{from}}–{{to}}에는 '{{name}}' 사용",
+        "hoursRuleDays": "{{days}} {{from}}–{{to}}에는 “{{name}}” 사용",
         "remove": "이 예외 삭제",
         "add": "예외 추가",
         "choose": "상황 선택",
@@ -22345,6 +22515,9 @@
         "from": "시작",
         "to": "종료",
         "useRoute": "대신 사용",
+        "days": "요일",
+        "daysHint": "아무것도 고르지 않으면 매일입니다. 자정을 넘는 시간대는 시작한 날로 칩니다.",
+        "dayRange": "{{from}}~{{to}}",
         "addHours": "추가",
         "sameHour": "시작과 종료는 같은 시각일 수 없습니다.",
         "full": "예외는 최대 {{count}}개입니다.",

@@ -45,7 +45,7 @@ import { throwIpcError } from '../../utils/ipcValidate.js';
 import { MAKER_INVOKE, MAKER_PUSH } from '../channels.js';
 import { registerProviderHandlers, type ProviderHandlerDeps } from '../providerHandlers.js';
 import { clearModelVisibilityMirror, waitForModelVisibilityMirror, getModelVisibilityMirrorSnapshot, setModelVisibilityMirror } from '../../maker-host/model-visibility-mirror.js';
-import { runDeviceLinkInvokeContext } from '../../device-link/invoke-context.js';
+import { runDeviceLinkInvokeContext, readDeviceLinkModelSelectionOrigin } from '../../device-link/invoke-context.js';
 import { extractIpcError } from '../../../renderer/utils/ipcError';
 import * as providerPresentation from '../../maker-host/provider-presentation-store.js';
 import * as llamaCppService from '../../local-model-runtime/llamaCppService.js';
@@ -5634,6 +5634,48 @@ describe('model context limit IPC', () => {
     expect(writeModelContextLimit).not.toHaveBeenCalled();
     await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_GET, { ...primary, sessionId: 123 }))
       .rejects.toThrow();
+  });
+
+  // #11716/#4477 unit: synthetic remote senders may read fixed numeric metadata,
+  // but scoped callers and all preference writes must retain their sender gate.
+  it('allows only the authorized same-account native read while preserving local and mutation trust gates', async () => {
+    const harness = new IpcHarness();
+    const native = { contextWindow: 100_000, usableContextWindow: 95_000, autoCompactTokenLimit: 90_000,
+      modelMaxContextWindow: 100_000, source: 'runtime' as const, fallbackModel: false };
+    const readNative = vi.fn(async () => native);
+    registerProviderHandlers(harness, makeDeps({
+      assertTrustedSender: () => { throwIpcError('PERMISSION_DENIED', 'untrusted sender'); },
+      isRemoteContextRead: () => readDeviceLinkModelSelectionOrigin() === 'owner',
+      readModelContextLimit: () => ({ limit: 800_000, isCustomized: true }),
+      writeModelContextLimit: vi.fn(),
+      readCodexContextWindowInfo: readNative,
+    }));
+    const target = { ...primary, sessionId: 'remote-task' };
+    const channel = MAKER_INVOKE.MODEL_CONTEXT_LIMIT_GET;
+    await expect(harness.invoke(channel, target)).rejects.toThrow('PERMISSION_DENIED');
+    await expect(runDeviceLinkInvokeContext({ controllerDeviceId: 'device-a', channel }, () => harness.invoke(channel, target)))
+      .resolves.toMatchObject({ codexContext: native });
+    await expect(runDeviceLinkInvokeContext({ controllerDeviceId: '', channel }, () => harness.invoke(channel, target)))
+      .rejects.toThrow('PERMISSION_DENIED');
+    await expect(runDeviceLinkInvokeContext({ controllerDeviceId: 'device-a', channel },
+      () => harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET, target, 50_000, stamp)))
+      .rejects.toThrow('PERMISSION_DENIED');
+    expect(readNative).toHaveBeenCalledExactlyOnceWith(primary, 'remote-task');
+  });
+  it('rejects a native context read that finishes after an account switch', async () => {
+    let finish!: (value: null) => void;
+    let generation = 1;
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps({
+      currentOwnerSession: () => ({ dataOwnerId: 'owner-a', generation }),
+      readModelContextLimit: () => ({ limit: null, isCustomized: false }),
+      readCodexContextWindowInfo: () => new Promise(resolve => { finish = resolve; }),
+      writeModelContextLimit: vi.fn(),
+    }));
+    const request = harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_GET, primary);
+    generation++;
+    finish(null);
+    await expect(request).rejects.toThrow('active account changed during context read');
   });
 
   it('validates every alias then writes one atomic edit with the current owner', async () => {

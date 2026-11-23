@@ -685,6 +685,7 @@
     },
     "picker": {
       "unavailable": "已無法使用的分享",
+      "offline": "{{name}} · 暫時離線",
       "hostOutdated": "分享者電腦上的 Cindy 版本太舊，讀不到這些模型。請讓對方更新 Cindy 後再試。",
       "numbered": "{{name}} ({{index}})"
     },
@@ -4763,7 +4764,68 @@
         "hint": "透過已繫結的飛書或 Lark 機器人私訊你一則訊息；僅在視窗失焦時傳送。",
         "disabledHint": "需要先設定 Bot 並傳送一則訊息給它，以完成繫結。"
       },
-      "bind": "繫結"
+      "bind": "繫結",
+      "groups": {
+        "title": "群組",
+        "description": "為機器人所在的某個群組單獨指定專案、模型與權限。",
+        "rules": "沒有單獨設定的項目：已選擇專案的群組跟隨「專案與模型」裡那個專案的設定，未選擇專案的群組跟隨上方的「新對話配置」與「群組新任務的權限模式」。群組主線與群組裡的話題共用同一個群組的設定。",
+        "expand": "展開",
+        "collapse": "收起",
+        "groupCount_one": "{{count}} 個群組",
+        "groupCount_other": "{{count}} 個群組",
+        "customCount_one": "{{count}} 個單獨設定",
+        "customCount_other": "{{count}} 個單獨設定",
+        "refresh": "重新整理",
+        "loading": "正在讀取群組列表…",
+        "loadFailed": "讀取群組列表失敗，請稍後點「重新整理」重試。",
+        "saveFailed": "儲存群組設定失敗",
+        "notConnected": "機器人連上後才能列出它所在的群組。下方只列出已單獨設定過的群組。",
+        "empty": "機器人還沒有加入任何群組。把機器人拉進群組後，再來這裡設定。",
+        "listPermission": "讀不到機器人所在的群組：請在飛書開放平台為這個應用開通「獲取群組資訊」權限。下方先列出機器人用過的群組。",
+        "listUnavailable": "暫時讀不到機器人所在的群組，下方先列出機器人用過的群組。",
+        "unnamed": "未命名的群組（{{id}}）",
+        "summaryModel": "單獨設定了模型",
+        "summaryPermission": "單獨設定了權限",
+        "expandAria": "設定「{{name}}」",
+        "searchLabel": "搜尋群組",
+        "searchPlaceholder": "依群組名稱搜尋",
+        "customHeading": "單獨設定",
+        "followHeading": "跟隨頻道設定",
+        "showMore": "再顯示 {{count}} 個",
+        "showLess": "收起",
+        "noMatch": "找不到名稱包含「{{query}}」的群組",
+        "project": {
+          "label": "專案",
+          "follow": "對話",
+          "missing": "{{name}}（已不在側欄）",
+          "hint": "在群組裡第一次 @ 機器人、開新話題或傳送 /new 時生效，進行中的任務不會被移走。選專案時，模型與權限預設跟隨這個專案在「專案與模型」裡的設定；選「對話」時任務放在機器人的對話目錄裡，跟隨上方的「新對話配置」。只能選擇側欄裡的本機專案。"
+        },
+        "model": {
+          "label": "模型和推理強度",
+          "hintFollow": "跟隨「新對話配置」。在這裡更換模型或推理強度，就只對這個群組生效。",
+          "hintFollowProject": "跟隨專案「{{project}}」在「專案與模型」裡的設定。在這裡更換模型或推理強度，就只對這個群組生效。",
+          "hintProjectUnavailable": "專案「{{project}}」在「專案與模型」裡設定的模型目前無法使用。可以到那裡重新選擇，或在這裡為這個群組單獨選一個。",
+          "hintFixed": "這個群組單獨設定了模型。群組裡沒有單獨改過模型的任務，收到下一則訊息時會切換過去；新任務直接使用它。"
+        },
+        "permission": {
+          "label": "權限",
+          "hintFollow": "目前跟隨「群組新任務的權限模式」。只影響之後在這個群組新建的任務，已有任務在群組裡用 /permission 切換。",
+          "hintFollowProject": "目前跟隨專案「{{project}}」在「專案與模型」裡的權限。只影響之後在這個群組新建的任務，已有任務在群組裡用 /permission 切換。",
+          "hintFixed": "這個群組單獨設定了權限。只影響之後在這個群組新建的任務，已有任務在群組裡用 /permission 切換。"
+        },
+        "fullAccessConfirm": {
+          "title": "讓「{{name}}」以完全存取執行？",
+          "description": "之後在這個群組新建的任務都會直接執行、不再逐項確認，群組裡任何人 @ 機器人都一樣。群組內容由成員控制，請確認群組成員都可信。",
+          "confirm": "改為完全存取",
+          "cancel": "取消"
+        },
+        "widerConfirm": {
+          "title": "放寬「{{name}}」的權限？",
+          "description": "之後在這個群組新建的任務會從「{{current}}」變成「{{next}}」，群組裡任何人 @ 機器人都一樣。群組內容由成員控制，請確認群組成員都可信。",
+          "confirm": "仍然變更",
+          "cancel": "取消"
+        }
+      }
     },
     "wechatBot": {
       "title": "個人微信",
@@ -6508,7 +6570,7 @@
           "defaultWorkspaceChip": "預設：{{name}}",
           "defaultWorkspaceAria": "選擇派發任務時使用的預設專案",
           "defaultWorkspaceRadioAria": "把「{{name}}」設為預設專案",
-          "defaultWorkspaceRowHint": "選中的是預設專案：在 Telegram、飛書 / Lark 和 X 裡，沒有單獨選過專案的私聊和群，任務都落在它裡面。",
+          "defaultWorkspaceRowHint": "選中的是預設專案：在 Telegram、飛書 / Lark、X 和 Discord 裡，沒有單獨選過專案的私聊和群，任務都落在它裡面。",
           "defaultProjectTag": "預設",
           "defaultProjectFullAccessWarning": "預設專案「{{name}}」的權限是完全訪問：任何群裡 @ 機器人，都會以完全訪問在它裡面執行。",
           "sharedSettingsPointer": "專案、模型與權限由所有官方機器人共用。",
@@ -6749,6 +6811,40 @@
           "workingDeviceThisComputer": "本機",
           "workingDeviceUnknown": "工作電腦尚未同步",
           "workingDeviceUnnamed": "未命名電腦"
+        },
+        "discord": {
+          "description": "關聯 Discord 帳號，在私訊或伺服器裡透過官方 bot 給 Cindy 派發任務。",
+          "disabledHint": "開啟開關後會產生關聯碼，把它傳給 Discord 裡的 Cindy 機器人即可完成關聯。",
+          "toggleAria": "切換 Discord 連線",
+          "connect": "關聯 Discord",
+          "openApp": "把 Cindy 新增到 Discord",
+          "cancel": "取消關聯",
+          "retry": "重新關聯",
+          "openBot": "開啟 Cindy bot",
+          "addToGroup": "新增到 Discord 伺服器",
+          "unlink": "解綁 Discord",
+          "unlinkConfirmTitle": "解綁 Discord？",
+          "unlinkConfirmDescription": "解綁後 Discord 將不能再向這臺裝置派發訊息；本地專案和其他渠道不受影響。",
+          "status": {
+            "checking": "正在檢查伺服器支援…",
+            "unavailable": "當前伺服器尚未開放",
+            "disabled": "已停用",
+            "none": "未關聯",
+            "pending": "把關聯碼傳給 Cindy 機器人",
+            "awaiting_confirmation": "請在 Discord 內確認關聯",
+            "confirmed": "已關聯 {{user}}",
+            "denied": "已拒絕關聯",
+            "expired": "關聯碼已過期",
+            "failed": "關聯失敗",
+            "revoked": "已解除關聯",
+            "superseded": "已關聯到另一臺裝置"
+          },
+          "bindCode": {
+            "label": "關聯碼",
+            "copy": "複製關聯碼",
+            "copied": "關聯碼已複製",
+            "hint": "在 Discord 裡把關聯碼私訊傳給 Cindy 機器人，或執行 /bind 並填入關聯碼。還沒新增 Cindy？先把它新增到 Discord。"
+          }
         }
       },
       "summary": {
@@ -6981,6 +7077,7 @@
         "providerTelegram": "Telegram",
         "providerX": "X",
         "providerFeishu": "飛書 / Lark",
+        "providerDiscord": "Discord",
         "requireConnected": "連線 {{provider}} 後可編輯（先在上方開啟對應開關並等待連線成功）。",
         "offlineLocal": "{{provider}} 暫時連不上，變更會保存在本機；連上後同步到對話裡的模型卡。",
         "requireBinding": "先完成 {{provider}} 帳號關聯後可編輯。",
@@ -7008,11 +7105,20 @@
       "connectionIssue": {
         "device-removed": "裝置已從帳號中移除，請在本裝置登出後重新登入。",
         "auth-failed": "登入已失效，請重新登入",
-        "replaced": "連線被另一處相同裝置頂替",
+        "replaced": "連線被另一個 Cindy 取代，它可能在本機，也可能在另一台被識別成同一台的電腦上",
         "too-many-connections": "同帳號連線數已達上限",
         "version-mismatch": "通訊協定版本不一致，請更新應用程式",
         "unstable": "連線反覆斷開又重連，請檢查網路；若持續如此，重啟 Cindy",
         "agent-net-relay-down": "連不上 Agent-Net 中轉，正在重新連線；已直連的電腦照常可用，其他裝置暫時連不上"
+      },
+      "rejoin": {
+        "hint": "這台裝置已從帳號中移除，點「重新加入」即可回來。",
+        "action": "重新加入",
+        "done": "已重新加入",
+        "doneWithoutAgentNet": "已重新加入，Agent-Net 暫未恢復，先用 Device Link 連線",
+        "unsupported": "伺服器暫不支援重新加入，請在本裝置登出後重新登入",
+        "agentNetFailed": "Agent-Net 暫未恢復。關閉「僅使用 Agent-Net」後可先用 Device Link 連線",
+        "failed": "重新加入失敗，請檢查網路後重試"
       },
       "refresh": "重新整理",
       "empty": "暫無其它裝置。在另一臺電腦上用同一帳號登入 {{appName}} 後，這裡會顯示該裝置。",
@@ -7031,7 +7137,7 @@
       "renameCancel": "取消",
       "delete": "刪除",
       "deleteTitle": "刪除「{{name}}」？",
-      "deleteMessage": "將此裝置從帳號中移除並中斷遠端連線。裝置上的任務和檔案會保留，重新登入後可再次加入。",
+      "deleteMessage": "將此裝置從帳號中移除並中斷遠端連線。裝置上的任務和檔案會保留，之後在那台裝置上點「重新加入」即可回來。",
       "deleteOnlineHint": "目前伺服器尚不支援移除線上裝置，請待服務升級後重試。",
       "error": {
         "unavailable": "裝置互聯服務暫時無法使用（伺服器未啟用或網路異常）",
@@ -7058,6 +7164,22 @@
       },
       "control": "控制",
       "standbyHint": "本機另一個 Cindy 執行個體正在使用遠端連線。關閉它後，此執行個體會自動接管。",
+      "identityConflict": {
+        "notice": "這台電腦和「{{name}}」被識別成了同一台電腦，兩邊會互相擠掉遠端連線，還可能被登出。在其中一台上換一個新身分就能解決。",
+        "replace": "給這台電腦換一個新身分",
+        "blockedSelfHostedRelay": "這台電腦正在使用自己的中繼，現在不能換身分。切回官方中繼後，就可以在這裡換。",
+        "confirmTitle": "給這台電腦換一個新身分？",
+        "confirmRestart": "Cindy 會馬上重新啟動，進行中的任務會中斷。",
+        "confirmNewDevice": "重新啟動後需要再登入一次，這台電腦會以一台新電腦出現在裝置清單裡。",
+        "confirmKeptByOther": "原本記在這個身分下的設定（如裝置名稱、夥伴的主力電腦、分享出去的供應商）會留給「{{name}}」，這台電腦需要重新設定。",
+        "confirmOtherUnaffected": "「{{name}}」維持不變，不需要再到那台電腦上操作。",
+        "confirmAction": "換身分並重新啟動 Cindy",
+        "failed": "未能給這台電腦換身分",
+        "toastTitle": "這台電腦和「{{name}}」被識別成了同一台電腦",
+        "toastBody": "兩台電腦會互相擠掉遠端連線，還可能被登出。在其中一台上換一個新身分就能解決。",
+        "toastAction": "開啟裝置互聯",
+        "toastDismiss": "稍後處理"
+      },
       "apps": {
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
@@ -8400,6 +8522,8 @@
         "badgeDetail": "有新內容時，它可以在左側導航的插件入口和自己的卡片上點亮一個綠點，並附一句話摘要；你開啟它的面板即清零。綠點不出聲、不震動，也不會進入系統通知中心，和上面的系統提示是兩項獨立權限。",
         "confirm": "可彈出確認框徵求你同意",
         "confirmDetail": "它動手前可以彈一個和 Cindy 同款的確認框來問你，問句由它提供、框上會標註它的名字；同意還是取消都由你親手點，它自己點不了。同時最多一個確認框，彈得太頻會被攔下。",
+        "form": "可彈出表單請你填寫",
+        "formDetail": "它可以彈一個和 Cindy 同款的表單請你填寫，表單上會標註它的名字；填好的內容只有你點「儲存」後才交給它，點取消什麼都不給。只在你正看著 Cindy 時彈出，同時最多一個表單，彈得太頻會被攔下。",
         "fsWrite": "可管理自己的私有檔案",
         "fsWriteDetail": "可讀寫、列舉和刪除自己的私有資料。當前 Agent 呼叫期間，也可讀取、列舉和監聽任務的工作目錄。寫入與刪除沿用任務權限；允許寫入不代表允許刪除。呼叫結束即停止監聽。檔案操作均由宿主執行。",
         "deviceSync": "在你的電腦間同步插件資料",
@@ -8702,6 +8826,8 @@
         "slotNetwork": "網路存取",
         "slotNotify": "系統提示",
         "slotBadge": "未讀角標",
+        "slotConfirm": "確認彈窗",
+        "slotForm": "表單彈窗",
         "slotFs": "寫檔案",
         "slotLibrary": "持久作品庫",
         "slotSkill": "Agent 技能",
@@ -8821,6 +8947,17 @@
       "saveAs": {
         "dialogTitle": "插件「{{name}}」另存為",
         "dialogMessage": "插件「{{name}}」請求你另存一份拷貝"
+      },
+      "form": {
+        "save": "儲存",
+        "cancel": "取消",
+        "addItem": "新增",
+        "removeItem": "刪除",
+        "removeNamed": "刪除「{{name}}」",
+        "required": "這一項必填",
+        "incomplete": "還有必填項沒填",
+        "itemTitle": "{{label}} {{index}}",
+        "srDescription": "插件「{{name}}」請你填寫"
       },
       "confirm": {
         "dialogTitle": "插件「{{name}}」請你確認"
@@ -12716,16 +12853,22 @@
     "listSeparator": "、",
     "crossAgentConvert": {
       "asking": {
-        "title": "偵測到可轉換的工作區設定",
-        "description": "目前工作區包含 {{sourceAgent}} 的專案層級設定。是否為 {{targetAgent}} 產生對應設定？這些變更只會寫入目前的工作區目錄。",
-        "primary": "轉換",
-        "cancel": "不要"
+        "title": "要讓 {{targetAgent}} 也使用這些專案設定嗎？",
+        "description": "這個專案已為 {{sourceAgent}} 設定好以下項目。你可以在專案裡為 {{targetAgent}} 加入一份，也可以直接開始任務。",
+        "primary": "加入 {{targetAgent}}",
+        "cancel": "直接開始任務"
       },
       "running": {
-        "title": "正在轉換設定…",
-        "description": "正在為 {{targetAgent}} 寫入工作區設定，請勿關閉視窗。",
-        "primary": "轉換",
-        "cancel": "不要"
+        "title": "正在加入專案設定…",
+        "description": "正在將 {{targetAgent}} 的設定儲存到目前的專案。",
+        "primary": "正在加入…",
+        "cancel": "直接開始任務"
+      },
+      "items": {
+        "agents-md": "專案說明與工作約定",
+        "agents": "專案自訂的助手角色",
+        "hooks": "自動執行的動作（例如執行專案指令碼）",
+        "mcp": "外部工具連線"
       }
     },
     "confirmDialog": {
@@ -13208,7 +13351,8 @@
           "subject": {
             "githubIssue": "「提交 GitHub Issue」的確認卡",
             "renameSessions": "「批次重新命名任務」的確認卡",
-            "pluginFileGrant": "「插件檔案授權」的確認卡"
+            "pluginFileGrant": "「插件檔案授權」的確認卡",
+            "mediaPathReveal": "「讓 Agent 取得圖片等媒體檔案在電腦上的位置」的確認卡"
           }
         },
         "replyWords": {
@@ -22117,6 +22261,11 @@
     "lineNumbers": "行號"
   },
   "subscriptionAccounts": {
+    "pluginSignIn": {
+      "method": "登入方式",
+      "secretHint": "Key 只交給插件，儲存在這個帳號自己的資料夾裡；Cindy 不會保存，也不會傳到其他電腦。",
+      "browserHint": "插件會開啟瀏覽器，在那裡完成登入後回到這裡。"
+    },
     "placement": {
       "needsUpdate": "執行這項操作的電腦需要先更新 Cindy，才能這樣調整帳號。",
       "moveTo": "移到…",
@@ -22259,6 +22408,18 @@
       "cheapest": {
         "title": "最省錢",
         "hint": "還有配額的訂閱先用，不另外花錢；其餘按標價從低到高，沒有標價的排在後面。"
+      },
+      "drain": {
+        "title": "用完再換",
+        "hint": "一直用上一次的來源，它配額用完或用不了才換下一個；前面的恢復了也不換回去。"
+      },
+      "headroom": {
+        "title": "餘量最多的先用",
+        "hint": "剩餘配額占比最高的先用（有週配額看週配額）；讀不到配額的來源排在後面。"
+      },
+      "weighted": {
+        "title": "按權重",
+        "hint": "新任務按各來源的權重比例交錯分配；用不了的來源這次不參與。"
       }
     },
     "picker": {
@@ -22286,6 +22447,11 @@
       "tight": "5 小時配額快滿了，先不用",
       "cheapest": "標價最低",
       "cheapestFree": "訂閱還有配額，不另外花錢",
+      "drain": "接著用它，直到配額用完",
+      "drainNext": "上一個來源用完或用不了，換到它",
+      "headroom": "剩餘配額最多",
+      "headroomQuota": "還剩 {{left}}% 配額，比其他來源都多",
+      "weighted": "按權重這次分到它",
       "noVision": "訊息裡有圖片，它看不了圖",
       "exceptionImage": "訊息裡有圖片，只在能看圖的來源裡選",
       "exceptionImageFallback": "訊息裡有圖片，但沒有能看圖的來源，照常選",
@@ -22305,6 +22471,9 @@
       "effort": "推理強度",
       "effortUnset": "不指定",
       "effortHint": "選中的模型不支援這一檔時，按它的預設檔執行。",
+      "weight": "權重",
+      "weightAria": "「{{name}}」的權重",
+      "weightHint": "按權重分配時，權重越大分到的新任務越多，1–1000。",
       "sources": "可以用的來源",
       "sourcesHint": "可以放不同的模型；實際用了哪個會寫在任務裡。",
       "sourcesEmpty": "還沒有來源。從下面加入已經連線的模型。",
@@ -22337,6 +22506,7 @@
         "empty": "還沒有例外，每個新任務都按上面的選法挑。",
         "imageRule": "訊息裡有圖片時，只用能看圖的來源",
         "hoursRule": "{{from}}–{{to}} 改走「{{name}}」",
+        "hoursRuleDays": "{{days}} {{from}}–{{to}} 改走「{{name}}」",
         "remove": "刪除這條例外",
         "add": "新增例外",
         "choose": "選擇一種情況",
@@ -22345,6 +22515,9 @@
         "from": "從",
         "to": "到",
         "useRoute": "改走",
+        "days": "星期",
+        "daysHint": "不選就是每天；跨午夜的時段按開始那一天算。",
+        "dayRange": "{{from}}至{{to}}",
         "addHours": "新增",
         "sameHour": "開始和結束不能是同一個時刻。",
         "full": "最多 {{count}} 條例外。",

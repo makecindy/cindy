@@ -4,11 +4,12 @@
  * 也就是新建任务时模型列表里以「引擎 · 电脑名」列出的那些。
  *
  * 行式与自己其他电脑上的普通供应商(OwnRemoteProviders)相同：图标带远程角标，名字后带「插件」标识，
- * 所在电脑只写在悬停提示里；点开在右栏只读地看所在电脑、状态与开放的模型。改名、隐藏、停用和逐模型
- * 关闭都只能在那台电脑上做，这里不提供菜单。
+ * 所在电脑只写在悬停提示里；点开在右栏只读地看所在电脑、状态、那台电脑上该账号的用量与开放的模型。
+ * 改名、隐藏、停用和逐模型关闭都只能在那台电脑上做，这里不提供菜单。
  *
  * 读取与模型选择器共用同一份按电脑缓存(useDevicesPluginEngines)：页面打开时向每台电脑各读一次
  * 只读的 `maker:list-plugin-engines`(15 秒内已读过的不再读)，之后只给新出现的电脑补读，不轮询。
+ * 用量只在打开某一项详情、且那台电脑说明该引擎会上报用量时读，与任务里的用量标签共用一分钟内的读取。
  */
 import { useEffect, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -24,7 +25,7 @@ import { remotePluginEngineChoices } from '@/lib/pluginEngineSelection';
 import { cn } from '@/lib/utils';
 
 import type { PluginEngineView } from '../../../shared/pluginEngines';
-import { PluginTag } from './PluginEngineProviders';
+import { PluginEngineUsage, PluginTag } from './PluginEngineProviders';
 import { ReadOnlyProviderModelSection } from './ReadOnlyProviderModels';
 
 export interface OwnRemotePluginEngine {
@@ -204,6 +205,9 @@ export function OwnRemotePluginEngineDetail({ entry }: { entry: OwnRemotePluginE
             {t('settings.providers.remote.detailNote', { device: entry.deviceName })}
           </p>
         </div>
+        {engine.reportsUsage && (
+          <PluginEngineUsage key={`usage:${entry.key}`} deviceId={entry.deviceId} engineKey={engine.key} />
+        )}
         <ReadOnlyProviderModelSection
           title={t('settings.providers.remote.modelsTitle')}
           models={models}

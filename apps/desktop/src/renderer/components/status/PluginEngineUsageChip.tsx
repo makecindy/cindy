@@ -13,11 +13,13 @@ import { pluginEngineUsageAccount, pluginEngineUsageBalances } from './pluginEng
 import { formatQuotaResetDuration } from './usageCardModel';
 
 /** Mounted only for the visible task. Its React key includes the account device and engine. */
-export function PluginEngineUsageChip({ engineKey, name, deviceId, running }: {
+export function PluginEngineUsageChip({ engineKey, name, deviceId, running, sessionId }: {
   engineKey: string;
   name?: string;
   deviceId: string | null;
   running: boolean;
+  /** A local task: an engine with several accounts shows this task's account. */
+  sessionId?: string;
 }) {
   const { t, i18n } = useTranslation();
   const [usage, setUsage] = useState<GhostHarnessUsage | null>(null);
@@ -38,7 +40,7 @@ export function PluginEngineUsageChip({ engineKey, name, deviceId, running }: {
         return;
       }
       pending = true;
-      const read = readPluginEngineUsage(owner, deviceId, engineKey);
+      const read = readPluginEngineUsage(owner, deviceId, engineKey, sessionId);
       const snapshot = await read.result;
       nextRead = read.freshUntil;
       pending = false;
@@ -60,7 +62,7 @@ export function PluginEngineUsageChip({ engineKey, name, deviceId, running }: {
       window.removeEventListener('focus', check);
       document.removeEventListener('visibilitychange', check);
     };
-  }, [engineKey, deviceId]);
+  }, [engineKey, deviceId, sessionId]);
   const wasRunning = useRef(running);
   useEffect(() => {
     if (wasRunning.current && !running) refresh.current();

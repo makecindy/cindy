@@ -7,6 +7,7 @@ import { extractIpcError } from '@/utils/ipcError';
 export function subscriptionAccountErrorKey(error: unknown): string | null {
   switch (extractIpcError(error)?.code) {
     case 'SUBSCRIPTION_LOGIN_CANCELLED': return null;
+    case 'NOT_FOUND': return 'subscriptionAccounts.boundUnavailable';
     // A connection problem, not a lost login: say so instead of sending the user to sign in again.
     case 'SUBSCRIPTION_ACCOUNT_UNREACHABLE': return 'subscriptionAccounts.unreachable';
     case 'SUBSCRIPTION_CODEX_PROVIDER_AUTH': return 'subscriptionAccounts.providerManagedAuth';

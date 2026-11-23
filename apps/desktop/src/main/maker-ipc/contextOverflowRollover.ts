@@ -407,6 +407,8 @@ function normalizeOverflowDbAgentKind(value: string): 'cc' | 'codex' | 'pi' {
 export function engineLabelForOverflow(agentKind: string): string {
   if (agentKind === 'codex') return 'Codex';
   if (agentKind === 'pi') return 'Pi';
+  // A plugin engine task handed to another account of its engine (plugin engine accounts, 2026-11-23).
+  if (agentKind === 'acp') return 'the plugin engine';
   return 'Claude Code';
 }
 
@@ -506,6 +508,15 @@ export interface ContextOverflowRolloverDeps {
     isTurnRunning(): boolean;
     listBackgroundTasks?(): ReadonlyArray<unknown>;
     getUsageSnapshot?(): { contextTokens: number; contextWindow: number; needsRollover?: boolean };
+  } | null | undefined;
+  /**
+   * The task's runtime whatever its engine, a plugin engine's included (getLiveSession reads only
+   * built-in engines). An account handoff (`retain-route`) retires it so the next send starts on the
+   * new account. Absent = getLiveSession.
+   */
+  getRuntimeSession?(sessionId: string): {
+    isTurnRunning(): boolean;
+    listBackgroundTasks?(): ReadonlyArray<unknown>;
   } | null | undefined;
   rehydrateColdPiRuntimeForWindowVerification?(sessionId: string): Promise<void>;
   closeSession(sessionId: string): Promise<void>;
@@ -1318,11 +1329,13 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
           }
           assertReady();
           const live = deps.getLiveSession(sessionId);
-          if (target && (live?.isTurnRunning() || (live?.listBackgroundTasks?.().length ?? 0) > 0)) {
+          // An account handoff retires the task's runtime whatever its engine (plugin engine accounts).
+          const runtime = target === 'retain-route' && deps.getRuntimeSession ? deps.getRuntimeSession(sessionId) : live;
+          if (target && (runtime?.isTurnRunning() || (runtime?.listBackgroundTasks?.().length ?? 0) > 0)) {
             throw new Error('Native session recovery cannot interrupt a running turn or background task');
           }
           // Manual restart closes the broken runtime without asking it to compact.
-          if (live) await deps.closeSession(sessionId);
+          if (runtime) await deps.closeSession(sessionId);
           assertReady();
           if (!target) {
             // Include any last output persisted while the old runtime was stopping.

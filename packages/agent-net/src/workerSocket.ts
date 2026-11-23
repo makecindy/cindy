@@ -171,7 +171,7 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
       socket.worker.once('error', () => { finish(new Error('AGENT_NET_WORKER_FAILED')); socket.dispose(1006); });
       socket.worker.once('exit', () => { finish(new Error('AGENT_NET_WORKER_EXITED')); socket.dispose(1006); });
     });
-    const { onDirectory: _directory, onDelegationRequests: _requests, onDelegations: _grants, onPathChanged: _path, tap: _tap, client: _client, workerFile: _file, assertCurrent: _guard,
+    const { onDirectory: _directory, onDelegationRequests: _requests, onDelegations: _grants, onPathChanged: _path, onRelayReplaced, tap: _tap, client: _client, workerFile: _file, assertCurrent: _guard,
       log: _log, uplinkKeepalive: _keepalive, uplinkMaxQueueDelayMs: _queueDelay, networkChangeProbeMs: _probe, pathMoveLogIntervalMs: _moveLog, observeUdpTraffic, ...portable } = options;
     if (observeUdpTraffic) {
       // Only two integers cross the thread boundary. Sampling doesn't copy packets or post per-datagram messages.
@@ -180,7 +180,8 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
       const stop = observeUdpTraffic(() => ({ sent: Number(Atomics.load(bytes, 0)), received: Number(Atomics.load(bytes, 1)) }));
       socket.worker.once('exit', stop);
     }
-    socket.worker.postMessage({ type: 'init', options: portable, client: workerClient(options.client), tap: !!options.tap });
+    socket.worker.postMessage({ type: 'init', options: portable, client: workerClient(options.client), tap: !!options.tap,
+      reportRelayReplacements: !!onRelayReplaced });
     try { await ready; setImmediate(() => { if (!socket.closed) socket.emit('open'); }); return socket; }
     catch (error) { socket.dispose(1006); throw error; }
   }
@@ -213,6 +214,9 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
    * not the others, and phones get no pushes; it says so in its connection status (2026-11-17 review: it showed online).
    */
   relayConnected(): boolean { return this.relayOpen > 0; }
+  setDuplicateIdentityCooldown(active: boolean): void {
+    if (!this.closed) this.worker.postMessage({ type: 'duplicate-identity-cooldown', active });
+  }
   /**
    * The last ping round trip on a relay connection, in ms; null while none is open or before the first pong. The remote
    * connection page shows it as the relay's round trip while relayed datagrams use the WebSocket (2026-11-17: it was always
@@ -383,6 +387,7 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
       if (message.code) pending.reject(new Error(message.code)); else pending.resolve(); return;
     }
     if (message.type === 'closed') { this.dispose(message.code); return; }
+    if (message.type === 'relay-replaced') { this.options.onRelayReplaced?.(); return; }
     if (message.type === 'delegation-requests') { this.options.onDelegationRequests?.(message.requests); return; }
     if (message.type === 'delegations') {
       this.delegations = Array.isArray(message.delegations) ? message.delegations.filter((d: unknown): d is Delegation =>
