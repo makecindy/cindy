@@ -46,6 +46,7 @@ import { StartupRecoveryDialogs } from '@/components/log-support/StartupRecovery
 import { GlobalDropImportListener } from '@/components/layout/GlobalDropImportListener';
 import { SessionShareImportWizard } from '@/components/settings/SessionShareImportWizard';
 import { ControlledBanner } from '@/features/remote-device/ControlledBanner';
+import { DeviceIdentityConflictNotice } from '@/features/device-link/DeviceIdentityConflict';
 import { TaskRemoteDesktopButton } from '@/features/remote-desktop/TaskRemoteDesktopButton';
 import {
   TASK_LIVE_SCREEN_LIMIT,
@@ -2143,6 +2144,8 @@ export function MainLayout() {
       <BrowserWebviewPool />
       {/* 实际存在内联提示（含伙伴 / 折叠态）时组件自行退让，其余页面保留兜底。 */}
       <ControlledBanner />
+      {/* 另一台电脑在用本机设备身份时提醒一次，带用户去「我的设备」处理。 */}
+      <DeviceIdentityConflictNotice />
       {/* 协议更新确认:同意过旧版协议的个人账号须先确认新版才能继续使用(各窗口都挡)。 */}
       <LegalTermsUpdateGate />
     </FeatureSidebarSlotProvider>

@@ -7052,7 +7052,7 @@
       "connectionIssue": {
         "device-removed": "Dieses Gerät wurde aus deinem Konto entfernt. Melde dich auf diesem Gerät ab und erneut an.",
         "auth-failed": "Anmeldung abgelaufen — bitte erneut anmelden",
-        "replaced": "Verbindung durch eine andere Instanz dieses Geräts ersetzt",
+        "replaced": "Verbindung von einer anderen Cindy übernommen – auf diesem Computer oder auf einem anderen, der als dieser erkannt wird",
         "too-many-connections": "Verbindungslimit für dieses Konto erreicht",
         "version-mismatch": "Protokollversion stimmt nicht überein — bitte App aktualisieren",
         "unstable": "Verbindung bricht ständig ab und wird wiederhergestellt — prüfe das Netzwerk oder starte Cindy neu, falls das Problem weiterhin besteht",
@@ -7111,6 +7111,22 @@
       },
       "control": "Steuern",
       "standbyHint": "Eine andere Cindy-Instanz auf diesem Computer verwendet die Remote-Verbindung. Schließe sie, damit diese Instanz automatisch übernimmt.",
+      "identityConflict": {
+        "notice": "Dieser Computer und „{{name}}“ werden als derselbe Computer erkannt. Dadurch verdrängen sie sich gegenseitig aus der Remote-Verbindung und werden womöglich abgemeldet. Gib einem der beiden eine neue Identität, um das zu beheben.",
+        "replace": "Diesem Computer eine neue Identität geben",
+        "blockedSelfHostedRelay": "Dieser Computer nutzt dein eigenes Relay, daher lässt sich seine Identität gerade nicht ändern. Wechsle zurück zum Cindy-Relay, dann kannst du sie hier ändern.",
+        "confirmTitle": "Diesem Computer eine neue Identität geben?",
+        "confirmRestart": "Cindy startet sofort neu; laufende Aufgaben werden unterbrochen.",
+        "confirmNewDevice": "Nach dem Neustart meldest du dich einmal neu an. Dieser Computer erscheint dann als neuer Computer in der Geräteliste.",
+        "confirmKeptByOther": "Einstellungen unter der bisherigen Identität, etwa der Gerätename, der Hauptcomputer deiner Freunde und geteilte Anbieter, bleiben bei „{{name}}“. Richte sie auf diesem Computer neu ein.",
+        "confirmOtherUnaffected": "„{{name}}“ bleibt unverändert. Auf jenem Computer ist nichts zu tun.",
+        "confirmAction": "Identität ändern und Cindy neu starten",
+        "failed": "Neue Identität für diesen Computer konnte nicht festgelegt werden",
+        "toastTitle": "Dieser Computer und „{{name}}“ werden als derselbe Computer erkannt",
+        "toastBody": "Sie verdrängen sich gegenseitig aus der Remote-Verbindung und werden womöglich abgemeldet. Gib einem der beiden eine neue Identität, um das zu beheben.",
+        "toastAction": "Geräteverknüpfung öffnen",
+        "toastDismiss": "Später"
+      },
       "apps": {
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"

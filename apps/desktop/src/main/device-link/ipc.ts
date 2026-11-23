@@ -77,6 +77,8 @@ import {
   forgetPeerControlState,
   getDeviceLinkConnectionIssue,
   isDeviceLinkStandby,
+  getDeviceIdentityConflict,
+  replaceDeviceIdentityAndRestart,
   getUnresponsiveDeviceIds,
   clearDeviceResponsiveness,
   setRemoteControlEnabled,
@@ -203,6 +205,8 @@ export interface DeviceLinkIpcDeps {
   apiFetch<T>(path: string, opts?: { method?: string; body?: unknown; timeoutMs?: number; signal?: AbortSignal }): Promise<T>;
   openLink(deviceId: string): Promise<LinkAcceptPayload>;
   closeLink(deviceId: string): void;
+  /** 设备身份冲突时用户确认换身份；只在已确认冲突时成功，随后应用重启。 */
+  replaceDeviceIdentity?(): { restarting: true };
   invoke(deviceId: string, channel: string, args: unknown[], options?: { background?: boolean; diagnosticSource?: 'renderer' }): Promise<InvokeResultPayload>;
   /** 分享者电脑的只读请求：先建后台链路再发(relay 只在建链时登记受邀者的电脑)。缺省时用 invoke。 */
   invokeProviderShareHost?(target: string, channel: string, args: unknown[]): Promise<InvokeResultPayload>;
@@ -260,6 +264,7 @@ export function defaultDeps(): DeviceLinkIpcDeps {
         directDataDeviceIds: getDirectDataDeviceIds(),
         connectionIssue: getDeviceLinkConnectionIssue(),
         standby: isDeviceLinkStandby(),
+        identityConflict: getDeviceIdentityConflict(),
         controlledBy: getActiveControllers(),
         revokedControllers: s.revokedControllers,
         disabledControlDeviceIds: s.disabledControlDeviceIds,
@@ -278,6 +283,7 @@ export function defaultDeps(): DeviceLinkIpcDeps {
     apiFetch: (path, opts) => deviceLinkApiFetch(path, opts),
     openLink: (deviceId: string) => openRemoteLink(deviceId),
     closeLink: closeRemoteLink,
+    replaceDeviceIdentity: () => replaceDeviceIdentityAndRestart(),
     invoke: (...args) => {
       requireDeviceLinkCapability();
       return remoteInvoke(...args);
@@ -2056,6 +2062,13 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
     requireDeviceLinkCapability();
     const p = (payload ?? {}) as { deviceId?: unknown };
     return handleDeleteDevice(deps, p.deviceId);
+  });
+  ipcMain.handle(DEVICE_LINK_INVOKE.REPLACE_DEVICE_IDENTITY, (e) => {
+    // 改的是本机身份并重启应用：只接受应用自己的页面，且只在已确认冲突时生效(由 deps 校验)。
+    assertTrustedAppRendererEvent(e);
+    requireDeviceLinkCapability();
+    if (!deps.replaceDeviceIdentity) throwIpcError('PRECONDITION_FAILED', 'Device identity replacement is unavailable');
+    return deps.replaceDeviceIdentity();
   });
   ipcMain.handle(DEVICE_LINK_INVOKE.OPEN_LINK, (e, payload: unknown) => {
     requireDeviceLinkCapability();

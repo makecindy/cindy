@@ -26,7 +26,13 @@ import { serverApiFetch, ServerApiError } from '../serverApiClient.desktop.js';
 import { tryPeerInvoke, stopFilePeers, stopFilePeerStreams, setFilePeerStreamTransport } from './filePeer';
 import { desktopDirectRuntime } from './directLink';
 import { assertBackgroundLinkAccepted, linkOpenCapabilities } from './backgroundLink';
-import { deviceName, initializeDeviceName } from './deviceName';
+import { deviceName, initializeDeviceName, localDeviceNameCandidates } from './deviceName';
+import {
+  createDeviceIdentityConflictMonitor,
+  type DeviceIdentityConflict,
+  type DeviceIdentityConflictMonitor,
+} from './deviceIdentityConflict.js';
+import { throwIpcError } from '../utils/ipcValidate';
 import { desktopTransferCodec } from './transferCodec';
 import { desktopInvokeTransferMetrics } from './invokeTransferMetrics';
 import { watchNetworkChanges } from './networkChanges';
@@ -99,7 +105,7 @@ import {
   type OwnershipLock,
 } from './ownership';
 import { DEVICE_LINK_PUSH } from '../../shared/deviceLinkIpc';
-import type { DeviceLinkPeerLinksSnapshot } from '../../shared/deviceLinkIpc';
+import type { DeviceLinkIdentityConflict, DeviceLinkPeerLinksSnapshot } from '../../shared/deviceLinkIpc';
 import { createPeerLinksPushScheduler } from './peerLinksPush';
 import {
   createTransportTimeoutReopenLoop,
@@ -216,7 +222,7 @@ import {
 } from './mobileNotify';
 import { createSubscriptionReplayScheduler, isPermanentSubscriptionReplayError } from './subscriptionReplayScheduler';
 import { getNotificationImageLabel, getSessionNotificationBody } from '../sessionNotificationCopy';
-import { deviceLinkApiFetch, officialDeviceLinkApiBase, resolveDeviceLinkApiBase } from './deviceLinkApi.desktop.js';
+import { deviceLinkApiFetch, officialDeviceLinkApiBase, officialDeviceListFetch, resolveDeviceLinkApiBase } from './deviceLinkApi.desktop.js';
 import { rejoinRemovedDevice, type AgentNetRejoinOutcome } from './deviceRejoin.js';
 import { activeSelfHostedRelay } from './selfHostedRelayRouting.js';
 import { currentRelayFrameAuth } from './selfHostedRelayFrameAuth.js';
@@ -225,7 +231,7 @@ import { bindAgentNetSharing, stopAgentNetSharing, agentNetSharingRoute } from '
 import { installAgentNetSharingPolicy } from './agentNetSharingPolicy.js';
 import { isAgentNetActive, agentNetAllowsLegacy, agentNetRequiresEncryption, createAgentNetOrLegacySocket, noteAgentNetIdentityRefused, rejoinOfficialAgentNet, agentNetSelectionKey, agentNetShouldUseLegacyPeer, agentNetShouldProbeLegacyPeer, agentNetPeerSnapshot, agentNetPeerRoutes,
   agentNetTransportAttestation, verifyAgentNetTransportAttestation, agentNetPrefersPrimary, useAgentNetSessions, agentNetSession,
-  agentNetPeerRoute, agentNetRelayStalled, agentNetPeerConnectedAt, connectAgentNetSessionPeer, agentNetPeerState, agentNetNotifyCoverage, agentNetListedPhones, agentNetNetworkChanged, agentNetRelayConnected, onAgentNetRelayChange, onAgentNetPathChange, agentNetRelayRoute } from './agentNetRuntime.js';
+  agentNetPeerRoute, agentNetRelayStalled, agentNetPeerConnectedAt, connectAgentNetSessionPeer, agentNetPeerState, agentNetNotifyCoverage, agentNetListedPhones, agentNetNetworkChanged, agentNetRelayConnected, onAgentNetRelayChange, onAgentNetPathChange, agentNetRelayRoute, setAgentNetDuplicateIdentityCooldown } from './agentNetRuntime.js';
 import { AgentNetSessionLinks, agentNetSessionLane, outboundOnSession, routeSessionPeers, type PeerLinks } from '@cindy/agent-net';
 import { ensureInvokeLinkReady, invokeWithClosedLinkRecovery, requiresSessionLink } from './linkRecovery';
 import { noteLocalNetworkControlEnabled, noteLocalNetworkRelayOnlyPeers, onLocalNetworkGranted } from '../local-network/index.js';
@@ -477,6 +483,8 @@ function refreshControllerDisplayNamesFromDirectory(generation: number): Promise
 
 // 业务看到的链路客户端：按对端走 Agent-Net 会话或 Device Link（packages/agent-net/src/session/peerLinks.ts）。
 let client: PeerLinks | null = null;
+/** 另一台电脑在用本机设备身份的判定(deviceIdentityConflict.ts)；服务初始化时创建。 */
+let identityConflictMonitor: DeviceIdentityConflictMonitor | null = null;
 /** 主连接是 Agent-Net 且允许旧连接时的 Device Link 中转连接（手机推送补发用，sendNotifyToPhones）。 */
 let compatibilityConnection: (() => DeviceLinkClient | null) | null = null;
 let stopSharingPolicy: (() => void) | null = null;
@@ -1099,6 +1107,10 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       return createAgentNetOrLegacySocket(
         () => connectionOptions.createWebSocket(url, headers),
         (encrypted) => { if (attempt === primaryTransportAttempt) { primaryUsesEncryptedTransport = encrypted; syncAgentNetRelayIssue(); } },
+        {
+          onReplaced: (readDirectory) => identityConflictMonitor?.noteReplaced(readDirectory),
+          cooldownActive: () => identityConflictMonitor?.current() != null,
+        },
       );
     },
   }, {
@@ -1158,6 +1170,34 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   // 文件直传：两台都开着 Agent-Net 的同账号电脑之间，文件字节走会话，不再起 WebRTC（filePeer.ts streamTransport）。
   // 按这次调用实际走的路判断：Device Link 上还留着这个对端的链路时调用照旧走 Device Link，字节也照旧走 WebRTC。
   setFilePeerStreamTransport((peer) => !isScopedPeer(peer) && outboundOnSession(routedClient, sessionLinks, peer));
+  // 另一台电脑在用本机设备身份(同一系统镜像装机、MachineGuid 相同)：确认后提示用户给这台电脑
+  // 换身份，并放慢被顶替后的重连。没被反复顶替时什么都不做。
+  identityConflictMonitor = createDeviceIdentityConflictMonitor({
+    selfDeviceId: () => authManager.getDeviceId(),
+    localDeviceNames: localDeviceNameCandidates,
+    readDirectory: async () => {
+      const scope = activeOwnerScopeKey();
+      const selection = agentNetSelectionKey();
+      const opts = { timeoutMs: 10_000, skipAutoRefresh: true, skipSessionInvalidation: true };
+      // The official compatibility socket can be replaced while our Agent-Net socket stays online.
+      // The combined list would hide the replacement's name behind our own Agent-Net row.
+      const result = activeSelfHostedRelay()
+        ? await deviceLinkApiFetch<DeviceDirectoryResponse>('/api/device-link/devices', opts)
+        : await officialDeviceListFetch<DeviceDirectoryResponse>(opts);
+      if (scope !== activeOwnerScopeKey() || selection !== agentNetSelectionKey()
+        || isAppSessionBoundaryPending() || result.partial) return [];
+      return (result.devices ?? []).filter((device) => device.online);
+    },
+    onChange: (conflict) => {
+      routedClient.setDuplicateIdentityCooldown(conflict !== null);
+      setAgentNetDuplicateIdentityCooldown(conflict !== null);
+      broadcast(DEVICE_LINK_PUSH.IDENTITY_CONFLICT, { conflict: identityConflictView(conflict) });
+    },
+    log,
+  });
+  routedClient.onReplaced((_event, onOfficialCrossAccount) => {
+    if (!onOfficialCrossAccount || !activeSelfHostedRelay()) identityConflictMonitor?.noteReplaced();
+  });
   client = routeSessionPeers(routedClient, sessionLinks, log);
   compatibilityConnection = () => routedClient.legacyConnection();
   // 这次初始化交出去的客户端（分路的那一层）；之后判断「client 还是不是它」都和它比。
@@ -1913,6 +1953,8 @@ function teardownActiveLink(): void {
   remoteCredentialHost.dispose();
   stopNetworkWatch?.();
   stopNetworkWatch = null;
+  // 冲突证据属于当前账号的这段链路；换账号或登出后不带过去。
+  identityConflictMonitor?.reset();
   if (!client || linkTornDown) return;
   linkTornDown = true;
   // 拓扑页立刻清空;下一段链路从头比较结构。
@@ -2130,6 +2172,38 @@ export function rejoinThisDevice(): Promise<{ agentNet: AgentNetRejoinOutcome }>
  */
 export function isDeviceLinkStandby(): boolean {
   return arbiter?.isStandby() ?? false;
+}
+
+function identityConflictView(conflict: DeviceIdentityConflict | null): DeviceLinkIdentityConflict | null {
+  if (!conflict) return null;
+  return { ...conflict, replaceBlockedBy: activeSelfHostedRelay() ? 'self-hosted-relay' : null };
+}
+
+/** 已确认另一台电脑在用本机设备身份时返回它的名字；否则 null。 */
+export function getDeviceIdentityConflict(): DeviceLinkIdentityConflict | null {
+  return identityConflictView(identityConflictMonitor?.current() ?? null);
+}
+
+/**
+ * 用户在冲突提示里确认后：给这台电脑写入新设备身份，然后重启 Cindy。
+ *
+ * 另一台电脑保留旧身份，以及服务端记在旧身份名下的一切(伙伴主力电脑、分享出去的供应商等)。
+ * 这台电脑重启后以新设备登记；旧登录首次续期得到 DEVICE_MISMATCH，按既有路径以未登录启动。
+ * 不调服务端登出：旧身份的续期凭证与另一台电脑共用，作废它会把那台电脑也登出。
+ */
+export function replaceDeviceIdentityAndRestart(): { restarting: true } {
+  const conflict = getDeviceIdentityConflict();
+  if (!conflict) throwIpcError('PRECONDITION_FAILED', 'No device identity conflict is active');
+  if (conflict.replaceBlockedBy) throwIpcError('PRECONDITION_FAILED', 'Device identity is bound to a self-hosted relay');
+  authManager.replaceDeviceIdentityForNextStart();
+  log.warn('device identity replaced after a conflict with another computer; restarting');
+  // 先让这次 IPC 回到界面，再走正常退出流程(落盘、关后台服务)。
+  setTimeout(() => {
+    if (app.isPackaged) app.relaunch({ args: process.argv.slice(1) });
+    else log.warn('source run: restart Cindy manually to use the new device identity');
+    app.quit();
+  }, 300);
+  return { restarting: true };
 }
 
 /** 切换「允许被控」开关:落盘 + 在线时即时 presence-set 广播;关闭时踢掉所有控制端 */

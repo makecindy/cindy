@@ -7009,7 +7009,7 @@
       "connectionIssue": {
         "device-removed": "此设备已自名籍中移除，请于此设备辞出后重新登录。",
         "auth-failed": "登录已失效，请复登录",
-        "replaced": "连接为他处同一设备所替",
+        "replaced": "连接为另一 Cindy 所替，或在此机，或在被认作此机之他机",
         "too-many-connections": "同名籍连接数已达上限",
         "version-mismatch": "协议版本不一，请升级应用",
         "unstable": "连接屡断屡连，请察网络；若持续如此，请重启 Cindy",
@@ -7068,6 +7068,22 @@
       },
       "control": "控",
       "standbyHint": "此机另一 Cindy 实例方用远程连接。阖之后，此实例将自行接管。",
+      "identityConflict": {
+        "notice": "此机与「{{name}}」被认作同一台电脑，两相争夺远程连接，或致登出。择其一易新身份，即可解之。",
+        "replace": "为此机易新身份",
+        "blockedSelfHostedRelay": "此机方用自设中继，今不可易身份。归官方中继后，可于此易之。",
+        "confirmTitle": "为此机易新身份乎？",
+        "confirmRestart": "Cindy 将即刻重启，进行中之任务将中断。",
+        "confirmNewDevice": "重启后须再登录一次，此机将以新电脑见于设备列表。",
+        "confirmKeptByOther": "旧身份下所记之设置（如设备名、同伴之主力电脑、所分享之供方），皆留予「{{name}}」，此机须重设。",
+        "confirmOtherUnaffected": "「{{name}}」如故，彼机无须再操作。",
+        "confirmAction": "易身份并重启 Cindy",
+        "failed": "未能为此机易身份",
+        "toastTitle": "此机与「{{name}}」被认作同一台电脑",
+        "toastBody": "两相争夺远程连接，或致登出。择其一易新身份，即可解之。",
+        "toastAction": "启诸器互联",
+        "toastDismiss": "稍后"
+      },
       "apps": {
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"

@@ -11,11 +11,13 @@ const state = vi.hoisted(() => ({
   subject: 'membership-a', scope: 'scope-a', base: 'https://agent-net.example.test', pending: false, unreadable: false,
   root: null as any, secrets: new Map<string, any>(), writes: [] as any[], requests: 0, bodies: [] as any[],
   beforeIssue: null as null | (() => Promise<void>), relay: null as any,
+  deviceId: 'unit-device', retired: [] as string[],
 }));
 vi.mock('node:fs/promises', () => ({ default: { mkdir: vi.fn(async () => undefined) } }));
 vi.mock('node:fs', async (original) => ({ ...await original<any>(), existsSync: () => state.unreadable }));
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => state.scope, isAppSessionBoundaryPending: () => state.pending }));
-vi.mock('../../authManager.js', () => ({ getCurrentUserId: () => state.subject, getActiveAuthRealm: () => 'global', getDeviceId: () => 'unit-device' }));
+vi.mock('../../authManager.js', () => ({ getCurrentUserId: () => state.subject, getActiveAuthRealm: () => 'global', getDeviceId: () => state.deviceId,
+  getRetiredDeviceIds: () => state.retired }));
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => state.base }));
 vi.mock('../selfHostedRelayRouting.js', () => ({ activeSelfHostedRelay: () => state.relay }));
 vi.mock('../selfHostedRelayConfig.js', () => ({
@@ -39,6 +41,7 @@ beforeEach(() => {
   state.subject = 'membership-a'; state.scope = 'scope-a'; state.pending = false; state.unreadable = false;
   state.base = 'https://agent-net.example.test'; state.root = generateKeyPairSync('ed25519').privateKey;
   state.secrets.clear(); state.writes = []; state.requests = 0; state.bodies = []; state.beforeIssue = null; state.relay = null;
+  state.deviceId = 'unit-device'; state.retired = [];
 });
 afterEach(() => vi.useRealTimers());
 // Bug (2026-11-23): after a removal the stored certificate is revoked but unexpired, so enrollment kept returning it and the
@@ -63,6 +66,24 @@ it('single-flights account enrollment and keeps the signed identity in the exist
   expect(saved.agentNet.signingPrivateKey).toContain('PRIVATE KEY');
   expect((await ensureOfficialAgentNetClient('Renamed')).identity.signingKey).toBe(first.identity.signingKey);
   expect(state.requests).toBe(1);
+});
+// 2026-11-23：两台电脑共用硬件身份，用户在冲突提示里给这台换了新身份并重启。旧证书属于让出去的
+// 身份，这台要按新身份重新登记，不能卡在 AGENT_NET_IDENTITY_MISMATCH；其它身份不符照旧拒绝。
+it('enrolls again under a replacement identity but still rejects any other identity mismatch', async () => {
+  const original = await ensureOfficialAgentNetClient('Unit device');
+  state.deviceId = 'other-device';
+  await expect(ensureOfficialAgentNetClient('Unit device')).rejects.toThrow('AGENT_NET_IDENTITY_MISMATCH');
+  state.deviceId = 'replacement-device'; state.retired = ['unit-device'];
+  const renewed = await ensureOfficialAgentNetClient('Unit device');
+  expect(renewed.certificate.deviceId).toBe('replacement-device');
+  expect(renewed.certificate.signingKey).not.toBe(original.certificate.signingKey);
+  expect(renewed.certificate.transportKey).not.toBe(original.certificate.transportKey);
+  expect((await ensureOfficialAgentNetClient('Unit device')).certificate).toEqual(renewed.certificate);
+  expect(state.secrets.get(officialAgentNetSlot()).agentNet.certificate.deviceId).toBe('replacement-device');
+  expect(state.requests).toBe(2);
+  state.deviceId = 'second-replacement'; state.retired.push('replacement-device');
+  expect((await ensureOfficialAgentNetClient('Unit device')).certificate.deviceId).toBe('second-replacement');
+  expect(state.requests).toBe(3);
 });
 // Bug #10092 review: the account-handover close resolves an official-service
 // task's authority while the boundary is pending, possibly after the user

@@ -982,6 +982,8 @@ const fanOutProviderShareOpenManage = createIpcFanOut(PROVIDER_SHARE_IPC.OPEN_MA
 const fanOutProviderShareReshareRequested = createIpcFanOut(PROVIDER_SHARE_IPC.RESHARE_REQUESTED);
 const fanOutSelfHostedRelayChanged = createIpcFanOut(SELF_HOSTED_RELAY_IPC.CHANGED);
 const fanOutDeviceLinkOwnershipChanged = createIpcFanOut('device-link:ownership-changed');
+// 另一台电脑在用本机设备身份的确认 / 撤销(payload = { conflict })
+const fanOutDeviceLinkIdentityConflict = createIpcFanOut(DEVICE_LINK_PUSH.IDENTITY_CONFLICT);
 // 控制端:目标设备「无响应」熔断状态翻转(payload = { deviceId, unresponsive })
 const fanOutDeviceLinkResponsivenessChanged = createIpcFanOut('device-link:responsiveness-changed');
 const fanOutDeviceLinkPeerLinkReopened = createIpcFanOut(DEVICE_LINK_PUSH.PEER_LINK_REOPENED);
@@ -5373,6 +5375,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('device-link:delete-device', { deviceId }),
     /** 本机被移除后「重新加入」(官方网络) */
     rejoin: (): Promise<{ agentNet: 'rejoined' | 'skipped' | 'failed' }> => ipcRenderer.invoke('device-link:rejoin'),
+    /** 设备身份冲突时给这台电脑换一个新身份；成功后应用随即重启。 */
+    replaceDeviceIdentity: (): Promise<{ restarting: true }> =>
+      ipcRenderer.invoke(DEVICE_LINK_INVOKE.REPLACE_DEVICE_IDENTITY),
     // —— 控制端:远程会话视图 ——
     openLink: (deviceId: string): Promise<{ appVersion: string; allowlistHash: string }> =>
       ipcRenderer.invoke('device-link:open-link', { deviceId }),
@@ -5412,6 +5417,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onControlEnabledChanged: fanOutDeviceLinkControlEnabledChanged,
     /** 同机单持有者仲裁角色变化,payload: { standby: boolean }。 */
     onOwnershipChanged: fanOutDeviceLinkOwnershipChanged,
+    /** 另一台电脑在用本机设备身份的确认 / 撤销,payload: { conflict } */
+    onIdentityConflict: fanOutDeviceLinkIdentityConflict,
     /** 控制端:目标设备「无响应」熔断状态翻转,payload: { deviceId, unresponsive } */
     onResponsivenessChanged: fanOutDeviceLinkResponsivenessChanged,
     onPeerLinkReset: fanOutDeviceLinkPeerLinkReset,
