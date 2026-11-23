@@ -15,12 +15,14 @@ import {
   assertSessionNotRestarting, sendToSessionLocks, trackSendToSessionLockRun, SessionRestartInProgressError,
   waitForSendToSessionLock, withSessionRestartLock,
 } from '../sendToSessionLock.js';
+import { createOrcaInterAgentDispatcher, type OrcaInterAgentSendToSessionInternalResult } from '../orcaInterAgentDispatcher.js';
+import { UI_ACTION_TRIGGER_PREFIX } from '@cindy/maker-shared/synthetic-trigger';
 /**
  * #5788:插件 errand 派活走 sendToSessionInternal 的 lazy-resume 时,必须按会话落库的
  * 权限档恢复,不能落到 main 侧通路的缺省 bypass。否则插件任务被提权,errand 复用判定也会
  * 因活跃会话的档位(bypass)≠ 任务设置的档位而每轮失败、另开新会话。
  *
- * 这项决定由宿主显式传入的策略参数承载;`sourcePlugin` 只是来源标签,不能当权限判据
+ * 冷恢复统一按落库权限起档;`sourcePlugin` 只是来源标签,不能当权限判据
  * (docs/product-rules/message-source.md)。
  *
  * 伙伴后台任务同理(docs/product-rules/cindy-bots-runtime.md:后台任务继承发起时实际生效的
@@ -41,7 +43,7 @@ import { verifiedOwnerRequestText } from '../../../shared/forwardedRequest.js';
 import { createWireNoteMemory } from '../wireNoteMemory.js';
 import { resolveSendToSessionCreateRoute } from '../sendToSessionExecutionConfig.js';
 import { builtinAgentKindOrNull, hasBuiltinAgentKind, requireBuiltinAgentKind } from '../../maker-host/engineKind.js';
-import { createGhostAgentTurnRunner, type GhostAgentTurnRunnerDeps } from '../ghostAgentTurnRunner.js';
+import { createGhostAgentTurnRunner } from '../ghostAgentTurnRunner.js';
 import { sanitizeSourceName, buildMessageSourceNote, messageSourceSenderFromMeta } from '@cindy/maker-shared/message-source';
 import { buildSessionCreatedBy, serializeSessionCreatedBy } from '../../../shared/sessionOrigin.js';
 
@@ -61,11 +63,9 @@ function lazyResumeCreateOpts(): string {
 }
 
 describe('sendToSessionInternal lazy-resume permission mode', () => {
-  it('restores the stored permission mode when the host asks for it', () => {
+  it('restores the stored permission mode without an opt-in', () => {
     expect(lazyResumeCreateOpts()).toContain(
-      `permissionMode: params.resumeWithStoredPermissionMode
-            ? permissionModeOrAsk(dbRow.permissionMode)
-            : 'bypassPermissions',`,
+      'permissionMode: permissionModeOrAsk(dbRow.permissionMode),',
     );
   });
 
@@ -140,11 +140,12 @@ ${slice('const toTaskFile = (attachment:', '  const dispatchBotSessionMessage ='
 ${dispatchBotSessionMessage}
 ${pluginSource}
 ${sendToSession};
+const ${slice('inputHandoffContinuation = async (sessionId, requestId, message) => {', '\n\n  // 同账号另一台电脑上的任务发来的消息')}
 // Host-originated input to a teammate task (cloud room, group delivery) resumes with its stored mode.
 const delegationDispatch = (params) => dispatchBotSessionMessage({ ...params, resumeWithStoredPermissionMode: true });
 const ensureGroupAssistantSession = ${slice('ensureGroupAssistantSession: async (', ',\n    isGroupInputLive:').slice('ensureGroupAssistantSession: '.length)};
 const groupDispatch = ${groupDispatch.slice('dispatch: '.length)};
-return { ensureGroupAssistantSession, delegationDispatch, groupDispatch, dispatchBotSessionMessage, sendToSessionInternal, sendToSession,
+return { ensureGroupAssistantSession, delegationDispatch, groupDispatch, dispatchBotSessionMessage, sendToSessionInternal, sendToSession, inputHandoffContinuation,
 enqueueGroupMessage: ${slice('async function enqueueSendToSessionMessage(params: {', '\n  async function buildSessionControlInputItem(')} };`,
     { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } },
   ).outputText;
@@ -156,8 +157,9 @@ const loadBotTaskDispatch = new Function(
   'scope',
   `with (scope) { return (function () { ${botTaskDispatchSlice()} })(); }`,
 ) as (scope: object) => {
+  inputHandoffContinuation: (sessionId: string, requestId: string, message: string) => Promise<void>;
   enqueueGroupMessage: (input: Record<string, unknown>) => Promise<void>;
-  sendToSessionInternal: (input: Record<string, unknown>) => ReturnType<GhostAgentTurnRunnerDeps['send']>;
+  sendToSessionInternal: (input: Record<string, unknown>) => Promise<OrcaInterAgentSendToSessionInternalResult>;
   sendToSession: (input: Record<string, unknown>) => Promise<{ ok: boolean; wakeKind?: string }>;
   ensureGroupAssistantSession: (input: { title: string; projectDir: null }) => Promise<{ ok: boolean; sessionId?: string }>;
   groupDispatch: (input: Record<string, unknown>) => Promise<{ ok: boolean; wakeKind?: string }>;
@@ -207,6 +209,7 @@ function botTaskDispatchHarness(
   };
   const dbClient = { drizzle: { select: () => dbChain } };
   const stubs: Record<string, unknown> = {
+    UI_ACTION_TRIGGER_PREFIX,
     getPluginHostToolCaller: () => undefined,
     getSessionActiveInputClientIds: () => [],
     withPluginTaskService: asyncNoop,
@@ -1017,6 +1020,53 @@ describe('group dispatch cancellation during preparation', () => {
   });
 });
 
+describe.each(['ordinary task', 'Orca lead fallback', 'input handoff continuation'] as const)(
+  '%s cold resume respects the recipient permission', entry => {
+    it.each(['ask', 'auto', 'bypassPermissions'])(
+      'preserves stored %s without a restore-policy flag', async permissionMode => {
+        const row = { permissionMode, planModeEnabled: true };
+        const h = botTaskDispatchHarness({ child: row }, {}, {
+          captureSessionAgentRequest: async (_id: string, message: string) => ({ message }),
+        });
+        if (entry === 'ordinary task') {
+          expect(await h.sendToSession({ targetSessionId: 'child', message: 'Continue', dispatcherSessionId: 'source' }))
+            .toMatchObject({ ok: true, wakeKind: 'resumed' });
+        } else if (entry === 'input handoff continuation') {
+          await h.inputHandoffContinuation('child', 'request', 'Input completed');
+        } else {
+          const unexpectedQueue = () => { throw new Error('Expected the cold non-queued Orca fallback'); };
+          const dispatcher = createOrcaInterAgentDispatcher({
+            createId: () => 'orca-cold-input',
+            getSessionMeta: async () => ({ agentKind: 'claude-code', workDir: '/fixture', model: 'fixture-model' }),
+            getSessionRowSnapshot: async () => ({ title: 'child', status: 'active', userSendAt: null }),
+            getLiveSession: () => undefined,
+            shouldQueueNewTurn: () => false,
+            hasSendToSessionLock: () => false,
+            buildCreateOptsForQueuedSession: async () => unexpectedQueue(),
+            enqueueQueuedMessage: unexpectedQueue,
+            reserveNextQueuedMessage: async () => unexpectedQueue(),
+            sendToSessionInternal: params => h.sendToSessionInternal({ ...params }),
+            createDbMessage: async () => undefined,
+            beginDirectTurnChangeSet: async () => undefined,
+            abortDirectTurnChangeSet: () => undefined,
+            resolveWorkerSenderLabel: async (_id, fallback) => fallback,
+            isSessionRunningError: () => false,
+            log: { info() {}, warn() {} },
+          });
+          expect(await dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+            targetSessionId: 'child', rawContent: 'Continue', source: 'lead', senderLabel: 'Lead',
+            meta: { source: 'permission-regression', context: 'cold lead dispatch' },
+          })).toMatchObject({ ok: true, mode: 'dispatched' });
+        }
+        expect(h.bootstrapped).toEqual([expect.objectContaining({ id: 'child', permissionMode })]);
+        expect(h.bootstrapped[0]).not.toHaveProperty('planMode');
+        expect(h.sentTo).toEqual([{ sessionId: 'child', planMode: false }]);
+        expect(row).toEqual({ permissionMode, planModeEnabled: true });
+      },
+    );
+  },
+);
+
 describe('stored-mode Host dispatch keeps the persisted permission and Plan', () => {
   // PR #10271 / Greptile, guard: sendToSessionInternal kept the old provider snapshot after
   // account recovery changed the persisted source. Execute the real dispatch closure: a legacy
@@ -1032,7 +1082,7 @@ describe('stored-mode Host dispatch keeps the persisted permission and Plan', ()
       clientId: 'recovered-source', resumeWithStoredPermissionMode: storedMode });
     expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
     expect(h.bootstrapped).toEqual([expect.objectContaining({ providerId: 'openai',
-      resumeSessionId: undefined, permissionMode: storedMode ? 'ask' : 'bypassPermissions' })]);
+      resumeSessionId: undefined, permissionMode: 'ask' })]);
     expect(readRecovered).toHaveBeenCalledOnce();
   });
 
@@ -1042,6 +1092,7 @@ describe('stored-mode Host dispatch keeps the persisted permission and Plan', ()
     ['bypassPermissions', false, 'bypassPermissions'],
     ['auto', true, 'auto'],
     [null, false, 'ask'],
+    ['invalid-mode', false, 'ask'],
   ] as const)(
     'starts a %s task (Plan %s) with that mode instead of Full access',
     async (permissionMode, planModeEnabled, expectedMode) => {

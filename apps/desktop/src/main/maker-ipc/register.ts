@@ -12873,9 +12873,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     /** 插件任务派发的来源(只用于标签与 `[消息来源]`,不是权限判据,也不是 origin)。 */
     sourcePlugin?: AgentInputQueuedMessage['sourcePlugin'];
     /**
-     * Host 持有的恢复策略:目标会话不在运行、需要 lazy-resume 时,按会话落库的权限档
-     * 启动,而不是 main 侧通路的缺省 bypass。插件任务的档位来自用户的任务设置,只能由
-     * 宿主的插件派发入口显式要求,不从来源字段推断(#5788)。
+     * 保留旧 Host 调用方的 Plan 快照恢复策略。冷恢复权限始终按落库档位启动,
+     * 不受此标志影响;省略或 false 都不授予 Full Access,来源标签也不是权限判据。
      * forceQueue 会在这条 lazy-resume 之前入队返回;排队项真正启动前由
      * reconcileCreateOptsAgainstDb 再读当前落库档位,不使用入队时的旧快照。
      */
@@ -13700,13 +13699,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           workingDir: meta.workDir,
           model: meta.model,
           resumeSessionId: meta.sdkSessionId,
-          // 插件任务的档位由用户在任务设置里给定(errand 还会再收窄),不能借 lazy-resume
-          // 的缺省 bypass 提权;档位不一致还会让 errand 复用判定每轮都失败、另开新会话
-          // (#5788)。由宿主的插件派发、伙伴后台任务派发等入口显式要求,未要求的 main 侧
-          // 通路(Orca 派活等)保持既有缺省。
-          permissionMode: params.resumeWithStoredPermissionMode
-            ? permissionModeOrAsk(dbRow.permissionMode)
-            : 'bypassPermissions',
+          // 冷恢复只沿用目标保存的权限;批准派发、Orca 角色或宿主来源都不构成提权授权。
+          // 已保存的 Full Access 保持不变,缺失或非法档位回退 Ask。
+          permissionMode: permissionModeOrAsk(dbRow.permissionMode),
           // 计划模式同理按落库状态起档,运行态才与库内一致(心跳等权限边界读取方要求两者
           // 相同)。下方 send 带 planMode:false,本轮仍是普通执行、不消耗武装态。
           ...(params.resumeWithStoredPermissionMode
@@ -13865,8 +13860,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     onAccepted?: (replayed?: boolean) => void | Promise<void>;
     onAcceptedRollback?: () => void | Promise<void>;
     /**
-     * Remote-origin input and Bot Session tasks: a cold session resumes with its stored
-     * permission mode (and Plan), never bypass.
+     * Retains the existing Host Plan snapshot restoration policy. Cold-resume permissions
+     * always use the stored mode, including when this legacy flag is omitted or false.
      */
     resumeWithStoredPermissionMode?: boolean;
   }, hostDispatch: 'bot' | 'group' | 'group-assistant' = 'bot') => {
