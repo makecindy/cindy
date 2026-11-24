@@ -17838,10 +17838,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     setSessionRuntime: (params) => sessionControlService.setSessionRuntime(params),
     sendToSession: async (params, fromSessionTool) => {
       const ownerScope = captureDataOwnerBroadcastScope();
-      // A task owned by this host qualifies through its own MCP bridge wherever its Agent runs.
+      // Device tunnels pin the task's own MCP route. SSH uses a shared bridge credential that cannot prove the sender.
       const dispatcher = fromSessionTool && params.targetSessionId && params.dispatcherSessionId && !isDeviceLinkInvoke()
         ? maker.getSession(params.dispatcherSessionId) : undefined;
-      const localSessionTool = dispatcher?.getStatus() === 'active';
+      const localSessionTool = dispatcher?.getStatus() === 'active' && !dispatcher.remoteHostId;
       const pluginSource = !params.dispatcherSessionId ? hostPluginInputSource() : undefined;
       let projectFromWorkingDir = false;
       if (!params.targetSessionId && !params.createDefaults) {

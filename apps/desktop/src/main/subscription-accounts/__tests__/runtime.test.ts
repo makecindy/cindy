@@ -11,6 +11,7 @@ import {
   Session,
   AgentStartupStoppedError,
   TurnDispatchUnconfirmedError,
+  TurnDispatchRejectedError,
   AgentStartupCleanupPendingError,
   AgentNotAuthenticatedError,
   type AgentEvent,
@@ -6616,11 +6617,9 @@ describe('shared subscription recovery through controller and account allocation
     // execution on the sharing computer does not erase an owned task's bound
     // bridge context. The idle target must queue and recover one such message.
     { original: 'second', phase: 'session-reconnect', boundary: 'shared-sender' },
-    // P1-1, unit: one bound send_to_session call per execution route. The
-    // shared route alone could not catch rejection based on device/SSH IDs.
-    // Use reverse frames for the own-device case and the real SSH bridge
-    // registration with a fake forward for SSH. Both reclaim targets must
-    // return queued, use the offered switch, and persist/deliver only once.
+    // Unit: a device tunnel pins the local context. SSH shares its bridge
+    // credential across tasks and cannot prove the sender, so the same
+    // overdue target must receive the SSH input via the ordinary direct path.
     { original: 'second', phase: 'session-reconnect', boundary: 'own-device-sender' },
     { original: 'second', phase: 'session-reconnect', boundary: 'ssh-sender' },
     // Unit (real host/controller, in-memory device link): app-quit publishes the
@@ -6648,6 +6647,20 @@ describe('shared subscription recovery through controller and account allocation
     { original: 'second', phase: 'session-reconnect', boundary: 'stop-during-open' },
     { original: 'second', phase: 'session-reconnect', boundary: 'late-revoke' },
     { original: 'second', phase: 'session-reconnect', boundary: 'unconfirmed' },
+    // Unit: exercise the real tool/coordinator/transaction with one held FIFO
+    // tail. Review found only the no-credential exit released a persisted head.
+    { original: 'second', phase: 'session-reconnect', boundary: 'late-owner-change' },
+    { original: 'second', phase: 'session-reconnect', boundary: 'late-generation-change' },
+    { original: 'second', phase: 'session-reconnect', boundary: 'late-input' },
+    { original: 'second', phase: 'session-reconnect', boundary: 'late-stale-input' },
+    { original: 'second', phase: 'session-reconnect', boundary: 'late-stop' },
+    { original: 'second', phase: 'session-reconnect', boundary: 'new-input-during-open' },
+    { original: 'second', phase: 'session-reconnect', boundary: 'close-failed' },
+    { original: 'second', phase: 'session-reconnect', boundary: 'close-not-closed' },
+    { original: 'second', phase: 'session-reconnect', boundary: 'replacement-start-failed' },
+    { original: 'second', phase: 'session-reconnect', boundary: 'replacement-send-rejected' },
+    { original: 'second', phase: 'session-reconnect', boundary: 'original-unconfirmed' },
+    { original: 'second', phase: 'session-reconnect', boundary: 'replacement-accepted-then-closed' },
     { original: 'second', phase: 'scheduled-reconnect', boundary: 'none' },
     { original: 'second', phase: 'legacy-reconnect', boundary: 'none' },
     { original: 'second', phase: 'reconnect', boundary: 'replacement-id-write-failed' },
@@ -6691,6 +6704,16 @@ describe('shared subscription recovery through controller and account allocation
     const replacementReply = new Promise<void>(resolve => { finishReplacementOpen = resolve; });
     const delayedOffer = boundary.startsWith('late-');
     let recoveryAllowed = true;
+    let ownerMatches = true;
+    let staleInput = false;
+    let runtimeGeneration = 0;
+    const replacesStoppedRun = ['replacement-start-failed', 'replacement-send-rejected', 'replacement-accepted-then-closed'].includes(boundary);
+    const releaseFailedHead = phase === 'session-reconnect' && [
+      'late-revoke', 'late-owner-change', 'late-generation-change', 'close-failed', 'close-not-closed',
+      'replacement-start-failed', 'replacement-send-rejected',
+    ].includes(boundary);
+    const unknownDispatch = boundary === 'unconfirmed' || boundary === 'original-unconfirmed';
+    const queueTailBeforeSettlement = releaseFailedHead || unknownDispatch;
     let shareListKnown = boundary !== 'share-list-unknown';
     const published = weekly ? 'anthropic' : boundary === 'old-share' ? b : a;
     const nextAccount = original === 'default' ? 'second' : 'default';
@@ -6740,7 +6763,9 @@ describe('shared subscription recovery through controller and account allocation
           const terminal = limited.has(dir.split('/').at(-1)!)
             ? { type: 'error', data: { sdkError: 'rate_limit', message: 'usage limit exceeded', isTerminal: true } } as AgentEvent
             : { type: 'done', data: {} } as AgentEvent;
-          if (nextInputBeforeReplayRpc && dir.endsWith('/default') && received.length === 2) {
+          if (received.length === 2 && (unknownDispatch || boundary === 'replacement-accepted-then-closed')) {
+            // No terminal event can race the fixture's lost ACK or close.
+          } else if (nextInputBeforeReplayRpc && dir.endsWith('/default') && received.length === 2) {
             void replayTurnGate.then(() => emit(terminal));
           } else {
             emit(terminal);
@@ -6809,8 +6834,8 @@ describe('shared subscription recovery through controller and account allocation
       if (!executorOnline) return invokeOffline(args, invokeOptions);
       if (request.op === 'call' && request.method === 'send') sendCalls++;
       const response = await host.handle(peer, request);
-      if (boundary === 'unconfirmed' && opens.length === 3 && request.op === 'call' && request.method === 'send') {
-        throw new TurnDispatchUnconfirmedError('Fixture lost replacement dispatch confirmation');
+      if (unknownDispatch && sendCalls === 2 && request.op === 'call' && request.method === 'send') {
+        throw new TurnDispatchUnconfirmedError('Fixture lost dispatch confirmation');
       }
       if (supersededDuringOpen && opens.length === 3 && request.op === 'open' && request.payload.json.groupSwitchToken) {
         receivedReplacementOpen();
@@ -6943,7 +6968,7 @@ describe('shared subscription recovery through controller and account allocation
           await vi.advanceTimersByTimeAsync(5_000);
           vi.mocked(guestLog.info).mockClear();
 
-          if (boundary !== 'running-target') {
+          if (boundary !== 'running-target' && boundary !== 'original-unconfirmed') {
             const exhausted = await acquireSubscriptionAccount(published, model, [], true, { accountId: original, remote: true });
             expect(exhausted!.observeFailure({ sdkError: 'rate_limit', usageResetAt: resetAtMs }, model, 'run')).toBe(true);
             exhausted!.release();
@@ -7007,6 +7032,8 @@ describe('shared subscription recovery through controller and account allocation
           getSession: () => live,
           closeSession: async () => { await live?.close(); live = undefined; },
           closeSessionIfCurrent: async (current: Session) => {
+            if (bootstrapped.mock.calls.length === 0 && boundary === 'close-failed') throw new Error('Fixture close failed');
+            if (bootstrapped.mock.calls.length === 0 && boundary === 'close-not-closed') return 'busy';
             if (live !== current || !await current.closeIfIdle()) return 'busy';
             live = undefined;
             return 'closed';
@@ -7022,6 +7049,8 @@ describe('shared subscription recovery through controller and account allocation
           },
           providerGroupService: service,
           providerShareAccessEpoch: () => recoveryAllowed ? 0 : 1,
+          sessionRuntimeControlOwnerEpochMatches: () => ownerMatches,
+          getSessionRuntimeControlSnapshot: () => ({ generation: runtimeGeneration }),
           // Keep the old execution lookup available even when the current
           // directory is missing the share, as with a retained Agent Net route.
           findReceivedShareForExecution: () => ({ status: authorized ? 'active' : 'revoked' }),
@@ -7041,6 +7070,8 @@ describe('shared subscription recovery through controller and account allocation
             log: guestLog,
           },
           createSessionWithRuntimePlugins: async (opts: StartSessionOptions) => {
+            const firstReplacement = replacesStoppedRun && bootstrapped.mock.calls.length === 1;
+            if (firstReplacement && boundary === 'replacement-start-failed') throw new Error('Fixture replacement startup failed');
             const handle = await openRemote(opts.resumeSessionId);
             if (boundary === 'replacement-id-write-failed') {
               row.sdkSessionId = oldNative;
@@ -7049,6 +7080,17 @@ describe('shared subscription recovery through controller and account allocation
             }
             live = guestSession = new Session({ id: task, agentKind: 'claude-code', permissionMode: 'bypassPermissions',
               workDir: '/controller/work', agentDeviceId: route, handle, capabilities: {} as never, logger: guestLog });
+            if (firstReplacement && boundary === 'replacement-send-rejected') {
+              vi.spyOn(handle, 'send').mockRejectedValueOnce(new TurnDispatchRejectedError('Fixture replacement rejected'));
+            } else if (firstReplacement && boundary === 'replacement-accepted-then-closed') {
+              const replacement = live;
+              const nativeSend = replacement.send.bind(replacement);
+              vi.spyOn(replacement, 'send').mockImplementationOnce(async (...args) => {
+                const result = await nativeSend(...args);
+                await replacement.close();
+                return result;
+              });
+            }
             attach(live);
             return live;
           },
@@ -7092,7 +7134,13 @@ describe('shared subscription recovery through controller and account allocation
           return;
         }
         const send = vi.fn<AgentInputCoordinatorDeps['sendToAgent']>(async (...args) => {
-          const dispatch = async () => (await sendToAgentAccepted(...args)).outcome;
+          const dispatch = async () => {
+            const [id, message, createOpts, opts] = args;
+            const recovery = opts.reconnectRecovery;
+            return (await sendToAgentAccepted(id, message, createOpts, boundary === 'late-stale-input' && recovery
+              ? { ...opts, reconnectRecovery: { ...recovery, isCurrent: () => !staleInput && recovery.isCurrent() } }
+              : opts)).outcome;
+          };
           return boundary === 'host-quit-offline' ? withSendToSessionLock(args[0], dispatch) : dispatch();
         });
         coordinator = new AgentInputCoordinator({
@@ -7102,7 +7150,13 @@ describe('shared subscription recovery through controller and account allocation
           getAgentKind: () => 'claude-code', getSdkSessionId: async () => live?.sdkSessionId,
           getTurnGeneration: () => live?.getTurnGeneration() ?? null, getTurnSessionIdentity: () => live ?? null,
           emitProjection, persistTerminalSendError: persistedError, onUsageLimitedTurnError,
-          onAcceptedQueuedMessage: accepted,
+          onAcceptedQueuedMessage: async (id, item) => {
+            accepted(id, item);
+            if (queueTailBeforeSettlement && item.clientId === 'after-idle') {
+              coordinator.enqueue(task, { ...inputItem('queued-tail', 'Pending separate input.'),
+                origin: { kind: 'session', senderSessionId: 'another-task', displayText: 'Pending separate input.' } });
+            }
+          },
           ...(boundary === 'ghost-rewrite' ? {
             screenUserMessage: async () => ({
               action: 'rewrite' as const, ghostId: 'fixture', ghostName: 'Fixture', text: 'Rewritten input.',
@@ -7276,6 +7330,16 @@ describe('shared subscription recovery through controller and account allocation
             const receipt = boundary in sendFromSender
               ? await sendFromSender[boundary as keyof typeof sendFromSender]()
               : await sendTool(task, 'Continue.');
+            if (boundary === 'ssh-sender') {
+              expect(receipt, JSON.stringify(receipt)).toMatchObject({ ok: false, errorCode: 'INTERNAL' });
+              expect(JSON.stringify(receipt)).toContain('SUBSCRIPTION_ACCOUNT_LIMITED');
+              expect(send).not.toHaveBeenCalled();
+              expect(persisted).toEqual(['after-idle']);
+              expect(received).toHaveLength(1);
+              expect(insertBoundary).not.toHaveBeenCalled();
+              expect(guestSwitch.hasOffer(task)).toBe(true);
+              return;
+            }
             if (boundary === 'connected-idle' || boundary === 'cold-target') {
               expect(receipt, JSON.stringify(receipt)).toMatchObject({
                 ok: true, wake_kind: boundary === 'cold-target' ? 'resumed' : 'already-active',
@@ -7302,7 +7366,8 @@ describe('shared subscription recovery through controller and account allocation
             ]);
             expect(hasSendToSessionLock(task)).toBe(true);
             expect(persisted).toEqual(['after-idle']);
-            enqueue('queued-behind-offline', 'Queued behind the offline input.');
+            coordinator.enqueue(task, { ...inputItem('queued-behind-offline', 'Queued behind the offline input.'),
+              origin: { kind: 'session', senderSessionId: 'another-task', displayText: 'Queued behind the offline input.' } });
             expect(coordinator.getProjection(task).pendingQueue.map(item => item.clientId)).toEqual(['queued-behind-offline']);
             const failed = expect(send.mock.results[0].value).rejects.toThrow('REMOTE_AGENT_OFFLINE');
             failOfflineOpen.resolve();
@@ -7423,15 +7488,53 @@ describe('shared subscription recovery through controller and account allocation
           expect(persistedError).not.toHaveBeenCalled();
           return;
         }
-        if (boundary === 'unconfirmed') {
+        if (unknownDispatch) {
           await expect(send.mock.results[0].value).rejects.toMatchObject({ code: 'TURN_DISPATCH_UNCONFIRMED' });
-          await vi.waitFor(() => expect(coordinator.getQueueControlSnapshot(task).pendingQueue).toEqual([]));
-          expect(opens).toHaveLength(3);
+          await vi.waitFor(() => expect(coordinator.getProjection(task).recovery).toMatchObject({
+            kind: 'active-turn', item: { clientId: 'after-idle' },
+          }));
+          expect(coordinator.getQueueControlSnapshot(task).pendingQueue.map(item => item.clientId)).toEqual(['queued-tail']);
+          expect(opens).toHaveLength(boundary === 'original-unconfirmed' ? 2 : 3);
+          if (boundary === 'original-unconfirmed') {
+            expect(opens[1]).not.toHaveProperty('groupSwitchToken');
+            expect(bootstrapped).not.toHaveBeenCalled();
+          }
           expect(sendCalls).toBe(2);
+          expect(received).toHaveLength(2);
           expect(accepted).toHaveBeenCalledOnce();
           expect(persisted).toEqual(['after-idle']);
-          expect(insertBoundary).toHaveBeenCalledOnce();
+          expect(insertBoundary).toHaveBeenCalledTimes(boundary === 'original-unconfirmed' ? 0 : 1);
           expect(guestSwitch.hasOffer(task)).toBe(false);
+          return;
+        }
+        if (boundary === 'replacement-accepted-then-closed') {
+          await expect(send.mock.results[0].value).resolves.toMatchObject({ dispatched: true });
+          expect(sendCalls).toBe(2);
+          expect(received).toHaveLength(2);
+          expect(persisted).toEqual(['after-idle']);
+          expect(insertBoundary).toHaveBeenCalledOnce();
+          expect(persistedError).not.toHaveBeenCalled();
+          expect(coordinator.getProjection(task).recovery).toBeNull();
+          return;
+        }
+        if (releaseFailedHead) {
+          if (delayedOffer) {
+            await probeGate;
+            if (boundary === 'late-owner-change') ownerMatches = false;
+            else if (boundary === 'late-generation-change') runtimeGeneration += 1;
+            else recoveryAllowed = false;
+            resolveProbe!();
+          }
+          await expect(send.mock.results[0].value).rejects.toThrow('SUBSCRIPTION_ACCOUNT_LIMITED');
+          await vi.waitFor(() => expect(emitProjection).toHaveBeenCalledWith(expect.objectContaining({
+            error: expect.stringContaining('SUBSCRIPTION_ACCOUNT_LIMITED'), recovery: null,
+          })));
+          expect(persistedError).toHaveBeenCalledWith(task, expect.stringContaining('SUBSCRIPTION_ACCOUNT_LIMITED'));
+          await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+          await send.mock.results[1].value.catch(() => undefined);
+          expect(send.mock.calls[1][3].persistUserMessage?.clientId).toBe('queued-tail');
+          expect(persisted.filter(id => id === 'after-idle')).toEqual(['after-idle']);
+          expect(received.some(item => JSON.stringify(item).includes('Continue.'))).toBe(false);
           return;
         }
         if (boundary === 'replacement-id-write-failed' || boundary === 'boundary-write-failed') {
@@ -7487,6 +7590,7 @@ describe('shared subscription recovery through controller and account allocation
             expect(opens[3]).not.toHaveProperty('groupSwitchToken');
             expect(received).toHaveLength(1);
             expect(coordinator.getProjection(task).pendingQueue.map(item => item.clientId)).not.toContain('after-idle');
+            expect(persisted.filter(id => id === 'after-idle')).toEqual(['after-idle']);
             return;
           }
           // O may already have rebound the task before the cancellation reached G.
@@ -7563,6 +7667,8 @@ describe('shared subscription recovery through controller and account allocation
           await probeGate;
           if (boundary === 'late-stop') coordinator.stop(task);
           else if (boundary === 'late-input') enqueue('new-input', 'Use my latest instructions.');
+          // Model a stale coordinator owner without also aborting the input signal.
+          else if (boundary === 'late-stale-input') staleInput = true;
           else recoveryAllowed = false;
           resolveProbe!();
           if (boundary === 'late-stop') {
@@ -7572,8 +7678,15 @@ describe('shared subscription recovery through controller and account allocation
           } else {
             await expect(send.mock.results[0].value).rejects.toThrow('SUBSCRIPTION_ACCOUNT_LIMITED');
           }
+          if (boundary === 'late-stale-input') {
+            expect(live).toBe(session);
+            await vi.waitFor(() => expect(coordinator.getProjection(task).recovery).toMatchObject({
+              kind: 'active-turn', item: { clientId: 'after-idle' },
+            }));
+          }
           expect(bootstrapped).not.toHaveBeenCalled();
           expect(sendCalls).toBe(1);
+          expect(persisted.filter(id => id === 'after-idle')).toEqual(['after-idle']);
           expect(probeResults).toEqual([true]);
           expect(guestSwitch.hasOffer(task)).toBe(false);
           return;
