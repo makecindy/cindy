@@ -1,3 +1,4 @@
+import { useUninstallPlugin } from './lib/useUninstallPlugin';
 import { CatalogDeviceScope, type CatalogDeviceControl } from './useCatalogDevice';
 import { RemotePluginPage } from './RemotePluginPage';
 import { LocalPluginShareView } from './LocalPluginShareView';
@@ -1554,31 +1555,12 @@ function LocalGhostPluginPage({
     }
   }, [selectedDetail, t]);
 
-  const handleUninstall = useCallback(async () => {
-    if (!selectedDetail) return;
-    const ok = await confirm({
-      title: t('settings.ghosts.uninstallConfirm.title', { name: selectedDetail.name }),
-      description: t('settings.ghosts.uninstallConfirm.description'),
-      confirmText: t('settings.ghosts.uninstall'),
-      cancelText: t('settings.ghosts.uninstallConfirm.cancel'),
-    });
-    if (!ok) return;
-    try {
-      if (selectedMarketInstall) {
-        await window.electronAPI.pluginMarket.uninstall(selectedMarketInstall.pluginId);
-        await refreshMarket();
-      } else {
-        await window.electronAPI.ghosts.uninstall(selectedDetail.id);
-      }
-      toast.success(t('settings.ghosts.toast.uninstalled', { name: selectedDetail.name }));
-    } catch (error) {
-      toast.error(
-        selectedMarketInstall
-          ? t(pluginMarketErrorKey(error))
-          : t(ghostInstallErrorKey(extractIpcError(error)?.code)),
-      );
+  const uninstallPlugin = useUninstallPlugin();
+  const handleUninstall = () => {
+    if (selectedGhost && selectedDetail) {
+      return uninstallPlugin(selectedGhost, selectedDetail.name, selectedMarketInstall?.pluginId, refreshMarket);
     }
-  }, [confirm, refreshMarket, selectedDetail, selectedMarketInstall, t]);
+  };
 
   const handleSelectMarket = useCallback(
     async (item: PluginMarketItem | string, preferInstalled = false) => {
