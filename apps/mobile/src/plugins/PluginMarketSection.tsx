@@ -129,6 +129,7 @@ export function PluginMarketSection({ market, onConnectComputer }: {
         ) : null}
       </View>
       {status}
+      {market.status === "ready" && market.notices.stale ? <Text style={styles.note}>{t("plugins.market.readFailed")}</Text> : null}
       {market.status === "ready" && market.notices.unavailable ? <Text style={styles.note}>{t("plugins.market.unavailable")}</Text> : null}
       {market.status === "ready" && market.notices.organizationKey ? <Text style={styles.note}>{t(market.notices.organizationKey)}</Text> : null}
       {market.status === "ready" && market.notices.unavailableCustomSources.length ? (

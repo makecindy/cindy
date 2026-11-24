@@ -152,6 +152,16 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     if (active && probe?.scope !== scope) void readProbe();
   }, [active, scope, probe?.scope, readProbe]);
   const probeStatus = probe?.scope === scope ? probe.status : "loading";
+  // An older Host rejects every non-empty snapshot input. If a catalog read says so after the probe
+  // passed (e.g. the computer's Cindy changed), probe again — at most once per scope, so a request the
+  // Host keeps rejecting (an expired cursor) cannot loop between probe and read.
+  const reprobed = useRef<string | undefined>(undefined);
+  const reprobe = useCallback((error: unknown, readScope: string) => {
+    if (pluginManagementErrorCode(error) !== "INVALID_PARAMS" || liveScope.current !== readScope
+      || reprobed.current === readScope) return;
+    reprobed.current = readScope;
+    void readProbe();
+  }, [readProbe]);
 
   // ---- Lists: one bounded LRU of cursor lists, keyed by scope + source + query.
   const [filter, setFilterState] = useState<PluginMarketFilter>("official");
@@ -196,13 +206,14 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
         list.loadingMore = true;
         await readPage(list, page.nextCursor, publisher);
       } else chain.current = 0;
-    } catch {
+    } catch (error) {
       if (!current()) return;
       if (cursor) list.loadingMore = false; else list.status = "failed";
       chain.current = 0;
       rerender();
+      reprobe(error, readScope);
     }
-  }, [client, scope, debouncedQuery, request.scope, request.limit]);
+  }, [client, scope, debouncedQuery, request.scope, request.limit, reprobe]);
   const startList = useCallback((force: boolean) => {
     const existing = lists.current.get(listKey);
     if (existing && !force && (existing.status === "loading" || (existing.status === "ready" && Date.now() - existing.at < MARKET_REFRESH_MS))) {
@@ -426,6 +437,8 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     refreshing: !!list && list.status === "loading" && list.items.length > 0,
     loadMore, refresh,
     notices: {
+      /** A re-read failed but the last rows stay visible (the installed list says the same). */
+      stale: settled && list?.status === "failed" && list.items.length > 0,
       unavailable: !!list?.meta?.unavailableReason,
       organizationKey: pluginMarketOrganizationErrorKey(list?.meta?.organizationAccessError),
       unavailableCustomSources: list?.meta?.unavailableCustomSourceNames ?? [],

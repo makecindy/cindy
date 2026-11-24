@@ -165,6 +165,7 @@ export function PluginMarketRows({ market, onConnectComputer }: PluginMarketRows
     <>
       {header}
       {status}
+      {ready && market.notices.stale ? <VStack alignment="leading" modifiers={quiet}>{note(t("plugins.market.readFailed"), "plugins.market.stale")}</VStack> : null}
       {ready && market.notices.unavailable ? <VStack alignment="leading" modifiers={quiet}>{note(t("plugins.market.unavailable"))}</VStack> : null}
       {ready && market.notices.organizationKey ? <VStack alignment="leading" modifiers={quiet}>{note(t(market.notices.organizationKey))}</VStack> : null}
       {ready && market.notices.unavailableCustomSources.length ? (

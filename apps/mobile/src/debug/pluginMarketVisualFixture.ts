@@ -167,11 +167,9 @@ export function pluginMarketVisualManagement(actionId: string | undefined, input
   const result = (value: unknown) => ({ effects: [], result: value });
   switch (actionId) {
     case "management:snapshot":
-      if (input.read === "capabilities") {
-        // An older Host rejects any non-empty snapshot input.
-        if (scenario === "outdated") throw failure("INVALID_PARAMS");
-        return result({ catalogPaging: true });
-      }
+      // An older Host rejects any non-empty snapshot input; its v1 full snapshot still works.
+      if (scenario === "outdated" && input.read !== undefined) throw failure("INVALID_PARAMS");
+      if (input.read === "capabilities") return result({ catalogPaging: true });
       if (input.read === "catalog") return result(catalog(input.query as Record<string, unknown>));
       if (input.read === "recommendations") return result([]);
       return result(snapshot());

@@ -42,7 +42,8 @@
 - 读取只用目标 Host 的 `management:snapshot {read:'capabilities'}` 与 `{read:'catalog',query}`：
   列表页 `excludeInstalled:true, counts:false`，计数另读一次 `scope:'all', limit:1, counts:true`；
   同一电脑、查询、来源 30 秒内复用（最多 6 份），下拉刷新强制重读。旧 Host 回 `INVALID_PARAMS`
-  或没有管理能力时显示「先更新那台电脑」，不回退一次读全量；普通读取失败只给重试。Host 抛出的错误经
+  或没有管理能力时显示「先更新那台电脑」，不回退一次读全量；普通读取失败只给重试，重读失败但保留上次条目时
+  附一句「未能读取插件市场」。探测通过后某次分页读取回 `INVALID_PARAMS`，同一电脑与连接代次内最多重新探测一次。Host 抛出的错误经
   dispatch 到手机是不带 code 的 `Error("[CODE] …")`，管理 client 按 `deviceProvidersCache` 的做法解出 `CODE`。
   页面按白名单字段做有界解析，`publisherKind`、`organizationAccessError`、`counts`、`nextCursor`
   缺失即降级；图标只接受未过期的 HTTPS 链接，自定义市场项不显示图标。

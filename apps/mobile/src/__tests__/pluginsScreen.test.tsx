@@ -1873,3 +1873,39 @@ it("still lists the remaining market plugins when returning from the new install
     expect(shownMarket().items.map((row: any) => row.name)).toEqual(["Other"]);
   } finally { clock.mockRestore(); }
 });
+// iOS simulator report (2026-11-25): after a supported probe, a Host that now rejects paged reads kept the old list.
+it.each([
+  ["rejects paged reads", true, "outdated"],
+  ["keeps rejecting one request", false, "ready"],
+])("probes again once when a refresh finds the computer %s", async (_name, oldHost, status) => {
+  const item = marketItem("demo", "Demo");
+  let rejecting = false;
+  const requests = marketWire((request) => {
+    if (rejecting && (request.input?.read === "catalog" || (oldHost && request.input?.read === "capabilities")))
+      throw new Error("[INVALID_PARAMS] Invalid plugin management request");
+    return request.input?.read === "capabilities" ? { catalogPaging: true } : marketPage([item]);
+  });
+  await openMarket();
+  expect(shownMarket().items.map((row: any) => row.name)).toEqual(["Demo"]);
+  rejecting = true;
+  await act(async () => { await shownMarket().refresh(); });
+  await settle(20);
+  expect(shownMarket().status).toBe(status);
+  // One re-probe per computer and connection: a request the Host keeps rejecting cannot loop.
+  expect(requests.filter((request) => request.input?.read === "capabilities")).toHaveLength(2);
+  if (!oldHost) expect(shownMarket()).toMatchObject({ items: [item], notices: { stale: true } });
+});
+it("keeps the shown rows with a read-failed note when a refresh fails", async () => {
+  const item = marketItem("demo", "Demo");
+  let failing = false;
+  marketWire((request) => {
+    if (failing && request.input?.read === "catalog") throw new Error("[TIMEOUT] remote invoke timed out");
+    return request.input?.read === "capabilities" ? { catalogPaging: true } : marketPage([item]);
+  });
+  await openMarket();
+  expect(shownMarket().notices.stale).toBe(false);
+  failing = true;
+  await act(async () => { await shownMarket().refresh(); });
+  await settle();
+  expect(shownMarket()).toMatchObject({ status: "ready", items: [item], notices: { stale: true } });
+});
