@@ -22,6 +22,30 @@ function fixture(options: { expires?: number; wrongRuntime?: boolean; failAck?: 
   return { transport, fetch, execute, now, changeContext(value: SettingsWebContext | null) { state = value; } };
 }
 describe('web settings Host transport', () => {
+  // A result the service asks to wait for is posted once, kept, and delivered again only when the
+  // wait is over; the command is not executed again and nothing else is polled meanwhile.
+  it('holds a result the service asked to wait for and delivers only that result afterwards', async () => {
+    vi.useFakeTimers();
+    try {
+      const f = fixture();
+      let results = 0;
+      const base = f.fetch.getMockImplementation()!;
+      f.fetch.mockImplementation(async (url, init) => String(url).endsWith('/result') && ++results === 1
+        ? new Response('', { status: 503, headers: { 'Retry-After': '60' } }) : base(url, init));
+      f.transport.start();
+      await vi.advanceTimersByTimeAsync(0);
+      const calls = (suffix: string) => f.fetch.mock.calls.filter(([url]) => String(url).endsWith(suffix)).length;
+      expect([calls('/result'), calls('/poll')]).toEqual([1, 1]);
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect([calls('/result'), calls('/poll')]).toEqual([1, 1]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(calls('/result')).toBe(2);
+      expect(JSON.parse(String(f.fetch.mock.calls.filter(([url]) => String(url).endsWith('/result'))[1]![1]?.body)).result)
+        .toEqual(JSON.parse(String(f.fetch.mock.calls.filter(([url]) => String(url).endsWith('/result'))[0]![1]?.body)).result);
+      expect(f.execute).toHaveBeenCalledTimes(1);
+      f.transport.stop();
+    } finally { vi.useRealTimers(); }
+  });
   // The service's Retry-After sets the earliest next poll, for a minute or a quarter hour alike.
   it.each([60, 900])('waits out a %s s Retry-After before polling again', async seconds => {
     vi.useFakeTimers();

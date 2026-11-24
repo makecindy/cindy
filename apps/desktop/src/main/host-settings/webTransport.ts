@@ -33,6 +33,8 @@ export function createSettingsWebTransport(options: SettingsWebTransportOptions)
   let timer: ReturnType<typeof setTimeout> | undefined;
   let inFlight = false;
   let abort: AbortController | null = null;
+  // A result the service asked to wait for: delivered again when the wait is over, never re-executed.
+  let undelivered: { scope: string; runtimeId: string; requestId: string; result: SettingsWebResult } | null = null;
   const current = (context: SettingsWebContext) => {
     const fresh = options.getContext();
     return !stopped && fresh?.scopeKey === context.scopeKey && fresh.baseUrl === context.baseUrl;
@@ -88,6 +90,20 @@ export function createSettingsWebTransport(options: SettingsWebTransportOptions)
         }
         connected = true;
       }
+      if (undelivered) {
+        const held = undelivered;
+        if (held.scope !== scope || held.runtimeId !== runtimeId) undelivered = null;
+        else {
+          try { await post(context, `requests/${held.requestId}/result`, { runtimeId, result: held.result }); }
+          catch (error) {
+            // Kept only while the service asks to wait; a refusal means it no longer wants the result.
+            if (!(error instanceof TransportError && error.retryAfterMs !== null)) undelivered = null;
+            throw error;
+          }
+          undelivered = null;
+          return 50;
+        }
+      }
       const polledAt = now();
       const response = z.strictObject({ request: envelope.nullable() }).parse(await post(context, 'poll', { runtimeId }));
       // After a held (long) poll, ask again at once so a browser's next call is not delayed.
@@ -103,7 +119,14 @@ export function createSettingsWebTransport(options: SettingsWebTransportOptions)
       // can be delivered again, including after the execution deadline.
       for (let attempt = 0; attempt < 3; attempt += 1) {
         try { await post(context, `requests/${request.requestId}/result`, { runtimeId, result }); break; }
-        catch (error) { if (attempt === 2 || !current(context) || error instanceof TransportError && error.status < 500) throw error; }
+        catch (error) {
+          // The service set a wait: stop now and deliver this same result once it is over.
+          if (error instanceof TransportError && error.retryAfterMs !== null) {
+            undelivered = { scope, runtimeId, requestId: request.requestId, result };
+            throw error;
+          }
+          if (attempt === 2 || !current(context) || error instanceof TransportError && error.status < 500) throw error;
+        }
       }
       return 50;
     } catch (error) {
