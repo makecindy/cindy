@@ -34,6 +34,7 @@
  */
 
 import { CredentialModeSwitchBusyError } from '../maker-host/credentialSwitchError.js';
+import { PROVIDER_GROUP_SUPERSEDED_ERROR } from '../provider-group/failurePolicy.js';
 import type { AgentKind, EngineKind } from '@cindy/maker-core';
 import {
   CONTROLLER_CAPABILITY_PLUGIN_ENGINE_SWITCH_INTENT_V1,
@@ -1987,7 +1988,7 @@ export function registerMakerSessionAgentSwitchHandler(
         // An authorized manual choice supersedes recovery even if locked admission later rejects it.
         onUserSwitchRequested(event, valid.sessionId);
         deps.cancelPendingRemoteStart?.(valid.sessionId,
-          new Error('[REMOTE_AGENT_UNAVAILABLE] Remote startup was cancelled for your new Agent selection.'));
+          new Error(PROVIDER_GROUP_SUPERSEDED_ERROR));
       }
       const run = () => performSessionAgentSwitch(deps, request);
       return typeof sessionId === 'string' && sessionId && deps.withSessionLock

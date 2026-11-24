@@ -20,7 +20,8 @@ import type {
   StartSessionOptions,
   UserMessage,
 } from '@cindy/maker-core';
-import { AgentStartupStoppedError, LOCAL_AGENT_CLIENT, MAIN_OWNED_SEND_CONTEXT, Session } from '@cindy/maker-core';
+import { AgentStartupStoppedError, LOCAL_AGENT_CLIENT, MAIN_OWNED_SEND_CONTEXT, Maker, Session,
+  type CreateSessionOptions, type SessionMeta } from '@cindy/maker-core';
 import { createServer } from 'node:http';
 import { isProviderSharePeer, providerShareHostPeer } from '@cindy/device-link';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -37,7 +38,8 @@ import { createNativeHistoryTransfer, NATIVE_HISTORY_CHECKPOINT } from '../nativ
 import { hostedAttachmentPreservation } from '../../maker-host/attachmentPreservation';
 import { hostedStartOptions } from '../host/service';
 import { createProviderGroupService, type ProviderGroupServiceDeps } from '../../provider-group/service';
-import { ProviderGroupUsageLimitError } from '../../provider-group/failurePolicy';
+import { decideProviderGroupFailure, providerGroupFailureSignals, ProviderGroupUsageLimitError,
+  PROVIDER_GROUP_SUPERSEDED_ERROR } from '../../provider-group/failurePolicy';
 import { createProviderGroupGuestSwitch } from '../../provider-group/guestSwitch';
 import { createPendingAgentSwitchRegistry, registerMakerSessionAgentSwitchHandler, relocateForFreshStart,
   type MakerSessionAgentSwitchHandlerDeps } from '../../maker-ipc/sessionAgentSwitchHandler';
@@ -2085,6 +2087,7 @@ describe('shared startup lease budget', () => {
     const pendingClose = deferred();
     const prepare = deferred();
     const allocation = deferred();
+    const capsReply = deferred();
     let allocations = 0;
     const renewals = new Map<string, number>();
     const guestSwitch = createProviderGroupGuestSwitch(() => Date.now());
@@ -2092,7 +2095,8 @@ describe('shared startup lease budget', () => {
       startFailure: '', startFailureName: 'AgentStartupStoppedError', startedId: undefined as string | undefined, localFailure: '',
       startupEnd: undefined as { reason: string; idleReclaimed?: true } | undefined,
       switchAvailable: true, pauseSwitch: false, legacySwitch: false, closeLinkOnFailure: false,
-      blockClose: false, failClose: false, maxRuns: 10, idleReclaimMinutes: undefined as number | undefined,
+      blockClose: false, failClose: false, blockCleanup: false, failCleanup: false, blockAgentCaps: false,
+      maxRuns: 10, idleReclaimMinutes: undefined as number | undefined,
       blockPrepare: false, preparing: false, blockAllocation: false, ownerOffline: false, ownerPaused: false, loseGrantOnOpen: false,
       directStatusBatch: false, agentNetStandby: false, authorityOffline: false, localFirst: false, loseOpenAck: false, rejectHandoff: false };
     const emit = (run: Run, value: unknown) => run.onData(Buffer.from(JSON.stringify(value) + '\n'), false);
@@ -2143,6 +2147,10 @@ describe('shared startup lease budget', () => {
       if (request.op === 'standby-prepare') return { ok: true, result: { deviceId: 'executor-m', generation, standby: true, leaseDurationMs: 120_000 } };
       if (request.op === 'standby-admit') return { ok: true, result: { generation: request.admissionId, leaseDurationMs: 360_000 } };
       if (request.op === 'caps') {
+        if (state.blockAgentCaps && state.preparing && device === target) {
+          await capsReply.promise;
+          throw Object.assign(new Error('fixture no invoke-result'), { code: 'INVOKE_TIMEOUT' });
+        }
         if (state.delayCaps) { const ms = state.delayCaps; state.delayCaps = 0; await vi.advanceTimersByTimeAsync(ms); }
         return { ok: true, result: { version: 1, maxRuns: state.maxRuns, idleReclaimMinutes: state.idleReclaimMinutes, uploadChunkBytes: 65536, maxPayloadBytes: 1000000,
           virtualWorkspace: true, directGuestExecution: true, ...(state.agentNetStandby ? { directGuestStandby: true } : {}),
@@ -2179,10 +2187,15 @@ describe('shared startup lease budget', () => {
       rgPath: () => RG, codexPath: () => 'fixture-never-spawned', mcpProviders: () => [],
       prepareMcpBridge: async (_providers, _logger, ctx) => {
         if (state.localFailure) throw new Error(state.localFailure);
+        const blockCleanup = state.blockCleanup, failCleanup = state.failCleanup;
         state.preparing = true;
         if (state.blockPrepare) await prepare.promise;
         return { mcpBridge: { servers: [{ name: 'fixture', url: 'http://fixture.invalid/' }] },
-          disposeSessionCtx: () => { disposed.push(ctx.sessionId!); },
+          disposeSessionCtx: async () => {
+            disposed.push(ctx.sessionId!);
+            if (blockCleanup) await pendingClose.promise;
+            if (failCleanup) throw new Error('fixture local cleanup failed');
+          },
           closeSessionInstance: () => { mcpSessions.delete(ctx.sessionId!); },
         } as never;
       },
@@ -2195,7 +2208,7 @@ describe('shared startup lease budget', () => {
     historyCloseEpoch.mockReturnValue(0);
     historyCrossRegion.mockReturnValue(false);
     return { owner, target, generation, state, calls, runs, disposed, mcpSessionCount: (sessionId = 'historical') => Number(mcpSessions.has(sessionId)),
-      pendingClose, prepare, allocation, emit, started, guestSwitch, renewals,
+      pendingClose, prepare, allocation, capsReply, emit, started, guestSwitch, renewals, start,
       open: (sessionId = 'pending', deviceId = owner, model = 'm', resumeSessionId?: string) => start({ agentKind: 'codex', deviceId,
         options: { sessionId, workingDir: project, model, ...(resumeSessionId ? { resumeSessionId } : {}) } }) };
   }
@@ -2820,12 +2833,22 @@ describe('shared startup lease budget', () => {
   it.each([
     { target: null, stage: 'backoff' }, { target: 'another-computer', stage: 'backoff' },
     { target: null, stage: 'in-flight' }, { target: 'another-computer', stage: 'in-flight' },
+    { target: null, stage: 'caps' }, { target: 'another-computer', stage: 'caps' },
+    { target: null, stage: 'agent-caps-timeout' }, { target: 'another-computer', stage: 'agent-caps-timeout' },
   ])('stages a manual move to $target during historical executor $stage', async ({ target, stage }) => {
     const f = fixture(); f.state.ready = true; f.state.duration = 120_000;
     const sibling = await f.open('sibling', 'ordinary-device');
-    const late = deferred();
+    f.state.preparing = false;
+    f.state.blockAgentCaps = stage === 'agent-caps-timeout';
+    const late = stage === 'agent-caps-timeout' ? f.capsReply : deferred();
+    const invoke = historyInvoke.getMockImplementation()!;
+    if (stage === 'caps') historyInvoke.mockImplementation(async (...args) => {
+      const response = invoke(...args);
+      if (args[0] === f.target && (args[2] as { op: string }[])[0]?.op === 'caps') await late.promise;
+      return response;
+    });
     historyOpenLink.mockImplementation(async peer => {
-      if (peer !== f.target) return;
+      if (peer !== f.target || stage === 'caps' || stage === 'agent-caps-timeout') return;
       if (stage === 'in-flight') return late.promise;
       throw Object.assign(new Error('executor restarting'), { code: 'DEVICE_UNRESPONSIVE' });
     });
@@ -2847,6 +2870,9 @@ describe('shared startup lease budget', () => {
     try {
       await vi.advanceTimersByTimeAsync(0);
       expect(historyOpenLink).toHaveBeenCalledWith(f.target);
+      if (stage === 'agent-caps-timeout') {
+        expect(f.calls.filter(call => call.device === f.target && call.op === 'caps')).toHaveLength(2);
+      }
       const ipc = new IpcHarness();
       registerMakerSessionAgentSwitchHandler(ipc, deps, () => {});
       let staged = false;
@@ -2854,14 +2880,18 @@ describe('shared startup lease budget', () => {
         undefined, undefined, { agentDeviceId: target }).then(result => { staged = true; return result; });
       await vi.advanceTimersByTimeAsync(0);
       expect(staged).toBe(true);
-      expect(String(await opening)).toContain('new Agent selection');
+      const failure = await opening;
+      expect(decideProviderGroupFailure(providerGroupFailureSignals(failure), 'start'))
+        .toEqual({ action: 'stay', why: 'user' });
       expect(pending.get('historical')).toMatchObject({ targetAgentDeviceId: target });
       expect(deps.closeSession).not.toHaveBeenCalled();
       expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
       const probes = historyOpenLink.mock.calls.length;
+      const capsCalls = f.calls.filter(call => call.op === 'caps').length;
       late.resolve();
       await vi.advanceTimersByTimeAsync(60_000);
       expect(historyOpenLink).toHaveBeenCalledTimes(probes);
+      expect(f.calls.filter(call => call.op === 'caps')).toHaveLength(capsCalls);
       expect(f.calls.filter(call => call.op === 'open')).toEqual([expect.objectContaining({ device: 'ordinary-device' })]);
       expect(f.calls.some(call => call.op === 'call')).toBe(false);
       await sibling.setModel!('still-live');
@@ -2873,6 +2903,61 @@ describe('shared startup lease budget', () => {
       await sibling.close();
     }
   });
+
+  // #12566 reviews / unit: real Maker -> device starter cancellation must notify
+  // the captured startup lease after cleanup, not the replacement's lease. Prior
+  // picker tests bypassed Maker and could not observe a leaked worktree heartbeat.
+  // Gates cover pre-runtime probe/MCP and unfinished/failed local disposal.
+  it.each(['executor', 'MCP', 'cleanup', 'failed-cleanup'] as const)(
+    'retires only the cancelled startup lease after %s cleanup', async stage => {
+      const f = fixture(); f.state.duration = 120_000;
+      f.state.blockPrepare = stage !== 'executor';
+      f.state.blockCleanup = stage === 'cleanup' || stage === 'failed-cleanup';
+      f.state.failCleanup = stage === 'failed-cleanup';
+      const probe = deferred();
+      if (stage === 'executor') historyOpenLink.mockImplementation(peer => peer === f.target ? probe.promise : Promise.resolve());
+      const leased = new Set<CreateSessionOptions>();
+      const rows = new Map<string, SessionMeta>();
+      const maker = new Maker({ agents: { codex: { kind: 'codex', capabilities: { rewind: { supported: false } },
+        dispose: async () => {} } as never }, logger: historyLogger, startDeviceAgentSession: f.start,
+        storage: {
+          create: async meta => { const row = { ...meta, createdAt: Date.now(), updatedAt: Date.now() }; rows.set(row.id, row); return row; },
+          get: async id => rows.get(id) ?? null, list: async () => [...rows.values()],
+          update: async (id, patch) => { const row = { ...rows.get(id)!, ...patch }; rows.set(id, row); return row; },
+          compareAndClearSdkSessionId: async () => false, delete: async id => { rows.delete(id); },
+        }, lifecycleHooks: {
+          prepareStartOptions: (_id, options) => { leased.add(options); },
+          onStartFailed: ({ options, runtimeMayBeAlive }) => { if (!runtimeMayBeAlive) leased.delete(options); },
+          onStartCleanupSucceeded: (_id, options) => { leased.delete(options); },
+          onClose: (_id, options) => { leased.delete(options); },
+        } });
+      const old = maker.createSession({ id: 'historical', agentKind: 'codex', workingDir: project, model: 'm',
+        agentDeviceId: f.owner, resumeSessionId: 'native-only-on-m' }).catch(error => error);
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        expect(leased.size).toBe(1);
+        cancelPendingRemoteStart('historical', new Error(PROVIDER_GROUP_SUPERSEDED_ERROR));
+        expect(String(await old)).toContain(PROVIDER_GROUP_SUPERSEDED_ERROR);
+        f.state.blockPrepare = false; f.state.ready = true;
+        f.state.blockCleanup = false; f.state.failCleanup = false;
+        await maker.createSession({ id: 'historical', agentKind: 'codex', workingDir: project, model: 'm', agentDeviceId: 'ordinary-device' });
+        const replacement = [...leased].at(-1)!;
+        expect(leased.size).toBe(2);
+        probe.resolve(); f.prepare.resolve();
+        await vi.advanceTimersByTimeAsync(0);
+        if (stage === 'cleanup' || stage === 'failed-cleanup') expect(leased.size).toBe(2);
+        f.pendingClose.resolve();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(leased.size).toBe(stage === 'failed-cleanup' ? 2 : 1);
+        expect(leased.has(replacement)).toBe(true);
+        expect(f.calls.some(call => call.op === 'call' && call.method === 'send')).toBe(false);
+      } finally {
+        probe.resolve(); f.prepare.resolve(); f.pendingClose.resolve();
+        f.state.blockClose = false; f.state.failClose = false;
+        await old; await maker.shutdown();
+      }
+    },
+  );
 
   it.each(['cancel', 'permission', 'link-generation', 'lease-expiry'] as const)('stops a delayed executor recovery after %s', async boundary => {
     const f = fixture(); f.state.ready = true; f.state.duration = 120_000;

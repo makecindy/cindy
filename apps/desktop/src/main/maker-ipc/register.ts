@@ -9201,6 +9201,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       } catch (error) {
         assertAccess?.();
         if (reconnectHandoff) throw error;
+        // A manual choice also supersedes native-resume and guest-share fallback,
+        // not just the provider group's next-member decision below.
+        if (error instanceof Error && error.message === PROVIDER_GROUP_SUPERSEDED_ERROR) throw error;
         if (error instanceof RuntimePluginControlError) throw error;
         // Native ownership is unresolved, not a route/resume failure. Do not
         // relocate history or try another provider while the old handle lives.

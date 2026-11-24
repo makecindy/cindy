@@ -33,7 +33,8 @@ import {
   type RemoteAgentStreamItem,
 } from '@cindy/device-link';
 import type { AgentEvent, AgentSessionHandle, Effort, StartSessionOptions } from '@cindy/maker-core';
-import { LOCAL_AGENT_CLIENT } from '@cindy/maker-core';
+import { AgentStartupCleanupPendingError, AgentStartupResourcesReleasedError, AgentStartupStoppedError,
+  LOCAL_AGENT_CLIENT } from '@cindy/maker-core';
 import { withTransientRemoteRetry } from '@cindy/maker-shared/device-link-contract';
 
 import { PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL } from '../../../shared/providerShareCredentialConsent';
@@ -405,6 +406,21 @@ export function registerPendingRemoteStart(sessionId: string, parent = currentSe
   if (parent?.aborted) cancelParent();
   return {
     signal: controller.signal, abort,
+    cancellationError(startup: Promise<AgentSessionHandle>): AgentStartupCleanupPendingError {
+      const reason: unknown = controller.signal.reason;
+      const whenStopped = startup.then(handle => handle.close({ reason: 'account-boundary' }), error => {
+        if (error instanceof AgentStartupCleanupPendingError) return error.whenStopped;
+        if (error instanceof AgentStartupResourcesReleasedError || error instanceof AgentStartupStoppedError) return;
+        // A rejected wait alone does not prove the unpublished resources were released.
+        throw error;
+      });
+      // Some callers do not use Maker; retain the rejection for its lifecycle
+      // consumer without an unhandled rejection if no host subscribes to it.
+      void whenStopped.catch(() => undefined);
+      return new AgentStartupCleanupPendingError(reason instanceof Error ? reason.message : String(reason), {
+        cause: reason, whenStopped,
+      });
+    },
     dispose() {
       parent?.removeEventListener('abort', cancelParent);
       cancels.delete(cancel);
@@ -433,28 +449,25 @@ export async function startRemoteAgentSession(
   const expired = () => new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
   let rejectCancelled!: (error: unknown) => void;
   const cancelled = new Promise<never>((_, reject) => { rejectCancelled = reject; });
-  let preparedHandle: AgentSessionHandle | undefined;
-  const closeCancelledHandle = () => {
-    void preparedHandle?.close({ reason: 'account-boundary' }).catch(() => undefined);
-  };
+  let startup!: Promise<AgentSessionHandle>;
   const onCancelled = () => {
-    closeCancelledHandle();
-    rejectCancelled(abort.signal.reason ?? expired());
+    rejectCancelled(abort.cancellationError(Promise.resolve().then(() => startup)));
   };
   abort.signal.addEventListener('abort', onCancelled, { once: true });
   const timing = remoteAgentStartupTiming(deps.log, { side: 'controller', kind, sessionId });
   let status: 'ok' | 'failed' = 'failed';
   try {
-    if (abort.signal.aborted) throw abort.signal.reason ?? expired();
+    if (abort.signal.aborted) throw new AgentStartupResourcesReleasedError(abort.signal.reason ?? expired());
     // Reject promptly even when MCP preparation or a remote RPC ignores cancellation.
     // The preparation path still owns cleanup of any late result.
-    const handle = await Promise.race([
-      prepareAndStartRemoteAgentSession(kind, opts, deps, abort.signal, timing).then(handle => {
-        preparedHandle = handle;
-        if (abort.signal.aborted) { closeCancelledHandle(); throw abort.signal.reason ?? expired(); }
-        return handle;
-      }), cancelled,
-    ]);
+    startup = prepareAndStartRemoteAgentSession(kind, opts, deps, abort.signal, timing).then(async handle => {
+      if (abort.signal.aborted) {
+        await handle.close({ reason: 'account-boundary' });
+        throw new AgentStartupResourcesReleasedError(abort.signal.reason ?? expired());
+      }
+      return handle;
+    });
+    const handle = await Promise.race([startup, cancelled]);
     if (handoff) {
       // As in cold startup, if O restarts between opens or the token expires,
       // G can treat an ordinary fresh open as a completed switch. This can add
@@ -582,6 +595,7 @@ async function prepareAndStartRemoteAgentSession(
   } catch (error) {
     // A late MCP result is disposed here even though the caller already rejected.
     await disposePreparation();
+    if (signal.aborted) throw new AgentStartupResourcesReleasedError(signal.reason);
     throw error;
   } finally {
     signal.removeEventListener('abort', cancelPreparation);
@@ -1416,6 +1430,9 @@ async function prepareAndStartRemoteAgentSession(
     });
   } catch (error) {
     await disposeLocal();
+    // Remote notification is best effort. Only the completed local executor,
+    // MCP and relay teardown proves this attempt no longer owns host resources.
+    if (signal.aborted) throw new AgentStartupResourcesReleasedError(signal.reason);
     throw localizeRemoteError(error);
   } finally {
     signal.removeEventListener('abort', cancelStart);
