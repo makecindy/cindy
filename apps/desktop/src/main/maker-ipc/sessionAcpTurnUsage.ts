@@ -8,10 +8,10 @@ function isTokenCount(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0;
 }
 
-export function recordSessionAcpTurnUsage(session: Session, event: AgentEvent, model: string): void {
+export function recordSessionAcpTurnUsage(session: Session, event: AgentEvent): void {
   if (session.agentKind !== 'acp' || session.agentDeviceId || session.remoteHostId ||
       event.type !== 'done' || event.turnScope === 'background' || event.runtimeRecovery) return;
-  const data = event.data as { type?: string; usage?: Record<string, unknown> } | undefined;
+  const data = event.data as { type?: string; usage?: Record<string, unknown>; usageModel?: unknown } | undefined;
   if (data?.type !== 'acp/prompt_end' || !data.usage) return;
   const { inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens } = data.usage;
   if (!isTokenCount(inputTokens) || !isTokenCount(outputTokens) ||
@@ -25,7 +25,7 @@ export function recordSessionAcpTurnUsage(session: Session, event: AgentEvent, m
   // ACP has already separated cache tokens from input in the prompt response.
   void recordModelTurnUsage({
     agentKind: 'acp',
-    model: model.trim() || 'unknown',
+    model: (typeof data.usageModel === 'string' && data.usageModel.trim()) || 'unknown',
     sessionId: session.id,
     inputTokensDelta: inputTokens,
     outputTokensDelta: outputTokens,

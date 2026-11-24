@@ -2313,7 +2313,7 @@ describe('usage through the production event pipeline', () => {
   it('settles reported ACP tokens and distinguishes zero from missing usage', async () => {
     const h = harness(undefined, 'acp');
     const done = { type: 'done', sessionTurnGeneration: 1, data: {
-      type: 'acp/prompt_end', status: 'completed',
+      type: 'acp/prompt_end', status: 'completed', usageModel: 'original-model',
       usage: { inputTokens: 2161, outputTokens: 15, cacheReadTokens: 9459, cacheCreationTokens: 0 },
     } } satisfies AgentEvent;
     try {
@@ -2322,7 +2322,7 @@ describe('usage through the production event pipeline', () => {
       h.emit({ ...done, sessionTurnGeneration: 2, data: { type: 'acp/prompt_end', status: 'completed' } });
       await vi.advanceTimersByTimeAsync(0);
       expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
-        agentKind: 'acp', model: 'test-model', sessionId: 'task',
+        agentKind: 'acp', model: 'original-model', sessionId: 'task',
         inputTokensDelta: 2161, outputTokensDelta: 15, cacheReadTokensDelta: 9459, cacheCreateTokensDelta: 0,
       }));
       expect(effects.fn('rebroadcastTodaySpend').mock.invocationCallOrder[0])

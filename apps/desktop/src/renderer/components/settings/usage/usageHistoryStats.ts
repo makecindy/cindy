@@ -115,7 +115,8 @@ export function filterUsageHistoryPayload(
   const rangeTodayKey = selectedDay ?? payload.todayKey;
   const modelByKey = new Map<string, UsageHistoryModel>();
   for (const row of payload.modelDaily) {
-    if (!isUsageDayInRange(row.day, payload.todayKey, range) || row.tokens <= 0) continue;
+    if (!isUsageDayInRange(row.day, payload.todayKey, range) ||
+        (row.tokens <= 0 && row.agentKind !== 'acp')) continue;
     const key = `${row.agentKind}\u0000${row.model}`;
     const existing = modelByKey.get(key);
     const componentTotal =
