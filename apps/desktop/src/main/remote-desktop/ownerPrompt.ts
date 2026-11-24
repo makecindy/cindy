@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { resolveDesktopInputBinary } from './inputHost';
+import { resolveDesktopInputBinary, resolveOwnerPromptApp } from './inputHost';
 
 /**
  * The owner's Touch ID check, armed while the privacy screen keeps the display awake
@@ -10,6 +10,8 @@ import { resolveDesktopInputBinary } from './inputHost';
  * words cross stdout, so no credential or fingerprint data reaches Cindy.
  */
 export type OwnerAnswer = 'verified' | 'denied' | 'unavailable';
+/** `fallback`: the local session refuses an embedded control; retry with the system sheet. */
+export type OwnerPromptAnswer = OwnerAnswer | 'fallback';
 
 /**
  * A helper that had to be killed leaves the system's own request on screen for about ten
@@ -25,14 +27,25 @@ export interface OwnerPrompt {
 
 export interface OwnerPromptRuntime {
   resolveBinary(): Promise<string>;
+  /** The bundled helper that hosts the control itself; only macOS has one. */
+  resolveEmbedded?(): Promise<string>;
   spawn(binary: string, args: string[]): ChildProcessWithoutNullStreams;
 }
 
-export async function watchOwnerPrompt(
-  onAnswer: (answer: OwnerAnswer) => void,
+type OwnerPromptMode = 'sheet' | 'embedded';
+
+/**
+ * `sheet` lets macOS draw its own dialog (Main covers it with the privacy mask).
+ * `embedded` hands the same check to a bundled helper that hosts the control in a window
+ * of our own, so no dialog is drawn anywhere (2026-11-24 real-device test).
+ */
+async function watchOwner(
+  onAnswer: (answer: OwnerPromptAnswer) => void,
   reason: string,
+  mode: OwnerPromptMode,
   runtime: OwnerPromptRuntime = {
     resolveBinary: resolveDesktopInputBinary,
+    resolveEmbedded: resolveOwnerPromptApp,
     spawn: (binary: string, args: string[]): ChildProcessWithoutNullStreams =>
       spawn(binary, args, { stdio: 'pipe', windowsHide: true }),
   },
@@ -57,9 +70,15 @@ export async function watchOwnerPrompt(
   // probe). A cover that let go during that wait has already marked the signal aborted,
   // and listening for the event afterwards never replays it: re-check before spawning so
   // the Touch ID control cannot flash onto a screen nobody is holding awake.
-  const binary = await runtime.resolveBinary();
+  const binary =
+    mode === 'embedded'
+      ? await (runtime.resolveEmbedded ?? resolveOwnerPromptApp)()
+      : await runtime.resolveBinary();
   if (signal?.aborted) throw new Error('DESKTOP_PRIVACY_UNAVAILABLE');
-  const child = runtime.spawn(binary, ['--owner-prompt', reason]);
+  const child = runtime.spawn(binary, [
+    mode === 'embedded' ? '--owner-prompt-app' : '--owner-prompt',
+    reason,
+  ]);
   let buffer = '';
   let started = false;
   let done = false;
@@ -86,7 +105,7 @@ export async function watchOwnerPrompt(
   // The exclusion id only names a window that exists: drop it as soon as the prompt is
   // gone, so a later capture never filters against a reused window number.
   const clearPanel = () => onPanel?.(null);
-  const emit = (answer: OwnerAnswer) => {
+  const emit = (answer: OwnerPromptAnswer) => {
     if (done) return;
     done = true;
     clearTimeout(timer);
@@ -163,7 +182,7 @@ export async function watchOwnerPrompt(
         clearTimeout(timer);
         settle?.();
         settle = undefined;
-      } else if (line === 'verified' || line === 'denied') emit(line);
+      } else if (line === 'verified' || line === 'denied' || line === 'fallback') emit(line);
       // The helper names its own panel so Main can keep it out of remote frames: modern
       // ScreenCaptureKit ignores `sharingType` and filters only ids it is handed.
       else if (line.startsWith('panel ')) {
@@ -195,3 +214,38 @@ export async function watchOwnerPrompt(
     },
   };
 }
+
+type WatchArgs = [
+  reason: string,
+  runtime?: OwnerPromptRuntime,
+  signal?: AbortSignal,
+  onPanel?: (windowId: number | null) => void,
+  onHelperClosed?: (panelGone: Promise<void>) => void,
+];
+
+/** macOS draws its dialog itself; the privacy mask covers it. */
+export const watchOwnerPrompt = (
+  onAnswer: (answer: OwnerAnswer) => void,
+  ...args: WatchArgs
+): Promise<OwnerPrompt> =>
+  watchOwner(
+    (answer) => {
+      if (answer !== 'fallback') onAnswer(answer);
+    },
+    args[0],
+    'sheet',
+    args[1],
+    args[2],
+    args[3],
+    args[4],
+  );
+
+/**
+ * The same check, hosted by our own bundled helper: no dialog is drawn, on screen or in a
+ * capture. Answers `fallback` when this macOS will not accept an embedded control.
+ */
+export const watchEmbeddedOwnerPrompt = (
+  onAnswer: (answer: OwnerPromptAnswer) => void,
+  ...args: WatchArgs
+): Promise<OwnerPrompt> =>
+  watchOwner(onAnswer, args[0], 'embedded', args[1], args[2], args[3], args[4]);

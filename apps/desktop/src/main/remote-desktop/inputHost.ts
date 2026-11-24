@@ -159,6 +159,97 @@ async function resolveBinary(): Promise<string> {
 
 export { resolveBinary as resolveDesktopInputBinary };
 
+const OWNER_PROMPT_BUNDLE = 'CindyOwnerPrompt.app';
+const OWNER_PROMPT_EXECUTABLE = 'cindy-owner-prompt';
+const ownerPromptPlist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleExecutable</key><string>${OWNER_PROMPT_EXECUTABLE}</string>
+<key>CFBundleIdentifier</key><string>app.cindy.owner-prompt</string>
+<key>CFBundleName</key><string>Cindy</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>LSUIElement</key><true/>
+<key>LSMinimumSystemVersion</key><string>14.0</string>
+</dict></plist>
+`;
+
+let ownerPromptApp: Promise<string> | null = null;
+/**
+ * The helper that hosts the owner's Touch ID control in a window of its own.
+ * macOS only completes the embedded-UI handshake for a bundled process, and the binary
+ * must not carry its own `__info_plist` (that section wins over the bundle's and turns the
+ * process back into a background one). Development compiles this copy; packaged builds
+ * ship a signed bundle next to the input helper.
+ */
+export async function resolveOwnerPromptApp(): Promise<string> {
+  if (process.platform !== 'darwin') throw new Error('DESKTOP_PRIVACY_UNAVAILABLE');
+  ownerPromptApp ??= buildOwnerPromptApp().catch((error) => {
+    ownerPromptApp = null;
+    throw error;
+  });
+  return ownerPromptApp;
+}
+
+async function buildOwnerPromptApp(): Promise<string> {
+  // Directly under Contents/: the helper's own caller check walks five levels up to find
+  // the enclosing app, and a deeper bundle would land on the wrapper instead.
+  const shipped = path.join(
+    path.resolve(process.resourcesPath, '..'),
+    OWNER_PROMPT_BUNDLE,
+    'Contents',
+    'MacOS',
+    OWNER_PROMPT_EXECUTABLE,
+  );
+  if (app.isPackaged) {
+    await fs.access(shipped);
+    return shipped;
+  }
+  const sourceRoot = path.join(app.getAppPath(), 'native', 'remote-desktop');
+  const source = path.join(sourceRoot, 'macos-input.swift');
+  const callerSource = await fs.readFile(
+    path.resolve(
+      app.getAppPath(),
+      '../../packages/remote-credentials-native/Sources/DesktopNativeCaller/DesktopNativeCaller.swift',
+    ),
+    'utf8',
+  );
+  const digest = createHash('sha256')
+    .update(await fs.readFile(source))
+    .update(callerSource)
+    .update(process.execPath)
+    .update(process.arch)
+    .update('owner-prompt-v2')
+    .digest('hex');
+  const directory = path.join(app.getPath('userData'), 'remote-desktop', 'native', digest);
+  const bundle = path.join(directory, OWNER_PROMPT_BUNDLE);
+  const executable = path.join(bundle, 'Contents', 'MacOS', OWNER_PROMPT_EXECUTABLE);
+  try {
+    await fs.access(executable);
+    return executable;
+  } catch {
+    /* build it below */
+  }
+  await fs.mkdir(path.join(bundle, 'Contents', 'MacOS'), { recursive: true });
+  const main = path.join(directory, 'main.swift');
+  const program = (callerSource + '\n' + (await fs.readFile(source, 'utf8'))).replace(
+    '"DESKTOP_INPUT_DEVELOPMENT_EXECUTABLE"',
+    JSON.stringify(Buffer.from(process.execPath).toString('base64')),
+  );
+  await fs.writeFile(main, program);
+  const temporary = `${executable}.${process.pid}.tmp`;
+  try {
+    await exec('swiftc', ['-D', 'DESKTOP_INPUT_DEVELOPMENT', main, '-O', '-o', temporary], {
+      timeout: 120_000,
+    });
+  } finally {
+    await fs.rm(main, { force: true });
+  }
+  await fs.rename(temporary, executable);
+  await fs.writeFile(path.join(bundle, 'Contents', 'Info.plist'), ownerPromptPlist);
+  await exec('codesign', ['-s', '-', '--force', bundle], { timeout: 30_000 });
+  return executable;
+}
+
 let biometry: DesktopBiometry | null = null;
 /**
  * Which biometry this Mac offers, named the way Apple does (Touch ID / Face ID / Optic

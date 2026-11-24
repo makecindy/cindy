@@ -18,7 +18,11 @@ import {
   requestDesktopInputPermission,
 } from './inputHost';
 import { watchAwayGuardInput, type AwayGuardInputMonitor } from './privacyInput';
-import { watchOwnerPrompt, type OwnerPrompt } from './ownerPrompt';
+import {
+  watchEmbeddedOwnerPrompt,
+  watchOwnerPrompt,
+  type OwnerPrompt,
+} from './ownerPrompt';
 import { keepAwakeController } from '../device-link/power-blocker';
 import { PrivacyScreen } from './privacyScreen';
 import { privacyScreenHtml } from './privacyScreenHtml';
@@ -382,71 +386,96 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
     if (controller?.inputShielded !== true || deps.screenLocked()) return;
     ownerPromptBusy = true;
     const generation = ++ownerPromptGeneration;
-    // The masks stay at the screen-saver level, above the system prompt: the prompt keeps
-    // key focus (so the sensor stays armed) while the cover hides it (2026-11-24 real-device
-    // test: a covered prompt still verified, with no `UI lost focus` and no pause).
+    // The masks stay at the screen-saver level above everything. The bundled helper hosts
+    // the control itself, so no dialog is drawn at all; the system's own sheet stays the
+    // fallback for a macOS that refuses an embedded control.
     const start = new AbortController();
     ownerPromptStart = start;
     // The helper this start spawned, by its `close`; its panel id is tracked against it.
     let closedHelper: Promise<void> | null = null;
-    void watchOwnerPrompt(
-      (answer) => {
-        if (generation !== ownerPromptGeneration) return;
-        ownerPrompt = null;
-        ownerPromptStart = null;
-        ownerPromptGeneration++;
-        // One answer per cover: a failed or cancelled check must not become a prompt loop.
-        ownerPromptAnswered = answer !== 'verified';
-        if (answer !== 'verified') return;
-        log.info('away guard owner verified');
-        controller?.ownerPresent();
-      },
-      t('awayGuard.verifyReason'),
-      undefined,
-      start.signal,
-      (windowId) => {
-        // A late id from a helper this cover already let go of is not published: the
-        // prompt has been stopped and its replacement may reuse the number.
-        if (generation !== ownerPromptGeneration) return;
-        if (!closedHelper || windowId === null) return;
-        if (ownerPromptPanelIds.get(closedHelper) === windowId) return;
-        ownerPromptPanelIds.set(closedHelper, windowId);
-        publishExcludedWindows();
-      },
-      (closed) => {
-        closedHelper = closed;
-        ownerPromptHelpers.add(closed);
-        void closed.then(() => {
-          ownerPromptHelpers.delete(closed);
-          // Window numbers get reused once this helper is gone: stop excluding its panel.
-          ownerPromptPanelIds.delete(closed);
+    const spawn = (embedded: boolean) => {
+      let abandoned = false;
+      const watch = embedded ? watchEmbeddedOwnerPrompt : watchOwnerPrompt;
+      void watch(
+        (answer) => {
+          if (generation !== ownerPromptGeneration) return;
+          if (answer === 'fallback') {
+            // This macOS will not accept an embedded control: let it draw its sheet, which
+            // the mask covers, instead of leaving touch-to-return silently broken.
+            abandoned = true;
+            ownerPrompt = null;
+            // The retry keeps the same abort controller: releasing the display must still
+            // cancel the sheet this cover just started.
+            log.info('away guard embedded prompt unavailable, using the system sheet');
+            spawn(false);
+            return;
+          }
+          ownerPrompt = null;
+          ownerPromptStart = null;
+          ownerPromptGeneration++;
+          // One answer per cover: a failed or cancelled check must not become a prompt loop.
+          ownerPromptAnswered = answer !== 'verified';
+          if (answer !== 'verified') return;
+          log.info('away guard owner verified');
+          controller?.ownerPresent();
+        },
+        t('awayGuard.verifyReason'),
+        undefined,
+        start.signal,
+        (windowId) => {
+          // A late id from a helper this cover already let go of is not published: the
+          // prompt has been stopped and its replacement may reuse the number.
+          if (generation !== ownerPromptGeneration) return;
+          if (!closedHelper || windowId === null) return;
+          if (ownerPromptPanelIds.get(closedHelper) === windowId) return;
+          ownerPromptPanelIds.set(closedHelper, windowId);
           publishExcludedWindows();
-        });
-      },
-    )
-      .then((prompt) => {
-        if (ownerPromptStart === start) ownerPromptStart = null;
-        if (generation === ownerPromptGeneration) {
+        },
+        (closed) => {
+          closedHelper = closed;
+          ownerPromptHelpers.add(closed);
+          void closed.then(() => {
+            ownerPromptHelpers.delete(closed);
+            // Window numbers get reused once this helper is gone: stop excluding its panel.
+            ownerPromptPanelIds.delete(closed);
+            publishExcludedWindows();
+          });
+        },
+      )
+        .then((prompt) => {
+          if (abandoned) {
+            void prompt.stop().catch(() => undefined);
+            return;
+          }
+          if (ownerPromptStart === start) ownerPromptStart = null;
+          if (generation === ownerPromptGeneration) {
+            ownerPrompt = prompt;
+            return;
+          }
+          // The cover let go while the helper was coming up: stop it like any other teardown
+          // so its panel id survives until `close`.
           ownerPrompt = prompt;
-          return;
-        }
-        // The cover let go while the helper was coming up: stop it like any other teardown
-        // so its panel id survives until `close`.
-        ownerPrompt = prompt;
-        disarmOwnerPrompt();
-      })
-      .catch(() => {
-        if (ownerPromptStart === start) ownerPromptStart = null;
-        // A cancelled start is not an answer: once the cover holds the display again it
-        // may arm a fresh prompt (unlike a helper that cannot start at all).
-        if (generation !== ownerPromptGeneration) return;
-        // No prompt is possible here (no Touch ID, locked session, unusable helper):
-        // keep the cover guarded instead of retrying on every tick.
-        ownerPromptAnswered = true;
-      })
-      .finally(() => {
-        ownerPromptBusy = false;
-      });
+          disarmOwnerPrompt();
+        })
+        .catch(() => {
+          if (ownerPromptStart === start) ownerPromptStart = null;
+          if (generation !== ownerPromptGeneration) return;
+          // The bundled helper could not even start: the system's own sheet still works.
+          if (embedded) {
+            abandoned = true;
+            log.info('away guard embedded prompt failed to start, using the system sheet');
+            spawn(false);
+            return;
+          }
+          // A cancelled start is not an answer: once the cover holds the display again it
+          // may arm a fresh prompt (unlike a helper that cannot start at all).
+          ownerPromptAnswered = true;
+        })
+        .finally(() => {
+          if (!abandoned) ownerPromptBusy = false;
+        });
+    };
+    spawn(true);
   };
   const syncOwnerPrompt = (awake: boolean) => {
     displayRequested = awake;

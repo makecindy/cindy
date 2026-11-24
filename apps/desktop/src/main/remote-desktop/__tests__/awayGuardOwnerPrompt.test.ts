@@ -24,6 +24,7 @@ const state = vi.hoisted(() => ({
   displays: [] as Array<{ id: number; bounds: Record<string, number> }>,
 }));
 const prompt = vi.hoisted(() => ({
+  embedded: vi.fn(),
   watch: vi.fn(),
   stop: vi.fn(async () => {}),
   signals: [] as AbortSignal[],
@@ -64,6 +65,13 @@ vi.mock('../privacyInput', () => ({
 // The system prompt never comes up on its own: each start stays pending until the test
 // resolves it, exactly like a helper that has not printed `ready` yet.
 vi.mock('../ownerPrompt', () => ({
+  // The product tries the bundled helper first and falls back to the system sheet when
+  // the local session refuses an embedded control, which is what this fixture models.
+  watchEmbeddedOwnerPrompt: (onAnswer: (answer: string) => void) => {
+    prompt.embedded();
+    queueMicrotask(() => onAnswer('fallback'));
+    return new Promise(() => {});
+  },
   watchOwnerPrompt: (onAnswer: (answer: string) => void, reason: string, ...rest: unknown[]) => {
     prompt.signals.push(
       rest[0] instanceof AbortSignal ? rest[0] : (rest[1] as AbortSignal),
@@ -180,6 +188,7 @@ beforeEach(() => {
   state.windows.length = 0;
   state.displays = [{ id: 1, bounds: { x: 0, y: 0, width: 1440, height: 900 } }];
   prompt.watch.mockReset();
+  prompt.embedded.mockReset();
   prompt.stop.mockClear();
   prompt.signals.length = 0;
   prompt.panels.length = 0;

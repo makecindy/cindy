@@ -1180,6 +1180,29 @@ function buildRemoteDesktopInput(platform: ForgePlatform, arch: ForgeArch): void
       fs.rmSync(inputBuild, { recursive: true, force: true });
     }
     fs.chmodSync(dest, 0o755);
+    // The owner's Touch ID control only gets the sensor inside an .app bundle. The bundle
+    // sits directly under Contents/ so the helper's own caller check (which walks five
+    // levels up to find the enclosing app) still lands on Cindy.app; its executable is a
+    // byte-identical copy of the sealed helper (2026-11-24 real-device test).
+    const ownerPromptBundle = path.join(destDir, '..', 'CindyOwnerPrompt.app');
+    const ownerPromptMacOS = path.join(ownerPromptBundle, 'Contents', 'MacOS');
+    fs.mkdirSync(ownerPromptMacOS, { recursive: true });
+    fs.copyFileSync(dest, path.join(ownerPromptMacOS, 'cindy-owner-prompt'));
+    fs.chmodSync(path.join(ownerPromptMacOS, 'cindy-owner-prompt'), 0o755);
+    fs.writeFileSync(
+      path.join(ownerPromptBundle, 'Contents', 'Info.plist'),
+      `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleExecutable</key><string>cindy-owner-prompt</string>
+<key>CFBundleIdentifier</key><string>app.cindy.owner-prompt</string>
+<key>CFBundleName</key><string>Cindy</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>LSUIElement</key><true/>
+<key>LSMinimumSystemVersion</key><string>14.0</string>
+</dict></plist>
+`,
+    );
     const credentialBuild = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-credential-build-'));
     try {
       const root = path.resolve(__dirname, '../../packages/remote-credentials-native');

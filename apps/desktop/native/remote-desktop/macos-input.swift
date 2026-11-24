@@ -1137,6 +1137,98 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--owner-prom
   RunLoop.main.run()
   exit(0)
 }
+// `--owner-prompt-app <reason>`: the owner check, hosted in a window of our own, so macOS
+// never draws its authentication sheet (docs/product-rules/privacy-screen.md).
+//
+// `LAAuthenticationView` pauses the sensor through its own `isVisibleToUser` gate when the
+// view is hidden, unfocused or covered. That gate lives in this process, and the cover is
+// supposed to hide the control, so it is answered here: the control reports itself visible
+// while the privacy mask covers it. The system still runs the whole check — only the UI
+// lives here (2026-11-24 real-device test: covered control, armed for the whole run, no
+// `is being paused`, fingerprint verified).
+//
+// This mode only works from an .app bundle: a bare executable fails the same handshake.
+// Fixed words on stdout: `panel <id>`, `ready owner-prompt`, `verified`, `denied`,
+// `unavailable`, `locked`, `fallback` (Main retries with the system sheet), `stopped`.
+final class OwnerPromptPanel: NSPanel {
+  override var canBecomeKey: Bool { true }
+  override var canBecomeMain: Bool { false }
+}
+
+func makeOwnerControlVisible() {
+  let selector = NSSelectorFromString("isVisibleToUser")
+  guard let method = class_getInstanceMethod(LAAuthenticationView.self, selector) else { return }
+  typealias VisibleImplementation = @convention(c) (AnyObject, Selector) -> Bool
+  let alwaysVisible: @convention(c) (AnyObject, Selector) -> Bool = { _, _ in true }
+  method_setImplementation(method, unsafeBitCast(alwaysVisible, to: IMP.self))
+}
+if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--owner-prompt-app" {
+  guard inputCaller.code() != nil, ownedConsoleSession() != nil else { print("unavailable"); exit(2) }
+  if (CGSessionCopyCurrentDictionary() as? [String: Any])?["CGSSessionScreenIsLocked"] as? Bool ?? false {
+    print("locked"); exit(0)
+  }
+  NSApplication.shared.setActivationPolicy(.accessory)
+  let context = LAContext()
+  context.localizedFallbackTitle = ""
+  var problem: NSError?
+  guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &problem) else {
+    print("unavailable"); exit(0)
+  }
+  makeOwnerControlVisible()
+  let reason = String(CommandLine.arguments[2].prefix(200))
+  let side: CGFloat = 32
+  let panel = OwnerPromptPanel(contentRect: NSRect(x: 0, y: 0, width: side, height: side),
+    styleMask: [.borderless], backing: .buffered, defer: false)
+  panel.isOpaque = true
+  panel.backgroundColor = .black
+  panel.alphaValue = 1
+  panel.level = .floating
+  panel.hasShadow = false
+  // Never part of a capture: the owner sees the privacy cover, nothing else.
+  panel.sharingType = .none
+  panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+  let host = NSView(frame: NSRect(x: 0, y: 0, width: side, height: side))
+  let control = LAAuthenticationView(context: context, controlSize: .regular)
+  control.frame = NSRect(x: 0, y: 0, width: side, height: side)
+  host.addSubview(control)
+  panel.contentView = host
+  if let screen = NSScreen.main {
+    let visible = screen.visibleFrame
+    panel.setFrameOrigin(NSPoint(x: visible.midX - side / 2, y: visible.minY + 72))
+  }
+  panel.makeKeyAndOrderFront(nil)
+  print("panel \(panel.windowNumber)"); fflush(stdout)
+  var answered = false
+  let started = DispatchTime.now()
+  DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+    context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason) { success, error in
+      guard !answered else { return }
+      answered = true
+      let code = (error as NSError?)?.code
+      let instant = DispatchTime.now().uptimeNanoseconds &- started.uptimeNanoseconds < 2_500_000_000
+      // This macOS will not accept an embedded control: let Main retry with its sheet.
+      if !success, instant, code == LAError.notInteractive.rawValue || code == LAError.systemCancel.rawValue {
+        print("fallback"); fflush(stdout); exit(0)
+      }
+      print(success ? "verified" : "denied"); fflush(stdout); exit(0)
+    }
+  }
+  print("ready owner-prompt"); fflush(stdout)
+  DispatchQueue.global().async {
+    while let command = readLine() {
+      guard command.utf8.count <= 16 else { exit(2) }
+      if command == "stop" { break }
+    }
+    DispatchQueue.main.async {
+      answered = true
+      context.invalidate()
+      panel.orderOut(nil)
+      print("stopped"); fflush(stdout); exit(0)
+    }
+  }
+  NSApp.run()
+  exit(0)
+}
 // `--biometry`: which biometry this Mac offers, so the copy names it the way Apple does
 // (Touch ID / Face ID / Optic ID; `LAContext.biometryType`). Fixed words only.
 if CommandLine.arguments == [CommandLine.arguments[0], "--biometry"] {
