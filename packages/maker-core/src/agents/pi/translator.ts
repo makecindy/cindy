@@ -803,6 +803,21 @@ function isPiTransientAssistantFailure(message: PiAssistantMessage): boolean {
   );
 }
 
+function openCodeGoRegionRejection(error: string): string | undefined {
+  const prefix = /^400(?::\s*|\s+)(?=\{)/.exec(error);
+  if (!prefix || error.length > 64 * 1024) return;
+  try {
+    const body = JSON.parse(error.slice(prefix[0].length));
+    const detail = body?.error ?? body;
+    if (detail?.type !== 'invalid_request_error' || typeof detail.message !== 'string') return;
+    // Keep the provider's known configuration guidance. Arbitrary upstream
+    // fields and suffixes can carry credentials or unrelated diagnostics.
+    return /^(?:Upstream request failed: )?(This Go model requires Global regions\. Select Global in your workspace's Privacy settings to use it\.)/.exec(detail.message)?.[1];
+  } catch {
+    return;
+  }
+}
+
 function parsePiAutoRetryProgress(
   event: PiRpcEvent,
 ): { attempt: number; maxAttempts: number } | null {
@@ -1385,9 +1400,24 @@ function translatePiEventInternal(
       // 网络类改走 `Reconnecting... N/M`，未分类 5xx / LiteLLM in-stream 仍静默。
       const progress = parsePiAutoRetryProgress(event);
       if (!progress) return;
-      const sdkError = typeof event.errorMessage === 'string'
-        ? redactSensitiveText(event.errorMessage)
+      const retryError = typeof event.errorMessage === 'string' ? event.errorMessage : undefined;
+      const regionRejection = progress.attempt === 1
+        ? openCodeGoRegionRejection(retryError ?? ctx.pendingAssistantError?.message ?? '')
         : undefined;
+      if (regionRejection) {
+        queue.push({
+          type: 'error',
+          data: {
+            message: JSON.stringify({ message: regionRejection }),
+            errorStatus: 400,
+            isTerminal: false,
+            willRetry: true,
+          },
+          source: 'pi',
+        });
+        return;
+      }
+      const sdkError = retryError === undefined ? undefined : redactSensitiveText(retryError);
       const rawMessage = (sdkError && sdkError.trim())
         || ctx.pendingAssistantError?.message
         || '';

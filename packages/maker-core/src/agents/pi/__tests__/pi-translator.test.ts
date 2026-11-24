@@ -1219,6 +1219,50 @@ describe('pi translator', () => {
     },
   );
 
+  // #4914, unit: both native 400 envelopes were silent until retry exhaustion.
+  // Exercise the retry event itself so the first backoff can show the diagnostic
+  // and a subsequent success can still own the only terminal event.
+  it.each(['chat', 'messages', 'wrong status', 'wrong error type', 'wrong message'])(
+    'surfaces only the confirmed OpenCode Go region rejection on first backoff (%s)',
+    shape => {
+      const ctx = createPiTranslateContext(noopLogger);
+      const { queue, events } = makeQueue();
+      const guidance = "This Go model requires Global regions. Select Global in your workspace's Privacy settings to use it.";
+      const error = {
+        type: shape === 'wrong error type' ? 'permission_error' : 'invalid_request_error',
+        message: shape === 'wrong message' ? 'Upstream request failed: some other 400' :
+          "Upstream request failed: " + guidance + ' Authorization: Bearer synthetic-fixture-marker',
+      };
+      const errorMessage = shape === 'messages'
+        ? '400 ' + JSON.stringify({ type: 'error', error })
+        : (shape === 'wrong status' ? '403: ' : '400: ') + JSON.stringify(error);
+      const retry = (attempt: number) => translatePiEvent(
+        ev({ type: 'auto_retry_start', attempt, maxAttempts: 6, errorMessage }), queue, ctx,
+      );
+      translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+      retry(1);
+      const progress = events.filter(event => event.type === 'error');
+      if (shape === 'chat' || shape === 'messages') {
+        expect(progress.map(event => event.data)).toEqual([{
+          message: JSON.stringify({ message: guidance }),
+          errorStatus: 400,
+          isTerminal: false,
+          willRetry: true,
+        }]);
+        retry(2);
+        expect(events.filter(event => event.type === 'error')).toHaveLength(1);
+      } else {
+        expect(progress).toHaveLength(0);
+      }
+      expect(events.some(event => event.type === 'done')).toBe(false);
+      translatePiEvent(ev({ type: 'auto_retry_end', success: true }), queue, ctx);
+      translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+      expect(events.filter(event => event.type === 'done')).toEqual([
+        expect.objectContaining({ data: expect.objectContaining({ status: 'completed' }) }),
+      ]);
+    },
+  );
+
   it('keeps unclassified Pi auto-retries silent instead of reusing the overload marker', () => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();
