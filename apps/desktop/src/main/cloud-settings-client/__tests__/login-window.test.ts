@@ -91,11 +91,9 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it('prewarms hidden without authorizing, and shows only after shell and presentation readiness', async () => {
-  f.manager.prewarm();
-  expect(f.authorize).not.toHaveBeenCalled();
-  expect(f.windows[0].show).not.toHaveBeenCalled();
+it('shows the login window only after shell and presentation readiness', async () => {
   await f.manager.open(f.opener, 'cloud-a');
+  expect(f.windows[0].show).not.toHaveBeenCalled();
   f.manager.controller.markRendererReady(f.sender());
   expect(f.windows[0].show).not.toHaveBeenCalled();
   f.manager.controller.markPresentationReady(f.sender());

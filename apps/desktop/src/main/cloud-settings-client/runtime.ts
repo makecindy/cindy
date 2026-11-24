@@ -67,19 +67,9 @@ function identity(): CloudClientIdentity | null {
 }
 let registered = false;
 let loginWindow: CloudLoginWindow | undefined;
-let prewarmRequested = false;
-let admittedKey: string | undefined;
-// Only an account the service has admitted gets a hidden login window, after the main window
-// has shown; an unreachable service or an account without access costs no extra renderer.
-function prewarmAdmitted() {
-  if (prewarmRequested && admittedKey !== undefined && admittedKey === identity()?.key)
-    loginWindow?.prewarm();
-}
+// The login window is created when an instance first needs a sign-in, never from an access check,
+// so an account that only chats locally runs no extra renderer.
 export const cloudLoginWindowLifecycle = {
-  prewarm: () => {
-    prewarmRequested = true;
-    prewarmAdmitted();
-  },
   setLocale: (locale: SupportedLocale) => loginWindow?.setLocale(locale),
   reset: () => loginWindow?.reset(),
   destroy: () => loginWindow?.destroy(),
@@ -134,13 +124,6 @@ export function registerCloudSettingsClientIpc(windowDeps?: {
     }
     return { id: sender.id, assertCurrent: () => assertTrustedAppRendererEvent(event) };
   };
-  const access = async (call: ReturnType<typeof caller>, raw: unknown) => {
-    const owner = identity()?.key;
-    const decision = await handlers.instanceAccess(call, raw);
-    admittedKey = decision.allowed ? owner : undefined;
-    prewarmAdmitted();
-    return decision;
-  };
   for (const key of Object.keys(CLOUD_CLIENT_CHANNELS) as Array<keyof typeof handlers>) {
     ipcMain.handle(CLOUD_CLIENT_CHANNELS[key], (event, raw: unknown) => {
       const call = caller(event);
@@ -148,7 +131,6 @@ export function registerCloudSettingsClientIpc(windowDeps?: {
       // renderer stops asking for this account.
       if (key === 'instanceAccess' && !cloudInstanceApiBaseUrl(auth.getActiveAuthRealm()))
         throwIpcError('CLOUD_SETTINGS_UNSUPPORTED', 'No cloud instance service in this region');
-      if (key === 'instanceAccess') return access(call, raw);
       return handlers[key](call, raw);
     });
   }

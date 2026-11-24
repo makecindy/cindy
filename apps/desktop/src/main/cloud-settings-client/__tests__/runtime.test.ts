@@ -50,7 +50,7 @@ vi.mock('../../security/trustedAppRenderer', () => ({
     if (!event.trusted) throw Error('PERMISSION_DENIED');
   },
 }));
-import { cloudLoginWindowLifecycle, registerCloudSettingsClientIpc } from '../runtime';
+import { registerCloudSettingsClientIpc } from '../runtime';
 
 // Window creation fails: the IPC cases must never reach a usable login window.
 const createWindow = vi.fn<() => never>(() => { throw Error('fixture login window unavailable'); });
@@ -118,22 +118,19 @@ afterEach(() => {
   f.stop();
   vi.useRealTimers();
 });
-// The hidden login window follows admission: no service, no answer or a refusal creates none.
-it('prepares the hidden login window only for an admitted account', async () => {
-  cloudLoginWindowLifecycle.prewarm();
-  expect(createWindow).not.toHaveBeenCalled();
-  mock.fetch.mockRejectedValueOnce(Error('fixture network outage'));
-  await expect(call('instanceAccess', {})).rejects.toThrow('CLOUD_SETTINGS_UNAVAILABLE');
-  mock.fetch.mockResolvedValueOnce(new Response(null, { status: 403 }));
-  await call('instanceAccess', {}).catch(() => undefined);
-  expect(createWindow).not.toHaveBeenCalled();
+// An admitted account that only chats locally gets no hidden login window; the first instance
+// that needs a sign-in creates it.
+it('creates the login window only when an instance first needs a sign-in', async () => {
   mock.fetch.mockResolvedValueOnce(Response.json({ schemaVersion: 1, allowed: true }));
   await expect(call('instanceAccess', {})).resolves.toMatchObject({ allowed: true });
-  expect(createWindow).toHaveBeenCalledTimes(1);
-  // Another account has not been admitted yet.
-  Object.assign(mock, { owner: 'member-b', member: 'member-b' });
-  mock.authChanged!();
-  cloudLoginWindowLifecycle.prewarm();
+  expect(createWindow).not.toHaveBeenCalled();
+  const target = { instanceId: 'instance-a', deviceId: 'cloud-a', customLabel: null, nameSequence: 1,
+    status: { instanceId: 'instance-a', deviceId: 'cloud-a', desiredState: 'stopped', runtimeState: 'missing',
+      image: 'registry.example.test/cloud:0.1.113', readiness: { ready: false }, updateAvailable: false,
+      latestReleaseTag: null, upgrade: { state: 'idle' }, loginRequired: true } };
+  mock.fetch.mockResolvedValueOnce(Response.json({ instances: [target] }));
+  // Fixture window creation deliberately fails, after the window was asked for once.
+  await expect(handler(CLOUD_LOGIN_WINDOW.open)(event, { deviceId: 'cloud-a' })).rejects.toThrow('CLOUD_SETTINGS_UNAVAILABLE');
   expect(createWindow).toHaveBeenCalledTimes(1);
 });
 // Ordinary clients: the access check of a region without a cloud instance service says so, so

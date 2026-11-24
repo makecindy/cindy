@@ -4953,7 +4953,6 @@ const createWindow = () => {
       );
       remoteDesktopViewerWindows.prewarm();
       cloudLoginWindowLifecycle.setLocale(currentApplicationMenuLocale ?? getPreferredApplicationLocale());
-      cloudLoginWindowLifecycle.prewarm();
       // 侧栏「弹出」已改为按页签弹出(sidebar tab window):预热一扇未指派的隐藏
       // 窗口,弹出时直接指派 → 首份内容 → show。整栏子窗口(rsbWindowController)
       // 不再有用户入口,不再预热,避免启动期多养一个隐藏 renderer。

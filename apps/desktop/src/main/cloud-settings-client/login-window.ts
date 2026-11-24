@@ -125,9 +125,6 @@ export class CloudLoginWindow {
     this.generation++;
     this.controller.hideWithOwner();
   }
-  prewarm(): void {
-    this.controller.prewarm();
-  }
   setLocale(locale: SupportedLocale): void {
     this.controller.setLocale(locale);
   }
