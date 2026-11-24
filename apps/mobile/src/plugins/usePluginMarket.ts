@@ -93,9 +93,24 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
   const onInstalled = useRef(options.onInstalled);
   onInstalled.current = options.onInstalled;
 
-  // ---- Target computer: installed filter → this screen's choice → last market choice → an online computer.
+  // ---- Install attempt (declared first: it pins the market to the installing computer).
+  const [install, setInstall] = useState<InstallAttempt | null>(null);
+  const installRef = useRef(install);
+  installRef.current = install;
+  const attemptId = useRef(0);
+  /** Failure notes per computer + plugin; the same market plugin can exist on several computers. */
+  const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
+  const errorKey = (deviceId: string, pluginId: string) => JSON.stringify([deviceId, pluginId]);
+
+  // ---- Target computer. Explicit choices win and never change by themselves: this visit's market
+  // choice, then the Installed tab's specific computer (both shown as "not connected" when offline).
+  // Otherwise pick automatically: the remembered market computer if online, else an online computer,
+  // else the remembered or first one. The automatic pick is fixed for this market visit once a computer
+  // is known online, so presence changes while browsing never move the list; the next visit re-picks.
+  // An install keeps the market on the installing computer until it ends.
   const [choice, setChoice] = useState<string>();
   const [remembered, setRemembered] = useState<string>();
+  const [pinned, setPinned] = useState<string>();
   useEffect(() => {
     let disposed = false;
     void AsyncStorage.getItem(storageKey).then((value) => {
@@ -105,19 +120,20 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
   }, [storageKey, owner]);
   useEffect(() => { if (installedDeviceId) setChoice(undefined); }, [installedDeviceId]);
   const has = (id: string | undefined) => !!id && targets.some((host) => host.deviceId === id);
-  const deviceId = has(choice) ? choice!
-    : has(installedDeviceId) ? installedDeviceId
-      : has(remembered) ? remembered!
-        : (targets.find((host) => isOnline(host)) ?? targets[0])?.deviceId;
-  const target = targets.find((host) => host.deviceId === deviceId);
+  const onlineId = (id: string | undefined) => {
+    const host = id ? targets.find((candidate) => candidate.deviceId === id) : undefined;
+    return !!host && isOnline(host);
+  };
+  const autoPick = onlineId(remembered) ? remembered : targets.find((host) => isOnline(host))?.deviceId;
+  useEffect(() => { if (!visible) setPinned(undefined); }, [visible]);
+  useEffect(() => { if (visible && !has(pinned) && autoPick) setPinned(autoPick); }, [visible, pinned, autoPick, targets]);
+  const automatic = has(pinned) ? pinned! : autoPick ?? (has(remembered) ? remembered! : targets[0]?.deviceId);
+  const deviceId = install ? install.target.deviceId
+    : has(choice) ? choice!
+      : has(installedDeviceId) ? installedDeviceId
+        : automatic;
+  const target = install ? install.target : targets.find((host) => host.deviceId === deviceId);
   const online = !!target && isOnline(target);
-
-  // ---- Install attempt (declared early: device switching is blocked while one is pending).
-  const [install, setInstall] = useState<InstallAttempt | null>(null);
-  const installRef = useRef(install);
-  installRef.current = install;
-  const attemptId = useRef(0);
-  const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
 
   const selectDevice = useCallback((id: string) => {
     if (installRef.current || !targets.some((host) => host.deviceId === id)) return;
@@ -308,7 +324,7 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
   }, [readDetail, target]);
   const closeDetail = useCallback(() => { detailRead.current += 1; setDetail(null); }, []);
   // The detail belongs to one computer and connection; drop it when either changes.
-  useEffect(() => { detailRead.current += 1; setDetail(null); setRowErrors({}); }, [scope]);
+  useEffect(() => { detailRead.current += 1; setDetail(null); }, [scope]);
 
   // ---- Install: a fresh existing controller per attempt; its state drives the row and the consent sheet.
   // Installs only start after the paged-catalog probe, so the Host also accepts the light installed read.
@@ -317,7 +333,7 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
   const blocked = !!options.blocked;
   const startInstall = useCallback((item: ManagedMarketItem, known?: ManagedMarketDetail) => {
     if (installRef.current || blocked || !target || !online || probeStatus !== "supported" || item.installState !== "not-installed") return;
-    setRowErrors(({ [item.pluginId]: _removed, ...rest }) => rest);
+    setRowErrors(({ [errorKey(target.deviceId, item.pluginId)]: _removed, ...rest }) => rest);
     const attempt = { id: ++attemptId.current, target, item, detail: known, started: false, confirmed: false };
     installRef.current = attempt;
     setInstall(attempt);
@@ -326,7 +342,7 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
     if (installRef.current?.id !== attempt.id) return;
     installRef.current = null;
     setInstall(null);
-    if (messageKey) setRowErrors((current) => ({ ...current, [attempt.item.pluginId]: messageKey }));
+    if (messageKey) setRowErrors((current) => ({ ...current, [errorKey(attempt.target.deviceId, attempt.item.pluginId)]: messageKey }));
   }, []);
   const complete = useCallback((attempt: InstallAttempt, instanceKey: string | undefined) => {
     if (installRef.current?.id !== attempt.id) return;
@@ -402,7 +418,8 @@ export function usePluginMarket(options: UsePluginMarketOptions) {
       if (install.confirmed && (outcome === "running" || outcome === "succeeded")) return { kind: "installing" };
       return { kind: "waiting" };
     }
-    if (rowErrors[item.pluginId]) return { kind: "failed", messageKey: rowErrors[item.pluginId] };
+    const failure = deviceId ? rowErrors[errorKey(deviceId, item.pluginId)] : undefined;
+    if (failure) return { kind: "failed", messageKey: failure };
     if (item.installState === "conflict") return { kind: "conflict" };
     if (item.installState === "installed" || item.installState === "update-available") return { kind: "installed" };
     return { kind: "idle" };

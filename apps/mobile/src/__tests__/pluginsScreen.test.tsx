@@ -34,6 +34,7 @@ const fixture = vi.hoisted(() => ({
   blocks: [] as any[],
   extraRows: [] as any[],
   extraDevices: [] as any[],
+  offlineDevices: new Set<string>(),
   devicesFailed: false,
   devicesAbsent: false,
   platform: "ios",
@@ -213,7 +214,7 @@ vi.mock("@/session/useRemoteResourceList", () => ({
         : [...fixture.extraRows, row()],
     error: fixture.devicesFailed || fixture.devicesAbsent ? "noHosts" : null,
     loading: false,
-    isOnline: () => fixture.online,
+    isOnline: (host: any) => fixture.online && !fixture.offlineDevices.has(host?.deviceId),
     refresh: fixture.refresh,
   }),
 }));
@@ -300,6 +301,7 @@ beforeEach(() => {
   fixture.blocks = [];
   fixture.extraRows = [];
   fixture.extraDevices = [];
+  fixture.offlineDevices.clear();
   fixture.devicesFailed = false;
   fixture.devicesAbsent = false;
   fixture.push.mockClear();
@@ -1908,4 +1910,72 @@ it("keeps the shown rows with a read-failed note when a refresh fails", async ()
   await act(async () => { await shownMarket().refresh(); });
   await settle();
   expect(shownMarket()).toMatchObject({ status: "ready", items: [item], notices: { stale: true } });
+});
+
+// Review F1 (2026-11-25): changing the Installed tab's computer during an install moved the market and
+// put that install's failure on the same plugin of the other computer.
+it("keeps the market on the installing computer and records its failure for that computer only", async () => {
+  fixture.extraDevices = [{ deviceId: "pc", name: "PC", platform: "win32", remoteControlEnabled: true }];
+  const item = marketItem("demo", "Demo");
+  marketWire((request) => {
+    switch (request.actionId) {
+      case "management:snapshot":
+        if (request.input?.read === "capabilities") return { catalogPaging: true };
+        if (request.input?.read === "catalog") return marketPage([item]);
+        return managementSnapshot(false);
+      case "management:market-detail": return { ...item, manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } };
+      case "management:begin": return { operationId: request.input.operationId, phase: "confirmation", consent: {
+        requestId: "consent", initiator: "user", origin: "market",
+        facts: { kind: "install", ghostId: "demo", name: "Demo", version: "1", permissions: [] } } };
+      case "management:answer": return { operationId: request.input.operationId, phase: "failed", errorCode: "GHOST_DOWNLOAD_FAILED" };
+      default: return {};
+    }
+  });
+  await openMarket();
+  expect(shownMarket().target.deviceId).toBe("mac");
+  await act(async () => shownMarket().install(shownMarket().items[0]));
+  await settle(14);
+  await act(async () => fixture.props.get("directory").onDeviceChange("pc"));
+  await settle();
+  expect(shownMarket().target.deviceId).toBe("mac");
+  await act(async () => fixture.props.get("confirmation").controller.answer(true));
+  await settle(14);
+  // After the install ends, the later explicit Installed-tab choice applies; the failure stays on the Mac.
+  expect(shownMarket().target.deviceId).toBe("pc");
+  expect(shownMarket().rowState(item)).toEqual({ kind: "idle" });
+  await act(async () => shownMarket().selectDevice("mac"));
+  await settle();
+  expect(shownMarket().rowState(item)).toEqual({ kind: "failed", messageKey: "plugins.market.errors.downloadFailed" });
+});
+// Review F2 (2026-11-25): an offline remembered computer should not cost an extra step; explicit choices stay.
+describe("market computer choice", () => {
+  const remembered = "cindy.pluginMarketDevice.v1.demo";
+  beforeEach(() => {
+    fixture.extraDevices = [{ deviceId: "pc", name: "PC", platform: "win32", remoteControlEnabled: true }];
+    marketWire((request) => request.input?.read === "capabilities" ? { catalogPaging: true } : marketPage([]));
+  });
+  it("falls back to an online computer without rewriting the remembered one, and stays put while browsing", async () => {
+    fixture.storage.set(remembered, "pc");
+    fixture.offlineDevices.add("pc");
+    await openMarket();
+    expect(shownMarket().target.deviceId).toBe("mac");
+    // The remembered computer comes online mid-visit: the list does not jump.
+    fixture.offlineDevices.delete("pc");
+    await act(async () => root.render(createElement(PluginsScreen)));
+    expect(shownMarket().target.deviceId).toBe("mac");
+    expect(fixture.setStored).not.toHaveBeenCalledWith(remembered, expect.anything());
+    // The next market visit picks again and prefers the remembered computer now that it is online.
+    await act(async () => fixture.props.get("directory").onSegmentChange("installed"));
+    await act(async () => fixture.props.get("directory").onSegmentChange("market"));
+    await settle();
+    expect(shownMarket().target.deviceId).toBe("pc");
+  });
+  it.each(["market", "installed"])("keeps an offline computer chosen explicitly in the %s tab", async (where) => {
+    fixture.offlineDevices.add("pc");
+    await openMarket();
+    if (where === "market") await act(async () => shownMarket().selectDevice("pc"));
+    else await act(async () => fixture.props.get("directory").onDeviceChange("pc"));
+    await settle();
+    expect(shownMarket()).toMatchObject({ status: "offline", target: { deviceId: "pc" } });
+  });
 });
