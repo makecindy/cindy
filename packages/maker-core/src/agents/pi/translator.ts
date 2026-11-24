@@ -760,6 +760,7 @@ function isPiInvalidRequestEnvelope(rawError: string): boolean {
   if (!rawError.startsWith('400:')) return false;
   try {
     const body = JSON.parse(rawError.slice(4));
+    if (body?.type === 'invalid_request_error') return true;
     const upstream = typeof body?.message === 'string' && !body.error
       ? JSON.parse(body.message)
       : body;

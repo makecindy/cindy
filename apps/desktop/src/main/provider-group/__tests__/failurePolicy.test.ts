@@ -39,6 +39,7 @@ const gatewayBody = JSON.stringify({ message: JSON.stringify({ error: {
 
 it.each([
   [`400: ${gatewayBody}`, stay('invalid-request')],
+  ['400: {"message":"Too many images","type":"invalid_request_error"}', stay('invalid-request')],
   [`HTTP 401: ${gatewayBody}`, switchTo('auth')],
   [`HTTP 429: ${gatewayBody}`, switchTo('usage-limit')],
   ['400: upstream connection reset', switchTo('failed')],
