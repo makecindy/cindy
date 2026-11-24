@@ -2188,6 +2188,13 @@
       }
     },
     "appearance": {
+      "chatLayout": {
+        "label": "对谈布置",
+        "standard": "常式",
+        "wide": "宽式",
+        "width": "内容之宽",
+        "hint": "以对谈两旁留白之外为准。栏狭则自调。"
+      },
       "title": "仪容",
       "modeLabel": "显示之式",
       "appIcon": {
@@ -8171,6 +8178,7 @@
           "official": "官设",
           "community": "社区"
         },
+        "communityDisclaimer": "此法器由社区作者开发与维护，Cindy 已审核此版本，但无法保证其在所有使用情境下皆安全。",
         "publisherDescription": {
           "official": "Cindy 官方所制，发布维护",
           "community": "社区开发者所制，发布维护",
@@ -8284,7 +8292,7 @@
             "authTitle": "私库",
             "authBody": "认证全赖系统之 Git 设置，Cindy 不存任何 Git 凭证。SSH 之法：此机须已设可用之 key；若组织启 SAML SSO，尚须于 GitHub 之 SSH key 设置中为该组织点 Configure SSO 授权。HTTPS 之法：用 Personal Access Token，由系统 credential helper 存之。",
             "rulesTitle": "纳器之规",
-            "rulesBody": "法器 id 全域唯一，先纳者得之——与已纳法器相冲时必明示。id 用官方保留前缀（{{reservedGhostIdPrefixes}}）之法器，不可经拖入、择档或自订法器坊纳之。法器所声明之权柄示于详情页；点「纳」即纳毕并自启，不再另弹窗确认权柄。",
+            "rulesBody": "法器 id 全域唯一，先纳者得之——与已纳法器相冲时必明示。id 用官方保留前缀（{{reservedGhostIdPrefixes}}）之法器，不可经拖入、择档或自订法器坊纳之。法器所声明之权柄示于详情页。初次手纳，Cindy 请核所请权柄。纳毕自启。",
             "copy": "录指南",
             "copied": "指南已录至剪贴板，拿去便是。",
             "copyFailed": "录之未成，请再试。"
@@ -8398,6 +8406,8 @@
         "installMeta": "版 {{version}} · {{source}}",
         "updateMeta": "版 {{from}} → {{to}} · {{source}}",
         "installDescription": "君确认后方纳；纳毕即激活，可随时于法器页禁用或卸除。",
+        "customMarketSourceNotice": "宜先信此法器坊，再核法器所请权柄。",
+        "localFileSourceNotice": "档之来处可信，方可续纳。",
         "updateDescription": "君确认后方更新；在此之前，旧版照常可用。",
         "grantsTitle": "纳后其将得：",
         "noPermissions": "此法器未声明额外权柄。",
@@ -17631,15 +17641,15 @@
   "scheduler": {
     "prTrigger": {
       "fallback": "GitHub App 消息未通，仍依时查验。",
-      "label": "PR",
-      "url": "PR 之链",
+      "label": "PR / MR",
+      "url": "PR 或 MR 之链",
       "condition": "何时行之",
-      "any": "PR 有变",
+      "any": "有变",
       "merged": "已合并",
       "review": "评议有变",
       "ci": "CI 有变",
       "timed": "亦定时查验",
-      "invalid": "请填 GitHub PR 全链。"
+      "invalid": "请填 GitHub PR 或 GitLab MR 全链。"
     },
     "presentation": {
       "status": {
