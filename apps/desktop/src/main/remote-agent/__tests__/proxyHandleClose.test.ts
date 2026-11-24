@@ -24,7 +24,7 @@ function fixture(agentKind: 'codex' | 'claude-code' = 'codex') {
   } as unknown as RemoteAgentPoller, {
     onEvent: event => controller.onEvent(event), onState: state => controller.onState(state),
     onClosed: (reason, error) => {
-      if (reason === 'provider-restarting') controller.onInterrupted(restartRecovery);
+      if (reason === 'provider-restarting') controller.onInterrupted({ reason, message: error?.message, runId: client.runId }, restartRecovery);
       else controller.onClosed(reason, error?.message, client.runId);
     },
     onRequest: async () => ({ type: 'callback' }), onWs() {},
@@ -333,7 +333,7 @@ describe('remote stream close settles the product turn', () => {
     const f = fixture();
     try {
       await f.session.send('work');
-      f.controller.onInterrupted(f.restartRecovery);
+      f.controller.onInterrupted({ reason: 'provider-restarting', runId: f.client.runId }, f.restartRecovery);
       f.controller.onClosed('ended', undefined, f.client.runId);
       await f.finish();
       expect(f.seen.filter(e => e.type === 'error')).toEqual([

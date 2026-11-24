@@ -929,7 +929,16 @@ describe('remote connection pool with a real host', () => {
     scenario.releaseHold?.();
   });
 
-  it.each(['missing', 'aborted', 'provider-restarting'] as const)('settles %s during the first turn once and reconnects the live Session', async reason => {
+  // #12558 integration: the restart branch must retain the received close reason
+  // and run correlation, not infer an OS process exit. Existing assertions only
+  // counted errors. Minimal input: an unfinished real Session + a missing run.
+  it.each([
+    { reason: 'missing' },
+    { reason: 'aborted' },
+    { reason: 'provider-restarting' },
+    { reason: 'provider-restarting', message: 'provider is shutting down' },
+    { reason: 'provider-restarting', message: '' },
+  ])('settles $reason ($message) during the first turn once and reconnects the live Session', async ({ reason, message }) => {
     const clients: RemoteAgentRunClient[] = [];
     const onData = RemoteAgentRunClient.prototype.onData;
     const receive = vi.spyOn(RemoteAgentRunClient.prototype, 'onData').mockImplementation(function (this: RemoteAgentRunClient, data, done) {
@@ -942,7 +951,8 @@ describe('remote connection pool with a real host', () => {
       interrupt = false;
       return { runs: (request.runs as Array<{ runId: string; cursor: number }>).map(run => {
         if (reason === 'missing') return { ...run, missing: true };
-        const data = Buffer.from(JSON.stringify({ t: 'closed', reason }) + '\n');
+        const data = Buffer.from(JSON.stringify({ t: 'closed', reason,
+          ...(message !== undefined ? { error: { code: 'AGENT_ERROR', message } } : {}) }) + '\n');
         return { ...run, cursor: run.cursor + data.length, data: data.toString('base64'), done: true };
       }) };
     });
@@ -961,6 +971,15 @@ describe('remote connection pool with a real host', () => {
       await expect(sending).resolves.toMatchObject({ accepted: true });
       await vi.waitFor(() => expect(seen.some(e => e.type === 'done')).toBe(true));
       expect(seen.filter(e => e.type === 'error')).toHaveLength(1);
+      const closedRunId = clients[0].runId;
+      expect(seen.find(e => e.type === 'error')?.data).toMatchObject({
+        reason: 'remote_agent_restarted', isTerminal: true,
+        remoteCloseReason: reason, remoteRunId: closedRunId,
+        sdkError: `Remote agent stream closed (${reason}); runId: ${closedRunId}`,
+        message: message || (reason === 'missing'
+          ? '[REMOTE_AGENT_EXPIRED] The task is no longer running on the other computer.'
+          : '[REMOTE_AGENT_UNAVAILABLE] The remote run is no longer available; reconnecting to the original conversation.'),
+      });
       expect(session.isTurnRunning()).toBe(false);
       await expect(session.send('continued')).resolves.toMatchObject({ accepted: true });
       await vi.waitFor(() => expect(seen.some(e => e.type === 'text' && textOf(e) === 'ok:continued')).toBe(true));

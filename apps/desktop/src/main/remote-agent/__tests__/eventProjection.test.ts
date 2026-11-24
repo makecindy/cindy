@@ -87,7 +87,7 @@ describe('remote terminal error ownership', () => {
     const { controller } = setup('/remote/workspace', async () => { throw new Error('rejected'); });
     await expect(controller.handle.send({ type: 'user', content: 'work' })).rejects.toThrow('rejected');
     expect(controller.isQuiet()).toBe(true);
-    controller.onInterrupted();
+    controller.onInterrupted({ reason: 'provider-restarting', runId: 'run-before-restart' });
     expect(await eventsFrom(controller, [])).toEqual([]);
   });
 
@@ -95,7 +95,7 @@ describe('remote terminal error ownership', () => {
     let interrupt = false;
     const { controller } = setup('/remote/workspace', async () => {
       if (!interrupt) return;
-      controller.onInterrupted();
+      controller.onInterrupted({ reason: 'provider-restarting', runId: 'run-before-restart' });
       throw new Error('steer delivery unknown');
     });
     await controller.handle.send({ type: 'user', content: 'work' });
