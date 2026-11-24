@@ -1953,7 +1953,7 @@ function parseTaskPayload(raw: string): WechatTaskPayload {
 
 function prepareWechatTaskTurn(payload: WechatTaskPayload) {
   const replyPrefix = payload.replyContext
-    ? buildImReplyContextBlock({ author: '引用消息', text: payload.replyContext })
+    ? buildImReplyContextBlock({ author: '引用消息', text: payload.replyContext }, payload.text)
     : '';
   return {
     text: payload.text,

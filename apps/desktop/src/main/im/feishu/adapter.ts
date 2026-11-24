@@ -412,7 +412,7 @@ export function buildFeishuAdapter(
           if (contextAttachments.length) safeReply.attachmentCount = contextAttachments.length;
           if (unavailable.length) safeReply.unavailableAttachments = unavailable;
         }
-        replyPrefix = buildFeishuReplyContextBlock(safeReply);
+        replyPrefix = buildFeishuReplyContextBlock(safeReply, event.text);
       }
       if (!lane) return replyPrefix ? {
         agentText: `${replyPrefix}${event.text}`,

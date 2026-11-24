@@ -498,7 +498,7 @@ export function createMessageHandler(
             }
           : undefined);
       const fallbackReplyPrefix = !adapter.prepareAgentTurnText && event.replyContext
-        ? buildImReplyContextBlock(event.replyContext)
+        ? buildImReplyContextBlock(event.replyContext, event.text)
         : '';
       const deliveredReply = prepared?.replyContext ??
         (!adapter.prepareAgentTurnText ? event.replyContext : undefined);
