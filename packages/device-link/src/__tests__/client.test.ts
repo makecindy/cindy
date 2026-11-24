@@ -14427,6 +14427,39 @@ it('keeps history validators across twelve uncached MCP opens and polls while re
 // - 最小失败输入：并发 4 笔 sessions:list + 在途 3 笔 fresh:true；16 帧阻塞窗口后排队 240 KiB sessions:list 回包并在控制端超时重试时捎带 retired。
 // - tier：unit（内存 relay + fake timers，<50ms）。
 describe('listing read coalescing and stale read invoke-result retirement', () => {
+  // Unit: an immediately rejected admission must give the event loop back to the transport.
+  it('reports pre-write backpressure after one admission attempt', async () => {
+    const coalescer = new RemoteListingReadCoalescer(() => 0);
+    const failure = new DeviceLinkError('BACKPRESSURE', 'queue full');
+    const execute = vi.fn();
+    const admit = vi.fn(async () => {
+      if (admit.mock.calls.length > 1) throw new Error('unexpected immediate retry');
+      throw failure;
+    });
+    const result = coalescer.run('scope', 'desktop', { channel: 'local-db:sessions:list', args: [] },
+      'foreground', 500, undefined, admit, execute);
+    await expect(result).rejects.toMatchObject({ code: 'BACKPRESSURE' });
+    expect(admit).toHaveBeenCalledTimes(1);
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  // Unit: legacy reads can be retired without ever negotiating a deadline.
+  it('evicts retired records alongside the inbound request history', () => {
+    const host = makeRelayClient(new MemoryRelay(), 'desktop') as unknown as {
+      rememberInboundInvokeChannel(env: Envelope): void;
+      retireInboundReadResults(dst: string, ids: string[]): void;
+      isInboundReadInvokeExplicitlyRetired(dst: string, id: string): boolean;
+      inboundInvokeDeadlines: Map<string, number>;
+    };
+    for (let id = 0; id < 520; id++) {
+      host.rememberInboundInvokeChannel({ src: 'ios', id: String(id), payload: { channel: 'local-db:sessions:list' } } as Envelope);
+      host.retireInboundReadResults('ios', [String(id)]);
+    }
+    expect(host.inboundInvokeDeadlines.size).toBe(512);
+    expect(host.isInboundReadInvokeExplicitlyRetired('ios', '0')).toBe(false);
+    expect(host.isInboundReadInvokeExplicitlyRetired('ios', '519')).toBe(true);
+  });
+
   it('coalesces duplicate listing reads, serializes fresh bursts into one delta follow-up, and isolates per-caller guards and args', async () => {
     vi.useFakeTimers();
     const codec = {

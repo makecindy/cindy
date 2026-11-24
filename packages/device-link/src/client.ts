@@ -4406,15 +4406,14 @@ export class DeviceLinkClient {
     this.inboundInvokeChannels.delete(key);
     this.inboundInvokeChannels.set(key, channel);
     while (this.inboundInvokeChannels.size > 512) {
-      this.inboundInvokeChannels.delete(this.inboundInvokeChannels.keys().next().value!);
+      const oldest = this.inboundInvokeChannels.keys().next().value!;
+      this.inboundInvokeChannels.delete(oldest);
+      this.inboundInvokeDeadlines.delete(oldest);
     }
     this.inboundInvokeDeadlines.delete(key);
     const negotiatedExpiresAt = this.receivedReadExpiresAt.get(env);
     if (negotiatedExpiresAt !== undefined && !isScopedPeer(env.src) && isPeerResetRetryableReadChannel(channel)) {
       this.inboundInvokeDeadlines.set(key, negotiatedExpiresAt);
-      while (this.inboundInvokeDeadlines.size > 512) {
-        this.inboundInvokeDeadlines.delete(this.inboundInvokeDeadlines.keys().next().value!);
-      }
     }
   }
 

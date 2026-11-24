@@ -35,7 +35,7 @@ const openPayload = { controllerName: 'test', protocolVersion: 1, appVersion: 't
 function pair(options: { connected?: boolean; connectedAt?(id: string): number | null; hostKey?: string; controllerKey?: string;
   connect?(id: string): Promise<boolean>; agentNetPeer?(id: string): 'online' | 'offline' | null; controllerEpoch?(id: string): number;
   reopenLink?(id: string): void; hostInvokeEpoch?(id: string): string | null; controllerLog?: AgentNetSessionLinksOptions['log'];
-  controllerPath?(id: string): 'direct' | 'relay' | null; onRelayStall?(id: string): void; requestTimeoutMs?: number } = {}) {
+  controllerPath?(id: string): 'direct' | 'relay' | null; onRelayStall?(id: string): void; requestTimeoutMs?: number; holdBodies?: boolean } = {}) {
   const hostKey = options.hostKey ?? 'a-host', controllerKey = options.controllerKey ?? 'b-controller';
   const sessions: Record<'host' | 'controller', SessionPeer | null> = { host: null, controller: null };
   const bytes = { toHost: 0, toController: 0 };
@@ -50,7 +50,24 @@ function pair(options: { connected?: boolean; connectedAt?(id: string): number |
       path: options.controllerPath, onRelayStall: options.onRelayStall, requestTimeoutMs: options.requestTimeoutMs }),
   };
   const receivers: Record<'host' | 'controller', ((lane: SessionLane, data: Uint8Array) => void) | null> = { host: null, controller: null };
+  const bodyReceivers: Record<'host' | 'controller', ((key: number, data: Uint8Array | null) => void) | undefined> = {
+    host: undefined, controller: undefined,
+  };
+  const bodies: Array<{ key: number; data: Uint8Array; deliver(data: Uint8Array | null): void }> = [];
   const wire = (side: 'host' | 'controller') => ({
+    ...(options.holdBodies ? {
+      onBody(handler: (key: number, data: Uint8Array | null) => void) { bodyReceivers[side] = handler; },
+      openBody(_lane: SessionLane, key: number) {
+        const to = side === 'host' ? 'controller' : 'host';
+        const chunks: Uint8Array[] = [];
+        const deliver = (data: Uint8Array | null) => bodyReceivers[to]?.(key, data);
+        return {
+          write: (data: Uint8Array) => chunks.push(data.slice()),
+          finish: () => bodies.push({ key, data: Buffer.concat(chunks), deliver }),
+          abandon: () => deliver(null),
+        };
+      },
+    } : {}),
     write: (lane: SessionLane, data: Uint8Array) => {
       const to = side === 'host' ? 'controller' : 'host';
       bytes[to === 'host' ? 'toHost' : 'toController'] += data.length;
@@ -63,13 +80,13 @@ function pair(options: { connected?: boolean; connectedAt?(id: string): number |
   });
   const scoped = options.hostKey !== undefined;
   const connect = () => {
-    sessions.host = new SessionPeer({ wire: wire('host'), laneFor: agentNetSessionLane, ...(scoped ? { role: 'serve' as const } : {}),
+    sessions.host = new SessionPeer({ wire: wire('host'), laneFor: agentNetSessionLane, bodies: options.holdBodies, ...(scoped ? { role: 'serve' as const } : {}),
       ...links.host.handlers(controllerKey) });
-    sessions.controller = new SessionPeer({ wire: wire('controller'), laneFor: agentNetSessionLane, ...(scoped ? { role: 'call' as const } : {}),
+    sessions.controller = new SessionPeer({ wire: wire('controller'), laneFor: agentNetSessionLane, bodies: options.holdBodies, ...(scoped ? { role: 'call' as const } : {}),
       ...links.controller.handlers(hostKey) });
   };
   if (options.connected !== false) connect();
-  return { links, sessions, bytes, connect, controllerLanes };
+  return { links, sessions, bytes, connect, controllerLanes, bodies };
 }
 
 /** 一个空闲的 Device Link 客户端（没有链路、不等恢复、没有待发）：走到它的建链与调用记进 calls。 */
@@ -887,6 +904,46 @@ describe('AgentNetSessionLinks', () => {
     void guest.openLink(providerShareHostPeer('share-2', 'a-host'), openPayload);
     expect(calls).toEqual(['device-link:openLink']);
     expect(dialed).toBe(1);
+  });
+
+  // Unit: one body starts before the timeout, completes after it, and serves both listing callers.
+  it('lets coalesced Agent-Net listing callers receive a slowly arriving body', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+    try {
+      const { links, sessions, bodies } = pair({ holdBodies: true });
+      const payload = { channel: 'local-db:sessions:list', args: [] };
+      const response = { ok: true, result: { preview: 'x'.repeat(140_000) } };
+      const invokes = vi.fn();
+      links.host.onFrame((env) => {
+        if (env.kind === 'link-open') links.host.sendLinkAccept(env.src!, env.id!, { appVersion: 'host', allowlistHash: 'hash' });
+        if (env.kind === 'invoke') {
+          invokes();
+          // Bypass the business compression in the fixture so the session sends a v2 body.
+          sessions.host!.respond(env.id!, { ok: true, result: response });
+        }
+      });
+      const opened = links.controller.openLink('a-host', openPayload);
+      await vi.advanceTimersByTimeAsync(0);
+      await opened;
+      const first = links.controller.invoke('a-host', payload, 100).catch((error) => error);
+      await vi.advanceTimersByTimeAsync(20);
+      const joined = links.controller.invoke('a-host', payload, 100).catch((error) => error);
+      expect(invokes).toHaveBeenCalledTimes(1);
+      expect(bodies).toHaveLength(1);
+      const body = bodies[0]!;
+      body.deliver(body.data.subarray(0, 4096));
+      await vi.advanceTimersByTimeAsync(150);
+      const lateJoin = links.controller.invoke('a-host', payload, 100).catch((error) => error);
+      expect(invokes).toHaveBeenCalledTimes(1);
+      body.deliver(body.data.subarray(4096));
+      body.deliver(null);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(await first).toEqual(response);
+      expect(await joined).toEqual(response);
+      expect(await lateJoin).toEqual(response);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('coalesces concurrent session listing reads and piggybacks retired read request ids after timeout', async () => {

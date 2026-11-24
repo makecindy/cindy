@@ -18,7 +18,8 @@
   `ifNoneMatch` 标签换 `notModified` 或小增量）。每位调用者始终持有自身 `callDeadlineAt = enqueuedAt + timeoutMs`：
   若前序较短预算读取先超时，仍有剩余预算的同乘调用者按精确剩余时长（`callDeadlineAt - now`，无加入时差启发式、
   无延长调用期限的下限）自动续读；不同 `limit`、`status`、`includePinned`、跨账号 scoped 对端与各调用方的
-  `preSend`／`beforeDispatch` 严格隔离。
+  `preSend`／`beforeDispatch` 严格隔离。发送前拥塞直接交还给调用方。Agent-Net 的共享预算调用者由会话层按正文流
+  进展决定超时；需要更早截止的调用者单独结算。合并层放弃最后一位调用者时，通过会话层已有的取消帧停止底层请求。
 - **弱网滞后期的列表增量基准保留**：`InvokeDeltaBases` 按 `(src, requestKey)` 同时保留控制端已确认持有的
   基准（`confirmed`）与最新发出的快照（`latest`），且 `local-db:sessions:list` 的缓存键与基准键忽略布尔型
   `fresh` 标记（保留 `tagCatalog` 等改变 wire 形状的标志），避免中间回包仍在慢队列排队时后续读取退回连续发送

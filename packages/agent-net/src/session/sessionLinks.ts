@@ -15,7 +15,7 @@ import {
   bypassInvokeScheduling, decodeModelSpeedPayload, decodePushTransfer, decodeSessionTagCatalog, encodeInvokeResultTransfer,
   encodeModelSpeedPayload, encodePushTransfer, isEncodedPushPayload, isHistoryViewDeltaMiss, pushDeflateCapabilities,
   isFilePeerStreamRead, isFilePeerStreamTransfer, isPeerResetRetryableInvoke, isPeerResetRetryableReadChannel, isRemoteAgentUploadChunk, isScopedPeer, isUnlinkedPushChannel, REMOTE_DESKTOP_CHANNEL, requestSessionTagCatalog, resolveInvokePriority,
-  type DeviceLinkErrorCode, type DeviceLinkPeerLinkSnapshot, type DeviceLinkPeerRouteStateChanged, type DeviceLinkTransferCodec,
+  type ListingUnderlyingControls, type DeviceLinkErrorCode, type DeviceLinkPeerLinkSnapshot, type DeviceLinkPeerRouteStateChanged, type DeviceLinkTransferCodec,
   type Envelope, type InvokePayload, type InvokeResultPayload, type LinkAcceptPayload, type LinkCloseReason, type PresenceSnapshot,
   type PushPayload, diagnosticChannel, invokeIntendedHoldMs, shortDeviceRef,
 } from '@cindy/device-link';
@@ -495,6 +495,7 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
       wireTimeoutMs: number | undefined,
       checkBeforeSend: () => void,
       checkBeforeRetry: () => void,
+      setUnderlyingControls?: (controls: ListingUnderlyingControls) => void,
     ): Promise<InvokeResultPayload> => {
       if (this.remoteControlDisabled.has(dst)) throw new DeviceLinkError('REMOTE_DISABLED', 'remote control is disabled by the target');
       checkBeforeSend();
@@ -536,6 +537,7 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
           timeout,
           priority === 'background' || backgroundLane,
           retired && retired.length > 0 ? () => this.retiredReadInvokes.acknowledge(dst, retired) : undefined,
+          setUnderlyingControls,
         );
         const result = transfer ? await transfer.decode(raw) : raw;
         if (transfer?.retryWithoutBase()) return { result, retry: 'remaining-budget' };
@@ -576,7 +578,7 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
           exec,
           { channel: payload.channel, request: `session-${Math.round(queuedAt)}`, source: options?.diagnosticSource ?? 'client' },
         ),
-        (ctx) => executeWire(ctx.payload, ctx.timeoutMs, () => {}, () => ctx.recheckBeforeRetry()),
+        (ctx) => executeWire(ctx.payload, ctx.timeoutMs, () => {}, ctx.recheckBeforeRetry, ctx.setUnderlyingControls),
       );
       if (coalesced) return coalesced;
     }
@@ -820,7 +822,14 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
    * 幂等读照旧报 PEER_RESET 让业务重读；文件块不在这里续（文件直传随会话收掉）。跨账号同样续：分享连接不会自己回来，会话断时就请业务重开
    * （broken）。
    */
-  private async request(dst: string, payload: InvokePayload, timeoutMs: number | undefined, background?: boolean, onDispatched?: () => void): Promise<InvokeResultPayload> {
+  private async request(
+    dst: string,
+    payload: InvokePayload,
+    timeoutMs: number | undefined,
+    background?: boolean,
+    onDispatched?: () => void,
+    setUnderlyingControls?: (controls: ListingUnderlyingControls) => void,
+  ): Promise<InvokeResultPayload> {
     let session = this.live(dst);
     if (!session) throw new DeviceLinkError('LINK_NOT_OPEN', 'no Agent-Net session with the target');
     const peer = this.peer(dst);
@@ -841,11 +850,19 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
         attempts = attempt + 1;
         const generation = peer.generation;
         if (attempt === 0) onDispatched?.();
-        outcome = await session.request(channel, args ?? [], { id, timeoutMs: Math.max(1, Math.round(deadline - performance.now())), background,
+        const activeSession = session;
+        const pending = activeSession.request(channel, args ?? [], { id, timeoutMs: Math.max(1, Math.round(deadline - performance.now())), background,
           // 幂等读不排在之前因为太大改走后台通道的请求后面；写照原来的先后（lanes.ts）。
           unordered: isPeerResetRetryableInvoke(channel, args),
           ...(lane ? { lane } : {}), ...(attempt > 0 ? { extra: { ...extra, agentNetResumeOnly: true } }
             : Object.keys(extra).length ? { extra } : {}) });
+        // SessionPeer owns the wire timeout and extends it while the body stream progresses.
+        setUnderlyingControls?.({
+          cancel: () => activeSession.cancelRequest(id),
+          isInFlight: () => true,
+          sharesProgressTimeout: true,
+        });
+        outcome = await pending;
         if (attempt > 0 && outcome.ok) {
           const result = outcome.result as InvokeResultPayload;
           if (result?.ok === false && result.error?.code === 'INVOKE_TIMEOUT') {

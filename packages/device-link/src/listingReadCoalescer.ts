@@ -33,6 +33,8 @@ interface ListingWaiter {
 export interface ListingUnderlyingControls {
   cancel(): void;
   isInFlight(): boolean;
+  /** Equal or longer waiters can use the transport’s own streaming timeout. */
+  sharesProgressTimeout?: boolean;
 }
 
 interface ListingFlight {
@@ -319,17 +321,15 @@ export class RemoteListingReadCoalescer {
         if (!(error instanceof ListingFlightAllCancelledError)) {
           const settledAt = this.now();
           const isTimeout = error instanceof DeviceLinkError && error.code === 'INVOKE_TIMEOUT';
-          const isPreWriteBackpressure =
-            error instanceof DeviceLinkError && error.code === 'BACKPRESSURE' && !error.inFlight;
           const wireDeadlineAt = flight.wireDeadlineAt;
           for (const waiter of flight.waiters) {
             if (waiter.settled) continue;
             this.clearWaiterTimer(waiter);
             const remainingMs = waiter.callDeadlineAt - settledAt;
-            const outlivedFlightBudget =
-              isTimeout
-                ? wireDeadlineAt !== null && waiter.activeDeadlineAt > wireDeadlineAt && remainingMs > 0
-                : isPreWriteBackpressure && remainingMs >= 1;
+            // Admission failure is final for this flight. An immediate retry would
+            // keep the microtask queue busy while the transport is trying to drain.
+            const outlivedFlightBudget = isTimeout
+              && wireDeadlineAt !== null && waiter.activeDeadlineAt > wireDeadlineAt && remainingMs > 0;
             if (outlivedFlightBudget) {
               waiter.waitedBehindPriorFlight = true;
               if (!slot.followUp) {
@@ -389,6 +389,7 @@ export class RemoteListingReadCoalescer {
       waiter.settled = true;
       waiter.reject(new DeviceLinkError(error.code, error.message));
     }
+    flight.underlyingControls?.cancel();
   }
 
   private attachWaiter(
@@ -461,25 +462,20 @@ export class RemoteListingReadCoalescer {
     const live = flight.waiters.filter((w) => !w.settled);
     if (live.length === 0) return;
     const wireDeadlineAt = flight.wireDeadlineAt;
-    const hasUnderlyingControls = flight.underlyingControls !== undefined;
+    const controls = flight.underlyingControls;
     for (const waiter of live) {
-      const remaining = Math.round(waiter.activeDeadlineAt - now);
-      if (remaining <= 0) {
-        this.expireWaiterNow(
-          slot,
-          flight,
-          waiter,
-          flight.underlyingControls ? flight.underlyingControls.isInFlight() : true,
-        );
-        continue;
-      }
       if (
-        hasUnderlyingControls
+        controls
         && wireDeadlineAt !== null
-        && !waiter.joinedAfterDispatch
+        && (!waiter.joinedAfterDispatch || controls.sharesProgressTimeout)
         && waiter.activeDeadlineAt >= wireDeadlineAt
       ) {
         this.clearWaiterTimer(waiter);
+        continue;
+      }
+      const remaining = Math.round(waiter.activeDeadlineAt - now);
+      if (remaining <= 0) {
+        this.expireWaiterNow(slot, flight, waiter, controls?.isInFlight() ?? true);
       } else {
         this.armWaiterTimer(slot, flight, waiter, remaining, true);
       }
