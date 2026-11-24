@@ -186,9 +186,12 @@ function isPiRequestBodyRecoveryExhausted(data: unknown): boolean {
 export function isPiRequestBodyTooLargeErrorData(data: unknown): boolean {
   if (!data || typeof data !== 'object') return false;
   const rec = data as { message?: unknown; sdkError?: unknown; errorMessage?: unknown };
+  const status413 = /\b(?:HTTP(?:\/\d(?:\.\d)?)?|status(?:\s+code)?)[ \t]*[:=]?[ \t]*413\b(?![ \t]*(?:ms|s|milliseconds?|seconds?)\b)/i;
+  const sizeReason413 = /\b413\b[ \t:,-]+(?:length limit exceeded|(?:request (?:body|entity)|content|payload) too large)\b|\b(?:request (?:body|entity)|content|payload) too large[ \t:(]+413\b(?![ \t]*(?:ms|s|milliseconds?|seconds?)\b)/i;
+  const gatewaySizeError = /Failed to buffer the request body:\s*length limit exceeded|BadRequest\.TooLarge|Exceeded limit on max bytes to request body/i;
   return [rec.message, rec.sdkError, rec.errorMessage].some(value =>
-      typeof value === 'string' &&
-      /(?:\b413\b[^\n]*(?:length|body|too\s+large|payload)|(?:length|body|too\s+large|payload|status(?:\s+code)?|request|response)[^\n]*\b413\b|Failed to buffer the request body:\s*length limit exceeded|BadRequest\.TooLarge|Exceeded limit on max bytes to request body)/i.test(value),
+    typeof value === 'string' &&
+    (status413.test(value) || sizeReason413.test(value) || gatewaySizeError.test(value)),
   );
 }
 

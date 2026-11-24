@@ -198,6 +198,9 @@ describe('shouldRebuildPiNativeSession', () => {
     expect(shouldRebuildPiNativeSession(error)).toBe(true);
     expect(isPiRequestBodyTooLargeErrorData({ message: '413 unauthorized' })).toBe(false);
     expect(isPiRequestBodyTooLargeErrorData({ message: 'Request failed with status code 413' })).toBe(true);
+    expect(isPiRequestBodyTooLargeErrorData({ message: 'HTTP 413' })).toBe(true);
+    expect(isPiRequestBodyTooLargeErrorData({ message: '413 Content Too Large' })).toBe(true);
+    expect(isPiRequestBodyTooLargeErrorData({ sdkError: '400 BadRequest.TooLarge' })).toBe(true);
     expect(isPiRequestBodyTooLargeErrorData({ message: 'Payload Too Large (413)' })).toBe(true);
     expect(isPiRequestBodyTooLargeErrorData({ message: 'record 413 items' })).toBe(false);
   });
@@ -2120,6 +2123,28 @@ describe('createContextOverflowRollover', () => {
     expect(history).toContain('Earlier answer');
     expect(history.includes('Inspect the final image')).toBe(keepRequest);
     expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
+
+  // Unit: exercise pre-send recovery with a persisted Pi timeout and a queued input.
+  it.each([
+    'Request timed out after 413 ms',
+    'Response arrived in 413 ms',
+    'Request body upload timed out after 413 ms',
+  ])('keeps native history for elapsed time in %s', async (message) => {
+    const deps = makeDeps([
+      msg('user', 'Inspect the final image', 'u1'),
+      msg('error', { message }, 'e1'),
+    ]);
+    deps.getSessionRow.mockResolvedValue({
+      status: 'active', agentKind: 'pi', remoteHostId: null, clearedAt: null,
+      sdkSessionId: 'pi-session', contextTokens: 0, contextWindow: 1_000_000,
+      model: 'test-model', providerId: 'local-test',
+    });
+    deps.getLiveSession.mockReturnValue(undefined);
+    const rollover = createContextOverflowRollover(deps);
+
+    await expect(rollover.prepareUnhealthySession('s1', { hasPendingFollowup: true })).resolves.toBe(false);
+    expect(deps.commitRebuild).not.toHaveBeenCalled();
   });
 
   it('rebuilds before send when host auto-compact has latched a deterministic failure', async () => {
