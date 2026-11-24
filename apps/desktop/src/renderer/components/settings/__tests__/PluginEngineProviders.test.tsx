@@ -115,7 +115,9 @@ describe('plugin providers in the provider list', () => {
     const engineView = engine({ name: 'Antigravity', models: [{ id: 'gemini', displayName: 'Gemini', efforts: ['low', 'high'], defaultEffort: 'high' }],
       modelEfforts: { gemini: 'high' } });
     renderDetail(engineView);
-    await userEvent.click(screen.getByRole('button', { name: /advanced.openAria/ }));
+    const trigger = screen.getByRole('button', { name: /advanced.openAria/ });
+    trigger.focus();
+    await userEvent.keyboard('{Enter}');
     const dialog = within(await screen.findByRole('dialog', { name: 'Gemini' }));
     expect(dialog.getByRole('radio', { name: 'effortLevels.high' }).getAttribute('aria-checked')).toBe('true');
     expect(dialog.queryByRole('radio', { name: 'effortLevels.medium' })).toBeNull();
@@ -125,6 +127,8 @@ describe('plugin providers in the provider list', () => {
     expect(api.setPluginEnginePrefs).toHaveBeenLastCalledWith({ key: engineView.key, modelEffort: { id: 'gemini', effort: 'low' }, ownerStamp: stamp });
     await userEvent.click(dialog.getByRole('button', { name: 'settings.providers.models.advanced.restoreDefault' }));
     expect(api.setPluginEnginePrefs).toHaveBeenLastCalledWith({ key: engineView.key, modelEffort: { id: 'gemini', effort: null }, ownerStamp: stamp });
+    await userEvent.keyboard('{Escape}');
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
   });
 
   it('marks every row as coming from a plugin, shows whether it can run and opens the one clicked', async () => {

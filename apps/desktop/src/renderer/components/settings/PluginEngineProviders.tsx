@@ -11,7 +11,7 @@
  * 按插件冷却)；不参与拖动排序、供应商组和引擎切换。
  */
 import { Eye, EyeOff, MoreHorizontal, Pencil, Power, RotateCcw, SlidersHorizontal } from 'lucide-react';
-import { useEffect, useId, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 
@@ -330,6 +330,7 @@ function ModelRow({
   const name = model.displayName || model.id;
   const owner = useSyncExternalStore(subscribeDataOwnerGeneration, getDataOwnerGeneration);
   const [openedFor, setOpenedFor] = useState<typeof owner>();
+  const advancedTrigger = useRef<HTMLButtonElement>(null);
   const advanced = openedFor === owner;
   const customized = Object.hasOwn(engine.modelEfforts ?? {}, model.id);
   return (
@@ -347,7 +348,7 @@ function ModelRow({
         )}
       </span>
       <Tip text={t('settings.providers.models.advanced.open')}>
-        <button type="button"
+        <button type="button" ref={advancedTrigger}
           data-settings-search-action="Open advanced settings for this plugin model"
           aria-label={t('settings.providers.models.advanced.openAria', { name })}
           className={cn('flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[var(--text-tertiary)]',
@@ -371,6 +372,10 @@ function ModelRow({
           }, t('settings.providers.models.accessWriteFailed'));
         }}
         onClose={() => setOpenedFor(undefined)}
+        onCloseAutoFocus={event => {
+          event.preventDefault();
+          if (isDataOwnerGenerationCurrent(owner)) advancedTrigger.current?.focus();
+        }}
       />}
       <Switch
         data-setting-id={providersSettings.pluginProviders.id}

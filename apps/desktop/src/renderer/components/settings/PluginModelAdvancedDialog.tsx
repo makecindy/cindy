@@ -8,12 +8,13 @@ import { SegmentedControl } from '@/components/ui/segmented-control';
 import type { PluginEngineEffort, PluginEngineModel } from '../../../shared/pluginEngines';
 import { providersSettings } from './ProvidersSection.settings-search';
 
-export function PluginModelAdvancedDialog({ model, providerName, customized, onSave, onClose }: {
+export function PluginModelAdvancedDialog({ model, providerName, customized, onSave, onClose, onCloseAutoFocus }: {
   model: PluginEngineModel;
   providerName: string;
   customized: boolean;
   onSave: (effort: PluginEngineEffort | null) => Promise<boolean>;
   onClose: () => void;
+  onCloseAutoFocus: (event: Event) => void;
 }) {
   const { t } = useTranslation();
   const [saving, setSaving] = useState(false);
@@ -36,6 +37,7 @@ export function PluginModelAdvancedDialog({ model, providerName, customized, onS
         <Dialog.Content
           className="modal-panel fixed inset-0 z-modal m-auto flex h-fit max-h-[calc(100%-32px)] w-[calc(100%-32px)] max-w-[560px] flex-col overflow-hidden"
           aria-describedby={undefined}
+          onCloseAutoFocus={onCloseAutoFocus}
         >
           <header className="flex items-start justify-between gap-3 border-b border-[var(--border-default)] px-5 py-4">
             <div className="min-w-0">
