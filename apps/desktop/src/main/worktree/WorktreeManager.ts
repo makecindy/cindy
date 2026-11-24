@@ -27,7 +27,7 @@ import {
   validateWorktreeName,
 } from './nameGenerator';
 import { readAttachedWorktreeBranch } from './attachedBranch';
-import { refreshSelectedDefaultSource, refreshWorkerDefaultSource } from './freshBase';
+import { refreshSelectedDefaultSource } from './freshBase';
 import { classifyError, type ClassifyInput } from './errorClassifier';
 import {
   gitExec,
@@ -838,8 +838,8 @@ export async function awaitBackgroundCheckout(sessionId: string): Promise<void> 
 }
 
 export interface CreateWorktreeOptions {
-  /** Internal policy: Desktop uses full remote refs; Orca also accepts remote shorthand. */
-  refreshDefaultSource?: boolean | 'orca-worker';
+  /** Internal opt-in to refresh a selected full remote default ref. */
+  refreshDefaultSource?: boolean;
   /** Keep a handle on the background checkout so failure compensation can wait for it. */
   trackBackgroundCheckout?: boolean;
   /**
@@ -924,9 +924,7 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
     const baseRepo = cwdInfo.repoRoot ?? path.resolve(req.baseRepo);
 
     let sourceBranch = req.sourceBranch;
-    if (options?.refreshDefaultSource === 'orca-worker') {
-      sourceBranch = await refreshWorkerDefaultSource(baseRepo, sourceBranch);
-    } else if (options?.refreshDefaultSource && sourceBranch?.startsWith('origin/')) {
+    if (options?.refreshDefaultSource && sourceBranch?.startsWith('origin/')) {
       // The new-task picker sends short local names and full remote refs.
       const localRef = `refs/heads/${sourceBranch}`;
       if (await revParseCommit(baseRepo, localRef)) sourceBranch = localRef;
@@ -951,7 +949,7 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
       }
     }
 
-    if (options?.refreshDefaultSource === true) {
+    if (options?.refreshDefaultSource) {
       await refreshSelectedDefaultSource(baseRepo, sourceBranch);
     }
 

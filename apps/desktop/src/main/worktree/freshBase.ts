@@ -206,26 +206,18 @@ export async function refreshSelectedDefaultSource(
   baseRepo: string,
   sourceBranch: string,
   totalBudgetMs = NET_TOTAL_BUDGET_MS,
-): Promise<string | undefined> {
-  if (!sourceBranch?.startsWith('refs/remotes/origin/')) return undefined;
+): Promise<void> {
+  if (!sourceBranch?.startsWith('refs/remotes/origin/')) return;
   const deadline = Date.now() + totalBudgetMs;
   try {
-    if (sourceBranch !== (await readOriginDefaultBranch(baseRepo))) return undefined;
+    if (sourceBranch !== (await readOriginDefaultBranch(baseRepo))) return;
     await fetchRemoteDefaultBranch(
       baseRepo,
       'origin',
       sourceBranch.slice('refs/remotes/origin/'.length),
       deadline - Date.now() - KILL_CLEANUP_BUDGET_MS,
     );
-    return sourceBranch;
   } catch {
     log.warn('[freshBase] 默认源分支探测失败，使用本地已有 ref');
-    return undefined;
   }
-}
-
-/** Orca tool calls may name the origin default with shorthand. */
-export async function refreshWorkerDefaultSource(baseRepo: string, sourceBranch: string): Promise<string> {
-  const candidate = sourceBranch.startsWith('origin/') ? `refs/remotes/${sourceBranch}` : sourceBranch;
-  return (await refreshSelectedDefaultSource(baseRepo, candidate)) ?? sourceBranch;
 }

@@ -258,6 +258,11 @@ function validateWorktreeSource(sourceBranch: string | undefined): void {
   }
 }
 
+/** Orca's explicit origin shorthand always names the remote tracking ref. */
+function qualifyWorkerRemoteSource(source: string): string {
+  return source.startsWith('origin/') ? `refs/remotes/${source}` : source;
+}
+
 /** Resolve the optional tool revision before reserving a slot or creating a checkout. */
 export async function resolveWorkerWorktreeSourceSelection(
   directory: string,
@@ -319,6 +324,7 @@ export async function resolveWorkerWorktreeSourceSelection(
   }
   validateWorktreeSource(sourceBranch);
   if (sourceBranch !== undefined && source === 'explicit') {
+    sourceBranch = qualifyWorkerRemoteSource(sourceBranch);
     try {
       await gitExec(
         ['rev-parse', '--verify', '--quiet', '--end-of-options', `${sourceBranch}^{commit}`],
@@ -363,8 +369,8 @@ export async function createWorkerWorktree(
   // A Worker based on the origin default starts from a freshly fetched ref, like the
   // Desktop new-task entry; other sources (the lead's branch, a commit) are unchanged.
   const created = await WorktreeManager.createWorktree(
-    { sessionId, baseRepo: info.baseRepo, name: '', sourceBranch },
-    { trackBackgroundCheckout: true, refreshDefaultSource: 'orca-worker' },
+    { sessionId, baseRepo: info.baseRepo, name: '', sourceBranch: qualifyWorkerRemoteSource(sourceBranch) },
+    { trackBackgroundCheckout: true, refreshDefaultSource: true },
   );
   if (!created.ok) throw new Error(`Worker worktree creation failed: ${created.error.message}`);
   // Probe paths are realpaths, so a symlink spelling cannot change the subproject offset.

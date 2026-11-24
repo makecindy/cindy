@@ -557,12 +557,13 @@ describe('Worker worktree source resolution', () => {
     {headState: 'branch' as const, branch: 'origin/main', source: undefined, expected: 'refs/heads/origin/main'},
     {headState: 'detached' as const, branch: 'a'.repeat(40), source: undefined, expected: 'a'.repeat(40)},
     {headState: 'branch' as const, branch: 'main', source: 'release', expected: 'release'},
+    {headState: 'branch' as const, branch: 'origin/main', source: 'origin/main', expected: 'refs/remotes/origin/main'},
     {headState: 'unborn' as const, branch: null, source: 'main', expected: 'main'},
   ])('resolves $headState with source $source', async ({headState, branch, source, expected}) => {
     if (source !== undefined) vi.mocked(gitExec).mockResolvedValueOnce({stdout: 'a'.repeat(40) + '\n', stderr: ''});
     await expect(resolveWorkerWorktreeSource('/repo', source, async () => ({...target, headState, branch}))).resolves.toBe(expected);
     if (source !== undefined) expect(gitExec).toHaveBeenLastCalledWith(
-      ['rev-parse', '--verify', '--quiet', '--end-of-options', `${source}^{commit}`], '/repo', {timeoutMs: 5000});
+      ['rev-parse', '--verify', '--quiet', '--end-of-options', `${expected}^{commit}`], '/repo', {timeoutMs: 5000});
   });
   it.each([
     {exists: false}, {baseRepo: null}, {headState: 'unborn' as const, branch: null}, {branch: null},

@@ -413,6 +413,22 @@ it('creates an Orca Worker from the freshly fetched origin default', async () =>
   expect(await git(workerDir, 'rev-parse', 'HEAD')).toBe(latest);
   expect(await fs.readFile(path.join(workerDir, 'tracked.txt'), 'utf8')).toBe('new');
   expect(metadata.get('orca-worker')?.sourceBranch).toBe('refs/remotes/origin/main');
+
+  // #12391: once origin's default changes, keep the selected tracking ref
+  // and its local commit. The same-named local branch remains at the old commit.
+  await git(repo, 'update-ref', 'refs/remotes/origin/trunk', latest);
+  await git(repo, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/trunk');
+  await git(seed, 'commit', '--allow-empty', '-m', 'after the default changed');
+  await git(seed, 'push', remote, 'main');
+  const nonDefaultWorker = await createWorkerWorktree('orca-non-default', repo, 'origin/main');
+  await awaitBackgroundCheckout('orca-non-default');
+  expect(await git(nonDefaultWorker, 'rev-parse', 'HEAD')).toBe(latest);
+  expect(metadata.get('orca-non-default')?.sourceBranch).toBe('refs/remotes/origin/main');
+
+  await git(repo, 'update-ref', '-d', 'refs/remotes/origin/main');
+  await expect(createWorkerWorktree('orca-missing-remote', repo, 'origin/main'))
+    .rejects.toThrow('Worker worktree creation failed');
+  expect(metadata.has('orca-missing-remote')).toBe(false);
 }, 30_000);
 
 // #6792: createWorktree must populate the linked worktree's full index after

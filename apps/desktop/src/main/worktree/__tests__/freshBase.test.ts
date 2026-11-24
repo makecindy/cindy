@@ -284,7 +284,7 @@ it('keeps the selected origin default after a fetch timeout, without probing ups
   };
   await expect(
     refreshSelectedDefaultSource(REPO, 'refs/remotes/origin/trunk', 5000),
-  ).resolves.toBe('refs/remotes/origin/trunk');
+  ).resolves.toBeUndefined();
   expect(call('fetch')?.args).toEqual([
     'fetch',
     '--quiet',
