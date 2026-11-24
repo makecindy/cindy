@@ -14757,6 +14757,7 @@
       "missingDir": "Dossier introuvable"
     },
     "pendingQueue": {
+      "waitingForDevice": "Non envoyé · Envoi à la reconnexion de l’autre ordinateur",
       "stopping": "Arrêt en cours",
       "queued": "En file d'attente",
       "editingInComposer": "Modification dans la zone de saisie ci-dessous…",

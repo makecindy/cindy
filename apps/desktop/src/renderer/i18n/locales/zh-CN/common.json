@@ -14586,6 +14586,7 @@
       "missingDir": "目录不存在"
     },
     "pendingQueue": {
+      "waitingForDevice": "尚未发送，等另一台电脑恢复连接后发送",
       "stopping": "停止处理中",
       "queued": "排队中",
       "editingInComposer": "正在下方输入框编辑…",

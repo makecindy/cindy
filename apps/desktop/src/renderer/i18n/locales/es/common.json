@@ -14757,6 +14757,7 @@
       "missingDir": "Carpeta no encontrada"
     },
     "pendingQueue": {
+      "waitingForDevice": "Sin enviar · Se enviará cuando el otro equipo se reconecte",
       "stopping": "Parando",
       "queued": "En cola",
       "editingInComposer": "Editando en el cuadro de entrada a continuación…",

@@ -10,6 +10,7 @@ import { acceptTaskActionRecoveryCopy, assertTaskActionCurrent, bindTaskActionIn
 import { isBotGroupClientId } from '../../shared/botGroupChat.js';
 import { BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON } from './botCandidateRecovery.js';
 import { BotCapabilityRefreshDeferredError } from './botCompactRuntimeRefresh.js';
+import { RemoteAccountReadUnavailable } from '../subscription-accounts/remotePreflight.js';
 import { SchedulerQueuedPreparationError } from './schedulerQueuedPreparation.js';
 import { SnapshotOperationDeadlineError } from '../utils/operationBudget.js';
 import { ProviderGroupUsageLimitError } from '../provider-group/failurePolicy.js';
@@ -1407,6 +1408,8 @@ export class AgentInputCoordinator {
   }
 
   private readonly states = new Map<string, SessionInputState>();
+  private readonly remoteAccountWaits = new WeakMap<NonNullable<AgentInputRecovery>, string>();
+  private readonly remoteAccountFallbackUsed = new WeakSet<AgentInputQueuedMessage>();
   private readonly botCapabilityRefreshWaits = new WeakMap<AgentInputQueuedMessage, {
     waiting: boolean;
     timer: ReturnType<typeof setTimeout> | null;
@@ -4390,6 +4393,10 @@ export class AgentInputCoordinator {
     next.splice(insertIndex, 0, entry);
     const previousHead = state.pendingQueue[0];
     state.pendingQueue = next;
+    if (previousHead !== next[0] && state.recovery && this.remoteAccountWaits.has(state.recovery)) {
+      state.recovery = null;
+      this.scheduleDrain(sessionId, 'remote-account-head-moved');
+    }
     if (previousHead !== next[0] && this.botCapabilityRefreshWaits.has(previousHead)) {
       this.scheduleDrain(sessionId, 'bot-capability-refresh-head-moved');
     }
@@ -5196,7 +5203,13 @@ export class AgentInputCoordinator {
   }
 
   private toProjection(sessionId: string, state: SessionInputState): AgentInputProjection {
-    const pendingQueue = state.pendingQueue.map((item) => this.toProjectedItem(item));
+    const wait = state.recovery?.kind === 'queue-head' && this.remoteAccountWaits.has(state.recovery)
+      ? state.recovery.clientId : null;
+    const pendingQueue = state.pendingQueue.map((item) => {
+      const projected = this.toProjectedItem(item);
+      if (wait === item.clientId) projected.waitingForRemoteAccount = true;
+      return projected;
+    });
     // 供应商组正在换电脑：错误先不呈现(没有红横幅、没有限额倒计时)，聊天流里只有「正在换一台电脑继续」。
     const groupSwitchHeld = isProviderGroupSwitchHoldLive(state);
     const error = groupSwitchHeld || (state.autoResumePending?.reason === 'orca-report-preparation'
@@ -5268,6 +5281,7 @@ export class AgentInputCoordinator {
     Reflect.deleteProperty(projected, TELEGRAM_QUESTION_ORIGIN);
     delete projected[HOST_ONLY_AGENT_PREFIX];
     delete projected.hostAcceptedAtMs;
+    delete projected.waitingForRemoteAccount;
     delete projected.orcaReportDelivery;
     delete projected.orcaReportDeliveryFence;
     delete projected.mergedDeliveryClientIds;
@@ -6215,6 +6229,19 @@ export class AgentInputCoordinator {
         clearErrorProjectionSignals(latest);
         latest.stickyError = null;
         latest.recovery = { kind: 'queue-head', clientId: head.clientId };
+        if (err instanceof RemoteAccountReadUnavailable && this.manualUiInputs.has(head) && !isAutomaticOriginItem(head)
+          && !head.sourcePlugin && !head.botTaskCoordination) {
+          const recovery = latest.recovery;
+          this.remoteAccountWaits.set(recovery, err.deviceId);
+          latest.error = null;
+          if (!this.remoteAccountFallbackUsed.has(head)) {
+            this.remoteAccountFallbackUsed.add(head);
+            const timer = setTimeout(() => this.resumeRemoteAccountWait(sessionId, recovery), 10_000);
+            timer.unref?.();
+          }
+          this.emit(sessionId);
+          return;
+        }
         log.warn('pre-accept send failed; restored queue head', {
           sessionId,
           clientId: head.clientId,
@@ -6638,6 +6665,22 @@ export class AgentInputCoordinator {
       timer.unref?.();
       wait.timer = timer;
     }
+  }
+
+  onRemoteAccountDeviceReady(deviceId: string): void {
+    for (const [sessionId, state] of this.states) {
+      const recovery = state.recovery;
+      if (recovery && this.remoteAccountWaits.get(recovery) === deviceId) this.resumeRemoteAccountWait(sessionId, recovery);
+    }
+  }
+
+  private resumeRemoteAccountWait(sessionId: string, recovery: NonNullable<AgentInputRecovery>): void {
+    const state = this.states.get(sessionId);
+    if (state?.recovery !== recovery || recovery.kind !== 'queue-head' ||
+      state.pendingQueue[0]?.clientId !== recovery.clientId) return;
+    state.recovery = null;
+    this.scheduleDrain(sessionId, 'remote-account-recheck');
+    this.emit(sessionId);
   }
 
   onBotCapabilityRefreshReady(sessionId: string): void {

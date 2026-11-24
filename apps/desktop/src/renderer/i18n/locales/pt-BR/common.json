@@ -14757,6 +14757,7 @@
       "missingDir": "Pasta não encontrada"
     },
     "pendingQueue": {
+      "waitingForDevice": "Não enviada · Será enviada quando o outro computador se reconectar",
       "stopping": "Parando",
       "queued": "Na fila",
       "editingInComposer": "Editando na caixa de entrada abaixo…",

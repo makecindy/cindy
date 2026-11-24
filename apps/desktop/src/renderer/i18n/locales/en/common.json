@@ -14640,6 +14640,7 @@
       "missingDir": "Folder not found"
     },
     "pendingQueue": {
+      "waitingForDevice": "Not sent · Will send when the other computer reconnects",
       "stopping": "Stopping…",
       "queued": "Queued",
       "editingInComposer": "Editing in the input box below…",
