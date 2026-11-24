@@ -15,6 +15,8 @@ export function turnIceConfig(url: string, mediaKey: string, deviceId: string, n
   const expires = (Math.floor(now / 300_000) + 12) * 300;
   const tag = createHmac('sha256', secret).update(deviceId).digest('hex').slice(0, 24);
   const username = expires + ':' + tag;
+  // eturnal 1.12.3 derive_password/2 verifies the TURN REST password as
+  // Base64(HMAC-SHA1(secret, username)); it has no SHA-256 wire option.
   const credential = createHmac('sha1', secret).update(username).digest('base64');
   return {
     iceServers: [{ urls: [...REMOTE_DESKTOP_ICE_SERVERS.map(s => s.urls), url], username, credential }],

@@ -42,6 +42,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
 import { createDeviceCredential, initializeRelay, startRelayServer, type RelayServerHandle } from '../index';
 import { startChallengeServer } from '../certificates';
+import { turnIceConfig } from '../turn';
 import { DEFAULT_MEDIA_LIMITS, MediaStore } from '../media';
 
 const OWNER_USER = 'user-owner';
@@ -246,6 +247,16 @@ function rawRequest(port: number, upgrade = false): Promise<string> {
 }
 
 describe('device-link relay wire contract', () => {
+  // Unit: the real eturnal 1.12.3 'password' command produced this vector
+  // for a public fixture key. API-shape tests cannot detect an incompatible MAC.
+  it('issues the password accepted by the pinned eturnal TURN REST verifier', () => {
+    const result = turnIceConfig('turns:relay.example.test:443?transport=tcp',
+      'interop-fixture-key', 'test-device', Date.UTC(2030, 0, 1));
+    expect(result.iceServers[0]).toMatchObject({
+      username: '1893459600:d2c0f957e8a9d9ff5cb17ea8',
+      credential: 'e601L2VheqM4W5GgQvXRAnhtXfg=',
+    });
+  });
   // V1 media used to return 404 even for an authenticated owner. Exercise the
   // real HTTP route and client parser, including readiness and device removal.
   // Unit, same disposable relay fixture as the other wire-contract tests.
