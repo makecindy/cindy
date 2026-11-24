@@ -95,6 +95,31 @@ describe('Claude Code SSH startup probes', () => {
     },
   );
 
+  it.each([
+    { error: channelRefused(), refused: true },
+    { error: new Error('daemon check timed out'), refused: false },
+  ])('distinguishes a refused daemon probe from other failures (refused=$refused)', async ({ error, refused }) => {
+    const { host, exec } = hostFixture();
+    exec.mockResolvedValueOnce(readyAgent)
+      .mockResolvedValueOnce(readyManager)
+      .mockResolvedValueOnce(result('OK\n'))
+      .mockRejectedValueOnce(error);
+
+    const prepare = ensureCcManagerInstalledOrInstall({ host });
+    if (refused) {
+      await expect(prepare).rejects.toMatchObject({ code: 'SSH_EXEC_FAILED' });
+    } else {
+      await expect(prepare).resolves.toBeUndefined();
+    }
+    expect(exec).toHaveBeenCalledTimes(4);
+
+    // A refused probe must not mark the manager as installed.
+    if (refused) exec.mockResolvedValueOnce(readyAgent).mockResolvedValueOnce(readyManager);
+    exec.mockResolvedValueOnce(result('OK\n')).mockResolvedValueOnce(result('ALIVE\n'));
+    await expect(ensureCcManagerInstalledOrInstall({ host })).resolves.toBeUndefined();
+    expect(exec).toHaveBeenCalledTimes(refused ? 8 : 5);
+  });
+
   it('continues to installation when the probe confirms the runtime is missing', async () => {
     const { host, exec } = hostFixture();
     exec.mockResolvedValueOnce(result('NOT_INSTALLED\n'))

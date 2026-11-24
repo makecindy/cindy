@@ -255,9 +255,13 @@ export function resolveProxyBundlePath(): string | null {
   return null;
 }
 
-function joinInstallAfterRejectedProbe(hostId: string, error: unknown): Promise<void> | undefined {
+function isSshProbeChannelRejected(error: unknown): boolean {
   // ssh2 forwards this error before the remote probe command can execute.
-  if (!(error instanceof Error) || !error.message.startsWith('(SSH) Channel open failure:')) return;
+  return error instanceof Error && error.message.startsWith('(SSH) Channel open failure:');
+}
+
+function joinInstallAfterRejectedProbe(hostId: string, error: unknown): Promise<void> | undefined {
+  if (!isSshProbeChannelRejected(error)) return;
 
   // A same-host install may have started while this probe was in flight.
   const installing = inFlightCcManagerInstall.get(hostId);
@@ -446,6 +450,7 @@ export async function ensureCcManagerInstalledOrInstall(opts: {
                 `then echo ALIVE; else echo DEAD; fi'`,
               { timeoutMs: 3_000, label: 'cc-mgr-daemon-alive-check' },
             ).catch((err) => {
+              if (isSshProbeChannelRejected(err)) throw err;
               log.warn('cc-mgr daemon-alive check failed (treating as alive to be safe)', {
                 hostId,
                 error: err instanceof Error ? err.message : String(err),
