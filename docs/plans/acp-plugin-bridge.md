@@ -397,6 +397,22 @@ Node Host（`apps/host`）。插件引擎任务的消息按 `agent_kind = 'acp'`
   变化的调用不会传到 Desktop：这类调用超过 31 分钟没有可见输出时，任务内「正在后台继续工作」先熄灭，
   结果到达时再亮起（maker-core 不会因此提前收尾该调用）。
 
+## 插件与 Skill 告知（2026-11-24）
+
+用户发现 Antigravity 任务不知道装了哪些插件和 Skill：发 PR 时直接用 `gh`，没走 GitHub 插件的 `pr` Skill，也开不了自动跟进。
+内置引擎从 system prompt 读到插件花名册，从原生 Skill 加载拿到 Skill；插件引擎两样都没有。用户决定只补这两样，
+不把 Cindy 的其他 system prompt 交给插件引擎。
+
+- **内容**：新会话首条消息前的说明里加两段——已装插件花名册（与内置引擎同一份文本，`getGhostRosterPrompt`），
+  以及 Skill 清单（名称、说明、`SKILL.md` 路径，Agent 需要时用自己的文件工具读）。Skill 范围与内置 Pi 相同
+  （Cindy 内置与已批准插件的 Skill、Pi 的共享与项目目录，按用户的启用开关过滤；目录在隔离、限时的扫描进程里发现，不在 Main 上同步扫描，见 `maker-host/pluginEngineSkills.ts`），
+  与 Cindy 工具范围同一口径。恢复的会话已有，不重复。
+- **只写真实可用的**：花名册只在 Agent 实际接收了插件网关（`cindy` MCP）时附上；对端不收 HTTP MCP 或工具桥不可用时
+  只留 Skill 清单。花名册或 Skill 读取失败只少这一段，不挡任务启动。
+- **另一台电脑的任务与伙伴**：另一台电脑托管的任务与内置引擎一致，附任务所在电脑带来的花名册快照（`deviceHostedGhostRoster`，隧道提供 `cindy` 时），不读本机花名册；Skill 清单不附（没有跨电脑的来源）。隔离伙伴（按伙伴自己冻结的能力集）两样都不附；按普通任务装配的 V2 项目伙伴（`projectContext`）照常附上。恢复的会话不读取。
+- **顺序**：远程工作区说明 → 伙伴说明 → 花名册 → Skill 清单 → 协同角色说明。
+- **缓存**：说明在首条用户消息里，内置引擎的 system prompt 与缓存前缀不变。
+
 ## 已知限制
 
 - 插件入口进程拿到的是插件 Node 运行时的精简环境：`DSH_HOME`、`HTTP(S)_PROXY` 等用户 shell 变量不会传给

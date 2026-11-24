@@ -3949,7 +3949,9 @@ class CindyMcpGateway {
         offset,
         ...(offset + page.length < matches.length ? { nextOffset: offset + page.length } : {}),
         availableServers: this.availableServers(),
-        hint: 'Use query or server to narrow results; follow nextOffset for more. Inspect an exact server and tool for the complete description and input schema.',
+        hint: query && matches.length === 0 && tools.length > 0
+          ? 'No tools matched the query. Omit query or try a shorter keyword and start at offset 0. Browse by a known server, or pass exact server and tool to inspect its schema.'
+          : 'Use query or server to narrow results; follow nextOffset for more. Inspect an exact server and tool for the complete description and input schema.',
         ...(unavailableServers.length > 0 ? { unavailableServers } : {}),
       };
     }

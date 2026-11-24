@@ -1033,8 +1033,9 @@ import {
 } from './secrets/builtinApiKeyBridge.js';
 import {
   isCustomProviderRuntimeKeyStorageKey,
-  isRendererAccessibleSafeStorageKey,
+  isRendererSafeStorageOperationAllowed,
   type ProviderSecretId,
+  type RendererSafeStorageOperation,
 } from '../shared/providerSecrets.js';
 import {
   readCodexCompactionState,
@@ -1082,6 +1083,7 @@ import {
 import { registerWorkingStatusIpc } from './maker-ipc/workingStatus.js';
 import { registerMakerTitleIpc } from './maker-ipc/title.js';
 import { registerAuxiliaryModelSettingsIpc } from './maker-ipc/auxiliary-model-settings.js';
+import { setAuxiliaryModelHealthBroadcaster } from './utility-model/auxiliary-model-health.js';
 import { registerMakerHelpIpc } from './maker-ipc/help.js';
 import { registerHelpFeedbackIpc } from './maker-ipc/help-feedback.js';
 import { registerMyIssuesIpc } from './maker-ipc/my-issues.js';
@@ -6640,8 +6642,9 @@ const registerIpcHandlers = () => {
 
   // safeStorage IPC handlers
   const isValidKey = (key: string): boolean => /^[a-zA-Z0-9_-]+$/.test(key);
-  const isValidRendererKey = (key: string): boolean =>
-    isValidKey(key) && isRendererAccessibleSafeStorageKey(key);
+  // Renderer 只能对白名单登记的键类别做登记的操作（shared/providerSecrets RENDERER_SAFE_STORAGE_GRANTS）。
+  const isValidRendererKey = (key: string, operation: RendererSafeStorageOperation): boolean =>
+    isValidKey(key) && isRendererSafeStorageOperationAllowed(key, operation);
   const resolveSafeStorageFilepath = (key: string): string | null => {
     const scopedKey = resolveOwnerScopedSecretStorageKey(key);
     return scopedKey
@@ -6719,7 +6722,7 @@ const registerIpcHandlers = () => {
     async (event: Electron.IpcMainInvokeEvent, key: string, value: string): Promise<boolean> => {
       try {
         assertTrustedAppRendererEvent(event);
-        if (!isValidRendererKey(key)) return false;
+        if (!isValidRendererKey(key, 'store')) return false;
         const filepath = resolveSafeStorageFilepath(key);
         if (!filepath) return false;
         if (!safeStorage.isEncryptionAvailable()) return false;
@@ -6774,7 +6777,7 @@ const registerIpcHandlers = () => {
       const strictCustomProviderRead = isCustomProviderRuntimeKeyStorageKey(key);
       try {
         assertTrustedAppRendererEvent(event);
-        if (!isValidRendererKey(key)) return null;
+        if (!isValidRendererKey(key, 'read')) return null;
         const filepath = resolveSafeStorageFilepath(key);
         if (!filepath) return null;
         if (!safeStorage.isEncryptionAvailable()) {
@@ -6814,7 +6817,7 @@ const registerIpcHandlers = () => {
     ): Promise<{ success: boolean; error?: string }> => {
       try {
         assertTrustedAppRendererEvent(event);
-        if (!isValidRendererKey(key)) {
+        if (!isValidRendererKey(key, 'remove')) {
           return { success: false, error: 'invalid key' };
         }
         const filepath = resolveSafeStorageFilepath(key);
@@ -7324,6 +7327,11 @@ const registerIpcHandlers = () => {
       });
       registerMakerTitleIpc({ isSessionTurnPendingCompletion });
       registerWorkingStatusIpc();
+      setAuxiliaryModelHealthBroadcaster((channel, payload) => {
+        for (const win of BrowserWindow.getAllWindows()) {
+          if (isTrustedAppRendererWindow(win)) win.webContents.send(channel, payload);
+        }
+      });
       registerAuxiliaryModelSettingsIpc();
       registerMakerHelpIpc(ipcMaker);
       registerHelpFeedbackIpc();

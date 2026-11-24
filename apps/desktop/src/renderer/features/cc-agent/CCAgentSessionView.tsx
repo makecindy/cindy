@@ -277,6 +277,7 @@ import { useSessionTurnActiveTruth } from '@/features/cc-agent/hooks/useSessionT
 import { useHistoryRecoveryNavigation } from '@/features/cc-agent/hooks/useHistoryRecoveryNavigation';
 import { useRemoteSessionLoading } from '@/features/cc-agent/hooks/useRemoteSessionLoading';
 import { RemoteSessionBanner } from './RemoteSessionBanner';
+import { AuxiliaryModelHealthBanner } from './AuxiliaryModelHealthBanner';
 import { WorkingDirectoryTip } from './WorkingDirectoryTip';
 import { decideRemoteSessionExit } from './remoteSessionExit';
 import { RemoteSessionLoading } from './RemoteSessionLoading';
@@ -1968,6 +1969,7 @@ function CCAgentSessionContent({
     cancelUsageLimitWait,
     errorIsRecoverable,
     errorRetryText,
+    queueHeadRetry,
     errorCanContinue,
     errorPersistId,
     disposedErrorPersistId,
@@ -6150,6 +6152,8 @@ function CCAgentSessionContent({
                 outputLimit={outputLimit}
                 isRecoverable={errorIsRecoverable}
                 retryText={errorRetryText}
+                queuedSendRecovery={queueHeadRetry && !remoteDeviceId && Boolean(session?.agentDeviceId
+                  && !isProviderShareAgentDeviceId(session.agentDeviceId))}
                 onRetry={handleRetry}
                 onContinueAfterError={canContinueError ? handleContinueAfterError : undefined}
                 onSilentStopContinue={handleSilentStopContinue}
@@ -6507,6 +6511,9 @@ function CCAgentSessionContent({
             </div>
           </div>
         )}
+
+        {/* 辅助模型运行状态提示放在会话工具栏/标题之后、消息流之前，不打断当前对话。 */}
+        {viewVisible && sessionId && !remoteDeviceId && !isRemoteWorktreeSession && <AuxiliaryModelHealthBanner sessionId={sessionId} />}
 
         {/* Scroll container — full height, bottom padding reserves space for input overlay.
            key={sessionId}: force a full remount on session switch so scroll state,

@@ -1,3 +1,5 @@
+import { assertConfirmedGhostUninstallOwner } from '../cindy-brain/confirmedGhostUninstall.js';
+import type { ConfirmedGhostUninstall } from '../../shared/ghost.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -2310,7 +2312,7 @@ export class PluginMarketService {
     );
   }
 
-  async uninstall(pluginId: string): Promise<{ ok: true }> {
+  async uninstall(pluginId: string, confirmed?: ConfirmedGhostUninstall): Promise<{ ok: true }> {
     // 自定义市场插件的卸载走同一账本路径，仅跳过服务端 CUID 形状校验。
     if (!parseCustomMarketPluginId(pluginId) && !isValidPluginResourceId(pluginId)) {
       throwIpcError('INVALID_PARAMS', 'Invalid Plugin ID');
@@ -2319,6 +2321,7 @@ export class PluginMarketService {
     const ledger = this.ledgerForOwner(owner);
     return this.withMutation(pluginId, async () => {
       requireSameMarketOwner(owner);
+      if (confirmed) assertConfirmedGhostUninstallOwner(confirmed);
       const data = ledger.read();
       const record = Object.values(data.installations).find(
         (candidate) => candidate.pluginId === pluginId && candidate.installed,
@@ -2334,7 +2337,10 @@ export class PluginMarketService {
       if (installed) {
         await uninstallGhostAndCleanup(installedGhostPhysicalRelId(installed), {
           skipMarketLedger: true,
+          ...(confirmed ? { confirmed } : {}),
         });
+      } else if (confirmed) {
+        throwIpcError('PRECONDITION_FAILED', 'The confirmed plugin installation changed');
       }
       // The package removal is already complete at this point. The session may
       // have changed while the runtime was stopping, so ledger reconciliation

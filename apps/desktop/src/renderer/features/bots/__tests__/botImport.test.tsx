@@ -149,6 +149,33 @@ it('uses the existing credential checkboxes as alternatives without selecting an
   await waitFor(() => expect(api.start).toHaveBeenCalledWith(expect.objectContaining({ entryIds: ['personal'] })));
 });
 
+// Regression (#12342 review PRRT_kwDOTgdRUs67AjO1). Production entry: BotImportForm category row.
+// Bulk selection never guesses between exclusive credentials, so clicking a partial category whose
+// only unselected entries are an exclusive pair leaves the selection — and the `indeterminate`
+// prop — unchanged. The browser still clears the native flag on click; the shared Checkbox must
+// restore it, or the row reads "unselected" while Shared is still imported. Existing tests only
+// covered the pair inside the category page. Minimal input: Shared selected, Work/Personal not,
+// click the category box. Tier: unit (jsdom).
+it('keeps a partially imported category visibly partial after its checkbox is clicked', async () => {
+  const api: CompanionImportApi = { sources: async () => [{ id: 'source', name: 'Ada', kind: 'hermes' }], preview: async () => ({ id: 'preview', name: 'Ada', source: { id: 'source', name: 'Ada', kind: 'hermes' }, entries: [
+    { id: 'shared', category: 'connections', name: 'Shared', selected: false },
+    { id: 'work', category: 'connections', name: 'Work', selected: false, exclusiveWith: ['personal'] },
+    { id: 'personal', category: 'connections', name: 'Personal', selected: false, exclusiveWith: ['work'] },
+  ] }), status: async () => undefined, start: vi.fn<CompanionImportApi['start']>(async input => ({ requestId: input.requestId, botId: 'bot', status: 'complete', checks: [] })) };
+  render(<BotImportForm api={api} onCreated={() => {}} onBack={() => {}} onBusy={() => {}} />);
+  fireEvent.click(await screen.findByRole('button', { name: /Ada.*Hermes/ }));
+  await screen.findByRole('button', { name: 'existing-portrait-picker' });
+  fireEvent.click(screen.getByRole('button', { name: /bots.import.connections/ }));
+  fireEvent.click(screen.getByLabelText('Shared'));
+  fireEvent.click(screen.getByRole('button', { name: 'bots.import.back' }));
+  const category = screen.getByRole('checkbox', { name: 'bots.import.connections' }) as HTMLInputElement;
+  expect(category.indeterminate).toBe(true);
+  fireEvent.click(category);
+  expect(category.checked).toBe(false);
+  expect(category.indeterminate).toBe(true);
+  expect(category.getAttribute('aria-checked')).toBe('mixed');
+});
+
 it('shows 142 selected skills in a flat searchable paginated list and opens chat after deferred setup', async () => {
   const entries = Array.from({ length: 142 }, (_, i) => ({ id: `skill-${i}`, category: 'skills' as const, name: `Skill ${i}`, selected: true }));
   const api: CompanionImportApi = { sources: async () => [{ id: 'source', name: 'Ada', kind: 'hermes' }],

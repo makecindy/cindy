@@ -14825,6 +14825,41 @@ describe('Orca report durable recovery', () => {
     },
   );
 
+  // 2026-11-24: a Worker's direct Lead assignment hit "You've hit your 5-hour limit"
+  // and its error banner offered neither Retry nor Continue: the explicit error
+  // dropped the direct receipt, so the projection had no retry text and
+  // errorCanContinue=false (Desktop and Mobile both gate the button on it).
+  // The failure still keeps no replayable record and no usage-limit wait.
+  it.each([
+    ['direct assignment', true],
+    ['stopped assignment', false],
+    ['turn without a receipt', false],
+  ] as const)('offers manual Continue after an explicit Worker failure: %s', async (boundary, expected) => {
+    const h = createHarness();
+    const runtime = { instanceId: 'worker-runtime' };
+    h.setTurnSessionIdentity(runtime);
+    h.setTurnGeneration(1);
+    const item = makeItem('assignment', 'write the third draft');
+    item.createOpts.orcaRole = 'worker';
+    if (boundary !== 'turn without a receipt') {
+      h.coordinator.rememberDirectWorkerInput(runtime, 1, item, h.coordinator.getInputAbortSignal('worker'));
+    }
+    if (boundary === 'stopped assignment') h.coordinator.stop('worker');
+    const meta = { sessionInstanceId: runtime.instanceId, sessionTurnGeneration: 1 };
+    h.coordinator.onTurnEvent('worker', 'error', "You've hit your 5-hour limit · resets 2:10pm (Pacific/Auckland)",
+      { sdkError: 'rate_limit', usageLimit: true, usageResetAt: 5_000_000 }, meta);
+    h.coordinator.onTurnEvent('worker', 'done', undefined, undefined, meta);
+    await flush();
+
+    const projection = h.coordinator.getProjection('worker');
+    expect(projection.error).toContain('5-hour limit');
+    expect(projection.errorCanContinue === true).toBe(expected);
+    expect(projection.errorRetryText).toBeNull();
+    expect(projection.usageLimitWait ?? null).toBeNull();
+    expect(h.onUsageLimitedTurnError).not.toHaveBeenCalled();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+  });
+
   // Unit regression: the real coordinator must give a remote Bot Schedule quota
   // terminal to its wait owner before candidate fallback can switch suppliers.
   it('hands scheduled companion quota failure to waiting instead of candidate fallback', async () => {

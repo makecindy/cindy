@@ -464,22 +464,20 @@ function isAuxiliaryModelCustomized(): boolean {
 /** Owner-scoped atomic write; empty `models` removes the override file. */
 async function writeAuxiliaryModelSettingsPatch(
   patch: AuxiliaryModelSettingsPatch,
+  beforeWrite?: () => void,
 ): Promise<void> {
-  if (patch.models?.length === 0) {
-    await store.updateAtomic(() => {
-      // A reset can race with the first legacy migration. Seal the legacy
-      // voice import while holding the same lock so it cannot resurrect the
-      // chain after this empty patch removes the new override.
+  await store.updateAtomic(() => {
+    beforeWrite?.();
+    if (patch.models?.length === 0) {
+      // Seal a pending legacy migration under the same lock as the reset.
       const legacyVoice =
         hasLegacyVoiceMigrationMarker() ||
         legacyVoiceOverrideRefs(readJsonObject(ownerVoiceModelsPath())).length > 0 ||
         legacyVoiceOverrideRefs(readClaimedUnscopedVoiceModels()).length > 0;
       if (legacyVoice) markLegacyVoiceMigrationComplete();
-      return patch;
-    });
-  } else {
-    await store.writePatchAtomic(patch);
-  }
+    }
+    return patch;
+  });
   log.info('auxiliary model settings written', {
     customizedKeys: store.readState().customizedKeys,
     models: store.read().models.length,

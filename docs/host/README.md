@@ -73,6 +73,15 @@ CINDY_HOST_API=http://127.0.0.1:3456 pnpm --filter desktop dev
 
 企业内测使用中国区账号体系。用开发环境的桌面渲染产物构建 Host 时，在 `--region cn` 后加 `--dev-endpoints`，并通过 `--web-dir` 指定 dev 渲染目录。构建器将发布仓提供的 `config/endpoint.dev.json` 装入中国区配置，同时核对渲染环境以及认证、设备、模型和 CDN 的独立 HTTPS 地址。
 
+## Linux 发布包
+
+无图形 Linux 用的 Host 发布包由工作流 [Host release (Linux)](../../.github/workflows/host-release.yml) 构建。在 Actions 页手动运行，「Use workflow from」选要构建的发布标签，或用 `gh workflow run host-release.yml --ref v<版本>`。工作流构建它所在的那个提交，版本号取自标签，所以只能构建已经包含这条工作流的标签。从分支运行得到不带版本号的包。
+
+- 每次运行在 Ubuntu 24.04 x64 上从同一个提交构建国内版和国际版，各自装入对应区域的网页客户端，内含 Node、Agent 运行时和 Chromium。两份都要先通过打包验收（`apps/host/scripts/release-region.e2e.mjs`）才会归档。
+- 产物是 `cindy-host-<版本>-linux-x64-<cn|global>.tar.gz`，作为该次运行的 artifact 保留 90 天，用 `gh run download <运行编号>` 取回。工作流只读仓库，不写 GitHub Release 和 CDN；对外发布是另一步。
+- 运行摘要列出提交、每个压缩包的 SHA-256，以及包内清单 `SHA256SUMS.json` 的 SHA-256。安装方按清单逐个文件校验，并固定清单本身的摘要；云主机的 Host 镜像用的就是这个摘要。
+- 修改构建脚本或这个工作流的 PR 会自动构建一份不带版本号的包（文件名里是 `unversioned`，保留 7 天），用来在评审时发现构建问题。
+
 ## 当前边界
 
 - Host 只监听 `127.0.0.1`，所有数据接口要求 profile bearer 或本机 cookie。
