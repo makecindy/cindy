@@ -24,6 +24,7 @@ vi.mock('../worktree/managedRecycle', () => ({ recycleManagedWorktree: remove })
 vi.mock('../worktree/worktreeStore', () => ({ get: () => null, getAll: () => [] }));
 vi.mock('../worktree/liveSessionRefs', () => ({ loadLiveSessionPathKeys: async () => new Set(), hasLiveSessionReference: () => false, pathKey: (value: string) => value }));
 const presentArchives = vi.hoisted(() => new Set<string>());
+const fullJournal = vi.hoisted(() => vi.fn(async () => [...state.records]));
 const removeArchive = vi.hoisted(() => vi.fn<(fileName: string) => Promise<boolean>>());
 const readById = vi.hoisted(() => vi.fn<(id: string) => Promise<WorktreeRecycleRecord | null>>());
 const lockHook = vi.hoisted(() => vi.fn<(resourcePath: string) => Promise<void> | void>());
@@ -31,7 +32,7 @@ const write = vi.hoisted(() => vi.fn());
 vi.mock('../worktree/recycleJournal', () => ({
   listPresentRecoveryArchives: vi.fn(async () => new Set(presentArchives)),
   listRecycleRecords: list,
-  listRecycleRecordsWithHistory: vi.fn(async () => [...state.records]),
+  listRecycleRecordsWithHistory: fullJournal,
   readRecycleRecord: read,
   readRecycleRecordById: readById,
   removeObsoleteRecoveryArchive: removeArchive,
@@ -47,11 +48,10 @@ vi.mock('../worktree/resourceLock', async (original) => ({
     await lockHook(value);
     return task();
   },
-  withWorktreeResourceLocks: async <T>(values: readonly string[], task: () => Promise<T>) => {
-    for (const value of [...new Set(values.map((item) => path.resolve(item)))].sort()) {
-      await lockHook(value);
-    }
-    return task();
+  withWorktreeResourceLocks: async <T>(values: readonly string[], task: (isHeld: (key: string) => boolean) => Promise<T>) => {
+    const keys = new Set(values.map((item) => path.resolve(item)).sort());
+    for (const value of keys) await lockHook(value);
+    return task((key) => keys.has(key));
   },
 }));
 import {
@@ -86,6 +86,7 @@ describe('startup recovery snapshot cleanup', () => {
   beforeEach(() => {
     state.records = [];
     presentArchives.clear();
+    fullJournal.mockClear();
     lockHook.mockReset();
     removeArchive.mockReset().mockImplementation(async (name) => presentArchives.delete(name));
     readById.mockReset().mockImplementation(async (id: string) => {
@@ -211,6 +212,7 @@ describe('startup recovery snapshot cleanup', () => {
 
     for (const file of [
       'deleted.tar.gz.enc',
+      'also-deleted.tar.gz.enc',
       'restored.tar.gz.enc',
       'shared-mixed.tar.gz.enc',
       'discarded-snap.tar.gz.enc',
@@ -218,6 +220,7 @@ describe('startup recovery snapshot cleanup', () => {
       'history-kept.tar.gz.enc',
       'restoring.tar.gz.enc',
       'raced.tar.gz.enc',
+      'late-path.tar.gz.enc',
     ]) {
       presentArchives.add(file);
     }
@@ -237,6 +240,7 @@ describe('startup recovery snapshot cleanup', () => {
       // 1. Eligible: removed in history + current root, owner deleted in all DBs.
       withArchive('deleted', 'removed', 'deleted.tar.gz.enc'),
       withArchive('deleted', 'removed', 'deleted.tar.gz.enc'),
+      withArchive('also-deleted', 'removed', 'also-deleted.tar.gz.enc'),
       // 2. Eligible: history removed + current root restored for the exact same (id, generation, owner).
       withArchive('restored', 'removed', 'restored.tar.gz.enc'),
       withArchive('restored', 'restored', 'restored.tar.gz.enc'),
@@ -262,16 +266,21 @@ describe('startup recovery snapshot cleanup', () => {
       withArchive('restoring', 'restoring', 'restoring.tar.gz.enc'),
       // 8. Ineligible (concurrent race): initially removed + deleted owner, transitions to restoring before lock acquired.
       withArchive('raced', 'removed', 'raced.tar.gz.enc'),
+      withArchive('late-original', 'restored', 'late-path.tar.gz.enc'),
     ];
 
     lockHook.mockImplementation((lockedPath) => {
       if (lockedPath.endsWith(`${path.sep}raced`)) {
         state.records.push(withArchive('raced', 'restoring', 'raced.tar.gz.enc'));
+        // A safely restored reference still cannot authorize deletion if its
+        // physical path appeared after the batch chose its lock set.
+        state.records.push(withArchive('late-new-path', 'restored', 'late-path.tar.gz.enc'));
       }
     });
 
     const rows: LocalWorktreeReference[] = [
       deleted('deleted'),
+      deleted('also-deleted'),
       deleted('owner-a'),
       { ...deleted('owner-b'), status: 'archived' },
       { ...deleted('discarded-snap'), status: 'archived' },
@@ -282,10 +291,15 @@ describe('startup recovery snapshot cleanup', () => {
       deleted('raced'),
     ];
 
-    expect(await releaseObsoleteRecoverySnapshots(async () => rows)).toBe(2);
+    const readRows = vi.fn(async () => rows);
+    expect(await releaseObsoleteRecoverySnapshots(readRows)).toBe(3);
+    // One prefilter and one lock-held recheck, including both deleted owners.
+    expect(fullJournal).toHaveBeenCalledTimes(2);
+    expect(readRows).toHaveBeenCalledTimes(2);
     expect([...presentArchives].sort()).toEqual([
       'discarded-snap.tar.gz.enc',
       'history-kept.tar.gz.enc',
+      'late-path.tar.gz.enc',
       'raced.tar.gz.enc',
       'restoring.tar.gz.enc',
       'reused-path.tar.gz.enc',

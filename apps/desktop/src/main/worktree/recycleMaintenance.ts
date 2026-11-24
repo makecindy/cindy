@@ -28,6 +28,8 @@ const EVENT_COALESCE_MS = 100;
 const STARTUP_DELAY_MS = 30_000;
 const SNAPSHOT_CLEANUP_BUDGET_MS = 5_000;
 const SNAPSHOT_GIT_TIMEOUT_MS = 1_000;
+// Amortize the full evidence reads without holding all archive paths at once.
+const ARCHIVE_CLEANUP_BATCH_SIZE = 16;
 const retryDelay = (attempt: number): number => Math.min(30 * 60_000, 5_000 * 2 ** Math.min(attempt, 9));
 
 export interface WorktreeMaintenanceOptions {
@@ -592,39 +594,42 @@ export async function releaseObsoleteRecoverySnapshots(
   const deadlineAtMs = performance.now() + SNAPSHOT_CLEANUP_BUDGET_MS;
   const gitOptions = { timeoutMs: SNAPSHOT_GIT_TIMEOUT_MS, deadlineAtMs };
   let released = 0;
-  for (const candidate of candidateArchives) {
+  for (let offset = 0; offset < candidateArchives.length; offset += ARCHIVE_CLEANUP_BATCH_SIZE) {
     if (!canContinue() || performance.now() >= deadlineAtMs) return released;
+    const batch = candidateArchives.slice(offset, offset + ARCHIVE_CLEANUP_BATCH_SIZE);
+    const paths = [...new Set(batch.flatMap((candidate) => candidate.paths))];
     try {
-      const removed = await withWorktreeResourceLocks(candidate.paths, async () => {
-        if (!canContinue() || performance.now() >= deadlineAtMs) return false;
-        const lockedPhysicalKeys = new Set(
-          await Promise.all(candidate.paths.map(physicalWorktreeKey)),
-        );
+      await withWorktreeResourceLocks(paths, async (isHeld) => {
+        if (!canContinue() || performance.now() >= deadlineAtMs) return;
         const latestRecords = await listRecycleRecordsWithHistory();
-        if (!latestRecords || !canContinue()) return false;
-        const reindexed = indexArchiveReferences(latestRecords, new Set([candidate.archiveFile]));
-        const latestEntry = reindexed.get(candidate.archiveFile);
-        // If no record references it any longer, leave it to the 2h unreferenced sweep;
-        // if a new physical path appeared outside our held locks, keep the archive.
-        if (!latestEntry || latestEntry.groups.size === 0) return false;
-        for (const latestPath of latestEntry.paths) {
-          if (!lockedPhysicalKeys.has(await physicalWorktreeKey(latestPath))) return false;
+        if (!latestRecords || !canContinue()) return;
+        const reindexed = indexArchiveReferences(latestRecords, new Set(batch.map((candidate) => candidate.archiveFile)));
+        const latestRoots = await readCurrentRootByGroup([...reindexed.values()].flatMap((entry) => [...entry.groups.values()]));
+        if (!latestRoots || !canContinue() || performance.now() >= deadlineAtMs) return;
+
+        const dispositions = [...reindexed].map(([file, entry]) => ({
+          file, entry, disposition: classifyArchiveEntry(entry, latestRoots),
+        }));
+        let latestDeletedOwners = new Map<string, boolean>();
+        if (dispositions.some(({ disposition }) => disposition.kind === 'needs-owners')) {
+          try { latestDeletedOwners = buildDeletedOwnersMap(await readRows()); } catch { /* Unknown owners keep their archive. */ }
         }
-        const latestRoots = await readCurrentRootByGroup(latestEntry.groups.values());
-        if (!latestRoots || !canContinue()) return false;
-        const latestDisposition = classifyArchiveEntry(latestEntry, latestRoots);
-        if (latestDisposition.kind === 'keep') return false;
-        const latestDeletedOwners =
-          latestDisposition.kind === 'needs-owners'
-            ? buildDeletedOwnersMap(await readRows())
-            : new Map<string, boolean>();
-        if (!canContinue()) return false;
-        if (!archiveDispositionSatisfied(latestDisposition, latestDeletedOwners)) return false;
-        return removeObsoleteRecoveryArchive(candidate.archiveFile);
+        for (const { file, entry, disposition } of dispositions) {
+          if (!canContinue() || performance.now() >= deadlineAtMs) return;
+          if (!archiveDispositionSatisfied(disposition, latestDeletedOwners)) continue;
+          // A newly discovered path can only authorize deletion if this batch
+          // actually holds its physical lock. Unreferenced files go to the age-based sweep.
+          try {
+            const keys = await Promise.all([...entry.paths].map(physicalWorktreeKey));
+            if (!keys.every(isHeld) || !canContinue() || performance.now() >= deadlineAtMs) continue;
+            if (await removeObsoleteRecoveryArchive(file)) released++;
+          } catch {
+            // An unavailable archive must not prevent the others from being checked.
+          }
+        }
       });
-      if (removed) released++;
     } catch {
-      continue;
+      // Leave this batch for the next sweep if its locks or journal are unavailable.
     }
   }
   for (const [baseRepo, candidates] of byRepo) {

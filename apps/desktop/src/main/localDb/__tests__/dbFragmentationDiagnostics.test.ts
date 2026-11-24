@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { inspectDatabaseFragmentation } from '../dbFragmentationDiagnostics';
 
@@ -55,10 +55,32 @@ describe('inspectDatabaseFragmentation', () => {
     const report = inspectDatabaseFragmentation(dbFilePath, { topLimit: 5 });
     expect(report.mainBytes).toBeGreaterThan(200 * 1024);
     expect(report.walBytes).toBe(0);
-    if (report.dbstatUnusedBytes !== null) {
-      expect(report.dbstatUnusedBytes).toBeGreaterThan(150 * 1024);
-      expect(report.topObjects[0]?.name).toBe('messages');
-      expect(report.topObjects[0]?.unusedBytes).toBeGreaterThan(150 * 1024);
+    expect(report.freelistCount).toBe(0);
+    expect(report.dbstatUnusedBytes).toBeGreaterThan(150 * 1024);
+    expect(report.topObjects[0]?.name).toBe('messages');
+    expect(report.topObjects[0]?.unusedBytes).toBeGreaterThan(150 * 1024);
+  });
+
+  it('retains base measurements when SQLite has no dbstat table', () => {
+    const db = new Database(dbFilePath);
+    try {
+      db.exec('CREATE TABLE messages (content TEXT NOT NULL)');
+    } finally {
+      db.close();
+    }
+
+    const prepare = Database.prototype.prepare;
+    const missingDbstat = vi.spyOn(Database.prototype, 'prepare').mockImplementation(function (this: Database.Database, sql) {
+      if (/FROM dbstat\b/.test(sql)) throw new Database.SqliteError('no such table: dbstat', 'SQLITE_ERROR');
+      return prepare.call(this, sql);
+    });
+    try {
+      const report = inspectDatabaseFragmentation(dbFilePath);
+      expect(report.pageCount).toBeGreaterThan(0);
+      expect(report.dbstatUnusedBytes).toBeNull();
+      expect(report.topObjects).toEqual([]);
+    } finally {
+      missingDbstat.mockRestore();
     }
   });
 
