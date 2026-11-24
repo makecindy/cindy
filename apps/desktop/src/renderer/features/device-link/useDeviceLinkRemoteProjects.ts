@@ -1385,10 +1385,18 @@ export function useDeviceLinkRemoteProjects(
             return;
           }
           patchedSkippedRuns.get(deviceId)?.delete(event.scheduleId);
+          remoteProjectsStore.clearPendingDeviceScheduleTiming(deviceId, event.scheduleId);
         } else if (event.type === 'ready' || event.type === 'unknown') {
           patchedSkippedRuns.delete(deviceId);
+          remoteProjectsStore.clearPendingDeviceScheduleTiming(deviceId);
         } else if ('scheduleId' in event) {
           patchedSkippedRuns.get(deviceId)?.delete(event.scheduleId);
+          if (
+            event.type === 'changed' || event.type === 'fired' || event.type === 'completed'
+            || event.type === 'failed' || event.type === 'deferred' || event.type === 'skipped'
+          ) {
+            remoteProjectsStore.clearPendingDeviceScheduleTiming(deviceId, event.scheduleId);
+          }
         }
         const forceUnseededOrFailureSkipRefresh = isPatchableSkippedScheduleEvent(event);
         if (!forceUnseededOrFailureSkipRefresh && !refresh.sessionIndex && !refresh.scheduleList && !refresh.unreadSummary) {

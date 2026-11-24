@@ -469,6 +469,7 @@ describe('multi-device recovery lifecycle', () => {
     let healthyNextFireAt = 60_000;
     let slowNextFireAt = 60_000;
     let healthyFailed = false;
+    let pendingHealthyIndex: ReturnType<typeof deferred<unknown>> | undefined;
     const sessionRow = (id: string) => ({
       id,
       title: `Task ${id}`,
@@ -481,9 +482,12 @@ describe('multi-device recovery lifecycle', () => {
     });
     invoke.mockImplementation(async (peer: string, channel: string) => {
       if (channel === 'local-db:sessions:list') {
-        return [sessionRow(peer === 'healthy' ? 's-healthy' : 's-slow')];
+        return peer === 'healthy'
+          ? [sessionRow('s-healthy'), sessionRow('s-other')]
+          : [sessionRow('s-slow')];
       }
       if (channel === 'maker:schedule:list-sidebar-index-runs') {
+        if (peer === 'healthy' && pendingHealthyIndex) return pendingHealthyIndex.promise;
         const nextFireAt = peer === 'healthy' ? healthyNextFireAt : slowNextFireAt;
         const runs: Array<Record<string, unknown>> = [
           {
@@ -663,6 +667,66 @@ describe('multi-device recovery lifecycle', () => {
     expect(indexReads('healthy')).toBe(readsBeforeRecovery + 1);
     expect(remoteProjectsStore.getSessionScheduleInfo('s-healthy')?.hasFailedRun).toBe(false);
     expect(remoteProjectsStore.getSessionScheduleInfo('s-healthy')?.nextFireAt).toBe(360_000);
+
+    // Let the fired-triggered read start, then deliver the terminal skip before
+    // that read returns its pre-skip timing. An unrelated new row must still land.
+    const beforeLateRead = indexReads('healthy');
+    const lateIndex = deferred<unknown>();
+    pendingHealthyIndex = lateIndex;
+    const pushHealthySchedule = (payload: object) =>
+      act(() => listeners.onRemotePush({ deviceId: 'healthy', channel: 'maker:schedule:event', payload }));
+    pushHealthySchedule({ type: 'fired', scheduleId: 's1', runId: 'r-late-index' });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(indexReads('healthy')).toBe(beforeLateRead + 1);
+    pushHealthySchedule({
+      type: 'skipped', scheduleId: 's1', runId: 'r-late-index', sessionId: '',
+      lastFinishedAt: 372_000, nextFireAt: 420_000, preRunCheckSucceeded: true,
+    });
+    expect(remoteProjectsStore.getSessionScheduleInfo('s-healthy')?.nextFireAt).toBe(420_000);
+    pendingHealthyIndex = undefined;
+    lateIndex.resolve({ runs: [
+      {
+        runId: 'r-seed', scheduleId: 's1', scheduleName: 'PR Watch', scheduleStatus: 'active',
+        sessionId: 's-healthy', status: 'success', firedAt: 1_000,
+      },
+      {
+        runId: 'r-other', scheduleId: 's2', scheduleName: 'Another watch', scheduleStatus: 'active',
+        sessionId: 's-other', status: 'success', firedAt: 2_000, nextFireAt: 500_000,
+      },
+    ] });
+    await settle();
+    expect(remoteProjectsStore.getSessionScheduleInfo('s-healthy')?.nextFireAt).toBe(420_000);
+    expect(remoteProjectsStore.getSessionScheduleInfo('s-other')?.nextFireAt).toBe(500_000);
+    pushHealthySchedule({ type: 'changed', scheduleId: 's1', skippedRunId: 'r-late-index' });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(indexReads('healthy')).toBe(beforeLateRead + 1);
+
+    // A newer run supersedes the pending skip overlay even before its own
+    // refresh starts. The response may already reflect that newer run.
+    const nextIndex = deferred<unknown>();
+    pendingHealthyIndex = nextIndex;
+    pushHealthySchedule({ type: 'changed', scheduleId: 's2' });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(indexReads('healthy')).toBe(beforeLateRead + 2);
+    pushHealthySchedule({
+      type: 'skipped', scheduleId: 's1', runId: 'r-follow-up', sessionId: '',
+      lastFinishedAt: 421_000, nextFireAt: 480_000, preRunCheckSucceeded: true,
+    });
+    expect(remoteProjectsStore.getSessionScheduleInfo('s-healthy')?.nextFireAt).toBe(480_000);
+    pushHealthySchedule({ type: 'fired', scheduleId: 's1', runId: 'r-newer' });
+    pendingHealthyIndex = undefined;
+    nextIndex.resolve({ runs: [{
+      runId: 'r-newer', scheduleId: 's1', scheduleName: 'PR Watch', scheduleStatus: 'active',
+      sessionId: 's-healthy', status: 'running', firedAt: 480_000,
+    }] });
+    await settle();
+    expect(remoteProjectsStore.getSessionScheduleInfo('s-healthy')?.nextFireAt).toBeUndefined();
   });
 
   // Same incident: the 60 s safety-net reconcile also re-read every peer's whole run
