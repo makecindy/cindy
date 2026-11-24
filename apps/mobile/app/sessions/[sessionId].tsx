@@ -5138,6 +5138,10 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const renderItems = useMemo(() => optimisticClientIds.size === 0 ? renderWindow.items : renderWindow.items.filter((item) =>
     !(item.type === 'message' && optimisticClientIds.has(item.message.source.clientId))),
   [renderWindow.items, optimisticClientIds]);
+  const timelineItems = useMemo(
+    () => companionChat ? companionProcessItems(renderWindow.items, isMessageListStreaming) : renderWindow.items,
+    [companionChat, isMessageListStreaming, renderWindow.items],
+  );
   const renderItemsStructureKey = useMemo(
     () => ({}),
     [pendingQuestionIds, optimisticUsers, historyView.snapshot, errorTailClientId, activeErrorClientId, forkOrigin, i18nInstance.language, inputProjection.autoResumePending, isMessageListStreaming, makerTurnRunning, messageStructureToken, sessionId, taskUpdates],
@@ -5180,8 +5184,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   );
   const activeSearchHit = activeSearchIndex >= 0 ? (searchHits[activeSearchIndex] ?? null) : null;
   const routeFocusedItemKey = useMemo(
-    () => findMobileRenderItemKeyByClientId(renderItems, routeFocusedClientId),
-    [renderItems, routeFocusedClientId],
+    () => findMobileRenderItemKeyByClientId(timelineItems, routeFocusedClientId),
+    [timelineItems, routeFocusedClientId],
   );
   const focusedMessageItemKey = activeSearchHit?.itemKey ?? routeFocusedItemKey;
   const routeFocusKey = routeFocusClientId
@@ -6422,8 +6426,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     ],
   );
   const messageListItems = useMemo(
-    () => mergePendingSendItems(companionChat ? companionProcessItems(renderWindow.items, isMessageListStreaming) : renderWindow.items, pendingSendItems, optimisticClientIds),
-    [companionChat, pendingSendItems, renderWindow.items, optimisticClientIds, isMessageListStreaming],
+    () => mergePendingSendItems(timelineItems, pendingSendItems, optimisticClientIds),
+    [timelineItems, pendingSendItems, optimisticClientIds],
   );
   const canLoadEarlierHistory = (historyView.snapshot.ready ? historyView.snapshot.hasMore : hasOlderMessages && messages.length > 0)
     && !isScheduleDetail;

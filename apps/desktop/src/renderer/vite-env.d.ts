@@ -1825,7 +1825,7 @@ interface ElectronAPI {
     officialModelPlugins: (cursor: string | null) => Promise<import('../shared/pluginMarket').OfficialModelPluginPage>;
     query: (input: import('../shared/pluginMarket').PluginMarketQuery) => Promise<import('../shared/pluginMarket').PluginMarketPage>;
     lookup: (ghostIds: string[]) => Promise<import('../shared/pluginMarket').PluginMarketSnapshot>;
-    recommendations: () => Promise<import('../shared/pluginMarket').PluginMarketItem[]>;
+    recommendations: (pluginIds?: string[]) => Promise<import('../shared/pluginMarket').PluginMarketItem[]>;
     snapshot: () => Promise<import('../shared/pluginMarket').PluginMarketSnapshot>;
     detail: (pluginId: string) => Promise<import('../shared/pluginMarket').PluginMarketDetail>;
     prepareShare: (pluginId: string, options?: import('../shared/share').ShareOptions) => Promise<import('../shared/share').ShareContent>;

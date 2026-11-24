@@ -339,6 +339,7 @@ import {
   parsePluginInstanceId,
   pluginStoragePart,
   pluginInstallStoragePart,
+  pluginNewInstallRelId,
   isValidPluginInstallRelId,
   isPluginInstanceKey,
   resolveInstalledGhost,
@@ -6599,6 +6600,21 @@ function getGhostConnectionManager(): GhostConnectionManager {
     });
   }
   return ghostConnectionManagerSingleton;
+}
+
+/** The status service may use only the approved public plugin's matching instance. */
+export function readGitlabPluginToken(host: string): string | null {
+  if (isGhostBoundaryPending()) return null;
+  const manager = getGhostManager();
+  const identity = createPluginLogicalIdentity(null, CINDY_GITLAB_GHOST_ID);
+  const storage = pluginInstallStoragePart(pluginNewInstallRelId(identity));
+  const known = [manager.findInstalledInstance(storage), manager.findInstalledInstance(CINDY_GITLAB_GHOST_ID)]
+    .filter((ghost): ghost is InstalledGhost => !!ghost);
+  const plugin = findInstalledGhostByIdentity(known, identity) ?? findInstalledGhostByIdentity(manager.list(), identity);
+  if (!plugin || !plugin.enabled || plugin.approval.state !== 'approved') return null;
+  const instance = installedGhostStoragePart(plugin);
+  if (!isGhostAvailableForActiveSession(instance)) return null;
+  return getGhostConnectionManager().resolveTokenByHost(instance, CINDY_GITLAB_CONNECTION_KEY, host);
 }
 
 let ghostSetupKvStore: GhostKvStore | null = null;

@@ -4,6 +4,7 @@ import { ThreadPanel } from '../../../src/renderer/features/bots/ThreadPanel';
 import { useState } from 'react';
 import { mountPage, subscription } from '../../ui-page/harness';
 import { MessageStream } from '../../../src/renderer/components/chat/MessageStream';
+import { createLocalImSource } from '../../../src/shared/imMessageSource';
 import type { ChatMessage } from '../../../src/renderer/lib/makerChatStore';
 import { Button } from '../../../src/renderer/components/ui/button';
 import { WorkGroupBlock } from '../../../src/renderer/components/chat/WorkGroupBlock';
@@ -139,6 +140,41 @@ function ReplyColumns({ ordinary }: { ordinary: boolean }) {
   </div>;
 }
 
+function FeishuReplyColumns({ editing }: { editing: boolean }) {
+  const legacy = '<p>请核对<strong>演示记录</strong> &amp; 备注。</p><p>完成后告知结果。</p>';
+  const incoming = '<p>请再核对新版本。<br>保留已确认的条目。</p>';
+  const rows: ChatMessage[] = [
+    { ...text('feishu-history', legacy), role: 'user', hookSource: { im: 'feishu', userText: legacy } },
+    { ...text('feishu-reply', '演示记录已核对。'.repeat(15), 'final_answer'), turnCompleted: true },
+    { ...text('imessage-source', '同步记录已收到。'), role: 'user', hookSource: createLocalImSource('imessage', '同步记录已收到。') },
+    { ...text('feishu-incoming', incoming), role: 'user', hookSource: createLocalImSource('feishu', incoming, {
+      replyContext: [
+        '[林岚] 2026-11-19 00:00 UTC [合并转发消息]',
+        '[周晴] <p>这是<strong>上一版记录</strong>。<br>第二行备注。</p>',
+        '[周晴] ```html',
+        '<p><strong>示例原文</strong></p>',
+        '```',
+        '[图片]',
+        '[文件: 演示记录.pdf]',
+        '(被引消息的 2 个附件已随本轮一并提供)',
+      ].join('\n'),
+      replyMessageCount: 1,
+      groupContext: [
+        '[林岚] 11-19 08:42 <p>上一版已核对。</p><p>新版保留已确认的条目。</p> [文件: 记录.pdf]',
+        '[周晴] 11-19 08:43 [合并转发消息]',
+        '[林岚] <p>两版差异已整理。</p> [图片]',
+      ].join('\n'),
+      groupMessageCount: 2,
+    }) },
+    ...(!editing ? [{ ...text('feishu-native', '原生输入保留字面 <p> 示例'), role: 'user' as const }] : []),
+  ];
+  return <div className="flex h-screen w-full min-w-0 flex-col bg-[var(--surface)]" data-ui-page-subject>
+    <MessageStream workingDir="" historyLoaded sessionId="feishu-fixture" agentKind="codex" messages={rows}
+      assistantAvatar={<BotAvatar bot={{ name: 'Cindy', avatar: 'cindy://avatar/preset/cindy' }} size="sm" />}
+      simplifiedBotConversation contentWidth={914} />
+  </div>;
+}
+
 function Subject({ done, retry, artifactCase, refresh, disclosure, switched, columns, ordinary, unread }: { done: boolean; retry: boolean; switched?: boolean; artifactCase?: string; refresh?: boolean; disclosure?: boolean; columns?: boolean; ordinary?: boolean; unread?: boolean }) {
   const [finished, setFinished] = useState(done);
   const [revision, setRevision] = useState(0);
@@ -176,5 +212,5 @@ void mountPage({
       return { kind: missing ? 'missing' : 'file', birthtimeMs: Date.now() - 46000, mtimeMs: Date.now() - 46000 };
     } },
   }),
-  render: ctx => <Subject columns={ctx.data.columns === true} ordinary={ctx.data.ordinary === true} unread={ctx.data.unread === true} switched={ctx.data.switched === true} done={ctx.data.done === true} retry={ctx.data.retry === true} refresh={ctx.data.refresh === true} disclosure={ctx.data.disclosure === true} artifactCase={ctx.case.startsWith('artifacts-') ? ctx.case : undefined} />,
+  render: ctx => ctx.case.startsWith('feishu-') ? <FeishuReplyColumns editing={ctx.case === 'feishu-edit'} /> : <Subject columns={ctx.data.columns === true} ordinary={ctx.data.ordinary === true} unread={ctx.data.unread === true} switched={ctx.data.switched === true} done={ctx.data.done === true} retry={ctx.data.retry === true} refresh={ctx.data.refresh === true} disclosure={ctx.data.disclosure === true} artifactCase={ctx.case.startsWith('artifacts-') ? ctx.case : undefined} />,
 });

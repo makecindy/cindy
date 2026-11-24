@@ -23,6 +23,16 @@ export const windowBehaviorSettings = defineSettings({
     descriptionKey: 'settings.windowBehavior.menubar.hint',
     isVisible: ({ platform }) => platform === 'darwin',
   },
+  trayCardLabel: {
+    id: 'settings.windowBehavior.trayCard.label',
+    fallbackTargetId: 'settings-window-behavior',
+    tab: 'general',
+    targetId: 'settings-search-tray-card',
+    titleKey: 'settings.windowBehavior.trayCard.label',
+    sectionKey: 'settings.sections.windowBehavior',
+    descriptionKey: 'settings.windowBehavior.trayCard.hint',
+    isVisible: ({ platform }) => platform === 'win32',
+  },
   closeBehaviorLabel: {
     id: 'settings.windowBehavior.closeBehavior.label',
     fallbackTargetId: 'settings-window-behavior',

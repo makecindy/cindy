@@ -1880,8 +1880,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     cancelOfficialModelPlugins: (): Promise<void> => ipcRenderer.invoke('plugin-market:cancel-official-model-plugins'),
     officialModelPlugins: (cursor: string | null): Promise<import('../shared/pluginMarket').OfficialModelPluginPage> =>
       ipcRenderer.invoke('plugin-market:official-model-plugins', cursor),
-    recommendations: (): Promise<import('../shared/pluginMarket').PluginMarketItem[]> =>
-      ipcRenderer.invoke('plugin-market:recommendations'),
+    recommendations: (pluginIds?: string[]): Promise<import('../shared/pluginMarket').PluginMarketItem[]> =>
+      ipcRenderer.invoke('plugin-market:recommendations', pluginIds),
     snapshot: (): Promise<import('../shared/pluginMarket').PluginMarketSnapshot> =>
       ipcRenderer.invoke('plugin-market:snapshot'),
     detail: (pluginId: string): Promise<import('../shared/pluginMarket').PluginMarketDetail> =>

@@ -1292,6 +1292,7 @@ import {
   getGhostSessionActivityTracker,
   interruptGhostCallsForAccountBoundary,
   reconcileGhostOauthAccountsForActiveOwner,
+  readGitlabPluginToken,
   refreshGhostLocalization,
   registerGhostIpc,
   setRemotePluginManagementServices,
@@ -3073,7 +3074,7 @@ registerAppShortcutIpc();
 registerAppearanceSettingsIpc();
 registerAccessibilitySupportIpc();
 registerLoginItemIpc();
-registerMenubarIpc();
+registerMenubarIpc(() => windowsQuotaPanel);
 registerAwayGuardIpc({
   read: () => {
     const settings = readWindowBehaviorSettings();
@@ -10865,7 +10866,7 @@ app.on('ready', async () => {
     );
   });
   // session-git-pr-context: git-context:* channel(分支查询/HEAD 监听/PR 引用/PR 状态)
-  registerGitContextIpc();
+  registerGitContextIpc({ readGitlabPluginToken });
   registerGitReviewIpc({
     isSessionRunning: (sessionId) => {
       try {
