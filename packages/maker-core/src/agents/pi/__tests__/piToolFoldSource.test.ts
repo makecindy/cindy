@@ -465,6 +465,78 @@ describe('cindy-tool-fold extension source', () => {
     expect(joined.length).toBeGreaterThan(next.offset as number);
   });
 
+  // 把「允许新增多少」当成「总共保留多少」，会用更短的前缀覆盖已有预览，模型反而少看正文。
+  it('never restores a shorter prefix than the preview it replaces', () => {
+    const flag = Symbol.for('cindy.pi.textOnlyTurn');
+    const { context, toolResult } = loadExtension({
+      CINDY_PI_TOOL_FOLD_INGEST_KEEP: '32000',
+      CINDY_PI_TOOL_FOLD_INGEST_LIMIT: '60000',
+      CINDY_PI_TOOL_FOLD_PIN_BUDGET: '2000',
+    });
+    const body = 'line of payload\n'.repeat(6250);
+    const truncated = toolResult({ toolName: 'read', toolCallId: 'wide', content: [{ type: 'text', text: body }] }) as { content: Block[] } | undefined;
+    expect(truncated).toBeDefined();
+    const previewChars = truncated!.content.map((block) => String(block.text ?? '')).join('').length;
+    const messages: Message[] = [
+      { role: 'user', content: [{ type: 'text', text: 'what changed' }] },
+      call('wide', 'read', { path: 'wide.log' }),
+      { role: 'toolResult', toolCallId: 'wide', toolName: 'read', content: truncated!.content },
+    ];
+    (globalThis as Record<symbol, unknown>)[flag] = true;
+    let out: Message[];
+    try { out = projection(context, messages); } finally { delete (globalThis as Record<symbol, unknown>)[flag]; }
+    const shown = (out[2].content ?? []).map((block) => String(block.text ?? '')).join('').length;
+    expect(shown).toBeGreaterThanOrEqual(previewChars);
+  });
+
+  // 恢复只能追加：被预算截住时，预览里已经交付的图片块必须原样留着（禁用工具的回合取不回来）。
+  it('keeps the media blocks of a result whose text alone exceeds the restore budget', () => {
+    const flag = Symbol.for('cindy.pi.textOnlyTurn');
+    const { context, toolResult } = loadExtension({
+      CINDY_PI_TOOL_FOLD_INGEST_KEEP: '8000',
+      CINDY_PI_TOOL_FOLD_INGEST_LIMIT: '30000',
+      CINDY_PI_TOOL_FOLD_PIN_BUDGET: '6000',
+    });
+    const image = { type: 'image', data: 'i'.repeat(20000), mimeType: 'image/png' } as Block;
+    const body = 'payload line\n'.repeat(3000);
+    const truncated = toolResult({ toolName: 'read', toolCallId: 'mixed', content: [{ type: 'text', text: body }, image] }) as { content: Block[] } | undefined;
+    expect(truncated).toBeDefined();
+    const previewChars = truncated!.content.map((block) => String(block.text ?? '')).join('').length;
+    const messages: Message[] = [
+      { role: 'user', content: [{ type: 'text', text: 'what is in this screenshot' }] },
+      call('mixed', 'read', { path: 'shot.png' }),
+      { role: 'toolResult', toolCallId: 'mixed', toolName: 'read', content: truncated!.content },
+    ];
+    (globalThis as Record<symbol, unknown>)[flag] = true;
+    let out: Message[];
+    try { out = projection(context, messages); } finally { delete (globalThis as Record<symbol, unknown>)[flag]; }
+    const blocks = out[2].content ?? [];
+    const media = blocks.filter((block) => block.type === 'image');
+    expect(media).toHaveLength(1);
+    expect(String(media[0].data)).toHaveLength(20000);
+    const shown = blocks.map((block) => String(block.text ?? '')).join('').length;
+    expect(shown).toBeGreaterThanOrEqual(previewChars);
+  });
+
+  // 真实结果恰好以一句「上游截断」收尾、调用 id 又很短时，不能被当成截断预览而丢掉原文。
+  it('keeps the original of a result that merely ends with an upstream truncation note', async () => {
+    const { context, toolResult, tool } = loadExtension({
+      CINDY_PI_TOOL_FOLD_INGEST_LIMIT: '20000',
+      CINDY_PI_TOOL_FOLD_INGEST_KEEP: '4000',
+    });
+    const body = 'row ' + 'r'.repeat(24000) + '\n[truncated by upstream]';
+    const truncated = toolResult({ toolName: 'read', toolCallId: 'a', content: [{ type: 'text', text: body }] }) as { content: Block[] } | undefined;
+    expect(truncated).toBeDefined();
+    projection(context, [
+      { role: 'user', content: [{ type: 'text', text: 'read the table' }] },
+      call('a', 'read', { path: 'table.csv' }),
+      { role: 'toolResult', toolCallId: 'a', toolName: 'read', content: truncated!.content },
+    ]);
+    const recovered = await tool.execute('t-upstream', { call_id: 'a' });
+    expect(recovered.isError).toBeUndefined();
+    expect(String(recovered.content![0].text)).toContain('row rrrrrrrrrr');
+  });
+
   it('recovers a folded result that merely quotes the truncation marker text', async () => {
     const { context, tool } = loadExtension();
     const messages = pairs(40);
@@ -594,7 +666,7 @@ describe('cindy-tool-fold extension source', () => {
     // 批里一条只剩入库摘要、原文又不在 giants 时，整批取回必须点名缺项，
     // 静默跳过会让模型把半批内容当成整批原文。
     const { context, tool } = loadExtension();
-    const preview = 'A ' + 'z'.repeat(1900) + '\n[truncated 28000 of 30001 chars; cindy_toolfold_read("p1") returns the full text]';
+    const preview = 'A ' + 'z'.repeat(1900) + '\n[truncated 28099 of 30001 chars; cindy_toolfold_read("p1") returns the full text]';
     const messages: Message[] = [
       { role: 'user', content: [{ type: 'text', text: 'run both' }] },
       {
@@ -806,7 +878,7 @@ describe('cindy-tool-fold extension source', () => {
     }
     // Simulate a resumed session: the transcript holds only the preview of giant-0, in the
     // shape earlier versions persisted (a bare-string call). That shape must still be recognized.
-    const preview = 'body zzz…\n[truncated 20000 of 22009 chars; cindy_toolfold_read("giant-0") returns the full text]';
+    const preview = 'body zzz…\n[truncated 20000 of 20009 chars; cindy_toolfold_read("giant-0") returns the full text]';
     const messages = [
       call('giant-0', 'bash', { command: 'make big output' }),
       { role: 'toolResult', toolCallId: 'giant-0', toolName: 'bash', content: [{ type: 'text', text: preview }] },
@@ -1006,7 +1078,7 @@ describe('cindy-tool-fold extension source', () => {
     }
     // The transcript keeps only the truncation preview, as pi would store it; the
     // tool_result hook passes it through (small enough), so build it inline.
-    const previewText = 'payload 0 ' + 'g'.repeat(1800) + '\n[truncated 23000 of 25011 chars; cindy_toolfold_read("giant-0") returns the full text]';
+    const previewText = 'payload 0 ' + 'g'.repeat(1800) + '\n[truncated 23000 of 24810 chars; cindy_toolfold_read("giant-0") returns the full text]';
     const preview = { role: 'toolResult', toolCallId: 'giant-0', toolName: 'bash', content: [{ type: 'text', text: previewText }] } as unknown as { content: Block[] };
     expect(preview).toBeDefined();
     projection(context, [
@@ -2098,7 +2170,7 @@ describe('cindy-tool-fold extension source', () => {
       const marked = ingested.toolResult({ toolName: 'bash', toolCallId: id, content: [{ type: 'text', text: 'T'.repeat(30000) }] }) as { content: Block[] };
       const marker = marked.content.map((block) => String((block as { text?: string }).text ?? '')).join('\n');
       expect(marker).toMatch(/\[truncated \d+ of \d+ chars; [^\]]+\]$/);
-      const drift = marker.replace(/\[truncated \d+ of \d+ chars; [^\]]+\]$/, '[truncated 28000 of 30000 chars; the rest was cut when stored; ask for call "' + id + '" to see it]');
+      const drift = marker.replace(/\[truncated \d+ of \d+ chars; [^\]]+\]$/, '[truncated 26000 of 30000 chars; the rest was cut when stored; ask for call "' + id + '" to see it]');
       const cases: Array<[string, Record<string, string>]> = [
         [marker, { CINDY_PI_TOOL_FOLD_INGEST_KEEP: '100', CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: '6000' }],
         [marker, { CINDY_PI_TOOL_FOLD_INGEST_KEEP: '4000', CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: '1000' }],
@@ -2144,6 +2216,38 @@ describe('cindy-tool-fold extension source', () => {
     const read = await tool.execute('r1', { call_id: id });
     const said = String(read.content![0].text);
     expect(said).toContain('clipped by the upstream tool');
+    expect(said).not.toMatch(/no longer available|not retained|Cannot page/);
+  });
+
+  it('tells its own marker apart from the same rendering for another call id', async () => {
+    // 限长把两个长 id 渲染成同一个名字，所以归因不能按名字：按「标记之前的字符数等于总数减去被截掉」
+    // 这一条写预览时的构造来认。自己的预览（前缀长度对得上）一律不当原文；别人的那句话长度对不上，
+    // 就是正文。两种错法都不能出现：把原文丢成拒绝、把预览当成全文。
+    const longer = 'call-' + 'i'.repeat(600);
+    const shorter = 'call-' + 'i'.repeat(250);
+    const env = { CINDY_PI_TOOL_FOLD_INGEST_KEEP: '500', CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: '6000' };
+    const ingested = loadExtension(env);
+    const marked = ingested.toolResult({
+      toolName: 'bash',
+      toolCallId: longer,
+      isError: false,
+      content: [{ type: 'text', text: 'y'.repeat(60000) }],
+    }) as { content: Block[] };
+    const own = marked.content.map((block) => String((block as { text?: string }).text ?? '')).join('\n');
+    for (const id of [longer, shorter]) {
+      const fresh = loadExtension(env);
+      projection(fresh.context, [call(id, 'bash', { command: 'x' }), result(id, 'bash', own)]);
+      const read = await fresh.tool.execute('r', { call_id: id });
+      const said = String(read.content![0].text);
+      // 60000 字符的原文不在登记表里，上下文里这份是预览：任何 id 都不许把它当原文交回。
+      expect(said).not.toContain('y'.repeat(300));
+      expect(said).toMatch(/not retained|no longer available|Cannot page/);
+    }
+    // 同一句提示但长度对不上：那是正文，必须原样交回。
+    const quoted = loadExtension(env);
+    projection(quoted.context, [call(shorter, 'bash', { command: 'x' }), result(shorter, 'bash', 'see note ' + own.split('\n').pop())]);
+    const said = String((await quoted.tool.execute('r', { call_id: shorter })).content![0].text);
+    expect(said).toContain('see note');
     expect(said).not.toMatch(/no longer available|not retained|Cannot page/);
   });
 

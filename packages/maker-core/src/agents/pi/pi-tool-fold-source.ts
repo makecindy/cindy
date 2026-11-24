@@ -203,21 +203,24 @@ export default function (pi) {
   // 落盘之后身份只剩原文，标记只能靠结构认回：以标记收尾、点名同一个调用 id。
   // 「当时用的是哪种措辞、当时的额度是多少」都不参与——写下去的东西必须和读回来时的
   // 配置无关，否则同一份会话换个配置就把截断预览当成全文。
-  // 标记必须是「N of M chars;」这种带数字的完整形态，且 M > N。
-  // 只要求「文本里出现过 [truncated 与 id」会误判真实结果（例如以 [truncated by upstream]
-  // 结尾、调用 id 又很短），误判会让原文被当成预览丢掉。
-  function isTruncatedPreview(id, text) {
-    var key = String(id);
+  // 归属也不按 id：标记里的 id 会被限长渲染，两个前缀相同的长 id 渲染成同一个名字，按名字
+  // 归因只能靠「标记记下的字符数」补救，而渲染本身已经把信息丢了。改看长度：标记之前的字符
+  // 数必须正好等于「总数 − 被截掉」——这是写预览时的构造，引用这段文字的真实结果长度不同。
+  // 两种错法各有用例守着：把别人的标记当成自己的预览（原文丢成一句拒绝）、把预览当成正文。
+  function isTruncatedPreview(text) {
     if (typeof text !== 'string' || text.charAt(text.length - 1) !== ']') return false;
     var open = text.lastIndexOf('[truncated ');
     if (open < 0) return false;
     var tail = text.slice(open);
     var head = /\[truncated (\d+) of (\d+) chars; /.exec(tail);
     if (!head) return false;
-    if (Number(head[2]) <= Number(head[1])) return false;
-    // 身份按完整 token 认：自己写的标记要么把 id 放在引号里，要么降级成「call id <名字>」。
-    // 子串包含会把短 id（例如 "a"）当成任何含这个字母的陌生标记，原文就被当预览丢掉。
-    return tail.indexOf('"' + key + '"') >= 0 || tail.indexOf('call id ' + oneLine(key)) >= 0;
+    var dropped = Number(head[1]);
+    var total = Number(head[2]);
+    if (total <= dropped) return false;
+    // 预览的文本块和标记块拼起来时中间有一个换行。
+    var prefix = open;
+    if (prefix > 0 && text.charAt(prefix - 1) === '\n') prefix--;
+    return prefix === total - dropped;
   }
 
   // Pins: callId -> { ts, chars }. ts is a monotonic recovery clock so the eviction
@@ -546,8 +549,9 @@ export default function (pi) {
         try { nonText += JSON.stringify(part).length; } catch (error) { /* ignore */ }
       }
     }
-    var withExtras = nonText <= keep;
-    var textBudget = Math.max(0, keep - (withExtras ? nonText : 0));
+    // 恢复只能追加：预览里已经有的非文本块一律保留，超出的部分只从文字里扣。
+    // 丢掉图片这类块会让模型在禁用工具的回合永久失去它，而那条结果是它唯一的一次交付。
+    var textBudget = Math.max(0, keep - nonText);
     var out = [];
     var shown = 0;
     var trailer = '';
@@ -559,7 +563,7 @@ export default function (pi) {
         var block = blocks[i];
         if (!block) continue;
         if (block.type !== 'text' || typeof block.text !== 'string') {
-          if (withExtras) out.push(block);
+          out.push(block);
           continue;
         }
         var text = block.text;
@@ -592,7 +596,8 @@ export default function (pi) {
       if (!(added > 0)) continue;
       if (added <= left) { left -= added; picks.push({ at: i, blocks: giant.blocks }); continue; }
       if (picks.length === 0 && left >= PARTIAL_FLOOR_CHARS) {
-        // 已显示多少 + 还能新增多少 = 这一段总共保留多少字符。
+        // 已显示多少 + 还能新增多少 = 这一段总共保留多少字符；调用方按这两者之和截取，
+        // 所以恢复只会追加，不会用更短的前缀覆盖已有正文。
         picks.push({ at: i, blocks: giant.blocks, add: left, have: textChars(message.content), total: textChars(giant.blocks) });
         left = 0;
       }
@@ -678,7 +683,7 @@ export default function (pi) {
     // 先按大小决定收不收，再要全文：被拒的载荷不该先付一整份副本的内存。
     var text = makeText();
     // 带截断标记的文本是预览，不是原文：收下它就等于把预览登记成「原文」，取回时再也分不出来。
-    if (isTruncatedPreview(id, text)) return false;
+    if (isTruncatedPreview(text)) return false;
     if (giants.has(id)) {
       giantBytes -= giants.get(id).bytes;
       giants.delete(id);
@@ -785,11 +790,11 @@ export default function (pi) {
     var giant = giantEntry === null ? null : giantEntry.text;
     var truncatedPreview = null;
     // Ingestion truncation appends exactly one marker and it is the last thing in
-    // the result. Only that full shape, naming this call id, counts as a preview: a
+    // result. Only that full shape counts as a preview: a
     // result that merely quotes the wording stays recoverable.
     if (giant === null && resultMsg) {
       var resultText = textOf(resultMsg.content);
-      if (isTruncatedPreview(key, resultText)) truncatedPreview = resultText.slice(resultText.lastIndexOf('[truncated '));
+      if (isTruncatedPreview(resultText)) truncatedPreview = resultText.slice(resultText.lastIndexOf('[truncated '));
     }
     // The registry holds the FULL text of an ingestion-truncated payload (the transcript
     // only has the preview). Prefer it, and combine it with the call block so recovery
