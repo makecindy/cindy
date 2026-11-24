@@ -23,6 +23,13 @@ export default {
     'src/renderer/contexts/AuthContext': { partial: `export const useAuth = () => ({ mode: (window.__uiPage.ctx.data.cloud || window.__uiPage.ctx.data.tab === 'billing') ? 'cloud' : 'local', dataOwnerId: 'fixture-account', user: { id: 'fixture-account', name: 'Preview', membershipKind: 'personal' } });` },
   },
   cases: {
+    // #8380: real SettingsView at the 800px minimum window's 2x/3x CSS widths.
+    // Existing cases use 1280px and cannot catch a fixed sidebar starving content.
+    ...Object.fromEntries([400, 267, 800].map(width => [`zoom-layout-${width}`, {
+      about: 'Content remains reachable; navigation and search return to the selected panel',
+      viewport: { width, height: width === 800 ? 600 : width === 267 ? 200 : 300 },
+      data: { tab: 'remote-control', cloud: true, zoomLayout: true },
+    }])),
     'model-tokens': { about: 'One analytics switch controls activity and model totals', data: {tab: 'about', cloud: true, modelTokens: true} },
     'archive-search': { about: 'Searching for auto archive or idle days opens the inline controls inside Storage', data: { tab: 'general', archiveEnabled: true } },
     'archive-legacy': { about: 'The previous Task management link opens Storage and highlights auto archive', data: { tab: 'storage', routeTab: 'task-management' } },
@@ -44,8 +51,77 @@ export default {
   },
   async check(page, ui) {
     const panel = page.getByRole('tabpanel');
-    await panel.waitFor();
+    await panel.waitFor({ state: ui.data.zoomLayout ? 'attached' : 'visible' });
     assert.equal(await panel.getAttribute('id'), `settings-panel-${ui.data.tab}`);
+    if (ui.data.zoomLayout) {
+      const column = panel.locator('..').locator('..');
+      const bounds = await column.boundingBox();
+      assert.ok(bounds && bounds.width >= Math.min(300, ui.viewport.width - 32), 'settings content must have usable width');
+      if (ui.viewport.width >= 800) {
+        assert.equal(await page.getByRole('tab', { name: await ui.t('settings.tabs.general'), exact: true }).isVisible(), true);
+        return;
+      }
+      const menu = page.getByRole('button', { name: await ui.t('settings.title'), exact: true });
+      await page.clock.install();
+      // Re-enter through real navigation so the pollers register on the installed clock.
+      // Installing a clock after an interval starts cannot control that existing timer.
+      await menu.click();
+      await page.getByRole('tab', { name: await ui.t('settings.tabs.general'), exact: true }).click();
+      await page.locator('#settings-panel-general').waitFor({ state: 'visible' });
+      await menu.click();
+      await page.getByRole('tab', { name: await ui.t('settings.tabs.remoteControl'), exact: true }).click();
+      await page.locator('#settings-panel-remote-control').waitFor({ state: 'visible' });
+      const activeReads = await page.evaluate(() => ({ ...window.settingsFixtureReads }));
+      await page.clock.fastForward(3100);
+      const polledReads = await page.evaluate(() => ({ ...window.settingsFixtureReads }));
+      assert.ok(polledReads.relay > activeReads.relay && polledReads.remoteDesktop > activeReads.remoteDesktop, 'both visible panel timers are controlled by the clock');
+      const scrollTop = await column.evaluate(el => { el.scrollTop = 40; return el.scrollTop; });
+      await menu.click();
+      const hiddenReads = await page.evaluate(() => ({ ...window.settingsFixtureReads }));
+      await page.clock.fastForward(6000);
+      assert.deepEqual(await page.evaluate(() => window.settingsFixtureReads), hiddenReads, 'hidden panels must stop polling');
+      await page.getByRole('tab', { name: await ui.t('settings.tabs.remoteControl'), exact: true }).click();
+      await panel.waitFor({ state: 'visible' });
+      assert.equal(await column.evaluate(el => el.scrollTop), scrollTop, 'navigation must retain content scroll position');
+      await page.waitForFunction(before => window.settingsFixtureReads.relay > before.relay, hiddenReads);
+      const restoredReads = await page.evaluate(() => ({ ...window.settingsFixtureReads }));
+      await page.clock.fastForward(3100);
+      assert.ok((await page.evaluate(() => window.settingsFixtureReads.relay)) > restoredReads.relay, 'visible panel polling resumes');
+      await page.clock.resume();
+      await menu.click();
+      await page.getByRole('tab', { name: await ui.t('settings.tabs.general'), exact: true }).click();
+      await page.locator('#settings-panel-general').waitFor({ state: 'visible' });
+      assert.equal(await menu.getAttribute('aria-expanded'), 'false');
+      await menu.click();
+      const search = page.getByRole('combobox', { name: await ui.t('settings.search.ariaLabel') });
+      await search.fill(await ui.t('settings.tabs.appearance'));
+      await page.locator('[role="option"]').first().click();
+      await page.locator('#settings-panel-appearance').waitFor({ state: 'visible' });
+      assert.equal(await menu.getAttribute('aria-expanded'), 'false');
+      await menu.click();
+      await menu.press('Escape');
+      assert.equal(await menu.getAttribute('aria-expanded'), 'false');
+      await page.locator('#settings-panel-appearance').waitFor({ state: 'visible' });
+      await menu.click();
+      await page.getByRole('tab', { name: await ui.t('settings.tabs.personalization'), exact: true }).click();
+      const draft = page.getByRole('textbox', { name: await ui.t('settings.personalization.ariaLabel'), exact: true });
+      await draft.fill('Unsaved instructions #8380');
+      await menu.click();
+      await page.getByRole('tab', { name: await ui.t('settings.tabs.personalization'), exact: true }).click();
+      assert.equal(await draft.inputValue(), 'Unsaved instructions #8380', 'opening navigation must preserve an unsaved draft');
+      // A real external store update while disconnected must be observed on return.
+      await menu.click();
+      await page.evaluate(() => window.settingsFixtureSetPrompt('External saved instructions #8380'));
+      await page.getByRole('tab', { name: await ui.t('settings.tabs.personalization'), exact: true }).click();
+      await page.waitForFunction(() => document.querySelector('textarea')?.value === 'External saved instructions #8380');
+      // Crossing the breakpoint must restore the wide navigation and clear its transient state.
+      await page.setViewportSize({ width: 800, height: 600 });
+      await page.getByRole('tab', { name: await ui.t('settings.tabs.general'), exact: true }).waitFor({ state: 'visible' });
+      await page.setViewportSize(ui.viewport);
+      await menu.waitFor({ state: 'visible' });
+      assert.equal(await menu.getAttribute('aria-expanded'), 'false');
+      return;
+    }
     // Product regression: the opt-in must remain off until selected. Exercise the
     // real setting, search and local override; existing cases only read controls.
     if (ui.data.modelTokens) {

@@ -1,4 +1,5 @@
 import { SETTINGS_SEARCH_ENTRIES } from '../../../src/renderer/components/settings/settingsSearchCatalog';
+import { setUserPrompt } from '../../../src/renderer/lib/userPromptStore';
 import { SettingsView } from '../../../src/renderer/components/settings/SettingsView';
 import { ctx, mountPage, subscription, forbid } from '../../ui-page/harness';
 import { WallpaperSettingsProvider } from '../../../src/renderer/hooks/useWallpaperSettings';
@@ -6,6 +7,8 @@ import { SUBAGENT_MODEL_SETTINGS_DEFAULTS } from '../../../src/shared/subagentMo
 import { getDefaultVoiceInputSettings } from '../../../src/shared/voiceInputData';
 import { DEFAULT_APPEARANCE_SETTINGS } from '../../../src/shared/appearanceSettings';
 
+const settingsFixtureReads = { relay: 0, remoteDesktop: 0 };
+Object.assign(window, { settingsFixtureReads, settingsFixtureSetPrompt: setUserPrompt });
 const read = <T,>(value: T) => async () => value;
 const state = <T extends object>(defaults: T) => ({ ...defaults, defaults, isCustomized: false, customizedKeys: [] });
 const voiceSettings = getDefaultVoiceInputSettings(ctx.platform);
@@ -69,6 +72,8 @@ void mountPage({
       recentWorkdirs: { list: read([]) },
     },
     maker: {
+      onProvidersChanged: subscription('providers'), onChatEmbeddingChanged: subscription('chat-embedding'),
+      chatEmbeddingGet: read(state({ enabled: false })),
       usage: { getHistory: read({ generatedAt: 1793577600000, todayKey: '2026-11-02', days: [], modelDaily: [], models: [], streak: { current: 0, longest: 0 }, totals: { today: zeroMoney, last30Days: zeroMoney, last30DaysWithEstimatedValue: zeroMoney, last30DaysEstimatedValue: zeroMoney, todayTokens: 0, last30DaysTokens: 0 }, anomaly: { isAnomalous: false, trailing7DayAvg: null } }), onTodaySpendChanged: subscription('spend'), onTodayTokensChanged: subscription('tokens'), onModelPricingChanged: subscription('pricing') },
       agent: { getBinaryVersion: read({ version: '1.0.0' }) },
       piKernel: { getState: read({ currentVersion: '0.0.0', restartRequired: false, operation: null, official: { release: null, checkedAt: null, error: false }, upstream: { release: null, checkedAt: null, error: false } }) },
@@ -93,10 +98,10 @@ void mountPage({
     ghosts: { listSync: () => ({ ghosts: [] }), recentUsageSync: () => ({ ids: [] }), onChanged: subscription('ghosts'), onRecentUsageChanged: subscription('ghost-usage') },
     pluginMarket: { snapshot: read({ items: [], unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] }), onUpdateConsentHoldsChanged: subscription('plugin-consent') },
     deviceLink: { getState: read({ remoteControlEnabled: Boolean(ctx.data.cloud), linkStatus: ctx.data.cloud ? 'online' : 'disconnected', controlledBy: [] }), onControlTargetChanged: subscription('control-target'), onOwnershipChanged: subscription('ownership'), onControlledState: subscription('controlled'), onConnectionIssue: subscription('connection-issue'), getSettings: read({}), getStatus: read({ connected: false }), listDevices: read({ devices: ctx.data.cloud ? [{ deviceId: 'fixture-pc', name: 'Preview PC', isSelf: true, online: true, platform: 'win32', remoteControlEnabled: true, controlEnabled: true }] : [] }), onPresenceChanged: subscription('presence'), onStatusChanged: subscription('device-status') },
-    remoteDesktop: { state: read({ enabled: false }) },
+    remoteDesktop: { state: async () => { settingsFixtureReads.remoteDesktop++; return { enabled: false }; } },
     remoteSsh: { list: read({ hosts: [] }), onStatusChanged: subscription('ssh') },
     sidebarSettings: { loadSnapshot: () => ({ hiddenMainViewGhostIds: [], dataOwnerId: null, ownerGeneration: 0 }), onHiddenMainViewGhostIdsChanged: subscription('sidebar') },
-    selfHostedRelay: { command: read({ state: relayState }), getState: read(relayState), onChanged: subscription('relay') },
+    selfHostedRelay: { command: async () => { settingsFixtureReads.relay++; return { state: relayState }; }, getState: read(relayState), onChanged: subscription('relay') },
     localAgent: { connections: read([]), developerConnection: read({ state: 'stopped' }), onConnectionsChanged: subscription('local-agent') },
     terminal: { listAvailableShells: read([]), getDefaultShellPref: read('auto') },
     worktreeRecycle: { list: read([]) },

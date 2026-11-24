@@ -19,11 +19,12 @@ import { imBotSettings } from './ImBotSection.settings-search';
 import { helpSettings } from './HelpSection.settings-search';
 import { aboutSettings } from './AboutSection.settings-search';
 import { storageManagementCardSettings } from './StorageManagementCard.settings-search';
-import { lazy, Suspense, useTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Activity, lazy, Suspense, useTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Navigate, useNavigate, useOutletContext, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useSyncExternalStore } from 'react';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, Menu } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
 import { TAB_IDS, isSettingsTab } from '@/lib/tabLabels';
@@ -155,6 +156,20 @@ function SettingsViewContent() {
   const [searchActivation, setSearchActivation] = useState(0);
   const { mode, dataOwnerId, user } = useAuth();
   const menuWidth = outletContext?.sidebarWidth ?? DEFAULT_SETTINGS_MENU_WIDTH;
+  // Reserve enough room for ordinary settings fields before showing two columns.
+  const compactQuery = useMemo(() => window.matchMedia?.(`(max-width: ${menuWidth + 320}px)`), [menuWidth]);
+  const subscribeCompact = useCallback((onChange: () => void) => {
+    compactQuery?.addEventListener('change', onChange);
+    return () => compactQuery?.removeEventListener('change', onChange);
+  }, [compactQuery]);
+  const compact = useSyncExternalStore(subscribeCompact, () => compactQuery?.matches ?? false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+  const closeMenu = useCallback(() => {
+    setMenuOpen(false);
+    menuButtonRef.current?.focus();
+  }, []);
+  useEffect(() => { if (!compact) setMenuOpen(false); }, [compact]);
   const isMac = window.electronAPI?.platform === 'darwin';
   const [helpAssistantOpen, setHelpAssistantOpen] = useState(false);
   const workingDir = useSyncExternalStore(
@@ -253,6 +268,7 @@ function SettingsViewContent() {
 
   const handleSelectTab = useCallback(
     (tab: SettingsTab) => {
+      closeMenu();
       if (tab === activeTab && !piExtensionsPanelOpen && !isTabPending && !searchParams.has('plugin')) return;
       const next = new URLSearchParams(searchParams);
       next.delete('openPanel');
@@ -274,19 +290,21 @@ function SettingsViewContent() {
       }
       startTransition(() => setSearchParams(next, { replace: true }));
     },
-    [activeTab, isTabPending, piExtensionsPanelOpen, searchParams, setSearchParams],
+    [activeTab, closeMenu, isTabPending, piExtensionsPanelOpen, searchParams, setSearchParams],
   );
 
   const selectPluginPage = useCallback((page: PluginSettingsPage, sectionId?: string) => {
+    closeMenu();
     const next = new URLSearchParams();
     next.set('tab', 'ghosts'); next.set('plugin', page.instanceId);
     if (page.contributionId) next.set('pluginView', page.contributionId);
     if (sectionId) next.set('section', sectionId);
     startTransition(() => setSearchParams(next, { replace: true }));
-  }, [setSearchParams]);
+  }, [closeMenu, setSearchParams]);
 
   const handleSelectSearchResult = useCallback(
     ({ tab, sectionId }: { tab: SettingsTab; sectionId: string }) => {
+      closeMenu();
       setSearchActivation((value) => value + 1);
       const pluginResult = pluginSearchDocuments.find(document => document.entry.id === sectionId);
       if (tab === 'ghosts' && pluginResult) { selectPluginPage(pluginResult.page, sectionId); return; }
@@ -299,7 +317,7 @@ function SettingsViewContent() {
       next.set('section', sectionId);
       startTransition(() => setSearchParams(next, { replace: true }));
     },
-    [searchParams, setSearchParams, pluginSearchDocuments, selectPluginPage],
+    [closeMenu, searchParams, setSearchParams, pluginSearchDocuments, selectPluginPage],
   );
 
   const handleOpenPiExtensions = useCallback(() => {
@@ -322,9 +340,10 @@ function SettingsViewContent() {
 
   // Esc 逐层返回：PI 扩展子页先回到「通用」，其余退出设置；帮助面板开着时归它。
   const handleSettingsEscape = useCallback(() => {
-    if (piExtensionsPanelOpen) handleClosePiExtensions();
+    if (compact && menuOpen) closeMenu();
+    else if (piExtensionsPanelOpen) handleClosePiExtensions();
     else exitSettings();
-  }, [exitSettings, handleClosePiExtensions, piExtensionsPanelOpen]);
+  }, [closeMenu, compact, exitSettings, handleClosePiExtensions, menuOpen, piExtensionsPanelOpen]);
   useSettingsEscape(settingsRootRef, !helpAssistantOpen, handleSettingsEscape);
 
   useEffect(() => {
@@ -390,21 +409,37 @@ function SettingsViewContent() {
     <SettingsSearchNavigationContext.Provider value={searchNavigation}>
     <div
       ref={settingsRootRef}
-      className="h-full w-full overflow-hidden bg-[var(--settings-bg)]"
+      className="flex h-full w-full flex-col overflow-hidden bg-[var(--settings-bg)]"
       role="main"
       aria-label={t('settings.title')}
     >
+      {compact && (
+        <div className="flex shrink-0 items-center gap-2 px-3 py-1">
+          <Button data-settings-search-action="Return from settings to the main page" size="sm" tone="quiet" compact onClick={exitSettings} aria-label={t('settings.back')}>
+            <ArrowLeft size={16} />
+          </Button>
+          <Button data-settings-search-action="Show or hide settings navigation in a narrow viewport" ref={menuButtonRef} size="sm" tone="quiet" compact
+            aria-expanded={menuOpen} aria-controls="settings-navigation"
+            onClick={() => setMenuOpen(open => !open)}>
+            <Menu size={16} />
+            {t('settings.title')}
+          </Button>
+        </div>
+      )}
       {/* Outer container — page itself does not scroll; columns own their scroll behavior.
           左侧保留原来的页头位置；右侧不再为页头预留 56px，贴着 46px 标题栏起排。 */}
-      <div className="flex h-full min-h-0 w-full justify-start pb-5">
+      <div className="flex min-h-0 w-full flex-1 justify-start pb-5">
         {/* Inner sidebar mirrors the main sidebar width for a stable route transition. */}
         <aside
-          className="flex h-full min-h-0 shrink-0 flex-col gap-2 overflow-y-auto pl-6 pr-4 pt-7"
-          style={{ width: menuWidth }}
+          id="settings-navigation"
+          className={cn('h-full min-h-0 shrink-0 flex-col gap-2 overflow-y-auto',
+            compact ? 'px-3 pt-2' : 'pl-6 pr-4 pt-7',
+            compact && !menuOpen ? 'hidden' : 'flex')}
+          style={{ width: compact ? '100%' : menuWidth }}
           aria-label={t('settings.title')}
         >
           {/* Back navigation — gap 10, pb 18, aligned with menu items via px-3 */}
-          <div className="flex items-center gap-2.5 px-3 pb-[18px]">
+          <div className={cn("items-center gap-2.5 px-3 pb-[18px]", compact ? "hidden" : "flex")}>
             <Tip text={t('settings.back')} side="bottom">
               <button data-settings-search-action="Return from settings or close the extensions subpage"
                 type="button"
@@ -441,10 +476,13 @@ function SettingsViewContent() {
             右侧贴 46px 标题栏起排，不跟随左侧页头高度下移。
             scrollbar-gutter:stable —— 所有分区都预留同一滚动条槽位；即使
             Session Import 自身不滚动，也要保持与普通滚动页相同的内容宽度。 */}
+        {/* Preserve drafts and scroll position while stopping hidden panel effects. */}
+        <Activity mode={compact && menuOpen ? 'hidden' : 'visible'}>
         <div
           ref={contentScrollRef}
           className={cn(
-            'flex h-full min-h-0 min-w-0 flex-1 flex-col pl-4 pr-6 [scrollbar-gutter:stable]',
+            'flex h-full min-h-0 min-w-0 flex-1 flex-col [scrollbar-gutter:stable]',
+            compact ? 'px-3' : 'pl-4 pr-6',
             // providers 与 import / ghosts 同属「内部自己滚」:模型列表要贴着窗口底,
             // 外层再滚一层会让卡片高度只能靠猜(原先卡片写 calc(100vh-14rem),
             // 扣除量与真实 chrome 不符时下方就空出一条 —— 正是 pb-32 那 128px)。
@@ -878,6 +916,7 @@ function SettingsViewContent() {
           </div>
           </Suspense>
         </div>
+        </Activity>
       </div>
       <HelpAssistantPanel open={helpAssistantOpen} onClose={() => setHelpAssistantOpen(false)} />
     </div>
