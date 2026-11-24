@@ -13,6 +13,13 @@ import { createAuxiliaryModelSettingsStore } from './auxiliaryModelSettingsStore
 import { app } from 'electron';
 import { hasExclusiveSharedLegacyUserDataAccess, hasLegacyOwnerNamespaceClaim } from '../ownerNamespaceMigration.js';
 
+let modelsRead: ((models: readonly string[]) => void) | undefined;
+
+/** Observe normalized, effective file reads, including supported external edits. */
+export function onAuxiliaryModelSettingsRead(observer: (models: readonly string[]) => void): void {
+  modelsRead = observer;
+}
+
 const desktopStore = createAuxiliaryModelSettingsStore({
   app: { getPath: (name) => app.getPath(name) },
   hasExclusiveSharedLegacyUserDataAccess: (...args) => hasExclusiveSharedLegacyUserDataAccess(...args),
@@ -29,15 +36,17 @@ export function migrateLegacyAuxiliaryModelSettings(...args: Parameters<Instance
 }
 
 export function readAuxiliaryModelSettings(...args: Parameters<Instance['readAuxiliaryModelSettings']>): ReturnType<Instance['readAuxiliaryModelSettings']> {
-  return desktopStore.readAuxiliaryModelSettings(...args);
+  return readAuxiliaryModelSettingsState(...args).value;
 }
 
 export function readAuxiliaryModelSettingsState(...args: Parameters<Instance['readAuxiliaryModelSettingsState']>): ReturnType<Instance['readAuxiliaryModelSettingsState']> {
-  return desktopStore.readAuxiliaryModelSettingsState(...args);
+  const state = desktopStore.readAuxiliaryModelSettingsState(...args);
+  modelsRead?.(state.value.models);
+  return state;
 }
 
 export function isAuxiliaryModelCustomized(...args: Parameters<Instance['isAuxiliaryModelCustomized']>): ReturnType<Instance['isAuxiliaryModelCustomized']> {
-  return desktopStore.isAuxiliaryModelCustomized(...args);
+  return readAuxiliaryModelSettings(...args).models.length > 0;
 }
 
 export function writeAuxiliaryModelSettingsPatch(...args: Parameters<Instance['writeAuxiliaryModelSettingsPatch']>): ReturnType<Instance['writeAuxiliaryModelSettingsPatch']> {

@@ -11,6 +11,7 @@
 
 import {
   AcpAgent,
+  type AcpAgentDeps,
   type AgentDeps,
   type AuthAdapter,
   type Capabilities,
@@ -48,6 +49,10 @@ export interface BuildAcpAgentOpts {
   mcpProviders?: AgentDeps['mcpProviders'];
   makerMemory?: AgentDeps['makerMemory'];
   getMcpToolApprovalPolicy?: AgentDeps['getMcpToolApprovalPolicy'];
+  /** The installed-plugin roster, the same text the built-in engines get (briefing ahead of the first message). */
+  getGhostRosterPrompt?: AgentDeps['getGhostRosterPrompt'];
+  /** The Skills a task can use, with the built-in Pi engine's discovery and enablement. */
+  listSessionSkills?: AcpAgentDeps['listSessionSkills'];
   /** Starts the declared entry of a listed harness in raw-stdio mode. */
   spawnHarness(key: string, options?: { remoteWorkspace?: boolean; guestWorkspace?: boolean; accountDir?: string }): Promise<NodeWorkerProcess>;
 }
@@ -62,6 +67,8 @@ export function buildAcpAgent(opts: BuildAcpAgentOpts): AcpAgent {
     ...(opts.mcpProviders ? { mcpProviders: opts.mcpProviders } : {}),
     ...(opts.makerMemory ? { makerMemory: opts.makerMemory } : {}),
     ...(opts.getMcpToolApprovalPolicy ? { getMcpToolApprovalPolicy: opts.getMcpToolApprovalPolicy } : {}),
+    ...(opts.getGhostRosterPrompt ? { getGhostRosterPrompt: opts.getGhostRosterPrompt } : {}),
+    ...(opts.listSessionSkills ? { listSessionSkills: opts.listSessionSkills } : {}),
     preparePiExtraSpawnConfig: (providers, ctx) => getPiExtraSpawnConfig(providers, logger, ctx),
     clientInfo: { name: 'cindy', title: 'Cindy', version: opts.appVersion },
     endpoints: {
@@ -86,6 +93,8 @@ export interface InstallPluginEnginesOpts {
   appVersion: string;
   mcpProviders?: AgentDeps['mcpProviders'];
   makerMemory?: AgentDeps['makerMemory'];
+  getGhostRosterPrompt?: AgentDeps['getGhostRosterPrompt'];
+  listSessionSkills?: AcpAgentDeps['listSessionSkills'];
 }
 
 /**
@@ -103,6 +112,8 @@ export function installPluginEngines(opts: InstallPluginEnginesOpts): () => void
       appVersion: opts.appVersion,
       ...(opts.mcpProviders ? { mcpProviders: opts.mcpProviders } : {}),
       ...(opts.makerMemory ? { makerMemory: opts.makerMemory } : {}),
+      ...(opts.getGhostRosterPrompt ? { getGhostRosterPrompt: opts.getGhostRosterPrompt } : {}),
+      ...(opts.listSessionSkills ? { listSessionSkills: opts.listSessionSkills } : {}),
       getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
       spawnHarness: (key, options) => (options ? registry.spawn(key, options) : registry.spawn(key)),
     });

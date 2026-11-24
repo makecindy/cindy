@@ -88,6 +88,7 @@ export function TelegramBotSection({
     status,
     botUsername,
     validationError,
+    saveTimedOut,
     isSaving,
     isDisconnecting,
     isTogglingOnline,
@@ -141,7 +142,9 @@ export function TelegramBotSection({
   }, []);
 
   // 非 idle = 主进程已有保存的凭证(连接中/冲突/失败也算),表单区给小垃圾桶解绑入口。
-  const hasSavedCreds = status.kind !== 'idle';
+  // 新绑定刚超时: 凭证已回滚, 表单里只是用户刚填的内容 —— 不显示解绑与「重新连接」,
+  // 重试就是用原输入再点一次「连接」。
+  const hasSavedCreds = status.kind !== 'idle' && !saveTimedOut;
 
   return (
     <ImChannelSettingsCard
@@ -263,6 +266,10 @@ export function TelegramBotSection({
               {validationError ? (
                 <p className="text-12 text-[var(--settings-error-text)]" role="alert">
                   {validationError}
+                </p>
+              ) : saveTimedOut ? (
+                <p className="text-12 text-[var(--settings-error-text)]" role="alert">
+                  {t('settings.telegramBot.connectTimedOut')}
                 </p>
               ) : status.kind === 'error' ? (
                 <ImConnectionError

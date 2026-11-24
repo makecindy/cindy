@@ -1283,6 +1283,7 @@ export function installRemoteAgentHost(options: {
           : retained ? { agentDeviceId: old.executorDeviceId, providerId: old.providerId,
           memberKey: old.memberKey, sameAccount: true }
           : await groupRelay.plan({ kind: request.agentKind, model: request.model,
+            direct: true,
             providerId: access.providerId,
             exclude: request.op === 'standby-prepare' ? new Set(group!.members.filter(member =>
               member.kind !== 'device' || member.agentDeviceId === request.excludeExecutorDeviceId).map(member => member.key))

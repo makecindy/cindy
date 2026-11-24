@@ -167,6 +167,7 @@ export function createDesktopTaskDigestDeps(host: DesktopTaskDigestHost): TaskDi
         const [row] = await getDbClient()
           .drizzle.select({
             title: sessions.title,
+            pinnedAt: sessions.pinnedAt,
             clearedAt: sessions.clearedAt,
             activeTurnStartedAt: sessions.activeTurnStartedAt,
             status: sessions.status,

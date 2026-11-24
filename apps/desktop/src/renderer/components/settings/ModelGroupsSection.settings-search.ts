@@ -34,8 +34,9 @@ export const modelGroupsSettings = defineSettings({
       'modelGroups.settings.sources',
       'modelGroups.settings.try.title',
       'modelGroups.settings.effort',
+      'modelGroups.settings.autoSwitch.title',
     ],
-    aliases: ['路由', '额度', '订阅', '多账号', '自动选模型', 'routing', 'quota', 'fallback', 'failover', 'load balance', 'thinking', 'weight', '权重', '星期'],
+    aliases: ['路由', '额度', '订阅', '多账号', '自动选模型', 'routing', 'quota', 'fallback', 'failover', 'load balance', 'thinking', 'weight', '权重', '星期', '自动换', '接替', '故障转移', 'auto switch'],
   },
 });
 

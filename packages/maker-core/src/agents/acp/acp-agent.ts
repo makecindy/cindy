@@ -25,10 +25,12 @@ import {
   type StartSessionOptions,
 } from '../base-agent.js';
 import { buildAcpCapabilities } from './capabilities.js';
+import { renderPluginEngineCapabilityBriefing, type PluginEngineBriefingSkill } from './briefing.js';
 import type { AcpLineTransport } from './line-transport.js';
 import type { AcpMcpServer } from './protocol.js';
 import {
   DEVICE_HOSTED_EXEC_MCP_SERVER,
+  deviceHostedGhostRoster,
   deviceHostedMcpUrl,
   deviceHostedPluginEngineMcpServers,
   deviceHostedPluginEngineNote,
@@ -97,6 +99,11 @@ export interface AcpAgentDeps extends AgentDeps {
   clientInfo: AcpClientInfo;
   /** Remembers what the agent offered so pickers can show it before the next start. */
   onSessionCapabilities?: (harnessKey: string, capabilities: Capabilities) => void;
+  /**
+   * The Skills a task in this directory can use, for the briefing ahead of the first message (the
+   * same discovery and enablement as the built-in Pi engine). A failure only leaves the list out.
+   */
+  listSessionSkills?: (ctx: { workingDir: string }) => Promise<readonly PluginEngineBriefingSkill[]>;
 }
 
 const NO_INIT = buildAcpCapabilities(
@@ -251,10 +258,25 @@ export class AcpAgent extends BaseAgent {
         : '',
       opts.botUserProfilePrompt ?? '',
     ].filter((part) => part.trim()).join('\n\n') : '';
+    // The built-in engines learn the installed plugins and Skills from their system prompt and native
+    // Skill loading; a plugin engine is told in the briefing instead (user decision 2026-11-24). An
+    // isolated companion keeps its own frozen capability set and gets neither, as on the built-in
+    // engines (a project-context companion loads like any task). A task hosted for another computer
+    // gets that computer's roster snapshot, exactly as the built-in engines inject it
+    // (`deviceHostedGhostRoster`, only when the tunnel offers the gateway; this computer's plugins never
+    // enter it), and no Skill list: there is no cross-computer source for one. A resumed session already
+    // has the briefing, and resuming never falls back to a new session, so nothing is read for it.
+    const capabilities = isolatedBotProfile(opts.botRuntimeProfile) || opts.resumeSessionId ? null
+      : hosted ? { pluginRoster: deviceHostedGhostRoster(hosted, opts.ghostRosterSnapshot, () => ''), skills: [] }
+      : {
+        pluginRoster: this.readPluginRoster(opts.workingDir, logger),
+        skills: await this.readSessionSkills(opts.workingDir, logger),
+      };
     // The workspace note comes first: without it the agent has no way to know where the project is.
-    const briefing = [
+    const briefing = (acceptedMcpServers: readonly string[]): string => [
       hosted ? deviceHostedPluginEngineNote(hosted, opts.workingDir) : '',
       companionBriefing,
+      capabilities ? renderPluginEngineCapabilityBriefing(capabilities, acceptedMcpServers) : '',
       opts.pluginEngineBriefing ?? '',
     ].filter((part) => part.trim()).join('\n\n');
     // The host's account pool picked an account Cindy added (its own directory); the agent's
@@ -283,7 +305,7 @@ export class AcpAgent extends BaseAgent {
           ...(opts.botRuntimeProfile || hosted ? { requireSelectedModel: true } : {}),
           ...(opts.effort ? { effort: opts.effort } : {}),
           ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
-          ...(briefing ? { briefing } : {}),
+          briefing,
           ...(companionBriefing ? { resumedCompanionBriefing: companionBriefing } : {}),
           logger,
           onEnded: disposeBridge,
@@ -312,6 +334,24 @@ export class AcpAgent extends BaseAgent {
     } catch (error) {
       disposeBridge();
       throw error;
+    }
+  }
+
+  private readPluginRoster(workingDir: string, logger: AgentDeps['logger']): string {
+    try {
+      return this.deps.getGhostRosterPrompt?.({ workingDir }) ?? '';
+    } catch (error) {
+      logger.warn('acp: plugin roster unavailable; starting without it', { message: String(error) });
+      return '';
+    }
+  }
+
+  private async readSessionSkills(workingDir: string, logger: AgentDeps['logger']): Promise<readonly PluginEngineBriefingSkill[]> {
+    try {
+      return await this.acpDeps.listSessionSkills?.({ workingDir }) ?? [];
+    } catch (error) {
+      logger.warn('acp: Skill list unavailable; starting without it', { message: error instanceof Error ? error.message : String(error) });
+      return [];
     }
   }
 }

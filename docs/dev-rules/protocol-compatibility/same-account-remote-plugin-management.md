@@ -73,6 +73,23 @@ A 不直接读取目标安装目录。原目录选择请求通过 Main 的固定
 存储，任务 patch 保留目标工作目录。旧控制端忽略新增字段，旧 Host 的缺失能力如实展示。
 无需服务端、通用 IPC allowlist、数据库或 Mobile 原生改动。
 
+## Desktop 公开市场提审
+
+`management:snapshot` 可选返回 `communityPublication: true` 并为来源可确认的本地安装投影
+`publishingSource`。Desktop 目录与详情使用同一发布交互。选中目标电脑时，控制端只向该电脑发送
+`management:publish-prepare`，绑定物理安装实例、已批准记录和预期版本。目标 Host 重新定位安装并
+复用本机社区提审的打包、包校验和市场预检，返回发布摘要和不透明的准备 ID。控制端不传安装路径，
+也不接收包字节、凭据或上传票据。
+
+`management:publish-submit/status/discard` 只接受原准备 ID，并校验同一控制设备及登录账号。
+提交前和实际写入前复核原控制授权、连接代次和安装事实；目标 Host 使用自身的账号凭据向既有市场
+接口执行提交。状态读取可在同一账号重连后继续，只有收到市场回执才确认成功。超时或断线只查询
+原提交，切换账号或撤销设备控制后拒绝访问旧回执。关闭未提交的预览释放准备包；已发起的提交由
+现有 Host 提交流程完成清理。
+
+旧 Host 缺少能力字段时保留所选电脑并提示在目标机发布或更新。新增动作复用现有
+`plugins` Remote Resource invoke；relay 仍透明传输既有业务帧，不增加通道或修改市场协议。
+
 ## 同账号远程技能管理（2026-10-14）
 
 插件与技能页共用电脑选择。目标 Host 通过追加 `skills` Remote Resource collection 和

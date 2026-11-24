@@ -193,6 +193,8 @@ export function BuiltinToolsSection({ workingDir }: BuiltinToolsSectionProps) {
   // First render: null → blank (no flash). After data arrives: render list.
   if (!plugins) return null;
 
+  const toggleHint = t('settings.builtinTools.toggleHint');
+
   return (
     <SettingsSection
       titleId={builtinToolsSettings.title.targetId}
@@ -206,7 +208,11 @@ export function BuiltinToolsSection({ workingDir }: BuiltinToolsSectionProps) {
           onPick={setSelectedScope}
         />
       }
-      caption={t('settings.builtinTools.toggleHint')}
+      caption={
+        effectiveWorkingDir
+          ? toggleHint
+          : `${toggleHint} ${t('settings.computerUse.browser.userDefaultToggleHint')}`
+      }
     >
       {/* 工具列表自带图标与来源标签，行样式保留 */}
       <SettingsCard className="flex flex-col">

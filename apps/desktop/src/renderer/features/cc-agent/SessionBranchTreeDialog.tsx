@@ -13,6 +13,7 @@ import { makerChatStore } from '@/lib/makerChatStore';
 import { plainTextToTiptapDoc, saveDraft } from '@/lib/composerDraftStore';
 import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import { Spinner } from '@/components/ui/spinner';
+import { Checkbox } from '@/components/ui/checkbox';
 
 interface Props {
   open: boolean;
@@ -267,12 +268,10 @@ export function SessionBranchTreeDialog({
           {session.agentKind === 'pi' && (
             <div className="border-t px-4 py-3" style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--surface-elevated-soft)' }}>
               <label className="flex items-center gap-2 text-12 text-[var(--text-primary)]">
-                <input
-                  type="checkbox"
+                <Checkbox
                   checked={summarize}
                   onChange={(event) => setSummarize(event.target.checked)}
                   disabled={switchingId !== null}
-                  className="accent-[var(--accent-cta-bg-pure)]"
                 />
                 {t('ccAgent.sidebar.sessionBranches.summarize')}
               </label>

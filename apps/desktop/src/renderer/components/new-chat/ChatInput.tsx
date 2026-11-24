@@ -9932,7 +9932,7 @@ export function ChatInput({
                     'w-[calc(100%+11px)] -mr-[11px]',
                     // Disabled gets the same visual cue as the old textarea
                     composerMutationLocked && 'cursor-not-allowed opacity-60',
-                    voiceBusyOnCurrentComposer && 'cursor-default',
+                    voiceBusyOnCurrentComposer && 'cursor-default [&_.ProseMirror]:caret-transparent',
                   )}
                   data-voice-draft-active={
                     voiceBusyOnCurrentComposer && voiceInput.draftText ? 'true' : undefined

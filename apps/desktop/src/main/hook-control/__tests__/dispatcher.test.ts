@@ -142,7 +142,7 @@ function memoryTerminalLedger(): HookRequestLedger & { records: HookTerminalReco
  * 可控假 runner: run 挂起直到测试显式 resolve —— 用于验证排队;
  * sessions 表模拟 inspect。
  */
-function fakeRunner(opts?: { sessions?: Record<string, { workingDir: string; usable: boolean }> }) {
+function fakeRunner(opts?: { sessions?: Record<string, { workingDir: string; usable: boolean; companionOwned?: boolean }> }) {
   const sessions = opts?.sessions ?? {};
   const calls: HookRunRequest[] = [];
   const resolvers: Array<(o: HookRunOutcome) => void> = [];
@@ -1839,6 +1839,20 @@ describe('dispatcher 核心语义', () => {
       result: 'rejected',
       reason: 'workspace_not_allowed',
     });
+  });
+
+  // PR #12405 (unit): a permitted directory may hold a teammate's private session.
+  // Exercise both routes through dispatch; the directory-only tests have no private session.
+  it.each([true, false])('rejects a private teammate session inside an allowed project (explicit=%s)', async explicit => {
+    const fr = fakeRunner({ sessions: { buddy: { workingDir: WS_DIR, usable: true, companionOwned: true } } });
+    const bindings = memoryBindings();
+    if (!explicit) bindings.set('conn-1', 'team-slack:C1:1.1', 'buddy');
+    const { d } = makeDispatcher({ runner: fr.runner, bindings });
+    const c = collector();
+    d.handleDispatch('conn-1', dispatch({ sessionId: explicit ? 'buddy' : null }), c.send);
+    await tick();
+    expect(c.last('task.ack')?.payload).toMatchObject({ result: 'rejected', reason: 'workspace_not_allowed' });
+    expect(fr.calls).toHaveLength(0);
   });
 
   it('接管白名单按 inspect 完成后的当前映射判定', async () => {

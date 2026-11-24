@@ -23,6 +23,7 @@ import { X, Copy, Key, KeyRound, Lock, Plus, Server, CheckCircle2, Circle, Unloc
 import { toast } from '@/lib/toast';
 import { Spinner } from '@/components/ui/spinner';
 import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
+import { Checkbox } from '@/components/ui/checkbox';
 
 /** ssh-add failure reasons mirrored from the main-side classification. Kept in
  *  sync with `AgentFailureReason` in vite-env.d.ts / ssh-keys.ts. */
@@ -533,12 +534,12 @@ function GenerateForm({ generating, onSubmit, onCancel }: GenerateFormProps) {
       </label>
 
       <label className="flex items-start gap-2 cursor-pointer">
-        <input
-          type="checkbox"
+        <Checkbox
+          data-settings-search-action="Chooses whether the SSH key being generated is passphrase-protected"
           checked={encrypt}
           onChange={(e) => setEncrypt(e.target.checked)}
           disabled={generating}
-          className="mt-0.5 accent-[var(--settings-menu-text-selected)]"
+          className="mt-0.5"
         />
         <span className="flex flex-col gap-0.5">
           <span className="text-12 font-medium"

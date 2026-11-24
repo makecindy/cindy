@@ -37,6 +37,7 @@ export interface TaskDigestWire {
   sessionUrl?: string;
   /** 另一台电脑的名字;本机为 null。 */
   device: string | null;
+  pinned?: boolean;
   title: string;
   phase: TaskDigestPhase;
   /** 处于当前状态(或本轮运行)多少分钟;未知为 null。 */
@@ -119,6 +120,7 @@ export function boundTaskDigest(raw: TaskDigestWire): TaskDigestWire {
 }
 
 const DESCRIPTION = [
+  'pinned 表示侧栏置顶状态。',
   '已知任务 id、需要给用户任务链接时也用本工具；sessionUrl 可直接写成 [任务标题](sessionUrl)。',
   '读一件任务的短摘要(≤2KB):状态 phase、已持续分钟数、最近用户消息(排除隐藏协调/续跑输入)、最新助手回复首尾片段、待回答的问题、错误、当前模型路线、',
   '建议换到的下一条路线(只在出错或撞用量上限、换模型确实有用且装得下当前上下文时,给你候选链里还没试过的那条;否则 null,此时提醒主人)、PR 状态、排队消息数、谁开的 / 谁在跟。',

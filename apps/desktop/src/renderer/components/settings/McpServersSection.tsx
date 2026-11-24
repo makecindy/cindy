@@ -161,6 +161,7 @@ export function McpServersSection() {
         description: t('settings.mcp.deleteConfirm.message'),
         confirmText: t('settings.mcp.deleteConfirm.confirm'),
         cancelText: t('settings.mcp.cancel'),
+        confirmVariant: 'destructive',
       });
       if (!ok) return;
       try {

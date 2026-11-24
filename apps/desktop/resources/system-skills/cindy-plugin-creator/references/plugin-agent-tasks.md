@@ -420,6 +420,12 @@ const page = await cindy.tasks.readMessages({ taskId: task.taskId, limit: 50 });
 // 保存 nextCursor；下一页传 after，不以最后一条 assistant 推断 run 已完成。
 ```
 
+**转发本轮进展**：当 `capabilities().runProgress === true` 时，调用
+`readMessages({taskId, progressForRun: runId, after?, limit?})`。结果带有相同的
+`progressForRun`，按时间返回这次输入已落库的用户可见进展。使用消息 ID 去重。
+Codex 使用已结束的 commentary，Claude 和 Pi 使用明确以调用工具结束的助手文本。
+没有明确进展的轮次可以只发最终答复。旧宿主继续按原有的 outputMessageId 读取最终答复。
+
 **边生成边显示（新增接口，尚未发布）**：`capabilities().runPreview === true` 时，`getRun` 在
 `status === 'running'` 且任务当前执行的正是这次输入时，可额外返回 `preview: { text }`：
 Agent 正在输出的那一段回答（最多 32768 个 UTF-16 字符，超出只保留开头），已去掉内部引用标记。
@@ -514,6 +520,8 @@ instanceId、generation、outcome（completed/failed/cancelled/interrupted）及
   不含消息、计划、文件或费用；不含对话、伙伴、Worker、隐藏、远程及其他电脑上的任务。未登记或已删除的项目返回 `TARGET_UNAVAILABLE`。
 - `openTask({taskId})`：在主窗口打开该任务；Cindy 未在前台时不抢焦点。只接受 `projectTasks` 能列出的任务，否则返回 `TARGET_UNAVAILABLE`。返回 `{opened:true}`。
 - 只读，不能发送消息、修改、归档或停止任务；需要这些操作请改用 `cindy.tasks` / `cindy.targets` 并声明对应权限。状态变化不推送，插件自行按需刷新。
+
+`openSession({sessionId, deviceId?})` 可在桌面主窗口打开本机或同账号其他电脑上的可见普通会话，包括独立对话。除 `agent.observe` 外，还需声明并获批 `agent.hostTools: ['history']`。先检测 `typeof cindy.observe?.openSession === 'function'`。远程目标传设备 ID 和原始会话 ID 两个字段。如 `list_sessions` 返回 `deviceId::sessionId`，取该设备组的 ID 并移除会话 ID 的设备前缀。省略设备或传 `local` 表示本机。宿主按指定设备核验目标，返回 `{opened:true}` 表示已交给原生导航；不可见或不存在返回 `TARGET_UNAVAILABLE`，远程连接不可用返回 `REMOTE_UNAVAILABLE`。本方法只导航，不返回会话数据。
 
 ## 4.11.9 查看伙伴和状态
 
