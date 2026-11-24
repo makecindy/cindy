@@ -104,14 +104,15 @@ export function collectFunctionCallRepairSchemas(
   if (!isObject(body)) return schemas;
   const liveGroups: unknown[][] = [];
   if (Array.isArray(body.tools)) liveGroups.push(body.tools);
-  const replayedGroups: unknown[][] = [];
-  const replayedInlineGroups: unknown[][] = [];
+  const searchGroups: unknown[][] = [];
+  const historicalGroups: unknown[][] = [];
   if (Array.isArray(body.input)) {
     for (const [index, entry] of body.input.entries()) {
       if (!isObject(entry) || !Array.isArray(entry.tools)) continue;
-      if (entry.type === "tool_search_output") replayedGroups.push(entry.tools);
-      else if (entry.type === "additional_tools") {
-        (currentInlineIndex === undefined || index === currentInlineIndex ? liveGroups : replayedInlineGroups).push(entry.tools);
+      if (entry.type === "tool_search_output" || entry.type === "tool_search_call_output") {
+        (index < (currentInlineIndex ?? -1) ? historicalGroups : searchGroups).push(entry.tools);
+      } else if (entry.type === "additional_tools") {
+        (currentInlineIndex === undefined || index === currentInlineIndex ? liveGroups : historicalGroups).push(entry.tools);
       }
     }
   }
@@ -127,13 +128,14 @@ export function collectFunctionCallRepairSchemas(
   // had no match when the request was lowered; it must never allocate its own wire names here.
   const { loweredToolChoice: loweredChoice, renamedWireNames } = plan ?? deriveFunctionCallRepairPlan(body);
   const choice = body.tool_choice;
-  const historySelectors = (replayedGroups.length > 0 || replayedInlineGroups.length > 0) && isObject(choice)
-    ? new Map<string, string | null>()
+  const selectorOwners = (searchGroups.length > 0 || historicalGroups.length > 0) && isObject(choice)
+    ? new Map<string, { key: string | null; historical: boolean }>()
     : undefined;
-  const declarations = new Map<string, { kind: unknown; identity: FunctionCallRepairSchema; live: boolean; wireName: string } | null>();
-  const wireOwners = new Map<string, { key: string; live: boolean } | null>();
+  const declarations = new Map<string, { kind: unknown; identity: FunctionCallRepairSchema; live: boolean; historical: boolean; wireName: string } | null>();
+  const wireOwners = new Map<string, { key: string; live: boolean; historical: boolean } | null>();
   const liveNamespacedIdentities = new Set<string>();
-  const register = (tool: unknown, declaredNamespace: string | undefined, live: boolean, replayedInline: boolean): void => {
+  const currentSearchIdentities = new Set<string>();
+  const register = (tool: unknown, declaredNamespace: string | undefined, live: boolean, historical: boolean): void => {
     if (!isObject(tool) || typeof tool.name !== "string" || tool.name.length === 0) return;
     const namespace = namespaceOf(declaredNamespace);
     const identity: FunctionCallRepairSchema = {
@@ -147,35 +149,38 @@ export function collectFunctionCallRepairSchemas(
     // Type restoration uses the live declaration when present, independently of schema conflicts.
     if (namespace) {
       if (live) liveNamespacedIdentities.add(key);
-      if (tool.type === "function" && (live || !liveNamespacedIdentities.has(key))) namespacedFunctions.add(key);
+      if (!live && !historical) currentSearchIdentities.add(key);
+      if (tool.type === "function" && (live || (!liveNamespacedIdentities.has(key)
+        && (!historical || !currentSearchIdentities.has(key))))) namespacedFunctions.add(key);
     }
     // Register the live catalog first. History can supply an explicit coordinate even if another
     // tool already owns its wire name. Two different tools with equal priority make the wire name ambiguous.
     const owner = wireOwners.get(wireName);
-    if (owner === undefined) wireOwners.set(wireName, { key, live });
-    else if (owner && owner.key !== key && owner.live === live) wireOwners.set(wireName, null);
-    if (historySelectors) {
+    if (owner === undefined) wireOwners.set(wireName, { key, live, historical });
+    else if (owner && owner.key !== key && owner.live === live && owner.historical === historical) wireOwners.set(wireName, null);
+    if (selectorOwners) {
       const names = declaredNamespace ? [tool.name, dottedToolName(declaredNamespace, tool.name)] : [tool.name];
       for (const name of names) {
-        const previous = historySelectors.get(name);
-        historySelectors.set(name, previous === undefined || previous === key ? key : null);
+        const previous = selectorOwners.get(name);
+        if (!previous) selectorOwners.set(name, { key, historical });
+        else if (previous.historical === historical && previous.key !== key) previous.key = null;
       }
     }
     const previous = declarations.get(key);
-    if (previous === undefined) declarations.set(key, { kind: tool.type, identity, live, wireName });
-    // Earlier inline declarations cannot invalidate the schema we are forwarding for this turn.
-    // Search-only outputs still withhold repair when schemas disagree.
-    else if (previous && (!replayedInline || !previous.live)
+    if (previous === undefined) declarations.set(key, { kind: tool.type, identity, live, historical, wireName });
+    // This turn's declarations and loaded search outputs take priority over replayed schemas.
+    // Conflicting declarations in the selected catalog still withhold repair.
+    else if (previous && (!historical || previous.historical)
       && (previous.kind !== tool.type || !sameSchemaValue(previous.identity.parameters, identity.parameters))) {
       declarations.set(key, null);
     }
   };
   const groups = [
-    ...liveGroups.map(group => ({ group, live: true, replayedInline: false })),
-    ...replayedGroups.map(group => ({ group, live: false, replayedInline: false })),
-    ...replayedInlineGroups.map(group => ({ group, live: false, replayedInline: true })),
+    ...liveGroups.map(group => ({ group, live: true, historical: false })),
+    ...searchGroups.map(group => ({ group, live: false, historical: false })),
+    ...historicalGroups.map(group => ({ group, live: false, historical: true })),
   ];
-  for (const { group, live, replayedInline } of groups) {
+  for (const { group, live, historical } of groups) {
     for (const tool of group) {
       if (!isObject(tool)) continue;
       if (tool.type === "namespace") {
@@ -183,16 +188,18 @@ export function collectFunctionCallRepairSchemas(
         for (const child of tool.tools) {
           if (tool.name === "functions" && isObject(child) && typeof child.name === "string"
             && canonicalBareNames.has(child.name)) continue;
-          register(child, tool.name, live, replayedInline);
+          register(child, tool.name, live, historical);
         }
       } else if (tool.type === "function" && isObject(tool.function)) {
-        register({ ...tool.function, type: "function" }, undefined, live, replayedInline);
-      } else register(tool, undefined, live, replayedInline);
+        register({ ...tool.function, type: "function" }, undefined, live, historical);
+      } else register(tool, undefined, live, historical);
     }
   }
   // An unchanged selector can already be a wire name. That exact identity takes precedence
   // over an unqualified history match even if the exact identity has no repairable schema.
-  if (historySelectors) for (const name of wireOwners.keys()) historySelectors.delete(name);
+  const historySelectors = selectorOwners && new Map([...selectorOwners]
+    .filter(([name]) => !wireOwners.has(name))
+    .map(([name, entry]) => [name, entry.key]));
   for (const [key, entry] of declarations) {
     if (!entry || entry.kind !== "function") continue;
     const wireName = wireOwners.get(entry.wireName)?.key === key ? entry.wireName : undefined;

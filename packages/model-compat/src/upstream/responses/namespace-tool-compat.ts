@@ -509,11 +509,20 @@ export function rewriteRoutedNamespaceToolsForUpstream(
   const originalBareCustomNames = bareCustomNames ?? collectBareCustomToolNames(body);
   const plan = buildRewritePlan(priorityGroups);
   const currentBareWireNames = currentInlineIndex === undefined ? undefined : new Set<string>();
+  const currentGroupedBareNames = new Set<string>();
+  const currentChildNames = new Set<string>();
   if (currentBareWireNames) {
     for (const group of currentGroups) {
       for (const tool of group) {
         if (isPlainObject(tool) && tool.type !== "namespace" && isRepresentableName(tool.name)) {
           currentBareWireNames.add(tool.name);
+        }
+        const parsed = parseNamespaceGroup(tool);
+        if (!parsed) continue;
+        if (parsed.namespace === BUILTIN_FUNCTIONS_NAMESPACE) {
+          for (const child of parsed.children) currentGroupedBareNames.add(child.name as string);
+        } else {
+          for (const child of parsed.children) currentChildNames.add(loweredWireName(parsed.namespace, child.name as string));
         }
       }
     }
@@ -559,10 +568,14 @@ export function rewriteRoutedNamespaceToolsForUpstream(
       || typeof original.name !== "string") return lowered;
     const allocated = plan.renamedWireNames.get(original.name);
     if (!allocated) return lowered;
+    if (currentBareWireNames && !currentChildNames.has(original.name)) return lowered;
     const childKind = renamedKinds.get(original.name);
     const bareCustom = originalBareCustomNames.has(original.name);
     const bareKind = bareCustom ? "custom" : "function";
-    return original.type === childKind && childKind !== bareKind
+    // Replayed bare tools still reserve a wire name. They cannot claim a selector over a current child.
+    const currentChildOnly = currentBareWireNames && !currentBareWireNames.has(original.name)
+      && !currentGroupedBareNames.has(original.name);
+    return original.type === childKind && (childKind !== bareKind || currentChildOnly)
       ? { ...lowered, name: allocated } : lowered;
   };
   const originalChoice = originalToolChoice ?? body.tool_choice;

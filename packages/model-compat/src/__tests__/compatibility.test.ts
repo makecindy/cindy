@@ -290,6 +290,42 @@ describe('request-owned Responses compatibility', () => {
     ]);
   });
 
+  // A history-only bare declaration still reserves its wire name, but does not take the selector.
+  it.each([false, true])('selects the current child over a replayed bare declaration (allowed=%s)', allowed => {
+    const selector = { type: 'function', name: 'workspace__read' };
+    const adapter = createCodexResponsesCompatibilityAdapter();
+    const request = adapter.adaptRequest({
+      input: [
+        { type: 'additional_tools', tools: [{ type: 'function', name: 'workspace__read' }] },
+        { type: 'additional_tools', tools: [{ type: 'namespace', name: 'workspace', tools: [{ type: 'function', name: 'read' }] }] },
+      ],
+      tool_choice: allowed ? { type: 'allowed_tools', tools: [selector] } : selector,
+    }, 10102, undefined, true) as { tool_choice: unknown };
+    const wireSelector = { ...selector, name: 'workspace__read_2' };
+    expect(request.tool_choice).toEqual(allowed ? { type: 'allowed_tools', tools: [wireSelector] } : wireSelector);
+  });
+
+  // Replayed search output must not invalidate the current turn's search-loaded integer schema.
+  it.each(['application/json', 'text/event-stream'])('repairs with the current search definition (%s)', async contentType => {
+    const adapter = createCodexResponsesCompatibilityAdapter();
+    const search = (type: string) => ({ type: 'tool_search_output', tools: [{ type: 'namespace', name: 'workspace', tools: [
+      { type: 'function', name: 'read', parameters: { type: 'object', properties: { line: { type } } } },
+    ] }] });
+    const sse = contentType === 'text/event-stream';
+    for (const lowerNamespaces of [false, true]) {
+      adapter.adaptRequest({
+        input: [search('number'), { type: 'additional_tools', tools: [] }, search('integer')],
+        tool_choice: { type: 'function', name: 'read' },
+      }, 10103, undefined, lowerNamespaces);
+      const item = { type: 'function_call', namespace: 'workspace', name: 'read', call_id: 'loaded', arguments: '{"line":12.0}' };
+      const response = { status: 'completed', output: [item] };
+      const wire = sse ? `data: ${JSON.stringify({ type: 'response.completed', response })}\n\n` : JSON.stringify(response);
+      const transform = adapter.createResponseTransform(10103, { contentType, contentEncoding: '' });
+      const text = transform ? await responseText(transform, wire) : wire;
+      expect((sse ? JSON.parse(text.trim().slice(6)).response : JSON.parse(text)).output).toEqual([{ ...item, arguments: '{"line":12}' }]);
+    }
+  });
+
   it.each(['application/json', 'text/event-stream'])('restores default functions custom calls as bare tools (%s)', async contentType => {
     const adapter = createCodexResponsesCompatibilityAdapter();
     adapter.adaptRequest({ tools: [
