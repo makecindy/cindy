@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { isForeground, onForegroundChange } from './foreground';
+import { cloudBusyRetryAfterMs } from '../../../shared/cloudSettingsErrors';
 import { useAuth } from '@/contexts/AuthContext';
 import {
   getDataOwnerGeneration,
@@ -41,9 +42,11 @@ export function CloudInstanceAccessProvider({ children }: { children: ReactNode 
     let lastDecisionAt = -Infinity;
     let retryIndex = 0;
     let retryTimer: number | undefined;
+    // The service's earliest next check after it throttled one.
+    let notBefore = 0;
     const current = () => live && isDataOwnerGenerationCurrent(owner);
     const refresh = async () => {
-      if (inFlight || !current() || Date.now() - lastDecisionAt < 5_000) return;
+      if (inFlight || !current() || Date.now() - lastDecisionAt < 5_000 || Date.now() < notBefore) return;
       if (retryTimer !== undefined) window.clearTimeout(retryTimer);
       retryTimer = undefined;
       inFlight = true;
@@ -61,7 +64,9 @@ export function CloudInstanceAccessProvider({ children }: { children: ReactNode 
         // already allowed keeps its open pages, with saving paused, while the service is out of
         // reach; a denial, a scope change or another account removes them.
         if (current()) {
-          const unreachable = String((error as Error | undefined)?.message).includes('[CLOUD_SETTINGS_UNAVAILABLE]');
+          const message = String((error as Error | undefined)?.message);
+          const throttled = message.includes('CLOUD_SETTINGS_BUSY');
+          const unreachable = throttled || message.includes('[CLOUD_SETTINGS_UNAVAILABLE]');
           setResult((previous) => unreachable && previous?.scope === scope && previous.access === 'allowed'
             ? { scope, access: 'allowed', unverified: true }
             : { scope, access: 'hidden' });
@@ -70,9 +75,16 @@ export function CloudInstanceAccessProvider({ children }: { children: ReactNode 
             stopListening();
             return;
           }
+          // Throttled: check again once the wait is over, on the next check while the window is in
+          // front (interval, focus, coming back online or to the front).
+          if (throttled) {
+            notBefore = Date.now() + (cloudBusyRetryAfterMs(message) ?? 60_000);
+            return;
+          }
           // The committed auth projection may reach Renderer before Main releases
-          // its owner-transition fence. Retry reads only, without relying on focus
-          // or visibility events. Explicit denial above never starts a retry.
+          // its owner-transition fence. Only that is retried quickly, without relying on
+          // focus or visibility events. Explicit denial above never starts a retry.
+          if (!message.includes('CLOUD_SETTINGS_SCOPE_CHANGED')) return;
           const delay = READ_RETRY_DELAYS_MS[retryIndex++];
           if (delay !== undefined) retryTimer = window.setTimeout(() => void refresh(), delay);
         }

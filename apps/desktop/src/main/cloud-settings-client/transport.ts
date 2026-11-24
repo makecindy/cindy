@@ -8,9 +8,11 @@ export function isCloudLoginAttemptId(value: unknown): value is string {
 }
 import type { CloudClientErrorCode } from '../../shared/cloudSettingsClient';
 import { cloudRefusal } from '../../shared/cloudSettingsErrors';
+import { retryAfterDelayMs } from '../host-settings/retryAfter.js';
 
 export class CloudClientError extends Error {
-  constructor(readonly code: CloudClientErrorCode) {
+  /** For BUSY: how long the service asked to wait, when it said. */
+  constructor(readonly code: CloudClientErrorCode, readonly retryAfterMs?: number) {
     super(code);
   }
 }
@@ -136,6 +138,7 @@ export function createCloudClientHttp(fetcher: typeof fetch): CloudClientHttp {
               throw new CloudLoginRemoteError('LOGIN_AUTH_UPGRADE_REQUIRED');
           }
           if (!response.bodyUsed) await response.body?.cancel();
+          const retryAfterMs = response.status === 429 ? retryAfterDelayMs(response) ?? undefined : undefined;
           throw new CloudClientError(
             (response.status === 404 || response.status === 410) &&
               /^\/instance-login\/api\/attempts\/[^/]+\/status$/u.test(path)
@@ -150,6 +153,7 @@ export function createCloudClientHttp(fetcher: typeof fetch): CloudClientHttp {
                     : response.status === 429
                       ? 'CLOUD_SETTINGS_BUSY'
                       : 'CLOUD_SETTINGS_UNAVAILABLE',
+            retryAfterMs,
           );
         }
         if (response.status === 204) return undefined;

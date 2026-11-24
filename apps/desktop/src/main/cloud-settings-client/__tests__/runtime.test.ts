@@ -118,6 +118,15 @@ afterEach(() => {
   f.stop();
   vi.useRealTimers();
 });
+// A throttled access check tells the renderer how long the service asked it to wait.
+it('passes the service\'s Retry-After of a throttled access check to the renderer', async () => {
+  mock.fetch.mockResolvedValueOnce(new Response(null, { status: 429, headers: { 'Retry-After': '30' } }));
+  await expect(call('instanceAccess', {})).rejects.toThrow('CLOUD_SETTINGS_BUSY retryAfterMs=30000');
+  mock.fetch.mockResolvedValueOnce(new Response(null, { status: 429 }));
+  const error = (await call('instanceAccess', {}).catch((e: unknown) => e)) as Error;
+  expect(error.message).toContain('CLOUD_SETTINGS_BUSY');
+  expect(error.message).not.toContain('retryAfterMs');
+});
 // An admitted account that only chats locally gets no hidden login window; the first instance
 // that needs a sign-in creates it.
 it('creates the login window only when an instance first needs a sign-in', async () => {

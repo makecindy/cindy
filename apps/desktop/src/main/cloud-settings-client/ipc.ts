@@ -15,6 +15,7 @@ import {
 } from '../../shared/cloudSettingsClient';
 import { throwIpcError } from '../utils/ipcValidate';
 import { CloudClientError } from './transport';
+import { cloudBusyMessage } from '../../shared/cloudSettingsErrors';
 import type { CloudClientCaller, createCloudSettingsService } from './service';
 
 /** Thin, injectable IPC handlers; the Electron adapter supplies the trusted caller. */
@@ -32,7 +33,8 @@ export function cloudSettingsClientHandlers(
       try {
         return await run(caller, input.data);
       } catch (error) {
-        if (error instanceof CloudClientError) throwIpcError(error.code, error.code);
+        if (error instanceof CloudClientError)
+          throwIpcError(error.code, error.code === 'CLOUD_SETTINGS_BUSY' ? cloudBusyMessage(error.retryAfterMs) : error.code);
         throwIpcError('CLOUD_SETTINGS_UNAVAILABLE', 'Cloud settings request failed');
       }
     };

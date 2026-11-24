@@ -155,6 +155,29 @@ it('keeps an allowed account on its pages while a recheck cannot reach the servi
   expect([access(), unverified()]).toEqual(['hidden', 'false']);
 });
 
+// A throttled check waits for the service's time: hiding the window right after it starts no
+// quick retries, and the next check comes once due and in front.
+it('waits out a throttled access check and checks again only once due and in front', async () => {
+  vi.useFakeTimers();
+  const calls = () => instanceAccess.mock.calls.length;
+  instanceAccess.mockRejectedValueOnce(new Error('[CLOUD_SETTINGS_BUSY] CLOUD_SETTINGS_BUSY retryAfterMs=30000'));
+  render(content());
+  await act(async () => {});
+  expect(calls()).toBe(1);
+  document.documentElement.setAttribute('data-app-hidden', '');
+  try {
+    await act(async () => vi.advanceTimersByTimeAsync(10_000));
+    expect(calls()).toBe(1);
+  } finally {
+    await act(async () => { document.documentElement.removeAttribute('data-app-hidden'); });
+  }
+  expect(calls()).toBe(1); // In front again, but not yet due.
+  await act(async () => vi.advanceTimersByTimeAsync(21_000));
+  await act(async () => { window.dispatchEvent(new Event('focus')); });
+  expect(calls()).toBe(2);
+  expect(access()).toBe('allowed');
+});
+
 // Query only after Main has committed login and Renderer finished startup.
 it.each(['isInitializing', 'canEnterApp'])(
   'waits for %s before fetching admission',
@@ -269,9 +292,10 @@ it('does not retry an explicit denial and cancels the outgoing account retry', a
   expect(instanceAccess).toHaveBeenCalledTimes(2);
 });
 
+// Only an account switch Main has not finished is retried quickly; the retries are bounded.
 it('bounds failed-read retries and cancels them when unmounted', async () => {
   vi.useFakeTimers();
-  instanceAccess.mockRejectedValue(new Error('CLOUD_SETTINGS_UNAVAILABLE'));
+  instanceAccess.mockRejectedValue(new Error('CLOUD_SETTINGS_SCOPE_CHANGED'));
   const view = render(content());
   await act(async () => {});
   await act(async () => vi.advanceTimersByTimeAsync(10_000));

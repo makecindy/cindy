@@ -25,6 +25,15 @@ export const CLOUD_CLIENT_ERRORS = [
 ] as const;
 export type CloudClientErrorCode = (typeof CLOUD_CLIENT_ERRORS)[number];
 
+/** A throttled reply's message carries the service's earliest retry, so the renderer can wait for it. */
+export function cloudBusyMessage(retryAfterMs: number | undefined): string {
+  return retryAfterMs === undefined ? 'CLOUD_SETTINGS_BUSY' : `CLOUD_SETTINGS_BUSY retryAfterMs=${Math.round(retryAfterMs)}`;
+}
+export function cloudBusyRetryAfterMs(message: string): number | null {
+  const match = /retryAfterMs=(\d{1,10})\b/u.exec(message);
+  return match ? Number(match[1]) : null;
+}
+
 /** The client code for a CIS error code that refuses the request, or null for anything else. */
 export function cloudRefusal(serverCode: unknown): CloudRefusalCode | null {
   return typeof serverCode === 'string' && Object.hasOwn(CLOUD_REFUSALS, serverCode)
