@@ -202,6 +202,25 @@ function botUserContextSource(config: Record<string, unknown>): string {
 }
 
 /**
+ * A Cindy-generated default SOUL may be rebuilt only while the user's Home copy
+ * still matches the frozen version. A missing SOUL.md will be seeded from the
+ * next version; any other text is user-authored and must survive a metadata edit.
+ */
+async function folderStillTracksFrozenDefaultSoul(
+  userDataDir: string,
+  botId: string,
+  identitySource: string,
+): Promise<boolean> {
+  try {
+    const folder = await readBotProfileFolder(userDataDir, botId, { strict: true });
+    return !folder.identitySource || folder.identitySource === identitySource;
+  } catch {
+    // Unreadable or unsafe Home contents cannot prove that the copy is unedited.
+    return false;
+  }
+}
+
+/**
  * Seed a Bot Home that was never created (profiles from before the folder existed)
  * so any save leaves editable SOUL.md / USER.md. Idempotent: an existing SOUL.md
  * means the Home exists and nothing is touched.
@@ -2227,15 +2246,39 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
     }
     owner.assertCurrent();
   }
+  const previousIdentitySource = version?.identitySource ?? '';
+  const nextName = patch.displayName ?? current.displayName;
+  const nextDescription = patch.description ?? current.description;
+  const identityMetadataChanged =
+    nextName !== current.displayName || nextDescription !== current.description;
+  let regeneratedDefaultIdentity = false;
+  // Only an untouched Cindy-generated default follows a name/description edit.
+  // Explicit identity edits, user-authored SOULs and already customized versions
+  // keep their exact frozen text, and folder reconciliation remains the reader
+  // of hand-edited files.
+  if (
+    body.identitySource === undefined
+    && identityMetadataChanged
+    && previousIdentitySource === buildDefaultBotIdentity(current.displayName, current.description)
+  ) {
+    regeneratedDefaultIdentity = await folderStillTracksFrozenDefaultSoul(
+      owner.userDataDir,
+      id,
+      previousIdentitySource,
+    );
+    owner.assertCurrent();
+  }
   const nextIdentitySource =
     body.identitySource !== undefined
       ? readBotProfileSource(body.identitySource, 'identitySource') ||
-        buildDefaultBotIdentity(patch.displayName ?? current.displayName, patch.description ?? current.description)
-      : (version?.identitySource ?? '');
+        buildDefaultBotIdentity(nextName, nextDescription)
+      : regeneratedDefaultIdentity
+        ? buildDefaultBotIdentity(nextName, nextDescription)
+        : previousIdentitySource;
   const profileContentChanged = botProfileContentChanged({
     previousCapabilities: previous,
     nextCapabilities: normalizedNextConfig,
-    previousIdentitySource: version?.identitySource ?? '',
+    previousIdentitySource,
     nextIdentitySource,
   }) || (patch.displayName !== undefined && patch.displayName !== current.displayName)
     || (patch.description !== undefined && patch.description !== current.description);
@@ -2323,7 +2366,7 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
   // hand edits that have not been reconciled yet.
   const nextUserContextSource = botUserContextSource(normalizedNextConfig);
   const folderPatch = {
-    ...(nextIdentitySource !== (version?.identitySource ?? '') ? { identitySource: nextIdentitySource } : {}),
+    ...(nextIdentitySource !== previousIdentitySource ? { identitySource: nextIdentitySource } : {}),
     ...(nextUserContextSource !== botUserContextSource(previous) ? { userContextSource: nextUserContextSource } : {}),
   };
   await ensureBotProfileFolderSeeded(id, nextIdentitySource, normalizedNextConfig, owner.userDataDir);
