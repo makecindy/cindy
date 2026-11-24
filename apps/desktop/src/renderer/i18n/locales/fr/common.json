@@ -12946,6 +12946,20 @@
       }
     },
     "voiceMode": {
+      "realtime": {
+        "systemVoices": "Voix système",
+        "myVoices": "Mes voix",
+        "refreshMyVoices": "Actualiser mes voix",
+        "callMode": "Mode d’appel",
+        "messageReadAloud": "Lecture des messages à voix haute",
+        "callVoice": "Voix des appels en temps réel",
+        "readAloudVoice": "Voix de lecture",
+        "readAloudHint": "Cliquez sur le haut-parleur sous une réponse écrite pour l’écouter avec cette voix.",
+        "resetReadAloud": "Réinitialiser les réglages de lecture",
+        "title": "Audio en temps réel",
+        "add": "Ajouter des modèles audio en temps réel",
+        "off": "Utiliser la synthèse vocale"
+      },
       "openConversation": "Ouvrir la conversation",
       "inCallWith": "En appel avec {{name}}",
       "showDetails": "Afficher la transcription de l'appel",
@@ -12967,7 +12981,7 @@
       "settingsTitle": "Voix",
       "openSettings": "Paramètres vocaux",
       "startConversation": "Démarrer une conversation vocale",
-      "settingsHint": "Choisissez le modèle vocal et la voix de cet ami, puis démarrez une conversation vocale depuis la zone de saisie.",
+      "settingsHint": "Quand les appels utilisent la synthèse vocale, le modèle et la voix ci-dessous servent aussi à la lecture des messages.",
       "previewNeedsChat": "Démarrez une conversation avec cet ami pour écouter un aperçu de voix.",
       "voiceId": "ID de voix",
       "manualVoice": "Saisir un ID de voix",
@@ -18104,6 +18118,7 @@
       "openWorkdirFailed": "Impossible d'ouvrir le dossier"
     },
     "runs": {
+      "boundPluginEngineRecovery": "L’automatisation ne s’est pas exécutée, car la tâche associée utilise un moteur de plugin. Repassez la tâche sur un moteur intégré ou associez l’automatisation à une tâche qui en utilise un.",
       "queueWaitTimeoutRecovery": "L’attente a expiré avant l’envoi du message. Une fois la session cible libre, choisissez {{action}} pour l’exécuter.",
       "status": {
         "running": "En cours",

@@ -211,7 +211,10 @@ export function useMessageViewport(options: Options) {
       setMounted(next);
     };
     reconcileRef.current = reconcile;
-    reconcile(!initial);
+    // First paint and anchor restoration need the destination immediately.
+    // Ordinary commits share the frame requested by DOM/resize observers.
+    if (initial || anchor) reconcile(!initial);
+    else scheduleViewportReconcile();
   };
   useLayoutEffect(connectViewport);
 
