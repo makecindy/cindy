@@ -54,6 +54,7 @@ function createFallbackHarness<TBehavior>(initialBehavior: TBehavior | null, fal
     persistBehavior: vi.fn((next: TBehavior) => {
       behavior = next;
     }),
+    onPersistFailure: vi.fn(),
     applyBehavior: vi.fn(),
     schedule: vi.fn((callback: () => void) => {
       scheduledCallback = callback;
@@ -269,6 +270,19 @@ describe('main window close behavior prompt', () => {
       expect(harness.deps.applyBehavior).toHaveBeenCalledWith(fallback);
     },
   );
+
+  // Unit: a refused settings write must leave the native close action usable.
+  it('uses the first close choice once when saving the preference is refused', () => {
+    const harness = createFallbackHarness<'quit' | 'minimize'>(null, 'minimize');
+    const refusal = new Error('[ATTACHED_LOCAL_WRITE_REFUSED] fixture refusal');
+    harness.deps.persistBehavior.mockImplementationOnce(() => { throw refusal; });
+
+    harness.controller.request();
+    expect(() => harness.fireFallback()).not.toThrow();
+    expect(harness.deps.onPersistFailure).toHaveBeenCalledWith(refusal);
+    expect(harness.deps.applyBehavior).toHaveBeenCalledExactlyOnceWith('minimize');
+    expect(harness.deps.readBehavior()).toBeNull();
+  });
 
   it('cancels the native fallback when the renderer confirms the dialog mounted', () => {
     const harness = createFallbackHarness<'quit' | 'minimize'>(null, 'minimize');

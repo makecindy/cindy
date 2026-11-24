@@ -125,6 +125,7 @@ export interface CloseBehaviorPromptFallbackDependencies<TBehavior> {
   showRendererPrompt(): void;
   showNativePrompt(): TBehavior;
   persistBehavior(behavior: TBehavior): void;
+  onPersistFailure?(error: unknown): void;
   applyBehavior(behavior: TBehavior): void;
   schedule(callback: () => void, delayMs: number): unknown;
   cancel(handle: unknown): void;
@@ -160,7 +161,13 @@ export function createCloseBehaviorPromptFallbackController<TBehavior>(
     const behavior = deps.showNativePrompt();
     // The renderer can persist a choice while the native dialog is open; keep the first choice.
     if (deps.readBehavior()) return;
-    deps.persistBehavior(behavior);
+    try {
+      deps.persistBehavior(behavior);
+    } catch (error) {
+      // The user chose how to close this window even when its preference file
+      // cannot be changed. Leave the preference untouched and apply once.
+      deps.onPersistFailure?.(error);
+    }
     deps.applyBehavior(behavior);
   };
 
