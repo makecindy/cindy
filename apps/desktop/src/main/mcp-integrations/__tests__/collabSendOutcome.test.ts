@@ -152,6 +152,7 @@ import {
   resolveCollabDispatchResult,
 } from '../../maker-ipc/collabSendOutcome.js';
 import { createDesktopMcpProviders } from '../mcp-providers.js';
+import * as sessionMeta from '../../localDb/ipc/sessions.js';
 import * as companionCloud from '../../companion-cloud/runtime.js';
 import { createDbClient } from '../../localDb/client/DbClient.js';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current.js';
@@ -203,6 +204,40 @@ it('records the same safe iLink rejection reason in the text result and log', as
 // fixed registry, so they miss providers constructed before login. Driver
 // factories are isolated; their injected call-time gates are also checked.
 describe('Desktop providers across account changes', () => {
+  // #12464 P1, unit: the ordinary task has no task-action context. Exercise
+  // the wired batch and its synchronous write guard with overlapping task IDs.
+  it.each(['owner', 'database'] as const)('stops local pin writes after a change of %s', async change => {
+    const db = await createDbClient({ transport: 'worker-thread', useInlineWorker: true });
+    const patch = vi.spyOn(sessionMeta, 'patchSessionMetaInDb');
+    const written: string[] = [];
+    try {
+      commitVolatileAppSession('local');
+      setCurrentDbClient(db, 'local');
+      patch.mockImplementation(async (id, meta, options) => {
+        // Reinstall the client during patch-meta preparation to isolate the DB
+        // generation check from owner changes. A new binding may reuse a client.
+        if (change === 'database' && id === 'second') setCurrentDbClient(db, 'local');
+        options?.beforeWrite?.();
+        written.push(id);
+        if (change === 'owner' && id === 'first') commitVolatileAppSession('cloud', 'next-owner');
+        return { pinnedAt: meta.pinnedAt } as Awaited<ReturnType<typeof sessionMeta.patchSessionMetaInDb>>;
+      });
+      createDesktopMcpProviders({ botCapabilities, getMakerMemoryManager: vi.fn(), lspPool: {} as never,
+        pluginRegistry: { isEnabled: () => false, getPlugins: () => [] } as never, invokeRemote: vi.fn(),
+      });
+      const helper = mockState.capturedProvidersConfig!.xdtHelper as XdtHelperMcpDeps;
+      const result = await helper.setSessionsPinned!({ deviceId: null, sessionIds: ['first', 'second', 'third'], pinned: true });
+      expect(written).toEqual(['first']);
+      expect(result).toMatchObject({ ok: false, errorCode: 'PRECONDITION_FAILED', changed: [{ sessionId: 'first' }],
+        failedSessionId: 'second', remainingSessionIds: ['third'] });
+    } finally {
+      patch.mockRestore();
+      clearCurrentDbClient(db);
+      commitVolatileAppSession('signed-out');
+      await db.dispose();
+    }
+  });
+
   it.each(['claude-code', 'codex', 'pi'] as const)(
     'reads the current owner for %s without widening frozen or bridge policy',
     async (agentKind) => {

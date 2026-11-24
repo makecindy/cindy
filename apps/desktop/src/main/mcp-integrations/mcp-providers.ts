@@ -169,7 +169,7 @@ import {
 import { getInputHandoffService } from '../input-handoff/service.js';
 import { isInputHandoffDisabledForSession } from '../input-handoff/botPolicy.js';
 import { readHandoffPicture } from '../input-handoff/pictureRef.js';
-import { isIpcError } from '../../shared/ipc-errors.js';
+import { createIpcError, isIpcError } from '../../shared/ipc-errors.js';
 import type { PluginRegistry } from '../maker-host/plugins/plugin-registry.js';
 import { BUILTIN_LIZI_MCP_IDS } from '../maker-host/plugins/builtin-plugins.js';
 import {
@@ -1204,11 +1204,20 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           const patch = createRemoteSessionsPatcher({ captureAccess: deps.historyRemote.captureAccess, invoke: deps.invokeRemote });
           return patch(deviceId, sessionIds, { pinnedAt: pinned ? new Date().toISOString() : null });
         }
-        if (!tryGetDbClient()) return fail(0, 'HOST_NOT_READY', 'localDb not ready');
-        const beforeWrite = captureTaskActionSyncGuard();
+        const db = getCurrentDbClientSnapshot();
+        if (!db || isAppSessionBoundaryPending()) return fail(0, 'HOST_NOT_READY', 'localDb not ready');
+        const owner = activeOwnerScopeKey();
+        const checkAction = captureTaskActionSyncGuard();
+        const beforeWrite = () => {
+          if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== owner || getCurrentDbClientSnapshot() !== db) {
+            throw createIpcError('PRECONDITION_FAILED', '账号或数据库已切换，当前项及后续项未执行。');
+          }
+          checkAction?.();
+        };
         for (const [index, sessionId] of sessionIds.entries()) {
           try {
             await assertTaskActionCurrent();
+            beforeWrite();
             const row = await patchSessionMetaInDb(sessionId, { pinnedAt: pinned ? new Date().toISOString() : null }, { beforeWrite });
             if ((row.pinnedAt != null) !== pinned) return fail(index, 'PRECONDITION_FAILED', '目标任务的置顶状态已再次变化。');
             changed.push({ sessionId });
