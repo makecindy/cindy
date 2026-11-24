@@ -48,10 +48,7 @@ export function PluginModelAdvancedDialog({
         >
           <ModelAdvancedColumns
             left={<>
-              <ModelAdvancedSection
-                title={t('settings.providers.models.advanced.engines')}
-                hint={t('settings.providers.models.advanced.enginesHint')}
-              >
+              <ModelAdvancedSection title={t('settings.providers.models.advanced.engines')}>
                 <ModelAdvancedRow label={t('settings.providers.models.advanced.protocol.upstream')}>ACP</ModelAdvancedRow>
               </ModelAdvancedSection>
               <ModelAdvancedSection
@@ -87,10 +84,7 @@ export function PluginModelAdvancedDialog({
                   />
                 )}
               </ModelAdvancedSection>
-              <ModelAdvancedSection
-                title={t('settings.providers.models.advanced.contextLimit')}
-                hint={t('settings.providers.models.advanced.contextLimitHint')}
-              >
+              <ModelAdvancedSection title={t('settings.providers.models.advanced.contextLimit')}>
                 <p className="py-2 text-13 text-[var(--text-tertiary)]">-</p>
                 <ModelAdvancedRow label={t('settings.providers.models.advanced.compaction.title')} muted>-</ModelAdvancedRow>
               </ModelAdvancedSection>
@@ -100,10 +94,7 @@ export function PluginModelAdvancedDialog({
               </ModelAdvancedSection>
             </>}
             right={<>
-              <ModelAdvancedSection
-                title={t('settings.providers.models.advanced.capability')}
-                hint={t('settings.providers.models.advanced.capabilityHint')}
-              >
+              <ModelAdvancedSection title={t('settings.providers.models.advanced.capability')}>
                 <ModelAdvancedRow label={t('settings.providers.models.advanced.imageInput')} muted>-</ModelAdvancedRow>
                 <ModelAdvancedRow label={t('settings.providers.models.advanced.inputModalities')} muted>-</ModelAdvancedRow>
                 <ModelAdvancedRow label={t('settings.providers.models.advanced.outputModalities')} muted>-</ModelAdvancedRow>

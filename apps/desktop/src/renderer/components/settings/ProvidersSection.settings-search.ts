@@ -110,9 +110,6 @@ export const providersSettings = defineSettings({
       'settings.providers.remote.rowLabel',
       'settings.providers.models.advanced.defaultEffort',
       'settings.providers.models.advanced.defaultEffortHint',
-      'settings.providers.models.advanced.enginesHint',
-      'settings.providers.models.advanced.contextLimitHint',
-      'settings.providers.models.advanced.capabilityHint',
       'settings.providers.models.advanced.providerLabel',
     ],
     aliases: [
