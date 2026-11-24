@@ -110,7 +110,7 @@ const Context = createContext<ContextValue | null>(null);
 /**
  * 这一轮会不会经账号池选账号：与执行端 subscription-accounts/agent.ts 的 providerFor 同口径——
  * Claude Code 显式选 Anthropic，或三种引擎显式选 OpenAI；SSH 不进账号池。
- * 旧 Codex 空来源可显式开启任务绑定探测，消费端仍须确认订阅形态，不能据此推断默认账号。
+ * 已建立的空来源任务可显式开启绑定探测。Claude 仅查询本机任务的已保存绑定。
  */
 export function sessionSubscriptionPoolProvider(
   agent: 'cc' | 'codex' | 'pi',
@@ -118,9 +118,10 @@ export function sessionSubscriptionPoolProvider(
   remoteHostId?: string | null,
   provider?: ProviderView,
   probeImplicitCodex = false,
-  implicitRoute?: { modelId?: string | null; providers: ProviderView[]; catalogReady: boolean },
+  implicitRoute?: { modelId?: string | null; providers: ProviderView[]; catalogReady: boolean; probeLocalClaude?: boolean },
 ): SubscriptionProvider | null {
   if (remoteHostId) return null;
+  if (agent === 'cc' && providerId == null && implicitRoute?.probeLocalClaude) return 'anthropic';
   // Old Codex tasks may retain a null display route after the executor bound an account.
   // This only enables a task-scoped query, not an OpenAI/default-account classification.
   if (probeImplicitCodex && agent === 'codex' && providerId == null) {
@@ -179,7 +180,7 @@ export function SessionSubscriptionAccountProvider({
 }: {
   /** Subscription family; the actual source may be an independent account provider. */
   providerId: string | null | undefined;
-  /** null probes an old Codex task; undefined keeps the ordinary named-pool route. */
+  /** null probes a task with no saved source; undefined keeps the named-pool route. */
   routeProviderId?: string | null;
   /** 执行任务的另一台电脑；null = 本机(不传本机自己的 id)。 */
   deviceId: string | null;
@@ -192,17 +193,17 @@ export function SessionSubscriptionAccountProvider({
   const pool =
     isSubscriptionProvider(providerId) && (sessionId || nativeSessionId) ? providerId : null;
   const remoteDeviceId = deviceId || null;
-  // Explicit null is the old task's unsaved route. Keep it distinct from the named OpenAI
-  // source so browsing another source cannot inherit this task's private account.
-  const implicitCodex = pool === 'openai' && routeProviderId === null;
-  const route = implicitCodex ? null : routeProviderId || pool;
+  // Keep an unsaved route distinct so browsing a named source cannot inherit the task's account.
+  const bindingOnly = pool === 'anthropic' && routeProviderId === null && !remoteDeviceId;
+  const implicit = routeProviderId === null && (pool === 'openai' || bindingOnly);
+  const route = implicit ? null : routeProviderId || pool;
   const ownerGeneration = useOptionalDataOwnerGeneration();
   const foreground = useDocumentVisible(pool !== null);
   const reconnectEpoch = useDeviceLinkReconnectEpoch(
     pool && remoteDeviceId ? remoteDeviceId : undefined,
   );
   const key = pool
-    ? [remoteDeviceId ?? '', pool, implicitCodex ? '<implicit-codex>' : route, sessionId ?? '', nativeSessionId ?? ''].join('\n')
+    ? [remoteDeviceId ?? '', pool, implicit ? '<implicit>' : route, sessionId ?? '', nativeSessionId ?? ''].join('\n')
     : '';
   const [loaded, setLoaded] = useState<{
     key: string;
@@ -218,6 +219,7 @@ export function SessionSubscriptionAccountProvider({
     const query: SubscriptionSessionAccountQuery = {
       action: 'session',
       providerId: pool,
+      ...(bindingOnly ? { bindingOnly: true } : {}),
       ...(route && route !== pool ? { routeProviderId: route } : {}),
       ...(sessionId ? { sessionId } : {}),
       ...(nativeSessionId ? { nativeSessionId } : {}),
@@ -240,7 +242,7 @@ export function SessionSubscriptionAccountProvider({
               )
             : await window.electronAPI.subscriptionAccounts?.sessionAccount?.(query);
           view = parseSubscriptionSessionAccountView(raw, pool);
-          if (implicitCodex ? view?.routeProviderId !== undefined : route !== pool && view?.routeProviderId !== route)
+          if (implicit ? view?.routeProviderId !== undefined : route !== pool && view?.routeProviderId !== route)
             view = null;
         } catch (error) {
           // 旧执行端或临时读取失败，先尝试已有的原生会话查询；明确不支持的记下，不再重发。
@@ -282,7 +284,7 @@ export function SessionSubscriptionAccountProvider({
       offChanged?.();
       window.removeEventListener('focus', onFocus);
     };
-  }, [pool, route, key, remoteDeviceId, sessionId, nativeSessionId, foreground, refreshKey, reconnectEpoch, ownerGeneration, implicitCodex]);
+  }, [pool, route, key, remoteDeviceId, sessionId, nativeSessionId, foreground, refreshKey, reconnectEpoch, ownerGeneration, implicit, bindingOnly]);
 
   const loading = useMemo<SessionSubscriptionAccountState | null>(
     () => (pool ? { providerId: pool, state: 'loading' } : null),
@@ -297,8 +299,8 @@ export function SessionSubscriptionAccountProvider({
         ? cached.view
         : loading;
   const value = useMemo<ContextValue | null>(
-    () => ((route || implicitCodex) && account ? { providerId: route, deviceId: remoteDeviceId, account } : null),
-    [route, remoteDeviceId, account, implicitCodex],
+    () => ((route || implicit) && account ? { providerId: route, deviceId: remoteDeviceId, account } : null),
+    [route, remoteDeviceId, account, implicit],
   );
   return <Context.Provider value={value}>{children}</Context.Provider>;
 }
@@ -310,10 +312,10 @@ export function SessionSubscriptionAccountProvider({
 export function useSessionSubscriptionAccount(
   providerId: string | null | undefined,
   remoteDeviceId: string | null,
-  allowImplicitCodex = false,
+  allowImplicit = false,
 ): SessionSubscriptionAccountState | null {
   const value = useContext(Context);
-  if (!value || (providerId == null && !allowImplicitCodex) || value.providerId !== (providerId ?? null))
+  if (!value || (providerId == null && !allowImplicit) || value.providerId !== (providerId ?? null))
     return null;
   return (remoteDeviceId || null) === value.deviceId ? value.account : null;
 }

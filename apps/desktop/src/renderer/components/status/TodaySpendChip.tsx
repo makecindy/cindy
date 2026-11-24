@@ -968,8 +968,14 @@ export function TodaySpendChip({
   const { hasSavedKey: hasGatewayKey, isReconciling: gatewayKeyReconciling } = useApiKey();
   const claudeOAuthConnected = useClaudeOAuthConnected(isDefaultRouteClaudeSession);
   const observedClaudeRoute = useClaudeSessionRoute(sessionId, isDefaultRouteClaudeSession);
+  const implicitClaudeBinding = useSessionSubscriptionAccount(
+    null, null, isDefaultRouteClaudeSession && observedClaudeRoute !== 'gateway',
+  );
+  const implicitClaudeAccount = implicitClaudeBinding?.providerId === 'anthropic'
+    ? implicitClaudeBinding : null;
+  const hasImplicitClaudeBinding = implicitClaudeAccount?.state === 'bound';
   const ccBillingFormPending =
-    isDefaultRouteClaudeSession &&
+    isDefaultRouteClaudeSession && !hasImplicitClaudeBinding &&
     observedClaudeRoute == null &&
     (gatewayKeyReconciling || (!hasGatewayKey && claudeOAuthConnected == null));
   const { providers: localQuotaProviders, loading: localQuotaLoading, error: localQuotaError } = useProviders();
@@ -1007,9 +1013,9 @@ export function TodaySpendChip({
         !isRemoteClaudeSession &&
         (isClaudeAccount ||
           (providerId == null &&
-            (observedClaudeRoute != null
+            (hasImplicitClaudeBinding || (observedClaudeRoute != null
               ? observedClaudeRoute === 'subscription'
-              : !gatewayKeyReconciling && !hasGatewayKey && claudeOAuthConnected === true)))) ||
+              : !gatewayKeyReconciling && !hasGatewayKey && claudeOAuthConnected === true))))) ||
         // Pi 的 provider 在创建会话时已经显式固化，不需要再从 CC proxy route 猜。
         ((vendorKey === 'pi' || vendorKey === 'codex') && !remoteHostId && isClaudeAccount)));
   // cc 走「订阅直连 bridge」= model 带 chatgpt/ / xai/ 前缀(经本地 responses-bridge 打用户个人
@@ -1122,7 +1128,7 @@ export function TodaySpendChip({
     vendorKey === 'cc' &&
     !isAnyRemoteSession &&
     !isSubscriptionBridge &&
-    !ccBillingFormPending &&
+    !ccBillingFormPending && !hasImplicitClaudeBinding &&
     (providerId === 'xd' ||
       (providerId == null &&
         (observedClaudeRoute != null
@@ -1165,7 +1171,12 @@ export function TodaySpendChip({
       : null,
     accountDeviceId,
   );
-  const taskAccount = sessionAccountDisplay(implicitCodexAccount ?? explicitTaskAccount, t);
+  const claudeTaskAccount = isClaudeSubscription && !isSubscriptionBridge ? implicitClaudeAccount : null;
+  const taskAccount = sessionAccountDisplay(
+    claudeTaskAccount?.state === 'legacy' ? { providerId: 'anthropic', state: 'loading' }
+      : claudeTaskAccount ?? implicitCodexAccount ?? explicitTaskAccount,
+    t,
+  );
   const readsTaskAccountUsage = taskAccount?.replacesUsage === true;
   const shouldReadLocalCodexAccountUsage =
     usesCodexQuotaForm && !isAnyRemoteSession && !readsTaskAccountUsage;

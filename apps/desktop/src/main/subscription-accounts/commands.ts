@@ -26,6 +26,7 @@ function pluginLoginFields(value: Record<string, unknown>, providerId: string): 
 /** null when `raw` is not a session read; it never reaches the management command executor. */
 export function parseSubscriptionSessionAccountQuery(
   raw: unknown,
+  local = false,
 ): SubscriptionSessionAccountQuery | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const value = raw as Record<string, unknown>;
@@ -58,6 +59,8 @@ export function parseSubscriptionSessionAccountQuery(
   return {
     action: 'session',
     providerId: value.providerId,
+    ...(local && value.providerId === 'anthropic' && value.bindingOnly === true
+      && !routeProviderId && !legacyProviderId && !model ? { bindingOnly: true as const } : {}),
     ...(sessionId ? { sessionId } : {}),
     ...(nativeSessionId ? { nativeSessionId } : {}),
     ...(typeof model === 'string' ? { model } : {}),

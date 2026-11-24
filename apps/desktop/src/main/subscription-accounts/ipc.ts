@@ -94,7 +94,7 @@ export function registerSubscriptionAccountsIpc(): void {
     if (context?.sharedTask)
       throwIpcError('PERMISSION_DENIED', 'Account management requires the owner');
     if (!context) assertTrustedAppRendererEvent(event);
-    const session = parseSubscriptionSessionAccountQuery(raw);
+    const session = parseSubscriptionSessionAccountQuery(raw, !context);
     if (session) {
       try {
         return await readSubscriptionSessionAccount(session.providerId, session, {

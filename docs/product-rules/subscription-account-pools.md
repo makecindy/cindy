@@ -385,6 +385,7 @@ Claude 保留官方 `subscriptionType` 与 `planTier`，另存可选 `planDispla
   名字凑；连这个也不认识的更旧版本才沿用原显示。实现见
   `renderer/components/new-chat/SessionSubscriptionAccount.tsx` 与 `main/subscription-accounts/runtime.ts` 的
   `readSubscriptionSessionAccount`。
+- 本机 Claude Code 已建立任务的保存来源为空时，底栏以任务或原生会话的已保存绑定为准。绑定未知或失效时隐藏账号额度。
 - 任务账号读取临时失败时保留当前 owner 代次的已知结果；没有结果则隐藏其他账号并继续刷新，不能据此推断成默认账号。
 - 本机模型目录因 CLI 认证或模型发现临时读取失败时，Main 以可选的 `subscriptionReadUnavailable` 标记失败证据；认证仍已连接或同池其他账号健康时也保留该标记，不把模型发现失败伪装成登出。Renderer 复用原有有界恢复计时器、联合刷新与代次保护；即使没有新的窗口事件也会重读，持续失败时按重试预算停止（网络类失败的预算见下方「网络恢复立即补拉」）。重新聚焦、恢复可见或网络恢复可触发重读；没有失败证据的未连接来源、主动断开、暂停或移除的来源不因此探测。隐藏时取消计时并停止恢复读取，卸载和 owner 切换后旧计时器失效。配置变化沿用既有 `maker.onProvidersChanged` 通知，不订阅包含额度、运行和租约变化的账号活动流；单个订阅账号故障不升级为整个目录错误。旧端缺少或忽略该标记，沿用原恢复行为，无新 IPC 通道或中转帧。实现与回归见 `renderer/lib/localCatalogSnapshot.ts`、`main/subscription-accounts/runtime.ts` 与 `renderer/__tests__/localCatalogSnapshot.test.ts`。
   同账号重新同步代次后重新读取。OpenAI 账号池中的 `chatgpt/` 桥接模型按去前缀的模型选择该账号原生额度桶，不把通用桶伪装成 WHAM。

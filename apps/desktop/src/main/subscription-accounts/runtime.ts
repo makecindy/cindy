@@ -1799,7 +1799,7 @@ const ACCOUNT_SWITCH_PROBE_BUDGET_MS = 2_000;
  */
 export async function readSubscriptionSessionAccount(
   provider: SubscriptionProvider,
-  keys: { sessionId?: string; nativeSessionId?: string; model?: string; legacyProviderId?: string; routeProviderId?: string },
+  keys: { sessionId?: string; nativeSessionId?: string; model?: string; legacyProviderId?: string; routeProviderId?: string; bindingOnly?: true },
   /** ownComputer：远程读取来自自己的其他电脑(不是受邀者)。 */
   options: { remote?: boolean; ownComputer?: boolean } = {},
 ): Promise<SubscriptionSessionAccountView> {
@@ -1864,7 +1864,8 @@ export async function readSubscriptionSessionAccount(
   ]
     .filter(Boolean)
     .map((key) => readAccountBinding(key, provider))
-    .find(Boolean) ?? (legacyAccountId ? { accountId: legacyAccountId } : undefined)
+    .find(Boolean) ?? (keys.bindingOnly ? undefined : inferredBinding());
+  const inferredBinding = () => (legacyAccountId ? { accountId: legacyAccountId } : undefined)
     ?? ((requestedRef.providerId !== provider || keys.nativeSessionId) && pinnedOwnAccount(requestedRef)
       ? { accountId: pinnedOwnAccount(requestedRef)! } : undefined);
   const binding = resolveBinding();

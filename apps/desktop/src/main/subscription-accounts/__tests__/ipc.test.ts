@@ -625,6 +625,22 @@ describe('subscription management boundary', () => {
     expect(h.sessionRead).toHaveBeenCalledTimes(6);
     expect(h.execute).not.toHaveBeenCalled();
   });
+  // #10164, unit: the binding-only read uses the original trusted-window/owner gate and is local-only.
+  it('keeps the stored-binding display option local to a trusted renderer', async () => {
+    const query = { action: 'session', providerId: 'anthropic', sessionId: 'task-1' };
+    const bindingOnly = { ...query, bindingOnly: true };
+    await invoke(bindingOnly);
+    expect(h.sessionRead).toHaveBeenLastCalledWith('anthropic', bindingOnly, { remote: false, ownComputer: false });
+    h.trusted = false;
+    await expect(invoke(bindingOnly)).rejects.toThrow('untrusted');
+    h.context = { controllerDeviceId: 'own-mac' };
+    await invoke(bindingOnly);
+    expect(h.sessionRead).toHaveBeenLastCalledWith('anthropic', query, { remote: true, ownComputer: true });
+    h.context = { sharedTask: {} };
+    await expect(invoke(bindingOnly)).rejects.toThrow('PERMISSION_DENIED');
+    expect(h.sessionRead).toHaveBeenCalledTimes(2);
+    expect(h.execute).not.toHaveBeenCalled();
+  });
   it('rejects invalid account paths, settings and login keys before any native operation', async () => {
     for (const command of [
       { action: 'login', accountId: '../credentials', loginKey: 'login' },

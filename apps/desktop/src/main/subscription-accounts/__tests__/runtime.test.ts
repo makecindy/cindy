@@ -3740,6 +3740,22 @@ describe('native account assignment on the executing computer', () => {
     expect(await read({ sessionId: 'task-1' })).toEqual({ providerId: provider, state: 'legacy' });
   });
 
+  // #10164, unit: when the built-in source was merged, a named source can still resolve its
+  // historical CLI account. With a saved null route, only a persisted binding is evidence.
+  it('requires a stored binding for implicit Claude display even after a pool move', async () => {
+    h.pools.anthropic = { strategy: 'order', accounts: [account('default')] };
+    h.placement['anthropic:default'] = 'anthropic-sub-12345678';
+    const query = { sessionId: 'implicit-claude', nativeSessionId: 'sdk-implicit-claude' };
+    expect(await readSubscriptionSessionAccount('anthropic', query)).toMatchObject({ state: 'bound' });
+    h.usage.mockClear();
+    expect(await readSubscriptionSessionAccount('anthropic', { ...query, bindingOnly: true }))
+      .toEqual({ providerId: 'anthropic', state: 'legacy' });
+    expect(h.usage).not.toHaveBeenCalled();
+    h.bindings.set('native:sdk-implicit-claude', { providerId: 'anthropic', accountId: 'default' });
+    expect(await readSubscriptionSessionAccount('anthropic', { ...query, bindingOnly: true }))
+      .toMatchObject({ state: 'bound', account: { isDefault: true } });
+  });
+
   // Unit, #9295 review: reset lookups refresh the pinned profile rather than
   // taking a different ready account; prior tests only covered pool availability.
   it.each([

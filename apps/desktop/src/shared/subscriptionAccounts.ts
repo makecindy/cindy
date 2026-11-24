@@ -199,6 +199,8 @@ export interface SubscriptionSessionAccountQuery {
   model?: string;
   /** Optional: the executor's old Codex connection id; can stand alone before a native session exists. */
   legacyProviderId?: string;
+  /** Local renderer only: use the saved binding without inferring an account from the route. */
+  bindingOnly?: true;
   /** Actual task source, resolved on the executing computer; echoed before a new controller acts. */
   routeProviderId?: string;
 }

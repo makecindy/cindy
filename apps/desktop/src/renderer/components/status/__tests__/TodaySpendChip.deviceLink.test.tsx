@@ -739,6 +739,47 @@ describe('existing UI with remote account data', () => {
 // computer), not the account the task is pinned to. Existing chip cases have one account per
 // provider. Minimal input: the default/next pick at 90% 5h used, the task's account at 30%.
 describe('TodaySpendChip on a subscription account pool', () => {
+  // #10164, unit: a persisted Claude binding can supply the bottom bar even before
+  // observing a live turn or confirming the default Claude login.
+  it('shows the saved Claude task account on a null route and hides quota after switching to unknown history', async () => {
+    mocks.localClaudeSnapshot = { source: 'oauth-endpoint', fiveHour: { utilization: 90 } };
+    const sessionAccount = vi.fn(async ({ sessionId }: { sessionId: string }) => sessionId === 'claude-b'
+      ? {
+          providerId: 'anthropic', state: 'bound', account: {
+            isDefault: false, number: 2, identity: 'second@example.test', paused: false, status: 'ready',
+            usage: { claude: { fiveHour: { utilization: 30 } } },
+          },
+        }
+      : { providerId: 'anthropic', state: 'legacy' });
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: {
+      openExternal: mocks.openExternal,
+      subscriptionAccounts: { sessionAccount, onChanged: () => () => {} },
+    } });
+    const view = (id: string) => (
+      <SessionSubscriptionAccountProvider
+        providerId={sessionSubscriptionPoolProvider('cc', null, null, undefined, false, {
+          providers: [], catalogReady: false, probeLocalClaude: true,
+        })}
+        routeProviderId={null} deviceId={null} sessionId={id} nativeSessionId={id + '-native'}>
+        <TodaySpendChip vendorKey="cc" providerId={null} modelId="claude-opus-5-5" sessionId={id} />
+      </SessionSubscriptionAccountProvider>
+    );
+    const { container, rerender } = render(view('claude-b'));
+    await act(async () => {});
+    expect(container.textContent).toContain('剩余 70%');
+    expect(sessionAccount).toHaveBeenCalledWith({
+      action: 'session', providerId: 'anthropic', bindingOnly: true, sessionId: 'claude-b', nativeSessionId: 'claude-b-native',
+    });
+    fireEvent.mouseEnter(screen.getByTestId('task-usage-trigger'));
+    act(() => vi.advanceTimersByTime(300));
+    expect(screen.getByTestId('quota-hover-card').textContent).toContain('second@example.test');
+    rerender(view('claude-unknown'));
+    expect(container.textContent).not.toContain('70%');
+    await act(async () => {});
+    expect(container.textContent).not.toMatch(/70%|10%/);
+    expect(mocks.localClaudeReadEnabled.every(enabled => !enabled)).toBe(true);
+  });
+
   // #10111 (unit): old null-route tasks already have a real second-account binding.
   // Existing cases always name the provider, bypassing both null-route gates.
   it.each(['oauth-bearer', null, 'env-key', 'provider-oauth'])(
