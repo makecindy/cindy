@@ -114,11 +114,13 @@ vi.mock('undici', async (importOriginal) => {
   return { ...actual, fetch: vi.fn() };
 });
 
+const gatewayEndpoint = vi.hoisted(() => ({ override: undefined as string | undefined }));
+
 // SUT 链(maker-host/runtime-configs → effectiveXdGatewayBaseUrl)运行期读
 // model-access 下发的 endpoint;mock 成 fixture 值。
 vi.mock('../../model-access/effectiveEndpoint.js', async () => {
   const { TEST_XD_GATEWAY_BASE_URL } = await import('../../../test/vitest/clientEndpointsFixture');
-  return { effectiveXdGatewayBaseUrl: () => TEST_XD_GATEWAY_BASE_URL };
+  return { effectiveXdGatewayBaseUrl: () => gatewayEndpoint.override ?? TEST_XD_GATEWAY_BASE_URL };
 });
 
 vi.mock('../../model-access/gatewayKeyRejection.js', () => ({
@@ -126,6 +128,7 @@ vi.mock('../../model-access/gatewayKeyRejection.js', () => ({
 }));
 
 import type { Maker } from '@cindy/maker-core';
+import { createAutoReviewUnavailableNotice, resolveAutoReviewDecision } from '@cindy/maker-core';
 // model-compat's own profile table; one test adds a temporary gateway-object
 // profile because the only real one (cline-pass) shares its address with a
 // conflicting profile and never resolves.
@@ -133,7 +136,7 @@ import upstreamProfiles from '../../../../../../packages/model-compat/src/upstre
 import { BUNDLED_CATALOG, buildUserProvider, type PiModelApi } from '@cindy/model-providers';
 import { DictationDictionaryAdvisor } from '@cindy/voice-input-core';
 import { DictionaryLearningTextModelClient } from '../../voice-input/DictionaryLearningTextModelClient.js';
-import { fetch as undiciFetch } from 'undici';
+import { fetch as undiciFetch, Response as UndiciResponse } from 'undici';
 
 import { getAppCapabilities } from '../../appCapabilities.js';
 import { readClaudeApiKey } from '../../maker-host/auth-adapters.js';
@@ -149,7 +152,8 @@ import { getProviderRouteCredentialRevision, isProviderRouteMutationInProgress }
 import { readCustomProviderKey } from '../../secrets/providerSecretStore.js';
 import { reportCindyGatewayKeyRejected } from '../../model-access/gatewayKeyRejection.js';
 import { getUtilityModelChainProfiles } from '../UtilityModelSelection.js';
-import { parseAutoPermissionReviewDecision } from '../../maker-host/auto-permission-reviewer.js';
+import { createAutoPermissionReviewer, parseAutoPermissionReviewDecision } from '../../maker-host/auto-permission-reviewer.js';
+import { createAutoReviewModelRouter } from '../../maker-host/auto-review-model-router.js';
 import { decodeCatalogPin } from '../textOneshotPinOptions.js';
 import {
   DEDICATED_AUTO_REVIEW_CANDIDATES,
@@ -200,6 +204,7 @@ describe('utility one-shot candidates', () => {
     projectedCatalog.mockReset();
     poolMembership.provider = 'pool-a';
     fetchMock.mockReset();
+    gatewayEndpoint.override = undefined;
     resetUtilityReasoningMemory();
     chainState.source = 'auto';
     chainState.refs = ['codex-gpt-5.4-mini', 'litellm-gpt-5.4-mini'];
@@ -3711,6 +3716,68 @@ describe('utility one-shot candidates', () => {
       max_tokens: 384,
       messages: [{ role: 'user', content: 'classify' }],
     });
+  });
+
+  // #11727, unit: drive the Desktop router with the real candidate resolver and
+  // reviewer. The transport-only tests cannot catch missing gateway connection
+  // data being surfaced as a missing-model notice.
+  it.each([
+    { state: 'eligible', gateway: true, key: 'synthetic-gateway-key', endpoint: undefined, code: undefined },
+    { state: 'ineligible', gateway: false, key: null, endpoint: undefined, code: 'AUTO_REVIEW_NO_AVAILABLE_MODEL' },
+    { state: 'credential not ready', gateway: true, key: null, endpoint: undefined, code: 'AUTO_REVIEW_UNAVAILABLE' },
+    { state: 'endpoint not ready', gateway: true, key: 'synthetic-gateway-key', endpoint: '', code: 'AUTO_REVIEW_UNAVAILABLE' },
+    { state: 'eligible Pi auxiliary', gateway: true, key: 'synthetic-gateway-key', auxiliary: 'pi', code: undefined },
+    { state: 'eligible Codex auxiliary', gateway: true, key: 'synthetic-gateway-key', auxiliary: 'codex', code: undefined },
+  ] as const)('reports automatic-review candidate availability when $state', async (scenario) => {
+    const { gateway, key, code } = scenario;
+    const auxiliary = 'auxiliary' in scenario ? scenario.auxiliary : undefined;
+    const agent = auxiliary ?? 'pi';
+    const model = 'deepseek/deepseek-v4-flash';
+    appCapabilities.mockReturnValue({ canUseCindyGateway: gateway } as never);
+    readKey.mockReturnValue(key);
+    gatewayEndpoint.override = 'endpoint' in scenario ? scenario.endpoint : undefined;
+    activeCatalog.mockReturnValue({ providers: [{
+      id: 'xd',
+      name: 'Cindy AI',
+      source: 'builtin',
+      agents: [agent],
+      auth: { method: 'managed' },
+      routing: { [agent]: { upstream: 'https://ignored.invalid', authStrategy: 'gateway-key' } },
+      models: { [agent]: [{ id: model, name: 'DeepSeek Flash', contextWindow: 100_000 }] },
+    }] } as never);
+    if (gateway) {
+      chainState.source = 'custom';
+      chainState.refs = [`cat:xd:${agent}:${model}`];
+    }
+    if (auxiliary) fetchMock.mockResolvedValueOnce(new UndiciResponse('{}', { status: 404 }));
+    if (!code) {
+      fetchMock.mockResolvedValueOnce(new UndiciResponse(JSON.stringify({
+        choices: [{ message: { content: '{"verdict":"ask","reason":"fixture"}' } }],
+      })));
+    }
+    const logger = { debug: vi.fn(), warn: vi.fn() };
+    const route = createAutoReviewModelRouter({ logger, createAuxiliaryFallback: createCustomAutoReviewFallback });
+    const reviewer = createAutoPermissionReviewer({
+      logger, managesRetries: true, requestText: (_request, prompt, { signal }) => route(prompt, signal),
+    });
+    const decision = await resolveAutoReviewDecision({
+      agentKind: 'pi', model, userIntent: 'Create a fixture file',
+      action: { kind: 'exec', command: 'touch /fixture-only' },
+      workspaceRoots: ['/fixture'], platform: process.platform,
+    }, reviewer);
+
+    expect(decision.verdict).toBe('ask');
+    expect(fetchMock.mock.calls.map(([, init]) => JSON.parse(String(init?.body)).model))
+      .toEqual(code ? [] : auxiliary ? ['cindy/auto-review', model] : ['cindy/auto-review']);
+    if (code) {
+      expect(decision.unavailable).toBe(true);
+      const emit = vi.fn();
+      createAutoReviewUnavailableNotice(emit).notify(decision);
+      expect(emit).toHaveBeenCalledWith(expect.stringMatching(`^\\[${code}\\]`));
+    } else {
+      expect(decision).toMatchObject({ verdict: 'ask', reason: 'fixture' });
+      expect(decision.unavailable).toBeUndefined();
+    }
   });
 
   // #8706 unit: real Response streams through the production HTTP entry. Existing HTTP
