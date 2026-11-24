@@ -12,20 +12,14 @@ export function readOfficialGroupImage(
   return reader?.(lane, token) ?? Promise.resolve(null);
 }
 
+/** `baseUrl` 是三方应用集成服务的 https 根地址(integrationsBaseUrl)。 */
 export async function fetchOfficialGroupImage(
-  url: string,
+  baseUrl: string,
   authToken: string,
   token: string,
 ): Promise<Buffer | null> {
-  const endpoint = new URL(url);
-  endpoint.protocol =
-    endpoint.protocol === 'wss:'
-      ? 'https:'
-      : endpoint.protocol === 'ws:'
-        ? 'http:'
-        : endpoint.protocol;
-  endpoint.pathname =
-    endpoint.pathname.replace(/\/ws\/?$/, '').replace(/\/$/, '') + '/telegram/group-image';
+  const endpoint = new URL(baseUrl);
+  endpoint.pathname = endpoint.pathname.replace(/\/$/, '') + '/telegram/group-image';
   endpoint.search = '';
   endpoint.hash = '';
   const response = await fetch(endpoint, {

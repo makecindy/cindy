@@ -54,10 +54,10 @@ test('EAS extends 解析支持子级覆盖，并拒绝缺失父级与循环', ()
   );
 });
 
-test('dev endpoint 模板保留 Telegram 字段但默认不启用', () => {
+test('dev endpoint 模板保留三方应用集成字段（官方 Telegram / Discord）但默认不启用', () => {
   const manifest = JSON.parse(
     fs.readFileSync(new URL('../../config/endpoint.dev.json.example', import.meta.url), 'utf8'),
   );
 
-  assert.equal(manifest.telegramHookWsUrl, '');
+  assert.equal(manifest.integrationsBaseUrl, '');
 });

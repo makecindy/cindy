@@ -165,14 +165,19 @@ export interface HookControlManagerDeps {
   isAvailable?: () => boolean;
   /** transport 工厂 —— 生产为 createHookTransport, 测试可注入假实现。 */
   createTransport: (opts: HookTransportOpts) => HookTransport;
-  /** Telegram 平级服务端点；空字符串表示当前环境尚未部署该服务。 */
+  /** 官方 Telegram 连接地址(integrationsBaseUrl 派生的 /telegram)；空字符串表示清单未配置。 */
   getTelegramUrl: () => string;
   /** X (Twitter) 平级服务端点；空字符串表示当前环境尚未部署该服务。 */
   getXUrl: () => string;
   /** 官方飞书 / Lark 平级服务端点；空字符串表示当前环境尚未部署该服务。 */
   getFeishuUrl: () => string;
-  /** 官方 Discord 服务端点(telegram-hook-server 的 /discord 路径)；空字符串表示尚未开放。 */
+  /** 官方 Discord 连接地址(integrationsBaseUrl 派生的 /discord)；空字符串表示清单未配置。 */
   getDiscordUrl: () => string;
+  /**
+   * 三方应用集成服务是否开启了该官方应用(服务端 GET /integrations)。只决定尚未开启的用户
+   * 能否看到入口, 不影响连接; 缺省视为开启。
+   */
+  isIntegrationOffered?: (provider: 'telegram' | 'discord') => boolean;
   /** 登录 accessToken 源(transport 每次建连实时取; null = 未登录)。 */
   getAuthToken: () => Promise<string | null>;
   /** upgrade 401 后强制刷新一次登录凭证；成功后 transport 立即重连。 */
@@ -551,6 +556,8 @@ interface NeutralProviderConfig {
   label: string;
   /** 服务端点(空串 = 当前环境尚未部署该服务)。 */
   getUrl: () => string;
+  /** 服务端是否对外开启该应用; false 时未开启的用户看不到入口(快照 url 置空)。缺省视为开启。 */
+  isOffered?: () => boolean;
   /** 端点未配置时的 lastError 文案。 */
   notConfiguredError: string;
   /** welcome.features 必须全部包含才视为该 provider 可用(能力协商)。 */
@@ -648,6 +655,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     getXUrl,
     getFeishuUrl,
     getDiscordUrl,
+    isIntegrationOffered = () => true,
     getAuthToken,
     refreshAuthToken,
     deviceInfo,
@@ -715,6 +723,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     provider: 'telegram',
     label: 'Telegram',
     getUrl: getTelegramUrl,
+    isOffered: () => isIntegrationOffered('telegram'),
     notConfiguredError: 'Telegram service endpoint is not configured',
     requiredFeatures: telegramProviderBaseFeatures,
     helloFeatures: [
@@ -974,6 +983,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     provider: 'discord',
     label: 'Discord',
     getUrl: getDiscordUrl,
+    isOffered: () => isIntegrationOffered('discord'),
     notConfiguredError: 'Discord service endpoint is not configured',
     requiredFeatures: discordProviderFeatures,
     // 与 Telegram / 飞书相同: 服务端按 hello.features 判定协商结果, 客户端要求的基础能力必须全部自报。
@@ -1560,9 +1570,11 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     const url = lane.config.getUrl().trim();
     const selectionReady = accountActive && !disposed && enabled && lane.status === 'connected'
       && laneCapabilityReady(lane) && !lane.awaitingStateSnapshot && lane.bindRequest?.kind !== 'revoke';
+    // 设置页按 url 是否为空决定是否显示入口: 服务端没开启的应用只对已开启的用户保留卡片。
+    const offered = enabled || (lane.config.isOffered?.() ?? true);
     return {
       enabled,
-      url,
+      url: offered ? url : '',
       status: enabled && url.length === 0 ? 'error' : toViewStatus(lane.status, enabled),
       lastError:
         enabled && url.length === 0

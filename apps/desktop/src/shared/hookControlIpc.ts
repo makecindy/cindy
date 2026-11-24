@@ -11,8 +11,8 @@
  *   - 用户可操作面 = provider 独立开关 / 账号绑定 / 工作目录清单。
  */
 
-// 内置服务器地址来自运行期端点清单(main 侧分别读取 slackHookWsUrl 与
-// telegramHookWsUrl；Slack 的本地 urlOverride 只覆盖 Slack);
+// 内置服务器地址来自运行期端点清单(main 侧读取 slackHookWsUrl、xHookWsUrl、feishuHookWsUrl,
+// 官方 Telegram / Discord 从 integrationsBaseUrl 派生；Slack 的本地 urlOverride 只覆盖 Slack);
 // 烘焙常量 SLACK_HOOK_DEFAULT_URL 已随 2026-07 端点清单重构退役。
 
 /**

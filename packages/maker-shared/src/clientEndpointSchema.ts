@@ -82,9 +82,12 @@ export const CLIENT_ENDPOINT_KEYS = [
   // oss-server(公开资产直传预签名,当前场景:头像上传)。
   'ossApiBaseUrl',
   'heartbeatUrl',
-  // Telegram hook is deployed independently from Slack; empty means the
-  // current environment has not rolled out Telegram yet.
-  'telegramHookWsUrl',
+  // 三方应用集成服务(integrations,当前由 telegram-hook-server 承载官方 Telegram
+  // 与 Discord)的唯一地址:https 根地址,各业务按路径派生(/telegram、/discord、
+  // /telegram/group-image),哪些官方入口可见由服务端 GET /integrations 决定。以后
+  // 新增三方应用不再加清单地址。空 = 不显示这些官方入口。更早的客户端读的旧键
+  // telegramHookWsUrl / discordHookWsUrl 仍留在线上清单里,本版本不再读取(未知字段按忽略处理)。
+  'integrationsBaseUrl',
   // X (Twitter) hook, same deployment model as Telegram; empty (or a manifest
   // that omits the key entirely) means X has not rolled out yet — the Settings
   // card stays hidden, which is the intended gradual-rollout switch.
@@ -93,10 +96,6 @@ export const CLIENT_ENDPOINT_KEYS = [
   // like Telegram. Empty (or omitted) keeps the Settings card hidden until the
   // service rolls out — the same gradual-rollout switch as X.
   'feishuHookWsUrl',
-  // Official Discord bot, hosted by the telegram-hook deployment on its own
-  // /discord path (one overseas deployment serves both regions). Empty (or
-  // omitted) keeps the Settings card hidden — the same rollout switch as X.
-  'discordHookWsUrl',
   'slackHookWsUrl',
   // webhook-server（自动化任务的外部事件）基址，按区域部署。纯增可选字段：留空时客户端
   // 隐藏 Webhook 触发入口，也是灰度开关。长连接地址由它派生。
@@ -128,6 +127,14 @@ export const CLIENT_ENDPOINT_KEYS = [
 ] as const;
 
 export type ClientEndpointKey = (typeof CLIENT_ENDPOINT_KEYS)[number];
+
+/**
+ * 只为更早的客户端留在正式清单里的字段:本版本不读取,解析时按未知字段忽略。删掉会让这些版本
+ * 的官方 Telegram / Discord 失去地址,确认已没有这些版本在用之前不能删。
+ *  - telegramHookWsUrl:没有 integrationsBaseUrl 的版本连官方 Telegram;
+ *  - discordHookWsUrl:带官方 Discord 卡片、但还没有 integrationsBaseUrl 的版本,非空才显示入口。
+ */
+export const LEGACY_CLIENT_ENDPOINT_KEYS = ['telegramHookWsUrl', 'discordHookWsUrl'] as const;
 
 /** 解析成功后的端点全集(全 key 存在;清单缺失/空白的字段值为 `''`)。 */
 export type ClientEndpointMap = Record<ClientEndpointKey, string>;
@@ -173,10 +180,9 @@ const FIELD_PROTOCOLS: Record<ClientEndpointKey, readonly string[]> = {
   oauthBrokerApiBaseUrl: ['https:'],
   ossApiBaseUrl: ['https:'],
   heartbeatUrl: ['https:'],
-  telegramHookWsUrl: ['wss:'],
+  integrationsBaseUrl: ['https:'],
   xHookWsUrl: ['wss:'],
   feishuHookWsUrl: ['wss:'],
-  discordHookWsUrl: ['wss:'],
   slackHookWsUrl: ['wss:'],
   webhookApiBaseUrl: ['https:'],
   websiteUrl: ['https:'],

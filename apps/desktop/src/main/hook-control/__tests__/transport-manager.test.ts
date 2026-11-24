@@ -3886,6 +3886,38 @@ function discordLaneHarness(
   return { manager, transports, sent, opened, store };
 }
 
+/**
+ * 测试价值: 端点清单只留 integrationsBaseUrl 后, 官方 Telegram / Discord 入口是否可见由服务端
+ * GET /integrations 决定(isIntegrationOffered), 设置页按快照 url 是否为空显示卡片。
+ * 最小失败输入: 服务端未开启、用户也没开启时快照仍带 url(上线前就露出入口); 用户已开启时
+ * url 被清空(看不到卡片, 也无法关掉)。unit tier, 不建连。
+ */
+describe('服务端开启的官方应用决定入口是否可见', () => {
+  it.each([
+    ['telegram', false, false, ''],
+    ['telegram', true, false, 'wss://integrations.example.test/telegram'],
+    ['telegram', false, true, 'wss://integrations.example.test/telegram'],
+    ['discord', false, false, ''],
+    ['discord', true, false, 'wss://integrations.example.test/discord'],
+    ['discord', false, true, 'wss://integrations.example.test/discord'],
+  ] as const)('%s: 服务端开启 %s、用户开启 %s → 快照 url %j', (provider, offered, enabled, url) => {
+    const store = memoryStore({
+      url: 'wss://slack-hook.example.test',
+      enabled: false,
+      telegramEnabled: provider === 'telegram' && enabled,
+      discordEnabled: provider === 'discord' && enabled,
+    });
+    const manager = makeManager(store, {
+      getTelegramUrl: () => 'wss://integrations.example.test/telegram',
+      getDiscordUrl: () => 'wss://integrations.example.test/discord',
+      isIntegrationOffered: (candidate) => (candidate === provider ? offered : true),
+      createTransport: () => ({ send: () => true, dispose: vi.fn() }),
+    });
+    cleanups.push(() => manager.dispose());
+    expect(manager.snapshot()[provider].url).toBe(url);
+  });
+});
+
 describe('官方 Discord provider lane', () => {
   it('hello 只声明三项基础能力; 服务端未宣告 provider:discord 时显示不可用并拒收派发', () => {
     const dispatcher = stubDispatcher();
