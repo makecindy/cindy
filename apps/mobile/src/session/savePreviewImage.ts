@@ -2,8 +2,8 @@ import { Directory, File, Paths } from 'expo-file-system';
 import { EncodingType, readAsStringAsync, StorageAccessFramework, writeAsStringAsync } from 'expo-file-system/legacy';
 import { Asset } from 'expo-media-library';
 import { Platform } from 'react-native';
-import { sniffImageMimeFromBase64 } from './imageAnnotationModel';
-import { extOfMime, imageMimeFromUrl } from './remoteMediaDiskCache';
+import { imageMimeForUriFallback, sniffImageMimeFromBase64 } from './imageAnnotationModel';
+import { extOfMime } from './remoteMediaDiskCache';
 import { copyRemoteFile } from './remoteMediaDiskCacheExpo';
 
 /** Export original bytes. Modern Android can add an owned photo without reading the library. */
@@ -29,8 +29,13 @@ export async function savePreviewImage(source: string, mimeHint?: string, title?
       throw new Error('UNSUPPORTED_IMAGE_SOURCE');
     }
     const head = await readAsStringAsync(copy.uri, { encoding: EncodingType.Base64, position: 0, length: 16 });
-    const mime = sniffImageMimeFromBase64(head) ?? inline?.[1]
-      ?? (mimeHint?.startsWith('image/') ? mimeHint : null) ?? imageMimeFromUrl(title ?? '') ?? imageMimeFromUrl(source);
+    const mime = [
+      sniffImageMimeFromBase64(head),
+      inline?.[1],
+      mimeHint,
+      imageMimeForUriFallback(title ?? ''),
+      imageMimeForUriFallback(source),
+    ].find((candidate) => candidate?.startsWith('image/'));
     if (!mime || !copy.size) throw new Error('UNKNOWN_IMAGE_FORMAT');
     const ext = extOfMime(mime);
     const extension = ext === 'img' ? /^image\/(\w+)$/.exec(mime)?.[1] : ext;
