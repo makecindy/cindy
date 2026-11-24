@@ -488,6 +488,50 @@ describe('My Plugins facts', () => {
     }
   });
 
+  // Greptile review on #12469: the open team detail only read once, so after submitting from it
+  // the page still showed no pending version and offered the submit button again. Minimal failing
+  // input: a team publish succeeds (or the change signal moves) while the detail is open — the
+  // detail must read again and show the pending version without the submit button.
+  it('reads the open team detail again after a team publish or a change signal', async () => {
+    const base = { id: 'team-1', ghostId: 'meeting-notes', namespace: 'acme', name: 'Meeting Notes', description: '',
+      myRole: 'creator', status: 'active', disabledByAdmin: false, latestReviewEvent: null,
+      visibilityAudience: { type: 'all' }, visibilityAudienceMembers: [],
+      currentRelease: { id: 'r1', version: '1.0.0', reviewStatus: 'approved' } };
+    const idle = { ...base, latestRelease: base.currentRelease, pendingRelease: null };
+    const submitted = { ...base, latestRelease: { id: 'r2', version: '1.2.0', reviewStatus: 'pending' },
+      pendingRelease: { id: 'r2', version: '1.2.0', reviewStatus: 'pending', publishedAt: '2026-11-24T00:00:00.000Z' } };
+    const plugin = vi.fn(async (): Promise<unknown> => idle);
+    Object.assign(window, { electronAPI: { pluginAuthor: { listPlugins: vi.fn(), plugin, maintainers: vi.fn(async () => []) } } });
+    const local = [{ id: 'local-1', ghostId: 'meeting-notes', name: 'Meeting Notes', version: '1.2.0' } as GhostPluginListItem];
+    const team = { orgName: 'Acme', plugins: local, onStart: vi.fn(async () => true) };
+    const page = (api: ReturnType<typeof reader>) => <StrictMode><MemoryRouter initialEntries={['/plugins?myPlugins=1&teamPlugin=team-1']}>
+      <MyPluginsPage localPlugins={local} installedPluginCount={1} reader={api} cache={{}} onSubmitUpdate={vi.fn()}
+        onViewLocal={vi.fn()} teamPublishing={team} />
+    </MemoryRouter></StrictMode>;
+    const detailCopy = 'settings.ghosts.contribution';
+    try {
+      auth.membershipKind = 'org';
+      const api = reader();
+      const { rerender } = render(page(api));
+      expect(await screen.findByRole('button', { name: `${detailCopy}.submitVersion 1.2.0` })).toBeTruthy();
+      const reads = plugin.mock.calls.length;
+      plugin.mockResolvedValue(submitted);
+      publishing.publishedSignal = 1;
+      rerender(page(api));
+      expect(await screen.findByText(`${detailCopy}.review.pending`)).toBeTruthy();
+      expect(plugin.mock.calls.length).toBeGreaterThan(reads);
+      expect(screen.queryByRole('button', { name: `${detailCopy}.submitVersion 1.2.0` })).toBeNull();
+      const afterPublish = plugin.mock.calls.length;
+      reviews.teamChangeToken = '["t",3]';
+      rerender(page(api));
+      await waitFor(() => expect(plugin.mock.calls.length).toBeGreaterThan(afterPublish));
+    } finally {
+      reviews.teamChangeToken = null;
+      publishing.publishedSignal = 0;
+      Object.assign(window, { electronAPI: undefined });
+    }
+  });
+
   it('retains the publishing choices and preview throughout the close animation', async () => {
     // jsdom lacks CSS.escape; the simulated animation names are plain identifiers.
     vi.stubGlobal('CSS', { escape: (value: string) => value });

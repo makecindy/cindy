@@ -1156,6 +1156,7 @@ export function MyPluginsPage({
               memberName={user?.name ?? null}
               localPlugins={teamLocalPlugins}
               onStartPublish={teamPublishing?.onStart ?? (async () => false)}
+              refreshSignal={JSON.stringify([reviewUpdates.teamChangeToken, teamPublishedSignal])}
               renderHeaderAction={(refreshTeam, teamLoading) => (
                 <Tip text={t(`${copy}.refreshDetail`)}>
                   <Button variant="secondary" tone="quiet" size="sm" className="size-7 p-0"

@@ -53,6 +53,7 @@ export function TeamPluginDetail({
   localPlugins,
   onStartPublish,
   renderHeaderAction,
+  refreshSignal,
 }: {
   pluginId: string;
   memberName: string | null;
@@ -60,6 +61,11 @@ export function TeamPluginDetail({
   localPlugins: readonly GhostPluginListItem[];
   onStartPublish: (instanceId: string) => Promise<boolean>;
   renderHeaderAction?: (refresh: () => void, loading: boolean) => React.ReactNode;
+  /**
+   * Changes when this plugin may have changed elsewhere (the organization change signal, a team
+   * publish that succeeded); the open detail then reads again.
+   */
+  refreshSignal?: string;
 }) {
   const { t, i18n } = useTranslation();
   const { confirm } = useConfirmDialog();
@@ -155,6 +161,15 @@ export function TeamPluginDetail({
   // Opening the detail reads the review result shown here (issue #1541 rule 5): only once the
   // detail on screen shows that exact result and the page is visible. A newer result arriving
   // through the change signal reloads the detail first.
+  // A publish started from this page, or any other change, must not leave the detail (and its
+  // submit button) on the old state (Greptile review on #12469). The first value is the mount read.
+  const seenSignal = useRef(refreshSignal);
+  useEffect(() => {
+    if (seenSignal.current === refreshSignal) return;
+    seenSignal.current = refreshSignal;
+    reload();
+  }, [refreshSignal, reload]);
+
   const reviews = usePluginReviewUpdates();
   const unreadReview = reviews.updates.find((item) =>
     item.unread && item.pluginId === `${ORGANIZATION_REVIEW_ID_PREFIX}${pluginId}`);
