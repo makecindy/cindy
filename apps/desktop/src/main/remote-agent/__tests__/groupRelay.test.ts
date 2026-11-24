@@ -1162,6 +1162,87 @@ describe('provider group relay for shared users', () => {
     }
   });
 
+  // Unit, #12552: real Host.handle(delegate) queue admission. Existing forget
+  // deduplication missed repeated revokes while native cleanup was pending;
+  // 256 copies could consume the shared mutation budget and refuse another peer.
+  it.each([false, true])('coalesces pending revocation retries without consuming other peers admission (failure=%s)', async failFirst => {
+    let release!: () => void;
+    let enter!: () => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let firstAttempt = true;
+    const delegate = vi.fn(async (_owner: string, request: { sessionId: string }) => {
+      if (request.sessionId === 'blocked' && firstAttempt) {
+        firstAttempt = false;
+        enter(); await gate;
+        if (failFirst) throw new Error('native cleanup failed');
+      }
+      return false;
+    });
+    const host = fakeAgentHost('revoke-queue', [], { trust: () => 'owner', directGuestExecution: {
+      ownerScope: () => 'owner', allocate: async () => null, status() {}, release: async () => {},
+      switch: async () => ({}), usage() {}, delegate, forget: () => false,
+      sessionAllowed: () => true, sessionDelegated: () => true,
+    } });
+    const revoke = { op: 'delegate', action: 'revoke', shareId: 'share', memberId: 'member', guestDeviceId: 'guest',
+      providerId: 'provider', model: 'model', sessionId: 'blocked', generation: '11111111-1111-4111-8111-111111111111' };
+    const first = host.handle(OWNER_DEVICE, revoke);
+    const firstResult = Promise.allSettled([first]);
+    let duplicates: Promise<PromiseSettledResult<unknown>[]> | undefined;
+    try {
+      await entered;
+      duplicates = Promise.allSettled(Array.from({ length: 255 }, () => host.handle(OWNER_DEVICE, revoke)));
+      await expect(host.handle(OWNER_DEVICE, { ...revoke, guestDeviceId: 'other-guest', sessionId: 'other-task' })).resolves.toEqual({});
+      release();
+      const results = [...await firstResult, ...await duplicates];
+      expect(results.every(result => result.status === (failFirst ? 'rejected' : 'fulfilled'))).toBe(true);
+      expect(delegate).toHaveBeenCalledTimes(2);
+      // A failed close must remain retryable; dedupe lasts only while pending.
+      await expect(host.handle(OWNER_DEVICE, revoke)).resolves.toEqual({});
+      expect(delegate).toHaveBeenCalledTimes(3);
+    } finally { release(); await firstResult; await duplicates; await host.dispose(); }
+  });
+
+  it('keeps later revocations behind a grant and never shares another owners acknowledgment', async () => {
+    let release!: () => void;
+    let enter!: () => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const leases = new Set(['blocked']);
+    let first = true;
+    const host = fakeAgentHost('revoke-grant-queue', [], { trust: () => 'owner', directGuestExecution: {
+      ownerScope: () => 'owner', allocate: async () => null, status() {}, release: async () => {},
+      switch: async () => ({}), usage() {}, forget: () => false,
+      sessionAllowed: () => true, sessionDelegated: () => true,
+      delegate: async (owner, request) => {
+        if (owner !== OWNER_DEVICE) throw new Error('foreign owner');
+        if (first) { first = false; enter(); await gate; }
+        if (request.action === 'revoke') leases.delete(request.sessionId);
+        else leases.add(request.sessionId);
+        return false;
+      },
+    } });
+    const request = { op: 'delegate', action: 'revoke', shareId: 'share', memberId: 'member', guestDeviceId: 'guest',
+      providerId: 'provider', model: 'model', sessionId: 'blocked', generation: '11111111-1111-4111-8111-111111111111' };
+    const head = host.handle(OWNER_DEVICE, request);
+    let result: Promise<PromiseSettledResult<unknown>[]> | undefined;
+    try {
+      await entered;
+      result = Promise.allSettled([
+        host.handle(OWNER_DEVICE, { ...request, action: 'grant' }),
+        host.handle(OWNER_DEVICE, request),
+        host.handle('other-owner', request),
+      ]);
+      release();
+      await head;
+      expect(await result).toEqual([
+        { status: 'fulfilled', value: {} }, { status: 'fulfilled', value: {} },
+        expect.objectContaining({ status: 'rejected', reason: expect.objectContaining({ message: 'foreign owner' }) }),
+      ]);
+      expect(leases.size).toBe(0);
+    } finally { release(); await head; await result; await host.dispose(); }
+  });
+
   // Host.handle regression (unit): sequential forget coverage missed F1/F2
   // sharing an ID while F1 is still deleting transcripts. An early F2 ACK let
   // a new epoch open before F1 overwrote its native IDs and cleanup epoch.
