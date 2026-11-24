@@ -18,10 +18,12 @@
  *     transcript 里没有的，单独留在内存 giants 表（有上限）。
  *  4. 钉住防抖动：取回过的往返在投影里恢复原文，直到下一条 user 消息（轮次边界）或超出
  *     钉住预算（按最近取回时间戳 LRU 驱逐）。没有这两条，取回→再折→再取回会把缓存反复打穿。
- *  5. 记录行必须是**不可复述**的：每批只留一条、不带命令原文、不带单条统计。记录落在 assistant
- *     位置（唯一不破坏调用/结果配对的位置），而 assistant 位置是模型最会延续的语气；一旦记录里
- *     同时有「命令 + 结论 + 规模」，它就成了模型叙述工具调用的现成模板，被用来预告还没做的调用
- *     （实测 17 条，其中 2 条写成「ok」但命令从未执行）。批次 id 在登记时分配（r1、r2…），与真实调用 id 不共享字符串空间；
+ *  5. 宿主写的字只能放在模型写不到的角色里。批记录是一条 toolResult：每批最后一次往返留下当锚点
+ *     （调用还在，最后一条结果换成记录），其余往返整段删除——调用/结果仍然成对。assistant 位置
+ *     不能放：那是模型唯一能自由书写的通道，放进去的记录就成了「我说过的话」的范本。实测同一批
+ *     记录放在 assistant 位时仿写 8/3,483 条助手消息（含按语法现编的「下一个批号」），放在
+ *     toolResult 位时 6/29,981。记录本身也保持不可复述：每批一条、不带命令原文、不带单条统计。
+ *     批次 id 在登记时分配（r1、r2…），与真实调用 id 不共享字符串空间；
  *     整批取回按成员游标分页，一次只拼当前页。
  *  6. 「占多少」只有一把尺（`costOfContent`）：入库内存账与文本回合的放回增量都从它出——两把尺相减
  *     正是多算与漏算的来源。取回按快照惰性建一次调用点索引，不逐条重扫；续读坐标只用稳定身份
@@ -42,7 +44,9 @@
  * CINDY_PI_TOOL_FOLD_ARG_CHARS（参数超过多少字符才折，默认 200；0 = 只折结果不折参数）。
  *
  * 回放（两条重会话，keep=4/pairs=32/chars=36000，重建按相邻请求的投影前缀差异计）：
- * 每批一条记录 → 上下文 −59.2% / −49.0%，净 +$15.44 / +$2.18；旧的逐条指针形态
+ * 每批一条记录（放在该批最后一次往返的结果位）→ 上下文 −58.6% / −48.6%，净 +$15.28 / +$2.15；
+ * 同样的批记录放在助手位时是 −59.2% / −49.0%、+$15.44 / +$2.18，多留的一对调用约占节省量的 1%；
+ * 旧的逐条指针形态
  * → −26.7% / −20.9%，净 +$4.59 / +$0.37。
  */
 
@@ -435,17 +439,13 @@ export default function (pi) {
   }
 
   /**
-   * Route 2: the whole round-trip becomes one assistant text record — no call block and no
-   * result message. Nothing in the history then reads like a callable example, which is
-   * what the model kept re-sending (795 validation failures, 121 of them in one day).
-   * Returns null when this trip must keep its pair.
-   */
-  /**
-   * One record line per folded batch. Never per round-trip: a line carrying "command → ok →
-   * size → pointer" is a complete summary in the assistant's own voice, so a model that is
-   * about to run a batch of queries writes those lines first as if they had already run
-   * (observed: four invented records with fabricated ids ahead of the real run). One
-   * aggregate line cannot describe any single action, so copying it buys nothing.
+   * One record line per folded batch, delivered as the anchor trip's last tool result. Never
+   * per round-trip: a line carrying "command → ok → size → pointer" is a complete summary of
+   * one action. Never in the assistant position either: placed there, the line sat inside the
+   * model's own previous message and was re-written from its grammar — including batch ids
+   * that did not exist yet (8 of 3,483 assistant messages in 4.7 hours, against 6 of 29,981
+   * for records that lived in tool results). The model cannot write a tool result, so this
+   * position removes the template instead of arguing with it.
    */
   function batchRecordText(batch) {
     var names = [];
@@ -534,6 +534,13 @@ export default function (pi) {
 
   function foldable(id) {
     return foldedIds[id] !== undefined && !pinned.has(id);
+  }
+
+  // 记录一旦写出就不再改写：带着记录的往返不再入批。投影结果再投影一次是定点，重放时
+  // 也不会把锚点当新成员折第二遍。
+  function carriesRecord(unit) {
+    var last = unit.results[unit.results.length - 1];
+    return Boolean(last) && textOf(last.content).slice(0, 9) === '[folded] ';
   }
 
   // 预算只有一把尺：文本按字符数，非文本块（图片、附件）按序列化字节数。入库时的内存账与
@@ -1001,7 +1008,6 @@ export default function (pi) {
     // 输出安排（outline）与单条调用的折叠信息（foldInfo）是两个东西：同名会被 var 提升
     // 覆盖掉已经写好的删除安排，等于把折过的原文又放回来。
     var outline = new Array(messages.length);   // undefined = keep, 'drop', or { message }
-    var records = Object.create(null);
     var groups = Object.create(null);
     var dirty = false;
     for (var g = 0; g < trips.length; g++) {
@@ -1011,9 +1017,10 @@ export default function (pi) {
       if (!assistant || !Array.isArray(assistant.content)) continue;
       var groupId = droppableBatch(unit);
       if (groupId !== null) {
+        if (carriesRecord(unit)) continue;
         var group = groups[groupId];
-        if (!group) group = groups[groupId] = { ref: groupId, dropped: 0, chars: 0, names: Object.create(null), slot: -1 };
-        group.slot = Math.max(group.slot, unit.end);
+        if (!group) group = groups[groupId] = { ref: groupId, dropped: 0, chars: 0, names: Object.create(null), last: null };
+        group.last = unit;
         group.dropped += 1;
         group.chars += unit.chars;
         for (var nc = 0; nc < unit.calls.length; nc++) {
@@ -1079,39 +1086,56 @@ export default function (pi) {
     }
 
     if (!dirty) return undefined;
-    // One record per batch, at the last slot it replaced: earlier records keep their bytes,
-    // so folding a new batch never rewrites an old one.
+    // 每批的最后一次往返留下当锚点：调用还在（参数照旧换成指针），最后一条结果换成整批的记录。
+    // 记录因此待在工具结果位——模型写不到的角色；调用/结果仍然成对，其余往返整段删除。
+    // 批次一经登记成员不变，记录的位置也随之固定：新折一批不会改写旧记录的字节。
     for (var batchKey in groups) {
       var batchGroup = groups[batchKey];
-      records[batchGroup.slot] = { role: 'assistant', content: [{ type: 'text', text: batchRecordText(batchGroup) }] };
+      var anchor = batchGroup.last;
+      var anchorAssistant = messages[anchor.start];
+      var anchorResult = anchor.results[anchor.results.length - 1];
+      var anchorCall = null;
+      for (var ac = 0; ac < anchor.calls.length; ac++) if (String(anchor.calls[ac].id) === String(anchorResult.toolCallId)) anchorCall = anchor.calls[ac];
+      if (!anchorCall) continue;
+      var anchorFold = anchor.folds[String(anchorCall.id)];
+      var anchorBlocks = [];
+      for (var ab = 0; ab < anchorAssistant.content.length; ab++) {
+        var anchorBlock = anchorAssistant.content[ab];
+        if (anchorBlock && anchorBlock.type === 'text') anchorBlocks.push(anchorBlock);
+      }
+      anchorBlocks.push(anchorFold && anchorFold.foldArgs === true ? foldedCall(anchorCall) : anchorCall);
+      outline[anchor.start] = { message: Object.assign({}, anchorAssistant, { content: anchorBlocks }) };
+      outline[anchor.end] = { message: {
+        role: 'toolResult',
+        toolCallId: anchorCall.id,
+        toolName: anchorResult.toolName,
+        content: [{ type: 'text', text: batchRecordText(batchGroup) }],
+      } };
     }
 
-    // ---- 执行：单遍按输入顺序走。记录行插在自己的槽位，来源索引单调递增，所以输出
-    // 里每个块的相对次序必然是输入的子序列（重排类漏洞无从发生）。----
+    // ---- 执行：单遍按输入顺序走，来源索引单调递增，所以输出里每个块的相对次序必然是
+    // 输入的子序列（重排类漏洞无从发生）。----
     var final = [];
     var sources = [];
-    var synthetic = new Set();
+    var replaced = new Set();
     for (var fi = 0; fi < messages.length; fi++) {
-      if (records[fi]) {
-        final.push(records[fi]);
-        synthetic.add(records[fi]);
-      }
       var op = outline[fi];
       if (op === 'drop') continue;
+      if (op) replaced.add(op.message);
       final.push(op ? op.message : messages[fi]);
       sources.push(fi);
     }
     // Dropping a trip removes the messages between two assistant turns, so two assistant
-    // messages can land next to each other. Providers reject that: fold the older record
-    // into the newer message instead of keeping both.
+    // messages can land next to each other. Providers reject that: join the pair, but only
+    // when this pass rewrote one of the two — untouched history stays as it came in.
     var merged = [];
     for (var mj = 0; mj < final.length; mj++) {
       var current = final[mj];
       var previous = merged.length > 0 ? merged[merged.length - 1] : null;
-      if (previous && previous.role === 'assistant' && current.role === 'assistant' && (synthetic.has(previous) || synthetic.has(current))) {
+      if (previous && previous.role === 'assistant' && current.role === 'assistant' && (replaced.has(previous) || replaced.has(current))) {
         var joined = Object.assign({}, current, { content: (previous.content || []).concat(current.content || []) });
         merged[merged.length - 1] = joined;
-        synthetic.add(joined);
+        replaced.add(joined);
         continue;
       }
       merged.push(current);

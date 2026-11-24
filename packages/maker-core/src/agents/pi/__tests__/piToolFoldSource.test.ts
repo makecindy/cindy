@@ -70,7 +70,9 @@ function recordText(message: Message): string {
 }
 
 function isRecord(message: Message): boolean {
-  return message.role === 'assistant' && recordText(message).startsWith('[folded] ');
+  // 批记录 = 带 {"batch":"r…"} 的那一行，现在是一条 toolResult（模型写不到的角色）。
+  const text = recordText(message);
+  return text.startsWith('[folded] ') && /\{"batch":"r\d+"\}/.test(text);
 }
 
 function callIds(messages: Message[]): string[] {
@@ -134,25 +136,26 @@ describe('cindy-tool-fold extension source', () => {
     expect(context({ messages: pairs(10) })).toBeUndefined();
   });
 
-  it('collapses the whole backlog into assistant records and keeps the newest 8 pairs verbatim', () => {
+  it('collapses the whole backlog into one tool-result record and keeps the newest 8 pairs verbatim', () => {
     const { context } = loadExtension({ CINDY_PI_TOOL_FOLD_KEEP: '8' });
     const messages = pairs(40);
     const out = projection(context, messages);
-    // Each folded trip loses both halves; the records merge into the next assistant
-    // message so two assistant messages never sit next to each other.
-    expect(out).toHaveLength(16);
-    expect(callIds(out)).toEqual(Array.from({ length: 8 }, (_, index) => `call-${index + 32}`));
+    // Every folded trip loses both halves except the batch's last one: it keeps its call
+    // so the record can take the place of its result. Call and result stay paired.
+    expect(out).toHaveLength(18);
+    expect(callIds(out)).toEqual(Array.from({ length: 9 }, (_, index) => `call-${index + 31}`));
+    expect(out[0]).toMatchObject({ role: 'assistant', content: [{ type: 'toolCall', id: 'call-31', name: 'bash' }] });
+    expect(out[1]).toMatchObject({ role: 'toolResult', toolCallId: 'call-31' });
+    expect(isRecord(out[1])).toBe(true);
     const foldedText = records(out).join('\n');
     // One batch, one line: the per-trip records are gone, so there is nothing shaped like
     // "command -> conclusion" for the model to re-use as its own narration template.
     expect(foldedText.match(/cindy_toolfold_read/g)).toHaveLength(1);
-    // The records ride on the next assistant message, so the resident pair keeps its
-    // original call block while the tail of the window is untouched.
-    // Records ride on the next assistant message, so no two assistant messages end up
-    // adjacent, which providers reject.
+    // No two assistant messages end up adjacent, which providers reject.
     for (let index = 1; index < out.length; index += 1) {
       expect([out[index - 1].role, out[index].role]).not.toEqual(['assistant', 'assistant']);
-    }    const resident = out[out.length - 16];
+    }
+    const resident = out[out.length - 16];
     expect((resident.content as Block[]).find((block) => block.type === 'toolCall')).toEqual((messages[64].content as Block[])[0]);
     expect(out.slice(out.length - 14)).toEqual(messages.slice(66));
     const first = foldedText.slice(foldedText.indexOf('[folded]'));
@@ -288,10 +291,12 @@ describe('cindy-tool-fold extension source', () => {
     }
     const out = projection(context, messages);
     // One line per batch, anchored at the batch's tail: the whole span before the user
-    // turn is gone and a single pointer sits after it.
+    // turn is gone; the anchor call and its record sit right after it, inside the turn.
     const at = out.findIndex((message) => message.role === 'user');
     expect(at).toBe(0);
-    expect(isRecord(out[at + 1])).toBe(true);
+    expect(out.slice(at + 1, at + 3).map((message) => message.role)).toEqual(['assistant', 'toolResult']);
+    expect(isRecord(out[at + 2])).toBe(true);
+    expect(out[at + 1]).toMatchObject({ content: [expect.objectContaining({ type: 'toolCall', id: 'call-31' })] });
     expect(records(out).join('\n')).toMatch(/^\[folded\] 32 round-trips,/m);
     expect(callIds(out)).not.toContain('call-0');
   });
@@ -312,9 +317,11 @@ describe('cindy-tool-fold extension source', () => {
     expect(JSON.stringify(again).length).toBe(firstSavings);
     const grown = projection(context, pairs(41));
     // One more pair is not a new batch: the earlier marks stay, the new pair joins the
-    // resident window instead of being folded on its own.
-    expect(callIds(grown)).toEqual(Array.from({ length: 9 }, (_, index) => `call-${index + 32}`));
+    // resident window instead of being folded on its own. The folded batch keeps its
+    // anchor call: the record rides on that call's result.
+    expect(callIds(grown)).toEqual(Array.from({ length: 10 }, (_, index) => `call-${index + 31}`));
     expect(isFolded(grown[grown.length - 4])).toBe(false);
+    expect(records(grown).join('\n')).toBe(records(first).join('\n'));
   });
 
   it('never folds a round-trip that carries an image', () => {
@@ -554,7 +561,11 @@ describe('cindy-tool-fold extension source', () => {
       .join('\n');
     expect(text).toContain('PLAN: rerun the flaky test');
     expect(callIds(view)).not.toContain('call-22');
-    expect(text).toContain('read with cindy_toolfold_read(');
+    // The batch record is a tool result: host text never lands in the assistant position,
+    // where the model would read it as something it said itself.
+    expect(records(view)).toHaveLength(1);
+    expect(view.filter((message) => message.role === 'assistant').some(isRecord)).toBe(false);
+    expect(text).not.toContain('[folded] ');
   });
 
   it('names the batch members it could not restore', async () => {
@@ -896,7 +907,7 @@ describe('cindy-tool-fold extension source', () => {
     const messages = pairs(40);
     messages[1] = { role: 'toolResult', toolCallId: 'call-0', toolName: 'bash', content: [{ type: 'text', text: kept }] };
     const out = projection(context, messages);
-    expect(isRecord(out[0])).toBe(true);
+    expect(isRecord(out[1])).toBe(true);
   });
 
   it('bounds the text of an image-bearing result and keeps the image', async () => {
@@ -930,9 +941,11 @@ describe('cindy-tool-fold extension source', () => {
       result('tail-1', 'bash', 'tail ok'),
     ];
     const out = projection(context, messages);
-    expect(isRecord(out[0])).toBe(true);
-    // The whole parallel trip is gone: no pointer left behind for any of its 32 calls.
-    expect(callIds(out)).toEqual(['tail-1']);
+    expect(isRecord(out[1])).toBe(true);
+    // The anchor keeps exactly one of the 32 calls so the record can ride on its result;
+    // the other 31 leave no pointer behind.
+    expect(callIds(out)).toEqual(['par-31', 'tail-1']);
+    expect((out[0].content as Block[]).filter((block) => block.type === 'toolCall')).toHaveLength(1);
     expect(records(out).join('\n')).toMatch(/^\[folded\] 1 round-trip, bash 32,/m);
     expect(records(out).join('\n')).not.toContain('parallel 0 ok');
   });
@@ -956,8 +969,9 @@ describe('cindy-tool-fold extension source', () => {
     const reopened = await Promise.all(refs.map((ref) => tool.execute('t-' + ref, { batch: ref })));
     expect(String(reopened[0].content![0].text)).toContain('run step 0');
     expect(String(reopened[1].content![0].text)).toContain('run step 120');
-    // The newer backlog folds too, and the newest 1 pair stays verbatim (KEEP=1).
-    expect(callIds(second)).toEqual(['call-239']);
+    // The newer backlog folds too; each batch keeps its anchor call and the newest 1 pair
+    // stays verbatim (KEEP=1).
+    expect(callIds(second)).toEqual(['call-118', 'call-238', 'call-239']);
   });
 
   it('rejects recovery of an evicted giant instead of serving the transcript preview', async () => {
@@ -1324,5 +1338,35 @@ describe('cindy-tool-fold extension source', () => {
       expect(followed?.isError).toBeUndefined();
       expect(String(followed?.content?.[0]?.text ?? '').length).toBeGreaterThan(0);
     }
+  });
+
+  it('keeps every record in a tool result and never writes assistant text', () => {
+    // 宿主从不写助手位：助手消息里的每一段文字都必须能在输入里原样找到，记录只出现在
+    // 工具结果里。实测仿写率随记录位置上升（工具结果位 6/29,981，助手位 8/3,483），
+    // 所以「记录在哪」本身是不变量，不靠提示词。
+    const { context } = loadExtension({ CINDY_PI_TOOL_FOLD_KEEP: '4' });
+    const messages: Message[] = [];
+    for (let index = 0; index < 60; index += 1) {
+      const text = index % 7 === 3 ? `plan ${index}` : undefined;
+      const block = { type: 'toolCall', id: `call-${index}`, name: 'bash', arguments: { command: `run step ${index}` } };
+      messages.push({ role: 'assistant', content: text === undefined ? [block] : [{ type: 'text', text }, block] } as Message);
+      messages.push(result(`call-${index}`, 'bash', `step ${index} ok ${'x'.repeat(2000)}`));
+      if (index === 20 || index === 44) messages.push({ role: 'user', content: [{ type: 'text', text: `turn ${index}` }] });
+    }
+    const out = projection(context, messages)!;
+    const texts = (list: Message[]) =>
+      list
+        .filter((message) => message.role === 'assistant')
+        .flatMap((message) => (message.content as Block[]).filter((block) => block.type === 'text').map((block) => String(block.text ?? '')));
+    const kept = texts(out);
+    expect(kept.length).toBeGreaterThan(0);
+    for (const text of kept) expect(texts(messages)).toContain(text);
+    const recordMessages = out.filter((message) => isRecord(message));
+    expect(recordMessages.length).toBeGreaterThan(0);
+    for (const message of recordMessages) expect(message.role).toBe('toolResult');
+    // A record always sits under the call it belongs to: call and result stay paired.
+    expect(out.flatMap((message) => (message.role === 'toolResult' ? [message.toolCallId] : []))).toEqual(
+      out.flatMap((message) => (message.role === 'assistant' ? callIds([message]) : [])),
+    );
   });
 });
