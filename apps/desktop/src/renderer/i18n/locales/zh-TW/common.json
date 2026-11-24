@@ -9184,6 +9184,7 @@
         "enableBeforeConfigure": "插件已停用，請先開啟上方開關，再進行設定。",
         "settingsPageUnavailable": "請在 {{device}} 的 Cindy 中開啟此插件的設定頁，目標電腦目前版本暫不支援遠端顯示。",
         "offlineNotice": "「{{device}}」已離線，暫時無法管理。連線恢復後即可繼續。",
+        "publishOnTarget": "請在「{{device}}」上的 Cindy 發佈插件，或更新該電腦上的 Cindy 後遠端發佈。",
         "managingTarget": "正在管理「{{device}}」",
         "managingDescription": "變更將儲存在這台電腦上。",
         "viewingTarget": "「{{device}}」的已安裝插件",

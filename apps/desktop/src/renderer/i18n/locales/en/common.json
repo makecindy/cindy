@@ -9227,6 +9227,7 @@
         "enableBeforeConfigure": "This plugin is disabled. Enable it with the switch above before configuring.",
         "settingsPageUnavailable": "Open Cindy on {{device}} to use this plugin’s settings page. This version of the target computer cannot display it remotely.",
         "offlineNotice": "{{device}} is offline. Management is unavailable until the connection is restored.",
+        "publishOnTarget": "Publish plugins in Cindy on {{device}}, or update Cindy on that computer to publish remotely.",
         "managingTarget": "Managing {{device}}",
         "managingDescription": "Changes are saved on this computer.",
         "viewingTarget": "Installed on {{device}}",
