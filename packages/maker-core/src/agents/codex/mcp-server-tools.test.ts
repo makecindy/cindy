@@ -17,10 +17,11 @@ describe('Codex thread MCP server tools', () => {
     ['authenticationRequired', 'needs-auth'], ['cancelled', 'disabled'], ['disabled', 'disabled'],
     ['future-native-state', 'pending'],
   ])('honors native %s despite tools returned by catalog discovery', async (runtimeStatus, state) => {
-    const { invoke } = requestFor({ first: { nextCursor: null, data: [{
+    const { request, invoke } = requestFor({ first: { nextCursor: null, data: [{
       name: 'cindy_helper', runtimeStatus, tools: { list_tools: {}, call_tool: {} },
     }] } });
     expect(await readCodexThreadMcpServerTools(invoke, 'thread-1', 'cindy_helper')).toEqual({ state, tools: [] });
+    expect(request.mock.calls[0]![1]).toMatchObject({ threadId: 'thread-1', serverName: 'cindy_helper' });
   });
 
   // #11380: explicit null after a config change has no exact runtime yet.
@@ -84,5 +85,6 @@ describe('Codex thread MCP server tools', () => {
     expect(reports.get('cindy')).toEqual({ state: 'failed', tools: [] });
     expect(reports.get('missing')).toEqual({ state: 'not-mounted', tools: [] });
     expect(request.mock.calls.map(([, params]) => params.cursor)).toEqual([null, 'next']);
+    expect(request.mock.calls.map(([, params]) => 'serverName' in params)).toEqual([false, false]);
   });
 });

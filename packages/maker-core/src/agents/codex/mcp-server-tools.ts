@@ -31,7 +31,11 @@ export async function readCodexThreadMcpServerTools(
   return reports.get(serverName)!;
 }
 
-/** Share one thread-status traversal and deadline across the requested servers. */
+/**
+ * Share one thread-status traversal and deadline across the requested servers.
+ * The native selector takes one server, so only a single-server request can be
+ * scoped; a multi-server request needs the full list anyway and filters here.
+ */
 export async function readCodexThreadMcpServersTools(
   request: StatusRequest,
   threadId: string,
@@ -42,6 +46,7 @@ export async function readCodexThreadMcpServersTools(
   const reports = new Map<string, AgentMcpServerToolsReport>();
   if (!missing.size) return reports;
   const deadline = Date.now() + timeoutMs;
+  const serverSelector = serverNames.length === 1 ? serverNames[0] : undefined;
   const seenCursors = new Set<string>();
   let cursor: string | null = null;
   for (let page = 0; page < MAX_STATUS_PAGES; page++) {
@@ -49,7 +54,13 @@ export async function readCodexThreadMcpServersTools(
     if (remainingMs <= 0) throw new Error('Codex MCP status timed out');
     const status: CodexMcpServerStatusListResponse = await request<CodexMcpServerStatusListResponse>(
       Method.McpServerStatusList,
-      { cursor, limit: 100, detail: 'toolsAndAuthOnly', threadId, serverName },
+      {
+        cursor,
+        limit: 100,
+        detail: 'toolsAndAuthOnly',
+        threadId,
+        ...(serverSelector ? { serverName: serverSelector } : {}),
+      },
       { timeoutMs: remainingMs },
     );
     for (const server of status.data) {
