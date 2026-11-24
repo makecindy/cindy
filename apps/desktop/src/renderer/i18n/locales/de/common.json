@@ -420,6 +420,7 @@
       "description": "Schränkt nur die Remote-Nutzung ein. Die lokale Nutzung bleibt unverändert. Gespeicherte Änderungen gelten beim Erstellen einer Aufgabe, beim Wechseln von Modellen oder beim Senden der nächsten Nachricht.",
       "all": "Alle Modelle",
       "selected": "{{count}} Modelle zugelassen",
+      "selectionExcludesModels": "Einige Modelle sind nicht ausgewählt. Neu hinzugefügte Modelle müssen manuell ausgewählt werden.",
       "choose": "Modelle auswählen",
       "memberTitle": "Zugelassene Modelle",
       "memberDescription": "Wähle aus den für die Remote-Nutzung freigegebenen Modellen aus, welche {{name}} verwenden darf. Diese Einschränkungen gelten auch für die Nutzung, die über diese Person weitergeteilt wird.",
@@ -1951,6 +1952,7 @@
       },
       "footnote": "Phase A: nur SSH-Verbindungsverwaltung. Das Ausführen von Agents auf dem Remote-Rechner folgt in einem späteren Update.",
       "viaAuth": "über {{label}}",
+      "managedAliasConflict": "Dieser SSH-Alias ist sowohl in der von Cindy verwalteten als auch in einer externen Konfiguration definiert. Die Verbindungsdetails sind schreibgeschützt. Dieser Eintrag kann hier nicht entfernt werden.",
       "readOnlyFromSshConfig": "Verbindungsdetails stammen aus der SSH-Konfiguration",
       "importedAgentHint": "Authentifiziert über den lokalen SSH-Schlüsselagenten (ssh-agent). Eine erfolgreiche ssh-Verbindung im Terminal bedeutet nicht, dass der Agent bereit ist.",
       "agentError": {
@@ -5910,7 +5912,8 @@
         "title": "Browserautomatisierung",
         "description": "Ein eigener Browser für Agents – getrennt von deinem alltäglichen Chrome",
         "toggleAria": "Browserautomatisierung umschalten",
-        "toggleHint": "Gilt nur für neue Agent-Sitzungen.",
+        "toggleHint": "Die Browser-Einstellung dieses Projekts gilt ab dem Start oder Neustart seiner Agent-Sitzungen.",
+        "userDefaultToggleHint": "Wenn du den Browser-Standard änderst, wird der lokale Codex automatisch aktualisiert, sobald er nichts mehr ausführt. Deine Sitzungen und der Chatverlauf bleiben erhalten. Codex lädt alle Einstellungen für integrierte Werkzeuge neu. Projekteinstellungen haben Vorrang. Pi und andere Agents übernehmen den Browser-Standard beim Start oder Neustart ihrer Sitzungen.",
         "noProjectHint": "Öffne die Einstellungen in einer Projektsitzung, um die Browserautomatisierung für dieses Projekt umzuschalten.",
         "detected": "{{browser}} erkannt",
         "notDetected": "Kein lokaler Browser erkannt. Installiere Chrome, um die Browserautomatisierung zu nutzen.",
@@ -6191,15 +6194,15 @@
     },
     "builtinTools": {
       "title": "Integrierte Tools",
-      "description": "Lege Standards für neue Sitzungen fest oder überschreibe sie für ein Projekt. Projekteinstellungen haben Vorrang.",
+      "description": "Lege Standardwerte für Werkzeuge fest oder passe sie für ein Projekt an. Projekteinstellungen haben Vorrang.",
       "empty": "Keine Tools verfügbar.",
       "toggleAria": "Tool {{name}} umschalten",
-      "toggleHint": "Änderungen gelten nur für neue oder neu gestartete Agent-Sitzungen. Laufende Sitzungen sind nicht betroffen.",
+      "toggleHint": "Neue oder neu gestartete Agent-Sitzungen übernehmen diese Werkzeugeinstellungen.",
       "loadFailed": "Tool-Liste konnte nicht geladen werden",
       "scopePicker": {
         "ariaLabel": "Geltungsbereich der Einstellungen für integrierte Tools wechseln",
-        "userDefault": "Standards für neue Sitzungen",
-        "userDefaultDescription": "Wird für neue Sitzungen ohne projektspezifische Überschreibung verwendet"
+        "userDefault": "Standards für Agent-Sitzungen",
+        "userDefaultDescription": "Gilt, wenn das Projekt keine eigene Einstellung hat"
       },
       "source": {
         "project": "Projekt",
@@ -15366,6 +15369,7 @@
       "codexHelperUnverified": "Es konnte nicht geprüft werden, ob cindy_helper für diese Aufgabe verfügbar ist. Das Aufgabenergebnis kann möglicherweise nicht übermittelt werden.",
       "requestFormatError": "Die App hat eine ungültige Anfrage gesendet. Daher konnte diese Antwort nicht abgeschlossen werden.",
       "replyFailed": "Antwort konnte nicht abgeschlossen werden",
+      "queuedSendRecovery": "Deine Nachricht wurde nicht gesendet. Wähle „Erneut versuchen“, um sie unverändert zu senden. Eine neue Nachricht ersetzt sie.",
       "retryTitle": "Letzte Nachricht erneut senden",
       "cancelTitle": "Fehlermeldung schließen",
       "retry": "Erneut versuchen",
@@ -16157,6 +16161,7 @@
       "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "Der Kontext konnte beim Modellwechsel nicht komprimiert werden, da das vorherige Modell über diese Verbindung nicht verfügbar ist.",
       "MODEL_SELECTION_UNAVAILABLE": "Das ausgewählte Modell ist bei seinem Anbieter nicht mehr verfügbar. Prüfe die Verbindung in den Einstellungen oder wähle ein anderes verfügbares Modell.",
       "MODEL_CATALOG_UNCONFIRMED": "Die Modellliste konnte nicht bestätigt werden. Das ausgewählte Modell wurde beibehalten. Aktualisiere die Modellliste und versuche es erneut.",
+      "SNAPSHOT_DISPATCH_INTENT_TIMEOUT": "Nachricht nicht gesendet. Cindy konnte den Sicherheitseintrag nicht rechtzeitig bestätigen.",
       "HARNESS_SWITCH_NOT_READY": "Der Harness-Wechsel ist noch nicht bereit. Prüfe die Fehlerdetails und versuche es erneut, sobald der Harness bereit ist.",
       "DEVICE_LINK_BUSY": "Der Remotecomputer ist ausgelastet. Versuche es in Kürze erneut.",
       "REMOTE_DAEMON_CLOSED": "Die Remote-Verbindung wurde unterbrochen, möglicherweise während eines Updates. Diese Runde wurde beendet. Sende die Nachricht erneut.",

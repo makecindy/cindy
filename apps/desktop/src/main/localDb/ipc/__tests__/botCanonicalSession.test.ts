@@ -34,6 +34,7 @@ import type { BotModelRoute } from '../../../../shared/botModelChain';
 import type { AgentKind, EngineKind } from '@cindy/maker-core';
 import { requireBuiltinAgentKind } from '../../../maker-host/engineKind';
 import { createBotCapabilityService, type BotCapabilityUpdate } from '../../../maker-ipc/botCapabilityService';
+import * as botProjectMode from '../../../maker-ipc/botProjectMode';
 import { GroupToolAuthorizationError, registerGroupToolAuthority } from '../../../maker-ipc/botGroupToolAuthorization';
 import { buildBotMcpCatalog } from '../../../maker-host/botMcpCatalog';
 import { CustomMcpProvider } from '../../../mcp-integrations/custom-mcp-provider';
@@ -5427,7 +5428,13 @@ describe('Bot self control uses the same profile authority as settings', () => {
     const canonical = await invoke('local-db:bots:create-canonical-session', { botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1 });
     const sessionId = canonical.session.id;
     const profile = await invoke('local-db:bots:get', 'bot-1');
-    await invoke('local-db:bots:update', { id: 'bot-1', capabilities: { projectMode: true } });
+    // Provision the real project without loading the automation host for its nightly review.
+    const provisionAutomations = vi.spyOn(botProjectMode, 'ensureBotProjectAutomations').mockResolvedValue(false);
+    try {
+      await invoke('local-db:bots:update', { id: 'bot-1', capabilities: { projectMode: true } });
+    } finally {
+      provisionAutomations.mockRestore();
+    }
     const service = createBotCapabilityService(capabilityDeps);
     const current = await service.inspect({ callerSessionId: sessionId });
     if (!current.ok) throw new Error(current.message);

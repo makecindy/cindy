@@ -103,6 +103,7 @@ import { isPluginEngineKind } from '../../shared/agentKindConversion.js';
 import { ensureDialogueWorkspaceDir } from '../localDb/dialogueWorkspace';
 import { AcceptedCallbackDispatchCancelled } from '../maker-ipc/acceptedCallbackRunner.js';
 import { schedulerFailureDetail } from '../maker-ipc/schedulerQueueBridge.js';
+import { SnapshotDispatchIntentDeadlineError } from '../utils/operationBudget.js';
 
 
 import { prependHandoffToUserMessage } from '../maker-ipc/agentHandoff.js';
@@ -2644,7 +2645,10 @@ export class MakerScheduleRunner implements ScheduleRunner {
         ctx.signal.removeEventListener('abort', onAbort);
         return this.deferFire(schedule, session.id, 'session-running');
       }
-      sendError = formatSchedulerSendError(sendContext, normalized.reason);
+      // The host supplies a fixed diagnostic for this proven pre-dispatch failure.
+      sendError = err instanceof SnapshotDispatchIntentDeadlineError
+        ? err.message
+        : formatSchedulerSendError(sendContext, normalized.reason);
       this.deps.logger.warn?.('[runner] session send failed before dispatch', {
         ...sendLogBase,
         source: normalized.source,

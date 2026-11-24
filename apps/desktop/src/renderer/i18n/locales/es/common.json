@@ -425,6 +425,7 @@
       "description": "Sólo limita el uso remoto. El uso local no cambia. Los cambios guardados se aplican al crear una tarea, cambiar de modelo o enviar el siguiente mensaje.",
       "all": "Todos los modelos",
       "selected": "{{count}} modelos permitidos",
+      "selectionExcludesModels": "Hay modelos sin seleccionar. Para permitir los que se añadan en el futuro, selecciónalos manualmente.",
       "choose": "Elige modelos",
       "memberTitle": "Modelos permitidos",
       "memberDescription": "Elige qué modelos puede usar {{name}}, dentro de los modelos abiertos para uso remoto. Estos límites también se aplican al uso que esta persona vuelva a compartir.",
@@ -1989,6 +1990,7 @@
       },
       "footnote": "Fase A: solo administración de conexiones SSH. Una actualización posterior permitirá ejecutar Agents en la computadora remota.",
       "viaAuth": "vía {{label}}",
+      "managedAliasConflict": "Este alias SSH está definido tanto en la configuración que gestiona Cindy como en una configuración externa. Los detalles de conexión son de solo lectura y no puedes quitar este host aquí.",
       "readOnlyFromSshConfig": "Los detalles de conexión provienen de la configuración SSH.",
       "importedAgentHint": "Se autentica mediante el agente local de claves SSH (ssh-agent). Poder conectar con ssh desde la terminal no garantiza que el agente esté listo.",
       "agentError": {
@@ -5970,7 +5972,8 @@
         "title": "Automatización del navegador",
         "description": "Un navegador para los Agents, separado de tu Chrome habitual",
         "toggleAria": "Alternar automatización del navegador",
-        "toggleHint": "Solo se aplica a las nuevas sesiones de Agent.",
+        "toggleHint": "El ajuste del navegador de este proyecto se aplica al iniciar o reiniciar sus sesiones de Agent.",
+        "userDefaultToggleHint": "Al cambiar el valor predeterminado del navegador, Codex local se actualiza automáticamente cuando queda inactivo. Se conservan tus sesiones y el historial del chat. Codex vuelve a cargar los ajustes de todas las herramientas integradas y da prioridad a los del proyecto. Pi y los demás Agents aplican el valor predeterminado del navegador al iniciar o reiniciar sus sesiones.",
         "noProjectHint": "Abre Configuración desde una sesión de proyecto para activar o desactivar la automatización del navegador en ese proyecto.",
         "detected": "Detectado {{browser}}",
         "notDetected": "No se detectó ningún navegador local. Instala Chrome para usar la automatización del navegador.",
@@ -6251,15 +6254,15 @@
     },
     "builtinTools": {
       "title": "Herramientas integradas",
-      "description": "Establece los valores predeterminados para las sesiones nuevas o personalízalos para un proyecto. La configuración del proyecto tiene prioridad.",
+      "description": "Establece los valores predeterminados de las herramientas o personalízalos para un proyecto. La configuración del proyecto tiene prioridad.",
       "empty": "No hay herramientas disponibles.",
       "toggleAria": "Activar o desactivar la herramienta {{name}}",
-      "toggleHint": "Los cambios solo se aplican a las sesiones de Agent nuevas o reiniciadas. Las sesiones en ejecución no se ven afectadas.",
+      "toggleHint": "Las sesiones de Agent nuevas o reiniciadas adoptan estos ajustes de herramientas.",
       "loadFailed": "No se pudo cargar la lista de herramientas",
       "scopePicker": {
         "ariaLabel": "Cambiar el ámbito de configuración de las herramientas integradas",
-        "userDefault": "Valores predeterminados para sesiones nuevas",
-        "userDefaultDescription": "Se usa en sesiones nuevas sin configuración específica del proyecto"
+        "userDefault": "Valores predeterminados de las sesiones de Agent",
+        "userDefaultDescription": "Se aplican si el proyecto no tiene su propia configuración"
       },
       "source": {
         "project": "proyecto",
@@ -15501,6 +15504,7 @@
       "codexHelperUnverified": "No se pudo comprobar si cindy_helper está disponible en esta tarea. Es posible que no se pueda comunicar el resultado de la tarea.",
       "requestFormatError": "La aplicación envió una solicitud no válida, por lo que no se pudo completar esta respuesta.",
       "replyFailed": "No se pudo completar la respuesta",
+      "queuedSendRecovery": "Tu mensaje no se envió. Selecciona «Reintentar» para enviarlo tal cual. Si envías un mensaje nuevo, reemplazará al anterior.",
       "retryTitle": "Reenviar el último mensaje",
       "cancelTitle": "Cerrar aviso de error",
       "retry": "Reintentar",
@@ -16300,6 +16304,7 @@
       "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "No se pudo compactar el contexto al cambiar de modelo porque esta conexión no permite usar el modelo anterior.",
       "MODEL_SELECTION_UNAVAILABLE": "El modelo seleccionado ya no está disponible en su proveedor. Comprueba la conexión en Ajustes o elige otro modelo disponible.",
       "MODEL_CATALOG_UNCONFIRMED": "No se ha podido confirmar la lista de modelos. Se ha conservado el modelo seleccionado. Actualiza la lista de modelos y vuelve a intentarlo.",
+      "SNAPSHOT_DISPATCH_INTENT_TIMEOUT": "No se envió el mensaje. Cindy no pudo confirmar a tiempo el registro de seguridad.",
       "HARNESS_SWITCH_NOT_READY": "El cambio de Harness aún no está listo. Revisa los detalles del error y vuelve a intentarlo cuando el Harness esté listo.",
       "DEVICE_LINK_BUSY": "La computadora remota está ocupada. Vuelve a intentarlo en breve.",
       "REMOTE_DAEMON_CLOSED": "La conexión remota se interrumpió, posiblemente durante una actualización. Este turno ha terminado. Envía el mensaje nuevamente.",

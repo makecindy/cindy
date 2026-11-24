@@ -738,6 +738,11 @@ Worker turn 被 vendor 报终止型 error，但 interrupted-turn auto-resume 仍
       继续就向同一个 Worker `send_to_worker`，用量上限或模型不可用时先用 `cindy_orca` 的
       `set_worker_runtime` 给它换路线（坑点 #6 的发送边界切换，运行设备 Worker 不适用）；归档重建会丢上下文。它是回报正文的一部分（用户在 Lead 对话里也看得到），不进系统提示词。
       Worker 的用量上限仍不走普通任务的等待续跑（`isUsageLimitAutoResumeEligible`），由 Lead 决定。
+    - **直投派活明确失败时用户可以手动继续（2026-11-24）**：起因是一个 Worker 的直投派活撞上
+      5 小时用量上限，错误横幅既没有「重试」也没有「继续」——直投派活不经队列，明确错误（非意外中断）
+      落到无 active turn 的收尾，既不留重试记录也不标可续跑。现在同一回执（实例、轮次一致、未被用户停止、
+      队列空闲）遇到明确错误时只把投影标为 `errorCanContinue`：Desktop 与 Mobile 的横幅照常出现按钮，
+      点了发隐藏的续跑指令，不重放 Lead 的原派活，也不启动用量上限的等待续跑。
     - **换好的路线在派活时先落地（2026-11-17）**：起因是四个撞了 Claude 订阅上限的 Worker，Lead 已用
       `set_session_runtime` 登记新来源（`next_send`），`send_to_worker` 却回 `[SUBSCRIPTION_ACCOUNT_LIMITED]`：
       休眠的 Worker 在派发前先按数据库里的旧路线唤醒（`resumeWorkerSession`），撞上旧订阅的上限，登记的

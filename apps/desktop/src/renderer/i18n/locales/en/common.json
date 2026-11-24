@@ -420,6 +420,7 @@
       "description": "Only limits remote use. Local use is unchanged. Saved changes apply when creating a task, switching models, or sending the next message.",
       "all": "All models",
       "selected": "{{count}} models allowed",
+      "selectionExcludesModels": "Some models are outside the selected range. To allow future models, select them manually.",
       "choose": "Choose models",
       "memberTitle": "Allowed models",
       "memberDescription": "Choose which models {{name}} can use, within the models open for remote use. These limits also apply to use reshared through this person.",
@@ -1951,6 +1952,7 @@
       },
       "footnote": "Only SSH connection management is available for now. Running agents on remote machines is coming in a later update.",
       "viaAuth": "via {{label}}",
+      "managedAliasConflict": "This alias is declared in both Cindy-managed and external SSH configuration. Connection details are read-only, and this host can’t be removed here.",
       "readOnlyFromSshConfig": "Connection details come from SSH configuration",
       "importedAgentHint": "Authenticates through the local SSH key agent (ssh-agent). A successful terminal ssh connection does not mean the agent is ready.",
       "agentError": {
@@ -5910,7 +5912,8 @@
         "title": "Browser automation",
         "description": "A dedicated browser for agents — separate from your everyday Chrome",
         "toggleAria": "Toggle browser automation",
-        "toggleHint": "Applies only to new Agent sessions.",
+        "toggleHint": "This project’s Browser setting takes effect when its agent sessions start or restart.",
+        "userDefaultToggleHint": "Changing the Browser default automatically refreshes local Codex when it is idle. Your tasks and chat history are kept. Codex reloads all built-in tool settings, with project overrides taking priority. Pi and other agents apply the Browser default the next time they start or restart.",
         "noProjectHint": "Open Settings from a project session to toggle browser automation for that project.",
         "detected": "Detected {{browser}}",
         "notDetected": "No local browser detected. Install Chrome to use browser automation.",
@@ -6191,15 +6194,15 @@
     },
     "builtinTools": {
       "title": "Built-in Tools",
-      "description": "Set defaults for new sessions or override them for a project. Project settings take priority.",
+      "description": "Set tool defaults or override them for a project. Project settings take priority.",
       "empty": "No tools available.",
       "toggleAria": "Toggle {{name}} tool",
-      "toggleHint": "Changes apply only to new or restarted agent sessions. Running sessions are not affected.",
+      "toggleHint": "New or restarted agent sessions pick up these tool settings.",
       "loadFailed": "Failed to load tool list",
       "scopePicker": {
         "ariaLabel": "Switch the scope of built-in tool settings",
-        "userDefault": "New session defaults",
-        "userDefaultDescription": "Used by new sessions without a project override"
+        "userDefault": "Agent session defaults",
+        "userDefaultDescription": "Used when the project has no override"
       },
       "source": {
         "project": "project",
@@ -15403,6 +15406,7 @@
       "codexHelperUnverified": "Could not verify cindy_helper for this task. Task result reporting may be unavailable.",
       "requestFormatError": "The app sent an invalid request, so this reply could not be completed.",
       "replyFailed": "Could not complete the reply",
+      "queuedSendRecovery": "Your message wasn’t sent. Select Retry to send it as is. Sending a new message will replace it.",
       "retryTitle": "Resend the last message",
       "cancelTitle": "Dismiss error",
       "retry": "Retry",
@@ -16194,6 +16198,7 @@
       "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "Context compaction failed during the switch because this connection cannot use the previous model.",
       "MODEL_SELECTION_UNAVAILABLE": "The selected model is no longer available from its provider. Check the connection in Settings or choose another available model.",
       "MODEL_CATALOG_UNCONFIRMED": "The model list could not be confirmed. Your selected model has been kept. Refresh the model list and try again.",
+      "SNAPSHOT_DISPATCH_INTENT_TIMEOUT": "Message not sent. Cindy couldn’t confirm the safety record in time.",
       "HARNESS_SWITCH_NOT_READY": "The Harness switch is not ready. Check the error details and retry after the Harness is ready.",
       "DEVICE_LINK_BUSY": "The remote computer is busy. Try again shortly.",
       "REMOTE_DAEMON_CLOSED": "The remote connection dropped, possibly during an update. This turn has ended. Send the message again.",

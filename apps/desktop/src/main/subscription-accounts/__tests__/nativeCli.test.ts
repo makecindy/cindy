@@ -2,7 +2,7 @@
  * Protects profile separation, bounded subprocess lifetime and sanitized errors, without real credentials.
  */
 import { EventEmitter } from 'node:events';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, rename, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -41,6 +41,7 @@ vi.mock('../../maker-host/claude-native-cli.desktop.js', () => ({
 import {
   codexAccountRpc,
   readNativeAccount,
+  readNativeCodexAccountAndRateLimits,
   readNativeAccountUsage,
   loginNativeAccount,
   readNativeCodexTokens,
@@ -155,9 +156,9 @@ beforeEach(() => {
               request.id === 1
                 ? { id: 1, result: {} }
                 : h.error
-                  ? { id: 2, error: { message: h.errorMessage } }
+                  ? { id: request.id, error: { message: h.errorMessage } }
                   : {
-                      id: 2,
+                      id: request.id,
                       result: h.accountResult ?? {
                         account: {
                           type: 'chatgpt',
@@ -199,6 +200,40 @@ describe('Claude profile renewal', () => {
   });
 });
 describe('official Codex profiles', () => {
+  // #12390, standard: the automatic read used separate CLI startups for identity and
+  // quota. Exercise both writes on one control connection and replace auth between
+  // requests to verify that a connection carrying the earlier login cannot read quota.
+  it.each([false, true])('uses one bounded probe and rejects a replaced credential (%s)', async replace => {
+    const profile = await mkdtemp(path.join(tmpdir(), 'codex-reset-profile-'));
+    const authFile = path.join(profile, 'auth.json');
+    try {
+      await writeFile(authFile, JSON.stringify({
+        tokens: { access_token: 'invalid-fixture', account_id: 'fixture-account' },
+      }));
+      let checks = 0;
+      const read = readNativeCodexAccountAndRateLimits(profile, async () => {
+        if (++checks !== 3 || !replace) return;
+        const next = path.join(profile, 'auth-next.json');
+        await writeFile(next, JSON.stringify({
+          tokens: { access_token: 'invalid-replacement', account_id: 'other-account' },
+        }));
+        await rename(next, authFile);
+      });
+      if (replace) await expect(read).rejects.toThrow('changed before dispatch');
+      else await expect(read).resolves.toMatchObject({
+        identity: { email: profile + '@example.test', accountId: 'fixture-account' },
+      });
+      expect(children).toHaveLength(1);
+      const requests = children[0].stdin.write.mock.calls.map(([line]) => JSON.parse(line).method);
+      expect(requests).toEqual(replace
+        ? ['initialize', 'initialized', 'account/read']
+        : ['initialize', 'initialized', 'account/read', 'account/rateLimits/read']);
+      expect(children[0].kill).toHaveBeenCalledOnce();
+    } finally {
+      await rm(profile, { recursive: true, force: true });
+    }
+  });
+
   // #10110 review, unit: legacy auth has no plan. Keep the plan returned by the
   // selected profile's quota RPC; the old test fixtures only read account/read.
   it('preserves the selected profile plan alongside its sanitized Codex quota', async () => {
