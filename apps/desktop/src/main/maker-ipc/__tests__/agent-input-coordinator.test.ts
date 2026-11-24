@@ -14882,9 +14882,10 @@ describe('Orca report durable recovery', () => {
   // The manual read cases exercise retryLastError with the ACK released during
   // either read, before the previous after-manual-retry case releases it.
   // One blocked read and one ACK suffice to lose the first Retry dispatch.
+  // A rejected steer write before Stop must stay visible once Stop cancels recovery.
   it.each([
     'before-backoff', 'after-backoff', 'after-close', 'after-takeover',
-    'before-stopped-write', 'before-replacement-failure', 'after-dismissal', 'after-manual-retry',
+    'before-stopped-write', 'before-stop', 'before-replacement-failure', 'after-dismissal', 'after-manual-retry',
     'during-manual-progress-read', 'during-manual-snapshot-read',
   ] as const)('settles Worker recovery when steer ACK arrives %s', async timing => {
     vi.useFakeTimers();
@@ -15006,11 +15007,21 @@ describe('Orca report durable recovery', () => {
       }
       ack.resolve();
       await expect(steering).resolves.toBe('steered');
+      if (timing === 'before-stop') {
+        expect(h.sendToAgent).not.toHaveBeenCalled();
+        expect(h.coordinator.stop('worker').error).toBe('Failed to persist user message: steer row unavailable');
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(h.sendToAgent).not.toHaveBeenCalled();
+        return;
+      }
       await vi.advanceTimersByTimeAsync(10_000);
       expect(h.sendToAgent).toHaveBeenCalledOnce();
       expect(h.sendToAgent.mock.lastCall?.[1]).toEqual({
         type: 'user', content: timing === 'after-takeover' ? 'My next instruction' : CONTINUE_AFTER_ERROR_PROMPT,
       });
+      if (timing === 'before-backoff' || timing === 'after-backoff' || timing === 'after-close') {
+        expect(h.coordinator.getProjection('worker').error).toBeNull();
+      }
     } finally {
       ack.resolve();
       vi.useRealTimers();

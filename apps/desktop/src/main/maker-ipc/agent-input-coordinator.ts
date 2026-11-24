@@ -866,7 +866,10 @@ interface SessionInputState {
   /** Last completed owner input, only reusable by a wake-up of that live SDK turn. */
   providerContinuationCandidate?: { turn: ActiveTurn; sessionIdentity: object };
   error: string | null;
-  detachedSteerPersistenceError: string | null;
+  detachedSteerPersistenceError: {
+    message: string;
+    recoveryClientId?: string;
+  } | null;
   /** Stable error reason for live projections; null when no terminal error is active. */
   errorReason: string | null;
   errorPersistBinding: { message: string; persistId: string } | null;
@@ -4148,7 +4151,7 @@ export class AgentInputCoordinator {
     // Dismiss only the visible error. A steer write failure can be waiting
     // behind a replacement turn's error.
     if (state.error === null && state.detachedSteerPersistenceError !== null &&
-        this.toProjection(sessionId, state).error === state.detachedSteerPersistenceError) {
+        this.toProjection(sessionId, state).error === state.detachedSteerPersistenceError.message) {
       state.detachedSteerPersistenceError = null;
     }
     if (state.autoResumePending) this.deps.onUserEnqueue?.(sessionId);
@@ -5313,7 +5316,7 @@ export class AgentInputCoordinator {
     );
     const error = turnError ?? (
       !groupSwitchHeld && state.autoResumeAttemptToken === null && !state.recovery
-        ? state.detachedSteerPersistenceError : null
+        ? state.detachedSteerPersistenceError?.message ?? null : null
     );
     const recovery: AgentInputRecovery =
       state.recovery?.kind === 'active-turn'
@@ -7249,6 +7252,7 @@ export class AgentInputCoordinator {
 
   /** 自动续跑项已真正进入 vendor，之后不再需要 pre-vendor 回滚信息。 */
   private commitAutoResumeDispatch(sessionId: string, item: AgentInputQueuedMessage): void {
+    const pending = this.pendingAutoResumeRecoveries.get(item.clientId);
     this.pendingAutoResumeRecoveries.delete(item.clientId);
     this.autoResumeDispatchAttempts.delete(item.clientId);
     const attemptToken = item.autoResumeInfo?.sessionTotal;
@@ -7258,6 +7262,14 @@ export class AgentInputCoordinator {
       typeof attemptToken === 'number' &&
       state.autoResumeAttemptToken === attemptToken
     ) {
+      const failedSteer = state.detachedSteerPersistenceError;
+      if (
+        pending?.stateRef === state &&
+        pending.attemptToken === attemptToken &&
+        failedSteer?.recoveryClientId === pending.recovery.item.clientId
+      ) {
+        state.detachedSteerPersistenceError = null;
+      }
       state.autoResumeAttemptToken = null;
     }
   }
@@ -8665,13 +8677,15 @@ export class AgentInputCoordinator {
       if (!this.isTurnGenerationCurrent(sessionId, active)) return 'stale';
       const state = this.getState(sessionId);
       if (active.workerRecoverySource && !this.isActiveTurnCurrent(sessionId, active)) {
-        // Keep a matching continuation intact. Otherwise surface the lost row
-        // without changing the active turn or another input's recovery.
+        // The projection hides this while recovery is live. Keep the failure
+        // in case recovery is cancelled before the provider accepts Continue.
         active.persisting = false;
-        if (!this.hasMatchingWorkerRecovery(state, active.workerRecoverySource)) {
-          state.detachedSteerPersistenceError = `Failed to persist user message: ${errorMessage(err)}`;
-          this.emit(sessionId);
-        }
+        const recovery = this.hasMatchingWorkerRecovery(state, active.workerRecoverySource);
+        state.detachedSteerPersistenceError = {
+          message: `Failed to persist user message: ${errorMessage(err)}`,
+          recoveryClientId: recovery ? active.workerRecoverySource.item.clientId : undefined,
+        };
+        if (!recovery) this.emit(sessionId);
         log.error('persist accepted Worker steer failed after turn settled', {
           sessionId, clientId: item.clientId, error: errorMessage(err),
         });
