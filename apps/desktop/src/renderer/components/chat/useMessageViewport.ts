@@ -238,7 +238,8 @@ export function useMessageViewport(options: Options) {
         measurement.current = null;
       }
     };
-    let textAccessTimer: ReturnType<typeof setTimeout> | undefined;
+    let keyboardRowsTimer: ReturnType<typeof setTimeout> | undefined;
+    let selectAllTimer: ReturnType<typeof setTimeout> | undefined;
     const setTextAccess = (enabled: boolean) => {
       if (keyboardOrSelectionRef.current === enabled) return;
       keyboardOrSelectionRef.current = enabled;
@@ -254,18 +255,24 @@ export function useMessageViewport(options: Options) {
       }
       return false;
     };
-    const updateTextAccess = () => {
-      setTextAccess(selectionIntersectsItems());
+    const clearKeyboardRowsOutside = () => {
       if (!root.contains(document.activeElement)) setKeyboardRows(previous => previous.size ? new Set() : previous);
     };
-    const settleTextAccess = () => {
-      clearTimeout(textAccessTimer);
-      // Native focus movement/selection happens after keydown. Also handle a
-      // prevented Tab or select-all, without leaving the entire window mounted.
-      textAccessTimer = setTimeout(updateTextAccess, 0);
+    const settleKeyboardRows = () => {
+      clearTimeout(keyboardRowsTimer);
+      // Native focus movement happens after keydown.
+      keyboardRowsTimer = setTimeout(clearKeyboardRowsOutside, 0);
     };
-    const pointer = () => {
-      settleTextAccess();
+    const updateTextAccess = () => {
+      setTextAccess(selectionIntersectsItems());
+      clearKeyboardRowsOutside();
+    };
+    const onSelectionChange = (event: Event) => {
+      // Text inputs also emit selectionchange. Only the document event reports
+      // changes to the page range, and reading isCollapsed can force layout.
+      if (event.target !== document) return;
+      clearTimeout(selectAllTimer);
+      updateTextAccess();
     };
     const prepareTabDestination = (reverse: boolean) => {
       // Include virtual rows in native DOM order, revealing only rows on the
@@ -298,7 +305,7 @@ export function useMessageViewport(options: Options) {
       if (event.key === 'Tab') {
         if (event.altKey || event.ctrlKey || event.metaKey) return;
         prepareTabDestination(event.shiftKey);
-        settleTextAccess();
+        settleKeyboardRows();
         return;
       }
       // Clicking ordinary message text leaves BODY focused. The page-level
@@ -306,7 +313,10 @@ export function useMessageViewport(options: Options) {
       if (event.altKey || !(event.ctrlKey || event.metaKey)
         || event.key.toLowerCase() !== 'a' || isEditableKeyboardTarget(event.target)) return;
       flushSync(() => setTextAccess(true));
-      settleTextAccess();
+      // If native select-all is prevented or leaves the selection unchanged,
+      // release the preemptive mount even without a selectionchange event.
+      clearTimeout(selectAllTimer);
+      selectAllTimer = setTimeout(updateTextAccess, 0);
     };
     const invalidate = (records: MutationRecord[]) => {
       geometry.mutations(records, items);
@@ -337,13 +347,14 @@ export function useMessageViewport(options: Options) {
     // Bubble after editor completion / modal handlers have had first refusal,
     // but before the browser performs its native focus or selection action.
     window.addEventListener('keydown', keyboard);
-    window.addEventListener('pointerdown', pointer, true);
-    document.addEventListener('focusin', settleTextAccess);
-    document.addEventListener('focusout', settleTextAccess);
-    document.addEventListener('selectionchange', updateTextAccess);
+    window.addEventListener('pointerdown', settleKeyboardRows, true);
+    document.addEventListener('focusin', settleKeyboardRows);
+    document.addEventListener('focusout', settleKeyboardRows);
+    document.addEventListener('selectionchange', onSelectionChange);
     return () => {
       stopObservingWrites();
-      clearTimeout(textAccessTimer);
+      clearTimeout(keyboardRowsTimer);
+      clearTimeout(selectAllTimer);
       observer.disconnect();
       geometry.observe(null);
       mutationObserver.disconnect();
@@ -354,10 +365,10 @@ export function useMessageViewport(options: Options) {
       root.removeEventListener('focusin', retainInteraction);
       root.removeEventListener('keydown', retainInteraction, true);
       window.removeEventListener('keydown', keyboard);
-      window.removeEventListener('pointerdown', pointer, true);
-      document.removeEventListener('focusin', settleTextAccess);
-      document.removeEventListener('focusout', settleTextAccess);
-      document.removeEventListener('selectionchange', updateTextAccess);
+      window.removeEventListener('pointerdown', settleKeyboardRows, true);
+      document.removeEventListener('focusin', settleKeyboardRows);
+      document.removeEventListener('focusout', settleKeyboardRows);
+      document.removeEventListener('selectionchange', onSelectionChange);
     };
   }, [options.scrollRef, options.itemsRef, options.connection, preserveTextAccessAnchor, scheduleViewportReconcile, geometry]);
 
