@@ -22,6 +22,24 @@ function fixture(options: { expires?: number; wrongRuntime?: boolean; failAck?: 
   return { transport, fetch, execute, now, changeContext(value: SettingsWebContext | null) { state = value; } };
 }
 describe('web settings Host transport', () => {
+  // The service's Retry-After sets the earliest next poll, for a minute or a quarter hour alike.
+  it.each([60, 900])('waits out a %s s Retry-After before polling again', async seconds => {
+    vi.useFakeTimers();
+    try {
+      const f = fixture();
+      f.fetch.mockImplementation(async (url) => String(url).endsWith('/connect') ? reply({ ok: true })
+        : new Response('', { status: 429, headers: { 'Retry-After': String(seconds) } }));
+      f.transport.start();
+      await vi.advanceTimersByTimeAsync(0);
+      const polls = () => f.fetch.mock.calls.filter(([url]) => String(url).endsWith('/poll')).length;
+      expect(polls()).toBe(1);
+      await vi.advanceTimersByTimeAsync(seconds * 1000 - 1);
+      expect(polls()).toBe(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(polls()).toBe(2);
+      f.transport.stop();
+    } finally { vi.useRealTimers(); }
+  });
   it('advertises batch reads and registers in legacy mode only if old CIS rejects the new field', async () => {
     const f = fixture();
     f.fetch.mockImplementationOnce(async (_url, init) => {

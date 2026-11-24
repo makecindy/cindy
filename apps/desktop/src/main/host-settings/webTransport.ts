@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
+import { retryAfterDelayMs } from './retryAfter.js';
 import { HOST_SETTINGS_DOMAINS } from '../../shared/hostSettings.js';
 import { settingsWebCommandSchema, settingsWebResultSchema, SETTINGS_WEB_MAX_BYTES, type SettingsWebEnvelope, type SettingsWebResult } from '../../shared/settingsWeb.js';
 
@@ -14,7 +15,13 @@ export interface SettingsWebTransportOptions {
   hostCalls?: { channels: string[]; desktopV1: true };
 }
 const envelope = z.strictObject({ requestId: z.string().uuid(), runtimeId: z.string().uuid(), sessionKey: z.string().regex(/^[a-f0-9]{64}$/u), expiresAtMs: z.number().safe().int(), command: settingsWebCommandSchema });
-class TransportError extends Error { constructor(readonly status: number) { super('SETTINGS_WEB_TRANSPORT_UNAVAILABLE'); } }
+class TransportError extends Error {
+  constructor(readonly status: number, readonly retryAfterMs: number | null = null) { super('SETTINGS_WEB_TRANSPORT_UNAVAILABLE'); }
+}
+/** How long the service asked to wait, from a throttled or unavailable response's Retry-After. */
+function serverRetryDelay(response: Response): number | null {
+  return response.status === 429 || response.status === 503 ? retryAfterDelayMs(response) : null;
+}
 
 /** One request at a time. A delivery failure retries only the result, never the write. */
 export function createSettingsWebTransport(options: SettingsWebTransportOptions) {
@@ -39,7 +46,7 @@ export function createSettingsWebTransport(options: SettingsWebTransportOptions)
     const timeout = setTimeout(() => abort?.abort(), 8_000);
     try {
       const response = await options.fetch(url.href, { method: 'POST', headers: { Authorization: `Bearer ${options.getContext()!.accessToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body), redirect: 'error', credentials: 'omit', cache: 'no-store', referrerPolicy: 'no-referrer', signal: abort.signal });
-      if (!response.ok) { await response.body?.cancel(); throw new TransportError(response.status); }
+      if (!response.ok) { const retryAfterMs = serverRetryDelay(response); await response.body?.cancel(); throw new TransportError(response.status, retryAfterMs); }
       const reader = response.body?.getReader();
       if (!reader) throw new Error('SETTINGS_WEB_RESPONSE_INVALID');
       let size = 0;
@@ -102,6 +109,8 @@ export function createSettingsWebTransport(options: SettingsWebTransportOptions)
     } catch (error) {
       if (error instanceof TransportError && error.status === 404) { connected = false; return 60_000; }
       if (error instanceof TransportError && error.status === 409) { connected = false; return 20_000; }
+      // The service's Retry-After is the earliest next request; the local backoff applies without one.
+      if (error instanceof TransportError && error.retryAfterMs !== null) return Math.max(5_000, error.retryAfterMs);
       return 5_000;
     } finally { inFlight = false; }
   };

@@ -229,6 +229,19 @@ describe('单请求后台上报器', () => {
     expect(h.fetcher).toHaveBeenCalledTimes(2);
     h.publisher.stop();
   });
+  // The service's wait is not shortened by a local cap, and a settings change in between waits too.
+  it.each([60, 900])('429 Retry-After %s 秒到期前不再上报', async seconds => {
+    const h = setup();
+    h.fetcher.mockResolvedValueOnce(new Response('', { status: 429, headers: { 'Retry-After': String(seconds) } }));
+    h.publisher.start();
+    await vi.advanceTimersByTimeAsync(0);
+    h.publisher.requestPublish();
+    await vi.advanceTimersByTimeAsync(seconds * 1000 - 1);
+    expect(h.fetcher).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.fetcher).toHaveBeenCalledTimes(2);
+    h.publisher.stop();
+  });
   it('请求有超时且不重复复用超时的正文', async () => {
     const h = setup();
     h.fetcher.mockImplementationOnce((_url, init) => new Promise((_resolve, reject) => {

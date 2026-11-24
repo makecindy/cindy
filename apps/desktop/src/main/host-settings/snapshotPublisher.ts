@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { retryAfterDelayMs } from './retryAfter.js';
 
 import {
   SETTINGS_SNAPSHOT_FRESHNESS_MS,
@@ -144,11 +145,13 @@ export async function postSettingsSnapshot(
       signal,
     });
     if (response.status === 429) {
-      const seconds = Number(response.headers.get('retry-after'));
+      // The service's Retry-After is the earliest next report, however long; the local interval
+      // applies only without a valid one.
+      const delay = retryAfterDelayMs(response);
       await response.body?.cancel();
-      return { status: 'rateLimited', retryAfterMs: Number.isFinite(seconds) && seconds > 0
-        ? Math.min(600_000, Math.max(SETTINGS_SNAPSHOT_MIN_WRITE_INTERVAL_MS, seconds * 1000))
-        : SETTINGS_SNAPSHOT_PUBLISH_INTERVAL_MS };
+      return { status: 'rateLimited', retryAfterMs: delay === null
+        ? SETTINGS_SNAPSHOT_PUBLISH_INTERVAL_MS
+        : Math.max(SETTINGS_SNAPSHOT_MIN_WRITE_INTERVAL_MS, delay) };
     }
     if (response.status !== 200 && response.status !== 409) {
       await response.body?.cancel();
