@@ -364,7 +364,7 @@ export async function createWorkerWorktree(
   // Desktop new-task entry; other sources (the lead's branch, a commit) are unchanged.
   const created = await WorktreeManager.createWorktree(
     { sessionId, baseRepo: info.baseRepo, name: '', sourceBranch },
-    { trackBackgroundCheckout: true, refreshDefaultSource: true },
+    { trackBackgroundCheckout: true, refreshDefaultSource: 'orca-worker' },
   );
   if (!created.ok) throw new Error(`Worker worktree creation failed: ${created.error.message}`);
   // Probe paths are realpaths, so a symlink spelling cannot change the subproject offset.

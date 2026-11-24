@@ -201,31 +201,31 @@ async function fetchRemoteDefaultBranch(
   return fetched;
 }
 
-/** Desktop and Orca Worker creation refresh only the selected origin default; never
- * redirect an explicit choice to upstream or a newly renamed remote default. Returns the full
- * tracking ref so checkout uses the same ref as the refresh. */
+/** Refresh a selected full origin default ref. Other refs are left to the caller. */
 export async function refreshSelectedDefaultSource(
   baseRepo: string,
   sourceBranch: string,
   totalBudgetMs = NET_TOTAL_BUDGET_MS,
-): Promise<string> {
-  const selected = sourceBranch?.startsWith('origin/')
-    ? `refs/remotes/${sourceBranch}`
-    : sourceBranch;
-  if (!selected?.startsWith('refs/remotes/origin/')) return sourceBranch;
+): Promise<string | undefined> {
+  if (!sourceBranch?.startsWith('refs/remotes/origin/')) return undefined;
   const deadline = Date.now() + totalBudgetMs;
   try {
-    if (selected !== (await readOriginDefaultBranch(baseRepo))) return sourceBranch;
+    if (sourceBranch !== (await readOriginDefaultBranch(baseRepo))) return undefined;
     await fetchRemoteDefaultBranch(
       baseRepo,
       'origin',
-      selected.slice('refs/remotes/origin/'.length),
+      sourceBranch.slice('refs/remotes/origin/'.length),
       deadline - Date.now() - KILL_CLEANUP_BUDGET_MS,
     );
-    return selected;
-  } catch {
-    // A failed local probe also retains the source already selected by the user.
-    log.warn('[freshBase] 默认源分支探测失败，使用本地已有 ref');
     return sourceBranch;
+  } catch {
+    log.warn('[freshBase] 默认源分支探测失败，使用本地已有 ref');
+    return undefined;
   }
+}
+
+/** Orca tool calls may name the origin default with shorthand. */
+export async function refreshWorkerDefaultSource(baseRepo: string, sourceBranch: string): Promise<string> {
+  const candidate = sourceBranch.startsWith('origin/') ? `refs/remotes/${sourceBranch}` : sourceBranch;
+  return (await refreshSelectedDefaultSource(baseRepo, candidate)) ?? sourceBranch;
 }

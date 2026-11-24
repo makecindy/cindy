@@ -389,6 +389,18 @@ it('creates an Orca Worker from the freshly fetched origin default', async () =>
   await git(seed, 'push', remote, 'main');
   const latest = await git(seed, 'rev-parse', 'HEAD');
 
+  // #12391 P1: the Desktop source picker supplies a local short name while
+  // the Orca tool uses the same string as a remote default shorthand.
+  const desktop = await createWorktree(
+    { sessionId: 'desktop-local', baseRepo: repo, name: 'desktop-local', sourceBranch: 'origin/main' },
+    { refreshDefaultSource: true, awaitFullCheckout: true },
+  );
+  expect(desktop.ok, JSON.stringify(desktop)).toBe(true);
+  if (!desktop.ok) return;
+  expect(await git(desktop.meta.path, 'rev-parse', 'HEAD')).toBe(old);
+  expect(desktop.meta.sourceBranch).toBe('refs/heads/origin/main');
+  expect(await git(repo, 'rev-parse', 'refs/remotes/origin/main')).toBe(old);
+
   // #12391 review: a colliding local branch made the short remote name
   // ambiguous at checkout. A full local ref must still select the local branch.
   const localWorker = await createWorkerWorktree('orca-local', repo, 'refs/heads/origin/main');

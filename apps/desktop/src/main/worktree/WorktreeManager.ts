@@ -27,7 +27,7 @@ import {
   validateWorktreeName,
 } from './nameGenerator';
 import { readAttachedWorktreeBranch } from './attachedBranch';
-import { refreshSelectedDefaultSource } from './freshBase';
+import { refreshSelectedDefaultSource, refreshWorkerDefaultSource } from './freshBase';
 import { classifyError, type ClassifyInput } from './errorClassifier';
 import {
   gitExec,
@@ -838,8 +838,8 @@ export async function awaitBackgroundCheckout(sessionId: string): Promise<void> 
 }
 
 export interface CreateWorktreeOptions {
-  /** Desktop new-task entry and Orca Worker creation; internal option, never taken from IPC request fields. */
-  refreshDefaultSource?: boolean;
+  /** Internal policy: Desktop uses full remote refs; Orca also accepts remote shorthand. */
+  refreshDefaultSource?: boolean | 'orca-worker';
   /** Keep a handle on the background checkout so failure compensation can wait for it. */
   trackBackgroundCheckout?: boolean;
   /**
@@ -923,9 +923,14 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
     }
     const baseRepo = cwdInfo.repoRoot ?? path.resolve(req.baseRepo);
 
-    const sourceBranch = options?.refreshDefaultSource
-      ? await refreshSelectedDefaultSource(baseRepo, req.sourceBranch)
-      : req.sourceBranch;
+    let sourceBranch = req.sourceBranch;
+    if (options?.refreshDefaultSource === 'orca-worker') {
+      sourceBranch = await refreshWorkerDefaultSource(baseRepo, sourceBranch);
+    } else if (options?.refreshDefaultSource && sourceBranch?.startsWith('origin/')) {
+      // The new-task picker sends short local names and full remote refs.
+      const localRef = `refs/heads/${sourceBranch}`;
+      if (await revParseCommit(baseRepo, localRef)) sourceBranch = localRef;
+    }
 
     // 2. branches — sourceBranch 既可以是本地分支(常规 schedule),也可以是
     //    任意 commit-ish。
@@ -944,6 +949,10 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
           },
         };
       }
+    }
+
+    if (options?.refreshDefaultSource === true) {
+      await refreshSelectedDefaultSource(baseRepo, sourceBranch);
     }
 
     // 3. 路径冲突避让
