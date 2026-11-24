@@ -12,7 +12,7 @@ import path from 'node:path';
 
 import { createAnthropicCompatProxy, type ProxyHandle } from '@cindy/anthropic-compat-proxy';
 import {
-  ClaudeCodeAgent, NATIVE_SUBSCRIPTION_ACCOUNT, TurnDispatchUnconfirmedError, type AgentDeps, type AgentEvent,
+  ClaudeCodeAgent, NATIVE_SUBSCRIPTION_ACCOUNT, TurnDispatchRejectedError, TurnDispatchUnconfirmedError, type AgentDeps, type AgentEvent,
   type BaseAgent, type AgentSessionHandle, Session, type StartSessionOptions,
   type InteractionDecision, type InteractionRequest, type Logger,
 } from '@cindy/maker-core';
@@ -581,7 +581,8 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
         stopRecoveryAt?: 'close-busy' | 'close-stopped' | 'close-throws' | 'startup' | 'send-throws' | 'send-rejected'
           | 'replacement-closed' | 'replacement-runtime-closed' | 'replacement-accepted-then-closed'
           | 'unconfirmed' | 'send-stopped' | 'stopped-before-open' | 'mode-changed'
-          | 'mode-changed-with-stop' | 'snapshot-deadline' | 'cancelled' | 'stale' | 'schedule-aborted' | 'new-input' | 'model-changed' | 'route-changed' | 'engine-changed';
+          | 'mode-changed-with-stop' | 'snapshot-deadline' | 'cancelled' | 'stale' | 'schedule-aborted' | 'new-input' | 'model-changed' | 'route-changed' | 'engine-changed'
+          | 'replacement-send-rejected';
       } = {}) {
     const reconnect = failure.endsWith('reconnect');
     const switchViaIpc = stopRecoveryAt === 'route-changed' || stopRecoveryAt === 'engine-changed';
@@ -655,7 +656,7 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
         }
         const nativeId = String(req.headers['x-claude-code-session-id'] ?? '');
         observations.push({ nativeId, body });
-        if (rejectIpcSelection && body.includes(followUp)) {
+        if ((rejectIpcSelection || stopRecoveryAt === 'replacement-send-rejected') && body.includes(followUp)) {
           res.writeHead(200, { 'content-type': 'text/event-stream' }).end(text(followUpReply));
           return;
         }
@@ -708,9 +709,14 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
       // The fixture adapter selects a normal custom API source only below the
       // real pool lease. It preserves the chosen account's isolated config dir;
       // the task/share/provider, allocator and host admission above stay intact.
-      return engine.startSession({ ...options, providerId: 'pool-e2e-loopback',
+      const handle = await engine.startSession({ ...options, providerId: 'pool-e2e-loopback',
         deviceHosted: { ...options.deviceHosted!, guestProvider: options.deviceHosted?.guestProvider
           ? { ...options.deviceHosted.guestProvider, providerId: 'pool-e2e-loopback' } : undefined } });
+      // The executor rejects the first send on the replacement account's real CLI handle.
+      if (stopRecoveryAt === 'replacement-send-rejected' && profile === accountDirectory('anthropic', accounts[replacement])) {
+        vi.spyOn(handle, 'send').mockRejectedValueOnce(new TurnDispatchRejectedError('fixture executor rejected before dispatch'));
+      }
+      return handle;
     } } as unknown as BaseAgent);
     const guestSwitch = createProviderGroupGuestSwitch();
     const order: string[] = [];
@@ -746,10 +752,12 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
       try {
         active = await startRemoteAgentSession('claude-code', { sessionId: task, workingDir: project, model: MODEL,
           providerId: published, permissionMode: 'bypassPermissions', ...(resume ? { resumeSessionId: resume } : {}) }, {
-          invoke: async args => {
+          invoke: async (args, invokeOptions) => {
             const request = JSON.parse(JSON.stringify(args[0]));
             if (request.op === 'open') opens.push(request.payload.json);
             if (request.op === 'call' && request.method === 'send') sends++;
+            // Like Device Link, mark the request as handed to transport before the executor sees it.
+            invokeOptions?.beforeDispatch?.();
             return JSON.parse(JSON.stringify(await host.handle(guest, request) ?? null));
           },
           recoverSharedReconnect: reconnect,
@@ -1038,7 +1046,16 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
           onResumableTurnError: attemptAutomaticResume,
           sendToAgent: send, steerToAgent: async () => {}, abortSession: async () => {},
           getSchedulerRunSignal: (id, item) => schedulerBridge?.runSignalFor(id, item),
-          onAcceptedQueuedMessage: (id, item) => acceptQueuedInput(id, item),
+          onAcceptedQueuedMessage: async (id, item) => {
+            await acceptQueuedInput(id, item);
+            if (stopRecoveryAt === 'replacement-send-rejected' && item.clientId === clientId) {
+              coordinator.enqueue(task, {
+                ...input, clientId: 'queued-tail', text: followUp, persistedContent: followUp,
+                chatMessage: { ...input.chatMessage, clientId: 'queued-tail', content: followUp },
+                origin: { kind: 'session', senderSessionId: 'another-task', displayText: followUp },
+              });
+            }
+          },
           touchUserSend: async () => {}, createUserMessage: vi.fn(),
           isTurnRunning: () => live?.isTurnRunning() ?? false, hasPendingInteraction: () => false,
           getAgentKind: () => 'claude-code', getSdkSessionId: async () => live?.sdkSessionId,
@@ -1281,6 +1298,26 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
           expect(await sendTool(task, continuation)).toMatchObject({
             ok: true, wake_kind: 'queued', queued_message_id: clientId,
           });
+          if (stopRecoveryAt === 'replacement-send-rejected') {
+            // TURN_DISPATCH_REJECTED proves the replacement CLI never got the
+            // input: show the original quota error and run the next input.
+            await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(2), { timeout: 30_000, interval: 20 });
+            const head = await send.mock.results[0].value.catch((error: unknown) => error);
+            expect((head as Error).message).toContain('SUBSCRIPTION_ACCOUNT_LIMITED');
+            expect(persistTerminalSendError).toHaveBeenCalledWith(task, expect.stringContaining('SUBSCRIPTION_ACCOUNT_LIMITED'));
+            expect(send.mock.calls[1][3].persistUserMessage?.clientId).toBe('queued-tail');
+            await expect(send.mock.results[1].value).resolves.toMatchObject({ dispatched: true });
+            await vi.waitFor(() => expect(history.some(message => message.role === 'assistant'
+              && contentText(message.content).includes(followUpReply))).toBe(true), { timeout: 30_000, interval: 20 });
+            expect(observations.filter(request => request.body.includes(followUp)).every(request => request.nativeId !== oldNative)).toBe(true);
+            expect(fs.existsSync(remaining)).toBe(false);
+            expect(opens).toHaveLength(3);
+            expect(opens[2].groupSwitchToken).toEqual(expect.any(String));
+            expect(sends).toBe(3);
+            expect(history.filter(message => message.clientId === clientId)).toHaveLength(1);
+            expect(coordinator.getProjection(task).recovery).toBeNull();
+            return;
+          }
         } else {
           const earlier = service.trackGuestStartRecovery(task);
           try {
@@ -1481,6 +1518,11 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
   it('recovers one local send_to_session input after an idle shared run is reclaimed', { timeout: 90_000 }, async () => {
     await exercise('a', 'session-reconnect');
   });
+  // E2E (real replacement CLI): the integration matrix injects this executor
+  // fault into a fixture agent. TURN_DISPATCH_REJECTED for the replacement send
+  // proves no dispatch: show the quota error and let the next queued input run.
+  it('releases the queue when the replacement CLI rejects a local send_to_session input', { timeout: 90_000 },
+    async () => exercise('a', 'session-reconnect', { stopRecoveryAt: 'replacement-send-rejected' }));
   // #11895 / e2e: fire against an idle live Session, whose old executor
   // run is gone. Exercise runner acceptance and terminal tracking in addition
   // to the real controller, host and CLI. Disabling capture must break success.
