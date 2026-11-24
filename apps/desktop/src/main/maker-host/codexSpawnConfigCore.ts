@@ -234,6 +234,7 @@ export function createCodexSpawnConfig(ports: {
         let contextProviderModels: string[] | undefined;
         let customContextCatalogArgs: string[] = [];
         let customContextCatalogPath: string | undefined;
+        const guestModelIds = ctx.deviceHostedGuestModelIds ?? [];
         if (isCustomContext) {
           const modelId = ctx.customContextModel?.trim();
           const contextWindow = ctx.customContextWindow;
@@ -256,7 +257,8 @@ export function createCodexSpawnConfig(ports: {
               modelId,
               contextWindow,
               modelIds: contextProviderModels,
-              declareFastMode: !guestProviderId && needsOpenAiApiCodexFastDeclaration(provider, modelId),
+              declareFastMode: needsOpenAiApiCodexFastDeclaration(provider, modelId) &&
+                (!guestProviderId || (source === guestProviderId && guestModelIds.includes(modelId))),
               resolveCompactionPct: (id) => resolveModelCompactionPct(getDesktopSelectableCatalog(), 'codex', source, id),
               resolveContextWindow: (nativeModelId) => {
                 return (source ? readModelContextLimit('codex', source, nativeModelId) : null)
@@ -284,7 +286,6 @@ export function createCodexSpawnConfig(ports: {
         }
         if (guestProviderId) {
           try {
-            const guestModelIds = ctx.deviceHostedGuestModelIds ?? [];
             contextProviderModels = contextProviderModels?.filter(model => guestModelIds.includes(model));
             const guestCatalog = await prepareCodexGuestModelCatalog({
               binaryPath: ports.binaryPath, codexHome: effectiveCodexHome,

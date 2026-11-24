@@ -268,8 +268,14 @@ describe('Codex launch requires its local route', () => {
   });
 
   // #12423 unit: verify the shared Desktop/Host launch boundary propagates
-  // Fast for the selected official API connection without lending it to a relay.
-  it.each([true, false])('passes the selected route Fast declaration to the native catalog (official=%s)', async (official) => {
+  // Fast for the selected official connection, including a guest whose grant covers it.
+  it.each([
+    { official: true, expected: true },
+    { official: false, expected: false },
+    { official: true, grant: 'matching', expected: true },
+    { official: true, grant: 'different-connection', expected: false },
+    { official: true, grant: 'different-model', expected: false },
+  ])('limits the native Fast declaration to the selected route and guest grant (%j)', async ({ official, grant, expected }) => {
     const f = routeFixture();
     f.ready();
     const modelId = 'gpt-6.2-sol';
@@ -283,14 +289,21 @@ describe('Codex launch requires its local route', () => {
       getDesktopSelectableCatalog: () => ({ ...BUNDLED_CATALOG, providers: [selectedProvider] }),
       resolveDesktopModelContextProviderId: () => selectedProvider.id,
     });
-    const extraArgs = ['-c', 'model_catalog_json="fixture-catalog.json"'];
-    vi.mocked(prepareCodexCustomContextCatalog).mockResolvedValueOnce({ catalogPath: 'fixture-catalog.json', extraArgs });
+    const catalogPath = path.join(scratch, 'fixture-catalog.json');
+    const extraArgs = ['-c', 'model_catalog_json=' + JSON.stringify(catalogPath)];
+    await fs.writeFile(catalogPath, JSON.stringify({ models: [] }));
+    vi.mocked(prepareCodexCustomContextCatalog).mockResolvedValueOnce({ catalogPath, extraArgs });
     const config = await prepare([], {
       hostPurpose: 'custom-context', customContextHostKey: 'fast-fixture',
       customContextProviderId: selectedProvider.id, customContextModel: modelId, customContextWindow: 272_000,
+      ...(grant ? {
+        deviceHostedGuestProviderId: grant === 'different-connection' ? provider.id : selectedProvider.id,
+        deviceHostedGuestSessionId: 'guest-fast-fixture',
+        deviceHostedGuestModelIds: [grant === 'different-model' ? 'fixture-model' : modelId],
+      } : {}),
     });
-    expect(prepareCodexCustomContextCatalog).toHaveBeenLastCalledWith(expect.objectContaining({ modelId, declareFastMode: official }));
-    expect(config.extraArgs).toEqual(expect.arrayContaining(extraArgs));
+    expect(prepareCodexCustomContextCatalog).toHaveBeenLastCalledWith(expect.objectContaining({ modelId, declareFastMode: expected }));
+    if (!grant) expect(config.extraArgs).toEqual(expect.arrayContaining(extraArgs));
     await config.onHostRetired?.();
   });
 
