@@ -195,16 +195,26 @@ export function useRemoteBotSync(): void {
           }
         }
         const restoredDue = Date.now() >= (restoredCheckAt.get(deviceId) ?? Infinity);
+        // Within the retry entries, the ones never tried (0) come before real failures, and the
+        // oldest failure first, so a teammate that keeps stalling always waits behind the rest.
         const readOrder = [...bots.filter(bot => !delegationRetryAt.has(retryKeyOf(bot))),
-          ...bots.filter(bot => delegationRetryAt.has(retryKeyOf(bot)))];
+          ...bots.filter(bot => delegationRetryAt.has(retryKeyOf(bot)))
+            .sort((a, b) => delegationRetryAt.get(retryKeyOf(a))! - delegationRetryAt.get(retryKeyOf(b))!)];
         for (const bot of readOrder) {
           if (!current() || generations.get(deviceId) !== epoch) return;
           if (!bot.sessionId) continue;
           const old = previous.get(bot.id);
           const retryKey = retryKeyOf(bot);
-          if (!refreshTasks && ((old?.delegatedSessionIds !== undefined && old.sessionId === bot.sessionId && !delegationRetryAt.has(retryKey)
-            && !(restoredDue && restoredAttribution.has(restoredKeyOf(bot))))
-            || Math.max(delegationRetryAt.get(retryKey) ?? 0, delegationRetryAt.get(deviceId) ?? 0) > Date.now())) continue;
+          if (!refreshTasks && old?.delegatedSessionIds !== undefined && old.sessionId === bot.sessionId && !delegationRetryAt.has(retryKey)
+            && !(restoredDue && restoredAttribution.has(restoredKeyOf(bot)))) continue;
+          if (!refreshTasks && Math.max(delegationRetryAt.get(retryKey) ?? 0, delegationRetryAt.get(deviceId) ?? 0) > Date.now()) {
+            // Skipped by a backoff before any read: a changed main chat must stay unconfirmed, or the
+            // row (already carrying the new chat) would look confirmed once the pause ends.
+            if (old?.delegatedSessionIds !== undefined && old.sessionId !== bot.sessionId && !delegationRetryAt.has(retryKey)) {
+              delegationRetryAt.set(retryKey, 0);
+            }
+            continue;
+          }
           try {
             const tasks = await readLegacyDelegations(deviceId, bot.sessionId);
             if (!current() || generations.get(deviceId) !== epoch) return;

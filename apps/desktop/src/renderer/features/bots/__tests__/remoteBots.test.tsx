@@ -499,14 +499,19 @@ it('stops waiting for a stalled attribution read, pauses the host, and does not 
 
 // Unit, same rule: an older host pushes a delegation change and the forced re-read stops at A's
 // timeout. B was skipped though its cached mark may be stale; the next ordinary refresh after the
-// host pause must still read it. Minimal input: A, B known; A's second read never answers.
-it('keeps teammates skipped by a timed-out forced re-read unconfirmed for the next refresh', async () => {
+// host pause must still read it, also when that refresh only comes after A's 5-minute backoff and
+// A keeps stalling (B, never tried, goes before A's retry). Minimal input: A, B known; A stalls
+// from its second read on; one ordinary refresh 30 s or 5 minutes later.
+it.each([
+  { label: 'after the host pause', wait: 30_000, rest: ['second'] },
+  { label: 'only after the stalled teammate\'s backoff', wait: 5 * 60_000, rest: ['second', 'canonical'] },
+])('keeps teammates skipped by a timed-out forced re-read unconfirmed for the next refresh ($label)', async ({ wait, rest }) => {
   h.devices = [host('a')];
   let aReads = 0;
   let bReads = 0;
   h.invoke.mockImplementation((_device, channel, args) => {
     if (channel === REMOTE_RESOURCE_LIST_CHANNEL) return Promise.resolve(teammatesAB());
-    if (args[0] === 'canonical') return ++aReads === 2 ? new Promise(() => {}) : Promise.resolve(createdBy('canonical'));
+    if (args[0] === 'canonical') return ++aReads >= 2 ? new Promise(() => {}) : Promise.resolve(createdBy('canonical'));
     return Promise.resolve(++bReads === 1 ? createdBy('second') : { ok: true, delegations: [
       { requestingBotId: 'second-bot', childSessionId: 'second-new' }] });
   });
@@ -518,11 +523,46 @@ it('keeps teammates skipped by a timed-out forced re-read unconfirmed for the ne
     act(() => h.push({ deviceId: 'a', channel: 'maker:bot-delegation:changed' }));
     await act(async () => { await vi.advanceTimersByTimeAsync(10_500); });
     expect(taskTargets()).toEqual(['canonical', 'second', 'canonical']);
+    await act(async () => { await vi.advanceTimersByTimeAsync(wait); });
+    act(() => h.push({ deviceId: 'a', channel: REMOTE_RESOURCE_CHANGED_CHANNEL }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(taskTargets()).toEqual(['canonical', 'second', 'canonical', ...rest]);
+    expect(result.current.map(bot => bot.delegatedSessionIds)).toEqual([['canonical-child'], ['second-new']]);
+  } finally { vi.useRealTimers(); }
+});
+
+// Unit, same rule: the host is paused after A stalled, and B's main chat changes meanwhile. The
+// ordinary refresh skips B for the pause before any read; the row already pairs the new chat with
+// the old attribution, which must not count as confirmed once the pause ends. Minimal input:
+// roster B, A; A stalls; B's chat moves during the pause; one ordinary refresh after it.
+it('keeps a main chat change skipped by the host pause unconfirmed until it is read', async () => {
+  h.devices = [host('a')];
+  const rosterBA = (bChat: string) => {
+    const roster = teammatesAB();
+    roster.items.reverse();
+    roster.items[0] = { ...roster.items[0], links: [{ rel: 'conversation', target: { kind: 'session', sessionId: bChat } }] };
+    return roster;
+  };
+  let bChat = 'second';
+  h.invoke.mockImplementation((_device, channel, args) => {
+    if (channel === REMOTE_RESOURCE_LIST_CHANNEL) return Promise.resolve(rosterBA(bChat));
+    if (args[0] === 'canonical') return new Promise(() => {});
+    return Promise.resolve({ ok: true, delegations: [{ requestingBotId: 'second-bot', childSessionId: `${args[0]}-child` }] });
+  });
+  vi.useFakeTimers();
+  try {
+    const { result } = renderHook(useRoster);
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    expect(taskTargets()).toEqual(['second', 'canonical']);
+    bChat = 'moved';
+    act(() => h.push({ deviceId: 'a', channel: REMOTE_RESOURCE_CHANGED_CHANNEL }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(taskTargets()).toEqual(['second', 'canonical']);
     await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
     act(() => h.push({ deviceId: 'a', channel: REMOTE_RESOURCE_CHANGED_CHANNEL }));
     await act(async () => { await vi.advanceTimersByTimeAsync(500); });
-    expect(taskTargets()).toEqual(['canonical', 'second', 'canonical', 'second']);
-    expect(result.current.map(bot => bot.delegatedSessionIds)).toEqual([['canonical-child'], ['second-new']]);
+    expect(taskTargets()).toEqual(['second', 'canonical', 'moved']);
+    expect(result.current.find(bot => bot.id === 'second-bot')?.delegatedSessionIds).toEqual(['moved-child']);
   } finally { vi.useRealTimers(); }
 });
 
