@@ -143,7 +143,7 @@ describe('RunHistoryCard 前置检查结果', () => {
     expect(screen.queryByText('chat.unreadFailedScheduleBanner.text')).toBeNull();
   });
 
-  // #12544, unit/DOM: an immediate busy skip needs its own recovery copy.
+  // Issue 12544, unit/DOM: an immediate busy skip needs its own recovery copy.
   it('shows busy-session recovery for a prompt blocked before dispatch', () => {
     renderRun({ id: 'busy-before-dispatch', scheduleId: 'schedule-1', sessionId: 'busy-task',
       firedAt: 1, finishedAt: 2, status: 'skipped', readAt: 2,
