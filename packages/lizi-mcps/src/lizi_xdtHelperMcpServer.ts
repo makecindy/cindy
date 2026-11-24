@@ -85,6 +85,7 @@ import {
   registerRenameSessionsTool,
   registerArchiveSessionsTool,
   registerUnarchiveSessionsTool,
+  registerPinSessionsTools,
   registerSnoozeSessionsTool,
   registerSendToSessionTool,
   registerListWorkdirsTool,
@@ -111,7 +112,7 @@ import type { AppUpdateCallbacks } from './xdt-helper/app_update.js';
 import type { SkillhubAgentCallback } from './xdt-helper/skillhub.js';
 import type { SetCurrentSessionTitleDeps } from './xdt-helper/set_current_session_title.js';
 import type { RenameSessionsDeps } from './xdt-helper/rename_sessions.js';
-import type { ArchiveSessionsDeps, SnoozeSessionsDeps } from './xdt-helper/archive_sessions.js';
+import type { ArchiveSessionsDeps, PinSessionsDeps, SnoozeSessionsDeps } from './xdt-helper/archive_sessions.js';
 import { registerSessionImportTools, type SessionImportCallbacks } from './xdt-helper/session_import.js';
 import { projectMembershipNote, type SendToRemoteSessionCallback, type SendToSessionCallback } from './xdt-helper/send_to_session.js';
 import type {
@@ -214,7 +215,7 @@ export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number]
   control: [
     'list_projects(device)、create_project、get_project_info、update_project_info 支持本机及同账号跨电脑：按名称分配目录、导入 GitHub/GitLab 仓库、读写名称/图标/多个项目目录；创建与目录授权走任务权限流程。',
     '管理任务与项目：当前任务的原生共享邀请/状态（create_shared_task_invitation / get_shared_task_state）在任务宿主执行，支持手机或同账号另一台电脑控制当前任务，不接受其他任务目标；',
-    '归档/取消归档、稍后处理与取回（snooze_sessions：指定时间、无限期或立即取回）、删除（delete_session）、按消息分叉（fork_session）与检查点回退（rewind_session）支持本机与跨电脑（deviceId::sessionId），删除和回退逐次确认；',
+    '置顶/取消置顶（pin_sessions / unpin_sessions）、归档/取消归档、稍后处理与取回（snooze_sessions：指定时间、无限期或立即取回）、删除（delete_session）、按消息分叉（fork_session）与检查点回退（rewind_session）支持本机与跨电脑（deviceId::sessionId），删除和回退逐次确认；',
     '原生任务包导入（import_session）仅本机；插件按安装授权调用，Agent 运行时遵循自身权限流程；加密包与未指定目录的项目包交原生向导完成；',
     '改名、移动、标签、排队消息、插话、停止、运行设置（含权限档）、给当前任务新建托管 worktree（create_task_worktree，可指定基线分支）、项目移除（remove_project）、从其他 AI 编程工具导入任务（scan_importable_sessions / import_sessions）仅本机。',
   ].join(''),
@@ -603,6 +604,7 @@ export interface XdtHelperMcpDeps {
   sessionHistory?: SessionHistoryCallback;
   sessionShare?: SessionShareCallbacks;
   setRemoteSessionsStatus?: ArchiveSessionsDeps['setRemoteSessionsStatus'];
+  setSessionsPinned?: PinSessionsDeps['setSessionsPinned'];
   /**
    * 稍后处理 / 取回回调。host 注入后, control 类工具 snooze_sessions 会被注册;
    * 与收件箱同一写入口(snoozedUntil),host 负责校验、写库并广播 sessions:patched。
@@ -750,6 +752,12 @@ export function createXdtHelperMcpServer(
     };
     registerArchiveSessionsTool(registry, archiveDeps);
     registerUnarchiveSessionsTool(registry, archiveDeps);
+  }
+  if (deps.setSessionsPinned) {
+    registerPinSessionsTools(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      setSessionsPinned: deps.setSessionsPinned,
+    });
   }
   if (deps.setSessionsSnooze) {
     registerSnoozeSessionsTool(registry, {

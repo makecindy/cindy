@@ -9,6 +9,7 @@ import type { XdtHelperToolResult } from '../lizi_xdtHelperToolRegistry.js';
 import { registerSendToSessionTool } from '../xdt-helper/send_to_session.js';
 import {
   registerArchiveSessionsTool,
+  registerPinSessionsTools,
   registerUnarchiveSessionsTool,
   registerSnoozeSessionsTool,
   type ArchiveSessionsDeps,
@@ -50,6 +51,26 @@ function setup(opts?: { sessionId?: string; remote?: ArchiveSessionsDeps['setRem
   registerUnarchiveSessionsTool(registry, deps);
   return { registry, setSessionsStatus, sessionId };
 }
+
+// #12464, unit: mixed-device batches must fail before dispatch; a partial
+// remote receipt must retain device-qualified IDs for all three outcomes.
+it('keeps a pin batch on one computer and qualifies partial unpin receipts', async () => {
+  const registry = new XdtHelperToolRegistry();
+  const setSessionsPinned = vi.fn(async () => ({
+    ok: false as const, errorCode: 'NOT_FOUND', message: 'missing',
+    changed: [{ sessionId: 'a' }], failedSessionId: 'b', remainingSessionIds: ['c'],
+  }));
+  registerPinSessionsTools(registry, {
+    getSessionContext: () => ({ sessionId: 'a', workingDir: '/tmp', agentKind: 'codex' }), setSessionsPinned,
+  });
+  expect(parse(await registry.call('pin_sessions', { session_ids: ['a', 'other::b'] })).errorCode).toBe('INVALID_ARGS');
+  expect(setSessionsPinned).not.toHaveBeenCalled();
+  const result = parse(await registry.call('unpin_sessions', { session_ids: ['other::a', 'other::b', 'other::c'] }));
+  expect(setSessionsPinned).toHaveBeenCalledWith({ deviceId: 'other', sessionIds: ['a', 'b', 'c'], pinned: false });
+  expect(result.data).toMatchObject({
+    changed: [{ session_id: 'other::a', pinned: false }], failed_session_id: 'other::b', remaining_session_ids: ['other::c'],
+  });
+});
 
 describe('archive_sessions tool', () => {
   it('archives a batch and passes status=archived to host', async () => {
