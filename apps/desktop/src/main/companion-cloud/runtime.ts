@@ -235,6 +235,7 @@ export function startCompanionCloud(input: {
   /** A local admission delay is not a failed ownership check. Keep this
    * distinction with the transport; data sync and explicit actions keep api. */
   backgroundIdentity?: { api: CompanionApi; isDeferred: (error: unknown) => boolean };
+  backgroundMirror?: { api: CompanionApi; check: () => void };
   host: CompanionCloudHost;
   endpoint: string;
   humanActorId: string;
@@ -300,10 +301,13 @@ export function startCompanionCloud(input: {
     },
     onLostHome: () => { void input.refresh?.().catch(() => undefined); },
   });
-  const mirror = createCompanionMirror({ api: input.api, state, humanActorId: () => input.humanActorId,
+  const mirrorDeps = { state, humanActorId: () => input.humanActorId,
     canonicalSession: input.host.canonicalSession, rowsAfter: input.host.rowsAfter, latestRows: input.host.latestRows,
     ...(input.media ? { uploadMedia: input.media.upload } : {}),
-    ...(input.host.replyAttachments ? { replyAttachments: input.host.replyAttachments } : {}), ...(input.log ? { log: input.log } : {}) });
+    ...(input.host.replyAttachments ? { replyAttachments: input.host.replyAttachments } : {}), ...(input.log ? { log: input.log } : {}) };
+  const mirror = createCompanionMirror({ ...mirrorDeps, api: input.api });
+  const backgroundMirror = input.backgroundMirror
+    ? createCompanionMirror({ ...mirrorDeps, api: input.backgroundMirror.api }) : mirror;
   let disposed = false;
   const live = () => !disposed && input.current();
   const aborts = new AbortController();
@@ -398,12 +402,16 @@ export function startCompanionCloud(input: {
     for (const bot of pick(only)) {
       if (!live()) return;
       try {
+        input.backgroundMirror?.check();
         if (state.bot(bot.botId)?.pendingRebuild && input.host.materializer) {
           const sessionId = await input.host.canonicalSession(bot.botId);
           if (sessionId) await rebuildPending({ state, host: input.host.materializer, botId: bot.botId, actorId: bot.actorId, sessionId, fence });
         }
-        await mirror.syncBot(bot.botId, bot.actorId, bot.name);
-      } catch (error) { input.log?.warn('Companion conversation mirror will retry', { actorId: bot.actorId, code: errorCode(error) }); }
+        await backgroundMirror.syncBot(bot.botId, bot.actorId, bot.name);
+      } catch (error) {
+        if (input.backgroundIdentity?.isDeferred(error)) return;
+        input.log?.warn('Companion conversation mirror will retry', { actorId: bot.actorId, code: errorCode(error) });
+      }
     }
   }, input.mirrorIntervalMs ?? 15_000, 2_000);
   const unsubscribe = input.host.onLocalChange?.(botId => { mirrors.kick(botId); uploads.kick(botId); });
