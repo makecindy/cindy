@@ -224,8 +224,12 @@ it('reads the startup route from the URL, not from the sidebar declaration', () 
   // 无侧栏页面上」，不能记成无侧栏启动，否则每次普通重启都会把存档开着的侧栏挤窄。
   expect(isTasklessPageRoute('/')).toBe(false);
   expect(isTasklessPageRoute('/cc-agent')).toBe(false);
-  // 副窗也是从 /cc-agent/boot 换进真正的任务，同样不是落地。
+  // 副窗也是从 /cc-agent/boot 换进真正的任务；`/cc-agent/orca/:id` 与伙伴历史的
+  // `/bots/.../history/:id` 同样是跳向任务的网关，都不算落地。
   expect(isTasklessPageRoute('/cc-agent/boot')).toBe(false);
+  expect(isTasklessPageRoute('/cc-agent/orca/session-a')).toBe(false);
+  expect(isTasklessPageRoute('/bots/bot-a/history/session-a')).toBe(false);
+  expect(isTasklessPageRoute('/bots/remote/dev-a/bot-a/history/session-a')).toBe(false);
   expect(isTasklessPageRoute('/cc-agent/session-a')).toBe(false);
   for (const pathname of ['/settings', '/bots/roster', '/plugins', '/cc-agent/new']) {
     expect(isTasklessPageRoute(pathname)).toBe(true);

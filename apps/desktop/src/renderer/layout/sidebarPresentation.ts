@@ -54,10 +54,21 @@ export function isTaskSessionRoute(pathname: string): boolean {
 /**
  * 启动时先停在这些路径只是重定向：`/` 交给 MainEntryRedirect，`/cc-agent` 交给
  * CCAgentIndexRedirect 恢复上次的任务，副窗的 `/cc-agent/boot` 交给
- * SecondaryWindowBootGate 换成真正的任务路由。它们不是「用户落在无侧栏的页面上」，
- * 所以不能拿它们记「本次挂载先停在无侧栏路由」。
+ * SecondaryWindowBootGate，`/cc-agent/orca/:id` 与伙伴历史的 `/bots/.../history/:id`
+ * 也各自由组件换成真正的任务路由。它们不是「用户落在无侧栏的页面上」，
+ * 所以不能拿它们记「本次挂载先停在无侧栏路由」（模式见 `TRANSIENT_STARTUP_PATTERNS`）。
  */
 const TRANSIENT_STARTUP_PATHS = new Set(['/', '/cc-agent', '/cc-agent/boot']);
+
+/**
+ * 会跳到任务路由的网关：先停在这些路径上，随后由各自的组件换成 `/cc-agent/:sessionId`。
+ * 它们不是「用户落在无侧栏页面上」，所以按模式跳过，而不是逐个加进上面的集合
+ * （`/cc-agent/orca/:id` → OrcaWorkflowRoute，`/bots/.../history/:id` → BotHistorySessionView）。
+ */
+const TRANSIENT_STARTUP_PATTERNS = [
+  /^\/cc-agent\/orca\/[^/]+$/,
+  /^\/bots\/(?:[^/]+|remote\/[^/]+\/[^/]+)\/history\/[^/]+$/,
+];
 
 /**
  * 内容区当前是否停在一个确定没有任务侧栏的页面（`/settings`、`/bots`、`/plugins`、
@@ -65,6 +76,7 @@ const TRANSIENT_STARTUP_PATHS = new Set(['/', '/cc-agent', '/cc-agent/boot']);
  */
 export function isTasklessPageRoute(pathname: string): boolean {
   if (!pathname || TRANSIENT_STARTUP_PATHS.has(pathname)) return false;
+  if (TRANSIENT_STARTUP_PATTERNS.some((pattern) => pattern.test(pathname))) return false;
   return !isTaskSessionRoute(pathname);
 }
 
