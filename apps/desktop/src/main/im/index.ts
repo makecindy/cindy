@@ -661,9 +661,9 @@ async function initializeImConnection(): Promise<void> {
     log.warn(`discord sessions workspaceKind backfill failed (non-fatal): ${msg}`);
   }
   activateImAccountBoundary();
-  await im.init();
-  // 伙伴自有连接跟在设置页那份后面起; 各自失败只记日志。
-  await startBotImConnections();
+  // 设置页那份与伙伴自有连接同时起, 互不等待(两边凭证与传输层实例各自独立);
+  // 各自失败只记日志。
+  await Promise.all([im.init(), startBotImConnections()]);
 }
 
 /**

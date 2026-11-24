@@ -389,6 +389,72 @@ export async function readPiBundledModels(
 
 
 /**
+ * #12298: 订阅来源的连接态判定(供启动器接到 AgentDeps.isNativeProviderSourceConnected)。
+ *
+ * 断开的订阅仍留在会话目录里(重连后父会话可直接切换),但子代理路由不能列它:
+ * 按这些名字派发的子任务会在首次上游请求时必败(空 runId + 噪声失败通知)。
+ *
+ * 判定口径与「设置 → 模型供应商」列表一致,且是纯读(不触发绑定自愈、不写凭证文件):
+ *  · xAI 家族(内置 SuperGrok 与独立账号)读 Grok OAuth 登录态;
+ *  · Codex 家族账号读该账号自己的登录态(bridge 对非 'openai' 的 providerId 也用这一条);
+ *  · 'openai'(ChatGPT 订阅)两条凭证路径任一可用即算连接 —— 本机 Codex 登录与账号池,
+ *    bridge 实际按会话绑定的账号取凭证,只判一条会把仍可用的来源误删。
+ *
+ * 读不到结论的来源一律按「连接」处理:只在确知断开时剔除,宁可多列也不误伤可用来源。
+ *
+ * 桌面与 Node Host 各接各的凭证读数(port 注入),但判定规则共用这一份;连接态不进入
+ * provider 清单本身 —— 清单是桌面与 Host 的逐字节契约(host↔desktop parity)。
+ */
+export interface PiSubscriptionConnectionPorts {
+  /** 当前生效目录(判断来源属于哪个订阅家族)。 */
+  getActiveCatalog: () => Catalog;
+  /** SuperGrok OAuth 登录态(providerId 缺省即内置 'xai')。 */
+  hasGrokOAuthLogin: (providerId?: string) => boolean;
+  /** 独立 Codex 账号的登录态。 */
+  codexAccountState: (providerId: string) => { authenticated: boolean };
+  /** 本机 Codex(ChatGPT 订阅)登录态,纯读版。 */
+  hasCodexOAuthLoginReadOnly: () => boolean;
+  /**
+   * ChatGPT 账号池里是否还有已连接的账号。桌面有这个账号池;Node Host 的订阅账号以
+   * 独立来源出现(各自判自己的登录态),没有池可读 → 缺省即不读这一条。
+   */
+  hasConnectedSubscriptionPool?: (
+    providerId: string,
+    options?: { includeBoundAccounts?: boolean },
+  ) => boolean;
+  /** 读取结论失败时的兜底日志。 */
+  onReadFailure?: (providerId: string, error: unknown) => void;
+}
+
+export function createPiSubscriptionConnectionReader(
+  ports: PiSubscriptionConnectionPorts,
+): (providerId: string) => boolean {
+  const {
+    getActiveCatalog,
+    hasGrokOAuthLogin,
+    codexAccountState,
+    hasCodexOAuthLoginReadOnly,
+    hasConnectedSubscriptionPool,
+    onReadFailure,
+  } = ports;
+  return (providerId: string): boolean => {
+    try {
+      const account = getActiveCatalog().providers.find((provider) => provider.id === providerId);
+      const native = account?.auth.native;
+      if (native === 'xai' || providerId === 'xai') return hasGrokOAuthLogin(providerId);
+      if (native === 'codex') return codexAccountState(providerId).authenticated;
+      if (providerId === 'openai') {
+        return hasCodexOAuthLoginReadOnly()
+          || Boolean(hasConnectedSubscriptionPool?.('openai', { includeBoundAccounts: true }));
+      }
+    } catch (error) {
+      onReadFailure?.(providerId, error);
+    }
+    return true;
+  };
+}
+
+/**
  * Overlay Cindy's host-managed subscription endpoints onto PI's bundled
  * provider catalog. Resolved catalog metadata is authoritative for all subscription
  * models; the version-matched PI binary remains authoritative for native API and
