@@ -24,6 +24,8 @@ import { ensureSystemBinPathForMachineId } from './deviceId.js';
 import { configureLinuxPasswordStore } from './linuxPasswordStore.js';
 import { recognizeLinuxUserInstallation, linuxUserDesktopName } from './linuxInstallation.js';
 import { prepareCindyVersionStartup, dispatchCindyVersionStartup } from './cindy-make/versionStartup.js';
+import { mainBundleBuildId, startMainCompileCache } from './mainCompileCache.js';
+import { markStartupMilestone } from './startupTimeline.js';
 
 if (process.platform === 'linux' && app.isPackaged) {
   const installation = recognizeLinuxUserInstallation(app.getPath('exe'), os.homedir(), process.getuid?.() ?? -1);
@@ -339,6 +341,16 @@ if (!process.env.XDT_BROWSER_RUNTIME_DIR) {
 }
 refreshBrowserRuntimeConfigDir();
 
+// After the final userData and before the bootstrap chunk, which is most of the main bundle.
+const mainCompileCache = startMainCompileCache({
+  userDataDir: app.getPath('userData'),
+  buildId: mainBundleBuildId(app.getVersion(), __dirname),
+  isPackaged: app.isPackaged,
+  platform: process.platform,
+  resourcesPath: process.resourcesPath,
+  homeDir: app.getPath('home'),
+});
+
 async function dispatch(): Promise<void> {
   if (await dispatchCindyVersionStartup()) return;
   const cleanupDevInstance = await beginDesktopDevInstance(desktopDevInstanceOptions);
@@ -350,6 +362,10 @@ async function dispatch(): Promise<void> {
     startFreshProfileInLocalMode();
   }
   const mod = await import('./bootstrap-electron.js');
+  markStartupMilestone('main-code-loaded');
+  mainCompileCache.flush();
+  // A passive instance shares another instance's userData; that instance cleans up.
+  if (process.env.XDT_PASSIVE_SHARED_USER_DATA !== '1') void mainCompileCache.pruneUnused();
   await mod.bootstrapElectron();
 }
 

@@ -21,7 +21,9 @@ import {
   type DataOwnerGeneration,
 } from '@/contexts/dataOwnerGeneration';
 import { createLogger } from '@/lib/logger';
+import { invokeModelCatalog } from '@/lib/invokeModelCatalog';
 import { extractIpcError } from '@/utils/ipcError';
+import { parseModelCatalogKey } from '../../shared/controlledModelCatalog';
 import {
   PLUGIN_ENGINES_INVOKE,
   pluginEngineKeyFromProviderId,
@@ -149,8 +151,11 @@ function sameEngineViews(
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
-function isUnsupportedRemoteListError(error: unknown): boolean {
-  if (extractIpcError(error)?.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED') return true;
+function isUnsupportedRemoteListError(error: unknown, deviceId: string): boolean {
+  const code = extractIpcError(error)?.code;
+  if (code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED') return true;
+  // A task computer that cannot read plugin engines for its sources yet refuses the read itself.
+  if (code === 'INVALID_PARAMS' && parseModelCatalogKey(deviceId)) return true;
   const message = error instanceof Error ? error.message : String(error ?? '');
   return message.includes('CHANNEL_NOT_ALLOWED');
 }
@@ -227,9 +232,11 @@ function deviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCa
       if (pending) return pending;
       const readGeneration = deviceGeneration;
       const readStartedAt = Date.now();
+      const link = window.electronAPI?.deviceLink;
       const run = Promise.resolve()
-        .then(() => isDataOwnerGenerationCurrent(owner) && readGeneration === deviceGeneration
-          ? window.electronAPI?.deviceLink?.invoke(deviceId, PLUGIN_ENGINES_INVOKE.LIST, [])
+        .then(() => isDataOwnerGenerationCurrent(owner) && readGeneration === deviceGeneration && link
+          // A source read through the task computer (remote control) is keyed by modelCatalogKey.
+          ? invokeModelCatalog(link, deviceId, PLUGIN_ENGINES_INVOKE.LIST, [])
           : undefined)
         .then((reply) => {
           if (!isDataOwnerGenerationCurrent(owner) || readGeneration !== deviceGeneration || !Array.isArray(reply)) {
@@ -251,7 +258,7 @@ function deviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCa
         // Old or unreachable hosts leave the catalogue unknown or retain their last result.
         .catch((error: unknown) => {
           if (!isDataOwnerGenerationCurrent(owner) || readGeneration !== deviceGeneration) return;
-          if (isUnsupportedRemoteListError(error)) unsupported = true;
+          if (isUnsupportedRemoteListError(error, deviceId)) unsupported = true;
           else lastFailedAt = Date.now();
         })
         .finally(() => {
@@ -404,6 +411,24 @@ export function evictRemotePluginEngines(deviceId: string): void {
   existingDeviceCatalogue(getDataOwnerGeneration(), deviceId)?.evict();
 }
 
+/** Drop data and in-flight reads routed through this task computer. */
+export function evictControlledPluginEngines(taskDeviceId: string): void {
+  const catalogues = deviceCatalogues.get(getDataOwnerGeneration());
+  for (const [key, catalogue] of catalogues ?? []) {
+    if (parseModelCatalogKey(key)?.taskDeviceId === taskDeviceId) catalogue.evict();
+  }
+}
+
+/** Only active task headers reload after the host confirms which sources are still available. */
+export function refreshControlledPluginEngines(taskDeviceId: string, sourceIds: ReadonlySet<string>): void {
+  const catalogues = deviceCatalogues.get(getDataOwnerGeneration());
+  for (const [key, catalogue] of catalogues ?? []) {
+    const route = parseModelCatalogKey(key);
+    if (route?.taskDeviceId === taskDeviceId && sourceIds.has(route.agentDeviceId)
+      && catalogue.hasPrefetchSubscribers()) catalogue.ensureLoaded();
+  }
+}
+
 function unreadSnapshot(): null {
   return null;
 }
@@ -450,7 +475,7 @@ const pickerReadAt = new WeakMap<DeviceCatalogue, number>();
  * DEVICE_PLUGIN_ENGINES_REREAD_MS; a computer keeps its last answer in between.
  * `null` = that computer has not answered yet (or could not be reached).
  */
-export function useDevicesPluginEngines(deviceIds: readonly string[]): {
+export function useDevicesPluginEngines(deviceIds: readonly string[], prefetchOnReconnect = false): {
   catalogues: ReadonlyMap<string, readonly PluginEngineView[] | null>;
   read: (deviceId?: string) => void;
 } {
@@ -471,12 +496,12 @@ export function useDevicesPluginEngines(deviceIds: readonly string[]): {
     }
   }, [sources]);
   const subscribe = useCallback((listener: () => void) => {
-    // Picker candidates share cache updates and read on demand, without causing reconnect prefetch.
-    const offs = sources.map((source) => source.catalogue.subscribe(listener, false));
+    // Picker candidates read on demand. A visible settings list can also recover on reconnect.
+    const offs = sources.map((source) => source.catalogue.subscribe(listener, prefetchOnReconnect));
     return () => {
       for (const off of offs) off();
     };
-  }, [sources]);
+  }, [sources, prefetchOnReconnect]);
   // One map per distinct set of answers, so consumers re-render only when a computer's list changed.
   const cache = useRef<{
     sources: typeof sources;

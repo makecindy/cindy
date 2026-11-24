@@ -3,6 +3,7 @@ import { PI_NATIVE_PROVIDER_ADAPTER_SOURCE } from './native-provider-adapter-sou
 import { PI_NATIVE_TOOL_CATALOG_SOURCE } from './native-tool-catalog-source.js';
 import { MAX_JSONL_BUFFER_CHARS } from './rpc-limits.js';
 import { assertToolLifecycleBudget } from '../shared/tool-lifecycle.js';
+import { PERMISSION_CONFIRMATION_TIMEOUT_GUIDANCE } from '../shared/auto-review-decision.js';
 /**
  * cindy-bridge —— 写进 pi agentHome/extensions/ 的扩展源码(字符串常量)。
  *
@@ -38,7 +39,9 @@ import {
 } from "../shared/sensitive-credential-paths.js";
 import { projectPiPackageCommandDiagnostic, projectPiManagedCommandFailure } from "../base-agent.js";
 import { shellInputRedirectionParserSource } from "../shared/shell-input-redirections.js";
+import { PI_SUBAGENT_TOOL_NAME } from "@cindy/maker-shared/agent-task";
 import { CINDY_SUBAGENT_TOOL_NAME } from "./cindy-subagent-source.js";
+import { PI_NATIVE_SUBAGENT_CALL_ENTRY } from "./session-tree.js";
 
 const SHELL_INPUT_REDIRECTION_PARSER_SOURCE = shellInputRedirectionParserSource();
 const CREDENTIAL_WORD_BOUNDARY = '\u0001';
@@ -159,6 +162,7 @@ const TURN_CHANGE_CAPTURE_TITLE = 'cindy:turn-change-capture';
 const PERMISSION_ALLOW = 'allow';
 const PERMISSION_USER_DENY = 'user-deny';
 const PERMISSION_AUTO_REVIEW_DENY = 'auto-review-deny';
+const PERMISSION_CONFIRMATION_TIMEOUT_GUIDANCE = ${JSON.stringify(PERMISSION_CONFIRMATION_TIMEOUT_GUIDANCE)};
 function permissionDenialReason(decision: string | undefined): string {
   const source = decision?.split(':', 1)[0];
   const label = source === PERMISSION_AUTO_REVIEW_DENY ? 'Cindy Auto-review denied this tool call'
@@ -166,6 +170,10 @@ function permissionDenialReason(decision: string | undefined): string {
       : 'Cindy could not approve this tool call';
   const known = source === PERMISSION_AUTO_REVIEW_DENY || source === PERMISSION_USER_DENY || source === 'system-deny';
   const detail = known && decision?.includes(':') ? decision.slice(decision.indexOf(':') + 1).trim().slice(0, 240) : '';
+  // Same wording as formatPermissionDenial: a confirmation nobody answered is not the user saying no.
+  if (source === 'system-deny' && (detail === 'timeout' || detail.endsWith('_timeout'))) {
+    return label + ' (' + detail + '). ' + PERMISSION_CONFIRMATION_TIMEOUT_GUIDANCE;
+  }
   return detail ? label + ': ' + detail : label + '.';
 }
 const READONLY_BUILTINS = new Set(['read', 'grep', 'find', 'ls']);
@@ -3894,10 +3902,10 @@ class CindyMcpGateway {
         reason: unavailableReason,
         availableServers: this.availableServers(),
       };
-    } else if (serverName && toolName) {
-      const selected = canonicalServerName && this.botMemoryFacadeEnabled && canonicalServerName === 'cindy_memory'
+    } else if (canonicalServerName && toolName) {
+      const selected = this.botMemoryFacadeEnabled && canonicalServerName === 'cindy_memory'
         ? undefined
-        : canonicalServerName ? this.tools.get(mcpGatewayKey(canonicalServerName, toolName)) : undefined;
+        : this.tools.get(mcpGatewayKey(canonicalServerName, toolName));
       if (!selected) {
         payload = {
           ok: false,
@@ -3941,7 +3949,9 @@ class CindyMcpGateway {
         offset,
         ...(offset + page.length < matches.length ? { nextOffset: offset + page.length } : {}),
         availableServers: this.availableServers(),
-        hint: 'Use query or server to narrow results; follow nextOffset for more. Inspect an exact server and tool for the complete description and input schema.',
+        hint: query && matches.length === 0 && tools.length > 0
+          ? 'No tools matched the query. Omit query or try a shorter keyword and start at offset 0. Browse by a known server, or pass exact server and tool to inspect its schema.'
+          : 'Use query or server to narrow results; follow nextOffset for more. Inspect an exact server and tool for the complete description and input schema.',
         ...(unavailableServers.length > 0 ? { unavailableServers } : {}),
       };
     }
@@ -5522,6 +5532,17 @@ export default async function cindyBridge(piApi: any) {
       // 缩小等待确认期间替换原始 link 的竞态面。这不是 descriptor / inode 绑定；
       // 同 UID 并发替换 canonical 路径仍需未来由 OS 级 no-follow 写入能力解决。
       event.input.path = writeTargetResolved;
+    }
+  });
+
+  // Store the provenance alongside the native call. Its name and result remain
+  // owned by the extension, and the custom entry stays out of model context.
+  pi.on('tool_result', (event: any) => {
+    if (event.toolName !== ${JSON.stringify(PI_SUBAGENT_TOOL_NAME)} || typeof event.toolCallId !== 'string') return;
+    try {
+      pi.appendEntry(${JSON.stringify(PI_NATIVE_SUBAGENT_CALL_ENTRY)}, { toolCallId: event.toolCallId });
+    } catch {
+      // History presentation must not fail a tool result.
     }
   });
 

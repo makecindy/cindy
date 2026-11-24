@@ -17,12 +17,17 @@
  *   对端一直重发（总有数据进来）而本机发往它的请求 60 秒内超时两次；本机只被控、请求一直进得来，自己发出的结果在
  *   中转连接上 5 秒里重传 10 个分片、占发出包数一半（审查 P1：只切控制端，被控端仍沿坏掉的上行回结果）；
  *   一条发过 1000 包、重传过 400 个分片的长期直连切到中转（审查 P2：生命周期累计不该算成最近 5 秒的中转重传）。
+ *   2026-11-22 真机（Surge/Clash Fake-IP 透明网关）：系统 DNS 与普通 UDP/53 都把 `agent-net-stun.cindy.com.cn` 解析到
+ *   `198.18.0.0/15`，STUN 走 Fake-IP 分配的外部端口与真实 IP 探测对端的 NAT 端口不同，对端在端口受限锥形 NAT 后无法直连。
+ *   最小失败输入：`systemLookup` 返回 `198.18.38.213`，`resolveUdpHost` / `StunClient` 须改走真实 IP（拿不到再回退）。
  * - tier：unit；本机约 130 毫秒（假计时器）。
  */
 import { afterEach, expect, it, vi } from 'vitest';
 import { encodeUdpDown, encodeUdpRegisterAck, verifyUdpRegister, verifyUdpUp, type UdpRelayCredentials } from '@cindy/agent-net-relay';
 import { UDP_RELAY_DOWN, UDP_RELAY_REGISTER_ACK, udpRelayPeerHash } from '@cindy/agent-net-relay/client';
 import { RELAY_UDP_DATA_COOLDOWNS_MS, RelaySendCounters, RelayUdpPath, type RelayUdpOptions } from '../relayUdp.js';
+import { StunClient, isFakeIp, parseDohIpv4, resolveUdpHost } from '../stun.js';
+import { AUTO_SWITCH_COOLDOWN_MS, decideAutoPreferRelay } from '../transport.js';
 
 const paths: RelayUdpPath[] = [];
 afterEach(() => { for (const path of paths.splice(0)) path.close(); vi.useRealTimers(); });
@@ -40,9 +45,9 @@ function open(credentials: UdpRelayCredentials, options: Partial<RelayUdpOptions
     ...options,
   });
   paths.push(path);
-  const registrations = () => sent.map((packet, i) => {
+  const registrations = (from = 0) => sent.slice(from).map((packet, i) => {
     const registration = verifyUdpRegister(packet, credentials.key);
-    return registration && { ...registration, at: sentAt[i] };
+    return registration && { ...registration, at: sentAt[from + i] };
   }).filter((r) => r !== null);
   return { path, sent, registrations };
 }
@@ -205,11 +210,12 @@ async function upWithAckingRelay(fill: number, options: Partial<RelayUdpOptions>
   fakeTimers();
   const credentials = { session: new Uint8Array(8).fill(fill), key: new Uint8Array(32).fill(fill + 1) };
   const opened = open(credentials, options);
-  let acked = 0n;
+  let inspectedPackets = 0;
   const ackAll = () => {
-    for (const r of opened.registrations()) {
-      if (r.counter <= acked) continue;
-      acked = r.counter;
+    // Only decode new packets. A simulated cooldown can span thousands of timer steps.
+    const pending = opened.registrations(inspectedPackets);
+    inspectedPackets = opened.sent.length;
+    for (const r of pending) {
       opened.path.intercept(encodeUdpRegisterAck(credentials, r.counter, true, COOKIE));
     }
   };
@@ -227,7 +233,7 @@ function resendUnanswered(path: RelayUdpPath, step: (ms: number) => void) {
 }
 
 it('leaves relay UDP when registrations are acked but no data comes back, tells the relay, and retries after a growing cooldown', async () => {
-  const { path, registrations, step, reply } = await upWithAckingRelay(3);
+  const { path, registrations, step } = await upWithAckingRelay(3);
   resendUnanswered(path, step);
   // Checked on the 1 s tick: a 4 s silence is acted on within 5 s of the first unanswered send.
   step(2_000);
@@ -248,15 +254,6 @@ it('leaves relay UDP when registrations are acked but no data comes back, tells 
   resendUnanswered(path, step);
   step(2_000);
   expect(path.suspension?.cooldownMs).toBe(RELAY_UDP_DATA_COOLDOWNS_MS[1]);
-
-  // Once data does arrive over UDP, a later failure starts from the first cooldown again.
-  step(RELAY_UDP_DATA_COOLDOWNS_MS[1]);
-  expect(path.send('member', new Uint8Array(100))).toBe(true);
-  reply();
-  expect(path.send('member', new Uint8Array(100))).toBe(true);
-  resendUnanswered(path, step);
-  step(2_000);
-  expect(path.suspension?.cooldownMs).toBe(RELAY_UDP_DATA_COOLDOWNS_MS[0]);
 });
 
 it('stays on relay UDP for an unanswered pure ACK, and while replies keep arriving over UDP or the WebSocket', async () => {
@@ -298,8 +295,10 @@ it('leaves relay UDP after two session request timeouts within a minute even whi
   expect(path.suspension?.cooldownMs).toBe(RELAY_UDP_DATA_COOLDOWNS_MS[0]);
 });
 
-it('leaves relay UDP when its own relayed sends go unacknowledged, even as a controlled host that only receives requests', async () => {
-  const counters = { retransmitted: 0, sent: 0 };
+// Unit regression: a peer can keep sending UDP data while every upload times out. Exercise the
+// second outage and recovery through the relay path; checking just the first fallback misses the loop.
+it('backs off repeated uplink loss despite incoming UDP, then resets after sustained acknowledged traffic', async () => {
+  const counters = { retransmitted: 0, sent: 0, acknowledgedBytes: 0 };
   const { path, registrations, step, reply } = await upWithAckingRelay(9, { relayedSendCounters: () => ({ ...counters }) });
   // Requests keep arriving (so the silence check stays clear) and this side never sends a request of its own.
   const receiving = (retransmitted: number, sent: number) => {
@@ -320,22 +319,152 @@ it('leaves relay UDP when its own relayed sends go unacknowledged, even as a con
   expect(path.send('member', new Uint8Array(100))).toBe(false);
   expect(path.suspension).toEqual({ reason: 'unacked-sends', cooldownMs: RELAY_UDP_DATA_COOLDOWNS_MS[0] });
   expect(registrations().at(-1)!.receiving).toBe(false);
+
+  // A late UDP datagram and work completed on the fallback WebSocket cannot bless the next UDP attempt.
+  reply();
+  counters.acknowledgedBytes += 32_000;
+  step(RELAY_UDP_DATA_COOLDOWNS_MS[0]);
+  expect(path.send('member', new Uint8Array(100))).toBe(true);
+  // Registration works and the peer keeps sending for longer than the recovery window,
+  // but only one old acknowledgement makes it through.
+  for (let i = 0; i < 12; i++) receiving(0, 1);
+  counters.acknowledgedBytes += 100;
+  receiving(0, 1);
+  receiving(2, 4);
+  expect(path.suspension).toEqual({ reason: 'unacked-sends', cooldownMs: RELAY_UDP_DATA_COOLDOWNS_MS[1] });
+  expect(path.send('member', new Uint8Array(100))).toBe(false);
+
+  const exchangeAcknowledgedTraffic = (seconds: number) => {
+    for (let i = 0; i < seconds; i++) {
+      expect(path.send('member', new Uint8Array(1_350))).toBe(true);
+      counters.sent++;
+      counters.acknowledgedBytes += 1_350;
+      reply();
+      step(1_000);
+    }
+  };
+
+  // One healthy window isn't enough. Thirty seconds of confirmed traffic
+  // followed by another outage must still advance to the longest cooldown.
+  step(RELAY_UDP_DATA_COOLDOWNS_MS[1]);
+  exchangeAcknowledgedTraffic(30);
+  receiving(2, 4);
+  expect(path.suspension).toEqual({ reason: 'unacked-sends', cooldownMs: RELAY_UDP_DATA_COOLDOWNS_MS[2] });
+
+  step(RELAY_UDP_DATA_COOLDOWNS_MS[2]);
+  exchangeAcknowledgedTraffic(70);
+  receiving(2, 4);
+  expect(path.suspension).toEqual({ reason: 'unacked-sends', cooldownMs: RELAY_UDP_DATA_COOLDOWNS_MS[0] });
 });
 
 it('counts only the growth a connection made while it stayed on the relay, not its history from a direct path', () => {
   const counters = new RelaySendCounters();
   const relayed = {}, direct = {};
   // The core's per-connection stats are lifetime totals and survive a path change.
-  expect(counters.sample([{ key: relayed, relay: true, retransmitted: 3, sent: 100 }, { key: direct, relay: false, retransmitted: 400, sent: 1_000 }]))
-    .toEqual({ retransmitted: 0, sent: 0 });
-  expect(counters.sample([{ key: relayed, relay: true, retransmitted: 4, sent: 120 }, { key: direct, relay: false, retransmitted: 410, sent: 1_050 }]))
-    .toEqual({ retransmitted: 1, sent: 20 });
+  const onRelay = { key: relayed, relay: true, retransmitted: 3, sent: 100, acknowledgedBytes: 800 };
+  const offRelay = { key: direct, relay: false, retransmitted: 400, sent: 1_000, acknowledgedBytes: 4_000 };
+  expect(counters.sample([onRelay, offRelay])).toEqual({ retransmitted: 0, sent: 0, acknowledgedBytes: 0 });
+  expect(counters.sample([
+    { ...onRelay, retransmitted: 4, sent: 120, acknowledgedBytes: 850 },
+    { ...offRelay, retransmitted: 410, sent: 1_050, acknowledgedBytes: 5_000 },
+  ])).toEqual({ retransmitted: 1, sent: 20, acknowledgedBytes: 50 });
   // The long-lived direct connection falls back to the relay: its 400+ past resends must not land in the window.
-  expect(counters.sample([{ key: relayed, relay: true, retransmitted: 4, sent: 140 }, { key: direct, relay: true, retransmitted: 410, sent: 1_060 }]))
-    .toEqual({ retransmitted: 1, sent: 40 });
+  const switched = { ...offRelay, relay: true, retransmitted: 410, sent: 1_060, acknowledgedBytes: 5_100 };
+  const steady = { ...onRelay, retransmitted: 4, sent: 140, acknowledgedBytes: 850 };
+  expect(counters.sample([steady, switched])).toEqual({ retransmitted: 1, sent: 40, acknowledgedBytes: 50 });
   // From then on its growth on the relay counts; once it leaves the relay it stops counting.
-  expect(counters.sample([{ key: relayed, relay: true, retransmitted: 4, sent: 160 }, { key: direct, relay: true, retransmitted: 418, sent: 1_070 }]))
-    .toEqual({ retransmitted: 9, sent: 70 });
-  expect(counters.sample([{ key: relayed, relay: true, retransmitted: 4, sent: 180 }, { key: direct, relay: false, retransmitted: 500, sent: 1_200 }]))
-    .toEqual({ retransmitted: 9, sent: 90 });
+  expect(counters.sample([{ ...steady, sent: 160 }, { ...switched, retransmitted: 418, sent: 1_070, acknowledgedBytes: 5_140 }]))
+    .toEqual({ retransmitted: 9, sent: 70, acknowledgedBytes: 90 });
+  expect(counters.sample([{ ...steady, sent: 180 }, { ...switched, relay: false, retransmitted: 500, sent: 1_200, acknowledgedBytes: 8_000 }]))
+    .toEqual({ retransmitted: 9, sent: 90, acknowledgedBytes: 90 });
+});
+
+it('detects RFC 2544 Fake-IP addresses and parses real IPv4 answers from DoH JSON', () => {
+  expect([
+    isFakeIp('198.18.0.1'),
+    isFakeIp('198.18.38.213'),
+    isFakeIp('198.19.255.254'),
+    isFakeIp('198.17.255.255'),
+    isFakeIp('198.20.0.1'),
+    isFakeIp('106.15.77.85'),
+    isFakeIp('not-an-ip'),
+  ]).toEqual([true, true, true, false, false, false, false]);
+
+  expect(parseDohIpv4(JSON.stringify({
+    Status: 0,
+    Answer: [
+      { type: 5, data: 'nlb.example.test.' },
+      { type: 1, data: '198.18.0.2' },
+      { type: 1, data: '106.15.77.85' },
+      { type: 1, data: '47.102.146.103' },
+    ],
+  }))).toBe('106.15.77.85');
+  expect(parseDohIpv4(JSON.stringify({ Status: 3, Answer: [{ type: 1, data: '106.15.77.85' }] }))).toBeNull();
+  expect(parseDohIpv4('{bad-json')).toBeNull();
+});
+
+it('bypasses Fake-IP via real-IP lookup, deduplicates concurrent lookups, and falls back when unavailable', async () => {
+  const resolveReal = vi.fn(async () => '47.102.146.103');
+  const systemLookup = vi.fn(async () => '106.15.77.85');
+  // IPv4 literal and normal DNS answers never touch the DoH path.
+  expect(await resolveUdpHost('106.15.77.85', { systemLookup, resolveReal })).toBe('106.15.77.85');
+  expect(systemLookup).not.toHaveBeenCalled();
+  expect(await resolveUdpHost('stun.example.test', { systemLookup, resolveReal })).toBe('106.15.77.85');
+  expect(resolveReal).not.toHaveBeenCalled();
+
+  // Fake-IP triggers real-IP lookup, shared between concurrent STUN + relay UDP calls for the same host.
+  let release!: (ip: string | null) => void;
+  const concurrentReal = vi.fn(() => new Promise<string | null>((resolve) => { release = resolve; }));
+  const fakeLookup = async () => '198.18.38.213';
+  const a = resolveUdpHost('agent-net-stun.example.test', { systemLookup: fakeLookup, resolveReal: concurrentReal });
+  const b = resolveUdpHost('agent-net-stun.example.test', { systemLookup: fakeLookup, resolveReal: concurrentReal });
+  await vi.waitFor(() => expect(concurrentReal).toHaveBeenCalledTimes(1));
+  release('47.102.146.103');
+  expect(await Promise.all([a, b])).toEqual(['47.102.146.103', '47.102.146.103']);
+
+  // Unreachable DoH or a Fake-IP answer falls back to the system result without breaking private relays.
+  expect(await resolveUdpHost('private.lan', { systemLookup: fakeLookup, resolveReal: async () => null })).toBe('198.18.38.213');
+  expect(await resolveUdpHost('private.lan', { systemLookup: fakeLookup, resolveReal: async () => '198.19.1.2' })).toBe('198.18.38.213');
+});
+
+it('sends STUN binding requests to the resolved real IP instead of a Fake-IP and parses XOR-MAPPED-ADDRESS', async () => {
+  const sentTo: Array<{ address: string; port: number }> = [];
+  let client!: StunClient;
+  client = new StunClient((to, datagram) => {
+    sentTo.push(to);
+    // Reply with a minimal RFC 5389 Binding Success carrying XOR-MAPPED-ADDRESS = 114.86.77.98:18024.
+    const reply = Buffer.alloc(32);
+    reply.writeUInt16BE(0x0101, 0);
+    reply.writeUInt16BE(12, 2);
+    reply.writeUInt32BE(0x2112a442, 4);
+    Buffer.from(datagram.buffer, datagram.byteOffset + 8, 12).copy(reply, 8);
+    reply.writeUInt16BE(0x0020, 20);
+    reply.writeUInt16BE(8, 22);
+    reply[25] = 0x01;
+    reply.writeUInt16BE(18024 ^ 0x2112, 26);
+    reply.writeUInt32BE(((114 << 24) | (86 << 16) | (77 << 8) | 98) >>> 0 ^ 0x2112a442, 28);
+    queueMicrotask(() => client.intercept(reply));
+  }, (host) => resolveUdpHost(host, {
+    systemLookup: async () => '198.18.38.213',
+    resolveReal: async () => '106.15.77.85',
+  }));
+
+  const mapped = await client.query('agent-net-stun.example.test:3479');
+  expect(sentTo).toEqual([{ address: '106.15.77.85', port: 3479 }]);
+  expect(mapped).toEqual({ address: '114.86.77.98', port: 18024 });
+  client.close();
+});
+
+// 2026-11-22 真机跨国直连（上海电信 163 ↔ 新加坡 StarHub 220ms vs 阿里云上海中转 86ms）：
+// 自动选路只在直连明显慢于中转（>1.5x 且慢 >=40ms）时选中转，并用滞回+冷却防止来回抖动。tier: unit。
+it('selects relay in auto mode only when direct is significantly slower, with hysteresis and cooldown', () => {
+  expect(decideAutoPreferRelay({ currentPreferRelay: false, directRttMs: 220, relayRttMs: null, msSinceLastSwitch: Infinity })).toBe(false);
+  expect(decideAutoPreferRelay({ currentPreferRelay: true, directRttMs: null, relayRttMs: 86, msSinceLastSwitch: Infinity })).toBe(true);
+  expect(decideAutoPreferRelay({ currentPreferRelay: false, directRttMs: 25, relayRttMs: 15, msSinceLastSwitch: Infinity })).toBe(false);
+  expect(decideAutoPreferRelay({ currentPreferRelay: false, directRttMs: 95, relayRttMs: 86, msSinceLastSwitch: Infinity })).toBe(false);
+  expect(decideAutoPreferRelay({ currentPreferRelay: false, directRttMs: 120, relayRttMs: 86, msSinceLastSwitch: Infinity })).toBe(false);
+  expect(decideAutoPreferRelay({ currentPreferRelay: false, directRttMs: 220, relayRttMs: 86, msSinceLastSwitch: Infinity })).toBe(true);
+  expect(decideAutoPreferRelay({ currentPreferRelay: true, directRttMs: 60, relayRttMs: 86, msSinceLastSwitch: AUTO_SWITCH_COOLDOWN_MS - 1 })).toBe(true);
+  expect(decideAutoPreferRelay({ currentPreferRelay: true, directRttMs: 140, relayRttMs: 86, msSinceLastSwitch: AUTO_SWITCH_COOLDOWN_MS })).toBe(true);
+  expect(decideAutoPreferRelay({ currentPreferRelay: true, directRttMs: 105, relayRttMs: 86, msSinceLastSwitch: AUTO_SWITCH_COOLDOWN_MS })).toBe(false);
 });

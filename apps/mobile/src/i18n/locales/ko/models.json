@@ -118,7 +118,10 @@
       "expiring": "곧 만료되는 것 먼저",
       "order": "순서대로",
       "rotate": "번갈아",
-      "cheapest": "가장 저렴하게"
+      "cheapest": "가장 저렴하게",
+      "drain": "다 쓰고 다음으로",
+      "headroom": "남은 양이 많은 순",
+      "weighted": "가중치"
     },
     "sourceOnDevice": "{{provider}} · {{device}}",
     "why": {
@@ -131,6 +134,11 @@
       "soonestUntil": "모든 소스의 할당량을 다 썼습니다. 이 소스가 가장 먼저 회복됩니다({{reset}})",
       "cheapest": "표시 가격이 가장 낮음",
       "cheapestFree": "구독 할당량이 남아 추가 비용 없음",
+      "drain": "할당량이 다 떨어질 때까지 계속 사용",
+      "drainNext": "이전 소스를 다 썼거나 쓸 수 없어 이 소스로 바꿈",
+      "headroom": "남은 할당량이 가장 많음",
+      "headroomQuota": "할당량이 {{left}}% 남아 다른 어떤 소스보다 많음",
+      "weighted": "가중치에 따라 이번 차례",
       "exceptionImage": "메시지에 이미지가 있어 이미지를 볼 수 있는 소스 중에서 선택",
       "exceptionImageFallback": "메시지에 이미지가 있지만 이미지를 볼 수 있는 소스가 없어 평소대로 선택",
       "exceptionHours": "이 시간대에는 '{{name}}' 사용",

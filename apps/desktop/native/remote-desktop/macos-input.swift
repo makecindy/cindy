@@ -965,8 +965,13 @@ func handoffDetectQr(_ data: Data) -> [[String: Any]] {
 }
 
 #if !DESKTOP_INPUT_TEST
+// AX may be scoped to a single app on macOS 27.3. Desktop input posts CGEvents.
+func desktopInputAuthorized() -> Bool {
+  AXIsProcessTrusted() && CGPreflightPostEventAccess()
+}
 if CommandLine.arguments.contains("--check") {
-  print(AXIsProcessTrusted() ? "ready" : "permission"); exit(0)
+  let granted = CommandLine.arguments.contains("--post-events") ? desktopInputAuthorized() : AXIsProcessTrusted()
+  print(granted ? "ready" : "permission"); exit(0)
 }
 if CommandLine.arguments == [CommandLine.arguments[0], "--handoff-qr"] {
   // One photographed window (JPEG) on stdin: its byte length on a line, then the bytes. Main keeps
@@ -1003,7 +1008,10 @@ if CommandLine.arguments.contains("--lock-state") {
 }
 if CommandLine.arguments.contains("--request-permission") {
   let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-  print(AXIsProcessTrustedWithOptions(options) ? "ready" : "permission"); exit(0)
+  // Request only the next missing capability on this explicit local action.
+  guard AXIsProcessTrustedWithOptions(options) else { print("permission"); exit(0) }
+  let granted = !CommandLine.arguments.contains("--post-events") || CGPreflightPostEventAccess() || CGRequestPostEventAccess()
+  print(granted ? "ready" : "permission"); exit(0)
 }
 func ownedConsoleSession() -> [String: Any]? {
   guard let state = CGSessionCopyCurrentDictionary() as? [String: Any],
@@ -1312,13 +1320,15 @@ if CommandLine.arguments.count == 4 && CommandLine.arguments[1] == "--window" {
     let pid = Int32(CommandLine.arguments[3]), pid > 0 else { exit(2) }
   confine = HandoffConfine(window: window, pid: pid)
 }
+// Other entrypoints above (e.g. reading a selection) do not post global events.
+guard CGPreflightPostEventAccess() else { print("permission"); fflush(stdout); exit(2) }
 print("ready"); fflush(stdout)
 let watchdog = DispatchSource.makeTimerSource(queue: .global())
 watchdog.schedule(deadline: .now() + 1, repeating: 1)
 watchdog.setEventHandler {
   lock.lock(); defer { lock.unlock() }
   if inputCaller.code() == nil { releaseAll(); exit(77) }
-  if !AXIsProcessTrusted() { releaseAll(); print("error"); fflush(stdout); exit(2) }
+  if !desktopInputAuthorized() { releaseAll(); print("error"); fflush(stdout); exit(2) }
   if Date().timeIntervalSince(lastSeen) > 5 { releaseAll() }
 }
 watchdog.resume()

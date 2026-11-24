@@ -101,6 +101,7 @@ import { rewriteToRemoteMediaOrigin, type RemoteMediaOrigin } from '../../../sha
 import { useChatSessionFile } from './ChatSessionFileContext';
 import { toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import { toast } from '@/lib/toast';
+import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 import { shouldOpenTextLightboxForOrigin } from '@/lib/filePreview';
 import { isRemoteFileOrigin, type SessionFileOrigin } from '@/lib/sessionFileOrigin';
 import {
@@ -315,8 +316,23 @@ const MARKDOWN_LINK_CLASS = 'underline underline-offset-2 cursor-pointer [overfl
  *
  * 移动端**刻意不同形态**(零底色 + 文字压暗):那边聊天流是 RN 嵌套 Text,不认
  * borderRadius,淡底只能是直角方块。这里是 CSS,按 GitHub 原样实现。
+ *
+ * 折行(#11312):行内 code 默认 `white-space: normal`,有空格时本来就会断行;但**无空格
+ * 的超长 token**(长路径、长类名、base64 片段)没有任何断点,会把气泡顶宽、溢出气泡
+ * 边界(见 issue 截图里的 `JudgeAttributeField.tsx` 一行)。折行 class 单独放在
+ * `INLINE_CODE_WRAP_CLASS`,在两条生产 `<code>` 路径上与几何常量一并套用,允许在
+ * 任意字符间断行,与 MARKDOWN_LINK_CLASS 的既有做法一致;`overflow-wrap` 可继承,
+ * 但链接、行内 code 各自声明一份,不依赖外层容器。几何字面量保持原样,避免改动
+ * 既有 `rounded-[6px]` 行被设计门禁当成新增 off-scale radius,也避免拆行破坏
+ * markdownFencedCodeInline 对 `INLINE_CODE_CLASS` 的常量提取。
+ *
+ * 不用 `text-ellipsis`/`truncate` 而是让它折行:行内 code 是路径、标识符这类
+ * **逐字符都有意义**的内容,中段省略会截掉用户真正要看的部分(哪个文件、哪个字段),
+ * 而折行后全文仍在,复制也不受影响。气泡自身的 `max-w` 已经限住上限,无需再写
+ * `max-w-full`——它用在 inline 元素上本就不生效。
  */
 const INLINE_CODE_CLASS = 'font-mono text-14 rounded-[6px] px-[0.4em] py-[0.2em] bg-[var(--msg-md-inline-code-bg)]';
+const INLINE_CODE_WRAP_CLASS = '[overflow-wrap:anywhere]';
 
 const WINDOWS_ABSOLUTE_HREF_RE = /^[A-Za-z]:[\\/]/;
 
@@ -903,12 +919,14 @@ function LightboxImage({
   alt,
   onZoom,
   streaming = false,
+  allowLocalFileOpen = false,
   ...props
 }: {
   src?: string;
   alt?: string;
   onZoom: (src: string) => void;
   streaming?: boolean;
+  allowLocalFileOpen?: boolean;
   [key: string]: unknown;
 }) {
   const { t } = useTranslation();
@@ -919,6 +937,14 @@ function LightboxImage({
 
   const { canCopy, canReveal: canRevealInFolder, copyImage, revealImage } = useImageClipboard(src ?? '');
   const showMenu = canCopy || canRevealInFolder;
+
+  async function openLocalImage(url: string): Promise<void> {
+    try {
+      await window.electronAPI.openMediaWithDefaultApp({ url });
+    } catch (error) {
+      toast.error(t(mapIpcErrorToI18nKey(error, { fallback: 'chat.media.openWithAppFailed' })));
+    }
+  }
 
   // image-local-cache F4: when the underlying file is missing (cache cleared,
   // xdt-image:// 404, etc.), swap to the friendly placeholder card. The
@@ -931,6 +957,9 @@ function LightboxImage({
         filename={alt || fallbackName}
         status={imageStatus}
         onRetry={canRetry ? retry : undefined}
+        onOpen={allowLocalFileOpen && src?.startsWith('xdt-file://')
+          ? () => void openLocalImage(src)
+          : undefined}
       />
     );
   }
@@ -1790,7 +1819,7 @@ function InlineCodeWithTarget({
   // inline <code> — same as before the markdown-target system existed.
   if (target.kind !== 'resolved-local') {
     return (
-      <code className={cn(INLINE_CODE_CLASS)} {...props}>
+      <code className={cn(INLINE_CODE_CLASS, INLINE_CODE_WRAP_CLASS)} {...props}>
         {children}
       </code>
     );
@@ -1957,6 +1986,7 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
                   alt={alt}
                   onZoom={setLightboxSrc}
                   {...imageProps}
+                  allowLocalFileOpen={resolveMediaInWorkspace && !mediaOrigin}
                 />
               );
             }}
@@ -1988,7 +2018,7 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
         const safeProps = omitMarkdownInternalProps(props as Record<string, unknown>);
         if (!allowPrivilegedLinks) {
           return (
-            <code className={cn(INLINE_CODE_CLASS)} {...safeProps}>
+            <code className={cn(INLINE_CODE_CLASS, INLINE_CODE_WRAP_CLASS)} {...safeProps}>
               {children}
             </code>
           );
