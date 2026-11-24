@@ -191,9 +191,10 @@ function emit(channel: string, payload: unknown): void {
   }
 }
 
-function notifyControlledModelCatalogChanged(): void {
-  emit(CONTROLLED_MODEL_CATALOG_CHANGED, {});
-  tapWindowBroadcast(CONTROLLED_MODEL_CATALOG_CHANGED, {});
+function notifyControlledModelCatalogChanged(receivedChangeSequence?: number): void {
+  const payload = receivedChangeSequence === undefined ? {} : { receivedChangeSequence };
+  emit(CONTROLLED_MODEL_CATALOG_CHANGED, payload);
+  tapWindowBroadcast(CONTROLLED_MODEL_CATALOG_CHANGED, payload);
 }
 
 function appInForeground(): boolean {
@@ -540,7 +541,7 @@ export function startProviderShareRuntime(broadcast: Broadcast, options: { invok
       // Local windows re-check stale subscription catalogs on every poll.
       emit(PROVIDER_SHARE_IPC.RECEIVED_CHANGED, received);
       // Pushed to every controlling computer; they re-read capabilities and rosters.
-      if (changed) notifyControlledModelCatalogChanged();
+      if (changed) notifyControlledModelCatalogChanged(providerShareReceivedChangeSequence());
     },
     settled(state, preview) {
       emit(PROVIDER_SHARE_IPC.SETTLED, { state, preview });

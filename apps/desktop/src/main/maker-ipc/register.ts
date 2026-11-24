@@ -526,7 +526,7 @@ import { materializeSshRemoteMedia } from '../file-browser/ssh-media.js';
 import { readGeneratedImageFile, MAX_GENERATED_IMAGE_BYTES } from '../cindy-media/generatedMedia.js';
 import { createDesktopGeneratedImageDelivery } from '../cindy-media/generatedImageDelivery.desktop.js';
 import { authorizeSharedTaskHistory, liveSharedTaskTarget } from '../remote-agent/controller/providerShareTaskLocation.js';
-import { findReceivedShare, parseProviderShareAgentDeviceId, providerShareAccessEpoch, resolveRemoteAgentTarget } from '../device-link/providerShareGuest.js';
+import { findReceivedShare, parseProviderShareAgentDeviceId, providerShareAccessEpoch, providerShareReceivedChangeSequence, resolveRemoteAgentTarget, resolveRemoteAgentTargetWhenReady } from '../device-link/providerShareGuest.js';
 import { readReceivedProviderShareQuota } from '../device-link/providerShareRuntime.js';
 import { setGeneratedImageRecovery } from '../cindy-media/generatedImageRecovery.js';
 import {
@@ -10411,6 +10411,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           throwIpcError('PRECONDITION_FAILED', 'Model catalog account changed');
         }
       };
+    },
+    retryShareDirectory: async (deviceId) => {
+      if (!parseProviderShareAgentDeviceId(deviceId)) throwIpcError('INVALID_PARAMS', 'Invalid shared provider');
+      const before = providerShareReceivedChangeSequence();
+      await resolveRemoteAgentTargetWhenReady(deviceId, { retryDirectory: true });
+      const receivedChangeSequence = providerShareReceivedChangeSequence();
+      return receivedChangeSequence === before ? {} : { receivedChangeSequence };
     },
     locations: () => {
       const owner = getCurrentDbClientSnapshot();

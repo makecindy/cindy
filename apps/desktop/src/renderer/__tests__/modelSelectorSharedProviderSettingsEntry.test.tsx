@@ -69,6 +69,10 @@ const catalogs = vi.hoisted(() => {
   };
 });
 
+function modelSource(key?: string): string | undefined {
+  return key ? parseModelCatalogKey(key)?.agentDeviceId ?? key : undefined;
+}
+
 const shareState = vi.hoisted(() => ({ received: [] as Array<Record<string, unknown>> }));
 vi.mock('@/features/provider-share/providerShareStore', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/features/provider-share/providerShareStore')>()),
@@ -82,22 +86,27 @@ vi.mock('@/hooks/useProviders', () => ({
 vi.mock('@/hooks/useDeviceProviders', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/hooks/useDeviceProviders')>()),
   prefetchDeviceProviders: vi.fn(async () => {}),
-  useDeviceProviders: (deviceId?: string) => ({
-    providers: deviceId === 'share:abc' && (catalogs.shareError || catalogs.shareLoading) ? [] : deviceId ? (catalogs.byDevice[deviceId] ?? []) : [],
-    loading: deviceId === 'share:abc' && catalogs.shareLoading,
-    error: deviceId === 'share:abc' ? catalogs.shareError : null,
-    unsupported: false,
-  }),
+  useDeviceProviders: (key?: string) => {
+    const deviceId = modelSource(key);
+    return {
+      providers: deviceId === 'share:abc' && (catalogs.shareError || catalogs.shareLoading) ? [] : deviceId ? (catalogs.byDevice[deviceId] ?? []) : [],
+      loading: deviceId === 'share:abc' && catalogs.shareLoading,
+      error: deviceId === 'share:abc' ? catalogs.shareError : null,
+      unsupported: false,
+    };
+  },
 }));
 vi.mock('@/hooks/useDevicesProviders', () => ({
   useDevicesProviders: (deviceIds: readonly string[]) =>
     new Map(
-      deviceIds.map((deviceId) => [
-        deviceId,
-        { providers: deviceId === 'share:abc' && (catalogs.shareError || catalogs.shareLoading) ? [] : catalogs.byDevice[deviceId] ?? [],
+      deviceIds.map((key) => {
+        const deviceId = modelSource(key)!;
+        return [key, {
+          providers: deviceId === 'share:abc' && (catalogs.shareError || catalogs.shareLoading) ? [] : catalogs.byDevice[deviceId] ?? [],
           loading: deviceId === 'share:abc' && catalogs.shareLoading,
-          error: deviceId === 'share:abc' ? catalogs.shareError : null },
-      ]),
+          error: deviceId === 'share:abc' ? catalogs.shareError : null,
+        }];
+      }),
     ),
 }));
 vi.mock('@/state/modelVisibilityPrefs', () => ({
@@ -116,6 +125,7 @@ vi.mock('@/hooks/useRemoteClaudeSubscriptionUsage', () => ({
 }));
 
 import { ModelSelectorContent } from '@/components/new-chat/ModelSelector';
+import { CONTROLLED_MODEL_CATALOG_CHANNEL, CONTROLLED_MODEL_CATALOG_RETRY_SHARE, modelCatalogKey, parseModelCatalogKey } from '../../shared/controlledModelCatalog';
 import { prefetchDeviceProviders } from '@/hooks/useDeviceProviders';
 import { __resetForTest as resetEnginePrefs } from '@/state/modelEnginePrefs';
 import { __resetForTest as resetFavorites } from '@/state/modelFavorites';
@@ -174,19 +184,27 @@ afterEach(() => {
 describe('模型面板底部「配置模型」', () => {
   // Unit / #10826: a known share with no cached catalog must expose retry and
   // recover selection. Existing fixtures only exercised already-loaded shares.
-  it('keeps a first-load failed share browsable and selects its model after retry', async () => {
+  it.each([undefined, 'device-b'])('keeps a first-load failed share browsable and retries on its catalog host (%s)', async (catalogHostDeviceId) => {
     catalogs.shareError = 'share catalog unavailable';
     const membership = Promise.withResolvers<{ ok: true }>();
     const command = vi.fn(() => membership.promise);
-    vi.stubGlobal('electronAPI', { ...window.electronAPI, providerShare: { command } });
-    const panel = renderPanel();
+    const invoke = vi.fn(() => membership.promise);
+    vi.stubGlobal('electronAPI', { ...window.electronAPI, providerShare: { command }, deviceLink: { invoke } });
+    const panel = renderPanel({ catalogHostDeviceId });
     await browse(share.name);
     expect(screen.getByRole('alert').textContent).toContain('newChat.modelSelector.remoteLoadFailed');
     await browse('newChat.modelSelector.retryRemoteModels');
-    expect(command).toHaveBeenCalledExactlyOnceWith({ action: 'retry-model-catalog', agentDeviceId: 'share:abc' });
+    if (catalogHostDeviceId) {
+      expect(invoke).toHaveBeenCalledExactlyOnceWith(catalogHostDeviceId, CONTROLLED_MODEL_CATALOG_CHANNEL, [{
+        op: CONTROLLED_MODEL_CATALOG_RETRY_SHARE, agentDeviceId: share.deviceId,
+      }]);
+      expect(command).not.toHaveBeenCalled();
+    } else {
+      expect(command).toHaveBeenCalledExactlyOnceWith({ action: 'retry-model-catalog', agentDeviceId: share.deviceId });
+    }
     expect(prefetchDeviceProviders).not.toHaveBeenCalled();
     await act(async () => { membership.resolve({ ok: true }); });
-    expect(prefetchDeviceProviders).toHaveBeenCalledWith('share:abc');
+    expect(prefetchDeviceProviders).toHaveBeenCalledWith(modelCatalogKey(share.deviceId, catalogHostDeviceId));
     catalogs.shareError = null;
     catalogs.shareLoading = true;
     panel.refresh();

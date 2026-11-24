@@ -1603,7 +1603,7 @@ function ModelSelectorContentView({
       : undefined;
   const retryRemoteModels = useCallback(() => {
     if (!catalogDeviceId) return;
-    if (isProviderShareAgentDeviceId(catalogDeviceId)) {
+    if (isProviderShareAgentDeviceId(deviceId)) {
       void retryProviderShareCatalog(catalogDeviceId).catch(() => undefined);
       return;
     }
@@ -1613,7 +1613,7 @@ function ModelSelectorContentView({
       prefetchDeviceCapabilities(catalogDeviceId),
       prefetchDeviceProviders(catalogDeviceId),
     ]);
-  }, [catalogDeviceId]);
+  }, [catalogDeviceId, deviceId]);
 
   const visibilityVersion = useModelVisibilityVersion();
   const [query, setQuery] = useState('');
