@@ -36,7 +36,11 @@ describe('session context read projection', () => {
   // capacity; aliases must not change exact-match priority or borrow capacity.
   it('shares exact-first alias matching with window bounds and rejects ambiguous routes', () => {
     const route = provider('local');
-    route.routing['claude-code'] = { modelIdRewrite: { stripPrefix: 'gateway/' } };
+    route.routing['claude-code'] = {
+      upstream: 'https://example.invalid',
+      authStrategy: 'oauth-passthrough',
+      modelIdRewrite: { stripPrefix: 'gateway/' },
+    };
     const routes = { providers: [route] };
     const wire = `gateway/${model.id}`;
     expect(resolveVerifiedContextWindow(routes, 'claude-code', 'local', wire)).toBe(272_000);

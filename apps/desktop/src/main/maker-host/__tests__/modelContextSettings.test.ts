@@ -46,7 +46,11 @@ describe('implicit context settings use the startup source in history protection
   it('resolves route wire aliases without borrowing another provider or window variant', () => {
     const catalog = dualCatalog('claude-code');
     const xd = catalog.providers.find(provider => provider.id === 'xd')!;
-    xd.routing['claude-code'] = { modelIdRewrite: { stripPrefix: 'gateway/' } };
+    xd.routing['claude-code'] = {
+      upstream: 'https://example.invalid',
+      authStrategy: 'oauth-passthrough',
+      modelIdRewrite: { stripPrefix: 'gateway/' },
+    };
     expect(resolveDesktopModelContextProviderId(catalog, 'claude-code', null, 'gateway/shared-model')).toBe('xd');
     expect(resolveConfiguredContextWindow(catalog, 'claude-code', 'xd', 'gateway/shared-model', null, 'required')).toBe(128_000);
     expect(resolveConfiguredContextWindow(catalog, 'claude-code', 'anthropic', 'gateway/shared-model', null, 'required')).toBeNull();
