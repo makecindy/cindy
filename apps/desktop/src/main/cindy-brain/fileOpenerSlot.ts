@@ -59,7 +59,8 @@ export class GhostFileOpenerSlot {
     );
   }
 
-  async open(filePath: string): Promise<GhostFileOpenOutcome> {
+  async open(filePath: string, requestIsCurrent: () => boolean): Promise<GhostFileOpenOutcome> {
+    if (!requestIsCurrent()) return { handled: false, reason: 'unavailable' };
     const ghost = this.candidate(filePath);
     if (!ghost) return { handled: false, reason: 'no-plugin' };
     const instanceId = this.deps.instanceId(ghost);
@@ -87,7 +88,7 @@ export class GhostFileOpenerSlot {
         ]);
         if (!woke) return { handled: false, reason: 'timeout' };
       }
-      if (!this.deps.isCurrent(ghost)) {
+      if (!requestIsCurrent() || !this.deps.isCurrent(ghost)) {
         settle(null);
         return { handled: false, reason: 'unavailable' };
       }

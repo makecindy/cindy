@@ -5,7 +5,7 @@ vi.mock('electron', () => ({
   app: { getPath: () => '/tmp/cindy-shell-open-test' },
 }));
 
-const { isLocalOriginalForPluginOpen, resolveShellOpenPathTarget } = await import('../shellOpenPath.js');
+const { isLocalOriginalForPluginOpen, resolveLocalOriginalForPluginOpen, resolveShellOpenPathTarget } = await import('../shellOpenPath.js');
 
 describe('resolveShellOpenPathTarget', () => {
   it('keeps absolute file paths unchanged', () => {
@@ -85,4 +85,18 @@ describe('isLocalOriginalForPluginOpen', () => {
   ])('%s', (_label, input, resolved, expected) => {
     expect(isLocalOriginalForPluginOpen(input, resolved, roots, 'win32')).toBe(expected);
   });
+});
+
+// An alias must not make a managed copy eligible for plugin delivery.
+it('rejects a file whose resolved target is inside a relocated cache root', async () => {
+  const file = path.resolve('workspace', 'document.docx');
+  const cache = path.resolve('data', 'remote-cache');
+  const cacheTarget = path.resolve('relocated-cache');
+  const target = path.join(cacheTarget, 'document.docx');
+  const stat = vi.fn(async () => ({ isFile: () => true }));
+  await expect(resolveLocalOriginalForPluginOpen(file, file, [cache], () => true, {
+    realpath: async (entry) => entry === file ? target : cacheTarget,
+    stat,
+  })).resolves.toBeNull();
+  expect(stat).not.toHaveBeenCalled();
 });

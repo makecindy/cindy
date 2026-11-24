@@ -1400,8 +1400,11 @@ function getGhostFileOpenerSlot(): GhostFileOpenerSlot {
  * 「用系统默认应用打开」前先问声明了该扩展名的插件(`fileOpener`)。未处理时调用方照常
  * 交给系统默认应用;调用方负责只传本机原件(不传其它电脑文件的缓存副本)。
  */
-export function openFileWithPluginFileOpener(filePath: string): Promise<GhostFileOpenOutcome> {
-  return getGhostFileOpenerSlot().open(filePath);
+export function openFileWithPluginFileOpener(
+  filePath: string,
+  requestIsCurrent: () => boolean,
+): Promise<GhostFileOpenOutcome> {
+  return getGhostFileOpenerSlot().open(filePath, requestIsCurrent);
 }
 
 /** Discovery may yield, but never carries an old owner's results into a new account. */

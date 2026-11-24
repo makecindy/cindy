@@ -55,12 +55,26 @@ afterEach(() => {
 });
 
 describe('GhostFileOpenerSlot', () => {
+  it('does not deliver an open request that loses its account during startup', async () => {
+    let current = true;
+    const send = vi.fn(() => true);
+    const { slot } = setup([plugin('office')], {
+      isRunning: () => false,
+      wake: async () => { current = false; },
+      send,
+    });
+    await expect(slot.open(FILE, () => current)).resolves.toEqual({
+      handled: false, reason: 'unavailable',
+    });
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it('hands the file to the first eligible plugin, waking it, and reports handled on its ok reply', async () => {
     const { slot, deps, sent } = setup(
       [plugin('off'), plugin('pdf', { extensions: ['.pdf'] }), plugin('office'), plugin('later')],
       { isEnabledByUser: (id) => id !== 'off', isRunning: () => false },
     );
-    const pending = slot.open(FILE);
+    const pending = slot.open(FILE, () => true);
     await vi.waitFor(() => expect(sent).toHaveLength(1));
     expect(deps.wake).toHaveBeenCalledTimes(1);
     expect(sent[0]).toEqual({
@@ -77,7 +91,7 @@ describe('GhostFileOpenerSlot', () => {
   it('ignores a reply from another plugin and falls back when the asked plugin never answers', async () => {
     vi.useFakeTimers();
     const { slot } = setup([plugin('office')]);
-    const pending = slot.open(FILE);
+    const pending = slot.open(FILE, () => true);
     await vi.advanceTimersByTimeAsync(0);
     slot.handleResult('impostor', { requestId: 'req-1', ok: true });
     await vi.advanceTimersByTimeAsync(GHOST_FILE_OPEN_TIMEOUT_MS);
@@ -91,7 +105,7 @@ describe('GhostFileOpenerSlot', () => {
     ['an older host stored the declaration without approving it', [plugin('office', { approved: false })], 'no-plugin'],
   ] as const)('does not offer the file when %s', async (_label, ghosts, reason) => {
     const { slot, sent } = setup([...ghosts]);
-    await expect(slot.open(FILE)).resolves.toEqual({ handled: false, reason });
+    await expect(slot.open(FILE, () => true)).resolves.toEqual({ handled: false, reason });
     expect(sent).toHaveLength(0);
   });
 
@@ -102,7 +116,7 @@ describe('GhostFileOpenerSlot', () => {
       wake: () => promise,
       isCurrent: () => false,
     });
-    const pending = slot.open(FILE);
+    const pending = slot.open(FILE, () => true);
     expect(sent).toHaveLength(0);
     resolve();
     await expect(pending).resolves.toEqual({ handled: false, reason: 'unavailable' });
@@ -111,12 +125,12 @@ describe('GhostFileOpenerSlot', () => {
 
   it('falls back when the plugin declines or its logic page is offline', async () => {
     const declined = setup([plugin('office')]);
-    const pending = declined.slot.open(FILE);
+    const pending = declined.slot.open(FILE, () => true);
     await vi.waitFor(() => expect(declined.sent).toHaveLength(1));
     declined.slot.handleResult('office', { requestId: 'req-1', ok: false });
     await expect(pending).resolves.toEqual({ handled: false, reason: 'declined' });
 
     const offline = setup([plugin('office')], { send: () => false });
-    await expect(offline.slot.open(FILE)).resolves.toEqual({ handled: false, reason: 'unavailable' });
+    await expect(offline.slot.open(FILE, () => true)).resolves.toEqual({ handled: false, reason: 'unavailable' });
   });
 });

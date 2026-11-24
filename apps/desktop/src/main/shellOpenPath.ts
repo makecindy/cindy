@@ -1,6 +1,8 @@
 /** Resolve user-openable local paths without exposing media-store paths to renderer. */
 
+import fs from 'node:fs/promises';
 import path from 'node:path';
+import { stripWinNamespace } from './filePathPolicy.js';
 
 import * as cindyMediaBlobStore from './cindy-media/blobStore.desktop.js';
 import { stripWindowsDriveUriSlash } from '../shared/pathText';
@@ -42,7 +44,7 @@ export function isLocalOriginalForPluginOpen(
   if (input.startsWith('cindy-media://')) return false;
   const pathApi = platform === 'win32' ? path.win32 : path.posix;
   const fold = (value: string) => {
-    const normalized = pathApi.resolve(value);
+    const normalized = pathApi.resolve(platform === 'win32' ? stripWinNamespace(value) : value);
     return platform === 'win32' ? normalized.toLowerCase() : normalized;
   };
   const target = fold(resolvedPath);
@@ -51,4 +53,38 @@ export function isLocalOriginalForPluginOpen(
     const base = fold(root);
     return target === base || target.startsWith(base.endsWith(pathApi.sep) ? base : base + pathApi.sep);
   });
+}
+
+/** Resolve the file and cache roots before giving a path to a plugin. */
+export async function resolveLocalOriginalForPluginOpen(
+  input: string,
+  filePath: string,
+  managedCopyRoots: readonly string[],
+  isPathAllowed: (filePath: string) => boolean,
+  files: {
+    realpath(path: string): Promise<string>;
+    stat(path: string): Promise<{ isFile(): boolean }>;
+  } = fs,
+): Promise<string | null> {
+  if (!isLocalOriginalForPluginOpen(input, filePath, managedCopyRoots)) return null;
+  try {
+    const [target, ...roots] = await Promise.all([
+      files.realpath(filePath),
+      ...managedCopyRoots.filter(Boolean).map(async (root) => {
+        try {
+          return await files.realpath(root);
+        } catch (error) {
+          // A cache that has not been created cannot contain this file.
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') return root;
+          throw error;
+        }
+      }),
+    ]);
+    if (!isPathAllowed(target) || !isLocalOriginalForPluginOpen(input, target, [...managedCopyRoots, ...roots])) {
+      return null;
+    }
+    return (await files.stat(target)).isFile() ? target : null;
+  } catch {
+    return null;
+  }
 }
