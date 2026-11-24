@@ -4,6 +4,7 @@ import { ChevronRight, Folder, Info, RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { SETTINGS_HINT, SettingsBlock, SettingsCard, SettingsRow } from '@/components/ui/settings-rows';
 import { Tip } from '@/components/ui/tooltip';
+import { useOptionalDataOwnerGeneration } from '@/contexts/AuthContext';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
@@ -15,7 +16,11 @@ import { useSettingDefinition } from './useSettingDefinition';
 export function TaskExportDirectorySection() {
   const { t } = useTranslation();
   const setting = useSettingDefinition(storageManagementCardSettings.taskExportDirectory);
-  const [state, setState] = useState<TaskExportDirectoryState | null>(null);
+  // The setting is per account: a result belongs to the owner generation it was read for, so a
+  // view kept open across a sign-out or account switch never shows the previous owner's path.
+  const ownerGeneration = useOptionalDataOwnerGeneration();
+  const [loaded, setLoaded] = useState<{ generation: number; value: TaskExportDirectoryState } | null>(null);
+  const state = loaded?.generation === ownerGeneration ? loaded.value : null;
   const [busy, setBusy] = useState(false);
   const pending = useRef(false);
   const revision = useRef(0);
@@ -25,20 +30,23 @@ export function TaskExportDirectorySection() {
     if (!api) return;
     let active = true;
     const request = ++revision.current;
-    void api.get().then((value) => { if (active && request === revision.current) setState(value); }).catch((error) => {
+    void api.get().then((value) => {
+      if (active && request === revision.current) setLoaded({ generation: ownerGeneration, value });
+    }).catch((error) => {
       if (active) toast.error(t(mapIpcErrorToI18nKey(error, { fallback: 'settings.about.storage.taskExportDirectoryFailed' })));
     });
     return () => { active = false; revision.current++; };
-  }, [api, t]);
+  }, [api, t, ownerGeneration]);
 
   const update = async (action: 'choose' | 'reset') => {
     if (!api || pending.current) return;
     pending.current = true;
     const request = ++revision.current;
+    const generation = ownerGeneration;
     setBusy(true);
     try {
       const value = await api[action]();
-      if (request === revision.current) setState(value);
+      if (request === revision.current) setLoaded({ generation, value });
     } catch (error) {
       toast.error(t(mapIpcErrorToI18nKey(error, { fallback: 'settings.about.storage.taskExportDirectoryFailed' })));
     } finally {

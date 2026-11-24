@@ -48,22 +48,27 @@ export function readTaskExportDirectory(): { realPath: string } | null | 'unread
   return realPath ? { realPath } : null;
 }
 
+function assertScope(scope: string): void {
+  if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== scope) {
+    throwIpcError('PRECONDITION_FAILED', 'task export directory owner changed');
+  }
+}
+
+/** Never returns one owner's path after the active owner changed while it was being read. */
 async function readState(): Promise<TaskExportDirectoryState> {
+  const scope = activeOwnerScopeKey();
+  assertScope(scope);
   store.invalidateIfChanged();
   if (store.isUnreadable()) return { path: null, exists: false, unreadable: true };
   const { directory } = store.read();
   if (!directory) return { path: null, exists: false, unreadable: false };
   const exists = await fs.promises.stat(directory).then((stat) => stat.isDirectory(), () => false);
+  assertScope(scope);
   return { path: directory, exists, unreadable: false };
 }
 
 /** Settings IPC: get / choose (native folder picker) / reset. Local only, not exposed via device-link. */
 export function createTaskExportDirectoryHandlers(deps: { chooseDirectory(): Promise<string | null> }) {
-  const assertScope = (scope: string) => {
-    if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== scope) {
-      throwIpcError('PRECONDITION_FAILED', 'task export directory owner changed');
-    }
-  };
   const choose = async () => {
     const scope = activeOwnerScopeKey();
     const directory = await deps.chooseDirectory();
