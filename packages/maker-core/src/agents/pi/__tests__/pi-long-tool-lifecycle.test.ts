@@ -265,6 +265,30 @@ describe('Pi long tool lifecycle through real stdio RPC', () => {
     expect(write.mock.calls.map(([line]) => JSON.parse(line).type)).not.toContain('prompt');
   });
 
+  // #12516: the existing mid-generation close misses a delivered reply whose
+  // threshold compaction is interrupted. Exercise the same isolated stdio fixture.
+  it('cancels once on close during threshold compaction after reply delivery', async () => {
+    const { events, transport } = await start();
+    const write = vi.spyOn(transport, 'writeLine');
+    await transport.writeLine(JSON.stringify({ type: 'fixture_finish', omit: 'agent_settled' }));
+    await transport.writeLine(JSON.stringify({ type: 'fixture_frames', frames: [
+      { type: 'agent_end' }, { type: 'compaction_start', reason: 'threshold' },
+    ] }));
+    await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({
+      type: 'status', data: expect.objectContaining({ status: 'Compacting context…' }),
+    })));
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'text', data: expect.objectContaining({ text: 'Build finished.', isFinal: true }),
+    }));
+    const terminals = () => events.filter(event => event.type === 'done' || event.type === 'error');
+    expect(terminals()).toEqual([]);
+    await session!.close();
+    expect(terminals()).toMatchObject([{ type: 'done', data: {
+      status: 'cancelled', usage: { inputTokens: 10, outputTokens: 3 },
+    } }]);
+    expect(write.mock.calls.map(([line]) => JSON.parse(line).type)).not.toContain('prompt');
+  });
+
   // #8887: real PiAgent/Session and stdio, fake executable only. Two completed
   // requests followed by each lifecycle termination must retain 120 input tokens.
   // #11735: app-quit must additionally cancel once, without a crash error or replay.
