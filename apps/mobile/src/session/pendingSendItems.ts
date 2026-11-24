@@ -90,6 +90,7 @@ export interface MobilePendingSendItem {
   /** Structured quote / pasted-text / Slash atoms used by the optimistic renderer. */
   sentInlineTokens: SentInlineToken[];
   phase: MobilePendingSendPhase;
+  waitingForRemoteAccount?: true;
   /** 队列序号(从 1 起,用于无障碍播报);不在队列里的条目为 null。 */
   queueIndex: number | null;
   thumbs: MobileOutboxThumb[];
@@ -423,6 +424,7 @@ export function buildPendingSendItems(input: BuildPendingSendItemsInput): Mobile
         slashCommandRanges: item.chatMessage.slashCommandRanges,
       }),
       phase,
+      ...(phase === 'queued' && item.waitingForRemoteAccount === true ? { waitingForRemoteAccount: true as const } : {}),
       queueIndex,
       thumbs: attachments.thumbs,
       fileCount: attachments.fileCount,

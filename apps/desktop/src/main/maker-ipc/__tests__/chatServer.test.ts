@@ -3,11 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import { setTimeout as yieldToIo } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import ts from 'typescript';
 import { AgentInputCoordinator } from '../agent-input-coordinator.js';
 import { HOST_ONLY_AGENT_PREFIX, type AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
 const avatarUpload = vi.hoisted(() => vi.fn());
+const videoPut = vi.hoisted(() => vi.fn());
 vi.mock('../../ossPublicUpload.js', () => ({ uploadPublicAsset: avatarUpload }));
 const fixture = vi.hoisted(() => ({ upload: vi.fn<(...args: Parameters<ReturnType<typeof import('../chatServerMedia.js').createChatMedia>['upload']>) => Promise<unknown[]>>(async () => []), download: vi.fn(), packaged: true, urls: [] as string[], wsUrls: [] as string[], exists: vi.fn(), config: '', handle: vi.fn(), profiles: [] as unknown[], sockets: [] as import('ws').WebSocket[], token: 'isolated-test-token', refresh: vi.fn(async () => true), requests: [] as Array<{ url: string; token: string; actor?: string }> }));
 vi.mock('../../authManager.js', () => ({ getAccessToken: () => fixture.token, refresh: fixture.refresh }));
@@ -15,7 +17,10 @@ vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'ht
 const replyFiles = vi.hoisted(() => ({ prepare: vi.fn(async (text: string, _sessionId?: string, _assertCurrent?: () => void, _fallbackId?: string | null, _omitOutsideWorkingDir?: boolean): Promise<{ text: string; attachments: unknown[]; omittedFiles?: number }> => ({ text, attachments: [] })) }));
 vi.mock('../chatServerReplyFiles.js', () => ({ prepareChatReplyFiles: replyFiles.prepare }));
 vi.mock('../chatServerMedia.js', () => ({ createChatMedia: () => ({ upload: fixture.upload, download: fixture.download }) }));
-const replyImages = vi.hoisted(() => vi.fn(async (text: string): Promise<{ text: string; attachments: import('../chatServerMedia.js').ChatUploadAttachment[] }> => ({ text, attachments: [] })));
+const replyImages = vi.hoisted(() => vi.fn<typeof import('../chatServerReplyImages.js').prepareChatReplyImages>(async text => ({ text, attachments: [] })));
+vi.mock('../../cindy-media/taskImageDelivery.js', () => ({ materializeTaskImageTextResult: vi.fn() }));
+vi.mock('../../device-link/remoteMediaPersistentCache.js', () => ({ captureRemoteMediaCacheValidity: () => () => {}, remoteMediaCacheGeneration: () => 0 }));
+vi.mock('../botGroupAttachments.js', () => ({ safeAttachmentFileName: (name: string) => name }));
 vi.mock('../chatServerReplyImages.js', () => ({ prepareChatReplyImages: replyImages }));
 // This computer's group settings; each test starts with none.
 const workspaceSettings = vi.hoisted(() => new Map<string, unknown>());
@@ -32,7 +37,7 @@ vi.mock('../chatServerWorkspaces.js', () => ({ chatServerWorkspaces: () => ({
   save: (value: Record<string, unknown>) => { assistantStore.value = structuredClone(value); },
 }) }));
 beforeEach(() => { workspaceSettings.clear(); taskCardStore.value = {}; assistantStore.value = {}; });
-const migration = vi.hoisted(() => ({ read: vi.fn<(_groupId: string) => { roomId: string; sequence: number; version: 2 } | null>(() => null) }));
+const migration = vi.hoisted(() => ({ read: vi.fn<(_groupId: string) => { roomId: string; sequence: number; version: 2 } | null>(() => null), save: vi.fn() }));
 const sendJournal = vi.hoisted(() => ({ enabled: false, rows: new Map<string, { intent?: unknown; receipt?: string }>() }));
 vi.mock('../chatSendJournal.js', () => ({ chatSendJournal: () => ({
   read: (key: string) => sendJournal.enabled ? sendJournal.rows.get(key) ?? null : null,
@@ -42,8 +47,8 @@ vi.mock('../chatSendJournal.js', () => ({ chatSendJournal: () => ({
 }) }));
 beforeEach(() => { sendJournal.enabled = false; sendJournal.rows.clear(); });
 vi.mock('../chatLocalHistory.js', () => ({ chatLocalHistory: () => ({ read: () => null, save: vi.fn(), forget: vi.fn() }) }));
-vi.mock('../chatMigrationReceipts.js', () => ({ chatMigrationReceipts: () => ({ read: migration.read, save: vi.fn() }) }));
-vi.mock('electron', () => ({ app: { get isPackaged() { return fixture.packaged; }, getPath: () => '/isolated' },
+vi.mock('../chatMigrationReceipts.js', () => ({ chatMigrationReceipts: () => ({ read: migration.read, save: migration.save }) }));
+vi.mock('electron', () => ({ net: { fetch: videoPut }, app: { get isPackaged() { return fixture.packaged; }, getPath: () => '/isolated' },
   nativeImage: { createFromBuffer: () => ({ isEmpty: () => false, getSize: () => ({ width: 1, height: 1 }) }) } }));
 // The real filesystem, except an `lstat` failure a test injects for a delivery file.
 const fsFault = vi.hoisted(() => ({ lstat: null as Error | null }));
@@ -224,6 +229,102 @@ describe('Chat Server result delivery and refresh', () => {
     service = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [] })), settleLaneTurn: vi.fn(async () => false), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
   });
   afterEach(() => { service.dispose(); vi.useRealTimers(); vi.unstubAllEnvs(); fixture.config = ''; vi.clearAllMocks(); });
+
+  // #7401 / unit: the Desktop timer must stop terminal imports even when another
+  // pass would otherwise repeat the request. Earlier importer tests bypassed scheduling.
+  it.each([
+    [404, 'CONVERSATION_NOT_FOUND'],
+    [409, 'CONVERSATION_ARCHIVED'],
+  ] as const)('stops background import after %s %s', async (status, code) => {
+    const source = '10000000-0000-4000-8000-000000000088';
+    service.dispose();
+    service = withChatServer({ listGroups: async () => ({ ok: true, groups: [{ id: source, name: 'Old group', members: [] }] }),
+      dispose: vi.fn() } as unknown as BotGroupChatService, deps);
+    const progress = `/conversations/${roomId}/import?sourceId=${source}`;
+    fixture.handle.mockImplementation((route, method) => {
+      if (route === '/conversations' && method === 'POST') return { body: { id: roomId } };
+      if (route === progress) return { status, body: { error: { code } } };
+      return response(route);
+    });
+    const attempts = () => fixture.handle.mock.calls.filter(([route]) => route === progress).length;
+
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(attempts()).toBe(1);
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(attempts()).toBe(1);
+    const group = await service.getGroup(source);
+    expect(group.ok && group.group.migrationPending).toBe(false);
+  });
+
+  // #7401 / unit: a pass can contain both a terminal group and a temporarily
+  // unavailable group. A 503 or a network error beyond the original retry limit must
+  // recover, and the archived group must resume when opened after a remote unarchive.
+  it.each(['locally', 'on another device'])('resumes mixed history imports after unarchiving %s', async unarchiveLocation => {
+    const archived = '10000000-0000-4000-8000-000000000088';
+    const recoverable = '10000000-0000-4000-8000-000000000089';
+    const localGroups = [archived, recoverable].map(id => ({ id, name: 'Old group', members: [] }));
+    service.dispose();
+    service = withChatServer({ listGroups: async () => ({ ok: true, groups: localGroups }),
+      dispose: vi.fn() } as unknown as BotGroupChatService, deps);
+    let available = false;
+    let unarchived = false;
+    migration.read.mockImplementation(source => migration.save.mock.calls.findLast(([id]) => id === source)?.[1] ?? null);
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route === '/conversations' && method === 'POST') return { body: { id: body.sourceId } };
+      if (route === `/conversations/${archived}` && method === 'PATCH' && body.archived === false) unarchived = true;
+      if (route === `/conversations/${archived}/snapshot`) return { body: {
+        room: { ...room(archived), archived: !unarchived },
+        members: [{ id: selfId, kind: 'human', name: 'Me', state: 'joined', role: 'owner' }], messages: [], cursor: '1',
+      } };
+      if (route === `/conversations/${archived}/import?sourceId=${archived}`) {
+        return unarchived ? { body: { sourceId: null } } : { status: 409, body: { error: { code: 'CONVERSATION_ARCHIVED' } } };
+      }
+      if (route === `/conversations/${recoverable}/import?sourceId=${recoverable}`) {
+        if (available) return { body: { sourceId: null } };
+        if (unarchiveLocation === 'on another device') {
+          throw Object.assign(new Error('connect ENETUNREACH'), { code: 'ENETUNREACH', syscall: 'connect' });
+        }
+        return { status: 503, headers: { 'retry-after': '600' }, body: { error: { code: 'UPSTREAM_FAILED' } } };
+      }
+      return response(route);
+    });
+    const db = await import('../../localDb/client/current.js');
+    const emptyRows = () => Object.assign(Promise.resolve([]), { limit: async () => [], orderBy: () => ({ limit: async () => [] }) });
+    const mockDb = vi.spyOn(db, 'getDbClient').mockReturnValue({
+      drizzle: { select: () => ({ from: () => ({ where: emptyRows }) }) },
+    } as unknown as ReturnType<typeof db.getDbClient>);
+    const requests = () => fixture.handle.mock.calls.filter(([route, method]) => route === '/conversations' && method === 'POST')
+      .map(([, , body]) => body.sourceId);
+    try {
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(requests()).toEqual([archived, recoverable]);
+      // The 503 response's Retry-After overrides the local schedule from 60 to 300 seconds.
+      const delays = unarchiveLocation === 'locally' ? Array<number>(6).fill(600_000)
+        : [60_000, 120_000, 240_000, 300_000, 300_000, 300_000];
+      for (const [index, delay] of delays.entries()) {
+        await vi.advanceTimersByTimeAsync(delay - 1);
+        expect(requests()).toEqual([archived, ...Array<string>(index + 1).fill(recoverable)]);
+        if (index === delays.length - 1) available = true;
+        await vi.advanceTimersByTimeAsync(1);
+        expect(requests()).toEqual([archived, ...Array<string>(index + 2).fill(recoverable)]);
+      }
+      expect(migration.save).toHaveBeenCalledExactlyOnceWith(recoverable, { roomId: recoverable, sequence: 0, version: 2 });
+      await vi.advanceTimersByTimeAsync(300_000);
+      expect(requests()).toHaveLength(delays.length + 2);
+      if (unarchiveLocation === 'locally') {
+        expect(await service.chatServer!.manage({
+          groupId: archived, action: { type: 'archive', archived: false, expectedRevision: 1 },
+        })).toMatchObject({ ok: true });
+      } else {
+        unarchived = true;
+        expect(await service.getGroup(archived)).toMatchObject({ ok: true, group: { archived: false } });
+      }
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(migration.save).toHaveBeenLastCalledWith(archived, { roomId: archived, sequence: 0, version: 2 });
+    } finally {
+      mockDb.mockRestore();
+    }
+  });
 
   // #10822 / unit: getGroup + dismissPlan exercise the production server
   // projection and existing stop action. Earlier tests never combined a failed
@@ -2556,7 +2657,7 @@ describe('Chat Server result delivery and refresh', () => {
       expect(fixture.urls.some(url => url.includes('/mask/'))).toBe(false);
       expect(deps.ensureGroupAssistantSession).toHaveBeenCalledExactlyOnceWith({ title: 'Group chat·Cindy · Room', projectDir: null });
       const [input] = dispatched();
-      expect(input).toMatchObject({ targetSessionId: 'group-task-1', resumeWithStoredPermissionMode: true,
+      expect(input).toMatchObject({ groupAssistantTask: true, targetSessionId: 'group-task-1', resumeWithStoredPermissionMode: true,
         message: `@Cindy please fix it\n\n${t('bots.groupChat.assistant.groupRecent')}\nAnn：The build is red again`,
         origin: { kind: 'session', senderSessionId: '', groupRequest: { groupId: roomId, groupName: 'Room', speakerId: selfId, speakerName: 'Chris' } } });
       expect(input!.persistedContent).toBe(input!.message);
@@ -3050,6 +3151,65 @@ describe('Chat Server result delivery and refresh', () => {
     });
     await start();
   }
+
+  // #11712, unit: real settlement, reply preparation and upload with a playable repository MP4.
+  // Isolate storage and transport. Both supported reply forms must seal the original bytes as video.
+  it.each(['component', 'file', 'revoked'] as const)('checks delivery of a playable MP4 (%s)', async form => {
+    const file = fileURLToPath(new URL('../../../renderer/assets/wallpapers/cindy-studio.mp4', import.meta.url));
+    const bytes = await realReplyFs.readFile(file);
+    const { createHash } = await import('node:crypto');
+    const hash = createHash('sha256').update(bytes).digest('hex');
+    const url = 'cindy-media://blobs/' + hash + '.mp4';
+    const rich = '```cindy-ui\n' + JSON.stringify({ version: 1, seq: 1, op: 'create', id: 'clip', kind: 'video', props: { src: url } }) + '\n```';
+    const resultText = form === 'file' ? '[Clip](./cindy-studio.mp4)' : rich;
+    const actual = await vi.importActual<typeof import('../chatServerReplyImages.js')>('../chatServerReplyImages.js');
+    const blob = await import('../../cindy-media/blobStore.desktop.js');
+    const ledger = await import('../../cindy-media/ledger.js');
+    const canRead = vi.spyOn(ledger, 'sessionCanRead').mockResolvedValue(true);
+    const resolve = vi.spyOn(blob, 'resolveSafe').mockReturnValue({ absPath: file, mimeType: 'video/mp4', hash });
+    const read = vi.spyOn(blob, 'readFile').mockResolvedValue({ buffer: bytes, mimeType: 'video/mp4' });
+    const memberRoot = await realReplyFs.mkdtemp(path.join(os.tmpdir(), 'group-video-member-'));
+    const ownerRoot = vi.spyOn(await import('../../appSessionState.js'), 'ownerScopedUserDataPath').mockReturnValue(memberRoot);
+    try {
+      replyScope.snapshot = { client: { drizzle: { select: () => ({ from: () => ({ where: () => ({
+        limit: async () => [{ workingDir: path.dirname(file), remoteHostId: null, status: 'active', clearedAt: null }],
+      }) }) }) } } };
+      replyFiles.prepare.mockImplementation((text, sessionId, check) => realReplyFiles.prepareChatReplyFiles(text, sessionId!, check!));
+      replyImages.mockImplementation(actual.prepareChatReplyImages);
+      const { createChatMedia } = await vi.importActual<typeof import('../chatServerMedia.js')>('../chatServerMedia.js');
+      const api = vi.fn().mockResolvedValueOnce({ id: 'clip', uploadUrl: 'https://upload.example.test/clip' }).mockResolvedValueOnce({});
+      videoPut.mockResolvedValueOnce(new Response(null, { status: 200 }));
+      fixture.upload.mockImplementation(createChatMedia(api, () => true, 'https://chat.example.test').upload);
+      await startFileReply();
+      if (form === 'revoked') {
+        const previous = fixture.handle.getMockImplementation()!;
+        fixture.handle.mockImplementation((route, method, body) => route.endsWith('/members')
+          ? { body: [] } : previous(route, method, body));
+      }
+      await service.settleLaneTurn({ ...terminal, resultText });
+      if (form === 'revoked') {
+        expect(deliveries()).toHaveLength(0);
+        expect(read).not.toHaveBeenCalled();
+        expect(api).not.toHaveBeenCalled();
+        return;
+      }
+      expect(api.mock.calls[0]?.[2]).toMatchObject({ type: 'video/mp4', size: bytes.length });
+      const uploaded = new Uint8Array(videoPut.mock.lastCall?.[1].body);
+      expect(Buffer.from(uploaded).equals(bytes)).toBe(true);
+      expect(deliveries()[0]?.[2].content).toContainEqual({ type: 'media', mediaId: 'clip', caption: 'cindy-studio.mp4' });
+      const memberApi = vi.fn().mockResolvedValue({ name: 'cindy-studio.mp4', type: 'video/mp4', size: uploaded.length, url: 'https://download.example.test/clip' });
+      videoPut.mockResolvedValueOnce(new Response(uploaded));
+      const received = await createChatMedia(memberApi, () => true, 'https://chat.example.test').download('room', 'clip');
+      expect(memberApi).toHaveBeenCalledWith('/conversations/room/media/clip');
+      expect(received.mimeType).toBe('video/mp4');
+      expect((await realReplyFs.readFile(received.path!)).equals(bytes)).toBe(true);
+    } finally {
+      replyScope.snapshot = null;
+      canRead.mockRestore(); resolve.mockRestore(); read.mockRestore(); videoPut.mockReset();
+      ownerRoot.mockRestore();
+      await realReplyFs.rm(memberRoot, { recursive: true, force: true });
+    }
+  });
 
   it('delivers a PDF reply and retries a lost completion ACK without another upload', async () => {
     const file = { id: 'pdf', name: 'report.pdf', category: 'file', mimeType: 'application/pdf', size: 0, path: null, url: null };

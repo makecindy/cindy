@@ -98,6 +98,12 @@ const OFFLINE_SECRET_KEY = 'telegram-bot-offline';
 
 const POLL_TIMEOUT_SEC = 50;
 /**
+ * 建连握手(getMe)上限: 网络不通时这条连接不能无限停在 connecting —— 超时按
+ * 网络失败处理(init 走既有退避重试, 手动保存直接报失败)。只管握手, 长轮询仍按
+ * POLL_TIMEOUT_SEC 由服务端挂起。
+ */
+const CONNECT_HANDSHAKE_TIMEOUT_MS = 15_000;
+/**
  * 相册(media_group)聚合窗: Telegram 把一次多图拆成多条消息, 同组消息通常在
  * 同一批 getUpdates 里到齐; 静默 1s 后合并成单个事件, 不各起一轮 turn。
  */
@@ -369,6 +375,13 @@ export interface TelegramConfigState {
   ownerUserId: string | null;
   botUsername: string | null;
   saveErrorStatus?: IMStatus;
+  /**
+   * 新绑定(此前没有已保存的 token)这次保存失败只是建连握手超时: 凭证已回滚、什么都没存,
+   * 界面保留用户刚填的内容, 提示「连接超时, 请重试」, 用原输入直接重试。替换已有绑定时
+   * 旧凭证会恢复并重连, 不标这个字段, 界面照旧按已有绑定处理。只出现在本机 set-config
+   * 的返回里, 不进跨设备状态投影(状态本身仍是 code='network', 旧控制端照常识别)。
+   */
+  saveTimedOut?: boolean;
 }
 
 export class TelegramIM extends BaseIM implements ChannelIM {
@@ -640,12 +653,13 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   }
 
   /** 设置卡 / 伙伴连接页读到的配置态(状态 + 主人 + bot 用户名)。 */
-  getConfigState(saveErrorStatus?: IMStatus): TelegramConfigState {
+  getConfigState(saveErrorStatus?: IMStatus, saveTimedOut = false): TelegramConfigState {
     return {
       status: this.status,
       ownerUserId: this.ownerUserId || null,
       botUsername: this.botUsername || null,
       ...(saveErrorStatus ? { saveErrorStatus } : {}),
+      ...(saveTimedOut ? { saveTimedOut: true } : {}),
     };
   }
 
@@ -659,7 +673,8 @@ export class TelegramIM extends BaseIM implements ChannelIM {
    * 由宿主直接调用(不注册 IPC)。token 为空时只换主人。
    */
   async setConfig(payload: unknown): Promise<TelegramConfigState> {
-    const configResult = (saveErrorStatus?: IMStatus) => this.getConfigState(saveErrorStatus);
+    const configResult = (saveErrorStatus?: IMStatus, saveTimedOut = false) =>
+      this.getConfigState(saveErrorStatus, saveTimedOut);
     const config = isRecord(payload) ? payload : {};
     const token = typeof config.token === 'string' ? config.token.trim() : '';
     const ownerUserId =
@@ -716,9 +731,11 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         this.setStatus({ kind: 'error', reason: secretWriteFailedReason(), code: 'secret-unavailable' });
         return configResult();
       }
-      const connected = await this.connect(token, false);
-      if (!connected) {
+      const outcome = await this.connectAttempt(token, false);
+      if (outcome !== 'connected') {
         const failedStatus = this.status;
+        // 只有新绑定才标超时: 替换已有绑定时下面会恢复并重连旧凭证, 界面要按已有绑定显示。
+        const timedOut = outcome === 'timed-out' && !previousToken?.trim();
         const restored = await this.rollbackConfigOrFailClosed(
           previousToken,
           previousOwnerUserId,
@@ -731,7 +748,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
           this.questionRespondents.clear();
           await this.connect(previous);
         }
-        return configResult(failedStatus);
+        return configResult(failedStatus, timedOut);
       }
       const noticeConfigVersion = this.configVersion;
       await this.sendOwnerNoticeWithTimeout(
@@ -1362,6 +1379,14 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   // ── connect / polling ──────────────────────────────────────────────────────
 
   private async connect(token: string, autoRetry = true): Promise<boolean> {
+    return (await this.connectAttempt(token, autoRetry)) === 'connected';
+  }
+
+  /** 同 connect, 但区分「握手超时」: 保存路径据此保留用户输入并提示重试。 */
+  private async connectAttempt(
+    token: string,
+    autoRetry: boolean,
+  ): Promise<'connected' | 'failed' | 'timed-out'> {
     const api = (this.opts.apiFactory ?? createTelegramApiClient)(token);
     // getMe 是网络请求, 这段窗口里另一台设备可能远程下线、用户可能本地下线或
     // 登出。这些路径都只递增 configVersion + 停当前 poll —— 尚未创建 poll 的
@@ -1371,11 +1396,19 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     const generation = this.configVersion;
     this.setStatus({ kind: 'connecting' });
     let me: TgUser;
+    const handshake = new AbortController();
+    const handshakeTimer = setTimeout(() => handshake.abort(), CONNECT_HANDSHAKE_TIMEOUT_MS);
     try {
-      me = await api.call<TgUser>('getMe');
-    } catch (err) {
-      if (this.configVersion !== generation || this.disposing) return false;
-      this.setStatus(mapConnectErrorToStatus(err));
+      me = await api.call<TgUser>('getMe', undefined, handshake.signal);
+    } catch (caught) {
+      if (this.configVersion !== generation || this.disposing) return 'failed';
+      // 超时一律按网络失败: 响应头已到、正文卡住时, 中止会被 parseResponse 包成
+      // error_code=200 的 TelegramApiError, 不能因此被当成不可重试的接口错误。
+      const err = handshake.signal.aborted ? new Error('telegram getMe timed out') : caught;
+      if (handshake.signal.aborted) this.log.warn(`getMe timed out after ${CONNECT_HANDSHAKE_TIMEOUT_MS}ms`);
+      this.setStatus(handshake.signal.aborted
+        ? { kind: 'error', reason: 'handshake timed out', code: 'network' }
+        : mapConnectErrorToStatus(err));
       const retryable = !(err instanceof TelegramApiError)
         || err.errorCode === 429 || err.errorCode >= 500;
       if (autoRetry && retryable) {
@@ -1385,13 +1418,15 @@ export class TelegramIM extends BaseIM implements ChannelIM {
           void this.connect(token);
         }, { minimumDelayMs: err instanceof TelegramApiError ? (err.retryAfterSec ?? 0) * 1_000 : 0 });
       }
-      return false;
+      return handshake.signal.aborted ? 'timed-out' : 'failed';
+    } finally {
+      clearTimeout(handshakeTimer);
     }
     // 世代变了(被下线/登出/换 token)或已 dispose → 本次连接结果作废。offline
     // 标志再查一次是防守: 远程下线写标志与递增世代之间也有窗口。
     if (this.configVersion !== generation || this.disposing) {
       this.log.info('connect result discarded: superseded by offline/dispose during getMe');
-      return false;
+      return 'failed';
     }
     const offlineFlagState = this.offlineFlagState();
     if (offlineFlagState !== 'absent') {
@@ -1402,7 +1437,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         this.setStatus({ kind: 'offline', appId: String(me.id) });
       }
       this.log.info('connect result discarded: offline flag is set or unreadable after getMe');
-      return false;
+      return 'failed';
     }
     this.connectionRetry.reset();
     this.api = api;
@@ -1412,7 +1447,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     this.setStatus({ kind: 'connected', appId: String(me.id) });
     this.startPolling(api);
     this.registerOwnerCommandMenu();
-    return true;
+    return 'connected';
   }
 
   /**

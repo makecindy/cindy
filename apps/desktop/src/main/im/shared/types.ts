@@ -204,6 +204,7 @@ export interface ImChannelAdapter {
    * 实现; 缺省 = 这个渠道的连接不能交给伙伴, 保持原有路由。
    */
   companionLane?: (userId: string) => ImCompanionLane;
+  steerWhileBusy?(botId: string, chatId: string): boolean;
   /** An explicitly delegated chat stays on its recipient even when the recipient is unavailable. */
   requiresCompanionLane?(userId: string): boolean;
   /**

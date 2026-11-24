@@ -48,6 +48,7 @@ import {
   failPluginInstallProgress,
 } from '../lib/pluginInstallProgress';
 import type { PluginMarketItem } from '../../../../shared/pluginMarket';
+import { PluginPublisherBadge } from '../PluginPublisherBadge';
 
 const {
   InstalledPluginDisclosure,
@@ -620,6 +621,26 @@ describe('GhostPluginCard', () => {
 });
 
 describe('MarketPluginCard', () => {
+  it.each([
+    ['public', 'official', 'settings.ghosts.market.publisherKind.official'],
+    ['public', 'personal', 'settings.ghosts.market.publisherKind.community'],
+    ['organization', undefined, 'settings.ghosts.page.origin.organization'],
+    ['custom', undefined, 'settings.ghosts.page.origin.custom'],
+    ['local', undefined, 'settings.ghosts.page.origin.local'],
+  ] as const)('keeps the %s/%s source badge without a hover tooltip', (origin, kind, label) => {
+    vi.useFakeTimers();
+    try {
+      render(<PluginPublisherBadge origin={origin} kind={kind} />);
+      const badge = screen.getByText(label);
+      expect(badge.closest('[title]')).toBeNull();
+      fireEvent.pointerMove(badge, { pointerType: 'mouse' });
+      act(() => vi.advanceTimersByTime(600));
+      expect(screen.queryByRole('tooltip')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // Unit: tooltips receive pointer events above the compact card's sibling hit
   // target. A click must still open detail exactly once, without installing.
   it.each([false, true])('opens detail from downloads with compact=%s and keeps installation separate', compact => {

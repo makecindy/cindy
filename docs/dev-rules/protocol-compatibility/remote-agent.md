@@ -16,6 +16,14 @@
 插件提供的引擎（2026-11-20）：`open.agentKind` 新增取值 `acp`，运行端以 `caps.pluginEngines` 声明支持，只对同账号
 控制端开放；字段、旧端降级与拒绝条件见[插件任务执行引擎](plugin-harnesses.md)「自己的其他电脑使用插件引擎」。
 
+## 跨设备发送前的账号检查
+
+同账号远程订阅账号只读检查超时，且普通输入尚未落库派发时，任务电脑保留队首原消息，
+可通过可选投影字段 `waitingForRemoteAccount: true` 提示等待目标电脑，不把上一轮标为失败。
+旧查看端仍显示普通队列，可按原入口取消。任务电脑收到目标设备恢复信号时重新检查；
+未收到信号时，原消息最多额外定时检查一次。每次派发仍须通过完整账号检查；
+已取消的消息和可能已送达但未确认的发送不走这条重试路径。不改变中继协议。
+
 ## 托管请求的附件预算与保存（2026-11-17）
 
 `open.acceptsAttachmentPreservation?: true` 表示任务所在电脑能接收被请求预算移出的附件。
@@ -385,7 +393,13 @@ Codex 原生图片恢复（#6412）在既有 `maker:remote-agent:v1` 上追加�
   分享仍以本次返回为准，完整结果确认移除后不再保留。此显示快照不授予读取或运行权限，
   宿主代读仍前后核对当前名单。控制端自身的 Agent 变化同时使经任务电脑读取的运行时列表失效，
   旧请求不得回填；不刷新其它任务电脑或本机直读缓存。
-  分享目录/名单变化以空载荷 `maker:model-catalog:changed` 推送到 `sessions` topic，控制端重新读取。
+  同账号控制端手动重试分享目录时，在同一通道发送 `op: retry-share-directory` 及目标 `agentDeviceId`。
+  任务电脑先按现有账号与分享授权有界恢复自己的名单，再由控制端继续普通目录读取。
+  旧任务电脑以 `INVALID_PARAMS` 拒绝未知操作时，继续使用该电脑原有目录读取路径。
+  分享目录/名单变化通过 `sessions` topic 发送 `maker:model-catalog:changed`。
+  名单变化通知与对应手动恢复回执可带同一任务电脑的 `receivedChangeSequence`，以合并同次恢复的目录读取。
+  后续独立变化仍刷新目录；旧控制端忽略可选序号。沿用既有中转透传，验证见
+  `controlledModelCatalog.test.ts`、`remoteCatalogSnapshot.test.ts` 与 `@cindy/device-link-relay interop`。
   `locations` 对有效分享可附带最小 `favoriteSource`（分享、成员、供应商 ID 与归属区域），只用于解析
   任务电脑保存的收藏，收藏仍通过原 `model-favorites` 通道读写任务电脑。不含凭证、不授予运行权限；
   旧控制端忽略此字段，新控制端遇到未提供此字段的主机不以自己电脑的成员身份替代。

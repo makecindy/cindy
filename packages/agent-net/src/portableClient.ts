@@ -344,12 +344,35 @@ function bufferedBytes(ws: BinarySocket): number {
   return typeof ws.bufferedAmount === 'number' && Number.isFinite(ws.bufferedAmount) && ws.bufferedAmount > 0 ? ws.bufferedAmount : 0;
 }
 
+const RELAY_PROBE_TIMEOUT_MS = 15_000;
+
 class PortableUplink extends SocketEvents implements SocketUplink {
   readonly kind = 'agent-net';
   devices: DeviceView[] = [];
   delegations: Delegation[] = [];
   delegationRequests: DelegationRequest[] = [];
   notifications = false;
+  private supportsRelayProbe = false;
+  private probeTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastProbeAt = -Infinity;
+
+  probeRelay(): void {
+    const now = performance.now();
+    if (!this.supportsRelayProbe || this.closed || this.probeTimer || now - this.lastProbeAt < RELAY_PROBE_TIMEOUT_MS) return;
+    this.lastProbeAt = now;
+    this.probeTimer = setTimeout(() => {
+      this.probeTimer = null;
+      // The app may have been suspended. A delayed JS timer is not a failed round trip.
+      if (performance.now() - now > 2 * RELAY_PROBE_TIMEOUT_MS) return;
+      this.close();
+      this.emitClose(1006);
+    }, RELAY_PROBE_TIMEOUT_MS);
+    try { this.ws.send('{"type":"relay-probe"}'); } catch { this.close(); this.emitClose(1006); }
+  }
+  private clearProbe(): void {
+    if (this.probeTimer !== null) clearTimeout(this.probeTimer);
+    this.probeTimer = null;
+  }
   /** This session's relay UDP credentials when the relay offered them; null keeps every relayed datagram on the WebSocket. */
   udp: { session: Uint8Array; key: Uint8Array } | null = null;
   private receiver: ((deviceId: string, data: Uint8Array) => void) | null = null;
@@ -405,6 +428,7 @@ class PortableUplink extends SocketEvents implements SocketUplink {
       };
       ws.onclose = event => {
         clearTimeout(timer); if (!established) reject(new Error('AGENT_NET_CLOSED_' + event.code));
+        uplink.clearProbe();
         uplink.closed = true;
         uplink.clearStall();
         if (established) uplink.emitClose(event.code);
@@ -418,7 +442,11 @@ class PortableUplink extends SocketEvents implements SocketUplink {
           client.options.assertCurrent();
           if (typeof event.data === 'string') {
             if (utf8(event.data).length > MAX_CONTROL_BYTES) throw new Error('INVALID_CONTROL');
-            const message = JSON.parse(event.data) as { type: string; deviceId: string; protocolVersion?: number; notifications?: boolean; devices: DeviceView[]; delegations: Delegation[]; delegationRequests?: DelegationRequest[] };
+            const message = JSON.parse(event.data) as { type: string; deviceId: string; protocolVersion?: number; notifications?: boolean; relayProbe?: boolean; devices: DeviceView[]; delegations: Delegation[]; delegationRequests?: DelegationRequest[] };
+            if (message.type === 'relay-pong' && receivedHello && uplink.supportsRelayProbe) {
+              uplink.clearProbe();
+              return;
+            }
             const requests = message.delegationRequests ?? [];
             if (!['hello', 'directory'].includes(message.type) || !Array.isArray(message.devices) || !Array.isArray(message.delegations)
               || !Array.isArray(requests) || !client.trustedDirectory(message.devices, message.delegations, requests)) throw new Error('UNTRUSTED_DIRECTORY');
@@ -428,6 +456,7 @@ class PortableUplink extends SocketEvents implements SocketUplink {
             if (message.type === 'hello') {
               if (receivedHello || message.protocolVersion !== 2
                 || message.deviceId !== (client.delegation ? 'guest:' + client.delegation.id : client.identity.deviceId)) throw new Error('INVALID_HELLO');
+              uplink.supportsRelayProbe = !client.delegation && message.relayProbe === true;
               uplink.notifications = message.notifications === true;
               uplink.udp = askUdp ? udpCredentials((message as { udp?: unknown }).udp) : null;
               receivedHello = true; established = true; clearTimeout(timer); resolve(uplink);
@@ -509,6 +538,7 @@ class PortableUplink extends SocketEvents implements SocketUplink {
       platform: metadata.platform, app: metadata.app, appVersion: metadata.appVersion, busy: metadata.busy, deviceName: metadata.deviceName }));
   }
   close(): void {
+    this.clearProbe();
     if (this.closed) return;
     this.closed = true;
     this.clearStall();

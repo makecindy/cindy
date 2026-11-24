@@ -113,7 +113,7 @@ import {
   readDesktopDisplayModes,
   isEditableDesktopPoint,
   setDesktopDisplayMode,
-  readDesktopInputPermission,
+  readDesktopInputAccess,
   resolveDesktopInputBinary,
   readDesktopLockState,
   lockDesktopScreen,
@@ -130,13 +130,20 @@ import {
 const log = createLogger('remote-desktop');
 const runMacOpen = promisify(execFile);
 
+// Local settings only: why remote keyboard and mouse are still missing on
+// macOS 27.3 when the person allowed Cindy to control chosen apps only.
+let inputChosenAppsOnly = false;
 const permissions = new RemoteDesktopPermissionsService({
   required: process.platform === 'darwin',
   screen: () => {
     const status = systemPreferences.getMediaAccessStatus('screen');
     return status === 'granted' ? 'granted' : status === 'unknown' ? 'unknown' : 'missing';
   },
-  accessibility: () => readDesktopInputPermission('postEvents'),
+  accessibility: async () => {
+    const access = await readDesktopInputAccess('postEvents');
+    inputChosenAppsOnly = access.chosenAppsOnly === true;
+    return access.status;
+  },
   request: async (permission, isCurrent, signal) => {
     if (permission === 'accessibility') return requestDesktopInputPermission(isCurrent, signal, 'postEvents');
     await enumerateDesktopSources(
@@ -1505,6 +1512,7 @@ export function registerRemoteDesktopIpc(
     return {
       ...status,
       ...(bundle ? { appBundlePath: bundle } : {}),
+      ...(status.accessibility === 'missing' && inputChosenAppsOnly ? { accessibilityChosenAppsOnly: true } : {}),
       separateWindowRetries: permissions.separateWindowRetries,
     };
   });

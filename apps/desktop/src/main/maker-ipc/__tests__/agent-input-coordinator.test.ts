@@ -1,3 +1,5 @@
+import { BotCapabilityRefreshDeferredError } from '../botCompactRuntimeRefresh.js';
+import { schedulePendingInteractionTimeout, type PendingInteractionTimeoutEntry } from '../interactionTimeout.js';
 import { desktopContextRecoveryAbortSignal } from '../contextRecoveryAssembly.desktop.js';
 import { acceptedAttachmentReplay } from '../attachmentReplay.js';
 import { normalizeUserMessage } from '../normalizeAttachments.desktop.js';
@@ -31,6 +33,7 @@ import { performSessionAgentSwitch, type AgentSwitchSessionRow } from '../sessio
 import * as delegationHistory from '../botDelegationHistory.js';
 import { modelGroupCandidateKey, type ModelGroupCandidate } from '../../../shared/modelGroups.js';
 import { AgentInputCoordinator } from '../agent-input-coordinator.desktop.js';
+import { RemoteAccountReadUnavailable } from '../../subscription-accounts/remotePreflight.js';
 import { canRecoverUndeliveredOrcaReport } from '../../../shared/sharedTaskRecovery.js';
 import { AutoResumeBookkeeping } from '../autoResumeBookkeeping.js';
 import { createInterruptedTurnAutoResumeHooks } from '../interruptedTurnAutoResumeHooks.js';
@@ -2995,6 +2998,240 @@ describe('AgentInputCoordinator trusted session reference snapshots', () => {
 });
 
 describe('AgentInputCoordinator send transaction', () => {
+  it.each(['text', 'content', 'replace'])('dispatches edited companion input after a refresh wait (%s)', async (edit) => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'companion-refresh-edit';
+      h.sendToAgent.mockRejectedValueOnce(new BotCapabilityRefreshDeferredError());
+      h.coordinator.enqueue(sid, makeItem('waiting', 'original'));
+      await flush();
+
+      const updated = makeItem('waiting', 'edited');
+      if (edit === 'text') h.coordinator.updateText(sid, 'waiting', 'edited');
+      else if (edit === 'content') h.coordinator.updateContent(sid, 'waiting', updated);
+      else h.coordinator.replaceQueuedMessage(sid, 'waiting', updated);
+      h.coordinator.wakeSession(sid, 'unrelated-wake');
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+      if (edit === 'text') await vi.runOnlyPendingTimersAsync();
+      else h.coordinator.onBotCapabilityRefreshReady(sid);
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+      expect(h.sendToAgent.mock.calls[1][1]).toMatchObject({ content: 'edited' });
+      expect(h.coordinator.getProjection(sid).pendingQueue).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('checks the new queue head when a companion input waiting for refresh moves back', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'companion-refresh-reorder';
+      h.sendToAgent.mockRejectedValueOnce(new BotCapabilityRefreshDeferredError());
+      h.coordinator.enqueue(sid, makeItem('first', 'first'));
+      h.coordinator.enqueue(sid, makeItem('second', 'second'));
+      await flush();
+
+      h.coordinator.move(sid, 'first', 2);
+      await flush();
+      expect(h.sendToAgent.mock.calls[1]?.[3].persistUserMessage?.clientId).toBe('second');
+
+      h.coordinator.onBotCapabilityRefreshReady(sid);
+      h.setRunning(false);
+      h.coordinator.onTurnEvent(sid, 'done');
+      await flush();
+      expect(h.sendToAgent.mock.calls.map(call => call[3].persistUserMessage?.clientId))
+        .toEqual(['first', 'second', 'first']);
+      expect(h.coordinator.getProjection(sid).pendingQueue).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['refresh ready', 'fallback timer'])('dispatches the original companion queue head once via %s', async (wake) => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'companion-refresh';
+      h.sendToAgent.mockRejectedValueOnce(new BotCapabilityRefreshDeferredError());
+      h.coordinator.enqueue(sid, makeItem('original-message', 'queued during refresh'));
+      await flush();
+
+      const waiting = h.coordinator.getProjection(sid);
+      expect(waiting.error).toBeNull();
+      expect(waiting.pendingQueue.map(item => item.clientId)).toEqual(['original-message']);
+      h.coordinator.wakeSession(sid, 'unrelated-wake');
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+      if (wake === 'refresh ready') {
+        h.coordinator.onBotCapabilityRefreshReady(sid);
+        h.coordinator.onBotCapabilityRefreshReady(sid);
+        await flush();
+        expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+      }
+      await vi.runOnlyPendingTimersAsync();
+      await flush();
+      expect(h.coordinator.getProjection(sid).pendingQueue).toEqual([]);
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+      expect(h.sendToAgent.mock.calls[1][3].persistUserMessage?.clientId).toBe('original-message');
+      expect(h.onDispatchedUserTurn).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['withdraw', 'stop'])('respects %s while a companion input is waiting for refresh', async (action) => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'companion-refresh-cancelled';
+      h.sendToAgent.mockRejectedValueOnce(new BotCapabilityRefreshDeferredError());
+      h.coordinator.enqueue(sid, makeItem('waiting', 'can be cancelled'));
+      await flush();
+      if (action === 'withdraw') h.coordinator.remove(sid, 'waiting');
+      else await h.coordinator.stop(sid, { keepQueue: true, pauseQueue: true });
+
+      h.coordinator.onBotCapabilityRefreshReady(sid);
+      await vi.runOnlyPendingTimersAsync();
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+      const projection = h.coordinator.getProjection(sid);
+      expect(projection.pendingQueue.map(item => item.clientId)).toEqual(action === 'withdraw' ? [] : ['waiting']);
+      expect(projection.error).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps waiting after an early fallback and dispatches only after the late refresh', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'companion-refresh-late';
+      const error = new BotCapabilityRefreshDeferredError();
+      h.sendToAgent.mockRejectedValueOnce(error).mockRejectedValueOnce(error);
+      h.coordinator.enqueue(sid, makeItem('waiting', 'wait for the actual refresh'));
+      await flush();
+      await vi.runOnlyPendingTimersAsync();
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+      expect(h.coordinator.getProjection(sid)).toMatchObject({
+        error: null,
+        recovery: null,
+        pendingQueue: [expect.objectContaining({ clientId: 'waiting' })],
+      });
+
+      await vi.runOnlyPendingTimersAsync();
+      h.coordinator.wakeSession(sid, 'unrelated-wake');
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+      h.coordinator.onBotCapabilityRefreshReady(sid);
+      await flush();
+      expect(h.sendToAgent.mock.calls[2][3].persistUserMessage?.clientId).toBe('waiting');
+      expect(h.onDispatchedUserTurn).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // #7316, unit: drive the host timeout after the one fallback is deferred or
+  // hits the busy gate. The neighboring tests inject refresh-ready directly.
+  it.each(['deferred', 'blocked'])('dispatches the original input once after interaction timeout (%s fallback)', async (fallback) => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'companion-refresh-interaction-timeout';
+      const requestId = 'permission';
+      const entry: PendingInteractionTimeoutEntry = {
+        sessionId: sid,
+        kind: 'permission',
+        request: { kind: 'permission', requestId, toolName: 'test', input: {} },
+        resolve: vi.fn(),
+        timeoutRemainingMs: 5_000,
+      };
+      let pending: PendingInteractionTimeoutEntry | undefined;
+      const openInteraction = () => {
+        pending = entry;
+        h.setPendingInteraction(true);
+        schedulePendingInteractionTimeout(requestId, entry, {
+          getPending: () => pending,
+          isExecutionPaused: sessionId => h.coordinator.isExecutionPaused(sessionId),
+          clearPending: () => {
+            pending = undefined;
+            h.setPendingInteraction(false);
+            return entry;
+          },
+          dismiss: vi.fn(),
+          publishTimeout: vi.fn(),
+          onInteractionTimedOut: sessionId => h.coordinator.onBotCapabilityRefreshReady(sessionId),
+        });
+      };
+      const error = new BotCapabilityRefreshDeferredError();
+      h.sendToAgent.mockRejectedValueOnce(error);
+      if (fallback === 'deferred') {
+        h.sendToAgent.mockImplementationOnce(async () => {
+          openInteraction();
+          throw error;
+        });
+      }
+
+      h.coordinator.enqueue(sid, makeItem('original', 'send after the interaction settles'));
+      await flush();
+      if (fallback === 'blocked') openInteraction();
+      await vi.advanceTimersByTimeAsync(2_000);
+      const attemptsBeforeTimeout = fallback === 'deferred' ? 2 : 1;
+      expect(h.sendToAgent).toHaveBeenCalledTimes(attemptsBeforeTimeout);
+      expect(h.coordinator.getProjection(sid)).toMatchObject({
+        error: null,
+        pendingQueue: [expect.objectContaining({ clientId: 'original' })],
+      });
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(entry.resolve).toHaveBeenCalledWith({ kind: 'permission', behavior: 'deny', reason: 'timeout' });
+      expect(h.sendToAgent).toHaveBeenCalledTimes(attemptsBeforeTimeout + 1);
+      expect(h.sendToAgent.mock.calls[attemptsBeforeTimeout][3].persistUserMessage?.clientId).toBe('original');
+      expect(h.onDispatchedUserTurn).toHaveBeenCalledTimes(1);
+      expect(h.coordinator.getProjection(sid).pendingQueue).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('uses the ready signal received while a deferred send is unwinding', async () => {
+    const h = createHarness();
+    const sid = 'companion-refresh-during-send';
+    h.sendToAgent.mockImplementationOnce(async () => {
+      h.coordinator.onBotCapabilityRefreshReady(sid);
+      throw new BotCapabilityRefreshDeferredError();
+    });
+    h.coordinator.enqueue(sid, makeItem('waiting', 'refresh already completed'));
+    await vi.waitFor(() => expect(h.onDispatchedUserTurn).toHaveBeenCalledTimes(1));
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+  });
+
+  it('preserves manual queue recovery after a genuine precondition error', async () => {
+    const h = createHarness();
+    const sid = 'companion-refresh-recovery';
+    const error = new Error('[PRECONDITION_FAILED] Task is paused');
+    h.sendToAgent.mockRejectedValueOnce(error);
+    h.coordinator.enqueue(sid, makeItem('failed', 'retained for manual retry'));
+    await flush();
+    h.coordinator.onBotCapabilityRefreshReady(sid);
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    expect(h.coordinator.getProjection(sid)).toMatchObject({
+      error: error.message,
+      recovery: { kind: 'queue-head', clientId: 'failed' },
+      pendingQueue: [expect.objectContaining({ clientId: 'failed' })],
+    });
+  });
+
   it('keeps a drained turn visible until vendor dispatch accepts it', async () => {
     const h = createHarness();
     const sid = 'inspection-pre-dispatch';
@@ -6502,6 +6739,92 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(dispatched).toEqual(['following']);
   });
 
+  it.each([true, false])('waits for the account device before sending the original queue head (cancel=%s)', async cancel => {
+    const harness = createHarness();
+    const sessionId = 'remote-admission';
+    harness.sendToAgent.mockRejectedValueOnce(new RemoteAccountReadUnavailable('peer-a', new Error('timeout')));
+    harness.coordinator.enqueue(sessionId, makeItem('input-a', 'original'), { manualUiSend: true });
+    await flush();
+    expect(latestProjection(harness.projections)).toMatchObject({
+      error: null, pendingQueue: [{ clientId: 'input-a', waitingForRemoteAccount: true }],
+    });
+    harness.coordinator.enqueue(sessionId, makeItem('input-b', 'next'), { manualUiSend: true });
+    await flush();
+    expect(latestProjection(harness.projections)).toMatchObject({
+      error: null, pendingQueue: [
+        { clientId: 'input-a', waitingForRemoteAccount: true },
+        { clientId: 'input-b' },
+      ],
+    });
+    expect(harness.onDiscardedQueuedMessage).not.toHaveBeenCalled();
+    harness.coordinator.onRemoteAccountDeviceReady('peer-b');
+    await flush();
+    expect(harness.sendToAgent).toHaveBeenCalledTimes(1);
+    if (cancel) harness.coordinator.remove(sessionId, 'input-a');
+    harness.coordinator.onRemoteAccountDeviceReady('peer-a');
+    harness.coordinator.onRemoteAccountDeviceReady('peer-a');
+    await flush();
+    expect(harness.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(mocks.createMessage).toHaveBeenCalledTimes(1);
+    expect(mocks.createMessage).toHaveBeenNthCalledWith(
+      1, sessionId, expect.objectContaining({ clientId: cancel ? 'input-b' : 'input-a' }), expect.anything(),
+    );
+    if (!cancel) {
+      harness.setRunning(false);
+      harness.coordinator.onTurnEvent(sessionId, 'done');
+      await flush();
+      expect(mocks.createMessage).toHaveBeenCalledTimes(2);
+      expect(mocks.createMessage).toHaveBeenNthCalledWith(
+        2, sessionId, expect.objectContaining({ clientId: 'input-b' }), expect.anything(),
+      );
+    }
+  });
+
+  it('releases the old wait when a priority input takes the queue head', async () => {
+    const harness = createHarness();
+    const sessionId = 'remote-admission';
+    harness.sendToAgent.mockRejectedValueOnce(new RemoteAccountReadUnavailable('peer-a', new Error('timeout')));
+    harness.coordinator.enqueue(sessionId, makeItem('input-a', 'original'), { manualUiSend: true });
+    await flush();
+    harness.coordinator.reserveNextInput(sessionId, makeItem('priority', 'priority'));
+    await flush();
+    expect(latestProjection(harness.projections).pendingQueue.map(item => item.clientId)).toEqual(['input-a']);
+    expect(harness.onDiscardedQueuedMessage).not.toHaveBeenCalled();
+    harness.setRunning(false);
+    harness.coordinator.onTurnEvent(sessionId, 'done');
+    await flush();
+    expect(mocks.createMessage).toHaveBeenNthCalledWith(
+      1, sessionId, expect.objectContaining({ clientId: 'priority' }), expect.anything(),
+    );
+    expect(mocks.createMessage).toHaveBeenNthCalledWith(
+      2, sessionId, expect.objectContaining({ clientId: 'input-a' }), expect.anything(),
+    );
+  });
+
+  it('rechecks only once without a device event and never dispatches a cancelled wait', async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = createHarness();
+      const sessionId = 'remote-admission';
+      const unavailable = new RemoteAccountReadUnavailable('peer-a', new Error('timeout'));
+      harness.sendToAgent.mockRejectedValue(unavailable);
+      harness.coordinator.enqueue(sessionId, makeItem('input-a', 'original'), { manualUiSend: true });
+      await flush();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(harness.sendToAgent).toHaveBeenCalledTimes(2);
+      expect(latestProjection(harness.projections)).toMatchObject({
+        error: null, pendingQueue: [{ clientId: 'input-a', waitingForRemoteAccount: true }],
+      });
+      harness.coordinator.remove(sessionId, 'input-a');
+      harness.coordinator.onRemoteAccountDeviceReady('peer-a');
+      await flush();
+      expect(harness.sendToAgent).toHaveBeenCalledTimes(2);
+      expect(mocks.createMessage).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('rolls back every pre-accept send failure to the queue head and retries by typed recovery', async () => {
     const h = createHarness();
     const sid = 'send-rollback';
@@ -6628,6 +6951,81 @@ describe('AgentInputCoordinator send transaction', () => {
       vi.useRealTimers();
     }
   });
+
+  // #12531 / unit with SQLite: the existing live failure test never reloads the
+  // queue. Inject a lazy-create refusal and reopen through queue restoration.
+  it.each(['unchanged', 'route changed', 'head replaced', 'head reordered', 'ordinary queue'] as const)(
+    'reopens a persisted queue with the appropriate refusal hint (%s)', async scenario => {
+      const sid = 'remote-route-refusal';
+      const reason = '[REMOTE_COMPAT_MODE_UNSUPPORTED]';
+      const sqlite = new Database(':memory:');
+      sqlite.exec('CREATE TABLE agent_input_queue_snapshots (session_id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at INTEGER)');
+      setCurrentDbClient({ drizzle: drizzle(sqlite) } as unknown as DbClient, 'queue-refusal-test');
+      try {
+        const live = createHarness();
+        live.persistQueueSnapshot.mockImplementation(saveAgentInputQueueSnapshot);
+        live.setLoadQueueSnapshot(loadAgentInputQueueSnapshot);
+        await live.coordinator.ensureQueueRestored(sid);
+        if (scenario === 'ordinary queue' || scenario === 'head reordered') live.setRunning(true);
+        if (scenario !== 'ordinary queue') {
+          live.sendToAgent.mockResolvedValueOnce(hostSendFailure('LAZY_CREATE_FAILED', `${reason} private provider details`));
+        }
+        const item = makeItem('original', 'first');
+        if (scenario === 'ordinary queue') Object.assign(item, { dispatchRefusal: reason.slice(1, -1) });
+        live.coordinator.enqueue(sid, item);
+        if (scenario === 'head reordered') {
+          live.coordinator.enqueue(sid, makeItem('later', 'second'));
+          live.setRunning(false);
+          live.coordinator.onTurnEvent(sid, 'done');
+        }
+        await flush();
+        if (scenario !== 'ordinary queue') {
+          expect(live.coordinator.getProjection(sid).error).toContain(reason);
+          expect(live.sendToAgent).toHaveBeenCalledOnce();
+        }
+        if (scenario === 'route changed') {
+          live.coordinator.refreshQueuedRoute(sid, { model: 'new-model', providerId: 'new-provider' });
+        }
+        if (scenario === 'head replaced') {
+          live.setRunning(true);
+          live.coordinator.enqueue(sid, makeItem('later', 'second'));
+        }
+        if (scenario === 'head reordered') live.coordinator.move(sid, 'later', 0);
+        live.coordinator.onSessionClosed(sid);
+        await awaitAgentInputQueueSnapshotPersistence(sid);
+        const payload = sqlite.prepare('SELECT payload FROM agent_input_queue_snapshots WHERE session_id = ?')
+          .pluck().get(sid);
+        expect(payload).not.toContain('private provider details');
+        if (scenario === 'ordinary queue') expect(payload).not.toContain('dispatchRefusal');
+
+        const reopened = createHarness();
+        reopened.setLoadQueueSnapshot(loadAgentInputQueueSnapshot);
+        await reopened.coordinator.ensureQueueRestored(sid);
+        const projection = reopened.coordinator.getProjection(sid);
+        const expectedIds = scenario === 'head reordered' ? ['later', 'original']
+          : scenario === 'head replaced' ? ['later'] : ['original'];
+        expect(projection.pendingQueue.map(item => item.clientId)).toEqual(expectedIds);
+        expect(projection.queuePaused).toBe(true);
+        expect(reopened.sendToAgent).not.toHaveBeenCalled();
+        expect(mocks.createMessage).not.toHaveBeenCalled();
+        expect(projection.error).toBe(scenario === 'unchanged' ? reason : null);
+        expect(projection.recovery).toBeNull();
+        expect(projection.errorRetryText).toBeNull();
+        if (scenario === 'route changed') {
+          reopened.coordinator.resume(sid);
+          await flush();
+          expect(reopened.sendToAgent).toHaveBeenCalledOnce();
+          expect(reopened.sendToAgent.mock.calls[0][2]).toMatchObject({
+            model: 'new-model', providerId: 'new-provider',
+          });
+          expect(reopened.sendToAgent.mock.calls[0][3].persistUserMessage?.clientId).toBe('original');
+        }
+      } finally {
+        clearCurrentDbClient();
+        sqlite.close();
+      }
+    },
+  );
 
   it.each(['WORKDIR_MISSING', 'LAZY_CREATE_FAILED'] as const)('keeps %s recoverable without leaving an active turn', async code => {
     const h = createHarness();
@@ -14589,6 +14987,41 @@ describe('Orca report durable recovery', () => {
     },
   );
 
+  // 2026-11-24: a Worker's direct Lead assignment hit "You've hit your 5-hour limit"
+  // and its error banner offered neither Retry nor Continue: the explicit error
+  // dropped the direct receipt, so the projection had no retry text and
+  // errorCanContinue=false (Desktop and Mobile both gate the button on it).
+  // The failure still keeps no replayable record and no usage-limit wait.
+  it.each([
+    ['direct assignment', true],
+    ['stopped assignment', false],
+    ['turn without a receipt', false],
+  ] as const)('offers manual Continue after an explicit Worker failure: %s', async (boundary, expected) => {
+    const h = createHarness();
+    const runtime = { instanceId: 'worker-runtime' };
+    h.setTurnSessionIdentity(runtime);
+    h.setTurnGeneration(1);
+    const item = makeItem('assignment', 'write the third draft');
+    item.createOpts.orcaRole = 'worker';
+    if (boundary !== 'turn without a receipt') {
+      h.coordinator.rememberDirectWorkerInput(runtime, 1, item, h.coordinator.getInputAbortSignal('worker'));
+    }
+    if (boundary === 'stopped assignment') h.coordinator.stop('worker');
+    const meta = { sessionInstanceId: runtime.instanceId, sessionTurnGeneration: 1 };
+    h.coordinator.onTurnEvent('worker', 'error', "You've hit your 5-hour limit · resets 2:10pm (Pacific/Auckland)",
+      { sdkError: 'rate_limit', usageLimit: true, usageResetAt: 5_000_000 }, meta);
+    h.coordinator.onTurnEvent('worker', 'done', undefined, undefined, meta);
+    await flush();
+
+    const projection = h.coordinator.getProjection('worker');
+    expect(projection.error).toContain('5-hour limit');
+    expect(projection.errorCanContinue === true).toBe(expected);
+    expect(projection.errorRetryText).toBeNull();
+    expect(projection.usageLimitWait ?? null).toBeNull();
+    expect(h.onUsageLimitedTurnError).not.toHaveBeenCalled();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+  });
+
   // Unit regression: the real coordinator must give a remote Bot Schedule quota
   // terminal to its wait owner before candidate fallback can switch suppliers.
   it('hands scheduled companion quota failure to waiting instead of candidate fallback', async () => {
@@ -15598,7 +16031,11 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     });
     const hooks = createInterruptedTurnAutoResumeHooks<Session>({
       inputCoordinator: h.coordinator, interruptedTurnAutoResumeGuard: guard, autoResumeBookkeeping: book,
-      botFallbackInputs: new WeakSet(), modelGroupInputs: new WeakSet([item.createOpts]),
+      botFallbackInputs: new WeakSet(),
+      modelGroupInputs: {
+        get: (opts) => opts === item.createOpts ? 'enabled' : undefined,
+        isInterruptedTurnAutoResumeEnabled: () => false,
+      },
       saveTurnStartedAtForDeferred: vi.fn(), beginSchedulerAutoResume: vi.fn(), getStableSessionForTurnBoundary: () => null,
       pendingContinuationOnlyAutoResumeRebuilds: new Map(), pendingSessionRuntimeFallbackRebuilds: new Set(),
       providerGroupHeldErrors: { stash: vi.fn() }, providerGroupHeldTerminals: { stash: vi.fn() },
@@ -15680,6 +16117,20 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: CONTINUE_AFTER_ERROR_PROMPT });
     expect(h.coordinator.isActiveInputOwnerContinuation(sid)).toBe(expected);
     expect(h.coordinator.isActiveInputOwnerAuthored(sid)).toBe(false);
+  });
+
+  // model-groups.md §4.6: a model group's source switch is recorded on the continuation, so its activity line says
+  // which source the task moved to and why (rendered like a provider group's computer switch).
+  it('records the model group source switch on the automatic continuation', async () => {
+    const { h, fail } = availabilityHarness();
+    const sid = 'model-group-source-switch';
+    h.coordinator.enqueue(sid, availabilityInput());
+    await flush();
+    await fail(sid, { toolResult: true });
+    const agentSwitch = { from: 'Claude · A', to: 'GPT · B', cause: 'usage-limit' as const };
+    expect(await h.coordinator.autoRetryLastError(sid, 1, { agentSwitch })).toBe('resumed');
+    await flush();
+    expect(h.sendToAgent.mock.calls[1]?.[3].persistUserMessage).toMatchObject({ autoResume: true, autoResumeInfo: { agentSwitch } });
   });
 
   it('continues after a completed tool and stops at the existing host retry budget', async () => {

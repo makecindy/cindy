@@ -51,6 +51,10 @@ import { localCliDisplayName, type LocalCliDetection } from '../../../shared/loc
 import { useProviderOAuthDeviceCode } from '@/hooks/useProviderOAuthDeviceCode';
 import { isSubscriptionProvider } from '../../../shared/subscriptionAccounts';
 import { SubscriptionSignInChoices, type SubscriptionSignInTarget } from './SubscriptionSignInChoices';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import type { OfficialModelPlugin } from '../../../shared/pluginMarket';
+import { OfficialModelPluginStep } from './OfficialModelPluginStep';
+import { useOfficialModelPlugins } from './useOfficialModelPlugins';
 import { cardIcon, ProviderRow } from './ProviderRow';
 import { LocalOllamaInstall, offersManagedOllamaInstall } from './LocalOllamaInstall';
 import { MANAGED_LLAMACPP_PROVIDER_ID } from '../../../shared/llamaCpp';
@@ -92,6 +96,7 @@ interface AddProviderWizardProps {
   onReturnCustom?: (draft: DetectedProviderDraft) => void;
   providers: ProviderView[];
   entry?: WizardEntry;
+  showOfficialModelPlugins?: boolean;
   /** 连接失败已在向导内提示；父级只恢复草稿，不再提示目录目标失效。 */
   onEntryUnavailable?: (reason?: 'target-unavailable' | 'connection-failed') => void;
   /** 「自定义端点」卡片 → 关闭向导并打开完整表单。 */
@@ -309,6 +314,7 @@ export function AddProviderWizard({
   providers,
   entry,
   onEntryUnavailable,
+  showOfficialModelPlugins,
   onOpenCustomForm: openCustomForm,
   onClose: notifyClosed,
   onDone: notifyDone,
@@ -334,6 +340,7 @@ export function AddProviderWizard({
   const consumePresetEntry = useCallback(() => {
     if (entry?.kind === 'preset') presetEntryConsumedRef.current = entry.presetId;
   }, [entry]);
+  const [pluginStep, setPluginStep] = useState<{ item: OfficialModelPlugin; owner: ReturnType<typeof getDataOwnerGeneration> }>();
   const [query, setQuery] = useState('');
   // entry(左栏检测建议 / 引导卡直达):目录里找得到该渠道才直达授权步,否则回落目录页。
   const entryProvider =
@@ -507,6 +514,10 @@ export function AddProviderWizard({
     [presets],
   );
   const q = query.trim().toLowerCase();
+  const activePluginStep = pluginStep && isDataOwnerGenerationCurrent(pluginStep.owner) ? pluginStep : undefined;
+  const officialPlugins = useOfficialModelPlugins(step === 1 && !activePluginStep && !!showOfficialModelPlugins, i18n.language);
+  const matchingPlugins = officialPlugins.items.filter(item =>
+    !q || [item.name, item.ghostId, item.description].some(value => value?.toLowerCase().includes(q)));
   const filteredOauth = q
     ? oauthChoices.filter((p) => p.name.toLowerCase().includes(q))
     : oauthChoices;
@@ -1602,6 +1613,10 @@ export function AddProviderWizard({
         style={WINDOW_NO_DRAG_STYLE}
         className="modal-panel fixed inset-0 z-modal m-auto flex h-fit max-h-[min(640px,85vh)] w-[min(600px,calc(100vw-32px))] flex-col overflow-hidden outline-none"
       >
+        {activePluginStep ? (
+          <OfficialModelPluginStep item={activePluginStep.item} owner={activePluginStep.owner}
+            onBack={() => setPluginStep(undefined)} onDone={() => onDone()} />
+        ) : <>
         {/* 头部:标题居左 + 步骤指示居右,同一行(2026-07 定稿原型形态)。 */}
         <div className="flex items-center justify-between gap-4 px-4 pb-3 pt-4">
           <Dialog.Title asChild><h3
@@ -1827,6 +1842,33 @@ export function AddProviderWizard({
                       );
                     })}
                   </>
+                )}
+                {showOfficialModelPlugins && (matchingPlugins.length > 0 || officialPlugins.failed || officialPlugins.hasMore) && (
+                  <>
+                    <GroupLabel>{t('settings.providers.wizard.officialModelPlugins')}</GroupLabel>
+                    {matchingPlugins.map(item => (
+                      <ProviderRow
+                        key={item.pluginId}
+                        icon={cardIcon({ name: item.name })}
+                        name={item.name}
+                        meta={t('settings.providers.wizard.configurePlugin')}
+                        onClick={() => setPluginStep({ item, owner: getDataOwnerGeneration() })}
+                      />
+                    ))}
+                  </>
+                )}
+                {officialPlugins.hasMore && (
+                  <Button variant="secondary" data-settings-search-action="Load the next page of official model plugins" onClick={officialPlugins.loadMore}>
+                    {t('settings.ghosts.contribution.loadMore')}
+                  </Button>
+                )}
+                {officialPlugins.failed && (
+                  <div className="flex items-center justify-between gap-2 px-3 py-2">
+                    <span role="status">{t('settings.ghosts.market.unavailable')}</span>
+                    <Button variant="secondary" data-settings-search-action="Retry loading the official model plugin catalog" onClick={officialPlugins.retry}>
+                      {t('settings.providers.wizard.retryPlugin')}
+                    </Button>
+                  </div>
                 )}
                 {listedLocalPresets.length > 0 && (
                   <>
@@ -2379,6 +2421,7 @@ export function AddProviderWizard({
             )}
           </div>
         </div>
+        </>}
       </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

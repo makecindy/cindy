@@ -183,7 +183,9 @@ function HostRow({
         </span>
         {!snap.config.managedByCindy && (
           <span className="text-11" style={{ color: 'var(--settings-integration-subtitle)' }}>
-            {t('settings.remote.readOnlyFromSshConfig')}
+            {t(snap.config.managedAliasConflict
+              ? 'settings.remote.managedAliasConflict'
+              : 'settings.remote.readOnlyFromSshConfig')}
           </span>
         )}
         {!snap.config.managedByCindy && snap.config.authMethod === 'agent' && (
@@ -423,6 +425,7 @@ interface HostFormProps {
   initial?: AddFormState;
   busy: boolean;
   connectionFieldsReadOnly?: boolean;
+  managedAliasConflict?: boolean;
   onSubmit: (form: AddFormState) => void;
   onCancel: () => void;
 }
@@ -432,6 +435,7 @@ function HostForm({
   initial,
   busy,
   connectionFieldsReadOnly = false,
+  managedAliasConflict = false,
   onSubmit,
   onCancel,
 }: HostFormProps) {
@@ -536,7 +540,9 @@ function HostForm({
 
       {connectionFieldsReadOnly && (
         <p className="text-11" style={{ color: 'var(--settings-integration-subtitle)' }}>
-          {t('settings.remote.edit.connectionFieldsReadOnly')}
+          {t(managedAliasConflict
+            ? 'settings.remote.managedAliasConflict'
+            : 'settings.remote.edit.connectionFieldsReadOnly')}
         </p>
       )}
 
@@ -1441,6 +1447,7 @@ export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}
                       : 'http://127.0.0.1:7890',
                   }}
                   connectionFieldsReadOnly={!snap.config.managedByCindy}
+                  managedAliasConflict={snap.config.managedAliasConflict}
                   onSubmit={handleEdit}
                   onCancel={() => setEditingId(null)}
                 />

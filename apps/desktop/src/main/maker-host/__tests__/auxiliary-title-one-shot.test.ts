@@ -89,10 +89,12 @@ describe('auxiliary task-title routing', () => {
   ])('保留正常标题并按 40 个 Unicode 字符截断: %s', async (text, expected) => {
     h.requestText.mockResolvedValue({ ok: true, text });
     await expect(generateTitleWithAuxiliaryModel(REQUEST, {}, runtimeDeps())).resolves.toBe(expected);
+    expect(h.requestText).toHaveBeenLastCalledWith(REQUEST.prompt, expect.objectContaining({ source: 'title', automaticTitle: true }));
     // AI regenerate consumes the result API; both routes retain historical truncation.
     await expect(generateTitleWithAuxiliaryModelResult(REQUEST, {}, runtimeDeps())).resolves.toEqual({
       status: 'ok', title: expected,
     });
+    expect(h.requestText).toHaveBeenLastCalledWith(REQUEST.prompt, expect.objectContaining({ source: 'title', automaticTitle: false }));
   });
 
   it('uses the shared utility chain in automatic mode', async () => {

@@ -26,6 +26,9 @@ Telegram / Slack / X / 飞书 / Lark / Discord）是同一件事的两套实现�
 与 SDK 真实连接状态一致。微信、企业微信保留已有重试循环。恢复成功立即更新状态，
 不等待下一条消息；凭据失效保留明确错误，冲突沿用各渠道原策略。主动下线、解绑、换账号或退出
 必须取消重试，旧连接结果不得复活。设置页的手动重连复用保存的凭据，不要求重新输入或解绑。
+Telegram 建连握手（`getMe`）限时 15 秒，超时按启动网络失败处理；长轮询不套用该时限。
+新绑定保存时若只是握手超时，凭证照常回滚，设置卡与伙伴「消息平台」对话框保留刚填的内容并提示「连接超时，请重试」，原输入直接重试，连上后才显示已连接（替换已有绑定时照旧恢复并重连旧绑定，界面按已有绑定显示）；超时只在本机保存结果里单独标出（`saveTimedOut`、伙伴添加的 `CONNECT_FAILED: timeout`），跨设备状态仍是 `code='network'`。
+账号 IM 启动时设置页个人 bot 与伙伴自有连接同时起，伙伴连接之间也并行，一条慢或失败不推迟其它连接。
 
 退避计算、默认间隔、抖动和可取消定时器统一放在 `@cindy/im/connection-retry`：飞书、
 Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询复用同一退避策略。
@@ -53,17 +56,17 @@ Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询�
 声明 `imEntrance` 的插件会让设置页在没开官方机器人时也显示「项目与模型」。具体合同见
 [插件 IM 共用项目与模型](protocol-compatibility/plugin-im-projects.md)。官方渠道原有命令和镜像协议不变。
 
-**侧栏的本机项目就是 IM 机器人用的项目**，不另设「工作目录映射」这一层概念；界面与机器人文案一律叫
+**IM 和侧栏读取同一份本机项目登记**。IM 按登记、别名和用户移除状态生成选择清单；侧栏还按伙伴所在电脑和分组设置决定显示哪些行。界面与机器人文案一律叫
 「项目」，「工作目录」只指 Agent 实际干活的那个目录（术语表）。
 
-- **官方机器人**（Slack / Telegram / X / 飞书）：可选项目 = 侧栏的本机项目（登记过的目录减去侧栏里
-  移除的；不含远程电脑上的项目与伙伴自己的项目），外加内置「对话」。`hook-control/projectWorkspaces.ts`
+- **官方机器人**（Slack / Telegram / X / 飞书）：可选项目 = 当前账号的本机项目（登记过的目录减去侧栏里
+  移除的；包含本机已登记的伙伴项目，伙伴搬家后留下的目录继续作为普通项目使用），外加内置「对话」。`hook-control/projectWorkspaces.ts`
   把项目列表投影成协议里的「名称 → 目录」表，名称跟随侧栏；`projectWorkspaceSync.ts` 在账号就绪、
   项目列表变化（`projectCatalogEvents.ts`）、打开设置页与 IM 里查询项目之前各整理一次。设置页只列出
   这些项目并提供「添加项目」（登记进侧栏），改名与移除在侧栏做。升级前手动配置的目录在第一次整理时
   登记成项目，原别名改为侧栏名字，旧别名留作查找；按名称存的偏好与默认项目跟着改名。这份表同时是
   「IM 能驱动哪些目录」的边界：一个项目要被执行，仍须由主人在 IM 里用 `/project` 选中，或在设置里设为
-  默认项目。协议约定见 [`protocol-compatibility/hook-project-names.md`](protocol-compatibility/hook-project-names.md)。
+  默认项目。项目选择只授权目录，伙伴私有任务仍按其专用入口校验。协议约定见 [`protocol-compatibility/hook-project-names.md`](protocol-compatibility/hook-project-names.md)。
 - **官方机器人共用一套项目配置**：每个项目的 Agent、模型、思考强度、权限档与模型来源只有一份
   （`hook-control/sharedProjectPrefs.ts`，存在本机偏好文件里渠道键为 `shared` 的行），飞书、Telegram、
   Slack、X 用到同一个项目时都按它跑；默认项目同样只有一个（Telegram / 飞书 / X 共用，Slack 仍在每个
@@ -85,7 +88,7 @@ Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询�
 - **换项目后的任务归属**：复用绑定的任务要求它就在这次点名的项目里（同一项目内换目录、任务自己的
   worktree 照旧跟随）。在 IM 里把会话从项目 A 切到 B 后，下一条消息在 B 里新建任务，不再进 A 的旧任务；
   桌面端把任务移到别的项目同理，原会话下一条消息在它点名的项目里新建。
-- **个人机器人**：`/ctr` 第一步与 `/project` 切换卡列的也是侧栏项目（`im/shared/controlProjects.ts`，
+- **个人机器人**：`/ctr` 第一步与 `/project` 切换卡也读取这份项目登记（`im/shared/controlProjects.ts`，
   名字跟随侧栏、含没有任务的项目、不含已移除的）；`/ctr` 另带不在任何项目里的对话任务目录。
   `/project` 在个人 Telegram 与个人飞书可用；用它切进项目的会话，启动时的托管目录归一与分组补写
   （`im/index.ts`、`feishu/legacySessionBackfill.ts`）都不得把它改回去。
@@ -115,7 +118,7 @@ Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询�
 | 建任务 | `sessionRepo.createSession` 确定性 id upsert；`createFreshSession`（`/new` 轮换事务）；随后 `maker.createSession` —— 2026-10 起两处建行都经 `openChannelSession` → **`openSession`**（模型准入） | `session-runner` 新任务的 `maker.createSession`、`/new` 的 `desktopSessionStorage.create` —— 同样经 `openChannelSession` → **`openSession`** | **公共入口 `openSession`**（已完成，批次 2）；渠道专属建行在 commit 回调里。live session 仍各自 `maker.createSession`，未改用 register 内部的 `bootstrapSession`（会新增项目上下文 / Orca 指令注入等行为，见 §6） |
 | 默认配置 | `resolveImSessionDefaults(channel)` + 跟随渠道默认（`channelDefaultRouteSync`） | `resolveNewSessionConfig`（目录偏好 > 全局 IM 默认 > 清单首项；权限档规则见 `defaults.ts`）+ 共用 `createDefaultRouteFollower` 跟随默认 | 渠道策略（台账第三节「新会话的默认…从哪读」有意不同） |
 | 命令 | `messageHandler.processOne` → `slashCommands`（注册表 `botCommands.ts`） | 服务端分发命令，桌面只收 `query.*` | 渠道适配（官方命令分发在服务端） |
-| 排队与插话 | `SessionState.sendQueue`（内存、无上限、重启丢失）；无插话 | `dispatcher.queues`（内存、上限 20）+ `drainPolls`；无插话 | **公共入口 `AgentInputCoordinator`**（见 §5 批次 3 与 §6 待决项） |
+| 排队与插话 | `SessionState.sendQueue`（内存、无上限、重启丢失）；iMessage 精确匹配的聊天可插话 | `dispatcher.queues`（内存、上限 20）+ `drainPolls`；无插话 | **公共入口 `AgentInputCoordinator`**（见 §5 批次 3 与 §6 待决项） |
 | 输入拼装 | `prepareAgentTurnText`（群上下文 / ambient 提示）+ `buildImChannelNote` + `buildImUserMessage`；派发时前置交接 / 计划对账 / Goal 提示 | `buildContextPrefix` + `composeXPrompt` + `buildHookPromptNote`；同样前置交接 / 计划对账（仅 IM 来源）/ Goal 提示 | 共用流程（前置层同一份；渠道说明文案有意不同，见台账「入站上下文」） |
 | 用户消息落库 | 部分渠道提前落库（`persistInboundUserMessageEarly`），`onAccepted` 补 `imSource` | 只在 `onAccepted` 落库，`agentMeta.hookSource` | 共用流程（`onAccepted` 落库；提前落库保留为渠道能力） |
 | 发送 | 发送前应用任务待切换选择，再 `makerSession.send`，`MAIN_OWNED_SEND_CONTEXT.origin.kind='im'` | 复用任务先经 `acquirePendingAgentSwitchForImSend` 跟随默认并应用任务选择，再读 meta、建会话、挂观察器和 `session.send`；发送后释放锁，origin `hook`（Telegram / X / 飞书）或 `im`（Slack） | 待切换选择共用既有直发流程；Pi 管理命令授权来源按渠道各自声明（hook 不得伪装成本机命令） |
@@ -329,10 +332,17 @@ inbound ──► admitted ──► queued? ──► dispatching ──► run
 | 排队消息在桌面端可见 / 可删 | 不可见 | 不可见 | 迁到 coordinator 后自然可见、可删（删除即视同撤回：IM 撤排队表情，hook 回 `turn.end(cancelled)`） |
 | 排队上限 | 无上限 | 每会话 20 | 各自保留：IM 不限，hook 仍按 20 拒收 |
 | 停止时同任务已排队的消息 | `/stop` 一并清掉 `sendQueue` | 服务端 `/stop` 只对正在跑的那一个 requestId 发 `task.cancel`；desktop hook 队列里同任务已排队的请求照常接着跑（本 PR 前即如此） | 未改：一并清掉等于替用户丢弃没被取消的请求、并以 cancelled 收口，属产品语义；随批次 3（hook 队列并入 coordinator）一起定 |
-| 插话（steer） | 无 | 无 | 不新增 |
+| 插话（steer） | iMessage 可按聊天开启，见下文；其他个人渠道无 | 无 | 通用迁移不扩大开启范围 |
 | 模型准入（`openSession`） | 只做凭证检查 | 新任务做路由检查 | 已按 Dash 指定改走 `openSession` 准入：新任务的模型 / 来源 / 推理强度 / Fast 不被支持时直接拒绝（文案「不会自动更换模型或供应商」），准入还会规范化来源与推理强度；渠道默认配置若指向已停用的模型，新任务会建不出来（以前会照建） |
 | live session 改走 `bootstrapSession` | 不注入项目上下文 / Orca 指令 | 同左 | 未改：改了等于给 IM / hook 任务新增项目上下文与 Orca 指令注入、目录授权准备等行为，属产品决定 |
 | 缺口 2b / 2e / 2f / 默认配置取值链 | 见台账 | 见台账 | 各自保留，合并只共享实现骨架 |
+
+iMessage 伙伴连接可通过当前账号目录的 `imessage/steering.json` 为指定聊天开启忙时插话。
+文件格式为 `{"routes":[{"connectionId":"…","botId":"…","chatSha256":"…"}]}`，
+摘要取原始 BlueBubbles chat GUID 的 UTF-8 SHA-256 小写十六进制。删除条目即可关闭，
+新聊天默认排队；聊天名单、群激活方式和权限仍由原连接管理。每次入站仍按原路由开轮或查找在途轮次。
+只有该连接、伙伴、聊天、发言权限和仍有效的 iMessage 轮次都匹配，且引擎支持同轮插话，才向其追加输入。
+主人私聊复用伙伴主任务时，来自桌面或定时执行的轮次继续排队。投递结果不明时保留原收件回执供核查。
 
 ### 同一 Cindy 电脑上的多个飞书机器人（2026-11-10，未发布）
 

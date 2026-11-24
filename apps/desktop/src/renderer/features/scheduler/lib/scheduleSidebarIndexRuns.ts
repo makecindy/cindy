@@ -17,6 +17,7 @@ export interface ScheduleSidebarIndexRun {
   firedAt?: number;
   finishedAt?: number;
   failureKind?: 'precheck' | 'rate-limit' | 'execution';
+  preRunBlocked?: true;
   errorMsg?: string;
   failureRecovered?: boolean;
   missingPlugin?: ScheduleMissingPlugin;
