@@ -1320,6 +1320,12 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
             nextRenewAt = Date.now() + 60_000;
           } else {
             stop();
+            // Renewal can fail with a new "closed" error after cancellation.
+            // Preserve the prepared handle's actual cleanup proof, including failure.
+            if (attempt.signal.aborted && preparedCleanup) {
+              await preparedCleanup;
+              throw new AgentStartupResourcesReleasedError(attempt.signal.reason);
+            }
             await close().catch(() => undefined);
             throw error;
           }

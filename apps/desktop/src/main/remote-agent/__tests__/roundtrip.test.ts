@@ -2907,13 +2907,16 @@ describe('shared startup lease budget', () => {
   // #12566 reviews / unit: real Maker -> device starter cancellation must notify
   // the captured startup lease after cleanup, not the replacement's lease. Prior
   // picker tests bypassed Maker and could not observe a leaked worktree heartbeat.
-  // Gates cover pre-runtime probe/MCP and unfinished/failed local disposal.
-  it.each(['executor', 'MCP', 'cleanup', 'failed-cleanup'] as const)(
+  // Gates cover pre-runtime probe/MCP, unfinished/failed local disposal, and
+  // cancellation during a prepared handle's early renewal (#12566 review).
+  it.each(['executor', 'MCP', 'cleanup', 'failed-cleanup', 'renewal', 'renewal-failed-cleanup'] as const)(
     'retires only the cancelled startup lease after %s cleanup', async stage => {
-      const f = fixture(); f.state.duration = 120_000;
-      f.state.blockPrepare = stage !== 'executor';
+      const renewal = stage === 'renewal' || stage === 'renewal-failed-cleanup';
+      const failedCleanup = stage === 'failed-cleanup' || stage === 'renewal-failed-cleanup';
+      const f = fixture(); f.state.duration = renewal ? undefined : 120_000;
+      f.state.blockPrepare = !renewal && stage !== 'executor';
       f.state.blockCleanup = stage === 'cleanup' || stage === 'failed-cleanup';
-      f.state.failCleanup = stage === 'failed-cleanup';
+      f.state.failCleanup = failedCleanup;
       const probe = deferred();
       if (stage === 'executor') historyOpenLink.mockImplementation(peer => peer === f.target ? probe.promise : Promise.resolve());
       const leased = new Set<CreateSessionOptions>();
@@ -2932,27 +2935,36 @@ describe('shared startup lease budget', () => {
           onClose: (_id, options) => { leased.delete(options); },
         } });
       const old = maker.createSession({ id: 'historical', agentKind: 'codex', workingDir: project, model: 'm',
-        agentDeviceId: f.owner, resumeSessionId: 'native-only-on-m' }).catch(error => error);
+        agentDeviceId: f.owner, ...(renewal ? {} : { resumeSessionId: 'native-only-on-m' }) }).catch(error => error);
       try {
         await vi.advanceTimersByTimeAsync(0);
         expect(leased.size).toBe(1);
+        if (renewal) {
+          await vi.waitFor(() => expect(f.runs.size).toBe(1), { interval: 1 });
+          await vi.advanceTimersByTimeAsync(20 * 60_000 + 1);
+          f.state.blockAllocation = true;
+          f.started([...f.runs.values()][0]!); await flush();
+          expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(2);
+        }
         cancelPendingRemoteStart('historical', new Error(PROVIDER_GROUP_SUPERSEDED_ERROR));
         expect(String(await old)).toContain(PROVIDER_GROUP_SUPERSEDED_ERROR);
         f.state.blockPrepare = false; f.state.ready = true;
-        f.state.blockCleanup = false; f.state.failCleanup = false;
+        f.state.blockCleanup = false; f.state.failCleanup = false; f.state.blockAllocation = false;
         await maker.createSession({ id: 'historical', agentKind: 'codex', workingDir: project, model: 'm', agentDeviceId: 'ordinary-device' });
         const replacement = [...leased].at(-1)!;
         expect(leased.size).toBe(2);
-        probe.resolve(); f.prepare.resolve();
+        if (renewal) expect(f.disposed).toEqual(['historical']);
+        probe.resolve(); f.prepare.resolve(); f.allocation.resolve();
         await vi.advanceTimersByTimeAsync(0);
         if (stage === 'cleanup' || stage === 'failed-cleanup') expect(leased.size).toBe(2);
         f.pendingClose.resolve();
         await vi.advanceTimersByTimeAsync(0);
-        expect(leased.size).toBe(stage === 'failed-cleanup' ? 2 : 1);
+        expect(leased.size).toBe(failedCleanup ? 2 : 1);
         expect(leased.has(replacement)).toBe(true);
         expect(f.calls.some(call => call.op === 'call' && call.method === 'send')).toBe(false);
       } finally {
-        probe.resolve(); f.prepare.resolve(); f.pendingClose.resolve();
+        cancelPendingRemoteStart('historical');
+        probe.resolve(); f.prepare.resolve(); f.pendingClose.resolve(); f.allocation.resolve();
         f.state.blockClose = false; f.state.failClose = false;
         await old; await maker.shutdown();
       }
