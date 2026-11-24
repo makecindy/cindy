@@ -570,19 +570,18 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           return { ok: true, messageId };
         } catch (error) {
           const safe = asWechatIlinkError(error);
+          const reason = safe.code === 'SEND_REJECTED'
+            ? safe.ret === undefined ? 'SEND_REJECTED' : `SEND_REJECTED:${safe.ret}`
+            : 'SEND_FAIL';
+          const detail = safe.code === 'SEND_REJECTED'
+            ? reason
+            : (error instanceof Error ? error.message : String(error));
           createLogger('mcp/cindy_wechat').warn(
             'sendMessage failed target=...%s detail=%s',
             peerId.slice(-8),
-            error instanceof Error ? error.message : String(error),
+            detail,
           );
-          return {
-            ok: false,
-            reason: safe.code === 'SEND_REJECTED' && safe.ret !== undefined
-              ? `SEND_REJECTED:${safe.ret}`
-              : safe.code === 'SEND_REJECTED'
-                ? 'SEND_REJECTED'
-                : 'SEND_FAIL',
-          };
+          return { ok: false, reason };
         }
       },
       sendFile: async (peerId, absPath, displayName) => {
