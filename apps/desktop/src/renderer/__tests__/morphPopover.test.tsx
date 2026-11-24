@@ -146,9 +146,11 @@ describe('MorphPopover interaction contract', () => {
     expect(document.activeElement).toBe(trigger);
   });
 
-  // #12437: standalone Escape coverage cannot detect closing a pinned plan
-  // behind the foreground popover. Exercise both real components in one unit test.
-  it('closes a later composer popover before closing a pinned plan with Escape', async () => {
+  // #12437 (unit): two Escape presses before the animated portal unmounts.
+  // Reduced motion alone misses the exiting portal swallowing the second key.
+  it('closes a later composer popover before closing a pinned plan with two immediate Escape presses', () => {
+    setReducedMotion(false);
+    const flushFrame = captureFrames();
     const { container } = render(
       <>
         <TodoListCard todos={[{ content: 'Check popover', status: 'in_progress' }]} />
@@ -158,11 +160,12 @@ describe('MorphPopover interaction contract', () => {
     const plan = container.querySelector<HTMLButtonElement>('button[aria-expanded]')!;
     fireEvent.click(plan);
     fireEvent.click(screen.getByRole('button', { name: 'Toggle' }), { detail: 0 });
-    const action = await screen.findByRole('button', { name: 'First action' });
+    flushFrame();
+    const action = screen.getByRole('button', { name: 'First action' });
 
     fireEvent.keyDown(action, { key: 'Escape' });
     expect(plan.getAttribute('aria-expanded')).toBe('true');
-    await waitFor(() => expect(screen.queryByRole('group', { name: 'Morph panel' })).toBeNull());
+    expect(action.closest('[data-morph-side]')?.getAttribute('data-state')).toBe('closed');
 
     fireEvent.keyDown(document.body, { key: 'Escape' });
     expect(plan.getAttribute('aria-expanded')).toBe('false');
