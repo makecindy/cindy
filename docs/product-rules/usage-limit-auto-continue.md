@@ -61,7 +61,8 @@ Claude 后台任务唤醒的新轮次即使第一条响应就是限额错误、�
    远程多订阅账号池的任务查询附带原生会话 id，由执行电脑按持久绑定读取该账号，不能使用池内
    下一可分配账号的额度。旧提供端忽略附加参数仍走原单账号读取；绑定已移出或断开时保持未知。
 3. 报错原文里写明的时刻（ChatGPT 订阅 `resets_at` / `try again at 3:05 PM` / Pi 的
-   `Try again in ~N min`，Claude 的 `resets 1:20am (TZ)`）。
+   `Try again in ~N min`，Claude 的 `resets 1:20am (TZ)`；智谱 GLM Coding Plan 的
+   `您的限额将在 YYYY-MM-DD HH:MM:SS 重置。`）。
    订阅家族由 provider 的 `auth.native` 决定，与跑在哪个 Harness 上无关。
 
 OpenCode Go 虽以 API key 接入，也有官方订阅额度。目标模式收到限额错误后，按本轮所用的本机连接和引擎
@@ -72,6 +73,16 @@ OpenCode Go 虽以 API key 接入，也有官方订阅额度。目标模式收�
 
 报错文案中的时刻只对原生订阅账号生效：Coding Plan、Copilot、API key、Cindy 网关个人额度等即使报错原文带了
 重试时刻也不等（那多半是按分钟的请求速率限制），**不等待、也不定时试探**，只报错交给用户。
+智谱 GLM Coding Plan 是其中唯一例外：它的 5 小时 / 每周窗口是周期额度而非分钟级速率限制，
+其报错原文里的重置时刻按第 3 条采信；该来源不依赖 `auth.native`。
+
+例外落在两个任务侧入口：普通／定时任务（`apps/desktop/src/main/maker-ipc/sessionUsageReset.ts`）
+与目标模式（`apps/desktop/src/main/goal-host/index.ts` 的 `getAccountLimit`）。两处按同一组条件判定——
+本轮实际使用的来源是 GLM Coding Plan（按供应商目录里的接入端点判定，不看报错文案）、报错原文表明
+周期额度已用尽（5 小时／每周窗口的措辞，不是分钟级速率限制）、时刻来自「不带时区的裸本地时刻」这条
+解析分支、且报错来自本机。任一条不满足就不排期：其它 API key 的同格式报错照旧只报错交给用户；
+SSH／远程 Agent 的原文仍不按本机时区换算。这条例外不读账号快照，也不改变账号快照的适用范围；
+带时区与相对时长的处理保持原样。
 
 普通任务有一个分钟限流例外：Gemini 429 明确指出每分钟付费输入 token 上限，并给出重试时长时，
 正文和 RetryInfo 的时长取较长者作为最短等待，再在 30 秒窗口内随机错开，每个任务自动重试一次。
@@ -81,7 +92,8 @@ OpenCode Go 虽以 API key 接入，也有官方订阅额度。目标模式收�
 快照只看会话模型实际受限的那一格：Codex 按模型取对应的用量桶（如 Spark 单独计），Claude 订阅
 除 5 小时 / 周窗口外只计该模型的分模型窗口，其它模型用满不影响本会话。SSH 远程会话与远程 Agent 任务（Agent 在
 另一台电脑、含分享来的供应商，2026-10-09 起）都用那台机器的登录，不读本机快照（目标模式同样只用远端报错里的时刻），且不采用远端报错里不带时区的钟点
-（如 Codex `try again at 3:05 PM` 用的是那台机器的本地时间）；相对时长与带时区的时刻照常。判定见
+（如 Codex `try again at 3:05 PM` 用的是那台机器的本地时间）；相对时长与带时区的时刻照常。智谱 GLM Coding Plan
+文案里不带时区的 `YYYY-MM-DD HH:MM:SS` 同属这一类，远端报错里同样不按本机时区理解。判定见
 `apps/desktop/src/main/usage/accountUsageLimit.ts` 的 `sessionUsesOtherMachineAccount`。
 普通任务的远程独立账号身份由执行电脑的授权目录确认；未指定来源（`providerId=null`）时，按该目录中
 会话模型的默认选路解析实际供应商，再确认订阅家族并读取该账号的用量。

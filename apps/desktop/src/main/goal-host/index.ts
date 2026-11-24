@@ -36,10 +36,11 @@ import {
   subscriptionFamilyOf,
 } from '../usage/accountUsageLimit.js';
 import { readClaudeAccountUsageSnapshot } from '../usage/claudeAccountUsage.js';
+import { isGlmCodingPlanProviderId } from '../usage/glmCodingPlanUsage.js';
 import { onCodexAutoResetRestored } from '../maker-ipc/usage.js';
 import { GoalController, GoalControllerDisposedError } from './controller';
 import { createMakerStartupGate } from '../maker-host/startup-gate.js';
-import { readTurnUsageResetAt } from './usageLimit.js';
+import { readGlmCodingPlanCycleResetAt, readTurnUsageResetAt } from './usageLimit.js';
 import { restoreSessionForGoal } from './sessionRestore.js';
 import { GoalStorage, type GoalDrizzleDb } from './storage';
 import type { GoalStatusUpdate, SessionLike } from './types';
@@ -153,8 +154,8 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
       // may be stale or unknown. Let the next normal turn reach the provider; retain
       // snapshot reset lookup after an actual rejection instead of retrying on credits.
       if (family === 'codex' && turnError === undefined) return null;
+      const otherMachineAccount = sessionUsesOtherMachineAccount(row);
       if (family) {
-        const otherMachineAccount = sessionUsesOtherMachineAccount(row);
         // 报错原文写明的重置时刻只对订阅账号可信(非订阅来源的是分钟级请求限流)。
         if (turnError !== undefined) {
           // SSH 远程会话 / 远程 Agent 的报错用那台机器的本地时间:不带时区的钟点不按本机时区理解。
@@ -166,6 +167,16 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
         // SSH 远端主机 / 远程 Agent 所在电脑用自己的登录,本机订阅快照属于另一个账号
         // (与普通任务同一边界)。
         if (otherMachineAccount) return null;
+      } else if (turnError !== undefined && !otherMachineAccount) {
+        // 智谱 GLM Coding Plan 的周期额度例外:它的 5 小时 / 每周窗口是周期额度而不是分钟级
+        // 速率限制,报错原文(1308)写明的重置时刻按例外采信。裸本地时刻按本机时区理解,
+        // 所以只在本机会话里成立(远端会话的原文用的是那台机器的本地时间)。
+        // 不读账号快照:这条路径没有订阅账号窗口可言。
+        const glmResetAt = readGlmCodingPlanCycleResetAt(turnError, Date.now(), {
+          isGlmCodingPlan: isGlmCodingPlanProviderId(providerId),
+          localTimeZoneTrusted: true,
+        });
+        if (glmResetAt !== null) return { limited: true, resetAtMs: glmResetAt };
       }
       // 远程 Agent 用 Agent 所在电脑自己的登录与来源:本机的订阅 / 网关快照都不是它的账号。
       // 那台的独立账号本机目录认不出(上面判不出订阅家族)时也到这里,同样不读。
