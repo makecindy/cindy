@@ -9289,6 +9289,7 @@
         "enableBeforeConfigure": "Este complemento está desactivado. Actívalo con el interruptor de arriba antes de configurarlo.",
         "settingsPageUnavailable": "Abre Cindy en {{device}} para usar la página de configuración de este complemento. Esta versión de la computadora de destino no permite mostrarla de forma remota.",
         "offlineNotice": "{{device}} está sin conexión. La administración no estará disponible hasta que se restablezca la conexión.",
+        "publishOnTarget": "Publica los complementos en Cindy en {{device}} o actualiza Cindy en ese equipo para publicarlos de forma remota.",
         "managingTarget": "Administrando {{device}}",
         "managingDescription": "Los cambios se guardan en esta computadora.",
         "viewingTarget": "Instalado en {{device}}",

@@ -9289,6 +9289,7 @@
         "enableBeforeConfigure": "Ce plugin est désactivé. Activez-le avec l'interrupteur ci-dessus avant de le configurer.",
         "settingsPageUnavailable": "Ouvrez Cindy sur {{device}} pour utiliser la page de paramètres de ce plugin. La version de l'ordinateur cible ne permet pas de l'afficher à distance.",
         "offlineNotice": "{{device}} est hors ligne. La gestion est indisponible jusqu'au rétablissement de la connexion.",
+        "publishOnTarget": "Publiez les plugins dans Cindy sur {{device}} ou mettez Cindy à jour sur cet ordinateur pour les publier à distance.",
         "managingTarget": "Gestion de {{device}}",
         "managingDescription": "Les modifications sont enregistrées sur cet ordinateur.",
         "viewingTarget": "Installé sur {{device}}",

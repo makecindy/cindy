@@ -9172,6 +9172,7 @@
         "enableBeforeConfigure": "このプラグインは無効です。設定するには、上のスイッチをオンにしてください。",
         "settingsPageUnavailable": "{{device}} の Cindy でこのプラグインの設定ページを開いてください。接続先の現在のバージョンではリモート表示に対応していません。",
         "offlineNotice": "{{device}}はオフラインです。接続が復旧すると管理を再開できます。",
+        "publishOnTarget": "プラグインは {{device}} の Cindy で公開するか、その端末の Cindy を更新してリモートで公開してください。",
         "managingTarget": "管理対象：{{device}}",
         "managingDescription": "変更はこのコンピューターに保存されます。",
         "viewingTarget": "{{device}} にインストール済み",

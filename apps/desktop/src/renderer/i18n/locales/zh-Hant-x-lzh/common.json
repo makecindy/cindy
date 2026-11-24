@@ -9158,6 +9158,7 @@
         "enableBeforeConfigure": "法器已停用，請先啟上方開關，再設之。",
         "settingsPageUnavailable": "請於 {{device}} 之 Cindy 中啟此法器之規制頁；目標之機今版尚不能遠端顯示。",
         "offlineNotice": "「{{device}}」已離線，暫不可理。俟連線復通，即可續之。",
+        "publishOnTarget": "請於「{{device}}」之 Cindy 發布法器，或更新彼機之 Cindy，而後遙發。",
         "managingTarget": "方理「{{device}}」",
         "managingDescription": "變更將存於此機。",
         "viewingTarget": "「{{device}}」已納之法器",
