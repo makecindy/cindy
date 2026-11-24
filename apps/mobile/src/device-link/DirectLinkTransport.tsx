@@ -33,6 +33,8 @@ export function DirectLinkTransport({ bridge, enabled, owner }: {
   const release = () => { detach.current?.(); detach.current = undefined; };
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state) => {
+      // iOS can briefly become inactive while the app and its LAN path are still live.
+      if (state === 'inactive') return;
       if (state !== 'active') { activeRef.current = false; release(); setLifecycle(n => n + 1); }
       setForeground(state === 'active');
     });
