@@ -7,7 +7,7 @@ import { RemotePluginCatalogSource as RemotePluginPage } from '../RemotePluginCa
 import { resetPluginCatalogMemoryForTest } from '../lib/pluginCatalogMemory';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { projectPluginUiConsent } from '../../../../shared/pluginUiConsent';
-import { ghostInstallApprovalToken } from '../../../../shared/ghost';
+import { ghostInstallApprovalToken, ghostPermissionItems } from '../../../../shared/ghost';
 const { invoke, confirm, localGhosts, notices, directoryMode } = vi.hoisted(() => ({
   directoryMode: { real: false },
   notices: { success: vi.fn(), info: vi.fn(), error: vi.fn(), warning: vi.fn(), dismiss: vi.fn() },
@@ -231,7 +231,7 @@ describe('selected plugin host', () => {
         return { effects: [], result: { preview: {
           preparedId: 'preview-b', instanceId: 'weather', pluginId: null, ghostId: 'weather', name: 'Weather on B',
           description: 'From B', version: selectedVersion, sha256: 'a'.repeat(64), sizeBytes: 42, expiresAt: at,
-          permissionLabels: ['network'], preflight: {
+          permissionLabels: ghostPermissionItems({ ...selected.ghosts[0].manifest, agent: { hostTools: ['history'] } } as Parameters<typeof ghostPermissionItems>[0]).map(item => item.labelKey), preflight: {
             subject: { authority: 'https://example.com', membershipId: 'member' }, queriedAt: at, policyVersion: 2,
             target: { pluginId: null, ghostId: 'weather', version: selectedVersion, expectedRelease: null },
             pendingRelease: null, blockers: [], actions: { canSubmit: true },
@@ -259,7 +259,7 @@ describe('selected plugin host', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Weather on B · 2.0.0 · weather' }));
     const submit = await screen.findByRole('button', { name: 'settings.ghosts.contribution.submitVersion' });
     expect(screen.getByText('From B')).toBeTruthy();
-    expect(screen.getByText('settings.ghosts.perm.network')).toBeTruthy();
+    expect(screen.getByText('settings.ghosts.perm.hostTools_history')).toBeTruthy();
     expect(invoke).toHaveBeenCalledWith('computer-b', 'maker:remote-resources:invoke', [expect.objectContaining({
       actionId: 'management:publish-prepare',
       input: { expectedInstalledApproval: ghostInstallApprovalToken(installed.approval), expectedVersion: selectedVersion },

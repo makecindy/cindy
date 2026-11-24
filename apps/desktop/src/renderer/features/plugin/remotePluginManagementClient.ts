@@ -435,7 +435,7 @@ export function parseRemotePublicationPreview(value: unknown): PreparedPluginCon
     !(preview.pluginId === null || typeof preview.pluginId === 'string') ||
     !(preview.releaseNotes === undefined || typeof preview.releaseNotes === 'string') ||
     !(preview.permissionLabels === undefined || (Array.isArray(preview.permissionLabels) &&
-      preview.permissionLabels.every(label => typeof label === 'string' && /^[A-Za-z0-9]+$/.test(label)))) ||
+      preview.permissionLabels.every(label => typeof label === 'string' && /^[A-Za-z0-9_]+$/.test(label)))) ||
     !contributionPreflight.safeParse(preview.preflight).success)
     throw new Error('INVALID_RESPONSE');
   return preview;
