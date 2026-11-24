@@ -17933,7 +17933,8 @@
             "stopped": "未執行",
             "unknown": "等待插件回報狀態"
           }
-        }
+        },
+        "prSource": "GitHub · 指定 PR"
       },
       "trigger": {
         "label": "觸發方式",

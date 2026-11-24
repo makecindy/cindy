@@ -39,5 +39,8 @@ export default {
     await page.getByText(await ui.t('scheduler.editor.webhook.plugin.hint'), { exact: true }).scrollIntoViewIfNeeded();
     await page.getByText(await ui.t('scheduler.editor.webhook.plugin.unavailable'), { exact: true }).waitFor();
     await ui.capture('plugin-hint');
+    // 2026-11-24: every event source may add a timed check.
+    await page.getByRole('checkbox', { name: await ui.t('scheduler.prTrigger.timed'), exact: true }).check();
+    await ui.capture('timed-check');
   },
 };

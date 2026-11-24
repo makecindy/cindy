@@ -17933,7 +17933,8 @@
             "stopped": "停止中",
             "unknown": "プラグインの状態報告を待っています"
           }
-        }
+        },
+        "prSource": "GitHub · 特定の PR"
       },
       "trigger": {
         "label": "トリガー方式",

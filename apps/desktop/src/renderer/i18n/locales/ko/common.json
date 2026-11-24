@@ -17933,7 +17933,8 @@
             "stopped": "실행 중 아님",
             "unknown": "플러그인 상태 보고를 기다리는 중"
           }
-        }
+        },
+        "prSource": "GitHub · 특정 PR"
       },
       "trigger": {
         "label": "트리거 방식",

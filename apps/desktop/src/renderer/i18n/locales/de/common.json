@@ -18007,7 +18007,8 @@
             "stopped": "Läuft nicht",
             "unknown": "Warte auf Statusmeldung des Plugins"
           }
-        }
+        },
+        "prSource": "GitHub · Bestimmter Pull Request"
       },
       "trigger": {
         "label": "Auslöseart",

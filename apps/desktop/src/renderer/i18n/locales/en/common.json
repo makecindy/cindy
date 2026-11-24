@@ -18007,7 +18007,8 @@
             "stopped": "Not running",
             "unknown": "Waiting for the plugin to report"
           }
-        }
+        },
+        "prSource": "GitHub · Specific pull request"
       },
       "trigger": {
         "label": "Trigger mode",

@@ -34,8 +34,10 @@ interface WebhookSourceFieldsProps {
   pluginSources?: readonly SchedulePluginEventSource[];
   pluginCandidates?: readonly GhostEventSourceCandidate[] | null;
   onPluginSourcesChange?(value: SchedulePluginEventSource[]): void;
-  /** 这台电脑能接收 Webhook 地址（已登录且有接收服务）；否则只能选插件事件。 */
+  /** 这台电脑能接收 Webhook 地址（已登录且有接收服务）；否则只能选插件事件或指定 PR。 */
   addressSourcesAvailable?: boolean;
+  /** 发送方为「GitHub · 指定 PR」（preset=github-pr）时显示的 PR 链接与条件。 */
+  prFields?: ReactNode;
 }
 
 /** 发送方、是否验证签名，以及自定义格式。密钥和接收地址在任务详情里管理。 */
@@ -55,23 +57,28 @@ export function WebhookSourceFields({
   pluginCandidates = null,
   onPluginSourcesChange,
   addressSourcesAvailable = true,
+  prFields,
 }: WebhookSourceFieldsProps) {
   const { t } = useTranslation();
   const [advancedOpen, setAdvancedOpen] = useState(!signed);
   const connectionId = useId();
   const appSource = preset === 'github-app';
   const pluginSource = preset === 'plugin';
+  const prSource = preset === 'github-pr';
   const githubSource = appSource || preset === 'github';
-  const known = appSource || pluginSource || preset === 'custom' || SCHEDULE_WEBHOOK_PRESETS.some((item) => item.id === preset);
+  const known = appSource || pluginSource || prSource || preset === 'custom' || SCHEDULE_WEBHOOK_PRESETS.some((item) => item.id === preset);
   const pluginOption = pluginSource || (pluginCandidates?.length ?? 0) > 0
     ? [{ value: 'plugin', label: t('scheduler.editor.webhook.plugin.source') }] : [];
+  // A single PR is watched by this computer itself: no receiver address, secret or Cindy account.
+  const prOption = { value: 'github-pr', label: t('scheduler.editor.webhook.prSource') };
   const options = addressSourcesAvailable ? [
-    ...SCHEDULE_WEBHOOK_PRESETS.map((item) => ({ value: item.id, label: item.label })),
+    ...SCHEDULE_WEBHOOK_PRESETS.flatMap((item) => item.id === 'github'
+      ? [{ value: item.id, label: item.label }, prOption] : [{ value: item.id, label: item.label }]),
     { value: 'custom', label: t('scheduler.editor.webhook.sourceCustom') },
     ...pluginOption,
     // 更新的版本写入的发送方：照原样显示，不改就不会被覆盖。
     ...(known ? [] : [{ value: preset, label: preset }]),
-  ] : pluginOption;
+  ] : [...pluginOption, prOption];
   const formatInvalid =
     preset === 'custom' && formatText.trim() !== '' && !parseWebhookFormatText(formatText);
 
@@ -91,6 +98,7 @@ export function WebhookSourceFields({
           )}
         </FormField>
       </div>
+      {prSource && prFields}
       {githubSource && (
         <fieldset className="flex min-w-0 flex-col gap-3">
           <legend className="mb-2 text-13 font-medium text-[var(--text-primary)]">{t('scheduler.editor.webhook.connectionLabel')}</legend>
@@ -128,7 +136,7 @@ export function WebhookSourceFields({
           {footerAction}
         </>
       )}
-      {!pluginSource && <WebhookEventSelect key={preset} preset={preset} value={events} onChange={onEventsChange} />}
+      {!pluginSource && !prSource && <WebhookEventSelect key={preset} preset={preset} value={events} onChange={onEventsChange} />}
       {preset === 'github' && <p className={hintClass}>{t('scheduler.editor.webhook.manualSetupHint')}</p>}
       {preset === 'custom' ? (
         <FormField
@@ -148,12 +156,12 @@ export function WebhookSourceFields({
           )}
         </FormField>
       ) : null}
-      {!appSource && !pluginSource && preset !== 'custom' && !signed && (
+      {!appSource && !pluginSource && !prSource && preset !== 'custom' && !signed && (
         <p className="text-12 leading-relaxed text-[var(--text-primary)]">
           {t('scheduler.editor.webhook.unsignedWarning')}
         </p>
       )}
-      {!appSource && !pluginSource && <div>
+      {!appSource && !pluginSource && !prSource && <div>
         <div className="flex flex-wrap items-center gap-2">
           <Button
             variant="secondary"

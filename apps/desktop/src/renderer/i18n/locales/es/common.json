@@ -18173,7 +18173,8 @@
             "stopped": "Sin ejecutar",
             "unknown": "Esperando el estado del complemento"
           }
-        }
+        },
+        "prSource": "GitHub · Pull request concreto"
       },
       "trigger": {
         "label": "Modo de activación",

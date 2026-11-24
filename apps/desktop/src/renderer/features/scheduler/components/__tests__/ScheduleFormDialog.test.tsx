@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { Schedule, ScheduleTemplate } from '@cindy/maker-scheduler';
@@ -264,12 +264,13 @@ it('sends the explicit local Harness and location when generating a bound hook',
   })));
 });
 
-// A saved Webhook remains visible but cannot be configured while signed out.
+// A saved Webhook remains selected but its address settings cannot be configured while signed out.
 // Saving unrelated fields must preserve it so receiving resumes after signing in.
 it('keeps the saved Webhook trigger while signed out', async () => {
   vi.stubGlobal('electronAPI', { maker: { schedule: { webhookReceiver: async () => 'signed-out' } } });
   const form = mount(schedule({ webhookTrigger: { endpointId: 'endpoint', events: ['check_suite'] } }));
-  expect(screen.getByRole('radio', { name: 'scheduler.editor.trigger.event' }).hasAttribute('disabled')).toBe(true);
+  expect(screen.getByRole('radio', { name: 'scheduler.editor.trigger.event' }).getAttribute('aria-checked')).toBe('true');
+  expect(screen.queryByRole('combobox', { name: 'scheduler.editor.webhook.sourceLabel' })).toBeNull();
   form.save();
   // 没有保存过发送方的任务按默认的 GitHub 写回，接收行为不变。
   await waitFor(() => expect(form.onSubmit).toHaveBeenCalledWith(expect.objectContaining({
@@ -281,17 +282,17 @@ it('keeps the saved Webhook trigger while signed out', async () => {
 // out with an event-declaring plugin installed, the event trigger stays available, offers only
 // plugin events, and saves the chosen plugin without a stale top-level event filter.
 it('offers plugin events while signed out and saves the chosen plugin', async () => {
+  const listEventSources = vi.fn(async () => [{ plugin: 'public/chat', name: 'Chat', state: 'listening',
+    events: [{ type: 'message.received', name: 'Message', fields: ['chatId'] }, { type: 'mention', name: 'Mention', fields: [] }] }]);
   vi.stubGlobal('electronAPI', {
     maker: { schedule: { webhookReceiver: async () => 'signed-out' } },
-    ghosts: {
-      listEventSources: async () => [{ plugin: 'public/chat', name: 'Chat', state: 'listening',
-        events: [{ type: 'message.received', name: 'Message', fields: ['chatId'] }, { type: 'mention', name: 'Mention', fields: [] }] }],
-      onChanged: () => () => undefined,
-    },
+    ghosts: { listEventSources, onChanged: () => () => undefined },
   });
   const form = mount(schedule());
   const trigger = await screen.findByRole('radio', { name: 'scheduler.editor.trigger.event' });
-  await waitFor(() => expect(trigger.hasAttribute('disabled')).toBe(false));
+  // Before the plugin list arrives a single PR is the only usable source; wait for the plugins.
+  await waitFor(() => expect(listEventSources).toHaveBeenCalled());
+  await act(async () => { await listEventSources.mock.results[0]!.value; });
   fireEvent.click(trigger);
   fireEvent.click(await screen.findByRole('checkbox', { name: 'Mention' }));
   form.save();
@@ -300,10 +301,10 @@ it('offers plugin events while signed out and saves the chosen plugin', async ()
   }), true));
 });
 
-// 2026-11-04 product decision, unit/jsdom: Webhook and timed triggering are separate
-// choices. Exercise the real form in both execution modes; saving an existing
-// trigger alone cannot catch the removed combined-trigger UI or mode switching.
-it.each(['agent', 'script'] as const)('keeps Webhook and timed triggering separate for %s execution', async (executionMode) => {
+// 2026-11-24 product decision (supersedes 2026-11-04), unit/jsdom: every event source may add a
+// timed check as a fallback. Exercise the real form in both execution modes, including switching
+// back to timed and manual, which must clear the event trigger.
+it.each(['agent', 'script'] as const)('lets an event trigger add timed checks for %s execution', async (executionMode) => {
   const form = mount(schedule({ executionMode,
     ...(executionMode === 'script' ? { workspaceKind: 'project' as const, workingDir: '/test-project', scriptConfig: { command: 'node check.cjs', capabilities: [] } } : {}),
   }));
@@ -312,8 +313,11 @@ it.each(['agent', 'script'] as const)('keeps Webhook and timed triggering separa
   await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
     manual: true, webhookTrigger: expect.objectContaining({ source: { preset: 'github' } }), executionMode,
   }), true));
-  fireEvent.click(screen.getByRole('button', { name: 'routines.advancedSettings' }));
-  expect(screen.queryByRole('switch', { name: 'scheduler.editor.webhook.timedFallback' })).toBeNull();
+  fireEvent.click(screen.getByRole('checkbox', { name: 'scheduler.prTrigger.timed' }));
+  form.save();
+  await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
+    manual: false, recurring: true, webhookTrigger: expect.objectContaining({ source: { preset: 'github' } }), executionMode,
+  }), true));
   fireEvent.click(screen.getByRole('radio', { name: 'scheduler.editor.trigger.timed' }));
   form.save();
   await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
@@ -326,10 +330,13 @@ it.each(['agent', 'script'] as const)('keeps Webhook and timed triggering separa
   }), true));
 });
 
-// UI regression: choosing an exact PR must round-trip independently of time and Webhook settings.
+// 2026-11-24: a single PR is an event source. Choosing it must save prTrigger (not a Webhook),
+// round-trip timed checks, and switching away must remove the rule.
 it('saves a single PR with optional timed checks and can remove the rule', async () => {
   const form = mount(schedule({}));
-  fireEvent.click(screen.getByRole('radio', { name: 'scheduler.prTrigger.label' }));
+  fireEvent.click(await screen.findByRole('radio', { name: 'scheduler.editor.trigger.event' }));
+  fireEvent.click(screen.getByRole('combobox', { name: 'scheduler.editor.webhook.sourceLabel' }));
+  fireEvent.click(screen.getByRole('option', { name: 'scheduler.editor.webhook.prSource' }));
   const url = 'https://github.com/example/project/pull/23';
   fireEvent.change(screen.getByRole('textbox', { name: 'scheduler.prTrigger.url' }), { target: { value: url } });
   form.save();
@@ -344,6 +351,20 @@ it('saves a single PR with optional timed checks and can remove the rule', async
   fireEvent.click(screen.getByRole('radio', { name: 'scheduler.editor.trigger.timed' }));
   form.save();
   await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({ prTrigger: null }), true));
+});
+
+// Without an account or event plugins, the event trigger falls back to the source that needs neither.
+it('offers a single PR as the event source while signed out without event plugins', async () => {
+  vi.stubGlobal('electronAPI', { gitContext: { githubAppStatus: async () => ({ available: true, login: null }) },
+    maker: { schedule: { webhookReceiver: async () => 'signed-out' } } });
+  const form = mount(schedule({}));
+  fireEvent.click(await screen.findByRole('radio', { name: 'scheduler.editor.trigger.event' }));
+  const url = 'https://github.com/example/project/pull/7';
+  fireEvent.change(await screen.findByRole('textbox', { name: 'scheduler.prTrigger.url' }), { target: { value: url } });
+  form.save();
+  await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
+    manual: true, prTrigger: { url, change: 'any' }, webhookTrigger: null,
+  }), true));
 });
 
 // PR 11309, unit/jsdom: an event-only PR automation created via the API can have recurring=false.

@@ -18173,7 +18173,8 @@
             "stopped": "Arrêté",
             "unknown": "En attente du statut du plugin"
           }
-        }
+        },
+        "prSource": "GitHub · Pull request précise"
       },
       "trigger": {
         "label": "Mode de déclenchement",

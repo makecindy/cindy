@@ -172,10 +172,9 @@ export function ScheduleFormDialog({
     );
     return () => { current = false; };
   }, []);
-  // 插件事件只在本机交接，不需要账号：有声明了事件的插件时也能选「事件」触发。
+  // 插件事件只在本机交接，不需要账号；未登录时「事件」优先提供插件事件，否则提供指定 PR。
   const pluginEventCandidates = usePluginEventSources();
   const pluginEventsAvailable = (pluginEventCandidates?.length ?? 0) > 0;
-  const eventTriggerReady = webhookReceiverReady || pluginEventsAvailable;
   const { form, setField, selectModelConfiguration, selectPluginEngine, setDestination, setRunMode, selectBoundSession, applyTemplateAgentFields, reset, toInput, validate } = formApi;
   // "运行会话"三态(fresh / persistent / bound)与心跳形态派生值。
   // hasRealBinding = targetSessionId 为真实会话 id(B 已绑 / C 已选 / MCP 手绑),
@@ -339,7 +338,9 @@ export function ScheduleFormDialog({
     ? t('scheduler.editor.promptDialog.save')
     : t('scheduler.editor.promptDialog.create');
   // UI 三选一；manual 仅表示不启用定时，已有组合配置在未切换触发方式时原样保留。
-  const triggerMode = form.prEnabled ? 'pr' : form.webhookEnabled ? 'webhook' : form.manual ? 'manually' : 'automatic';
+  // A single PR is one of the event sources (2026-11-24); its storage stays the separate prTrigger field.
+  const triggerMode = form.prEnabled || form.webhookEnabled ? 'webhook' : form.manual ? 'manually' : 'automatic';
+  const eventMode = triggerMode === 'webhook';
   // Address-based senders still need an account; a saved one stays hidden (and preserved) while signed out.
   const webhookSettingsVisible = !isProjectAutomationMode && form.webhookEnabled
     && (webhookReceiverReady || form.webhookPreset === 'plugin');
@@ -1209,23 +1210,26 @@ export function ScheduleFormDialog({
                           onValueChange={(mode) => {
                             if (mode === triggerMode) return;
                             preserveTriggerScrollPosition();
-                            if (mode === 'pr' || form.prEnabled) setField('prEnabled', mode === 'pr');
-                            setField('webhookEnabled', mode === 'webhook');
-                            // Without an account only plugin events can be received here.
-                            if (mode === 'webhook' && !webhookReceiverReady && pluginEventsAvailable && form.webhookPreset !== 'plugin') {
-                              setField('webhookPreset', 'plugin');
+                            if (mode === 'webhook' && !webhookReceiverReady && !pluginEventsAvailable) {
+                              // Without an account or event plugins, a single PR is the source this computer can use.
+                              setField('prEnabled', true);
+                              setField('webhookEnabled', false);
+                            } else {
+                              if (form.prEnabled) setField('prEnabled', false);
+                              setField('webhookEnabled', mode === 'webhook');
+                              // Without an account, address-based senders cannot receive here.
+                              if (mode === 'webhook' && !webhookReceiverReady && form.webhookPreset !== 'plugin') {
+                                setField('webhookPreset', 'plugin');
+                              }
                             }
                             setField('manual', mode !== 'automatic');
                             setField('recurring', mode !== 'manually');
                           }}
                           options={[
                             { value: 'automatic', label: t('scheduler.editor.trigger.timed') },
-                            ...(!isProjectAutomationMode ? [{ value: 'pr', label: t('scheduler.prTrigger.label') }] : []),
                             { value: 'manually', label: t('scheduler.editor.fields.manually') },
-                            ...(!isProjectAutomationMode && (eventTriggerReady || form.webhookEnabled)
-                              ? [{ value: 'webhook', label: t('scheduler.editor.trigger.event'),
-                                disabled: !eventTriggerReady && form.webhookPreset !== 'plugin' }]
-                              : []),
+                            // A single PR needs no account, so the event trigger is always available.
+                            ...(!isProjectAutomationMode || eventMode ? [{ value: 'webhook', label: t('scheduler.editor.trigger.event') }] : []),
                           ]}
                         />
                         {/* 自动模式:cron chip + 一次(recurring 反向)。手动模式:两者全部隐藏——cron 占位值仍在 form 里,提交合法。 */}
@@ -1312,36 +1316,12 @@ export function ScheduleFormDialog({
                           </Popover>
                         )}
                       </div>
-                      {form.prEnabled && (
-                        <div className="flex flex-col gap-3">
-                          <FormField label={t('scheduler.prTrigger.url')}>
-                            {(control) => <Input {...control} value={form.prUrl ?? ''} onChange={value => setField('prUrl', value)}
-                              placeholder="https://github.com/owner/repo/pull/123" />}
-                          </FormField>
-                          <GithubAppCard automation timedPrCheck={!form.manual} repositories={[(form.prUrl ?? '').split('/').slice(3, 5).join('/')]} />
-                          <FormField label={t('scheduler.prTrigger.condition')}>
-                            {(control) => <Select {...control} label={t('scheduler.prTrigger.condition')} value={form.prChange ?? 'any'}
-                              options={PR_CHANGES.map(value => ({ value, label: t(`scheduler.prTrigger.${value}`) }))}
-                              onValueChange={value => setField('prChange', value as PrChange)} />}
-                          </FormField>
-                          <label className="flex items-center gap-2 text-13 text-[var(--text-primary)]">
-                            <Checkbox checked={!form.manual} onChange={event => {
-                              const enabled = event.currentTarget.checked;
-                              setField('manual', !enabled);
-                              if (enabled) setField('recurring', true);
-                            }} />
-                            {t('scheduler.prTrigger.timed')}
-                          </label>
-                          {!form.manual && <ScheduleChip cronExpr={form.cronExpr} intervalMs={form.intervalMs}
-                            onChangeSchedule={value => { setField('cronExpr', value.cronExpr); setField('intervalMs', value.intervalMs); }} />}
-                        </div>
-                      )}
                       {/* 项目配置不保存接收地址；未登录时保留已配置的触发方式。 */}
-                      {webhookSettingsVisible && webhookReceiverReady && form.webhookPreset !== 'github-app' && form.webhookPreset !== 'plugin'
+                      {webhookSettingsVisible && !form.prEnabled && webhookReceiverReady && form.webhookPreset !== 'github-app' && form.webhookPreset !== 'plugin'
                         && <WebhookAccountManager allowOpenSchedule={false} />}
-                      {webhookSettingsVisible && (
+                      {(webhookSettingsVisible || form.prEnabled) && (
                           <WebhookSourceFields
-                            preset={form.webhookPreset ?? DEFAULT_SCHEDULE_WEBHOOK_PRESET}
+                            preset={form.prEnabled ? 'github-pr' : form.webhookPreset ?? DEFAULT_SCHEDULE_WEBHOOK_PRESET}
                             signed={form.webhookSigned !== false}
                             formatText={form.webhookFormat ?? ''}
                             events={form.webhookEvents ?? ''}
@@ -1349,6 +1329,14 @@ export function ScheduleFormDialog({
                             onRepositoriesChange={(value) => setField('webhookRepositories', value)}
                             onEventsChange={(value) => setField('webhookEvents', value)}
                             onPresetChange={(value) => {
+                              // A single PR keeps its own prTrigger field; every other sender is a webhookTrigger.
+                              if (value === 'github-pr') {
+                                setField('prEnabled', true);
+                                setField('webhookEnabled', false);
+                                return;
+                              }
+                              if (form.prEnabled) setField('prEnabled', false);
+                              setField('webhookEnabled', true);
                               // 切到自定义时，用当前预设的格式作为起点，避免从空白开始写。
                               if (value === 'custom' && !form.webhookFormat?.trim()) {
                                 const current = form.webhookPreset ?? DEFAULT_SCHEDULE_WEBHOOK_PRESET;
@@ -1367,7 +1355,36 @@ export function ScheduleFormDialog({
                             pluginCandidates={pluginEventCandidates}
                             onPluginSourcesChange={(value) => setField('webhookPluginSources', value)}
                             addressSourcesAvailable={webhookReceiverReady}
+                            prFields={
+                              <div className="flex flex-col gap-3">
+                                <FormField label={t('scheduler.prTrigger.url')}>
+                                  {(control) => <Input {...control} value={form.prUrl ?? ''} onChange={value => setField('prUrl', value)}
+                                    placeholder="https://github.com/owner/repo/pull/123" />}
+                                </FormField>
+                                <GithubAppCard automation timedPrCheck={!form.manual} repositories={[(form.prUrl ?? '').split('/').slice(3, 5).join('/')]} />
+                                <FormField label={t('scheduler.prTrigger.condition')}>
+                                  {(control) => <Select {...control} label={t('scheduler.prTrigger.condition')} value={form.prChange ?? 'any'}
+                                    options={PR_CHANGES.map(value => ({ value, label: t(`scheduler.prTrigger.${value}`) }))}
+                                    onValueChange={value => setField('prChange', value as PrChange)} />}
+                                </FormField>
+                              </div>
+                            }
                           />
+                      )}
+                      {/* 2026-11-24：所有事件来源都可以同时定时检查，用来兜底离线或漏掉的事件。 */}
+                      {eventMode && (
+                        <div className="flex flex-wrap items-center gap-2.5">
+                          <label className="flex min-h-[34px] items-center gap-2 text-13 text-[var(--text-primary)]">
+                            <Checkbox checked={!form.manual} onChange={event => {
+                              const enabled = event.currentTarget.checked;
+                              setField('manual', !enabled);
+                              if (enabled) setField('recurring', true);
+                            }} />
+                            {t('scheduler.prTrigger.timed')}
+                          </label>
+                          {!form.manual && <ScheduleChip cronExpr={form.cronExpr} intervalMs={form.intervalMs}
+                            onChangeSchedule={value => { setField('cronExpr', value.cronExpr); setField('intervalMs', value.intervalMs); }} />}
+                        </div>
                       )}
                       {!isScriptMode && (
                         <div className="flex flex-wrap items-start gap-2.5">
