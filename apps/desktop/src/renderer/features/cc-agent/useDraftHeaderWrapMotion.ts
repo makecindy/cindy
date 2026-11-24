@@ -27,6 +27,7 @@ export function useDraftHeaderWrapMotion(
     const read = () => ({
       left: chips.offsetLeft,
       top: chips.offsetTop,
+      height: chips.offsetHeight,
       contentTop: content.offsetTop,
     });
     let from = read();
@@ -39,6 +40,7 @@ export function useDraftHeaderWrapMotion(
       return {
         left: from.left + (matrix?.m41 ?? 0),
         top: from.top + (matrix?.m42 ?? 0),
+        height: from.height,
         contentTop: from.contentTop + margin - baseMargin,
       };
     };
@@ -65,7 +67,11 @@ export function useDraftHeaderWrapMotion(
       const easing = style.getPropertyValue('--motion-ease-move').trim() || 'linear';
       const dx = start.left - chips.offsetLeft;
       const dy = start.top - chips.offsetTop;
-      const dContent = start.contentTop - content.offsetTop;
+      // 按钮排自身的内折行会让它变高（窄一下就从一行变两行）。FLIP 只搬位置不搬尺寸：
+      // 输入区若还从旧位置开始，前一段会压在高出来的那部分按钮排下面。把这段高度差
+      // 加进起点，等于让它直接落到新布局；高度没变时是 0，行为不变。
+      const grown = Math.max(0, chips.offsetHeight - start.height);
+      const dContent = start.contentTop + grown - content.offsetTop;
       if (Math.abs(dx) >= 0.5 || Math.abs(dy) >= 0.5) {
         // 折行与复原都走「先沿当前列上下、再沿目标行左右」两条腿:直接对角线插值会让
         // 按钮排从 logo 右上角穿到 logo 左下角,200ms 里又压一次 logo。第一腿停在
