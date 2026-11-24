@@ -366,6 +366,27 @@ describe('handleSchedulerEvent', () => {
       nextFireAt: 301050,
     });
   });
+
+  it('clears the last slot on a persisted skip and retains that timing across a stale list response', async () => {
+    const before = { ...schedule1, lastFinishedAt: 100, nextFireAt: 200 };
+    listMock.mockResolvedValueOnce([before]);
+    await schedulesStore.ensure();
+    let finishRead!: (value: Schedule[]) => void;
+    listMock.mockReturnValueOnce(new Promise<Schedule[]>((resolve) => { finishRead = resolve; }));
+    const pending = schedulesStore.forceRefresh();
+    const legacySkip = { type: 'skipped', scheduleId: 's1', runId: 'r-skip', sessionId: '' };
+    handleSchedulerEvent(legacySkip);
+    expect(schedulesStore.getSnapshot()?.[0]?.nextFireAt).toBe(200);
+
+    handleSchedulerEvent({ ...legacySkip, lastFiredAt: 200, lastFinishedAt: 210 });
+    expect(schedulesStore.getSnapshot()?.[0]?.nextFireAt).toBeUndefined();
+    finishRead([before, schedule2]);
+    expect(await pending).toEqual([
+      { ...before, lastFiredAt: 200, lastFinishedAt: 210, nextFireAt: undefined },
+      schedule2,
+    ]);
+    expect(listMock).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('handleAuthStateChange', () => {

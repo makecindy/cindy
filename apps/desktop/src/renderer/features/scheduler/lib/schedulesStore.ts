@@ -45,7 +45,8 @@ import type { Schedule, SchedulerEvent } from '@cindy/maker-scheduler';
 import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 
 let cache: Schedule[] | null = null;
-let inflight: Promise<Schedule[]> | null = null;
+type SkippedEvent = Extract<SchedulerEvent, { type: 'skipped' }>;
+let inflight: { promise: Promise<Schedule[]>; skips: Map<string, SkippedEvent> } | null = null;
 let lastError: string | null = null;
 /**
  * Logout listener 置 true → 下一次 'ready' 后台预热,避免冷启动场景下
@@ -67,6 +68,19 @@ function notify(): void {
   subs.forEach((fn) => fn());
 }
 
+function applySkippedTiming(schedule: Schedule, event: SkippedEvent): Schedule {
+  return {
+    ...schedule,
+    ...(event.lastFiredAt !== undefined ? { lastFiredAt: event.lastFiredAt } : {}),
+    ...(event.lastFinishedAt !== undefined ? { lastFinishedAt: event.lastFinishedAt } : {}),
+    // The local engine sends lastFinishedAt only with a persisted schedule
+    // snapshot. Its missing nextFireAt means this run has no next slot.
+    ...(event.lastFinishedAt !== undefined || event.nextFireAt !== undefined
+      ? { nextFireAt: event.nextFireAt }
+      : {}),
+  };
+}
+
 /**
  * 真正发起 list IPC + 落 cache 的内部 helper,ensure / forceRefresh 共用。
  *
@@ -76,7 +90,7 @@ function notify(): void {
  *   CLAUDE.md §12 的空白帧 / 列表闪烁。
  */
 async function fetchAndStore(): Promise<Schedule[]> {
-  if (inflight) return inflight;
+  if (inflight) return inflight.promise;
   // 捕获发起时的 epoch。所有副作用(写 cache/lastError、清 inflight)都用
   // myEpoch === epoch 守卫:
   //   - 同 epoch(未切账号):dedup 保证同一时刻只有一个 in-flight,本 promise 就是
@@ -84,13 +98,23 @@ async function fetchAndStore(): Promise<Schedule[]> {
   //   - 跨 epoch(期间登出过):本 promise 是上个账号的晚到请求,全部副作用跳过 ——
   //     不回写 cache(防串库),也不清 inflight(此刻 inflight 可能已是新账号的 pB)。
   const myEpoch = epoch;
-  inflight = (async (): Promise<Schedule[]> => {
+  const skips = new Map<string, SkippedEvent>();
+  const promise = (async (): Promise<Schedule[]> => {
     try {
       const list = (await window.electronAPI.maker.schedule.list()) as Schedule[];
       if (myEpoch === epoch) {
-        cache = list;
+        const next = skips.size === 0 ? list : list.map((schedule) => {
+          const skip = skips.get(schedule.id);
+          // A snapshot that includes this completion already owns its timing
+          // and may also include a newer edit to the schedule.
+          return skip && (skip.lastFinishedAt ?? -Infinity) > (schedule.lastFinishedAt ?? -Infinity)
+            ? applySkippedTiming(schedule, skip)
+            : schedule;
+        });
+        cache = next;
         lastError = null;
         notify();
+        return next;
       }
       return list;
     } catch (e) {
@@ -103,7 +127,8 @@ async function fetchAndStore(): Promise<Schedule[]> {
       if (myEpoch === epoch) inflight = null;
     }
   })();
-  return inflight;
+  inflight = { promise, skips };
+  return promise;
 }
 
 /** 命中 cache 直接返回(零 IPC);未命中走 fetchAndStore。 */
@@ -162,26 +187,16 @@ export function handleSchedulerEvent(raw: unknown): void {
     });
     return;
   }
-  if (ev.type === 'skipped' && cache !== null) {
+  if (ev.type === 'skipped') {
     // 活跃周期任务的前置检查空跳不再额外广播 'changed';直接原位推进缓存里的排期时间戳,避免重拉整表。
     const hasTimingPatch =
       ev.lastFiredAt !== undefined ||
       ev.lastFinishedAt !== undefined ||
       ev.nextFireAt !== undefined;
     if (hasTimingPatch) {
-      let updated = false;
-      const next = cache.map((item) => {
-        if (item.id !== ev.scheduleId) return item;
-        updated = true;
-        return {
-          ...item,
-          ...(ev.lastFiredAt !== undefined ? { lastFiredAt: ev.lastFiredAt } : {}),
-          ...(ev.lastFinishedAt !== undefined ? { lastFinishedAt: ev.lastFinishedAt } : {}),
-          ...(ev.nextFireAt !== undefined ? { nextFireAt: ev.nextFireAt } : {}),
-        };
-      });
-      if (updated) {
-        cache = next;
+      if (ev.lastFinishedAt !== undefined) inflight?.skips.set(ev.scheduleId, ev);
+      if (cache?.some((item) => item.id === ev.scheduleId)) {
+        cache = cache.map((item) => item.id === ev.scheduleId ? applySkippedTiming(item, ev) : item);
         notify();
       }
     }
@@ -256,7 +271,7 @@ export const schedulesStore = {
 
   /** 有刷新在途时返回该请求(缓存此时可能已过期,例如刚创建 / 恢复 / 改绑了自动化);否则 null。 */
   pendingRefresh(): Promise<Schedule[]> | null {
-    return inflight;
+    return inflight?.promise ?? null;
   },
 };
 

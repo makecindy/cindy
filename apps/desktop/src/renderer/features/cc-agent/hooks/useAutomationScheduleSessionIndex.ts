@@ -224,11 +224,10 @@ export function useAutomationScheduleSessionIndex(
       publishIndex(next);
       retryAttemptRef.current = 0;
     } catch (error) {
+      if (refreshSeqRef.current !== seq || cancelledRef.current) return;
       log.warn('failed to build automation schedule session index', {
         error: error instanceof Error ? error.message : String(error),
       });
-      // 卸载后到达的 rejection 不再排新定时器,见 cancelledRef。
-      if (cancelledRef.current) return;
       // 见 REFRESH_RETRY_DELAYS_MS:这次拉取也是标记对账的载体,失败不能只 log。
       // 退避档位用尽后:仍有标记待对账就按最后一档持续重试(否则 scheduler / IPC / DB
       // 连续不可用超过三档窗口、且此后再无事件时,标记会永久残留);没有标记则停手,
@@ -326,40 +325,6 @@ export function useAutomationScheduleSessionIndex(
       } else if (event.type === 'deferred' || event.type === 'skipped') {
         clearSchedulerOwnedRun(event.runId);
       }
-      const skippedNeedsIndexRefresh =
-        event.type === 'skipped' &&
-        (Boolean(event.sessionId) ||
-          (event.preRunCheckSucceeded === true &&
-            [...publishedIndex.values()].some(
-              (info) => info.scheduleId === event.scheduleId && info.hasFailedRun,
-            )));
-      if (
-        event.type === 'skipped' &&
-        !skippedNeedsIndexRefresh &&
-        event.nextFireAt !== undefined &&
-        publishedIndex.size > 0
-      ) {
-        let patched = false;
-        const next = new Map<string, AutomationScheduleSessionInfo>();
-        for (const [sid, info] of publishedIndex) {
-          if (info.scheduleId === event.scheduleId && info.nextFireAt !== event.nextFireAt) {
-            patched = true;
-            next.set(sid, {
-              ...info,
-              nextFireAt: event.nextFireAt,
-              ...(info.latestFailedRun && info.scheduleStatus === 'active'
-                ? { latestFailedRun: { ...info.latestFailedRun, nextFireAt: event.nextFireAt } }
-                : {}),
-            });
-          } else {
-            next.set(sid, info);
-          }
-        }
-        if (patched) {
-          setIndex(next);
-          publishIndex(next);
-        }
-      }
       if (
         event.type === 'changed' ||
         event.type === 'completed' ||
@@ -367,7 +332,9 @@ export function useAutomationScheduleSessionIndex(
         event.type === 'session-bound' ||
         event.type === 'read' ||
         event.type === 'all-read' ||
-        skippedNeedsIndexRefresh
+        // The skip is already committed in the local DB. Use the same refresh
+        // sequence as every other terminal event so earlier reads cannot win.
+        event.type === 'skipped'
       ) {
         void refresh();
       }
