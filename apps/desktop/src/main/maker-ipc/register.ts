@@ -1470,7 +1470,7 @@ import {
   setSessionEffort,
   setSessionFastMode,
 } from '../maker-host/session-effort-store.js';
-import { modelGroupAutoSwitchFor, modelGroupCandidateKey } from '../../shared/modelGroups.js';
+import { MODEL_GROUP_LIMITS, modelGroupAutoSwitchFor, modelGroupCandidateKey } from '../../shared/modelGroups.js';
 import { botModelGroupsSignature, expandBotModelGroups, modelGroupCandidateRoute } from '../model-groups/botRoutes.js';
 import { pickModelGroupRoute, readModelGroupRecoveryOffer } from '../model-groups/desktopResolver.js';
 import { modelGroupSessionStart } from '../model-groups/sessionStart.desktop.js';
@@ -3205,7 +3205,16 @@ interface OrcaCollabService {
   >;
 }
 
+function parseWorkerModelGroup(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || !value.trim() || value.length > MODEL_GROUP_LIMITS.id) {
+    throwIpcError('INVALID_PARAMS', 'modelGroup must be a model group id');
+  }
+  return value.trim();
+}
+
 interface EnableOrcaOptions {
+  modelGroup?: string;
   workerAgent: EngineKind;
   delegateTask?: string;
   role?: string;
@@ -7237,6 +7246,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // agentDeviceId(Worker 的 Agent 所在电脑)；旧 desktop 会静默丢掉这个字段，把 Worker 建在
       // 与 Lead 相同的位置，所以缺省 false 时控制端不提供。
       supportsOrcaWorkerAgentDevice: true,
+      supportsOrcaWorkerModelGroup: true,
       // 新控制端只有看到此位，才对本机上的协同 Lead / 本机 Worker 列出其他电脑与分享、允许换 Agent
       // 所在电脑。v0.1.104–v0.1.110 的 host 会以 UNSUPPORTED_CAPABILITY 拒绝这类换位置，缺省 false
       // 时控制端不提供。
@@ -10576,8 +10586,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         providerId: row.providerId,
       };
     },
+    supportsModelGroup: true,
     openSession: createOrcaRemoteWorkerSessionOpener({
       openSession,
+      modelGroupStart: modelGroupSessionStart,
       isSelfDeviceId: deviceId => deviceId === getSelfDeviceId(),
       captureOwner: () => {
         const owner = getCurrentDbClientSnapshot();
@@ -10609,12 +10621,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       insertSession: async (row) => {
         await getDbClient().drizzle.insert(sessions).values(row).run();
       },
-      bootstrapSession: async (opened, assertCurrent) => {
+      bootstrapSession: async (opened, assertCurrent, modelGroupStart) => {
         const agentKind = opened.agentKind === 'codex' || opened.agentKind === 'pi'
           ? opened.agentKind
           : 'claude-code';
         await bootstrapSession(buildCreateOptsWithStderr({
           id: opened.id,
+          ...(modelGroupStart ? { modelGroupStart } : {}),
           agentKind,
           workspaceKind: opened.workspaceKind,
           // openSession 已为 dialogue 分配目录；project 由调用方给出并经 device-link 目录守卫。
@@ -12086,6 +12099,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       role: opts.role,
       label: opts.label,
       model: opts.model,
+      modelGroup: opts.modelGroup,
       effort: opts.effort,
       fast: opts.fast,
       providerId: opts.providerId,
@@ -15930,6 +15944,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (typeof leadSessionId !== 'string')
         throwIpcError('INVALID_PARAMS', 'leadSessionId required');
       const body = (opts ?? {}) as {
+        modelGroup?: unknown;
         workerAgent?: unknown;
         delegateTask?: unknown;
         role?: unknown;
@@ -15969,6 +15984,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         role: typeof body.role === 'string' ? body.role : undefined,
         label: typeof body.label === 'string' ? body.label : undefined,
         model: typeof body.model === 'string' ? body.model : undefined,
+        modelGroup: parseWorkerModelGroup(body.modelGroup),
         effort: typeof body.effort === 'string' ? (body.effort as OrcaWorkerEffort) : undefined,
         fast: (typeof body.fast === 'boolean' || body.fast === 'ultrafast') ? body.fast : undefined,
         // 只认非空(trim 后)string 为显式来源;其余(null/空白/缺省/异型)一律按「未显式」处理。
@@ -16276,6 +16292,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       role: b.role,
       agent,
       model,
+      modelGroup: parseWorkerModelGroup(b.modelGroup),
       effort: typeof b.effort === 'string' ? (b.effort as OrcaWorkerEffort) : undefined,
       fast: (typeof b.fast === 'boolean' || b.fast === 'ultrafast') ? b.fast : undefined,
       // 只认非空(trim 后)string 为显式来源;其余(null/空白/缺省/异型)一律按「未显式」处理。
@@ -16831,6 +16848,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       };
     },
     getWorkerDefaults: getWorkerDefaultsFromNewMaker,
+    modelGroupStart: modelGroupSessionStart,
     getCreationSelection: () => isAppSessionBoundaryPending() ? null : getWorkerCreationSelection(getActiveDataOwnerPushStamp()),
     getWorkerPermissionMode: getWorkerPermissionModeFromCreationPrefs,
     resolveWorkerWorkingDir: async (dir, lead) => {
