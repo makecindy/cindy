@@ -2256,6 +2256,13 @@
       }
     },
     "appearance": {
+      "chatLayout": {
+        "label": "Diseño del chat",
+        "standard": "Estándar",
+        "wide": "Ancho",
+        "width": "Ancho del contenido",
+        "hint": "Se calcula sobre el espacio entre los márgenes del chat. Los paneles estrechos se ajustan automáticamente."
+      },
       "title": "Apariencia",
       "modeLabel": "Modo de apariencia",
       "appIcon": {
@@ -2501,6 +2508,10 @@
       }
     },
     "windowBehavior": {
+      "trayCard": {
+        "label": "Tarjeta de la bandeja del sistema",
+        "hint": "Sitúa el puntero sobre el icono de Cindy en la bandeja para ver la cuota restante y las tareas sin leer."
+      },
       "menubar": {
         "label": "Mostrar el uso restante en la barra de menú",
         "hint": "Agrega un icono de Cindy a la barra de menús de macOS. Haz clic en él para ver lo que te queda de tus suscripciones, tu saldo de Cindy y el uso de hoy."
@@ -2846,7 +2857,8 @@
         "errorBusy": "Ya hay una carga en progreso, espera",
         "errorFailed": "Error al cargar el registro. Comprueba tu red y vuelve a intentarlo.",
         "unavailableNotConfigured": "La carga de registros no está configurada en esta compilación.",
-        "unavailableNoConsent": "Primero debes aceptar la Política de privacidad."
+        "unavailableNoConsent": "Primero debes aceptar la Política de privacidad.",
+        "consentPrompt": "Antes de subir los registros, lee la <policy>Política de privacidad</policy> y selecciona <accept>Aceptar</accept>."
       },
       "openLogsDirError": "No se pudo abrir el directorio de registros",
       "autoUpdateLabel": "Instalar actualizaciones mientras está inactivo",
@@ -5244,6 +5256,7 @@
       "formHint": "El ID de usuario es numérico; escribe a @userinfobot por mensaje directo para consultar tu ID.",
       "connect": "Conectar",
       "connectingAction": "Conectando…",
+      "connectTimedOut": "Se agotó el tiempo de conexión. Vuelve a intentarlo.",
       "errorCode": {
         "invalid-token": "El token del bot no es válido o se restableció: vuelve a introducirlo",
         "provider-api": "Telegram devolvió un error; inténtalo de nuevo en breve",
@@ -8284,6 +8297,7 @@
           "official": "Oficial",
           "community": "Comunidad"
         },
+        "communityDisclaimer": "Este complemento lo desarrollan y mantienen miembros de la comunidad. Cindy ha revisado esta versión, pero no puede garantizar que sea seguro en todas las situaciones de uso.",
         "publisherDescription": {
           "official": "Publicado y mantenido por Cindy",
           "community": "Publicado y mantenido por desarrolladores de la comunidad",
@@ -8399,7 +8413,7 @@
             "authTitle": "Repositorios privados",
             "authBody": "La autenticación depende por completo de la configuración de Git de tu sistema: Cindy nunca almacena credenciales de Git. SSH: debes tener una clave funcional configurada en este equipo; si la organización exige SAML SSO, autoriza la clave para esa organización mediante Configure SSO en la configuración de claves SSH de GitHub. HTTPS: usa un Personal Access Token almacenado por el asistente de credenciales del sistema.",
             "rulesTitle": "Reglas de instalación",
-            "rulesBody": "Los identificadores de los complementos son únicos a nivel global y se asignan por orden de llegada; los conflictos con complementos instalados se señalan explícitamente. Los complementos cuyos identificadores usan los prefijos oficiales reservados ({{reservedGhostIdPrefixes}}) no se pueden instalar arrastrando un paquete, eligiendo un archivo ni usando un mercado de complementos personalizado. Los permisos declarados se muestran en la página de detalles; al hacer clic en Instalar, se completa la instalación y se habilita el complemento sin otro diálogo de confirmación de permisos.",
+            "rulesBody": "Los identificadores de los complementos son únicos a nivel global y se asignan por orden de llegada; los conflictos con complementos instalados se señalan explícitamente. Los complementos cuyos identificadores usan los prefijos oficiales reservados ({{reservedGhostIdPrefixes}}) no se pueden instalar arrastrando un paquete, eligiendo un archivo ni usando un mercado de complementos personalizado. Los permisos declarados se muestran en la página de detalles. Al instalar un complemento manualmente por primera vez, Cindy te pide que confirmes los permisos solicitados. El complemento se habilita automáticamente después de la instalación.",
             "copy": "Copiar guía",
             "copied": "Guía copiada al portapapeles.",
             "copyFailed": "No se pudo copiar. Inténtalo de nuevo."
@@ -8516,6 +8530,8 @@
         "installMeta": "Versión {{version}} · {{source}}",
         "updateMeta": "Versión {{from}} → {{to}} · {{source}}",
         "installDescription": "No se instala nada hasta que confirmes. El complemento se activa justo después de instalarse y puedes desactivarlo o desinstalarlo cuando quieras en la página Complementos.",
+        "customMarketSourceNotice": "Asegúrate de que confías en este mercado y revisa los permisos que solicita el complemento.",
+        "localFileSourceNotice": "Antes de continuar, comprueba que el archivo procede de una fuente de confianza.",
         "updateDescription": "La actualización comienza solo cuando confirmes. La versión actual seguirá disponible hasta entonces.",
         "grantsTitle": "Después de la instalación tendrá:",
         "noPermissions": "Este complemento no declara permisos adicionales.",
@@ -12624,6 +12640,8 @@
       "transferBusy": "{{name}} todavía está trabajando en una respuesta. Muévelo después de que termine la respuesta.",
       "targetUnavailable": "“{{device}}” no está disponible. Debe estar en línea y tener el control remoto activado",
       "targetOutdated": "“{{device}}” ejecuta una versión antigua de Cindy que aún no puede ejecutar a {{name}}. Actualiza Cindy allí primero",
+      "skillTargetOutdated": "Una Habilidad de {{name}} tiene un contenido de más de 64 KB que la versión antigua de Cindy en “{{device}}” no puede recibir. Actualiza Cindy en ese ordenador antes de mover a tu amigo. Tu amigo sigue en el ordenador original",
+      "skillTargetOutdated_skill": "La versión antigua de Cindy en «{{device}}» no puede recibir la habilidad «{{slug}}». Su contenido ocupa {{bodyBytes, number}} bytes y supera el límite de 64 KB. {{name}} sigue en el ordenador original. Actualiza Cindy en el ordenador de destino y vuelve a intentarlo.",
       "targetOutdatedItem": "Mover a “{{device}}” · Cindy antigua",
       "targetOutdatedMeta": "Cindy antigua",
       "olderTargetNote": "“{{device}}” ejecuta una versión antigua de Cindy, así que {{name}} funcionará allí como antes: el historial del chat se sigue sincronizando, pero las reglas y automatizaciones del proyecto no se aplican allí.",
@@ -12867,6 +12885,7 @@
           "conflict": "Este bot ya está conectado en esta computadora, en Configuración → Bots de mensajería instantánea o en otro amigo.",
           "botUnavailable": "{{name}} no está disponible en este momento. Inténtalo cuando vuelva.",
           "connectFailed": "No se pudo conectar: {{reason}}",
+          "connectTimedOut": "Se agotó el tiempo de conexión. Vuelve a intentarlo.",
           "failed": "No se pudo terminar. Inténtalo más tarde.",
           "personalBotGone": "Este bot ya no está configurado en Configuración → Bots de mensajería instantánea. Ingresa sus credenciales."
         },
@@ -16620,7 +16639,13 @@
       "open": "Abrir la tarea «{{title}}»",
       "untitled": "Tarea sin título",
       "startedOne": "Iniciada",
-      "handedToOne": "Encargada a"
+      "handedToOne": "Encargada a",
+      "status": {
+        "running": "En ejecución",
+        "needsAction": "Esperando tu acción",
+        "error": "Error",
+        "idle": "Inactiva"
+      }
     },
     "botTaskLetter": {
       "replied": "respondió",
@@ -17867,15 +17892,15 @@
   "scheduler": {
     "prTrigger": {
       "fallback": "Las comprobaciones programadas continúan sin notificaciones de GitHub App.",
-      "label": "PR",
-      "url": "URL de la pull request",
+      "label": "PR / MR",
+      "url": "URL de PR o MR",
       "condition": "Ejecutar cuando",
-      "any": "Actividad de la PR",
+      "any": "Actividad",
       "merged": "Fusión",
       "review": "Actividad de revisión",
       "ci": "Cambios de CI",
       "timed": "Comprobar también periódicamente",
-      "invalid": "Introduce la URL de una pull request de GitHub."
+      "invalid": "Introduce la URL de una PR de GitHub o una MR de GitLab."
     },
     "presentation": {
       "status": {

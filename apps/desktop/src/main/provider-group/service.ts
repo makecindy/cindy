@@ -325,7 +325,7 @@ export interface ProviderGroupService {
   /** Keep an in-flight send and its replacement open cancellable by task Stop. */
   trackGuestStartRecovery(sessionId: string): { signal: AbortSignal; isCurrent(): boolean; dispose(): void };
   /** 用户亲自接手：这一轮重新从头试。 */
-  noteUserAction(sessionId: string): void;
+  noteUserAction(sessionId: string, ownReconnectRecoverySignal?: AbortSignal): void;
   /**
    * 任务此刻归哪个组(模型列表据此把它显示在组那一项下，provider-groups.md §10)：有绑定、且任务记录里的
    * 位置就是绑定的那台时返回组；没归组、位置与绑定对不上(挪到了别处，等下次核对)时返回 null。只读本机记录，
@@ -528,6 +528,7 @@ type ReturnOutcome = 'reachable' | 'back' | 'gone' | 'stopped';
 
 interface SwitchRun {
   superseded: boolean;
+  recoverySignal?: AbortSignal;
   onSuperseded?: () => void;
   isCurrent?(): boolean;
   onRelocationMutationStart?(): void;
@@ -2394,6 +2395,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     trackGuestStartRecovery(sessionId) {
       const { run, done } = trackRun(sessionId);
       const abort = new AbortController();
+      run.recoverySignal = abort.signal;
       run.onSuperseded = () => abort.abort(new Error(PROVIDER_GROUP_SUPERSEDED_ERROR));
       return { signal: abort.signal, isCurrent: () => !run.superseded, dispose: done };
     },
@@ -2421,8 +2423,9 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       }
     },
 
-    noteUserAction(sessionId) {
+    noteUserAction(sessionId, ownReconnectRecoverySignal) {
       for (const run of runningSwitches.get(sessionId) ?? []) {
+        if (ownReconnectRecoverySignal && run.recoverySignal === ownReconnectRecoverySignal) continue;
         run.superseded = true;
         run.onSuperseded?.();
       }

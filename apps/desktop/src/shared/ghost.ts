@@ -2030,6 +2030,13 @@ export function isGhostInstallApprovalToken(value: unknown): value is string {
   );
 }
 
+export interface ConfirmedGhostUninstall {
+  owner: import('./dataOwnerPush').DataOwnerPushStamp;
+  physicalId: string;
+  approval: string;
+  version: string;
+}
+
 /** Public attribution requires a server projection; other installs retain their package attribution. */
 export function ghostFallbackDisplayAuthor(ghost: Pick<InstalledGhost, 'manifest' | 'publishingSource'>): string | null {
   return ghost.publishingSource?.kind === 'public-market' ? null : ghost.manifest.author ?? null;

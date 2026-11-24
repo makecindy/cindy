@@ -2188,6 +2188,13 @@
       }
     },
     "appearance": {
+      "chatLayout": {
+        "label": "对谈布置",
+        "standard": "常式",
+        "wide": "宽式",
+        "width": "内容之宽",
+        "hint": "以对谈两旁留白之外为准。栏狭则自调。"
+      },
       "title": "仪容",
       "modeLabel": "显示之式",
       "appIcon": {
@@ -2433,6 +2440,10 @@
       }
     },
     "windowBehavior": {
+      "trayCard": {
+        "label": "盘中浮笺",
+        "hint": "移标驻 Cindy 盘中图记，可览余额及未阅之务。"
+      },
       "menubar": {
         "label": "于菜单栏显余量",
         "hint": "于 macOS 菜单栏置一 Cindy 图标，点之可观订阅余量、Cindy 余资与今日耗用。"
@@ -2778,7 +2789,8 @@
         "errorBusy": "已有一次上呈方行，请稍候",
         "errorFailed": "日志上呈未成，请察网络后再试",
         "unavailableNotConfigured": "此版未设日志上呈。",
-        "unavailableNoConsent": "须先允《隐私政策》。"
+        "unavailableNoConsent": "须先允《隐私政策》。",
+        "consentPrompt": "上呈之前，请阅<policy>《隐私政策》</policy>而<accept>允之</accept>。"
       },
       "openLogsDirError": "日志目录未能启",
       "autoUpdateLabel": "闲时自装更新",
@@ -5143,6 +5155,7 @@
       "formHint": "用户 ID 为纯数字；私聊 @userinfobot 可查己之 ID。",
       "connect": "连之",
       "connectingAction": "方连…",
+      "connectTimedOut": "连接逾时，请再试",
       "errorCode": {
         "invalid-token": "Bot Token 无效或已重置，请重填",
         "provider-api": "Telegram 服务回报谬误，请稍后再试",
@@ -8172,6 +8185,7 @@
           "official": "官设",
           "community": "社区"
         },
+        "communityDisclaimer": "此法器由社区作者开发与维护，Cindy 已审核此版本，但无法保证其在所有使用情境下皆安全。",
         "publisherDescription": {
           "official": "Cindy 官方所制，发布维护",
           "community": "社区开发者所制，发布维护",
@@ -8285,7 +8299,7 @@
             "authTitle": "私库",
             "authBody": "认证全赖系统之 Git 设置，Cindy 不存任何 Git 凭证。SSH 之法：此机须已设可用之 key；若组织启 SAML SSO，尚须于 GitHub 之 SSH key 设置中为该组织点 Configure SSO 授权。HTTPS 之法：用 Personal Access Token，由系统 credential helper 存之。",
             "rulesTitle": "纳器之规",
-            "rulesBody": "法器 id 全域唯一，先纳者得之——与已纳法器相冲时必明示。id 用官方保留前缀（{{reservedGhostIdPrefixes}}）之法器，不可经拖入、择档或自订法器坊纳之。法器所声明之权柄示于详情页；点「纳」即纳毕并自启，不再另弹窗确认权柄。",
+            "rulesBody": "法器 id 全域唯一，先纳者得之——与已纳法器相冲时必明示。id 用官方保留前缀（{{reservedGhostIdPrefixes}}）之法器，不可经拖入、择档或自订法器坊纳之。法器所声明之权柄示于详情页。初次手纳，Cindy 请核所请权柄。纳毕自启。",
             "copy": "录指南",
             "copied": "指南已录至剪贴板，拿去便是。",
             "copyFailed": "录之未成，请再试。"
@@ -8399,6 +8413,8 @@
         "installMeta": "版 {{version}} · {{source}}",
         "updateMeta": "版 {{from}} → {{to}} · {{source}}",
         "installDescription": "君确认后方纳；纳毕即激活，可随时于法器页禁用或卸除。",
+        "customMarketSourceNotice": "宜先信此法器坊，再核法器所请权柄。",
+        "localFileSourceNotice": "档之来处可信，方可续纳。",
         "updateDescription": "君确认后方更新；在此之前，旧版照常可用。",
         "grantsTitle": "纳后其将得：",
         "noPermissions": "此法器未声明额外权柄。",
@@ -12478,6 +12494,8 @@
       "transferBusy": "{{name}} 方在回复，待此轮毕再换机",
       "targetUnavailable": "「{{device}}」今不可用，须在线并开远程控制",
       "targetOutdated": "「{{device}}」之 Cindy 版本较旧，未能运行「{{name}}」，请先于彼机更新 Cindy",
+      "skillTargetOutdated": "「{{name}}」有技艺正文逾 64 KB，「{{device}}」之旧版 Cindy 无法接收。请先更新彼机之 Cindy，再换主力之机。同伴仍留原机",
+      "skillTargetOutdated_skill": "「{{device}}」之旧版 Cindy 无法接收技艺「{{slug}}」，其正文 {{bodyBytes, number}} 字节，逾 64 KB。「{{name}}」仍行于原机。请更新彼机之 Cindy，再换主力之机。",
       "targetOutdatedItem": "移至「{{device}}」· 旧版 Cindy",
       "targetOutdatedMeta": "旧版 Cindy",
       "olderTargetNote": "「{{device}}」之 Cindy 为旧版，{{name}} 于彼依旧法而行：言谈记录照常同步，案之规约与自运于彼不行。",
@@ -12719,6 +12737,7 @@
           "conflict": "此机器人已用于此机：或在 规制 → IM 机器人，或在另一同伴处。",
           "botUnavailable": "{{name}} 今不可用，待其复后再试。",
           "connectFailed": "连之未成：{{reason}}",
+          "connectTimedOut": "连接逾时，请再试。",
           "failed": "未竟，请稍后再试。",
           "personalBotGone": "规制 → IM 机器人 中已无此机器人，请改填凭证。"
         },
@@ -16393,7 +16412,13 @@
       "open": "启差事「{{title}}」",
       "untitled": "无名之差事",
       "startedOne": "已启差事",
-      "handedToOne": "付与差事"
+      "handedToOne": "付与差事",
+      "status": {
+        "running": "方行",
+        "needsAction": "候君示下",
+        "error": "有误",
+        "idle": "闲"
+      }
     },
     "botTaskLetter": {
       "replied": "覆书",
@@ -17625,15 +17650,15 @@
   "scheduler": {
     "prTrigger": {
       "fallback": "GitHub App 消息未通，仍依时查验。",
-      "label": "PR",
-      "url": "PR 之链",
+      "label": "PR / MR",
+      "url": "PR 或 MR 之链",
       "condition": "何时行之",
-      "any": "PR 有变",
+      "any": "有变",
       "merged": "已合并",
       "review": "评议有变",
       "ci": "CI 有变",
       "timed": "亦定时查验",
-      "invalid": "请填 GitHub PR 全链。"
+      "invalid": "请填 GitHub PR 或 GitLab MR 全链。"
     },
     "presentation": {
       "status": {

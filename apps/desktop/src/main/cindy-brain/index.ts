@@ -1,3 +1,5 @@
+import { assertConfirmedGhostUninstallOwner, readConfirmedGhostUninstall } from './confirmedGhostUninstall.js';
+import type { ConfirmedGhostUninstall } from '../../shared/ghost.js';
 import { readGithubAppToken } from '../git-context/githubAppAuthorization.desktop.js';
 import { createDesktopRuntimePluginHost } from './runtimePluginHost.desktop.js';
 import { callEvaluate, readEvaluationImageFile } from '../cindy-evaluate/runtime.js';
@@ -337,6 +339,7 @@ import {
   parsePluginInstanceId,
   pluginStoragePart,
   pluginInstallStoragePart,
+  pluginNewInstallRelId,
   isValidPluginInstallRelId,
   isPluginInstanceKey,
   resolveInstalledGhost,
@@ -6553,6 +6556,21 @@ function getGhostConnectionManager(): GhostConnectionManager {
   return ghostConnectionManagerSingleton;
 }
 
+/** The status service may use only the approved public plugin's matching instance. */
+export function readGitlabPluginToken(host: string): string | null {
+  if (isGhostBoundaryPending()) return null;
+  const manager = getGhostManager();
+  const identity = createPluginLogicalIdentity(null, CINDY_GITLAB_GHOST_ID);
+  const storage = pluginInstallStoragePart(pluginNewInstallRelId(identity));
+  const known = [manager.findInstalledInstance(storage), manager.findInstalledInstance(CINDY_GITLAB_GHOST_ID)]
+    .filter((ghost): ghost is InstalledGhost => !!ghost);
+  const plugin = findInstalledGhostByIdentity(known, identity) ?? findInstalledGhostByIdentity(manager.list(), identity);
+  if (!plugin || !plugin.enabled || plugin.approval.state !== 'approved') return null;
+  const instance = installedGhostStoragePart(plugin);
+  if (!isGhostAvailableForActiveSession(instance)) return null;
+  return getGhostConnectionManager().resolveTokenByHost(instance, CINDY_GITLAB_CONNECTION_KEY, host);
+}
+
 let ghostSetupKvStore: GhostKvStore | null = null;
 
 /** 默认 OAuth 账号的授权面陈旧建议；只返回首个凭证槽，保持 envelope 有界。 */
@@ -8874,7 +8892,7 @@ export function setGhostUninstallLedgerPreparer(preparer: GhostUninstallLedgerPr
  */
 export async function uninstallGhostAndCleanup(
   id: string,
-  options?: { skipMarketLedger?: boolean; assertCurrent?: () => void },
+  options?: { skipMarketLedger?: boolean; assertCurrent?: () => void; confirmed?: ConfirmedGhostUninstall },
 ): Promise<void> {
   // Install lock is the catalog ghostId so public and org instances of the
   // same name stay serial. OAuth/vault lock is the storage part, never a
@@ -8885,8 +8903,14 @@ export async function uninstallGhostAndCleanup(
   }
   return withGhostInstallLock(identity.ghostId, async () => {
     options?.assertCurrent?.();
+    const { confirmed } = options ?? {};
+    if (confirmed) assertConfirmedGhostUninstallOwner(confirmed);
     const ghost = findGhostForInstanceId(id);
     if (!ghost) throwIpcError('NOT_FOUND', '目标插件实例已不存在');
+    if (confirmed && (installedGhostPhysicalRelId(ghost) !== confirmed.physicalId ||
+        ghostInstallApprovalToken(ghost.approval) !== confirmed.approval || ghost.manifest.version !== confirmed.version)) {
+      throwIpcError('PRECONDITION_FAILED', 'The confirmed plugin installation changed');
+    }
     const release = beginGhostMutation();
     try {
       await uninstallGhostAndCleanupLocked(id, options);
@@ -11344,7 +11368,7 @@ export function registerGhostIpc(): void {
     };
   });
 
-  ipcMain.handle('ghosts:uninstall', async (event, id: unknown) => {
+  ipcMain.handle('ghosts:uninstall', async (event, id: unknown, target?: unknown) => {
     // 卸载会停运行时、撤 receipt 批准、清凭证/KV/ghost-fs 并删安装目录 —— 与
     // install/update/set-enabled/export 同级的高权限写路径,来源判定必须由 Main
     // 按真实顶层 frame 完成,不可信任页面自报;不受信 Ghost/WebView 页面若能
@@ -11353,7 +11377,7 @@ export function registerGhostIpc(): void {
     if (typeof id !== 'string' || id.trim().length === 0) {
       throwIpcError('INVALID_PARAMS', 'id must be a non-empty string');
     }
-    await uninstallGhostAndCleanup(id);
+    await uninstallGhostAndCleanup(id, { confirmed: readConfirmedGhostUninstall(target) });
     return { ok: true };
   });
 

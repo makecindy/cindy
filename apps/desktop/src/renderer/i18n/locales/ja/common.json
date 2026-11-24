@@ -2188,6 +2188,13 @@
       }
     },
     "appearance": {
+      "chatLayout": {
+        "label": "チャットのレイアウト",
+        "standard": "標準",
+        "wide": "ワイド",
+        "width": "コンテンツの幅",
+        "hint": "チャット欄の左右の余白を除いた幅に対する割合です。狭い欄では自動で調整されます。"
+      },
       "title": "外観",
       "modeLabel": "表示モード",
       "appIcon": {
@@ -2433,6 +2440,10 @@
       }
     },
     "windowBehavior": {
+      "trayCard": {
+        "label": "トレイのホバーカード",
+        "hint": "システムトレイの Cindy アイコンにポインターを合わせると、残りのクォータと未読のタスクを表示します。"
+      },
       "menubar": {
         "label": "メニューバーに残り使用量を表示",
         "hint": "macOS のメニューバーに Cindy アイコンを置きます。クリックすると、サブスクリプションの残り、Cindy 残高、今日の使用量を確認できます。"
@@ -2778,7 +2789,8 @@
         "errorBusy": "すでにアップロードが進行中です。しばらくお待ちください",
         "errorFailed": "ログのアップロードに失敗しました。ネットワークを確認して再試行してください",
         "unavailableNotConfigured": "このビルドではログアップロードが設定されていません。",
-        "unavailableNoConsent": "先に「プライバシーポリシー」への同意が必要です。"
+        "unavailableNoConsent": "先に「プライバシーポリシー」への同意が必要です。",
+        "consentPrompt": "アップロードする前に<policy>プライバシーポリシー</policy>を読み、<accept>同意する</accept>を選択してください。"
       },
       "openLogsDirError": "ログディレクトリを開けませんでした",
       "autoUpdateLabel": "アイドル時に更新をインストール",
@@ -5143,6 +5155,7 @@
       "formHint": "ユーザー ID は数字です。@userinfobot に DM すると自分の ID を確認できます。",
       "connect": "接続",
       "connectingAction": "接続中…",
+      "connectTimedOut": "接続がタイムアウトしました。もう一度お試しください。",
       "errorCode": {
         "invalid-token": "Bot Token が無効か再発行されています。入力し直してください",
         "provider-api": "Telegram 側でエラーが発生しました。しばらくしてから再試行してください",
@@ -8172,6 +8185,7 @@
           "official": "公式",
           "community": "コミュニティ"
         },
+        "communityDisclaimer": "このプラグインはコミュニティの開発者が開発・保守しています。Cindy はこのバージョンを審査しましたが、あらゆる場面で安全に使えることを保証するものではありません。",
         "publisherDescription": {
           "official": "Cindy が公式に公開・保守しています",
           "community": "コミュニティ開発者が公開・保守しています",
@@ -8286,7 +8300,7 @@
             "authTitle": "プライベートリポジトリ",
             "authBody": "認証はすべてシステムの Git 設定に依存し、Cindy は Git の認証情報を一切保存しません。SSH の場合: 利用可能な key がマシンに設定されている必要があります。組織が SAML SSO を強制している場合は、GitHub の SSH key 設定で Configure SSO からその組織に key を承認してください。HTTPS の場合: Personal Access Token を使用し、システムの credential helper に保存します。",
             "rulesTitle": "インストールルール",
-            "rulesBody": "プラグイン id はグローバルに一意で先着順です。インストール済みプラグインとの競合は明示されます。id に公式予約プレフィックス（{{reservedGhostIdPrefixes}}）を使うプラグインは、ドラッグ、ファイル選択、カスタムプラグインマーケットからインストールできません。宣言された権限は詳細ページに表示されます。インストールをクリックすると、追加の権限確認ダイアログなしでインストールが完了し、自動的に有効になります。",
+            "rulesBody": "プラグイン id はグローバルに一意で先着順です。インストール済みプラグインとの競合は明示されます。id に公式予約プレフィックス（{{reservedGhostIdPrefixes}}）を使うプラグインは、ドラッグ、ファイル選択、カスタムプラグインマーケットからインストールできません。宣言された権限は詳細ページに表示されます。初めて手動でインストールするときは、Cindy が要求される権限の確認を求めます。インストール後、プラグインは自動的に有効になります。",
             "copy": "ガイドをコピー",
             "copied": "ガイドをクリップボードにコピーしました。",
             "copyFailed": "コピーに失敗しました。もう一度お試しください。"
@@ -8399,6 +8413,8 @@
         "installMeta": "バージョン {{version}} · {{source}}",
         "updateMeta": "バージョン {{from}} → {{to}} · {{source}}",
         "installDescription": "確認するまでインストールされません。インストール後はすぐに有効になり、プラグインページからいつでも無効化・アンインストールできます。",
+        "customMarketSourceNotice": "このマーケットが信頼できることを確かめ、プラグインが要求する権限を確認してください。",
+        "localFileSourceNotice": "信頼できるところから入手したファイルか確認してから、インストールを続けてください。",
         "updateDescription": "確認後に更新します。それまでは現在のバージョンをそのまま使えます。",
         "grantsTitle": "インストール後に持つ権限:",
         "noPermissions": "このプラグインは追加の権限を宣言していません。",
@@ -12478,6 +12494,8 @@
       "transferBusy": "{{name}} はまだ返信中です。返信が終わってから移動してください",
       "targetUnavailable": "「{{device}}」は今は使えません。オンラインでリモート操作がオンになっている必要があります",
       "targetOutdated": "「{{device}}」の Cindy は古いバージョンのため、まだ「{{name}}」を動かせません。先にそのパソコンで Cindy を更新してください",
+      "skillTargetOutdated": "「{{name}}」には本文が 64 KB を超えるスキルがあるため、「{{device}}」の古い Cindy では受け取れません。先にそのパソコンの Cindy を更新してから移してください。仲間は元のパソコンに残っています",
+      "skillTargetOutdated_skill": "「{{device}}」の古い Cindy では、スキル「{{slug}}」を受け取れません。本文が {{bodyBytes, number}} バイトあり、上限の 64 KB を超えています。「{{name}}」は元のパソコンで引き続き動作しています。移行先の Cindy を更新してから、もう一度お試しください。",
       "targetOutdatedItem": "「{{device}}」に移す · 旧バージョンの Cindy",
       "targetOutdatedMeta": "旧バージョンの Cindy",
       "olderTargetNote": "「{{device}}」の Cindy は旧バージョンのため、{{name}} はそこで従来どおりに動きます。チャット履歴は同期されますが、プロジェクトのルールと自動化はそこでは適用されません。",
@@ -12719,6 +12737,7 @@
           "conflict": "このボットはすでにこのコンピューターで使われています（設定 → IM ボット、または別の仲間）。",
           "botUnavailable": "{{name}} は現在利用できません。復帰後にもう一度お試しください。",
           "connectFailed": "接続できませんでした：{{reason}}",
+          "connectTimedOut": "接続がタイムアウトしました。もう一度お試しください。",
           "failed": "完了できませんでした。しばらくしてからもう一度お試しください。",
           "personalBotGone": "設定 → IM ボット にこのボットはもうありません。認証情報を入力してください。"
         },
@@ -16393,7 +16412,13 @@
       "open": "タスク「{{title}}」を開く",
       "untitled": "名称未設定のタスク",
       "startedOne": "開始したタスク",
-      "handedToOne": "引き継ぎ先"
+      "handedToOne": "引き継ぎ先",
+      "status": {
+        "running": "実行中",
+        "needsAction": "確認待ち",
+        "error": "エラー",
+        "idle": "待機中"
+      }
     },
     "botTaskLetter": {
       "replied": "からの返信",
@@ -17625,15 +17650,15 @@
   "scheduler": {
     "prTrigger": {
       "fallback": "GitHub App の通知を受け取れない間も定期チェックは続きます。",
-      "label": "PR",
-      "url": "PR の URL",
+      "label": "PR / MR",
+      "url": "PR または MR の URL",
       "condition": "実行条件",
-      "any": "PR の更新",
+      "any": "更新時",
       "merged": "マージ時",
       "review": "レビューの更新",
       "ci": "CI 状態の変更",
       "timed": "定期的にも確認",
-      "invalid": "GitHub PR の URL を入力してください。"
+      "invalid": "GitHub PR または GitLab MR の URL を入力してください。"
     },
     "presentation": {
       "status": {

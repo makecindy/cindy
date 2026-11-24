@@ -2218,6 +2218,13 @@
       }
     },
     "appearance": {
+      "chatLayout": {
+        "label": "Chat-Layout",
+        "standard": "Standard",
+        "wide": "Breit",
+        "width": "Inhaltsbreite",
+        "hint": "Der Anteil bezieht sich auf den Platz zwischen den Chaträndern. Schmale Bereiche passen sich automatisch an."
+      },
       "title": "Darstellung",
       "modeLabel": "Darstellungsmodus",
       "appIcon": {
@@ -2463,6 +2470,10 @@
       }
     },
     "windowBehavior": {
+      "trayCard": {
+        "label": "Infokarte im Infobereich",
+        "hint": "Beim Zeigen auf das Cindy-Symbol im Infobereich werden das verbleibende Kontingent und ungelesene Aufgaben angezeigt."
+      },
       "menubar": {
         "label": "Restkontingent in der Menüleiste anzeigen",
         "hint": "Fügt der macOS-Menüleiste ein Cindy-Symbol hinzu. Klicke darauf, um dein verbleibendes Abokontingent, dein Cindy-Guthaben und die heutige Nutzung zu sehen."
@@ -2808,7 +2819,8 @@
         "errorBusy": "Ein Upload läuft bereits, bitte warten",
         "errorFailed": "Hochladen der Protokolle fehlgeschlagen. Prüfe deine Netzwerkverbindung und versuche es erneut",
         "unavailableNotConfigured": "Der Protokollupload ist in diesem Build nicht konfiguriert.",
-        "unavailableNoConsent": "Du musst zuerst die Datenschutzerklärung akzeptieren."
+        "unavailableNoConsent": "Du musst zuerst die Datenschutzerklärung akzeptieren.",
+        "consentPrompt": "Lies vor dem Hochladen die <policy>Datenschutzerklärung</policy> und wähle <accept>Zustimmen</accept>."
       },
       "openLogsDirError": "Protokollverzeichnis konnte nicht geöffnet werden",
       "autoUpdateLabel": "Updates bei Inaktivität installieren",
@@ -5186,6 +5198,7 @@
       "formHint": "Die Benutzer-ID ist numerisch. Sende @userinfobot eine Direktnachricht, um deine ID herauszufinden.",
       "connect": "Verbinden",
       "connectingAction": "Verbindung wird hergestellt…",
+      "connectTimedOut": "Zeitüberschreitung bei der Verbindung. Versuch es erneut.",
       "errorCode": {
         "invalid-token": "Das Bot-Token ist ungültig oder wurde zurückgesetzt — gib es erneut ein.",
         "provider-api": "Telegram hat einen Fehler zurückgegeben — versuche es in Kürze erneut.",
@@ -8215,6 +8228,7 @@
           "official": "Offiziell",
           "community": "Community"
         },
+        "communityDisclaimer": "Dieses Plugin wird von Mitgliedern der Community entwickelt und gepflegt. Cindy hat diese Version geprüft, kann die Sicherheit des Plugins aber nicht in jeder Nutzungssituation garantieren.",
         "publisherDescription": {
           "official": "Von Cindy veröffentlicht und gepflegt",
           "community": "Von Community-Entwicklern veröffentlicht und gepflegt",
@@ -8329,7 +8343,7 @@
             "authTitle": "Private Repositorys",
             "authBody": "Die Authentifizierung erfolgt vollständig über deine Git-Systemkonfiguration — Cindy speichert niemals Git-Zugangsdaten. SSH: Auf diesem Computer muss ein funktionierender Schlüssel eingerichtet sein. Falls die Organisation SAML SSO erzwingt, autorisiere den Schlüssel für diese Organisation über Configure SSO in deinen GitHub-SSH-Schlüsseleinstellungen. HTTPS: Verwende ein Personal Access Token, das vom Anmeldeinformationsmanager des Systems gespeichert wird.",
             "rulesTitle": "Installationsregeln",
-            "rulesBody": "Plugin-IDs sind global eindeutig, wer zuerst kommt, mahlt zuerst – Konflikte mit installierten Plugins werden explizit angezeigt. Plugins, deren IDs die offiziell reservierten Präfixe ({{reservedGhostIdPrefixes}}) verwenden, können nicht durch Hereinziehen eines Pakets, Auswählen einer Datei oder über einen benutzerdefinierten Plugin-Marktplatz installiert werden. Deklarierte Berechtigungen werden auf der Detailseite angezeigt; durch Klicken auf „Installieren“ wird die Installation abgeschlossen und das Plugin ohne einen weiteren Dialog zur Berechtigungsbestätigung aktiviert.",
+            "rulesBody": "Plugin-IDs sind global eindeutig, wer zuerst kommt, mahlt zuerst – Konflikte mit installierten Plugins werden explizit angezeigt. Plugins, deren IDs die offiziell reservierten Präfixe ({{reservedGhostIdPrefixes}}) verwenden, können nicht durch Hereinziehen eines Pakets, Auswählen einer Datei oder über einen benutzerdefinierten Plugin-Marktplatz installiert werden. Deklarierte Berechtigungen werden auf der Detailseite angezeigt. Bei der ersten manuellen Installation bittet dich Cindy, die angeforderten Berechtigungen zu bestätigen. Nach der Installation wird das Plugin automatisch aktiviert.",
             "copy": "Anleitung kopieren",
             "copied": "Anleitung in die Zwischenablage kopiert.",
             "copyFailed": "Kopieren fehlgeschlagen. Bitte versuche es erneut."
@@ -8442,6 +8456,8 @@
         "installMeta": "Version {{version}} · {{source}}",
         "updateMeta": "Version {{from}} → {{to}} · {{source}}",
         "installDescription": "Ohne deine Bestätigung wird nichts installiert. Das Plugin wird direkt nach der Installation aktiviert. Du kannst es jederzeit auf der Seite „Plugins“ deaktivieren oder deinstallieren.",
+        "customMarketSourceNotice": "Installiere nur aus einem Marktplatz, dem du vertraust, und prüfe die angeforderten Berechtigungen.",
+        "localFileSourceNotice": "Fahre mit der Installation nur fort, wenn du der Quelle der Datei vertraust.",
         "updateDescription": "Das Update startet erst nach deiner Bestätigung. Bis dahin bleibt die aktuelle Version verfügbar.",
         "grantsTitle": "Nach der Installation hat es folgende Berechtigungen:",
         "noPermissions": "Dieses Plugin gibt keine zusätzlichen Berechtigungen an.",
@@ -12523,6 +12539,8 @@
       "transferBusy": "{{name}} arbeitet noch an einer Antwort. Warte mit dem Wechsel, bis die Antwort fertig ist",
       "targetUnavailable": "„{{device}}“ ist nicht verfügbar. Das Gerät muss online sein und die Fernsteuerung muss aktiviert sein",
       "targetOutdated": "Auf „{{device}}“ läuft eine ältere Cindy-Version, die {{name}} noch nicht ausführen kann. Aktualisiere Cindy dort zuerst",
+      "skillTargetOutdated": "Ein Skill von {{name}} hat einen Textinhalt von mehr als 64 KB, den die ältere Cindy-Version auf „{{device}}“ nicht empfangen kann. Aktualisiere Cindy auf diesem Computer, bevor du deinen Freund verschiebst. Er bleibt auf dem bisherigen Computer",
+      "skillTargetOutdated_skill": "Die ältere Cindy-Version auf „{{device}}“ kann den Skill „{{slug}}“ nicht empfangen. Sein Text ist {{bodyBytes, number}} Bytes groß und überschreitet das Limit von 64 KB. {{name}} läuft weiter auf dem bisherigen Computer. Aktualisiere Cindy auf dem Zielcomputer und versuche es erneut.",
       "targetOutdatedItem": "Auf „{{device}}“ verschieben · ältere Cindy",
       "targetOutdatedMeta": "Ältere Cindy",
       "olderTargetNote": "Auf „{{device}}“ läuft eine ältere Cindy-Version, daher arbeitet {{name}} dort wie bisher: Der Chatverlauf wird weiter synchronisiert, Projektregeln und Automatisierungen gelten dort aber nicht.",
@@ -12765,6 +12783,7 @@
           "conflict": "Dieser Bot ist auf diesem Computer bereits verbunden: unter Einstellungen → IM-Bots oder mit einem anderen Freund.",
           "botUnavailable": "{{name}} ist gerade nicht verfügbar. Versuche es erneut, sobald es wieder verfügbar ist.",
           "connectFailed": "Verbindung fehlgeschlagen: {{reason}}",
+          "connectTimedOut": "Zeitüberschreitung bei der Verbindung. Versuch es erneut.",
           "failed": "Vorgang fehlgeschlagen. Versuch es später erneut.",
           "personalBotGone": "Dieser Bot ist unter Einstellungen → IM-Bots nicht mehr eingerichtet. Gib stattdessen seine Zugangsdaten ein."
         },
@@ -16467,7 +16486,13 @@
       "open": "Aufgabe „{{title}}“ öffnen",
       "untitled": "Unbenannte Aufgabe",
       "startedOne": "Gestartet",
-      "handedToOne": "Übergeben an"
+      "handedToOne": "Übergeben an",
+      "status": {
+        "running": "Läuft",
+        "needsAction": "Wartet auf dich",
+        "error": "Fehler",
+        "idle": "Inaktiv"
+      }
     },
     "botTaskLetter": {
       "replied": "hat geantwortet",
@@ -17699,15 +17724,15 @@
   "scheduler": {
     "prTrigger": {
       "fallback": "Ohne GitHub-App-Benachrichtigungen wird weiterhin regelmäßig geprüft.",
-      "label": "PR",
-      "url": "Pull-Request-URL",
+      "label": "PR / MR",
+      "url": "PR- oder MR-URL",
       "condition": "Auslösen bei",
-      "any": "PR-Aktivität",
+      "any": "Aktivität",
       "merged": "Merge",
       "review": "Review-Aktivität",
       "ci": "CI-Statusänderung",
       "timed": "Zusätzlich regelmäßig prüfen",
-      "invalid": "GitHub-Pull-Request-URL eingeben."
+      "invalid": "URL eines GitHub-PR oder GitLab-MR eingeben."
     },
     "presentation": {
       "status": {

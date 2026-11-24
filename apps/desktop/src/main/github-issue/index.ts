@@ -6,8 +6,6 @@
  * (deferred-lookup:holder 未就绪时返回 HOST_NOT_READY,模式同 OrcaCollabService)。
  */
 
-import os from 'node:os';
-
 import { app } from 'electron';
 
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
@@ -26,6 +24,7 @@ import {
 } from './githubIssueSubmitService';
 import { invalidateMyIssuesCache } from './myIssuesRuntime.js';
 import { formatRelatedIssueLogs } from './issueDiagnostics';
+import { getIssueOsInfo } from './issueOsInfo';
 import { collectLogsFromDisk } from '../log-upload/collectRuntime';
 import { recordSubmittedIssue } from './submittedIssueLedger.js';
 import {
@@ -97,11 +96,7 @@ export async function submitGithubIssueForSession(
         );
       },
       getAppVersion: () => app.getVersion(),
-      getOsInfo: () => ({
-        platform: process.platform,
-        arch: process.arch,
-        osVersion: os.release(),
-      }),
+      getOsInfo: getIssueOsInfo,
       getTurnModelId,
       getRegion: () => CURRENT_CINDY_REGION,
       getFallbackLocale: () => app.getLocale(),
