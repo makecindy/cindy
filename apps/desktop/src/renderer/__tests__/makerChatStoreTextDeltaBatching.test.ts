@@ -2376,6 +2376,68 @@ describe('makerChatStore text delta batching', () => {
     expect(makerChatStore.getSnapshot(SESSION_ID).messages.some(row => row.isStreaming)).toBe(false);
   });
 
+  // #1743 / unit: real remote ingress previously sealed A on B's ordinary
+  // delta. Replay both stable IDs within one batch window, before any DB echo.
+  it.each([
+    { label: 'owned Claude child streams', preserve: true },
+    { label: 'missing ownership', missingParent: true },
+    { label: 'unknown root ownership', nullParent: true },
+    { label: 'missing message identity', missingId: true },
+    { label: 'incomplete batch ownership', mixedBatch: true },
+    { label: 'another engine', source: 'codex' },
+    { label: 'Claude over SSH', remoteHostId: 'ssh-host' },
+  ])('assembles interleaved Desktop push deltas ($label)', ({
+    preserve, missingParent, nullParent, missingId, mixedBatch, source = 'claude-code', remoteHostId,
+  }) => {
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    if (remoteHostId) makerChatStore.setSessionRuntime(SESSION_ID, { remoteHostId });
+    const push = (persistId: string | undefined, type: string, data: unknown, parentUuid?: string | null) => {
+      onRemotePush?.({ deviceId: 'device-1', channel: 'maker:event', payload: {
+        sessionId: SESSION_ID, persistId, event: { type, source, data, agentMeta: { parentUuid } },
+      } });
+    };
+    const delta = (id: string | undefined, text: string, parent?: string | null) =>
+      push(id, 'text', { text, isFinal: false }, parent);
+    const siblingParent = missingParent ? undefined : nullParent ? null : 'toolu_b';
+    delta('a', 'prefix', 'toolu_a');
+    if (mixedBatch) delta('a', ' partial', undefined);
+    // Deliver identity-less frames in separate batches to keep the legacy
+    // timer behavior independent of the interleaved-ID path.
+    if (missingId) vi.advanceTimersByTime(32);
+    delta(missingId ? undefined : 'b', 'sibling', siblingParent);
+    if (missingId) vi.advanceTimersByTime(32);
+    delta('a', ' suffix', 'toolu_a');
+    vi.advanceTimersByTime(32);
+    const rows = makerChatStore.getSnapshot(SESSION_ID).messages;
+    if (missingId) {
+      expect(rows).toHaveLength(1);
+      expect(rows.find(row => row.clientId === 'a')).toMatchObject({
+        content: 'prefixsibling suffix', isStreaming: true,
+      });
+      return;
+    }
+    expect(rows).toEqual([
+      expect.objectContaining({
+        clientId: 'a', content: preserve ? 'prefix suffix' : mixedBatch ? 'prefix partial' : 'prefix',
+        isStreaming: preserve === true,
+      }),
+      expect.objectContaining({ clientId: 'b', content: 'sibling', isStreaming: true }),
+    ]);
+    if (!preserve) return;
+
+    push('tool-b', 'tool_use', { toolUseId: 'toolu_read', toolName: 'Read', input: {} }, 'toolu_b');
+    delta('b', ' late', 'toolu_b');
+    delta('a', ' again', 'toolu_a');
+    vi.advanceTimersByTime(32);
+    const afterTool = makerChatStore.getSnapshot(SESSION_ID).messages;
+    expect(afterTool.find(row => row.clientId === 'a')).toMatchObject({
+      content: 'prefix suffix again', isStreaming: true,
+    });
+    expect(afterTool.find(row => row.clientId === 'b')).toMatchObject({
+      content: 'sibling', isStreaming: false,
+    });
+  });
+
   it('keeps the ordinary Claude item boundary for deltas without SDK ownership', () => {
     for (const [persistId, text] of [['old', 'prefix'], ['new', 'new item'], ['old', ' late']]) {
       onEvent?.({ sessionId: SESSION_ID, persistId,

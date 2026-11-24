@@ -486,8 +486,8 @@ export interface AskUserQuestionItem {
 }
 
 export interface ChatMessage {
-  /** In-flight text with explicit local Claude SDK ownership. */
-  localClaudeStream?: true;
+  /** In-flight text with explicit Claude SDK stream ownership. */
+  claudeScopedStream?: true;
   /** Local durable-push order, retained by the display cache. */
   cacheReceipt?: HistoryCacheReceipt;
   /** Private Bot reply provenance, projected from persisted/live agent metadata. */
@@ -6106,7 +6106,7 @@ function isRetiredVisionNotice(event: { type: string; source?: unknown; data?: u
 export function handleStreamEvent(
   inputState: SessionChatState,
   event: CCAgentStreamEvent,
-  localIngress = false,
+  ingress?: 'local' | 'remote',
 ): SessionChatState {
   if (isRetiredVisionNotice(event)) return inputState;
   const reconnectAttempt =
@@ -6173,7 +6173,8 @@ export function handleStreamEvent(
       ? { replyToClientId: incomingMeta.replyToClientId } : {}),
   };
   const claudeParent = incomingMeta?.parentUuid === null ? null : assistantMetaFields.parentToolUseId;
-  const localClaudeParent = localIngress && event.source === 'claude-code' && state.remoteHostId === null
+  const scopedClaudeParent = event.source === 'claude-code' && state.remoteHostId === null &&
+    (ingress === 'local' || (ingress === 'remote' && typeof claudeParent === 'string'))
     ? claudeParent
     : undefined;
   switch (event.type) {
@@ -6185,7 +6186,7 @@ export function handleStreamEvent(
       };
       const snapshot = readRemoteTextSnapshot(event);
       if (snapshot?.truncated) return state;
-      const scopedDelta = !isFinal && !isFullText && event.persistId && localClaudeParent !== undefined;
+      const scopedDelta = !isFinal && !isFullText && event.persistId && scopedClaudeParent !== undefined;
       // Persistence can finish the row before the turn clears streamingClientId.
       // The row, rather than that assembly pointer, owns durable precedence.
       if (snapshot && event.persistId && state.messages.some((message) =>
@@ -6223,8 +6224,8 @@ export function handleStreamEvent(
           (message) => message.clientId === event.persistId && message.role === 'assistant',
         );
         if (existing) {
-          if (scopedDelta && existing.isStreaming && existing.localClaudeStream &&
-              (existing.parentToolUseId ?? null) === localClaudeParent) {
+          if (scopedDelta && existing.isStreaming && existing.claudeScopedStream &&
+              (existing.parentToolUseId ?? null) === scopedClaudeParent) {
             const content = existing.content + text;
             return {
               ...state,
@@ -6298,20 +6299,20 @@ export function handleStreamEvent(
           message.role === 'assistant' && message.isStreaming &&
           (message.parentToolUseId ?? null) !== finalParent),
       );
-      const active = localClaudeParent !== undefined && event.persistId !== state.streamingClientId && (itemBoundary || scopedDelta)
+      const active = scopedClaudeParent !== undefined && event.persistId !== state.streamingClientId && (itemBoundary || scopedDelta)
         ? state.messages.find((message) => message.clientId === state.streamingClientId && message.isStreaming)
         : undefined;
       let textState = state;
       if (scopedDelta && event.persistId !== state.streamingClientId) {
         // A new persistId ends the previous item in this lane, and starts a
-        // separate row while other locally owned items stay open.
+        // separate row while items owned by other streams stay open.
         textState = {
-          ...finalizeStreamingInState(state, active?.localClaudeStream || !active ? localClaudeParent : undefined),
+          ...finalizeStreamingInState(state, active?.claudeScopedStream || !active ? scopedClaudeParent : undefined),
           streamingClientId: null,
         };
       } else if (itemBoundary) {
-        if (localClaudeParent !== undefined && active?.localClaudeStream) {
-          textState = finalizeStreamingInState(state, localClaudeParent);
+        if (scopedClaudeParent !== undefined && active?.claudeScopedStream) {
+          textState = finalizeStreamingInState(state, scopedClaudeParent);
         } else if (!independentFinal) {
           textState = finalizeStreamingInState(state);
         }
@@ -6320,7 +6321,7 @@ export function handleStreamEvent(
       if (isFinal) {
         // Confirmation of streamed text, or a non-streaming final burst.
         if ((!textState.streamingClientId || independentFinal ||
-             (itemBoundary && localClaudeParent !== undefined && active?.localClaudeStream)) && text) {
+             (itemBoundary && scopedClaudeParent !== undefined && active?.claudeScopedStream)) && text) {
           // Guard: if the last message is an assistant with identical content,
           // this is a duplicate isFinal event from the SDK — skip it.
           const last = textState.messages[textState.messages.length - 1];
@@ -6413,7 +6414,7 @@ export function handleStreamEvent(
               role: 'assistant',
               content: text,
               isStreaming: true,
-              ...(scopedDelta ? { localClaudeStream: true } : {}),
+              ...(scopedDelta ? { claudeScopedStream: true } : {}),
               createdAt: snapshot?.createdAt ?? new Date().toISOString(),
               ...assistantMetaFields,
             },
@@ -6684,9 +6685,9 @@ export function handleStreamEvent(
           message.clientId === state.streamingClientId &&
           message.role === 'assistant' && message.isStreaming &&
           (message.parentToolUseId ?? null) !== toolParent);
-      const finalized = localClaudeParent !== undefined && event.persistId &&
-        state.messages.some((message) => message.isStreaming && message.localClaudeStream)
-        ? finalizeStreamingInState(state, localClaudeParent)
+      const finalized = scopedClaudeParent !== undefined && event.persistId &&
+        state.messages.some((message) => message.isStreaming && message.claudeScopedStream)
+        ? finalizeStreamingInState(state, scopedClaudeParent)
         : separateClaudeStream ? state : finalizeStreamingInState(state);
       const clientId = event.persistId ?? crypto.randomUUID();
 
@@ -7514,13 +7515,13 @@ export function handleStreamEvent(
 function finalizeStreamingInState(state: SessionChatState, parent?: string | null): SessionChatState {
   const id = state.streamingClientId;
   const shouldFinalize = (message: ChatMessage) =>
-    (message.clientId === id || (message.localClaudeStream && message.isStreaming)) &&
+    (message.clientId === id || (message.claudeScopedStream && message.isStreaming)) &&
     (parent === undefined || (message.parentToolUseId ?? null) === parent);
   if (!state.messages.some(shouldFinalize) && (parent !== undefined || !id)) return state;
   const messages = state.messages.map((message) =>
     shouldFinalize(message) ? { ...message, isStreaming: false } : message);
   const current = messages.find((message) => message.clientId === id && message.isStreaming);
-  const remaining = current ?? messages.findLast((message) => message.localClaudeStream && message.isStreaming);
+  const remaining = current ?? messages.findLast((message) => message.claudeScopedStream && message.isStreaming);
   return {
     ...state,
     messages,
@@ -8029,6 +8030,7 @@ type PendingTextDeltaBatch = {
   dataOwner: DataOwnerGeneration;
   ingress: LiveIngressContext;
   source?: 'claude-code' | 'codex' | 'pi';
+  remoteClaudeParent?: string;
   persistId?: string;
   agentMeta?: Record<string, unknown>;
 };
@@ -8242,7 +8244,7 @@ function dispatchStreamEventPayload(
   persistId?: string,
   resolvedContent?: string,
   deferNotification = false,
-  localIngress = false,
+  ingress?: 'local' | 'remote',
 ): void {
   if (!event) return;
   const streamEvent = {
@@ -8260,7 +8262,7 @@ function dispatchStreamEventPayload(
     resolvedContent,
   } as CCAgentStreamEvent;
   supersedeInputProjectionOnTerminalEvent(sessionId, streamEvent);
-  setState(sessionId, (s) => handleStreamEvent(s, streamEvent, localIngress), { deferNotification });
+  setState(sessionId, (s) => handleStreamEvent(s, streamEvent, ingress), { deferNotification });
   scheduleWakeBridgeReconciliation(sessionId);
 }
 
@@ -8296,7 +8298,7 @@ function flushPendingTextDelta(sessionId: string, deferNotification = false): vo
     pending.persistId,
     undefined,
     deferNotification,
-    !pending.ingress.remoteDeviceId,
+    pending.ingress.remoteDeviceId ? (pending.remoteClaudeParent ? 'remote' : undefined) : 'local',
   );
 }
 
@@ -8346,7 +8348,14 @@ function enqueueTextDeltaPayload(
     flushPendingTextDelta(sessionId);
     existing = undefined;
   }
+  const parent = event.agentMeta?.parentUuid;
+  const remoteClaudeParent = ingress.remoteDeviceId && persistId && event.source === 'claude-code' &&
+    typeof parent === 'string' && parent ? parent : undefined;
   if (existing) {
+    // Only scope batches whose every frame declares the same stream and message.
+    if (existing.remoteClaudeParent !== remoteClaudeParent || existing.persistId !== persistId) {
+      existing.remoteClaudeParent = undefined;
+    }
     existing.text += text;
     if (!existing.persistId && persistId) existing.persistId = persistId;
     if (event.source) existing.source = event.source;
@@ -8358,6 +8367,7 @@ function enqueueTextDeltaPayload(
       dataOwner,
       ingress,
       source: event.source,
+      remoteClaudeParent,
       persistId,
       agentMeta: { ...event.agentMeta, ...(phase ? { assistantPhase: phase } : {}) },
     });
@@ -8928,7 +8938,11 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
     const displayEvent = ingress.remoteDeviceId && (event.type === 'tool_use' || event.type === 'text') && event.agentMeta?.parentUuid === null
       ? { ...event, agentMeta: { ...event.agentMeta, parentUuid: undefined } }
       : event;
-    dispatchStreamEventPayload(sessionId, displayEvent, persistId, resolvedContent, deferNotification, !ingress.remoteDeviceId);
+    const streamIngress = ingress.remoteDeviceId
+      ? (displayEvent.type === 'tool_use' || (displayEvent.type === 'text' && (displayEvent.data as { isFinal?: boolean })?.isFinal === true)
+        ? 'remote' : undefined)
+      : 'local';
+    dispatchStreamEventPayload(sessionId, displayEvent, persistId, resolvedContent, deferNotification, streamIngress);
     if (persistDeferredAfterDispatch) {
       persistTurnErrorDeferredTracked(
         sessionId,
@@ -17035,7 +17049,7 @@ function stopSession(
     // F7.6 / FP-3: expire any pending ask_user + plan_review messages on stop
     const msgs = removeResumePendingCards(
       s.messages.map((m) => {
-        if ((id && m.clientId === id) || (m.localClaudeStream && m.isStreaming)) {
+        if ((id && m.clientId === id) || (m.claudeScopedStream && m.isStreaming)) {
           return { ...m, isStreaming: false };
         }
         if (m.role === 'ask_user' && m.askUserStatus === 'pending') {
