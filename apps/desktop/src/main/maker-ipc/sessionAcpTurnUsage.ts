@@ -1,6 +1,7 @@
 import type { AgentEvent, Session } from '@cindy/maker-core';
 import { captureDataOwnerBroadcastScope } from '../device-link/broadcast-tap.js';
-import { rebroadcastTodaySpend, recordModelTurnUsage } from './turnUsagePorts.js';
+import { rebroadcastTodaySpend, recordModelTurnUsage } from '../usageBroadcaster.js';
+import { mayRecordTurnUsage } from '../usage/turnUsageAdmission.js';
 
 const lastRecordedGeneration = new WeakMap<Session, number>();
 
@@ -9,7 +10,8 @@ function isTokenCount(value: unknown): value is number {
 }
 
 export function recordSessionAcpTurnUsage(session: Session, event: AgentEvent): void {
-  if (session.agentKind !== 'acp' || session.agentDeviceId || session.remoteHostId ||
+  // The controller owns the task ledger even when another device hosts its engine.
+  if (session.agentKind !== 'acp' || session.remoteHostId ||
       event.type !== 'done' || event.turnScope === 'background' || event.runtimeRecovery) return;
   const data = event.data as { type?: string; usage?: Record<string, unknown>; usageModel?: unknown } | undefined;
   if (data?.type !== 'acp/prompt_end' || !data.usage) return;
@@ -23,6 +25,7 @@ export function recordSessionAcpTurnUsage(session: Session, event: AgentEvent): 
 
   const scope = captureDataOwnerBroadcastScope();
   // ACP has already separated cache tokens from input in the prompt response.
+  if (!mayRecordTurnUsage()) return;
   void recordModelTurnUsage({
     agentKind: 'acp',
     model: (typeof data.usageModel === 'string' && data.usageModel.trim()) || 'unknown',
@@ -31,5 +34,7 @@ export function recordSessionAcpTurnUsage(session: Session, event: AgentEvent): 
     outputTokensDelta: outputTokens,
     cacheReadTokensDelta: cacheReadTokens,
     cacheCreateTokensDelta: cacheCreationTokens,
-  }).then(() => rebroadcastTodaySpend(scope));
+  }).then(() => {
+    if (mayRecordTurnUsage()) return rebroadcastTodaySpend(scope);
+  });
 }

@@ -2310,8 +2310,10 @@ describe('provider turn observer on real Session.send', () => {
 describe('usage through the production event pipeline', () => {
   // #12433 (unit): ACP completes without a built-in engine source, but its
   // report must reach the model ledger once and refresh consumers after the write.
-  it('settles reported ACP tokens and distinguishes zero from missing usage', async () => {
+  // A device-hosted engine has no persisted Session on the execution device.
+  it.each([null, 'device-2'])('settles reported ACP tokens and distinguishes zero from missing usage (device: %s)', async (agentDeviceId) => {
     const h = harness(undefined, 'acp');
+    Object.defineProperty(h.session, 'agentDeviceId', { value: agentDeviceId });
     const done = { type: 'done', sessionTurnGeneration: 1, data: {
       type: 'acp/prompt_end', status: 'completed', usageModel: 'original-model',
       usage: { inputTokens: 2161, outputTokens: 15, cacheReadTokens: 9459, cacheCreationTokens: 0 },
