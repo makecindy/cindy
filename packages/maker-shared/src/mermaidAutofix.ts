@@ -72,7 +72,7 @@ const LABEL_BRACKET_ENDS = new Map([['(', ')'], ['[', ']'], ['{', '}']]);
  * 从右向左索引各个闭合符。每个位置可以跳过一整个配对括号或引号段，
  * 这样未闭合的形状不会让下一个候选重新扫描同一段。
  */
-function indexLabelEnds(line: string): Map<string, Uint16Array> {
+function indexLabelEnds(line: string) {
   const bracketEnds = new Map([...LABEL_BRACKET_ENDS.values()].map(
     (end) => [end, new Uint16Array(line.length + 1)],
   ));
@@ -99,7 +99,7 @@ function indexLabelEnds(line: string): Map<string, Uint16Array> {
       offsets[i] = matches ? i + end.length : offsets[next];
     }
   }
-  return shapeEnds;
+  return { bracketEnds, shapeEnds };
 }
 
 function replaceArrowsOutsideLabels(line: string): string {
@@ -108,13 +108,13 @@ function replaceArrowsOutsideLabels(line: string): string {
   const protectedStarts = /"[^"]*(?:"|$)|(?<=[\p{L}\p{N}\p{M}_.!?#$%*+/:&'`\\-])(?:\({2,3}|\(\[|\[[[(\/\\]|\{\{)/gu;
   let result = '';
   let start = 0;
-  let labelEnds: Map<string, Uint16Array> | undefined;
+  let labelEnds: ReturnType<typeof indexLabelEnds> | undefined;
   for (let match = protectedStarts.exec(line); match; match = protectedStarts.exec(line)) {
     const token = match[0];
     const shapeEnd = SHAPE_ENDS.get(token);
     if (shapeEnd) {
       labelEnds ??= indexLabelEnds(line);
-      const end = labelEnds.get(shapeEnd)![protectedStarts.lastIndex];
+      const end = labelEnds.shapeEnds.get(shapeEnd)![protectedStarts.lastIndex];
       if (!end) continue;
       protectedStarts.lastIndex = end;
     }
@@ -197,18 +197,37 @@ function findShapeDataEnd(source: string, start: number): number {
 
 function repairOutsideShapeData(source: string, chartStart: number): string {
   // 形状属性使用 YAML 键值对，可在第一个键之前写注释或给键加引号。
-  const tokens = /^[^\S\r\n]*(?:%%|\/\/)[^\n]*|(?:^|;)[^\S\r\n]*(?:acc(?:Title|Descr)[^\S\r\n]*:[^\n]*|accDescr[^\S\r\n]*\{[^}]*\})|"[^"\n]*(?:"|$)|\|[^|\n]+\||[-.=]+[>xo]?|@\{(?=\s*(?:#[^\n]*\n\s*)*(?:[\w-]+|"[^"\n]+"|'[^'\n]+')[^\S\r\n]*:)/gm;
+  const tokens = /^[^\S\r\n]*(?:%%|\/\/)[^\n]*|(?:^|;)[^\S\r\n]*(?:acc(?:Title|Descr)[^\S\r\n]*:[^\n]*|accDescr[^\S\r\n]*\{[^}]*\})|"[^"]*"|"[^"\n]*|\|[^|\n]+\||[-.=]+[>xo]?|@\{(?=\s*(?:#[^\n]*\n\s*)*(?:[\w-]+|"[^"\n]+"|'[^'\n]+')[^\S\r\n]*:)|\({2,3}|\(\[|\[[[(\/\\]|\{\{|[({\[>]/gm;
   tokens.lastIndex = chartStart;
   const edgeLabelClosers = new Map([['--', /^--+[-xo>]$/], ['==', /^==+[=xo>]$/], ['-.', /^\.+-[xo>]?$/]]);
   let result = '';
   let start = 0;
   let edgeLabelEnd: RegExp | undefined;
+  let labelLineStart = 0;
+  let labelLineEnd = -1;
+  let labelEnds: ReturnType<typeof indexLabelEnds> | undefined;
   for (let match = tokens.exec(source); match; match = tokens.exec(source)) {
     const token = match[0];
     // 旧式边标签位于两段连接符之间，例如 A -- text --> B。
     if (edgeLabelEnd?.test(token)) edgeLabelEnd = undefined;
     else edgeLabelEnd ??= edgeLabelClosers.get(token);
-    if (token !== '@{' || edgeLabelEnd) continue;
+    if (edgeLabelEnd) continue;
+    const shapeEnd = SHAPE_ENDS.get(token);
+    const bracketEnd = token === '>' ? ']' : LABEL_BRACKET_ENDS.get(token);
+    if (shapeEnd || bracketEnd) {
+      // 节点标签里的 --、==、-. 是文字，不开启边标签。
+      if (match.index >= labelLineEnd) {
+        labelLineStart = source.lastIndexOf('\n', match.index) + 1;
+        const newline = source.indexOf('\n', match.index);
+        labelLineEnd = newline === -1 ? source.length : newline;
+        labelEnds = indexLabelEnds(source.slice(labelLineStart, labelLineEnd));
+      }
+      const offsets = shapeEnd ? labelEnds!.shapeEnds.get(shapeEnd) : labelEnds!.bracketEnds.get(bracketEnd!);
+      const end = offsets![tokens.lastIndex - labelLineStart];
+      if (end) tokens.lastIndex = labelLineStart + end;
+      continue;
+    }
+    if (token !== '@{') continue;
     const end = findShapeDataEnd(source, tokens.lastIndex);
     // 未闭合属性走普通修复，同一残缺后缀只扫描一次。
     if (end === -1) break;

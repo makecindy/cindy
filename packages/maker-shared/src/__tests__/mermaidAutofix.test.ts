@@ -137,6 +137,15 @@ describe('repairMermaidSource', () => {
     );
   });
 
+  it.each(['A[foo -- bar]', 'A([foo == bar])', 'A(foo -. bar)', 'A>foo -- bar]', 'A["`foo\n-- bar`"]'])(
+    '保留 %s 后面的形状属性与连线',
+    (node) => {
+      expect(repairMermaidSource('flowchart TD\n' + node + '\nC@{ shape: rect, label: start → done }\nC → D')).toBe(
+        'flowchart TD\n' + node + '\nC@{ shape: rect, label: start → done }\nC --> D',
+      );
+    },
+  );
+
   it('未闭合的形状不会吞掉后面的完整标签和连线', () => {
     const prefix = 'flowchart TD\n' + 'A(('.repeat(600);
     expect(repairMermaidSource(prefix + ' C([go → stop]) → B')).toBe(
