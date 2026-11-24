@@ -446,8 +446,8 @@ function NodeView({
       <div
         key={entry.node.id}
         data-layout-node-id={entry.node.id}
-        aria-hidden={entry.parked || undefined}
-        inert={entry.parked || undefined}
+        aria-hidden={collapsed || undefined}
+        inert={collapsed || undefined}
         className={`flex min-h-0 min-w-0 overflow-hidden ${
           node.direction === 'column' ? 'w-full flex-col' : 'h-full flex-row'
         } ${fillsColumn ? 'flex-1' : 'flex-none'}`}

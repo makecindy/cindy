@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -11,6 +11,8 @@ import {
 import { __resetBuiltinPanelsForTest } from '../../panels/builtinPanels';
 import { __resetPanelRegistryForTest, registerPanelKind } from '../../panels/registry';
 import { LayoutRoot, normalizeSubMinFractions } from '../LayoutRoot';
+import { usePanelMaximize } from '../panelMaximize';
+import { TodoListCard } from '../../components/chat/TodoListCard';
 import { usePaneAtWindowTop, usePaneFill, usePaneAtWindowLeft } from '../panePlacement';
 
 const ghostPanelSyncMock = vi.hoisted(() => ({ version: 0 }));
@@ -97,6 +99,54 @@ describe('LayoutRoot · 树驱动的顺序与在场', () => {
     expect([...row.children]).toEqual([content]);
     expect(content.className).toContain('flex-1');
     expect(rowChildTestIds()).toEqual(['p-chat', 'layout-divider', 'p-right']);
+  });
+
+  // #12437: a maximized nested pane owns Escape while its clipped sibling stays mounted.
+  it('gives Escape to the visible plan in a maximized nested pane', () => {
+    function TopPane() {
+      const maximize = usePanelMaximize();
+      return <section data-testid="top-plan-pane">
+        <button onClick={() => maximize?.toggle('tab-group:top')}>Toggle maximize</button>
+        <TodoListCard todos={[{ content: 'Side plan', status: 'in_progress' }]} />
+      </section>;
+    }
+    registerPanelKind({ kind: 'tab-group:top', Component: TopPane, collapseMemory: 'none' });
+    currentLayout = {
+      ...createDefaultLayout(),
+      content: {
+        type: 'split', id: 'root', direction: 'row', children: [
+          { fraction: 0.75, node: {
+            type: 'split', id: 'chat-column', direction: 'column', children: [
+              { fraction: 0.4, node: { type: 'pane', id: 'top', panelKind: 'tab-group:top' } },
+              { fraction: 0.6, node: { type: 'pane', id: 'chat', panelKind: 'chat-main' } },
+            ],
+          } },
+          { fraction: 0.25, node: { type: 'pane', id: 'right', panelKind: 'right-tabs' } },
+        ],
+      },
+    };
+    render(
+      <BuiltinPanelBridgeProvider value={{ ...bridge, chatMain: <div data-testid="main-plan-pane">
+        <TodoListCard todos={[{ content: 'Main plan', status: 'in_progress' }]} />
+      </div> }}>
+        <LayoutRoot />
+      </BuiltinPanelBridgeProvider>,
+    );
+    const top = screen.getByTestId('top-plan-pane');
+    const sidePlan = within(top).getByRole('button', { expanded: false });
+    const mainPlan = within(screen.getByTestId('main-plan-pane')).getByRole('button', { expanded: false });
+    fireEvent.click(sidePlan, { detail: 0 });
+    fireEvent.click(mainPlan, { detail: 0 });
+    const maximize = within(top).getByRole('button', { name: 'Toggle maximize' });
+    fireEvent.click(maximize, { detail: 0 });
+
+    fireEvent.keyDown(sidePlan, { key: 'Escape' });
+
+    expect(sidePlan.getAttribute('aria-expanded')).toBe('false');
+    expect(mainPlan.getAttribute('aria-expanded')).toBe('true');
+    fireEvent.click(maximize, { detail: 0 });
+    fireEvent.keyDown(mainPlan, { key: 'Escape' });
+    expect(mainPlan.getAttribute('aria-expanded')).toBe('false');
   });
 
   it('默认树:chat 在前、right 在后,相邻可见面板之间有引擎分割线', () => {
