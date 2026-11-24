@@ -6,14 +6,16 @@ import { SessionSubscriptionAccountProvider, useSessionSubscriptionAccount, sess
 import { getDataOwnerGeneration, setDataOwnerGeneration } from '../contexts/dataOwnerGeneration';
 import type { ProviderView } from '@cindy/model-providers';
 vi.mock('@/contexts/AuthContext', () => ({ useOptionalDataOwnerGeneration: () => getDataOwnerGeneration() }));
-const connection = vi.hoisted(() => ({ epoch: 0, visible: false }));
+const connection = vi.hoisted(() => ({ epoch: 0, visible: false, nativeHidden: false }));
 vi.mock('@/hooks/useWindowVisible', () => ({ useDocumentVisible: () => connection.visible }));
 vi.mock('@/features/device-link/useDeviceLinkReconnectEpoch', () => ({ useDeviceLinkReconnectEpoch: () => connection.epoch }));
+vi.mock('@/lib/hiddenAnimationGate', () => ({ isWindowHidden: () => connection.nativeHidden }));
 const invoke = vi.fn();
 beforeEach(() => {
   invoke.mockReset();
   connection.epoch = 0;
   connection.visible = false;
+  connection.nativeHidden = false;
   setDataOwnerGeneration('owner-10111');
   Object.defineProperty(window, 'electronAPI', { configurable: true, value: { deviceLink: { invoke } } });
 });
@@ -202,4 +204,71 @@ it('pauses local Claude binding reads while its chat rail is collapsed', async (
     unmount();
     vi.useRealTimers();
   }
+});
+
+
+// #12403 review (unit): disabled background throttling leaves the DOM visible
+// through a native hide. A mounted Claude probe still follows the native signal.
+it('handles initial native hiding, reveal and cleanup for local Claude binding reads', async () => {
+  vi.useFakeTimers();
+  connection.visible = true;
+  connection.nativeHidden = true;
+  const sessionAccount = vi.fn(async () => ({
+    providerId: 'anthropic', state: 'bound',
+    account: { isDefault: false, number: 2, paused: false, status: 'ready' },
+  }));
+  const nativeListeners = new Set<(hidden: boolean) => void>();
+  const accountListeners = new Set<(event: { providerId: string }) => void>();
+  Object.defineProperty(window, 'electronAPI', { configurable: true, value: {
+    onWindowHiddenChange: (listener: (hidden: boolean) => void) => {
+      nativeListeners.add(listener);
+      return () => nativeListeners.delete(listener);
+    },
+    subscriptionAccounts: { sessionAccount, onChanged: (listener: (event: { providerId: string }) => void) => {
+      accountListeners.add(listener);
+      return () => accountListeners.delete(listener);
+    } },
+  } });
+  const view = (providerId: 'anthropic' | 'openai' = 'anthropic') => (
+    <SessionSubscriptionAccountProvider providerId={providerId} routeProviderId={null} deviceId={null}
+      sessionId="native-window-visibility" nativeSessionId="native-window-task">
+      <div />
+    </SessionSubscriptionAccountProvider>
+  );
+  const setHidden = (hidden: boolean) => act(async () => {
+    connection.nativeHidden = hidden;
+    for (const listener of nativeListeners) listener(hidden);
+  });
+  const { rerender, unmount } = render(view());
+  try {
+    expect(sessionAccount).not.toHaveBeenCalled();
+    expect(nativeListeners.size).toBe(1);
+    await setHidden(false);
+    expect(sessionAccount).toHaveBeenCalledTimes(1);
+    await setHidden(true);
+    expect(accountListeners.size).toBe(0);
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+      vi.advanceTimersByTime(61_000);
+    });
+    expect(sessionAccount).toHaveBeenCalledTimes(1);
+    await setHidden(false);
+    expect(sessionAccount).toHaveBeenCalledTimes(2);
+
+    connection.visible = false;
+    rerender(view());
+    expect(accountListeners.size).toBe(0);
+    await setHidden(true);
+    await setHidden(false);
+    expect(sessionAccount).toHaveBeenCalledTimes(2);
+
+    rerender(view('openai'));
+    expect(nativeListeners.size).toBe(0);
+    expect(sessionAccount).toHaveBeenCalledTimes(3);
+  } finally {
+    unmount();
+    vi.useRealTimers();
+  }
+  expect(nativeListeners.size).toBe(0);
+  expect(accountListeners.size).toBe(0);
 });

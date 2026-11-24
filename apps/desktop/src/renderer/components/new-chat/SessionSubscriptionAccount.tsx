@@ -16,6 +16,7 @@ import {
   type DataOwnerGeneration,
 } from '@/contexts/dataOwnerGeneration';
 import { useDocumentVisible } from '@/hooks/useWindowVisible';
+import { isWindowHidden } from '@/lib/hiddenAnimationGate';
 import { useDeviceLinkReconnectEpoch } from '@/features/device-link/useDeviceLinkReconnectEpoch';
 import type { RateLimitSnapshot } from '@/hooks/useAccountUsage';
 import type { RemoteCodexAccountUsagePayload } from '@/hooks/useRemoteDeviceUsage';
@@ -198,11 +199,18 @@ export function SessionSubscriptionAccountProvider({
   const remoteDeviceId = deviceId || null;
   // Keep an unsaved route distinct so browsing a named source cannot inherit the task's account.
   const bindingOnly = pool === 'anthropic' && routeProviderId === null && !remoteDeviceId;
-  const readEnabled = !bindingOnly || viewVisible;
   const implicit = routeProviderId === null && (pool === 'openai' || bindingOnly);
   const route = implicit ? null : routeProviderId || pool;
   const ownerGeneration = useOptionalDataOwnerGeneration();
   const foreground = useDocumentVisible(pool !== null);
+  const [windowHidden, setWindowHidden] = useState(isWindowHidden);
+  const readEnabled = !bindingOnly || (viewVisible && foreground && !windowHidden);
+  useEffect(() => {
+    if (!bindingOnly || !viewVisible) return;
+    const unsubscribe = window.electronAPI?.onWindowHiddenChange?.(setWindowHidden);
+    setWindowHidden(isWindowHidden());
+    return unsubscribe;
+  }, [bindingOnly, viewVisible]);
   const reconnectEpoch = useDeviceLinkReconnectEpoch(
     pool && remoteDeviceId ? remoteDeviceId : undefined,
   );
@@ -233,6 +241,8 @@ export function SessionSubscriptionAccountProvider({
       setLoaded({ key, owner, view });
     };
     const refresh = async () => {
+      // A native hide can arrive before React has cleaned up this effect.
+      if (disposed || (bindingOnly && (document.hidden || isWindowHidden()))) return;
       const request = ++latest;
       let view: ReadResult | null = null;
       const unsupportedKey = remoteDeviceId ? unsupportedQueryKey(remoteDeviceId, reconnectEpoch) : '';
