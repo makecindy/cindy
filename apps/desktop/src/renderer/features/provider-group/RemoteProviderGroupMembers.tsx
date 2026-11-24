@@ -62,13 +62,88 @@ function budgetExpired(budget: ViewBudget): boolean {
   return Date.now() >= budget.wallUntil || performance.now() >= budget.monoUntil;
 }
 
+interface MemberSnapshot {
+  status: ProviderGroupMemberStatus;
+  budget?: ViewBudget;
+  expired: boolean;
+}
+
+function liveSnapshot(snapshot: MemberSnapshot | undefined) {
+  if (snapshot?.budget && budgetExpired(snapshot.budget)) snapshot.expired = true;
+  return snapshot && !snapshot.expired ? snapshot.status : undefined;
+}
+
+async function readMemberStatuses(
+  deviceId: string,
+  providerId: string,
+  members: ProviderGroupMember[],
+  snapshots: Map<string, MemberSnapshot>,
+  canApply: () => boolean,
+  changed: () => void,
+  onReadFailure: () => void,
+) {
+  const keys = new Set(members.map(member => member.key));
+  for (const key of snapshots.keys()) if (!keys.has(key)) snapshots.delete(key);
+  // Cold rows get a lightweight availability read first. Warm rows already have something
+  // to show. Put enrichment behind queued base reads and bound work on the shared link.
+  const queue = Array.from(keys, memberKey => ({ memberKey, details: !!liveSnapshot(snapshots.get(memberKey)) }));
+  queue.sort((a, b) => Number(a.details) - Number(b.details));
+  let nextJob = 0;
+  const worker = async () => {
+    while (canApply() && nextJob < queue.length) {
+      const job = queue[nextJob++]!;
+      const start = { wall: Date.now(), mono: performance.now() };
+      try {
+        const row = await window.electronAPI.providerGroup.command({
+          action: 'remote-view', deviceId, providerId,
+          display: { memberKey: job.memberKey, ...(job.details ? { details: true } : {}) },
+        });
+        if (!canApply()) return;
+        const status = row.members.find(member => member.key === job.memberKey);
+        if (status && !row.providerContinuity?.stale) {
+          snapshots.set(job.memberKey, { status, budget: viewBudget(row, start), expired: false });
+          if (!job.details) queue.push({ ...job, details: true });
+        } else {
+          snapshots.delete(job.memberKey);
+        }
+      } catch {
+        if (!canApply()) return;
+        snapshots.delete(job.memberKey);
+        onReadFailure();
+      }
+      changed();
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(4, queue.length) }, worker));
+}
+
 function useRemoteProviderGroupView(deviceId: string, providerId: string) {
   const [view, setView] = useState<ProviderGroupView | null>(null);
   /** The last acknowledged view budget is over; never let it outlive it. */
   const [retired, setRetired] = useState(false);
   const [versions, setVersions] = useState<ReadonlyMap<string, string>>(() => new Map());
   const [failed, setFailed] = useState(false);
+  const [memberFailed, setMemberFailed] = useState(false);
   const seq = useRef(0);
+  const inFlight = useRef(false);
+  const snapshots = useRef(new Map<string, MemberSnapshot>());
+  const [revision, setRevision] = useState(0);
+  const changed = useCallback(() => setRevision(value => value + 1), []);
+
+  // Retire each row at its own source deadline, even while a sibling is still loading.
+  useEffect(() => {
+    let remaining = Infinity;
+    for (const snapshot of snapshots.current.values()) {
+      if (snapshot.budget && !snapshot.expired) remaining = Math.min(remaining, budgetRemainingMs(snapshot.budget));
+    }
+    if (Number.isFinite(remaining)) {
+      const timer = setTimeout(() => {
+        for (const snapshot of snapshots.current.values()) liveSnapshot(snapshot);
+        changed();
+      }, remaining);
+      return () => clearTimeout(timer);
+    }
+  }, [revision, changed]);
   const expiry = useRef<{
     token: number;
     timer: ReturnType<typeof setTimeout> | null;
@@ -99,6 +174,8 @@ function useRemoteProviderGroupView(deviceId: string, providerId: string) {
   };
 
   const reload = useCallback(async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
     const current = ++seq.current;
     const owner = getDataOwnerGeneration();
     const requestedAt = { wall: Date.now(), mono: performance.now() };
@@ -119,8 +196,9 @@ function useRemoteProviderGroupView(deviceId: string, providerId: string) {
     };
     void readVersions();
     try {
-      const next = await window.electronAPI.providerGroup.command({ action: 'remote-view', deviceId, providerId });
+      const next = await window.electronAPI.providerGroup.command({ action: 'remote-view', deviceId, providerId, display: 'roster' });
       if (!canApply()) return;
+      setMemberFailed(false);
       setView(next);
       setFailed(false);
       clearExpiry();
@@ -143,6 +221,12 @@ function useRemoteProviderGroupView(deviceId: string, providerId: string) {
       } else {
         setRetired(false);
       }
+      if (!next.rosterOnly || !next.config || next.providerContinuity?.stale || (budget && budgetExpired(budget))) {
+        snapshots.current.clear();
+        return;
+      }
+      await readMemberStatuses(deviceId, providerId, next.config.members, snapshots.current,
+        () => canApply() && (!budget || !budgetExpired(budget)), changed, () => setMemberFailed(true));
     } catch {
       if (!canApply()) return;
       // A failed re-read is not live status evidence. Mark the last snapshot
@@ -151,11 +235,17 @@ function useRemoteProviderGroupView(deviceId: string, providerId: string) {
       // deadline: repeated failures must not renew or shorten it, and an old
       // host without a stamp keeps its original lifecycle.
       setFailed(true);
+      snapshots.current.clear();
+    } finally {
+      if (current === seq.current) inFlight.current = false;
     }
-  }, [deviceId, providerId, clearExpiry]);
+  }, [deviceId, providerId, clearExpiry, changed]);
 
   useEffect(() => {
     clearExpiry();
+    snapshots.current.clear();
+    inFlight.current = false;
+    setMemberFailed(false);
     setView(null);
     setRetired(false);
     setVersions(new Map());
@@ -170,7 +260,7 @@ function useRemoteProviderGroupView(deviceId: string, providerId: string) {
   }, [reload, clearExpiry]);
 
   const expired = retired || viewExpired();
-  return { view, versions, failed, expired };
+  return { view, versions, failed, memberFailed, expired, snapshots: snapshots.current };
 }
 
 export function RemoteProviderGroupMembers({
@@ -184,7 +274,7 @@ export function RemoteProviderGroupMembers({
   config: ProviderGroupConfig;
 }) {
   const { t } = useTranslation();
-  const { view, versions, failed, expired } = useRemoteProviderGroupView(deviceId, providerId);
+  const { view, versions, failed, memberFailed, expired, snapshots } = useRemoteProviderGroupView(deviceId, providerId);
   // While the view is still inside its own budget, its config is the last
   // acknowledged group-owner snapshot. Once that budget ends, keep the
   // navigation/config fallback from the current catalog prop instead.
@@ -194,7 +284,7 @@ export function RemoteProviderGroupMembers({
   const staleView = failed || expired || view?.providerContinuity?.stale === true;
   const statusOf = (member: ProviderGroupMember) => staleView
     ? undefined
-    : view?.members.find((m) => m.key === member.key);
+    : view?.rosterOnly ? liveSnapshot(snapshots.get(member.key)) : view?.members.find((m) => m.key === member.key);
   // local 指组所在电脑，不是查看端；分享来源不能按同账号设备查版本。
   const appVersionOf = (member: ProviderGroupMember) => member.kind === 'local' ? versions.get(deviceId)
     : member.kind === 'device' && member.agentDeviceId ? versions.get(member.agentDeviceId) : undefined;
@@ -237,7 +327,7 @@ export function RemoteProviderGroupMembers({
           );
         })}
       </div>
-      {failed && (
+      {(failed || memberFailed) && (
         <p className="mt-2 text-12 leading-[1.5] text-[var(--text-tertiary)]">
           {t('settings.providers.remote.groupMembersFailed')}
         </p>
