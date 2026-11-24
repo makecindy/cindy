@@ -13,8 +13,8 @@ export function initInputHandoffAskpass(deps: AskpassHostDeps): AskpassHost {
 }
 
 /** `AgentRuntimeConfig.taskShellEnv` for all three harnesses. Empty until ready or when unsupported. */
-export function inputHandoffTaskShellEnv(ctx: { sessionId: string }): Record<string, string> {
-  return host?.envFor(ctx.sessionId) ?? {};
+export function inputHandoffTaskShellEnv(ctx: { sessionId: string; baseEnv?: NodeJS.ProcessEnv }): Record<string, string> {
+  return host?.envFor(ctx.sessionId, ctx.baseEnv) ?? {};
 }
 
 export async function closeInputHandoffAskpass(): Promise<void> {

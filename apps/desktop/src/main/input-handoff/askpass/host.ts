@@ -110,14 +110,17 @@ export class AskpassHost {
   /**
    * Variables for the commands of one local task. Deterministic for a task in
    * this app run, so a respawned agent process gets byte-identical env.
+   * Callers whose child process starts from a filtered base environment (such as
+   * plugin harnesses using `pluginNodeEnvironment`) pass that base env so pre-set
+   * host askpass variables that the child does not inherit do not suppress injection.
    */
-  envFor(sessionId: string): Record<string, string> {
+  envFor(sessionId: string, baseEnv?: NodeJS.ProcessEnv): Record<string, string> {
     const helper = this.helperPath;
     if (!this.supported || !helper || !sessionId) return {};
     void this.prepare();
     const route = createHmac('sha256', this.key).update(sessionId).digest('base64url').slice(0, 32);
     this.routes.set(route, sessionId);
-    const base = this.deps.baseEnv ?? process.env;
+    const base = baseEnv ?? this.deps.baseEnv ?? process.env;
     const wanted: Record<string, string> = {
       [INPUT_HANDOFF_ROUTE_ENV]: route,
       SUDO_ASKPASS: helper,

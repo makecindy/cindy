@@ -129,7 +129,10 @@ export function installPluginEngines(opts: InstallPluginEnginesOpts): () => void
       ...(opts.getGhostRosterPrompt ? { getGhostRosterPrompt: opts.getGhostRosterPrompt } : {}),
       ...(opts.listSessionSkills ? { listSessionSkills: opts.listSessionSkills } : {}),
       getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
-      taskShellEnv: inputHandoffTaskShellEnv,
+      // Plugin harness processes start from pluginNodeEnvironment() (which does not inherit
+      // host SUDO_ASKPASS / SSH_ASKPASS / GIT_ASKPASS), so compute askpass overrides against
+      // that minimal base env rather than process.env.
+      taskShellEnv: ({ sessionId }) => inputHandoffTaskShellEnv({ sessionId, baseEnv: {} }),
       spawnHarness: (key, options) => (options ? registry.spawn(key, options) : registry.spawn(key)),
     });
     // Engines whose plugin keeps accounts apart run on accounts like built-in providers
