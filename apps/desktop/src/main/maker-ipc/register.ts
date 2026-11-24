@@ -12679,7 +12679,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 suggestName: worktreeManager.suggestName,
                 listBranches: worktreeManager.listBranches,
                 resolveCommit: worktreeManager.revParseCommit,
-                createWorktree: worktreeManager.createWorktree,
+                createWorktree:
+                  inherited.agentKind === 'acp'
+                    ? (req) => worktreeManager.createWorktree(req, { awaitFullCheckout: true })
+                    : worktreeManager.createWorktree,
                 createId: () => randomUUID(),
                 resolveFreshSource: resolveFreshSourceBranch,
               },

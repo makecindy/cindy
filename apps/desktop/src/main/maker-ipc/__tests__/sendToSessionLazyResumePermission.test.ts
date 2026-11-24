@@ -1123,4 +1123,97 @@ describe('sendToSessionInternal create from plugin engine (#12127)', () => {
       model: 'gpt-5.6-sol',
     });
   });
+
+  it('passes awaitFullCheckout: true to worktreeManager.createWorktree only when target engine is acp', async () => {
+    const runWithWorktree = async (execution?: { agentKind: 'codex'; model: string }) => {
+      const createWorktree = vi.fn(async () => ({
+        ok: true,
+        meta: { path: '/tmp/proj/.cindy-worktrees/acp-wt' },
+      }));
+      const dbChain = {
+        from: () => dbChain,
+        where: () => dbChain,
+        limit: async () => [{ effort: 'high', fastMode: false, providerId: AGY_PROVIDER, permissionMode: 'auto' }],
+      };
+      const h = botTaskDispatchHarness({}, {}, {
+        getDbClient: () => ({ drizzle: { select: () => dbChain } }),
+        maker: {
+          getSession: () => undefined,
+          getSessionMeta: async (id: string) => ({
+            id,
+            agentKind: 'acp',
+            workDir: '/tmp/proj',
+            projectDir: '/tmp/proj',
+            workspaceKind: 'project',
+            model: 'gemini-4-neon',
+            sdkSessionId: 'native-agy-1',
+          }),
+          getCapabilities: () => ({
+            availableModels: [{ id: 'gpt-5.6-sol', efforts: ['high'], defaultEffort: 'high' }],
+          }),
+        },
+        getSelfDeviceId: () => 'device-self',
+        getPluginHarnessRegistry: () => ({ list: () => [agyHarness('available')] }),
+        pluginEngineModelsOf: (item: { models?: Array<{ id: string; name: string; efforts?: string[] }> }) =>
+          (item.models ?? []).map((m) => ({ id: m.id, displayName: m.name, ...(m.efforts ? { efforts: m.efforts } : {}) })),
+        pluginEngineSettingsOf: () => ({}),
+        getProviderRoutingContext: async () => ({
+          availability: {
+            codex: [{ id: 'openai', name: 'OpenAI', models: ['gpt-5.6-sol'] }],
+            'claude-code': [],
+            pi: [],
+          },
+          resolveDefaultProviderIdForModel: () => 'openai',
+        }),
+        readClaudeApiKey: () => null,
+        worktreeManager: { createWorktree },
+        resolveFreshSourceBranch: vi.fn(),
+        prepareHandoffWorktree: async (deps: { createWorktree: (req: Record<string, unknown>) => Promise<{ ok: boolean; meta: { path: string } }> }) => {
+          const resp = await deps.createWorktree({
+            sessionId: 'wt-child',
+            baseRepo: '/tmp/proj',
+            name: 'acp-wt',
+            sourceBranch: 'main',
+          });
+          return { ok: resp.ok, sessionId: 'wt-child', meta: resp.meta };
+        },
+        openSession: async (input: { body: Record<string, unknown> }, commit: (row: Record<string, unknown>, assertCurrent: () => void) => Promise<unknown>) => {
+          const row = {
+            id: String(input.body.id ?? 'wt-child'),
+            model: input.body.model,
+            providerId: input.body.providerId,
+            effort: input.body.effort ?? '',
+            fastMode: Boolean(input.body.fastMode),
+            workingDir: input.body.workingDir,
+            workspaceKind: input.body.workspaceKind ?? 'project',
+          };
+          const value = await commit(row, () => undefined);
+          return { row, value };
+        },
+        broadcastSessionCreated: () => undefined,
+      });
+      const result = await h.sendToSessionInternal({
+        dispatcherSessionId: 'source-agy',
+        message: 'Run in worktree',
+        useWorktree: true,
+        ...(execution ? { execution } : {}),
+      });
+      return { result, createWorktree };
+    };
+
+    const acpRun = await runWithWorktree();
+    expect(acpRun.result).toMatchObject({ ok: true, agentKind: 'acp', wakeKind: 'created' });
+    expect(acpRun.createWorktree).toHaveBeenCalledTimes(1);
+    expect(acpRun.createWorktree).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'wt-child', baseRepo: '/tmp/proj' }),
+      { awaitFullCheckout: true },
+    );
+
+    const codexRun = await runWithWorktree({ agentKind: 'codex', model: 'gpt-5.6-sol' });
+    expect(codexRun.result).toMatchObject({ ok: true, agentKind: 'codex', wakeKind: 'created' });
+    expect(codexRun.createWorktree).toHaveBeenCalledTimes(1);
+    expect(codexRun.createWorktree).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'wt-child', baseRepo: '/tmp/proj' }),
+    );
+  });
 });
