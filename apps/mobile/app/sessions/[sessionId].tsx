@@ -1,3 +1,4 @@
+import { useNavigationState, useRoute } from 'expo-router/react-navigation';
 import { WallpaperBackdrop } from '@/theme/WallpaperBackdrop';
 import { useWallpaper } from '@/theme/wallpaper';
 import { ProjectSettingsSheet } from '@/session/ProjectSettingsSheet';
@@ -694,6 +695,7 @@ import { buildWideSessionNavLayout } from '@/session/wideSessionNav';
 import { SessionFloatingDrawer } from '@/session/SessionTaskDrawer';
 import { GestureDetector } from '@/platform/gestureHandler';
 import {
+  sessionSwipeReturnsToSource,
   pushSessionDrillDown,
   switchDrawerSessionInPlace,
   taskListSessionTarget,
@@ -1191,6 +1193,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     deviceId, sessionId, () => navigation.isFocused(), (key) => Alert.alert(t(key)), credentialNoticeAlias,
   ), [credentialNoticeAlias, deviceId, navigation, sessionId, t]);
   const router = useRouter();
+  const route = useRoute();
+  const swipeReturnsToSource = useNavigationState(state => sessionSwipeReturnsToSource(state, route.key));
   // 完整消息读取权限按「会话 + 单调代际」登记。focus 与 AppState 正交：后台时
   // 导航仍可能保持 focused，必须立即撤权；重新聚焦/回前台会生成新代际，使旧
   // listMessages 响应永久失效。
@@ -3324,7 +3328,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // 退出宽屏后 layout.drawerWidth 会变 0;退场期间继续用最后一个有效宽度,避免面板几何跳变。
   const { sessionListDrawerOpen, sessionListDrawerOverlayMounted, sessionListDrawerWidthRef, sessionListDrawerClosingRef, pendingDrawerNavigationRef, openSessionListDrawer, closeSessionListDrawer, stackGestureEnabled, sessionListDrawerFloating, sessionListDrawerMotion, sessionListDrawerPullGesture, queueDrawerNavigation, handleSessionListDrawerClosed } = useConversationTaskDrawer({
     enabled: wideSessionNav.enabled, persistent: paneLayout.persistent, width: wideSessionNav.drawerWidth,
-    onSwipeBack: windowDimensions.height > windowDimensions.width && (params.sessionEntry === 'drillDown' || params.sessionEntry === 'messageLink')
+    onSwipeBack: windowDimensions.height > windowDimensions.width && swipeReturnsToSource
       && router.canGoBack() ? goBackOneLevel : undefined,
   });
   const handleDrawerSelectSession = useCallback((item: RemoteSessionListItem) => {

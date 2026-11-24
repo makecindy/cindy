@@ -5,6 +5,7 @@ import type { RemoteSession } from './types';
 
 export interface SessionDrawerRouteTarget {
   taskListEntry?: 'sidebar';
+  sessionEntry?: 'taskList';
   deviceId: string;
   deviceName: string;
   sessionId: string;
@@ -32,11 +33,13 @@ export interface SessionRouteParamsNavigation {
 export function switchDrawerSessionInPlace(
   navigation: SessionRouteParamsNavigation,
   target: SessionDrawerRouteTarget,
+  fromTaskList = true,
 ): void {
   navigation.replaceParams({
     deviceId: target.deviceId,
     deviceName: target.deviceName,
     sessionId: target.sessionId,
+    ...(fromTaskList ? { sessionEntry: 'taskList' as const } : {}),
     ...(target.taskListEntry ? { taskListEntry: target.taskListEntry } : {}),
     ...(target.focusClientId ? { focusClientId: target.focusClientId } : {}),
     ...(target.resourceId ? {
@@ -78,4 +81,18 @@ export function pushSessionDrillDown(
     pathname: '/sessions/[sessionId]',
     params: { ...params, sessionEntry: 'drillDown' },
   }, { dangerouslySingular: () => undefined });
+}
+
+/** The stack owns drill-down history, including routes pushed by embedded cards.
+ * An in-place list selection explicitly ends that drill-down on this screen. */
+export function sessionSwipeReturnsToSource(
+  state: { routes: readonly { key: string; name: string; params?: object }[] },
+  routeKey: string,
+): boolean {
+  const index = state.routes.findIndex(route => route.key === routeKey);
+  if (index <= 0) return false;
+  const params = state.routes[index].params as { sessionEntry?: string } | undefined;
+  if (params?.sessionEntry === 'taskList') return false;
+  const source = state.routes[index - 1].name;
+  return source !== 'index' && source !== 'devices/index' && source !== 'devices/[deviceId]';
 }
