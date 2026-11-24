@@ -172,7 +172,9 @@ Cindy 主进程**从不执行插件写的命令**，只启动插件包里声明�
   HTTP MCP 桥对 `antigravity-client` 按服务数加权分配 12 KB 总量（`antigravityToolCatalog.ts`）：放得下就原样下发；
   否则压成一句话摘要加参数类型，完整说明经 `describe_tool` 读取；仍放不下时只保留首选入口与
   `list_tools` / `call_tool`，其余经 `run_tool` 调用。`run_tool` 在传输层还原成原来的 `tools/call`，
-  注册、参数校验与授权不变；其他客户端的目录不受影响。新增工具或加长说明不需要改这里，
+  注册、参数校验与授权不变；其他客户端的目录不受影响。两个辅助入口只由传输层应答、不在 `McpServer` 上注册：
+  MCP App 代理（`mcp-apps/serverProxy.ts`）与伙伴连接（`bot-import/connectionProvider.ts`）自己安装
+  `tools/list` / `tools/call` 处理器，再调 `registerTool` 会与之冲突，使服务初始化失败。新增工具或加长说明不需要改这里，
   预算由测试 `keeps every agy catalog within the shared budget` 守住。
 - **排除范围**：远程 / SSH / 设备互联被控端、定时任务、伙伴、多 Agent 协同、插件模型路由、
   标题生成的 oneShot 均不接入 `acp`，遇到即返回明确的「不支持」。

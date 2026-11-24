@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
   StreamableHTTPServerTransport, type StreamableHTTPServerTransportOptions,
 } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -7,7 +6,6 @@ import type { Transport, TransportSendOptions } from '@modelcontextprotocol/sdk/
 import {
   isJSONRPCRequest, isJSONRPCResultResponse, type JSONRPCMessage, type RequestId, type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
-import { z } from 'zod';
 
 /*
  * agy (Antigravity CLI) puts every tool of the MCP servers it receives over ACP `session/new`
@@ -171,57 +169,66 @@ function textResult(text: string, isError = false) {
   return { content: [{ type: 'text' as const, text }], ...(isError ? { isError } : {}) };
 }
 
+/**
+ * describe_tool and run_tool exist only in this transport: the McpServer is never touched, so
+ * servers that install their own tools/list and tools/call handlers (MCP App and companion
+ * connection proxies) keep their discovery and execution unchanged.
+ */
 class AntigravityCatalogTransport extends StreamableHTTPServerTransport {
   private readonly listing = new AsyncLocalStorage<RequestId>();
   private readonly definitions = new Map<string, Definition>();
   private hidden = new Set<string>();
+  /** Whether the latest listing declared describe_tool / run_tool. */
+  private helpers = false;
 
   constructor(
     options: StreamableHTTPServerTransportOptions,
-    server: McpServer,
     private readonly serverName: string,
     private readonly budgetBytes: number,
   ) {
     super(options);
-    // Registered only on this agy session's server instance; other clients never see them.
-    server.registerTool(DESCRIBE_TOOL, {
-      description: describeDeclaration.description, inputSchema: { name: z.string().optional() },
-      annotations: { readOnlyHint: true },
-    }, ({ name }) => {
-      if (name === undefined) {
+  }
+
+  private unknownTool(name: unknown) {
+    return textResult(`No tool named ${String(name)} on this server. Call describe_tool without name to list them.`, true);
+  }
+
+  /** The reply to a describe_tool call, or to a run_tool call that cannot be forwarded. */
+  private localResult(name: unknown, args: Record<string, unknown>) {
+    if (name === DESCRIBE_TOOL) {
+      if (args.name === undefined) {
         return textResult(JSON.stringify([...this.definitions.values()].map(tool => ({
           name: tool.name, summary: summarize(tool.description), declared: !this.hidden.has(tool.name),
         }))));
       }
-      const definition = this.definitions.get(name);
-      return definition ? textResult(JSON.stringify(definition))
-        : textResult(`No tool named ${name} on this server. Call describe_tool without name to list them.`, true);
-    });
-    // Reached only when the call could not be forwarded (see onmessage).
-    server.registerTool(RUN_TOOL, {
-      description: runDeclaration.description,
-      inputSchema: { name: z.string(), arguments: z.record(z.string(), z.unknown()).optional() },
-    }, ({ name }) => textResult(`No tool named ${name} on this server. Call describe_tool without name to list them.`, true));
-  }
-
-  /** run_tool → the tools/call it stands for; the server validates and authorizes it as usual. */
-  private forward(message: JSONRPCMessage): JSONRPCMessage {
-    if (!isJSONRPCRequest(message) || message.method !== 'tools/call') return message;
-    const params = message.params as { name?: unknown; arguments?: unknown } | undefined;
-    if (params?.name !== RUN_TOOL || !params.arguments || typeof params.arguments !== 'object') return message;
-    const { name, arguments: args } = params.arguments as { name?: unknown; arguments?: unknown };
-    if (typeof name !== 'string' || !this.definitions.has(name)) return message;
-    return { ...message, params: { ...params, name, arguments: args && typeof args === 'object' ? args : {} } };
+      const definition = typeof args.name === 'string' ? this.definitions.get(args.name) : undefined;
+      return definition ? textResult(JSON.stringify(definition)) : this.unknownTool(args.name);
+    }
+    if (name === RUN_TOOL && !(typeof args.name === 'string' && this.definitions.has(args.name))) {
+      return this.unknownTool(args.name);
+    }
+    return undefined;
   }
 
   // SDK handlers may run concurrently, including requests in the same JSON-RPC batch.
   // Bind the projection to the individual tools/list handler, never to tools/call output.
   override set onmessage(handler: Transport['onmessage']) {
     super.onmessage = handler && ((message, extra) => {
-      if ('method' in message && message.method === 'tools/list' && 'id' in message) {
-        return this.listing.run(message.id, () => handler(message, extra));
+      if (!isJSONRPCRequest(message)) return handler(message, extra);
+      if (message.method === 'tools/list') return this.listing.run(message.id, () => handler(message, extra));
+      const params = message.params as { name?: unknown; arguments?: unknown } | undefined;
+      if (!this.helpers || message.method !== 'tools/call' || (params?.name !== DESCRIBE_TOOL && params?.name !== RUN_TOOL)) {
+        return handler(message, extra);
       }
-      return handler(this.forward(message), extra);
+      const args = params.arguments && typeof params.arguments === 'object' ? params.arguments as Record<string, unknown> : {};
+      const local = this.localResult(params.name, args);
+      if (local) {
+        void this.send({ jsonrpc: '2.0', id: message.id, result: local }).catch(error => this.onerror?.(error as Error));
+        return;
+      }
+      // run_tool → the tools/call it stands for; the server validates and authorizes it as usual.
+      const forwarded = args.arguments && typeof args.arguments === 'object' ? args.arguments : {};
+      return handler({ ...message, params: { ...params, name: args.name, arguments: forwarded } }, extra);
     });
   }
   override get onmessage(): Transport['onmessage'] { return super.onmessage; }
@@ -229,11 +236,15 @@ class AntigravityCatalogTransport extends StreamableHTTPServerTransport {
   override send(message: JSONRPCMessage, options?: TransportSendOptions) {
     const listId = this.listing.getStore();
     if (listId !== undefined && isJSONRPCResultResponse(message) && listId === message.id && Array.isArray(message.result.tools)) {
-      const original = (message.result.tools as Tool[]).filter(tool => tool.name !== DESCRIBE_TOOL && tool.name !== RUN_TOOL);
+      const original = message.result.tools as Tool[];
       this.definitions.clear();
       for (const { name, description, inputSchema } of original) this.definitions.set(name, { name, description, inputSchema });
-      const projection = projectAntigravityCatalog(this.serverName, original, this.budgetBytes);
+      // A server with its own describe_tool or run_tool keeps its catalog; never shadow its tools.
+      const projection = original.some(tool => tool.name === DESCRIBE_TOOL || tool.name === RUN_TOOL)
+        ? { tools: original, hidden: [] }
+        : projectAntigravityCatalog(this.serverName, original, this.budgetBytes);
       this.hidden = new Set(projection.hidden);
+      this.helpers = projection.tools !== original && projection.tools.some(tool => tool.name === DESCRIBE_TOOL);
       return super.send({ ...message, result: { ...message.result, tools: projection.tools } }, options);
     }
     return super.send(message, options);
@@ -244,10 +255,9 @@ export function createCatalogTransport(
   clientName: string,
   serverName: string,
   serverNames: readonly string[],
-  server: McpServer,
   options: StreamableHTTPServerTransportOptions,
 ): StreamableHTTPServerTransport {
   return clientName === ANTIGRAVITY_CLIENT_NAME
-    ? new AntigravityCatalogTransport(options, server, serverName, antigravityServerBudget(serverName, serverNames))
+    ? new AntigravityCatalogTransport(options, serverName, antigravityServerBudget(serverName, serverNames))
     : new StreamableHTTPServerTransport(options);
 }

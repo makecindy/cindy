@@ -953,7 +953,7 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
   // 新 session: 创建 transport + connect 到新的 mcp server (transport 跟 server 1:1
   // 绑定；McpServer/Protocol 实例不允许并发/重复 connect)。
   const mcpServer = createMcpServer();
-  const transport = createCatalogTransport(body.params.clientInfo.name, serverName, opts.serverNames, mcpServer, {
+  const transport = createCatalogTransport(body.params.clientInfo.name, serverName, opts.serverNames, {
     sessionIdGenerator: () => randomUUID(),
     onsessioninitialized: (newId) => {
       transports.set(newId, { transport, mcpServer, ownerSessionId, ownerSessionInstanceId });

@@ -1,8 +1,13 @@
 import { registerAppServer, clearAppServerConfigs } from '../../mcp-apps/runtime.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { ANTIGRAVITY_TOTAL_DECLARATION_BYTES } from '../antigravityToolCatalog.js';
+import { COMPANION_CONNECTIONS_MCP_NAME, createCompanionConnectionsProvider } from '../../bot-import/connectionProvider.js';
+// The companion provider's catalog code is real; only its import-setup host and session store are
+// replaced, because loading them costs ~15 s of collection and no case here has a companion session.
+vi.mock('../../bot-import/host.js', () => ({ continueCompanionImport: vi.fn(), getCompanionImportSetupStatus: vi.fn(), useCindyImportSettings: vi.fn() }));
+vi.mock('../../bot-import/runtime.js', () => ({ readCompanionSessionDiscovery: vi.fn(async () => undefined), readCompanionSessionEnvironment: vi.fn(async () => undefined), readCompanionSessionScope: vi.fn(async () => undefined) }));
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -243,12 +248,32 @@ describe('codexHttpBridge', () => {
   //   （google-antigravity/antigravity-cli#1530），ghost_call、cindy_scheduler.call_tool 因此不可调用。
   // - 现有覆盖缺口：其他用例只验证普通客户端的完整目录。
   // - 最小失败输入：16 个服务、每个都有几 KB 声明的目录；旧实现原样下发，总量远超预算。
+  //   自己安装 tools/list / tools/call 处理器的服务（companion_connections 的生产 provider、
+  //   与 mcp-apps/serverProxy.ts 同样写法的代理）在 agy 下曾因 registerTool 冲突而初始化失败。
   // - tier：unit（回环端口、内存服务器，无外部进程）。实测约 1 秒。
   it('keeps every agy catalog within the shared budget while full help and normal calls still work', async () => {
     const run = vi.fn(async (args: Record<string, unknown>) => ({ content: [{ type: 'text' as const, text: `ran ${String(args.plugin)}` }] }));
     const long = (topic: string) => `${topic}. ${'Detailed guidance for this tool. '.repeat(40)}`;
-    const serverNames = ['cindy', 'cindy_orca', 'cindy_helper', 'cindy_scheduler', ...Array.from({ length: 12 }, (_, i) => `extra_${i}`)];
+    const serverNames = ['cindy', 'cindy_orca', 'cindy_helper', 'cindy_scheduler', 'app_proxy', COMPANION_CONNECTIONS_MCP_NAME,
+      ...Array.from({ length: 10 }, (_, i) => `extra_${i}`)];
+    const proxied = Array.from({ length: 8 }, (_, i) => ({
+      name: `upstream_${i}`, description: long(`Upstream ${i}`),
+      inputSchema: { type: 'object' as const, properties: { plugin: { type: 'string' } }, required: ['plugin'] },
+    }));
+    const proxyCall = vi.fn(async (request: { params: { name: string; arguments?: Record<string, unknown> } }) => ({
+      content: [{ type: 'text' as const, text: `proxied ${request.params.name} ${String(request.params.arguments?.plugin)}` }],
+    }));
     const serverFactories = Object.fromEntries(serverNames.map(name => [name, () => {
+      if (name === COMPANION_CONNECTIONS_MCP_NAME) {
+        return (createCompanionConnectionsProvider().toClaudeSdkConfig!({} as never) as { instance: McpServer }).instance;
+      }
+      if (name === 'app_proxy') {
+        // Same construction as the MCP App proxy: its own discovery and execution handlers.
+        const server = new McpServer({ name, version: '1.0.0' }, { capabilities: { tools: {} } });
+        server.server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: proxied }));
+        server.server.setRequestHandler(CallToolRequestSchema, proxyCall);
+        return server;
+      }
       const server = new McpServer({ name, version: '1.0.0' });
       const plain = { title: z.string(), note: z.string().optional() };
       if (name === 'cindy') {
@@ -284,6 +309,14 @@ describe('codexHttpBridge', () => {
       expect(names(0)).toEqual(expect.arrayContaining(['ghost_call', 'ghost_info', 'describe_tool', 'run_tool']));
       expect(names(0)).not.toContain('cindy_rare_0');
       expect(names(3)).toEqual(['list_tools', 'call_tool']);
+      expect(names(4)).toEqual(['describe_tool', 'run_tool']);
+      expect(names(5)).toEqual([]);
+      const proxy = clients[4]!;
+      expect(JSON.parse(((await proxy.callTool({ name: 'describe_tool', arguments: { name: 'upstream_3' } })).content as [{ text: string }])[0].text))
+        .toEqual(proxied[3]);
+      expect((await proxy.callTool({ name: 'run_tool', arguments: { name: 'upstream_3', arguments: { plugin: 'docs' } } })).content)
+        .toEqual([{ type: 'text', text: 'proxied upstream_3 docs' }]);
+      expect(proxyCall).toHaveBeenCalledOnce();
 
       const full = (await ordinary.listTools()).tools;
       expect(full.map(tool => tool.name)).not.toContain('describe_tool');
