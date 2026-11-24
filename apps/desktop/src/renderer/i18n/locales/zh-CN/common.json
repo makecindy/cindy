@@ -16390,7 +16390,13 @@
       "open": "打开任务「{{title}}」",
       "untitled": "未命名任务",
       "startedOne": "开了任务",
-      "handedToOne": "交给任务"
+      "handedToOne": "交给任务",
+      "status": {
+        "running": "运行中",
+        "needsAction": "待确认",
+        "error": "出错",
+        "idle": "空闲"
+      }
     },
     "botTaskLetter": {
       "replied": "回信",

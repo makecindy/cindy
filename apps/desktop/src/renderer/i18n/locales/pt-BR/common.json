@@ -16617,7 +16617,13 @@
       "open": "Abrir a tarefa “{{title}}”",
       "untitled": "Tarefa sem título",
       "startedOne": "Iniciada",
-      "handedToOne": "Repassada a"
+      "handedToOne": "Repassada a",
+      "status": {
+        "running": "Em execução",
+        "needsAction": "Aguardando você",
+        "error": "Erro",
+        "idle": "Inativa"
+      }
     },
     "botTaskLetter": {
       "replied": "respondeu",
