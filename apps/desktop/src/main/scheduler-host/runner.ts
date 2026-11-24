@@ -1327,7 +1327,15 @@ export class MakerScheduleRunner implements ScheduleRunner {
             }
           : undefined;
       if (selection && this.deps.schedulerQueue?.isSessionBusy(sessionId)) {
-        return this.failOrDeferSessionRunning(schedule, ctx, sessionId, true);
+        // 目标会话正忙。引擎会重试的行(recurring && active && !manual)按原语义顺延;
+        // 不能顺延的行(一次性 / manual / 已 expired)不能失败 —— 失败会把这次触发
+        // 变成「十几毫秒就记 failed、schedule 直接 expired、提示词从未派发」的
+        // 一次性自动化(#12544)。这类行保留本轮继续往下走:任务切换租约在会话正忙
+        // 时按设计拒绝抢占当前回合(抛 ScheduledModelSelectionBusyError),随后由
+        // B1.5 的排队窗口接手 —— 会话空闲后由排队派发应用本轮的来源/模型/强度。
+        if (this.canDefer(schedule, ctx)) {
+          return this.failOrDeferSessionRunning(schedule, ctx, sessionId, true);
+        }
       }
       if (selection && !this.deps.acquirePendingAgentSwitch) {
         throw new Error('Scheduled model selection is not available');
@@ -1345,10 +1353,14 @@ export class MakerScheduleRunner implements ScheduleRunner {
           resolvedSelection = lease.selection;
         }
       } catch (error) {
-        if (error instanceof ScheduledModelSelectionBusyError) {
+        if (!(error instanceof ScheduledModelSelectionBusyError)) throw error;
+        // 会话正忙 → 任务切换流程按设计不抢占当前回合(绑定自动化遇忙顺延的规则,
+        // docs/product-rules/model-selector-unified.md)。能顺延的行按原语义顺延;
+        // 不能顺延的行保留本轮,交给 B1.5 的排队窗口(#12544):提示词留在会话队列里,
+        // 会话空闲后由排队派发在取得发送锁时应用本轮的来源/模型/强度。
+        if (this.canDefer(schedule, ctx)) {
           return this.failOrDeferSessionRunning(schedule, ctx, sessionId, true);
         }
-        throw error;
       }
       throwIfFireAborted(ctx.signal, 'credential switch setup');
       const [meta, row] = await Promise.all([
@@ -1446,6 +1458,27 @@ export class MakerScheduleRunner implements ScheduleRunner {
         // 用户空闲再说。桥未注入(测试/启动早期)时走原直发路径,行为不变。
         if (this.deps.schedulerQueue?.isSessionBusy(sessionId)) {
           if (selection) {
+            // 显式模型选择的撞忙处理:
+            // - 引擎会重试的行(recurring && active && !manual)按原语义顺延;
+            // - 不能顺延的行(一次性 / manual / 已 expired)保留本轮,走现有排队窗口
+            //   (30 分钟):提示词留在会话队列里(用户可见可删),会话空闲后由排队
+            //   派发在取得发送锁时应用本轮的来源/模型/强度,恰好投递一次;窗口内
+            //   一直忙则记 skipped / QUEUE_WAIT_TIMEOUT(提示词未派发),运行历史
+            //   指向「立即运行」补跑 —— 不迟发、不静默丢触发(#12544)。
+            //   跨引擎 / 远程位置的显式选择排队路径应用不了(只有任务切换流程能),
+            //   那种情况维持原语义:可见失败。
+            if (!this.canDefer(schedule, ctx)) {
+              const queuedBaseline = this.queuedExplicitRouteBaseline(
+                schedule, selection, resolvedSelection, meta, row, sessionId,
+              );
+              if (queuedBaseline) {
+                holder.releaseAgentSwitchLock?.();
+                holder.releaseAgentSwitchLock = undefined;
+                return await this.fireHeartbeatViaQueue(schedule, ctx, sessionId, holder, queuedBaseline, {
+                  enqueuePrompt,
+                });
+              }
+            }
             holder.releaseAgentSwitchLock?.();
             holder.releaseAgentSwitchLock = undefined;
             return this.failOrDeferSessionRunning(schedule, ctx, sessionId, true);
@@ -2764,6 +2797,61 @@ export class MakerScheduleRunner implements ScheduleRunner {
     return reconciled;
   }
 
+  /**
+   * 本轮显式路由能不能交给排队派发在派发时刻应用;能就返回排队派发要的路由基线,
+   * 不能就返回 null(调用方维持原语义:可见失败)。
+   *
+   * 两种情形:
+   * - 租约已经拿到(resolvedSelection 有值):路由已由任务切换流程应用到会话,排队
+   *   派发在派发时刻核对路由没被改即可(现有 resolvedSelection 围栏)。
+   * - 租约没拿到(会话正忙时任务切换流程按设计拒绝抢占当前回合):本轮显式配置改由
+   *   排队派发在派发时刻热同步(来源/模型/强度/Fast)—— 与直发路径同口径。
+   *   但排队派发不做跨引擎切换、不做远程位置路由,那两件事只有任务切换流程做得了:
+   *   显式 Harness 与绑定会话当前 Harness 不一致、或选了远程位置时不排队。
+   */
+  private queuedExplicitRouteBaseline(
+    schedule: Schedule,
+    selection: ScheduledModelSelection,
+    resolvedSelection: ScheduledModelSelection | undefined,
+    meta: { agentKind?: EngineKind; model?: string; effort?: string; fastMode?: boolean | 'ultrafast' } | null,
+    row: { providerId?: string | null; agentDeviceId?: string | null; remoteHostId?: string | null } | null,
+    sessionId: string,
+  ): {
+    model?: string;
+    agentKind?: EngineKind;
+    effort?: string;
+    fastMode?: boolean | 'ultrafast';
+    explicitFastMode?: boolean | 'ultrafast';
+    resolvedSelection?: ScheduledModelSelection;
+    providerId: string | null;
+  } | null {
+    const live = this.deps.maker.getSession(sessionId);
+    const baseline = {
+      agentKind: meta?.agentKind ?? live?.agentKind,
+      model: meta?.model,
+      effort: meta?.effort,
+      fastMode: meta?.fastMode,
+      providerId: row?.providerId ?? null,
+    };
+    // 租约已应用本轮路由:排队派发照常带 resolvedSelection(派发时刻核对围栏)。
+    if (resolvedSelection) return { ...baseline, resolvedSelection };
+    const liveAgentKind = live?.agentKind ?? meta?.agentKind;
+    const localLocation = !selection.agentDeviceId
+      && !live?.agentDeviceId && !live?.remoteHostId
+      && !row?.agentDeviceId && !row?.remoteHostId;
+    if (!localLocation) return null;
+    if (!liveAgentKind || liveAgentKind !== selection.agentKind) return null;
+    return {
+      ...baseline,
+      // 本轮显式配置:排队派发在派发时刻按它热同步会话的来源/模型/强度/Fast。
+      model: schedule.model?.trim() || baseline.model,
+      effort: schedule.effort ?? undefined,
+      providerId: schedule.providerId?.trim() || row?.providerId || null,
+      explicitFastMode:
+        schedule.fastMode === 'ultrafast' ? 'ultrafast' : schedule.fastMode === true ? true : undefined,
+    };
+  }
+
   private async fireHeartbeatViaQueue(
     schedule: Schedule,
     ctx: FireContext,
@@ -2775,6 +2863,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
       agentKind?: EngineKind;
       effort?: string;
       fastMode?: boolean | 'ultrafast';
+      /** 本轮显式配置的 Fast:租约没拿到(会话正忙改走排队窗口)时由排队派发落地。 */
+      explicitFastMode?: boolean | 'ultrafast';
       resolvedSelection?: ScheduledModelSelection;
       providerId: string | null;
     },
@@ -2819,6 +2909,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
       agentKind?: EngineKind;
       effort?: string;
       fastMode?: boolean | 'ultrafast';
+      /** 本轮显式配置的 Fast:租约没拿到(会话正忙改走排队窗口)时由排队派发落地。 */
+      explicitFastMode?: boolean | 'ultrafast';
       resolvedSelection?: ScheduledModelSelection;
       providerId: string | null;
     },
@@ -3525,6 +3617,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
       agentKind?: EngineKind;
       effort?: string;
       fastMode?: boolean | 'ultrafast';
+      /** 本轮显式配置的 Fast:租约没拿到(会话正忙改走排队窗口)时由排队派发落地。 */
+      explicitFastMode?: boolean | 'ultrafast';
       resolvedSelection?: ScheduledModelSelection;
       providerId: string | null;
     },
@@ -3786,13 +3880,20 @@ export class MakerScheduleRunner implements ScheduleRunner {
     if (resolvedSelection && effortApplied) {
       setSessionEffort(live.id, resolvedSelection.effort);
     }
-    if (resolvedSelection && live.agentKind === 'codex') {
+    // 显式 Fast:租约解析出的选择优先;租约没拿到(会话正忙,本轮改走排队窗口,
+    // 路由由排队派发在派发时刻热同步)时用本轮显式配置的 Fast —— 与直发路径同口径,
+    // 别让排队窗口把 Fast 丢掉。
+    const queuedFastMode = resolvedSelection ? resolvedSelection.fastMode : baseline.explicitFastMode;
+    if (queuedFastMode !== undefined && live.agentKind === 'codex') {
       try {
-        await live.setFastMode(resolvedSelection.fastMode);
+        await live.setFastMode(queuedFastMode);
       } catch (err) {
-        throw new QueuedRouteDisabledError('Scheduled Fast selection could not be applied', {
-          cause: err,
-        });
+        if (resolvedSelection) {
+          throw new QueuedRouteDisabledError('Scheduled Fast selection could not be applied', {
+            cause: err,
+          });
+        }
+        this.deps.logger.warn('[runner] queued heartbeat setFastMode failed (non-fatal)', err);
       }
     }
     // applyProviderId = 裁决后的落地来源:显式来源(通过裁决)或隐式默认被停用时的
@@ -3817,7 +3918,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           permissionMode: null,
           model: modelChanged && modelApplied ? targetModel : undefined,
           effort: effortChanged && effortApplied ? reconciledEffort : undefined,
-          fastMode: resolvedSelection?.fastMode,
+          fastMode: resolvedSelection?.fastMode ?? baseline.explicitFastMode,
           providerId: applyProviderId ?? undefined,
         },
         this.deps.logger,

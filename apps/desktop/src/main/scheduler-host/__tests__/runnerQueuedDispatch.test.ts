@@ -2636,6 +2636,131 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     expect(queue.enqueueCalls).toHaveLength(0);
   });
 
+  // #12544 / unit: 一次性自动触发绑定忙碌的本机会话并显式指定模型时,旧实现十几毫秒
+  // 就记 SESSION_RUNNING 失败、把 schedule 标成 expired —— 提示词从未派发,用户也补跑
+  // 不了。修复:本轮保留,走现有排队窗口(30 分钟);会话空闲后由排队派发在取得发送锁
+  // 时应用本轮的来源/模型/强度,恰好投递一次。
+  //
+  // - 生产入口与可观察结果:MakerScheduleRunner.fire(一次性 heartbeat)—— 运行历史里
+  //   这一轮不是 failed,而是会话空闲后照常送达(会话里出现这条提示词)。
+  // - Bug 依据:#12544(一次性自动化 + 显式模型 + 目标会话在跑 turn)。
+  // - 现有覆盖缺口:runnerDefer.test.ts 覆盖「能顺延」与「send 阶段抛 SESSION_RUNNING」;
+  //   「入队前的撞忙预检 + 不能顺延」这条分支没有用例(上面那条只钉了 recurring 的顺延)。
+  // - 最小失败输入:recurring:false + modelAgentKind/model 齐全 + 会话正忙。
+  // - tier:unit(内存 host + 假 session + 假队列);等待用假时钟推进,不真实睡。
+  it('一次性触发撞上忙碌会话:保留本轮进排队窗口,空闲后按本轮模型恰好投递一次', async () => {
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    Object.assign(h.session, { agentKind: 'codex', model: 'gpt-5.4' });
+    const queue = createQueueHarness({ busy: true });
+    const acquirePendingAgentSwitch = vi.fn(async () => {
+      // 会话正忙 → 任务切换流程按设计不抢占当前回合(绑定自动化遇忙顺延的规则)。
+      throw new ScheduledModelSelectionBusyError('Scheduled model selection waits for the current turn');
+    });
+    const { runner } = createRunnerHarness(h.session, queue.deps, {
+      acquirePendingAgentSwitch,
+      availableModels: [{ id: 'gpt-6.2-astra', efforts: ['high'], defaultEffort: null }],
+    });
+
+    const firePromise = runner.fire(
+      heartbeatSchedule({
+        recurring: false, // 一次性:引擎不会重试这一轮 → 不能顺延
+        agentKind: 'codex',
+        modelAgentKind: 'codex',
+        model: 'gpt-6.2-astra',
+        providerId: 'openai',
+        effort: 'high',
+      }),
+      createFireContext(),
+    );
+
+    // 保留本轮:提示词进会话队列,恰好一次(旧实现这里是十几毫秒就记 failed)。
+    await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
+    expect(acquirePendingAgentSwitch).toHaveBeenCalled();
+    // 等待期间不改用户回合的配置,也不发送。
+    expect(h.setModel).not.toHaveBeenCalled();
+    expect(h.send).not.toHaveBeenCalled();
+
+    // 会话空闲后由排队派发在取得发送锁时应用本轮的来源/模型/强度。
+    await queue.accept();
+    expect(h.setModel).toHaveBeenCalledWith('gpt-6.2-astra');
+    expect(h.setEffort).toHaveBeenCalledWith('high');
+    expect(mocks.setSessionProvider).toHaveBeenCalledWith(SESSION_ID, 'openai');
+
+    h.emit({ type: 'done', data: {}, source: 'codex' });
+    await expect(firePromise).resolves.toMatchObject({ sessionId: SESSION_ID });
+    // 仅投递一次。
+    expect(queue.enqueueCalls).toHaveLength(1);
+  });
+
+  it('一次性触发一直忙到排队窗口上限:记未派发(可补跑),不迟发', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createSessionHarness(async () => ({ accepted: true }));
+      Object.assign(h.session, { agentKind: 'codex', model: 'gpt-5.4' });
+      const queue = createQueueHarness({ busy: true });
+      const { runner } = createRunnerHarness(h.session, queue.deps, {
+        acquirePendingAgentSwitch: async () => {
+          throw new ScheduledModelSelectionBusyError('Scheduled model selection waits for the current turn');
+        },
+        availableModels: [{ id: 'gpt-6.2-astra', efforts: ['high'], defaultEffort: null }],
+      });
+
+      const firePromise = runner.fire(
+        heartbeatSchedule({
+          recurring: false,
+          agentKind: 'codex',
+          modelAgentKind: 'codex',
+          model: 'gpt-6.2-astra',
+          providerId: 'openai',
+          effort: 'high',
+        }),
+        createFireContext(),
+      );
+      await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
+      await vi.advanceTimersByTimeAsync(
+        QUEUED_DISPATCH_MAX_WAIT_MS + QUEUED_DISPATCH_TRACK_POLL_MS,
+      );
+
+      // 窗口耗尽:历史里说明是等待超时、提示词未派发(可用「立即运行」补跑)。
+      await expect(firePromise).resolves.toMatchObject({
+        sessionId: SESSION_ID,
+        skipped: true,
+        resultText: expect.stringContaining('[QUEUE_WAIT_TIMEOUT]'),
+      });
+      // 超时后即使会话恢复空闲也不迟发。
+      await queue.accept();
+      expect(h.send).not.toHaveBeenCalled();
+      expect(h.setModel).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('跨引擎的显式选择排队路径应用不了:维持原语义(可见失败,不排队)', async () => {
+    // 排队派发只热同步来源/模型/强度,跨引擎切换只有任务切换流程做得了 ——
+    // 那种情况不排队,避免用错引擎把提示词发出去。
+    const h = createSessionHarness(async () => ({ accepted: true })); // 会话是 claude-code
+    const queue = createQueueHarness({ busy: true });
+    const { runner, notifier } = createRunnerHarness(h.session, queue.deps, {
+      acquirePendingAgentSwitch: async () => {
+        throw new ScheduledModelSelectionBusyError('Scheduled model selection waits for the current turn');
+      },
+    });
+
+    await expect(runner.fire(
+      heartbeatSchedule({
+        recurring: false,
+        agentKind: 'codex',
+        modelAgentKind: 'codex',
+        model: 'gpt-6.2-astra',
+      }),
+      createFireContext(),
+    )).rejects.toThrow(/SESSION_RUNNING/);
+
+    expect(queue.enqueueCalls).toHaveLength(0);
+    expect(notifier.notify).toHaveBeenCalled();
+  });
+
   it('busy 心跳跨 dynamic identity 时不入旧 thread 队列，而是顺延到安全重建点', async () => {
     const [routeA, routeB] = queuedImageGenerationRoutes;
     setCodexAppliedCustomProviderRoutes(queuedImageGenerationRoutes);
