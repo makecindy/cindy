@@ -41,6 +41,7 @@ export async function readCodexThreadMcpServersTools(
   const missing = new Set(serverNames);
   const reports = new Map<string, AgentMcpServerToolsReport>();
   if (!missing.size) return reports;
+  const serverName = missing.size === 1 ? serverNames[0] : undefined;
   const deadline = Date.now() + timeoutMs;
   const seenCursors = new Set<string>();
   let cursor: string | null = null;
@@ -49,7 +50,7 @@ export async function readCodexThreadMcpServersTools(
     if (remainingMs <= 0) throw new Error('Codex MCP status timed out');
     const status: CodexMcpServerStatusListResponse = await request<CodexMcpServerStatusListResponse>(
       Method.McpServerStatusList,
-      { cursor, limit: 100, detail: 'toolsAndAuthOnly', threadId, serverName },
+      { cursor, limit: 100, detail: 'toolsAndAuthOnly', threadId, ...(serverName === undefined ? {} : { serverName }) },
       { timeoutMs: remainingMs },
     );
     for (const server of status.data) {
