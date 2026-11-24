@@ -2907,7 +2907,7 @@ export class PiAgent extends BaseAgent {
       providerId: string | null | undefined,
       model: string,
       resolveFailed = false,
-    ): providerId is string => {
+    ): boolean => {
       if (!providerId || NON_BYOM_PROVIDER_IDS.has(providerId)) return false;
       if (resolveFailed) return true;
       const native = nativeProviderForSource(providerId);
@@ -2924,6 +2924,12 @@ export class PiAgent extends BaseAgent {
       );
     }
     const initialProvider = resolveProviderForModel(opts.model, opts.providerId);
+    // Local proxy tokens for the gateway carry no provider grant. An explicit OpenAI
+    // session needs the matching subscription route before any process can use that token.
+    if (!opts.remoteHostId && this.deps.registerPiProxySession &&
+        opts.providerId === 'openai' && initialProvider === PI_PROVIDER_ID) {
+      throw new Error(`pi: the OpenAI subscription cannot serve model '${opts.model}' in the current Pi catalog`);
+    }
     // Loopback is interpreted on the execution host. Shared-loopback topologies can reach
     // the configured endpoint, so require a host-side probe rather than rejecting its name.
     // Only hostProxyForward authorizes forwarding to Desktop; never infer that ownership

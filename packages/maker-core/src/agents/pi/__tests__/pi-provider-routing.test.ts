@@ -8148,6 +8148,21 @@ describe("Pi provider-aware model routing", () => {
     await handle.close();
   });
 
+  // #12651, unit: an empty subscription snapshot previously spawned the gateway for a ChatGPT selection.
+  it("rejects an unavailable local ChatGPT subscription route before launch", async () => {
+    const agent = new PiAgent({
+      ...byomDeps(async () => ({ providers: [], env: {} })),
+      registerPiProxySession: () => () => {},
+    });
+    await expect(agent.startSession({
+      sessionId: "missing-chatgpt-route",
+      workingDir: cwd,
+      model: "chatgpt/gpt-6.2-sol",
+      providerId: "openai",
+    })).rejects.toThrow(/OpenAI subscription.*chatgpt\/gpt-6\.2-sol/);
+    expect(captured.args).toEqual([]);
+  });
+
   it("does not fail closed for a gateway/subscription route when native resolution throws", async () => {
     // openai(订阅直连)在 nativeProviders 缺席是正常的,应照常走网关块,不触发 BYOM 拦截。
     const agent = new PiAgent(
