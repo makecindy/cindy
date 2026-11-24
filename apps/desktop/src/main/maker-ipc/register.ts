@@ -882,6 +882,7 @@ import {
   getWorkerCreationSelection,
   getWorkerRolesMirror,
   getSelectedNewMakerRoute,
+  getGroupAssistantPluginSelection,
   getWorkerPermissionModeFromCreationPrefs,
   type ProviderModelMemorySnapshot,
   syncNewMakerDraftCache,
@@ -12340,7 +12341,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
      * reconcileCreateOptsAgainstDb 再读当前落库档位,不使用入队时的旧快照。
      */
     resumeWithStoredPermissionMode?: boolean;
-  }, hostDispatch?: 'bot' | 'group'): Promise<SendToSessionInternalResult> {
+  }, hostDispatch?: 'bot' | 'group' | 'group-assistant'): Promise<SendToSessionInternalResult> {
     await assertTaskActionCurrent();
     if (hasTaskActionAuthorization()) params = { ...params, forceQueue: true };
     const {
@@ -12795,7 +12796,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         };
       }
       // The group dispatcher owns the turn and publishes its reply from this group lane.
-      const managedGroupTurn = hostDispatch === 'group' && dispatchCompanionLink?.role === 'group';
+      const managedGroupTurn = (hostDispatch === 'group' && dispatchCompanionLink?.role === 'group')
+        || (hostDispatch === 'group-assistant' && !dispatchCompanionLink);
       if (meta.agentKind === 'acp' && params.origin?.kind !== 'orca' && !managedGroupTurn) {
         return {
           ok: false as const,
@@ -13293,7 +13295,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
      * permission mode (and Plan), never bypass.
      */
     resumeWithStoredPermissionMode?: boolean;
-  }, hostDispatch: 'bot' | 'group' = 'bot') => {
+  }, hostDispatch: 'bot' | 'group' | 'group-assistant' = 'bot') => {
     if (params.clientId && params.authorizationGuard) {
       const delivery = await resolveBotAuthorizationDelivery(params.clientId, async (clientId) => {
         const [row] = await getDbClient().drizzle
@@ -13626,7 +13628,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return { ok: false as const, errorCode: 'LANE_UNAVAILABLE', message: error instanceof Error ? error.message : String(error) };
       }
     },
-    dispatch: ({ targetSessionId, message, persistedContent, autoReviewUserText, origin, clientId, attachments, toolsDisabled, resumeWithStoredPermissionMode, assertDispatchCurrent, onQueued, onAccepted }) =>
+    dispatch: ({ groupAssistantTask, targetSessionId, message, persistedContent, autoReviewUserText, origin, clientId, attachments, toolsDisabled, resumeWithStoredPermissionMode, assertDispatchCurrent, onQueued, onAccepted }) =>
       dispatchBotSessionMessage({
         targetSessionId,
         message,
@@ -13641,7 +13643,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // Same attachment shape as a task message: images by their media address, files by path.
         files: attachments?.map(toTaskFile),
         onAccepted,
-      }, 'group'),
+      }, groupAssistantTask ? 'group-assistant' : 'group'),
     prepareAttachments: botGroupAttachments.prepare,
     abortLane: async (sessionId, inputClientId) => {
       if (!inputClientId) return stopSessionTurnExplicitly(sessionId);
@@ -13692,9 +13694,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           const stored = row?.workspaceKind === 'project' ? row.projectDir ?? row.workingDir : null;
           if (row?.status === 'active' && stored === projectDir) return { ok: true as const, sessionId, created: false };
         }
-        const route = getSelectedNewMakerRoute(activeOwnerScopeKey());
+        const ownerScope = activeOwnerScopeKey();
+        const pluginSelection = getGroupAssistantPluginSelection(ownerScope);
+        const route = getSelectedNewMakerRoute(ownerScope);
         const agentKind = route ? (route.harness === 'claude' ? 'claude-code' : route.harness) : undefined;
         const { row } = await (async () => {
+          if (pluginSelection) {
+            const { model, effort, permissionMode } = admitPluginEngineSwitchTarget(pluginSelection, listPluginEngineViews());
+            return openSession({ assertCurrent: assertOwner, body: { title, projectDir,
+              workspaceKind: projectDir ? 'project' : 'dialogue', workingDir: projectDir ?? undefined, agentKind: 'acp', providerId: pluginSelection.providerId,
+              model, effort, permissionMode } });
+          }
           try {
             return await openSession({ assertCurrent: assertOwner, body: {
               title, projectDir, workspaceKind: projectDir ? 'project' : 'dialogue', workingDir: projectDir ?? undefined,
