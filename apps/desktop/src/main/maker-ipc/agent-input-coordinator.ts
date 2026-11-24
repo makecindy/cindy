@@ -7775,7 +7775,6 @@ export class AgentInputCoordinator {
       return;
     }
     state.error = null;
-    state.detachedSteerPersistenceError = null;
     clearErrorProjectionSignals(state);
     state.stickyError = null;
     state.recovery = null;

@@ -15055,7 +15055,7 @@ describe('Orca report durable recovery', () => {
   // One blocked read and one ACK suffice to lose the first Retry dispatch.
   // A rejected steer write before Stop must stay visible once Stop cancels recovery.
   it.each([
-    'before-backoff', 'after-backoff', 'after-close', 'after-takeover',
+    'before-backoff', 'after-backoff', 'after-close', 'after-takeover', 'before-takeover',
     'before-stopped-write', 'before-stop', 'before-unconfirmed-continue',
     'before-replacement-failure', 'after-dismissal', 'after-manual-retry',
     'during-manual-progress-read', 'during-manual-snapshot-read',
@@ -15192,11 +15192,21 @@ describe('Orca report durable recovery', () => {
         expect(h.sendToAgent).not.toHaveBeenCalled();
         return;
       }
+      if (timing === 'before-takeover') {
+        expect(h.coordinator.isContinuationOnlyAutoResume('worker')).toBe(true);
+        expect(h.sendToAgent).not.toHaveBeenCalled();
+        h.coordinator.enqueue('worker', makeItem('takeover', 'My next instruction'));
+      }
       await vi.advanceTimersByTimeAsync(10_000);
       expect(h.sendToAgent).toHaveBeenCalledOnce();
       expect(h.sendToAgent.mock.lastCall?.[1]).toEqual({
-        type: 'user', content: timing === 'after-takeover' ? 'My next instruction' : CONTINUE_AFTER_ERROR_PROMPT,
+        type: 'user', content: timing === 'after-takeover' || timing === 'before-takeover'
+          ? 'My next instruction' : CONTINUE_AFTER_ERROR_PROMPT,
       });
+      if (timing === 'before-takeover') {
+        expect(h.coordinator.getProjection('worker').error).toBe('Failed to persist user message: steer row unavailable');
+        expect(h.coordinator.clearError('worker').error).toBeNull();
+      }
       if (timing === 'before-unconfirmed-continue') {
         expect(h.coordinator.getProjection('worker').error).toBe('Continue delivery unconfirmed');
         expect(h.coordinator.clearError('worker').error).toBe('Failed to persist user message: steer row unavailable');
