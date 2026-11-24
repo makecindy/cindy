@@ -18008,7 +18008,14 @@
             "unknown": "Warte auf Statusmeldung des Plugins"
           }
         },
-        "prSource": "GitHub · Bestimmter Pull Request"
+        "scopeLabel": "Umfang",
+        "scope": {
+          "repository": "Gesamtes Repository",
+          "repositoryHint": "Läuft bei neuen Repository-Ereignissen, z. B. neuen Pull Requests, Kommentaren oder abgeschlossener CI.",
+          "pullRequest": "Bestimmter Pull Request",
+          "pullRequestHint": "Beobachtet einen Pull Request und läuft nur, wenn sich sein Status tatsächlich ändert, z. B. gemergt oder neue Reviews.",
+          "repositoryNeedsAccount": "Melde dich bei einem Cindy-Konto an, um Repository-Ereignisse zu empfangen."
+        }
       },
       "trigger": {
         "label": "Auslöseart",

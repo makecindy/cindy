@@ -18174,7 +18174,14 @@
             "unknown": "Esperando el estado del complemento"
           }
         },
-        "prSource": "GitHub · Pull request concreto"
+        "scopeLabel": "Alcance",
+        "scope": {
+          "repository": "Todo el repositorio",
+          "repositoryHint": "Se ejecuta con nuevos eventos del repositorio, como pull requests, comentarios o CI terminada.",
+          "pullRequest": "Pull request concreto",
+          "pullRequestHint": "Vigila un pull request y solo se ejecuta cuando su estado cambia de verdad, como fusionado o nuevas revisiones.",
+          "repositoryNeedsAccount": "Inicia sesión en una cuenta de Cindy para recibir eventos del repositorio."
+        }
       },
       "trigger": {
         "label": "Modo de activación",

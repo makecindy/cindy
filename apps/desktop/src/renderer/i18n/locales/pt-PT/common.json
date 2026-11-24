@@ -18174,7 +18174,14 @@
             "unknown": "A aguardar o estado do plugin"
           }
         },
-        "prSource": "GitHub · Pull request específico"
+        "scopeLabel": "Âmbito",
+        "scope": {
+          "repository": "Repositório inteiro",
+          "repositoryHint": "Executa com novos eventos do repositório, como pull requests, comentários ou CI concluída.",
+          "pullRequest": "Pull request específico",
+          "pullRequestHint": "Acompanha um pull request e só executa quando o estado muda de facto, como integrado ou novas revisões.",
+          "repositoryNeedsAccount": "Inicie sessão numa conta Cindy para receber eventos do repositório."
+        }
       },
       "trigger": {
         "label": "Modo de acionamento",

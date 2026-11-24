@@ -17934,7 +17934,14 @@
             "unknown": "플러그인 상태 보고를 기다리는 중"
           }
         },
-        "prSource": "GitHub · 특정 PR"
+        "scopeLabel": "범위",
+        "scope": {
+          "repository": "저장소 전체",
+          "repositoryHint": "새 PR, 댓글, CI 완료 등 저장소에 새 이벤트가 생기면 실행합니다.",
+          "pullRequest": "특정 PR",
+          "pullRequestHint": "PR 하나만 지켜보고 병합, 새 리뷰 등 상태가 실제로 바뀔 때만 실행합니다.",
+          "repositoryNeedsAccount": "저장소 이벤트를 받으려면 Cindy 계정에 로그인해야 합니다."
+        }
       },
       "trigger": {
         "label": "트리거 방식",

@@ -17934,7 +17934,14 @@
             "unknown": "等待插件报告状态"
           }
         },
-        "prSource": "GitHub · 指定 PR"
+        "scopeLabel": "范围",
+        "scope": {
+          "repository": "整个仓库",
+          "repositoryHint": "仓库里有新事件时运行，例如新 PR、评论、CI 完成。",
+          "pullRequest": "指定 PR",
+          "pullRequestHint": "只盯一条 PR，状态确实变化时才运行，例如已合并、有新评审。",
+          "repositoryNeedsAccount": "需要登录 Cindy 账号才能接收仓库事件。"
+        }
       },
       "trigger": {
         "label": "触发方式",

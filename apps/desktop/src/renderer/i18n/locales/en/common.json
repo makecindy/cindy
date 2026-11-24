@@ -18008,7 +18008,14 @@
             "unknown": "Waiting for the plugin to report"
           }
         },
-        "prSource": "GitHub · Specific pull request"
+        "scopeLabel": "Scope",
+        "scope": {
+          "repository": "Whole repository",
+          "repositoryHint": "Runs on new repository events, such as new pull requests, comments or finished CI.",
+          "pullRequest": "Specific pull request",
+          "pullRequestHint": "Watches one pull request and runs only when its state actually changes, such as merged or new reviews.",
+          "repositoryNeedsAccount": "Sign in to a Cindy account to receive repository events."
+        }
       },
       "trigger": {
         "label": "Trigger mode",

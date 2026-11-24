@@ -65,20 +65,27 @@ export function WebhookSourceFields({
   const appSource = preset === 'github-app';
   const pluginSource = preset === 'plugin';
   const prSource = preset === 'github-pr';
-  const githubSource = appSource || preset === 'github';
-  const known = appSource || pluginSource || prSource || preset === 'custom' || SCHEDULE_WEBHOOK_PRESETS.some((item) => item.id === preset);
+  // GitHub is one sender; its scope is the whole repository (App or manual Webhook) or a single PR.
+  const repositorySource = appSource || preset === 'github';
+  const githubSource = repositorySource || prSource;
+  // Remembers the repository connection so switching scope back keeps the user's choice.
+  const [lastRepositoryPreset, setLastRepositoryPreset] = useState<'github-app' | 'github'>(preset === 'github' ? 'github' : 'github-app');
+  const scopeId = useId();
+  const known = githubSource || pluginSource || preset === 'custom' || SCHEDULE_WEBHOOK_PRESETS.some((item) => item.id === preset);
   const pluginOption = pluginSource || (pluginCandidates?.length ?? 0) > 0
     ? [{ value: 'plugin', label: t('scheduler.editor.webhook.plugin.source') }] : [];
-  // A single PR is watched by this computer itself: no receiver address, secret or Cindy account.
-  const prOption = { value: 'github-pr', label: t('scheduler.editor.webhook.prSource') };
+  const githubOption = { value: 'github', label: SCHEDULE_WEBHOOK_PRESETS.find((item) => item.id === 'github')?.label ?? 'GitHub' };
   const options = addressSourcesAvailable ? [
-    ...SCHEDULE_WEBHOOK_PRESETS.flatMap((item) => item.id === 'github'
-      ? [{ value: item.id, label: item.label }, prOption] : [{ value: item.id, label: item.label }]),
+    ...SCHEDULE_WEBHOOK_PRESETS.map((item) => ({ value: item.id, label: item.label })),
     { value: 'custom', label: t('scheduler.editor.webhook.sourceCustom') },
     ...pluginOption,
     // 更新的版本写入的发送方：照原样显示，不改就不会被覆盖。
     ...(known ? [] : [{ value: preset, label: preset }]),
-  ] : [...pluginOption, prOption];
+  ] : [...pluginOption, githubOption];
+  const chooseRepositoryPreset = (value: 'github-app' | 'github') => {
+    setLastRepositoryPreset(value);
+    onPresetChange(value);
+  };
   const formatInvalid =
     preset === 'custom' && formatText.trim() !== '' && !parseWebhookFormatText(formatText);
 
@@ -91,15 +98,38 @@ export function WebhookSourceFields({
               {...control}
               label={t('scheduler.editor.webhook.sourceLabel')}
               className="w-full"
-              value={appSource ? 'github' : preset}
+              value={githubSource ? 'github' : preset}
               options={options}
-              onValueChange={(value) => onPresetChange(value === 'github' ? (githubSource ? preset : 'github-app') : value)}
+              // A single PR needs no account; repository scope needs a receiver on this computer.
+              onValueChange={(value) => onPresetChange(value === 'github'
+                ? (githubSource ? preset : addressSourcesAvailable ? lastRepositoryPreset : 'github-pr') : value)}
             />
           )}
         </FormField>
       </div>
-      {prSource && prFields}
       {githubSource && (
+        <fieldset className="flex min-w-0 flex-col gap-3">
+          <legend className="mb-2 text-13 font-medium text-[var(--text-primary)]">{t('scheduler.editor.webhook.scopeLabel')}</legend>
+          {(['repository', 'pullRequest'] as const).map((scope) => {
+            const checked = scope === 'pullRequest' ? prSource : repositorySource;
+            const disabled = scope === 'repository' && !addressSourcesAvailable && !repositorySource;
+            const label = t(`scheduler.editor.webhook.scope.${scope}`);
+            const hint = disabled ? t('scheduler.editor.webhook.scope.repositoryNeedsAccount') : t(`scheduler.editor.webhook.scope.${scope}Hint`);
+            return <label key={scope} className={cn('flex min-w-0 items-start gap-2 py-1 text-13 text-[var(--text-primary)]',
+              disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer')}>
+              <input type="radio" name={scopeId} checked={checked} disabled={disabled} aria-label={label}
+                aria-describedby={`${scopeId}-${scope}`} className="mt-1 shrink-0 accent-[var(--text-primary)]"
+                onChange={() => (scope === 'pullRequest' ? onPresetChange('github-pr') : onPresetChange(lastRepositoryPreset))} />
+              <span className="min-w-0">
+                <span>{label}</span>
+                <span id={`${scopeId}-${scope}`} className={`mt-1 block ${hintClass}`}>{hint}</span>
+              </span>
+            </label>;
+          })}
+        </fieldset>
+      )}
+      {prSource && prFields}
+      {repositorySource && (
         <fieldset className="flex min-w-0 flex-col gap-3">
           <legend className="mb-2 text-13 font-medium text-[var(--text-primary)]">{t('scheduler.editor.webhook.connectionLabel')}</legend>
           {(['github-app', 'github'] as const).map((value) => {
@@ -107,7 +137,7 @@ export function WebhookSourceFields({
             return <label key={value} className="flex min-w-0 cursor-pointer items-start gap-2 py-1 text-13 text-[var(--text-primary)]">
               <input type="radio" name={connectionId} checked={preset === value}
                 aria-label={t(`scheduler.editor.webhook.${mode}Connection`)} aria-describedby={`${connectionId}-${mode}`} className="mt-1 shrink-0 accent-[var(--text-primary)]"
-                onChange={() => onPresetChange(value)} />
+                onChange={() => chooseRepositoryPreset(value)} />
               <span className="min-w-0">
                 <span>{t(`scheduler.editor.webhook.${mode}Connection`)}</span>
                 <span id={`${connectionId}-${mode}`} className={`mt-1 block ${hintClass}`}>{t(`scheduler.editor.webhook.${mode}ConnectionHint`)}</span>

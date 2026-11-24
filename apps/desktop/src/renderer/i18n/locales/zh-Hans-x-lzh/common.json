@@ -17934,7 +17934,14 @@
             "unknown": "待法器报其状"
           }
         },
-        "prSource": "GitHub · 指定之 PR"
+        "scopeLabel": "所及",
+        "scope": {
+          "repository": "全库",
+          "repositoryHint": "库有新事则行，如新 PR、评语、CI 竣事。",
+          "pullRequest": "指定之 PR",
+          "pullRequestHint": "唯察一 PR，状实有变乃行，如已合、有新审。",
+          "repositoryNeedsAccount": "须登 Cindy 之号，乃能受库之事。"
+        }
       },
       "trigger": {
         "label": "触发方式",

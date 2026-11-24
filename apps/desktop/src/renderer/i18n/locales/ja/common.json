@@ -17934,7 +17934,14 @@
             "unknown": "プラグインの状態報告を待っています"
           }
         },
-        "prSource": "GitHub · 特定の PR"
+        "scopeLabel": "範囲",
+        "scope": {
+          "repository": "リポジトリ全体",
+          "repositoryHint": "新しい PR、コメント、CI 完了など、リポジトリの新しいイベントで実行します。",
+          "pullRequest": "特定の PR",
+          "pullRequestHint": "1 つの PR だけを見て、マージや新しいレビューなど状態が実際に変わったときだけ実行します。",
+          "repositoryNeedsAccount": "リポジトリのイベントを受け取るには Cindy アカウントへのログインが必要です。"
+        }
       },
       "trigger": {
         "label": "トリガー方式",

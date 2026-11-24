@@ -18174,7 +18174,14 @@
             "unknown": "En attente du statut du plugin"
           }
         },
-        "prSource": "GitHub · Pull request précise"
+        "scopeLabel": "Portée",
+        "scope": {
+          "repository": "Dépôt entier",
+          "repositoryHint": "S'exécute lors de nouveaux événements du dépôt : pull requests, commentaires ou CI terminée.",
+          "pullRequest": "Pull request précise",
+          "pullRequestHint": "Surveille une pull request et ne s'exécute que lorsque son état change réellement : fusionnée ou nouvelles revues.",
+          "repositoryNeedsAccount": "Connectez-vous à un compte Cindy pour recevoir les événements du dépôt."
+        }
       },
       "trigger": {
         "label": "Mode de déclenchement",

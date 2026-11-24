@@ -330,13 +330,13 @@ it.each(['agent', 'script'] as const)('lets an event trigger add timed checks fo
   }), true));
 });
 
-// 2026-11-24: a single PR is an event source. Choosing it must save prTrigger (not a Webhook),
-// round-trip timed checks, and switching away must remove the rule.
+// 2026-11-24: a single PR is the narrower scope of the GitHub event source. Choosing it must save
+// prTrigger (not a Webhook), round-trip timed checks, and switching away must remove the rule.
 it('saves a single PR with optional timed checks and can remove the rule', async () => {
   const form = mount(schedule({}));
   fireEvent.click(await screen.findByRole('radio', { name: 'scheduler.editor.trigger.event' }));
-  fireEvent.click(screen.getByRole('combobox', { name: 'scheduler.editor.webhook.sourceLabel' }));
-  fireEvent.click(screen.getByRole('option', { name: 'scheduler.editor.webhook.prSource' }));
+  // GitHub is one sender; a single PR is its narrower scope.
+  fireEvent.click(screen.getByRole('radio', { name: 'scheduler.editor.webhook.scope.pullRequest' }));
   const url = 'https://github.com/example/project/pull/23';
   fireEvent.change(screen.getByRole('textbox', { name: 'scheduler.prTrigger.url' }), { target: { value: url } });
   form.save();
@@ -348,9 +348,16 @@ it('saves a single PR with optional timed checks and can remove the rule', async
   await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
     manual: false, prTrigger: { url, change: 'any' },
   }), true));
+  // Back to the repository scope restores the previous repository connection (here the default
+  // manual Webhook), not a stale PR rule.
+  fireEvent.click(screen.getByRole('radio', { name: 'scheduler.editor.webhook.scope.repository' }));
+  form.save();
+  await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
+    prTrigger: null, webhookTrigger: expect.objectContaining({ source: { preset: 'github' } }),
+  }), true));
   fireEvent.click(screen.getByRole('radio', { name: 'scheduler.editor.trigger.timed' }));
   form.save();
-  await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({ prTrigger: null }), true));
+  await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({ prTrigger: null, webhookTrigger: null }), true));
 });
 
 // Without an account or event plugins, the event trigger falls back to the source that needs neither.
