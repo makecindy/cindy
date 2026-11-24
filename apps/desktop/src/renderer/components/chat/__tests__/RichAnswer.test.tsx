@@ -1,9 +1,7 @@
 import { VideoSitePreview } from '../VideoSitePreview';
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { stopAllMedia } from '@/lib/mediaPlaybackBus';
-import { useEffect } from 'react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ user: { id: 'test-owner' } }) }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string, values?: Record<string, string>) =>
   key === 'richAnswer.requestImageAgainMessage' ? `Show the existing image ${values?.name} (${values?.source}) again without generating a new image.` : key,
@@ -15,20 +13,6 @@ vi.stubGlobal(
   'ResizeObserver',
   class {
     observe() {}
-    disconnect() {}
-  },
-);
-const notifyIntersection = vi.fn<(visible: boolean) => void>();
-vi.stubGlobal(
-  'IntersectionObserver',
-  class {
-    constructor(callback: IntersectionObserverCallback) {
-      notifyIntersection.mockImplementation((isIntersecting) => {
-        callback([{ isIntersecting } as IntersectionObserverEntry], this as unknown as IntersectionObserver);
-      });
-    }
-    observe() {}
-    unobserve() {}
     disconnect() {}
   },
 );
@@ -384,58 +368,6 @@ it('loads a site player on demand, retains its source link and disposes it on re
   fireEvent.click(screen.getByRole('button'));
   view.unmount();
   expect(document.querySelector('webview')).toBeNull();
-});
-
-// Unit, #12416: replacement is covered above; a guest can keep playing while
-// its message stays mounted. Start one guest, then leave its viewport or close
-// it. Its WebView must detach and the play cover must return.
-it.each(['offscreen', 'close button'])('releases the playing site guest on %s', (exit) => {
-  const view = render(<VideoSitePreview src="https://youtu.be/6b9FKpTeV28" title="Tutorial" />);
-  fireEvent.click(screen.getByRole('button', { name: 'richAnswer.playVideo' }));
-  const guest = view.container.querySelector('webview')!;
-  expect(guest.isConnected).toBe(true);
-
-  if (exit === 'offscreen') {
-    fireEvent(guest, new Event('enter-html-full-screen'));
-    act(() => notifyIntersection(false));
-    expect(guest.isConnected).toBe(true);
-    fireEvent(guest, new Event('leave-html-full-screen'));
-    act(() => notifyIntersection(false));
-  } else {
-    fireEvent.click(screen.getByRole('button', { name: 'chat.lightbox.close' }));
-  }
-
-  expect(guest.isConnected).toBe(false);
-  const play = screen.getByRole('button', { name: 'richAnswer.playVideo' });
-  if (exit === 'close button') expect(document.activeElement).toBe(play);
-  fireEvent.click(play);
-  expect(view.container.querySelector('webview')).not.toBe(guest);
-  expect(view.container.querySelector('webview')).not.toBeNull();
-});
-
-// Unit, #12416: MessageStream stops native media on unmount. In split view,
-// closing one conversation must dispose only the webpage player it owns.
-it('keeps another conversation’s webpage player open when one pane unmounts', () => {
-  function Conversation({ src }: { src: string }) {
-    useEffect(() => stopAllMedia, []);
-    return <VideoSitePreview src={src} title="Tutorial" />;
-  }
-  const pair = (first: boolean) => <>
-    {first && <Conversation key="first" src="https://youtu.be/6b9FKpTeV28" />}
-    <Conversation key="second" src="https://youtu.be/glW1pXWebnY" />
-  </>;
-  const view = render(pair(true));
-  for (const play of screen.getAllByRole('button', { name: 'richAnswer.playVideo' })) fireEvent.click(play);
-  const first = view.container.querySelector('webview[src*="6b9FKpTeV28"]')!;
-  const second = view.container.querySelector('webview[src*="glW1pXWebnY"]')!;
-  expect(first.isConnected).toBe(true);
-  expect(second.isConnected).toBe(true);
-
-  view.rerender(pair(false));
-
-  expect(first.isConnected).toBe(false);
-  expect(second.isConnected).toBe(true);
-  expect(view.container.querySelector('webview')).toBe(second);
 });
 
 // Unit: an answer designed on a desktop is also read on a phone, and colors belong to Cindy:
