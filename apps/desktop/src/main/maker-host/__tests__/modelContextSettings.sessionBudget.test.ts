@@ -37,7 +37,7 @@ vi.mock('../catalog-to-descriptors.js', async () => {
 });
 
 import { resolveConfiguredContextWindow, contextWindowBudgetChangesEffectiveWindow, resolveDesktopModelContextProviderId, resolveSessionContextWindowBounds, applySessionContextWindowBudgetToCreateOpts } from '../model-context-settings';
-import { readSessionContextWindowBudget, writeSessionContextWindowBudget } from '../session-context-budget-store';
+import { writeSessionContextWindowBudget } from '../session-context-budget-store';
 
 /** 目录里 1M 物理上限、默认工作窗口 200K 的路由（服务端压低过默认值）。 */
 const catalog: Pick<Catalog, 'providers'> = {
@@ -173,36 +173,45 @@ describe('resolveConfiguredContextWindow on an unverified route', () => {
   });
 });
 
-describe('owner rebuild gate target window', () => {
-  // 主人远程切模的闸门要核实的正是重建 env 与重放共同使用的窗口，所以它按默认口径解析、
-  // 与创建参数同一支收敛；目录未核实时用户显式设过的工作窗口就是目标窗口。改传 `required`
-  // 会让上游不发布窗口的连接永远切不了模
+describe('required verification on an unverified route', () => {
+  // 主人远程切模、交接都要核实目标窗口。上游不发布窗口的连接只能靠用户在模型详情里
+  // 手填的模型级上限（`model-context-limit-store`）作为人工事实：只认这条声明，任务预算
+  // 仍不算证据。认这条之前，这类连接永远切不了模
   // （2026-11-25 实测 [PRECONDITION_FAILED] target-window-unverified）。
-  it('accepts the model-level cap when the route declares no window', () => {
-    mockModelLimit = 262_144;
-    expect(resolveConfiguredContextWindow(undeclaredCatalog, 'claude-code', 'xd', 'undeclared-model')).toBe(262_144);
-  });
-
-  it('accepts the task budget and clamps it by the declared physical max', () => {
-    expect(resolveConfiguredContextWindow(undeclaredCatalog, 'claude-code', 'xd', 'undeclared-model', 200_000)).toBe(200_000);
-    expect(resolveConfiguredContextWindow(unverifiedCatalog, 'claude-code', 'xd', 'discovered-model', 10_000_000)).toBe(400_000);
-  });
-
-  it('keeps the gate closed when the user configured no window', () => {
-    // 没有显式工作窗口时目标窗口依然不可核实：闸门的原意保留。
-    expect(resolveConfiguredContextWindow(undeclaredCatalog, 'claude-code', 'xd', 'undeclared-model')).toBeNull();
-  });
-
-  it('keeps using the verified catalog window when there is one', () => {
-    expect(resolveConfiguredContextWindow(catalog, 'claude-code', 'xd', 'long-window-model')).toBe(200_000);
-  });
-
-  it('does not widen the handoff contract to a saved budget', () => {
-    // 交接/探测的 `required` 不认预算：那边的窗口要供另一台宿主按它压缩，没有用户意图覆盖。
+  it('accepts the user-declared model limit as the target window', () => {
     mockModelLimit = 262_144;
     expect(resolveConfiguredContextWindow(
       undeclaredCatalog, 'claude-code', 'xd', 'undeclared-model', null, 'required',
+    )).toBe(262_144);
+  });
+
+  it('returns the same window the runtime is created with', () => {
+    // 同源不变量：闸门核实的目标窗口必须就是建 env 用的窗口，否则重放按的值与运行时不同。
+    mockModelLimit = 262_144;
+    expect(resolveConfiguredContextWindow(
+      undeclaredCatalog, 'claude-code', 'xd', 'undeclared-model', 200_000, 'required',
+    )).toBe(resolveConfiguredContextWindow(
+      undeclaredCatalog, 'claude-code', 'xd', 'undeclared-model', 200_000,
+    ));
+  });
+
+  it('still refuses when only a task budget is configured', () => {
+    // 任务预算只是工作上限，不能当物理容量：没有模型级声明时闸门照旧关闭。
+    expect(resolveConfiguredContextWindow(
+      undeclaredCatalog, 'claude-code', 'xd', 'undeclared-model', 262_144, 'required',
     )).toBeNull();
+  });
+
+  it('still refuses when the catalog has no row for the model', () => {
+    mockModelLimit = 262_144;
+    expect(resolveConfiguredContextWindow(
+      undeclaredCatalog, 'claude-code', 'xd', 'model-absent-from-catalog', null, 'required',
+    )).toBeNull();
+  });
+
+  it('keeps using the verified catalog window when there is one', () => {
+    expect(resolveConfiguredContextWindow(catalog, 'claude-code', 'xd', 'long-window-model', null, 'required'))
+      .toBe(200_000);
   });
 });
 
@@ -385,20 +394,6 @@ describe('applySessionContextWindowBudgetToCreateOpts', () => {
     expect('contextWindowBudget' in opts).toBe(false);
   });
 
-  it('未核实路由：闸门认可的目标窗口与下发创建参数的值相同', async () => {
-    // 同源不变量：主人切换闸门放的窗口必须就是引擎收到的 contextWindowBudget，
-    // 否则闸门认的窗口与重放按的窗口会分叉。
-    writeSessionContextWindowBudget('sess-gate', 262_144);
-    const opts = optsFor({ model: 'undeclared-model' });
-    await applySessionContextWindowBudgetToCreateOpts('sess-gate', opts, undeclaredCatalog);
-    expect(opts.contextWindowBudget).toBe(262_144);
-    expect(opts.contextWindowBudget).toBe(
-      // 闸门的输入就是这里读到的任务预算，口径同为默认解析：两者必须落同一个值。
-      resolveConfiguredContextWindow(
-        undeclaredCatalog, 'claude-code', 'xd', 'undeclared-model', readSessionContextWindowBudget('sess-gate'),
-      ),
-    );
-  });
 
   it('目录没有该模型行时创建参数不收敛，闸门也没有可核实的窗口', async () => {
     writeSessionContextWindowBudget('sess-absent', 262_144);

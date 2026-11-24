@@ -967,18 +967,6 @@ describe('session runtime control wiring', () => {
     expect(rerouteApply).toBeGreaterThan(admission);
   });
 
-  it('resolves the owner rebuild gate window without the strict verification (#12538)', () => {
-    const setModel = setModelSource();
-    // 主人远程切模的闸门核实的正是重建 env 与重放共同使用的收敛值,所以它按默认口径解析:
-    // 目录未核实但用户显式设过工作窗口时,目标窗口仍然成立。改传 `required` 会让上游不发布
-    // 窗口的连接永远切不了模(2026-11-25 实测 [PRECONDITION_FAILED] target-window-unverified)。
-    const gateResolve = setModel.indexOf(
-      'getActiveCatalog(), agentKind, pid, routeModelId, sessionContextWindowBudget,',
-    );
-    expect(gateResolve).toBeGreaterThan(-1);
-    expect(setModel.slice(gateResolve, setModel.indexOf(');', gateResolve))).not.toContain("'required'");
-  });
-
   it('projects rebuilt zero usage and the verified window after the runtime is closed', () => {
     const coreSource = readFileSync(resolve(mainRoot, 'maker-ipc/contextRecoveryAssembly.ts'), 'utf8').replace(/\r\n?/g, '\n');
     const coreAst = ts.createSourceFile('contextRecoveryAssembly.ts', coreSource, ts.ScriptTarget.Latest, true);
