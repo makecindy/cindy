@@ -7,6 +7,10 @@ import { DeviceLinkError, isScopedPeer, type InvokePayload, type InvokeResultPay
 
 const MAX_FLIGHT_SLOTS = 256;
 
+function admissionBudgetMs(budgetMs: number): number {
+  return Math.min(Math.max(1, Math.round(budgetMs)), 30_000);
+}
+
 interface ListingWaiter {
   settled: boolean;
   dispatchedChecked: boolean;
@@ -44,6 +48,7 @@ interface ListingFlight {
   basePayload: InvokePayload;
   requireFresh: boolean;
   dispatched: boolean;
+  admissionDeadlineAt: number;
   wireDeadlineAt: number | null;
   settled: boolean;
   waiters: ListingWaiter[];
@@ -158,6 +163,11 @@ export class RemoteListingReadCoalescer {
 
     if (existingSlot && !existingSlot.active.settled) {
       if (!existingSlot.active.dispatched) {
+        // The scheduler cannot extend a queued job's admission deadline.
+        // Give this caller its own queue entry if it can wait longer.
+        if (this.now() + admissionBudgetMs(effectiveTimeoutMs) > existingSlot.active.admissionDeadlineAt) {
+          return null;
+        }
         if (normalized.fresh) existingSlot.active.requireFresh = true;
         return this.attachWaiter(existingSlot, existingSlot.active, effectiveTimeoutMs, options, false);
       }
@@ -239,6 +249,7 @@ export class RemoteListingReadCoalescer {
       basePayload,
       requireFresh,
       dispatched: false,
+      admissionDeadlineAt: 0,
       wireDeadlineAt: null,
       settled: false,
       waiters: [],
@@ -262,8 +273,9 @@ export class RemoteListingReadCoalescer {
       return;
     }
 
-    const admissionBudgets = live.map((w) => Math.min(Math.max(1, Math.round(this.waiterRemainingBudgetMs(w, now))), 30_000));
+    const admissionBudgets = live.map((w) => admissionBudgetMs(this.waiterRemainingBudgetMs(w, now)));
     const slotBudgetMs = Math.max(...admissionBudgets);
+    flight.admissionDeadlineAt = now + slotBudgetMs;
     if (live.length > 1) {
       live.forEach((waiter, idx) => {
         const budget = admissionBudgets[idx]!;
@@ -443,9 +455,9 @@ export class RemoteListingReadCoalescer {
         this.armWaiterTimer(slot, flight, waiter, Math.max(1, Math.round(timeoutMs)), false);
       } else if (flight.waiters.filter((w) => !w.settled).length > 1) {
         const live = flight.waiters.filter((w) => !w.settled);
-        const maxAdmission = Math.max(...live.map((w) => Math.min(Math.max(1, Math.round(w.callDeadlineAt - enqueuedAt)), 30_000)));
+        const maxAdmission = Math.max(...live.map((w) => admissionBudgetMs(w.callDeadlineAt - enqueuedAt)));
         for (const w of live) {
-          const remaining = Math.min(Math.max(1, Math.round(w.callDeadlineAt - enqueuedAt)), 30_000);
+          const remaining = admissionBudgetMs(w.callDeadlineAt - enqueuedAt);
           if (remaining < maxAdmission && !w.timer) {
             this.armWaiterTimer(slot, flight, w, remaining, w.everDispatched);
           }

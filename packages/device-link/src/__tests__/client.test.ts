@@ -54,6 +54,7 @@ import { DIRECT_LINK_SIGNAL, type DirectRuntime, type DirectRuntimeEvents } from
 import { providerShareGuestPeer, providerShareHostPeer } from '../providerSharePeer.js';
 import { createDirectRuntimeBridge, createDirectRuntimeHost } from '../directRuntimeBridge.js';
 import { resolveRemoteInvokeTimeoutMs } from '../invokePolicy.js';
+import { InvokeScheduler } from '../invokeScheduler.js';
 import { RemoteListingReadCoalescer } from '../listingReadCoalescer.js';
 import { parseRemoteActionInvokeRequest } from '../remoteResources.js';
 import { SESSION_ACTIVITY_CHANNEL } from '../topics.js';
@@ -14441,6 +14442,40 @@ describe('listing read coalescing and stale read invoke-result retirement', () =
     await expect(result).rejects.toMatchObject({ code: 'BACKPRESSURE' });
     expect(admit).toHaveBeenCalledTimes(1);
     expect(execute).not.toHaveBeenCalled();
+  });
+
+  // Unit: a real admission queue stays saturated past a 350 ms read but
+  // drains before the later 1500 ms read's deadline.
+  it('keeps a longer listing read queued after the shorter read expires before dispatch', async () => {
+    vi.useFakeTimers();
+    let release!: () => void;
+    const blocker = new Promise<void>((resolve) => { release = resolve; });
+    const scheduler = new InvokeScheduler();
+    const coalescer = new RemoteListingReadCoalescer(Date.now);
+    const payload: InvokePayload = { channel: 'local-db:sessions:list', args: [] };
+    const send = vi.fn(async () => ({ ok: true as const, result: 'new list' }));
+    const running = Array.from({ length: 12 }, () =>
+      scheduler.run('desktop', 'foreground', 2_000, () => blocker));
+    const submit = (budget: number) => coalescer.run(
+      'scope', 'desktop', payload, 'foreground', budget, undefined,
+      (priority, wait, execute) => scheduler.run('desktop', priority, wait, execute),
+      send,
+    ) ?? scheduler.run('desktop', 'foreground', budget, send);
+    try {
+      const short = submit(350).catch((error) => error);
+      await vi.advanceTimersByTimeAsync(20);
+      const long = submit(1_500).catch((error) => error);
+      await vi.advanceTimersByTimeAsync(580);
+      expect(await short).toMatchObject({ code: 'BACKPRESSURE' });
+      expect(send).not.toHaveBeenCalled();
+      release();
+      await expect(long).resolves.toEqual({ ok: true, result: 'new list' });
+      expect(send).toHaveBeenCalledTimes(1);
+    } finally {
+      release();
+      await Promise.all(running);
+      vi.useRealTimers();
+    }
   });
 
   // Unit: legacy reads can be retired without ever negotiating a deadline.

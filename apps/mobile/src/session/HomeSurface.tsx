@@ -1737,7 +1737,10 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       // 索引(此处用旧列表刷,新会话的 running/未读条目会被 replaceSessionScheduleIndexEntries
       // 按 sessionIds 白名单丢弃,手机将一直看不到"任务正在运行")。
       const boundSessionId = projection.runPatch.sessionId;
-      if (boundSessionId && !sessionIds.includes(boundSessionId)) {
+      // An overflow summary may have dropped bindings for sessions missing
+      // from Home, even when its last retained binding is already known.
+      const scheduleOverflow = projection.event.type === 'unknown' && projection.event.rawType === 'resync';
+      if (scheduleOverflow || (boundSessionId && !sessionIds.includes(boundSessionId))) {
         remoteSessionStore.requestReseed(deviceId);
         continue;
       }

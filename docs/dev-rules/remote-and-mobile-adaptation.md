@@ -18,7 +18,7 @@
   `ifNoneMatch` 标签换 `notModified` 或小增量）。每位调用者始终持有自身 `callDeadlineAt = enqueuedAt + timeoutMs`：
   若前序较短预算读取先超时，仍有剩余预算的同乘调用者按精确剩余时长（`callDeadlineAt - now`，无加入时差启发式、
   无延长调用期限的下限）自动续读；不同 `limit`、`status`、`includePinned`、跨账号 scoped 对端与各调用方的
-  `preSend`／`beforeDispatch` 严格隔离。发送前拥塞直接交还给调用方。Agent-Net 的共享预算调用者由会话层按正文流
+  `preSend`／`beforeDispatch` 严格隔离。排队期间无法共享已有准入期限的调用方独立排队，发送前拥塞直接交还给调用方。Agent-Net 的共享预算调用者由会话层按正文流
   进展决定超时；需要更早截止的调用者单独结算。合并层放弃最后一位调用者时，通过会话层已有的取消帧停止底层请求。
 - **弱网滞后期的列表增量基准保留**：`InvokeDeltaBases` 按 `(src, requestKey)` 同时保留控制端已确认持有的
   基准（`confirmed`）与最新发出的快照（`latest`），且 `local-db:sessions:list` 的缓存键与基准键忽略布尔型
@@ -36,7 +36,8 @@
   按 `scheduleId` 覆盖；驱动刷新的 `maker:schedule:event` 在对端窗口健康（`< SESSION_ACTIVITY_WINDOW_SOFT_CAP`）
   时保持 0ms 直发，越过软上限时进入有界的 `ScheduleEventPushStage`（上限 64 条／16 KiB）：未超限时按到达因果顺序折叠投影等价
   中间运行态，超限时绝不静默删终态，而是以 `O(1)` 汇总折叠为 `{ type: 'resync' }` 权威全量补读事件 + 最新会话绑定／已读槽位，
-  让新旧控制端重拉权威调度列表、运行索引、未读汇总与新会话列表；两个暂存队列（`ScheduleEventPushStage` 与 `LatestStatePushStage`）的
+  让控制端重拉权威调度列表、运行索引和未读汇总。新版手机首页收到 `resync` 时直接请求补齐会话列表，
+  旧版首页仍可借保留的会话绑定或后续全量同步补齐。两个暂存队列（`ScheduleEventPushStage` 与 `LatestStatePushStage`）的
   可写唤醒（`nudge()`）只提前、绝不延后已排期的 drain，避免持续 ACK 令已可写队列饥饿；`routeSessionPeers` 合并转发
   `DeviceLinkClient` 与 `AgentNetSessionLinks` 的 `onPeerSendProgress`：对确定性 ACK 通知的 Device Link 对端在无进展达上限后
   0 定时器挂起，对队列深度来自 `bufferedAmount`（静默排空未必触发 `onDrain`）的 Agent-Net 会话对端保留 5s 低频兜底并在清空后停表，

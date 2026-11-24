@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import ts from 'typescript';
 import { i18n } from '@/i18n';
+import { projectScheduleEvent } from '@cindy/maker-shared/schedule-events';
 import { startBoundedStartupRead } from '@/session/mobileHomeStartup';
 import { resolveConnectionBannerSyncActionVisibility, resolveConnectionBannerVisibility, resolveHomeConnectionFeedback } from '@/components/connectionBannerVisibility';
 import { connectionHealthCopy, describeRemoteError } from '@/device-link/remoteStatus';
@@ -1038,6 +1039,44 @@ describe('Home list sync wiring', () => {
     const focus = source.slice(source.indexOf('useFocusEffect(\n    useCallback(() => {\n      // The focus event'));
     expect(focus.indexOf('screenFocusedRef.current = true;')).toBeLessThan(focus.indexOf('refreshHomeScheduleIndexes('));
     expect(focus).toContain('const scheduleDirty = new Set(homeScheduleIndexDirtyRef.current.keys());');
+  });
+
+  // Unit: exercise the production subscription with the exact overflow
+  // payload, then a retained completed event for an already-visible session.
+  it('reseeds only the affected session list after schedule overflow', () => {
+    const start = source.indexOf('useEffect(() => remoteScheduleEventStore.subscribe(');
+    const effect = source.slice(start, source.indexOf('}), [refreshDeviceScheduleIndex]);', start) + '}, [refreshDeviceScheduleIndex]);'.length);
+    const code = ts.transpileModule(effect, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+    const session = [{ id: 'known', deviceLinkDeviceId: 'dev' }];
+    const requestReseed = vi.fn();
+    const refreshDeviceScheduleIndex = vi.fn();
+    let emit!: () => void;
+    let version = 1;
+    let lastProjection = projectScheduleEvent({ type: 'resync' });
+    const bindings = {
+      useEffect: (effect: () => void) => effect(),
+      remoteScheduleEventStore: {
+        subscribe: (cb: () => void) => { emit = cb; },
+        getSnapshot: () => ({ version, lastProjection }),
+      },
+      devicesRef: { current: [{ deviceId: 'dev' }] },
+      homeSyncTargetDeviceIdsRef: { current: new Set(['dev']) },
+      scheduleEventVersionsRef: { current: new Map() },
+      remoteSessionStore: { getSessions: () => session, requestReseed },
+      screenFocusedRef: { current: true },
+      markHomeScheduleIndexDirty: vi.fn(),
+      refreshDeviceScheduleIndex,
+    };
+    new Function(...Object.keys(bindings), code)(...Object.values(bindings));
+    emit();
+    emit();
+    expect(requestReseed).toHaveBeenCalledExactlyOnceWith('dev');
+    expect(refreshDeviceScheduleIndex).not.toHaveBeenCalled();
+    lastProjection = projectScheduleEvent({ type: 'completed', scheduleId: 'sched', runId: 'run', sessionId: 'known' });
+    version++;
+    emit();
+    expect(requestReseed).toHaveBeenCalledTimes(1);
+    expect(refreshDeviceScheduleIndex).toHaveBeenCalledExactlyOnceWith('dev', ['known']);
   });
 
   it('keeps automation badge refreshes pending until one is applied', () => {
