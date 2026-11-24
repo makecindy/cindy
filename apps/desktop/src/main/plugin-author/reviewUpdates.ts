@@ -50,10 +50,21 @@ export function createOrganizationReviewUpdates(deps: {
   ownerKey: () => string | null;
 }) {
   let cache: Cache | null = null;
+  // Several windows check at once; like the public results, one account shares one read
+  // (Greptile review on #12469).
+  let inFlight: { owner: string; task: Promise<OrganizationDecision[]> } | null = null;
 
   async function read(): Promise<OrganizationDecision[]> {
     const owner = deps.ownerKey();
     if (!owner) return [];
+    if (inFlight?.owner === owner) return inFlight.task;
+    const task = load(owner);
+    inFlight = { owner, task };
+    try { return await task; }
+    finally { if (inFlight?.task === task) inFlight = null; }
+  }
+
+  async function load(owner: string): Promise<OrganizationDecision[]> {
     const api = deps.api();
     const token: PersonalPluginChanges = await api.changes();
     if (deps.ownerKey() !== owner) return [];

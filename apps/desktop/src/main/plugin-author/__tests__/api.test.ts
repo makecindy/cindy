@@ -209,6 +209,28 @@ describe('organization review updates', () => {
     expect(listPages).toHaveBeenCalledTimes(2);
   });
 
+  // Greptile review on #12469: every window checks the team results; without sharing, two windows
+  // read the change signal and the whole author list twice. Minimal failing input: two reads start
+  // before the first one settles — one change-signal request and one list read serve both; another
+  // account is never handed that read.
+  it('shares one in-flight read per account across callers', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const changes = vi.fn(async () => { await gate; return { changedAt: '2026-11-20T00:00:00.000Z', eventCount: 1 }; });
+    const listPages = vi.fn(async () => ({ plugins: [], nextCursor: null }));
+    let owner = 'owner-a';
+    const updates = createOrganizationReviewUpdates({ api: () => ({ changes, listPages }), ownerKey: () => owner });
+    const first = updates.read();
+    const second = updates.read();
+    owner = 'owner-b';
+    const other = updates.read();
+    owner = 'owner-a';
+    release();
+    await Promise.all([first, second, other]);
+    expect(changes).toHaveBeenCalledTimes(2);
+    expect(listPages).toHaveBeenCalledTimes(1);
+  });
+
   it('reads per-version review results', async () => {
     const fetch = vi.fn(async () => {
       return { nextCursor: null, releases: [
