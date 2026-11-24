@@ -1532,11 +1532,13 @@ describe('remote connection pool with a real host', () => {
     expect(scenario.started).toHaveLength(3);
   });
 
-  // PR #6483 第三轮：self 让出时 close 没送到，接回前本机不算自己的旧 run，对方按上限拒绝，且不会选 self 让出。
+  // #12552: real controller + host admission, unit. #6483 covered a lost
+  // close but expected the old host's limit rejection. A new host can finish
+  // this exact idle session before replacing it, even if every close RPC drops.
   it.each([
-    ['gets through', 1, 'ok:again'],
-    ['still fails', Infinity, '[DEVICE_LIMIT]'],
-  ])('when its own release close did not get through and the retried close %s, a reconnect closes the old run first', async (_label, drops, outcome) => {
+    ['gets through', 1],
+    ['still fails', Infinity],
+  ])('when its own release close did not get through and the retried close %s, a reconnect closes the old run first', async (_label, drops) => {
     const pool = new RemoteConnectionPool({ idleMinutes: () => idleMinutes, checkMs: 3_600_000, closeRetryMs: 3_600_000 });
     const a = await start(pool);
     const events = watch(a);
@@ -1552,19 +1554,15 @@ describe('remote connection pool with a real host', () => {
     // 对方还开着 a 的旧 run(名额 1 已占满)。
     expect(host.limitUsage().total).toBe(1);
     opens = 0;
-    if (outcome.startsWith('ok:')) {
-      expect(await ask(a, events, 'again')).toBe(outcome);
-      // 先关掉了 a 的旧 run 再打开，没有撞上限。
-      expect(opens).toBe(1);
-      expect(dropped).toBe(1);
-      expect(host.limitUsage().total).toBe(1);
-      expect(scenario.started).toHaveLength(2);
-    } else {
-      // 旧 run 还是关不掉：照常按对方的上限报错，不死循环。
-      await expect(a.send({ type: 'user', content: 'again' })).rejects.toThrow(outcome);
-      expect(opens).toBe(1);
-      expect(dropped).toBeLessThanOrEqual(3);
-    }
+    expect(await ask(a, events, 'again')).toBe('ok:again');
+    // Either the close RPC or the host's same-session admission finishes the
+    // old idle instance. Never add a second slot or loop on a lost close.
+    expect(opens).toBe(1);
+    expect(dropped).toBeGreaterThanOrEqual(1);
+    expect(dropped).toBeLessThanOrEqual(3);
+    if (drops === 1) expect(dropped).toBe(1);
+    expect(host.limitUsage().total).toBe(1);
+    expect(scenario.started).toHaveLength(2);
   });
 
   it('still counts the old run of a task closed while its release close was undelivered, then drops it once closed', async () => {

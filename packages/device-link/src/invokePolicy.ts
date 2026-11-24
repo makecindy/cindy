@@ -240,6 +240,7 @@ export function resolveRemoteInvokeTimeoutMs(
 }
 
 const PEER_RESET_RETRYABLE_READ_CHANNELS = new Set([
+  'worktree:restore-status',
   'local-db:sessions:list',
   'local-db:sessions:get',
   'local-db:sessions:get-many',

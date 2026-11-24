@@ -200,7 +200,9 @@ beforeEach(() => {
     onDataChanged: () => () => {},
   } });
   // jsdom 没有元素滚动；设置页切分区时会把内容列滚回顶部。
-  Element.prototype.scrollTo = () => {};
+  Element.prototype.scrollTo = function (options?: ScrollToOptions | number, y?: number) {
+    this.scrollTop = typeof options === 'number' ? y ?? 0 : options?.top ?? 0;
+  };
 });
 
 afterEach(() => {
@@ -451,6 +453,24 @@ describe('SettingsView Escape', () => {
     expect(!!document.getElementById('settings-window-behavior')).toBe(!hostOwned);
     expect(document.getElementById('settings-search-target-general-language')).toBeTruthy();
   });
+  // Unit regression: the direct-link test cannot detect losing General's position after a round trip.
+  it.each(['back', 'escape'])('restores the scrolled General page after returning with %s', async (action) => {
+    renderSettings('/settings');
+    const entry = await screen.findByRole('button', { name: /settings.piPackages.manageLabel/ });
+    const viewport = entry.closest<HTMLElement>('.overflow-y-auto')!;
+    viewport.scrollTop = 640;
+    fireEvent.click(entry);
+    const back = await screen.findByRole('button', { name: 'settings.piPackages.backToGeneral' });
+    const detailViewport = back.closest<HTMLElement>('.overflow-y-auto')!;
+    expect(detailViewport).not.toBe(viewport);
+    expect(detailViewport.scrollTop).toBe(0);
+    detailViewport.scrollTop = 80;
+    if (action === 'escape') pressEscape();
+    else fireEvent.click(back);
+    expect(await screen.findByRole('button', { name: /settings.piPackages.manageLabel/ })).toBe(entry);
+    expect(viewport.scrollTop).toBe(640);
+  });
+
   it('returns from the Pi extensions page to General before leaving Settings', async () => {
     renderSettings('/settings?openPanel=pi-extensions');
     expect(await screen.findByText('PI packages')).toBeTruthy();

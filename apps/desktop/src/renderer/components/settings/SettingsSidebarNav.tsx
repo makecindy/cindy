@@ -105,6 +105,7 @@ interface SettingsSidebarNavProps {
   searchContext?: SettingsSearchContext;
   allowSearchEntry?: (entry: SettingsSearchEntry) => boolean;
   activeTab: SettingsTab | null;
+  activePanelId?: string;
   leadingTab?: SettingsNavExtraTab;
   trailingTab?: SettingsNavExtraTab;
   onSelectTab: (tab: SettingsTab) => void;
@@ -123,6 +124,7 @@ export function SettingsSidebarNav({
   searchContext,
   allowSearchEntry,
   activeTab,
+  activePanelId,
   onSelectTab,
   onSelectSearchResult,
   pluginPages,
@@ -158,13 +160,14 @@ export function SettingsSidebarNav({
       <nav role="tablist" aria-label={t('settings.title')} className="flex flex-col gap-0.5">
         {items.map(({ id: tabId, label, icon: Icon, selected, onSelect }) => {
           return (
-            <button data-settings-search-action="Open the settings category of this sidebar tab"
+            <button
               key={tabId}
+              data-settings-search-action="Navigate to the selected settings category"
               id={`settings-tab-${tabId}`}
               type="button"
               role="tab"
               aria-selected={selected}
-              aria-controls={`settings-panel-${tabId}`}
+              aria-controls={selected && activePanelId ? activePanelId : `settings-panel-${tabId}`}
               onClick={onSelect}
               className={cn(NAV_ITEM_CLASS, selected ? NAV_ITEM_ACTIVE_CLASS : NAV_ITEM_IDLE_CLASS)}
             >

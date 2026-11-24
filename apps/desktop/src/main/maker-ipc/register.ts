@@ -15114,13 +15114,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               || (cursor.rowid !== undefined && !Number.isSafeInteger(cursor.rowid))) throw new Error('Invalid cursor');
           } catch { throw new PluginTaskError('INVALID_REQUEST', 'Invalid message cursor'); }
         }
+        const progressRun = request.progressForRun
+          ? await service.getRun(pluginId, request.progressForRun) : undefined;
+        if (progressRun && progressRun.taskId !== request.taskId)
+          throw new PluginTaskError('TASK_NOT_FOUND', 'Run does not belong to this task');
         await drainPersistQueue();
         if (getCurrentDbClientSnapshot() !== snapshot) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
-        const page = await getMessagesForHistory({ sessionIds: [request.taskId], workdir: null, fromMs: null, toMs: null,
+        const page = await getMessagesForHistory({ sessionIds: [request.taskId], workdir: null, fromMs: progressRun?.acceptedAt ?? null, toMs: null,
+          pluginProgressInputId: progressRun?.inputMessageId,
           agentKind: null, roles: null, includeRewound: false, limit: request.limit ?? 50, cursor, order: 'asc' });
         await service.get(pluginId, request.taskId);
         if (getCurrentDbClientSnapshot() !== snapshot) throw new PluginTaskError('PERMISSION_DENIED', 'Account changed');
-        return { items: page.items.map(({ id, clientId, role, content, createdAt }) => ({ id: clientId ?? id, role, content, createdAt })),
+        return { ...(progressRun ? { progressForRun: progressRun.runId } : {}),
+          items: page.items.map(({ id, clientId, role, content, createdAt }) => ({ id: clientId ?? id, role, content, createdAt })),
           nextCursor: page.nextCursor ? JSON.stringify(page.nextCursor) : null };
       }
       case 'getRun': return service.getRun(pluginId, request.runId);

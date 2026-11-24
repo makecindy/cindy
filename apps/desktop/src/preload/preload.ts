@@ -52,6 +52,7 @@ import {
   type StartupGateStallSnapshot,
 } from '../shared/startupGateStall';
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
+import { createRemoteReadBridge } from './remoteReadBridge';
 import { createChatFolderUpload } from './chatFolderUpload';
 import { DESKTOP_LOCAL, type RemoteDesktopApi } from '../shared/remoteDesktop';
 import { LOCAL_NETWORK_LOCAL, type LocalNetworkApi, type LocalNetworkState } from '../shared/localNetwork';
@@ -1202,6 +1203,7 @@ ipcRenderer.on('appearance-settings:changed', (_event, settings: AppearanceSetti
 const readMicrophonePermissionSnapshot = createMicrophonePermissionSnapshot();
 const voiceInputDataSnapshot = createVoiceInputDataSnapshot();
 
+const remoteReads = createRemoteReadBridge(ipcRenderer);
 contextBridge.exposeInMainWorld('electronAPI', {
   hostConnection: {
     client: 'desktop',
@@ -5423,13 +5425,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     replaceDeviceIdentity: (): Promise<{ restarting: true }> =>
       ipcRenderer.invoke(DEVICE_LINK_INVOKE.REPLACE_DEVICE_IDENTITY),
     // —— 控制端:远程会话视图 ——
-    openLink: (deviceId: string): Promise<{ appVersion: string; allowlistHash: string }> =>
-      ipcRenderer.invoke('device-link:open-link', { deviceId }),
-    closeLink: (deviceId: string): Promise<{ ok: true }> =>
-      ipcRenderer.invoke('device-link:close-link', { deviceId }),
+    openLink: remoteReads.openLink,
+    closeLink: remoteReads.closeLink,
     /** 远程调用被控端的 allowlist 内 channel;成功直接拿返回值,失败 reject 带 code 的 Error */
-    invoke: (deviceId: string, channel: string, args: unknown[], scheduling?: { background?: boolean }): Promise<unknown> =>
-      ipcRenderer.invoke('device-link:invoke', { deviceId, channel, args, ...(scheduling ? { scheduling } : {}) }),
+    invoke: remoteReads.invoke,
     /** 控制端:订阅被控端某 topic 的变更推送(push 驱动侧边栏 / 会话视图) */
     subscribe: (deviceId: string, topics: string[]): Promise<{ ok: true }> =>
       ipcRenderer.invoke('device-link:topic-subscribe', { deviceId, topics }),

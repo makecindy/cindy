@@ -2080,6 +2080,11 @@ function LocalPluginCatalogSource({
   ) : null;
 
 
+  const backFromInstalledDetail = () => {
+    requestPluginCatalogScrollRestore();
+    setSelectedId(null);
+  };
+
   if (showMyPlugins) return <MyPluginsPage
     key={contributionOwner}
     cache={contributionCache.current}
@@ -2129,12 +2134,12 @@ function LocalPluginCatalogSource({
         ghost={selectedGhost}
         replacement={findInstalledRetirementReplacement(ghosts, marketItems, target)}
         busy={marketBusyId !== null}
-        onBack={() => setSelectedId(null)}
+        onBack={backFromInstalledDetail}
         onReplace={() => void handleReplaceRetiredFeature()}
         onDismiss={() => {
           void window.electronAPI.ghosts
             .acknowledgeRetirement(installedGhostStoragePart(selectedGhost))
-            .then(() => setSelectedId(null))
+            .then(backFromInstalledDetail)
             .catch(() => toast.error(t('settings.ghosts.retirement.saveFailed')));
         }}
         onUninstall={() => void handleUninstall()}
@@ -2153,8 +2158,7 @@ function LocalPluginCatalogSource({
       enabledOverride: selectedGhost ? effectiveEnabled(installedGhostStoragePart(selectedGhost), selectedGhost.enabled) : undefined,
       onBack: () => {
         cancelPendingPluginSuggestion(recommendationNonce ?? undefined);
-        requestPluginCatalogScrollRestore();
-        setSelectedId(null);
+        backFromInstalledDetail();
       },
       onToggle: enabled => void handleToggle(selectedDetail.id, enabled, selectedDetail.name),
       onUse: handleUse,
