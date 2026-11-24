@@ -27,6 +27,11 @@ const EMPTY: BotAppearance = Object.freeze({});
 const listeners = new Set<() => void>();
 let cachedRaw: string | null | undefined;
 let cachedMap: BotAppearanceMap = {};
+/**
+ * Set only after a write fails (storage full or unavailable): this window keeps the
+ * new choice until a later write succeeds, instead of re-reading the stale stored value.
+ */
+let unsavedMap: BotAppearanceMap | null = null;
 
 export function isBotWallpaperId(value: unknown): value is BotWallpaperId {
   return typeof value === 'string' && value !== 'custom' && (WALLPAPER_IDS as readonly string[]).includes(value);
@@ -54,6 +59,7 @@ function parse(raw: string | null): BotAppearanceMap {
 }
 
 function readMap(): BotAppearanceMap {
+  if (unsavedMap) return unsavedMap;
   let raw: string | null = null;
   try {
     raw = localStorage.getItem(BOT_APPEARANCE_STORAGE_KEY);
@@ -93,13 +99,14 @@ export function setBotAppearance(
   }
   if (next.familyId === undefined && next.wallpaperId === undefined) delete map[botId];
   else map[botId] = next;
+  const parsed = parse(JSON.stringify(map));
   try {
     if (Object.keys(map).length) localStorage.setItem(BOT_APPEARANCE_STORAGE_KEY, JSON.stringify(map));
     else localStorage.removeItem(BOT_APPEARANCE_STORAGE_KEY);
+    unsavedMap = null;
   } catch {
-    // localStorage may be unavailable; keep the in-memory value for this window.
-    cachedRaw = JSON.stringify(map);
-    cachedMap = parse(cachedRaw);
+    // localStorage may be full or unavailable; keep the choice for this window only.
+    unsavedMap = parsed;
   }
   notify();
 }
@@ -137,5 +144,6 @@ export function useBotAppearanceOverride(botId: string | null): void {
 export function __resetBotAppearanceCacheForTest(): void {
   cachedRaw = undefined;
   cachedMap = {};
+  unsavedMap = null;
   listeners.clear();
 }

@@ -109,17 +109,19 @@ function overrideFamilyId(): string | null {
   return id && tryGetFamily(id) ? id : null;
 }
 
-function resolveActiveTheme(mode: Theme) {
+function resolveActiveTheme(mode: Theme, savedOnly = false) {
   const isDark = resolveIsDark(mode);
-  return resolveFamilyVariant(overrideFamilyId() ?? getStoredFamilyId(), isDark ? 'dark' : 'light');
+  const familyId = (savedOnly ? null : overrideFamilyId()) ?? getStoredFamilyId();
+  return resolveFamilyVariant(familyId, isDark ? 'dark' : 'light');
 }
 
-function resolveSessionActiveTheme(mode: Theme) {
-  return resolveActiveTheme(firstLaunchLightSession === true ? 'light' : mode);
+function resolveSessionActiveTheme(mode: Theme, savedOnly = false) {
+  return resolveActiveTheme(firstLaunchLightSession === true ? 'light' : mode, savedOnly);
 }
 
-function resolveSessionIsDark(mode: Theme): boolean {
-  return resolveSessionActiveTheme(mode).theme.type === 'dark';
+/** `savedOnly` resolves the saved theme, ignoring a view-scoped override. */
+function resolveSessionIsDark(mode: Theme, savedOnly = false): boolean {
+  return resolveSessionActiveTheme(mode, savedOnly).theme.type === 'dark';
 }
 
 function systemModeFollowsSystem(familyId: string): boolean {
@@ -142,6 +144,8 @@ function disableTransitionsTemporarily(): void {
   });
 }
 
+let leavingOverride = false;
+
 export function applyThemeClass(theme: Theme, force = false, prepare = true): void {
   const root = document.documentElement;
   const wasDark = root.classList.contains('dark');
@@ -158,7 +162,10 @@ export function applyThemeClass(theme: Theme, force = false, prepare = true): vo
     disableTransitionsTemporarily();
   }
 
-  presentTheme(nextTheme, true, prepare);
+  // A view-scoped override is this window's palette only. Theme-package defaults
+  // (fonts, wallpaper, motion) live in the shared AppearanceService and reach every
+  // window, so neither showing nor leaving an override may prepare or clear them.
+  presentTheme(nextTheme, true, prepare && overrideFamilyId() === null && !leavingOverride);
 }
 
 /** 无 ThemeProvider 的窗口用。 */
@@ -360,15 +367,22 @@ export function ThemeProvider({
   const appliedOverride = useRef(overrideFamily);
   useEffect(() => {
     if (appliedOverride.current === overrideFamily) return;
+    const leaving = overrideFamily === null;
     appliedOverride.current = overrideFamily;
-    applyThemeClass(theme, true);
+    // Leaving restores the saved palette only: the shared package projection was never changed.
+    leavingOverride = leaving;
+    try {
+      applyThemeClass(theme, true);
+    } finally {
+      leavingOverride = false;
+    }
   }, [overrideFamily, theme]);
 
   useEffect(() => {
     window.electronAPI?.setUpdateRelaunchTheme?.(
       document.documentElement.classList.contains('dark') ? 'dark' : 'light',
     );
-  }, [shownFamilyId, systemPrefersDark, theme]);
+  }, [familyId, systemPrefersDark, theme]);
 
   // OS 色偏好变化: 在 system 模式下重新 apply, 同时同步 systemPrefersDark
   // 让 fallbackFromType 刷新。非 system 模式只同步 state, 不动 DOM。
@@ -411,11 +425,14 @@ export function ThemeProvider({
       const state = `${covered}:${desktopBlur}`;
       if (state === lastState) return;
       lastState = state;
+      // The native backdrop, dock icon and theme snapshot are application-wide (main
+      // applies them to every window), so they follow the saved theme, never a
+      // teammate's view-scoped one.
       window.electronAPI?.theme?.applyVibrancy?.(
-        shownFamilyId,
-        resolveSessionIsDark(theme),
+        familyId,
+        resolveSessionIsDark(theme, true),
         theme,
-        systemModeFollowsSystem(shownFamilyId),
+        systemModeFollowsSystem(familyId),
         covered,
         desktopBlur,
       );
@@ -424,7 +441,7 @@ export function ThemeProvider({
     const observer = new MutationObserver(sync);
     observer.observe(root, { attributes: true, attributeFilter: ['data-wallpaper-active', 'data-desktop-background', 'data-desktop-blur'] });
     return () => observer.disconnect();
-  }, [shownFamilyId, localThemeRev, syncWindowVibrancy, theme, systemPrefersDark]);
+  }, [familyId, localThemeRev, syncWindowVibrancy, theme, systemPrefersDark]);
 
   const fallbackFromType = useMemo<ThemeType | null>(() => {
     void localThemeRev;

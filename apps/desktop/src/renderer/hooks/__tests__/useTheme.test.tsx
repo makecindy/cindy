@@ -19,13 +19,20 @@ import { DEFAULT_APPEARANCE_SETTINGS } from '../../../shared/appearanceSettings'
 import type { LocalThemesResult } from '../../../shared/local-themes';
 import {
   __resetLoginFirstLaunchLightGateForTest,
+  applyThemeClass,
   endLoginFirstLaunchLightGate,
   followLocalThemeChanges,
   getInitialThemeVariant,
   ThemeProvider,
   useTheme,
 } from '../useTheme';
-import { BOT_APPEARANCE_STORAGE_KEY, useBotAppearanceOverride } from '../../features/bots/botAppearance';
+import {
+  __resetBotAppearanceCacheForTest,
+  BOT_APPEARANCE_STORAGE_KEY,
+  getBotAppearance,
+  setBotAppearance,
+  useBotAppearanceOverride,
+} from '../../features/bots/botAppearance';
 
 const applyVibrancyMock = vi.fn();
 vi.mock('../../lib/toast', () => ({ toast: { error: vi.fn() } }));
@@ -80,7 +87,8 @@ describe('useTheme 跨窗口主题同步(D2-3)', () => {
   // reproduces both the startup regression and the lost synchronous setter.
   // Teammate appearance: opening a teammate's chat shows its own theme family, the
   // focused pane wins over a background one, and leaving restores the saved family.
-  // The saved `theme.familyId` must never change (it is the global choice). Minimal
+  // The saved `theme.familyId` and the app-wide native backdrop must never change
+  // (review of makecindy/cindy#12542: vibrancy is broadcast to every window). Minimal
   // input: saved "cindy", teammate "default"; unit tier, real ThemeProvider.
   it('shows a teammate theme while its view holds the override and restores the saved one', () => {
     localStorage.setItem('theme.familyId', 'cindy');
@@ -95,7 +103,10 @@ describe('useTheme 跨窗口主题同步(D2-3)', () => {
       { wrapper, initialProps: { focused: 'bot-1' as string | null, background: null as string | null } },
     );
     expect(shownFamily()).toBe('default');
-    expect(applyVibrancyMock.mock.lastCall?.[0]).toBe('default');
+    // The native backdrop is application-wide (main applies it to every window): it keeps
+    // following the saved family instead of the teammate's view-scoped one.
+    expect(applyVibrancyMock.mock.lastCall?.[0]).toBe('cindy');
+    expect(applyVibrancyMock.mock.calls.some(([family]) => family === 'default')).toBe(false);
     // A background pane releasing (or holding nothing) cannot clear the focused override.
     rerender({ focused: 'bot-1', background: 'bot-2' });
     rerender({ focused: 'bot-1', background: null });
@@ -105,6 +116,64 @@ describe('useTheme 跨窗口主题同步(D2-3)', () => {
     expect(applyVibrancyMock.mock.lastCall?.[0]).toBe('cindy');
     expect(localStorage.getItem('theme.familyId')).toBe('cindy');
     unmount();
+  });
+
+  // Review of makecindy/cindy#12542: theme-package defaults (fonts, wallpaper, motion) are one
+  // shared projection broadcast to every window. Entering a teammate with a builtin theme
+  // used to call selectTheme(null), dropping the global package's wallpaper everywhere.
+  // Minimal input: saved package family, teammate "default"; enter then leave.
+  it('never prepares or clears shared theme-package defaults for a teammate theme', async () => {
+    const installLocal = (themes: LocalThemesResult['themes']) => {
+      Object.assign(window.electronAPI, { localThemes: {
+        listSync: () => ({ success: true, themes, diagnostics: [] }), onChanged: () => () => {},
+      } });
+      bootstrapLocalThemesSync();
+    };
+    installLocal([{ id: 'paper-light-local', family: 'paper', name: 'Paper', type: 'light', colors: {},
+      packageSha256: 'a'.repeat(64), appearance: { motion: 0 } }]);
+    const selectTheme = vi.fn().mockResolvedValue(DEFAULT_APPEARANCE_SETTINGS);
+    Object.assign(window.electronAPI, { appearanceSettings: {
+      getSync: () => DEFAULT_APPEARANCE_SETTINGS, onChanged: () => () => {}, selectTheme,
+    } });
+    localStorage.setItem('theme.familyId', 'paper-local');
+    localStorage.setItem(BOT_APPEARANCE_STORAGE_KEY, JSON.stringify({ 'bot-1': { familyId: 'default' } }));
+    const applied = vi.mocked(themeService.applyTheme);
+    const { rerender, unmount } = renderHook(
+      ({ botId }: { botId: string | null }) => useBotAppearanceOverride(botId),
+      { wrapper, initialProps: { botId: null as string | null } },
+    );
+    await act(async () => {});
+    const prepared = selectTheme.mock.calls.length;
+    rerender({ botId: 'bot-1' });
+    await act(async () => {});
+    expect(findFamilyByThemeId(applied.mock.lastCall?.[0].id)?.id).toBe('default');
+    rerender({ botId: null });
+    await act(async () => {});
+    expect(applied.mock.lastCall?.[0].id).toBe('paper-light-local');
+    expect(selectTheme).toHaveBeenCalledTimes(prepared);
+    // Leave a builtin saved theme so the module's package selection does not leak.
+    localStorage.setItem('theme.familyId', 'default');
+    act(() => applyThemeClass('light', true));
+    unmount();
+    installLocal([]);
+  });
+
+  // Review of makecindy/cindy#12542: when storage is full, the in-memory fallback was
+  // overwritten by the next read of the stale stored value, so the choice jumped back.
+  // Minimal input: setItem throws once; the window must keep showing the new choice.
+  it('keeps a teammate appearance chosen while storage writes fail', () => {
+    __resetBotAppearanceCacheForTest();
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('full', 'QuotaExceededError');
+    });
+    setBotAppearance('bot-1', { familyId: 'default' });
+    expect(getBotAppearance('bot-1').familyId).toBe('default');
+    setItem.mockRestore();
+    setBotAppearance('bot-1', { wallpaperId: 'night-launch' });
+    expect(JSON.parse(localStorage.getItem(BOT_APPEARANCE_STORAGE_KEY)!)).toEqual({
+      'bot-1': { familyId: 'default', wallpaperId: 'night-launch' },
+    });
+    __resetBotAppearanceCacheForTest();
   });
 
   it('starts and switches builtin themes from legacy storage even when Host settings are unreadable', () => {

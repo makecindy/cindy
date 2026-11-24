@@ -490,6 +490,9 @@ Cindy 应用，也不取消伙伴已开的独立任务。操作中禁用重复�
 - 覆盖只在内存中投影（`renderer/appearance/appearanceOverride.ts`）：主题经 `useTheme` 的同一解析与
   `presentTheme` 应用，壁纸经同一张 `WallpaperSettingsProvider` 画布绘制，不新增第二张画布。
 - 指向的本地主题被删除时回落全局，不改写记录；选「跟随应用设置」删除该项。
+- 覆盖只作用于当前窗口的配色与壁纸画布。原生窗口背景（vibrancy）、Dock 图标与主题快照由 main 对所有
+  窗口统一应用，继续跟随全局主题；主题包的共享默认层（字体、壁纸、动效）也不随伙伴进出准备或清除，
+  因此伙伴选主题包时只换配色，全局主题包的默认壁纸等在伙伴视图里照常保留。
 - 实现与回归：`features/bots/botAppearance.ts`、`BotAppearanceSettings.tsx`；`useTheme.test.tsx`、
   `useWallpaperSettings.test.tsx` 的伙伴外观用例。
 
