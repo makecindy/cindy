@@ -267,6 +267,33 @@ describe('Codex launch requires its local route', () => {
     await config.onHostRetired?.();
   });
 
+  // #12423 unit: verify the shared Desktop/Host launch boundary propagates
+  // Fast for the selected official API connection without lending it to a relay.
+  it.each([true, false])('passes the selected route Fast declaration to the native catalog (official=%s)', async (official) => {
+    const f = routeFixture();
+    f.ready();
+    const modelId = 'gpt-6.2-sol';
+    const selectedProvider = buildUserProvider({ id: 'fixture-fast-api', name: 'API connection', runtimes: { codex: {
+      baseUrl: official ? 'https://api.openai.com/v1' : 'https://relay.example/v1',
+      wireProtocol: 'openai-responses',
+      models: [{ id: modelId, name: modelId, supportsFastMode: true }],
+    } } });
+    const prepare = createCodexSpawnConfig({
+      ...f.ports,
+      getDesktopSelectableCatalog: () => ({ ...BUNDLED_CATALOG, providers: [selectedProvider] }),
+      resolveDesktopModelContextProviderId: () => selectedProvider.id,
+    });
+    const extraArgs = ['-c', 'model_catalog_json="fixture-catalog.json"'];
+    vi.mocked(prepareCodexCustomContextCatalog).mockResolvedValueOnce({ catalogPath: 'fixture-catalog.json', extraArgs });
+    const config = await prepare([], {
+      hostPurpose: 'custom-context', customContextHostKey: 'fast-fixture',
+      customContextProviderId: selectedProvider.id, customContextModel: modelId, customContextWindow: 272_000,
+    });
+    expect(prepareCodexCustomContextCatalog).toHaveBeenLastCalledWith(expect.objectContaining({ modelId, declareFastMode: official }));
+    expect(config.extraArgs).toEqual(expect.arrayContaining(extraArgs));
+    await config.onHostRetired?.();
+  });
+
   it('leaves remote materialization independent of the local proxy', async () => {
     const f = routeFixture();
     expect(await f.prepare([], { remoteHostId: 'remote-fixture', credentialMode: 'gateway-key' })).toEqual({ extraArgs: ['remote'], extraEnv: {} });

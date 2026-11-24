@@ -5295,14 +5295,20 @@ assertRouteCurrent();
     let initialCustomContextWindow = !reviewMode
       ? mutableContextWindowBudget ?? await resolveCodexThreadContextWindow?.(opts.providerId, opts.model) ?? null
       : null;
+    // A route-specific Fast declaration cannot follow the model to another connection.
     const customContextCatalogIdentity = (
+      providerId: string | null | undefined,
       model: string,
       contextWindow: number | null,
     ): string | null =>
       typeof contextWindow === 'number' && Number.isFinite(contextWindow) && contextWindow > 0
-        ? `${model}\0${Math.floor(contextWindow)}`
+        ? JSON.stringify([
+          model, Math.floor(contextWindow),
+          !opts.remoteHostId && this.deps.needsCodexFastCatalog?.(providerId, model) ? providerId ?? '' : null,
+        ])
         : null;
     let initialCustomContextCatalogIdentity = customContextCatalogIdentity(
+      opts.providerId,
       opts.model,
       initialCustomContextWindow,
     );
@@ -5322,7 +5328,7 @@ assertRouteCurrent();
       const contextWindow = reviewMode
         ? null
         : nextBudget ?? await resolveCodexThreadContextWindow?.(providerId, newModel) ?? null;
-      return customContextCatalogIdentity(newModel, contextWindow);
+      return customContextCatalogIdentity(providerId, newModel, contextWindow);
     };
     const modelSwitchRequiresRebuild = async (
       newModel: string,
@@ -5439,7 +5445,7 @@ assertRouteCurrent();
           credentialMode = requestedCredentialMode ?? (localAuthPolicy === 'isolated' ? 'provider-oauth' : undefined);
           initialCustomContextWindow = !reviewMode
             ? await resolveCodexThreadContextWindow?.(opts.providerId, opts.model) ?? null : null;
-          initialCustomContextCatalogIdentity = customContextCatalogIdentity(opts.model, initialCustomContextWindow);
+          initialCustomContextCatalogIdentity = customContextCatalogIdentity(opts.providerId, opts.model, initialCustomContextWindow);
           usesCustomContextHost = initialCustomContextCatalogIdentity !== null;
           currentHostKey = resolveSessionHostKey();
         }

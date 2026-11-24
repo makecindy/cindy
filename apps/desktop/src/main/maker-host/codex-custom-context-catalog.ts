@@ -354,6 +354,8 @@ export async function prepareCodexCustomContextCatalog(params: {
   scanChunkBytes?: number;
   /** Same-provider model IDs, including aliases absent from native discovery. */
   modelIds?: readonly string[];
+  /** Declare Fast for the selected API route without changing the native default tier. */
+  declareFastMode?: boolean;
   /** Same-provider budgets for native previous-model compaction after cold resume. */
   resolveContextWindow?: (modelId: string) => number | null;
   resolveCompactionPct?: (modelId: string) => number | null;
@@ -373,7 +375,12 @@ export async function prepareCodexCustomContextCatalog(params: {
   // A global model_context_window override also applies to the previous model
   // reconstructed by Codex. Keep budgets per descriptor so native can see the
   // old > new relationship and compact with the old model before downshifting.
-  patched.models = patched.models.map((model) => {
+  patched.models = patched.models.map((entry) => {
+    const tiers: unknown[] = Array.isArray(entry.service_tiers) ? entry.service_tiers : [];
+    const model = params.declareFastMode && entry.slug === params.modelId &&
+      !tiers.some(tier => isRecord(tier) && tier.id === 'priority')
+      ? { ...entry, service_tiers: [...tiers, { id: 'priority', name: 'Fast', description: 'Fast mode' }] }
+      : entry;
     const window = model.slug === params.modelId
       ? params.contextWindow : params.resolveContextWindow?.(model.slug);
     if (typeof window !== 'number' || !Number.isSafeInteger(window) || window <= 0) return model;
