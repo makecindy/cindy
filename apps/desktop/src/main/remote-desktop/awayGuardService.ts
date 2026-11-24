@@ -337,14 +337,12 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
   // One answer per cover: a failed or cancelled check is not turned into a prompt loop.
   let ownerPromptAnswered = false;
   let ownerPromptGeneration = 0;
-  // The masks are at the lowered level for the system prompt and were not raised since.
-  let ownerPromptLowered = false;
   // A start still waiting for the helper's `ready`; the display can be released first.
   let ownerPromptStart: AbortController | null = null;
-  // The helper draws its Touch ID control in a window of its own. Modern ScreenCaptureKit
-  // ignores `sharingType`, and Main's capture filter only excludes ids it is handed, so
-  // both the masks and that panel are published together: a remote viewer that starts its
-  // lease between two ticks cannot catch the control in its first frames.
+  // Older helpers drew their own Touch ID panel and reported its window id; the sheet is
+  // the system's now (hidden under the cover), so no id arrives. The publishing path stays:
+  // modern ScreenCaptureKit only excludes ids it is handed, and a viewer that starts its
+  // lease between two ticks must not catch anything still on screen.
   let coverWindowIds: number[] = [];
   // Panel window id per live helper process. A re-armed prompt can overlap a helper that is
   // still closing (2 s kill fallback), so the ids are tracked per helper: publishing only the
@@ -356,21 +354,14 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
     deps.excludedWindows([...coverWindowIds, ...ownerPromptPanelIds.values()]);
   /** The last display request the controller made, so a session change can re-evaluate. */
   let displayRequested = false;
-  const raiseOwnerPrompt = () => {
-    if (!ownerPromptLowered) return;
-    ownerPromptLowered = false;
-    masks.lowerForSystemPrompt(false);
-  };
   const disarmOwnerPrompt = () => {
     ownerPromptGeneration++;
     const prompt = ownerPrompt;
     const start = ownerPromptStart;
     ownerPrompt = null;
     ownerPromptStart = null;
-    // A start still in flight has already lowered the masks and may yet put the system
-    // prompt on screen: raise the level and cancel the helper now, rather than waiting
-    // for its `ready` (the cover would otherwise stay below the Dock and menu bar).
-    raiseOwnerPrompt();
+    // A start still in flight may yet put the system prompt on screen: cancel the helper
+    // now rather than waiting for its `ready`.
     start?.abort();
     // A helper still starting or already closing keeps its own panel id published until its
     // `close` (see the helper-tracking callback); a repeated tick changes nothing here.
@@ -391,9 +382,9 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
     if (controller?.inputShielded !== true || deps.screenLocked()) return;
     ownerPromptBusy = true;
     const generation = ++ownerPromptGeneration;
-    // The prompt sits above the masks; the lowered level still covers the Dock and menu bar.
-    ownerPromptLowered = true;
-    masks.lowerForSystemPrompt(true);
+    // The masks stay at the screen-saver level, above the system prompt: the prompt keeps
+    // key focus (so the sensor stays armed) while the cover hides it (2026-11-24 real-device
+    // test: a covered prompt still verified, with no `UI lost focus` and no pause).
     const start = new AbortController();
     ownerPromptStart = start;
     // The helper this start spawned, by its `close`; its panel id is tracked against it.
@@ -404,7 +395,6 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
         ownerPrompt = null;
         ownerPromptStart = null;
         ownerPromptGeneration++;
-        raiseOwnerPrompt();
         // One answer per cover: a failed or cancelled check must not become a prompt loop.
         ownerPromptAnswered = answer !== 'verified';
         if (answer !== 'verified') return;
@@ -453,7 +443,6 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
         // No prompt is possible here (no Touch ID, locked session, unusable helper):
         // keep the cover guarded instead of retrying on every tick.
         ownerPromptAnswered = true;
-        raiseOwnerPrompt();
       })
       .finally(() => {
         ownerPromptBusy = false;

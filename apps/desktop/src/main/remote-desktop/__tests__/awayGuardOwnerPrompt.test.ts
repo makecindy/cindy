@@ -238,9 +238,10 @@ it('raises the cover again and cancels a still-starting Touch ID prompt when the
   // The covered tick arms the prompt: the cover holds the display and input is shielded.
   await vi.advanceTimersByTimeAsync(2_000);
   await settle();
-  // The prompt sits above the cover; the lowered level still blocks the Dock and menu bar.
+  // The cover stays *above* the system prompt (2026-11-24): the prompt keeps key focus, so
+  // the sensor stays armed, while the cover hides it. The level must never be lowered.
   expect(prompt.watch).toHaveBeenCalledOnce();
-  expect(mask.level).toBe('pop-up-menu');
+  expect(mask.level).toBe('screen-saver');
   const [signal] = prompt.signals;
   expect(signal.aborted).toBe(false);
 
@@ -248,7 +249,6 @@ it('raises the cover again and cancels a still-starting Touch ID prompt when the
   needsDisplay = false;
   await vi.advanceTimersByTimeAsync(2_000);
   await settle();
-  // Back to the level that hides everything at once, not waiting for the helper's ready.
   expect(mask.level).toBe('screen-saver');
   expect(signal.aborted).toBe(true);
 
@@ -269,7 +269,7 @@ it('raises the cover again and cancels a still-starting Touch ID prompt when the
   for (const listener of sessionChanges) listener();
   await settle();
   expect(prompt.watch).toHaveBeenCalledTimes(2);
-  expect(mask.level).toBe('pop-up-menu');
+  expect(mask.level).toBe('screen-saver');
   prompt.resolve({ stop: prompt.stop });
   await settle();
 
@@ -294,7 +294,7 @@ it('raises the cover again and cancels a still-starting Touch ID prompt when the
   await vi.advanceTimersByTimeAsync(2_000);
   await settle();
   expect(prompt.watch).toHaveBeenCalledTimes(3);
-  expect(mask.level).toBe('pop-up-menu');
+  expect(mask.level).toBe('screen-saver');
   prompt.resolve({ stop: prompt.stop });
   await settle();
 
