@@ -1,15 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  consumeDispatchClaimReminder,
   dispatchFactsForTurn,
-  dispatchReconcileFloor,
   dropLeadDispatchFact,
+  findUnbackedDispatchClaim,
   noteLeadDispatchFact,
-  noteLeadTurnDeclaration,
-  reconcileLeadTurnDeclaration,
   resetDispatchClaimState,
   sessionInstanceToken,
-  settleDispatchClaimIncident,
-  toDispatchClaimNotice,
   type LeadDispatchFact,
 } from '../orcaDispatchClaims';
 
@@ -29,7 +26,7 @@ afterEach(() => {
   resetDispatchClaimState();
 });
 
-describe('lead turn declaration reconciliation', () => {
+describe('host dispatch fact ledger', () => {
   it('keeps a rebuilt instance first dispatch when the turn counter restarts', () => {
     const oldSession = {};
     const newSession = {};
@@ -54,299 +51,98 @@ describe('lead turn declaration reconciliation', () => {
     );
 
     expect(dispatchFactsForTurn('lead-1', 1).map((entry) => entry.dispatchId)).toEqual(['mq-new']);
-    noteLeadTurnDeclaration('lead-1', {
-      assignments: [],
-      dispatched: [{ workerId: 'worker-1', messageId: 'mq-new' }],
-      pending: [],
-      turnGeneration: 1,
-    });
-    expect(reconcileLeadTurnDeclaration('lead-1', dispatchFactsForTurn('lead-1', 1))).toEqual({
-      consistent: true,
-    });
-  });
-  it('accepts a declaration that matches the host dispatch records', () => {
-    noteLeadDispatchFact('lead-1', fact());
-
-    noteLeadTurnDeclaration('lead-1', {
-      assignments: [{ workerId: 'worker-1', taskSummary: 'Take the export bug.' }],
-      dispatched: [{ workerId: 'worker-1', messageId: 'mq-1' }],
-      pending: [],
-      turnGeneration: 0,
-    });
-
-    expect(
-      reconcileLeadTurnDeclaration('lead-1', dispatchFactsForTurn('lead-1', 0)),
-    ).toEqual({ consistent: true });
   });
 
-  it('catches an assignment the lead declared but never dispatched', () => {
-    noteLeadTurnDeclaration('lead-1', {
-      assignments: [{ workerId: 'worker-1', taskSummary: 'Classify the 199 cases.' }],
-      dispatched: [],
-      pending: [],
-      turnGeneration: 0,
-    });
+  it('keeps the current ledger when a late fact from an older turn lands', () => {
+    noteLeadDispatchFact('lead-1', fact({ dispatchId: 'mq-1', turnGeneration: 4 }));
+    // 投递落地晚于所属轮次收口：迟到的旧凭据不改账本轮次，也不抹掉现有凭据。
+    noteLeadDispatchFact('lead-1', fact({ dispatchId: 'mq-2', turnGeneration: 2 }));
 
-    expect(reconcileLeadTurnDeclaration('lead-1', [])).toEqual({
-      consistent: false,
-      reason: 'declared-not-dispatched',
-      targets: ['worker-1'],
-      detail: 'worker-1',
-    });
+    expect(dispatchFactsForTurn('lead-1', 4).map((entry) => entry.dispatchId)).toEqual([
+      'mq-1',
+      'mq-2',
+    ]);
   });
 
-  it('accepts an assignment whose worker already has a dispatch from an earlier turn', () => {
-    // 上一轮派出去的活还在跑，这一轮收口时被自然地复述进 assignments：不能判成没派。
-    noteLeadDispatchFact('lead-1', fact({ turnGeneration: 2 }));
-    dispatchFactsForTurn('lead-1', 2);
-
-    noteLeadTurnDeclaration('lead-1', {
-      assignments: [{ workerId: 'worker-1', taskSummary: 'Keep going on the export bug.' }],
-      dispatched: [],
-      pending: [],
-      turnGeneration: 3,
-    });
-
-    expect(reconcileLeadTurnDeclaration('lead-1', dispatchFactsForTurn('lead-1', 3))).toEqual({
-      consistent: true,
-    });
-  });
-
-  it('accepts an assignment the lead parked as pending', () => {
-    noteLeadTurnDeclaration('lead-1', {
-      assignments: [{ workerId: 'worker-1', taskSummary: 'Classify the 199 cases.' }],
-      dispatched: [],
-      pending: [{ workerId: 'worker-1', waitingFor: 'the owner to confirm the scope' }],
-      turnGeneration: 0,
-    });
-
-    expect(reconcileLeadTurnDeclaration('lead-1', [])).toEqual({ consistent: true });
-  });
-
-  it('catches a dispatch the declaration leaves out', () => {
-    noteLeadDispatchFact('lead-1', fact());
-    noteLeadTurnDeclaration('lead-1', {
-      assignments: [],
-      dispatched: [],
-      pending: [],
-      turnGeneration: 0,
-    });
-
-    expect(
-      reconcileLeadTurnDeclaration('lead-1', dispatchFactsForTurn('lead-1', 0)),
-    ).toEqual({
-      consistent: false,
-      reason: 'dispatched-not-declared',
-      targets: ['research'],
-      detail: 'research',
-    });
-  });
-
-  it('reports the missing declaration, not a fake id, when the id came from an earlier turn', () => {
-    noteLeadDispatchFact('lead-1', fact({ dispatchId: 'mq-old', turnGeneration: 5 }));
-    noteLeadDispatchFact('lead-1', fact({ dispatchId: 'mq-new', turnGeneration: 7 }));
-    noteLeadTurnDeclaration('lead-1', {
-      assignments: [],
-      dispatched: [{ workerId: 'worker-1', messageId: 'mq-old' }],
-      pending: [],
-      turnGeneration: 7,
-    });
-
-    // 编号真实存在过，所以不判「编造」；本轮新派发没写进声明才是要纠正的错。
-    expect(
-      reconcileLeadTurnDeclaration('lead-1', dispatchFactsForTurn('lead-1', 7)),
-    ).toEqual({
-      consistent: false,
-      reason: 'dispatched-not-declared',
-      targets: ['research'],
-      detail: 'research',
-    });
-  });
-
-  it('catches a queued message id that matches no dispatch', () => {
-    noteLeadDispatchFact('lead-1', fact());
-    noteLeadTurnDeclaration('lead-1', {
-      assignments: [],
-      dispatched: [{ workerId: 'worker-1', messageId: 'mq-404' }],
-      pending: [],
-      turnGeneration: 0,
-    });
-
-    expect(
-      reconcileLeadTurnDeclaration('lead-1', dispatchFactsForTurn('lead-1', 0)),
-    ).toEqual({
-      consistent: false,
-      reason: 'unknown-message-id',
-      targets: ['research'],
-      detail: 'mq-404',
-    });
-  });
-
-  it('catches a turn that dispatched without declaring anything', () => {
-    noteLeadDispatchFact('lead-1', fact());
-
-    expect(
-      reconcileLeadTurnDeclaration('lead-1', dispatchFactsForTurn('lead-1', 0)),
-    ).toEqual({
-      consistent: false,
-      reason: 'no-declaration',
-      targets: ['research'],
-      detail: 'research',
-    });
-  });
-
-  it('matches a queued message id against every dispatch the worker received', () => {
-    for (const id of ['mq-1', 'mq-2']) {
-      noteLeadDispatchFact('lead-1', fact({ dispatchId: id, queuedMessageId: id }));
-    }
-    noteLeadTurnDeclaration('lead-1', {
-      assignments: [{ workerId: 'worker-1', taskSummary: 'Take the export bug.' }],
-      dispatched: [{ workerId: 'worker-1', messageId: 'mq-1' }],
-      pending: [],
-      turnGeneration: 0,
-    });
-
-    expect(
-      reconcileLeadTurnDeclaration('lead-1', dispatchFactsForTurn('lead-1', 0)),
-    ).toEqual({ consistent: true });
-  });
-
-  it('keeps the record window at the turn that started the incident across the wake turn', () => {
-    noteLeadDispatchFact(
-      'lead-1',
-      fact({
-        dispatchId: 'mq-4',
-        queuedMessageId: 'mq-4',
-        turnGeneration: 4,
-        at: Date.now() - 60_000,
-      }),
-    );
-    noteLeadTurnDeclaration('lead-1', {
-      assignments: [{ workerId: 'worker-1', taskSummary: 'Take the export bug.' }],
-      dispatched: [],
-      pending: [],
-      turnGeneration: 4,
-    });
-    expect(reconcileLeadTurnDeclaration('lead-1', dispatchFactsForTurn('lead-1', 4)).consistent).toBe(
-      false,
-    );
-    expect(settleDispatchClaimIncident('lead-1', false, 4)).toBe('wake');
-
-    // 唤醒开的新一轮：账仍是第 4 轮那笔，凭据不能被新一轮的生成号挡掉。
-    const floor = dispatchReconcileFloor('lead-1', 7);
-    expect(floor).toBe(4);
-    expect(
-      dispatchFactsForTurn('lead-1', 7, floor).map((entry) => entry.dispatchId),
-    ).toEqual(['mq-4']);
-
-    settleDispatchClaimIncident('lead-1', true, 7);
-    expect(dispatchReconcileFloor('lead-1', 7)).toBe(7);
-  });
-
-  it('stays silent on a turn that dispatched nothing and declared nothing', () => {
-    expect(reconcileLeadTurnDeclaration('lead-1', [])).toEqual({ consistent: true });
-  });
-
-  it('clears the declaration once it reconciles so the next turn must declare again', () => {
-    noteLeadDispatchFact('lead-1', fact());
-    noteLeadTurnDeclaration('lead-1', {
-      assignments: [],
-      dispatched: [{ workerId: 'worker-1' }],
-      pending: [],
-      turnGeneration: 0,
-    });
-
-    expect(
-      reconcileLeadTurnDeclaration('lead-1', dispatchFactsForTurn('lead-1', 0)),
-    ).toEqual({ consistent: true });
-
-    noteLeadDispatchFact('lead-1', fact({ dispatchId: 'mq-2', turnGeneration: 1 }));
-
-    expect(
-      reconcileLeadTurnDeclaration('lead-1', dispatchFactsForTurn('lead-1', 1)),
-    ).toEqual({
-      consistent: false,
-      reason: 'no-declaration',
-      targets: ['research'],
-      detail: 'research',
-    });
-  });
-
-  it('forgets a declaration when the session instance restarts', () => {
-    noteLeadTurnDeclaration('lead-1', {
-      assignments: [{ workerId: 'worker-1', taskSummary: 'Take the export bug.' }],
-      dispatched: [],
-      pending: [],
-      turnGeneration: 8,
-    });
-
-    // 先把账本推进到第 8 轮，再让收口看到回退的生成号：会话实例变了，旧声明不能跨实例继续算账。
-    dispatchFactsForTurn('lead-1', 8);
-    dispatchFactsForTurn('lead-1', 0);
-
-    expect(reconcileLeadTurnDeclaration('lead-1', [])).toEqual({ consistent: true });
-  });
-
-  it('keeps a fresh declaration when the session instance restarts', () => {
-    // 旧实例的账本停在第 8 轮；重建会话后第 1 轮就交了声明，收口才发现代次回退。
-    dispatchFactsForTurn('lead-1', 8);
-    noteLeadTurnDeclaration('lead-1', {
-      assignments: [{ workerId: 'worker-1', taskSummary: 'Take the export bug.' }],
-      dispatched: [],
-      pending: [],
-      turnGeneration: 1,
-    });
-
-    const verdict = reconcileLeadTurnDeclaration('lead-1', dispatchFactsForTurn('lead-1', 1));
-    if (verdict.consistent) throw new Error('expected an inconsistent verdict');
-    expect(verdict.reason).toBe('declared-not-dispatched');
-  });
-
-  it('asks once, then escalates, then stays quiet until a real dispatch resets it', () => {
-    expect(settleDispatchClaimIncident('lead-1', false, 0)).toBe('wake');
-    expect(settleDispatchClaimIncident('lead-1', false, 0)).toBe('escalate');
-    expect(settleDispatchClaimIncident('lead-1', false, 0)).toBeNull();
-
-    noteLeadDispatchFact('lead-1', fact({ turnGeneration: 1 }));
-    expect(settleDispatchClaimIncident('lead-1', false, 1)).toBe('wake');
-  });
-
-  it('does not re-arm the wake for a fact that lands after its turn settled', () => {
-    // 第 5 轮派发、收口时没交声明→唤醒一次。
-    noteLeadDispatchFact('lead-1', fact({ turnGeneration: 5 }));
-    dispatchFactsForTurn('lead-1', 5);
-    expect(settleDispatchClaimIncident('lead-1', false, 5)).toBe('wake');
-
-    // 同一笔派发迟到落地（仍在第 5 轮）：账本不能因此重新武装，唤醒轮不能被告知「本轮派了」。
-    noteLeadDispatchFact('lead-1', fact({ turnGeneration: 5, dispatchId: 'mq-2' }));
-    expect(settleDispatchClaimIncident('lead-1', false, 6)).toBe('escalate');
-  });
-
-  it('drops a fact once the dispatch is retracted', () => {
-    noteLeadDispatchFact('lead-1', fact());
-    expect(dispatchFactsForTurn('lead-1', 0)).toHaveLength(1);
+  it('drops a dispatch fact when the dispatch is withdrawn', () => {
+    noteLeadDispatchFact('lead-1', fact({ dispatchId: 'mq-1' }));
+    noteLeadDispatchFact('lead-1', fact({ dispatchId: 'mq-2' }));
 
     dropLeadDispatchFact('lead-1', 'mq-1');
-    expect(dispatchFactsForTurn('lead-1', 0)).toHaveLength(0);
+
+    expect(dispatchFactsForTurn('lead-1', 0).map((entry) => entry.dispatchId)).toEqual(['mq-2']);
   });
 
-  it('builds the escalation notice from the reconciliation verdict', () => {
-    noteLeadTurnDeclaration('lead-1', {
-      assignments: [],
-      dispatched: [{ workerId: 'worker-1', messageId: 'mq-404' }],
-      pending: [],
-      turnGeneration: 0,
-    });
-    const verdict = reconcileLeadTurnDeclaration('lead-1', []);
-    if (verdict.consistent) throw new Error('expected an inconsistent verdict');
+  it('forgets facts older than the retention window', () => {
+    noteLeadDispatchFact('lead-1', fact({ dispatchId: 'mq-old', at: Date.now() - 25 * 60 * 60 * 1000 }));
+    noteLeadDispatchFact('lead-1', fact({ dispatchId: 'mq-new' }));
 
-    expect(toDispatchClaimNotice(verdict)).toEqual({
-      version: 1,
-      state: 'unverified',
-      targets: ['worker-1'],
-      reason: 'declared-not-dispatched',
-      detail: 'worker-1',
-      at: expect.any(Number),
-    });
+    expect(dispatchFactsForTurn('lead-1', 0).map((entry) => entry.dispatchId)).toEqual(['mq-new']);
+  });
+
+  it('resets one lead without touching another', () => {
+    noteLeadDispatchFact('lead-1', fact());
+    noteLeadDispatchFact('lead-2', fact());
+
+    resetDispatchClaimState('lead-1');
+
+    expect(dispatchFactsForTurn('lead-1', 0)).toEqual([]);
+    expect(dispatchFactsForTurn('lead-2', 0)).toHaveLength(1);
+  });
+});
+
+describe('unbacked dispatch claim detection', () => {
+  it('flags a wake_kind value while the host recorded no dispatch at all', () => {
+    expect(
+      findUnbackedDispatchClaim('lead-1', '已派修（wake_kind=already-active），等它交回。'),
+    ).toEqual({ kind: 'wake-kind', token: 'already-active', label: 'wake_kind' });
+  });
+
+  it('accepts a wake_kind recap once the host has dispatches to back it', () => {
+    noteLeadDispatchFact('lead-1', fact());
+
+    expect(
+      findUnbackedDispatchClaim('lead-1', '上一笔 wake_kind=queued 还在队列里。'),
+    ).toBeNull();
+  });
+
+  it('flags a labeled dispatch id that exists nowhere in the ledger', () => {
+    expect(
+      findUnbackedDispatchClaim('lead-1', '派了：queued_message_id: e47e4ix8u7vjpxzd0ixrivw8'),
+    ).toEqual({ kind: 'id', token: 'e47e4ix8u7vjpxzd0ixrivw8', label: 'queued_message_id' });
+  });
+
+  it('accepts an id dispatched in an earlier turn', () => {
+    noteLeadDispatchFact('lead-1', fact({ queuedMessageId: 'cvpssg60na9s2ona9dh7327s' }));
+
+    expect(
+      findUnbackedDispatchClaim('lead-1', '上一条的 queued_message_id: cvpssg60na9s2ona9dh7327s 已消费。'),
+    ).toBeNull();
+  });
+
+  it('leaves plain prose alone — it carries no protocol token to check', () => {
+    expect(findUnbackedDispatchClaim('lead-1', '已派给 research 去改注入表了。')).toBeNull();
+  });
+
+  it('reports the first problem only, so one reminder names one place', () => {
+    expect(
+      findUnbackedDispatchClaim('lead-1', 'wake_kind=queued，编号 queued_message_id: abcdefgh1234'),
+    )?.toMatchObject({ kind: 'wake-kind' });
+  });
+});
+
+describe('claim reminder budget', () => {
+  it('allows one reminder per turn', () => {
+    expect(consumeDispatchClaimReminder('lead-1', 3)).toBe(true);
+    expect(consumeDispatchClaimReminder('lead-1', 3)).toBe(false);
+    expect(consumeDispatchClaimReminder('lead-1', 4)).toBe(true);
+  });
+
+  it('re-arms after the session instance restarts', () => {
+    expect(consumeDispatchClaimReminder('lead-1', 9)).toBe(true);
+    expect(consumeDispatchClaimReminder('lead-1', 9)).toBe(false);
+
+    // 重建实例后轮次从 1 重来：旧实例的提醒额度不能压住新实例。
+    expect(consumeDispatchClaimReminder('lead-1', 1)).toBe(true);
   });
 });

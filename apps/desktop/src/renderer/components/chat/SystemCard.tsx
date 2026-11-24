@@ -1428,42 +1428,6 @@ function SessionImportCard({ data }: { data?: Record<string, unknown> }) {
   );
 }
 
-function OrcaDispatchCard({ data }: { data?: Record<string, unknown> }) {
-  const { t } = useTranslation();
-  // 正常派单不落卡：宿主只在声明与凭据对不上、补交一轮后仍不一致时落这张升级卡。
-  if (data?.state !== 'unverified') return null;
-  const label = t('chat.systemCard.orcaDispatch.unverified');
-  // 正文按查看者当前语言拼：同一条记录会在手机、英文桌面上重读。
-  const detail = typeof data?.detail === 'string' ? data.detail : '';
-  const reason =
-    data?.reason === 'no-declaration'
-      ? t('chat.systemCard.orcaDispatch.notice.noDeclaration')
-      : data?.reason === 'declared-not-dispatched'
-        ? t('chat.systemCard.orcaDispatch.notice.declaredNotDispatched', { target: detail })
-        : data?.reason === 'dispatched-not-declared'
-          ? t('chat.systemCard.orcaDispatch.notice.dispatchedNotDeclared', { target: detail })
-          : t('chat.systemCard.orcaDispatch.notice.unknownId', { id: detail });
-  const body = t('chat.systemCard.orcaDispatch.notice.body', { reason });
-    return (
-      <div
-        className="flex w-full items-start gap-1.5 px-2 py-[3px]"
-        role="note"
-        aria-label={label}
-      >
-        <span className="shrink-0 text-12 leading-[1.5] text-[var(--error-fg)]">{label}</span>
-        <span aria-hidden className="shrink-0 text-12 leading-[1.5] text-[var(--text-tertiary)]">
-          ·
-        </span>
-        <span
-          className="min-w-0 whitespace-normal text-left text-12 leading-[1.5] text-[var(--text-secondary)]"
-          title={body}
-        >
-          {body}
-        </span>
-      </div>
-    );
-  }
-
 const REVIEW_FAILURE_I18N_KEY: Record<ReviewFailureCode, string> = {
   'no-visible-result': 'chat.systemCard.review.noResult',
   'reviewer-closed': 'chat.systemCard.review.failure.reviewerClosed',
@@ -1629,8 +1593,6 @@ export function SystemCard({
       return <ContextRebuildCard data={data} />;
     case 'session-import':
       return <SessionImportCard data={data} />;
-    case 'orca-dispatch':
-      return <OrcaDispatchCard data={data} />;
     case 'learn':
       return <LearnStatusCard data={data} contextSessionId={sessionId} />;
     case 'review':

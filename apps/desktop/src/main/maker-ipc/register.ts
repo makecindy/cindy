@@ -40,7 +40,6 @@ import { createOrcaWorkerProjectHandlers } from './orcaWorkerProjectHandlers';
 import { getTeamByWorkerSession } from '../localDb/orcaTeamStore';
 import { readWorkerProjectContext, createWorkerWorktree, rememberWorkerProject, probeWorkerProject, resolveWorkerWorktreeSourceSelection, getWorkerOwnedWorktree } from './orcaWorkerProject';
 import type { WorkerWorktreeRequest } from '../../shared/orca-worker-project';
-import type { OrcaDispatchClaimNotice } from '../../shared/orcaDispatchReceipt.js';
 import { captureAgentRequest as captureRequest, ownerChannelInputEvidence, type CapturedAgentRequest, type DelegationTarget } from './forwardedRequest.js';
 import { readChannelToolScope } from '../im/shared/channelToolScope.js';
 import { FORWARDED_REQUEST_RECEIPT, verifiedOwnerRequestText, type AgentRequestReceipt } from '../../shared/forwardedRequest.js';
@@ -2450,7 +2449,6 @@ const COLLABORATION_SETTING_KEYS = [
   'workerSoftLimit',
   'workerHardLimit',
   'workerIdleReleaseMinutes',
-  'dispatchClaimVerification',
 ] as const;
 type CollaborationSettingKey = (typeof COLLABORATION_SETTING_KEYS)[number];
 const COLLABORATION_WORKER_LIMIT_MAX = 20;
@@ -2460,7 +2458,7 @@ function isCollaborationSettingKey(key: unknown): key is CollaborationSettingKey
   return typeof key === 'string' && (COLLABORATION_SETTING_KEYS as readonly string[]).includes(key);
 }
 
-function requireInteger(value: unknown, key: Exclude<CollaborationSettingKey, 'dispatchClaimVerification'>): number {
+function requireInteger(value: unknown, key: CollaborationSettingKey): number {
   if (typeof value !== 'number' || !Number.isFinite(value) || !Number.isInteger(value)) {
     throwIpcError('INVALID_PARAMS', `${key} must be an integer`);
   }
@@ -2470,13 +2468,7 @@ function requireInteger(value: unknown, key: Exclude<CollaborationSettingKey, 'd
 function validateCollaborationSettingValue(
   key: CollaborationSettingKey,
   value: unknown,
-): number | boolean {
-  if (key === 'dispatchClaimVerification') {
-    if (typeof value !== 'boolean') {
-      throwIpcError('INVALID_PARAMS', `${key} must be a boolean`);
-    }
-    return value;
-  }
+): number {
   const next = requireInteger(value, key);
   const current = readCollaborationSettings();
   if (key === 'workerIdleReleaseMinutes') {
@@ -2729,16 +2721,6 @@ type SendToSessionResult = SendToSessionInternalResult;
 
 /** 暴露给 xdt-helper MCP provider 的协同控制面，必须复用 IPC 同源业务路径。 */
 interface OrcaCollabService {
-  /** Lead 回合声明：report_turn 落账，收口时与宿主派发凭据对账。 */
-  reportLeadTurn: (params: {
-    callerLeadSessionId: string;
-    assignments: Array<{ workerId: string; taskSummary: string }>;
-    dispatched: Array<{ workerId: string; messageId?: string }>;
-    pending: Array<{ workerId: string; waitingFor: string }>;
-  }) => Promise<
-    | { ok: true; workers: number }
-    | { ok: false; errorCode: 'NOT_FOUND'; message: string }
-  >;
   controlSession: ReturnType<typeof createSessionControlService>['controlSession'];
   listSessionQueue: (
     sessionId: string,
@@ -16311,20 +16293,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       inputCoordinator.mergeQueuedMessagesAtomically(sessionId, clientIds, buildReplacement).merged,
   };
 
-  /** 协同系统行：升级卡落库路径（role=assistant + agentMeta 标记，正文为空）。 */
-  const appendOrcaDispatchSystemRow = (
-    leadSessionId: string,
-    clientId: string,
-    record: OrcaDispatchClaimNotice,
-  ): void => {
-    void createDbMessage(leadSessionId, {
-      clientId,
-      role: 'assistant',
-      content: '',
-      agentMeta: { orcaDispatch: record },
-    }).catch(() => undefined);
-  };
-
   const orcaTeamService = createOrcaTeamService(orcaRemoteWorkers.wrapTeamDeps({
     captureControlAuthority: async () => (await captureOrcaTaskAuthority()).assertCurrent,
     // Queued dispatch acceptance and terminal-time retries land after this turn is gone.
@@ -16529,30 +16497,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       });
       return { accepted: result.ok, ...(!result.ok && result.reportRejected ? { reportRejected: true as const } : {}) };
     },
-    escalateDispatchClaim: (leadSessionId, notice) => {
-      // 升级只是“给主人看”的宿主记录：落系统行 + 红点 + 通知，不发队列消息、不开新 turn。
-      appendOrcaDispatchSystemRow(leadSessionId, randomUUID(), notice);
-      void (async () => {
-        let title = '';
-        try {
-          const [row] = await getDbClient()
-            .drizzle
-            .select({ title: sessions.title })
-            .from(sessions)
-            .where(eq(sessions.id, leadSessionId))
-            .limit(1);
-          title = row?.title ?? '';
-        } catch {
-          /* 标题只是装饰，读不到就留空 */
-        }
-        showDesktopSessionEvent(() => getDeepLinkMainWindow(), {
-          sessionId: leadSessionId,
-          title,
-          kind: 'error',
-        });
-      })();
-    },
-    readDispatchClaimVerificationEnabled: () => readCollaborationSettings().dispatchClaimVerification,
     log,
   }));
   orcaTeamServiceForEvents = orcaTeamService;
@@ -17782,22 +17726,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 公开错误码映射都与 IPC handler WORKER_SEND_TO 保持同一套状态机。
     sendToWorker: (params) => orcaTeamService.sendToWorker(params),
     interruptWorker: (params) => orcaTeamService.interruptWorker(params),
-    // 回合声明：Lead 收口前交的账，与宿主派发凭据对账。
-    reportLeadTurn: async (params) => {
-      const result = await orcaTeamService.recordLeadTurnDeclaration({
-        leadSessionId: params.callerLeadSessionId,
-        assignments: params.assignments,
-        dispatched: params.dispatched,
-        pending: params.pending,
-      });
-      return result.ok
-        ? result
-        : {
-            ok: false as const,
-            errorCode: 'NOT_FOUND' as const,
-            message: '当前 session 不是 Orca Lead, 不能提交回合声明。',
-          };
-    },
     // 排队消息控制统一走 OrcaTeamService,复用 resolveWorkerRef 归属校验与
     // coordinator 的 remove/replace 原语(cancel 经 remove 触发 discard settle)。
     listWorkerQueuedMessages: (params) => orcaTeamService.listWorkerQueuedMessages(params),

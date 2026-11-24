@@ -1,17 +1,13 @@
 /**
- * Lead 回合声明的宿主侧对账。
+ * 宿主侧的派发凭据账，以及「引用不存在的凭据」的核对。
  *
- * Lead 每轮收口必须在 report_turn 里交两本账：assignments（本轮想让谁做什么）
- * 与 dispatched（本轮真正被宿主接受的派发），派不出去的在 pending 里写明在等什么。
- * 宿主用自己的派发凭据对账：任一侧差集非空即不一致。
+ * 派发由宿主自己记账：send_to_worker 被接受的那一刻就写下凭据，只来自真实动作。
+ * Lead 的回复里如果引用了宿主签发的编号或派发结果值，而账本里没有对应记录，
+ * 那就是一个纯字段矛盾——不需要读语义，也不需要模型判定。
  *
- * 取舍：不读 Lead 的散文。词表永远补不完；对账只认字段，误报只多问一轮，
- * 不会动派发本身，连续不一致才升级成卡。
+ * 取舍：只认协议令牌（`wake_kind=`、`queued_message_id:` 一类），不认措辞。
+ * 词表永远补不完；核对只比字段，误报的代价是多问一轮，不会动派发本身。
  */
-import type {
-  OrcaDispatchClaimFailure,
-  OrcaDispatchClaimNotice,
-} from '../../shared/orcaDispatchReceipt';
 
 /** 投递方式：direct = 本轮直接唤醒/立即执行，queued = 进队列等 Worker 自己取。 */
 export type OrcaDispatchDelivery = 'direct' | 'queued';
@@ -45,64 +41,12 @@ export function sessionInstanceToken(session: object): number {
   return token;
 }
 
-/** Lead 声明的一条指派：想让哪个 Worker 做什么。 */
-export interface LeadTurnAssignment {
-  workerId: string;
-  taskSummary: string;
-}
-
-/** Lead 声明的一条已完成派发。messageId 只在进队列时有值，可直接抄 dispatch 结果。 */
-export interface LeadTurnDispatched {
-  workerId: string;
-  messageId?: string;
-}
-
-/** Lead 声明的一条未派出去的指派，以及它在等什么。 */
-export interface LeadTurnPending {
-  workerId: string;
-  waitingFor: string;
-}
-
-/** 一轮的声明。turnGeneration 取提交时的轮次，用于和同一轮的凭据对齐。 */
-export interface LeadTurnDeclaration {
-  assignments: LeadTurnAssignment[];
-  dispatched: LeadTurnDispatched[];
-  pending: LeadTurnPending[];
-  turnGeneration: number;
-  at: number;
-}
-
-export type DeclarationVerdict =
-  | { consistent: true }
-  | {
-      consistent: false;
-      reason: OrcaDispatchClaimFailure;
-      targets: string[];
-      detail: string;
-    };
-
-/** wake = 首次不一致，叫它补交一轮；escalate = 补交后仍不一致，落卡。 */
-export type DispatchClaimAction = 'wake' | 'escalate' | null;
-
 interface LeadLedger {
   /** 最近一次收口看到的轮次；变小说明换了会话实例，账本整体作废。 */
   turnGeneration: number;
-  /**
-   * 本轮声明。只在「对账一致」后清空：不一致时保留，让下一次收口看到同一处矛盾，
-   * 而不是逼模型重交一遍才升级。
-   */
-  declaration: LeadTurnDeclaration | null;
   facts: LeadDispatchFact[];
-  /** 是否已就当前矛盾唤醒过；真实派发会清掉它，避免同一动作反复打扰。 */
-  woke: boolean;
-  /** 已升级成卡：同一矛盾不再重复落卡，等真实派发或一致声明解除。 */
-  escalated: boolean;
-  escalatedAt: number | null;
-  /**
-   * 这次不一致从哪一轮开始。唤醒会开新一轮，但凭据属于引发对账的那一轮，
-   * 所以地板只降不升；一致后清空。
-   */
-  incidentFloor: number | null;
+  /** 已经就哪一轮的不实凭据提醒过。同一轮只提醒一次，避免空转。 */
+  remindedGeneration: number | null;
   /** 账本属于哪个会话实例。换实例后旧账整体作废，新实例从第一条凭据重新记。 */
   instanceToken?: number;
 }
@@ -117,19 +61,15 @@ function ledgerFor(leadSessionId: string): LeadLedger {
   if (!ledger) {
     ledger = {
       turnGeneration: 0,
-      declaration: null,
       facts: [],
-      woke: false,
-      escalated: false,
-      escalatedAt: null,
-      incidentFloor: null,
+      remindedGeneration: null,
     };
     ledgers.set(leadSessionId, ledger);
   }
   return ledger;
 }
 
-/** 轮次回退 = 换了会话实例，旧账本不能继续用（否则上一实例的卡会压住新实例）。 */
+/** 轮次回退 = 换了会话实例，旧账本不能继续用（否则上一实例的提醒状态会压住新实例）。 */
 function observeGeneration(ledger: LeadLedger, turnGeneration: number): void {
   if (turnGeneration >= ledger.turnGeneration) {
     ledger.turnGeneration = turnGeneration;
@@ -140,16 +80,12 @@ function observeGeneration(ledger: LeadLedger, turnGeneration: number): void {
 }
 
 function ledgersReset(ledger: LeadLedger): void {
-  ledger.declaration = null;
   ledger.facts = [];
-  ledger.woke = false;
-  ledger.escalated = false;
-  ledger.escalatedAt = null;
-  ledger.incidentFloor = null;
+  ledger.remindedGeneration = null;
   ledger.instanceToken = undefined;
 }
 
-/** 记一条宿主派发凭据。真实派发重置抑制状态：同一个动作值得重新判定。 */
+/** 记一条宿主派发凭据。 */
 export function noteLeadDispatchFact(leadSessionId: string, fact: LeadDispatchFact): void {
   const ledger = ledgerFor(leadSessionId);
   if (
@@ -157,7 +93,7 @@ export function noteLeadDispatchFact(leadSessionId: string, fact: LeadDispatchFa
     ledger.instanceToken !== undefined &&
     fact.instanceToken !== ledger.instanceToken
   ) {
-    // 换了会话实例：旧账本连同升级进度作废，并把轮次降到新实例这一轮，
+    // 换了会话实例：旧账本作废，并把轮次降到新实例这一轮，
     // 否则随后的收口按「轮次回退」再清一次，会把这条新凭据一起抹掉。
     ledgersReset(ledger);
     ledger.turnGeneration = fact.turnGeneration;
@@ -166,12 +102,7 @@ export function noteLeadDispatchFact(leadSessionId: string, fact: LeadDispatchFa
   ledger.facts.push(fact);
   if (ledger.facts.length > MAX_FACTS) ledger.facts.splice(0, ledger.facts.length - MAX_FACTS);
   // 凭据不参与轮次观察：投递落地可能晚于它所属的轮次收口，迟到的旧凭据既不能抹掉
-  // 当前账本，也不能重新武装唤醒——否则下一轮会在「本轮什么都没派」的情况下再被叫一次。
-  // 只有比这次矛盾更新的轮次里的派发才值得重新判定。
-  if (ledger.incidentFloor !== null && fact.turnGeneration <= ledger.incidentFloor) return;
-  ledger.woke = false;
-  ledger.escalated = false;
-  ledger.escalatedAt = null;
+  // 当前账本，也不能替已经提醒过的那一轮作废记录。
 }
 
 /** 派发被撤回（恢复草稿）时扣掉凭据：它没真正交到 Worker 手上。 */
@@ -181,214 +112,80 @@ export function dropLeadDispatchFact(leadSessionId: string, dispatchId: string):
   ledger.facts = ledger.facts.filter((fact) => fact.dispatchId !== dispatchId);
 }
 
-/** 这次不一致的凭据地板：唤醒会开新一轮，地板只降不升，避免自己造出假不一致。 */
-export function dispatchReconcileFloor(leadSessionId: string, turnGeneration: number): number {
-  const ledger = ledgerFor(leadSessionId);
-  if (ledger.incidentFloor !== null && ledger.incidentFloor <= turnGeneration) {
-    return ledger.incidentFloor;
-  }
-  return turnGeneration;
-}
-
-/** 本轮（含同轮后续续跑）的派发凭据。窗口是生成号，不是墙钟。 */
+/** 账本里的全部派发凭据。窗口不是墙钟也不是单轮：判断「派过没有」要看整本账。 */
 export function dispatchFactsForTurn(
   leadSessionId: string,
   turnGeneration: number,
-  sinceGeneration = turnGeneration,
 ): LeadDispatchFact[] {
   const ledger = ledgerFor(leadSessionId);
   observeGeneration(ledger, turnGeneration);
   const cutoff = Date.now() - FACT_RETENTION_MS;
   ledger.facts = ledger.facts.filter((fact) => fact.at >= cutoff);
-  return ledger.facts.filter((fact) => fact.turnGeneration >= sinceGeneration);
+  return [...ledger.facts];
+}
+
+/** 回复里引用了一个宿主没有记录的派发。 */
+export interface UnbackedDispatchClaim {
+  /** wake-kind = 引用了派发结果值；id = 引用了宿主签发的编号。 */
+  kind: 'wake-kind' | 'id';
+  /** 回复里出现的那个值。 */
+  token: string;
+  /** 回复里使用的标签，用于回话时指出是哪一处。 */
+  label: string;
+}
+
+/** 派发结果值闭集：这些值只可能来自工具返回。 */
+const WAKE_KIND_PATTERN = /\bwake_kind\s*[=:]\s*`?([a-z][a-z-]{2,20})`?/i;
+/** 宿主签发编号的协议标签：只认这几个标签，不猜裸 id。 */
+const LABELED_ID_PATTERN =
+  /\b(queued_message_id|message_id|dispatch_id)\s*[=:]\s*`?([A-Za-z0-9_-]{8,64})`?/i;
+
+/**
+ * 找出回复里「引用了宿主没有的派发凭据」的第一处。
+ *
+ * - `wake_kind=<值>` 断言了一次派发结果，而账本里一条凭据都没有 → 无中生有。
+ * - `queued_message_id: <编号>` 等标签后的编号必须命中账本里某个派发/排队编号。
+ *
+ * 账本非空时 `wake_kind` 不判：那时分不清它复述的是哪一次派发，误判代价高。
+ */
+export function findUnbackedDispatchClaim(
+  leadSessionId: string,
+  text: string,
+): UnbackedDispatchClaim | null {
+  const ledger = ledgers.get(leadSessionId);
+  const facts = ledger ? ledger.facts : [];
+
+  const wakeKind = text.match(WAKE_KIND_PATTERN);
+  if (wakeKind && facts.length === 0) {
+    return { kind: 'wake-kind', token: wakeKind[1]!, label: 'wake_kind' };
+  }
+
+  const labeledId = text.match(LABELED_ID_PATTERN);
+  if (labeledId) {
+    const label = labeledId[1]!;
+    const token = labeledId[2]!;
+    const known = facts.some(
+      (fact) => fact.dispatchId === token || fact.queuedMessageId === token,
+    );
+    if (!known) return { kind: 'id', token, label };
+  }
+
+  return null;
 }
 
 /**
- * 记一轮的声明（report_turn 工具入口）。
- * 只登记不判定：对账发生在收口，凭据由宿主自己写下，两者不在同一时刻产生。
+ * 同一轮只提醒一次。返回 true 表示这次可以用掉提醒额度。
+ * 换成 true 之后再调用同一轮会返回 false，避免模型坚持不改时来回空转。
  */
-export function noteLeadTurnDeclaration(
+export function consumeDispatchClaimReminder(
   leadSessionId: string,
-  declaration: Omit<LeadTurnDeclaration, 'at' | 'pending'> & { pending?: LeadTurnPending[] },
-): void {
+  turnGeneration: number,
+): boolean {
   const ledger = ledgerFor(leadSessionId);
-  // 重建会话后轮次会回到 1：先按代次丢掉旧账本再记声明，否则收口时的回退清理会把这份声明抹掉。
-  if (declaration.turnGeneration > 0) observeGeneration(ledger, declaration.turnGeneration);
-  ledger.declaration = {
-    assignments: declaration.assignments,
-    dispatched: declaration.dispatched,
-    pending: declaration.pending ?? [],
-    turnGeneration: declaration.turnGeneration,
-    at: Date.now(),
-  };
-}
-
-/**
- * 对账：声明里的每一条派发都必须有宿主凭据，宿主的每一条凭据都必须写进声明。
- * 声明了但故意没派的，必须出现在 pending 里并写明在等什么，否则视为「光说不做」。
- * 一致后清空声明：下一轮必须重新交，不允许上一轮的声明替这一轮背书。
- */
-export function reconcileLeadTurnDeclaration(
-  leadSessionId: string,
-  facts: readonly LeadDispatchFact[],
-): DeclarationVerdict {
-  const ledger = ledgerFor(leadSessionId);
-  const declaration = ledger.declaration;
-
-  if (!declaration) {
-    // 没有派发就没有可对账的对象：普通问答不该被逼着交声明。
-    if (facts.length === 0) return { consistent: true };
-    return {
-      consistent: false,
-      reason: 'no-declaration',
-      targets: facts.map((fact) => fact.workerLabel),
-      detail: facts.map((fact) => fact.workerLabel).join(', '),
-    };
-  }
-
-  const factsByWorker = new Map<string, LeadDispatchFact[]>();
-  for (const fact of facts) {
-    const bucket = factsByWorker.get(fact.workerId);
-    if (bucket) bucket.push(fact);
-    else factsByWorker.set(fact.workerId, [fact]);
-  }
-  const labelOf = (workerId: string): string =>
-    factsByWorker.get(workerId)?.[0]?.workerLabel ??
-    ledger.facts.find((fact) => fact.workerId === workerId)?.workerLabel ??
-    declaration.dispatched.find((entry) => entry.workerId === workerId)?.workerId ??
-    workerId;
-
-  // 声明指着更早轮次的编号时，本轮同 Worker 的凭据仍然没有被这一句声明覆盖。
-  const uncovered = new Set<string>();
-  for (const entry of declaration.dispatched) {
-    // 同一个 Worker 可以连着收多条（q1、q2）：按这一轮它全部凭据匹配，不能只看最后一条。
-    const bucket = factsByWorker.get(entry.workerId);
-    if (!bucket || bucket.length === 0) {
-      return {
-        consistent: false,
-        reason: 'declared-not-dispatched',
-        targets: [labelOf(entry.workerId)],
-        detail: labelOf(entry.workerId),
-      };
-    }
-    const matched =
-      !entry.messageId ||
-      bucket.some(
-        (fact) => fact.dispatchId === entry.messageId || fact.queuedMessageId === entry.messageId,
-      );
-    if (!matched) {
-      // 编号在更早轮次的凭据里存在，就不是「编了个不存在的编号」：这种错没法纠正。
-      // 把它留给下面「本轮有派发没声明」的判定，那条能靠补交声明修好。
-      const seenEarlier = entry.messageId
-        ? ledger.facts.some(
-            (fact) =>
-              fact.dispatchId === entry.messageId || fact.queuedMessageId === entry.messageId,
-          )
-        : false;
-      if (seenEarlier) {
-        uncovered.add(entry.workerId);
-        continue;
-      }
-      return {
-        consistent: false,
-        reason: 'unknown-message-id',
-        targets: [bucket[0]!.workerLabel],
-        detail: entry.messageId ?? '',
-      };
-    }
-  }
-
-  const declaredWorkers = new Set(declaration.dispatched.map((entry) => entry.workerId));
-  // 「光说不做」只能按「这个 worker 有没有任何一笔派发」判：更早轮次派出去还在跑的活，
-  // 这一轮会被自然地复述进 assignments，按本轮凭据逐个比会把在跑的活判成没派。
-  for (const assignment of declaration.assignments) {
-    if (declaredWorkers.has(assignment.workerId)) continue;
-    if (ledger.facts.some((fact) => fact.workerId === assignment.workerId)) continue;
-    if (declaration.pending.some((entry) => entry.workerId === assignment.workerId)) continue;
-    return {
-      consistent: false,
-      reason: 'declared-not-dispatched',
-      targets: [labelOf(assignment.workerId)],
-      detail: labelOf(assignment.workerId),
-    };
-  }
-
-  for (const fact of facts) {
-    if (declaredWorkers.has(fact.workerId) && !uncovered.has(fact.workerId)) continue;
-    return {
-      consistent: false,
-      reason: 'dispatched-not-declared',
-      targets: [fact.workerLabel],
-      detail: fact.workerLabel,
-    };
-  }
-
-  ledger.declaration = null;
-  return { consistent: true };
-}
-
-/** 一句人话，用作唤醒文本里的原因行。 */
-export function describeDeclarationVerdict(verdict: {
-  reason: OrcaDispatchClaimFailure;
-  detail: string;
-}): string {
-  switch (verdict.reason) {
-    case 'no-declaration':
-      return 'The host recorded a dispatch that no report_turn declaration covers';
-    case 'declared-not-dispatched':
-      return `You listed work for ${verdict.detail}, but the host never accepted a dispatch to it`;
-    case 'dispatched-not-declared':
-      return `The host dispatched to ${verdict.detail}, but your declaration leaves it out`;
-    case 'unknown-message-id':
-      return `The queued message id ${verdict.detail} matches no dispatch the host recorded`;
-  }
-}
-
-/** 升级卡的载荷。只带字段，不带原话：卡片正文由渲染层按语言拼。 */
-export function toDispatchClaimNotice(verdict: {
-  reason: OrcaDispatchClaimFailure;
-  targets: string[];
-  detail: string;
-}): OrcaDispatchClaimNotice {
-  return {
-    version: 1,
-    state: 'unverified',
-    targets: verdict.targets,
-    reason: verdict.reason,
-    detail: verdict.detail,
-    at: Date.now(),
-  };
-}
-
-/** 一致就清账；不一致先唤醒一次，仍不一致才升级。返回本轮该做的动作。 */
-export function settleDispatchClaimIncident(
-  leadSessionId: string,
-  consistent: boolean,
-  turnGeneration = 0,
-): DispatchClaimAction {
-  const ledger = ledgerFor(leadSessionId);
-
-  if (consistent) {
-    ledger.woke = false;
-    ledger.escalated = false;
-    ledger.escalatedAt = null;
-    ledger.incidentFloor = null;
-    return null;
-  }
-
-  // 已经落过卡：同一处矛盾不再唤醒、不再重复落卡，等真实派发或一致声明解除。
-  if (ledger.escalated) return null;
-
-  ledger.incidentFloor = Math.min(ledger.incidentFloor ?? turnGeneration, turnGeneration);
-
-  if (ledger.woke) {
-    ledger.escalated = true;
-    ledger.escalatedAt = Date.now();
-    return 'escalate';
-  }
-
-  ledger.woke = true;
-  return 'wake';
+  observeGeneration(ledger, turnGeneration);
+  if (ledger.remindedGeneration === turnGeneration) return false;
+  ledger.remindedGeneration = turnGeneration;
+  return true;
 }
 
 /** 测试与会话销毁用：清掉一个 Lead 的账本。 */

@@ -448,26 +448,23 @@ Git worktree，不改变供应商、模型与 Worker 创建权限偏好。
    `renderOrcaLeadSystemPrompt`，以及 `packages/lizi-mcps/src/xdt-helper/create_workers.ts`
    的批量结果契约。
 
-3a. **派发以 Lead 的回合声明对账，不读 Lead 的散文（状态：不变量）**<br>
-   Lead 收口前必须调 `report_turn` 交两本账：`assignments`（本轮指派，含还没派出去的）、
-   `dispatched`（宿主已接受的派发：`send_to_worker` 的 accepted 回调与 `queued_message_id`、
-   `create_worker` 的首任务派发；排队消息被撤回即失效）、`pending`（声明了但没派，写明在等
-   什么）。宿主用自己的派发凭据双向对账：声明了却没派出、派了却没写进声明、引用的队列编号
-   对不上、本轮有派发却完全没交声明，都算不一致。计划、分析、读文件都不构成派发，只有工具
-   返回的具体派发信号才算。不一致时先向该 Lead 注入一条纠正消息（附对不上的目标与精简原因，
-   至多一次）；补交轮仍不一致才升级：在会话里落一条不可撤回的宿主卡片 + 红点 + 既有通知通道
-   提醒，卡片是系统行、不开新 turn，所以升级不会自激；真派发出现前该 Lead 不再唤醒。正常派单
-   不落卡（异常才有可见性）；只有升级卡落库（`agentMeta.orcaDispatch`，`role=assistant` +
-   空正文，`state=unverified`），只给渲染层，不进模型上下文。零派发且零声明的普通问答轮不
-   对账（没有可对账的对象），不把闲聊变成噪音。
-   实现指针：`apps/desktop/src/main/maker-ipc/orcaDispatchClaims.ts`（声明账 + 双向对账 +
-   结算状态机）、`orcaTeamService.ts` 的 `recordLeadTurnDeclaration` 与
-   `handleLeadTurnSettled`、`packages/lizi-mcps/src/xdt-helper/report_turn.ts`（schema 必填
-   的声明入口，与 Worker 侧 `send_to_lead.report` 同构）、`sessionEventTerminal.ts` 的 lead
-   收口钩子、`localDb/agentHandoffHistory.ts` 的卡片行过滤；能力开关是协同设置里的
-   `dispatchClaimVerification`（默认开）。与不变量 3 的分工：3 管「什么时候可以静默结束
-   turn」，本条只问「收口时声明与凭据是否一致」；补交唤醒是显式队列消息（新的 turn），
-   不改动静默结束的判据。
+3a. **回复引用宿主凭据必须命中账本，不读 Lead 的散文（状态：不变量）**<br>
+   宿主自己记派发账：`send_to_worker` 被接受那一刻写下凭据（Worker、派发号、投递方式、
+   轮次、会话实例、可选的排队消息号），只来自真实动作，不来自模型输出。收口时只做两件事，
+   都不需要理解语义，也不调用模型：`wake_kind=<值>` 断言了一次派发结果，而账本里一条凭据都
+   没有，即无中生有；`queued_message_id`／`message_id`／`dispatch_id` 标签后的编号必须命中
+   账本里某个派发号或排队号，查不到就是引用了不存在的凭据。命中一处即判不一致：向该 Lead
+   注入一条纠正消息（点名是哪一处、是什么形状），同一轮至多一次；模型可以当场补派或改口，
+   第二次收口仍不一致只记日志，不再唤醒。账本非空时不判 `wake_kind`——那时分不清它复述的
+   是哪一次派发，误判代价高。零派发且不含凭据形状的普通问答轮不判（没有可比对的对象）。
+   Lead 收口不再需要额外工具调用，也不再存在声明入口、升级卡或能力开关；检查对正常派单
+   完全无感，只在回复引用了宿主没有的凭据时才说话。计划、分析、读文件都不构成派发，只有
+   工具返回的具体派发信号才算。实现指针：
+   `apps/desktop/src/main/maker-ipc/orcaDispatchClaims.ts`（凭据账 + 令牌核对 +
+   每轮一次提醒）、`orcaTeamService.ts` 的 `noteLeadDispatchFact`／`handleLeadTurnSettled`、
+   `sessionEventTerminal.ts` 的 lead 收口钩子，以及宿主提示行
+   `chat.userMessage.orcaHostNoticeDispatchClaim`。与不变量 3 的分工：3 管「什么时候可以
+   静默结束 turn」，本条只核对「收口时回复里出现的凭据是否有记录」。
 
 #### 消息派发与 auto-bridge
 

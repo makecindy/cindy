@@ -187,7 +187,7 @@ function createOrcaDeps(overrides: Partial<OrcaMcpDeps> = {}): OrcaMcpDeps {
 }
 
 describe('dynamic lizi MCP session context', () => {
-  it('keeps the 23-tool Orca manifest order stable across server construction', () => {
+  it('keeps the 22-tool Orca manifest order stable across server construction', () => {
     const context = {
       agentKind: 'codex' as const,
       workingDir: 'C:\\repo',
@@ -197,8 +197,8 @@ describe('dynamic lizi MCP session context', () => {
     const first = Object.keys(tools(createOrcaMcpServer(createOrcaDeps(), context)));
     const second = Object.keys(tools(createOrcaMcpServer(createOrcaDeps(), context)));
 
-    // 20 个 team 工具 + 3 个只读诊断工具。
-    expect(first).toHaveLength(23);
+    // 19 个 team 工具 + 3 个只读诊断工具。
+    expect(first).toHaveLength(22);
     expect(first).toEqual(second);
     expect(first).toContain('create_worker');
     expect(first).toContain('create_workers');
@@ -208,7 +208,6 @@ describe('dynamic lizi MCP session context', () => {
     expect(first).toContain('steer_queued_message');
     expect(first).toContain('move_queued_message');
     expect(first).toContain('update_worker');
-    expect(first).toContain('report_turn');
     expect(first).toContain('set_worker_runtime');
     expect(first).not.toContain('list_worker_queue');
   });

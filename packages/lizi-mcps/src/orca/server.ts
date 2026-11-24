@@ -47,7 +47,6 @@ import {
   registerCreateWorkersTool,
   registerListWorkersTool,
   registerSwitchFocusTool,
-  registerReportTurnTool,
   registerSendToWorkerTool,
   registerGetWorkerQueueStatusTool,
   registerUpdateQueuedMessageTool,
@@ -88,13 +87,6 @@ import { errorPayload, okPayload } from '../xdt-helper/_payload.js';
  * (从原 lizi_xdtHelperMcpServer.ts 拆出, 随 team 工具一起独立成 cindy_orca server。)
  */
 export interface OrcaMcpDeps {
-  /** Lead 回合声明（report_turn）：登记到宿主账本，收口时对账。 */
-  reportLeadTurn?: (params: {
-    callerLeadSessionId: string;
-    assignments: Array<{ workerId: string; taskSummary: string }>;
-    dispatched: Array<{ workerId: string; messageId?: string }>;
-    pending: Array<{ workerId: string; waitingFor: string }>;
-  }) => Promise<ControlResult<{ workers: number }, 'NOT_FOUND'>>;
   authorizeCall?: ToolCallAuthorizer;
   logger?: import('../types.js').LiziMcpLogger;
   /** 启动 multi-worker workflow (只建 team, 不含 worker / initial_task)。 */
@@ -571,16 +563,6 @@ export function createOrcaMcpServer(
     sendToWorker: deps.sendToWorker,
     interruptWorker: deps.interruptWorker,
     listWorkerQueuedMessages: deps.listWorkerQueuedMessages,
-  });
-  registerReportTurnTool(sink, {
-    getSessionContext,
-    reportLeadTurn:
-      deps.reportLeadTurn ??
-      (async () => ({
-        ok: false as const,
-        errorCode: 'NOT_FOUND' as const,
-        message: 'Orca 宿主未提供回合声明通道。',
-      })),
   });
   registerGetWorkerQueueStatusTool(sink, {
     getSessionContext,

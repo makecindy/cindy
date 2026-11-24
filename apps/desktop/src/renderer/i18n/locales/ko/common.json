@@ -5512,9 +5512,7 @@
       "workerHardLimit": "Worker 하드 제한",
       "workerHardLimitHint": "허용되는 최대 Worker 수입니다. 소프트 제한 이상이어야 합니다.",
       "idleRelease": "유휴 해제(분)",
-      "idleReleaseHint": "0으로 설정하면 백그라운드 자동 해제를 끕니다. 양수 값은 해당 시간(분) 동안 유휴 상태인 Worker를 자동 해제합니다.",
-      "dispatchClaimVerification": "턴 선언 확인",
-      "dispatchClaimVerificationHint": "Lead가 턴을 마칠 때 제출한 배정과 파견을 호스트의 파견 기록과 대조합니다. 불일치하면 한 번 정정을 요청하고, 그래도 다르면 알려 드립니다."
+      "idleReleaseHint": "0으로 설정하면 백그라운드 자동 해제를 끕니다. 양수 값은 해당 시간(분) 동안 유휴 상태인 Worker를 자동 해제합니다."
     },
     "agentResource": {
       "saveFailed": "저장하지 못했습니다. 다시 시도해 주세요.",
@@ -15482,16 +15480,6 @@
       }
     },
     "systemCard": {
-      "orcaDispatch": {
-        "unverified": "턴 선언 미확인",
-        "notice": {
-          "noDeclaration": "이번 턴의 보고 선언이 제출되지 않았습니다",
-          "declaredNotDispatched": "{{target}}에게 파견했다고 선언했지만 호스트가 접수하지 않았습니다",
-          "dispatchedNotDeclared": "호스트는 이번 턴 {{target}}에게 파견했지만 선언에 없습니다",
-          "unknownId": "인용한 대기열 ID {{id}}에 해당하는 파견이 없습니다",
-          "body": "{{reason}}. Lead에게 선언 보완을 요청했습니다."
-        }
-      },
       "help": {
         "title": "사용 가능한 명령",
         "builtInCommands": "기본 제공 명령",
@@ -15754,7 +15742,7 @@
       "orcaFromWorkerBatch": "시스템이 반환한 Worker 결과 {{count}}개",
       "orcaFromWorkerNamed": "Worker \"{{role}}\"에서 온 메시지",
       "orcaFromHost": "호스트(Orca host)에서 온 메시지",
-      "orcaHostNoticeDispatchClaim": "이번 턴 선언이 호스트의 파견 기록과 일치하지 않습니다. Lead에 수정을 요청했습니다.",
+      "orcaHostNoticeDispatchClaim": "이 답신은 Cindy에 기록되지 않은 파견을 인용했습니다. Lead에 수정을 요청했습니다.",
       "hookChannelFrom": "{{channel}}에서",
       "deviceSentMobileNamed": "휴대폰 \"{{name}}\"에서 보냄",
       "deviceSentMobile": "휴대폰에서 보냄",

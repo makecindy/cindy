@@ -17,15 +17,13 @@ interface CollaborationSettings {
   workerSoftLimit: number;
   workerHardLimit: number;
   workerIdleReleaseMinutes: number;
-  dispatchClaimVerification: boolean;
   isCustomized?: boolean;
 }
 
 type CollaborationSettingKey =
   | 'workerSoftLimit'
   | 'workerHardLimit'
-  | 'workerIdleReleaseMinutes'
-  | 'dispatchClaimVerification';
+  | 'workerIdleReleaseMinutes';
 
 export function CollaborationSection() {
   const { t } = useTranslation();
@@ -40,7 +38,7 @@ export function CollaborationSection() {
         if (c && typeof c.workerSoftLimit === 'number') setSettings(c);
       })
       .catch(() => {
-        setSettings({ workerSoftLimit: 5, workerHardLimit: 8, workerIdleReleaseMinutes: 0, dispatchClaimVerification: true });
+        setSettings({ workerSoftLimit: 5, workerHardLimit: 8, workerIdleReleaseMinutes: 0 });
       });
   }, []);
 
@@ -167,28 +165,6 @@ export function CollaborationSection() {
           }
         />
 
-        {/* Dispatch claim verification */}
-        <SettingsRow
-          title={
-            <label id={collaborationSettings.dispatchClaimVerification.targetId} htmlFor={`${idPrefix}-dispatch-claim`}>
-              {t(collaborationSettings.dispatchClaimVerification.titleKey)}
-            </label>
-          }
-          hint={
-            <span id={`${idPrefix}-dispatch-claim-hint`}>
-              {t(collaborationSettings.dispatchClaimVerification.descriptionKey)}
-            </span>
-          }
-          trailing={
-            <Switch
-              data-setting-id={collaborationSettings.dispatchClaimVerification.id}
-              id={`${idPrefix}-dispatch-claim`}
-              aria-describedby={`${idPrefix}-dispatch-claim-hint`}
-              checked={settings.dispatchClaimVerification !== false}
-              onCheckedChange={(checked) => persist('dispatchClaimVerification', checked === true)}
-            />
-          }
-        />
       </SettingsCard>
     </SettingsSection>
   );

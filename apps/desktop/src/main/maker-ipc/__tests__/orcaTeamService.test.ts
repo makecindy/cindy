@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {readFileSync} from 'node:fs';
 import ts from 'typescript';
 import { AcceptedCallbackDispatchCancelled, runAcceptedCallback } from '../acceptedCallbackRunner';
-import { noteLeadTurnDeclaration, resetDispatchClaimState } from '../orcaDispatchClaims';
+import { dispatchFactsForTurn, resetDispatchClaimState } from '../orcaDispatchClaims';
 
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue';
 import {
@@ -448,14 +448,24 @@ describe('OrcaTeamService updateWorker', () => {
 
 });
 
-describe('lead turn declaration reconciliation', () => {
-  const declaration = {
-    leadSessionId: 'lead-1',
-    assignments: [{ workerId: 'worker-1', taskSummary: 'Take the export bug.' }],
-    dispatched: [{ workerId: 'worker-1' }],
-  };
+describe('dispatch claim reminder on lead turn settle', () => {
+  it('reminds the lead once when the closing text cites a dispatch the host never accepted', async () => {
+    resetDispatchClaimState();
+    const { deps, service } = createDeps();
 
-  it('stays silent when the declaration matches what the host dispatched', async () => {
+    await service.handleLeadTurnSettled({
+      leadSessionId: 'lead-1',
+      turnGeneration: 3,
+      finalText: '已派修（wake_kind=already-active），等它交回。',
+    });
+
+    expect(deps.sendAutoBridgeToLead).toHaveBeenCalledTimes(1);
+    const call = vi.mocked(deps.sendAutoBridgeToLead).mock.calls[0];
+    expect(call?.[0]).toBe('lead-1');
+    expect(call?.[1]).toContain('wake_kind=already-active');
+  });
+
+  it('stays silent for an id the host dispatched in an earlier turn', async () => {
     resetDispatchClaimState();
     const { deps, service } = createDeps();
     await service.sendToWorker({
@@ -463,96 +473,57 @@ describe('lead turn declaration reconciliation', () => {
       targetSessionId: 'worker-session-1',
       message: 'Please also check the desktop build.',
     });
+    const fact = dispatchFactsForTurn('lead-1', 0)[0];
+    const cited = fact?.queuedMessageId ?? fact?.dispatchId;
+    expect(cited).toBeTruthy();
 
-    await service.recordLeadTurnDeclaration(declaration);
-    await service.handleLeadTurnSettled({ leadSessionId: 'lead-1', turnGeneration: 0 });
+    await service.handleLeadTurnSettled({
+      leadSessionId: 'lead-1',
+      turnGeneration: 5,
+      finalText: `上一条 queued_message_id: ${cited} 已被消费。`,
+    });
 
     expect(deps.sendAutoBridgeToLead).not.toHaveBeenCalled();
-    expect(deps.escalateDispatchClaim).not.toHaveBeenCalled();
   });
 
-  it('wakes the lead once when the declaration claims a dispatch the host never accepted, then escalates', async () => {
+  it('allows only one reminder per turn', async () => {
     resetDispatchClaimState();
     const { deps, service } = createDeps();
 
-    await service.recordLeadTurnDeclaration(declaration);
-    await service.handleLeadTurnSettled({ leadSessionId: 'lead-1', turnGeneration: 3 });
-    expect(deps.sendAutoBridgeToLead).toHaveBeenCalledTimes(1);
-    expect(deps.escalateDispatchClaim).not.toHaveBeenCalled();
-
-    await service.recordLeadTurnDeclaration(declaration);
-    await service.handleLeadTurnSettled({ leadSessionId: 'lead-1', turnGeneration: 5 });
-    expect(deps.sendAutoBridgeToLead).toHaveBeenCalledTimes(1);
-    expect(deps.escalateDispatchClaim).toHaveBeenCalledWith(
-      'lead-1',
-      expect.objectContaining({
-        version: 1,
-        state: 'unverified',
-        reason: 'declared-not-dispatched',
-      }),
-    );
-  });
-
-  it('stays silent for an assignment the lead parked as pending', async () => {
-    resetDispatchClaimState();
-    const { deps, service } = createDeps();
-
-    await service.recordLeadTurnDeclaration({
+    await service.handleLeadTurnSettled({
       leadSessionId: 'lead-1',
-      assignments: [{ workerId: 'worker-1', taskSummary: 'Take the export bug.' }],
-      dispatched: [],
-      pending: [{ workerId: 'worker-1', waitingFor: 'the owner to confirm the scope' }],
+      turnGeneration: 2,
+      finalText: 'wake_kind=queued',
     });
-    await service.handleLeadTurnSettled({ leadSessionId: 'lead-1', turnGeneration: 2 });
+    await service.handleLeadTurnSettled({
+      leadSessionId: 'lead-1',
+      turnGeneration: 2,
+      finalText: 'wake_kind=queued',
+    });
+
+    expect(deps.sendAutoBridgeToLead).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores a session that leads no workers', async () => {
+    resetDispatchClaimState();
+    const { deps, service } = createDeps();
+
+    await service.handleLeadTurnSettled({
+      leadSessionId: 'solo-1',
+      turnGeneration: 1,
+      finalText: 'wake_kind=already-active',
+    });
 
     expect(deps.sendAutoBridgeToLead).not.toHaveBeenCalled();
-    expect(deps.escalateDispatchClaim).not.toHaveBeenCalled();
   });
 
-  it('flags a dispatch the declaration leaves out', async () => {
+  it('does nothing when the turn produced no closing text', async () => {
     resetDispatchClaimState();
     const { deps, service } = createDeps();
-    await service.sendToWorker({
-      callerLeadSessionId: 'lead-1',
-      targetSessionId: 'worker-session-1',
-      message: 'Please also check the desktop build.',
-    });
 
-    await service.recordLeadTurnDeclaration({
-      leadSessionId: 'lead-1',
-      assignments: [],
-      dispatched: [],
-    });
-    await service.handleLeadTurnSettled({ leadSessionId: 'lead-1', turnGeneration: 0 });
-
-    // 唤醒文本还带别的参数（worker 归属与来源标签），只验第一句对人说的话。
-    expect(vi.mocked(deps.sendAutoBridgeToLead).mock.calls[0]?.[0]).toBe('lead-1');
-    expect(vi.mocked(deps.sendAutoBridgeToLead).mock.calls[0]?.[1]).toContain('dispatched to research');
-  });
-
-  it('refuses a declaration from a session that leads no workers', async () => {
-    resetDispatchClaimState();
-    const { service } = createDeps();
-
-    await expect(
-      service.recordLeadTurnDeclaration({
-        leadSessionId: 'solo-1',
-        assignments: [],
-        dispatched: [],
-      }),
-    ).resolves.toEqual({ ok: false, errorCode: 'NOT_FOUND' });
-  });
-
-  it('does nothing when the dispatch claim capability is turned off', async () => {
-    resetDispatchClaimState();
-    const { deps, service } = createDeps();
-    deps.readDispatchClaimVerificationEnabled = () => false;
-
-    await service.recordLeadTurnDeclaration(declaration);
     await service.handleLeadTurnSettled({ leadSessionId: 'lead-1', turnGeneration: 1 });
 
     expect(deps.sendAutoBridgeToLead).not.toHaveBeenCalled();
-    expect(deps.escalateDispatchClaim).not.toHaveBeenCalled();
   });
 });
 
@@ -591,7 +562,6 @@ function createDeps(overrides: Partial<OrcaTeamServiceDeps> = {}) {
       workers.filter((worker) => worker.leadSessionId === leadSessionId),
     ),
 
-    escalateDispatchClaim: vi.fn(),
     getLiveSession: vi.fn(() => null),
     resumeWorkerSession: vi.fn(async () => {}),
     updateWorkerStatus: vi.fn(async (workerId, status) => {

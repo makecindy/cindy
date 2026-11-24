@@ -4326,30 +4326,6 @@
       }
     },
     {
-      "id": "turn-declaration",
-      "status": "proposed",
-      "en": "Turn declaration",
-      "translations": {
-        "zh-CN": "回合声明",
-        "zh-TW": "回合聲明",
-        "ja": "ターン宣言",
-        "ko": "턴 선언",
-        "es": "declaración de turno",
-        "fr": "déclaration de tour",
-        "de": "Turn-Erklärung",
-        "pt-PT": "declaração de turno",
-        "pt-BR": "declaração de turno",
-        "zh-Hant-x-lzh": "回合之陳",
-        "zh-Hans-x-lzh": "回合之陈"
-      },
-      "minorityByDesign": {
-        "zh-Hant-x-lzh": "文言变体按既有的「陳」说法，与繁体版的「回合聲明」同指 Lead 在收口时交的指派与派发账；文言不直译「声明」而作「之陳」。",
-        "zh-Hans-x-lzh": "文言变体按既有的「陈」说法，与简体版的「回合声明」同指 Lead 在收口时交的指派与派发账；文言不直译「声明」而作「之陈」。"
-      },
-      "checkCase": false,
-      "note": "Lead 每轮收口交给宿主的指派与派发账（report_turn 的 assignments / dispatched / pending）。中文用「回合声明」；日语「ターン宣言」，韩语「턴 선언」，德语「Turn-Erklärung」，西语、法语、葡语用 declaración / déclaration de turno。派发动作本身仍用既有的「派发」「派遣」「파견」「Übergabe」「envío」「envoi」「envio」。"
-    },
-    {
       "id": "ultrafast",
       "status": "proposed",
       "en": "Ultrafast",

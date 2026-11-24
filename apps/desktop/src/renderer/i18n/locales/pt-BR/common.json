@@ -5613,9 +5613,7 @@
       "workerHardLimit": "Limite rígido de Workers",
       "workerHardLimitHint": "Número máximo de Workers permitidos. Deve ser >= ao limite flexível.",
       "idleRelease": "Liberação por inatividade (minutos)",
-      "idleReleaseHint": "Defina 0 para desativar a liberação automática em segundo plano; valores positivos liberam Workers após esse número de minutos de inatividade.",
-      "dispatchClaimVerification": "Verificar declarações de turno",
-      "dispatchClaimVerificationHint": "Confere as atribuições e envios que o Lead declara no fim do turno com os registros do host. Se não coincidirem, há uma correção e depois um aviso."
+      "idleReleaseHint": "Defina 0 para desativar a liberação automática em segundo plano; valores positivos liberam Workers após esse número de minutos de inatividade."
     },
     "agentResource": {
       "saveFailed": "Falha ao salvar. Tente novamente.",
@@ -15651,16 +15649,6 @@
       }
     },
     "systemCard": {
-      "orcaDispatch": {
-        "unverified": "Declaração de turno não verificada",
-        "notice": {
-          "noDeclaration": "Este turno não apresentou declaração de envio",
-          "declaredNotDispatched": "A declaração afirma um envio para {{target}} que o host nunca aceitou",
-          "dispatchedNotDeclared": "O host enviou para {{target}} neste turno, mas a declaração o omite",
-          "unknownId": "O id de fila {{id}} não corresponde a nenhum envio",
-          "body": "{{reason}}. Foi pedido ao Lead que corrija a declaração."
-        }
-      },
       "help": {
         "title": "Comandos disponíveis",
         "builtInCommands": "Comandos integrados",
@@ -15923,7 +15911,7 @@
       "orcaFromWorkerBatch": "Relatório do sistema: {{count}} resultados de Worker",
       "orcaFromWorkerNamed": "Mensagem do Worker \"{{role}}\"",
       "orcaFromHost": "Mensagem do host (Orca host)",
-      "orcaHostNoticeDispatchClaim": "A declaração do turno não bate com os registros de envio do host; o Lead foi solicitado a corrigi-la.",
+      "orcaHostNoticeDispatchClaim": "Esta resposta cita um envio que o Cindy não registrou; o Lead foi solicitado a corrigir.",
       "hookChannelFrom": "De {{channel}}",
       "deviceSentMobileNamed": "Enviado do celular \"{{name}}\"",
       "deviceSentMobile": "Enviado do celular",

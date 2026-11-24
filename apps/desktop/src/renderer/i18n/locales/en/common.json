@@ -5555,9 +5555,7 @@
       "workerHardLimit": "Worker Hard Limit",
       "workerHardLimitHint": "Maximum number of Workers allowed. Must be greater than or equal to the soft limit.",
       "idleRelease": "Idle Release (minutes)",
-      "idleReleaseHint": "Set 0 to disable background auto-release; positive values release workers after this many idle minutes.",
-      "dispatchClaimVerification": "Verify turn declarations",
-      "dispatchClaimVerificationHint": "Check the assignments and dispatches the Lead declares at turn end against the host's own dispatch records. A mismatch gets one correction and then a notification."
+      "idleReleaseHint": "Set 0 to disable background auto-release; positive values release workers after this many idle minutes."
     },
     "agentResource": {
       "saveFailed": "Failed to save. Try again.",
@@ -15547,16 +15545,6 @@
       }
     },
     "systemCard": {
-      "orcaDispatch": {
-        "unverified": "Turn declaration unverified",
-        "notice": {
-          "noDeclaration": "This turn carried no report_turn declaration",
-          "declaredNotDispatched": "The declaration claims a dispatch to {{target}} that the host never accepted",
-          "dispatchedNotDeclared": "The host dispatched to {{target}} this turn, but the declaration leaves it out",
-          "unknownId": "The queued message id {{id}} matches no dispatch",
-          "body": "{{reason}}. Lead has been asked to correct its declaration."
-        }
-      },
       "help": {
         "title": "Available Commands",
         "builtInCommands": "Built-in Commands",
@@ -15819,7 +15807,7 @@
       "orcaFromWorkerBatch": "System report: {{count}} Worker results",
       "orcaFromWorkerNamed": "Message from Worker “{{role}}”",
       "orcaFromHost": "Message from the host (Orca host)",
-      "orcaHostNoticeDispatchClaim": "The turn declaration and the host dispatch records disagree; the Lead was asked to correct it.",
+      "orcaHostNoticeDispatchClaim": "This reply cited a dispatch the host has no record of; the Lead was asked to correct it.",
       "hookChannelFrom": "From {{channel}}",
       "deviceSentMobileNamed": "Sent from phone “{{name}}”",
       "deviceSentMobile": "Sent from phone",

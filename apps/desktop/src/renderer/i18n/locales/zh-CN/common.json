@@ -5512,9 +5512,7 @@
       "workerHardLimit": "Worker 硬上限",
       "workerHardLimitHint": "允许创建的最大 Worker 数量，必须大于等于软上限。",
       "idleRelease": "空闲释放（分钟）",
-      "idleReleaseHint": "设为 0 时关闭后台自动释放；正数表示空闲超过该时长后自动释放。",
-      "dispatchClaimVerification": "核对回合声明",
-      "dispatchClaimVerificationHint": "Lead 收口时提交的指派与派发，按宿主派发记录核对。不一致先纠正一次，仍不一致则提醒你。"
+      "idleReleaseHint": "设为 0 时关闭后台自动释放；正数表示空闲超过该时长后自动释放。"
     },
     "agentResource": {
       "saveFailed": "保存失败，请重试。",
@@ -15482,16 +15480,6 @@
       }
     },
     "systemCard": {
-      "orcaDispatch": {
-        "unverified": "回合声明未核实",
-        "notice": {
-          "noDeclaration": "这一轮没有交回合声明",
-          "declaredNotDispatched": "声明称已派给 {{target}}，宿主这一轮没有接受",
-          "dispatchedNotDeclared": "宿主这一轮已派给 {{target}}，声明里没写",
-          "unknownId": "引用的队列编号 {{id}} 不对应任何派发",
-          "body": "{{reason}}。已要求 Lead 补齐声明。"
-        }
-      },
       "help": {
         "title": "可用命令",
         "builtInCommands": "内置命令",
@@ -15754,7 +15742,7 @@
       "orcaFromWorkerBatch": "系统回传的 {{count}} 条 Worker 结果",
       "orcaFromWorkerNamed": "来自 Worker「{{role}}」的消息",
       "orcaFromHost": "来自宿主（Orca host）的消息",
-      "orcaHostNoticeDispatchClaim": "这项回合声明与宿主派发记录不一致，已提醒 Lead 改正。",
+      "orcaHostNoticeDispatchClaim": "这条回复引用了一个 Cindy 没有记录的派发凭据，已提醒 Lead 改正。",
       "hookChannelFrom": "来自 {{channel}}",
       "deviceSentMobileNamed": "从手机「{{name}}」发送",
       "deviceSentMobile": "从手机发送",

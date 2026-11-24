@@ -5512,9 +5512,7 @@
       "workerHardLimit": "Worker 硬限",
       "workerHardLimitHint": "許建立之 Worker 最大數，須不小於軟上限。",
       "idleRelease": "閒時釋放（分鐘）",
-      "idleReleaseHint": "設為 0 則闔後臺自動釋放；正數謂閒逾此時長即自釋放。",
-      "dispatchClaimVerification": "核回合之陳",
-      "dispatchClaimVerificationHint": "Lead 收口所陳指派與遣發，按宿之遣單核之。不合則正一次，仍未合則告。"
+      "idleReleaseHint": "設為 0 則闔後臺自動釋放；正數謂閒逾此時長即自釋放。"
     },
     "agentResource": {
       "saveFailed": "存之未成，請再試。",
@@ -15473,16 +15471,6 @@
       }
     },
     "systemCard": {
-      "orcaDispatch": {
-        "unverified": "回合之陳未核",
-        "notice": {
-          "noDeclaration": "此輪未有回合之陳",
-          "declaredNotDispatched": "陳稱已遣往 {{target}}，然宿未納",
-          "dispatchedNotDeclared": "宿於此輪已遣 {{target}}，陳中未載",
-          "unknownId": "所引隊號 {{id}} 無對應之單",
-          "body": "{{reason}}。已命 Lead 補陳。"
-        }
-      },
       "help": {
         "title": "可用指令",
         "builtInCommands": "內建指令",
@@ -15745,7 +15733,7 @@
       "orcaFromWorkerBatch": "系統所報 Worker 結果凡 {{count}}",
       "orcaFromWorkerNamed": "Worker「{{role}}」之訊",
       "orcaFromHost": "宿主（Orca host）來訊",
-      "orcaHostNoticeDispatchClaim": "此單之陳與宿錄不符，已命 Lead 正之。",
+      "orcaHostNoticeDispatchClaim": "此覆引一憑據，Cindy 無其記，已請 Lead 正之。",
       "hookChannelFrom": "自 {{channel}} 來",
       "deviceSentMobileNamed": "自手機「{{name}}」所遣",
       "deviceSentMobile": "自手機所遣",

@@ -5613,9 +5613,7 @@
       "workerHardLimit": "Limite stricte de Workers",
       "workerHardLimitHint": "Nombre maximal de Workers autorisés. Doit être >= à la limite souple.",
       "idleRelease": "Libération après inactivité (minutes)",
-      "idleReleaseHint": "Définissez 0 pour désactiver la libération automatique en arrière-plan ; une valeur positive libère les Workers après ce nombre de minutes d'inactivité.",
-      "dispatchClaimVerification": "Vérifier les déclarations de tour",
-      "dispatchClaimVerificationHint": "Compare les affectations et envois déclarés par Lead en fin de tour aux enregistrements de l'hôte. En cas d'écart, une correction puis une notification."
+      "idleReleaseHint": "Définissez 0 pour désactiver la libération automatique en arrière-plan ; une valeur positive libère les Workers après ce nombre de minutes d'inactivité."
     },
     "agentResource": {
       "saveFailed": "Échec de l'enregistrement. Réessayez.",
@@ -15651,16 +15649,6 @@
       }
     },
     "systemCard": {
-      "orcaDispatch": {
-        "unverified": "Déclaration de tour non vérifiée",
-        "notice": {
-          "noDeclaration": "Ce tour n'a présenté aucune déclaration d'envoi",
-          "declaredNotDispatched": "La déclaration annonce un envoi vers {{target}} que l'hôte n'a jamais accepté",
-          "dispatchedNotDeclared": "L'hôte a envoyé vers {{target}} ce tour-ci, mais la déclaration l'omet",
-          "unknownId": "L'id de file {{id}} ne correspond à aucun envoi",
-          "body": "{{reason}}. Lead a été invité à corriger sa déclaration."
-        }
-      },
       "help": {
         "title": "Commandes disponibles",
         "builtInCommands": "Commandes intégrées",
@@ -15923,7 +15911,7 @@
       "orcaFromWorkerBatch": "Rapport système : {{count}} résultats de Worker",
       "orcaFromWorkerNamed": "Message du Worker « {{role}} »",
       "orcaFromHost": "Message de l’hôte (Orca host)",
-      "orcaHostNoticeDispatchClaim": "La déclaration du tour ne correspond pas aux envois enregistrés par l’hôte ; le Lead a été prié de la corriger.",
+      "orcaHostNoticeDispatchClaim": "Cette réponse cite un envoi dont Cindy n'a pas la trace ; le Lead a été prié de la corriger.",
       "hookChannelFrom": "Depuis {{channel}}",
       "deviceSentMobileNamed": "Envoyé depuis le téléphone « {{name}} »",
       "deviceSentMobile": "Envoyé depuis un téléphone",

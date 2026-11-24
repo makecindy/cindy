@@ -1071,10 +1071,6 @@ Codex Subagent 的可选扩展调配开关。默认关闭以保留 Codex 原生 
 
 阿里云百炼与小米 MiMo 的外部订阅产品名称，四语统一保留官方英文写法；与 Coding Plan 是不同套餐和凭证类型，先登记为 proposed，避免供应商预设中混用产品名。
 
-### Turn declaration
-
-Lead 每轮收口交给宿主的指派与派发账（report_turn 的 assignments / dispatched / pending）。中文用「回合声明」；日语「ターン宣言」，韩语「턴 선언」，德语「Turn-Erklärung」，西语、法语、葡语用 declaración / déclaration de turno。派发动作本身仍用既有的「派发」「派遣」「파견」「Übergabe」「envío」「envoi」「envio」。
-
 ### Ultrafast
 
 Codex 模型的第三档速度；与推理深度 Ultra 独立。标准、快速、超快分别对应默认、Fast、Ultrafast。
