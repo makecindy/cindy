@@ -93,6 +93,15 @@ export interface PluginRemovalUserNotice {
   name: string | null;
 }
 
+export type OfficialModelPlugin = Pick<PluginMarketItem, 'pluginId' | 'ghostId' | 'namespace' | 'name' | 'description'>;
+export interface OfficialModelPluginPage {
+  incomplete?: boolean;
+  officialIds: string[];
+  totalOfficial: number | null;
+  items: OfficialModelPlugin[];
+  nextCursor: string | null;
+}
+
 /** 详情携带安装前展示给用户的 manifest；官方来自 release，自定义来自本地发现。 */
 export interface PluginMarketDetail extends PluginMarketItem {
   manifest: GhostManifest;

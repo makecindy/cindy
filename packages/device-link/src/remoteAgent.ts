@@ -362,6 +362,8 @@ export interface RemoteAgentCaps {
   version: number;
   agents: Array<{ kind: RemoteAgentKind; available: boolean }>;
   maxRuns: number;
+  /** Live anonymous admission hint for this authenticated controller, not a reservation. */
+  runCapacityAvailable?: boolean;
   uploadChunkBytes: number;
   maxPayloadBytes: number;
   /** 是否支持 opaque 虚拟工作区；不支持时控制端必须拒绝启动以免泄露真实路径。 */
@@ -956,6 +958,7 @@ export function parseRemoteAgentCaps(value: unknown): RemoteAgentCaps {
     version: count(v.version, 1_000),
     agents,
     maxRuns: count(v.maxRuns, 1_000),
+    ...(typeof v.runCapacityAvailable === 'boolean' ? { runCapacityAvailable: v.runCapacityAvailable } : {}),
     uploadChunkBytes: count(v.uploadChunkBytes, REMOTE_AGENT_UPLOAD_CHUNK_BYTES),
     maxPayloadBytes: count(v.maxPayloadBytes, Number.MAX_SAFE_INTEGER),
     ...(v.virtualWorkspace === true ? { virtualWorkspace: true } : {}),

@@ -486,6 +486,31 @@ describe('resolveSendToSessionCreateRoute', () => {
     readDeviceRouting: vi.fn((_deviceId: string, _agentKind: AgentKind) => device()),
   });
 
+  // #12060, unit: with two connections for one model the initial task config
+  // must select the requested connection, even when the model was inherited.
+  it('pins the initial config to an available local connection without fallback', async () => {
+    const deps = routingDeps();
+    const snapshot = await deps.readLocalRouting('claude-code');
+    const catalog = snapshot.providerRouting.availability;
+    const second = { id: 'second', name: 'Secondary', models: ['claude-fable-5'] };
+    deps.readLocalRouting.mockResolvedValue({ ...snapshot, providerRouting: {
+      ...snapshot.providerRouting, availability: { ...catalog, 'claude-code': [...catalog['claude-code'], second] },
+    } });
+    const request = { source: fableSource(), sourceAgentDeviceId: null, sourceIsSsh: false };
+    const overrides = { providerId: second.id };
+    expect(await resolveSendToSessionCreateRoute(request, deps))
+      .toMatchObject({ ok: true, config: { providerId: 'anthropic' } });
+    expect(await resolveSendToSessionCreateRoute({ ...request, overrides }, deps))
+      .toMatchObject({ ok: true, config: { providerId: second.id } });
+    for (const invalid of [{ providerId: 'offline' }, { ...overrides, model: 'claude-opus-fast' }]) {
+      expect(await resolveSendToSessionCreateRoute({ ...request, overrides: invalid }, deps))
+        .toMatchObject({ ok: false, errorCode: 'PROVIDER_ROUTE_UNAVAILABLE' });
+    }
+    expect(await resolveSendToSessionCreateRoute({ ...request, sourceAgentDeviceId: 'device-b', overrides }, deps))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(deps.readDeviceRouting).not.toHaveBeenCalled();
+  });
+
   it('SC1: 指定另一台电脑 → 位置为那台，沿用来源模型 id，来源按那台的供应商解析', async () => {
     const deps = routingDeps();
     const result = await resolveSendToSessionCreateRoute({

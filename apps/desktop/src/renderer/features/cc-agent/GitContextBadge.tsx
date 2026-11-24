@@ -201,7 +201,7 @@ function PrChip({
   const [settingsOpen, setSettingsOpen] = useState(false);
   // A remote task's card is read from its computer by the task page; shared-task guests have none.
   const prCard = useSessionPrCard(session.id, prStatusKey(prRef),
-    (summaryOpen || settingsOpen) && canManage && !readOnly && prRef.provider !== 'gitlab');
+    (summaryOpen || settingsOpen) && canManage && !readOnly);
   useEffect(() => {
     if (!prCard || (status?.ok && (status.status === 'merged' || status.status === 'closed'))) setSettingsOpen(false);
   }, [prCard, status]);

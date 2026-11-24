@@ -199,6 +199,7 @@ export function PreviewHeader({
   closeDisabled = false,
   closeTestID = "preview.close",
   standalone = true,
+  sheetMenu = false,
 }: {
   name: string;
   detail?: string;
@@ -207,6 +208,7 @@ export function PreviewHeader({
   closeDisabled?: boolean;
   closeTestID?: string;
   standalone?: boolean;
+  sheetMenu?: boolean;
 }) {
   const { t } = useTranslation();
   const insets = useSafeAreaInsets();
@@ -224,7 +226,7 @@ export function PreviewHeader({
     },
     ...actions,
   ];
-  const nativeMenu = usesNativePullDownMenu();
+  const nativeMenu = !sheetMenu && usesNativePullDownMenu();
   const frame = [
     styles.header,
     {
@@ -277,6 +279,7 @@ export function PreviewHeader({
         </View>
         {menuActions.length ? (
           <NativePullDownMenu
+            disabled={sheetMenu}
             accessibilityLabel={t("message.attachmentPreview.more")}
             actions={menuActions.map((action) => ({
               id: action.key,

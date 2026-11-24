@@ -1458,29 +1458,56 @@ describe('remote connection pool with a real host', () => {
   });
 
   it('when a release close does not get through, makes room before opening instead of hitting the limit, then closes it', async () => {
-    limits = { perDevice: 2, total: 64 };
-    const pool = new RemoteConnectionPool({ idleMinutes: () => idleMinutes, checkMs: 3_600_000, closeRetryMs: 20 });
-    const a = await start(pool);
-    await ask(a, watch(a), 'hello');
-    await sleep(5);
-    const b = await start(pool);
-    await ask(b, watch(b), 'hello');
-    // 让出 a 时 close 第一次没送到对方。
-    let dropped = false;
-    intercept = (request) => {
-      if (request.op !== 'close' || dropped) return undefined;
-      dropped = true;
-      throw new Error('[DEVICE_LINK_TIMEOUT] link down');
-    };
-    expect(await pool.releaseForRetry(member('other', 0, false))).toBe(true);
-    expect(host.limitUsage().total).toBe(2);
-    await sleep(5);
-    opens = 0;
-    await start(pool);
-    // 本机仍按 a 占着算：打开前先让了 b，没有白开一次撞上限。
-    expect(opens).toBe(1);
-    // 再发的 close 送到后，对方结束 a。
-    await vi.waitFor(() => expect(host.limitUsage().total).toBe(1));
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const retryRequested = Promise.withResolvers<void>();
+    const deliverRetry = Promise.withResolvers<void>();
+    try {
+      limits = { perDevice: 2, total: 64 };
+      const pool = new RemoteConnectionPool({ idleMinutes: () => idleMinutes, checkMs: 3_600_000, closeRetryMs: 20 });
+      const a = await start(pool);
+      await ask(a, watch(a), 'hello');
+      vi.setSystemTime(Date.now() + 1);
+      const b = await start(pool);
+      await ask(b, watch(b), 'hello');
+      vi.setSystemTime(Date.now() + 1);
+
+      const closeRunIds: unknown[] = [];
+      let usageBeforeOpen: number | undefined;
+      intercept = (request) => {
+        if (request.op === 'open') usageBeforeOpen = host.limitUsage().total;
+        if (request.op !== 'close') return undefined;
+        closeRunIds.push(request.runId);
+        if (closeRunIds.length === 1) throw new Error('[DEVICE_LINK_TIMEOUT] link down');
+        if (request.runId !== closeRunIds[0]) return undefined;
+        // #8097: hold the retry in transit until the new connection has opened.
+        retryRequested.resolve();
+        return deliverRetry.promise.then(() => host.handle(CONTROLLER, request));
+      };
+
+      expect(await pool.releaseForRetry(member('other', 0, false))).toBe(true);
+      await retryRequested.promise;
+      expect(pool.occupied()).toBe(2);
+      expect(host.limitUsage().total).toBe(2);
+
+      opens = 0;
+      await start(pool);
+      expect(opens).toBe(1);
+      expect(usageBeforeOpen).toBe(1);
+      expect(closeRunIds).toHaveLength(3);
+      expect(closeRunIds[2]).not.toBe(closeRunIds[0]);
+      expect(pool.occupied()).toBe(2);
+      expect(host.limitUsage().total).toBe(2);
+
+      deliverRetry.resolve();
+      await vi.waitFor(() => {
+        expect(host.limitUsage().total).toBe(1);
+        expect(pool.occupied()).toBe(1);
+      });
+      expect(closeRunIds).toHaveLength(3);
+    } finally {
+      deliverRetry.resolve();
+      vi.useRealTimers();
+    }
   });
 
   // PR #6483 review：连回后补发设置失败只记日志，消息照样在缺设置的 Agent 上执行。
@@ -1505,11 +1532,13 @@ describe('remote connection pool with a real host', () => {
     expect(scenario.started).toHaveLength(3);
   });
 
-  // PR #6483 第三轮：self 让出时 close 没送到，接回前本机不算自己的旧 run，对方按上限拒绝，且不会选 self 让出。
+  // #12552: real controller + host admission, unit. #6483 covered a lost
+  // close but expected the old host's limit rejection. A new host can finish
+  // this exact idle session before replacing it, even if every close RPC drops.
   it.each([
-    ['gets through', 1, 'ok:again'],
-    ['still fails', Infinity, '[DEVICE_LIMIT]'],
-  ])('when its own release close did not get through and the retried close %s, a reconnect closes the old run first', async (_label, drops, outcome) => {
+    ['gets through', 1],
+    ['still fails', Infinity],
+  ])('when its own release close did not get through and the retried close %s, a reconnect closes the old run first', async (_label, drops) => {
     const pool = new RemoteConnectionPool({ idleMinutes: () => idleMinutes, checkMs: 3_600_000, closeRetryMs: 3_600_000 });
     const a = await start(pool);
     const events = watch(a);
@@ -1525,19 +1554,15 @@ describe('remote connection pool with a real host', () => {
     // 对方还开着 a 的旧 run(名额 1 已占满)。
     expect(host.limitUsage().total).toBe(1);
     opens = 0;
-    if (outcome.startsWith('ok:')) {
-      expect(await ask(a, events, 'again')).toBe(outcome);
-      // 先关掉了 a 的旧 run 再打开，没有撞上限。
-      expect(opens).toBe(1);
-      expect(dropped).toBe(1);
-      expect(host.limitUsage().total).toBe(1);
-      expect(scenario.started).toHaveLength(2);
-    } else {
-      // 旧 run 还是关不掉：照常按对方的上限报错，不死循环。
-      await expect(a.send({ type: 'user', content: 'again' })).rejects.toThrow(outcome);
-      expect(opens).toBe(1);
-      expect(dropped).toBeLessThanOrEqual(3);
-    }
+    expect(await ask(a, events, 'again')).toBe('ok:again');
+    // Either the close RPC or the host's same-session admission finishes the
+    // old idle instance. Never add a second slot or loop on a lost close.
+    expect(opens).toBe(1);
+    expect(dropped).toBeGreaterThanOrEqual(1);
+    expect(dropped).toBeLessThanOrEqual(3);
+    if (drops === 1) expect(dropped).toBe(1);
+    expect(host.limitUsage().total).toBe(1);
+    expect(scenario.started).toHaveLength(2);
   });
 
   it('still counts the old run of a task closed while its release close was undelivered, then drops it once closed', async () => {

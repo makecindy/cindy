@@ -119,6 +119,9 @@ export function mobileAgentNetPeerRoute(peer: string): { path: 'direct' | 'relay
   const socket = live();
   return { path: socket?.pathTo(peer) ?? null, rttMs: socket?.peerSnapshot(peer)?.rttMs ?? null };
 }
+export function mobileAgentNetRelayStalled(peer: string): void {
+  if (!isScopedPeer(peer)) live()?.relayStalled();
+}
 export function mobileAgentNetPeerConnectedAt(peer: string): number | null { return peerConnectedAt.get(peer) ?? null; }
 /**
  * The phone changed networks: connections send from the new address now and candidates are gathered again. `routeChanged`

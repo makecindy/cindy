@@ -48,7 +48,11 @@ export function admitPluginEngineSession(
    * What the user set for an engine in Settings → Model providers
    * (pluginEnginesIpc.pluginEngineSettingsOf); absent = nothing is turned off.
    */
-  settingsOf?: (provider: Pick<PluginHarness, 'key'>) => { suspended?: boolean; disabledModels?: readonly string[] },
+  settingsOf?: (provider: Pick<PluginHarness, 'key'>) => {
+    suspended?: boolean;
+    disabledModels?: readonly string[];
+    modelEfforts?: PluginEngineView['modelEfforts'];
+  },
 ): SessionOpenBody {
   const key = pluginEngineKeyFromProviderId(body.providerId);
   if (!key) throw new Error('插件引擎任务缺少引擎标识。请在新建任务时重新选择插件引擎。');
@@ -73,7 +77,9 @@ export function admitPluginEngineSession(
   if (isPluginEngineModelDisabled(model, settings?.disabledModels)) throw new Error(pluginEngineModelOffMessage(harness.name));
   const requested = body.effort;
   const offered = modelsOf(harness).find((item) => item.id === model)?.efforts ?? [];
-  const effort = isPluginEngineEffort(requested) && offered.includes(requested) ? requested : '';
+  const saved = settings?.modelEfforts?.[model];
+  const effort = isPluginEngineEffort(requested) && offered.includes(requested) ? requested
+    : saved && offered.includes(saved) ? saved : '';
   return { ...body, model, effort, fastMode: false };
 }
 
@@ -131,7 +137,9 @@ export function admitPluginEngineSwitchTarget(
     throw new Error(`${engine.name} 当前没有开放这个模型。请重新选择模型。`);
   }
   const offered = engine.models.find((item) => item.id === model)?.efforts ?? [];
-  const effort = isPluginEngineEffort(target.effort) && offered.includes(target.effort) ? target.effort : '';
+  const saved = engine.modelEfforts?.[model];
+  const effort = isPluginEngineEffort(target.effort) && offered.includes(target.effort) ? target.effort
+    : saved && offered.includes(saved) ? saved : '';
   const permissionMode = engine.permissionModes.find((mode) => mode.id === target.permissionMode)?.id
     ?? engine.defaultPermissionMode;
   return { model, effort, permissionMode, engineName: engine.name };

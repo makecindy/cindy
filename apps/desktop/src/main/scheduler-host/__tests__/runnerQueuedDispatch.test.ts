@@ -128,15 +128,16 @@ import { AgentInputCoordinator } from '../../maker-ipc/agent-input-coordinator.d
 import { GitSnapshotCoordinator } from '../../git-snapshot/gitSnapshotCoordinator.js';
 import { SnapshotOperationDeadlineError } from '../../utils/operationBudget.js';
 import { createSchedulerQueueBridge, prepareQueuedPromptSnapshot, type SchedulerQueuedPromptObserver } from '../../maker-ipc/schedulerQueueBridge.js';
-import { createInputEnqueueHarness } from '../../maker-ipc/__tests__/inputEnqueueHarness.js';
+import { createInputEnqueueHarness, createUsageLimitedTurnErrorHarness } from '../../maker-ipc/__tests__/inputEnqueueHarness.js';
 import { createQueuedAcceptedCallbacks } from '../../maker-ipc/queuedAcceptedCallbacks.js';
 import { runSchedulerQueuedPreparation, type SchedulerQueuedPreparation } from '../../maker-ipc/schedulerQueuedPreparation.js';
 import { createInterruptedTurnAutoResumeHooks } from '../../maker-ipc/interruptedTurnAutoResumeHooks.js';
-import { InterruptedTurnAutoResumeGuard } from '../../maker-ipc/interruptedTurnAutoResume.js';
+import { InterruptedTurnAutoResumeGuard, type InterruptedTurnErrorSignals } from '../../maker-ipc/interruptedTurnAutoResume.js';
 import { AutoResumeBookkeeping } from '../../maker-ipc/autoResumeBookkeeping.js';
 import { computeScheduleRunCostDeltas } from '../runCostLedger.js';
 import { CONTINUE_AFTER_APP_EXIT_PROMPT } from '../../../shared/interruptedTurn.js';
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
+import type { ProviderGroupTurnErrorHooks } from '../../provider-group/service.js';
 import { isUnattendedTurn } from '../../mcp-integrations/unattendedTurn';
 import { noteUnattendedPlanReviewDeclined } from '../../mcp-integrations/unattendedTurn';
 
@@ -546,7 +547,9 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
   // scheduler must settle from the queued failure callback, not its later poll.
   // Only the real typed snapshot deadline is handed to #10834's backoff recovery;
   // its resend and exhaustion are covered by the persisted-recovery tests below.
-  it.each(['deadline', 'permission', 'stop', 'clear', 'pause', 'delete', 'unknown-send'] as const)(
+  // #10161 / unit: with recovery disabled, the same stalled journal receipt
+  // must reach the run's failure details as an unsent message.
+  it.each(['deadline', 'deadline-without-recovery', 'permission', 'stop', 'clear', 'pause', 'delete', 'unknown-send'] as const)(
     'settles pre-accept snapshot preparation through the real queue: %s', async (outcome) => {
     vi.useFakeTimers();
     const h = createSessionHarness(async () => ({ accepted: true }));
@@ -582,7 +585,8 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
       beforeDispatchUserTurn: (sid, item, signal) => prepareQueuedPromptSnapshot(snapshots, watchers, sid, item, signal),
       onAcceptedQueuedMessage: async () => { watchers.delete('snapshot-run-input'); await accepted?.(); },
       onPersistedSendRejected: (sid, message, item, recovering) => queue.onPersistedSendRejected(sid, message, item, recovering),
-      isResumableTurnErrorCandidate: signals => signals.reason === 'scheduler-snapshot-preparation',
+      isResumableTurnErrorCandidate: signals => outcome !== 'deadline-without-recovery'
+        && signals.reason === 'scheduler-snapshot-preparation',
       onResumableTurnError: takeOver,
       onDiscardedQueuedMessage: (_sid, item) => { watchers.get(item.clientId)?.onDiscarded(); watchers.delete(item.clientId); },
       steerToAgent: async () => {}, abortSession: async () => {}, isTurnRunning: () => false,
@@ -634,6 +638,9 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
       expect(vendorSend).toHaveBeenCalledTimes(outcome === 'unknown-send' ? 1 : 0);
       expect(result.error).toBeInstanceOf(Error);
       if (outcome === 'permission') expect(result.error.message).toBe('permission denied');
+      if (outcome === 'deadline-without-recovery') {
+        expect(result.error.message).toMatch(/^\[SNAPSHOT_DISPATCH_INTENT_TIMEOUT\]/);
+      }
       expect(persisted).toHaveBeenCalledOnce();
       releaseIntent({ attemptId: 'late' });
       await vi.advanceTimersByTimeAsync(0);
@@ -1876,6 +1883,192 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     replacement.emit({ type: 'done', source: 'claude-code', data: {} });
     await expect(fire).resolves.toMatchObject({ sessionId: SESSION_ID, resultText: 'recovered scheduled result' });
     expect(replacement.listenerCount()).toBe(0);
+  });
+
+  // Unit regression: runner.fire + the registered terminal handler. The old
+  // reconnect test never exercised a usage-limit from a still-live direct run.
+  // Minimal input: one accepted Schedule turn, terminal quota error, usable group.
+  it.each(['switch', 'exhausted', 'unknown-reset', 'cancelled', 'consecutive-budget', 'episode-budget'] as const)(
+    'tries the selected provider group before scheduled quota waiting: %s', async outcome => {
+    const budgetLimit = outcome === 'consecutive-budget' ? 5 : outcome === 'episode-budget' ? 10 : 0;
+    const guard = new InterruptedTurnAutoResumeGuard({ isEnabled: () => true, log: { debug: vi.fn(), warn: vi.fn() } });
+    const pending = new Map<string, { retryClientId?: string }>();
+    let releaseGroup!: () => void;
+    const groupGate = new Promise<void>(resolve => { releaseGroup = resolve; });
+    const onTurnError = vi.fn(async (id: string, signals: InterruptedTurnErrorSignals, token: number, hooks?: ProviderGroupTurnErrorHooks) => {
+      await groupGate;
+      if (outcome === 'exhausted' || outcome === 'unknown-reset') {
+        if (hooks?.fallback) hooks.fallback(token + 1);
+        else await handler.fallback(id, signals, token + 1);
+      }
+      else if (outcome === 'switch' || budgetLimit) pending.get(id)!.retryClientId = 'replacement-input';
+    });
+    const waitForReset = vi.fn(async () => outcome !== 'unknown-reset');
+    const finish = vi.fn(() => { pending.clear(); queue.failAutoResume('usage limit'); });
+    const handler = createUsageLimitedTurnErrorHarness({
+      pendingSchedulerAutoResumeRunBySession: pending,
+      schedulerFailureDetail: (message: string) => message,
+      schedulerAutoResumeFailureListeners: new Map([['run', [{ quotaWait: { start: () => queue.startQuotaWait() } }]]]),
+      schedulerAutoResumeRunKey: () => 'run',
+      inputCoordinator: { scheduledQuotaOrigin: () => undefined, getProviderGroupSwitchHoldId: () => null },
+      providerGroupService: { onTurnError },
+      interruptedTurnAutoResumeGuard: guard,
+      usageLimitAutoResume: { onTurnError: waitForReset },
+      finishSchedulerUsageLimitWait: finish,
+      log: createLogger(),
+    });
+    const session = createSessionHarness(async () => ({ accepted: true }));
+    const queue = createQueueHarness({ busy: true, autoResumePending: () => pending.has(SESSION_ID) });
+    const { runner } = createRunnerHarness(session.session, queue.deps);
+    const context = createFireContext();
+    const fire = runner.fire(heartbeatSchedule(), context);
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+    await queue.accept();
+    const signals = { codexErrorInfo: 'usageLimitExceeded', message: 'usage limit' };
+    const item: AgentInputQueuedMessage = {
+      clientId: 'scheduled', text: 'original work', persistedContent: 'original work', model: 'gpt-6.2-astra',
+      effort: '', permissionMode: 'ask', workingDir: process.cwd(),
+      chatMessage: { clientId: 'scheduled', role: 'user', content: 'original work', createdAt: '2026-11-01T00:00:00.000Z' },
+      createOpts: { agentKind: 'codex', model: 'gpt-6.2-astra', workingDir: process.cwd() }, origin: SCHEDULER_TURN_ORIGIN,
+    };
+    handler(SESSION_ID, signals, item, 1);
+    session.emit({ type: 'error', source: 'codex', data: { message: 'usage limit', isTerminal: true } });
+    session.emit({ type: 'done', source: 'codex', data: { status: 'failed' } });
+    const groupStarted = onTurnError.mock.calls.length;
+    const resetStarted = waitForReset.mock.calls.length;
+    const waiting = session.listenerCount();
+    const settled = fire.then(result => result.resultText, () => 'failed');
+    if (outcome === 'cancelled') { context.abortController.abort(); pending.clear(); }
+    releaseGroup();
+    await vi.waitFor(() => expect(onTurnError.mock.settledResults[0]?.type).toBe('fulfilled'));
+    if (budgetLimit) {
+      // The registered callback must consume the real shared guard: progress
+      // resets consecutive failures, but cannot reset the human episode cap.
+      for (let attempt = 2; attempt <= budgetLimit + 1; attempt += 1) {
+        if (outcome === 'episode-budget') guard.noteProgress(SESSION_ID);
+        handler(SESSION_ID, signals, item, attempt);
+        await vi.waitFor(() => expect(onTurnError.mock.settledResults.at(-1)?.type).toBe('fulfilled'));
+        session.emit({ type: 'error', source: 'codex', data: { message: 'usage limit', isTerminal: true } });
+        session.emit({ type: 'done', source: 'codex', data: { status: 'failed' } });
+      }
+      expect(onTurnError).toHaveBeenCalledTimes(budgetLimit);
+      expect(waitForReset).toHaveBeenCalledOnce();
+      expect(session.listenerCount()).toBe(1);
+      expect(queue.enqueueCalls).toHaveLength(1);
+    }
+    if (outcome === 'unknown-reset' || outcome === 'cancelled') {
+      expect(await settled).toBe('failed');
+      if (outcome === 'unknown-reset') expect(finish).toHaveBeenCalledWith(SESSION_ID, 2);
+    } else {
+      if (outcome === 'exhausted') expect(waitForReset).toHaveBeenCalledOnce();
+      if (outcome === 'switch') expect(waitForReset).not.toHaveBeenCalled();
+    }
+    pending.clear();
+    session.emit({ type: 'text', source: 'codex', data: { text: 'same-model result', isFinal: true } });
+    session.emit({ type: 'done', source: 'codex', data: {} });
+    if (outcome === 'switch' || outcome === 'exhausted' || budgetLimit) expect(await settled).toBe('same-model result');
+    expect(groupStarted).toBe(1);
+    expect(resetStarted).toBe(0);
+    expect(waiting).toBe(1);
+  });
+
+  // Unit, PR #12569: an old group/reset lookup must not fail a later run on
+  // the same session. Single-run quota tests could not expose this ownership race.
+  it.each(['late-group', 'same-token', 'abandoned', 'late-reset'] as const)(
+    'fences a scheduled quota fallback to its original run: %s', async mode => {
+    const gate = () => {
+      let release!: () => void;
+      const promise = new Promise<void>(resolve => { release = resolve; });
+      return { promise, release };
+    };
+    const oldGroup = gate();
+    const newGroup = gate();
+    const oldReset = gate();
+    const pending = new Map<string, { runId: string; usageLimitToken: number; providerGroupPending: boolean; retryClientId?: string }>();
+    const tokenB = mode === 'late-reset' ? 9 : mode === 'late-group' ? 2 : 1;
+    const waitA = vi.fn();
+    const waitB = vi.fn(() => queue.startQuotaWait());
+    const waitForReset = vi.fn(async (_id: string, _signals: InterruptedTurnErrorSignals, token: number) => {
+      if (token !== 9) return true;
+      if (mode === 'late-reset') await oldReset.promise;
+      return false;
+    });
+    const finish = vi.fn((id: string, token: number) => {
+      if (pending.get(id)?.usageLimitToken !== token) return;
+      pending.delete(id);
+      queue.failAutoResume('old quota failure');
+    });
+    let groupCall = 0;
+    const onTurnError = vi.fn(async (id: string, signals: InterruptedTurnErrorSignals, _token: number, hooks?: ProviderGroupTurnErrorHooks) => {
+      const first = groupCall++ === 0;
+      await (first ? oldGroup.promise : newGroup.promise);
+      if (first && mode === 'abandoned') return;
+      const token = first ? 9 : tokenB + 1;
+      if (hooks?.fallback) hooks.fallback(token);
+      else await handler.fallback(id, signals, token);
+    });
+    const handler = createUsageLimitedTurnErrorHarness({
+      pendingSchedulerAutoResumeRunBySession: pending,
+      schedulerFailureDetail: (message: string) => message,
+      schedulerAutoResumeFailureListeners: new Map([
+        ['old-run', [{ quotaWait: { start: waitA } }]],
+        [SCHEDULER_TURN_ORIGIN.runId, [{ quotaWait: { start: waitB } }]],
+      ]),
+      schedulerAutoResumeRunKey: (_id: string, runId: string) => runId,
+      inputCoordinator: { scheduledQuotaOrigin: () => undefined, getProviderGroupSwitchHoldId: () => null },
+      providerGroupService: { onTurnError },
+      interruptedTurnAutoResumeGuard: new InterruptedTurnAutoResumeGuard({ isEnabled: () => true, log: { debug: vi.fn(), warn: vi.fn() } }),
+      usageLimitAutoResume: { onTurnError: waitForReset },
+      finishSchedulerUsageLimitWait: finish,
+      log: createLogger(),
+    });
+    const makeInput = (runId: string): AgentInputQueuedMessage => ({
+      clientId: runId, text: 'work', persistedContent: 'work', model: 'gpt-6.2-astra', effort: '',
+      permissionMode: 'ask', workingDir: process.cwd(),
+      chatMessage: { clientId: runId, role: 'user', content: 'work', createdAt: '2026-11-01T00:00:00.000Z' },
+      createOpts: { agentKind: 'codex', model: 'gpt-6.2-astra', workingDir: process.cwd() },
+      origin: { ...SCHEDULER_TURN_ORIGIN, runId },
+    });
+    const session = createSessionHarness(async () => ({ accepted: true }));
+    const queue = createQueueHarness({ busy: true, autoResumePending: () => pending.has(SESSION_ID) });
+    const signals = { codexErrorInfo: 'usageLimitExceeded', message: 'usage limit' };
+    handler(SESSION_ID, signals, makeInput('old-run'), 1);
+    if (mode === 'late-reset') {
+      oldGroup.release();
+      await vi.waitFor(() => expect(waitForReset).toHaveBeenCalledOnce());
+    }
+    pending.delete(SESSION_ID); // Original run cancelled/taken over while its lookup was in flight.
+    const { runner } = createRunnerHarness(session.session, queue.deps);
+    const fire = runner.fire(heartbeatSchedule(), createFireContext());
+    const settled = fire.then(result => result.resultText, () => 'failed');
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+    await queue.accept();
+    handler(SESSION_ID, signals, makeInput(SCHEDULER_TURN_ORIGIN.runId), tokenB);
+    const current = pending.get(SESSION_ID);
+    session.emit({ type: 'error', source: 'codex', data: { message: 'usage limit', isTerminal: true } });
+    session.emit({ type: 'done', source: 'codex', data: { status: 'failed' } });
+    oldGroup.release();
+    oldReset.release();
+    if (mode === 'late-reset') await waitForReset.mock.results[0]!.value;
+    await onTurnError.mock.results[0]!.value;
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(pending.get(SESSION_ID)).toBe(current);
+    expect(current?.usageLimitToken).toBe(tokenB);
+    expect(waitA).toHaveBeenCalledTimes(mode === 'late-reset' ? 1 : 0);
+    expect(waitB).not.toHaveBeenCalled();
+    expect(finish).not.toHaveBeenCalled();
+    expect(waitForReset).toHaveBeenCalledTimes(mode === 'late-reset' ? 1 : 0);
+    expect(session.listenerCount()).toBe(1);
+    newGroup.release();
+    await onTurnError.mock.results[1]!.value;
+    expect(waitB).toHaveBeenCalledOnce();
+    expect(current?.usageLimitToken).toBe(tokenB + 1); // The owning entry still accepts its rearmed token.
+    pending.delete(SESSION_ID);
+    session.emit({ type: 'text', source: 'codex', data: { text: 'new run result', isFinal: true } });
+    session.emit({ type: 'done', source: 'codex', data: {} });
+    expect(await settled).toBe('new run result');
+    expect(queue.enqueueCalls).toHaveLength(1);
   });
 
   it.each(['local session', 'shared send without an offer'] as const)(

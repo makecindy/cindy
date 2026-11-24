@@ -113,7 +113,7 @@ export {
 } from './memory/manager.js';
 export { isBotMcpServerAllowed } from './agents/shared/bot-runtime-policy.js';
 export { resolveAllowedManagedSkills, snapshotManagedSkillGrants } from './agents/shared/managed-skill-policy.js';
-export { isSkillDisabled } from './agents/shared/skill-activation.js';
+export { canonicalSkillPath, isSkillDisabled, snapshotDisabledSkillPaths } from './agents/shared/skill-activation.js';
 export {
   MemoryFlushController,
   DEFAULT_FLUSH_THRESHOLDS,
@@ -123,6 +123,6 @@ export { MAKER_MEMORY_RULES } from './memory/system-prompt.js';
 export { loadMemoryContext } from './memory/context.js';
 
 export { LIBRARY_READ_ROOT, parseLibraryAssetRef, resolveLibraryAssetPath } from './agents/shared/library-native-read.js';
-export { VoiceCallContext, type VoiceCallRecord, type VoiceCallTurn, type VoiceCallHandoff } from './voice-call.js';
+export { VoiceCallContext, nativeVoiceCallInstructions, type VoiceCallRecord, type VoiceCallTurn, type VoiceCallHandoff } from './voice-call.js';
 
 export { ASYNC_QUESTION_ANSWER, SUPERSEDE_ASYNC_QUESTIONS, isolatedBotProfile } from './agents/base-agent.js';

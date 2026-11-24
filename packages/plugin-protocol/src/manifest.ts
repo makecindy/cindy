@@ -5,6 +5,7 @@ import { parseGhostSecretCheck, type GhostSecretCheckDecl } from './secretCheck.
 import { parseGhostRoutineEvents, type GhostRoutineEvents } from './routineEvents.js';
 import { parseGhostModelsNeeds, type GhostModelsNeeds } from './pluginModels.js';
 import { parseGhostHarnesses, type GhostHarnessDecl } from './pluginHarnesses.js';
+import { parseGhostFileOpener, type GhostFileOpenerDecl } from './pluginFileOpener.js';
 import { parseGhostSystemPromptFragments, type GhostSystemPromptFragment } from './runtimeContext.js';
 import { GHOST_LOCALES, type GhostLocale } from './locales.js';
 import { validateGhostReadmeDeclaration } from './readme.js';
@@ -1072,6 +1073,11 @@ export interface GhostManifest {
    */
   harnesses?: GhostHarnessDecl[];
   /**
+   * File types the plugin opens for the user instead of the system default app (v3 only;
+   * requires `node`). See `pluginFileOpener.ts`.
+   */
+  fileOpener?: GhostFileOpenerDecl;
+  /**
    * network 能力与访问范围。
    * 域名白名单 + 凭证声明由插件详情逐项展示,运行期主机代发并守门。
    */
@@ -1283,6 +1289,7 @@ const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
   'routineEvents',
   'models',
   'harnesses',
+  'fileOpener',
   'systemPrompt',
   'schemaVersion',
   'id',
@@ -3601,6 +3608,14 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
     if (parsed.ok) harnesses = parsed.harnesses;
     else if (!preserveHistoricalParameterSize) return { ok: false, reason: parsed.reason };
   }
+  // 插件接管打开的文件类型(v3 only;v2 slots 不映射)。历史快照里本 Host 认识之前写下、
+  // 不合规的值只丢弃,不让已装插件失效。
+  let fileOpener: GhostFileOpenerDecl | undefined;
+  if (prepared.schemaVersion === 3 && raw.fileOpener !== undefined) {
+    const parsed = parseGhostFileOpener(raw.fileOpener, node);
+    if (parsed.ok) fileOpener = parsed.fileOpener;
+    else if (!preserveHistoricalParameterSize) return { ok: false, reason: parsed.reason };
+  }
   if (node?.secretBindings) {
     for (const binding of node.secretBindings) {
       if (network?.secrets?.some((secret) => secret.key === binding.key)) {
@@ -4116,6 +4131,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
       ...(routineEvents !== undefined ? { routineEvents } : {}),
       ...(models !== undefined ? { models } : {}),
       ...(harnesses !== undefined ? { harnesses } : {}),
+      ...(fileOpener !== undefined ? { fileOpener } : {}),
       ...(systemPrompt !== undefined ? { systemPrompt } : {}),
       ...(network !== undefined ? { network } : {}),
       ...(raw.command !== undefined ? { command: raw.command as string } : {}),

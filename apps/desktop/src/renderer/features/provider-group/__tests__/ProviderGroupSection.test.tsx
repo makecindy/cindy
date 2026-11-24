@@ -180,7 +180,7 @@ describe('ProviderGroupSection', () => {
     const candidates = await within(dialog).findAllByTestId('provider-group-candidate');
     expect(candidates).toHaveLength(2);
     // 已在组里的不能再勾选。
-    expect((candidates[1] as HTMLButtonElement).disabled).toBe(true);
+    expect((within(candidates[1]).getByRole('checkbox') as HTMLInputElement).disabled).toBe(true);
     fireEvent.click(candidates[0]);
     fireEvent.click(within(dialog).getByRole('button', { name: 'providerGroup.add.confirm' }));
     await waitFor(() => expect(command).toHaveBeenCalledWith(expect.objectContaining({ action: 'save-if-current', expectedConfig: null })));

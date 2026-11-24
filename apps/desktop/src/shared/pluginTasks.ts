@@ -157,7 +157,7 @@ export type PluginTaskRequest = (
   | { type: 'tasks-request'; kind: 'setTeamPlan'; taskId: string; plan: PluginTeamPlan }
   | { type: 'tasks-request'; kind: 'releaseWorker'; taskId: string; workerId: string; completedAt: number }
   | { type: 'tasks-request'; kind: 'requestWriteAccess'; taskId: string; mode?: 'acceptEdits' | 'auto' }
-  | { type: 'tasks-request'; kind: 'readMessages'; taskId: string; after?: string; limit?: number }
+  | { type: 'tasks-request'; kind: 'readMessages'; taskId: string; progressForRun?: string; after?: string; limit?: number }
   | {
       type: 'tasks-request';
       kind: 'send';

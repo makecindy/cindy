@@ -638,7 +638,7 @@ function IntervalMinutesInput({
         if (open) onFocus();
       }}
       onValueChange={(next) => onChange(Number(next))}
-      className="w-[88px] px-2 text-center text-13"
+      width="xs"
     />
   );
 }
