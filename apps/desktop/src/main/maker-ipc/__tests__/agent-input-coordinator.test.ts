@@ -122,11 +122,56 @@ const mocks = vi.hoisted(() => {
 });
 
 describe('task action dispatch authorization', () => {
+  // #12479, unit: a second queue promotion cannot resolve a lost provider ACK.
+  it('keeps an uncertain queued receipt paused when its grant later expires', async () => {
+    const h = createHarness(), sid = 'uncertain-target';
+    await h.coordinator.ensureQueueRestored(sid);
+    h.setRunning(true);
+    const row = makeItem('receipt', 'Queued receipt');
+    const grant = vi.fn(async () => {});
+    bindTaskActionInput(sid, row, grant);
+    h.coordinator.enqueue(sid, row);
+    h.steerToAgent.mockImplementationOnce(async (_id, _message, opts) => {
+      await opts?.[MCP_APP_MESSAGE_GUARD]?.();
+      throw new Error('delivery uncertain');
+    });
+    const promote = () => h.coordinator.steer(sid, row, { removeFromQueue: true });
+    expect(await promote()).toBe(false);
+    grant.mockRejectedValue(new Error('TASK_ACTION_AUTHORIZATION_EXPIRED'));
+    expect(await promote()).toBe(false);
+    expect(h.steerToAgent).toHaveBeenCalledOnce();
+    expect(h.coordinator.isPausedForUncertainDelivery(sid)).toBe(true);
+    expect(h.onDiscardedQueuedMessage).not.toHaveBeenCalled();
+  });
+  // #12479, unit: turn-done may attempt a drain while the row guard is still pending.
+  it('drains the next queued input after the running turn ends during revocation', async () => {
+    const h = createHarness(), sid = 'finishing-target';
+    await h.coordinator.ensureQueueRestored(sid);
+    h.coordinator.enqueue(sid, makeItem('original', 'Original input'));
+    await vi.waitFor(() => expect(h.onUserMessagePersisted).toHaveBeenCalledOnce());
+    const row = makeItem('receipt', 'Queued receipt');
+    bindTaskActionInput(sid, row, async () => {
+      h.setRunning(false);
+      h.coordinator.onTurnEvent(sid, 'done');
+      await flush();
+      throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+    });
+    h.coordinator.enqueue(sid, row);
+    h.coordinator.enqueue(sid, makeItem('next', 'Next input'));
+    h.steerToAgent.mockImplementationOnce(async (_id, _message, opts) => {
+      await opts?.[MCP_APP_MESSAGE_GUARD]?.();
+    });
+    expect(await h.coordinator.steer(sid, row, { removeFromQueue: true })).toBe(false);
+    await vi.waitFor(() => expect(h.sendToAgent).toHaveBeenCalledTimes(2));
+    expect(h.coordinator.getActiveInputClientId(sid)).toBe('next');
+  });
   // #12479, unit: drain tests miss promotion of a stored row while the receiver is busy.
   it.each(['revoked', 'unavailable'] as const)('settles a queued steer with %s row authority', async outcome => {
     const h = createHarness(), sid = 'busy-target';
     await h.coordinator.ensureQueueRestored(sid);
-    h.setRunning(true);
+    h.coordinator.enqueue(sid, makeItem('original', 'Original input'));
+    await vi.waitFor(() => expect(h.onUserMessagePersisted).toHaveBeenCalledOnce());
+    expect(h.coordinator.getActiveInputClientId(sid)).toBe('original');
     const row = makeItem('receipt', 'Queued receipt');
     let allowed = false;
     bindTaskActionInput(sid, row, async () => {
@@ -147,13 +192,14 @@ describe('task action dispatch authorization', () => {
     expect(h.coordinator.getProjection(sid).error).toBeNull();
     expect(h.coordinator.hasPendingQueueItem(sid, row.clientId)).toBe(outcome === 'unavailable');
     expect(delivered).not.toHaveBeenCalled();
-    expect(h.onUserMessagePersisted).not.toHaveBeenCalled();
+    expect(h.onUserMessagePersisted).toHaveBeenCalledOnce();
+    expect(h.coordinator.getActiveInputClientId(sid)).toBe('original');
     allowed = true;
     if (outcome === 'unavailable') await promote();
     else await h.coordinator.steer(sid, makeItem('next', 'Next input'));
     await promote(); // A stale queue mirror may submit the same clientId again.
     expect(delivered).toHaveBeenCalledOnce();
-    expect(h.sendToAgent).not.toHaveBeenCalled();
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
   });
   // Unit regression through the production coordinator: revocation/restore cannot
   // deliver an automatic message, while the following owner input still runs.

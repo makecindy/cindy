@@ -2841,6 +2841,9 @@ export class AgentInputCoordinator {
     // relationship check. Read the host-owned row first: UI projections omit
     // the receipt, and queue-to-steer must not silence an existing user turn.
     if (item.botTaskCoordination) return false;
+    // A previous attempt may already have delivered this row. Only the
+    // existing explicit uncertain-delivery recovery can release that pause.
+    if (steersStoredQueueItem && this.isPausedForUncertainDelivery(sessionId)) return false;
     if (state.steeringQueueClientIds.includes(item.clientId)) {
       log.info('steer ignored: duplicate in-flight clientId (control-side resend)', {
         sessionId,
@@ -2916,7 +2919,9 @@ export class AgentInputCoordinator {
     // steer ack 期间原 turn 可能先收到 terminal 事件并清掉 activeTurn。owner 是本次
     // 注入开始时就已确定的 vendor-turn 身份，必须在 await 前快照，不能等 ack 后再从
     // 可能已经清空的 activeTurn 读取。
-    if (state.activeTurn) state.activeTurn.latestSteeringClientId = item.clientId;
+    const originalTurn = state.activeTurn;
+    const priorSteeringClientId = originalTurn?.latestSteeringClientId;
+    if (originalTurn) originalTurn.latestSteeringClientId = item.clientId;
     const steerContinuationOwnerClientId = state.activeTurn?.continuationOwnerClientId ?? null;
     const steerVendorTurnGeneration = this.deps.getTurnGeneration?.(sessionId) ?? null;
     this.clearErrorUnlessQueueHeadBlocked(state, item.clientId);
@@ -3147,6 +3152,10 @@ export class AgentInputCoordinator {
       this.clearSteerAbortController(sessionId, item.clientId, steerAbort);
 
       if (queuedGuardFailure) {
+        if (markerStillPresent && originalTurn && latest.activeTurn === originalTurn
+          && originalTurn.latestSteeringClientId === item.clientId) {
+          originalTurn.latestSteeringClientId = priorSteeringClientId;
+        }
         if (markerStillPresent && queuedGuardFailure === 'revoked') {
           latest.pendingQueue = latest.pendingQueue.filter(row => row.clientId !== item.clientId);
           this.removePendingCompactWaitClientId(latest, item.clientId);
@@ -3155,6 +3164,7 @@ export class AgentInputCoordinator {
           observation.policyBlocked = true;
           this.notifyRejectedUserTurn(sessionId, item);
           this.deps.onDiscardedQueuedMessage?.(sessionId, item);
+          this.scheduleDrain(sessionId, 'queued-steer-revoked');
         }
         this.emit(sessionId, markerStillPresent ? { clientId: item.clientId, reason: queuedGuardFailure } : undefined);
         return finishSteerRequest(false);
