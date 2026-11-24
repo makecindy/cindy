@@ -37,6 +37,20 @@ export function passiveRevealOnBackgroundOpen(opts: {
   return opts.visibility === 'open' && !opts.userInitiated && opts.wasCollapsed;
 }
 
+/** `/cc-agent` 下的静态段：不是任务会话，没有可恢复的右栏记忆。 */
+const NON_SESSION_SEGMENTS = new Set(['new', 'new-dialogue', 'scheduled', 'files', 'orca', 'boot']);
+
+/**
+ * 内容区当前是否落在任务路由上（`/cc-agent/:sessionId`）。只看 URL：子视图声明
+ * 「右栏在场」要等它自己的 effect，冷启动首帧读不到，不能用作「启动落在哪个路由」
+ * 的判据。启动恢复与从无侧栏路由落地是两条不同的路，见 `useSidebarPresentation`。
+ */
+export function isTaskSessionRoute(pathname: string): boolean {
+  const [, root, segment, nested] = pathname.split('/');
+  if (root !== 'cc-agent' || !segment || nested !== undefined) return false;
+  return !NON_SESSION_SEGMENTS.has(segment);
+}
+
 /** Hold the old layout while native geometry crosses the IPC/compositor boundary. */
 export function useSidebarPresentation(
   root: RefObject<HTMLDivElement | null>,
@@ -50,6 +64,11 @@ export function useSidebarPresentation(
   passiveReveal = false,
   /** 面板失去就绪时是否把宽度还给窗口；自动收起（最后一个页签关掉等）保留窗口矩形。 */
   retractOnUnready = true,
+  /**
+   * 内容区当前落在任务路由上（`isTaskSessionRoute`）。启动时先停在无侧栏路由、
+   * 之后才被通知带到任务上，那次展开是任务自己的存档，不是用户开栏。
+   */
+  taskRoute = true,
 ): SidebarPresentation {
   const [presentation, setPresentation] = useState<SidebarPresentation>({ collapsed, instant: false });
   const expansion = useRef(expansionWidth);
@@ -63,6 +82,8 @@ export function useSidebarPresentation(
   const previousUserToggle = useRef(userToggle);
   /** 已经走过一次就绪渲染：之前的 false 是启动前的等待，不是路由离开。 */
   const everReady = useRef(false);
+  /** 这次挂载先停在「没有任务语境、也还没就绪」的路由（冷启动落在 /settings、/bots 等）。 */
+  const sawTasklessRender = useRef(false);
   /** 当前这次展开是否由我们占用了窗口宽度（启动恢复 / 用户开栏）。 */
   const ownsWidth = useRef(false);
   /** 最近一次就绪渲染所属的任务；设置页接管会先清空 sessionKey，不能拿空档里的值。 */
@@ -77,6 +98,9 @@ export function useSidebarPresentation(
   useLayoutEffect(() => {
     const wasCollapsed = previous.current;
     const turnedUser = userToggle && !previousUserToggle.current;
+    // 路由来源由调用方按 URL 同步给出：任务路由冷启动的首帧 sessionKey 还没填，
+    // 不能拿它当「落在无侧栏路由」，否则启动恢复会被当成落地而不展开。
+    if (!everReady.current && !taskRoute) sawTasklessRender.current = true;
     previousUserToggle.current = userToggle;
     previous.current = ready ? collapsed : null;
     if (ready) {
@@ -104,8 +128,9 @@ export function useSidebarPresentation(
     const gap = beforeGap.current;
     // 先落在没有侧栏的路由（/settings、/bots 等）、之后才被通知带到任务上，和离开就绪区间
     // 再回来是同一种「落地」：这次展开来自任务自己的存档，不是用户开栏，窗口保持原宽。
-    const relanded = openingFromMount && !userResize.current && gap !== null
-      && (gap.ownsWidth === false || gap.sessionKey !== sessionKey);
+    const relanded = openingFromMount && !userResize.current
+      && (gap !== null ? gap.ownsWidth === false || gap.sessionKey !== sessionKey
+        : sawTasklessRender.current);
     // 启动时按存档恢复展开照常占窗口宽度；但同一帧里由视图强制的展示（首帧 Orca
     // workers 等程序动作）只是把面板放出来，不能顺手把窗口拉宽。
     const forcedReveal = openingFromMount && !userResize.current && passive.current;
@@ -178,7 +203,7 @@ export function useSidebarPresentation(
       ownsWidth.current = false;
       setPresentation({ collapsed, instant: false });
     });
-  }, [collapsed, ready, root, sessionKey, userToggle, retractOnUnready]);
+  }, [collapsed, ready, root, sessionKey, userToggle, retractOnUnready, taskRoute]);
 
   useLayoutEffect(() => () => {
     // StrictMode's second mount must establish a fresh baseline.

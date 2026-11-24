@@ -6,6 +6,7 @@
 import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import {
+  isTaskSessionRoute,
   passiveRevealOnBackgroundOpen,
   rewritesRevealSource,
   useSidebarPresentation,
@@ -206,6 +207,44 @@ it('keeps a settling request when only the session key changes', async () => {
   window.innerWidth = 1800;
   await act(async () => { reply(800); });
   expect(result.current).toEqual({ collapsed: false, instant: true, expandedWidth: 1600 });
+});
+
+// Codex P1: 冷启动落在 /settings、/bots 这类无侧栏路由，之后通知把窗口带到「存档里右栏开着」
+// 的任务上。这条不是启动恢复，窗口保持原宽。
+it('reads the startup route from the URL, not from the sidebar declaration', () => {
+  // 任务会话才有可恢复的右栏记忆；/cc-agent 下的静态段与其它路由都不算。
+  expect(isTaskSessionRoute('/cc-agent/session-a')).toBe(true);
+  expect(isTaskSessionRoute('/cc-agent/7f6d1a2b-3c4d')).toBe(true);
+  for (const pathname of ['/cc-agent', '/cc-agent/new', '/cc-agent/scheduled', '/cc-agent/files/session-a',
+    '/cc-agent/orca/session-a', '/settings', '/bots/roster']) {
+    expect(isTaskSessionRoute(pathname)).toBe(false);
+  }
+});
+
+it('does not expand on the first task landing after a taskless start', async () => {
+  const resize = vi.fn(async () => 800);
+  window.electronAPI = { windowSidebarExpansion: resize } as never;
+  const { rerender } = renderHook(
+    ({ ready, sessionKey, taskRoute }) =>
+      useSidebarPresentation(root, false, ready, width, false, sessionKey, false, true, taskRoute),
+    { initialProps: { ready: false, sessionKey: '', taskRoute: false } },
+  );
+  await act(async () => { rerender({ ready: true, sessionKey: 'task-a', taskRoute: true }); });
+  expect(resize).not.toHaveBeenCalled();
+});
+
+// 同一族判据的另一半：任务路由冷启动时首帧 sessionKey 还没填、ready 仍为 false，
+// 但路由来源是任务，所以那是启动恢复，照常按存档展开——不能被当成「落地」。
+it('expands a task restored during startup even before the session key arrives', async () => {
+  const resize = vi.fn(async () => 800);
+  window.electronAPI = { windowSidebarExpansion: resize } as never;
+  const { rerender } = renderHook(
+    ({ ready, sessionKey }) =>
+      useSidebarPresentation(root, false, ready, width, false, sessionKey, false, true, true),
+    { initialProps: { ready: false, sessionKey: '' } },
+  );
+  await act(async () => { rerender({ ready: true, sessionKey: 'task-a' }); });
+  expect(resize).toHaveBeenCalledOnce();
 });
 
 it('keeps the standalone width when a readiness gap lands on another task passively', async () => {
