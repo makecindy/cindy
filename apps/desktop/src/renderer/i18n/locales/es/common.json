@@ -2256,6 +2256,13 @@
       }
     },
     "appearance": {
+      "chatLayout": {
+        "label": "Diseño del chat",
+        "standard": "Estándar",
+        "wide": "Ancho",
+        "width": "Ancho del contenido",
+        "hint": "Se calcula sobre el espacio entre los márgenes del chat. Los paneles estrechos se ajustan automáticamente."
+      },
       "title": "Apariencia",
       "modeLabel": "Modo de apariencia",
       "appIcon": {
@@ -2846,7 +2853,8 @@
         "errorBusy": "Ya hay una carga en progreso, espera",
         "errorFailed": "Error al cargar el registro. Comprueba tu red y vuelve a intentarlo.",
         "unavailableNotConfigured": "La carga de registros no está configurada en esta compilación.",
-        "unavailableNoConsent": "Primero debes aceptar la Política de privacidad."
+        "unavailableNoConsent": "Primero debes aceptar la Política de privacidad.",
+        "consentPrompt": "Antes de subir los registros, lee la <policy>Política de privacidad</policy> y selecciona <accept>Aceptar</accept>."
       },
       "openLogsDirError": "No se pudo abrir el directorio de registros",
       "autoUpdateLabel": "Instalar actualizaciones mientras está inactivo",
@@ -5241,6 +5249,7 @@
       "formHint": "El ID de usuario es numérico; escribe a @userinfobot por mensaje directo para consultar tu ID.",
       "connect": "Conectar",
       "connectingAction": "Conectando…",
+      "connectTimedOut": "Se agotó el tiempo de conexión. Vuelve a intentarlo.",
       "errorCode": {
         "invalid-token": "El token del bot no es válido o se restableció: vuelve a introducirlo",
         "provider-api": "Telegram devolvió un error; inténtalo de nuevo en breve",
@@ -12864,6 +12873,7 @@
           "conflict": "Este bot ya está conectado en esta computadora, en Configuración → Bots de mensajería instantánea o en otro amigo.",
           "botUnavailable": "{{name}} no está disponible en este momento. Inténtalo cuando vuelva.",
           "connectFailed": "No se pudo conectar: {{reason}}",
+          "connectTimedOut": "Se agotó el tiempo de conexión. Vuelve a intentarlo.",
           "failed": "No se pudo terminar. Inténtalo más tarde.",
           "personalBotGone": "Este bot ya no está configurado en Configuración → Bots de mensajería instantánea. Ingresa sus credenciales."
         },
@@ -16617,7 +16627,13 @@
       "open": "Abrir la tarea «{{title}}»",
       "untitled": "Tarea sin título",
       "startedOne": "Iniciada",
-      "handedToOne": "Encargada a"
+      "handedToOne": "Encargada a",
+      "status": {
+        "running": "En ejecución",
+        "needsAction": "Esperando tu acción",
+        "error": "Error",
+        "idle": "Inactiva"
+      }
     },
     "botTaskLetter": {
       "replied": "respondió",

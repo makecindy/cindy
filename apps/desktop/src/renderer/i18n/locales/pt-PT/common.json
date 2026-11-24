@@ -2256,6 +2256,13 @@
       }
     },
     "appearance": {
+      "chatLayout": {
+        "label": "Disposição da conversa",
+        "standard": "Padrão",
+        "wide": "Larga",
+        "width": "Largura do conteúdo",
+        "hint": "Usa o espaço entre as margens da conversa. Os painéis estreitos ajustam-se automaticamente."
+      },
       "title": "Aspeto",
       "modeLabel": "Modo de aspeto",
       "appIcon": {
@@ -2846,7 +2853,8 @@
         "errorBusy": "Já está em curso um envio. Aguarde.",
         "errorFailed": "O envio dos registos falhou. Verifique a sua rede e tente novamente.",
         "unavailableNotConfigured": "O envio de registos não está configurado nesta compilação.",
-        "unavailableNoConsent": "Tem de aceitar primeiro a Política de Privacidade."
+        "unavailableNoConsent": "Tem de aceitar primeiro a Política de Privacidade.",
+        "consentPrompt": "Antes de enviar, lê a <policy>Política de Privacidade</policy> e seleciona <accept>Aceitar</accept>."
       },
       "openLogsDirError": "Não foi possível abrir o diretório de registos",
       "autoUpdateLabel": "Instalar atualizações durante a inatividade",
@@ -5241,6 +5249,7 @@
       "formHint": "O ID de utilizador é numérico; envie uma mensagem direta a @userinfobot para consultar o seu ID.",
       "connect": "Ligar",
       "connectingAction": "A ligar…",
+      "connectTimedOut": "A ligação excedeu o tempo limite. Tente novamente.",
       "errorCode": {
         "invalid-token": "O token do bot é inválido ou foi reposto — introduza-o novamente",
         "provider-api": "O Telegram devolveu um erro — tente novamente dentro de instantes",
@@ -12864,6 +12873,7 @@
           "conflict": "Este bot já está ligado neste computador, em Definições → Bots de mensagens instantâneas ou noutro amigo.",
           "botUnavailable": "{{name}} está indisponível neste momento. Tente novamente quando regressar.",
           "connectFailed": "Não foi possível ligar: {{reason}}",
+          "connectTimedOut": "A ligação excedeu o tempo limite. Tente novamente.",
           "failed": "Não foi possível concluir. Tente novamente mais tarde.",
           "personalBotGone": "Este bot já não está configurado em Definições → Bots de mensagens instantâneas. Introduza as credenciais."
         },
@@ -16617,7 +16627,13 @@
       "open": "Abrir a tarefa «{{title}}»",
       "untitled": "Tarefa sem título",
       "startedOne": "Iniciada",
-      "handedToOne": "Entregue a"
+      "handedToOne": "Entregue a",
+      "status": {
+        "running": "Em execução",
+        "needsAction": "A aguardar por si",
+        "error": "Erro",
+        "idle": "Inativa"
+      }
     },
     "botTaskLetter": {
       "replied": "respondeu",

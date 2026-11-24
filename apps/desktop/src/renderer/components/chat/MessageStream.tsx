@@ -6703,7 +6703,7 @@ export function MessageStream({
               ref={scrollRef}
               data-scroll-container=""
               onCopy={copyChatSelection}
-              className="h-full w-full overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable]"
+              className="h-full w-full overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable_both-edges]"
               onScroll={handleScroll}
               onPointerDownCapture={() => refreshViewportAnchor()}
               onKeyDownCapture={() => refreshViewportAnchor()}
@@ -7056,7 +7056,8 @@ export function MessageStream({
                             {shareable && shareSelectionActive ? (
                               <ShareMessageCheckbox clientId={msg.clientId} />
                             ) : null}
-                            {msg.role === 'assistant' && msg.systemCardType === 'mcp-app'
+                            {((msg.role === 'assistant' && msg.systemCardType === 'mcp-app') ||
+                              (msg.role === 'user' && !msg.systemCardType && msg.hookSource))
                               ? withAssistantAvatar(botReplyColumnSpacer, messageNode)
                               : messageNode}
                           </div>

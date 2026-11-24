@@ -2188,6 +2188,13 @@
       }
     },
     "appearance": {
+      "chatLayout": {
+        "label": "对谈布置",
+        "standard": "常式",
+        "wide": "宽式",
+        "width": "内容之宽",
+        "hint": "以对谈两旁留白之外为准。栏狭则自调。"
+      },
       "title": "仪容",
       "modeLabel": "显示之式",
       "appIcon": {
@@ -2778,7 +2785,8 @@
         "errorBusy": "已有一次上呈方行，请稍候",
         "errorFailed": "日志上呈未成，请察网络后再试",
         "unavailableNotConfigured": "此版未设日志上呈。",
-        "unavailableNoConsent": "须先允《隐私政策》。"
+        "unavailableNoConsent": "须先允《隐私政策》。",
+        "consentPrompt": "上呈之前，请阅<policy>《隐私政策》</policy>而<accept>允之</accept>。"
       },
       "openLogsDirError": "日志目录未能启",
       "autoUpdateLabel": "闲时自装更新",
@@ -5140,6 +5148,7 @@
       "formHint": "用户 ID 为纯数字；私聊 @userinfobot 可查己之 ID。",
       "connect": "连之",
       "connectingAction": "方连…",
+      "connectTimedOut": "连接逾时，请再试",
       "errorCode": {
         "invalid-token": "Bot Token 无效或已重置，请重填",
         "provider-api": "Telegram 服务回报谬误，请稍后再试",
@@ -12716,6 +12725,7 @@
           "conflict": "此机器人已用于此机：或在 规制 → IM 机器人，或在另一同伴处。",
           "botUnavailable": "{{name}} 今不可用，待其复后再试。",
           "connectFailed": "连之未成：{{reason}}",
+          "connectTimedOut": "连接逾时，请再试。",
           "failed": "未竟，请稍后再试。",
           "personalBotGone": "规制 → IM 机器人 中已无此机器人，请改填凭证。"
         },
@@ -16390,7 +16400,13 @@
       "open": "启差事「{{title}}」",
       "untitled": "无名之差事",
       "startedOne": "已启差事",
-      "handedToOne": "付与差事"
+      "handedToOne": "付与差事",
+      "status": {
+        "running": "方行",
+        "needsAction": "候君示下",
+        "error": "有误",
+        "idle": "闲"
+      }
     },
     "botTaskLetter": {
       "replied": "覆书",

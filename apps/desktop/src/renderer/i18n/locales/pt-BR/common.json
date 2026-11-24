@@ -2256,6 +2256,13 @@
       }
     },
     "appearance": {
+      "chatLayout": {
+        "label": "Layout do chat",
+        "standard": "Padrão",
+        "wide": "Amplo",
+        "width": "Largura do conteúdo",
+        "hint": "Usa o espaço entre as margens do chat. Painéis estreitos se ajustam automaticamente."
+      },
       "title": "Aparência",
       "modeLabel": "Modo de aparência",
       "appIcon": {
@@ -2846,7 +2853,8 @@
         "errorBusy": "Já há um envio em andamento. Aguarde",
         "errorFailed": "Falha ao enviar logs. Verifique sua conexão e tente novamente",
         "unavailableNotConfigured": "O envio de logs não está configurado nesta compilação.",
-        "unavailableNoConsent": "Você precisa aceitar a Política de Privacidade primeiro."
+        "unavailableNoConsent": "Você precisa aceitar a Política de Privacidade primeiro.",
+        "consentPrompt": "Antes de enviar, leia a <policy>Política de Privacidade</policy> e selecione <accept>Aceitar</accept>."
       },
       "openLogsDirError": "Não foi possível abrir o diretório de logs",
       "autoUpdateLabel": "Instalar atualizações durante a inatividade",
@@ -5241,6 +5249,7 @@
       "formHint": "O ID de usuário é numérico; envie uma mensagem direta ao @userinfobot para consultar seu ID.",
       "connect": "Conectar",
       "connectingAction": "Conectando…",
+      "connectTimedOut": "O tempo de conexão esgotou. Tente novamente.",
       "errorCode": {
         "invalid-token": "O token do bot é inválido ou foi redefinido — insira-o novamente",
         "provider-api": "O Telegram retornou um erro — tente novamente em instantes",
@@ -12864,6 +12873,7 @@
           "conflict": "Este bot já está conectado neste computador, em Configurações → Bots de mensagens ou em outro amigo.",
           "botUnavailable": "{{name}} está indisponível no momento. Tente novamente quando voltar.",
           "connectFailed": "Não foi possível conectar: {{reason}}",
+          "connectTimedOut": "O tempo de conexão esgotou. Tente novamente.",
           "failed": "Não foi possível concluir. Tente novamente mais tarde.",
           "personalBotGone": "Este bot não está mais configurado em Configurações → Bots de mensagens. Insira as credenciais dele."
         },
@@ -16617,7 +16627,13 @@
       "open": "Abrir a tarefa “{{title}}”",
       "untitled": "Tarefa sem título",
       "startedOne": "Iniciada",
-      "handedToOne": "Repassada a"
+      "handedToOne": "Repassada a",
+      "status": {
+        "running": "Em execução",
+        "needsAction": "Aguardando você",
+        "error": "Erro",
+        "idle": "Inativa"
+      }
     },
     "botTaskLetter": {
       "replied": "respondeu",

@@ -2188,6 +2188,13 @@
       }
     },
     "appearance": {
+      "chatLayout": {
+        "label": "对话布局",
+        "standard": "标准",
+        "wide": "宽屏",
+        "width": "内容宽度",
+        "hint": "按对话区扣除两侧留白后的宽度计算。窄栏会自动调整。"
+      },
       "title": "外观",
       "modeLabel": "显示模式",
       "appIcon": {
@@ -2778,7 +2785,8 @@
         "errorBusy": "已有一次上传正在进行，请稍候",
         "errorFailed": "日志上传失败，请检查网络后重试",
         "unavailableNotConfigured": "当前版本未配置日志上传。",
-        "unavailableNoConsent": "需要先同意《隐私政策》。"
+        "unavailableNoConsent": "需要先同意《隐私政策》。",
+        "consentPrompt": "上传前请阅读<policy>《隐私政策》</policy>并<accept>同意</accept>。"
       },
       "openLogsDirError": "打开日志目录失败",
       "autoUpdateLabel": "空闲时自动安装更新",
@@ -5140,6 +5148,7 @@
       "formHint": "用户 ID 是纯数字；私聊 @userinfobot 可以查到自己的 ID。",
       "connect": "连接",
       "connectingAction": "连接中…",
+      "connectTimedOut": "连接超时，请重试",
       "errorCode": {
         "invalid-token": "Bot Token 无效或已被重置，请重新填写",
         "provider-api": "Telegram 服务返回错误，请稍后重试",
@@ -12707,6 +12716,7 @@
           "conflict": "这个机器人已经在这台电脑上用了：在 设置 → IM 机器人 里，或者在另一位伙伴那里。",
           "botUnavailable": "{{name}} 现在不可用，等 TA 恢复后再试。",
           "connectFailed": "没连上：{{reason}}",
+          "connectTimedOut": "连接超时，请重试。",
           "failed": "没能完成，请稍后再试。",
           "personalBotGone": "设置 → IM 机器人 里已经没有这个机器人了，请改为填写凭证。"
         },
@@ -16390,7 +16400,13 @@
       "open": "打开任务「{{title}}」",
       "untitled": "未命名任务",
       "startedOne": "开了任务",
-      "handedToOne": "交给任务"
+      "handedToOne": "交给任务",
+      "status": {
+        "running": "运行中",
+        "needsAction": "待确认",
+        "error": "出错",
+        "idle": "空闲"
+      }
     },
     "botTaskLetter": {
       "replied": "回信",
