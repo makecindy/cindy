@@ -454,6 +454,9 @@ describe('model group failure handling', () => {
     ['a turn without events', { reason: 'turn_no_event_timeout' }, 'transient'],
     ['a stalled Codex reconnect', { reason: 'codex_reconnect_stalled' }, 'transient'],
     ['a short rate limit', { errorStatus: 429, sdkError: 'rate_limit' }, 'transient'],
+    ['a rate limit reported only as text', { message: 'rate limit exceeded' }, 'transient'],
+    ['an unclassified upstream error', { message: 'weird upstream boom' }, 'transient'],
+    ['an unclassified failed turn', { reason: 'turn-failed', message: 'weird upstream boom' }, 'transient'],
     ['out of credit', { errorStatus: 402 }, 'connection'],
     ['an account quota', { usageLimit: true }, 'connection'],
     ['a dead login', { reason: 'provider_auth_or_access' }, 'connection'],
@@ -467,6 +470,12 @@ describe('model group failure handling', () => {
     ['Pi giving up after its own retries', { reason: 'pi-gateway-drop' }, 'model'],
     ['an engine that would not start', { reason: 'agent-start-failed' }, 'model'],
     ['a prompt too long for any source', { errorStatus: 400, message: 'prompt too long' }, null],
+    ['a structured context error', { reason: 'turn-failed', codexErrorInfo: 'contextWindowExceeded' }, null],
+    ['a statusless content block', { reason: 'turn-failed', message: 'content_policy_violation' }, null],
+    ['a rejected approval', { reason: 'acp-request-failed', message: 'User denied permission' }, null],
+    ['a local permission denial', { sdkError: 'permission_error' }, null],
+    ['a provider permission denial', { sdkError: 'permission_error', errorStatus: 403 }, 'model'],
+    ['a malformed request', { reason: 'turn-failed', errorStatus: 422 }, null],
     ['an unknown control failure', { reason: 'user-cancelled' }, null],
   ] as const)('sorts %s', (_name, signals, scope) => {
     expect(modelGroupFailureScope(signals as never)).toBe(scope);
@@ -478,7 +487,11 @@ describe('model group failure handling', () => {
     const delays: number[] = [];
     const fallback = vi.fn(async (..._args: unknown[]): Promise<Record<string, unknown>> => ({ session: null, outcome: 'unchanged' }));
     const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn() };
-    const guard = new InterruptedTurnAutoResumeGuard({ isEnabled: () => true, log, random: () => 0.5 });
+    const guard = new InterruptedTurnAutoResumeGuard({
+      isEnabled: () => policy === 'disabled' || interruptedResumeEnabled,
+      log,
+      random: () => 0.5,
+    });
     let lastDispatchedToken: number | undefined;
     const resume = vi.fn(async (sessionId: string, token: number, ..._extra: unknown[]) => {
       guard.noteAttemptEvent(sessionId, token);
@@ -545,6 +558,29 @@ describe('model group failure handling', () => {
     expect(h.noteProgress()).toBe(true);
     expect(await h.fail(signals)).toMatchObject({ requireRouteChange: false, recovery: { retrySameSource: true } });
     expect(h.delays.at(-1)).toBe(3000);
+  });
+
+  // §4.1 / #12440, unit: an unclassified statusless provider error must
+  // dispatch two same-source retries and then switch even with ordinary auto-resume off.
+  it('retries and then switches on an unclassified provider error', async () => {
+    const h = groupHarness('enabled', false);
+    const signals = { message: 'weird upstream boom' };
+    await h.fail(signals);
+    await h.fail(signals);
+    h.fallback.mockResolvedValueOnce({
+      session: null, outcome: 'switched', sourceSwitch: { from: 'Model · A', to: 'Model · B' },
+    });
+    expect(await h.fail(signals)).toMatchObject({ requireRouteChange: true, recovery: { retrySameSource: false } });
+    expect(h.delays).toEqual([3000, 6000, 0]);
+    expect(h.resume.mock.calls.at(-1)).toEqual(['s', 3, {
+      agentSwitch: { from: 'Model · A', to: 'Model · B', cause: 'failed' },
+    }]);
+  });
+
+  it('leaves a deterministic failure visible even if it carries an ordinarily retryable status', async () => {
+    const h = groupHarness();
+    expect(await h.fail({ codexErrorInfo: 'cyberPolicy', errorStatus: 503 })).toBeNull();
+    expect(h.resume).not.toHaveBeenCalled();
   });
 
   it.each(['exhausted', 'failed', 'unchanged'])('surfaces the error after two retries when choosing a new source returns %s', async outcome => {

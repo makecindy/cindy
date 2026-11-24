@@ -93,9 +93,10 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
       ? !!item?.orcaReportDelivery && item.origin?.kind === 'orca' && canRecoverUndeliveredOrcaReport(signals.message)
       : signals.reason === 'session_event_loop_crashed'
       ? !!item && workerInputs?.has(item.createOpts) === true && isUnexpectedWorkerStreamEnd(signals)
+      : item && modelGroupInputs?.get(item.createOpts) === 'enabled'
+      ? modelGroupFailureScope(signals) !== null
       : isInterruptedTurnError(signals) ||
-        (!!item && botFallbackInputs.has(item.createOpts) && isBotCandidateUnavailable(signals)) ||
-        (!!item && modelGroupInputs?.get(item.createOpts) === 'enabled' && modelGroupFailureScope(signals) !== null);
+        (!!item && botFallbackInputs.has(item.createOpts) && isBotCandidateUnavailable(signals));
   // Every candidate can get two retries plus one attempt to move to the next candidate or surface exhaustion.
   // Keep a hard cap even if an upstream that keeps interrupting also produces output between failures.
   const modelGroupEpisodeLimit = MODEL_GROUP_LIMITS.candidates * (MODEL_GROUP_SAME_SOURCE_RETRIES + 1);

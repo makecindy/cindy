@@ -1,6 +1,6 @@
-import { isNetworkishErrorMessage, isOverloadErrorMessage } from '@cindy/maker-core';
+import { isContextOverflowErrorMessage, isNetworkishErrorMessage, isOverloadErrorMessage } from '@cindy/maker-core';
 import { extractNonSecretErrorSignals, matchesDeterministicUsageExhaustionText } from '@cindy/maker-shared/error-redaction';
-import { isAcceptedTurnContinuationOnlyReason, isInterruptedTurnError, isRemoteAgentRouteLostReason, type InterruptedTurnErrorSignals } from './interruptedTurnAutoResume.js';
+import { isAcceptedTurnContinuationOnlyReason, isRemoteAgentRouteLostReason, type InterruptedTurnErrorSignals } from './interruptedTurnAutoResume.js';
 import { isBillingDepletionError } from '../../shared/usageLimitRecovery.js';
 
 /** A model-specific rate limit leaves other models on the connection available. */
@@ -12,6 +12,14 @@ export function isModelGroupConnectionOutOfCredit(signals: InterruptedTurnErrorS
 /** Host-proven stopped bootstrap, distinct from a turn or opaque startup error. */
 export const BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON = 'bot-subscription-startup-admission';
 
+const PROVIDER_TURN_FAILURE_REASONS = new Set([
+  'pi-gateway-drop', 'upstream-overload', 'empty-response', 'turn-failed', 'acp-request-failed',
+  'acp-agent-exited', 'acp-auth-required',
+  'provider_auth_or_access', 'provider_quota_limit', 'provider_rate_limit',
+  'provider_server_error', 'model_unavailable', 'user_model_access_denied', 'agent-start-failed',
+  BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON,
+]);
+
 /** A failed provider may be replaced, even when retrying that provider is forbidden. */
 export function isBotCandidateUnavailable(signals: InterruptedTurnErrorSignals): boolean {
   // The agent serving this route on another computer is gone; another candidate route can still run the
@@ -19,13 +27,7 @@ export function isBotCandidateUnavailable(signals: InterruptedTurnErrorSignals):
   if (isRemoteAgentRouteLostReason(signals.reason)) return true;
   const reason = signals.reason ?? '';
   // Explicit product/control failures must never be reinterpreted from their text.
-  if (reason && ![
-    'pi-gateway-drop', 'upstream-overload', 'empty-response', 'turn-failed', 'acp-request-failed',
-    'acp-agent-exited', 'acp-auth-required',
-    'provider_auth_or_access', 'provider_quota_limit', 'provider_rate_limit',
-    'provider_server_error', 'model_unavailable', 'user_model_access_denied', 'agent-start-failed',
-    BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON,
-  ].includes(reason)) return false;
+  if (reason && !PROVIDER_TURN_FAILURE_REASONS.has(reason)) return false;
   // Exhaustion forbids retrying this account, not trying the user's configured
   // backups. The caller requires a successful route change before resuming.
   if (signals.codexErrorInfo === 'sessionBudgetExceeded') return false;
@@ -72,23 +74,28 @@ function leadingHttpStatus(text: string): number | undefined {
 }
 
 const MODEL_GROUP_AUTH_TEXT = /invalid (?:api[ _-]?key|token|x-api-key|access token)|unauthori[sz]ed|authentication (?:failed|error)|incorrect api key/i;
+const MODEL_GROUP_REJECTED_REQUEST_TEXT = /user (?:denied|rejected|cancelled|canceled)|approval (?:denied|required)|prompt too long|context.{0,20}(?:overflow|too long)|content[_ -](?:filter(?:ed)?|policy[_ -]violation)|invalid[_ -]request|request[_ -]too[_ -]large/i;
+const MODEL_GROUP_UNAVAILABLE_TEXT = /model.{0,80}(?:not found|does not exist|unavailable)|(?:failed to (?:start|spawn)|could not start) (?:the )?(?:agent|pi|codex|claude)/i;
 
 export function modelGroupFailureScope(input: InterruptedTurnErrorSignals): ModelGroupFailureScope | null {
   const reason = input.reason ?? '';
+  const tag = input.sdkError ?? '';
+  if (input.toolLoop || input.outputLimit ||
+    ['sessionBudgetExceeded', 'contextWindowExceeded', 'cyberPolicy'].includes(input.codexErrorInfo ?? '') ||
+    ['invalid_request', 'invalid_request_error', 'context_length_exceeded', 'content_filter'].includes(tag)) return null;
   // A stream the provider cut mid-reply after its own retries, and an ACP agent's quota, are not in the
   // candidate list above but are exactly what another source fixes.
   if (reason === 'acp-usage-limit') return 'connection';
-  if (reason === 'upstream-stream-interrupted') return 'model';
+  if (reason === 'upstream-stream-interrupted' || isRemoteAgentRouteLostReason(reason)) return 'model';
   if (isAcceptedTurnContinuationOnlyReason(reason)) return 'transient';
-  const text = input.message ?? (typeof input.sdkError === 'string' ? input.sdkError : '');
-  const status = input.errorStatus ?? leadingHttpStatus(text);
+  // Only provider/agent failure envelopes can use the unknown-error default.
+  // A distinct host/control reason (Stop, tool loop, preparation, etc.) keeps its existing owner.
+  if (reason && !PROVIDER_TURN_FAILURE_REASONS.has(reason)) return null;
+  const message = input.message ?? tag;
+  const status = input.errorStatus ?? leadingHttpStatus(message);
+  if ([400, 413, 422].includes(status ?? 0) ||
+    isContextOverflowErrorMessage(message) || MODEL_GROUP_REJECTED_REQUEST_TEXT.test(message)) return null;
   const signals = status !== undefined && input.errorStatus === undefined ? { ...input, errorStatus: status } : input;
-  if (!isBotCandidateUnavailable(signals)) {
-    // A dead key the engine reported only as text (no status, no tag).
-    return !reason && MODEL_GROUP_AUTH_TEXT.test(text) ? 'connection' : null;
-  }
-  const message = text;
-  const tag = signals.sdkError ?? '';
   if (isModelGroupConnectionOutOfCredit(signals)
     || signals.usageLimit === true || signals.codexErrorInfo === 'usageLimitExceeded'
     || matchesDeterministicUsageExhaustionText(message)
@@ -99,13 +106,13 @@ export function modelGroupFailureScope(input: InterruptedTurnErrorSignals): Mode
     || /missing bearer token|no available oauth accounts|\byou['’]ve hit your session limit\b/i.test(message)) {
     return 'connection';
   }
-  if (isInterruptedTurnError(signals)
-    || ['provider_server_error', 'provider_rate_limit', 'upstream-overload', 'empty-response'].includes(reason)
-    || ['server_error', 'rate_limit'].includes(tag)
-    || [429, 500, 502, 503, 504, 529].includes(signals.errorStatus ?? 0)) {
-    return 'transient';
-  }
-  return 'model';
+  if (['model_unavailable', 'user_model_access_denied', 'agent-start-failed', 'acp-agent-exited', 'pi-gateway-drop',
+    BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON].includes(reason) ||
+    ['model_not_found', 'user_model_access_denied', 'agent_start_failed'].includes(tag) ||
+    status === 403 || extractNonSecretErrorSignals(message).errorStatus === 403 ||
+    /\bthe caller does not have permission\b/i.test(message) || MODEL_GROUP_UNAVAILABLE_TEXT.test(message)) return 'model';
+  if (tag === 'permission_error' || /\bpermission denied\b/i.test(message)) return null;
+  return 'transient';
 }
 
 /**
@@ -129,7 +136,10 @@ export function modelGroupSwitchCause(signals: InterruptedTurnErrorSignals, scop
   const text = signals.message ?? (typeof signals.sdkError === 'string' ? signals.sdkError : '');
   if (['provider_auth_or_access', 'acp-auth-required'].includes(reason) || ['authentication_failed', 'authentication_error'].includes(tag)
     || (signals.errorStatus ?? leadingHttpStatus(text)) === 401 || MODEL_GROUP_AUTH_TEXT.test(text)) return 'auth';
-  if (scope === 'transient') return 'overload';
+  if (scope === 'transient' &&
+    (['upstream-overload', 'provider_rate_limit', 'provider_server_error'].includes(reason) ||
+      [429, 500, 502, 503, 504, 529].includes(signals.errorStatus ?? leadingHttpStatus(text) ?? 0) ||
+      ['rate_limit', 'server_error'].includes(tag) || isOverloadErrorMessage(text, signals.errorStatus))) return 'overload';
   if (isRemoteAgentRouteLostReason(signals.reason) || ['model_unavailable', 'user_model_access_denied', 'agent-start-failed'].includes(reason)
     || tag === 'model_not_found') return 'unavailable';
   return 'failed';
