@@ -163,7 +163,7 @@ vi.mock('../providerShareHost.js', () => ({
   },
 }));
 const guest = vi.hoisted(() => ({ revision: 0, share: null as unknown }));
-vi.mock('../providerShareGuest.js', () => ({ startProviderShareGuest: vi.fn(), stopProviderShareGuest: vi.fn(), findReceivedShare: () => guest.share, providerShareAccessEpoch: () => guest.revision,
+vi.mock('../providerShareGuest.js', () => ({ startProviderShareGuest: vi.fn(), stopProviderShareGuest: vi.fn(), findReceivedShare: () => guest.share, providerShareAccessEpoch: () => guest.revision, providerShareReceivedChangeSequence: () => 7,
   getReceivedShares: () => received.shares, isReceivedSharesReady: () => received.ready }));
 vi.mock('../providerShareGuestPrefs.js', () => ({ configureProviderShareGuestPrefs: vi.fn(), invalidateProviderShareGuestPrefsCache: vi.fn() }));
 vi.mock('../providerShareGuestPrefsIpc.js', () => ({ setProviderShareCredentialConsentFromIpc: vi.fn() }));
@@ -598,8 +598,9 @@ it.each(['catalog', 'received', 'stop'] as const)('forwards %s invalidation to r
   if (trigger === 'catalog') events.catalogChanged!('share:b-only');
   else if (trigger === 'received') events.changed([], true);
   else stopProviderShareRuntime();
-  expect(local).toHaveBeenCalledWith(CONTROLLED_MODEL_CATALOG_CHANGED, {});
-  expect(remote).toHaveBeenCalledWith(CONTROLLED_MODEL_CATALOG_CHANGED, {},
+  const payload = trigger === 'received' ? { receivedChangeSequence: 7 } : {};
+  expect(local).toHaveBeenCalledWith(CONTROLLED_MODEL_CATALOG_CHANGED, payload);
+  expect(remote).toHaveBeenCalledWith(CONTROLLED_MODEL_CATALOG_CHANGED, payload,
     { dataOwnerId: 'owner-a', ownerGeneration: 1 });
 });
 
@@ -614,8 +615,8 @@ it('refreshes local windows but does not push a catalog change for an unchanged 
   const events = vi.mocked(startProviderShareGuest).mock.lastCall![0];
   events.changed([], false);
   expect(local).toHaveBeenCalledWith(PROVIDER_SHARE_IPC.RECEIVED_CHANGED, []);
-  expect(local).not.toHaveBeenCalledWith(CONTROLLED_MODEL_CATALOG_CHANGED, {});
-  expect(remote).not.toHaveBeenCalledWith(CONTROLLED_MODEL_CATALOG_CHANGED, {}, expect.anything());
+  expect(local).not.toHaveBeenCalledWith(CONTROLLED_MODEL_CATALOG_CHANGED, expect.anything());
+  expect(remote).not.toHaveBeenCalledWith(CONTROLLED_MODEL_CATALOG_CHANGED, expect.anything(), expect.anything());
 });
 
 /* Unit integration: the real received-catalogs producer must distinguish an explicit
