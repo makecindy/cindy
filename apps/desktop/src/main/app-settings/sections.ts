@@ -50,7 +50,10 @@ export const appSettingsSections: AppSettingsSection[] = [{
   effective: 'immediate',
   get schema() { return isManagedCloudInstance() ? appPreferenceSchema : desktopPreferenceSchema; },
   read: async () => withoutCloudOnlyPreferences(await manageAppPreferences('get')),
-  update: async patch => withoutCloudOnlyPreferences(await manageAppPreferences('update', patch)),
+  // The app window keeps these preferences, so it compares the read values itself before applying.
+  update: async (patch, guard) => withoutCloudOnlyPreferences(await (guard?.expected
+    ? manageAppPreferences('update', patch, undefined, { expected: guard.expected })
+    : manageAppPreferences('update', patch))),
 }, {
   id: 'appearance', title: '外观、字体与壁纸',
   description: '界面、代码、终端字体和字号，窗口缩放，壁纸及动态效果，macOS Dock 图标。', effective: 'immediate',
@@ -73,14 +76,14 @@ export const appSettingsSections: AppSettingsSection[] = [{
     delete defaults.customWallpaperUrl;
     return { ...state, value, defaults };
   },
-  update: async patch => { await updateAppearanceFromSettings(patch); },
+  update: async (patch, guard) => { await updateAppearanceFromSettings(patch, guard ? { assertCurrent: () => guard.assertUnchanged() } : undefined); },
   reset: async () => { await resetAppearanceFromSettings(); },
 }, {
   id: 'git-safety', title: 'Git 安全快照', description: '关闭、仅现有 Git 项目或所有项目自动快照。', effective: 'next-turn',
   schema: z.strictObject({ mode: z.enum(['off', 'existing-git', 'all-projects']).optional() }),
   read: async () => readGitSafetySettingsState(),
-  update: async patch => writeGitSafetyMode(patch.mode as 'off' | 'existing-git' | 'all-projects'),
-  reset: async () => resetGitSafetySettings(),
+  update: async (patch, guard) => { guard?.assertUnchanged(); return writeGitSafetyMode(patch.mode as 'off' | 'existing-git' | 'all-projects'); },
+  reset: async guard => { guard?.assertUnchanged(); return resetGitSafetySettings(); },
 }, {
   id: 'goal-defaults', title: '目标模式默认限制', description: '以后启动目标模式的轮数、token 预算和无进展轮数；null 为不限。', effective: 'new-goals',
   schema: z.strictObject({ maxTurns: z.number().int().positive().nullable().optional(),
@@ -93,17 +96,17 @@ export const appSettingsSections: AppSettingsSection[] = [{
   schema: z.strictObject({ maxConcurrentCommands: z.number().int().min(0).max(64).optional(),
     processPriority: z.enum(['normal', 'low', 'lowest']).optional(), capToolchainThreads: z.boolean().optional() }),
   read: async () => readAgentResourceSettingsState(),
-  update: async patch => {
-
+  update: async (patch, guard) => {
+    guard?.assertUnchanged();
     for (const [key, value] of Object.entries(patch)) writeAgentResourceSetting(
       key as keyof import('../maker-host/agent-resource-settings-store.js').AgentResourceSettings,
       value as number | boolean | 'normal' | 'low' | 'lowest');
   },
-  reset: async () => resetAgentResourceSettings(),
+  reset: async guard => { guard?.assertUnchanged(); return resetAgentResourceSettings(); },
 }];
 
-export const manageAppSettings: ReturnType<typeof createAppSettingsService> = async (input, assertCurrent) => {
-  const result = await createAppSettingsService([...appSettingsSections, ...runtimeSettingsSections(), ...pluginSettingsSections()])(input, assertCurrent);
+export const manageAppSettings: ReturnType<typeof createAppSettingsService> = async (input, assertCurrent, write) => {
+  const result = await createAppSettingsService([...appSettingsSections, ...runtimeSettingsSections(), ...pluginSettingsSections()])(input, assertCurrent, write);
   if ((input.operation === 'update' || input.operation === 'reset') && !('errorCode' in result)) {
     await assertCurrent();
     // Plugin KV publishes the same event for every write path, including /kv.

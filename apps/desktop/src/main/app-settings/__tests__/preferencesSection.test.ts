@@ -21,6 +21,10 @@ vi.mock('../../task-management/service.js', () => ({ taskArchiveEngine: { previe
 
 import { appSettingsSections } from '../sections';
 import { createAppSettingsService } from '../service';
+import { updateAppearanceFromSettings } from '../../appearance-settings-ipc.js';
+import { readAppearanceSettingsState } from '../../appearance-settings-store.js';
+import { writeGitSafetyMode, resetGitSafetySettings } from '../../maker-host/git-safety-settings-store.js';
+import { writeAgentResourceSetting } from '../../maker-host/agent-resource-settings-store.js';
 
 const CLOUD_ONLY = ['sidebarPinned', 'sidebarTasks', 'feishuNotifications', 'swallowActivationClick', 'networkDebug'];
 const windowState = {
@@ -36,6 +40,30 @@ beforeEach(() => {
   manageAppPreferences.mockImplementation(async (operation: string, patch?: Record<string, unknown>) => ({
     value: operation === 'update' ? { ...windowState, ...patch } : windowState, themeFamilies: [],
   }));
+});
+
+// Unit: a save based on an earlier read reaches each built-in section's write, which applies
+// nothing once that read is out of date.
+describe('a save checked against its read', () => {
+  const service = createAppSettingsService(appSettingsSections);
+  const stale = { assertUnchanged: () => { throw new Error('CONFLICT'); } };
+  it('stops each built-in section before it persists', async () => {
+    const onPersisted = vi.fn();
+    await expect(service({ operation: 'update', section: 'git-safety', patch: { mode: 'off' } }, async () => {}, { guard: stale, onPersisted })).rejects.toThrow('CONFLICT');
+    await expect(service({ operation: 'reset', section: 'git-safety' }, async () => {}, { guard: stale, onPersisted })).rejects.toThrow('CONFLICT');
+    await expect(service({ operation: 'update', section: 'agent-resources', patch: { maxConcurrentCommands: 2 } }, async () => {}, { guard: stale, onPersisted })).rejects.toThrow('CONFLICT');
+    expect(writeGitSafetyMode).not.toHaveBeenCalled();
+    expect(resetGitSafetySettings).not.toHaveBeenCalled();
+    expect(writeAgentResourceSetting).not.toHaveBeenCalled();
+    expect(onPersisted).not.toHaveBeenCalled();
+    // Appearance checks inside its store's update, and the app window compares its preferences.
+    vi.mocked(readAppearanceSettingsState).mockReturnValue({ value: {}, defaults: {} } as never);
+    await service({ operation: 'update', section: 'appearance', patch: { uiSize: 14 } }, async () => {}, { guard: stale });
+    expect(() => vi.mocked(updateAppearanceFromSettings).mock.calls[0]![1]!.assertCurrent!()).toThrow('CONFLICT');
+    await service({ operation: 'update', section: 'preferences', patch: { notifications: false } }, async () => {}, { guard: { ...stale, expected: { notifications: true } }, onPersisted });
+    expect(manageAppPreferences).toHaveBeenCalledWith('update', { notifications: false }, undefined, { expected: { notifications: true } });
+    expect(onPersisted).toHaveBeenCalledOnce();
+  });
 });
 
 describe('the preferences section', () => {

@@ -72,8 +72,8 @@ export function getHostSettingsOperation(caller: HostSettingsCaller, id: string)
   if (!owner) throw new HostSettingsError('OWNER_CHANGED');
   return journal.get(id, settingsOwnerKey(owner), caller.id);
 }
-// Section stores take no revision precondition, so their check-and-write runs in order per owner
-// and domain: two controllers saving from the same revision cannot both succeed.
+// Cloud saves of one section run in order per owner and domain, so two controllers saving from the
+// same revision cannot both pass the revision check; the section repeats it where it persists.
 const sectionWrites = new Map<string, Promise<void>>();
 async function inSectionOrder<T>(key: string | null, write: () => Promise<T>): Promise<T> {
   if (key === null) return write();
@@ -114,9 +114,14 @@ export async function updateHostSettings(caller: HostSettingsCaller, input: Host
         // restart Codex while applying (smart subagent routing), which refreshes the catalog, so
         // during and after its write only the owner is checked.
         options.assertCurrent();
-        await commitThroughSection(change.domain as never, change, before as never, assertCurrent);
-        const after = await inspectDomain(input.domain, input.workspaceId);
-        revision = after.status === 'ready' ? after.revision : undefined;
+        // The section compares the revision where it persists, so a newer save from the app's own
+        // window is kept and this one is rejected.
+        await commitThroughSection(change.domain as never, change, before as never, assertCurrent, input.expectedRevision);
+        // Saved from here on: a failed read-back only leaves the new revision unknown.
+        try {
+          const after = await inspectDomain(input.domain, input.workspaceId);
+          revision = after.status === 'ready' ? after.revision : undefined;
+        } catch { revision = undefined; }
       } else if (modelAdapter && isModelSettingsDomain(change.domain)) revision = (await modelAdapter.commit(change.domain, change, options)).revision;
       else if (isAdditionalSettingsDomain(change.domain)) {
         const result = await commitAdditionalSettings(change.domain, change, options, input.workspaceId);

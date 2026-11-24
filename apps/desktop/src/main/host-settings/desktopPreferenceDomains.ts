@@ -55,6 +55,11 @@ export async function readDesktopPreferenceDomain(domain: DesktopPreferenceDomai
     locale: SETTINGS_DISPLAY_LOCALES.map(locale => ({ value: locale, label: locale })) } } : state;
 }
 
+/** The preferences a read returned for a group, which the app window compares before saving a change made from it. */
+export function desktopPreferenceExpected(domain: DesktopPreferenceDomain, value: Values): Partial<Record<keyof AppPreferencePatch, SettingsEditableValue>> {
+  return Object.fromEntries(Object.entries(FIELDS[domain]).map(([field, key]) => [key, value[field]]));
+}
+
 /** The preferences patch for a change, checked against the choices the read offered. */
 export function desktopPreferencePatch(domain: DesktopPreferenceDomain, values: Values, before: { choices?: Record<string, Choice[]> }): Values {
   const patch: Values = {};

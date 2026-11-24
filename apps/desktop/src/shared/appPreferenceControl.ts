@@ -40,10 +40,14 @@ export interface AppPreferenceRequest {
   /** With operation `model-effort`: a model's remembered reasoning effort, or null to follow its default; omitted to only read. */
   modelEffort?: { agent: 'claude-code' | 'codex' | 'pi'; providerId: string; modelId: string; effort: string | null };
   patch?: AppPreferencePatch;
+  /** With operation `update`: the values the change was read from; the window applies nothing if one has changed since. */
+  expected?: AppPreferencePatch;
 }
 export interface AppPreferenceReply {
   requestId: string;
   ok: boolean;
+  /** Why nothing was applied, when the window can tell. */
+  code?: 'CONFLICT';
   state?: Required<AppPreferencePatch>;
   themeFamilies?: string[];
   modelVisibility?: { visible: boolean; customized: boolean };

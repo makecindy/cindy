@@ -6,6 +6,7 @@ import { updatePersonalLocalPlugins } from './cindy-brain/index.js';
 import { observeDesktopStartupResult } from './devStartupStatus.js';
 import { getClaudeSessionBackgroundActivity } from './maker-host/claude-session-background-activity';
 import { registerRuntimeSettingsSection } from './app-settings/runtime.js';
+import type { AppSettingsWriteGuard } from './app-settings/service.js';
 import { z as settingsSchema } from 'zod';
 import { flushPluginUsageLifecycle } from './plugin-usage/current.js';
 import { scheduleNativeHistoryBackupCleanup } from './remote-agent/controller/nativeHistoryBackup.js';
@@ -5818,7 +5819,9 @@ const registerIpcHandlers = () => {
   ipcMain.handle(MAKER_IPC_INVOKE.SUBAGENT_MODEL_SETTINGS_GET, async () => {
     return subagentModelSettingsWire();
   });
-  const updateSubagentSettings = async (patch: unknown) => {
+  // `guard` comes from a settings save based on an earlier read; it is checked before any restart and
+  // again right before the write, so that save cannot replace a newer one.
+  const updateSubagentSettings = async (patch: unknown, guard?: AppSettingsWriteGuard) => {
     // 本 channel 已升级为可触发进程管理(软关/重启本地 Codex 会话)的操作,
     // 必须先验证调用方是可信主渲染器,不能让任意取得 channel 的 frame/WebView
     // 改写 owner-scoped 配置并重启会话(codex review P1)。
@@ -5829,6 +5832,7 @@ const registerIpcHandlers = () => {
       parseSubagentModelSettingsPatch(patch),
       current,
     );
+    guard?.assertUnchanged();
     // codex 的 -c 注入在共享 app-server 的 spawn 时刻,变更触及注入键且有存活
     // maker 时走 DeferredCodexRestart 执行体(空闲即软重启,busy 落盘后延迟兑现);
     // 无 maker(启动早期/已关)时新 spawn 天然现读新值,直接落盘。
@@ -5857,6 +5861,7 @@ const registerIpcHandlers = () => {
           'app session changed during codex restart; write dropped',
         );
       }
+      guard?.assertUnchanged();
       writeSubagentModelSettingsPatch(parsed);
       return subagentModelSettingsWire();
       // stillValid 同时传给执行体:busy 路径 persist 与登记之间还有一个 await 边界,
@@ -5865,7 +5870,8 @@ const registerIpcHandlers = () => {
     }, stillValid);
   };
   ipcMain.handle(MAKER_IPC_INVOKE.SUBAGENT_MODEL_SETTINGS_SET, async (event, patch: unknown) => { assertTrustedAppRendererEvent(event); return updateSubagentSettings(patch); });
-  const restoreSubagentSettings = async () => {
+  const restoreSubagentSettings = async (guard?: AppSettingsWriteGuard) => {
+    guard?.assertUnchanged();
     // 同 SET:restart-capable 操作,先验可信渲染器(codex review P1)。
     const needsCodexRestart =
       codexSpawnConfigChanged(readSubagentModelSettings(), SUBAGENT_MODEL_SETTINGS_DEFAULTS) &&
@@ -5887,6 +5893,7 @@ const registerIpcHandlers = () => {
           'app session changed during codex restart; reset dropped',
         );
       }
+      guard?.assertUnchanged();
       resetSubagentModelSettings();
       return subagentModelSettingsWire();
     }, stillValid);

@@ -55,13 +55,13 @@ vi.mock('../../utility-model/oneshotProviderUsability.js', () => ({ hasOneshotPr
 vi.mock('../../utility-model/textOneshotPinOptions.js', () => ({ buildTextOneshotPinOptions: () => [{ id: 'fixture-pin', label: 'Fixture Auxiliary Model' }] }));
 vi.mock('../../ownerNamespaceMigration.js', () => ({ isLegacyOwnerNamespaceClaimedByOtherOwner: () => true, hasExclusiveSharedLegacyUserDataAccess: () => false, hasLegacyOwnerNamespaceClaim: () => false }));
 
-import { configureHostSettingsApplication, getHostSettings, updateHostSettings } from '../index.js';
+import { configureHostSettingsApplication, getHostSettings, getHostSettingsOperation, updateHostSettings } from '../index.js';
 import { normalizeHostSettingsChange, type HostSettingsDomain, type HostSettingsUpdate } from '../../../shared/hostSettings.js';
 import { modelSettingsChoices, readModelSettings, validateModelSettingsChange, commitModelSettings } from '../additionalModels.js';
 import { settingsWebReadResultSchema } from '../../../shared/settingsWeb.js';
 import { readModelContextLimit } from '../../maker-host/model-context-limit-store.js';
 import { readModelDisableOverrides } from '../../maker-host/model-disable-store.js';
-import { readSubagentModelSettings } from '../../maker-host/subagent-model-settings-store.js';
+import { readSubagentModelSettings, writeSubagentModelSettingsPatch } from '../../maker-host/subagent-model-settings-store.js';
 import { createHostImDefaultsStore, readImDefaultSettings } from '../../im/defaultSettingsStore.js';
 import { nativePluginSettings } from '../additionalPlugins.js';
 import { configureAdditionalNativeOperations } from '../additionalRuntime.js';
@@ -179,6 +179,36 @@ describe('model and IM settings native persistence', () => {
     } finally {
       registerRuntimeSettingsSection(section);
       context.catalogRevision = 1;
+    }
+  });
+  // The instance's own settings window can save while a cloud save is still checking its model.
+  it('keeps the model the instance window saved while an older cloud save was being checked', async () => {
+    context.modelsPerAgent = 2;
+    const input = await request('subagentModel', { set: { claudeCode: route } });
+    configureHostSettingsApplication({ models: { read: readModelSettings, commit: commitModelSettings,
+      validate: async (domain, change) => {
+        const result = await validateModelSettingsChange(domain, change);
+        writeSubagentModelSettingsPatch({ claudeCode: 'fixture-1', claudeCodeProviderId: route.providerId });
+        return result;
+      } }, databaseWarning() {} });
+    expect(await updateHostSettings(caller, input)).toMatchObject({ saved: false, status: 'rejected', code: 'CONFLICT' });
+    expect(readSubagentModelSettings()).toMatchObject({ claudeCode: 'fixture-1', claudeCodeProviderId: route.providerId });
+  });
+  it('reports a persisted change as saved when reading it back fails', async () => {
+    const input = await request('subagentModel', { set: { codexSmartSubagentRouting: true } });
+    const section = runtimeSettingsSections().find(item => item.id === 'subagent-models')!;
+    registerRuntimeSettingsSection({ ...section, read: () => { throw new Error('read failed'); } });
+    let reads = 0;
+    configureHostSettingsApplication({ models: { commit: commitModelSettings, validate: validateModelSettingsChange,
+      read: async domain => { if (++reads > 1) throw new Error('read failed'); return readModelSettings(domain); } }, databaseWarning() {} });
+    try {
+      const receipt = await updateHostSettings(caller, input);
+      expect(receipt).toMatchObject({ saved: true, status: 'saved' });
+      expect(receipt.revision).toBeUndefined();
+      expect(readSubagentModelSettings().codexSmartSubagentRouting).toBe(true);
+      expect(getHostSettingsOperation(caller, input.operationId)).toMatchObject({ saved: true, status: 'saved' });
+    } finally {
+      registerRuntimeSettingsSection(section);
     }
   });
   it('rejects a new route whose provider disconnected after the form was read', async () => {

@@ -170,6 +170,11 @@ export function AppPreferenceControl() {
         let language: AppPreferencePatch['language'];
         if (request.operation === 'update') {
           const patch = appPreferenceSchema.parse(request.patch);
+          // A change read before this window saved something newer applies nothing.
+          const expected = request.expected === undefined ? {} : appPreferenceSchema.parse(request.expected);
+          if (Object.entries(expected).some(([key, value]) => current.current.state[key as keyof typeof expected] !== value)) {
+            bridge.reply({ requestId: request.requestId, ok: false, code: 'CONFLICT' }); return;
+          }
           let pending: Promise<void> | undefined;
           const active = () => isDataOwnerPushStampCurrent(request.ownerStamp) && Date.now() <= request.expiresAt;
           flushSync(() => { pending = current.current.apply(patch, active); });
