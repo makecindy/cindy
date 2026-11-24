@@ -63,7 +63,7 @@ async function runUpdate(
   packageSha256: string,
   installed: InstalledGhost,
   deps: InstallFlowDeps,
-): Promise<void> {
+): Promise<boolean> {
   const { t } = deps;
   try {
     const { ghost } = await window.electronAPI.ghosts.update(lizFilePath, {
@@ -77,8 +77,10 @@ async function runUpdate(
         version: ghost.manifest.version,
       }),
     );
+    return true;
   } catch (err) {
     await showInstallError(err, deps);
+    return false;
   }
 }
 
@@ -106,14 +108,13 @@ export async function installInspectedGhostFromFile(
   lizFilePath: string,
   { manifest, packageSha256 }: { manifest: GhostManifest; packageSha256: string },
   deps: InstallFlowDeps,
-): Promise<void> {
+): Promise<boolean> {
   const { t } = deps;
   // 1.5) 同 id 已装 → 转更新分支(拖入/双击/装入按钮选到新版包时不再报
   // "已经注入",直接原位更新)。
   const installed = findInstalledLocalForFile(manifest.id);
   if (installed) {
-    await runUpdate(lizFilePath, packageSha256, installed, deps);
-    return;
+    return runUpdate(lizFilePath, packageSha256, installed, deps);
   }
 
   // 用户通过文件选择／拖入／双击发起安装，Main 会先弹确认框。安装后默认启用；
@@ -128,8 +129,10 @@ export async function installInspectedGhostFromFile(
     if (willOpenPanel) {
       deps.openPluginPanel?.(installedGhostStoragePart(ghost));
     }
+    return true;
   } catch (err) {
     await showInstallError(err, deps);
+    return false;
   }
 }
 

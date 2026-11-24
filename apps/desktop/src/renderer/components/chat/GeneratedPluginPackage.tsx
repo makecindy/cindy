@@ -16,6 +16,9 @@ import {
 
 type Inspection = Awaited<ReturnType<typeof window.electronAPI.ghosts.inspect>>;
 
+// Main reads the full archive for inspection. Serialize background card inspections per window.
+let pendingInspection = Promise.resolve();
+
 /** Host-verified generated package. An unreadable file or a theme keeps its ordinary file chip. */
 export function GeneratedPluginPackage({
   path,
@@ -30,23 +33,25 @@ export function GeneratedPluginPackage({
   const navigate = useNavigate();
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [busy, setBusy] = useState(false);
+  const [inspectionRevision, setInspectionRevision] = useState(0);
   const inFlight = useRef(false);
   const installed = useInstalledGhosts(inspection !== null);
 
   useEffect(() => {
     let current = true;
-    void window.electronAPI.ghosts
-      .inspect(path)
-      .then((result) => {
+    pendingInspection = pendingInspection.then(async () => {
+      if (!current) return;
+      try {
+        const result = await window.electronAPI.ghosts.inspect(path);
         if (current) setInspection(result);
-      })
-      .catch(() => {
+      } catch {
         if (current) setInspection(null);
-      });
+      }
+    });
     return () => {
       current = false;
     };
-  }, [path]);
+  }, [path, inspectionRevision]);
 
   if (!inspection) return children;
   const { manifest } = inspection;
@@ -71,7 +76,8 @@ export function GeneratedPluginPackage({
     setBusy(true);
     try {
       if (!matched) {
-        await installInspectedGhostFromFile(path, inspection, { t });
+        const installed = await installInspectedGhostFromFile(path, inspection, { t });
+        if (!installed) setInspectionRevision((revision) => revision + 1);
         return;
       }
       const instanceId = installedGhostStoragePart(matched);

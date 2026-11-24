@@ -51,6 +51,8 @@ export interface GeneratedFileRef {
   artifact?: DocumentArtifactMetadata;
   /** true 仅表示同一 tool_use 有结构化 ok:true 结果，可用本轮 mtime 证明成功覆盖。 */
   artifactConfirmed?: boolean;
+  /** Latest successful Forge invocation that wrote this local package. */
+  packageToolUseId?: string;
 }
 
 export type DocumentArtifactFormat = 'pdf' | 'docx' | 'pptx' | 'xlsx';
@@ -388,7 +390,10 @@ export function collectGeneratedFiles(
           path && /^(?:\/|[A-Za-z]:[\\/])/.test(path) && /\.cindy$/i.test(path)) {
         addPath(path, 'tool');
         const file = byKey.get(dedupeKeyForPath(canonicalizeWindowsShape(path)));
-        if (file) file.artifactConfirmed = true;
+        if (file) {
+          file.artifactConfirmed = true;
+          file.packageToolUseId = msg.toolUseId;
+        }
       }
     }
     const artifact = extractDocumentArtifactMetadata(toolName, msg.toolInput, resultContent);

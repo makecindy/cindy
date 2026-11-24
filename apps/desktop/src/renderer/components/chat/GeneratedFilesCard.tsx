@@ -591,6 +591,7 @@ export function generatedFileVisibleSignature(file: GeneratedFileRef): string {
     file.source,
     file.artifactConfirmed ? '1' : '0',
     artifactVisibleSignature(file.artifact),
+    file.packageToolUseId ?? '',
   ].join('\t');
 }
 
@@ -1091,7 +1092,7 @@ export const GeneratedFilesCard = memo(function GeneratedFilesCard({
   return (
     <div data-render-item-key={renderItemKey} className="my-1 flex flex-col gap-2">
       {installSessionId && candidates.map((file) => (
-        <GeneratedPluginPackage key={file.path} path={file.path} sessionId={installSessionId}>
+        <GeneratedPluginPackage key={JSON.stringify([file.path, file.packageToolUseId])} path={file.path} sessionId={installSessionId}>
           <GeneratedFileChip file={file} />
         </GeneratedPluginPackage>
       ))}
