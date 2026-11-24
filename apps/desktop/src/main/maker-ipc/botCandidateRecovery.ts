@@ -1,4 +1,4 @@
-import { isContextOverflowErrorMessage, isNetworkishErrorMessage, isOverloadErrorMessage } from '@cindy/maker-core';
+import { isContextOverflowErrorMessage, isNetworkishErrorMessage, isOverloadErrorMessage, UPSTREAM_STREAM_INTERRUPTED_REASON } from '@cindy/maker-core';
 import { extractNonSecretErrorSignals, matchesDeterministicUsageExhaustionText } from '@cindy/maker-shared/error-redaction';
 import { isAcceptedTurnContinuationOnlyReason, isRemoteAgentRouteLostReason, type InterruptedTurnErrorSignals } from './interruptedTurnAutoResume.js';
 import { isBillingDepletionError } from '../../shared/usageLimitRecovery.js';
@@ -83,11 +83,9 @@ export function modelGroupFailureScope(input: InterruptedTurnErrorSignals): Mode
   if (input.toolLoop || input.outputLimit ||
     ['sessionBudgetExceeded', 'contextWindowExceeded', 'cyberPolicy'].includes(input.codexErrorInfo ?? '') ||
     ['invalid_request', 'invalid_request_error', 'context_length_exceeded', 'content_filter'].includes(tag)) return null;
-  // A stream the provider cut mid-reply after its own retries, and an ACP agent's quota, are not in the
-  // candidate list above but are exactly what another source fixes.
   if (reason === 'acp-usage-limit') return 'connection';
-  if (reason === 'upstream-stream-interrupted' || isRemoteAgentRouteLostReason(reason)) return 'model';
-  if (isAcceptedTurnContinuationOnlyReason(reason)) return 'transient';
+  if (isRemoteAgentRouteLostReason(reason)) return 'model';
+  if (reason === UPSTREAM_STREAM_INTERRUPTED_REASON || isAcceptedTurnContinuationOnlyReason(reason)) return 'transient';
   // Only provider/agent failure envelopes can use the unknown-error default.
   // A distinct host/control reason (Stop, tool loop, preparation, etc.) keeps its existing owner.
   if (reason && !PROVIDER_TURN_FAILURE_REASONS.has(reason)) return null;

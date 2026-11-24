@@ -466,7 +466,6 @@ describe('model group failure handling', () => {
     ['a dead key reported only as text', { sdkError: '401: {"code":"","message":"Invalid token (request id: x)","type":"AgnesAI_error"}',
       message: '401: {"code":"","message":"Invalid token (request id: x)","type":"AgnesAI_error"}' }, 'connection'],
     ['a removed model', { reason: 'model_unavailable' }, 'model'],
-    ['a stream cut after the provider retried', { reason: 'upstream-stream-interrupted' }, 'model'],
     ['Pi giving up after its own retries', { reason: 'pi-gateway-drop' }, 'model'],
     ['an engine that would not start', { reason: 'agent-start-failed' }, 'model'],
     ['a prompt too long for any source', { errorStatus: 400, message: 'prompt too long' }, null],
@@ -560,13 +559,17 @@ describe('model group failure handling', () => {
     expect(h.delays.at(-1)).toBe(3000);
   });
 
-  // §4.1 / #12440, unit: an unclassified statusless provider error must
-  // dispatch two same-source retries and then switch even with ordinary auto-resume off.
-  it('retries and then switches on an unclassified provider error', async () => {
+  // §4.1 / #12440, unit: the real guard and hooks used on a terminal provider
+  // error must retry twice in place before switching, even with ordinary auto-resume off.
+  // Previously an unclassified error stopped and a typed stream interruption switched at once.
+  it.each([
+    ['an unclassified provider error', { message: 'weird upstream boom' }],
+    ['an interrupted stream', { reason: 'upstream-stream-interrupted', message: 'Response API in-stream error' }],
+  ] as const)('retries twice and then switches on %s', async (_name, signals) => {
     const h = groupHarness('enabled', false);
-    const signals = { message: 'weird upstream boom' };
-    await h.fail(signals);
-    await h.fail(signals);
+    for (let retry = 0; retry < 2; retry += 1) {
+      expect(await h.fail(signals)).toMatchObject({ requireRouteChange: false, recovery: { retrySameSource: true } });
+    }
     h.fallback.mockResolvedValueOnce({
       session: null, outcome: 'switched', sourceSwitch: { from: 'Model · A', to: 'Model · B' },
     });
