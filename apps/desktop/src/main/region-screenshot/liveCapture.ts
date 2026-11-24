@@ -17,7 +17,7 @@ function captureProfileMode(display: Display): true | 'verify-sdr' | false {
   const space = display.colorSpace ?? '';
   if (![8, 10].includes(display.depthPerComponent) || !space.includes('matrix:RGB, range:FULL')
     || !space.includes('transfer:') || space.includes('transfer:INVALID')) return false;
-  return /transfer:(?:SRGB|GAMMA18|GAMMA22|GAMMA24|GAMMA28),/.test(space) || 'verify-sdr';
+  return (display.depthPerComponent === 8 && space.includes('primaries:BT709, transfer:SRGB,')) || 'verify-sdr';
 }
 
 export function nativeScreenshotPrecheck(
@@ -56,7 +56,7 @@ export async function captureScreenshotDisplays(
       if (!frame) { fallbackReason ??= 'native-frame-unavailable'; continue; }
       // Older helpers can still serve ordinary sRGB. Wide-gamut device RGB
       // needs the profile of the same monitor before we can display it.
-      if (!frame.sdrFromHdr && !frame.icc && (display.depthPerComponent !== 8 || !display.colorSpace.includes('primaries:BT709, transfer:SRGB,'))) {
+      if (!frame.sdrFromHdr && !frame.icc && mode === 'verify-sdr') {
         fallbackReason ??= 'color-space';
         continue;
       }

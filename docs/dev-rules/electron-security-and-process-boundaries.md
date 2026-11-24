@@ -206,7 +206,7 @@ main 按所属窗口、顶层 frame 和当前 token 校验每次采集，只向�
 Windows 滚动截图与录制由当前用户会话的截图 helper 直接读取已选矩形（单帧最多 3200 万像素），不启动 SYSTEM broker；
 Windows 首次定格按显示器独立选择采集路径。对符合采集条件的 8 或 10 位全范围 RGB 显示器，helper 按物理坐标和原分辨率采集。
 DXGI 确认对应输出为 HDR10（全范围 PQ / BT.2020）时，GDI 返回桌面的 SDR 位图。helper 标记 `sdrFromHdr`，主机直接使用该位图并忽略显示器 ICC，避免预览和导出时再次转换颜色。
-对于 SDR，自定义传递函数需由 DXGI 确认对应输出为 SDR。除标准 8 位 sRGB 外，原生 SDR 设备像素必须附有该显示器的 ICC 配置。冻结预览使用此配置，导出时将选区转换到 sRGB 再合成标注。
+除标准 8 位 sRGB 外，原生 SDR 设备像素必须经 DXGI 确认对应输出为 SDR，并附有该显示器的 ICC 配置。Chromium 报告的 P3/sRGB 也可能来自 HDR10 屏。对已确认的 SDR 设备像素，冻结预览使用该屏 ICC，导出时将选区转换到 sRGB 再合成标注。
 色彩空间不受支持、所需的输出确认或 ICC 缺失、原生帧不可用或尺寸不匹配时，用 Electron 补采对应显示器，保留其他屏幕的有效原生帧。
 Windows helper 的 `frame` 请求可显式指定 `encoding: "bgra"`，响应为一行 JSON 头加
 `byteLength` 个原始像素字节；未指定时保留旧 Base64 JSON，新主机也接受旧 helper 的回复。

@@ -101,7 +101,7 @@ describe('live region capture recovery', () => {
   // Unit: a custom-calibrated SDR display beside an HDR screen previously lost
   // its ICC. A single-monitor P3 case cannot expose that routing error.
   // Windows can expose HDR10 as P3/sRGB to Chromium. Trust the frame's DXGI result.
-  it.each([['BT2020', 'PQ', 'verify-sdr'], ['P3', 'SRGB', true]])('keeps the SDR ICC and the HDR desktop rendition (%s/%s)', async (primaries, transfer, mode) => {
+  it.each([['BT2020', 'PQ'], ['P3', 'SRGB']])('keeps the SDR ICC and the HDR desktop rendition (%s/%s)', async (primaries, transfer) => {
     const custom = { ...sdr, colorSpace: '{primaries:CUSTOM, transfer:custom curve, matrix:RGB, range:FULL}' };
     const hdr = { ...sdr, id: 2, depthPerComponent: 10, colorSpace: `{primaries:${primaries}, transfer:${transfer}, matrix:RGB, range:FULL}` };
     const icc = Uint8Array.of(42);
@@ -109,7 +109,7 @@ describe('live region capture recovery', () => {
     mocks.capture.mockResolvedValueOnce({ ...frame, sdrFromHdr: true }).mockResolvedValueOnce({ ...frame, icc });
     const result = await captureScreenshotDisplays([hdr, custom], helper);
     expect(result).toMatchObject({ backend: 'native', captures: [{ display: hdr, previewProfile: undefined }, { display: custom, previewProfile: icc }] });
-    expect(mocks.capture.mock.calls).toEqual([[hdr.bounds, 32768, mode], [custom.bounds, 32768, 'verify-sdr']]);
+    expect(mocks.capture.mock.calls).toEqual([[hdr.bounds, 32768, 'verify-sdr'], [custom.bounds, 32768, 'verify-sdr']]);
   });
   // Unit: a Dell P3 desktop faded on opening the overlay. The previous
   // fallback-only coverage never checked whether device RGB kept its profile.
