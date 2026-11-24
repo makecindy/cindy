@@ -31,16 +31,28 @@ export function createRemoteProfileStore(deviceId: string, botId: string, accept
   let writeGeneration = 0;
   let readGeneration = 0;
   let writing = 0;
+  let confirmedAvatar: Pick<BotProfile, 'avatar' | 'avatarColor'> | null = null;
   const emit = () => listeners.forEach((listener) => listener());
-  const adopt = (raw: unknown): BotProfile => {
-    const next = normalizeDbProfile((raw as { profile?: unknown } | null)?.profile);
-    if (!next) throw createIpcError('INTERNAL', 'Invalid buddy profile');
+  const publish = (next: BotProfile): BotProfile => {
     // Re-reads that change nothing keep the same object so the pages do not reconcile for nothing.
     if (profile && JSON.stringify(profile) === JSON.stringify(next)) return profile;
     profile = next;
     emit();
     return next;
   };
+  const adopt = (raw: unknown, avatarReceipt = false): BotProfile => {
+    const next = normalizeDbProfile((raw as { profile?: unknown } | null)?.profile);
+    if (!next) throw createIpcError('INTERNAL', 'Invalid buddy profile');
+    if (avatarReceipt) {
+      confirmedAvatar = { avatar: next.avatar, avatarColor: next.avatarColor };
+      readGeneration += 1;
+    }
+    return publish(next);
+  };
+  // Avatar writes can leave currentVersion unchanged. Protect an avatar
+  // confirmed while this request was pending, and merge all its other fields.
+  const preserveAvatar = (next: BotProfile, before: typeof confirmedAvatar): BotProfile =>
+    confirmedAvatar && confirmedAvatar !== before ? { ...next, ...confirmedAvatar } : next;
   return {
     get: () => profile,
     subscribe(listener: () => void) {
@@ -68,6 +80,7 @@ export function createRemoteProfileStore(deviceId: string, botId: string, accept
         { ...before.capabilities }, { ...before.capabilities, ...profilePatch.capabilities },
       )) throw createIpcError('UNSUPPORTED_CAPABILITY', 'Update the buddy computer to reselect the configured model');
       const generation = ++writeGeneration;
+      const avatarAtStart = confirmedAvatar;
       writing += 1;
       profile = { ...before, ...profilePatch, capabilities: { ...before.capabilities, ...profilePatch.capabilities } };
       emit();
@@ -93,8 +106,9 @@ export function createRemoteProfileStore(deviceId: string, botId: string, accept
             : await invokeBotSettings(deviceId, 'profile.update', botId, { patch: part });
           saved += 1;
         }
-        const next = normalizeDbProfile((raw as { profile?: unknown } | null)?.profile);
-        if (!next) throw createIpcError('INTERNAL', 'Invalid buddy profile');
+        const received = normalizeDbProfile((raw as { profile?: unknown } | null)?.profile);
+        if (!received) throw createIpcError('INTERNAL', 'Invalid buddy profile');
+        const next = preserveAvatar(received, avatarAtStart);
         // A newer write on this profile is closer to what the person wants now.
         if (generation === writeGeneration) {
           profile = next;
@@ -105,13 +119,13 @@ export function createRemoteProfileStore(deviceId: string, botId: string, accept
         if (generation === writeGeneration) {
           // A large patch goes in several requests: when an earlier one is already saved on the
           // computer, `before` is no longer what it holds, so the page starts again from what it has.
+          const avatarAtReread = confirmedAvatar;
           let reread: unknown = null;
           if (saved > 0 || extractIpcError(error)?.code === 'PRECONDITION_FAILED')
             reread = await invokeBotSettings(deviceId, 'profile.get', botId).catch(() => null);
-          if (reread && normalizeDbProfile((reread as { profile?: unknown }).profile)) adopt(reread);
-          else {
-            profile = before;
-            emit();
+          const received = normalizeDbProfile((reread as { profile?: unknown } | null)?.profile);
+          if (generation === writeGeneration) {
+            publish(received ? preserveAvatar(received, avatarAtReread) : preserveAvatar(before, avatarAtStart));
           }
         }
         throw error;
@@ -277,7 +291,7 @@ export function createRemoteBotSettingsTarget(input: RemoteBotSettingsInput) {
         // The native chooser reads files of the computer it runs on; here the picker hands over bytes.
         if (avatarImageBase64 === undefined) return null;
         const raw = await call('profile.chooseAvatar', { avatarImageBase64: await toRemoteAvatar(avatarImageBase64) });
-        return profiles.adopt(raw);
+        return profiles.adopt(raw, true);
       },
       async retryInvitation() {
         profiles.adopt(await call('profile.retryInvitation'));

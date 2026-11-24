@@ -171,6 +171,41 @@ it('ignores a read that was overtaken by a write', async () => {
   expect(profiles.get()?.name).toBe('Renamed');
 });
 
+// #8122: desktop profile versions can stay equal when the host writes a name or avatar.
+it.each(['success', 'failure'] as const)('preserves a confirmed same-version avatar after a delayed profile %s', async (outcome) => {
+  vi.stubGlobal('Image', class { async decode() {} });
+  vi.stubGlobal('document', { createElement: () => ({
+    getContext: () => ({ drawImage() {} }),
+    toDataURL: () => 'data:image/jpeg;base64,YWJj',
+  }) });
+  const { target, profiles } = create();
+  const original = profile();
+  host.invoke.mockResolvedValueOnce(ok({ profile: original }));
+  await profiles.load();
+  const delayed = Promise.withResolvers<unknown>();
+  host.invoke.mockReturnValueOnce(delayed.promise);
+  const pending = target.profile.update('bot-1', { name: 'Renamed' });
+  const renameResult = outcome === 'success'
+    ? expect(pending).resolves.toMatchObject({ name: 'Renamed', description: 'From host', avatar: '🦊', avatarColor: 'blue' })
+    : expect(pending).rejects.toSatisfy((error) => extractIpcError(error)?.code === 'INVALID_PARAMS');
+  const confirmed = { ...original, avatar: '🦊', avatarColor: 'blue' };
+  host.invoke.mockResolvedValueOnce(ok({ profile: confirmed }));
+  await target.profile.chooseAvatar('bot-1', 'YWJj');
+  delayed.resolve(outcome === 'success'
+    ? ok({ profile: { ...original, name: 'Renamed', description: 'From host' } })
+    : refused('INVALID_PARAMS', 'Synthetic failure'));
+  await renameResult;
+  expect(profiles.get()).toMatchObject({
+    avatar: confirmed.avatar, avatarColor: confirmed.avatarColor, currentVersion: original.currentVersion,
+    ...(outcome === 'success' ? { name: 'Renamed', description: 'From host' } : { name: original.name }),
+  });
+
+  const fresh = { ...confirmed, avatar: '🐱', avatarColor: 'violet' };
+  host.invoke.mockResolvedValueOnce(ok({ profile: fresh }));
+  await profiles.refresh();
+  expect(profiles.get()).toMatchObject({ avatar: fresh.avatar, avatarColor: fresh.avatarColor, currentVersion: original.currentVersion });
+});
+
 it('sends long personality and user text as separate requests so none exceeds the invoke input limit', async () => {
   const { target, profiles } = create();
   host.invoke.mockResolvedValueOnce(ok({ profile: profile() }));

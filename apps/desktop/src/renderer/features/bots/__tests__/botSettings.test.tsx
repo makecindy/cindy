@@ -1161,8 +1161,9 @@ describe('Bot settings unified autosave', () => {
     }));
     window.electronAPI.profileChooseAvatar = vi.fn(async () => { throw new Error('Local mode has no account'); });
     const original = bot();
-    const renamed = { ...original, name: 'New name', currentVersion: 2 };
-    const saved = { ...renamed, avatar: `cindy-media://blobs/${'c'.repeat(64)}.png`, avatarColor: 'teal', currentVersion: 3 };
+    const renamed = { ...original, name: 'New name' };
+    const saved = { ...renamed, avatar: `cindy-media://blobs/${'c'.repeat(64)}.png`, avatarColor: 'teal' };
+    const merged = { ...saved, description: 'Host description' };
     const avatarReceipt = Promise.withResolvers<BotProfile>();
     const renameReceipt = Promise.withResolvers<BotProfile>();
     const update = vi.fn().mockReturnValueOnce(renameReceipt.promise).mockResolvedValue(saved);
@@ -1199,12 +1200,13 @@ describe('Bot settings unified autosave', () => {
       });
       fireEvent.blur(name);
       await act(async () => {
-        view.rerender(viewFor(renamed));
-        renameReceipt.resolve(renamed);
+        view.rerender(viewFor(merged));
+        renameReceipt.resolve(merged);
       });
 
       expect(update).toHaveBeenCalledTimes(1);
       expect((name as HTMLInputElement).value).toBe(saved.name);
+      expect(screen.getByDisplayValue(merged.description)).toBeTruthy();
       expect(picker.querySelector('img')?.getAttribute('src')).toMatch(/^cindy-remote-media:/);
     } finally {
       vi.unstubAllGlobals();
