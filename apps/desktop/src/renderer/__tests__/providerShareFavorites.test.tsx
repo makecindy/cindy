@@ -4,9 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { parseModelFavorites, providerShareParsers, type ProviderShareReceived } from '@cindy/device-link';
 import type { ModelFavoritesHostApi } from '../../shared/modelFavoritesSync';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { modelConfigCopyIdentity } from '@/state/modelConfigCopy';
 import {
   __resetForTest, accessHostModelFavorites, addModelFavorite, listModelFavorites, setModelFavoritesOwner, useModelFavorites,
 } from '@/state/modelFavorites';
+import * as hostFavorites from '@/state/modelFavorites';
 import {
   parseProviderShareFavoriteSource, providerShareFavoriteSource, reconcileProviderShareFavorites,
   useProviderShareFavorites, useProviderShareFavoriteCleanupFailed,
@@ -73,8 +75,12 @@ describe('recipient-owned shared model favorites', () => {
   it('aggregates only exact, available grants for the current account', () => {
     const sources = renderHook(() => useProviderShareFavoriteSources());
     expect([...sources.result.current.values()]).toEqual(['share:s1', 'share:s2']);
-    act(() => publish([{ ...share(), status: 'paused' }, { ...share('s2', 'm2'), hostOnline: false }]));
+    act(() => publish([{ ...share(), status: 'paused' }, { ...share('s2', 'm2'), hostCapable: false }]));
     expect(sources.result.current.size).toBe(0);
+    // 2026-11-23 用户裁决「保留并标注」: an owner computer that is only temporarily offline keeps its
+    // favorites resolvable (greyed with the catalog) instead of making them vanish and come back.
+    act(() => publish([share(), { ...share('s2', 'm2'), hostOnline: false, hostCapable: false }]));
+    expect([...sources.result.current.values()]).toEqual(['share:s1', 'share:s2']);
     act(() => publish([share('s1', 'replacement')]));
     expect(sources.result.current.has(providerShareFavoriteSource(share()))).toBe(false);
     expect(sources.result.current.get(providerShareFavoriteSource(share('s1', 'replacement')))).toBe('share:s1');
@@ -190,6 +196,29 @@ describe('recipient-owned shared model favorites', () => {
     act(() => { setModelFavoritesOwner('other'); setModelFavoritesOwner('recipient'); });
     expect(a.result.current.items[0]).toMatchObject(config);
     expect(b.result.current.items).toHaveLength(1);
+  });
+
+  // 回归：本机直写分享收藏时，改推理档不得把 ultrafast 收成普通 fast，否则星标对不上、再点会多一条。
+  it('keeps ultrafast when editing a locally stored shared favorite', () => {
+    const view = mount();
+    const ultra = { ...config, fast: 'ultrafast' as const };
+    act(() => view.result.current.store.add(ultra));
+    const uid = view.result.current.items[0]!.uid;
+    const writes = vi.spyOn(hostFavorites, 'accessHostModelFavorites');
+    act(() => view.result.current.store.update(uid, { effort: 'low' }));
+    const update = writes.mock.calls.find((call) => call[1]?.kind === 'update')?.[1];
+    expect(update).toMatchObject({
+      kind: 'update',
+      item: { effort: 'low', fast: 'ultrafast' },
+    });
+    const saved = view.result.current.items[0]!;
+    const current = { ...ultra, effort: 'low' as const };
+    expect(saved).toMatchObject(current);
+    expect(modelConfigCopyIdentity(saved)).toBe(modelConfigCopyIdentity(current));
+    act(() => view.result.current.store.add(current));
+    expect(view.result.current.items).toHaveLength(1);
+    expect(listModelFavorites()).toHaveLength(1);
+    expect(hostFavorites.accessHostModelFavorites('recipient').find((item) => item.uid === uid)?.fast).toBe('ultrafast');
   });
 
   it('edits and removes only the selected copy while preserving its share source', () => {

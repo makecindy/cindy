@@ -268,6 +268,9 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // 菜单时拉一次,才能给出「更大」的档位。无 event.sender / 无本机副作用,不写任何存储。
   // 老被控端无 handler → CHANNEL_NOT_ALLOWED → 控制端退回「只允许收紧」。
   'maker:get-context-window-bounds',
+  // Same-account, read-only native window numbers. No config contents, paths or
+  // credentials; no settings writes. Old hosts reject this channel as unsupported.
+  'maker:model-context-limit:get',
   'maker:set-extra-dirs',
   'maker:set-writable-dirs',
   // Pi 原生分支树:只读快照 + 当前会话内导航。导航业务 handler 在被控端原子同步

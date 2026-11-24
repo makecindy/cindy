@@ -161,6 +161,19 @@ export function RemoteConnectionV2Section({
     });
   }, [t]);
 
+  const onPathPreferenceChange = useCallback(async (node: TopologyNode, preference: 'auto' | 'direct' | 'relay') => {
+    const setPref = window.electronAPI?.deviceLink?.setPeerPathPreference;
+    if (!setPref) return false;
+    try {
+      await setPref(node.id, preference);
+      return true;
+    } catch (err) {
+      log.warn('setPeerPathPreference failed', err);
+      toast.error(t('settings.remoteControl.v2.popover.routePreferenceFailed'));
+      return false;
+    }
+  }, [t]);
+
   const linkStatusText = t(`settings.devices.linkStatus.${s.linkStatus}`);
   const offlineToggleVisible = model.stats.offline >= 2;
 
@@ -208,6 +221,7 @@ export function RemoteConnectionV2Section({
               ready={s.devices !== null && peerLinks.takenAt > 0}
               switches={remoteSwitch.entries}
               onSwitch={onSwitch}
+              onPathPreferenceChange={onPathPreferenceChange}
             />
           </div>
           {offlineToggleVisible ? (

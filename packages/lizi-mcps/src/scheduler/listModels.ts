@@ -30,6 +30,7 @@ export function registerScheduleListModelsTool(
       '要让任务每次新建时在别处运行：schedule_create / schedule_update 传同一个 agentDeviceId；model 取 codex / claude_code / pi 列表项的 id，providerId 取该模型 providers[].id（名称为 providers[].name，默认来源为 defaultProviderId）。' +
       'providers[].modelDetails 是该来源的实际目录资料，包含可用推理档位、速度及已知价格；cost 固定为 USD/百万 token；currency 只对应 displayPricing，优先按该来源展示报价与适用折扣比较。按任务能力与同币种价格推荐经济型号，不凭名称或前缀猜价格，缺价不等于免费，订阅参考价不等于实际扣费。保留用户已有选择，不批量改自动化。' +
       '只用于本机的定时任务；其它电脑上的定时任务不能设运行位置。' +
+      '列本机时还会返回 modelGroups：用户建的模型组(模式) [{id, name, strategy, sources}]，schedule_create / schedule_update 的 modelGroup 传其 id，新建任务时按模式选来源。' +
       '列本机且不传 agent 时还会返回 pluginEngines：本机插件提供的执行引擎 [{providerId, name, available, message?, models:[{id, label, efforts?}]}]；用它时 agentKind 与 modelAgentKind 都传 acp，providerId 传该项 providerId，model 传 models[].id，只能每次新建任务在本机运行。',
     inputShape: {
       agent: z.enum(AGENT_KIND).optional().describe('只列某个 agent 的模型；不传列全部'),

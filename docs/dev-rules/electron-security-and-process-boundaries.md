@@ -204,8 +204,10 @@ macOS 在用户请求的回放窗口实际显示前激活应用，再聚焦回�
 main 按所属窗口、顶层 frame 和当前 token 校验每次采集，只向面板发送裁剪后的像素；
 不授予 Renderer 通用屏幕媒体流，不扩大 device-link 的远程 IPC 白名单。
 Windows 滚动截图与录制由当前用户会话的截图 helper 直接读取已选矩形（单帧最多 3200 万像素），不启动 SYSTEM broker；
-Windows 首次定格同样优先使用该 helper，仅对已确认的 8-bit sRGB 显示器启用，按物理坐标和原分辨率采集；
-HDR、广色域、未知色彩配置或 helper 不可用时，整组显示器回退 Electron 原采集路径。
+Windows 首次定格按显示器独立选择采集路径。对 8 或 10 位、全范围 RGB 且传递函数可确认为 SDR 的显示器，
+helper 按物理坐标和原分辨率采集；自定义传递函数需由 DXGI 确认对应输出为 SDR。
+除标准 8 位 sRGB 外，原生帧必须附有该显示器的 ICC 配置。冻结预览使用此配置，导出时将选区转换到 sRGB 再合成标注。
+HDR、无法确认色彩空间、缺少必需的 ICC 或原生帧不可用时，用 Electron 补采对应显示器，保留其他屏幕的有效原生帧。
 Windows helper 的 `frame` 请求可显式指定 `encoding: "bgra"`，响应为一行 JSON 头加
 `byteLength` 个原始像素字节；未指定时保留旧 Base64 JSON，新主机也接受旧 helper 的回复。
 主机按请求 ID、尺寸和 3200 万像素上限校验后才分配独立的定长缓冲，按管道分段填充，

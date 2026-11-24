@@ -425,6 +425,31 @@ pub extern "C" fn probe(id: u32, now: f64) -> i32 {
     with(0, |state| state.endpoint.probe(micros(now), id, address) as i32)
 }
 
+/// 仅测速验证连接 `id` 到 addr 里那个地址的路径（不切换数据路径），见 `Endpoint::measure`。开始了新一轮验证时返回 1。
+#[unsafe(no_mangle)]
+pub extern "C" fn measure_probe(id: u32, now: f64) -> i32 {
+    let Some(address) = decode_addr(addr()) else { return 0 };
+    with(0, |state| state.endpoint.measure(micros(now), id, address) as i32)
+}
+
+/// 切换连接 `id` 是否优先走中继路径（`prefer != 0` 时中继代价 0、直连代价 2），见 `Endpoint::set_prefer_relay`。
+#[unsafe(no_mangle)]
+pub extern "C" fn conn_set_prefer_relay(id: u32, prefer: u32) -> i32 {
+    with(0, |state| state.endpoint.set_prefer_relay(id, prefer != 0) as i32)
+}
+
+/// 取出连接 `id` 一条路径测速结果：把地址写进 addr 并返回往返微秒数；没有返回 -1。
+#[unsafe(no_mangle)]
+pub extern "C" fn conn_poll_probe_rtt(id: u32) -> f64 {
+    with(-1.0, |state| match state.endpoint.poll_probe_rtt(id) {
+        Some((address, rtt_us)) => {
+            encode_addr(address, addr());
+            rtt_us as f64
+        }
+        None => -1.0,
+    })
+}
+
 /// 这一端换了网络，见 `Endpoint::on_local_address_change`。
 #[unsafe(no_mangle)]
 pub extern "C" fn local_address_change(now: f64) {
@@ -626,6 +651,7 @@ pub extern "C" fn conn_stats(id: u32) -> i32 {
             security.connection_ids_retired,
             security.connection_id_packets,
             security.connection_id_retransmissions,
+            stats.acknowledged_bytes,
         ];
         write_f64s(io, &values)
     })

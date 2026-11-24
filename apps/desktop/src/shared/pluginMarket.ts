@@ -1,6 +1,6 @@
 import type { DownloadProgress } from './downloadProgress';
 import type { GhostManifest, InstalledGhost } from './ghost';
-import type { GhostReadmeContent, PluginDownloadStatistics, PluginIconMetadata, PluginUsageStatistics } from '@cindy/plugin-protocol';
+import type { GhostReadmeContent, PluginCatalogCounts, PluginDownloadStatistics, PluginIconMetadata, PluginUsageStatistics } from '@cindy/plugin-protocol';
 
 export type PluginMarketScope = 'public' | 'organization' | 'personal';
 export type PluginMarketInstallState =
@@ -76,11 +76,7 @@ export interface PluginMarketQuery {
   /** Readers that only need items/cursors can omit the complete first-page count. */
   counts?: boolean;
 }
-export interface PluginMarketCounts {
-  all: number;
-  public: number;
-  organization: number;
-  personal: number;
+export interface PluginMarketCounts extends PluginCatalogCounts {
   custom: number;
 }
 export interface PluginMarketPage extends PluginMarketSnapshot {
@@ -95,6 +91,15 @@ export interface PluginRemovalUserNotice {
   count: number;
   /** 累计单条且插件名经安全过滤后非空时为插件名；其余情况为 null，只展示数量。 */
   name: string | null;
+}
+
+export type OfficialModelPlugin = Pick<PluginMarketItem, 'pluginId' | 'ghostId' | 'namespace' | 'name' | 'description'>;
+export interface OfficialModelPluginPage {
+  incomplete?: boolean;
+  officialIds: string[];
+  totalOfficial: number | null;
+  items: OfficialModelPlugin[];
+  nextCursor: string | null;
 }
 
 /** 详情携带安装前展示给用户的 manifest；官方来自 release，自定义来自本地发现。 */

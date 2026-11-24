@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "0450c6ba-3ad2-4f32-99db-5e51fc9c06e6",
+  "id": "b11f478d-1cd5-4aec-bebb-423047da9fe0",
   "prevId": "0f15935b-db8f-4d08-9709-9ce774d036e8",
   "tables": {
     "account_usage_snapshots": {
@@ -2101,13 +2101,6 @@
           "notNull": true,
           "autoincrement": false,
           "default": "'{}'"
-        },
-        "stdio": {
-          "name": "stdio",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
         },
         "sort_order": {
           "name": "sort_order",
@@ -5264,6 +5257,13 @@
         },
         "effort": {
           "name": "effort",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "model_group": {
+          "name": "model_group",
           "type": "text",
           "primaryKey": false,
           "notNull": false,
