@@ -440,16 +440,19 @@ async function renderNewImageGenerationReloadConfirmation(onSaved = vi.fn(), onC
   });
   const user = userEvent.setup();
   renderExpandedConnection(<ProviderConnectionDialog onSaved={onSaved} onClose={onClose} />);
-  await user.type(
+  // Fill each field in one change to keep the confirmation fixture fast.
+  fireEvent.change(
     screen.getByPlaceholderText('settings.providers.custom.fields.namePlaceholder'),
-    'New image provider',
+    { target: { value: 'New image provider' } },
   );
   await user.click(screen.getByRole('tab', { name: 'settings.providers.custom.protocol.codex' }));
-  await user.type(
+  fireEvent.change(
     screen.getByPlaceholderText('settings.providers.custom.fields.baseUrlPlaceholder'),
-    'https://images.example.test/v1',
+    { target: { value: 'https://images.example.test/v1' } },
   );
-  await user.type(screen.getByLabelText('settings.providers.connection.manualModel'), 'responses-model');
+  fireEvent.change(screen.getByLabelText('settings.providers.connection.manualModel'), {
+    target: { value: 'responses-model' },
+  });
   await user.click(screen.getByRole('button', { name: 'settings.providers.custom.fields.addModel' }));
   await user.click(
     screen.getByRole('button', { name: 'settings.providers.custom.fields.runtimeAdvanced' }),
