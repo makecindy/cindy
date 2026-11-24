@@ -40,7 +40,11 @@ export default {
         if (!target || !scroller) return false;
         const line = target.getBoundingClientRect();
         const viewport = scroller.getBoundingClientRect();
-        return line.top >= viewport.top && line.bottom <= viewport.bottom;
+        const lineCenter = line.top + line.height / 2;
+        const viewportCenter = viewport.top + viewport.height / 2;
+        const tolerance = Number.parseFloat(getComputedStyle(target).lineHeight);
+        return line.top >= viewport.top && line.bottom <= viewport.bottom &&
+          Math.abs(lineCenter - viewportCenter) <= tolerance;
       });
       await ui.capture('referenced-source-line');
       const target = editor.locator('.cm-line').filter({ hasText: 'void reconcileInventory()' });
