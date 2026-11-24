@@ -17719,18 +17719,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const provider = catalog.providers.find(entry => entry.id === route.providerId);
     const model = findCatalogModel(provider, route.model, 'codex', { exact: true });
     if (!model) return;
-    let imageMetadata;
+    let pinned: Awaited<ReturnType<typeof readPinnedSessionModelInterface>>;
     try {
-      const pinned = await readPinnedSessionModelInterface(sessionId, route.providerId, 'codex', model, catalog.modelRegistry);
-      imageMetadata = pinned?.defaults ?? model;
+      pinned = await readPinnedSessionModelInterface(sessionId, route.providerId, 'codex', model, catalog.modelRegistry);
     } catch {
       // The send transaction reports an unavailable or invalid pin.
       return;
     }
+    const imageMetadata = pinned?.defaults ?? model;
     const imageInput = imageMetadata.supportsImageInput ?? imageMetadata.modalities?.input.includes('image');
     if (imageInput !== false) return;
-    // A resumed task may be pinned to another interface with different capabilities.
-    if (model?.availableInterfaces?.some(({ defaults, profileId }) =>
+    // Without a pin, the send transaction can still select another interface.
+    if (!pinned && model.availableInterfaces?.some(({ defaults, profileId }) =>
       profileId !== model.selectedInterface?.profileId &&
       (defaults.supportsImageInput ?? defaults.modalities?.input.includes('image')) !== false)) return;
     if (await activeModelGroupBinding(sessionId, row) ||

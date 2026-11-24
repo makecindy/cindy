@@ -148,7 +148,13 @@ export function createInputEnqueueHarness(coordinator: AgentInputCoordinator, op
   mobile?: boolean;
   resumeInterruptedScheduleRun?: typeof import('../../scheduler-host/index.desktop.js').resumeInterruptedScheduleRun;
   getSessionFsSnapshot?: () => Promise<{ planModeEnabled?: boolean } | null>;
-  codexModel?: { id: string; supportsImageInput?: boolean };
+  codexModel?: {
+    id: string;
+    supportsImageInput?: boolean;
+    selectedInterface?: { profileId: string };
+    availableInterfaces?: { profileId: string; defaults: { supportsImageInput?: boolean } }[];
+  };
+  pinnedCodexImageInput?: boolean;
 } = {}) {
   const { remote = true, mobile = false, resumeInterruptedScheduleRun = async () => null } = options;
   const noop = () => undefined;
@@ -214,7 +220,9 @@ export function createInputEnqueueHarness(coordinator: AgentInputCoordinator, op
     isSessionSharedTaskActive: () => false,
     getActiveCatalog: () => ({ providers: [{ id: 'fixture-codex', models: { codex: [options.codexModel] } }] }),
     findCatalogModel,
-    readPinnedSessionModelInterface: async () => undefined,
+    readPinnedSessionModelInterface: async () => options.pinnedCodexImageInput === undefined
+      ? undefined
+      : { defaults: { supportsImageInput: options.pinnedCodexImageInput } },
     CODEX_IMAGE_INPUT_UNSUPPORTED,
     prepareDeviceLinkAutoTitle: async () => noop,
     queuedAttachmentOwnership: { activateCurrentOwner: noop },

@@ -622,11 +622,26 @@ describe('INPUT_ENQUEUE local Codex image validation', () => {
     { supportsImageInput: true, ext: '.png', blocked: false },
     { supportsImageInput: undefined, ext: '.png', blocked: false },
     { supportsImageInput: false, ext: '.gif', blocked: false },
-  ])('only rejects an image block on an explicitly text-only route (%j)', async ({ supportsImageInput, ext, blocked }) => {
+    { supportsImageInput: false, ext: '.png', alternate: true, pinned: false, blocked: true },
+    { supportsImageInput: false, ext: '.png', alternate: true, pinned: true, blocked: false },
+    { supportsImageInput: false, ext: '.png', alternate: true, blocked: false },
+  ])('only rejects an image block on an explicitly text-only route (%j)', async ({ supportsImageInput, ext, alternate, pinned, blocked }) => {
     const h = createHarness();
     const sid = 'local-codex';
     const { enqueue } = createInputEnqueueHarness(h.coordinator, {
-      remote: false, codexModel: { id: 'fixture-model', supportsImageInput },
+      remote: false,
+      pinnedCodexImageInput: pinned,
+      codexModel: {
+        id: 'fixture-model',
+        supportsImageInput,
+        ...(alternate && {
+          selectedInterface: { profileId: 'chat' },
+          availableInterfaces: [
+            { profileId: 'chat', defaults: { supportsImageInput: false } },
+            { profileId: 'responses', defaults: {} },
+          ],
+        }),
+      },
     });
     const item = makeItem('fresh-input', 'Look at this');
     item.createOpts = { ...item.createOpts, agentKind: 'codex', providerId: 'fixture-codex', model: 'fixture-model' };
