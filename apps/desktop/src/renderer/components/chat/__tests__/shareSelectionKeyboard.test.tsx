@@ -78,8 +78,8 @@ it('still leaves Escape and ⌘/Ctrl+A to a text field', () => {
 });
 
 // #12437: the existing share-bar tests do not include a pinned plan's document listener.
-// Unit: pin a real plan, keyboard-enter sharing, then send Escape to the message area.
-it('exits keyboard-opened sharing before closing the pinned plan', () => {
+// Unit: keyboard-open the real plan and share bar in both orders, then send Escape.
+it.each(['plan', 'sharing'] as const)('closes the newest Escape layer when %s opened first', (first) => {
   shareSelectionStore.exit();
   function Session() {
     const sharing = useShareSelectionActive(SESSION);
@@ -93,15 +93,18 @@ it('exits keyboard-opened sharing before closing the pinned plan', () => {
   }
   const { container } = render(<Session />);
   const plan = container.querySelector<HTMLButtonElement>('button[aria-expanded]')!;
-  fireEvent.click(plan, { detail: 0 });
   const share = screen.getByRole('button', { name: 'Share message as image' });
-  fireEvent.click(share, { detail: 0 });
+  const [older, newer] = first === 'plan' ? [plan, share] : [share, plan];
+  fireEvent.click(older, { detail: 0 });
+  fireEvent.click(newer, { detail: 0 });
   expect(shareSelectionStore.isActive(SESSION)).toBe(true);
-
-  fireEvent.keyDown(share, { key: 'Escape' });
-  expect(shareSelectionStore.isActive(SESSION)).toBe(false);
   expect(plan.getAttribute('aria-expanded')).toBe('true');
 
-  fireEvent.keyDown(plan, { key: 'Escape' });
+  fireEvent.keyDown(newer, { key: 'Escape' });
+  expect(shareSelectionStore.isActive(SESSION)).toBe(first === 'sharing');
+  expect(plan.getAttribute('aria-expanded')).toBe(first === 'plan' ? 'true' : 'false');
+
+  fireEvent.keyDown(older, { key: 'Escape' });
+  expect(shareSelectionStore.isActive(SESSION)).toBe(false);
   expect(plan.getAttribute('aria-expanded')).toBe('false');
 });

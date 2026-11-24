@@ -34,6 +34,7 @@ import type { MessageRenderTodoItem } from '@cindy/maker-shared/message-render';
 import { Spinner, type SpinnerIconComponent } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
+import { isForegroundComposerEscapeLayer, registerComposerEscapeLayer } from './composerEscapeLayers';
 
 // ---------------------------------------------------------------------------
 // Types — normalized agent plan/todo item
@@ -42,8 +43,6 @@ import { cn } from '@/lib/utils';
 export type TodoItem = MessageRenderTodoItem;
 
 type FlyoutOpenMode = 'closed' | 'hover' | 'pinned';
-
-const pinnedPlanCards: HTMLElement[] = [];
 
 /**
  * 静态灰度进度圆环。
@@ -309,7 +308,7 @@ export function TodoListCard({
   useEffect(() => {
     const card = cardRef.current;
     if (openMode !== 'pinned' || !card) return;
-    pinnedPlanCards.push(card);
+    const unregisterLayer = registerComposerEscapeLayer(card);
 
     const handlePointerDownOutside = (event: PointerEvent) => {
       const target = event.target;
@@ -318,13 +317,10 @@ export function TodoListCard({
     };
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
-      const foregroundPlan = pinnedPlanCards.findLast(
-        (candidate) => candidate.isConnected && candidate.checkVisibility?.({ checkVisibilityCSS: true }) !== false,
-      );
-      if (foregroundPlan !== card) return;
+      if (!isForegroundComposerEscapeLayer(card)) return;
       // Other foreground layers may close without cancelling the key event.
       if (document.querySelector(
-        '[data-preview-scrim], [aria-modal="true"], [data-morph-side], [data-worker-dropdown], [data-share-selection-bar]',
+        '[data-preview-scrim], [aria-modal="true"], [data-morph-side], [data-worker-dropdown]',
       )) return;
       event.preventDefault();
       setOpenMode('closed');
@@ -333,7 +329,7 @@ export function TodoListCard({
     document.addEventListener('pointerdown', handlePointerDownOutside, true);
     document.addEventListener('keydown', handleKeyDown);
     return () => {
-      pinnedPlanCards.splice(pinnedPlanCards.indexOf(card), 1);
+      unregisterLayer();
       document.removeEventListener('pointerdown', handlePointerDownOutside, true);
       document.removeEventListener('keydown', handleKeyDown);
     };

@@ -39,6 +39,7 @@ import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { useBrandLogo } from '@/hooks/useBrandLogo';
 import shareCharacterSrc from '@/assets/cindy-share-character.jpg';
+import { registerComposerEscapeLayer } from './composerEscapeLayers';
 import { shareSelectionStore, useShareSelectionCount } from './shareSelectionStore';
 import { Checkbox } from '@/components/ui/checkbox';
 
@@ -168,8 +169,11 @@ export function ShareSelectionBar({
 
   useEffect(() => {
     mountedRef.current = true;
+    const bar = barRef.current;
+    const unregisterLayer = bar ? registerComposerEscapeLayer(bar) : undefined;
     return () => {
       mountedRef.current = false;
+      unregisterLayer?.();
     };
   }, []);
 
@@ -199,7 +203,6 @@ export function ShareSelectionBar({
   return (
     <div
       ref={barRef}
-      data-share-selection-bar
       {...{ [SHARE_EXCLUDE_ATTR]: '' }}
       style={{ width: barWidth }}
       className={cn(
