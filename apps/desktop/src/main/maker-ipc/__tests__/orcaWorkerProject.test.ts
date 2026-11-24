@@ -553,6 +553,8 @@ describe('Worker worktree source resolution', () => {
     headState: 'branch' as const, dirty: false, isWorktree: false, commonDir: '/repo/.git', checkoutRoot: '/repo', realDirectory: '/repo'};
   it.each([
     {headState: 'branch' as const, branch: 'feature', source: undefined, expected: 'feature'},
+    // #12391: omitting the source follows the attached local branch even when its name matches origin's default.
+    {headState: 'branch' as const, branch: 'origin/main', source: undefined, expected: 'refs/heads/origin/main'},
     {headState: 'detached' as const, branch: 'a'.repeat(40), source: undefined, expected: 'a'.repeat(40)},
     {headState: 'branch' as const, branch: 'main', source: 'release', expected: 'release'},
     {headState: 'unborn' as const, branch: null, source: 'main', expected: 'main'},

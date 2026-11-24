@@ -202,28 +202,30 @@ async function fetchRemoteDefaultBranch(
 }
 
 /** Desktop and Orca Worker creation refresh only the selected origin default; never
- * redirect an explicit choice to upstream or a newly renamed remote default. The short
- * `origin/<branch>` spelling (used by Orca tool calls) refreshes the same tracking ref. */
+ * redirect an explicit choice to upstream or a newly renamed remote default. Returns the full
+ * tracking ref so checkout uses the same ref as the refresh. */
 export async function refreshSelectedDefaultSource(
   baseRepo: string,
   sourceBranch: string,
   totalBudgetMs = NET_TOTAL_BUDGET_MS,
-): Promise<void> {
+): Promise<string> {
   const selected = sourceBranch?.startsWith('origin/')
     ? `refs/remotes/${sourceBranch}`
     : sourceBranch;
-  if (!selected?.startsWith('refs/remotes/origin/')) return;
+  if (!selected?.startsWith('refs/remotes/origin/')) return sourceBranch;
   const deadline = Date.now() + totalBudgetMs;
   try {
-    if (selected !== (await readOriginDefaultBranch(baseRepo))) return;
+    if (selected !== (await readOriginDefaultBranch(baseRepo))) return sourceBranch;
     await fetchRemoteDefaultBranch(
       baseRepo,
       'origin',
       selected.slice('refs/remotes/origin/'.length),
       deadline - Date.now() - KILL_CLEANUP_BUDGET_MS,
     );
+    return selected;
   } catch {
     // A failed local probe also retains the source already selected by the user.
     log.warn('[freshBase] 默认源分支探测失败，使用本地已有 ref');
+    return sourceBranch;
   }
 }

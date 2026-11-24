@@ -923,28 +923,27 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
     }
     const baseRepo = cwdInfo.repoRoot ?? path.resolve(req.baseRepo);
 
+    const sourceBranch = options?.refreshDefaultSource
+      ? await refreshSelectedDefaultSource(baseRepo, req.sourceBranch)
+      : req.sourceBranch;
+
     // 2. branches — sourceBranch 既可以是本地分支(常规 schedule),也可以是
     //    任意 commit-ish。
     //    本地分支命中优先,否则用 rev-parse 校验是不是合法 commit-ish。
     const { branches } = await timed('list branches', () => listBranches(baseRepo));
-    if (!branches.includes(req.sourceBranch)) {
+    if (!branches.includes(sourceBranch)) {
       try {
-        await gitExec(['rev-parse', '--verify', `${req.sourceBranch}^{commit}`], baseRepo);
+        await gitExec(['rev-parse', '--verify', `${sourceBranch}^{commit}`], baseRepo);
       } catch {
         return {
           ok: false,
           error: {
             kind: 'unknown',
-            message: `源分支 "${req.sourceBranch}" 不存在`,
+            message: `源分支 "${sourceBranch}" 不存在`,
             hint: '请刷新分支列表或选择其他源分支',
           },
         };
       }
-    }
-
-    // Refresh before add/checkout. Other creation paths preserve their existing behavior.
-    if (options?.refreshDefaultSource) {
-      await refreshSelectedDefaultSource(baseRepo, req.sourceBranch);
     }
 
     // 3. 路径冲突避让
@@ -991,13 +990,13 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
       if (useMultibox) {
         try {
           const added = await timed('git multibox add', () =>
-            gitExec(buildMultiboxAddArgs(branch, worktreePath, req.sourceBranch), baseRepo));
+            gitExec(buildMultiboxAddArgs(branch, worktreePath, sourceBranch), baseRepo));
           logMultiboxAddResult(worktreePath, added.stdout);
         } catch (err) {
           return { ok: false, error: classifyError(classifyAny(err)) };
         }
       } else {
-        const addArgs = buildWorktreeAddArgs(branch, worktreePath, req.sourceBranch);
+        const addArgs = buildWorktreeAddArgs(branch, worktreePath, sourceBranch);
         try {
           await timed('git worktree add', () => gitExec(addArgs, baseRepo));
         } catch (err) {
@@ -1113,7 +1112,7 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
         path: worktreePath,
         baseRepo,
         branch,
-        sourceBranch: req.sourceBranch,
+        sourceBranch,
         createdAt: nowIso(),
         generation: randomUUID(),
         ...(recoveryKey ? { recoveryKey } : {}),

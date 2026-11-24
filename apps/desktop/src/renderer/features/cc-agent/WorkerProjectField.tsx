@@ -123,11 +123,15 @@ export function useWorkerProjectSelection(
     !!context.selected.baseRepo &&
     context.selected.headState !== 'unborn' &&
     !(sameProject && context.dialogue);
-  const branch =
-    sourceBranch ||
-    (snapshot?.key === key ? snapshot.preferredBranch : undefined) ||
-    context?.selected.branch ||
-    '';
+  const explicitBranch =
+    sourceBranch || (snapshot?.key === key ? snapshot.preferredBranch : undefined);
+  const currentBranch = context?.selected.branch ?? '';
+  const branch = explicitBranch || currentBranch;
+  // The current checkout is local, even when its branch name looks like a remote ref.
+  const checkoutSource =
+    !explicitBranch && context?.selected.headState === 'branch' && currentBranch.startsWith('origin/')
+      ? `refs/heads/${currentBranch}`
+      : branch;
   return {
     context,
     sameProject,
@@ -153,7 +157,7 @@ export function useWorkerProjectSelection(
           ...(context.selected.directory !== context.recordedDirectory
             ? { workingDir: context.selected.directory }
             : {}),
-          ...(checked && canWorktree ? { worktree: { sourceBranch: branch } } : {}),
+          ...(checked && canWorktree ? { worktree: { sourceBranch: checkoutSource } } : {}),
         }
       : {}) as { projectPath?: string; workingDir?: string; worktree?: WorkerWorktreeRequest },
   };

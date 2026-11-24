@@ -3111,14 +3111,21 @@ describe('local Worker project selection', () => {
     await waitFor(() => expect(result.current.ready).toBe(true));
     expect(result.current.fields).not.toHaveProperty('worktree');
   });
-  it('submits a detected checkout explicitly while keeping its own branch', async () => {
-    const inherited = {...project, directory: '/checkout', branch: 'feature', isWorktree: true};
+  // #12391: the picker sends the attached branch explicitly. A remote-looking name
+  // must keep its local ref in the request, while remaining readable in the chip.
+  it.each([
+    {branch: 'feature', sourceBranch: 'feature'},
+    {branch: 'origin/main', sourceBranch: 'refs/heads/origin/main'},
+  ])('keeps the detected checkout on its own branch $branch', async ({branch, sourceBranch}) => {
+    const inherited = {...project, directory: '/checkout', branch, headState: 'branch' as const, isWorktree: true};
     projectContext.mockResolvedValue({...context, inherited, selected: inherited});
     const {result} = renderHook(() => useWorkerProjectSelection(true, 'lead', true));
     await waitFor(() => expect(result.current.ready).toBe(true));
     expect(result.current.fields.workingDir).toBe('/checkout');
-    expect(result.current.branch).toBe('feature');
+    expect(result.current.branch).toBe(branch);
     expect(result.current.fields).not.toHaveProperty('projectPath');
+    act(() => result.current.setChecked(true));
+    expect(result.current.fields.worktree).toEqual({sourceBranch});
   });
   it('ignores an old project response and resets checkbox and source on each selection', async () => {
     let resolveOld!: (value: WorkerProjectContext['selected']) => void;

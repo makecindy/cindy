@@ -382,16 +382,25 @@ it('creates an Orca Worker from the freshly fetched origin default', async () =>
   await git(seed, 'commit', '-m', 'old');
   await git(fixture, 'clone', '--bare', seed, remote);
   await git(fixture, 'clone', remote, repo);
+  const old = await git(repo, 'rev-parse', 'HEAD');
+  await git(repo, 'branch', 'origin/main');
   await fs.writeFile(path.join(seed, 'tracked.txt'), 'new');
   await git(seed, 'commit', '-am', 'new');
   await git(seed, 'push', remote, 'main');
   const latest = await git(seed, 'rev-parse', 'HEAD');
 
+  // #12391 review: a colliding local branch made the short remote name
+  // ambiguous at checkout. A full local ref must still select the local branch.
+  const localWorker = await createWorkerWorktree('orca-local', repo, 'refs/heads/origin/main');
+  await awaitBackgroundCheckout('orca-local');
+  expect(await git(localWorker, 'rev-parse', 'HEAD')).toBe(old);
+  expect(await git(repo, 'rev-parse', 'refs/remotes/origin/main')).toBe(old);
+
   const workerDir = await createWorkerWorktree('orca-worker', repo, 'origin/main');
   await awaitBackgroundCheckout('orca-worker');
-
   expect(await git(workerDir, 'rev-parse', 'HEAD')).toBe(latest);
   expect(await fs.readFile(path.join(workerDir, 'tracked.txt'), 'utf8')).toBe('new');
+  expect(metadata.get('orca-worker')?.sourceBranch).toBe('refs/remotes/origin/main');
 }, 30_000);
 
 // #6792: createWorktree must populate the linked worktree's full index after

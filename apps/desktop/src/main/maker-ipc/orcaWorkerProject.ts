@@ -330,7 +330,11 @@ export async function resolveWorkerWorktreeSourceSelection(
   if (info.headState === 'unborn' || !info.branch) {
     throw new Error('Worker worktree requires a repository with a commit');
   }
-  return { sourceBranch: info.branch, source, ...(fallbackReason ? { fallbackReason } : {}) };
+  // A checkout's attached branch is local even when its name looks like an origin ref.
+  const currentBranch = info.headState === 'branch' && info.branch.startsWith('origin/')
+    ? `refs/heads/${info.branch}`
+    : info.branch;
+  return { sourceBranch: currentBranch, source, ...(fallbackReason ? { fallbackReason } : {}) };
 }
 
 /** Compatibility reader for callers that only need the resolved revision. */
