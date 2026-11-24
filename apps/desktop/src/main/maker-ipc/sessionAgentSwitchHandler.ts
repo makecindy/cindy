@@ -264,7 +264,7 @@ export interface MakerSessionAgentSwitchHandlerDeps {
   /** 与 send / SET_MODEL 共用的 session 锁；生产注入，最小测试 harness 可省略。 */
   withSessionLock?<T>(sessionId: string, task: () => Promise<T>): Promise<T>;
   /** Desktop admission for a completed, unbound automation task. */
-  canSwitchCompletedAutomationSession?(sessionId: string): Promise<boolean>;
+  canSwitchCompletedAutomationSession?(sessionId: string, returningToBuiltin: boolean): Promise<boolean>;
   /**
    * 停用轴的边界裁决(生产 = register.ts 的 assertModelRouteUsable,内核纯逻辑在
    * model-route-guard.ts)。跨引擎切换是新的路由选择,目标 (agent, model, 来源) 被
@@ -971,7 +971,10 @@ export async function performSessionAgentSwitch(
         && readDeviceLinkModelSelectionOrigin() !== 'scoped';
       const localManualSwitch = admittedCaller && row.status === 'active' && !row.agentDeviceId
         && !requestedAgentDeviceId && !params.runtimeSource && !params.configStaged;
-      if (!localManualSwitch || !await deps.canSwitchCompletedAutomationSession?.(sessionId)) {
+      // Historical runs may be deleted with their rule. Keep the local route
+      // back to a builtin available for tasks that already use a plugin.
+      const returningToBuiltin = sourceIsPluginEngine && !!builtinTarget;
+      if (!localManualSwitch || !await deps.canSwitchCompletedAutomationSession?.(sessionId, returningToBuiltin)) {
         throwIpcError('UNSUPPORTED_CAPABILITY', 'this automation task cannot switch to or from a plugin engine');
       }
       throwIfAgentSwitchAborted(signal);

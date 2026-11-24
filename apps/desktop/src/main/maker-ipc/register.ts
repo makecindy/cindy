@@ -11456,9 +11456,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     resolveProviderGroupTarget: (sessionId, target) =>
       providerGroupService ? providerGroupService.resolveSwitchTarget(sessionId, target) : Promise.resolve(null),
     withSessionLock: withSendToSessionLock,
-    canSwitchCompletedAutomationSession: async (sessionId) => {
-      const storage = getScheduleStorageIfInitialized();
-      if (!storage || !await storage.canSwitchCompletedAutomationSession(sessionId)) return false;
+    canSwitchCompletedAutomationSession: async (sessionId, returningToBuiltin) => {
+      if (!returningToBuiltin) {
+        const storage = getScheduleStorageIfInitialized();
+        if (!storage || !await storage.canSwitchCompletedAutomationSession(sessionId)) return false;
+      }
       return !getSchedulerIfInitialized()?.resolveInflightRunForSession(sessionId)
         && !hasPendingSchedulerTargetInput(sessionId);
     },

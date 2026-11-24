@@ -100,6 +100,19 @@ describe('switching a task onto a plugin engine', () => {
     expect(pendingSwitches.get('s1')).toBeUndefined();
   });
 
+  // #12397: deleting a schedule can remove the run while keeping its task.
+  it('can return a kept automation task to a builtin after its run is gone', async () => {
+    const { deps } = makeDeps(makeRow({ source: 'scheduler', agentKind: 'acp', providerId: ENGINE }), {
+      canSwitchCompletedAutomationSession: vi.fn(async (_sessionId, returningToBuiltin) => returningToBuiltin),
+    });
+    await performSessionAgentSwitch(deps, {
+      sessionId: 's1', targetAgentKind: 'claude-code', model: 'claude-fable-5', localWindowRequest: true,
+    });
+    await applyPendingAgentSwitchIfIdle(deps, 's1');
+    expect(deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({
+      agentKind: 'cc', providerId: null, model: 'claude-fable-5',
+    }));
+  });
 
   it('keeps the current route if a completed task becomes bound before send', async () => {
     const canSwitchCompletedAutomationSession = vi.fn(async () => true);

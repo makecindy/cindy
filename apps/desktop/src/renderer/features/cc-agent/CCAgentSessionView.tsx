@@ -2290,12 +2290,15 @@ function CCAgentSessionContent({
   const pluginEngineOnTaskComputer = !!session && !isSharedTaskPeer(pluginEngineDeviceId)
     && !session.remoteHostId;
   const scheduleSessionInfo = useAutomationScheduleSessionInfo(sessionId);
-  const completedLocalAutomation = session?.source === 'scheduler' && !remoteDeviceId
-    && !pluginEngineDeviceId && !session.agentDeviceId && scheduleSessionInfo?.canSwitchPluginEngine === true;
+  const localAutomation = session?.source === 'scheduler' && !remoteDeviceId
+    && !pluginEngineDeviceId && !session.agentDeviceId;
+  const completedLocalAutomation = localAutomation && scheduleSessionInfo?.canSwitchPluginEngine === true;
   const pluginEngineSwitchEligible = pluginEngineOnTaskComputer && !!sessionId && !readOnly
     && !session.orcaRole && !session.orcaRemoteLead
     && ((session.source ?? 'desktop') === 'desktop' || session.source === 'bot' || completedLocalAutomation)
     && session.status !== 'archived';
+  const automationCanReturnToBuiltin = localAutomation && pluginEngineOnTaskComputer && pluginEngineTask
+    && !readOnly && !session.orcaRole && !session.orcaRemoteLead && session.status === 'active';
   const localPluginEngines = usePluginEngines(!pluginEngineDeviceId && (pluginEngineTask || pluginEngineSwitchEligible));
   const remotePluginCatalogue = useRemotePluginEngines(
     pluginEngineOnTaskComputer && !readOnly && (pluginEngineTask || pluginEngineSwitchEligible)
@@ -3998,17 +4001,17 @@ function CCAgentSessionContent({
   // 普通任务的选择器列出本机及同账号其他电脑开放的插件引擎(本机须已装对应插件)：
   // 当前选中的是待切到的引擎，或任务自己的引擎；待切到内置引擎时不选中任何插件引擎。
   const pluginEngineSwitchPicker = useMemo<PluginEnginesPickerProps | undefined>(() => {
-    if (!pluginEngineSwitchEligible || !session
+    if ((!pluginEngineSwitchEligible && !automationCanReturnToBuiltin) || !session
       || (!pluginEngineTask && !pluginEngineDeviceId && switchablePluginEngines.length === 0 && switchPluginEngineDevices.length === 0)) {
       return undefined;
     }
     return {
-      engines: switchablePluginEngines,
+      engines: pluginEngineSwitchEligible ? switchablePluginEngines : [],
       active: activeSessionPluginEngineChoice,
       onSelect: handlePluginEngineSwitchSelect,
       readCatalogue: readSessionPluginEngines,
     };
-  }, [pluginEngineSwitchEligible, pluginEngineDeviceId, switchablePluginEngines, switchPluginEngineDevices.length,
+  }, [pluginEngineSwitchEligible, automationCanReturnToBuiltin, pluginEngineDeviceId, switchablePluginEngines, switchPluginEngineDevices.length,
     session, activeSessionPluginEngineChoice, pluginEngineTask, handlePluginEngineSwitchSelect, readSessionPluginEngines]);
 
   // effort 已在 ChatInput 中落库成功；直接 merge 确切值回 SSoT，避免额外 GET

@@ -17,6 +17,8 @@ import { supplementalConversationEstimates } from '@cindy/maker-shared/usage-cos
 
 import { eq, gte, desc, and, isNull, isNotNull, inArray, notInArray, or, sql } from 'drizzle-orm';
 import { runAsBackgroundDbRpc } from '../localDb/client/rpcAdmission.js';
+import { withSessionRouteLock } from '../localDb/sessionRouteLock.js';
+import { throwIpcError } from '../utils/ipcValidate.js';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import type { broadcastSessionPatched as BroadcastSessionPatched } from '../localDb/ipc/sessions.js';
 
@@ -398,8 +400,6 @@ function canSwitchRunPluginEngine() {
     ${scheduleRuns.sessionId} IS NOT NULL
     AND ${scheduleRuns.finishedAt} IS NOT NULL
     AND ${scheduleRuns.status} IN ('success', 'failed', 'aborted')
-    AND ${schedules.executionMode} = 'agent'
-    AND ${schedules.persistentSession} = 0
     AND NOT EXISTS (
       SELECT 1 FROM schedules AS bound WHERE bound.target_session_id = ${scheduleRuns.sessionId}
     )
@@ -485,9 +485,29 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     return row ? scheduleToCamel(row) : null;
   }
 
-  async insert(s: Schedule): Promise<Schedule> {
+  private async writeWithTargetSession<T>(
+    targetSessionId: string | undefined,
+    write: (db: SchedulerDrizzleDb) => Promise<T>,
+  ): Promise<T> {
     const db = this.getDb();
-    await db.insert(schedules).values(scheduleCreateToRow(s));
+    if (!targetSessionId) return write(db);
+    // Share the send/route lock with engine switching. A task may have
+    // changed engines after Scheduler validated the target at save time.
+    return withSessionRouteLock(targetSessionId, async () => {
+      const [pluginTask] = await db.select({ id: sessions.id }).from(sessions).where(and(
+        eq(sessions.id, targetSessionId), eq(sessions.source, 'scheduler'), eq(sessions.agentKind, 'acp'),
+      )).limit(1);
+      if (pluginTask) {
+        throwIpcError('UNSUPPORTED_CAPABILITY', 'this plugin engine task cannot be bound to an automation');
+      }
+      return write(db);
+    });
+  }
+
+  async insert(s: Schedule): Promise<Schedule> {
+    await this.writeWithTargetSession(s.targetSessionId, async db => {
+      await db.insert(schedules).values(scheduleCreateToRow(s));
+    });
     // 返回 round-tripped 版本（确保 timezone/booleans/默认值都按 DB 实际形态回流）
     const inserted = await this.get(s.id);
     if (!inserted) {
@@ -526,7 +546,8 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       const [current] = await db.select().from(schedules).where(where).limit(1);
       return current ? scheduleToCamel(current) : null;
     }
-    const [updated] = await db.update(schedules).set(setObj).where(where).returning();
+    const [updated] = await this.writeWithTargetSession(patch.targetSessionId, async db =>
+      db.update(schedules).set(setObj).where(where).returning());
     if (!updated) return null;
     this.bumpSidebarIndexCache();
     return scheduleToCamel(updated);

@@ -16,6 +16,8 @@ import * as schema from '../../localDb/schema';
 import { createDbClient } from '../../localDb/client/DbClient';
 import type { DbClient } from '../../localDb/client/DbClient';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current';
+import { setSessionRouteLockImplementation } from '../../localDb/sessionRouteLock';
+import { withSendToSessionLock } from '../../maker-ipc/sendToSessionLock';
 import { recordScheduleRunCostDirect, applyScheduleRunCostMetaChange } from '../runCostLedger';
 import { DrizzleScheduleStorage, type SchedulerDrizzleDb } from '../storage.desktop';
 
@@ -96,6 +98,7 @@ const SCHEDULER_DDL = [
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,
       source TEXT NOT NULL DEFAULT 'desktop',
+      agent_kind TEXT NOT NULL DEFAULT 'cc',
       status TEXT NOT NULL DEFAULT 'active',
       workspace_kind TEXT NOT NULL DEFAULT 'project',
       working_dir TEXT,
@@ -2094,6 +2097,8 @@ it('offers the same plugin switch eligibility in the sidebar and send guard', as
     await expect(eligibility()).resolves.toEqual({ switch: false, picker: false });
     await storage.updateRun('first-run', { status: 'success', finishedAt: 2 });
     await expect(eligibility()).resolves.toEqual({ switch: true, picker: true });
+    await storage.update('fresh-rule', { persistentSession: true });
+    await expect(eligibility()).resolves.toEqual({ switch: true, picker: true });
 
     await storage.insert(baseSchedule({ id: 'bound-rule', targetSessionId: 'fresh-task', persistentSession: true }));
     await expect(eligibility()).resolves.toEqual({ switch: false, picker: false });
@@ -2106,6 +2111,38 @@ it('offers the same plugin switch eligibility in the sidebar and send guard', as
     await expect(eligibility()).resolves.toEqual({ switch: false, picker: false });
   } finally {
     harness.close();
+  }
+});
+
+// #12397, DB tier. Queue a binding after its initial validation while
+// the real send/route lock is held by a switch that commits ACP first.
+// Saving a rule must fail without inserting or updating its target.
+it.each(['create', 'update'])('rechecks the task route before binding an automation (%s)', async operation => {
+  const { db, storage, close } = createStorageHarness();
+  setSessionRouteLockImplementation(withSendToSessionLock);
+  try {
+    db.run(sql`INSERT INTO sessions (id, title, source) VALUES ('switch-then-bind', 'task', 'scheduler')`);
+    const rule = baseSchedule({ id: 'new-binding' });
+    if (operation === 'update') await storage.insert(rule);
+    let releaseSwitch!: () => void;
+    const canCommit = new Promise<void>(resolve => { releaseSwitch = resolve; });
+    const switchRoute = withSendToSessionLock('switch-then-bind', async () => {
+      await canCommit;
+      db.run(sql`UPDATE sessions SET agent_kind = 'acp' WHERE id = 'switch-then-bind'`);
+    });
+    const bind = operation === 'create'
+      ? storage.insert({ ...rule, targetSessionId: 'switch-then-bind' })
+      : storage.update(rule.id, { targetSessionId: 'switch-then-bind' });
+    const rejected = expect(bind).rejects.toThrow('[UNSUPPORTED_CAPABILITY]');
+    releaseSwitch();
+    await switchRoute;
+    await rejected;
+    const saved = await storage.get(rule.id);
+    if (operation === 'create') expect(saved).toBeNull();
+    else expect(saved?.targetSessionId).toBeUndefined();
+  } finally {
+    setSessionRouteLockImplementation(null);
+    close();
   }
 });
 
