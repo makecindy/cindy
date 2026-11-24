@@ -14244,7 +14244,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     readProviderRouting: () => getProviderRoutingContext(),
     hasCindyAiApiKey: () => readClaudeApiKey() != null,
   });
-  setSessionOpeningModelAdmission(async body => {
+  setSessionOpeningModelAdmission(async (body, sourceSessionId) => {
     // 插件引擎任务不在内置模型目录里：按本机此刻提供的插件引擎准入(docs/plans/acp-plugin-bridge.md)。
     if (isPluginEngineKind(body.agentKind)) {
       return admitPluginEngineSession(body, getPluginHarnessRegistry().list(), pluginEngineModelsOf, pluginEngineSettingsOf);
@@ -14252,7 +14252,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const execution = await resolveSessionExecution({
       agentKind: body.agentKind, model: body.model, providerId: body.providerId,
       effort: body.effort, fastMode: body.fastMode,
-    });
+    }, sourceSessionId);
     return { ...body, ...execution, effort: execution.effort ?? '',
       agentKind: execution.agentKind === 'claude-code' ? 'cc' : execution.agentKind };
   });

@@ -2,7 +2,7 @@ import { seedBotReadPositions, markBotReadPositions, pruneBotReadState as pruneH
 import { listBotDelegationHistory } from '../../../maker-ipc/botDelegationHistory';
 import { readBotResponsibilityScope } from '../../../maker-ipc/botTaskCreation';
 import { emitSessionCreated } from '../sessionCreatedBroadcast.js';
-import { resolveSessionExecutionSelection } from '../../../maker-ipc/sessionExecutionSelection';
+import { createSessionExecutionResolver } from '../../../maker-ipc/sessionExecutionSelection';
 import { setSessionOpeningModelAdmission } from '../../sessionOpening';
 import { createDrizzleProxy } from '../../client/drizzleProxy';
 import type { DbTransport } from '../../client/DbTransport';
@@ -2534,30 +2534,34 @@ describe('Bot canonical Session lifecycle', () => {
   });
 
   it.each([
-    { saved: '', efforts: [], modelDefault: null, expected: '' },
-    { saved: '', efforts: ['low', 'medium'], modelDefault: 'medium', expected: 'medium' },
-    { saved: 'low', efforts: ['low', 'medium'], modelDefault: 'medium', expected: 'low' },
-  ])('opens the first custom Pi group task with saved effort "$saved" and model default $modelDefault', async ({
-    saved, efforts, modelDefault, expected,
+    { providerId: 'hermes', saved: '', efforts: [], modelDefault: null, expected: '' },
+    { providerId: 'hermes', saved: '', efforts: ['low', 'medium'], modelDefault: 'medium', expected: 'medium' },
+    { providerId: 'hermes', saved: 'low', efforts: ['low', 'medium'], modelDefault: 'medium', expected: 'low' },
+    { providerId: null, saved: '', efforts: ['medium', 'high'], modelDefault: 'medium', expected: 'medium' },
+  ])('opens the first custom Pi group task with provider "$providerId", saved effort "$saved" and model default $modelDefault', async ({
+    providerId, saved, efforts, modelDefault, expected,
   }) => {
     const botId = 'custom-pi';
     const model = 'hermes-agent';
-    const providerId = 'hermes';
     await invoke('local-db:bots:create', {
       id: botId, name: 'Hermes', capabilities: { harness: 'pi', model, providerId, effort: saved },
     });
-    setSessionOpeningModelAdmission(async body => {
-      const selected = resolveSessionExecutionSelection({
-        selection: body,
-        availableAgents: ['pi'],
-        availableModels: [{ id: model, efforts, defaultEffort: modelDefault }],
-        providerRouting: {
-          availability: { pi: [{ id: providerId, name: 'Hermes', models: [model] }], codex: [], 'claude-code': [] },
-          resolveDefaultProviderIdForModel: () => providerId,
-        },
-        hasCindyAiApiKey: false,
-      });
-      return { ...body, effort: selected.effort ?? '' };
+    const readDefault = vi.fn(() => ({ agentKind: 'pi' as const, model, providerId: 'hermes', effort: 'xhigh' as const, fastMode: false }));
+    const resolve = createSessionExecutionResolver({
+      captureOwner: () => () => {},
+      readCaller: vi.fn(),
+      readDefault,
+      availableAgents: () => ['pi'],
+      availableModels: () => [{ id: model, efforts, defaultEffort: modelDefault }],
+      readProviderRouting: async () => ({
+        availability: { pi: [{ id: 'hermes', name: 'Hermes', models: [model] }], codex: [], 'claude-code': [] },
+        resolveDefaultProviderIdForModel: () => 'hermes',
+      }),
+      hasCindyAiApiKey: () => false,
+    });
+    setSessionOpeningModelAdmission(async (body, sourceSessionId) => {
+      const selected = await resolve(body, sourceSessionId);
+      return { ...body, providerId: selected.providerId, effort: selected.effort ?? '' };
     });
     h.sqlite!.exec('CREATE TABLE bot_group_members(group_id TEXT, bot_id TEXT)');
     h.sqlite!.prepare('INSERT INTO bot_group_members VALUES (?, ?)').run('room', botId);
@@ -2567,7 +2571,8 @@ describe('Bot canonical Session lifecycle', () => {
     if (!lane.ok) throw new Error(lane.message);
     expect(lane.created).toBe(true);
     expect(h.sqlite!.prepare('SELECT model, provider_id, effort FROM sessions WHERE id = ?').get(lane.sessionId))
-      .toEqual({ model, provider_id: providerId, effort: expected });
+      .toEqual({ model, provider_id: 'hermes', effort: expected });
+    expect(readDefault).not.toHaveBeenCalled();
   });
 
   it('continues a group task in its project, rebinds a missing project and isolates a chat grant', async () => {
