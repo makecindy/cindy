@@ -223,12 +223,11 @@ async function getPiExtraSpawnConfig(
       if (server.name === 'cindy_imessage' && !hasImChannelVendorOptions(sessionCtx?.vendorOptions, 'imessage')) return false;
       // ACP-only pruning: remove role-mismatched collaboration bridges and unbound IM channel MCPs
       // so external ACP runtimes (e.g. agy) do not exhaust their eager tool budget on irrelevant servers.
+      // Note: cindy_feishu_bot is intentionally kept even without feishuChatId/cindyBotImChannels,
+      // because getChatId falls back to getOwnerOpenId for send_message_to_user / send_file_to_user.
       if (sessionCtx?.acpCompactTools === true) {
         if (server.name === 'orca_worker_bridge' && orcaRole !== 'worker') return false;
         if (server.name === 'cindy_orca' && orcaRole === 'worker') return false;
-        if (server.name === 'cindy_feishu_bot' && !hasImChannelVendorOptions(sessionCtx?.vendorOptions, 'feishu')) {
-          return false;
-        }
         if (server.name === 'cindy_discord' && !hasImChannelVendorOptions(sessionCtx?.vendorOptions, 'discord')) {
           return false;
         }

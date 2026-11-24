@@ -18,6 +18,34 @@
 import type http from 'node:http';
 
 const DEFAULT_MAX_TOOL_DESCRIPTION_CHARS = 120;
+const CORE_TOOL_MAX_PARAM_DESCRIPTION_CHARS = 56;
+
+/**
+ * Core direct-invocation tools without a secondary schema-lookup entrypoint
+ * (unlike `list_tools`/`call_tool` gateways or `ghost_info`/`ghost_call`).
+ * Keeping brief truncated parameter hints preserves critical semantics such as
+ * `working_dir` and `initial_task` while keeping each tool well below agy's
+ * eager threshold and the full toolset within its 52 KB global budget.
+ */
+const CORE_DIRECT_TOOL_NAMES: ReadonlySet<string> = new Set([
+  'create_worker',
+  'create_workers',
+  'start_team',
+  'send_to_worker',
+  'interrupt_worker',
+  'update_worker',
+  'set_worker_runtime',
+  'send_to_lead',
+]);
+
+export interface CompactAcpInputSchemaOptions {
+  /**
+   * When > 0, keep a compacted `description` on parameter schemas (up to this
+   * many characters) instead of stripping all parameter descriptions.
+   * Defaults to 0 (strip all parameter descriptions).
+   */
+  maxParamDescriptionChars?: number;
+}
 
 export function compactAcpToolDescription(
   text: string,
@@ -36,33 +64,51 @@ export function compactAcpToolDescription(
   return `${slice.trimEnd()}…`;
 }
 
-export function compactAcpInputSchema(node: unknown): unknown {
+function compactSchemaNode(
+  node: unknown,
+  maxParamDescriptionChars: number,
+  isPropertySchema: boolean,
+): unknown {
   if (Array.isArray(node)) {
-    return node.map((item) => compactAcpInputSchema(item));
+    return node.map((item) => compactSchemaNode(item, maxParamDescriptionChars, isPropertySchema));
   }
   if (!node || typeof node !== 'object') return node;
   const record = node as Record<string, unknown>;
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(record)) {
-    if (key === 'description' || key === '$schema' || key === 'title') continue;
+    if (key === '$schema' || key === 'title') continue;
+    if (key === 'description') {
+      if (isPropertySchema && maxParamDescriptionChars > 0 && typeof value === 'string') {
+        const brief = compactAcpToolDescription(value, maxParamDescriptionChars);
+        if (brief) out[key] = brief;
+      }
+      continue;
+    }
     if (key === 'properties' && value && typeof value === 'object' && !Array.isArray(value)) {
       const props: Record<string, unknown> = {};
       for (const [propName, propSchema] of Object.entries(value as Record<string, unknown>)) {
-        props[propName] = compactAcpInputSchema(propSchema);
+        props[propName] = compactSchemaNode(propSchema, maxParamDescriptionChars, true);
       }
       out[key] = props;
     } else if (key === 'items') {
-      out[key] = compactAcpInputSchema(value);
+      out[key] = compactSchemaNode(value, maxParamDescriptionChars, false);
     } else if (
       (key === 'anyOf' || key === 'oneOf' || key === 'allOf') &&
       Array.isArray(value)
     ) {
-      out[key] = value.map((item) => compactAcpInputSchema(item));
+      out[key] = value.map((item) => compactSchemaNode(item, maxParamDescriptionChars, false));
     } else {
       out[key] = value;
     }
   }
   return out;
+}
+
+export function compactAcpInputSchema(
+  node: unknown,
+  options?: CompactAcpInputSchemaOptions,
+): unknown {
+  return compactSchemaNode(node, options?.maxParamDescriptionChars ?? 0, false);
 }
 
 function compactSingleRpcPayload(payload: unknown): unknown {
@@ -75,13 +121,21 @@ function compactSingleRpcPayload(payload: unknown): unknown {
   const compactedTools = resultObj.tools.map((tool) => {
     if (!tool || typeof tool !== 'object' || Array.isArray(tool)) return tool;
     const t = tool as Record<string, unknown>;
+    const maxParamDescriptionChars =
+      typeof t.name === 'string' && CORE_DIRECT_TOOL_NAMES.has(t.name)
+        ? CORE_TOOL_MAX_PARAM_DESCRIPTION_CHARS
+        : 0;
     return {
       ...t,
       ...(typeof t.description === 'string'
         ? { description: compactAcpToolDescription(t.description) }
         : {}),
       ...(t.inputSchema !== undefined
-        ? { inputSchema: compactAcpInputSchema(t.inputSchema) }
+        ? {
+            inputSchema: compactAcpInputSchema(t.inputSchema, {
+              maxParamDescriptionChars,
+            }),
+          }
         : {}),
     };
   });

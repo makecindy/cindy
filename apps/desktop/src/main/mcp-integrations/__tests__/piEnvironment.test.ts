@@ -1423,8 +1423,10 @@ describe('piEnvironment per-session identity', () => {
     const acpLeadNames = acpLeadConfig?.mcpBridge?.servers.map((s) => s.name) ?? [];
     expect(acpLeadNames).toContain('cindy_orca');
     expect(acpLeadNames).toContain('cindy_browser');
+    // cindy_feishu_bot must remain available on unbound desktop ACP tasks because
+    // getChatId falls back to getOwnerOpenId for send_message_to_user / send_file_to_user.
+    expect(acpLeadNames).toContain('cindy_feishu_bot');
     expect(acpLeadNames).not.toContain('orca_worker_bridge');
-    expect(acpLeadNames).not.toContain('cindy_feishu_bot');
     expect(acpLeadNames).not.toContain('cindy_discord');
     expect(acpLeadNames).not.toContain('cindy_group_history');
     acpLeadConfig?.disposeSessionCtx?.();
