@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createControlledModelCatalogReader, type ControlledModelCatalogDeps } from '../controlledModelCatalog.js';
+import { CONTROLLED_SOURCE_READ_TIMEOUT_MS, createControlledModelCatalogReader, type ControlledModelCatalogDeps } from '../controlledModelCatalog.js';
+import { isDeviceUnresponsiveRemoteError, isTransientRemoteError } from '@cindy/maker-shared/device-link-contract';
+import { REMOTE_AGENT_INVOKE_TIMEOUT_MS } from '@cindy/device-link';
 import { invokeModelCatalog } from '../../../renderer/lib/invokeModelCatalog';
 import { modelCatalogKey } from '../../../shared/controlledModelCatalog';
 import { extractIpcError } from '../../../shared/ipcError';
@@ -129,6 +131,37 @@ describe('controlled model catalogs', () => {
     }] });
     expect(f.invoke).toHaveBeenCalledWith('share:b-only', 'maker:provider:list', args, f.assertOwner);
   });
+  // 2026-11-23 用户反馈：A 远控 B 新建任务时看不到 B 收到的插件供应商分享（内置供应商分享可以）。
+  // 生产入口与可观察结果：renderer invokeModelCatalog → B 的 maker:model-catalog:read 代读 maker:list-plugin-engines，
+  // 控制端拿到的是该来源开放的引擎；用量标记不经 B 转出，分享只保留授予的那一个引擎，内置供应商分享不发请求。
+  // 覆盖缺口：此前这个通道只代读四个内置目录 channel，插件引擎列表一律 INVALID_PARAMS。
+  // 最小失败输入与 tier：unit；agentDeviceId='share:plugin'、channel='maker:list-plugin-engines'、args=[]。
+  it.each([
+    { source: 'device-a', providers: ['acp-plugin:dsh:dsh', 'acp-plugin:agy:agy'] },
+    { source: 'share:plugin', providers: ['acp-plugin:dsh:dsh'] },
+    { source: 'share:builtin', providers: [], forwarded: false },
+  ])('reads the plugin engines $source offers through B', async ({ source, providers, forwarded = true }) => {
+    const f = fixture();
+    f.locations.mockResolvedValue({ status: 'complete', locations: [
+      { agentDeviceId: 'device-a', name: 'A' },
+      { agentDeviceId: 'share:plugin', name: 'DSH · Owner', favoriteSource: {
+        shareId: 'plugin', memberId: 'm1', providerId: 'acp-plugin:dsh:dsh', owner: { region: 'cn' } } },
+      { agentDeviceId: 'share:builtin', name: 'Anthropic · Owner', favoriteSource: {
+        shareId: 'builtin', memberId: 'm2', providerId: 'anthropic', owner: { region: 'cn' } } },
+    ] });
+    const engineView = (key: string) => ({
+      key, providerId: `acp-plugin:${key}`, name: key, models: [{ id: 'm', displayName: 'M' }],
+      availability: { state: 'available' }, remoteUse: { supported: true, shareSupported: true, enabled: true },
+      permissionModes: [], defaultPermissionMode: 'ask', reportsUsage: true,
+    });
+    f.invoke.mockResolvedValue({ ok: true, result: [engineView('dsh:dsh'), engineView('agy:agy'), { key: 'broken' }] });
+    const link = { invoke: vi.fn(async (_host: string, _endpoint: string, payload: unknown[]) => f.read(payload[0])) };
+    const engines = await invokeModelCatalog(link, modelCatalogKey(source, 'device-b')!, 'maker:list-plugin-engines', []) as Array<Record<string, unknown>>;
+    expect(engines.map(engine => engine.providerId)).toEqual(providers);
+    expect(engines.some(engine => 'reportsUsage' in engine)).toBe(false);
+    expect(f.invoke).toHaveBeenCalledTimes(forwarded ? 1 : 0);
+    await expect(f.read({ ...request(source), channel: 'maker:list-plugin-engines', args: [{}] })).rejects.toThrow('INVALID_PARAMS');
+  });
   it('discards results after source revocation', async () => {
     const f = fixture();
     f.invoke.mockImplementation(async () => {
@@ -146,5 +179,39 @@ describe('controlled model catalogs', () => {
     await expect(f.read(request())).rejects.toThrow('account changed');
     f.assertCaller.mockImplementation(() => { throw new Error('guest denied'); });
     await expect(f.read({ op: 'locations' })).rejects.toThrow('guest denied');
+  });
+
+  // Gap (2026-11-23): a slow/offline sharer behind the task computer came back to the controller as
+  // PRECONDITION_FAILED, which Desktop and Mobile treat as final and drop the share's catalog.
+  // Minimal input: one temporary source failure per form, plus one hung source read.
+  it.each([
+    ['envelope timeout', { ok: false as const, error: { code: 'INVOKE_TIMEOUT' as const, message: 'no reply' } }, 'DEVICE_LINK_TIMEOUT'],
+    ['envelope offline', { ok: false as const, error: { code: 'DEVICE_OFFLINE' as const, message: 'offline' } }, 'DEVICE_LINK_DEVICE_OFFLINE'],
+    ['thrown link closed', Object.assign(new Error('[LINK_CLOSED] closed'), { code: 'LINK_CLOSED' }), 'DEVICE_LINK_NOT_CONNECTED'],
+  ] as const)('keeps a %s from the source temporary for the controller', async (_label, failure, code) => {
+    const f = fixture();
+    if (failure instanceof Error) f.invoke.mockRejectedValue(failure);
+    else f.invoke.mockResolvedValue(failure);
+    const error = await f.read(request('share:b-only')).catch((caught: unknown) => caught);
+    expect(extractIpcError(error)?.code).toBe(code);
+    expect(isTransientRemoteError(error) || isDeviceUnresponsiveRemoteError(error)).toBe(true);
+  });
+
+  it('still reports a refused source as unavailable', async () => {
+    const f = fixture();
+    f.invoke.mockResolvedValue({ ok: false, error: { code: 'ACCESS_REVOKED', message: 'revoked' } });
+    await expect(f.read(request('share:b-only'))).rejects.toThrow('PRECONDITION_FAILED');
+  });
+
+  it('answers a hung source read before the controller request times out', async () => {
+    vi.useFakeTimers();
+    try {
+      const f = fixture();
+      f.invoke.mockImplementation(() => new Promise(() => {}));
+      const pending = f.read(request('share:b-only')).catch((caught: unknown) => caught);
+      await vi.advanceTimersByTimeAsync(CONTROLLED_SOURCE_READ_TIMEOUT_MS);
+      expect(extractIpcError(await pending)?.code).toBe('DEVICE_LINK_TIMEOUT');
+      expect(CONTROLLED_SOURCE_READ_TIMEOUT_MS).toBeLessThan(REMOTE_AGENT_INVOKE_TIMEOUT_MS);
+    } finally { vi.useRealTimers(); }
   });
 });

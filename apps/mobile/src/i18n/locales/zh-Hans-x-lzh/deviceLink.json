@@ -35,7 +35,17 @@
   "retryAccess": "再试访问",
   "recheck": "重察",
   "deviceRemovedTitle": "机已移除",
-  "deviceRemovedHint": "请辞出后重新登门，以重入机录。",
+  "deviceRemovedHint": "此机已自名籍中移除，点「重新加入」即可复归。",
+  "rejoin": {
+    "action": "重新加入",
+    "busy": "正重新加入",
+    "doneTitle": "已重新加入",
+    "agentNetUnavailable": "Agent-Net 之服暂不支重新加入，此机姑不用 Agent-Net 连线。",
+    "failedTitle": "未能重新加入",
+    "failed": "请察网络，再试一次。",
+    "unsupported": "服务暂不支重新加入，请辞出后重新登门。",
+    "agentNetUnsupported": "Agent-Net 之服暂不支重新加入。闭「惟用加密连线」后，此机可先不用 Agent-Net 而归。"
+  },
   "authFailedTitle": "登门已失效",
   "authFailedHint": "登门之状已过期，请辞出后重新登门。",
   "replacedTitle": "连接已见夺",

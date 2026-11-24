@@ -146,7 +146,8 @@ describe('remoteStatus', () => {
       expect(connectionIssueHint('version-mismatch')).toContain('Update to the latest version');
       expect(connectionIssueTitle('unstable')).toBe('Connection keeps dropping');
       expect(connectionIssueTitle('device-removed')).toBe('Device removed');
-      expect(connectionIssueHint('device-removed')).toContain('Sign out');
+      // Official removal: the phone rejoins with one tap (2026-11-23), no sign-out.
+      expect(connectionIssueHint('device-removed')).toContain('Rejoin');
     } finally {
       await i18n.changeLanguage(previousLanguage);
     }

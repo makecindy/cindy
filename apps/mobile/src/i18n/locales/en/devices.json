@@ -32,7 +32,7 @@
     "notFound": "This device is no longer in your account.",
     "deleteDevice": "Delete device",
     "deleteTitle": "Delete {{name}}?",
-    "deleteMessage": "Remove this device from your account and disconnect remote access. Its sessions and files are kept. Sign in again on that device to rejoin.",
+    "deleteMessage": "Remove this device from your account and disconnect remote access. Its sessions and files are kept. Tap “Rejoin” on that device to bring it back.",
     "deleteFailed": "Could not delete the device.",
     "deleteOnline": "This server does not yet support removing online devices. Retry after the service is upgraded.",
     "deleteRejectedWhileOffline": "Couldn’t delete the device: the server still lists it as online, although it shows as offline here.",

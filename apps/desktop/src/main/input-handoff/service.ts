@@ -60,9 +60,21 @@ export type InputHandoffImageStartError = InputHandoffStartError | 'NOT_AN_IMAGE
 
 /** Why a target cannot be handed off, known before starting. */
 export interface InputHandoffTargetProblem {
-  errorCode: 'TARGET_IS_CINDY' | 'TARGET_NOT_FOUND' | 'TARGET_AMBIGUOUS';
+  errorCode: 'TARGET_IS_CINDY' | 'TARGET_NOT_FOUND' | 'TARGET_AMBIGUOUS' | 'SCREEN_LOCKED';
   message: string;
 }
+
+/**
+ * What the agent tells the owner when the screen is locked, both when the
+ * request starts and when the card was already open. The owner is often on
+ * their phone, so it names the way they have from there.
+ */
+const SCREEN_LOCKED_NEXT = 'This computer\'s screen is locked (a display going to sleep locks it too), so nothing was read or typed. '
+  + 'Ask the owner to wake and unlock it. If they are away from it, they can try to unlock it through Cindy\'s remote desktop '
+  + 'from an iPhone or another Mac that has automatic unlock turned on for this Mac (not from the single-window view on the input handoff card); '
+  + 'if that is not available, ask them to unlock it at the computer. '
+  + 'Request a window input handoff again only after they confirm it is unlocked. '
+  + 'A terminal password prompt (sudo -A, ssh, git over HTTPS) does not read the screen and can still be answered from their phone.';
 
 /** A password prompt from a verified terminal program in the task's shell. */
 export interface TerminalPromptRequest {
@@ -173,7 +185,7 @@ export function buildInputHandoffContinuation(result: HandoffResult): string {
     : result.failure === 'permission'
       ? 'Cindy lacks macOS Accessibility permission for input handoff. Ask the owner to allow it on this computer, or continue another way.'
     : result.failure === 'screen_locked'
-      ? 'This computer\'s screen is locked (a display going to sleep locks it too), so nothing was read or typed. Ask the owner to wake and unlock it; request input handoff again only after they say it is unlocked.'
+      ? SCREEN_LOCKED_NEXT
       : 'The handoff did not complete. Do not retry it automatically; tell the owner what is still needed or continue another way.';
   return `${INPUT_HANDOFF_ENDED_PREFIX} ${facts}. ${next}`;
 }
@@ -222,13 +234,17 @@ export class InputHandoffService {
    * it named Cindy itself or a window that is not there (it used to get a
    * pending receipt and a target_gone minutes later). Null: go ahead; the
    * session still resolves the window itself. Without macOS Accessibility the
-   * session asks for it as before, so nothing is checked here.
+   * session asks for it as before, so nothing is checked here. A screen
+   * already locked is reported now too, before the request counts against
+   * the task's hourly limit.
    */
   async checkTarget(target: HandoffTargetSpec): Promise<InputHandoffTargetProblem | null> {
     const driver = this.deps.createDriver();
     if (!driver) return null;
     if ((await driver.permission().catch(() => 'unknown' as const)) !== 'granted') return null;
-    const list = await driver.windows({ background: true }).catch(() => null);
+    const list = await driver.windows({ background: true }).catch((error: unknown) =>
+      (error instanceof Error && error.message === 'locked' ? 'locked' as const : null));
+    if (list === 'locked') return { errorCode: 'SCREEN_LOCKED', message: SCREEN_LOCKED_NEXT };
     if (!list) return null;
     const resolved = resolveHandoffTarget(list, target, this.deps.hostPid);
     if (resolved) {

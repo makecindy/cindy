@@ -73,6 +73,7 @@ export function createAgentNetNode(ports: AgentNetNodePorts) {
   let client: AgentNetClient | null = null;
   let sessionConfig: SessionConfig | null = null;
   let enrolling: Promise<AgentNetClient> | null = null;
+  let rejoining: Promise<AgentNetClient> | null = null;
   /**
    * This device's own enrolled identity, kept while Agent-Net is off: like the Desktop, a device that has joined the network
    * signs every legacy link with its current mode, so peers that know it accept the relay link once it says it is off.
@@ -129,21 +130,35 @@ export function createAgentNetNode(ports: AgentNetNodePorts) {
       fetch: ports.fetch, createWebSocket: (url, options) => ports.createWebSocket(url, options) as never });
   };
 
-  /** This device's member client on the official network: the stored one, renewed a day before expiry, or a new enrollment. */
-  function ensureClient(): Promise<AgentNetClient> {
-    if (enrolling) return enrolling;
+  /**
+   * This device's member client on the official network: the stored one, renewed a day before expiry, or a new enrollment.
+   * `rejoin` (「重新加入」, deviceRejoin.ts, as the Desktop's agentNetOfficial.ts): this device was removed from the account and
+   * its stored certificate was revoked with it even if it has not expired, so it enrolls again whatever the expiry and asks the
+   * service to lift the removal (`rejoin: true`); a failure never hands back the revoked certificate.
+   */
+  function ensureClient(options: { rejoin?: boolean } = {}): Promise<AgentNetClient> {
+    const rejoin = options.rejoin === true;
+    const inFlight = rejoining ?? (!rejoin ? enrolling : null);
+    if (inFlight) return inFlight;
+    const pendingRenewal = rejoin ? enrolling : null;
     const work = (async () => {
       assertCurrent();
       const base = ports.base(), subject = ports.subject();
       if (!base || !subject) throw new Error('AGENT_NET_UNAVAILABLE');
       const slot = slotFor(base, subject);
+      if (pendingRenewal) {
+        await pendingRenewal.catch(() => undefined);
+        assertCurrent();
+        if (ports.base() !== base || ports.subject() !== subject) throw new Error('AGENT_NET_OWNER_CHANGED');
+      }
       let stored = await read(slot); assertCurrent();
       if (!stored) { stored = { version: 1, seed: randomBytes(32).toString('base64url') }; await ports.writeSecret(slot, JSON.stringify(stored)); }
-      const ready = toClient(base, slot, stored);
+      const ready = rejoin ? null : toClient(base, slot, stored);
       if (ready && ready.certificate.expiresAt - Date.now() > RENEWAL_MARGIN_MS) return ready;
       const keys = identity(slot, stored);
+      const request = createEnrollmentRequest(keys, ports.deviceName().trim().slice(0, 64) || 'Cindy Host');
       let response: unknown;
-      try { response = await ports.enroll(base, createEnrollmentRequest(keys, ports.deviceName().trim().slice(0, 64) || 'Cindy Host')); }
+      try { response = await ports.enroll(base, rejoin ? { ...request, rejoin: true } : request); }
       catch (error) { assertCurrent(); if (ready) return ready; throw error; }
       assertCurrent();
       const enrolled = acceptEnrollment(keys, response, subject, stored.agentNet?.rootPublicKey);
@@ -153,9 +168,12 @@ export function createAgentNetNode(ports: AgentNetNodePorts) {
       await ports.writeSecret(slot, JSON.stringify(next)); assertCurrent();
       return toClient(base, slot, next)!;
     })();
-    enrolling = work;
+    if (rejoin) rejoining = work; else enrolling = work;
     void work.then((api) => { if (ports.current()) member = api; }, () => undefined);
-    void work.finally(() => { if (enrolling === work) enrolling = null; }).catch(() => undefined);
+    void work.finally(() => {
+      if (enrolling === work) enrolling = null;
+      if (rejoining === work) rejoining = null;
+    }).catch(() => undefined);
     return work;
   }
 
@@ -289,7 +307,20 @@ export function createAgentNetNode(ports: AgentNetNodePorts) {
   return {
     active,
     /** This device's member client (enrolled or renewed as needed); `openSocket` uses the same one. */
-    member: ensureClient,
+    member: (): Promise<AgentNetClient> => ensureClient(),
+    /**
+     * 「重新加入」 (deviceRejoin.ts): asks the official service to take this removed device back, enrolling again whatever its
+     * certificate's expiry, then forgets the refusal so the next connection uses Agent-Net again. 'skipped' when there is nothing
+     * to lift: Agent-Net is off and this device never enrolled on this account's service.
+     */
+    async rejoin(): Promise<'rejoined' | 'skipped'> {
+      const base = ports.base(), subject = ports.subject();
+      if (!base || !subject || !ports.deviceId()) return 'skipped';
+      if (!ports.enabled() && !(await read(slotFor(base, subject)))?.agentNet) return 'skipped';
+      await ensureClient({ rejoin: true });
+      refusedFor = null;
+      return 'rejoined';
+    },
     openSocket,
     useSessions(config: SessionConfig) { sessionConfig = config; socket?.useSessions?.(config); },
     session(peer: string): SessionHandle | null { return socket?.session?.(peer) ?? null; },

@@ -174,6 +174,39 @@ describe('UserBrowserBackend · 就绪与连接', () => {
 });
 
 describe('UserBrowserBackend · 标签页与寻址', () => {
+  // #10465: the tabs call used to return only the timeout. Check the recovery path
+  // at UserBrowserBackend.call with a failed enumeration and an otherwise ready connection.
+  it.each([
+    ['EXTENSION_TIMEOUT', 'unknown'],
+    ['BROWSER_TIMEOUT', 'not_executed'],
+  ])(
+    'tabs reports a single-page route on %s and keeps the original error',
+    async (error, execution) => {
+      const fake = fakeControl({ version: '0.4.70' });
+      fake.responses.set('tabs', () => ({ ok: false, error, message: 'Timed out.', execution }));
+
+      const result = await call(backend(fake.control), { action: 'tabs' });
+
+      expect(result).toMatchObject({
+        ok: false,
+        errorCode: 'BROWSER_RUNTIME_ACTION_FAILED',
+        data: { error, execution },
+        message: expect.stringContaining(`${error}:Timed out.`),
+      });
+      expect(result.message).toMatch(/read.*url.*open.*targetId/);
+    },
+  );
+
+  it('tabs advises updating extensions whose single-page commands still depend on tabs', async () => {
+    const fake = fakeControl({ version: '0.4.42' });
+    fake.responses.set('tabs', () => ({ ok: false, error: 'EXTENSION_TIMEOUT' }));
+
+    const result = await call(backend(fake.control), { action: 'tabs' });
+
+    expect(result.message).toMatch(/更新.*Cindy.*扩展.*重试 tabs/);
+    expect(result.message).not.toMatch(/read|open/);
+  });
+
   // 2026-11-06: the agent kept working in the user's own ChatGPT tab (snapshot, clicks, two
   // navigations) because tabs listed it like any page Cindy had opened.
   it('tabs 标出页签归属:Cindy 窗口里的是 cindy,其余是用户自己的', async () => {
