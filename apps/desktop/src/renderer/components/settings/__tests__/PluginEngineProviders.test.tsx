@@ -109,6 +109,24 @@ afterEach(() => {
 });
 
 describe('plugin providers in the provider list', () => {
+  // Unit: open the real settings dialog and save only a level the plugin offers.
+  it('edits and restores the default reasoning level of an Antigravity model', async () => {
+    const api = stubApi();
+    const engineView = engine({ name: 'Antigravity', models: [{ id: 'gemini', displayName: 'Gemini', efforts: ['low', 'high'], defaultEffort: 'high' }],
+      modelEfforts: { gemini: 'high' } });
+    renderDetail(engineView);
+    await userEvent.click(screen.getByRole('button', { name: /advanced.openAria/ }));
+    const dialog = within(await screen.findByRole('dialog', { name: 'Gemini' }));
+    expect(dialog.getByRole('radio', { name: 'effortLevels.high' }).getAttribute('aria-checked')).toBe('true');
+    expect(dialog.queryByRole('radio', { name: 'effortLevels.medium' })).toBeNull();
+    await userEvent.click(dialog.getByRole('radio', { name: 'effortLevels.low' }));
+    const { dataOwnerId, generation } = getDataOwnerGeneration();
+    const stamp = { dataOwnerId, ownerGeneration: generation };
+    expect(api.setPluginEnginePrefs).toHaveBeenLastCalledWith({ key: engineView.key, modelEffort: { id: 'gemini', effort: 'low' }, ownerStamp: stamp });
+    await userEvent.click(dialog.getByRole('button', { name: 'settings.providers.models.advanced.restoreDefault' }));
+    expect(api.setPluginEnginePrefs).toHaveBeenLastCalledWith({ key: engineView.key, modelEffort: { id: 'gemini', effort: null }, ownerStamp: stamp });
+  });
+
   it('marks every row as coming from a plugin, shows whether it can run and opens the one clicked', async () => {
     stubApi();
     const ready = engine({ name: 'DeepSeek Harness' });
@@ -232,12 +250,12 @@ describe('plugin providers in the provider list', () => {
     const dialog = await screen.findByRole('alertdialog');
     fireEvent.change(within(dialog).getByRole('textbox'), { target: { value: 'Work DeepSeek' } });
     try {
-      setDataOwnerGeneration('other-account');
+      act(() => setDataOwnerGeneration('other-account'));
       fireEvent.click(within(dialog).getByRole('button', { name: 'settings.providers.custom.save' }));
       await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
       expect(api.setPluginEnginePrefs).not.toHaveBeenCalled();
     } finally {
-      setDataOwnerGeneration(originalOwner.dataOwnerId, originalOwner.generation);
+      act(() => setDataOwnerGeneration(originalOwner.dataOwnerId, originalOwner.generation));
     }
   });
 

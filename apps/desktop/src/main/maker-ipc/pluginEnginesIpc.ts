@@ -22,6 +22,7 @@ import {
   PLUGIN_ENGINES_INVOKE,
   PLUGIN_ENGINES_PUSH,
   pluginEngineProviderId,
+  isPluginEngineEffort,
   type PluginEnginePermissionMode,
   type PluginEnginePrefsInput,
   type PluginEngineView,
@@ -60,10 +61,11 @@ export function pluginEngineModelsOf(harness: PluginHarness): PluginEngineView['
 
 /** The engine without what only its own computer's settings page shows. */
 function withoutSettingsDetails(view: PluginEngineView): PluginEngineView {
-  if (view.declaredName === undefined && view.disabledModels === undefined) return view;
+  if (view.declaredName === undefined && view.disabledModels === undefined && view.modelEfforts === undefined) return view;
   const offered = { ...view };
   delete offered.declaredName;
   delete offered.disabledModels;
+  delete offered.modelEfforts;
   return offered;
 }
 
@@ -118,6 +120,7 @@ export interface PluginEngineSettings {
   hidden?: true;
   suspended?: true;
   disabledModels?: readonly string[];
+  modelEfforts?: PluginEngineView['modelEfforts'];
 }
 
 /**
@@ -154,7 +157,10 @@ export function pluginEngineSettingsOf(harness: Pick<PluginHarness, 'key'>): Plu
  */
 function toView(harness: PluginHarness, key = harness.key, declared = harness.name): PluginEngineView {
   const settings = pluginEngineSettingsOf({ key });
-  const listed = engineModels(harness);
+  const listed = engineModels(harness).map(model => {
+    const effort = settings.modelEfforts?.[model.id];
+    return effort && model.efforts?.includes(effort) ? { ...model, defaultEffort: effort } : model;
+  });
   const off = settings.disabledModels?.length ? new Set(settings.disabledModels) : null;
   const disabledModels = off ? listed.filter((model) => off.has(model.id)) : [];
   return {
@@ -181,6 +187,7 @@ function toView(harness: PluginHarness, key = harness.key, declared = harness.na
     ...(settings.suspended ? { suspended: true as const } : {}),
     ...(settings.name ? { declaredName: declared } : {}),
     ...(disabledModels.length > 0 ? { disabledModels } : {}),
+    ...(settings.modelEfforts ? { modelEfforts: settings.modelEfforts } : {}),
     ...(harness.accounts ? { accounts: { methods: harness.accounts.methods.map((method) => ({ ...method })) } } : {}),
   };
 }
@@ -203,7 +210,7 @@ export function listPluginEngineViews(): PluginEngineView[] {
   return getPluginHarnessRegistry().list().flatMap((harness) => [toView(harness), ...separateProviderViews(harness)]);
 }
 
-const PREFS_FIELDS = new Set(['key', 'name', 'hidden', 'suspended', 'models', 'ownerStamp']);
+const PREFS_FIELDS = new Set(['key', 'name', 'hidden', 'suspended', 'models', 'modelEffort', 'ownerStamp']);
 
 /** Shape and size check of a settings change; null = not a valid request. */
 function parsePluginEnginePrefsInput(input: unknown): PluginEnginePrefsInput | null {
@@ -231,6 +238,14 @@ function parsePluginEnginePrefsInput(input: unknown): PluginEnginePrefsInput | n
       || !Array.isArray(models.ids) || models.ids.length === 0 || models.ids.length > 200
       || models.ids.some((id) => typeof id !== 'string' || !id || id.length > 256)) return null;
     request.models = { ids: [...new Set(models.ids as string[])], disabled: models.disabled };
+  }
+  if (value.modelEffort !== undefined) {
+    const edit = value.modelEffort as { id?: unknown; effort?: unknown } | null;
+    if (!edit || typeof edit !== 'object' || Array.isArray(edit) ||
+        typeof edit.id !== 'string' || !edit.id.trim() || edit.id.length > 256 ||
+        (edit.effort !== null && !isPluginEngineEffort(edit.effort))) return null;
+    request.modelEffort = { id: edit.id, effort: edit.effort };
+    if (!isDataOwnerPushStamp(value.ownerStamp)) return null;
   }
   if (Object.keys(request).length === 1) return null;
   if (value.ownerStamp !== undefined) {
@@ -412,11 +427,17 @@ export function registerPluginEnginesIpc(opts: RegisterPluginEnginesIpcOpts): ()
     // Setting something needs an engine this computer lists (and models it lists); undoing always
     // works, also for an engine whose plugin was turned off meanwhile.
     const sets = typeof patch.name === 'string' || patch.hidden === true || patch.suspended === true
-      || patch.models?.disabled === true;
+      || patch.models?.disabled === true || Boolean(patch.modelEffort?.effort);
     if (sets && !harness) throwIpcError('NOT_FOUND', 'The plugin that provides this engine is disabled or removed');
     if (harness && patch.models?.disabled) {
       const listed = new Set(engineModels(harness).map((model) => model.id));
       if (patch.models.ids.some((id) => !listed.has(id))) throwIpcError('INVALID_PARAMS', 'Unknown plugin engine model');
+    }
+    if (harness && patch.modelEffort?.effort) {
+      const { id, effort } = patch.modelEffort;
+      if (!engineModels(harness).find(model => model.id === id)?.efforts?.includes(effort)) {
+        throwIpcError('INVALID_PARAMS', 'The plugin does not offer this level for the model');
+      }
     }
     // The plugin's own name is the default, not a display name to remember.
     if (harness && engineKey === key && patch.name === harness.name) patch.name = null;

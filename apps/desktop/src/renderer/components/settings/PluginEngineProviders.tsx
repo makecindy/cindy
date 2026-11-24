@@ -10,8 +10,8 @@
  * 「打开插件」，没有删除，卸载在插件页)；模型由引擎自己上报，打开详情时请插件重新上报一次(主进程
  * 按插件冷却)；不参与拖动排序、供应商组和引擎切换。
  */
-import { Eye, EyeOff, MoreHorizontal, Pencil, Power, RotateCcw } from 'lucide-react';
-import { useEffect, useId, useState, type ReactNode } from 'react';
+import { Eye, EyeOff, MoreHorizontal, Pencil, Power, RotateCcw, SlidersHorizontal } from 'lucide-react';
+import { useEffect, useId, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 
@@ -25,7 +25,7 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Switch } from '@/components/ui/switch';
 import { Tip } from '@/components/ui/tooltip';
-import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, subscribeDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { usePluginEngineRemoteUseSwitch } from '@/features/plugin/PluginEngineRemoteUse';
 import { ProviderShareEntryButton } from '@/features/provider-share/ProviderShareEntryButton';
 import { readPluginEngineUsage } from '@/hooks/pluginEngineUsage';
@@ -40,6 +40,7 @@ import {
   type PluginEngineView,
 } from '../../../shared/pluginEngines';
 import { providersSettings } from './ProvidersSection.settings-search';
+import { PluginModelAdvancedDialog } from './PluginModelAdvancedDialog';
 import { SettingsTextInput } from './SettingsTextInput';
 import { SubscriptionAccountsSection } from './SubscriptionAccountsSection';
 
@@ -327,10 +328,14 @@ function ModelRow({
   const { t } = useTranslation();
   const [busy, setBusy] = useState(false);
   const name = model.displayName || model.id;
+  const owner = useSyncExternalStore(subscribeDataOwnerGeneration, getDataOwnerGeneration);
+  const [openedFor, setOpenedFor] = useState<typeof owner>();
+  const advanced = openedFor === owner;
+  const customized = Object.hasOwn(engine.modelEfforts ?? {}, model.id);
   return (
     <li
       data-plugin-engine-model={model.id}
-      className="flex items-center gap-3 rounded-lg px-3 py-2 text-13"
+      className="group flex items-center gap-3 rounded-lg px-3 py-2 text-13 hover:bg-[var(--surface-hover)]"
       style={{ color: enabled ? 'var(--text-primary)' : 'var(--text-tertiary)' }}
     >
       <span className="min-w-0 flex-1">
@@ -341,6 +346,32 @@ function ModelRow({
           </span>
         )}
       </span>
+      <Tip text={t('settings.providers.models.advanced.open')}>
+        <button type="button"
+          data-settings-search-action="Open advanced settings for this plugin model"
+          aria-label={t('settings.providers.models.advanced.openAria', { name })}
+          className={cn('flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[var(--text-tertiary)]',
+            'opacity-0 transition-opacity hover:bg-[var(--surface-hover)] focus-visible:opacity-100 group-hover:opacity-100',
+            advanced && 'opacity-100')}
+          onClick={() => setOpenedFor(owner)}
+        >
+          <SlidersHorizontal size={14} aria-hidden />
+        </button>
+      </Tip>
+      {advanced && <PluginModelAdvancedDialog
+        model={model}
+        providerName={engine.name}
+        customized={customized}
+        onSave={effort => {
+          if (!isDataOwnerGenerationCurrent(owner)) return Promise.resolve(false);
+          return writePluginEnginePrefs({
+            key: engine.key,
+            modelEffort: { id: model.id, effort },
+            ownerStamp: { dataOwnerId: owner.dataOwnerId, ownerGeneration: owner.generation },
+          }, t('settings.providers.models.accessWriteFailed'));
+        }}
+        onClose={() => setOpenedFor(undefined)}
+      />}
       <Switch
         data-setting-id={providersSettings.pluginProviders.id}
         checked={enabled}
@@ -383,7 +414,7 @@ function EngineModels({ engine }: { engine: PluginEngineView }) {
         <>
           <ul data-testid="plugin-engine-models" className="px-2 pb-3">
             {engine.models.map((model) => (
-              <ModelRow key={model.id} engine={engine} model={model} enabled />
+              <ModelRow key={JSON.stringify([engine.key, model.id])} engine={engine} model={model} enabled />
             ))}
           </ul>
           {off.length > 0 && (
@@ -393,7 +424,7 @@ function EngineModels({ engine }: { engine: PluginEngineView }) {
               </span>
               <ul data-testid="plugin-engine-models-off" className="px-2 pb-3">
                 {off.map((model) => (
-                  <ModelRow key={model.id} engine={engine} model={model} enabled={false} />
+                  <ModelRow key={JSON.stringify([engine.key, model.id])} engine={engine} model={model} enabled={false} />
                 ))}
               </ul>
             </div>

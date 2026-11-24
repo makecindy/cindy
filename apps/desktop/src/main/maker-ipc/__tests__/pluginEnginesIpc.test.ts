@@ -160,6 +160,23 @@ describe('plugin engines with the settings from Settings → Model providers', (
     expect(fs.existsSync(ipc.prefsFile())).toBe(false);
   });
 
+  // Unit: real settings IPC and owner-scoped file, with the plugin publishing two levels.
+  it('persists and restores a per-model reasoning default and refuses invalid or stale choices', async () => {
+    const ipc = register();
+    const ownerStamp = { dataOwnerId: host.owner, ownerGeneration: 1 };
+    const patch = { key: KEY, ownerStamp, modelEffort: { id: 'deepseek-v4', effort: 'low' } };
+    await expect(ipc.set({ ...patch, modelEffort: { ...patch.modelEffort, effort: 'max' } })).rejects.toThrow('INVALID_PARAMS');
+    await expect(ipc.set({ ...patch, ownerStamp: { ...ownerStamp, ownerGeneration: 0 } })).rejects.toThrow('PERMISSION_DENIED');
+    await ipc.set(patch);
+    expect(ipc.list()[0]).toMatchObject({ modelEfforts: { 'deepseek-v4': 'low' }, models: [{ defaultEffort: 'low' }, { id: 'deepseek-lite' }] });
+    expect(JSON.parse(fs.readFileSync(ipc.prefsFile(), 'utf8')).engines[KEY]).toEqual({ modelEfforts: { 'deepseek-v4': 'low' } });
+    expect(ipc.listFromAnotherDevice()[0]).not.toHaveProperty('modelEfforts');
+    const other = await ipc.set({ ...patch, modelEffort: { id: 'deepseek-v4', effort: null } });
+    expect(other).not.toHaveProperty('modelEfforts');
+    expect(other?.models[0]?.defaultEffort).toBe('high');
+    expect(readPluginEnginePrefs(KEY)).toEqual({});
+  });
+
   it('shows the user’s name, hides, turns off models and suspends for every reader of this computer’s list', async () => {
     const ipc = register();
     await ipc.set({ key: KEY, name: '  Work DeepSeek  ' });
