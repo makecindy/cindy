@@ -116,7 +116,7 @@ Cindy 应用更新（2026-11-11）：`list_tools({query:"更新 Cindy"})`（含�
 | 工具执行过程 | 插件 `subscribe.topics:['tool-execution']` 异步旁听实际 AgentEvent 的工具输入、结果、错误与子任务更新；无订阅不投影，原 message/activity 主题保持 | 有（整体安装授予，原有有界缓冲与 seq/dropped；未进入共享流的引擎原生中间帧不承诺） | 仅执行 Host 实际收到的事件，不主动订阅另一台电脑 |
 | 任务与伙伴 | `list_sessions` 返回隐藏状态；`list_teammates` 分页枚举含隐藏、暂停、归档的伙伴，传 `teammate_id` 分页读取已保存的任务关系（默认100、最多1000） | 有（history 组，普通任务与插件共用） | 有（同账号历史查询；旧端不支持时明确返回未覆盖） |
 | 任务附件 | `read_session_attachment` 只读已有宿主授权的 Cindy 媒体与 grant / deposit / handoff 引用，分块字节与 SHA-256；历史 JSON 文件路径不构成授权，返回 `UNSUPPORTED_CAPABILITY`，不返回宿主路径 | 有（history 组，受上述限制） | 暂不支持，返回 `UNSUPPORTED_CAPABILITY` |
-| 任务包 | `export_session` 原生 `.cshare` 导出、`import_session` 原生任务包导入；插件按安装授权调用，Agent 运行时遵循自身权限流程；Agent 导出由用户在原生保存对话框中选择位置，再返回最终路径，不接受 `output_path`。导入用本机路径，插件用本实例 handoff；加密或需要目录时交原生向导，`awaiting_user` 不算导入完成 | 有（history / control 组；复用原生服务，默认不覆盖） | 暂不支持；沿用已有跨电脑迁移链 |
+| 任务包 | `export_session` 原生 `.cshare` 导出、`import_session` 原生任务包导入；插件按安装授权调用，Agent 运行时遵循自身权限流程；Agent 导出存到用户在「设置 → 存储空间」用原生选择器设定的导出位置（宿主命名、不覆盖同名文件、导出到私有临时目录后再落盘；位置失效返回 `EXPORT_DIRECTORY_UNAVAILABLE`，不改弹窗），未设定时由用户在原生保存对话框中选择位置，再返回最终路径，不接受 `output_path`。导入用本机路径，插件用本实例 handoff；加密或需要目录时交原生向导，`awaiting_user` 不算导入完成 | 有（history / control 组；复用原生服务，默认不覆盖） | 暂不支持；沿用已有跨电脑迁移链 |
 | 任务     | 获取可直接引用的任务链接（列表、搜索、聊天记录与摘要返回 sessionUrl） | 有 | 有（链接携带所属电脑；旧远端查询结果由调用端补齐） |
 | 任务     | 读摘要（状态、最后的要求与回答、模型路线、PR、排队数）     | 有   | 有（2026-10-17） |
 | GitHub | 查询明确 PR 的 CI、评审和变化；明确关联、移除、恢复、固定、排序 | 有（桌面与手机关联管理） | 有：helper `github` 类目，同账号跨电脑；脚本 `github.read` |
@@ -127,6 +127,7 @@ Cindy 应用更新（2026-11-11）：`list_tools({query:"更新 Cindy"})`（含�
 | 任务     | 给既有任务发消息（隐藏群专线不是群聊收件地址，返回不支持且说明未送达） | 有 | 有（2026-10-14；接收电脑执行同一判定，隐藏目标仍优先遵守可见性检查） |
 | 任务     | 新建任务（继承项目、选择已有项目或不绑项目；来源不绑项目时按执行目录所在的已登记可见项目归属，2026-11-10） | 有 | 有（2026-11-11，`device` 指定任务电脑；项目与默认模型在目标解析，不继承本机路径）               |
 | 任务     | 新建任务时选择 Agent 所在电脑（`send_to_session` create 的 `provider_device_id`（兼容 `agent_device_id`），取 `list_available_models` 的 `locations[]`；只换 Agent 用的远程或分享供应商，任务与文件仍在 `device` 指定的电脑） | 有 | 有（2026-11-07；SSH 任务不支持；那台没有所需模型或连不上返回 `PROVIDER_ROUTE_UNAVAILABLE`，不自动换电脑） |
+| 任务 | 新建普通任务时选择本机供应商连接（`send_to_session` create 的可选 `provider_id`，取 `list_available_models` 对应模型的 `providers[].provider_id`） | 有。指定连接从首轮生效，省略时沿用原选路。连接不可用或不提供所选模型时返回 `PROVIDER_ROUTE_UNAVAILABLE` | 跨电脑创建、使用远程供应商或从 SSH 任务创建时，显式指定连接返回 `INVALID_ARGS` |
 | 任务     | 归档 / 取消归档                                             | 有   | 有（2026-10-16） |
 | 任务     | 稍后处理（指定时间 / 无限期）与提前取回，与收件箱同一字段和唤回规则（`snooze_sessions`，与归档同在 control 类） | 有（2026-11-22） | 有（2026-11-22，既有 patch-meta，按顺序写，结果不明不重发） |
 | 任务     | `delete_session` 删除明确任务（不能删除当前调用任务），复用宿主生命周期清理 | 有（整体安装授予的 control 声明） | 有（既有 patch-meta，结果不明不重发） |
@@ -218,6 +219,9 @@ Worker 工具省略 working_dir 时保持继承 Lead 任务记录目录，不跟
 - 新建任务的 Agent 所在电脑：`packages/lizi-mcps/src/xdt-helper/send_to_session.ts` 的 `provider_device_id`（兼容 `agent_device_id`），
   host 侧解析见 `apps/desktop/src/main/maker-ipc/sendToSessionExecutionConfig.ts`
   （`resolveSendToSessionCreateRoute`）。
+- 新建任务的本机供应商连接由 `packages/lizi-mcps/src/xdt-helper/list_available_models.ts` 列出，
+  `send_to_session.ts` 接收可选的 `provider_id`。`apps/desktop/src/main/mcp-integrations/mcp-providers.ts`
+  在转发到其他电脑前检查该参数，本机创建由上述 `resolveSendToSessionCreateRoute` 校验连接和模型。
 - 任务摘要（`get_task_digest`）：`packages/lizi-mcps/src/xdt-helper/get_task_digest.ts`（输出合同 ≤2KB）、
   `apps/desktop/src/main/mcp-integrations/taskDigest.ts` 与 `taskDigestHost.ts`（跨电脑只读，复用
   `local-db:sessions:get`、`maker:list-active`、历史消息与 PR 状态通道）。

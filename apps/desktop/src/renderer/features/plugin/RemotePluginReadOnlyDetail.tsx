@@ -7,7 +7,7 @@ import {
   PluginPermissionSummary,
   ToolsSection,
 } from './GhostPluginDetailView';
-import { PluginDetailTopBar, usePluginDetailScrolled } from './PluginDetailTopBar';
+import { PluginInstalledDetailFrame } from './PluginDetailTopBar';
 import type { LegacyManagedPluginDetail } from './remotePluginManagementClient';
 
 export function RemotePluginReadOnlyDetail({
@@ -28,7 +28,6 @@ export function RemotePluginReadOnlyDetail({
   onRetry(): void;
 }) {
   const { t } = useTranslation();
-  const { scrolled, onScroll } = usePluginDetailScrolled();
   const facts = detail.details?.length
     ? detail.details.map((fact, index) => ({
         key: `${index}:${fact.key}`,
@@ -55,16 +54,7 @@ export function RemotePluginReadOnlyDetail({
         },
       ];
   return (
-    <main
-      className="app-wallpaper-surface plugin-motion-root h-full min-h-0 w-full overflow-y-auto bg-[var(--surface)] [scrollbar-gutter:stable_both-edges]"
-      onScroll={onScroll}
-    >
-      <PluginDetailTopBar
-        label={t('settings.ghosts.detail.backToList')}
-        onBack={onBack}
-        scrolled={scrolled}
-      />
-      <article className="plugin-detail-frame mx-auto w-full max-w-[824px] px-8 pb-16 pt-5 max-[760px]:px-6">
+    <PluginInstalledDetailFrame label={t('settings.ghosts.detail.backToList')} onBack={onBack}>
         <PluginDetailHeader
           {...detail}
           author={detail.details?.find((fact) => fact.key === 'author')?.value}
@@ -118,7 +108,6 @@ export function RemotePluginReadOnlyDetail({
           </p>
         ) : null}
         <PluginDetailFactsSection facts={facts} />
-      </article>
-    </main>
+    </PluginInstalledDetailFrame>
   );
 }

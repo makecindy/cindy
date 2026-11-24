@@ -12,7 +12,7 @@ import {
 } from './ProviderRunLocationRow';
 import { useProviderBorrow } from '@/hooks/useProviderBorrow';
 import { AddSpeechModelsDialog } from './AddSpeechModelsDialog';
-import { providerSpeechSetup } from '../../../shared/speechProviderSetup';
+import { providerSpeechSetup, providerRealtimeSetup } from '../../../shared/speechProviderSetup';
 import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
 import { SubscriptionFastSetting } from '@/features/provider-share/SubscriptionFastSetting';
 import { useCodexRateLimitReset } from '@/hooks/useCodexRateLimitReset';
@@ -165,6 +165,7 @@ import { useLocalProviderGroupsState } from '@/features/provider-group/useLocalP
 import { ProviderShareManagePage } from '@/features/provider-share/ProviderShareManagePage';
 import { ProviderSharePasteButton } from '@/features/provider-share/ProviderSharePasteDialog';
 import {
+  ProviderShareReceivedCatalogRetry,
   ProviderShareReceivedDetail,
   ProviderShareReceivedRailGroup,
 } from '@/features/provider-share/ProviderShareReceivedRail';
@@ -2732,7 +2733,8 @@ export function ProvidersSection() {
   // 选中本机供应商或登录引导时清空。
   const [selectedShareId, setSelectedShareId] = useState<string | null>(null);
   const [selectedRemoteKey, setSelectedRemoteKey] = useState<string | null>(null);
-  const { received: receivedShares, loaded: receivedSharesLoaded } = useProviderShareReceived();
+  const { received: receivedShares, loaded: receivedSharesLoaded, retryCatalogShareIds } = useProviderShareReceived();
+  const retryCatalogShareId = selectedShareId && retryCatalogShareIds?.has(selectedShareId) ? selectedShareId : null;
   const selectedShare = selectedShareId
     ? receivedShares.find((share) => share.shareId === selectedShareId) ?? null
     : null;
@@ -2763,7 +2765,7 @@ export function ProvidersSection() {
     ? remotePluginEngines.find((entry) => entry.key === selectedEngineKey) ?? null
     : null;
   // 右栏正在显示的不是本机普通供应商：分享给我的、另一台电脑上的，或由插件提供的(互斥)。
-  const otherDeviceSelected = selectedShare !== null || selectedRemote !== null || selectedEngine !== null
+  const otherDeviceSelected = selectedShare !== null || retryCatalogShareId !== null || selectedRemote !== null || selectedEngine !== null
     || selectedRemoteEngine !== null;
   // 用户或深链、向导完成、导入完成等「打开某个供应商」时，右栏回到那个供应商(即使它就是当前选中项)。
   const selectProvider = useCallback((providerId: string) => {
@@ -2801,7 +2803,7 @@ export function ProvidersSection() {
     ids: Set<string>;
   }>({ dataOwnerId, ids: new Set<string>() });
   // 向导:null = 关;{ entry } = 打开(entry 指定直达的供应商,来自检测建议)。
-  const [speechProvider, setSpeechProvider] = useState<{ provider: ProviderView; owner: string | null; generation: number | null } | null>(null);
+  const [speechProvider, setSpeechProvider] = useState<{ provider: ProviderView; owner: string | null; generation: number | null; mode?: 'realtime' } | null>(null);
   const [wizard, setWizard] = useState<null | { entry?: WizardEntry; detected?: DetectedProviderDraft }>(null);
   // 自定义供应商完整表单(编辑,或从向导「自定义端点」进入新建)。
   const [dialog, setDialog] = useState<
@@ -3924,8 +3926,8 @@ export function ProvidersSection() {
           {/* 右栏身份固定；说明、资产和模型共用 DetailHeader 的滚动区。 */}
           <div
             key={
-              selectedShare
-                ? `share:${selectedShare.shareId}`
+              selectedShare || retryCatalogShareId
+                ? `share:${selectedShare?.shareId ?? retryCatalogShareId}`
                 : selectedRemote
                   ? `remote:${selectedRemote.key}`
                   : selectedEngine
@@ -3938,6 +3940,8 @@ export function ProvidersSection() {
           >
             {selectedShare ? (
               <ProviderShareReceivedDetail share={selectedShare} />
+            ) : retryCatalogShareId ? (
+              <ProviderShareReceivedCatalogRetry shareId={retryCatalogShareId} />
             ) : selectedRemote ? (
               <OwnRemoteProviderDetail
                 entry={selectedRemote}
@@ -4160,6 +4164,9 @@ export function ProvidersSection() {
                           onAddSpeechModels={providerSpeechSetup(effectiveSelected) ? () => {
                             setSpeechProvider({ provider: effectiveSelected, owner: dataOwnerId, generation: ownerGeneration });
                           } : undefined}
+                          onAddRealtimeModels={providerRealtimeSetup(effectiveSelected) ? () => {
+                            setSpeechProvider({ provider: effectiveSelected, owner: dataOwnerId, generation: ownerGeneration, mode: 'realtime' });
+                          } : undefined}
                           focusModelId={
                             focusedModel?.providerId === effectiveSelected.id
                               ? focusedModel.modelId
@@ -4305,6 +4312,7 @@ export function ProvidersSection() {
       />
       {speechProvider && speechProvider.owner === dataOwnerId && speechProvider.generation === ownerGeneration && (
         <AddSpeechModelsDialog key={`${dataOwnerId}:${ownerGeneration}:${speechProvider.provider.id}`}
+          mode={speechProvider.mode}
           provider={speechProvider.provider} onClose={() => setSpeechProvider(null)}
           onSaved={() => { setSpeechProvider(null); void refetch(); }} />
       )}

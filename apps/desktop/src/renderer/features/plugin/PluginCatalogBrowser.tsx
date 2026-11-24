@@ -16,6 +16,7 @@ export { emptyPluginBrowserCache, PLUGIN_PAGE_SIZE, type PluginBrowserCache } fr
 import { readPluginCatalogAnchor, restorePluginCatalogAnchor, type PluginCatalogAnchor } from './lib/pluginCatalogAnchor';
 import { useDelayedPluginLoading } from './lib/useDelayedPluginLoading';
 import { mergePluginSnapshot } from './lib/pluginCatalogMemory';
+import { readReusedMarketIcon, type MarketIconCache } from './lib/pluginBrowserCache';
 
 function dedupeCachedPages(cache: PluginBrowserCache): boolean {
   const seen = new Set<string>();
@@ -39,7 +40,7 @@ const CatalogCard = memo(function CatalogCard({ item, renderItem }: {
 
 /** Cursor metadata survives detail navigation; only six pages of summaries stay resident. */
 export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey = '', installedItems, installedGhosts, query, scope: filter, onScope, showOrganization, prewarm = false,
-  visible, scrollRef, loadPage, renderItem, renderRevision, onCounts, filterHost }: {
+  visible, scrollRef, loadPage, renderItem, renderRevision, onCounts, filterHost, iconCache }: {
   cacheRef: RefObject<PluginBrowserCache>;
   ownerKey: string;
   revision: string;
@@ -58,6 +59,7 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
   renderRevision?: unknown;
   onCounts?(counts: PluginMarketCounts | null): void;
   filterHost?: RefObject<HTMLDivElement | null>;
+  iconCache?: MarketIconCache;
 }) {
   const { t } = useTranslation();
   const [, rerender] = useReducer(n => n + 1, 0);
@@ -167,11 +169,11 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
         const initial = current.metadata === null;
         const prior = current.pages.get(index);
         const page = { ...response, items: mergePluginSnapshot(prior && current.metadata ? { ...current.metadata, items: prior } : null,
-          response).items.filter(item => !isInstalled.current(item)) };
+          response, Boolean(iconCache)).items.filter(item => !isInstalled.current(item)) };
         const previousItems = current.pages.get(index) ?? (index === 0 && displayed.current.partitionKey === partitionKey
           ? [...displayed.current.pages.values()].flat() : []);
         current.pages.delete(index);
-        current.pages.set(index, mergePluginItems(previousItems, page.items));
+        current.pages.set(index, mergePluginItems(previousItems, page.items, false, iconCache));
         if (scope === 'custom') {
           let previous = current.lastSource.get(index - 1) ?? null;
           let start = 0;
@@ -212,7 +214,7 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
     readQueue.current = request;
     inFlight.current.set(flightKey, { cache: current, promise: request });
     return request;
-  }, [cacheRef, query, scope, partitionKey, pageLimit]);
+  }, [cacheRef, query, scope, partitionKey, pageLimit, iconCache]);
   useEffect(() => {
     alive.current = true;
     if (!visible && !prewarm) return () => { alive.current = false; };
@@ -248,7 +250,7 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
     countQueue.current = flight;
     await flight;
   }, [cache, cacheRef, countsKey, query]);
-  const refreshFlight = useRef<{ cache: PluginBrowserCache; revision: string; promise: Promise<void> } | null>(null);
+  const refreshFlight = useRef<{ cache: PluginBrowserCache; revision: string; promise: Promise<void>; renewIcons: boolean } | null>(null);
   useEffect(() => {
     if (!visible && !prewarm) return;
     let active = true;
@@ -257,15 +259,12 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
       if (!current()) return;
       const pending = refreshFlight.current;
       if (pending?.cache === cache) {
+        if (options?.renewIcons) pending.renewIcons = true;
         await pending.promise;
         // Reuse the flight as the queue: only invalidations newer than that
         // read need a follow-up. Concurrent callers join that one latest read.
         if (current() && pending.revision !== latestRevision.current && cache.refreshedRevision !== latestRevision.current) {
           await refresh({ ...options, force: true });
-        } else if (current() && options?.renewIcons) {
-          for (const [index, items] of cache.pages)
-            cache.pages.set(index, items.map(item => item.icon ? { ...item, icon: { ...item.icon } } : item));
-          rerender();
         }
         return;
       }
@@ -350,11 +349,12 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
           cache.hasNext = rebuiltHasNext;
           cache.pages.clear(); restartCursors.current = false; changed = true;
         }
+        const renewIcons = refreshFlight.current?.cache === cache && refreshFlight.current.renewIcons;
         for (const [index, page] of pages) {
           const previous = previousPages.get(index) ?? [];
           const next = mergePluginSnapshot(cache.metadata ? { ...cache.metadata, items: previous } : null,
-            page, options?.renewIcons).items.filter(item => !isInstalled.current(item));
-          const merged = mergePluginItems(previous, next, options?.renewIcons);
+            page, renewIcons || Boolean(iconCache)).items.filter(item => !isInstalled.current(item));
+          const merged = mergePluginItems(previous, next, renewIcons, iconCache);
           if (rebuilt || merged !== previous) { cache.pages.set(index, merged); cache.sizes.set(index, pluginPageSize(merged)); changed = true; }
           if (page.nextCursor) cache.cursors.set(index + 1, page.nextCursor);
           if (index === cache.last && cache.hasNext !== (page.nextCursor !== null)) { cache.hasNext = page.nextCursor !== null; changed = true; }
@@ -406,11 +406,15 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
           rerender();
         }
       })().catch(() => undefined).finally(() => { if (refreshFlight.current?.promise === flight) refreshFlight.current = null; });
-      refreshFlight.current = { cache, revision: latestRevision.current, promise: flight };
+      refreshFlight.current = { cache, revision: latestRevision.current, promise: flight, renewIcons: options?.renewIcons === true };
       await flight;
     };
     if (cache.metadata && cache.refreshedRevision !== latestRevision.current) { cache.countsAt = 0; cache.countsFlight = undefined; }
-    cache.refresh = async options => { await Promise.all([refresh(options), Date.now() - cache.countsAt >= PLUGIN_CATALOG_REFRESH_MS ? count() : Promise.resolve()]); };
+    cache.refresh = async options => {
+      // Signed image URLs can expire independently of the catalog counts.
+      const refreshCounts = !options?.renewIcons && Date.now() - cache.countsAt >= PLUGIN_CATALOG_REFRESH_MS;
+      await Promise.all([refresh(options), refreshCounts ? count() : Promise.resolve()]);
+    };
     const timer = setTimeout(() => {
       if (cache.countsFlight || cache.countsKey !== countsKey || Date.now() - cache.countsAt >= PLUGIN_CATALOG_REFRESH_MS) void count();
       void refresh();
@@ -420,7 +424,7 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
       clearTimeout(timer); cache.refresh = undefined;
       if (refreshFlight.current?.cache === cache) refreshFlight.current = null;
     };
-  }, [cache, countsKey, query, scope, pageLimit, visible, prewarm, count, scrollRef, read]);
+  }, [cache, countsKey, query, scope, pageLimit, visible, prewarm, count, scrollRef, read, iconCache]);
   const previousRevision = useRef(revision);
   useEffect(() => {
     if (previousRevision.current === revision) return;
@@ -513,7 +517,7 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, catalogKey 
           rows = publisherPages.get(page);
         }
         const item = rows?.[index - offsets[page]];
-        return item ? <CatalogCard item={item} renderItem={renderItem} renderRevision={renderRevision} />
+        return item ? <CatalogCard item={iconCache ? readReusedMarketIcon(iconCache, item) : item} renderItem={renderItem} renderRevision={renderRevision} />
           : <div className="h-36 rounded-xl bg-[var(--surface-elevated)]" aria-hidden="true" />;
       }} />
     <div ref={sentinel} className="flex min-h-12 items-center justify-center gap-3 text-12 text-[var(--text-tertiary)]" aria-live="polite">

@@ -165,8 +165,8 @@ const bundleTail = (bundleId: string): string => bundleId.slice(bundleId.lastInd
  * Minimized windows stay reachable (Cindy's browser window opens minimized), but
  * only when named or when the app has nothing else: a shown window answers first.
  */
-export function resolveHandoffTarget(list: NativeWindowList, spec: HandoffTargetSpec, hostPid: number): HandoffTarget | null {
-  const others = list.apps.filter((app) => app.pid !== hostPid && app.windows.length > 0);
+export function resolveHandoffTarget(list: NativeWindowList, spec: HandoffTargetSpec, hostPid: number): HandoffTarget | 'permission' | null {
+  const others = list.apps.filter((app) => app.pid !== hostPid && (app.windows.length > 0 || app.controlDenied));
   const showing = (app: NativeWindowList['apps'][number]) => app.windows.some((w) => !w.minimized);
   const candidates = [...others.filter(showing), ...others.filter((app) => !showing(app))];
   let app = spec.pid !== undefined ? candidates.find((entry) => entry.pid === spec.pid) : undefined;
@@ -181,6 +181,7 @@ export function resolveHandoffTarget(list: NativeWindowList, spec: HandoffTarget
   }
   if (!app && spec.pid === undefined && !spec.app) app = candidates.find((entry) => entry.pid === list.frontmost);
   if (!app) return null;
+  if (app.controlDenied) return 'permission';
   const title = spec.windowTitle?.toLowerCase();
   const named = (w: { title: string }) => !!title && w.title.toLowerCase().includes(title);
   // The same browser can run as several processes (profiles, an automation copy): the named window may be in any of them.
@@ -481,7 +482,11 @@ export class InputHandoffSession {
         }
       }
       const windows = await this.options.driver.windows({ background: true });
-      const target = this.resolveTarget(windows);
+      const target = resolveHandoffTarget(windows, this.options.target, this.options.hostPid);
+      if (target === 'permission') {
+        this.end('failed', 'failure', 'permission');
+        return;
+      }
       // What the window watch compares against, so a page renaming its window from here on is not a closed window.
       this.watchList = windows;
       const ambiguous = target ? ambiguousWindowTitles(windows, this.options.target, target, this.options.hostPid) : null;
@@ -654,6 +659,10 @@ export class InputHandoffSession {
     try {
       const windows = await this.options.driver.windows().catch(() => null);
       const follow = windows ? this.followTarget(windows, null) : null;
+      if (follow === 'permission') {
+        this.end('failed', 'failure', 'permission');
+        return true;
+      }
       if (follow === 'ended') {
         this.end('succeeded', 'detected');
         return true;
@@ -860,6 +869,10 @@ export class InputHandoffSession {
         // The window closed, changed its title, or a new one of the same app took over. Whatever
         // other app happens to be in front is not followed: it says nothing about this sign-in.
         const follow = this.followTarget({ ...windows, frontmost: target.pid }, null);
+        if (follow === 'permission') {
+          this.end('failed', 'failure', 'permission');
+          return;
+        }
         if (follow === 'ended') {
           this.submissions++;
           this.end('succeeded', 'detected');
@@ -992,6 +1005,10 @@ export class InputHandoffSession {
       const windows = await this.options.driver.windows().catch(() => null);
       if (windows) {
         const follow = this.followTarget(windows, before);
+        if (follow === 'permission') {
+          this.end('failed', 'failure', 'permission');
+          return true;
+        }
         if (follow === 'ended') {
           this.end('succeeded', 'detected');
           return true;
@@ -1103,17 +1120,22 @@ export class InputHandoffSession {
     if (this.guardedPage) this.options.onSecretEntered?.(this.guardedPage);
     const list = await driver.windows().catch(() => null);
     if (!list || !this.watching() || this.target !== target) return;
+    const mine = list.apps.find((app) => app.pid === target.pid);
+    if (mine?.controlDenied) {
+      this.end('failed', 'failure', 'permission');
+      return;
+    }
     const previous = this.watchList;
     this.watchList = list;
     // Coming back from answering or a picture: this read is only the new baseline.
     if (!previous) return;
-    const mine = list.apps.find((app) => app.pid === target.pid);
     if (!mine) {
       // Nothing of it on screen: minimized or on another desktop is still there; no window at all, or no program, is gone.
       const all = await driver.windows({ background: true }).catch(() => null);
       if (!this.watching() || this.target !== target) return;
       const entry = all?.apps.find((app) => app.pid === target.pid);
-      if (all ? !entry || entry.windows.length === 0 : !(await driver.commandLine(target.pid).catch(() => 'unknown'))) this.noteWindowGone();
+      if (entry?.controlDenied) this.end('failed', 'failure', 'permission');
+      else if (all ? !entry || entry.windows.length === 0 : !(await driver.commandLine(target.pid).catch(() => 'unknown'))) this.noteWindowGone();
       return;
     }
     const known = mine.windows.find((w) => w.index === target.window.index && w.title === target.window.title)
@@ -1208,10 +1230,6 @@ export class InputHandoffSession {
       ...(this.answeredOn ? { answeredOn: { ...this.answeredOn } } : {}),
       ...(this.ambiguousTitles ? { ambiguousTitles: this.ambiguousTitles } : {}),
     });
-  }
-
-  private resolveTarget(list: NativeWindowList): HandoffTarget | null {
-    return resolveHandoffTarget(list, this.options.target, this.options.hostPid);
   }
 
   private async useTarget(target: HandoffTarget): Promise<void> {
@@ -1467,6 +1485,10 @@ export class InputHandoffSession {
       if (windows) {
         const asks = last ? actionable(last) : !!this.step && actionable(this.step);
         const follow = this.followTarget(windows, before, asks);
+        if (follow === 'permission') {
+          this.end('failed', 'failure', 'permission');
+          return 'ended';
+        }
         if (follow === 'ended') return 'ended';
         if (follow && (follow.pid !== this.target?.pid || follow.window.index !== this.target?.window.index ||
             follow.window.title !== this.target?.window.title)) {
@@ -1493,11 +1515,13 @@ export class InputHandoffSession {
   }
 
   /** Decide which window the flow now lives in. `'ended'` when nothing remains to follow. */
-  private followTarget(list: NativeWindowList, before: NativeWindowList | null, currentAsks = false): HandoffTarget | 'ended' | null {
+  private followTarget(list: NativeWindowList, before: NativeWindowList | null, currentAsks = false): HandoffTarget | 'ended' | 'permission' | null {
     const current = this.target;
     if (!current) return null;
     const hints = this.options.completeWhen;
     const app = (pid: number) => list.apps.find((entry) => entry.pid === pid);
+    const mine = app(current.pid);
+    if (mine?.controlDenied) return 'permission';
     const toTarget = (entry: NativeWindowList['apps'][number], window: NativeWindowList['apps'][number]['windows'][number]): HandoffTarget => ({
       pid: entry.pid, app: entry.app, bundleId: entry.bundleId, window: { index: window.index, title: window.title },
     });
@@ -1511,7 +1535,6 @@ export class InputHandoffSession {
         .some((w) => w.index === window.index && w.title === window.title);
       if (front && window && !(currentAsks && unchanged)) return toTarget(front, window);
     }
-    const mine = app(current.pid);
     const sameWindow = mine?.windows.find((w) => w.index === current.window.index && w.title === current.window.title)
       ?? mine?.windows.find((w) => w.title === current.window.title);
     // A new window in the same app took focus (dialogs, popups, sign-in windows).
