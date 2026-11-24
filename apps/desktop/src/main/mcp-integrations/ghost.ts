@@ -275,6 +275,19 @@ export type PluginGatewayPorts = Omit<GhostGatewayPorts, PlatformService> & Part
   setupFollowsToolCancellation?: boolean;
 };
 
+/**
+ * Publish targets the current login identity allows (#1541): a personal identity only has the
+ * public market, so the Agent must not ask. A Host that has no organization publisher wired in
+ * (e.g. the headless Node Host) cannot tell the identity apart and reports null ("unknown")
+ * instead of presenting an organization member as personal.
+ */
+export function publishTargetsFromIdentity(
+  identity: (() => unknown) | undefined,
+): Array<'organization' | 'public'> | null {
+  if (!identity) return null;
+  return identity() ? ['organization', 'public'] : ['public'];
+}
+
 export function createGhostGateway(ports: PluginGatewayPorts) {
 const { classifyGhostVisibility, classifyInstalledGhostVisibility, preferLatestLocalOrPublicGhosts } = createGhostVisibility(ports.t);
 const { publishPluginAppResult, pluginModelResult, getBotAuthorizationService, isBotAuthorizationSession, getSessionFsSnapshot, getGhostCardService, getGhostManager, listInstalledGhostsAsync, getGhostPipeDispatcher, getGhostSetupAssessment, captureGhostMutationOwnerForMcp, acquireGhostMutationLeaseForMcp, isGhostAvailableForActiveSession, getGhostHandoffStore, blobStore, commitMessageMediaRefs, resolveGhostAttachmentUrl, t } = ports;
@@ -284,6 +297,10 @@ function requireService<K extends PlatformService>(key: K): GhostGatewayPorts[K]
   const service = ports[key];
   if (!service) throwIpcError('UNSUPPORTED_CAPABILITY', 'The execution Host has not connected this service: ' + key);
   return service as GhostGatewayPorts[K];
+}
+
+function forgePublishTargets(): Array<'organization' | 'public'> | null {
+  return publishTargetsFromIdentity(ports.currentPublisherIdentity);
 }
 
 
@@ -2073,7 +2090,10 @@ function getCindyGhostsMcpDeps(
         else if (input.action === 'submission') result = await requireService('community').myPluginSubmission(input.pluginId, input.submissionId);
         else if (input.action === 'detail') result = await requireService('community').myPluginDetail(input.pluginId, input.cursor);
         await authority.assert();
-        return { ok: true, result };
+        // ghost_my_plugins also tells the Agent which publish targets this identity has (#1541).
+        return input.action === 'list' || input.action === 'detail'
+          ? { ok: true, result, publishTargets: forgePublishTargets() }
+          : { ok: true, result };
       } catch (error) {
         try { requireService('community').mapContributionError(error); } catch (safe) {
           return {
@@ -3036,6 +3056,7 @@ function getCindyGhostsMcpDeps(
             name: packed.manifest.name,
             version: packed.manifest.version,
             publishToken: staged.ticket,
+            publishTargets: forgePublishTargets(),
             note: `${iconNote}已打包为待发布产物。仅企业组织成员可用 ghost_forge_publish 提交;个人账号不可用。`,
           };
         }
@@ -3046,6 +3067,7 @@ function getCindyGhostsMcpDeps(
           id: packed.manifest.id,
           name: packed.manifest.name,
           version: packed.manifest.version,
+          publishTargets: forgePublishTargets(),
           note: `${iconNote}已完成校验和打包；本工具不会安装或更新插件。`,
         };
       });
@@ -3110,6 +3132,7 @@ function getCindyGhostsMcpDeps(
           enabled: installed.ghost.enabled,
           instanceId: installedGhostStoragePart(installed.ghost),
           namespace: installed.ghost.namespace ?? null,
+          publishTargets: forgePublishTargets(),
           note:
             installed.action === 'installed'
               ? `${packedAttempt.iconNote}插件已完成校验、打包和安装，并已启用。`
@@ -3136,7 +3159,7 @@ function getCindyGhostsMcpDeps(
         };
       }
     },
-    async forgePublish({ token }): Promise<CindyForgePublishResult> {
+    async forgePublish({ token, audienceHint }): Promise<CindyForgePublishResult> {
       const boundaryPending = isAppSessionBoundaryPending();
       const consumed = consumeForgePackForPublish(getForgePackStagingController(), {
         token,
@@ -3167,7 +3190,7 @@ function getCindyGhostsMcpDeps(
         return {
           ok: false,
           errorCode: 'NOT_ORG_MEMBER',
-          message: '需要组织身份才能发布插件',
+          message: '当前是个人身份，只能发布到公开市场：按手册 §7.3 用 ghost_contribution_prepare 投稿，不要再询问发布目标。',
         };
       }
       try {
@@ -3175,7 +3198,7 @@ function getCindyGhostsMcpDeps(
           manifestId: ticket.manifestId,
           packageSha256: ticket.packageSha256,
           onTerminal: () => releaseForgePackStaging(ticket.stagingPath),
-        });
+        }, audienceHint);
         return {
           ok: true,
           transferId: started.transferId,
