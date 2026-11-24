@@ -318,6 +318,44 @@ describe('browser auth session lifecycle (real AuthProvider, mocked native/netwo
     expect(native.unregisterPush).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])('offers explicit login for a damaged vault without clearing it (initially locked: %s)', async initiallyLocked => {
+    seedSession(membership.id);
+    const vault = JSON.parse(native.storage.get(MOBILE_ACCOUNT_VAULT_KEY)!);
+    vault.resources.damaged = { realm: 'cn' };
+    const damagedVault = initiallyLocked ? JSON.stringify(vault) : '{bad-json';
+    native.storage.set(MOBILE_ACCOUNT_VAULT_KEY, damagedVault);
+    const savedSession = JSON.stringify({ version: 1, realm: 'cn', refreshToken: 'fixture-refresh' });
+    native.storage.set(sessionKey, savedSession);
+    let locked = initiallyLocked;
+    native.readSecure.mockImplementation(async (key: string) => {
+      if (locked && key === MOBILE_ACCOUNT_VAULT_KEY) throw new Error('locked');
+      return native.storage.get(key) ?? null;
+    });
+    await restartProvider();
+    if (initiallyLocked) {
+      expect(auth.recoveringSession).toBe(true);
+      locked = false;
+      await act(async () => { for (const listener of native.appStates) listener('active'); });
+    }
+    expect(auth.initialized && !auth.isAuthenticated && !auth.recoveringSession).toBe(true);
+    await act(async () => { await auth.dispatchLoginAction({ type: 'initialize' }); });
+    expect(auth.authError).toBe('AUTH_VAULT_INVALID');
+    expect(native.storage.get(MOBILE_ACCOUNT_VAULT_KEY)).toBe(damagedVault);
+    expect(native.storage.get(sessionKey)).toBe(savedSession);
+    expect(native.refresh).not.toHaveBeenCalled();
+    expect(native.unregisterPush).not.toHaveBeenCalled();
+
+    native.exchange.mockResolvedValue({
+      status: 'ok', accessToken: 'fixture-access', refreshToken: 'repaired', expiresIn: 3600,
+      membership,
+    });
+    await start();
+    await emitLink(callbackUrl());
+    expect(auth.user?.id).toBe(membership.id);
+    expect(native.storage.get(sessionKey)).toContain('repaired');
+    expect(native.storage.get(MOBILE_ACCOUNT_VAULT_KEY)).not.toContain('damaged');
+  });
+
   it('returns to login after the auth service rejects the saved session', async () => {
     seedSession(membership.id);
     native.refresh.mockRejectedValue(new AuthApiError('INVALID_REFRESH_TOKEN', 401, 'revoked'));

@@ -93,6 +93,7 @@ import {
 } from '@/auth/secureStorage';
 import {
   LOGIN_CREDENTIAL_STORAGE,
+  InvalidMobileAccountVaultError,
   clearMobileLoginCredentialsForLogout,
   commitMobileLoginSessions,
   commitMobileRuntimeResourceSession,
@@ -882,8 +883,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [serializeUserProfileMutation],
   );
 
-  const refreshSavedAccountsSnapshot = useCallback(async () => {
-    const vault = await readMobileAccountVault();
+  const refreshSavedAccountsSnapshot = useCallback(async (options?: { strict?: boolean }) => {
+    const vault = await readMobileAccountVault(options);
     const runtimeActiveAccountKey = userRef.current
       ? accountVaultKey(activeAuthRealmRef.current, userRef.current.id)
       : null;
@@ -1501,7 +1502,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!isCurrent()) return null;
     deviceIdRef.current = did;
     setDeviceId(did);
-    const persistedAccountVault = await refreshSavedAccountsSnapshot();
+    const persistedAccountVault = await refreshSavedAccountsSnapshot({ strict: true });
     if (!isCurrent()) return null;
     const signedOutTombstone =
       typeof persistedAccountVault?.signedOutAt === 'number';
@@ -1609,6 +1610,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return { did, hasSession: Boolean(storedSession) };
   }, [prepareBetaChannelForCurrentDevice, refreshSavedAccountsSnapshot, serializeRefreshTokenMutation, serializeUserProfileMutation]);
 
+  const allowLoginForInvalidVault = useCallback((error: unknown) => {
+    if (!(error instanceof InvalidMobileAccountVaultError) || userRef.current) return false;
+    // Successful explicit login can repair the vault. Leave the existing
+    // credentials and local data intact until the new login commits.
+    setAuthError('AUTH_VAULT_INVALID');
+    setDeferredSessionRecovery(false);
+    return true;
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     const generation = authGenerationRef.current;
@@ -1641,7 +1651,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             refresh(did),
             AUTH_STARTUP_GATE_TIMEOUT_MS,
           );
-        } catch {
+        } catch (error) {
+          if (isCurrent() && allowLoginForInvalidVault(error)) return;
           // transient:保留降级会话,由下方自愈 effect 自动补刷 token。
         }
         // 使用统计同意闸的一次性存量迁移。放在这里而不是下面的 tapdb effect 里,
@@ -1657,8 +1668,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (!cancelled && userRef.current) {
           await migrateExistingLoginAsConsented().catch(() => undefined);
         }
-      } catch {
-        if (isCurrent()) setDeferredSessionRecovery(true);
+      } catch (error) {
+        if (isCurrent() && !allowLoginForInvalidVault(error)) setDeferredSessionRecovery(true);
       } finally {
         if (!cancelled) {
           setIsBusy(false);
@@ -1668,7 +1679,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
     void run();
     return () => { cancelled = true; };
-  }, [prepareBetaChannelForCurrentDevice, restoreLocalIdentity, refresh]);
+  }, [allowLoginForInvalidVault, prepareBetaChannelForCurrentDevice, restoreLocalIdentity, refresh]);
 
   // 降级会话自愈：无法验证缓存身份时先重读本机凭证，再与已恢复用户共用单飞续期。
   useEffect(() => {
@@ -1707,8 +1718,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           }
         }
         if (!(await refresh()) && isCurrent()) scheduleNext();
-      } catch {
-        if (isCurrent()) scheduleNext();
+      } catch (error) {
+        if (isCurrent() && !allowLoginForInvalidVault(error)) scheduleNext();
       } finally {
         running = false;
       }
@@ -1735,6 +1746,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [
     accessToken,
+    allowLoginForInvalidVault,
     restoreLocalIdentity,
     deferredSessionRecovery,
     initialized,
@@ -1988,7 +2000,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           loginFlowEpochRef.current === epoch;
         promise = (async () => {
           setIsBusy(true);
-          setAuthError(reason => reason === 'SESSION_EXPIRED' || reason === 'ACCOUNT_UNAVAILABLE' ? reason : null);
+          setAuthError(reason =>
+            reason === 'SESSION_EXPIRED' || reason === 'ACCOUNT_UNAVAILABLE' || reason === 'AUTH_VAULT_INVALID'
+              ? reason
+              : null,
+          );
           suspendSessionRecoveryForLogin();
           try {
             const did = await (deviceIdRef.current ?? prepareBetaChannelForCurrentDevice());
