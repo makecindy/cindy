@@ -2829,6 +2829,7 @@
         "taskExportDirectoryTitle": "差事輸出處",
         "taskExportDirectoryUnset": "每次擇之",
         "taskExportDirectoryMissing": "卷匣不存",
+        "taskExportDirectoryUnreadable": "設定不可讀",
         "taskExportDirectoryChoose": "擇目錄",
         "taskExportDirectoryReset": "復每次擇之",
         "taskExportDirectoryDescription": "既設，Agent 所輸差事逕存於此，不復每次問所，亦不覆同名之檔。未設則每輸由君擇所。",

@@ -2859,6 +2859,7 @@
         "taskExportDirectoryTitle": "Session export location",
         "taskExportDirectoryUnset": "Ask each time",
         "taskExportDirectoryMissing": "Folder not found",
+        "taskExportDirectoryUnreadable": "Can't read setting",
         "taskExportDirectoryChoose": "Choose directory",
         "taskExportDirectoryReset": "Ask each time instead",
         "taskExportDirectoryDescription": "When set, sessions the Agent exports are saved here without asking for a location, and existing files are never replaced. If not set, you choose a location for each export.",

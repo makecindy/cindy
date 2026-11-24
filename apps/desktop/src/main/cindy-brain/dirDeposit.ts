@@ -403,11 +403,14 @@ function dedupeFileName(fileName: string, n: number): string {
  * 在 canonical 根下原子创建一个不覆盖的文件。先用 O_EXCL/O_NOFOLLOW
  * 钉住句柄，再核对根路径、目标真身与句柄 identity，最后才写入字节。
  * 任务包导出到用户设定目录时复用同一写法(sessionShareTools.desktop.ts)。
+ * assertCurrent(可选)在写入字节前与提交成功前各调用一次；抛错即按失败
+ * 路径清空并删除本次新建的文件，用于调用方在等待期间被撤权的情形。
  */
 export async function writeNewSaveFile(
   dirRealPath: string,
   fileName: string,
   bytes: Uint8Array,
+  assertCurrent?: () => void,
 ): Promise<string | null> {
   const flags =
     fs.constants.O_WRONLY |
@@ -451,6 +454,7 @@ export async function writeNewSaveFile(
       ) {
         return null;
       }
+      assertCurrent?.();
       await handle.writeFile(bytes);
 
       // 写入本身也可能触发另一个进程的 rename / replace；提交成功前再
@@ -471,6 +475,7 @@ export async function writeNewSaveFile(
       ) {
         return null;
       }
+      assertCurrent?.();
       result = candidate;
     } catch {
       // result 保持 null；失败路径在 finally 中尽力清理。

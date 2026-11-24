@@ -12,6 +12,10 @@ import type { CommitShareImportOptions, CommitShareImportResult, InspectResult }
 /** The packer caps unpacked content at 256 MiB; this only bounds reading back its own output. */
 const PRESET_EXPORT_MAX_BYTES = 512 * 1024 * 1024;
 
+function sameRealPath(a: string, b: string): boolean {
+  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
+}
+
 /** The two callers share native package services; only their file handoff differs. */
 export function createSessionShareToolCallbacks(ports: {
   capture(context: LiziMcpSessionContext): Promise<{ pluginId?: string; assertCurrent(): void }>;
@@ -20,10 +24,17 @@ export function createSessionShareToolCallbacks(ports: {
   commitShare(options: CommitShareImportOptions, assertCurrent: () => void): Promise<CommitShareImportResult>;
   cancelDraft(draftId: string): void;
   chooseExportPath(sessionId: string): Promise<string | null>;
-  /** Owner-chosen folder for Agent exports (canonical path) and the file name to use; null = ask with the dialog. */
+  /**
+   * Owner-chosen folder for Agent exports — the canonical path recorded when it was approved — and
+   * the file name to use; null = ask with the dialog. Throws EXPORT_DIRECTORY_UNAVAILABLE when the
+   * setting exists but cannot be used.
+   */
   presetExportDestination(sessionId: string): Promise<{ directory: string; fileName: string } | null>;
-  /** Creates a new file in the folder without overwriting; returns the name actually written, or null. */
-  writeExportFile(directory: string, fileName: string, bytes: Uint8Array): Promise<string | null>;
+  /**
+   * Creates a new file in the folder without overwriting; returns the name actually written, or null.
+   * Calls assertCurrent before writing and before reporting success, removing the new file if it throws.
+   */
+  writeExportFile(directory: string, fileName: string, bytes: Uint8Array, assertCurrent: () => void): Promise<string | null>;
   openImportWizard(filePath: string): void;
   handoff(): {
     import(instance: string, files: Array<{ name: string; bytes: Uint8Array }>, assertCurrent: () => void): Promise<Array<Pick<GhostHandoffFile, 'ref' | 'name' | 'size' | 'sha256'>>>;
@@ -65,6 +76,11 @@ export function createSessionShareToolCallbacks(ports: {
         // without overwriting or following links (#9979 kept caller paths out).
         const preset = scope.pluginId ? null : await ports.presetExportDestination(params.sessionId);
         scope.assertCurrent();
+        // The approved location must still be its own canonical path: a folder or ancestor later
+        // replaced by a symlink or junction would otherwise redirect the export.
+        if (preset && !sameRealPath(await fs.realpath(preset.directory).catch(() => ''), preset.directory)) {
+          throw new Error('EXPORT_DIRECTORY_UNAVAILABLE');
+        }
         if (scope.pluginId || preset) {
           temporary = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-task-export-')));
           targetPath = path.join(temporary, 'task.cshare');
@@ -83,8 +99,11 @@ export function createSessionShareToolCallbacks(ports: {
             { containWithin: temporary!, verifyContentStability: true });
           scope.assertCurrent();
           if (!packed) throw new Error('SHARE_EXPORT_FAILED');
-          const written = await ports.writeExportFile(preset.directory, preset.fileName, packed);
-          if (!written) throw new Error('EXPORT_DIRECTORY_UNAVAILABLE');
+          const written = await ports.writeExportFile(preset.directory, preset.fileName, packed, scope.assertCurrent);
+          if (!written) {
+            scope.assertCurrent();
+            throw new Error('EXPORT_DIRECTORY_UNAVAILABLE');
+          }
           return { ...summary, file_path: path.join(preset.directory, written) };
         }
         if (!scope.pluginId) return { ...summary, file_path: result.filePath };

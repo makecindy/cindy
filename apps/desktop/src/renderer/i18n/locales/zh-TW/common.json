@@ -2829,6 +2829,7 @@
         "taskExportDirectoryTitle": "任務匯出位置",
         "taskExportDirectoryUnset": "每次選擇",
         "taskExportDirectoryMissing": "資料夾不存在",
+        "taskExportDirectoryUnreadable": "設定無法讀取",
         "taskExportDirectoryChoose": "選擇目錄",
         "taskExportDirectoryReset": "改回每次選擇",
         "taskExportDirectoryDescription": "設定後，Agent 匯出任務時會直接存到這裡，不再每次跳出視窗選位置，也不會覆寫同名檔案。未設定時，每次匯出都由你選擇位置。",

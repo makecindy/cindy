@@ -8,10 +8,13 @@ import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 import type { TaskExportDirectoryState } from '../../../shared/taskExportDirectory';
+import { storageManagementCardSettings } from './StorageManagementCard.settings-search';
+import { useSettingDefinition } from './useSettingDefinition';
 
 /** Where Agent task exports are saved without asking. Unset keeps the save dialog. */
 export function TaskExportDirectorySection() {
   const { t } = useTranslation();
+  const setting = useSettingDefinition(storageManagementCardSettings.taskExportDirectory);
   const [state, setState] = useState<TaskExportDirectoryState | null>(null);
   const [busy, setBusy] = useState(false);
   const pending = useRef(false);
@@ -45,17 +48,21 @@ export function TaskExportDirectorySection() {
   };
 
   if (!api) return null;
-  const badge = state && (!state.path
-    ? t('settings.about.storage.taskExportDirectoryUnset')
-    : !state.exists ? t('settings.about.storage.taskExportDirectoryMissing') : null);
+  // Unreadable or missing folders need attention; exports fail until the owner fixes them.
+  const warning = !!state && (state.unreadable || (!!state.path && !state.exists));
+  const badge = state && (state.unreadable
+    ? t('settings.about.storage.taskExportDirectoryUnreadable')
+    : !state.path ? t('settings.about.storage.taskExportDirectoryUnset')
+      : !state.exists ? t('settings.about.storage.taskExportDirectoryMissing') : null);
+  const canReset = !!state && (state.unreadable || !!state.path);
   return (
-    <SettingsCard>
+    <SettingsCard {...setting.anchorProps}>
       <SettingsRow
         wrap
-        title={<span role="heading" aria-level={3}>{t('settings.about.storage.taskExportDirectoryTitle')}</span>}
+        title={<span role="heading" aria-level={3}>{setting.title}</span>}
         tag={badge && (
           <span className={cn('rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-11',
-            state?.path ? 'text-[var(--warning-fg)]' : 'text-[var(--text-secondary)]')}>
+            warning ? 'text-[var(--warning-fg)]' : 'text-[var(--text-secondary)]')}>
             {badge}
           </span>
         )}
@@ -67,14 +74,14 @@ export function TaskExportDirectorySection() {
         )}
         trailing={
           <div className="flex shrink-0 items-center gap-2">
-            {state?.path && (
+            {canReset && (
               <Tip text={t('settings.about.storage.taskExportDirectoryReset')}>
                 <Button data-settings-search-action="Ask for a location on each session export" variant="secondary" tone="quiet" size="sm" className="w-7 px-0" disabled={busy} aria-label={t('settings.about.storage.taskExportDirectoryReset')} onClick={() => void update('reset')}>
                   <RotateCcw size={15} aria-hidden />
                 </Button>
               </Tip>
             )}
-            <Button variant="secondary" size="md" className="gap-1.5" disabled={busy} onClick={() => void update('choose')}>
+            <Button {...setting.controlProps} variant="secondary" size="md" className="gap-1.5" disabled={busy} onClick={() => void update('choose')}>
               {t('settings.about.storage.taskExportDirectoryChoose')}<ChevronRight size={14} aria-hidden />
             </Button>
           </div>
@@ -82,7 +89,7 @@ export function TaskExportDirectorySection() {
       />
       <SettingsBlock>
         <p className={cn('flex items-start gap-1.5', SETTINGS_HINT)}>
-          <Info size={13} className="mt-0.5 shrink-0" aria-hidden />{t('settings.about.storage.taskExportDirectoryDescription')}
+          <Info size={13} className="mt-0.5 shrink-0" aria-hidden />{setting.description}
         </p>
       </SettingsBlock>
     </SettingsCard>

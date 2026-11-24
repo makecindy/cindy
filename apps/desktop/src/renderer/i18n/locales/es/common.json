@@ -2897,6 +2897,7 @@
         "taskExportDirectoryTitle": "Ubicación de exportación de sesiones",
         "taskExportDirectoryUnset": "Preguntar cada vez",
         "taskExportDirectoryMissing": "No se encontró la carpeta",
+        "taskExportDirectoryUnreadable": "No se puede leer el ajuste",
         "taskExportDirectoryChoose": "Elegir directorio",
         "taskExportDirectoryReset": "Volver a preguntar cada vez",
         "taskExportDirectoryDescription": "Si se define, las sesiones que exporta el Agent se guardan aquí sin preguntar la ubicación y nunca se reemplazan archivos existentes. Si no se define, eliges la ubicación en cada exportación.",

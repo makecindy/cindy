@@ -2859,6 +2859,7 @@
         "taskExportDirectoryTitle": "Speicherort für Sitzungsexporte",
         "taskExportDirectoryUnset": "Jedes Mal fragen",
         "taskExportDirectoryMissing": "Ordner nicht gefunden",
+        "taskExportDirectoryUnreadable": "Einstellung nicht lesbar",
         "taskExportDirectoryChoose": "Verzeichnis auswählen",
         "taskExportDirectoryReset": "Wieder jedes Mal fragen",
         "taskExportDirectoryDescription": "Wenn festgelegt, werden vom Agent exportierte Sitzungen ohne Nachfrage hier gespeichert; vorhandene Dateien werden nie ersetzt. Ohne Einstellung wählst du bei jedem Export einen Speicherort.",

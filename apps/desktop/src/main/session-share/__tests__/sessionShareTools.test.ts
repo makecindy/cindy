@@ -184,4 +184,37 @@ describe('native package Host tools', () => {
     expect(f.ports.exportShare).not.toHaveBeenCalled();
     expect(f.ports.chooseExportPath).not.toHaveBeenCalled();
   });
+  // Unit, #12461 review: an approved folder (or an ancestor) later replaced by a
+  // symlink / Windows junction must not redirect the export to the new target.
+  // Minimum input: approve a real folder, then swap that path for a link.
+  it('refuses a Settings folder that now resolves somewhere else', async () => {
+    const f = fixture(), context = { agentKind: 'codex', sessionId: 'caller', workingDir: directory };
+    await fs.mkdir(path.join(directory, 'approved'));
+    const approved = await fs.realpath(path.join(directory, 'approved'));
+    const elsewhere = path.join(directory, 'elsewhere');
+    await fs.mkdir(elsewhere);
+    await fs.rename(approved, path.join(directory, 'approved-old'));
+    await fs.symlink(elsewhere, approved, 'junction');
+    f.ports.presetExportDestination.mockResolvedValue({ directory: approved, fileName: 'Task.cshare' });
+    expect(await f.callbacks.export({ sessionId: 'task', excludeMedia: false }, context))
+      .toMatchObject({ ok: false, errorCode: 'EXPORT_DIRECTORY_UNAVAILABLE' });
+    expect(f.ports.exportShare).not.toHaveBeenCalled();
+    expect(await fs.readdir(elsewhere)).toEqual([]);
+  });
+  // Unit, #12461 review: losing the caller (sign-out, account switch, revoked
+  // task action) while the Settings-folder write is pending must not report
+  // success or leave the package behind.
+  it('removes the Settings-folder package and fails when the caller is revoked during the write', async () => {
+    const f = fixture(), context = { agentKind: 'codex', sessionId: 'caller', workingDir: directory };
+    await fs.mkdir(path.join(directory, 'exports'));
+    const exports = await fs.realpath(path.join(directory, 'exports'));
+    f.ports.presetExportDestination.mockResolvedValue({ directory: exports, fileName: 'Task.cshare' });
+    f.ports.writeExportFile.mockImplementationOnce(async (dir, name, bytes, assertCurrent) => {
+      current = false;
+      return writeNewSaveFile(dir, name, bytes, assertCurrent);
+    });
+    expect(await f.callbacks.export({ sessionId: 'task', excludeMedia: false }, context))
+      .toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(await fs.readdir(exports)).toEqual([]);
+  });
 });

@@ -2829,6 +2829,7 @@
         "taskExportDirectoryTitle": "セッションのエクスポート先",
         "taskExportDirectoryUnset": "毎回選択",
         "taskExportDirectoryMissing": "フォルダーが見つかりません",
+        "taskExportDirectoryUnreadable": "設定を読み込めません",
         "taskExportDirectoryChoose": "フォルダーを選択",
         "taskExportDirectoryReset": "毎回選択に戻す",
         "taskExportDirectoryDescription": "設定すると、Agent がエクスポートするセッションは保存先を尋ねずにここへ保存され、同名のファイルは上書きされません。未設定の場合は、エクスポートのたびに保存先を選びます。",

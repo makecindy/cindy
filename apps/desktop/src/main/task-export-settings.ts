@@ -9,10 +9,13 @@ import type { TaskExportDirectoryState } from '../shared/taskExportDirectory.js'
 /**
  * The folder the owner picked for Agent task package exports. Only Main's
  * native folder picker writes it, so a stored path is the owner's explicit
- * approval for exports to land there without asking each time.
+ * approval for exports to land there without asking each time. `realPath` is
+ * the canonical location at the moment of approval: exports go only there,
+ * so a later symlink or junction swap cannot redirect them.
  */
 interface Settings {
   directory: string | null;
+  realPath: string | null;
 }
 
 function validDirectory(value: unknown): value is string {
@@ -21,10 +24,13 @@ function validDirectory(value: unknown): value is string {
 
 const store = createOverrideSettingsFile<Settings>({
   filePath: () => ownerScopedUserDataPath('task-export-settings.json'),
-  defaults: { directory: null },
+  defaults: { directory: null, realPath: null },
   normalize: (raw) => {
     const value = raw as Partial<Settings>;
-    return { directory: validDirectory(value.directory) ? path.normalize(value.directory) : null };
+    // Both are written together; a half entry is treated as not set rather than trusted.
+    return validDirectory(value.directory) && validDirectory(value.realPath)
+      ? { directory: path.normalize(value.directory), realPath: path.normalize(value.realPath) }
+      : { directory: null, realPath: null };
   },
   scopeKey: () => activeOwnerScopeKey(),
   preserveUnreadableFile: true,
@@ -34,34 +40,49 @@ const store = createOverrideSettingsFile<Settings>({
   label: 'task-export',
 });
 
-export function readTaskExportDirectory(): string | null {
+/** For exports: null = not set; 'unreadable' = a settings file exists but cannot be read (fail, do not ask). */
+export function readTaskExportDirectory(): { realPath: string } | null | 'unreadable' {
   store.invalidateIfChanged();
-  return store.read().directory;
+  if (store.isUnreadable()) return 'unreadable';
+  const { realPath } = store.read();
+  return realPath ? { realPath } : null;
 }
 
 async function readState(): Promise<TaskExportDirectoryState> {
-  const directory = readTaskExportDirectory();
-  if (!directory) return { path: null, exists: false };
+  store.invalidateIfChanged();
+  if (store.isUnreadable()) return { path: null, exists: false, unreadable: true };
+  const { directory } = store.read();
+  if (!directory) return { path: null, exists: false, unreadable: false };
   const exists = await fs.promises.stat(directory).then((stat) => stat.isDirectory(), () => false);
-  return { path: directory, exists };
+  return { path: directory, exists, unreadable: false };
 }
 
 /** Settings IPC: get / choose (native folder picker) / reset. Local only, not exposed via device-link. */
 export function createTaskExportDirectoryHandlers(deps: { chooseDirectory(): Promise<string | null> }) {
-  const mutate = async (choose: boolean) => {
-    const scope = activeOwnerScopeKey();
-    const directory = choose ? await deps.chooseDirectory() : null;
-    if (choose && directory === null) return readState();
+  const assertScope = (scope: string) => {
     if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== scope) {
       throwIpcError('PRECONDITION_FAILED', 'task export directory owner changed');
     }
-    if (directory !== null && !validDirectory(directory)) throwIpcError('INVALID_PARAMS', 'invalid task export directory');
-    await store.updateAtomic(() => ({ directory }));
+  };
+  const choose = async () => {
+    const scope = activeOwnerScopeKey();
+    const directory = await deps.chooseDirectory();
+    if (directory === null) return readState();
+    assertScope(scope);
+    if (!validDirectory(directory)) throwIpcError('INVALID_PARAMS', 'invalid task export directory');
+    const realPath = await fs.promises.realpath(directory).catch(() => null);
+    if (!realPath) throwIpcError('NOT_FOUND', 'task export directory is not available');
+    assertScope(scope);
+    // A fresh choice from the native picker replaces an unreadable file; nothing else is stored in it.
+    if (store.isUnreadable()) await store.resetAtomic();
+    await store.updateAtomic(() => ({ directory, realPath }));
     return readState();
   };
-  return {
-    get: readState,
-    choose: () => mutate(true),
-    reset: () => mutate(false),
+  const reset = async () => {
+    assertScope(activeOwnerScopeKey());
+    // resetAtomic removes the file, so this is also the recovery path for an unreadable one.
+    await store.resetAtomic();
+    return readState();
   };
+  return { get: readState, choose, reset };
 }

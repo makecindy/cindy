@@ -2897,6 +2897,7 @@
         "taskExportDirectoryTitle": "Emplacement d'exportation des sessions",
         "taskExportDirectoryUnset": "Demander à chaque fois",
         "taskExportDirectoryMissing": "Dossier introuvable",
+        "taskExportDirectoryUnreadable": "Réglage illisible",
         "taskExportDirectoryChoose": "Choisir un répertoire",
         "taskExportDirectoryReset": "Toujours demander",
         "taskExportDirectoryDescription": "Une fois défini, les sessions exportées par l'Agent sont enregistrées ici sans demander d'emplacement, et aucun fichier existant n'est remplacé. S'il n'est pas défini, vous choisissez l'emplacement à chaque exportation.",

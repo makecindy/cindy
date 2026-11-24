@@ -17,16 +17,20 @@ import { createSessionShareToolCallbacks } from './sessionShareTools.js';
 
 const log = createLogger('session-share-tools');
 
-/** The Settings export folder at its canonical path; a set but unusable folder fails instead of opening a dialog. */
+/**
+ * The Settings export folder as the canonical path recorded when the owner approved it (the
+ * shared callbacks verify it still resolves to itself). A set but unusable or unreadable setting
+ * fails instead of opening a dialog nobody may be there to answer.
+ */
 async function presetExportDestination(sessionId: string) {
   const configured = readTaskExportDirectory();
   if (!configured) return null;
-  const directory = await fsp.realpath(configured).catch(() => null);
-  if (!directory || !(await fsp.stat(directory).then(stat => stat.isDirectory(), () => false))) {
-    log.warn('task export directory unavailable');
+  if (configured === 'unreadable' ||
+    !(await fsp.stat(configured.realPath).then(stat => stat.isDirectory(), () => false))) {
+    log.warn('task export directory unavailable', { unreadable: configured === 'unreadable' });
     throw new Error('EXPORT_DIRECTORY_UNAVAILABLE');
   }
-  return { directory, fileName: sanitizeSaveFileName(await sessionShareExportFileName(sessionId)) };
+  return { directory: configured.realPath, fileName: sanitizeSaveFileName(await sessionShareExportFileName(sessionId)) };
 }
 
 /** No I/O, timers or background work until a discovered tool is called. */

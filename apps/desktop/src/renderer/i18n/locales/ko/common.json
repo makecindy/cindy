@@ -2829,6 +2829,7 @@
         "taskExportDirectoryTitle": "세션 내보내기 위치",
         "taskExportDirectoryUnset": "매번 선택",
         "taskExportDirectoryMissing": "폴더를 찾을 수 없음",
+        "taskExportDirectoryUnreadable": "설정을 읽을 수 없음",
         "taskExportDirectoryChoose": "폴더 선택",
         "taskExportDirectoryReset": "매번 선택으로 되돌리기",
         "taskExportDirectoryDescription": "설정하면 Agent가 내보내는 세션이 위치를 묻지 않고 이곳에 저장되며, 같은 이름의 파일은 덮어쓰지 않습니다. 설정하지 않으면 내보낼 때마다 위치를 선택합니다.",
