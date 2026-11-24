@@ -8,7 +8,6 @@ import { Button } from '@/components/ui/button';
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { i18n } from '@/i18n';
 import { toast } from '@/lib/toast';
 import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 
@@ -312,18 +311,24 @@ export function TelegramBehaviorSettings({
 
 /** 「人格」节: bot 名字 + soul 文本(soul.md 语义), 可一键同步名字到 Telegram 资料页。 */
 /** Keep debounced and close-time saves on the same failure path. */
-async function persistTelegramPersona(next: { botName: string; soul: string }): Promise<boolean> {
+async function persistTelegramPersona(
+  next: { botName: string; soul: string },
+  t: (key: string) => string,
+): Promise<boolean> {
   try {
     await window.electronAPI.telegramBot.setPersona(next);
     return true;
   } catch (error) {
-    toast.error(i18n.t(mapIpcErrorToI18nKey(error, { fallback: 'ipcError.INTERNAL' })));
+    toast.error(t(mapIpcErrorToI18nKey(error, { fallback: 'ipcError.INTERNAL' })));
     return false;
   }
 }
 
 export function TelegramPersonaSettings() {
   const { t } = useTranslation();
+  // The close-time save runs in an unmount cleanup; read the current translator there.
+  const translate = useRef(t);
+  translate.current = t;
   const [persona, setPersona] = useState<{ botName: string; soul: string } | null>(null);
   const [syncState, setSyncState] = useState<'idle' | 'syncing' | 'done' | 'failed'>('idle');
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -344,7 +349,7 @@ export function TelegramPersonaSettings() {
       if (pendingSave.current) {
         const flush = pendingSave.current;
         pendingSave.current = null;
-        void persistTelegramPersona(flush);
+        void persistTelegramPersona(flush, translate.current);
       }
     };
   }, []);
@@ -358,7 +363,7 @@ export function TelegramPersonaSettings() {
     // 600ms 去抖自动保存 — 无显式保存按钮(设置卡即改即存的通用手感)。
     saveTimer.current = setTimeout(() => {
       pendingSave.current = null;
-      void persistTelegramPersona(next).then(async saved => {
+      void persistTelegramPersona(next, t).then(async saved => {
         if (saved) return;
         try {
           const stored = await window.electronAPI.telegramBot.getPersona();
