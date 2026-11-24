@@ -2508,6 +2508,10 @@
       }
     },
     "windowBehavior": {
+      "trayCard": {
+        "label": "Tarjeta de la bandeja del sistema",
+        "hint": "Sitúa el puntero sobre el icono de Cindy en la bandeja para ver la cuota restante y las tareas sin leer."
+      },
       "menubar": {
         "label": "Mostrar el uso restante en la barra de menú",
         "hint": "Agrega un icono de Cindy a la barra de menús de macOS. Haz clic en él para ver lo que te queda de tus suscripciones, tu saldo de Cindy y el uso de hoy."

@@ -2440,6 +2440,10 @@
       }
     },
     "windowBehavior": {
+      "trayCard": {
+        "label": "系統匣懸浮卡片",
+        "hint": "將滑鼠停在 Cindy 系統匣圖示上，即可查看剩餘配額和未讀任務。"
+      },
       "menubar": {
         "label": "在選單列顯示餘量",
         "hint": "在 macOS 選單列放一個 Cindy 圖示，點開查看訂閱餘量、Cindy 餘額和今天的用量。"
