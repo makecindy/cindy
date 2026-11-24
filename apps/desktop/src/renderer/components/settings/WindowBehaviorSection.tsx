@@ -120,7 +120,7 @@ export function WindowBehaviorSection() {
   }
 
   if (menubar.available) {
-    const setting = isWindows ? windowBehaviorSettings.trayCardLabel : windowBehaviorSettings.menubarLabel;
+    const setting = windowBehaviorSettings[isWindows ? 'trayCardLabel' : 'menubarLabel'];
     rows.push({
       key: 'menubar',
       node: (
