@@ -17115,7 +17115,8 @@
         "compactResumeFirst": "Send a message to resume this session before compacting its context.",
         "compactNothing": "Nothing to compact yet",
         "sessionBranches": "Session branches",
-        "copySessionLink": "Copy session link"
+        "copySessionLink": "Copy session link",
+        "markUnread": "Mark as unread"
       },
       "sessionBranches": {
         "title": "Session branches",

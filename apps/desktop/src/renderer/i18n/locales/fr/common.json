@@ -17279,7 +17279,8 @@
         "compactResumeFirst": "Envoyez un message pour reprendre cette session avant de compacter son contexte.",
         "compactNothing": "Rien à compacter pour l'instant",
         "sessionBranches": "Branches de la session",
-        "copySessionLink": "Copier le lien de la session"
+        "copySessionLink": "Copier le lien de la session",
+        "markUnread": "Marquer comme non lu"
       },
       "sessionBranches": {
         "title": "Branches de la session",
