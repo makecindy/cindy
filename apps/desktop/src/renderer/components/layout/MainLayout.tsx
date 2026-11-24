@@ -1768,9 +1768,11 @@ export function MainLayout() {
     setRightSidebarAvailable,
     setRightSidebarSessionId: declareRightSidebarSessionId,
     setRightSidebarWorkdir,
+    // 与「打开终端」快捷键同一动作：页面内按钮（如群聊右上角）直接复用。
+    openTerminal: openTerminalForCurrentTask,
   }), [
     sidebarWidth, pluginSettings, rsbDetached, isRightSidebarCollapsed, handleOpenRightSidebar,
-    rightSidebarSide, declareRightSidebarSessionId, setRightSidebarWorkdir,
+    rightSidebarSide, declareRightSidebarSessionId, setRightSidebarWorkdir, openTerminalForCurrentTask,
   ]);
 
   return (

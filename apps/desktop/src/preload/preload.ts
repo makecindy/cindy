@@ -1453,6 +1453,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     dispose: (id: string) => ipcRenderer.invoke('terminal:dispose', id),
     restart: (id: string) => ipcRenderer.invoke('terminal:restart', id),
     listAvailableShells: () => ipcRenderer.invoke('terminal:list-available-shells'),
+    getHomeDir: () => ipcRenderer.invoke('terminal:get-home-dir'),
     getDefaultShellPref: () => ipcRenderer.invoke('terminal:get-default-shell-pref'),
     setDefaultShellPref: (value: string) =>
       ipcRenderer.invoke('terminal:set-default-shell-pref', value),

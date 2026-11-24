@@ -76,3 +76,19 @@ describe('terminal CREATE shell preference', () => {
     expect(mocks.managerCreate).not.toHaveBeenCalled();
   });
 });
+
+// 依据：#12409 群聊终端须从本机主目录开始，不能依赖空 cwd 回退（renderer 拿不到 process.env）。
+// 缺口：此前没有任何 IPC 向 renderer 暴露主目录。最小失败输入：未注册该 channel。tier: unit。
+describe('terminal GET_HOME_DIR', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    registerTerminalHandlers();
+  });
+
+  it('returns the local user home directory from main', async () => {
+    const { homedir } = await import('node:os');
+    const call = mocks.ipcHandle.mock.calls.find(([channel]) => channel === TERMINAL_INVOKE.GET_HOME_DIR);
+    expect(call).toBeDefined();
+    expect((call![1] as () => string)()).toBe(homedir());
+  });
+});

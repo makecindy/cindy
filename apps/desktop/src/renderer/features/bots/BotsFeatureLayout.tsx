@@ -8,6 +8,7 @@ import { BotGroupSettingsDrawer } from './BotGroupSettingsDrawer';
 import { GroupMaskProvider } from './GroupMaskProvider';
 import { useBotProfiles } from './botStore';
 import { useBotGroupSummary } from './botGroupStore';
+import { useBotGroupTerminalSidebar } from './botGroupTerminalSidebar';
 
 /**
  * 外层任务布局统一注册侧栏；只有活动伙伴面板拥有窗口的设置抽屉。
@@ -52,7 +53,10 @@ export function BotsFeatureLayout() {
       remoteHostId?: string | null,
       deviceLinkDeviceId?: string | null,
     ) => void;
+    openTerminal?: () => boolean;
   } | null>();
+  // 群聊页的本机终端：只有当前聚焦的面板向主布局声明，起始目录为本机主目录。
+  useBotGroupTerminalSidebar(groupId, focused && !!groupId, shellContext);
   const content = (
     <>
       <Outlet context={shellContext} />

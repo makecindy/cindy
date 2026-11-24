@@ -11,6 +11,8 @@
  * channels：TERMINAL_INVOKE / TERMINAL_PUSH（见 channels.ts）。
  */
 
+import { homedir } from 'node:os';
+
 import { ipcMain, type IpcMainInvokeEvent, type WebContents } from 'electron';
 
 import { throwIpcError } from '../utils/ipcValidate.js';
@@ -141,6 +143,8 @@ export function registerTerminalHandlers(options?: TerminalHandlersOptions): Pty
   ipcMain.handle(TERMINAL_INVOKE.LIST_AVAILABLE_SHELLS, (): AvailableShell[] => {
     return probeAvailableShells();
   });
+
+  ipcMain.handle(TERMINAL_INVOKE.GET_HOME_DIR, (): string => homedir());
 
   ipcMain.handle(TERMINAL_INVOKE.GET_DEFAULT_SHELL_PREF, (): ShellId => {
     return getDefaultShellPref();
