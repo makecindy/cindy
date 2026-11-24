@@ -6,9 +6,14 @@ export default {
   notCovered: 'Fixture catalogs/account; model and project picker buttons are placeholders. No server writes.',
   stubs: {
     'src/renderer/contexts/AuthContext': 'export const useOptionalDataOwnerGeneration = () => 0;',
-    'src/renderer/hooks/useAgentCapabilities': './catalog-hooks.ts',
+    'src/renderer/hooks/useAgentCapabilities': {
+      partial: `export { getCachedCapabilities, evictDeviceCapabilities, prefetchDeviceCapabilities,
+        refreshLocalCapabilities, useAgentCapabilities } from './scripts/fixtures/scheduler-trigger/catalog-hooks';`,
+    },
     'src/renderer/hooks/useProviders': './catalog-hooks.ts',
-    'src/renderer/hooks/useDeviceProviders': './catalog-hooks.ts',
+    'src/renderer/hooks/useDeviceProviders': {
+      partial: "export { useDeviceProviders } from './scripts/fixtures/scheduler-trigger/catalog-hooks';",
+    },
     'src/renderer/hooks/useFeishuBot': 'export const useFeishuBot = () => ({status: "disconnected"});',
     'src/renderer/hooks/useWecomGroupNotificationSettings': 'export const useWecomGroupNotificationSettings = () => ({});',
     'src/renderer/hooks/useProjectPickerOptions': 'export const useProjectPickerOptions = () => [];',
@@ -65,7 +70,8 @@ export default {
     }
     // Issue #10224: the compact field still shows the original three lines; a long
     // prompt scrolls inside it, and the expand button above it opens a large editor.
-    const prompt = await page.locator('textarea').evaluate((el) => ({
+    const promptField = page.getByRole('textbox', { name: await ui.t('scheduler.editor.fields.prompt'), exact: true });
+    const prompt = await promptField.evaluate((el) => ({
       height: el.getBoundingClientRect().height, clientHeight: el.clientHeight, scrollHeight: el.scrollHeight,
     }));
     console.log(`prompt field: ${JSON.stringify(prompt)}`);
@@ -82,13 +88,13 @@ export default {
       // this control by 144px in a short window. Start measuring after the user
       // has scrolled the control into view, not before Playwright's auto-scroll.
       await choice.scrollIntoViewIfNeeded();
-      await choice.evaluate((element, triggerLabel) => {
+      await choice.evaluate((element, { triggerLabel, promptElement }) => {
         const frames = []; window.__triggerFrames = frames; window.__triggerFramesDone = false;
         const sample = () => {
           const box = document.querySelector('[role="dialog"]').getBoundingClientRect();
           const trigger = [...document.querySelectorAll('[role="radiogroup"]')]
             .find(el => el.getAttribute('aria-label') === triggerLabel).getBoundingClientRect();
-          const prompt = document.querySelector('textarea').getBoundingClientRect();
+          const prompt = promptElement.getBoundingClientRect();
           frames.push({y: box.y, height: box.height, triggerY: trigger.y, triggerX: trigger.x, promptY: prompt.y});
         };
         sample();
@@ -99,7 +105,7 @@ export default {
             else window.__triggerFramesDone = true;
           }; tick();
         }, {once: true});
-      }, await ui.t('scheduler.editor.trigger.label'));
+      }, { triggerLabel: await ui.t('scheduler.editor.trigger.label'), promptElement: await promptField.elementHandle() });
       await choice.click();
       await page.waitForFunction(() => window.__triggerFramesDone);
       const frames = await page.evaluate(() => window.__triggerFrames);
@@ -149,7 +155,7 @@ export default {
       const collapse = await ui.t('scheduler.editor.promptDialog.collapsePrompt');
       await page.getByRole('button', { name: collapse, exact: true }).click();
       await panel.waitFor({ state: 'detached' });
-      const back = await page.locator('textarea').evaluate((el) => ({ height: el.getBoundingClientRect().height }));
+      const back = await promptField.evaluate((el) => ({ height: el.getBoundingClientRect().height }));
       assert.ok(back.height <= 60, `Collapsing did not restore the compact field: ${JSON.stringify(back)}`);
       // Focus returns to the entry button instead of restarting at the top.
       assert.equal(await page.evaluate(() => document.activeElement?.textContent?.trim()), expand);

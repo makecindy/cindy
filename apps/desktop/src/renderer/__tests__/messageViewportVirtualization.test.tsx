@@ -111,6 +111,29 @@ afterEach(async () => {
   host.remove(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals();
 });
 describe('message viewport content virtualization', () => {
+  // #12504: ordinary commits and clicks caused synchronous browser layout.
+  // Count the browser API calls at the real viewport boundary in jsdom.
+  it('reuses the mounted window on an unchanged commit without reading layout', async () => {
+    await act(async () => root.render(<Fixture restore />));
+    await flushFrames();
+    const height = vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get');
+    height.mockClear();
+    await act(async () => root.render(<Fixture restore />));
+    expect(height).not.toHaveBeenCalled();
+    expect(row(40).querySelector('button')).not.toBeNull();
+  });
+
+  it('does not query native selection on an ordinary pointer or focus change', async () => {
+    vi.useFakeTimers();
+    await act(async () => root.render(<Fixture restore />));
+    const selection = vi.spyOn(document, 'getSelection');
+    await act(async () => {
+      row(40).dispatchEvent(new Event('pointerdown', { bubbles: true }));
+      row(40).dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+      vi.runOnlyPendingTimers();
+    });
+    expect(selection).not.toHaveBeenCalled();
+  });
   // A thread root lives before items and can resize without any row mutation.
   // Keep scrollTop fixed to model reading after a header layout change.
   it.each([{ height: 0, anchor: 42 }, { height: 720, anchor: 38 }])(

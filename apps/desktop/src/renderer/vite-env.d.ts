@@ -6579,6 +6579,7 @@ interface ElectronAPI {
     enableOrca: (
       leadSessionId: string,
       opts: {
+        modelGroup?: string;
         /** 'acp' = 第一个 Worker 放在插件引擎上(providerId 指出是哪一个)。 */
         workerAgent: 'claude-code' | 'codex' | 'pi' | 'acp';
         delegateTask?: string;

@@ -12798,6 +12798,20 @@
       }
     },
     "voiceMode": {
+      "realtime": {
+        "systemVoices": "系統音色",
+        "myVoices": "我的音色",
+        "refreshMyVoices": "重新整理我的音色",
+        "callMode": "通話方式",
+        "messageReadAloud": "訊息朗讀",
+        "callVoice": "即時通話音色",
+        "readAloudVoice": "朗讀音色",
+        "readAloudHint": "點選夥伴文字回覆下方的喇叭，即可以這個聲音朗讀。",
+        "resetReadAloud": "還原朗讀預設值",
+        "title": "即時語音",
+        "add": "新增即時語音模型",
+        "off": "使用語音合成"
+      },
       "openConversation": "開啟對話",
       "inCallWith": "正在與 {{name}} 通話",
       "showDetails": "展開通話記錄",
@@ -12819,7 +12833,7 @@
       "settingsTitle": "語音",
       "openSettings": "語音設定",
       "startConversation": "開始語音對話",
-      "settingsHint": "選擇這位夥伴使用的朗讀模型和音色。設定完成後，從輸入框開始語音對話。",
+      "settingsHint": "使用語音合成通話時，通話與訊息朗讀共用下方的模型和音色。",
       "previewNeedsChat": "與夥伴開始對話後可試聽。",
       "voiceId": "音色 ID",
       "manualVoice": "手動輸入音色 ID",
@@ -17863,6 +17877,7 @@
       "openWorkdirFailed": "開啟資料夾失敗"
     },
     "runs": {
+      "boundPluginEngineRecovery": "自動化未執行，因為繫結的任務使用插件引擎。請將任務切回內建引擎，或將自動化重新繫結到使用內建引擎的任務。",
       "queueWaitTimeoutRecovery": "排隊等待逾時，提示詞未傳送。目標任務閒置後可點擊「{{action}}」補跑。",
       "status": {
         "running": "執行中",

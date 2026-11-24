@@ -213,6 +213,8 @@ export interface PiTranslateContext {
   finalAssistantText: string;
   /** Latest assistant stop reason for classifying the settled turn outcome. */
   finalAssistantStopReason: string | null;
+  /** Narrow close-time evidence, independent of native agent_settled. */
+  replyPhase: 'delivered' | 'agent-ended' | 'threshold-compaction' | null;
   /**
    * Pi 会先用 message_end(stopReason=error) 报 provider 错误，之后仍可能自动重试。
    * 暂存到 agent_settled 再终态上报，避免一次可恢复错误提前收口整个 turn。
@@ -332,6 +334,7 @@ export function createPiTranslateContext(
     streamStopTokenByIndex: new Map(),
     finalAssistantText: '',
     finalAssistantStopReason: null,
+    replyPhase: null,
     turnWallClockStartedAt: 0,
     // Pi routes both verbatim-thinking and summary-thinking models: configure explicitly
     // from the active model/API, defaulting to verbatim when none is supplied.
@@ -903,6 +906,7 @@ function translatePiEventInternal(
 ): void {
   switch (event.type) {
     case 'agent_start': {
+      ctx.replyPhase = null;
       if (ctx.isStreaming && !ctx.turnSettled && !ctx.terminalAssistantErrorEmitted
           && ctx.pendingHostTurnStartToken === null) {
         ctx.pendingAssistantError = null;
@@ -960,9 +964,11 @@ function translatePiEventInternal(
     }
 
     case 'turn_start':
+      ctx.replyPhase = null;
       return;
 
     case 'message_start': {
+      ctx.replyPhase = null;
       // Pi also starts user prompts and tool results; only assistant messages are
       // model requests that queue a price tier and open generation timing.
       const role = (event.message as { role?: string } | undefined)?.role;
@@ -1060,6 +1066,8 @@ function translatePiEventInternal(
       if (!transientAssistantFailure && message.stopReason === 'stop') {
         ctx.finalAssistantText = fullText;
       }
+      ctx.replyPhase = !transientAssistantFailure && message.stopReason === 'stop' && fullText.trim()
+        ? 'delivered' : null;
       if (!transientAssistantFailure && fullText.length > 0) {
         // 覆盖为本 turn 最新一条有文本的 assistant 回复,agent_settled 作 done.result 上报。
         ctx.finalAssistantText = fullText;
@@ -1267,6 +1275,7 @@ function translatePiEventInternal(
     }
 
     case 'agent_end':
+      ctx.replyPhase = ctx.replyPhase === 'delivered' ? 'agent-ended' : null;
       // 可能跟 retry / compaction / queued follow-up;终态一律等 agent_settled。
       return;
 
@@ -1384,6 +1393,7 @@ function translatePiEventInternal(
     }
 
     case 'auto_retry_start': {
+      ctx.replyPhase = null;
       // The backoff wait is not generation time; the retried request's first block resumes.
       ctx.tokenSpeed.pause();
       // A provider retry may begin without a matching message_end for the
@@ -1510,6 +1520,8 @@ function translatePiEventInternal(
     }
 
     case 'compaction_start': {
+      ctx.replyPhase = event.reason === 'threshold' && ctx.replyPhase === 'agent-ended'
+        ? 'threshold-compaction' : null;
       // Idle manual compaction is background work, while native threshold and
       // overflow compaction remain inside Pi's active agent run.
       // Latch the scope at start because a new turn may begin before end arrives.
@@ -1518,6 +1530,7 @@ function translatePiEventInternal(
     }
 
     case 'compaction_end': {
+      ctx.replyPhase = null;
       const belongsToCurrentTurn = ctx.compactTurnGeneration === null
         || ctx.compactTurnGeneration === ctx.turnGeneration;
       ctx.compactTurnGeneration = null;

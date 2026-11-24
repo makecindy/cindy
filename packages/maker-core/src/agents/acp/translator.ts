@@ -57,7 +57,7 @@ export interface AcpUpdateTranslatorOptions {
 }
 
 export type AcpTurnOutcome =
-  | { stopReason: AcpStopReason; usage?: AcpTurnUsage }
+  | { stopReason: AcpStopReason; usage?: AcpTurnUsage; usageModel?: string }
   /** `signals`: structured failure fields (usage limit, sign-in, overload) the agent classified. */
   | { error: string; reason?: string; signals?: Record<string, unknown> };
 
@@ -256,6 +256,7 @@ export class AcpUpdateTranslator {
         stopReason: outcome.stopReason,
         // A cancelled turn still spent the tokens the agent reports for it.
         ...(outcome.usage ? { usage: outcome.usage } : {}),
+        ...(outcome.usageModel ? { usageModel: outcome.usageModel } : {}),
       },
     });
     return events;
