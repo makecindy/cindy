@@ -788,6 +788,8 @@ export function verifyMacContactsPermissions(appPath, { keychainAccessGroup, sig
   );
 }
 
+const OWNER_PROMPT_EXECUTABLE = 'cindy-owner-prompt';
+
 export function adhocSignMacApp(appPath, helperEntitlementsPath, mainEntitlementsPath, arch) {
   console.log('==> Ad-hoc signing macOS app for local packaged testing...');
   const signBase = '/usr/bin/codesign --force --options runtime --sign -';
@@ -802,6 +804,20 @@ export function adhocSignMacApp(appPath, helperEntitlementsPath, mainEntitlement
   if (fs.existsSync(resourceToolsDir)) {
     exec(`find "${resourceToolsDir}" -type f | while IFS= read -r f; do if file "$f" | grep -qE "Mach-O"; then ${signBase} "$f"; fi; done`);
     exec(`find "${resourceToolsDir}" -depth -type d -name "*.app" -exec ${signBase} "{}" \\;`);
+  }
+  // The owner's Touch ID control ships as its own bundle directly under Contents/ (so the
+  // helper's caller check still resolves the enclosing app). Sign the bundle, then keep a
+  // byte-identical copy of its executable at the resource path that check validates: signing
+  // the two separately changes the bytes, and the sealed-resource check is byte-exact.
+  const ownerPromptBundle = path.join(appPath, 'Contents', 'CindyOwnerPrompt.app');
+  if (fs.existsSync(ownerPromptBundle)) {
+    exec(`${signBase} "${ownerPromptBundle}"`);
+    if (fs.existsSync(resourceToolsDir)) {
+      fs.copyFileSync(
+        path.join(ownerPromptBundle, 'Contents', 'MacOS', OWNER_PROMPT_EXECUTABLE),
+        path.join(resourceToolsDir, 'remote-desktop', OWNER_PROMPT_EXECUTABLE),
+      );
+    }
   }
 
   exec(`find "${frameworksDir}" -type f | while IFS= read -r f; do if file "$f" | grep -qE "Mach-O"; then ${signBase} "$f"; fi; done`);
@@ -848,6 +864,21 @@ export function signMacAppWithIdentity(
     exec(`find "${resourceToolsDir}" -type f | while IFS= read -r f; do if file "$f" | grep -qE "Mach-O"; then ${signBase} "$f"; fi; done`);
     console.log('    Signing bundled resource app bundles...');
     exec(`find "${resourceToolsDir}" -depth -type d -name "*.app" -exec ${signBase} "{}" \\;`);
+  }
+
+  // 0c. 主人的 Touch ID 认证 bundle(随包发布在 Contents/ 下):必须单独签,且要在主 app 之前,
+  //     因为它内部的 helper 靠自身签名 + 外层 app 封印来通过调用方校验。签完把它的可执行文件
+  //     原样复制到资源路径——那是校验用的密封副本,两处字节必须完全一致(分开签会改字节)。
+  const ownerPromptBundle = path.join(appPath, 'Contents', 'CindyOwnerPrompt.app');
+  if (fs.existsSync(ownerPromptBundle)) {
+    console.log('    Signing the owner prompt bundle...');
+    exec(`${signBase} "${ownerPromptBundle}"`);
+    if (fs.existsSync(resourceToolsDir)) {
+      fs.copyFileSync(
+        path.join(ownerPromptBundle, 'Contents', 'MacOS', OWNER_PROMPT_EXECUTABLE),
+        path.join(resourceToolsDir, 'remote-desktop', OWNER_PROMPT_EXECUTABLE),
+      );
+    }
   }
 
   // 1. 全部 Mach-O(库、chrome_crashpad_handler、ShipIt 等)

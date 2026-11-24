@@ -10,7 +10,17 @@ import LocalAuthenticationEmbeddedUI
 
 #if !DESKTOP_INPUT_TEST
 // This guard precedes every entrypoint, including selection and permission UI.
-guard let inputCaller = DesktopInputCaller.authenticate() else { exit(77) }
+// The owner prompt ships as its own bundle (`Contents/CindyOwnerPrompt.app`) and keeps a
+// sealed, byte-identical copy of its executable at
+// `Resources/tools/remote-desktop/cindy-owner-prompt`, so it authenticates against that
+// resource instead of the input helper's (2026-11-24: signing the two separately changes
+// the bytes, and the sealed-resource check is byte-exact).
+let ownerPromptEntry =
+  CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--owner-prompt-app"
+let inputCaller =
+  DesktopInputCaller.authenticate()
+  ?? (ownerPromptEntry ? DesktopInputCaller.authenticate(resourceName: "cindy-owner-prompt") : nil)
+guard let inputCaller else { exit(77) }
 #endif
 
 // Both one-shot and persistent queries recheck the OS session on every read.
@@ -1155,6 +1165,7 @@ final class OwnerPromptPanel: NSPanel {
   override var canBecomeMain: Bool { false }
 }
 
+@available(macOS 12.0, *)
 func makeOwnerControlVisible() {
   let selector = NSSelectorFromString("isVisibleToUser")
   guard let method = class_getInstanceMethod(LAAuthenticationView.self, selector) else { return }
@@ -1163,6 +1174,8 @@ func makeOwnerControlVisible() {
   method_setImplementation(method, unsafeBitCast(alwaysVisible, to: IMP.self))
 }
 if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--owner-prompt-app" {
+  // The embedded control needs macOS 12; the packaged helper's deployment target is older.
+  guard #available(macOS 12.0, *) else { print("unavailable"); exit(0) }
   guard inputCaller.code() != nil, ownedConsoleSession() != nil else { print("unavailable"); exit(2) }
   if (CGSessionCopyCurrentDictionary() as? [String: Any])?["CGSSessionScreenIsLocked"] as? Bool ?? false {
     print("locked"); exit(0)

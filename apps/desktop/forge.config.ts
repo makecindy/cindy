@@ -1184,7 +1184,7 @@ function buildRemoteDesktopInput(platform: ForgePlatform, arch: ForgeArch): void
     // sits directly under Contents/ so the helper's own caller check (which walks five
     // levels up to find the enclosing app) still lands on Cindy.app; its executable is a
     // byte-identical copy of the sealed helper (2026-11-24 real-device test).
-    const ownerPromptBundle = path.join(destDir, '..', 'CindyOwnerPrompt.app');
+    const ownerPromptBundle = path.join(destDir, '..', '..', '..', 'CindyOwnerPrompt.app');
     const ownerPromptMacOS = path.join(ownerPromptBundle, 'Contents', 'MacOS');
     fs.mkdirSync(ownerPromptMacOS, { recursive: true });
     fs.copyFileSync(dest, path.join(ownerPromptMacOS, 'cindy-owner-prompt'));
