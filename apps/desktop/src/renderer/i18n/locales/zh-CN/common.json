@@ -3380,6 +3380,7 @@
       "description": "把其他 AI 编程工具里的任务接到 Cindy 接着做。只读取原记录，不会改动它们。",
       "rescan": "重新扫描",
       "allSources": "全部来源",
+      "sourceFilterAria": "来源",
       "search": "搜索任务或文件夹",
       "projectFilter": "只看 {{name}}",
       "clearProjectFilter": "显示全部项目",
@@ -5139,6 +5140,7 @@
       "formHint": "用户 ID 是纯数字；私聊 @userinfobot 可以查到自己的 ID。",
       "connect": "连接",
       "connectingAction": "连接中…",
+      "connectTimedOut": "连接超时，请重试",
       "errorCode": {
         "invalid-token": "Bot Token 无效或已被重置，请重新填写",
         "provider-api": "Telegram 服务返回错误，请稍后重试",
@@ -12706,6 +12708,7 @@
           "conflict": "这个机器人已经在这台电脑上用了：在 设置 → IM 机器人 里，或者在另一位伙伴那里。",
           "botUnavailable": "{{name}} 现在不可用，等 TA 恢复后再试。",
           "connectFailed": "没连上：{{reason}}",
+          "connectTimedOut": "连接超时，请重试。",
           "failed": "没能完成，请稍后再试。",
           "personalBotGone": "设置 → IM 机器人 里已经没有这个机器人了，请改为填写凭证。"
         },
@@ -15468,6 +15471,7 @@
       "prCheck_rate-limit": "GitHub 暂时限制了 {{device}} 的请求频率。已连续失败 {{failures}} 次，下次自动检查时间为 {{retry}}。",
       "prCheck_unknown": "{{device}} 上的 PR 检查失败，请查看运行详情。已连续失败 {{failures}} 次，下次自动检查时间为 {{retry}}。",
       "precheck": "自动检查暂时受阻。",
+      "preRunBlocked": "启动前检查未通过，本轮未开始。",
       "rateLimited": "自动检查暂时受阻：请求限流。",
       "pluginMissing": "自动检查暂时受阻：「{{name}}」插件未安装，装好后自动恢复。",
       "pluginMissingUnnamed": "自动检查暂时受阻：需要的插件未安装，装好后自动恢复。",
@@ -16388,7 +16392,13 @@
       "open": "打开任务「{{title}}」",
       "untitled": "未命名任务",
       "startedOne": "开了任务",
-      "handedToOne": "交给任务"
+      "handedToOne": "交给任务",
+      "status": {
+        "running": "运行中",
+        "needsAction": "待确认",
+        "error": "出错",
+        "idle": "空闲"
+      }
     },
     "botTaskLetter": {
       "replied": "回信",

@@ -3410,6 +3410,7 @@
       "description": "Sitzungen aus anderen KI-Programmierwerkzeugen in Cindy übernehmen und weiterarbeiten. Cindy liest die Originale nur und verändert sie nicht.",
       "rescan": "Erneut suchen",
       "allSources": "Alle Quellen",
+      "sourceFilterAria": "Quelle",
       "search": "Sitzungen oder Ordner suchen",
       "projectFilter": "Nur {{name}}",
       "clearProjectFilter": "Alle Projekte anzeigen",
@@ -5182,6 +5183,7 @@
       "formHint": "Die Benutzer-ID ist numerisch. Sende @userinfobot eine Direktnachricht, um deine ID herauszufinden.",
       "connect": "Verbinden",
       "connectingAction": "Verbindung wird hergestellt…",
+      "connectTimedOut": "Zeitüberschreitung bei der Verbindung. Versuch es erneut.",
       "errorCode": {
         "invalid-token": "Das Bot-Token ist ungültig oder wurde zurückgesetzt — gib es erneut ein.",
         "provider-api": "Telegram hat einen Fehler zurückgegeben — versuche es in Kürze erneut.",
@@ -12761,6 +12763,7 @@
           "conflict": "Dieser Bot ist auf diesem Computer bereits verbunden: unter Einstellungen → IM-Bots oder mit einem anderen Freund.",
           "botUnavailable": "{{name}} ist gerade nicht verfügbar. Versuche es erneut, sobald es wieder verfügbar ist.",
           "connectFailed": "Verbindung fehlgeschlagen: {{reason}}",
+          "connectTimedOut": "Zeitüberschreitung bei der Verbindung. Versuch es erneut.",
           "failed": "Vorgang fehlgeschlagen. Versuch es später erneut.",
           "personalBotGone": "Dieser Bot ist unter Einstellungen → IM-Bots nicht mehr eingerichtet. Gib stattdessen seine Zugangsdaten ein."
         },
@@ -15496,6 +15499,7 @@
       "prCheck_rate-limit": "GitHub begrenzt die Anfragen von {{device}}. Fehlversuche in Folge: {{failures}}. Nächste automatische Prüfung: {{retry}}.",
       "prCheck_unknown": "Die PR-Prüfung auf {{device}} ist fehlgeschlagen. Details stehen im Laufprotokoll. Fehlversuche in Folge: {{failures}}. Nächste automatische Prüfung: {{retry}}.",
       "precheck": "Automatische Prüfungen sind vorübergehend blockiert.",
+      "preRunBlocked": "Die Prüfung vor dem Start ist fehlgeschlagen. Dieser Lauf wurde nicht gestartet.",
       "rateLimited": "Automatische Prüfungen sind wegen eines Anfragelimits vorübergehend blockiert.",
       "pluginMissing": "Automatische Prüfungen sind blockiert: Das Plugin „{{name}}“ ist nicht installiert. Nach der Installation laufen sie automatisch weiter.",
       "pluginMissingUnnamed": "Automatische Prüfungen sind blockiert: Ein benötigtes Plugin ist nicht installiert. Nach der Installation laufen sie automatisch weiter.",
@@ -16462,7 +16466,13 @@
       "open": "Aufgabe „{{title}}“ öffnen",
       "untitled": "Unbenannte Aufgabe",
       "startedOne": "Gestartet",
-      "handedToOne": "Übergeben an"
+      "handedToOne": "Übergeben an",
+      "status": {
+        "running": "Läuft",
+        "needsAction": "Wartet auf dich",
+        "error": "Fehler",
+        "idle": "Inaktiv"
+      }
     },
     "botTaskLetter": {
       "replied": "hat geantwortet",

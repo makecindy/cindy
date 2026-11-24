@@ -3448,6 +3448,7 @@
       "description": "Traga sessões de outras ferramentas de programação com IA para o Cindy e continue trabalhando. O Cindy apenas lê os originais e nunca os altera.",
       "rescan": "Buscar novamente",
       "allSources": "Todas as origens",
+      "sourceFilterAria": "Origem",
       "search": "Buscar sessões ou pastas",
       "projectFilter": "Somente {{name}}",
       "clearProjectFilter": "Mostrar todos os projetos",
@@ -5240,6 +5241,7 @@
       "formHint": "O ID de usuário é numérico; envie uma mensagem direta ao @userinfobot para consultar seu ID.",
       "connect": "Conectar",
       "connectingAction": "Conectando…",
+      "connectTimedOut": "O tempo de conexão esgotou. Tente novamente.",
       "errorCode": {
         "invalid-token": "O token do bot é inválido ou foi redefinido — insira-o novamente",
         "provider-api": "O Telegram retornou um erro — tente novamente em instantes",
@@ -12863,6 +12865,7 @@
           "conflict": "Este bot já está conectado neste computador, em Configurações → Bots de mensagens ou em outro amigo.",
           "botUnavailable": "{{name}} está indisponível no momento. Tente novamente quando voltar.",
           "connectFailed": "Não foi possível conectar: {{reason}}",
+          "connectTimedOut": "O tempo de conexão esgotou. Tente novamente.",
           "failed": "Não foi possível concluir. Tente novamente mais tarde.",
           "personalBotGone": "Este bot não está mais configurado em Configurações → Bots de mensagens. Insira as credenciais dele."
         },
@@ -15636,6 +15639,7 @@
       "prCheck_rate-limit": "O GitHub limitou as solicitações de {{device}}. Falhas consecutivas: {{failures}}. Próxima verificação automática: {{retry}}.",
       "prCheck_unknown": "A verificação do PR falhou em {{device}}. Consulte os detalhes da execução. Falhas consecutivas: {{failures}}. Próxima verificação automática: {{retry}}.",
       "precheck": "As verificações automáticas estão temporariamente bloqueadas.",
+      "preRunBlocked": "A verificação prévia falhou. Esta execução não foi iniciada.",
       "rateLimited": "As verificações automáticas estão temporariamente bloqueadas por um limite de frequência de solicitações.",
       "pluginMissing": "As verificações automáticas estão bloqueadas: o plugin {{name}} não está instalado. Elas serão retomadas após a instalação.",
       "pluginMissingUnnamed": "As verificações automáticas estão bloqueadas: um plugin necessário não está instalado. Elas serão retomadas após a instalação.",
@@ -16615,7 +16619,13 @@
       "open": "Abrir a tarefa “{{title}}”",
       "untitled": "Tarefa sem título",
       "startedOne": "Iniciada",
-      "handedToOne": "Repassada a"
+      "handedToOne": "Repassada a",
+      "status": {
+        "running": "Em execução",
+        "needsAction": "Aguardando você",
+        "error": "Erro",
+        "idle": "Inativa"
+      }
     },
     "botTaskLetter": {
       "replied": "respondeu",

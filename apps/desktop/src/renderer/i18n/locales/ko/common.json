@@ -3380,6 +3380,7 @@
       "description": "다른 AI 코딩 도구의 세션을 Cindy로 가져와 이어서 작업하세요. 원본 기록은 읽기만 하고 변경하지 않습니다.",
       "rescan": "다시 스캔",
       "allSources": "모든 출처",
+      "sourceFilterAria": "출처",
       "search": "세션 또는 폴더 검색",
       "projectFilter": "{{name}}만 보기",
       "clearProjectFilter": "모든 프로젝트 보기",
@@ -5139,6 +5140,7 @@
       "formHint": "사용자 ID는 숫자입니다. @userinfobot에게 DM을 보내면 자신의 ID를 확인할 수 있습니다.",
       "connect": "연결",
       "connectingAction": "연결 중…",
+      "connectTimedOut": "연결 시간이 초과되었습니다. 다시 시도하세요.",
       "errorCode": {
         "invalid-token": "Bot Token이 유효하지 않거나 재발급되었습니다. 다시 입력하세요",
         "provider-api": "Telegram에서 오류를 반환했습니다. 잠시 후 다시 시도하세요",
@@ -12715,6 +12717,7 @@
           "conflict": "이 봇은 이미 이 컴퓨터에서 사용 중입니다 (설정 → IM 봇, 또는 다른 동반자).",
           "botUnavailable": "{{name}}은(는) 지금 사용할 수 없습니다. 복구된 뒤 다시 시도하세요.",
           "connectFailed": "연결하지 못했습니다: {{reason}}",
+          "connectTimedOut": "연결 시간이 초과되었습니다. 다시 시도하세요.",
           "failed": "완료하지 못했습니다. 잠시 후 다시 시도하세요.",
           "personalBotGone": "설정 → IM 봇에 이 봇이 더 이상 없습니다. 인증 정보를 입력하세요."
         },
@@ -15468,6 +15471,7 @@
       "prCheck_rate-limit": "GitHub가 {{device}}의 요청 빈도를 제한했습니다. 연속 실패 횟수는 {{failures}}회입니다. 다음 자동 확인 시간은 {{retry}}입니다.",
       "prCheck_unknown": "{{device}}에서 PR 확인에 실패했습니다. 실행 세부 정보를 확인하세요. 연속 실패 횟수는 {{failures}}회입니다. 다음 자동 확인 시간은 {{retry}}입니다.",
       "precheck": "자동 확인이 일시적으로 차단되었습니다.",
+      "preRunBlocked": "실행 전 검사에 실패해 이번 실행이 시작되지 않았습니다.",
       "rateLimited": "요청 한도 초과로 자동 확인이 일시적으로 차단되었습니다.",
       "pluginMissing": "자동 확인이 차단되었습니다: '{{name}}' 플러그인이 설치되어 있지 않습니다. 설치하면 자동으로 재개됩니다.",
       "pluginMissingUnnamed": "자동 확인이 차단되었습니다: 필요한 플러그인이 설치되어 있지 않습니다. 설치하면 자동으로 재개됩니다.",
@@ -16388,7 +16392,13 @@
       "open": "작업 “{{title}}” 열기",
       "untitled": "이름 없는 작업",
       "startedOne": "시작한 작업",
-      "handedToOne": "넘긴 작업"
+      "handedToOne": "넘긴 작업",
+      "status": {
+        "running": "실행 중",
+        "needsAction": "확인 대기 중",
+        "error": "오류",
+        "idle": "대기 중"
+      }
     },
     "botTaskLetter": {
       "replied": "회신",

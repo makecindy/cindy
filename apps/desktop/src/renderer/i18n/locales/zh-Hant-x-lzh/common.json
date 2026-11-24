@@ -3380,6 +3380,7 @@
       "description": "將他家 AI 程式設計工具之差事接入 Cindy，續而為之。唯讀原始記錄，不改分毫。",
       "rescan": "再察",
       "allSources": "諸源",
+      "sourceFilterAria": "源",
       "search": "尋差事或卷匣",
       "projectFilter": "唯覽 {{name}}",
       "clearProjectFilter": "示諸案",
@@ -5139,6 +5140,7 @@
       "formHint": "使用者 ID 為純數字；私聊 @userinfobot 可查己之 ID。",
       "connect": "連之",
       "connectingAction": "方連…",
+      "connectTimedOut": "連線逾時，請再試",
       "errorCode": {
         "invalid-token": "Bot Token 無效或已重置，請重填",
         "provider-api": "Telegram 服務回報謬誤，請稍後再試",
@@ -12715,6 +12717,7 @@
           "conflict": "此機器人已用於此機：或在 規制 → IM 機器人，或在另一同伴處。",
           "botUnavailable": "{{name}} 今不可用，待其復後再試。",
           "connectFailed": "連之未成：{{reason}}",
+          "connectTimedOut": "連線逾時，請再試。",
           "failed": "未竟，請稍後再試。",
           "personalBotGone": "規制 → IM 機器人 中已無此機器人，請改填憑證。"
         },
@@ -15459,6 +15462,7 @@
       "prCheck_rate-limit": "GitHub 暫限 {{device}} 之請。凡 {{failures}} 次未成，將於 {{retry}} 復檢。",
       "prCheck_unknown": "{{device}} 檢 PR 未成，詳見紀錄。凡 {{failures}} 次未成，將於 {{retry}} 復檢。",
       "precheck": "自動查驗暫受阻。",
+      "preRunBlocked": "行前查驗未過，此輪未啟。",
       "rateLimited": "自動查驗暫受阻：請求限流。",
       "pluginMissing": "自動查驗暫受阻：「{{name}}」法器未裝，裝畢自復。",
       "pluginMissingUnnamed": "自動查驗暫受阻：所需法器未裝，裝畢自復。",
@@ -16388,7 +16392,13 @@
       "open": "啟差事「{{title}}」",
       "untitled": "無名之差事",
       "startedOne": "已啟差事",
-      "handedToOne": "付與差事"
+      "handedToOne": "付與差事",
+      "status": {
+        "running": "方行",
+        "needsAction": "候君示下",
+        "error": "有誤",
+        "idle": "閑"
+      }
     },
     "botTaskLetter": {
       "replied": "覆書",

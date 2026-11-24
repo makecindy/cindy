@@ -3448,6 +3448,7 @@
       "description": "Importez dans Cindy des sessions provenant d’autres outils de programmation avec IA et poursuivez votre travail. Cindy lit les originaux sans jamais les modifier.",
       "rescan": "Rechercher à nouveau",
       "allSources": "Toutes les sources",
+      "sourceFilterAria": "Source",
       "search": "Rechercher des sessions ou des dossiers",
       "projectFilter": "{{name}} uniquement",
       "clearProjectFilter": "Afficher tous les projets",
@@ -5240,6 +5241,7 @@
       "formHint": "L'identifiant utilisateur est numérique ; envoyez un message privé à @userinfobot pour connaître le vôtre.",
       "connect": "Connecter",
       "connectingAction": "Connexion…",
+      "connectTimedOut": "Délai de connexion dépassé. Réessayez.",
       "errorCode": {
         "invalid-token": "Le jeton du bot est invalide ou a été réinitialisé : saisissez-le à nouveau",
         "provider-api": "Telegram a renvoyé une erreur : réessayez dans un instant",
@@ -12863,6 +12865,7 @@
           "conflict": "Ce bot est déjà connecté sur cet ordinateur, dans Paramètres → Bots de messagerie ou sur un autre ami.",
           "botUnavailable": "{{name}} n'est pas disponible pour le moment. Réessayez lorsqu'il sera de retour.",
           "connectFailed": "Connexion impossible : {{reason}}",
+          "connectTimedOut": "Délai de connexion dépassé. Réessayez.",
           "failed": "Impossible de terminer. Réessayez plus tard.",
           "personalBotGone": "Ce bot n'est plus configuré dans Paramètres → Bots de messagerie. Saisissez plutôt ses identifiants."
         },
@@ -15636,6 +15639,7 @@
       "prCheck_rate-limit": "GitHub limite les requêtes de {{device}}. Échecs consécutifs : {{failures}}. Prochaine vérification automatique : {{retry}}.",
       "prCheck_unknown": "La vérification de la PR a échoué sur {{device}}. Consultez les détails de l’exécution. Échecs consécutifs : {{failures}}. Prochaine vérification automatique : {{retry}}.",
       "precheck": "Les vérifications automatiques sont temporairement bloquées.",
+      "preRunBlocked": "La vérification préalable a échoué. Cette exécution n’a pas démarré.",
       "rateLimited": "Les vérifications automatiques sont temporairement bloquées par une limite de débit des requêtes.",
       "pluginMissing": "Les vérifications automatiques sont bloquées : le plugin {{name}} n'est pas installé. Elles reprendront une fois le plugin installé.",
       "pluginMissingUnnamed": "Les vérifications automatiques sont bloquées : un plugin requis n'est pas installé. Elles reprendront une fois le plugin installé.",
@@ -16615,7 +16619,13 @@
       "open": "Ouvrir la tâche « {{title}} »",
       "untitled": "Tâche sans titre",
       "startedOne": "Lancée",
-      "handedToOne": "Confiée à"
+      "handedToOne": "Confiée à",
+      "status": {
+        "running": "En cours d'exécution",
+        "needsAction": "Attend votre action",
+        "error": "Erreur",
+        "idle": "Inactive"
+      }
     },
     "botTaskLetter": {
       "replied": "a répondu",
