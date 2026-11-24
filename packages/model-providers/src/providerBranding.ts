@@ -15,6 +15,8 @@ export { CINDY_MARK_TRANSFORM, CINDY_MARK_PATH, CINDY_MARK_EARRING_PATH, CINDY_M
 
 // Additional supplier marks: Lobe Icons 5.14.0 (MIT; included in THIRD-PARTY-NOTICES).
 export const PROVIDER_LOGO_PATHS = {
+  // Official foreground mark, scaled to 24px: https://tokenrhythm.studio/figma/current/brand-logo.svg
+  tokenrhythm: 'M1.2534 2.7157L13.2616 2.7159C15.4348 2.716 17.6805 2.7443 19.8491 2.7019C18.3338 3.9625 16.4973 5.6829 15.0229 7.0278C14.3355 7.0688 13.3613 7.0419 12.653 7.0421C11.3395 7.0473 10.026 7.0437 8.7126 7.0313C9.5372 7.7643 10.8343 9.1471 11.6659 9.9802L17.6277 15.95L21.3423 19.6674C21.5662 19.8915 22.6482 20.9445 22.7467 21.116L22.6868 21.1344C20.6776 21.0672 18.5953 21.1261 16.5944 21.0364L10.0155 14.4541C8.5548 12.9925 7.0209 11.4983 5.5908 10.0129L5.5946 17.1219C4.1789 18.5055 2.6912 19.8877 1.2523 21.2541L1.2534 2.7157Z',
   // Lobe Icons Spark Mono (MIT), commit 55746b0b082258211121c70bd26e6878fd3bd292.
   'iflytek-maas': 'M11.615 0l6.237 6.107c2.382 2.338 2.823 3.743 3.161 6.15-1.197-1.732-1.776-2.02-4.504-2.772C12.48 8.374 11.095 5.933 11.615 0z M9.32 2.122C4.771 6.367 2 9.182 2 13.08c0 5.76 4.288 9.788 9.745 9.918 5.457.13 9.441-5.284 9.095-8.403-.347-3.118-4.418-3.81-4.418-3.81 1.69 3.16-.13 8.098-4.894 8.098-5.154 0-6.8-6.02-4.2-9.008.82 1.617 1.879 2.563 2.674 3.273.717.64 1.219 1.09 1.136 1.664-.173 1.213-1.385.866-1.385.866.346.607 3.6 1.473 4.59-1.342.613-1.741-.423-2.789-1.714-4.096-1.632-1.651-3.672-3.717-3.31-8.118z',
   // Open Design's Apache-2.0 brand-icon.svg, scaled from 82px to 24px.
@@ -108,6 +110,7 @@ export type ProviderLogoRouting = Readonly<
 
 /** Bundled regional presets share a brand and never infer it from display names. */
 const PROVIDER_LOGO_KIND_BY_ID: Readonly<Record<string, ProviderLogoKind>> = {
+  tokenrhythm: 'tokenrhythm',
   'iflytek-maas': 'iflytek-maas',
   'open-design': 'open-design',
   hinoki: 'hinoki',
@@ -194,6 +197,7 @@ const PROVIDER_LOGO_KIND_BY_ID: Readonly<Record<string, ProviderLogoKind>> = {
 
 /** Renamed providers retain stable upstream hosts, matched only on DNS boundaries. */
 const PROVIDER_LOGO_KIND_BY_HOST: readonly (readonly [string, ProviderLogoKind])[] = [
+  ['tokenrhythm.studio', 'tokenrhythm'],
   ['maas-api.cn-huabei-1.xf-yun.com', 'iflytek-maas'],
   ['amr-link.open-design.ai', 'open-design'],
   ['inference.hinoki.security', 'hinoki'],

@@ -19,10 +19,11 @@ import { nativeToolMediaFields } from '@cindy/maker-shared/tool-process-media';
  */
 
 import { randomUUID } from 'node:crypto';
+import { PI_NATIVE_SUBAGENT_DISPLAY_NAME } from './session-tree.js';
 import { parseMessageToolUse } from '@cindy/maker-shared/message-normalize';
 import type { StartSessionOptions } from '../base-agent.js';
 import type { Logger } from '../../interfaces/logger.js';
-import { PI_SUBAGENT_TOOL_NAME, subagentSpawnResultIndicatesRunning } from '@cindy/maker-shared/agent-task';
+import { PI_SUBAGENT_RUNTIME_TOOL_NAME, PI_SUBAGENT_TOOL_NAME, subagentSpawnResultIndicatesRunning } from '@cindy/maker-shared/agent-task';
 import {
   extractNonSecretErrorSignals,
   redactSensitiveText,
@@ -99,7 +100,7 @@ interface PiPendingAssistantError {
   message: string;
   sdkError: string;
   piCacheCompatibility?: import('./cache-compatibility.js').PiCacheCompatibility;
-  errorStatus?: NonSecretErrorSignals['errorStatus'];
+  errorStatus?: NonSecretErrorSignals['errorStatus'] | 400;
   usageLimit?: true;
   reason?: typeof CONTEXT_OVERFLOW_REASON | typeof UPSTREAM_STREAM_INTERRUPTED_REASON | typeof PI_GATEWAY_DROP_REASON | typeof UNSUPPORTED_REQUEST_OPTION_REASON;
 }
@@ -754,13 +755,29 @@ function isPiAbortedRequest(error: string): boolean {
   return /^Request was aborted[.!]?$/i.test(error.trim());
 }
 
+/** OpenAI-compatible gateways can wrap the upstream JSON error in a JSON string. */
+function isPiInvalidRequestEnvelope(rawError: string): boolean {
+  if (!rawError.startsWith('400:')) return false;
+  try {
+    const body = JSON.parse(rawError.slice(4));
+    if (body?.type === 'invalid_request_error') return true;
+    const upstream = typeof body?.message === 'string' && !body.error
+      ? JSON.parse(body.message)
+      : body;
+    return upstream?.error?.type === 'invalid_request_error';
+  } catch {
+    return false;
+  }
+}
+
 function piAssistantErrorOf(rawError: string): PiPendingAssistantError {
   const signals = extractNonSecretErrorSignals(rawError);
+  const errorStatus = signals.errorStatus ?? (isPiInvalidRequestEnvelope(rawError) ? 400 : undefined);
   const redactedError = redactSensitiveText(rawError);
   return {
     message: redactedError,
     sdkError: redactedError,
-    ...(signals.errorStatus !== undefined ? { errorStatus: signals.errorStatus } : {}),
+    ...(errorStatus !== undefined ? { errorStatus } : {}),
     ...(signals.usageLimit ? { usageLimit: true } : {}),
     ...(isContextOverflowErrorMessage(redactedError)
       ? { reason: CONTEXT_OVERFLOW_REASON }
@@ -1093,13 +1110,16 @@ function translatePiEventInternal(
           toolUseId,
           ...parseMessageToolUse({
             role: 'tool_use',
-            content: { toolName, input: toolArgs },
+            content: {
+              toolName: toolName === PI_SUBAGENT_TOOL_NAME ? PI_NATIVE_SUBAGENT_DISPLAY_NAME : toolName,
+              input: toolArgs,
+            },
             toolUseId,
           }),
         },
         source: 'pi',
       });
-      if (toolName === PI_SUBAGENT_TOOL_NAME && toolUseId && (toolArgs.action === undefined || toolArgs.action === 'run')) {
+      if (toolName === PI_SUBAGENT_RUNTIME_TOOL_NAME && toolUseId && (toolArgs.action === undefined || toolArgs.action === 'run')) {
         const rawTitle = toolArgs.title;
         const taskFallback = typeof toolArgs.task === 'string' && toolArgs.task.trim()
           ? toolArgs.task.trim().replace(/\s+/g, ' ').slice(0, 120)
@@ -1381,9 +1401,10 @@ function translatePiEventInternal(
         });
         return;
       }
-      // 网络 / 超时 / Responses 半截流：复用 Desktop 已有的 Reconnecting N/M 进行态，
+      // 网络 / 超时 / 半截流：复用 Desktop 已有的 Reconnecting N/M 进行态，
       // 不要套 `(auto-retry N/M)`——那条跨端协议在手机上只表示过载。
-      if (isNetworkishErrorMessage(rawMessage)) {
+      // Chat Completions 的 EOF 文案只在原生重试事件内认领，保持终态和 Host 续跑判定。
+      if (isNetworkishErrorMessage(rawMessage) || sdkError?.trim() === 'Stream ended without finish_reason') {
         queue.push({
           type: 'error',
           data: {

@@ -184,6 +184,8 @@ export interface ConnectionStats {
   connectionIdsRetired: number;
   connectionIdPackets: number;
   connectionIdRetransmissions: number;
+  /** 发出的包里已被对端确认的累计字节数。旧核心不提供时为零。 */
+  acknowledgedBytes: number;
 }
 
 export interface EndpointStats {
@@ -620,11 +622,12 @@ export class Connection extends EventEmitter {
         fallbackProbes: v[14],
         alternatesKept: v[15],
         cookiesReceived: v[16],
-          connectionIdRotations: v[17],
-          connectionIdExhaustions: v[18],
-          connectionIdsRetired: v[19],
-          connectionIdPackets: v[20],
-          connectionIdRetransmissions: v[21],
+        connectionIdRotations: v[17],
+        connectionIdExhaustions: v[18],
+        connectionIdsRetired: v[19],
+        connectionIdPackets: v[20],
+        connectionIdRetransmissions: v[21],
+        acknowledgedBytes: v[22] ?? 0,
       };
     });
   }

@@ -18901,6 +18901,8 @@ describe('CodexAgent MCP thread context hooks', () => {
     if (scenario === 'user') expect(JSON.stringify(steers)).toContain('User denied this tool call via Cindy');
     if (scenario === 'system') {
       expect(JSON.stringify(steers)).toContain('Cindy could not approve');
+      // Native Codex calls every decline "user rejected"; the steer must say nobody answered in time.
+      expect(JSON.stringify(steers)).toContain('the user did not reject it');
       expect(JSON.stringify(steers)).not.toContain('User denied');
     }
     expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(1);
@@ -36494,6 +36496,23 @@ describe('CodexAgent custom provider context window override', () => {
     // would also overwrite the previous model during native downshift compaction.
     expect(params.config?.model_context_window).toBeUndefined();
     expect(params.config?.model_auto_compact_token_limit).toBeUndefined();
+    await handle.close();
+  });
+
+  // #12423 unit: two connections share a model ID and window but carry different
+  // native catalog metadata. Exercise the public session model-switch gate.
+  it('rebuilds the local catalog when the same model and budget move to another connection', async () => {
+    const agent = new CodexAgent(createDeps({}, {
+      resolveCodexThreadContextWindow: () => 272_000,
+      needsCodexFastCatalog: providerId => providerId === 'cprov-openai',
+    }));
+    installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'connection-scoped-catalog', model: 'gpt-6.2-sol',
+      providerId: 'cprov-openai', workingDir: '/repo',
+    });
+    expect(await handle.requiresModelSwitchRebuild?.('gpt-6.2-sol', { providerId: 'cprov-openai' })).toBe(false);
+    expect(await handle.requiresModelSwitchRebuild?.('gpt-6.2-sol', { providerId: 'cprov-relay' })).toBe(true);
     await handle.close();
   });
 

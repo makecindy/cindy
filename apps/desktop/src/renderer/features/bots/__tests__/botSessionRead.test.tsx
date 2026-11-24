@@ -14,16 +14,26 @@ const mocks = vi.hoisted(() => ({
   params: { botId: 'bot-1', sessionId: 'session-1' } as Record<string, string | undefined>,
   demoted: [] as string[],
   cached: [] as unknown[],
+  unread: {} as Record<string, number>,
+  locationState: null as unknown,
+  redirectTo: [] as string[],
 }));
-vi.mock('../botStore', () => ({ useBotProfiles: () => mocks.cached, getBotProfiles: () => mocks.cached }));
+vi.mock('../botStore', () => ({
+  useBotProfiles: () => mocks.cached,
+  getBotProfiles: () => mocks.cached,
+  // A loaded roster stays usable while refreshes are queued; the gate must not wait on them.
+  ensureBotProfilesLoaded: () => new Promise(() => {}),
+  hasLoadedBotProfiles: () => true,
+  getBotUnreadCounts: () => mocks.unread,
+}));
 vi.mock('../companionCloudStore', () => ({ useCompanionCloud: () => ({ enabled: false, selfDeviceId: null, humanActorId: null, actors: [], demotedBotIds: mocks.demoted }) }));
 vi.mock('../CompanionShadowBanner', () => ({ CompanionShadowBanner: ({ botId }: { botId: string }) => <div data-testid="shadow-banner">{botId}</div> }));
 
 vi.mock('react-router-dom', () => ({
   useNavigate: () => mocks.navigate,
   useParams: () => mocks.params,
-  useLocation: () => ({ search: '', state: null }),
-  Navigate: () => <div data-testid="original-task" />,
+  useLocation: () => ({ search: '', state: mocks.locationState }),
+  Navigate: ({ to }: { to: string }) => { mocks.redirectTo.push(to); return <div data-testid="original-task" />; },
 }));
 // The private-chat topic host belongs to the chat surface these tests isolate.
 vi.mock('../BotDmThreadHost', () => ({ BotDmThreadHost: ({ children }: { children: import('react').ReactNode }) => <>{children}</> }));
@@ -45,7 +55,7 @@ import {
 
 let messageListeners: Array<(payload: unknown) => void> = [];
 
-function installElectronApi(bot: unknown, listedBot: unknown = bot): void {
+function installElectronApi(bot: unknown): void {
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
     writable: true,
@@ -53,7 +63,7 @@ function installElectronApi(bot: unknown, listedBot: unknown = bot): void {
       localDb: {
         bots: {
           get: vi.fn(async () => bot),
-          list: vi.fn(async () => [listedBot]),
+          list: vi.fn(async () => [bot]),
         },
         messages: {
           onCreated: (cb: (payload: unknown) => void) => {
@@ -87,6 +97,9 @@ beforeEach(() => {
   mocks.params = { botId: 'bot-1', sessionId: 'session-1' };
   mocks.demoted = [];
   mocks.cached = [];
+  mocks.unread = {};
+  mocks.locationState = null;
+  mocks.redirectTo = [];
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(10_000);
   installElectronApi(readyBot);
@@ -125,9 +138,12 @@ describe('Bot conversation read position', () => {
   });
   it('preserves the entry boundary and ignores message arrival without a viewport receipt', async () => {
     markBotRead('bot-1', 5_000);
-    installElectronApi(readyBot, { ...readyBot, unreadCount: 2 });
+    // The roster's unread count (the sidebar badge source) decides the boundary; opening
+    // the chat no longer re-reads the whole roster for this one number.
+    mocks.unread = { 'bot-1': 2 };
     const view = render(<BotSessionView />);
     await waitFor(() => expect(view.getByTestId('chat').dataset.unreadBoundary).toBe('5000'));
+    expect(window.electronAPI.localDb.bots.list).not.toHaveBeenCalled();
     act(() => messageListeners.forEach(listener => listener({ sessionId: 'session-1' })));
     expect(getBotLastReadAt('bot-1')).toBe(5_000);
     act(() => mocks.read?.(7_000));
@@ -139,9 +155,25 @@ describe('Bot conversation read position', () => {
     installElectronApi({ ...readyBot, sessions: [{ id: 'session-1', kind: 'chat', role: 'history', status: 'active' }] });
     const view = render(<BotSessionView />);
     await waitFor(() => expect(view.getByTestId('original-task')).toBeTruthy());
+    // Without the sidebar's direct-entry state the old URL still opens that exact task.
+    expect(mocks.redirectTo.at(-1)).toContain('session-1');
     expect(view.queryByTestId('chat')).toBeNull();
     expect(mocks.read).toBeUndefined();
     expect(getBotLastReadAt('bot-1')).toBe(5_000);
+  });
+
+  // The sidebar now skips /bots/:botId when the roster shows a healthy main chat
+  // (cindy-bots-runtime §3.1: a lost or deleted main chat must still reach repair).
+  // Unit: a direct-entry route whose fresh read no longer has that main chat.
+  it.each([
+    ['the main chat was deleted', { ...readyBot, sessions: [] }],
+    ['the main chat was replaced', { ...readyBot, sessions: [{ id: 'session-2', kind: 'chat', role: 'canonical', status: 'active' }] }],
+  ])('hands a sidebar direct entry back to the Bot page when %s', async (_case, freshBot) => {
+    mocks.locationState = { botDirectEntry: true };
+    installElectronApi(freshBot);
+    const view = render(<BotSessionView />);
+    await waitFor(() => expect(view.getByTestId('original-task')).toBeTruthy());
+    expect(mocks.redirectTo.at(-1)).toBe('/bots/bot-1');
   });
 
   it('does not mark anything read when the Bot task cannot be opened', async () => {

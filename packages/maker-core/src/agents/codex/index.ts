@@ -138,6 +138,7 @@ import {
   type AutoReviewUserIntent,
   isSystemPermissionDenialReason,
   formatPermissionDenial,
+  isPermissionConfirmationTimeoutReason,
   resolveAutoReviewDecision,
   withAutoReviewContext,
   toolAutoReviewAction,
@@ -3200,6 +3201,9 @@ assertRouteCurrent();
                 : {}),
               ...(hostPurpose ? { hostPurpose } : {}),
               ...(nativeStorageOnly ? { nativeStorageOnly } : {}),
+              ...(hostPurpose === 'review' && customContextModel
+                ? { customContextModel, customContextProviderId }
+                : {}),
               ...(hostPurpose === 'custom-context'
                 ? {
                     customContextModel,
@@ -5294,14 +5298,20 @@ assertRouteCurrent();
     let initialCustomContextWindow = !reviewMode
       ? mutableContextWindowBudget ?? await resolveCodexThreadContextWindow?.(opts.providerId, opts.model) ?? null
       : null;
+    // A route-specific Fast declaration cannot follow the model to another connection.
     const customContextCatalogIdentity = (
+      providerId: string | null | undefined,
       model: string,
       contextWindow: number | null,
     ): string | null =>
       typeof contextWindow === 'number' && Number.isFinite(contextWindow) && contextWindow > 0
-        ? `${model}\0${Math.floor(contextWindow)}`
+        ? JSON.stringify([
+          model, Math.floor(contextWindow),
+          !opts.remoteHostId && this.deps.needsCodexFastCatalog?.(providerId, model) ? providerId ?? '' : null,
+        ])
         : null;
     let initialCustomContextCatalogIdentity = customContextCatalogIdentity(
+      opts.providerId,
       opts.model,
       initialCustomContextWindow,
     );
@@ -5321,7 +5331,7 @@ assertRouteCurrent();
       const contextWindow = reviewMode
         ? null
         : nextBudget ?? await resolveCodexThreadContextWindow?.(providerId, newModel) ?? null;
-      return customContextCatalogIdentity(newModel, contextWindow);
+      return customContextCatalogIdentity(providerId, newModel, contextWindow);
     };
     const modelSwitchRequiresRebuild = async (
       newModel: string,
@@ -5411,7 +5421,12 @@ assertRouteCurrent();
         ...(localAuthPolicy === 'isolated' ? { localAuthPolicy } : {}),
         ...(guestCodexHome && guestProviderId ? { deviceHostedGuestProviderId: guestProviderId, deviceHostedGuestSessionId: sid, deviceHostedGuestModelIds: hosted?.guestProvider?.modelIds } : {}),
         ...(reviewMode
-          ? { hostPurpose: 'review' as const }
+          ? {
+              hostPurpose: 'review' as const,
+              ...(opts.fastMode === true && this.deps.needsCodexFastCatalog?.(opts.providerId, opts.model)
+                ? { customContextModel: opts.model, customContextProviderId: opts.providerId }
+                : {}),
+            }
           : usesCustomContextHost
             ? {
                 hostPurpose: 'custom-context' as const,
@@ -5438,7 +5453,7 @@ assertRouteCurrent();
           credentialMode = requestedCredentialMode ?? (localAuthPolicy === 'isolated' ? 'provider-oauth' : undefined);
           initialCustomContextWindow = !reviewMode
             ? await resolveCodexThreadContextWindow?.(opts.providerId, opts.model) ?? null : null;
-          initialCustomContextCatalogIdentity = customContextCatalogIdentity(opts.model, initialCustomContextWindow);
+          initialCustomContextCatalogIdentity = customContextCatalogIdentity(opts.providerId, opts.model, initialCustomContextWindow);
           usesCustomContextHost = initialCustomContextCatalogIdentity !== null;
           currentHostKey = resolveSessionHostKey();
         }
@@ -8661,8 +8676,7 @@ assertRouteCurrent();
           policyCause?: string,
         ) => {
           if (kind !== 'mcpServerElicitation') return;
-          const timedOut = source === 'system' && isSystemPermissionDenialReason(reason) &&
-            (reason === 'timeout' || reason?.endsWith('_timeout'));
+          const timedOut = source === 'system' && isPermissionConfirmationTimeoutReason(reason);
           const code = source === 'auto-review' ? 'MCP_APPROVAL_AUTO_BLOCKED'
             : timedOut ? 'MCP_APPROVAL_CONFIRMATION_TIMEOUT' : 'MCP_APPROVAL_CONFIRMATION_UNAVAILABLE';
           // IDs and a closed set of causes only: no arguments, credentials, or
@@ -10190,6 +10204,7 @@ assertRouteCurrent();
       // inner action。查询继续静默，高风险 action 逐次确认且不得持久化授权。
       const approvalPolicy = mcpToolApprovalPolicy(params);
       const policyPermissionInput = mcpElicitationPermissionInput(params);
+      const reviewEvidence = this.deps.getMcpToolApprovalEvidence?.(mcpToolApprovalContext(params));
       const turnPolicyForcePrompt = forceTurnConfirmation(
         `mcp:${params.serverName}`,
         policyPermissionInput,
@@ -10231,7 +10246,8 @@ assertRouteCurrent();
           // against the review budget (see mcpToolReviewAction).
           autoReviewAction: policyPermissionInput.toolParams === undefined
             ? { kind: 'other' as const, description: undefined }
-            : mcpToolReviewAction(`mcp:${params.serverName}`, policyPermissionInput),
+            : mcpToolReviewAction(`mcp:${params.serverName}`, reviewEvidence === undefined
+              ? policyPermissionInput : { ...policyPermissionInput, toolParams: reviewEvidence }),
           ...(toolUseId ? { itemId: toolUseId } : {}),
         },
       );

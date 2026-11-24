@@ -59,7 +59,8 @@ function ProviderRunLocationPicker({
         label={t('settings.providers.detail.runLocation.label')}
         value={location}
         truncateOptions
-        className="-my-1 h-6 w-fit max-w-[200px] gap-1 rounded-lg px-1.5 text-13"
+        size="inline"
+        className="-my-1 max-w-[200px] text-13"
         contentClassName="w-72 max-w-[var(--radix-select-content-available-width)]"
         groups={[{
           label: hint,

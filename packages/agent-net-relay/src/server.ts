@@ -14,7 +14,7 @@ import {
   guestRequestPath, delegationPrincipalMatches, delegationEndpointCertificate, isAgentNetStunHost,
 } from '@cindy/agent-net-protocol';
 import { sha256, verifySignature, verifyCertificate, verifyDelegation, verifyJoinRequest, verifyRequestProof, verifyRequestDigestProof, verifyTenantJoinRequest } from './identity.js';
-import { Store, type NetworkRecord, type RelayStore } from './store.js';
+import { Store, type DeviceRecord, type NetworkRecord, type RelayStore } from './store.js';
 import { ClusterStore, RelayStateUnavailableError, type RelayStoreChange } from './clusterStore.js';
 import { CLUSTER_PATH, checkClusterOptions, clusterOwner, createClusterRouter, routingNetwork, type RelayClusterMember, type RelayClusterOptions } from './cluster.js';
 import type { SharingState } from '@cindy/device-link-sharing/repositories';
@@ -46,7 +46,7 @@ const identifier = (value: unknown): string => { const result = string(value); r
 const name = (value: unknown): string => string(value, 64).trim() || fail(400, 'BAD_REQUEST');
 
 export interface Bootstrap { networkId: string; name: string; rootPublicKey: string; ownerCertificate: DeviceCertificate; }
-export interface Enrollment { networkId: string; name: string; rootPublicKey: string; certificate: DeviceCertificate; deviceName: string; }
+export interface Enrollment { networkId: string; name: string; rootPublicKey: string; certificate: DeviceCertificate; deviceName: string; issueWithSerial?: (serial: string) => DeviceCertificate; }
 export interface RelayLogger {
   info(fields: Record<string, unknown>, message: string): void;
   warn(fields: Record<string, unknown>, message: string): void;
@@ -359,26 +359,34 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     if (!verifyCertificate(n.rootPublicKey, c, now()) || c.subject !== n.subject) return fail(401, 'CERTIFICATE_INVALID');
     const existing = memberRecord(n, c.deviceId);
     if (existing.revokedAt !== null || c.issuedAt < (existing.notBefore ?? 0) || existing.certificate.signingKey !== c.signingKey
-      || existing.certificate.transportKey !== c.transportKey || existing.certificate.role !== c.role) return fail(401, 'DEVICE_REVOKED');
+      || existing.certificate.transportKey !== c.transportKey || existing.certificate.role !== c.role || !sameMembership(existing, c)) return fail(401, 'DEVICE_REVOKED');
     if (!validProof(c.signingKey, envelope.proof)) return fail(401, 'PROOF_INVALID');
     await remember(n.id, c.deviceId, envelope.proof.nonce);
     if (c.issuedAt > existing.certificate.issuedAt) await store.transaction((state) => {
       const currentNetwork = own(state.networks, n.id);
       const current = currentNetwork && own(currentNetwork.devices, c.deviceId);
-      if (!current || current.revokedAt !== null || current.certificate.signingKey !== c.signingKey) return fail(401, 'DEVICE_REVOKED');
-      current.certificate = c;
+      if (!current || current.revokedAt !== null || current.certificate.signingKey !== c.signingKey
+        || !sameMembership(current, c)) return fail(401, 'DEVICE_REVOKED');
+      if (c.issuedAt > current.certificate.issuedAt) current.certificate = c;
     });
     return { networkId: n.id, deviceId: c.deviceId, certificate: c };
   }
+  // Existing serials are UUIDs. After rejoin, the signed serial carries a new membership generation.
+  const certificateGeneration = (certificate: DeviceCertificate): string | undefined =>
+    /^rejoin-([a-f0-9]{32})\./.exec(certificate.serial)?.[1];
+  const sameMembership = (current: DeviceRecord, incoming: DeviceCertificate): boolean =>
+    current.membershipGeneration === certificateGeneration(incoming);
+
   function usableDelegation(n: NetworkRecord, d: Delegation): boolean {
     const issuer = own(n.devices, d.hostDeviceId);
     return d.expiresAt > now() && !!issuer && issuer.revokedAt === null && d.issuerCertificate.issuedAt >= (issuer.notBefore ?? 0)
-      && issuer.certificate.signingKey === d.issuerCertificate.signingKey && (!sharing || sharing.authorized(d));
+      && issuer.certificate.signingKey === d.issuerCertificate.signingKey && sameMembership(issuer, d.issuerCertificate) && (!sharing || sharing.authorized(d));
   }
   function endpointUsable(n: NetworkRecord, d: Delegation, deviceId: string): boolean {
     const c = delegationEndpointCertificate(d, deviceId, now()), member = own(n.devices, deviceId);
     return !!c && !!member && member.revokedAt === null && c.issuedAt >= (member.notBefore ?? 0)
-      && c.signingKey === member.certificate.signingKey && c.transportKey === member.certificate.transportKey;
+      && c.signingKey === member.certificate.signingKey && c.transportKey === member.certificate.transportKey
+      && sameMembership(member, c);
   }
   function active(principal: Principal): boolean {
     try {
@@ -393,7 +401,7 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
       }
       const c = principal.certificate!;
       const current = memberRecord(n, principal.deviceId);
-      return c.expiresAt > now() && c.issuedAt >= (current.notBefore ?? 0) && current.revokedAt === null && current.certificate.signingKey === c.signingKey && current.certificate.transportKey === c.transportKey;
+      return c.expiresAt > now() && c.issuedAt >= (current.notBefore ?? 0) && current.revokedAt === null && current.certificate.signingKey === c.signingKey && current.certificate.transportKey === c.transportKey && sameMembership(current, c);
     } catch { return false; }
   }
   const requireOwner = (p: Principal) => p.certificate?.role === 'owner' ? undefined : fail(403, 'OWNER_REQUIRED');
@@ -659,18 +667,36 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     if (url.pathname === API + '/enroll' && method === 'POST') {
       if (!options.enroll || mode !== 'official') return fail(404, 'NOT_FOUND');
       const bytes = await readBody(req, 16_384);
-      const enrollment = await options.enroll(req, jsonBody(bytes));
-      const c = enrollment.certificate;
+      const body = jsonBody(bytes);
+      const enrollment = await options.enroll(req, body);
+      let c = enrollment.certificate;
       if (!verifyCertificate(enrollment.rootPublicKey, c, now()) || c.networkId !== enrollment.networkId) return fail(500, 'ENROLLMENT_INVALID');
       await synchronize(req, [c.networkId]);
       await store.transaction((state) => {
         const n = own(state.networks, c.networkId) ?? blankNetwork(c.networkId, enrollment.name, enrollment.rootPublicKey, c.subject);
         if (n.rootPublicKey !== enrollment.rootPublicKey || n.subject !== c.subject) return fail(403, 'NETWORK_MISMATCH');
         const existing = own(n.devices, c.deviceId);
-        if (existing && (existing.revokedAt !== null || existing.certificate.signingKey !== c.signingKey || existing.certificate.transportKey !== c.transportKey)) return fail(403, 'DEVICE_REENROLLMENT_REQUIRES_APPROVAL');
+        const rejoining = body.rejoin === true && !!existing && existing.revokedAt !== null;
+        if (!rejoining && existing && existing.revokedAt !== null && body.reportRevocation === true) return fail(403, 'DEVICE_REVOKED');
+        if (existing && !rejoining && (existing.revokedAt !== null || existing.certificate.signingKey !== c.signingKey || existing.certificate.transportKey !== c.transportKey)) return fail(403, 'DEVICE_REENROLLMENT_REQUIRES_APPROVAL');
+        const generation = rejoining ? randomBytes(16).toString('hex') : existing?.membershipGeneration;
+        if (generation) {
+          const serial = 'rejoin-' + generation + '.' + randomUUID();
+          const issued = enrollment.issueWithSerial?.(serial);
+          if (!issued || issued.serial !== serial || !verifyCertificate(enrollment.rootPublicKey, issued, now())
+            || issued.networkId !== c.networkId || issued.subject !== c.subject || issued.deviceId !== c.deviceId
+            || issued.signingKey !== c.signingKey || issued.transportKey !== c.transportKey || issued.role !== c.role) return fail(500, 'ENROLLMENT_INVALID');
+          c = issued;
+        }
+        if (existing && c.issuedAt < (existing.notBefore ?? 0)) return fail(409, 'CERTIFICATE_NOT_NEWER');
+        if (rejoining && existing && c.issuedAt <= existing.certificate.issuedAt) return fail(409, 'CERTIFICATE_NOT_NEWER');
         if (!existing && Object.keys(n.devices).length >= 256) return fail(409, 'DEVICE_LIMIT');
-        n.devices[c.deviceId] = { ...existing, certificate: c, name: existing?.name ?? name(enrollment.deviceName),
-          reportedName: name(enrollment.deviceName), ...(!existing ? { customName: null } : {}), revokedAt: null };
+        const certificate = !rejoining && existing && sameMembership(existing, existing.certificate) && c.issuedAt < existing.certificate.issuedAt
+          ? existing.certificate : c;
+        n.devices[c.deviceId] = { ...existing, certificate, name: existing?.name ?? name(enrollment.deviceName),
+          reportedName: name(enrollment.deviceName), ...(!existing ? { customName: null } : {}), revokedAt: null,
+          ...(rejoining ? { notBefore: c.issuedAt, membershipGeneration: generation } : {}) };
+        if (rejoining && n.sharingOrigins) delete n.sharingOrigins[c.deviceId];
         state.networks[n.id] = n;
       });
       announce(c.networkId);
@@ -757,9 +783,11 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     const n = network(principal.networkId);
     if (url.pathname === API + '/sharing-origins') {
       if (principal.delegation || principal.certificate?.subject !== n.subject) return fail(403, 'FORBIDDEN');
-      if (method === 'GET') return writeJson(res, 200, { origins: Object.values(n.sharingOrigins ?? {}).filter(doc =>
-        sharingOriginsPolicyValid(doc, now()) && own(n.devices, doc.certificate.deviceId)?.revokedAt === null
-        && own(n.devices, doc.certificate.deviceId)?.certificate.signingKey === doc.certificate.signingKey) });
+      if (method === 'GET') return writeJson(res, 200, { origins: Object.values(n.sharingOrigins ?? {}).filter(doc => {
+        const publishedBy = own(n.devices, doc.certificate.deviceId);
+        return publishedBy && publishedBy.revokedAt === null && sameMembership(publishedBy, doc.certificate)
+          && publishedBy.certificate.signingKey === doc.certificate.signingKey && sharingOriginsPolicyValid(doc, now());
+      }) });
       if (method !== 'POST') return fail(405, 'METHOD_NOT_ALLOWED');
       const doc = body as unknown as SharingOrigins;
       if (!sharingOriginsPolicyValid(doc, now()) || doc.networkId !== n.id || doc.certificate.deviceId !== principal.deviceId
@@ -769,6 +797,9 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
         || !verifySignature(doc.certificate.signingKey, sharingOriginsPayload(doc), doc.signature)) return fail(400, 'INVALID_SHARING_ORIGINS');
       await store.transaction(state => {
         const current = state.networks[n.id], old = current.sharingOrigins?.[principal.deviceId];
+        const publishedBy = own(current.devices, principal.deviceId);
+        if (!publishedBy || publishedBy.revokedAt !== null || !sameMembership(publishedBy, doc.certificate)
+          || publishedBy.certificate.signingKey !== doc.certificate.signingKey) return fail(403, 'FORBIDDEN');
         if (old && old.issuedAt > doc.issuedAt) return fail(409, 'STALE_SHARING_ORIGINS');
         current.sharingOrigins ??= {}; current.sharingOrigins[principal.deviceId] = doc;
       });

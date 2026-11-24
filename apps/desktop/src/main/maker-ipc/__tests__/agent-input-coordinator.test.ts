@@ -1,3 +1,5 @@
+import { BotCapabilityRefreshDeferredError } from '../botCompactRuntimeRefresh.js';
+import { schedulePendingInteractionTimeout, type PendingInteractionTimeoutEntry } from '../interactionTimeout.js';
 import { desktopContextRecoveryAbortSignal } from '../contextRecoveryAssembly.desktop.js';
 import { acceptedAttachmentReplay } from '../attachmentReplay.js';
 import { normalizeUserMessage } from '../normalizeAttachments.desktop.js';
@@ -2997,6 +2999,240 @@ describe('AgentInputCoordinator trusted session reference snapshots', () => {
 });
 
 describe('AgentInputCoordinator send transaction', () => {
+  it.each(['text', 'content', 'replace'])('dispatches edited companion input after a refresh wait (%s)', async (edit) => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'companion-refresh-edit';
+      h.sendToAgent.mockRejectedValueOnce(new BotCapabilityRefreshDeferredError());
+      h.coordinator.enqueue(sid, makeItem('waiting', 'original'));
+      await flush();
+
+      const updated = makeItem('waiting', 'edited');
+      if (edit === 'text') h.coordinator.updateText(sid, 'waiting', 'edited');
+      else if (edit === 'content') h.coordinator.updateContent(sid, 'waiting', updated);
+      else h.coordinator.replaceQueuedMessage(sid, 'waiting', updated);
+      h.coordinator.wakeSession(sid, 'unrelated-wake');
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+      if (edit === 'text') await vi.runOnlyPendingTimersAsync();
+      else h.coordinator.onBotCapabilityRefreshReady(sid);
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+      expect(h.sendToAgent.mock.calls[1][1]).toMatchObject({ content: 'edited' });
+      expect(h.coordinator.getProjection(sid).pendingQueue).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('checks the new queue head when a companion input waiting for refresh moves back', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'companion-refresh-reorder';
+      h.sendToAgent.mockRejectedValueOnce(new BotCapabilityRefreshDeferredError());
+      h.coordinator.enqueue(sid, makeItem('first', 'first'));
+      h.coordinator.enqueue(sid, makeItem('second', 'second'));
+      await flush();
+
+      h.coordinator.move(sid, 'first', 2);
+      await flush();
+      expect(h.sendToAgent.mock.calls[1]?.[3].persistUserMessage?.clientId).toBe('second');
+
+      h.coordinator.onBotCapabilityRefreshReady(sid);
+      h.setRunning(false);
+      h.coordinator.onTurnEvent(sid, 'done');
+      await flush();
+      expect(h.sendToAgent.mock.calls.map(call => call[3].persistUserMessage?.clientId))
+        .toEqual(['first', 'second', 'first']);
+      expect(h.coordinator.getProjection(sid).pendingQueue).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['refresh ready', 'fallback timer'])('dispatches the original companion queue head once via %s', async (wake) => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'companion-refresh';
+      h.sendToAgent.mockRejectedValueOnce(new BotCapabilityRefreshDeferredError());
+      h.coordinator.enqueue(sid, makeItem('original-message', 'queued during refresh'));
+      await flush();
+
+      const waiting = h.coordinator.getProjection(sid);
+      expect(waiting.error).toBeNull();
+      expect(waiting.pendingQueue.map(item => item.clientId)).toEqual(['original-message']);
+      h.coordinator.wakeSession(sid, 'unrelated-wake');
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+      if (wake === 'refresh ready') {
+        h.coordinator.onBotCapabilityRefreshReady(sid);
+        h.coordinator.onBotCapabilityRefreshReady(sid);
+        await flush();
+        expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+      }
+      await vi.runOnlyPendingTimersAsync();
+      await flush();
+      expect(h.coordinator.getProjection(sid).pendingQueue).toEqual([]);
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+      expect(h.sendToAgent.mock.calls[1][3].persistUserMessage?.clientId).toBe('original-message');
+      expect(h.onDispatchedUserTurn).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['withdraw', 'stop'])('respects %s while a companion input is waiting for refresh', async (action) => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'companion-refresh-cancelled';
+      h.sendToAgent.mockRejectedValueOnce(new BotCapabilityRefreshDeferredError());
+      h.coordinator.enqueue(sid, makeItem('waiting', 'can be cancelled'));
+      await flush();
+      if (action === 'withdraw') h.coordinator.remove(sid, 'waiting');
+      else await h.coordinator.stop(sid, { keepQueue: true, pauseQueue: true });
+
+      h.coordinator.onBotCapabilityRefreshReady(sid);
+      await vi.runOnlyPendingTimersAsync();
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+      const projection = h.coordinator.getProjection(sid);
+      expect(projection.pendingQueue.map(item => item.clientId)).toEqual(action === 'withdraw' ? [] : ['waiting']);
+      expect(projection.error).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps waiting after an early fallback and dispatches only after the late refresh', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'companion-refresh-late';
+      const error = new BotCapabilityRefreshDeferredError();
+      h.sendToAgent.mockRejectedValueOnce(error).mockRejectedValueOnce(error);
+      h.coordinator.enqueue(sid, makeItem('waiting', 'wait for the actual refresh'));
+      await flush();
+      await vi.runOnlyPendingTimersAsync();
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+      expect(h.coordinator.getProjection(sid)).toMatchObject({
+        error: null,
+        recovery: null,
+        pendingQueue: [expect.objectContaining({ clientId: 'waiting' })],
+      });
+
+      await vi.runOnlyPendingTimersAsync();
+      h.coordinator.wakeSession(sid, 'unrelated-wake');
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+      h.coordinator.onBotCapabilityRefreshReady(sid);
+      await flush();
+      expect(h.sendToAgent.mock.calls[2][3].persistUserMessage?.clientId).toBe('waiting');
+      expect(h.onDispatchedUserTurn).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // #7316, unit: drive the host timeout after the one fallback is deferred or
+  // hits the busy gate. The neighboring tests inject refresh-ready directly.
+  it.each(['deferred', 'blocked'])('dispatches the original input once after interaction timeout (%s fallback)', async (fallback) => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'companion-refresh-interaction-timeout';
+      const requestId = 'permission';
+      const entry: PendingInteractionTimeoutEntry = {
+        sessionId: sid,
+        kind: 'permission',
+        request: { kind: 'permission', requestId, toolName: 'test', input: {} },
+        resolve: vi.fn(),
+        timeoutRemainingMs: 5_000,
+      };
+      let pending: PendingInteractionTimeoutEntry | undefined;
+      const openInteraction = () => {
+        pending = entry;
+        h.setPendingInteraction(true);
+        schedulePendingInteractionTimeout(requestId, entry, {
+          getPending: () => pending,
+          isExecutionPaused: sessionId => h.coordinator.isExecutionPaused(sessionId),
+          clearPending: () => {
+            pending = undefined;
+            h.setPendingInteraction(false);
+            return entry;
+          },
+          dismiss: vi.fn(),
+          publishTimeout: vi.fn(),
+          onInteractionTimedOut: sessionId => h.coordinator.onBotCapabilityRefreshReady(sessionId),
+        });
+      };
+      const error = new BotCapabilityRefreshDeferredError();
+      h.sendToAgent.mockRejectedValueOnce(error);
+      if (fallback === 'deferred') {
+        h.sendToAgent.mockImplementationOnce(async () => {
+          openInteraction();
+          throw error;
+        });
+      }
+
+      h.coordinator.enqueue(sid, makeItem('original', 'send after the interaction settles'));
+      await flush();
+      if (fallback === 'blocked') openInteraction();
+      await vi.advanceTimersByTimeAsync(2_000);
+      const attemptsBeforeTimeout = fallback === 'deferred' ? 2 : 1;
+      expect(h.sendToAgent).toHaveBeenCalledTimes(attemptsBeforeTimeout);
+      expect(h.coordinator.getProjection(sid)).toMatchObject({
+        error: null,
+        pendingQueue: [expect.objectContaining({ clientId: 'original' })],
+      });
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(entry.resolve).toHaveBeenCalledWith({ kind: 'permission', behavior: 'deny', reason: 'timeout' });
+      expect(h.sendToAgent).toHaveBeenCalledTimes(attemptsBeforeTimeout + 1);
+      expect(h.sendToAgent.mock.calls[attemptsBeforeTimeout][3].persistUserMessage?.clientId).toBe('original');
+      expect(h.onDispatchedUserTurn).toHaveBeenCalledTimes(1);
+      expect(h.coordinator.getProjection(sid).pendingQueue).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('uses the ready signal received while a deferred send is unwinding', async () => {
+    const h = createHarness();
+    const sid = 'companion-refresh-during-send';
+    h.sendToAgent.mockImplementationOnce(async () => {
+      h.coordinator.onBotCapabilityRefreshReady(sid);
+      throw new BotCapabilityRefreshDeferredError();
+    });
+    h.coordinator.enqueue(sid, makeItem('waiting', 'refresh already completed'));
+    await vi.waitFor(() => expect(h.onDispatchedUserTurn).toHaveBeenCalledTimes(1));
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+  });
+
+  it('preserves manual queue recovery after a genuine precondition error', async () => {
+    const h = createHarness();
+    const sid = 'companion-refresh-recovery';
+    const error = new Error('[PRECONDITION_FAILED] Task is paused');
+    h.sendToAgent.mockRejectedValueOnce(error);
+    h.coordinator.enqueue(sid, makeItem('failed', 'retained for manual retry'));
+    await flush();
+    h.coordinator.onBotCapabilityRefreshReady(sid);
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    expect(h.coordinator.getProjection(sid)).toMatchObject({
+      error: error.message,
+      recovery: { kind: 'queue-head', clientId: 'failed' },
+      pendingQueue: [expect.objectContaining({ clientId: 'failed' })],
+    });
+  });
+
   it('keeps a drained turn visible until vendor dispatch accepts it', async () => {
     const h = createHarness();
     const sid = 'inspection-pre-dispatch';
@@ -14837,6 +15073,41 @@ describe('Orca report durable recovery', () => {
       expect(h.sendToAgent).not.toHaveBeenCalled();
     },
   );
+
+  // 2026-11-24: a Worker's direct Lead assignment hit "You've hit your 5-hour limit"
+  // and its error banner offered neither Retry nor Continue: the explicit error
+  // dropped the direct receipt, so the projection had no retry text and
+  // errorCanContinue=false (Desktop and Mobile both gate the button on it).
+  // The failure still keeps no replayable record and no usage-limit wait.
+  it.each([
+    ['direct assignment', true],
+    ['stopped assignment', false],
+    ['turn without a receipt', false],
+  ] as const)('offers manual Continue after an explicit Worker failure: %s', async (boundary, expected) => {
+    const h = createHarness();
+    const runtime = { instanceId: 'worker-runtime' };
+    h.setTurnSessionIdentity(runtime);
+    h.setTurnGeneration(1);
+    const item = makeItem('assignment', 'write the third draft');
+    item.createOpts.orcaRole = 'worker';
+    if (boundary !== 'turn without a receipt') {
+      h.coordinator.rememberDirectWorkerInput(runtime, 1, item, h.coordinator.getInputAbortSignal('worker'));
+    }
+    if (boundary === 'stopped assignment') h.coordinator.stop('worker');
+    const meta = { sessionInstanceId: runtime.instanceId, sessionTurnGeneration: 1 };
+    h.coordinator.onTurnEvent('worker', 'error', "You've hit your 5-hour limit · resets 2:10pm (Pacific/Auckland)",
+      { sdkError: 'rate_limit', usageLimit: true, usageResetAt: 5_000_000 }, meta);
+    h.coordinator.onTurnEvent('worker', 'done', undefined, undefined, meta);
+    await flush();
+
+    const projection = h.coordinator.getProjection('worker');
+    expect(projection.error).toContain('5-hour limit');
+    expect(projection.errorCanContinue === true).toBe(expected);
+    expect(projection.errorRetryText).toBeNull();
+    expect(projection.usageLimitWait ?? null).toBeNull();
+    expect(h.onUsageLimitedTurnError).not.toHaveBeenCalled();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+  });
 
   // Unit regression: the real coordinator must give a remote Bot Schedule quota
   // terminal to its wait owner before candidate fallback can switch suppliers.

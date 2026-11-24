@@ -387,7 +387,13 @@ export class DesktopInputHost {
           text += data.toString();
           if (text.includes('\n'))
             finish(
-              text.startsWith('ready') ? undefined : new Error('DESKTOP_ACCESSIBILITY_REQUIRED'),
+              text.startsWith('ready')
+                ? undefined
+                : new Error(
+                    platform === 'win32'
+                      ? 'DESKTOP_INPUT_UNAVAILABLE'
+                      : 'DESKTOP_ACCESSIBILITY_REQUIRED',
+                  ),
             );
         };
         child.stdout.on('data', receive);

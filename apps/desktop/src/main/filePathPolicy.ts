@@ -108,7 +108,7 @@ export function buildSystemPathBlocklist(opts: SystemBlocklistOptions = {}): str
  * Without this, a caller can prefix `\\?\` to bypass every `C:\Windows`-style
  * entry. No-op on non-`\\?\`/`\\.\` paths and on POSIX.
  */
-function stripWinNamespace(input: string): string {
+export function stripWinNamespace(input: string): string {
   if (input.startsWith('\\\\?\\') || input.startsWith('\\\\.\\')) {
     const rest = input.slice(4);
     // `\\?\UNC\server\share` → `\\server\share`

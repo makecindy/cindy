@@ -64,7 +64,7 @@ beta 存量同意范围扩展及维护者确认要求见[平台契约的授权�
 | 打包限制                                             | `apps/desktop/src/main/cindy-brain/forge.ts` 的 `packGhostDir`                                                                                                                                                                                                                                                    |
 | 运行时、沙箱进程与生命周期                           | `apps/desktop/src/main/cindy-brain/runtime/GhostRuntime.ts`、`GhostManager.ts`                                                                                                                                                                                                                                    |
 | 安装事务状态、内容摘要与技能快照 receipt             | `apps/desktop/src/main/cindy-brain/ghostInstallReceipt.ts`，状态投影见 `shared/ghost.ts` 的 `GhostInstallApproval`                                                                                                                                                                                                |
-| 能力实现（网络／通知／确认／文件系统／技能／宿主等） | `networkSlot.ts`、`notifySlot.ts`、`badgeSlot.ts`、`confirmSlot.ts`、`fsSlot.ts`、`cindySlot.ts`、`skillSlot.ts`、`agentSlot.ts`、`errandSlot.ts`；持久作品库见 [`plugin-library-storage.md`](plugin-library-storage.md)，主实现在 `libraryVault.ts`、`librarySlot.ts`、`libraryDbCore.ts` |
+| 能力实现（网络／通知／确认／文件系统／技能／宿主等） | `networkSlot.ts`、`notifySlot.ts`、`badgeSlot.ts`、`confirmSlot.ts`、`formSlot.ts`（表单弹窗，载荷与校验在 `shared/ghostForm.ts`）、`fsSlot.ts`、`cindySlot.ts`、`skillSlot.ts`、`agentSlot.ts`、`errandSlot.ts`；持久作品库见 [`plugin-library-storage.md`](plugin-library-storage.md)，主实现在 `libraryVault.ts`、`librarySlot.ts`、`libraryDbCore.ts` |
 | 面板供片、注入主题 token 与协议                      | `apps/desktop/src/renderer/cindy-brain/ghostPanelTheme.ts`、`cindy-ghost://` 分支                                                                                                                                                                                                                                 |
 | 插件详情能力说明 UI                                  | `apps/desktop/src/renderer/features/plugin/GhostPluginDetailView.tsx`                                                                                                                                                                                                                                             |
 | 远程／手机版能力准入白名单                           | `packages/device-link/src/allowlist.ts`                                                                                                                                                                                                                                                                           |
@@ -208,7 +208,7 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   改用专用浏览器，由用户决定。大文件上传走分块，不依赖调试接口。新增权限不得改变 Chrome 的
   安装提示（`<all_urls>` 可加，`tabGroups` 只能做可选权限）。Agent 操作的页面显示红光边框与「Cindy 正在自动操作此页面」
   标签，保持到最后一次动作后约 20 秒。新增 id 或新增 `pageControl` 视为权限变多，删减视为收权。
-- 无配置的布尔能力只接受字面量 `true`：`notify`、`badge`、`confirm`、`fs`、`library`、
+- 无配置的布尔能力只接受字面量 `true`：`notify`、`badge`、`confirm`、`form`、`fs`、`library`、
   `sessionContext`、`pick`、`workspace`。不用就省略，写 `false` 是无效清单。
 - `card: {}` 与 `agent: {}` 分别表示基础卡片能力和由真实用户点击触发 Agent 回合；
   其它对象型能力必须至少包含一项真实能力，不能用空对象占位。
@@ -348,6 +348,20 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   Host receipt 的 `approvedHarnesses`（只来自确认里显示过的这一行；服务端默认安装与随包种子视为已批准），
   旧 receipt 缺字段 = 未批准但插件照常可用，Host 认识该字段之前声明的引擎不随升级静默生效，下一次更新按新增
   权限复核；已装快照里不合新规则的声明只丢弃，不让插件失效。见下文[任务执行引擎](#任务执行引擎harnesses新增能力尚未发布)。
+- `fileOpener`（插件接管打开的文件类型，2026-11-24，未发布）是 v3 顶层字段：`{ extensions: [".docx", …] }`，
+  1–32 个小写带点扩展名，必须同时声明 `node`（插件会拿到用户所开文件的宿主绝对路径，与 `pick` 同一边界）。
+  解析器只在协议包 `pluginFileOpener.ts` 一份，Desktop 镜像复用；已存 Release 与已装快照里不合规的历史值只丢弃。
+  安装／更新确认单列 `file-opener` 权限项并列出扩展名，新增该能力或扩展名即「权限变多」；市场真实包的扩展名只能
+  是审核清单的子集。Host 在安装批准记录中保存已确认的扩展名，旧版仅保存过声明的插件须经更新确认后才可接管。
+  同源更新保留仍在清单中的已批准扩展名，换源不继承。启动完成后，投递前再次核对安装批准与开关。
+  用户在插件详情「配置」区可关掉，偏好存 owner 作用域的 `plugin-file-openers.json`，只表示「不再交给它」，不是批准事实。
+  运行时只在 Main 的 `shell:open-path` 入口、经 `assertTrustedAppRendererEvent` 与 `isPathAllowed` 之后生效：
+  仅本机原件（排除 `cindy-media://`、远程文件缓存与聊天附件缓存、文件夹）会以 `open-file` 事件交给第一个已启用、
+  声明 node 与该扩展名、未被用户关掉的插件；回执 `file-open-result` 只认被问的同一实例（发送方由 Main 反查），
+  15 秒内未回执、回 `ok:false`、投递失败均回落系统默认应用，插件不可用不能让文件打不开。右键「打开方式」、
+  媒体「用默认应用打开」与远程／手机端不经此路径。实现见 `cindy-brain/fileOpenerSlot.ts`、`fileOpenerPrefs.ts`，
+  作者手册 §4.25（`plugin-file-opener.md`）；回归见协议包 `manifest.test.ts`、Desktop `ghost.test.ts`、
+  `fileOpenerSlot.test.ts` 与 `shellOpenPath.test.ts`。
 - **Agent 在途调用不需要重复登记具体操作。** 插件工具是否执行由当前
   `ghost_call` 的 Cindy Agent 授权决定；普通网络和当前工作目录操作使用主机
   下发且仍在途的 `callId`。随包代码与 CLI 继续使用已有 Node 工作进程，顶层
@@ -1522,6 +1536,14 @@ App 双向同步，**不另建存储**：Main 复用 device-link 同一条 owner
   声明列出。字段与旧端降级见 [plugin-harnesses.md](protocol-compatibility/plugin-harnesses.md)。
 - **注册表**：`cindy-brain/pluginHarnesses.ts` 只列已启用、已批准、已声明、receipt 已批准且协议已支持的引擎，名称按
   界面语言选取；花名册广播、语言切换与状态发布后重算，内容不变不通知。`spawn` 现算列表，不在列表或已发布不可用即拒绝。
+- **引擎账号（2026-11-23，未发布）**：插件在 `PUT /harnesses` 发布 `accounts.methods` 后，Cindy 为每个添加的账号建一个按账号隔离的目录，
+  启动时以宿主固定的 `--cindy-account-dir <目录>` 交给入口；注册表核对目录是这个引擎根目录下的一级子目录且引擎声明了登录方式，否则拒绝启动，
+  插件仍没有参数面。账号状态、登录、取消与按账号用量只调用主 worker 的固定方法名，参数由注册表拼好，回包按协议白名单校验后才用
+  （身份只留邮箱、名字、说明与套餐，`fingerprint` 不出 Main）。**凭证交接的唯一例外**：用户为 `kind: 'secret'` 的方式在本机 Cindy 弹窗
+  里填的 Key，由 Main 原样交给该插件 worker 一次，用于写进这个账号目录里外部 Agent 自己的凭据存储——Cindy 不保存、不记日志、不进模型；
+  带 Key 的命令只接受本机受信窗口，device-link 一律拒绝，Helper 工具没有这个参数。这与插件自己的设置页收 Key 是同一信任边界（插件 worker
+  本来就能读写这台电脑的文件），不扩大权限。不增加 manifest 字段、权限行或批准状态，存量插件影响：无。字段与旧端降级见
+  [plugin-harnesses.md](protocol-compatibility/plugin-harnesses.md#引擎账号多账号2026-11-23未发布)。
 
 存量插件影响：无。旧 Host 装下、manifest 已声明 `harnesses` 的插件升级后照常启用，只是引擎不生效；回归见
 `ghostLocalInstallIdentity.test.ts`（旧 receipt 升级）与 `ghostInstallConsent.test.ts`。协议记录见

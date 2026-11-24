@@ -632,6 +632,9 @@ describe('OwnRemoteProviderRows / OwnRemoteProviderDetail', () => {
 // 生产入口：真实 useOwnRemotePluginEngines + 按电脑的引擎目录缓存 + 行与详情，只替换在线电脑列表和
 // Device Link invoke。最小失败输入：一台在线电脑回一个已开放的引擎和一个未开放的引擎。
 // 第二条守住读取次数：在线电脑列表变化时只读新出现的电脑，不把已读过的电脑再读一遍。
+// 用量(2026-11-23 用户反馈：详情看不到那台电脑的用量，而 provider-sharing.md 2026-10-22 裁决要求只读显示)：
+// 最小失败输入是那台电脑回一个 reportsUsage 的引擎、用量读取回一个窗口；修复前详情没有用量块、也不读。
+// 不上报用量的引擎不读，由第一条守住。
 // tier: unit(jsdom，内存 invoke，不联网)。
 describe('plugin engines my other computers open for remote use', () => {
   const invoke = vi.fn();
@@ -639,6 +642,7 @@ describe('plugin engines my other computers open for remote use', () => {
   const listCalls = () => invoke.mock.calls
     .filter(([, channel]) => channel === 'maker:list-plugin-engines')
     .map(([deviceId]) => deviceId as string);
+  const usageCalls = () => invoke.mock.calls.filter(([, channel]) => channel === 'maker:get-plugin-engine-usage');
 
   function engine(harnessId: string, overrides: Record<string, unknown> = {}) {
     return {
@@ -703,6 +707,25 @@ describe('plugin engines my other computers open for remote use', () => {
     expect(within(detail).getByText('Gemini 3 Pro')).toBeTruthy();
     expect(within(detail).queryByRole('button', { name: 'settings.providers.detail.moreActionsAria' })).toBeNull();
     expect(listCalls()).toEqual(['studio-desktop']);
+    // This engine does not report usage: no read and no empty usage block.
+    await act(async () => { await Promise.resolve(); });
+    expect(usageCalls()).toEqual([]);
+    expect(within(detail).queryByTestId('provider-usage-module')).toBeNull();
+  });
+
+  it('shows that computer’s account usage when its engine reports it', async () => {
+    devices.value = [{ deviceId: 'studio-desktop', name: 'Studio Desktop', platform: 'darwin' }];
+    const usage = { updatedAt: Date.now(), windows: [{ label: 'Weekly requests', remainingPercent: 64 }] };
+    invoke.mockImplementation(async (_deviceId: string, channel: string) => {
+      if (channel === 'maker:list-plugin-engines') return [engine('antigravity', { reportsUsage: true })];
+      return channel === 'maker:get-plugin-engine-usage' ? usage : undefined;
+    });
+    render(<Page />);
+
+    fireEvent.click(await screen.findByTestId('own-remote-plugin-engine-row'));
+    const detail = screen.getByTestId('own-remote-plugin-engine-detail');
+    expect(within(await within(detail).findByTestId('provider-usage-module')).getByText('Weekly requests')).toBeTruthy();
+    expect(usageCalls()).toEqual([['studio-desktop', 'maker:get-plugin-engine-usage', ['agy:antigravity']]]);
   });
 
   it('reads only a computer that comes online while the page stays open', async () => {
