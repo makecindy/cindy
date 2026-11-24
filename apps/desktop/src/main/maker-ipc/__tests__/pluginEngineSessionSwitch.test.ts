@@ -135,6 +135,23 @@ describe('switching a task onto a plugin engine', () => {
     expect(pendingSwitches.get('s1')).toMatchObject({ targetAgentKind: 'acp' });
   });
 
+  // #12397: a persistent automation that uses its task's model should
+  // continue applying any staged builtin-to-builtin choice on its next send.
+  it('applies a builtin engine choice on the next scheduled send from a bound task', async () => {
+    const { deps, pendingSwitches } = makeDeps(makeRow({ source: 'scheduler' }), {
+      canSwitchCompletedAutomationSession: vi.fn(async () => false),
+    });
+    await performSessionAgentSwitch(deps, {
+      sessionId: 's1', targetAgentKind: 'codex', model: 'gpt-5.4', localWindowRequest: true,
+    });
+
+    await applyPendingAgentSwitchIfIdle(deps, 's1', { scheduled: true });
+    expect(deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({
+      agentKind: 'codex', model: 'gpt-5.4',
+    }));
+    expect(pendingSwitches.get('s1')).toBeUndefined();
+  });
+
   it.each([false, true])('requires a trusted window choice for an automation switch (applyNow=%s)', async (applyNow) => {
     const { deps, pendingSwitches } = makeDeps(makeRow({ source: 'scheduler' }), {
       canSwitchCompletedAutomationSession: vi.fn(async () => true),

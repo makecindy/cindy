@@ -1216,7 +1216,8 @@ export async function performSessionAgentSwitch(
           ? existingIntent?.thinking
           : undefined;
     const intent: PendingAgentSwitchIntent = {
-      ...(row.source === 'scheduler' && params.localWindowRequest ? { localAutomationSwitch: true } : {}),
+      ...(row.source === 'scheduler' && params.localWindowRequest && (sourceIsPluginEngine || !builtinTarget)
+        ? { localAutomationSwitch: true } : {}),
       ...(params.runtimeSource ? { runtimeSource: params.runtimeSource } : {}),
       ...(params.configStaged === true ? { configStaged: true } : {}),
       targetAgentKind,
