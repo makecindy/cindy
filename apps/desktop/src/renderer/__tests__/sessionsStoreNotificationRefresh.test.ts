@@ -240,3 +240,42 @@ it.each(['success', 'failure'])('keeps cold waiters on the final read (%s)', asy
   ]));
   expect(sessionsStore.findById(task.id)).toEqual(outcome === 'success' ? task : null);
 });
+
+// Unit, #12471 review: a directory push reconciles visible tags immediately.
+// A list started before the push must preserve that correction even if its tail fails.
+it.each(['delete', 'rename'])('keeps the published tag %s through a stale list and failed tail', async (change) => {
+  const tag = { id: 'tag', name: 'Old', color: 'none', revision: 1, favoriteOrder: null } as const;
+  const stale = { id: 'tagged-task', status: 'active', tags: [tag] } satisfies Partial<Session>;
+  const catalog = change === 'delete' ? [] : [{ ...tag, name: 'Renamed', revision: 2 }];
+  setDataOwnerGeneration(owner.dataOwnerId, owner.ownerGeneration);
+  ipc.invoke.mockResolvedValueOnce([stale]);
+  await sessionsStore.ensureByFilter('active');
+  const view = renderHook(() => useCCSessions());
+  const tags = () => view.result.current.sessions[0]?.tags;
+  const reads: ReturnType<typeof Promise.withResolvers<Partial<Session>[]>>[] = [];
+  ipc.invoke.mockImplementation(() => {
+    const read = Promise.withResolvers<Partial<Session>[]>();
+    reads.push(read);
+    return read.promise;
+  });
+
+  emitRefresh();
+  const pushCatalog = ipc.listeners.get('local-db:task-tags:changed')!;
+  act(() => pushCatalog({}, { tags: catalog }, { ...owner, ownerGeneration: 0 }));
+  expect(tags()).toEqual([tag]);
+  act(() => pushCatalog({}, { tags: catalog }, owner));
+  expect(tags()).toEqual(catalog);
+  expect(reads).toHaveLength(1);
+  await act(async () => { reads[0]!.resolve([stale]); });
+  expect(reads).toHaveLength(2);
+  const duringTail = tags();
+  await act(async () => { reads[1]!.reject(new Error('tail failed')); });
+  const afterFailure = tags();
+
+  emitRefresh();
+  const later = { ...tag, id: 'later', name: 'Later' };
+  await act(async () => { reads[2]!.resolve([{ ...stale, tags: [later] }]); });
+  expect(tags()).toEqual([later]);
+  expect({ duringTail, afterFailure }).toEqual({ duringTail: catalog, afterFailure: catalog });
+  expect(reads).toHaveLength(3);
+});

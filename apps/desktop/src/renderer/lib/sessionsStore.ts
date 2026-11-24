@@ -1,7 +1,7 @@
 import { isOrdinaryTaskListSession } from '../../shared/sessionSource';
 import { applySessionRebalancePreferencePatch } from '@/features/provider-group/sessionRebalanceCache';
 import { emitTaskTagCatalog } from '@/features/task-tags/taskTagEvents';
-import { normalizeTaskTags, reconcileTaskTags } from '@cindy/maker-shared';
+import { normalizeTaskTags, reconcileTaskTags, type TaskTag } from '@cindy/maker-shared';
 /**
  * sessionsStore — CC Agent Session 列表的模块级单例 store
  * ---------------------------------------------------------------------------
@@ -95,6 +95,7 @@ interface FilterRequest {
   fresh: boolean;
   replacesInitialLoad?: boolean;
   prependedIds?: Set<string>;
+  taskTagCatalog?: TaskTag[];
   promise: Promise<void>;
   resolve: (replacement?: PromiseLike<void>) => void;
   reject: (reason: unknown) => void;
@@ -111,6 +112,10 @@ function withoutHiddenSessions(list: Session[]): Session[] {
   if (hiddenSessionIds.size === 0) return list;
   const next = list.filter((session) => !hiddenSessionIds.has(session.id));
   return next.length === list.length ? list : next;
+}
+
+function reconcileSessionTags(rows: Session[], catalog: TaskTag[]): Session[] {
+  return rows.map((row) => ({ ...row, tags: reconcileTaskTags(row.tags, catalog) }));
 }
 /** 列表请求期间收到的 session 费用权威值及其本地事件版本。 */
 interface SessionSpendOverride {
@@ -854,6 +859,9 @@ export const sessionsStore = {
       if (!request) {
         const { promise, resolve, reject } = Promise.withResolvers<void>();
         request = { fresh: opts?.fresh === true, promise, resolve, reject };
+      } else {
+        // A continued read shares the waiters, but starts after the prior catalog push.
+        delete request.taskTagCatalog;
       }
       pending = request;
       inflight.set(filter, request);
@@ -869,14 +877,16 @@ export const sessionsStore = {
               // 仅保护这轮读取启动后新增且仍在桶里的行。已删除、归档或隐藏的行
               // 不会被补回，之后启动的读取也照常使用权威快照。
               const prependedIds = request.prependedIds;
-              let next = data;
+              let next = request.taskTagCatalog
+                ? reconcileSessionTags(data, request.taskTagCatalog)
+                : data;
               if (prependedIds) {
                 const fetchedIds = new Set(data.map((row) => row.id));
                 const prepended = cache.get(filter)?.filter((row) =>
                   prependedIds.has(row.id) && !fetchedIds.has(row.id)
                     && !hiddenSessionIds.has(row.id) && belongsInFilter(row.status, filter),
                 );
-                if (prepended?.length) next = [...prepended, ...data].slice(0, DEFAULT_LIMIT);
+                if (prepended?.length) next = [...prepended, ...next].slice(0, DEFAULT_LIMIT);
               }
               cache.set(filter, next);
             }
@@ -1445,14 +1455,11 @@ if (typeof window !== 'undefined') {
   window.electronAPI?.localDb?.taskTags?.onChanged?.(({ tags }, ownerStamp) => {
     if (!isDataOwnerPushCurrent(ownerStamp)) return;
     const catalog = normalizeTaskTags(tags, 256);
+    // Only reads already in flight can return tag data from before this push.
+    for (const request of inflight.values()) request.taskTagCatalog = catalog;
     emitTaskTagCatalog(undefined, catalog);
-    for (const [filter, rows] of cache)
-      cache.set(
-        filter,
-        rows.map((row) => ({ ...row, tags: reconcileTaskTags(row.tags, catalog) })),
-      );
+    for (const [filter, rows] of cache) cache.set(filter, reconcileSessionTags(rows, catalog));
     notify();
-    // Supersede list reads which started before this directory mutation.
     refreshAfterNotification();
     },
   );
