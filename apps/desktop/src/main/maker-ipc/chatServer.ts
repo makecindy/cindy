@@ -3027,7 +3027,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       // Only the owner's own message speaks for the owner; a teammate that named Cindy in its reply is labeled as itself.
       const ownWords = source.origin === 'user' && source.author?.kind === 'human' && source.authorId === selfId && !source.maskAttribution;
       const speaker = s.members.find(m => m.id === source.authorId);
-      const dispatched = await deps.dispatch({ targetSessionId: sessionId, clientId: run.clientId, message, persistedContent: message,
+      const dispatched = await deps.dispatch({ groupAssistantTask: true, targetSessionId: sessionId, clientId: run.clientId, message, persistedContent: message,
         // The requester's own words are the request this turn speaks for; the group's messages are background.
         ...(ownWords ? { autoReviewUserText: { kind: 'agent-request' as const, request: { sessionId, clientId: run.clientId, plainBody: true, delegatedText: words } } } : {}),
         origin: { kind: 'session', senderSessionId: '', displayText: message,

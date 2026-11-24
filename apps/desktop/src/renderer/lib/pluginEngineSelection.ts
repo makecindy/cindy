@@ -51,19 +51,7 @@ export function isSamePluginEngineChoice(
 }
 
 /** What the new-task draft remembers: which engine, which of its models and its permission mode. */
-export interface PluginEngineSelection {
-  providerId: string;
-  /** The other computer of this account that has the engine; absent = the computer the task is on. */
-  deviceId?: string;
-  modelId: string;
-  /**
-   * Kept with the engine choice, apart from the built-in Harness preferences: an engine offers only
-   * 'ask' / 'bypassPermissions', and picking one must not rewrite what Claude Code / Codex / Pi use.
-   */
-  permissionMode?: PluginEnginePermissionMode['id'];
-  /** Reasoning level chosen for the engine; kept across models that offer it (like built-in effort). */
-  effort?: PluginEngineEffort;
-}
+export type PluginEngineSelection = import('../../shared/pluginEngines').NewTaskPluginEngineSelection;
 
 /** A draft selection that can be used right now. */
 export interface ActivePluginEngine {

@@ -133,11 +133,27 @@ export interface ModelGroupRoute {
   exceptions?: ModelGroupException[];
   /** 推理强度；不设或选中的模型不支持这一档时不带，按该模型的默认档运行。 */
   effort?: string;
+  /**
+   * 「出问题时自动换来源」(model-groups.md §4.5)：默认开，只在用户关掉这个模式的开关时存 false。
+   * 关掉后用这个模式的任务出问题不自动换，只在横幅里提议。
+   */
+  autoSwitch?: false;
 }
 
 /** 2026-11-11 起只有路线；旧版存下的 modes 读取时忽略。 */
 export interface ModelGroupsConfig {
   routes: ModelGroupRoute[];
+}
+
+/** 用了这个模式的任务出问题时是否自动换来源(默认开)。 */
+export function modelGroupAutoSwitchOn(route: Pick<ModelGroupRoute, 'autoSwitch'>): boolean {
+  return route.autoSwitch !== false;
+}
+
+/** 任务记下的模式此刻是否自动换来源；模式已删除时为 false(不再接替)。 */
+export function modelGroupAutoSwitchFor(config: ModelGroupsConfig, selection: ModelGroupSelection | null | undefined): boolean {
+  const route = findModelGroupRoute(config, selection);
+  return !!route && modelGroupAutoSwitchOn(route);
 }
 
 export const MODEL_GROUPS_DEFAULTS: ModelGroupsConfig = { routes: [] };
@@ -351,7 +367,10 @@ function normalizeModelGroupRoute(raw: unknown): ModelGroupRoute | null {
     .filter((item): item is ModelGroupException => !!item)
     .slice(0, MODEL_GROUP_LIMITS.exceptions);
   const effort = text(value.effort, MODEL_GROUP_LIMITS.effort);
-  return { id, name, strategy, candidates, ...(exceptions.length > 0 ? { exceptions } : {}), ...(effort ? { effort } : {}) };
+  return {
+    id, name, strategy, candidates, ...(exceptions.length > 0 ? { exceptions } : {}), ...(effort ? { effort } : {}),
+    ...(value.autoSwitch === false ? { autoSwitch: false as const } : {}),
+  };
 }
 
 function hour(value: unknown): number | null {
@@ -425,7 +444,9 @@ export function normalizeModelGroupsConfig(raw: unknown): ModelGroupsConfig {
     MODEL_GROUP_LIMITS.routes,
   );
   const routeIds = new Set(routes.map((route) => route.id));
-  return { routes: routes.map((route) => pruneExceptions(route, routeIds)) };
+  return {
+    routes: routes.map((route) => pruneExceptions(route, routeIds)),
+  };
 }
 
 export function findModelGroupRoute(

@@ -2657,7 +2657,7 @@ describe('Chat Server result delivery and refresh', () => {
       expect(fixture.urls.some(url => url.includes('/mask/'))).toBe(false);
       expect(deps.ensureGroupAssistantSession).toHaveBeenCalledExactlyOnceWith({ title: 'Group chat·Cindy · Room', projectDir: null });
       const [input] = dispatched();
-      expect(input).toMatchObject({ targetSessionId: 'group-task-1', resumeWithStoredPermissionMode: true,
+      expect(input).toMatchObject({ groupAssistantTask: true, targetSessionId: 'group-task-1', resumeWithStoredPermissionMode: true,
         message: `@Cindy please fix it\n\n${t('bots.groupChat.assistant.groupRecent')}\nAnn：The build is red again`,
         origin: { kind: 'session', senderSessionId: '', groupRequest: { groupId: roomId, groupName: 'Room', speakerId: selfId, speakerName: 'Chris' } } });
       expect(input!.persistedContent).toBe(input!.message);
