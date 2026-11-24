@@ -5,7 +5,12 @@ import { installInspectedGhostFromFile } from '@/cindy-brain/installFlow';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import { Button } from '@/components/ui/button';
 import { GhostPluginIcon } from '@/features/plugin/GhostPluginIcon';
-import { openPluginInSidebar } from '@/features/right-sidebar/pluginPlacement';
+import {
+  focusExistingPluginTab,
+  openPluginInSidebar,
+  openPluginInWindow,
+  resolvePluginOpenTarget,
+} from '@/features/right-sidebar/pluginPlacement';
 import { openPluginTaskTab } from '@/features/right-sidebar/lib/openPluginTaskTab';
 import { insertPromptIntoComposer } from '@/lib/composerActionsBus';
 import { toast } from '@/lib/toast';
@@ -86,7 +91,11 @@ export function GeneratedPluginPackage({
       } else if (matched.manifest.panel) {
         await openPluginInSidebar(matched, 'panel');
       } else if (matched.manifest.mainView) {
-        navigate('/apps/' + encodeURIComponent(instanceId));
+        if (focusExistingPluginTab(matched)) return;
+        const target = resolvePluginOpenTarget(matched);
+        if (target === 'sidebar') await openPluginInSidebar(matched);
+        else if (target === 'window') openPluginInWindow(matched);
+        else navigate('/apps/' + encodeURIComponent(instanceId));
       } else if (matched.manifest.taskView) {
         await openPluginTaskTab(sessionId, instanceId);
       } else if (

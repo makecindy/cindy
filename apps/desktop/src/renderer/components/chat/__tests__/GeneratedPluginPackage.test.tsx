@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { GeneratedPluginPackage } from '../GeneratedPluginPackage';
+import { __resetInstalledGhostsStoreForTest } from '@/cindy-brain/useInstalledGhosts';
+import * as placement from '@/features/right-sidebar/pluginPlacement';
 import { installInspectedGhostFromFile } from '@/cindy-brain/installFlow';
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
@@ -61,3 +63,46 @@ it('reads the replacement package after its displayed digest is rejected', async
     await act(async () => root.unmount());
   }
 });
+
+function CurrentPath() {
+  return <output>{useLocation().pathname}</output>;
+}
+
+it.each(['existing', 'sidebar', 'window', 'page'] as const)(
+  'opens an installed main view in the expected place (%s)', async (target) => {
+    const manifest = { id: 'quiet', name: 'Quiet', version: '1', mainView: { html: 'main.html' } };
+    const ghost = {
+      manifest, namespace: 'local', namespaceState: 'confirmed', enabled: true,
+      approval: { state: 'approved' }, installedPackageSha256: 'digest',
+    };
+    __resetInstalledGhostsStoreForTest();
+    vi.stubGlobal('electronAPI', { ghosts: {
+      inspect: async () => ({ manifest, packageSha256: 'digest' }),
+      listSync: () => ({ ghosts: [ghost] }), onChanged: () => () => {},
+    } });
+    const focus = vi.spyOn(placement, 'focusExistingPluginTab').mockReturnValue(target === 'existing');
+    const resolve = vi.spyOn(placement, 'resolvePluginOpenTarget').mockReturnValue(target === 'existing' ? 'page' : target);
+    const sidebar = vi.spyOn(placement, 'openPluginInSidebar').mockResolvedValue();
+    const popout = vi.spyOn(placement, 'openPluginInWindow').mockImplementation(() => {});
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(
+        <MemoryRouter initialEntries={['/task']}>
+          <CurrentPath />
+          <GeneratedPluginPackage path="quiet.cindy" sessionId="test">quiet.cindy</GeneratedPluginPackage>
+        </MemoryRouter>,
+      ));
+      await act(async () => container.querySelector('button')!.click());
+      expect(focus).toHaveBeenCalledWith(ghost);
+      expect(resolve).toHaveBeenCalledTimes(target === 'existing' ? 0 : 1);
+      expect(sidebar).toHaveBeenCalledTimes(target === 'sidebar' ? 1 : 0);
+      expect(popout).toHaveBeenCalledTimes(target === 'window' ? 1 : 0);
+      expect(container.querySelector('output')?.textContent).toBe(target === 'page' ? '/apps/_ns__local__quiet' : '/task');
+    } finally {
+      await act(async () => root.unmount());
+      __resetInstalledGhostsStoreForTest();
+      vi.restoreAllMocks();
+    }
+  },
+);
