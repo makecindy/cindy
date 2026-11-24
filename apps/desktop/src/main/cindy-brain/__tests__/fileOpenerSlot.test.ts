@@ -15,9 +15,11 @@ import { GHOST_FILE_OPEN_TIMEOUT_MS, GhostFileOpenerSlot, type GhostFileOpenerDe
 
 const FILE = 'C:\\work\\季度报告.docx';
 
-function plugin(id: string, opts: { enabled?: boolean; node?: boolean; extensions?: string[] } = {}): InstalledGhost {
+function plugin(id: string, opts: { enabled?: boolean; node?: boolean; extensions?: string[]; approved?: boolean } = {}): InstalledGhost {
   return {
     enabled: opts.enabled ?? true,
+    approval: { state: 'approved' },
+    approvedFileOpenerExtensions: opts.approved === false ? undefined : opts.extensions ?? ['.docx'],
     manifest: {
       id,
       name: `Plugin ${id}`,
@@ -34,6 +36,7 @@ function setup(ghosts: InstalledGhost[], overrides: Partial<GhostFileOpenerDeps>
     instanceId: (ghost) => ghost.manifest.id,
     isEnabledByUser: () => true,
     isRunning: () => true,
+    isCurrent: () => true,
     wake: vi.fn(async () => undefined),
     send: (instanceId, payload) => {
       sent.push({ instanceId, payload: payload as Record<string, unknown> });
@@ -85,9 +88,24 @@ describe('GhostFileOpenerSlot', () => {
     ['no plugin declares the extension', [plugin('pdf', { extensions: ['.pdf'] })], 'no-plugin'],
     ['the plugin is disabled', [plugin('office', { enabled: false })], 'no-plugin'],
     ['the plugin has no node worker', [plugin('office', { node: false })], 'no-plugin'],
+    ['an older host stored the declaration without approving it', [plugin('office', { approved: false })], 'no-plugin'],
   ] as const)('does not offer the file when %s', async (_label, ghosts, reason) => {
     const { slot, sent } = setup([...ghosts]);
     await expect(slot.open(FILE)).resolves.toEqual({ handled: false, reason });
+    expect(sent).toHaveLength(0);
+  });
+
+  it('drops the request if the approved plugin changes while it is starting', async () => {
+    const { promise, resolve } = Promise.withResolvers<void>();
+    const { slot, sent } = setup([plugin('office')], {
+      isRunning: () => false,
+      wake: () => promise,
+      isCurrent: () => false,
+    });
+    const pending = slot.open(FILE);
+    expect(sent).toHaveLength(0);
+    resolve();
+    await expect(pending).resolves.toEqual({ handled: false, reason: 'unavailable' });
     expect(sent).toHaveLength(0);
   });
 

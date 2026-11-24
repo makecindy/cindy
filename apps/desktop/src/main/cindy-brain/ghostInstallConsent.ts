@@ -124,6 +124,20 @@ export function confirmedHarnesses(
   return shown?.some(item => item.key === 'harnesses') ? declared : [];
 }
 
+/** Approved extensions shown in the install or update confirmation. */
+export function confirmedFileOpenerExtensions(
+  decision: GhostInstallConsentDecision,
+  installed: InstalledGhost | null | undefined,
+  next: GhostManifest,
+): string[] {
+  const declared = next.fileOpener?.extensions ?? [];
+  if (decision.mode === 'exempt') return declared;
+  if (decision.mode !== 'confirmed') return [];
+  const facts = evaluateGhostInstallConsent(installed, next);
+  const shown = facts?.kind === 'install' ? facts.permissions : facts?.added;
+  return shown?.some(item => item.key === 'file-opener') ? declared : [];
+}
+
 /**
  * 本次确认里用户看到过的免确认工具(`tools[].approval: "auto"`)。口径同控制节点：
  * 服务端默认安装(exempt)视为已批准全部声明；未确认/无需确认时返回空，已批准项由 update 延续。

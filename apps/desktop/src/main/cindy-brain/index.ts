@@ -592,6 +592,7 @@ import {
   confirmedCindyModelActions,
   confirmedControlPoints,
   confirmedHarnesses,
+  confirmedFileOpenerExtensions,
   confirmedUiCapability,
   obtainGhostInstallConsent,
   type GhostInstallConsentDecision,
@@ -1378,8 +1379,14 @@ function getGhostFileOpenerSlot(): GhostFileOpenerSlot {
       isEnabledByUser: isPluginFileOpenerEnabled,
       isRunning: (id) => getGhostRuntime().stateOf(id) === 'running',
       wake: async (ghost) => {
-        const r = await getGhostRuntime().spawn(ghost);
+        const r = await getGhostRuntime().spawnForTool(ghost);
         if (!r.ok) throw new Error(r.reason);
+      },
+      isCurrent: (ghost) => {
+        const id = installedGhostStoragePart(ghost);
+        const current = findGhostForInstanceId(id);
+        return current?.enabled === true && isPluginFileOpenerEnabled(id) &&
+          ghostInstallApprovalToken(current.approval) === ghostInstallApprovalToken(ghost.approval);
       },
       send: (id, payload) => sendToGhostLogic(id, payload),
       log,
@@ -8013,6 +8020,7 @@ async function installAndDockLocked(
     approvedAutoTools: confirmedAutoTools(opts.consent.decision, installedBefore, opts.consent.manifest),
     approvedCindyModelActions: confirmedCindyModelActions(opts.consent.decision, installedBefore, opts.consent.manifest),
     approvedHarnesses: confirmedHarnesses(opts.consent.decision, installedBefore, opts.consent.manifest),
+    approvedFileOpenerExtensions: confirmedFileOpenerExtensions(opts.consent.decision, installedBefore, opts.consent.manifest),
     observeCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'observe'),
     companionsCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'companions'),
     initiallyEnabled: opts.enable ?? false,
@@ -8212,6 +8220,7 @@ async function updateLocalGhostPackageLocked(
           approvedAutoTools: confirmedAutoTools(consent, previousGhost, inspected.manifest),
           approvedCindyModelActions: confirmedCindyModelActions(consent, previousGhost, inspected.manifest),
           approvedHarnesses: confirmedHarnesses(consent, previousGhost, inspected.manifest),
+          approvedFileOpenerExtensions: confirmedFileOpenerExtensions(consent, previousGhost, inspected.manifest),
           observeCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'observe'),
           companionsCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'companions'),
           expectedPackageSha256,
@@ -8819,6 +8828,7 @@ async function installOrUpdateMarketGhostPackageLocked(
           approvedAutoTools: confirmedAutoTools(expected.consent, installed, inspected.manifest),
           approvedCindyModelActions: confirmedCindyModelActions(expected.consent, installed, inspected.manifest),
           approvedHarnesses: confirmedHarnesses(expected.consent, installed, inspected.manifest),
+          approvedFileOpenerExtensions: confirmedFileOpenerExtensions(expected.consent, installed, inspected.manifest),
           observeCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'observe'),
           companionsCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'companions'),
           expectedPackageSha256: inspected.packageSha256,
@@ -11020,7 +11030,7 @@ export function registerGhostIpc(): void {
       throwIpcError('INVALID_PARAMS', 'ghostId must be a non-empty string');
     }
     const ghost = findGhostForInstanceId(ghostId);
-    if (!ghost?.manifest.fileOpener) return { declared: false, enabled: false };
+    if (!ghost?.approvedFileOpenerExtensions?.length) return { declared: false, enabled: false };
     return { declared: true, enabled: isPluginFileOpenerEnabled(installedGhostStoragePart(ghost)) };
   });
   ipcMain.handle('ghosts:file-opener:set', (event, ghostId: unknown, enabled: unknown) => {
@@ -11033,7 +11043,7 @@ export function registerGhostIpc(): void {
     const release = beginGhostMutation(owner);
     try {
       const ghost = findGhostForInstanceId(ghostId);
-      if (!ghost?.manifest.fileOpener) throwIpcError('NOT_FOUND', '插件实例已变化，请刷新后重试');
+      if (!ghost?.approvedFileOpenerExtensions?.length) throwIpcError('NOT_FOUND', '插件实例已变化，请刷新后重试');
       setPluginFileOpenerEnabled(installedGhostStoragePart(ghost), enabled);
       return { declared: true, enabled };
     } finally {

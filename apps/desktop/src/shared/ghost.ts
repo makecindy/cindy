@@ -2085,6 +2085,8 @@ export interface InstalledGhost {
    * knew the field never starts silently after an upgrade.
    */
   approvedHarnesses?: string[];
+  /** File extensions granted by the host install or update confirmation. */
+  approvedFileOpenerExtensions?: string[];
   manifest: GhostManifest;
   /** 安装目录绝对路径(userData/brain/<id> 或 userData/brain/_ns/<org>/<id>)。 */
   dir: string;
@@ -3141,6 +3143,10 @@ function compareGhostPermissionItems(
       } else unchanged.push(item);
       continue;
     }
+    if (item.key === 'file-opener' && ghostFileOpenerWithinCap(next.fileOpener, prev.fileOpener)) {
+      unchanged.push(item);
+      continue;
+    }
     if (!prevKeys.has(item.key)) {
       added.push(item);
     } else if (ghostPermissionProjectionKey(item) !== prevProjectionByKey.get(item.key)) {
@@ -3154,6 +3160,8 @@ function compareGhostPermissionItems(
       if (!nextKeys.has(item.key) || added.some(nextItem => nextItem.key === item.key)) removed.push(item);
       continue;
     }
+    if (item.key === 'file-opener' && next.fileOpener &&
+        ghostFileOpenerWithinCap(next.fileOpener, prev.fileOpener)) continue;
     if (!nextKeys.has(item.key)) {
       removed.push(item);
     } else if (ghostPermissionProjectionKey(item) !== nextProjectionByKey.get(item.key)) {
@@ -3223,6 +3231,8 @@ export function diffInstalledGhostPermissionItems(
       subscribe: withoutUnapprovedControlPoints(installed),
       tools: withoutUnapprovedAutoTools(installed),
       harnesses: withoutUnapprovedHarnesses(installed),
+      fileOpener: installed.approvedFileOpenerExtensions?.length
+        ? { extensions: installed.approvedFileOpenerExtensions } : undefined,
     };
     // Host declarations belong to the installed version, even when the legacy
     // page grant is absent and its UI resources are omitted from that baseline.

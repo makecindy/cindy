@@ -50,7 +50,7 @@ export function PluginFileOpenerSwitch({
         <p className="text-14 font-medium leading-[1.571] text-[var(--text-primary)]">
           {t('settings.ghosts.detail.fileOpenerTitle')}
         </p>
-        <p className="mt-0.5 text-13 leading-5 text-[var(--text-secondary)]">
+        <p className="mt-0.5 text-13 leading-[1.54] text-[var(--text-secondary)]">
           {t('settings.ghosts.detail.fileOpenerDescription', { name, extensions: extensions.join(' ') })}
         </p>
       </div>

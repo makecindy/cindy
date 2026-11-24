@@ -21,6 +21,7 @@ export interface GhostFileOpenerDeps {
   instanceId(ghost: InstalledGhost): string;
   isEnabledByUser(instanceId: string): boolean;
   isRunning(instanceId: string): boolean;
+  isCurrent(ghost: InstalledGhost): boolean;
   wake(ghost: InstalledGhost): Promise<void>;
   /** 投递到插件逻辑页;逻辑页不在线返回 false。 */
   send(instanceId: string, payload: unknown): boolean;
@@ -51,7 +52,8 @@ export class GhostFileOpenerSlot {
         (ghost) =>
           ghost.enabled &&
           ghost.manifest.node !== undefined &&
-          ghostFileOpenerMatches(ghost.manifest.fileOpener, filePath) &&
+          ghost.approval.state === 'approved' &&
+          ghostFileOpenerMatches({ extensions: ghost.approvedFileOpenerExtensions ?? [] }, filePath) &&
           this.deps.isEnabledByUser(this.deps.instanceId(ghost)),
       ) ?? null
     );
@@ -84,6 +86,10 @@ export class GhostFileOpenerSlot {
           answer.then(() => false),
         ]);
         if (!woke) return { handled: false, reason: 'timeout' };
+      }
+      if (!this.deps.isCurrent(ghost)) {
+        settle(null);
+        return { handled: false, reason: 'unavailable' };
       }
       const delivered = this.deps.send(instanceId, {
         type: 'event',
