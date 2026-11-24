@@ -268,6 +268,86 @@ describe('request-owned Responses compatibility', () => {
     }
   });
 
+  // #11199 review regression (unit): the Codex adapter must keep both argument schemas when a
+  // history-only workspace.read and a live workspace__read share the preferred wire name.
+  it.each(['application/json', 'text/event-stream'])('repairs each selected tool through a live/history collision (%s)', async contentType => {
+    const adapter = createCodexResponsesCompatibilityAdapter();
+    const bareTool = { type: 'function', name: 'workspace__read', parameters: { type: 'object', properties: { limit: { type: 'integer' } } } };
+    const historyTool = { type: 'function', name: 'read', parameters: { type: 'object', properties: { line: { type: 'integer' } } } };
+    const input = [{ type: 'tool_search_output', tools: [{ type: 'namespace', name: 'workspace', tools: [historyTool] }] }];
+    const bare = { type: 'function_call', name: bareTool.name, call_id: 'bare', arguments: '{"limit":4.0}' };
+    const history = { type: 'function_call', namespace: 'workspace', name: 'read', call_id: 'history', arguments: '{"line":12.0}' };
+    const output = { status: 'completed', output: [bare, history] };
+    const sse = contentType === 'text/event-stream';
+    const wire = sse ? `data: ${JSON.stringify({ type: 'response.completed', response: output })}\n\n` : JSON.stringify(output);
+    const bareChoice = { type: 'function', name: bareTool.name };
+    for (const { choice, repairBare, repairHistory } of [
+      { choice: { type: 'function', name: 'read' }, repairBare: false, repairHistory: true },
+      { choice: { type: 'function', name: 'workspace.read' }, repairBare: false, repairHistory: true },
+      { choice: { type: 'function', name: 'read', namespace: 'workspace' }, repairBare: false, repairHistory: true },
+      { choice: bareChoice, repairBare: true, repairHistory: false },
+      { choice: { type: 'allowed_tools', tools: [bareChoice, { type: 'function', name: 'read' }] }, repairBare: true, repairHistory: true },
+    ]) {
+      adapter.adaptRequest({ tools: [bareTool], input, tool_choice: choice }, 10094, undefined, true);
+      const transform = adapter.createResponseTransform(10094, { contentType, contentEncoding: '' });
+      const text = transform ? await responseText(transform, wire) : wire;
+      const parsed = JSON.parse(sse ? text.trim().slice(6) : text);
+      expect((sse ? parsed.response : parsed).output).toEqual([
+        repairBare ? { ...bare, arguments: '{"limit":4}' } : bare,
+        repairHistory ? { ...history, arguments: '{"line":12}' } : history,
+      ]);
+    }
+  });
+
+  // Same collision with a live custom tool. The Codex adapter must restore the bare custom
+  // call while the historical function retains its type and its repaired integer argument.
+  it.each([
+    ['application/json', false], ['text/event-stream', false],
+    ['application/json', true], ['text/event-stream', true],
+  ] as const)('keeps a historical function distinct from a live custom tool (%s, schemaConflict=%s)', async (contentType, schemaConflict) => {
+    const adapter = createCodexResponsesCompatibilityAdapter();
+    const bare = { type: 'function_call', name: 'workspace__read', call_id: 'bare', arguments: '{"input":"text"}' };
+    const history = { type: 'function_call', namespace: 'workspace', name: 'read', call_id: 'history', arguments: '{"line":12.0}' };
+    const historyOutput = (type: string) => ({ type: 'tool_search_output', tools: [{ type: 'namespace', name: history.namespace, tools: [
+      { type: 'function', name: history.name, parameters: { type: 'object', properties: { line: { type } } } },
+    ] }] });
+    adapter.adaptRequest({
+      tools: [{ type: 'custom', name: bare.name }],
+      input: schemaConflict ? [historyOutput('integer'), historyOutput('number')] : [historyOutput('integer')],
+      tool_choice: { type: 'allowed_tools', tools: [
+        { type: 'custom', name: bare.name },
+        { type: 'function', namespace: history.namespace, name: history.name },
+      ] },
+    }, 10095, undefined, true);
+    const output = { status: 'completed', output: [bare, history] };
+    const sse = contentType === 'text/event-stream';
+    const wire = sse ? `data: ${JSON.stringify({ type: 'response.completed', response: output })}\n\n` : JSON.stringify(output);
+    const text = await responseText(adapter.createResponseTransform(10095, { contentType, contentEncoding: '' })!, wire);
+    const parsed = JSON.parse(sse ? text.trim().slice(6) : text);
+    expect((sse ? parsed.response : parsed).output).toEqual([
+      { type: 'custom_tool_call', name: bare.name, call_id: bare.call_id, input: 'text' },
+      schemaConflict ? history : { ...history, arguments: '{"line":12}' },
+    ]);
+  });
+
+  it.each(['application/json', 'text/event-stream'])('uses the active tool kind over a stale declaration at the same coordinate (%s)', async contentType => {
+    const adapter = createCodexResponsesCompatibilityAdapter();
+    const tool = { type: 'custom', name: 'read' };
+    adapter.adaptRequest({
+      tools: [{ type: 'namespace', name: 'workspace', tools: [tool] }],
+      input: [{ type: 'tool_search_output', tools: [{ type: 'namespace', name: 'workspace', tools: [{ type: 'function', name: 'read' }] }] }],
+      tool_choice: { ...tool, namespace: 'workspace' },
+    }, 10096, undefined, true);
+    const output = { status: 'completed', output: [{ type: 'function_call', name: 'workspace__read', call_id: 'live', arguments: '{"input":"text"}' }] };
+    const sse = contentType === 'text/event-stream';
+    const wire = sse ? `data: ${JSON.stringify({ type: 'response.completed', response: output })}\n\n` : JSON.stringify(output);
+    const text = await responseText(adapter.createResponseTransform(10096, { contentType, contentEncoding: '' })!, wire);
+    const parsed = JSON.parse(sse ? text.trim().slice(6) : text);
+    expect((sse ? parsed.response : parsed).output).toEqual([
+      { type: 'custom_tool_call', namespace: 'workspace', name: 'read', call_id: 'live', input: 'text' },
+    ]);
+  });
+
   // #11199 native collision regression: public Codex transport, unit tier. The earlier native
   // case had no competing bare tool, so schema allocation and response lookup could diverge.
   it.each(['application/json', 'text/event-stream'])('repairs native collisions without borrowing the bare schema (%s)', async contentType => {

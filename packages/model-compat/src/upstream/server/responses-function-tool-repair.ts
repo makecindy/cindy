@@ -32,9 +32,8 @@ function outputIndexOf(value: unknown): number | undefined {
 export function createResponsesFunctionToolRepairBlockRewrite(
   schemas: FunctionCallRepairSchemas,
   budget?: TranslatorBudget,
-  renamedWireNames?: ReadonlyMap<string, string>,
 ): SseBlockRewrite {
-  if (schemas.size === 0) return block => [block];
+  if (schemas.byIdentity.size === 0) return block => [block];
   const byId = new Map<string, Identity>();
   const byIndex = new Map<number, Identity>();
   let pending: PendingCompletion[] = [];
@@ -97,7 +96,7 @@ export function createResponsesFunctionToolRepairBlockRewrite(
     const resolved = (typeof event.item_id !== "string" || event.item_id === "") && identity.itemId !== undefined
       ? { ...event, item_id: identity.itemId }
       : event;
-    const repaired = repairFunctionCalls({ ...identity.item, status: identity.item.status ?? "completed", arguments: event.arguments }, schemas, renamedWireNames);
+    const repaired = repairFunctionCalls({ ...identity.item, status: identity.item.status ?? "completed", arguments: event.arguments }, schemas);
     if (repaired.changed && isObject(repaired.value)) {
       return replaceSseDataPayload(block, JSON.stringify({ ...resolved, arguments: repaired.value.arguments }));
     }
@@ -139,7 +138,7 @@ export function createResponsesFunctionToolRepairBlockRewrite(
       if ((event.type === "response.output_item.added" || event.type === "response.output_item.done") && isObject(event.item)) {
         const identity = register(event.item, index);
         const replayed = identity ? flushPending(identity) : [];
-        const repaired = repairFunctionCalls(event, schemas, renamedWireNames);
+        const repaired = repairFunctionCalls(event, schemas);
         const output = repaired.changed ? replaceSseDataPayload(block, JSON.stringify(repaired.value)) : block;
         if (identity && (event.type === "response.output_item.done" || replayed.length > 0)) releaseIdentity(identity);
         return event.type === "response.output_item.added" ? [output, ...replayed] : [...replayed, output];
@@ -169,7 +168,7 @@ export function createResponsesFunctionToolRepairBlockRewrite(
           }
         }
         replayed.push(...pending.map(entry => entry.block));
-        const repaired = repairFunctionCalls(event, schemas, renamedWireNames);
+        const repaired = repairFunctionCalls(event, schemas);
         dispose();
         return [...replayed, repaired.changed ? replaceSseDataPayload(block, JSON.stringify(repaired.value)) : block];
       }

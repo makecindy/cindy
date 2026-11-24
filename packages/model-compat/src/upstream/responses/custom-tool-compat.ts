@@ -78,6 +78,7 @@ export function routedCustomToolWireName(value: unknown): string | undefined {
 export interface CustomRestoreDisplacement {
   bareCustomNames: ReadonlySet<string>;
   displacedKinds: ReadonlyMap<string, "function" | "custom">;
+  isDeclaredNamespacedFunction?: (namespace: string, name: string) => boolean;
 }
 
 export function routedCustomToolTargetName(
@@ -96,6 +97,8 @@ export function routedCustomToolTargetName(
         // Restoring the child is what puts the namespace on the item; an ordinary function child
         // must stay a function call rather than come back as a custom-tool call.
         if (displacement.displacedKinds.get(wireName) === "function") return undefined;
+        if (value.type === "function_call" && typeof value.namespace === "string" && typeof value.name === "string"
+          && displacement.isDeclaredNamespacedFunction?.(value.namespace, value.name)) return undefined;
       } else if (
         displacement.displacedKinds.has(wireName)
         && !displacement.bareCustomNames.has(wireName)

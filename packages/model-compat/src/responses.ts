@@ -10,7 +10,7 @@ import { rewriteRoutedCustomToolsForUpstream, restoreRoutedCustomCallsInJson } f
 import { rewriteRoutedNamespaceToolsForUpstream, restoreRoutedNamespaceCallsInJson, collectBareCustomToolNames } from './upstream/responses/namespace-tool-compat';
 import { collectResponsesToolGroups } from './upstream/responses/tool-groups';
 import { rewriteRoutedToolSearchForUpstream, restoreRoutedToolSearchCallsInJson } from './upstream/responses/tool-search-compat';
-import { collectFunctionCallRepairSchemas, deriveFunctionCallRepairPlan, repairFunctionCallsInJson } from './upstream/responses/function-call-compat';
+import { collectFunctionCallRepairSchemas, deriveFunctionCallRepairPlan, hasDeclaredNamespacedFunction, repairFunctionCallsInJson } from './upstream/responses/function-call-compat';
 import { createRoutedCustomToolRestoreBlockRewrite } from './upstream/server/responses-custom-tool-repair';
 import { createRoutedToolSearchRestoreBlockRewrite } from './upstream/server/responses-tool-search-repair';
 import { createResponsesFunctionToolRepairBlockRewrite } from './upstream/server/responses-function-tool-repair';
@@ -77,18 +77,23 @@ export function prepareResponsesCompatibility(body: unknown, policy: ResponsesCo
           : undefined,
       };
   const displacedKinds = repairPlan.renamedKinds;
-  const displacement = displacedKinds.size > 0
-    ? { bareCustomNames, displacedKinds }
+  const schemas = collectFunctionCallRepairSchemas(policy.repairFunctionArguments ? body : undefined, repairPlan);
+  const displacement = displacedKinds.size > 0 || (custom.names.size > 0 && schemas.namespacedFunctions.size > 0)
+    ? {
+        bareCustomNames, displacedKinds,
+        isDeclaredNamespacedFunction: (namespace: string, name: string) => hasDeclaredNamespacedFunction(schemas, namespace, name),
+      }
     : undefined;
-  const schemas = policy.repairFunctionArguments
-    ? collectFunctionCallRepairSchemas(body, repairPlan)
-    : new Map();
   const declared = collectDeclaredWireToolNames(body);
-  const scrubAuthorization = collectSelfNamedNamespaceScrubAuthorization(body, new Set([...custom.names, ...custom.repairNames]), new Set(schemas.keys()));
+  const bareFunctionNames = new Set<string>();
+  for (const schema of schemas.byIdentity.values()) {
+    if (!schema.namespace) bareFunctionNames.add(schema.name);
+  }
+  const scrubAuthorization = collectSelfNamedNamespaceScrubAuthorization(body, new Set([...custom.names, ...custom.repairNames]), bareFunctionNames);
   const restoreNamespace = (text: string) => restoreRoutedNamespaceCallsInJson(text, namespace.aliases);
   return {
     body: policy.namespaceTools === 'functions' ? stripCanonicalOnlyToolFields(namespace.body, false) : namespace.body,
-    needsResponseTransform: Boolean(policy.itemIdRepair || policy.snapshotRepair || policy.contentChannelReasoning) || custom.names.size > 0 || custom.repairNames.size > 0 || search.names.size > 0 || namespace.aliases.size > 0 || schemas.size > 0 || policy.backfillResponseFields === true,
+    needsResponseTransform: Boolean(policy.itemIdRepair || policy.snapshotRepair || policy.contentChannelReasoning) || custom.names.size > 0 || custom.repairNames.size > 0 || search.names.size > 0 || namespace.aliases.size > 0 || schemas.byIdentity.size > 0 || policy.backfillResponseFields === true,
     restoreJson(text: string): string {
       let next = restoreNamespace(scrubSelfNamedToolCallNamespaceInJson(text, scrubAuthorization));
       if (policy.itemIdRepair) {
@@ -99,7 +104,7 @@ export function prepareResponsesCompatibility(body: unknown, policy: ResponsesCo
       if (policy.contentChannelReasoning) next = rewriteReasoningSummaryInJsonString(next);
       next = restoreRoutedCustomCallsInJson(next, custom.names, custom.repairNames, declared, displacement);
       next = restoreRoutedToolSearchCallsInJson(next, search.names);
-      next = repairFunctionCallsInJson(next, schemas, repairPlan.renamedWireNames);
+      next = repairFunctionCallsInJson(next, schemas);
       return policy.backfillResponseFields ? backfillResponsesFieldsJson(next) : next;
     },
     createStreamRewrite() {
@@ -109,7 +114,7 @@ export function prepareResponsesCompatibility(body: unknown, policy: ResponsesCo
         payloadRewriteAsBlockRewrite(restoreNamespace),
         createRoutedCustomToolRestoreBlockRewrite(custom.names, budget, custom.repairNames, declared, displacement),
         createRoutedToolSearchRestoreBlockRewrite(search.names, budget),
-        createResponsesFunctionToolRepairBlockRewrite(schemas, budget, repairPlan.renamedWireNames),
+        createResponsesFunctionToolRepairBlockRewrite(schemas, budget),
       ];
       // Transport/id reconstruction precedes tool completion; all stages share one budget.
       const before: SseBlockRewrite[] = [];
