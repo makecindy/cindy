@@ -132,9 +132,20 @@ export async function inspectTree(
 }
 
 /** Resume only inside a transaction-owned root. Existing entries must match; never overwrite. */
-export async function copyTree(source: string, destination: string, resume = false): Promise<void> {
+export async function copyTree(
+  source: string,
+  destination: string,
+  resume = false,
+  onCopiedBytes?: (copiedBytes: number) => void,
+): Promise<void> {
   const realSource = await fs.realpath(source);
   let realDestination = resume ? await fs.realpath(destination) : '';
+  let copiedBytes = 0;
+  const reportBytes = (delta: number) => {
+    if (delta <= 0 || !onCopiedBytes) return;
+    copiedBytes += delta;
+    onCopiedBytes(copiedBytes);
+  };
   const visit = async (relative: string): Promise<void> => {
     const from = path.join(source, relative);
     const to = path.join(destination, relative);
@@ -151,7 +162,8 @@ export async function copyTree(source: string, destination: string, resume = fal
           throw new Error('TARGET_CONTENT_CHANGED');
         return;
       }
-      let link = relocatedLink(await fs.readlink(from), relative, source);
+      const rawLink = await fs.readlink(from);
+      let link = relocatedLink(rawLink, relative, source);
       // NTFS directory junctions do not need Developer Mode. File symlinks do;
       // insufficient privilege fails before the original directory is moved.
       const directory = await fs.stat(from).then(
@@ -163,7 +175,12 @@ export async function copyTree(source: string, destination: string, resume = fal
           return false;
         },
       );
-      if (process.platform === 'win32' && directory) link = path.resolve(path.dirname(from), link);
+      if (process.platform === 'win32' && directory) {
+        // Internal relative links stay inside the moved workspace rather than
+        // bouncing back through the old source junction.
+        const base = path.isAbsolute(link) ? path.dirname(from) : path.dirname(to);
+        link = path.resolve(base, link);
+      }
       await fs.symlink(
         link,
         to,
@@ -197,6 +214,7 @@ export async function copyTree(source: string, destination: string, resume = fal
           (await fileHash(from, realSource)) !== (await fileHash(to, realDestination))
         )
           throw new Error('TARGET_CONTENT_CHANGED');
+        reportBytes(Number(info.size));
         return;
       }
       // Copy from the verified handle, not a pathname which could have become a
@@ -208,8 +226,10 @@ export async function copyTree(source: string, destination: string, resume = fal
       });
       try {
         if (!inside(realDestination, await fs.realpath(to))) throw new Error('TARGET_PATH_CHANGED');
-        for await (const bytes of input.createReadStream({ autoClose: false }))
+        for await (const bytes of input.createReadStream({ autoClose: false })) {
           await output.writeFile(bytes);
+          reportBytes(bytes.length);
+        }
         const after = await input.stat({ bigint: true });
         if (
           before.size !== after.size ||

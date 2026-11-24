@@ -18,6 +18,10 @@ import {
   workspaceMoveStatus,
 } from '../service.js';
 import { copyTree, directoryIdentity, inspectTree } from '../tree.js';
+import {
+  getWorkspaceMigrationStartupProgress,
+  subscribeWorkspaceMigrationStartupProgress,
+} from '../startupState.js';
 import * as processIdentity from '../../desktopProcessIdentity.js';
 
 let temporary: string;
@@ -538,5 +542,32 @@ describe('offline workspace relocation', () => {
     expect(await fs.readFile(path.join(status.backup!, 'external.txt'), 'utf8')).toBe(
       'late-user-data',
     );
+  });
+
+  it('emits startup progress phases and clears progress when recovery completes', async () => {
+    const events: Array<{ phase: string; progress: number } | null> = [];
+    const unsubscribe = subscribeWorkspaceMigrationStartupProgress((progress) => {
+      events.push(progress ? { phase: progress.phase, progress: progress.progress } : null);
+    });
+    try {
+      await requestWorkspaceMove(owner, bot, target, current);
+      // Case-insensitive retry on Windows should remain idempotent.
+      if (process.platform === 'win32') {
+        const flipped = target[0]!.toLowerCase() + target.slice(1);
+        expect((await requestWorkspaceMove(owner, bot, flipped, current)).phase).toBe('pending');
+      }
+      await previousProcess();
+      await recoverWorkspaceMovesAtStartup(owner, true);
+      expect(getWorkspaceMigrationStartupProgress()).toBeNull();
+      const phases = events.filter((e): e is { phase: string; progress: number } => e !== null).map((e) => e.phase);
+      expect(phases).toContain('preparing');
+      expect(phases).toContain('copying');
+      expect(phases).toContain('verifying');
+      expect(phases).toContain('switching');
+      expect(phases).toContain('cleaning');
+      expect(events.at(-1)).toBeNull();
+    } finally {
+      unsubscribe();
+    }
   });
 });

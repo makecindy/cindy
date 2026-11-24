@@ -15,7 +15,23 @@ import {
   readDesktopProcessIdentity,
   type DesktopProcessIdentity,
 } from '../desktopProcessIdentity.js';
+import type { WorkspaceMigrationPhase } from '../../shared/workspaceMigration.js';
 import { copyTree, directoryIdentity, entry, inside, inspectTree } from './tree.js';
+import {
+  beginWorkspaceMigrationStartupProgress,
+  type WorkspaceMigrationStartupProgressJob,
+} from './startupState.js';
+
+async function normalizeComparePath(value: string): Promise<string> {
+  const resolved = path.resolve(value);
+  const canonical = await fs
+    .realpath(path.dirname(resolved))
+    .then(
+      (parent) => path.join(parent, path.basename(resolved)),
+      () => resolved,
+    );
+  return process.platform === 'win32' ? path.toNamespacedPath(canonical).toLowerCase() : canonical;
+}
 
 const processToken = randomUUID();
 // Only a diagnostic for this startup, scoped to the exact owner and receipt.
@@ -260,7 +276,7 @@ export async function workspaceMoveStatus(ownerRoot: string, botId: string) {
     source,
     workspaceAvailable,
     startupWarning: warning?.id === receipt?.id ? warning?.code : undefined,
-    phase: receipt?.phase ?? 'none',
+    phase: (receipt?.phase ?? 'none') as WorkspaceMigrationPhase,
     target: receipt?.target,
     error: receipt?.error,
     backupRemaining: receipt?.backupRemaining,
@@ -298,7 +314,8 @@ async function requestMove(
 ) {
   const existing = await read(ownerRoot, botId);
   if (existing && !['failed', 'cancelled'].includes(existing.phase)) {
-    if (path.resolve(target) === existing.target) return workspaceMoveStatus(ownerRoot, botId);
+    if ((await normalizeComparePath(target)) === (await normalizeComparePath(existing.target)))
+      return workspaceMoveStatus(ownerRoot, botId);
     if (existing.phase === 'completed') throw new Error('WORKSPACE_ALREADY_REDIRECTED');
     throw new Error('MIGRATION_ALREADY_REGISTERED');
   }
@@ -425,7 +442,11 @@ async function restoreOriginal(ownerRoot: string, receipt: Receipt): Promise<voi
   await syncDirectory(path.dirname(source));
 }
 
-async function cleanupBackup(ownerRoot: string, receipt: Receipt): Promise<void> {
+async function cleanupBackup(
+  ownerRoot: string,
+  receipt: Receipt,
+  verifiedInCurrentRun = false,
+): Promise<void> {
   const { source, backup } = locations(ownerRoot, receipt.botId, receipt);
   try {
     if (await entry(backup)) {
@@ -434,11 +455,13 @@ async function cleanupBackup(ownerRoot: string, receipt: Receipt): Promise<void>
         !(await sameDirectory(receipt.target, receipt.targetIdentity))
       )
         throw new Error('TARGET_UNAVAILABLE');
-      if (
-        !(await sameDirectory(backup, receipt.sourceIdentity)) ||
-        (await inspectTree(backup, source)).digest !== receipt.digest ||
-        (await inspectTree(receipt.target, source)).digest !== receipt.digest
-      ) {
+      const backupMatchesIdentity = await sameDirectory(backup, receipt.sourceIdentity);
+      const digestsMatch =
+        backupMatchesIdentity &&
+        (verifiedInCurrentRun ||
+          ((await inspectTree(backup, source)).digest === receipt.digest &&
+            (await inspectTree(receipt.target, source)).digest === receipt.digest));
+      if (!digestsMatch) {
         receipt.backupRemaining = true;
         receipt.error = 'MOVED_BACKUP_RETAINED_FOR_REVIEW';
         await save(ownerRoot, receipt);
@@ -456,7 +479,11 @@ async function cleanupBackup(ownerRoot: string, receipt: Receipt): Promise<void>
   await save(ownerRoot, receipt);
 }
 
-async function execute(ownerRoot: string, receipt: Receipt): Promise<void> {
+async function execute(
+  ownerRoot: string,
+  receipt: Receipt,
+  progressJob?: WorkspaceMigrationStartupProgressJob,
+): Promise<void> {
   const { source, backup } = locations(ownerRoot, receipt.botId, receipt);
   const persist = async (phase: Phase) => {
     await save(ownerRoot, { ...receipt, phase });
@@ -470,14 +497,17 @@ async function execute(ownerRoot: string, receipt: Receipt): Promise<void> {
         (await linkedTo(source, receipt.target)) &&
         (await sameDirectory(receipt.target, receipt.targetIdentity))
       ) {
+        progressJob?.update({ phase: 'cleaning', progress: 92 });
         receipt.backupRemaining = !!(await entry(backup));
         await persist('completed');
         await cleanupBackup(ownerRoot, receipt);
+        progressJob?.update({ phase: 'cleaning', progress: 100 });
         return;
       }
       await restoreOriginal(ownerRoot, receipt);
       throw new Error('CUTOVER_INTERRUPTED_OR_TARGET_UNAVAILABLE');
     }
+    progressJob?.update({ phase: 'preparing', progress: 5, copiedBytes: 0, totalBytes: 0 });
     if (!(await sameDirectory(source, receipt.sourceIdentity)))
       throw new Error('SOURCE_PATH_CHANGED');
     if (
@@ -503,11 +533,35 @@ async function execute(ownerRoot: string, receipt: Receipt): Promise<void> {
     }
     await persist('copying');
     const before = await inspectTree(source);
-    await copyTree(source, receipt.target, true);
+    const totalBytes = Number(before.bytes);
+    progressJob?.update({
+      phase: 'copying',
+      progress: 12,
+      copiedBytes: 0,
+      totalBytes,
+    });
+    let lastEmitAt = 0;
+    await copyTree(source, receipt.target, true, (copiedBytes) => {
+      if (!progressJob) return;
+      const now = Date.now();
+      if (now - lastEmitAt < 100 && copiedBytes < totalBytes) return;
+      lastEmitAt = now;
+      const ratio = totalBytes > 0 ? Math.min(1, copiedBytes / totalBytes) : 1;
+      progressJob.update({
+        phase: 'copying',
+        progress: 12 + Math.round(ratio * 63),
+        copiedBytes: Math.min(copiedBytes, totalBytes),
+        totalBytes,
+      });
+    });
+    progressJob?.update({
+      phase: 'verifying',
+      progress: 76,
+      copiedBytes: totalBytes,
+      totalBytes,
+    });
     const copied = await inspectTree(receipt.target, source);
-    const after = await inspectTree(source);
-    if (before.digest !== copied.digest || before.digest !== after.digest)
-      throw new Error('WORKSPACE_CHANGED');
+    if (before.digest !== copied.digest) throw new Error('WORKSPACE_CHANGED');
     receipt.digest = copied.digest;
     await persist('prepared');
     // Test link creation on the SOURCE filesystem (NTFS junction privileges),
@@ -521,16 +575,19 @@ async function execute(ownerRoot: string, receipt: Receipt): Promise<void> {
       !(await sameDirectory(path.dirname(receipt.target), receipt.parentIdentity))
     )
       throw new Error('TARGET_CHANGED');
+    progressJob?.update({ phase: 'switching', progress: 86 });
     await persist('switching');
     await fs.rename(source, backup);
     await syncDirectory(path.dirname(source));
+    // Verify the moved-aside source once after rename, confirming nothing
+    // changed during copy or right before cutover.
     if ((await inspectTree(backup, source)).digest !== receipt.digest)
       throw new Error('WORKSPACE_CHANGED');
     await fs.symlink(receipt.target, source, process.platform === 'win32' ? 'junction' : 'dir');
     await syncDirectory(path.dirname(source));
     if (
       !(await linkedTo(source, receipt.target)) ||
-      (await inspectTree(await fs.realpath(source), source)).digest !== receipt.digest
+      !(await sameDirectory(await fs.realpath(source), receipt.targetIdentity))
     )
       throw new Error('LINK_VERIFICATION_FAILED');
     await persist('linked');
@@ -538,7 +595,9 @@ async function execute(ownerRoot: string, receipt: Receipt): Promise<void> {
     // startup to replace the now authoritative destination with a partial backup.
     receipt.backupRemaining = true;
     await persist('completed');
-    await cleanupBackup(ownerRoot, receipt);
+    progressJob?.update({ phase: 'cleaning', progress: 96 });
+    await cleanupBackup(ownerRoot, receipt, true);
+    progressJob?.update({ phase: 'cleaning', progress: 100 });
   } catch (error) {
     const phase = receipt.phase;
     if (phase === 'switching' || phase === 'linked') {
@@ -566,52 +625,87 @@ export async function recoverWorkspaceMovesAtStartup(
   });
   if (!names.some((name) => name.endsWith('.json'))) return;
   await locked(ownerRoot, async () => {
+    const receipts: Array<{ journal: string; receipt: Receipt }> = [];
     for (const name of names.sort()) {
       if (!name.endsWith('.json')) continue;
-      const receipt = await readJournal(ownerRoot, path.join(directory, name));
+      const journal = path.join(directory, name);
+      const receipt = await readJournal(ownerRoot, journal);
       if (!receipt || ['failed', 'cancelled'].includes(receipt.phase)) continue;
-      const journal = locations(ownerRoot, receipt.botId).journal;
-      try {
-        if (receipt.phase === 'completed') {
-          if (
-            exclusiveStartup &&
-            receipt.backupRemaining &&
-            receipt.error !== 'MOVED_BACKUP_RETAINED_FOR_REVIEW'
+      receipts.push({ journal, receipt });
+    }
+    const runnableCount = exclusiveStartup
+      ? (
+          await Promise.all(
+            receipts.map(async ({ receipt }) =>
+              receipt.phase !== 'completed' && !(await requesterIsActive(receipt)),
+            ),
           )
-            await cleanupBackup(ownerRoot, receipt);
-          continue;
+        ).filter(Boolean).length
+      : 0;
+    let progressJob: WorkspaceMigrationStartupProgressJob | undefined;
+    let executedIndex = 0;
+    try {
+      for (const { journal, receipt } of receipts) {
+        try {
+          if (receipt.phase === 'completed') {
+            if (
+              exclusiveStartup &&
+              receipt.backupRemaining &&
+              receipt.error !== 'MOVED_BACKUP_RETAINED_FOR_REVIEW'
+            )
+              await cleanupBackup(ownerRoot, receipt);
+            continue;
+          }
+          if (await requesterIsActive(receipt)) {
+            if (receipt.phase !== 'pending') throw new Error('WORKSPACE_MOVE_IN_PROGRESS');
+            continue;
+          }
+          if (!exclusiveStartup) {
+            if (!(await usableWorkspace(ownerRoot, receipt)))
+              throw new Error('WORKSPACE_MOVE_REQUIRES_EXCLUSIVE_STARTUP');
+            startupWarnings.set(journal, {
+              id: receipt.id,
+              code: 'MIGRATION_WAITING_FOR_EXCLUSIVE_STARTUP',
+            });
+            continue;
+          }
+          executedIndex += 1;
+          if (!progressJob) {
+            progressJob = beginWorkspaceMigrationStartupProgress(
+              receipt.id,
+              Math.max(1, runnableCount),
+            );
+          } else {
+            progressJob.update({
+              phase: 'preparing',
+              progress: 5,
+              copiedBytes: 0,
+              totalBytes: 0,
+              currentIndex: executedIndex,
+              totalCount: Math.max(executedIndex, runnableCount),
+            });
+          }
+          await execute(ownerRoot, receipt, progressJob);
+        } catch (error) {
+          if (
+            error instanceof Error &&
+            [
+              'MIGRATION_BUSY',
+              'WORKSPACE_MOVE_IN_PROGRESS',
+              'WORKSPACE_MOVE_REQUIRES_EXCLUSIVE_STARTUP',
+            ].includes(error.message)
+          )
+            throw error;
+          // Once committed, backup cleanup is maintenance and cannot block the
+          // account even if the target disk is currently offline. The affected
+          // buddy's guard still rejects an unavailable target, without mkdir.
+          if (receipt.phase !== 'completed' && !(await usableWorkspace(ownerRoot, receipt)))
+            throw error;
+          startupWarnings.set(journal, { id: receipt.id, code: 'MIGRATION_RECEIPT_UPDATE_FAILED' });
         }
-        if (await requesterIsActive(receipt)) {
-          if (receipt.phase !== 'pending') throw new Error('WORKSPACE_MOVE_IN_PROGRESS');
-          continue;
-        }
-        if (!exclusiveStartup) {
-          if (!(await usableWorkspace(ownerRoot, receipt)))
-            throw new Error('WORKSPACE_MOVE_REQUIRES_EXCLUSIVE_STARTUP');
-          startupWarnings.set(journal, {
-            id: receipt.id,
-            code: 'MIGRATION_WAITING_FOR_EXCLUSIVE_STARTUP',
-          });
-          continue;
-        }
-        await execute(ownerRoot, receipt);
-      } catch (error) {
-        if (
-          error instanceof Error &&
-          [
-            'MIGRATION_BUSY',
-            'WORKSPACE_MOVE_IN_PROGRESS',
-            'WORKSPACE_MOVE_REQUIRES_EXCLUSIVE_STARTUP',
-          ].includes(error.message)
-        )
-          throw error;
-        // Once committed, backup cleanup is maintenance and cannot block the
-        // account even if the target disk is currently offline. The affected
-        // buddy's guard still rejects an unavailable target, without mkdir.
-        if (receipt.phase !== 'completed' && !(await usableWorkspace(ownerRoot, receipt)))
-          throw error;
-        startupWarnings.set(journal, { id: receipt.id, code: 'MIGRATION_RECEIPT_UPDATE_FAILED' });
       }
+    } finally {
+      progressJob?.finish();
     }
   });
 }
@@ -626,4 +720,74 @@ export async function assertWorkspaceMoveReady(ownerRoot: string, botId: string)
       ? 'MOVED_WORKSPACE_UNAVAILABLE'
       : 'WORKSPACE_MOVE_RECOVERY_REQUIRED',
   );
+}
+
+/**
+ * Provision a brand-new buddy's workspace directly under a configured custom root
+ * (decoupled from %APPDATA%), linking the canonical logical path `<ownerRoot>/bots/<bot>/workspace`
+ * to the physical folder and recording a completed receipt so offline-drive guards apply immediately.
+ */
+export async function provisionDecoupledWorkspace(
+  ownerRoot: string,
+  botId: string,
+  customRoot: string,
+): Promise<string> {
+  const { source } = locations(ownerRoot, botId);
+  return locked(ownerRoot, async () => {
+    await assertWorkspaceMoveReady(ownerRoot, botId);
+    if (await entry(source)) return source;
+
+    const rootInfo = await fs.stat(customRoot).catch(() => null);
+    if (!rootInfo?.isDirectory()) {
+      throw new Error('BUDDY_WORKSPACE_ROOT_UNAVAILABLE');
+    }
+    const physicalOwner = await fs.realpath(ownerRoot);
+    const physicalRoot = await fs.realpath(customRoot);
+    if (inside(physicalOwner, physicalRoot) || inside(physicalRoot, physicalOwner)) {
+      throw new Error('TARGET_OVERLAPS_CINDY_DATA');
+    }
+
+    const baseName = `${botSegment(botId)}-workspace`;
+    let physicalTarget = '';
+    for (let suffix = 1; suffix <= 99; suffix += 1) {
+      const candidate = path.join(physicalRoot, suffix === 1 ? baseName : `${baseName}-${suffix}`);
+      if (!(await entry(candidate))) {
+        physicalTarget = candidate;
+        break;
+      }
+    }
+    if (!physicalTarget) {
+      physicalTarget = path.join(physicalRoot, `${baseName}-${randomUUID().slice(0, 8)}`);
+    }
+
+    await fs.mkdir(physicalTarget, { mode: 0o700 });
+    await syncDirectory(physicalRoot);
+    try {
+      await fs.mkdir(path.dirname(source), { recursive: true });
+      await fs.symlink(physicalTarget, source, process.platform === 'win32' ? 'junction' : 'dir');
+      await syncDirectory(path.dirname(source));
+      const targetIdentity = await directoryIdentity(physicalTarget);
+      const parentIdentity = await directoryIdentity(physicalRoot);
+      const identity = await readDesktopProcessIdentity(process.pid);
+      await save(ownerRoot, {
+        version: 1,
+        id: randomUUID(),
+        botId,
+        target: physicalTarget,
+        parentIdentity,
+        sourceIdentity: targetIdentity,
+        targetIdentity,
+        processToken,
+        ...(identity ? { processIdentity: identity } : {}),
+        pid: process.pid,
+        phase: 'completed',
+        backupRemaining: false,
+      });
+      return source;
+    } catch (error) {
+      await fs.unlink(source).catch(() => undefined);
+      await fs.rm(physicalTarget, { recursive: true, force: true }).catch(() => undefined);
+      throw error;
+    }
+  });
 }

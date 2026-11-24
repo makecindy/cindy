@@ -16,6 +16,7 @@ import {
   BotProfileFolderError,
   botProfileDir,
   ensureBotContentDirs,
+  ensureBotWorkspaceDir,
   migrateLegacyBotProfileFolder,
   migrateBotProfileFolder,
   readBotProfileFolder,
@@ -442,5 +443,63 @@ describe('strict reads (cloud companions)', () => {
     } finally {
       await fs.chmod(soul, 0o600);
     }
+  });
+});
+
+describe('decoupled default buddy workspace root (#10568)', () => {
+  it('provisions brand-new buddies under the configured custom root and guards against offline drives', async () => {
+    const { BUDDY_WORKSPACE_SETTINGS_FILENAME } = await import('../../buddy-workspace-settings.js');
+    const { workspaceMoveStatus } = await import('../../workspace-migration/service.js');
+
+    // Existing buddy created before setting the custom root stays on the default path.
+    const existingWs = await ensureBotWorkspaceDir(root, 'bot-existing');
+    await fs.writeFile(path.join(existingWs, 'old.txt'), 'stays-put');
+
+    const customRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-buddy-ws-root-'));
+    try {
+      await fs.writeFile(
+        path.join(root, BUDDY_WORKSPACE_SETTINGS_FILENAME),
+        JSON.stringify({ directory: customRoot, previousDirectories: [customRoot] }),
+      );
+
+      // Existing buddy is unaffected.
+      expect(await ensureBotWorkspaceDir(root, 'bot-existing')).toBe(existingWs);
+      expect((await fs.lstat(existingWs)).isSymbolicLink()).toBe(false);
+
+      // Brand-new buddy is provisioned directly on the custom root with a link at the logical path.
+      const newWs = await ensureBotWorkspaceDir(root, 'bot-new');
+      expect((await fs.lstat(newWs)).isSymbolicLink()).toBe(true);
+      const physical = await fs.realpath(newWs);
+      expect(path.dirname(physical)).toBe(await fs.realpath(customRoot));
+      await fs.writeFile(path.join(newWs, 'draft.md'), 'stored-on-custom-root');
+      expect(await fs.readFile(path.join(physical, 'draft.md'), 'utf8')).toBe('stored-on-custom-root');
+
+      const status = await workspaceMoveStatus(root, 'bot-new');
+      expect(status).toMatchObject({
+        phase: 'completed',
+        workspaceAvailable: true,
+        backupRemaining: false,
+      });
+
+      // Removing the custom target must fail explicitly instead of silently recreating an empty folder.
+      await fs.rm(physical, { recursive: true, force: true });
+      await expect(ensureBotWorkspaceDir(root, 'bot-new')).rejects.toThrow(
+        'MOVED_WORKSPACE_UNAVAILABLE',
+      );
+    } finally {
+      await fs.rm(customRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('fails explicitly when creating a new buddy while the configured custom root is offline', async () => {
+    const { BUDDY_WORKSPACE_SETTINGS_FILENAME } = await import('../../buddy-workspace-settings.js');
+    const missingRoot = path.join(os.tmpdir(), `cindy-missing-root-${Date.now()}`);
+    await fs.writeFile(
+      path.join(root, BUDDY_WORKSPACE_SETTINGS_FILENAME),
+      JSON.stringify({ directory: missingRoot, previousDirectories: [] }),
+    );
+    await expect(ensureBotWorkspaceDir(root, 'bot-offline')).rejects.toThrow(
+      'BUDDY_WORKSPACE_ROOT_UNAVAILABLE',
+    );
   });
 });
