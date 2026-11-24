@@ -165,6 +165,11 @@ function scopedFixtureSampler(recorded, fullTimesOut, calls) {
   };
 }
 
+// Host integration tier. The native case runs in the regular Host suite on POSIX
+// and uses the production ps -A sampler. Run it on macOS or Linux with permission
+// to read the system process table. If the development sandbox blocks that read,
+// pass --test-name-pattern="native process table" to the Host suite's Node
+// command and run it separately in a process-table-enabled environment.
 for (const [mode, fullTimesOut] of [['scoped fixture', false], ['full scan times out', true], ['native process table', false]]) {
   test('Host exit reaps only tools with a proven app-server owner: ' + mode,
     { skip: process.platform === 'win32', timeout: TEST_TIMEOUT_MS }, async t => {
@@ -194,7 +199,6 @@ for (const [mode, fullTimesOut] of [['scoped fixture', false], ['full scan times
       t.after(() => { for (const dispose of disposers) dispose?.(); });
 
       const calls = [];
-      // The native gate requires a process-table-permitted environment, as does the application.
       const result = reapCodexToolTreesSync(native ? undefined : scopedFixtureSampler(recorded, fullTimesOut, calls));
       assert.equal(result.appServers, 1);
       assert.equal(result.killedToolTrees, 1);

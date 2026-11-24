@@ -1,6 +1,8 @@
 /**
  * Unit tier. Inject the process table through the production reaper interface;
  * the Host diagnostics integration sends real signals to owned test processes.
+ * A valid ancestry alone cannot authorize a signal if the app-server's
+ * registration was retired while the reaper checked that ancestry.
  */
 import { ChildProcess } from 'node:child_process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -69,6 +71,21 @@ describe('reapCodexToolTreesSync', () => {
     registerCodexProcessRole(root, 'task-host', spawned(root));
 
     expect(reapCodexToolTreesSync(sample)).toMatchObject({ killedToolTrees: 0, unreapedAppServers: 1 });
+    expect(kill).not.toHaveBeenCalled();
+  });
+
+  it('withholds signals if the registration is retired during the parent re-read', () => {
+    const kill = vi.spyOn(process, 'kill').mockReturnValue(true);
+    const unregister = registerCodexProcessRole(root, 'task-host', spawned(root));
+    const readTable = processTable([[tool, root], [root, process.pid]]);
+    const sample: CodexProcessSampler = (query, timeoutMs) => {
+      const result = readTable(query, timeoutMs);
+      if (query.kind === 'parents') unregister();
+      return result;
+    };
+
+    expect(reapCodexToolTreesSync(sample)).toMatchObject({ killedToolTrees: 0, unreapedAppServers: 1 });
+    expect(readTable.mock.calls.map(([query]) => query.kind)).toEqual(['all', 'parents']);
     expect(kill).not.toHaveBeenCalled();
   });
 
