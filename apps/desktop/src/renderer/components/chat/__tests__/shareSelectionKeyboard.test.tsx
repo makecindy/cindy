@@ -16,7 +16,8 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { SHARE_MESSAGE_ATTR, SHARE_SESSION_ATTR } from '@/lib/shareConversationImage';
 import { ShareMessageCheckbox } from '../ShareMessageCheckbox';
 import { ShareSelectionBar } from '../ShareSelectionBar';
-import { shareSelectionStore } from '../shareSelectionStore';
+import { shareSelectionStore, useShareSelectionActive } from '../shareSelectionStore';
+import { TodoListCard } from '../TodoListCard';
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('@/hooks/useBrandLogo', () => ({ useBrandLogo: () => '' }));
@@ -74,4 +75,33 @@ it('still leaves Escape and ⌘/Ctrl+A to a text field', () => {
 
   act(() => { fireEvent.keyDown(draft, { key: 'Escape' }); });
   expect(shareSelectionStore.isActive(SESSION)).toBe(true);
+});
+
+// #12437: the existing share-bar tests do not include a pinned plan's document listener.
+// Unit: pin a real plan, keyboard-enter sharing, then send Escape to the message area.
+it('exits keyboard-opened sharing before closing the pinned plan', () => {
+  shareSelectionStore.exit();
+  function Session() {
+    const sharing = useShareSelectionActive(SESSION);
+    return (
+      <>
+        <TodoListCard todos={[{ content: 'Check sharing', status: 'in_progress' }]} />
+        <button onClick={() => shareSelectionStore.enter(SESSION)}>Share message as image</button>
+        {sharing && <ShareSelectionBar sessionId={SESSION} getContentWidth={() => 600} barWidth={600} />}
+      </>
+    );
+  }
+  const { container } = render(<Session />);
+  const plan = container.querySelector<HTMLButtonElement>('button[aria-expanded]')!;
+  fireEvent.click(plan, { detail: 0 });
+  const share = screen.getByRole('button', { name: 'Share message as image' });
+  fireEvent.click(share, { detail: 0 });
+  expect(shareSelectionStore.isActive(SESSION)).toBe(true);
+
+  fireEvent.keyDown(share, { key: 'Escape' });
+  expect(shareSelectionStore.isActive(SESSION)).toBe(false);
+  expect(plan.getAttribute('aria-expanded')).toBe('true');
+
+  fireEvent.keyDown(plan, { key: 'Escape' });
+  expect(plan.getAttribute('aria-expanded')).toBe('false');
 });

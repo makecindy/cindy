@@ -199,6 +199,7 @@ export function ShareSelectionBar({
   return (
     <div
       ref={barRef}
+      data-share-selection-bar
       {...{ [SHARE_EXCLUDE_ATTR]: '' }}
       style={{ width: barWidth }}
       className={cn(
