@@ -2587,6 +2587,8 @@ export interface AgentMcpServerToolsReport {
 }
 
 export interface AgentSessionHandle {
+  /** The sharing computer confirmed that it reclaimed this idle native run. */
+  hasReclaimedSharedRun?(): boolean;
   /** Canonical physical Skill identities frozen at native runtime startup. */
   readonly disabledSkillPaths?: readonly string[];
   getCodexContextWindowInfo?(): Promise<CodexContextWindowInfo | null>;

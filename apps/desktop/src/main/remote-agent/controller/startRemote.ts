@@ -63,6 +63,7 @@ import {
   type RemoteAgentHandleController,
   type RemoteAgentLink,
   type RemoteStartedInfo,
+  type SharedReconnectSendEvidence,
 } from './proxyHandle';
 import { ExecServerRelay } from './execServerRelay';
 import { createReverseHttpRouter, type LocalMcpTarget } from './router';
@@ -72,10 +73,19 @@ import { isSharedTaskAuthorizationDenied } from './poller';
 // Local evidence from the same open that failed. An old offer or a send RPC
 // error must never authorize replay of a persisted input.
 const stoppedReconnectOffers = new WeakMap<RemoteAgentRemoteError, () => void>();
-const reconnectOfferCapture = new AsyncLocalStorage<string>();
+const reconnectOfferCapture = new AsyncLocalStorage<{
+  sessionId: string;
+  evidence?: SharedReconnectSendEvidence;
+  replacement?: boolean;
+}>();
 
-export function withSharedReconnectOfferCapture<T>(sessionId: string, send: () => Promise<T>): Promise<T> {
-  return reconnectOfferCapture.run(sessionId, send);
+export function withSharedReconnectOfferCapture<T>(
+  sessionId: string,
+  send: () => Promise<T>,
+  evidence?: SharedReconnectSendEvidence,
+  replacement?: boolean,
+): Promise<T> {
+  return reconnectOfferCapture.run({ sessionId, evidence, replacement }, send);
 }
 
 interface SharedReconnectHandoff {
@@ -618,6 +628,7 @@ async function prepareAndStartRemoteAgentSession(
   /** 正在连或连着的那条连接(Codex 的执行环境帧经它推给对方)。 */
   let active: RemoteAgentRunClient | null = null;
   let linkState: LinkState = 'connecting';
+  let idleReclaimedByHost = false;
   /** 进行中的、要对方参与的调用数(期间不让出名额)。 */
   let inflight = 0;
   let lastActivity = Date.now();
@@ -762,8 +773,9 @@ async function prepareAndStartRemoteAgentSession(
     const early: Array<{ type: 'event' | 'state'; value: unknown }> = [];
     let closedEarly: { reason: string; message?: string } | null = null;
     const expectedResume = payload.options.resumeSessionId;
+    const capture = reconnectOfferCapture.getStore();
     const captureReconnectOffer = reconnect && deps.recoverSharedReconnect && !!expectedResume
-      && reconnectOfferCapture.getStore() === opts.sessionId
+      && capture && capture.sessionId === opts.sessionId && !capture.replacement
       && payload.acceptsGroupSwitch && !payload.groupAssigned;
     let startupSwitchToken: string | undefined;
     let resumeLost = false;
@@ -885,6 +897,7 @@ async function prepareAndStartRemoteAgentSession(
               active = null;
               relay?.reset();
               linkState = unfinished ? 'closed' : 'released';
+              idleReclaimedByHost = !unfinished;
               if (unfinished) controller?.onClosed(reason, error?.message, client.runId);
             }
             if (releasing === pendingRelease) releasing = null;
@@ -896,6 +909,7 @@ async function prepareAndStartRemoteAgentSession(
         if ((restart || (idleReclaimed && !controller?.hasActiveTurn())) && controller) {
           relay?.reset();
           linkState = 'released';
+          idleReclaimedByHost = !restart;
           deps.log?.info('remote agent connection released by the other computer', { kind, runId: client.runId, reason });
           if (restart) {
             // A first turn may already have changed local files before its first done.
@@ -947,6 +961,7 @@ async function prepareAndStartRemoteAgentSession(
         deps.groupSwitch?.offer(startupSwitchToken);
       }
       linkState = 'connected';
+      idleReclaimedByHost = false;
       lastStarted = started;
       onOpened(started);
       clearInterval(reportingTimer);
@@ -1359,6 +1374,10 @@ async function prepareAndStartRemoteAgentSession(
       controller = createRemoteAgentHandle({
         link,
         started,
+        sharedReconnectSendEvidence: () => {
+          const capture = reconnectOfferCapture.getStore();
+          return capture && capture.sessionId === opts.sessionId ? capture.evidence : undefined;
+        },
         workspace,
         getExecutorCwd: () => executor.getCwd(),
         recordApproval: (action) => executor.recordApproval(action),
@@ -1421,5 +1440,9 @@ async function prepareAndStartRemoteAgentSession(
   }
   touch();
   deps.log?.info('remote agent session started', { kind, runId: activeNow()?.runId });
-  return (controller as RemoteAgentHandleController | null)!.handle;
+  const handle = (controller as RemoteAgentHandleController | null)!.handle;
+  if (deps.recoverSharedReconnect) {
+    handle.hasReclaimedSharedRun = () => linkState === 'released' && idleReclaimedByHost;
+  }
+  return handle;
 }
