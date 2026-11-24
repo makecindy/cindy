@@ -201,6 +201,16 @@ describe('shared native cloud settings', () => {
     expect((input as HTMLTextAreaElement).value).toBe('unsaved draft');
     expect(save).not.toHaveBeenCalled();
   });
+  // Unit: leaving by any route (the sidebar, another page) closes the session after waiting
+  // changes are sent, so Main stops keeping it alive.
+  it('closes the session when the page goes away by any route', async () => {
+    let close!: MockInstance<CloudSettingsClient['close']>;
+    setup((client) => { close = vi.spyOn(client, 'close'); });
+    await screen.findByRole('textbox', { name: 'settings.personalization.ariaLabel' });
+    expect(close).not.toHaveBeenCalled();
+    cleanup();
+    await waitFor(() => expect(close).toHaveBeenCalledOnce());
+  });
   it('retains the native prompt editor draft across categories without a write', async () => {
     const { save } = setup();
     const input = await screen.findByRole('textbox', {

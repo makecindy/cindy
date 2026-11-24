@@ -181,8 +181,9 @@ export function CloudSettingsPanel({
     });
     return next;
   }, [client]);
-  // Leaving by any route: waiting changes are sent, not dropped.
-  useEffect(() => () => void sync.dispose(), [sync]);
+  // Leaving by any route: waiting changes are sent, not dropped, and then the session closes so
+  // Main stops keeping it alive.
+  useEffect(() => () => void sync.dispose().then(() => client.close()), [sync, client]);
   useEffect(() => {
     scrollRef.current?.scrollTo?.({ top: 0 });
   }, [tab]);
