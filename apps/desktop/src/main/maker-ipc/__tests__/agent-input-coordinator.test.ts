@@ -14643,17 +14643,40 @@ describe('Orca report durable recovery', () => {
   // Unit regression for PR #12163: an EOF can queue Continue before the provider
   // acknowledges a steer. Also exercise manual recovery consumption and
   // dismissal of a replacement error while a separate write failure is pending.
+  // The manual read cases exercise retryLastError with the ACK released during
+  // either read, before the previous after-manual-retry case releases it.
+  // One blocked read and one ACK suffice to lose the first Retry dispatch.
   it.each([
     'before-backoff', 'after-backoff', 'after-close', 'after-takeover',
     'before-stopped-write', 'before-replacement-failure', 'after-dismissal', 'after-manual-retry',
+    'during-manual-progress-read', 'during-manual-snapshot-read',
   ] as const)('settles Worker recovery when steer ACK arrives %s', async timing => {
     vi.useFakeTimers();
     const ack = deferred<void>();
     try {
       const workerInputs = new WeakSet<object>();
-      const h = createHarness({ workerInputs });
+      const readStarted = deferred<void>();
+      const readFinished = deferred<void>();
+      const duringManualRead = timing === 'during-manual-progress-read' || timing === 'during-manual-snapshot-read';
+      const h = createHarness({
+        workerInputs,
+        getRecoveryContextSnapshot: timing === 'during-manual-snapshot-read' ? async () => {
+          readStarted.resolve();
+          await readFinished.promise;
+          return { contextTokens: 0, contextWindow: 200_000, progressCount: 1, recentProgress: [] };
+        } : undefined,
+      });
       wireHostReportRecovery(h, workerInputs);
-      const manualRecovery = timing === 'after-dismissal' || timing === 'after-manual-retry';
+      if (timing === 'during-manual-progress-read') {
+        h.setHasAssistantProgressAfter(async () => {
+          readStarted.resolve();
+          await readFinished.promise;
+          return true;
+        });
+      } else if (timing === 'during-manual-snapshot-read') {
+        h.setHasAssistantProgressAfter(async () => true);
+      }
+      const manualRecovery = duringManualRead || timing === 'after-dismissal' || timing === 'after-manual-retry';
       if (manualRecovery) h.onResumableTurnError.mockReturnValueOnce(null);
       const runtime = { instanceId: 'worker-runtime' };
       h.setTurnSessionIdentity(runtime);
@@ -14687,7 +14710,17 @@ describe('Orca report durable recovery', () => {
       if (manualRecovery) {
         expect(h.coordinator.getProjection('worker').recovery?.kind).toBe('active-turn');
         if (timing === 'after-dismissal') h.coordinator.clearError('worker');
-        else await h.coordinator.retryLastError('worker');
+        else if (duringManualRead) {
+          const retry = h.coordinator.retryLastError('worker');
+          try {
+            await readStarted.promise;
+            ack.resolve();
+            await expect(steering).resolves.toBe('steered');
+          } finally {
+            readFinished.resolve();
+          }
+          await retry;
+        } else await h.coordinator.retryLastError('worker');
         ack.resolve();
         await expect(steering).resolves.toBe('steered');
         expect(h.coordinator.getProjection('worker').recovery).toBeNull();

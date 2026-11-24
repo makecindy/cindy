@@ -1469,6 +1469,8 @@ export class AgentInputCoordinator {
    * 并用 stateRef 防止 clearSession 后迟到的旧结果复活新上下文。
    */
   private readonly pendingAutoResumeRecoveries = new Map<string, PendingAutoResumeRecovery>();
+  /** Manual retries reading this recovery may overlap each other and a late Worker steer ACK. */
+  private readonly manualRetryClaims = new WeakMap<Extract<AgentInputRecovery, { kind: 'active-turn' }>, number>();
   /** transient busy 期间同一 auto item 已尝试过的派发次数。 */
   private readonly autoResumeDispatchAttempts = new Map<string, number>();
 
@@ -3304,9 +3306,13 @@ export class AgentInputCoordinator {
     );
     const preservesWorkerRecovery = workerRecoverySource !== undefined &&
       this.hasMatchingWorkerRecovery(accepted, workerRecoverySource);
+    const manuallyClaimedWorkerRecovery = workerRecoverySource !== undefined &&
+      accepted.recovery?.kind === 'active-turn' &&
+      accepted.recovery.item.clientId === workerRecoverySource.item.clientId &&
+      this.manualRetryClaims.has(accepted.recovery);
     const abandonedWorkerRecovery = workerRecoverySource !== undefined &&
       workerRecoverySource.recoveryAbandonment !== accepted.workerRecoveryAbandonment;
-    if (!ownsCurrentSteerMarker || preservesWorkerRecovery || abandonedWorkerRecovery) {
+    if (!ownsCurrentSteerMarker || preservesWorkerRecovery || manuallyClaimedWorkerRecovery || abandonedWorkerRecovery) {
       const releasedSteerMarker = this.clearSteeringMarker(accepted, item.clientId, {
         generation: steerGeneration, token: steerRequestToken,
       });
@@ -3364,7 +3370,7 @@ export class AgentInputCoordinator {
         persisted,
       });
       this.emit(sessionId);
-      if ((preservesWorkerRecovery || abandonedWorkerRecovery) && releasedSteerMarker) {
+      if ((preservesWorkerRecovery || manuallyClaimedWorkerRecovery || abandonedWorkerRecovery) && releasedSteerMarker) {
         this.scheduleDrain(sessionId, 'steer-persistence-settled');
       }
       return finishSteerRequest(true);
@@ -3690,10 +3696,22 @@ export class AgentInputCoordinator {
     expectedSwitchRevision?: number,
     guards?: { beforeMutation: () => Promise<void>; beforeDelivery: () => Promise<void> },
   ): Promise<AgentInputProjection> {
-    const { projection } = await this.performRetryLastError(sessionId, {
-      expectedQueueHeadClientId, expectedSwitchRevision, ...guards,
-    });
-    return projection;
+    const recovery = this.getState(sessionId).recovery;
+    const claim = expectedQueueHeadClientId === undefined && recovery?.kind === 'active-turn'
+      ? recovery : undefined;
+    if (claim) this.manualRetryClaims.set(claim, (this.manualRetryClaims.get(claim) ?? 0) + 1);
+    try {
+      const { projection } = await this.performRetryLastError(sessionId, {
+        expectedQueueHeadClientId, expectedSwitchRevision, ...guards,
+      });
+      return projection;
+    } finally {
+      if (claim) {
+        const remaining = (this.manualRetryClaims.get(claim) ?? 1) - 1;
+        if (remaining > 0) this.manualRetryClaims.set(claim, remaining);
+        else this.manualRetryClaims.delete(claim);
+      }
+    }
   }
 
   takeRetrySwitchRevision(sessionId: string, clientId: string | undefined): number | undefined {
