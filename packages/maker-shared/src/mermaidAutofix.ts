@@ -196,8 +196,9 @@ function findShapeDataEnd(source: string, start: number): number {
 }
 
 function repairOutsideShapeData(source: string, chartStart: number): string {
-  // 形状属性使用 YAML 键值对，可在第一个键之前写注释或给键加引号。
-  const tokens = /^[^\S\r\n]*(?:%%|\/\/)[^\n]*|(?:^|;)[^\S\r\n]*(?:acc(?:Title|Descr)[^\S\r\n]*:[^\n]*|accDescr[^\S\r\n]*\{[^}]*\})|"[^"]*"|"[^"\n]*|\|[^|\n]+\||[-.=]+[>xo]?|@\{(?=\s*(?:#[^\n]*\n\s*)*(?:[\w-]+|"[^"\n]+"|'[^'\n]+')[^\S\r\n]*:)|(?<=[\p{L}\p{N}\p{M}_.!,?#$%*+/:&'`\\-])(?:\([^()[\]{}"\n]*\)|\[[^()[\]{}"\n]*\]|\{[^()[\]{}"\n]*\}|\({2,3}|\(\[|\[[[(\/\\]|\{\{|[({\[>])/gmu;
+  // 从节点 ID 后的 @{ 识别属性，把 YAML 语法交给 Mermaid。
+  // click 声明中的回调名不是边，扫描在分号之后继续。
+  const tokens = /^[^\S\r\n]*(?:%%|\/\/)[^\n]*|(?:^|;)[^\S\r\n]*(?:acc(?:Title|Descr)[^\S\r\n]*:[^\n]*|accDescr[^\S\r\n]*\{[^}]*\}|click[^\S\r\n]+(?:"[^"\r\n]*"|[^";\r\n])*)|"[^"]*"|"[^"\n]*|\|[^|\n]+\||[-.=]+[>xo]?|(?<=[\p{L}\p{N}\p{M}_.!,?#$%*+/:&'`\\-])(?:@\{|\([^()[\]{}"\n]*\)|\[[^()[\]{}"\n]*\]|\{[^()[\]{}"\n]*\}|\({2,3}|\(\[|\[[[(\/\\]|\{\{|[({\[>])/gmu;
   tokens.lastIndex = chartStart;
   const edgeLabelClosers = new Map([['--', /^--+[-xo>]$/], ['==', /^==+[=xo>]$/], ['-.', /^\.+-[xo>]?$/]]);
   let result = '';

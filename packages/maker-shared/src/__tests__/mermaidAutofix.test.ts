@@ -104,6 +104,7 @@ describe('repairMermaidSource', () => {
   // 连线仍须修复。最小失败输入是 A@{ shape: stadium, label: start → done } → B。
   it.each([
     'A@{ shape: stadium, label: start → done }',
+    'A@{ &props shape: stadium, label: start → done }',
     'A@{ "shape": "stadium", label: start → done }',
     "A@{ 'shape': 'stadium', label: start → done }",
     'A@{\n  shape: stadium\n  label: start → done\n}',
@@ -122,6 +123,12 @@ describe('repairMermaidSource', () => {
     expect(repairMermaidSource('flowchart TD\nA -->|literal @{ text| B\nC → D\nE{ok} --> F')).toBe(
       'flowchart TD\nA -->|"literal @{ text"| B\nC --> D\nE{ok} --> F',
     );
+  });
+
+  it.each(['\n', '; '])('回调名中的 -- 不影响后续形状属性和连线 (%j)', (separator) => {
+    const prefix = 'flowchart TD\nclick A call foo--bar()' + separator;
+    const node = 'C@{ shape: rect, label: start → done }';
+    expect(repairMermaidSource(prefix + node + ' → D')).toBe(prefix + node + ' --> D');
   });
 
   it.each([
