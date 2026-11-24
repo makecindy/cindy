@@ -1604,6 +1604,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       config: Record<string, unknown> | null,
     ): Promise<{ config: Record<string, unknown> }> =>
       ipcRenderer.invoke('ghosts:errand-prefs:set', id, config),
+    fileOpener: (id: string): Promise<{ declared: boolean; enabled: boolean }> =>
+      ipcRenderer.invoke('ghosts:file-opener:get', id),
+    setFileOpener: (id: string, enabled: boolean): Promise<{ declared: boolean; enabled: boolean }> =>
+      ipcRenderer.invoke('ghosts:file-opener:set', id, enabled),
     githubRelease: (action: 'check' | 'update' | 'sign-in', instanceId: string, assetId?: number):
       Promise<import('../shared/githubPluginRelease').GithubPluginReleaseResult | boolean> =>
       ipcRenderer.invoke('ghosts:github-release', action, instanceId, assetId),

@@ -481,7 +481,7 @@ import {
 } from './filePathPolicy';
 import { readFileThumbnail } from './fileThumbnail';
 import { createOpenWithHandlers, decodeRegOutput, parseChcpCodepage } from './openWithApps';
-import { resolveShellOpenPathTarget } from './shellOpenPath';
+import { resolveLocalOriginalForPluginOpen, resolveShellOpenPathTarget } from './shellOpenPath';
 import { posixDrivePathToWin32 } from '../shared/pathText';
 import { handleOpenFileInBrowser } from './openFileInBrowser';
 import { createWindowsFileUrlOpener } from './windowsFileUrlOpener';
@@ -1312,6 +1312,7 @@ import {
   diagnoseScheduleHookPluginForActiveOwner,
   getLiveScreenHost,
   pluginLiveScreenViews,
+  openFileWithPluginFileOpener,
 } from './cindy-brain/index.js';
 import { createCodexImageAuthAcquirer, setCodexImageAuthBinding } from './cindy-brain/codexImageAuthBinding.js';
 import { configureMailAttachmentHost } from './cindy-brain/mailAttachmentUpload.js';
@@ -8659,12 +8660,26 @@ const registerIpcHandlers = () => {
     ): Promise<{ success: boolean; error?: string }> => {
       try {
         assertTrustedAppRendererEvent(event);
+        const { generation } = getActiveAppSession();
+        const requestIsCurrent = () =>
+          !isAppSessionBoundaryPending() && getActiveAppSession().generation === generation;
+        if (!requestIsCurrent()) return { success: false, error: 'App session changed' };
         const filePath = resolveShellOpenPathTarget(filePathOrUrl);
         if (filePath === null) {
           return { success: false, error: 'Path must be absolute' };
         }
         if (!isPathAllowed(filePath)) {
           return { success: false, error: '不允许访问该路径' };
+        }
+        // 先问声明了该扩展名的插件(fileOpener);只交本机原件,插件没处理就照常交给系统。
+        const pluginPath = await resolveLocalOriginalForPluginOpen(
+          filePathOrUrl, filePath, [getRemoteFileCacheRoot(), getChatAttachmentCacheRoot()], isPathAllowed,
+        );
+        if (!requestIsCurrent()) return { success: false, error: 'App session changed' };
+        if (pluginPath) {
+          const routed = await openFileWithPluginFileOpener(pluginPath, requestIsCurrent);
+          if (!requestIsCurrent()) return { success: false, error: 'App session changed' };
+          if (routed.handled) return { success: true };
         }
         // shell.openPath returns '' on success, error string on failure.
         const errMsg = await shell.openPath(filePath);

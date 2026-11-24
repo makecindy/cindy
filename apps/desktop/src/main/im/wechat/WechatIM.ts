@@ -709,6 +709,13 @@ export class WechatIM extends BaseIM implements RichChannelIM {
       );
       return { ok: true, messageId: clientId };
     } catch (error) {
+      const safe = asWechatIlinkError(error);
+      if (safe.code === 'SEND_REJECTED') {
+        return {
+          ok: false,
+          reason: safe.ret === undefined ? 'SEND_REJECTED' : `SEND_REJECTED:${safe.ret}`,
+        };
+      }
       const code =
         error instanceof Error && 'code' in error
           ? String((error as NodeJS.ErrnoException).code)

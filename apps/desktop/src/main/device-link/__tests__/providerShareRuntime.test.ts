@@ -967,6 +967,48 @@ describe('provider share approval follows the computer that generated the link',
 });
 
 describe('provider share guest routing', () => {
+  // Unit regression from the Windows 0.1.145 logs: the model picker retries a known share after a
+  // failed membership read. Existing tests recover by calling the background poll directly.
+  it('recovers an unavailable share on an explicit catalog retry and joins concurrent retries', async () => {
+    state.received = [received('active')];
+    const list = vi.spyOn(providerShareApi, 'listReceived');
+    startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() });
+    await refreshReceivedShares('initial');
+    state.receivedError = true;
+    await refreshReceivedShares('poll');
+    list.mockClear();
+    await expect(resolveRemoteAgentTargetWhenReady('share:share-1')).rejects.toThrow(/DEVICE_LINK_NOT_CONNECTED/);
+    expect(list).not.toHaveBeenCalled();
+    state.receivedError = false;
+    const retry = () => resolveRemoteAgentTargetWhenReady('share:share-1', { retryDirectory: true });
+    const target = providerShareHostPeer('share-1', 'owner-mac');
+    await expect(Promise.all([retry(), retry()])).resolves.toEqual([target, target]);
+    expect(list).toHaveBeenCalledTimes(1);
+    await expect(retry()).resolves.toBe(target);
+    expect(list).toHaveBeenCalledTimes(1);
+  });
+
+
+  // Unit: a manual retry uses fresh membership, and a continuing failure cannot start a second read.
+  it.each([
+    ['offline', 'DEVICE_LINK_NOT_CONNECTED'],
+    ['removed', 'REMOTE_AGENT_SHARE_REMOVED'],
+    ['paused', 'REMOTE_AGENT_SHARE_PAUSED'],
+  ])('does not route an explicitly retried share when the refreshed list says %s', async (status, error) => {
+    state.received = [received('active')];
+    startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() });
+    await refreshReceivedShares('initial');
+    state.receivedError = true;
+    await refreshReceivedShares('poll');
+    const list = vi.spyOn(providerShareApi, 'listReceived');
+    state.receivedError = status === 'offline';
+    state.received = status === 'paused' ? [received('paused')] : [];
+    const retry = () => resolveRemoteAgentTargetWhenReady('share:share-1', { retryDirectory: true });
+    await expect(retry()).rejects.toThrow(error);
+    await expect(retry()).rejects.toThrow(error);
+    expect(list).toHaveBeenCalledTimes(1);
+  });
+
   it('distinguishes an authoritative empty membership list from startup, failure, disconnect and account switch', async () => {
     expect(getReceivedSharesSnapshot().confirmedRegions).toEqual([]);
     state.receivedError = true;

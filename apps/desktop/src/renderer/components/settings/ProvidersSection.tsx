@@ -166,6 +166,7 @@ import { useLocalProviderGroupsState } from '@/features/provider-group/useLocalP
 import { ProviderShareManagePage } from '@/features/provider-share/ProviderShareManagePage';
 import { ProviderSharePasteButton } from '@/features/provider-share/ProviderSharePasteDialog';
 import {
+  ProviderShareReceivedCatalogRetry,
   ProviderShareReceivedDetail,
   ProviderShareReceivedRailGroup,
 } from '@/features/provider-share/ProviderShareReceivedRail';
@@ -2646,7 +2647,8 @@ export function ProvidersSection() {
   // 选中本机供应商或登录引导时清空。
   const [selectedShareId, setSelectedShareId] = useState<string | null>(null);
   const [selectedRemoteKey, setSelectedRemoteKey] = useState<string | null>(null);
-  const { received: receivedShares, loaded: receivedSharesLoaded } = useProviderShareReceived();
+  const { received: receivedShares, loaded: receivedSharesLoaded, retryCatalogShareIds } = useProviderShareReceived();
+  const retryCatalogShareId = selectedShareId && retryCatalogShareIds?.has(selectedShareId) ? selectedShareId : null;
   const selectedShare = selectedShareId
     ? receivedShares.find((share) => share.shareId === selectedShareId) ?? null
     : null;
@@ -2677,7 +2679,7 @@ export function ProvidersSection() {
     ? remotePluginEngines.find((entry) => entry.key === selectedEngineKey) ?? null
     : null;
   // 右栏正在显示的不是本机普通供应商：分享给我的、另一台电脑上的，或由插件提供的(互斥)。
-  const otherDeviceSelected = selectedShare !== null || selectedRemote !== null || selectedEngine !== null
+  const otherDeviceSelected = selectedShare !== null || retryCatalogShareId !== null || selectedRemote !== null || selectedEngine !== null
     || selectedRemoteEngine !== null;
   // 用户或深链、向导完成、导入完成等「打开某个供应商」时，右栏回到那个供应商(即使它就是当前选中项)。
   const selectProvider = useCallback((providerId: string) => {
@@ -3838,8 +3840,8 @@ export function ProvidersSection() {
           {/* 右栏身份固定；说明、资产和模型共用 DetailHeader 的滚动区。 */}
           <div
             key={
-              selectedShare
-                ? `share:${selectedShare.shareId}`
+              selectedShare || retryCatalogShareId
+                ? `share:${selectedShare?.shareId ?? retryCatalogShareId}`
                 : selectedRemote
                   ? `remote:${selectedRemote.key}`
                   : selectedEngine
@@ -3852,6 +3854,8 @@ export function ProvidersSection() {
           >
             {selectedShare ? (
               <ProviderShareReceivedDetail share={selectedShare} />
+            ) : retryCatalogShareId ? (
+              <ProviderShareReceivedCatalogRetry shareId={retryCatalogShareId} />
             ) : selectedRemote ? (
               <OwnRemoteProviderDetail
                 entry={selectedRemote}

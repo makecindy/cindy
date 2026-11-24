@@ -2,6 +2,7 @@
  * Existing device generations remain the authority for disconnect/owner changes.
  */
 import { createCoalescedRefresh } from '@/lib/coalescedRefresh';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { readProviderMetadataContinuity } from '@cindy/device-link';
 import {
   evictAllRemoteCapabilities,
@@ -24,7 +25,13 @@ import {
   isDeviceProvidersGenerationCurrent,
   prefetchDeviceProviders,
 } from '@/hooks/useDeviceProviders';
-import { parseModelCatalogKey } from '../../shared/controlledModelCatalog';
+import {
+  CONTROLLED_MODEL_CATALOG_CHANNEL,
+  CONTROLLED_MODEL_CATALOG_RETRY_SHARE,
+  parseModelCatalogKey,
+  readReceivedCatalogChangeSequence,
+} from '../../shared/controlledModelCatalog';
+import { extractIpcError } from '../../shared/ipcError';
 
 const refreshes = new Map<
   string,
@@ -36,6 +43,54 @@ const refreshes = new Map<
     endpointsAreCurrent: () => boolean;
   }
 >();
+
+const shareCatalogRetries = new Map<string, Promise<void>>();
+const shareCatalogRecoverySequences = new Map<string, number>();
+
+export function wasShareCatalogRecovered(deviceId: string, receivedChangeSequence: number): boolean {
+  return shareCatalogRecoverySequences.get(deviceId) === receivedChangeSequence;
+}
+
+export function retryProviderShareCatalog(deviceId: string): Promise<void> {
+  const pending = shareCatalogRetries.get(deviceId);
+  if (pending) return pending;
+  const owner = getDataOwnerGeneration();
+  const generation = getDeviceProvidersGeneration(deviceId);
+  const route = parseModelCatalogKey(deviceId);
+  const endpointsAreCurrent = captureRouteEndpoints(deviceId);
+  const retry = (async () => {
+    let result: { receivedChangeSequence?: number } | undefined;
+    if (route) {
+      try {
+        const receipt = await window.electronAPI?.deviceLink?.invoke(route.taskDeviceId, CONTROLLED_MODEL_CATALOG_CHANNEL, [{
+          op: CONTROLLED_MODEL_CATALOG_RETRY_SHARE, agentDeviceId: route.agentDeviceId,
+        }]);
+        result = { receivedChangeSequence: readReceivedCatalogChangeSequence(receipt) };
+      } catch (error) {
+        // Old task hosts rejected this operation before reaching model discovery.
+        // Keep their ordinary catalog read, including the host's permission checks.
+        const failure = extractIpcError(error);
+        if (failure?.code !== 'INVALID_PARAMS' || failure.message !== 'Invalid model catalog read') throw error;
+      }
+    } else {
+      result = await window.electronAPI?.providerShare?.command({ action: 'retry-model-catalog', agentDeviceId: deviceId });
+    }
+    // A push or eviction during the directory refresh owns the newer catalog.
+    if (isDataOwnerGenerationCurrent(owner) && endpointsAreCurrent()
+      && isDeviceProvidersGenerationCurrent(deviceId, generation)) {
+      const refresh = refreshRemoteCatalogSnapshot(deviceId);
+      // The matching received snapshot may arrive after this catalog read finishes.
+      if (result?.receivedChangeSequence !== undefined) {
+        shareCatalogRecoverySequences.set(deviceId, result.receivedChangeSequence);
+      }
+      await refresh;
+    }
+  })().finally(() => {
+    if (shareCatalogRetries.get(deviceId) === retry) shareCatalogRetries.delete(deviceId);
+  });
+  shareCatalogRetries.set(deviceId, retry);
+  return retry;
+}
 
 function captureRouteEndpoints(deviceId: string): () => boolean {
   const route = parseModelCatalogKey(deviceId);
@@ -82,12 +137,20 @@ async function scheduleRefresh(
 }
 
 /** A catalog notification invalidates display data while locations are being rediscovered. */
-export function invalidateControlledCatalogRoutes(taskDeviceId: string, catalogChanged: boolean): void {
+export function invalidateControlledCatalogRoutes(
+  taskDeviceId: string, catalogChanged: boolean, receivedChangeSequence?: number,
+): ReadonlySet<string> {
+  const recovered = new Set<string>();
+  for (const [key, sequence] of shareCatalogRecoverySequences) {
+    if (parseModelCatalogKey(key)?.taskDeviceId !== taskDeviceId) continue;
+    if (catalogChanged && sequence === receivedChangeSequence) recovered.add(key);
+    else shareCatalogRecoverySequences.delete(key);
+  }
   const affected = [...refreshes.keys()]
-    .filter(key => parseModelCatalogKey(key)?.taskDeviceId === taskDeviceId)
+    .filter(key => parseModelCatalogKey(key)?.taskDeviceId === taskDeviceId && !recovered.has(key))
     .map(key => ({ key, refresh: getCurrentRefresh(key) }));
-  evictControlledDeviceProviders(taskDeviceId);
-  evictControlledDeviceCapabilities(taskDeviceId);
+  evictControlledDeviceProviders(taskDeviceId, recovered);
+  evictControlledDeviceCapabilities(taskDeviceId, recovered);
   for (const { key, refresh } of affected) {
     if (!catalogChanged) {
       refreshes.delete(key);
@@ -99,12 +162,14 @@ export function invalidateControlledCatalogRoutes(taskDeviceId: string, catalogC
     refresh.capabilitiesGeneration = getDeviceCapabilitiesGeneration(key);
     refresh.needsRead = true;
   }
+  return recovered;
 }
 
-export function refreshDiscoveredCatalogRoutes(taskDeviceId: string): void {
+export function refreshDiscoveredCatalogRoutes(taskDeviceId: string, recovered?: ReadonlySet<string>): void {
   const providers = new Set(getMountedControlledDeviceProviderTargets(taskDeviceId));
   const capabilities = new Set(getMountedControlledDeviceCapabilityTargets(taskDeviceId));
   for (const key of new Set([...providers, ...capabilities])) {
+    if (recovered?.has(key)) continue;
     const current = getCurrentRefresh(key);
     if (current && !current.needsRead) continue;
     void scheduleRefresh(
@@ -123,6 +188,8 @@ export function invalidateRemoteCatalogSnapshots(): void {
   evictAllDeviceProviders();
   evictAllRemoteCapabilities();
   refreshes.clear();
+  shareCatalogRetries.clear();
+  shareCatalogRecoverySequences.clear();
 }
 
 export async function refreshRemoteCatalogSnapshot(deviceId: string, notification?: unknown,
@@ -133,6 +200,7 @@ export async function refreshRemoteCatalogSnapshot(deviceId: string, notificatio
   const retainDisplaySnapshot = !options?.retireOnly
     && readProviderMetadataContinuity(notification)?.remainingMs !== 0;
   const retireOnly = options?.retireOnly === true;
+  shareCatalogRecoverySequences.delete(deviceId);
   // Capture in-flight-only consumers before eviction removes their request keys.
   // The direct source and every affected task-host route retain separate caches
   // and refresh generations; never reopen aliases for a denial/retirement.

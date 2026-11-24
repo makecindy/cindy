@@ -113,12 +113,15 @@ import { configureProviderShareApprovalWindows } from './providerShareApprovalWi
 import {
   findReceivedShare,
   providerShareAccessEpoch,
+  providerShareReceivedChangeSequence,
   getReceivedShares,
   isReceivedSharesReady,
   getReceivedSharesSnapshot,
   leaveProviderShare,
   previewProviderShare,
+  parseProviderShareAgentDeviceId,
   refreshReceivedShares,
+  resolveRemoteAgentTargetWhenReady,
   sendProviderShareRequest,
   getProviderShareRequest,
   startProviderShareGuest,
@@ -188,9 +191,10 @@ function emit(channel: string, payload: unknown): void {
   }
 }
 
-function notifyControlledModelCatalogChanged(): void {
-  emit(CONTROLLED_MODEL_CATALOG_CHANGED, {});
-  tapWindowBroadcast(CONTROLLED_MODEL_CATALOG_CHANGED, {});
+function notifyControlledModelCatalogChanged(receivedChangeSequence?: number): void {
+  const payload = receivedChangeSequence === undefined ? {} : { receivedChangeSequence };
+  emit(CONTROLLED_MODEL_CATALOG_CHANGED, payload);
+  tapWindowBroadcast(CONTROLLED_MODEL_CATALOG_CHANGED, payload);
 }
 
 function appInForeground(): boolean {
@@ -537,7 +541,7 @@ export function startProviderShareRuntime(broadcast: Broadcast, options: { invok
       // Local windows re-check stale subscription catalogs on every poll.
       emit(PROVIDER_SHARE_IPC.RECEIVED_CHANGED, received);
       // Pushed to every controlling computer; they re-read capabilities and rosters.
-      if (changed) notifyControlledModelCatalogChanged();
+      if (changed) notifyControlledModelCatalogChanged(providerShareReceivedChangeSequence());
     },
     settled(state, preview) {
       emit(PROVIDER_SHARE_IPC.SETTLED, { state, preview });
@@ -666,6 +670,11 @@ export function parseProviderShareCommand(raw: unknown): ProviderShareCommand {
       const decision = value.decision;
       if (decision !== 'approve' && decision !== 'reject') throwIpcError('INVALID_PARAMS', 'Invalid decision');
       return { action: 'reshare-decide', id: text(value.id, 'id', 64), decision };
+    }
+    case 'retry-model-catalog': {
+      const agentDeviceId = text(value.agentDeviceId, 'agentDeviceId', 128);
+      if (!parseProviderShareAgentDeviceId(agentDeviceId)) throwIpcError('INVALID_PARAMS', 'Invalid shared provider');
+      return { action: value.action, agentDeviceId };
     }
     case 'received':
       return { action: 'received' };
@@ -1320,6 +1329,12 @@ async function execute(command: ProviderShareCommand, assertCurrent: () => void 
       if (decided.previous === 'approved' && decided.record.state !== 'approved') abortReshares([decided.record]);
       emit(PROVIDER_SHARE_IPC.OWNED_CHANGED, null);
       return { ok: true };
+    }
+    case 'retry-model-catalog': {
+      const previousSequence = providerShareReceivedChangeSequence();
+      await resolveRemoteAgentTargetWhenReady(command.agentDeviceId, { retryDirectory: true });
+      const receivedChangeSequence = providerShareReceivedChangeSequence();
+      return previousSequence === receivedChangeSequence ? { ok: true } : { ok: true, receivedChangeSequence };
     }
     case 'received':
       if (running) void refreshReceivedShares('ui');
