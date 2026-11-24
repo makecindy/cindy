@@ -432,6 +432,34 @@ describe('message viewport content virtualization', () => {
     });
     expect(host.querySelectorAll('button').length).toBeLessThan(20);
   });
+  it('keeps the selected history mounted without reading the range on unchanged pointer or focus events', async () => {
+    vi.useFakeTimers();
+    await act(async () => root.render(<Fixture restore />));
+    const outside = host.appendChild(document.createElement('button'));
+    const selection = document.getSelection()!;
+    await act(async () => {
+      const range = document.createRange();
+      range.selectNodeContents(row(40));
+      selection.addRange(range);
+      vi.runOnlyPendingTimers();
+    });
+    const readSelection = vi.spyOn(document, 'getSelection');
+    await act(async () => {
+      outside.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+      // jsdom collapses the selection when focus() is called, unlike a
+      // Chromium focus change that leaves the page selection intact.
+      outside.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+      vi.runOnlyPendingTimers();
+    });
+    // #12504: selection getters can synchronously flush Chromium layout.
+    expect(readSelection).not.toHaveBeenCalled();
+    expect(scroller().querySelectorAll('button')).toHaveLength(80);
+    await act(async () => {
+      selection.removeAllRanges();
+      vi.runOnlyPendingTimers();
+    });
+    expect(scroller().querySelectorAll('button').length).toBeLessThan(20);
+  });
   it('keeps page-text access active when a selection ends, then releases independently', async () => {
     await act(async () => root.render(<Fixture restore />));
     let release = () => {};
