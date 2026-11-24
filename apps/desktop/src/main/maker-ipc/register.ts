@@ -2079,10 +2079,15 @@ onCodexAutoResetRestored(providerId => usageLimitAutoResume.resumeRestored(id =>
 // Schedule 不另建重试状态机：真正的恢复仍由 AgentInputCoordinator +
 // AutoResumeBookkeeping 独占。这里仅把「这一轮 scheduler run 已被普通自动续跑接管」
 // 和「最终仍失败」桥给 runner，让同一个 run 继续等待或正确失败。
-const pendingSchedulerAutoResumeRunBySession = new Map<
-  string,
-  { runId: string; attemptToken: number; usageLimitToken?: number; retryClientId?: string; error?: string; providerGroupPending?: boolean }
->();
+interface SchedulerAutoResumePending {
+  runId: string;
+  attemptToken: number;
+  usageLimitToken?: number;
+  retryClientId?: string;
+  error?: string;
+  providerGroupPending?: boolean;
+}
+const pendingSchedulerAutoResumeRunBySession = new Map<string, SchedulerAutoResumePending>();
 interface SchedulerRecoveryListener {
   failed(error?: string, stopped?: true): void;
   quotaWait?: { start(): void; resume(): boolean };
@@ -2161,8 +2166,11 @@ function waitForUsageLimitAfterGroup(
   signals: Parameters<UsageLimitAutoResume['onTurnError']>[1],
   token: number,
   recovery?: Parameters<UsageLimitAutoResume['onTurnError']>[3],
+  pending?: SchedulerAutoResumePending,
 ): Promise<boolean> {
-  const pending = pendingSchedulerAutoResumeRunBySession.get(sessionId);
+  // A rearmed token may belong to this same entry. A later run must never be
+  // adopted just because it uses the same session (or even the same token).
+  if (pendingSchedulerAutoResumeRunBySession.get(sessionId) !== pending) return Promise.resolve(false);
   if (pending?.usageLimitToken !== undefined) {
     pending.usageLimitToken = token;
     pending.providerGroupPending = false;
@@ -2171,7 +2179,8 @@ function waitForUsageLimitAfterGroup(
     }
   }
   return usageLimitAutoResume.onTurnError(sessionId, signals, token, recovery).then(armed => {
-    if (!armed && pending?.usageLimitToken === token) finishSchedulerUsageLimitWait(sessionId, token);
+    if (!armed && pending && pendingSchedulerAutoResumeRunBySession.get(sessionId) === pending &&
+      pending.usageLimitToken === token) finishSchedulerUsageLimitWait(sessionId, token);
     return armed;
   });
 }
@@ -11671,7 +11680,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 撞限／登录失效的只是那台电脑上的一个账号：账号池里另一个账号能接时可原地换号(由执行电脑判断)。
     readAccountSwitch: (sessionId) =>
       readSubscriptionAccountSwitch(sessionId, readSubscriptionRuntimeSession, remoteBackgroundInvoke),
-    fallback: waitForUsageLimitAfterGroup,
+    fallback: (sessionId, signals, token, recovery) => usageLimitAutoResume.onTurnError(sessionId, signals, token, recovery),
     // 组内电脑的报错用那台机器的本地时间：不带时区的钟点不按本机时区理解。
     readResetAt: (signals) => readTurnUsageResetAt(signals, Date.now(), { localTimeZoneTrusted: false }),
     // 任务里选过「以后自动换」的换号(provider-groups.md §6.2「任务进行中换号」)。
@@ -19926,14 +19935,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     claimExternalAutomaticRecovery: (sessionId) =>
       interruptedTurnAutoResumeGuard.claimExternalAutomaticRecovery(sessionId).action === 'allow',
     onUsageLimitedTurnError: (sessionId, signals, item, candidateToken) => {
+      let schedulerPending: SchedulerAutoResumePending | undefined;
       if (item.origin?.kind === 'scheduler' && item.origin.runId) {
         // Claim synchronously, before the runner consumes this error. Reset-time
         // lookup is async; unknown/unsafe resets release the run but keep Retry.
-        pendingSchedulerAutoResumeRunBySession.set(sessionId, {
+        schedulerPending = {
           runId: item.origin.runId, attemptToken: 0, usageLimitToken: candidateToken,
           error: signals.message ? schedulerFailureDetail(signals.message) : undefined, providerGroupPending: true,
-        });
+        };
+        pendingSchedulerAutoResumeRunBySession.set(sessionId, schedulerPending);
       }
+      const waitForReset = (token: number, recovery?: Parameters<UsageLimitAutoResume['onTurnError']>[3]) =>
+        waitForUsageLimitAfterGroup(sessionId, signals, token, recovery, schedulerPending);
       // Restored provenance is not a live runner. Re-arm quota waiting without
       // rebinding its expired run or entering immediate provider-group recovery.
       if (item.origin?.kind !== 'scheduler' && inputCoordinator.scheduledQuotaOrigin(sessionId)) {
@@ -19942,7 +19955,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
       // 供应商组分配的任务先试自动换电脑，不换时由它交回额度重置后自动继续。
       if (!providerGroupService || signals.providerGroupUsageLimit) {
-        void waitForUsageLimitAfterGroup(sessionId, signals, candidateToken);
+        void waitForReset(candidateToken);
         return;
       }
       // Provider-group recovery shares the interrupted-turn budget. Once it is
@@ -19954,12 +19967,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         ? interruptedTurnAutoResumeGuard.claimExternalAutomaticRecovery(sessionId).action !== 'allow'
         : interruptedTurnAutoResumeGuard.isBudgetExhausted(sessionId);
       if (groupBudgetExhausted) {
-        void waitForUsageLimitAfterGroup(sessionId, signals, candidateToken);
+        void waitForReset(candidateToken);
         return;
       }
       // 先不呈现的那次错误：换成了丢掉，不换了先放出来再交回原有处理；一直没有结局时到点放出来。
       const holdId = inputCoordinator.getProviderGroupSwitchHoldId(sessionId);
-      let hooks: ProviderGroupTurnErrorHooks | undefined;
+      let hooks: ProviderGroupTurnErrorHooks = { fallback: (token, recovery) => { void waitForReset(token, recovery); } };
       let holdTimer: ReturnType<typeof setTimeout> | undefined;
       if (holdId !== null) {
         // 久久没有结局时到点放出来。每次重试、开始换电脑时重新计时：等原电脑恢复本身就可能要一两分钟，
@@ -19977,6 +19990,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // 协同 Worker 的终态与 error 行按同一次登记结算：换成了不回报这次异常终止，没换成才回报给 Lead。
         const recoveryOwner = activeOwnerScopeKey();
         hooks = {
+          ...hooks,
           notHandled: () => recoveryOwner === activeOwnerScopeKey() && inputCoordinator.resumeAfterProviderGroupDeclined(
             sessionId, candidateToken, signals, (attemptToken) => {
               const detail = providerGroupHeldErrors.takeForRecovery(sessionId, holdId);
@@ -20011,8 +20025,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           });
         })
         .finally(() => {
-          const pending = pendingSchedulerAutoResumeRunBySession.get(sessionId);
-          if (pending?.usageLimitToken === candidateToken && pending.providerGroupPending) {
+          const pending = schedulerPending;
+          if (pending && pendingSchedulerAutoResumeRunBySession.get(sessionId) === pending &&
+            pending.usageLimitToken === candidateToken && pending.providerGroupPending) {
             pending.providerGroupPending = false;
             // No fallback and no accepted continuation means the group lost its
             // input/grant. Settle this run instead of leaving its waiter behind.
