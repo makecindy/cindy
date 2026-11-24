@@ -3704,6 +3704,7 @@ function CCAgentSessionContent({
           role: form.role,
           label: createWorkerLabel(form.role, []),
           model: form.model,
+          ...(form.modelGroup ? { modelGroup: form.modelGroup } : {}),
           effort: form.effort as
             'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | undefined,
           fast: form.fast,

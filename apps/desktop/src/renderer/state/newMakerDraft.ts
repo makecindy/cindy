@@ -84,6 +84,7 @@ export interface VendorPrefs {
 export interface CollabWorkerConfig {
   role: string;
   model: string;
+  modelGroup?: string;
   effort?: Effort;
   fast?: boolean | 'ultrafast';
   /** 显式选定的模型来源;null/缺省 = 未显式(main 侧按默认路由解析)。 */

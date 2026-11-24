@@ -7756,6 +7756,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     enableOrca: (
       leadSessionId: string,
       opts: {
+        modelGroup?: string;
         workerAgent: 'claude-code' | 'codex';
         delegateTask?: string;
         role?: string;
