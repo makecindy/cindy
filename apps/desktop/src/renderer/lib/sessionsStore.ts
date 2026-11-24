@@ -94,6 +94,7 @@ const cache = new SessionBucketCache();
 interface FilterRequest {
   fresh: boolean;
   replacesInitialLoad?: boolean;
+  prependedIds?: Set<string>;
   promise: Promise<void>;
   resolve: (replacement?: PromiseLike<void>) => void;
   reject: (reason: unknown) => void;
@@ -648,13 +649,18 @@ async function fetchFilter(
   return result;
 }
 
-function runFilterBackfill(filter: ListStatusFilter, isCurrent?: () => boolean): Promise<void> | undefined {
-  if (isCurrent && !isCurrent()) return;
-  const refresh = sessionsStore.ensureByFilter(filter, { fresh: true, isCurrent });
-  void refresh.catch(() => {
+function runFilterBackfill(
+  filter: ListStatusFilter,
+  isCurrent?: () => boolean,
+  continuation?: FilterRequest,
+): boolean {
+  if (isCurrent && !isCurrent()) return false;
+  const refresh = sessionsStore.ensureByFilter(filter, { fresh: true, isCurrent }, continuation);
+  // 首次加载的续读复用已有 promise 及其等待者。
+  if (!continuation) void refresh.catch(() => {
     /* 静默：后续状态广播、主动操作或 refresh 会再次兜底。 */
   });
-  return refresh;
+  return true;
 }
 
 /**
@@ -672,10 +678,10 @@ function requestFilterBackfill(filter: ListStatusFilter, isCurrent?: () => boole
   runFilterBackfill(filter, isCurrent);
 }
 
-function runTrailingFilterBackfill(filter: ListStatusFilter): Promise<void> | undefined {
+function runTrailingFilterBackfill(filter: ListStatusFilter, continuation?: FilterRequest): boolean {
   const isCurrent = trailingFilterRefreshes.get(filter);
-  if (!trailingFilterRefreshes.delete(filter)) return;
-  return runFilterBackfill(filter, isCurrent);
+  if (!trailingFilterRefreshes.delete(filter)) return false;
+  return runFilterBackfill(filter, isCurrent, continuation);
 }
 
 function recordSessionPinSummaryOverrides(
@@ -836,17 +842,19 @@ export const sessionsStore = {
    * 确保指定桶已加载（命中即 noop，dedupe 并发请求）。
    * 强制刷新会让已有等待者跟随替换请求；失败由调用方决定如何展示。
    */
-  async ensureByFilter(filter: ListStatusFilter, opts?: { fresh?: boolean; isCurrent?: () => boolean }): Promise<void> {
-    if (!opts?.fresh && cache.has(filter)) return;
+  ensureByFilter(
+    filter: ListStatusFilter,
+    opts?: { fresh?: boolean; isCurrent?: () => boolean },
+    continuation?: FilterRequest,
+  ): Promise<void> {
+    if (!opts?.fresh && cache.has(filter)) return Promise.resolve();
     let pending = inflight.get(filter);
     if (!pending) {
-      let resolve!: FilterRequest['resolve'];
-      let reject!: FilterRequest['reject'];
-      const promise = new Promise<void>((onResolve, onReject) => {
-        resolve = onResolve;
-        reject = onReject;
-      });
-      const request: FilterRequest = { fresh: opts?.fresh === true, promise, resolve, reject };
+      let request = continuation;
+      if (!request) {
+        const { promise, resolve, reject } = Promise.withResolvers<void>();
+        request = { fresh: opts?.fresh === true, promise, resolve, reject };
+      }
       pending = request;
       inflight.set(filter, request);
       void fetchFilter(filter, opts)
@@ -857,7 +865,21 @@ export const sessionsStore = {
           // 当前桶认领的 request 才能提交，避免旧账号请求回填新账号缓存。
           if (inflight.get(filter) === request) {
             const current = !opts?.isCurrent || opts.isCurrent();
-            if (current) cache.set(filter, data);
+            if (current) {
+              // 仅保护这轮读取启动后新增且仍在桶里的行。已删除、归档或隐藏的行
+              // 不会被补回，之后启动的读取也照常使用权威快照。
+              const prependedIds = request.prependedIds;
+              let next = data;
+              if (prependedIds) {
+                const fetchedIds = new Set(data.map((row) => row.id));
+                const prepended = cache.get(filter)?.filter((row) =>
+                  prependedIds.has(row.id) && !fetchedIds.has(row.id)
+                    && !hiddenSessionIds.has(row.id) && belongsInFilter(row.status, filter),
+                );
+                if (prepended?.length) next = [...prepended, ...data].slice(0, DEFAULT_LIMIT);
+              }
+              cache.set(filter, next);
+            }
             inflight.delete(filter);
             if (current) notify();
             runTrailingFilterBackfill(filter);
@@ -867,19 +889,16 @@ export const sessionsStore = {
         .catch((e) => {
           if (inflight.get(filter) === request) {
             inflight.delete(filter);
-            // 首次加载的替换请求失败时，有新通知就让等待者跟随这一轮尾刷。
+            // 首次加载的替换请求失败时，有新通知就让等待者继续跟随尾刷。
             const followNotification = request.replacesInitialLoad && trailingFilterRefreshes.get(filter);
-            const trailing = runTrailingFilterBackfill(filter);
-            if (followNotification && trailing) {
-              request.resolve(trailing);
-              return;
-            }
+            if (runTrailingFilterBackfill(filter, followNotification ? request : undefined)
+              && followNotification) return;
           }
           // 替换时 resolve 已接到新请求，之后旧请求的 reject 不会再改变结果。
           request.reject(e);
         });
     }
-    await pending.promise;
+    return pending.promise;
   },
 
   /** 强制重拉单桶（先 drop 再 ensure）。返回新数据。 */
@@ -1286,6 +1305,8 @@ export const sessionsStore = {
     for (const [k, list] of cache) {
       if (k === 'archived') continue;
       if (list.some((s) => s.id === session.id)) continue;
+      const request = inflight.get(k);
+      if (request) (request.prependedIds ??= new Set()).add(session.id);
       cache.set(k, [withPreview, ...list]);
       touched = true;
     }

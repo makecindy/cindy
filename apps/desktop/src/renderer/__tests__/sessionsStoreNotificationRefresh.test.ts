@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-import { act } from '@testing-library/react';
+import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import '../../preload/preload';
 import { setDataOwnerGeneration, __testing as dataOwnerTesting } from '@/contexts/dataOwnerGeneration';
+import { useCCSessions } from '@/hooks/useCCSessions';
 import type { Session } from '@/lib/ccAgent.types';
 import { emitRefresh } from '@/lib/sessionsBus';
 import { sessionsStore } from '@/lib/sessionsStore';
@@ -78,6 +79,7 @@ async function loadOpenTask() {
 }
 
 afterEach(() => {
+  cleanup();
   sessionsStore.reset();
   dataOwnerTesting.reset();
   ipc.invoke.mockReset();
@@ -150,4 +152,91 @@ it('lets an explicit refresh supersede a pending notification and consume its qu
   expect(sessionsStore.getByFilter('active')?.[0]?.id).toBe('created-1');
   expect(fixture.reads).toHaveLength(2);
   expect(fixture.pending).toBe(0);
+});
+
+// Unit, #12471 review: an old snapshot captured before prependCreated must
+// preserve the visible row through a failed tail. A later snapshot still owns it.
+it('keeps a locally opened creation through stale reads and a failed tail', async () => {
+  const fixture = await loadOpenTask();
+  const task = { id: 'local-new', status: 'active', title: 'Local' } as Session;
+  const view = renderHook(() => useCCSessions());
+  const visibleTask = () => view.result.current.sessions.find(row => row.id === task.id);
+  emitRefresh();
+  act(() => sessionsStore.prependCreated(task));
+  expect(visibleTask()).toEqual(task);
+  announce(1);
+
+  await act(async () => { fixture.reads[0]!.finish(); });
+  const duringTail = visibleTask();
+  await act(async () => { fixture.reads[1]!.finish(new Error('tail failed')); });
+  const afterFailure = visibleTask();
+
+  ipc.invoke.mockResolvedValueOnce([{ ...task, title: 'Authoritative' }]);
+  await act(async () => { await sessionsStore.forceRefresh('active'); });
+  expect(visibleTask()?.title).toBe('Authoritative');
+  announce(3);
+  await act(async () => { fixture.reads[2]!.finish(); });
+  expect(visibleTask()).toBeUndefined();
+  expect({ duringTail, afterFailure }).toEqual({ duringTail: task, afterFailure: task });
+  expect(fixture.peak).toBe(1);
+});
+
+it.each<Partial<Session>>([{ status: 'deleted' }, { status: 'archived' }, { hiddenAt: 'hidden' }])(
+  'does not restore a prepended row removed from the active bucket by %j',
+  async (patch) => {
+    const fixture = await loadOpenTask();
+    const task = { id: 'local-new', status: 'active' } as Session;
+    emitRefresh();
+    sessionsStore.prependCreated(task);
+    ipc.listeners.get('local-db:sessions:patched')!({}, { sessionId: task.id, patch }, owner);
+    expect(sessionsStore.findById(task.id)).toBeNull();
+
+    const firstWave = [...fixture.reads];
+    await act(async () => {
+      for (const read of firstWave.reverse()) read.finish();
+    });
+    await act(async () => {
+      for (const read of fixture.reads.slice(firstWave.length)) read.finish();
+    });
+    expect(sessionsStore.getByFilter('active')?.some(row => row.id === task.id)).toBe(false);
+    expect(fixture.pending).toBe(0);
+  },
+);
+
+// Unit, #12471 review: two failed notification reads with another queued
+// invalidate must keep both initial waiters pending for the fourth read.
+it.each(['success', 'failure'])('keeps cold waiters on the final read (%s)', async (outcome) => {
+  setDataOwnerGeneration(owner.dataOwnerId, owner.ownerGeneration);
+  const reads: { resolve: (rows: Session[]) => void; reject: (error: Error) => void }[] = [];
+  ipc.invoke.mockImplementation(() => new Promise<Session[]>((resolve, reject) => {
+    reads.push({ resolve, reject });
+  }));
+  const observe = vi.fn();
+  const load = () => sessionsStore.ensureByFilter('active').then(() => observe('success'), observe);
+  const first = load();
+  announce(1);
+  const second = load();
+  announce(2);
+  expect(reads).toHaveLength(2);
+  await act(async () => { reads[1]!.reject(new Error('first fresh read failed')); });
+  expect(reads).toHaveLength(3);
+  announce(3);
+  await act(async () => { reads[2]!.reject(new Error('second fresh read failed')); });
+  expect(reads).toHaveLength(4);
+  const whileFinalPending = observe.mock.calls.length;
+
+  const failure = new Error('final read failed');
+  const task = { id: 'final', status: 'active' } as Session;
+  if (outcome === 'success') reads[3]!.resolve([task]);
+  else reads[3]!.reject(failure);
+  await Promise.all([first, second]);
+  expect(reads).toHaveLength(4);
+
+  await act(async () => { reads[0]!.resolve([{ ...task, id: 'superseded' }]); });
+  expect(sessionsStore.findById('superseded')).toBeNull();
+  expect(whileFinalPending).toBe(0);
+  expect(observe.mock.calls).toEqual(Array.from({ length: 2 }, () => [
+    outcome === 'success' ? 'success' : expect.objectContaining({ message: failure.message }),
+  ]));
+  expect(sessionsStore.findById(task.id)).toEqual(outcome === 'success' ? task : null);
 });
