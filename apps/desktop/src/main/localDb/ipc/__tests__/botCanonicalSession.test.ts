@@ -26,6 +26,7 @@ import { existsSync, mkdirSync, promises as fsPromises, readFileSync, rmSync, wr
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BOT_TEMPLATE_PRESET_IDENTITIES } from '../../../../shared/botTemplatePreset';
+import { buildDefaultBotIdentity } from '../../../../shared/botProfileDefaults';
 import { createBotModelRouteReconciler } from '../../../maker-ipc/botModelRouteReconciler';
 import { configureBotModelSelectionCoordinator, createBotModelSelectionCoordinator } from '../../../maker-ipc/botModelSelectionCoordinator';
 import { createBotSettingsAutosave, normalizeBotSettingsPayload, type BotAutosaveStatus } from '../../../../renderer/features/bots/botSettingsAutosave';
@@ -275,6 +276,7 @@ import {
   getBotRemoteResourceSource,
   listBotRemoteResourceSources,
   prepareImportedBotInvitation,
+  reconcileBotProfileFolder,
 } from '../bots';
 import { tx as runWorkerTx } from '../../worker/opHandlers/tx.js';
 import * as modelSettings from '../../../maker-host/bot-model-chain-settings-store.js';
@@ -4483,6 +4485,213 @@ describe('Bot canonical Session lifecycle', () => {
     expect(row.identitySource).toContain('You are Renamed Bot');
   });
 
+  describe('Buddy rename default SOUL', () => {
+    /*
+     * 测试价值
+     * - 生产入口与可观察结果：`local-db:bots:update` 改名后，版本行、SOUL.md、
+     *   `reconcileBotProfileFolder` 回写路径与运行时稳定层提示词都跟随当前名。
+     * - Bug／规则依据：F1 默认身份旧名残留；`docs/product-rules/cindy-bots-runtime.md` §1
+     *   要求伙伴名字以当前 Profile 为准，历史快照另属 F2。
+     * - 现有覆盖缺口：相邻用例只验证显式清空 identity 时重建默认身份，未覆盖普通改名、
+     *   文件夹回写、连续改名、用户手写 SOUL、旧版 Home 迁移、保存暂停期间的手改，
+     *   以及失败保存前预检查 Home 的已提交配置播种。
+     * - 不变量：只有在实际写入边界仍与冻结快照逐字节一致的 Home 文件，才可被这次保存改写；
+     *   旧版 Home 必须先迁移，读取失败或手改一律 fail-closed，由后续对账收进版本行；
+     *   事务提交前的 Home 播种只能用已提交配置，不能让被拒绝的保存部分生效。
+     * - 最小失败输入：以 OldName 创建、未显式提供 identitySource 的伙伴，只提交 `name: NewName`。
+     * - tier：db/integration；沿用本文件既有真实 SQLite 与 Bot Home 夹具，不新增模块重载或真实等待。
+     * - 实测耗时：新增用例单独运行 135.35s（收集 119.82s，用例 888ms）；本机负载导致收集耗时远超单文件预算，沿用既有重型集成文件。
+     */
+    const home = (botId: string) =>
+      join(h.userDataDir, createHash('sha256').update(h.ownerScopeKey).digest('hex'), 'bots', botId);
+    const soul = (botId: string) => readFileSync(join(home(botId), 'SOUL.md'), 'utf8');
+    const latestIdentity = (botId: string) =>
+      (
+        h.sqlite!.prepare(
+          'SELECT identity_source AS identitySource FROM bot_profile_versions WHERE bot_id = ? ORDER BY version DESC LIMIT 1',
+        ).get(botId) as { identitySource: string }
+      ).identitySource;
+    const createDefaultBuddy = async (botId: string, extra: Record<string, unknown> = {}) =>
+      invoke('local-db:bots:create', {
+        id: botId,
+        name: 'OldName',
+        avatar: '🤖',
+        capabilities: { harness: 'pi', model: 'grok-4.5', permissions: 'trusted' },
+        ...extra,
+      });
+    const runtimeIdentity = async (botId: string, expectedProfileVersion: number) => {
+      const canonical = await invoke('local-db:bots:create-canonical-session', {
+        botId,
+        expectedCanonicalSessionId: null,
+        expectedProfileVersion,
+      });
+      const opts: MakerSessionCreateOpts = {
+        id: canonical.session.id,
+        agentKind: 'pi',
+        workingDir: canonical.session.workingDir,
+        workspaceKind: 'dialogue',
+        model: canonical.session.model,
+        permissionMode: 'ask',
+      };
+      await hydrateBotProfileRuntime(opts, {}, { persistSnapshot: false });
+      return opts;
+    };
+
+    it('rebuilds a generated default SOUL on a plain rename across the version, file, and runtime', async () => {
+      const created = await createDefaultBuddy('rename-only');
+      const expected = buildDefaultBotIdentity('NewName');
+      expect(latestIdentity(created.id)).toBe(buildDefaultBotIdentity('OldName'));
+
+      const updated = await invoke('local-db:bots:update', { id: created.id, name: 'NewName' });
+
+      expect(updated.identitySource).toBe(expected);
+      expect(latestIdentity(created.id)).toBe(expected);
+      expect(soul(created.id)).toBe(expected);
+      const opts = await runtimeIdentity(created.id, updated.currentVersion);
+      expect(opts.botProfilePrompt).toBe(expected);
+      expect(opts.botProfilePrompt).not.toContain('OldName');
+      expect(opts.botProfileContextPrompt).toContain('Active Cindy Bot profile: NewName.');
+      expect(opts.botProfileContextPrompt).not.toContain('Active Cindy Bot profile: OldName.');
+    });
+
+    it('uses the new description when a generated default SOUL is renamed and described', async () => {
+      const created = await createDefaultBuddy('rename-description');
+      const description = 'Supports Buddy A with concise summaries.';
+
+      const updated = await invoke('local-db:bots:update', {
+        id: created.id,
+        name: 'NewName',
+        description,
+      });
+
+      expect(updated.identitySource).toBe(description);
+      expect(latestIdentity(created.id)).toBe(description);
+      expect(soul(created.id)).toBe(description);
+    });
+
+    it('does not rebuild a user-authored identity on rename', async () => {
+      const custom = 'User-authored SOUL for Buddy A.';
+      const created = await createDefaultBuddy('custom-identity', { identitySource: custom });
+
+      await invoke('local-db:bots:update', { id: created.id, name: 'NewName' });
+
+      expect(latestIdentity(created.id)).toBe(custom);
+      expect(soul(created.id)).toBe(custom);
+    });
+
+    it('does not overwrite a hand-edited SOUL.md on rename', async () => {
+      const created = await createDefaultBuddy('hand-edited-soul');
+      const handEdited = 'User-authored SOUL for Buddy A.\n';
+      writeFileSync(join(home(created.id), 'SOUL.md'), handEdited);
+
+      await invoke('local-db:bots:update', { id: created.id, name: 'NewName' });
+
+      expect(soul(created.id)).toBe(handEdited);
+      expect(latestIdentity(created.id)).toBe(buildDefaultBotIdentity('OldName'));
+    });
+
+    it('keeps folder reconciliation from writing the old name back', async () => {
+      const created = await createDefaultBuddy('folder-sync');
+      const expected = buildDefaultBotIdentity('NewName');
+      const updated = await invoke('local-db:bots:update', { id: created.id, name: 'NewName' });
+
+      expect(await reconcileBotProfileFolder(created.id)).toBeNull();
+      expect(
+        h.sqlite!.prepare('SELECT current_version FROM bot_profiles WHERE id = ?').pluck().get(created.id),
+      ).toBe(updated.currentVersion);
+      expect(latestIdentity(created.id)).toBe(expected);
+      expect(soul(created.id)).toBe(expected);
+    });
+
+    it('rebuilds the generated default SOUL on consecutive renames', async () => {
+      const created = await createDefaultBuddy('multiple-renames');
+      await invoke('local-db:bots:update', { id: created.id, name: 'NewName' });
+
+      const updated = await invoke('local-db:bots:update', { id: created.id, name: 'Buddy A' });
+      const expected = buildDefaultBotIdentity('Buddy A');
+
+      expect(updated.identitySource).toBe(expected);
+      expect(latestIdentity(created.id)).toBe(expected);
+      expect(soul(created.id)).toBe(expected);
+      expect(updated.identitySource).not.toContain('OldName');
+      expect(updated.identitySource).not.toContain('NewName');
+    });
+
+    it('migrates a hand-edited legacy Home before deciding to rebuild the default SOUL', async () => {
+      const created = await createDefaultBuddy('legacy-home-hand-edit');
+      const handEdited = 'User-authored SOUL for Buddy A.\n';
+      rmSync(home(created.id), { recursive: true, force: true });
+      const legacyHome = join(h.userDataDir, 'bots', created.id);
+      mkdirSync(legacyHome, { recursive: true });
+      writeFileSync(join(legacyHome, 'SOUL.md'), handEdited);
+
+      const updated = await invoke('local-db:bots:update', { id: created.id, name: 'NewName' });
+
+      expect(soul(created.id)).toBe(handEdited);
+      expect(updated.identitySource).toBe(buildDefaultBotIdentity('OldName'));
+      expect(latestIdentity(created.id)).toBe(buildDefaultBotIdentity('OldName'));
+      expect(await reconcileBotProfileFolder(created.id)).not.toBeNull();
+      expect(latestIdentity(created.id)).toBe(handEdited);
+    });
+
+    it('keeps a SOUL.md hand edit made while the rename save is paused', async () => {
+      const created = await createDefaultBuddy('paused-save-hand-edit');
+      const handEdited = 'User-authored SOUL for Buddy A.\n';
+      let reachedTx!: () => void;
+      let releaseTx!: () => void;
+      const atTx = new Promise<void>(resolve => { reachedTx = resolve; });
+      const resumeTx = new Promise<void>(resolve => { releaseTx = resolve; });
+      const originalTx = h.tx!;
+      let paused = false;
+      h.tx = async (name, args) => {
+        if (name === 'bots.updateProfile' && !paused) {
+          paused = true;
+          reachedTx();
+          await resumeTx;
+        }
+        return originalTx(name, args);
+      };
+      try {
+        const pending = invoke('local-db:bots:update', { id: created.id, name: 'NewName' });
+        await atTx;
+        writeFileSync(join(home(created.id), 'SOUL.md'), handEdited);
+        releaseTx();
+        const updated = await pending;
+        expect(updated.identitySource).toBe(buildDefaultBotIdentity('NewName'));
+      } finally {
+        h.tx = originalTx;
+      }
+
+      expect(soul(created.id)).toBe(handEdited);
+      expect(await reconcileBotProfileFolder(created.id)).not.toBeNull();
+      expect(latestIdentity(created.id)).toBe(handEdited);
+    });
+
+    it('seeds a pre-check Home with committed config when the rename save is rejected', async () => {
+      await createDefaultBuddy('taken-name', { name: 'Taken Name' });
+      const created = await createDefaultBuddy('rejected-pre-check-home', {
+        userContextSource: 'Old context',
+      });
+      rmSync(home(created.id), { recursive: true, force: true });
+
+      await expect(invoke('local-db:bots:update', {
+        id: created.id,
+        name: 'Taken Name',
+        userContextSource: 'New context',
+      })).rejects.toMatchObject({ code: 'ALREADY_EXISTS' });
+
+      expect(readFileSync(join(home(created.id), 'memories', 'USER.md'), 'utf8')).toBe('Old context');
+      expect(soul(created.id)).toBe(buildDefaultBotIdentity('OldName'));
+      expect(await reconcileBotProfileFolder(created.id)).toBeNull();
+      const row = h
+        .sqlite!.prepare(
+          'SELECT capabilities_json AS capabilitiesJson FROM bot_profile_versions WHERE bot_id = ? ORDER BY version DESC LIMIT 1',
+        )
+        .get(created.id) as { capabilitiesJson: string };
+      expect(JSON.parse(row.capabilitiesJson).userContextSource).toBe('Old context');
+    });
+  });
+
   it('returns the winner without removing the permanent workspace when a stale create loses the CAS', async () => {
     await invoke('local-db:bots:create-canonical-session', {
       botId: 'bot-1',
@@ -5494,7 +5703,7 @@ describe('Bot self control uses the same profile authority as settings', () => {
     expect(await service.updateProfile(request)).toMatchObject({ ok: false });
   });
 
-  it('reads only its own state and patches requested fields without replacing independent configuration', async () => {
+  it('patches requested fields while regenerating only the default identity', async () => {
     const canonical = await invoke('local-db:bots:create-canonical-session', { botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1 });
     const sessionId = canonical.session.id;
     const service = createBotCapabilityService(capabilityDeps);
@@ -5507,7 +5716,9 @@ describe('Bot self control uses the same profile authority as settings', () => {
     const after = await invoke('local-db:bots:get', 'bot-1');
     expect(after.name).toBe('Renamed');
     expect(after.capabilities).toEqual(before.capabilities);
-    expect(after.identitySource).toBe(before.identitySource);
+    // A Cindy-generated default SOUL follows the current name; user-authored
+    // identities are protected by the rename regression cases above.
+    expect(after.identitySource).toBe(buildDefaultBotIdentity('Renamed', before.description));
     expect(after.canonicalSessionId).toBe(before.canonicalSessionId);
     expect(await service.updateProfile({ callerSessionId: sessionId,
       expectedVersion: initial.state.profile.version, name: 'Stale' })).toMatchObject({ ok: false });

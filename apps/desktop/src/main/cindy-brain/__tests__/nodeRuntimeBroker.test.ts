@@ -3323,6 +3323,22 @@ describe('nodeRuntimeBroker · 任务执行引擎进程(harnesses)', () => {
     } finally { broker.destroyAll(); }
   });
 
+  // #12595: the ninth request needs an actionable error, and an exit must allow a retry.
+  it('reports plugin capacity before forking and accepts a retry after an engine exits', async () => {
+    const { broker, spawned } = setupHarness(harnessGhost());
+    try {
+      for (let i = 0; i < 8; i++) await broker.spawnHarness('node-ghost', 'dsh');
+      await expect(broker.spawnHarness('node-ghost', 'dsh')).rejects.toThrow(
+        'Plugin "node-ghost" is using 8/8 task engine slots. Try again after an engine process for this plugin exits.',
+      );
+      expect(spawned).toHaveLength(8);
+
+      spawned[0].proc.emit('exit', 0);
+      const replacement = await broker.spawnHarness('node-ghost', 'dsh');
+      expect(replacement).toBe(spawned[8].proc);
+    } finally { broker.destroyAll(); }
+  });
+
   it('refuses while the account boundary is switching', async () => {
     const ghost = harnessGhost();
     const spawnChildProcess = vi.fn();

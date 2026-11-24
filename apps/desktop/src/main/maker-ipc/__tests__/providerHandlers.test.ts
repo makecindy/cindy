@@ -1,3 +1,4 @@
+import { streamSimple as streamPiChat } from '@earendil-works/pi-ai/api/openai-completions';
 import { remoteProviderDisableKey } from '@cindy/model-providers';
 import * as customProviderStore from '../../maker-host/custom-provider-store.js';
 import { configureModelSettingsActions, manageAppModels } from '../../app-settings/models';
@@ -25,6 +26,7 @@ import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/c
 import * as schema from '../../localDb/schema.js';
 import { createCustomProvider, getCustomProvider, listCustomProviders, mergeDiscoveredModelsIntoConfig, updateCustomProviderIfUnchanged, revokeCodexAccountUltrafast } from '../../maker-host/custom-provider-store.js';
 import { issueModelSourceSnapshot } from '../../maker-host/model-source-snapshots.js';
+import { buildPiNativeProvidersFromConfigs } from '../../maker-host/pi-native-catalog.js';
 import { fetchProviderModels } from '../../maker-host/provider-model-fetch.js';
 import { deriveModelsDiscoveryUrl } from '../../maker-host/generic-oauth.desktop.js';
 import { codexCustomProviderConfigSignature } from '../../maker-host/codex-custom-provider-route.js';
@@ -6777,6 +6779,86 @@ describe('Agent API connection configuration', () => {
     })).rejects.toThrow('Connection changed');
     expect(deps.storeCustomProviderKey).not.toHaveBeenCalled();
   });
+  // #12603, unit: Settings refresh persists a Go /models response and feeds Pi's
+  // launch config. The flat discovery fixtures miss nested reasoning declarations.
+  it('refreshes OpenCode Go reasoning capabilities without inventing selectable levels', async () => {
+    const preset = BUNDLED_CATALOG.presets!.find(entry => entry.id === 'opencode-go')!;
+    const data = [
+      { id: 'hy4-flash-free', capabilities: { reasoning: { supported: true, effort: ['none', 'high'] } } },
+      { id: 'hungerg-free', capabilities: { reasoning: { supported: true } } },
+      { id: 'fixture-disabled', capabilities: { reasoning: { supported: false, effort: ['high'] } } },
+      { id: 'fixture-unspecified' },
+      { id: 'fixture-overridden', capabilities: { reasoning: { supported: true, effort: ['high'] } } },
+    ];
+    let discovery: typeof data = data;
+    setup({
+      listPresets: () => [preset],
+      readCustomProviderKeyForMutation: () => 'synthetic-key',
+      fetchModels: spec => fetchProviderModels(spec, async url => {
+        expect(String(url)).toBe('https://opencode.ai/zen/go/v1/models');
+        return Response.json({ data: discovery });
+      }),
+    });
+    const config = {
+      id: 'fixture-opencode-go', name: preset.name, auth: { method: 'apiKey' as const },
+      runtimes: { pi: { ...preset.runtimes.pi!, catalogPresetId: preset.id, models: [
+        { id: 'fixture-overridden', name: 'Override', reasoning: true, reasoningEfforts: ['low' as const] },
+      ] } },
+    };
+    await createCustomProvider(config);
+    const refresh = () => manageAppModels({ operation: 'connection', change: {
+      action: 'refreshModels', providerId: config.id, agent: 'pi',
+    } }, async () => {});
+    expect(await refresh()).toMatchObject({ saved: true, discoveredModelCount: data.length });
+    const saved = (await getCustomProvider(config.id))!;
+    const catalog = buildUserProvider(saved, { presets: BUNDLED_CATALOG.presets, modelRegistry: BUNDLED_CATALOG.modelRegistry });
+    const projected = catalog.models.pi!;
+    expect(projected.map(model => [model.id, model.efforts])).toEqual([
+      ['hy4-flash-free', ['high']], ['hungerg-free', []], ['fixture-disabled', []],
+      ['fixture-unspecified', []], ['fixture-overridden', ['low']],
+    ]);
+    expect(projected.map(model => model.supportsReasoning)).toEqual([true, true, false, undefined, true]);
+    const launch = buildPiNativeProvidersFromConfigs([saved], () => 'synthetic-key', undefined, undefined,
+      { ...BUNDLED_CATALOG, providers: [catalog] }).providers[0]!;
+    expect(launch.models).toMatchObject([
+      { id: 'hy4-flash-free', reasoning: true, thinkingLevelMap: { off: 'none', high: 'high', low: null } },
+      { id: 'hungerg-free', reasoning: true, thinkingLevelMap: { high: null, low: null } },
+      { id: 'fixture-disabled', reasoning: false },
+      { id: 'fixture-unspecified', reasoning: false },
+      { id: 'fixture-overridden', reasoning: true, thinkingLevelMap: { high: null, low: 'low' } },
+    ]);
+    const capture = async (id: string, reasoning?: 'high') => {
+      const model = launch.models.find(candidate => candidate.id === id)!;
+      const fetch = vi.fn<typeof globalThis.fetch>(async (_url, _init) =>
+        new Response('data: [DONE]\n\n', { headers: { 'content-type': 'text/event-stream' } }));
+      await streamPiChat({
+        id: model.id, name: model.name!, api: 'openai-completions', provider: launch.id,
+        baseUrl: launch.baseUrl!, reasoning: model.reasoning!, thinkingLevelMap: model.thinkingLevelMap,
+        input: ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 100_000, maxTokens: 1024, compat: model.compat,
+      }, { messages: [{ role: 'user', content: 'fixture', timestamp: 0 }] },
+      { apiKey: 'synthetic-key', reasoning, fetch }).result();
+      expect(fetch).toHaveBeenCalledTimes(1);
+      const [url, init] = fetch.mock.calls[0];
+      expect(String(url)).toBe('https://opencode.ai/zen/go/v1/chat/completions');
+      return JSON.parse(String(init?.body));
+    };
+    expect(await capture('hy4-flash-free', 'high')).toMatchObject({ reasoning_effort: 'high' });
+    expect(await capture('hy4-flash-free')).toMatchObject({ reasoning_effort: 'none' });
+    expect(await capture('hungerg-free')).not.toHaveProperty('reasoning_effort');
+
+    discovery = [
+      { id: 'hy4-flash-free', capabilities: { reasoning: { supported: true } } },
+      { id: 'hungerg-free' },
+    ];
+    expect(await refresh()).toMatchObject({ saved: true, discoveredModelCount: discovery.length });
+    const refreshed = buildUserProvider((await getCustomProvider(config.id))!).models.pi!;
+    expect(refreshed.find(model => model.id === 'hy4-flash-free')).toMatchObject({ supportsReasoning: true, efforts: [] });
+    expect(refreshed.find(model => model.id === 'hy4-flash-free')?.reasoningOffEffort).toBeUndefined();
+    expect(refreshed.find(model => model.id === 'hungerg-free')?.supportsReasoning).toBeUndefined();
+
+  });
+
   // #9276 review, unit: prior discovery coverage retained a manually named model,
   // missing a newly discovered model's rename in the final selector projection.
   it('keeps an explicit name over discovery metadata, including after another refresh', async () => {
