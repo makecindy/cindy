@@ -11325,6 +11325,8 @@
     }
   },
   "bots": {
+    "nameHistoryHint": "Renommer ne change que les nouveaux messages ; les messages précédents gardent le nom utilisé lors de l’envoi.",
+    "nameHistoryHint": "Renommer ne change que les nouveaux messages ; les messages précédents gardent le nom utilisé lors de l’envoi.",
     "rosterLoadFailed": "Impossible de charger les amis",
     "rosterReload": "Recharger les amis",
     "avatarStatus": {

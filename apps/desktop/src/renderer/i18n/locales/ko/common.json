@@ -11198,6 +11198,8 @@
     }
   },
   "bots": {
+    "nameHistoryHint": "이름을 바꾸면 이후 새 메시지에만 적용됩니다. 이전 메시지는 보낼 때의 이름으로 표시됩니다.",
+    "nameHistoryHint": "이름을 바꾸면 이후 새 메시지에만 적용됩니다. 이전 메시지는 보낼 때의 이름으로 표시됩니다.",
     "rosterLoadFailed": "동반자 목록을 불러오지 못했어요",
     "rosterReload": "동반자 다시 불러오기",
     "avatarStatus": {

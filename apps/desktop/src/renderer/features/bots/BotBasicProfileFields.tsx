@@ -89,6 +89,7 @@ export function BotBasicProfileFields({
             className="min-w-0"
             required
           />
+          <span className="text-12 text-[var(--text-tertiary)]">{t('bots.nameHistoryHint')}</span>
         </label>
       </div>
 

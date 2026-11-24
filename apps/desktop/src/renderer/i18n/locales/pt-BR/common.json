@@ -11325,6 +11325,8 @@
     }
   },
   "bots": {
+    "nameHistoryHint": "Mudar o nome só afeta mensagens novas; as mensagens anteriores mantêm o nome com que foram enviadas.",
+    "nameHistoryHint": "Mudar o nome só afeta mensagens novas; as mensagens anteriores mantêm o nome com que foram enviadas.",
     "rosterLoadFailed": "Não foi possível carregar os amigos",
     "rosterReload": "Recarregar amigos",
     "avatarStatus": {

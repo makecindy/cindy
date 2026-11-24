@@ -11241,6 +11241,8 @@
     }
   },
   "bots": {
+    "nameHistoryHint": "Umbenennen wirkt sich nur auf neue Nachrichten aus; frühere Nachrichten behalten den Namen, mit dem sie gesendet wurden.",
+    "nameHistoryHint": "Umbenennen wirkt sich nur auf neue Nachrichten aus; frühere Nachrichten behalten den Namen, mit dem sie gesendet wurden.",
     "rosterLoadFailed": "Freunde konnten nicht geladen werden",
     "rosterReload": "Freunde neu laden",
     "avatarStatus": {
