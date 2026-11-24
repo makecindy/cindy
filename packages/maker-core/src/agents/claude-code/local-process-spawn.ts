@@ -1,6 +1,9 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { spawn, type ChildProcessWithoutNullStreams, type StdioOptions } from 'node:child_process';
+import { closeSync, openSync } from 'node:fs';
 
 import type { SpawnOptions, SpawnedProcess } from '@anthropic-ai/claude-agent-sdk';
+
+import { CLAUDE_OAUTH_TOKEN_DESCRIPTOR, CLAUDE_OAUTH_TOKEN_DESCRIPTOR_ENV } from './cli-login-status.js';
 
 export interface ObservedClaudeProcessExit {
   pid: number | undefined;
@@ -11,6 +14,11 @@ export interface ObservedClaudeProcessExit {
 
 export interface ObservedClaudeProcessOptions {
   spawnOptions: SpawnOptions;
+  /**
+   * The account's long-lived token file. The CLI receives it as an open descriptor and reads it
+   * itself; this process never reads the token. A file that is gone leaves the CLI on its stored login.
+   */
+  oauthTokenFile?: string;
   registerProcess?: (pid: number) => void | (() => void);
   trackDebugFile?: () => () => void;
   onStderr?: (chunk: string) => void;
@@ -21,17 +29,35 @@ export interface ObservedClaudeProcessOptions {
 export function spawnObservedClaudeProcess(
   opts: ObservedClaudeProcessOptions,
 ): SpawnedProcess {
-  const child: ChildProcessWithoutNullStreams = spawn(
-    opts.spawnOptions.command,
-    opts.spawnOptions.args,
-    {
-      cwd: opts.spawnOptions.cwd,
-      env: opts.spawnOptions.env,
-      signal: opts.spawnOptions.signal,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      windowsHide: true,
-    },
-  );
+  const stdio: StdioOptions = ['pipe', 'pipe', 'pipe'];
+  let env = opts.spawnOptions.env;
+  let tokenDescriptor: number | undefined;
+  if (opts.oauthTokenFile) {
+    try {
+      tokenDescriptor = openSync(opts.oauthTokenFile, 'r');
+      stdio[CLAUDE_OAUTH_TOKEN_DESCRIPTOR] = tokenDescriptor;
+      env = { ...env, [CLAUDE_OAUTH_TOKEN_DESCRIPTOR_ENV]: String(CLAUDE_OAUTH_TOKEN_DESCRIPTOR) };
+    } catch {
+      // Removed between selection and launch: the CLI falls back to its stored login.
+    }
+  }
+  let child: ChildProcessWithoutNullStreams;
+  try {
+    child = spawn(
+      opts.spawnOptions.command,
+      opts.spawnOptions.args,
+      {
+        cwd: opts.spawnOptions.cwd,
+        env,
+        signal: opts.spawnOptions.signal,
+        stdio,
+        windowsHide: true,
+      },
+    ) as ChildProcessWithoutNullStreams;
+  } finally {
+    // The child holds its own inherited copy.
+    if (tokenDescriptor !== undefined) closeSync(tokenDescriptor);
+  }
   let disposeRegistration: (() => void) | undefined;
   let disposeDebugFile: (() => void) | undefined;
   if (child.pid != null && child.pid > 0) {

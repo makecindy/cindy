@@ -35,6 +35,8 @@ const h = vi.hoisted(() => ({
   rejectSnapshotRename: false,
   directoryEntries: vi.fn(),
   login: vi.fn(),
+  tokenCreate: vi.fn(),
+  tokenRemove: vi.fn(),
   bound: true,
   shared: true,
   legacyRead: vi.fn(),
@@ -146,6 +148,8 @@ vi.mock('../nativeCli.js', () => ({
   readNativeCodexTokens: h.tokens,
   readNativeAccountUsage: h.usage,
   loginNativeAccount: h.login,
+  createNativeLongLivedToken: h.tokenCreate,
+  removeNativeLongLivedToken: h.tokenRemove,
   readLegacyCodexAccount: h.legacyRead,
   loginLegacyCodexAccount: h.legacyLogin,
   readLegacyCodexProviderAccount: h.importedRead,
@@ -348,6 +352,8 @@ beforeEach(() => {
   h.modelCacheRead.mockReset().mockRejectedValue(new Error('no account cache'));
   h.directoryEntries.mockReset().mockResolvedValue([]);
   h.login.mockReset().mockResolvedValue(undefined);
+  h.tokenCreate.mockReset().mockResolvedValue(undefined);
+  h.tokenRemove.mockReset().mockResolvedValue(undefined);
   h.legacyRead.mockReset().mockResolvedValue({
     authenticated: true,
     identity: 'original@example.com',
@@ -7589,5 +7595,133 @@ describe('unreachable account service', () => {
     await refreshSubscriptionPoolCodexModels();
     expect(hasConnectedSubscriptionPool('openai')).toBe(false);
     expect(readSubscriptionPoolCodexModels()).toEqual([]);
+  });
+});
+
+// Unit, 2026-11-24 Claude long-lived token (subscription-account-pools.md「Claude 长期令牌」).
+// Production entries: runSubscriptionAccountCommand, readSubscriptionPool, acquireSubscriptionAccount
+// and observeSubscriptionAccountUsage. The service refuses profile reads for such a token (measured:
+// 403, scope user:profile), so the row's identity has to survive without it, and the account the
+// token spends can only be checked through quota windows. No earlier case has an account whose
+// tasks run on anything but its ordinary login. Minimal failing input: a status read that reports a
+// token login with no identity.
+describe('Claude long-lived token', () => {
+  const stored = {
+    authenticated: true, identity: 'second@example.test', plan: 'max', planTier: 'max_20x',
+    loginExpiresAt: '2030-01-05T00:00:00.000Z',
+  };
+  const onToken = (storedLogin: boolean, source: 'descriptor' | 'settings' = 'descriptor') => storedLogin
+    ? { ...stored, longLivedToken: { source, storedLogin: true } }
+    : { authenticated: true, longLivedToken: { source, storedLogin: false } };
+  let second: Record<string, unknown>;
+  const restart = () => { h.owner = 'owner-a:' + ++generation; };
+  beforeEach(() => {
+    second = stored;
+    h.read.mockImplementation(async (_provider, directory) => directory === 'anthropic/default'
+      ? { authenticated: true, identity: 'first@example.test' } : second);
+  });
+
+  it('moves a signed-in account onto a token and keeps who it is after the ordinary sign-in ends', async () => {
+    h.tokenCreate.mockImplementation(async () => { second = onToken(true); });
+    const view = await runSubscriptionAccountCommand({
+      action: 'token-login', providerId: 'anthropic', accountId: 'second', loginKey: 'mint',
+    });
+    expect(h.tokenCreate).toHaveBeenCalledExactlyOnceWith('anthropic/second', expect.any(AbortSignal));
+    expect(view.accounts[1]).toMatchObject({
+      identity: 'second@example.test', status: 'ready', loginExpiresAt: stored.loginExpiresAt,
+      longLivedToken: { storedLogin: true, verification: 'pending' },
+    });
+    expect(Date.parse(view.accounts[1].longLivedToken!.expiresAt!)).toBeGreaterThan(Date.now() + 364 * 86_400_000);
+    expect(view.accounts[0].longLivedToken).toBeUndefined();
+
+    // About a month later the ordinary sign-in is gone; the token says nothing about the account.
+    second = onToken(false);
+    restart();
+    const later = await readSubscriptionPool('anthropic');
+    expect(later.accounts[1]).toMatchObject({
+      identity: 'second@example.test', plan: 'max', planTier: 'max_20x', status: 'ready',
+      longLivedToken: { storedLogin: false, verification: 'pending' },
+    });
+    expect(later.accounts[1].loginExpiresAt).toBeUndefined();
+  });
+
+  it('refuses an account that has no ordinary sign-in to be identified by', async () => {
+    second = { authenticated: false };
+    await expect(runSubscriptionAccountCommand({
+      action: 'token-login', providerId: 'anthropic', accountId: 'second', loginKey: 'mint',
+    })).rejects.toThrow('not_signed_in');
+    expect(h.tokenCreate).not.toHaveBeenCalled();
+    expect(h.pools.anthropic?.accounts[1]).not.toHaveProperty('longLivedToken');
+  });
+
+  it.each([
+    [0, 'verified'],
+    [3_600, 'mismatch'],
+  ] as const)('checks whose quota the token spends on its first task (windows %i s apart: %s)', async (offset, verdict) => {
+    const now = Math.floor(Date.now() / 1000);
+    const fiveHour = now + 3_600;
+    const sevenDay = now + 3 * 86_400;
+    second = onToken(true);
+    h.pools.anthropic!.accounts[0].paused = true;
+    h.usage.mockImplementation(async (_provider, directory) => directory === 'anthropic/second' ? { claudeUsage: {
+      fiveHour: { utilization: 10, resetsAt: fiveHour }, sevenDay: { utilization: 20, resetsAt: sevenDay },
+      source: 'oauth-endpoint', updatedAt: Date.now(),
+    } } : {});
+    const lease = await acquireSubscriptionAccount('anthropic', 'claude-sonnet', []);
+    expect(lease?.account.configDir).toBe('anthropic/second');
+    // The shape CLI 2.1.321 reports: both windows under unifiedWindows.
+    observeSubscriptionAccountUsage(lease!.account, { status: 'allowed', unifiedWindows: {
+      five_hour: { utilization: 0.3, resetsAt: fiveHour + offset },
+      seven_day: { utilization: 0.2, resetsAt: sevenDay + offset },
+    } });
+    await vi.waitFor(() => expect(h.pools.anthropic!.accounts[1].longLivedToken?.verification).toBe(verdict));
+    lease!.release();
+    const view = await readSubscriptionPool('anthropic');
+    if (verdict === 'verified') {
+      expect(view.accounts[1]).toMatchObject({ status: 'ready', longLivedToken: { verification: 'verified' } });
+      return;
+    }
+    // A token for some other account spends that account's quota: stop assigning this row.
+    expect(view.accounts[1]).toMatchObject({
+      status: 'signed-out', identity: 'second@example.test', authIssue: 'claude-token-account-mismatch',
+      longLivedToken: { verification: 'mismatch' },
+    });
+    await expect(acquireSubscriptionAccount('anthropic', 'claude-sonnet', [])).rejects.toThrow('No subscription account is available');
+    // Authorizing again replaces the token and its verdict; the row must not be locked out of its own repair.
+    const renewed = await runSubscriptionAccountCommand({
+      action: 'token-login', providerId: 'anthropic', accountId: 'second', loginKey: 'again',
+    });
+    expect(h.tokenCreate).toHaveBeenCalledExactlyOnceWith('anthropic/second', expect.any(AbortSignal));
+    expect(renewed.accounts[1]).toMatchObject({ status: 'ready', longLivedToken: { verification: 'pending' } });
+    expect(renewed.accounts[1].authIssue).toBeUndefined();
+  });
+
+  it('keeps a token stored in user settings away from sessions that start without them', async () => {
+    second = onToken(false, 'settings');
+    h.pools.anthropic!.accounts[0].paused = true;
+    await expect(acquireSubscriptionAccount('anthropic', 'claude-sonnet', [], false, { userSettingsLoaded: false }))
+      .rejects.toThrow('No subscription account is available');
+    const local = await acquireSubscriptionAccount('anthropic', 'claude-sonnet', []);
+    expect(local?.account.configDir).toBe('anthropic/second');
+    local?.release();
+    expect((await readSubscriptionPool('anthropic')).accounts[1].longLivedToken).toMatchObject({ settingsOnly: true });
+
+    // A token handed over as a descriptor reaches every kind of session.
+    second = onToken(false);
+    restart();
+    const hosted = await acquireSubscriptionAccount('anthropic', 'claude-sonnet', [], false, { userSettingsLoaded: false });
+    expect(hosted?.account.configDir).toBe('anthropic/second');
+    hosted?.release();
+  });
+
+  it('takes the token away again and forgets its notes', async () => {
+    second = onToken(true);
+    h.pools.anthropic!.accounts[1] = { ...account('second'), longLivedToken: { mintedAt: 1, verification: 'verified' } };
+    h.tokenRemove.mockImplementation(async () => { second = stored; });
+    const view = await runSubscriptionAccountCommand({ action: 'token-remove', providerId: 'anthropic', accountId: 'second' });
+    expect(h.tokenRemove).toHaveBeenCalledExactlyOnceWith('anthropic/second');
+    expect(view.accounts[1]).toMatchObject({ status: 'ready', identity: 'second@example.test', loginExpiresAt: stored.loginExpiresAt });
+    expect(view.accounts[1].longLivedToken).toBeUndefined();
+    expect(h.pools.anthropic!.accounts[1]).not.toHaveProperty('longLivedToken');
   });
 });

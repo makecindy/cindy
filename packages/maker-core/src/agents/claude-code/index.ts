@@ -49,6 +49,7 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 import { discoverSubagentDefinitions } from './subagent-definitions.js';
 import { spawnObservedClaudeProcess } from './local-process-spawn.js';
+import { claudeLongLivedTokenFile } from './cli-login-status.js';
 import { claudeMcpServerToolsReport, type ClaudeMcpServerStatusEntry } from './mcp-server-tools.js';
 import { callClaudeToolCatalog } from './native-tool-catalog.js';
 import {
@@ -1121,6 +1122,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         nativeCliAuth: true,
         subagentModel: null,
       });
+      const probeTokenFile = claudeLongLivedTokenFile(env.CLAUDE_CONFIG_DIR);
       q = sdkQuery({
         prompt: idleInput as unknown as Parameters<typeof sdkQuery>[0]['prompt'],
         options: {
@@ -1128,6 +1130,10 @@ export class ClaudeCodeAgent extends BaseAgent {
           cwd: probeDir,
           pathToClaudeCodeExecutable: this.deps.binaryPath,
           env,
+          // An account on a long-lived token is probed with the credential its tasks use.
+          ...(probeTokenFile
+            ? { spawnClaudeCodeProcess: (spawnOptions) => spawnObservedClaudeProcess({ spawnOptions, oauthTokenFile: probeTokenFile }) }
+            : {}),
         },
       });
       const query = q;
@@ -4624,11 +4630,16 @@ export class ClaudeCodeAgent extends BaseAgent {
           ...(finalResumeAt ? { resumeSessionAt: finalResumeAt } : {}),
           ...(finalFork ? { forkSession: true } : {}),
           env,
-          ...(this.deps.registerLocalAgentProcess || this.deps.trackCcDebugFile
+          ...(this.deps.registerLocalAgentProcess || this.deps.trackCcDebugFile || nativeCliAuth
             ? {
                 spawnClaudeCodeProcess: (spawnOptions) =>
                   spawnObservedClaudeProcess({
                     spawnOptions,
+                    // 订阅账号改用长期令牌后,每次拉起 CLI(含会话中途重建)都把令牌文件的句柄交给它;
+                    // 不依赖用户级设置,设备托管与隔离伙伴会话同样拿得到。本进程不读令牌内容。
+                    ...(nativeCliAuth
+                      ? { oauthTokenFile: claudeLongLivedTokenFile(spawnOptions.env.CLAUDE_CONFIG_DIR) }
+                      : {}),
                     registerProcess: (pid) =>
                       this.deps.registerLocalAgentProcess?.({
                         pid,

@@ -93,3 +93,46 @@ describe('official CLI subscription display name', () => {
     expect(execFile).toHaveBeenCalledTimes(1);
   });
 });
+
+// Unit, 2026-11-24 long-lived Claude token. The official JSON status reports every bearer token as
+// `oauth_token` (measured on CLI 2.1.321: a relay token and a `claude setup-token` token are
+// identical there); only the text status names the source. Until now every `oauth_token` login was
+// refused as "not a subscription". Minimal failing input: the two payloads below.
+describe('long-lived subscription token', () => {
+  const tokenJson = JSON.stringify({ loggedIn: true, authMethod: 'oauth_token', apiProvider: 'firstParty', loginExpiresAt: null });
+
+  it.each([
+    ['Auth token: CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR\n', { loggedIn: true, authMethod: 'oauth_token', longLivedToken: 'descriptor' }],
+    ['Auth token: CLAUDE_CODE_OAUTH_TOKEN\n', { loggedIn: true, authMethod: 'oauth_token', longLivedToken: 'settings' }],
+    // A relay token must never be taken for a subscription.
+    ['Auth token: ANTHROPIC_AUTH_TOKEN\n', { loggedIn: false, notSubscription: true }],
+    ['Auth token: CLAUDE_CODE_OAUTH_TOKEN\nAuth token: ANTHROPIC_AUTH_TOKEN\n', { loggedIn: false, notSubscription: true }],
+    [undefined, { loggedIn: false, notSubscription: true }],
+  ])('classifies a token login by the source the text status names: %j', (textStatus, expected) => {
+    expect(parseClaudeCliLoginStatus(tokenJson, textStatus)).toEqual(expected);
+  });
+
+  it('describes the account through the ordinary login stored beside the token', async () => {
+    reply(tokenJson);
+    reply('Auth token: CLAUDE_CODE_OAUTH_TOKEN\n');
+    reply(JSON.stringify({ ...subscription, planDisplayName: 'Ultra', loginExpiresAt: '2026-12-21T17:12:41.249Z' }));
+    await expect(readClaudeCliLoginStatusBySpawn(options)).resolves.toEqual({
+      loggedIn: true, authMethod: 'oauth_token', longLivedToken: 'settings', storedLogin: true,
+      subscriptionType: 'pro', planTier: 'pro', planDisplayName: 'Ultra', email: 'user@example.com',
+      loginExpiresAt: '2026-12-21T17:12:41.249Z',
+    });
+    // The third read leaves the user's settings out, so the CLI answers from the stored login.
+    expect(vi.mocked(execFile).mock.calls.map(call => call[1])).toEqual([
+      ['auth', 'status', '--json'], ['auth', 'status', '--text'], ['--setting-sources', '', 'auth', 'status', '--json'],
+    ]);
+  });
+
+  it('keeps the token login when the ordinary login has ended', async () => {
+    reply(tokenJson);
+    reply('Auth token: CLAUDE_CODE_OAUTH_TOKEN\n');
+    reply(JSON.stringify({ loggedIn: false, authMethod: 'none' }), new Error('exit 1'));
+    await expect(readClaudeCliLoginStatusBySpawn(options)).resolves.toEqual({
+      loggedIn: true, authMethod: 'oauth_token', longLivedToken: 'settings', storedLogin: false,
+    });
+  });
+});

@@ -183,6 +183,36 @@ Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此�
   项目级设置、不起 MCP、不落会话记录），会话内的 SDK `rate_limit_event` 做增量刷新；
   模型列表来自 SDK `supportedModels` 与 Registry；
   不得为此恢复用订阅 token 直接调用 Anthropic API。
+- **长期令牌是这一节唯一的例外**（2026-11-24 用户裁决，产品行为见
+  [账号池规则](../product-rules/subscription-account-pools.md)「Claude 长期令牌」）。普通登录由服务端限定约
+  四周的寿命，刷新不延长，无人值守的任务到期即断；官方给这种场景的办法是 `claude setup-token`（约一年
+  有效、只有模型请求权限）。这条命令只把令牌显示在终端里、不保存，所以由 Cindy 代办：
+  - 在伪终端里运行内置 CLI 的 `claude setup-token`，浏览器授权仍由 CLI 打开、在 Anthropic 的页面完成；
+    Cindy 不自己发起 OAuth，也不向用户索要令牌。授权后从还原出的终端屏幕读出令牌，写进**该账号自己的
+    Claude 配置目录**，随即重读登录态确认 CLI 认了它，不认就删掉。令牌只在这一次调用里经手：不进
+    Cindy 的数据库、设置、日志，不发给 Renderer、Agent、插件或其他电脑，也不随新电脑设置迁移。
+  - macOS / Linux：目录下的 `cindy-long-lived-token`（仅本人可读）。每次拉起 CLI 时把这个文件的句柄交给它
+    （`CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR`），由 CLI 自己读；Cindy 只判断文件是否存在，不读内容，
+    也不把令牌放进任何进程的环境变量。不依赖用户级设置，设备托管与隔离伙伴会话同样拿得到；终端里的
+    `claude` 不受影响。这个变量官方文档未记载（Anthropic 自己的远程环境在用），所以
+    [smoke-claude-sdk.mjs](../../scripts/smoke-claude-sdk.mjs) 对内置 CLI 实测这条途径；升级 CLI 时它不过就不能升。
+  - Windows：CLI 经 `/dev/fd` 读句柄，Windows 上不通（2026-11-24 实测）。令牌写进该账号用户设置文件的
+    `env.CLAUDE_CODE_OAUTH_TOKEN`，由 CLI 加载用户设置时自己读；只合并这一个键，读不懂的设置文件原样
+    不动。不加载用户设置的会话读不到它，账号池因此不把这类账号派给它们（见产品规则）。CLI 默认目录
+    与终端共用，Windows 上不给默认账号写令牌。
+  - 这是一份明文凭证文件，与「不要新增自定义明文凭证文件」相悖：它放在官方 CLI 自己的配置目录里、
+    只供官方 CLI 读取，是官方「把令牌设为环境变量」做法的等价物，不是 Cindy 的凭证库。除此之外不得
+    仿照它新增别的明文凭证。
+  - 账号是谁仍只认普通登录：长期令牌没有读资料的权限（服务端 403），状态命令因此不带邮箱与套餐。
+    令牌在位时再读一次不交句柄（Windows 为跳过用户设置）的状态，取那份普通登录的邮箱、套餐、到期日
+    与完整余量；普通登录结束后沿用已记下的身份。JSON 状态分不清长期令牌与中转 token，必须以文本状态
+    里写明的来源为准，中转 token 照旧按 `not_a_subscription` 处理。
+  - 「停用」只删本机这份令牌；官方没有作废命令，它在 Anthropic 那边仍有效到期满。
+  - 实现见 [claude-setup-token.ts](../../apps/desktop/src/main/maker-host/claude-setup-token.ts)、
+    [claude-long-lived-token.ts](../../apps/desktop/src/main/maker-host/claude-long-lived-token.ts)、
+    [cli-login-status.ts](../../packages/maker-core/src/agents/claude-code/cli-login-status.ts) 与
+    [local-process-spawn.ts](../../packages/maker-core/src/agents/claude-code/local-process-spawn.ts)；回归见
+    [claudeSetupToken.test.ts](../../apps/desktop/src/main/maker-host/__tests__/claudeSetupToken.test.ts)。
 - 实现见 [claude-native-cli.ts](../../apps/desktop/src/main/maker-host/claude-native-cli.ts)、
   [env-builder.ts](../../packages/maker-core/src/agents/claude-code/env-builder.ts)；回归见
   [claudeAuthAdapterOAuthEnv.test.ts](../../apps/desktop/src/main/maker-host/__tests__/claudeAuthAdapterOAuthEnv.test.ts)

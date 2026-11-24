@@ -11,6 +11,8 @@ export default {
     'official-plan-name-narrow': { about: 'The official Ultra account label at 320-pixel content width', viewport: { width: 320, height: 850 } },
     expiry: { about: 'Login expiry and the selected-account renewal action, before interaction' },
     'expiry-narrow': { about: 'Login expiry and renewal at 320-pixel content width, before interaction' },
+    'long-lived-token': { about: 'Two Claude accounts on a long-lived token: the token tag, its own expiry line and the account menu actions' },
+    'long-lived-token-narrow': { about: 'Long-lived token rows at 320-pixel content width', viewport: { width: 320, height: 850 } },
     'identity-unknown': { about: 'A stale account row explains how to reconnect when the executor cannot confirm the original identity' },
     default: { about: 'Three Claude accounts: independent 18-day, 3-day and unknown login expiry, per-account renewal and aligned usage' },
     'expiry-past': { about: 'A past CLI estimate warns but does not mark the account signed out' },
@@ -123,6 +125,20 @@ export default {
     );
     assert.equal(bars.length, ui.case.startsWith('codex-no-usage') ? 4 : codex ? 6 : 8);
     assert.deepEqual([...new Set(bars)], [bars[0]]);
+    if (ui.case.startsWith('long-lived-token')) {
+      const rows = page.getByTestId('subscription-account');
+      await rows.nth(0).getByText(await ui.t('subscriptionAccounts.longLivedToken.tag'), { exact: true }).waitFor();
+      await rows.nth(0).getByText(await ui.t('subscriptionAccounts.longLivedToken.expiresInDays', { days: 300 }), { exact: true }).waitFor();
+      await rows.nth(1).getByText(await ui.t('subscriptionAccounts.longLivedToken.expiresInDays', { days: 20 }), { exact: true }).waitFor();
+      // The ordinary sign-in is no longer what keeps these rows running: no renewal button.
+      assert.equal(await rows.nth(1).getByRole('button', { name: await ui.t('subscriptionAccounts.loginAccountAria', { name: 'long.work.account@research.example.com' }), exact: true }).count(), 0);
+      await ui.capture('token');
+      await page.getByRole('button', { name: await ui.t('providerGroup.member.moreAria', { name: 'alex@example.com' }) }).click();
+      await page.getByRole('menuitem', { name: await ui.t('subscriptionAccounts.longLivedToken.renew'), exact: true }).waitFor();
+      await page.getByRole('menuitem', { name: await ui.t('subscriptionAccounts.longLivedToken.remove'), exact: true }).waitFor();
+      await ui.capture('token-menu');
+      return;
+    }
     if (['default', 'narrow', 'expiry-past', 'expiry', 'expiry-narrow'].includes(ui.case)) {
       const rows = page.getByTestId('subscription-account');
       await rows.nth(0).getByText(await ui.t('subscriptionAccounts.loginExpiresInDays', { days: 18 }), { exact: true }).waitFor();

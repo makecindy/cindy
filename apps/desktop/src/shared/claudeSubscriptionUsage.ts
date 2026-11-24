@@ -243,8 +243,9 @@ export function parseClaudeUnifiedRateLimitHeaders(
  * 解析 Claude Code SDK 的 `rate_limit_event.rate_limit_info`(CLI 从同一组 unified headers
  * 解析出的额度信息;订阅会话由 CLI 直连 Anthropic,host 只能从这里拿到余量)。
  *
- * 每条事件只描述一个窗口(rateLimitType);只认 5h / 7d 总窗口,分模型周窗口与 overage
- * 不在 headers 口径内,跳过。按 headers 源(`unified-headers`)的增量语义合并。
+ * 旧版每条事件只描述一个窗口(rateLimitType);新版在 unifiedWindows 里同时给出 5h / 7d。
+ * 只认这两个总窗口,分模型周窗口与 overage 不在 headers 口径内,跳过。按 headers 源
+ * (`unified-headers`)的增量语义合并。
  * utilization 与 headers 同为 0.0-1.0 分数(>1 时按已是百分比处理);resetsAt 为 epoch
  * 秒(误给毫秒时折算)。无可用窗口也无状态时返回 null。
  */
@@ -264,8 +265,22 @@ export function parseClaudeSdkRateLimitInfo(
     ? null
     : Math.floor(rawResetsAt > 1e12 ? rawResetsAt / 1000 : rawResetsAt);
   const window = utilization === null ? null : { utilization, resetsAt };
-  const fiveHour = rateLimitType === 'five_hour' ? window : null;
-  const sevenDay = rateLimitType === 'seven_day' ? window : null;
+  // CLI 2.1.321 起事件不再带顶层 utilization,5h / 7d 两个窗口各自的用量与重置时刻放在
+  // unifiedWindows 里(实测)。有就以它为准:一条事件同时更新两个窗口。
+  const unified = isPlainObject(info.unifiedWindows) ? info.unifiedWindows : null;
+  const unifiedWindow = (name: 'five_hour' | 'seven_day') => {
+    const entry = unified?.[name];
+    if (!isPlainObject(entry)) return null;
+    const used = toFiniteNumber(entry.utilization);
+    if (used === null) return null;
+    const reset = toFiniteNumber(entry.resetsAt);
+    return {
+      utilization: clampPercent(used <= 1 ? used * 100 : used),
+      resetsAt: reset === null || reset <= 0 ? null : Math.floor(reset > 1e12 ? reset / 1000 : reset),
+    };
+  };
+  const fiveHour = unifiedWindow('five_hour') ?? (rateLimitType === 'five_hour' ? window : null);
+  const sevenDay = unifiedWindow('seven_day') ?? (rateLimitType === 'seven_day' ? window : null);
   if (!fiveHour && !sevenDay && !status) return null;
   return {
     fiveHour,
