@@ -2927,6 +2927,180 @@ it('repairs a flattened plugin parameter instead of rejecting the call', async (
   expect(requests[0].params).toEqual({ name: 'ghost_info', arguments: { ghost_id: 'calendar' } });
 });
 
+// 评审 P2(信封被平铺): 弱模型把通用 call_tool 的信封两个字段平铺到顶层 ——
+// {server, tool, name: <内层工具>, args: <内层参数>}。归位时把顶层 name 折进参数容器,
+// 信封的 args 层就没了: 服务端收到的不是 {name, args}, 而是 {<内层参数>, name},
+// 内层工具按空参数被调用。
+it('rebuilds a flattened call_tool envelope instead of folding the inner name into the parameters', async () => {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const compiled = ts.transpileModule(
+    source.slice(source.indexOf('const CINDY_MCP_LIST_TOOLS'), source.indexOf('async function connectServer'))
+      + '\n(globalThis as any).Gateway = CindyMcpGateway;',
+    { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const context: Record<string, any> = {
+    createHash,
+    recordInput: (value: unknown) => value && typeof value === 'object' ? value : {},
+    mcpContentToPi: (content: unknown) => content,
+  };
+  runInNewContext(compiled, context);
+  const requests: Array<{ method: string; params: any }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'WROTE' }] };
+  } };
+  const gateway = new context.Gateway();
+  gateway.add('cindy_memory', client, [
+    // 真实 cindy server 的 call_tool schema 形状指纹: name:string + args:object + required 含 name。
+    { name: 'call_tool', inputSchema: { type: 'object', properties: { name: { type: 'string' }, args: { type: 'object' } }, required: ['name'] } },
+  ]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_memory', tool: 'call_tool' });
+  await gateway.executeCall({
+    server: 'cindy_memory', tool: 'call_tool', name: 'memory_write', args: { type: 'project' },
+  });
+  expect(requests).toHaveLength(1);
+  expect(requests[0].params).toEqual({
+    name: 'call_tool',
+    arguments: { name: 'memory_write', args: { type: 'project' } },
+  });
+});
+
+// 评审 P2(动态参数被丢): schema 明确放开 additionalProperties 或用 patternProperties 收了
+// 某个前缀时, 顶层那个键是服务端认的参数 —— 不转发它等于又丢一次参数。
+// 但 schema 没表态时仍不转发(宁漏不误转), 只是记进回执让用户看得见。
+it('forwards top-level keys the tool schema explicitly accepts instead of dropping them', async () => {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const compiled = ts.transpileModule(
+    source.slice(source.indexOf('const CINDY_MCP_LIST_TOOLS'), source.indexOf('async function connectServer'))
+      + '\n(globalThis as any).Gateway = CindyMcpGateway;',
+    { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const context: Record<string, any> = {
+    createHash,
+    recordInput: (value: unknown) => value && typeof value === 'object' ? value : {},
+    mcpContentToPi: (content: unknown) => content,
+  };
+  runInNewContext(compiled, context);
+  const requests: Array<{ method: string; params: any }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'WROTE[A1]' }] };
+  } };
+  const gateway = new context.Gateway();
+  gateway.add('cindy_sheets', client, [{
+    name: 'set_cell',
+    inputSchema: {
+      type: 'object',
+      properties: { file_id: { type: 'string' }, row: { type: 'integer' } },
+      required: ['file_id'],
+      additionalProperties: true,
+    },
+  }]);
+  gateway.add('cindy_extras', client, [{
+    name: 'tag',
+    inputSchema: {
+      type: 'object',
+      properties: { file_id: { type: 'string' } },
+      required: ['file_id'],
+      patternProperties: { '^x_': { type: 'string' } },
+    },
+  }]);
+  gateway.add('cindy_strict', client, [{
+    name: 'write',
+    inputSchema: {
+      type: 'object',
+      properties: { file_id: { type: 'string' } },
+      required: ['file_id'],
+    },
+  }]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_sheets', tool: 'set_cell' });
+  await gateway.listResult({ server: 'cindy_extras', tool: 'tag' });
+  await gateway.listResult({ server: 'cindy_strict', tool: 'write' });
+  await gateway.executeCall({ server: 'cindy_sheets', tool: 'set_cell', args: { file_id: 'doc-1' }, note: 'keep me' });
+  expect(requests[0].params).toEqual({ name: 'set_cell', arguments: { file_id: 'doc-1', note: 'keep me' } });
+  await gateway.executeCall({ server: 'cindy_extras', tool: 'tag', args: { file_id: 'doc-1' }, x_note: 'keep me too' });
+  expect(requests[1].params).toEqual({ name: 'tag', arguments: { file_id: 'doc-1', x_note: 'keep me too' } });
+  // schema 没表态的键仍然不转发, 但要出现在回执里(用户看得见没被转的参数)。
+  const strict = await gateway.executeCall({ server: 'cindy_strict', tool: 'write', args: { file_id: 'doc-1' }, note: 'not declared' });
+  expect(requests[2].params).toEqual({ name: 'write', arguments: { file_id: 'doc-1' } });
+  const note = (strict.content as Array<{ text?: string }>).map(block => block.text ?? '').join('\n');
+  expect(note).toContain('were not forwarded because the tool schema does not declare them: note');
+});
+
+// 评审 P2(组合 schema 放过必填项): 组合 schema(allOf/anyOf/oneOf/$ref)里藏着的必填项
+// 判定不了, 可以不拦; 但根层的 required 是明确的, 缺了就不该发出去 ——
+// 旧实现会拦, 现在这条调用会一路触达审批与服务端。
+it('still enforces the root required of a schema that also uses a combinator', async () => {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const compiled = ts.transpileModule(
+    source.slice(source.indexOf('const CINDY_MCP_LIST_TOOLS'), source.indexOf('async function connectServer'))
+      + '\n(globalThis as any).Gateway = CindyMcpGateway;',
+    { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const context: Record<string, any> = {
+    createHash,
+    recordInput: (value: unknown) => value && typeof value === 'object' ? value : {},
+    mcpContentToPi: (content: unknown) => content,
+  };
+  runInNewContext(compiled, context);
+  const requests: Array<{ method: string; params: any }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'WROTE' }] };
+  } };
+  const gateway = new context.Gateway();
+  gateway.add('cindy', client, [{
+    name: 'ghost_call',
+    inputSchema: {
+      type: 'object',
+      properties: { ghost_id: { type: 'string' }, scope: { type: 'string' } },
+      required: ['ghost_id'],
+      allOf: [{ properties: { scope: { type: 'string' } } }],
+    },
+  }]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy', tool: 'ghost_call' });
+  await expect(gateway.executeCall({ server: 'cindy', tool: 'ghost_call', args: {} }))
+    .rejects.toThrow(/missing args.ghost_id/);
+  expect(requests).toHaveLength(0);
+  await gateway.executeCall({ server: 'cindy', tool: 'ghost_call', args: { ghost_id: 'calendar' } });
+  expect(requests).toHaveLength(1);
+});
+
+// 评审 P2(失败回执看不到出站参数): 服务端拒收时最需要核对真正发出去的那一份 ——
+// 参数最可能有问题的场景反而看不见「Forwarded arguments」。
+it('echoes the forwarded arguments when the server rejects the call', async () => {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const compiled = ts.transpileModule(
+    source.slice(source.indexOf('const CINDY_MCP_LIST_TOOLS'), source.indexOf('async function connectServer'))
+      + '\n(globalThis as any).Gateway = CindyMcpGateway;',
+    { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const context: Record<string, any> = {
+    createHash,
+    recordInput: (value: unknown) => value && typeof value === 'object' ? value : {},
+    mcpContentToPi: (content: unknown) => content,
+  };
+  runInNewContext(compiled, context);
+  const client = { request: async () => { throw new Error('invalid params: missing field row'); } };
+  const gateway = new context.Gateway();
+  gateway.add('cindy_sheets', client, [{
+    name: 'set_cell',
+    inputSchema: {
+      type: 'object',
+      properties: { file_id: { type: 'string' }, row: { type: 'integer' } },
+      required: ['file_id', 'row'],
+    },
+  }]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_sheets', tool: 'set_cell' });
+  await expect(gateway.executeCall({
+    server: 'cindy_sheets', tool: 'set_cell', args: { file_id: 'doc-1' }, row: 10,
+  })).rejects.toThrow(/Forwarded arguments: \{"file_id":"doc-1","row":10\}/);
+});
+
 it('intercepts a double-wrapped envelope and an entry-tool name before they reach the server', async () => {
   const source = CINDY_BRIDGE_EXTENSION_SOURCE;
   const compiled = ts.transpileModule(

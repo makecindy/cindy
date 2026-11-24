@@ -2727,6 +2727,8 @@ interface ResolvedMcpGatewayCall {
   unmapped?: string[];
   /** args 以 JSON 字符串形态给出, 已被解析成对象。 */
   parsedFromString?: boolean;
+  /** 信封被平铺(顶层 name + 顶层 args), 已重建回 {name, args}。 */
+  rebuiltEnvelope?: boolean;
 }
 
 class McpBridgeError extends Error {
@@ -3289,6 +3291,8 @@ interface GatewayArgsResolution {
   unmapped: string[];
   /** args 以 JSON 字符串形态给出, 已被解析成对象。 */
   parsedFromString: boolean;
+  /** 信封被平铺(顶层 name + 顶层 args), 已重建回 {name, args}。 */
+  rebuiltEnvelope?: boolean;
 }
 
 function parseJsonObject(value: string): Record<string, unknown> | null {
@@ -3314,6 +3318,56 @@ function schemaParameterNames(schema: Record<string, unknown> | undefined): Set<
 }
 
 /**
+ * 这个 schema 是不是 Cindy 通用 call_tool 的 {name, args} 信封形状。
+ *
+ * 判据必须用**形状指纹**而不是名字或单个字段：Pi 也接入用户自接的第三方 MCP，它们可能
+ * 同样叫 call_tool（但信封是 {tool_name, arguments}），也可能有个叫 name 的必填字符串
+ * 参数却是文件名。所以要求三个信号同时成立 —— properties.name 是 string、properties.args
+ * 是 object、且 required 含 name。
+ *
+ * 归一化(平铺信封重建)与执行前的信封检查必须用同一判据，否则两处对「这是不是信封」
+ * 的理解会分叉：重建出来的形状与检查时的形状对不上。
+ */
+function isNameEnvelopeSchema(schema: unknown): boolean {
+  const typed = schema as {
+    required?: unknown;
+    properties?: Record<string, { type?: unknown } | undefined>;
+  } | null;
+  const properties = typed?.properties;
+  return Array.isArray(typed?.required)
+    && typed.required.includes('name')
+    && properties?.name?.type === 'string'
+    && properties?.args?.type === 'object';
+}
+
+/**
+ * schema 明确收下这个键吗（声明之外的动态参数）。
+ *
+ * - additionalProperties 明确放开（true 或一个 schema）→ 收：schema 说这个键合法，
+ *   不转发等于又丢一次参数（表格类服务于是按缺省值写回 A1 并返回成功）。
+ * - patternProperties 命中某个模式 → 收。
+ * - 其余（没写 additionalProperties，或写成 false）→ 不收：schema 没表态，宁漏不误转。
+ *   JSON Schema 默认允许额外字段，但「默认允许」不等于「这个键是模型想给的参数」，
+ *   把模型的私货转过去只会让服务端多一条校验错误。
+ */
+function schemaAcceptsKey(schema: Record<string, unknown> | undefined, key: string): boolean {
+  if (!schema) return false;
+  const additional = schema.additionalProperties;
+  if (additional === true || (typeof additional === 'object' && additional !== null)) return true;
+  const patterns = schema.patternProperties;
+  if (patterns && typeof patterns === 'object' && !Array.isArray(patterns)) {
+    for (const pattern of Object.keys(patterns as Record<string, unknown>)) {
+      try {
+        if (new RegExp(pattern).test(key)) return true;
+      } catch {
+        // 非法正则: 判不了就不收。
+      }
+    }
+  }
+  return false;
+}
+
+/**
  * 把模型给出的网关调用还原成「所选工具自己的参数」。
  *
  * 弱模型有两种常见偏差(实测 MiniMax-M3.1 / deepseek-v4.1-flash / step-5 都会犯):
@@ -3322,7 +3376,13 @@ function schemaParameterNames(schema: Record<string, unknown> | undefined): Set<
  * 并返回成功, 链路看起来完全正常, 用户只会以为服务端忽略了参数。
  *
  * 这里按工具自己的 schema 把参数归位: schema 声明过的顶层键折进 args(同名以 args 为准),
- * 声明之外的顶层键不转发(那是模型的私货, 转过去只会让服务端多一条校验错误), 但记下来。
+ * 声明之外的顶层键只在 schema 明确收下它时转发(additionalProperties / patternProperties),
+ * 其余不转发(那是模型的私货, 转过去只会让服务端多一条校验错误), 但记下来。
+ *
+ * 信封工具另有一种平铺: 弱模型把通用 call_tool 的信封两个字段(name/args)摊到顶层,
+ * 给出 {server, tool, name: <内层工具>, args: <内层参数>}。这时顶层 name 是**信封层**
+ * 的内层工具名, 不是内层参数 —— 把它折进参数容器, 信封的 args 层就没了, 服务端收到的
+ * 不是 {name, args}, 内层工具会被按空参数调用。这种形态重建回 {name, args}。
  *
  * args/arguments 只有两种形态可用: 对象, 或能解析成对象的 JSON 字符串。
  * 「没传这个键」与「显式传 null」必须分开: 后者是模型给了一个用不了的形态,
@@ -3331,7 +3391,7 @@ function schemaParameterNames(schema: Record<string, unknown> | undefined): Set<
 function normalizeGatewayArgs(record: Record<string, unknown>, tool: ConnectedMcpTool): GatewayArgsResolution {
   const provided = record.args !== undefined || record.arguments !== undefined;
   const raw = record.args !== undefined ? record.args : record.arguments;
-  let args: Record<string, unknown> = {};
+  let params: Record<string, unknown> = {};
   let malformed = false;
   let parsedFromString = false;
   if (raw === null) {
@@ -3339,11 +3399,11 @@ function normalizeGatewayArgs(record: Record<string, unknown>, tool: ConnectedMc
   } else if (raw !== undefined) {
     if (typeof raw === 'object' && !Array.isArray(raw)) {
       // 复制一份: 归一化不能改写模型给的那个对象(它同时是审批提示与回执的凭据)。
-      args = { ...raw as Record<string, unknown> };
+      params = { ...raw as Record<string, unknown> };
     } else if (typeof raw === 'string') {
       const parsed = parseJsonObject(raw);
       if (parsed) {
-        args = parsed;
+        params = parsed;
         parsedFromString = true;
       } else {
         malformed = true;
@@ -3352,23 +3412,42 @@ function normalizeGatewayArgs(record: Record<string, unknown>, tool: ConnectedMc
       malformed = true;
     }
   }
-  const declared = schemaParameterNames(tool.inputSchema);
+  const schema = tool.inputSchema;
+  const declared = schemaParameterNames(schema);
   // schema 没声明参数名时, 只有明确禁止额外字段才不转发 —— JSON Schema 默认允许额外字段,
   // 这类工具(如只声明类型不声明 properties 的)把顶层键折进去才是服务端能接住的那一份。
-  const foldAll = !declared && tool.inputSchema?.additionalProperties !== false;
+  const foldAll = !declared && schema?.additionalProperties !== false;
   const folded: string[] = [];
   const unmapped: string[] = [];
+  // 信封被平铺: 顶层 name 是内层工具名, 顶层 args 是内层参数。args 容器里已经有 name 时
+  // 说明模型给的就是完整信封, 不重建。
+  const flattenedEnvelope = isNameEnvelopeSchema(schema)
+    && provided
+    && typeof record.name === 'string'
+    && !Object.prototype.hasOwnProperty.call(params, 'name');
   for (const [key, value] of Object.entries(record)) {
     if (GATEWAY_OWN_KEYS.has(key)) continue;
-    if (Object.prototype.hasOwnProperty.call(args, key)) continue;
-    if (!foldAll && !(declared?.has(key) ?? false)) {
+    if (flattenedEnvelope && key === 'name') continue; // 信封层, 不是内层参数。
+    if (Object.prototype.hasOwnProperty.call(params, key)) continue;
+    if (!foldAll && !(declared?.has(key) ?? false) && !schemaAcceptsKey(schema, key)) {
       unmapped.push(key);
       continue;
     }
-    args[key] = value;
+    params[key] = value;
     folded.push(key);
   }
-  return { args, provided, malformed, folded, unmapped, parsedFromString };
+  const args = flattenedEnvelope
+    ? { name: record.name as string, args: params }
+    : params;
+  return {
+    args,
+    provided,
+    malformed,
+    folded,
+    unmapped,
+    parsedFromString,
+    ...(flattenedEnvelope ? { rebuiltEnvelope: true } : {}),
+  };
 }
 
 /**
@@ -3600,14 +3679,15 @@ class CindyMcpGateway {
   }
 
   /**
-   * 工具 schema 声明了必填参数时, 缺一个就不能发出去。组合 schema
-   * (allOf/anyOf/oneOf/$ref)的必填项可能藏在里面, 判定不了就不拦。
+   * 工具 schema 声明了必填参数时, 缺一个就不能发出去。
+   *
+   * 组合 schema(allOf/anyOf/oneOf/$ref)里藏着的必填项判定不了(要展开子 schema 才能判),
+   * 那种判定不了就不拦; 但**根层**的 required 是明确的, 缺了必须拦 ——
+   * 放过它等于让缺参的调用一路触达审批与服务端。
    */
   private missingRequiredArgs(tool: ConnectedMcpTool, args: Record<string, unknown>): string[] {
     const schema = tool.inputSchema;
     if (!schema || typeof schema !== 'object') return [];
-    if (schema.allOf !== undefined || schema.anyOf !== undefined
-      || schema.oneOf !== undefined || schema.$ref !== undefined) return [];
     const required = Array.isArray(schema.required)
       ? schema.required.filter((key): key is string => typeof key === 'string')
       : [];
@@ -3633,6 +3713,7 @@ class CindyMcpGateway {
       ...(resolution.folded.length > 0 ? { folded: resolution.folded } : {}),
       ...(resolution.unmapped.length > 0 ? { unmapped: resolution.unmapped } : {}),
       ...(resolution.parsedFromString ? { parsedFromString: true } : {}),
+      ...(resolution.rebuiltEnvelope ? { rebuiltEnvelope: true } : {}),
     };
   }
 
@@ -3854,17 +3935,11 @@ class CindyMcpGateway {
    * string、properties.args 是 object、且 required 含 name —— 才认定是 Cindy 的信封。
    * 少一个都不套用这条自纠错说明，让调用按检视到的 schema 原样走到服务端，由服务端报它
    * 真实的参数要求：普通工具缺字段时不能被引向错误的嵌套形状。
+   *
+   * 判据本体在 isNameEnvelopeSchema: 归一化(平铺信封重建)与这里必须同源。
    */
   private requiresNameEnvelope(tool: ConnectedMcpTool): boolean {
-    const schema = tool.inputSchema as {
-      required?: unknown;
-      properties?: Record<string, { type?: unknown } | undefined>;
-    } | null;
-    const properties = schema?.properties;
-    return Array.isArray(schema?.required)
-      && schema.required.includes('name')
-      && properties?.name?.type === 'string'
-      && properties?.args?.type === 'object';
+    return isNameEnvelopeSchema(tool.inputSchema);
   }
 
   /**
@@ -4071,12 +4146,17 @@ class CindyMcpGateway {
     const folded = call.folded ?? [];
     const unmapped = call.unmapped ?? [];
     const parsedFromString = call.parsedFromString === true;
-    if (folded.length === 0 && unmapped.length === 0 && !parsedFromString) return null;
+    const rebuiltEnvelope = call.rebuiltEnvelope === true;
+    if (folded.length === 0 && unmapped.length === 0 && !parsedFromString && !rebuiltEnvelope) return null;
     const parts: string[] = [];
     if (parsedFromString) {
       // 字符串形态也是一种归一化动作: 参数被解析成了对象, 用户与模型看到的必须
       // 是真正发出去的那一份, 否则「参数没生效」时就没有可对照的依据。
       parts.push('Cindy parsed the JSON string in args before forwarding.');
+    }
+    if (rebuiltEnvelope) {
+      // 信封被平铺时 name 与 args 都在顶层, 归位后重建回 {name, args}。
+      parts.push('Cindy rebuilt the {"name", "args"} envelope from the flattened call before forwarding.');
     }
     if (folded.length > 0) {
       parts.push('Cindy moved these top-level parameters into args before forwarding: '
@@ -4106,6 +4186,7 @@ class CindyMcpGateway {
     isError?: boolean;
   }> {
     let result: any;
+    let requestAttempted = false;
     try {
       if (this.needsRecovery(resolved.tool.serverName)) await this.recover(resolved.tool.serverName, signal);
       const current = this.tools.get(mcpGatewayKey(resolved.tool.serverName, resolved.tool.name));
@@ -4117,18 +4198,23 @@ class CindyMcpGateway {
         throw new McpBridgeError('tool definition changed; inspect it with cindy_mcp_list_tools and call again');
       }
       resolved = { ...resolved, tool: current };
+      requestAttempted = true;
       result = await resolved.tool.client.request('tools/call', {
         name: resolved.tool.name,
         arguments: resolved.helperCommand
           ? { name: resolved.helperCommand, args: resolved.args } : resolved.args,
       }, signal);
     } catch (error) {
+      // 出站参数已经交给客户端了(哪怕服务端拒收): 最需要核对「真正发出去的那一份」的
+      // 场景恰恰是服务端说参数不对的时候, 回执里没有它就无从判断是链路丢参还是参数真错。
+      const note = requestAttempted ? this.normalizationNote(resolved) : null;
       throw new Error(
         'MCP tool ' + resolved.tool.serverName + '/' + resolved.tool.name + ' failed: ' +
         safeMcpFailure(error) + (resolved.tool.client.needsReconnect
           ? '. The request was not replayed; check whether the operation completed before retrying.' : '')
         + (error instanceof McpBridgeError && error.invalidParams
-          ? '. Expected args schema: ' + schemaHint(resolved.tool.inputSchema) : ''),
+          ? '. Expected args schema: ' + schemaHint(resolved.tool.inputSchema) : '')
+        + (note ? ' ' + note : ''),
       );
     }
     const content = mcpContentToPi(result?.content, result?.structuredContent);
