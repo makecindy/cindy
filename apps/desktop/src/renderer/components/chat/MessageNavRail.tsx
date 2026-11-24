@@ -135,6 +135,8 @@ function PreviewHeading({ entry, sessionId }: { entry: NavRailEntry; sessionId?:
   } else {
     author = <MessageSourceLabels automationOrigin={automationOrigin} hostSessionId={sessionId} align="start" />;
   }
+  // 发送方与设备在聊天里是两个独立标签：非本人的来源也保留设备（如从手机经插件发来）。
+  if (!entry.isOwn && sourceDevice) author = <>{author}<QueueSourceDeviceTag device={sourceDevice} separator /></>;
   return (
     <div className="flex min-w-0 items-center gap-1.5 text-12 text-[var(--text-secondary)]">
       <SessionNavigationModeProvider mode="sidebar-embedded">{author}</SessionNavigationModeProvider>

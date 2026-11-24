@@ -64,9 +64,9 @@ describe('deriveNavRailEntries', () => {
       [{ hookSource: { ...hook, origin: { sender: { isOwner: false } } } }, false],
       [{ sourcePlugin: { pluginId: 'relay' }, hookSource: hook }, false],
       [{ automationOrigin: { kind: 'session', senderBotId: 'bot' } }, false],
-      // 群里的 Cindy 请求与任务卡话题插话由宿主核实为主人本人（bot-group-chat.md）。
-      [{ automationOrigin: { kind: 'session', groupRequest: { groupId: 'g', speakerId: 'me' } } }, true],
-      [{ automationOrigin: { kind: 'session', senderBotId: 'bot', groupThread: { groupId: 'g', speakerId: 'me' } } }, true],
+      // 群请求也会记录队友点名 Cindy 的话（chatServer 只给主人原话加核实戳），照聊天署名写发言人。
+      [{ automationOrigin: { kind: 'session', groupRequest: { groupId: 'g', speakerId: 'teammate' } } }, false],
+      [{ automationOrigin: { kind: 'session', senderBotId: 'bot', groupThread: { groupId: 'g', speakerId: 'member' } } }, false],
       [{ sharedAuthorName: 'Alex', sourceDevice: remote }, false],
       [{ content: '{"orcaSource":"lead","content":"Review"}' }, false],
     ];

@@ -135,7 +135,9 @@ describe('MessageNavRail', () => {
     const entries = deriveNavRailEntries([
       { ...row, clientId: 'me', content: '我的问题', sourceDevice: { deviceId: 'phone', platform: 'mobile', name: 'iPhone' } },
       { ...row, clientId: 'worker', content: JSON.stringify({ orcaSource: 'worker', content: '进展' }) },
-      { ...row, clientId: 'plugin', content: '插件来信', sourcePlugin: { pluginId: 'plugin' } },
+      // 发送方和设备是聊天里两个独立标签，非本人来源也要保留设备。
+      { ...row, clientId: 'plugin', content: '插件来信', sourcePlugin: { pluginId: 'plugin' },
+        sourceDevice: { deviceId: 'tablet', platform: 'mobile', name: 'iPad' } },
       { ...row, clientId: 'task', content: '其他任务', automationOrigin: { kind: 'session', senderSessionId: 'origin', senderSessionTitle: '远端任务标题' } },
       { ...row, clientId: 'timer', content: '定时任务', automationOrigin: { kind: 'scheduler' } },
       { ...row, clientId: 'im', content: '群消息', hookSource: {
@@ -148,6 +150,7 @@ describe('MessageNavRail', () => {
     const cards = await screen.findAllByRole('tooltip');
     expect(cards[0].textContent).toContain('iPhone');
     expect(cards[0].querySelector('time')?.dateTime).toBe(row.createdAt);
+    expect(cards[2].textContent).toContain('iPad');
     expect(cards[3].textContent).toContain('远端任务标题');
     localTitle.mockRestore();
     hostDevice.mockRestore();

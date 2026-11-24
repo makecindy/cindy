@@ -209,12 +209,10 @@ export function deriveNavRailEntries(messages: readonly ChatMessage[]): NavRailE
       closeAnswerTurn();
       if (preview || attachmentCount > 0) {
         const fromHookChannel = Boolean(m.hookSource) && isHookSchedulerOrigin(m.automationOrigin);
-        // 群里交给 Cindy 的请求、任务卡话题里的插话：宿主核实过是主人本人的话
-        // （bot-group-chat.md「群里的 Cindy」与「在任务卡的话题里插话」）。
-        const fromOwnerInGroup = m.automationOrigin?.kind === 'session'
-          && Boolean(m.automationOrigin.groupRequest || m.automationOrigin.groupThread);
+        // 群请求 / 话题插话照聊天署名写发言人：队友点名 Cindy 时同样带 groupRequest
+        // （chatServer 只给主人原话加核实戳），渲染侧没有可靠的本人标记。
         const isOwn = !orca && !m.sourcePlugin && !m.sharedAuthorName
-          && (!m.automationOrigin || fromHookChannel || fromOwnerInGroup) && isOwnImSender(m.hookSource?.origin);
+          && (!m.automationOrigin || fromHookChannel) && isOwnImSender(m.hookSource?.origin);
         entries.push({
           id: m.clientId,
           preview,
