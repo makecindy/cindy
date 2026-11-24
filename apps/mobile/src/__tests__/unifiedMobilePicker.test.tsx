@@ -80,7 +80,14 @@ it('only closes after selection succeeds and passes the full wire configuration'
 // #9087 follow-up, unit: the companion opt-in must retain a changed local candidate effort
 // through detail navigation and submit it with the model. The selected-row tests miss this
 // branch. Minimal input: an unselected model with two supported levels and no model memory.
-it('submits the companion candidate effort without updating shared model preferences', async () => {
+it.each([
+  { action: 'keeps the explicitly chosen effort', restore: false, effort: 'high' },
+  { action: 'restores the default from favorite details', restore: true, effort: 'medium' },
+])('$action when submitting a companion candidate', async ({ restore, effort }) => {
+  if (restore) {
+    // PR #12402: the same candidate is also reachable through a saved copy with its own UID.
+    test.prefs.favorites = [{ uid: 'saved-copy', providerId: 'account', modelId: 'codex/model', agent: 'codex', effort: 'high', fast: false }];
+  }
   const onSelect = vi.fn(async () => true);
   await mount(onSelect, {
     activeModelId: 'another-model',
@@ -91,7 +98,7 @@ it('submits the companion candidate effort without updating shared model prefere
       draftCandidateEffort: true, onSelect,
     },
   });
-  const row = () => test.view.groups[0].rows[0];
+  const row = () => test.view.groups.find((group: { key: string }) => group.key !== 'favorites').rows[0];
   expect(row().selected).toBe(false);
   await act(async () => test.view.onOptions(row()));
   await act(async () => test.view.options.onChange({ ...test.view.options.row.config, effort: 'high' }));
@@ -99,9 +106,16 @@ it('submits the companion candidate effort without updating shared model prefere
   expect(test.save).not.toHaveBeenCalled();
   expect(test.view.options.row.config.effort).toBe('high');
   await act(async () => test.view.onBack());
+  if (restore) {
+    const favorite = test.view.groups.find((group: { key: string }) => group.key === 'favorites').rows[0];
+    await act(async () => test.view.onOptions(favorite));
+    await act(async () => test.view.options.onReset());
+    await act(async () => test.view.onBack());
+  }
+  expect(row().config.effort).toBe(effort);
   await act(async () => test.view.onSelect(row()));
   expect(onSelect).toHaveBeenCalledWith(
-    { providerId: 'account', modelId: 'codex/model', agent: 'codex', effort: 'high', fast: false },
+    { providerId: 'account', modelId: 'codex/model', agent: 'codex', effort, fast: false },
     { deviceId: null },
   );
 });

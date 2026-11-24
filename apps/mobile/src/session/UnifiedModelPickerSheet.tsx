@@ -1338,10 +1338,10 @@ export function UnifiedModelPickerSheet(
           );
         }
         if (!isCurrent()) return;
-        if (reset && candidateEfforts.has(row.key)) {
+        if (reset && candidateEfforts.has(key)) {
           setCandidateEfforts(current => {
             const next = new Map(current);
-            next.delete(row.key);
+            next.delete(key);
             return next;
           });
         }
