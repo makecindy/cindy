@@ -1092,6 +1092,54 @@ describe('cindy-tool-fold extension source', () => {
     const live = await tool.execute('t2', { call_id: 'giant-8' });
     expect(String(live.content![0].text)).toContain(`payload 8 ${'g'.repeat(25000)}`);
   });
+  it('refuses recovery of an evicted giant whose result had several text blocks', async () => {
+    // 多块结果的预览把标记放在单独一块里，块之间的换行是拼接出来的：用拼接后的整段文本去数
+    // 「标记前有多少字符」，每个块间换行都多算一次，预览就被当成原文交回去了。
+    const { context, toolResult, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_GIANTS: '8' });
+    const mixed = toolResult({
+      toolName: 'bash',
+      toolCallId: 'multi-0',
+      content: [{ type: 'text', text: 'head '.repeat(20) }, { type: 'text', text: 'm'.repeat(30000) }, { type: 'text', text: 'tail' }],
+    }) as { content: Block[] } | undefined;
+    expect(mixed!.content).toHaveLength(3);
+    for (let i = 1; i < 9; i += 1) {
+      toolResult({ toolName: 'bash', toolCallId: `multi-${i}`, content: [{ type: 'text', text: `payload ${i} ${'g'.repeat(25000)}` }] });
+    }
+    projection(context, [
+      call('multi-0', 'bash', { command: 'cat parts' }),
+      { role: 'toolResult', toolCallId: 'multi-0', toolName: 'bash', content: mixed!.content },
+    ]);
+    const refused = await tool.execute('t1', { call_id: 'multi-0' });
+    expect(refused.isError).toBe(true);
+    expect(String(refused.content![0].text)).toContain('no longer available');
+  });
+  it('never stores a truncated preview as the original when it comes back through the hook', async () => {
+    // 预览再次经过截断钩子（重放、恢复或编辑后重发）：它带着标记，收下就等于把预览登记成
+    // 原文。判定要在拼全文之前做完，不然被拒的载荷先付了一份副本的内存。
+    const { toolResult } = loadExtension();
+    const after = toolResult({
+      toolName: 'bash',
+      toolCallId: 'again',
+      content: [
+        { type: 'text', text: 'p'.repeat(20000) },
+        { type: 'text', text: '[truncated 1000 of 21000 chars; cindy_toolfold_read({"call_id":"again"}) returns the full text]' },
+      ],
+    }) as { content: Block[] };
+    expect(String(after.content[after.content.length - 1].text)).toContain('full text not retained');
+  });
+  it('keeps the original of a multi-block result that only ends with marker-like text', async () => {
+    // 反向：标记前的字符数对不上就不是预览，这一段是正文，必须原样可取回。
+    const { context, tool } = loadExtension();
+    const kept = [{ type: 'text', text: 'log head ' }, { type: 'text', text: '[truncated 100 of 200 chars; cindy_toolfold_read({"call_id":"quote"}) returns the full text]' }];
+    projection(context, [
+      call('quote', 'bash', { command: 'grep truncation logs' }),
+      { role: 'toolResult', toolCallId: 'quote', toolName: 'bash', content: kept },
+    ]);
+    const out = await tool.execute('t1', { call_id: 'quote' });
+    expect(out.isError).toBeUndefined();
+    expect(String(out.content![0].text)).toContain('grep truncation logs');
+    expect(String(out.content![0].text)).toContain('truncated 100 of 200 chars');
+  });
   it('slices a giant recovery at the per-read limit and resumes from an offset', async () => {
     const { context, toolResult, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: '1000' });
     const big = 'body ' + 'z'.repeat(22000);

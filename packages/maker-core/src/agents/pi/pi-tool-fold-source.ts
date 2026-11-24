@@ -207,19 +207,34 @@ export default function (pi) {
   // 归因只能靠「标记记下的字符数」补救，而渲染本身已经把信息丢了。改看长度：标记之前的字符
   // 数必须正好等于「总数 − 被截掉」——这是写预览时的构造，引用这段文字的真实结果长度不同。
   // 两种错法各有用例守着：把别人的标记当成自己的预览（原文丢成一句拒绝）、把预览当成正文。
-  function isTruncatedPreview(text) {
-    if (typeof text !== 'string' || text.charAt(text.length - 1) !== ']') return false;
+  // 量它必须用写它时那把尺子：预览有两种落法。标记单独成块时（多块结果按块截、文本回合
+  // 按前缀放回），前面的正文是「各文本块长度之和」——块之间拼接插入的换行不是原文，拿拼接
+  // 后的整段文本去减一个换行，会把每个块间换行都多算一次，多块预览就此被当成原文交回去。
+  // 标记并进唯一的正文块时（字符串结果是拼成一段存的），那个换行是拼进去的，要减掉。
+  function isTruncatedPreview(content) {
+    var blocks = typeof content === 'string' ? [{ type: 'text', text: content }] : content;
+    if (!Array.isArray(blocks) || blocks.length === 0) return false;
+    var last = blocks[blocks.length - 1];
+    if (!last || last.type !== 'text' || typeof last.text !== 'string') return false;
+    var text = last.text;
+    if (text.charAt(text.length - 1) !== ']') return false;
     var open = text.lastIndexOf('[truncated ');
     if (open < 0) return false;
-    var tail = text.slice(open);
-    var head = /\[truncated (\d+) of (\d+) chars; /.exec(tail);
+    var head = /\[truncated (\d+) of (\d+) chars; /.exec(text.slice(open));
     if (!head) return false;
     var dropped = Number(head[1]);
     var total = Number(head[2]);
     if (total <= dropped) return false;
-    // 预览的文本块和标记块拼起来时中间有一个换行。
-    var prefix = open;
-    if (prefix > 0 && text.charAt(prefix - 1) === '\n') prefix--;
+    var prefix = 0;
+    for (var i = 0; i < blocks.length - 1; i++) {
+      var block = blocks[i];
+      if (block && block.type === 'text' && typeof block.text === 'string') prefix += block.text.length;
+    }
+    if (open > 0) {
+      var before = open;
+      if (text.charAt(before - 1) === '\n') before--;
+      prefix += before;
+    }
     return prefix === total - dropped;
   }
 
@@ -681,9 +696,10 @@ export default function (pi) {
     var cost = costOfContent(blocks);
     if (cost > GIANT_BUDGET_CHARS) return false; // a single payload over budget is never retained
     // 先按大小决定收不收，再要全文：被拒的载荷不该先付一整份副本的内存。
-    var text = makeText();
     // 带截断标记的文本是预览，不是原文：收下它就等于把预览登记成「原文」，取回时再也分不出来。
-    if (isTruncatedPreview(text)) return false;
+    // 判定只看块结构，所以能在拼全文之前做完。
+    if (isTruncatedPreview(blocks)) return false;
+    var text = makeText();
     if (giants.has(id)) {
       giantBytes -= giants.get(id).bytes;
       giants.delete(id);
@@ -793,8 +809,10 @@ export default function (pi) {
     // result. Only that full shape counts as a preview: a
     // result that merely quotes the wording stays recoverable.
     if (giant === null && resultMsg) {
-      var resultText = textOf(resultMsg.content);
-      if (isTruncatedPreview(resultText)) truncatedPreview = resultText.slice(resultText.lastIndexOf('[truncated '));
+      if (isTruncatedPreview(resultMsg.content)) {
+        var resultText = textOf(resultMsg.content);
+        truncatedPreview = resultText.slice(resultText.lastIndexOf('[truncated '));
+      }
     }
     // The registry holds the FULL text of an ingestion-truncated payload (the transcript
     // only has the preview). Prefer it, and combine it with the call block so recovery
