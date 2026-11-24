@@ -1086,13 +1086,16 @@ export function UserMessage({
   const copyBody = quotesEncoded ? stripChatQuoteMarkerLines(projectedSource) : projectedSource;
   const visibleSource = quotesEncoded ? stripChatQuoteMarkerLines(ghostBody) : ghostBody;
   // Display decoding must not change an unedited resend's wire bytes.
-  const editSubmitText = forwardedDraftBody !== undefined
-    ? forwardedDraftBody
-    : quotesEncoded
-    ? ghostBody
-    : copyBody !== visibleSource
-      ? visibleSource
-      : undefined;
+  const originalImText = hookSource?.contentFormat === 'user-text'
+    ? hookSource.userText ?? content
+    : undefined;
+  const editSubmitText = forwardedDraftBody ?? (
+    originalImText !== undefined && originalImText !== displayContent
+      ? originalImText
+      : quotesEncoded
+        ? ghostBody
+        : copyBody !== visibleSource ? visibleSource : undefined
+  );
   const copyText = hasFiles
     ? `${copyBody}\n\n${t('chat.userMessage.attachmentPrefix')}${files!.map((f) => f.name).join(', ')}`
     : copyBody;
@@ -1415,7 +1418,7 @@ export function UserMessage({
       <div
         className={cn(
           'flex flex-col gap-2',
-          botLetter
+          botLetter || (simplifiedBotConversation && hookSource)
             ? cn(CHAT_BUBBLE_COLUMN_CLASS, 'w-full items-start')
             : orcaCommunication || hookSource
             ? 'w-full max-w-[560px] items-start'

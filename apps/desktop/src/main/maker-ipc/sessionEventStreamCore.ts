@@ -23,7 +23,7 @@ export function persistSessionStreamEventCore(
     broadcastSubagentRunsChanged: typeof broadcastSubagentRunsChanged;
   },
   session: Session,
-  prepared: Pick<PreparedSessionEvent, 'event' | 'eventAgentMeta'>,
+  prepared: Pick<PreparedSessionEvent, 'event' | 'eventAgentMeta'> & Partial<Pick<PreparedSessionEvent, 'groupLaneInputClientId'>>,
 ) {
   const {
     enqueueDurableWrite,
@@ -84,9 +84,29 @@ export function persistSessionStreamEventCore(
         isFinal: td.isFinal === true,
       });
     }
+    const progressInput = prepared.groupLaneInputClientId ?? '';
+    const textPhase = (event.data as { phase?: unknown } | null)?.phase;
+    // Only a finished public assistant block can leave the task. The input snapshot
+    // comes from the coordinator before it applies steering or advances the queue.
+    const pluginProgress = progressInput.startsWith('plugin-task:') && td?.isFinal === true
+      && event.turnScope !== 'background' && !event.runtimeRecovery && !eventAgentMeta?.parentUuid
+      && !eventAgentMeta?.botPrivateReply && !eventAgentMeta?.botTaskCoordination
+      && ((event.source === 'codex' && textPhase === 'commentary' && td.isFullText === true)
+        || (event.source === 'claude-code' && eventAgentMeta?.stopReason === 'tool_use')
+        || (event.source === 'pi' && eventAgentMeta?.stopReason === 'toolUse'));
+    const textMeta = pluginProgress
+      ? { ...eventAgentMeta, pluginProgressInputId: progressInput }
+      : eventAgentMeta;
     persistId = localClaude
-      ? onAssistantTextEvent(session.id, td, eventAgentMeta, event.turnScope, true)
-      : onAssistantTextEvent(session.id, td, eventAgentMeta, event.turnScope);
+      ? onAssistantTextEvent(session.id, td, textMeta, event.turnScope, true)
+      : onAssistantTextEvent(session.id, td, textMeta, event.turnScope);
+    // Codex commentary carries a complete item snapshot. Keep Claude's block
+    // confirmations buffered until tool_use so later blocks cannot be written twice.
+    // A late Codex snapshot must not flush a newer streaming answer.
+    if (pluginProgress && event.source === 'codex' && persistId &&
+        deps.persistence.getSessionTextSnapshot(session.id)?.persistId === persistId) {
+      flushAssistantBlock(session.id, eventAgentMeta);
+    }
     // Pi message_end carries the authoritative whole assistant message. Commit
     // its calibrated block now: agent_settled may arrive much later (or never),
     // and a subsequent assistant message must not overwrite this one in memory.

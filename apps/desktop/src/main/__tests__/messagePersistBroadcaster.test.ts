@@ -312,6 +312,104 @@ const terminalSubagentObservation = (taskId: string, parentToolUseId?: string) =
   },
 });
 
+// Unit: a commentary-only turn may pause before the next tool or final. Exercise the
+// real stream assembler and writer: no draft, one complete row, while the turn is live.
+it('makes completed plugin progress readable before the next event without flushing a later draft', async () => {
+  const { persistSessionStreamEventCore } = await import('../maker-ipc/sessionEventStreamCore.js');
+  const persistence = await import('../messagePersistBroadcaster.desktop.js');
+  type Args = Parameters<typeof persistSessionStreamEventCore>;
+  const session = { id: SESSION, agentKind: 'codex' } as Args[1];
+  noteSessionAgentKind(SESSION, 'codex');
+  const emit = (id: string, text: string, phase: string, isFinal: boolean) =>
+    persistSessionStreamEventCore({
+      persistence, orcaTeamServiceForEvents: null, log: { warn: vi.fn() }, broadcastSubagentRunsChanged: vi.fn(),
+    }, session, { event: { type: 'text', source: 'codex', data: {
+      text, agentMessageId: id, phase, isFinal, isFullText: isFinal,
+    } }, eventAgentMeta: { replyToClientId: 'plugin-task:r' }, groupLaneInputClientId: 'plugin-task:r' });
+
+  emit('progress', '检查', 'commentary', false);
+  await drainPersistQueue();
+  expect(createMessage).not.toHaveBeenCalled();
+  emit('progress', '检查通过。', 'commentary', true);
+  emit('answer', '答案草稿', 'final_answer', false);
+  emit('progress', '检查通过。', 'commentary', true);
+  await drainPersistQueue();
+  expect(createMessage).toHaveBeenCalledTimes(1);
+  expect(createMessage).toHaveBeenCalledWith(SESSION, expect.objectContaining({
+    role: 'assistant', content: '检查通过。', agentMeta: expect.objectContaining({ pluginProgressInputId: 'plugin-task:r' }),
+  }), expect.anything());
+  expect(persistence.getSessionTextSnapshot(SESSION)?.event.data.text).toBe('答案草稿');
+});
+
+// Unit, PR #12557: the stream writer must persist one plugin progress row at
+// the Claude tool boundary. The Codex test above covers whole-item snapshots;
+// Claude can stream two text blocks and then confirm each separately.
+// #1743: a sibling child must keep its buffer and remain private while root
+// progress is committed by the root tool.
+it.each([false, true])('persists Claude multi-block plugin progress once (interleaved child: %s)', async (withChild) => {
+  const { persistSessionStreamEventCore } = await import('../maker-ipc/sessionEventStreamCore.js');
+  const persistence = await import('../messagePersistBroadcaster.desktop.js');
+  type Args = Parameters<typeof persistSessionStreamEventCore>;
+  const session = { id: SESSION, agentKind: 'claude-code' } as Args[1];
+  const deps = {
+    persistence,
+    orcaTeamServiceForEvents: null,
+    log: { warn: vi.fn() },
+    broadcastSubagentRunsChanged: vi.fn(),
+  };
+  const inputId = 'plugin-task:r';
+  const emit = (event: Args[2]['event'], eventAgentMeta: Args[2]['eventAgentMeta']) =>
+    persistSessionStreamEventCore(deps, session, {
+      event, eventAgentMeta, groupLaneInputClientId: inputId,
+    });
+  const meta = { stopReason: 'tool_use', replyToClientId: inputId };
+  const childMeta = { ...meta, parentUuid: 'child-owner' };
+  const textEvent = (text: string, isFinal: boolean) => ({
+    type: 'text' as const, source: 'claude-code' as const, data: { text, isFinal },
+  });
+  emit(textEvent('First. ', false), null);
+  if (withChild) emit(textEvent('Child', false), childMeta);
+  emit(textEvent('Second.', false), null);
+  for (const text of ['First. ', 'Second.']) {
+    emit({ type: 'text', source: 'claude-code', data: { text, isFinal: true } }, meta);
+  }
+  emit({ type: 'tool_use', source: 'claude-code', data: {
+    toolUseId: 'progress-tool', toolName: 'Read', input: {},
+  } }, meta);
+  await drainPersistQueue();
+
+  const assistantRows = vi.mocked(createMessage).mock.calls
+    .map(([, row]) => row)
+    .filter((row) => row.role === 'assistant');
+  expect(assistantRows).toEqual([
+    expect.objectContaining({
+      content: 'First. Second.',
+      agentMeta: expect.objectContaining({ pluginProgressInputId: inputId }),
+    }),
+  ]);
+  if (withChild) {
+    emit(textEvent(' continuation.', false), childMeta);
+    emit(textEvent('Child continuation.', true), childMeta);
+    emit({ type: 'tool_use', source: 'claude-code', data: {
+      toolUseId: 'child-tool', toolName: 'Read', input: {},
+    } }, childMeta);
+    await drainPersistQueue();
+
+    const rows = vi.mocked(createMessage).mock.calls.map(([, row]) => row);
+    const assistant = rows.filter(row => row.role === 'assistant');
+    expect(assistant).toHaveLength(2);
+    expect(assistant[1]).toMatchObject({
+      content: 'Child continuation.',
+      agentMeta: { parentUuid: 'child-owner' },
+    });
+    expect(assistant[1]?.agentMeta).not.toHaveProperty('pluginProgressInputId');
+    const tools = rows.filter(row => row.role === 'tool_use');
+    expect(tools).toHaveLength(2);
+    expect(tools[0]?.agentMeta?.parentUuid).toBeUndefined();
+    expect(tools[1]?.agentMeta?.parentUuid).toBe('child-owner');
+  }
+});
+
 describe('Codex done completion boundary', () => {
   it('only treats successful terminal data as a completed turn', () => {
     expect(isSuccessfulCodexDoneEventData({ raw: { status: 'completed' } })).toBe(true);

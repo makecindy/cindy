@@ -24,7 +24,7 @@ import { localizedModelName, localizedBrandName } from '@/lib/modelDisplayNames'
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { AlertTriangle, Check, CircleHelp, Minus, Trash2, X } from 'lucide-react';
+import { AlertTriangle, Check, CircleHelp, Minus, Trash2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { SegmentedControl } from '@/components/ui/segmented-control';
@@ -44,6 +44,10 @@ import { useModelContextLimit } from '@/hooks/useModelContextLimit';
 import { useModelImageInputOverride } from '@/hooks/useModelImageInputOverride';
 import { parseContextTokenInput } from '../../../shared/modelContextLimit';
 import { ModelCompactionSettings } from './ModelCompactionSettings';
+import {
+  modelAdvancedLayoutClasses, ModelAdvancedContent, ModelAdvancedFooter,
+  ModelAdvancedRow as Row, ModelAdvancedSection as Section,
+} from './ModelAdvancedLayout';
 import { modelPriceDetailRows, type ModelPricePresentation } from '@/lib/modelPriceFormat';
 import {
   isModelEnabled,
@@ -84,6 +88,7 @@ import { MANAGED_LLAMACPP_PROVIDER_ID, supportsLlamaCppMillionContext, llamaCppM
 import { modelBrand } from './modelManagementPresentation';
 import { ModelPriceOverrideDialog } from './ModelPriceOverrideDialog';
 import type { UnionModelRow } from './UnifiedModelList';
+import { ResetGroupButton } from '@/components/ui/reset-buttons';
 
 const AGENT_LABEL: Record<AgentKind, string> = {
   'claude-code': 'Claude Code',
@@ -128,30 +133,6 @@ function withCurrentOption(value: string | null | undefined, options: SelectOpti
 }
 
 /** 定义列表的一行:左标签右值 + 细分隔线。 */
-function Row({
-  label,
-  children,
-  muted,
-}: {
-  label: string;
-  children: React.ReactNode;
-  muted?: boolean;
-}) {
-  return (
-    <div className="flex min-h-[34px] items-center justify-between gap-4 border-b border-[var(--settings-theme-card-border)] py-2 last:border-b-0">
-      <span className="shrink-0 text-13 text-[var(--text-secondary)]">{label}</span>
-      <span
-        className={cn(
-          'min-w-0 break-words text-right text-13',
-          muted ? 'text-[var(--text-tertiary)]' : 'text-[var(--text-primary)]',
-        )}
-      >
-        {children}
-      </span>
-    </div>
-  );
-}
-
 function CapabilityValue({ state, label }: { state: boolean | undefined; label: string }) {
   const Icon = state === true ? Check : state === false ? Minus : CircleHelp;
   return (
@@ -159,36 +140,6 @@ function CapabilityValue({ state, label }: { state: boolean | undefined; label: 
       <Icon size={13} aria-hidden />
       {label}
     </span>
-  );
-}
-
-function Section({
-  title,
-  hint,
-  children,
-}: {
-  title: string;
-  hint?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="pt-5 first:pt-1">
-      <div className="flex items-center gap-1.5">
-        <h4 className="text-12 font-medium text-[var(--text-secondary)]">{title}</h4>
-        {hint && (
-          <Tip text={hint}>
-            <button
-              type="button"
-              aria-label={hint}
-              className="rounded-full p-1 text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
-            >
-              <CircleHelp size={12} aria-hidden />
-            </button>
-          </Tip>
-        )}
-      </div>
-      <div className="mt-1.5">{children}</div>
-    </section>
   );
 }
 
@@ -244,7 +195,6 @@ export function ModelAdvancedDrawer({
   const pricePendingRef = useRef(false);
   const [protocolSaving, setProtocolSaving] = useState(false);
   const [imageCapabilitySaving, setImageCapabilitySaving] = useState(false);
-  const titleRef = useRef<HTMLHeadingElement>(null);
   // 开关/档位写的是 renderer 本地存储，订阅 version 才能在写后重渲染。
   useModelVisibilityVersion();
   useProviderModelMemoryVersion();
@@ -694,70 +644,37 @@ export function ModelAdvancedDrawer({
         onOpenChange(next);
       }}>
         <Dialog.Portal>
-          <Dialog.Overlay
-            className={cn(
-              'modal-scrim fixed inset-0 z-modal-raised',
-            )}
-          />
-          <Dialog.Content
-            onPointerDownOutside={(event) => event.preventDefault()}
-            className={cn(
-              'modal-panel fixed inset-0 z-modal-raised m-auto flex h-fit max-h-[calc(100dvh-48px)] w-[800px] max-w-[calc(100vw-32px)] flex-col overflow-hidden',
-            )}
-            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-            aria-describedby={undefined}
+          <ModelAdvancedContent
+            title={localizedModelName(primaryModel.name, t)}
+            providerName={providerDisplayName(provider, t)}
             onEscapeKeyDown={(event) => {
-              if (!(event.target instanceof HTMLElement) || !event.target.closest('[data-model-price-editor]')) return;
-              event.preventDefault();
+              if (event.target instanceof HTMLElement && event.target.closest('[data-model-price-editor]')) {
+                event.preventDefault();
+              }
             }}
-            onOpenAutoFocus={(event) => {
-              event.preventDefault();
-              titleRef.current?.focus();
-            }}
+            titleExtra={groupRow?.aliasRows && (
+              <Select data-settings-search-action="Choose which member model of this alias group the drawer shows"
+                label={t('settings.providers.models.advanced.modelId')}
+                size="compact"
+                width="sm"
+                className="mb-2"
+                truncateOptions
+                value={row.id}
+                disabled={ctx.loading || protocolSaving}
+                onValueChange={(id) => {
+                  if (ctx.loading || ctxDirtyRef.current || protocolSaving || pricePendingRef.current) return;
+                  const member = memberRows.find((candidate) => candidate.id === id);
+                  if (member) onSelectMember?.(member);
+                }}
+                options={memberRows.map((member) => ({ value: member.id, label: member.id }))}
+              />
+            )}
           >
-            <header className="flex shrink-0 items-start gap-3 border-b border-[var(--settings-theme-card-border)] px-5 pb-3 pt-4">
-              <div className="min-w-0 flex-1">
-                {groupRow?.aliasRows && (
-                  <Select data-settings-search-action="Choose which member model of this alias group the drawer shows"
-                    label={t('settings.providers.models.advanced.modelId')}
-                    size="compact"
-                    width="sm"
-                    className="mb-2"
-                    truncateOptions
-                    value={row.id}
-                    disabled={ctx.loading || protocolSaving}
-                    onValueChange={(id) => {
-                      if (ctx.loading || ctxDirtyRef.current || protocolSaving || pricePendingRef.current) return;
-                      const member = memberRows.find((candidate) => candidate.id === id);
-                      if (member) onSelectMember?.(member);
-                    }}
-                    options={memberRows.map((member) => ({ value: member.id, label: member.id }))}
-                  />
-                )}
-                <Dialog.Title
-                  ref={titleRef}
-                  tabIndex={-1}
-                  className="break-words text-15 font-medium text-[var(--text-primary)] outline-none"
-                >
-                  {localizedModelName(primaryModel.name, t)}
-                </Dialog.Title>
-                <p className="mt-0.5 truncate text-12 text-[var(--text-tertiary)]">
-                  {providerDisplayName(provider, t)}
-                </p>
-              </div>
-              <Dialog.Close
-                className="-mr-1 -mt-1 shrink-0 rounded-full p-1.5 text-[var(--text-secondary)] transition-colors hover:bg-[var(--settings-menu-bg-hover)] hover:text-[var(--text-primary)]"
-                aria-label={t('settings.providers.models.advanced.close')}
-              >
-                <X size={16} aria-hidden />
-              </Dialog.Close>
-            </header>
-
             <div
               key={`${provider.id}:${primaryModel.id}`}
-              className="min-h-0 overflow-y-auto px-5 pb-5 pt-3"
+              className={modelAdvancedLayoutClasses.body}
             >
-              <div className="grid gap-5 min-[760px]:grid-cols-2 min-[760px]:gap-6">
+              <div className={modelAdvancedLayoutClasses.grid}>
                 <div className="min-w-0">
                   {conversational && (
                     <Section
@@ -919,20 +836,14 @@ export function ModelAdvancedDrawer({
                         );
                       })}
                       {visibilityCustomized && !paymentRequired && selectionAvailable && (
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          tone="quiet"
-                          compact
-                          type="button"
+                        <ResetGroupButton
                           onClick={async () => {
                             if (!await resetModelVisibilities(provider.id, visibilityTargets))
                               toast.error(t('settings.providers.models.visibilityWriteFailed'));
                           }}
                           className="mt-2"
-                        >
-                          {t('settings.providers.models.advanced.restoreDefault')}
-                        </Button>
+                          label={t('settings.providers.models.advanced.restoreDefault')}
+                        />
                       )}
                     </Section>
                   )}
@@ -974,12 +885,7 @@ export function ModelAdvancedDrawer({
                         (a) =>
                           rememberedEffort(a, row.byAgent[a]!.id) !== undefined,
                       ) && (
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          tone="quiet"
-                          compact
-                          type="button"
+                        <ResetGroupButton
                           disabled={paymentRequired}
                           onClick={() => {
                             if (groupRow?.aliasRows) {
@@ -991,9 +897,8 @@ export function ModelAdvancedDrawer({
                               clearProviderModelEffort(a, provider.id, row.byAgent[a]!.id);
                           }}
                           className="mt-2"
-                        >
-                          {t('settings.providers.models.advanced.restoreDefault')}
-                        </Button>
+                          label={t('settings.providers.models.advanced.restoreDefault')}
+                        />
                       )}
                     </Section>
                   )}
@@ -1065,18 +970,12 @@ export function ModelAdvancedDrawer({
                               })}
                             </span>
                             {ctx.isCustomized && (
-                              <Button data-settings-search-action="Restore the default context limit for this model"
-                                variant="secondary"
-                                size="sm"
-                                tone="quiet"
-                                compact
-                                type="button"
+                              <ResetGroupButton data-settings-search-action="Restore the default context limit for this model"
                                 onClick={resetCtx}
                                 disabled={paymentRequired || ctx.loading || localConfigurationBlocked}
                                 className="shrink-0"
-                              >
-                                {t('settings.providers.models.advanced.restoreDefault')}
-                              </Button>
+                                label={t('settings.providers.models.advanced.restoreDefault')}
+                              />
                             )}
                           </div>
                           {(ctxInvalid || ctx.error || ctx.mixed) && (
@@ -1127,7 +1026,7 @@ export function ModelAdvancedDrawer({
                     )}
                   </Section>
                 </div>
-                <div className="min-w-0 border-t border-[var(--settings-theme-card-border)] pt-4 min-[760px]:border-l min-[760px]:border-t-0 min-[760px]:pl-6 min-[760px]:pt-0">
+                <div className={modelAdvancedLayoutClasses.right}>
                   <Section
                     title={t('settings.providers.models.advanced.capability')}
                     hint={t('settings.providers.models.advanced.capabilityHint')}
@@ -1299,7 +1198,7 @@ export function ModelAdvancedDrawer({
                 outbound protocol unconfirmed. Keep that distinction in
                 the manufacturer reference when one is declared. */}
             {!paymentRequired && (
-              <div className="flex shrink-0 flex-col gap-2 border-t border-[var(--settings-theme-card-border)] px-5 py-3">
+              <ModelAdvancedFooter>
                 <Button
                   variant="secondary"
                   size="md"
@@ -1327,9 +1226,9 @@ export function ModelAdvancedDrawer({
                     {t('settings.providers.local.deleteModel')}
                   </Button>
                 )}
-              </div>
+              </ModelAdvancedFooter>
             )}
-          </Dialog.Content>
+          </ModelAdvancedContent>
         </Dialog.Portal>
       </Dialog.Root>
     </>

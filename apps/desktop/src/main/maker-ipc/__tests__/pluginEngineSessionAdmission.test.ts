@@ -67,6 +67,16 @@ describe('opening a task on a plugin engine', () => {
     expect(admitPluginEngineSession(body({ model: ' deepseek-v4 ' }), [harness(availability)]).model).toBe(' deepseek-v4 ');
   });
 
+  // Unit: the actual task admission must use the saved default and keep explicit task choices.
+  it('uses the saved offered level when a task does not choose a level', () => {
+    const available = [harness({ state: 'available' })];
+    const config = () => ({ modelEfforts: { 'deepseek-v4': 'low' as const, 'no-levels': 'max' as const } });
+    const admit = (model: string, effort: string) => admitWith(body({ model, effort }), available, () => models, config).effort;
+    expect(admit('deepseek-v4', '')).toBe('low');
+    expect(admit('deepseek-v4', 'max')).toBe('max');
+    expect(admit('no-levels', '')).toBe('');
+  });
+
   // 2026-11-19 用户要求插件引擎可选思考深度：只保留该模型列出的档位，其余交给引擎自己的默认。
   it('keeps a reasoning level only when the engine lists it for the chosen model', () => {
     const available = [harness({ state: 'available' })];

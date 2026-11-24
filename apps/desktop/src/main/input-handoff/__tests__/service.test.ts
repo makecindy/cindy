@@ -149,6 +149,28 @@ describe('代输入 requests the agent makes', () => {
     if (errorCode === 'TARGET_IS_CINDY') expect(problem!.message).toContain('request_input_handoff');
   });
 
+  // #12506 review: during partial authorization the target's AXWindows read fails.
+  // The request preflight must report the denial even though it cannot read the title (unit).
+  it('reports a named target whose windows are inaccessible instead of suggesting another window', async () => {
+    const h = harness();
+    const list = await h.desktop.driver.windows();
+    h.desktop.driver.windows = async () => ({
+      ...list,
+      apps: list.apps.map((app) => app.pid === 10 ? { ...app, windows: [], controlDenied: true } : app),
+    });
+    expect(await h.service.checkTarget({ app: 'com.example.app', windowTitle: 'Sign in' }))
+      .toMatchObject({ errorCode: 'TARGET_PERMISSION_DENIED', message: expect.stringContaining('System & App Protection Override') });
+    expect(await h.service.checkTarget({ pid: 10, app: 'Google Chrome' }))
+      .toMatchObject({ errorCode: 'TARGET_PERMISSION_DENIED' });
+
+    // The grant can change after preflight. The session must fail without presenting
+    // a window or notifying the owner, even when it starts with a denied target.
+    expect(h.service.start({ sessionId: 'task', purpose: 'Sign in', target: { pid: 10 } }).ok).toBe(true);
+    await vi.waitFor(() => expect(h.continued[0]).toContain('failure=permission'));
+    expect(h.snapshots).toEqual([]);
+    expect(h.notified).toEqual([]);
+  });
+
   // 2026-11-21 teammate review: a locked computer answered with a pending receipt and
   // only later ended as screen_locked, each try counting against the hourly limit.
   // #12017 review: only an explicit `locked` from the preflight counts; it gives the same

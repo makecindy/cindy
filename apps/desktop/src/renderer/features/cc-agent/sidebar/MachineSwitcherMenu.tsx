@@ -65,6 +65,7 @@ import { toast } from '@/lib/toast';
 import { useActiveMainView } from '@/hooks/useActiveMainView';
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
@@ -333,10 +334,14 @@ function MachineMenuItem({
   // 因 isTrusted=false 不会覆盖。onSelect 消费后立即复位。
   const modifierHeldRef = useRef(false);
   return (
-    <DropdownMenuItem
+    // Checkbox semantics (menuitemcheckbox + aria-checked) from the shared item; the
+    // approved trailing slot below still draws the mark, so the leading column is off.
+    <DropdownMenuCheckboxItem
+      indicator="none"
+      checked={selected}
       className={cn(
         MENU_ITEM_CLASS,
-        'group/machine-item',
+        'group/machine-item cursor-pointer',
         rejected && 'text-[var(--text-tertiary)]',
       )}
       onClick={(event) => {
@@ -447,6 +452,6 @@ function MachineMenuItem({
           </span>
         )}
       </span>
-    </DropdownMenuItem>
+    </DropdownMenuCheckboxItem>
   );
 }

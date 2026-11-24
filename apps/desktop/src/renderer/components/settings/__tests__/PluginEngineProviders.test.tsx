@@ -30,7 +30,7 @@ vi.mock('react-i18next', async (importOriginal) => ({
   }),
 }));
 const toastError = vi.hoisted(() => vi.fn());
-vi.mock('@/lib/toast', () => ({ toast: { error: toastError } }));
+vi.mock('@/lib/toast', () => ({ toast: { error: toastError, success: vi.fn() } }));
 vi.mock('@/lib/scrollbarAutoHide', () => ({ flashScrollbar: () => {} }));
 
 import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
@@ -82,19 +82,21 @@ function renderDetail(view: PluginEngineView, props: {
   pendingShareRequests?: number;
   onManageShare?: () => void;
 } = {}) {
-  return render(
+  const tree = (engine: PluginEngineView) => (
     <MemoryRouter initialEntries={['/settings?tab=providers']}>
       <ConfirmDialogProvider>
         <PluginEngineProviderDetail
-          engine={view}
+          engine={engine}
           remoteControlEnabled={props.remoteControlEnabled === undefined ? true : props.remoteControlEnabled}
           pendingShareRequests={props.pendingShareRequests ?? 0}
           onManageShare={props.onManageShare ?? (() => {})}
         />
         <Location />
       </ConfirmDialogProvider>
-    </MemoryRouter>,
+    </MemoryRouter>
   );
+  const result = render(tree(view));
+  return { ...result, updateView: (engine: PluginEngineView) => result.rerender(tree(engine)) };
 }
 
 async function chooseFromMenu(item: string) {
@@ -109,6 +111,108 @@ afterEach(() => {
 });
 
 describe('plugin providers in the provider list', () => {
+  // Unit: the real drawer saves only offered reasoning levels and shares the row visibility action.
+  it('manages reasoning and visibility in the Antigravity model settings', async () => {
+    const api = stubApi();
+    const engineView = engine({ name: 'Antigravity', models: [{ id: 'gemini', displayName: 'Gemini', efforts: ['low', 'high'], defaultEffort: 'high' }],
+      modelEfforts: { gemini: 'high' } });
+    const { updateView } = renderDetail(engineView);
+    const trigger = screen.getByRole('button', { name: /advanced.openAria/ });
+    trigger.focus();
+    await userEvent.keyboard('{Enter}');
+    const dialog = within(await screen.findByRole('dialog', { name: 'Gemini' }));
+    expect(dialog.getByText('ACP')).toBeTruthy();
+    expect(dialog.getByRole('radio', { name: 'effortLevels.high' }).getAttribute('aria-checked')).toBe('true');
+    expect(dialog.queryByRole('radio', { name: 'effortLevels.medium' })).toBeNull();
+    await userEvent.click(dialog.getByRole('radio', { name: 'effortLevels.low' }));
+    const { dataOwnerId, generation } = getDataOwnerGeneration();
+    const stamp = { dataOwnerId, ownerGeneration: generation };
+    expect(api.setPluginEnginePrefs).toHaveBeenLastCalledWith({ key: engineView.key, modelEffort: { id: 'gemini', effort: 'low' }, ownerStamp: stamp });
+    await userEvent.click(dialog.getByRole('button', { name: 'settings.providers.models.advanced.restoreDefault' }));
+    expect(api.setPluginEnginePrefs).toHaveBeenLastCalledWith({ key: engineView.key, modelEffort: { id: 'gemini', effort: null }, ownerStamp: stamp });
+    await userEvent.keyboard('{Escape}');
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+    await userEvent.keyboard('{Enter}');
+    const reopened = within(await screen.findByRole('dialog', { name: 'Gemini' }));
+    await userEvent.click(reopened.getByRole('button', { name: 'settings.providers.models.disableModel' }));
+    expect(api.setPluginEnginePrefs).toHaveBeenLastCalledWith({
+      key: engineView.key, models: { ids: ['gemini'], disabled: true }, ownerStamp: stamp,
+    });
+    updateView({ ...engineView, models: [], disabledModels: engineView.models });
+    expect(reopened.getByRole('button', { name: 'settings.providers.models.enableModel' })).toBeTruthy();
+    await userEvent.keyboard('{Escape}');
+    const movedTrigger = within(screen.getByTestId('plugin-engine-models-off')).getByRole('button', { name: /advanced.openAria/ });
+    await waitFor(() => expect(document.activeElement).toBe(movedTrigger));
+  });
+
+  // Unit: opening a model without metadata retains the expected fields and makes no preference writes.
+  it('shows missing advanced fields as dashes for a plugin model', async () => {
+    const api = stubApi();
+    renderDetail(engine({ models: [{ id: 'plugin-model', displayName: 'Plugin model' }] }));
+    await userEvent.click(screen.getByRole('button', { name: /advanced.openAria/ }));
+    const dialog = within(await screen.findByRole('dialog', { name: 'Plugin model' }));
+
+    for (const heading of ['defaultEffort', 'contextLimit', 'spec', 'capability', 'pricing', 'identity']) {
+      expect(dialog.getByRole('heading', { name: 'settings.providers.models.advanced.' + heading })).toBeTruthy();
+    }
+    for (const label of [
+      'settings.providers.models.advanced.compaction.title',
+      'settings.providers.models.advanced.contextWindow',
+      'settings.providers.models.advanced.maxOutput',
+      'settings.providers.models.advanced.imageInput',
+      'settings.providers.models.advanced.inputModalities',
+      'settings.providers.models.advanced.outputModalities',
+      'Fast',
+      'newChat.modelSelector.speed.ultrafast',
+      'settings.providers.models.priceOverride.currency',
+      'settings.providers.models.priceOverride.input',
+      'settings.providers.models.priceOverride.output',
+      'settings.providers.models.priceOverride.cacheRead',
+      'settings.providers.models.priceOverride.cacheWrite',
+      'settings.providers.models.advanced.discount',
+      'settings.providers.models.priceOverride.referenceDetails',
+      'settings.providers.models.management.brand',
+    ]) {
+      const row = dialog.getByText(label).parentElement!;
+      expect(within(row).getByText('-')).toBeTruthy();
+    }
+    expect(dialog.getByText('plugin-model')).toBeTruthy();
+    expect(dialog.queryByRole('radio')).toBeNull();
+    expect(dialog.queryByRole('textbox')).toBeNull();
+    expect(api.setPluginEnginePrefs).not.toHaveBeenCalled();
+  });
+
+  // Unit: a renamed, suspended provider must still confirm uninstall of its exact plugin instance.
+  it.each(['market', 'local'] as const)('confirms the plugin name before uninstalling a %s provider', async source => {
+    const { __resetInstalledGhostsStoreForTest } = await import('@/cindy-brain/useInstalledGhosts');
+    __resetInstalledGhostsStoreForTest();
+    const view = engine({ ghostId: '_root__sample', name: 'My provider', suspended: true });
+    const uninstallLocal = vi.fn().mockResolvedValue(undefined);
+    const uninstallMarket = vi.fn().mockResolvedValue(undefined);
+    const ghost = { manifest: { id: 'sample', name: 'Sample plugin', version: '1' }, namespace: null,
+      dir: '/plugins/_ns/_root/sample', approval: { state: 'approved', revision: 'a' },
+      publishingSource: source === 'market' ? { kind: 'public-market', pluginId: 'market-sample' } : { kind: 'local' } };
+    stubApi();
+    Object.assign(window.electronAPI, { ghosts: { listSync: () => ({ ghosts: [ghost] }), onChanged: () => () => {}, uninstall: uninstallLocal },
+      pluginMarket: { uninstall: uninstallMarket } });
+    renderDetail(view);
+    await chooseFromMenu('settings.ghosts.detail.dangerTitle');
+    expect(await screen.findByText('settings.ghosts.uninstallConfirm.title:{"name":"Sample plugin"}')).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: 'settings.ghosts.uninstallConfirm.cancel' }));
+    expect(uninstallLocal).not.toHaveBeenCalled();
+    expect(uninstallMarket).not.toHaveBeenCalled();
+    await chooseFromMenu('settings.ghosts.detail.dangerTitle');
+    await userEvent.click(await screen.findByRole('button', { name: 'settings.ghosts.uninstall' }));
+    const { dataOwnerId, generation } = getDataOwnerGeneration();
+    const confirmed = {
+      owner: { dataOwnerId, ownerGeneration: generation },
+      physicalId: '_ns/_root/sample', approval: 'approved:a', version: '1',
+    };
+    expect(uninstallMarket.mock.calls).toEqual(source === 'market' ? [['market-sample', confirmed]] : []);
+    expect(uninstallLocal.mock.calls).toEqual(source === 'local' ? [['_root__sample', confirmed]] : []);
+    __resetInstalledGhostsStoreForTest();
+  });
+
   it('marks every row as coming from a plugin, shows whether it can run and opens the one clicked', async () => {
     stubApi();
     const ready = engine({ name: 'DeepSeek Harness' });
@@ -190,10 +294,12 @@ describe('plugin providers in the provider list', () => {
     const off = within(screen.getByTestId('plugin-engine-models-off')).getByRole('switch');
     expect([on.getAttribute('aria-checked'), off.getAttribute('aria-checked')]).toEqual(['true', 'false']);
     expect(off.getAttribute('aria-label')).toBe('settings.providers.plugin.modelSwitchAria:{"model":"DeepSeek Lite"}');
+    const { dataOwnerId, generation } = getDataOwnerGeneration();
+    const ownerStamp = { dataOwnerId, ownerGeneration: generation };
     fireEvent.click(on);
-    expect(api.setPluginEnginePrefs).toHaveBeenLastCalledWith({ key: view.key, models: { ids: ['deepseek-v4'], disabled: true } });
+    expect(api.setPluginEnginePrefs).toHaveBeenLastCalledWith({ key: view.key, models: { ids: ['deepseek-v4'], disabled: true }, ownerStamp });
     fireEvent.click(off);
-    expect(api.setPluginEnginePrefs).toHaveBeenLastCalledWith({ key: view.key, models: { ids: ['deepseek-lite'], disabled: false } });
+    expect(api.setPluginEnginePrefs).toHaveBeenLastCalledWith({ key: view.key, models: { ids: ['deepseek-lite'], disabled: false }, ownerStamp });
     await waitFor(() => expect((on as HTMLButtonElement).disabled).toBe(false));
   });
 
@@ -232,12 +338,12 @@ describe('plugin providers in the provider list', () => {
     const dialog = await screen.findByRole('alertdialog');
     fireEvent.change(within(dialog).getByRole('textbox'), { target: { value: 'Work DeepSeek' } });
     try {
-      setDataOwnerGeneration('other-account');
+      act(() => setDataOwnerGeneration('other-account'));
       fireEvent.click(within(dialog).getByRole('button', { name: 'settings.providers.custom.save' }));
       await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
       expect(api.setPluginEnginePrefs).not.toHaveBeenCalled();
     } finally {
-      setDataOwnerGeneration(originalOwner.dataOwnerId, originalOwner.generation);
+      act(() => setDataOwnerGeneration(originalOwner.dataOwnerId, originalOwner.generation));
     }
   });
 
