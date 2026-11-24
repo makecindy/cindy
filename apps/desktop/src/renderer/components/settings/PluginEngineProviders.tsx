@@ -7,22 +7,25 @@
  *
  * 与普通供应商一致的部分：重命名(只在这台电脑上的显示名)、在模型选择器中隐藏、停用、逐模型开关、
  * 「允许被远程调用」与分享入口、账号用量。不同的部分照实呈现：登录和连接由插件自己管理(详情给
- * 「打开插件」，没有删除，卸载在插件页)；模型由引擎自己上报，打开详情时请插件重新上报一次(主进程
+ * 「打开插件」，更多菜单可卸载提供它的插件)；模型由引擎自己上报，打开详情时请插件重新上报一次(主进程
  * 按插件冷却)；不参与拖动排序、供应商组和引擎切换。
  */
-import { Eye, EyeOff, MoreHorizontal, Pencil, Power, RotateCcw, SlidersHorizontal } from 'lucide-react';
+import { Eye, EyeOff, MoreHorizontal, Pencil, Power, RotateCcw, SlidersHorizontal, Trash2 } from 'lucide-react';
 import { useEffect, useId, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 
 import type { GhostHarnessUsage } from '@cindy/plugin-protocol';
 
+import { readInstalledGhostsSnapshot } from '@/cindy-brain/useInstalledGhosts';
+import { useUninstallPlugin } from '@/features/plugin/lib/useUninstallPlugin';
+import { findInstalledGhostByInstanceId } from '../../../shared/pluginIdentity';
 import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
 import { QuotaHoverCard } from '@/components/status/QuotaHoverCard';
 import { pluginEngineUsageAccount } from '@/components/status/pluginEngineUsageAccount';
 import { Button } from '@/components/ui/button';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Switch } from '@/components/ui/switch';
 import { Tip } from '@/components/ui/tooltip';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, subscribeDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
@@ -458,6 +461,16 @@ export function PluginEngineProviderDetail({
   const rename = usePluginEngineRename();
   const visibilityError = t('settings.providers.models.visibilityWriteFailed');
   const accessError = t('settings.providers.models.accessWriteFailed');
+  const uninstallPlugin = useUninstallPlugin();
+  const uninstallProviderPlugin = () => {
+    const ghost = findInstalledGhostByInstanceId(readInstalledGhostsSnapshot(), engine.ghostId);
+    if (!ghost) {
+      toast.error(t('settings.ghosts.market.errors.stateChanged'));
+      return;
+    }
+    const marketId = ghost.publishingSource?.kind === 'public-market' ? ghost.publishingSource.pluginId : undefined;
+    void uninstallPlugin(ghost, ghost.manifest.name, marketId);
+  };
   const openPlugin = () => navigate(`/settings?tab=ghosts&ghost=${encodeURIComponent(engine.ghostId)}`);
   const unavailable = !engine.suspended && engine.availability.state === 'unavailable';
   // 与模型选择器同一时机：打开时请插件重新上报模型(主进程按插件冷却)，新列表随推送到达。
@@ -553,6 +566,11 @@ export function PluginEngineProviderDetail({
                 >
                   <Power size={18} className="mr-2.5" />
                   {t(engine.suspended ? 'settings.providers.menu.enableProvider' : 'settings.providers.menu.disableProvider')}
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem variant="danger" onSelect={uninstallProviderPlugin}>
+                  <Trash2 size={18} className="mr-2.5" />
+                  {t('settings.ghosts.detail.dangerTitle')}
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>

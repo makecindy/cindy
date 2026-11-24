@@ -30,7 +30,7 @@ vi.mock('react-i18next', async (importOriginal) => ({
   }),
 }));
 const toastError = vi.hoisted(() => vi.fn());
-vi.mock('@/lib/toast', () => ({ toast: { error: toastError } }));
+vi.mock('@/lib/toast', () => ({ toast: { error: toastError, success: vi.fn() } }));
 vi.mock('@/lib/scrollbarAutoHide', () => ({ flashScrollbar: () => {} }));
 
 import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
@@ -129,6 +129,37 @@ describe('plugin providers in the provider list', () => {
     expect(api.setPluginEnginePrefs).toHaveBeenLastCalledWith({ key: engineView.key, modelEffort: { id: 'gemini', effort: null }, ownerStamp: stamp });
     await userEvent.keyboard('{Escape}');
     await waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+
+  // Unit: a renamed, suspended provider must still confirm uninstall of its exact plugin instance.
+  it.each(['market', 'local'] as const)('confirms the plugin name before uninstalling a %s provider', async source => {
+    const { __resetInstalledGhostsStoreForTest } = await import('@/cindy-brain/useInstalledGhosts');
+    __resetInstalledGhostsStoreForTest();
+    const view = engine({ ghostId: '_root__sample', name: 'My provider', suspended: true });
+    const uninstallLocal = vi.fn().mockResolvedValue(undefined);
+    const uninstallMarket = vi.fn().mockResolvedValue(undefined);
+    const ghost = { manifest: { id: 'sample', name: 'Sample plugin', version: '1' }, namespace: null,
+      dir: '/plugins/_ns/_root/sample', approval: { state: 'approved', revision: 'a' },
+      publishingSource: source === 'market' ? { kind: 'public-market', pluginId: 'market-sample' } : { kind: 'local' } };
+    stubApi();
+    Object.assign(window.electronAPI, { ghosts: { listSync: () => ({ ghosts: [ghost] }), onChanged: () => () => {}, uninstall: uninstallLocal },
+      pluginMarket: { uninstall: uninstallMarket } });
+    renderDetail(view);
+    await chooseFromMenu('settings.ghosts.detail.dangerTitle');
+    expect(await screen.findByText('settings.ghosts.uninstallConfirm.title:{"name":"Sample plugin"}')).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: 'settings.ghosts.uninstallConfirm.cancel' }));
+    expect(uninstallLocal).not.toHaveBeenCalled();
+    expect(uninstallMarket).not.toHaveBeenCalled();
+    await chooseFromMenu('settings.ghosts.detail.dangerTitle');
+    await userEvent.click(await screen.findByRole('button', { name: 'settings.ghosts.uninstall' }));
+    const { dataOwnerId, generation } = getDataOwnerGeneration();
+    const confirmed = {
+      owner: { dataOwnerId, ownerGeneration: generation },
+      physicalId: '_ns/_root/sample', approval: 'approved:a', version: '1',
+    };
+    expect(uninstallMarket.mock.calls).toEqual(source === 'market' ? [['market-sample', confirmed]] : []);
+    expect(uninstallLocal.mock.calls).toEqual(source === 'local' ? [['_root__sample', confirmed]] : []);
+    __resetInstalledGhostsStoreForTest();
   });
 
   it('marks every row as coming from a plugin, shows whether it can run and opens the one clicked', async () => {

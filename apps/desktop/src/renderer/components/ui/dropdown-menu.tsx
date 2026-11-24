@@ -177,17 +177,25 @@ DropdownMenuItem.displayName = DropdownMenuPrimitive.Item.displayName;
 
 const DropdownMenuCheckboxItem = React.forwardRef<
   React.ComponentRef<typeof DropdownMenuPrimitive.CheckboxItem>,
-  React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.CheckboxItem>
->(({ className, children, checked, ...props }, ref) => {
+  React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.CheckboxItem> & {
+    /**
+     * `start` (default): the shared leading check column. `none`: the row keeps the
+     * checkbox semantics (menuitemcheckbox + aria-checked) while the caller draws its
+     * own checked mark, e.g. an approved trailing slot (DESIGN.md §4 Select & Dropdown).
+     */
+    indicator?: 'start' | 'none';
+  }
+>(({ className, children, checked, indicator = 'start', ...props }, ref) => {
   const row = useRowHighlight(className);
   return (
     <DropdownMenuPrimitive.CheckboxItem
       ref={ref}
       {...row.attrs}
-      className={cn(ROW_BASE, row.weight, 'cursor-default pl-8 pr-2', row.fill, className)}
+      className={cn(ROW_BASE, row.weight, 'cursor-default pr-2', indicator === 'start' ? 'pl-8' : 'pl-2', row.fill, className)}
       checked={checked}
       {...props}
     >
+      {indicator === 'start' && (
       <span className="absolute left-2 flex h-3.5 w-3.5 items-center justify-center">
         <DropdownMenuPrimitive.ItemIndicator>
           <svg
@@ -206,6 +214,7 @@ const DropdownMenuCheckboxItem = React.forwardRef<
           </svg>
         </DropdownMenuPrimitive.ItemIndicator>
       </span>
+      )}
       {withMenuLabels(children)}
     </DropdownMenuPrimitive.CheckboxItem>
   );
