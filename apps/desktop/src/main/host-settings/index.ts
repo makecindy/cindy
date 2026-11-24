@@ -72,6 +72,16 @@ export function getHostSettingsOperation(caller: HostSettingsCaller, id: string)
   if (!owner) throw new HostSettingsError('OWNER_CHANGED');
   return journal.get(id, settingsOwnerKey(owner), caller.id);
 }
+// Section stores take no revision precondition, so their check-and-write runs in order per owner
+// and domain: two controllers saving from the same revision cannot both succeed.
+const sectionWrites = new Map<string, Promise<void>>();
+async function inSectionOrder<T>(key: string | null, write: () => Promise<T>): Promise<T> {
+  if (key === null) return write();
+  const run = (sectionWrites.get(key) ?? Promise.resolve()).then(write);
+  const settled = run.then(() => undefined, () => undefined);
+  sectionWrites.set(key, settled);
+  try { return await run; } finally { if (sectionWrites.get(key) === settled) sectionWrites.delete(key); }
+}
 export async function updateHostSettings(caller: HostSettingsCaller, input: HostSettingsUpdate): Promise<HostSettingsReceipt> {
   caller.assertCurrent();
   const owner = currentSettingsOwner();
@@ -82,7 +92,8 @@ export async function updateHostSettings(caller: HostSettingsCaller, input: Host
   try { change = normalizeHostSettingsChange({ domain: input.domain, set: input.set, clear: input.clear }); }
   catch { throw new HostSettingsError('INVALID_PARAMS'); }
   const assertCurrent = () => { assertSettingsOwner(owner); caller.assertCurrent(); };
-  return journal.execute({ operationId: input.operationId, owner: settingsOwnerKey(owner), caller: caller.id, domain: input.domain, revision: input.expectedRevision, normalizedChange: { ...change, ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}) }, assertCurrent, perform: async () => {
+  const sectionKey = isSectionDomain(input.domain) ? JSON.stringify([settingsOwnerKey(owner), input.domain, input.workspaceId ?? null]) : null;
+  return journal.execute({ operationId: input.operationId, owner: settingsOwnerKey(owner), caller: caller.id, domain: input.domain, revision: input.expectedRevision, normalizedChange: { ...change, ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}) }, assertCurrent, perform: () => inSectionOrder(sectionKey, async () => {
     const before = await inspectDomain(input.domain, input.workspaceId);
     assertCurrent();
     if (before.status !== 'ready') throw new HostSettingsError('UNREADABLE');
@@ -133,6 +144,6 @@ export async function updateHostSettings(caller: HostSettingsCaller, input: Host
     } catch { applied = 'failed'; }
     if (applicationFailed) applied = 'failed';
     return { operationId: input.operationId, domain: input.domain, status: 'saved', saved: true, application: applied, revision };
-  } });
+  }) });
 }
 export { HostSettingsError };

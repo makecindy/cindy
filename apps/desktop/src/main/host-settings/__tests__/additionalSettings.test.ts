@@ -107,6 +107,16 @@ describe('expanded settings use the real native stores', () => {
     expect(readCollaborationSettings()).toMatchObject({ workerSoftLimit: 5, workerHardLimit: 8 });
     expect(() => normalizeHostSettingsChange({ domain: 'agentResource', set: { maxConcurrentCommands: 65 } })).toThrow();
   });
+  it('lets only one of two controllers saving a section from the same revision succeed', async () => {
+    // Both read the same revision before either write lands.
+    const first = await request('memory', { set: { maker: false } });
+    const second = await request('memory', { set: { pi: false } });
+    expect(second.expectedRevision).toBe(first.expectedRevision);
+    const receipts = await Promise.all([updateHostSettings(caller, first), updateHostSettings(caller, second)]);
+    expect(receipts.filter(receipt => receipt.saved)).toHaveLength(1);
+    expect(receipts.find(receipt => !receipt.saved)).toMatchObject({ status: 'rejected', code: 'CONFLICT' });
+    expect(readMemorySettings()).toMatchObject({ maker: false, pi: true });
+  });
   it('terminal writes are seen by existing native consumers and reset clears the override', async () => {
     // Only a shell present on this host is accepted (`sh` does not exist on Windows).
     const shell = probeAvailableShells().find(item => item.id !== 'auto')!.id;
