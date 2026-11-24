@@ -126,6 +126,7 @@ type NamespaceRewritePlan = {
   bareWireNames: Set<string>;
   identities: Map<string, string>;
   selectors: Map<string, string | null>;
+  currentWireNames: Set<string>;
   /**
    * Preferred wire name -> allocated name, for children displaced by a bare declaration. The
    * custom-tool layer records wire names before this pass runs, so a displaced custom child has to
@@ -181,18 +182,21 @@ type LoweredNamespaceChild = {
   childName: string;
   identity: string;
   preferred: string;
+  current: boolean;
 };
 
-function buildRewritePlan(groups: readonly unknown[][]): NamespaceRewritePlan {
+function buildRewritePlan(groups: readonly unknown[][], currentGroupCount = groups.length): NamespaceRewritePlan {
   const aliases = new Map<string, RoutedNamespaceToolIdentity>();
   const bareWireNames = new Set<string>();
   const identities = new Map<string, string>();
   const selectors = new Map<string, string | null>();
+  const currentWireNames = new Set<string>();
   const wireOwners = new Map<string, string>();
   const renamedWireNames = new Map<string, string>();
   const renamedChildren: { preferred: string; declaredType: unknown }[] = [];
 
-  for (const group of groups) {
+  for (const [index, group] of groups.entries()) {
+    const current = index < currentGroupCount;
     for (const tool of group) {
       if (isPlainObject(tool) && tool.type !== "namespace" && isRepresentableName(tool.name)) {
         // A bare declaration is the reserved group's flattened form, so it claims that identity:
@@ -200,7 +204,10 @@ function buildRewritePlan(groups: readonly unknown[][]): NamespaceRewritePlan {
         // collision, and `promoteClientLoadedTools` produces exactly that shape.
         wireOwners.set(tool.name, loweredIdentity(BUILTIN_FUNCTIONS_NAMESPACE, tool.name));
         bareWireNames.add(tool.name);
-        addSelector(selectors, tool.name, tool.name);
+        if (current) {
+          addSelector(selectors, tool.name, tool.name);
+          currentWireNames.add(tool.name);
+        }
       }
       // Codex's reserved group is another spelling of bare declarations. Reserve its names
       // before real namespaces allocate, but leave emission to the group's existing dedup path.
@@ -209,7 +216,10 @@ function buildRewritePlan(groups: readonly unknown[][]): NamespaceRewritePlan {
         for (const child of parsed.children) {
           const name = child.name as string;
           wireOwners.set(name, loweredIdentity(BUILTIN_FUNCTIONS_NAMESPACE, name));
-          addSelector(selectors, name, name);
+          if (current) {
+            addSelector(selectors, name, name);
+            currentWireNames.add(name);
+          }
         }
       }
     }
@@ -219,7 +229,7 @@ function buildRewritePlan(groups: readonly unknown[][]): NamespaceRewritePlan {
   // Which identities want each preferred wire name. The same logical tool may be declared in
   // several containers, so identity — not declaration — is what makes a name contested.
   const wantedBy = new Map<string, Set<string>>();
-  for (const group of groups) {
+  for (const [index, group] of groups.entries()) {
     for (const tool of group) {
       const parsed = parseNamespaceGroup(tool);
       if (!parsed) continue;
@@ -227,7 +237,7 @@ function buildRewritePlan(groups: readonly unknown[][]): NamespaceRewritePlan {
         const childName = child.name as string;
         const identity = loweredIdentity(parsed.namespace, childName);
         const preferred = loweredWireName(parsed.namespace, childName);
-        children.push({ namespace: parsed.namespace, child, childName, identity, preferred });
+        children.push({ namespace: parsed.namespace, child, childName, identity, preferred, current: index < currentGroupCount });
         if (parsed.namespace === BUILTIN_FUNCTIONS_NAMESPACE) continue;
         const wanted = wantedBy.get(preferred);
         if (wanted) wanted.add(identity);
@@ -271,9 +281,12 @@ function buildRewritePlan(groups: readonly unknown[][]): NamespaceRewritePlan {
 
   for (const entry of children) {
     const wireName = identities.get(entry.identity)!;
-    addSelector(selectors, wireName, wireName);
-    addSelector(selectors, `${entry.namespace}.${entry.childName}`, wireName);
-    addSelector(selectors, entry.childName, wireName);
+    if (entry.current) {
+      addSelector(selectors, wireName, wireName);
+      addSelector(selectors, `${entry.namespace}.${entry.childName}`, wireName);
+      addSelector(selectors, entry.childName, wireName);
+      currentWireNames.add(wireName);
+    }
     if (entry.namespace === BUILTIN_FUNCTIONS_NAMESPACE || aliases.has(wireName)) continue;
     // A child declared `custom` stays custom; everything else lowers to a function, which is how
     // `buildTools` flattens it upstream.
@@ -281,7 +294,7 @@ function buildRewritePlan(groups: readonly unknown[][]): NamespaceRewritePlan {
     aliases.set(wireName, { namespace: entry.namespace, name: entry.childName, kind });
   }
 
-  return { aliases, bareWireNames, identities, selectors, renamedWireNames, renamedChildren };
+  return { aliases, bareWireNames, identities, selectors, currentWireNames, renamedWireNames, renamedChildren };
 }
 
 /**
@@ -372,8 +385,9 @@ function rewriteNamedSelector(
     return wireName === undefined || wireName === value.name ? value : { ...value, name: wireName };
   }
   const { namespace: _dropped, ...rest } = value;
-  const wireName = plan.identities.get(loweredIdentity(namespace, value.name))
-    ?? loweredWireName(namespace, value.name);
+  const allocated = plan.identities.get(loweredIdentity(namespace, value.name));
+  const wireName = allocated !== undefined && (!bareFallback || plan.currentWireNames.has(allocated))
+    ? allocated : loweredWireName(namespace, value.name);
   return { ...rest, name: wireName };
 }
 
@@ -508,7 +522,11 @@ export function rewriteRoutedNamespaceToolsForUpstream(
     ? [...currentGroups, ...groups.filter(group => group !== body.tools && group !== currentInlineTools)]
     : groups;
   const originalBareCustomNames = bareCustomNames ?? collectBareCustomToolNames(body);
-  const plan = buildRewritePlan(priorityGroups);
+  const plan = buildRewritePlan(priorityGroups, currentInlineTools ? currentGroups.length : undefined);
+  // Search-loaded bare tools keep their own short selectors after their definitions are serialized.
+  for (const name of currentBareSelectors?.keys() ?? []) {
+    if (isRepresentableName(name)) addSelector(plan.selectors, name, name);
+  }
   const currentBareWireNames = currentInlineIndex === undefined ? undefined : new Set<string>();
   const currentChildNames = new Set<string>();
   if (currentBareWireNames) {
@@ -612,7 +630,10 @@ export function rewriteRoutedNamespaceToolsForUpstream(
     const originals = originalChoice.tools;
     authorizationChoice = { ...authorizationChoice, tools: authorizationChoice.tools.map((tool, index) => withOriginalKind(tool, originals[index])) };
   }
-  const aliases = authorizedAliases(plan.aliases, authorizationChoice);
+  const selectorAliases = isPlainObject(authorizationChoice)
+    ? new Map([...plan.aliases].filter(([wireName]) => plan.currentWireNames.has(wireName)))
+    : plan.aliases;
+  const aliases = authorizedAliases(selectorAliases, authorizationChoice);
   const ambiguousDotted = collectAmbiguousDottedAliases(groups);
   // Authorize canonical identities first, then add only unambiguous spellings.
   // Selection cannot hide a collision elsewhere in the original declaration set.

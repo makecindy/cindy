@@ -350,6 +350,50 @@ describe('request-owned Responses compatibility', () => {
     expect(request.tool_choice).toEqual(allowed ? { type: 'allowed_tools', tools: [selector] } : selector);
   });
 
+  // #11199: the bare owner loaded by this turn's search uses its original custom call type.
+  it.each(['application/json', 'text/event-stream'])('restores a search-loaded bare custom call (%s)', async contentType => {
+    const adapter = createCodexResponsesCompatibilityAdapter();
+    const name = 'workspace__read';
+    const request = adapter.adaptRequest({
+      tools: [{ type: 'namespace', name: 'workspace', tools: [{ type: 'function', name: 'read' }] }],
+      input: [
+        { type: 'additional_tools', tools: [{ type: 'function', name }] },
+        { type: 'additional_tools', tools: [] },
+        { type: 'tool_search_output', tools: [{ type: 'custom', name, description: 'Read a location' }] },
+      ],
+      tool_choice: { type: 'custom', name },
+    }, 10106, undefined, true) as { tool_choice: unknown };
+    expect(request.tool_choice).toEqual({ type: 'function', name });
+    const response = { status: 'completed', output: [{ type: 'function_call', name, call_id: 'loaded', arguments: '{"input":"text"}' }] };
+    const sse = contentType === 'text/event-stream';
+    const wire = sse ? `data: ${JSON.stringify({ type: 'response.completed', response })}\n\n` : JSON.stringify(response);
+    const transform = adapter.createResponseTransform(10106, { contentType, contentEncoding: '' });
+    const text = transform ? await responseText(transform, wire) : wire;
+    expect((sse ? JSON.parse(text.trim().slice(6)).response : JSON.parse(text)).output).toEqual([
+      { type: 'custom_tool_call', name, call_id: 'loaded', input: 'text' },
+    ]);
+  });
+
+  // Replayed tool definitions still allocate names for old input call items, without selecting them.
+  it.each([false, true])('leaves a selector unresolved for replay-only tools (allowed=%s)', allowed => {
+    const adapter = createCodexResponsesCompatibilityAdapter();
+    const selector = { type: 'function', name: 'read' };
+    const toolChoice = allowed ? { type: 'allowed_tools', tools: [selector] } : selector;
+    const request = adapter.adaptRequest({
+      input: [
+        { type: 'additional_tools', tools: [
+          { type: 'function', name: 'workspace__read' },
+          { type: 'namespace', name: 'workspace', tools: [{ type: 'function', name: 'read' }] },
+        ] },
+        { type: 'function_call', name: 'read', namespace: 'workspace', call_id: 'previous', arguments: '{}' },
+        { type: 'additional_tools', tools: [] },
+      ],
+      tool_choice: toolChoice,
+    }, 10107, undefined, true) as { input: unknown[]; tool_choice: unknown };
+    expect(request.tool_choice).toEqual(toolChoice);
+    expect(request.input[1]).toMatchObject({ type: 'function_call', name: 'workspace__read_2' });
+  });
+
   // Replayed search output must not invalidate the current turn's search-loaded integer schema.
   it.each(['application/json', 'text/event-stream'])('repairs with the current search definition (%s)', async contentType => {
     const adapter = createCodexResponsesCompatibilityAdapter();

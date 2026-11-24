@@ -87,7 +87,7 @@ function collectNativeToolSelectors(body: unknown) {
   for (const [name, tool] of historical) {
     if (!namespaced.has(name)) namespaced.set(name, tool);
   }
-  return { bare, namespaced };
+  return { bare, namespaced, loadedBare };
 }
 
 function disambiguateNativeToolChoice(original: unknown, forwarded: unknown, loweredCustom: unknown): unknown {
@@ -142,9 +142,19 @@ export function prepareResponsesCompatibility(body: unknown, policy: ResponsesCo
   const catalog = isPlainObject(body) && Array.isArray(input) && currentInlineIndex >= 0
     ? { ...body, input: input.filter((item, index) => index === currentInlineIndex || !isPlainObject(item) || item.type !== 'additional_tools') }
     : body;
-  const bareCustomNames = collectBareCustomToolNames(catalog);
+  const currentSelectors = collectNativeToolSelectors(body);
+  const loadedCustomTools = [...currentSelectors.loadedBare.values()]
+    .filter(tool => tool?.type === 'custom' && currentSelectors.bare.get(tool.name) === tool);
+  // Search lowering serializes the definitions. Keep the effective loaded bare kinds for restoration.
+  const restorationCatalog = loadedCustomTools.length > 0 && isPlainObject(catalog)
+    ? { ...catalog, input: [
+        ...(Array.isArray(catalog.input) ? catalog.input : []),
+        { type: 'additional_tools', tools: loadedCustomTools },
+      ] }
+    : catalog;
+  const bareCustomNames = collectBareCustomToolNames(restorationCatalog);
   const custom = policy.customTools && policy.customTools !== 'native'
-    ? rewriteRoutedCustomToolsForUpstream(body, policy.customTools === 'functions' ? false : undefined, catalog)
+    ? rewriteRoutedCustomToolsForUpstream(body, policy.customTools === 'functions' ? false : undefined, restorationCatalog)
     : { body, names: new Set<string>(), repairNames: new Set<string>() };
   const search = policy.toolSearch === 'function'
     ? rewriteRoutedToolSearchForUpstream(custom.body)
@@ -153,7 +163,7 @@ export function prepareResponsesCompatibility(body: unknown, policy: ResponsesCo
   const namespace = policy.namespaceTools === 'functions'
     ? rewriteRoutedNamespaceToolsForUpstream(search.body, custom.names, bareCustomNames, canonicalNamespaceKinds,
         isPlainObject(body) ? body.tool_choice : undefined, currentInlineIndex,
-        isPlainObject(body) && isPlainObject(body.tool_choice) ? collectNativeToolSelectors(body).bare : undefined)
+        currentSelectors.bare)
     : {
         body: custom.body !== body ? disambiguateNativeToolChoice(body, search.body, custom.body) : search.body,
         aliases: new Map(), renamedWireNames: new Map<string, string>(), renamedKinds: new Map<string, 'function' | 'custom'>(),
@@ -183,7 +193,7 @@ export function prepareResponsesCompatibility(body: unknown, policy: ResponsesCo
   for (const schema of schemas.byIdentity.values()) {
     if (!schema.namespace) bareFunctionNames.add(schema.name);
   }
-  const scrubAuthorization = collectSelfNamedNamespaceScrubAuthorization(catalog, new Set([...custom.names, ...custom.repairNames]), bareFunctionNames);
+  const scrubAuthorization = collectSelfNamedNamespaceScrubAuthorization(restorationCatalog, new Set([...custom.names, ...custom.repairNames]), bareFunctionNames);
   const restoreNamespace = (text: string) => restoreRoutedNamespaceCallsInJson(text, namespace.aliases);
   return {
     body: policy.namespaceTools === 'functions' ? stripCanonicalOnlyToolFields(namespace.body, false) : namespace.body,

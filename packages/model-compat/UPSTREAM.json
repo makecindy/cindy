@@ -90,7 +90,7 @@
       "source": "src/responses/namespace-tool-compat.ts",
       "target": "src/upstream/responses/namespace-tool-compat.ts",
       "upstreamSha256": "29ab7614e0757cde8bf81ad86da407afc8cb6d05027da22375fcca9a95de63b0",
-      "portedSha256": "d72fdaa11c5d9a92263bbeb3565feddf38a0f9f59f65c01682e650a6e899c6f1"
+      "portedSha256": "f54b1edd878470115fdcf6c303229e85aca507a9de5abb4b28bf15b8d2a74c02"
     },
     {
       "source": "src/responses/tool-groups.ts",
