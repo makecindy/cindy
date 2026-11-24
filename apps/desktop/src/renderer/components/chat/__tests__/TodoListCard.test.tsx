@@ -5,8 +5,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { InlinePlanCard, TodoListCard } from '../TodoListCard';
 import { registerComposerEscapeLayer } from '../composerEscapeLayers';
+import { RailPanelShell } from '../../../features/cc-agent/CCAgentSidebarUpper';
 
-vi.mock('react-i18next', () => ({
+vi.mock('react-i18next', async (importOriginal) => ({
+  ...await importOriginal<typeof import('react-i18next')>(),
   useTranslation: () => ({
     t: (key: string, values?: { current: number; total: number }) =>
       key === 'chat.planPill.dismiss' ? 'Close Plan' : `Step ${values?.current} / ${values?.total}`,
@@ -188,6 +190,25 @@ describe('TodoListCard flyout interaction', () => {
     } finally {
       unregister();
     }
+  });
+
+  // #12437 (unit): the same primary rail stays mounted when its section changes.
+  it('yields Escape to the rail after switching from Projects to Dialogues', () => {
+    const view = (section: 'projects' | 'dialogues') => (
+      <>
+        <TodoListCard todos={TODOS} />
+        <RailPanelShell anchorRight={0} anchorTop={0} level={1} section={section} onEnter={() => {}} onLeave={() => {}}>
+          {section}
+        </RailPanelShell>
+      </>
+    );
+    const { rerender } = render(view('projects'));
+    const plan = screen.getByRole('button', { name: 'Step 1 / 2' });
+    fireEvent.click(plan, { detail: 0 });
+    rerender(view('dialogues'));
+
+    expect(fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' })).toBe(true);
+    expect(plan.getAttribute('aria-expanded')).toBe('true');
   });
 
   // #12437 (unit): a collapsed document rail remains mounted and is clipped.

@@ -9,6 +9,7 @@ import {
 } from '@/features/bots/botFollowScopes';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 import { ErrorNotice } from '@/components/ui/error-notice';
+import type { RailPanelSection } from './sidebar/railPanelStore';
 import { isForegroundComposerEscapeLayer, registerComposerEscapeLayer } from '@/components/chat/composerEscapeLayers';
 /**
  * CCAgentFeature 的 Sidebar 上半内容。
@@ -4234,10 +4235,11 @@ const RAIL_PROJECT_KEEPALIVE_SELECTOR =
 
 /** rail 面板容器:portal + fixed + 视口钳制。mouseleave 时若指针落入 Radix
  *  popper / 对话框(行内右键菜单、移动子菜单、确认弹窗)不视为离开。 */
-function RailPanelShell({
+export function RailPanelShell({
   anchorRight,
   anchorTop,
   level,
+  section,
   onEnter,
   onLeave,
   children,
@@ -4245,6 +4247,7 @@ function RailPanelShell({
   anchorRight: number;
   anchorTop: number;
   level: 1 | 2;
+  section?: RailPanelSection;
   onEnter: () => void;
   onLeave: () => void;
   children: ReactNode;
@@ -4262,7 +4265,7 @@ function RailPanelShell({
   useLayoutEffect(() => {
     const panel = ref.current;
     if (level === 1 && panel) return registerComposerEscapeLayer(panel);
-  }, [level]);
+  }, [level, section]);
 
   return createPortal(
     <div
@@ -4728,6 +4731,7 @@ function RailPanels({
         anchorRight={panelState.anchor.right}
         anchorTop={panelState.anchor.top}
         level={1}
+        section={panelState.openSection}
         onEnter={() => railPanelStore.cancelClose()}
         onLeave={() => railPanelStore.scheduleClose()}
       >
