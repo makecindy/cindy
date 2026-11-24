@@ -1,9 +1,10 @@
 import { Plus, ChevronUp } from 'lucide-react';
-import { lazy, Suspense, useState } from 'react';
+import { lazy, Suspense, useMemo, useState } from 'react';
 import type { useChatReactions } from './useChatReactions';
 import { ChatReactionMotion, ReactionGlyph } from './ChatReactionMotion';
-import { ChatReactionButton } from './ChatReactionButton';
+import { ChatReactionButton, type ReactorReads } from './ChatReactionButton';
 import { useTranslation } from 'react-i18next';
+import { Tip } from '@/components/ui/tooltip';
 import { BubbleHoverToolbar, MessageActionBar } from '@/components/chat/MessageActionBar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { shareSelectionStore } from '@/components/chat/shareSelectionStore';
@@ -35,11 +36,12 @@ interface ChatMessageActionProps {
 
 export function ChatMessageReactions({ groupId, message, members, reactionRevision, align = 'left', controls }: Pick<ChatMessageActionProps, 'groupId' | 'message' | 'members' | 'reactionRevision' | 'align' | 'controls'>) {
   const { t } = useTranslation();
-  const { reactions, gesture } = controls;
+  const { owner, reactions, gesture } = controls;
+  const reactorReads: ReactorReads = useMemo(() => new Map(), [groupId, message.id, owner, reactionRevision]);
   if (!reactions.length) return null;
   const stacked = reactions.length > 1;
   const badges = reactions.map(reaction => (
-    <ChatReactionButton key={reaction.emoji} groupId={groupId} messageId={message.id} reaction={reaction} revision={reactionRevision} members={members}
+    <ChatReactionButton key={reaction.emoji} groupId={groupId} messageId={message.id} reads={reactorReads} reaction={reaction} revision={reactionRevision} members={members}
       optimistic={!message.reactions?.includes(reaction)} compact={!stacked} disabled={!groupId}
       gesture={!stacked && gesture?.emoji === reaction.emoji ? gesture : undefined}
       onFinishGesture={controls.finishGesture} onToggle={() => void controls.toggle(reaction.emoji)} />
@@ -79,10 +81,12 @@ function ReactionPicker({ controls, onChoose }: { controls: ReturnType<typeof us
   return <>
     <div className="flex items-center justify-between gap-0.5">
       {quickReactions.map(choice)}
-      <button type="button" className={iconClass} aria-expanded={expanded} aria-label={t(key('moreReactions'))}
-        onClick={() => setExpanded(!expanded)}>
-        {expanded ? <ChevronUp aria-hidden className="size-4" /> : <Plus aria-hidden className="size-4" />}
-      </button>
+      <Tip text={t(key('moreReactions'))}>
+        <button type="button" className={iconClass} aria-expanded={expanded} aria-label={t(key('moreReactions'))}
+          onClick={() => setExpanded(!expanded)}>
+          {expanded ? <ChevronUp aria-hidden className="size-4" /> : <Plus aria-hidden className="size-4" />}
+        </button>
+      </Tip>
     </div>
     {expanded && <Suspense fallback={<div className="chat-full-reaction-space" aria-busy="true" />}>
       <FullReactionPicker onChoose={onChoose} />

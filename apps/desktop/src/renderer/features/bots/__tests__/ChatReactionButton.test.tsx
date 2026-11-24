@@ -5,6 +5,7 @@ import type { ReactNode } from 'react';
 import { Tooltip } from '@/components/ui/tooltip';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { toast } from '@/lib/toast';
+import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { ChatReactionReads } from '../useChatReactions';
 import { GroupReactionFixture } from './GroupReactionFixture';
 import type { BotGroupMemberView, BotGroupMessageView, ChatReactor } from '../../../../shared/botGroupChat';
@@ -22,9 +23,11 @@ vi.mock('react-i18next', () => ({ useTranslation: () => ({ i18n: { language: 'en
     return name;
   } }) }));
 vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
-vi.mock('@/contexts/dataOwnerGeneration', () => ({
-  getDataOwnerGeneration: () => 1, isDataOwnerGenerationCurrent: () => mocks.ownerCurrent,
-}));
+vi.mock('@/contexts/dataOwnerGeneration', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@/contexts/dataOwnerGeneration')>();
+  return { ...original, isDataOwnerGenerationCurrent: (owner: ReturnType<typeof original.getDataOwnerGeneration>) =>
+    mocks.ownerCurrent && original.isDataOwnerGenerationCurrent(owner) };
+});
 
 const reactor = (actorId: string, name: string | null, extra: Partial<ChatReactor> = {}): ChatReactor =>
   ({ actorId, name, isSelf: false, formerMember: false, ...extra });
@@ -272,6 +275,59 @@ describe('reaction avatars', () => {
     expect(mocks.react).toHaveBeenCalledTimes(1);
     await act(async () => acknowledge());
     expect(mocks.react.mock.calls.map(([request]) => request.present)).toEqual([true, false]);
+  });
+
+  it('reuses pending and completed reactor reads when the stacked badge reopens', async () => {
+    let resolve!: (value: unknown) => void;
+    const pending = new Promise(r => { resolve = r; });
+    mocks.reactors.mockReturnValue(pending);
+    render(actions([{ emoji: '👍', count: 1, me: false }, { emoji: '❤️', count: 1, me: false }]));
+    const toggle = screen.getByRole('button', { name: '👍 ❤️ · 2' });
+    expect(mocks.reactors).not.toHaveBeenCalled();
+    fireEvent.click(toggle);
+    expect(mocks.reactors).toHaveBeenCalledTimes(2);
+    fireEvent.click(toggle);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    fireEvent.click(toggle);
+    await act(async () => resolve({ ok: true, reactors: [reactor('z', 'Zoe')] }));
+    expect(badge().getAttribute('aria-label')).toContain('Zoe');
+    fireEvent.click(toggle);
+    fireEvent.click(toggle);
+    await waitFor(() => expect(badge().getAttribute('aria-label')).toContain('Zoe'));
+    expect(mocks.reactors).toHaveBeenCalledTimes(2);
+  });
+
+  it('holds an acknowledged undo until a read started after that write confirms it', async () => {
+    const reads = new ChatReactionReads();
+    const props = { reactionReads: reads };
+    const initial = [{ emoji: '👍', count: 4, me: false }];
+    const added = [{ emoji: '👍', count: 5, me: true }];
+    let acknowledge!: () => void;
+    mocks.react.mockImplementationOnce(() => new Promise(r => { acknowledge = () => r({ ok: true }); }));
+    const view = render(actions(initial, props));
+    fireEvent.click(badge());
+    const stale = reads.beginRead();
+    fireEvent.click(badge());
+    await act(async () => acknowledge());
+    act(() => stale([message(added)]));
+    view.rerender(actions(added, props));
+    expect(badge().getAttribute('aria-pressed')).toBe('false');
+    act(() => reads.beginRead()([message(added)]));
+    expect(badge().getAttribute('aria-pressed')).toBe('false');
+    act(() => reads.beginRead()([message(initial)]));
+    view.rerender(actions(initial, props));
+    view.rerender(actions(added, props));
+    expect(badge().getAttribute('aria-pressed')).toBe('true');
+    expect(mocks.react).toHaveBeenCalledTimes(2);
+  });
+
+  it('accepts a new click when the same owner advances generation with the row still mounted', async () => {
+    setDataOwnerGeneration('owner', 1);
+    render(actions([{ emoji: '👍', count: 4, me: false }]));
+    act(() => setDataOwnerGeneration('owner', 2));
+    await act(async () => fireEvent.click(badge()));
+    expect(badge().getAttribute('aria-pressed')).toBe('true');
+    expect(mocks.react).toHaveBeenCalledTimes(1);
   });
 
   it('drops a read that settles after the account changed', async () => {

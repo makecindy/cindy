@@ -507,7 +507,7 @@ export function MessageActionBar({
       </Tip>
       <PopoverContent side="top" align={align === 'right' ? 'start' : 'end'}
         collisionBoundary={reactionAnchor?.closest('[data-testid="bot-group-timeline"], .thread-panel') ?? undefined} collisionPadding={8} sideOffset={8}
-        className="w-fit rounded-2xl p-1.5" aria-label={reactionAction.label}>
+        className="w-fit p-1.5" aria-label={reactionAction.label}>
         {reactionAction.content}
       </PopoverContent>
     </Popover>

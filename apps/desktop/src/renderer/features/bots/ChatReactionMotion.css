@@ -40,16 +40,17 @@
 }
 
 .chat-reaction-flight[data-from-picker] {
+  --chat-reaction-landing-delay: var(--motion-enter);
   animation: chat-reaction-flight var(--motion-enter) var(--motion-ease-move) both;
 }
 
 .chat-reaction-landing {
   font-size: 30px;
-  animation: chat-reaction-landing 780ms linear both;
+  animation: chat-reaction-landing var(--motion-enter) var(--motion-ease-out) var(--chat-reaction-landing-delay, 0s) both;
 }
 
 .chat-reaction-glyph[data-playing] .chat-reaction-strip {
-  animation: chat-reaction-frames 720ms steps(29, end) both;
+  animation: chat-reaction-frames var(--motion-enter) steps(29, end) var(--chat-reaction-landing-delay, 0s) both;
 }
 
 @keyframes chat-reaction-flight {

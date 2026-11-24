@@ -11,6 +11,7 @@ import type { BotGroupMemberView, BotGroupMessageView, ChatReactor } from '../..
 
 type Reaction = NonNullable<BotGroupMessageView['reactions']>[number];
 type Loaded = { summary: string; reactors: ChatReactor[] | null };
+export type ReactorReads = Map<string, { summary: string; request: Promise<ChatReactor[] | null> }>;
 
 const key = (name: string) => `bots.groupChat.server.${name}`;
 const REACTION_AVATAR_LIMIT = 3;
@@ -32,15 +33,16 @@ function reactorNames(reactors: ChatReactor[], t: TFunction, language: string) {
   return new Intl.ListFormat(language, { style: 'long', type: 'conjunction' }).format(labels);
 }
 
-export function ChatReactionButton({ groupId, messageId, reaction, revision = 0, members, disabled, onToggle, gesture, onFinishGesture, optimistic = false, compact = false }: {
+export function ChatReactionButton({ groupId, messageId, reaction, revision = 0, members, disabled, onToggle, gesture, onFinishGesture, reads, optimistic = false, compact = false }: {
   groupId?: string; messageId: string; reaction: Reaction; revision?: string | number; members?: readonly BotGroupMemberView[]; disabled: boolean; onToggle: () => void;
   gesture?: ReactionGesture; onFinishGesture?: (gesture: ReactionGesture) => void;
-  optimistic?: boolean; compact?: boolean;
+  optimistic?: boolean; compact?: boolean; reads?: ReactorReads;
 }) {
   const { t, i18n } = useTranslation();
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   // The revision distinguishes two sets of reactors with the same count.
-  const summary = `${reaction.count}:${reaction.me}:${revision}`;
+  const owner = getDataOwnerGeneration();
+  const summary = JSON.stringify([owner, groupId, messageId, reaction.emoji, reaction.count, reaction.me, revision]);
   const wantsAvatars = !optimistic && !!groupId && reaction.count > 0 && reaction.count <= REACTION_AVATAR_LIMIT;
   // Only badges near the viewport read, so opening a long history does not fire one read per badge.
   const badgeRef = useRef<HTMLButtonElement>(null);
@@ -56,14 +58,18 @@ export function ChatReactionButton({ groupId, messageId, reaction, revision = 0,
   useEffect(() => {
     if (!wantsAvatars || !groupId || !nearViewport || loadedSummary === summary) return;
     let superseded = false;
-    const owner = getDataOwnerGeneration();
-    const settle = (reactors: ChatReactor[] | null) => {
+    let entry = reads?.get(reaction.emoji);
+    if (entry?.summary !== summary) {
+      const request = window.electronAPI.maker.chatServer.reactors({ groupId, messageId, emoji: reaction.emoji })
+        .then(result => result.ok ? result.reactors : null, () => null);
+      entry = { summary, request };
+      reads?.set(reaction.emoji, entry);
+    }
+    void entry.request.then(reactors => {
       if (!superseded && isDataOwnerGenerationCurrent(owner)) setLoaded({ summary, reactors });
-    };
-    window.electronAPI.maker.chatServer.reactors({ groupId, messageId, emoji: reaction.emoji })
-      .then(result => settle(result.ok ? result.reactors : null), () => settle(null));
+    });
     return () => { superseded = true; };
-  }, [wantsAvatars, groupId, nearViewport, loadedSummary, messageId, reaction.emoji, summary]);
+  }, [wantsAvatars, groupId, nearViewport, loadedSummary, messageId, owner, reaction.emoji, reads, summary]);
   const current = loaded?.summary === summary ? loaded : null;
   const showAvatars = wantsAvatars && (!current || current.reactors?.length === reaction.count);
   const reactors = showAvatars && current?.reactors ? reactorOrder(current.reactors.map(r => {

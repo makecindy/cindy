@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useState, useSyncExternalStore } from 'react';
 import type { BotGroupMessageView } from '../../../shared/botGroupChat';
-import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, subscribeDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 
 type Reactions = NonNullable<BotGroupMessageView['reactions']>;
 const empty: Reactions = [];
@@ -10,24 +10,25 @@ const ECHO_TIMEOUT_MS = 10_000;
 export type ReactionGesture = { emoji: string; from?: { x: number; y: number } };
 type Edit = { desired: boolean; writing: boolean; expiresAt?: number; stopWaiting?: () => void };
 
-/** A view's existing history reads settle failed reactions, even if the server returns an
- * unchanged row. Capture waiters at read start so an older response cannot undo a later tap. */
-export class ChatReactionReads {
-  private readonly waiting = new Map<() => void, string>();
+type ReactionRow = Pick<BotGroupMessageView, 'id' | 'reactions'>;
+type SettleRead = (row: ReactionRow) => boolean;
 
-  afterNextRead(messageId: string, settle: () => void) {
+/** Only reads started after the write may settle its local choice. */
+export class ChatReactionReads {
+  private readonly waiting = new Map<SettleRead, string>();
+
+  afterNextRead(messageId: string, settle: SettleRead) {
     this.waiting.set(settle, messageId);
     return () => { this.waiting.delete(settle); };
   }
 
   beginRead() {
     const waiting = [...this.waiting];
-    return (messages: readonly { id: string }[]) => {
+    return (messages: readonly ReactionRow[]) => {
       for (const [settle, id] of waiting) {
-        if (this.waiting.has(settle) && messages.some(message => message.id === id)) {
-          this.waiting.delete(settle);
-          settle();
-        }
+        if (!this.waiting.has(settle)) continue;
+        const row = messages.find(message => message.id === id);
+        if (row && settle(row)) this.waiting.delete(settle);
       }
     };
   }
@@ -35,7 +36,7 @@ export class ChatReactionReads {
 
 export function useChatReactions(groupId: string | undefined, message: BotGroupMessageView,
   onChanged: (id: string) => void, reads?: ChatReactionReads) {
-  const owner = getDataOwnerGeneration();
+  const owner = useSyncExternalStore(subscribeDataOwnerGeneration, getDataOwnerGeneration);
   const messageId = message.id;
   const server = message.reactions ?? empty;
   const edits = useMemo(() => new Map<string, Edit>(), [groupId, messageId, owner, reads]);
@@ -55,7 +56,9 @@ export function useChatReactions(groupId: string | undefined, message: BotGroupM
     let nextExpiry = Infinity;
     for (const [emoji, edit] of edits) {
       if (edit.writing || edit.expiresAt === undefined) continue;
-      if (edit.desired === server.some(r => r.emoji === emoji && r.me) || Date.now() >= edit.expiresAt) {
+      const echoedWithoutReader = !reads && edit.desired === server.some(r => r.emoji === emoji && r.me);
+      if (echoedWithoutReader || Date.now() >= edit.expiresAt) {
+        edit.stopWaiting?.();
         edits.delete(emoji);
         redraw();
       } else {
@@ -66,7 +69,7 @@ export function useChatReactions(groupId: string | undefined, message: BotGroupM
       const timer = setTimeout(redraw, Math.max(0, nextExpiry - Date.now()));
       return () => clearTimeout(timer);
     }
-  }, [edits, server, version]);
+  }, [edits, reads, server, version]);
 
   async function toggle(emoji: string, from?: ReactionGesture['from']) {
     if (!groupId || !isDataOwnerGenerationCurrent(owner)) return;
@@ -99,14 +102,15 @@ export function useChatReactions(groupId: string | undefined, message: BotGroupM
     } while (sent !== edit.desired);
 
     edit.writing = false;
+    edit.stopWaiting = reads?.afterNextRead(messageId, row => {
+      if (accepted && sent !== Boolean(row.reactions?.some(r => r.emoji === emoji && r.me))) return false;
+      edits.delete(emoji);
+      redraw();
+      return true;
+    });
     if (accepted) {
       edit.expiresAt = Date.now() + ECHO_TIMEOUT_MS;
       onChanged(messageId);
-    } else {
-      edit.stopWaiting = reads?.afterNextRead(messageId, () => {
-        edits.delete(emoji);
-        redraw();
-      });
     }
     redraw();
   }
@@ -123,5 +127,5 @@ export function useChatReactions(groupId: string | undefined, message: BotGroupM
     else if (count === 0) reactions.splice(index, 1);
     else reactions[index] = next;
   }
-  return { reactions, toggle, gesture: gesture?.scope === edits ? gesture : null, finishGesture };
+  return { owner, reactions, toggle, gesture: gesture?.scope === edits ? gesture : null, finishGesture };
 }
