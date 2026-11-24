@@ -3049,7 +3049,7 @@ registerAppShortcutIpc();
 registerAppearanceSettingsIpc();
 registerAccessibilitySupportIpc();
 registerLoginItemIpc();
-registerMenubarIpc();
+registerMenubarIpc(() => windowsQuotaPanel);
 registerAwayGuardIpc({
   read: () => {
     const settings = readWindowBehaviorSettings();

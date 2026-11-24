@@ -2470,6 +2470,10 @@
       }
     },
     "windowBehavior": {
+      "trayCard": {
+        "label": "Infokarte im Infobereich",
+        "hint": "Beim Zeigen auf das Cindy-Symbol im Infobereich werden das verbleibende Kontingent und ungelesene Aufgaben angezeigt."
+      },
       "menubar": {
         "label": "Restkontingent in der Menüleiste anzeigen",
         "hint": "Fügt der macOS-Menüleiste ein Cindy-Symbol hinzu. Klicke darauf, um dein verbleibendes Abokontingent, dein Cindy-Guthaben und die heutige Nutzung zu sehen."

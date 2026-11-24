@@ -2440,6 +2440,10 @@
       }
     },
     "windowBehavior": {
+      "trayCard": {
+        "label": "盘中浮笺",
+        "hint": "移标驻 Cindy 盘中图记，可览余额及未阅之务。"
+      },
       "menubar": {
         "label": "于菜单栏显余量",
         "hint": "于 macOS 菜单栏置一 Cindy 图标，点之可观订阅余量、Cindy 余资与今日耗用。"

@@ -2440,6 +2440,10 @@
       }
     },
     "windowBehavior": {
+      "trayCard": {
+        "label": "트레이 호버 카드",
+        "hint": "트레이의 Cindy 아이콘에 마우스를 올리면 남은 할당량과 읽지 않은 작업이 표시됩니다."
+      },
       "menubar": {
         "label": "메뉴 막대에 남은 양 표시",
         "hint": "macOS 메뉴 막대에 Cindy 아이콘을 둬요. 클릭하면 구독의 남은 양, Cindy 잔액, 오늘 사용량을 볼 수 있어요."

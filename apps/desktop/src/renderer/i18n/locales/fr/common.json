@@ -2508,6 +2508,10 @@
       }
     },
     "windowBehavior": {
+      "trayCard": {
+        "label": "Carte de la zone de notification",
+        "hint": "Survolez l’icône Cindy dans la zone de notification pour voir le quota restant et les tâches non lues."
+      },
       "menubar": {
         "label": "Afficher la consommation restante dans la barre des menus",
         "hint": "Ajoute une icône Cindy à la barre des menus de macOS. Cliquez dessus pour voir ce qu'il reste sur vos abonnements, votre solde Cindy et la consommation du jour."
