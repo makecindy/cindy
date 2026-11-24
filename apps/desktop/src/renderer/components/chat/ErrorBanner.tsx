@@ -204,6 +204,8 @@ export function ErrorBanner({
   className,
 }: ErrorBannerProps) {
   const { t, i18n } = useTranslation();
+  const errorReasonI18nKey = resolveErrorReasonI18nKey(errorReason, error);
+  const isUpstreamOutputBlocked = errorReasonI18nKey === UPSTREAM_OUTPUT_BLOCKED_I18N_KEY;
   const bannerRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!dismissOnEscape || !onCancel) return;
@@ -292,7 +294,7 @@ export function ErrorBanner({
   // 主侧把这个结论留成稳定 reason(auth-adapters / host runtime),这里负责把它翻成用户
   // 能执行的动作;落到兜底文案时用户只看到「回复未完成」,而重登解决不了链接权限。
   const isCodexSharedAuthLinkUnavailable =
-    agentKind === 'codex' && isCodexSharedAuthLinkUnavailableError(error);
+    !isUpstreamOutputBlocked && agentKind === 'codex' && isCodexSharedAuthLinkUnavailableError(error);
   // 仅本地 Codex 会话:远端会话 rollout 在远端机器, 本地 fork 剥离做不到, 不给入口。
   const showInvalidEncryptedContentRecovery =
     agentKind === 'codex' &&
@@ -347,7 +349,7 @@ export function ErrorBanner({
   // Pattern: 跟 translator.ts:180 一致, 收紧到 \b401\b | Missing bearer 避开
   // "Unauthorized file system access" 等非 HTTP-auth 误伤。
   const isCodexAuthMissing =
-    agentKind === 'codex' && isCodexOpenAiSource && /\b401\b|Missing bearer/i.test(error);
+    !isUpstreamOutputBlocked && isCodexOpenAiSource && /\b401\b|Missing bearer/i.test(error);
   const isCodexRemoteAuthMissing = isCodexAuthMissing && !!remoteHostId;
   const isCodexLocalOAuthAuthMissing =
     isCodexAuthMissing && isLocalAuthSession &&
@@ -362,7 +364,7 @@ export function ErrorBanner({
     !!modelId &&
     modelId.startsWith('chatgpt/');
   const isOpenAiConnectionExpired =
-    isLocalAuthSession &&
+    !isUpstreamOutputBlocked && isLocalAuthSession &&
     ((isCodexOpenAiSource && isCodexSessionExpiredError(error)) ||
       (isClaudeChatgptBridgeModel && isCodexSessionExpiredError(error)));
   const isOpenAiAuthFailure = isOpenAiConnectionExpired || isCodexLocalOAuthAuthMissing;
@@ -415,7 +417,6 @@ export function ErrorBanner({
   const isOverloadError = isOverloadErrorMessage(error, undefined, errorReason);
   const isStreamInterrupted = isStreamInterruptedErrorMessage(error, errorReason);
   const overloadRetryProgress = parseOverloadRetryProgress(error);
-  const errorReasonI18nKey = resolveErrorReasonI18nKey(errorReason, error);
   const toolLoopI18nKey =
     errorReason === 'tool_use_loop_detected' ? getToolLoopI18nKey(toolLoop) : undefined;
   const localizedReasonError =
@@ -540,7 +541,9 @@ export function ErrorBanner({
 
   // hasSpecialGuidance: 是否命中下面任一「有专属可操作指引」的特殊分支。用一个在
   // else 兜底里翻转的标志, 而不是另写一遍条件取反，保证原始错误只在通用回退时展开。
-  const sharedRecoveryReason = isCodexUsageLimitError ? undefined : sharedTaskRecoveryFor(error, agentDeviceId);
+  const sharedRecoveryReason = isUpstreamOutputBlocked || isCodexUsageLimitError
+    ? undefined
+    : sharedTaskRecoveryFor(error, agentDeviceId);
   const subscriptionGuidance = localizeSubscriptionAccountError(error, t, i18n.resolvedLanguage ?? i18n.language);
   let displayError: string;
   let hasSpecialGuidance = true;
@@ -551,7 +554,11 @@ export function ErrorBanner({
   const piCloudContextRecovery = agentKind === 'pi'
     ? /(?:^|: Error: )(?:\[IPC_ERROR\]\s*)?(?:LAZY_CREATE_FAILED:\s*)?\[PI_STARTUP_CLOUD_CONTEXT_FILE\] ([^\r\n]+)\npi rpc timeout after \d+ms: [^\r\n]+$/.exec(error)?.[1]
     : undefined;
-  if (piCloudContextRecovery) {
+  if (isUpstreamOutputBlocked) {
+    // The confirmed provider reason also excludes credential hints derived from diagnostic text.
+    displayError = t(UPSTREAM_OUTPUT_BLOCKED_I18N_KEY);
+    hasSpecialGuidance = false;
+  } else if (piCloudContextRecovery) {
     displayError = piCloudContextRecovery;
   } else if (geminiLimit !== null) {
     displayError = t(errorReason === 'gemini-input-retry-exhausted' ? 'chat.geminiRateLimit.exhausted' : 'chat.geminiRateLimit.title');
@@ -659,10 +666,6 @@ export function ErrorBanner({
   } else if (agentKind === 'pi' && /bundled node not installed/.test(error)) {
     // 引导:需先装 claude-code 或 codex 连带 node。
     displayError = t('chat.errorBanner.piBundledNodeMissing');
-  } else if (errorReasonI18nKey === UPSTREAM_OUTPUT_BLOCKED_I18N_KEY) {
-    // The structured reason takes precedence over status-like text in diagnostic metadata.
-    displayError = t(errorReasonI18nKey);
-    hasSpecialGuidance = false;
   } else if (isOverloadError) {
     // 服务过载:上游模型没有可用容量。原始英文("Selected model is at capacity")
     // 对用户没有行动价值,换成友好文案 + 明确的下一步;原始错误折叠可查。

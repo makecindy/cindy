@@ -453,6 +453,45 @@ it.each(['live', 'tail'] as const)('keeps a terminal HTTP 502 on the network pat
   expect(details).not.toContain('fixture-private-value');
 });
 
+// #8100 P2 (unit): the existing 502 cases exercise network copy. In ErrorBanner's
+// SSH/OpenAI context, sequence_number: 401 also used to select Sync auth and hide
+// Retry. Compare it with a genuine HTTP 401 and verify that both retain diagnostics.
+it.each([
+  {
+    kind: 'output block',
+    error: JSON.stringify({ error: {
+      type: 'invalid_request_error', code: 'safety_violation',
+      message: 'Synthetic plugin blocked the output stream. api_key=fixture-private-value fixture-end.',
+    }, sequence_number: 401 }),
+    summary: en.chat.errorBanner.upstreamOutputBlocked,
+    raw: /"sequence_number":401/,
+    showSync: false,
+  },
+  {
+    kind: 'credential failure',
+    error: 'Unexpected status HTTP 401 Unauthorized: Missing bearer. api_key=fixture-private-value fixture-end.',
+    summary: en.chat.errorBanner.codexAuthMissing,
+    raw: /HTTP 401 Unauthorized/,
+    showSync: true,
+  },
+])('shows the correct SSH OpenAI recovery actions for $kind', async ({ error, summary, raw, showSync }) => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'en', resources: { en: { translation: en } } });
+  render(<I18nextProvider i18n={i18n}>
+    <ErrorBanner error={error} agentKind="codex" remoteHostId="fixture-ssh"
+      errorSourceProviderId="openai" retryText="original input" onRetry={vi.fn()} />
+  </I18nextProvider>);
+
+  expect(screen.getByText(summary)).toBeTruthy();
+  expect(Boolean(screen.queryByRole('button', { name: en.chat.errorBanner.syncAuth }))).toBe(showSync);
+  expect(Boolean(screen.queryByRole('button', { name: en.chat.errorBanner.retry }))).toBe(!showSync);
+  expect(screen.queryByText(raw)).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: en.chat.errorBanner.networkShowRaw }));
+  const details = screen.getByText(raw).textContent;
+  expect(details).toContain('[REDACTED]');
+  expect(details).not.toContain('fixture-private-value');
+});
+
 // #8100 P2: an inline explanation can be suppressed by the display policy
 // while the live event still carries meaningful diagnostics.
 it.each([
