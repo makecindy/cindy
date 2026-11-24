@@ -12,6 +12,9 @@ import { createProviderGroupDirectory, type ProviderGroupDirectoryDeps } from '.
 import { providerGroupCodexUsageSnapshot } from '../usage';
 import { readDeviceProviderViews } from '../../remote-agent/controller/deviceCatalog';
 import { createProviderGroupRouter } from '../router';
+import { createProviderGroupRemoteClient } from '../remoteClient';
+import { handleProviderGroupRemote } from '../remoteHandler';
+import { createProviderGroupExternalLoad } from '../externalLoad';
 
 // Isolate the catalog reader's local preference port; never read the test runner's owner profile.
 vi.mock('../../maker-host/model-disable-store.js', () => ({
@@ -201,6 +204,43 @@ describe('listCandidates', () => {
 });
 
 describe('resolveMembers', () => {
+  // Unit regression: the settings roster and a fast member must be observable while a
+  // sibling's directory and the fast member's quota are pending. Full-view tests awaited both.
+  it('returns the roster and individual base status before slow directory and quota reads', async () => {
+    let releaseDirectory!: () => void;
+    let releaseQuota!: () => void;
+    const catalog = new Promise<void>(resolve => { releaseDirectory = resolve; });
+    const quota = new Promise<void>(resolve => { releaseQuota = resolve; });
+    const config = normalizeProviderGroupConfig({ members: [
+      { kind: 'local' }, { kind: 'device', agentDeviceId: 'mini', providerId: 'anthropic' },
+    ] }, 'anthropic')!;
+    const directory = createProviderGroupDirectory(deps({
+      readDeviceProviders: async () => { await catalog; return [view('anthropic', 'Claude', { remoteInvocationEnabled: true })]; },
+      readClaudeUsage: async () => { await quota; return { updatedAt: 1_000, fiveHour: { utilization: 100 } }; },
+    }));
+    const router = createProviderGroupRouter({ directory, readGroup: () => config,
+      listBindings: () => ({}), isTurnRunning: () => false, now: () => 1_000, random: () => 0 });
+    const externalLoad = createProviderGroupExternalLoad({ now: () => 1_000 });
+    const client = createProviderGroupRemoteClient(async (_device, _channel, args) => ({
+      ok: true,
+      result: await handleProviderGroupRemote({
+        scope: () => ({ router, externalLoad, isCurrent: () => true }), readGroup: () => config,
+        isRemoteAllowed: () => true, now: () => 1_000, replaceReportedUsage: vi.fn(), sessionGroup: async () => null,
+      }, 'viewer', args[0]),
+    }));
+    expect(await client.view('owner', 'anthropic', { display: 'roster' }))
+      .toMatchObject({ config, rosterOnly: true, members: [] });
+    const [fast, slow] = config.members;
+    const slowRead = client.view('owner', 'anthropic', { display: { memberKey: slow.key } });
+    const enriched = client.view('owner', 'anthropic', { display: { memberKey: fast.key, details: true } });
+    expect((await client.view('owner', 'anthropic', { display: { memberKey: fast.key } })).members)
+      .toMatchObject([{ key: fast.key, state: 'available' }]);
+    releaseDirectory();
+    expect((await slowRead).members).toMatchObject([{ key: slow.key, state: 'available' }]);
+    releaseQuota();
+    expect((await enriched).members).toMatchObject([{ key: fast.key, state: 'cooling', usageLimit: { resetAtMs: null } }]);
+  });
+
   it('uses actual local and advertised device versions, including offline devices; never invents a share version', async () => {
     const directory = createProviderGroupDirectory(deps({ localAppVersion: () => '0.1.104-beta' }));
     const members: ProviderGroupConfig['members'] = [
