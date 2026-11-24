@@ -18,6 +18,7 @@ type UnreadPorts = { [K in keyof AgentDeps]?: undefined };
 /** Ports only the Codex agent reads. */
 export const PORTS_ONLY_CODEX_READS = {
   armCodexHttpRecovery: undefined,
+  getRejectedCodexDownshiftModel: undefined,
   createCodexAuthTokenReader: undefined,
   disableCodexPluginRuntime: undefined,
   getCodexServerCompactionPreference: undefined,
@@ -58,6 +59,9 @@ export const PORTS_ONLY_PI_READS = {
   getRemotePiAgentProxyEnv: undefined,
   getRemotePiFileOps: undefined,
   getRemotePiTransport: undefined,
+  // #12298: the Pi agent reads the host's subscription connection state; Claude and Codex route
+  // subagent models from their own catalogs and never consult it.
+  isNativeProviderSourceConnected: undefined,
   mutatePiManagedPackage: undefined,
   onPiManagedPackageMutationSettled: undefined,
   preparePiExtraSpawnConfig: undefined,

@@ -88,6 +88,7 @@ export function TelegramBotSection({
     status,
     botUsername,
     validationError,
+    saveTimedOut,
     isSaving,
     isDisconnecting,
     isTogglingOnline,
@@ -141,7 +142,9 @@ export function TelegramBotSection({
   }, []);
 
   // 非 idle = 主进程已有保存的凭证(连接中/冲突/失败也算),表单区给小垃圾桶解绑入口。
-  const hasSavedCreds = status.kind !== 'idle';
+  // 新绑定刚超时: 凭证已回滚, 表单里只是用户刚填的内容 —— 不显示解绑与「重新连接」,
+  // 重试就是用原输入再点一次「连接」。
+  const hasSavedCreds = status.kind !== 'idle' && !saveTimedOut;
 
   return (
     <ImChannelSettingsCard
@@ -214,7 +217,7 @@ export function TelegramBotSection({
               spellCheck={false}
               autoComplete="off"
               className={cn(
-                'h-[42px] w-full rounded-full pl-[14px] pr-10',
+                'h-[42px] w-full rounded-full pl-3.5 pr-10',
                 'bg-[var(--settings-input-bg)] border border-[var(--settings-input-border)]',
                 'text-13 text-[var(--settings-input-text)] placeholder:text-[var(--settings-input-placeholder)]',
                 'outline-none transition-colors focus:border-[var(--settings-input-border-focus)]',
@@ -250,7 +253,7 @@ export function TelegramBotSection({
             autoComplete="off"
             inputMode="numeric"
             className={cn(
-              'h-[42px] w-full rounded-full pl-[14px] pr-[14px]',
+              'h-[42px] w-full rounded-full pl-3.5 pr-3.5',
               'bg-[var(--settings-input-bg)] border border-[var(--settings-input-border)]',
               'text-13 text-[var(--settings-input-text)] placeholder:text-[var(--settings-input-placeholder)]',
               'outline-none transition-colors focus:border-[var(--settings-input-border-focus)]',
@@ -263,6 +266,10 @@ export function TelegramBotSection({
               {validationError ? (
                 <p className="text-12 text-[var(--settings-error-text)]" role="alert">
                   {validationError}
+                </p>
+              ) : saveTimedOut ? (
+                <p className="text-12 text-[var(--settings-error-text)]" role="alert">
+                  {t('settings.telegramBot.connectTimedOut')}
                 </p>
               ) : status.kind === 'error' ? (
                 <ImConnectionError
@@ -282,7 +289,7 @@ export function TelegramBotSection({
                 disabled={isDisconnecting}
                 aria-label={t('settings.telegramBot.disconnectAria')}
                 className={cn(
-                  'mr-[4px] flex shrink-0 items-center justify-center bg-transparent p-0',
+                  'mr-1 flex shrink-0 items-center justify-center bg-transparent p-0',
                   'text-[var(--settings-trash-icon)] transition-colors hover:text-[var(--settings-trash-icon-hover)]',
                   isDisconnecting && 'cursor-not-allowed opacity-40',
                 )}

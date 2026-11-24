@@ -15,12 +15,13 @@ import { SessionTaskDrawerProvider } from './SessionTaskDrawer';
 import { buildWideSessionNavLayout } from './wideSessionNav';
 import { sharedStatusRowTrailingReserve } from '@/platform/windowGeometry';
 import { useSessionPaneLayout, useSessionSidebarWidthPreference } from './ResidentHomeList';
-import { remoteSessionStore, useRemoteSessionDetail } from './remoteSessionStore';
+import { remoteSessionStore, useRemoteSessionDetail, useRemoteSessionLinkTarget } from './remoteSessionStore';
 import { SessionListDrawer } from './SessionListDrawer';
 import { switchDrawerSessionInPlace, taskListSessionTarget, type SessionRouteParamsNavigation } from './sessionDrawerNavigation';
 import type { RemoteSessionListItem } from './sessionList';
 import { SideChatTaskBoundary } from './SideChatTaskBoundary';
 import type { RemoteSession } from './types';
+import { resolveSessionLinkDeviceId } from './sessionLinks';
 
 export interface SessionTaskChrome {
   beforeSessionSwitchRef: RefObject<(() => void) | null>;
@@ -34,8 +35,13 @@ export function SessionTaskLayout({ children }: {
 }) {
   const params = useLocalSearchParams<{ sessionId: string; deviceId?: string; deviceName?: string; resourceHistorySessionId?: string; resourceId?: string; focusClientId?: string; taskListEntry?: string }>();
   const sessionId = readRouteParam(params.sessionId) ?? '';
-  const deviceId = readRouteParam(params.deviceId)
-    ?? remoteSessionStore.getSessionDeviceId(sessionId) ?? '';
+  const linkedDeviceId = readRouteParam(params.deviceId);
+  const listedSession = useRemoteSessionLinkTarget(sessionId);
+  const deviceId = resolveSessionLinkDeviceId({
+    listedDeviceId: listedSession?.canonicalDeviceId ?? listedSession?.deviceLinkDeviceId,
+    linkedDeviceId,
+    currentDeviceId: remoteSessionStore.getSessionDeviceId(sessionId),
+  }) ?? '';
   const session = useRemoteSessionDetail(deviceId, sessionId);
   const navigation = useNavigation<SessionRouteParamsNavigation>();
   const legacyHistory = readRouteParam(params.resourceHistorySessionId) === sessionId && !!sessionId;

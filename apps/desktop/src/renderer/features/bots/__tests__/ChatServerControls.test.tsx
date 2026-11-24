@@ -187,6 +187,33 @@ describe('chat interaction controls', () => {
     await screen.findByText('No config');
     expect((screen.getByLabelText('Chat draft') as HTMLInputElement).value).toBe('My unfinished message');
   });
+  // Unit at the real Provider: every group page mounts it, and each read pages all mentions.
+  // Before: the 15s timer kept reading while the window was hidden. With background throttling off
+  // (a running turn or voice call) document.hidden stays false, so the main broadcast must count too.
+  it.each(['document visibility', 'main window broadcast'] as const)('pauses AI reply reads while hidden by %s and reads once on return', async source => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    onTestFinished(() => { vi.useRealTimers(); });
+    let documentHidden = false, broadcast = (_hidden: boolean) => {};
+    const visibility = vi.spyOn(document, 'hidden', 'get').mockImplementation(() => documentHidden);
+    onTestFinished(() => visibility.mockRestore());
+    Object.assign(window.electronAPI, { onWindowHiddenChange: (listener: (hidden: boolean) => void) => { broadcast = listener; return () => {}; } });
+    const setHidden = (hidden: boolean) => act(async () => {
+      if (source === 'main window broadcast') broadcast(hidden);
+      else { documentHidden = hidden; document.dispatchEvent(new Event('visibilitychange')); }
+    });
+    mocks.mask.mockResolvedValue({ ok: true, state: maskState() });
+    render(<GroupMaskProvider groupId="room"><MaskProbe /></GroupMaskProvider>);
+    await screen.findByText('Config ready');
+    await waitFor(() => expect(mocks.mask).toHaveBeenCalledTimes(1));
+    await setHidden(true);
+    await act(async () => { vi.advanceTimersByTime(45_000); });
+    expect(mocks.mask).toHaveBeenCalledTimes(1);
+    await setHidden(false);
+    await waitFor(() => expect(mocks.mask).toHaveBeenCalledTimes(2));
+    // A visible page keeps reading for scheduled windows.
+    await act(async () => { vi.advanceTimersByTime(15_000); });
+    await waitFor(() => expect(mocks.mask).toHaveBeenCalledTimes(3));
+  });
   it.each(['Participate', 'Read original'])('retains a failed save after successful %s and retries that save', async operation => {
     let state = maskState(), fail = true;
     state.settings.trigger = 'scheduled';
@@ -214,7 +241,7 @@ describe('chat interaction controls', () => {
     const joined = vi.fn();
     render(<ChatInviteDialog initialLink="cindy://chat-invite/test" onClose={vi.fn()} onJoined={joined} />);
     await screen.findByText('Invited group');
-    const toggle = screen.queryByRole('switch', { name: 'bots.groupChat.mask.joinSetup' });
+    const toggle = screen.queryByRole('checkbox', { name: 'bots.groupChat.mask.joinSetup' });
     expect(!!toggle).toBe(supported);
     if (toggle) fireEvent.click(toggle);
     fireEvent.click(screen.getByRole('button', { name: k('accept') }));

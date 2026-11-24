@@ -32,6 +32,7 @@ import { providerDisplayNameById } from '@/lib/providerDisplayName';
 import { isCodexResumeNotReadyProjectionError } from '@cindy/maker-shared/agent-input-projection';
 import {
   canOfferCodexHistoryRecovery,
+  isAccountUsageLimitReachedText,
   isCindyGatewayProxyTokenInvalidError,
   isResponsesLiteParallelToolCallsError,
   isRemoteCompactEncryptedContentError,
@@ -89,6 +90,7 @@ interface ErrorBannerProps {
   outputLimit?: OutputLimitDetails | null;
   retryText?: string | null;
   onRetry: (text: string) => void;
+  queuedSendRecovery?: boolean;
   /** 已停止且有任务上下文，但无原始恢复记录：发送现有隐藏续跑指令。 */
   onContinueAfterError?: () => Promise<void>;
   onCancel?: () => void;
@@ -173,6 +175,7 @@ export function ErrorBanner({
   outputLimit,
   retryText,
   onRetry,
+  queuedSendRecovery,
   onContinueAfterError,
   onCancel,
   dismissOnEscape = false,
@@ -422,6 +425,8 @@ export function ErrorBanner({
         : errorReasonI18nKey
           ? t(errorReasonI18nKey)
           : undefined;
+  const ipcRefusal = extractIpcError(new Error(error));
+  const preconditionMessage = ipcRefusal?.code === 'PRECONDITION_FAILED' ? ipcRefusal.message : undefined;
   const remoteErrorCode = parseAgentErrorCode(error)?.code;
   const isRemoteResumeRejected = isRemoteAgentResumeRejectedError(error);
   const isAttachmentAccessDenied = remoteErrorCode === 'DEVICE_LINK_MEDIA_ACCESS_DENIED';
@@ -462,6 +467,7 @@ export function ErrorBanner({
       sameDay ? { timeStyle: 'short' } : { dateStyle: 'medium', timeStyle: 'short' },
     ).format(resumeDate);
   })();
+  const isAccountUsageLimitText = isAccountUsageLimitReachedText(error);
   // 原始恢复记录优先；自动任务收口后可手动续跑。按钮与指引共用同一判定。
   const isSilentStopExhausted = errorReason === 'silent-stop-exhausted';
   const isClaudeGatewayOpusPlanMismatch = errorReason === CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON;
@@ -488,6 +494,8 @@ export function ErrorBanner({
     // retry alongside settings, without claiming that cached credentials recovered.
     (isCodexLocalOAuthAuthMissing && !independentOpenAiAccount && !openAiConnectionRecoveredSinceError);
   const safeRetryText = !hideRetry && retryText ? retryText : null;
+  const showQueuedSendRecovery = queuedSendRecovery && Boolean(safeRetryText)
+    && !isRecoverable && remoteErrorCode === 'REMOTE_AGENT_UNAVAILABLE';
   const retryAction = safeRetryText
     ? () => onRetry(safeRetryText)
     : !hideRetry && !isRecoverable && !requiresAgentErrorConfigurationChange(error)
@@ -625,8 +633,17 @@ export function ErrorBanner({
           : 'chat.errorBanner.codexUsageLimit',
       );
     }
+  } else if (usageLimitResumeAt) {
+    // 被控端已确认是账号用量上限并排好了自动继续：直接说发生了什么，
+    // 「将于 X 自动继续」在操作区，原始报错留在可展开的详情里。
+    displayError = t('chat.errorBanner.usageLimitReached');
   } else if (isQuotaExhausted) {
     displayError = t('providerError.QUOTA_EXCEEDED');
+  } else if (isAccountUsageLimitText) {
+    // 没有排自动继续（已取消、共享中、拿不到可靠时刻等）但原文明说到了用量上限。
+    displayError = usageLimitResetAt
+      ? t('chat.errorBanner.usageLimitReachedWithReset', { resetAt: usageLimitResetAt })
+      : t('chat.errorBanner.usageLimitReachedNoReset');
   } else if (terminalRateLimitRetryProgress) {
     // daemon 已耗尽内部 retry budget 的终态 429，由 maker-core 做受限外层重投。
     // 它不是模型容量过载，也不是用户网络异常；独立文案避免误导用户切模型或查网络。
@@ -688,7 +705,8 @@ export function ErrorBanner({
     // the final fallback uses the stable reason map, so auth/network/overload
     // recovery behavior keeps its existing priority while generic maker-core
     // English fallbacks are localized in both the live and tail banner.
-    displayError = localizedReasonError ?? t('chat.errorBanner.replyFailed');
+    displayError = localizedReasonError ?? t(preconditionMessage === undefined
+      ? 'chat.errorBanner.replyFailed' : 'ipcError.PRECONDITION_FAILED');
     hasSpecialGuidance = false;
   }
   const showUnwrappedRaw = !hasSpecialGuidance || isResponsesLiteParallelToolCallsError(error);
@@ -708,6 +726,8 @@ export function ErrorBanner({
     isStreamInterrupted ||
     showUnwrappedRaw ||
     isCodexUsageLimitError ||
+    Boolean(usageLimitResumeAt) ||
+    isAccountUsageLimitText ||
     terminalRateLimitRetryProgress ||
     isClaudeGatewayOpusPlanMismatch ||
     isClaudeSubscriptionOpusPlanMismatch ||
@@ -854,11 +874,13 @@ export function ErrorBanner({
       description={
         isAttachmentAccessDenied
           ? t('chat.errorBanner.attachmentAccessDeniedRecovery')
-          : (showHistoryRecovery || showInvalidEncryptedContentRecovery) && onForkStripEncrypted
-            ? t('chat.errorBanner.readableHistoryRecoveryDescription')
-            : renderProviderErrorExplanation(error, displayError, t)
+          : showQueuedSendRecovery
+            ? t('chat.errorBanner.queuedSendRecovery')
+            : (showHistoryRecovery || showInvalidEncryptedContentRecovery) && onForkStripEncrypted
+              ? t('chat.errorBanner.readableHistoryRecoveryDescription')
+              : renderProviderErrorExplanation(error, displayError, t)
       }
-      details={canShowErrorDetails ? error : undefined}
+      details={canShowErrorDetails && preconditionMessage !== displayError ? preconditionMessage ?? error : undefined}
       onDiagnose={
         onDiagnose
           ? () => onDiagnose({ message: displayError, details: error, reason: errorReason })

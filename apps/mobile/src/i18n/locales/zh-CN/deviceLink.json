@@ -35,7 +35,17 @@
   "retryAccess": "重试访问",
   "recheck": "重新检查",
   "deviceRemovedTitle": "设备已移除",
-  "deviceRemovedHint": "请退出后重新登录，以重新加入设备列表。",
+  "deviceRemovedHint": "这台手机已从账号中移除，点「重新加入」即可回来。",
+  "rejoin": {
+    "action": "重新加入",
+    "busy": "正在重新加入",
+    "doneTitle": "已重新加入",
+    "agentNetUnavailable": "Agent-Net 服务暂不支持重新加入，这台手机暂时不使用 Agent-Net 连接。",
+    "failedTitle": "没能重新加入",
+    "failed": "请检查网络后再试一次。",
+    "unsupported": "服务暂不支持重新加入，请退出后重新登录。",
+    "agentNetUnsupported": "Agent-Net 服务暂不支持重新加入。关闭「仅使用加密连接」后，这台手机可以先不用 Agent-Net 连回来。"
+  },
   "authFailedTitle": "登录已失效",
   "authFailedHint": "登录状态已过期，请退出后重新登录。",
   "replacedTitle": "连接被顶替",

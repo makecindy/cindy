@@ -11,6 +11,8 @@ export default {
   real: 'MessageStream, ThreadPanel with compact styles, BotSessionTaskResultCard, teammate grouping, WorkGroupBlock, GeneratedFilesCard and SheetPreview, Markdown, theme and i18n',
   notCovered: 'Full CCAgentSessionView, login, host execution, document opening, native mobile layout and transport',
   cases: { default: { about: 'Live private turn with stage notes and initial thinking', data: { done: false } }, finished: { about: 'Completed private turn with final answer outside', data: { done: true } }, retry: { about: 'Two failed attempts followed by a running read: current action stays visible', data: { done: false, retry: true } },
+    'feishu-columns': { about: 'Saved and incoming Feishu cards align with companion replies and keep quoted context collapsible' },
+    'feishu-edit': { about: 'The inline Feishu editor keeps the source card’s responsive column' },
     'reply-columns': { about: 'Generated media, plan, running task and MCP App share the companion reply column', data: { columns: true } },
     'reply-columns-narrow': { about: 'All four top-level card kinds fit a narrow reply column', data: { columns: true }, viewport: { width: 320, height: 850 } },
     'reply-columns-task': { about: 'Ordinary tasks keep their original unindented card column', data: { columns: true, ordinary: true } },
@@ -31,6 +33,67 @@ export default {
     'artifacts-missing': { about: 'Missing files leave no empty avatar row' },
   },
   async check(page, ui) {
+    if (ui.case === 'feishu-columns' || ui.case === 'feishu-edit') {
+      const user = id => page.locator(`[data-user-msg-id="${id}"]`);
+      const card = id => user(id).locator('[data-selection-quote-body]').locator('xpath=../../..');
+      const reply = page.locator('[data-message-client-id="feishu-reply"] [data-bot-reply-bubble]');
+      await reply.waitFor();
+      await ui.capture('collapsed');
+      const replyBox = await reply.boundingBox();
+      const boxes = await Promise.all(['feishu-history', 'feishu-incoming'].map(id => card(id).boundingBox()));
+      const incomingText = await user('feishu-incoming').locator('[data-selection-quote-body]').textContent();
+      const checkSourceCards = async () => {
+        for (const box of boxes) {
+          assert.ok(Math.abs(box.x - replyBox.x) <= 0.5, `Card x=${box.x} vs reply x=${replyBox.x}`);
+          assert.ok(Math.abs(box.width - replyBox.width) <= 0.5, `Card width=${box.width} vs reply width=${replyBox.width}`);
+        }
+        assert.equal(incomingText, '请再核对新版本。\n保留已确认的条目。');
+        assert.match(await card('imessage-source').textContent(), /iMessage/);
+        assert.doesNotMatch(await card('imessage-source').textContent(), /imessage/);
+      };
+      if (ui.case === 'feishu-edit') {
+        const incoming = user('feishu-incoming');
+        const before = await card('feishu-incoming').boundingBox();
+        await incoming.hover();
+        await incoming.getByRole('button', { name: await ui.t('chat.messageActionBar.edit'), exact: true }).click();
+        const editor = incoming.getByRole('textbox');
+        await ui.capture('editing');
+        assert.equal(await editor.inputValue(), '请再核对新版本。\n保留已确认的条目。');
+        const box = await editor.locator('xpath=..').boundingBox();
+        assert.ok(Math.abs(box.x - before.x) <= 0.5 && Math.abs(box.width - before.width) <= 0.5,
+          'Editing keeps both edges aligned with the original card');
+        await incoming.getByRole('button', { name: await ui.t('chat.userMessage.editCancel'), exact: true }).click();
+        await card('feishu-incoming').waitFor();
+        await checkSourceCards();
+        return;
+      }
+      const native = user('feishu-native').locator('[data-selection-quote-body]');
+      assert.match(await native.textContent(), /原生输入保留字面 <p> 示例/);
+      assert.ok((await native.boundingBox()).x > replyBox.x, 'Native author bubble stays on the right');
+      const toggle = user('feishu-incoming').getByRole('button', { name: await ui.t('chat.threadContext.attachedContextCount', { count: 3 }) });
+      assert.equal(await toggle.getAttribute('aria-expanded'), 'false');
+      await toggle.press('Enter');
+      const quote = user('feishu-incoming').getByRole('region', { name: await ui.t('chat.threadContext.referencedMessages', { count: 1 }) });
+      const group = user('feishu-incoming').getByRole('region', { name: await ui.t('chat.threadContext.groupBackgroundCount', { count: 2 }) });
+      await group.waitFor();
+      await ui.capture('expanded');
+      await checkSourceCards();
+      assert.equal(await user('feishu-history').locator('[data-selection-quote-body]').textContent(),
+        '请核对演示记录 & 备注。\n\n完成后告知结果。');
+      assert.match(await quote.textContent(), /上一版记录。\n第二行备注。/);
+      const quotedText = await quote.textContent();
+      assert.match(quotedText, /\[林岚\].*\[合并转发消息\]\n\[周晴\]/);
+      assert.match(quotedText, /\[图片\]\n\[文件: 演示记录.pdf\]\n\(被引消息的 2 个附件已随本轮一并提供\)/);
+      const literalCode = '```html\n<p><strong>示例原文</strong></p>\n```';
+      assert.ok(quotedText.includes(literalCode));
+      assert.doesNotMatch(quotedText.replace(literalCode, ''), /<\/?(?:p|br)\b/);
+      assert.match(await group.textContent(), /\[林岚\] 11-19 08:42 上一版已核对。\n\n新版保留已确认的条目。 \[文件: 记录.pdf\]/);
+      assert.match(await group.textContent(), /\[周晴\] 11-19 08:43 \[合并转发消息\]\n\[林岚\] 两版差异已整理。 \[图片\]/);
+      assert.doesNotMatch(await group.textContent(), /<\/?p\b/);
+      await toggle.click();
+      await quote.waitFor({ state: 'hidden' });
+      return;
+    }
     if (ui.data.columns) {
       const reply = page.locator('[data-message-client-id="columns-answer"]');
       await reply.scrollIntoViewIfNeeded();

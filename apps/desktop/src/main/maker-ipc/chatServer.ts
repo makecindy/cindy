@@ -23,7 +23,7 @@ import { MIRROR_ATTACHMENT_MAX_BYTES } from '../companion-cloud/mirror.js';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { migrateLocalGroups, type ChatContentBlock } from './chatServerMigration.js';
-import { chatErrorDiagnostic, chatGroupFailure, contentShapes, detailsDiagnostic, missingGroupCode } from './chatServerErrors.js';
+import { chatErrorDiagnostic, chatGroupFailure, chatRetryDeadline, contentShapes, detailsDiagnostic, missingGroupCode } from './chatServerErrors.js';
 import { chatInviteShareBase, createChatInviteShare, notifyChatInviteRevoked, resolveChatInviteShare } from './chatInviteShares.js';
 import { createChatMedia } from './chatServerMedia.js';
 import { mergeChatReplyAttachments } from './chatServerReplyAttachments.js';
@@ -179,7 +179,8 @@ interface Running {
   capabilityNotices?: Map<BotGroupCapabilityNoticeCode, Promise<void>>;
 }
 export class ChatResponseError extends Error {
-  constructor(code: string, readonly status: number, readonly retryAt?: number, readonly details?: unknown) { super(code); }
+  constructor(code: string, readonly status: number, readonly retryAt?: number, readonly details?: unknown,
+    readonly serviceRetryAt?: number) { super(code); }
 }
 /**
  * The group's terminal result was definitely refused for its content — not for auth, permissions
@@ -189,6 +190,20 @@ class SettlementRefused extends Error {
   constructor(readonly refusal: unknown) { super('SETTLEMENT_REFUSED'); }
 }
 const CHAT_AUTH_RETRY_MS = 60_000;
+const HISTORY_UPGRADE_RETRY_DELAYS_MS = [60_000, 120_000, 240_000, 300_000, 300_000];
+function historyUpgradeRetryAt(error: unknown, failures: number): number {
+  const delay = HISTORY_UPGRADE_RETRY_DELAYS_MS[Math.min(failures, HISTORY_UPGRADE_RETRY_DELAYS_MS.length) - 1]!;
+  if (failures > HISTORY_UPGRADE_RETRY_DELAYS_MS.length && (
+    error instanceof ChatResponseError ? !retryableResponse(error) : error instanceof Error && LOCAL_FILE_REFUSALS.has(error.message)
+  )) return Infinity;
+  return Math.max(Date.now() + delay, chatRetryDeadline(error));
+}
+function isTerminalHistoryUpgradeError(error: unknown): error is ChatResponseError {
+  return error instanceof ChatResponseError && (
+    (error.status === 404 && error.message === 'CONVERSATION_NOT_FOUND')
+    || (error.status === 409 && ['CONVERSATION_ARCHIVED', 'CONVERSATION_DISSOLVED'].includes(error.message))
+  );
+}
 /** A read list is served from memory this long; a receipt for the group ends it sooner. */
 /** How long the positions of a snapshot are trusted while my messages in it are unread; a lost receipt is healed by reading it again. */
 const OTHERS_READ_RECHECK_MS = 30_000;
@@ -809,16 +824,19 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
             if (!current()) throw new Error('OWNER_CHANGED');
             if ((res.statusCode ?? 500) >= 300 && (res.statusCode ?? 500) < 400) throw new Error('CHAT_REDIRECT_REFUSED');
             const status = res.statusCode ?? 500;
-            const retryAt = status === 429 ? retryAfterDeadline({ headers: {
+            const deadline = (status === 429 || status === 503) ? retryAfterDeadline({ headers: {
               get: name => { const header = res.headers[name.toLowerCase()]; return typeof header === 'string' ? header : null; },
             } }) : undefined;
+            const retryAt = status === 429 ? deadline : undefined;
+            // Only consumers that compare absolute deadlines opt in to 503 cooldowns.
+            const serviceRetryAt = status === 503 ? deadline : undefined;
             let value;
             try { value = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
             catch {
               // Older servers may return a non-JSON 404 for an unknown route.
-              if (successStatus && status >= 400) throw new ChatResponseError('REQUEST_FAILED', status, retryAt);
+              if (successStatus && status >= 400) throw new ChatResponseError('REQUEST_FAILED', status, retryAt, undefined, serviceRetryAt);
               if (successStatus) throw new Error('CHAT_RESPONSE_INVALID');
-              throw new ChatResponseError('INVALID_CHAT_RESPONSE', status >= 400 ? status : 502, retryAt);
+              throw new ChatResponseError('INVALID_CHAT_RESPONSE', status >= 400 ? status : 502, retryAt, undefined, serviceRetryAt);
             }
             const code = typeof value?.error?.code === 'string' ? value.error.code : 'REQUEST_FAILED';
             if (res.statusCode === 401 && !retried && CHAT_REFRESHABLE_ERROR_CODES.has(code)) {
@@ -826,7 +844,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
                 resolve(api<T>(route, method, data, actorId, true, successStatus, admit)); return;
               }
             }
-            if (status >= 400) throw new ChatResponseError(code, status, retryAt, value?.error?.details);
+            if (status >= 400) throw new ChatResponseError(code, status, retryAt, value?.error?.details, serviceRetryAt);
             if (successStatus && status !== successStatus) throw new Error('CHAT_RESPONSE_INVALID');
             resolve(value);
           } catch (error) { reject(error); }
@@ -860,11 +878,24 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   let upgrade: Promise<Map<string, string>> | undefined;
   let upgradeRetryAt = 0;
   const upgradeErrors = new Map<string, string>();
+  // Keep refusal and retry state within this account/endpoint controller.
+  // Recreating the controller gives restored groups and recovered networks a fresh attempt.
+  type UpgradeRetry = { failures: number; at: number; archived: boolean };
+  let upgradeRetries = new Map<string, UpgradeRetry>();
+  let upgradePassFailures = 0;
   const runUpgrade = async (mode: 'background' | 'foreground'): Promise<Map<string, string>> => {
     upgradeRetryAt = Infinity;
     await register(mode);
     const db = getDbClient().drizzle;
-    let incomplete = false;
+    const groups = await localSources();
+    const nextRetries = new Map<string, UpgradeRetry>();
+    const startedAt = Date.now();
+    const due = groups.filter(group => {
+      const retry = upgradeRetries.get(group.id);
+      if (!retry || retry.at <= startedAt) return true;
+      nextRetries.set(group.id, retry);
+      return false;
+    });
     await migrateLocalGroups({ api, current, selfId,
       onRoom: (source, room) => { upgradedGroups.set(source, room); upgradeErrors.delete(source); changed(room); },
       afterMessages: async (source, room) => {
@@ -893,13 +924,19 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         upgradeErrors.delete(source); changed(room);
       },
       onError: (source, error) => {
-        incomplete = true;
-        upgradeErrors.set(source, error instanceof Error ? error.message : 'IMPORT_FAILED');
-        deps.log?.warn('Group history upgrade will retry', { groupId: source, ...chatErrorDiagnostic(error) });
+        const terminal = isTerminalHistoryUpgradeError(error);
+        const failures = (upgradeRetries.get(source)?.failures ?? 0) + 1;
+        const at = terminal ? Infinity : historyUpgradeRetryAt(error, failures);
+        nextRetries.set(source, { failures, at, archived: terminal && error.message === 'CONVERSATION_ARCHIVED' });
+        const retrying = Number.isFinite(at);
+        if (retrying) upgradeErrors.set(source, error instanceof Error ? error.message : 'IMPORT_FAILED');
+        else upgradeErrors.delete(source);
+        deps.log?.warn(retrying ? 'Group history upgrade will retry' : 'Group history upgrade stopped',
+          { groupId: source, ...chatErrorDiagnostic(error) });
         changed(upgradedGroups.get(source) ?? source);
       },
       receipts: chatMigrationReceipts(config.baseUrl, selfId, current),
-      groups: localSources,
+      groups: async () => due,
       messages: async (groupId, after) => {
         const rows = await db.select().from(botGroupMessages).where(and(eq(botGroupMessages.groupId, groupId), gt(botGroupMessages.sequence, after)))
           .orderBy(asc(botGroupMessages.sequence)).limit(100);
@@ -924,7 +961,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       },
       attachments: (room, source, files, author) => media.upload(room, source, files, author),
     });
-    upgradeRetryAt = incomplete ? Date.now() + 60000 : Infinity;
+    upgradeRetries = nextRetries;
+    upgradePassFailures = 0;
+    for (const { at } of upgradeRetries.values()) upgradeRetryAt = Math.min(upgradeRetryAt, at);
     return upgradedGroups;
   };
   function ensureUpgrade(mode: 'background' | 'foreground'): Promise<Map<string, string>> {
@@ -933,7 +972,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         // No migration ran when registration was locally deferred. Do not cache
         // that rejection as a failed import for a later foreground caller.
         if (error instanceof WorkRequestDeferred) { upgrade = undefined; upgradeRetryAt = Date.now() + 2000; }
-        else upgradeRetryAt = Date.now() + 60000;
+        else upgradeRetryAt = historyUpgradeRetryAt(error, ++upgradePassFailures);
       }
       throw error;
     });
@@ -949,6 +988,18 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       void ensureUpgrade('background').catch(() => undefined);
     }
   };
+  function resumeUnarchivedUpgrade(roomId: string) {
+    // Wait for the current pass to publish its retry map before changing it.
+    void (upgrade ?? Promise.resolve()).catch(() => undefined).then(() => {
+      if (!current()) return;
+      for (const [source, retry] of upgradeRetries) {
+        if (retry.archived && (upgradedGroups.get(source) ?? source) === roomId) {
+          upgradeRetries.delete(source);
+          upgradeRetryAt = Math.min(upgradeRetryAt, Date.now());
+        }
+      }
+    });
+  }
   async function localSources() {
     const db = getDbClient().drizzle;
     const result = await local.listGroups();
@@ -1957,6 +2008,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const executionsRead = direct ? Promise.resolve([] as Execution[]) : api<Execution[]>(`/conversations/${roomId}/executions`);
     for (const read of [messagesRead, executionsRead]) read?.catch(() => undefined);
     const s = await snapshotRead;
+    if (!direct && s.room.archived === false && !s.room.dissolved_at
+      && generation(roomId) === attentionGeneration && snapshotConnection === attentionConnection) {
+      resumeUnarchivedUpgrade(roomId);
+    }
     // The snapshot this read adopts (not a side read such as the readers list), so a receipt that arrives while the rest is awaited lands on its layer.
     fenceReceipts(s);
     const page = (await messagesRead) ?? s.messages;
@@ -2686,7 +2741,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           const ordinaryReply = !run.plan || run.plan.kind === 'talk';
           const validateUpload = async () => {
             assertCurrent();
-            if (pending.fileReply?.attachments.length || pending.fileReply?.omittedFiles) {
+            if (pending.fileReply?.attachments.length || pending.fileReply?.omittedFiles
+              || pending.reply?.attachments.some(attachment => attachment.mimeType === 'video/mp4')) {
               try { await validateExecutionAuthority(run); }
               catch (error) {
                 // Definitive revocation ends delivery; transport failures retain
@@ -2993,7 +3049,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       assistantTasks.noteDelivered(roomId, sessionId, scope, source.seq);
       // The requester's other devices learn at once where this runs; later renewals repeat it.
       if (selfDeviceId) {
-        const model = (await deps.readGroupTaskStatus?.(sessionId).catch(() => null))?.model;
+        const model = (await deps.readGroupTaskStatus?.(sessionId, { model: true }).catch(() => null))?.model;
         run.executor = { deviceId: selfDeviceId, sessionId, ...(model ? { model } : {}) };
         if (live()) void checkLease(run);
       }
@@ -3141,7 +3197,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           settings.plans[key] = run.workspace; settings.plans[run.plan.id] = run.workspace;
           workspaces().save(s.room.id, settings);
         }
-        await deps.syncLanePermission?.(lane.sessionId, bot.id);
+        // A reused lane was reconciled inside ensureLane, with nothing in between; a new or moved one still is here.
+        if (!lane.permissionSynced) await deps.syncLanePermission?.(lane.sessionId, bot.id);
         return { ...lane, name };
       })();
       const contextRead = (async () => {
@@ -4031,6 +4088,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       await api(`/conversations/${target}${route}`, type === 'update' || type === 'archive' ? 'PATCH' : 'POST', {
         operationId: randomUUID(), ...payload, ...(ownCompanion ? { action: 'leave' } : {}), ...(type === 'archive' ? { archived: action.archived } : {}),
       }, actorId);
+      if (action.type === 'archive' && !action.archived) resumeUnarchivedUpgrade(target);
       changed(target); return {};
     }),
     status: async () => ({ enabled: true, connected: current() && connected, ...(current() && personalMask ? { personalMask: true } : {}) }),

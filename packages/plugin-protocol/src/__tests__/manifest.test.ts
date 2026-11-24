@@ -1,5 +1,10 @@
 import { getPluginHostUi, getPluginToolUi, parseGhostUi, pluginHasToolUi, pluginToolVisible, pluginUiDomains, pluginUiPermissionsExpand } from '../toolUi.js';
 import { hostUiApprovalSubjects } from '../hostUi.js';
+import {
+  GHOST_HARNESS_GUEST_WORKSPACE_ARG,
+  GHOST_HARNESS_REMOTE_WORKSPACE_ARG,
+  parseGhostHarnessAvailability,
+} from '../pluginHarnesses.js';
 import { describe, expect, it } from 'vitest';
 import {
   GHOST_MANUAL_DESCRIPTION_MAX_CHARS,
@@ -141,6 +146,28 @@ describe('Ghost manifest contract', () => {
       const v2 = validateGhostManifest({ ...validManifest, slots: ['tool', 'node'], node, harnesses: [harness] });
       expect(v2.ok).toBe(true);
       if (v2.ok) expect(v2.manifest.harnesses).toBeUndefined();
+    });
+
+    it('keeps guestWorkspace availability only alongside available and remoteWorkspace, and locks CLI flag literals', () => {
+      expect(GHOST_HARNESS_REMOTE_WORKSPACE_ARG).toBe('--cindy-remote-workspace');
+      expect(GHOST_HARNESS_GUEST_WORKSPACE_ARG).toBe('--cindy-guest-workspace');
+      const parsed = parseGhostHarnessAvailability({
+        harnesses: [
+          { id: 'both', available: true, remoteWorkspace: true, guestWorkspace: true },
+          { id: 'remote-only', available: true, remoteWorkspace: true, guestWorkspace: 'yes' },
+          { id: 'guest-without-remote', available: true, guestWorkspace: true },
+          { id: 'offline', available: false, remoteWorkspace: true, guestWorkspace: true },
+        ],
+      }, ['both', 'remote-only', 'guest-without-remote', 'offline']);
+      expect(parsed).toEqual({
+        ok: true,
+        harnesses: [
+          { id: 'both', available: true, remoteWorkspace: true, guestWorkspace: true },
+          { id: 'remote-only', available: true, remoteWorkspace: true },
+          { id: 'guest-without-remote', available: true },
+          { id: 'offline', available: false },
+        ],
+      });
     });
   });
 
@@ -1015,6 +1042,7 @@ describe('Ghost manifest contract', () => {
       notify: true,
       fs: true,
       library: true,
+      form: true,
       tools: [
         {
           name: 'run_helper',
@@ -1062,6 +1090,7 @@ describe('Ghost manifest contract', () => {
     expect(result.manifest.notify).toBe(true);
     expect(result.manifest.fs).toBe(true);
     expect(result.manifest.library).toBe(true);
+    expect(result.manifest.form).toBe(true);
     expect(result.manifest.unknownField).toBe('ignored');
   });
 
@@ -2186,6 +2215,19 @@ describe('interactive page declarations', () => {
             file: 'ui/planner.html',
             csp: { connectDomains: ['https://api.example.com'] }
         }], tools: { help: { resourceUri: "ui://planner", visibility: ['model', 'app'] } } } } };
+  // #11918, unit: a new declaration must be valid at install, while historical
+  // snapshots keep their original approval data and all valid page declarations.
+  it.each(['240', NaN, Infinity, -Infinity, {}, null])('rejects an invalid initialHeight %s only for a new package', initialHeight => {
+    const resource = base.mcpApps.ui.resources[0];
+    const other = { uri: 'ui://other', file: 'ui/other.html', initialHeight: 180 };
+    const raw = { ...base, mcpApps: { ui: { ...base.mcpApps.ui, resources: [{ ...resource, initialHeight }, other] } } };
+    expect(validateGhostManifest(raw)).toMatchObject({ ok: false, reason: expect.stringContaining('resources[0].initialHeight') });
+    const stored = validateStoredGhostManifest(raw);
+    if (!stored.ok) throw new Error(stored.reason);
+    expect(getPluginToolUi(stored.manifest)).toEqual({ ...base.mcpApps.ui, resources: [resource, other] });
+    expect(stored.manifest.mcpApps).toEqual(raw.mcpApps);
+    expect(raw.mcpApps.ui.resources[0].initialHeight).toEqual(initialHeight);
+  });
   // Host button preference is presentation only, not a display-mode permission.
   it('preserves the optional Host fullscreen button preference without changing tools', () => {
     const resources = [{ ...base.mcpApps.ui.resources[0], hostFullscreenButton: false }];
@@ -2462,6 +2504,23 @@ describe('tool approval declaration', () => {
     expect(validateGhostManifest({ ...validManifest, tools: [{ name: 'run', description: 'Run', approval: 'bypass' }] }))
       .toMatchObject({ ok: false });
   });
+});
+
+// Unit: the installed manifest must preserve the explicit startup declaration.
+// Approval tests cover tool policies but cannot distinguish an opted-in tool
+// from a legacy tool with no startup claim.
+it('retains tool startup opt-in while ignoring unknown values for installed packages', () => {
+  const tools = [
+    { name: 'find', description: 'Find an item', exposure: 'startup' },
+    { name: 'open', description: 'Open an item' },
+    { name: 'list', description: 'List items', exposure: { legacy: true } },
+  ];
+  for (const validate of [validateGhostManifest, validateStoredGhostManifest]) {
+    expect(validate({ ...validManifest, schemaVersion: 3, minCindyVersion: '0.1.61', slots: undefined, tools })).toMatchObject({
+      ok: true,
+      manifest: { tools: [tools[0], tools[1], { name: 'list', description: 'List items' }] },
+    });
+  }
 });
 
 describe('readme declarations', () => {

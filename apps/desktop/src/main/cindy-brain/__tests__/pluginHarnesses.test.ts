@@ -1,3 +1,5 @@
+import path from 'node:path';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import { validateGhostManifest, type InstalledGhost } from '../../../shared/ghost.js';
@@ -6,6 +8,7 @@ import {
   configurePluginHarnessRegistry,
   createPluginHarnessRegistry,
   PLUGIN_HARNESS_REFRESH_COOLDOWN_MS,
+  PLUGIN_USAGE_WORKER_FAILURE,
   requestPluginHarnessRefresh,
   resetPluginHarnessRefreshForTests,
   type PluginHarnessRegistryDeps,
@@ -85,6 +88,48 @@ describe('plugin harness registry', () => {
     expect(await registry.readUsage(key)).toBeNull();
   });
 
+  it('reports retryable worker failures only to remote readers of a still-approved engine', async () => {
+    const { registry, deps, publish, setGhosts } = setup([ghost()]);
+    publish({ harnesses: [{ id: 'dsh', available: true, reportsUsage: true }] });
+    const key = 'dsh-plugin:dsh';
+    const remote = { reportWorkerFailure: true };
+    deps.readUsage = async () => null;
+    expect(await registry.readUsage(key, undefined, remote)).toBeNull();
+    deps.readUsage = async () => PLUGIN_USAGE_WORKER_FAILURE;
+    expect(await registry.readUsage(key)).toBeNull();
+    await expect(registry.readUsage(key, undefined, remote)).rejects.toThrow('Plugin usage worker unavailable');
+    deps.readUsage = async () => {
+      setGhosts([ghost({ approvedHarnesses: [] })]);
+      return PLUGIN_USAGE_WORKER_FAILURE;
+    };
+    expect(await registry.readUsage(key, undefined, remote)).toBeNull();
+  });
+
+  // 引擎账号(subscription-account-pools.md 插件引擎的账号)：账号目录只给声明了登录方式的引擎，且只能是 Cindy
+  // 为这个引擎建的目录；Key 只交给要求 Key 的方式。最小失败输入：没声明账号的引擎带账号目录启动；目录在根之外。
+  it('starts an engine on an account directory only when its plugin keeps accounts apart', async () => {
+    const root = path.resolve('/data/owners/u/plugin-engine-accounts/dsh-plugin/dsh');
+    const account = path.join(root, 'cindy-0123456789ab-00000000-0000-4000-8000-00000000000a');
+    const r = setup([ghost()], { harnesses: [{ id: 'dsh', available: true }] });
+    r.deps.accountRoot = () => root;
+    const call = vi.fn(async (_ghost: string, method: string) => method === 'accountLogin' ? { ok: true } : { state: 'signed-in', identity: { email: 'a@example.com' }, token: 'x' });
+    r.deps.callAccount = call;
+    await expect(r.registry.spawn('dsh-plugin:dsh', { accountDir: account })).rejects.toThrow('cannot run on this account');
+    expect(await r.registry.readAccountStatus('dsh-plugin:dsh')).toBeNull();
+
+    r.publish({ harnesses: [{ id: 'dsh', available: true, accounts: { methods: [{ id: 'api-key', label: 'API Key', kind: 'secret' }] } }] });
+    r.registry.reconcile();
+    await expect(r.registry.spawn('dsh-plugin:dsh', { accountDir: path.join(root, '..', 'other') })).rejects.toThrow('cannot run on this account');
+    await expect(r.registry.spawn('dsh-plugin:dsh', { accountDir: account })).resolves.toBe(r.process);
+    expect(r.deps.spawn).toHaveBeenLastCalledWith('dsh-plugin', 'dsh', { accountDir: account });
+    // Only display fields of the status leave the worker.
+    expect(await r.registry.readAccountStatus('dsh-plugin:dsh', account)).toEqual({ state: 'signed-in', identity: { email: 'a@example.com' } });
+    expect(await r.registry.loginAccount('dsh-plugin:dsh', account, 'api-key')).toEqual({ ok: false, error: 'invalid-secret' });
+    expect(await r.registry.loginAccount('dsh-plugin:dsh', account, 'api-key', 'sk-1')).toEqual({ ok: true });
+    expect(call).toHaveBeenLastCalledWith('dsh-plugin', 'accountLogin',
+      { harnessId: 'dsh', accountDir: account, methodId: 'api-key', secret: 'sk-1' }, expect.objectContaining({ maxTotalMs: expect.any(Number) }));
+  });
+
   it('lists only enabled, approved, declared, receipt-approved engines with a known protocol', () => {
     const { registry } = setup([
       ghost(),
@@ -135,6 +180,9 @@ describe('plugin harness registry', () => {
     expect(requestRefresh.mock.calls.slice(2).map(([id]) => id)).toEqual(['offline-plugin']);
     requestPluginHarnessRefresh(1_000 + PLUGIN_HARNESS_REFRESH_COOLDOWN_MS);
     expect(requestRefresh.mock.calls.slice(3).map(([id]) => id).sort()).toEqual(['dsh-plugin', 'offline-plugin']);
+    // Targeting a single shared plugin never wakes or burns cooldowns on unshared plugins.
+    requestPluginHarnessRefresh(1_000 + PLUGIN_HARNESS_REFRESH_COOLDOWN_MS * 2, 'dsh-plugin');
+    expect(requestRefresh.mock.calls.slice(5).map(([id]) => id)).toEqual(['dsh-plugin']);
   });
 
   it('notifies listeners only when a reconcile changes the list', () => {
@@ -187,11 +235,22 @@ describe('plugin harness registry', () => {
     r.publish({ harnesses: [{ id: 'dsh', available: true, remoteWorkspace: true }] });
     r.registry.reconcile();
     expect(r.registry.list()[0]).toMatchObject({ remoteWorkspace: true });
+    expect(r.registry.list()[0]).not.toHaveProperty('guestWorkspace');
     await expect(r.registry.spawn('dsh-plugin:dsh', { remoteWorkspace: true })).resolves.toBe(r.process);
     expect(r.deps.spawn).toHaveBeenLastCalledWith('dsh-plugin', 'dsh', { remoteWorkspace: true });
+    // Cross-account shared tasks additionally require guestWorkspace: true from the plugin.
+    await expect(r.registry.spawn('dsh-plugin:dsh', { remoteWorkspace: true, guestWorkspace: true })).rejects.toThrow('shared');
+    expect(r.deps.spawn).toHaveBeenCalledTimes(1);
+
+    r.publish({ harnesses: [{ id: 'dsh', available: true, remoteWorkspace: true, guestWorkspace: true }] });
+    r.registry.reconcile();
+    expect(r.registry.list()[0]).toMatchObject({ remoteWorkspace: true, guestWorkspace: true });
+    await expect(r.registry.spawn('dsh-plugin:dsh', { remoteWorkspace: true, guestWorkspace: true })).resolves.toBe(r.process);
+    expect(r.deps.spawn).toHaveBeenLastCalledWith('dsh-plugin', 'dsh', { remoteWorkspace: true, guestWorkspace: true });
     // An unavailable engine cannot keep the mode: it is not startable either way.
-    r.publish({ harnesses: [{ id: 'dsh', available: false, remoteWorkspace: true }] });
+    r.publish({ harnesses: [{ id: 'dsh', available: false, remoteWorkspace: true, guestWorkspace: true }] });
     r.registry.reconcile();
     expect(r.registry.list()[0]).not.toHaveProperty('remoteWorkspace');
+    expect(r.registry.list()[0]).not.toHaveProperty('guestWorkspace');
   });
 });

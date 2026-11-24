@@ -71,9 +71,22 @@ pnpm dev:host -- --mock
 CINDY_HOST_API=http://127.0.0.1:3456 pnpm --filter desktop dev
 ```
 
+企业内测使用中国区账号体系。用开发环境的桌面渲染产物构建 Host 时，在 `--region cn` 后加 `--dev-endpoints`，并通过 `--web-dir` 指定 dev 渲染目录。构建器将发布仓提供的 `config/endpoint.dev.json` 装入中国区配置，同时核对渲染环境以及认证、设备、模型和 CDN 的独立 HTTPS 地址。
+
+## Linux 发布包
+
+无图形 Linux 用的 Host 发布包由工作流 [Host release (Linux)](../../.github/workflows/host-release.yml) 构建。在 Actions 页手动运行，「Use workflow from」选要构建的发布标签，或用 `gh workflow run host-release.yml --ref v<版本>`。工作流构建它所在的那个提交，版本号取自标签，所以只能构建已经包含这条工作流的标签。从分支运行得到不带版本号的包。
+
+- 每次运行在 Ubuntu 24.04 x64 上从同一个提交构建国内版和国际版，各自装入对应区域的网页客户端，内含 Node、Agent 运行时和 Chromium。两份都要先通过打包验收（`apps/host/scripts/release-region.e2e.mjs`）才会归档。
+- 产物是 `cindy-host-<版本>-linux-x64-<cn|global>.tar.gz`，作为该次运行的 artifact 保留 90 天，用 `gh run download <运行编号>` 取回。工作流只读仓库，不写 GitHub Release 和 CDN；对外发布是另一步。
+- 运行摘要列出提交、每个压缩包的 SHA-256，以及包内清单 `SHA256SUMS.json` 的 SHA-256。安装方按清单逐个文件校验，并固定清单本身的摘要；云主机的 Host 镜像用的就是这个摘要。
+- 修改构建脚本或这个工作流的 PR 会自动构建一份不带版本号的包（文件名里是 `unversioned`，保留 7 天），用来在评审时发现构建问题。
+
 ## 当前边界
 
 - Host 只监听 `127.0.0.1`，所有数据接口要求 profile bearer 或本机 cookie。
+- Device Link 的项目目录浏览复用桌面 `fsBrowse` 的纯 Node 实现，支持 `fs:list-dir`、`fs:stat-path` 和 `fs:mkdir-p`；目录始终按执行端文件系统解析。`maker:send` 复用完整 turn executor，运行设置复用 Host 现有 sessions 路由。`maker:get-new-maker-defaults` 复用桌面默认值镜像，首次读取时从当前账号目录恢复草稿与 worktree 偏好，文件名为 `host-new-maker-defaults.json`，分支偏好复用桌面持久化。`maker:git-safety:get` 读取同一份 Git safety 设置，`maker:set-extra-dirs` 复用桌面授权校验、冲突排除和失败回滚。wire channel、payload 与 relay 不变，写操作在桌面占用 profile 时拒绝。回归入口：`apps/host/src/device-link.test.mjs`、`apps/host/src/agent/remote-draft-preferences.test.mjs`。
+- Device Link 的远端新建 Worktree 流程支持 `worktree:detect-cwd`、`list-branches`、`suggest-name`、`create`、`discard-precreated` 和 `cancel-precreated`。Git 编排、分支冲突避让、后台 checkout 租约、脏改动/保留标记/活动引用保护、取消 tombstone 和分支删除 expected-tip 检查复用 Desktop 同一份 `WorktreeManager`；registry 使用同一 profile 的 `worktrees.json` 与跨进程锁。正式会话创建后回写 `sessions.worktree_path`，已落库或已有 live runtime 的会话拒绝补偿回收。这里不开放通用删除、主 checkout 切换或 archive/recovery，`supportsCheckout` 返回 false。回归入口：`apps/host/scripts/worktree-lifecycle.git-integration.mjs`（`pnpm --filter @cindy/host test:git-integration`）与 Desktop WorktreeManager/Store 测试。
 - 当前已完成 macOS 上真实文本任务、刷新、停止、允许一次、Host 重启续接与受控事件断线恢复；
   手机、三平台实机与真实网络切换仍待验收，见 [本地人工验收](basic-web.md#本地人工验收2026-11-10)。
 - Electron 客户端模式覆盖任务、消息、供应商、能力、Agent 命令/技能、输入队列、交互与告警；

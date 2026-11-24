@@ -747,8 +747,8 @@ describe('Plugins joining the sidebar', () => {
         </MemoryRouter>
       </MainViewHistoryProvider>,
     );
-    expect(screen.getByRole('checkbox', { name: 'sidebar.navigation.items.search' }).getAttribute('aria-checked'))
-      .toBe('false');
+    expect((screen.getByRole('checkbox', { name: 'sidebar.navigation.items.search' }) as HTMLInputElement).checked)
+      .toBe(false);
     fireEvent.click(screen.getByRole('button', { name: 'sidebar.navigation.customize.done' }));
     expect(getSidebarNavigationPrefs('owner-2').visible).toEqual(['automations']);
     expect(getSidebarNavigationPrefs(OWNER).visible).toEqual(['automations', 'plugins', 'search']);

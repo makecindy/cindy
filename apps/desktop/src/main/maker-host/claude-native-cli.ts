@@ -271,13 +271,14 @@ async function readClaudeCliLoginStatus(options?: {
 // ── 套餐余量 ──────────────────────────────────────────────────────────────────
 
 const PLAN_USAGE_TIMEOUT_MS = 20_000;
+const PLAN_USAGE_EXIT_GRACE_MS = 3_000;
 const PLAN_USAGE_REQUEST_ID = 'cindy-plan-usage';
 
 
 /**
  * 读 Claude 订阅套餐余量:拉起内置 CLI 的 SDK 模式,发 `get_usage` 控制请求(CLI 的
- * /usage 同源,结构化返回),拿到响应即结束进程。请求由 CLI 用自己的登录发出,Cindy
- * 不接触凭证;不发用户消息,不产生模型调用。
+ * /usage 同源,结构化返回),拿到响应后发送 EOF,给 CLI 留出收尾退出的时间。
+ * 请求由 CLI 用自己的登录发出,Cindy 不接触凭证;不发用户消息,不产生模型调用。
  *
  * `get_usage` 是 CLI 标注为 Experimental 的控制请求,响应形状可能变化 —— 这里只取
  * `rate_limits` 原样交给调用方解析。CLI 明确声明当前账号没有套餐余量
@@ -309,21 +310,30 @@ async function readClaudeCliPlanUsage(configDir?: string): Promise<ClaudeCliPlan
     }
     let settled = false;
     let buffer = '';
+    let exitTimer: ReturnType<typeof setTimeout> | undefined;
     const finish = (err: Error | null, value?: ClaudeCliPlanUsage | null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      child.kill();
       if (err) reject(err);
       else resolve(value ?? null);
     };
-    const timer = setTimeout(() => finish(new Error('claude get_usage timed out')), PLAN_USAGE_TIMEOUT_MS);
-    child.once('error', (err) => finish(err));
-    child.once('close', (code) => finish(new Error(`claude cli exited before get_usage response (code ${code})`)));
+    const fail = (err: Error) => {
+      if (settled) return;
+      finish(err);
+      child.kill();
+    };
+    const timer = setTimeout(() => fail(new Error('claude get_usage timed out')), PLAN_USAGE_TIMEOUT_MS);
+    child.once('error', fail);
+    child.once('close', (code) => {
+      clearTimeout(exitTimer);
+      finish(new Error(`claude cli exited before get_usage response (code ${code})`));
+    });
     child.stdin?.on('error', () => {
       /* 进程提前退出时写 stdin 会 EPIPE,由 close 分支给结论。 */
     });
     child.stdout?.on('data', (chunk: Buffer) => {
+      if (settled) return;
       buffer += chunk.toString('utf8');
       let newline: number;
       while ((newline = buffer.indexOf('\n')) >= 0) {
@@ -331,7 +341,17 @@ async function readClaudeCliPlanUsage(configDir?: string): Promise<ClaudeCliPlan
         buffer = buffer.slice(newline + 1);
         if (!line) continue;
         const outcome = parseClaudeCliPlanUsageLine(line);
-        if (outcome) finish(outcome.error ? new Error(outcome.error) : null, outcome.usage);
+        if (!outcome) continue;
+        if (outcome.error) {
+          fail(new Error(outcome.error));
+          return;
+        }
+        // Quota readers have their own deadlines. Return the reply while EOF
+        // lets the SDK process finish outstanding writes before exiting.
+        finish(null, outcome.usage);
+        exitTimer = setTimeout(() => child.kill('SIGKILL'), PLAN_USAGE_EXIT_GRACE_MS);
+        child.stdin?.end();
+        return;
       }
     });
     const write = (message: unknown) => child.stdin?.write(`${JSON.stringify(message)}\n`);

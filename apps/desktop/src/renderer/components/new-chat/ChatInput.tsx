@@ -81,6 +81,7 @@ import {
   setSlashCommandRoster,
   SlashCommandDecoration,
 } from './SlashCommandDecoration';
+import { detectTrigger, type TriggerState } from './composerTrigger';
 
 import { cn } from '@/lib/utils';
 import { markComposerTypingActivity } from '@/lib/composerTypingActivity';
@@ -149,10 +150,11 @@ import {
   type UnifiedSelectionAgentDevice,
 } from './ModelSelector';
 import type { PluginModelsPickerProps } from './PluginModelsSection';
-import type {
-  PluginEnginePendingSelection,
-  PluginEngineSessionPickerProps,
-  PluginEnginesPickerProps,
+import {
+  usePluginEngineChoiceLabel,
+  type PluginEnginePendingSelection,
+  type PluginEngineSessionPickerProps,
+  type PluginEnginesPickerProps,
 } from './PluginEnginesSection';
 import { PLUGIN_ENGINE_FALLBACK_PERMISSION_MODES, isSamePluginEngineChoice } from '@/lib/pluginEngineSelection';
 import type { ModelGroupsPickerProps } from './ModelGroupsPickerSection';
@@ -238,7 +240,6 @@ import { AtMentionPanel, type AtPanelState } from './AtMentionPanel';
 import { MentionChipNode, type MentionChipAttrs } from './MentionChipNode';
 import { ComposerQuoteNode } from './ComposerQuoteNode';
 import {
-  COMPOSER_QUOTE_NODE_TYPE,
   composerHistoryEntryToDocument,
   type ComposerHistoryEntry,
 } from '@/lib/composerQuoteDocument';
@@ -430,6 +431,7 @@ import {
 import type { MessageDeliveryMode, QueuedMessage } from '@/lib/makerChatStore';
 import {
   builtinAgentSwitchIntent,
+  isSameEngineNonPiModelIntent,
   isRemoteOptimisticComposerTransitionActive,
   isRemoteOptimisticDataOwnerBoundaryError,
   isRemoteOptimisticSessionPurgedError,
@@ -444,6 +446,7 @@ import {
 } from '../../../shared/modelSwitchAssessment';
 import { ComposerRecordingBars, type RecordingSamplesRef } from '@/voice-input/ComposerRecordingBars';
 import { useVoiceInput } from '@/voice-input/useVoiceInput';
+import { retainDictationInputContext } from '@/voice-input/retainDictationInputContext';
 import { getTextPreviewHost } from '@/components/find-in-page/findInPageOwnership';
 import { useVoiceInputSettings } from '@/hooks/useVoiceInputSettings';
 import { VoiceInputStatusNotice } from '@/voice-input/VoiceInputStatusNotice';
@@ -466,6 +469,7 @@ import {
   type ComposerLongPressVoiceGesture,
 } from '@/voice-input/composerLongPressGesture';
 import { requestRendererMicrophonePermission } from '@/voice-input/startGuards';
+import { COMPOSER_ATTACHMENT_MIME, composerAttachmentDropError, isComposerAttachmentDrag } from '@/lib/composerDrop';
 import { COMPOSER_MENTION_MIME, decodeComposerMentionPayload } from '@/lib/composerMentionDrag';
 import { createWorkLouderCodexVoiceGesture } from '@/lib/workLouderCodexVoiceGesture';
 import { appendMentionChip } from './mentionChipInsertion';
@@ -661,6 +665,7 @@ interface ChatInputProps {
   modelMemoryOverride?: ModelMemoryAccessors;
   /** Initial model from session data. When provided, overrides activeModel. */
   initialModel?: string;
+  draftModelPending?: boolean;
   /** Initial effort from session data. null explicitly means the model has no effort selector. */
   initialEffort?: Effort | null;
   /** 持久化基线档（session.runtimeBaseline.effort）。投影把 effort 折成 null→''（如远程
@@ -1166,140 +1171,6 @@ function isEditorEmpty(editor: Editor | null): boolean {
 }
 
 /**
- * Detect the active command-palette trigger based on the current selection.
- * Returns:
- *   - { kind: 'slash', query }  if `/` is the very first character of the doc
- *     and the caret sits in the leading slash-run
- *   - { kind: 'at', query, from } if `@` preceded by whitespace/start exists
- *     in the current text block up to the caret with no whitespace between
- *   - { kind: 'none' } otherwise
- *
- * `from` is the absolute doc position of the `@` char — ChatInput uses it
- * later to replace the `@query` run with a chip + trailing space.
- */
-interface TriggerSlash {
-  kind: 'slash';
-  /** 触发符:'/' = 技能/命令,'$' = 意识指令(2026-07-09 定案分流)。 */
-  sigil: '/' | '$';
-  query: string;
-  from: number; // absolute position of the leading `/` or `$`
-}
-interface TriggerAt {
-  kind: 'at';
-  query: string;
-  from: number; // absolute position of the `@`
-}
-type TriggerState = TriggerSlash | TriggerAt | { kind: 'none' };
-
-/**
- * `$` 触发符的等价字符集:中文输入法下 Shift+4 产出的是全角 ¥(U+FFE5),
- * 全角标点模式/日文布局还可能产出全角 $(U+FF04)/半角 ¥(U+00A5)——
- * 一律视作 `$`,用户打中文时不必切输入法。面板选中后统一替换为 ASCII
- * `$cmd `(见 applySlashSelect),发送期 ghostCommand.ts 的 COMMAND_RE
- * 认同一字符集,两端必须保持一致。
- */
-const GHOST_SIGIL_CHARS = ['$', '＄', '¥', '￥'] as const;
-
-function detectTrigger(editor: Editor): TriggerState {
-  const { state } = editor;
-  const { selection } = state;
-  if (!selection.empty) return { kind: 'none' };
-
-  const pos = selection.from;
-  const $pos = state.doc.resolve(pos);
-
-  // Must be inside a paragraph
-  const parent = $pos.parent;
-  if (parent.type.name !== 'paragraph') return { kind: 'none' };
-
-  const offsetInParent = $pos.parentOffset;
-  // Collect paragraph text up to the caret. We iterate children because
-  // inline nodes (chips) break `textBetween` semantics — we want chips to
-  // act as hard boundaries that reset any @-run.
-  let textSoFar = '';
-  let consumed = 0;
-  parent.forEach((child) => {
-    if (consumed >= offsetInParent) return;
-    const size = child.nodeSize;
-    if (child.type.name === 'mentionChip' || child.type.name === COMPOSER_QUOTE_NODE_TYPE) {
-      textSoFar = ''; // chips reset the @ / slash run
-      consumed += size;
-      return;
-    }
-    if (child.isText) {
-      const remaining = offsetInParent - consumed;
-      const slice = (child.text ?? '').slice(0, remaining);
-      textSoFar += slice;
-      consumed += slice.length;
-    } else {
-      // hardBreak (Shift+Enter) → treat as whitespace so @ / / triggers
-      // fire at the start of a new line, not glued to the previous word.
-      if (child.type.name === 'hardBreak') textSoFar += '\n';
-      consumed += size;
-    }
-  });
-
-  // Slash detection — mirror @ semantics: trigger when `/` sits at the start
-  // of the current paragraph OR is preceded by whitespace, with no whitespace
-  // between it and the caret. The previous "must be doc[0]" rule was too
-  // strict — users couldn't fire / after a Shift+Enter or in a sentence.
-  const slashIdx = textSoFar.lastIndexOf('/');
-  if (slashIdx >= 0) {
-    const beforeSlash = slashIdx === 0 ? '' : textSoFar[slashIdx - 1];
-    const slashAllowed = slashIdx === 0 || /\s/.test(beforeSlash);
-    const afterSlash = textSoFar.slice(slashIdx + 1);
-    if (slashAllowed && !/\s/.test(afterSlash)) {
-      return {
-        kind: 'slash',
-        sigil: '/',
-        query: afterSlash,
-        from: pos - (textSoFar.length - slashIdx),
-      };
-    }
-  }
-
-  // `$` 检测 —— 与 `/` 同规则(段首或空白后,到光标无空白):意识指令面板。
-  // 全角变体(GHOST_SIGIL_CHARS)同权触发;都是单 UTF-16 code unit,位置
-  // 计算与 ASCII `$` 完全一致。
-  let dollarIdx = -1;
-  for (const sigil of GHOST_SIGIL_CHARS) {
-    const idx = textSoFar.lastIndexOf(sigil);
-    if (idx > dollarIdx) dollarIdx = idx;
-  }
-  if (dollarIdx >= 0) {
-    const beforeDollar = dollarIdx === 0 ? '' : textSoFar[dollarIdx - 1];
-    const dollarAllowed = dollarIdx === 0 || /\s/.test(beforeDollar);
-    const afterDollar = textSoFar.slice(dollarIdx + 1);
-    if (dollarAllowed && !/\s/.test(afterDollar)) {
-      return {
-        kind: 'slash',
-        sigil: '$',
-        query: afterDollar,
-        from: pos - (textSoFar.length - dollarIdx),
-      };
-    }
-  }
-
-  // @ detection — find the last `@` with whitespace or start-of-text before it.
-  const atIdx = textSoFar.lastIndexOf('@');
-  if (atIdx >= 0) {
-    const before = atIdx === 0 ? '' : textSoFar[atIdx - 1];
-    const allowed = atIdx === 0 || /\s/.test(before);
-    const after = textSoFar.slice(atIdx + 1);
-    const from = pos - (textSoFar.length - atIdx);
-    if (allowed && !/\s/.test(after)) {
-      return {
-        kind: 'at',
-        query: after,
-        from,
-      };
-    }
-  }
-
-  return { kind: 'none' };
-}
-
-/**
  * 合成激活(「+」按钮打开统一建议面板,Codex 模式)的 query 推导:
  * 不向文档插入 `@`,query = 锚点→光标之间的纯文本。返回 null 表示锚点失效
  * (光标移到锚点前 / 跨段落 / 中间出现空白、chip 或换行),此时
@@ -1379,6 +1250,7 @@ export function ChatInput({
   catalogHostDeviceId,
   modelMemoryOverride,
   initialModel,
+  draftModelPending,
   initialEffort,
   baselineEffort,
   initialProviderId,
@@ -1473,6 +1345,16 @@ export function ChatInput({
   // device-link 远程会话:null = 已确认本地会话,undefined = 所有权尚未解析,string = 远程会话。
   // 预测守卫用原始值区分 null vs undefined,下游通路继续用 ?? undefined 归一化。
   const deviceLinkDeviceId = _deviceLinkDeviceId;
+  const taskEngine = runtimeAgentKind ?? runtimeEffective?.agentKind;
+  const usesDeferredCredentialCommit = taskEngine === 'claude-code' || taskEngine === 'codex';
+  const credentialFailureKey = useCallback((failure: {
+    reason: 'apply-failed' | 'rollback-failed';
+    previousSettingsRetained?: boolean;
+  }) => usesDeferredCredentialCommit && failure.reason === 'apply-failed' && failure.previousSettingsRetained === true
+      ? 'newChat.chatInput.credentialSwitchKeptSettings'
+      : 'newChat.chatInput.credentialSwitchFailed',
+  [usesDeferredCredentialCommit]);
+
   const sharedGuest = isSharedTaskPeer(deviceLinkDeviceId ?? '');
   // The host owns model, Agent and reasoning settings; guests can still send input.
   const settingsLocked = settingsLockedProp || sharedGuest;
@@ -1637,19 +1519,19 @@ export function ChatInput({
     return window.electronAPI.maker.onSessionCredentialSwitchFailed((payload) => {
       if (payload.sessionId !== sessionId) return;
       if (deviceLinkDeviceId || getSessionDeviceId(sessionId)) return;
-      toast.error(t('newChat.chatInput.credentialSwitchFailed'), { duration: 6000 });
+      toast.error(t(credentialFailureKey(payload)), { duration: 6000 });
     });
-  }, [deviceLinkDeviceId, sessionId, t]);
+  }, [credentialFailureKey, deviceLinkDeviceId, sessionId, t]);
   useEffect(() => {
     if (!sessionId) return;
     return subscribeRemoteCredentialSwitchOutcome(sessionId, deviceLinkDeviceId ?? undefined, (outcome) => {
       if (outcome.kind === 'applied') {
         toast.success(t('newChat.chatInput.credentialSwitchApplied'), { duration: 3000 });
       } else {
-        toast.error(t('newChat.chatInput.credentialSwitchFailed'), { duration: 6000 });
+        toast.error(t(credentialFailureKey(outcome)), { duration: 6000 });
       }
     });
-  }, [deviceLinkDeviceId, sessionId, t]);
+  }, [credentialFailureKey, deviceLinkDeviceId, sessionId, t]);
   // F-QUEUE-1 — preserve prior semantics
   const showStopButton = isAgentBusy ?? isStreaming;
   const { confirm: confirmDialog } = useConfirmDialog();
@@ -1865,7 +1747,7 @@ export function ChatInput({
   // trigger:none 的普通输入吞掉,面板不过滤)。锚点失效时返回哨兵 query,
   // 放行一次刷新让清锚点 effect 跑掉。
   const composerTriggerSnapshotOf = (ed: Editor): TriggerState => {
-    const typed = detectTrigger(ed);
+    const typed = detectTrigger(ed.state);
     if (typed.kind !== 'none') return typed;
     const anchor = syntheticAtAnchorRef.current;
     if (anchor != null) {
@@ -1969,25 +1851,32 @@ export function ChatInput({
   // SessionChatState 独立槽位,登记/撤销通过 setState 驱动重渲染,不会改真实
   // agentKind reducer 路由。device-link 远程会话同样适用:意图的权威态在被控端
   // main,控制端 store 里这份是它的镜像(登记时乐观写、重连时读回、push 回流覆盖)。
-  const storedAgentSwitchIntent =
-    sessionId && !remoteHostId ? makerChatStore.getAgentSwitchIntent(sessionId) : null;
+  const storedIntent = sessionId ? makerChatStore.getAgentSwitchIntent(sessionId) : null;
+  const storedAgentSwitchIntent = !remoteHostId ||
+    (runtimeAgentKind && isSameEngineNonPiModelIntent(builtinAgentSwitchIntent(storedIntent), runtimeAgentKind))
+    ? storedIntent : null;
   // 待切到插件引擎(docs/plans/acp-plugin-bridge.md)的意图由选择器单独呈现；下面内置引擎的展示、
   // 档位与切换链路只看切到内置引擎的意图，行为与没有插件引擎时一致。
   const agentSwitchIntent = builtinAgentSwitchIntent(storedAgentSwitchIntent);
   const pluginEngineSwitchIntent = pluginEngineAgentSwitchIntent(storedAgentSwitchIntent);
+  const pluginEngineChoiceLabel = usePluginEngineChoiceLabel();
   // 待切到插件引擎时选择器的 trigger 写「下条：引擎 · 模型」；引擎已不在时用通用名称。
   const pluginEnginePending = useMemo<PluginEnginePendingSelection | undefined>(() => {
     const providerId = pluginEngineSwitchIntent?.providerId;
     if (!pluginEngineSwitchIntent || !providerId) return undefined;
-    const engine = pluginEngines?.engines.find((item) => item.providerId === providerId) ?? null;
+    const targetDeviceId = pluginEngineSwitchIntent.agentDeviceId === undefined
+      ? (agentDeviceId ?? null)
+      : pluginEngineSwitchIntent.agentDeviceId;
+    const engine = pluginEngines?.engines.find((item) =>
+      isSamePluginEngineChoice(item, { providerId, deviceId: targetDeviceId })) ?? null;
     return {
       providerId,
       engine,
-      engineName: engine?.name ?? t('newChat.pluginEngines.genericName'),
+      engineName: engine ? pluginEngineChoiceLabel(engine) : t('newChat.pluginEngines.genericName'),
       modelId: pluginEngineSwitchIntent.model,
       effort: pluginEngineSwitchIntent.effort ?? null,
     };
-  }, [pluginEngineSwitchIntent, pluginEngines, t]);
+  }, [pluginEngineSwitchIntent, agentDeviceId, pluginEngines, pluginEngineChoiceLabel, t]);
   const composerSelection = resolveComposerModelSelection({
     current: {
       agentKind: runtimeAgentKind ?? vendorKeyToAgentKind(vendorKey) ?? 'claude-code',
@@ -2439,7 +2328,11 @@ export function ChatInput({
   // 关键:这里**绝不**把"跟随默认"具体化成原生默认 id(如 'xd')——默认 cohort 必须保持
   //   providerId=null,路由才回落 spawn-aware 默认(字节级不变,no-break);写成显式 'xd'
   //   会改走 catalog gateway-key 路由(见 provider-route.ts),破坏默认 cohort 的路由/缓存基线。
-  const sendProviderId = activeProviderId || null;
+  // The same-engine picker is a preview; the host admits the actual switch.
+  const sendCurrentSelection = isSameEngineNonPiModelIntent(agentSwitchIntent, composerSelection.current.agentKind);
+  const sendModel = sendCurrentSelection ? composerSelection.current.model : activeModel;
+  const sendEffort = sendCurrentSelection ? composerSelection.current.effort ?? '' : selectedEffort;
+  const sendProviderId = (sendCurrentSelection ? composerSelection.current.providerId : activeProviderId) || null;
 
   // 模型预设采用「全局默认 + 已创建会话保护」:
   //   - 本地草稿 / 已创建会话的**非选中行**都读写 providerModelMemory,所以同一
@@ -3288,7 +3181,7 @@ export function ChatInput({
           // active, the suppressed-at check keeps it closed.
           const ed = editorRef.current;
           if (!ed) return;
-          const t = detectTrigger(ed);
+          const t = detectTrigger(ed.state);
           if (t.kind === 'slash') setSuppressedSlashAt(t.from);
           else if (t.kind === 'at') setSuppressedAtAt(t.from);
           // 合成打开的统一面板同样随失焦关闭(「+」按钮本身 mousedown
@@ -3461,17 +3354,22 @@ export function ChatInput({
   const installedGhosts = useInstalledGhosts(deviceLinkDeviceId === null);
   const installedGhostsRef = useRef(installedGhosts);
   installedGhostsRef.current = installedGhosts;
-  const trigger: TriggerState = editor ? detectTrigger(editor) : { kind: 'none' };
+  const trigger: TriggerState = editor ? detectTrigger(editor.state) : { kind: 'none' };
   const pluginCompletionKey = pluginUiCandidates.completion.length && trigger.kind !== 'none' &&
     (trigger.kind === 'at' || trigger.sigil === '/') && !remoteHostId && !deviceLinkDeviceId
     ? JSON.stringify([storageKey, pluginCompletionAuthority, trigger.kind, trigger.from, trigger.query]) : '';
   pluginCompletionKeyRef.current = pluginCompletionKey;
   const pluginCompletionItems = pluginCompletionKey && pluginCompletionResult?.key === pluginCompletionKey
     ? pluginCompletionResult.items : undefined;
-  const canInsertPluginCompletion = (from: number, query: string, sigil: '/' | '@', key: string) => !!editor &&
-    !editor.isDestroyed && !editor.view.composing && !composerMutationLockedRef.current &&
-    pluginCompletionKeyRef.current === key && editor.state.selection.empty &&
-    editor.state.doc.textBetween(from, editor.state.selection.from, '\n', '\uFFFC') === `${sigil}${query}`;
+  const canInsertPluginCompletion = (from: number, query: string, key: string) => {
+    if (!editor || editor.isDestroyed || editor.view.composing || composerMutationLockedRef.current) return false;
+    if (pluginCompletionKeyRef.current !== key || !editor.state.selection.empty) return false;
+    // 触发符可能是 ASCII `/`,也可能是它的输入法别名(`、`,见 composerTrigger)。
+    // 比对文档里实际写入的那个字符与它的选区区间,而不是把 `/` 写死在这里。
+    const typedSigil = editor.state.doc.textBetween(from, from + 1);
+    const run = editor.state.doc.textBetween(from, editor.state.selection.from, '\n', '\uFFFC');
+    return run === `${typedSigil}${query}`;
+  };
   const remoteComposerGhosts = useRemoteComposerGhosts(
     deviceLinkDeviceId,
     workingDir,
@@ -3558,6 +3456,10 @@ export function ChatInput({
 
     const result = await requestRendererMicrophonePermission();
     if (result.ok) return;
+    if (result.status === 'device-unavailable') {
+      toast.error(t('settings.voiceInput.microphone.errors.deviceUnavailable'));
+      return;
+    }
 
     const settingsResult = await window.electronAPI.voiceInput.openMicrophoneSettings();
     if (!settingsResult.ok) {
@@ -3661,14 +3563,27 @@ export function ChatInput({
     currentStorageKey: storageKeyForDraftRef.current,
   });
   const composerMutationLocked = composerEditorLocked || voiceBusyOnCurrentComposer;
+  const canReceiveComposerDrag = () => !!sessionId && storageKey === sessionId && !sharedGuest &&
+    !composerMutationLocked && !remoteHostId && !deviceLinkDeviceId && !getSessionDeviceId(sessionId) &&
+    typeof window.electronAPI?.maker?.redeemComposerAttachmentDrag === 'function';
   // Only the composer that owns the run explains why someone else's words are missing.
   const showSpeakerFilteredNotice = voiceInput.speakerFiltered && voiceBusyOnCurrentComposer;
   useEffect(() => {
     onComposerVoiceBusyChange?.(voiceBusyOnCurrentComposer);
   }, [onComposerVoiceBusyChange, voiceBusyOnCurrentComposer]);
-  const composerTypingLocked =
-    disabled || waitingForFolders || (sendDispatchInFlight && !allowTypeDuringSend) || voiceBusyOnCurrentComposer;
+  const typingLockedOutsideDictation =
+    disabled || waitingForFolders || (sendDispatchInFlight && !allowTypeDuringSend);
+  const composerTypingLocked = typingLockedOutsideDictation || voiceBusyOnCurrentComposer;
+  const retainVoiceInputContext =
+    voiceBusyOnCurrentComposer && !typingLockedOutsideDictation && window.electronAPI?.platform === 'darwin';
   composerMutationLockedRef.current = composerTypingLocked;
+  // Attach before the effect that makes the focused editor read-only. A change
+  // in lock ownership alone must not emit another Tiptap document update.
+  useEffect(() => {
+    if (retainVoiceInputContext && editor && !editor.isDestroyed) {
+      return retainDictationInputContext(editor);
+    }
+  }, [editor, retainVoiceInputContext]);
   useEffect(() => {
     editor?.setEditable(!composerTypingLocked);
   }, [composerTypingLocked, editor]);
@@ -5266,7 +5181,7 @@ export function ChatInput({
   const pluginAtActions = useMemo<ComposerSuggestionAction[]>(() => trigger.kind === 'at' && pluginCompletionItems
     ? pluginCompletionItems.map(item => ({ id: `plugin-completion:${item.instanceId}:${item.providerId}:${item.id}`,
       label: `${item.label} · ${item.source}`, searchText: trigger.query,
-      canRun: () => canInsertPluginCompletion(trigger.from, trigger.query, '@', pluginCompletionKey),
+      canRun: () => canInsertPluginCompletion(trigger.from, trigger.query, pluginCompletionKey),
       run: () => { editor?.chain().focus().command(({ tr }) => {
         tr.insertText(item.insertText, trigger.from, tr.selection.from); return true;
       }).run(); },
@@ -5524,7 +5439,7 @@ export function ChatInput({
       const { from } = trigger;
       if (cmd.name.startsWith('plugin-completion:')) {
         const choice = pluginSlashChoices.find(choice => choice.command === cmd);
-        if (!choice || !canInsertPluginCompletion(from, trigger.query, '/', pluginCompletionKey)) return;
+        if (!choice || !canInsertPluginCompletion(from, trigger.query, pluginCompletionKey)) return;
         editor.chain().focus().command(({ tr }) => {
           tr.insertText(choice.item.insertText, from, editor.state.selection.from); return true;
         }).run();
@@ -6045,7 +5960,7 @@ export function ChatInput({
               model: activeModel,
               effort: selectedEffort,
               permissionMode: activePermissionMode,
-              providerId: sendProviderId,
+              providerId: activeProviderId || null,
               fastMode,
               planModeEnabled: planModeEntry?.enabled ?? false,
             },
@@ -6629,7 +6544,7 @@ export function ChatInput({
           }
         }
         let result: boolean | void;
-        let effortForSend = selectedEffort;
+        let effortForSend = sendEffort;
         try {
           if (sessionId) {
             const coordinator = effortChangeCoordinatorRef.current;
@@ -6667,11 +6582,11 @@ export function ChatInput({
             }
             // 等待 commit 后，闭包里的 activeEffort 可能仍是旧 props；以该 session 已提交的
             // 选择发送，保证本 turn 与 UI/SQLite 的 effort 相同。
-            effortForSend = coordinator.getCommittedEffort(sessionId) ?? selectedEffort;
+            effortForSend = coordinator.getCommittedEffort(sessionId) ?? sendEffort;
           }
           result = await onSend(
             routedText,
-            activeModel,
+            sendModel,
             effortForSend,
             activePermissionMode,
             filesToSend,
@@ -6730,7 +6645,8 @@ export function ChatInput({
       sessionId,
       onSend,
       activeModel,
-      selectedEffort,
+      sendModel,
+      sendEffort,
       activePermissionMode,
       sendProviderId,
       selectedSourceDisconnected,
@@ -9663,7 +9579,7 @@ export function ChatInput({
           Stacked here (voice error on top, rejections below) so both stay
           visible when present simultaneously. */}
       {(voiceInput.lastError || showSpeakerFilteredNotice || rejections.length > 0) && (
-        <div className="pointer-events-none absolute bottom-full left-0 right-0 z-20 mb-2 flex flex-col items-center gap-1 px-3">
+        <div className="pointer-events-none absolute bottom-full left-0 right-0 z-page-float mb-2 flex flex-col items-center gap-1 px-3">
           {voiceInput.lastError ? (
             <VoiceInputStatusNotice message={voiceInput.lastError} />
           ) : showSpeakerFilteredNotice ? (
@@ -9752,11 +9668,30 @@ export function ChatInput({
               if (intent === 'keep-caret') editor.commands.focus();
               else if (intent === 'doc-end') editor.commands.focus('end');
             }}
+            onDropCapture={(event) => {
+              if (!isComposerAttachmentDrag(event.dataTransfer)) return;
+              event.preventDefault();
+              event.stopPropagation();
+              dragCounterRef.current = 0;
+              setIsDragOver(false);
+              composerMentionDragActiveRef.current = false;
+              internalMentionDragActiveRef.current = false;
+              setMentionDragCaret(editor, null);
+              onComposerDropHandled?.();
+              const ticket = event.dataTransfer.getData(COMPOSER_ATTACHMENT_MIME);
+              if (!ticket || !sessionId || !canReceiveComposerDrag()) {
+                toast.error(t('mcpApps.composerDragFailed'));
+                return;
+              }
+              void window.electronAPI.maker.redeemComposerAttachmentDrag({ sessionId, ticket })
+                .catch(error => toast.error(t(composerAttachmentDropError(error))));
+            }}
             onDragEnter={(e) => {
               e.preventDefault();
               e.stopPropagation();
+              if (isComposerAttachmentDrag(e.dataTransfer) && !canReceiveComposerDrag()) return;
               const firstEnter = dragCounterRef.current === 0;
-              if (firstEnter && Array.from(e.dataTransfer.types).includes(COMPOSER_MENTION_MIME)) {
+              if (firstEnter && !isComposerAttachmentDrag(e.dataTransfer) && Array.from(e.dataTransfer.types).includes(COMPOSER_MENTION_MIME)) {
                 composerMentionDragActiveRef.current = true;
                 if (editor && !editor.isDestroyed) {
                   lastComposerSelectionFromRef.current = editor.state.selection.from;
@@ -9770,6 +9705,10 @@ export function ChatInput({
             onDragOver={(e) => {
               e.preventDefault();
               e.stopPropagation();
+              if (isComposerAttachmentDrag(e.dataTransfer)) {
+                e.dataTransfer.dropEffect = canReceiveComposerDrag() ? 'copy' : 'none';
+                return;
+              }
               if (internalMentionDragActiveRef.current && editor && !editor.isDestroyed) {
                 const dropPos =
                   editor.view.posAtCoords({ left: e.clientX, top: e.clientY })?.pos ?? null;
@@ -9782,7 +9721,7 @@ export function ChatInput({
             onDragLeave={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              dragCounterRef.current -= 1;
+              dragCounterRef.current = Math.max(0, dragCounterRef.current - 1);
               if (dragCounterRef.current === 0) {
                 setIsDragOver(false);
                 composerMentionDragActiveRef.current = false;
@@ -9853,10 +9792,10 @@ export function ChatInput({
             {(isDragOver || externalDragOver) && (
               <div
                 className={cn(
-                  'pointer-events-none absolute inset-0 z-10',
+                  'pointer-events-none absolute inset-0 z-raised',
                   // 输入框卡片圆角与对话页统一为 12px(用户定稿 2026-07-22);create-agent
                   // 不再用 Figma 的 6px,避免新建/对话两个框圆角不一致。
-                  'rounded-[12px]',
+                  'rounded-xl',
                 )}
                 style={{
                   backgroundColor: 'var(--drop-overlay-bg)',
@@ -9898,7 +9837,7 @@ export function ChatInput({
                   {/* hover 预览:逐条评论(截图缩略 + 标签 + 文字),行内可单删。
                   与 quotes 预览不同,这里是可交互面板(pointer-events 开)。 */}
                   <div
-                    className="absolute bottom-full left-0 z-30 mb-2 hidden max-h-72 w-80 max-w-[70vw] flex-col gap-2 overflow-y-auto rounded-[12px] border p-3 group-hover/bcomment:flex"
+                    className="absolute bottom-full left-0 z-page-overlay mb-2 hidden max-h-72 w-80 max-w-[70vw] flex-col gap-2 overflow-y-auto rounded-xl border p-3 group-hover/bcomment:flex"
                     style={{
                       backgroundColor: 'var(--surface-elevated)',
                       borderColor: 'var(--border-default)',
@@ -10025,7 +9964,8 @@ export function ChatInput({
                 {/* 字号 / 行高 / 颜色与原生 placeholder 对齐,单行截断防止长句撑高输入框。
                     py-[3px] 是镜像 .ProseMirror 的 py-[3px]:它的 -my-[3px] 会穿过这里
                     向外折叠(relative 不建立 BFC),于是 .ProseMirror 的 border box 贴在本
-                    容器顶边、正文被自身 padding 推低 3px。overlay 不跟着补这 3px 就会高一行边距。 */}
+                    容器顶边、正文被自身 padding 推低 3px。overlay 不跟着补这 3px 就会高一行边距。
+                    3px 属于 DESIGN.md §5 登记的输入区破出套组，不单独收到刻度。 */}
                 {showRecommendationOverlay && !showPromptPreview && (
                   <div
                     className={cn(
@@ -10086,7 +10026,7 @@ export function ChatInput({
                 // select-none 挂容器而非逐按钮:Chromium 的 user-select:none 只挡
                 // "在元素上起选",从相邻可选区起拖再划入时按钮文字仍会被刷蓝
                 // (同 sortable.css 侧栏行修过的 selection bleed),容器级禁选才挡得住。
-                'mt-[2px] flex select-none items-center',
+                'mt-0.5 flex select-none items-center',
                 allowToolbarWrap
                   ? 'min-w-0 flex-wrap justify-between gap-x-1 gap-y-1'
                   : useNarrowToolbar
@@ -10265,6 +10205,7 @@ export function ChatInput({
                   )}
                 >
                   {!sessionModelLoading && <ModelSelector
+                    draftModelPending={draftModelPending}
                     openRequest={modelPickerRequest}
                     onOpenRequestConsumed={onModelPickerRequestConsumed}
                     sshCodex={sshCodexCatalog}
@@ -10545,7 +10486,7 @@ export function ChatInput({
                       onReleaseToSendChange={setVoiceReleaseToSendActive}
                       visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
                       className={
-                        isCreateAgentVariant && !useNarrowToolbar ? 'ml-[7px]' : undefined
+                        isCreateAgentVariant && !useNarrowToolbar ? 'ml-1.5' : undefined
                       }
                     />
                   )}
@@ -10767,7 +10708,7 @@ export function ChatInput({
                 <button
                   type="button"
                   className={cn(
-                    'flex h-[46px] items-center gap-[10px] rounded-full',
+                    'flex h-[46px] items-center gap-2.5 rounded-full',
                     'border px-5',
                     'bg-[var(--folder-btn-bg)]',
                     'border-[var(--folder-btn-border)]',

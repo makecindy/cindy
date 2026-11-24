@@ -20,6 +20,7 @@ const OUTER_SESSION_CLEARED_AT_SQL = sql`${sql.identifier('sessions')}.${sql.ide
 export function ordinaryTaskListFilter(): SQL | undefined {
   return and(
     or(inArray(sessions.source, DESKTOP_TASK_LIST_SESSION_SOURCES),
+      and(eq(sessions.source, 'side-chat'), eq(sessions.sideChatPromoted, true)),
       and(eq(sessions.source, 'bot'), sql`EXISTS (
         SELECT 1 FROM bot_session_links task_link
         JOIN bot_profiles task_bot ON task_bot.id = task_link.bot_id
@@ -133,11 +134,13 @@ export function projectSessionReadResult(
 export function projectSessionDetail(
   row: SessionRowWithCount,
   resolve?: (session: ContextWindowSession) => number | null,
+  productStartedAt = row.activeTurnStartedAt,
+  settledProductEndedAt?: number | null,
 ) {
-  const start = row.activeTurnStartedAt;
-  const end = row.lastTurnEndedAt;
+  const start = settledProductEndedAt === undefined ? row.activeTurnStartedAt : productStartedAt;
+  const end = settledProductEndedAt === undefined ? row.lastTurnEndedAt : settledProductEndedAt;
   const turnElapsedMs = start != null && start > (row.clearedAt ?? 0)
-    ? Math.max(0, (end != null && end >= start ? end : Date.now()) - start)
+    ? Math.max(0, (end != null && end >= start ? end : Date.now()) - (productStartedAt ?? start))
     : null;
   return { ...projectSessionReadResult(row, resolve), turnElapsedMs };
 }

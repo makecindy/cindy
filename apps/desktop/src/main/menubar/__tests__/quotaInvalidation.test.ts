@@ -18,6 +18,10 @@ const mocks = vi.hoisted(() => ({
   openRemoteSettings: vi.fn(), onHelperMessage: null as null | ((message: MenubarHelperMessage) => void),
   pool: null as SubscriptionPoolView | null, poolRead: vi.fn(), poolRefresh: vi.fn(),
   poolListeners: new Set<() => void>(),
+  pluginEngines: [] as Array<{ key: string; providerId: string; ghostId: string; harnessId: string; name: string; availability: { state: 'available' | 'unavailable' | 'unknown' }; reportsUsage?: true; models: Array<{ id: string; displayName: string }>; permissionModes: []; defaultPermissionMode: 'ask' }>,
+  pluginUsageRead: vi.fn(),
+  pluginEngineListeners: new Set<() => void>(),
+  applyDraftRoute: vi.fn(),
   settings: {} as Partial<typeof DEFAULT_MENUBAR_SETTINGS>, deviceLink: false, listDevices: vi.fn(),
 }));
 vi.mock('electron', () => ({ app: mocks.app, Notification: class {} }));
@@ -67,8 +71,18 @@ vi.mock('../../subscription-accounts/runtime.js', () => ({
   onSubscriptionAccountsChanged: (listener: () => void) => { mocks.poolListeners.add(listener); return () => mocks.poolListeners.delete(listener); },
 }));
 vi.mock('../../subscription-accounts/store.js', () => ({ readPool: (providerId: string) => providerId === 'openai' ? mocks.pool : null }));
+vi.mock('../../cindy-brain/pluginHarnesses.js', () => ({
+  readPluginHarnessUsage: (key: string) => mocks.pluginUsageRead(key),
+}));
+vi.mock('../../maker-ipc/pluginEnginesIpc.js', () => ({
+  listPluginEngineViews: () => mocks.pluginEngines,
+  onPluginEnginesChanged: (listener: () => void) => {
+    mocks.pluginEngineListeners.add(listener);
+    return () => mocks.pluginEngineListeners.delete(listener);
+  },
+}));
 vi.mock('../../maker-ipc/appDefaultModelControl.js', () => ({}));
-vi.mock('../../maker-ipc/register.js', () => ({}));
+vi.mock('../../maker-ipc/register.js', () => ({ applyNewMakerDraftRoute: (route: unknown) => mocks.applyDraftRoute(route) }));
 vi.mock('../../maker-ipc/usage.js', () => ({}));
 vi.mock('../../notificationService.js', () => ({}));
 vi.mock('../../serverApiClient.desktop.js', () => ({}));
@@ -100,6 +114,7 @@ beforeEach(() => {
   mocks.openOverviewSession.mockReset(); mocks.openLocalSession.mockReset();
   mocks.openRemoteSettings.mockReset(); mocks.onHelperMessage = null;
   mocks.pool = null; mocks.poolRead.mockReset(); mocks.poolRefresh.mockReset(); mocks.poolListeners.clear();
+  mocks.pluginEngines = []; mocks.pluginUsageRead.mockReset(); mocks.pluginEngineListeners.clear(); mocks.applyDraftRoute.mockReset();
   mocks.settings = {}; mocks.deviceLink = false; mocks.listDevices.mockReset();
   subscriptions.__testing.reset();
   mocks.quota = { spend: 2, maxBudget: 10, currency: 'CNY', fetchedAt: Date.now(), todaySpend: null };
@@ -571,4 +586,64 @@ it.each(['logout', 'owner', 'session-invalidated'])('clears the presented share 
     service.stop();
     releaseBoundary?.();
   }
+});
+
+// Unit: QuotaOverviewService must collect plugin engine usage, bypass its cache on explicit
+// refresh, react to engine changes, project into widget snapshots, and preselect the plugin
+// engine when the panel's detail CTA is clicked.
+it('collects, refreshes and launches plugin engine quota sources through the overview and panel controller', async () => {
+  mocks.pluginEngines = [{
+    key: 'dsh:dsh',
+    providerId: 'acp-plugin:dsh:dsh',
+    ghostId: 'dsh',
+    harnessId: 'dsh',
+    name: 'DeepSeek Harness',
+    availability: { state: 'available' },
+    reportsUsage: true,
+    models: [{ id: 'deepseek-v4', displayName: 'DeepSeek V4' }],
+    permissionModes: [],
+    defaultPermissionMode: 'ask',
+  }];
+  let remaining = 75;
+  mocks.pluginUsageRead.mockImplementation(async () => ({
+    updatedAt: Date.now(),
+    windows: [{ label: 'Weekly', remainingPercent: remaining, resetsAt: Date.now() + 86_400_000 }],
+  }));
+  mocks.collect.mockImplementation((deps: MenubarCollectDeps) => collectActual({
+    ...deps,
+    readUsage: async () => null,
+    readBalance: async () => null,
+    activities: () => [],
+  }));
+  const openNewTask = vi.fn();
+  const service = new MenubarService({ openNewTask, overview });
+  service.init();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(overview.latest()?.view.sources).toMatchObject([{ id: 'acp-plugin:dsh:dsh', value: '75', fill: 0.75 }]);
+  expect(buildUsageWidgetSnapshot(overview.latest()!.view, Date.now(), () => null)?.sources).toMatchObject([
+    { id: 'acp-plugin:dsh:dsh', value: '75', unit: '%', fill: 0.75 },
+  ]);
+
+  remaining = 40;
+  mocks.onHelperMessage?.({ type: 'refresh' });
+  await vi.advanceTimersByTimeAsync(400);
+  expect(overview.latest()?.view.sources).toMatchObject([{ id: 'acp-plugin:dsh:dsh', value: '40', fill: 0.4 }]);
+
+  mocks.onHelperMessage?.({ type: 'detail-action', sourceId: 'acp-plugin:dsh:dsh' });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(mocks.applyDraftRoute).toHaveBeenCalledWith({
+    harness: 'acp',
+    providerId: 'acp-plugin:dsh:dsh',
+    model: 'default',
+    effort: '',
+    fastMode: false,
+  });
+  expect(openNewTask).toHaveBeenCalledTimes(1);
+
+  mocks.pluginEngines = [];
+  for (const listener of mocks.pluginEngineListeners) listener();
+  await vi.advanceTimersByTimeAsync(400);
+  expect(overview.latest()?.view.sources).toEqual([]);
+  service.stop();
+  expect(mocks.pluginEngineListeners.size).toBe(0);
 });

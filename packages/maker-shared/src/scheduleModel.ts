@@ -5,6 +5,7 @@ import type {
   RemoteScheduleStatus,
   RemoteTimestamp,
 } from './scheduleTypes';
+import { parseAgentErrorCode } from './errorRedaction.js';
 import {
   presentationDate,
   presentationText,
@@ -616,6 +617,8 @@ export interface FailedScheduleRunSnapshot {
   finishedAt?: number;
   scheduleId?: string;
   failureKind?: ScheduleFailureKind;
+  /** Only set when a stored hook result confirms that the run was blocked before execution. */
+  preRunBlocked?: true;
   /** Optional on older hosts; error content is only disclosed on demand. */
   errorMsg?: string;
   /** The check script belongs to a plugin that is not installed or not enabled. */
@@ -704,6 +707,10 @@ export function scheduleFailureDetails(run: FailedScheduleRunSnapshot): string {
 
 /** Old hosts can omit the classification; keep their warning generic. */
 export function scheduleFailureMessageKey(run: FailedScheduleRunSnapshot): string {
+  if ((!run.failureKind || run.failureKind === 'execution') &&
+    parseAgentErrorCode(run.errorMsg ?? '')?.code === 'MODEL_CATALOG_UNCONFIRMED') {
+    return 'modelCatalogUnconfirmed';
+  }
   if (run.failureKind === 'precheck' && run.missingPlugin) {
     const key = run.missingPlugin.installed ? 'pluginDisabled' : 'pluginMissing';
     return run.missingPlugin.name ? key : `${key}Unnamed`;

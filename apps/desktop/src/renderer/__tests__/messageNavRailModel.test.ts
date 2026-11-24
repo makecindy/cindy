@@ -12,19 +12,22 @@ import {
   NAV_RAIL_BACKFILL_TARGET_ENTRIES,
   NAV_RAIL_EXCERPT_MAX_CHARS,
   NAV_RAIL_JUMP_TOP_OFFSET_PX,
+  NAV_RAIL_MAX_TICKS,
+  NAV_RAIL_MIN_ENTRIES,
   NAV_RAIL_MIN_GUTTER_PX,
-  NAV_RAIL_TICK_MIN_PITCH_PX,
   NAV_RAIL_TICK_PITCH_PX,
   deriveNavRailEntries,
   hasNavRailRoom,
   normalizeExcerpt,
   pickActiveNavId,
+  pickScrubEdgeDirection,
   pickVisibleNavRange,
-  planNavRailTicks,
+  planNavRailWindow,
   planNavRailTickWidth,
   planNavRailTickProgress,
   promptPreviewLine,
   shouldBackfillForNavRail,
+  stepNavRailWindow,
 } from '@/components/chat/messageNavRailModel';
 import { forwardNavRailWheel } from '@/components/chat/messageNavRailWheel';
 
@@ -557,33 +560,175 @@ describe('pickVisibleNavRange', () => {
   });
 });
 
-describe('planNavRailTicks', () => {
-  it('空间充裕:标准纵距,全量展示', () => {
-    const plan = planNavRailTicks(10, 10 * NAV_RAIL_TICK_PITCH_PX);
-    expect(plan).toEqual({ startIndex: 0, pitchPx: NAV_RAIL_TICK_PITCH_PX, hiddenCount: 0 });
-  });
+describe('planNavRailWindow', () => {
+  // 1,030px 的带子按 9px 纵距本可放 114 根,一窗上限压到 50 根。
+  const BAND_PX = 1030;
 
-  it('略挤:压缩纵距但不截断', () => {
-    const plan = planNavRailTicks(20, 20 * 7);
+  it('空间充裕、条目不足一窗:从头铺满,不截断', () => {
+    const plan = planNavRailWindow({
+      entryCount: 10,
+      availableHeightPx: BAND_PX,
+      activeIndex: 4,
+      anchorStart: null,
+    });
     expect(plan.startIndex).toBe(0);
-    expect(plan.hiddenCount).toBe(0);
-    expect(plan.pitchPx).toBe(7);
-    expect(plan.pitchPx).toBeGreaterThanOrEqual(NAV_RAIL_TICK_MIN_PITCH_PX);
+    expect(plan.hiddenBefore).toBe(0);
+    expect(plan.pitchPx).toBe(NAV_RAIL_TICK_PITCH_PX);
   });
 
-  it('最小纵距也放不下:截掉最早的一段,预留占位刻度', () => {
-    const availableHeight = 100; // 最小纵距 5px → 20 格,留 1 格占位 → 展示 19 条
-    const plan = planNavRailTicks(50, availableHeight);
-    expect(plan.pitchPx).toBe(NAV_RAIL_TICK_MIN_PITCH_PX);
-    expect(plan.hiddenCount).toBe(50 - 19);
-    expect(plan.startIndex).toBe(plan.hiddenCount);
-    // 展示条数 + 占位 1 格不超过可用空间
-    expect((50 - plan.startIndex + 1) * plan.pitchPx).toBeLessThanOrEqual(availableHeight);
+  it('条目超过一窗:纵距恒为标准值,窗口在阅读位置居中', () => {
+    const plan = planNavRailWindow({
+      entryCount: 2405,
+      availableHeightPx: BAND_PX,
+      activeIndex: 1200,
+      anchorStart: null,
+    });
+    expect(plan.pitchPx).toBe(NAV_RAIL_TICK_PITCH_PX);
+    expect(plan.capacity).toBe(NAV_RAIL_MAX_TICKS);
+    expect(plan.startIndex).toBe(1200 - Math.floor((NAV_RAIL_MAX_TICKS - 1) / 2));
+    expect(plan.hiddenBefore).toBe(1200 - Math.floor((NAV_RAIL_MAX_TICKS - 1) / 2));
+    // 起点 >0 要留一格给"更早还有 N 条"占位,窗内刻度比上限少一根。
+    expect(plan.slotCount).toBe(NAV_RAIL_MAX_TICKS - 1);
+  });
+
+  it('一窗上限:视口再高也不超过 50 根', () => {
+    const plan = planNavRailWindow({
+      entryCount: 2405,
+      availableHeightPx: 4000,
+      activeIndex: 1200,
+      anchorStart: null,
+    });
+    expect(plan.capacity).toBe(NAV_RAIL_MAX_TICKS);
+  });
+
+  it('滞回:阅读位置留在窗内就不搬窗口', () => {
+    const anchored = planNavRailWindow({
+      entryCount: 2405,
+      availableHeightPx: BAND_PX,
+      activeIndex: 1200,
+      anchorStart: 1175,
+    });
+    expect(anchored.startIndex).toBe(1175);
+    // 逼近上边距则重新居中,不让人贴在窗口边缘
+    const escaped = planNavRailWindow({
+      entryCount: 2405,
+      availableHeightPx: BAND_PX,
+      activeIndex: 1250,
+      anchorStart: 1175,
+    });
+    expect(escaped.startIndex).toBe(1250 - Math.floor((NAV_RAIL_MAX_TICKS - 1) / 2));
+  });
+
+  it('贴尾部:起点夹在末尾一窗内,不越界', () => {
+    const plan = planNavRailWindow({
+      entryCount: 2405,
+      availableHeightPx: BAND_PX,
+      activeIndex: 2404,
+      anchorStart: null,
+    });
+    // 占位占掉一格后,末窗仍需盖住最后一条(否则当前轮没有刻度可点)。
+    expect(plan.startIndex).toBe(2405 - (NAV_RAIL_MAX_TICKS - 1));
+    expect(plan.startIndex + plan.slotCount).toBe(2405);
+  });
+
+  it('末窗不会被占位刻度挤掉最新一条(回归:51 条 / 窗 50)', () => {
+    const plan = planNavRailWindow({
+      entryCount: 51,
+      availableHeightPx: BAND_PX,
+      activeIndex: 50,
+      anchorStart: null,
+    });
+    expect(plan.hiddenBefore).toBe(2);
+    expect(plan.slotCount).toBe(NAV_RAIL_MAX_TICKS - 1);
+    expect(plan.startIndex + plan.slotCount).toBe(51);
+  });
+
+  it('位置未知:贴尾部(刚打开会话先看最新一轮)', () => {
+    const plan = planNavRailWindow({
+      entryCount: 2405,
+      availableHeightPx: BAND_PX,
+      activeIndex: null,
+      anchorStart: null,
+    });
+    expect(plan.startIndex).toBe(2405 - (NAV_RAIL_MAX_TICKS - 1));
+    expect(plan.startIndex + plan.slotCount).toBe(2405);
+  });
+
+  it('拖动扫描:冻结窗口不跟随阅读位置', () => {
+    const plan = planNavRailWindow({
+      entryCount: 2405,
+      availableHeightPx: BAND_PX,
+      activeIndex: 2000,
+      anchorStart: 1175,
+      frozenStart: 400,
+    });
+    expect(plan.startIndex).toBe(400);
+    expect(plan.hiddenBefore).toBe(400);
+  });
+
+  it('最小容量居中:阅读位置的下一条提问仍在窗内', () => {
+    // 36–44px 的窄带只放得下 4 格;起点 >0 时又要让出"⋯"一格,
+    // 按 capacity 居中会把阅读位置顶到带尾,后面那条提问就点不到了。
+    const plan = planNavRailWindow({
+      entryCount: 40,
+      availableHeightPx: 36,
+      activeIndex: 3,
+      anchorStart: null,
+    });
+    expect(plan.capacity).toBe(NAV_RAIL_MIN_ENTRIES);
+    expect(plan.startIndex).toBe(2);
+    expect(plan.slotCount).toBe(3);
+    expect(plan.startIndex + plan.slotCount - 1).toBeGreaterThan(3);
+  });
+
+  it('最小容量居中:起点仍在第一条时不出现占位', () => {
+    const plan = planNavRailWindow({
+      entryCount: 40,
+      availableHeightPx: 36,
+      activeIndex: 0,
+      anchorStart: null,
+    });
+    expect(plan.startIndex).toBe(0);
+    expect(plan.slotCount).toBe(NAV_RAIL_MIN_ENTRIES);
   });
 
   it('零条目 / 零空间不炸', () => {
-    expect(planNavRailTicks(0, 500).hiddenCount).toBe(0);
-    expect(planNavRailTicks(10, 0).hiddenCount).toBe(0);
+    expect(planNavRailWindow({ entryCount: 0, availableHeightPx: 0, activeIndex: null }).capacity).toBe(
+      NAV_RAIL_MIN_ENTRIES,
+    );
+    expect(
+      planNavRailWindow({ entryCount: 10, availableHeightPx: 0, activeIndex: 0 }).startIndex,
+    ).toBe(0);
+  });
+});
+
+describe('stepNavRailWindow', () => {
+  it('首次从 0 向下推进:目标按出现占位后的刻度数算', () => {
+    // 0→1 会多出"⋯"占位,窗口从 [0..49] 变成 [1..49],末根是 49 而不是 50。
+    expect(
+      stepNavRailWindow({ start: 0, dir: 1, entryCount: 60, capacity: NAV_RAIL_MAX_TICKS }),
+    ).toEqual({ start: 1, targetIndex: NAV_RAIL_MAX_TICKS - 1 });
+  });
+
+  it('末窗不再推进,也不会跳过最后一条', () => {
+    const atEnd = stepNavRailWindow({ start: 11, dir: 1, entryCount: 60, capacity: NAV_RAIL_MAX_TICKS });
+    expect(atEnd).toBeNull();
+    const clampToEnd = stepNavRailWindow({
+      start: 10,
+      dir: 1,
+      entryCount: 55,
+      capacity: NAV_RAIL_MAX_TICKS,
+    });
+    expect(clampToEnd).toEqual({ start: 6, targetIndex: 54 });
+  });
+
+  it('向上推进回到起点,不足一窗时不推进', () => {
+    expect(
+      stepNavRailWindow({ start: 1, dir: -1, entryCount: 60, capacity: NAV_RAIL_MAX_TICKS }),
+    ).toEqual({ start: 0, targetIndex: 0 });
+    expect(
+      stepNavRailWindow({ start: 0, dir: 1, entryCount: 30, capacity: NAV_RAIL_MAX_TICKS }),
+    ).toBeNull();
   });
 });
 
@@ -637,4 +782,45 @@ it('shows readable delegated history only on attributed task messages', () => {
   expect(resolveUserDisplayText({ content, automationOrigin: { kind: 'session' } }))
     .toContain('第一段\n\n保留 `\\n`');
   expect(resolveUserDisplayText({ content })).toBe(content);
+});
+
+describe('pickScrubEdgeDirection', () => {
+  const base = {
+    clientX: 40,
+    railLeft: 30,
+    railRight: 56,
+    bandTop: 100,
+    bandBottom: 700,
+    startIndex: 100,
+    slotCount: 50,
+    entryCount: 2405,
+  };
+
+  it('刻度带中间不推进', () => {
+    expect(pickScrubEdgeDirection({ ...base, clientY: 400 })).toBe(0);
+  });
+
+  it('上缘:只有还留着更早的条目才推进', () => {
+    expect(pickScrubEdgeDirection({ ...base, clientY: 105 })).toBe(-1);
+    expect(pickScrubEdgeDirection({ ...base, clientY: 105, startIndex: 0 })).toBe(0);
+  });
+
+  it('下缘:只有还留着后面条目才推进', () => {
+    expect(pickScrubEdgeDirection({ ...base, clientY: 695 })).toBe(1);
+    expect(
+      pickScrubEdgeDirection({ ...base, clientY: 695, startIndex: 2355 }),
+    ).toBe(0);
+  });
+
+  it('指针横向离开刻度带就停 — 抓着的刻度可能已被推进移出窗口', () => {
+    expect(
+      pickScrubEdgeDirection({ ...base, clientY: 695, clientX: base.railLeft - 25 }),
+    ).toBe(0);
+    expect(
+      pickScrubEdgeDirection({ ...base, clientY: 695, clientX: base.railRight + 25 }),
+    ).toBe(0);
+    expect(
+      pickScrubEdgeDirection({ ...base, clientY: 695, clientX: base.railLeft - 24 }),
+    ).toBe(1);
+  });
 });

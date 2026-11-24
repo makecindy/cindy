@@ -75,6 +75,7 @@ describe('mapServerMessages — persisted terminal error rows', () => {
     // 本表注释的一致性诉求: 同一条过载错误不能出现「尾部红条本地化、历史静态卡
     // 英文原文」的分裂。复用 banner 那条 key(不新增文案), 且 codex 改措辞也不影响
     // —— 判定走的是稳定 reason key, 不是原文。
+    expect(ERROR_REASON_I18N_KEYS['UPSTREAM_OVERLOADED']).toBe('chat.errorBanner.overloadBusyNoRetry');
     expect(ERROR_REASON_I18N_KEYS[UPSTREAM_OVERLOAD_REASON]).toBe(
       'chat.errorBanner.overloadBusyNoRetry',
     );

@@ -65,6 +65,7 @@ export type DbTxName =
   | 'bots.createChannelLane'
   | 'bots.createThreadLane'
   | 'bots.archiveChannelLanes'
+  | 'bots.pruneEmptyLegacyRoutineHistory'
   | 'botGroups.create'
   | 'botGroups.setMembers'
   | 'botGroups.delete'
@@ -148,6 +149,8 @@ export interface SessionTreeRehydrateArgs {
 }
 
 export interface ForkSessionArgs {
+  /** Reject edits to the ordered history selected before the native fork awaited. */
+  sourceMessagesDigest?: string;
   sourceSessionId: string;
   /** /clear 之前的行不属于当前可见/原生上下文，fork 时不得重新带回。 */
   sourceClearedAt?: number | null;
@@ -375,6 +378,9 @@ export interface SessionsSetTerminalStatusArgs {
   projectGuard?: ProjectArchiveGuard;
   sessionId: string;
   status: 'archived' | 'deleted';
+  deleteTarget?: 'side-chat' | 'task';
+  /** Trusted host request only, recorded in the same transaction as the archive. */
+  sideChatCloseParentId?: string;
   /** Internal automatic housekeeping only; never accepted as renderer metadata. */
   idleArchiveCutoff?: number;
   unusedOnly?: boolean;
@@ -831,6 +837,7 @@ export interface BotsCreateThreadLaneArgs {
  * exceptBotId 非空时保留该伙伴的专线(改绑时只收旧伙伴的)。
  */
 export interface BotsArchiveChannelLanesArgs {
+  botId?: string;
   routeKey: string | null;
   routeKeyPrefix: string | null;
   exceptBotId: string | null;
@@ -1393,6 +1400,7 @@ export type DbTxArgsByName = {
   'bots.createChannelLane': BotsCreateChannelLaneArgs;
   'bots.createThreadLane': BotsCreateThreadLaneArgs;
   'bots.archiveChannelLanes': BotsArchiveChannelLanesArgs;
+  'bots.pruneEmptyLegacyRoutineHistory': { neverDispatchedSessionIds: string[] };
   'botGroups.create': BotGroupsCreateArgs;
   'botGroups.setMembers': BotGroupsSetMembersArgs;
   'botGroups.delete': BotGroupsDeleteArgs;
@@ -1429,6 +1437,7 @@ export type DbTxResultByName = {
   'usage.recordPiUsage': { changed: boolean };
   'usage.recordMediaSpend': {
     legacyUsd: number;
+    usdApproximate: number;
     amount: number;
     currency: 'USD' | 'CNY';
     approximate: number;
@@ -1494,6 +1503,7 @@ export type DbTxResultByName = {
   'bots.createChannelLane': BotGroupsCreateLaneResult;
   'bots.createThreadLane': BotGroupsCreateLaneResult;
   'bots.archiveChannelLanes': { archivedSessionIds: string[] };
+  'bots.pruneEmptyLegacyRoutineHistory': { removed: number; botIds: string[] };
   'botGroups.create': undefined;
   'botGroups.setMembers': BotGroupsSetMembersResult;
   'botGroups.delete': { archivedSessionIds: string[] };

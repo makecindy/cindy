@@ -115,7 +115,7 @@ export function createGhostPageBridge(ports: { ping: () => Promise<{ ok: true; i
       throw Object.assign(new Error(result?.error?.message ?? 'Target request failed'), { code: result?.error?.code ?? 'HOST_NOT_READY' });
     },
   ])),
-  observe: Object.fromEntries([['projectTasks', 'project-tasks'], ['openTask', 'open-task']].map(([name, kind]) => [name,
+  observe: Object.fromEntries([['projectTasks', 'project-tasks'], ['openTask', 'open-task'], ['openSession', 'open-session']].map(([name, kind]) => [name,
     async (req: Record<string, unknown> = {}): Promise<unknown> => {
       const result = await ports.send({ ...req, type: 'observe-request', kind });
       if (result?.ok === true) return result.data;
@@ -181,6 +181,9 @@ export function createGhostPageBridge(ports: { ping: () => Promise<{ ok: true; i
     ports.send({ ...req, type: 'workspace-request' }),
   confirm: (req: Record<string, unknown>): Promise<unknown> =>
     ports.send({ ...req, type: 'confirm-request' }),
+  // 主机画的表单弹窗(form 槽):回 { ok, outcome: 'submit' | 'cancel' | 'action', ... }。
+  form: (req: Record<string, unknown>): Promise<unknown> =>
+    ports.send({ ...req, type: 'form-request' }),
 };
   return { api, deliver(payload: unknown) {
     if (payload && typeof payload === 'object' && 'type' in payload && payload.type === 'ui-consumers' && 'consumers' in payload && Array.isArray(payload.consumers))

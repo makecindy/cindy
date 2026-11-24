@@ -30,7 +30,7 @@ import { describeAgentAuthError } from '@/device-link/remoteStatus';
 import type { InputProjection } from '@/session/types';
 import type { ErrorDiagnosisSource } from '@/session/errorDiagnosisPrompt';
 import { inputProjectionErrorI18nKey } from '@/session/inputProjectionError';
-import { describeNonRetryableAgentError, localizeAgentError, localizeUnclassifiedAgentError, requiresAgentErrorConfigurationChange } from '@/session/agentErrorI18n';
+import { describeNonRetryableAgentError, localizeAgentError, requiresAgentErrorConfigurationChange, unclassifiedAgentErrorI18nKey } from '@/session/agentErrorI18n';
 import {
   fontWeight,
   iconSize,
@@ -100,15 +100,23 @@ export function InlineQueueSection({
   const projectionErrorKey = projection.error
     ? inputProjectionErrorI18nKey(projection.error)
     : null;
+  const usageLimitResumeAt = projection.error && projection.usageLimitWait
+    ? formatUsageLimitResumeAt(projection.usageLimitWait.resumeAt, i18n.resolvedLanguage || i18n.language)
+    : null;
+  // The computer already confirmed an account usage limit and armed the automatic
+  // continuation, so name the cause even when the upstream text is not recognizable.
+  const unclassifiedErrorKey = projection.error
+    ? unclassifiedAgentErrorI18nKey(projection.error, sessionSource)
+    : null;
   const projectionError = projection.error
     ? localizedAgentError
       ?? (projectionErrorKey
         ? t(projectionErrorKey)
-        : (describeAgentAuthError(projection.error) ?? localizeUnclassifiedAgentError(projection.error, sessionSource)))
-    : null;
-
-  const usageLimitResumeAt = projection.error && projection.usageLimitWait
-    ? formatUsageLimitResumeAt(projection.usageLimitWait.resumeAt, i18n.resolvedLanguage || i18n.language)
+        : (describeAgentAuthError(projection.error) ?? t(
+          usageLimitResumeAt && unclassifiedErrorKey === 'session.tail.replyFailed'
+            ? 'session.tail.usageLimitReached'
+            : unclassifiedErrorKey ?? 'session.tail.replyFailed',
+        )))
     : null;
 
   return (

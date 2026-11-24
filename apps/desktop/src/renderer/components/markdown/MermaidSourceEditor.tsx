@@ -145,7 +145,7 @@ function MermaidSourceEditor({
   return (
     <Dialog.Root open={dialog.open} onOpenChange={(open) => { if (!open) close(false); }}>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[60]" style={WINDOW_DRAG_STYLE} />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" style={WINDOW_DRAG_STYLE} />
       {/* The scrim does not dismiss: a stray click outside must not discard the
           draft. Cancel and Escape remain the ways out (DESIGN §4 Dialog). */}
       <Dialog.Content
@@ -161,7 +161,7 @@ function MermaidSourceEditor({
         onKeyDown={onKeyDown}
         style={WINDOW_NO_DRAG_STYLE}
         className={cn(
-          'modal-panel fixed inset-0 z-[61] m-auto flex flex-col outline-none',
+          'modal-panel fixed inset-0 z-modal-raised m-auto flex flex-col outline-none',
           'w-[min(880px,90vw)] h-[min(640px,80vh)]',
           'overflow-hidden',
         )}

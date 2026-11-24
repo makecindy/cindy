@@ -1,3 +1,4 @@
+import { releaseFailure } from './agent/profile-hold.ts';
 /*
  * 测试价值
  * - 生产入口与可观察结果：createHostServer + createHostIpcRoute 的 `POST /api/ipc/<channel>` 与
@@ -145,13 +146,16 @@ test('model-change refusals answer 409 with their code, and a typed code outside
     'MODEL_SWITCH_TASK_RUNNING', 'MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN', 'MODEL_WINDOW_PREPARATION_IN_PROGRESS',
     'MODEL_WINDOW_PROTECTION_UNAVAILABLE', 'MODEL_WINDOW_REMOTE_REBUILD_UNSUPPORTED', 'MODEL_WINDOW_TARGET_CONTEXT_UNKNOWN'];
   const route = createHostIpcRoute({ instanceId: 'host-a', readOwnerStamp: () => OWNER, unsupported: OTHERS,
-    bindings: { [CHANNEL]: async ([code]) => { throw Object.assign(new Error(`[${code}] refused for ${code}`), { code }); } } });
+    bindings: { [CHANNEL]: async ([code]) => { throw Object.assign(new Error(`[${code}] refused for ${code}`), { code, reason: 'HOST_PROFILE_RELEASE_FAILED' }); } } });
   const request = await serve(t, { ipcRoute: route });
   for (const code of codes) {
     const answer = await request(hostIpcPath(CHANNEL), { headers: pinned(), body: { args: [code], owner: OWNER } });
     assert.equal(answer.status, 409, code);
     assert.deepEqual(answer.body, { ok: false, error: { code, message: `refused for ${code}` } });
   }
+  const release = await request(hostIpcPath(CHANNEL), { headers: pinned(), body: { args: ['PRECONDITION_FAILED'], owner: OWNER } });
+  assert.equal(release.status, 409);
+  assert.deepEqual(release.body, { ok: false, error: releaseFailure() });
   const outside = await request(hostIpcPath(CHANNEL), { headers: pinned(), body: { args: ['NOT_IN_TABLE'], owner: OWNER } });
   assert.equal(outside.status, 500);
   assert.deepEqual(outside.body, { ok: false, error: { code: 'NOT_IN_TABLE', message: 'refused for NOT_IN_TABLE' } });
@@ -206,10 +210,10 @@ test('side-chat binding returns the contract shape from a real database, unchang
   t.after(() => sqlite.close());
   sqlite.exec(`CREATE TABLE "${getTableName(sessions)}" (${Object.values(getTableColumns(sessions))
     .map(column => `"${column.name}" ${column.getSQLType()}`).join(',')})`);
-  sqlite.exec(`INSERT INTO sessions(id,parent_session_id,source,status,created_at,updated_at) VALUES
-    ('second','parent','side-chat','archived',2,2), ('first','parent','side-chat','active',1,1),
-    ('gone','parent','side-chat','deleted',3,3), ('fork','parent','desktop','active',4,4),
-    ('other','elsewhere','side-chat','active',5,5)`);
+  sqlite.exec(`INSERT INTO sessions(id,parent_session_id,source,status,created_at,updated_at,side_chat_promoted) VALUES
+    ('second','parent','side-chat','archived',2,2,0), ('first','parent','side-chat','active',1,1,0),
+    ('gone','parent','side-chat','deleted',3,3,0), ('fork','parent','desktop','active',4,4,0),
+    ('other','elsewhere','side-chat','active',5,5,0), ('promoted','parent','side-chat','active',6,6,1)`);
   const client = createDbClientForHandle({ db: sqlite, drizzle: drizzle(sqlite) });
   setCurrentDbClient(client, 'isolated');
   t.after(() => clearCurrentDbClient(client));
@@ -268,8 +272,8 @@ test('desktop proxy and Host route agree over real HTTP with the production bind
   t.after(() => sqlite.close());
   sqlite.exec(`CREATE TABLE "${getTableName(sessions)}" (${Object.values(getTableColumns(sessions))
     .map(column => `"${column.name}" ${column.getSQLType()}`).join(',')})`);
-  sqlite.exec(`INSERT INTO sessions(id,parent_session_id,source,status,created_at,updated_at) VALUES
-    ('child','parent','side-chat','active',1,1)`);
+  sqlite.exec(`INSERT INTO sessions(id,parent_session_id,source,status,created_at,updated_at,side_chat_promoted) VALUES
+    ('child','parent','side-chat','active',1,1,0)`);
   const client = createDbClientForHandle({ db: sqlite, drizzle: drizzle(sqlite) });
   setCurrentDbClient(client, 'isolated');
   t.after(() => clearCurrentDbClient(client));
