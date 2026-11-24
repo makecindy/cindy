@@ -145,6 +145,43 @@ describe('plugin providers in the provider list', () => {
     await waitFor(() => expect(document.activeElement).toBe(movedTrigger));
   });
 
+  // Unit: opening a model without metadata retains the expected fields and makes no preference writes.
+  it('shows missing advanced fields as dashes for a plugin model', async () => {
+    const api = stubApi();
+    renderDetail(engine({ models: [{ id: 'plugin-model', displayName: 'Plugin model' }] }));
+    await userEvent.click(screen.getByRole('button', { name: /advanced.openAria/ }));
+    const dialog = within(await screen.findByRole('dialog', { name: 'Plugin model' }));
+
+    for (const heading of ['defaultEffort', 'contextLimit', 'spec', 'capability', 'pricing', 'identity']) {
+      expect(dialog.getByRole('heading', { name: 'settings.providers.models.advanced.' + heading })).toBeTruthy();
+    }
+    for (const label of [
+      'settings.providers.models.advanced.compaction.title',
+      'settings.providers.models.advanced.contextWindow',
+      'settings.providers.models.advanced.maxOutput',
+      'settings.providers.models.advanced.imageInput',
+      'settings.providers.models.advanced.inputModalities',
+      'settings.providers.models.advanced.outputModalities',
+      'Fast',
+      'newChat.modelSelector.speed.ultrafast',
+      'settings.providers.models.priceOverride.currency',
+      'settings.providers.models.priceOverride.input',
+      'settings.providers.models.priceOverride.output',
+      'settings.providers.models.priceOverride.cacheRead',
+      'settings.providers.models.priceOverride.cacheWrite',
+      'settings.providers.models.advanced.discount',
+      'settings.providers.models.priceOverride.referenceDetails',
+      'settings.providers.models.management.brand',
+    ]) {
+      const row = dialog.getByText(label).parentElement!;
+      expect(within(row).getByText('-')).toBeTruthy();
+    }
+    expect(dialog.getByText('plugin-model')).toBeTruthy();
+    expect(dialog.queryByRole('radio')).toBeNull();
+    expect(dialog.queryByRole('textbox')).toBeNull();
+    expect(api.setPluginEnginePrefs).not.toHaveBeenCalled();
+  });
+
   // Unit: a renamed, suspended provider must still confirm uninstall of its exact plugin instance.
   it.each(['market', 'local'] as const)('confirms the plugin name before uninstalling a %s provider', async source => {
     const { __resetInstalledGhostsStoreForTest } = await import('@/cindy-brain/useInstalledGhosts');

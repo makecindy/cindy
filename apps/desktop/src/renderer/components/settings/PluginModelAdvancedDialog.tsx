@@ -48,51 +48,86 @@ export function PluginModelAdvancedDialog({
         >
           <ModelAdvancedColumns
             left={<>
-              <ModelAdvancedSection title={t('settings.providers.models.advanced.engines')}>
+              <ModelAdvancedSection
+                title={t('settings.providers.models.advanced.engines')}
+                hint={t('settings.providers.models.advanced.enginesHint')}
+              >
                 <ModelAdvancedRow label={t('settings.providers.models.advanced.protocol.upstream')}>ACP</ModelAdvancedRow>
               </ModelAdvancedSection>
-              {(offered.length > 0 || customized) && (
-                <ModelAdvancedSection
-                  title={t('settings.providers.models.advanced.defaultEffort')}
-                  hint={t('settings.providers.models.advanced.defaultEffortHint')}
-                >
-                  {offered.length > 0 && (
-                    <SegmentedControl
-                      data-setting-id={providersSettings.pluginProviders.id}
-                      className="mt-1"
-                      fullWidth
-                      style={offered.length > 4 ? {
-                        display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', borderRadius: 'var(--radius-xl)',
-                      } : undefined}
-                      optionClassName={offered.length > 4 ? '!min-w-0 px-1' : undefined}
-                      height={32}
-                      optionHeight={24}
-                      aria-label={t('settings.providers.models.advanced.defaultEffort')}
-                      options={offered.map(effort => ({ value: effort, label: t(`effortLevels.${effort}`) }))}
-                      value={value}
-                      disabled={saving}
-                      onValueChange={effort => void save(effort)}
-                    />
-                  )}
-                  {customized && (
-                    <ResetGroupButton
-                      data-settings-search-action="Restore the plugin's default for this model"
-                      className="mt-2"
-                      disabled={saving}
-                      onClick={() => void save(null)}
-                      label={t('settings.providers.models.advanced.restoreDefault')}
-                    />
-                  )}
-                </ModelAdvancedSection>
-              )}
+              <ModelAdvancedSection
+                title={t('settings.providers.models.advanced.defaultEffort')}
+                hint={t('settings.providers.models.advanced.defaultEffortHint')}
+              >
+                {offered.length > 0 && (
+                  <SegmentedControl
+                    data-setting-id={providersSettings.pluginProviders.id}
+                    className="mt-1"
+                    fullWidth
+                    style={offered.length > 4 ? {
+                      display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', borderRadius: 'var(--radius-xl)',
+                    } : undefined}
+                    optionClassName={offered.length > 4 ? '!min-w-0 px-1' : undefined}
+                    height={32}
+                    optionHeight={24}
+                    aria-label={t('settings.providers.models.advanced.defaultEffort')}
+                    options={offered.map(effort => ({ value: effort, label: t(`effortLevels.${effort}`) }))}
+                    value={value}
+                    disabled={saving}
+                    onValueChange={effort => void save(effort)}
+                  />
+                )}
+                {value === null && <p className="py-2 text-13 text-[var(--text-tertiary)]">-</p>}
+                {customized && (
+                  <ResetGroupButton
+                    data-settings-search-action="Restore the plugin's default for this model"
+                    className="mt-2"
+                    disabled={saving}
+                    onClick={() => void save(null)}
+                    label={t('settings.providers.models.advanced.restoreDefault')}
+                  />
+                )}
+              </ModelAdvancedSection>
+              <ModelAdvancedSection
+                title={t('settings.providers.models.advanced.contextLimit')}
+                hint={t('settings.providers.models.advanced.contextLimitHint')}
+              >
+                <p className="py-2 text-13 text-[var(--text-tertiary)]">-</p>
+                <ModelAdvancedRow label={t('settings.providers.models.advanced.compaction.title')} muted>-</ModelAdvancedRow>
+              </ModelAdvancedSection>
+              <ModelAdvancedSection title={t('settings.providers.models.advanced.spec')}>
+                <ModelAdvancedRow label={t('settings.providers.models.advanced.contextWindow')} muted>-</ModelAdvancedRow>
+                <ModelAdvancedRow label={t('settings.providers.models.advanced.maxOutput')} muted>-</ModelAdvancedRow>
+              </ModelAdvancedSection>
             </>}
-            right={<ModelAdvancedSection title={t('settings.providers.models.advanced.identity')}>
-              {model.description && <p className="mb-2 break-words text-12 leading-relaxed text-[var(--text-secondary)]">{model.description}</p>}
-              <ModelAdvancedRow label={t('settings.providers.models.advanced.modelId')}>
-                <code className="select-text break-all text-12">{model.id}</code>
-              </ModelAdvancedRow>
-              <ModelAdvancedRow label={t('settings.providers.models.advanced.providerLabel')} muted>{providerName}</ModelAdvancedRow>
-            </ModelAdvancedSection>}
+            right={<>
+              <ModelAdvancedSection
+                title={t('settings.providers.models.advanced.capability')}
+                hint={t('settings.providers.models.advanced.capabilityHint')}
+              >
+                <ModelAdvancedRow label={t('settings.providers.models.advanced.imageInput')} muted>-</ModelAdvancedRow>
+                <ModelAdvancedRow label={t('settings.providers.models.advanced.inputModalities')} muted>-</ModelAdvancedRow>
+                <ModelAdvancedRow label={t('settings.providers.models.advanced.outputModalities')} muted>-</ModelAdvancedRow>
+                <ModelAdvancedRow label="Fast" muted>-</ModelAdvancedRow>
+                <ModelAdvancedRow label={t('newChat.modelSelector.speed.ultrafast')} muted>-</ModelAdvancedRow>
+              </ModelAdvancedSection>
+              <ModelAdvancedSection title={t('settings.providers.models.advanced.pricing')}>
+                <ModelAdvancedRow label={t('settings.providers.models.priceOverride.currency')} muted>-</ModelAdvancedRow>
+                <ModelAdvancedRow label={t('settings.providers.models.priceOverride.input')} muted>-</ModelAdvancedRow>
+                <ModelAdvancedRow label={t('settings.providers.models.priceOverride.output')} muted>-</ModelAdvancedRow>
+                <ModelAdvancedRow label={t('settings.providers.models.priceOverride.cacheRead')} muted>-</ModelAdvancedRow>
+                <ModelAdvancedRow label={t('settings.providers.models.priceOverride.cacheWrite')} muted>-</ModelAdvancedRow>
+                <ModelAdvancedRow label={t('settings.providers.models.advanced.discount')} muted>-</ModelAdvancedRow>
+                <ModelAdvancedRow label={t('settings.providers.models.priceOverride.referenceDetails')} muted>-</ModelAdvancedRow>
+              </ModelAdvancedSection>
+              <ModelAdvancedSection title={t('settings.providers.models.advanced.identity')}>
+                <p className="mb-2 break-words text-12 leading-relaxed text-[var(--text-secondary)]">{model.description || '-'}</p>
+                <ModelAdvancedRow label={t('settings.providers.models.advanced.modelId')}>
+                  <code className="select-text break-all text-12">{model.id}</code>
+                </ModelAdvancedRow>
+                <ModelAdvancedRow label={t('settings.providers.models.management.brand')} muted>-</ModelAdvancedRow>
+                <ModelAdvancedRow label={t('settings.providers.models.advanced.status')} muted>-</ModelAdvancedRow>
+              </ModelAdvancedSection>
+            </>}
           />
           <ModelAdvancedFooter>
             <Button variant="secondary" size="md" compact type="button" disabled={visibilityBusy || saving}
