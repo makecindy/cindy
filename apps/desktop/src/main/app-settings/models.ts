@@ -112,6 +112,14 @@ export async function manageAppModels(input: AppModelsRequest, assertCurrent: ()
         // stored choice, so it must stay available for those orphan keys; an explicit on/off
         // choice still needs a catalog entry to resolve the default.
         if (!model && change.value !== null) throw new Error('MODEL_NOT_IN_CATALOG');
+        // Resetting a key that never existed is not a no-op: the renderer records every
+        // reset in `followCatalogKeys` and nothing removes such a key again, so a typo
+        // would accumulate in local storage forever. Only an override that is really
+        // stored may be cleared without a catalog entry.
+        if (!model && change.value === null
+          && catalog.modelVisibilityOverrides[`${target.agent}:${target.providerId}:${target.modelId}`] === undefined) {
+          throw new Error('MODEL_NOT_IN_CATALOG');
+        }
         await guard();
         const receipt = await manageAppPreferences('model-visibility', undefined, { target, visible: change.value, defaultEnabled: model?.defaultEnabled });
         if (!receipt.modelVisibility || (change.value === null

@@ -32,6 +32,17 @@ describe('model visibility override cleanup', () => {
     expect(result).toMatchObject({ setting: 'visible', result: { customized: false } });
   });
 
+  // Codex P2: a reset for a key that was never in the catalog or in the overrides is not a
+  // no-op — the renderer records it in followCatalogKeys and nothing removes it again, so a
+  // mistyped target would pile up permanently. Only a stored orphan override may be cleared.
+  it('refuses to reset a key that has neither a catalog entry nor an override', async () => {
+    const mistyped = { providerId: 'magpie-bac7deb4', agent: 'pi' as const, modelId: 'old-modle' };
+
+    await expect(manageAppModels({ operation: 'set', target: mistyped, change: { setting: 'visible', value: null } },
+      async () => {})).rejects.toThrow('MODEL_NOT_IN_CATALOG');
+    expect(manageAppPreferences).not.toHaveBeenCalled();
+  });
+
   it('keeps refusing an explicit on/off choice for a model outside the catalog', async () => {
     await expect(manageAppModels({ operation: 'set', target: orphan, change: { setting: 'visible', value: true } },
       async () => {})).rejects.toThrow('MODEL_NOT_IN_CATALOG');
