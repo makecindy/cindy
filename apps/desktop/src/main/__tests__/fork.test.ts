@@ -347,10 +347,12 @@ describe('forkSessionAtMessage', () => {
     ['append', 'inproc'], ['rewind', 'inproc'], ['delete', 'inproc'], ['edit', 'inproc'], ['unchanged', 'inproc'],
     ['append', 'file'], ['append', 'inline'], ['remote-append', 'inproc'],
     ['pi-next-turn', 'inproc'], ['pi-unchanged', 'inproc'],
+    ['codex-next-turn', 'inproc'], ['codex-anchored-next-turn', 'inproc'],
   ] as const)(
     'keeps the selected side-chat snapshot across native fork: %s (%s)', async (change, transport) => {
       const root = userDataDirRef.current;
       const isPi = change === 'pi-next-turn' || change === 'pi-unchanged';
+      const isCodex = change === 'codex-next-turn' || change === 'codex-anchored-next-turn';
       const dbPath = transport === 'inproc' ? ':memory:' : path.join(root, 'snapshot.db');
       const sqlite = new Database(dbPath);
       try {
@@ -366,7 +368,7 @@ describe('forkSessionAtMessage', () => {
         const db = drizzle(sqlite, { schema });
         db.insert(sessions).values({ id: 'src-session', title: 'Snapshot', sdkSessionId: 'source-sdk',
           createdAt: 1, updatedAt: 1,
-          ...(isPi ? { agentKind: 'pi' } : {}),
+          ...(isPi ? { agentKind: 'pi' } : isCodex ? { agentKind: 'codex' } : {}),
           ...(change === 'remote-append' ? { agentDeviceId: 'device-b' } : {}) }).run();
         db.insert(messages).values([
           { id: 'q', clientId: 'q', sessionId: 'src-session', role: 'user', content: '"question"', createdAt: 1000 },
@@ -393,7 +395,8 @@ describe('forkSessionAtMessage', () => {
         forkSdkSessionMock.mockImplementationOnce(async () => {
           entered();
           await gate;
-          return { newSdkSessionId: 'child-sdk', uuidMap: new Map([['native-anchor', 'child-anchor']]) };
+          return { newSdkSessionId: 'child-sdk', uuidMap: new Map([['native-anchor', 'child-anchor']]),
+            usedNativeForkAnchor: change === 'codex-anchored-next-turn' };
         });
         if (change === 'remote-append') remoteInvokeMock.mockImplementation(async (_device, _channel, [request]) => {
           if (request.op === 'caps') return { ok: true, result: { version: 1, agents: [], maxRuns: 16,
@@ -406,7 +409,7 @@ describe('forkSessionAtMessage', () => {
         // Attach rejection handling before changing the source.
         const outcome = opening.then(value => ({ value, error: null }), error => ({ value: null, error }));
         await Promise.race([waiting, opening]);
-        if (change === 'pi-next-turn') {
+        if (change === 'pi-next-turn' || isCodex) {
           db.insert(messages).values({ id: 'next', clientId: 'next', sessionId: 'src-session',
             role: 'user', content: '"next turn"', createdAt: 1200 }).run();
         }
@@ -417,17 +420,18 @@ describe('forkSessionAtMessage', () => {
         if (change === 'edit') sqlite.prepare("UPDATE messages SET content = '\"edited\"' WHERE id = 'a'").run();
         resume();
         const result = await outcome;
-        if (isPi) {
-          expect(forkSdkSessionMock).toHaveBeenCalledWith('pi', expect.objectContaining({ tailTurnsToDrop: 0 }));
+        if (isPi || isCodex) {
+          expect(forkSdkSessionMock).toHaveBeenCalledWith(isPi ? 'pi' : 'codex', expect.objectContaining({ tailTurnsToDrop: 0 }));
         }
-        if (change === 'append' || change === 'remote-append' || change === 'unchanged' || change === 'pi-unchanged') {
+        if (change === 'append' || change === 'remote-append' || change === 'unchanged'
+          || change === 'pi-unchanged' || change === 'codex-anchored-next-turn') {
           expect(result.error).toBeNull();
           expect(sqlite.prepare('SELECT role, content FROM messages WHERE session_id = ? ORDER BY created_at, rowid')
             .all(result.value!.id)).toEqual([{ role: 'user', content: '"question"' }, { role: 'assistant', content: '"answer"' }]);
           if (change === 'remote-append') {
             expect(forkSdkSessionMock).not.toHaveBeenCalled();
             expect(remoteInvokeMock).toHaveBeenLastCalledWith('device-b', 'maker:remote-agent:v1', [expect.objectContaining({ op: 'fork', upToMessageId: 'native-anchor' })]);
-          } else if (!isPi) {
+          } else if (!isPi && !isCodex) {
             expect(forkSdkSessionMock).toHaveBeenCalledWith('claude-code', expect.objectContaining({ upToMessageId: 'native-anchor' }));
           }
           expect(result.value!.parentSessionId).toBe('src-session');
