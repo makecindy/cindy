@@ -132,6 +132,7 @@ export function WallpaperSection() {
       aria-label={t(appearanceSettings.wallpaperTitle.titleKey)}
       headingLevel={3}
       title={t(appearanceSettings.wallpaperTitle.titleKey)}
+      titleId={appearanceSettings.wallpaperTitle.targetId}
       action={
         <Button data-setting-id={appearanceSettings.wallpaperTitle.id}
           variant="secondary"
@@ -156,7 +157,7 @@ export function WallpaperSection() {
         </Button>
       }
     >
-      <SettingsCard id={appearanceSettings.wallpaperCustomChoose.targetId}>
+      <SettingsCard>
         <SettingsBlock className="flex flex-col gap-4">
           <div
             className="grid grid-cols-[repeat(auto-fill,minmax(6rem,1fr))] gap-2"
@@ -339,7 +340,7 @@ export function WallpaperSection() {
           )}
 
           <div className="flex flex-wrap items-center gap-3">
-            <Button data-setting-id={appearanceSettings.wallpaperCustomChoose.id}
+            <Button id={appearanceSettings.wallpaperCustomChoose.targetId} data-setting-id={appearanceSettings.wallpaperCustomChoose.id}
               variant="secondary"
               type="button"
               disabled={busy}

@@ -172,6 +172,7 @@ function pressEscape() {
 }
 
 const location = () => screen.getByTestId('location').textContent;
+const originalScrollIntoView = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollIntoView');
 
 beforeEach(() => {
   voicePage.real = false;
@@ -188,11 +189,14 @@ beforeEach(() => {
     getModelSelection: vi.fn(async () => ({ selection: { serviceMode: 'cindy', asrProvider: 'openai' } })),
     onDataChanged: () => () => {},
   } });
-  // jsdom 没有元素滚动；设置页切分区时会把内容列滚回顶部。
+  // jsdom has no element scrolling. Settings scrolls the content column and reveals page results in the sidebar.
   Element.prototype.scrollTo = () => {};
+  Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
 });
 
 afterEach(() => {
+  if (originalScrollIntoView) Object.defineProperty(Element.prototype, 'scrollIntoView', originalScrollIntoView);
+  else Reflect.deleteProperty(Element.prototype, 'scrollIntoView');
   localStorage.clear();
   vi.unstubAllGlobals();
 });
