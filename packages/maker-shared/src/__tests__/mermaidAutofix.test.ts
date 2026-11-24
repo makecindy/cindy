@@ -86,6 +86,8 @@ describe('repairMermaidSource', () => {
     'A([输入 (含括号) → 输出])',
     'A.([stadium → text])',
     'A,([stadium → text])',
+    'A>draft → final]',
+    'A->draft → final]',
     "A'([stadium → text])",
     'A`([stadium → text])',
     'A[[outer [inner] → text]]',
@@ -129,6 +131,12 @@ describe('repairMermaidSource', () => {
     const prefix = 'flowchart TD\nclick A call foo--bar()' + separator;
     const node = 'C@{ shape: rect, label: start → done }';
     expect(repairMermaidSource(prefix + node + ' → D')).toBe(prefix + node + ' --> D');
+  });
+
+  it.each(['C:::foo--bar\n', 'C:::foo--bar-->'])('类名中的 -- 不影响后续节点 (%j)', (line) => {
+    const prefix = 'flowchart TD\n' + line;
+    const node = 'D@{ shape: rect, label: start → done }';
+    expect(repairMermaidSource(prefix + node + '\nD → E')).toBe(prefix + node + '\nD --> E');
   });
 
   it.each([

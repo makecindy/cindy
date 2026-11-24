@@ -65,6 +65,7 @@ const SHAPE_ENDS = new Map([
   ['(((', ')))'],
   ['[/', '/]'],
   ['[\\', '/]'],
+  ['>', ']'],
 ]);
 const LABEL_BRACKET_ENDS = new Map([['(', ')'], ['[', ']'], ['{', '}']]);
 
@@ -105,13 +106,14 @@ function indexLabelEnds(line: string) {
 function replaceArrowsOutsideLabels(line: string): string {
   if (line.search(UNICODE_ARROW_RE) === -1) return line;
   // 先跳过完整引号段或节点形状，再继续同一行的边。未闭合形状沿用普通扫描。
-  const protectedStarts = /"[^"]*(?:"|$)|(?<=[\p{L}\p{N}\p{M}_.!,?#$%*+/:&'`\\-])(?:\({2,3}|\(\[|\[[[(\/\\]|\{\{)/gu;
+  const protectedStarts = /"[^"]*(?:"|$)|(?<!-)--+>|(?<!=)==+>|-\.+->|(?<=[\p{L}\p{N}\p{M}_.!,?#$%*+/:&'`\\-])(?:\({2,3}|\(\[|\[[[(\/\\]|\{\{|>)/gu;
   let result = '';
   let start = 0;
   let labelEnds: ReturnType<typeof indexLabelEnds> | undefined;
   for (let match = protectedStarts.exec(line); match; match = protectedStarts.exec(line)) {
     const token = match[0];
     const shapeEnd = SHAPE_ENDS.get(token);
+    if (!shapeEnd && token[0] !== '"') continue;
     if (shapeEnd) {
       labelEnds ??= indexLabelEnds(line);
       const end = labelEnds.shapeEnds.get(shapeEnd)![protectedStarts.lastIndex];
@@ -197,8 +199,8 @@ function findShapeDataEnd(source: string, start: number): number {
 
 function repairOutsideShapeData(source: string, chartStart: number): string {
   // 从节点 ID 后的 @{ 识别属性，把 YAML 语法交给 Mermaid。
-  // click 声明中的回调名不是边，扫描在分号之后继续。
-  const tokens = /^[^\S\r\n]*(?:%%|\/\/)[^\n]*|(?:^|;)[^\S\r\n]*(?:acc(?:Title|Descr)[^\S\r\n]*:[^\n]*|accDescr[^\S\r\n]*\{[^}]*\}|click[^\S\r\n]+(?:"[^"\r\n]*"|[^";\r\n])*)|"[^"]*"|"[^"\n]*|\|[^|\n]+\||[-.=]+[>xo]?|(?<=[\p{L}\p{N}\p{M}_.!,?#$%*+/:&'`\\-])(?:@\{|\([^()[\]{}"\n]*\)|\[[^()[\]{}"\n]*\]|\{[^()[\]{}"\n]*\}|\({2,3}|\(\[|\[[[(\/\\]|\{\{|[({\[>])/gmu;
+  // 回调、样式声明和类选择器里的连字符属于名称或值。
+  const tokens = /^[^\S\r\n]*(?:%%|\/\/)[^\n]*|(?:^|;)[^\S\r\n]*(?:acc(?:Title|Descr)[^\S\r\n]*:[^\n]*|accDescr[^\S\r\n]*\{[^}]*\}|(?:click|classDef|class|style|linkStyle)[^\S\r\n]+(?:"[^"\r\n]*"|[^";\r\n])*)|"[^"]*"|"[^"\n]*|\|[^|\n]+\||:::[\p{L}\p{N}\p{M}_]+(?:[.-]+[\p{L}\p{N}\p{M}_]+)*|[-.=]+[>xo]?|(?<=[\p{L}\p{N}\p{M}_.!,?#$%*+/:&'`\\-])(?:@\{|\([^()[\]{}"\n]*\)|\[[^()[\]{}"\n]*\]|\{[^()[\]{}"\n]*\}|\({2,3}|\(\[|\[[[(\/\\]|\{\{|[({\[>])/gmu;
   tokens.lastIndex = chartStart;
   const edgeLabelClosers = new Map([['--', /^--+[-xo>]$/], ['==', /^==+[=xo>]$/], ['-.', /^\.+-[xo>]?$/]]);
   let result = '';
@@ -214,7 +216,7 @@ function repairOutsideShapeData(source: string, chartStart: number): string {
     else edgeLabelEnd ??= edgeLabelClosers.get(token);
     if (edgeLabelEnd) continue;
     const shapeEnd = SHAPE_ENDS.get(token);
-    const bracketEnd = token === '>' ? ']' : LABEL_BRACKET_ENDS.get(token);
+    const bracketEnd = LABEL_BRACKET_ENDS.get(token);
     if (shapeEnd || bracketEnd) {
       // 节点标签里的 --、==、-. 是文字，不开启边标签。
       if (match.index >= labelLineEnd) {
