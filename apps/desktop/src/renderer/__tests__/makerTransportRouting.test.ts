@@ -113,6 +113,25 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
     await getSessionFor('archive');
     expect(invoke).toHaveBeenLastCalledWith('host', 'local-db:sessions:get', ['archive']);
   });
+  // Unit #12500: a later device snapshot must not redirect ID-only transport.
+  it.each(['cold', 'mirrored', 'pushed'])('keeps the verified %s owner across a conflicting snapshot', async mode => {
+    const { invoke } = stubElectron();
+    Object.assign(window, { addEventListener: vi.fn() });
+    const { confirmSessionOrigin } = await import('@/features/device-link/confirmSessionOrigin');
+    const { remoteProjectsStore } = await import('@/features/device-link/remoteProjectsStore');
+    const { getSessionFor } = await import('@/lib/makerTransport');
+    const row = sess('same-id');
+    if (mode === 'mirrored') remoteProjectsStore.setDeviceSessions('first', 'First', [row]);
+    invoke.mockImplementation(async () => {
+      if (mode === 'pushed') remoteProjectsStore.setDeviceSessions('first', 'First', [row]);
+      return row;
+    });
+    await confirmSessionOrigin(row.id, 'first', () => true);
+    remoteProjectsStore.setDeviceSessions('second', 'Second', [row]);
+    await expect(confirmSessionOrigin(row.id, 'second', () => true)).rejects.toThrow('Conflicting');
+    await getSessionFor(row.id);
+    expect(invoke).toHaveBeenLastCalledWith('first', 'local-db:sessions:get', [row.id]);
+  });
   it('accepts deferred switch outcomes only from the owning remote device and session', async () => {
     stubElectron();
     let listener: ((push: { deviceId: string; channel: string; payload: unknown }, stamp?: unknown) => void) | undefined;

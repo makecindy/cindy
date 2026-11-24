@@ -1,3 +1,4 @@
+import type { Session } from '@/lib/ccAgent.types';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { getSessionOnDevice } from '@/lib/makerTransport';
 import { resolveReferences } from '@/lib/sessionService';
@@ -14,10 +15,14 @@ export async function confirmSessionOrigin(sessionId: string, deviceId: string, 
       throw new Error('[PERMISSION_DENIED] Conflicting session origin');
     }
   };
+  const remember = (row: Session) => {
+    remoteProjectsStore.pinSessionOrigin(deviceId, sessionId);
+    return row;
+  };
   check();
   const mirrored = () => remoteProjectsStore.getDeviceSessions(deviceId).find(row => row.id === sessionId);
   const existing = mirrored();
-  if (existing) return existing;
+  if (existing) return remember(existing);
 
   const needsLocalCheck = !getStickySessionDeviceId(sessionId);
   const current = remoteProjectsStore.captureSessionRead(deviceId, sessionId);
@@ -32,12 +37,11 @@ export async function confirmSessionOrigin(sessionId: string, deviceId: string, 
   }
   if (!current()) {
     const newer = mirrored();
-    if (newer) return newer;
+    if (newer) return remember(newer);
     throw new Error('Remote task read invalidated');
   }
   if (!row || row.id !== sessionId || row.status === 'deleted') throw new Error('[NOT_FOUND] Remote task missing');
   const confirmed = current.mergeActivity(row);
   remoteProjectsStore.addSessionDetail(deviceId, confirmed);
-  getStickySessionDeviceId(sessionId);
-  return confirmed;
+  return remember(confirmed);
 }

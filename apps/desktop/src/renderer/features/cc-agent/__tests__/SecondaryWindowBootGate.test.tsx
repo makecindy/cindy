@@ -36,6 +36,7 @@ vi.mock('@/features/device-link/remoteProjectsStore', () => ({
     captureSessionRead: () => Object.assign(() => true, { mergeActivity: (row: unknown) => row }),
     getDeviceSessions: mocks.getVisibleMergedRemoteSessions,
     getVisibleMergedRemoteSessions: mocks.getVisibleMergedRemoteSessions,
+    pinSessionOrigin: vi.fn(),
     addSessionDetail: mocks.addSessionDetail,
   },
 }));
