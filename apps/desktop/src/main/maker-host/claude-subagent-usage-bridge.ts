@@ -89,7 +89,7 @@ function recordBillingSegment(
   const tier = final.service_tier ?? start.service_tier;
   if (speed !== 'standard' && speed !== 'fast') return;
   if (tier != null && tier !== 'standard' && tier !== 'priority' && tier !== 'batch' && tier !== 'default') return;
-  const validCount = (value: unknown) =>
+  const validCount = (value: unknown): value is number =>
     typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
   if (!validCount(start.input_tokens) || !validCount(final.output_tokens)) return;
   for (const field of ['input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens']) {
@@ -98,10 +98,15 @@ function recordBillingSegment(
   }
   const inputCount = (key: string) => Math.max(numberField(start, key), numberField(final, key));
   const cacheCreate = inputCount('cache_creation_input_tokens');
-  const ttl = final.cache_creation ?? start.cache_creation;
-  const cache1h = isPlainObject(ttl) ? numberField(ttl, 'ephemeral_1h_input_tokens') : 0;
-  if (ttl != null && (!isPlainObject(ttl) ||
-      (ttl.ephemeral_1h_input_tokens !== undefined && !validCount(ttl.ephemeral_1h_input_tokens)))) return;
+  let cache1h = 0;
+  for (const ttl of [start.cache_creation, final.cache_creation]) {
+    if (ttl == null) continue;
+    if (!isPlainObject(ttl)) return;
+    const count = ttl.ephemeral_1h_input_tokens;
+    if (count === undefined) continue;
+    if (!validCount(count)) return;
+    cache1h = Math.max(cache1h, count);
+  }
   if (cache1h > cacheCreate) return;
   const id = message.id;
   if (segments.has(id) || segments.size >= MAX_SEGMENTS_PER_TASK) return;

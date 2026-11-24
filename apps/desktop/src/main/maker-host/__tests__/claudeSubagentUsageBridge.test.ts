@@ -372,11 +372,15 @@ it.each(['proxy', 'sdk-and-proxy', 'legacy', 'truncated', 'foreign-session', 'un
       getSubagentTaskUsage: (id: string, sid?: string) => bridge.getTaskUsage(id, sid),
     };
     const usage = { input_tokens: 100, output_tokens: 10, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
+    const childUsage = {
+      ...usage, cache_creation_input_tokens: 50,
+      cache_creation: { ephemeral_5m_input_tokens: 20, ephemeral_1h_input_tokens: 30 },
+    };
     const emit = (msg: Parameters<typeof translateSdkMessage>[0]) => translateSdkMessage(msg, queue, ctx);
     function sdkRequest(id: string, model: string, parent?: string) {
       for (const event of [
-        { type: 'message_start', message: { id, model, usage } },
-        { type: 'message_delta', usage }, { type: 'message_stop' },
+        { type: 'message_start', message: { id, model, usage: parent ? childUsage : usage } },
+        { type: 'message_delta', usage: parent ? { output_tokens: 10 } : usage }, { type: 'message_stop' },
       ]) emit({ type: 'stream_event', parent_tool_use_id: parent, event });
     }
     sdkRequest('msg-main', 'main-model');
@@ -405,8 +409,11 @@ it.each(['proxy', 'sdk-and-proxy', 'legacy', 'truncated', 'foreign-session', 'un
           requestBody: requestBody(model, prompt),
         });
         const frames = [
-          { type: 'message_start', message: { id: 'msg-child', model, usage: { ...usage, output_tokens: 0 } } },
-          { type: 'message_delta', usage: { output_tokens: 10 } },
+          { type: 'message_start', message: { id: 'msg-child', model, usage: { ...childUsage, output_tokens: 0 } } },
+          { type: 'message_delta', usage: {
+            output_tokens: 10,
+            cache_creation: mode === 'sdk-and-proxy' ? { ephemeral_1h_input_tokens: 0 } : { ephemeral_5m_input_tokens: 20 },
+          } },
           ...(mode === 'truncated' ? [] : [{ type: 'message_stop' }]),
         ];
         sink?.onData?.(Buffer.from(frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join('')));
@@ -417,7 +424,7 @@ it.each(['proxy', 'sdk-and-proxy', 'legacy', 'truncated', 'foreign-session', 'un
       emit({ type: 'system', subtype: 'task_notification', status: 'completed', task_id: 'agent-a', tool_use_id: 'tool-a' });
       launch();
     }
-    emit({ type: 'result', result: 'done', usage: { ...usage, input_tokens: 200, output_tokens: 20 } });
+    emit({ type: 'result', result: 'done', usage: { ...usage, input_tokens: 200, output_tokens: 20, cache_creation_input_tokens: 50 } });
     queue.end();
     let segments = normalizeTurnUsageSegments([]);
     for await (const event of queue) {
@@ -426,13 +433,13 @@ it.each(['proxy', 'sdk-and-proxy', 'legacy', 'truncated', 'foreign-session', 'un
     const models = ['main-model', model];
     const { perModel } = resolveClaudeTurnCostSinks(models.map(model => ({
       model, inputTokensDelta: 100, outputTokensDelta: 10, cacheReadTokensDelta: 0,
-      cacheCreateTokensDelta: 0, costUsdDelta: 0,
+      cacheCreateTokensDelta: model === 'child-model' ? 50 : 0, costUsdDelta: 0,
     })), { supplier: Object.fromEntries(models.map((modelId, index) => [modelId, {
       modelId, providerId: 'supplier', source: 'user-override', currency: 'USD', approximate: true,
-      inputPerMtok: 10 * (index + 1), outputPerMtok: 0,
+      inputPerMtok: 10 * (index + 1), outputPerMtok: 0, cacheCreatePerMtok: 5, cacheCreate1hPerMtok: 20,
     }])) }, { providerId: 'supplier', billingRoute: 'provider-api', region: 'global' }, segments);
     expect(perModel.map(row => [row.model, row.money?.amount ?? null])).toEqual([
-      ['main-model', 0.001], [model, ['proxy', 'sdk-and-proxy', 'early-response'].includes(mode) ? 0.002 : null],
+      ['main-model', 0.001], [model, ['proxy', 'sdk-and-proxy', 'early-response'].includes(mode) ? 0.0027 : null],
     ]);
   },
 );
