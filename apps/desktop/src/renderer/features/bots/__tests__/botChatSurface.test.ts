@@ -134,7 +134,7 @@ describe('伙伴消息流复用工作组件并保留独立过程分组', () => {
 
   it('时间戳只挂在伙伴消息分组上', () => {
     expect(messageStream).toContain('collectBotMessageTimeGroups(');
-    expect(messageStream).toContain('botMessageTimeGroups.get(msg.clientId)');
+    expect(messageStream).toContain('groupTimestamp={botTimeGroupsByRow.get(item.key)}');
   });
 
   it('未读起点只挂在伙伴消息流，不会创建分支', () => {
