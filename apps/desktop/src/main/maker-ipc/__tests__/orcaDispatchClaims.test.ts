@@ -95,6 +95,23 @@ describe('lead turn declaration reconciliation', () => {
     });
   });
 
+  it('accepts an assignment whose worker already has a dispatch from an earlier turn', () => {
+    // 上一轮派出去的活还在跑，这一轮收口时被自然地复述进 assignments：不能判成没派。
+    noteLeadDispatchFact('lead-1', fact({ turnGeneration: 2 }));
+    dispatchFactsForTurn('lead-1', 2);
+
+    noteLeadTurnDeclaration('lead-1', {
+      assignments: [{ workerId: 'worker-1', taskSummary: 'Keep going on the export bug.' }],
+      dispatched: [],
+      pending: [],
+      turnGeneration: 3,
+    });
+
+    expect(reconcileLeadTurnDeclaration('lead-1', dispatchFactsForTurn('lead-1', 3))).toEqual({
+      consistent: true,
+    });
+  });
+
   it('accepts an assignment the lead parked as pending', () => {
     noteLeadTurnDeclaration('lead-1', {
       assignments: [{ workerId: 'worker-1', taskSummary: 'Classify the 199 cases.' }],
@@ -303,23 +320,6 @@ describe('lead turn declaration reconciliation', () => {
     // 同一笔派发迟到落地（仍在第 5 轮）：账本不能因此重新武装，唤醒轮不能被告知「本轮派了」。
     noteLeadDispatchFact('lead-1', fact({ turnGeneration: 5, dispatchId: 'mq-2' }));
     expect(settleDispatchClaimIncident('lead-1', false, 6)).toBe('escalate');
-  });
-
-  it('keeps the open incident when a stale fact arrives', () => {
-    dispatchFactsForTurn('lead-1', 8);
-    noteLeadTurnDeclaration('lead-1', {
-      assignments: [{ workerId: 'worker-1', taskSummary: 'Take the export bug.' }],
-      dispatched: [],
-      pending: [],
-      turnGeneration: 8,
-    });
-
-    noteLeadDispatchFact('lead-1', fact({ turnGeneration: 3 }));
-
-    expect(dispatchFactsForTurn('lead-1', 8)).toHaveLength(0);
-    const verdict = reconcileLeadTurnDeclaration('lead-1', []);
-    if (verdict.consistent) throw new Error('expected the declaration to survive');
-    expect(verdict.reason).toBe('declared-not-dispatched');
   });
 
   it('drops a fact once the dispatch is retracted', () => {

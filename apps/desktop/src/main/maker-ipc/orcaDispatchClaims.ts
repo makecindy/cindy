@@ -254,7 +254,8 @@ export function reconcileLeadTurnDeclaration(
   }
   const labelOf = (workerId: string): string =>
     factsByWorker.get(workerId)?.[0]?.workerLabel ??
-    declaration.assignments.find((entry) => entry.workerId === workerId)?.workerId ??
+    ledger.facts.find((fact) => fact.workerId === workerId)?.workerLabel ??
+    declaration.dispatched.find((entry) => entry.workerId === workerId)?.workerId ??
     workerId;
 
   // 声明指着更早轮次的编号时，本轮同 Worker 的凭据仍然没有被这一句声明覆盖。
@@ -298,8 +299,11 @@ export function reconcileLeadTurnDeclaration(
   }
 
   const declaredWorkers = new Set(declaration.dispatched.map((entry) => entry.workerId));
+  // 「光说不做」只能按「这个 worker 有没有任何一笔派发」判：更早轮次派出去还在跑的活，
+  // 这一轮会被自然地复述进 assignments，按本轮凭据逐个比会把在跑的活判成没派。
   for (const assignment of declaration.assignments) {
     if (declaredWorkers.has(assignment.workerId)) continue;
+    if (ledger.facts.some((fact) => fact.workerId === assignment.workerId)) continue;
     if (declaration.pending.some((entry) => entry.workerId === assignment.workerId)) continue;
     return {
       consistent: false,
@@ -332,7 +336,7 @@ export function describeDeclarationVerdict(verdict: {
     case 'no-declaration':
       return 'The host recorded a dispatch that no report_turn declaration covers';
     case 'declared-not-dispatched':
-      return `You declared a dispatch to ${verdict.detail} that the host never accepted`;
+      return `You listed work for ${verdict.detail}, but the host never accepted a dispatch to it`;
     case 'dispatched-not-declared':
       return `The host dispatched to ${verdict.detail}, but your declaration leaves it out`;
     case 'unknown-message-id':
