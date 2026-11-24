@@ -20,9 +20,10 @@ export async function savePreviewImage(source: string, mimeHint?: string, title?
   staging.create();
   try {
     const copy = new File(staging, 'original');
-    const inline = /^data:(image\/[\w.+-]+);base64,/i.exec(source);
+    const inline = /^data:(image\/[\w.+-]+)(?:;[^,]*)?;base64,/i.exec(source);
     if (inline) {
-      await writeAsStringAsync(copy.uri, source.slice(inline[0].length), { encoding: EncodingType.Base64 });
+      const base64 = decodeURIComponent(source.slice(inline[0].length));
+      await writeAsStringAsync(copy.uri, base64, { encoding: EncodingType.Base64 });
     } else if (/^(?:file|https?):\/\//i.test(source)) {
       await copyRemoteFile(source, copy);
     } else {
@@ -31,7 +32,7 @@ export async function savePreviewImage(source: string, mimeHint?: string, title?
     const head = await readAsStringAsync(copy.uri, { encoding: EncodingType.Base64, position: 0, length: 16 });
     const mime = [
       sniffImageMimeFromBase64(head),
-      inline?.[1],
+      inline?.[1]?.toLowerCase(),
       mimeHint,
       imageMimeForUriFallback(title ?? ''),
       imageMimeForUriFallback(source),
