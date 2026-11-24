@@ -166,7 +166,6 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
   const overlayRef = useRef<HTMLDivElement | null>(null);
   const bodyScrollRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<PlaintextEditorHandle>(null);
-  const initialLineScrollKeyRef = useRef<string | null>(null);
 
   const displayName = useMemo(() => fileName ?? basename(filePath), [fileName, filePath]);
   const renderable = useMemo(() => detectRenderable(filePath), [filePath]);
@@ -244,11 +243,6 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
       onClose();
     }, 200);
   }, [onClose, triggerRef]);
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: filePath/initialLine 需要触发滚动状态重置。
-  useEffect(() => {
-    initialLineScrollKeyRef.current = null;
-  }, [filePath, initialLine]);
 
   // Trigger fade-in on mount (mirrors ImageLightbox)
   useEffect(() => {
@@ -414,20 +408,8 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
 
 
   useEffect(() => {
-    if (!contentReady || loadState.phase !== 'ready') return;
-    if (initialLine == null || !Number.isFinite(initialLine) || initialLine <= 0) return;
-
-    const line = Math.floor(initialLine);
-    const scrollKey = `${filePath}:${line}:${renderable.kind}`;
-    if (initialLineScrollKeyRef.current === scrollKey) return;
-    initialLineScrollKeyRef.current = scrollKey;
-
-    if (renderable.kind !== 'markdown') {
-      const raf = requestAnimationFrame(() => {
-        editorRef.current?.scrollToLine(line);
-      });
-      return () => cancelAnimationFrame(raf);
-    }
+    if (renderable.kind !== 'markdown' || showSource || loadState.phase !== 'ready') return;
+    if (initialLine == null || !Number.isInteger(initialLine) || initialLine <= 0) return;
 
     const raf = requestAnimationFrame(() => {
       const scroller = bodyScrollRef.current;
@@ -436,7 +418,7 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
       const entries = Array.from(
         scroller.querySelectorAll<HTMLElement>('[data-source-line]'),
       ).map((el) => ({ el, line: Number(el.getAttribute('data-source-line')) }));
-      const target = pickSourceLineAnchor(entries, line)?.el;
+      const target = pickSourceLineAnchor(entries, initialLine)?.el;
       if (target) {
         const targetRect = target.getBoundingClientRect();
         const scrollerRect = scroller.getBoundingClientRect();
@@ -445,7 +427,7 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
     });
 
     return () => cancelAnimationFrame(raf);
-  }, [contentReady, filePath, initialLine, loadState.phase, renderable.kind]);
+  }, [initialLine, loadState, renderable.kind, showSource]);
 
   // F3 toolbar：点击文件名复制完整路径；F4：点击右侧 Copy 复制全文。
   async function copyPath() {
@@ -708,8 +690,9 @@ function TextDocumentLightbox({ filePath, fileName, initialLine, triggerRef, onC
           loadState.phase === 'ready' &&
           (renderable.kind === 'text' || renderable.kind === 'code' || showSource) && (
             <PlaintextEditor
-              key={filePath}
+              key={`${filePath}:${initialLine ?? ''}`}
               ref={editorRef}
+              initialReferenceLine={initialLine}
               readOnly
               wordWrap={wordWrap}
               showLineNumbers={lineNumbers}

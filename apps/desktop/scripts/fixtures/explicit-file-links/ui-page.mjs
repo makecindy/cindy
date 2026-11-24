@@ -4,7 +4,7 @@ export default {
   name: 'explicit-file-links',
   entry: './fixture.tsx',
   viewport: { width: 560, height: 420 },
-  real: 'MarkdownRenderer, path classification, click-time resolution, link context menu, error toast and FileLightbox navigation',
+  real: 'MarkdownRenderer, path classification, click-time resolution, link context menu, error toast and FileLightbox navigation, and the TextLightbox CodeMirror viewport',
   notCovered: 'Real filesystem, remote transport, PDF decoding and OS opening; mobile native rendering.',
   stubs: {
     'src/renderer/features/cc-agent/workdir-browse/PdfPreview':
@@ -13,10 +13,60 @@ export default {
   cases: {
     default: { about: 'Missing authored link remains clickable, explains failure, offers a copy menu and requests a fresh lookup after restoration' },
     'html-shortcut': { about: 'Cmd-click opens a restored relative HTML link in the system browser' },
+    'source-line': {
+      about: 'A source link opens a long Java file with its referenced line visible and highlighted',
+      data: { sourceLine: true },
+    },
+    'source-line-classic': {
+      about: 'Source line highlighting also works with the Classic theme’s opaque hover color',
+      data: { sourceLine: true },
+      storage: { 'theme.familyId': 'default' },
+    },
     remote: { about: 'Missing remote link remains clickable without local filesystem access' },
     untrusted: { about: 'Content without privileged file access stays inert' },
   },
   async check(page, ui) {
+    if (ui.data.sourceLine) {
+      // UI regression: the existing lightbox unit test stubs the editor, so it
+      // cannot verify the viewport or highlight for a Markdown :line link.
+      await page.getByRole('link', { name: '方法入口', exact: true }).click();
+      const editor = page.locator('[data-text-lightbox-overlay] .cm-editor');
+      await editor.waitFor();
+      await page.waitForFunction(() => {
+        const editor = document.querySelector('[data-text-lightbox-overlay] .cm-editor');
+        const target = Array.from(editor?.querySelectorAll('.cm-line') ?? [])
+          .find((line) => line.textContent?.includes('void reconcileInventory()'));
+        const scroller = editor?.querySelector('.cm-scroller');
+        if (!target || !scroller) return false;
+        const line = target.getBoundingClientRect();
+        const viewport = scroller.getBoundingClientRect();
+        return line.top >= viewport.top && line.bottom <= viewport.bottom;
+      });
+      await ui.capture('referenced-source-line');
+      const target = editor.locator('.cm-line').filter({ hasText: 'void reconcileInventory()' });
+      assert.equal(await target.getAttribute('data-reference-line'), '975');
+      const lineNumber = editor.locator('.cm-lineNumbers .cm-reference-line-number');
+      assert.equal(await lineNumber.textContent(), '975');
+      assert.equal(await lineNumber.evaluate((gutter) => getComputedStyle(gutter).fontWeight), '600');
+      const { background, themeBackground, ordinaryBackground } = await target.evaluate((line) => {
+        const parent = line.parentElement;
+        const ordinary = parent.querySelector('.cm-line:not([data-reference-line])');
+        const probe = document.createElement('span');
+        probe.hidden = true;
+        probe.style.backgroundColor = 'var(--surface-hover)';
+        parent.append(probe);
+        const themeBackground = getComputedStyle(probe).backgroundColor;
+        probe.remove();
+        return {
+          background: getComputedStyle(line).backgroundColor,
+          themeBackground,
+          ordinaryBackground: getComputedStyle(ordinary).backgroundColor,
+        };
+      });
+      assert.equal(background, themeBackground);
+      assert.notEqual(background, ordinaryBackground);
+      return;
+    }
     if (ui.case === 'html-shortcut') {
       // DESIGN §14.5: unlike the DOM tests, this browser run sends a real
       // modified pointer click to MarkdownRenderer and observes the host boundary.

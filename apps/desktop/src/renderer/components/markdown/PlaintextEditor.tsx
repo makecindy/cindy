@@ -40,12 +40,15 @@ import {
   EditorState,
   EditorSelection,
   Prec,
+  RangeSet,
   RangeSetBuilder,
   StateField,
 } from '@codemirror/state';
 import {
   Decoration,
   EditorView,
+  gutterLineClass,
+  GutterMarker,
   keymap,
   lineNumbers,
   type DecorationSet,
@@ -147,12 +150,6 @@ export interface PlaintextEditorHandle {
    * 那一行只露出半行也算"顶上的行", 跟用户视觉一致。
    */
   getViewportTopLine: () => number | null;
-  /**
-   * doc-mode anchor: 把指定 1-based 行号对齐到 viewport 顶部。out-of-range / view
-   * 未挂载时 no-op。配合 getViewportTopLine 用 (preview→edit 切换时父层先在
-   * preview 里捕获 line, 切到 editor 挂载完调本方法对齐位置)。
-   */
-  scrollToLine: (line: number) => void;
   /** Current non-empty selection's raw document slice. */
   getSelectionText: () => string | null;
   /** Current non-empty selection's 1-based source line range. */
@@ -163,6 +160,8 @@ export interface PlaintextEditorProps {
   /** Initial text. Editor becomes uncontrolled internally after mount;
    *  remount via key={filePath} to swap content. */
   initialValue: string;
+  /** 1-based line to reveal and mark when mounting a source preview. */
+  initialReferenceLine?: number;
   /** Fires on every keystroke / edit. Use to drive the dirty flag. */
   onChange?: (value: string) => void;
   /** Read-only mode. Toggled at runtime via Compartment.reconfigure,
@@ -994,8 +993,45 @@ const markdownFormattingKeymap = Prec.high(keymap.of([
   },
 ]));
 
+const referenceLineTheme = EditorView.baseTheme({
+  '.cm-reference-line': {
+    backgroundColor: 'var(--surface-hover)',
+  },
+  '.cm-lineNumbers .cm-gutterElement.cm-reference-line-number': {
+    color: 'var(--text-primary)',
+    fontWeight: '600',
+  },
+});
+
+const referenceLineNumber = new class extends GutterMarker {
+  elementClass = 'cm-reference-line-number';
+}();
+
+function getReferenceLine(doc: EditorState['doc'], line?: number) {
+  return line !== undefined && Number.isInteger(line) && line >= 1 && line <= doc.lines
+    ? doc.line(line)
+    : null;
+}
+
+function referenceLineDecoration(line: number) {
+  const marker = Decoration.line({
+    attributes: { class: 'cm-reference-line', 'data-reference-line': String(line) },
+  });
+  return [
+    EditorView.decorations.compute(['doc'], (state) => {
+      const target = getReferenceLine(state.doc, line);
+      return target ? Decoration.set([marker.range(target.from)]) : Decoration.none;
+    }),
+    gutterLineClass.compute(['doc'], (state) => {
+      const target = getReferenceLine(state.doc, line);
+      return target ? RangeSet.of(referenceLineNumber.range(target.from)) : RangeSet.empty;
+    }),
+  ];
+}
+
 type PlaintextEditorInitialConfig = {
   doc: string;
+  initialReferenceLine: number | undefined;
   initialScrollTop: number | undefined;
   initialScrollLine: number | null | undefined;
   initialScrollOffset: number | null | undefined;
@@ -1029,13 +1065,6 @@ function getViewportTopAnchor(view: EditorView): ViewportTopAnchor {
 
 function getViewportTopLine(view: EditorView): number | null {
   return getViewportTopAnchor(view).line;
-}
-
-function scrollViewToLine(view: EditorView, line: number): void {
-  const doc = view.state.doc;
-  if (line < 1 || line > doc.lines) return;
-  const pos = doc.line(line).from;
-  view.dispatch({ effects: EditorView.scrollIntoView(pos, { y: 'start' }) });
 }
 
 function getSelectionLineRange(view: EditorView): PlaintextEditorSelectionLineRange | null {
@@ -1072,6 +1101,7 @@ export const PlaintextEditor = forwardRef<PlaintextEditorHandle, PlaintextEditor
   function PlaintextEditor(
     {
       initialValue,
+      initialReferenceLine,
       onChange,
       readOnly = false,
       wordWrap,
@@ -1108,6 +1138,7 @@ export const PlaintextEditor = forwardRef<PlaintextEditorHandle, PlaintextEditor
       const docFlags = detectLargeDoc(initialValue);
       initialConfigRef.current = {
         doc: initialValue,
+        initialReferenceLine,
         initialScrollTop,
         initialScrollLine,
         initialScrollOffset,
@@ -1268,13 +1299,6 @@ export const PlaintextEditor = forwardRef<PlaintextEditorHandle, PlaintextEditor
         search,
         getViewportTopLine: () =>
           cmViewRef.current ? getViewportTopLine(cmViewRef.current) : null,
-        scrollToLine: (line: number) => {
-          const view = cmViewRef.current;
-          if (!view) return;
-          // EditorView.scrollIntoView with y:'start' 把目标 char 对齐到 viewport
-          // 顶部 — 配合 anchor 捕获方向上的"顶部行"语义。
-          scrollViewToLine(view, line);
-        },
         getSelectionText: () => {
           const view = cmViewRef.current;
           return view ? getSelectionText(view) : null;
@@ -1354,6 +1378,10 @@ export const PlaintextEditor = forwardRef<PlaintextEditorHandle, PlaintextEditor
             ? plainDarkEditorTheme
             : plainLightEditorTheme,
         searchHighlightField,
+        ...(initialConfig.initialReferenceLine === undefined ? [] : [
+          referenceLineTheme,
+          referenceLineDecoration(initialConfig.initialReferenceLine),
+        ]),
         editableCompartment.of(EditorView.editable.of(!readOnlyRef.current)),
         EditorView.updateListener.of((u) => {
           if (!u.docChanged) return;
@@ -1363,7 +1391,17 @@ export const PlaintextEditor = forwardRef<PlaintextEditorHandle, PlaintextEditor
         }),
       ];
       const state = EditorState.create({ doc: docValueRef.current, extensions });
-      const view = new EditorView({ state, parent: cmContainerRef.current });
+      const target = getReferenceLine(state.doc, initialConfig.initialReferenceLine);
+      const hasSavedScroll = scrollLineRef.current !== null || scrollTopRef.current > 0;
+      // Let CodeMirror resolve the target in its initial layout, including
+      // virtualized and wrapped lines that are outside the initial viewport.
+      const view = new EditorView({
+        state,
+        parent: cmContainerRef.current,
+        scrollTo: target && !hasSavedScroll
+          ? EditorView.scrollIntoView(target.from, { y: 'center' })
+          : undefined,
+      });
       cmViewRef.current = view;
       // 还原跨 mount 滚动位置。Markdown live-preview/table widgets 会在
       // mount 后几帧内持续改变 height map；恢复期间触发的 scroll event 是
