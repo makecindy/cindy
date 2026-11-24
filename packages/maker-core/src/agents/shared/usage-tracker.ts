@@ -41,6 +41,8 @@ export interface UsageSegment {
   modelConfirmed?: boolean;
   /** Request price variant. Fast maps to the gateway priority tariff. */
   priceVariant?: 'standard' | 'priority' | 'fast' | 'batch' | 'ultrafast';
+  /** Same-ID receipts contradict the SDK tariff and cannot be matched uniquely. */
+  ambiguousPriceVariant?: true;
   /** 输入 token (不含 cache) */
   inputTokens: number;
   outputTokens: number;

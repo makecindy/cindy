@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import { collectNativeToolMedia, type NativeToolMedia } from '@cindy/maker-shared/tool-process-media';
 /**
  * Claude Code SDKMessage → maker-core 语义 AgentEvent 翻译器。
@@ -393,7 +394,6 @@ function mergeProxyUsage(ctx: TranslateContext, sdk: UsageSegment[]): UsageSegme
     else segmentsByMessageId.set(messageId, [segmentId]);
   }
   const indexBySegment = new Map(sdk.map((segment, index) => [segment.id, index]));
-  const added = new Set<string>();
   const soleParentByTask = new Map<string, string | undefined>();
   for (const [parent, { taskId }] of ctx.turn.subagentTasks) {
     if (!taskId) continue;
@@ -406,14 +406,18 @@ function mergeProxyUsage(ctx: TranslateContext, sdk: UsageSegment[]): UsageSegme
     // Reading transfers the whole owner batch, including receipts for resumed calls.
     const billing = ctx.getSubagentTaskUsage?.(taskId, ctx.getSdkSessionId())?.billing;
     if (!billing || billing.sdkSessionId !== ctx.getSdkSessionId()) continue;
+    // Compare only eligible receipts within this SDK session and task. Re-delivery
+    // can repeat the same usage, but conflicting evidence cannot identify a request.
+    const candidates = new Map<string, UsageSegment[]>();
     for (const { reservedAt, parentToolUseId, ...request } of billing.segments) {
       if (!request.id) continue;
-      const matches = segmentsByMessageId.get(request.id)?.filter(id =>
-        ctx.turn.subagentTasks?.get(sdkParent(id))?.taskId === taskId);
-      if (matches && matches.length !== 1) continue;
-      const sdkId = matches?.[0];
-      const receiptKey = sdkId ?? request.id;
-      if (added.has(receiptKey)) continue;
+      const sameId = segmentsByMessageId.get(request.id) ?? [];
+      const matches = sameId.filter(id => ctx.turn.subagentTasks?.get(sdkParent(id))?.taskId === taskId);
+      if (matches.length > 1) continue;
+      const sdkId = matches[0];
+      // A known different owner can independently use the same provider ID.
+      // An unidentified SDK stream could already contain this request.
+      if (!sdkId && sameId.some(id => !ctx.turn.subagentTasks?.get(sdkParent(id))?.taskId)) continue;
       const parent = sdkId ? sdkParent(sdkId) : onlyParent;
       if (!parent) continue;
       const invocation = ctx.turn.subagentTasks.get(parent);
@@ -428,13 +432,30 @@ function mergeProxyUsage(ctx: TranslateContext, sdk: UsageSegment[]): UsageSegme
         if (!sdkId || latest?.taskId !== taskId || latest.startedAt <= invocation.startedAt) continue;
       }
       if (!sdkId && anonymousParents.has(parent)) continue;
-      const index = sdkId ? indexBySegment.get(sdkId) : undefined;
+      const id = sdkId ?? `claude:proxy/${request.id}:${parent}`;
+      const group = candidates.get(id);
+      if (group) group.push(request);
+      else candidates.set(id, [request]);
+    }
+    for (const [id, group] of candidates) {
+      const request = group[0]!;
+      const index = indexBySegment.get(id);
+      if (group.some(receipt => receipt !== request && !isDeepStrictEqual(receipt, request))) {
+        // The SDK can still establish the counts. Its default tariff cannot settle
+        // a request if an eligible receipt for this model contradicts that tariff.
+        if (index === undefined) continue;
+        const observed = sdk[index]!;
+        if (group.some(receipt => receipt.model === observed.model && receipt.priceVariant !== observed.priceVariant)) {
+          merged[index] = { ...observed, ambiguousPriceVariant: true };
+        }
+        continue;
+      }
       if (index === undefined) {
-        merged.push({ ...request, id: `claude:proxy/${request.id}:${parent}` });
+        merged.push({ ...request, id });
       } else if (!merged[index]?.complete) {
         const previous = merged[index]!;
-        merged[index] = request.complete ? { ...request, id: sdkId } : {
-          ...request, id: sdkId,
+        merged[index] = request.complete ? { ...request, id } : {
+          ...request, id,
           inputTokens: Math.max(previous.inputTokens, request.inputTokens),
           outputTokens: Math.max(previous.outputTokens, request.outputTokens),
           cacheReadTokens: Math.max(previous.cacheReadTokens ?? 0, request.cacheReadTokens ?? 0),
@@ -442,7 +463,6 @@ function mergeProxyUsage(ctx: TranslateContext, sdk: UsageSegment[]): UsageSegme
           cacheCreate1hTokens: Math.max(previous.cacheCreate1hTokens ?? 0, request.cacheCreate1hTokens ?? 0),
         };
       }
-      added.add(receiptKey);
     }
   }
   return merged;

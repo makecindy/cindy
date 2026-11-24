@@ -652,6 +652,78 @@ it.each(['fresh', 'stale-only', 'late-finish', 'previous-parent', 'reused-id', '
   },
 );
 
+// #12615 unit regression: existing reused-ID coverage forwards both requests through
+// the SDK. Price two observed HTTP receipts with one or zero SDK boundaries instead.
+it.each(['sdk-sees-later', 'ambiguous-tariff', 'conflicting-proxy-only', 'two-owners', 'one-owner-streamed', 'duplicate'])(
+  'settles same-ID receipts using their owner and unambiguous usage (%s)', async mode => {
+    const { bridge, queue, sdkSessionId, ctx } = billingFixture();
+    const sdkSeesLater = mode === 'sdk-sees-later' || mode === 'ambiguous-tariff';
+    const separate = mode === 'two-owners' || mode === 'one-owner-streamed';
+    const models = separate ? ['model-a', 'model-b'] : ['model-a'];
+    const emit = (msg: Parameters<typeof translateSdkMessage>[0]) => translateSdkMessage(msg, queue, ctx);
+    for (const model of models) {
+      emit({ type: 'assistant', message: { content: [
+        { type: 'tool_use', name: 'Agent', id: model, input: { prompt: model } },
+      ] } });
+      emit({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: model, content: 'launched' }] },
+        tool_use_result: { isAsync: true, agentId: `agent-${model}`, resolvedModel: model, prompt: model } });
+    }
+
+    for (const reqId of [1, 2]) {
+      const model = models[reqId - 1] ?? models[0]!;
+      const input = reqId === 2 && !separate && mode !== 'duplicate' ? 200 : 100;
+      const usage = { input_tokens: input, output_tokens: input / 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+      const message = { id: 'reused', model, usage };
+      createClaudeSubagentUsageRequestTransform(bridge)({ ...requestPayload(model, model), speed: mode === 'ambiguous-tariff' ? 'fast' : 'standard' }, {
+        reqId, method: 'POST', url: '/v1/messages',
+        headers: { 'x-claude-code-session-id': sdkSessionId, 'x-claude-code-agent-id': `agent-${model}` },
+      });
+      const sink = openObservation(bridge, reqId, model, model);
+      const frames = [
+        { type: 'message_start', message },
+        { type: 'message_delta', usage: { output_tokens: usage.output_tokens } }, { type: 'message_stop' },
+      ];
+      sink?.onData?.(Buffer.from(frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join('')));
+      sink?.onEnd?.();
+      if ((sdkSeesLater && reqId === 2) || (mode === 'one-owner-streamed' && reqId === 1)) {
+        for (const event of frames) emit({ type: 'stream_event', parent_tool_use_id: model, event });
+      }
+    }
+    const perModelInput = mode === 'conflicting-proxy-only' ? 300 : sdkSeesLater ? 200 : 100;
+    emit({ type: 'result', result: 'done', usage: {
+      input_tokens: perModelInput * models.length, output_tokens: perModelInput * models.length / 10,
+      cache_read_input_tokens: 0, cache_creation_input_tokens: 0,
+    } });
+    queue.end();
+    const amounts: Array<number | null> = [];
+    for await (const event of queue) {
+      if (event.type !== 'done') continue;
+      const done = event.data as { usageSegments?: unknown; usageSegmentsComplete?: boolean };
+      const segments = normalizeTurnUsageSegments(done.usageSegments);
+      const { perModel } = resolveClaudeTurnCostSinks(models.map(model => ({
+        model, inputTokensDelta: perModelInput, outputTokensDelta: perModelInput / 10,
+        cacheReadTokensDelta: 0, cacheCreateTokensDelta: 0, costUsdDelta: 0,
+      })), { supplier: Object.fromEntries(models.map(modelId => [modelId, {
+        modelId, providerId: 'supplier', source: 'user-override', currency: 'USD', approximate: true,
+        inputPerMtok: 20, outputPerMtok: 0,
+      }])) }, { providerId: 'supplier', billingRoute: 'provider-api', region: 'global' }, segments, done.usageSegmentsComplete);
+      if (mode === 'ambiguous-tariff') {
+        // An independently reported model cost still follows the existing non-opaque SDK route.
+        const reported = resolveClaudeTurnCostSinks([{
+          model: 'model-a', inputTokensDelta: 200, outputTokensDelta: 20,
+          cacheReadTokensDelta: 0, cacheCreateTokensDelta: 0, costUsdDelta: 0.007,
+        }], undefined, { providerId: 'supplier', billingRoute: 'provider-api', region: 'global' }, segments, done.usageSegmentsComplete);
+        expect(reported.perModel).toMatchObject([{ source: 'sdk', money: { amount: 0.007 } }]);
+      }
+      amounts.push(...perModel.map(row => row.money?.amount ?? null));
+      expect(segments.map(segment => [segment.model, segment.inputTokens, segment.outputTokens])).toEqual(
+        mode === 'conflicting-proxy-only' ? [] : models.map(model => [model, perModelInput, perModelInput / 10]),
+      );
+    }
+    expect(amounts).toEqual(models.map(() => mode === 'conflicting-proxy-only' || mode === 'ambiguous-tariff' ? null : perModelInput * 0.00002));
+  },
+);
+
 it('retains an accepted billing receipt when the card registry evicts its task', () => {
   const bridge = new ClaudeSubagentUsageBridge();
   const sdkSessionId = 'sdk';

@@ -42,6 +42,7 @@ export interface TurnUsageSegment extends TurnTokenDeltas {
   model?: string;
   modelConfirmed?: boolean;
   priceVariant?: PriceVariant;
+  ambiguousPriceVariant?: true;
   costUsd?: number;
   complete?: boolean;
 }
@@ -73,6 +74,7 @@ export function normalizeTurnUsageSegments(value: unknown): TurnUsageSegment[] {
       continue;
     if (typeof raw.id === 'string' && raw.id) segment.id = raw.id;
     if (typeof raw.model === 'string' && raw.model.trim()) segment.model = raw.model.trim();
+    if (raw.ambiguousPriceVariant === true) segment.ambiguousPriceVariant = true;
     if (typeof raw.modelConfirmed === 'boolean') segment.modelConfirmed = raw.modelConfirmed;
     if (
       raw.priceVariant === 'standard' ||
@@ -660,7 +662,7 @@ export function resolveClaudeTurnCostSinks(
                 ? ((hasExplicitClaudeSubagent = true), group.subagent)
                 : group.unscoped;
             bucket.all.push(copy);
-            if (usageSegmentsComplete || segment.complete === true) {
+            if (!segment.ambiguousPriceVariant && (usageSegmentsComplete || segment.complete === true)) {
               bucket.priceable.push(copy);
             }
             observedByModel.set(model, group);
