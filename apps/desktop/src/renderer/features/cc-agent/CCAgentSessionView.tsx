@@ -1,4 +1,4 @@
-import { useSplitPaneFocus } from '@/features/cc-agent/splitPaneFocus';
+import { useSplitPaneFocus, useSplitPaneRouteActivation } from '@/features/cc-agent/splitPaneFocus';
 import { useProjectInfo } from './hooks/useProjectInfo';
 import { SessionProjectSettingsDialog } from './sidebar/SessionProjectMenuButton';
 import { acquireQueueEditLock, releaseQueueEditLock, type QueueEditLockOwner } from '@/components/new-chat/pendingQueueLocks';
@@ -931,6 +931,7 @@ function CCAgentSessionContent({
   const confirmedSessionId = awaitingCreation ? undefined : sessionId;
   const navigate = useNavigate();
   const paneFocused = useSplitPaneFocus();
+  const activateSplitPane = useSplitPaneRouteActivation();
   const ownsWindowRoute = paneFocused && navigationMode === 'route-owner';
   const canNavigateSession = ownsWindowRoute || navigationMode === 'split-pane';
   const sessionNavigationVersionRef = useRef(0);
@@ -1151,7 +1152,12 @@ function CCAgentSessionContent({
         const search = new URLSearchParams(location.search);
         search.set('settings', '1');
         search.set('settingsPage', 'model');
-        navigate(`${location.pathname}?${search.toString()}`);
+        const route = `${location.pathname}?${search.toString()}`;
+        if (!paneFocused && activateSplitPane) {
+          activateSplitPane(route);
+        } else {
+          navigate(route);
+        }
       }
     : undefined;
   const openVoiceSettings = useCallback(() => {
