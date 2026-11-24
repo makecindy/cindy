@@ -8803,6 +8803,11 @@ export class PiAgent extends BaseAgent {
       getPendingTurnUsage() {
         return ctx.turnGeneration > 0 && ctx.pendingHostTurnStartToken === null ? piTurnUsageOf(ctx) : undefined;
       },
+      isCompactingDeliveredReply() {
+        return !proc.isClosed && !ctx.turnSettled && ctx.pendingHostTurnStartToken === null
+          && ctx.replyPhase === 'threshold-compaction'
+          && piToolMarkupProjection(ctx).hasDeliveredReply(ctx.finalAssistantText);
+      },
 
       setInteractionResolver(resolver: InteractionResolver): void {
         interactionResolver = resolver;
