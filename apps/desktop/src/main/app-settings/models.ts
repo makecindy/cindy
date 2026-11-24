@@ -115,10 +115,19 @@ export async function manageAppModels(input: AppModelsRequest, assertCurrent: ()
         // the media settings, and the legacy override only filters their catalog. So the
         // fallback is for clearing a stored override (value=null) and its real default;
         // an explicit on/off is still the chat selector's switch and needs a chat entry.
-        const model = chatModel ?? (change.value === null
+        const mediaModel = change.value === null
           ? [...(provider?.imageModels ?? []), ...(provider?.videoModels ?? []),
             ...(provider?.audioModels ?? []), ...(provider?.evaluationModels ?? []),
             ...(provider?.embeddingModels ?? [])].find(model => model.id === target.modelId)
+          : undefined;
+        // A media entry is read through its own source agents (`codex:p:m`, not `pi:p:m`
+        // just because the caller said pi). Clearing the wrong key reports success while
+        // the override that actually filters the media catalog stays.
+        const mediaSourceAgents = mediaModel?.sourceAgents?.length
+          ? mediaModel.sourceAgents
+          : mediaModel?.sourceAgent ? [mediaModel.sourceAgent] : undefined;
+        const model = chatModel ?? (mediaModel && (!mediaSourceAgents || mediaSourceAgents.includes(target.agent))
+          ? mediaModel
           : undefined);
         // A provider that left the catalog keeps its overrides. value=null only removes the
         // stored choice, so it must stay available for those orphan keys; an explicit on/off

@@ -80,6 +80,31 @@ describe('model visibility override cleanup', () => {
     expect(manageAppPreferences).not.toHaveBeenCalled();
   });
 
+  // Codex P1: media entries are read through their own source agents. Resetting with the
+  // wrong agent builds a different key: the receipt says customized=false while the
+  // override that filters the media catalog is still there.
+  it('refuses to reset a media override through an agent that does not source it', async () => {
+    configureModelSettingsActions({
+      owner: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }),
+      list: async () => ({ providers: [{ id: 'relay', models: { pi: [], codex: [] },
+        imageModels: [{ id: 'openai/old-image', name: 'Old Image', defaultEnabled: false, sourceAgent: 'codex' }] }],
+        modelVisibilityOverrides: { 'codex:relay:openai/old-image': false } }),
+    } as unknown as Parameters<typeof configureModelSettingsActions>[0]);
+    manageAppPreferences.mockResolvedValue({ modelVisibility: { visible: true, customized: false } });
+
+    await expect(manageAppModels({ operation: 'set',
+      target: { providerId: 'relay', agent: 'pi', modelId: 'openai/old-image' },
+      change: { setting: 'visible', value: null } }, async () => {})).rejects.toThrow('MODEL_NOT_IN_CATALOG');
+    expect(manageAppPreferences).not.toHaveBeenCalled();
+
+    // Through the agent that actually sources the catalog the same reset goes through.
+    await manageAppModels({ operation: 'set',
+      target: { providerId: 'relay', agent: 'codex', modelId: 'openai/old-image' },
+      change: { setting: 'visible', value: null } }, async () => {});
+    expect(manageAppPreferences).toHaveBeenCalledWith('model-visibility', undefined,
+      { target: { providerId: 'relay', agent: 'codex', modelId: 'openai/old-image' }, visible: null, defaultEnabled: false });
+  });
+
   it('keeps refusing an explicit on/off choice for a model outside the catalog', async () => {
     await expect(manageAppModels({ operation: 'set', target: orphan, change: { setting: 'visible', value: true } },
       async () => {})).rejects.toThrow('MODEL_NOT_IN_CATALOG');
