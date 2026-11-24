@@ -6635,8 +6635,16 @@ export function handleStreamEvent(
       // F1-a: 在飞 assistant 文本 + tool_use 的落库都已收口 main(messagePersistBroadcaster
       // 在 tool_use 边界先 flushAssistantBlock 再落 tool_use),renderer 这里只做 UI:
       // finalize 在飞气泡 + 用 main 下发的 persistId 建 tool_use 气泡(onCreated 同 id dedup)。
-      // Finalize any in-flight assistant message first
-      const finalized = finalizeStreamingInState(state);
+      // The local Claude host flushes a child tool boundary on the SDK parent
+      // only. A different live row can keep the same persistId after the tool.
+      const toolParent = assistantMetaFields.parentToolUseId;
+      const separateClaudeStream = toolParent && event.persistId && state.streamingClientId &&
+        event.source === 'claude-code' && state.remoteHostId === null &&
+        state.messages.some((message) =>
+          message.clientId === state.streamingClientId &&
+          message.role === 'assistant' && message.isStreaming &&
+          message.parentToolUseId !== toolParent);
+      const finalized = separateClaudeStream ? state : finalizeStreamingInState(state);
       const clientId = event.persistId ?? crypto.randomUUID();
 
       const existingUpdatableToolIdx =

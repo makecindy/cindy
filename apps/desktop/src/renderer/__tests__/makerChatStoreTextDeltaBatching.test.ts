@@ -2328,6 +2328,41 @@ describe('makerChatStore text delta batching', () => {
     ]));
   });
 
+  // #1743 / unit: a child tool boundary must seal only the matching live row.
+  // Exercise local maker:event ingress; the child-final regression above does
+  // not cover tool events or the ordinary root tool boundary.
+  it.each([
+    { label: 'child tool during root', toolParent: 'toolu_child', preserve: true },
+    { label: 'tool of the active child', activeParent: 'toolu_child', toolParent: 'toolu_child', preserve: false },
+    { label: 'tool of another child', activeParent: 'toolu_other', toolParent: 'toolu_child', preserve: true },
+    { label: 'ordinary root tool', preserve: false },
+    { label: 'transcript edge only', transcriptParent: 'toolu_child', preserve: false },
+  ])('applies the Claude boundary to the owning stream ($label)', ({ activeParent, toolParent, transcriptParent, preserve }) => {
+    const send = (type: string, persistId: string, data: unknown, agentMeta?: object) => onEvent?.({
+      sessionId: SESSION_ID, persistId, event: { type, source: 'claude-code', data, agentMeta },
+    });
+    send('text', 'before', { text: 'prefix', isFinal: false }, activeParent ? { parentUuid: activeParent } : undefined);
+    vi.advanceTimersByTime(32);
+    send('tool_use', 'tool-row', { toolUseId: 'toolu_read', toolName: 'Read', input: {} },
+      toolParent ? { parentUuid: toolParent } : transcriptParent ? { transcriptParentUuid: transcriptParent } : undefined);
+    send('text', preserve ? 'before' : 'after', { text: ' suffix', isFinal: false },
+      activeParent ? { parentUuid: activeParent } : undefined);
+    vi.advanceTimersByTime(32);
+
+    const rows = makerChatStore.getSnapshot(SESSION_ID).messages;
+    expect(rows.find(row => row.clientId === 'before')).toMatchObject({
+      content: preserve ? 'prefix suffix' : 'prefix', isStreaming: preserve,
+    });
+    expect(rows.find(row => row.clientId === 'tool-row')).toMatchObject({ role: 'tool_use', toolUseId: 'toolu_read' });
+    if (!preserve) expect(rows.find(row => row.clientId === 'after')).toMatchObject({ content: ' suffix', isStreaming: true });
+
+    send('done', 'terminal', {});
+    send('text', 'next', { text: 'next reply', isFinal: false });
+    vi.advanceTimersByTime(32);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages.filter(row => row.isStreaming))
+      .toEqual([expect.objectContaining({ clientId: 'next', content: 'next reply' })]);
+  });
+
   it.each(['local', 'remote'] as const)('preserves newer queued text when an older item is retracted through %s ingress', (source) => {
     if (source === 'remote') remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
     const send = (channel: string, payload: unknown) => {
