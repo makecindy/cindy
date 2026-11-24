@@ -1,4 +1,5 @@
 import { runCloudManagementExecution } from './managementCalls.js';
+import { admitRemoteChange, runRemoteChange } from '../instance-runtime/maintenance.js';
 import { createHash, randomUUID } from 'node:crypto';
 import {
   managementCommandSchema,
@@ -212,6 +213,8 @@ export function createSettingsManagement(provider: ManagementProvider, now = Dat
       error('MANAGEMENT_INVALID_INPUT');
     if (busy.has(action.resource) || operations.size >= 512) error('MANAGEMENT_BUSY');
     caller.assertCurrent();
+    // Once maintenance has begun a new action is refused, with its ticket still unused.
+    admitRemoteChange();
     ticket!.used = command.operationId;
     busy.add(action.resource);
     const created: Operation = {
@@ -247,13 +250,14 @@ export function createSettingsManagement(provider: ManagementProvider, now = Dat
         created.cancel.push(cancel);
       },
     };
-    void Promise.resolve()
+    // Counted as in flight until the action settles, so maintenance cannot seal under it.
+    void runRemoteChange(() => Promise.resolve()
       .then(async () => {
         assertCurrent();
         await runCloudManagementExecution(execution, () => action.run(command.values, execution));
         assertCurrent();
         created.view = { kind: 'operation', operationId: command.operationId, phase: 'succeeded' };
-      })
+      }))
       .catch(() => {
         if (!terminal(created.view.phase))
           created.view = {

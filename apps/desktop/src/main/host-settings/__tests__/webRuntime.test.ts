@@ -42,14 +42,49 @@ vi.mock('../catalog.js', () => ({ readSettingsModelCatalog: async () => ({ provi
 import { executeWebSettingsRequest } from '../webRuntime.js';
 import { configureHostSettingsApplication } from '../index.js';
 import { settingsWebResultSchema, type SettingsWebCommand, type SettingsWebEnvelope } from '../../../shared/settingsWeb.js';
+import { connectInstanceMaintenance, type InstanceMaintenanceGate } from '../../instance-runtime/maintenance.js';
+/** A maintenance gate that refuses new work once maintenance begins and counts what it runs. */
+function maintenanceGate() {
+  const state = { preparing: false, inFlight: 0 };
+  const gate: InstanceMaintenanceGate = {
+    admit() { if (state.preparing) throw Object.assign(new Error('CLOUD_MAINTENANCE_RETRY'), { code: 'CLOUD_MAINTENANCE_RETRY' }); },
+    run(kind, work) { gate.admit(kind); state.inFlight++; return work().finally(() => { state.inFlight--; }); },
+  };
+  connectInstanceMaintenance(gate);
+  return state;
+}
+const noMaintenance: InstanceMaintenanceGate = { admit() {}, run: (_kind, work) => work() };
 const input = (command: SettingsWebCommand, sessionKey = 'a'.repeat(64)): SettingsWebEnvelope => ({ requestId: randomUUID(), runtimeId: randomUUID(), sessionKey, expiresAtMs: Date.now() + 30_000, command });
 beforeEach(() => {
   isolated.root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-web-settings-')); isolated.generation += 1;
   appWindow.userPrompt = '';
   configureHostSettingsApplication({ databaseWarning() {} });
 });
-afterEach(() => fs.rmSync(isolated.root, { recursive: true, force: true }));
+afterEach(() => { fs.rmSync(isolated.root, { recursive: true, force: true }); connectInstanceMaintenance(noMaintenance); });
 describe('web adapter uses actual Host settings files', () => {
+  // Unit: an accepted save counts as in flight until it is persisted; once maintenance has begun a
+  // new save is refused before it starts, and succeeds when retried after maintenance.
+  it('keeps an accepted save in flight until persisted and refuses new ones during maintenance', async () => {
+    const gate = maintenanceGate();
+    let inFlightWhenSaved = -1;
+    configureHostSettingsApplication({ databaseWarning() { inFlightWhenSaved = gate.inFlight; } });
+    const read = async () => {
+      const result = await executeWebSettingsRequest(input({ kind: 'read', domain: 'databaseWarning' }), () => {});
+      if (!result.ok || !('settings' in result) || result.settings.status !== 'ready') throw new Error('fixture read');
+      return result.settings;
+    };
+    const save = (settings: Awaited<ReturnType<typeof read>>, thresholdGiB: number) => input({ kind: 'update',
+      change: { domain: 'databaseWarning', operationId: settings.operationId, expectedRevision: settings.revision, set: { thresholdGiB } } });
+    expect(await executeWebSettingsRequest(save(await read(), 6), () => {})).toMatchObject({ ok: true, receipt: { saved: true } });
+    expect(inFlightWhenSaved).toBe(1);
+    expect(gate.inFlight).toBe(0);
+    const later = save(await read(), 7);
+    gate.preparing = true;
+    expect(await executeWebSettingsRequest(later, () => {})).toEqual({ ok: false, code: 'CLOUD_MAINTENANCE_RETRY' });
+    expect(await read()).toMatchObject({ value: { thresholdGiB: 6 } });
+    gate.preparing = false;
+    expect(await executeWebSettingsRequest(later, () => {})).toMatchObject({ ok: true, receipt: { saved: true } });
+  });
   it('initializes several domains in one request, without writes, and keeps session-bound CAS', async () => {
     const request = input({kind:'readBatch',domains:['databaseWarning','personalization','appearance']});
     const result = settingsWebResultSchema.parse(await executeWebSettingsRequest(request, () => {}));

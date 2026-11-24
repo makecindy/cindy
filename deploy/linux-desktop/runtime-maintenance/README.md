@@ -4,8 +4,11 @@ Lets the control service stop admitting work on one instance (prepare), close it
 and reopen it (cancel or release) around a backup or upgrade.
 
 `overlay.mjs` routes every work ingress through the gate: agent input and dispatch,
-scheduler, remote input including managed login recovery, and plugin work. It also hooks
-the quit chain in `lifecycle.ts` and activity sampling, which needs `runtime-activity`.
+scheduler, remote input including managed login recovery, and plugin work. At startup it
+connects the gate to the desktop's explicit hooks: settings saves and management actions
+the instance accepts from the cloud settings page (`instance-runtime/maintenance.ts`, as
+remote input), the quit chain's outcome (`observeQuitSteps` in `lifecycle.ts`), and activity
+sampling, which needs `runtime-activity`.
 `expectedRegion` must match the main process `VITE_CINDY_AUTH_REGION`.
 
 ## Contract

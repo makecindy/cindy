@@ -11,6 +11,7 @@ import { SETTINGS_WEB_CHANNELS, type SettingsWebEnvelope, type SettingsWebResult
 import { executeWebHostCall, isWebHostCall, type WebHostCallDeps } from './webHostCalls.js';
 import { dispatchLocalInvoke } from '../device-link/invoke-registry.js';
 import { runDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
+import { isMaintenanceRetry, MAINTENANCE_RETRY, runRemoteChange } from '../instance-runtime/maintenance.js';
 
 // Loaded on first use: DeviceLink dispatch and the desktop host are large and import Host settings.
 const webHostCallDeps: WebHostCallDeps = {
@@ -40,7 +41,9 @@ export async function executeWebSettingsRequest(request: SettingsWebEnvelope, as
     if (request.command.kind === 'update') {
       // The authenticated web form's Save is the human action, as with native settings
       // IPC. This path is not exposed through helper tools or device-link invoke.
-      return { ok: true, receipt: await updateHostSettings(caller, request.command.change) } as SettingsWebResult;
+      // Maintenance waits for an accepted save to persist, and refuses new ones once it has begun.
+      const change = request.command.change;
+      return { ok: true, receipt: await runRemoteChange(() => updateHostSettings(caller, change)) } as SettingsWebResult;
     }
     if (request.command.kind === 'receipt') return { ok: true, receipt: getHostSettingsOperation(caller, request.command.operationId) } as SettingsWebResult;
     const domain = request.command.domain;
@@ -59,7 +62,7 @@ export async function executeWebSettingsRequest(request: SettingsWebEnvelope, as
     return { ok: true, settings: { ...settings, domain,
       ...(settings.status === 'ready' && choices ? { choices } : {}) } } as SettingsWebResult;
   } catch (error) {
-    return { ok: false, code: error instanceof HostSettingsError ? error.code : 'SETTINGS_REQUEST_FAILED' };
+    return { ok: false, code: error instanceof HostSettingsError ? error.code : isMaintenanceRetry(error) ? MAINTENANCE_RETRY : 'SETTINGS_REQUEST_FAILED' };
   }
 }
 

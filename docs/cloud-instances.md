@@ -66,4 +66,6 @@
   `settingsReadCatalog.ts`（有守卫测试）。
 - wire 定义在 `shared/settingsWeb.ts`、`settingsManagement.ts`、`settingsEditableCatalog.ts`、`settingsSnapshot*.ts`，
   字段只增不改：实例可能比控制端旧或新。
+- 实例从云设置页接收的设置保存和管理操作经 `instance-runtime/maintenance.ts` 计入维护在途，维护开始后返回可重试的
+  `CLOUD_MAINTENANCE_RETRY`；新增会改状态的云端入口也要接入。
 - UI 场景在 `apps/desktop/scripts/fixtures/cloud-*`，不连真实服务或账号。

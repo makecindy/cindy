@@ -5,6 +5,7 @@ import {
   type ManagementCaller,
   type ManagementExecution,
 } from '../management.js';
+import { connectInstanceMaintenance, type InstanceMaintenanceGate } from '../../instance-runtime/maintenance.js';
 import {
   callCloudManagement,
   isCloudManagementInvocation,
@@ -66,8 +67,42 @@ function setup(run = vi.fn<(values: Record<string, string>, execution: Managemen
 const settle = async () => {
   await new Promise((resolve) => setTimeout(resolve, 0));
 };
-afterEach(() => vi.restoreAllMocks());
+/** A maintenance gate that refuses new work once maintenance begins and counts what it runs. */
+function maintenanceGate() {
+  const state = { preparing: false, inFlight: 0 };
+  const gate: InstanceMaintenanceGate = {
+    admit() { if (state.preparing) throw Object.assign(new Error('CLOUD_MAINTENANCE_RETRY'), { code: 'CLOUD_MAINTENANCE_RETRY' }); },
+    run(kind, work) { gate.admit(kind); state.inFlight++; return work().finally(() => { state.inFlight--; }); },
+  };
+  connectInstanceMaintenance(gate);
+  return state;
+}
+const noMaintenance: InstanceMaintenanceGate = { admit() {}, run: (_kind, work) => work() };
+afterEach(() => { vi.restoreAllMocks(); connectInstanceMaintenance(noMaintenance); });
 describe('cloud management action isolation and results', () => {
+  // Unit: an action counts as in flight until it settles; once maintenance has begun a new one is
+  // refused with its ticket unused, so it can start after maintenance.
+  it('keeps a started action in flight until it settles and refuses new ones during maintenance', async () => {
+    const gate = maintenanceGate();
+    let finish!: () => void;
+    const s = setup(vi.fn(() => new Promise<void>(resolve => { finish = resolve; })));
+    const first = randomUUID();
+    await s.start(await s.ticket(), first);
+    await settle();
+    expect(gate.inFlight).toBe(1);
+    // Maintenance begins: the running action keeps its place until it settles.
+    gate.preparing = true;
+    await settle();
+    expect(gate.inFlight).toBe(1);
+    finish();
+    await settle();
+    expect(gate.inFlight).toBe(0);
+    await expect(s.manager.execute(caller, { operation: 'status', operationId: first })).resolves.toMatchObject({ phase: 'succeeded' });
+    const action = await s.ticket();
+    await expect(s.start(action)).rejects.toMatchObject({ code: 'CLOUD_MAINTENANCE_RETRY' });
+    gate.preparing = false;
+    await expect(s.start(action)).resolves.toMatchObject({ phase: 'running' });
+  });
   it('binds tickets and operation results to the browser session', async () => {
     const s = setup(),
       action = await s.ticket(),

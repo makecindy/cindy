@@ -6,18 +6,6 @@ import ts from 'typescript';
 
 const virtualId = 'virtual:cindy-cloud-maintenance';
 const bootstrap = 'apps/desktop/src/main/bootstrap-electron.ts';
-const lifecycle = 'apps/desktop/src/main/lifecycle.ts';
-/** Every branch where a quit step did not complete cleanly, with exact counts. */
-const quitFaults = [
-  ['log.warn(`sync disposer "${d.name}" returned a promise — not awaited`)', 1],
-  ['log.error(`sync disposer "${d.name}" threw`, err)', 1],
-  ['log.error(`async disposer "${d.name}" threw`, err)', 1],
-  ['log.warn(`async disposers timed out after ${timeoutMs}ms — proceeding to post-async`)', 1],
-  ['log.error(`post-async disposer "${d.name}" threw`, err)', 2],
-  ['log.warn(`post-async disposer "${d.name}" timed out after ${timeoutMs}ms — continuing`)', 1],
-  ["log.error('runQuitDisposers threw', err)", 1],
-];
-const quitCompleted = "      log.info('runQuitDisposers completed');\n      noteQuitDisposersCompleted();\n";
 const entries = {
   // Owner credential handoff is a remote control operation. Count the whole
   // commit so maintenance cannot seal halfway through canonical persistence.
@@ -41,25 +29,21 @@ const entries = {
   'apps/desktop/src/main/cindy-brain/pipeDispatcher.ts': { callGhostTool: ['plugin-work', true] },
   'apps/desktop/src/main/remote-desktop/inputOwnership.ts': { withAgentDesktopInput: ['remote-input', true] },
 };
-export const targets = [bootstrap, lifecycle, ...Object.keys(entries)];
-function transformLifecycle(code) {
-  for (const [call, count] of quitFaults) {
-    assert.equal(code.split(call).length - 1, count, `Maintenance quit integration changed: ${call}`);
-    code = code.split(call).join(`(cloudMaintenanceQuit.fault(), ${call})`);
-  }
-  assert.equal(code.split(quitCompleted).length, 2, 'Maintenance quit completion changed');
-  code = code.replace(quitCompleted, `${quitCompleted}      cloudMaintenanceQuit.completed(reason);\n`);
-  return `/* cloud-maintenance-v1 */\nimport { cloudMaintenanceQuit } from '${virtualId}';\n${code}`;
-}
+export const targets = [bootstrap, ...Object.keys(entries)];
 export function transformMaintenanceSource(code, relative) {
   if (!targets.includes(relative)) return null;
   assert.ok(!code.includes('/* cloud-maintenance-v1 */'), 'Maintenance overlay applied twice');
-  if (relative === lifecycle) return transformLifecycle(code);
   if (relative === bootstrap) {
+    // Startup connects the gate to the explicit hooks: changes the instance accepts from its
+    // controllers, the quit chain's outcome, and activity sampling.
     const marker = '    const stopStatus = startInstanceStatus(';
     assert.equal(code.split(marker).length, 2, 'Maintenance activity integration changed');
-    return `/* cloud-maintenance-v1 */\nimport { configureMaintenanceActivity } from '${virtualId}';\nimport { readMaintenanceActivity } from 'virtual:cindy-cloud-task-activity';\n`
-      + code.replace(marker, `    configureMaintenanceActivity(readMaintenanceActivity);\n${marker}`);
+    return `/* cloud-maintenance-v1 */\nimport { cloudMaintenance, cloudMaintenanceQuit, configureMaintenanceActivity } from '${virtualId}';\n`
+      + `import { readMaintenanceActivity } from 'virtual:cindy-cloud-task-activity';\n`
+      + `import { connectInstanceMaintenance as connectCloudMaintenance } from './instance-runtime/maintenance.js';\n`
+      + `import { observeQuitSteps as observeCloudQuitSteps } from './lifecycle.js';\n`
+      + code.replace(marker, `    connectCloudMaintenance(cloudMaintenance);\n    observeCloudQuitSteps(cloudMaintenanceQuit);\n`
+        + `    configureMaintenanceActivity(readMaintenanceActivity);\n${marker}`);
   }
   if (relative === 'packages/maker-scheduler/src/engine/scheduler.ts') {
     // An unfinished Once claim computes no wake; the gate keeps an undefined wake unchanged.

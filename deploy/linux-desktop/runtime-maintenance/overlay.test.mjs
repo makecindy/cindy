@@ -41,20 +41,19 @@ test('every actual cloud ingress transforms and compiles without editing client 
   plugin.buildEnd(null);
 });
 
-test('quit chain faults and completion are wired exactly, and drift fails the build',()=>{
-  const lifecycle='apps/desktop/src/main/lifecycle.ts';
-  const excerpt=['log.warn(`sync disposer "${d.name}" returned a promise — not awaited`);','log.error(`sync disposer "${d.name}" threw`, err);',
-    'log.error(`async disposer "${d.name}" threw`, err);','log.warn(`async disposers timed out after ${timeoutMs}ms — proceeding to post-async`);',
-    'log.error(`post-async disposer "${d.name}" threw`, err),','log.error(`post-async disposer "${d.name}" threw`, err);',
-    'log.warn(`post-async disposer "${d.name}" timed out after ${timeoutMs}ms — continuing`);',"log.error('runQuitDisposers threw', err);",
-    "      log.info('runQuitDisposers completed');\n      noteQuitDisposersCompleted();\n"].join('\n');
-  const out=transformMaintenanceSource(excerpt,lifecycle);
-  assert.equal(out.split('cloudMaintenanceQuit.fault()').length-1,8);
-  assert.equal(out.split('cloudMaintenanceQuit.completed(reason);').length-1,1);
-  assert.ok(out.indexOf('cloudMaintenanceQuit.completed')>out.indexOf('noteQuitDisposersCompleted();'));
-  assert.throws(()=>transformMaintenanceSource(excerpt.replace('— continuing','- continuing'),lifecycle),/quit integration changed/);
-  assert.throws(()=>transformMaintenanceSource(excerpt.replace('noteQuitDisposersCompleted();',''),lifecycle),/completion changed/);
-  assert.throws(()=>transformMaintenanceSource(out,lifecycle),/twice/);
+test('startup connects the gate to the explicit hooks, and only the core quit chain stays untouched',()=>{
+  const bootstrap='apps/desktop/src/main/bootstrap-electron.ts';
+  const marker='    const stopStatus = startInstanceStatus(';
+  const out=transformMaintenanceSource(`function start() {\n${marker}x);\n}\n`,bootstrap);
+  const wiring=out.slice(out.indexOf('function start()'));
+  for(const call of ['connectCloudMaintenance(cloudMaintenance);','observeCloudQuitSteps(cloudMaintenanceQuit);','configureMaintenanceActivity(readMaintenanceActivity);'])
+    assert.ok(wiring.indexOf(call)>=0&&wiring.indexOf(call)<wiring.indexOf(marker),call);
+  assert.match(out,/from '\.\/instance-runtime\/maintenance\.js'/);
+  assert.match(out,/from '\.\/lifecycle\.js'/);
+  assert.throws(()=>transformMaintenanceSource('function start() {}',bootstrap),/activity integration changed/);
+  // The quit chain reports its own steps; its log wording is not part of the build.
+  assert.ok(!targets.includes('apps/desktop/src/main/lifecycle.ts'));
+  assert.equal(transformMaintenanceSource("log.warn('anything');",'apps/desktop/src/main/lifecycle.ts'),null);
 });
 
 // Executes the actual overlaid scheduler with in-memory storage and a fake clock:

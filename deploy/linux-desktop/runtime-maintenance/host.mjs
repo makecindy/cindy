@@ -34,7 +34,7 @@ export const cloudMaintenance = {
   scan(fn) { return gate ? gate.scan(fn) : fn(); },
 };
 let quitFaults = 0;
-/** Wired into the desktop quit chain by the build overlay. */
+/** Observes the desktop quit chain, connected at startup by the build overlay. */
 export const cloudMaintenanceQuit = {
   fault() { quitFaults++; },
   completed(reason) {
