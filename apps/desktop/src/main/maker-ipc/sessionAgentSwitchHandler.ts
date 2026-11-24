@@ -1981,7 +1981,7 @@ export function registerMakerSessionAgentSwitchHandler(
         // Check permission without admitting the actual mutation, which must
         // still recheck access after waiting for the lock.
         guard();
-        // The user's selection supersedes recovery before the old send releases the lock.
+        // An authorized manual choice supersedes recovery even if locked admission later rejects it.
         onUserSwitchRequested(event, valid.sessionId);
       }
       const run = () => performSessionAgentSwitch(deps, request);

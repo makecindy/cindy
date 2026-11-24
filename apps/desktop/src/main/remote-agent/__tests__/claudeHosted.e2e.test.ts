@@ -67,7 +67,7 @@ import { createSchedulerQueueBridge, type SchedulerQueueBridge } from '../../mak
 import { createQueuedAcceptedCallbacks } from '../../maker-ipc/queuedAcceptedCallbacks';
 import { MAKER_INVOKE } from '../../maker-ipc/channels';
 import { IpcHarness } from '../../maker-ipc/__tests__/helpers/ipcHarness';
-import { isSendToSessionLockHeldByCurrentCall, withSendToSessionLock } from '../../maker-ipc/sendToSessionLock';
+import { hasSendToSessionLock, isSendToSessionLockHeldByCurrentCall, withSendToSessionLock } from '../../maker-ipc/sendToSessionLock';
 import { SnapshotOperationDeadlineError } from '../../utils/operationBudget';
 import type { Maker } from '@cindy/maker-core';
 import { exerciseConnectionPool, sharedAccountRegisterWiring, sharedAccountSendTransaction } from './poolHarness';
@@ -573,10 +573,11 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
 
   async function exercise(original: 'a' | 'b', failure: 'cold' | 'run' | 'cold-auth' | 'send-auth' | 'idle-send' | 'reconnect' | 'scheduled-reconnect',
     { disconnectHandoff = false, replayAttachments = false,
-      stopRecoveryAt, automaticOrigin }: {
+      stopRecoveryAt, automaticOrigin, rejectIpcSelection = false }: {
         disconnectHandoff?: boolean;
         replayAttachments?: boolean;
         automaticOrigin?: 'session' | 'orca';
+        rejectIpcSelection?: boolean;
         stopRecoveryAt?: 'close-busy' | 'close-stopped' | 'close-throws' | 'startup' | 'send-throws' | 'send-rejected'
           | 'replacement-closed' | 'replacement-runtime-closed' | 'replacement-accepted-then-closed'
           | 'unconfirmed' | 'send-stopped' | 'stopped-before-open' | 'mode-changed'
@@ -585,6 +586,8 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
     const reconnect = failure === 'reconnect' || failure === 'scheduled-reconnect';
     const switchViaIpc = stopRecoveryAt === 'route-changed' || stopRecoveryAt === 'engine-changed';
     const continuation = 'Continue the remaining work.';
+    const followUp = 'Check that I can send a new message.';
+    const followUpReply = 'New message received.';
     const oldRequestsWithContinuation = () => observations.filter(request =>
       request.nativeId === oldNative && request.body.includes(continuation)).length;
     commitVolatileAppSession('local', undefined, true);
@@ -652,6 +655,10 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
         }
         const nativeId = String(req.headers['x-claude-code-session-id'] ?? '');
         observations.push({ nativeId, body });
+        if (rejectIpcSelection && body.includes(followUp)) {
+          res.writeHead(200, { 'content-type': 'text/event-stream' }).end(text(followUpReply));
+          return;
+        }
         if (failOriginal && nativeId === oldNative) {
           if (failure === 'run') {
             sawRunningRequest();
@@ -1173,7 +1180,16 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
           const selectedModel = engineOnly ? 'gpt-5.5' : MODEL;
           const selectedDevice = engineOnly ? undefined : 'another-computer';
           const pendingSwitches = createPendingAgentSwitchRegistry();
+          const selectionError = engineOnly
+            ? '[MODEL_SELECTION_UNAVAILABLE] Target no longer offers the selected model'
+            : '[REMOTE_AGENT_DEVICE_UNREACHABLE] Target computer is offline';
           const switchDeps: MakerSessionAgentSwitchHandlerDeps = {
+            assertAgentDeviceRouteUsable: async () => {
+              if (rejectIpcSelection) {
+                expect(isSendToSessionLockHeldByCurrentCall(task)).toBe(true);
+                throw new Error(selectionError);
+              }
+            },
             withSessionLock: withSendToSessionLock,
             withCloseSuppressed: async (_id, run) => run(),
             pendingSwitches,
@@ -1201,13 +1217,44 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
             task, selectedEngine, selectedModel, 'fixture-selected-provider', undefined, undefined,
             selectedDevice === undefined ? undefined : { agentDeviceId: selectedDevice });
           switchRequestQueued.resolve();
-          await sent;
-          await expect(selected).resolves.toMatchObject({ deferred: true });
+          const selection = rejectIpcSelection
+            ? expect(selected).rejects.toThrow(selectionError)
+            : expect(selected).resolves.toMatchObject({ deferred: true });
+          const [originalSend] = await sent;
+          await selection;
           expect(opens.filter(open => open.groupSwitchToken), 'old route opened after the user chose a new engine or computer').toHaveLength(0);
           expect(sends).toBe(1);
           expect(history.filter(message => message.clientId === clientId)).toHaveLength(1);
           expect(guestSwitch.hasOffer(task)).toBe(false);
           expect(await pending.peek(task)).toBeNull();
+          if (rejectIpcSelection) {
+            const originalError = expect.stringContaining('[SUBSCRIPTION_ACCOUNT_LIMITED]');
+            expect(originalSend).toMatchObject({ status: 'rejected', reason: { message: originalError } });
+            await vi.waitFor(() => expect(coordinator.getProjection(task).error).toEqual(originalError));
+            expect(persistTerminalSendError).toHaveBeenCalledExactlyOnceWith(task, originalError);
+            expect(pendingSwitches.get(task)).toBeUndefined();
+            expect(row).toMatchObject({ agentKind: 'cc', agentDeviceId: shareRoute, sdkSessionId: oldNative });
+            expect(coordinator.hasQueuedItemWhere(task, item => item.clientId === clientId)).toBe(false);
+            expect(hasSendToSessionLock(task)).toBe(false);
+            // The account can send again once its quota window resets. Keep the
+            // task and queue intact across the failed selection and the new send.
+            poolCli.limited.delete(originalDir);
+            await refreshSubscriptionPool(published, true);
+            const nextClientId = randomUUID();
+            coordinator.enqueue(task, {
+              ...input, clientId: nextClientId, text: followUp, persistedContent: followUp,
+              chatMessage: { ...input.chatMessage, clientId: nextClientId, content: followUp },
+            }, { manualUiSend: true });
+            await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+            await expect(send.mock.results[1].value).resolves.toMatchObject({ dispatched: true });
+            await vi.waitFor(() => expect(events.filter(event => event.type === 'done')).toHaveLength(2), { timeout: 30_000 });
+            await persistence.drainPersistQueue();
+            expect(history.filter(message => message.clientId === nextClientId)).toHaveLength(1);
+            expect(history.some(message => message.role === 'assistant' && contentText(message.content).includes(followUpReply))).toBe(true);
+            expect(sends).toBe(2);
+            expect(hasSendToSessionLock(task)).toBe(false);
+            return;
+          }
           expect(pendingSwitches.get(task)).toMatchObject({ targetAgentKind: selectedEngine, model: selectedModel });
           expect(pendingSwitches.get(task)?.targetAgentDeviceId).toBe(selectedDevice);
           await withSendToSessionLock(task, () => applyPendingAgentSwitchIfIdle(switchDeps, task));
@@ -1395,6 +1442,13 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
   it.each(['route-changed', 'engine-changed'] as const)(
     'abandons the old route when an IPC selection waits for the send lock (%s)', { timeout: 90_000 },
     async stopRecoveryAt => exercise('a', 'reconnect', { stopRecoveryAt }),
+  );
+  // E2E: d91b90faef and 9326ed28c9 covered accepted selections. An authorized
+  // choice that fails locked admission still supersedes the old quota recovery.
+  // Verify the visible error and that an independent next send can use the task.
+  it.each(['route-changed', 'engine-changed'] as const)(
+    'keeps recovery cancelled when locked admission rejects an IPC selection (%s)', { timeout: 90_000 },
+    async stopRecoveryAt => exercise('a', 'reconnect', { stopRecoveryAt, rejectIpcSelection: true }),
   );
   it.each(['session', 'orca'] as const)(
     'keeps the default offer path for automatic %s input', { timeout: 90_000 },
