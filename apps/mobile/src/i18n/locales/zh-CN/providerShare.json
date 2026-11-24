@@ -23,7 +23,9 @@
     "list": {
       "title": "我分享的供应商",
       "separator": "、",
+      "membersCount_one": "已分享给 {{count}} 人",
       "membersCount_other": "已分享给 {{count}} 人",
+      "pendingCount_one": "{{count}} 个分享申请待处理",
       "pendingCount_other": "{{count}} 个分享申请待处理",
       "shareOther": "分享其他供应商",
       "emptyTitle": "没有可以管理的电脑",
@@ -81,6 +83,7 @@
     "computers": {
       "title": "电脑与配额",
       "footer": "配额来自每台电脑上登录的账号，约每分钟更新一次。别人分享来的电脑不在这里显示配额。",
+      "runningCount_one": "{{count}} 个任务运行中",
       "runningCount_other": "{{count}} 个任务运行中",
       "shareComputer": "{{name}} 的电脑",
       "shareComputerUnknown": "分享来的电脑",
@@ -115,6 +118,7 @@
     "members": {
       "title": "已分享的人",
       "statusActive": "正常",
+      "statusRunning_one": "正常 · {{count}} 个任务运行中",
       "statusRunning_other": "正常 · {{count}} 个任务运行中",
       "statusPaused": "已暂停",
       "empty": "还没有分享给任何人。生成分享链接发给对方，对方申请、你同意后会出现在这里。",

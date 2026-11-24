@@ -23,7 +23,9 @@
     "list": {
       "title": "我分享的供應商",
       "separator": "、",
+      "membersCount_one": "已分享給 {{count}} 人",
       "membersCount_other": "已分享給 {{count}} 人",
+      "pendingCount_one": "{{count}} 個分享申請待處理",
       "pendingCount_other": "{{count}} 個分享申請待處理",
       "shareOther": "分享其他供應商",
       "emptyTitle": "沒有可以管理的電腦",
@@ -81,6 +83,7 @@
     "computers": {
       "title": "電腦與配額",
       "footer": "配額來自每台電腦上登入的帳號，約每分鐘更新一次。別人分享來的電腦不在這裡顯示配額。",
+      "runningCount_one": "{{count}} 個任務執行中",
       "runningCount_other": "{{count}} 個任務執行中",
       "shareComputer": "{{name}} 的電腦",
       "shareComputerUnknown": "分享來的電腦",
@@ -115,6 +118,7 @@
     "members": {
       "title": "已分享的人",
       "statusActive": "正常",
+      "statusRunning_one": "正常 · {{count}} 個任務執行中",
       "statusRunning_other": "正常 · {{count}} 個任務執行中",
       "statusPaused": "已暫停",
       "empty": "還沒有分享給任何人。產生分享連結傳給對方，對方申請、你同意後會出現在這裡。",

@@ -23,7 +23,9 @@
     "list": {
       "title": "自分が共有したプロバイダー",
       "separator": "、",
+      "membersCount_one": "{{count}} 人と共有中",
       "membersCount_other": "{{count}} 人と共有中",
+      "pendingCount_one": "未処理の共有申請 {{count}} 件",
       "pendingCount_other": "未処理の共有申請 {{count}} 件",
       "shareOther": "ほかのプロバイダーを共有",
       "emptyTitle": "管理できるパソコンがありません",
@@ -81,6 +83,7 @@
     "computers": {
       "title": "パソコンとクォータ",
       "footer": "クォータは各パソコンでログインしているアカウントのもので、約 1 分ごとに更新されます。ほかの人から共有されたパソコンのクォータはここには表示されません。",
+      "runningCount_one": "{{count}} 件実行中",
       "runningCount_other": "{{count}} 件実行中",
       "shareComputer": "{{name}} のパソコン",
       "shareComputerUnknown": "共有されたパソコン",
@@ -115,6 +118,7 @@
     "members": {
       "title": "共有している相手",
       "statusActive": "利用可能",
+      "statusRunning_one": "アクティブ · {{count}} 件のセッションを実行中",
       "statusRunning_other": "アクティブ · {{count}} 件のセッションを実行中",
       "statusPaused": "一時停止中",
       "empty": "まだ誰とも共有していません。共有リンクを作成して相手に送ってください。相手が申請し、あなたが承認するとここに表示されます。",

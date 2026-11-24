@@ -23,7 +23,9 @@
     "list": {
       "title": "내가 공유한 제공자",
       "separator": ", ",
+      "membersCount_one": "{{count}}명과 공유 중",
       "membersCount_other": "{{count}}명과 공유 중",
+      "pendingCount_one": "대기 중인 공유 요청 {{count}}개",
       "pendingCount_other": "대기 중인 공유 요청 {{count}}개",
       "shareOther": "다른 제공자 공유",
       "emptyTitle": "관리할 수 있는 컴퓨터가 없습니다",
@@ -81,6 +83,7 @@
     "computers": {
       "title": "컴퓨터 및 할당량",
       "footer": "할당량은 각 컴퓨터에 로그인된 계정 기준이며 약 1분마다 업데이트됩니다. 다른 사람이 공유한 컴퓨터의 할당량은 여기에 표시되지 않습니다.",
+      "runningCount_one": "{{count}}개 실행 중",
       "runningCount_other": "{{count}}개 실행 중",
       "shareComputer": "{{name}}님의 컴퓨터",
       "shareComputerUnknown": "공유된 컴퓨터",
@@ -115,6 +118,7 @@
     "members": {
       "title": "공유 중인 사람",
       "statusActive": "정상",
+      "statusRunning_one": "정상 · 세션 {{count}}개 실행 중",
       "statusRunning_other": "정상 · 세션 {{count}}개 실행 중",
       "statusPaused": "일시 중지됨",
       "empty": "아직 아무와도 공유하지 않았습니다. 공유 링크를 만들어 보내세요. 상대방이 요청하고 내가 승인하면 여기에 표시됩니다.",

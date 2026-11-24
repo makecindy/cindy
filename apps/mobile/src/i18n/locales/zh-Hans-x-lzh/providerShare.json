@@ -23,7 +23,9 @@
     "list": {
       "title": "吾所分享之供方",
       "separator": "、",
+      "membersCount_one": "已分享予 {{count}} 人",
       "membersCount_other": "已分享予 {{count}} 人",
+      "pendingCount_one": "{{count}} 件分享之请待理",
       "pendingCount_other": "{{count}} 件分享之请待理",
       "shareOther": "分享他供方",
       "emptyTitle": "无可理之机",
@@ -81,6 +83,7 @@
     "computers": {
       "title": "机与限额",
       "footer": "限额出自各机所登之名籍，约每分钟更新一次。他人分享之机，不于此显限额。",
+      "runningCount_one": "{{count}} 件差事方行",
       "runningCount_other": "{{count}} 件差事方行",
       "shareComputer": "{{name}} 之机",
       "shareComputerUnknown": "分享而来之机",
@@ -115,6 +118,7 @@
     "members": {
       "title": "已分享之人",
       "statusActive": "无恙",
+      "statusRunning_one": "无恙 · {{count}} 件差事方行",
       "statusRunning_other": "无恙 · {{count}} 件差事方行",
       "statusPaused": "已暂止",
       "empty": "尚未与人分享。生分享链接遣之，待彼来请、君颔首许之，其名自见于此。",
