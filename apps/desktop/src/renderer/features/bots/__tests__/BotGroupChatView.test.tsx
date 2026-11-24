@@ -3074,6 +3074,23 @@ describe('BotGroupChatView', () => {
       expect(document.body.textContent).not.toContain('很早的原文');
     });
 
+    it('holds an offline reaction on the timeline until the next normal read of the row', async () => {
+      const row = msg({ id: 'root', sequence: 1, content: '群消息', reactions: [{ emoji: '👍', count: 4, me: false }] });
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true, messages: [row] }) });
+      const react = vi.fn().mockRejectedValue(new Error('offline'));
+      Object.assign(window.electronAPI.maker.chatServer, { react });
+      renderView();
+      const chip = await screen.findByRole('button', { name: 'bots.groupChat.server.reactionCount' });
+      mocks.getBotGroup.mockClear();
+      await act(async () => fireEvent.click(chip));
+      expect(chip.getAttribute('aria-pressed')).toBe('true');
+      expect(mocks.getBotGroup).not.toHaveBeenCalled();
+      await act(async () => { mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'messages' })); });
+      expect(chip.getAttribute('aria-pressed')).toBe('false');
+      expect(mocks.getBotGroup).toHaveBeenCalledTimes(1);
+      expect(react).toHaveBeenCalledTimes(1);
+    });
+
     it('re-reads the opened older page after reacting to a message on it', async () => {
       const user = userEvent.setup();
       const older = msg({ id: 'old1', sequence: 1, authorKind: 'bot', authorBotId: 'xiaoman', authorName: '小满', content: '很早的消息',

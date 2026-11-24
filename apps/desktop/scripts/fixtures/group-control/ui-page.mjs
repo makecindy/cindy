@@ -111,6 +111,10 @@ export default {
       about: 'Teammate bubbles: quote, corner reaction, thread entry, task card, long text at the width cap; hover shows the toolbar beside the bubble',
       data: { ...base, bubbles: true },
     },
+    'reaction-motion': {
+      about: 'A local pick flies to its badge and plays once even offline; reduced motion goes straight to the selected state',
+      data: { ...base, bubbles: true, reactionMotion: true },
+    },
     'reaction-colors': {
       about: 'Color emoji retain full opacity in the reaction picker and badges in both themes',
       data: { ...base, bubbles: true },
@@ -238,6 +242,36 @@ export default {
       await ui.capture('planning');
       return;
     }
+    if (ui.case === 'reaction-motion') {
+      await page.emulateMedia({ reducedMotion: 'no-preference' });
+      const row = page.locator('[data-bot-group-message-id="a2"]');
+      const add = row.getByRole('button', { name: await ui.t('bots.groupChat.server.addReaction'), exact: true });
+      await row.hover();
+      await add.click();
+      const choice = page.getByRole('button', { name: '❤️', exact: true });
+      await choice.click();
+      const flight = row.locator('.chat-reaction-flight[data-from-picker]');
+      await flight.waitFor();
+      const anchor = row.locator('.chat-reaction-anchor');
+      const rect = await anchor.boundingBox();
+      assert.ok(rect?.width > 0 && rect.height > 0);
+      const badge = row.getByRole('button', { name: /❤️/ });
+      assert.equal(await badge.getAttribute('aria-pressed'), 'true');
+      const rowHeight = await row.evaluate(node => node.offsetHeight);
+      await ui.capture('reaction-landing');
+      await anchor.waitFor({ state: 'detached' });
+      assert.equal(await row.evaluate(node => node.offsetHeight), rowHeight, 'playing the effect never resizes the row');
+      assert.equal(await badge.getAttribute('aria-pressed'), 'true', 'failed write leaves the selected badge visible');
+      await badge.click();
+      assert.equal(await anchor.count(), 0, 'undo is quiet');
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      await row.hover();
+      await add.click();
+      await page.getByRole('button', { name: '❤️', exact: true }).click();
+      assert.equal(await badge.getAttribute('aria-pressed'), 'true');
+      assert.equal(await anchor.count(), 0, 'reduced motion skips the flight and sprite');
+      return;
+    }
     if (ui.case === 'reaction-colors') {
       const row = page.locator('[data-bot-group-message-id="a2"]');
       await row.hover();
@@ -257,7 +291,7 @@ export default {
         return context.getImageData(0, 0, 1, 1).data[3];
       };
       const choice = picker.getByRole('button', { name: '👍', exact: true });
-      const glyph = choice.locator('span');
+      const glyph = choice.locator('.chat-reaction-glyph');
       // Use the button itself in the pre-fix comparison, before the emoji span existed.
       assert.equal(await ((await glyph.count()) ? glyph : choice).evaluate(inkAlpha), 255, 'picker emoji must not inherit translucent text ink');
       assert.equal(await picker.locator('button[aria-pressed]').count(), 6, 'six quick reactions before expanding');
@@ -269,7 +303,7 @@ export default {
       await choice.focus();
       assert.equal(await glyph.evaluate(inkAlpha), 255, 'hover and focus preserve emoji colors');
       await page.keyboard.press('Escape');
-      const badge = row.locator('[data-reaction-corner] button > span').first();
+      const badge = row.locator('[data-reaction-corner] button .chat-reaction-glyph').first();
       assert.equal(await badge.evaluate(inkAlpha), 255, 'reaction badges preserve emoji colors');
       return;
     }

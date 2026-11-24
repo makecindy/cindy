@@ -3624,7 +3624,7 @@ FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
 OTHER DEALINGS IN THE FONT SOFTWARE.
 
 ------------------------------------------------------------------------------
-Cindy agent-net WebAssembly core sha256:328bf5a72ab4a90b7be997c166071c0e2003df727400b0415f999430278d01dc
+Cindy agent-net WebAssembly core sha256:59cae34427bc38db2ce201d25645ef272b6c484331eeab5143b1e831fad27ac9
 License: Apache-2.0
 Source: https://github.com/makecindy/cindy/tree/main/packages/agent-net-core
 ------------------------------------------------------------------------------
@@ -4872,6 +4872,33 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
+
+------------------------------------------------------------------------------
+Microsoft Fluent Emoji Animated (reaction artwork) daa0365c09795789ed2bc6e8b228c97736cb6669
+License: MIT
+Source: https://github.com/microsoft/fluentui-emoji-animated
+------------------------------------------------------------------------------
+MIT License
+
+    Copyright (c) Microsoft Corporation.
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE
 
 ------------------------------------------------------------------------------
 oh-my-pi Windows Git PATH helpers (adapted) 326d24bd40d9858e24e1036ae739c27c72eeb543

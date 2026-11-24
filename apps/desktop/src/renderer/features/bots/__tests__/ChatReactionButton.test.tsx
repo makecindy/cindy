@@ -4,6 +4,8 @@ import { act, cleanup, fireEvent, render as renderUI, screen, waitFor } from '@t
 import type { ReactNode } from 'react';
 import { Tooltip } from '@/components/ui/tooltip';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { toast } from '@/lib/toast';
+import { ChatReactionReads } from '../useChatReactions';
 import { ChatMessageActions } from '../ChatServerControls';
 import type { BotGroupMemberView, BotGroupMessageView, ChatReactor } from '../../../../shared/botGroupChat';
 
@@ -38,8 +40,10 @@ const members = [
 ];
 const message = (reactions: BotGroupMessageView['reactions']) =>
   ({ id: 'root', authorName: 'Human', content: 'Root', reactions }) as BotGroupMessageView;
-const actions = (reactions: BotGroupMessageView['reactions']) =>
-  <ChatMessageActions pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} shareScope="group:room" groupId="room" message={message(reactions)} members={members} onChanged={vi.fn()} />;
+const actions = (reactions: BotGroupMessageView['reactions'], props: {
+  reactionReads?: ChatReactionReads; onChanged?: () => void; groupId?: string;
+} = {}) =>
+  <ChatMessageActions pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} shareScope="group:room" groupId="room" message={message(reactions)} members={members} onChanged={vi.fn()} {...props} />;
 // The message toolbar expects the app-level tooltip provider.
 const render = (ui: ReactNode) => {
   const view = renderUI(<Tooltip.Provider>{ui}</Tooltip.Provider>);
@@ -182,19 +186,64 @@ describe('reaction avatars', () => {
     await waitFor(() => expect(mocks.react).toHaveBeenCalledWith({ groupId: 'room', messageId: 'root', emoji: '👍', present: false }));
   });
 
-  it('shows the selection before the receipt, merges other actors, and rolls back only my failed edit', async () => {
-    let reject!: () => void;
-    mocks.react.mockImplementationOnce(() => new Promise((_, fail) => { reject = fail; }));
-    mocks.reactors.mockResolvedValue({ ok: false });
-    const view = render(actions([{ emoji: '👍', count: 4, me: false }]));
+  it.each(['rejection', 'error response'])('keeps a failed choice until a later read of that message (%s)', async failure => {
+    const reads = new ChatReactionReads();
+    const props = { reactionReads: reads, onChanged: vi.fn() };
+    let fail!: () => void;
+    mocks.react.mockImplementationOnce(() => new Promise((resolve, reject) => {
+      fail = failure === 'rejection' ? () => reject(new Error('offline')) : () => resolve({ ok: false, errorCode: 'SERVICE_ERROR' });
+    }));
+    const view = render(actions([{ emoji: '👍', count: 4, me: false }], props));
     fireEvent.click(badge());
-    expect(badge().getAttribute('aria-pressed')).toBe('true');
     expect(badge().textContent).toBe('👍5');
-    view.rerender(actions([{ emoji: '👍', count: 5, me: false }]));
-    expect(badge().textContent).toBe('👍6');
-    await act(async () => reject());
+    const olderRead = reads.beginRead();
+    view.rerender(actions([{ emoji: '👍', count: 5, me: false }], props));
+    await act(async () => fail());
+    vi.useFakeTimers();
+    try {
+      act(() => {
+        vi.advanceTimersByTime(60_000);
+        olderRead([{ id: 'root' }]);
+        reads.beginRead()([{ id: 'another-message' }]);
+      });
+      expect(badge().getAttribute('aria-pressed')).toBe('true');
+      expect(badge().textContent).toBe('👍6');
+      act(() => reads.beginRead()([{ id: 'root' }]));
+      expect(badge().getAttribute('aria-pressed')).toBe('false');
+      expect(badge().textContent).toBe('👍5');
+      expect(mocks.react).toHaveBeenCalledTimes(1);
+      expect(props.onChanged).not.toHaveBeenCalled();
+      expect(toast.error).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each([2, 3])('sends only the latest distinct choice after %i quick taps during an outage', async taps => {
+    let fail!: () => void;
+    mocks.react.mockImplementationOnce(() => new Promise(resolve => { fail = () => resolve({ ok: false }); }))
+      .mockResolvedValue({ ok: false });
+    const props = { reactionReads: new ChatReactionReads(), onChanged: vi.fn() };
+    render(actions([{ emoji: '👍', count: 4, me: false }], props));
+    for (let tap = 0; tap < taps; tap++) fireEvent.click(badge());
+    expect(mocks.react).toHaveBeenCalledTimes(1);
+    await act(async () => fail());
+    expect(mocks.react.mock.calls.map(([request]) => request.present)).toEqual(taps === 2 ? [true, false] : [true]);
+    expect(badge().getAttribute('aria-pressed')).toBe(String(taps === 3));
+    expect(props.onChanged).not.toHaveBeenCalled();
+  });
+
+  it('discards queued writes when switching rooms before a receipt', async () => {
+    let finish!: () => void;
+    mocks.react.mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve({ ok: false }); }));
+    const reactions = [{ emoji: '👍', count: 4, me: false }];
+    const props = { reactionReads: new ChatReactionReads(), onChanged: vi.fn() };
+    const view = render(actions(reactions, props));
+    fireEvent.click(badge());
+    fireEvent.click(badge());
+    view.rerender(actions(reactions, { ...props, groupId: 'another-room' }));
+    await act(async () => finish());
+    expect(mocks.react).toHaveBeenCalledTimes(1);
+    expect(props.onChanged).not.toHaveBeenCalled();
     expect(badge().getAttribute('aria-pressed')).toBe('false');
-    expect(badge().textContent).toBe('👍5');
   });
 
   it('keeps my acknowledged choice through an older refresh and releases it once the server catches up', async () => {

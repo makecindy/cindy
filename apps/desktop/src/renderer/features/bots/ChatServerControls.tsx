@@ -1,6 +1,7 @@
 import { ChevronDown } from 'lucide-react';
 import { useState } from 'react';
-import { useChatReactions } from './useChatReactions';
+import { type ChatReactionReads, useChatReactions } from './useChatReactions';
+import { ReactionGlyph } from './ChatReactionMotion';
 import { ChatReactionButton } from './ChatReactionButton';
 import { useTranslation } from 'react-i18next';
 import { BubbleHoverToolbar, MessageActionBar } from '@/components/chat/MessageActionBar';
@@ -27,6 +28,7 @@ export const messageReactionRevision = (group: Pick<BotGroupDetail, 'reactionRev
   `${group.reactionRevision ?? 0}:${group.reactionRevisions?.[messageId] ?? 0}`;
 
 interface ChatMessageActionProps {
+  reactionReads?: ChatReactionReads;
   pluginUi: PluginUiMessageCandidates;
   groupId?: string; shareScope: string; message: BotGroupMessageView; align?: 'left' | 'right';
   /** Who can be named on a reaction badge, and the message's reaction version (see `messageReactionRevision`). */
@@ -56,13 +58,14 @@ export function ChatMessageReactions({ groupId, message, members, reactionRevisi
           : cn('mt-1 flex-wrap', align === 'right' && 'justify-end'))}>
       {controls.reactions.map(reaction => (
         <ChatReactionButton key={reaction.emoji} groupId={groupId} messageId={message.id} reaction={reaction} revision={reactionRevision} members={members}
-          optimistic={!message.reactions?.includes(reaction)} corner={corner} disabled={!groupId} onToggle={() => void controls.toggle(reaction.emoji)} />
+          optimistic={!message.reactions?.includes(reaction)} corner={corner} disabled={!groupId} gesture={controls.gesture?.emoji === reaction.emoji ? controls.gesture : undefined}
+          onFinishGesture={controls.finishGesture} onToggle={() => void controls.toggle(reaction.emoji)} />
       ))}
     </div>
   );
 }
 
-function ReactionPicker({ controls, onChoose }: { controls: ReturnType<typeof useChatReactions>; onChoose: (emoji: string) => void }) {
+function ReactionPicker({ controls, onChoose }: { controls: ReturnType<typeof useChatReactions>; onChoose: (emoji: string, from: DOMRect) => void }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   function choice(emoji: string) {
@@ -70,8 +73,8 @@ function ReactionPicker({ controls, onChoose }: { controls: ReturnType<typeof us
     return <button key={emoji} type="button" aria-label={emoji} aria-pressed={selected}
       className={cn(iconClass, 'text-18 motion-safe:transition-transform motion-safe:hover:scale-110 motion-safe:active:scale-95 focus-visible:ring-2 focus-visible:ring-ring',
         selected && 'bg-[var(--surface-hover)] ring-1 ring-inset ring-[var(--text-tertiary)]')}
-      onClick={() => onChoose(emoji)}>
-      <span className="text-[color:rgb(from_var(--text-primary)_r_g_b_/_1)]">{emoji}</span>
+      onClick={event => onChoose(emoji, event.currentTarget.getBoundingClientRect())}>
+      <ReactionGlyph emoji={emoji} />
     </button>;
   }
   return <>
@@ -99,7 +102,10 @@ function ChatMessageToolbar({ groupId, shareScope, message, align = 'left', onQu
       replyAction={onReply ? { onClick: onReply, count: replyCountShown ? undefined : message.replyCount,
         label: message.replyCount ? t(key('openTopic'), { count: message.replyCount }) : t(key('startTopic')) } : undefined}
       reactionAction={groupId ? { label: t(key('addReaction')), open: picker, onOpenChange: onPickerChange,
-        content: <ReactionPicker controls={controls} onChoose={emoji => { onPickerChange(false); void controls.toggle(emoji); }} />,
+        content: <ReactionPicker controls={controls} onChoose={(emoji, rect) => {
+          onPickerChange(false);
+          void controls.toggle(emoji, { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
+        }} />,
       } : undefined} />
   );
 }
@@ -125,7 +131,7 @@ export function ChatMessageHoverActions({ besideReactions = false, ...props }: O
 /** Reactions and the toolbar stacked under the text, always visible. */
 export function ChatMessageActions(props: ChatMessageActionProps) {
   const [picker, setPicker] = useState(false);
-  const controls = useChatReactions(props.groupId, props.message, props.onChanged);
+  const controls = useChatReactions(props.groupId, props.message, props.onChanged, props.reactionReads);
   const align = props.align ?? (props.message.isSelf ? 'right' : 'left');
   return (
     <div {...{ [SHARE_EXCLUDE_ATTR]: '' }} className="mt-1 flex flex-col gap-1">

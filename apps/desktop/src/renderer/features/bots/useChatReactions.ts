@@ -1,24 +1,55 @@
-import { useEffect, useMemo, useReducer } from 'react';
-import { useTranslation } from 'react-i18next';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useState } from 'react';
 import type { BotGroupMessageView } from '../../../shared/botGroupChat';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
-import { toast } from '@/lib/toast';
-import { chatErrorKey } from './chatError';
 
 type Reactions = NonNullable<BotGroupMessageView['reactions']>;
 const empty: Reactions = [];
 // A successful write can beat an older timeline read. Hold the local choice until
 // the echo arrives, but let another device's conflicting choice win if it never does.
 const ECHO_TIMEOUT_MS = 10_000;
-type Edit = { desired: boolean; writing: boolean; confirmed?: boolean; expiresAt?: number };
+export type ReactionGesture = { emoji: string; from?: { x: number; y: number } };
+type Edit = { desired: boolean; writing: boolean; expiresAt?: number; stopWaiting?: () => void };
 
-export function useChatReactions(groupId: string | undefined, message: BotGroupMessageView, onChanged: (id: string) => void) {
-  const { t } = useTranslation();
+/** A view's existing history reads settle failed reactions, even if the server returns an
+ * unchanged row. Capture waiters at read start so an older response cannot undo a later tap. */
+export class ChatReactionReads {
+  private readonly waiting = new Map<() => void, string>();
+
+  afterNextRead(messageId: string, settle: () => void) {
+    this.waiting.set(settle, messageId);
+    return () => { this.waiting.delete(settle); };
+  }
+
+  beginRead() {
+    const waiting = [...this.waiting];
+    return (messages: readonly { id: string }[]) => {
+      for (const [settle, id] of waiting) {
+        if (this.waiting.has(settle) && messages.some(message => message.id === id)) {
+          this.waiting.delete(settle);
+          settle();
+        }
+      }
+    };
+  }
+}
+
+export function useChatReactions(groupId: string | undefined, message: BotGroupMessageView,
+  onChanged: (id: string) => void, reads?: ChatReactionReads) {
   const owner = getDataOwnerGeneration();
   const messageId = message.id;
   const server = message.reactions ?? empty;
-  const edits = useMemo(() => new Map<string, Edit>(), [groupId, messageId, owner]);
+  const edits = useMemo(() => new Map<string, Edit>(), [groupId, messageId, owner, reads]);
   const [version, redraw] = useReducer((version: number) => version + 1, 0);
+
+  const [gesture, setGesture] = useState<(ReactionGesture & { scope: typeof edits }) | null>(null);
+  const finishGesture = useCallback((finished: ReactionGesture) => {
+    setGesture(current => current === finished ? null : current);
+  }, []);
+
+  useLayoutEffect(() => () => {
+    for (const edit of edits.values()) edit.stopWaiting?.();
+    edits.clear();
+  }, [edits]);
 
   useEffect(() => {
     let nextExpiry = Infinity;
@@ -37,44 +68,46 @@ export function useChatReactions(groupId: string | undefined, message: BotGroupM
     }
   }, [edits, server, version]);
 
-  async function toggle(emoji: string) {
+  async function toggle(emoji: string, from?: ReactionGesture['from']) {
     if (!groupId || !isDataOwnerGenerationCurrent(owner)) return;
     const previous = edits.get(emoji);
     const mine = previous?.desired ?? server.some(r => r.emoji === emoji && r.me);
     const edit = previous ?? { desired: mine, writing: false };
+    edit.stopWaiting?.();
+    edit.expiresAt = undefined;
     edit.desired = !mine;
+    setGesture(mine ? null : { emoji, from, scope: edits });
     edits.set(emoji, edit);
     redraw();
     if (edit.writing) return;
     edit.writing = true;
-    // Each write sets one emoji. Serialize just that emoji and send the latest choice
-    // if it changed while awaiting the first write. Other emoji remain independent.
-    try {
-      let sent: boolean;
-      do {
-        sent = edit.desired;
+
+    // A new user choice during the write is the only reason to send again.
+    // One failed write by itself schedules neither another write nor a refresh.
+    let sent: boolean;
+    let accepted: boolean;
+    do {
+      sent = edit.desired;
+      try {
         const result = await window.electronAPI.maker.chatServer.react({ groupId, messageId, emoji, present: sent });
-        if (!isDataOwnerGenerationCurrent(owner)) return;
-        if (!result.ok) {
-          toast.error(t(chatErrorKey(result.errorCode)));
-          break;
-        }
-        edit.confirmed = sent;
-      } while (sent !== edit.desired);
-    } catch {
-      if (isDataOwnerGenerationCurrent(owner)) toast.error(t(chatErrorKey('REQUEST_FAILED')));
-    } finally {
-      edit.writing = false;
-      if (edit.confirmed === undefined) edits.delete(emoji);
-      else {
-        edit.desired = edit.confirmed;
-        edit.expiresAt = Date.now() + ECHO_TIMEOUT_MS;
+        accepted = result.ok;
+      } catch {
+        accepted = false;
       }
-      if (isDataOwnerGenerationCurrent(owner)) {
+      if (edits.get(emoji) !== edit || !isDataOwnerGenerationCurrent(owner)) return;
+    } while (sent !== edit.desired);
+
+    edit.writing = false;
+    if (accepted) {
+      edit.expiresAt = Date.now() + ECHO_TIMEOUT_MS;
+      onChanged(messageId);
+    } else {
+      edit.stopWaiting = reads?.afterNextRead(messageId, () => {
+        edits.delete(emoji);
         redraw();
-        onChanged(messageId);
-      }
+      });
     }
+    redraw();
   }
 
   let reactions = server;
@@ -89,5 +122,5 @@ export function useChatReactions(groupId: string | undefined, message: BotGroupM
     else if (count === 0) reactions.splice(index, 1);
     else reactions[index] = next;
   }
-  return { reactions, toggle };
+  return { reactions, toggle, gesture: gesture?.scope === edits ? gesture : null, finishGesture };
 }

@@ -67,7 +67,7 @@ import { BotGroupQuoteBlock } from './BotGroupQuote';
 import { BotGroupRuntimeFailureNotice } from './BotGroupRuntimeFailureNotice';
 import { BotGroupLiveTaskCard, BotGroupTaskCard } from './BotGroupTaskCard';
 import type { BotGroupTimelineMessage } from './BotGroupTimelineModel';
-import { useChatReactions } from './useChatReactions';
+import { type ChatReactionReads, useChatReactions } from './useChatReactions';
 import { ChatMessageHoverActions, ChatMessageReactions } from './ChatServerControls';
 
 // ---- @ mention highlight ----------------------------------------------------------------
@@ -326,6 +326,7 @@ export interface BotGroupTimelineItemProps {
   readersEnabled?: boolean;
   /** The message's reaction version (`messageReactionRevision`): who reacted is re-read when it moves. */
   reactionRevision?: string;
+  reactionReads?: ChatReactionReads;
   quoteDisplay?: BotGroupQuoteDisplay;
   onLocateQuote?: (quote: BotGroupQuoteView) => void;
   onQuote?: (messageId: string) => void;
@@ -403,7 +404,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
   const mask = useGroupMask();
   const { t } = useTranslation();
   const { message, authorName, members, mentionLabels, locale, shareScope, sharing } = props;
-  const controls = useChatReactions(props.reactionGroupId, message, props.onChanged);
+  const controls = useChatReactions(props.reactionGroupId, message, props.onChanged, props.reactionReads);
   const attribution = message.maskAttribution ? { self: maskIdentity(message.maskAttribution.self), companion: maskIdentity(message.maskAttribution.companion) }
     : mask?.attributions[message.id];
   const continued = props.continued && !attribution;

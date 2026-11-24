@@ -3,9 +3,9 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "cindy-desktop-macos",
-  "documentNamespace": "https://cindy.app/spdx/desktop-macos/39c09a74b4787d20ff8293f09c3a41b44b119f61f5127d4751f659ace5aecd38",
+  "documentNamespace": "https://cindy.app/spdx/desktop-macos/5f2545928ad312797a8971100ae611a53941157591ba0bfeb8c34cccf8bd130d",
   "creationInfo": {
-    "created": "2026-11-18T18:51:53Z",
+    "created": "2026-11-23T12:35:11Z",
     "creators": [
       "Tool: scripts/generate-third-party-notices.mjs"
     ]
@@ -53,8 +53,8 @@
     },
     {
       "name": "Cindy agent-net WebAssembly core",
-      "SPDXID": "SPDXRef-Package-e05549246e066bfd",
-      "versionInfo": "sha256:328bf5a72ab4a90b7be997c166071c0e2003df727400b0415f999430278d01dc",
+      "SPDXID": "SPDXRef-Package-fbf01fd7977adbee",
+      "versionInfo": "sha256:59cae34427bc38db2ce201d25645ef272b6c484331eeab5143b1e831fad27ac9",
       "downloadLocation": "https://github.com/makecindy/cindy/tree/main/packages/agent-net-core",
       "filesAnalyzed": false,
       "licenseConcluded": "Apache-2.0",
@@ -136,6 +136,16 @@
       "SPDXID": "SPDXRef-Package-4ca8318bb935f57f",
       "versionInfo": "adapted",
       "downloadLocation": "https://github.com/yetone/magpie/blob/main/site/public/img/magpie-small.svg",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "Microsoft Fluent Emoji Animated (reaction artwork)",
+      "SPDXID": "SPDXRef-Package-c6e47fb4feeee3c3",
+      "versionInfo": "daa0365c09795789ed2bc6e8b228c97736cb6669",
+      "downloadLocation": "https://github.com/microsoft/fluentui-emoji-animated",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
       "licenseDeclared": "MIT",
@@ -16279,7 +16289,7 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-e05549246e066bfd"
+      "relatedSpdxElement": "SPDXRef-Package-fbf01fd7977adbee"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -16320,6 +16330,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-4ca8318bb935f57f"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-c6e47fb4feeee3c3"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",

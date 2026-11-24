@@ -54,6 +54,7 @@ interface GroupData {
   /** A server group with teammates' bubbles: quote, reactions, thread entry and a task card. */
   bubbles?: boolean;
   wrappedReactions?: boolean;
+  reactionMotion?: boolean;
   replyComposer?: boolean;
   /** A single-speaker server group: nobody was named, so everyone answers in turn (bot-group-chat.md §4.0/§7.0). */
   arrangement?: Queue;
@@ -509,7 +510,7 @@ void mountPage({
               : input.messageId.endsWith('short-sent') ? [] : [{ actorId: 'g', name: 'Ada', readAt: T0 + 5 * MINUTE, formerMember: false }];
             return { ok: true, readers: { messageId: input.messageId, eligibleCount: 6, readCount: readers.length, listed: true, readers } };
           },
-          react: forbid('maker.chatServer.react'),
+          react: data.reactionMotion ? async () => ({ ok: false, errorCode: 'SERVICE_ERROR' }) : forbid('maker.chatServer.react'),
           ownedBots: async () => ({ ok: true, bots: [] }),
           manage: forbid('maker.chatServer.manage'),
           ...(data.threadPanel || data.readReceipts || data.topicPreview ? { thread, followThread } : {}),

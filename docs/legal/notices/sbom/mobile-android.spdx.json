@@ -5,7 +5,7 @@
   "name": "cindy-mobile-android",
   "documentNamespace": "https://cindy.app/spdx/mobile-android/8cffeb8f9f753745e16811e6e1bbf5f0984ed4893a53f5e0fafd484ef812243e",
   "creationInfo": {
-    "created": "2026-11-18T18:51:53Z",
+    "created": "2026-11-23T12:35:11Z",
     "creators": [
       "Tool: scripts/generate-third-party-notices.mjs"
     ]

@@ -766,6 +766,24 @@ describe('chat interaction controls', () => {
     expect(mocks.react).toHaveBeenCalledWith({ groupId: 'room', messageId: 'root', emoji: '👍', present: false });
   });
 
+  it('keeps a failed thread reaction until a normal refresh returns the unchanged root', async () => {
+    let push = () => {};
+    window.electronAPI.maker.onBotGroupChanged = listener => {
+      push = () => listener({ groupId: group.id, change: 'messages' }, undefined);
+      return () => {};
+    };
+    mocks.react.mockResolvedValue({ ok: false, errorCode: 'SERVICE_ERROR' });
+    render(<ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} />);
+    const chip = await screen.findByRole('button', { name: k('reactionCount') });
+    await act(async () => fireEvent.click(chip));
+    expect(chip.getAttribute('aria-pressed')).toBe('false');
+    expect(mocks.thread).toHaveBeenCalledTimes(1);
+    await act(async () => push());
+    expect(chip.getAttribute('aria-pressed')).toBe('true');
+    expect(mocks.thread).toHaveBeenCalledTimes(2);
+    expect(mocks.react).toHaveBeenCalledTimes(1);
+  });
+
   // Unit, PR #7396: a latest refresh must not invalidate the reaction recheck for
   // an opened older reply. The projection path must avoid that extra page read.
   it.each([false, true])('refreshes an opened older Thread reaction (projection: %s)', async projection => {
