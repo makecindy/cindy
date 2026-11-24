@@ -132,7 +132,7 @@ import {
   viewportAnchorCorrection,
   type RestoredScrollGeometry,
 } from './messageViewportCompensation';
-import { isEditableKeyboardTarget } from '@/lib/editableKeyboardTarget';
+import { editableTargetConsumesKey } from '@/lib/editableKeyboardTarget';
 import { createLogger } from '@/lib/logger';
 import { subscribeWorkLouderCodexAction } from '@/lib/workLouderCodexActions';
 import { joystickScrollDelta } from '../../../shared/workLouderCodexScroll';
@@ -4095,7 +4095,8 @@ export function MessageStream({
     const onNavigationKey = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
       if (!isScrollNavigationKey(event.key)) return;
-      if (isEditableKeyboardTarget(event.target)) return;
+      // 分享模式的消息勾选框只要空格；翻页键与焦点在按钮上时一样算用户滚动。
+      if (editableTargetConsumesKey(event.target, event.key)) return;
       onUserInput();
     };
     let disposed = false;
@@ -5264,7 +5265,7 @@ export function MessageStream({
         // At a disclosure's reserved tail, End may produce no scroll event.
         // Restore the existing down-intent state only for this list's input.
         if (root && event.target instanceof Node && root.contains(event.target)
-          && !isEditableKeyboardTarget(event.target) && contentRef.current?.style.minHeight
+          && !editableTargetConsumesKey(event.target, event.key) && contentRef.current?.style.minHeight
           && shouldRepinOnDownIntent({ distanceFromBottom: root.scrollHeight - root.scrollTop - root.clientHeight })) {
           clearChipJumpSuppression();
           pinAutoFollowForUserDownIntent();
@@ -5272,7 +5273,7 @@ export function MessageStream({
         return;
       }
       if (!HISTORY_NAVIGATION_KEYS.has(event.key)) return;
-      if (isEditableKeyboardTarget(event.target)) return;
+      if (editableTargetConsumesKey(event.target, event.key)) return;
       clearChipJumpSuppression();
       const el = scrollRef.current;
       if (

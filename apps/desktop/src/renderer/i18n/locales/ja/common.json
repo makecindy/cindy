@@ -3380,6 +3380,7 @@
       "description": "ほかの AI コーディングツールのセッションを Cindy に取り込んで、そのまま続けられます。元の記録は読み取るだけで、変更しません。",
       "rescan": "再スキャン",
       "allSources": "すべてのソース",
+      "sourceFilterAria": "ソース",
       "search": "セッションまたはフォルダを検索",
       "projectFilter": "{{name}} のみ",
       "clearProjectFilter": "すべてのプロジェクトを表示",

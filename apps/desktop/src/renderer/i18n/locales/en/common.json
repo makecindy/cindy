@@ -3410,6 +3410,7 @@
       "description": "Bring sessions from other AI coding tools into Cindy and keep working. Cindy only reads the originals and never changes them.",
       "rescan": "Scan Again",
       "allSources": "All Sources",
+      "sourceFilterAria": "Source",
       "search": "Search sessions or folders",
       "projectFilter": "Only {{name}}",
       "clearProjectFilter": "Show all projects",

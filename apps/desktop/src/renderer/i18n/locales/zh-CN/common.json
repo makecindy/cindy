@@ -3380,6 +3380,7 @@
       "description": "把其他 AI 编程工具里的任务接到 Cindy 接着做。只读取原记录，不会改动它们。",
       "rescan": "重新扫描",
       "allSources": "全部来源",
+      "sourceFilterAria": "来源",
       "search": "搜索任务或文件夹",
       "projectFilter": "只看 {{name}}",
       "clearProjectFilter": "显示全部项目",

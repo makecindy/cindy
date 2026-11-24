@@ -3380,6 +3380,7 @@
       "description": "把其他 AI 程式設計工具裡的任務接到 Cindy 接著做。只讀取原始記錄，不會改動它們。",
       "rescan": "重新掃描",
       "allSources": "全部來源",
+      "sourceFilterAria": "來源",
       "search": "搜尋任務或資料夾",
       "projectFilter": "只看 {{name}}",
       "clearProjectFilter": "顯示全部專案",
