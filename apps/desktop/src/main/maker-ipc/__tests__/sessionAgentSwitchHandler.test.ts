@@ -674,6 +674,23 @@ describe('same-engine selection at send', () => {
     expect(h.apply).toHaveBeenCalledOnce();
   });
 
+  // Unit: location selection now cancels an in-flight recovery before taking
+  // the lock. A guest or malformed IPC request must leave recovery untouched.
+  it('rejects unauthorized or malformed location requests before notifying recovery', async () => {
+    const h = sharedSelectionHarness();
+    const ipc = new IpcHarness();
+    const onLocationSwitchRequested = vi.fn();
+    registerMakerSessionAgentSwitchHandler(ipc, h.deps, onLocationSwitchRequested);
+    const select = (agentDeviceId: unknown) => ipc.invoke(
+      MAKER_INVOKE.SWITCH_SESSION_AGENT, 's1', 'codex', 'gpt-6-astra', 'openai', undefined, undefined,
+      { agentDeviceId },
+    );
+    await expect(runDeviceLinkInvokeContext(h.context, () => select('another-computer')))
+      .rejects.toThrow('shared task guests cannot move');
+    await expect(select('invalid device!')).rejects.toThrow('INVALID_PARAMS');
+    expect(onLocationSwitchRequested).not.toHaveBeenCalled();
+  });
+
   it.each(['revoked', 'other-task', 'during-preflight'] as const)(
     'keeps the owner choice pending when guest access fails (%s)', async (failure) => {
       const h = sharedSelectionHarness(failure === 'other-task' ? 'other-task' : 's1');

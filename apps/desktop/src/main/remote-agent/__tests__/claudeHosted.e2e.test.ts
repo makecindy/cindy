@@ -51,7 +51,10 @@ import { createMessagePersistence, type MessagePersistencePorts } from '../../me
 import { createUserMessageDurableWrite, type UserMessageDurableWritePorts } from '../../maker-ipc/userMessageDurableWrite';
 import { persistSessionStreamEventCore } from '../../maker-ipc/sessionEventStreamCore';
 import { assistantSamplingSettlements } from '../../assistantSamplingSettlement';
-import { relocateForFreshStart, type AgentSwitchSessionRow } from '../../maker-ipc/sessionAgentSwitchHandler';
+import {
+  applyPendingAgentSwitchIfIdle, createPendingAgentSwitchRegistry, registerMakerSessionAgentSwitchHandler,
+  relocateForFreshStart, type AgentSwitchSessionRow, type MakerSessionAgentSwitchHandlerDeps,
+} from '../../maker-ipc/sessionAgentSwitchHandler';
 import { createAgentHandoffPendingRegistry, prependHandoffToUserMessage, type HandoffSourceMessage } from '../../maker-ipc/agentHandoff';
 import { hostSessionIdFor } from '../host/sessionIdentity';
 
@@ -62,6 +65,9 @@ import { hostedStartOptions } from '../host/service';
 import { MakerScheduleRunner, type SchedulerRunnerRuntime } from '../../scheduler-host/runner';
 import { createSchedulerQueueBridge, type SchedulerQueueBridge } from '../../maker-ipc/schedulerQueueBridge';
 import { createQueuedAcceptedCallbacks } from '../../maker-ipc/queuedAcceptedCallbacks';
+import { MAKER_INVOKE } from '../../maker-ipc/channels';
+import { IpcHarness } from '../../maker-ipc/__tests__/helpers/ipcHarness';
+import { isSendToSessionLockHeldByCurrentCall, withSendToSessionLock } from '../../maker-ipc/sendToSessionLock';
 import { SnapshotOperationDeadlineError } from '../../utils/operationBudget';
 import type { Maker } from '@cindy/maker-core';
 import { exerciseConnectionPool, sharedAccountRegisterWiring, sharedAccountSendTransaction } from './poolHarness';
@@ -574,7 +580,7 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
         stopRecoveryAt?: 'close-busy' | 'close-stopped' | 'close-throws' | 'startup' | 'send-throws' | 'send-rejected'
           | 'replacement-closed' | 'replacement-runtime-closed' | 'replacement-accepted-then-closed'
           | 'unconfirmed' | 'send-stopped' | 'stopped-before-open' | 'mode-changed'
-          | 'mode-changed-with-stop' | 'snapshot-deadline' | 'cancelled' | 'stale' | 'schedule-aborted' | 'new-input' | 'route-changed';
+          | 'mode-changed-with-stop' | 'snapshot-deadline' | 'cancelled' | 'stale' | 'schedule-aborted' | 'new-input' | 'model-changed' | 'route-changed';
       } = {}) {
     const reconnect = failure === 'reconnect' || failure === 'scheduled-reconnect';
     const continuation = 'Continue the remaining work.';
@@ -851,6 +857,8 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
         const cancelledInput = new AbortController();
         const fireAbort = new AbortController();
         const accepted = createQueuedAcceptedCallbacks();
+        const oldSessionClosed = Promise.withResolvers<void>();
+        const switchRequestQueued = Promise.withResolvers<void>();
         const wiring = sharedAccountRegisterWiring({
           maker: {
             getSession: () => live,
@@ -878,9 +886,12 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
                   chatMessage: { ...input.chatMessage, clientId: 'new-input', content: 'Use the new instructions.' },
                 }, { manualUiSend: true });
               }
-              // The real model / execution-location entry invalidates with this
-              // same production service before applying the new selection.
-              if (stopRecoveryAt === 'route-changed') service.noteUserAction(task);
+              // SET_MODEL uses this service before applying the selection.
+              if (stopRecoveryAt === 'model-changed') service.noteUserAction(task);
+              if (stopRecoveryAt === 'route-changed') {
+                oldSessionClosed.resolve();
+                await switchRequestQueued.promise;
+              }
               return 'closed';
             },
           },
@@ -996,7 +1007,7 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
             reconnectRecovery: { ...reconnectRecovery, signal: AbortSignal.any([reconnectRecovery.signal, cancelledInput.signal]) },
           } : options;
           try {
-            const { outcome } = await sendToAgentAccepted(id, message, createOpts, sendOpts);
+            const { outcome } = await withSendToSessionLock(id, () => sendToAgentAccepted(id, message, createOpts, sendOpts));
             await accepted.settle(id, options, outcome);
             return outcome;
           } catch (error) {
@@ -1154,6 +1165,50 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
             fireAbort.abort();
             await run;
           }
+        } else if (stopRecoveryAt === 'route-changed') {
+          const ipc = new IpcHarness();
+          const selectedDevice = 'another-computer';
+          const pendingSwitches = createPendingAgentSwitchRegistry();
+          const switchDeps: MakerSessionAgentSwitchHandlerDeps = {
+            withSessionLock: withSendToSessionLock,
+            withCloseSuppressed: async (_id, run) => run(),
+            pendingSwitches,
+            getSessionRow: async () => ({ ...row }),
+            getLiveSession: () => live,
+            closeSession: async () => { await live?.close(); live = undefined; },
+            listMessagesForHandoff: async () => structuredClone(history),
+            applyAgentSwitchToDb: async (_id, patch) => { Object.assign(row, patch); },
+            setSessionProvider() {},
+            insertBoundaryMessage: async () => randomUUID(),
+            applyResumeFallbackAtomically: async () => { throw new Error('Unexpected resume fallback'); },
+            bootstrapSwitchedSession: async () => { throw new Error('Selection is applied before the next send opens'); },
+            setPendingHandoff: (id, note, generation) => pending.set(id, note, generation),
+            readPendingHandoffGeneration: id => pending.readGeneration(id),
+            log: noopLogger,
+          };
+          registerMakerSessionAgentSwitchHandler(ipc, switchDeps, (_event, id) => service.noteUserAction(id));
+          coordinator.enqueue(task, input, { manualUiSend: true });
+          await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
+          const sent = Promise.allSettled([send.mock.results[0].value]);
+          await oldSessionClosed.promise;
+          // A separate IPC caller queues the selection while the send owns the lock.
+          expect(isSendToSessionLockHeldByCurrentCall(task)).toBe(false);
+          const selected = ipc.invoke(MAKER_INVOKE.SWITCH_SESSION_AGENT,
+            task, 'claude-code', MODEL, 'fixture-selected-provider', undefined, undefined,
+            { agentDeviceId: selectedDevice });
+          switchRequestQueued.resolve();
+          await sent;
+          await expect(selected).resolves.toMatchObject({ deferred: true });
+          expect(opens.filter(open => open.groupSwitchToken), 'old route opened after user asked to switch computers').toHaveLength(0);
+          expect(sends).toBe(1);
+          expect(history.filter(message => message.clientId === clientId)).toHaveLength(1);
+          expect(guestSwitch.hasOffer(task)).toBe(false);
+          expect(await pending.peek(task)).toBeNull();
+          expect(pendingSwitches.get(task)?.targetAgentDeviceId).toBe(selectedDevice);
+          await withSendToSessionLock(task, () => applyPendingAgentSwitchIfIdle(switchDeps, task));
+          expect(row).toMatchObject({ agentDeviceId: selectedDevice, providerId: 'fixture-selected-provider' });
+          expect(pendingSwitches.get(task)).toBeUndefined();
+          return;
         } else {
           const earlier = service.trackGuestStartRecovery(task);
           try {
@@ -1322,10 +1377,16 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
   });
   // These actions land after the credential has been claimed, while the old
   // session is closing. The user's next action must still invalidate this send.
-  it.each(['new-input', 'stopped-before-open', 'route-changed'] as const)(
+  it.each(['new-input', 'stopped-before-open', 'model-changed'] as const)(
     'abandons a manual shared reconnect on %s', { timeout: 90_000 },
     async stopRecoveryAt => exercise('a', 'reconnect', { stopRecoveryAt }),
   );
+  // 4b731e4c49 left an authorized computer selection behind the send lock.
+  // The e2e fixture runs the real IPC handler while that lock owner is closing
+  // the old session, then checks the attempted open and the route committed.
+  it('abandons the old route when a manual computer selection waits for the send lock (route-changed)', { timeout: 90_000 }, async () => {
+    await exercise('a', 'reconnect', { stopRecoveryAt: 'route-changed' });
+  });
   it.each(['session', 'orca'] as const)(
     'keeps the default offer path for automatic %s input', { timeout: 90_000 },
     async automaticOrigin => exercise('a', 'reconnect', { automaticOrigin }),
