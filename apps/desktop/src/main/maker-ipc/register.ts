@@ -19936,6 +19936,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   const inputCoordinator: AgentInputCoordinator = new AgentInputCoordinator({
     sendToSessionHint: confirmedSendToSessionHint,
+    workerInputs,
     sendToAgent: async (sessionId, message, createOpts, sendOpts) => {
       try {
         let runtimePreparationStarted = false;

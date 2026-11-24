@@ -2098,6 +2098,7 @@ function unsupportedChatBridgeImageError(feature = "input content part 'input_im
 }
 
 function createHarness(opts?: {
+  workerInputs?: WeakSet<object>;
   isScheduledQuotaInput?: (item: AgentInputQueuedMessage) => boolean;
   canRestoreOrcaReport?: AgentInputCoordinatorDeps['canRestoreOrcaReport'];
   awaitQueuePersistence?: AgentInputCoordinatorDeps['awaitQueuePersistence'];
@@ -2252,6 +2253,7 @@ function createHarness(opts?: {
   >(async () => []);
   const rewindPersistedUserMessageAfterClear = vi.fn(async (_sessionId: string, _clientId: string) => {});
   const coordinator = new AgentInputCoordinator({
+    workerInputs: opts?.workerInputs,
     sendToSessionHint: opts?.sendToSessionHint,
     rewindPersistedUserMessageAfterClear,
     sendToAgent,
@@ -14893,8 +14895,7 @@ describe('Orca report durable recovery', () => {
 
   // Exercise the real host scheduling callback with its guard and bookkeeping;
   // a hand-written retry timer would miss pending-token and retry-budget bugs.
-  function wireHostReportRecovery(h: ReturnType<typeof createHarness>) {
-    const workerInputs = new WeakSet<object>();
+  function wireHostReportRecovery(h: ReturnType<typeof createHarness>, workerInputs = new WeakSet<object>()) {
     const botFallbackInputs = new WeakSet<object>();
     const scheduledQuotaInputs = new WeakSet<object>();
     const runtimeFallback = vi.fn(async () => ({ session: null, outcome: 'unchanged' as const }));
@@ -14933,11 +14934,14 @@ describe('Orca report durable recovery', () => {
 
   // 2026-11-17: a worker can lose the runtime after an irreversible tool has
   // run but before its result is persisted. Even zero observed progress must CONTINUE.
-  it.each(['direct', 'queued'] as const)('continues an unfinished %s Worker assignment on the rebuilt runtime', async mode => {
+  it.each([
+    ['direct', 0], ['queued', 0], ['direct', 2], ['queued', 2],
+  ] as const)('continues a %s Worker assignment after %i same-turn steers', async (mode, steerCount) => {
     vi.useFakeTimers();
     try {
-      const h = createHarness();
-      const { workerInputs } = wireHostReportRecovery(h);
+      const workerInputs = new WeakSet<object>();
+      const h = createHarness({ workerInputs });
+      wireHostReportRecovery(h, workerInputs);
       const runtime = { instanceId: 'worker-runtime' };
       h.setTurnSessionIdentity(runtime);
       h.setTurnGeneration(1);
@@ -14948,11 +14952,17 @@ describe('Orca report durable recovery', () => {
       if (mode === 'queued') {
         h.coordinator.enqueue('worker', item);
         await flush();
-        h.setRunning(false);
       } else {
         h.coordinator.rememberDirectWorkerInput(runtime, 1, item, h.coordinator.getInputAbortSignal('worker'));
+        h.setRunning(true);
+      }
+      for (let index = 0; index < steerCount; index++) {
+        const steer = makeItem(`steer-${index}`, 'Clarify the assignment');
+        await expect(h.coordinator.steerControlInput('worker', { item: steer },
+          { session: runtime, turnGeneration: 1 })).resolves.toBe('steered');
       }
 
+      h.setRunning(false);
       h.coordinator.onTurnEvent('worker', 'error', 'Session event loop stopped unexpectedly without a terminal event',
         { reason: 'session_event_loop_crashed' }, { sessionInstanceId: runtime.instanceId, sessionTurnGeneration: 1 });
       expect(h.coordinator.isContinuationOnlyAutoResume('worker')).toBe(true);
@@ -14963,6 +14973,286 @@ describe('Orca report durable recovery', () => {
       expect(h.sendToAgent.mock.lastCall?.[1]).toEqual({ type: 'user', content: CONTINUE_AFTER_ERROR_PROMPT });
     } finally { vi.useRealTimers(); }
   });
+
+  it.each([
+    'write-succeeds', 'write-fails', 'failed-before-eof', 're-steered-after-write-failure',
+    'requested-close', 'stop-before-eof', 'stop-after-eof-with-failed-write',
+  ] as const)(
+    'settles Worker EOF during an accepted steer write (%s)', async outcome => {
+      vi.useFakeTimers();
+      const steerWrite = deferred<void>();
+      try {
+        const workerInputs = new WeakSet<object>();
+        const h = createHarness({ workerInputs });
+        wireHostReportRecovery(h, workerInputs);
+        const runtime = { instanceId: 'worker-runtime' };
+        h.setTurnSessionIdentity(runtime);
+        h.setTurnGeneration(1);
+        h.setRunning(true);
+        const assignment = makeItem('assignment', 'Apply the approved change');
+        assignment.createOpts.orcaRole = 'worker';
+        workerInputs.add(assignment.createOpts);
+        h.coordinator.rememberDirectWorkerInput(runtime, 1, assignment, h.coordinator.getInputAbortSignal('worker'));
+        const savingSteer = deferred<void>();
+        mocks.createMessage.mockImplementationOnce(async () => {
+          savingSteer.resolve();
+          await steerWrite.promise;
+          return {};
+        });
+        const steering = h.coordinator.steerControlInput('worker',
+          { item: makeItem('steer', 'Clarify the assignment') }, { session: runtime, turnGeneration: 1 });
+        await savingSteer.promise;
+        if (outcome === 'failed-before-eof' || outcome === 're-steered-after-write-failure' ||
+            outcome === 'stop-after-eof-with-failed-write') {
+          steerWrite.reject(new Error('steer row unavailable'));
+          await expect(steering).resolves.toBe('steered');
+        }
+        if (outcome === 're-steered-after-write-failure') {
+          await expect(h.coordinator.steerControlInput('worker',
+            { item: makeItem('second-steer', 'Update the assignment') },
+            { session: runtime, turnGeneration: 1 })).resolves.toBe('steered');
+        }
+
+        if (outcome === 'stop-before-eof') h.coordinator.stop('worker');
+        h.setRunning(false);
+        h.coordinator.onTurnEvent('worker', 'error', 'Session event loop stopped unexpectedly without a terminal event',
+          { reason: 'session_event_loop_crashed' }, { sessionInstanceId: runtime.instanceId, sessionTurnGeneration: 1 });
+        if (outcome === 'stop-after-eof-with-failed-write') {
+          expect(h.coordinator.isContinuationOnlyAutoResume('worker')).toBe(true);
+          expect(h.coordinator.stop('worker').error).toBe('Failed to persist user message: steer row unavailable');
+          await vi.advanceTimersByTimeAsync(10_000);
+          expect(h.sendToAgent).not.toHaveBeenCalled();
+          return;
+        }
+        h.coordinator.onSessionClosed('worker', {
+          preserveAutoResumeIntent: outcome !== 'requested-close' && h.coordinator.isContinuationOnlyAutoResume('worker'),
+          wakeQueuedInput: outcome !== 'requested-close',
+        });
+        h.setTurnSessionIdentity({ instanceId: 'replacement' });
+        if (outcome === 'write-fails') steerWrite.reject(new Error('steer row unavailable'));
+        else steerWrite.resolve();
+        await expect(steering).resolves.toBe('steered');
+        await vi.advanceTimersByTimeAsync(10_000);
+        if (outcome === 'requested-close' || outcome === 'stop-before-eof') {
+          expect(h.sendToAgent).not.toHaveBeenCalled();
+          return;
+        }
+        expect(h.sendToAgent).toHaveBeenCalledOnce();
+        expect(h.sendToAgent.mock.lastCall?.[1]).toEqual({ type: 'user', content: CONTINUE_AFTER_ERROR_PROMPT });
+        if (outcome === 'failed-before-eof') expect(h.coordinator.getProjection('worker').error).toBeNull();
+      } finally {
+        steerWrite.resolve();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  // Unit regression for PR #12163: an EOF can queue Continue before the provider
+  // acknowledges a steer. Also exercise manual recovery consumption and
+  // dismissal of a replacement error while a separate write failure is pending.
+  // The manual read cases exercise retryLastError with the ACK released during
+  // either read, before the previous after-manual-retry case releases it.
+  // One blocked read and one ACK suffice to lose the first Retry dispatch.
+  // A rejected steer write before Stop must stay visible once Stop cancels recovery.
+  it.each([
+    'before-backoff', 'after-backoff', 'after-close', 'after-takeover', 'before-takeover',
+    'before-stopped-write', 'before-stop', 'before-unconfirmed-continue',
+    'before-replacement-failure', 'after-dismissal', 'after-manual-retry',
+    'during-manual-progress-read', 'during-manual-snapshot-read',
+  ] as const)('settles Worker recovery when steer ACK arrives %s', async timing => {
+    vi.useFakeTimers();
+    const ack = deferred<void>();
+    try {
+      const workerInputs = new WeakSet<object>();
+      const readStarted = deferred<void>();
+      const readFinished = deferred<void>();
+      const duringManualRead = timing === 'during-manual-progress-read' || timing === 'during-manual-snapshot-read';
+      const h = createHarness({
+        workerInputs,
+        getRecoveryContextSnapshot: timing === 'during-manual-snapshot-read' ? async () => {
+          readStarted.resolve();
+          await readFinished.promise;
+          return { contextTokens: 0, contextWindow: 200_000, progressCount: 1, recentProgress: [] };
+        } : undefined,
+      });
+      wireHostReportRecovery(h, workerInputs);
+      if (timing === 'during-manual-progress-read') {
+        h.setHasAssistantProgressAfter(async () => {
+          readStarted.resolve();
+          await readFinished.promise;
+          return true;
+        });
+      } else if (timing === 'during-manual-snapshot-read') {
+        h.setHasAssistantProgressAfter(async () => true);
+      }
+      const manualRecovery = duringManualRead || timing === 'after-dismissal' || timing === 'after-manual-retry';
+      if (manualRecovery) h.onResumableTurnError.mockReturnValueOnce(null);
+      const runtime = { instanceId: 'worker-runtime' };
+      h.setTurnSessionIdentity(runtime);
+      h.setTurnGeneration(1);
+      h.setRunning(true);
+      const assignment = makeItem('assignment', 'Apply the approved change');
+      assignment.createOpts.orcaRole = 'worker';
+      workerInputs.add(assignment.createOpts);
+      h.coordinator.rememberDirectWorkerInput(runtime, 1, assignment, h.coordinator.getInputAbortSignal('worker'));
+      const atProvider = deferred<void>();
+      h.steerToAgent.mockImplementationOnce(async () => {
+        atProvider.resolve();
+        await ack.promise;
+      });
+      const steering = h.coordinator.steerControlInput('worker',
+        { item: makeItem('steer', 'Clarify the assignment') }, { session: runtime, turnGeneration: 1 });
+      await atProvider.promise;
+      h.setRunning(false);
+      h.coordinator.onTurnEvent('worker', 'error', 'Session event loop stopped unexpectedly without a terminal event',
+        { reason: 'session_event_loop_crashed' }, { sessionInstanceId: runtime.instanceId, sessionTurnGeneration: 1 });
+      if (timing === 'after-close') {
+        h.coordinator.onSessionClosed('worker', { preserveAutoResumeIntent: true });
+        h.setTurnSessionIdentity({ instanceId: 'replacement' });
+      }
+      if (timing === 'after-backoff' || timing === 'after-takeover' || manualRecovery) {
+        h.setObservedCurrentTurnTerminal({
+          kind: 'error', generation: 1, reason: 'session_event_loop_crashed',
+          message: 'Session event loop stopped unexpectedly without a terminal event',
+        });
+      }
+      if (manualRecovery) {
+        expect(h.coordinator.getProjection('worker').recovery?.kind).toBe('active-turn');
+        if (timing === 'after-dismissal') h.coordinator.clearError('worker');
+        else if (duringManualRead) {
+          const retry = h.coordinator.retryLastError('worker');
+          try {
+            await readStarted.promise;
+            ack.resolve();
+            await expect(steering).resolves.toBe('steered');
+          } finally {
+            readFinished.resolve();
+          }
+          await retry;
+        } else await h.coordinator.retryLastError('worker');
+        ack.resolve();
+        await expect(steering).resolves.toBe('steered');
+        expect(h.coordinator.getProjection('worker').recovery).toBeNull();
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(h.sendToAgent).toHaveBeenCalledTimes(timing === 'after-dismissal' ? 0 : 1);
+        return;
+      } else if (timing === 'after-backoff') {
+        await vi.advanceTimersByTimeAsync(4_000);
+        expect(h.coordinator.hasQueuedAutoResume('worker')).toBe(true);
+        expect(h.sendToAgent).not.toHaveBeenCalled();
+      } else if (timing === 'after-takeover') {
+        h.coordinator.enqueue('worker', makeItem('takeover', 'My next instruction'));
+      } else if (timing === 'before-stopped-write' || timing === 'before-replacement-failure') {
+        const savingSteer = deferred<void>();
+        const steerWrite = deferred<void>();
+        mocks.createMessage.mockImplementationOnce(async () => {
+          savingSteer.resolve();
+          await steerWrite.promise;
+          return {};
+        });
+        ack.resolve();
+        await savingSteer.promise;
+        if (timing === 'before-stopped-write') {
+          h.coordinator.stop('worker');
+        } else {
+          h.setTurnGeneration(2);
+          h.coordinator.enqueue('worker', makeItem('takeover', 'My next instruction'));
+          await vi.advanceTimersByTimeAsync(100);
+          expect(h.sendToAgent).toHaveBeenCalledOnce();
+          h.coordinator.onTurnEvent('worker', 'error', 'New turn failed');
+          expect(h.coordinator.getProjection('worker').error).toBe('New turn failed');
+        }
+        steerWrite.reject(new Error('steer row unavailable'));
+        await expect(steering).resolves.toBe('steered');
+        const projection = h.coordinator.getProjection('worker');
+        expect(projection.error).toBe(timing === 'before-stopped-write'
+          ? 'Failed to persist user message: steer row unavailable' : 'New turn failed');
+        if (timing === 'before-replacement-failure') {
+          expect(h.coordinator.clearError('worker').error).toBe('Failed to persist user message: steer row unavailable');
+          expect(h.coordinator.clearError('worker').error).toBeNull();
+        }
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(h.sendToAgent).toHaveBeenCalledTimes(timing === 'before-stopped-write' ? 0 : 1);
+        return;
+      } else {
+        mocks.createMessage.mockRejectedValueOnce(new Error('steer row unavailable'));
+      }
+      if (timing === 'before-unconfirmed-continue') {
+        h.sendToAgent.mockImplementationOnce(async (sessionId, _message, _opts, sendOpts) => {
+          await persistQueuedUserMessage(sessionId, sendOpts);
+          throw turnDispatchUnconfirmedError('Continue delivery unconfirmed');
+        });
+      }
+      ack.resolve();
+      await expect(steering).resolves.toBe('steered');
+      if (timing === 'before-stop') {
+        expect(h.sendToAgent).not.toHaveBeenCalled();
+        expect(h.coordinator.stop('worker').error).toBe('Failed to persist user message: steer row unavailable');
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(h.sendToAgent).not.toHaveBeenCalled();
+        return;
+      }
+      if (timing === 'before-takeover') {
+        expect(h.coordinator.isContinuationOnlyAutoResume('worker')).toBe(true);
+        expect(h.sendToAgent).not.toHaveBeenCalled();
+        h.coordinator.enqueue('worker', makeItem('takeover', 'My next instruction'));
+      }
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(h.sendToAgent).toHaveBeenCalledOnce();
+      expect(h.sendToAgent.mock.lastCall?.[1]).toEqual({
+        type: 'user', content: timing === 'after-takeover' || timing === 'before-takeover'
+          ? 'My next instruction' : CONTINUE_AFTER_ERROR_PROMPT,
+      });
+      if (timing === 'before-takeover') {
+        expect(h.coordinator.getProjection('worker').error).toBe('Failed to persist user message: steer row unavailable');
+        expect(h.coordinator.clearError('worker').error).toBeNull();
+      }
+      if (timing === 'before-unconfirmed-continue') {
+        expect(h.coordinator.getProjection('worker').error).toBe('Continue delivery unconfirmed');
+        expect(h.coordinator.clearError('worker').error).toBe('Failed to persist user message: steer row unavailable');
+      }
+      if (timing === 'before-backoff' || timing === 'after-backoff' || timing === 'after-close') {
+        expect(h.coordinator.getProjection('worker').error).toBeNull();
+      }
+    } finally {
+      ack.resolve();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['ordinary-task', 'stopped', 'replaced-runtime', 'new-turn'] as const)(
+    'does not transfer Worker recovery to an accepted steer after %s', async boundary => {
+      const workerInputs = new WeakSet<object>();
+      const h = createHarness({ workerInputs });
+      wireHostReportRecovery(h, workerInputs);
+      const runtime = { instanceId: 'worker-runtime' };
+      h.setTurnSessionIdentity(runtime);
+      h.setTurnGeneration(1);
+      h.setRunning(true);
+      const assignment = makeItem('assignment', 'Apply the approved change');
+      if (boundary !== 'ordinary-task') {
+        assignment.createOpts.orcaRole = 'worker';
+        workerInputs.add(assignment.createOpts);
+        h.coordinator.rememberDirectWorkerInput(runtime, 1, assignment, h.coordinator.getInputAbortSignal('worker'));
+      }
+      const steer = makeItem('steer', 'Clarify the assignment');
+      // Input options alone cannot establish Worker recovery eligibility.
+      steer.createOpts.orcaRole = 'worker';
+      h.steerToAgent.mockImplementationOnce(async () => {
+        if (boundary === 'stopped') h.coordinator.stop('worker');
+        if (boundary === 'replaced-runtime') h.setTurnSessionIdentity({ instanceId: 'replacement' });
+        if (boundary === 'new-turn') h.setTurnGeneration(2);
+      });
+      await expect(h.coordinator.steerControlInput('worker', { item: steer },
+        { session: runtime, turnGeneration: 1 })).resolves.toBe('steered');
+      expect(workerInputs.has(steer.createOpts)).toBe(false);
+      h.setRunning(false);
+      h.coordinator.onTurnEvent('worker', 'error', 'Session event loop stopped unexpectedly without a terminal event',
+        { reason: 'session_event_loop_crashed' }, { sessionInstanceId: runtime.instanceId, sessionTurnGeneration: 1 });
+      expect(h.coordinator.isAutoResumePending('worker')).toBe(false);
+      expect(h.sendToAgent).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(['stopped', 'rejected', 'replaced', 'requested-close', 'ordinary-task'] as const)(
     'does not continue an ineligible worker EOF (%s)', async boundary => {
