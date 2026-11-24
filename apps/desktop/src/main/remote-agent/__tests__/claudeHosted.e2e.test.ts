@@ -580,9 +580,10 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
         stopRecoveryAt?: 'close-busy' | 'close-stopped' | 'close-throws' | 'startup' | 'send-throws' | 'send-rejected'
           | 'replacement-closed' | 'replacement-runtime-closed' | 'replacement-accepted-then-closed'
           | 'unconfirmed' | 'send-stopped' | 'stopped-before-open' | 'mode-changed'
-          | 'mode-changed-with-stop' | 'snapshot-deadline' | 'cancelled' | 'stale' | 'schedule-aborted' | 'new-input' | 'model-changed' | 'route-changed';
+          | 'mode-changed-with-stop' | 'snapshot-deadline' | 'cancelled' | 'stale' | 'schedule-aborted' | 'new-input' | 'model-changed' | 'route-changed' | 'engine-changed';
       } = {}) {
     const reconnect = failure === 'reconnect' || failure === 'scheduled-reconnect';
+    const switchViaIpc = stopRecoveryAt === 'route-changed' || stopRecoveryAt === 'engine-changed';
     const continuation = 'Continue the remaining work.';
     const oldRequestsWithContinuation = () => observations.filter(request =>
       request.nativeId === oldNative && request.body.includes(continuation)).length;
@@ -888,7 +889,7 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
               }
               // SET_MODEL uses this service before applying the selection.
               if (stopRecoveryAt === 'model-changed') service.noteUserAction(task);
-              if (stopRecoveryAt === 'route-changed') {
+              if (switchViaIpc) {
                 oldSessionClosed.resolve();
                 await switchRequestQueued.promise;
               }
@@ -1165,9 +1166,12 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
             fireAbort.abort();
             await run;
           }
-        } else if (stopRecoveryAt === 'route-changed') {
+        } else if (switchViaIpc) {
           const ipc = new IpcHarness();
-          const selectedDevice = 'another-computer';
+          const engineOnly = stopRecoveryAt === 'engine-changed';
+          const selectedEngine = engineOnly ? 'codex' : 'claude-code';
+          const selectedModel = engineOnly ? 'gpt-5.5' : MODEL;
+          const selectedDevice = engineOnly ? undefined : 'another-computer';
           const pendingSwitches = createPendingAgentSwitchRegistry();
           const switchDeps: MakerSessionAgentSwitchHandlerDeps = {
             withSessionLock: withSendToSessionLock,
@@ -1194,19 +1198,23 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
           // A separate IPC caller queues the selection while the send owns the lock.
           expect(isSendToSessionLockHeldByCurrentCall(task)).toBe(false);
           const selected = ipc.invoke(MAKER_INVOKE.SWITCH_SESSION_AGENT,
-            task, 'claude-code', MODEL, 'fixture-selected-provider', undefined, undefined,
-            { agentDeviceId: selectedDevice });
+            task, selectedEngine, selectedModel, 'fixture-selected-provider', undefined, undefined,
+            selectedDevice === undefined ? undefined : { agentDeviceId: selectedDevice });
           switchRequestQueued.resolve();
           await sent;
           await expect(selected).resolves.toMatchObject({ deferred: true });
-          expect(opens.filter(open => open.groupSwitchToken), 'old route opened after user asked to switch computers').toHaveLength(0);
+          expect(opens.filter(open => open.groupSwitchToken), 'old route opened after the user chose a new engine or computer').toHaveLength(0);
           expect(sends).toBe(1);
           expect(history.filter(message => message.clientId === clientId)).toHaveLength(1);
           expect(guestSwitch.hasOffer(task)).toBe(false);
           expect(await pending.peek(task)).toBeNull();
+          expect(pendingSwitches.get(task)).toMatchObject({ targetAgentKind: selectedEngine, model: selectedModel });
           expect(pendingSwitches.get(task)?.targetAgentDeviceId).toBe(selectedDevice);
           await withSendToSessionLock(task, () => applyPendingAgentSwitchIfIdle(switchDeps, task));
-          expect(row).toMatchObject({ agentDeviceId: selectedDevice, providerId: 'fixture-selected-provider' });
+          expect(row).toMatchObject({
+            agentKind: engineOnly ? 'codex' : 'cc', model: selectedModel,
+            agentDeviceId: selectedDevice ?? shareRoute, providerId: 'fixture-selected-provider',
+          });
           expect(pendingSwitches.get(task)).toBeUndefined();
           return;
         } else {
@@ -1381,12 +1389,13 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
     'abandons a manual shared reconnect on %s', { timeout: 90_000 },
     async stopRecoveryAt => exercise('a', 'reconnect', { stopRecoveryAt }),
   );
-  // 4b731e4c49 left an authorized computer selection behind the send lock.
-  // The e2e fixture runs the real IPC handler while that lock owner is closing
-  // the old session, then checks the attempted open and the route committed.
-  it('abandons the old route when a manual computer selection waits for the send lock (route-changed)', { timeout: 90_000 }, async () => {
-    await exercise('a', 'reconnect', { stopRecoveryAt: 'route-changed' });
-  });
+  // d91b90faef protected computer selection but left an engine-only request
+  // behind the send lock. In both cases, send the real IPC request after the
+  // old session closes and check the attempted open and committed selection.
+  it.each(['route-changed', 'engine-changed'] as const)(
+    'abandons the old route when an IPC selection waits for the send lock (%s)', { timeout: 90_000 },
+    async stopRecoveryAt => exercise('a', 'reconnect', { stopRecoveryAt }),
+  );
   it.each(['session', 'orca'] as const)(
     'keeps the default offer path for automatic %s input', { timeout: 90_000 },
     async automaticOrigin => exercise('a', 'reconnect', { automaticOrigin }),

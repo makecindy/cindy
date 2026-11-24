@@ -674,21 +674,24 @@ describe('same-engine selection at send', () => {
     expect(h.apply).toHaveBeenCalledOnce();
   });
 
-  // Unit: location selection now cancels an in-flight recovery before taking
-  // the lock. A guest or malformed IPC request must leave recovery untouched.
-  it('rejects unauthorized or malformed location requests before notifying recovery', async () => {
+  // Unit: selection cancels an in-flight recovery before taking the lock.
+  // A guest or malformed request must leave recovery untouched, with or without a location.
+  it('rejects unauthorized or malformed switch requests before notifying recovery', async () => {
     const h = sharedSelectionHarness();
     const ipc = new IpcHarness();
-    const onLocationSwitchRequested = vi.fn();
-    registerMakerSessionAgentSwitchHandler(ipc, h.deps, onLocationSwitchRequested);
-    const select = (agentDeviceId: unknown) => ipc.invoke(
-      MAKER_INVOKE.SWITCH_SESSION_AGENT, 's1', 'codex', 'gpt-6-astra', 'openai', undefined, undefined,
-      { agentDeviceId },
+    const onUserSwitchRequested = vi.fn();
+    registerMakerSessionAgentSwitchHandler(ipc, h.deps, onUserSwitchRequested);
+    const select = (agentDeviceId?: string, model = 'gpt-6-astra') => ipc.invoke(
+      MAKER_INVOKE.SWITCH_SESSION_AGENT, 's1', 'codex', model, 'openai', undefined, undefined,
+      agentDeviceId === undefined ? undefined : { agentDeviceId },
     );
     await expect(runDeviceLinkInvokeContext(h.context, () => select('another-computer')))
       .rejects.toThrow('shared task guests cannot move');
+    await expect(runDeviceLinkInvokeContext(h.context, () => select())).rejects.toThrow('PERMISSION_DENIED');
     await expect(select('invalid device!')).rejects.toThrow('INVALID_PARAMS');
-    expect(onLocationSwitchRequested).not.toHaveBeenCalled();
+    await expect(select(undefined, '')).rejects.toThrow('INVALID_PARAMS');
+    expect(h.context.sharedTaskSetting.admitted).toBe(false);
+    expect(onUserSwitchRequested).not.toHaveBeenCalled();
   });
 
   it.each(['revoked', 'other-task', 'during-preflight'] as const)(

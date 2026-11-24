@@ -1934,7 +1934,7 @@ export function readSwitchOptionsAgentDeviceId(options: unknown): unknown {
 export function registerMakerSessionAgentSwitchHandler(
   registry: IpcHandlerRegistry,
   deps: MakerSessionAgentSwitchHandlerDeps,
-  onLocationSwitchRequested?: (event: unknown, sessionId: string) => void,
+  onUserSwitchRequested?: (event: unknown, sessionId: string) => void,
 ): void {
   registry.handle(
     MAKER_INVOKE.SWITCH_SESSION_AGENT,
@@ -1976,11 +1976,13 @@ export function registerMakerSessionAgentSwitchHandler(
         thinking,
         assertSelectionCurrent: guard.admit,
       };
-      if (agentDeviceId !== undefined && onLocationSwitchRequested) {
+      if (onUserSwitchRequested) {
         const valid = validateAgentSwitchRequest(request);
+        // Check permission without admitting the actual mutation, which must
+        // still recheck access after waiting for the lock.
         guard();
-        // An authorized location choice supersedes recovery before the send lock is released.
-        onLocationSwitchRequested(event, valid.sessionId);
+        // The user's selection supersedes recovery before the old send releases the lock.
+        onUserSwitchRequested(event, valid.sessionId);
       }
       const run = () => performSessionAgentSwitch(deps, request);
       return typeof sessionId === 'string' && sessionId && deps.withSessionLock
