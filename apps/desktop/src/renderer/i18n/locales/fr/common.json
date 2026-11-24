@@ -425,6 +425,7 @@
       "description": "Limite uniquement l'utilisation à distance. L'utilisation locale n'est pas modifiée. Les modifications enregistrées s'appliquent à la création d'une tâche, au changement de modèle ou à l'envoi du message suivant.",
       "all": "Tous les modèles",
       "selected": "{{count}} modèles autorisés",
+      "selectionExcludesModels": "Certains modèles ne sont pas sélectionnés. Pour autoriser les futurs modèles, sélectionnez-les manuellement.",
       "choose": "Choisir des modèles",
       "memberTitle": "Modèles autorisés",
       "memberDescription": "Choisissez les modèles que {{name}} peut utiliser, parmi ceux ouverts à l'utilisation à distance. Ces limites s'appliquent aussi à l'utilisation repartagée par cette personne.",
@@ -1989,6 +1990,7 @@
       },
       "footnote": "Phase A : gestion des connexions SSH uniquement. L'exécution d'Agents sur la machine distante arrivera dans une prochaine mise à jour.",
       "viaAuth": "via {{label}}",
+      "managedAliasConflict": "Cet alias SSH est défini à la fois dans la configuration gérée par Cindy et dans une configuration externe. Les détails de connexion sont en lecture seule et cet hôte ne peut pas être retiré ici.",
       "readOnlyFromSshConfig": "Les détails de connexion proviennent de la configuration SSH",
       "importedAgentHint": "S’authentifie via l’agent local de clés SSH (ssh-agent). Une connexion ssh réussie dans le terminal ne garantit pas que l’agent est prêt.",
       "agentError": {
@@ -2254,6 +2256,13 @@
       }
     },
     "appearance": {
+      "chatLayout": {
+        "label": "Disposition du chat",
+        "standard": "Standard",
+        "wide": "Large",
+        "width": "Largeur du contenu",
+        "hint": "Proportion de l’espace entre les marges du chat. Les volets étroits s’ajustent automatiquement."
+      },
       "title": "Apparence",
       "modeLabel": "Mode d'apparence",
       "appIcon": {
@@ -2499,6 +2508,10 @@
       }
     },
     "windowBehavior": {
+      "trayCard": {
+        "label": "Carte de la zone de notification",
+        "hint": "Survolez l’icône Cindy dans la zone de notification pour voir le quota restant et les tâches non lues."
+      },
       "menubar": {
         "label": "Afficher la consommation restante dans la barre des menus",
         "hint": "Ajoute une icône Cindy à la barre des menus de macOS. Cliquez dessus pour voir ce qu'il reste sur vos abonnements, votre solde Cindy et la consommation du jour."
@@ -2844,7 +2857,8 @@
         "errorBusy": "Un envoi est déjà en cours, veuillez patienter",
         "errorFailed": "Échec de l'envoi des journaux. Vérifiez votre connexion réseau et réessayez",
         "unavailableNotConfigured": "L'envoi des journaux n'est pas configuré dans cette version.",
-        "unavailableNoConsent": "Vous devez d'abord accepter la Politique de confidentialité."
+        "unavailableNoConsent": "Vous devez d'abord accepter la Politique de confidentialité.",
+        "consentPrompt": "Avant l’envoi, lis la <policy>politique de confidentialité</policy> et sélectionne <accept>Accepter</accept>."
       },
       "openLogsDirError": "Impossible d'ouvrir le répertoire des journaux",
       "autoUpdateLabel": "Installer les mises à jour en période d'inactivité",
@@ -3446,6 +3460,7 @@
       "description": "Importez dans Cindy des sessions provenant d’autres outils de programmation avec IA et poursuivez votre travail. Cindy lit les originaux sans jamais les modifier.",
       "rescan": "Rechercher à nouveau",
       "allSources": "Toutes les sources",
+      "sourceFilterAria": "Source",
       "search": "Rechercher des sessions ou des dossiers",
       "projectFilter": "{{name}} uniquement",
       "clearProjectFilter": "Afficher tous les projets",
@@ -5238,6 +5253,7 @@
       "formHint": "L'identifiant utilisateur est numérique ; envoyez un message privé à @userinfobot pour connaître le vôtre.",
       "connect": "Connecter",
       "connectingAction": "Connexion…",
+      "connectTimedOut": "Délai de connexion dépassé. Réessayez.",
       "errorCode": {
         "invalid-token": "Le jeton du bot est invalide ou a été réinitialisé : saisissez-le à nouveau",
         "provider-api": "Telegram a renvoyé une erreur : réessayez dans un instant",
@@ -5969,7 +5985,8 @@
         "title": "Automatisation du navigateur",
         "description": "Un navigateur dédié aux Agents, distinct de votre Chrome habituel",
         "toggleAria": "Activer ou désactiver l'automatisation du navigateur",
-        "toggleHint": "S'applique uniquement aux nouvelles sessions Agent.",
+        "toggleHint": "Le réglage du navigateur de ce projet s’applique au démarrage ou au redémarrage de ses sessions Agent.",
+        "userDefaultToggleHint": "Quand le réglage par défaut du navigateur change, Codex local se met à jour automatiquement dès qu’il est inactif. Vos sessions et l’historique du chat sont conservés. Codex recharge les réglages de tous les outils intégrés, en donnant la priorité à ceux du projet. Pi et les autres Agents appliquent le réglage par défaut du navigateur au démarrage ou au redémarrage de leurs sessions.",
         "noProjectHint": "Ouvrez les Paramètres depuis une session de projet pour activer ou désactiver l'automatisation du navigateur pour ce projet.",
         "detected": "{{browser}} détecté",
         "notDetected": "Aucun navigateur local détecté. Installez Chrome pour utiliser l'automatisation du navigateur.",
@@ -6250,15 +6267,15 @@
     },
     "builtinTools": {
       "title": "Outils intégrés",
-      "description": "Définissez les valeurs par défaut des nouvelles sessions ou remplacez-les pour un projet. Les paramètres du projet sont prioritaires.",
+      "description": "Définissez les réglages par défaut des outils ou adaptez-les à un projet. Les paramètres du projet sont prioritaires.",
       "empty": "Aucun outil disponible.",
       "toggleAria": "Activer/désactiver l'outil {{name}}",
-      "toggleHint": "Les modifications ne s'appliquent qu'aux sessions Agent nouvelles ou redémarrées. Les sessions en cours d'exécution ne sont pas affectées.",
+      "toggleHint": "Les sessions Agent nouvelles ou redémarrées utilisent ces réglages d’outils.",
       "loadFailed": "Échec du chargement de la liste des outils",
       "scopePicker": {
         "ariaLabel": "Changer la portée des paramètres des outils intégrés",
-        "userDefault": "Par défaut (nouvelles sessions)",
-        "userDefaultDescription": "Utilisées par les nouvelles sessions sans paramètres de projet spécifiques"
+        "userDefault": "Réglages par défaut des sessions Agent",
+        "userDefaultDescription": "S’appliquent en l’absence de réglage propre au projet"
       },
       "source": {
         "project": "projet",
@@ -8277,6 +8294,7 @@
           "official": "Officiel",
           "community": "Communauté"
         },
+        "communityDisclaimer": "Ce plugin est développé et maintenu par des membres de la communauté. Cindy a examiné cette version, mais ne peut pas garantir la sécurité du plugin dans toutes les situations d’utilisation.",
         "publisherDescription": {
           "official": "Publié et maintenu par Cindy",
           "community": "Publié et maintenu par des développeurs de la communauté",
@@ -8392,7 +8410,7 @@
             "authTitle": "Dépôts privés",
             "authBody": "L'authentification repose entièrement sur la configuration Git de votre système : Cindy ne stocke jamais d'identifiants Git. SSH : une clé fonctionnelle doit être configurée sur cette machine ; si l'organisation impose le SSO SAML, autorisez la clé pour cette organisation via Configure SSO dans les paramètres de vos clés SSH GitHub. HTTPS : utilisez un Personal Access Token enregistré par le credential helper du système.",
             "rulesTitle": "Règles d'installation",
-            "rulesBody": "Les ID de plugin sont uniques au niveau global, selon le principe du premier arrivé, premier servi ; les conflits avec des plugins installés sont signalés explicitement. Les plugins dont l'ID utilise les préfixes officiels réservés ({{reservedGhostIdPrefixes}}) ne peuvent pas être installés par glisser-déposer d'un paquet, par sélection d'un fichier ou via un marketplace de plugins personnalisé. Les autorisations déclarées sont affichées sur la page de détails ; cliquer sur Installer termine l'installation et active le plugin sans nouvelle boîte de dialogue de confirmation des autorisations.",
+            "rulesBody": "Les ID de plugin sont uniques au niveau global, selon le principe du premier arrivé, premier servi ; les conflits avec des plugins installés sont signalés explicitement. Les plugins dont l'ID utilise les préfixes officiels réservés ({{reservedGhostIdPrefixes}}) ne peuvent pas être installés par glisser-déposer d'un paquet, par sélection d'un fichier ou via un marketplace de plugins personnalisé. Les autorisations déclarées sont affichées sur la page de détails. Lors de la première installation manuelle d’un plugin, Cindy vous demande de confirmer les autorisations demandées. Le plugin est activé automatiquement après l’installation.",
             "copy": "Copier le guide",
             "copied": "Guide copié dans le presse-papiers.",
             "copyFailed": "Échec de la copie. Veuillez réessayer."
@@ -8509,6 +8527,8 @@
         "installMeta": "Version {{version}} · {{source}}",
         "updateMeta": "Version {{from}} → {{to}} · {{source}}",
         "installDescription": "Rien n'est installé tant que vous n'avez pas confirmé. Le plugin est activé dès son installation, et vous pouvez le désactiver ou le désinstaller à tout moment depuis la page Plugins.",
+        "customMarketSourceNotice": "Assurez-vous de faire confiance à ce marketplace et vérifiez les autorisations demandées par le plugin.",
+        "localFileSourceNotice": "Avant de poursuivre l’installation, assurez-vous que le fichier provient d’une source de confiance.",
         "updateDescription": "La mise à jour ne démarre qu'après votre confirmation. La version actuelle reste disponible d'ici là.",
         "grantsTitle": "Après l'installation, il disposera de :",
         "noPermissions": "Ce plugin ne déclare aucune autorisation supplémentaire.",
@@ -8751,6 +8771,8 @@
         "liveScreenDetail": "Via le bureau à distance, votre téléphone ou vos autres ordinateurs peuvent afficher les écrans d'appareils qu'il fournit (comme des simulateurs) et leur envoyer des touchers, des boutons et du texte. La connexion n'a lieu que lorsque vous l'ouvrez depuis l'un de ces appareils et rien d'autre de cet ordinateur n'est affiché.",
         "preview": "Peut ouvrir des pages d'aperçu des sites ci-dessous dans le navigateur de la barre latérale",
         "previewDetail": "Seuls les sites listés ci-dessous peuvent être ouverts ; chaque page ouverte est attribuée à ce plugin.",
+        "fileOpener": "Peut ouvrir les types de fichiers ci-dessous lorsque vous les ouvrez depuis Cindy",
+        "fileOpenerDetail": "Le plugin reçoit le chemin complet du fichier et l'ouvre à la place de votre application par défaut ; s'il n'y parvient pas, votre application par défaut l'ouvre. Vous pouvez désactiver cette option dans les détails du plugin.",
         "browserExtension": "Permet à son extension de navigateur intégrée de se connecter à Cindy",
         "browserNativeHost": "Peut enregistrer la connexion de navigateur « {{name}} »",
         "browserNativeHostDetail": "Le programme enregistré s’exécute hors du bac à sable et accède à cet ordinateur selon votre compte et les autorisations système.",
@@ -8992,6 +9014,8 @@
         "configurationTitle": "Configuration",
         "sidebarEntryTitle": "Entrée de navigation",
         "showInSidebar": "Afficher dans la navigation de gauche",
+        "fileOpenerTitle": "Ouvrir les fichiers avec ce plugin",
+        "fileOpenerDescription": "Lorsque vous ouvrez des fichiers {{extensions}} depuis Cindy, {{name}} les ouvre à la place de votre application par défaut. Les fichiers d'autres ordinateurs s'ouvrent toujours avec votre application par défaut.",
         "sidebarEntryDescription": "Une fois activé, « {{title}} » apparaît dans la navigation de gauche à côté d'Automatisations et de Plugins, soit en haut, soit sous Plus. Choisissez l'emplacement dans Plus → Personnaliser. Le masquer ne désactive pas le plugin.",
         "openTool": "Voir les détails de l'outil {{name}}",
         "noToolDescription": "Aucune description n'est disponible pour cet outil.",
@@ -12617,6 +12641,8 @@
       "transferBusy": "{{name}} est encore en train de rédiger une réponse. Déplacez-le une fois la réponse terminée",
       "targetUnavailable": "« {{device}} » n'est pas disponible. Il doit être en ligne avec le contrôle à distance activé",
       "targetOutdated": "« {{device}} » utilise une ancienne version de Cindy qui ne peut pas encore faire fonctionner {{name}}. Mettez d'abord Cindy à jour sur cet ordinateur",
+      "skillTargetOutdated": "Un skill de {{name}} contient un corps de texte de plus de 64 KB que l’ancienne version de Cindy sur « {{device}} » ne peut pas recevoir. Mettez Cindy à jour sur cet ordinateur avant de déplacer votre ami. Il reste sur l’ordinateur d’origine",
+      "skillTargetOutdated_skill": "La version de Cindy sur « {{device}} » ne peut pas recevoir le skill « {{slug}} ». Son contenu fait {{bodyBytes, number}} octets et dépasse la limite de 64 Ko. {{name}} continue de fonctionner sur l’ordinateur d’origine. Mettez Cindy à jour sur l’ordinateur de destination, puis réessayez.",
       "targetOutdatedItem": "Déplacer vers « {{device}} » · ancienne Cindy",
       "targetOutdatedMeta": "Ancienne Cindy",
       "olderTargetNote": "« {{device}} » utilise une ancienne version de Cindy : {{name}} y fonctionnera comme avant. L'historique de conversation reste synchronisé, mais les règles et automatisations du projet ne s'y appliquent pas.",
@@ -12860,6 +12886,7 @@
           "conflict": "Ce bot est déjà connecté sur cet ordinateur, dans Paramètres → Bots de messagerie ou sur un autre ami.",
           "botUnavailable": "{{name}} n'est pas disponible pour le moment. Réessayez lorsqu'il sera de retour.",
           "connectFailed": "Connexion impossible : {{reason}}",
+          "connectTimedOut": "Délai de connexion dépassé. Réessayez.",
           "failed": "Impossible de terminer. Réessayez plus tard.",
           "personalBotGone": "Ce bot n'est plus configuré dans Paramètres → Bots de messagerie. Saisissez plutôt ses identifiants."
         },
@@ -15500,6 +15527,7 @@
       "codexHelperUnverified": "Impossible de vérifier si cindy_helper est disponible pour cette tâche. Le résultat de la tâche risque de ne pas pouvoir être transmis.",
       "requestFormatError": "L'application a envoyé une requête non valide : cette réponse n'a donc pas pu aboutir.",
       "replyFailed": "Impossible de terminer la réponse",
+      "queuedSendRecovery": "Ton message n’a pas été envoyé. Sélectionne « Réessayer » pour le renvoyer tel quel. Si tu envoies un nouveau message, il remplacera le précédent.",
       "retryTitle": "Renvoyer le dernier message",
       "cancelTitle": "Fermer l'erreur",
       "retry": "Réessayer",
@@ -15632,6 +15660,7 @@
       "prCheck_rate-limit": "GitHub limite les requêtes de {{device}}. Échecs consécutifs : {{failures}}. Prochaine vérification automatique : {{retry}}.",
       "prCheck_unknown": "La vérification de la PR a échoué sur {{device}}. Consultez les détails de l’exécution. Échecs consécutifs : {{failures}}. Prochaine vérification automatique : {{retry}}.",
       "precheck": "Les vérifications automatiques sont temporairement bloquées.",
+      "preRunBlocked": "La vérification préalable a échoué. Cette exécution n’a pas démarré.",
       "rateLimited": "Les vérifications automatiques sont temporairement bloquées par une limite de débit des requêtes.",
       "pluginMissing": "Les vérifications automatiques sont bloquées : le plugin {{name}} n'est pas installé. Elles reprendront une fois le plugin installé.",
       "pluginMissingUnnamed": "Les vérifications automatiques sont bloquées : un plugin requis n'est pas installé. Elles reprendront une fois le plugin installé.",
@@ -16299,6 +16328,7 @@
       "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "La compression du contexte a échoué lors du changement de modèle, car cette connexion ne permet pas d’utiliser le modèle précédent.",
       "MODEL_SELECTION_UNAVAILABLE": "Le modèle sélectionné n'est plus disponible auprès de son fournisseur. Vérifiez la connexion dans les paramètres ou choisissez un autre modèle disponible.",
       "MODEL_CATALOG_UNCONFIRMED": "Impossible de confirmer la liste des modèles. Votre modèle sélectionné a été conservé. Actualisez la liste des modèles et réessayez.",
+      "SNAPSHOT_DISPATCH_INTENT_TIMEOUT": "Message non envoyé. Cindy n’a pas pu confirmer le journal de sécurité à temps.",
       "HARNESS_SWITCH_NOT_READY": "Le changement de Harness n'est pas prêt. Consultez les détails de l'erreur et réessayez une fois le Harness prêt.",
       "DEVICE_LINK_BUSY": "L'ordinateur distant est occupé. Veuillez réessayer dans un instant.",
       "REMOTE_DAEMON_CLOSED": "La connexion distante a été coupée, peut-être pendant une mise à jour. Ce tour est terminé. Renvoyez le message.",
@@ -16610,7 +16640,13 @@
       "open": "Ouvrir la tâche « {{title}} »",
       "untitled": "Tâche sans titre",
       "startedOne": "Lancée",
-      "handedToOne": "Confiée à"
+      "handedToOne": "Confiée à",
+      "status": {
+        "running": "En cours d'exécution",
+        "needsAction": "Attend votre action",
+        "error": "Erreur",
+        "idle": "Inactive"
+      }
     },
     "botTaskLetter": {
       "replied": "a répondu",
@@ -17857,15 +17893,15 @@
   "scheduler": {
     "prTrigger": {
       "fallback": "Les vérifications planifiées continuent sans les notifications GitHub App.",
-      "label": "PR",
-      "url": "URL de la pull request",
+      "label": "PR / MR",
+      "url": "URL de la PR ou de la MR",
       "condition": "Déclenchement",
-      "any": "Activité sur la PR",
+      "any": "Activité",
       "merged": "Fusion",
       "review": "Activité de revue",
       "ci": "Changement de CI",
       "timed": "Vérifier aussi périodiquement",
-      "invalid": "Saisissez une URL de pull request GitHub."
+      "invalid": "Saisissez une URL de PR GitHub ou de MR GitLab."
     },
     "presentation": {
       "status": {

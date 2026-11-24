@@ -2980,6 +2980,10 @@ function forkSession(db: Database.Database, args: unknown): { messageCount: numb
         `newMessageIds length mismatch: expected ${sourceMessages.length}, got ${newMessageIds.length}`,
       );
     }
+    if (payload.sourceMessagesDigest != null && computeForkSourceMessagesDigest(sourceMessages)
+      !== expectString(payload.sourceMessagesDigest, 'sourceMessagesDigest')) {
+      throw invalidArgs('Source history changed while preparing fork');
+    }
     const childCreatedAt = expectNumber(newSession.createdAt, 'newSession.createdAt');
     // Keep inherited history strictly before the side-chat visibility boundary,
     // without moving the child into the future or changing source timestamps.

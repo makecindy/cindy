@@ -83,7 +83,6 @@ import { readBotProjectMode } from '../../../shared/botProjectMode.js';
 import { ownTeammateProjectState } from '../../scheduler-host/ownTeammateProject.js';
 import { readBotResponsibilityScope } from '../../maker-ipc/botTaskCreation.js';
 import {
-  NEW_BOT_DEFAULT_PI_EFFORT,
   NEW_BOT_DEFAULT_PI_MODEL,
   NEW_BOT_DEFAULT_PI_PROVIDER,
 } from '../../../shared/botDefaults.js';
@@ -919,13 +918,8 @@ function botSessionRouteFields(config: Record<string, unknown>, primaryRoute: Bo
           : agentKind === 'pi'
             ? NEW_BOT_DEFAULT_PI_PROVIDER
             : undefined),
-    effort:
-      primaryRoute?.effort ||
-      (typeof config.effort === 'string' && config.effort.trim()
-        ? config.effort.trim()
-        : agentKind === 'pi'
-          ? NEW_BOT_DEFAULT_PI_EFFORT
-          : undefined),
+    // Local admission chooses the model default. Remote tasks skip it and persist '' for no selection.
+    effort: primaryRoute?.effort || (primaryRoute?.agentDeviceId ? '' : undefined),
     fastMode: agentKind === 'acp' ? false : (primaryRoute?.fastMode ?? config.fastMode === true),
     agentDeviceId: primaryRoute?.agentDeviceId ?? null,
     agentKind,

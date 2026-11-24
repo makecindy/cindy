@@ -2,6 +2,7 @@ import { seedBotReadPositions, markBotReadPositions, pruneBotReadState as pruneH
 import { listBotDelegationHistory } from '../../../maker-ipc/botDelegationHistory';
 import { readBotResponsibilityScope } from '../../../maker-ipc/botTaskCreation';
 import { emitSessionCreated } from '../sessionCreatedBroadcast.js';
+import { createSessionExecutionResolver } from '../../../maker-ipc/sessionExecutionSelection';
 import { setSessionOpeningModelAdmission } from '../../sessionOpening';
 import { createDrizzleProxy } from '../../client/drizzleProxy';
 import type { DbTransport } from '../../client/DbTransport';
@@ -35,6 +36,7 @@ import type { BotModelRoute } from '../../../../shared/botModelChain';
 import type { AgentKind, EngineKind } from '@cindy/maker-core';
 import { requireBuiltinAgentKind } from '../../../maker-host/engineKind';
 import { createBotCapabilityService, type BotCapabilityUpdate } from '../../../maker-ipc/botCapabilityService';
+import * as botProjectMode from '../../../maker-ipc/botProjectMode';
 import { GroupToolAuthorizationError, registerGroupToolAuthority } from '../../../maker-ipc/botGroupToolAuthorization';
 import { buildBotMcpCatalog } from '../../../maker-host/botMcpCatalog';
 import { CustomMcpProvider } from '../../../mcp-integrations/custom-mcp-provider';
@@ -866,17 +868,17 @@ describe('Bot canonical Session lifecycle', () => {
     expect((await listBotRemoteResourceSources()).map((row) => row.id)).not.toContain(created.id);
   });
 
-  it('persists a shared model location when creating the canonical session', async () => {
+  it.each(['high', ''])('persists a shared model location and saved effort %j in the canonical session', async effort => {
     const route = { harness: 'codex', model: 'gpt-6-astra', providerId: 'openai',
-      agentDeviceId: 'share:test-account', effort: 'high', fastMode: false };
+      agentDeviceId: 'share:test-account', effort, fastMode: false };
     h.sqlite!.prepare('UPDATE bot_profile_versions SET capabilities_json = ? WHERE bot_id = ? AND version = 1')
       .run(JSON.stringify({ modelChainOverride: [route] }), 'bot-1');
     const canonical = await invoke('local-db:bots:create-canonical-session', {
       botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
     });
-    expect(h.sqlite!.prepare('SELECT agent_device_id, model, provider_id FROM sessions WHERE id = ?')
+    expect(h.sqlite!.prepare('SELECT agent_device_id, model, provider_id, effort FROM sessions WHERE id = ?')
       .get(canonical.session.id)).toEqual({ agent_device_id: route.agentDeviceId,
-        model: route.model, provider_id: route.providerId });
+        model: route.model, provider_id: route.providerId, effort });
   });
 
   it('creates the first canonical task on Codex when only its subscription is connected', async () => {
@@ -2531,6 +2533,48 @@ describe('Bot canonical Session lifecycle', () => {
       failureReason: 'provider_quota_limit',
       needsAttention: true,
     });
+  });
+
+  it.each([
+    { providerId: 'hermes', saved: '', efforts: [], modelDefault: null, expected: '' },
+    { providerId: 'hermes', saved: '', efforts: ['low', 'medium'], modelDefault: 'medium', expected: 'medium' },
+    { providerId: 'hermes', saved: 'low', efforts: ['low', 'medium'], modelDefault: 'medium', expected: 'low' },
+    { providerId: null, saved: '', efforts: ['medium', 'high'], modelDefault: 'medium', expected: 'medium' },
+  ])('opens the first custom Pi group task with provider "$providerId", saved effort "$saved" and model default $modelDefault', async ({
+    providerId, saved, efforts, modelDefault, expected,
+  }) => {
+    const botId = 'custom-pi';
+    const model = 'hermes-agent';
+    await invoke('local-db:bots:create', {
+      id: botId, name: 'Hermes', capabilities: { harness: 'pi', model, providerId, effort: saved },
+    });
+    const readDefault = vi.fn(() => ({ agentKind: 'pi' as const, model, providerId: 'hermes', effort: 'xhigh' as const, fastMode: false }));
+    const resolve = createSessionExecutionResolver({
+      captureOwner: () => () => {},
+      readCaller: vi.fn(),
+      readDefault,
+      availableAgents: () => ['pi'],
+      availableModels: () => [{ id: model, efforts, defaultEffort: modelDefault }],
+      readProviderRouting: async () => ({
+        availability: { pi: [{ id: 'hermes', name: 'Hermes', models: [model] }], codex: [], 'claude-code': [] },
+        resolveDefaultProviderIdForModel: () => 'hermes',
+      }),
+      hasCindyAiApiKey: () => false,
+    });
+    setSessionOpeningModelAdmission(async (body, sourceSessionId) => {
+      const selected = await resolve(body, sourceSessionId);
+      return { ...body, providerId: selected.providerId, effort: selected.effort ?? '' };
+    });
+    h.sqlite!.exec('CREATE TABLE bot_group_members(group_id TEXT, bot_id TEXT)');
+    h.sqlite!.prepare('INSERT INTO bot_group_members VALUES (?, ?)').run('room', botId);
+    const lane = await ensureBotGroupLaneSession({
+      botId, groupId: 'room', title: 'Group', chatAccess: { mode: 'owner', revision: 1 },
+    });
+    if (!lane.ok) throw new Error(lane.message);
+    expect(lane.created).toBe(true);
+    expect(h.sqlite!.prepare('SELECT model, provider_id, effort FROM sessions WHERE id = ?').get(lane.sessionId))
+      .toEqual({ model, provider_id: 'hermes', effort: expected });
+    expect(readDefault).not.toHaveBeenCalled();
   });
 
   it('continues a group task in its project, rebinds a missing project and isolates a chat grant', async () => {
@@ -5558,7 +5602,13 @@ describe('Bot self control uses the same profile authority as settings', () => {
     const canonical = await invoke('local-db:bots:create-canonical-session', { botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1 });
     const sessionId = canonical.session.id;
     const profile = await invoke('local-db:bots:get', 'bot-1');
-    await invoke('local-db:bots:update', { id: 'bot-1', capabilities: { projectMode: true } });
+    // Provision the real project without loading the automation host for its nightly review.
+    const provisionAutomations = vi.spyOn(botProjectMode, 'ensureBotProjectAutomations').mockResolvedValue(false);
+    try {
+      await invoke('local-db:bots:update', { id: 'bot-1', capabilities: { projectMode: true } });
+    } finally {
+      provisionAutomations.mockRestore();
+    }
     const service = createBotCapabilityService(capabilityDeps);
     const current = await service.inspect({ callerSessionId: sessionId });
     if (!current.ok) throw new Error(current.message);

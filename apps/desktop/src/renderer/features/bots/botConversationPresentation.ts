@@ -1,4 +1,4 @@
-import { groupTeammateProcess, isSteerUserRow } from '@cindy/maker-shared/message-render';
+import { collapseLegacyIdleGapCards, groupTeammateProcess, isSteerUserRow } from '@cindy/maker-shared/message-render';
 import { isContinuationMessage } from '@cindy/maker-shared/synthetic-trigger';
 import { hasRichAnswer } from '@cindy/maker-shared/rich-answer';
 import { botTaskResultKey, readBotCollaborationMeta } from '@cindy/maker-shared/botCollaboration';
@@ -155,7 +155,8 @@ export function botProcessItems(
     streaming: item => item.type === 'work_group' ? item.isStreaming === true
       : liveItems.has(item),
     create: (children, key, streaming, start, end) => ({ type: 'work_group', teammateJournal: true, key,
-      children: children as WorkGroupChildItem[], isStreaming: streaming,
+      children: collapseLegacyIdleGapCards(children as WorkGroupChildItem[],
+        child => child.type === 'message' ? child.message : undefined), isStreaming: streaming,
       ...(start !== null ? { startedAtMs: start } : {}),
       ...(start !== null && end !== null ? { durationMs: Math.max(0, end - start) } : {}) }),
   });

@@ -425,6 +425,7 @@
       "description": "Limita apenas a utilização remota. A utilização local mantém-se inalterada. As alterações guardadas aplicam-se ao criar uma tarefa, mudar de modelo ou enviar a mensagem seguinte.",
       "all": "Todos os modelos",
       "selected": "{{count}} modelos permitidos",
+      "selectionExcludesModels": "Alguns modelos não estão selecionados. Para permitir novos modelos, selecione-os manualmente.",
       "choose": "Escolher modelos",
       "memberTitle": "Modelos permitidos",
       "memberDescription": "Escolha os modelos que {{name}} pode utilizar, entre os modelos disponíveis para utilização remota. Estes limites também se aplicam à utilização repartilhada através desta pessoa.",
@@ -1989,6 +1990,7 @@
       },
       "footnote": "Fase A: apenas gestão de ligações SSH. A execução de Agents na máquina remota chegará numa atualização posterior.",
       "viaAuth": "via {{label}}",
+      "managedAliasConflict": "Este alias SSH está definido tanto na configuração gerida pela Cindy como numa configuração externa. Os detalhes da ligação são só de leitura e este anfitrião não pode ser removido aqui.",
       "readOnlyFromSshConfig": "Os detalhes da ligação provêm da configuração SSH",
       "importedAgentHint": "Autentica através do agente local de chaves SSH (ssh-agent). Uma ligação ssh bem-sucedida no terminal não garante que o agente esteja pronto.",
       "agentError": {
@@ -2254,6 +2256,13 @@
       }
     },
     "appearance": {
+      "chatLayout": {
+        "label": "Disposição da conversa",
+        "standard": "Padrão",
+        "wide": "Larga",
+        "width": "Largura do conteúdo",
+        "hint": "Usa o espaço entre as margens da conversa. Os painéis estreitos ajustam-se automaticamente."
+      },
       "title": "Aspeto",
       "modeLabel": "Modo de aspeto",
       "appIcon": {
@@ -2499,6 +2508,10 @@
       }
     },
     "windowBehavior": {
+      "trayCard": {
+        "label": "Cartão da área de notificação",
+        "hint": "Passe o ponteiro sobre o ícone da Cindy na área de notificação para ver a cota restante e as tarefas por ler."
+      },
       "menubar": {
         "label": "Mostrar utilização restante na barra de menus",
         "hint": "Adiciona um ícone do Cindy à barra de menus do macOS. Clique nele para ver o que resta nas suas subscrições, o seu saldo Cindy e a utilização de hoje."
@@ -2844,7 +2857,8 @@
         "errorBusy": "Já está em curso um envio. Aguarde.",
         "errorFailed": "O envio dos registos falhou. Verifique a sua rede e tente novamente.",
         "unavailableNotConfigured": "O envio de registos não está configurado nesta compilação.",
-        "unavailableNoConsent": "Tem de aceitar primeiro a Política de Privacidade."
+        "unavailableNoConsent": "Tem de aceitar primeiro a Política de Privacidade.",
+        "consentPrompt": "Antes de enviar, lê a <policy>Política de Privacidade</policy> e seleciona <accept>Aceitar</accept>."
       },
       "openLogsDirError": "Não foi possível abrir o diretório de registos",
       "autoUpdateLabel": "Instalar atualizações durante a inatividade",
@@ -3446,6 +3460,7 @@
       "description": "Traga sessões de outras ferramentas de programação com IA para o Cindy e continue a trabalhar. O Cindy apenas lê os originais e nunca os altera.",
       "rescan": "Procurar novamente",
       "allSources": "Todas as origens",
+      "sourceFilterAria": "Origem",
       "search": "Procurar sessões ou pastas",
       "projectFilter": "Apenas {{name}}",
       "clearProjectFilter": "Mostrar todos os projetos",
@@ -5238,6 +5253,7 @@
       "formHint": "O ID de utilizador é numérico; envie uma mensagem direta a @userinfobot para consultar o seu ID.",
       "connect": "Ligar",
       "connectingAction": "A ligar…",
+      "connectTimedOut": "A ligação excedeu o tempo limite. Tente novamente.",
       "errorCode": {
         "invalid-token": "O token do bot é inválido ou foi reposto — introduza-o novamente",
         "provider-api": "O Telegram devolveu um erro — tente novamente dentro de instantes",
@@ -5969,7 +5985,8 @@
         "title": "Automatização do navegador",
         "description": "Um navegador dedicado aos Agents — separado do Chrome que usa diariamente",
         "toggleAria": "Ativar/desativar automatização do navegador",
-        "toggleHint": "Aplica-se apenas a novas sessões de Agent.",
+        "toggleHint": "A definição do navegador deste projeto aplica-se ao iniciar ou reiniciar as suas sessões do Agent.",
+        "userDefaultToggleHint": "Ao alterar a predefinição do navegador, o Codex local é atualizado automaticamente quando fica inativo. As suas sessões e o histórico de conversas são preservados. O Codex volta a carregar as definições de todas as ferramentas integradas e dá prioridade às do projeto. O Pi e os restantes Agents usam a predefinição do navegador ao iniciar ou reiniciar as respetivas sessões.",
         "noProjectHint": "Abra as Definições a partir de uma sessão de projeto para ativar ou desativar a automatização do navegador nesse projeto.",
         "detected": "{{browser}} detetado",
         "notDetected": "Não foi detetado nenhum navegador local. Instale o Chrome para usar a automatização do navegador.",
@@ -6250,15 +6267,15 @@
     },
     "builtinTools": {
       "title": "Ferramentas integradas",
-      "description": "Defina as predefinições para novas sessões ou substitua-as para um projeto. As definições do projeto têm prioridade.",
+      "description": "Defina as predefinições das ferramentas ou personalize-as para um projeto. As definições do projeto têm prioridade.",
       "empty": "Nenhuma ferramenta disponível.",
       "toggleAria": "Ativar ou desativar a ferramenta {{name}}",
-      "toggleHint": "As alterações aplicam-se apenas a sessões do Agent novas ou reiniciadas. As sessões em execução não são afetadas.",
+      "toggleHint": "As sessões do Agent novas ou reiniciadas usam estas definições de ferramentas.",
       "loadFailed": "Falha ao carregar a lista de ferramentas",
       "scopePicker": {
         "ariaLabel": "Alterar o âmbito das definições de ferramentas integradas",
-        "userDefault": "Predefinições de novas sessões",
-        "userDefaultDescription": "Usadas por novas sessões sem definições específicas do projeto"
+        "userDefault": "Predefinições das sessões do Agent",
+        "userDefaultDescription": "Usadas quando o projeto não tem uma definição própria"
       },
       "source": {
         "project": "projeto",
@@ -8277,6 +8294,7 @@
           "official": "Oficial",
           "community": "Comunidade"
         },
+        "communityDisclaimer": "Este plugin é desenvolvido e mantido por membros da comunidade. A Cindy analisou esta versão, mas não pode garantir a segurança do plugin em todas as situações de utilização.",
         "publisherDescription": {
           "official": "Publicado e mantido pela Cindy",
           "community": "Publicado e mantido por programadores da comunidade",
@@ -8392,7 +8410,7 @@
             "authTitle": "Repositórios privados",
             "authBody": "A autenticação depende inteiramente da configuração Git do sistema — Cindy nunca guarda credenciais Git. SSH: deve existir uma chave funcional configurada neste computador; se a organização exigir SAML SSO, autorize a chave para essa organização através de Configure SSO nas definições de chaves SSH do GitHub. HTTPS: utilize um Personal Access Token guardado pelo gestor de credenciais do sistema.",
             "rulesTitle": "Regras de instalação",
-            "rulesBody": "Os identificadores dos plugins são globalmente únicos e atribuídos por ordem de chegada — os conflitos com plugins instalados são indicados explicitamente. Os plugins cujos identificadores utilizam os prefixos oficiais reservados ({{reservedGhostIdPrefixes}}) não podem ser instalados ao arrastar um pacote, escolher um ficheiro ou utilizar um mercado de plugins personalizado. As permissões declaradas são apresentadas na página de detalhes; clicar em Instalar conclui a instalação e ativa o plugin sem outro diálogo de confirmação de permissões.",
+            "rulesBody": "Os identificadores dos plugins são globalmente únicos e atribuídos por ordem de chegada — os conflitos com plugins instalados são indicados explicitamente. Os plugins cujos identificadores utilizam os prefixos oficiais reservados ({{reservedGhostIdPrefixes}}) não podem ser instalados ao arrastar um pacote, escolher um ficheiro ou utilizar um mercado de plugins personalizado. As permissões declaradas são apresentadas na página de detalhes. Na primeira instalação manual de um plugin, Cindy pede que confirme as permissões solicitadas. O plugin é ativado automaticamente após a instalação.",
             "copy": "Copiar guia",
             "copied": "Guia copiado para a área de transferência.",
             "copyFailed": "Não foi possível copiar. Tente novamente."
@@ -8509,6 +8527,8 @@
         "installMeta": "Versão {{version}} · {{source}}",
         "updateMeta": "Versão {{from}} → {{to}} · {{source}}",
         "installDescription": "Nada é instalado até confirmar. O plugin é ativado imediatamente após a instalação e pode desativá-lo ou desinstalá-lo a qualquer momento na página Plugins.",
+        "customMarketSourceNotice": "Confirme que confia neste mercado e verifique as permissões pedidas pelo plugin.",
+        "localFileSourceNotice": "Antes de continuar a instalação, confirme que o ficheiro veio de uma fonte de confiança.",
         "updateDescription": "A atualização só começa após a sua confirmação. A versão atual permanece disponível até lá.",
         "grantsTitle": "Após a instalação, o plugin terá:",
         "noPermissions": "Este plugin não declara permissões adicionais.",
@@ -8751,6 +8771,8 @@
         "liveScreenDetail": "Através do ambiente de trabalho remoto, o telemóvel ou os seus outros computadores podem mostrar os ecrãs de dispositivos que fornece (como simuladores) e enviar-lhes toques, botões e texto. Só liga quando o abre a partir de um desses dispositivos e não mostra mais nada deste computador.",
         "preview": "Pode abrir páginas de pré-visualização dos sites abaixo no navegador da barra lateral",
         "previewDetail": "Só podem ser abertos os sites indicados abaixo; cada página aberta é atribuída a este plugin.",
+        "fileOpener": "Pode abrir os tipos de ficheiro abaixo quando os abre a partir do Cindy",
+        "fileOpenerDetail": "O plugin recebe o caminho completo do ficheiro e abre-o em vez da aplicação predefinida; se não conseguir, a aplicação predefinida abre-o. Pode desativar isto nos detalhes do plugin.",
         "browserExtension": "Permite que a extensão de navegador incluída se ligue a Cindy",
         "browserNativeHost": "Pode registar a ligação do navegador «{{name}}»",
         "browserNativeHostDetail": "O programa registado é executado fora da sandbox e acede ao computador com a sua conta e as permissões do sistema.",
@@ -8992,6 +9014,8 @@
         "configurationTitle": "Configuração",
         "sidebarEntryTitle": "Entrada de navegação",
         "showInSidebar": "Mostrar na navegação à esquerda",
+        "fileOpenerTitle": "Abrir ficheiros com este plugin",
+        "fileOpenerDescription": "Quando abre ficheiros {{extensions}} a partir do Cindy, o {{name}} abre-os em vez da aplicação predefinida. Os ficheiros de outros computadores continuam a abrir com a aplicação predefinida.",
         "sidebarEntryDescription": "Quando ativado, «{{title}}» aparece na navegação à esquerda, junto a Automatizações e Plugins, no topo ou em Mais — escolha a posição em Mais → Personalizar. Ocultá-lo não desativa o plugin.",
         "openTool": "Ver detalhes da ferramenta {{name}}",
         "noToolDescription": "Não existe descrição para esta ferramenta.",
@@ -12617,6 +12641,8 @@
       "transferBusy": "{{name}} ainda está a preparar uma resposta. Mova-o quando a resposta terminar",
       "targetUnavailable": "“{{device}}” não está disponível. Tem de estar online com o controlo remoto ativado",
       "targetOutdated": "«{{device}}» tem uma versão antiga do Cindy que ainda não consegue executar {{name}}. Atualize primeiro o Cindy nesse computador",
+      "skillTargetOutdated": "Uma Skill de {{name}} tem um corpo de texto superior a 64 KB que a versão antiga do Cindy em «{{device}}» não consegue receber. Atualize o Cindy nesse computador antes de mover o seu amigo. O amigo permanece no computador original",
+      "skillTargetOutdated_skill": "A versão antiga do Cindy em «{{device}}» não consegue receber a Skill «{{slug}}». O texto tem {{bodyBytes, number}} bytes e excede o limite de 64 KB. {{name}} continua no computador original. Atualize o Cindy no computador de destino e tente novamente.",
       "targetOutdatedItem": "Mover para «{{device}}» · Cindy antigo",
       "targetOutdatedMeta": "Cindy antigo",
       "olderTargetNote": "«{{device}}» tem uma versão antiga do Cindy, por isso {{name}} funcionará aí como antes: o histórico da conversa continua sincronizado, mas as regras e automatizações do projeto não se aplicam aí.",
@@ -12860,6 +12886,7 @@
           "conflict": "Este bot já está ligado neste computador, em Definições → Bots de mensagens instantâneas ou noutro amigo.",
           "botUnavailable": "{{name}} está indisponível neste momento. Tente novamente quando regressar.",
           "connectFailed": "Não foi possível ligar: {{reason}}",
+          "connectTimedOut": "A ligação excedeu o tempo limite. Tente novamente.",
           "failed": "Não foi possível concluir. Tente novamente mais tarde.",
           "personalBotGone": "Este bot já não está configurado em Definições → Bots de mensagens instantâneas. Introduza as credenciais."
         },
@@ -15500,6 +15527,7 @@
       "codexHelperUnverified": "Não foi possível verificar se cindy_helper está disponível nesta tarefa. Pode não ser possível comunicar o resultado da tarefa.",
       "requestFormatError": "A aplicação enviou um pedido inválido, pelo que não foi possível concluir esta resposta.",
       "replyFailed": "Não foi possível concluir a resposta",
+      "queuedSendRecovery": "A tua mensagem não foi enviada. Seleciona «Tentar novamente» para a enviar sem alterações. Se enviares uma nova mensagem, esta substitui a anterior.",
       "retryTitle": "Reenviar a última mensagem",
       "cancelTitle": "Fechar aviso de erro",
       "retry": "Tentar novamente",
@@ -15632,6 +15660,7 @@
       "prCheck_rate-limit": "O GitHub limitou os pedidos de {{device}}. Falhas consecutivas: {{failures}}. Próxima verificação automática: {{retry}}.",
       "prCheck_unknown": "A verificação do PR falhou em {{device}}. Consulte os detalhes da execução. Falhas consecutivas: {{failures}}. Próxima verificação automática: {{retry}}.",
       "precheck": "As verificações automáticas estão temporariamente bloqueadas.",
+      "preRunBlocked": "A verificação prévia falhou. Esta execução não foi iniciada.",
       "rateLimited": "As verificações automáticas estão temporariamente bloqueadas por um limite de frequência de pedidos.",
       "pluginMissing": "As verificações automáticas estão bloqueadas: o plugin {{name}} não está instalado. Elas serão retomadas após a instalação.",
       "pluginMissingUnnamed": "As verificações automáticas estão bloqueadas: um plugin necessário não está instalado. Elas serão retomadas após a instalação.",
@@ -16299,6 +16328,7 @@
       "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "Não foi possível compactar o contexto ao mudar de modelo porque esta ligação não permite usar o modelo anterior.",
       "MODEL_SELECTION_UNAVAILABLE": "O modelo selecionado já não está disponível no respetivo fornecedor. Verifique a ligação nas Definições ou escolha outro modelo disponível.",
       "MODEL_CATALOG_UNCONFIRMED": "Não foi possível confirmar a lista de modelos. O modelo selecionado foi mantido. Atualiza a lista de modelos e tenta novamente.",
+      "SNAPSHOT_DISPATCH_INTENT_TIMEOUT": "Mensagem não enviada. O Cindy não conseguiu confirmar o registo de segurança a tempo.",
       "HARNESS_SWITCH_NOT_READY": "A mudança de Harness não está pronta. Verifique os detalhes do erro e tente novamente quando o Harness estiver pronto.",
       "DEVICE_LINK_BUSY": "O computador remoto está ocupado. Tente novamente dentro de instantes.",
       "REMOTE_DAEMON_CLOSED": "A ligação remota caiu, possivelmente durante uma atualização. Este turno terminou. Envie a mensagem novamente.",
@@ -16610,7 +16640,13 @@
       "open": "Abrir a tarefa «{{title}}»",
       "untitled": "Tarefa sem título",
       "startedOne": "Iniciada",
-      "handedToOne": "Entregue a"
+      "handedToOne": "Entregue a",
+      "status": {
+        "running": "Em execução",
+        "needsAction": "A aguardar por si",
+        "error": "Erro",
+        "idle": "Inativa"
+      }
     },
     "botTaskLetter": {
       "replied": "respondeu",
@@ -17857,15 +17893,15 @@
   "scheduler": {
     "prTrigger": {
       "fallback": "As verificações agendadas continuam sem notificações da GitHub App.",
-      "label": "PR",
-      "url": "URL do pull request",
+      "label": "PR / MR",
+      "url": "URL de PR ou MR",
       "condition": "Executar quando",
-      "any": "Atividade no PR",
+      "any": "Atividade",
       "merged": "Integração",
       "review": "Atividade de revisão",
       "ci": "Alterações na CI",
       "timed": "Verificar também periodicamente",
-      "invalid": "Introduza o URL de um pull request do GitHub."
+      "invalid": "Introduza o URL de um PR do GitHub ou MR do GitLab."
     },
     "presentation": {
       "status": {

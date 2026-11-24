@@ -420,6 +420,7 @@
       "description": "僅限制遠端呼叫，不影響本機使用。儲存後，建立任務、切換模型及傳送下一輪訊息時生效。",
       "all": "全部模型",
       "selected": "已開放 {{count}} 個模型",
+      "selectionExcludesModels": "目前有模型未選取。新增模型需手動選取後才會開放。",
       "choose": "選擇模型",
       "memberTitle": "可用模型",
       "memberDescription": "設定 {{name}} 可以使用的模型，僅能選擇遠端已開放的模型。也適用於經此人轉分享的呼叫。",
@@ -1921,6 +1922,7 @@
       },
       "footnote": "第一版僅支援 SSH 連線管理。在遠端執行 Agent 的能力將在後續版本中加入。",
       "viaAuth": "透過 {{label}} 認證",
+      "managedAliasConflict": "此 SSH 別名在 Cindy 管理的設定與外部設定中都有定義。連線資訊為唯讀，無法在此移除此主機。",
       "readOnlyFromSshConfig": "連線資訊來自 SSH 設定",
       "importedAgentHint": "使用本機 SSH 金鑰代理程式（ssh-agent）完成驗證。終端機 ssh 能連線，不代表代理程式已就緒。",
       "agentError": {
@@ -2186,6 +2188,13 @@
       }
     },
     "appearance": {
+      "chatLayout": {
+        "label": "對話版面",
+        "standard": "標準",
+        "wide": "寬螢幕",
+        "width": "內容寬度",
+        "hint": "依對話區扣除兩側留白後的寬度計算。窄欄會自動調整。"
+      },
       "title": "外觀",
       "modeLabel": "顯示模式",
       "appIcon": {
@@ -2431,6 +2440,10 @@
       }
     },
     "windowBehavior": {
+      "trayCard": {
+        "label": "系統匣懸浮卡片",
+        "hint": "將滑鼠停在 Cindy 系統匣圖示上，即可查看剩餘配額和未讀任務。"
+      },
       "menubar": {
         "label": "在選單列顯示餘量",
         "hint": "在 macOS 選單列放一個 Cindy 圖示，點開查看訂閱餘量、Cindy 餘額和今天的用量。"
@@ -2776,7 +2789,8 @@
         "errorBusy": "已有一次上傳正在進行，請稍候",
         "errorFailed": "日誌上傳失敗，請檢查網路後重試",
         "unavailableNotConfigured": "當前版本未配置日誌上傳。",
-        "unavailableNoConsent": "需要先同意《隱私政策》。"
+        "unavailableNoConsent": "需要先同意《隱私政策》。",
+        "consentPrompt": "上傳前請閱讀<policy>《隱私政策》</policy>並<accept>同意</accept>。"
       },
       "openLogsDirError": "開啟日誌目錄失敗",
       "autoUpdateLabel": "空閒時自動安裝更新",
@@ -3378,6 +3392,7 @@
       "description": "把其他 AI 程式設計工具裡的任務接到 Cindy 接著做。只讀取原始記錄，不會改動它們。",
       "rescan": "重新掃描",
       "allSources": "全部來源",
+      "sourceFilterAria": "來源",
       "search": "搜尋任務或資料夾",
       "projectFilter": "只看 {{name}}",
       "clearProjectFilter": "顯示全部專案",
@@ -5137,6 +5152,7 @@
       "formHint": "使用者 ID 是純數字；私聊 @userinfobot 可以查到自己的 ID。",
       "connect": "連線",
       "connectingAction": "連線中…",
+      "connectTimedOut": "連線逾時，請重試",
       "errorCode": {
         "invalid-token": "Bot Token 無效或已被重置，請重新填寫",
         "provider-api": "Telegram 服務返回錯誤，請稍後重試",
@@ -5866,7 +5882,8 @@
         "title": "自動操作瀏覽器",
         "description": "一個 Agent 專用的獨立瀏覽器，與你日常的 Chrome 互不影響",
         "toggleAria": "切換瀏覽器自動化",
-        "toggleHint": "僅對新建的 Agent 會話生效",
+        "toggleHint": "此專案的瀏覽器設定在該專案的 Agent 會話啟動或重新啟動時生效。",
+        "userDefaultToggleHint": "變更瀏覽器預設值後，Cindy 會在本機 Codex 閒置時自動重新載入。原任務和對話記錄會保留。Codex 會重新讀取所有內建工具設定，並優先採用專案覆蓋。Pi 等其他 Agent 在下次啟動或重新啟動時採用瀏覽器預設值。",
         "noProjectHint": "從專案任務中開啟「設定」可針對該專案開關瀏覽器自動化。",
         "detected": "已偵測到 {{browser}}",
         "notDetected": "未偵測到本機瀏覽器。安裝 Chrome 後即可使用瀏覽器自動化。",
@@ -6150,7 +6167,7 @@
       "description": "設定 Agent 會話預設值，或為指定專案新增覆蓋。專案設定優先於使用者預設值。",
       "empty": "暫無可用的工具。",
       "toggleAria": "切換 {{name}} 工具",
-      "toggleHint": "變更僅對新建或重啟的 Agent 會話生效，正在執行的 Agent 會話不受影響。",
+      "toggleHint": "新建或重新啟動的 Agent 會話會採用這裡的工具設定。",
       "loadFailed": "載入工具列表失敗",
       "scopePicker": {
         "ariaLabel": "切換內建工具設定的作用域",
@@ -8165,6 +8182,7 @@
           "official": "官方",
           "community": "社群"
         },
+        "communityDisclaimer": "此插件由社群作者開發與維護，Cindy 已審核這個版本，但無法保證插件在所有使用情境下都安全。",
         "publisherDescription": {
           "official": "由 Cindy 官方發布及維護",
           "community": "由社群開發者發布及維護",
@@ -8278,7 +8296,7 @@
             "authTitle": "私有倉庫",
             "authBody": "認證完全依賴系統的 Git 設定，Cindy 不儲存任何 Git 憑證。SSH 方式：本機已設定可用的 key；若組織開啟了 SAML SSO，還需在 GitHub 的 SSH key 設定裡為該組織點 Configure SSO 授權。HTTPS 方式：使用 Personal Access Token，並由系統 credential helper 儲存。",
             "rulesTitle": "安裝規則",
-            "rulesBody": "插件 id 全域唯一、先裝先得——與已安裝插件衝突時會明確提示。id 使用官方保留字首（{{reservedGhostIdPrefixes}}）的插件，無法透過拖入、選取檔案或自訂插件市場安裝。插件宣告的權限會在詳情頁展示；點選安裝後直接完成安裝並自動開啟，不再額外彈窗確認權限。",
+            "rulesBody": "插件 id 全域唯一、先裝先得——與已安裝插件衝突時會明確提示。id 使用官方保留字首（{{reservedGhostIdPrefixes}}）的插件，無法透過拖入、選取檔案或自訂插件市場安裝。插件宣告的權限會顯示在詳情頁。首次手動安裝時，Cindy 會請你確認插件要求的權限。安裝完成後，插件會自動啟用。",
             "copy": "複製指南",
             "copied": "指南已複製到剪貼簿。",
             "copyFailed": "複製失敗，請重試。"
@@ -8392,6 +8410,8 @@
         "installMeta": "版本 {{version}} · {{source}}",
         "updateMeta": "版本 {{from}} → {{to}} · {{source}}",
         "installDescription": "確認後才會安裝，安裝好後立即啟用，可隨時在插件頁停用或解除安裝。",
+        "customMarketSourceNotice": "請確認你信任這個市場，再核對插件要求的權限。",
+        "localFileSourceNotice": "請確認檔案來自你信任的來源，再繼續安裝。",
         "updateDescription": "確認後才會更新；在此之前舊版本照常可用。",
         "grantsTitle": "安裝後它將擁有：",
         "noPermissions": "這個插件沒有宣告額外權限。",
@@ -8634,6 +8654,8 @@
         "liveScreenDetail": "透過遠端桌面，你的手機或其他電腦可以檢視它提供的裝置畫面（例如模擬器）並直接觸控、按鍵和輸入文字。只在你從這些裝置開啟時連線，不會開啟電腦的其他內容。",
         "preview": "可在右側欄瀏覽器中開啟以下網站的預覽頁面",
         "previewDetail": "只能開啟下方列出的網站；每次開啟都會提示是哪個插件開啟的。",
+        "fileOpener": "你在 Cindy 裡開啟以下類型的檔案時，由它開啟",
+        "fileOpenerDetail": "插件會取得檔案的完整路徑，代替系統預設應用程式開啟它；無法開啟時仍使用預設應用程式。可以在插件詳情中關閉。",
         "browserExtension": "可讓它自帶的瀏覽器擴充功能連線到 Cindy",
         "browserNativeHost": "可註冊瀏覽器連線「{{name}}」",
         "browserNativeHostDetail": "註冊的程式在沙箱外執行，依你的系統帳號與系統授權存取本機。",
@@ -8875,6 +8897,8 @@
         "configurationTitle": "組態",
         "sidebarEntryTitle": "導航入口",
         "showInSidebar": "顯示在左側導航",
+        "fileOpenerTitle": "用這個插件開啟檔案",
+        "fileOpenerDescription": "在 Cindy 裡開啟 {{extensions}} 檔案時，改用 {{name}} 開啟，不再使用系統預設應用程式。其他電腦上的檔案仍以預設應用程式開啟。",
         "sidebarEntryDescription": "開啟後，「{{title}}」會出現在左側導航，和「自動化」「插件」並列。放在最外層還是收進「更多」，可在「更多 → 自訂」中調整。隱藏入口不會停用插件。",
         "openTool": "檢視 Tool {{name}} 的詳情",
         "noToolDescription": "該 Tool 暫無描述。",
@@ -12471,6 +12495,8 @@
       "transferBusy": "{{name}} 還在回覆，等這一輪結束再換電腦",
       "targetUnavailable": "「{{device}}」現在無法使用，它需要上線並開啟遠端控制",
       "targetOutdated": "「{{device}}」上的 Cindy 版本較舊，還不能執行「{{name}}」，請先在那台電腦上更新 Cindy",
+      "skillTargetOutdated": "「{{name}}」有技能正文超過 64 KB，「{{device}}」上的舊版 Cindy 無法接收。請先更新那台電腦上的 Cindy，再更換主力電腦。夥伴仍留在原電腦",
+      "skillTargetOutdated_skill": "「{{device}}」上的舊版 Cindy 無法接收技能「{{slug}}」（正文 {{bodyBytes, number}} 位元組，超過 64 KB）。「{{name}}」仍在原電腦上執行。請在目標電腦上更新 Cindy，再更換主力電腦。",
       "targetOutdatedItem": "換到「{{device}}」· 舊版 Cindy",
       "targetOutdatedMeta": "舊版 Cindy",
       "olderTargetNote": "「{{device}}」上是舊版 Cindy，{{name}} 在那裡按舊方式執行：對話記錄照常同步，專案規則和自動化在那裡不生效。",
@@ -12703,6 +12729,7 @@
           "conflict": "這個機器人已經在這台電腦上使用了：在 設定 → IM 機器人 裡，或是在另一位夥伴那裡。",
           "botUnavailable": "{{name}} 目前無法使用，等它恢復後再試。",
           "connectFailed": "未能連線：{{reason}}",
+          "connectTimedOut": "連線逾時，請重試。",
           "failed": "未能完成，請稍後再試。",
           "personalBotGone": "設定 → IM 機器人 裡已經沒有這個機器人了，請改為填寫憑證。"
         },
@@ -15336,6 +15363,7 @@
       "codexHelperUnverified": "未能確認此任務的 cindy_helper 是否可用，任務結果可能無法回傳。",
       "requestFormatError": "應用程式送出的請求格式有誤，本次回覆未能完成。",
       "replyFailed": "回覆未完成",
+      "queuedSendRecovery": "上一則訊息尚未傳送。點選「重試」可原樣傳送。傳送新訊息會取代這一則。",
       "retryTitle": "重新傳送最後一則訊息",
       "cancelTitle": "關閉錯誤提示",
       "retry": "重試",
@@ -15463,6 +15491,7 @@
       "prCheck_rate-limit": "GitHub 暫時限制了 {{device}} 的請求頻率。已連續失敗 {{failures}} 次，下次自動檢查時間為 {{retry}}。",
       "prCheck_unknown": "{{device}} 上的 PR 檢查失敗，請查看執行詳情。已連續失敗 {{failures}} 次，下次自動檢查時間為 {{retry}}。",
       "precheck": "自動檢查暫時受阻。",
+      "preRunBlocked": "啟動前檢查未通過，本輪未開始。",
       "rateLimited": "自動檢查暫時受阻：請求限流。",
       "pluginMissing": "自動檢查暫時受阻：「{{name}}」插件未安裝，裝好後自動恢復。",
       "pluginMissingUnnamed": "自動檢查暫時受阻：需要的插件未安裝，裝好後自動恢復。",
@@ -16127,6 +16156,7 @@
       "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "目前的連線無法使用上一個模型，切換模型時的上下文壓縮失敗。",
       "MODEL_SELECTION_UNAVAILABLE": "所選模型在該供應商下已無法使用。請在設定中檢查連線，或重新選擇可用模型。",
       "MODEL_CATALOG_UNCONFIRMED": "暫時無法確認模型清單。已保留你選擇的模型，可重新整理模型清單後重試。",
+      "SNAPSHOT_DISPATCH_INTENT_TIMEOUT": "未傳送訊息，Cindy 未能及時確認安全記錄",
       "HARNESS_SWITCH_NOT_READY": "Harness 尚未完成切換。請查看錯誤詳細資訊，待 Harness 就緒後重試。",
       "DEVICE_LINK_BUSY": "遠端忙碌中，請稍後再試。",
       "REMOTE_DAEMON_CLOSED": "遠端連線中斷了，可能正在更新。這一輪已經結束，請重新傳送。",
@@ -16383,7 +16413,13 @@
       "open": "開啟任務「{{title}}」",
       "untitled": "未命名任務",
       "startedOne": "開了任務",
-      "handedToOne": "交給任務"
+      "handedToOne": "交給任務",
+      "status": {
+        "running": "執行中",
+        "needsAction": "待確認",
+        "error": "出錯",
+        "idle": "閒置"
+      }
     },
     "botTaskLetter": {
       "replied": "回信",
@@ -17615,15 +17651,15 @@
   "scheduler": {
     "prTrigger": {
       "fallback": "尚未接通 GitHub App 通知，仍會依排程檢查。",
-      "label": "PR",
-      "url": "PR 連結",
+      "label": "PR / MR",
+      "url": "PR 或 MR 連結",
       "condition": "觸發條件",
-      "any": "PR 有新動態",
+      "any": "有新動態",
       "merged": "PR 已合併",
       "review": "審查有新動態",
       "ci": "CI 狀態變更",
       "timed": "同時定時檢查",
-      "invalid": "請輸入完整的 GitHub PR 連結。"
+      "invalid": "請輸入完整的 GitHub PR 或 GitLab MR 連結。"
     },
     "presentation": {
       "status": {

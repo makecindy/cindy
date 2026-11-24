@@ -2123,6 +2123,9 @@ function forkSession(readyDb, args) {
     if (newMessageIds.length !== sourceMessages.length) {
       throw invalidArgs('newMessageIds length mismatch: expected ' + sourceMessages.length + ', got ' + newMessageIds.length);
     }
+    if (payload.sourceMessagesDigest != null && computeForkSourceMessagesDigest(sourceMessages) !== expectString(payload.sourceMessagesDigest, 'sourceMessagesDigest')) {
+      throw invalidArgs('Source history changed while preparing fork');
+    }
     const childCreatedAt = expectNumber(newSession.createdAt, 'newSession.createdAt');
     // Keep inherited history before the side-chat boundary, preserving relative order.
     const historyTimeOffset = newSession.source === 'side-chat'

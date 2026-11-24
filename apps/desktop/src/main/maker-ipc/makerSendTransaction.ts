@@ -407,6 +407,8 @@ export interface MakerSendTransactionDeps {
     opts?: {
       shouldBroadcast?: () => boolean;
       expectedClearBoundaryMs?: number | null;
+      /** Main-only identity for the recovery registered by this exact write. */
+      ownReconnectRecoverySignal?: AbortSignal;
     },
   ): Promise<unknown>;
   /** Resolve the actual /learn Skill winner once for this exact dispatch. */
@@ -2130,9 +2132,12 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                           : {}),
                       },
                     },
-                    persistUserMessage.shouldBroadcast ||
+                    reconnect || persistUserMessage.shouldBroadcast ||
                       persistUserMessage.expectedClearBoundaryMs !== undefined
                       ? {
+                          // This write supersedes earlier switch runs. Keep only the
+                          // registration made by this send, using its local identity.
+                          ...(reconnect ? { ownReconnectRecoverySignal: reconnect.signal } : {}),
                           ...(persistUserMessage.shouldBroadcast
                             ? { shouldBroadcast: persistUserMessage.shouldBroadcast }
                             : {}),

@@ -1,6 +1,10 @@
 import { useEffect, type RefObject } from 'react';
 
-import { isEditableKeyboardTarget, shouldCardShortcutYield } from '@/lib/editableKeyboardTarget';
+import {
+  editableTargetConsumesKey,
+  isEditableKeyboardTarget,
+  shouldCardShortcutYield,
+} from '@/lib/editableKeyboardTarget';
 
 /**
  * 设置页的 Esc 逐层返回（全平台同一套）。按键只在无人认领时才由设置页处理：
@@ -38,6 +42,8 @@ export function useSettingsEscape(
         !event.defaultPrevented &&
         !event.isComposing &&
         isEditableKeyboardTarget(target) &&
+        // 勾选框不收文字，与按钮一样不需要「先失焦」这一步。
+        editableTargetConsumesKey(target, event.key) &&
         root?.contains(target)
       ) {
         event.preventDefault();

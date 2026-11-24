@@ -2,6 +2,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { SessionSendResult } from '@cindy/maker-core';
+import { WechatIlinkError } from '@cindy/wechat-ilink';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -42,6 +43,7 @@ const mockState = vi.hoisted(() => ({
     sendMarkdownText: vi.fn(async () => ({ messageId: 'om_companion_text' })),
     sendFile: vi.fn(async () => ({ ok: true, messageId: 'om_companion_file' })),
   },
+  wechat: { sendText: vi.fn() },
 }));
 
 vi.mock('electron', () => ({
@@ -98,6 +100,7 @@ vi.mock('../../maker-ipc/rewind.js', () => ({ commitTaskRewind: vi.fn() }));
 
 vi.mock('../../im/index.js', () => ({
   feishuIm: mockState.personalFeishu,
+  wechatIm: mockState.wechat,
 }));
 
 vi.mock('../../im/shared/botImConnectionRuntime', () => ({
@@ -149,9 +152,10 @@ import {
   resolveCollabDispatchResult,
 } from '../../maker-ipc/collabSendOutcome.js';
 import { createDesktopMcpProviders } from '../mcp-providers.js';
+import * as companionCloud from '../../companion-cloud/runtime.js';
 import { createDbClient } from '../../localDb/client/DbClient.js';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current.js';
-import type { FeishuBotMcpHostDeps, XdtHelperMcpDeps } from '@cindy/mcps';
+import type { FeishuBotMcpHostDeps, WechatBotMcpHostDeps, XdtHelperMcpDeps } from '@cindy/mcps';
 import { beginAppSessionBoundary, commitVolatileAppSession, ownerScopedUserDataPath } from '../../appSessionState.js';
 import * as userDataPath from '../../userDataPath.js';
 import { createPluginRegistry, resetPluginRegistry } from '../../maker-host/plugins/index.js';
@@ -166,6 +170,33 @@ const botCapabilities = {
   list: vi.fn(async () => ({ ok: true as const, capabilities: [] })),
   select: vi.fn(async () => ({ ok: true as const, joined: true, effective: 'next-turn' as const })),
 };
+
+// #7791, unit: the actual Desktop provider must preserve a rejected send's
+// numeric code in both the MCP result and the log. The iLink tests stop at
+// the thrown error, and cannot catch the Desktop log losing a nonzero ret.
+it('records the same safe iLink rejection reason in the text result and log', async () => {
+  mockState.wechat.sendText.mockRejectedValueOnce(
+    new WechatIlinkError('SEND_REJECTED', 'private response detail', true, { ret: 1205 }),
+  );
+  createDesktopMcpProviders({
+    botCapabilities,
+    getMakerMemoryManager: vi.fn(),
+    lspPool: {} as never,
+    pluginRegistry: { isEnabled: () => false, getPlugins: () => [] } as never,
+    invokeRemote: vi.fn(),
+  });
+  const wechat = mockState.capturedProvidersConfig!.wechatBot as WechatBotMcpHostDeps;
+
+  expect(await wechat.sendMessage('fixture-peer', 'hello')).toEqual({
+    ok: false,
+    reason: 'SEND_REJECTED:1205',
+  });
+  expect(mockState.logger.warn).toHaveBeenLastCalledWith(
+    'sendMessage failed target=...%s detail=%s',
+    'ure-peer',
+    'SEND_REJECTED:1205',
+  );
+});
 
 // #9940, unit: exercise the real Desktop provider gate, registry factory and
 // settings reader across owner commits. Existing registry tests only wrap a
@@ -313,6 +344,21 @@ describe('collab send outcome semantics', () => {
     mockState.invitationInput = null;
     mockState.invitationOwner = true;
     vi.clearAllMocks();
+  });
+
+  // #12112, unit: a move requested in chat must surface the same skill and upgrade action as the settings UI.
+  it('explains an incompatible skill when the owner moves the buddy from chat', async () => {
+    const active = vi.spyOn(companionCloud, 'activeCompanionCloud');
+    try {
+      vi.mocked(companionCloud.activeCompanionCloud, { partial: true }).mockReturnValue({ switchHome: vi.fn().mockResolvedValue({
+        ok: false, code: 'SKILL_TARGET_OUTDATED', oversizedSkill: { slug: 'research-paper-writing', bodyBytes: 71_560 },
+      }) });
+      createDesktopMcpProviders({ botCapabilities, getMakerMemoryManager: vi.fn(), lspPool: {} as never,
+        pluginRegistry: { isEnabled: () => true, getPlugins: () => [] } as never, invokeRemote: vi.fn() });
+      const tools = (mockState.capturedProvidersConfig!.xdtHelper as XdtHelperMcpDeps).teammateHome!;
+      const result = await tools.move({ callerSessionId: 'task', teammateId: 'bot', targetDeviceId: 'laptop' });
+      expect(result).toMatchObject({ ok: false, errorCode: 'SKILL_TARGET_OUTDATED', message: expect.stringMatching(/research-paper-writing.*71560.*Update Cindy/) });
+    } finally { active.mockRestore(); }
   });
 
   // Unit: actual Desktop provider + worker DB. Host tests inject caller facts;
