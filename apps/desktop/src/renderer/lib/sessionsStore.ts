@@ -96,6 +96,7 @@ interface FilterRequest {
   replacesInitialLoad?: boolean;
   prependedIds?: Set<string>;
   taskTagCatalog?: TaskTag[];
+  taskTagPatches?: Map<string, TaskTag[]>;
   promise: Promise<void>;
   resolve: (replacement?: PromiseLike<void>) => void;
   reject: (reason: unknown) => void;
@@ -860,8 +861,9 @@ export const sessionsStore = {
         const { promise, resolve, reject } = Promise.withResolvers<void>();
         request = { fresh: opts?.fresh === true, promise, resolve, reject };
       } else {
-        // A continued read shares the waiters, but starts after the prior catalog push.
+        // A continued read shares the waiters, but starts after the prior tag pushes.
         delete request.taskTagCatalog;
+        delete request.taskTagPatches;
       }
       pending = request;
       inflight.set(filter, request);
@@ -877,9 +879,12 @@ export const sessionsStore = {
               // 仅保护这轮读取启动后新增且仍在桶里的行。已删除、归档或隐藏的行
               // 不会被补回，之后启动的读取也照常使用权威快照。
               const prependedIds = request.prependedIds;
-              let next = request.taskTagCatalog
-                ? reconcileSessionTags(data, request.taskTagCatalog)
-                : data;
+              const tagPatches = request.taskTagPatches;
+              let next = tagPatches ? data.map((row) => {
+                const tags = tagPatches.get(row.id);
+                return tags === undefined ? row : { ...row, tags };
+              }) : data;
+              if (request.taskTagCatalog) next = reconcileSessionTags(next, request.taskTagCatalog);
               if (prependedIds) {
                 const fetchedIds = new Set(data.map((row) => row.id));
                 const prepended = cache.get(filter)?.filter((row) =>
@@ -1468,6 +1473,12 @@ if (typeof window !== 'undefined') {
   if (sessionsPush) {
     sessionsPush.onPatched(({ sessionId, patch }, ownerStamp) => {
       if (!isDataOwnerPushCurrent(ownerStamp)) return;
+      // Association IDs must be restored before reconciling against the catalog.
+      if (patch.tags !== undefined) {
+        for (const request of inflight.values()) {
+          (request.taskTagPatches ??= new Map()).set(sessionId, patch.tags);
+        }
+      }
       applySessionRebalancePreferencePatch(sessionId, patch);
       sessionsStore.patchLocal(sessionId, patch);
       // A follow-up may have been absent from every loaded task list until its first worker committed.

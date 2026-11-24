@@ -279,3 +279,82 @@ it.each(['delete', 'rename'])('keeps the published tag %s through a stale list a
   expect({ duringTail, afterFailure }).toEqual({ duringTail: catalog, afterFailure: catalog });
   expect(reads).toHaveLength(3);
 });
+
+// Unit, #12471 review: Main publishes the association patch before the
+// catalog. Replaying only the catalog loses an association changed in flight.
+it.each([
+  { action: 'attach', attached: true, tailFails: false },
+  { action: 'attach', attached: true, tailFails: true },
+  { action: 'detach', attached: false, tailFails: false },
+  { action: 'detach', attached: false, tailFails: true },
+])('preserves $action during a stale list response (tail fails: $tailFails)', async ({ attached, tailFails }) => {
+  const tag = { id: 'tag', name: 'Tag', color: 'none', revision: 1, favoriteOrder: null } as const;
+  const changed = attached ? [tag] : [];
+  const stale = { id: 'tagged-task', status: 'active', tags: attached ? [] : [tag] } satisfies Partial<Session>;
+  setDataOwnerGeneration(owner.dataOwnerId, owner.ownerGeneration);
+  ipc.invoke.mockResolvedValueOnce([stale]);
+  await sessionsStore.ensureByFilter('active');
+  const view = renderHook(() => useCCSessions());
+  const tags = () => view.result.current.sessions[0]?.tags;
+  const reads: ReturnType<typeof Promise.withResolvers<Partial<Session>[]>>[] = [];
+  ipc.invoke.mockImplementation(() => {
+    const read = Promise.withResolvers<Partial<Session>[]>();
+    reads.push(read);
+    return read.promise;
+  });
+
+  emitRefresh();
+  act(() => {
+    ipc.listeners.get('local-db:sessions:patched')!({}, { sessionId: stale.id, patch: { tags: changed } }, owner);
+    ipc.listeners.get('local-db:task-tags:changed')!({}, { tags: [tag] }, owner);
+  });
+  expect(tags()).toEqual(changed);
+  expect(reads).toHaveLength(1);
+  await act(async () => { reads[0]!.resolve([stale]); });
+  expect(reads).toHaveLength(2);
+  const duringTail = tags();
+  await act(async () => {
+    if (tailFails) reads[1]!.reject(new Error('tail failed'));
+    else reads[1]!.resolve([{ ...stale, tags: changed }]);
+  });
+  const afterTail = tags();
+  emitRefresh();
+  await act(async () => { reads[2]!.resolve([stale]); });
+  expect(tags()).toEqual(stale.tags);
+  expect({ duringTail, afterTail }).toEqual({ duringTail: changed, afterTail: changed });
+  expect(reads).toHaveLength(3);
+});
+
+it.each(['account switch', 'deleted', 'archived'] as const)(
+  'does not replay a patched association across %s',
+  async (boundary) => {
+    const fixture = await loadOpenTask();
+    const tag = { id: 'tag', name: 'Tag', color: 'none', revision: 1, favoriteOrder: null } as const;
+    const sessionId = 'initial-0';
+    const patch = (value: Partial<Session>) =>
+      ipc.listeners.get('local-db:sessions:patched')!({}, { sessionId, patch: value }, owner);
+    emitRefresh();
+    patch({ tags: [tag] });
+    expect(sessionsStore.findById(sessionId)?.tags).toEqual([tag]);
+
+    if (boundary === 'account switch') {
+      setDataOwnerGeneration('other-owner', 2);
+      sessionsStore.reset();
+      const otherTask = { id: sessionId, status: 'active', tags: [] };
+      ipc.invoke.mockResolvedValueOnce([otherTask]);
+      await sessionsStore.ensureByFilter('active');
+      patch({ tags: [tag] });
+      await act(async () => { fixture.reads[0]!.finish(); });
+      expect(sessionsStore.findById(sessionId)).toEqual(otherTask);
+    } else {
+      patch({ status: boundary });
+      // The tail starts after the status write, so Main no longer lists this row.
+      ipc.invoke.mockResolvedValueOnce([]);
+      await act(async () => { fixture.reads[0]!.finish(); });
+      expect(sessionsStore.findById(sessionId)).toBeNull();
+      expect(ipc.invoke).toHaveBeenCalledTimes(3);
+    }
+    expect(fixture.pending).toBe(0);
+    expect(fixture.peak).toBe(1);
+  },
+);
