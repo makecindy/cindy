@@ -54,6 +54,18 @@ describe('cloud bot forms use native domain services', () => {
     ).rejects.toThrow('CONNECTION_FAILED');
     expect(save).toHaveBeenCalledWith({ token: 'invalid', ownerUserId: 'owner' });
   });
+  it('fails a new binding whose handshake timed out instead of waiting for a connection', async () => {
+    registerCloudImCall('telegramBot:get-status', () => ({ status: { kind: 'idle' } }));
+    // Native Telegram rolls the credentials back on a timeout, so the status never connects.
+    registerCloudImCall('telegramBot:set-config', () => ({
+      status: { kind: 'idle' },
+      saveTimedOut: true,
+    }));
+    const [entry] = await listPersonalBotManagement(caller, (id) => id === 'telegram');
+    await expect(
+      entry!.actions[0]!.run({ token: 'slow-token', ownerUserId: 'owner' }, execution),
+    ).rejects.toThrow('CONNECTION_FAILED');
+  });
   it('rejects a stale bot identity before disconnecting another connection', async () => {
     let appId = 'first';
     const disconnect = vi.fn(() => ({ ok: true }));

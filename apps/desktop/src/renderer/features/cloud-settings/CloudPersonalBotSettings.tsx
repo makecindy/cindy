@@ -376,6 +376,9 @@ export function CloudPersonalBotSettings({
                   : status,
             botUsername: remote?.botUsername ?? null,
             validationError,
+            // The draft is cleared on submit and a failed save is reported by the operation,
+            // including a handshake timeout, so there is no kept-input timeout state here.
+            saveTimedOut: false,
             isSaving: pending,
             isDisconnecting: false,
             isTogglingOnline: togglingOnline,

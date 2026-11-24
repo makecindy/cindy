@@ -207,7 +207,13 @@ export async function listPersonalBotManagement(
             execution,
           ),
         );
-        if (result.saveErrorStatus || result.verdict === 'error' || result.verdict === 'conflict')
+        // A timed-out new binding rolls its credentials back, so it never becomes connected.
+        if (
+          result.saveErrorStatus ||
+          result.saveTimedOut ||
+          result.verdict === 'error' ||
+          result.verdict === 'conflict'
+        )
           throw new Error('MANAGEMENT_CONNECTION_FAILED');
         await managementWait(async () => {
           const current = await read(execution),
