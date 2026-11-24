@@ -54,6 +54,22 @@ export interface TabGroupPanesInput {
   subagentsAvailable?: boolean;
 }
 
+/**
+ * `useTabGroupPanes` 交给 MainLayout 的两件事，都来自它已有的订阅与可用性投影：
+ * 右栏里还有没有全局具名页（无任务语境下的就绪来源），以及这一帧是不是刚刚关掉最后一个。
+ */
+export interface TabGroupPanesState {
+  /** 全局具名页（`/plugins` 等无任务语境下唯一的就绪来源）还在不在右栏。 */
+  namedGlobalPage: boolean;
+  /**
+   * 上一次提交还有全局具名页、这一次没有了：关掉最后一个全局具名页的自动收起。
+   * 面板要等 RightSidebarShell 的被动副作用才真正收起，而就绪（`globalViewAvailable`）
+   * 在这一帧就已经变 false；只看 `collapsed` 会把这次自动收起当成路由离开，
+   * 把用户亲手拉宽的窗口又收回去。
+   */
+  lastNamedGlobalPageClosed: boolean;
+}
+
 /** 纯函数:哪些边组当前有可见页签。 */
 export function presentEdgeTabGroups(input: {
   sessionTabs: readonly { id: string }[];
@@ -91,7 +107,7 @@ function ensurePaneInTree(groupId: EdgeTabGroupId): void {
  * 挂在主窗口(MainLayout):随任务桶 / 全局页签 / 组归属 / 弹出状态的变化维护
  * 边组 pane 的注册与树里的在场。
  */
-export function useTabGroupPanes(input: TabGroupPanesInput): boolean {
+export function useTabGroupPanes(input: TabGroupPanesInput): TabGroupPanesState {
   const {
     sessionId,
     enabled,
@@ -192,5 +208,13 @@ export function useTabGroupPanes(input: TabGroupPanesInput): boolean {
     };
   }, []);
   // MainLayout reuses this hook's existing subscriptions and availability projection.
-  return globalViewGroups.has('right');
+  const namedGlobalPage = globalViewGroups.has('right');
+  // 「刚关掉最后一个」只能在当场记：收起发生在被动副作用里，下一次渲染就读不到这个边沿了。
+  // ref 在提交后更新，所以 StrictMode 的重复渲染读到的是同一个旧值。
+  const seenNamedGlobalPage = useRef(false);
+  const lastNamedGlobalPageClosed = seenNamedGlobalPage.current && !namedGlobalPage;
+  useEffect(() => {
+    seenNamedGlobalPage.current = namedGlobalPage;
+  }, [namedGlobalPage]);
+  return { namedGlobalPage, lastNamedGlobalPageClosed };
 }

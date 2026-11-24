@@ -1222,7 +1222,7 @@ export function MainLayout() {
     setIsRightSidebarMaximized((v) => !v);
   }, []);
   // 左 / 上 / 下边页签组:按「组里有没有可见页签」注册 / 注销 pane,并保证树里有它。
-  const globalRightViewAvailable = useTabGroupPanes({
+  const { namedGlobalPage: globalRightViewAvailable, lastNamedGlobalPageClosed } = useTabGroupPanes({
     sessionId: rightSidebarSessionId,
     enabled: rsbWindow.loaded && !rsbDetached && !isSettingsRoute,
     // 离开聊天页(如 /plugins)时在聊天页出现过的组停放而不卸载,webview 不重载(#8081)。
@@ -2140,7 +2140,12 @@ export function MainLayout() {
               rightTabsSessionKey={rightSidebarSessionId ?? ''}
               // 关掉最后一个页签这类自动收起不还宽度；路由接管、分离到独立窗口、离开
               // 聊天视图才把宽度还给窗口（docs/dev-rules/desktop-development.md）。
-              rightTabsRetractOnUnready={isSettingsRoute || rsbDetached || !isRightSidebarCollapsed}
+              // 关掉最后一个全局具名页只是间接收起（面板要等 RightSidebarShell 的被动副作用
+              // 才收），那次渲染的就绪先消失不能按「离开就绪区间」处理，否则用户亲手拉宽的
+              // 窗口会被收回去（docs/dev-rules/desktop-development.md）。
+              rightTabsRetractOnUnready={
+                isSettingsRoute || rsbDetached || (!isRightSidebarCollapsed && !lastNamedGlobalPageClosed)
+              }
               rightTabsCollapsed={
                 !rightSidebarMounted || isRightSidebarCollapsed || rightSidebarForceCollapsed
               }
