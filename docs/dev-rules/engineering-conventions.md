@@ -314,7 +314,7 @@ PR 门禁必须在 Windows 上用多个并行分片（当前为 8 个）完整�
     `apps/desktop/src/main/__tests__/oauthResultPageGlossary.test.ts`。它的文案分散在
     若干函数里且要传 provider / brand 实参，测试用固定占位实参求值后再扫；占位值不含
     CJK 与标点，免得实参本身影响判定。
-  - desktop：`src/main/localDb/ipc/botRemoteEditors.ts`（远程伙伴编辑器的手写 13 语 catalog）→
+  - desktop：`src/main/localDb/ipc/botRemoteEditors.ts`（远程伙伴编辑器的手写 12 语 catalog）→
     `apps/desktop/src/main/__tests__/buddyTermShadowCopy.test.ts`；直接展开 catalog 的
     `fallback` 与 `translations`（含 `text()` 的位置参数语言），按 glossary 的 `forbidden` 判定；
     新增同类 catalog 时把展开函数接进这个测试。
