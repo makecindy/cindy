@@ -6268,22 +6268,23 @@ export function handleStreamEvent(
         state.streamingClientId &&
         event.persistId !== state.streamingClientId,
       );
-      // A child final can arrive while another SDK parent still owns the active row.
-      const finalParent = assistantMetaFields.parentToolUseId;
-      const independentChildFinal = Boolean(
+      // A final can arrive while another SDK parent still owns the active row.
+      const finalParent = incomingMeta?.parentUuid === null ? null : assistantMetaFields.parentToolUseId;
+      const independentFinal = Boolean(
         itemBoundary && isFinal && text &&
         event.source === 'claude-code' && state.remoteHostId === null &&
-        finalParent &&
+        finalParent !== undefined &&
         state.messages.some((message) =>
           message.clientId === state.streamingClientId &&
           message.role === 'assistant' && message.isStreaming &&
-          (!message.parentToolUseId || (!remoteIngress && message.parentToolUseId !== finalParent))),
+          (message.parentToolUseId ?? null) !== finalParent &&
+          (!remoteIngress || !message.parentToolUseId)),
       );
-      const textState = itemBoundary && !independentChildFinal ? finalizeStreamingInState(state) : state;
+      const textState = itemBoundary && !independentFinal ? finalizeStreamingInState(state) : state;
 
       if (isFinal) {
         // Confirmation of streamed text, or a non-streaming final burst.
-        if ((!textState.streamingClientId || independentChildFinal) && text) {
+        if ((!textState.streamingClientId || independentFinal) && text) {
           // Guard: if the last message is an assistant with identical content,
           // this is a duplicate isFinal event from the SDK — skip it.
           const last = textState.messages[textState.messages.length - 1];
@@ -6304,7 +6305,7 @@ export function handleStreamEvent(
 
           return {
             ...textState,
-            lastAgentMeta: independentChildFinal
+            lastAgentMeta: independentFinal
               ? textState.lastAgentMeta
               : incomingMeta ?? textState.lastAgentMeta,
             messages: [
@@ -8876,7 +8877,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
     }
 
     // Explicit root ownership is projected by the local Electron host only.
-    const displayEvent = ingress.remoteDeviceId && event.type === 'tool_use' && event.agentMeta?.parentUuid === null
+    const displayEvent = ingress.remoteDeviceId && (event.type === 'tool_use' || event.type === 'text') && event.agentMeta?.parentUuid === null
       ? { ...event, agentMeta: { ...event.agentMeta, parentUuid: undefined } }
       : event;
     dispatchStreamEventPayload(sessionId, displayEvent, persistId, resolvedContent, deferNotification, Boolean(ingress.remoteDeviceId));

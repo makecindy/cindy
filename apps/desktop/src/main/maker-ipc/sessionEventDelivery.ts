@@ -1,4 +1,4 @@
-import { CLAUDE_EXPLICIT_ROOT_TOOL_USE, type AgentEvent, type Session } from '@cindy/maker-core';
+import { CLAUDE_EXPLICIT_ROOT_BOUNDARY, type AgentEvent, type Session } from '@cindy/maker-core';
 
 import type { GitSnapshotCoordinator } from '../git-snapshot/gitSnapshotCoordinator.js';
 import { reserveTurnErrorPersistId } from '../messagePersistBroadcaster.desktop.js';
@@ -151,8 +151,8 @@ export function deliverSessionEvent(
     });
   } else {
     const payload = { sessionId: session.id, event: broadcastEvent, persistId, resolvedContent };
-    if (event.type === 'tool_use' && event.source === 'claude-code' && !session.remoteHostId &&
-        event[CLAUDE_EXPLICIT_ROOT_TOOL_USE] === true) {
+    if ((event.type === 'tool_use' || event.type === 'text') && event.source === 'claude-code' && !session.remoteHostId &&
+        event[CLAUDE_EXPLICIT_ROOT_BOUNDARY] === true) {
       deps.broadcastToAllWindows(MAKER_PUSH.EVENT, payload, undefined, {
         ...payload,
         event: { ...broadcastEvent, agentMeta: { ...broadcastEvent.agentMeta, parentUuid: null } },

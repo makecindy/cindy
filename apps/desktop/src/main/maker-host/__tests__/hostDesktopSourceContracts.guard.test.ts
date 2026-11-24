@@ -773,7 +773,10 @@ describe('event types the desktop pipeline acts on, classified for the Host', ()
       host: 'turn-executor.mjs context snapshot (shared), background activity',
       gaps: ['smaller difference: running=false alone does not write the turn end time'],
     },
-    text: { host: 'history.event (sessionEventStreamCore, shared); turn-executor.mjs routeStandaloneTextEvent (sessionEventPreparationSteps.ts, shared)' },
+    text: {
+      host: 'history.event (sessionEventStreamCore, shared); turn-executor.mjs routeStandaloneTextEvent (sessionEventPreparationSteps.ts, shared)',
+      platform: 'sessionEventDelivery.ts projects confirmed Claude root finals for local Electron windows only',
+    },
     tool_use: {
       host: 'history.event (sessionEventStreamCore, shared); turn-executor.mjs publishes the redacted tool event',
       platform: 'sessionEventDelivery.ts projects confirmed Claude root ownership for local Electron windows only',

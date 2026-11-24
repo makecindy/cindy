@@ -2304,14 +2304,17 @@ describe('makerChatStore text delta batching', () => {
     { label: 'root and child', finalParent: 'toolu_b', preserve: true },
     { label: 'parallel children', activeParent: 'toolu_a', finalParent: 'toolu_b', preserve: true },
     { label: 'same child', activeParent: 'toolu_a', finalParent: 'toolu_a', preserve: false },
+    { label: 'proven root final during child', activeParent: 'toolu_a', finalParent: null, preserve: true },
+    { label: 'proven root final during root', finalParent: null, preserve: false },
+    { label: 'remote root final during child', remote: true, activeParent: 'toolu_a', finalParent: null, preserve: false },
     { label: 'legacy final', activeParent: 'toolu_a', preserve: false },
     { label: 'another engine', source: 'codex', activeParent: 'toolu_a', finalParent: 'toolu_b', preserve: false },
     { label: 'remote children', remote: true, activeParent: 'toolu_a', finalParent: 'toolu_b', preserve: false },
   ])('handles an independent final during a live stream ($label)', ({ activeParent, finalParent, preserve, source = 'claude-code', remote }) => {
     if (remote) remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
-    const send = (persistId: string, text: string, isFinal: boolean, parentUuid?: string) => {
+    const send = (persistId: string, text: string, isFinal: boolean, parentUuid?: string | null) => {
       const payload = { sessionId: SESSION_ID, persistId, event: {
-        type: 'text', source, data: { text, isFinal }, ...(parentUuid ? { agentMeta: { parentUuid } } : {}),
+        type: 'text', source, data: { text, isFinal }, ...(parentUuid !== undefined ? { agentMeta: { parentUuid } } : {}),
       } };
       if (remote) onRemotePush?.({ deviceId: 'device-1', channel: 'maker:event', payload });
       else onEvent?.(payload);
@@ -2333,7 +2336,7 @@ describe('makerChatStore text delta batching', () => {
       expect.objectContaining({ clientId: 'active', content: preserve ? 'prefix suffix' : 'prefix', isStreaming: preserve }),
       expect.objectContaining({ clientId: 'finished', content: 'complete reply', isStreaming: false }),
     ]));
-    expect(rows.find(row => row.clientId === 'finished')?.parentToolUseId).toBe(finalParent);
+    expect(rows.find(row => row.clientId === 'finished')?.parentToolUseId).toBe(finalParent ?? undefined);
   });
 
   // #1743 / unit: a child tool boundary must seal only the matching live row.

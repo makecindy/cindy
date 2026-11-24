@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { CLAUDE_EXPLICIT_ROOT_TOOL_USE, type AgentEvent, type AgentTaskUpdateEventData } from '../../../types/events.js';
+import { CLAUDE_EXPLICIT_ROOT_BOUNDARY, type AgentEvent, type AgentTaskUpdateEventData } from '../../../types/events.js';
 import { createAsyncQueue } from '../../shared/async-queue.js';
 import { UsageTracker } from '../../shared/usage-tracker.js';
 import {
@@ -63,22 +63,24 @@ async function collect(queue: ReturnType<typeof createAsyncQueue<AgentEvent>>): 
 
 describe('Claude Code assistant text streaming contract', () => {
   // #1743 / unit: an explicit root SDK envelope and a legacy envelope
-  // must remain distinguishable for local tool boundaries after translation.
+  // must remain distinguishable for local tool and text boundaries after translation.
   it.each([
     [null, true, undefined],
     [undefined, undefined, undefined],
     ['toolu_child', undefined, 'toolu_child'],
-  ] as const)('retains only explicit tool ownership from the SDK wrapper (%s)', async (parent, knownRoot, expectedParent) => {
+  ] as const)('retains only explicit boundary ownership from the SDK wrapper (%s)', async (parent, knownRoot, expectedParent) => {
     const queue = createAsyncQueue<AgentEvent>();
     translateSdkMessage({
       type: 'assistant',
       ...(parent !== undefined ? { parent_tool_use_id: parent } : {}),
-      message: { content: [{ type: 'tool_use', id: 'toolu_read', name: 'Read', input: {} }] },
+      message: { content: [{ type: 'text', text: 'final' }, { type: 'tool_use', id: 'toolu_read', name: 'Read', input: {} }] },
     }, queue, createCtx());
-    const tool = (await collect(queue)).find(event => event.type === 'tool_use');
-    expect(tool).toBeDefined();
-    expect(tool?.[CLAUDE_EXPLICIT_ROOT_TOOL_USE]).toBe(knownRoot);
-    expect(tool?.agentMeta?.parentUuid).toBe(expectedParent);
+    const events = (await collect(queue)).filter(event => event.type === 'text' || event.type === 'tool_use');
+    expect(events.map(event => event.type)).toEqual(['text', 'tool_use']);
+    for (const event of events) {
+      expect(event[CLAUDE_EXPLICIT_ROOT_BOUNDARY]).toBe(knownRoot);
+      expect(event.agentMeta?.parentUuid).toBe(expectedParent);
+    }
   });
 
   it.each([

@@ -16,7 +16,7 @@ import { collectNativeToolMedia, type NativeToolMedia } from '@cindy/maker-share
  * 跨 stream_event 兜底 (老链路 agentManager.ts:2214 同款)。
  */
 
-import { CLAUDE_EXPLICIT_ROOT_TOOL_USE, type AgentEvent, type AgentTaskStatus, type AgentTaskUsage, type AgentTaskUpdateEventData } from '../../types/events.js';
+import { CLAUDE_EXPLICIT_ROOT_BOUNDARY, type AgentEvent, type AgentTaskStatus, type AgentTaskUsage, type AgentTaskUpdateEventData } from '../../types/events.js';
 import { normalizeWorkflowProgressEntries } from '@cindy/maker-shared/agent-task';
 import {
   extractNonSecretErrorSignals,
@@ -1596,6 +1596,7 @@ function handleAssistant(
           data: { text: visibleText, isFinal: true },
           source: 'claude-code',
           agentMeta: assistantMeta,
+          ...(msg.parent_tool_use_id === null ? { [CLAUDE_EXPLICIT_ROOT_BOUNDARY]: true } : {}),
         });
       }
     } else if (block.type === 'tool_use') {
@@ -1620,7 +1621,7 @@ function handleAssistant(
         },
         source: 'claude-code',
         agentMeta: assistantMeta,
-        ...(msg.parent_tool_use_id === null ? { [CLAUDE_EXPLICIT_ROOT_TOOL_USE]: true } : {}),
+        ...(msg.parent_tool_use_id === null ? { [CLAUDE_EXPLICIT_ROOT_BOUNDARY]: true } : {}),
       });
     } else if (block.type === 'thinking' && typeof block.thinking === 'string') {
       const cur = ctx.rt.currentThinking;
