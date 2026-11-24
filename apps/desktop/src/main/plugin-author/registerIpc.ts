@@ -9,7 +9,7 @@ import { z } from 'zod';
 import { parseVisibilityAudience, PluginProtocolError } from '@cindy/plugin-protocol';
 
 import { isIpcError, isIpcErrorCode } from '../../shared/ipc-errors.js';
-import { visibilityAudienceSchema } from '../../shared/pluginAuthor.js';
+import { COLLEAGUE_SEARCH_MAX_LENGTH, visibilityAudienceSchema } from '../../shared/pluginAuthor.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { ServerApiError } from '../serverApiClient.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
@@ -95,7 +95,7 @@ export function createPluginAuthorPickerHandlers(api: () => PluginAuthorApi) {
       return api().departmentMembers(input.departmentId, input.page);
     },
     searchColleagues: (raw: unknown) => {
-      const query = z.string().trim().min(1).max(254).parse(raw);
+      const query = z.string().trim().min(1).max(COLLEAGUE_SEARCH_MAX_LENGTH).parse(raw);
       return api().searchColleagues(query);
     },
     lookupColleagues: (raw: unknown) => {

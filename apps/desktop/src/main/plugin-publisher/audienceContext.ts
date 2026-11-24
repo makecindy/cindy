@@ -10,6 +10,8 @@ import { ORGANIZATION_ROLES, parseVisibilityAudience, type VisibilityAudience } 
 
 import {
   COLLEAGUE_SEARCH_LIMIT,
+  COLLEAGUE_SEARCH_MAX_LENGTH,
+  isAudienceEmail,
   type AuthorMemberReference,
   type AuthorVisibilityAudience,
   type Colleague,
@@ -25,8 +27,6 @@ import {
 import type { PluginAuthorApi } from '../plugin-author/api.js';
 import { ServerApiError } from '../serverApiClient.js';
 
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const COLLEAGUE_SEARCH_MAX_LENGTH = 254;
 const ALL: AuthorVisibilityAudience = { type: 'all' };
 
 export interface AudienceContextDeps {
@@ -119,7 +119,7 @@ export async function resolveAudienceHint(
     const lower = text.toLowerCase();
     // Text shaped like an email is an email: only an exact email matches, never a display name
     // that happens to equal it.
-    const isEmail = EMAIL_PATTERN.test(text);
+    const isEmail = isAudienceEmail(text);
     const matches = isEmail
       ? found.filter((member) => member.email?.toLowerCase() === lower)
       : found.filter((member) => member.displayName?.trim() === text);
@@ -141,7 +141,7 @@ export async function resolveAudienceHint(
 
   for (const text of hint.emails) {
     const lower = text.toLowerCase();
-    if (EMAIL_PATTERN.test(lower)) {
+    if (isAudienceEmail(lower)) {
       if (!emails.includes(lower)) emails.push(lower);
     } else {
       unresolved.push({ kind: 'email', text, reason: 'not_found' });

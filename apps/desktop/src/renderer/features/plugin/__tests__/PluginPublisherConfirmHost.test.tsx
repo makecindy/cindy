@@ -196,4 +196,34 @@ describe('PluginPublisherConfirmHost', () => {
     expect(await within(picker).findByText(`${audience}.picker.addEmail`)).toBeTruthy();
     expect(within(picker).getByRole('button', { name: `${audience}.picker.retry` })).toBeTruthy();
   });
+
+  // Greptile review on #12469: adding by email waited for a successful colleague search. Minimal
+  // failing input: the search fails, or the email is longer than the search accepts (254) but
+  // within the protocol limit (320) — the email can still be added, and the long one is never
+  // sent to the search.
+  it('adds an email when the colleague search fails or cannot take the text', async () => {
+    const author = (window as unknown as { electronAPI: { pluginAuthor: Record<string, ReturnType<typeof vi.fn>> } }).electronAPI.pluginAuthor;
+    author.searchColleagues.mockRejectedValue(new Error('[NETWORK_UNREACHABLE] offline'));
+    render(<PluginPublisherConfirmHost />);
+    const dialog = deliver(request({
+      kind: 'editable', isNew: true, current: { type: 'all' }, initial: { type: 'all' }, members: [], unresolved: [],
+    }));
+    fireEvent.click(within(dialog).getByRole('radio', { name: `${audience}.specified` }));
+    fireEvent.click(within(dialog).getByRole('button', { name: `${audience}.choose` }));
+    const picker = await screen.findByRole('dialog', { name: `${audience}.picker.title` });
+    fireEvent.change(within(picker).getByRole('searchbox'), { target: { value: 'guest@partner.com' } });
+    expect(await within(picker).findByText(`${audience}.picker.addEmail`)).toBeTruthy();
+    const calls = author.searchColleagues.mock.calls.length;
+    const long = `${'a'.repeat(260)}@partner.com`;
+    fireEvent.change(within(picker).getByRole('searchbox'), { target: { value: long } });
+    expect(await within(picker).findByText(`${audience}.picker.addEmail`)).toBeTruthy();
+    // Never searched: the member group says "no members" at once instead of loading or failing.
+    expect(within(picker).getByText(`${audience}.picker.noMembers`)).toBeTruthy();
+    expect(within(picker).queryByRole('alert')).toBeNull();
+    expect(author.searchColleagues.mock.calls.length).toBe(calls);
+    expect(author.searchColleagues).not.toHaveBeenCalledWith(long);
+    // Beyond the protocol's 320 characters it is not an email the server accepts.
+    fireEvent.change(within(picker).getByRole('searchbox'), { target: { value: `${'a'.repeat(320)}@partner.com` } });
+    await waitFor(() => expect(within(picker).queryByText(`${audience}.picker.addEmail`)).toBeNull());
+  });
 });

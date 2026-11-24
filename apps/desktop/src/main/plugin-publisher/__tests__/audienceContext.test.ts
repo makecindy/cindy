@@ -154,6 +154,22 @@ describe('loadPublisherAudienceContext', () => {
       .resolves.toMatchObject({ initial: { type: 'matchAny', membershipIds: ['m-boss'] }, unresolved: [] });
   });
 
+  // Greptile review on #12469 (same family as the picker): an email the user named in the
+  // conversation must not depend on the colleague search. Minimal failing input: the search fails,
+  // or the email is longer than the search accepts (254) but within the protocol limit (320) — it
+  // is still preselected as an email, and the long one is never searched.
+  it('keeps emails from the conversation when the colleague search fails or cannot take them', async () => {
+    const long = `${'a'.repeat(260)}@partner.com`;
+    const offline = deps({ searchColleagues: vi.fn(async () => { throw new Error('offline'); }) });
+    await expect(loadPublisherAudienceContext(offline,
+      { ...input, hint: { members: ['guest@partner.com', long], emails: ['other@partner.com'] } }, signal))
+      .resolves.toMatchObject({
+        initial: { type: 'matchAny', emails: ['guest@partner.com', long, 'other@partner.com'] }, unresolved: [],
+      });
+    expect(offline.api.searchColleagues).toHaveBeenCalledTimes(1);
+    expect(offline.api.searchColleagues).toHaveBeenCalledWith('guest@partner.com', signal);
+  });
+
   it('preselects what the user said and reports names it cannot match to exactly one', async () => {
     const context = await loadPublisherAudienceContext(deps(), {
       ...input,

@@ -27,8 +27,6 @@ export const ALL_MEMBERS_DRAFT: AudienceDraft = {
   mode: 'all', departmentIds: [], members: [], emails: [], roles: [],
 };
 
-export const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
 export function memberLabel(member: AudienceMember): string {
   return member.displayName || member.email || member.membershipId;
 }

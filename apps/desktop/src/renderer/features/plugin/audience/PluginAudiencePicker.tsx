@@ -14,13 +14,18 @@ import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
-import type { AuthorDepartment, Colleague, PluginAuthorRendererApi } from '../../../../shared/pluginAuthor';
+import {
+  COLLEAGUE_SEARCH_MAX_LENGTH,
+  isAudienceEmail,
+  type AuthorDepartment,
+  type Colleague,
+  type PluginAuthorRendererApi,
+} from '../../../../shared/pluginAuthor';
 import {
   childDepartments,
   departmentAncestors,
   departmentPath,
   draftItemCount,
-  EMAIL_PATTERN,
   indexDepartments,
   memberLabel,
   removeRole,
@@ -94,9 +99,14 @@ export function PluginAudiencePicker({
       setSearchFailed(false);
       return;
     }
+    setSearchFailed(false);
+    // The colleague search rejects longer text, and such text cannot match anyone anyway.
+    if (keyword.length > COLLEAGUE_SEARCH_MAX_LENGTH) {
+      setFound([]);
+      return;
+    }
     let cancelled = false;
     setFound(null);
-    setSearchFailed(false);
     const timer = setTimeout(() => {
       api.searchColleagues(keyword).then(
         (members) => { if (!cancelled) setFound(members.filter((member) => member.active)); },
@@ -257,8 +267,10 @@ export function PluginAudiencePicker({
       );
     }
     const lower = keyword.toLowerCase();
-    const emailCandidate = EMAIL_PATTERN.test(keyword) && found !== null &&
-      !found.some((member) => member.email?.toLowerCase() === lower) ? lower : null;
+    // Adding by email depends only on the text: a failed or skipped colleague search does not
+    // hide it (Greptile review on #12469). Once a search finds the member, the member row is used.
+    const emailCandidate = isAudienceEmail(keyword) && (found !== null || searchFailed) &&
+      !found?.some((member) => member.email?.toLowerCase() === lower) ? lower : null;
     const matchedDepartments = (departments ?? []).filter((department) => department.name.toLowerCase().includes(lower));
     return (
       <>

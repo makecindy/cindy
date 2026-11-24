@@ -7,7 +7,7 @@
  * Responses are parsed leniently: unknown fields are dropped and statistics stay decimal strings
  * (missing = unavailable, not zero).
  */
-import type { ManagedReleaseReview } from '@cindy/plugin-protocol';
+import { VISIBILITY_AUDIENCE_EMAIL_MAX_LENGTH, type ManagedReleaseReview } from '@cindy/plugin-protocol';
 import { z } from 'zod';
 
 const id = z.string().min(1).max(256);
@@ -224,6 +224,17 @@ export const PLUGIN_AUTHOR_IPC_ERROR_CODES = [
 /** Server page sizes; used to tell whether another page exists. */
 export const COLLEAGUES_PAGE_SIZE = 50;
 export const COLLEAGUE_SEARCH_LIMIT = 20;
+/** `/api/me/colleagues?q=` accepts at most this many characters; longer text is never searched. */
+export const COLLEAGUE_SEARCH_MAX_LENGTH = 254;
+
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+/**
+ * Whether text can be added to an audience as an email: shaped like an email and within the
+ * protocol's length limit. Decided on its own, never by whether a colleague search succeeded.
+ */
+export function isAudienceEmail(text: string): boolean {
+  return text.length <= VISIBILITY_AUDIENCE_EMAIL_MAX_LENGTH && EMAIL_PATTERN.test(text);
+}
 export const COLLEAGUE_LOOKUP_MAX = 100;
 
 /**

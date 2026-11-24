@@ -27,7 +27,8 @@ export type VisibilityAudience =
 export const VISIBILITY_AUDIENCE_MAX_ITEMS = 500;
 const MEMBERSHIP_ID_MAX_LENGTH = 128;
 const DEPARTMENT_ID_MAX_LENGTH = 191;
-const EMAIL_MAX_LENGTH = 320;
+/** Longest email the server accepts in an audience; it checks no other email format. */
+export const VISIBILITY_AUDIENCE_EMAIL_MAX_LENGTH = 320;
 
 function stringArray(value: unknown, path: string, maxItemLength: number): string[] | undefined {
   if (value === undefined) return undefined;
@@ -69,7 +70,7 @@ export function parseVisibilityAudience(
   }
   const membershipIds = stringArray(raw.membershipIds, `${path}.membershipIds`, MEMBERSHIP_ID_MAX_LENGTH);
   const departmentIds = stringArray(raw.departmentIds, `${path}.departmentIds`, DEPARTMENT_ID_MAX_LENGTH);
-  const rawEmails = stringArray(raw.emails, `${path}.emails`, EMAIL_MAX_LENGTH);
+  const rawEmails = stringArray(raw.emails, `${path}.emails`, VISIBILITY_AUDIENCE_EMAIL_MAX_LENGTH);
   const emails = rawEmails ? [...new Set(rawEmails.map((email) => email.toLowerCase()))].sort() : undefined;
   let roles: OrganizationRole[] | undefined;
   if (raw.roles !== undefined) {

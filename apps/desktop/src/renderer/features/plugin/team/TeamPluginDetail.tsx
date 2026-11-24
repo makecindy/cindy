@@ -18,6 +18,7 @@ import { Input } from '@/components/ui/input';
 import { usePluginReviewUpdates } from '@/contexts/PluginReviewUpdatesContext';
 import { useWindowShown } from '@/hooks/useWindowVisible';
 import {
+  COLLEAGUE_SEARCH_MAX_LENGTH,
   ORGANIZATION_REVIEW_ID_PREFIX,
   type AuthorDepartment,
   type Colleague,
@@ -204,6 +205,11 @@ export function TeamPluginDetail({
   useEffect(() => {
     if (!adding || !keyword) {
       setFound(null);
+      return;
+    }
+    // The colleague search rejects longer text, and such text cannot match anyone anyway.
+    if (keyword.length > COLLEAGUE_SEARCH_MAX_LENGTH) {
+      setFound([]);
       return;
     }
     let cancelled = false;
