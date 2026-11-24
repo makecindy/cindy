@@ -778,6 +778,7 @@ interface ActiveTurn {
     signal: AbortSignal;
     recoveryAbandonment: number;
   };
+  workerSteerPersistenceError?: string;
   /**
    * `vendorTurnGeneration` before a host continuation adopted a newer one
    * (见 noteHostTurnContinuation)。续跑 send 在派发确认前失败时用它还原绑定；
@@ -4817,6 +4818,13 @@ export class AgentInputCoordinator {
           ? steerRecovery.item : undefined;
       if (active?.persisted || directWorkerItem || pendingSteerWorkerItem) {
         const item = pendingSteerWorkerItem ?? active?.item ?? directWorkerItem ?? null;
+        const steerPersistenceError = active?.workerSteerPersistenceError;
+        if (pendingSteerWorkerItem && steerPersistenceError && state.stickyError === steerPersistenceError) {
+          state.detachedSteerPersistenceError = {
+            message: steerPersistenceError,
+            recoveryClientId: pendingSteerWorkerItem.clientId,
+          };
+        }
         state.activeTurn = null;
         state.stickyError = null;
         const schedulerItem = item && isSchedulerOriginItem(item);
@@ -8697,6 +8705,7 @@ export class AgentInputCoordinator {
         return 'failed';
       }
       state.error = `Failed to persist user message: ${errorMessage(err)}`;
+      if (active.workerRecoverySource) active.workerSteerPersistenceError = state.error;
       clearErrorProjectionSignals(state);
       state.stickyError = state.error;
       state.recovery = null;

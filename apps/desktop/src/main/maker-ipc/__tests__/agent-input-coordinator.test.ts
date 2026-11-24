@@ -14814,7 +14814,7 @@ describe('Orca report durable recovery', () => {
 
   it.each([
     'write-succeeds', 'write-fails', 'failed-before-eof', 're-steered-after-write-failure',
-    'requested-close', 'stop-before-eof',
+    'requested-close', 'stop-before-eof', 'stop-after-eof-with-failed-write',
   ] as const)(
     'settles Worker EOF during an accepted steer write (%s)', async outcome => {
       vi.useFakeTimers();
@@ -14840,7 +14840,8 @@ describe('Orca report durable recovery', () => {
         const steering = h.coordinator.steerControlInput('worker',
           { item: makeItem('steer', 'Clarify the assignment') }, { session: runtime, turnGeneration: 1 });
         await savingSteer.promise;
-        if (outcome === 'failed-before-eof' || outcome === 're-steered-after-write-failure') {
+        if (outcome === 'failed-before-eof' || outcome === 're-steered-after-write-failure' ||
+            outcome === 'stop-after-eof-with-failed-write') {
           steerWrite.reject(new Error('steer row unavailable'));
           await expect(steering).resolves.toBe('steered');
         }
@@ -14854,6 +14855,13 @@ describe('Orca report durable recovery', () => {
         h.setRunning(false);
         h.coordinator.onTurnEvent('worker', 'error', 'Session event loop stopped unexpectedly without a terminal event',
           { reason: 'session_event_loop_crashed' }, { sessionInstanceId: runtime.instanceId, sessionTurnGeneration: 1 });
+        if (outcome === 'stop-after-eof-with-failed-write') {
+          expect(h.coordinator.isContinuationOnlyAutoResume('worker')).toBe(true);
+          expect(h.coordinator.stop('worker').error).toBe('Failed to persist user message: steer row unavailable');
+          await vi.advanceTimersByTimeAsync(10_000);
+          expect(h.sendToAgent).not.toHaveBeenCalled();
+          return;
+        }
         h.coordinator.onSessionClosed('worker', {
           preserveAutoResumeIntent: outcome !== 'requested-close' && h.coordinator.isContinuationOnlyAutoResume('worker'),
           wakeQueuedInput: outcome !== 'requested-close',
@@ -14869,6 +14877,7 @@ describe('Orca report durable recovery', () => {
         }
         expect(h.sendToAgent).toHaveBeenCalledOnce();
         expect(h.sendToAgent.mock.lastCall?.[1]).toEqual({ type: 'user', content: CONTINUE_AFTER_ERROR_PROMPT });
+        if (outcome === 'failed-before-eof') expect(h.coordinator.getProjection('worker').error).toBeNull();
       } finally {
         steerWrite.resolve();
         vi.useRealTimers();
