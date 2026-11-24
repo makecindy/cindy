@@ -686,11 +686,14 @@ import { registerCloudProviderSettings } from './instance-runtime/providerSettin
 import { publishedPluginOauthIdentity } from './plugin-oauth/runtime.js';
 import { startCloudSettingsSnapshotPublisher } from './host-settings/snapshotRuntime.js';
 import { startCloudSettingsWebTransport } from './host-settings/webRuntime.js';
+import { runDeviceLinkInvokeContext } from './device-link/invoke-context.js';
+import { loadDesktopIceServers } from './remote-desktop/iceConfig.js';
 
 let instanceBinariesReady = false;
 import {
   isLinuxAwayCoverUp,
   registerRemoteDesktopIpc,
+  requestRemoteDesktop,
   setAwayCaptureExcludedWindows,
   startLinuxAwayCover,
 } from './remote-desktop';
@@ -762,6 +765,8 @@ import {
   pushSessionActivityToController,
   setSessionsSubscribedListener,
   setAgentNetSwitchRemoteHandler,
+  getCloudPrivateInvokeHandler,
+  getProviderGroupRemoteHandler,
 } from './device-link/dispatch.desktop';
 import {
   registerDeviceLinkIpc,
@@ -771,7 +776,7 @@ import {
 } from './device-link/ipc';
 import { getMirrorCache, MirrorCachePurgeError } from './device-link/mirrorCacheStore';
 import { drainPurgeQueue, enqueuePurge } from './device-link/mirrorCachePurgeQueue';
-import { assertCaptureHealthy } from './device-link/invoke-registry';
+import { assertCaptureHealthy, dispatchLocalInvoke } from './device-link/invoke-registry';
 import { registerSettingsNavigationIpc } from './settingsNavigationIpc';
 import { registerRemoteResourcesIpc } from './device-link/remoteResourcesIpc';
 // worktree-parallel-sessions: IPC 注册 + close-session 内的 fire-and-forget 删除钩子
@@ -11037,7 +11042,19 @@ app.on('ready', async () => {
     const stopStatus = startInstanceStatus(instance, readInstanceReadiness, () => createLogger('instance-runtime').warn('runtime status unavailable'), publishedPluginOauthIdentity,
       stopRecovery ? () => ({ version: 1, state: instanceLoginRequired() || deviceRegistrationLost() ? 'login-required' : readInstanceReadiness().auth ? 'ready' : 'pending' }) : undefined);
     const stopSettingsSnapshot = startCloudSettingsSnapshotPublisher();
-    const stopSettingsWeb = startCloudSettingsWebTransport();
+    // Handlers are read when a browser call arrives; the modules themselves are loaded here.
+    const stopSettingsWeb = startCloudSettingsWebTransport({
+      privateHandler: async channel => getCloudPrivateInvokeHandler(channel),
+      invoke: (channel, args) => dispatchLocalInvoke(channel, args),
+      providerGroup: async (controller, raw) => {
+        const handler = getProviderGroupRemoteHandler();
+        if (!handler) throw new Error('[UNAVAILABLE] provider groups are not ready yet');
+        return handler.handle(controller, raw);
+      },
+      inContext: (controllerDeviceId, channel, run) => runDeviceLinkInvokeContext({ controllerDeviceId, channel }, run),
+      desktop: (controller, request) => requestRemoteDesktop(controller, request),
+      ice: async () => loadDesktopIceServers(),
+    });
     const stopProviderSettings = registerCloudProviderSettings();
     app.once('will-quit', stopProviderSettings);
     app.once('will-quit', stopSettingsWeb);

@@ -9,30 +9,21 @@ import { createSettingsWebTransport } from './webTransport.js';
 import { readSettingsBatch } from './webBatch.js';
 import { SETTINGS_WEB_CHANNELS, type SettingsWebEnvelope, type SettingsWebResult } from '../../shared/settingsWeb.js';
 import { executeWebHostCall, isWebHostCall, type WebHostCallDeps } from './webHostCalls.js';
-import { dispatchLocalInvoke } from '../device-link/invoke-registry.js';
-import { runDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { isMaintenanceRetry, MAINTENANCE_RETRY, runRemoteChange } from '../instance-runtime/maintenance.js';
 
-// Loaded on first use: DeviceLink dispatch and the desktop host are large and import Host settings.
-const webHostCallDeps: WebHostCallDeps = {
-  privateHandler: async channel => (await import('../device-link/dispatch.desktop.js')).getCloudPrivateInvokeHandler(channel),
-  invoke: (channel, args) => dispatchLocalInvoke(channel, args),
-  providerGroup: async (controller, raw) => {
-    const handler = (await import('../device-link/dispatch.desktop.js')).getProviderGroupRemoteHandler();
-    if (!handler) throw new Error('[UNAVAILABLE] provider groups are not ready yet');
-    return handler.handle(controller, raw);
-  },
-  inContext: (controllerDeviceId, channel, run) => runDeviceLinkInvokeContext({ controllerDeviceId, channel }, run),
-  desktop: async (controller, request) => (await import('../remote-desktop/index.js')).requestRemoteDesktop(controller, request),
-  ice: async () => (await import('../remote-desktop/iceConfig.js')).loadDesktopIceServers(),
-};
+// Desktop startup provides these: DeviceLink dispatch and the remote desktop import Host settings,
+// so this module does not import them.
+let webHostCallDeps: WebHostCallDeps | null = null;
 
 /** Private Host adapter for origin-checked browser requests delivered by the configured CIS. */
 export async function executeWebSettingsRequest(request: SettingsWebEnvelope, assertCurrent: () => void): Promise<SettingsWebResult> {
   assertCurrent();
   const caller = { id: `web:${request.sessionKey}`, assertCurrent };
   try {
-    if (isWebHostCall(request.command)) return await executeWebHostCall({ ...request, command: request.command }, webHostCallDeps);
+    if (isWebHostCall(request.command)) {
+      if (!webHostCallDeps) return { ok: false, code: 'SETTINGS_REQUEST_FAILED' };
+      return await executeWebHostCall({ ...request, command: request.command }, webHostCallDeps);
+    }
     if (request.command.kind === 'manage') return { ok: true, management: await executeCloudManagement(request, assertCurrent) };
     if (request.command.kind === 'readBatch') {
       return await readSettingsBatch(request.command.domains,
@@ -66,12 +57,13 @@ export async function executeWebSettingsRequest(request: SettingsWebEnvelope, as
   }
 }
 
-export function startCloudSettingsWebTransport(): () => void {
+export function startCloudSettingsWebTransport(hostCalls: WebHostCallDeps): () => void {
   if (getInstanceConfig()?.authProtocol !== 'resource-v1') return () => {};
+  webHostCallDeps = hostCalls;
   const transport = createSettingsWebTransport({ getContext: getCloudSettingsSnapshotContext,
     fetch: (input, init) => net.fetch(input as string, init), execute: executeWebSettingsRequest, managementV1: true,
     hostCalls: { channels: [...SETTINGS_WEB_CHANNELS], desktopV1: true } });
   const stopManagement = startCloudManagementMaintenance();
   transport.start();
-  return () => { transport.stop(); stopManagement(); };
+  return () => { transport.stop(); stopManagement(); webHostCallDeps = null; };
 }
