@@ -880,8 +880,8 @@ async function commitRewindAtMessage(
   const dbClient = getDbClient();
   const ownerScope = opts?.ownerScope ?? captureDataOwnerBroadcastScope();
   const assertCommitWriteAllowed = async () => {
-    opts?.assertWriteAllowed?.();
     await assertTaskActionCurrent();
+    opts?.assertWriteAllowed?.();
   };
   const ctx = await loadRewindContext(sessionId, clientId, opts);
   await assertCommitWriteAllowed();
@@ -943,11 +943,13 @@ async function commitRewindAtMessage(
       const result =
         filePlan.mode === 'file-restore'
           ? await executeCodexFileRestorePlanWithThreadRollback(filePlan, sessionId, {
+              assertWriteAllowed: opts?.assertWriteAllowed,
               commitThreadRollback,
               onCompensationError: (compErr, execution) =>
                 logCompensationError(compErr, execution.rollbackCommit),
             })
           : await executeCodexFileRewindPlanWithThreadRollback(filePlan, sessionId, {
+              assertWriteAllowed: opts?.assertWriteAllowed,
               commitThreadRollback,
               onCompensationError: (compErr, execution) =>
                 logCompensationError(compErr, execution.rollbackCommit),
@@ -992,10 +994,12 @@ async function commitRewindAtMessage(
       const result =
         filePlan.mode === 'file-restore'
           ? await executeCodexFileRestorePlanWithThreadRollback(filePlan, sessionId, {
+              assertWriteAllowed: opts?.assertWriteAllowed,
               commitThreadRollback: commitConversationRewind,
               onCompensationError,
             })
           : await executeCodexFileRewindPlanWithThreadRollback(filePlan, sessionId, {
+              assertWriteAllowed: opts?.assertWriteAllowed,
               commitThreadRollback: commitConversationRewind,
               onCompensationError,
             });

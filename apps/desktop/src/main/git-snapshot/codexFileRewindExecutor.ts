@@ -21,6 +21,7 @@ type CompletedCodexFileRewindExecutionResult = CodexFileRewindExecutionResult & 
 
 interface CodexFileRewindExecutorDeps { gitExec: (args: readonly string[], cwd?: string) => Promise<GitExecResult>; getHead: (repoRoot: string) => Promise<string>; createRollbackId: () => string; }
 export interface CodexFileRewindLockedRollbackHooks<T> {
+  assertWriteAllowed?: () => void;
   commitThreadRollback: (execution: CodexFileRewindExecutionResult | null) => Promise<T>;
   onCompensationError?: (error: unknown, execution: CompletedCodexFileRewindExecutionResult) => void;
 }
@@ -44,14 +45,28 @@ export async function executeCodexFileRewindPlanWithThreadRollback<T>(
   }
 
   return enqueueGitRepoWrite(plan.repoRoot, async () => {
-    const fileRewind = await executeCodexFileRewindPlanLocked(plan, deps);
+    const { assertWriteAllowed } = hooks;
+    assertWriteAllowed?.();
+    // Check each Git invocation, including recovery commands issued from catch paths.
+    const guardedDeps = assertWriteAllowed ? {
+      ...deps,
+      gitExec: async (args: readonly string[], cwd?: string) => {
+        assertWriteAllowed();
+        return (deps.gitExec ?? gitExec)(args, cwd);
+      },
+    } : deps;
+    const fileRewind = await executeCodexFileRewindPlanLocked(plan, guardedDeps).catch(err => {
+      assertWriteAllowed?.();
+      throw err;
+    });
     try {
       return { fileRewind, threadRollback: await hooks.commitThreadRollback(fileRewind) };
     } catch (err) {
+      assertWriteAllowed?.();
       if (fileRewind.rollbackCommit) {
         const completedExecution = { ...fileRewind, rollbackCommit: fileRewind.rollbackCommit };
         try {
-          await compensateCodexFileRewindExecutionLocked(completedExecution, sessionId, deps);
+          await compensateCodexFileRewindExecutionLocked(completedExecution, sessionId, guardedDeps);
         } catch (compErr) {
           hooks.onCompensationError?.(compErr, completedExecution);
         }
