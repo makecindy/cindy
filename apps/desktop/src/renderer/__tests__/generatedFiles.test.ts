@@ -29,6 +29,21 @@ describe('isExplicitFailedToolResult', () => {
 });
 
 describe('collectGeneratedFiles', () => {
+  // Tier 1: the paired successful pack is the evidence for a generated plugin package;
+  // an identically named tool from another server or a publish hint is not.
+  it('carries the local Forge package into the turn and ignores publish tickets', () => {
+    const path = '/work/quiet/quiet-1.0.0.cindy';
+    const packed = (toolName: string, result: object) => collectGeneratedFiles([
+      { ...toolUse(toolName, { dir: '/work/quiet' }), toolUseId: 'pack' },
+      { role: 'tool_result', toolUseId: 'pack', content: JSON.stringify(result) },
+    ], WORKDIR);
+    expect(packed('mcp__cindy__ghost_forge_pack', { ok: true, cindyPath: path }))
+      .toEqual([{ name: 'quiet-1.0.0.cindy', path, source: 'tool', artifactConfirmed: true }]);
+    expect(packed('mcp__cindy__ghost_forge_pack', { ok: true, cindyPath: path, publishToken: 'ticket' })).toEqual([]);
+    expect(packed('mcp__other__ghost_forge_pack', { ok: true, cindyPath: path })).toEqual([]);
+    expect(packed('mcp__cindy__ghost_forge_pack', { ok: false, cindyPath: path })).toEqual([]);
+  });
+
   it('turns a top-level cindy docs tool result into artifact metadata', () => {
     const files = collectGeneratedFiles(
       [

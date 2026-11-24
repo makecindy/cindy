@@ -3165,6 +3165,7 @@ export class GhostManager {
           enabled: !retired && enabled,
           ...(retirement ? { retirement } : {}),
           approval: { state: 'approved', revision: receipt.revision },
+          ...(receipt.packageSha256 ? { installedPackageSha256: receipt.packageSha256 } : {}),
           ...(receipt.taskCapabilityApproved === true ? { taskCapabilityApproved: true as const } : {}),
           ...(receipt.uiCapabilityApproved === true && pluginHasToolUi(localizedManifest) ? { uiCapabilityApproved: true as const } : {}),
           ...(receipt.targetCapabilityApproved === true ? { targetCapabilityApproved: true as const } : {}),

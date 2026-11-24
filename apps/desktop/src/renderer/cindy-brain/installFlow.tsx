@@ -86,8 +86,6 @@ export async function installGhostFromFile(
   lizFilePath: string,
   deps: InstallFlowDeps,
 ): Promise<void> {
-  const { t } = deps;
-
   // 1) 只验不装,拿身份卡;坏文件在这一步就被拒,不会产生安装副作用。
   let manifest: GhostManifest;
   let packageSha256: string;
@@ -100,6 +98,16 @@ export async function installGhostFromFile(
     return;
   }
 
+  await installInspectedGhostFromFile(lizFilePath, { manifest, packageSha256 }, deps);
+}
+
+/** The card passes the inspection it displayed; Main revalidates the digest before placement. */
+export async function installInspectedGhostFromFile(
+  lizFilePath: string,
+  { manifest, packageSha256 }: { manifest: GhostManifest; packageSha256: string },
+  deps: InstallFlowDeps,
+): Promise<void> {
+  const { t } = deps;
   // 1.5) 同 id 已装 → 转更新分支(拖入/双击/装入按钮选到新版包时不再报
   // "已经注入",直接原位更新)。
   const installed = findInstalledLocalForFile(manifest.id);

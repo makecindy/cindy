@@ -379,6 +379,18 @@ export function collectGeneratedFiles(
     for (const rawPath of createdPathsFromDescriptor(descriptorFor(msg))) {
       addPath(rawPath, 'tool');
     }
+    // A successful local Forge pack writes a concrete artifact. Publish tickets
+    // only expose a filename hint and must never become install actions.
+    if (/^(?:mcp(?:__|:)(?:cindy|cindy_ghosts)(?:__|:))?ghost_forge_pack$/.test(toolName)) {
+      const result = parseToolResult(resultContent);
+      const path = stringField(result, 'cindyPath');
+      if (result?.ok === true && !result.publishToken && asRecord(msg.toolInput)?.intent !== 'publish' &&
+          path && /^(?:\/|[A-Za-z]:[\\/])/.test(path) && /\.cindy$/i.test(path)) {
+        addPath(path, 'tool');
+        const file = byKey.get(dedupeKeyForPath(canonicalizeWindowsShape(path)));
+        if (file) file.artifactConfirmed = true;
+      }
+    }
     const artifact = extractDocumentArtifactMetadata(toolName, msg.toolInput, resultContent);
     if (artifact) {
       const outputPath =
