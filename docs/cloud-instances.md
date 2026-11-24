@@ -53,7 +53,7 @@
   回执失败只重送同一回执。能力按注册声明协商，旧服务端不认识的可选项逐个去掉重试。
 - **私有通道**：`cloud:personalization:v1`、`cloud:im-settings:v1`、`cloud:storage-usage:v1`、
   `cloud:provider-settings:v1`，只接受实例主人；普通桌面返回 `CHANNEL_NOT_ALLOWED`。密钥不经 DeviceLink，
-  走 `manage` 票据，只写不回显。
+  走 `manage` 票据，只写不回显。个人指令正文只经 DeviceLink，不在 settingsWeb 的 `channel` 清单里。
 - **授权**：第三方授权页在发起操作的控制端打开，回调只接受该次登录创建的 redirect 与 state；
   PKCE、换票和凭证保存都在实例内。
 - **只读快照**：`snapshotPublisher.ts` 在就绪后约每分钟上报一份脱敏设置快照，目录与上限见

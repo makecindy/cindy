@@ -24,7 +24,6 @@ export interface WebHostCallDeps {
 
 const PRIVATE_CHANNELS: ReadonlySet<Channel> = new Set([
   'cloud:provider-settings:v1',
-  'cloud:personalization:v1',
   'cloud:im-settings:v1',
   'cloud:storage-usage:v1',
 ]);

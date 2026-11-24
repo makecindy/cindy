@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { executeWebHostCall, isWebHostCall, type WebHostCallDeps } from '../webHostCalls.js';
-import { settingsWebResultSchema, type SettingsWebCommand, type SettingsWebEnvelope } from '../../../shared/settingsWeb.js';
+import { SETTINGS_WEB_CHANNELS, settingsWebCommandSchema, settingsWebResultSchema, type SettingsWebCommand, type SettingsWebEnvelope } from '../../../shared/settingsWeb.js';
 
 type HostCall = Extract<SettingsWebCommand, { kind: 'channel' | 'desktop' | 'desktopIce' }>;
 const sessionKey = 'c'.repeat(64);
@@ -22,6 +22,12 @@ function deps(overrides: Partial<WebHostCallDeps> = {}) {
 }
 
 describe('Host calls from the cloud service browser pages', () => {
+  // Unit: the personal instructions' text travels over DeviceLink only; the web relay neither
+  // declares nor accepts their channel.
+  it('never relays the personal instructions through the cloud service', () => {
+    expect(SETTINGS_WEB_CHANNELS).not.toContain('cloud:personalization:v1');
+    expect(settingsWebCommandSchema.safeParse({ kind: 'channel', channel: 'cloud:personalization:v1', args: [{ op: 'read' }] }).success).toBe(false);
+  });
   it('recognizes only the browser-only kinds', () => {
     expect(isWebHostCall({ kind: 'desktopIce' })).toBe(true);
     expect(isWebHostCall({ kind: 'read', domain: 'appearance' })).toBe(false);

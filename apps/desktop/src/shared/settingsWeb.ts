@@ -46,10 +46,10 @@ const batchDomains = z.array(settingsWebDomainSchema).min(1).max(64).refine(doma
  * Owner-only Host calls the cloud instance service's browser pages make in place of
  * DeviceLink invokes. A closed list: CIS relays only these names, and only to a Host
  * that declared them. The Host applies the same handlers and owner checks as DeviceLink.
+ * The personal instructions are not here: their text travels over DeviceLink only.
  */
 export const SETTINGS_WEB_CHANNELS = [
   'cloud:provider-settings:v1',
-  'cloud:personalization:v1',
   'cloud:im-settings:v1',
   'cloud:storage-usage:v1',
   'maker:get-capabilities',
