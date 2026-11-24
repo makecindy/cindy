@@ -10991,7 +10991,6 @@
     }
   },
   "bots": {
-    "nameHistoryHint": "Mengganti nama hanya berlaku untuk pesan baru; pesan sebelumnya tetap memakai nama saat dikirim.",
     "rosterLoadFailed": "Tidak dapat membaca daftar buddy",
     "rosterReload": "Baca ulang buddy",
     "avatarStatus": {
