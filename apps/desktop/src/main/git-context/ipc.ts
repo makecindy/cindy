@@ -184,12 +184,13 @@ const prFollowWatch = new PrFollowWatch({
   autoRunAllowed: () => getSchedulerIfInitialized()?.isPassive() === false,
   listActive: async () => (await getSchedulerIfInitialized()?.list({ status: 'active' })) ?? [],
   hasSuccessfulPrRunSince: async (id, since) => (await getScheduleStorageIfInitialized()?.hasSuccessfulPrRunSince(id, since)) ?? false,
+  lastSuccessfulMrObservation: async id => (await getScheduleStorageIfInitialized()?.lastSuccessfulMrObservation(id)) ?? null,
   inflight: (id) => getSchedulerIfInitialized()?.getInflightCount(id) ?? 0,
   hasCapacity: () => getSchedulerIfInitialized()?.hasFreeSlot() ?? false,
-  runNow: async (id, trigger, expectedSchedule) => {
+  runNow: async (id, trigger, expectedSchedule, mrObservation) => {
     const scheduler = getSchedulerIfInitialized();
     if (!scheduler) return null;
-    return scheduler.runNow(id, { trigger, expectedSchedule, deferToCaller: Boolean(expectedSchedule.prTrigger) });
+    return scheduler.runNow(id, { trigger, mrObservation, expectedSchedule, deferToCaller: Boolean(expectedSchedule.prTrigger) });
   },
   log,
 });

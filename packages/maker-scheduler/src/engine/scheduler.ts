@@ -87,6 +87,7 @@ export interface RunNowOptions {
   expectedSchedule?: ScheduleMutationGuard;
   webhook?: FireContext['webhook'];
   trigger?: ScheduleRunTrigger;
+  mrObservation?: ScheduleRun['mrObservation'];
   /** Internal durable-queue handoff. Awaited after insertRun, before any runner side effects. */
   onRunCreated?: () => Promise<void>;
 }
@@ -2357,6 +2358,9 @@ export class Scheduler extends EventEmitter {
       heartbeatAt: firedAt,
       ...(options?.webhook ? { triggerSource: 'webhook' as const } : options?.trigger?.source === 'pr-status' ? { triggerSource: 'pr-status' as const } : {}),
     };
+    if (initialRun.triggerSource === 'pr-status' && options?.mrObservation) {
+      initialRun.mrObservation = options.mrObservation;
+    }
     if (!recovery) await this.storage.insertRun(initialRun);
     if (!recovery && options?.onRunCreated) {
       try {

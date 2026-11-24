@@ -1116,6 +1116,7 @@ export function scheduleRunCreateToRow(r: ScheduleRun): ScheduleRunInsert {
     resultText: r.resultText ?? null,
     preRunHookResult: r.preRunHookResult ? JSON.stringify(r.preRunHookResult) : null,
     triggerSource: r.triggerSource ?? null,
+    mrObservation: r.mrObservation ?? null,
     readAt: r.readAt ?? null,
     heartbeatAt: r.heartbeatAt ?? null,
   };

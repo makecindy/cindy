@@ -196,6 +196,8 @@ export async function fetchGitlabMrStatus(
       closed_at: mr.closed_at,
       user_notes_count: mr.user_notes_count,
       pipeline_status: mr.head_pipeline?.status,
+      pipeline_id: mr.head_pipeline?.id,
+      pipeline_finished_at: mr.head_pipeline?.finished_at,
       blocking_discussions_resolved: mr.blocking_discussions_resolved,
     },
   };

@@ -887,7 +887,7 @@ describe('PR follow watch', () => {
     await look(20);
     expect(runNow).not.toHaveBeenCalled();
     await look(30, 'b2');
-    expect(runNow.mock.calls).toEqual([['follow-85', { kind: 'watch', source: 'pr-status', detail: 'https://github.com/makecindy/cindy/pull/85' }, expect.objectContaining({ id: 'follow-85' })]]);
+    expect(runNow.mock.calls).toEqual([['follow-85', { kind: 'watch', source: 'pr-status', detail: 'https://github.com/makecindy/cindy/pull/85' }, expect.objectContaining({ id: 'follow-85' }), undefined]]);
     await look(40, 'c3');
     expect(runNow).toHaveBeenCalledTimes(1);
     inflight.mockReturnValue(1);
@@ -957,7 +957,7 @@ describe('PR follow watch', () => {
     watch.observe(Q, { ok: true, status: 'merged' } as never);
     await new Promise(resolve => setImmediate(resolve));
     expect(runNow).toHaveBeenCalledTimes(1);
-    expect(runNow).toHaveBeenCalledWith('merged', expect.objectContaining({ detail: target }), tasks[0]);
+    expect(runNow).toHaveBeenCalledWith('merged', expect.objectContaining({ detail: target }), tasks[0], undefined);
   });
 
   // #11309: a failed timed check can advance lastFiredAt without handling the merge.
@@ -1011,20 +1011,40 @@ describe('PR follow watch', () => {
     expect(await observe('head2', 0, 0, 1)).toEqual([]);
   });
 
-  it('handles review already outstanding when a GitLab follow-up starts, without waking again after success', async () => {
+  // Restart the watcher between reads; only the successful run's dispatch facts survive.
+  it('recovers offline MR changes once per successful observation, including across restarts', async () => {
     const target = { provider: 'gitlab' as const, host: 'git.example.com', owner: 'group/sub', repo: 'project', prNumber: 7 };
     const url = 'https://git.example.com/group/sub/project/-/merge_requests/7';
     const task = schedule('review-mr', url, { createdAt: 1, prTrigger: { url, change: 'any' } });
     const runNow = vi.fn(async () => null);
-    const processed = vi.fn(async () => false);
-    const watch = new PrFollowWatch({ listActive: async () => [task], inflight: () => 0,
-      autoRunAllowed: () => true, hasCapacity: () => true, hasSuccessfulPrRunSince: processed, runNow });
-    const status = { ...target, ok: true as const, status: 'open' as const, title: 'Fix', branch: 'fix', htmlUrl: url, unresolvedCount: 1 };
-    await watch.reconcileInitialMrWork(task, status);
-    expect(runNow).toHaveBeenCalledOnce();
-    processed.mockResolvedValue(true);
-    await watch.reconcileInitialMrWork(task, status);
-    expect(runNow).toHaveBeenCalledOnce();
+    let last: { url: string; signature: string } | null = null;
+    const restart = async (unresolvedCount: number | null, failed: number | null, pipelineId = 1) => {
+      const watch = new PrFollowWatch({ listActive: async () => [task], inflight: () => 0,
+        autoRunAllowed: () => true, hasCapacity: () => true, lastSuccessfulMrObservation: async () => last, runNow });
+      const status = { ...target, ok: true as const, status: 'open' as const, title: 'Fix', branch: 'fix',
+        htmlUrl: url, headSha: 'abc', unresolvedCount, metadata: { pipeline_id: pipelineId }, checks: failed === null ? null :
+          { total: 1, failed, pending: 0, passed: 1 - failed, skipped: 0 } };
+      watch.observe(target, status);
+      await watch.reconcileInitialMrWork(task, status);
+      return { url, signature: prStatusSignature(status)! };
+    };
+    await restart(0, 0);
+    expect(runNow).not.toHaveBeenCalled();
+    last = await restart(1, 0);
+    expect(runNow).toHaveBeenLastCalledWith('review-mr', expect.objectContaining({ detail: url }), task, last);
+    await restart(null, null);
+    await restart(1, 0);
+    expect(runNow).toHaveBeenCalledTimes(1);
+    await restart(2, 1); // failed or interrupted execution: the receipt does not advance
+    last = await restart(2, 1);
+    await restart(2, 1);
+    expect(runNow).toHaveBeenCalledTimes(3);
+    last = await restart(2, 1, 2); // another failed pipeline on the same commit
+    await restart(2, 1, 2);
+    expect(runNow).toHaveBeenCalledTimes(4);
+    last = { ...last, url: url.replace('git.example', 'other.example') };
+    await restart(2, 1, 2);
+    expect(runNow).toHaveBeenCalledTimes(5);
   });
 
   it('keeps GitLab follow-ups local and recovers a merge missed while the host was offline', async () => {
@@ -1039,7 +1059,7 @@ describe('PR follow watch', () => {
     watch.observe({ host: 'git.example.com', provider: 'gitlab', owner: 'group/sub', repo: 'project', prNumber: 7 },
       { ok: true, status: 'merged', metadata: { merged_at: new Date(20).toISOString() } } as never);
     await new Promise(resolve => setImmediate(resolve));
-    expect(runNow).toHaveBeenCalledWith('mr', expect.objectContaining({ detail: url }), task);
+    expect(runNow).toHaveBeenCalledWith('mr', expect.objectContaining({ detail: url }), task, expect.objectContaining({ url }));
   });
 
   it('filters CI, review and recovery wakeups for ordinary tasks with no gate', async () => {
@@ -1129,7 +1149,7 @@ describe('PR follow watch', () => {
       if (!active) task = schedule('merge', url, { preRunHook: undefined, prTrigger: null });
       await vi.advanceTimersByTimeAsync(60_000);
       expect(runNow).toHaveBeenCalledTimes(active ? 2 : 1);
-      if (active) expect(runNow).toHaveBeenLastCalledWith('merge', { kind: 'watch', source: 'pr-status', detail: url }, task);
+      if (active) expect(runNow).toHaveBeenLastCalledWith('merge', { kind: 'watch', source: 'pr-status', detail: url }, task, undefined);
       await vi.advanceTimersByTimeAsync(60_000);
       expect(runNow).toHaveBeenCalledTimes(active ? 2 : 1);
     } finally { vi.clearAllTimers(); vi.useRealTimers(); }

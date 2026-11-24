@@ -8,9 +8,9 @@
  * retain one local wakeup, subject to their current rule and account.
  */
 import type { PrStatusResult } from '@cindy/maker-shared';
-import { prStatusKey, sessionPrUrl } from '@cindy/maker-shared';
+import { parseSessionPrUrl, prStatusKey, sessionPrUrl } from '@cindy/maker-shared';
 import { schedulePrTriggers, type PrChange } from '@cindy/maker-scheduler';
-import type { Schedule, ScheduleRunTrigger } from '@cindy/maker-scheduler';
+import type { MrRunObservation, Schedule, ScheduleRunTrigger } from '@cindy/maker-scheduler';
 import { runTaskActionRequest } from '../maker-ipc/taskActionAuthorization';
 
 import type { PrStatusQuery } from './prStatusService';
@@ -26,13 +26,14 @@ export interface PrFollowWatchDeps {
   listActive(): Promise<Schedule[]>;
   /** Completed PR-triggered executions survive restarts and failed timed lookups. */
   hasSuccessfulPrRunSince?(id: string, since: number): Promise<boolean>;
+  lastSuccessfulMrObservation?(id: string): Promise<MrRunObservation | null>;
   /** Runs of this schedule in flight right now. */
   inflight(id: string): number;
   /** False on a passive instance: automatic runs belong to another instance sharing the data. */
   autoRunAllowed(): boolean;
   /** The scheduler has a free concurrency slot right now. */
   hasCapacity(): boolean;
-  runNow(id: string, trigger: ScheduleRunTrigger, expected: Schedule): Promise<{ runId: string; deferred?: boolean } | null>;
+  runNow(id: string, trigger: ScheduleRunTrigger, expected: Schedule, observation?: MrRunObservation): Promise<{ runId: string; deferred?: boolean } | null>;
   now?: () => number;
   log?: { info?: (msg: string, meta?: unknown) => void; warn?: (msg: string, meta?: unknown) => void };
 }
@@ -54,7 +55,11 @@ export function prStatusSignature(result: PrStatusResult): string | null {
     ok.mergeState ?? '',
     ok.conflicts ?? '',
     ok.reviewDecision ?? '',
-    ...(ok.provider === 'gitlab' ? [ok.metadata?.user_notes_count ?? '', ok.metadata?.pipeline_status ?? '', ok.metadata?.blocking_discussions_resolved ?? ''] : []),
+    ...(ok.provider === 'gitlab' ? [
+      ok.metadata?.user_notes_count ?? '', ok.metadata?.pipeline_status ?? '',
+      ok.metadata?.blocking_discussions_resolved ?? '', ok.metadata?.pipeline_id ?? '',
+      ok.metadata?.pipeline_finished_at ?? '',
+    ] : []),
   ].join('|');
 }
 
@@ -76,10 +81,11 @@ export function changesBetween(previous: string | undefined, current: string | u
     if (previous === current) return [];
   }
   const changes: PrChange[] = ['any'];
-  const [oldStatus, , oldChecks, oldThreads, , , oldReview, oldNotes, oldPipeline, oldBlocking] = previous.split('|');
-  const [status, , checks, threads, , , review, notes, pipeline, blocking] = current.split('|');
+  const [oldStatus, , oldChecks, oldThreads, , , oldReview, oldNotes, oldPipeline, oldBlocking, oldPipelineId, oldFinishedAt] = previous.split('|');
+  const [status, , checks, threads, , , review, notes, pipeline, blocking, pipelineId, finishedAt] = current.split('|');
   if (oldStatus !== status && status === 'merged') changes.push('merged');
-  if ((checks && checks !== oldChecks) || (pipeline && pipeline !== oldPipeline)) changes.push('ci');
+  if ((checks && checks !== oldChecks) || (pipeline && pipeline !== oldPipeline) ||
+      (pipelineId && pipelineId !== oldPipelineId) || (finishedAt && finishedAt !== oldFinishedAt)) changes.push('ci');
   if ((review && review !== oldReview) || (threads && threads !== oldThreads) || (notes && notes !== oldNotes) || (blocking && blocking !== oldBlocking)) changes.push('review');
   return changes;
 }
@@ -87,6 +93,20 @@ export function changesBetween(previous: string | undefined, current: string | u
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 type WatchChange = PrChange | 'reconcile';
+
+interface MrRecovery {
+  signature: string;
+  actionable: boolean;
+}
+
+// A REST-only read may first learn about failed jobs or open discussions after
+// GraphQL recovers. Known healthy details alone do not require a model run.
+function hasNewMrWork(previous: string, current: string): boolean {
+  if (changesBetween(previous, current, 'gitlab').length) return true;
+  const [, , oldChecks, oldThreads] = previous.split('|');
+  const [, , checks, threads] = current.split('|');
+  return (!oldChecks && Number(checks?.split(',')[1]) > 0) || (!oldThreads && Number(threads) > 0);
+}
 
 function watchesChange(schedule: Schedule, url: string, changes: readonly WatchChange[]): boolean {
   if (schedulePrTriggers(schedule).some(rule => rule.url.toLowerCase() === url.toLowerCase() && (changes.includes(rule.change)
@@ -100,7 +120,7 @@ export class PrFollowWatch {
   private readonly signatures = new Map<string, string>();
   private readonly lastTriggered = new Map<string, number>();
   /** Keep one doorbell per schedule, so retrying a busy follower cannot rerun its siblings. */
-  private readonly pending = new Map<string, { url: string; changes: readonly WatchChange[]; isCurrent: () => boolean; mergedAt?: number }>();
+  private readonly pending = new Map<string, () => Promise<void>>();
   private retryTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly now: () => number;
 
@@ -155,11 +175,13 @@ export class PrFollowWatch {
     const rule = schedule.prTrigger;
     if (result.provider !== 'gitlab' || result.status !== 'open' || rule?.change !== 'any' ||
         sessionPrUrl(result).toLowerCase() !== rule.url.toLowerCase()) return;
-    if (!result.conflicts && !result.checks?.failed && !result.unresolvedCount &&
-        result.metadata?.pipeline_status !== 'failed' && result.metadata?.blocking_discussions_resolved !== false) return;
+    const observed = this.observedSignature(result);
+    const signature = observed ?? prStatusSignature(result)!;
+    const actionable = Boolean(result.conflicts || result.checks?.failed || result.unresolvedCount ||
+      result.metadata?.pipeline_status === 'failed' || result.metadata?.blocking_discussions_resolved === false);
     const generation = this.generation;
-    if (await this.deps.hasSuccessfulPrRunSince?.(schedule.id, schedule.createdAt)) return;
-    await this.trigger(rule.url, ['any'], () => generation === this.generation, schedule.id);
+    const isCurrent = () => generation === this.generation && this.observedSignature(result) === observed;
+    await this.trigger(rule.url, ['any'], isCurrent, schedule.id, undefined, { signature, actionable });
   }
 
   /** Snapshot the observer baseline before refreshing an explicit event. */
@@ -179,14 +201,14 @@ export class PrFollowWatch {
   private retryPending(): void {
     if (this.retryTimer) clearTimeout(this.retryTimer);
     this.retryTimer = undefined;
-    for (const [id, { url, changes, isCurrent, mergedAt }] of Array.from(this.pending)) {
+    for (const [id, retry] of Array.from(this.pending)) {
       this.pending.delete(id);
-      void this.trigger(url, changes, isCurrent, id, mergedAt).catch(() => undefined);
+      void retry().catch(() => undefined);
     }
   }
 
-  private defer(id: string, url: string, changes: readonly WatchChange[], isCurrent: () => boolean, mergedAt?: number): void {
-    this.pending.set(id, { url, changes, isCurrent, mergedAt });
+  private defer(id: string, retry: () => Promise<void>): void {
+    this.pending.set(id, retry);
     // This only checks local scheduler capacity; it makes no GitHub API requests.
     // A comment must not depend on another status change to be noticed after a busy run.
     if (!this.retryTimer) {
@@ -195,9 +217,20 @@ export class PrFollowWatch {
     }
   }
 
-  private async trigger(url: string, changes: readonly WatchChange[], isCurrent: () => boolean = () => true, onlyScheduleId?: string, mergedAt?: number): Promise<void> {
+  private async trigger(url: string, changes: readonly WatchChange[], isCurrent: () => boolean = () => true, onlyScheduleId?: string, mergedAt?: number, mrRecovery?: MrRecovery): Promise<void> {
     if (!url || !isCurrent() || !this.deps.autoRunAllowed()) return;
+    const ref = parseSessionPrUrl(url);
+    const signature = mrRecovery?.signature ?? (ref?.provider === 'gitlab' ? this.observedSignature(ref) : undefined);
     const generation = this.generation;
+    const observation = signature ? { url: url.toLowerCase(), signature } : undefined;
+    if (mrRecovery && onlyScheduleId && observation) {
+      const last = await this.deps.lastSuccessfulMrObservation?.(onlyScheduleId);
+      if (!isCurrent() || this.generation !== generation) return;
+      if (last?.url === observation.url) {
+        if (!hasNewMrWork(last.signature, observation.signature)) return;
+        observation.signature = withKnownMrSummary(observation.signature, last.signature);
+      } else if (!mrRecovery.actionable) return;
+    }
     const schedules = (await this.deps.listActive()).filter((schedule) =>
       (!onlyScheduleId || schedule.id === onlyScheduleId) && watchesChange(schedule, url, changes));
     const now = this.now();
@@ -211,11 +244,10 @@ export class PrFollowWatch {
       // Explicit App triggers own the event filter and durable queue. Do not run
       // the same task again through the implicit PR-follow wakeup path.
       if (schedule.webhookTrigger?.source?.preset === 'github-app') continue;
-      if (this.deps.inflight(schedule.id) > 0) { this.defer(schedule.id, url, changes, isCurrent, mergedAt); continue; }
+      const retry = () => this.trigger(url, changes, isCurrent, schedule.id, mergedAt, mrRecovery);
       const last = this.lastTriggered.get(schedule.id);
-      if (last !== undefined && now - last < MIN_RETRIGGER_MS) { this.defer(schedule.id, url, changes, isCurrent, mergedAt); continue; }
-      if (!this.deps.hasCapacity()) {
-        this.defer(schedule.id, url, changes, isCurrent, mergedAt);
+      if (this.deps.inflight(schedule.id) > 0 || (last !== undefined && now - last < MIN_RETRIGGER_MS) || !this.deps.hasCapacity()) {
+        this.defer(schedule.id, retry);
         continue;
       }
       this.pending.delete(schedule.id);
@@ -223,11 +255,11 @@ export class PrFollowWatch {
       this.deps.log?.info?.('pr follow watch: status changed, running schedule now', { scheduleId: schedule.id, url });
       // This run belongs to the configured schedule, even if the observing tool call expired.
       void runTaskActionRequest(() =>
-        this.deps.runNow(schedule.id, { kind: 'watch', source: PR_WATCH_SOURCE, detail: url }, schedule))
+        this.deps.runNow(schedule.id, { kind: 'watch', source: PR_WATCH_SOURCE, detail: url }, schedule, observation))
         .then(result => {
           // The next cron tick only checks status. Keep the event after a runner defers its work.
           if (schedule.prTrigger && result?.deferred && isCurrent() && this.generation === generation && !this.pending.has(schedule.id)) {
-            this.defer(schedule.id, url, changes, isCurrent, mergedAt);
+            this.defer(schedule.id, retry);
           }
         })
         .catch((error) => {
