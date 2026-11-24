@@ -81,10 +81,12 @@ it('only closes after selection succeeds and passes the full wire configuration'
 // through detail navigation and submit it with the model. The selected-row tests miss this
 // branch. Minimal input: an unselected model with two supported levels and no model memory.
 it.each([
-  { action: 'keeps the explicitly chosen effort', restore: false, effort: 'high' },
-  { action: 'restores the default from favorite details', restore: true, effort: 'medium' },
-])('$action when submitting a companion candidate', async ({ restore, effort }) => {
-  if (restore) {
+  { action: 'keeps the explicitly chosen effort', favoriteAction: null, effort: 'high' },
+  { action: 'restores the default from favorite details', favoriteAction: 'reset', effort: 'medium' },
+  { action: 'uses the latest effort chosen from favorite details', favoriteAction: 'change', effort: 'medium' },
+  { action: 'keeps the candidate effort when editing a favorite copy', favoriteAction: 'edit', effort: 'high' },
+])('$action when submitting a companion candidate', async ({ favoriteAction, effort }) => {
+  if (favoriteAction) {
     // PR #12402: the same candidate is also reachable through a saved copy with its own UID.
     test.prefs.favorites = [{ uid: 'saved-copy', providerId: 'account', modelId: 'codex/model', agent: 'codex', effort: 'high', fast: false }];
   }
@@ -106,10 +108,18 @@ it.each([
   expect(test.save).not.toHaveBeenCalled();
   expect(test.view.options.row.config.effort).toBe('high');
   await act(async () => test.view.onBack());
-  if (restore) {
+  if (favoriteAction) {
     const favorite = test.view.groups.find((group: { key: string }) => group.key === 'favorites').rows[0];
     await act(async () => test.view.onOptions(favorite));
-    await act(async () => test.view.options.onReset());
+    if (favoriteAction === 'reset') {
+      await act(async () => test.view.options.onReset());
+    } else {
+      if (favoriteAction === 'edit') await act(async () => test.view.options.onEditFavorite());
+      await act(async () => test.view.options.onChange({ ...test.view.options.row.config, effort: 'medium' }));
+      expect(test.view.options.row.config.effort).toBe('medium');
+      expect(test.save).not.toHaveBeenCalled();
+      if (favoriteAction === 'edit') await act(async () => test.view.options.onCancelEdit());
+    }
     await act(async () => test.view.onBack());
   }
   expect(row().config.effort).toBe(effort);

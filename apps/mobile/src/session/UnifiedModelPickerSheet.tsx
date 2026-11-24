@@ -1223,16 +1223,27 @@ export function UnifiedModelPickerSheet(
       return;
     }
     const remoteDevice = row.remoteDevice;
+    const previousConfig =
+      row.favorite && sameConfiguration(row.config, live)
+        ? live
+        : row.selected
+          ? selection
+          : undefined;
     if (
-      !reset && p.unified.draftCandidateEffort && !remoteDevice && !row.selected && !target?.uid &&
+      !reset && p.unified.draftCandidateEffort && !remoteDevice && !previousConfig &&
       sameConfiguration(row.config, { ...config, effort: row.config.effort })
     ) {
-      if (lock.current || p.disabled || !prefs.ready || config.effort === row.config.effort) return;
+      if (lock.current || p.disabled || !prefs.ready) return;
+      const key = modelKey(row.entry.providerId, row.entry.modelId);
       setCandidateEfforts(current => {
         const next = new Map(current);
-        next.set(row.key, { agent: config.agent, effort: config.effort });
+        next.set(key, { agent: config.agent, effort: config.effort });
         return next;
       });
+      if (target?.config) {
+        setTarget({ ...target, config });
+        setNotice(t(favoriteToRemove ? "models.unified.originalFavoriteKept" : "models.unified.parametersSaved"));
+      }
       return;
     }
     if (remoteDevice) {
@@ -1283,12 +1294,6 @@ export function UnifiedModelPickerSheet(
       return routed ? configure(...routed) : configure(next);
     };
     void transact(async (isCurrent) => {
-      const previousConfig =
-        row.favorite && sameConfiguration(row.config, live)
-          ? live
-          : row.selected
-            ? selection
-            : undefined;
       if (previousConfig && !(await apply(config))) return;
       // Selection can await remote work or a confirmation. Do not begin another
       // write for a panel that closed or changed its binding while waiting.
