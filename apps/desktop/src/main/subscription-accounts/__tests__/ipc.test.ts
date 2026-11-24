@@ -548,6 +548,13 @@ describe('subscription management boundary', () => {
     expect(mapIpcErrorToI18nKey(error)).toBe('ipcError.SUBSCRIPTION_CODEX_PROVIDER_AUTH');
   });
 
+  // A saved row can move or disappear between displaying it and clicking Sign in.
+  it('reports a missing sign-in target separately from CLI or network errors', async () => {
+    h.execute.mockRejectedValue(new Error('Account not found'));
+    await expect(invoke({ action: 'login', providerId: 'openai', accountId: 'default', loginKey: 'stale' }))
+      .rejects.toThrow('[NOT_FOUND]');
+  });
+
   // 2026-11-18 user report, unit: an unreachable account service reached the renderer as the
   // generic "check the CLI login" error and left no cause in the log. Minimal input: the command
   // rejects with the classified network failure, or with an unknown error carrying file text.

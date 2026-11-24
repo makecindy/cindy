@@ -251,6 +251,9 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
                   {t('bots.channels.remove')}
                 </Button>
                 </div>
+                {view.health?.automationDenied && (
+                  <p className="text-12 leading-[1.5] text-[var(--text-secondary)]">{t('bots.channels.add.imessage.automationDenied')}</p>
+                )}
                 {view.health && view.health.uncertainInputs + view.health.uncertainSends > 0 ? (
                   <p className="text-12 leading-[1.5] text-[var(--text-secondary)]">{t('bots.channels.add.imessage.uncertain', {
                     count: view.health.uncertainInputs + view.health.uncertainSends,
@@ -561,6 +564,7 @@ function ConnectionLanes({ api, connectionId, botName, platform, deviceId }: {
       <div className="flex items-center justify-between text-12 font-medium text-[var(--text-primary)]">
         <span>{t('bots.channels.lanes.title', { platform })}</span>
         <ChromeIconButton
+          // -my-[5px]：28px 按钮抵消到 18px 文字行高，标题行不被撑高（DESIGN.md §5 破出抵消）。
           className="-my-[5px] shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
           aria-label={t(expanded ? 'bots.channels.lanes.collapse' : 'bots.channels.lanes.expand', { platform })}
           aria-expanded={expanded}
@@ -904,7 +908,7 @@ function BotChannelAddDialog({
   return (
     <Dialog.Root open onOpenChange={(open) => !busyRef.current && onOpenChange(open)}>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[70]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
           onEscapeKeyDown={(event) => {
@@ -915,7 +919,7 @@ function BotChannelAddDialog({
             event.preventDefault();
             firstOptionRef.current.focus();
           }}
-          className="modal-panel fixed inset-0 z-[71] m-auto flex h-fit max-h-[85vh] w-[min(480px,calc(100vw-32px))] flex-col p-4 outline-none"
+          className="modal-panel fixed inset-0 z-modal-raised m-auto flex h-fit max-h-[85vh] w-[min(480px,calc(100vw-32px))] flex-col p-4 outline-none"
         >
           <form className="flex min-h-0 flex-col" onSubmit={(event) => void submit(event)}>
             <Dialog.Title className="text-18 font-medium text-[var(--confirm-title)]">
@@ -1001,7 +1005,7 @@ function BotChannelAddDialog({
                       {control => <Input {...control} mono secret={key === 'password'} value={imessage[key]}
                         onChange={value => setIMessage(previous => ({ ...previous, [key]: value }))}
                         placeholder={editing && key === 'password' ? t('bots.channels.edit.keepPassword') : t(`bots.channels.add.imessage.${key}Placeholder`)} autoComplete="off"
-                        spellCheck={false} disabled={busy} secretTipContentClassName="z-[10001]" />}
+                        spellCheck={false} disabled={busy} />}
                     </FormField>
                   ))}
                 </>
@@ -1019,7 +1023,6 @@ function BotChannelAddDialog({
                         autoComplete="off"
                         spellCheck={false}
                         disabled={busy}
-                        secretTipContentClassName="z-[10001]"
                       />
                     )}
                   </FormField>
@@ -1120,7 +1123,6 @@ function BotChannelAddDialog({
                         autoComplete="off"
                         spellCheck={false}
                         disabled={busy}
-                        secretTipContentClassName="z-[10001]"
                       />
                     )}
                   </FormField>
@@ -1156,7 +1158,6 @@ function BotChannelAddDialog({
                         autoComplete="off"
                         spellCheck={false}
                         disabled={busy}
-                        secretTipContentClassName="z-[10001]"
                       />
                     )}
                   </FormField>
@@ -1192,7 +1193,6 @@ function BotChannelAddDialog({
                         autoComplete="off"
                         spellCheck={false}
                         disabled={busy}
-                        secretTipContentClassName="z-[10001]"
                       />
                     )}
                   </FormField>
@@ -1211,7 +1211,6 @@ function BotChannelAddDialog({
                         autoComplete="off"
                         spellCheck={false}
                         disabled={busy}
-                        secretTipContentClassName="z-[10001]"
                       />
                     )}
                   </FormField>

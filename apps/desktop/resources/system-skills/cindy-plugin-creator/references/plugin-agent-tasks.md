@@ -172,11 +172,7 @@ const r = await cindy.agent.requestSchedule({
   另一个自动化表单在编辑,那种情况下本次草稿会被**丢弃**(保护他没保存的输入),他看到
   一句提示、面板不换内容。即使面板正常打开,任务也要他亲手点保存才落库。所以你的 UI
   **不要**显示"已开启"这类完成态,写"已为你打开创建面板,请确认"才准确;
-  想确认用户是否照做了,当前唯一可信的信号是任务真的跑起来调了你的 tool。
-  **后续版本会补上**:任务与发起插件的**绑定关系**,以及你查询 / 管理**自己绑定的那条
-  任务**(是否有效、下次运行时间、频率,以及改时间 / 暂停 / 关掉)。届时你就能在自己面板
-  上显示"已开启 · 每小时 · 下次 15:00"并让用户就地改。绑定本身即授权边界:你只能看和改
-  自己请求创建的那条,看不到用户的其它自动化;
+  普通草稿的保存状态不提供查询。若插件需要同账号只在一台电脑执行，见下方的主机绑定用法。
 - `prompt` 里要**自己说清楚该调你哪个工具**(见上面示例第 3 行)。AI 不会自动猜到
   "跑完要更新哪个插件";
 - 预填内容会**净化 + 截断**(去控制字符,名称 60 字 / prompt 2000 字);净化后为空一律
@@ -193,6 +189,21 @@ const r = await cindy.agent.requestSchedule({
 
 什么时候**不该**用它:一次性的事，用快问快答(§4.0.2)或普通任务接口
 (§4.11.3)。这个加档是给"长期定期刷新"用的,每条任务都会反复产生模型费用。
+
+### 只在用户指定的电脑执行
+
+对同时声明 `deviceSync: true` 和 `agent.schedule: true` 的插件，先读取账号主机，再响应用户的创建操作。
+
+```js
+const role = await cindy.deviceSync({ op: 'automationHost' });
+if (role.ok && role.isPrimary && role.localSchedule === 'none') {
+  await cindy.agent.requestSchedule({
+    name: '整理资料', prompt: '调用本插件的整理工具。', primaryDeviceOnly: true
+  });
+}
+```
+
+`primaryDeviceOnly` 默认关闭。开启后，首次保存必须在选中的执行电脑桌面窗口完成，从手机或另一台电脑发起也会打开执行电脑的桌面编辑器。用户在该电脑选择模型并保存。宿主按已安装插件的身份绑定草稿；修改标题或暂停任务会保留绑定。选主本身不会新建或启用自动化。已有任务的实际启停状态可从 `localSchedule` 获取。主机暂停、离线或无法确认账号归属时，其它电脑继续等待。选主及错误状态见 [同账号电脑间的插件资料同步](./plugin-files-and-library.md#4102-同账号电脑间的插件资料同步)。
 
 ## 4.11.3 新建任务与继续任务（普通 Session）
 
@@ -503,6 +514,8 @@ instanceId、generation、outcome（completed/failed/cancelled/interrupted）及
   不含消息、计划、文件或费用；不含对话、伙伴、Worker、隐藏、远程及其他电脑上的任务。未登记或已删除的项目返回 `TARGET_UNAVAILABLE`。
 - `openTask({taskId})`：在主窗口打开该任务；Cindy 未在前台时不抢焦点。只接受 `projectTasks` 能列出的任务，否则返回 `TARGET_UNAVAILABLE`。返回 `{opened:true}`。
 - 只读，不能发送消息、修改、归档或停止任务；需要这些操作请改用 `cindy.tasks` / `cindy.targets` 并声明对应权限。状态变化不推送，插件自行按需刷新。
+
+`openSession({sessionId, deviceId?})` 可在桌面主窗口打开本机或同账号其他电脑上的可见普通会话，包括独立对话。除 `agent.observe` 外，还需声明并获批 `agent.hostTools: ['history']`。先检测 `typeof cindy.observe?.openSession === 'function'`。远程目标传设备 ID 和原始会话 ID 两个字段。如 `list_sessions` 返回 `deviceId::sessionId`，取该设备组的 ID 并移除会话 ID 的设备前缀。省略设备或传 `local` 表示本机。宿主按指定设备核验目标，返回 `{opened:true}` 表示已交给原生导航；不可见或不存在返回 `TARGET_UNAVAILABLE`，远程连接不可用返回 `REMOTE_UNAVAILABLE`。本方法只导航，不返回会话数据。
 
 ## 4.11.9 查看伙伴和状态
 

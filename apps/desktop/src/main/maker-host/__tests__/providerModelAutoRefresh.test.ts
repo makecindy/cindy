@@ -156,6 +156,45 @@ describe('provider model auto-refresh coordinator', () => {
     ]);
   });
 
+  // 2026-11-20 user report: after a network outage, models took minutes to come back because a
+  // failed source waited out the 5-minute failure cooldown. Existing cases cover cooldowns only
+  // for UI triggers. Minimal input: one failed and one healthy source, then 'network-restored'.
+  it('network recovery retries only failed sources at once and keeps healthy ones on cooldown', async () => {
+    let now = 1_000;
+    let offline = true;
+    const refreshProvider = vi.fn(async (id: BuiltinRefreshableProviderId) => {
+      if (offline && id === 'openai') throw new Error('offline');
+    });
+    const refreshCatalog = vi.fn(async () => {
+      if (offline) throw new Error('offline');
+    });
+    const coordinator = createProviderModelRefreshCoordinator({
+      listProviders: async () => [view('xd', true), view('openai', true)],
+      refreshProvider,
+      refreshCatalog,
+      now: () => now,
+      log: { debug: vi.fn(), warn: vi.fn() },
+    });
+
+    await coordinator.requestAutoRefresh('providers-open');
+    expect(refreshProvider.mock.calls.map(([id]) => id)).toEqual(['xd', 'openai']);
+    expect(refreshCatalog).toHaveBeenCalledOnce();
+
+    now += 1_000;
+    await coordinator.requestAutoRefresh('model-selector-open');
+    expect(refreshProvider).toHaveBeenCalledTimes(2);
+
+    offline = false;
+    await coordinator.requestAutoRefresh('network-restored');
+    expect(refreshProvider.mock.calls.map(([id]) => id)).toEqual(['xd', 'openai', 'openai']);
+    expect(refreshCatalog).toHaveBeenCalledTimes(2);
+
+    // Once recovered, repeated reports are back on the normal cooldown.
+    await coordinator.requestAutoRefresh('network-restored');
+    expect(refreshProvider).toHaveBeenCalledTimes(3);
+    expect(refreshCatalog).toHaveBeenCalledTimes(2);
+  });
+
   it('applies the shared Catalog before provider discovery derives model capabilities', async () => {
     const catalog = deferred();
     const refreshProvider = vi.fn(async () => undefined);

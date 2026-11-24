@@ -1,3 +1,4 @@
+import { installCompanyUsageCapture, installExecutionReporting } from '../../usage/companyTokenFacts.js';
 import { botLearningTracker } from '../botLearningTracker.js';
 import { learningTurnIdentity } from '../botLearningFeedback.js';
 import { beginQuietScheduledOutput } from '../../scheduler-host/silent-output.js';
@@ -184,6 +185,7 @@ vi.mock('../../maker-host/claude-session-background-activity.js', async (importO
   ).hasWorkingBackgroundCommand,
   noteClaudeSessionBackgroundCommandWork: effects.fn('noteClaudeSessionBackgroundCommandWork'),
   noteClaudeSessionTurnState: effects.fn('noteClaudeSessionTurnState'),
+  observePluginEngineEvent: effects.fn('observePluginEngineEvent'),
 }));
 vi.mock('../../subagentObservationRewindFence.js', () => ({
   noteSubagentObservationTurnStarted: effects.fn('noteSubagentObservationTurnStarted'),
@@ -1145,6 +1147,22 @@ describe('production Session event pipeline', () => {
     h.emit(event('text', { isFinal: true, text: 'real worker reply' }, { source: 'pi' }));
     expect(h.deps.orcaTeamServiceForEvents.captureWorkerText).toHaveBeenCalledWith('task', 'real worker reply', { isFinal: true });
     await h.dispose();
+  });
+
+  // PR #11776 review: a plugin engine's reply between turns has no done to commit it, so it stayed
+  // in memory and was lost on restart. Its final segment commits it; deltas and turn text do not.
+  it('commits a plugin engine reply written between turns at its final segment only', async () => {
+    const h = harness();
+    Object.defineProperty(h.session, 'agentKind', { value: 'acp' });
+    try {
+      h.emit(event('text', { text: 'The content', isFinal: false }, { turnScope: 'background' }));
+      h.emit(event('text', { text: 'In a turn', isFinal: true, isFullText: true }));
+      expect(effects.fn('flushAssistantBlock')).not.toHaveBeenCalled();
+      h.emit(event('text', { text: 'The content is `finished`', isFinal: true, isFullText: true }, { turnScope: 'background' }));
+      expect(effects.fn('flushAssistantBlock')).toHaveBeenCalledOnce();
+    } finally {
+      await h.dispose();
+    }
   });
 
   it('preserves ordinary Pi text without the Host recovery marker', async () => {
@@ -2441,7 +2459,7 @@ describe('usage through the production event pipeline', () => {
   // Use the production pipeline to prove that currency recovery does not freeze
   // fallback USD into a receipt, either within a write or across product turns.
   it.each(['during-write', 'next-turn', 'terminal-replay'] as const)(
-    'prices Pi subscription receipts in the recovered account currency (%s)', async mode => {
+    'prices Pi subscription receipts in the original quote currency after account recovery (%s)', async mode => {
       const h = harness();
       pricing(true);
       effects.fn('isLedgerCurrencyKnown').mockReturnValue(false);
@@ -2455,9 +2473,9 @@ describe('usage through the production event pipeline', () => {
       h.emit(event('account_usage', { type: 'pi/request_usage', usage: receiptUsage }, { source: 'pi' }));
       if (mode !== 'during-write') {
         await flushSessionPiTurnUsage();
-        // Unknown currency is pending, not a final USD estimate.
-        expect(writes.mock.calls.every(call => (call as unknown as [string, Array<{ amount: unknown }>])[1]
-          .every(row => row.amount === null))).toBe(true);
+        expect(writes).toHaveBeenLastCalledWith('usage.recordPiUsage', [expect.objectContaining({
+          currency: 'USD', amount: expect.any(Number), actualCost: false,
+        })]);
       }
       effects.fn('currentLedgerCurrency').mockReturnValue('CNY');
       effects.fn('isLedgerCurrencyKnown').mockReturnValue(true);
@@ -2467,7 +2485,7 @@ describe('usage through the production event pipeline', () => {
       }, { source: 'pi' }));
       await flushSessionPiTurnUsage();
       expect(writes).toHaveBeenLastCalledWith('usage.recordPiUsage', [expect.objectContaining({
-        currency: 'CNY', amount: expect.any(Number), actualCost: false,
+        currency: 'USD', amount: expect.any(Number), actualCost: false,
       })]);
       await h.dispose();
     },
@@ -2630,6 +2648,42 @@ describe('usage through the production event pipeline', () => {
     },
   );
 
+  // Unit regression: local billing may recognize a saved custom provider even
+  // when this Codex run explicitly used a gateway key. Only the direct run
+  // may reach the enterprise sink; its local ledger is written in both cases.
+  it.each(['provider-oauth', 'gateway-key'])('gates company usage on the executing credential (%s)', async credentialMode => {
+    const h = harness();
+    pricing(false);
+    effects.fn('getSessionProvider').mockReturnValue('custom');
+    effects.fn('isUserProviderSession').mockReturnValue(true);
+    const record = vi.fn();
+    installCompanyUsageCapture(() => record);
+    installExecutionReporting({
+      direct: provider => provider === 'custom', available: () => true, challenge: () => null,
+      issue: async () => null, redeem: async () => undefined,
+    });
+    try {
+      h.emit(event('status', { isRunning: true }));
+      h.emit(event('done', { usage: { ...usage('codex'), execution: {
+        providerId: 'custom', credentialMode, model: 'test-model',
+      } } }));
+      await microtasks();
+      expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalled();
+      if (credentialMode === 'gateway-key') {
+        expect(record).not.toHaveBeenCalled();
+      } else {
+        expect(record).toHaveBeenCalledTimes(1);
+        expect(record).toHaveBeenCalledWith([
+          { model: 'test-model', input: 100, output: 20, cacheRead: 10, cacheWrite: 0 },
+        ]);
+      }
+    } finally {
+      installCompanyUsageCapture(() => undefined);
+      installExecutionReporting(undefined);
+      await h.dispose();
+    }
+  });
+
   // Unit regression: another task's Gateway spawn must not take a native subscription turn.
   it('settles the executing Codex route and model when the global proxy points elsewhere', async () => {
     const h = harness();
@@ -2640,7 +2694,7 @@ describe('usage through the production event pipeline', () => {
     await microtasks();
     expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledWith(expect.objectContaining({
       model: 'test-model#billing=subscription', inputTokensDelta: 100,
-      attribution: { provider: 'openai', billingSource: 'subscription' },
+      attribution: { provider: 'openai', billingSource: 'subscription', modelUnconfirmed: true },
     }));
     expect(effects.fn('recordTurnSpend')).not.toHaveBeenCalled();
     await h.dispose();
@@ -2911,6 +2965,55 @@ describe('usage through the production event pipeline', () => {
     },
   );
 
+  // #11616 review, unit: the production done entry must not report a selected
+  // model as observed when proxy matching supplies no proof. Existing served-model
+  // tests assert cost only. Minimal input is one fallback segment with execution.model.
+  // Cases cover legacy receipts, failed/missing matches, invalid totals and mixed rows.
+  // Uses the existing event fixture, no network or extra module loads.
+  // Standalone wall-clock 9.72s, including 6.99s shared fixture collection for 290 cases.
+  it.each([
+    ['legacy', undefined, true],
+    ['unmatched', false, true],
+    ['confirmed', true, true],
+    ['inconsistent totals', true, false],
+  ] as const)('keeps Codex actual-model confirmation separate from execution (%s)', async (_name, confirmed, reliable) => {
+    const h = harness();
+    pricing(false);
+    h.emit(event('done', { usage: {
+      promptTokens: reliable ? 100 : 101, completionTokens: 20, cachedTokens: 10,
+      execution: { model: 'selected-model', providerId: 'xd', credentialMode: 'gateway-key' },
+      segments: [{ ...segment, model: 'selected-model', modelConfirmed: confirmed }],
+    } }));
+    await microtasks();
+    const tokenWrite = effects.fn('recordModelTurnUsage').mock.calls.find(([row]) => row.inputTokensDelta > 0)?.[0];
+    expect(tokenWrite.inputTokensDelta).toBe(reliable ? 100 : 101);
+    expect(tokenWrite.attribution.modelUnconfirmed).toBe(confirmed && reliable ? undefined : true);
+    await h.dispose();
+  });
+
+  it('keeps confirmation with each Codex model in a mixed turn', async () => {
+    const h = harness();
+    pricing(false);
+    h.emit(event('done', { usage: {
+      promptTokens: 200, completionTokens: 40, cachedTokens: 20,
+      execution: { model: 'selected-model', providerId: 'xd', credentialMode: 'gateway-key' },
+      segments: [
+        { ...segment, model: 'served-model', modelConfirmed: true },
+        { ...segment, model: 'selected-model', modelConfirmed: false },
+      ],
+    } }));
+    await microtasks();
+    const tokenWrites = effects.fn('recordModelTurnUsage').mock.calls
+      .map(([row]) => row).filter(row => row.inputTokensDelta > 0);
+    expect(tokenWrites).toEqual([
+      expect.objectContaining({ model: 'served-model#billing=api',
+        attribution: expect.not.objectContaining({ modelUnconfirmed: true }) }),
+      expect.objectContaining({ model: 'selected-model#billing=api',
+        attribution: expect.objectContaining({ modelUnconfirmed: true }) }),
+    ]);
+    await h.dispose();
+  });
+
   it.each(['live', 'replay'] as const)('uses reference overrides for direct Pi subscriptions (%s)', async mode => {
     const h = harness();
     pricing(false);
@@ -3102,6 +3205,405 @@ describe('usage through the production event pipeline', () => {
       model: expect.stringContaining('#billing=subscription'),
       inputTokensDelta: 100, outputTokensDelta: 20,
       money: expect.objectContaining({ kind: 'value-estimate' }),
+    }));
+    await h.dispose();
+  });
+
+  // 回归价值：2026-11-19 #11456；真走 handleSessionEvent -> captureTurnUsageContext -> sessionClaudeTurnUsage
+  // 验证不透明分组在主路径（modelUsage，含上游返回后端模型名）、窄兜底（total_cost_usd）均不把 SDK 兜底写成 actual-cost。tier: unit。
+  it.each([
+    'unpriced-main',
+    'unpriced-main-backend-model',
+    'unpriced-fallback',
+    'priced-main',
+    'priced-main-backend-model',
+  ] as const)(
+    'routes opaqueMagpie Claude Code turns safely (%s)',
+    async (scenario) => {
+      const h = harness();
+      effects.fn('getSessionProvider').mockReturnValue('custom-magpie');
+      effects.fn('getGatewayAccountCurrency').mockResolvedValue('USD');
+      effects.fn('consumeLastAssistantPersistId').mockReturnValue('assistant-row');
+      h.deps.readSessionModelForUsage = vi.fn(async () => 'magpie-mix');
+      effects.fn('getActiveCatalog').mockReturnValue({
+        providers: [
+          {
+            id: 'custom-magpie',
+            auth: { method: 'api_key' },
+            access: { kind: 'api' },
+            models: {
+              'claude-code': [
+                {
+                  id: 'magpie-mix',
+                  name: 'Magpie Mix',
+                  opaqueModelId: true,
+                },
+              ],
+            },
+          },
+        ],
+      });
+      const isPriced = scenario === 'priced-main' || scenario === 'priced-main-backend-model';
+      const reportedModel =
+        scenario === 'unpriced-main-backend-model' || scenario === 'priced-main-backend-model'
+          ? 'claude-sonnet-4-6'
+          : 'magpie-mix';
+      effects.fn('getReferenceModelPricing').mockReturnValue(
+        isPriced
+          ? {
+              'custom-magpie': {
+                'magpie-mix\u0000claude-code': {
+                  providerId: 'custom-magpie',
+                  modelId: 'magpie-mix',
+                  currency: 'USD',
+                  source: 'provider-reference',
+                  approximate: true,
+                  inputPerMtok: 2,
+                  outputPerMtok: 10,
+                },
+              },
+            }
+          : {},
+      );
+
+      h.emit(event('status', { isRunning: true }, { source: 'claude-code' }));
+      if (scenario === 'unpriced-fallback') {
+        h.deps.lastReportedCostUsdBySession.set('task', 10);
+        h.emit(event('done', {
+          total_cost_usd: 12,
+          duration_ms: 500,
+          usage: { input_tokens: 100, output_tokens: 20 },
+        }, { source: 'claude-code' }));
+      } else {
+        h.emit(event('done', {
+          total_cost_usd: 9.99,
+          modelUsageCumulativeStartsAtZero: true,
+          modelUsage: {
+            [reportedModel]: { inputTokens: 1_000_000, outputTokens: 0, costUSD: 9.99 },
+          },
+          usageSegmentsComplete: true,
+          usageSegments: [{
+            id: 'req-1',
+            model: reportedModel,
+            inputTokens: 1_000_000,
+            outputTokens: 0,
+            cacheReadTokens: 0,
+            cacheCreateTokens: 0,
+            complete: true,
+          }],
+        }, { source: 'claude-code' }));
+      }
+      await microtasks();
+
+      expect(effects.fn('recordTurnSpend')).not.toHaveBeenCalled();
+      expect(effects.fn('recordSessionTurnSpend')).not.toHaveBeenCalled();
+      if (isPriced) {
+        expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledWith(expect.objectContaining({
+          model: reportedModel,
+          inputTokensDelta: 1_000_000,
+          money: null,
+        }));
+        expect(effects.fn('recordSchedulerTurnCost')).toHaveBeenCalledWith(expect.objectContaining({
+          clientId: 'assistant-row',
+          money: expect.objectContaining({ amount: 2, kind: 'value-estimate' }),
+          turnUsageDetails: expect.objectContaining({ model: reportedModel, inputTokens: 1_000_000 }),
+        }));
+      } else if (scenario === 'unpriced-fallback') {
+        expect(effects.fn('recordSchedulerTurnCost')).not.toHaveBeenCalled();
+        expect(effects.fn('recordTurnUsageOnMessage')).toHaveBeenCalledWith(expect.objectContaining({
+          clientId: 'assistant-row',
+          turnUsageDetails: expect.objectContaining({ model: 'magpie-mix' }),
+        }));
+      } else {
+        expect(effects.fn('recordSchedulerTurnCost')).not.toHaveBeenCalled();
+        expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledWith(expect.objectContaining({
+          model: reportedModel,
+          inputTokensDelta: 1_000_000,
+          money: null,
+        }));
+        expect(effects.fn('recordTurnUsageOnMessage')).toHaveBeenCalledWith(expect.objectContaining({
+          clientId: 'assistant-row',
+          turnUsageDetails: expect.objectContaining({ model: reportedModel, inputTokens: 1_000_000 }),
+        }));
+      }
+      await h.dispose();
+    },
+  );
+
+  // 回归价值：2026-11-19 #11456 Greptile P1；Pi 链路与 receipt 持久化在选定不透明模型但上游返回后端名时
+  // 同样按 selectedModel 查找报价与 opaque 判定，不跨名借用后端型号报价。tier: unit。
+  it.each(['legacy-unpriced-backend-model', 'receipt-priced-backend-model'] as const)(
+    'routes opaqueMagpie Pi turns safely (%s)',
+    async (scenario) => {
+      const h = harness();
+      effects.fn('getSessionProvider').mockReturnValue('custom-magpie');
+      effects.fn('isUserProviderSession').mockReturnValue(true);
+      effects.fn('currentLedgerCurrency').mockReturnValue('USD');
+      effects.fn('isLedgerCurrencyKnown').mockReturnValue(true);
+      effects.fn('consumeLastAssistantPersistId').mockReturnValue('assistant-row');
+      Object.defineProperty(h.session, 'model', { value: 'magpie-mix' });
+      h.deps.readSessionModelForUsage = vi.fn(async () => 'magpie-mix');
+      effects.fn('piUsageToTokens').mockReturnValue({
+        inputTokens: 1_000_000,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheCreateTokens: 0,
+      });
+      effects.fn('getActiveCatalog').mockReturnValue({
+        providers: [
+          {
+            id: 'custom-magpie',
+            auth: { method: 'api_key' },
+            access: { kind: scenario === 'receipt-priced-backend-model' ? 'managed' : 'api' },
+            models: {
+              pi: [{ id: 'magpie-mix', name: 'Magpie Mix', opaqueModelId: true }],
+            },
+          },
+        ],
+      });
+      effects.fn('getReferenceModelPricing').mockReturnValue(
+        scenario === 'receipt-priced-backend-model'
+          ? {
+              'custom-magpie': {
+                'magpie-mix\u0000pi': {
+                  providerId: 'custom-magpie',
+                  modelId: 'magpie-mix',
+                  currency: 'USD',
+                  source: 'provider-reference',
+                  approximate: true,
+                  inputPerMtok: 2,
+                  outputPerMtok: 10,
+                },
+              },
+            }
+          : {
+              'custom-magpie': {
+                'claude-sonnet-4-6\u0000pi': {
+                  providerId: 'custom-magpie',
+                  modelId: 'claude-sonnet-4-6',
+                  currency: 'USD',
+                  source: 'provider-reference',
+                  approximate: true,
+                  inputPerMtok: 3,
+                  outputPerMtok: 15,
+                },
+              },
+            },
+      );
+
+      h.emit(event('status', { isRunning: true }, { source: 'pi' }));
+      if (scenario === 'receipt-priced-backend-model') {
+        const writes = vi.fn(async (_name: string, _rows: PiUsageWrite[]) => ({ changed: true }));
+        effects.fn('getDbClient').mockReturnValue({ tx: writes, queryOne: async () => null });
+        h.emit(event('account_usage', {
+          type: 'pi/request_usage',
+          usage: {
+            settlementId: 'opaque-pi-turn',
+            receipts: [{
+              id: 'pi:1',
+              model: 'claude-sonnet-4-6',
+              inputTokens: 1_000_000,
+              outputTokens: 0,
+              cacheReadTokens: 0,
+              cacheCreateTokens: 0,
+              recordedAt: Date.now(),
+            }],
+          },
+        }, { source: 'pi' }));
+        await flushSessionPiTurnUsage();
+        expect(writes).toHaveBeenCalledTimes(2);
+        expect(writes).toHaveBeenLastCalledWith('usage.recordPiUsage', [
+          expect.objectContaining({ model: 'claude-sonnet-4-6', amount: 0, actualCost: false }),
+        ]);
+        expect(effects.fn('broadcastSessionSpend')).not.toHaveBeenCalled();
+      } else {
+        h.emit(event('done', {
+          usage: {
+            inputTokens: 1_000_000,
+            outputTokens: 0,
+            cacheReadTokens: 0,
+            cacheCreationTokens: 0,
+            segmentsComplete: true,
+            segments: [{
+              id: 'pi:1',
+              model: 'claude-sonnet-4-6',
+              inputTokens: 1_000_000,
+              outputTokens: 0,
+              cacheReadTokens: 0,
+              cacheCreateTokens: 0,
+              costUsd: 9.99,
+            }],
+          },
+        }, { source: 'pi' }));
+        await flushSessionPiTurnUsage();
+        expect(effects.fn('recordTurnSpend')).not.toHaveBeenCalled();
+        expect(effects.fn('recordSchedulerTurnCost')).not.toHaveBeenCalled();
+        expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledWith(expect.objectContaining({
+          model: 'claude-sonnet-4-6',
+          inputTokensDelta: 1_000_000,
+          money: null,
+        }));
+      }
+      await h.dispose();
+    },
+  );
+
+  // 回归价值：2026-11-22 PR #11464 Codex P2 (PRRT_kwDOTgdRUs66ehqz / PRRT_kwDOTgdRUs66ehq0)；
+  // 真实经过 handleSessionEvent -> captureTurnUsageContext -> sessionClaudeTurnUsageCore，
+  // 覆盖官方 Anthropic 自定义 ID（https://api.anthropic.com）保留 SDK actual-cost 而同 preset ID
+  // 中转（https://relay.example）走参考报价，且同轮子代理段（claude:2:toolu_1）不被主 opaqueModelId 劫持。tier: unit。
+  it.each([
+    { scenario: 'official-custom-id-reference', providerId: 'anthropic-work', upstream: 'https://api.anthropic.com', source: 'provider-reference' as const, expectKind: 'actual-cost' as const, expectAmount: 2.75 },
+    { scenario: 'official-custom-id-override', providerId: 'anthropic-work', upstream: 'https://api.anthropic.com', source: 'user-override' as const, expectKind: 'value-estimate' as const, expectAmount: 3 },
+    { scenario: 'relay-with-anthropic-preset', providerId: 'anthropic-api', upstream: 'https://relay.example', source: 'provider-reference' as const, expectKind: 'value-estimate' as const, expectAmount: 3 },
+  ])('classifies official vs relayed Anthropic API connections by endpoint ($scenario)', async ({
+    providerId,
+    upstream,
+    source,
+    expectKind,
+    expectAmount,
+  }) => {
+    const h = harness();
+    effects.fn('getSessionProvider').mockReturnValue(providerId);
+    effects.fn('getGatewayAccountCurrency').mockResolvedValue('USD');
+    effects.fn('consumeLastAssistantPersistId').mockReturnValue('assistant-row');
+    h.deps.readSessionModelForUsage = vi.fn(async () => 'claude-sonnet-4-6');
+    effects.fn('getActiveCatalog').mockReturnValue({
+      providers: [
+        {
+          id: providerId,
+          auth: { method: 'api_key' },
+          access: { kind: 'api' },
+          routing: { 'claude-code': { upstream } },
+          models: { 'claude-code': [{ id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', catalogPresetId: 'anthropic-api' }] },
+        },
+      ],
+    });
+    effects.fn('getReferenceModelPricing').mockReturnValue({
+      [providerId]: {
+        'claude-sonnet-4-6\u0000claude-code': {
+          providerId,
+          modelId: 'claude-sonnet-4-6',
+          currency: 'USD',
+          source,
+          approximate: true,
+          inputPerMtok: 3,
+          outputPerMtok: 15,
+        },
+      },
+    });
+    h.emit(event('status', { isRunning: true }, { source: 'claude-code' }));
+    h.emit(event('done', {
+      total_cost_usd: 2.75,
+      modelUsageCumulativeStartsAtZero: true,
+      modelUsage: {
+        'claude-sonnet-4-6': { inputTokens: 1_000_000, outputTokens: 0, costUSD: 2.75 },
+      },
+      usageSegmentsComplete: true,
+      usageSegments: [{
+        id: 'claude:1:__main__',
+        model: 'claude-sonnet-4-6',
+        inputTokens: 1_000_000,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheCreateTokens: 0,
+        complete: true,
+      }],
+    }, { source: 'claude-code' }));
+    await microtasks();
+
+    expect(effects.fn('recordSchedulerTurnCost')).toHaveBeenCalledWith(expect.objectContaining({
+      clientId: 'assistant-row',
+      money: expect.objectContaining({ amount: expectAmount, kind: expectKind }),
+    }));
+    if (expectKind === 'actual-cost') {
+      expect(effects.fn('recordTurnSpend')).toHaveBeenCalledWith(expect.objectContaining({ amount: expectAmount }));
+    } else {
+      expect(effects.fn('recordTurnSpend')).not.toHaveBeenCalled();
+    }
+    await h.dispose();
+  });
+
+  it('prices opaque main and distinct subagent models separately in one Claude turn', async () => {
+    const h = harness();
+    effects.fn('getSessionProvider').mockReturnValue('custom-magpie');
+    effects.fn('getGatewayAccountCurrency').mockResolvedValue('USD');
+    effects.fn('consumeLastAssistantPersistId').mockReturnValue('assistant-row');
+    h.deps.readSessionModelForUsage = vi.fn(async () => 'magpie-mix');
+    effects.fn('getActiveCatalog').mockReturnValue({
+      providers: [
+        {
+          id: 'custom-magpie',
+          auth: { method: 'api_key' },
+          access: { kind: 'api' },
+          routing: { 'claude-code': { upstream: 'https://magpie.example' } },
+          models: {
+            'claude-code': [
+              { id: 'magpie-mix', name: 'Magpie Mix', opaqueModelId: true },
+              { id: 'claude-haiku-4-5', name: 'Haiku' },
+            ],
+          },
+        },
+      ],
+    });
+    effects.fn('getReferenceModelPricing').mockReturnValue({
+      'custom-magpie': {
+        'magpie-mix\u0000claude-code': {
+          providerId: 'custom-magpie',
+          modelId: 'magpie-mix',
+          currency: 'USD',
+          source: 'provider-reference',
+          approximate: true,
+          inputPerMtok: 2,
+          outputPerMtok: 10,
+        },
+        'claude-haiku-4-5\u0000claude-code': {
+          providerId: 'custom-magpie',
+          modelId: 'claude-haiku-4-5',
+          currency: 'USD',
+          source: 'provider-reference',
+          approximate: true,
+          inputPerMtok: 1,
+          outputPerMtok: 5,
+        },
+      },
+    });
+    h.emit(event('status', { isRunning: true }, { source: 'claude-code' }));
+    h.emit(event('done', {
+      total_cost_usd: 10.5,
+      modelUsageCumulativeStartsAtZero: true,
+      modelUsage: {
+        'claude-sonnet-4-6': { inputTokens: 1_000_000, outputTokens: 0, costUSD: 9.99 },
+        'claude-haiku-4-5': { inputTokens: 500_000, outputTokens: 0, costUSD: 0.51 },
+      },
+      usageSegmentsComplete: true,
+      usageSegments: [
+        {
+          id: 'claude:1:__main__',
+          model: 'claude-sonnet-4-6',
+          inputTokens: 1_000_000,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheCreateTokens: 0,
+          complete: true,
+        },
+        {
+          id: 'claude:2:toolu_1',
+          model: 'claude-haiku-4-5',
+          inputTokens: 500_000,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheCreateTokens: 0,
+          complete: true,
+        },
+      ],
+    }, { source: 'claude-code' }));
+    await microtasks();
+
+    expect(effects.fn('recordTurnSpend')).not.toHaveBeenCalled();
+    expect(effects.fn('recordSchedulerTurnCost')).toHaveBeenCalledWith(expect.objectContaining({
+      clientId: 'assistant-row',
+      money: expect.objectContaining({ amount: 2.5, kind: 'value-estimate' }),
     }));
     await h.dispose();
   });

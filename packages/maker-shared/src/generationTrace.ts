@@ -15,6 +15,8 @@ export interface GenerationTrace {
   requests: number;
   /** Speed readings: `[atMs, tokensPerSecond]`. */
   speed: Array<[number, number]>;
+  /** Chart positions whose speed is the settled average of one request. */
+  requestRateTimes?: number[];
   /**
    * Finished requests: `[atMs, thinkingTokens, requests]`. `thinkingTokens` is -1
    * when the provider reported no split; `requests` is above 1 once the host
@@ -57,6 +59,9 @@ export function normalizeGenerationTrace(value: unknown): GenerationTrace | unde
     durationMs: raw.durationMs,
     requests: Math.floor(raw.requests),
     speed,
+    ...(Array.isArray(raw.requestRateTimes) && raw.requestRateTimes.length <= speed.length &&
+      raw.requestRateTimes.every(t => finiteAtLeast(t, 0))
+      ? { requestRateTimes: raw.requestRateTimes as number[] } : {}),
     marks,
     reportedOutputTokens: finiteAtLeast(raw.reportedOutputTokens, 0) ? raw.reportedOutputTokens : 0,
   };
@@ -69,7 +74,7 @@ export function normalizeGenerationTrace(value: unknown): GenerationTrace | unde
  * rather than an empty frame.
  */
 export function traceHasChart(trace: GenerationTrace): boolean {
-  return trace.speed.length > 1 || trace.marks.some((mark) => mark[1] >= 0);
+  return trace.speed.length > 1 || Boolean(trace.requestRateTimes?.length) || trace.marks.some((mark) => mark[1] >= 0);
 }
 
 /** The marks of a stored trace in the shape the live chart keeps them. */

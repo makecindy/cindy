@@ -246,6 +246,8 @@ const SESSION_FIELD_WHITELIST = [
   'fastMode',
   'status',
   'agentKind',
+  'providerId',
+  'agentDeviceId',
   'source',
   'orcaRole',
   'parentSessionId',

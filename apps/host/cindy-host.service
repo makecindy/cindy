@@ -20,9 +20,13 @@ RestartSec=3
 # SIGTERM, which is what systemd sends first.
 KillSignal=SIGTERM
 TimeoutStopSec=30
-# Environment the host reads. Set your region and profile explicitly so the
-# service never guesses a different data root than your logged-in profile.
-Environment=CINDY_HOST_REGION=global
+# Environment the host reads. Set your profile explicitly so the service never
+# guesses a different data root than your logged-in profile.
+# Region: an installed release is built for one edition (cn or global) and
+# needs nothing here; a CINDY_HOST_REGION naming the other edition makes it
+# refuse to start. From a checkout (this unit's ExecStart) it chooses the
+# edition, global when unset.
+# Environment=CINDY_HOST_REGION=global
 # Environment=CINDY_HOST_DATA_DIR=%h/.config/CindyGlobal
 # Environment=CINDY_HOST_OWNER=<owner-id-from-the-login-stage>
 

@@ -6,10 +6,10 @@
  * reference later changes, the local patch wins and the UI exposes a conflict/reset state.
  */
 
-import type { AgentKind, ModelRegistry } from '@cindy/model-providers';
+import type { AgentKind, ModelRegistry, Provider } from '@cindy/model-providers';
 
-import { modelPricingKey } from '../../shared/modelPriceQuote.js';
-import { accountReferencePriceQuote as providerReferencePriceQuote } from './accountReferencePrice.js';
+import { modelCostQuote, modelPricingKey } from '../../shared/modelPriceQuote.js';
+import { accountReferencePriceQuote as providerReferencePriceQuote, providerRegistryTariffEndedAt, providerSnapshotReferencePriceQuote } from './accountReferencePrice.js';
 import type {
   ModelPriceOverrideDesiredQuote,
   ModelPriceOverrideTarget,
@@ -24,6 +24,7 @@ import type {
 import { ownerScopedUserDataPath } from '../appSessionState.js';
 import { createOverrideSettingsFile, portableOverrideSettings } from '../maker-host/override-settings-file.js';
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
+import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import { currentLedgerCurrency } from './ledgerCurrency.js';
 
 const log = desktopMakerLogger.child('model-price-overrides');
@@ -439,48 +440,50 @@ function mergedQuote(
   };
 }
 
-function currencyCanProjectToLedger(
-  currency: MoneyCurrency,
-  ledgerCurrency: MoneyCurrency,
-): boolean {
-  return currency === ledgerCurrency || (currency === 'USD' && ledgerCurrency === 'CNY');
-}
-
-function allowedCurrenciesForLedger(ledgerCurrency: MoneyCurrency): MoneyCurrency[] {
-  return ledgerCurrency === 'USD' ? ['USD'] : ['USD', 'CNY'];
-}
-
 function readEntries(): Record<string, StoredModelPriceOverride> {
   store.invalidateIfChanged();
   return store.read().entries;
 }
 
+function currentConnectionReference(
+  target: ModelPriceOverrideTarget,
+  registry: ModelRegistry | null | undefined,
+  displayedProvider?: Provider,
+): ModelPriceQuote | undefined {
+  const { providerId, modelId, agent } = target;
+  const provider = displayedProvider ?? getActiveCatalog().providers.find(candidate => candidate.id === providerId);
+  const remote = provider
+    ? providerSnapshotReferencePriceQuote(provider, modelId, registry, {
+      agent, ...(provider.auth.method === 'oauth' && provider.auth.native ? { officialOnly: true } : {}),
+    })
+    : providerReferencePriceQuote(providerId, modelId, registry, { agent });
+  if (remote) return remote;
+  if (providerId === 'xd' || provider?.source !== 'user') return undefined;
+  const model = provider.models[agent]?.find(candidate => candidate.id === modelId);
+  if (!model?.cost || providerRegistryTariffEndedAt(provider, providerId, modelId, registry, undefined, agent)) {
+    return undefined;
+  }
+  return modelCostQuote(providerId, model);
+}
+
 export function readModelPriceOverrideView(
   target: ModelPriceOverrideTarget,
   registry: ModelRegistry | null | undefined,
-  ledgerCurrency: MoneyCurrency = currentLedgerCurrency(),
+  displayedProvider?: Provider,
 ): ModelPriceOverrideView {
-  const remoteReference = providerReferencePriceQuote(target.providerId, target.modelId, registry, {
-    agent: target.agent,
-  });
-  const reference =
-    remoteReference && currencyCanProjectToLedger(remoteReference.currency, ledgerCurrency)
-      ? remoteReference
-      : undefined;
+  const reference = currentConnectionReference(target, registry, displayedProvider);
   const record = readEntries()[overrideKey(target)];
   const merged = mergedQuote(target, reference, record?.values, record?.baseReference);
   return {
     target,
     editable: target.providerId !== 'xd',
     reference: reference ?? null,
-    effective:
-      merged && currencyCanProjectToLedger(merged.currency, ledgerCurrency)
-        ? merged
-        : (reference ?? null),
+    effective: merged ?? reference ?? null,
     override: record?.values ?? null,
-    conflict: Boolean(record && !sameComparable(record.baseReference, comparable(remoteReference))),
+    conflict: Boolean(record && !sameComparable(record.baseReference, comparable(reference))),
     registryUpdatedAt: registry?.updatedAt ?? null,
-    allowedCurrencies: allowedCurrenciesForLedger(ledgerCurrency),
+    // Report the currencies accepted by the price override save handler.
+    allowedCurrencies: currentLedgerCurrency() === 'USD' ? ['USD'] : ['USD', 'CNY'],
   };
 }
 
@@ -488,13 +491,12 @@ export function setModelPriceOverride(
   target: ModelPriceOverrideTarget,
   desired: ModelPriceOverrideDesiredQuote,
   registry: ModelRegistry | null | undefined,
+  displayedProvider?: Provider,
 ): void {
   if (target.providerId === 'xd') {
     throw new Error('Cindy AI Gateway pricing cannot be overridden');
   }
-  const reference = providerReferencePriceQuote(target.providerId, target.modelId, registry, {
-    agent: target.agent,
-  });
+  const reference = currentConnectionReference(target, registry, displayedProvider);
   const baseReference = comparable(reference);
   const values = sparseValues(desired, baseReference);
   const entries = { ...readEntries() };
@@ -585,30 +587,24 @@ export function mergeStoredModelPriceOverride(
 export function applyModelPriceOverrides(
   pricing: ModelPricingCatalog,
   registry: ModelRegistry | null | undefined,
-  ledgerCurrency: MoneyCurrency = currentLedgerCurrency(),
   options: { at?: string | Date; entries?: ModelPriceOverridesSnapshot } = {},
 ): ModelPricingCatalog {
   const next: ModelPricingCatalog = Object.fromEntries(
     Object.entries(pricing).map(([providerId, quotes]) => [
       providerId,
-      Object.fromEntries(
-        Object.entries(quotes).filter(
-          ([, quote]) =>
-            quote.source === 'gateway' ||
-            currencyCanProjectToLedger(quote.currency, ledgerCurrency),
-        ),
-      ),
+      { ...quotes },
     ]),
   );
   for (const record of Object.values(options.entries ?? readEntries())) {
     if (record.providerId === 'xd') continue;
-    const reference = providerReferencePriceQuote(record.providerId, record.modelId, registry, {
-      agent: record.agent,
-      at: options.at,
-    });
+    const key = modelPricingKey(record.modelId, record.agent);
+    // The projection already checked this engine's endpoint and historical tariff date.
+    const reference = pricing[record.providerId]?.[key] ?? providerReferencePriceQuote(
+      record.providerId, record.modelId, registry, { agent: record.agent, at: options.at },
+    );
     const quote = mergedQuote(record, reference, record.values, record.baseReference);
-    if (!quote || !currencyCanProjectToLedger(quote.currency, ledgerCurrency)) continue;
-    (next[record.providerId] ??= {})[modelPricingKey(record.modelId, record.agent)] = quote;
+    if (!quote) continue;
+    (next[record.providerId] ??= {})[key] = quote;
   }
   return next;
 }
@@ -620,7 +616,6 @@ export const __testing = {
   sameComparable,
   comparable,
   mergedQuote,
-  currencyCanProjectToLedger,
 };
 
 /** New-computer setup: values the user changed here (docs/product-rules/new-device-setup-migration.md). */

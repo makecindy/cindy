@@ -555,7 +555,7 @@ function FolderChipBig({
           disabled={disabled}
           className={cn(
             'inline-flex h-[42px] items-center gap-2.5 rounded-full',
-            'border border-border bg-[var(--chat-input-bg)] px-[18px]',
+            'border border-border bg-[var(--chat-input-bg)] px-4',
             'text-14 font-medium text-foreground',
             'transition-colors hover:bg-sidebar-item-hover',
             'disabled:cursor-not-allowed disabled:opacity-50',
@@ -794,7 +794,7 @@ export function BranchWorktreeChip({
         !branchInteractive && 'cursor-default',
         compact
           ? 'max-w-[180px] gap-1.5 pl-3 pr-2 text-12 font-medium leading-[1.167]'
-          : 'max-w-[220px] gap-2.5 pl-[18px] pr-2.5 text-14 font-medium',
+          : 'max-w-[220px] gap-2.5 pl-4 pr-2.5 text-14 font-medium',
         branchInteractive &&
           (compact
             ? 'hover:bg-[var(--create-agent-control-bg-hover)] active:bg-[var(--create-agent-control-bg-pressed)]'
@@ -880,7 +880,7 @@ export function BranchWorktreeChip({
             type="button"
             onClick={onRetryBranches}
             className={cn(
-              'w-full cursor-pointer rounded-[8px] px-3 py-1.5 text-left text-13 text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+              'w-full cursor-pointer rounded-lg px-3 py-1.5 text-left text-13 text-muted-foreground hover:bg-accent hover:text-accent-foreground',
               'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
             )}
           >
@@ -970,7 +970,7 @@ export function BranchWorktreeChip({
                           onMouseMove={() => setActiveBranchIndex(index)}
                           onClick={() => pickBranch(b)}
                           className={cn(
-                            'cursor-pointer break-words rounded-[8px] px-3 py-1.5 text-13 text-foreground',
+                            'cursor-pointer break-words rounded-lg px-3 py-1.5 text-13 text-foreground',
                             optionDisabledReason?.(b) && 'cursor-default opacity-60',
                             index === clampedActiveIndex
                               ? 'bg-accent text-accent-foreground'
@@ -1025,7 +1025,7 @@ export function BranchWorktreeChip({
         checkboxDisabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer',
         compact
           ? 'gap-1.5 pl-2 pr-3 text-12 font-medium leading-[1.167]'
-          : 'gap-2.5 pl-2.5 pr-[18px] text-14 font-medium',
+          : 'gap-2.5 pl-2.5 pr-4 text-14 font-medium',
         !checkboxDisabled &&
           (compact
             ? 'hover:bg-[var(--create-agent-control-bg-hover)] active:bg-[var(--create-agent-control-bg-pressed)]'

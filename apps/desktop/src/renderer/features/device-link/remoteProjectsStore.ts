@@ -480,8 +480,13 @@ function settlePendingStatuses(
   return settled;
 }
 
+function isVisibleSession(session: Session): boolean {
+  return !isCindyMakeSource(session.source);
+}
+
 /** 重算扁平快照 + origin 注册表,然后通知订阅者。所有 mutation 走这里。 */
 function recompute(): void {
+  const previousMerged = mergedSnapshot;
   recomputeScheduleIndex();
   sessionDeviceIndex.clear();
   sessionTitleIndex.clear();
@@ -510,23 +515,36 @@ function recompute(): void {
   }
   const nextVisible = CINDY_MAKE_ENABLED
     ? [...mergedSnapshot]
-    : mergedSnapshot.filter((session) => !isCindyMakeSource(session.source));
+    : mergedSnapshot.filter(isVisibleSession);
   // Share only the UI projection. Authoritative rows must keep their new content
   // identities so captureSessionRead still rejects details predating a snapshot.
-  // Compare the complete JSON payload (including nested metadata), not a field
-  // whitelist that could leave a newly added sidebar field stale. Same-id tasks
-  // on different computers are distinct; only the last visible set is retained.
-  const visibleKey = (session: Session) => JSON.stringify([session.deviceLinkDeviceId, session.id]);
+  // The previous visible rows align with the previous filtered projection,
+  // followed by any creation previews. A projection reused by reference was
+  // already compared with its visible row. Compare full JSON for new references.
   for (const preview of creationPreviews.values()) {
     if (!nextVisible.some(row => row.id === preview.row.id && row.deviceLinkDeviceId === preview.row.deviceLinkDeviceId)) {
       nextVisible.push(preview.row);
       sessionTitleIndex.set(preview.row.id, preview.row.title);
     }
   }
-  const previousVisible = new Map(visibleMergedSnapshot.map((session) => [visibleKey(session), session]));
+  const previousProjection = CINDY_MAKE_ENABLED
+    ? previousMerged
+    : previousMerged.filter(isVisibleSession);
+  const previousVisibleIndexes = new Map<Session['deviceLinkDeviceId'], Map<string, number>>();
+  visibleMergedSnapshot.forEach((visible, index) => {
+    let indexes = previousVisibleIndexes.get(visible.deviceLinkDeviceId);
+    if (!indexes) {
+      indexes = new Map();
+      previousVisibleIndexes.set(visible.deviceLinkDeviceId, indexes);
+    }
+    indexes.set(visible.id, index);
+  });
   const sharedVisible = nextVisible.map((session) => {
-    const previous = previousVisible.get(visibleKey(session));
-    return previous && (previous === session || JSON.stringify(previous) === JSON.stringify(session))
+    const index = previousVisibleIndexes.get(session.deviceLinkDeviceId)?.get(session.id);
+    if (index === undefined) return session;
+    const previous = visibleMergedSnapshot[index];
+    return previous === session || previousProjection[index] === session ||
+      JSON.stringify(previous) === JSON.stringify(session)
       ? previous
       : session;
   });
@@ -764,7 +782,7 @@ const actions = {
   /**
    * 写入 / 覆盖某台设备的整份会话列表(bootstrap 订阅后拉一次 / reconnect 重拉 / reseed)。
    * rawSessions 是被控端 local-db:sessions:list 原样返回的 Session[],本函数负责打标记。
-   * 逐字节不变时跳过(避免无谓重渲染);epoch 乱序保护在调用方(listing tier)用
+   * 顺序及完整内容不变时跳过(避免无谓重渲染);epoch 乱序保护在调用方(listing tier)用
    * nextSnapshotEpoch/isLatestSnapshotEpoch 完成,本函数无条件替换。
    */
   setDeviceSessions(
@@ -820,6 +838,9 @@ const actions = {
       existing &&
       existing.connectionStatus === connectionStatus &&
       existing.deviceName === deviceName &&
+      // Membership and order can disprove equality without encoding either list.
+      existing.sessions.length === nextSessions.length &&
+      existing.sessions.every((session, index) => session.id === nextSessions[index].id) &&
       JSON.stringify(existing.sessions) === JSON.stringify(nextSessions)
     ) {
       if (!statusWasLoaded) {
@@ -1020,7 +1041,7 @@ const actions = {
     if (!shard) return;
     const idx = shard.sessions.findIndex((s) => s.id === sessionId);
     if (idx === -1) {
-      if (patch.status === 'active') requestRemoteReseed(deviceId, 'active');
+      if (patch.status === 'active' || patch.sideChatPromoted === true) requestRemoteReseed(deviceId, 'active');
       if (patch.status === 'archived' && shard.loadedStatuses.has('archived')) {
         requestRemoteReseed(deviceId, 'archived');
       }

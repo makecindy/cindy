@@ -26,12 +26,20 @@ export const DEFAULT_HOME_FILTERS: HomeFilterSelection = {
 };
 
 export type HomeListViewMode = 'text' | 'list';
+export type HomePinnedView = HomeListViewMode | 'card';
+export type HomePinnedSort = 'manual' | 'activity';
+export const HOME_IDENTITY_FIELDS = ['harness', 'project', 'teammate'] as const;
 /**
  * 与桌面任务信息同序,但不含 worktree:产品规则(sidebar-redesign-plan §3.4)限定 worktree
  * 标识仅本机 Desktop 显示——它依赖本地登记与存活探测,SSH / device-link / Mobile 不显示。
  * 旧版本存下的 'worktree' 由 normalizeTaskInfoFields 丢弃。
  */
-export type HomeTaskInfoField = 'time' | 'pr' | 'tokens' | 'cost';
+export type HomeTaskInfoField = typeof HOME_IDENTITY_FIELDS[number] | 'time' | 'pr' | 'tokens' | 'cost';
+
+export interface HomeModeDisplayPreferences extends HomeFilterSelection {
+  viewMode: HomeListViewMode;
+  taskInfoFields: readonly HomeTaskInfoField[];
+}
 
 /** 项目筛选里「对话」的占位键;与真实项目 key 不会撞(项目 key 带设备 / 路径前缀)。 */
 export const HOME_DIALOGUE_FILTER_KEY = 'dialogue';
@@ -39,8 +47,8 @@ export const HOME_DIALOGUE_FILTER_KEY = 'dialogue';
 export const HOME_VENDOR_FILTERS: readonly HomeVendorFilter[] = ['all', 'cc', 'codex', 'pi'];
 export const HOME_LAST_ACTIVITY_FILTERS: readonly HomeLastActivityFilter[] = ['1d', '3d', '7d', '30d', 'all'];
 /** 本表顺序 = 菜单里复选项的排列顺序(固定),与桌面一致。 */
-export const HOME_TASK_INFO_FIELDS: readonly HomeTaskInfoField[] = ['time', 'pr', 'tokens', 'cost'];
-export const DEFAULT_HOME_TASK_INFO_FIELDS: readonly HomeTaskInfoField[] = ['time'];
+export const HOME_TASK_INFO_FIELDS: readonly HomeTaskInfoField[] = [...HOME_IDENTITY_FIELDS, 'time', 'pr', 'tokens', 'cost'];
+export const DEFAULT_HOME_TASK_INFO_FIELDS: readonly HomeTaskInfoField[] = ['time', ...HOME_IDENTITY_FIELDS];
 
 export const LAST_ACTIVITY_DAYS: Record<Exclude<HomeLastActivityFilter, 'all'>, number> = {
   '1d': 1,
@@ -156,7 +164,7 @@ export function buildHomeSessionInfoPieces(
       if (typeof tokens === 'number' && Number.isFinite(tokens) && tokens > 0) {
         pieces.push({ key: 'tokens', text: formatCompactTokens(tokens) });
       }
-    } else {
+    } else if (field === 'cost') {
       const money = resolveSessionTotalMoney(session);
       if (money) pieces.push({ key: 'cost', text: formatRemoteMoney(money) });
     }

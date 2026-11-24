@@ -11,6 +11,7 @@
 
 import {
   AcpAgent,
+  type AcpAgentDeps,
   type AgentDeps,
   type AuthAdapter,
   type Capabilities,
@@ -22,6 +23,7 @@ import { getPluginHarnessRegistry, type PluginHarness } from '../cindy-brain/plu
 import { getDesktopMcpToolApprovalPolicy } from './mcp-tool-approval-policy.js';
 import type { NodeWorkerProcess } from '../cindy-brain/nodeRuntimeBroker.js';
 import { createAcpProcessTransport } from './acp-transport.js';
+import { withPluginEngineAccounts } from '../plugin-engine-accounts/agent.js';
 export { createAcpProcessTransport } from './acp-transport.js';
 export {
   getCachedPluginHarnessModels,
@@ -47,8 +49,12 @@ export interface BuildAcpAgentOpts {
   mcpProviders?: AgentDeps['mcpProviders'];
   makerMemory?: AgentDeps['makerMemory'];
   getMcpToolApprovalPolicy?: AgentDeps['getMcpToolApprovalPolicy'];
+  /** The installed-plugin roster, the same text the built-in engines get (briefing ahead of the first message). */
+  getGhostRosterPrompt?: AgentDeps['getGhostRosterPrompt'];
+  /** The Skills a task can use, with the built-in Pi engine's discovery and enablement. */
+  listSessionSkills?: AcpAgentDeps['listSessionSkills'];
   /** Starts the declared entry of a listed harness in raw-stdio mode. */
-  spawnHarness(key: string): Promise<NodeWorkerProcess>;
+  spawnHarness(key: string, options?: { remoteWorkspace?: boolean; guestWorkspace?: boolean; accountDir?: string }): Promise<NodeWorkerProcess>;
 }
 
 export function buildAcpAgent(opts: BuildAcpAgentOpts): AcpAgent {
@@ -61,10 +67,21 @@ export function buildAcpAgent(opts: BuildAcpAgentOpts): AcpAgent {
     ...(opts.mcpProviders ? { mcpProviders: opts.mcpProviders } : {}),
     ...(opts.makerMemory ? { makerMemory: opts.makerMemory } : {}),
     ...(opts.getMcpToolApprovalPolicy ? { getMcpToolApprovalPolicy: opts.getMcpToolApprovalPolicy } : {}),
+    ...(opts.getGhostRosterPrompt ? { getGhostRosterPrompt: opts.getGhostRosterPrompt } : {}),
+    ...(opts.listSessionSkills ? { listSessionSkills: opts.listSessionSkills } : {}),
     preparePiExtraSpawnConfig: (providers, ctx) => getPiExtraSpawnConfig(providers, logger, ctx),
     clientInfo: { name: 'cindy', title: 'Cindy', version: opts.appVersion },
     endpoints: {
-      connect: async (key) => createAcpProcessTransport(await opts.spawnHarness(key), logger),
+      connect: async (key, options) => createAcpProcessTransport(
+        options?.remoteWorkspace || options?.guestWorkspace || options?.accountDir
+          ? await opts.spawnHarness(key, {
+              ...(options.remoteWorkspace ? { remoteWorkspace: true } : {}),
+              ...(options.guestWorkspace ? { guestWorkspace: true } : {}),
+              ...(options.accountDir ? { accountDir: options.accountDir } : {}),
+            })
+          : await opts.spawnHarness(key),
+        logger,
+      ),
     },
     onSessionCapabilities: rememberCapabilities,
   });
@@ -76,6 +93,8 @@ export interface InstallPluginEnginesOpts {
   appVersion: string;
   mcpProviders?: AgentDeps['mcpProviders'];
   makerMemory?: AgentDeps['makerMemory'];
+  getGhostRosterPrompt?: AgentDeps['getGhostRosterPrompt'];
+  listSessionSkills?: AcpAgentDeps['listSessionSkills'];
 }
 
 /**
@@ -93,10 +112,14 @@ export function installPluginEngines(opts: InstallPluginEnginesOpts): () => void
       appVersion: opts.appVersion,
       ...(opts.mcpProviders ? { mcpProviders: opts.mcpProviders } : {}),
       ...(opts.makerMemory ? { makerMemory: opts.makerMemory } : {}),
+      ...(opts.getGhostRosterPrompt ? { getGhostRosterPrompt: opts.getGhostRosterPrompt } : {}),
+      ...(opts.listSessionSkills ? { listSessionSkills: opts.listSessionSkills } : {}),
       getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
-      spawnHarness: (key) => registry.spawn(key),
+      spawnHarness: (key, options) => (options ? registry.spawn(key, options) : registry.spawn(key)),
     });
-    registered = opts.maker.registerAgent('acp', agent);
+    // Engines whose plugin keeps accounts apart run on accounts like built-in providers
+    // (subscription-account-pools.md 插件引擎的账号); all others start exactly as before.
+    registered = opts.maker.registerAgent('acp', withPluginEngineAccounts(agent));
     if (registered) opts.logger.info('plugin engine registered', { harnesses: list.length });
   };
   sync(registry.list());

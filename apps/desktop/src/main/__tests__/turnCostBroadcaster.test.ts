@@ -156,6 +156,20 @@ describe('recordTurnCostOnMessage', () => {
     expect(patchCalls[0].patch.turnCost).toEqual(usdMoney(1));
     expect(broadcasts[0]).toMatchObject({ userTurnMoney: { amount: 3 }, userTurnCostIsEstimate: true });
   });
+  // Unit: a USD primary used to hide a CNY charge on both the stored and live message.
+  it('records both actual currencies once and includes earlier segments in the display total', async () => {
+    const { deps, patchCalls, broadcasts } = makeDeps(true, {
+      money: cnyMoney(2), costUsd: 0, hasEstimatedValue: false,
+    });
+    const segment = [usdMoney(1), cnyMoney(3)];
+    await recordSchedulerTurnCost({ ...ARGS, money: segment[0], actualAmounts: segment }, {
+      recordOnMessage: args => recordTurnCostOnMessage(args, deps),
+      recordDirect: vi.fn(),
+    });
+    const details = { actualAmounts: segment, userTurnAmounts: [cnyMoney(5), usdMoney(1)] };
+    expect(patchCalls[0].patch).toMatchObject({ turnCost: usdMoney(1), turnUsageDetails: details });
+    expect(broadcasts[0]).toMatchObject({ turnMoney: usdMoney(1), turnUsageDetails: details });
+  });
   it('owner boundary after patch keeps success and suppresses stale broadcast', async () => {
     const { deps, broadcasts } = makeDeps(true);
     deps.enqueue = vi.fn(async (_label, fn) => {

@@ -87,7 +87,7 @@ export function registerBotRemoteResourceProvider(management?: typeof botRemoteM
       placement: 'home-scope',
       icon: { name: 'users', fallbackText: '••' },
       // `management:settings` tells a desktop controller this host runs the teammate settings pages itself.
-      ...(management ? { actions: [{ id: 'open-create', label: editorCopy.create }, { id: BOT_SETTINGS_ACTION_ID, label: 'Buddy settings' }] } : {}),
+      ...(management ? { actions: [{ id: 'open-create', label: editorCopy.create }, { id: BOT_SETTINGS_ACTION_ID, label: editorCopy.settingsAction }] } : {}),
     },
     async list(_context, request) {
       const scope = captureDataOwnerBroadcastScope();

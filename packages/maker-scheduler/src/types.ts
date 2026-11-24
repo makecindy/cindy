@@ -316,6 +316,12 @@ export interface Schedule {
   agentDeviceId?: string;
   effort?: string;
   /**
+   * 模型组(模式)id，model-groups.json 里的路线。设了时每次新建任务按模式的规则选一个来源(发到已有任务时按那个任务自己的模式)
+   * (额度与时段按新建那一刻算，model-groups.md §6.3)，这次新建的任务用选出的来源；上面的具体模型字段是
+   * 选不出来时沿用的模型(模式已删除、里面都用不了)。没设时与原来一致。
+   */
+  modelGroup?: string;
+  /**
    * Fast 模式：仅 Codex 有意义（agent capability `hasFastMode` 为 true）。
    * true → runner fire 时透传给 codex agent，落到 app-server 的 ServiceTier.Fast，
    * 输出更快。Claude agent 忽略此字段。undefined/false → 标准 tier。
@@ -368,6 +374,8 @@ export interface Schedule {
   /** 外部事件触发条件；undefined = 未开启。详见 ScheduleWebhookTrigger。 */
   webhookTrigger?: ScheduleWebhookTrigger;
   /** 插件前置检查;undefined = 未配置。详见 PreRunPluginConfig。 */
+  /** Account-scoped assignment for schedules created by a plugin. */
+  primaryHostKey?: string;
   preRunPlugin?: PreRunPluginConfig;
   notify: ScheduleNotifyConfig;
   status: ScheduleStatus;
@@ -426,6 +434,7 @@ export interface ScheduleRun {
   costMoney?: ScheduleRunMoney;
   /** 新版区域订阅价值估算；不代表实际账单。 */
   estimatedValueMoney?: ScheduleRunMoney;
+  estimatedValueAmounts?: ScheduleRunMoney[];
   /** 本次 run 关联 assistant 消息的 Token 用量总和，供无法可靠计价时展示。 */
   totalTokens?: number;
   /**
@@ -495,6 +504,8 @@ export interface CreateScheduleInput {
   /** Agent 运行位置。详见 Schedule.agentDeviceId。 */
   agentDeviceId?: string;
   effort?: string;
+  /** 模型组(模式)id。详见 Schedule.modelGroup。 */
+  modelGroup?: string;
   /** Codex Fast 模式开关，仅 Codex 有意义。详见 Schedule.fastMode。 */
   fastMode?: boolean | 'ultrafast';
   /** Defaults to 'project' for backwards compatibility. */
@@ -523,6 +534,7 @@ export interface CreateScheduleInput {
   /** Webhook 触发条件；null / 缺省 = 不开启。与定时的一次性任务互斥。 */
   webhookTrigger?: ScheduleWebhookTriggerInput | null;
   /** 插件前置检查;update 时 null = 清除,省略 = 保留(旧客户端不认识该字段)。 */
+  primaryHostKey?: string;
   preRunPlugin?: PreRunPluginConfig | null;
   notify: ScheduleNotifyConfig;
   /** null explicitly clears the deadline across JSON transports. */

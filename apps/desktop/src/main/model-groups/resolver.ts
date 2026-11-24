@@ -13,6 +13,7 @@ import { getModelPriceQuote } from '../../shared/modelPriceQuote.js';
 import { USD_TO_CNY_FIXED_RATE, type ModelPricingCatalog } from '../../shared/regionalMoney.js';
 import {
   modelGroupCandidateKey,
+  modelGroupWeight,
   type ModelGroupAppliedException,
   type ModelGroupCandidate,
   type ModelGroupResolveRequest,
@@ -23,13 +24,23 @@ import {
 } from '../../shared/modelGroups.js';
 import { GHOST_REMOTE_AGENT_MODELS } from '../cindy-brain/ghostAgentModels.js';
 import { isGhostCardModelRouteAvailable, isPluginModelPickerRouteAvailable } from '../cindy-brain/ghostModelPicker.js';
-import { pickModelGroupCandidate, type ModelGroupCandidateFacts } from './pick.js';
+import {
+  applyModelGroupWeightStep,
+  pickModelGroupCandidate,
+  type ModelGroupCandidateFacts,
+  type ModelGroupWeightStep,
+} from './pick.js';
 import { modelGroupRouteFor } from './routeFor.js';
 
 export interface ModelGroupResolverDeps {
   config(): ModelGroupsConfig;
   /** 本机供应商目录的快照(不触发发现或登录)。 */
   views(): Promise<ProviderView[]>;
+  /**
+   * 这台电脑的连接是否开了「允许被远程调用」。主进程的供应商列表不带这个开关(它在下发界面时才合进去)，
+   * 由调用方注入；不注入时看列表自带的字段。
+   */
+  remoteInvocable?(providerId: string): boolean;
   /** 本机可用的引擎。 */
   agents(): readonly string[];
   /**
@@ -128,12 +139,29 @@ function scopedWindowApplies(scopedTo: string, modelId: string, modelName: strin
   return modelName.toLowerCase().includes(scopedTo.toLowerCase());
 }
 
-export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
-  /** 「轮流」上一次选中的候选；只在内存里，重启后从第一个开始。 */
-  const lastPicked = new Map<string, string>();
-  const pending = new Map<string, { scope: string; at: number; selection: ModelGroupResolveRequest['selection']; result: ModelGroupResolveResult; routeId?: string }>();
+/** 「按权重」计数对应的那份权重：来源或权重变了，旧计数按新比例算不对，从头开始。 */
+function weightSignature(route: ModelGroupRoute): string {
+  return route.candidates.map((candidate) => `${modelGroupCandidateKey(candidate)}=${modelGroupWeight(candidate.weight)}`).join('\u0001');
+}
 
-  function prepare(request: ModelGroupResolveRequest, scope: string, result: ModelGroupResolveResult, routeId?: string): ModelGroupResolveResult {
+export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
+  /** 「轮流」「用完再换」上一次选中的候选；只在内存里，重启后从第一个开始。 */
+  const lastPicked = new Map<string, string>();
+  /** 「按权重」每条路线的计数与当时的权重；只在内存里，重启或改了来源、权重后重新开始。 */
+  const weightCounters = new Map<string, { signature: string; counters: ReadonlyMap<string, number> }>();
+  const countersFor = (key: string, signature: string) => {
+    const stored = weightCounters.get(key);
+    return stored?.signature === signature ? stored.counters : undefined;
+  };
+  const pending = new Map<string, {
+    scope: string; at: number; selection: ModelGroupResolveRequest['selection']; result: ModelGroupResolveResult; routeId?: string;
+    weightStep?: { step: ModelGroupWeightStep; signature: string };
+  }>();
+
+  function prepare(
+    request: ModelGroupResolveRequest, scope: string, result: ModelGroupResolveResult, routeId?: string,
+    weightStep?: { step: ModelGroupWeightStep; signature: string },
+  ): ModelGroupResolveResult {
     if (request.dryRun || scope !== deps.scope()) return result;
     // 未采用的结果不写盘；限制暂存数量和生命周期，避免取消操作不断积累。
     for (const [id, item] of pending) {
@@ -141,7 +169,10 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
     }
     while (pending.size >= 128) pending.delete(pending.keys().next().value!);
     const decisionId = randomUUID();
-    pending.set(decisionId, { scope, at: deps.now(), selection: { ...request.selection }, result, routeId });
+    pending.set(decisionId, {
+      scope, at: deps.now(), selection: { ...request.selection }, result, routeId,
+      ...(weightStep ? { weightStep } : {}),
+    });
     return { ...result, decisionId };
   }
 
@@ -152,6 +183,13 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
     deps.recordDecision?.(item.selection, item.result);
     if (item.result.outcome === 'routed' && item.routeId) {
       lastPicked.set(`${item.scope}\u0000${item.routeId}`, modelGroupCandidateKey(item.result.route));
+      const key = `${item.scope}\u0000${item.routeId}`;
+      // 选路之后改了来源或权重：这一步是按旧比例算的，不记，按新配置从头开始。
+      const routeNow = item.weightStep && deps.config().routes.find((route) => route.id === item.routeId);
+      if (item.weightStep && routeNow && weightSignature(routeNow) === item.weightStep.signature) {
+        const { signature, step } = item.weightStep;
+        weightCounters.set(key, { signature, counters: applyModelGroupWeightStep(countersFor(key, signature), step) });
+      }
     }
     return true;
   }
@@ -258,10 +296,14 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
         }
       : target.route;
     const needsImage = request.context?.hasImages === true && !!route.exceptions?.some((item) => item.when.type === 'image');
-    const views = await deps.views();
+    const allViews = await deps.views();
+    // 为另一台电脑跑 Agent 时只认允许被远程调用的连接：别的连接在这次选路里按没有连接处理。
+    const remoteInvocable = (view: ProviderView) => (deps.remoteInvocable ? deps.remoteInvocable(view.id) : view.remoteInvocationEnabled === true);
+    const views = request.remoteInvocableOnly ? allViews.filter(remoteInvocable) : allViews;
     const facts = await inspect(route, views);
     const picked = pickModelGroupCandidate(route, facts, {
       now, lastPickedKey: lastPicked.get(`${scope}\u0000${route.id}`) ?? null, needsImage,
+      weightCounters: countersFor(`${scope}\u0000${route.id}`, weightSignature(target.route)),
     });
     const exceptions: ModelGroupAppliedException[] = [
       ...via,
@@ -284,10 +326,10 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
       modelName: entry.modelName, sourceName: entry.sourceName,
       why: entry.why, quota: entry.quota, trace: picked.trace,
       ...(exceptions.length > 0 ? { exceptions } : {}),
-    }, route.id);
+    }, route.id, picked.weightStep ? { step: picked.weightStep, signature: weightSignature(target.route) } : undefined);
   }
 
-  /** 一条路线每个候选此刻的事实(与新任务解析同一判断)；不推进「轮流」的位置。 */
+  /** 一条路线每个候选此刻的事实(与新任务解析同一判断)；不推进「轮流」的位置与「按权重」的计数。 */
   async function candidateFacts(route: ModelGroupRoute): Promise<ModelGroupCandidateFacts[]> {
     return inspect(route, await deps.views());
   }

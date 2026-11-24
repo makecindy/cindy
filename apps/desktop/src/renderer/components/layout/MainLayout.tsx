@@ -40,10 +40,13 @@ import { BuiltinPanelBridgeProvider } from '@/panels/BuiltinPanelBridge';
 import { WindowControls } from '@/components/title-bar/WindowControls';
 import { UpdateNoticeDialog } from '@/components/UpdateNoticeDialog';
 import { FeishuConflictDialogHost } from '@/components/feishuBot/FeishuConflictDialogHost';
+import { LegalTermsUpdateGate } from '@/components/auth/LegalTermsUpdateGate';
+import { useLegalTermsGateBlocking } from '@/components/auth/legalTermsGateState';
 import { StartupRecoveryDialogs } from '@/components/log-support/StartupRecoveryDialogs';
 import { GlobalDropImportListener } from '@/components/layout/GlobalDropImportListener';
 import { SessionShareImportWizard } from '@/components/settings/SessionShareImportWizard';
 import { ControlledBanner } from '@/features/remote-device/ControlledBanner';
+import { DeviceIdentityConflictNotice } from '@/features/device-link/DeviceIdentityConflict';
 import { TaskRemoteDesktopButton } from '@/features/remote-desktop/TaskRemoteDesktopButton';
 import {
   TASK_LIVE_SCREEN_LIMIT,
@@ -148,7 +151,7 @@ import {
 import { requestSessionSwitch } from '@/features/cc-agent/lib/sessionSwitchCommands';
 import { makeFolderPickerNewMakerRouteState } from '@/features/cc-agent/lib/newMakerRouteState';
 import { makeGenericNewMakerRouteState } from '@/features/cc-agent/lib/genericNewMakerRouteState';
-import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
+import { resolveSessionRoute, standardSessionRoute } from '@/lib/orcaSessionIdentity';
 import { canonicalBotSessionId, ensureBotProfilesLoaded, getBotProfiles, useBotProfiles } from '@/features/bots/botStore';
 import { botRouteForOwnedSession, createSessionEntryNavigator, findBotProfileForSession, remoteBotRouteForSession, resolveBotRouteForSessionEntry } from '@/features/bots/botSessionOwners';
 import { readRemoteBots } from '@/features/bots/useRemoteBots';
@@ -478,6 +481,10 @@ export function MainLayout() {
     onOpen: openNotice,
     onOpenVersion: openVersionNotice,
   } = useUpdateNotice();
+  // 协议更新确认挡着时,所有会自动弹出的全局弹窗(更新说明、启动恢复、飞书冲突、分享审批、
+  // 中转审批、聊天邀请、共享任务、会话导入)都先不显示:Radix 模态会抢焦点并禁用页面其余部分的
+  // 指针事件,却画在协议遮罩下面。各自的状态保留,用户同意后再弹出。
+  const legalTermsGateBlocking = useLegalTermsGateBlocking();
   const navigate = useNavigate();
   const location = useLocation();
   const { t } = useTranslation();
@@ -593,6 +600,7 @@ export function MainLayout() {
   useSchemaDriftWarningToast();
   // 语音快捷键在设置页之外自动恢复失败 —— 那时设置页的 toast 不在,只能由常挂载的这里提示。
   useVoiceInputShortcutRecoveryToast();
+  // 辅助模型全部不可用时提示一次（任务命名、摘要、插件任务等都依赖它）。
   // 冷启动市场对账可能早于 Renderer 挂载；Main pending + 常驻 consume 保证清理不静默。
   usePluginRemovalNoticeToast();
   // device-link 跨设备远程控制:同账号在线 + 开了被控的设备,其项目自动并入侧边栏
@@ -615,7 +623,9 @@ export function MainLayout() {
       const remoteSession =
         remoteProjectsStore.getVisibleMergedRemoteSessions().find((s) =>
           s.id === sessionId && (!deviceId || s.deviceLinkDeviceId === deviceId)) ?? null;
-      const route = deviceId
+      const route = deviceId === 'local'
+        ? Promise.resolve(standardSessionRoute(sessionId))
+        : deviceId
         ? Promise.resolve(remoteBotRouteForSession(readRemoteBots().filter(bot => bot.deviceId === deviceId), sessionId)?.route
           ?? `/cc-agent/${encodeURIComponent(sessionId)}`)
         : resolveSessionRoute(sessionId, remoteSession);
@@ -715,7 +725,7 @@ export function MainLayout() {
   useEffect(() => {
     const unsubscribe = window.electronAPI.ghosts?.onScheduleDraft?.((payload) => {
       if (!payload || typeof payload !== 'object') return;
-      const { requestId, ghostId, ghostName, name, prompt, intervalMs } = payload;
+      const { requestId, ghostId, ghostName, name, prompt, intervalMs, primaryHostKey } = payload;
       if (
         typeof requestId !== 'string' ||
         !requestId ||
@@ -733,6 +743,7 @@ export function MainLayout() {
       navigate('/cc-agent/scheduled', {
         state: pluginScheduleNavigationState({
           kind: 'plugin-schedule-draft',
+          ...(typeof primaryHostKey === 'string' ? { primaryHostKey } : {}),
           requestId,
           ghostId,
           ghostName,
@@ -778,7 +789,7 @@ export function MainLayout() {
         | { type: 'installed-plugin'; ghostId?: string }
         | { type: 'gift-card'; code: string }
         | { type: 'settings-navigation'; target: import('@cindy/maker-shared/settings-navigation').SettingsNavigationTarget }
-        | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' },
+        | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; focusDeviceId?: string; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' },
     ) => {
       if (payload.type === 'chat-message') {
         const search = new URLSearchParams({ messageId: payload.messageId });
@@ -877,7 +888,10 @@ export function MainLayout() {
         const intent = payload.tab === 'billing' && payload.intent === 'topup' ? '&intent=topup' : '';
         // imGroup 交给 SettingsView 已有的 ?imGroup= 分区定位。
         const imGroup = payload.tab === 'im-bot' && payload.imGroup ? `&imGroup=${payload.imGroup}` : '';
-        navigate(`/settings?tab=${payload.tab}${connect}${intent}${imGroup}`);
+        const device = payload.tab === 'remote-control' && payload.focusDeviceId
+          ? '&section=devices&device=' + encodeURIComponent(payload.focusDeviceId)
+          : '';
+        navigate(`/settings?tab=${payload.tab}${connect}${intent}${imGroup}${device}`);
       }
     },
     [navigate, navigateToSession, openShareImport],
@@ -1932,7 +1946,7 @@ export function MainLayout() {
                     <div
                       data-testid="right-sidebar-fixed-trigger"
                       className={cn(
-                        'pointer-events-none absolute z-50 flex items-center gap-1',
+                        'pointer-events-none absolute z-float flex items-center gap-1',
                         rightSidebarSide === 'left' ? 'left-2 flex-row-reverse' : 'right-2',
                       )}
                       style={
@@ -1975,7 +1989,7 @@ export function MainLayout() {
                 {isMac && rightSidebarPaneAvailable && rsbWindow.loaded && (
                   <div
                     data-testid="right-sidebar-fixed-trigger"
-                    className="absolute right-0 top-0 z-50 flex h-[46px] items-center pr-2"
+                    className="absolute right-0 top-0 z-float flex h-[46px] items-center pr-2"
                     style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
                   >
                     <RightSidebarToggle
@@ -2073,7 +2087,7 @@ export function MainLayout() {
             右上角（系统按钮下一行），与截图中的原位置一致。 */}
         {!isMac && (
           <div
-            className="absolute right-0 top-0 z-50 flex h-[46px] items-center pr-2"
+            className="absolute right-0 top-0 z-float flex h-[46px] items-center pr-2"
             data-plugin-ui-element="windowControls"
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           >
@@ -2091,7 +2105,7 @@ export function MainLayout() {
       {/* Update notice dialog -- mounted inside FeatureSidebarSlotProvider (ThemeProvider scope) */}
       {releaseNotes && (
         <UpdateNoticeDialog
-          open={noticeOpen}
+          open={noticeOpen && !legalTermsGateBlocking}
           mode={noticeMode}
           releaseNotes={releaseNotes}
           allVersions={noticeAllVersions}
@@ -2101,7 +2115,7 @@ export function MainLayout() {
       )}
       {/* 重启提示按更新说明、中断任务恢复、意外退出诊断的顺序出现。 */}
       {!isSecondaryWindow() && (
-        <StartupRecoveryDialogs suspended={Boolean(releaseNotes && noticeOpen)} />
+        <StartupRecoveryDialogs suspended={Boolean(releaseNotes && noticeOpen) || legalTermsGateBlocking} />
       )}
       {/* FeiShu Bot conflict dialog -- subscribes to main process push and surfaces a global modal */}
       <FeishuConflictDialogHost />
@@ -2112,11 +2126,11 @@ export function MainLayout() {
       {!isSecondaryWindow() && <ChatInviteHost />}
       {/* 通话属于应用而不是任务页:切任务、换页面都不卸载;副窗只显示并转发操作。 */}
       {isSecondaryWindow() ? <RemoteVoiceCallSurface /> : <GlobalVoiceCallHost />}
-      {sharedTaskInvitation && <JoinSharedTaskDialog key={sharedTaskInvitation.id} open initialInvitation={sharedTaskInvitation.link}
+      {sharedTaskInvitation && !legalTermsGateBlocking && <JoinSharedTaskDialog key={sharedTaskInvitation.id} open initialInvitation={sharedTaskInvitation.link}
         onOpenChange={(open) => { if (!open) setSharedTaskInvitation(null); }} />}
       {/* 窗口级拖拽兜底:拖 .cshare 进窗口空白处 → 会话导入向导 */}
       <GlobalDropImportListener onOpenShareImport={openShareImport} />
-      {shareImportRequest && (
+      {shareImportRequest && !legalTermsGateBlocking && (
         <SessionShareImportWizard
           key={shareImportRequest.id}
           open
@@ -2130,6 +2144,10 @@ export function MainLayout() {
       <BrowserWebviewPool />
       {/* 实际存在内联提示（含伙伴 / 折叠态）时组件自行退让，其余页面保留兜底。 */}
       <ControlledBanner />
+      {/* 另一台电脑在用本机设备身份时提醒一次，带用户去「我的设备」处理。 */}
+      <DeviceIdentityConflictNotice />
+      {/* 协议更新确认:同意过旧版协议的个人账号须先确认新版才能继续使用(各窗口都挡)。 */}
+      <LegalTermsUpdateGate />
     </FeatureSidebarSlotProvider>
   );
 }

@@ -730,8 +730,9 @@ async function invalidateHostRuntimeState(hostId: string): Promise<void> {
   } catch (error) {
     rememberFailure(error);
   }
+  let mcpInvalidation = Promise.resolve();
   try {
-    invalidateRemoteCodexMcpEndpointState(hostId);
+    mcpInvalidation = invalidateRemoteCodexMcpEndpointState(hostId);
   } catch (error) {
     rememberFailure(error);
   }
@@ -760,6 +761,7 @@ async function invalidateHostRuntimeState(hostId: string): Promise<void> {
 
   const cleanupResults = await Promise.allSettled([
     fileBrowserInvalidation,
+    mcpInvalidation,
     clearAgentProxyTunnelStateAndWait(hostId),
     oldHost?.closeAllRemoteForwards().catch((error) => {
       log.warn('failed to clear remote forwards during endpoint invalidation', {
@@ -859,6 +861,7 @@ type RendererHostConfig = Pick<HostConfig,
   | 'authMethod'
   | 'source'
   | 'managedByCindy'
+  | 'managedAliasConflict'
 > & {
   /** Renderer only needs to know whether an owned identity exists. */
   identityFileConfigured: boolean;
@@ -901,6 +904,7 @@ function toRendererHostConfig(config: HostConfig): RendererHostConfig {
       : {}),
     source: config.source,
     managedByCindy: config.managedByCindy,
+    ...(config.managedAliasConflict ? { managedAliasConflict: true } : {}),
   };
 }
 
@@ -1416,7 +1420,7 @@ export async function removeRemoteSshHost(args: unknown) {
       () => removeRemoteMcpForwardPref(id),
     ]) {
       try {
-        cleanup();
+        await cleanup();
       } catch (error) {
         log.warn('failed to clean removed SSH host local state', {
           hostId: id,

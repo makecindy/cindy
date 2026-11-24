@@ -84,6 +84,7 @@ import { MANAGED_LLAMACPP_PROVIDER_ID, supportsLlamaCppMillionContext, llamaCppM
 import { modelBrand } from './modelManagementPresentation';
 import { ModelPriceOverrideDialog } from './ModelPriceOverrideDialog';
 import type { UnionModelRow } from './UnifiedModelList';
+import { ResetGroupButton } from '@/components/ui/reset-buttons';
 
 const AGENT_LABEL: Record<AgentKind, string> = {
   'claude-code': 'Claude Code',
@@ -176,7 +177,7 @@ function Section({
       <div className="flex items-center gap-1.5">
         <h4 className="text-12 font-medium text-[var(--text-secondary)]">{title}</h4>
         {hint && (
-          <Tip text={hint} contentClassName="z-[10002]">
+          <Tip text={hint}>
             <button
               type="button"
               aria-label={hint}
@@ -207,6 +208,11 @@ interface Props {
   onDeleteLocal?: (row: UnionModelRow) => void;
   /** 该行当前是否已被停用（用于底部动作区的方向）。 */
   disabled: boolean;
+  /**
+   * 已停用时能否恢复。由列表按行判定（功能型模型不看聊天登录，见 UnifiedModelList 的
+   * canReenableRow）；缺省沿用聊天连接。
+   */
+  canEnable?: boolean;
   /** 付费锁定行不给写入入口（与列表行同一判定）。 */
   paymentRequired: boolean;
 }
@@ -222,6 +228,7 @@ export function ModelAdvancedDrawer({
   onDisable,
   onDeleteLocal,
   disabled,
+  canEnable: canEnableProp,
   paymentRequired,
 }: Props) {
   const row = groupRow?.aliasRows?.find((member) => member.id === selectedMemberId)
@@ -233,6 +240,7 @@ export function ModelAdvancedDrawer({
   }));
   const { t, i18n } = useTranslation();
   const selectionAvailable = provider.connected && !provider.suspended;
+  const canEnable = canEnableProp ?? selectionAvailable;
   const locale = i18n.resolvedLanguage ?? i18n.language ?? 'en';
   const pricePendingRef = useRef(false);
   const [protocolSaving, setProtocolSaving] = useState(false);
@@ -659,7 +667,7 @@ export function ModelAdvancedDrawer({
         {discount !== undefined && discount > 0 && discount <= 1 && (
           <Row label={t('settings.providers.models.advanced.discount')}>
             <span
-              className="inline-flex items-center rounded-full px-2 py-[1px] text-10 font-medium"
+              className="inline-flex items-center rounded-full px-2 py-px text-10 font-medium"
               style={{
                 color: EFFORT_TIER_COLORS.low,
                 backgroundColor: `color-mix(in srgb, ${EFFORT_TIER_COLORS.low} 14%, transparent)`,
@@ -689,13 +697,13 @@ export function ModelAdvancedDrawer({
         <Dialog.Portal>
           <Dialog.Overlay
             className={cn(
-              'modal-scrim fixed inset-0 z-[10001]',
+              'modal-scrim fixed inset-0 z-modal-raised',
             )}
           />
           <Dialog.Content
             onPointerDownOutside={(event) => event.preventDefault()}
             className={cn(
-              'modal-panel fixed inset-0 z-[10001] m-auto flex h-fit max-h-[calc(100dvh-48px)] w-[800px] max-w-[calc(100vw-32px)] flex-col overflow-hidden',
+              'modal-panel fixed inset-0 z-modal-raised m-auto flex h-fit max-h-[calc(100dvh-48px)] w-[800px] max-w-[calc(100vw-32px)] flex-col overflow-hidden',
             )}
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
             aria-describedby={undefined}
@@ -871,7 +879,6 @@ export function ModelAdvancedDrawer({
                                 notes.join(' · ')
                               ) : (
                                 <Tip
-                                  contentClassName="z-[10002]"
                                   text={t('settings.providers.models.advanced.engineNotConfigured')}
                                 >
                                   <button
@@ -913,20 +920,14 @@ export function ModelAdvancedDrawer({
                         );
                       })}
                       {visibilityCustomized && !paymentRequired && selectionAvailable && (
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          tone="quiet"
-                          compact
-                          type="button"
+                        <ResetGroupButton
                           onClick={async () => {
                             if (!await resetModelVisibilities(provider.id, visibilityTargets))
                               toast.error(t('settings.providers.models.visibilityWriteFailed'));
                           }}
                           className="mt-2"
-                        >
-                          {t('settings.providers.models.advanced.restoreDefault')}
-                        </Button>
+                          label={t('settings.providers.models.advanced.restoreDefault')}
+                        />
                       )}
                     </Section>
                   )}
@@ -968,12 +969,7 @@ export function ModelAdvancedDrawer({
                         (a) =>
                           rememberedEffort(a, row.byAgent[a]!.id) !== undefined,
                       ) && (
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          tone="quiet"
-                          compact
-                          type="button"
+                        <ResetGroupButton
                           disabled={paymentRequired}
                           onClick={() => {
                             if (groupRow?.aliasRows) {
@@ -985,9 +981,8 @@ export function ModelAdvancedDrawer({
                               clearProviderModelEffort(a, provider.id, row.byAgent[a]!.id);
                           }}
                           className="mt-2"
-                        >
-                          {t('settings.providers.models.advanced.restoreDefault')}
-                        </Button>
+                          label={t('settings.providers.models.advanced.restoreDefault')}
+                        />
                       )}
                     </Section>
                   )}
@@ -1059,18 +1054,12 @@ export function ModelAdvancedDrawer({
                               })}
                             </span>
                             {ctx.isCustomized && (
-                              <Button data-settings-search-action="Restore the default context limit for this model"
-                                variant="secondary"
-                                size="sm"
-                                tone="quiet"
-                                compact
-                                type="button"
+                              <ResetGroupButton data-settings-search-action="Restore the default context limit for this model"
                                 onClick={resetCtx}
                                 disabled={paymentRequired || ctx.loading || localConfigurationBlocked}
                                 className="shrink-0"
-                              >
-                                {t('settings.providers.models.advanced.restoreDefault')}
-                              </Button>
+                                label={t('settings.providers.models.advanced.restoreDefault')}
+                              />
                             )}
                           </div>
                           {(ctxInvalid || ctx.error || ctx.mixed) && (
@@ -1299,7 +1288,7 @@ export function ModelAdvancedDrawer({
                   size="md"
                   compact
                   type="button"
-                  disabled={disabled && !selectionAvailable}
+                  disabled={disabled && !canEnable}
                   data-settings-search-action="Enable or disable the displayed model group"
                   onClick={() => { if (!pricePendingRef.current) onDisable(groupRow ?? row); }}
                 >

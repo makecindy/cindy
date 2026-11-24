@@ -116,6 +116,12 @@ const ALL_SCOPES: ScopeSupport = { sharedTask: true, providerShare: true };
 const DUPLICATE_CONNECTION_CLOSE_CODE = 4409;
 const RELAY_RESTART_CLOSE_CODE = 1012;
 const RELAY_RESTART_CLOSE_REASON = 'service restart';
+/**
+ * 官方中转在同一设备身份的新连接接管后，也会以 1012 + 这条原因关掉旧连接
+ * (2026-11-23 现场：两台 Windows 共用 MachineGuid，与 4409 交替出现)。
+ * 只用于识别「被顶替」，不改变断开分类与链路复位。
+ */
+const RELAY_NOT_CURRENT_CLOSE_REASON = 'connection no longer current';
 const RELAY_RESTART_PACING_MS = 10_000;
 /** RFC 6455 1013 Try Again Later:relay 因拥塞主动断连(如 inbound backpressure)。 */
 const RELAY_TRY_AGAIN_LATER_CLOSE_CODE = 1013;
@@ -473,6 +479,17 @@ export interface DeviceLinkTiming {
    * 普通退避 10s 即可恢复快速重连；拥塞冷却必须跨过现场 3–8 分钟一踢的间隔。
    */
   congestionStableResetMs: number;
+  /**
+   * 宿主确认另一台电脑在用同一设备身份(setDuplicateIdentityCooldown)后，被顶替时的
+   * 重连等待下限：第 N 次连续被顶替至少等 min(base × 2^(N-1), max)，与普通退避取 max。
+   * 未确认时不生效：被顶替照旧按普通退避重连。两台电脑各自在线约 15 秒就被对方顶掉，
+   * 刚好跨过 reconnectStableResetMs，普通退避每次都归零，互踢不会自己停下来
+   * (2026-11-23 现场 3 小时 318 次)。
+   */
+  duplicateIdentityCooldownBaseMs: number;
+  duplicateIdentityCooldownMaxMs: number;
+  /** 连续被顶替计数清零所需的在线时长；须长于冷却上限，否则对方每次重连前计数已归零。 */
+  duplicateIdentityStreakResetMs: number;
 }
 
 const DEFAULT_TIMING: DeviceLinkTiming = {
@@ -493,6 +510,9 @@ const DEFAULT_TIMING: DeviceLinkTiming = {
   congestionBackoffBaseMs: 5_000,
   congestionBackoffMaxMs: 30_000,
   congestionStableResetMs: 15 * 60_000,
+  duplicateIdentityCooldownBaseMs: 5_000,
+  duplicateIdentityCooldownMaxMs: 60_000,
+  duplicateIdentityStreakResetMs: 5 * 60_000,
 };
 
 /**
@@ -635,6 +655,9 @@ export interface DeviceLinkPeerTransportReset {
  * message 匹配:Node ws 是 "Unexpected server response: 401",RN 是
  * "Expected HTTP 101 response but was '401 Unauthorized'"。
  */
+// A local transport can confirm revocation before it has a socket to emit 4410.
+export class DeviceLinkRegistrationRemovedError extends Error {}
+
 export function classifyConnectionIssue(
   code?: number,
   reason?: string,
@@ -647,6 +670,38 @@ export function classifyConnectionIssue(
   const detail = `${reason ?? ''} ${socketErrorMessage ?? ''}`;
   if (/\b401\b|unauthorized/i.test(detail)) return 'auth-failed';
   return null;
+}
+
+/**
+ * relay 是否因为「同一设备身份的另一条连接已接管」而关掉了本连接。
+ * 只用于 onReplaced 与身份冲突冷却；连接问题分类仍以 classifyConnectionIssue 为准。
+ */
+export function isReplacedByAnotherConnection(code?: number, reason?: string): boolean {
+  return code === DUPLICATE_CONNECTION_CLOSE_CODE
+    || (code === RELAY_RESTART_CLOSE_CODE && reason === RELAY_NOT_CURRENT_CLOSE_REASON);
+}
+
+/** 本连接被同一设备身份的另一条连接顶替(见 isReplacedByAnotherConnection)。 */
+export interface DeviceLinkReplacedEvent {
+  closeCode: number;
+  /** 被顶替前这条连接在线了多久；从未上线为 null。 */
+  onlineForMs: number | null;
+  /** unix ms */
+  at: number;
+}
+
+/**
+ * 宿主确认另一台电脑在用同一设备身份后，第 streak 次连续被顶替的重连等待下限。
+ * streak ≤ 0 表示不限制。
+ */
+export function computeDuplicateIdentityCooldownMs(input: {
+  streak: number;
+  baseMs: number;
+  maxMs: number;
+}): number {
+  const streak = Number.isFinite(input.streak) ? Math.max(0, Math.floor(input.streak)) : 0;
+  if (streak === 0) return 0;
+  return Math.min(input.baseMs * 2 ** (streak - 1), input.maxMs);
 }
 
 /** 入站隧道帧(由 host 处理:被控端 dispatch invoke;控制端消费 push 等) */
@@ -924,6 +979,14 @@ export class DeviceLinkClient {
    * 但不清本计数:立即重连可以,但若再被踢,冷却按更深一档生效。
    */
   private congestionCloseStreak = 0;
+  /** 宿主已确认另一台电脑在用同一设备身份；只影响被顶替后的重连等待。 */
+  private duplicateIdentityCooldown = false;
+  /** 冷却开启期间连续被顶替的次数。 */
+  private replacedCloseStreak = 0;
+  /** 下一次 scheduleReconnect 的等待下限；被顶替且冷却开启时设置，用后清零。 */
+  private replacedReconnectFloorMs = 0;
+  /** 冷却中的重连计时器到点时刻；之前的 connectNow 不提前重连。 */
+  private replacedCooldownUntil = 0;
   private readonly congestionSendBudget = new CongestionSendBudget();
   private relayRestartRecovery: 'waiting' | 'handshake' | number | null = null;
   private localSendPressure = false;
@@ -1010,6 +1073,7 @@ export class DeviceLinkClient {
   private peerStreamAcceptedHandlers = new Set<(peer: string, streamId: string) => void>();
   private inboundPeerReleasedHandlers = new Set<(peer: string) => void>();
   private issueHandlers = new Set<(issue: DeviceLinkConnectionIssue | null) => void>();
+  private replacedHandlers = new Set<(event: DeviceLinkReplacedEvent) => void>();
   private peerRouteStateHandlers = new Set<
     (change: DeviceLinkPeerRouteStateChanged) => void
   >();
@@ -1153,6 +1217,7 @@ export class DeviceLinkClient {
     this.reconnectAttempt = 0;
     // 全新生命周期(登录/切号后 start):不背上一世代的拥塞冷却。
     this.congestionCloseStreak = 0;
+    this.replacedCloseStreak = 0;
     void this.connect('start');
   }
 
@@ -1200,6 +1265,7 @@ export class DeviceLinkClient {
       // stopped → 等价 start():全新生命周期不背上一世代的拥塞冷却(review P1,
       // 与 start() 的清零语义对齐)。
       this.congestionCloseStreak = 0;
+      this.replacedCloseStreak = 0;
     } else if (
       (this.congestionCloseStreak > 0 || this.relayRestartRecovery === 'waiting')
       && this.reconnectTimer
@@ -1207,6 +1273,16 @@ export class DeviceLinkClient {
     ) {
       this.log.debug(
         `connectNow(${reason}) parked: relay reconnect delay active (streak=${this.congestionCloseStreak})`,
+      );
+      return;
+    } else if (
+      // 身份冲突冷却期间，网络变化等自动触发的立即重连会再把另一台电脑顶下去。
+      this.reconnectTimer
+      && Date.now() < this.replacedCooldownUntil
+      && !opts?.overrideCongestionCooldown
+    ) {
+      this.log.debug(
+        `connectNow(${reason}) parked: duplicate device identity cool-down (streak=${this.replacedCloseStreak})`,
       );
       return;
     }
@@ -1243,9 +1319,12 @@ export class DeviceLinkClient {
     void this.connect(reason);
   }
 
-  /** host 的整体恢复入口(系统唤醒等):作用于本机全部连接。 */
-  restartConnections(reason?: string): void {
-    this.restartConnection(reason);
+  /**
+   * host 的整体恢复入口(系统唤醒、换网等):作用于本机全部连接。`keepPrimary` 时不重建主连接
+   * (见 RoutedDeviceLinkClient);这里只有这一条。
+   */
+  restartConnections(reason?: string, options?: { keepPrimary?: boolean }): void {
+    if (!options?.keepPrimary) this.restartConnection(reason);
   }
 
   /** host 的整体睡眠入口:作用于本机全部连接(与 restartConnections 对称)。 */
@@ -1613,6 +1692,28 @@ export class DeviceLinkClient {
 
   getConnectionIssue(): DeviceLinkConnectionIssue | null {
     return this.connectionIssue;
+  }
+
+  /** 每次本连接被同一设备身份的另一条连接顶替时通知(不去重)。 */
+  onReplaced(cb: (event: DeviceLinkReplacedEvent) => void): () => void {
+    this.replacedHandlers.add(cb);
+    return () => this.replacedHandlers.delete(cb);
+  }
+
+  /**
+   * 宿主确认(或撤销)「另一台电脑在用同一设备身份」。开启后被顶替的重连按
+   * duplicateIdentityCooldown* 逐次拉长等待；不停止重连，也不影响其它断开原因。
+   * 关闭时清零连续计数，已排上的那次重连照常执行。只由宿主在确认冲突后调用：
+   * 普通用户被顶替一次仍按原退避立即重连。
+   */
+  setDuplicateIdentityCooldown(active: boolean): void {
+    if (this.duplicateIdentityCooldown === active) return;
+    this.duplicateIdentityCooldown = active;
+    if (!active) {
+      this.replacedCloseStreak = 0;
+      this.replacedReconnectFloorMs = 0;
+      this.replacedCooldownUntil = 0;
+    }
   }
 
   /** 订阅连接问题变化(null = 已恢复/清除)。同类问题重复发生只更新时间戳、不重复通知。 */
@@ -2189,7 +2290,7 @@ export class DeviceLinkClient {
         return { ok: false as const, error: { code: 'IPC_ERROR' as const, message: 'GITHUB_READ_UNSUPPORTED: update the target computer to use GitHub queries' } };
       }
       if (resolveInvokePriority(payload.channel, options?.background, payload.args) === 'background'
-        && (this.networkProbeTimer || this.networkChangeTimer)) {
+        && (this.networkProbeTimer || (this.networkChangeTimer && this.lastInboundAt <= this.networkChangeHintedAt))) {
         throw new DeviceLinkError('BACKPRESSURE', 'background refresh paused while checking relay connectivity');
       }
       // Prepare at dispatch, not when joining the admission queue. Earlier
@@ -2847,6 +2948,10 @@ export class DeviceLinkClient {
         this.log.debug?.('stale createWebSocket rejection ignored', err);
         return;
       }
+      if (err instanceof DeviceLinkRegistrationRemovedError) {
+        this.markRegistrationRemoved();
+        return;
+      }
       this.log.warn('createWebSocket failed', err);
       this.scheduleReconnect();
       return;
@@ -2964,8 +3069,7 @@ export class DeviceLinkClient {
     this.failNonReliablePending(new DeviceLinkError('NOT_CONNECTED', 'relay connection lost'));
     if (this.stopped) return;
     if (code === 4410) {
-      this.stopConnection();
-      this.setConnectionIssue({ kind: 'device-removed', closeCode: code, at: Date.now() });
+      this.markRegistrationRemoved();
       return;
     }
     if (code === DUPLICATE_CONNECTION_CLOSE_CODE) {
@@ -2991,7 +3095,36 @@ export class DeviceLinkClient {
         at: Date.now(),
       });
     }
+    if (code !== undefined && isReplacedByAnotherConnection(code, reason)) {
+      this.noteReplacedClose(code, onlineForMs);
+      if (this.stopped) return;
+    }
     this.scheduleReconnect(serviceRestart);
+  }
+
+  /** 先通知宿主(它可能据此确认冲突并开启冷却)，再按冷却状态定下一次重连的等待下限。 */
+  private noteReplacedClose(closeCode: number, onlineForMs: number | null): void {
+    const event: DeviceLinkReplacedEvent = { closeCode, onlineForMs, at: Date.now() };
+    for (const cb of this.replacedHandlers) {
+      try {
+        cb(event);
+      } catch (err) {
+        this.log.error('replaced handler threw', err);
+      }
+    }
+    if (!this.duplicateIdentityCooldown) return;
+    if (onlineForMs !== null && onlineForMs >= this.timing.duplicateIdentityStreakResetMs) {
+      this.replacedCloseStreak = 0;
+    }
+    this.replacedCloseStreak++;
+    this.replacedReconnectFloorMs = computeDuplicateIdentityCooldownMs({
+      streak: this.replacedCloseStreak,
+      baseMs: this.timing.duplicateIdentityCooldownBaseMs,
+      maxMs: this.timing.duplicateIdentityCooldownMaxMs,
+    });
+    this.log.warn(
+      `another device uses this device identity; reconnect cool-down engaged (streak=${this.replacedCloseStreak}, floorMs=${this.replacedReconnectFloorMs})`,
+    );
   }
 
   /**
@@ -3031,6 +3164,9 @@ export class DeviceLinkClient {
   }
 
   private scheduleReconnect(serviceRestart = false): void {
+    // 被顶替的下限只属于紧接着的这一次重连，不能留给之后普通断线的重连。
+    const replacedFloorMs = this.replacedReconnectFloorMs;
+    this.replacedReconnectFloorMs = 0;
     if (this.stopped || this.reconnectTimer) return;
     if (this.systemSuspendHoldTimer) {
       // 睡前主动断开：等唤醒或保持期兜底，不在睡眠过渡中又连回去。
@@ -3052,7 +3188,12 @@ export class DeviceLinkClient {
     });
     // A retiring pod closes many sockets together. Spread their first rejoin
     // across 1–5 seconds and keep any larger ordinary/congestion backoff.
-    const delay = serviceRestart ? Math.max(backoff, Math.round(1_000 + random * 4_000)) : backoff;
+    const paced = serviceRestart ? Math.max(backoff, Math.round(1_000 + random * 4_000)) : backoff;
+    // 身份冲突冷却同样向下抖动，两台电脑不会在同一时刻回来再互踢。
+    const delay = replacedFloorMs > 0
+      ? Math.max(paced, Math.round(replacedFloorMs * (0.7 + random * 0.3)))
+      : paced;
+    this.replacedCooldownUntil = replacedFloorMs > 0 ? Date.now() + delay : 0;
     this.reconnectAttempt++;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
@@ -6098,7 +6239,7 @@ export class DeviceLinkClient {
       if (pending.envelope.kind === 'invoke' && pending.envelope.id
         && this.pending.get(pending.envelope.id)?.expireIfOverdue()) continue;
       if (opts.onlyUnsent && pending.sent) continue;
-      // Cumulative ACK cannot confirm a tail while a byte-paced head is still
+      // Cumulative ACK cannot confirm a tail while the stream head is still
       // missing. Allow one early tail retry to fill the receiver's buffer, but
       // do not burn its whole retry budget (and reset this healthy slow link)
       // before the head has finished. ACK removal naturally releases this hold;
@@ -6107,7 +6248,8 @@ export class DeviceLinkClient {
         !opts.ignoreInterval
         && head
         && pending !== head
-        && head.bytes > RELIABLE_RETRY_BYTES_PER_INTERVAL
+        && (head.bytes > RELIABLE_RETRY_BYTES_PER_INTERVAL
+          || (pending.path === 'relay' && head.path === 'relay' && pending.envelope.kind === 'push'))
         && pending.attempts >= Math.min(2, this.timing.transportMaxRetryAttempts)
       ) continue;
       // A local ws write is not a delivery receipt: relay -> mobile can still be
@@ -6783,6 +6925,11 @@ export class DeviceLinkClient {
       if (!oldest) break;
       this.pendingInboundLinkOffers.delete(oldest);
     }
+  }
+
+  private markRegistrationRemoved(): void {
+    this.stopConnection();
+    this.setConnectionIssue({ kind: 'device-removed', closeCode: 4410, at: Date.now() });
   }
 
   private setConnectionIssue(issue: DeviceLinkConnectionIssue | null): void {
