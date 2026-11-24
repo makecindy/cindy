@@ -715,13 +715,14 @@ export function createComputerMcpServer(
         // identity error (a minimized or other-Space window still has an AX tree).
         const desktop = await deps.describeDesktop?.().catch(() => undefined);
         const screenLocked = desktop?.screen_locked === true;
+        const appControlDenied = isAppControlDenied(data);
         const recovery =
-          !screenLocked &&
+          !screenLocked && !appControlDenied &&
           (isWindowIdentityFailure(data) ||
             (typeof parsedData.pid === 'number' && typeof parsedData.window_id === 'number'))
             ? await rediscoverWindow(parsedData, { ...callContext, signal })
             : undefined;
-        const unavailable = await classifyUnavailableObservation(data, recovery, screenLocked);
+        const unavailable = classifyUnavailableObservation(data, recovery, screenLocked, appControlDenied);
         return textResult(
           {
             ok: false,
@@ -736,6 +737,16 @@ export function createComputerMcpServer(
         );
       }
       let outcome = computerResultOutcome(name, data);
+      if (name !== 'get_window_state' && (!outcome.ok || isWindowIdentityFailure(data)) && isAppControlDenied(data)) {
+        invalidateWindowSnapshot(name, parsedData, sessionId);
+        return textResult({
+          ok: false,
+          tool: name,
+          errorCode: outcome.errorCode ?? 'CUA_UNAVAILABLE',
+          reason: 'app_control_not_allowed',
+          data: { ...(data as Record<string, unknown>), next_step: 'check_permissions', hint: APP_CONTROL_DENIED_HINT },
+        }, true);
+      }
       const recovery =
         name !== "get_window_state" && isWindowIdentityFailure(data)
           ? await rediscoverWindow(parsedData, { ...callContext, signal })
@@ -799,6 +810,7 @@ export function createComputerMcpServer(
           ? (err as { code: string }).code
           : "COMPUTER_DRIVER_ERROR";
       const windowUnresolved = isWindowIdentityFailure(err);
+      const appControlDenied = !signal?.aborted && isAppControlDenied(err);
       invalidateWindowSnapshot(name, parsedData, sessionId);
       if (
         (windowUnresolved ||
@@ -814,23 +826,23 @@ export function createComputerMcpServer(
         );
       }
       const recovery =
-        windowUnresolved && !signal?.aborted
+        windowUnresolved && !signal?.aborted && !appControlDenied
           ? await rediscoverWindow(parsedData, { ...callContext, signal })
           : undefined;
       // A thrown window-identity failure gets the same reason as a degraded read.
       const unresolvedReason = recovery
-        ? await classifyUnavailableObservation(
+        ? classifyUnavailableObservation(
             undefined,
             recovery,
             (await deps.describeDesktop?.().catch(() => undefined))?.screen_locked === true,
-            err,
+            false,
           )
-        : !signal?.aborted && isAppControlDenied(err)
+        : appControlDenied
           ? { reason: 'app_control_not_allowed' as const, hint: APP_CONTROL_DENIED_HINT }
           : undefined;
-      const appControlDenied = unresolvedReason?.reason === 'app_control_not_allowed';
       const shouldObserveUnknownAction =
         !recovery &&
+        !appControlDenied &&
         !signal?.aborted &&
         errorCode !== "REQUEST_CANCELLED" &&
         POSTCHECK_ACTION_TOOLS.has(name as ComputerMcpToolName) &&
@@ -847,6 +859,7 @@ export function createComputerMcpServer(
       const installedDiscovery =
         name === "launch_app" &&
         !signal?.aborted &&
+        !appControlDenied &&
         isAppNameResolutionFailure(parsedData, err)
           ? await readForRecovery(
               deps,
@@ -922,6 +935,7 @@ export function createComputerMcpServer(
       const appDiscovery =
         name === "launch_app" &&
         !signal?.aborted &&
+        !appControlDenied &&
         canLocateRunningApp(parsedData, err)
           ? await readForRecovery(
               deps,
@@ -1028,12 +1042,12 @@ export function createComputerMcpServer(
    * Host state (lock screen) is consulted first; the window's own on-screen
    * flag second; anything else stays a driver error.
    */
-  async function classifyUnavailableObservation(
+  function classifyUnavailableObservation(
     data: unknown,
     recovery: { requested_target: { window_id?: unknown } ; discovery: { ok: boolean; data?: unknown } } | undefined,
     screenLocked: boolean,
-    thrown?: unknown,
-  ): Promise<{ reason: 'screen_locked' | 'app_control_not_allowed' | 'window_not_on_screen' | 'window_gone' | 'driver_error'; hint: string }> {
+    appControlDenied: boolean,
+  ): { reason: 'screen_locked' | 'app_control_not_allowed' | 'window_not_on_screen' | 'window_gone' | 'driver_error'; hint: string } {
     if (screenLocked) {
       return {
         reason: 'screen_locked',
@@ -1042,7 +1056,7 @@ export function createComputerMcpServer(
     }
     // The window may well exist and be on screen; window discovery does not need
     // accessibility, so this must win over the window checks below.
-    if (isAppControlDenied(data) || isAppControlDenied(thrown)) {
+    if (appControlDenied) {
       return { reason: 'app_control_not_allowed', hint: APP_CONTROL_DENIED_HINT };
     }
     const windows = recovery?.discovery.ok && recovery.discovery.data && typeof recovery.discovery.data === 'object'

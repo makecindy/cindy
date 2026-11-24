@@ -60,7 +60,7 @@ export type InputHandoffImageStartError = InputHandoffStartError | 'NOT_AN_IMAGE
 
 /** Why a target cannot be handed off, known before starting. */
 export interface InputHandoffTargetProblem {
-  errorCode: 'TARGET_IS_CINDY' | 'TARGET_NOT_FOUND' | 'TARGET_AMBIGUOUS' | 'SCREEN_LOCKED';
+  errorCode: 'TARGET_IS_CINDY' | 'TARGET_NOT_FOUND' | 'TARGET_AMBIGUOUS' | 'TARGET_PERMISSION_DENIED' | 'SCREEN_LOCKED';
   message: string;
 }
 
@@ -247,6 +247,14 @@ export class InputHandoffService {
     if (list === 'locked') return { errorCode: 'SCREEN_LOCKED', message: SCREEN_LOCKED_NEXT };
     if (!list) return null;
     const resolved = resolveHandoffTarget(list, target, this.deps.hostPid);
+    if (resolved === 'permission') {
+      return {
+        errorCode: 'TARGET_PERMISSION_DENIED',
+        message: 'macOS did not allow Cindy to read windows in the target app. Ask the owner to allow the app in '
+          + 'System Settings > Privacy & Security > System & App Protection Override > Cindy. '
+          + 'If macOS is asking for temporary access, have the owner respond on that Mac before trying again.',
+      };
+    }
     if (resolved) {
       // Guessing could send the owner to the wrong window (the agent's page is often minimized behind theirs).
       // Without a pid the program may run as several processes (profiles, an automation copy): all of them count.
@@ -263,7 +271,7 @@ export class InputHandoffService {
     // The program is there but nothing carries that title: say what its windows are called now.
     if (target.windowTitle) {
       const sameProgram = resolveHandoffTarget(list, { ...target, windowTitle: undefined }, this.deps.hostPid);
-      if (sameProgram) {
+      if (sameProgram && sameProgram !== 'permission') {
         const titles = list.apps
           .filter((app) => (target.pid !== undefined ? app.pid === sameProgram.pid : app.pid !== this.deps.hostPid && app.bundleId === sameProgram.bundleId))
           .flatMap((app) => app.windows.map((w) => w.title))

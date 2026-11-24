@@ -473,12 +473,13 @@ func handoffExposePage(_ request: [String: Any]) -> [String: Any] {
   // Chrome takes the value yet answers with an error code: only reading it back tells.
   return ["changed": (handoffBool(app, attribute) ?? false) == on]
 }
-func handoffWindows(_ app: AXUIElement) -> [AXUIElement] {
-  guard let raw = handoffAttr(app, kAXWindowsAttribute), let windows = raw as? [AXUIElement] else { return [] }
-  return windows
+func handoffWindows(_ app: AXUIElement) -> (windows: [AXUIElement], error: AXError) {
+  var raw: CFTypeRef?
+  let error = AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &raw)
+  return (error == .success ? (raw as? [AXUIElement] ?? []) : [], error)
 }
 func handoffResolveWindow(_ app: AXUIElement, _ request: [String: Any]) -> (AXUIElement, Int)? {
-  let windows = handoffWindows(app)
+  let windows = handoffWindows(app).windows
   if let spec = request["window"] as? [String: Any] {
     let title = spec["title"] as? String
     if let index = spec["index"] as? Int, index >= 0, index < windows.count,
@@ -646,23 +647,28 @@ func handoffWindowList(_ request: [String: Any] = [:]) -> [String: Any] {
       pids.insert(running.processIdentifier)
     }
   }
+  let chosenAppsOnly = !CGPreflightPostEventAccess() && controlsAllApps() == false
   var apps: [[String: Any]] = []
   for pid in pids {
     guard let running = NSRunningApplication(processIdentifier: pid) else { continue }
     let element = AXUIElementCreateApplication(pid)
     AXUIElementSetMessagingTimeout(element, 0.3)
-    let focused = handoffElement(handoffAttr(element, kAXFocusedWindowAttribute))
-    let windows = handoffWindows(element).enumerated().map { offset, window -> [String: Any] in
+    let read = handoffWindows(element)
+    let controlDenied = chosenAppsOnly && read.error == .apiDisabled
+    let focused = read.windows.isEmpty ? nil : handoffElement(handoffAttr(element, kAXFocusedWindowAttribute))
+    let windows = read.windows.enumerated().map { offset, window -> [String: Any] in
       ["index": offset, "title": handoffString(window, kAXTitleAttribute) ?? "",
        "frame": handoffFrame(window) ?? [], "focused": focused.map { CFEqual($0, window) } ?? false,
        "minimized": handoffBool(window, kAXMinimizedAttribute) ?? false]
     }
-    if running.activationPolicy != .regular && windows.isEmpty { continue }
+    if running.activationPolicy != .regular && windows.isEmpty && !controlDenied { continue }
     // Without `background`, an app is listed only while it has something on screen. With it, every
     // app is, even with no window at all: that is how a closed last window is told from a hidden one.
     if request["background"] as? Bool != true && !onScreen.contains(pid) { continue }
-    apps.append(["pid": Int(pid), "app": running.localizedName ?? "", "bundleId": running.bundleIdentifier ?? "",
-                 "windows": windows])
+    var app: [String: Any] = ["pid": Int(pid), "app": running.localizedName ?? "",
+                              "bundleId": running.bundleIdentifier ?? "", "windows": windows]
+    if controlDenied { app["controlDenied"] = true }
+    apps.append(app)
   }
   // Read fresh (see handoffFrontPid): NSWorkspace can name another app in this short-lived process.
   return ["frontmost": Int(handoffFrontPid() ?? NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0), "apps": apps]
@@ -994,11 +1000,6 @@ func handoffDetectQr(_ data: Data) -> [[String: Any]] {
   return found
 }
 
-#if !DESKTOP_INPUT_TEST
-// AX may be scoped to a single app on macOS 27.3. Desktop input posts CGEvents.
-func desktopInputAuthorized() -> Bool {
-  AXIsProcessTrusted() && CGPreflightPostEventAccess()
-}
 // macOS 27.3 lets the person allow control of chosen apps only. The per-target
 // trust keys exist only there, so they are looked up at run time (nil before).
 // Measured on 27.3 beta 2 (26C5047e) with one chosen app: AXIsProcessTrusted()
@@ -1019,6 +1020,12 @@ func appControlAllowed(_ bundleId: String?) -> Bool? {
   return AXIsProcessTrustedWithOptions(options)
 }
 func controlsAllApps() -> Bool? { appControlAllowed(nil) }
+
+#if !DESKTOP_INPUT_TEST
+// AX may be scoped to a single app on macOS 27.3. Desktop input posts CGEvents.
+func desktopInputAuthorized() -> Bool {
+  AXIsProcessTrusted() && CGPreflightPostEventAccess()
+}
 var inputTargetBundle: String?
 /// Input handoff works in one app. With control limited to chosen apps, it may
 /// only act on a chosen app and must send that app's input to its process.

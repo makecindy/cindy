@@ -2225,23 +2225,33 @@ describe('a target app macOS refuses to the driver is named as a permission prob
     try {
       const result = textPayload(await h.client.callTool({ name: 'call_tool', arguments: {
         name: 'get_window_state', args: { pid: 7, window_id: 9, include_screenshot: false },
-      } })) as { reason?: string; hint?: string; data?: { hint?: string; next_step?: string } };
+      } })) as { reason?: string; hint?: string; data?: { hint?: string; next_step?: string }; recovery?: unknown };
       expect(result.reason).toBe(reason);
+      // #12506 review: denied reads cannot be recovered by re-enumerating windows (unit).
+      expect(callTool.mock.calls.map(([name]) => name)).toEqual(
+        reason === 'app_control_not_allowed' ? ['get_window_state'] : ['get_window_state', 'list_windows'],
+      );
       if (reason === 'app_control_not_allowed') {
+        expect(result.recovery).toBeUndefined();
         expect(result.hint ?? result.data?.hint).toContain('System & App Protection Override');
       }
     } finally { await h.cleanup(); }
   });
 
-  it('points a refused action at check_permissions instead of a retry', async () => {
-    const callTool = vi.fn(async () => { throw new Error('click failed: AXUIElementPerformAction returned AXError -25211 (kAXErrorAPIDisabled)'); });
+  it.each([
+    ['thrown', () => { throw new Error('click failed: AXUIElementPerformAction returned AXError -25211 (kAXErrorAPIDisabled)'); }],
+    ['returned', () => ({ ok: false, degraded_reason: denied })],
+  ])('points a %s refused action at check_permissions instead of a retry', async (_label, refuse) => {
+    const callTool = vi.fn(async (_name: string) => refuse());
     const h = await makeHarness({ getStatus: vi.fn(), callTool, describeDesktop: async () => ({ screen_locked: false }) }, { sessionId: 'denied-click' });
     try {
       const result = textPayload(await h.client.callTool({ name: 'call_tool', arguments: {
         name: 'click', args: { pid: 7, window_id: 9, x: 10, y: 10 },
-      } })) as { errorCode?: string; reason?: string; data?: { next_step?: string; hint?: string } };
+      } })) as { errorCode?: string; reason?: string; data?: { next_step?: string; hint?: string }; recovery?: unknown };
       expect(result).toMatchObject({ errorCode: 'COMPUTER_DRIVER_ERROR', reason: 'app_control_not_allowed' });
       expect(result.data).toMatchObject({ next_step: 'check_permissions' });
+      expect(result.recovery).toBeUndefined();
+      expect(callTool.mock.calls.map(([name]) => name)).toEqual(['click']);
     } finally { await h.cleanup(); }
   });
 });
