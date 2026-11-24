@@ -20,6 +20,7 @@ import {
   customType,
 } from 'drizzle-orm/sqlite-core';
 
+import type { MrRunObservation } from '@cindy/maker-scheduler';
 import type { SessionSource } from '../../shared/sessionSource.js';
 
 /** Rebuildable Chat Server projection inside the owner's database; namespace includes server and reader. */
@@ -1769,6 +1770,7 @@ export const scheduleRuns = sqliteTable(
     preRunHookResult: text('pre_run_hook_result'),
     /** 本轮触发来源；NULL = 定时或手动。 */
     triggerSource: text('trigger_source'),
+    mrObservation: text('mr_observation', { mode: 'json' }).$type<MrRunObservation>(),
     readAt: integer('read_at'),
     /**
      * In-flight 心跳时间戳（毫秒）——跨实例的"仍有活实例在跑"租约信号。
@@ -1779,6 +1781,9 @@ export const scheduleRuns = sqliteTable(
   },
   (t) => ({
     idxBySchedule: index('idx_schedule_runs_schedule').on(t.scheduleId, t.firedAt),
+    idxMrObservation: index('idx_schedule_runs_mr_observation')
+      .on(t.scheduleId, t.status, t.firedAt, t.id)
+      .where(sql`${t.mrObservation} IS NOT NULL`),
     idxRunningSchedule: index('idx_schedule_runs_running_schedule')
       .on(t.scheduleId)
       .where(sql`${t.status} = 'running'`),

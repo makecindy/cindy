@@ -807,7 +807,7 @@ export function createMakerHookSessionRunner(deps: {
           if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error;
         }
       }
-      return { workingDir, usable };
+      return { workingDir, usable, companionOwned: row?.source === 'bot' };
     },
 
     async run(req: HookRunRequest, releaseSendLock = (): void => {}) {

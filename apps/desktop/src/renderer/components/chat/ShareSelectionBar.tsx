@@ -22,11 +22,10 @@ import {
   useState,
   type CSSProperties,
 } from 'react';
-import { Check } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { blobToDataUrl } from '@/lib/annotationBurnIn';
-import { isEditableKeyboardTarget } from '@/lib/editableKeyboardTarget';
+import { editableTargetConsumesKey } from '@/lib/editableKeyboardTarget';
 import { createLogger } from '@/lib/logger';
 import { copyPngBlobToClipboard } from '@/lib/rasterizeToImage';
 import {
@@ -41,6 +40,7 @@ import { cn } from '@/lib/utils';
 import { useBrandLogo } from '@/hooks/useBrandLogo';
 import shareCharacterSrc from '@/assets/cindy-share-character.jpg';
 import { shareSelectionStore, useShareSelectionCount } from './shareSelectionStore';
+import { Checkbox } from '@/components/ui/checkbox';
 
 const log = createLogger('ShareSelectionBar');
 
@@ -176,7 +176,8 @@ export function ShareSelectionBar({
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (e.defaultPrevented) return;
-      if (isEditableKeyboardTarget(e.target)) return;
+      // 勾选消息或点「全选」后焦点停在原生勾选框上；它只要空格，Esc / ⌘A 仍归分享栏。
+      if (editableTargetConsumesKey(e.target, e.key)) return;
       if (busy) return;
       if (e.key === 'Escape') {
         e.preventDefault();
@@ -193,6 +194,7 @@ export function ShareSelectionBar({
   }, [busy, toggleAll]);
 
   const disabled = count === 0 || busy !== null;
+  const selectAllDisabled = busy !== null || shareableMessageIds.length === 0;
 
   return (
     <div
@@ -208,32 +210,19 @@ export function ShareSelectionBar({
     >
       {/* 部分勾选不等于全选:按钮仍显示未选中,点击后临时补齐全部；只有当前
           可选项全部勾上时才显示选中态,再次点击恢复全选前的用户选择。 */}
-      <button
-        type="button"
-        role="checkbox"
-        aria-checked={allSelected}
-        aria-label={t('chat.shareImage.selectAll')}
-        onClick={toggleAll}
-        disabled={busy !== null || shareableMessageIds.length === 0}
+      <label
         className={cn(
-          'inline-flex h-8 shrink-0 items-center gap-2 rounded-full border px-3 text-13 font-medium transition-colors',
-          'outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-          'border-[var(--border-default)] bg-[var(--surface-chip)] text-[var(--text-primary)]',
-          'hover:bg-[var(--surface-hover)] disabled:cursor-default disabled:opacity-50',
+          'inline-flex h-8 shrink-0 items-center gap-2 text-13 font-medium text-[var(--text-primary)]',
+          selectAllDisabled ? 'opacity-60' : 'cursor-pointer',
         )}
       >
-        <span
-          className={cn(
-            'flex h-4 w-4 items-center justify-center rounded-full border transition-colors',
-            allSelected
-              ? 'border-[var(--accent-cta-bg-pure)] bg-[var(--accent-cta-bg-pure)] text-[var(--accent-pure-cta-fg)]'
-              : 'border-[var(--text-tertiary)] bg-transparent',
-          )}
-        >
-          {allSelected ? <Check size={11} strokeWidth={2.5} aria-hidden /> : null}
-        </span>
+        <Checkbox
+          checked={allSelected}
+          onChange={toggleAll}
+          disabled={selectAllDisabled}
+        />
         <span>{t('chat.shareImage.selectAll')}</span>
-      </button>
+      </label>
 
       <div className="min-w-0 flex-1">
         <div className="text-14 font-medium leading-tight text-[var(--text-primary)]">

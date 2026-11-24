@@ -35,6 +35,33 @@ describe('useDeviceLinkDeviceList initial request', () => {
     await waitFor(() => expect(result.current?.[0]?.app).toBe('cindy-friend'));
     unmount();
   });
+  // PR #11991 review: a stale fallback (e.g. a read that timed out right after waking) or a
+  // one-leg read is still `ready`, but its online flags are not current evidence, so it must
+  // not settle the first-connection window. Only a complete read is authoritative.
+  it.each([['stale', { stale: true }], ['partial', { partial: true }]] as const)(
+    'marks a %s directory ready but not authoritative until a complete read', async (_source, flag) => {
+      const target: DeviceLinkDeviceView = { deviceId: 'peer', name: 'Mac', platform: 'darwin', appVersion: '1',
+        online: false, busy: false, remoteControlEnabled: false, controlEnabled: true, isSelf: false, lastSeenAt: null };
+      let status!: (payload: { status: 'stopped' | 'connecting' | 'online' }) => void;
+      const listDevices = vi.fn().mockResolvedValueOnce({ devices: [target], ...flag })
+        .mockResolvedValue({ devices: [target] });
+      vi.stubGlobal('electronAPI', { deviceLink: { listDevices, getState: vi.fn().mockResolvedValue({ linkStatus: 'online' }),
+        onPresenceChanged: vi.fn(), onStatusChanged: (callback: typeof status) => { status = callback; }, onControlTargetChanged: vi.fn(),
+      } });
+      const { useDeviceLinkDeviceListAuthoritative, useDeviceLinkDeviceListRequestState } =
+        await import('@/features/device-link/useDeviceLinkDeviceList');
+      const { result, unmount } = renderHook(() => ({
+        authoritative: useDeviceLinkDeviceListAuthoritative(), request: useDeviceLinkDeviceListRequestState(),
+      }));
+      await waitFor(() => expect(result.current.request.status).toBe('ready'));
+      expect(result.current.authoritative).toBe(false);
+      act(() => status({ status: 'online' }));
+      await waitFor(() => expect(result.current.authoritative).toBe(true));
+      // Relay stop clears the directory: no authority survives into the next connection.
+      act(() => status({ status: 'stopped' }));
+      expect(result.current.authoritative).toBe(false);
+      unmount();
+    });
   it('silently retries a failed directory request without a later push event', async () => {
     let resolveRetry: ((value: { devices: DeviceLinkDeviceView[] }) => void) | undefined;
     let resolvePresenceRefresh: ((value: { devices: DeviceLinkDeviceView[] }) => void) | undefined;

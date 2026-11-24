@@ -1,3 +1,4 @@
+import { useNavigationState, useRoute } from 'expo-router/react-navigation';
 import { WallpaperBackdrop } from '@/theme/WallpaperBackdrop';
 import { useWallpaper } from '@/theme/wallpaper';
 import { ProjectSettingsSheet } from '@/session/ProjectSettingsSheet';
@@ -31,6 +32,7 @@ import { MountOnFirstOpen } from '@/session/MountOnFirstOpen';
 import { RunningTokenRatePopover } from '@/session/RunningTokenRatePopover';
 import { companionProcessItems } from '@/session/companionConversationPresentation';
 import { useRunningTokenRateHistory } from '@/session/useRunningTokenRateHistory';
+import Svg, { Path, Rect } from 'react-native-svg';
 import { HomeHeaderGlassButton } from '@/session/HomeHeaderGlassButton';
 import { SessionStackActions, SessionStackHeader } from '@/session/SessionStackHeader';
 import { HomeNewTaskButton } from '@/session/HomeNewTaskButton';
@@ -693,6 +695,8 @@ import { buildWideSessionNavLayout } from '@/session/wideSessionNav';
 import { SessionFloatingDrawer } from '@/session/SessionTaskDrawer';
 import { GestureDetector } from '@/platform/gestureHandler';
 import {
+  sessionSwipeReturnsToSource,
+  pushSessionDrillDown,
   switchDrawerSessionInPlace,
   taskListSessionTarget,
   type SessionRouteParamsNavigation,
@@ -1121,6 +1125,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const { t, i18n: i18nInstance } = useTranslation();
   const params = useLocalSearchParams<{
     sessionId: string;
+    sessionEntry?: string;
     notificationResponse?: string;
     resourceKind?: string;
     resourceCollectionId?: string;
@@ -1188,6 +1193,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     deviceId, sessionId, () => navigation.isFocused(), (key) => Alert.alert(t(key)), credentialNoticeAlias,
   ), [credentialNoticeAlias, deviceId, navigation, sessionId, t]);
   const router = useRouter();
+  const route = useRoute();
+  const swipeReturnsToSource = useNavigationState(state => sessionSwipeReturnsToSource(state, route.key));
   // 完整消息读取权限按「会话 + 单调代际」登记。focus 与 AppState 正交：后台时
   // 导航仍可能保持 focused，必须立即撤权；重新聚焦/回前台会生成新代际，使旧
   // listMessages 响应永久失效。
@@ -2302,13 +2309,10 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     navigateToCollabSession(
       {
         getState: () => navigation.getState(),
-        push: (target) => router.push({
-          pathname: '/sessions/[sessionId]',
-          params: {
-            sessionId: target.sessionId,
-            deviceId: target.deviceId,
-            deviceName: target.deviceName,
-          },
+        push: (target) => pushSessionDrillDown(router, {
+          sessionId: target.sessionId,
+          deviceId: target.deviceId,
+          deviceName: target.deviceName,
         }),
         dismissTo: (target) => router.dismissTo({
           pathname: '/sessions/[sessionId]',
@@ -3319,9 +3323,14 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // below the whole status area.
   const sessionListDrawerTopInset = horizontalSystemHeader
     ? sharedStatusRowDrawerTop(nativeHeaderHeight, insets.top) : undefined;
+  // 自愈返回:canGoBack 与真实栈不一致时(reload 恢复深路由 / 重复压栈残留),
+  // GO_BACK 会被静默吞掉,生产表现为"点返回永远没反应"——校验兜底见 useGuardedBack。
+  const goBackOneLevel = useGuardedBack();
   // 退出宽屏后 layout.drawerWidth 会变 0;退场期间继续用最后一个有效宽度,避免面板几何跳变。
-  const { sessionListDrawerOpen, sessionListDrawerOverlayMounted, sessionListDrawerWidthRef, sessionListDrawerClosingRef, pendingDrawerNavigationRef, openSessionListDrawer, closeSessionListDrawer, sessionListDrawerFloating, sessionListDrawerMotion, sessionListDrawerPullGesture, queueDrawerNavigation, handleSessionListDrawerClosed } = useConversationTaskDrawer({
+  const { sessionListDrawerOpen, sessionListDrawerOverlayMounted, sessionListDrawerWidthRef, sessionListDrawerClosingRef, pendingDrawerNavigationRef, openSessionListDrawer, closeSessionListDrawer, stackGestureEnabled, sessionListDrawerFloating, sessionListDrawerMotion, sessionListDrawerPullGesture, queueDrawerNavigation, handleSessionListDrawerClosed } = useConversationTaskDrawer({
     enabled: wideSessionNav.enabled, persistent: paneLayout.persistent, width: wideSessionNav.drawerWidth,
+    onSwipeBack: windowDimensions.height > windowDimensions.width && swipeReturnsToSource
+      && router.canGoBack() ? goBackOneLevel : undefined,
   });
   const handleDrawerSelectSession = useCallback((item: RemoteSessionListItem) => {
     const targetSession = item.session as RemoteSession;
@@ -5139,6 +5148,10 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const renderItems = useMemo(() => optimisticClientIds.size === 0 ? renderWindow.items : renderWindow.items.filter((item) =>
     !(item.type === 'message' && optimisticClientIds.has(item.message.source.clientId))),
   [renderWindow.items, optimisticClientIds]);
+  const timelineItems = useMemo(
+    () => companionChat ? companionProcessItems(renderWindow.items, isMessageListStreaming) : renderWindow.items,
+    [companionChat, isMessageListStreaming, renderWindow.items],
+  );
   const renderItemsStructureKey = useMemo(
     () => ({}),
     [pendingQuestionIds, optimisticUsers, historyView.snapshot, errorTailClientId, activeErrorClientId, forkOrigin, i18nInstance.language, inputProjection.autoResumePending, isMessageListStreaming, makerTurnRunning, messageStructureToken, sessionId, taskUpdates],
@@ -5181,8 +5194,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   );
   const activeSearchHit = activeSearchIndex >= 0 ? (searchHits[activeSearchIndex] ?? null) : null;
   const routeFocusedItemKey = useMemo(
-    () => findMobileRenderItemKeyByClientId(renderItems, routeFocusedClientId),
-    [renderItems, routeFocusedClientId],
+    () => findMobileRenderItemKeyByClientId(timelineItems, routeFocusedClientId),
+    [timelineItems, routeFocusedClientId],
   );
   const focusedMessageItemKey = activeSearchHit?.itemKey ?? routeFocusedItemKey;
   const routeFocusKey = routeFocusClientId
@@ -6423,8 +6436,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     ],
   );
   const messageListItems = useMemo(
-    () => mergePendingSendItems(companionChat ? companionProcessItems(renderWindow.items, isMessageListStreaming) : renderWindow.items, pendingSendItems, optimisticClientIds),
-    [companionChat, pendingSendItems, renderWindow.items, optimisticClientIds, isMessageListStreaming],
+    () => mergePendingSendItems(timelineItems, pendingSendItems, optimisticClientIds),
+    [timelineItems, pendingSendItems, optimisticClientIds],
   );
   const canLoadEarlierHistory = (historyView.snapshot.ready ? historyView.snapshot.hasMore : hasOlderMessages && messages.length > 0)
     && !isScheduleDetail;
@@ -9853,9 +9866,6 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     }
   }, [currentSession, extraDirBrowseOpen, loadExtraDirBrowsePath]);
 
-  // 自愈返回:canGoBack 与真实栈不一致时(reload 恢复深路由 / 重复压栈残留),
-  // GO_BACK 会被静默吞掉,生产表现为"点返回永远没反应"——校验兜底见 useGuardedBack。
-  const goBackOneLevel = useGuardedBack();
   const backToTaskList = useTaskListBack();
   const goBackToHome = companionChat && !companionEntry.threadRootSessionId ? backToTaskList : goBackOneLevel;
   // Dragging the floating list on to full screen is a way back: the list
@@ -10295,10 +10305,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       saveComposerDocumentDraft(forked.id, forkDocument);
       saveComposerDraft(forked.id, composerDocumentProjectedText(forkDocument));
       clearQuotes(forked.id);
-      router.push({
-        pathname: '/sessions/[sessionId]',
-        params: { sessionId: forked.id, deviceId, deviceName },
-      });
+      pushSessionDrillDown(router, { sessionId: forked.id, deviceId, deviceName });
     } catch (err) {
       const detail = formatRemoteError(err);
       // 远程 Agent 的分叉失败(如 REMOTE_AGENT_FORK_FAILED)用 session.remoteError 的本地化文案，不显示原始错误码。
@@ -10344,7 +10351,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       const forked = await maker.forkStripEncrypted(sessionId);
       if (!recovery.isCurrent() || !navigation.isFocused()) return;
       remoteSessionStore.upsertDeviceSession(deviceId, deviceName, forked);
-      router.push({ pathname: '/sessions/[sessionId]', params: { sessionId: forked.id, deviceId, deviceName } });
+      pushSessionDrillDown(router, { sessionId: forked.id, deviceId, deviceName });
     } catch (err) {
       if (recovery.isCurrent() && navigation.isFocused()) {
         setError(formatRemoteError(err));
@@ -10358,15 +10365,12 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     const parentSessionId = currentSession?.parentSessionId;
     const forkedAtMessageId = currentSession?.forkedAtMessageId;
     if (!deviceId || !parentSessionId || !forkedAtMessageId) return;
-    router.push({
-      pathname: '/sessions/[sessionId]',
-      params: {
-        sessionId: parentSessionId,
-        deviceId,
-        deviceName,
-        focusClientId: forkedAtMessageId,
-        focusRequestKey: String(Date.now()),
-      },
+    pushSessionDrillDown(router, {
+      sessionId: parentSessionId,
+      deviceId,
+      deviceName,
+      focusClientId: forkedAtMessageId,
+      focusRequestKey: String(Date.now()),
     });
   }, [
     currentSession?.forkedAtMessageId,
@@ -10383,13 +10387,10 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     if (!target || !targetDeviceId) return;
     if (target.sessionId === sessionId && targetDeviceId === deviceId) return;
     const targetDevice = remoteSessionStore.getDeviceIdentity().find((item) => item.deviceId === targetDeviceId);
-    router.push({
-      pathname: '/sessions/[sessionId]',
-      params: {
-        sessionId: target.sessionId,
-        deviceId: targetDeviceId,
-        deviceName: targetDevice?.name ?? (targetDeviceId === deviceId ? deviceName : targetDeviceId),
-      },
+    pushSessionDrillDown(router, {
+      sessionId: target.sessionId,
+      deviceId: targetDeviceId,
+      deviceName: targetDevice?.name ?? (targetDeviceId === deviceId ? deviceName : targetDeviceId),
     });
   }, [deviceId, deviceName, router, sessionId]);
 
@@ -10437,21 +10438,19 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       setError(t('session.screen.sessionDeviceNotFound'));
       return;
     }
-    router.push({
-      pathname: '/sessions/[sessionId]',
-      params: {
-        sessionId: target.sessionId,
-        deviceId: targetDeviceId,
-        deviceName: targetSession?.deviceLinkDeviceName
-          ?? (targetDeviceId === deviceId ? deviceName : undefined)
-          ?? (sharedPeer ? t('sharedTask.hostDevice') : targetDeviceId),
-        ...(target.messageClientId
-          ? {
-              focusClientId: target.messageClientId,
-              focusRequestKey: String(Date.now()),
-            }
-          : {}),
-      },
+    // Keep the source route even when the link revisits a task already in the stack.
+    pushSessionDrillDown(router, {
+      sessionId: target.sessionId,
+      deviceId: targetDeviceId,
+      deviceName: targetSession?.deviceLinkDeviceName
+        ?? (targetDeviceId === deviceId ? deviceName : undefined)
+        ?? (sharedPeer ? t('sharedTask.hostDevice') : targetDeviceId),
+      ...(target.messageClientId
+        ? {
+            focusClientId: target.messageClientId,
+            focusRequestKey: String(Date.now()),
+          }
+        : {}),
     });
   }, [deviceId, deviceName, router, sessionId, setError, t]);
 
@@ -10637,7 +10636,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const companionHeaderShown = companionChat && !!companionResource && !shareSelectionActive;
   const headerNode = (
     <>
-    <Stack.Screen options={{ gestureEnabled: !sessionListDrawerOverlayMounted && !sessionListDrawerFloating }} />
+    <Stack.Screen options={{ gestureEnabled: stackGestureEnabled }} />
     {companionHeaderShown ? (
         <>
       {horizontalSystemHeader || adaptiveWindow.barEdge !== 'none' ? null : (
@@ -12273,15 +12272,22 @@ function SessionHeaderBar({
   const systemBack = useSystemNavigationBack();
   const headerWindow = useAdaptiveWindow();
   const headerInsets = headerWindow.insets;
+  const listOnly = !!onOpenSessionList && headerWindow.height > headerWindow.width;
   // Budget the title together with both toolbars and, on Duo portrait, the status area.
   const nativeTitleMaxWidth = sessionNavigationTitleMaxWidth({
     barWidth: headerWindow.width - headerInsets.left - headerInsets.right,
-    sessionList: !!onOpenSessionList, detailsOnly: workerHeader, statusRowReserve,
+    additionalListButton: !!onOpenSessionList && !listOnly, detailsOnly: workerHeader, statusRowReserve,
   });
   const sessionListButton = onOpenSessionList ? (
     <HomeHeaderGlassButton accessibilityLabel={t('home.drawer.openA11y')}
-      onPress={onOpenSessionList} testID="session.sessionListButton">
-      <Menu color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} />
+      onPress={onOpenSessionList} floatingFallback={listOnly} testID="session.sessionListButton">
+      {listOnly ? (
+        <Svg width={iconSize.action} height={iconSize.action} viewBox="0 0 24 24" fill="none"
+          stroke={colors.textPrimary} strokeWidth={iconStroke.thin} strokeLinecap="round">
+          <Rect x={1} y={3.5} width={22} height={17} rx={3} />
+          <Path d="M9 4v16 M4 8h2 M4 10.5h2 M4 13h2" />
+        </Svg>
+      ) : <Menu color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} />}
     </HomeHeaderGlassButton>
   ) : null;
 
@@ -12295,7 +12301,7 @@ function SessionHeaderBar({
       available={!!currentSession} detailsOnly={workerHeader}
       filesDisabled={!files || files.disabled} filesDisabledReason={files?.disabledReason}
       onFiles={onOpenFiles} onDetails={onOpenSettings} onDesktop={onOpenRemoteDesktop}
-      screen={liveScreen} onBack={onBack} onOpenSessionList={onOpenSessionList} /></>;
+      screen={liveScreen} onBack={onBack} onOpenSessionList={onOpenSessionList} listOnly={listOnly} /></>;
   }
 
   // 分享选择模式只保留全选；底部关闭按钮负责退出。
@@ -12317,14 +12323,14 @@ function SessionHeaderBar({
   return (
     <View style={[styles.sessionHeaderBar, nativeHeader && styles.sessionHeaderBarNative]} testID="session.summary">
       {projectSettings}
-      <SystemNavigationBack label={t('shared.back')} onPress={onBack} />
+      <SystemNavigationBack label={t('shared.back')} onPress={onBack} hideBackButton={listOnly} />
       {sessionListButton}
       {systemBack ? (
         <SessionStackActions available={!!currentSession} detailsOnly={workerHeader}
           filesDisabled={!overview?.actions.some((action) => action.id === 'files' && !action.disabled)}
           onFiles={onOpenFiles} onDetails={onOpenSettings} onDesktop={onOpenRemoteDesktop} screen={liveScreen} />
       ) : null}
-      {systemBack ? null : nativeHeader ? (
+      {systemBack || listOnly ? null : nativeHeader ? (
         <SessionHeaderNativeBack label={t('shared.back')} onPress={onBack} />
       ) : (
         <ScreenBackButton

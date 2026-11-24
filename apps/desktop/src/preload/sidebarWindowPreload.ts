@@ -717,7 +717,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Only read operations required by the model selector; sharing/group management stays in the main UI.
   providerShare: {
     command: (command: ProviderShareCommand) => {
-      if (!['received', 'received-snapshot', 'quota-account'].includes(command.action) &&
+      if (!['received', 'received-snapshot', 'retry-model-catalog', 'quota-account'].includes(command.action) &&
           !(command.action === 'insights' && command.includeUsage === false))
         return Promise.reject(new Error('Unsupported model catalog operation'));
       return ipcRenderer.invoke(PROVIDER_SHARE_IPC.COMMAND, command);

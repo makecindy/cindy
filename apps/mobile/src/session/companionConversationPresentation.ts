@@ -1,4 +1,4 @@
-import { groupTeammateProcess } from '@cindy/maker-shared/message-render';
+import { collapseLegacyIdleGapCards, groupTeammateProcess } from '@cindy/maker-shared/message-render';
 import { hasRichAnswer } from '@cindy/maker-shared/rich-answer';
 import { botTaskResultKey, readBotTaskResults } from '@cindy/maker-shared/botCollaboration';
 import { HISTORY_GAP_SPLIT_MS } from '@cindy/maker-shared/history-gap';
@@ -159,7 +159,11 @@ export function companionProcessItems(items: readonly MobileMessageRenderItem[],
       ? item.startedAtMs + (item.durationMs ?? 0) : time(item),
     streaming: item => item.type === 'work_group' ? item.isStreaming === true : liveItems.has(item),
     create: (children, key, streaming, start, end) => ({ type: 'work_group', teammateJournal: true, key,
-      children: children as MobileWorkChildItem[], isStreaming: streaming,
+      children: collapseLegacyIdleGapCards(children as MobileWorkChildItem[], child => child.type === 'message' ? {
+        clientId: child.message.source.clientId || child.message.source.id || child.message.key,
+        systemCardType: child.message.systemCardType,
+        systemCardData: child.message.systemCardData,
+      } : undefined), isStreaming: streaming,
       ...(start !== null ? { startedAtMs: start } : {}),
       ...(start !== null && end !== null ? { durationMs: Math.max(0, end - start) } : {}) }),
   });

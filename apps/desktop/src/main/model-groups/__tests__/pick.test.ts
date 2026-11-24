@@ -20,6 +20,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ProviderView } from '@cindy/model-providers';
 
 import {
+  modelGroupAutoSwitchFor,
+  modelGroupAutoSwitchOn,
   modelGroupCandidateKey,
   modelGroupResolveResultForRemote,
   modelGroupResolveResultFromRemote,
@@ -596,5 +598,27 @@ describe('strategies added on 2026-11-21', () => {
     expect(wire.routes.map((item) => [item.strategy, (item as { pick?: string }).pick])).toEqual([['order', 'drain'], ['order', undefined]]);
     // 新版读回来是真实的选法。
     expect(normalizeModelGroupsConfig(JSON.parse(JSON.stringify(wire))).routes.map((item) => item.strategy)).toEqual(['drain', 'order']);
+  });
+});
+
+// model-groups.md §4.5 (2026-11-24): each mode has its own 「出问题时自动换来源」, on unless the user turned it off;
+// a task follows the switch of the mode it was opened with.
+describe('auto switch setting', () => {
+  it.each([
+    ['never set', {}, true, undefined],
+    ['turned off', { autoSwitch: false }, false, false],
+    ['a stray true', { autoSwitch: true }, true, undefined],
+    ['junk', { autoSwitch: 'no' }, true, undefined],
+  ] as const)('reads a mode with %s', (_name, extra, on, stored) => {
+    const [saved] = normalizeModelGroupsConfig({ routes: [{ ...route('order'), ...extra }] }).routes;
+    expect(modelGroupAutoSwitchOn(saved)).toBe(on);
+    expect(saved.autoSwitch).toBe(stored);
+  });
+
+  it('follows the mode the task was opened with, and stops once that mode is gone', () => {
+    const config = normalizeModelGroupsConfig({ routes: [route('order'), { ...route('order'), id: 'r2', autoSwitch: false }] });
+    expect(modelGroupAutoSwitchFor(config, { type: 'route', id: 'r1' })).toBe(true);
+    expect(modelGroupAutoSwitchFor(config, { type: 'route', id: 'r2' })).toBe(false);
+    expect(modelGroupAutoSwitchFor(config, { type: 'route', id: 'gone' })).toBe(false);
   });
 });

@@ -3,7 +3,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { useTranslation } from 'react-i18next';
 import { Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Switch } from '@/components/ui/switch';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
@@ -181,8 +181,10 @@ export function ChatInviteDialog({ groupId, initialLink = '', malformedLink = fa
         {!fromLink && (!groupId || link) && <Input aria-label={t(key('inviteLink'))} value={link} readOnly={!!groupId} disabled={busy || revoked}
           size={groupId ? 'md' : 'lg'} inputClassName={groupId ? 'text-12 text-[var(--text-secondary)]' : undefined}
           placeholder={t(key('pasteLink'))} onChange={value => { setLink(value); setPreview(null); setError(''); operation.current = crypto.randomUUID(); }} />}
-        {!groupId && preview && maskSupported && <label className="flex min-h-10 items-center justify-between gap-4 text-13">
-          <span>{t('bots.groupChat.mask.joinSetup')}</span><Switch checked={configureMask} disabled={busy} onCheckedChange={setConfigureMask} aria-label={t('bots.groupChat.mask.joinSetup')} />
+        {!groupId && preview && maskSupported && <label className="flex min-h-10 cursor-pointer items-center gap-2 text-13">
+          {/* Applied only when the user clicks Join: Checkbox, not Switch (DESIGN.md §4). */}
+          <Checkbox checked={configureMask} disabled={busy} onChange={event => setConfigureMask(event.currentTarget.checked)} />
+          <span>{t('bots.groupChat.mask.joinSetup')}</span>
         </label>}
         {fromLink && !preview && !error && <p role="status" className="text-13 leading-normal text-[var(--text-secondary)]">{t(key('loadingInvite'))}</p>}
         {preview && <div className="space-y-1 rounded-lg bg-[var(--surface-elevated)] p-3">

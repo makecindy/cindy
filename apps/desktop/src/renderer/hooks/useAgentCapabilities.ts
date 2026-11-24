@@ -712,11 +712,11 @@ export async function prefetchDeviceCapabilities(deviceId: string): Promise<void
   await Promise.allSettled(ALL_AGENT_KINDS.map((agent) => fetchCapabilities(agent, deviceId)));
 }
 
-export function evictControlledDeviceCapabilities(taskDeviceId: string): void {
+export function evictControlledDeviceCapabilities(taskDeviceId: string, recovered?: ReadonlySet<string>): void {
   const devices = new Set([...cache.keys(), ...inflight.keys(), ...remoteListeners.keys()]
     .map(key => key.slice(0, key.lastIndexOf(':'))));
   for (const key of devices) {
-    if (parseModelCatalogKey(key)?.taskDeviceId === taskDeviceId) evictDeviceCapabilities(key);
+    if (parseModelCatalogKey(key)?.taskDeviceId === taskDeviceId && !recovered?.has(key)) evictDeviceCapabilities(key);
   }
 }
 

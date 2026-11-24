@@ -1467,6 +1467,9 @@ interface ElectronAPI {
       id: string,
       config: Record<string, unknown> | null,
     ) => Promise<{ config: Record<string, unknown> }>;
+    /** 「用插件打开文件」开关(只对声明了 fileOpener 的插件有意义;默认开)。 */
+    fileOpener: (id: string) => Promise<{ declared: boolean; enabled: boolean }>;
+    setFileOpener: (id: string, enabled: boolean) => Promise<{ declared: boolean; enabled: boolean }>;
     /** 系统文件选择框(.cindy 过滤),只选不装;取消返回 { canceled: true }。 */
     githubRelease: (action: 'check' | 'update' | 'sign-in', instanceId: string, assetId?: number) =>
       Promise<import('../shared/githubPluginRelease').GithubPluginReleaseResult | boolean>;
@@ -1487,7 +1490,7 @@ interface ElectronAPI {
       unsupportedSlots: string[];
       iconDataUrl?: string;
     }>;
-    uninstall: (id: string) => Promise<{ ok: true }>;
+    uninstall: (id: string, confirmed?: import('../shared/ghost').ConfirmedGhostUninstall) => Promise<{ ok: true }>;
     /** 详情页「导出 .cindy」:打包安装目录 → 保存对话框落盘。 */
     export: (
       id: string,
@@ -1821,7 +1824,7 @@ interface ElectronAPI {
     officialModelPlugins: (cursor: string | null) => Promise<import('../shared/pluginMarket').OfficialModelPluginPage>;
     query: (input: import('../shared/pluginMarket').PluginMarketQuery) => Promise<import('../shared/pluginMarket').PluginMarketPage>;
     lookup: (ghostIds: string[]) => Promise<import('../shared/pluginMarket').PluginMarketSnapshot>;
-    recommendations: () => Promise<import('../shared/pluginMarket').PluginMarketItem[]>;
+    recommendations: (pluginIds?: string[]) => Promise<import('../shared/pluginMarket').PluginMarketItem[]>;
     snapshot: () => Promise<import('../shared/pluginMarket').PluginMarketSnapshot>;
     detail: (pluginId: string) => Promise<import('../shared/pluginMarket').PluginMarketDetail>;
     prepareShare: (pluginId: string, options?: import('../shared/share').ShareOptions) => Promise<import('../shared/share').ShareContent>;
@@ -1836,7 +1839,7 @@ interface ElectronAPI {
       pluginId: string,
       options: import('../shared/pluginMarket').PluginMarketInstallOptions,
     ) => Promise<import('../shared/pluginMarket').PluginMarketInstallResult>;
-    uninstall: (pluginId: string) => Promise<{ ok: true }>;
+    uninstall: (pluginId: string, confirmed?: import('../shared/ghost').ConfirmedGhostUninstall) => Promise<{ ok: true }>;
     consumeRemovalNotice: () => Promise<
       import('../shared/pluginMarket').PluginRemovalUserNotice | null
     >;
@@ -2429,6 +2432,7 @@ interface ElectronAPI {
    * `LOG_UPLOAD_EMPTY`(采到 0 条)/ `LOG_UPLOAD_FAILED`(网络)/ `LOG_UPLOAD_BUSY`。
    */
   uploadLogsNow: () => Promise<LogUploadResult>;
+  acceptManualLogUploadConsent: (policyVersion: string) => Promise<LogUploadSettingsPayload>;
   onLogUploadSettingsChange: (callback: (payload: LogUploadSettingsPayload) => void) => () => void;
 
   // ── Profile 编辑(设置 → 用户卡片编辑名字 / 头像;直写服务端,跨设备生效) ──
@@ -2527,6 +2531,8 @@ interface ElectronAPI {
     setConfig: (payload: { token: string; ownerUserId: string }) => Promise<{
       status: TelegramBotTransportStatus;
       saveErrorStatus?: TelegramBotTransportStatus;
+      /** 保存失败只是建连握手超时(界面保留输入、提示重试)。 */
+      saveTimedOut?: boolean;
       ownerUserId: string | null;
       botUsername: string | null;
     }>;
@@ -4153,6 +4159,11 @@ interface ElectronAPI {
     get(): Promise<import('../shared/projectsRoot').ProjectsRootState>;
     choose(): Promise<import('../shared/projectsRoot').ProjectsRootState>;
     reset(): Promise<import('../shared/projectsRoot').ProjectsRootState>;
+  };
+  taskExportDirectory?: {
+    get(): Promise<import('../shared/taskExportDirectory').TaskExportDirectoryState>;
+    choose(): Promise<import('../shared/taskExportDirectory').TaskExportDirectoryState>;
+    reset(): Promise<import('../shared/taskExportDirectory').TaskExportDirectoryState>;
   };
   createProjectFromTask: {
     prepare(sessionId: string): Promise<import('../shared/projectsRoot').PreparedProjectFromTask>;

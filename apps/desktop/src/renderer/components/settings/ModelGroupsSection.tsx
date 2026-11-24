@@ -37,6 +37,7 @@ import { cn } from '@/lib/utils';
 import {
   MODEL_GROUP_LIMITS,
   MODEL_GROUP_STRATEGIES,
+  modelGroupAutoSwitchOn,
   modelGroupCandidateKey,
   modelGroupWeight,
   type ModelGroupCandidate,
@@ -207,6 +208,7 @@ export function ModelGroupsSection() {
         description: t('modelGroups.settings.deleteRouteConfirmDescription'),
         confirmText: t('modelGroups.settings.delete'),
         cancelText: t('modelGroups.settings.cancel'),
+        confirmVariant: 'destructive',
       })) return;
       if (await save((latest) => ({ ...latest, routes: latest.routes.filter((item) => item.id !== route.id) }))) back();
     };
@@ -257,6 +259,25 @@ export function ModelGroupsSection() {
                         const { effort: _previous, ...rest } = current;
                         void _previous;
                         return value === UNSET_EFFORT ? rest : { ...rest, effort: value };
+                      })}
+                    />
+                  }
+                />
+                <SettingsRow
+                  title={t('modelGroups.settings.autoSwitch.title')}
+                  hint={t('modelGroups.settings.autoSwitch.hint')}
+                  wrap
+                  trailing={
+                    <Switch
+                      data-setting-id={modelGroupsSettings.routes.id}
+                      data-model-group-auto-switch
+                      checked={modelGroupAutoSwitchOn(route)}
+                      aria-label={t('modelGroups.settings.autoSwitch.title')}
+                      onCheckedChange={(on) => void updateRoute(route.id, (current) => {
+                        // 默认开：开着时不存这一项，关掉才存 false(model-groups.md §4.5)。
+                        const { autoSwitch: _was, ...rest } = current;
+                        void _was;
+                        return on ? rest : { ...rest, autoSwitch: false };
                       })}
                     />
                   }
