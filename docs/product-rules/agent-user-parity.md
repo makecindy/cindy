@@ -128,6 +128,7 @@ Cindy 应用更新（2026-11-11）：`list_tools({query:"更新 Cindy"})`（含�
 | 任务     | 新建任务（继承项目、选择已有项目或不绑项目；来源不绑项目时按执行目录所在的已登记可见项目归属，2026-11-10） | 有 | 有（2026-11-11，`device` 指定任务电脑；项目与默认模型在目标解析，不继承本机路径）               |
 | 任务     | 新建任务时选择 Agent 所在电脑（`send_to_session` create 的 `provider_device_id`（兼容 `agent_device_id`），取 `list_available_models` 的 `locations[]`；只换 Agent 用的远程或分享供应商，任务与文件仍在 `device` 指定的电脑） | 有 | 有（2026-11-07；SSH 任务不支持；那台没有所需模型或连不上返回 `PROVIDER_ROUTE_UNAVAILABLE`，不自动换电脑） |
 | 任务     | 归档 / 取消归档                                             | 有   | 有（2026-10-16） |
+| 任务     | 置顶 / 取消置顶（`pin_sessions` / `unpin_sessions`）；列表和摘要查回 `pinned` | 有（保留已有置顶顺序） | 有（每批限一台电脑，沿用任务权限及远控授权） |
 | 任务     | 稍后处理（指定时间 / 无限期）与提前取回，与收件箱同一字段和唤回规则（`snooze_sessions`，与归档同在 control 类） | 有（2026-11-22） | 有（2026-11-22，既有 patch-meta，按顺序写，结果不明不重发） |
 | 任务     | `delete_session` 删除明确任务（不能删除当前调用任务），复用宿主生命周期清理 | 有（整体安装授予的 control 声明） | 有（既有 patch-meta，结果不明不重发） |
 | 自动归档 | 设置 → 存储空间中的闲置自动归档开关、保留天数、预览与恢复默认；`tasks.auto-archive` 仍通过 `task-management` 配置分类复用 `get_app_settings` / `update_app_settings` / `reset_app_settings` | 有（当前账号本机） | 无（设置本身为本机范围，远程仍使用现有归档与恢复） |
