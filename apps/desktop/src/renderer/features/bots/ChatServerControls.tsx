@@ -57,7 +57,7 @@ export function ChatMessageReactions({ groupId, message, members, reactionRevisi
       className={compact ? cn('absolute -top-2.5 z-[5] w-max', align === 'right' ? '-left-1' : '-right-1') : cn('mt-1 flex flex-wrap items-center gap-1', align === 'right' && 'justify-end')}>
       {stacked ? <Popover>
         <PopoverTrigger asChild>
-          <button type="button" aria-label={label} className="relative flex h-[22px] items-center gap-0.5 rounded-full border border-[var(--border-default)] bg-popover px-1.5 text-13 shadow-sm focus-visible:ring-2 focus-visible:ring-ring">
+          <button type="button" aria-label={label} className="relative flex h-[22px] items-center gap-0.5 rounded-full border border-[var(--border-default)] bg-popover px-1.5 text-13 focus-visible:ring-2 focus-visible:ring-ring">
             {reactions.slice(0, 2).map(r => <ReactionGlyph key={r.emoji} emoji={r.emoji} />)}
             <span className="text-11 tabular-nums text-[var(--text-secondary)]">{total}</span>
             {gesture && <ChatReactionMotion key={gesture.emoji} gesture={gesture} onFinish={controls.finishGesture} />}
