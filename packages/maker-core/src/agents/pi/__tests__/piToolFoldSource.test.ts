@@ -423,7 +423,7 @@ describe('cindy-tool-fold extension source', () => {
     const recovered = await tool.execute('t-slice', { call_id: 'huge-write' });
     const text = String(recovered.content![0].text);
     expect(text.length).toBeLessThan(1200);
-    expect(text).toContain('Call cindy_toolfold_read({"call_id":"huge-write","offset":');
+    expect(text).toContain('Call cindy_toolfold_read({"call_id":"huge-write","part":"result","offset":');
     // 部分读取不能钉住：钉住会把整段塞回下一次请求，读上限就白设了。
     const afterSlice = projection(context, messages);
     expect(callIds(afterSlice)).not.toContain('huge-write');
@@ -614,7 +614,7 @@ describe('cindy-tool-fold extension source', () => {
     const text = String(read.content![0].text);
     expect(text).toContain('B ok');
     // 缺项在它自己的成员位置上点名（p1 在 p2 之前），不是页尾另附的清单。
-    const named = '[missing round-trip p1 (full text evicted); re-run that command]';
+    const named = '[missing round-trip p1 (full text evicted); it already ran]';
     expect(text).toContain(named);
     expect(text.indexOf(named)).toBeLessThan(text.indexOf('B ok'));
   });
@@ -888,7 +888,9 @@ describe('cindy-tool-fold extension source', () => {
     ]);
     const refused = await tool.execute('t1', { call_id: 'huge-1' });
     expect(refused.isError).toBe(true);
-    expect(String(refused.content![0].text)).toContain('re-run the command');
+    // 扩展不知道被折的命令是否幂等：重复一次 rm 或 push 就是第二次副作用。
+    expect(String(refused.content![0].text)).toContain('it already ran');
+    expect(String(refused.content![0].text)).not.toContain('re-run');
   });
 
   it('recovers a giant with its call arguments, not only the stored result text', async () => {
@@ -1321,7 +1323,7 @@ describe('cindy-tool-fold extension source', () => {
       params = { batch: batchId, ...again };
     }
     // 分页拼回去与逐条读取逐字相同，只少被删的那一条；缺项在它的成员位置上被点名。
-    const gone = '[missing round-trip call-5 (not in this session); re-run that command]';
+    const gone = '[missing round-trip call-5 (not in this session); it already ran]';
     expect(joined).toBe([...full.slice(0, 5), gone, ...full.slice(6)].join('\n\n'));
     // 游标成员自己被删：成员内偏移随之作废——缺项说明从头给出，下一条成员不被截头。
     const afterLoss = await page({ batch: batchId, at: 5, offset: 10 });
@@ -1376,7 +1378,7 @@ describe('cindy-tool-fold extension source', () => {
     // 压缩把整批成员都删了：96 条缺项。调用 id 在说明行里限长（160 字符），点名不随 id 长度
     // 增长；读取上限调到 1,000，点名总量（96 条、每条约 224）仍是上限的二十倍。
     projection(context, [{ role: 'user', content: [{ type: 'text', text: 'continue' }] }]);
-    const lines = ids.slice(0, 96).map((id) => '[missing round-trip ' + idShown(id) + ' (not in this session); re-run that command]');
+    const lines = ids.slice(0, 96).map((id) => '[missing round-trip ' + idShown(id) + ' (not in this session); it already ran]');
     // 续读游标是位置、不带调用 id：放得下的成员进这一页，放不下的另起一页——页严格不越过上限。
     const { pages, joined } = await readWholeBatch(tool, batchId, 1000);
     expect(pages.length).toBeGreaterThan(1);
@@ -1407,7 +1409,7 @@ describe('cindy-tool-fold extension source', () => {
     // 每条说明行 184 字符，预算 1,000、页尾按最宽形态留位后第一页余 839：放下 4 条，第 5 条放不进
     // 剩下的余量，整行另起一页——从不按偏移切开（否则下一页的「游标成员已不在 → 偏移作废」会让它
     // 永远从头重发），也不越过上限。
-    const lines = ids.slice(0, 7).map((id) => '[missing round-trip ' + id + ' (not in this session); re-run that command]');
+    const lines = ids.slice(0, 7).map((id) => '[missing round-trip ' + id + ' (not in this session); it already ran]');
     const { pages, joined } = await readWholeBatch(tool, batchId, 1000);
     expect(pages, pages.map((page) => page.length + ':' + page.slice(0, 30)).join(' || ')).toEqual([lines.slice(0, 4).join('\n\n'), lines.slice(4).join('\n\n')]);
     for (const page of pages) expect(page.length).toBeLessThanOrEqual(1000);
@@ -1487,7 +1489,16 @@ describe('cindy-tool-fold extension source', () => {
       try { out = projection(context, messages) ?? messages; } finally { delete (globalThis as Record<symbol, unknown>)[flag]; }
       expect(out).toHaveLength(messages.length);
       for (let index = 0; index < messages.length; index += 1) {
-        expect(out[index] === messages[index] || kept.some((item) => out[index].content === item.blocks)).toBe(true);
+        // 三种可接受形态：原样不动，整份放回，或前缀放回（末尾带截断说明）。
+        const item = kept.find((entry) => messages[index].role === 'toolResult' && entry.id === (messages[index] as unknown as { toolCallId: string }).toolCallId);
+        const content = out[index].content as Block[] | undefined;
+        const textsOf = (blocks: Block[] | undefined) => (blocks ?? []).filter((block) => block && block.type === 'text').map((block) => (block as unknown as { text: string }).text).join('');
+        const same = out[index] === messages[index] || (item !== undefined && content === item.blocks);
+        const partial = item !== undefined && Array.isArray(content) && content.length > 1
+          && content[content.length - 1].type === 'text'
+          && /^\[truncated \d+ of \d+ chars;/.test(String((content[content.length - 1] as unknown as { text: string }).text))
+          && textsOf(item.blocks).indexOf(textsOf(content.slice(0, -1))) === 0;
+        expect(same || partial, String(index)).toBe(true);
       }
       if (newest && added(newest) <= pin) {
         hit.fits += 1;
@@ -2008,6 +2019,147 @@ describe('cindy-tool-fold extension source', () => {
     }
     // 定义本身加两个调用点。
     expect(argCounts).toEqual([4, 4, 4]);
+  });
+
+  it('pages one call through every place where the call part fills the page', async () => {
+    // 游标的编码与解码必须互逆，而且任何一段读完都不能让游标原地不动。猜宽度会漏掉边界，
+    // 所以这里量出来：页尾宽度从一次超长调用头得出，调用头长度是参数的线性函数，用空参数得出截距，
+    // 就能把调用头正好放在页边界上（页里剩 0–1 个字符给正文）。
+    const limit = 1000;
+    const id = 'e';
+    const widths = async (argLength: number) => {
+      const { context, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: String(limit) });
+      projection(context, [call(id, 'bash', { command: 'a'.repeat(argLength) }), result(id, 'bash', '')]);
+      return String((await tool.execute('w' + argLength, { call_id: id })).content![0].text);
+    };
+    const probe = await widths(limit);
+    const budget = probe.replace(/\n\n\[truncated: [^\n]*\]$/, '').length;
+    // 调用头长度随参数线性增长，但截距取决于参数如何渲染，算不准。干脆在估算值附近逐个扫，
+    // 让「调用头正好占满一页」这个边界必然落在窗口里，而不是靠算得刚好。
+    const body = 'r'.repeat(budget + 8);
+    const firstCursor = async (argLength: number) => {
+      const args = 'a'.repeat(argLength);
+      const { context, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: String(limit) });
+      projection(context, [call(id, 'bash', { command: args }), result(id, 'bash', body)]);
+      const raw = String((await tool.execute('c' + argLength, { call_id: id })).content![0].text);
+      return { part: (JSON.parse(JSON.stringify(continuation(raw) ?? null)) || {}).part || null, raw };
+    };
+    // 调用头里参数出现两次（摘要和 arguments 各一次），长度是参数的两倍左右，算不准截距，
+    // 所以先粗扫找到「首屏从结果段变成调用段」的长度，再在它前后逐字扫，让边界必然被覆盖。
+    let edge = 0;
+    for (let probeLength = 0; probeLength <= limit; probeLength += 20) {
+      const seen = await firstCursor(probeLength);
+      if (seen.part === 'call') {
+        edge = probeLength;
+        break;
+      }
+    }
+    expect(edge, 'a call part longer than one page exists somewhere in the scan').toBeGreaterThan(0);
+    for (let argLength = edge - 24; argLength <= edge + 2; argLength += 1) {
+      const args = 'a'.repeat(argLength);
+      const { context, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: String(limit) });
+      projection(context, [call(id, 'bash', { command: args }), result(id, 'bash', body)]);
+      const where = 'call part after ' + argLength + ' arg chars, ';
+      const pages = [];
+      const states = [];
+      let params = { call_id: id };
+      for (let guard = 0; guard < 40; guard += 1) {
+        const read = await tool.execute('r' + guard, params);
+        expect(read.isError, where + 'page ' + pages.length).toBeUndefined();
+        const pageRaw = String(read.content![0].text);
+        expect(pageRaw.length, where + 'page ' + pages.length).toBeLessThanOrEqual(limit);
+        const next = continuation(pageRaw);
+        states.push(JSON.stringify(next ?? 'end'));
+        if (next === null) {
+          pages.push(pageRaw);
+          break;
+        }
+        expect(pageRaw.length, where + 'empty page ' + pages.length).toBeGreaterThan(0);
+        pages.push(pageRaw.replace(/\n\n\[truncated: [^\n]*\]$/, ''));
+        params = { call_id: id, ...next };
+      }
+      // 游标每步都必须指向新位置（不能原地打转），并且至少两页，拼回去逐字等于原文。
+      expect(new Set(states).size, where + 'cursor repeated: ' + states.join(' ')).toBe(states.length);
+      // 拼回去的基准是「上限足够大时一次读到的原文」，不是手写的期望串。
+      const wide = loadExtension({ CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: '4000000' });
+      projection(wide.context, [call(id, 'bash', { command: args }), result(id, 'bash', body)]);
+      const whole = String((await wide.tool.execute('whole' + argLength, { call_id: id })).content![0].text);
+      expect(pages.join(''), where + 'pages join back to the original').toBe(whole);
+    }
+  });
+
+  it('recognizes an ingest marker whatever the settings or wording are when the session is read back', async () => {
+    // 入库截断标记是这个扩展唯一落盘的文本，写下去之后就不变；识别它的条件也必须只依赖写下去的东西：
+    // 标记的固定外壳和它点名的调用 id。不能依赖读它时的配置（重启后预览额度、读取上限都可能不同），
+    // 也不能依赖措辞。认不出标记的后果是把截断的预览当成全文交回去。
+    for (const idLength of [6, 60, 2600]) {
+      const id = 'call-' + 'i'.repeat(idLength);
+      const ingested = loadExtension({ CINDY_PI_TOOL_FOLD_INGEST_KEEP: '4000', CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: '6000' });
+      const marked = ingested.toolResult({ toolName: 'bash', toolCallId: id, content: [{ type: 'text', text: 'T'.repeat(30000) }] }) as { content: Block[] };
+      const marker = marked.content.map((block) => String((block as { text?: string }).text ?? '')).join('\n');
+      expect(marker).toMatch(/\[truncated \d+ of \d+ chars; [^\]]+\]$/);
+      const drift = marker.replace(/\[truncated \d+ of \d+ chars; [^\]]+\]$/, '[truncated 28000 of 30000 chars; the rest was cut when stored; ask for call "' + id + '" to see it]');
+      const cases: Array<[string, Record<string, string>]> = [
+        [marker, { CINDY_PI_TOOL_FOLD_INGEST_KEEP: '100', CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: '6000' }],
+        [marker, { CINDY_PI_TOOL_FOLD_INGEST_KEEP: '4000', CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: '1000' }],
+        [drift, { CINDY_PI_TOOL_FOLD_INGEST_KEEP: '4000', CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: '6000' }],
+      ];
+      for (const [text, resumed] of cases) {
+        const fresh = loadExtension(resumed);
+        projection(fresh.context, [call(id, 'bash', { command: 'x' }), result(id, 'bash', text)]);
+        const read = await fresh.tool.execute('r', { call_id: id });
+        const said = String(read.content![0].text);
+        const where = 'id ' + idLength + ', keep ' + resumed.CINDY_PI_TOOL_FOLD_INGEST_KEEP + ', limit ' + resumed.CINDY_PI_TOOL_FOLD_RECOVERY_CHARS;
+        // 绝不把预览当成全文；要么点名「未保留」，要么明确拒绝。
+        expect(said.includes('T'.repeat(300)), where).toBe(false);
+        expect(said).toMatch(/not retained|no longer available|Cannot page/);
+      }
+    }
+  });
+
+  it('never tells the model to repeat a call whose output it cannot return', () => {
+    // 扩展不知道被折的命令是否幂等：重复一次 rm 或 push 就是第二次副作用。
+    // 取回失败只陈述事实（已经执行过），并要求先核实状态，不劝「重跑」。
+    expect(CINDY_TOOL_FOLD_EXTENSION_SOURCE).not.toMatch(/re-run/);
+  });
+
+  it('gives the newest oversized result a prefix on text-only turns instead of skipping it', () => {
+    // 文本回合禁用了所有工具。整份放不下就跳过，预算会落到更旧的载荷上，而模型正要用的是
+    // 最新那份、且无处可取：按优先级给前缀，并标明这是预览。
+    const flag = Symbol.for('cindy.pi.textOnlyTurn');
+    const { context, toolResult } = loadExtension({
+      CINDY_PI_TOOL_FOLD_PIN_BUDGET: '2000',
+      CINDY_PI_TOOL_FOLD_INGEST_LIMIT: '4000',
+      CINDY_PI_TOOL_FOLD_INGEST_KEEP: '500',
+    });
+    const body = '0123456789'.repeat(600);
+    const older = 'abcdefghij'.repeat(500);
+    const newest = toolResult({ toolName: 'read', toolCallId: 'newest', content: [{ type: 'text', text: body }] }) as { content: Block[] } | undefined;
+    const prior = toolResult({ toolName: 'read', toolCallId: 'older', content: [{ type: 'text', text: older }] }) as { content: Block[] } | undefined;
+    const joined = (blocks?: Block[]) => (blocks ?? []).map((b) => String(b.text ?? '')).join('');
+    expect(joined(newest!.content).length).toBeLessThan(body.length);
+    const messages: Message[] = [
+      { role: 'user', content: [{ type: 'text', text: 'summarize both logs' }] },
+      call('older', 'read', { path: 'older.log' }),
+      { role: 'toolResult', toolCallId: 'older', toolName: 'read', content: prior!.content },
+      call('newest', 'read', { path: 'newest.log' }),
+      { role: 'toolResult', toolCallId: 'newest', toolName: 'read', content: newest!.content },
+    ];
+    (globalThis as Record<symbol, unknown>)[flag] = true;
+    try {
+      const out = projection(context, messages);
+      const results = out.filter((m) => m.role === 'toolResult');
+      const restored = joined(results.find((m) => m.toolCallId === 'newest')!.content);
+      expect(restored.startsWith(body.slice(0, 100))).toBe(true);
+      expect(restored.length).toBeGreaterThan(body.length / 3);
+      // 末尾必须说明这是预览并点名同一个调用 id：恢复会话时不能被当成原文。
+      expect(restored).toMatch(/\[truncated \d+ of \d+ chars;/);
+      expect(restored).toContain('newest');
+      // 预算已用在前缀上，更旧的那份原样留作预览。
+      expect(joined(results.find((m) => m.toolCallId === 'older')!.content)).toBe(joined(prior!.content));
+    } finally {
+      delete (globalThis as Record<symbol, unknown>)[flag];
+    }
   });
 });
 
