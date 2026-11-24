@@ -12,6 +12,7 @@ import { createSnapshotDetailed } from '../git-snapshot/gitSnapshotService.js';
 import { botProfileMemoryDir } from '../maker-ipc/botProfileFolder.js';
 import {
   hasTeammateMemoryMoved,
+  isTeammateProjectIgnoreReady,
   legacyTeammateProjectMemoryDir,
   teammateProjectMemoryDir,
   unlinkedTeammateProjectMemoryDir,
@@ -92,6 +93,8 @@ export function companionProjectIo(): CompanionProjectIo {
       .catch((error: unknown) => { if (missing(error)) return null; throw error; }),
     writeCarryover: (workingDir, content) => writeAtomic(path.join(workingDir, BOT_V2_CARRYOVER_FILE), content),
     snapshot: async (workingDir, label) => {
+      // Not before the project's .gitignore keeps credentials out; the rules go into a later version.
+      if (!await isTeammateProjectIgnoreReady(workingDir)) return;
       await createSnapshotDetailed(workingDir, { label, meta: { sessionId: 'bot-project', kind: 'manual' } });
     },
     automations: async (workingDir) => {

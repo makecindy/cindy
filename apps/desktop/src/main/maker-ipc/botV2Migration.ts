@@ -258,10 +258,12 @@ async function migrateTeammateOnce(botId: string, ownerRoot: string,
   const receiptPath = path.join(home, RECEIPT_FILE);
   if (await exists(receiptPath)) {
     const workspace = teammateWorkspaceDir(ownerRoot, botId);
+    let ignore: 'ready' | 'failed' = 'failed';
     if (await exists(workspace)) {
       // Set up before the project ignored credentials, environments and worktrees: add those once,
-      // before any version below is recorded.
-      await ensureTeammateProjectIgnored({ botId, ownerRoot, workspace });
+      // before any version below is recorded. When that fails the teammate stays usable, but the
+      // versions below are deferred (snapshotTeammateProject) and the next start tries again.
+      ignore = await ensureTeammateProjectIgnored({ botId, workspace });
       // Upgraded before its project memory moved into the project folder: move it once (idempotent).
       await moveTeammateMemoryIntoProject({ botId, ownerRoot, workspace });
     }
@@ -274,9 +276,11 @@ async function migrateTeammateOnce(botId: string, ownerRoot: string,
       await ensureBotProjectAutomations({ botId, displayName: upgraded.name, workingDir: workspace, addMissing: false });
       // V2's migration receipt says nothing about the initial Git commit succeeding.
       // Retry only incomplete repositories; versions must not block the buddy's use.
-      await ensureWorkspaceRepository(workspace).catch((error) => {
-        log.warn('buddy project repository setup failed', { botId, error: String(error) });
-      });
+      if (ignore === 'ready') {
+        await ensureWorkspaceRepository(workspace).catch((error) => {
+          log.warn('buddy project repository setup failed', { botId, error: String(error) });
+        });
+      }
       assertCurrent();
       const projectDir = normalizeRecentWorkdirPath(workspace);
       if (projectDir) await nameBotProject(botId, projectDir, upgraded.name);

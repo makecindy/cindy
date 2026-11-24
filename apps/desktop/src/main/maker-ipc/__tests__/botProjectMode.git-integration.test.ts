@@ -26,7 +26,7 @@ vi.mock('@cindy/maker-core', async () => {
   };
 });
 
-import { ensureTeammateProjectIgnored, prepareBotProjectWorkspace, readWorkspaceRepositoryStatus } from '../botProjectMode.js';
+import { BOT_PROJECT_MEMORY_GITIGNORE, ensureTeammateProjectIgnored, prepareBotProjectWorkspace, readWorkspaceRepositoryStatus } from '../botProjectMode.js';
 import { teammateWorkspaceDir } from '../botProjectMemory.js';
 import { gitExec } from '../../worktree/gitExec.js';
 
@@ -129,7 +129,7 @@ describe('buddy repository initialization (#10216)', () => {
     await fs.writeFile(path.join(workspace, '.env'), 'COMMITTED=1\n');
     await gitExec(['add', '.gitignore', '.env'], workspace);
     await gitExec(['commit', '-m', 'v1'], workspace);
-    await expect(ensureTeammateProjectIgnored({ botId: 'old_ignore', ownerRoot: root, workspace })).resolves.toBe(true);
+    await expect(ensureTeammateProjectIgnored({ botId: 'old_ignore', workspace })).resolves.toBe('ready');
     const ignored = (file: string) => gitExec(['check-ignore', '-q', file], workspace).then(() => true, () => false);
     for (const file of ['.env.local', '.agents/skills/a/.env', '.agents/skills/a/token.json', '.agents/skills/a/.venv/bin/python', 'venv/lib/x.py', '.cindy-worktrees/t/a.txt', 'key.pem']) {
       expect(await ignored(file), file).toBe(true);
@@ -137,6 +137,37 @@ describe('buddy repository initialization (#10216)', () => {
     for (const file of ['.env.example', 'notes.md', 'keep.log']) expect(await ignored(file), file).toBe(false);
     expect((await gitExec(['ls-files', '.env'], workspace)).stdout.trim()).toBe('.env');
     expect(await fs.readFile(path.join(workspace, '.env'), 'utf8')).toBe('COMMITTED=1\n');
+  });
+
+  // Maintainer review 2026-11-24: when an older project's .gitignore could not be completed, the
+  // upgrade went on to record a version, so an untracked token.json entered the history before the
+  // next start could add the rule. Minimal failure: committed old .gitignore made read-only, an
+  // untracked token.json, then the first preparation; then the file is writable again on the next start.
+  // The old file already has the memory entries (as every project after the memory move does).
+  it.skipIf(process.getuid?.() === 0)('records no version while the .gitignore cannot be completed, and completes it on the next start', async () => {
+    const workspace = teammateWorkspaceDir(root, 'readonly_ignore');
+    await fs.mkdir(workspace, { recursive: true });
+    await gitExec(['init'], workspace);
+    await gitExec(['config', '--local', 'user.name', 'Test Author'], workspace);
+    await gitExec(['config', '--local', 'user.email', 'author@example.invalid'], workspace);
+    const ignore = path.join(workspace, '.gitignore');
+    const before = ['node_modules/', ...BOT_PROJECT_MEMORY_GITIGNORE, ''].join('\n');
+    await fs.writeFile(ignore, before);
+    await gitExec(['add', '.gitignore'], workspace);
+    await gitExec(['commit', '-m', 'v1'], workspace);
+    await fs.writeFile(path.join(workspace, 'token.json'), '{"refresh_token":"fixture"}\n');
+    const versioned = async () => (await gitExec(['log', '--all', '--name-only', '--format='], workspace)).stdout.split('\n').includes('token.json');
+    await fs.chmod(ignore, 0o444);
+    try {
+      await prepare('readonly_ignore');
+      expect(await versioned()).toBe(false);
+      expect(await fs.readFile(ignore, 'utf8')).toBe(before);
+    } finally { await fs.chmod(ignore, 0o644); }
+
+    // Next start, writable again: the rules are completed and the credential stays out of Git.
+    await prepare('readonly_ignore');
+    await expect(gitExec(['check-ignore', '-q', 'token.json'], workspace)).resolves.toBeDefined();
+    expect(await versioned()).toBe(false);
   });
 
   it('does not treat a branch referencing a missing commit as unborn', async () => {

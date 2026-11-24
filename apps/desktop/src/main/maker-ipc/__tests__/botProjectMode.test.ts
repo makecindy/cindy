@@ -567,6 +567,8 @@ describe('moveTeammateMemoryIntoProject', () => {
     await put(outside, 'project_launch.md', 'only outside');
     await put(outside, 'MEMORY.md', 'old index');
     await put(inside, 'user_tea.md', 'newer');
+    // As both upgrade entries do: the local .gitignore entries come first, else the version is deferred.
+    await expect(ensureTeammateProjectIgnored({ workspace })).resolves.toBe('ready');
 
     await expect(moveTeammateMemoryIntoProject({ botId: 'bot_mia', ownerRoot: root, workspace })).resolves.toBe(1);
     expect(await fs.readFile(path.join(inside, 'user_tea.md'), 'utf8')).toBe('newer');
@@ -615,7 +617,7 @@ describe('ensureTeammateProjectIgnored', () => {
     await fs.writeFile(path.join(workspace, '.gitignore'), before);
     await fs.writeFile(path.join(workspace, '.env'), 'COMMITTED=1');
 
-    await expect(ensureTeammateProjectIgnored({ botId: 'bot_mia', ownerRoot: root, workspace })).resolves.toBe(true);
+    await expect(ensureTeammateProjectIgnored({ botId: 'bot_mia', workspace })).resolves.toBe('ready');
     const text = await fs.readFile(path.join(workspace, '.gitignore'), 'utf8');
     expect(text).toBe(`${before}\r\n${[
       '.env.*', '!.env.example', '!.env.sample', '!.env.template',
@@ -626,7 +628,7 @@ describe('ensureTeammateProjectIgnored', () => {
 
     // Once: an entry the owner removes afterwards is not put back.
     await fs.writeFile(path.join(workspace, '.gitignore'), text.replace('token.json\r\n', ''));
-    await expect(ensureTeammateProjectIgnored({ botId: 'bot_mia', ownerRoot: root, workspace })).resolves.toBe(false);
+    await expect(ensureTeammateProjectIgnored({ botId: 'bot_mia', workspace })).resolves.toBe('ready');
     expect(await fs.readFile(path.join(workspace, '.gitignore'), 'utf8')).not.toContain('token.json');
   });
 

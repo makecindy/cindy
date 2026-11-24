@@ -17,6 +17,11 @@ import { botProfileDir, botProfileMemoryDir } from './botProfileFolder.js';
 export const TEAMMATE_V2_RECEIPT_FILE = 'v2-migration.json';
 /** Written once the teammate's project memory moved into its project folder (botProjectMode.ts). */
 export const TEAMMATE_MEMORY_MOVE_RECEIPT_FILE = 'project-memory-move.json';
+/**
+ * Written once the teammate project's `.gitignore` has the local entries (botProjectMode.ts), beside
+ * the project, so an entry the owner removes afterwards stays removed.
+ */
+export const TEAMMATE_GITIGNORE_RECEIPT_FILE = 'project-gitignore.json';
 /** The memory folder, relative to the teammate's project. */
 export const TEAMMATE_PROJECT_MEMORY_SEGMENTS = ['.cindy', 'memory'] as const;
 
@@ -84,6 +89,15 @@ async function exists(file: string): Promise<boolean> {
 /** The teammate finished its V2 upgrade here: its memories and skills were copied into the project. */
 export async function hasTeammateUpgraded(ownerRoot: string, botId: string): Promise<boolean> {
   return exists(path.join(botProfileDir(ownerRoot, botId), TEAMMATE_V2_RECEIPT_FILE));
+}
+
+/**
+ * Whether the teammate project at `workspace` has its local `.gitignore` entries. Until it does,
+ * Cindy records no version of the project: an untracked credential would enter the history before
+ * the rule could keep it out (maintainer review, 2026-11-24).
+ */
+export async function isTeammateProjectIgnoreReady(workspace: string): Promise<boolean> {
+  return exists(path.join(path.dirname(workspace), TEAMMATE_GITIGNORE_RECEIPT_FILE));
 }
 
 /** The teammate's project memory moved into its project folder here (once). */
