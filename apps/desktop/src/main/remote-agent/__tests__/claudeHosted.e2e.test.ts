@@ -48,6 +48,7 @@ import { createProviderGroupRouter } from '../../provider-group/router';
 import { createProviderGroupService } from '../../provider-group/service';
 import { AgentInputCoordinator, type AgentInputCoordinatorDeps } from '../../maker-ipc/agent-input-coordinator';
 import { createMessagePersistence, type MessagePersistencePorts } from '../../messagePersistBroadcaster';
+import { createUserMessageDurableWrite, type UserMessageDurableWritePorts } from '../../maker-ipc/userMessageDurableWrite';
 import { persistSessionStreamEventCore } from '../../maker-ipc/sessionEventStreamCore';
 import { assistantSamplingSettlements } from '../../assistantSamplingSettlement';
 import { relocateForFreshStart, type AgentSwitchSessionRow } from '../../maker-ipc/sessionAgentSwitchHandler';
@@ -566,13 +567,14 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
 
   async function exercise(original: 'a' | 'b', failure: 'cold' | 'run' | 'cold-auth' | 'send-auth' | 'idle-send' | 'reconnect' | 'scheduled-reconnect',
     { disconnectHandoff = false, replayAttachments = false,
-      stopRecoveryAt }: {
+      stopRecoveryAt, automaticOrigin }: {
         disconnectHandoff?: boolean;
         replayAttachments?: boolean;
+        automaticOrigin?: 'session' | 'orca';
         stopRecoveryAt?: 'close-busy' | 'close-stopped' | 'close-throws' | 'startup' | 'send-throws' | 'send-rejected'
           | 'replacement-closed' | 'replacement-runtime-closed' | 'replacement-accepted-then-closed'
           | 'unconfirmed' | 'send-stopped' | 'stopped-before-open' | 'mode-changed'
-          | 'mode-changed-with-stop' | 'snapshot-deadline' | 'cancelled' | 'stale' | 'schedule-aborted';
+          | 'mode-changed-with-stop' | 'snapshot-deadline' | 'cancelled' | 'stale' | 'schedule-aborted' | 'new-input' | 'route-changed';
       } = {}) {
     const reconnect = failure === 'reconnect' || failure === 'scheduled-reconnect';
     const continuation = 'Continue the remaining work.';
@@ -604,12 +606,19 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
       providerId: published, agentDeviceId: shareRoute, remoteHostId: null, orcaRole: null, sdkSessionId: null, workingDir: project };
     const history: Array<HandoffSourceMessage & { clientId: string; sessionId: string }> = [];
     const pending = createAgentHandoffPendingRegistry(async () => null);
+    const writeHistoryRow: UserMessageDurableWritePorts['createDbMessage'] = async (sessionId, body) => {
+      const { agentKind, ...fields } = body;
+      const stored = { ...fields, id: randomUUID(), sessionId, createdAt: body.createdAt ?? Date.now() };
+      history.push(stored);
+      return {
+        ...stored, createdAt: new Date(stored.createdAt).toISOString(),
+        agentKind: agentKind === 'acp' ? null : agentKind,
+        toolUseId: body.toolUseId ?? null, agentMeta: body.agentMeta ?? null,
+      };
+    };
     const persistence = createMessagePersistence({
       assistantSamplingSettlements, broadcastTap: { captureDataOwnerBroadcastScope: () => null },
-      createDbMessage: async (sessionId: string, body: Record<string, unknown>) => {
-        const stored = { ...body, sessionId, createdAt: body.createdAt ?? Date.now() };
-        history.push(stored as typeof history[number]); return stored;
-      },
+      createDbMessage: writeHistoryRow,
       updateDbMessageContent: async (_id: string, clientId: string, content: unknown) => {
         const stored = history.find(item => item.clientId === clientId); if (stored) stored.content = content; return stored;
       },
@@ -793,13 +802,24 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
       fallback: () => { throw new Error('Unexpected fallback'); }, readResetAt: () => null, now: Date.now,
       guestSwitch, log: noopLogger,
     });
+    const createUserMessage = createUserMessageDurableWrite({
+      autoResumeBookkeeping: { registerPendingOutcome() {}, releasePendingOutcome() {} },
+      silentStopAutoResumeGuard: { noteUserSend() {} },
+      interruptedTurnAutoResumeGuard: { noteUserSend() {} },
+      usageLimitAutoResume: { noteUserAction() {} },
+      getProviderGroupService: () => service,
+      enqueueDurableWrite: (_label, write) => write(undefined),
+      getLastAssistantTranscriptUuid: () => 'fixture-transcript-anchor',
+      getSessionDbAgentKind: () => 'cc',
+      createDbMessage: writeHistoryRow,
+    });
     try {
       await open(); oldNative = active.id;
       const user = 'Complete step one, report its receipt and the remaining step, then wait.';
       const content = replayAttachments
         ? JSON.stringify({ text: user, images: [image], files: [file], slashCommandRanges: [] })
         : user;
-      history.push({ clientId: randomUUID(), sessionId: task, role: 'user', content, createdAt: Date.now() });
+      await createUserMessage(task, { clientId: randomUUID(), role: 'user', content });
       if (live) await live.send(user);
       else await active.send({ type: 'user', content: user });
       await vi.waitFor(() => expect(events.filter(event => event.type === 'done')).toHaveLength(1), { timeout: 30_000, interval: 20 });
@@ -847,6 +867,20 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
               if (stopRecoveryAt === 'cancelled') cancelledInput.abort();
               if (stopRecoveryAt === 'stopped-before-open') coordinator.stop(task);
               if (stopRecoveryAt === 'stale') shareIsActive = false;
+              if (stopRecoveryAt === 'new-input') {
+                // Keep the new input queued so this assertion only observes the old transaction.
+                coordinator.setInteractionLock(task, 'fixture-delay-new-input', true);
+                coordinator.enqueue(task, {
+                  ...input,
+                  clientId: 'new-input',
+                  text: 'Use the new instructions.',
+                  persistedContent: 'Use the new instructions.',
+                  chatMessage: { ...input.chatMessage, clientId: 'new-input', content: 'Use the new instructions.' },
+                }, { manualUiSend: true });
+              }
+              // The real model / execution-location entry invalidates with this
+              // same production service before applying the new selection.
+              if (stopRecoveryAt === 'route-changed') service.noteUserAction(task);
               return 'closed';
             },
           },
@@ -946,9 +980,7 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
             opts.providerId = published;
             opts.resumeSessionId = row.sdkSessionId ?? undefined;
           },
-          createDbMessage: async (_id, body) => {
-            history.push({ clientId: body.clientId, role: 'user', content: body.content, createdAt: Date.now(), sessionId: task });
-          },
+          createDbMessage: createUserMessage,
           peekPendingHandoff: id => pending.peek(id),
           consumePendingHandoff: id => pending.consume(id),
           onSharedReconnectClaimed: (sessionId, reconnectClientId) => coordinator.markSharedReconnectPending(sessionId, reconnectClientId),
@@ -1122,7 +1154,45 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
             fireAbort.abort();
             await run;
           }
-        } else coordinator.enqueue(task, input, { manualUiSend: true });
+        } else {
+          const earlier = service.trackGuestStartRecovery(task);
+          try {
+            const origin = automaticOrigin === 'session'
+              ? { kind: 'session' as const, senderSessionId: 'source-task', displayText: continuation }
+              : automaticOrigin === 'orca' ? { kind: 'orca' as const, senderLabel: 'Lead' } : undefined;
+            coordinator.enqueue(task, { ...input, origin }, { manualUiSend: true });
+            await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
+            const sent = send.mock.results[0].value;
+            if (automaticOrigin) {
+              expect(send.mock.calls[0][3].reconnectRecovery).toBeUndefined();
+              await expect(sent).rejects.toThrow('SUBSCRIPTION_ACCOUNT_LIMITED');
+              expect(earlier.isCurrent()).toBe(true);
+              expect(guestSwitch.hasOffer(task)).toBe(true);
+            } else {
+              if (stopRecoveryAt) await sent.catch(() => undefined);
+              else await expect(sent).resolves.toMatchObject({ dispatched: true });
+              expect(earlier.signal.aborted).toBe(true);
+            }
+            if (automaticOrigin || stopRecoveryAt) {
+              expect(originalSession?.getStatus()).toBe(automaticOrigin ? 'active' : 'closed');
+              expect(opens).toHaveLength(2);
+              expect(opens[1].options.resumeSessionId).toBe(oldNative);
+              expect(opens[1].groupSwitchToken).toBeUndefined();
+              expect(guestSwitch.hasOffer(task)).toBe(Boolean(automaticOrigin));
+              expect(history.filter(message => message.clientId === clientId)).toHaveLength(1);
+              expect(await pending.peek(task)).toBeNull();
+              expect(row.sdkSessionId).toBe(oldNative);
+              expect(readAccountBinding(`task:${hostTask}`, 'anthropic')?.accountId).toBe(accounts[original]);
+              expect(sends).toBe(1);
+              if (stopRecoveryAt === 'new-input') {
+                expect(coordinator.getQueueControlSnapshot(task).pendingQueue.map(item => item.clientId)).toEqual(['new-input']);
+              }
+              return;
+            }
+          } finally {
+            earlier.dispose();
+          }
+        }
         await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
         await expect(send.mock.results[0].value).resolves.toMatchObject({ dispatched: true });
         expect(history.filter(message => message.clientId === clientId)).toHaveLength(1);
@@ -1244,10 +1314,22 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
     async failure => exercise('a', failure));
   // 11-20 incident / #11081, e2e: the old test closed G before cold open.
   // Keep G's Session alive and let the production idle sweep reclaim O's run.
-  // CINDY_TEST_DISABLE_SHARED_RECONNECT=1 disconnects only the new dispatch recovery.
+  // On 0.1.144 the real user-row write supersedes its own registered recovery;
+  // the earlier in-memory write skipped that side effect. Require one persisted
+  // input, a credentialed open and one execution through the real Claude CLI.
   it('continues the original input once after an idle shared run is reclaimed', { timeout: 90_000 }, async () => {
     await exercise('a', 'reconnect');
   });
+  // These actions land after the credential has been claimed, while the old
+  // session is closing. The user's next action must still invalidate this send.
+  it.each(['new-input', 'stopped-before-open', 'route-changed'] as const)(
+    'abandons a manual shared reconnect on %s', { timeout: 90_000 },
+    async stopRecoveryAt => exercise('a', 'reconnect', { stopRecoveryAt }),
+  );
+  it.each(['session', 'orca'] as const)(
+    'keeps the default offer path for automatic %s input', { timeout: 90_000 },
+    async automaticOrigin => exercise('a', 'reconnect', { automaticOrigin }),
+  );
   // #11895 / e2e: fire against an idle live Session, whose old executor
   // run is gone. Exercise runner acceptance and terminal tracking in addition
   // to the real controller, host and CLI. Disabling capture must break success.
