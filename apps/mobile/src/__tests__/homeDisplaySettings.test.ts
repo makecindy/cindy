@@ -11,7 +11,8 @@ import {
   type HomeContentFilters,
 } from '@/session/homeDisplaySettings';
 import { applyHomeContentFilters, filterSharedHomeRows } from '@/session/homeContentFilters';
-import { buildGroupedHomeRows, buildMixedHomeRows } from '@/session/homeSections';
+import { buildGroupedHomeRows, buildInboxHomeSections, buildMixedHomeRows } from '@/session/homeSections';
+import { EMPTY_HOME_PRIORITY_CONTEXT } from '@/session/homeListPriority';
 import type { MobileHomePresentation, MobileHomeProjectGroup } from '@/session/mobileHome';
 import type { RemoteSessionListItem } from '@/session/sessionList';
 import { groupAutomationListItems } from '@cindy/maker-shared/session-list';
@@ -159,6 +160,24 @@ describe('home content filters (desktop 筛选 parity)', () => {
     expect(activeContentFilterCount({ lastActivity: '1d', projects: ['p2'], vendor: 'pi' })).toBe(3);
   });
 
+  // Unit, task-inbox.md: exercise real Home grouping before filtering. The fixtures above
+  // cannot catch a pinned task being removed before the inbox gets to classify it.
+  it('keeps both pins accessible while the inbox counts only pins matching its project filter', () => {
+    const sessions = ['A', 'B'].map(name => ({
+      ...item(name).session, title: name, workingDir: '/' + name, workspaceKind: 'project',
+      status: 'active', deviceLinkDeviceId: 'd', pinnedAt: new Date(NOW).toISOString(),
+    }));
+    const inbox = buildMobileHomePresentation({ sessions, now: NOW, statusFilter: 'all', inboxMode: true });
+    const filtered = applyHomeContentFilters(inbox, { ...NO_FILTERS, projects: ['device:d:/A'] }, NOW);
+    expect(filtered.pinned.map(item => item.session.id).sort()).toEqual(['A', 'B']);
+    const signals = { ...EMPTY_HOME_PRIORITY_CONTEXT, runningSessionIds: new Set(['A']) };
+    const sections = buildInboxHomeSections(filtered, new Set(), signals, NOW);
+    expect(sections.find(section => section.key === 'inbox-working')).toMatchObject({
+      count: 1, data: [{ item: { session: { id: 'A' } } }],
+    });
+    expect(sections.find(section => section.key === 'inbox-inbox')?.count).toBe(0);
+  });
+
   it('filters automation runs individually instead of trusting the group representative', () => {
     const [group] = groupAutomationListItems(
       [run('old-cc', 'cc', 9), run('new-codex-1', 'codex', 0), run('new-codex-2', 'codex', 1)],
@@ -273,12 +292,13 @@ describe('task info and retained Home behavior', () => {
 
   it('keeps real project candidates available despite nonmatching search and status', () => {
     const sessions = ['A', 'B'].map((name) => ({ ...item(name).session, title: name, workingDir: '/' + name,
-      workspaceKind: 'project', status: 'active', deviceLinkDeviceId: 'd', deviceLinkDeviceName: 'Computer' }));
+      workspaceKind: 'project', status: 'active', deviceLinkDeviceId: 'd', deviceLinkDeviceName: 'Computer',
+      pinnedAt: name === 'A' ? new Date(NOW).toISOString() : null }));
     // Keep the existing production-expression fixture complete when aliases become an optional Home input.
     const result = surfaceValue('projectFilterUniverse', { useMemo, buildMobileHomePresentation,
       deviceModels: [], scheduleIndex: new Map(), selectedDeviceId: null, homeSessions: sessions,
       projectAliases: new Map([['device:d:/A', 'Customer Portal']]),
-      t: (key: string) => key, searchQuery: 'no match', statusFilter: 'running' });
+      t: (key: string) => key, searchQuery: 'no match', statusFilter: 'running', taskListMode: 'inbox' });
     expect(result.projects.map((project: { workingDir: string }) => project.workingDir).sort()).toEqual(['/A', '/B']);
     // #7026: the production initializer consumes host aliases; keep that input
     // in this unit fixture and verify its visible title without filtering candidates.

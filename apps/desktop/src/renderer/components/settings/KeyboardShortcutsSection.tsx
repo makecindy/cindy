@@ -69,6 +69,7 @@ import {
   type GamepadFamily,
 } from '../../../shared/xboxGamepad';
 import { XboxGamepadEntry, XboxGamepadSettings } from './XboxGamepadSettings';
+import { RestoreDefaultButton } from '@/components/ui/reset-buttons';
 
 const log = createLogger('settings:keyboard-shortcuts');
 
@@ -484,7 +485,7 @@ export function KeyboardShortcutsSection() {
               <div id={setting?.targetId} key={def.id} className="flex items-center gap-2 py-2">
                 {/* 条目标题 + 说明双行: 标题主文字色 + 说明次级色,
                     对齐 LinkOpenSection 卡片条目的用色规范 */}
-                <div className="flex min-w-0 flex-1 flex-col gap-[2px]">
+                <div className="flex min-w-0 flex-1 flex-col gap-0.5">
                   <p className="truncate text-13 font-medium text-[var(--text-primary)]">
                     {itemLabel(def)}
                   </p>
@@ -498,19 +499,11 @@ export function KeyboardShortcutsSection() {
 
                 {/* 单项恢复默认在控件左侧 (CONTROLS decision 3), 仅已自定义时出现 */}
                 {customized && !isRecording && (
-                  <Tip text={t('settings.shortcuts.reset')}>
-                    <Button data-setting-id={controlSetting.id}
-                      variant="secondary"
-                      tone="quiet"
-                      size="sm"
-                      type="button"
-                      onClick={() => handleResetOne(def.id)}
-                      className={iconButtonClass}
-                      aria-label={t('settings.shortcuts.reset')}
-                    >
-                      <RotateCcw size={15} aria-hidden />
-                    </Button>
-                  </Tip>
+                  <RestoreDefaultButton
+                    data-setting-id={controlSetting.id}
+                    label={t('settings.shortcuts.reset')}
+                    onClick={() => handleResetOne(def.id)}
+                  />
                 )}
 
                 {/* 组合键展示位: 录制中显示提示, 无绑定显示"未设置" */}

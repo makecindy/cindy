@@ -28,6 +28,7 @@ export function projectScheduleSidebarIndex(
         finishedAt: run.finishedAt,
         nextFireAt: run.scheduleStatus === 'active' ? run.nextFireAt : undefined,
         failureKind: run.failureKind,
+        preRunBlocked: run.status === 'failed' && run.preRunBlocked === true ? true as const : undefined,
         errorMsg: run.status === 'failed' ? run.errorMsg : undefined,
         prCheckDiagnosis: run.status === 'failed' ? readPrCheckDiagnosis(run.prCheckDiagnosis) : undefined,
         missingPlugin: run.status === 'failed' ? run.missingPlugin : undefined,

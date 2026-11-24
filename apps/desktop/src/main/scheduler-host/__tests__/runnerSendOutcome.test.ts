@@ -55,9 +55,11 @@ vi.mock('../runners/_shared', () => ({
   backfillSessionMeta: mocks.backfillSessionMeta,
 }));
 
+import { RemoteAgentRemoteError } from '../../remote-agent/controller/runClient';
 import { MakerScheduleRunner } from '../runner.desktop';
 import { ScheduledModelSelectionBusyError } from '../../maker-ipc/scheduledModelSelection';
 import { isHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface';
+import { GitSnapshotCoordinator } from '../../git-snapshot/gitSnapshotCoordinator.js';
 
 type SessionSendOptions = Parameters<Session['send']>[1];
 type SendImpl = (
@@ -689,6 +691,67 @@ describe('MakerScheduleRunner send outcome policy', () => {
     expect(run.status).toBe('success');
     expect(run.resultText).toBe('done text');
     expect(ctx.removeAbortListener).toHaveBeenCalledTimes(1);
+  });
+
+  // #10161 / unit: the idle scheduler goes straight through this runner.
+  // Its generic error sanitization used to erase the safe, typed send diagnosis.
+  it('keeps the dispatch intent diagnosis in an idle scheduled run', async () => {
+    vi.useFakeTimers();
+    const receipt = Promise.withResolvers<{ attemptId: string }>();
+    const entered = Promise.withResolvers<void>();
+    const snapshots = new GitSnapshotCoordinator({
+      snapshotTimeoutMs: 50,
+      recordTurnAttempt: () => { entered.resolve(); return receipt.promise; },
+      readAutoSnapshotEnabled: () => true,
+      getSessionContext: vi.fn(), detectRepoRoot: vi.fn(),
+      createShadowSavepoint: vi.fn(), createShadowMarker: vi.fn(),
+      oneShot: vi.fn(), logger: createLogger(),
+    });
+    const dispatch = vi.fn();
+    const h = createSessionHarness(async (_message, opts) => {
+      await opts?.onAccepted?.();
+      dispatch();
+      return { accepted: true };
+    });
+    const { runner, notifier } = createRunnerHarness(h.session, {
+      beforeDispatchUserTurn: (id, signal) => snapshots.onTurnStart(id, signal),
+    });
+    try {
+      const result = runner.fire(baseSchedule(), createFireContext()).catch(error => error);
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(50);
+      const errorMsg = expect.stringMatching(/^\[SNAPSHOT_DISPATCH_INTENT_TIMEOUT\]/);
+      expect(await result).toMatchObject({ message: errorMsg });
+      expect(latestNotifiedRun(notifier)).toMatchObject({ status: 'failed', errorMsg });
+      expect(mocks.createMessage).toHaveBeenCalledOnce();
+      expect(dispatch).not.toHaveBeenCalled();
+    } finally {
+      receipt.resolve({ attemptId: 'late' });
+      vi.useRealTimers();
+    }
+  });
+
+  // Unit regression for the idle shared reconnect: after acceptance, a confirmed
+  // startup failure still closes out this occurrence through the normal runner.
+  // The allocator/runtime suite drives the real reconnect and token delivery.
+  it('fails the scheduled occurrence once when an accepted send cannot reopen the old remote run', async () => {
+    const error = new RemoteAgentRemoteError({
+      name: 'AgentStartupStoppedError',
+      code: 'SUBSCRIPTION_ACCOUNT_LIMITED',
+      message: '[SUBSCRIPTION_ACCOUNT_LIMITED] The task subscription account is waiting for its usage window to reset',
+    }, 'start');
+    const h = createSessionHarness(async (_message, opts) => {
+      await opts?.onAccepted?.();
+      throw error;
+    });
+    const { runner, notifier, maker } = createRunnerHarness(h.session);
+    await expect(runner.fire(baseSchedule(), createFireContext())).rejects.toThrow(/Session send failed before dispatch/);
+    expect(latestNotifiedRun(notifier)).toMatchObject({ status: 'failed' });
+    expect(notifier.notify).toHaveBeenCalledOnce();
+    expect(mocks.createMessage).toHaveBeenCalledOnce();
+    expect(maker.createSession).toHaveBeenCalledOnce();
+    expect(h.send).toHaveBeenCalledOnce();
+    expect(h.listenerCount()).toBe(0);
   });
 
   it('keeps quota failures in scheduler notifications free of IM recovery instructions', async () => {

@@ -24,6 +24,7 @@ struct MBSettings: Codable, Equatable {
   var lowAlert: Bool
   var privacy: Bool
   var scope: String
+  var currency: String?
 }
 
 struct MBCell: Decodable, Identifiable, Equatable {
@@ -164,6 +165,7 @@ struct MBView: Decodable, Equatable {
   let liquidGlassClarity: Double?
   let presentation: MBPanelDesign?
   let locale: String
+  let taskMoneySymbol: String?
   let moneySymbol: String
   let strings: [String: String]
   let statusTextByMode: [String: String?]
@@ -356,7 +358,10 @@ enum Fmt {
   /// Currency symbol of the usage ledger ($ on Global, ¥ in mainland China); set by main.
   @MainActor static var symbol = "$"
 
-  @MainActor static func money(_ value: Double) -> String {
+  @MainActor static var taskSymbol = "$"
+
+  @MainActor static func money(_ value: Double, symbol override: String? = nil) -> String {
+    let symbol = override ?? Self.symbol
     if value >= 10_000 { return symbol + String(format: "%.1fk", value / 1000) }
     if value >= 100 { return symbol + grouped(value.rounded()) }
     return symbol + String(format: "%.2f", value)
@@ -651,6 +656,7 @@ final class MenubarStore: ObservableObject {
 
   func apply(_ next: MBView) {
     Fmt.symbol = next.moneySymbol
+    Fmt.taskSymbol = next.taskMoneySymbol ?? next.moneySymbol
     PanelDesign.current = next.presentation
     view = next
     if refreshing { refreshing = false }
@@ -2632,7 +2638,7 @@ struct TaskTotal: View {
           .foregroundStyle(Palette.ink3)
           .monospacedDigit()
       }
-      CountUpText(text: Fmt.money(money), font: NumFont.font(19), replayToken: replayToken)
+      CountUpText(text: Fmt.money(money, symbol: Fmt.taskSymbol), font: NumFont.font(19), replayToken: replayToken)
         .foregroundStyle(Palette.ink)
     }
     .lineLimit(1)
@@ -2668,7 +2674,7 @@ struct TaskList: View {
       if !rest.isEmpty {
         MoreRow(
           label: store.s("moreTasks", ["n": String(rest.count)]),
-          value: Fmt.money(rest.reduce(0) { $0 + $1.value })
+          value: Fmt.money(rest.reduce(0) { $0 + $1.value }, symbol: Fmt.taskSymbol)
         ) {
           store.usageList = .tasks
           store.go(.usage)
@@ -2700,7 +2706,7 @@ struct TaskRow: View {
               .tracking(-0.1)
               .lineLimit(1)
               .frame(maxWidth: .infinity, alignment: .leading)
-            CountUpText(text: Fmt.money(task.value), font: NumFont.font(14), replayToken: store.fillToken, delay: 0.12)
+            CountUpText(text: Fmt.money(task.value, symbol: Fmt.taskSymbol), font: NumFont.font(14), replayToken: store.fillToken, delay: 0.12)
               .fixedSize()
           }
           HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -2722,7 +2728,7 @@ struct TaskRow: View {
     .buttonStyle(.plain)
     .onHover { hovering in withAnimation(.easeOut(duration: 0.15)) { self.hovering = hovering } }
     .help(task.title)
-    .accessibilityLabel("\(task.title), \(Fmt.money(task.value))")
+    .accessibilityLabel("\(task.title), \(Fmt.money(task.value, symbol: Fmt.taskSymbol))")
   }
 
   private var shareBar: some View {
@@ -3524,7 +3530,7 @@ struct UsageTaskRow: View {
           Circle().fill(Palette.harness(task.harness)).frame(width: 6, height: 6)
         }
         Text(task.title).lineLimit(1).truncationMode(.tail).frame(maxWidth: .infinity, alignment: .leading)
-        Text(Fmt.money(task.value)).fontWeight(.semibold)
+        Text(Fmt.money(task.value, symbol: Fmt.taskSymbol)).fontWeight(.semibold)
       }
       .font(.system(size: 12))
       .monospacedDigit()
@@ -3537,8 +3543,8 @@ struct UsageTaskRow: View {
     .onHover { hovering in withAnimation(Motion.quick) { self.hovering = hovering } }
     .help(task.title)
     .accessibilityLabel(task.running
-      ? "\(task.title), \(runningLabel), \(Fmt.money(task.value))"
-      : "\(task.title), \(Fmt.money(task.value))")
+      ? "\(task.title), \(runningLabel), \(Fmt.money(task.value, symbol: Fmt.taskSymbol))"
+      : "\(task.title), \(Fmt.money(task.value, symbol: Fmt.taskSymbol))")
   }
 }
 
@@ -3648,6 +3654,15 @@ struct ManagePage: View {
           settingRow(store.s("privacy"), nil) {
             Toggle("", isOn: Binding(get: { view.settings.privacy }, set: { Bridge.emitSettings(["privacy": $0]) }))
               .toggleStyle(.switch).controlSize(.small).labelsHidden()
+          }
+          Hairline()
+          settingRow(store.s("usageCurrency"), nil) {
+            Picker("", selection: Binding(get: { view.settings.currency ?? "auto" },
+                                         set: { Bridge.emitSettings(["currency": $0]) })) {
+              Text(store.s("automaticCurrency")).tag("auto")
+              Text("USD").tag("USD")
+              Text("CNY").tag("CNY")
+            }.pickerStyle(.segmented).labelsHidden().controlSize(.small).fixedSize()
           }
           Hairline()
           // The picker moves under its title when the two labels don't fit beside it.

@@ -71,8 +71,10 @@
     "copyStateCopying": "Wird kopiert",
     "copyStateCopied": "Kopiert",
     "copyStateFailed": "Kopieren fehlgeschlagen",
+    "tableSelectionUnavailable": "Die durchgehende Textauswahl konnte nicht geladen werden. Lesen und Kopieren der Nachricht sind weiterhin möglich.",
     "copyStateCopy": "Kopieren",
     "copyCode": "Code kopieren",
+    "copyTable": "Tabelle kopieren",
     "thinkingHidden": "Denkprozess ausgeblendet",
     "thinkingDone": "{{duration}} nachgedacht",
     "thinkingActive": "Denkprozess {{elapsed}}",
@@ -193,6 +195,9 @@
     "turnTokens": "{{tokens}} Token"
   },
   "lightbox": {
+    "saveImage": "Bild speichern",
+    "imageSaved": "Bild gespeichert",
+    "saveFailed": "Das Bild konnte nicht gespeichert werden. Bitte erneut versuchen.",
     "originalUnavailable": "Originalbild nicht verfügbar",
     "retryOriginal": "Originalbild erneut laden",
     "loadingOriginal": "Originalbild wird geladen…",

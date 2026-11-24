@@ -59,7 +59,9 @@ button:disabled { opacity: .3; cursor: default; }
 .headline { padding: 6px 20px 0; }
 .headline .secondary { font-size: 14px; font-weight: 600; line-height: 1.3; }
 .secondary[data-alert=true]::before { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; background: var(--warn); }
-.sources { display: flex; gap: 6px; padding: 10px 16px 0; }
+.sources { display: flex; gap: 8px; padding: 10px 16px 0; }
+/* More than six sources tighten the gaps, as the Swift panel's cell row does. */
+.sources[data-dense=true] { gap: 4px; }
 .source { flex: 1 1 0; min-width: 0; text-align: center; padding: 4px 0; }
 .source:hover, .more:hover { background: none; }
 .more:hover { color: var(--ink); }
@@ -68,10 +70,27 @@ button:disabled { opacity: .3; cursor: default; }
 .count > :last-child { position: absolute; top: 0; right: 0; white-space: nowrap; }
 .source > span:not(.logo), .source > small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .metric { font-family: "Quota Barlow", "Segoe UI", sans-serif; font-weight: 600; font-variant-numeric: tabular-nums; }
-.source > b { font-size: 22px; line-height: 1.2; }
+/*
+ * The Swift panel's 22pt value header: one line, bottom-aligned, so every tube starts at the same
+ * height; SourceValue scales a value too wide for its column down to fit.
+ */
+.source > .value { display: flex; justify-content: center; align-items: flex-end; height: 22px; line-height: 1; white-space: nowrap; color: var(--ink); }
+.value > span { flex: none; transform-origin: center bottom; }
+.value[data-kind=number] { font-size: 18px; }
+.value[data-kind=balance] { font-size: 16px; }
+.source > .value small { font-family: inherit; font-size: 11px; margin-left: 1px; }
+/*
+ * Credits have no percentage: the unit sits under the amount, as on the Swift panel (15pt over
+ * 8pt there), at the 10px type floor here, so the pair rises a little above the fixed header.
+ */
+.value[data-kind=reserve] { font-size: 14px; }
+.value[data-kind=reserve] > span { display: flex; flex-direction: column; align-items: center; }
+.source > .value[data-kind=reserve] small { font-family: "Segoe UI Variable", "Segoe UI", sans-serif; font-size: 10px; margin: 0; }
+.value[data-kind=label] { font-size: 11px; font-weight: 600; color: var(--ink2); }
 .metric small { font-family: inherit; font-size: 60%; }
-.tube { position: relative; overflow: hidden; margin: 8px auto; height: var(--tube-height); width: 40px; background: linear-gradient(var(--wellTop), var(--wellBottom)); box-shadow: inset 0 1px 3px var(--wellShade); border-radius: 12px; }
-.tube[data-best=true] { outline: 1px solid var(--ink2); }
+.tube { position: relative; overflow: hidden; margin: 8px auto; height: var(--tube-height); width: 100%; max-width: 40px; background: linear-gradient(var(--wellTop), var(--wellBottom)); box-shadow: inset 0 1px 3px var(--wellShade); border-radius: 12px; }
+/* Drawn inside the wall like the Swift strokeBorder, so the recommended tube is no bigger than the rest. */
+.tube[data-best=true] { box-shadow: inset 0 0 0 1px var(--ink2), inset 0 1px 3px var(--wellShade); }
 .well { position: absolute; inset: 3px; overflow: hidden; border-radius: 8px; }
 .tube i { position: absolute; inset: auto 0 0; }
 .tube svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; fill: var(--liquid); }

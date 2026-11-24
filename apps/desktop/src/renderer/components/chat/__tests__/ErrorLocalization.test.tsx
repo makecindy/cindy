@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, act } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createInstance } from 'i18next';
 import { I18nextProvider } from 'react-i18next';
+import { MemoryRouter } from 'react-router-dom';
 import { SUPPORTED_LOCALES } from '../../../../shared/locale';
 import es from '@/i18n/locales/es/common.json';
 import fr from '@/i18n/locales/fr/common.json';
@@ -24,7 +25,10 @@ vi.mock('@/hooks/useProviders', () => ({ useProviders: () => ({ providers: [], r
 vi.mock('@/hooks/useCodexAuth', () => ({ useCodexAuth: () => ({ state: { kind: 'disconnected' } }), isChatGptConnectionConnected: () => false }));
 import { ErrorBanner } from '../ErrorBanner';
 import { ErrorMessageCard } from '../ErrorMessageCard';
+import { UserMessage } from '../UserMessage';
 import { ErrorTailErrorBanner } from '../InterruptedTurnBanner';
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
+import { Tooltip } from '@/components/ui/tooltip';
 import { remoteErrorMessageForBanner, handleStreamEvent, EMPTY_SESSION_STATE } from '@/lib/makerChatStore';
 import { buildErrorDiagnosisPrompt, prefillErrorDiagnosisDraft } from '@/lib/errorDiagnosisPrompt';
 import { clearDraft, getDraft, plainTextToTiptapDoc, saveDraft } from '@/lib/composerDraftStore';
@@ -37,6 +41,78 @@ const raw = JSON.stringify({ error: {
   type: 'invalid_request_error', code: 'unsupported_value', param: 'parallel_tool_calls',
 } });
 afterEach(cleanup);
+
+// #12240, unit: the live banner must explain both options for a retained
+// queue head. The same network error without that recovery cannot promise
+// that the original input is still waiting to be sent.
+it.each([true, false])('describes the original input only for a queue-head retry (%s)', async queuedSendRecovery => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'en', resources: { en: { translation: en } } });
+  const retry = vi.fn();
+  render(<I18nextProvider i18n={i18n}>
+    <ErrorBanner error="LAZY_CREATE_FAILED: [REMOTE_AGENT_UNAVAILABLE] not online within 1500ms"
+      agentKind="codex" agentDeviceId="other-computer" queuedSendRecovery={queuedSendRecovery}
+      retryText="original input" onRetry={retry} />
+  </I18nextProvider>);
+  const hint = screen.queryByText('Your message wasn’t sent. Select Retry to send it as is. Sending a new message will replace it.');
+  expect(Boolean(hint)).toBe(queuedSendRecovery);
+  fireEvent.click(screen.getByRole('button', { name: en.chat.errorBanner.retry }));
+  expect(retry).toHaveBeenCalledExactlyOnceWith('original input');
+});
+
+// L343 / unit: a short input skipped after a context overflow uses the same
+// notice as any skipped input. Exercise the real bubble with its locale bundle.
+it('shows the context-full notice on a skipped short input', async () => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } } });
+  const { container } = render(<I18nextProvider i18n={i18n}><MemoryRouter><Tooltip.Provider>
+    <UserMessage pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} workingDir="" content="继续"
+      inputNotice="oversized-input-skipped" />
+  </Tooltip.Provider></MemoryRouter></I18nextProvider>);
+  expect(screen.getByText('继续')).toBeTruthy();
+  const notice = container.querySelectorAll('[data-input-notice]');
+  expect(notice).toHaveLength(1);
+  expect(notice[0].textContent).toBe('上下文已满，这条消息未能处理。后面的消息会继续按顺序处理。');
+});
+
+it.each(['live', 'history'] as const)('reports a clean Codex transport exit as an interruption in %s', async surface => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'en', resources: { en: { translation: en } } });
+  const message = 'app-server force-retired: transport error: codex app-server transport closed: child exited (exit code=0)';
+  const reason = 'app-server-force-retired';
+  const retry = vi.fn();
+  render(<I18nextProvider i18n={i18n}>{surface === 'live'
+    ? <ErrorBanner error={message} errorReason={reason} agentKind="codex" retryText="continue" onRetry={retry} />
+    : <ErrorMessageCard message={message} reason={reason} />}</I18nextProvider>);
+  expect(screen.getByText('The connection to Codex was lost. The current request was interrupted. You can continue in this session.')).toBeTruthy();
+  if (surface === 'live') {
+    fireEvent.click(screen.getByRole('button', { name: en.chat.errorBanner.retry }));
+    expect(retry).toHaveBeenCalledOnce();
+  }
+});
+
+// #10161 / unit: a stalled local dispatch record used to look like a model
+// reply failure. Both error surfaces use real localized copy after the host
+// identifies that boundary. An unclassified timeout still has generic copy.
+it.each(['live', 'history', 'unclassified'] as const)('attributes a send preparation deadline in %s', async surface => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } } });
+  const raw = 'Snapshot operation deadline exceeded';
+  const message = surface === 'unclassified'
+    ? raw
+    : `[SNAPSHOT_DISPATCH_INTENT_TIMEOUT] ${raw} before confirming the send record. The message was not sent.`;
+  const retry = vi.fn();
+  render(<I18nextProvider i18n={i18n}>{surface === 'history'
+    ? <ErrorMessageCard message={message} />
+    : <ErrorBanner error={message} agentKind="codex" retryText="原消息" onRetry={retry} />}</I18nextProvider>);
+  expect(screen.getByText(surface === 'unclassified'
+    ? zhCN.chat.errorBanner.replyFailed
+    : '未发送消息，Cindy 未能及时确认安全记录')).toBeTruthy();
+  if (surface === 'live') {
+    fireEvent.click(screen.getByRole('button', { name: zhCN.chat.errorBanner.retry }));
+    expect(retry).toHaveBeenCalledWith('原消息');
+  }
+});
 
 // #10854, unit: production live reducer + banner/tail/history must retain the
 // actual cause for diagnosis while legacy reason-only errors use neutral copy.
@@ -197,7 +273,7 @@ describe.each(SUPPORTED_LOCALES)('error presentation in %s', locale => {
     expect(screen.queryByText(locales[locale].chat.errorBanner.networkShowRaw)).toBeNull();
   });
 
-  it.each(['REMOTE_AGENT_TIMEOUT', 'REMOTE_AGENT_LINK_BUSY', 'REMOTE_AGENT_UNRESPONSIVE', 'REMOTE_AGENT_OFFLINE', 'REMOTE_AGENT_ACCESS_DENIED', 'REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_MEDIA_ACCESS_DENIED', 'DEVICE_LINK_BUSY', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'SSH_HARNESS_SWITCH_UNSUPPORTED', 'MODEL_SELECTION_UNAVAILABLE', 'HARNESS_SWITCH_NOT_READY'])('preserves curated %s guidance and follows language changes', async code => {
+  it.each(['REMOTE_AGENT_TIMEOUT', 'REMOTE_AGENT_LINK_BUSY', 'REMOTE_AGENT_UNRESPONSIVE', 'REMOTE_AGENT_OFFLINE', 'REMOTE_AGENT_ACCESS_DENIED', 'REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_MEDIA_ACCESS_DENIED', 'DEVICE_LINK_BUSY', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'SSH_HARNESS_SWITCH_UNSUPPORTED', 'MODEL_SELECTION_UNAVAILABLE', 'MODEL_CATALOG_UNCONFIRMED', 'HARNESS_SWITCH_NOT_READY'])('preserves curated %s guidance and follows language changes', async code => {
     const i18n = createInstance();
     await i18n.init({ lng: locale, fallbackLng: 'en', resources: Object.fromEntries(Object.entries(locales).map(([lng, common]) => [lng, { translation: common }])) });
     const message = `Error invoking remote method device-link:invoke: Error: [${code}] upstream fallback api_key=private-test-value`;
@@ -345,4 +421,18 @@ describe.each(SUPPORTED_LOCALES)('error presentation in %s', locale => {
     expect(screen.queryByText(generic)).toBeNull();
     expect(screen.queryByText(/Switch this task/)).toBeNull();
   });
+});
+
+// #8706 unit: render each real error surface with the new code; the old UI offered Full access.
+it.each(['live', 'tail', 'history'] as const)('localizes quota exhaustion on %s without permission escalation', async surface => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'zh-CN', resources: { 'zh-CN': { translation: zhCN } } });
+  const message = '[AUTO_REVIEW_UNAVAILABLE_QUOTA] PRIVATE_UPSTREAM_BODY';
+  render(<I18nextProvider i18n={i18n}>{surface === 'live'
+    ? <ErrorBanner error={message} onRetry={vi.fn()} />
+    : surface === 'tail'
+      ? <ErrorTailErrorBanner errorText={message} onContinue={vi.fn()} onDismiss={vi.fn()} />
+      : <ErrorMessageCard message={message} />}</I18nextProvider>);
+  expect(screen.getByText(zhCN.chat.remoteError.AUTO_REVIEW_UNAVAILABLE_QUOTA)).toBeTruthy();
+  expect(screen.queryByText(/PRIVATE_UPSTREAM_BODY|完全访问/)).toBeNull();
 });

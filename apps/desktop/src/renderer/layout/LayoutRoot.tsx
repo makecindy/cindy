@@ -817,7 +817,7 @@ function RootDivider({
     >
       {/* 隐形抓握区:比 1px 缝宽,悬停变色提示可拖;no-drag 保证收到指针事件。 */}
       <div
-        className="absolute inset-y-0 left-[-3px] z-10 w-[7px] cursor-col-resize"
+        className="absolute inset-y-0 left-[-3px] z-raised w-[7px] cursor-col-resize"
         style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
         onPointerEnter={() => setHover(true)}
         onPointerLeave={() => setHover(false)}
@@ -938,7 +938,7 @@ function ColumnDivider({
       style={hover ? { background: 'hsl(var(--sidebar-action-icon))' } : undefined}
     >
       <div
-        className="absolute inset-x-0 top-[-3px] z-10 h-[7px] cursor-row-resize"
+        className="absolute inset-x-0 top-[-3px] z-raised h-[7px] cursor-row-resize"
         style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
         onPointerEnter={() => setHover(true)}
         onPointerLeave={() => setHover(false)}

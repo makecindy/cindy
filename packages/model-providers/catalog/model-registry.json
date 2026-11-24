@@ -1,6 +1,6 @@
 {
   "schemaVersion": 6,
-  "updatedAt": "2026-11-18T05:57:00.000Z",
+  "updatedAt": "2026-11-23T14:39:22.018Z",
   "models": [
     {
       "id": "openai/gpt-6.2-sol",
@@ -1870,7 +1870,8 @@
           ],
           "defaults": {
             "supportsFastMode": false
-          }
+          },
+          "referencePriceGroup": "global"
         }
       ],
       "nativeApi": "google-generative-ai",
@@ -1890,7 +1891,8 @@
           ],
           "defaults": {
             "supportsFastMode": false
-          }
+          },
+          "referencePriceGroup": "global"
         }
       ],
       "nativeApi": "google-generative-ai",
@@ -2187,7 +2189,8 @@
           "agents": [
             "claude-code",
             "codex"
-          ]
+          ],
+          "referencePriceGroup": "cn"
         },
         {
           "providerId": "zhipu-glm-global",
@@ -2997,7 +3000,8 @@
           "agents": [
             "claude-code",
             "codex"
-          ]
+          ],
+          "referencePriceGroup": "cn"
         },
         {
           "providerId": "aliyun-model-studio-global",
@@ -3024,7 +3028,8 @@
           "agents": [
             "claude-code",
             "codex"
-          ]
+          ],
+          "referencePriceGroup": "cn"
         },
         {
           "providerId": "aliyun-model-studio-global",
@@ -3107,7 +3112,8 @@
           "agents": [
             "claude-code",
             "codex"
-          ]
+          ],
+          "referencePriceGroup": "cn"
         },
         {
           "providerId": "aliyun-model-studio-global",
@@ -3134,7 +3140,8 @@
           "agents": [
             "claude-code",
             "codex"
-          ]
+          ],
+          "referencePriceGroup": "cn"
         },
         {
           "providerId": "aliyun-model-studio-global",
@@ -3454,7 +3461,13 @@
       "modelRef": "xai/grok-imagine-video-1.5",
       "mode": "video_generation",
       "status": "active",
-      "routes": [{ "providerId": "xai", "modelId": "xai/grok-imagine-video-1.5", "agents": [] }],
+      "routes": [
+        {
+          "providerId": "xai",
+          "modelId": "xai/grok-imagine-video-1.5",
+          "agents": []
+        }
+      ],
       "nativeApi": "xai-videos"
     },
     {
@@ -3549,6 +3562,125 @@
       ],
       "nativeApi": "openai-responses",
       "modelRef": "xd/auto"
+    },
+    {
+      "id": "zhipu-glm-cn/glm-5.2",
+      "name": "GLM-5.2",
+      "nativeApi": "openai-completions",
+      "modelRef": "z-ai/glm-5.2",
+      "routes": [
+        {
+          "providerId": "zhipu-glm-cn",
+          "modelId": "glm-5.2",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "cn"
+        }
+      ]
+    },
+    {
+      "id": "zhipu-glm-cn/glm-5.3",
+      "name": "GLM-5.3",
+      "nativeApi": "openai-completions",
+      "modelRef": "z-ai/glm-5.3",
+      "routes": [
+        {
+          "providerId": "zhipu-glm-cn",
+          "modelId": "glm-5.3",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "cn"
+        }
+      ]
+    },
+    {
+      "id": "zhipu-glm-cn/glm-5.1",
+      "name": "GLM-5.1",
+      "nativeApi": "openai-completions",
+      "modelRef": "z-ai/glm-5.1",
+      "routes": [
+        {
+          "providerId": "zhipu-glm-cn",
+          "modelId": "glm-5.1",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "cn"
+        }
+      ]
+    },
+    {
+      "id": "moonshot-kimi-cn/kimi-k2.6",
+      "name": "Kimi K2.6",
+      "nativeApi": "openai-completions",
+      "modelRef": "moonshotai/kimi-k2.6",
+      "routes": [
+        {
+          "providerId": "moonshot-kimi-cn",
+          "modelId": "kimi-k2.6",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "cn"
+        }
+      ]
+    },
+    {
+      "id": "iflytek/spark-x2.6",
+      "name": "Spark X2.6",
+      "nativeApi": "openai-completions",
+      "modelRef": "iflytek/spark-x2.6",
+      "routes": [
+        {
+          "providerId": "iflytek-maas",
+          "modelId": "spark-x2.6",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "cn"
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/qwen3.7-max",
+      "name": "Qwen 3.7 Max",
+      "modelRef": "qwen/qwen3.7-max",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "qwen3.7-max",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "cn"
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/qwen3.8-max",
+      "name": "Qwen 3.8 Max",
+      "modelRef": "qwen/qwen3.8-max",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "qwen3.8-max",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "cn"
+        }
+      ]
     },
     {
       "id": "agnes/agnes-3.0-flash",
@@ -3812,6 +3944,4254 @@
           "agents": []
         }
       ]
+    },
+    {
+      "id": "google-gemini-api/gemini-4-neon",
+      "name": "Gemini 4 Neon",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "google-gemini-api",
+          "modelId": "gemini-4-neon",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "global"
+        }
+      ],
+      "nativeApi": "google-generative-ai",
+      "modelRef": "google/gemini-4-neon"
+    },
+    {
+      "id": "google-gemini-api/gemini-4-carbon",
+      "name": "Gemini 4 Carbon",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "google-gemini-api",
+          "modelId": "gemini-4-carbon",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "global"
+        }
+      ],
+      "nativeApi": "google-generative-ai",
+      "modelRef": "google/gemini-4-carbon"
+    },
+    {
+      "id": "google-gemini-api/gemini-4-argon",
+      "name": "Gemini 4 Argon",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "google-gemini-api",
+          "modelId": "gemini-4-argon",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "global"
+        }
+      ],
+      "nativeApi": "google-generative-ai",
+      "modelRef": "google/gemini-4-argon"
+    },
+    {
+      "id": "google-gemini-api/gemini-4-hydrogen",
+      "name": "Gemini 4 Hydrogen",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "google-gemini-api",
+          "modelId": "gemini-4-hydrogen",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "global"
+        }
+      ],
+      "nativeApi": "google-generative-ai",
+      "modelRef": "google/gemini-4-hydrogen"
+    },
+    {
+      "id": "google-gemini-api/gemini-3.8-flash",
+      "name": "Gemini 3.8 Flash",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "google-gemini-api",
+          "modelId": "gemini-3.8-flash",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "global"
+        }
+      ],
+      "nativeApi": "google-generative-ai",
+      "modelRef": "google/gemini-3.8-flash"
+    },
+    {
+      "id": "google-gemini-api/gemini-3.7-flash",
+      "name": "Gemini 3.7 Flash",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "google-gemini-api",
+          "modelId": "gemini-3.7-flash",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "global"
+        }
+      ],
+      "nativeApi": "google-generative-ai",
+      "modelRef": "google/gemini-3.7-flash"
+    },
+    {
+      "id": "google-gemini-api/gemini-3.6-flash",
+      "name": "Gemini 3.6 Flash",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "google-gemini-api",
+          "modelId": "gemini-3.6-flash",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "global"
+        }
+      ],
+      "nativeApi": "google-generative-ai",
+      "modelRef": "google/gemini-3.6-flash"
+    },
+    {
+      "id": "google-gemini-api/gemini-3.5-flash",
+      "name": "Gemini 3.5 Flash",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "google-gemini-api",
+          "modelId": "gemini-3.5-flash",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "global"
+        }
+      ],
+      "nativeApi": "google-generative-ai",
+      "modelRef": "google/gemini-3.5-flash"
+    },
+    {
+      "id": "google-gemini-api/gemini-3.1-pro-preview",
+      "name": "Gemini 3.1 Pro",
+      "status": "preview",
+      "routes": [
+        {
+          "providerId": "google-gemini-api",
+          "modelId": "gemini-3.1-pro-preview",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "global"
+        }
+      ],
+      "nativeApi": "google-generative-ai",
+      "modelRef": "google/gemini-3.1-pro-preview"
+    },
+    {
+      "id": "google-gemini-api/gemini-3-flash-preview",
+      "name": "Gemini 3 Flash",
+      "status": "preview",
+      "routes": [
+        {
+          "providerId": "google-gemini-api",
+          "modelId": "gemini-3-flash-preview",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "global"
+        }
+      ],
+      "nativeApi": "google-generative-ai",
+      "modelRef": "google/gemini-3-flash-preview"
+    },
+    {
+      "id": "google-gemini-api/gemini-3.5-flash-lite",
+      "name": "Gemini 3.5 Flash-Lite",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "google-gemini-api",
+          "modelId": "gemini-3.5-flash-lite",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "global"
+        }
+      ],
+      "nativeApi": "google-generative-ai",
+      "modelRef": "google/gemini-3.5-flash-lite"
+    },
+    {
+      "id": "google-gemini-api/gemini-3.1-flash-lite",
+      "name": "Gemini 3.1 Flash-Lite",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "google-gemini-api",
+          "modelId": "gemini-3.1-flash-lite",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "global"
+        }
+      ],
+      "nativeApi": "google-generative-ai",
+      "modelRef": "google/gemini-3.1-flash-lite"
+    },
+    {
+      "id": "google-gemini-api/gemini-2.5-pro",
+      "name": "Gemini 2.5 Pro",
+      "status": "deprecated",
+      "routes": [
+        {
+          "providerId": "google-gemini-api",
+          "modelId": "gemini-2.5-pro",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "global"
+        }
+      ],
+      "nativeApi": "google-generative-ai",
+      "modelRef": "google/gemini-2.5-pro"
+    },
+    {
+      "id": "google-gemini-api/gemini-2.5-flash",
+      "name": "Gemini 2.5 Flash",
+      "status": "deprecated",
+      "routes": [
+        {
+          "providerId": "google-gemini-api",
+          "modelId": "gemini-2.5-flash",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "global"
+        }
+      ],
+      "nativeApi": "google-generative-ai",
+      "modelRef": "google/gemini-2.5-flash"
+    },
+    {
+      "id": "google-gemini-api/gemini-2.5-flash-lite",
+      "name": "Gemini 2.5 Flash-Lite",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "google-gemini-api",
+          "modelId": "gemini-2.5-flash-lite",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "global"
+        }
+      ],
+      "nativeApi": "google-generative-ai",
+      "modelRef": "google/gemini-2.5-flash-lite"
+    },
+    {
+      "id": "siliconflow-cn/ByteDance-Seed/Seed-OSS-36B-Instruct",
+      "name": "Seed-OSS-36B-Instruct",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "ByteDance-Seed/Seed-OSS-36B-Instruct",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 1.5,
+              "outputPerMtok": 4,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/PaddlePaddle/PaddleOCR-VL-1.5",
+      "name": "PaddleOCR-VL-1.5",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "PaddlePaddle/PaddleOCR-VL-1.5",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 0,
+              "outputPerMtok": 0,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/Pro/Qwen/Qwen2.5-7B-Instruct",
+      "name": "Qwen2.5-7B-Instruct (Pro)",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "Pro/Qwen/Qwen2.5-7B-Instruct",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 0.35,
+              "outputPerMtok": 0.35,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/Pro/deepseek-ai/DeepSeek-R1",
+      "name": "DeepSeek-R1 (Pro)",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "Pro/deepseek-ai/DeepSeek-R1",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "outputPerMtok": 16,
+              "inputPerMtok": 4,
+              "cacheReadPerMtok": 0.4,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/Pro/deepseek-ai/DeepSeek-V3",
+      "name": "DeepSeek-V3 (Pro)",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "Pro/deepseek-ai/DeepSeek-V3",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 2,
+              "outputPerMtok": 8,
+              "cacheReadPerMtok": 0.2,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/Pro/deepseek-ai/DeepSeek-V3.1-Terminus",
+      "name": "DeepSeek-V3.1-Terminus (Pro)",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "Pro/deepseek-ai/DeepSeek-V3.1-Terminus",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 4,
+              "outputPerMtok": 12,
+              "cacheReadPerMtok": 0.4,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/Pro/moonshotai/Kimi-K2.6",
+      "name": "Kimi-K2.6 (Pro)",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "Pro/moonshotai/Kimi-K2.6",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "cacheReadPerMtok": 1.1,
+              "inputPerMtok": 6.5,
+              "outputPerMtok": 27,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/Qwen/Qwen2.5-14B-Instruct",
+      "name": "Qwen2.5-14B-Instruct",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "Qwen/Qwen2.5-14B-Instruct",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "outputPerMtok": 0.7,
+              "inputPerMtok": 0.7,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/Qwen/Qwen2.5-32B-Instruct",
+      "name": "Qwen2.5-32B-Instruct",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "Qwen/Qwen2.5-32B-Instruct",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 1.26,
+              "outputPerMtok": 1.26,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/Qwen/Qwen2.5-72B-Instruct",
+      "name": "Qwen2.5-72B-Instruct",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "Qwen/Qwen2.5-72B-Instruct",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "outputPerMtok": 4.13,
+              "inputPerMtok": 4.13,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/Qwen/Qwen2.5-72B-Instruct-128K",
+      "name": "Qwen2.5-72B-Instruct-128K",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "Qwen/Qwen2.5-72B-Instruct-128K",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "outputPerMtok": 4.13,
+              "inputPerMtok": 4.13,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/Qwen/Qwen2.5-7B-Instruct",
+      "name": "Qwen2.5-7B-Instruct (Free)",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "Qwen/Qwen2.5-7B-Instruct",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 0,
+              "outputPerMtok": 0,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/Qwen/Qwen3-14B",
+      "name": "Qwen3-14B",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "Qwen/Qwen3-14B",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "outputPerMtok": 2,
+              "inputPerMtok": 0.5,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/Qwen/Qwen3-30B-A3B-Instruct-2507",
+      "name": "Qwen3-30B-A3B-Instruct-2507",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "Qwen/Qwen3-30B-A3B-Instruct-2507",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 0.7,
+              "outputPerMtok": 2.8,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/Qwen/Qwen3-32B",
+      "name": "Qwen3-32B",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "Qwen/Qwen3-32B",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "outputPerMtok": 4,
+              "inputPerMtok": 1,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/Qwen/Qwen3-8B",
+      "name": "Qwen3-8B",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "Qwen/Qwen3-8B",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 0,
+              "outputPerMtok": 0,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/Qwen/Qwen3-Coder-30B-A3B-Instruct",
+      "name": "Qwen3-Coder-30B-A3B-Instruct",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 0.7,
+              "outputPerMtok": 2.8,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/Qwen/Qwen3-Omni-30B-A3B-Captioner",
+      "name": "Qwen3-Omni-30B-A3B-Captioner",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "Qwen/Qwen3-Omni-30B-A3B-Captioner",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 0.7,
+              "outputPerMtok": 2.8,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/Qwen/Qwen3-Omni-30B-A3B-Instruct",
+      "name": "Qwen3-Omni-30B-A3B-Instruct",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "Qwen/Qwen3-Omni-30B-A3B-Instruct",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "outputPerMtok": 2.8,
+              "inputPerMtok": 0.7,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/Qwen/Qwen3-Omni-30B-A3B-Thinking",
+      "name": "Qwen3-Omni-30B-A3B-Thinking",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "Qwen/Qwen3-Omni-30B-A3B-Thinking",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 0.7,
+              "outputPerMtok": 2.8,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/Qwen/Qwen3-VL-30B-A3B-Instruct",
+      "name": "Qwen3-VL-30B-A3B-Instruct",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "Qwen/Qwen3-VL-30B-A3B-Instruct",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "outputPerMtok": 2.8,
+              "inputPerMtok": 0.7,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/Qwen/Qwen3-VL-32B-Instruct",
+      "name": "Qwen3-VL-32B-Instruct",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "Qwen/Qwen3-VL-32B-Instruct",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 1,
+              "outputPerMtok": 4,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/Qwen/Qwen3-VL-32B-Thinking",
+      "name": "Qwen3-VL-32B-Thinking",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "Qwen/Qwen3-VL-32B-Thinking",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "outputPerMtok": 10,
+              "inputPerMtok": 1,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/Qwen/Qwen3-VL-8B-Instruct",
+      "name": "Qwen3-VL-8B-Instruct",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "Qwen/Qwen3-VL-8B-Instruct",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "outputPerMtok": 2,
+              "inputPerMtok": 0.5,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/Qwen/Qwen3-VL-8B-Thinking",
+      "name": "Qwen3-VL-8B-Thinking",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "Qwen/Qwen3-VL-8B-Thinking",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "outputPerMtok": 5,
+              "inputPerMtok": 0.5,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/Qwen/Qwen3.5-4B",
+      "name": "Qwen3.5-4B",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "Qwen/Qwen3.5-4B",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 0,
+              "outputPerMtok": 0,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/Qwen/Qwen3.6-27B",
+      "name": "Qwen3.6-27B",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "Qwen/Qwen3.6-27B",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 3,
+              "outputPerMtok": 18,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/Qwen/Qwen3.6-35B-A3B",
+      "name": "Qwen3.6-35B-A3B",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "Qwen/Qwen3.6-35B-A3B",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 1.8,
+              "outputPerMtok": 10.8,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/Qwen/Qwen3.8-27B",
+      "name": "Qwen3.8-27B",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "Qwen/Qwen3.8-27B",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 3,
+              "outputPerMtok": 12,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/THUDM/GLM-4-32B-0414",
+      "name": "GLM-4-32B-0414",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "THUDM/GLM-4-32B-0414",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "outputPerMtok": 1.89,
+              "inputPerMtok": 1.89,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/THUDM/GLM-4-9B-0414",
+      "name": "GLM-4-9B-0414",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "THUDM/GLM-4-9B-0414",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 0,
+              "outputPerMtok": 0,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/THUDM/GLM-Z1-9B-0414",
+      "name": "GLM-Z1-9B-0414",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "THUDM/GLM-Z1-9B-0414",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 0,
+              "outputPerMtok": 0,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/XingChenAGI/Xing4.0-29B",
+      "name": "Xing4.0-29B",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "XingChenAGI/Xing4.0-29B",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 0,
+              "outputPerMtok": 0,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/deepseek-ai/DeepSeek-OCR",
+      "name": "DeepSeek-OCR",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "deepseek-ai/DeepSeek-OCR",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 0,
+              "outputPerMtok": 0,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/deepseek-ai/DeepSeek-R1",
+      "name": "DeepSeek-R1",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "deepseek-ai/DeepSeek-R1",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "outputPerMtok": 16,
+              "inputPerMtok": 4,
+              "cacheReadPerMtok": 0.4,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+      "name": "DeepSeek-R1-0528-Qwen3-8B (Free)",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 0,
+              "outputPerMtok": 0,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/deepseek-ai/DeepSeek-V3",
+      "name": "DeepSeek-V3",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "deepseek-ai/DeepSeek-V3",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 2,
+              "outputPerMtok": 8,
+              "cacheReadPerMtok": 0.2,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/deepseek-ai/DeepSeek-V3.1-Terminus",
+      "name": "DeepSeek-V3.1-Terminus",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "deepseek-ai/DeepSeek-V3.1-Terminus",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 4,
+              "outputPerMtok": 12,
+              "cacheReadPerMtok": 0.4,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/deepseek-ai/DeepSeek-V4-Pro",
+      "name": "DeepSeek-V4-Pro",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "deepseek-ai/DeepSeek-V4-Pro",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 12,
+              "outputPerMtok": 24,
+              "cacheReadPerMtok": 1,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/inclusionAI/Ling-flash-2.0",
+      "name": "Ling-flash-2.0",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "inclusionAI/Ling-flash-2.0",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "outputPerMtok": 4,
+              "inputPerMtok": 1,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/meituan-longcat/LongCat-2.0",
+      "name": "LongCat-2.0",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "meituan-longcat/LongCat-2.0",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 5,
+              "outputPerMtok": 20,
+              "cacheReadPerMtok": 0.1,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/moonshotai/Kimi-K2.7-Code",
+      "name": "Kimi-K2.7-Code",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "moonshotai/Kimi-K2.7-Code",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "cacheReadPerMtok": 1.3,
+              "inputPerMtok": 6.5,
+              "outputPerMtok": 27,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/tencent/Hunyuan-MT-7B",
+      "name": "Hunyuan-MT-7B",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "tencent/Hunyuan-MT-7B",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 0,
+              "outputPerMtok": 0,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/tencent/Hy4-preview",
+      "name": "Hy4 preview",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "tencent/Hy4-preview",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "cacheReadPerMtok": 0.3,
+              "inputPerMtok": 6,
+              "outputPerMtok": 18,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/zai-org/GLM-4.5-Air",
+      "name": "GLM-4.5-Air",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "zai-org/GLM-4.5-Air",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "outputPerMtok": 6,
+              "inputPerMtok": 1,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/zai-org/GLM-5.2",
+      "name": "GLM-5.2",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "zai-org/GLM-5.2",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "cacheReadPerMtok": 2,
+              "inputPerMtok": 8,
+              "outputPerMtok": 28,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/zai-org/GLM-5.3",
+      "name": "GLM-5.3",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "zai-org/GLM-5.3",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "cacheReadPerMtok": 2,
+              "inputPerMtok": 8,
+              "outputPerMtok": 28,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn/zai-org/GLM-5.3-Flash",
+      "name": "GLM-5.3-Flash",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "siliconflow-cn",
+          "modelId": "zai-org/GLM-5.3-Flash",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "outputPerMtok": 2.8,
+              "cacheReadPerMtok": 0.23,
+              "inputPerMtok": 0.8,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://www.siliconflow.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/MiniMax-M2.5",
+      "name": "MiniMax-M2.5",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "MiniMax-M2.5",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 2.1,
+              "outputPerMtok": 8.4,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.42
+            }
+          ]
+        }
+      ],
+      "modelRef": "minimax/minimax-m2.5"
+    },
+    {
+      "id": "aliyun-model-studio-cn/MiniMax/MiniMax-M2.1",
+      "name": "MiniMax/MiniMax-M2.1",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "MiniMax/MiniMax-M2.1",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 2.1,
+              "outputPerMtok": 8.4,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.21
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/MiniMax/MiniMax-M2.5",
+      "name": "MiniMax/MiniMax-M2.5",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "MiniMax/MiniMax-M2.5",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 2.1,
+              "outputPerMtok": 8.4,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.21
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/MiniMax/MiniMax-M2.7",
+      "name": "MiniMax/MiniMax-M2.7",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "MiniMax/MiniMax-M2.7",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 2.1,
+              "outputPerMtok": 8.4,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.42
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/MiniMax/MiniMax-M3.1-Flash",
+      "name": "MiniMax/MiniMax-M3.1-Flash",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "MiniMax/MiniMax-M3.1-Flash",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 1,
+              "outputPerMtok": 4,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/ZHIPU/GLM-5",
+      "name": "ZHIPU/GLM-5",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "ZHIPU/GLM-5",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 6,
+              "outputPerMtok": 22,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 1.5
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/ZHIPU/GLM-5.1",
+      "name": "ZHIPU/GLM-5.1",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "ZHIPU/GLM-5.1",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 8,
+              "outputPerMtok": 28,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 2
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/ZHIPU/GLM-5.2",
+      "name": "ZHIPU/GLM-5.2",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "ZHIPU/GLM-5.2",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 8,
+              "outputPerMtok": 28,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 2
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/ZHIPU/GLM-5.3",
+      "name": "ZHIPU/GLM-5.3",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "ZHIPU/GLM-5.3",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 8,
+              "outputPerMtok": 28,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 2
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/ZHIPU/GLM-5.3-Flash",
+      "name": "ZHIPU/GLM-5.3-Flash",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "ZHIPU/GLM-5.3-Flash",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 0.8,
+              "outputPerMtok": 2.8,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.23
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/ZHIPU/GLM-5.3-FlashX",
+      "name": "ZHIPU/GLM-5.3-FlashX",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "ZHIPU/GLM-5.3-FlashX",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 2,
+              "outputPerMtok": 7,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.57
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/deepseek-v4-pro",
+      "name": "deepseek-v4-pro",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "deepseek-v4-pro",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 12,
+              "outputPerMtok": 24,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/deepseek-v4-pro",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 1
+            }
+          ]
+        }
+      ],
+      "modelRef": "deepseek/deepseek-v4-pro"
+    },
+    {
+      "id": "aliyun-model-studio-cn/glm-5.2",
+      "name": "glm-5.2",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "glm-5.2",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 8,
+              "outputPerMtok": 28,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/glm-5-2",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 2
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/glm-5.2-fast-preview",
+      "name": "glm-5.2-fast-preview",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "glm-5.2-fast-preview",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 16,
+              "outputPerMtok": 56,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 4
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/glm-5.3",
+      "name": "glm-5.3",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "glm-5.3",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 8,
+              "outputPerMtok": 28,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/glm-5-3",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 2
+            }
+          ]
+        }
+      ],
+      "modelRef": "z-ai/glm-5.3"
+    },
+    {
+      "id": "aliyun-model-studio-cn/glm-5.3-prime",
+      "name": "glm-5.3-prime",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "glm-5.3-prime",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 16,
+              "outputPerMtok": 56,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 4
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/gui-plus",
+      "name": "gui-plus",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "gui-plus",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 1.5,
+              "outputPerMtok": 4.5,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/gui-plus-2026-02-26",
+      "name": "gui-plus-2026-02-26",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "gui-plus-2026-02-26",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 1.5,
+              "outputPerMtok": 4.5,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/kimi-k2.5",
+      "name": "kimi-k2.5",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "kimi-k2.5",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 4,
+              "outputPerMtok": 21,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/kimi-k2-5",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.4,
+              "cacheWritePerMtok": 5
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/kimi-k2.6",
+      "name": "kimi-k2.6",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "kimi-k2.6",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 6.5,
+              "outputPerMtok": 27,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/kimi-k2-6",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.65,
+              "cacheWritePerMtok": 8.125
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/kimi-k2.7-code",
+      "name": "kimi-k2.7-code",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "kimi-k2.7-code",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 6.5,
+              "outputPerMtok": 27,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/kimi-k2-7-code",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.65,
+              "cacheWritePerMtok": 8.125
+            }
+          ]
+        }
+      ],
+      "modelRef": "moonshotai/kimi-k2.7-code"
+    },
+    {
+      "id": "aliyun-model-studio-cn/kimi-k3",
+      "name": "kimi-k3",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "kimi-k3",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 20,
+              "outputPerMtok": 100,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 2
+            }
+          ]
+        }
+      ],
+      "modelRef": "moonshotai/kimi-k3"
+    },
+    {
+      "id": "aliyun-model-studio-cn/kimi/kimi-k2.5",
+      "name": "kimi/kimi-k2.5",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "kimi/kimi-k2.5",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 4,
+              "outputPerMtok": 21,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/kimi/kimi-k2.6",
+      "name": "kimi/kimi-k2.6",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "kimi/kimi-k2.6",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 6.5,
+              "outputPerMtok": 27,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/kimi-k2-6-by-moonshot",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 1.1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/kimi/kimi-k2.7-code-highspeed",
+      "name": "kimi/kimi-k2.7-code-highspeed",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "kimi/kimi-k2.7-code-highspeed",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 13,
+              "outputPerMtok": 54,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/kimi-k2-7-code-highspeed",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 2.6
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/kimi/kimi-k2.7-code",
+      "name": "kimi/kimi-k2.7-code",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "kimi/kimi-k2.7-code",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 6.5,
+              "outputPerMtok": 27,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/kimi-k2-7-code-by-moonshot",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 1.3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/kimi/kimi-k3.1-pro-highspeed",
+      "name": "kimi/kimi-k3.1-pro-highspeed",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "kimi/kimi-k3.1-pro-highspeed",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 26,
+              "outputPerMtok": 136,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 1.3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/kimi/kimi-k3.1-pro",
+      "name": "kimi/kimi-k3.1-pro",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "kimi/kimi-k3.1-pro",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 13,
+              "outputPerMtok": 68,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 1.3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/kimi/kimi-k3",
+      "name": "kimi/kimi-k3",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "kimi/kimi-k3",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 20,
+              "outputPerMtok": 100,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 2
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/qwen-doc-turbo",
+      "name": "qwen-doc-turbo",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "qwen-doc-turbo",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 0.6,
+              "outputPerMtok": 1,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/qwen-doc-turbo",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.06,
+              "cacheWritePerMtok": 0.75
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/qwen-flash-character",
+      "name": "qwen-flash-character",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "qwen-flash-character",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 0.25,
+              "outputPerMtok": 1.5,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/qwen-flash-character",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.05
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/qwen-flash-character-2026-02-26",
+      "name": "qwen-flash-character-2026-02-26",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "qwen-flash-character-2026-02-26",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 0.18,
+              "outputPerMtok": 1.5,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/qwen-flash-character",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.036
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/qwen-long",
+      "name": "qwen-long",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "qwen-long",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 0.5,
+              "outputPerMtok": 2,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/qwen-max",
+      "name": "qwen-max",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "qwen-max",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 2.4,
+              "outputPerMtok": 9.6,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/qwen-max",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.48
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/qwen-mt-flash",
+      "name": "qwen-mt-flash",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "qwen-mt-flash",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 0.7,
+              "outputPerMtok": 1.95,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/qwen-mt-lite",
+      "name": "qwen-mt-lite",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "qwen-mt-lite",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 0.6,
+              "outputPerMtok": 1.6,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/qwen-mt-plus",
+      "name": "qwen-mt-plus",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "qwen-mt-plus",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 1.8,
+              "outputPerMtok": 5.4,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/qwen-plus-2024-12-20",
+      "name": "qwen-plus-2024-12-20",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "qwen-plus-2024-12-20",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 0.8,
+              "outputPerMtok": 2,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/qwen-plus-2025-01-12",
+      "name": "qwen-plus-2025-01-12",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "qwen-plus-2025-01-12",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 0.8,
+              "outputPerMtok": 2,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/qwen-plus-2025-01-25",
+      "name": "qwen-plus-2025-01-25",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "qwen-plus-2025-01-25",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 0.8,
+              "outputPerMtok": 2,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/qwen-plus-character",
+      "name": "qwen-plus-character",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "qwen-plus-character",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 0.8,
+              "outputPerMtok": 2,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/qwen-plus-character",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.08,
+              "cacheWritePerMtok": 1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/qwen-vl-ocr",
+      "name": "qwen-vl-ocr",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "qwen-vl-ocr",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 0.3,
+              "outputPerMtok": 0.5,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/qwen-vl-ocr-2024-10-28",
+      "name": "qwen-vl-ocr-2024-10-28",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "qwen-vl-ocr-2024-10-28",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 5,
+              "outputPerMtok": 5,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/qwen-vl-ocr-2025-11-20",
+      "name": "qwen-vl-ocr-2025-11-20",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "qwen-vl-ocr-2025-11-20",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 0.3,
+              "outputPerMtok": 0.5,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/qwen3-omni-flash",
+      "name": "qwen3-omni-flash",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "qwen3-omni-flash",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 1.8,
+              "outputPerMtok": 6.9,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/qwen3.5-ocr",
+      "name": "qwen3.5-ocr",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "qwen3.5-ocr",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 0.5,
+              "outputPerMtok": 2,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/qwen3.5-omni-flash",
+      "name": "qwen3.5-omni-flash",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "qwen3.5-omni-flash",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 2.2,
+              "outputPerMtok": 13.3,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/qwen3.5-omni-flash-2026-03-15",
+      "name": "qwen3.5-omni-flash-2026-03-15",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "qwen3.5-omni-flash-2026-03-15",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 2.2,
+              "outputPerMtok": 13.3,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/qwen3.5-omni-plus",
+      "name": "qwen3.5-omni-plus",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "qwen3.5-omni-plus",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 7,
+              "outputPerMtok": 40,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/qwen3.5-omni-plus-2026-03-15",
+      "name": "qwen3.5-omni-plus-2026-03-15",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "qwen3.5-omni-plus-2026-03-15",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 7,
+              "outputPerMtok": 40,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/qwen3.6-27b",
+      "name": "qwen3.6-27b",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "qwen3.6-27b",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 3,
+              "outputPerMtok": 18,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
+                "verifiedAt": "2026-11-21"
+              },
+              "maxInputTokens": 256001
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/qwen3.6-35b-a3b",
+      "name": "qwen3.6-35b-a3b",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "qwen3.6-35b-a3b",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 1.8,
+              "outputPerMtok": 10.8,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
+                "verifiedAt": "2026-11-21"
+              },
+              "maxInputTokens": 256001
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/qwen3.7-max-2026-05-17",
+      "name": "qwen3.7-max-2026-05-17",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "qwen3.7-max-2026-05-17",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 12,
+              "outputPerMtok": 36,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
+                "verifiedAt": "2026-11-21"
+              },
+              "maxInputTokens": 1000001
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/qwen3.7-max-2026-05-20",
+      "name": "qwen3.7-max-2026-05-20",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "qwen3.7-max-2026-05-20",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 12,
+              "outputPerMtok": 36,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/qwen3-7-max",
+                "verifiedAt": "2026-11-23"
+              },
+              "maxInputTokens": 1000001,
+              "cacheReadPerMtok": 1.2,
+              "cacheWritePerMtok": 15
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/qwen3.7-max-2026-06-08",
+      "name": "qwen3.7-max-2026-06-08",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "qwen3.7-max-2026-06-08",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 12,
+              "outputPerMtok": 36,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/qwen3-7-max",
+                "verifiedAt": "2026-11-23"
+              },
+              "maxInputTokens": 1000001,
+              "cacheReadPerMtok": 1.2,
+              "cacheWritePerMtok": 15
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/qwen3.7-max-preview",
+      "name": "qwen3.7-max-preview",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "qwen3.7-max-preview",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 12,
+              "outputPerMtok": 36,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
+                "verifiedAt": "2026-11-21"
+              },
+              "maxInputTokens": 1000001
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/qwen3.8-2.4t-a95b",
+      "name": "qwen3.8-2.4t-a95b",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "qwen3.8-2.4t-a95b",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 12,
+              "outputPerMtok": 36,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/qwen3-8-2-4t-a95b",
+                "verifiedAt": "2026-11-23"
+              },
+              "maxInputTokens": 1000001,
+              "cacheReadPerMtok": 1,
+              "cacheWritePerMtok": 15
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/qwen3.8-27b",
+      "name": "qwen3.8-27b",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "qwen3.8-27b",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 3,
+              "outputPerMtok": 12,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/qwen3-8-27b",
+                "verifiedAt": "2026-11-23"
+              },
+              "maxInputTokens": 1000001,
+              "cacheReadPerMtok": 0.3,
+              "cacheWritePerMtok": 3.75
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/qwen3.8-max-0902",
+      "name": "qwen3.8-max-0902",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "qwen3.8-max-0902",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 12,
+              "outputPerMtok": 36,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/qwen3-8-max",
+                "verifiedAt": "2026-11-23"
+              },
+              "maxInputTokens": 1000001,
+              "cacheReadPerMtok": 1,
+              "cacheWritePerMtok": 15
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/qwen3.8-omni-flash",
+      "name": "qwen3.8-omni-flash",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "qwen3.8-omni-flash",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 0.8,
+              "outputPerMtok": 2.7,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
+                "verifiedAt": "2026-11-21"
+              },
+              "cacheReadPerMtok": 0.1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/siliconflow/deepseek-r1-0528",
+      "name": "siliconflow/deepseek-r1-0528",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "siliconflow/deepseek-r1-0528",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 4,
+              "outputPerMtok": 16,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/siliconflow/deepseek-v3-0324",
+      "name": "siliconflow/deepseek-v3-0324",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "siliconflow/deepseek-v3-0324",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 2,
+              "outputPerMtok": 8,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/siliconflow/deepseek-v3.1-terminus",
+      "name": "siliconflow/deepseek-v3.1-terminus",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "siliconflow/deepseek-v3.1-terminus",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 4,
+              "outputPerMtok": 12,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/siliconflow/deepseek-v3.2",
+      "name": "siliconflow/deepseek-v3.2",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "siliconflow/deepseek-v3.2",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 2,
+              "outputPerMtok": 3,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/stepfun/step-3.7-flash",
+      "name": "stepfun/step-3.7-flash",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "stepfun/step-3.7-flash",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 1.35,
+              "outputPerMtok": 8.1,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/step-3-7-flash",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.27
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/stepfun/step-5-preview",
+      "name": "stepfun/step-5-preview",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "stepfun/step-5-preview",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 7,
+              "outputPerMtok": 20,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.35
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/tongyi-intent-detect-v3",
+      "name": "tongyi-intent-detect-v3",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "tongyi-intent-detect-v3",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 0.4,
+              "outputPerMtok": 1,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/tongyi-xiaomi-analysis-flash",
+      "name": "tongyi-xiaomi-analysis-flash",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "tongyi-xiaomi-analysis-flash",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 0.2,
+              "outputPerMtok": 0.4,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/tongyi-xiaomi-analysis-flash",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.04
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/tongyi-xiaomi-analysis-pro",
+      "name": "tongyi-xiaomi-analysis-pro",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "tongyi-xiaomi-analysis-pro",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 1,
+              "outputPerMtok": 2.7,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/tongyi-xiaomi-analysis-pro",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.2
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/unisound/unisound-u2",
+      "name": "unisound/unisound-u2",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "unisound/unisound-u2",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 1,
+              "outputPerMtok": 2,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/vanchin/deepseek-ocr",
+      "name": "vanchin/deepseek-ocr",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "vanchin/deepseek-ocr",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 0.216,
+              "outputPerMtok": 0.216,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/vanchin/deepseek-r1",
+      "name": "vanchin/deepseek-r1",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "vanchin/deepseek-r1",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 4,
+              "outputPerMtok": 16,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 1.6
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/vanchin/deepseek-v3",
+      "name": "vanchin/deepseek-v3",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "vanchin/deepseek-v3",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 2,
+              "outputPerMtok": 8,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.8
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/vanchin/deepseek-v3.1-terminus",
+      "name": "vanchin/deepseek-v3.1-terminus",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "vanchin/deepseek-v3.1-terminus",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 4,
+              "outputPerMtok": 12,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 1.6
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/vanchin/deepseek-v3.2-think",
+      "name": "vanchin/deepseek-v3.2-think",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "vanchin/deepseek-v3.2-think",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 2,
+              "outputPerMtok": 3,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.2
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/vanchin/deepseek-v4-pro",
+      "name": "vanchin/deepseek-v4-pro",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "vanchin/deepseek-v4-pro",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 12,
+              "outputPerMtok": 24,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/deepseek-v4-pro-by-vanchin",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/vanchin/deepseek-v4-pro-0813",
+      "name": "vanchin/deepseek-v4-pro-0813",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "vanchin/deepseek-v4-pro-0813",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 9,
+              "outputPerMtok": 27,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/deepseek-v4-pro-by-vanchin",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/vanchin/deepseek-v4.1-flash",
+      "name": "vanchin/deepseek-v4.1-flash",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "vanchin/deepseek-v4.1-flash",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 2,
+              "outputPerMtok": 8,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/context-cache",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.04
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn/xiaomi/mimo-v2.6-pro-ultraspeed",
+      "name": "xiaomi/mimo-v2.6-pro-ultraspeed",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "aliyun-model-studio-cn",
+          "modelId": "xiaomi/mimo-v2.6-pro-ultraspeed",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 30,
+              "outputPerMtok": 60,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/mimo-v2-6-pro-ultraspeed",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.25
+            }
+          ]
+        }
+      ],
+      "modelRef": "xiaomi/mimo-v2.6-pro-ultraspeed"
+    },
+    {
+      "id": "ant-ling/Ling-3.2-flash",
+      "name": "Ling-3.2-flash",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "ant-ling",
+          "modelId": "Ling-3.2-flash",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 2,
+              "outputPerMtok": 6,
+              "cacheReadPerMtok": 0.4,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developer.ant-ling.com/zh-CN/docs/models/price/",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "zhipu-glm-cn/glm-4.6v",
+      "name": "glm-4.6v",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "zhipu-glm-cn",
+          "modelId": "glm-4.6v",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 1,
+              "outputPerMtok": 3,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://bigmodel.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              },
+              "maxInputTokens": 32000
+            },
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 2,
+              "outputPerMtok": 6,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://bigmodel.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              },
+              "minInputTokens": 32000,
+              "maxInputTokens": 128000
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "zhipu-glm-cn/glm-4.6v-flash",
+      "name": "glm-4.6v-flash",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "zhipu-glm-cn",
+          "modelId": "glm-4.6v-flash",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 0,
+              "outputPerMtok": 0,
+              "cacheReadPerMtok": 0,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://bigmodel.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "zhipu-glm-cn/glm-4.7-flash",
+      "name": "glm-4.7-flash",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "zhipu-glm-cn",
+          "modelId": "glm-4.7-flash",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 0,
+              "outputPerMtok": 0,
+              "cacheReadPerMtok": 0,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://bigmodel.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "zhipu-glm-cn/glm-5.3-flashx",
+      "name": "glm-5.3-flashx",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "zhipu-glm-cn",
+          "modelId": "glm-5.3-flashx",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 2,
+              "outputPerMtok": 7,
+              "cacheReadPerMtok": 0.57,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://bigmodel.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "zhipu-glm-cn/glm-5v-turbo",
+      "name": "glm-5v-turbo",
+      "nativeApi": "openai-completions",
+      "routes": [
+        {
+          "providerId": "zhipu-glm-cn",
+          "modelId": "glm-5v-turbo",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePrices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 5,
+              "outputPerMtok": 22,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://bigmodel.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              },
+              "maxInputTokens": 32000
+            },
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 7,
+              "outputPerMtok": 26,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://bigmodel.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              },
+              "minInputTokens": 32000
+            }
+          ]
+        }
+      ]
     }
   ],
   "nativeApiRules": [
@@ -3944,6 +8324,11 @@
       "providerId": "xai",
       "modelIdPrefix": "xai/grok-",
       "nativeApi": "openai-responses"
+    },
+    {
+      "providerId": "google-gemini-api",
+      "modelIdPrefix": "gemini-",
+      "nativeApi": "google-generative-ai"
     }
   ],
   "localModels": {
@@ -7504,6 +11889,60 @@
                 "url": "https://ai.google.dev/gemini-api/docs/pricing",
                 "verifiedAt": "2026-10-14"
               }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 1,
+              "outputPerMtok": 5,
+              "cacheReadPerMtok": 0.05,
+              "effectiveFrom": "2026-11-20",
+              "effectiveUntil": "2026-12-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 2,
+              "outputPerMtok": 10,
+              "cacheReadPerMtok": 0.1,
+              "effectiveFrom": "2026-12-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "priority",
+              "inputPerMtok": 3.6,
+              "outputPerMtok": 18,
+              "cacheReadPerMtok": 0.18,
+              "effectiveFrom": "2026-11-20",
+              "effectiveUntil": "2026-12-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "priority",
+              "inputPerMtok": 7.2,
+              "outputPerMtok": 36,
+              "cacheReadPerMtok": 0.36,
+              "effectiveFrom": "2026-12-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
             }
           ]
         }
@@ -7555,6 +11994,73 @@
                 "kind": "provider-official",
                 "url": "https://ai.google.dev/gemini-api/docs/pricing",
                 "verifiedAt": "2026-11-12"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 4,
+              "outputPerMtok": 20,
+              "cacheReadPerMtok": 0.2,
+              "effectiveFrom": "2026-12-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 1,
+              "outputPerMtok": 5,
+              "cacheReadPerMtok": 0.05,
+              "effectiveFrom": "2026-11-20",
+              "effectiveUntil": "2026-12-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 2,
+              "outputPerMtok": 10,
+              "cacheReadPerMtok": 0.1,
+              "effectiveFrom": "2026-12-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "priority",
+              "inputPerMtok": 3.6,
+              "outputPerMtok": 18,
+              "cacheReadPerMtok": 0.18,
+              "effectiveFrom": "2026-11-20",
+              "effectiveUntil": "2026-12-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "priority",
+              "inputPerMtok": 7.2,
+              "outputPerMtok": 36,
+              "cacheReadPerMtok": 0.36,
+              "effectiveFrom": "2026-12-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
               }
             }
           ]
@@ -7608,6 +12114,110 @@
                 "url": "https://ai.google.dev/gemini-api/docs/pricing",
                 "verifiedAt": "2026-11-13"
               }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 0.75,
+              "outputPerMtok": 3.75,
+              "cacheReadPerMtok": 0.0375,
+              "effectiveFrom": "2026-11-20",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "priority",
+              "inputPerMtok": 2.7,
+              "outputPerMtok": 13.5,
+              "cacheReadPerMtok": 0.135,
+              "effectiveFrom": "2026-11-20",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "google/gemini-4-neon",
+      "aliases": [
+        "gemini-4-neon"
+      ],
+      "defaults": {
+        "name": "Gemini 4 Neon",
+        "description": "Google Gemini 4 Neon — frontier Gemini model for complex software engineering, knowledge work and science workflows",
+        "group": "google",
+        "contextWindow": 1048576,
+        "maxOutputTokens": 65536,
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ],
+        "defaultEffort": "high",
+        "supportsImageInput": true,
+        "mode": "chat",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini-4-neon"
+      },
+      "referencePriceGroups": [
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 3,
+              "outputPerMtok": 15,
+              "cacheReadPerMtok": 0.15,
+              "effectiveFrom": "2026-11-18",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-19"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 1.5,
+              "outputPerMtok": 7.5,
+              "cacheReadPerMtok": 0.075,
+              "effectiveFrom": "2026-11-20",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "priority",
+              "inputPerMtok": 5.4,
+              "outputPerMtok": 27,
+              "cacheReadPerMtok": 0.27,
+              "effectiveFrom": "2026-11-20",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
             }
           ]
         }
@@ -7629,7 +12239,18 @@
           "medium",
           "high"
         ],
-        "defaultEffort": "medium"
+        "defaultEffort": "medium",
+        "supportsImageInput": true,
+        "mode": "chat",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        }
       },
       "referencePriceGroups": [
         {
@@ -7683,7 +12304,19 @@
           "medium",
           "high"
         ],
-        "defaultEffort": "medium"
+        "defaultEffort": "medium",
+        "supportsImageInput": true,
+        "mode": "chat",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini-3.6-flash"
       },
       "referencePriceGroups": [
         {
@@ -7715,6 +12348,60 @@
                 "url": "https://ai.google.dev/gemini-api/docs/pricing",
                 "verifiedAt": "2026-08-13"
               }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 0.375,
+              "outputPerMtok": 1.875,
+              "cacheReadPerMtok": 0.0375,
+              "effectiveFrom": "2026-11-20",
+              "effectiveUntil": "2027-01-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 0.75,
+              "outputPerMtok": 3.75,
+              "cacheReadPerMtok": 0.075,
+              "effectiveFrom": "2027-01-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "priority",
+              "inputPerMtok": 1.35,
+              "outputPerMtok": 6.75,
+              "cacheReadPerMtok": 0.135,
+              "effectiveFrom": "2026-11-20",
+              "effectiveUntil": "2027-01-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "priority",
+              "inputPerMtok": 2.7,
+              "outputPerMtok": 13.5,
+              "cacheReadPerMtok": 0.27,
+              "effectiveFrom": "2027-01-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
             }
           ]
         }
@@ -7737,7 +12424,18 @@
           "medium",
           "high"
         ],
-        "defaultEffort": "medium"
+        "defaultEffort": "medium",
+        "supportsImageInput": true,
+        "mode": "chat",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        }
       },
       "referencePriceGroups": [
         {
@@ -7776,7 +12474,19 @@
           "medium",
           "high"
         ],
-        "defaultEffort": "medium"
+        "defaultEffort": "medium",
+        "supportsImageInput": true,
+        "mode": "chat",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini-3.1-pro-preview"
       },
       "referencePriceGroups": [
         {
@@ -7794,6 +12504,76 @@
                 "kind": "provider-official",
                 "url": "https://ai.google.dev/gemini-api/docs/pricing",
                 "verifiedAt": "2026-11-12"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 4,
+              "outputPerMtok": 18,
+              "cacheReadPerMtok": 0.4,
+              "minInputTokens": 200001,
+              "effectiveFrom": "2026-11-12",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 1,
+              "outputPerMtok": 6,
+              "cacheReadPerMtok": 0.2,
+              "maxInputTokens": 200001,
+              "effectiveFrom": "2026-11-20",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 2,
+              "outputPerMtok": 9,
+              "cacheReadPerMtok": 0.4,
+              "minInputTokens": 200001,
+              "effectiveFrom": "2026-11-20",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "priority",
+              "inputPerMtok": 3.6,
+              "outputPerMtok": 21.6,
+              "cacheReadPerMtok": 0.36,
+              "maxInputTokens": 200001,
+              "effectiveFrom": "2026-11-20",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "priority",
+              "inputPerMtok": 7.2,
+              "outputPerMtok": 32.4,
+              "cacheReadPerMtok": 0.72,
+              "minInputTokens": 200001,
+              "effectiveFrom": "2026-11-20",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
               }
             }
           ]
@@ -7817,7 +12597,19 @@
           "medium",
           "high"
         ],
-        "defaultEffort": "medium"
+        "defaultEffort": "medium",
+        "supportsImageInput": true,
+        "mode": "chat",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini-3-flash-preview"
       },
       "referencePriceGroups": [
         {
@@ -7834,6 +12626,32 @@
                 "kind": "provider-official",
                 "url": "https://ai.google.dev/gemini-api/docs/pricing",
                 "verifiedAt": "2026-11-12"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 0.25,
+              "outputPerMtok": 1.5,
+              "cacheReadPerMtok": 0.05,
+              "effectiveFrom": "2026-11-20",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "priority",
+              "inputPerMtok": 0.9,
+              "outputPerMtok": 5.4,
+              "cacheReadPerMtok": 0.09,
+              "effectiveFrom": "2026-11-20",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
               }
             }
           ]
@@ -7857,7 +12675,19 @@
           "medium",
           "high"
         ],
-        "defaultEffort": "medium"
+        "defaultEffort": "medium",
+        "supportsImageInput": true,
+        "mode": "chat",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite"
       },
       "referencePriceGroups": [
         {
@@ -7874,6 +12704,32 @@
                 "kind": "provider-official",
                 "url": "https://ai.google.dev/gemini-api/docs/pricing",
                 "verifiedAt": "2026-09-11"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 0.15,
+              "outputPerMtok": 1.25,
+              "cacheReadPerMtok": 0.015,
+              "effectiveFrom": "2026-11-20",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "priority",
+              "inputPerMtok": 0.54,
+              "outputPerMtok": 4.5,
+              "cacheReadPerMtok": 0.05,
+              "effectiveFrom": "2026-11-20",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
               }
             }
           ]
@@ -7897,7 +12753,19 @@
           "medium",
           "high"
         ],
-        "defaultEffort": "medium"
+        "defaultEffort": "medium",
+        "supportsImageInput": true,
+        "mode": "chat",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-lite"
       },
       "referencePriceGroups": [
         {
@@ -7914,6 +12782,317 @@
                 "kind": "provider-official",
                 "url": "https://ai.google.dev/gemini-api/docs/pricing",
                 "verifiedAt": "2026-09-11"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 0.125,
+              "outputPerMtok": 0.75,
+              "cacheReadPerMtok": 0.0125,
+              "effectiveFrom": "2026-11-20",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "priority",
+              "inputPerMtok": 0.45,
+              "outputPerMtok": 2.7,
+              "cacheReadPerMtok": 0.045,
+              "effectiveFrom": "2026-11-20",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "google/gemini-2.5-pro",
+      "aliases": [
+        "gemini-2.5-pro"
+      ],
+      "defaults": {
+        "name": "Gemini 2.5 Pro",
+        "group": "google",
+        "contextWindow": 1048576,
+        "maxOutputTokens": 65536,
+        "efforts": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "defaultEffort": "medium",
+        "description": "Google Gemini 2.5 Pro — thinking model for complex reasoning (deprecated; migrates to Gemini 3.8 Flash)",
+        "supportsImageInput": true,
+        "mode": "chat",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini-2.5-pro"
+      },
+      "referencePriceGroups": [
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 1.25,
+              "outputPerMtok": 10,
+              "cacheReadPerMtok": 0.125,
+              "maxInputTokens": 200001,
+              "effectiveFrom": "2026-11-20",
+              "effectiveUntil": "2026-12-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 2.5,
+              "outputPerMtok": 15,
+              "cacheReadPerMtok": 0.25,
+              "minInputTokens": 200001,
+              "effectiveFrom": "2026-11-20",
+              "effectiveUntil": "2026-12-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 0.625,
+              "outputPerMtok": 5,
+              "cacheReadPerMtok": 0.125,
+              "maxInputTokens": 200001,
+              "effectiveFrom": "2026-11-20",
+              "effectiveUntil": "2026-12-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 1.25,
+              "outputPerMtok": 7.5,
+              "cacheReadPerMtok": 0.25,
+              "minInputTokens": 200001,
+              "effectiveFrom": "2026-11-20",
+              "effectiveUntil": "2026-12-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "priority",
+              "inputPerMtok": 2.25,
+              "outputPerMtok": 18,
+              "cacheReadPerMtok": 0.225,
+              "maxInputTokens": 200001,
+              "effectiveFrom": "2026-11-20",
+              "effectiveUntil": "2026-12-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "priority",
+              "inputPerMtok": 4.5,
+              "outputPerMtok": 27,
+              "cacheReadPerMtok": 0.45,
+              "minInputTokens": 200001,
+              "effectiveFrom": "2026-11-20",
+              "effectiveUntil": "2026-12-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "google/gemini-2.5-flash",
+      "aliases": [
+        "gemini-2.5-flash"
+      ],
+      "defaults": {
+        "name": "Gemini 2.5 Flash",
+        "description": "Google Gemini 2.5 Flash — fast hybrid reasoning model (deprecated; migrates to Gemini 3.5 Flash-Lite)",
+        "group": "google",
+        "contextWindow": 1048576,
+        "efforts": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "maxOutputTokens": 65536,
+        "defaultEffort": "medium",
+        "supportsImageInput": true,
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini-2.5-flash",
+        "mode": "chat",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        }
+      },
+      "referencePriceGroups": [
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 0.3,
+              "outputPerMtok": 2.5,
+              "cacheReadPerMtok": 0.03,
+              "effectiveFrom": "2026-11-20",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              },
+              "effectiveUntil": "2026-12-01"
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 0.15,
+              "outputPerMtok": 1.25,
+              "cacheReadPerMtok": 0.03,
+              "effectiveFrom": "2026-11-20",
+              "effectiveUntil": "2026-12-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "priority",
+              "inputPerMtok": 0.54,
+              "outputPerMtok": 4.5,
+              "cacheReadPerMtok": 0.054,
+              "effectiveFrom": "2026-11-20",
+              "effectiveUntil": "2026-12-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "google/gemini-2.5-flash-lite",
+      "aliases": [
+        "gemini-2.5-flash-lite"
+      ],
+      "defaults": {
+        "name": "Gemini 2.5 Flash-Lite",
+        "group": "google",
+        "contextWindow": 1048576,
+        "efforts": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "defaultEffort": "medium",
+        "description": "Google Gemini 2.5 Flash-Lite — high-throughput lightweight multimodal model",
+        "maxOutputTokens": 65536,
+        "supportsImageInput": true,
+        "mode": "chat",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini-2.5-flash-lite"
+      },
+      "referencePriceGroups": [
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 0.1,
+              "outputPerMtok": 0.4,
+              "cacheReadPerMtok": 0.01,
+              "effectiveFrom": "2026-11-20",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 0.05,
+              "outputPerMtok": 0.2,
+              "cacheReadPerMtok": 0.01,
+              "effectiveFrom": "2026-11-20",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "priority",
+              "inputPerMtok": 0.18,
+              "outputPerMtok": 0.72,
+              "cacheReadPerMtok": 0.018,
+              "effectiveFrom": "2026-11-20",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
               }
             }
           ]
@@ -7952,7 +13131,29 @@
           "xhigh"
         ],
         "defaultEffort": "medium"
-      }
+      },
+      "referencePriceGroups": [
+        {
+          "id": "cn",
+          "prices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 12,
+              "outputPerMtok": 36,
+              "cacheWritePerMtok": 15,
+              "maxInputTokens": 1000001,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/qwen3-8-max",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 1
+            }
+          ]
+        }
+      ]
     },
     {
       "id": "qwen/qwen4-max",
@@ -8021,7 +13222,29 @@
         "contextWindow": 992000,
         "maxOutputTokens": 65536,
         "efforts": []
-      }
+      },
+      "referencePriceGroups": [
+        {
+          "id": "cn",
+          "prices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 12,
+              "outputPerMtok": 36,
+              "cacheWritePerMtok": 15,
+              "maxInputTokens": 1000001,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/qwen3-7-max",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 1.2
+            }
+          ]
+        }
+      ]
     },
     {
       "id": "moonshotai/kimi-k2.7-code",
@@ -8153,6 +13376,24 @@
               }
             }
           ]
+        },
+        {
+          "id": "cn",
+          "prices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 6.5,
+              "outputPerMtok": 27,
+              "cacheReadPerMtok": 1.1,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.kimi.com/docs/pricing/chat",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
         }
       ]
     },
@@ -8182,6 +13423,39 @@
                 "kind": "provider-official",
                 "url": "https://docs.z.ai/guides/overview/pricing",
                 "verifiedAt": "2026-09-11"
+              }
+            }
+          ]
+        },
+        {
+          "id": "cn",
+          "prices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 6,
+              "outputPerMtok": 24,
+              "cacheReadPerMtok": 1.3,
+              "maxInputTokens": 32000,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://bigmodel.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            },
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 8,
+              "outputPerMtok": 28,
+              "cacheReadPerMtok": 2,
+              "minInputTokens": 32000,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://bigmodel.cn/pricing",
+                "verifiedAt": "2026-11-21"
               }
             }
           ]
@@ -8219,6 +13493,24 @@
                 "kind": "provider-official",
                 "url": "https://docs.z.ai/guides/overview/pricing",
                 "verifiedAt": "2026-09-11"
+              }
+            }
+          ]
+        },
+        {
+          "id": "cn",
+          "prices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 8,
+              "outputPerMtok": 28,
+              "cacheReadPerMtok": 2,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://bigmodel.cn/pricing",
+                "verifiedAt": "2026-11-21"
               }
             }
           ]
@@ -8261,6 +13553,24 @@
               }
             }
           ]
+        },
+        {
+          "id": "cn",
+          "prices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 8,
+              "outputPerMtok": 28,
+              "cacheReadPerMtok": 2,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://bigmodel.cn/pricing",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
         }
       ]
     },
@@ -8297,6 +13607,24 @@
                 "kind": "provider-official",
                 "url": "https://docs.z.ai/guides/overview/pricing",
                 "verifiedAt": "2026-09-11"
+              }
+            }
+          ]
+        },
+        {
+          "id": "cn",
+          "prices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 0.8,
+              "outputPerMtok": 2.8,
+              "cacheReadPerMtok": 0.23,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://bigmodel.cn/pricing",
+                "verifiedAt": "2026-11-21"
               }
             }
           ]
@@ -9109,7 +14437,45 @@
         "group": "china",
         "contextWindow": 991808,
         "maxOutputTokens": 65536
-      }
+      },
+      "referencePriceGroups": [
+        {
+          "id": "cn",
+          "prices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 2,
+              "outputPerMtok": 12,
+              "maxInputTokens": 256001,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/qwen3-6-plus",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.2,
+              "cacheWritePerMtok": 2.5
+            },
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 8,
+              "outputPerMtok": 48,
+              "minInputTokens": 256001,
+              "maxInputTokens": 1000001,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/qwen3-6-plus",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.8,
+              "cacheWritePerMtok": 10
+            }
+          ]
+        }
+      ]
     },
     {
       "id": "qwen/qwen3.7-flash",
@@ -9123,7 +14489,61 @@
         "contextWindow": 991808,
         "maxOutputTokens": 65536,
         "efforts": []
-      }
+      },
+      "referencePriceGroups": [
+        {
+          "id": "cn",
+          "prices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 0.2,
+              "outputPerMtok": 0.8,
+              "maxInputTokens": 32001,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/qwen3-7-flash",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.02,
+              "cacheWritePerMtok": 0.25
+            },
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 0.6,
+              "outputPerMtok": 2.4,
+              "minInputTokens": 32001,
+              "maxInputTokens": 256001,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/qwen3-7-flash",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.06,
+              "cacheWritePerMtok": 0.75
+            },
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 1.2,
+              "outputPerMtok": 4.8,
+              "minInputTokens": 256001,
+              "maxInputTokens": 1000001,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/qwen3-7-flash",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.12,
+              "cacheWritePerMtok": 1.5
+            }
+          ]
+        }
+      ]
     },
     {
       "id": "qwen/qwen3.8-flash",
@@ -9157,6 +14577,21 @@
                 "kind": "provider-official",
                 "url": "https://help.aliyun.com/zh/model-studio/model-pricing",
                 "verifiedAt": "2026-09-11"
+              },
+              "effectiveUntil": "2026-11-23"
+            },
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 0.8,
+              "outputPerMtok": 2.7,
+              "cacheReadPerMtok": 0.1,
+              "cacheWritePerMtok": 1.25,
+              "effectiveFrom": "2026-11-23",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/qwen3-8-flash",
+                "verifiedAt": "2026-11-23"
               }
             }
           ]
@@ -9175,7 +14610,45 @@
         "contextWindow": 991808,
         "maxOutputTokens": 65536,
         "efforts": []
-      }
+      },
+      "referencePriceGroups": [
+        {
+          "id": "cn",
+          "prices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 2,
+              "outputPerMtok": 8,
+              "maxInputTokens": 256001,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/qwen3-7-plus",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.2,
+              "cacheWritePerMtok": 2.5
+            },
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 6,
+              "outputPerMtok": 24,
+              "minInputTokens": 256001,
+              "maxInputTokens": 1000001,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/qwen3-7-plus",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.6,
+              "cacheWritePerMtok": 7.5
+            }
+          ]
+        }
+      ]
     },
     {
       "id": "qwen/qwen3.6-flash",
@@ -9189,7 +14662,45 @@
         "contextWindow": 991808,
         "maxOutputTokens": 65536,
         "efforts": []
-      }
+      },
+      "referencePriceGroups": [
+        {
+          "id": "cn",
+          "prices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 1.2,
+              "outputPerMtok": 7.2,
+              "maxInputTokens": 256001,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/qwen3-6-flash",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.12,
+              "cacheWritePerMtok": 1.5
+            },
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 4.8,
+              "outputPerMtok": 28.8,
+              "minInputTokens": 256001,
+              "maxInputTokens": 1000001,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://help.aliyun.com/zh/model-studio/qwen3-6-flash",
+                "verifiedAt": "2026-11-23"
+              },
+              "cacheReadPerMtok": 0.48,
+              "cacheWritePerMtok": 6
+            }
+          ]
+        }
+      ]
     },
     {
       "id": "openai/gpt-5.5-auto",
@@ -9939,12 +15450,22 @@
     },
     {
       "id": "xai/grok-imagine-video-1.5",
-      "aliases": ["grok-imagine-video-1.5"],
+      "aliases": [
+        "grok-imagine-video-1.5"
+      ],
       "defaults": {
         "name": "Grok Imagine Video 1.5",
         "mode": "video_generation",
         "officialDocs": "https://docs.x.ai/developers/model-capabilities/video/reference-to-video",
-        "modalities": { "input": ["text", "image"], "output": ["video"] }
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "video"
+          ]
+        }
       }
     },
     {
@@ -10338,7 +15859,29 @@
         "gemini-3.8-flash"
       ],
       "defaults": {
-        "name": "Gemini 3.8 Flash"
+        "name": "Gemini 3.8 Flash",
+        "description": "Google Gemini 3.8 Flash — most intelligent Flash model for long-horizon software engineering and agents",
+        "group": "google",
+        "contextWindow": 1048576,
+        "maxOutputTokens": 65536,
+        "efforts": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "defaultEffort": "medium",
+        "supportsImageInput": true,
+        "mode": "chat",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash"
       },
       "referencePriceGroups": [
         {
@@ -10369,6 +15912,60 @@
                 "kind": "provider-official",
                 "url": "https://ai.google.dev/gemini-api/docs/pricing",
                 "verifiedAt": "2026-09-23"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 0.375,
+              "outputPerMtok": 1.875,
+              "cacheReadPerMtok": 0.0375,
+              "effectiveFrom": "2026-11-20",
+              "effectiveUntil": "2027-01-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 0.75,
+              "outputPerMtok": 3.75,
+              "cacheReadPerMtok": 0.075,
+              "effectiveFrom": "2027-01-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "priority",
+              "inputPerMtok": 1.35,
+              "outputPerMtok": 6.75,
+              "cacheReadPerMtok": 0.135,
+              "effectiveFrom": "2026-11-20",
+              "effectiveUntil": "2027-01-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "priority",
+              "inputPerMtok": 2.7,
+              "outputPerMtok": 13.5,
+              "cacheReadPerMtok": 0.27,
+              "effectiveFrom": "2027-01-01",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://ai.google.dev/gemini-api/docs/pricing",
+                "verifiedAt": "2026-11-20"
               }
             }
           ]
@@ -10960,6 +16557,34 @@
       }
     },
     {
+      "id": "iflytek/spark-x2.6",
+      "aliases": [
+        "spark-x2.6"
+      ],
+      "defaults": {
+        "name": "Spark X2.6"
+      },
+      "referencePriceGroups": [
+        {
+          "id": "cn",
+          "prices": [
+            {
+              "currency": "CNY",
+              "variant": "standard",
+              "inputPerMtok": 1.5,
+              "outputPerMtok": 6,
+              "effectiveFrom": "2026-11-21",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://maas.xfyun.cn/modelSquare",
+                "verifiedAt": "2026-11-21"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": "agnes/agnes-3.0-flash",
       "aliases": [
         "agnes-3.0-flash"
@@ -11260,7 +16885,9 @@
             "text"
           ]
         },
-        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini"
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini",
+        "name": "Antigravity Preview",
+        "group": "google"
       }
     },
     {
@@ -11278,7 +16905,9 @@
             "text"
           ]
         },
-        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini"
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini",
+        "name": "Deep Research Max Preview",
+        "group": "google"
       }
     },
     {
@@ -11296,7 +16925,9 @@
             "text"
           ]
         },
-        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini"
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini",
+        "name": "Deep Research Preview",
+        "group": "google"
       }
     },
     {
@@ -11315,7 +16946,9 @@
             "image"
           ]
         },
-        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini"
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini",
+        "name": "Gemini 2.5 Flash Image",
+        "group": "google"
       }
     },
     {
@@ -11335,7 +16968,9 @@
             "audio"
           ]
         },
-        "officialDocs": "https://ai.google.dev/gemini-api/docs/live-api"
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/live-api",
+        "name": "Gemini 2.5 Flash Native Audio",
+        "group": "google"
       }
     },
     {
@@ -11353,7 +16988,9 @@
             "audio"
           ]
         },
-        "officialDocs": "https://ai.google.dev/gemini-api/docs/speech-generation"
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/speech-generation",
+        "name": "Gemini 2.5 Flash Preview TTS",
+        "group": "google"
       }
     },
     {
@@ -11371,7 +17008,9 @@
             "audio"
           ]
         },
-        "officialDocs": "https://ai.google.dev/gemini-api/docs/speech-generation"
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/speech-generation",
+        "name": "Gemini 2.5 Pro Preview TTS",
+        "group": "google"
       }
     },
     {
@@ -11390,7 +17029,9 @@
             "image"
           ]
         },
-        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini"
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini",
+        "name": "Gemini 3 Pro Image Preview",
+        "group": "google"
       }
     },
     {
@@ -11409,7 +17050,9 @@
             "image"
           ]
         },
-        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini"
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini",
+        "name": "Gemini 3.1 Flash Image Preview",
+        "group": "google"
       }
     },
     {
@@ -11428,7 +17071,9 @@
             "image"
           ]
         },
-        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini"
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-lite-image",
+        "name": "Gemini 3.1 Flash Lite Image",
+        "group": "google"
       }
     },
     {
@@ -11448,7 +17093,9 @@
             "audio"
           ]
         },
-        "officialDocs": "https://ai.google.dev/gemini-api/docs/live-api"
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-live-preview",
+        "name": "Gemini 3.1 Flash Live Preview",
+        "group": "google"
       }
     },
     {
@@ -11466,7 +17113,9 @@
             "audio"
           ]
         },
-        "officialDocs": "https://ai.google.dev/gemini-api/docs/speech-generation"
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-tts-preview",
+        "name": "Gemini 3.1 Flash TTS Preview",
+        "group": "google"
       }
     },
     {
@@ -11484,7 +17133,9 @@
             "audio"
           ]
         },
-        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini"
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini-3.5-live-translate-preview",
+        "name": "Gemini 3.5 Live Translate",
+        "group": "google"
       }
     },
     {
@@ -11502,7 +17153,9 @@
             "text"
           ]
         },
-        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini"
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini-3.5-transcribe",
+        "name": "Gemini 3.5 Transcribe",
+        "group": "google"
       }
     },
     {
@@ -11520,7 +17173,9 @@
             "text"
           ]
         },
-        "officialDocs": "https://ai.google.dev/gemini-api/docs/live-api/live-transcribe"
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/live-api/live-transcribe",
+        "name": "Gemini 3.5 Transcribe Live",
+        "group": "google"
       }
     },
     {
@@ -11538,7 +17193,9 @@
             "audio"
           ]
         },
-        "officialDocs": "https://ai.google.dev/gemini-api/docs/speech-generation"
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash-lite-tts",
+        "name": "Gemini 3.8 Flash-Lite TTS",
+        "group": "google"
       }
     },
     {
@@ -11556,7 +17213,9 @@
             "audio"
           ]
         },
-        "officialDocs": "https://ai.google.dev/gemini-api/docs/speech-generation"
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash-tts",
+        "name": "Gemini 3.8 Flash TTS",
+        "group": "google"
       }
     },
     {
@@ -11576,7 +17235,9 @@
             "audio"
           ]
         },
-        "officialDocs": "https://ai.google.dev/gemini-api/docs/live-api"
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini-3.8-live",
+        "name": "Gemini 3.8 Live",
+        "group": "google"
       }
     },
     {
@@ -11596,7 +17257,9 @@
             "audio"
           ]
         },
-        "officialDocs": "https://ai.google.dev/gemini-api/docs/live-api"
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini-3.8-live-extended-thinking",
+        "name": "Gemini 3.8 Live Extended Thinking",
+        "group": "google"
       }
     },
     {
@@ -11615,7 +17278,9 @@
             "image"
           ]
         },
-        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini"
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/gemini-nano-banana-2.1",
+        "name": "Gemini Nano Banana 2.1",
+        "group": "google"
       }
     },
     {
@@ -11634,7 +17299,9 @@
             "video"
           ]
         },
-        "officialDocs": "https://ai.google.dev/gemini-api/docs/omni"
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/omni",
+        "name": "Gemini Omni 1.1 Flash",
+        "group": "google"
       }
     },
     {
@@ -11653,7 +17320,9 @@
             "video"
           ]
         },
-        "officialDocs": "https://ai.google.dev/gemini-api/docs/omni"
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/omni",
+        "name": "Gemini Omni 1.2 Flash",
+        "group": "google"
       }
     },
     {
@@ -11672,7 +17341,9 @@
             "video"
           ]
         },
-        "officialDocs": "https://ai.google.dev/gemini-api/docs/omni"
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/omni",
+        "name": "Gemini Omni Flash Preview",
+        "group": "google"
       }
     },
     {
@@ -11692,7 +17363,9 @@
             "text"
           ]
         },
-        "officialDocs": "https://ai.google.dev/gemini-api/docs/music-generation"
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/music-generation",
+        "name": "Lyria 3 Clip Preview",
+        "group": "google"
       }
     },
     {
@@ -11712,7 +17385,9 @@
             "text"
           ]
         },
-        "officialDocs": "https://ai.google.dev/gemini-api/docs/music-generation"
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/lyria-3-pro-preview",
+        "name": "Lyria 3 Pro Preview",
+        "group": "google"
       }
     },
     {
@@ -11732,7 +17407,9 @@
             "text"
           ]
         },
-        "officialDocs": "https://ai.google.dev/gemini-api/docs/music-generation"
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/music-generation",
+        "name": "Lyria 3.5",
+        "group": "google"
       }
     },
     {
@@ -11750,7 +17427,227 @@
             "audio"
           ]
         },
-        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/lyria-realtime-exp"
+        "officialDocs": "https://ai.google.dev/gemini-api/docs/models/lyria-realtime-exp",
+        "name": "Lyria RealTime",
+        "group": "google"
+      }
+    },
+    {
+      "id": "openai/gpt-realtime-2.1",
+      "aliases": [
+        "gpt-realtime-2.1"
+      ],
+      "defaults": {
+        "name": "gpt-realtime-2.1",
+        "mode": "realtime",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "audio"
+          ],
+          "output": [
+            "text",
+            "audio"
+          ]
+        },
+        "officialDocs": "https://developers.openai.com/api/docs/models/gpt-realtime-2.1"
+      }
+    },
+    {
+      "id": "openai/gpt-realtime-2.1-mini",
+      "aliases": [
+        "gpt-realtime-2.1-mini"
+      ],
+      "defaults": {
+        "name": "gpt-realtime-2.1-mini",
+        "mode": "realtime",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "audio"
+          ],
+          "output": [
+            "text",
+            "audio"
+          ]
+        },
+        "officialDocs": "https://developers.openai.com/api/docs/models/gpt-realtime-2.1-mini"
+      }
+    },
+    {
+      "id": "openai/gpt-realtime-2",
+      "aliases": [
+        "gpt-realtime-2"
+      ],
+      "defaults": {
+        "name": "gpt-realtime-2",
+        "mode": "realtime",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "audio"
+          ],
+          "output": [
+            "text",
+            "audio"
+          ]
+        },
+        "officialDocs": "https://developers.openai.com/api/docs/models/gpt-realtime-2"
+      }
+    },
+    {
+      "id": "openai/gpt-realtime-1.5",
+      "aliases": [
+        "gpt-realtime-1.5"
+      ],
+      "defaults": {
+        "name": "gpt-realtime-1.5",
+        "mode": "realtime",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "audio"
+          ],
+          "output": [
+            "text",
+            "audio"
+          ]
+        },
+        "officialDocs": "https://developers.openai.com/api/docs/models/gpt-realtime-1.5"
+      }
+    },
+    {
+      "id": "openai/gpt-realtime",
+      "aliases": [
+        "gpt-realtime",
+        "gpt-realtime-2025-08-28"
+      ],
+      "defaults": {
+        "name": "gpt-realtime",
+        "mode": "realtime",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "audio"
+          ],
+          "output": [
+            "text",
+            "audio"
+          ]
+        },
+        "officialDocs": "https://developers.openai.com/api/docs/models/gpt-realtime"
+      }
+    },
+    {
+      "id": "openai/gpt-realtime-mini",
+      "aliases": [
+        "gpt-realtime-mini",
+        "gpt-realtime-mini-2025-12-15"
+      ],
+      "defaults": {
+        "name": "gpt-realtime-mini",
+        "mode": "realtime",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "audio"
+          ],
+          "output": [
+            "text",
+            "audio"
+          ]
+        },
+        "officialDocs": "https://developers.openai.com/api/docs/models/gpt-realtime-mini"
+      }
+    },
+    {
+      "id": "qwen/qwen-audio-3.0-realtime-plus",
+      "aliases": [
+        "qwen-audio-3.0-realtime-plus"
+      ],
+      "defaults": {
+        "name": "qwen-audio-3.0-realtime-plus",
+        "mode": "realtime",
+        "modalities": {
+          "input": [
+            "text",
+            "audio"
+          ],
+          "output": [
+            "text",
+            "audio"
+          ]
+        },
+        "officialDocs": "https://help.aliyun.com/zh/model-studio/qwen-audio-realtime-user-guides"
+      }
+    },
+    {
+      "id": "qwen/qwen-audio-3.0-realtime-flash",
+      "aliases": [
+        "qwen-audio-3.0-realtime-flash"
+      ],
+      "defaults": {
+        "name": "qwen-audio-3.0-realtime-flash",
+        "mode": "realtime",
+        "modalities": {
+          "input": [
+            "text",
+            "audio"
+          ],
+          "output": [
+            "text",
+            "audio"
+          ]
+        },
+        "officialDocs": "https://help.aliyun.com/zh/model-studio/qwen-audio-realtime-user-guides"
+      }
+    },
+    {
+      "id": "qwen/qwen-audio-3.1-realtime-plus",
+      "aliases": [
+        "qwen-audio-3.1-realtime-plus"
+      ],
+      "defaults": {
+        "name": "qwen-audio-3.1-realtime-plus",
+        "mode": "realtime",
+        "modalities": {
+          "input": [
+            "text",
+            "audio"
+          ],
+          "output": [
+            "text",
+            "audio"
+          ]
+        },
+        "officialDocs": "https://help.aliyun.com/zh/model-studio/qwen-audio-realtime-user-guides"
+      }
+    },
+    {
+      "id": "qwen/qwen-audio-3.1-realtime-flash",
+      "aliases": [
+        "qwen-audio-3.1-realtime-flash"
+      ],
+      "defaults": {
+        "name": "qwen-audio-3.1-realtime-flash",
+        "mode": "realtime",
+        "modalities": {
+          "input": [
+            "text",
+            "audio"
+          ],
+          "output": [
+            "text",
+            "audio"
+          ]
+        },
+        "officialDocs": "https://help.aliyun.com/zh/model-studio/qwen-audio-realtime-user-guides"
       }
     }
   ],
@@ -13259,6 +19156,45 @@
       "inputBaseUrls": [
         "https://openhubs.zhidemai.com",
         "https://openhubs.zhidemai.com/v1"
+      ],
+      "defaultFor": [
+        "pi"
+      ]
+    },
+    {
+      "id": "tokenrhythm-anthropic-messages",
+      "providerId": "tokenrhythm",
+      "api": "anthropic-messages",
+      "baseUrl": "https://tokenrhythm.studio",
+      "inputBaseUrls": [
+        "https://tokenrhythm.studio",
+        "https://tokenrhythm.studio/v1"
+      ],
+      "defaultFor": [
+        "claude-code"
+      ]
+    },
+    {
+      "id": "tokenrhythm-openai-responses",
+      "providerId": "tokenrhythm",
+      "api": "openai-responses",
+      "baseUrl": "https://tokenrhythm.studio/v1",
+      "inputBaseUrls": [
+        "https://tokenrhythm.studio",
+        "https://tokenrhythm.studio/v1"
+      ],
+      "defaultFor": [
+        "codex"
+      ]
+    },
+    {
+      "id": "tokenrhythm-openai-completions",
+      "providerId": "tokenrhythm",
+      "api": "openai-completions",
+      "baseUrl": "https://tokenrhythm.studio/v1",
+      "inputBaseUrls": [
+        "https://tokenrhythm.studio",
+        "https://tokenrhythm.studio/v1"
       ],
       "defaultFor": [
         "pi"

@@ -71,8 +71,10 @@
     "copyStateCopying": "复制中",
     "copyStateCopied": "已复制",
     "copyStateFailed": "复制失败",
+    "tableSelectionUnavailable": "连续选字加载失败，仍可阅读和复制整条消息。",
     "copyStateCopy": "复制",
     "copyCode": "复制代码",
+    "copyTable": "复制表格",
     "thinkingHidden": "思考内容已隐藏",
     "thinkingDone": "已思考 {{duration}}",
     "thinkingActive": "思考中 {{elapsed}}",
@@ -193,6 +195,9 @@
     "turnTokens": "{{tokens}} tokens"
   },
   "lightbox": {
+    "saveImage": "保存原图",
+    "imageSaved": "图片已保存",
+    "saveFailed": "图片保存失败，请重试",
     "originalUnavailable": "原图暂不可用",
     "retryOriginal": "重试原图",
     "loadingOriginal": "正在加载原图…",

@@ -8,16 +8,16 @@ import { isAutomaticInputOriginKind, type AgentInputProjection, type AgentInputQ
 import type { SchedulerQueuedPreparation } from '../schedulerQueuedPreparation.js';
 import type { SavedUsageLimitWait } from '../usageLimitRecoveryStore.js';
 import { createSchedulerQueueBridge } from '../schedulerQueueBridge.js';
+import { MAKER_INVOKE } from '../channels.js';
 
 // Execute the production IPC handler while injecting only its host services.
 // Shared by queue tests and the real scheduler-runner continuation regression.
 const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
-const start = source.indexOf('    MAKER_INVOKE.INPUT_ENQUEUE,');
-const handlerStart = source.indexOf('    async (event, sessionId: unknown, item: unknown, opts?: unknown) => {', start);
-const handlerEnd = source.indexOf('\n  );', handlerStart);
-if (start < 0 || handlerStart < start || handlerEnd < handlerStart) throw new Error('INPUT_ENQUEUE handler not found');
-const handler = source.slice(handlerStart, handlerEnd).trim().replace(/,$/, '');
-const compiled = transpileModule(`return (${handler});`, {
+const enqueueChannel = source.indexOf('    MAKER_INVOKE.INPUT_ENQUEUE,');
+const enqueueStart = source.lastIndexOf('  ipcMain.handle(', enqueueChannel);
+const enqueueEnd = source.indexOf('\n  );', enqueueChannel);
+if (enqueueChannel < 0 || enqueueStart < 0 || enqueueEnd < enqueueChannel) throw new Error('INPUT_ENQUEUE registration not found');
+const compiled = transpileModule(source.slice(enqueueStart, enqueueEnd + '\n  );'.length), {
   compilerOptions: { target: ScriptTarget.ES2022 },
 }).outputText;
 
@@ -53,6 +53,25 @@ export function createSavedQuotaRestoreHarness(coordinator: AgentInputCoordinato
   };
   return new Function(...Object.keys(bindings), compiledQuotaRestore)(...Object.values(bindings)) as
     (sid: string) => Promise<void>;
+}
+
+export function createInputRetryHarness(coordinator: AgentInputCoordinator) {
+  const channel = source.indexOf('    MAKER_INVOKE.INPUT_RETRY_LAST_ERROR,');
+  const start = source.lastIndexOf('  ipcMain.handle(', channel);
+  const end = source.indexOf('\n  );', channel);
+  if (channel < 0 || start < 0 || end < channel) throw new Error('INPUT_RETRY_LAST_ERROR handler not found');
+  const program = transpileModule(source.slice(start, end + '\n  );'.length), {
+    compilerOptions: { target: ScriptTarget.ES2022 },
+  }).outputText;
+  type Handler = (event: unknown, sessionId: string, options: unknown) => Promise<AgentInputProjection>;
+  let handler!: Handler;
+  const bindings = {
+    ipcMain: { handle: (_channel: string, callback: Handler) => { handler = callback; } },
+    MAKER_INVOKE, inputCoordinator: coordinator, requireSessionId: (id: string) => id,
+    isDeviceLinkInvoke: () => false, assertRemoteInputControlBoundary: async () => {},
+  };
+  new Function(...Object.keys(bindings), program)(...Object.values(bindings));
+  return (sessionId: string, options: unknown) => handler({}, sessionId, options);
 }
 
 export function createInputStopHarness(coordinator: AgentInputCoordinator, options: {
@@ -163,7 +182,11 @@ export function createInputEnqueueHarness(coordinator: AgentInputCoordinator, op
       'discardSpecificQueuedAttachmentOwnership', 'markQueuedAttachmentDurableAfterSnapshot',
     ].map(name => [name, noop])),
   };
-  const enqueue = new Function(...Object.keys(bindings), compiled)(...Object.values(bindings)) as
-    (event: object, sid: string, item: AgentInputQueuedMessage, opts?: unknown) => Promise<AgentInputProjection>;
+  type EnqueueHandler = (event: object, sid: string, item: AgentInputQueuedMessage, opts?: unknown) => Promise<AgentInputProjection>;
+  const handlers = new Map<string, EnqueueHandler>();
+  const ipcMain = { handle: (channel: string, fn: EnqueueHandler) => handlers.set(channel, fn) };
+  new Function('ipcMain', 'MAKER_INVOKE', ...Object.keys(bindings), compiled)(ipcMain, MAKER_INVOKE, ...Object.values(bindings));
+  const enqueue = handlers.get(MAKER_INVOKE.INPUT_ENQUEUE);
+  if (!enqueue) throw new Error('INPUT_ENQUEUE handler was not registered');
   return { enqueue, acceptedCallbacks, preparations, schedulerBridge };
 }

@@ -49,6 +49,9 @@ vi.mock('@cindy/maker-shared', async () => {
 vi.mock('@cindy/device-link', async () => ({
   ...await import('../../../../../packages/device-link/src/sharedTaskPeer'),
   ...await import('../../../../../packages/device-link/src/metadataContinuity'),
+  // BotStartedTasks reads the buddy roster, which loads favorite length limits
+  // from this barrel. Keep that real submodule instead of the unused client graph.
+  ...await import('../../../../../packages/device-link/src/modelFavorites'),
 }));
 // Selection never edits/resends messages or controls an Agent session. Keep the
 // real message bodies/actions, without booting those unrelated dependency trees.

@@ -7,7 +7,9 @@
 同账号设备授权和 owner 边界执行，不新增通用 IPC allowlist 或服务端协议。
 新版插件页复用 `management:snapshot` 的可选只读参数：`{read:'capabilities'}` 只返回
 `catalogPaging: true`；`{read:'installed'}` 只返回已装管理及维护投影；
-`{read:'catalog',query}` 返回目标 Host 的一页市场项、游标、首批完整数量及本地来源统计；
+`{read:'catalog',query}` 返回目标 Host 的一页市场项、游标、首批完整数量及本地来源统计。
+其中可选的 `counts.official`、`counts.community` 是同一查询下公开插件的两个子集，沿用目标 Host 的已装排除规则。
+旧 Host 可省略分项，控制端在公开总数为零或已有完整目录时仍可显示准确数字。
 `{read:'recommendations'}` 返回本次最多 12 个公开官方候选。查询、版本、来源和已装判定均在
 目标 Host 执行，本地自定义来源不上传市场服务器。新控制端先探测能力，只有旧 Host 明确
 拒绝非空输入（`INVALID_PARAMS`）才进入既有 v1 快照路径；普通读取失败不得回退全量。

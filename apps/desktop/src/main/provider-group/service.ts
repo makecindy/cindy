@@ -322,8 +322,10 @@ export interface ProviderGroupService {
   claimGuestStartSwitch(sessionId: string): boolean;
   /** Startup counterpart of guestFailover, fenced through the history handoff. */
   prepareGuestStartSwitch(sessionId: string): Promise<{ isCurrent(): boolean; dispose(): void } | null>;
+  /** Keep an in-flight send and its replacement open cancellable by task Stop. */
+  trackGuestStartRecovery(sessionId: string): { signal: AbortSignal; isCurrent(): boolean; dispose(): void };
   /** 用户亲自接手：这一轮重新从头试。 */
-  noteUserAction(sessionId: string): void;
+  noteUserAction(sessionId: string, ownReconnectRecoverySignal?: AbortSignal): void;
   /**
    * 任务此刻归哪个组(模型列表据此把它显示在组那一项下，provider-groups.md §10)：有绑定、且任务记录里的
    * 位置就是绑定的那台时返回组；没归组、位置与绑定对不上(挪到了别处，等下次核对)时返回 null。只读本机记录，
@@ -526,6 +528,8 @@ type ReturnOutcome = 'reachable' | 'back' | 'gone' | 'stopped';
 
 interface SwitchRun {
   superseded: boolean;
+  recoverySignal?: AbortSignal;
+  onSuperseded?: () => void;
   isCurrent?(): boolean;
   onRelocationMutationStart?(): void;
 }
@@ -533,7 +537,7 @@ interface SwitchRun {
 export function createProviderGroupService(deps: ProviderGroupServiceDeps): ProviderGroupService {
   const { router } = deps;
   /** 进行中的自动换电脑：用户亲自接手(发消息、重试、换模型)时标记作废。只在换电脑期间登记。 */
-  const runningSwitches = new Map<string, Set<{ superseded: boolean }>>();
+  const runningSwitches = new Map<string, Set<SwitchRun>>();
   /**
    * 这一轮等过每台电脑几次(原电脑与要换过去的那台各算)：运行中失败与发送前共用一份，那台反复掉线也不会无休止地
    * 等下去。用户接手即重新计；距上一次重试超过一轮的时限(30 分钟)也重新计。
@@ -2388,6 +2392,14 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       return claimed;
     },
 
+    trackGuestStartRecovery(sessionId) {
+      const { run, done } = trackRun(sessionId);
+      const abort = new AbortController();
+      run.recoverySignal = abort.signal;
+      run.onSuperseded = () => abort.abort(new Error(PROVIDER_GROUP_SUPERSEDED_ERROR));
+      return { signal: abort.signal, isCurrent: () => !run.superseded, dispose: done };
+    },
+
     async prepareGuestStartSwitch(sessionId) {
       const recovery = deps.directGuestSession?.(sessionId)?.captureRecovery?.();
       const { run, done } = trackRun(sessionId);
@@ -2411,8 +2423,12 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       }
     },
 
-    noteUserAction(sessionId) {
-      for (const run of runningSwitches.get(sessionId) ?? []) run.superseded = true;
+    noteUserAction(sessionId, ownReconnectRecoverySignal) {
+      for (const run of runningSwitches.get(sessionId) ?? []) {
+        if (ownReconnectRecoverySignal && run.recoverySignal === ownReconnectRecoverySignal) continue;
+        run.superseded = true;
+        run.onSuperseded?.();
+      }
       resetRound(sessionId);
       deps.guestSwitch?.drop(sessionId);
     },

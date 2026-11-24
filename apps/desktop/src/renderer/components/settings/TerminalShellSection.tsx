@@ -18,12 +18,10 @@ import { personalizationDetailsSettings } from './PersonalizationDetails.setting
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { SelectParts as Select } from '@/components/ui/select';
+import { Select } from '@/components/ui/select';
 import { SettingsCard, SettingsField, SettingsSection } from '@/components/ui/settings-rows';
-import { Check, ChevronDown, ChevronUp } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import type { AvailableShell, ShellId } from '../../../shared/terminal-bridge';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
@@ -118,91 +116,24 @@ export function TerminalShellSection() {
           )}
         >
 
-          <Select.Root
+          <Select
+            data-setting-id={personalizationDetailsSettings.terminalShellCardLabel.id}
+            label={t('settings.terminalShell.card.selectAria')}
             value={pref}
             onValueChange={(value) => onChange(value as ShellId)}
             disabled={resetting}
-          >
-            <Select.Trigger data-setting-id={personalizationDetailsSettings.terminalShellCardLabel.id}
-              aria-label={t('settings.terminalShell.card.selectAria')}
-              className={cn(
-                'flex h-9 w-full min-w-0 items-center justify-between gap-2 rounded-full border px-3 text-12 outline-none',
-                'bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
-                'border-[var(--settings-input-border)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-                'data-[disabled]:cursor-not-allowed data-[disabled]:opacity-60',
-              )}
-            >
-              <span className="min-w-0 truncate text-left">
-                <Select.Value />
-              </span>
-              <Select.Icon asChild>
-                <ChevronDown size={15} className="shrink-0 opacity-75" />
-              </Select.Icon>
-            </Select.Trigger>
-            <Select.Portal>
-              <Select.Content
-                position="popper"
-                side="bottom"
-                align="start"
-                sideOffset={4}
-                className={cn(
-                  'z-[10010] w-[var(--radix-select-trigger-width)] overflow-hidden rounded-xl border p-1.5',
-                  'max-h-[min(15rem,var(--radix-select-content-available-height))]',
-                  'border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]',
-                )}
-              >
-                <Select.ScrollUpButton className="flex h-5 items-center justify-center text-[var(--settings-section-desc)]">
-                  <ChevronUp size={14} />
-                </Select.ScrollUpButton>
-                <Select.Viewport>
-                  <ShellOption value="auto" label={autoLabel} />
-                  {shells.map((shell) => (
-                    <ShellOption key={shell.id} value={shell.id} label={shell.displayName} />
-                  ))}
-                  {/* 用户上次选的 shell 当前不可用(卸了)时,仍要显示让用户可以切回 auto */}
-                  {unavailablePref ? (
-                    <ShellOption
-                      value={unavailablePref}
-                      label={t('settings.terminalShell.unavailable', { shell: unavailablePref })}
-                      unavailable
-                    />
-                  ) : null}
-                </Select.Viewport>
-                <Select.ScrollDownButton className="flex h-5 items-center justify-center text-[var(--settings-section-desc)]">
-                  <ChevronDown size={14} />
-                </Select.ScrollDownButton>
-              </Select.Content>
-            </Select.Portal>
-          </Select.Root>
+            width="full"
+            options={[
+              { value: 'auto', label: autoLabel },
+              ...shells.map((shell) => ({ value: shell.id, label: shell.displayName })),
+              // 用户上次选的 shell 当前不可用(卸了)时,仍要显示让用户可以切回 auto
+              ...(unavailablePref
+                ? [{ value: unavailablePref, label: t('settings.terminalShell.unavailable', { shell: unavailablePref }) }]
+                : []),
+            ]}
+          />
         </SettingsField>
       </SettingsCard>
     </SettingsSection>
-  );
-}
-
-/** Radix shell option row;统一键盘高亮、选中指示、失效提示和主题 token。 */
-function ShellOption({
-  value,
-  label,
-  unavailable = false,
-}: {
-  value: ShellId;
-  label: string;
-  unavailable?: boolean;
-}) {
-  return (
-    <Select.Item
-      value={value}
-      className={cn(
-        'flex w-full cursor-pointer select-none items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-12 outline-none',
-        'text-[var(--settings-input-text)]',
-        unavailable && 'text-[var(--settings-section-desc)]',
-      )}
-    >
-      <Select.ItemText>{label}</Select.ItemText>
-      <Select.ItemIndicator>
-        <Check size={14} strokeWidth={2.25} />
-      </Select.ItemIndicator>
-    </Select.Item>
   );
 }

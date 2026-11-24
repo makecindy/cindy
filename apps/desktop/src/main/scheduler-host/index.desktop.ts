@@ -1,4 +1,5 @@
 import { projectForNewTask } from '../mcp-integrations/projectManagementCore.js';
+import { modelGroupSessionStart } from '../model-groups/sessionStart.desktop.js';
 import { app } from 'electron';
 import './pre-run-hook.desktop.js';
 import type { BrowserWindow } from 'electron';
@@ -34,6 +35,7 @@ import {
   hasQueuedSchedulerPrompt,
   hasPendingSchedulerTargetInput,
   isSchedulerAutoResumePending,
+  isSchedulerSharedReconnectPending,
   isSchedulerPromptTracked,
   releaseQueuedSchedulerPrompt,
   isSchedulerTargetSessionBusy,
@@ -53,11 +55,14 @@ import { DesktopNotifier } from './notifier.desktop';
 import { sendFeishuSessionNotification } from '../im/feishu/notificationOrigin';
 import { wecomGroupNotificationService } from '../wecomGroupNotification';
 import { withTeammateHomeGuard } from './teammateHomeGuard.js';
+import { ownTeammateProjectPrimaryModel, ownTeammateProjectState } from './ownTeammateProject.js';
+import { readEffectiveBotModelChain } from '../maker-host/bot-model-chain-settings-store.js';
+import { resolveTeammateScheduleModel } from './teammateScheduleModel.js';
 import { withQuietRunArchive } from './quietRunArchive.js';
 import { archiveQuietScheduledTarget, readScheduledTargetStatus } from './quietRunArchive.desktop.js';
 import { createLogger } from '../logger';
 import type { ScheduleRunner } from '@cindy/maker-scheduler';
-import { ownTeammateProjectState } from './ownTeammateProject.js';
+import { pluginAutomationAccount } from '../device-link/pluginAutomationHost.desktop.js';
 import { companionHomes } from '../companion-cloud/homes.js';
 import { startScheduleWebhooks, stopScheduleWebhooks } from './webhook/runtime.js';
 
@@ -88,6 +93,8 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
     });
     const promptRunner = new MakerScheduleRunner({
       projectForNewTask,
+      // 设了模式的定时任务新建任务时按模式选来源(model-groups.md §6.3)，选路记账由任务层做。
+      modelGroupStart: modelGroupSessionStart,
       maker: deps.maker,
       bootstrapSession: bootstrapScheduledSession,
       getDb: deps.getDb,
@@ -100,6 +107,11 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
         return listMessagesForAgentHandoff(sessionId, null, undefined, 'authorization');
       },
       onUndispatchedUserTurn: deps.onUndispatchedUserTurn,
+      resolveInheritedModel: schedule => resolveTeammateScheduleModel(schedule, {
+        follows: (dir, id): Promise<boolean> => desktop.getProjectAutomationLoader().followsTeammateModel(dir, id),
+        isOwnProject: async dir => (await ownTeammateProjectState(dir)) !== null,
+        primaryModel: dir => ownTeammateProjectPrimaryModel(dir, readEffectiveBotModelChain),
+      }),
       findUsageLimitWait: findSchedulerUsageLimitWait,
       acquirePendingAgentSwitch: acquirePendingAgentSwitchForDirectSend,
       prepareModelPreferences: prepareScheduledModelPreferencesUnderLock,
@@ -144,6 +156,7 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
         isPromptTracked: isSchedulerPromptTracked,
         releasePrompt: releaseQueuedSchedulerPrompt,
         isAutoResumePending: isSchedulerAutoResumePending,
+        isSharedReconnectPending: isSchedulerSharedReconnectPending,
         onAutoResumeFailed: onSchedulerAutoResumeFailed,
         cancelAutoResume: cancelSchedulerAutoResume,
       },
@@ -162,6 +175,7 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
   },
   // A teammate's project automations run only on its main computer (handed away: skipped here).
   captureFireContext: captureScheduledOwnerGuard,
+  automationAccount: pluginAutomationAccount,
   // Quiet rounds return an archived target to archived (archive-pauses-automations.md).
   wrapRunner: (runner): ScheduleRunner => withQuietRunArchive(
     withTeammateHomeGuard(runner, () => companionHomes.snapshot().demotedBotIds, ownTeammateProjectState),

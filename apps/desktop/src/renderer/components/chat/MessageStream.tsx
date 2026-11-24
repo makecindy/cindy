@@ -132,7 +132,7 @@ import {
   viewportAnchorCorrection,
   type RestoredScrollGeometry,
 } from './messageViewportCompensation';
-import { isEditableKeyboardTarget } from '@/lib/editableKeyboardTarget';
+import { editableTargetConsumesKey } from '@/lib/editableKeyboardTarget';
 import { createLogger } from '@/lib/logger';
 import { subscribeWorkLouderCodexAction } from '@/lib/workLouderCodexActions';
 import { joystickScrollDelta } from '../../../shared/workLouderCodexScroll';
@@ -369,7 +369,7 @@ import {
   ensureCard,
   ensureRemoteCard,
   retainRemoteCardSession,
-  ensureSessionCards,
+  retainLocalCardSession,
   getGhostCardSnapshot,
   subscribeGhostCards,
   type GhostCardSnapshot,
@@ -384,7 +384,7 @@ import { GhostFulfillmentContext, type GhostCallSummary } from './GhostSummonCar
 import { ChatSessionFileProvider, useChatSessionFileValue } from './ChatSessionFileContext';
 import { toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import { rewriteToRemoteMediaOrigin, type RemoteMediaOrigin } from '@/../shared/remoteMediaUrl';
-import { isGhostCallToolName, isTurnEndGhostCardHtml } from '@/../shared/ghost';
+import { isGhostCallToolName, isGhostStartupToolCallName, isTurnEndGhostCardHtml } from '@/../shared/ghost';
 import { ChatVideoView } from './ChatVideoView';
 import { ChatAudioCard } from './ChatAudioCard';
 import { ChatSoundEffectCard } from './ChatSoundEffectCard';
@@ -817,7 +817,7 @@ function collectAssistantsWithFollowingUserBoundary(messages: readonly ChatMessa
 /**
  * 意识"提及 → 兑现"关联(方案 2,渲染期从持久数据推导,重启幂等):
  * 逐条扫消息,维护"当前轮的 user 消息",遇到 assistant 的 ghost_call 工具
- * 调用就把其 ghost_id 记到当前 user 名下——即"这条 user 触发的那一轮里,
+ * 调用优先按 replyToClientId 归属,旧数据才按原始消息顺序找到 user——即"这条 user 触发的那一轮里,
  * AI 真的召唤了哪些意识"。软提示徽章据此升级为召唤卡(徽章说'提到了',
  * 兑现后才敢说'召唤了')。turn 边界 = 下一条非 steer 的 user 消息。
  * 调用与结果都来自持久消息,结果返回即停止;合成触发和结束标记隔离旧归属,不落
@@ -830,16 +830,31 @@ export function collectGhostCallsByUserTurn(
   const out = new Map<string, { ghostIds: Set<string>; pendingGhostIds: Set<string>; running: boolean }>();
   // Match the persisted tool-use identity, even when a hidden/empty result arrives
   // after another user message. This is the same settlement criterion as work logs.
-  const results = new Set(messages.filter((m) => m.role === 'tool_result' && m.toolUseId).map((m) => m.toolUseId));
+  const results = new Set<string>();
+  const userTurnOwners = new Map<string, string>();
   let currentUserClientId: string | null = null;
+  for (const m of messages) {
+    if (m.role === 'tool_result' && m.toolUseId) results.add(m.toolUseId);
+    if (m.role === 'user') {
+      if (m.delivery !== 'steer') currentUserClientId = m.isSyntheticTrigger ? null : m.clientId;
+      // The host may attribute later output to an accepted steering message.
+      // It still annotates the same user turn, without claiming a new bubble.
+      if (currentUserClientId) userTurnOwners.set(m.clientId, currentUserClientId);
+    }
+  }
+  currentUserClientId = null;
   for (const [index, m] of messages.entries()) {
     if (m.role === 'user' && m.delivery !== 'steer') {
       // A new autonomous run must not borrow the preceding human's bubble.
       currentUserClientId = m.isSyntheticTrigger ? null : m.clientId;
       continue;
     }
+    // An explicit owner outside this window is unknown, never the nearest user.
+    const owner = m.replyToClientId
+      ? userTurnOwners.get(m.replyToClientId) ?? null
+      : currentUserClientId;
     if (
-      currentUserClientId &&
+      owner &&
       (m.role === 'tool_use' || m.role === 'assistant') &&
       isGhostCallToolName(m.toolName) &&
       m.toolInput &&
@@ -848,15 +863,15 @@ export function collectGhostCallsByUserTurn(
       const input = m.toolInput as Record<string, unknown>;
       const gid = ghostSummonInstanceId(input.ghost_id as string, input.namespace);
       if (!gid) continue;
-      const state = out.get(currentUserClientId) ?? { ghostIds: new Set<string>(), pendingGhostIds: new Set<string>(), running: false };
+      const state = out.get(owner) ?? { ghostIds: new Set<string>(), pendingGhostIds: new Set<string>(), running: false };
       state.ghostIds.add(gid);
       const returned = m.toolUseId
         ? results.has(m.toolUseId)
         : messages[index + 1]?.role === 'tool_result';
       if (!returned) state.pendingGhostIds.add(gid);
-      out.set(currentUserClientId, state);
+      out.set(owner, state);
     }
-    if (m.turnCompleted === true || m.role === 'error') currentUserClientId = null;
+    if ((m.turnCompleted === true || m.role === 'error') && owner === currentUserClientId) currentUserClientId = null;
   }
   const active = currentUserClientId ? out.get(currentUserClientId) : undefined;
   if (active) active.running = isStreaming && active.pendingGhostIds.size > 0;
@@ -2201,7 +2216,8 @@ export function buildRenderItems(
       let suppressMediaForCard = false;
       let hideRowForCard = false;
       const maybeQueueGhostCard = (result: string | undefined): void => {
-        if (!ghostCards || !isGhostCallToolName(toolName)) return;
+        const namedPluginTool = isGhostStartupToolCallName(toolName);
+        if (!ghostCards || (!isGhostCallToolName(toolName) && !namedPluginTool)) return;
         const inp = (msg.toolInput ?? null) as Record<string, unknown> | null;
         const ghostIdFromInput = typeof inp?.ghost_id === 'string' ? inp.ghost_id : '';
         const candidateGhostId = ghostCardInstanceId(ghostIdFromInput, inp?.namespace);
@@ -2243,15 +2259,17 @@ export function buildRenderItems(
               typeof msg.toolUseId === 'string' &&
               lc.toolUseId === msg.toolUseId,
           ) ??
-          (candidateGhostId && i >= latestTurnStart
+          ((namedPluginTool || candidateGhostId) && i >= latestTurnStart
             ? guessableLiveCards.find(
                 (lc) =>
                   !claimedLiveCallIds.has(lc.callId) &&
                   !settledCardIds.has(lc.callId) &&
                   lc.toolUseId === null &&
-                  ((lc.logicalGhostId ?? lc.ghostId) === candidateGhostId ||
-                    (lc.logicalGhostId === undefined && inp?.namespace === undefined &&
-                      lc.ghostId === candidateGhostId)),
+                  (lc.startupToolName
+                    ? toolName === `mcp__cindy__${lc.startupToolName}` || toolName === `mcp:cindy:${lc.startupToolName}`
+                    : !namedPluginTool && ((lc.logicalGhostId ?? lc.ghostId) === candidateGhostId ||
+                      (lc.logicalGhostId === undefined && inp?.namespace === undefined &&
+                        lc.ghostId === candidateGhostId))),
               )
             : undefined);
         if (!live) return;
@@ -3350,7 +3368,7 @@ export function MessageStream({
     if (remoteCardDeviceId && sessionId) return retainRemoteCardSession(remoteCardDeviceId, sessionId);
   }, [remoteCardDeviceId, sessionId]);
   useEffect(() => {
-    if (sessionId && !ownerDeviceId) ensureSessionCards(sessionId);
+    if (sessionId && !ownerDeviceId) return retainLocalCardSession(sessionId);
   }, [sessionId, ownerDeviceId]);
   useEffect(() => {
     for (const m of messages) {
@@ -3359,7 +3377,7 @@ export function MessageStream({
         if (!cardId) continue;
         // Anything else (local tasks, shared-task guests) resolves here; a missing card keeps the tool row.
         if (remoteCardDeviceId && sessionId) ensureRemoteCard(remoteCardDeviceId, sessionId, cardId);
-        else ensureCard(cardId);
+        else ensureCard(cardId, sessionId ?? undefined);
       }
     }
   }, [messages, remoteCardDeviceId, sessionId]);
@@ -4077,7 +4095,8 @@ export function MessageStream({
     const onNavigationKey = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
       if (!isScrollNavigationKey(event.key)) return;
-      if (isEditableKeyboardTarget(event.target)) return;
+      // 分享模式的消息勾选框只要空格；翻页键与焦点在按钮上时一样算用户滚动。
+      if (editableTargetConsumesKey(event.target, event.key)) return;
       onUserInput();
     };
     let disposed = false;
@@ -5246,7 +5265,7 @@ export function MessageStream({
         // At a disclosure's reserved tail, End may produce no scroll event.
         // Restore the existing down-intent state only for this list's input.
         if (root && event.target instanceof Node && root.contains(event.target)
-          && !isEditableKeyboardTarget(event.target) && contentRef.current?.style.minHeight
+          && !editableTargetConsumesKey(event.target, event.key) && contentRef.current?.style.minHeight
           && shouldRepinOnDownIntent({ distanceFromBottom: root.scrollHeight - root.scrollTop - root.clientHeight })) {
           clearChipJumpSuppression();
           pinAutoFollowForUserDownIntent();
@@ -5254,7 +5273,7 @@ export function MessageStream({
         return;
       }
       if (!HISTORY_NAVIGATION_KEYS.has(event.key)) return;
-      if (isEditableKeyboardTarget(event.target)) return;
+      if (editableTargetConsumesKey(event.target, event.key)) return;
       clearChipJumpSuppression();
       const el = scrollRef.current;
       if (
@@ -6649,11 +6668,11 @@ export function MessageStream({
   // 引用缓存:内容不变时复用上一个 Map 引用——UserMessage 顶层订阅该
   // context,流式期间 messages 每批 delta 都换引用,不缓存会让全部历史
   // 消息每批 token 重渲一遍(ghostCallMapsEqual 注释有完整推导)。
-  // 走可见序列:归属键是**可见的**那条 user 消息(软提示卡挂在它上面),被隐藏的
-  // 子代理 user 行不该成为归属键,否则该 turn 的召唤卡升级不到任何可见气泡上。
+  // 使用原始顺序,避免历史交接把折叠工具行移到新 user 后。仍排除子代理内部行,
+  // 并复用元数据投影,纯正文 delta 不会重新扫描调用或刷新历史气泡的 context。
   const ghostCallsByUserTurnRaw = useMemo(
-    () => collectGhostCallsByUserTurn(visibleMetadataMessages, isSessionStreaming),
-    [visibleMetadataMessages, isSessionStreaming],
+    () => collectGhostCallsByUserTurn(selectVisibleMessages(rawMetadataMessages), isSessionStreaming),
+    [rawMetadataMessages, isSessionStreaming],
   );
   const ghostCallsCacheRef = useRef(ghostCallsByUserTurnRaw);
   if (!ghostCallMapsEqual(ghostCallsCacheRef.current, ghostCallsByUserTurnRaw)) {
@@ -6684,7 +6703,7 @@ export function MessageStream({
               ref={scrollRef}
               data-scroll-container=""
               onCopy={copyChatSelection}
-              className="h-full w-full overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable]"
+              className="h-full w-full overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable_both-edges]"
               onScroll={handleScroll}
               onPointerDownCapture={() => refreshViewportAnchor()}
               onKeyDownCapture={() => refreshViewportAnchor()}
@@ -7037,7 +7056,8 @@ export function MessageStream({
                             {shareable && shareSelectionActive ? (
                               <ShareMessageCheckbox clientId={msg.clientId} />
                             ) : null}
-                            {msg.role === 'assistant' && msg.systemCardType === 'mcp-app'
+                            {((msg.role === 'assistant' && msg.systemCardType === 'mcp-app') ||
+                              (msg.role === 'user' && !msg.systemCardType && msg.hookSource))
                               ? withAssistantAvatar(botReplyColumnSpacer, messageNode)
                               : messageNode}
                           </div>
@@ -7308,6 +7328,7 @@ const MessageItem = memo(function MessageItem({
             delivery={message.delivery}
             goalBadge={message.goalBadge}
             blockedByGhost={message.blockedByGhost}
+            inputNotice={message.inputNotice}
             simplifiedBotConversation={simplifiedBotConversation}
             replyQuote={message.replyQuote}
           />
@@ -7326,7 +7347,7 @@ const MessageItem = memo(function MessageItem({
         return sessionId ? (
           <McpAppCard sessionId={sessionId} clientId={message.clientId}
             title={String(message.systemCardData?.title ?? '')}
-            plugin={message.systemCardData?.plugin} customMcp={message.systemCardData?.customMcp}
+            plugin={message.systemCardData?.plugin} customMcp={message.systemCardData?.customMcp} initialHeight={message.systemCardData?.initialHeight}
             fallbackText={String(message.systemCardData?.fallbackText ?? '')} />
         ) : null;
       }

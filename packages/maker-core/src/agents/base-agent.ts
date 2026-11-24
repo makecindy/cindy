@@ -164,6 +164,8 @@ export interface PiExtraSpawnConfig {
    * close() 时调用且要求幂等。只要拿到 bridge（包括匿名会话）就应提供。
    */
   disposeSessionCtx?: () => void;
+  /** Close only the transports owned by a confirmed Agent process instance. */
+  closeSessionInstance?: () => void;
 }
 
 /** pi models.json 原生 provider 的 api 形态(BYOM 用;不过 anthropic-compat 代理)。 */
@@ -378,7 +380,15 @@ export interface CodexSessionMcpConfigInput {
   vendorOptions?: Record<string, unknown>;
 }
 
+export interface CodexDownshiftModelRejection {
+  model: string;
+  /** A bridge receipt has already verified an explicit model denial in the upstream body. */
+  transport: 'http' | 'bridge';
+}
+
 export interface CodexExtraSpawnConfig {
+  /** Exact root-connection model IDs frozen with the custom context catalog. */
+  contextProviderModels?: readonly string[];
   extraArgs: string[];
   extraEnv: Record<string, string>;
   /** Host 路由要求更强的 Codex 进程凭证时，冷启动以该模式重建 app-server。 */
@@ -487,6 +497,8 @@ export interface RefreshLocalModelsOptions {
    * 捕获监听器,让调用方按发起时的登录代际决定是否采用。
    */
   onSupportedModels?: (models: unknown[]) => void;
+  /** Claude discovery hosts may classify failures instead of receiving false. */
+  throwOnError?: boolean;
   /** Codex: route a complete live snapshot to this caller instead of OAuth discovery. */
   onModelsListed?: (models: readonly CodexModelListItem[]) => void | Promise<void>;
 }
@@ -894,6 +906,17 @@ export interface AgentDeps {
       sessionId?: string;
     },
   ) => Promise<PiNativeProvidersResult | null>;
+
+  /**
+   * Pi-only:宿主已知的订阅来源连接态(纯读,无自愈副作用)。
+   *
+   * 子代理路由不列确知断开的来源:账号断开或被移除后目录里的模型名仍在,按这些名字
+   * 派发的子任务会先建 run、随后在首次上游请求时因缺凭证必败(#12298)。
+   *
+   * 入参是 provider 的**来源 id**(spec.sourceProviderId ?? spec.id),不是 Pi 侧的 provider id。
+   * 缺省 / 读不到结论 → 视为连接,不过滤(宁可多列也不误伤可用来源)。
+   */
+  isNativeProviderSourceConnected?: (sourceProviderId: string) => boolean;
 
   /**
    * Pi-only:按实际 provider/model 路由解析运行时描述符。用于启动前校验已持久化 effort，
@@ -1354,6 +1377,8 @@ export interface AgentDeps {
    * Missing or failed classifiers cannot grant a trusted shortcut.
    */
   getMcpToolApprovalPolicy?: (context: McpToolApprovalContext) => McpToolApprovalPolicy;
+  /** Optional host-resolved review input for an alias. Never replaces execution input. */
+  getMcpToolApprovalEvidence?: (context: McpToolApprovalContext) => unknown;
 
   /**
    * Codex 专用钩子：resume / fork 外部本地 thread 前由 host 准备底层 session state。
@@ -1404,6 +1429,9 @@ export interface AgentDeps {
      */
     reasoningEffort?: Effort | '';
   }) => void;
+
+  /** Original model of the local root's rejected native pre-turn downshift request, if observed. */
+  getRejectedCodexDownshiftModel?: (sessionId: string, threadId: string, turnId: string) => CodexDownshiftModelRejection | undefined;
 
   /** Desktop proxy observation of the model actually sent for one Codex child thread. */
   getCodexSubagentIdentity?: (args: { childThreadId: string }) => {
@@ -2667,7 +2695,10 @@ export interface AgentSessionHandle {
   listBackgroundTasks?(): BackgroundTaskSnapshot[];
 
   /**
-   * 「任务已终态、wake turn 尚未启动或仍在跑」的 continuation claim 数
+   * Native continuation count: wake claims and bounded completion-to-start
+   * retention for provider-triggered background Bash follow-up. This probe
+   * does not itself claim a product turn or change send/Stop semantics.
+   * 「任务已终态、wake turn 尚未启动或仍在跑」
    * (awaiting + active,cancelled 不计)。listBackgroundTasks 在任务终态后
    * 立即不再包含该任务,空快照不能证明后续没有 wake turn —— renderer 的
    * 唤醒桥接对账以本计数为收口权威依据。不支持的 agent 留空(Session 层
@@ -3107,7 +3138,8 @@ export abstract class BaseAgent {
   }
 
   async requiresCodexThreadHostTransfer(
-    opts: Pick<StartSessionOptions, 'sessionId' | 'model' | 'providerId' | 'reviewMode' | 'remoteHostId'> & { threadId: string },
+    opts: Pick<StartSessionOptions, 'sessionId' | 'model' | 'providerId' | 'reviewMode' | 'remoteHostId' | typeof NATIVE_SUBSCRIPTION_ACCOUNT>
+      & { threadId: string },
   ): Promise<boolean> {
     void opts;
     return false;

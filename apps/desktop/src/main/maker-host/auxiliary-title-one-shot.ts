@@ -58,6 +58,7 @@ type TitleRequest = {
 
 export interface AuxiliaryTextRequest {
   source?: string;
+  automaticTitle?: boolean;
   sessionId?: string;
   agentKind: AgentKind;
   prompt: string;
@@ -105,7 +106,7 @@ export async function requestAuxiliaryText(
   const beforeSessionAgentDispatch = async (route?: { model?: string }) =>
     !(await isAgentOneShotRouteDisabled(args.agentKind, route?.model)) && await beforeDispatch();
   const result = await deps.requestText(args.prompt, {
-    source: args.source, sessionId: args.sessionId,
+    source: args.source, sessionId: args.sessionId, automaticTitle: args.automaticTitle,
     maxTokens: args.maxTokens,
     timeoutMs: args.timeoutMs,
     // Short budgets cannot afford provider-default thinking. Messages /
@@ -150,9 +151,10 @@ export async function requestAuxiliaryText(
 async function generateAuxiliaryTitle(
   args: TitleRequest,
   deps: AuxiliaryTitleRuntimeDeps,
+  automaticTitle: boolean,
 ): Promise<TitleOneShotResult> {
   const result = await requestAuxiliaryText({
-    source: 'title', sessionId: args.sessionId,
+    source: 'title', sessionId: args.sessionId, automaticTitle,
     agentKind: args.agentKind,
     prompt: args.prompt,
     maxTokens: AUXILIARY_TITLE_MAX_TOKENS,
@@ -179,19 +181,19 @@ function normalizeAuxiliaryTitle(text: string): string | null {
 
 export async function generateTitleWithAuxiliaryModel(
   args: TitleRequest,
-  _legacyDeps: TitleOneShotDeps = {},
+  _legacyDeps?: TitleOneShotDeps,
   runtimeDeps: Partial<AuxiliaryTitleRuntimeDeps> = {},
 ): Promise<string | null> {
   const deps = { ...DEFAULT_DEPS, ...runtimeDeps };
-  const result = await generateAuxiliaryTitle(args, deps);
+  const result = await generateAuxiliaryTitle(args, deps, true);
   return result.status === 'ok' ? result.title : null;
 }
 
 export async function generateTitleWithAuxiliaryModelResult(
   args: TitleRequest,
-  _legacyDeps: TitleOneShotDeps = {},
+  _legacyDeps?: TitleOneShotDeps,
   runtimeDeps: Partial<AuxiliaryTitleRuntimeDeps> = {},
 ): Promise<TitleOneShotResult> {
   const deps = { ...DEFAULT_DEPS, ...runtimeDeps };
-  return generateAuxiliaryTitle(args, deps);
+  return generateAuxiliaryTitle(args, deps, false);
 }

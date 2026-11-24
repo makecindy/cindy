@@ -1059,6 +1059,18 @@ describe("Pi provider-aware model routing", () => {
               },
             ],
           },
+          {
+            // #11460: a custom provider has no row in Pi's bundled catalog, so every
+            // model here is a full entry. Custom providers legitimately have no price
+            // sheet, yet Pi still dereferences `model.cost.tiers` when a turn finishes.
+            id: "mify",
+            sourceProviderId: "mify",
+            name: "Mify",
+            baseUrl: "https://mify.example/v1",
+            api: "openai-completions",
+            inheritModels: false,
+            models: [{ id: "xiaomi/mimo-v2.6-flash", name: "MiMo" }],
+          },
         ],
         env: { CINDY_PI_OPENAI_PROXY_KEY: "placeholder-jwt" },
       }),
@@ -1090,7 +1102,7 @@ describe("Pi provider-aware model routing", () => {
     ) as {
       providers: Record<
         string,
-        { api?: string; models?: Array<{ id: string; api?: string }> }
+        { api?: string; models?: Array<{ id: string; api?: string; cost?: Record<string, number> }> }
       >;
     };
     expect(models.providers.anthropic).not.toHaveProperty("api");
@@ -1123,6 +1135,23 @@ describe("Pi provider-aware model routing", () => {
       }),
     ]);
     expect(models.providers.xai?.models?.[0]).not.toHaveProperty("api");
+    // #11460: Pi charges every finished turn through `calculateCost`, which reads
+    // `model.cost.tiers` without a guard, and pi-harness.md §5 makes the host catalog
+    // the only source of rates with "缺省按 0". No row may omit `cost` — otherwise the
+    // turn dies on `undefined is not an object (evaluating 'model.cost.tiers')`.
+    expect(models.providers.mify?.models).toEqual([
+      expect.objectContaining({
+        id: "xiaomi/mimo-v2.6-flash",
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      }),
+    ]);
+    for (const model of [
+      ...(models.providers.mify?.models ?? []),
+      ...(models.providers["openai-codex"]?.models ?? []),
+      ...(models.providers.xai?.models ?? []),
+    ]) {
+      expect(model.cost, `${model.id} cost`).toBeDefined();
+    }
     expect(
       JSON.parse(readFileSync(path.join(configHome, "settings.json"), "utf8")),
     ).toEqual({
@@ -3109,6 +3138,270 @@ describe("Pi provider-aware model routing", () => {
         sourceProviderId: "cindy-gateway",
         proxySessionAuth: true,
       },
+    ]);
+    await handle.close();
+  });
+
+  // #12298: 断开的订阅来源不得进子代理路由 —— 按它的名字派发会在首次上游请求时必败。
+  it("keeps a disconnected subscription source out of the subagent model routes", async () => {
+    const deps = byomDeps(
+      async () => ({
+        providers: [
+          {
+            id: "openai-codex",
+            sourceProviderId: "openai",
+            name: "OpenAI (ChatGPT)",
+            baseUrl: "http://openai.test",
+            api: "openai-codex-responses" as const,
+            modelIdAliases: {
+              "chatgpt/gpt-5.5-pro": "chatgpt/gpt-5.5-pro",
+              "gpt-5.5-pro": "chatgpt/gpt-5.5-pro",
+            },
+            models: [{ id: "chatgpt/gpt-5.5-pro", wireId: "gpt-5.5-pro" }],
+          },
+          {
+            id: "magpie",
+            sourceProviderId: "magpie-211d8cf5",
+            name: "Magpie",
+            baseUrl: "http://magpie.test",
+            api: "openai-responses" as const,
+            models: [{ id: "gpt-5.5-pro", wireId: "gpt-5.5-pro" }],
+          },
+        ],
+        env: {},
+      }),
+      [
+        {
+          id: "local-model",
+          displayName: "Local",
+          contextWindow: 200_000,
+          efforts: [],
+          defaultEffort: null,
+        },
+      ],
+    );
+    // 宿主知道自己这条来源已断开(账号断开或被移除)。
+    deps.isNativeProviderSourceConnected = sourceProviderId => sourceProviderId !== "openai";
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: "subagent-disconnected-subscription",
+      workingDir: cwd,
+      model: "local-model",
+      providerId: "xd",
+    });
+    const runtime = JSON.parse(
+      readFileSync(
+        runtimeFileOf("subagent", "subagent-disconnected-subscription"),
+        "utf8",
+      ),
+    ) as {
+      modelRoutes: Record<
+        string,
+        Array<{ provider: string; model: string; sourceProviderId?: string }>
+      >;
+    };
+    // 断开来源的两个名字都不再出现在路由里。
+    expect(runtime.modelRoutes["chatgpt/gpt-5.5-pro"]).toBeUndefined();
+    // 另一个仍连接的同名来源照常可指定。
+    expect(runtime.modelRoutes["gpt-5.5-pro"]).toEqual([
+      {
+        provider: "magpie",
+        model: "gpt-5.5-pro",
+        sourceProviderId: "magpie-211d8cf5",
+      },
+    ]);
+    await handle.close();
+  });
+
+  it("keeps a subscription source the host knows is connected in the subagent model routes", async () => {
+    const deps = byomDeps(
+      async () => ({
+        providers: [
+          {
+            id: "openai-codex",
+            sourceProviderId: "openai",
+            name: "OpenAI (ChatGPT)",
+            baseUrl: "http://openai.test",
+            api: "openai-codex-responses" as const,
+            modelIdAliases: {
+              "chatgpt/gpt-5.5-pro": "chatgpt/gpt-5.5-pro",
+            },
+            models: [{ id: "chatgpt/gpt-5.5-pro", wireId: "gpt-5.5-pro" }],
+          },
+          {
+            id: "xai",
+            sourceProviderId: "xai",
+            name: "xAI",
+            baseUrl: "http://xai.test",
+            api: "openai-responses" as const,
+            models: [{ id: "xai/grok-4.6", wireId: "grok-4.6" }],
+          },
+        ],
+        env: {},
+      }),
+      [
+        {
+          id: "local-model",
+          displayName: "Local",
+          contextWindow: 200_000,
+          efforts: [],
+          defaultEffort: null,
+        },
+      ],
+    );
+    deps.isNativeProviderSourceConnected = () => true;
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: "subagent-connected-subscription",
+      workingDir: cwd,
+      model: "local-model",
+      providerId: "xd",
+    });
+    const runtime = JSON.parse(
+      readFileSync(
+        runtimeFileOf("subagent", "subagent-connected-subscription"),
+        "utf8",
+      ),
+    ) as {
+      modelRoutes: Record<
+        string,
+        Array<{ provider: string; model: string; sourceProviderId?: string }>
+      >;
+    };
+    expect(runtime.modelRoutes["chatgpt/gpt-5.5-pro"]).toEqual([
+      {
+        provider: "openai-codex",
+        model: "gpt-5.5-pro",
+        sourceProviderId: "openai",
+      },
+    ]);
+    expect(runtime.modelRoutes["xai/grok-4.6"]).toEqual([
+      { provider: "xai", model: "grok-4.6", sourceProviderId: "xai" },
+    ]);
+    await handle.close();
+  });
+
+  it("keeps subscription sources in the subagent model routes when the host has no connection state", async () => {
+    // 宿主没给判据(读不到结论)→ 不剔除:宁可多列也不误伤可用来源。
+    const deps = byomDeps(
+      async () => ({
+        providers: [
+          {
+            id: "openai-codex",
+            sourceProviderId: "openai",
+            name: "OpenAI (ChatGPT)",
+            baseUrl: "http://openai.test",
+            api: "openai-codex-responses" as const,
+            modelIdAliases: {
+              "chatgpt/gpt-5.5-pro": "chatgpt/gpt-5.5-pro",
+            },
+            models: [{ id: "chatgpt/gpt-5.5-pro", wireId: "gpt-5.5-pro" }],
+          },
+          {
+            id: "xai",
+            sourceProviderId: "xai",
+            name: "xAI",
+            baseUrl: "http://xai.test",
+            api: "openai-responses" as const,
+            models: [{ id: "xai/grok-4.6", wireId: "grok-4.6" }],
+          },
+        ],
+        env: {},
+      }),
+      [
+        {
+          id: "local-model",
+          displayName: "Local",
+          contextWindow: 200_000,
+          efforts: [],
+          defaultEffort: null,
+        },
+      ],
+    );
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: "subagent-unknown-connection-state",
+      workingDir: cwd,
+      model: "local-model",
+      providerId: "xd",
+    });
+    const runtime = JSON.parse(
+      readFileSync(
+        runtimeFileOf("subagent", "subagent-unknown-connection-state"),
+        "utf8",
+      ),
+    ) as {
+      modelRoutes: Record<
+        string,
+        Array<{ provider: string; model: string; sourceProviderId?: string }>
+      >;
+    };
+    expect(runtime.modelRoutes["chatgpt/gpt-5.5-pro"]).toEqual([
+      {
+        provider: "openai-codex",
+        model: "gpt-5.5-pro",
+        sourceProviderId: "openai",
+      },
+    ]);
+    expect(runtime.modelRoutes["xai/grok-4.6"]).toEqual([
+      { provider: "xai", model: "grok-4.6", sourceProviderId: "xai" },
+    ]);
+    await handle.close();
+  });
+
+  // greptile P1 on #12329: the startup filter alone is not enough — a live catalog
+  // refresh rebuilds every native route from the provider list, which carries no
+  // connection state, so a disconnected source would re-enter modelRoutes and
+  // restore the #12298 dispatch-then-fail path.
+  it("keeps a disconnected subscription source out of the routes after a live catalog refresh", async () => {
+    let magpieUrl = "http://magpie.test";
+    const deps = byomDeps(
+      async () => ({
+        providers: [
+          {
+            id: "openai-codex",
+            sourceProviderId: "openai",
+            name: "OpenAI (ChatGPT)",
+            baseUrl: "http://openai.test",
+            api: "openai-codex-responses" as const,
+            modelIdAliases: {
+              "chatgpt/gpt-5.5-pro": "chatgpt/gpt-5.5-pro",
+              "gpt-5.5-pro": "chatgpt/gpt-5.5-pro",
+            },
+            models: [{ id: "chatgpt/gpt-5.5-pro", wireId: "gpt-5.5-pro" }],
+          },
+          {
+            id: "magpie",
+            sourceProviderId: "magpie",
+            name: "Magpie",
+            baseUrl: magpieUrl,
+            api: "openai-responses" as const,
+            models: [{ id: "gpt-5.5-pro", wireId: "gpt-5.5-pro", contextWindow: 200_000 }],
+          },
+        ],
+        env: {},
+      }),
+    );
+    deps.isNativeProviderSourceConnected = sourceProviderId => sourceProviderId !== "openai";
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: "subagent-refresh-disconnected",
+      workingDir: cwd,
+      model: "gpt-5.5-pro",
+      providerId: "magpie",
+    });
+    const readRoutes = (): Record<string, Array<{ provider: string; model: string }>> =>
+      (JSON.parse(readFileSync(runtimeFileOf("subagent", "subagent-refresh-disconnected"), "utf8")) as {
+        modelRoutes: Record<string, Array<{ provider: string; model: string }>>;
+      }).modelRoutes;
+    // 启动时过滤已生效:断开来源不在路由里。
+    expect(readRoutes()["chatgpt/gpt-5.5-pro"]).toBeUndefined();
+    // 改动当前 provider 的端点 → 预演判为 refresh,刷新会按 provider 清单整体重建路由。
+    magpieUrl = "http://magpie-b.test";
+    expect(await handle.previewModelSwitch?.("gpt-5.5-pro", { providerId: "magpie" }))
+      .toMatchObject({ action: "refresh" });
+    await handle.setModel!("gpt-5.5-pro", { providerId: "magpie" });
+    const routes = readRoutes();
+    // 刷新后断开来源仍不得回到路由里;仍连接的来源照常在。
+    expect(routes["chatgpt/gpt-5.5-pro"]).toBeUndefined();
+    expect(routes["gpt-5.5-pro"]).toEqual([
+      { provider: "magpie", model: "gpt-5.5-pro", sourceProviderId: "magpie" },
     ]);
     await handle.close();
   });
@@ -7394,6 +7687,43 @@ describe("Pi provider-aware model routing", () => {
       await handle.close();
     },
   );
+
+  // #11339, unit: a stopped Pi turn can leave a hidden native extension
+  // marker as the retry parent. The RPC must confirm that raw leaf and send
+  // the retried prompt once; existing tests only navigated to visible parents.
+  it('confirms retry navigation to a hidden native subagent history parent', async () => {
+    let navigated = false;
+    const marker = {
+      id: 'marker', parentId: 'previous', type: 'custom',
+      customType: 'cindy-native-subagent-call', data: { toolCallId: 'call' },
+    };
+    captured.requestHandler = async command => {
+      if (command.type === 'get_state') return { success: true, data: {
+        sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 },
+      } };
+      if (command.type === 'get_tree') return { success: true, data: {
+        leafId: navigated ? 'marker' : 'failed',
+        tree: [{ entry: { id: 'previous', type: 'message', message: { role: 'assistant' } }, children: [
+          { entry: marker, children: [{ entry: {
+            id: 'accepted', parentId: 'marker', type: 'message', message: { role: 'user' },
+          }, children: [{ entry: {
+            id: 'failed', parentId: 'accepted', type: 'message',
+            message: { role: 'assistant', stopReason: 'error', content: [] },
+          }, children: [] }] }] },
+        ] }],
+      } };
+      if (command.type === 'prompt' && String(command.message).startsWith('/cindy-branch-switch ')) navigated = true;
+      return { success: true, data: {} };
+    };
+    const agent = new PiAgent(byomDeps(async () => ({ providers: [], env: {} })));
+    const handle = await agent.startSession({ sessionId: 'retry-hidden-parent', workingDir: cwd, model: 'local-model' });
+    try {
+      await handle.send({ type: 'user', content: 'same input' }, { retryTranscriptUserEntryId: 'accepted' });
+      expect(captured.requests.filter(r => r.type === 'prompt' && r.message === 'same input')).toHaveLength(1);
+    } finally {
+      await handle.close();
+    }
+  });
 
   it('reports the oversized history response before retry accepts another prompt', async () => {
     captured.requestHandler = async command => {

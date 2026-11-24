@@ -21,6 +21,7 @@ import {
   type ProviderGroupConfig,
   type ProviderGroupMember,
   type ProviderGroupMemberQuota,
+  type ProviderGroupDisplayRead,
   type ProviderGroupView,
   type ProviderGroupUsageLimit,
 } from '../../shared/providerGroup.js';
@@ -38,6 +39,8 @@ export function providerGroupImageModelId(
   providerId: string,
   model: string,
 ): string | undefined {
+  // Independent pools expose their image model for local Art, not the shared image invocation.
+  if (view.subscriptionPool === 'openai') return undefined;
   const sourcePrefix = `${providerId}/`;
   const memberModel = model.startsWith(sourcePrefix) ? `${view.id}/${model.slice(sourcePrefix.length)}` : model;
   return view.imageModels?.find(item => item.id === memberModel && !item.disabled
@@ -140,7 +143,7 @@ export interface ProviderGroupRouter {
     input: Pick<ProviderGroupPickInput, 'providerId' | 'agentKind' | 'model' | 'localTask'> & { exclude: ReadonlySet<string> },
     resolved: readonly ResolvedProviderGroupMember[],
   ): { key: string; label: string; quota: ProviderGroupMemberQuota }[];
-  view(providerId: string, options?: string | { model?: string; agentKind?: AgentKind; includeGuestSupport?: boolean }): Promise<ProviderGroupView>;
+  view(providerId: string, options?: string | { model?: string; agentKind?: AgentKind; includeGuestSupport?: boolean; display?: ProviderGroupDisplayRead }): Promise<ProviderGroupView>;
   /** 经本组分到这台、正在运行的任务数。 */
   running(providerId: string, memberKey: string): number;
   markCooling(providerId: string, memberKey: string, until: number, model?: string): void;
@@ -496,12 +499,20 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
     },
 
     async view(providerId, options) {
-      const config = deps.readGroup(providerId);
+      let config = deps.readGroup(providerId);
       if (!config) return { providerId, config: null, members: [] };
-      const resolved = await deps.directory.resolveMembers(providerId, config);
       const viewOptions = typeof options === 'string' ? { model: options } : options;
+      const display = viewOptions?.display;
+      if (display === 'roster') return { providerId, config, members: [], rosterOnly: true };
+      if (display) {
+        const member = config.members.find(entry => entry.key === display.memberKey);
+        if (!member) return { providerId, config: null, members: [] };
+        config = { ...config, members: [member] };
+      }
+      const basic = display !== undefined && !display.details;
+      const resolved = await deps.directory.resolveMembers(providerId, config, basic ? { skipUsage: true } : undefined);
       const model = viewOptions?.model;
-      const readSupport = viewOptions?.includeGuestSupport ? guestSupportReader : null;
+      const readSupport = !basic && viewOptions?.includeGuestSupport ? guestSupportReader : null;
       const providerContinuity = (() => {
         const stamps = resolved.flatMap((entry) => entry.providerContinuity ? [entry.providerContinuity] : []);
         if (!stamps.length) return undefined;

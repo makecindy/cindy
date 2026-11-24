@@ -11,6 +11,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 import type { ProviderView } from '@cindy/model-providers';
 
+import { isTemporaryCatalogFailure } from '@/lib/temporaryCatalogFailure';
 import {
   getCachedDeviceProviders,
   prefetchDeviceProviders,
@@ -51,7 +52,9 @@ export function useDevicesProviders(
     const unsubscribes = ids.map((deviceId) =>
       subscribeDeviceProviders(deviceId, (event) => {
         if (retainDisplaySnapshot && event.status === 'ready') displayRef.current.set(deviceId, event);
-        if (event.status === 'error'
+        // A retaining consumer keeps its rows through a temporary read failure, the same rule as the
+        // single-device hook; refusals, expired budgets and real evictions still clear them.
+        if ((event.status === 'error' && !(retainDisplaySnapshot && isTemporaryCatalogFailure(event.error)))
           || (event.status === 'loading' && !event.retainDisplaySnapshot)) {
           displayRef.current.delete(deviceId);
         }
@@ -80,13 +83,17 @@ export function useDevicesProviders(
       const cached = getCachedDeviceProviders(deviceId);
       if (cached && retainDisplaySnapshot) displayRef.current.set(deviceId, cached);
       const display = cached ?? (retainDisplaySnapshot ? displayRef.current.get(deviceId) : undefined);
-      const error = cached ? null : (errorsRef.current.get(deviceId) ?? null);
+      const failure = cached ? null : (errorsRef.current.get(deviceId) ?? null);
+      // Rows retained through a temporary failure are shown as the bounded snapshot they are, not as
+      // a failed source (no red mark, no greyed favorites).
+      const retainedThroughFailure = !cached && !!display && isTemporaryCatalogFailure(failure);
+      const error = retainedThroughFailure ? null : failure;
       result.set(deviceId, {
         providers: display?.providers ?? [],
         ...(display?.modelVisibilityOverrides !== undefined
           ? { modelVisibilityOverrides: display.modelVisibilityOverrides }
           : {}),
-        loading: !cached && error === null,
+        loading: !cached && !retainedThroughFailure && error === null,
         error,
       });
     }

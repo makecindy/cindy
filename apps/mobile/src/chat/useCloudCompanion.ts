@@ -77,6 +77,12 @@ export function useCloudCompanionHome(enabled: boolean) {
     if (!(await api.client.hasProfileSnapshot(actorId))) throw new Error('PROFILE_SNAPSHOT_MISSING');
     return api.client.setHome(actorId, homeDeviceId, expected);
   }, [api]);
+  /** A companion's main computer as the server has it now (not the cached roster); throws when it cannot be read. */
+  const readHome = useCallback(async (botId: string): Promise<string | null> => {
+    const actor = (await api.client.actors()).find(candidate => candidate.kind === 'bot' && candidate.externalId === botId);
+    if (!actor) throw new Error('COMPANION_NOT_FOUND');
+    return actor.homeDeviceId;
+  }, [api]);
   return { supported: cached?.supported === true, actors: cached?.actors ?? NO_ACTORS,
-    cindyIds: cached?.cindyIds ?? NO_CINDY_IDS, deviceNames, error: failure?.owner === api.owner ? failure.error : null, refresh, setHome };
+    cindyIds: cached?.cindyIds ?? NO_CINDY_IDS, deviceNames, error: failure?.owner === api.owner ? failure.error : null, refresh, setHome, readHome };
 }

@@ -23,9 +23,11 @@ import { createMobileMakerTransport, type RemoteInvoke } from '@/device-link/mob
 import { applyPluginEnginePick, buildRemoteCreateSessionOptions, type NewSessionDraft } from '@/session/newSession';
 import {
   buildPluginEngineGroups,
+  formatPluginEnginePickerQuota,
   getCachedPluginEngines,
   loadPluginEngines,
   normalizePluginEngines,
+  pluginEngineExecutionDeviceId,
   pluginEngineSessionCapabilities,
   setCachedPluginEngines,
   type MobilePluginEngine,
@@ -195,6 +197,20 @@ describe('the pending engine switch the computer projects', () => {
     expect(sessionAgentSwitchIntentPatch({ targetAgentKind: 'acp', model: 'default', providerId: 'openai' }))
       .toEqual({ agentSwitchIntent: null, pluginEngineSwitchIntent: null });
   });
+
+  // The store receives a scoped ACP intent over the existing task patch. The picker must
+  // distinguish another computer from an explicit return home or a legacy omitted device.
+  it.each([
+    [{ agentDeviceId: 'studio' }, 'studio'],
+    [{ agentDeviceId: null }, null],
+    [{}, 'original'],
+  ] as const)('keeps the execution computer for %j', (location, expectedDeviceId) => {
+    const { pluginEngineSwitchIntent } = sessionAgentSwitchIntentPatch({
+      targetAgentKind: 'acp', model: 'deepseek-v4', providerId: DSH, ...location,
+    });
+    expect(pluginEngineSwitchIntent).toEqual({ providerId: DSH, model: 'deepseek-v4', ...location });
+    expect(pluginEngineExecutionDeviceId('original', pluginEngineSwitchIntent)).toBe(expectedDeviceId);
+  });
 });
 
 describe('creating a task on a plugin engine', () => {
@@ -242,18 +258,88 @@ describe('a task running on a plugin engine', () => {
     })]);
   });
 
-  it('lists an unavailable engine with its hint but does not let it be picked', () => {
+  // 2026-11-20 用户反馈：只安装了插件但尚未登录/不可用(unavailable)的引擎不在模型选择器里占位；仅当前已选该引擎时保留提示。
+  // An explicitly closed default is absent even with an empty catalog (unit, mobile picker).
+  it('does not recreate a default when the host has turned it off', () => {
+    const engines = normalizePluginEngines([{ ...desktopView, models: [], defaultModelAllowed: false }]);
+    expect(engines[0]).toMatchObject({ defaultModelAllowed: false, models: [] });
+    expect(buildPluginEngineGroups({ engines, active: null }, '', { ...labels, unavailable: () => '' })).toEqual([]);
+  });
+
+  it('omits an unavailable engine unless it is already the active selection', () => {
     const [unavailable] = normalizePluginEngines([{ ...desktopView, providerId: 'acp-plugin:_ns__local__agy:agy',
       name: 'Antigravity', availability: { state: 'unavailable', message: 'Install agy' } }]);
     const groups = buildPluginEngineGroups({ engines: [unavailable!, engine], active: { providerId: DSH, modelId: 'deepseek-v4' } }, '', {
       ...labels,
       unavailable: (name, hint) => `${name} unavailable: ${hint}`,
     });
-    expect(groups[0]?.rows[0]).toMatchObject({ disabled: true, notice: 'Antigravity unavailable: Install agy', selected: false });
-    // The selected model shows the level it will run at (its default here).
-    expect(groups[1]?.rows[0]).toMatchObject({ disabled: false, selected: true, effort: 'high', effortLabel: 'level:high' });
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.rows[0]).toMatchObject({ disabled: false, selected: true, effort: 'high', effortLabel: 'level:high' });
+
+    const activeUnavailable = buildPluginEngineGroups(
+      { engines: [unavailable!], active: { providerId: unavailable!.providerId, modelId: 'default' } },
+      '',
+      { ...labels, unavailable: (name, hint) => `${name} unavailable: ${hint}` },
+    );
+    expect(activeUnavailable[0]?.rows[0]).toMatchObject({ disabled: true, notice: 'Antigravity unavailable: Install agy', selected: true });
     expect(buildPluginEngineGroups({ engines: [engine], active: null }, 'nothing matches', {
       ...labels, unavailable: () => '',
     })).toEqual([]);
+  });
+
+  // 2026-11-22：电脑上的「设置 → 模型供应商」可以把插件引擎从模型选择器中隐藏(引擎列表追加可选 hidden)。
+  // 生产入口：normalizePluginEngines(device-link 回包) + buildPluginEngineGroups(选择器分组)。
+  // 依据：隐藏只改陈列，Desktop 与 Mobile 选择器同一口径，已选着它的任务照常显示。此前的用例没有这个字段。
+  // 最小失败输入：隐藏的引擎仍列在选择器里；当前任务选着的引擎被隐藏后选不中 / 不显示；hidden 不是 true 也被隐藏。
+  it('omits an engine hidden on its computer unless the task is already on it', () => {
+    const [hidden, notHidden] = normalizePluginEngines([
+      { ...desktopView, hidden: true },
+      { ...desktopView, providerId: 'acp-plugin:_ns__local__agy:agy', name: 'Antigravity', hidden: 'yes' },
+    ]);
+    expect(hidden).toMatchObject({ providerId: DSH, hidden: true });
+    expect(notHidden).not.toHaveProperty('hidden');
+    const picker = (active: { providerId: string; modelId: string } | null) =>
+      buildPluginEngineGroups({ engines: [hidden!, notHidden!], active }, '', { ...labels, unavailable: () => '' })
+        .map((group) => group.title);
+    expect(picker(null)).toEqual(['Antigravity']);
+    expect(picker({ providerId: DSH, modelId: 'deepseek-v4' })).toEqual(['DeepSeek Harness', 'Antigravity']);
+  });
+
+  // Unit: Mobile model picker plugin engine group header quota formatting (windows, expired
+  // windows falling back to balances, and depleted balance warning). Minimal failing input:
+  // tightest window not chosen or balance-only plugin returns undefined.
+  it('formats plugin engine picker quota from tightest unexpired window or currency balance', () => {
+    const now = 1_700_000_000_000;
+    const countdown = (resetsAtSec: number) => `${Math.round((resetsAtSec * 1000 - now) / 3_600_000)}h`;
+    expect(formatPluginEnginePickerQuota({
+      updatedAt: now,
+      windows: [
+        { label: 'Weekly', remainingPercent: 80, resetsAt: now + 24 * 3_600_000 },
+        { label: '5h', remainingPercent: 20, resetsAt: now + 2 * 3_600_000 },
+        { label: 'Expired', remainingPercent: 0, resetsAt: now - 1000 },
+      ],
+    }, now, 'en-US', countdown)).toEqual({
+      summary: '20% · 2h',
+      level: 'warn',
+      accessibilityLabel: '5h · 20% · 2h',
+    });
+
+    expect(formatPluginEnginePickerQuota({
+      updatedAt: now,
+      windows: [{ label: 'Expired', remainingPercent: 0, resetsAt: now - 1000 }],
+      balances: [{ currency: 'USD', amount: '12.50' }],
+    }, now, 'en-US', countdown)).toMatchObject({
+      level: 'normal',
+      summary: expect.stringContaining('12.50'),
+    });
+
+    expect(formatPluginEnginePickerQuota({
+      updatedAt: now,
+      balances: [{ currency: 'CNY', amount: '0' }],
+    }, now, 'zh-CN', countdown)).toMatchObject({
+      level: 'crit',
+    });
+
+    expect(formatPluginEnginePickerQuota(null, now, 'en-US', countdown)).toBeUndefined();
   });
 });

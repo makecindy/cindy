@@ -18,6 +18,12 @@ Windows 托盘面板（2026-11-18）沿用这里的内容顺序、默认任务�
 开启「减少动态效果」时全部静止。液面与数值滚动在 `src/renderer/quota-tray-tube.tsx`，其余在 `styles/quota-tray.css`。
 首页和详情按内容测量高度，仅超过屏幕可用高度的 86% 才滚动。所有页面复用
 `QuotaPanelController` 的取数、隐私处理、设置持久化和操作派发。
+额度列的间距、管宽与数值排版跟随 Swift 的 `Cells`／`CellView`：超过 6 个额度时列间距从 8px 收为 4px；管子最宽 40px，
+列更窄时随列收窄，液面按管子实际宽度绘制；管子上方的数值固定占一行 22px 高（额度 18px、余额 16px、
+% 号 11px；credits 为 14px 数额叠 10px 单位，守 10px 字号下限，比 Swift 的 15pt／8pt 略高出数值行），
+所有管子顶端对齐。数值放不下时整体缩小到列宽，不换行也不压到相邻列；Swift 的 `minimumScaleFactor`
+缩到 75% 后截断，Windows 继续缩小以完整显示金额（2026-11-22，九个额度时「100」与「%」分成两行、
+「¥90.20」压到相邻列）。推荐账号的描边画在管壁内侧，管子尺寸不变。重置时间仍是 11px 单行，放不下时省略。
 
 两端的额度浮层外观跟随「个性化 → 界面材质 → 液态玻璃」。关闭时使用共享的不透明底色，并保留额度数据和液柱反馈。
 
@@ -25,8 +31,9 @@ Windows 托盘面板（2026-11-18）沿用这里的内容顺序、默认任务�
 controller 随视图发送，Swift 的 `PanelDesign`／`Palette` 与 Windows 的 CSS 变量共同消费。
 Swift 内的旧值只供旧预览数据缺字段时兼容，调整设计时改共享正本。平台渲染器仍各自维护页面
 结构和原生交互，新增控件须同时适配；Mac 的系统模糊材质与 Windows 的背景合成各自由平台负责。
-Windows 回归入口为 `pnpm ui:check --page quota-tray --theme all --locale all`，
-覆盖首页任务裁剪、管理、账号详情、用量详情与品牌按钮；Mac 仍须运行原生 helper 验证。
+Windows 回归入口为 `pnpm ui:check --page quota-tray --case all --theme all --locale all`，
+覆盖首页任务裁剪、管理、账号详情、用量详情与品牌按钮，以及九个额度并排时的对齐（`crowded`）；
+Mac 仍须运行原生 helper 验证。
 
 Received shared subscriptions (owner correction, 2026-11-05): while the panel is open, authorized weekly allowances use the existing tube and detail layout. The tube shows the sharer’s existing display name (for example dash), falling back to the provider label when absent; detail title places the sharer first, followed by the provider, so a long provider label cannot hide who shared it. The update fact says the localized “Shared by <name>”. This uses the received-share directory identity, never a quota account email or device identity. When Hide personal information is enabled, project every sharer label to the provider brand across tubes, recommendation copy, management rows, detail titles and update facts; do not emit the original nickname. Turning privacy off restores the received name without changing the quota. For groups or multiple accounts, select the readable ready account with the highest unexpired weekly percentage; take all detail windows, reset times and update time from that same account. Partial results may use the readable subset. Label the detail “Shared · highest weekly” and explain that this is the highest readable account allowance, not a combined or personal allowance; selection does not promise a routing destination. A single-account share keeps the existing “Shared” label and account-wide notice. Use neutral detail rings, without account email, device identity, reset-credit controls or local-provider task selection. Unavailable/expired/balance-only accounts do not participate; no eligible account means no tube. Manual refresh within the same owner/share identity retains the displayed source until the new result arrives, so an open detail stays open. Repeated refreshes join the current pending batch instead of stacking requests; a reopened panel or changed identity/relationship starts a new lease without reusing old results; a confirmed failure or unavailable permission removes that share immediately, without waiting for pending siblings. Owner/share changes and closing the panel clear readings immediately. Subscribe to synchronous session invalidation so clearing starts at the account boundary, before asynchronous sign-out cleanup or auth notifications finish. If identity invalidation leaves no usable overview, immediately publish an empty account-free native view instead of waiting for collection: signed-out users see the existing sign-in gate, while a signed-in account switch waits empty for its new build. Access-epoch changes invalidate only affected shares even with unchanged directory DTOs; refusal notifications do not immediately query again or cancel healthy sibling reads, and retries follow the bounded five-second polling schedule. Published windows reproject at their local reset deadline, independently of network refresh, removing expired values or selecting a still-live group account. Authorized raw snapshots for this projection are kept only for the visible-panel lease and cleared on invalidation/close. The same layout applies in every locale and appearance.
 
