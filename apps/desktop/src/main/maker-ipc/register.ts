@@ -4660,6 +4660,10 @@ async function syncLibraryReadonlyExtraDir(
 }
 
 let agentInputCoordinatorHolder: AgentInputCoordinator | null = null;
+export function readLocalTaskQueuePaused(sessionId: string): boolean | undefined {
+  return agentInputCoordinatorHolder?.getQueuePausedIfRestored(sessionId);
+}
+
 let contextOverflowRolloverHolder: ReturnType<typeof createContextOverflowRollover> | null = null;
 
 /**

@@ -121,6 +121,7 @@ import { readLspModeSettings } from '../maker-host/lsp-mode-store.js';
 import {
   tryGetBotDirectMessageService,
   tryGetOrcaCollabService,
+  readLocalTaskQueuePaused,
   isSessionInTurn,
   getTaskActionInputState,
   isActiveInputAccountScoped,
@@ -328,6 +329,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       const svc = tryGetOrcaCollabService();
       return svc ? svc.listSessionQueuedCounts(sessionIds) : { ok: false as const };
     },
+    readLocalQueuePaused: readLocalTaskQueuePaused,
     // git-context 牵连 Electron 窗口广播,按需加载,不让工具装配一引用就把它带进来。
     readSessionPrStatuses: async (sessionId) =>
       (await import('../git-context/ipc.js')).readSessionPrStatuses(sessionId),
