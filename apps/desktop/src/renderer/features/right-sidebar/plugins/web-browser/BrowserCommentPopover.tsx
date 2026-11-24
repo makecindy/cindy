@@ -355,7 +355,7 @@ export function BrowserCommentPopover({
                     value={cssColorToHex(value) ?? hexBaseline}
                     onChange={(e) => setStyleEdit(property, e.target.value)}
                     disabled={submitting}
-                    className="h-6 w-10 shrink-0 cursor-pointer rounded-lg border border-[var(--border-default)] bg-transparent p-0.5"
+                    className="h-6 w-10 shrink-0 cursor-pointer rounded-[4px] border border-[var(--border-default)] bg-transparent p-0.5"
                   />
                 ) : (
                   <input
