@@ -59,11 +59,11 @@ afterEach(() => {
 describe('analytics settings store', () => {
   it('reports a fresh display state from disk without replacing corrupt records', async () => {
     const store = await importStore();
-    await expect(store.readAnalyticsConsentForDisplay()).resolves.toBe(false);
+    await expect(store.readAnalyticsConsentFromDisk()).resolves.toBe(false);
     fs.writeFileSync(settingsFile(), JSON.stringify({ privacyConsentAccepted: true }));
-    await expect(store.readAnalyticsConsentForDisplay()).resolves.toBe(true);
+    await expect(store.readAnalyticsConsentFromDisk()).resolves.toBe(true);
     fs.writeFileSync(settingsFile(), '{invalid');
-    await expect(store.readAnalyticsConsentForDisplay()).resolves.toBeNull();
+    await expect(store.readAnalyticsConsentFromDisk()).resolves.toBeNull();
     expect(fs.readFileSync(settingsFile(), 'utf-8')).toBe('{invalid');
   });
 

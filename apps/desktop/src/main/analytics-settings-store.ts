@@ -143,8 +143,8 @@ function classifyAnalyticsContent(fileContent: string | null): RecordProbe {
   return parseAnalyticsRecord(fileContent) ? 'valid' : 'invalid';
 }
 
-/** Read the upload settings display without blocking main or mutating the consent store. */
-export async function readAnalyticsConsentForDisplay(): Promise<boolean | null> {
+/** Read the current consent without blocking main or mutating the consent store. */
+export async function readAnalyticsConsentFromDisk(): Promise<boolean | null> {
   try {
     const content = await fs.promises.readFile(settingsFilePath(), 'utf-8');
     if (recordProbe === 'invalid') return null;

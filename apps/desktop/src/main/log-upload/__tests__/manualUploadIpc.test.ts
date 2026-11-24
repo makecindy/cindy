@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import fs, { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
   trustedRenderer: vi.fn(),
   target: vi.fn(),
   consentReadable: vi.fn(),
-  readDisplayConsent: vi.fn(),
+  readAnalyticsConsent: vi.fn(),
   readAnalytics: vi.fn(),
   collect: vi.fn(),
   send: vi.fn(),
@@ -38,7 +38,7 @@ vi.mock('../../authManager', () => ({
 }));
 vi.mock('../../analytics-settings-store', () => ({
   isAnalyticsConsentRecordReadable: mocks.consentReadable,
-  readAnalyticsConsentForDisplay: mocks.readDisplayConsent,
+  readAnalyticsConsentFromDisk: mocks.readAnalyticsConsent,
   readAnalyticsSettings: mocks.readAnalytics,
   refreshAnalyticsSettingsFromDisk: vi.fn(),
 }));
@@ -48,7 +48,7 @@ vi.mock('../../lifecycle', () => ({
   onQuit: vi.fn(),
 }));
 vi.mock('../../logger', () => ({
-  createLogger: () => ({ info: vi.fn(), warn: vi.fn() }),
+  createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
   getLogDir: () => 'mock-logs',
 }));
 vi.mock('../../startup-diagnostics', () => ({ getPreviousRunReports: vi.fn() }));
@@ -83,7 +83,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.target.mockReturnValue({});
   mocks.consentReadable.mockReturnValue(true);
-  mocks.readDisplayConsent.mockResolvedValue(false);
+  mocks.readAnalyticsConsent.mockResolvedValue(false);
   mocks.readAnalytics.mockReturnValue({ privacyConsentAccepted: false });
   mocks.collect.mockResolvedValue({
     records: [{ msg: 'sample diagnostic record' }],
@@ -92,7 +92,10 @@ beforeEach(() => {
   });
   mocks.send.mockResolvedValue({ ok: true, records: 1, batches: 1 });
 });
-afterEach(() => rmSync(mocks.userData, { recursive: true, force: true }));
+afterEach(() => {
+  vi.restoreAllMocks();
+  rmSync(mocks.userData, { recursive: true, force: true });
+});
 
 describe('manual log upload IPC', () => {
   it.each([
@@ -100,13 +103,13 @@ describe('manual log upload IPC', () => {
     [true, true, false],
     [null, false, false],
   ])('projects manual upload and consent actions from the readable local record', async (consent, available, offersConsent) => {
-    mocks.readDisplayConsent.mockResolvedValue(consent);
+    mocks.readAnalyticsConsent.mockResolvedValue(consent);
     await expect(settings()).resolves.toMatchObject({
       manualUploadAvailable: available,
       manualUploadConsentRequired: offersConsent,
     });
     expect(mocks.consentReadable).not.toHaveBeenCalled();
-    expect(mocks.readDisplayConsent).toHaveBeenCalledOnce();
+    expect(mocks.readAnalyticsConsent).toHaveBeenCalledOnce();
   });
 
   it('saves manual consent without sending logs or changing crash settings', async () => {
@@ -122,6 +125,7 @@ describe('manual log upload IPC', () => {
     });
     expect(mocks.collect).not.toHaveBeenCalled();
     expect(mocks.send).not.toHaveBeenCalled();
+    expect(mocks.consentReadable).not.toHaveBeenCalled();
     expect(JSON.parse(readFileSync(settingsFile(), 'utf8'))).toEqual({
       crashAutoUploadEnabled: true,
     });
@@ -171,10 +175,11 @@ describe('manual log upload IPC', () => {
 
   it('uploads without an explicit policy version when consent is already saved', async () => {
     mocks.readAnalytics.mockReturnValue({ privacyConsentAccepted: true });
+    mocks.readAnalyticsConsent.mockResolvedValue(true);
     await expect(settings()).resolves.toMatchObject({
       manualUploadAvailable: true, manualUploadConsentRequired: false,
     });
-    expect(mocks.readDisplayConsent).not.toHaveBeenCalled();
+    expect(mocks.readAnalyticsConsent).not.toHaveBeenCalled();
     await expect(upload()).resolves.toMatchObject({ recordCount: 1 });
     expect(mocks.send).toHaveBeenCalledTimes(1);
   });
@@ -185,7 +190,7 @@ describe('manual log upload IPC', () => {
   });
 
   it('still blocks collection when the existing consent record is unreadable', async () => {
-    mocks.consentReadable.mockReturnValue(false);
+    mocks.readAnalyticsConsent.mockResolvedValue(null);
     await expect(accept()).rejects.toThrow('[PRIVACY_CONSENT_REQUIRED]');
     await expect(upload()).rejects.toThrow('[PRIVACY_CONSENT_REQUIRED]');
     expect(mocks.collect).not.toHaveBeenCalled();
@@ -201,6 +206,19 @@ describe('manual log upload IPC', () => {
     });
   });
 
+  it('preserves the prior grant and does not unlock upload when atomic replacement fails', async () => {
+    writeFileSync(consentFile(), JSON.stringify('older-policy'));
+    vi.spyOn(fs.promises, 'rename').mockRejectedValueOnce(
+      Object.assign(new Error('file locked'), { code: 'EPERM' }),
+    );
+    await expect(accept()).rejects.toThrow('[INTERNAL]');
+    expect(JSON.parse(readFileSync(consentFile(), 'utf8'))).toBe('older-policy');
+    expect(readdirSync(mocks.userData)).toEqual(['manual-log-upload-consent.json']);
+    expect(mocks.broadcast).not.toHaveBeenCalled();
+    await expect(upload()).rejects.toThrow('[PRIVACY_CONSENT_REQUIRED]');
+    expect(mocks.collect).not.toHaveBeenCalled();
+  });
+
   it('still blocks collection when no upload target is configured', async () => {
     mocks.target.mockReturnValue(null);
     await expect(accept()).rejects.toThrow('[LOG_UPLOAD_UNAVAILABLE]');
@@ -211,7 +229,7 @@ describe('manual log upload IPC', () => {
   it('rejects an untrusted renderer before recording consent', async () => {
     mocks.trustedRenderer.mockImplementationOnce(() => { throw new Error('untrusted renderer'); });
     await expect(accept()).rejects.toThrow('untrusted renderer');
-    expect(mocks.consentReadable).not.toHaveBeenCalled();
+    expect(mocks.readAnalyticsConsent).not.toHaveBeenCalled();
     expect(mocks.collect).not.toHaveBeenCalled();
   });
 });

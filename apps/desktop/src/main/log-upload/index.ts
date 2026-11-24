@@ -31,7 +31,7 @@ import {
 import * as authManager from '../authManager';
 import {
   isAnalyticsConsentRecordReadable,
-  readAnalyticsConsentForDisplay,
+  readAnalyticsConsentFromDisk,
   readAnalyticsSettings,
   refreshAnalyticsSettingsFromDisk,
 } from '../analytics-settings-store';
@@ -40,7 +40,6 @@ import { createLogger, getLogDir } from '../logger';
 import { outboundFetch } from '../maker-host/outbound-fetch.desktop';
 import { getPreviousRunReports } from '../startup-diagnostics';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
-import { atomicWriteFileSync } from '../utils/atomicWriteFile.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { collectLogsFromDisk } from './collectRuntime';
 import {
@@ -48,7 +47,7 @@ import {
   selectBackfillGrouping,
   shouldBackfillForReportKind,
 } from './crashTriggers';
-import type { ConsentGateDeps } from './consentGate';
+import type { ConsentGateDeps, GateVerdict } from './consentGate';
 import { evaluateGate } from './consentGate';
 import { sendLogs } from './logSink';
 import { resolveLogUploadTarget } from './logUploadTarget';
@@ -162,7 +161,7 @@ function parseManualConsent(content: string): boolean {
   return version === LEGAL_TERMS_VERSION;
 }
 
-async function readManualConsentForDisplay(): Promise<boolean | null> {
+async function readManualConsent(): Promise<boolean | null> {
   try {
     return parseManualConsent(await fs.promises.readFile(manualConsentPath(), 'utf8'));
   } catch (err) {
@@ -170,18 +169,25 @@ async function readManualConsentForDisplay(): Promise<boolean | null> {
   }
 }
 
-const manualGateDeps: ConsentGateDeps = {
-  ...gateDeps,
-  readPrivacyConsentAccepted: () => {
-    if (gateDeps.readPrivacyConsentAccepted()) return true;
-    try {
-      return parseManualConsent(fs.readFileSync(manualConsentPath(), 'utf8'));
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
-      throw err;
-    }
-  },
-};
+async function evaluateManualConsent(): Promise<GateVerdict> {
+  if (!currentTarget()) return { kind: 'denied', reason: 'not-configured' };
+  const globalConsent = await readAnalyticsConsentFromDisk();
+  const consent = globalConsent === false ? await readManualConsent() : globalConsent;
+  if (consent === null) return { kind: 'unknown' };
+  return consent ? { kind: 'allowed' } : { kind: 'denied', reason: 'no-consent' };
+}
+
+async function persistManualConsent(version: string): Promise<void> {
+  const file = manualConsentPath();
+  const temp = `${file}.${crypto.randomUUID()}.tmp`;
+  try {
+    await fs.promises.writeFile(temp, JSON.stringify(version), { flag: 'wx', mode: 0o600 });
+    await fs.promises.rename(temp, file);
+  } catch (err) {
+    await fs.promises.rm(temp, { force: true }).catch(() => undefined);
+    throw err;
+  }
+}
 
 function buildMeta(args: {
   uploadCode: string;
@@ -206,9 +212,10 @@ function buildMeta(args: {
   };
 }
 
-function runnerDeps(gate = gateDeps) {
+function runnerDeps(evaluateManualConsent?: () => Promise<GateVerdict>) {
   return {
-    gate,
+    gate: gateDeps,
+    evaluateManualConsent,
     resolveTarget: currentTarget,
     collect: (request: { reason: LogUploadReason; anchors: number[] }) =>
       collectLogsFromDisk(request),
@@ -252,9 +259,9 @@ async function logUploadSettingsPayload(): Promise<LogUploadSettingsPayload> {
   const targetConfigured = currentTarget() !== null;
   const privacyConsentAccepted = readAnalyticsSettings().privacyConsentAccepted;
   const privacyConsent = targetConfigured && !privacyConsentAccepted
-    ? await readAnalyticsConsentForDisplay()
+    ? await readAnalyticsConsentFromDisk()
     : null;
-  const manualConsent = privacyConsent === false ? await readManualConsentForDisplay() : null;
+  const manualConsent = privacyConsent === false ? await readManualConsent() : null;
   return {
     targetConfigured,
     privacyConsentAccepted,
@@ -461,7 +468,7 @@ export function initLogUploadService(): void {
     if (policyVersion !== LEGAL_TERMS_VERSION) {
       return throwIpcError('PRIVACY_CONSENT_REQUIRED', 'current privacy policy consent is required');
     }
-    const verdict = evaluateGate(manualGateDeps, 'manual');
+    const verdict = await evaluateManualConsent();
     if (verdict.kind === 'unknown') {
       return throwIpcError('PRIVACY_CONSENT_REQUIRED', 'privacy consent could not be verified');
     }
@@ -470,7 +477,7 @@ export function initLogUploadService(): void {
         return throwIpcError('LOG_UPLOAD_UNAVAILABLE', 'log upload is unavailable');
       }
       try {
-        atomicWriteFileSync(manualConsentPath(), JSON.stringify(policyVersion));
+        await persistManualConsent(policyVersion);
       } catch (err) {
         log.error('write manual log upload consent failed', err);
         return throwIpcError('INTERNAL', 'failed to persist manual log upload consent');
@@ -488,7 +495,7 @@ export function initLogUploadService(): void {
     }
     manualUploadInFlight = true;
     try {
-      const outcome = await runUpload(runnerDeps(manualGateDeps), {
+      const outcome = await runUpload(runnerDeps(evaluateManualConsent), {
         reason: 'manual',
         anchors: [],
         claimed: [],
