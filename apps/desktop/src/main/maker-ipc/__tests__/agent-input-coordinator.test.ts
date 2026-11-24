@@ -33,6 +33,7 @@ import { performSessionAgentSwitch, type AgentSwitchSessionRow } from '../sessio
 import * as delegationHistory from '../botDelegationHistory.js';
 import { modelGroupCandidateKey, type ModelGroupCandidate } from '../../../shared/modelGroups.js';
 import { AgentInputCoordinator } from '../agent-input-coordinator.desktop.js';
+import { RemoteAccountReadUnavailable } from '../../subscription-accounts/remotePreflight.js';
 import { canRecoverUndeliveredOrcaReport } from '../../../shared/sharedTaskRecovery.js';
 import { AutoResumeBookkeeping } from '../autoResumeBookkeeping.js';
 import { createInterruptedTurnAutoResumeHooks } from '../interruptedTurnAutoResumeHooks.js';
@@ -6736,6 +6737,92 @@ describe('AgentInputCoordinator send transaction', () => {
     h.coordinator.retryLastError(sid);
     await flush();
     expect(dispatched).toEqual(['following']);
+  });
+
+  it.each([true, false])('waits for the account device before sending the original queue head (cancel=%s)', async cancel => {
+    const harness = createHarness();
+    const sessionId = 'remote-admission';
+    harness.sendToAgent.mockRejectedValueOnce(new RemoteAccountReadUnavailable('peer-a', new Error('timeout')));
+    harness.coordinator.enqueue(sessionId, makeItem('input-a', 'original'), { manualUiSend: true });
+    await flush();
+    expect(latestProjection(harness.projections)).toMatchObject({
+      error: null, pendingQueue: [{ clientId: 'input-a', waitingForRemoteAccount: true }],
+    });
+    harness.coordinator.enqueue(sessionId, makeItem('input-b', 'next'), { manualUiSend: true });
+    await flush();
+    expect(latestProjection(harness.projections)).toMatchObject({
+      error: null, pendingQueue: [
+        { clientId: 'input-a', waitingForRemoteAccount: true },
+        { clientId: 'input-b' },
+      ],
+    });
+    expect(harness.onDiscardedQueuedMessage).not.toHaveBeenCalled();
+    harness.coordinator.onRemoteAccountDeviceReady('peer-b');
+    await flush();
+    expect(harness.sendToAgent).toHaveBeenCalledTimes(1);
+    if (cancel) harness.coordinator.remove(sessionId, 'input-a');
+    harness.coordinator.onRemoteAccountDeviceReady('peer-a');
+    harness.coordinator.onRemoteAccountDeviceReady('peer-a');
+    await flush();
+    expect(harness.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(mocks.createMessage).toHaveBeenCalledTimes(1);
+    expect(mocks.createMessage).toHaveBeenNthCalledWith(
+      1, sessionId, expect.objectContaining({ clientId: cancel ? 'input-b' : 'input-a' }), expect.anything(),
+    );
+    if (!cancel) {
+      harness.setRunning(false);
+      harness.coordinator.onTurnEvent(sessionId, 'done');
+      await flush();
+      expect(mocks.createMessage).toHaveBeenCalledTimes(2);
+      expect(mocks.createMessage).toHaveBeenNthCalledWith(
+        2, sessionId, expect.objectContaining({ clientId: 'input-b' }), expect.anything(),
+      );
+    }
+  });
+
+  it('releases the old wait when a priority input takes the queue head', async () => {
+    const harness = createHarness();
+    const sessionId = 'remote-admission';
+    harness.sendToAgent.mockRejectedValueOnce(new RemoteAccountReadUnavailable('peer-a', new Error('timeout')));
+    harness.coordinator.enqueue(sessionId, makeItem('input-a', 'original'), { manualUiSend: true });
+    await flush();
+    harness.coordinator.reserveNextInput(sessionId, makeItem('priority', 'priority'));
+    await flush();
+    expect(latestProjection(harness.projections).pendingQueue.map(item => item.clientId)).toEqual(['input-a']);
+    expect(harness.onDiscardedQueuedMessage).not.toHaveBeenCalled();
+    harness.setRunning(false);
+    harness.coordinator.onTurnEvent(sessionId, 'done');
+    await flush();
+    expect(mocks.createMessage).toHaveBeenNthCalledWith(
+      1, sessionId, expect.objectContaining({ clientId: 'priority' }), expect.anything(),
+    );
+    expect(mocks.createMessage).toHaveBeenNthCalledWith(
+      2, sessionId, expect.objectContaining({ clientId: 'input-a' }), expect.anything(),
+    );
+  });
+
+  it('rechecks only once without a device event and never dispatches a cancelled wait', async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = createHarness();
+      const sessionId = 'remote-admission';
+      const unavailable = new RemoteAccountReadUnavailable('peer-a', new Error('timeout'));
+      harness.sendToAgent.mockRejectedValue(unavailable);
+      harness.coordinator.enqueue(sessionId, makeItem('input-a', 'original'), { manualUiSend: true });
+      await flush();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(harness.sendToAgent).toHaveBeenCalledTimes(2);
+      expect(latestProjection(harness.projections)).toMatchObject({
+        error: null, pendingQueue: [{ clientId: 'input-a', waitingForRemoteAccount: true }],
+      });
+      harness.coordinator.remove(sessionId, 'input-a');
+      harness.coordinator.onRemoteAccountDeviceReady('peer-a');
+      await flush();
+      expect(harness.sendToAgent).toHaveBeenCalledTimes(2);
+      expect(mocks.createMessage).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('rolls back every pre-accept send failure to the queue head and retries by typed recovery', async () => {

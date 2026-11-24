@@ -691,6 +691,7 @@ export function PendingQueuePanel({
                 </>
               )}
 
+              {entry.waitingForRemoteAccount && <span className="text-12 text-[var(--text-secondary)]">{t('newChat.pendingQueue.waitingForDevice')}</span>}
               {isPendingEnqueue ? (
                 <span
                   aria-hidden

@@ -14654,6 +14654,7 @@
       "missingDir": "Ordner nicht gefunden"
     },
     "pendingQueue": {
+      "waitingForDevice": "Nicht gesendet · Wird gesendet, sobald der andere Computer wieder verbunden ist",
       "stopping": "Wird gestoppt",
       "queued": "In der Warteschlange",
       "editingInComposer": "Wird im Eingabefeld unten bearbeitet…",

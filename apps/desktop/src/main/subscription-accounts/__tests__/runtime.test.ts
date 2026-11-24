@@ -2585,6 +2585,32 @@ describe('paused account next-turn handoff', () => {
     await expect(needsSubscriptionAccountHandoff('task-a', { providerId: provider, agentKind: provider === 'anthropic' ? 'cc' : 'codex', sdkSessionId: 'new-history' })).rejects.toThrow('No subscription account');
   });
 
+  it('shares an executor decision only within one send and checks paused accounts again on retry', async () => {
+    const { withRemoteAccountReads } = await import('../remotePreflight.js');
+    const row = { providerId: 'anthropic', model: 'claude-sonnet', agentKind: 'cc', sdkSessionId: 'native-a', agentDeviceId: 'peer' };
+    const reply = (paused: boolean) => ({ ok: true, result: { providerId: 'anthropic', routeProviderId: 'anthropic', state: 'bound',
+      account: { isDefault: true, number: 1, paused, status: 'ready', switchAvailable: false } } });
+    h.remote.mockResolvedValueOnce(reply(false)).mockResolvedValueOnce(reply(true));
+    await withRemoteAccountReads(async () => {
+      expect(await needsSubscriptionAccountHandoff('task', row)).toBe(false);
+      expect(await needsSubscriptionAccountHandoff('task', row)).toBe(false);
+    });
+    await expect(withRemoteAccountReads(() => needsSubscriptionAccountHandoff('task', row))).rejects.toThrow('No subscription account');
+    expect(h.remote).toHaveBeenCalledTimes(2);
+  });
+
+  it('marks only a transient read during send preparation as waiting for the executor', async () => {
+    const { RemoteAccountReadUnavailable, withRemoteAccountReads } = await import('../remotePreflight.js');
+    const row = { providerId: 'anthropic', model: 'claude-sonnet', agentKind: 'cc', sdkSessionId: 'native-a', agentDeviceId: 'peer' };
+    const check = () => needsSubscriptionAccountHandoff('task', row);
+    const timeout = Object.assign(new Error('no result within 30000ms'), { code: 'INVOKE_TIMEOUT' });
+    const denied = Object.assign(new Error('not allowed'), { code: 'FORBIDDEN' });
+    h.remote.mockRejectedValueOnce(timeout).mockRejectedValueOnce(denied).mockRejectedValueOnce(timeout);
+    await expect(withRemoteAccountReads(check)).rejects.toBeInstanceOf(RemoteAccountReadUnavailable);
+    await expect(withRemoteAccountReads(check)).rejects.toBe(denied);
+    await expect(check()).rejects.toBe(timeout);
+  });
+
   it('checks the executing computer for a paused remote task and leaves shared providers alone', async () => {
     h.remote.mockResolvedValueOnce({ ok: true, result: { providerId: 'anthropic', state: 'bound',
       account: { isDefault: false, number: 2, paused: true, status: 'ready' } } })

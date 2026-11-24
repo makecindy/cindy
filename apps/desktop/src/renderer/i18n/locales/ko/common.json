@@ -14600,6 +14600,7 @@
       "missingDir": "폴더를 찾을 수 없음"
     },
     "pendingQueue": {
+      "waitingForDevice": "미전송 · 다른 컴퓨터가 다시 연결되면 보냅니다",
       "stopping": "중지 처리 중",
       "queued": "대기 중",
       "editingInComposer": "아래 입력창에서 편집 중…",

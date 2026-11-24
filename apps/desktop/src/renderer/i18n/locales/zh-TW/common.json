@@ -14600,6 +14600,7 @@
       "missingDir": "目錄不存在"
     },
     "pendingQueue": {
+      "waitingForDevice": "尚未傳送，待另一台電腦重新連線後傳送",
       "stopping": "停止處理中",
       "queued": "排隊中",
       "editingInComposer": "正在下方輸入框編輯…",

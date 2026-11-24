@@ -14600,6 +14600,7 @@
       "missingDir": "目錄不存"
     },
     "pendingQueue": {
+      "waitingForDevice": "尚未發，俟彼機復通乃發",
       "stopping": "方止",
       "queued": "方候",
       "editingInComposer": "方於下方輸入框修之…",
