@@ -1030,6 +1030,28 @@ export function UnifiedModelList({
     </Tip>
   );
 
+  const renderModelName = (row: UnionModelRow, color: string) => {
+    const rep = row.byAgent[row.avail[0]]!;
+    const absentFromAllRoutes = provider.source === 'user' && provider.auth.method === 'apiKey' &&
+      (row.aliasRows ?? [row]).every(member => member.avail.every(agent =>
+        member.byAgent[agent]?.userModelConfig?.missingUpstream === true,
+      ));
+    const name = (
+      <span className="min-w-0 truncate text-14 font-medium" style={{ color }}>
+        {localizedModelName(rep.name, t)}
+      </span>
+    );
+    if (!absentFromAllRoutes) return name;
+    return (
+      <span className="flex min-w-0 flex-col">
+        {name}
+        <span className="break-words text-12 text-[var(--text-secondary)]">
+          {t('settings.providers.models.withdrawn.rowStatus')}
+        </span>
+      </span>
+    );
+  };
+
   /**
    * 一行模型的渲染。抽成函数是因为它现在有**两个调用点**:厂商分组里,以及底部
    * 「未启用」沉底区。两边必须逐像素一致 —— 复制一份 150 行 JSX 的话,任何一次
@@ -1089,17 +1111,8 @@ export function UnifiedModelList({
             </CustomProviderIcon>
           )}
         </span>
-        <span
-          className="min-w-0 truncate text-14 font-medium"
-          style={{
-            color:
-              (capability ? capabilityOn && state.ready : state.ready && anyOn)
-                ? 'var(--settings-section-title)'
-                : 'var(--text-tertiary)',
-          }}
-        >
-          {localizedModelName(rep.name, t)}
-        </span>
+        {renderModelName(row, (capability ? capabilityOn && state.ready : state.ready && anyOn)
+          ? 'var(--settings-section-title)' : 'var(--text-tertiary)')}
         {/* 价格档与折扣紧跟模型名(不单独成列):这一列不是用来纵向比价的,
                 是用来在读到某个模型名时顺手知道它贵不贵。拿不到报价就整个
                 不渲染 —— 不画假的「$」也不画「—」。 */}
@@ -1204,10 +1217,12 @@ export function UnifiedModelList({
     <div className={'flex flex-col'}>
       {/* 第一行说明模型选择与管理，第二行仅筛选当前列表。排列和批量配置在菜单里
           明确分组，任何筛选或排列操作都不写入模型开关。 */}
+      {/* 壁纸 / 桌面透明时工具行未吸顶就透出卡片的半透明底，吸顶后才铺回卡片底色
+          （wallpaper-sticky-header，见 globals.css）。 */}
       {!compactEmpty && (
         <div
           data-testid="provider-model-toolbar"
-          className="sticky top-0 z-raised flex flex-col gap-2 bg-[var(--settings-theme-card-bg)] px-5 pb-2 pt-2.5"
+          className="wallpaper-sticky-header sticky top-0 z-raised flex flex-col gap-2 bg-[var(--settings-theme-card-bg)] px-5 pb-2 pt-2.5"
         >
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
             <div className="min-w-0 flex-1">
@@ -1335,13 +1350,7 @@ export function UnifiedModelList({
               {showSearch && (
                 /* basis 200px 但允许收缩:窄窗口(右栏可被压到 ~270px)时先压缩搜索框,
              不让 chip 组被 overflow-hidden 裁掉(PR #1102 review)。 */
-                <div
-                  className="flex h-8 min-w-0 basis-[200px] items-center gap-2 rounded-full px-3"
-                  style={{
-                    backgroundColor: 'var(--surface-elevated)',
-                    border: '1px solid var(--border-default)',
-                  }}
-                >
+                <div className="flex h-8 min-w-0 basis-[200px] items-center gap-2 rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3">
                   <Search
                     size={14}
                     className="shrink-0"
@@ -1541,12 +1550,7 @@ export function UnifiedModelList({
                               'bg-[var(--surface-hover)] ring-2 ring-[var(--focus-ring)]',
                           )}
                         >
-                          <span
-                            className="min-w-0 truncate text-14 font-medium"
-                            style={{ color: 'var(--text-disabled)' }}
-                          >
-                            {localizedModelName(rep.name, t)}
-                          </span>
+                          {renderModelName(row, 'var(--text-disabled)')}
                           {/* 来源分组注记:启用后会回到哪个组,别让用户猜。 */}
                           <span
                             className="shrink-0 text-12"

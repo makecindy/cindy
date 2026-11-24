@@ -12,8 +12,10 @@ import {
   buildInputHandoffNoticeText,
   createDesktopConfirmNotifier,
   desktopConfirmSubject,
+  ghostGrantConfirmSubject,
   resolveFeishuNoticeTarget,
 } from '../desktopConfirmNotice.js';
+import { GhostGrantConfirmBridge, type GhostGrantLane } from '../../cindy-brain/ghostGrantConfirmBridge';
 import { setMainLocale } from '../../i18n.desktop';
 
 // 断言中文控制文案:显式锁定界面语言,结束后还原默认。
@@ -152,5 +154,28 @@ describe('desktop confirm notice copy follows the interface language', () => {
       '🔔 The “Submit GitHub Issue” confirmation card is waiting for your confirmation in Cindy Desktop. It will be cancelled automatically if it times out; to continue, go to Cindy Desktop.',
     );
     expect(buildInputHandoffNoticeText('Deploy')).toBe('🔐 Your input is needed: Deploy · Open in Cindy');
+  });
+});
+
+// 复盘(2026-11):Agent 取刚生成图片的本机路径时,飞书只收到「插件文件授权」提醒,主人看不懂
+// 在确认什么。经真实确认桥触发提醒,reveal_path 必须按实际事情称呼,其余 lane 保持原称呼。
+describe('文件授权确认桥的 IM 提醒按 lane 称呼卡片', () => {
+  it.each<[GhostGrantLane, string, string]>([
+    ['reveal_path', '图片等媒体文件在电脑上的位置', '插件文件授权'],
+    ['attachments', '插件文件授权', '媒体文件在电脑上的位置'],
+  ])('%s → 提醒含「%s」且不含「%s」', async (lane, expected, absent) => {
+    const send = vi.fn(async (_openId: string, _markdown: string) => ({}));
+    const notify = createDesktopConfirmNotifier({ getFeishuOpenId: async () => 'ou_1', sendFeishuText: send });
+    const bridge = new GhostGrantConfirmBridge({
+      broadcast: () => {},
+      onDesktopOnlyConfirmPending: (sessionId, pendingLane) =>
+        void notify(sessionId, desktopConfirmSubject(ghostGrantConfirmSubject(pendingLane))),
+    });
+    void bridge.request('s1', { ghostId: 'cindy-media', ghostName: 'Cindy Media', lane, items: [] });
+    await flush();
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0][1]).toContain(expected);
+    expect(send.mock.calls[0][1]).not.toContain(absent);
+    bridge.cleanupAll('session_closed');
   });
 });

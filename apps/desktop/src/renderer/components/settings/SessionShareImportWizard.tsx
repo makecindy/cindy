@@ -27,6 +27,7 @@ import { emitRefresh } from '@/lib/sessionsBus';
 import { extractIpcError } from '@/utils/ipcError';
 import { getDraft, getFastModeForModel } from '@/state/newMakerDraft';
 import appI18n from 'i18next';
+import { Checkbox } from '@/components/ui/checkbox';
 
 const log = createLogger('SessionShareImportWizard');
 
@@ -383,15 +384,13 @@ export function SessionShareImportWizard({
                       {t('sessionShare.import.pickWorkdir')}
                     </Button>
                   </div>
-                  {/* 与 confirm-dialog 的 checkbox 约定一致:原生 input + size-3.5 +
-                      accent 主题 token(项目没有统一 Checkbox 组件,这是现行范式)。 */}
                   <label className="mt-1 flex cursor-pointer select-none items-start gap-2">
-                    <input
-                      type="checkbox"
+                    <Checkbox
+                      data-settings-search-action="Chooses whether an imported task runs in its own worktree"
                       checked={useWorktree}
                       onChange={(e) => setUseWorktree(e.target.checked)}
                       disabled={busy}
-                      className="mt-[3px] size-3.5 cursor-pointer accent-[var(--confirm-btn-primary-bg)]"
+                      className="mt-0.5"
                     />
                     <span className="flex flex-col gap-0.5">
                       <span className="text-sm text-[var(--confirm-title)]">

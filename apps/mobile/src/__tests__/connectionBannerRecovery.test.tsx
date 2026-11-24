@@ -5,11 +5,14 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { useDelayedConnectionNotice } from '@/components/ConnectionNoticeOverlay';
 import { ConnectionBanner, useShowConnectionBanner } from '@/components/ConnectionBanner';
 import { localNetworkStore } from '@/device-link/localNetworkStatus';
+import { registerMobileDeviceRejoin } from '@/device-link/deviceRejoin';
+import { setActiveSelfHostedRelay } from '@/device-link/selfHostedRelayRouting';
 import { i18n } from '@/i18n';
 import type { DeviceLinkStatus } from '@cindy/device-link';
 
 vi.mock('expo-router', () => ({ useFocusEffect: () => {} }));
 vi.mock('react-native', () => ({
+  Alert: { alert: () => {} },
   ActivityIndicator: () => null,
   View: ({ children }: { children: ReactNode }) => createElement('div', null, children),
   StyleSheet: { create: (s: unknown) => s },
@@ -96,6 +99,40 @@ it('restores history retry after the computer reconnects despite a retained offl
   expect(button).not.toBeNull();
   act(() => button!.click());
   expect(onSync).toHaveBeenCalledOnce();
+});
+
+// Unit regression (2026-11-23 removed-phone rejoin): the real banner offers 「重新加入」 for this phone's own removal on the
+// official network instead of a resync; a self-hosted relay's removal keeps its re-pairing hint and offers no rejoin.
+it('offers rejoin for this phone’s removal on the official network only', async () => {
+  const run = vi.fn(async () => ({ agentNet: 'rejoined' as const }));
+  const dispose = registerMobileDeviceRejoin(run);
+  const show = () => {
+    act(() => root.render(createElement(ConnectionBanner, {
+      status: 'stopped', issue: { kind: 'device-removed', at: Date.now() }, loading: false, error: null,
+      lastSyncedAt: null, onSync: () => {},
+    })));
+    advance(3_000);
+    return {
+      copy: container.querySelector('[data-testid="connection.copy"]')?.textContent,
+      rejoin: container.querySelector<HTMLButtonElement>('[data-testid="connection.rejoinButton"]'),
+    };
+  };
+  try {
+    const official = show();
+    expect(official.copy).toBe(i18n.t('deviceLink.deviceRemovedHint'));
+    expect(container.querySelector('[data-testid="connection.syncButton"]')).toBeNull();
+    // The tap's attempt settles in a few microtasks (busy on, handler, busy off); keep all of it inside act.
+    await act(async () => { official.rejoin!.click(); for (let i = 0; i < 5; i++) await Promise.resolve(); });
+    expect(run).toHaveBeenCalledOnce();
+
+    setActiveSelfHostedRelay({ relayId: 'relay-1', name: 'Home', baseUrl: 'https://relay.example.test', credential: 'relay-credential', signing: null });
+    const selfHosted = show();
+    expect(selfHosted.copy).toBe(i18n.t('relay.issue.removedHint'));
+    expect(selfHosted.rejoin).toBeNull();
+  } finally {
+    act(() => dispose());
+    setActiveSelfHostedRelay(null);
+  }
 });
 
 it('keeps repeated online task loads quiet, even when content takes several seconds', () => {

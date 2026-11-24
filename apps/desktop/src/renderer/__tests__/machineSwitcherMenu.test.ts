@@ -371,7 +371,7 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(projectsSectionSource).not.toMatch(/if \(\s*allProjectKeysForOrder\.length === 0/);
     // 连接中 / 全屏 loading-error 不再把范围标题一起摘掉。设备目录 error 不展示
     // 占位提示，因此不属于这里的标题覆盖分支。
-    const connectingIdx = sidebarUpperSource.indexOf('selectedMachineConnecting ?');
+    const connectingIdx = sidebarUpperSource.indexOf('selectedMachinePlaceholder ?');
     expect(connectingIdx).toBeGreaterThanOrEqual(0);
     expect(sidebarUpperSource.slice(connectingIdx, connectingIdx + 900)).toContain(
       '<MainListScopeHeader',
@@ -384,7 +384,7 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
       'remoteSessionBootstrapFailures.length > 0 && !hasVisibleSidebarContent',
       "remoteDeviceDirectoryStatus === 'loading' && !hasVisibleSidebarContent",
       'remoteSessionBootstrapLoadingDevices.length > 0 && !hasVisibleSidebarContent',
-      'selectedMachineConnecting ?',
+      'selectedMachinePlaceholder ?',
     ];
     for (const marker of placeholderMarkers) {
       const idx = sidebarUpperSource.indexOf(marker);

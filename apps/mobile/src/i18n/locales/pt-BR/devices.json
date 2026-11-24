@@ -32,7 +32,7 @@
     "notFound": "Este dispositivo não está mais na sua conta.",
     "deleteDevice": "Excluir dispositivo",
     "deleteTitle": "Excluir {{name}}?",
-    "deleteMessage": "Este dispositivo será removido da sua conta e o acesso remoto será desconectado. As sessões e os arquivos dele serão mantidos. Entre novamente nesse dispositivo para adicioná-lo de novo.",
+    "deleteMessage": "Este dispositivo será removido da sua conta e o acesso remoto será desconectado. As sessões e os arquivos dele serão mantidos. Toque em “Reintegrar” nesse dispositivo para recuperá-lo.",
     "deleteFailed": "Não foi possível excluir o dispositivo.",
     "deleteOnline": "Este servidor ainda não permite remover dispositivos online. Tente novamente após a atualização do serviço.",
     "deleteRejectedWhileOffline": "Não foi possível excluir o dispositivo: o servidor ainda o lista como online, embora apareça como offline aqui.",

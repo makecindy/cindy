@@ -282,6 +282,43 @@ describe('codexHttpBridge', () => {
     expect(await readRpcResponse(execution)).toMatchObject({ result: { content: [{ text: 'bot-parent' }] } });
   });
 
+  // Transport regression: ordinary helper tests do not pass a startup task
+  // into a server factory. The first cindy initialize must capture the same
+  // workdir that its subsequent registered task uses.
+  it('builds the cindy server from the bound startup task before Codex registers its thread', async () => {
+    const create = vi.fn((ctx?: import('@cindy/mcps').LiziMcpSessionContext) => {
+      const server = createTestServer();
+      if (ctx) server.tool('task_catalog', {}, async () => ({
+        content: [{ type: 'text' as const, text: ctx.workingDir }],
+      }));
+      return server;
+    });
+    bridge = await startCodexHttpBridge({ serverFactories: { cindy: create }, logger: noopLogger() });
+    const current = bridge;
+    const context = { agentKind: 'codex', sessionId: 'local-task', sessionInstanceId: 'instance', workingDir: '/task' };
+    const url = withMcpRouteIdentity(current.url('cindy'), { sessionInstanceId: 'instance' });
+    const headers: Record<string, string> = {
+      authorization: `Bearer ${current.token}`, accept: 'application/json, text/event-stream',
+      'content-type': 'application/json',
+    };
+    const request = (id: number, method: string, params: unknown) => fetch(url, {
+      method: 'POST', headers, body: JSON.stringify({ jsonrpc: '2.0', id, method, params }),
+    });
+    const initialized = await current.withDiscoveryContext(context, () => request(1, 'initialize', {
+      protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'plugin-startup-test', version: '1' },
+    }));
+    headers['mcp-session-id'] = initialized.headers.get('mcp-session-id')!;
+    await initialized.text();
+    expect(create).toHaveBeenCalledWith(context);
+    current.registerThreadContext('registered-thread', context);
+    expect(await readRpcResponse(await request(2, 'tools/list', {}))).toMatchObject({
+      result: { tools: expect.arrayContaining([expect.objectContaining({ name: 'task_catalog' })]) },
+    });
+    expect(await readRpcResponse(await request(3, 'tools/call', {
+      name: 'task_catalog', arguments: {}, _meta: { threadId: 'registered-thread' },
+    }))).toMatchObject({ result: { content: [{ text: '/task' }] } });
+  });
+
   it.each(['codex', 'claude-code'] as const)('serves live remote introspection and keeps Bot tasks scoped over the %s helper route', async (agentKind) => {
     let surface: 'bot' | 'default' = 'bot';
     const start = vi.fn(async () => ({ ok: true as const, agents: [{ id: 'remote-task' }], unavailableDevices: [] }));
@@ -1564,10 +1601,17 @@ describe('codexHttpBridge', () => {
     });
   });
 
-  it('blocks a tool call using the policy frozen on its Codex thread', async () => {
+  // #4932: the HTTP tools/call result for a disabled Browser on a local Codex
+  // thread must explain how to continue in that task. The existing SSH case
+  // covers the frozen policy but cannot catch Browser's distinct recovery path.
+  // Unit tier: one registered thread and an in-process SDK tool server.
+  it.each([
+    ['ssh', 'start a new session'],
+    ['browser', 'then retry in this task'],
+  ])('blocks a disabled %s call and returns its recovery guidance', async (pluginId, recovery) => {
     bridge = await startCodexHttpBridge({
       serverFactories: { lizi_test: createTestServer },
-      pluginIdByServerName: { lizi_test: 'ssh' },
+      pluginIdByServerName: { lizi_test: pluginId },
       logger: noopLogger(),
     });
     bridge.registerThreadContext('thread-disabled', {
@@ -1576,7 +1620,7 @@ describe('codexHttpBridge', () => {
       sessionInstanceId: 'instance-disabled',
       workingDir: '/repo',
       vendorOptions: {
-        [CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY]: ['ssh'],
+        [CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY]: [pluginId],
       },
     });
 
@@ -1625,7 +1669,7 @@ describe('codexHttpBridge', () => {
     expect(await readRpcResponse(callResp)).toMatchObject({
       result: {
         isError: true,
-        content: [{ type: 'text', text: expect.stringContaining('ssh') }],
+        content: [{ type: 'text', text: expect.stringMatching(new RegExp(`"${pluginId}".*${recovery}`)) }],
       },
     });
 
@@ -1643,7 +1687,7 @@ describe('codexHttpBridge', () => {
     expect(await readRpcResponse(withoutThreadId)).toMatchObject({
       result: {
         isError: true,
-        content: [{ type: 'text', text: expect.stringContaining('ssh') }],
+        content: [{ type: 'text', text: expect.stringContaining(pluginId) }],
       },
     });
   });

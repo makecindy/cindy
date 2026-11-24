@@ -19,8 +19,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import * as Dialog from '@radix-ui/react-dialog';
-import { SelectParts as Select } from '@/components/ui/select';
-import { X, CloudUpload, Globe, Users, Lock, RefreshCw, CircleAlert, Check, ChevronDown, ChevronUp } from 'lucide-react';
+import { X, CloudUpload, Globe, Users, Lock, RefreshCw, CircleAlert } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
@@ -313,86 +312,6 @@ function TextareaInput({
         readOnly && 'cursor-default opacity-70',
       )}
     />
-  );
-}
-
-export function SelectInput({
-  value,
-  onChange,
-  disabled,
-  options,
-  placeholder,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  disabled?: boolean;
-  options: Array<{ value: string; label: string; disabled?: boolean }>;
-  placeholder?: string;
-}) {
-  // Radix Select:表单内下拉的业界标准实现。相比手搓 Popover,它 portal 到 body
-  // 逃出弹窗 transform(-translate)造成的裁剪,且自带在 modal 弹窗里可用的滚动视口
-  // (滚轮 + 上下滚动按钮 + 键盘导航),不受 Dialog 滚动锁影响。
-  return (
-    <Select.Root value={value} onValueChange={onChange} disabled={disabled}>
-      <Select.Trigger
-        className={cn(
-          'flex h-10 w-full items-center justify-between gap-2 rounded-full border px-3 text-sm',
-          'bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
-          'border-[var(--settings-input-border)]',
-          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-          'transition-colors data-[disabled]:cursor-not-allowed data-[disabled]:opacity-60',
-          'data-[placeholder]:text-[var(--settings-input-placeholder)]',
-        )}
-      >
-        <span className="min-w-0 truncate text-left">
-          <Select.Value placeholder={placeholder} />
-        </span>
-        <Select.Icon asChild>
-          <ChevronDown size={14} className="shrink-0 text-[var(--settings-section-desc)]" />
-        </Select.Icon>
-      </Select.Trigger>
-      <Select.Portal>
-        <Select.Content
-          position="popper"
-          side="bottom"
-          align="start"
-          sideOffset={4}
-          className={cn(
-            'w-[var(--radix-select-trigger-width)] overflow-hidden rounded-xl border p-1.5',
-            'max-h-[min(15rem,var(--radix-select-content-available-height))]',
-            'border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]',
-          )}
-        >
-          <Select.ScrollUpButton className="flex h-5 items-center justify-center text-[var(--settings-section-desc)]">
-            <ChevronUp size={14} />
-          </Select.ScrollUpButton>
-          <Select.Viewport>
-            {options.map((option) => (
-              <Select.Item
-                key={option.value}
-                value={option.value}
-                disabled={option.disabled}
-                className={cn(
-                  'flex w-full cursor-pointer select-none items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm outline-none',
-                  'text-[var(--msg-assistant-text)] transition-colors',
-                  'data-[disabled]:cursor-not-allowed data-[disabled]:opacity-60',
-                )}
-              >
-                <span className="flex h-4 w-4 shrink-0 items-center justify-center">
-                  <Select.ItemIndicator>
-                    <Check size={14} strokeWidth={2.25} />
-                  </Select.ItemIndicator>
-                </span>
-                <Select.ItemText>{option.label}</Select.ItemText>
-              </Select.Item>
-            ))}
-          </Select.Viewport>
-          <Select.ScrollDownButton className="flex h-5 items-center justify-center text-[var(--settings-section-desc)]">
-            <ChevronDown size={14} />
-          </Select.ScrollDownButton>
-        </Select.Content>
-      </Select.Portal>
-    </Select.Root>
   );
 }
 

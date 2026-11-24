@@ -9533,6 +9533,26 @@ describe('CodexAgent MCP thread context hooks', () => {
     await b.close(); await agent.dispose();
   });
 
+  // Regression (2026-11-22, teammate iMessage lane): a subscription-account session's host key carries
+  // the account, the writer check did not, so the session's own host looked like another writer and every
+  // explicit route apply closed and relinked an unchanged session (provider-thread-relink, same provider).
+  it('treats the subscription account host of the same session as the target, not another writer', async () => {
+    const profile: NativeSubscriptionAccount = { id: 'pooled', configDir: '/fixture/.codex-pooled',
+      assertCurrent() {}, readState: async () => ({ authenticated: true }) };
+    const deps = createDeps();
+    deps.auth.getAuthEnv = async options => ({ CODEX_HOME: options?.nativeSubscriptionAccount?.configDir ?? '/fixture/legacy' });
+    const agent = new CodexAgent(deps);
+    try {
+      const handle = await agent.startSession({ sessionId: 'lane', providerId: 'openai', model: 'gpt-5.4', workingDir: '/repo', [NATIVE_SUBSCRIPTION_ACCOUNT]: profile });
+      createdTransports[0].setMockResponse('thread/loaded/list', { result: { data: [handle.id], nextCursor: null } });
+      const query = { sessionId: 'lane', threadId: handle.id, model: 'gpt-5.4', providerId: 'openai' };
+      expect(await agent.requiresCodexThreadHostTransfer({ ...query, [NATIVE_SUBSCRIPTION_ACCOUNT]: profile })).toBe(false);
+      // A route without that account still has to move the writer.
+      expect(await agent.requiresCodexThreadHostTransfer(query)).toBe(true);
+      await handle.close();
+    } finally { await agent.dispose(); }
+  });
+
   it('propagates account host shutdown failure before another account can resume its rollout', async () => {
     const agent = new CodexAgent(createDeps({}, { isCodexAccountProvider: (id) => id === 'account-a' }));
     const handle = await agent.startSession({ sessionId: 'account-close-failure', providerId: 'account-a', model: 'gpt-5.4', workingDir: '/repo' });
@@ -18881,6 +18901,8 @@ describe('CodexAgent MCP thread context hooks', () => {
     if (scenario === 'user') expect(JSON.stringify(steers)).toContain('User denied this tool call via Cindy');
     if (scenario === 'system') {
       expect(JSON.stringify(steers)).toContain('Cindy could not approve');
+      // Native Codex calls every decline "user rejected"; the steer must say nobody answered in time.
+      expect(JSON.stringify(steers)).toContain('the user did not reject it');
       expect(JSON.stringify(steers)).not.toContain('User denied');
     }
     expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(1);

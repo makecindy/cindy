@@ -94,6 +94,7 @@ vi.mock('../runners/_shared', () => ({
 }));
 
 import { MakerScheduleRunner } from '../runner.desktop';
+import { resolveTeammateScheduleModel } from '../teammateScheduleModel';
 import { __testing as projectAutomation } from '../project-automation-loader';
 import { scheduleCreateToRow, schedulePatchToRow, scheduleToCamel } from '../../localDb/mapper';
 import { applyScheduledModelSelection, createScheduledModelScope, resolveScheduledModelSelection } from '../../maker-ipc/scheduledModelSelection';
@@ -254,6 +255,7 @@ function createRunnerHarness(
     sdkSessionId?: string;
   } | null = null,
   opts: {
+    resolveInheritedModel?: ConstructorParameters<typeof MakerScheduleRunner>[0]['resolveInheritedModel'];
     bootstrapSession?: ConstructorParameters<typeof MakerScheduleRunner>[0]['bootstrapSession'];
     sessionAlive?: boolean;
     acquirePendingAgentSwitch?: ConstructorParameters<typeof MakerScheduleRunner>[0]['acquirePendingAgentSwitch'];
@@ -279,6 +281,7 @@ function createRunnerHarness(
     >[0]['resolveDefaultModelRoute'];
     getSessionMeta?: () => Promise<typeof meta>;
     admitPluginEngine?: ConstructorParameters<typeof MakerScheduleRunner>[0]['admitPluginEngine'];
+    modelGroupStart?: ConstructorParameters<typeof MakerScheduleRunner>[0]['modelGroupStart'];
   } = {},
 ): RunnerHarness {
   const createSession = vi.fn(async () => h.session);
@@ -300,6 +303,7 @@ function createRunnerHarness(
   const runner = new MakerScheduleRunner({
     maker,
     bootstrapSession: opts.bootstrapSession,
+    resolveInheritedModel: opts.resolveInheritedModel,
     getDb: () => ({}) as never,
     notifier,
     logger: createLogger(),
@@ -318,6 +322,7 @@ function createRunnerHarness(
     resolveRouteCopyCapabilities: opts.resolveRouteCopyCapabilities,
     resolveDefaultModelRoute: opts.resolveDefaultModelRoute,
     ...(opts.admitPluginEngine ? { admitPluginEngine: opts.admitPluginEngine } : {}),
+    ...(opts.modelGroupStart ? { modelGroupStart: opts.modelGroupStart } : {}),
   });
   return { runner, createSession, closeSession };
 }
@@ -356,6 +361,86 @@ describe('MakerScheduleRunner model selection', () => {
   // Plugin engines (docs/plans/acp-plugin-bridge.md, 2026-11-19), unit through runner.fire. A fresh
   // run on a plugin engine must start that engine with its own model and level, never be checked
   // against or rerouted through the built-in catalog, and fail plainly when the plugin is turned off.
+  // model-groups.md §6.3 (2026-11-22: a mode belongs to the task), unit through runner.fire: a run that creates a
+  // new task picks its source from the mode and hands the token to the ordinary task startup, which settles the
+  // pick on the first dispatched turn; a run sent to an existing task does not pick (that task follows its own
+  // mode). Gap: scheduled runs only knew the saved model. Minimal input: a fresh Codex schedule saved on one model
+  // whose mode picks another, and the same schedule bound to a live task. Failure: the new task starts on the saved
+  // model or without the token, or a bound run re-picks.
+  describe('model group schedules', () => {
+    const picked = (token = 'tok-1') => ({
+      prepare: vi.fn(async () => ({
+        route: { agentKind: 'codex' as const, model: 'gpt-picked', providerId: 'openai-work', agentDeviceId: null },
+        token,
+      })),
+      canRoute: vi.fn(async () => true),
+      exists: vi.fn(async () => true),
+    });
+
+    it('starts the new task on the model the mode picked and hands the token to task startup', async () => {
+      const h = createSessionHarness();
+      const modelGroupStart = picked();
+      const harness = createRunnerHarness(h, { agentKind: 'codex', model: 'gpt-saved', workDir: '/work' }, {
+        modelGroupStart, resolveModelSelection: async (choice) => choice,
+      });
+      const opts = await fireToCompletion(harness, h, baseSchedule({
+        agentKind: 'codex', modelAgentKind: 'codex', model: 'gpt-saved', modelGroup: 'daily',
+      })) as { model: string; modelGroupStart?: string };
+      expect(modelGroupStart.prepare).toHaveBeenCalledWith('daily', { keptModelName: 'gpt-saved', localOnly: false });
+      expect(opts.model).toBe('gpt-picked');
+      expect(opts.modelGroupStart).toBe('tok-1');
+    });
+
+    it('keeps the saved model when the mode has nothing to pick, and still hands the token over for the note', async () => {
+      const h = createSessionHarness();
+      const modelGroupStart = { prepare: vi.fn(async () => ({ token: 'tok-kept' })), canRoute: vi.fn(async () => false), exists: vi.fn(async () => true) };
+      const harness = createRunnerHarness(h, { agentKind: 'codex', model: 'gpt-saved', workDir: '/work' }, {
+        modelGroupStart, resolveModelSelection: async (choice) => choice,
+      });
+      const opts = await fireToCompletion(harness, h, baseSchedule({
+        agentKind: 'codex', modelAgentKind: 'codex', model: 'gpt-saved', modelGroup: 'daily',
+      })) as { model: string; modelGroupStart?: string };
+      expect(opts.model).toBe('gpt-saved');
+      expect(opts.modelGroupStart).toBe('tok-kept');
+    });
+
+    // PR #11881 review r4661455493: a run sent to a task that still exists re-applied the saved fallback model
+    // as an explicit choice, switching the task off the source its mode picked (and failing if the fallback is
+    // gone). Minimal input: a mode schedule bound to a live task whose saved model differs from the task's.
+    // Failure: the run resolves or switches to the saved model; with the mode deleted it must still use it.
+    async function fireBound(exists: boolean) {
+      const h = createSessionHarness();
+      const modelGroupStart = { ...picked(), exists: vi.fn(async () => exists) };
+      const selections: unknown[] = [];
+      const harness = createRunnerHarness(h, { agentKind: 'codex', model: 'gpt-current', workDir: '/work' }, {
+        modelGroupStart,
+        sessionAlive: true,
+        resolveModelSelection: async (choice) => choice,
+        acquirePendingAgentSwitch: async (_id, _signal, selection) => {
+          selections.push(selection);
+          const release = () => {};
+          return selection ? { release, selection } : release;
+        },
+      });
+      await fireToCompletion(harness, h, baseSchedule({
+        agentKind: 'codex', modelAgentKind: 'codex', model: 'gpt-fallback', modelGroup: 'daily', targetSessionId: h.session.id,
+      }));
+      return { modelGroupStart, selections };
+    }
+
+    it('keeps the task on its own source when the run goes to a task that still exists', async () => {
+      const { modelGroupStart, selections } = await fireBound(true);
+      expect(modelGroupStart.prepare).not.toHaveBeenCalled();
+      expect(selections).not.toContainEqual(expect.objectContaining({ model: 'gpt-fallback' }));
+    });
+
+    it('runs the saved model on an existing task once the mode is deleted', async () => {
+      const { modelGroupStart, selections } = await fireBound(false);
+      expect(modelGroupStart.prepare).not.toHaveBeenCalled();
+      expect(selections).toContainEqual(expect.objectContaining({ model: 'gpt-fallback' }));
+    });
+  });
+
   describe('plugin engine schedules', () => {
     const ENGINE = 'acp-plugin:_ns__local__dsh-acp:dsh';
     const pluginSchedule = () => baseSchedule({ agentKind: 'acp', modelAgentKind: 'acp', providerId: ENGINE,
@@ -488,6 +573,20 @@ describe('MakerScheduleRunner model selection', () => {
     expect(harness.createSession).not.toHaveBeenCalled();
     expect(h.setModel).not.toHaveBeenCalled();
     expect(h.send).not.toHaveBeenCalled();
+  });
+
+  // PR #11881 review r4653462645: saving (create, promote to project, import) required the saved fallback model
+  // even when the mode itself picks a usable source. Minimal input: a mode schedule whose saved model no longer
+  // resolves. Failure: save rejected although runs would use the mode; or a mode with nothing usable admitted.
+  it('admits a mode that picks a usable source even when the saved fallback model is gone', async () => {
+    const resolveModelSelection = vi.fn(async () => { throw new Error('[MODEL_SELECTION_UNAVAILABLE] removed'); });
+    const modelGroupStart = { prepare: vi.fn(), canRoute: vi.fn(async () => true), exists: vi.fn(async () => true) };
+    const harness = createRunnerHarness(createSessionHarness(), null, { resolveModelSelection, modelGroupStart });
+    const schedule = baseSchedule({ agentKind: 'codex', modelAgentKind: 'codex', model: 'gone', providerId: 'removed', modelGroup: 'daily' });
+    await expect(harness.runner.validateModelSelection(schedule)).resolves.toBeUndefined();
+    expect(resolveModelSelection).not.toHaveBeenCalled();
+    modelGroupStart.canRoute.mockResolvedValueOnce(false);
+    await expect(harness.runner.validateModelSelection(schedule)).rejects.toThrow('modelAgentDeviceId');
   });
 
   it('does not require a live catalog for unrelated edits or legacy followed models', async () => {
@@ -2575,4 +2674,81 @@ describe('MakerScheduleRunner model selection', () => {
       expect(mocks.setSessionFastMode).not.toHaveBeenCalled();
     });
   });
+
+// User decision 2026-11-16 / unit: previous model tests only covered saved snapshots.
+// Minimum failure: opt-in review with an old persistent task after the buddy changes model.
+describe('Bot project schedule model inheritance', () => {
+  const review = (overrides: Partial<Schedule> = {}) => baseSchedule({ source: 'project',
+    projectConfigId: 'teammate-memory-review', model: undefined, ...overrides });
+  it.each(['teammate-memory-review', 'future-default-task'])('reads A then B for %s, and respects explicit C', async (projectConfigId) => {
+    let model = 'model-a';
+    const primaryModel = vi.fn(async () => ({ harness: 'codex' as const, model, providerId: 'openai', effort: '', fastMode: false }));
+    const resolve = (schedule: Schedule) => resolveTeammateScheduleModel(schedule, {
+      isOwnProject: async () => true, follows: async () => true, primaryModel,
+    });
+    const h = createSessionHarness();
+    const harness = createRunnerHarness(h, null, { resolveInheritedModel: resolve, resolveModelSelection: async choice => choice });
+    for (const next of ['model-a', 'model-b']) {
+      model = next;
+      h.send.mockClear();
+      await fireToCompletion(harness, h, review({ projectConfigId }));
+      expect(harness.createSession).toHaveBeenLastCalledWith(expect.objectContaining({ model: next, providerId: 'openai', agentKind: 'codex' }));
+    }
+    h.send.mockClear();
+    await fireToCompletion(harness, h, review({ projectConfigId, model: 'model-c', agentKind: 'codex', providerId: 'openai' }));
+    expect(harness.createSession).toHaveBeenLastCalledWith(expect.objectContaining({ model: 'model-c' }));
+    expect(primaryModel).toHaveBeenCalledTimes(2);
+  });
+
+  it('resolves the full current route before acquiring a persistent task switch', async () => {
+    mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active', providerId: 'openai' });
+    const h = createSessionHarness();
+    const acquire = vi.fn(async (_id, _signal, selection) => ({ selection, release: vi.fn() }));
+    const harness = createRunnerHarness(h, { model: 'old-model', workDir: '/work', agentKind: 'codex' }, {
+      acquirePendingAgentSwitch: acquire,
+      resolveModelSelection: async choice => choice,
+      resolveInheritedModel: schedule => resolveTeammateScheduleModel(schedule, {
+        isOwnProject: async () => true, follows: async () => true,
+        primaryModel: async () => ({ harness: 'codex', model: 'new-model', providerId: 'openai', effort: 'high', fastMode: false, agentDeviceId: 'remote' }),
+      }),
+    });
+    await fireToCompletion(harness, h, review({ persistentSession: true, targetSessionId: 'scheduler-session' }));
+    expect(acquire).toHaveBeenCalledWith('scheduler-session', expect.any(AbortSignal), expect.objectContaining({
+      agentKind: 'codex', model: 'new-model', providerId: 'openai', agentDeviceId: 'remote', effort: 'high',
+    }));
+  });
+
+  // An ordinary project may use the same ID. Missing project files must keep its old defaults.
+  it('does not read buddy model metadata for an ordinary project with the same config ID', async () => {
+    const follows = vi.fn(async () => { throw new Error('project config was removed'); });
+    const primaryModel = vi.fn(async () => { throw new Error('not a buddy'); });
+    await expect(resolveTeammateScheduleModel(review(), {
+      isOwnProject: async () => false, follows, primaryModel,
+    })).resolves.toBeNull();
+    expect(follows).not.toHaveBeenCalled();
+    expect(primaryModel).not.toHaveBeenCalled();
+  });
+
+  it('keeps an unmarked Bot project task on its existing model defaults', async () => {
+    const primaryModel = vi.fn(async () => { throw new Error('must not read the Bot model'); });
+    await expect(resolveTeammateScheduleModel(review({ projectConfigId: 'custom-task' }), {
+      isOwnProject: async () => true, follows: async () => false, primaryModel,
+    })).resolves.toBeNull();
+    expect(primaryModel).not.toHaveBeenCalled();
+  });
+
+  it('fails before creating or sending when the primary route is missing or disabled', async () => {
+    const h = createSessionHarness();
+    const missing = createRunnerHarness(h, null, { resolveInheritedModel: async () => { throw new Error('buddy has no primary model'); } });
+    await expect(missing.runner.fire(review(), createFireContext())).rejects.toThrow('no primary model');
+    expect(missing.createSession).not.toHaveBeenCalled();
+    const disabled = createRunnerHarness(h, null, {
+      resolveInheritedModel: async () => ({ agentKind: 'codex', model: 'disabled', providerId: 'openai' }),
+      checkModelRoute: () => ({ kind: 'reject', reason: 'model-disabled' }) as never,
+    });
+    await expect(disabled.runner.fire(review(), createFireContext())).rejects.toThrow('schedule route unavailable');
+    expect(h.send).not.toHaveBeenCalled();
+  });
+});
+
 });
