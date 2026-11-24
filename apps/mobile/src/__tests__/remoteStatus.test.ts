@@ -62,6 +62,13 @@ describe('remoteStatus', () => {
     expect(describeRemoteError('REMOTE_WORKDIR_NOT_FOUND missing folder')).not.toBe(i18n.t('deviceLink.remoteError.notFound'));
   });
 
+  // #4841 (unit): the existing banner cases only cover stable codes, not a
+  // direct Expo Android DNS error that has bypassed the API wrapper.
+  it('describes Expo Android DNS failure in the connection banner language', () => {
+    const error = 'fetch failed: java.net.UnknownHostException: Unable to resolve host "relay.example.invalid": No address associated with hostname';
+    expect(describeRemoteError(error)).toBe(i18n.t('deviceLink.remoteError.transient'));
+  });
+
   it('preserves structured remote error codes for banner classification', () => {
     const text = formatRemoteError(new DeviceLinkError('ACCESS_REVOKED', 'access revoked by target device'));
     expect(text).toBe('[ACCESS_REVOKED] access revoked by target device');
