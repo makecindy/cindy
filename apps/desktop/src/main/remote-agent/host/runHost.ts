@@ -423,6 +423,8 @@ export interface RemoteAgentGroupRelayDeps {
     capability?: 'image.generate';
     exclude: ReadonlySet<string>;
     reserve?: boolean;
+    /** Direct G→M admission has its own authenticated controller quota. */
+    direct?: true;
     /**
      * 这个受邀者的转分享键(provider-sharing.md §4.3)：分享来的组内电脑只在它的主人同意过这个人时才选；
      * 没有时一律不选分享来的电脑。
@@ -773,9 +775,10 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
   let sweepTimer: ReturnType<typeof setInterval> | null = null;
   const key = (controller: string, id: string) => `${controller}\0${id}`;
   const limitDeviceOf = (controller: string) => parseProviderSharePeer(controller)?.deviceId ?? controller;
-  function usageByDevice(): Map<string, number> {
+  function usageByDevice(exclude?: Run): Map<string, number> {
     const counts = new Map<string, number>();
     for (const run of runs.values()) {
+      if (run === exclude) continue;
       // 清理完成前仍占名额，包括正在关闭的实例。
       if (run.closedAt !== undefined && !startingRuns.has(run)) continue;
       const device = limitDeviceOf(run.controller);
@@ -783,15 +786,40 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     }
     return counts;
   }
-  function assertRunCapacity(controller: string): void {
+  function runCapacityLimit(controller: string, exclude?: Run): 'DEVICE_LIMIT' | 'TOTAL_LIMIT' | undefined {
     const limits = deps.readLimits?.() ?? DEFAULT_REMOTE_AGENT_LIMITS;
-    const counts = usageByDevice();
+    const counts = usageByDevice(exclude);
     if ((counts.get(limitDeviceOf(controller)) ?? 0) >= limits.perDevice) {
-      fail('REMOTE_AGENT_BUSY', '[DEVICE_LIMIT] remote task limit for this device reached');
+      return 'DEVICE_LIMIT';
     }
     if ([...counts.values()].reduce((sum, count) => sum + count, 0) >= limits.total) {
-      fail('REMOTE_AGENT_BUSY', '[TOTAL_LIMIT] remote task limit for the provider computer reached');
+      return 'TOTAL_LIMIT';
     }
+  }
+  function assertRunCapacity(controller: string): void {
+    const limit = runCapacityLimit(controller);
+    if (limit) fail('REMOTE_AGENT_BUSY', limit === 'DEVICE_LIMIT'
+      ? '[DEVICE_LIMIT] remote task limit for this device reached'
+      : '[TOTAL_LIMIT] remote task limit for the provider computer reached');
+  }
+  /** A reconnect replaces only its own settled, idle instance. Never reclaim a
+   * different session/relay scope or let a closing native process stop counting. */
+  async function prepareRunCapacity(controller: string, payload: RemoteAgentOpenPayload, assertAllowed: () => void): Promise<void> {
+    if (!runCapacityLimit(controller)) return;
+    const hostSessionId = hostSessionIdFor(guestScopeOf(controller, payload.relay), payload.sessionId);
+    await withShadowLock(hostSessionId, async () => {
+      for (const other of runs.values()) {
+        assertAllowed();
+        if (other.controller !== controller || other.sessionId !== payload.sessionId || other.relayKey !== payload.relay
+          || other.closedAt !== undefined || other.closing || startingRuns.has(other) || busyForReclaim(other)) continue;
+        // Lowered limits can leave this host already above its new ceiling.
+        // Closing this instance must actually make room for its replacement.
+        if (runCapacityLimit(controller, other)) break;
+        await finishRun(other, 'superseded', 'navigation');
+        break;
+      }
+    });
+    assertRunCapacity(controller);
   }
   const trustOf = (controller: string): RemoteAgentControllerTrust => deps.controllerTrust?.(controller) ?? 'owner';
   /** 按控制端分开存放的目录名(影子工作区、附件与受邀者目录)。 */
@@ -3818,6 +3846,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
             available: deps.isAgentAvailable(kind) && (!guest || GUEST_SUPPORTED_AGENTS.has(kind)),
           })),
           maxRuns: limits.perDevice,
+          runCapacityAvailable: runCapacityLimit(controller) === undefined,
           idleReclaimMinutes: limits.idleMinutes ?? 0,
           uploadChunkBytes: REMOTE_AGENT_UPLOAD_CHUNK_BYTES,
           maxPayloadBytes: REMOTE_AGENT_MAX_PAYLOAD_BYTES,
@@ -3913,6 +3942,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         return {};
       }
       case 'open': {
+        const openOwner = deps.captureOwner();
         const existing = runs.get(key(controller, request.runId));
         if (existing) {
           discardPayload(controller, request.payload);
@@ -3968,7 +3998,6 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           if (reshareKey) fail('REMOTE_AGENT_RESHARE_NOT_ALLOWED', 'the owner of this computer has not agreed to this user');
           failProviderNotAllowed();
         }
-        assertRunCapacity(controller);
         if (trust === 'guest') {
           // 受邀者必须用虚拟工作区：本机 Agent 只看到会话目录内的路径，附加目录也映射在其中。
           if (payload.virtualWorkspace !== true) {
@@ -4085,31 +4114,38 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           reserved?.release();
           return {};
         }
-        // 查询供应商与续接归属期间主人可能已经撤回，而尚未登记的任务不会被 abortReshare 找到。
-        // 最后一次核对与 runs.set 之间不能 await；登记后撤回会走正常的任务收尾。
-        if (controllerTrust === 'guest' && relayKey && deps.reshare && !deps.reshare.allows(controller, reshareKey)) {
-          reserved?.release();
-          if (reshareKey) fail('REMOTE_AGENT_RESHARE_NOT_ALLOWED', 'the owner of this computer has not agreed to this user');
-          failProviderNotAllowed();
-        }
-        // 供应商查询/组分配有 await；最终检查与登记间不能再等待，防止并发 open 超额。
-        if (controllerTrust === 'guest' && !relayKey && deps.directGuestExecution
-          && (pluginEngine
-            ? deps.directGuestExecution.sessionDelegated(controller, payload.sessionId)
-              || !deps.directGuestExecution.sessionAllowed(controller, payload.sessionId)
-            : !deps.directGuestExecution.sessionAllowed(controller, payload.sessionId, builtinKindOf(request.agentKind)))) {
-          reserved?.release();
-          fail('REMOTE_AGENT_UNAVAILABLE', 'this shared task is no longer authorized');
-        }
-        try {
+        // Recheck after awaited provider/group work, before replacing an idle
+        // instance, and once more without awaits immediately before runs.set.
+        const assertOpenAllowed = () => {
+          if (disposed || !deps.isOwnerCurrent(openOwner) || !deps.isControllerAuthorized(controller)) {
+            fail('REMOTE_AGENT_UNAVAILABLE', 'remote agent host is no longer authorized');
+          }
+          if (controllerTrust === 'guest' && relayKey && deps.reshare && !deps.reshare.allows(controller, reshareKey)) {
+            if (reshareKey) fail('REMOTE_AGENT_RESHARE_NOT_ALLOWED', 'the owner of this computer has not agreed to this user');
+            failProviderNotAllowed();
+          }
+          if (controllerTrust === 'guest' && !relayKey && deps.directGuestExecution
+            && (pluginEngine
+              ? deps.directGuestExecution.sessionDelegated(controller, payload.sessionId)
+                || !deps.directGuestExecution.sessionAllowed(controller, payload.sessionId)
+              : !deps.directGuestExecution.sessionAllowed(controller, payload.sessionId, builtinKindOf(request.agentKind)))) {
+            fail('REMOTE_AGENT_UNAVAILABLE', 'this shared task is no longer authorized');
+          }
           // Admission may throw a specific pause error after the awaited group reservation.
-          // Nothing owns the reserved load until runs.set, so release it on either rejection path.
           if (pluginEngine
             ? !providerId || !deps.pluginEngines!.isOffered(providerId, controller, payload.options.model)
             : providerId && deps.providerAccess && !deps.providerAccess.isAllowed(providerId, controller, payload.options.model, payload.sessionId)) {
             failProviderNotAllowed();
           }
-          if (disposed) fail('REMOTE_AGENT_UNAVAILABLE', 'remote agent host has been disposed');
+        };
+        try {
+          // Authorization must succeed before retiring an old idle instance.
+          assertOpenAllowed();
+          await prepareRunCapacity(controller, payload, assertOpenAllowed);
+          if (runs.has(key(controller, request.runId))) { reserved?.release(); return {}; }
+          // Nothing owns the load until runs.set. Revalidate after close, then
+          // keep the final capacity check and registration synchronous.
+          assertOpenAllowed();
           assertRunCapacity(controller);
         } catch (error) {
           reserved?.release();
