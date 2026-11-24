@@ -694,6 +694,7 @@
     "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "Não foi possível compactar o contexto ao trocar de modelo porque esta conexão não permite usar o modelo anterior.",
     "MODEL_SELECTION_UNAVAILABLE": "O modelo selecionado não está mais disponível no provedor. Verifique a conexão em Configurações ou escolha outro modelo disponível.",
     "MODEL_CATALOG_UNCONFIRMED": "Não foi possível confirmar a lista de modelos. O modelo selecionado foi mantido. Atualize a lista de modelos e tente novamente.",
+    "SNAPSHOT_DISPATCH_INTENT_TIMEOUT": "Mensagem não enviada. O Cindy não conseguiu confirmar o registro de segurança a tempo.",
     "HARNESS_SWITCH_NOT_READY": "A troca de Harness não está pronta. Verifique os detalhes do erro e tente novamente quando o Harness estiver pronto.",
     "REMOTE_AGENT_GROUP_USAGE_LIMIT": "As contas disponíveis para este modelo atingiram o limite de uso. Troque de modelo ou continue quando a cota for renovada.",
     "REMOTE_AGENT_GROUP_UNAVAILABLE": "Nenhum computador no grupo do provedor pode executar esta tarefa agora. Eles podem estar offline, pausados, em espera ou sem este modelo. Verifique o grupo na página Acesso remoto e compartilhamento deste provedor no computador.",
