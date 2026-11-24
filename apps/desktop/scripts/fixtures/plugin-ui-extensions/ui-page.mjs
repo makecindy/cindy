@@ -95,7 +95,6 @@ export default {
   stubs: {
     'src/renderer/contexts/AuthContext': 'export const useAuth = () => ({ dataOwnerId: null }); export const useOptionalAuthDeviceId = () => null;',
     'src/renderer/lib/makerChatStore': 'export const makerChatStore = { subscribe: () => () => {}, getSnapshot: () => ({}) };',
-    'src/renderer/features/device-link/stickySessionOrigin': 'export const getStickySessionDeviceId = () => undefined;',
     'src/renderer/features/device-link/remoteProjectsStore': { partial: 'export const getSessionDeviceId = () => undefined;' },
   },
   cases: {

@@ -8,7 +8,6 @@ export default {
   notCovered: 'Live App iframe and Main/tool approval are verified by dedicated tests; this fixture supplies only installed metadata and local IPC snapshots',
   stubs: {
     'src/renderer/lib/makerChatStore': 'export const makerChatStore = { subscribe: () => () => {}, getSnapshot: () => ({}) };',
-    'src/renderer/features/device-link/stickySessionOrigin': 'export const getStickySessionDeviceId = () => undefined;',
     'src/renderer/features/device-link/remoteProjectsStore': 'export const getSessionDeviceId = () => undefined; export const remoteProjectsStore = { subscribe: () => () => {} };',
   },
   cases: { default: { about: 'Original message and tool result remain readable with plugin entry points and live native status' } },
