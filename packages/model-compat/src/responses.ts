@@ -47,6 +47,7 @@ function collectNativeToolSelectors(body: unknown) {
   const bare = new Map<string, NativeTool | null>();
   const groupedBare = new Map<string, NativeTool | null>();
   const namespaced = new Map<string, NativeTool | null>();
+  const historical = new Map<string, NativeTool | null>();
   const record = (catalog: Map<string, NativeTool | null>, key: string, tool: NativeTool) => {
     const previous = catalog.get(key);
     if (previous === undefined) catalog.set(key, tool);
@@ -54,16 +55,27 @@ function collectNativeToolSelectors(body: unknown) {
       catalog.set(key, null);
     }
   };
-  for (const group of collectResponsesToolGroups(body)) {
-    for (const tool of group) {
+  const groups = collectResponsesToolGroups(body).map(tools => ({ tools, live: true }));
+  if (isPlainObject(body) && Array.isArray(body.input)) {
+    for (const entry of body.input) {
+      if (isPlainObject(entry) && entry.type === 'tool_search_output' && Array.isArray(entry.tools)) {
+        groups.push({ tools: entry.tools, live: false });
+      }
+    }
+  }
+  for (const { tools, live } of groups) {
+    for (const tool of tools) {
       if (!isPlainObject(tool) || typeof tool.name !== 'string' || typeof tool.type !== 'string') continue;
       if (tool.type !== 'namespace') {
-        record(bare, tool.name, { type: tool.type, name: tool.name });
+        if (live) record(bare, tool.name, { type: tool.type, name: tool.name });
       } else if (Array.isArray(tool.tools)) {
         for (const child of tool.tools) {
           if (!isPlainObject(child) || typeof child.name !== 'string' || typeof child.type !== 'string') continue;
-          if (tool.name === 'functions') record(groupedBare, child.name, { type: child.type, name: child.name });
-          else record(namespaced, `${tool.name}__${child.name}`, { type: child.type, name: child.name, namespace: tool.name });
+          if (tool.name === 'functions') {
+            if (live) record(groupedBare, child.name, { type: child.type, name: child.name });
+          } else {
+            record(live ? namespaced : historical, `${tool.name}__${child.name}`, { type: child.type, name: child.name, namespace: tool.name });
+          }
         }
       }
     }
@@ -71,16 +83,20 @@ function collectNativeToolSelectors(body: unknown) {
   for (const [name, tool] of groupedBare) {
     if (!bare.has(name)) bare.set(name, tool);
   }
+  for (const [name, tool] of historical) {
+    if (!namespaced.has(name)) namespaced.set(name, tool);
+  }
   return { bare, namespaced };
 }
 
-function disambiguateNativeToolChoice(original: unknown, forwarded: unknown): unknown {
+function disambiguateNativeToolChoice(original: unknown, forwarded: unknown, loweredCustom: unknown): unknown {
   if (!isPlainObject(original) || !isPlainObject(forwarded)) return forwarded;
   const before = original.tool_choice;
   const after = forwarded.tool_choice;
   if (!isPlainObject(before) || !isPlainObject(after)) return forwarded;
   const originalTools = collectNativeToolSelectors(original);
-  const forwardedTools = collectNativeToolSelectors(forwarded);
+  // Search lowering serializes discovered declarations into a tool-result string.
+  const forwardedTools = collectNativeToolSelectors(loweredCustom);
   const select = (selector: unknown, lowered: unknown): unknown => {
     if (!isPlainObject(selector) || !isPlainObject(lowered) || 'namespace' in selector
       || (selector.type !== 'function' && selector.type !== 'custom') || typeof selector.name !== 'string') return lowered;
@@ -130,7 +146,7 @@ export function prepareResponsesCompatibility(body: unknown, policy: ResponsesCo
     ? rewriteRoutedNamespaceToolsForUpstream(search.body, custom.names, bareCustomNames, collectNamespaceCustomToolNames(body),
         body && typeof body === 'object' ? (body as { tool_choice?: unknown }).tool_choice : undefined)
     : {
-        body: custom.body !== body ? disambiguateNativeToolChoice(body, search.body) : search.body,
+        body: custom.body !== body ? disambiguateNativeToolChoice(body, search.body, custom.body) : search.body,
         aliases: new Map(), renamedWireNames: new Map<string, string>(), renamedKinds: new Map<string, 'function' | 'custom'>(),
       };
   // Native requests retain their declarations, but response restoration and schema lookup still

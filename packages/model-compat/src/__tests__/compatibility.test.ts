@@ -208,6 +208,18 @@ describe('request-owned Responses compatibility', () => {
     expect(outbound).toMatchObject({ tool_choice: { type, name, namespace: 'workspace' } });
   });
 
+  it.each([false, true])('disambiguates a native selector for a tool discovered only in search history (allowed=%s)', allowed => {
+    const adapter = createCodexResponsesCompatibilityAdapter();
+    const selector = { type: 'function', name: 'workspace__read' };
+    const outbound = adapter.adaptRequest({
+      tools: [{ type: 'custom', name: selector.name }],
+      input: [{ type: 'tool_search_output', tools: [{ type: 'namespace', name: 'workspace', tools: [{ type: 'function', name: 'read' }] }] }],
+      tool_choice: allowed ? { type: 'allowed_tools', tools: [selector] } : selector,
+    }, 10098);
+    const selected = { type: 'function', namespace: 'workspace', name: 'read' };
+    expect(outbound).toMatchObject({ tool_choice: allowed ? { type: 'allowed_tools', tools: [selected] } : selected });
+  });
+
   it.each(['application/json', 'text/event-stream'])('restores default functions custom calls as bare tools (%s)', async contentType => {
     const adapter = createCodexResponsesCompatibilityAdapter();
     adapter.adaptRequest({ tools: [
