@@ -2256,6 +2256,13 @@
       }
     },
     "appearance": {
+      "chatLayout": {
+        "label": "Disposition du chat",
+        "standard": "Standard",
+        "wide": "Large",
+        "width": "Largeur du contenu",
+        "hint": "Proportion de l’espace entre les marges du chat. Les volets étroits s’ajustent automatiquement."
+      },
       "title": "Apparence",
       "modeLabel": "Mode d'apparence",
       "appIcon": {

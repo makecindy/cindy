@@ -2188,6 +2188,13 @@
       }
     },
     "appearance": {
+      "chatLayout": {
+        "label": "チャットのレイアウト",
+        "standard": "標準",
+        "wide": "ワイド",
+        "width": "コンテンツの幅",
+        "hint": "チャット欄の左右の余白を除いた幅に対する割合です。狭い欄では自動で調整されます。"
+      },
       "title": "外観",
       "modeLabel": "表示モード",
       "appIcon": {

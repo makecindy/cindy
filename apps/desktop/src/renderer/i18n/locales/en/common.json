@@ -2218,6 +2218,13 @@
       }
     },
     "appearance": {
+      "chatLayout": {
+        "label": "Chat layout",
+        "standard": "Standard",
+        "wide": "Wide",
+        "width": "Content width",
+        "hint": "A share of the space between the chat margins. Narrow panes adjust automatically."
+      },
       "title": "Appearance",
       "modeLabel": "Appearance Mode",
       "appIcon": {
