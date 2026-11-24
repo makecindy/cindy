@@ -2,6 +2,8 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
+import { ScriptTarget, transpileModule } from 'typescript';
+import { shouldNotifyAgentIslandForSession } from '../agent-island/notificationPolicy.js';
 
 import { createSetSessionThinkingEnabled } from '../maker-ipc/sessionRuntimeAxisSettings';
 
@@ -20,19 +22,24 @@ describe('maker Orca role marking IPC boundary', () => {
     expect(registerSource).toContain('await markOrcaRoleIfNeeded(sessionId, role);');
   });
 
-  it('suppresses Agent Island notifications for known Orca workers', () => {
-    expect(registerSource).toContain("from '../agent-island/notificationPolicy.js'");
-    expect(registerSource).toContain('function shouldNotifyAgentIslandForSession(sessionId: string): boolean');
-    expect(registerSource).toContain('isKnownOrcaWorkerSession(sessionId)');
-    expect(registerSource).toContain('if (!shouldNotifyAgentIslandForSession(session.id)) return;');
-    expect(registerSource).toContain('if (!shouldNotifyAgentIslandForSession(sessionId)) return;');
-  });
-
-  it('clears any existing Agent Island entry when a session is marked as an Orca worker', () => {
-    const roleMarkingSource = registerSource.slice(registerSource.indexOf('async function markOrcaRoleIfNeeded'));
-
-    expect(roleMarkingSource).toContain("if (orcaRole === 'worker') {");
-    expectOrder(roleMarkingSource, 'markKnownOrcaWorkerSession(sessionId);', 'clearSuppressedOrcaWorkerAgentIslandSession(sessionId);');
+  // Worker notification suppression is covered through AgentIslandService's real
+  // display/activity projections in agent-island/__tests__/service.test.ts. Do not
+  // require discarding its lifecycle events or deleting its live activity here.
+  // #12558, unit: execute the production forwarding gate with in-memory identity
+  // boundaries; the former literal assertions required the buggy Worker exclusion.
+  it('forwards Worker lifecycle activity while retaining the hidden-task boundary', () => {
+    const source = registerSource.match(/function shouldNotifyAgentIslandForSession\(sessionId: string\): boolean \{[\s\S]*?\n\}/)?.[0];
+    if (!source) throw new Error('Activity forwarding gate missing');
+    const gate = new Function('isSessionHiddenSync', 'isKnownOrcaWorkerSession',
+      'shouldNotifyAgentIslandForSessionByPolicy', 'AGENT_ISLAND_DISPLAY_CONFIG',
+      transpileModule(`${source}\nreturn shouldNotifyAgentIslandForSession;`, {
+        compilerOptions: { target: ScriptTarget.ES2022 },
+      }).outputText,
+    )((id: string) => id === 'hidden', (id: string) => id === 'worker',
+      shouldNotifyAgentIslandForSession, { notifyOrcaWorkerSessions: false }) as (id: string) => boolean;
+    expect(gate('worker')).toBe(true);
+    expect(gate('ordinary')).toBe(true);
+    expect(gate('hidden')).toBe(false);
   });
 
   it('rejects Review sessions before either Orca entry point can mutate state', () => {

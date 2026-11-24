@@ -1169,11 +1169,6 @@ import {
 } from './normalizeAttachments.desktop.js';
 import { QueuedAttachmentOwnershipRegistry } from './queuedAttachmentOwnership.js';
 import { prepareRemoteReviewAttachments } from './reviewRemoteInput.js';
-import { AGENT_ISLAND_DISPLAY_CONFIG } from '../agent-island/displayConfig.js';
-import {
-  shouldClearAgentIslandSessionForOrcaWorker,
-  shouldNotifyAgentIslandForSession as shouldNotifyAgentIslandForSessionByPolicy,
-} from '../agent-island/notificationPolicy.js';
 import { getAgentIslandService } from '../agent-island/service.js';
 import { createOrcaLifecycleService, ORCA_WORKER_READY_MESSAGE } from './orcaLifecycleService.js';
 import { buildUiAssignmentInitialTask } from './orcaUiAssignment.js';
@@ -5610,15 +5605,9 @@ function shouldNotifyAgentIslandForSession(sessionId: string): boolean {
   // 「消息免打扰」**不在这里挡**：它只退出展示面(岛面/菜单栏/提示音，见
   // agent-island state 的 displaySuppressedSessionIds)。事件必须继续进状态机，
   // 否则侧栏卡片的实时活动与等待交互态会跟着一起消失，而这不该是静音的效果。
-  return shouldNotifyAgentIslandForSessionByPolicy(
-    AGENT_ISLAND_DISPLAY_CONFIG,
-    isKnownOrcaWorkerSession(sessionId),
-  );
-}
-
-function clearSuppressedOrcaWorkerAgentIslandSession(sessionId: string): void {
-  if (!shouldClearAgentIslandSessionForOrcaWorker(AGENT_ISLAND_DISPLAY_CONFIG)) return;
-  handleAgentIslandSessionClosedAfterCleanup(sessionId);
+  // Worker 的事件也属于共同活动读模型。是否展示 / 响铃由 service 的展示策略决定；
+  // 在这里丢事件会让 runtime / digest 退回持久化标记，把新回合误读成旧中断。
+  return true;
 }
 
 function notifyAgentIslandUserPrompt(
@@ -8788,7 +8777,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     assertCurrent();
     if (orcaRole === 'worker') {
       markKnownOrcaWorkerSession(sessionId);
-      clearSuppressedOrcaWorkerAgentIslandSession(sessionId);
+      getAgentIslandService()?.handleNotificationMuteChanged();
     }
     try {
       await setSessionOrcaRole(sessionId, orcaRole, { owner: owner!, assertCurrent });
