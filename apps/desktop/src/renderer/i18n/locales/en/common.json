@@ -2808,7 +2808,8 @@
         "errorBusy": "An upload is already in progress. Wait for it to finish.",
         "errorFailed": "Log upload failed. Check your network and try again",
         "unavailableNotConfigured": "Log upload is not configured in this build.",
-        "unavailableNoConsent": "You need to accept the Privacy Policy first."
+        "unavailableNoConsent": "You need to accept the Privacy Policy first.",
+        "consentPrompt": "Before uploading, read the <policy>Privacy Policy</policy> and select <accept>Agree</accept>."
       },
       "openLogsDirError": "Failed to open logs directory",
       "autoUpdateLabel": "Install updates while idle",
@@ -5183,6 +5184,7 @@
       "formHint": "The user ID is numeric; DM @userinfobot to look up your own ID.",
       "connect": "Connect",
       "connectingAction": "Connecting…",
+      "connectTimedOut": "Connection timed out. Try again.",
       "errorCode": {
         "invalid-token": "Bot token is invalid or was reset — enter it again",
         "provider-api": "Telegram returned an error — try again shortly",
@@ -12753,6 +12755,7 @@
           "conflict": "This bot is already connected on this computer, in Settings → IM bots or on another buddy.",
           "botUnavailable": "{{name}} is unavailable right now. Try again once it’s back.",
           "connectFailed": "Couldn’t connect: {{reason}}",
+          "connectTimedOut": "Connection timed out. Try again.",
           "failed": "Couldn’t finish. Try again later.",
           "personalBotGone": "This bot is no longer set up in Settings → IM bots. Enter its credentials instead."
         },
@@ -16464,7 +16467,13 @@
       "open": "Open task “{{title}}”",
       "untitled": "Untitled task",
       "startedOne": "Started",
-      "handedToOne": "Handed to"
+      "handedToOne": "Handed to",
+      "status": {
+        "running": "Running",
+        "needsAction": "Waiting for you",
+        "error": "Error",
+        "idle": "Idle"
+      }
     },
     "botTaskLetter": {
       "replied": "replied",

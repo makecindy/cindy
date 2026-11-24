@@ -2846,7 +2846,8 @@
         "errorBusy": "Un envoi est déjà en cours, veuillez patienter",
         "errorFailed": "Échec de l'envoi des journaux. Vérifiez votre connexion réseau et réessayez",
         "unavailableNotConfigured": "L'envoi des journaux n'est pas configuré dans cette version.",
-        "unavailableNoConsent": "Vous devez d'abord accepter la Politique de confidentialité."
+        "unavailableNoConsent": "Vous devez d'abord accepter la Politique de confidentialité.",
+        "consentPrompt": "Avant l’envoi, lis la <policy>politique de confidentialité</policy> et sélectionne <accept>Accepter</accept>."
       },
       "openLogsDirError": "Impossible d'ouvrir le répertoire des journaux",
       "autoUpdateLabel": "Installer les mises à jour en période d'inactivité",
@@ -5241,6 +5242,7 @@
       "formHint": "L'identifiant utilisateur est numérique ; envoyez un message privé à @userinfobot pour connaître le vôtre.",
       "connect": "Connecter",
       "connectingAction": "Connexion…",
+      "connectTimedOut": "Délai de connexion dépassé. Réessayez.",
       "errorCode": {
         "invalid-token": "Le jeton du bot est invalide ou a été réinitialisé : saisissez-le à nouveau",
         "provider-api": "Telegram a renvoyé une erreur : réessayez dans un instant",
@@ -12864,6 +12866,7 @@
           "conflict": "Ce bot est déjà connecté sur cet ordinateur, dans Paramètres → Bots de messagerie ou sur un autre ami.",
           "botUnavailable": "{{name}} n'est pas disponible pour le moment. Réessayez lorsqu'il sera de retour.",
           "connectFailed": "Connexion impossible : {{reason}}",
+          "connectTimedOut": "Délai de connexion dépassé. Réessayez.",
           "failed": "Impossible de terminer. Réessayez plus tard.",
           "personalBotGone": "Ce bot n'est plus configuré dans Paramètres → Bots de messagerie. Saisissez plutôt ses identifiants."
         },
@@ -16617,7 +16620,13 @@
       "open": "Ouvrir la tâche « {{title}} »",
       "untitled": "Tâche sans titre",
       "startedOne": "Lancée",
-      "handedToOne": "Confiée à"
+      "handedToOne": "Confiée à",
+      "status": {
+        "running": "En cours d'exécution",
+        "needsAction": "Attend votre action",
+        "error": "Erreur",
+        "idle": "Inactive"
+      }
     },
     "botTaskLetter": {
       "replied": "a répondu",
