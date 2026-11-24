@@ -1,4 +1,4 @@
-import { net } from 'electron';
+import { cookielessNetFetch } from '../cookielessNetFetch.js';
 import { requireAppCapability } from '../appCapabilities.js';
 import { deviceLinkApiFetch, officialDeviceLinkApiFetch } from './deviceLinkApi.desktop.js';
 import { createMediaTransfer } from './mediaTransfer.js';
@@ -12,7 +12,7 @@ export const {
   uploadLocalFile, uploadBuffer, downloadToBuffer, openMediaStream,
   downloadToFile, removeRemote, __testing,
 } = createMediaTransfer({
-  fetch: (url, init) => net.fetch(url, init),
+  fetch: cookielessNetFetch,
   uploadFetch: (url, init) => globalThis.fetch(url, init),
   deviceLinkApiFetch: (...args) => deviceLinkApiFetch(...args),
   officialDeviceLinkApiFetch: (...args) => officialDeviceLinkApiFetch(...args),

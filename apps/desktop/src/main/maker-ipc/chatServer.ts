@@ -7,7 +7,8 @@ import type { ChatUploadAttachment } from './chatServerMedia.js';
 import { createConversationListState } from '@cindy/maker-shared/chatConversationList';
 /** Production chat transport. The server owns messages and execution leases;
  * local group rows only supply Agent lane metadata and the upgrade source. */
-import { app, net, nativeImage } from 'electron';
+import { app, nativeImage } from 'electron';
+import { cookielessNetFetch } from '../cookielessNetFetch.js';
 import { validateAvatarUpload } from '../profileEdit.js';
 import { uploadPublicAsset } from '../ossPublicUpload.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
@@ -1072,7 +1073,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const media = await readMedia(profile.avatar!);
       if (media.buffer.length > 5 * 1024 * 1024 || !['image/png', 'image/jpeg', 'image/webp'].includes(media.mimeType)) throw new Error('INVALID_AVATAR');
       if (!current()) throw new Error('OWNER_CHANGED');
-      const uploaded = await uploadPublicAsset({ fetchImpl: net.fetch, getBaseUrl: () => getClientEndpoint('ossApiBaseUrl'), getToken: getAccessToken },
+      const uploaded = await uploadPublicAsset({ fetchImpl: cookielessNetFetch, getBaseUrl: () => getClientEndpoint('ossApiBaseUrl'), getToken: getAccessToken },
         { scene: 'avatar', contentType: media.mimeType, body: media.buffer });
       if (!uploaded.ok) throw new Error('AVATAR_UPLOAD_FAILED');
       avatar = uploaded.publicUrl;
@@ -4038,7 +4039,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
             return image.isEmpty() ? null : image.getSize();
           });
           if (!current()) throw new Error('OWNER_CHANGED');
-          const uploaded = await uploadPublicAsset({ fetchImpl: (input, init) => net.fetch(input, init),
+          const uploaded = await uploadPublicAsset({ fetchImpl: cookielessNetFetch,
             getBaseUrl: () => getClientEndpoint('ossApiBaseUrl'), getToken: () => current() ? getAccessToken() : null },
           { scene: 'avatar', contentType: action.avatar.mimeType, body: action.avatar.data });
           if (!current()) throw new Error('OWNER_CHANGED');

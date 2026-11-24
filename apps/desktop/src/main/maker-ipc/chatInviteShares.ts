@@ -1,4 +1,5 @@
-import { app, net } from 'electron';
+import { app } from 'electron';
+import { cookielessNetFetch } from '../cookielessNetFetch.js';
 import * as authManager from '../authManager.js';
 import { getBuildClientEndpoint } from '../clientEndpointsService.js';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
@@ -33,7 +34,7 @@ function requestFor(authenticated: boolean) {
       let response: Response;
       let value: Record<string, unknown>;
       try {
-        response = await net.fetch(`${base}${path}`, { method: 'POST', redirect: 'error', cache: 'no-store', signal: AbortSignal.timeout(20000),
+        response = await cookielessNetFetch(`${base}${path}`, { method: 'POST', redirect: 'error', cache: 'no-store', signal: AbortSignal.timeout(20000),
           headers: { 'Content-Type': 'application/json', ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}) },
           body: body ? JSON.stringify({ ...body, ...(authenticated ? { authRealm: realm } : {}) }) : undefined });
         const reader = response.body?.getReader();

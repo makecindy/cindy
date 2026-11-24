@@ -19,7 +19,8 @@ import { resolveRuntimeDeviceIdentity, writeReplacementDeviceId } from './device
  * exposed by this module and receives state updates via 'auth:state-change'.
  */
 
-import { BrowserWindow, net, safeStorage, app, shell, powerMonitor } from 'electron';
+import { BrowserWindow, safeStorage, app, shell, powerMonitor } from 'electron';
+import { cookielessNetFetch } from './cookielessNetFetch.js';
 import crypto from 'node:crypto';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -432,7 +433,7 @@ let confirmedAccountDeletionCredential: {
   realm: AuthRegion;
 } | null = null;
 
-const desktopAuthFetch: typeof fetch = (input, init) => net.fetch(input instanceof URL ? input.href : input, init);
+const desktopAuthFetch: typeof fetch = cookielessNetFetch;
 
 function createAuthClient(
   realm: AuthRegion = pendingAuthRealm ?? activeAuthRealm,
@@ -2366,7 +2367,7 @@ async function apiFetch<T>(
   const timer =
     effectiveTimeout > 0 ? setTimeout(() => controller.abort(), effectiveTimeout) : undefined;
   try {
-    const response = await net.fetch(url, {
+    const response = await cookielessNetFetch(url, {
       method,
       headers,
       body: options?.body !== undefined ? JSON.stringify(options.body) : undefined,

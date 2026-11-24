@@ -1,3 +1,4 @@
+import './systemCaTrust.js';
 import './personalBuildMonitor.js';
 import { configureWindowsAtomicRename } from './windowsAtomicRename.js';
 import './personalLaunchCwd.js';
