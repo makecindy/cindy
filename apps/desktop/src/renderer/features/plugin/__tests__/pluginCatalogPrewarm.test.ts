@@ -19,10 +19,11 @@ it('reuses signed icons across recommendations and search results in the same ca
   const searchItem = { ...item, icon: { ...item.icon!, url: 'https://icons.invalid/search' } };
   const other = { ...item, pluginId: 'other-plugin', ghostId: 'other-ghost' };
   const withoutIcon = { ...item, pluginId: 'no-icon', icon: null };
-  const recommendations = vi.fn().mockResolvedValue([item, other, withoutIcon]);
-  const lookup = vi.fn()
-    .mockResolvedValueOnce({ items: [], unavailableReason: 'temporary outage' })
-    .mockResolvedValueOnce({ items: [searchItem], unavailableReason: null });
+  const recommendations = vi.fn()
+    .mockResolvedValueOnce([item, other, withoutIcon])
+    .mockRejectedValueOnce(new Error('temporary outage'))
+    .mockResolvedValueOnce([searchItem]);
+  const lookup = vi.fn().mockRejectedValue(new Error('would scan custom markets'));
   vi.stubGlobal('window', { electronAPI: { pluginMarket: { recommendations, lookup } } });
   memory.todayPool = await readPluginRecommendations(memory);
   const cachedPage = mergePluginItems([], [searchItem], false, memory.marketIcons);
@@ -35,18 +36,20 @@ it('reuses signed icons across recommendations and search results in the same ca
   const renewed = await readPluginRecommendations(memory, memory.todayPool);
   expect(renewed).toEqual([searchItem, { ...other, icon: null }, withoutIcon]);
   expect(readReusedMarketIcon(memory.marketIcons, cachedPage[0]!).icon).toBe(searchItem.icon);
-  expect(lookup).toHaveBeenLastCalledWith(['plugin-ghost', 'other-ghost']);
-  expect(recommendations).toHaveBeenCalledOnce();
+  expect(recommendations).toHaveBeenCalledTimes(3);
+  expect(recommendations).toHaveBeenNthCalledWith(1);
+  expect(recommendations).toHaveBeenNthCalledWith(2, ['plugin', 'other-plugin']);
+  expect(recommendations).toHaveBeenNthCalledWith(3, ['plugin', 'other-plugin']);
 
   memory.todayPool = renewed;
   const newRelease = { ...searchItem, releaseId: 'release-2', version: '2.0.0',
     icon: { ...searchItem.icon!, sha256: 'b'.repeat(64), thumbnailUrl: undefined } };
-  lookup.mockResolvedValueOnce({ items: [newRelease], unavailableReason: null });
+  recommendations.mockResolvedValueOnce([newRelease]);
   const updated = await readPluginRecommendations(memory, memory.todayPool);
   expect(updated).toEqual([newRelease, ...renewed.slice(1)]);
   expect(readReusedMarketIcon(memory.marketIcons, cachedPage[0]!).icon).toBe(searchItem.icon);
-  expect(lookup).toHaveBeenLastCalledWith(['plugin-ghost']);
-  expect(recommendations).toHaveBeenCalledOnce();
+  expect(recommendations).toHaveBeenLastCalledWith(['plugin']);
+  expect(lookup).not.toHaveBeenCalled();
 });
 
 // Unit: login preheat must use the page's exact owner/language bucket, and must

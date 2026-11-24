@@ -176,9 +176,9 @@ export function registerPluginMarketIpc(): void {
     const query = requireObject(input, 'query');
     return invokePluginMarket(() => service().query(query));
   });
-  ipcMain.handle('plugin-market:recommendations', (event) => {
+  ipcMain.handle('plugin-market:recommendations', (event, pluginIds?: unknown) => {
     assertTrustedAppRendererEvent(event);
-    return invokePluginMarket(() => service().recommendations());
+    return invokePluginMarket(() => service().recommendations(pluginIds));
   });
   ipcMain.handle('plugin-market:lookup', (event, ghostIds: unknown) => {
     assertTrustedAppRendererEvent(event);

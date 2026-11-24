@@ -100,11 +100,8 @@ async function renewRecommendationIcons(memory: CatalogMemory, visible: readonly
     [item, readReusedMarketIcon(memory.marketIcons, item, true)] as const));
   const missing = [...renewed].filter(([item, cached]) => item === cached).map(([item]) => item);
   if (missing.length) {
-    const result = await window.electronAPI.pluginMarket.lookup(missing.map(item => item.ghostId));
-    if (result.unavailableReason !== null) throw new Error(result.unavailableReason);
-    const currentById = new Map(result.items.filter(item =>
-      item.sourceType === 'server' && item.scope === 'public' && item.publisherKind === 'official',
-    ).map(item => [item.pluginId, item]));
+    const result = await window.electronAPI.pluginMarket.recommendations(missing.map(item => item.pluginId));
+    const currentById = new Map(result.map(item => [item.pluginId, item]));
     for (const item of missing) {
       const current = currentById.get(item.pluginId);
       // A withdrawn or iconless release should not keep an expired URL in the timer.

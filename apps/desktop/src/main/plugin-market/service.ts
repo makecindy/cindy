@@ -1451,12 +1451,20 @@ export class PluginMarketService {
       customSourceNames, unavailableCustomSourceNames: discovery.unavailableSourceNames, organizationAccessError };
   }
 
-  async recommendations(): Promise<PluginMarketItem[]> {
+  async recommendations(pluginIds?: unknown): Promise<PluginMarketItem[]> {
+    const renewalIds = Array.isArray(pluginIds) ? pluginIds : null;
+    if (pluginIds !== undefined && (!renewalIds || renewalIds.length > 3 || !renewalIds.every(isValidPluginResourceId))) {
+      throwIpcError('INVALID_PARAMS', 'Invalid recommendation Plugin IDs');
+    }
+    if (renewalIds?.length === 0) return [];
     if (!getClientEndpoint('pluginApiBaseUrl')) return [];
     const owner = canCaptureMarketOwner() ? captureMarketOwner() : null;
     const key = owner ? marketOwnerKey(owner) : getClientEndpoint('pluginApiBaseUrl');
     try {
-      const response = await this.api.recommendations();
+      const plugins = renewalIds
+        ? (await this.api.resolve([...new Set<string>(renewalIds)].map((pluginId, index) => ({ key: String(index), pluginId })))).results
+          .flatMap(row => row.status === 'available' && row.plugin.scope === 'public' && row.plugin.publisherKind === 'official' ? [row.plugin] : [])
+        : (await this.api.recommendations()).plugins;
       if (owner) requireSameMarketOwner(owner);
       else if (canCaptureMarketOwner() || isAppSessionBoundaryPending()) return [];
       if (key !== (owner ? marketOwnerKey(owner) : getClientEndpoint('pluginApiBaseUrl'))) return [];
@@ -1464,8 +1472,11 @@ export class PluginMarketService {
       if (owner) requireSameMarketOwner(owner);
       else if (canCaptureMarketOwner() || isAppSessionBoundaryPending()) return [];
       if (key !== (owner ? marketOwnerKey(owner) : getClientEndpoint('pluginApiBaseUrl'))) return [];
-      return response.plugins.map(plugin => this.toItem(plugin, local));
-    } catch { return []; }
+      return plugins.map(plugin => this.toItem(plugin, local));
+    } catch (error) {
+      if (renewalIds) throw error;
+      return [];
+    }
   }
 
   /**
