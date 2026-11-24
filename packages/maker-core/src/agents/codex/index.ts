@@ -3201,6 +3201,9 @@ assertRouteCurrent();
                 : {}),
               ...(hostPurpose ? { hostPurpose } : {}),
               ...(nativeStorageOnly ? { nativeStorageOnly } : {}),
+              ...(hostPurpose === 'review' && customContextModel
+                ? { customContextModel, customContextProviderId }
+                : {}),
               ...(hostPurpose === 'custom-context'
                 ? {
                     customContextModel,
@@ -5418,7 +5421,12 @@ assertRouteCurrent();
         ...(localAuthPolicy === 'isolated' ? { localAuthPolicy } : {}),
         ...(guestCodexHome && guestProviderId ? { deviceHostedGuestProviderId: guestProviderId, deviceHostedGuestSessionId: sid, deviceHostedGuestModelIds: hosted?.guestProvider?.modelIds } : {}),
         ...(reviewMode
-          ? { hostPurpose: 'review' as const }
+          ? {
+              hostPurpose: 'review' as const,
+              ...(opts.fastMode === true && this.deps.needsCodexFastCatalog?.(opts.providerId, opts.model)
+                ? { customContextModel: opts.model, customContextProviderId: opts.providerId }
+                : {}),
+            }
           : usesCustomContextHost
             ? {
                 hostPurpose: 'custom-context' as const,

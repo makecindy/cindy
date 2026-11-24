@@ -235,50 +235,49 @@ export function createCodexSpawnConfig(ports: {
         let customContextCatalogArgs: string[] = [];
         let customContextCatalogPath: string | undefined;
         const guestModelIds = ctx.deviceHostedGuestModelIds ?? [];
-        if (isCustomContext) {
-          const modelId = ctx.customContextModel?.trim();
+        const requestedCatalogModel = ctx.customContextModel?.trim();
+        if (isCustomContext || (isReview && requestedCatalogModel)) {
           const contextWindow = ctx.customContextWindow;
           try {
-            if (
-              !modelId ||
-              typeof contextWindow !== 'number' ||
-              !Number.isFinite(contextWindow) ||
-              contextWindow <= 0
-            ) {
+            if (!requestedCatalogModel || (isCustomContext &&
+                (typeof contextWindow !== 'number' || !Number.isFinite(contextWindow) || contextWindow <= 0))) {
               throw new Error('custom-context Codex host is missing its model or context window');
             }
             const catalog = getDesktopSelectableCatalog();
-            const source = resolveDesktopModelContextProviderId(catalog, 'codex', ctx.customContextProviderId, modelId);
+            const source = resolveDesktopModelContextProviderId(catalog, 'codex', ctx.customContextProviderId, requestedCatalogModel);
             const provider = catalog.providers.find(provider => provider.id === source);
-            contextProviderModels = provider?.models.codex?.map(model => model.id) ?? [];
-            const customCatalog = await prepareCodexCustomContextCatalog({
-              binaryPath: ports.binaryPath,
-              codexHome: effectiveCodexHome,
-              modelId,
-              contextWindow,
-              modelIds: contextProviderModels,
-              declareFastMode: needsOpenAiApiCodexFastDeclaration(provider, modelId) &&
-                (!guestProviderId || (source === guestProviderId && guestModelIds.includes(modelId))),
-              resolveCompactionPct: (id) => resolveModelCompactionPct(getDesktopSelectableCatalog(), 'codex', source, id),
-              resolveContextWindow: (nativeModelId) => {
-                return (source ? readModelContextLimit('codex', source, nativeModelId) : null)
-                  ?? resolveModelDefaultContextWindow(catalog, 'codex', source, nativeModelId);
-              },
-              ...(smartSubagentConfig
-                ? { baseCatalog: smartSubagentConfig.modelCatalog }
-                : {}),
-            });
-            customContextCatalogPath = customCatalog.catalogPath;
-            if (smartSubagentConfig) {
-              smartSubagentConfig = {
-                ...smartSubagentConfig,
-                catalogPath: customCatalog.catalogPath,
-              };
-            } else {
-              customContextCatalogArgs = customCatalog.extraArgs;
+            const declareFastMode = needsOpenAiApiCodexFastDeclaration(provider, requestedCatalogModel) &&
+              (!guestProviderId || (source === guestProviderId && guestModelIds.includes(requestedCatalogModel)));
+            if (isCustomContext) contextProviderModels = provider?.models.codex?.map(model => model.id) ?? [];
+            if (isCustomContext || declareFastMode) {
+              const budgets = isCustomContext ? {
+                contextWindow,
+                modelIds: contextProviderModels,
+                resolveCompactionPct: (id: string) => resolveModelCompactionPct(getDesktopSelectableCatalog(), 'codex', source, id),
+                resolveContextWindow: (nativeModelId: string) => {
+                  return (source ? readModelContextLimit('codex', source, nativeModelId) : null)
+                    ?? resolveModelDefaultContextWindow(catalog, 'codex', source, nativeModelId);
+                },
+              } : {};
+              const customCatalog = await prepareCodexCustomContextCatalog({
+                binaryPath: ports.binaryPath,
+                codexHome: effectiveCodexHome,
+                modelId: requestedCatalogModel,
+                declareFastMode,
+                ...budgets,
+                ...(smartSubagentConfig
+                  ? { baseCatalog: smartSubagentConfig.modelCatalog }
+                  : {}),
+              });
+              customContextCatalogPath = customCatalog.catalogPath;
+              if (smartSubagentConfig) {
+                smartSubagentConfig = { ...smartSubagentConfig, catalogPath: customCatalog.catalogPath };
+              } else {
+                customContextCatalogArgs = customCatalog.extraArgs;
+              }
             }
           } catch (error) {
-            await releaseCodexCustomContextProxy(scopedProxyKey);
+            if (usesScopedProxy) await releaseCodexCustomContextProxy(scopedProxyKey);
             const fatal = error instanceof Error ? error : new Error(String(error));
             (fatal as { codexSpawnConfigFatal?: boolean }).codexSpawnConfigFatal = true;
             throw fatal;

@@ -275,7 +275,9 @@ describe('Codex launch requires its local route', () => {
     { official: true, grant: 'matching', expected: true },
     { official: true, grant: 'different-connection', expected: false },
     { official: true, grant: 'different-model', expected: false },
-  ])('limits the native Fast declaration to the selected route and guest grant (%j)', async ({ official, grant, expected }) => {
+    { official: true, review: true, expected: true },
+    { official: false, review: true, expected: false },
+  ])('limits the native Fast declaration to the selected route and guest grant (%j)', async ({ official, grant, review, expected }) => {
     const f = routeFixture();
     f.ready();
     const modelId = 'gpt-6.2-sol';
@@ -291,19 +293,30 @@ describe('Codex launch requires its local route', () => {
     });
     const catalogPath = path.join(scratch, 'fixture-catalog.json');
     const extraArgs = ['-c', 'model_catalog_json=' + JSON.stringify(catalogPath)];
+    vi.mocked(prepareCodexCustomContextCatalog).mockReset();
     await fs.writeFile(catalogPath, JSON.stringify({ models: [] }));
     vi.mocked(prepareCodexCustomContextCatalog).mockResolvedValueOnce({ catalogPath, extraArgs });
     const config = await prepare([], {
-      hostPurpose: 'custom-context', customContextHostKey: 'fast-fixture',
-      customContextProviderId: selectedProvider.id, customContextModel: modelId, customContextWindow: 272_000,
+      hostPurpose: review ? 'review' : 'custom-context', customContextHostKey: 'fast-fixture',
+      customContextProviderId: selectedProvider.id, customContextModel: modelId,
+      ...(!review ? { customContextWindow: 272_000 } : {}),
       ...(grant ? {
         deviceHostedGuestProviderId: grant === 'different-connection' ? provider.id : selectedProvider.id,
         deviceHostedGuestSessionId: 'guest-fast-fixture',
         deviceHostedGuestModelIds: [grant === 'different-model' ? 'fixture-model' : modelId],
       } : {}),
     });
-    expect(prepareCodexCustomContextCatalog).toHaveBeenLastCalledWith(expect.objectContaining({ modelId, declareFastMode: expected }));
-    if (!grant) expect(config.extraArgs).toEqual(expect.arrayContaining(extraArgs));
+    if (review && !official) {
+      expect(prepareCodexCustomContextCatalog).not.toHaveBeenCalled();
+    } else {
+      expect(prepareCodexCustomContextCatalog).toHaveBeenLastCalledWith(expect.objectContaining({ modelId, declareFastMode: expected }));
+      if (review) {
+        const [options] = vi.mocked(prepareCodexCustomContextCatalog).mock.lastCall!;
+        expect(options.contextWindow).toBeUndefined();
+        expect(options.resolveContextWindow).toBeUndefined();
+      }
+      if (!grant) expect(config.extraArgs).toEqual(expect.arrayContaining(extraArgs));
+    }
     await config.onHostRetired?.();
   });
 
