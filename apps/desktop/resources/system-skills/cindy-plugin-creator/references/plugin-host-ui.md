@@ -84,7 +84,7 @@
 要把 Open in 放到工作目录上，在 `mcpApps.host.contributions` 声明：
 `{"id":"open-in","title":"Open in","position":"workdir.menu","view":"open-in-page","presentation":"popover"}`。
 `open-in-page` 是插件已声明的页面 ID。用户点目录名后可选系统文件管理器或插件操作。选择 Open in 才加载页面。
-任务弹层声明 `scope:"task"` 和 `context` 能力后，通过 `app.getHostContext().cindy.context.workingDir` 读取用户点选的目录（含当前显示的 worktree）。目录的文件操作沿用已有授权。
+任务页面（弹层或侧栏）声明 `scope:"task"` 和 `context` 能力后，通过 `app.getHostContext().cindy.context.workingDir` 读取用户点选的目录（含当前显示的 worktree）。目录的文件操作沿用已有授权。
 旧客户端忽略此位置，兼容旧版时可保留原状态栏入口。
 
 `message.menu` 声明菜单动作，`kind` 缺省或填 `button`，引用 `view` 或 `tool`；

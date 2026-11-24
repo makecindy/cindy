@@ -20,8 +20,8 @@ import { SectionCollapse } from '@/features/cc-agent/sidebar/SectionCollapse';
 import { MAIN_VIEW_ICONS } from './mainViewIcons';
 import { isPluginUiElementVisible, subscribePluginUiRegions } from './pluginUiVisibility';
 const PluginUiView = lazy(() => import('./PluginUiView').then(module => ({ default: module.PluginUiView })));
-const openPluginUiView = async (instanceId: string, viewId: string, sessionId: string | null, input?: Record<string, unknown>) =>
-  (await import('@/features/right-sidebar/lib/openPluginUiView')).openPluginUiView(instanceId, viewId, sessionId, input);
+const openPluginUiView = async (instanceId: string, viewId: string, sessionId: string | null, input?: Record<string, unknown>, workingDir?: string) =>
+  (await import('@/features/right-sidebar/lib/openPluginUiView')).openPluginUiView(instanceId, viewId, sessionId, input, workingDir);
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 
 export type PluginUiEntry = { ghost: InstalledGhost; instanceId: string; contribution: GhostHostUiContribution };
@@ -214,10 +214,10 @@ export function PluginUiMessageMenuItem({ entry, sessionId, clientId, disabled, 
   </DropdownMenuItem>;
 }
 
-export async function runPluginUiEntry(entry: PluginUiEntry, sessionId: string | null, value?: string): Promise<void> {
+export async function runPluginUiEntry(entry: PluginUiEntry, sessionId: string | null, value?: string, workingDir?: string): Promise<void> {
   const action = entry.contribution;
   if (action.view) return openPluginUiView(entry.instanceId, action.view, sessionId,
-    { ...action.arguments, ...(value === undefined ? {} : { value }) });
+    { ...action.arguments, ...(value === undefined ? {} : { value }) }, workingDir);
   if (!action.tool) return;
   const result = await window.electronAPI.maker.mcpApps(sessionId, { op: 'plugin-action',
     instanceId: entry.instanceId, id: action.id, value });
@@ -303,7 +303,7 @@ export function PluginUiWorkdirButton({ sessionId, path, children, onOpenDirecto
       {entries.map(entry => <PluginUiMessageMenuItem key={workdirPageKey(entry)} className="gap-2"
         entry={entry} sessionId={sessionId} onSelect={() => {
           if (entry.contribution.presentation === 'popover' && entry.contribution.view) setSelected(workdirPageKey(entry));
-          else void runPluginUiEntry(entry, sessionId).catch(() => toast.error(t('pluginUi.actionFailed')));
+          else void runPluginUiEntry(entry, sessionId, undefined, path).catch(() => toast.error(t('pluginUi.actionFailed')));
         }} />)}
     </DropdownMenuContent></DropdownMenu>
     {page && page.contribution.view && <PopoverContent align="start" side="top" aria-label={page.contribution.title}
