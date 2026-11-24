@@ -1244,10 +1244,16 @@ describe('direct commit admission races', () => {
       await commit(input);
     });
     const request = allocate('commit-race');
-    await ready;
-    state.delegatedAllowed = false;
-    state.modelChanged!();
-    release();
+    try {
+      // An early return never reaches the commit fixture. Report that failure
+      // directly instead of leaving the test waiting for an unreachable gate.
+      const reachedCommit = await Promise.race([ready.then(() => true), request.then(() => false)]);
+      expect(reachedCommit, `Expected ${stage} allocation to reach its commit gate`).toBe(true);
+      state.delegatedAllowed = false;
+      state.modelChanged!();
+    } finally {
+      release();
+    }
     expect(await request).toBeNull();
     expect(delegation.delegatedProviderShareTaskAccess(guestPeer, 'commit-race')).toBeNull();
     await vi.waitFor(() => expect(state.usage!.listActiveDirectReceiptRoutes(state.owner)).toEqual([]));
