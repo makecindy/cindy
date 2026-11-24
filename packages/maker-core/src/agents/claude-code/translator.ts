@@ -1814,6 +1814,7 @@ function handleStreamEvent(
           data: { text: visibleDelta, isFinal: false },
           source: 'claude-code',
           agentMeta: fallbackMeta,
+          ...(msg.parent_tool_use_id === null ? { [CLAUDE_EXPLICIT_ROOT_BOUNDARY]: true } : {}),
         });
       }
     } else if (delta.type === 'thinking_delta' && typeof delta.thinking === 'string') {

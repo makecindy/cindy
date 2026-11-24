@@ -775,7 +775,7 @@ describe('event types the desktop pipeline acts on, classified for the Host', ()
     },
     text: {
       host: 'history.event (sessionEventStreamCore, shared); turn-executor.mjs routeStandaloneTextEvent (sessionEventPreparationSteps.ts, shared)',
-      platform: 'sessionEventDelivery.ts projects confirmed Claude root finals for local Electron windows only',
+      platform: 'sessionEventDelivery.ts projects confirmed Claude root text ownership for local Electron windows only',
     },
     tool_use: {
       host: 'history.event (sessionEventStreamCore, shared); turn-executor.mjs publishes the redacted tool event',

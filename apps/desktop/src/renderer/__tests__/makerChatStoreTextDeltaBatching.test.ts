@@ -2341,6 +2341,53 @@ describe('makerChatStore text delta batching', () => {
     expect(rows.find(row => row.clientId === 'finished')?.parentToolUseId).toBe(finalParent ?? undefined);
   });
 
+  // #1743 / unit: the production IPC listener previously sealed the first
+  // row on the second delta. Revisit both exact IDs, close just one tool lane,
+  // then finish the turn and ignore a late delta to the sealed row.
+  it.each([
+    [null, 'toolu_child'], ['toolu_child', null], ['toolu_a', 'toolu_b'],
+  ])('keeps Claude deltas live across both lane switches (%s to %s)', (first, second) => {
+    const send = (type: string, persistId: string, data: unknown, parentUuid?: string | null) => {
+      onEvent?.({ sessionId: SESSION_ID, persistId, event: {
+        type, source: 'claude-code', data, agentMeta: { parentUuid },
+      } });
+      vi.advanceTimersByTime(32);
+    };
+    const delta = (id: string, text: string, parent: string | null) =>
+      send('text', id, { text, isFinal: false }, parent);
+    delta('a', 'one', first);
+    delta('b', 'two', second);
+    delta('a', ' more', first);
+    delta('b', ' later', second);
+    let rows = makerChatStore.getSnapshot(SESSION_ID).messages;
+    expect(rows).toEqual([
+      expect.objectContaining({ clientId: 'a', content: 'one more', isStreaming: true }),
+      expect.objectContaining({ clientId: 'b', content: 'two later', isStreaming: true }),
+    ]);
+    send('tool_use', 'tool', { toolUseId: 'toolu_test', toolName: 'Read', input: {} }, first);
+    delta('b', ' again', second);
+    delta('a', ' late', first);
+    rows = makerChatStore.getSnapshot(SESSION_ID).messages;
+    expect(rows.find(row => row.clientId === 'a')).toMatchObject({ content: 'one more', isStreaming: false });
+    expect(rows.find(row => row.clientId === 'b')).toMatchObject({ content: 'two later again', isStreaming: true });
+    delta('c', 'fresh item', first);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages.filter(row => row.isStreaming)).toHaveLength(2);
+    send('done', 'done', {});
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages.some(row => row.isStreaming)).toBe(false);
+  });
+
+  it('keeps the ordinary Claude item boundary for deltas without SDK ownership', () => {
+    for (const [persistId, text] of [['old', 'prefix'], ['new', 'new item'], ['old', ' late']]) {
+      onEvent?.({ sessionId: SESSION_ID, persistId,
+        event: { type: 'text', source: 'claude-code', data: { text, isFinal: false } } });
+      vi.advanceTimersByTime(32);
+    }
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+      expect.objectContaining({ clientId: 'old', content: 'prefix', isStreaming: false }),
+      expect.objectContaining({ clientId: 'new', content: 'new item', isStreaming: true }),
+    ]);
+  });
+
   // #1743 / unit: a child tool boundary must seal only the matching live row.
   // Exercise local maker:event ingress; the child-final regression above does
   // not cover tool events or the ordinary root tool boundary.
