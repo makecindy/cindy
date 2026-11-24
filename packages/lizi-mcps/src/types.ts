@@ -997,6 +997,8 @@ export interface LiziMcpSessionContext {
    */
   remoteHostId?: string;
   vendorOptions?: Record<string, unknown>;
+  /** ACP-only flag: compact verbose tools/list descriptions without affecting built-in engines. */
+  acpCompactTools?: boolean;
   /**
    * Business 层 session id (host 在 createSession 时通过 opts.id 注入, maker-core
    * 透传给 agent.startSession, agent 再放进 McpProviderContext)。MCP server 工厂

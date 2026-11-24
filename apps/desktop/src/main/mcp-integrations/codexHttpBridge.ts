@@ -28,6 +28,10 @@ import {
   createCodexMcpThreadContextStore,
   isSameCodexMcpSessionContext,
 } from './codexMcpThreadContextStore.js';
+import {
+  isToolsListRpcBody,
+  wrapResponseForAcpToolsListCompaction,
+} from './acpToolCompactor.js';
 import { isFrozenBuiltinPluginAllowed, isFrozenMcpServerAllowed } from './codexBuiltinToolPolicy.js';
 import { AppToolCancellation, type AppToolCallIdentity } from '../mcp-apps/toolCancellation.js';
 import { runTaskActionRequest } from '../maker-ipc/taskActionAuthorization.js';
@@ -899,8 +903,14 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
       return;
     }
     if (activeContext) {
+      const targetRes =
+        activeContext.acpCompactTools === true
+        && req.method === 'POST'
+        && isToolsListRpcBody(parsedBody)
+          ? wrapResponseForAcpToolsListCompaction(res)
+          : res;
       const run = () => runWithLiziMcpSessionContext(activeContext, () =>
-        existing.transport.handleRequest(req, res, parsedBody));
+        existing.transport.handleRequest(req, targetRes, parsedBody));
       const threadId = extractCodexThreadId(parsedBody);
       if (appServer && !sessionTokenCtx && activeContext.agentKind === 'codex' &&
         activeContext.sessionId && activeContext.sessionInstanceId && threadId) {

@@ -368,6 +368,8 @@ export interface PiExtraSpawnConfigContext {
   mcpCallerAttested?: boolean;
   /** SSH remote 会话的 host id;host 据此把 bridge URL 改成 remote-forward 地址。 */
   remoteHostId?: string | null;
+  /** ACP-only: prune irrelevant MCP servers and compact verbose tool descriptions on tools/list. */
+  acpCompactTools?: boolean;
 }
 
 export type CodexSubagentRoutingProfile = 'default' | 'configured' | 'oauth-default' | 'smart';

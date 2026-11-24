@@ -57,7 +57,7 @@ import { pluginIdForKnownProviderName } from '../maker-host/plugins/builtin-plug
 import { createPluginRegistry } from '../maker-host/plugins/index.js';
 import { isAllowedRemoteMcpUrl, isDesktopLoopbackMcpUrl } from './piMcpTransport.js';
 import { RUNTIME_MCP_NAMES_KEY } from '../maker-host/agentCapabilityCatalog.js';
-import { hasImChannelVendorOptions } from '../../shared/botImConnection.js';
+import { BOT_IM_CHANNELS, hasImChannelVendorOptions } from '../../shared/botImConnection.js';
 import { REMOTE_COLLAB_SERVER_NAMES } from './codexHttpBridge.js';
 
 
@@ -221,6 +221,24 @@ async function getPiExtraSpawnConfig(
         && !hasImChannelVendorOptions(sessionCtx?.vendorOptions, 'telegram')
       ) return false;
       if (server.name === 'cindy_imessage' && !hasImChannelVendorOptions(sessionCtx?.vendorOptions, 'imessage')) return false;
+      // ACP-only pruning: remove role-mismatched collaboration bridges and unbound IM channel MCPs
+      // so external ACP runtimes (e.g. agy) do not exhaust their eager tool budget on irrelevant servers.
+      if (sessionCtx?.acpCompactTools === true) {
+        if (server.name === 'orca_worker_bridge' && orcaRole !== 'worker') return false;
+        if (server.name === 'cindy_orca' && orcaRole === 'worker') return false;
+        if (server.name === 'cindy_feishu_bot' && !hasImChannelVendorOptions(sessionCtx?.vendorOptions, 'feishu')) {
+          return false;
+        }
+        if (server.name === 'cindy_discord' && !hasImChannelVendorOptions(sessionCtx?.vendorOptions, 'discord')) {
+          return false;
+        }
+        if (
+          server.name === 'cindy_group_history'
+          && !BOT_IM_CHANNELS.some((channel) => hasImChannelVendorOptions(sessionCtx?.vendorOptions, channel))
+        ) {
+          return false;
+        }
+      }
       if (!isBotMcpServerAllowed(sessionCtx?.botMcpPolicy, server.name)) return false;
       if (!collabEnabled && REMOTE_COLLAB_SERVER_NAMES.has(server.name)) return false;
       // Custom HTTP MCPs are `s.remote` and skip the SSH URL rewriter. Desktop
@@ -330,6 +348,7 @@ async function getPiExtraSpawnConfig(
     vendorOptions,
     mcpCallerKind: sessionCtx?.mcpCallerKind ?? 'unknown',
     mcpCallerAttested: sessionCtx?.mcpCallerAttested === true,
+    ...(sessionCtx?.acpCompactTools === true ? { acpCompactTools: true } : {}),
   };
   // 同 session 重建(resume/reattach)直接覆盖注册,注册表以 sessionId 为 key,
   // 天然不累积。必须在返回(即 spawn)前完成 —— cindy-bridge extension 一起进程

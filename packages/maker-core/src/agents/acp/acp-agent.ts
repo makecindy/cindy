@@ -234,6 +234,7 @@ export class AcpAgent extends BaseAgent {
           // that trusts the engine as a whole (collaboration Workers) treats every call as the task's own.
           mcpCallerKind: opts.pluginEngineTrustedCaller === true ? 'root' : 'unknown',
           mcpCallerAttested: opts.pluginEngineTrustedCaller === true,
+          acpCompactTools: true,
         });
       } catch (error) {
         logger.error('acp: Cindy tool bridge unavailable; starting without Cindy tools', {

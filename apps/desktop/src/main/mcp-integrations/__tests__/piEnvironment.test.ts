@@ -1393,6 +1393,57 @@ describe('piEnvironment per-session identity', () => {
     expect(config?.mcpBridge?.servers.map((server) => server.name)).toContain('orca_worker_bridge');
   });
 
+  it('prunes irrelevant collaboration and unbound IM servers for ACP only, leaving Pi untouched', async () => {
+    const providers = [
+      makeProvider('cindy_orca'),
+      makeProvider('orca_worker_bridge'),
+      makeProvider('cindy_feishu_bot'),
+      makeProvider('cindy_discord'),
+      makeProvider('cindy_group_history'),
+      makeProvider('cindy_browser'),
+    ];
+    const logger = noopLogger();
+
+    const piConfig = await getPiExtraSpawnConfig(providers, logger, {
+      sessionId: 'pi-normal-1',
+      workingDir: '/repo',
+    });
+    const piNames = piConfig?.mcpBridge?.servers.map((s) => s.name) ?? [];
+    expect(piNames).toEqual(
+      expect.arrayContaining(['cindy_orca', 'orca_worker_bridge', 'cindy_feishu_bot', 'cindy_discord', 'cindy_group_history', 'cindy_browser']),
+    );
+    piConfig?.disposeSessionCtx?.();
+
+    const acpLeadConfig = await getPiExtraSpawnConfig(providers, logger, {
+      sessionId: 'acp-lead-1',
+      workingDir: '/repo',
+      acpCompactTools: true,
+      vendorOptions: { orcaRole: 'lead' },
+    });
+    const acpLeadNames = acpLeadConfig?.mcpBridge?.servers.map((s) => s.name) ?? [];
+    expect(acpLeadNames).toContain('cindy_orca');
+    expect(acpLeadNames).toContain('cindy_browser');
+    expect(acpLeadNames).not.toContain('orca_worker_bridge');
+    expect(acpLeadNames).not.toContain('cindy_feishu_bot');
+    expect(acpLeadNames).not.toContain('cindy_discord');
+    expect(acpLeadNames).not.toContain('cindy_group_history');
+    acpLeadConfig?.disposeSessionCtx?.();
+
+    const acpWorkerConfig = await getPiExtraSpawnConfig(providers, logger, {
+      sessionId: 'acp-worker-1',
+      workingDir: '/repo',
+      acpCompactTools: true,
+      vendorOptions: { orcaRole: 'worker', feishuChatId: 'oc_123' },
+    });
+    const acpWorkerNames = acpWorkerConfig?.mcpBridge?.servers.map((s) => s.name) ?? [];
+    expect(acpWorkerNames).toContain('orca_worker_bridge');
+    expect(acpWorkerNames).toContain('cindy_feishu_bot');
+    expect(acpWorkerNames).toContain('cindy_group_history');
+    expect(acpWorkerNames).not.toContain('cindy_orca');
+    expect(acpWorkerNames).not.toContain('cindy_discord');
+    acpWorkerConfig?.disposeSessionCtx?.();
+  });
+
   // ── 轮 40-w4 HIGH 回归保护:ensureBridge 成功路径的 30s 超时 timer 必须取消 ──
   it('does not re-create the bridge when 30s elapse after a successful start (round 40-w4 HIGH)', async () => {
     vi.useFakeTimers();
