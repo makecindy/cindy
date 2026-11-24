@@ -215,11 +215,42 @@ function walkImages(node: JsonNode, format: WireFormat, out: ImageOccurrence[], 
   }
 }
 
+const mediaTypeKey = Buffer.from('"type"');
+// Search from the first letter so unrelated quoted JSON fields are cheap to skip.
+const mediaTypeValues = ['image', 'input_image', 'input_file', 'document', 'image_url']
+  .map(value => Buffer.from(value + '"'));
+
+function beforeMarkerWhitespace(body: Buffer, end: number): number {
+  while (end > 0) {
+    const byte = body[end - 1];
+    if (byte === 0x20 || (byte >= 0x09 && byte <= 0x0d)) {
+      end--;
+      continue;
+    }
+    // Non-ASCII ECMAScript whitespace ends in a UTF-8 continuation byte.
+    if ((byte & 0xc0) !== 0x80) break;
+    // The longest UTF-8 whitespace character uses three bytes.
+    const whitespace = /\s$/u.exec(body.toString('utf8', Math.max(0, end - 3), end));
+    if (!whitespace) break;
+    end -= Buffer.byteLength(whitespace[0]);
+  }
+  return end;
+}
+
 /** Cheap conservative hint; positive matches still go through the schema-aware scanner.
  * Keep legacy inline documents/files eligible for recovery as well as images.
  */
 export function hasRequestMediaMarkers(body: Buffer): boolean {
-  return /"type"\s*:\s*"(?:input_image|input_file|image|document|image_url)"/.test(body.toString('utf8'));
+  for (const marker of mediaTypeValues) {
+    for (let pos = body.indexOf(marker); pos !== -1; pos = body.indexOf(marker, pos + 1)) {
+      if (body[pos - 1] !== 0x22) continue;
+      const colon = beforeMarkerWhitespace(body, pos - 1) - 1;
+      if (body[colon] !== 0x3a) continue;
+      const end = beforeMarkerWhitespace(body, colon);
+      if (end >= mediaTypeKey.length && mediaTypeKey.compare(body, end - mediaTypeKey.length, end) === 0) return true;
+    }
+  }
+  return false;
 }
 
 function isImageMimeType(mimeType: string): boolean {
