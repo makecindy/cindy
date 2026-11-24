@@ -110,8 +110,12 @@ function recordBillingSegment(
   if (cache1h > cacheCreate) return;
   const id = message.id;
   if (segments.has(id) || segments.size >= MAX_SEGMENTS_PER_TASK) return;
+  // A terminal frame closes the request; omitted cache counters still need
+  // independent confirmation from the SDK's turn totals before pricing.
+  const complete = ['cache_read_input_tokens', 'cache_creation_input_tokens']
+    .every(field => start[field] !== undefined || final[field] !== undefined);
   segments.set(id, {
-    id, model: message.model, modelConfirmed: true, complete: true,
+    id, model: message.model, modelConfirmed: true, complete,
     priceVariant: speed === 'fast' || tier === 'priority' ? 'priority' : tier === 'batch' ? 'batch' : 'standard',
     inputTokens: inputCount('input_tokens'), outputTokens: numberField(final, 'output_tokens'),
     cacheReadTokens: inputCount('cache_read_input_tokens'), cacheCreateTokens: cacheCreate,

@@ -384,7 +384,15 @@ function mergeProxyUsage(ctx: TranslateContext, sdk: UsageSegment[]): UsageSegme
       if (index === undefined) {
         merged.push({ ...request, id: `claude:proxy/${request.id}:${parent}` });
       } else if (!merged[index]?.complete) {
-        merged[index] = { ...request, id: sdkId };
+        const previous = merged[index]!;
+        merged[index] = request.complete ? { ...request, id: sdkId } : {
+          ...request, id: sdkId,
+          inputTokens: Math.max(previous.inputTokens, request.inputTokens),
+          outputTokens: Math.max(previous.outputTokens, request.outputTokens),
+          cacheReadTokens: Math.max(previous.cacheReadTokens ?? 0, request.cacheReadTokens ?? 0),
+          cacheCreateTokens: Math.max(previous.cacheCreateTokens ?? 0, request.cacheCreateTokens ?? 0),
+          cacheCreate1hTokens: Math.max(previous.cacheCreate1hTokens ?? 0, request.cacheCreate1hTokens ?? 0),
+        };
       }
       added.add(request.id);
     }
@@ -2299,7 +2307,13 @@ function handleResult(
   // On the first result after resume that aggregate may still include history,
   // so a mismatch must fail closed to token-only accounting rather than price
   // an incomplete set of requests.
-  const usageSegmentsComplete = segmentsMatchResult;
+  const partialProxyUsage = turnUsageSegments.some(segment => segment.modelConfirmed && !segment.complete);
+  // The general usage display can subtract a missing historical counter as zero;
+  // that fallback is not an independent measurement for pricing a partial request.
+  const knownCacheBaseline = !aggregateBeforeThisResult ||
+    (aggregateBeforeThisResult.cacheReadTokens !== undefined && aggregateBeforeThisResult.cacheCreateTokens !== undefined);
+  const usageSegmentsComplete = segmentsMatchResult && (!partialProxyUsage ||
+    (knownCacheBaseline && resultUsage?.cacheReadTokens !== undefined && resultUsage.cacheCreateTokens !== undefined));
   const finalTextForLogs = msg.is_error ? redactSensitiveText(finalText) : finalText;
 
   // turn end usage 锁定: Claude Code result.usage 是 session aggregate,

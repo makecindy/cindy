@@ -348,9 +348,22 @@ describe('ClaudeSubagentUsageBridge', () => {
   });
 });
 
-it.each(['proxy', 'sdk-and-proxy', 'legacy', 'truncated', 'foreign-session', 'untagged', 'late-launch', 'early-response'] as const)(
-  'prices the main model and only identifiable completed background requests (%s)',
-  async mode => {
+const cacheCases = [
+  { name: 'missing read bucket, late 300k', start: { cache_creation_input_tokens: 0 }, aggregate: { cache_read_input_tokens: 300_000, cache_creation_input_tokens: 0 }, expected: null },
+  { name: 'missing write bucket, late 300k', start: { cache_read_input_tokens: 0 }, aggregate: { cache_read_input_tokens: 0, cache_creation_input_tokens: 300_000 }, expected: null },
+  { name: 'independent zero buckets', start: {}, aggregate: { cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }, expected: 0.002 },
+  { name: 'neither source reports cache', start: {}, aggregate: {}, expected: null },
+  { name: 'SDK confirms 300k', start: {}, aggregate: {}, expected: 0.302 },
+  { name: 'SDK observes 300k, aggregate agrees', start: {}, aggregate: { cache_read_input_tokens: 300_000, cache_creation_input_tokens: 0 }, expected: 0.302 },
+  { name: 'unknown prior cache baseline', start: { cache_read_input_tokens: 300_000 }, aggregate: { cache_read_input_tokens: 300_000, cache_creation_input_tokens: 0 }, expected: null },
+  { name: 'explicit zero buckets', start: { cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }, aggregate: {}, expected: 0.002 },
+] as const;
+
+it.each([
+  ...['proxy', 'sdk-and-proxy', 'legacy', 'truncated', 'foreign-session', 'untagged', 'late-launch', 'early-response'].map(mode => ({ mode, name: mode, cache: undefined })),
+  ...cacheCases.map(cache => ({ mode: 'proxy', name: cache.name, cache })),
+])('prices the main model and only identifiable completed background requests ($name)',
+  async ({ mode, cache }) => {
     const bridge = new ClaudeSubagentUsageBridge();
     const queue = createAsyncQueue<AgentEvent>();
     const sdkSessionId = 'sdk-session';
@@ -372,16 +385,20 @@ it.each(['proxy', 'sdk-and-proxy', 'legacy', 'truncated', 'foreign-session', 'un
       getSubagentTaskUsage: (id: string, sid?: string) => bridge.getTaskUsage(id, sid),
     };
     const usage = { input_tokens: 100, output_tokens: 10, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
-    const childUsage = {
+    const childUsage = cache ? { input_tokens: 100, output_tokens: 10, ...cache.start } : {
       ...usage, cache_creation_input_tokens: 50,
       cache_creation: { ephemeral_5m_input_tokens: 20, ephemeral_1h_input_tokens: 30 },
     };
     const emit = (msg: Parameters<typeof translateSdkMessage>[0]) => translateSdkMessage(msg, queue, ctx);
     function sdkRequest(id: string, model: string, parent?: string) {
+      const sdkUsage = cache?.name.startsWith('SDK ') ? { ...usage, cache_read_input_tokens: 300_000 } : childUsage;
       for (const event of [
-        { type: 'message_start', message: { id, model, usage: parent ? childUsage : usage } },
-        { type: 'message_delta', usage: parent ? { output_tokens: 10 } : usage }, { type: 'message_stop' },
+        { type: 'message_start', message: { id, model, usage: parent ? sdkUsage : usage } },
+        { type: 'message_delta', usage: parent ? (cache?.name === 'SDK confirms 300k' ? sdkUsage : { output_tokens: 10 }) : usage }, { type: 'message_stop' },
       ]) emit({ type: 'stream_event', parent_tool_use_id: parent, event });
+    }
+    if (cache?.name === 'unknown prior cache baseline') {
+      emit({ type: 'result', result: 'previous turn', usage: { input_tokens: 20, output_tokens: 5 } });
     }
     sdkRequest('msg-main', 'main-model');
     if (mode !== 'late-launch') {
@@ -392,7 +409,7 @@ it.each(['proxy', 'sdk-and-proxy', 'legacy', 'truncated', 'foreign-session', 'un
       tool_use_result: { isAsync: true, agentId: 'agent-a', resolvedModel: model, prompt },
     });
     if (mode !== 'early-response') launch();
-    if (mode === 'sdk-and-proxy') sdkRequest('msg-child', model, 'tool-a');
+    if (mode === 'sdk-and-proxy' || cache?.name.startsWith('SDK ')) sdkRequest('msg-child', model, 'tool-a');
     if (mode !== 'legacy') {
       const transform = createClaudeSubagentUsageRequestTransform(bridge);
       for (const reqId of [1, 2]) {
@@ -412,7 +429,7 @@ it.each(['proxy', 'sdk-and-proxy', 'legacy', 'truncated', 'foreign-session', 'un
           { type: 'message_start', message: { id: 'msg-child', model, usage: { ...childUsage, output_tokens: 0 } } },
           { type: 'message_delta', usage: {
             output_tokens: 10,
-            cache_creation: mode === 'sdk-and-proxy' ? { ephemeral_1h_input_tokens: 0 } : { ephemeral_5m_input_tokens: 20 },
+            ...(!cache ? { cache_creation: mode === 'sdk-and-proxy' ? { ephemeral_1h_input_tokens: 0 } : { ephemeral_5m_input_tokens: 20 } } : {}),
           } },
           ...(mode === 'truncated' ? [] : [{ type: 'message_stop' }]),
         ];
@@ -424,22 +441,28 @@ it.each(['proxy', 'sdk-and-proxy', 'legacy', 'truncated', 'foreign-session', 'un
       emit({ type: 'system', subtype: 'task_notification', status: 'completed', task_id: 'agent-a', tool_use_id: 'tool-a' });
       launch();
     }
-    emit({ type: 'result', result: 'done', usage: { ...usage, input_tokens: 200, output_tokens: 20, cache_creation_input_tokens: 50 } });
+    const reportedCache: { cache_read_input_tokens?: number; cache_creation_input_tokens?: number } = cache?.aggregate ?? { cache_read_input_tokens: 0, cache_creation_input_tokens: 50 };
+    const priorTurn = cache?.name === 'unknown prior cache baseline';
+    emit({ type: 'result', result: 'done', usage: { input_tokens: priorTurn ? 220 : 200, output_tokens: priorTurn ? 25 : 20, ...reportedCache } });
     queue.end();
     let segments = normalizeTurnUsageSegments([]);
+    let complete = false;
     for await (const event of queue) {
-      if (event.type === 'done') segments = normalizeTurnUsageSegments((event.data as { usageSegments?: unknown }).usageSegments);
+      if (event.type !== 'done') continue;
+      const done = event.data as { usageSegments?: unknown; usageSegmentsComplete?: boolean };
+      segments = normalizeTurnUsageSegments(done.usageSegments);
+      complete = done.usageSegmentsComplete === true;
     }
     const models = ['main-model', model];
     const { perModel } = resolveClaudeTurnCostSinks(models.map(model => ({
-      model, inputTokensDelta: 100, outputTokensDelta: 10, cacheReadTokensDelta: 0,
-      cacheCreateTokensDelta: model === 'child-model' ? 50 : 0, costUsdDelta: 0,
+      model, inputTokensDelta: 100, outputTokensDelta: 10, cacheReadTokensDelta: model === 'child-model' ? reportedCache.cache_read_input_tokens ?? 0 : 0,
+      cacheCreateTokensDelta: model === 'child-model' ? reportedCache.cache_creation_input_tokens ?? 0 : 0, costUsdDelta: 0,
     })), { supplier: Object.fromEntries(models.map((modelId, index) => [modelId, {
       modelId, providerId: 'supplier', source: 'user-override', currency: 'USD', approximate: true,
-      inputPerMtok: 10 * (index + 1), outputPerMtok: 0, cacheCreatePerMtok: 5, cacheCreate1hPerMtok: 20,
-    }])) }, { providerId: 'supplier', billingRoute: 'provider-api', region: 'global' }, segments);
+      inputPerMtok: 10 * (index + 1), outputPerMtok: 0, cacheReadPerMtok: 1, cacheCreatePerMtok: 5, cacheCreate1hPerMtok: 20,
+    }])) }, { providerId: 'supplier', billingRoute: 'provider-api', region: 'global' }, segments, complete);
     expect(perModel.map(row => [row.model, row.money?.amount ?? null])).toEqual([
-      ['main-model', 0.001], [model, ['proxy', 'sdk-and-proxy', 'early-response'].includes(mode) ? 0.0027 : null],
+      ['main-model', 0.001], [model, cache ? cache.expected : ['proxy', 'sdk-and-proxy', 'early-response'].includes(mode) ? 0.0027 : null],
     ]);
   },
 );
