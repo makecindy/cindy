@@ -261,6 +261,25 @@ identity.displayTemplate 时,`/oauth` 回查与连接结果里 account.label 给
   `http://127.0.0.1:<redirectPort><callbackPath>`。必须与 tokenBroker、
   redirectPort 同时声明(302 目标端口/路径在 broker 服务端写死,三者一套约定)。
 
+**设备码登录(可选,`deviceAuthorizationUrl`)**:服务商支持 RFC 8628 Device Authorization
+Grant(飞书、GitHub、微软等,常见于「扫码 / 命令行登录」)时,在 oauth 详单里声明设备码端点即可,
+插件代码与 `/oauth` 调用都不用改。主机连接时:
+
+1. 向设备码端点申请验证码(表单带 `client_id` 与 scopes;有 clientSecret 时另带 HTTP Basic 认证);
+2. 拉起服务商确认页——响应带 `verification_uri_complete`(验证码已嵌在链接里)时直接打开;只给通用
+   确认页时,本机把验证码放进剪贴板供用户粘贴;远程 / 手机发起的连接由控制端卡片展示验证码与倒计时
+   (控制端需支持新版授权卡片,旧控制端会失败并提示更新,不会改在执行电脑上开浏览器);
+3. 按服务商给的间隔轮询 `tokenUrl`(`grant_type=urn:ietf:params:oauth:grant-type:device_code`,
+   表单带 client 凭证),处理等待 / 放慢 / 拒绝 / 过期,拿到令牌后与授权码模式一样保管、刷新与注入。
+
+确认页地址必须落在设备码端点 / authorizeUrl / tokenUrl 所在域名或 `network.hosts` 白名单内,否则连接
+以 `EXCHANGE_FAILED` 拒绝——服务商确认页在别的域名时把它声明进 hosts。设置页的「连接账号」照常
+`POST /oauth/<key>/connect`,等待期间提示用户去浏览器(或飞书等应用)里确认即可;用户拒绝返回
+`CANCELLED`,验证码过期返回 `TIMEOUT`。约束:`authorizeUrl` 仍必填——不认识本字段的旧版 Cindy
+会忽略它、退回授权码 + loopback 流程,依赖设备码的插件应把 `minCindyVersion` 设到支持它的版本;
+与 `tokenBroker` / `brokerBounce` 互斥;服务端插件市场同步支持前,声明本字段的插件只适合本地
+`.cindy` 安装。
+
 连接时还可以降面授权:`POST /oauth/<key>/connect` 支持可选 body
 `{"scopes":[...]}`——本次授权只申请清单 scopes 的**非空子集**(如"只读连接"
 按钮只带读 scope);越界或不在清单里的条目 400。不带 body = 申请全量声明面。
