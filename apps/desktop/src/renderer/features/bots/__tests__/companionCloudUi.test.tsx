@@ -538,14 +538,22 @@ describe('BotHomeComputerSetting', () => {
     await waitFor(() => expect(h.navigate).toHaveBeenCalledWith('/bots/local-orphan?settings=1'));
   });
 
-  it('shows why a move did not happen', async () => {
+  // #12112, unit: distinguish oversized skills from older hosts' generic version refusals;
+  // either refusal keeps the owner on the current buddy instead of navigating to the target.
+  it.each([
+    { code: 'OFFLINE', key: 'switchOffline' },
+    { code: 'TARGET_OUTDATED', key: 'targetOutdated' },
+    { code: 'SKILL_TARGET_OUTDATED', key: 'skillTargetOutdated' },
+    { code: 'SKILL_TARGET_OUTDATED', key: 'skillTargetOutdated', oversizedSkill: { slug: 'research-paper-writing', bodyBytes: 71_560 } },
+  ])('shows why a move did not happen ($code)', async ({ code, key, oversizedSkill }) => {
     maker.getCompanionHomeChoices.mockResolvedValue(local());
-    maker.switchCompanionHome.mockResolvedValue({ ok: false, code: 'OFFLINE' });
+    maker.switchCompanionHome.mockResolvedValue({ ok: false, code, oversizedSkill });
     show(snapshot('desk'));
     openMenu();
     fireEvent.click(await screen.findByText('bots.cloud.switchTo:{"device":"Laptop"}'));
     fireEvent.click(await screen.findByRole('button', { name: 'bots.cloud.switchAction:{"device":"Laptop"}' }));
-    expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'bots.cloud.switchOffline:{"name":"Mia","device":"Laptop"}');
+    const params = { name: 'Mia', device: 'Laptop', ...(oversizedSkill && { context: 'skill', ...oversizedSkill }) };
+    expect((await screen.findByRole('alert')).textContent).toBe(`bots.cloud.${key}:${JSON.stringify(params)}`);
     expect(h.navigate).not.toHaveBeenCalled();
   });
 

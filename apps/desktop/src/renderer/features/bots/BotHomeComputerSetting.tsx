@@ -47,6 +47,7 @@ const SWITCH_ERROR_KEYS: Record<CompanionCloudFailureCode, string> = {
   HOME_OUTDATED: 'bots.cloud.homeOutdated',
   PAUSED: 'bots.cloud.resumeToMove',
   TARGET_OUTDATED: 'bots.cloud.targetOutdated',
+  SKILL_TARGET_OUTDATED: 'bots.cloud.skillTargetOutdated',
   // Answered with the force-take-over dialog instead (`forceTarget`); kept for completeness.
   HOME_UNRESPONSIVE: 'bots.cloud.switchOffline',
 };
@@ -159,7 +160,9 @@ export function useCompanionHomeSwitch(bot: CompanionHomeBot, failures: 'inline'
       if (!result.ok) {
         setRepairAvailable(!!result.profileFailure);
         report(result.profileFailure ? t(result.profileFailure.field === 'identitySource' ? 'bots.cloud.profileIdentityTooLong' : 'bots.cloud.profileUserTooLong', { limit: result.profileFailure.maxLength })
-          : t(SWITCH_ERROR_KEYS[result.code] ?? 'bots.cloud.switchFailed', { name: bot.name, device }),
+          : t(SWITCH_ERROR_KEYS[result.code] ?? 'bots.cloud.switchFailed', {
+            name: bot.name, device, context: result.oversizedSkill ? 'skill' : undefined, ...result.oversizedSkill,
+          }),
           result.profileFailure ? { label: t('bots.cloud.repair.action'), onClick: () => setRepairOpen(true) } : conflict.report(result));
         refreshCompanionCloud();
         return;

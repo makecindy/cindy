@@ -526,7 +526,7 @@ import { materializeSshRemoteMedia } from '../file-browser/ssh-media.js';
 import { readGeneratedImageFile, MAX_GENERATED_IMAGE_BYTES } from '../cindy-media/generatedMedia.js';
 import { createDesktopGeneratedImageDelivery } from '../cindy-media/generatedImageDelivery.desktop.js';
 import { authorizeSharedTaskHistory, liveSharedTaskTarget } from '../remote-agent/controller/providerShareTaskLocation.js';
-import { findReceivedShare, parseProviderShareAgentDeviceId, providerShareAccessEpoch, resolveRemoteAgentTarget } from '../device-link/providerShareGuest.js';
+import { findReceivedShare, parseProviderShareAgentDeviceId, providerShareAccessEpoch, providerShareReceivedChangeSequence, resolveRemoteAgentTarget, resolveRemoteAgentTargetWhenReady } from '../device-link/providerShareGuest.js';
 import { readReceivedProviderShareQuota } from '../device-link/providerShareRuntime.js';
 import { setGeneratedImageRecovery } from '../cindy-media/generatedImageRecovery.js';
 import {
@@ -3275,7 +3275,7 @@ async function probeCompanionHomeCaps(deviceId: string, timeoutMs: number): Prom
 /** The companion's home listed online: only an explicit answer may lead to a take-over (cloud-companions.md §3.1). */
 const companionCloudHomeVersion = (deviceId: string) => askCompanionHomeVersion(timeoutMs => probeCompanionHomeCaps(deviceId, timeoutMs));
 const COMPANION_FAILURE_CODES: ReadonlySet<CompanionCloudFailureCode> = new Set<CompanionCloudFailureCode>(
-  ['HOME_CONFLICT', 'LOCAL_CINDY_CONFLICT', 'OFFLINE', 'NOT_ENABLED', 'FAILED', 'TARGET_UNAVAILABLE', 'BUSY', 'HOME_OUTDATED', 'PAUSED', 'TARGET_OUTDATED']);
+  ['HOME_CONFLICT', 'LOCAL_CINDY_CONFLICT', 'OFFLINE', 'NOT_ENABLED', 'FAILED', 'TARGET_UNAVAILABLE', 'BUSY', 'HOME_OUTDATED', 'PAUSED', 'TARGET_OUTDATED', 'SKILL_TARGET_OUTDATED']);
 /** Kept and merged Cindy ids from a request (local IPC or another computer). */
 function companionMergeIds(keepBotId: unknown, fromBotIds: unknown): { keep: string; from: string[] } {
   if (typeof keepBotId !== 'string' || !keepBotId || keepBotId.length > 200) throwIpcError('INVALID_PARAMS', 'keepBotId required');
@@ -10436,6 +10436,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         }
       };
     },
+    retryShareDirectory: async (deviceId) => {
+      if (!parseProviderShareAgentDeviceId(deviceId)) throwIpcError('INVALID_PARAMS', 'Invalid shared provider');
+      const before = providerShareReceivedChangeSequence();
+      await resolveRemoteAgentTargetWhenReady(deviceId, { retryDirectory: true });
+      const receivedChangeSequence = providerShareReceivedChangeSequence();
+      return receivedChangeSequence === before ? {} : { receivedChangeSequence };
+    },
     locations: () => {
       const owner = getCurrentDbClientSnapshot();
       if (controlledLocationsRead?.owner === owner) return controlledLocationsRead.promise;
@@ -11545,7 +11552,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     log,
   };
-  registerMakerSessionAgentSwitchHandler(makerSessionRegistry, agentSwitchDeps);
+  registerMakerSessionAgentSwitchHandler(makerSessionRegistry, agentSwitchDeps, (event, sessionId) => {
+    if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
+    providerGroupService?.noteUserAction(sessionId);
+  });
 
   /** 终态错误后输入协调器收尾、turn 真正停下来再交接(交接拒绝运行中的 turn)。 */
   async function waitForProviderGroupTurnIdle(sessionId: string): Promise<void> {
@@ -12350,7 +12360,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
      * reconcileCreateOptsAgainstDb 再读当前落库档位,不使用入队时的旧快照。
      */
     resumeWithStoredPermissionMode?: boolean;
-  }, hostBotDispatch = false): Promise<SendToSessionInternalResult> {
+  }, hostDispatch?: 'bot' | 'group'): Promise<SendToSessionInternalResult> {
     await assertTaskActionCurrent();
     if (hasTaskActionAuthorization()) params = { ...params, forceQueue: true };
     const {
@@ -12412,7 +12422,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // A hidden lane is execution context, not a group delivery destination.
       // Only host-managed group turns associate their output with the timeline;
       // clientId prefixes and message source labels do not prove that ownership.
-      if (link?.role === 'group' && !hostBotDispatch) {
+      if (link?.role === 'group' && !hostDispatch) {
         return {
           ok: false as const,
           errorCode: 'UNSUPPORTED_CAPABILITY' as const,
@@ -12804,9 +12814,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           message: `session ${targetSessionId} not found`,
         };
       }
-      if (meta.agentKind === 'acp' && params.origin?.kind !== 'orca') {
-        // Agent-to-agent messages into plugin-engine tasks are not supported yet, except within a
-        // collaboration team (Lead ↔ plugin-engine Worker, phase 2 of docs/plans/acp-plugin-bridge.md).
+      // The group dispatcher owns the turn and publishes its reply from this group lane.
+      const managedGroupTurn = hostDispatch === 'group' && dispatchCompanionLink?.role === 'group';
+      if (meta.agentKind === 'acp' && params.origin?.kind !== 'orca' && !managedGroupTurn) {
         return {
           ok: false as const,
           errorCode: 'UNSUPPORTED_CAPABILITY' as const,
@@ -13303,7 +13313,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
      * permission mode (and Plan), never bypass.
      */
     resumeWithStoredPermissionMode?: boolean;
-  }) => {
+  }, hostDispatch: 'bot' | 'group' = 'bot') => {
     if (params.clientId && params.authorizationGuard) {
       const delivery = await resolveBotAuthorizationDelivery(params.clientId, async (clientId) => {
         const [row] = await getDbClient().drizzle
@@ -13417,11 +13427,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
     // This private dispatcher owns Bot/group inputs and their host continuations.
     // Keep the host marker separate from message params so handoff payloads
-    // cannot supply it. External cross-task delivery uses the default false.
+    // cannot supply it. External cross-task delivery has no host marker.
     // Visible group tasks also accept private user turns. Queue group requests even when idle
     // so their terminal carries the exact input ID the group execution is waiting for.
     return sendToSessionInternal({ ...params, forceQueue: isBotGroupInTaskClientId(params.clientId),
-      onAccepted: () => params.onAccepted?.() }, true);
+      onAccepted: () => params.onAccepted?.() }, hostDispatch);
   };
 
   setBotInvitationWelcomeDispatch(input => dispatchBotSessionMessage({ ...input, invitationWelcome: true }));
@@ -13651,7 +13661,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // Same attachment shape as a task message: images by their media address, files by path.
         files: attachments?.map(toTaskFile),
         onAccepted,
-      }),
+      }, 'group'),
     prepareAttachments: botGroupAttachments.prepare,
     abortLane: async (sessionId, inputClientId) => {
       if (!inputClientId) return stopSessionTurnExplicitly(sessionId);
@@ -14269,7 +14279,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     readProviderRouting: () => getProviderRoutingContext(),
     hasCindyAiApiKey: () => readClaudeApiKey() != null,
   });
-  setSessionOpeningModelAdmission(async body => {
+  setSessionOpeningModelAdmission(async (body, sourceSessionId) => {
     // 插件引擎任务不在内置模型目录里：按本机此刻提供的插件引擎准入(docs/plans/acp-plugin-bridge.md)。
     if (isPluginEngineKind(body.agentKind)) {
       return admitPluginEngineSession(body, getPluginHarnessRegistry().list(), pluginEngineModelsOf, pluginEngineSettingsOf);
@@ -14277,7 +14287,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const execution = await resolveSessionExecution({
       agentKind: body.agentKind, model: body.model, providerId: body.providerId,
       effort: body.effort, fastMode: body.fastMode,
-    });
+    }, sourceSessionId);
     return { ...body, ...execution, effort: execution.effort ?? '',
       agentKind: execution.agentKind === 'claude-code' ? 'cc' : execution.agentKind };
   });

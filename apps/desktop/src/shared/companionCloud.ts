@@ -1,3 +1,4 @@
+import type { CompanionOversizedSkill } from '@cindy/device-link';
 import type { BotProfileSourceFailure } from './botProfileSources.js';
 
 /** Cloud companions (docs/product-rules/cloud-companions.md): which computer runs each companion. */
@@ -59,6 +60,8 @@ export type CompanionCloudFailureCode =
   | 'PAUSED'
   /** The chosen computer runs a Cindy too old for a V2 teammate (a project): update it first. */
   | 'TARGET_OUTDATED'
+  /** The chosen computer still rejects imported skills above its 64 KiB body limit. */
+  | 'SKILL_TARGET_OUTDATED'
   /**
    * Local only (never sent to another computer): the home is listed online but did not answer, so it
    * was not asked to hand over. Taking over anyway needs `CompanionSwitchOptions.force`.
@@ -68,6 +71,7 @@ export type CompanionCloudFailureCode =
 export type CompanionCloudActionResult =
   | { ok: true }
   | { ok: false; code: CompanionCloudFailureCode; homeDeviceId?: string | null;
+      oversizedSkill?: CompanionOversizedSkill;
       /** Local identity conflict provenance; older/remote replies may omit it. Never a cleanup authorization. */
       conflictingBotId?: string; conflictingDeviceId?: string | null;
       /** Optional detail of FAILED; older clients retain the existing generic failure. */

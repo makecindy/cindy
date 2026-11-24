@@ -2218,6 +2218,13 @@
       }
     },
     "appearance": {
+      "chatLayout": {
+        "label": "Chat layout",
+        "standard": "Standard",
+        "wide": "Wide",
+        "width": "Content width",
+        "hint": "A share of the space between the chat margins. Narrow panes adjust automatically."
+      },
       "title": "Appearance",
       "modeLabel": "Appearance Mode",
       "appIcon": {
@@ -2463,6 +2470,10 @@
       }
     },
     "windowBehavior": {
+      "trayCard": {
+        "label": "Tray hover card",
+        "hint": "Hover over the Cindy tray icon to see remaining quota and unread tasks."
+      },
       "menubar": {
         "label": "Show remaining usage in the menu bar",
         "hint": "Adds a Cindy icon to the macOS menu bar. Click it to see what's left on your subscriptions, your Cindy balance and today's usage."
@@ -2808,7 +2819,8 @@
         "errorBusy": "An upload is already in progress. Wait for it to finish.",
         "errorFailed": "Log upload failed. Check your network and try again",
         "unavailableNotConfigured": "Log upload is not configured in this build.",
-        "unavailableNoConsent": "You need to accept the Privacy Policy first."
+        "unavailableNoConsent": "You need to accept the Privacy Policy first.",
+        "consentPrompt": "Before uploading, read the <policy>Privacy Policy</policy> and select <accept>Agree</accept>."
       },
       "openLogsDirError": "Failed to open logs directory",
       "autoUpdateLabel": "Install updates while idle",
@@ -5183,6 +5195,7 @@
       "formHint": "The user ID is numeric; DM @userinfobot to look up your own ID.",
       "connect": "Connect",
       "connectingAction": "Connecting…",
+      "connectTimedOut": "Connection timed out. Try again.",
       "errorCode": {
         "invalid-token": "Bot token is invalid or was reset — enter it again",
         "provider-api": "Telegram returned an error — try again shortly",
@@ -8212,6 +8225,7 @@
           "official": "Official",
           "community": "Community"
         },
+        "communityDisclaimer": "Community developers build and maintain this plugin. Cindy has reviewed this version but can’t guarantee it’s safe in every situation.",
         "publisherDescription": {
           "official": "Published and maintained by Cindy",
           "community": "Published and maintained by community developers",
@@ -8326,7 +8340,7 @@
             "authTitle": "Private Repositories",
             "authBody": "Authentication relies entirely on your system Git configuration — Cindy never stores Git credentials. SSH: a working key must be configured on this machine; if the organization enforces SAML SSO, authorize the key for that organization via Configure SSO in your GitHub SSH key settings. HTTPS: use a Personal Access Token stored by the system credential helper.",
             "rulesTitle": "Install Rules",
-            "rulesBody": "Plugin ids are globally unique, first come first served — conflicts with installed plugins are called out explicitly. Plugins whose ids use the official reserved prefixes ({{reservedGhostIdPrefixes}}) cannot be installed by dragging in a package, choosing a file, or using a custom plugin marketplace. Declared permissions are shown on the detail page; clicking Install completes installation and enables the plugin without another permission confirmation dialog.",
+            "rulesBody": "Plugin ids are globally unique, first come first served — conflicts with installed plugins are called out explicitly. Plugins whose ids use the official reserved prefixes ({{reservedGhostIdPrefixes}}) cannot be installed by dragging in a package, choosing a file, or using a custom plugin marketplace. Declared permissions are shown on the detail page. When you first install a plugin manually, Cindy asks you to confirm its requested permissions. The plugin is enabled automatically after installation.",
             "copy": "Copy guide",
             "copied": "Guide copied to clipboard.",
             "copyFailed": "Copy failed. Try again."
@@ -8439,6 +8453,8 @@
         "installMeta": "Version {{version}} · {{source}}",
         "updateMeta": "Version {{from}} → {{to}} · {{source}}",
         "installDescription": "Nothing is installed until you confirm. The plugin is enabled right after installing, and you can disable or uninstall it anytime on the Plugins page.",
+        "customMarketSourceNotice": "Make sure you trust this marketplace and review the permissions the plugin requests.",
+        "localFileSourceNotice": "Make sure this file came from a source you trust before installing.",
         "updateDescription": "The update starts only after you confirm. The current version remains available until then.",
         "grantsTitle": "After installing it will have:",
         "noPermissions": "This plugin declares no additional permissions.",
@@ -12520,6 +12536,8 @@
       "transferBusy": "{{name}} is still working on a reply. Move it after the reply finishes",
       "targetUnavailable": "“{{device}}” isn’t available. It must be online with remote control turned on",
       "targetOutdated": "“{{device}}” runs an older Cindy that can’t run {{name}} yet. Update Cindy there first",
+      "skillTargetOutdated": "A Skill in {{name}} has a body larger than 64 KB, which the older Cindy on “{{device}}” cannot receive. Update Cindy on that computer before moving your buddy. Your buddy remains on the original computer",
+      "skillTargetOutdated_skill": "The older Cindy on “{{device}}” can’t receive the Skill “{{slug}}”. Its body is {{bodyBytes, number}} bytes, over the 64 KB limit. {{name}} is still running on the original computer. Update Cindy on the target computer and try again.",
       "targetOutdatedItem": "Move to “{{device}}” · older Cindy",
       "targetOutdatedMeta": "Older Cindy",
       "olderTargetNote": "“{{device}}” runs an older Cindy, so {{name}} works the older way there: the chat history still syncs, but project rules and automations don’t apply there.",
@@ -12759,6 +12777,7 @@
           "conflict": "This bot is already connected on this computer, in Settings → IM bots or on another buddy.",
           "botUnavailable": "{{name}} is unavailable right now. Try again once it’s back.",
           "connectFailed": "Couldn’t connect: {{reason}}",
+          "connectTimedOut": "Connection timed out. Try again.",
           "failed": "Couldn’t finish. Try again later.",
           "personalBotGone": "This bot is no longer set up in Settings → IM bots. Enter its credentials instead."
         },
@@ -16470,7 +16489,13 @@
       "open": "Open task “{{title}}”",
       "untitled": "Untitled task",
       "startedOne": "Started",
-      "handedToOne": "Handed to"
+      "handedToOne": "Handed to",
+      "status": {
+        "running": "Running",
+        "needsAction": "Waiting for you",
+        "error": "Error",
+        "idle": "Idle"
+      }
     },
     "botTaskLetter": {
       "replied": "replied",
@@ -17702,15 +17727,15 @@
   "scheduler": {
     "prTrigger": {
       "fallback": "Scheduled checks will continue while GitHub App notifications are unavailable.",
-      "label": "PR",
-      "url": "Pull request URL",
+      "label": "PR / MR",
+      "url": "PR or MR URL",
       "condition": "Run when",
-      "any": "PR activity",
+      "any": "Activity",
       "merged": "Merged",
       "review": "Review activity",
       "ci": "CI status changes",
       "timed": "Also check on a schedule",
-      "invalid": "Enter a GitHub pull request URL."
+      "invalid": "Enter a GitHub PR or GitLab MR URL."
     },
     "presentation": {
       "status": {
