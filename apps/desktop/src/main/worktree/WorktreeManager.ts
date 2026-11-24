@@ -838,7 +838,7 @@ export async function awaitBackgroundCheckout(sessionId: string): Promise<void> 
 }
 
 export interface CreateWorktreeOptions {
-  /** Desktop new-task entry only; internal option, never taken from IPC request fields. */
+  /** Desktop new-task entry and Orca Worker creation; internal option, never taken from IPC request fields. */
   refreshDefaultSource?: boolean;
   /** Keep a handle on the background checkout so failure compensation can wait for it. */
   trackBackgroundCheckout?: boolean;

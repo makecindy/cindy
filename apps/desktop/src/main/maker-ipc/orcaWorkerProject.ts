@@ -354,9 +354,11 @@ export async function createWorkerWorktree(
 ): Promise<string> {
   const info = await probeWorkerProject(directory);
   if (!info.baseRepo) throw new Error('Worker worktree requires a Git repository');
+  // A Worker based on the origin default starts from a freshly fetched ref, like the
+  // Desktop new-task entry; other sources (the lead's branch, a commit) are unchanged.
   const created = await WorktreeManager.createWorktree(
     { sessionId, baseRepo: info.baseRepo, name: '', sourceBranch },
-    { trackBackgroundCheckout: true },
+    { trackBackgroundCheckout: true, refreshDefaultSource: true },
   );
   if (!created.ok) throw new Error(`Worker worktree creation failed: ${created.error.message}`);
   // Probe paths are realpaths, so a symlink spelling cannot change the subproject offset.

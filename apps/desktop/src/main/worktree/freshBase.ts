@@ -201,21 +201,25 @@ async function fetchRemoteDefaultBranch(
   return fetched;
 }
 
-/** Desktop creation refreshes only the selected origin default; never redirects
- * an explicit choice to upstream or a newly renamed remote default. */
+/** Desktop and Orca Worker creation refresh only the selected origin default; never
+ * redirect an explicit choice to upstream or a newly renamed remote default. The short
+ * `origin/<branch>` spelling (used by Orca tool calls) refreshes the same tracking ref. */
 export async function refreshSelectedDefaultSource(
   baseRepo: string,
   sourceBranch: string,
   totalBudgetMs = NET_TOTAL_BUDGET_MS,
 ): Promise<void> {
-  if (!sourceBranch?.startsWith('refs/remotes/origin/')) return;
+  const selected = sourceBranch?.startsWith('origin/')
+    ? `refs/remotes/${sourceBranch}`
+    : sourceBranch;
+  if (!selected?.startsWith('refs/remotes/origin/')) return;
   const deadline = Date.now() + totalBudgetMs;
   try {
-    if (sourceBranch !== (await readOriginDefaultBranch(baseRepo))) return;
+    if (selected !== (await readOriginDefaultBranch(baseRepo))) return;
     await fetchRemoteDefaultBranch(
       baseRepo,
       'origin',
-      sourceBranch.slice('refs/remotes/origin/'.length),
+      selected.slice('refs/remotes/origin/'.length),
       deadline - Date.now() - KILL_CLEANUP_BUDGET_MS,
     );
   } catch {

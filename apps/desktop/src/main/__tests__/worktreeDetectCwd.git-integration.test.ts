@@ -9,6 +9,7 @@ import { AcpAgent, type AcpLineTransport, type Logger } from '@cindy/maker-core'
 import { createCheckoutService } from '../worktree/checkout';
 import '../worktree/WorktreeManagerPorts.desktop';
 import { awaitBackgroundCheckout, createWorktree, detectCwd } from '../worktree/WorktreeManager';
+import { createWorkerWorktree } from '../maker-ipc/orcaWorkerProject';
 import { app } from 'electron';
 import type { WorktreeMeta } from '../worktree/types';
 
@@ -359,6 +360,39 @@ it.each(['fresh', 'offline', 'other-source', 'legacy', 'checkout-fails'] as cons
   },
   30_000,
 );
+
+// Orca Workers based on the origin default used to skip the refresh, so whole
+// batches started behind main. Tool calls name it as `origin/main`, which the
+// Desktop-only refresh did not recognize. Minimal failure: the remote advances
+// after the local fetch. Real Git + local bare remote, git-integration tier.
+it('creates an Orca Worker from the freshly fetched origin default', async () => {
+  fixture = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-worker-default-'));
+  vi.spyOn(app, 'getPath').mockReturnValue(fixture);
+  const remote = path.join(fixture, 'remote.git');
+  const seed = path.join(fixture, 'seed');
+  const repo = path.join(fixture, 'repo');
+  await fs.mkdir(seed);
+  const git = async (cwd: string, ...args: string[]) =>
+    (await exec('git', args, { cwd, windowsHide: true, timeout: 10_000 })).stdout.trim();
+  await git(seed, 'init', '--initial-branch=main');
+  await git(seed, 'config', 'user.name', 'Test');
+  await git(seed, 'config', 'user.email', 'test@example.invalid');
+  await fs.writeFile(path.join(seed, 'tracked.txt'), 'old');
+  await git(seed, 'add', '.');
+  await git(seed, 'commit', '-m', 'old');
+  await git(fixture, 'clone', '--bare', seed, remote);
+  await git(fixture, 'clone', remote, repo);
+  await fs.writeFile(path.join(seed, 'tracked.txt'), 'new');
+  await git(seed, 'commit', '-am', 'new');
+  await git(seed, 'push', remote, 'main');
+  const latest = await git(seed, 'rev-parse', 'HEAD');
+
+  const workerDir = await createWorkerWorktree('orca-worker', repo, 'origin/main');
+  await awaitBackgroundCheckout('orca-worker');
+
+  expect(await git(workerDir, 'rev-parse', 'HEAD')).toBe(latest);
+  expect(await fs.readFile(path.join(workerDir, 'tracked.txt'), 'utf8')).toBe('new');
+}, 30_000);
 
 // #6792: createWorktree must populate the linked worktree's full index after
 // background checkout. Existing checks use ordinary repositories. Reproduce
