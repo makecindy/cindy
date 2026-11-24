@@ -420,6 +420,12 @@ const page = await cindy.tasks.readMessages({ taskId: task.taskId, limit: 50 });
 // 保存 nextCursor；下一页传 after，不以最后一条 assistant 推断 run 已完成。
 ```
 
+**转发本轮进展**：当 `capabilities().runProgress === true` 时，调用
+`readMessages({taskId, progressForRun: runId, after?, limit?})`。结果带有相同的
+`progressForRun`，按时间返回这次输入已落库的用户可见进展。使用消息 ID 去重。
+Codex 使用已结束的 commentary，Claude 和 Pi 使用明确以调用工具结束的助手文本。
+没有明确进展的轮次可以只发最终答复。旧宿主继续按原有的 outputMessageId 读取最终答复。
+
 **边生成边显示（新增接口，尚未发布）**：`capabilities().runPreview === true` 时，`getRun` 在
 `status === 'running'` 且任务当前执行的正是这次输入时，可额外返回 `preview: { text }`：
 Agent 正在输出的那一段回答（最多 32768 个 UTF-16 字符，超出只保留开头），已去掉内部引用标记。
