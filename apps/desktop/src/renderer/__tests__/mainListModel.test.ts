@@ -578,21 +578,26 @@ describe('automations sidebar group', () => {
 
   const teammateDir = '/Users/u/Cindy/owners/acct/bots/bot_1/workspace';
 
-  it('collects automation runs out of projects and chats, hiding a teammate project left empty', () => {
+  // #12497, unit: the sidebar used to extract an explicitly assigned Buddy run just like a cwd-only run.
+  it('keeps only assigned Buddy runs under their project when both groups are enabled', () => {
     const review = session({
       title: 'review', source: 'scheduler', workspaceKind: 'project',
-      workingDir: teammateDir, updatedAt: '2026-11-17T03:30:00Z',
+      projectDir: teammateDir, workingDir: '/separate-checkout', updatedAt: '2026-11-17T03:30:00Z',
+    });
+    const cwdOnly = session({
+      title: 'cwd only', source: 'scheduler', workspaceKind: 'project',
+      workingDir: teammateDir, updatedAt: '2026-11-17T02:30:00Z',
     });
     const report = session({
       title: 'report', source: 'scheduler', workspaceKind: 'project',
-      workingDir: '/repo', updatedAt: '2026-11-16T09:00:00Z',
+      projectDir: '/repo', workingDir: teammateDir, updatedAt: '2026-11-16T09:00:00Z',
     });
     const work = session({ title: 'work', workspaceKind: 'project', workingDir: '/repo', updatedAt: '2026-11-15T00:00:00Z' });
     const digest = session({ title: 'digest', source: 'scheduler', updatedAt: '2026-11-14T00:00:00Z' });
     const chat = session({ title: 'chat', updatedAt: '2026-11-13T00:00:00Z' });
     const input = {
       projects: [
-        project(teammateDir, [review]),
+        project(teammateDir, [review, cwdOnly]),
         project('/repo', [report, work]),
         { ...project('/saved', [session({ title: 'nightly', source: 'scheduler', workspaceKind: 'project', workingDir: '/saved', updatedAt: '2026-11-12T00:00:00Z' })]), isPersistentLocal: true },
       ],
@@ -603,11 +608,20 @@ describe('automations sidebar group', () => {
       manualProjectOrder: [],
     };
 
-    expect(labels(buildMainListEntries({ ...input, groupAutomation: true }))).toEqual([
-      'automations:review,report,digest,nightly',
+    const entries = buildMainListEntries({ ...input, groupAutomation: true });
+    expect(labels(entries)).toEqual([
+      `p:${teammateDir}`,
+      'automations:cwd only,report,digest,nightly',
       'p:/repo',
       'dlg-group',
       'p:/saved',
+    ]);
+    const buddy = entries.find((entry) => entry.kind === 'project' && entry.project.workingDir === teammateDir);
+    expect(buddy && getMainListEntrySessions(buddy).map((item) => item.id)).toEqual([review.id]);
+    expect(labels(buildMainListEntries({ ...input, groupBy: 'flat', groupAutomation: true }))).toEqual([
+      'automations:review,cwd only,report,digest,nightly',
+      's:work',
+      'dlg-group',
     ]);
     // Off: runs stay where they ran; a teammate project with tasks is shown as before.
     expect(labels(buildMainListEntries(input))).toEqual([
