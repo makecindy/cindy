@@ -8739,6 +8739,7 @@
             "message_body": "メッセージの本文",
             "tool_body": "ツールの結果",
             "sidebar_navigation": "サイドバーナビゲーション",
+            "workdir_menu": "作業ディレクトリのメニュー",
             "session_menu": "タスクメニュー",
             "settings_section": "設定ページ",
             "composer_completion": "入力補完",

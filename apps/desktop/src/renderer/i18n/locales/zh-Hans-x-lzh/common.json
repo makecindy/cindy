@@ -8705,6 +8705,7 @@
             "message_body": "消息正文",
             "tool_body": "工具结果",
             "sidebar_navigation": "侧边导航栏",
+            "workdir_menu": "工作目录菜单",
             "session_menu": "任务菜单",
             "settings_section": "设置页面",
             "composer_completion": "输入补全入口",
