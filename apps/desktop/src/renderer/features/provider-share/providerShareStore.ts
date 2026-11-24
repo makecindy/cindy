@@ -56,6 +56,8 @@ function providerShareApi(): ProviderShareApi | null {
 
 export interface ReceivedSnapshot {
   received: readonly ProviderShareReceived[];
+  /** Unavailable ordinary shares that settings may offer to retry. */
+  retryCatalogShareIds?: ReadonlySet<string>;
   /** 已拿到过一次权威列表(命令返回或推送)。 */
   loaded: boolean;
 }
@@ -339,7 +341,12 @@ function invalidateShareCatalogs(
 
 function setReceived(
   next: readonly ProviderShareReceived[],
-  options?: ReceivedCatalogUpdate & { ownerId?: string | null; ownerGeneration?: number; loaded?: boolean },
+  options?: ReceivedCatalogUpdate & {
+    ownerId?: string | null;
+    ownerGeneration?: number;
+    loaded?: boolean;
+    retryCatalogShareIds?: ReadonlySet<string>;
+  },
 ): void {
   const previous = receivedSnapshot.received;
   const expiredShareIds = new Set<string>();
@@ -357,7 +364,11 @@ function setReceived(
   }
   receivedOwnerId = options?.ownerId !== undefined ? options.ownerId : getDataOwnerGeneration().dataOwnerId;
   receivedOwnerGeneration = options?.ownerGeneration ?? getDataOwnerGeneration().generation;
-  receivedSnapshot = { received: filtered, loaded: options?.loaded ?? true };
+  receivedSnapshot = {
+    received: filtered,
+    loaded: options?.loaded ?? true,
+    ...(options?.retryCatalogShareIds?.size ? { retryCatalogShareIds: options.retryCatalogShareIds } : {}),
+  };
   expiredReadSource = null;
   expiredReadSnapshot = null;
   expiredReadKey = '';
@@ -438,6 +449,22 @@ function applyReceivedSnapshot(snapshot: ProviderShareReceivedSnapshot, requestS
     regionSourceCurrent(region, budget?.[region]?.id));
   const confirmed = new Set(acceptedConfirmed);
   const unavailable = new Set(snapshot.unavailableShareIds);
+  const retryCatalogShareIds = new Set<string>();
+  if (unavailable.size > 0) {
+    if (!ownerChanged && receivedOwnerGeneration === snapshot.ownerStamp.ownerGeneration) {
+      for (const id of receivedSnapshot.retryCatalogShareIds ?? []) {
+        if (unavailable.has(id)) retryCatalogShareIds.add(id);
+      }
+    }
+    const known = new Map((ownerChanged ? [] : previous).map(share => [share.shareId, share]));
+    for (const share of snapshot.received) known.set(share.shareId, share);
+    for (const id of unavailable) {
+      const share = known.get(id);
+      if (!share) continue;
+      if (share.status === 'active' && !pluginEngineKeyFromProviderId(share.providerId)) retryCatalogShareIds.add(id);
+      else retryCatalogShareIds.delete(id);
+    }
+  }
   const incoming = snapshot.received.filter(share => !unavailable.has(share.shareId) &&
     retentionLive(share.owner.region) && regionSourceCurrent(share.owner.region, budget?.[share.owner.region]?.id));
   const currentIds = new Set(incoming.map(share => share.shareId));
@@ -453,7 +480,7 @@ function applyReceivedSnapshot(snapshot: ProviderShareReceivedSnapshot, requestS
   const next = [...incoming, ...retained];
   setReceived(next, { clearEmpty: true, skipCatalogs: ownerChanged, ownerId,
     ownerGeneration: snapshot.ownerStamp.ownerGeneration, loaded,
-    receivedChangeSequence: snapshot.receivedChangeSequence,
+    receivedChangeSequence: snapshot.receivedChangeSequence, retryCatalogShareIds,
     ...(refreshCatalogs ? { refreshShareIds: new Set(incoming.map(share => share.shareId)) } : {}) });
   armRegionRetentionTimer();
 }
@@ -700,7 +727,7 @@ function getReceivedSnapshot(): ReceivedSnapshot {
   if (expiredReadSource !== receivedSnapshot || expiredReadKey !== liveKey) {
     expiredReadSource = receivedSnapshot;
     expiredReadKey = liveKey;
-    expiredReadSnapshot = { received: live, loaded: receivedSnapshot.loaded };
+    expiredReadSnapshot = { ...receivedSnapshot, received: live };
   }
   return expiredReadSnapshot!;
 }

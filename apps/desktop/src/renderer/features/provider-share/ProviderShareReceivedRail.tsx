@@ -19,6 +19,7 @@ import {
   readOnlyProviderModels,
 } from '@/components/settings/ReadOnlyProviderModels';
 import { Button } from '@/components/ui/button';
+import { ErrorNotice } from '@/components/ui/error-notice';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Switch } from '@/components/ui/switch';
 import { Tip } from '@/components/ui/tooltip';
@@ -184,6 +185,33 @@ function useCredentialConsent(shareId: string) {
       });
   };
   return { skip, saving, update };
+}
+
+export function ProviderShareReceivedCatalogRetry({ shareId }: { shareId: string }) {
+  const { t } = useTranslation();
+  const [retrying, setRetrying] = useState(false);
+  const retry = async () => {
+    setRetrying(true);
+    try {
+      await retryProviderShareCatalog(providerShareAgentDeviceId(shareId));
+    } catch {
+      // The unavailable view remains visible and allows another manual retry.
+    } finally {
+      setRetrying(false);
+    }
+  };
+
+  return (
+    <ErrorNotice
+      className="m-5"
+      message={t('newChat.modelSelector.remoteLoadFailed')}
+      actions={(
+        <Button variant="secondary" size="sm" disabled={retrying} onClick={() => void retry()}>
+          {t(retrying ? 'providerShare.received.modelsLoading' : 'providerShare.received.retryModels')}
+        </Button>
+      )}
+    />
+  );
 }
 
 /** 右栏：一条分享给我的供应商。 */
