@@ -58,6 +58,7 @@ import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 import { createWorkingDirectoryRecovery } from '../workingDirectoryRecovery';
 import { createPreflightHarness, filesystemError } from './helpers/workingDirectoryPreflightHarness';
+import { createSharedReconnectFixture } from './helpers/sharedReconnectFixture';
 import { buildCindyMakeTaskNote } from '../../cindy-make/taskNote';
 import { getMainClassicalStyle, getResolvedMainLocale } from '../../i18n.desktop';
 import { buildMobileClientPromptNote } from '../mobileClientPromptNote';
@@ -429,8 +430,7 @@ function createSession(overrides: Partial<MakerSendTransactionSession> = {}): Ma
   };
 }
 
-function createDeps(overrides: Partial<MakerSendTransactionDeps> = {}) {
-  const session = createSession();
+function createDeps(overrides: Partial<MakerSendTransactionDeps> = {}, session = createSession()) {
   const deps: MakerSendTransactionDeps = {
     getResolvedMainLocale: () => getResolvedMainLocale(),
     getMainClassicalStyle: () => getMainClassicalStyle(),
@@ -831,6 +831,82 @@ describe('maker SEND transaction', () => {
     expect(deps.log.warn).toHaveBeenCalledWith('send: remote agent switch credential abandoned', {
       sessionId: session.id, reason: 'close-not-closed',
     });
+  });
+
+  // Unit, PR #12422: the send transaction must carry its own recovery identity
+  // through the real durable writer. A mocked writer missed the loss of the
+  // credential after one manual row and one confirmed stopped remote open.
+  it('persists once and dispatches once through the replacement after a shared reconnect offer', async () => {
+    const { write, createDbMessage, service, guestSwitch } = createSharedReconnectFixture();
+    const { deps, session } = createDeps(
+      { createDbMessage: vi.fn(write) }, createSession({ agentDeviceId: 'share:fixture' }),
+    );
+    const replacement = createSession({ instanceId: 'replacement', agentDeviceId: session.agentDeviceId });
+    const recovery = service.trackGuestStartRecovery(session.id);
+    const inputSignal = new AbortController().signal;
+    const denied = new AgentStartupStoppedError(new Error('[SUBSCRIPTION_ACCOUNT_LIMITED] waiting for reset'));
+    const offer = vi.fn(() => guestSwitch.offer(session.id, 'replacement-credential'));
+    const takeOffer = vi.fn((error: unknown) => error === denied ? offer : undefined);
+    const close = vi.fn(async () => {
+      vi.mocked(deps.getSession).mockReturnValue(undefined);
+      return true;
+    });
+    deps.captureSharedReconnectRecovery = () => ({
+      ...recovery, captureOffer: send => send(), takeOffer, close,
+    });
+
+    // Supply the stopped-open result at the Session port, before provider dispatch.
+    vi.mocked(session.send).mockImplementation(async (_message, options) => {
+      await options?.onAccepted?.();
+      throw denied;
+    });
+    const consumedAtOpen: Array<string | undefined> = [];
+    vi.mocked(deps.bootstrapSession).mockImplementation(async (_opts, assertCurrent, opening) => {
+      assertCurrent?.();
+      opening?.offer();
+      expect(service.claimGuestStartSwitch(session.id)).toBe(true);
+      consumedAtOpen.push(guestSwitch.takeForOpen(session.id));
+      guestSwitch.release(session.id);
+      vi.mocked(deps.getSession).mockReturnValue(replacement);
+      return { session: replacement, didInjectOrcaInstructions: false, didInjectProjectContext: false };
+    });
+    const assertBeforeVendorDispatch = vi.fn();
+    deps.assertBeforeVendorDispatch = assertBeforeVendorDispatch;
+    const message = 'continue after reconnect';
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted(
+      session.id, message, { id: session.id, agentKind: 'codex', workingDir: session.workDir, model: 'gpt-5.4' },
+      { persistUserMessage: { clientId: 'reconnect-input', content: message },
+        reconnectRecovery: { signal: inputSignal, isCurrent: () => true } },
+    )).resolves.toMatchObject({ accepted: true });
+
+    expect(vi.mocked(deps.createDbMessage).mock.calls[0]?.[2]?.ownReconnectRecoverySignal).toBe(recovery.signal);
+    expect(createDbMessage).toHaveBeenCalledExactlyOnceWith(
+      session.id, expect.objectContaining({ clientId: 'reconnect-input', role: 'user', content: message }),
+      { broadcastOwnerScope: null },
+    );
+    expect(takeOffer).toHaveBeenCalledExactlyOnceWith(denied);
+    expect(createDbMessage).toHaveBeenCalledBefore(takeOffer);
+    expect(close).toHaveBeenCalledBefore(offer);
+    expect(consumedAtOpen).toEqual(['replacement-credential']);
+    expect(session.send).toHaveBeenCalledOnce();
+    expect(replacement.send).toHaveBeenCalledExactlyOnceWith(message, expect.any(Object));
+    expect(assertBeforeVendorDispatch).toHaveBeenCalledOnce();
+  });
+
+  it('sends an ordinary durable write without a reconnect identity', async () => {
+    const { deps, session } = createDeps();
+    const capture = vi.fn();
+    deps.captureSharedReconnectRecovery = capture;
+    const shouldBroadcast = () => true;
+
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted(session.id, 'ordinary', undefined, {
+      persistUserMessage: { clientId: 'ordinary-input', content: 'ordinary', shouldBroadcast },
+    })).resolves.toMatchObject({ accepted: true });
+
+    expect(deps.createDbMessage).toHaveBeenCalledExactlyOnceWith(
+      session.id, expect.objectContaining({ clientId: 'ordinary-input' }), { shouldBroadcast },
+    );
+    expect(capture).not.toHaveBeenCalled();
   });
 
   // #10559: a quota-looking message alone cannot authorize transparent replay.
