@@ -1,3 +1,4 @@
+import type { useRouter } from 'expo-router';
 import { deviceDisplayName } from '@/device-link/deviceName';
 import type { RemoteSessionListItem } from './sessionList';
 import type { RemoteSession } from './types';
@@ -65,4 +66,16 @@ export function taskListSessionTarget(
     sessionId: session.id,
     ...(focusClientId ? { focusClientId } : {}),
   };
+}
+
+/** A drill-down keeps its source task and hands a portrait right swipe to Back.
+ * List selection uses replaceParams instead, clearing this entry mode. */
+export function pushSessionDrillDown(
+  router: Pick<ReturnType<typeof useRouter>, 'push'>,
+  params: SessionDrawerRouteTarget & { focusRequestKey?: string },
+): void {
+  router.push({
+    pathname: '/sessions/[sessionId]',
+    params: { ...params, sessionEntry: 'drillDown' },
+  }, { dangerouslySingular: () => undefined });
 }

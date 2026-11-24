@@ -694,6 +694,7 @@ import { buildWideSessionNavLayout } from '@/session/wideSessionNav';
 import { SessionFloatingDrawer } from '@/session/SessionTaskDrawer';
 import { GestureDetector } from '@/platform/gestureHandler';
 import {
+  pushSessionDrillDown,
   switchDrawerSessionInPlace,
   taskListSessionTarget,
   type SessionRouteParamsNavigation,
@@ -2304,13 +2305,10 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     navigateToCollabSession(
       {
         getState: () => navigation.getState(),
-        push: (target) => router.push({
-          pathname: '/sessions/[sessionId]',
-          params: {
-            sessionId: target.sessionId,
-            deviceId: target.deviceId,
-            deviceName: target.deviceName,
-          },
+        push: (target) => pushSessionDrillDown(router, {
+          sessionId: target.sessionId,
+          deviceId: target.deviceId,
+          deviceName: target.deviceName,
         }),
         dismissTo: (target) => router.dismissTo({
           pathname: '/sessions/[sessionId]',
@@ -3326,7 +3324,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // 退出宽屏后 layout.drawerWidth 会变 0;退场期间继续用最后一个有效宽度,避免面板几何跳变。
   const { sessionListDrawerOpen, sessionListDrawerOverlayMounted, sessionListDrawerWidthRef, sessionListDrawerClosingRef, pendingDrawerNavigationRef, openSessionListDrawer, closeSessionListDrawer, stackGestureEnabled, sessionListDrawerFloating, sessionListDrawerMotion, sessionListDrawerPullGesture, queueDrawerNavigation, handleSessionListDrawerClosed } = useConversationTaskDrawer({
     enabled: wideSessionNav.enabled, persistent: paneLayout.persistent, width: wideSessionNav.drawerWidth,
-    onSwipeBack: windowDimensions.height > windowDimensions.width && params.sessionEntry === 'messageLink'
+    onSwipeBack: windowDimensions.height > windowDimensions.width && (params.sessionEntry === 'drillDown' || params.sessionEntry === 'messageLink')
       && router.canGoBack() ? goBackOneLevel : undefined,
   });
   const handleDrawerSelectSession = useCallback((item: RemoteSessionListItem) => {
@@ -10298,10 +10296,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       saveComposerDocumentDraft(forked.id, forkDocument);
       saveComposerDraft(forked.id, composerDocumentProjectedText(forkDocument));
       clearQuotes(forked.id);
-      router.push({
-        pathname: '/sessions/[sessionId]',
-        params: { sessionId: forked.id, deviceId, deviceName },
-      });
+      pushSessionDrillDown(router, { sessionId: forked.id, deviceId, deviceName });
     } catch (err) {
       const detail = formatRemoteError(err);
       // 远程 Agent 的分叉失败(如 REMOTE_AGENT_FORK_FAILED)用 session.remoteError 的本地化文案，不显示原始错误码。
@@ -10347,7 +10342,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       const forked = await maker.forkStripEncrypted(sessionId);
       if (!recovery.isCurrent() || !navigation.isFocused()) return;
       remoteSessionStore.upsertDeviceSession(deviceId, deviceName, forked);
-      router.push({ pathname: '/sessions/[sessionId]', params: { sessionId: forked.id, deviceId, deviceName } });
+      pushSessionDrillDown(router, { sessionId: forked.id, deviceId, deviceName });
     } catch (err) {
       if (recovery.isCurrent() && navigation.isFocused()) {
         setError(formatRemoteError(err));
@@ -10361,15 +10356,12 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     const parentSessionId = currentSession?.parentSessionId;
     const forkedAtMessageId = currentSession?.forkedAtMessageId;
     if (!deviceId || !parentSessionId || !forkedAtMessageId) return;
-    router.push({
-      pathname: '/sessions/[sessionId]',
-      params: {
-        sessionId: parentSessionId,
-        deviceId,
-        deviceName,
-        focusClientId: forkedAtMessageId,
-        focusRequestKey: String(Date.now()),
-      },
+    pushSessionDrillDown(router, {
+      sessionId: parentSessionId,
+      deviceId,
+      deviceName,
+      focusClientId: forkedAtMessageId,
+      focusRequestKey: String(Date.now()),
     });
   }, [
     currentSession?.forkedAtMessageId,
@@ -10386,13 +10378,10 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     if (!target || !targetDeviceId) return;
     if (target.sessionId === sessionId && targetDeviceId === deviceId) return;
     const targetDevice = remoteSessionStore.getDeviceIdentity().find((item) => item.deviceId === targetDeviceId);
-    router.push({
-      pathname: '/sessions/[sessionId]',
-      params: {
-        sessionId: target.sessionId,
-        deviceId: targetDeviceId,
-        deviceName: targetDevice?.name ?? (targetDeviceId === deviceId ? deviceName : targetDeviceId),
-      },
+    pushSessionDrillDown(router, {
+      sessionId: target.sessionId,
+      deviceId: targetDeviceId,
+      deviceName: targetDevice?.name ?? (targetDeviceId === deviceId ? deviceName : targetDeviceId),
     });
   }, [deviceId, deviceName, router, sessionId]);
 
@@ -10441,23 +10430,19 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       return;
     }
     // Keep the source route even when the link revisits a task already in the stack.
-    router.push({
-      pathname: '/sessions/[sessionId]',
-      params: {
-        sessionEntry: 'messageLink',
-        sessionId: target.sessionId,
-        deviceId: targetDeviceId,
-        deviceName: targetSession?.deviceLinkDeviceName
-          ?? (targetDeviceId === deviceId ? deviceName : undefined)
-          ?? (sharedPeer ? t('sharedTask.hostDevice') : targetDeviceId),
-        ...(target.messageClientId
-          ? {
-              focusClientId: target.messageClientId,
-              focusRequestKey: String(Date.now()),
-            }
-          : {}),
-      },
-    }, { dangerouslySingular: () => undefined });
+    pushSessionDrillDown(router, {
+      sessionId: target.sessionId,
+      deviceId: targetDeviceId,
+      deviceName: targetSession?.deviceLinkDeviceName
+        ?? (targetDeviceId === deviceId ? deviceName : undefined)
+        ?? (sharedPeer ? t('sharedTask.hostDevice') : targetDeviceId),
+      ...(target.messageClientId
+        ? {
+            focusClientId: target.messageClientId,
+            focusRequestKey: String(Date.now()),
+          }
+        : {}),
+    });
   }, [deviceId, deviceName, router, sessionId, setError, t]);
 
   // 长按/操作条「复制消息链接」:复制带消息锚点的会话深链,可跨端粘贴跳转。
