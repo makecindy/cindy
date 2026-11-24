@@ -8,6 +8,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { i18n } from '@/i18n';
 import { TextLightbox } from '../TextLightbox';
 import { TodoListCard } from '../TodoListCard';
+import { VideoLightbox } from '../VideoLightbox';
 import { AttachmentCollectionContext } from '../AttachmentCollection';
 
 const state = vi.hoisted(() => ({ line: vi.fn(), parse: vi.fn() }));
@@ -74,9 +75,11 @@ it.each(['before', 'after'])('keeps the preview open when fullscreen exits %s Es
 
 // PR #12437: a preview opened after pinning the real plan owns the first
 // Escape. Neither component's standalone unit tests exercise listener order.
-it('closes a later text preview before closing a pinned plan with Escape', async () => {
+it.each(['text', 'video', 'audio'] as const)('closes a later %s preview before closing a pinned plan with Escape', async (kind) => {
   vi.useFakeTimers();
   mockFile('# Preview');
+  vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+  vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => {});
   function Host() {
     const [open, setOpen] = useState(false);
     return (
@@ -85,7 +88,10 @@ it('closes a later text preview before closing a pinned plan with Escape', async
         <button onKeyDown={(event) => {
           if (event.key === 'Enter') setOpen(true);
         }}>Open preview</button>
-        {open && <TextLightbox filePath="/preview.md" onClose={() => setOpen(false)} />}
+        {open && (kind === 'text'
+          ? <TextLightbox filePath="/preview.md" onClose={() => setOpen(false)} />
+          : <VideoLightbox src="/preview-media" kind={kind} onClose={() => setOpen(false)} />
+        )}
       </>
     );
   }
@@ -95,11 +101,12 @@ it('closes a later text preview before closing a pinned plan with Escape', async
   fireEvent.keyDown(screen.getByRole('button', { name: 'Open preview' }), { key: 'Enter' });
   await act(async () => { await vi.runOnlyPendingTimersAsync(); });
 
-  const preview = screen.getByLabelText('Preview video');
+  await act(async () => { await vi.advanceTimersByTimeAsync(150); });
+  const preview = document.querySelector<HTMLElement>(kind === 'audio' ? 'audio' : 'video')!;
   act(() => preview.focus());
   fireEvent.keyDown(preview, { key: 'Escape' });
   await act(async () => { await vi.advanceTimersByTimeAsync(250); });
-  expect(screen.queryByLabelText('Preview video')).toBeNull();
+  expect(preview.isConnected).toBe(false);
   expect(plan.getAttribute('aria-expanded')).toBe('true');
 
   fireEvent.keyDown(document.body, { key: 'Escape' });
