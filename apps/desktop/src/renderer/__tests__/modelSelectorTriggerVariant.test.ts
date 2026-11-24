@@ -456,7 +456,7 @@ const ModelSelector = (props: React.ComponentProps<typeof SharedModelSelector>) 
   React.createElement(SharedModelSelector, { unifiedPanel: false, ...props });
 const ModelSelectorContent = (props: React.ComponentProps<typeof SharedModelSelectorContent>) =>
   React.createElement(SharedModelSelectorContent, { unifiedPanel: false, ...props });
-import { makerChatStore } from '@/lib/makerChatStore';
+import { builtinAgentSwitchIntent, makerChatStore } from '@/lib/makerChatStore';
 
 const requestProviderModelsAutoRefresh = vi.fn(async () => ({ ok: true as const }));
 
@@ -1527,7 +1527,7 @@ describe('ModelSelector trigger variants', () => {
         onEffortChange: vi.fn(),
         vendorKey: displayAgent === 'codex' ? 'codex' : 'cc',
         // 稳态来自已加载的真实 runtime；intent 是下一条消息的明确目标，不能写成 Current。
-        agentIdentity: resolveModelSelectorAgentIdentity('claude-code', intent?.target),
+        agentIdentity: resolveModelSelectorAgentIdentity('claude-code', builtinAgentSwitchIntent(intent)?.target),
         currentProviderId: intent?.providerId ?? null,
         onProviderChange: vi.fn(),
         onNavigateToProviders: vi.fn(),

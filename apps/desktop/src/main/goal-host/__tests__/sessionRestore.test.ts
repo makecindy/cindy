@@ -132,4 +132,28 @@ describe('Goal dormant session restore', () => {
       expect.objectContaining({ sessionId: 'session-1' }),
     );
   });
+
+  // Goals do not run plugin-engine (ACP) tasks (docs/plans/acp-plugin-bridge.md): a dormant one
+  // must not be resumed at all, and never on a built-in engine. Goal creation then reports the
+  // restore failure. Minimal input: persisted meta agentKind 'acp'. Unit fixture.
+  it('refuses a dormant plugin-engine task instead of resuming it', async () => {
+    const deps = baseDeps({
+      maker: {
+        getSession: vi.fn(),
+        getSessionMeta: vi.fn().mockResolvedValue({ ...META, agentKind: 'acp' }),
+        createSession: vi.fn().mockResolvedValue(fakeSession()),
+      },
+    });
+
+    await expect(restoreSessionForGoal('session-1', deps)).resolves.toBeUndefined();
+
+    expect(deps.maker.createSession).not.toHaveBeenCalled();
+    expect(deps.prepareOrcaStart).not.toHaveBeenCalled();
+    expect(deps.hydrateProvider).not.toHaveBeenCalled();
+    expect(deps.wireSession).not.toHaveBeenCalled();
+    expect(deps.warn).toHaveBeenCalledWith(
+      '[goal-host] goals are not available for plugin-engine tasks',
+      { sessionId: 'session-1' },
+    );
+  });
 });

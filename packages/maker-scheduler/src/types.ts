@@ -2,6 +2,12 @@ import type { ScheduleWebhookSource } from './webhook-formats.js';
 
 export type ScheduleKind = 'cron';
 export type AgentKind = 'claude-code' | 'codex' | 'pi';
+/**
+ * The engine a schedule runs on: a built-in Harness, or 'acp' = a plugin-provided engine on the
+ * automation host (docs/plans/acp-plugin-bridge.md). A plugin engine always comes with its
+ * `providerId` (`acp-plugin:<plugin>:<harness>`) and only runs as a new task each run on the host.
+ */
+export type ScheduleAgentKind = AgentKind | 'acp';
 export type ScheduleStatus = 'active' | 'paused' | 'expired';
 export type ScheduleWorkspaceKind = 'project' | 'dialogue';
 export type ScheduleExecutionMode = 'agent' | 'script';
@@ -288,9 +294,9 @@ export interface Schedule {
    * 兼容/显式切回 Cron 时的表达式，但 UI 回显与引擎执行都必须以 intervalMs 为准。
    */
   intervalMs?: number;
-  agentKind: AgentKind;
+  agentKind: ScheduleAgentKind;
   /** Explicit model-picker Harness. Absent on legacy schedules: bound tasks keep their live Harness. */
-  modelAgentKind?: AgentKind;
+  modelAgentKind?: ScheduleAgentKind;
   /** Agent location for an explicit model choice: absent = inherit the bound task; '' = task host. */
   modelAgentDeviceId?: string;
   model?: string;
@@ -472,9 +478,9 @@ export interface CreateScheduleInput {
   manual?: boolean;
   /** Interval 语义间隔（毫秒）。详见 Schedule.intervalMs。 */
   intervalMs?: number;
-  agentKind: AgentKind;
+  agentKind: ScheduleAgentKind;
   /** Explicit model-picker Harness. Absent on legacy schedules: bound tasks keep their live Harness. */
-  modelAgentKind?: AgentKind;
+  modelAgentKind?: ScheduleAgentKind;
   /** Agent location for an explicit model choice: absent = inherit the bound task; '' = task host. */
   modelAgentDeviceId?: string;
   model?: string;

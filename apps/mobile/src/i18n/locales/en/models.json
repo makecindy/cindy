@@ -110,5 +110,12 @@
     "quotaResetIn": "Resets in {{duration}}",
     "quotaAverageHint": "Weekly quota · Equal weight per account",
     "quotaResetHint": "At the current pace, quota may remain at reset: yellow within 24 hours, red within 6 hours."
+  },
+  "pluginEngines": {
+    "genericName": "Plugin engine",
+    "defaultModel": "Default model",
+    "unavailable": "{{engine}} is unavailable",
+    "unavailableWithHint": "{{engine}} is unavailable: {{hint}}",
+    "worktreeUnsupported": "Plugin engines can’t start tasks in a worktree yet. Turn off worktree to send."
   }
 }

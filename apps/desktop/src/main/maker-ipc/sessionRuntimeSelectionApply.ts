@@ -16,12 +16,13 @@
  * assigned once in register.ts, at the top level of registerMakerIpc before the set-model handler is
  * registered, and never reassigned (a guard test keeps that so), so a call sees the same values.
  */
-import type { AgentKind, Maker } from '@cindy/maker-core';
+import { acpHarnessKeyFromProviderId, type AgentKind, type Maker, type Session, type SessionMeta } from '@cindy/maker-core';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { sessions } from '../localDb/schema.js';
 import { isDeviceLinkInvoke, readDeviceLinkModelSelectionOrigin, deviceLinkInvokeControllerSupports } from '../device-link/invoke-context.js';
 import { normalizeSessionProviderId, getSessionProvider, hasSessionProvider, setSessionProvider, hydrateSessionProvider, clearSessionProvider } from '../maker-host/session-provider-store.js';
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
+import { isPluginEngineEffort } from '../../shared/pluginEngines.js';
 import { getSessionFastMode, getSessionEffort, setSessionEffort, setSessionFastMode } from '../maker-host/session-effort-store.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import { sessionRuntimeControlOwnerEpochMatches, acceptSessionRuntimeMutation, getSessionRuntimeControlSnapshot, captureSessionRuntimeControlOwnerEpoch, resolveSessionRuntimeRefreshEffort, resolveSessionRuntimeAxes, deferSessionRuntimeAxisMutation, recordRecoveredSessionRuntimeMutation, recordRecoveredSessionRuntimeAxisMutation, recordUserSessionRuntimeMutation, settlePendingSessionRuntimeMutation, acceptSessionRuntimeAxisMutation } from './sessionRuntimeControl.js';
@@ -185,6 +186,12 @@ export interface AgentDeviceRuntimeSelectionInput {
   supersededByOwnerBoundary(): boolean;
 }
 
+/** Maker as seen after checking the persisted route and the current handle inside the route lock. */
+type BuiltinSessionsMaker = {
+  getSession(sessionId: string): (Session & { agentKind: AgentKind }) | undefined;
+  getSessionMeta(sessionId: string): Promise<(SessionMeta & { agentKind: AgentKind }) | null>;
+} & Maker;
+
 export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPorts) {
   const handleSetModel = async (
     sessionId: unknown,
@@ -195,7 +202,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
     internalOptions: InternalRuntimeSelectionOptions,
   ): ReturnType<ApplySessionRuntimeSelection> => {
     const {
-      maker,
+      maker: makerPort,
       agentSwitchPending,
       broadcastSessionRuntimeProjection,
       assertReviewSettingsUnlocked,
@@ -378,6 +385,43 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
       ) {
         return { deferred: false, superseded: true };
       }
+      const live = makerPort.getSession(sessionId);
+      if (runtimeStatus.agentKind === 'acp') {
+        if (internalOptions.source !== 'user' || (live && live.agentKind !== 'acp')) {
+          return { deferred: false, superseded: true };
+        }
+        if (!runtimeStatus.providerId || !acpHarnessKeyFromProviderId(runtimeStatus.providerId)
+          || (providerId != null && providerId !== runtimeStatus.providerId)) {
+          throwIpcError('PRECONDITION_FAILED', 'a plugin engine task cannot switch to another engine or model source');
+        }
+        if (!agentSwitchDeps.admitPluginEngineTarget) {
+          throwIpcError('UNSUPPORTED_CAPABILITY', 'plugin engines are not available here');
+        }
+        if (atomicSelection && atomicSelection.fastMode !== false) {
+          throwIpcError('INVALID_PARAMS', 'Fast is unavailable for plugin engines');
+        }
+        // Keep the same owner, write authorization and send lock across the ACP round trip.
+        assertRuntimeOwnerCurrent();
+        assertSharedTaskCurrent.admit();
+        const target = agentSwitchDeps.admitPluginEngineTarget({
+          providerId: runtimeStatus.providerId,
+          model,
+          effort: atomicSelection?.effort,
+        });
+        const effort = isPluginEngineEffort(target.effort) ? target.effort : undefined;
+        if (live && runtimeStatus.status === 'active') {
+          await live.setModel(target.model, effort ? { effort } : undefined);
+          assertRuntimeOwnerCurrent();
+          assertSharedTaskCurrent.admit();
+        }
+        await persistSessionFields(sessionId, { model: target.model, ...(effort ? { effort } : {}) });
+        assertRuntimeOwnerCurrent();
+        const response = { deferred: false, superseded: false, effectiveModelId: target.model };
+        if (isDeviceLinkInvoke()) markRemoteSettingPersistedInsideHandler(response);
+        return response;
+      }
+      if (live?.agentKind === 'acp') return { deferred: false, superseded: true };
+      const maker = makerPort as BuiltinSessionsMaker;
       if (runtimeStatus.agentDeviceId && !runtimeStatus.remoteHostId) {
         return applyAgentDeviceRuntimeSelection({
           sessionId, model, providerId, atomicSelection, internalOptions, runtimeStatus,

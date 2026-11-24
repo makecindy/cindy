@@ -18,6 +18,9 @@ const BACKGROUND_INVOKE_CHANNELS = new Set([
   // all ordinary slots and delay navigation or live model/context mutations.
   'maker:provider:list',
   'maker:get-capabilities',
+  // 同一批模型选择器预读：插件引擎列表与刷新请求。
+  'maker:list-plugin-engines',
+  'maker:refresh-plugin-engines',
   'maker:list-available-agents',
   'maker:agent:status',
   'git-context:pr-refs:list',
