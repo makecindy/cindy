@@ -62,9 +62,12 @@ export interface SessionExecutionResolverDeps {
   hasCindyAiApiKey(): boolean;
 }
 
-/** sourceSessionId is Host-resolved from an authenticated call, never plugin-supplied. */
+/**
+ * Only the Host supplies a caller's session ID. Without one, undefined permits the
+ * new-task draft and null resolves the selection from the model catalog alone.
+ */
 export function createSessionExecutionResolver(deps: SessionExecutionResolverDeps) {
-  return async (selection: Selection, sourceSessionId?: string,
+  return async (selection: Selection, sourceSessionId?: string | null,
     existing?: { agentKind: string; model: string; providerId?: string | null; effort?: string | null; fastMode?: boolean | 'ultrafast' },
   ): Promise<SessionExecutionSelection> => {
     const assertOwner = deps.captureOwner();
@@ -76,7 +79,7 @@ export function createSessionExecutionResolver(deps: SessionExecutionResolverDep
       source = { agentKind: (existing.agentKind === 'cc' ? 'claude-code' : existing.agentKind) as AgentKind,
         model: existing.model, providerId: existing.providerId,
         effort: (existing.effort || undefined) as Effort | undefined, fastMode: (existing.fastMode === 'ultrafast' ? 'ultrafast' : existing.fastMode === true) };
-    } else if (!(selection.agentKind && selection.model && selection.providerId)) {
+    } else if (sourceSessionId !== null && !(selection.agentKind && selection.model && selection.providerId)) {
       source = sourceSessionId ? await deps.readCaller(sourceSessionId) : deps.readDefault();
       assertOwner();
     }

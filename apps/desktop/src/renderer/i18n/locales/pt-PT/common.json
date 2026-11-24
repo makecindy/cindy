@@ -2905,6 +2905,14 @@
         "projectsRootReset": "Restaurar localização sugerida",
         "projectsRootDescription": "Onde ficam as pastas de projeto ao criar um projeto a partir de uma sessão. Se não estiver definida, é sugerida uma localização com base nos projetos existentes.",
         "projectsRootFailed": "Não foi possível atualizar a localização de novos projetos",
+        "taskExportDirectoryTitle": "Localização de exportação de sessões",
+        "taskExportDirectoryUnset": "Perguntar sempre",
+        "taskExportDirectoryMissing": "Pasta não encontrada",
+        "taskExportDirectoryUnreadable": "Não é possível ler a definição",
+        "taskExportDirectoryChoose": "Escolher diretório",
+        "taskExportDirectoryReset": "Voltar a perguntar sempre",
+        "taskExportDirectoryDescription": "Quando definida, as sessões exportadas pelo Agent são guardadas aqui sem perguntar a localização, e os ficheiros existentes nunca são substituídos. Se não estiver definida, escolhe a localização em cada exportação.",
+        "taskExportDirectoryFailed": "Não foi possível atualizar a localização de exportação de sessões",
         "dialogueDirectoryOpen": "Abrir diretório",
         "dialogueDirectoryChoose": "Alterar diretório",
         "dialogueDirectoryReset": "Restaurar localização predefinida",
@@ -8771,6 +8779,8 @@
         "liveScreenDetail": "Através do ambiente de trabalho remoto, o telemóvel ou os seus outros computadores podem mostrar os ecrãs de dispositivos que fornece (como simuladores) e enviar-lhes toques, botões e texto. Só liga quando o abre a partir de um desses dispositivos e não mostra mais nada deste computador.",
         "preview": "Pode abrir páginas de pré-visualização dos sites abaixo no navegador da barra lateral",
         "previewDetail": "Só podem ser abertos os sites indicados abaixo; cada página aberta é atribuída a este plugin.",
+        "fileOpener": "Pode abrir os tipos de ficheiro abaixo quando os abre a partir do Cindy",
+        "fileOpenerDetail": "O plugin recebe o caminho completo do ficheiro e abre-o em vez da aplicação predefinida; se não conseguir, a aplicação predefinida abre-o. Pode desativar isto nos detalhes do plugin.",
         "browserExtension": "Permite que a extensão de navegador incluída se ligue a Cindy",
         "browserNativeHost": "Pode registar a ligação do navegador «{{name}}»",
         "browserNativeHostDetail": "O programa registado é executado fora da sandbox e acede ao computador com a sua conta e as permissões do sistema.",
@@ -9012,6 +9022,8 @@
         "configurationTitle": "Configuração",
         "sidebarEntryTitle": "Entrada de navegação",
         "showInSidebar": "Mostrar na navegação à esquerda",
+        "fileOpenerTitle": "Abrir ficheiros com este plugin",
+        "fileOpenerDescription": "Quando abre ficheiros {{extensions}} a partir do Cindy, o {{name}} abre-os em vez da aplicação predefinida. Os ficheiros de outros computadores continuam a abrir com a aplicação predefinida.",
         "sidebarEntryDescription": "Quando ativado, «{{title}}» aparece na navegação à esquerda, junto a Automatizações e Plugins, no topo ou em Mais — escolha a posição em Mais → Personalizar. Ocultá-lo não desativa o plugin.",
         "openTool": "Ver detalhes da ferramenta {{name}}",
         "noToolDescription": "Não existe descrição para esta ferramenta.",
@@ -12637,6 +12649,8 @@
       "transferBusy": "{{name}} ainda está a preparar uma resposta. Mova-o quando a resposta terminar",
       "targetUnavailable": "“{{device}}” não está disponível. Tem de estar online com o controlo remoto ativado",
       "targetOutdated": "«{{device}}» tem uma versão antiga do Cindy que ainda não consegue executar {{name}}. Atualize primeiro o Cindy nesse computador",
+      "skillTargetOutdated": "Uma Skill de {{name}} tem um corpo de texto superior a 64 KB que a versão antiga do Cindy em «{{device}}» não consegue receber. Atualize o Cindy nesse computador antes de mover o seu amigo. O amigo permanece no computador original",
+      "skillTargetOutdated_skill": "A versão antiga do Cindy em «{{device}}» não consegue receber a Skill «{{slug}}». O texto tem {{bodyBytes, number}} bytes e excede o limite de 64 KB. {{name}} continua no computador original. Atualize o Cindy no computador de destino e tente novamente.",
       "targetOutdatedItem": "Mover para «{{device}}» · Cindy antigo",
       "targetOutdatedMeta": "Cindy antigo",
       "olderTargetNote": "«{{device}}» tem uma versão antiga do Cindy, por isso {{name}} funcionará aí como antes: o histórico da conversa continua sincronizado, mas as regras e automatizações do projeto não se aplicam aí.",
@@ -14757,6 +14771,7 @@
       "missingDir": "Pasta não encontrada"
     },
     "pendingQueue": {
+      "waitingForDevice": "Por enviar · Será enviada quando o outro computador voltar a ligar-se",
       "stopping": "A parar",
       "queued": "Em fila",
       "editingInComposer": "A editar na caixa de entrada abaixo…",
@@ -15244,6 +15259,7 @@
       "unavailable": "A introdução automática não está disponível na aplicação atual. Copie a transcrição e introduza-a manualmente.",
       "unconfirmed": "Não foi possível confirmar se a introdução automática foi bem-sucedida. Copie a transcrição, se necessário.",
       "permission": "É necessária permissão de acessibilidade para introduzir texto por voz na aplicação atual. Conceda a permissão e tente novamente.",
+      "appNotAllowed": "{{app}} não tem permissão para controlar esta aplicação, pelo que o texto não foi introduzido. Adicione esta aplicação para {{app}} em «System & App Protection Override» ou copie o texto e cole-o manualmente.",
       "failed": "A introdução automática falhou. Copie a transcrição e introduza-a manualmente."
     },
     "permissionPrompts": {
@@ -15648,11 +15664,11 @@
       "actionExpired": "A autorização da sessão para esta ação expirou. Consulte a execução mais recente da automatização.",
       "actionRecovered": "A autorização para esta ação expirou. A mesma automatização foi executada com sucesso mais tarde.",
       "text": "Uma execução automática falhou.",
-      "prCheck_dns": "{{device}} não conseguiu resolver {{host}}. Se o problema persistir, verifique a rede ou o DNS nesse dispositivo. Falhas consecutivas: {{failures}}. Próxima verificação automática: {{retry}}.",
-      "prCheck_timeout": "A ligação ao GitHub excedeu o tempo limite em {{device}}. Falhas consecutivas: {{failures}}. Próxima verificação automática: {{retry}}.",
-      "prCheck_auth": "Volte a iniciar sessão no GitHub em {{device}}. Falhas consecutivas: {{failures}}. Próxima verificação automática: {{retry}}.",
-      "prCheck_rate-limit": "O GitHub limitou os pedidos de {{device}}. Falhas consecutivas: {{failures}}. Próxima verificação automática: {{retry}}.",
-      "prCheck_unknown": "A verificação do PR falhou em {{device}}. Consulte os detalhes da execução. Falhas consecutivas: {{failures}}. Próxima verificação automática: {{retry}}.",
+      "prCheck_dns": "{{device}} não conseguiu resolver {{host}}. Se o problema persistir, verifique a rede ou o DNS nesse dispositivo. Falhas consecutivas: {{failures}}. As verificações agendadas podem ser retomadas a partir de {{retry}}.",
+      "prCheck_timeout": "A ligação ao GitHub excedeu o tempo limite em {{device}}. Falhas consecutivas: {{failures}}. As verificações agendadas podem ser retomadas a partir de {{retry}}.",
+      "prCheck_auth": "Volte a iniciar sessão no GitHub em {{device}}. Falhas consecutivas: {{failures}}. As verificações agendadas podem ser retomadas a partir de {{retry}}.",
+      "prCheck_rate-limit": "O GitHub limitou os pedidos de {{device}}. Falhas consecutivas: {{failures}}. As verificações agendadas podem ser retomadas a partir de {{retry}}.",
+      "prCheck_unknown": "A verificação do PR falhou em {{device}}. Consulte os detalhes da execução. Falhas consecutivas: {{failures}}. As verificações agendadas podem ser retomadas a partir de {{retry}}.",
       "precheck": "As verificações automáticas estão temporariamente bloqueadas.",
       "preRunBlocked": "A verificação prévia falhou. Esta execução não foi iniciada.",
       "rateLimited": "As verificações automáticas estão temporariamente bloqueadas por um limite de frequência de pedidos.",
@@ -19042,7 +19058,7 @@
       "expired": "Introdução manual terminada por tempo de espera excedido."
     },
     "failure": {
-      "permission": "O Cindy não consegue ler a interface deste Mac. Verifique a permissão de controlo da cópia do Cindy em execução. No macOS 27.3 ou posterior, a permissão de controlo encontra-se em «System & App Protection Override». Nas versões anteriores, abra Acessibilidade.",
+      "permission": "O Cindy não consegue ler a interface deste Mac. Verifique a permissão de controlo da cópia do Cindy em execução. No macOS 27.3 ou posterior, a permissão de controlo encontra-se em «System & App Protection Override». Nas versões anteriores, abra Acessibilidade. Se o Cindy só puder controlar algumas aplicações, adicione também esta.",
       "target_gone": "A janela de destino foi fechada.",
       "unreadable": "Não é possível ler este ecrã. Pode concluir este passo no computador anfitrião e depois devolver o controlo ao Agent.",
       "action_failed": "A ação não teve efeito. Verifique o ecrã e tente novamente.",
@@ -22867,6 +22883,10 @@
       "separator": "; "
     },
     "settings": {
+      "autoSwitch": {
+        "title": "Mudar de fonte automaticamente quando houver problema",
+        "hint": "Quando a fonte usada por este modo falhar, mudar para a seguinte disponível e anotar por baixo dessa ronda. Desligado, a mudança só é sugerida no erro."
+      },
       "newRoute": "Novo modo",
       "newRouteName": "Novo modo",
       "routesEmpty": "Ainda não há modos. Crie um e adicione várias fontes.",
@@ -23099,6 +23119,8 @@
   "macControlPermission": {
     "pane": "System & App Protection Override",
     "selectApp": "Em «System & App Protection Override», clique em ⓘ junto de {{app}}. Se a aplicação não constar da lista, adicione a cópia em execução com +.",
-    "review": "$t(macControlPermission.selectApp)\nSe a opção estiver disponível, pode limitar o controlo às aplicações que escolher. O controlo total dá acesso a todas as aplicações e dados. Se concordar, leia e confirme cada item e permita o acesso no fundo da janela."
+    "review": "$t(macControlPermission.selectApp)\nSe a opção estiver disponível, pode limitar o controlo às aplicações que escolher. O controlo total dá acesso a todas as aplicações e dados. Se concordar, leia e confirme cada item e permita o acesso no fundo da janela.",
+    "reviewWholeMac": "$t(macControlPermission.selectApp)\nO teclado e o rato remotos atuam em todo o Mac, pelo que precisam do controlo do Mac inteiro: ao adicionar com +, escolha «Override System Protections»; se a aplicação já constar da lista, ative «Control Your Entire Mac and All Apps» em ⓘ. Se apenas algumas aplicações forem permitidas, o macOS bloqueia toda a introdução remota por teclado e rato. Reveja o acesso que o macOS indica antes de permitir.",
+    "chosenAppsOnly": "{{app}} só pode controlar as aplicações escolhidas, pelo que o macOS bloqueia toda a introdução remota por teclado e rato. Para o controlo remoto, clique em ⓘ junto de {{app}} em «System & App Protection Override» e ative «Control Your Entire Mac and All Apps»."
   }
 }

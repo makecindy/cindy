@@ -215,6 +215,7 @@ interface CodexImageGenerationLogParams {
 }
 
 export interface CodexProxyHostPorts {
+  diagnoseLocalResponsesLifecycle?: boolean;
   bearerKeyFromHeaders: typeof import('../model-access/gatewayKeyRejection.js').bearerKeyFromHeaders;
   reportCindyGatewayKeyRejected: typeof import('../model-access/gatewayKeyRejection.js').reportCindyGatewayKeyRejected;
   createAttachmentRecovery: typeof import('./oversized-attachment-recovery.js').createAttachmentRecovery;
@@ -3709,9 +3710,12 @@ async function createCodexProxyHandle(
     : modelRoute;
   const frozenReasoning = createCustomProviderReasoningTransform(frozenCustomProviderRoutes);
   const lateReplayRequests = new WeakSet<Readonly<Record<string, string>>>();
+  // Bind the diagnostic to the resolved upstream request, before the response
+  // can race a session provider change or follow a namespaced child route.
+  const localCustomResponses = new WeakSet<Readonly<Record<string, string>>>();
   const routeWithUsageEncoding: RoutingTransform = (body, ctx) => {
     observeDownshiftRequest(body, ctx);
-    const uncompressed = (decision: RoutingDecision | null): RoutingDecision | null => {
+    const prepareForward = (decision: RoutingDecision | null): RoutingDecision | null => {
       const model = isPlainObject(body) && typeof body.model === 'string' ? body.model : '';
       const context = providerContextForRequest(ctx.headers, model);
       const customPath = parseCodexCustomProviderPath(ctx.url);
@@ -3721,6 +3725,22 @@ async function createCodexProxyHandle(
         providerId: customProviderId ?? gatewayProviderIdForRewrittenModel(model) ?? context.providerId ?? guestProviderId
           ?? (gatewayProviderIdForRewrittenModel(model) ? null : (frozenAuthInjection ?? getCodexProxyAuthInjection()) === 'oauth-bearer' ? 'openai' : null),
       }, ctx);
+      if (ports.diagnoseLocalResponsesLifecycle && decision?.upstreamOverride && !decision.localHandler && !guestProviderId
+        && ctx.method === 'POST' && ctx.url.split('?', 1)[0]?.replace(/\/+$/, '').endsWith('/responses')
+        && (customPath.kind === 'not-custom-provider-route' || (customPath.kind === 'route' && customPath.pathKind === 'responses'))
+        && context.sessionId && !hasHostedSessionModelAccess(context.sessionId)
+        && !guestProviderRouteForSession(context.sessionId) && !headerValue(ctx.headers, 'x-openai-subagent')
+        && !context.subagentRoute
+        && getActiveCatalog().providers.some(provider =>
+          provider.id === (customProviderId ?? context.providerId) && provider.source === 'user')) {
+        const routing = customPath.kind === 'route'
+          ? customProviderRouteSnapshot(customPath.routeId, frozenCustomProviderRoutes)?.responseRoutingByModel[model]
+          : getSessionRoutingDescriptor(context.sessionId, 'codex', model);
+        if (routing && (routing.wireProtocol ?? 'openai-responses') === 'openai-responses'
+          && routing.upstream.replace(/\/+$/, '') === decision.upstreamOverride.replace(/\/+$/, '')) {
+          localCustomResponses.add(ctx.headers);
+        }
+      }
       const rewrite = decision?.transformRequestBody;
       if (decision && rewrite && !decision.localHandler && isResponsesReplayPath(ctx.url)) {
         lateReplayRequests.add(ctx.headers);
@@ -3740,7 +3760,7 @@ async function createCodexProxyHandle(
       return { ...decision, headerOverride: { ...decision?.headerOverride, 'accept-encoding': 'identity' } };
     };
     const decision = route(body, ctx);
-    return decision instanceof Promise ? decision.then(uncompressed) : uncompressed(decision);
+    return decision instanceof Promise ? decision.then(prepareForward) : prepareForward(decision);
   };
   const attachmentRecovery = createAttachmentRecovery(sessionIdFromHeaders);
   const requestSizeController = createRequestSizeController(sessionIdFromHeaders, imagePreprocessor, (headers, model) =>
@@ -3872,7 +3892,10 @@ async function createCodexProxyHandle(
       // Repair runs first so items with `null` arrays reach the custom-tool adapter (and Codex)
       // as valid ResponseItems (#4251). The adapter keeps its own compressed/MIME rejections.
       return chainResponseTransforms(
-        createResponsesNullArrayRepairTransform(response),
+        createResponsesNullArrayRepairTransform({
+          ...response,
+          diagnoseOrphanText: ctx.status === 200 && localCustomResponses.has(ctx.requestHeaders),
+        }),
         execAdapter.createResponseTransform(ctx.reqId, response),
       );
     },

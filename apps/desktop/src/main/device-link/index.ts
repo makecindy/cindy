@@ -1166,7 +1166,13 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     },
     log,
   });
-  useAgentNetSessions({ laneFor: agentNetSessionLane, handlers: (deviceId) => sessionLinks.handlers(deviceId) });
+  useAgentNetSessions({ laneFor: agentNetSessionLane, handlers: (deviceId) => {
+    const handlers = sessionLinks.handlers(deviceId);
+    queueMicrotask(() => {
+      if (!linkTornDown && agentNetSession(deviceId)) notifyRemoteInputPeerReady?.(deviceId);
+    });
+    return handlers;
+  } });
   // 文件直传：两台都开着 Agent-Net 的同账号电脑之间，文件字节走会话，不再起 WebRTC（filePeer.ts streamTransport）。
   // 按这次调用实际走的路判断：Device Link 上还留着这个对端的链路时调用照旧走 Device Link，字节也照旧走 WebRTC。
   setFilePeerStreamTransport((peer) => !isScopedPeer(peer) && outboundOnSession(routedClient, sessionLinks, peer));
@@ -2010,8 +2016,15 @@ function teardownActiveLink(): void {
   client.stop();
 }
 
+let notifyRemoteInputPeerReady: ((deviceId: string) => void) | undefined;
+
+export function setRemoteInputPeerReadyListener(listener: (deviceId: string) => void): void {
+  notifyRemoteInputPeerReady = listener;
+}
+
 function replayActiveSubscriptions(reason: string, deviceId?: string): void {
   subscriptionReplayScheduler.replay(reason, deviceId);
+  if (deviceId && !linkTornDown) notifyRemoteInputPeerReady?.(deviceId);
 }
 
 const subscriptionReplayScheduler = createSubscriptionReplayScheduler({

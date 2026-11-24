@@ -450,9 +450,9 @@ export async function prefetchDeviceProviders(deviceId: string): Promise<void> {
 }
 
 /** Refresh mounted task-host catalogs after that host's discovery has recovered. */
-export function evictControlledDeviceProviders(taskDeviceId: string): void {
+export function evictControlledDeviceProviders(taskDeviceId: string, recovered?: ReadonlySet<string>): void {
   for (const key of new Set([...cache.keys(), ...inflight.keys(), ...listeners.keys()])) {
-    if (parseModelCatalogKey(key)?.taskDeviceId === taskDeviceId) evictDeviceProviders(key);
+    if (parseModelCatalogKey(key)?.taskDeviceId === taskDeviceId && !recovered?.has(key)) evictDeviceProviders(key);
   }
 }
 
