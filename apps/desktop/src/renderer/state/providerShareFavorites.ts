@@ -3,6 +3,7 @@ import type { ControlledModelFavoriteSource } from '../../shared/controlledModel
 import {
   parseProviderShareFavoriteSource,
   providerShareFavoriteSource,
+  providerSharePickerState,
   type ProviderShareReceived,
 } from '@cindy/device-link';
 import {
@@ -75,14 +76,18 @@ export function useProviderShareFavoriteCleanupFailed(): boolean {
   return !!state.membership && isDataOwnerPushStampCurrent(state.membership.ownerStamp) && state.cleanupFailed;
 }
 
-/** 聚合收藏只解析当前账号仍可用的原授权；同名供应商或重新申请的分享不能接管旧副本。 */
+/**
+ * 聚合收藏只解析当前账号仍可用的原授权；同名供应商或重新申请的分享不能接管旧副本。
+ * 分享者电脑暂时离线时仍解析(与选择器同一条 providerSharePickerState 规则)：收藏随目录置灰，
+ * 不因在线状态来回变化而消失；只有在线但版本过旧(hostCapable=false)的分享不解析。
+ */
 export function useProviderShareFavoriteSources(routed?: ReadonlyMap<string, ControlledModelFavoriteSource>): ReadonlyMap<string, string> {
   const state = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const current = state.membership && isDataOwnerPushStampCurrent(state.membership.ownerStamp)
     ? state.membership : null;
   return useMemo(() => routed ? new Map([...routed].map(([deviceId, share]) => [providerShareFavoriteSource(share), deviceId])) : new Map(
     (current?.received ?? [])
-      .filter((share) => share.status === 'active' && share.hostOnline && share.hostCapable
+      .filter((share) => providerSharePickerState(share) !== 'paused' && !(share.hostOnline && !share.hostCapable)
         && !current?.unavailableShareIds?.includes(share.shareId) && !current?.leftMemberIds?.includes(share.memberId))
       .map((share) => [providerShareFavoriteSource(share), `share:${share.shareId}`]),
   ), [current, routed]);
@@ -145,7 +150,12 @@ export function useProviderShareFavorites(
       const item = { ...before, ...patch };
       accessHostModelFavorites(owner.dataOwnerId, {
         kind: 'update', expected: before,
-        item: { ...item, effort: item.effort ?? undefined, fast: item.fast ? true : undefined },
+        // 速度是三态。收成 true 后，星标对不上 ultrafast，再点会再加一条。
+        item: {
+          ...item,
+          effort: item.effort ?? undefined,
+          fast: item.fast === 'ultrafast' ? 'ultrafast' : item.fast ? true : undefined,
+        },
       });
     },
     remove: (uid) => {

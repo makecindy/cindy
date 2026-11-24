@@ -91,9 +91,15 @@ Cindy 主进程**从不执行插件写的命令**，只启动插件包里声明�
 | 文本 / 思考 | `agent_message_chunk` / `agent_thought_chunk` → `text` / `thinking` |
 | 工具 | `tool_call` / `tool_call_update` → `tool_use` / `tool_result`（同一 `toolCallId` 合并） |
 | 计划 | `plan` → 折叠为任务内的待办展示（第一期可只记录为文本） |
-| 用量 | `usage_update` → 上下文用量 |
+| 用量 | `usage_update` → 上下文用量；`session/prompt` 结果里的 `usage`（本轮 token）→ `done.data.usage`，供「远程与分享」页按使用方的用量与插件的 did-turn-end 使用。`inputTokens` 按不含缓存记：对端的 `totalTokens` 等于输入 + 输出时，说明它的输入含缓存，先扣掉缓存。对端不报时只记轮数（2026-11-23） |
 | 权限 | `session/request_permission` → `interaction_request`（kind = permission） |
 | 模型 / 推理强度 | 类别为 `model` 的配置项 / `reasoning_effort` 配置项 → `setModel` / `setEffort` |
+
+本机 Desktop 的普通新建任务（[#11956](https://github.com/makecindy/cindy/issues/11956)）：
+项目和插件引擎均在本机时，可选择源分支并启用 Git worktree。宿主等受管 worktree 完整检出，
+才用新目录创建任务；第一条消息启动时，`session/new.cwd` 使用同一目录。检出失败时保留原草稿和附件，
+不在基础仓库创建任务或发送。未启用 worktree 或直接选择已有 worktree 时，仍在所选目录运行。
+此行为不改变 Orca、远程建任务、SSH 或远程引擎的 worktree 约束。
 
 不支持的能力（分叉、回退、会话树、手动压缩、记忆、计划模式、Fast）在 `Capabilities` 中
 如实标为不支持，界面按现有能力开关隐藏，不伪装成功。
@@ -390,6 +396,22 @@ Node Host（`apps/host`）。插件引擎任务的消息按 `agent_kind = 'acp'`
   Agent 长时间静默等待（如一次等很久的定时检查）期间，名额紧张时可能被收回。只发进度、界面上没有
   变化的调用不会传到 Desktop：这类调用超过 31 分钟没有可见输出时，任务内「正在后台继续工作」先熄灭，
   结果到达时再亮起（maker-core 不会因此提前收尾该调用）。
+
+## 插件与 Skill 告知（2026-11-24）
+
+用户发现 Antigravity 任务不知道装了哪些插件和 Skill：发 PR 时直接用 `gh`，没走 GitHub 插件的 `pr` Skill，也开不了自动跟进。
+内置引擎从 system prompt 读到插件花名册，从原生 Skill 加载拿到 Skill；插件引擎两样都没有。用户决定只补这两样，
+不把 Cindy 的其他 system prompt 交给插件引擎。
+
+- **内容**：新会话首条消息前的说明里加两段——已装插件花名册（与内置引擎同一份文本，`getGhostRosterPrompt`），
+  以及 Skill 清单（名称、说明、`SKILL.md` 路径，Agent 需要时用自己的文件工具读）。Skill 范围与内置 Pi 相同
+  （Cindy 内置与已批准插件的 Skill、Pi 的共享与项目目录，按用户的启用开关过滤；目录在隔离、限时的扫描进程里发现，不在 Main 上同步扫描，见 `maker-host/pluginEngineSkills.ts`），
+  与 Cindy 工具范围同一口径。恢复的会话已有，不重复。
+- **只写真实可用的**：花名册只在 Agent 实际接收了插件网关（`cindy` MCP）时附上；对端不收 HTTP MCP 或工具桥不可用时
+  只留 Skill 清单。花名册或 Skill 读取失败只少这一段，不挡任务启动。
+- **另一台电脑的任务与伙伴**：另一台电脑托管的任务与内置引擎一致，附任务所在电脑带来的花名册快照（`deviceHostedGhostRoster`，隧道提供 `cindy` 时），不读本机花名册；Skill 清单不附（没有跨电脑的来源）。隔离伙伴（按伙伴自己冻结的能力集）两样都不附；按普通任务装配的 V2 项目伙伴（`projectContext`）照常附上。恢复的会话不读取。
+- **顺序**：远程工作区说明 → 伙伴说明 → 花名册 → Skill 清单 → 协同角色说明。
+- **缓存**：说明在首条用户消息里，内置引擎的 system prompt 与缓存前缀不变。
 
 ## 已知限制
 

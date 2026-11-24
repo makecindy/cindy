@@ -25,6 +25,7 @@ export default {
   },
   cases: {
     default: { about: 'No topic: quote/copy always visible, create topic in More' },
+    'feishu-quote': { about: 'Feishu reply preview and accepted reply show the same readable excerpt' },
     read: { about: 'Original topic entry with count/time' },
     unread: { about: 'Original topic entry with unread indicator' },
   },
@@ -42,6 +43,33 @@ export default {
     );
   },
   async check(page, ui) {
+    if (ui.case === 'feishu-quote') {
+      const editor = page.locator('[contenteditable=true]');
+      await editor.fill('收到，我会核对新版记录。');
+      const reply = page.locator('[data-owner]').getByRole('button', { name: await ui.t('chat.messageActionBar.reply'), exact: true });
+      await reply.click();
+      const preview = page.getByTestId('bot-group-quote-preview');
+      const excerpt = '演示记录 & 备注。 请保留已确认的条目。';
+      const pendingText = await preview.textContent();
+      assert.match(await editor.innerText(), /收到，我会核对新版记录。/);
+      await ui.capture('reply-preview');
+      await editor.press('Enter');
+      const sent = page.getByTestId('bot-group-quote');
+      await sent.waitFor();
+      assert.equal(await sent.getAttribute('data-quote-state'), 'live');
+      const sentText = await sent.textContent();
+      assert.equal(await preview.count(), 0);
+      await reply.click();
+      await editor.fill('原始附件也会保留。');
+      await ui.capture('reply-and-sent');
+      assert.ok(pendingText.includes(excerpt));
+      assert.ok(sentText.includes(excerpt));
+      assert.ok((await preview.textContent()).includes(excerpt));
+      await page.getByTestId('unload-quote-source').click();
+      assert.equal(await sent.getAttribute('data-quote-state'), 'snapshot');
+      assert.ok((await sent.textContent()).includes(excerpt));
+      return;
+    }
     const reply = page
       .locator('[data-answer]')
       .getByRole('button', { name: await ui.t('chat.messageActionBar.reply'), exact: true });

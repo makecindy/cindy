@@ -136,8 +136,10 @@ const TAILWIND_Z_INDEX = {
   "dropdown": "var(--z-dropdown)",
   "tooltip": "var(--z-tooltip)",
   "modal-popover-nested": "var(--z-modal-popover-nested)",
+  "modal-blocking": "var(--z-modal-blocking)",
   "toast": "var(--z-toast)",
-  "toast-top": "var(--z-toast-top)"
+  "toast-top": "var(--z-toast-top)",
+  "blocking-gate": "var(--z-blocking-gate)"
 };
 const MOTION_CSS = {
   "instant": "var(--motion-instant, 80ms)",

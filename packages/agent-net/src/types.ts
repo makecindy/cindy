@@ -1,5 +1,13 @@
 import type { KeyObject } from 'node:crypto';
 import type { AgentNetUplink } from '@cindy/agent-net-relay/client';
+export type PathPreference = 'auto' | 'direct' | 'relay';
+
+export interface PeerPathMetrics {
+  directRttMs: number | null;
+  relayRttMs: number | null;
+  preference: PathPreference;
+}
+
 export interface RosterEntry { id: string; dial: unknown; }
 export interface PeerChannel {
   readonly remoteId: string;
@@ -28,6 +36,10 @@ export interface PeerChannel {
    */
   readonly sessionBodies?: boolean;
   path?(): 'direct' | 'relay' | null;
+  /** Live RTT of both direct and relay paths (when measured) plus the local path preference. */
+  pathMetrics?(): PeerPathMetrics;
+  /** Change the local path preference (`auto` / `direct` / `relay`) and sync it with the peer on the control stream. */
+  setPathPreference?(preference: PathPreference): void;
   /** The peer's authenticated direct UDP address while `path()` is `'direct'`, so a fast foreground resume can dial it first. */
   directAddress?(): { address: string; port: number } | null;
   /** Fires when `path()` or `directAddress()` changes after the channel was adopted (for instance after hole punching). */

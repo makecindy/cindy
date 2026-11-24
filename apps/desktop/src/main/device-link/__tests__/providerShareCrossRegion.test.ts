@@ -135,7 +135,7 @@ import {
   startProviderShareCrossRegion,
   stopProviderShareCrossRegion,
 } from '../providerShareCrossRegion';
-import { DeviceLinkError, PROVIDER_METADATA_TRUST_MS, providerShareHostPeer } from '@cindy/device-link';
+import { DeviceLinkError, PROVIDER_METADATA_TRUST_MS, REMOTE_CATALOG_FRESH_MS, providerShareHostPeer } from '@cindy/device-link';
 import { sha256Hex } from '../providerShareApi';
 import { captureProviderShareGroupRecovery, findReceivedShare, getConfirmedReceivedShareIds, getReceivedSharesSnapshot, onProviderShareReceivedChanged, isReceivedSharesReady, previewProviderShare, refreshReceivedShares, resolveRemoteAgentTarget, resolveRemoteAgentTargetWhenReady, sendProviderShareRequest, startProviderShareGuest, stopProviderShareGuest } from '../providerShareGuest';
 import { createProviderGroupRemoteClient } from '../../provider-group/remoteClient';
@@ -1283,6 +1283,7 @@ describe('cross-region provider share', () => {
   });
 
   it('keeps a cached model list from claiming the offline host is online', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] });
     state.responses.set('/session', {
       credential: CREDENTIAL, expiresAt: new Date(Date.now() + 86_400_000).toISOString(), shares: [share],
     });
@@ -1290,6 +1291,8 @@ describe('cross-region provider share', () => {
     await refreshProviderShareCrossRegion('global');
     const peer = providerShareHostPeer(share.shareId, share.hostDeviceId);
     await crossRegionInvoke(peer, 'maker:provider:list', []);
+    // Past the shared fresh window the next catalog read reaches the (now offline) host again.
+    vi.advanceTimersByTime(REMOTE_CATALOG_FRESH_MS);
     state.invokeError = new DeviceLinkError('DEVICE_OFFLINE', 'offline');
     await expect(crossRegionInvoke(peer, 'maker:provider:list', [])).resolves.toMatchObject({
       ok: true, result: { providerContinuity: { stale: true } },

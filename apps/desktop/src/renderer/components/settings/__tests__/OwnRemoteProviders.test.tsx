@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
+import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -10,8 +11,20 @@ import {
   useOwnRemoteProviders,
   type OwnRemoteProvider,
 } from '../OwnRemoteProviders';
+import {
+  OwnRemotePluginEngineDetail,
+  OwnRemotePluginEngineRows,
+  useOwnRemotePluginEngines,
+} from '../OwnRemotePluginEngines';
 import { useOwnedProviderShares } from '@/features/provider-share/useOwnedProviderShares';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import {
+  DEVICE_PLUGIN_ENGINES_REREAD_MS,
+  hasRemotePluginEngineSubscribers,
+  prefetchRemotePluginEngines,
+  resetPluginEnginesStoreForTests,
+} from '@/hooks/usePluginEngines';
+import { useControllableDevices } from '@/hooks/useControllableDevices';
 
 vi.mock('react-i18next', () => ({
   initReactI18next: { type: '3rdParty', init: () => undefined },
@@ -439,5 +452,315 @@ describe('OwnRemoteProviderRows / OwnRemoteProviderDetail', () => {
     }} />);
     expect(screen.queryByTestId('provider-usage-module')).toBeNull();
     expect(screen.queryByText('quotaCard.noWindows')).toBeNull();
+  });
+
+  // Test value: OwnRemoteProviderDetail previously called only the default-account quota reader and
+  // dropped additional accounts in a remote computer's subscription pool. Exercise the real detail,
+  // useGroupMemberAccounts, and QuotaHoverCard together; existing tests only stub the legacy single card.
+  // Minimal input: two accounts in one remote pool, a split pool push, an old-host rejection, and an all-paused pool.
+  // Tier: unit; in-memory deviceLink mocks without network or real waiting.
+  describe('remote subscription account pools', () => {
+    let originalApi: Window['electronAPI'];
+    const invoke = vi.fn();
+    let pushListeners: Set<(push: { deviceId: string; channel: string; payload?: unknown }, stamp?: unknown) => void>;
+
+    const poolAccount = (id: string, overrides: Record<string, unknown> = {}) => ({
+      id,
+      paused: false,
+      limit: 4,
+      weight: 1,
+      directory: `/remote/${id}`,
+      status: 'ready' as const,
+      running: 0,
+      ...overrides,
+    });
+
+    const claudeUsage = (fiveHour: number, sevenDay: number, extra: Record<string, unknown> = {}) => ({
+      claude: {
+        source: 'oauth-endpoint' as const,
+        updatedAt: Date.now(),
+        fiveHour: { utilization: fiveHour, resetsAt: null },
+        sevenDay: { utilization: sevenDay, resetsAt: null },
+        ...extra,
+      },
+    });
+
+    beforeEach(() => {
+      originalApi = window.electronAPI;
+      setDataOwnerGeneration('owner-1', 1);
+      invoke.mockReset();
+      pushListeners = new Set();
+      window.electronAPI = {
+        ...originalApi,
+        deviceLink: {
+          invoke,
+          onRemotePush: (listener: (push: { deviceId: string; channel: string; payload?: unknown }, stamp?: unknown) => void) => {
+            pushListeners.add(listener);
+            return () => pushListeners.delete(listener);
+          },
+          onPresenceChanged: () => () => undefined,
+          onStatusChanged: () => () => undefined,
+        },
+      } as unknown as Window['electronAPI'];
+    });
+
+    afterEach(() => {
+      cleanup();
+      window.electronAPI = originalApi;
+      setDataOwnerGeneration(null, 0);
+    });
+
+    it('lists every active subscription account on the remote computer, read-only, and clears on switching', async () => {
+      invoke.mockImplementation(async (deviceId: string) => deviceId === 'mini-a'
+        ? {
+            providerId: 'anthropic',
+            configured: true,
+            strategy: 'least',
+            accounts: [
+              poolAccount('default', {
+                identity: 'first@example.com',
+                plan: 'pro',
+                usage: claudeUsage(0, 13),
+              }),
+              poolAccount('work', {
+                identity: 'second@example.com',
+                plan: 'max',
+                planTier: 'max_5x',
+                usage: claudeUsage(15, 2),
+              }),
+              poolAccount('paused-acc', {
+                identity: 'paused@example.com',
+                paused: true,
+                usage: claudeUsage(50, 50),
+              }),
+            ],
+          }
+        : { providerId: 'anthropic', configured: true, strategy: 'least', accounts: [] });
+
+      const subscription: OwnRemoteProvider = {
+        ...entry,
+        provider: { ...entry.provider, auth: { method: 'oauth' as const, native: 'claude' as const } },
+      };
+      const { rerender } = render(<OwnRemoteProviderDetail entry={subscription} />);
+
+      await waitFor(() => expect(screen.getAllByTestId('own-remote-provider-account')).toHaveLength(2));
+      expect(invoke).toHaveBeenCalledWith('mini-a', 'maker:subscription-accounts', [{ action: 'read', providerId: 'anthropic' }]);
+      expect(usage.remoteClaude.mock.calls.every(([deviceId]) => deviceId === null)).toBe(true);
+      const rows = screen.getAllByTestId('own-remote-provider-account');
+      expect(rows[0].textContent).toContain('first@example.com');
+      expect(within(rows[0]).getByTestId('quota-plan-badge').textContent).toBe('Pro');
+      expect(rows[1].textContent).toContain('second@example.com');
+      expect(within(rows[1]).getByTestId('quota-plan-badge').textContent).toBe('Max 5×');
+      expect(screen.queryByText('paused@example.com')).toBeNull();
+      expect(screen.getAllByRole('button')).toEqual([screen.getByRole('button', { name: 'settings.providers.detail.moreActionsAria' })]);
+      expect(screen.queryByRole('link')).toBeNull();
+
+      // All-paused / empty pool on another computer clears accounts without falling back to the legacy card.
+      rerender(<OwnRemoteProviderDetail entry={{ ...subscription, key: ownRemoteProviderKey('mini-b', 'anthropic'), deviceId: 'mini-b' }} />);
+      await waitFor(() => expect(invoke).toHaveBeenCalledWith('mini-b', 'maker:subscription-accounts', [{ action: 'read', providerId: 'anthropic' }]));
+      expect(screen.queryByTestId('provider-usage-module')).toBeNull();
+      expect(screen.queryByRole('progressbar')).toBeNull();
+    });
+
+    it('reads a split remote subscription pool and refreshes on its pool-kind change push', async () => {
+      invoke.mockResolvedValueOnce({
+        providerId: 'claude-work',
+        kind: 'anthropic',
+        configured: true,
+        strategy: 'least',
+        accounts: [
+          poolAccount('acc-1', { identity: 'one@example.com', plan: 'pro', usage: claudeUsage(20, 40) }),
+          poolAccount('acc-2', { identity: 'two@example.com', status: 'signed-out' }),
+        ],
+      }).mockResolvedValueOnce({
+        providerId: 'claude-work',
+        kind: 'anthropic',
+        configured: true,
+        strategy: 'least',
+        accounts: [
+          poolAccount('acc-1', { identity: 'one@example.com', plan: 'pro', usage: claudeUsage(20, 40) }),
+          poolAccount('acc-2', { identity: 'two@example.com', plan: 'pro', usage: claudeUsage(10, 30) }),
+        ],
+      });
+
+      const split: OwnRemoteProvider = {
+        ...entry,
+        key: ownRemoteProviderKey('mini-a', 'claude-work'),
+        provider: provider('claude-work', {
+          name: 'Claude Work',
+          auth: { method: 'oauth', native: 'claude' },
+          subscriptionAccountPool: 'anthropic',
+        }) as unknown as OwnRemoteProvider['provider'],
+      };
+      render(<OwnRemoteProviderDetail entry={split} />);
+
+      await waitFor(() => expect(screen.getAllByTestId('own-remote-provider-account')).toHaveLength(2));
+      expect(invoke).toHaveBeenCalledWith('mini-a', 'maker:subscription-accounts', [{ action: 'read', providerId: 'claude-work' }]);
+      expect(screen.getAllByTestId('own-remote-provider-account')[1].textContent).toContain('subscriptionAccounts.signedOut');
+
+      await act(async () => {
+        pushListeners.forEach((listener) =>
+          listener({ deviceId: 'mini-a', channel: 'subscription-accounts:changed', payload: { providerId: 'anthropic' } }),
+        );
+      });
+      await waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
+      expect(screen.getAllByTestId('own-remote-provider-account')[1].textContent).not.toContain('subscriptionAccounts.signedOut');
+      expect(within(screen.getAllByTestId('own-remote-provider-account')[1]).getAllByRole('progressbar').length).toBe(2);
+    });
+
+    it('falls back to the single-account card on older hosts and skips pool reads for api-key or group entries', async () => {
+      invoke.mockRejectedValueOnce(new Error('CHANNEL_NOT_ALLOWED'));
+      const subscription: OwnRemoteProvider = {
+        ...entry,
+        provider: { ...entry.provider, auth: { method: 'oauth' as const, native: 'claude' as const } },
+      };
+      const { rerender } = render(<OwnRemoteProviderDetail entry={subscription} />);
+
+      await waitFor(() => expect(screen.getByRole('progressbar').getAttribute('aria-valuetext')).toBe('quotaCard.remainingPercent:{"percent":63}'));
+      expect(invoke).toHaveBeenCalledTimes(1);
+
+      invoke.mockClear();
+      rerender(<OwnRemoteProviderDetail entry={entry} />);
+      expect(invoke).not.toHaveBeenCalled();
+      expect(screen.queryByTestId('provider-usage-module')).toBeNull();
+    });
+  });
+});
+
+// 测试价值：「设置 → 模型供应商」此前只列本机插件引擎和其他电脑的普通供应商，同账号另一台电脑开放的
+// 插件引擎在新建任务的模型列表里能选，在设置页却看不到。
+// 生产入口：真实 useOwnRemotePluginEngines + 按电脑的引擎目录缓存 + 行与详情，只替换在线电脑列表和
+// Device Link invoke。最小失败输入：一台在线电脑回一个已开放的引擎和一个未开放的引擎。
+// 第二条守住读取次数：在线电脑列表变化时只读新出现的电脑，不把已读过的电脑再读一遍。
+// 用量(2026-11-23 用户反馈：详情看不到那台电脑的用量，而 provider-sharing.md 2026-10-22 裁决要求只读显示)：
+// 最小失败输入是那台电脑回一个 reportsUsage 的引擎、用量读取回一个窗口；修复前详情没有用量块、也不读。
+// 不上报用量的引擎不读，由第一条守住。
+// tier: unit(jsdom，内存 invoke，不联网)。
+describe('plugin engines my other computers open for remote use', () => {
+  const invoke = vi.fn();
+  let originalApi: Window['electronAPI'];
+  const listCalls = () => invoke.mock.calls
+    .filter(([, channel]) => channel === 'maker:list-plugin-engines')
+    .map(([deviceId]) => deviceId as string);
+  const usageCalls = () => invoke.mock.calls.filter(([, channel]) => channel === 'maker:get-plugin-engine-usage');
+
+  function engine(harnessId: string, overrides: Record<string, unknown> = {}) {
+    return {
+      key: `agy:${harnessId}`,
+      providerId: `acp-plugin:agy:${harnessId}`,
+      ghostId: 'agy',
+      harnessId,
+      name: harnessId === 'antigravity' ? 'Antigravity' : 'Closed engine',
+      availability: { state: 'available' },
+      models: [{ id: 'gemini-3-pro', displayName: 'Gemini 3 Pro' }],
+      permissionModes: [],
+      defaultPermissionMode: 'ask',
+      remoteUse: { supported: true, enabled: true },
+      ...overrides,
+    };
+  }
+
+  function Page({ active = true }: { active?: boolean }) {
+    // 与设置页相同：电脑列表来自 useOwnRemoteProviderList 用的那份(这里由文件顶部的 mock 提供)。
+    const entries = useOwnRemotePluginEngines(useControllableDevices(), active);
+    const [selected, setSelected] = useState<string | null>(null);
+    const entry = entries.find((item) => item.key === selected);
+    return (
+      <>
+        <OwnRemotePluginEngineRows entries={entries} selectedKey={selected} onSelect={setSelected} />
+        {entry ? <OwnRemotePluginEngineDetail entry={entry} /> : null}
+      </>
+    );
+  }
+
+  beforeEach(() => {
+    originalApi = window.electronAPI;
+    setDataOwnerGeneration('owner-1', 1);
+    resetPluginEnginesStoreForTests();
+    invoke.mockReset();
+    window.electronAPI = { ...originalApi, deviceLink: { invoke } } as unknown as Window['electronAPI'];
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+    window.electronAPI = originalApi;
+    resetPluginEnginesStoreForTests();
+    setDataOwnerGeneration(null, 0);
+  });
+
+  it('lists the engine another computer opened and shows where it runs and its models', async () => {
+    devices.value = [{ deviceId: 'studio-desktop', name: 'Studio Desktop', platform: 'darwin' }];
+    invoke.mockImplementation(async (_deviceId: string, channel: string) => channel === 'maker:list-plugin-engines'
+      ? [engine('antigravity'), engine('closed', { remoteUse: { supported: true, enabled: false } })]
+      : undefined);
+    render(<Page />);
+
+    const row = await screen.findByTestId('own-remote-plugin-engine-row');
+    expect(screen.getAllByTestId('own-remote-plugin-engine-row')).toHaveLength(1);
+    expect(row.getAttribute('aria-label')).toBe(
+      'settings.providers.remote.rowLabel:{"provider":"Antigravity","device":"Studio Desktop"}',
+    );
+    fireEvent.click(row);
+    const detail = screen.getByTestId('own-remote-plugin-engine-detail');
+    expect(within(detail).getByText('Studio Desktop')).toBeTruthy();
+    expect(within(detail).getByText('Gemini 3 Pro')).toBeTruthy();
+    expect(within(detail).queryByRole('button', { name: 'settings.providers.detail.moreActionsAria' })).toBeNull();
+    expect(listCalls()).toEqual(['studio-desktop']);
+    // This engine does not report usage: no read and no empty usage block.
+    await act(async () => { await Promise.resolve(); });
+    expect(usageCalls()).toEqual([]);
+    expect(within(detail).queryByTestId('provider-usage-module')).toBeNull();
+  });
+
+  it('shows that computer’s account usage when its engine reports it', async () => {
+    devices.value = [{ deviceId: 'studio-desktop', name: 'Studio Desktop', platform: 'darwin' }];
+    const usage = { updatedAt: Date.now(), windows: [{ label: 'Weekly requests', remainingPercent: 64 }] };
+    invoke.mockImplementation(async (_deviceId: string, channel: string) => {
+      if (channel === 'maker:list-plugin-engines') return [engine('antigravity', { reportsUsage: true })];
+      return channel === 'maker:get-plugin-engine-usage' ? usage : undefined;
+    });
+    render(<Page />);
+
+    fireEvent.click(await screen.findByTestId('own-remote-plugin-engine-row'));
+    const detail = screen.getByTestId('own-remote-plugin-engine-detail');
+    expect(within(await within(detail).findByTestId('provider-usage-module')).getByText('Weekly requests')).toBeTruthy();
+    expect(usageCalls()).toEqual([['studio-desktop', 'maker:get-plugin-engine-usage', ['agy:antigravity']]]);
+  });
+
+  it('reads only a computer that comes online while the page stays open', async () => {
+    // 时钟照常走，只在电脑列表变化前跳过 15 秒的复读间隔，证明不是靠这个间隔才没有重读。
+    const realNow = Date.now.bind(Date);
+    let skipped = 0;
+    vi.spyOn(Date, 'now').mockImplementation(() => realNow() + skipped);
+    invoke.mockResolvedValue([]);
+    const first = { deviceId: 'mini', name: 'Mini', platform: 'darwin' };
+    devices.value = [first];
+    const view = render(<Page />);
+    await waitFor(() => expect(listCalls()).toEqual(['mini']));
+
+    skipped += DEVICE_PLUGIN_ENGINES_REREAD_MS + 1;
+    devices.value = [first, { deviceId: 'studio-desktop', name: 'Studio Desktop', platform: 'darwin' }];
+    view.rerender(<Page />);
+    await waitFor(() => expect(listCalls()).toEqual(['mini', 'studio-desktop']));
+  });
+
+  it('recovers an unread catalogue on reconnect and releases the subscription when hidden', async () => {
+    const deviceId = 'studio-desktop';
+    devices.value = [{ deviceId, name: 'Studio Desktop', platform: 'darwin' }];
+    invoke.mockRejectedValueOnce(new Error('connection interrupted')).mockResolvedValue([engine('antigravity')]);
+    const view = render(<Page />);
+    await waitFor(() => expect(listCalls()).toEqual([deviceId]));
+    expect(screen.queryByTestId('own-remote-plugin-engine-row')).toBeNull();
+
+    await act(async () => {
+      // The remote bootstrap only prefetches for a live subscriber.
+      if (hasRemotePluginEngineSubscribers(deviceId)) await prefetchRemotePluginEngines(deviceId);
+    });
+    expect(await screen.findByTestId('own-remote-plugin-engine-row')).toBeTruthy();
+
+    view.rerender(<Page active={false} />);
+    expect(hasRemotePluginEngineSubscribers(deviceId)).toBe(false);
+    expect(screen.queryByTestId('own-remote-plugin-engine-row')).toBeNull();
   });
 });

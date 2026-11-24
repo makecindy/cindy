@@ -546,7 +546,9 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
   // scheduler must settle from the queued failure callback, not its later poll.
   // Only the real typed snapshot deadline is handed to #10834's backoff recovery;
   // its resend and exhaustion are covered by the persisted-recovery tests below.
-  it.each(['deadline', 'permission', 'stop', 'clear', 'pause', 'delete', 'unknown-send'] as const)(
+  // #10161 / unit: with recovery disabled, the same stalled journal receipt
+  // must reach the run's failure details as an unsent message.
+  it.each(['deadline', 'deadline-without-recovery', 'permission', 'stop', 'clear', 'pause', 'delete', 'unknown-send'] as const)(
     'settles pre-accept snapshot preparation through the real queue: %s', async (outcome) => {
     vi.useFakeTimers();
     const h = createSessionHarness(async () => ({ accepted: true }));
@@ -582,7 +584,8 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
       beforeDispatchUserTurn: (sid, item, signal) => prepareQueuedPromptSnapshot(snapshots, watchers, sid, item, signal),
       onAcceptedQueuedMessage: async () => { watchers.delete('snapshot-run-input'); await accepted?.(); },
       onPersistedSendRejected: (sid, message, item, recovering) => queue.onPersistedSendRejected(sid, message, item, recovering),
-      isResumableTurnErrorCandidate: signals => signals.reason === 'scheduler-snapshot-preparation',
+      isResumableTurnErrorCandidate: signals => outcome !== 'deadline-without-recovery'
+        && signals.reason === 'scheduler-snapshot-preparation',
       onResumableTurnError: takeOver,
       onDiscardedQueuedMessage: (_sid, item) => { watchers.get(item.clientId)?.onDiscarded(); watchers.delete(item.clientId); },
       steerToAgent: async () => {}, abortSession: async () => {}, isTurnRunning: () => false,
@@ -634,6 +637,9 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
       expect(vendorSend).toHaveBeenCalledTimes(outcome === 'unknown-send' ? 1 : 0);
       expect(result.error).toBeInstanceOf(Error);
       if (outcome === 'permission') expect(result.error.message).toBe('permission denied');
+      if (outcome === 'deadline-without-recovery') {
+        expect(result.error.message).toMatch(/^\[SNAPSHOT_DISPATCH_INTENT_TIMEOUT\]/);
+      }
       expect(persisted).toHaveBeenCalledOnce();
       releaseIntent({ attemptId: 'late' });
       await vi.advanceTimersByTimeAsync(0);

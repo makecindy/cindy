@@ -420,6 +420,7 @@
       "description": "僅限遠端呼叫，不涉此機使用。存後，於立差事、易模型及遣下一輪訊時生效。",
       "all": "諸模型",
       "selected": "已開 {{count}} 個模型",
+      "selectionExcludesModels": "尚有模型未選。日後新增者，須親選而後開放。",
       "choose": "擇模型",
       "memberTitle": "可用模型",
       "memberDescription": "設 {{name}} 可用之模型，僅能擇遠端已開者。經此人轉分享之呼叫亦適用。",
@@ -685,6 +686,7 @@
     },
     "picker": {
       "unavailable": "已不可用之分享",
+      "offline": "{{name}} · 暫離線",
       "hostOutdated": "分享者機上之 Cindy 版本過舊，讀不得此等模型。請彼更新 Cindy 而後再試。",
       "numbered": "{{name}} ({{index}})"
     },
@@ -977,7 +979,7 @@
     "captureFailed": "不能擷取螢幕",
     "permission": {
       "title": "須螢幕錄製之權柄",
-      "detail": "截圖須於「系統設定 > 隱私權與安全性 > 螢幕與系統錄音」中許 {{appName}}，啟後請重啟 {{appName}}。",
+      "detail": "許 {{appName}} 錄屏，再試之。若 macOS 有請，再啟此應用。",
       "openSettings": "啟系統設定",
       "later": "暫不啟"
     },
@@ -1144,12 +1146,12 @@
     "windowsError": "授權未竟，請於此機再試。",
     "windowsErrorDetail": "錯誤碼 {{code}}",
     "permissionsTitle": "遠端桌面權柄",
-    "permissionsIntro": "覽桌面須螢幕錄製權限；操作桌面另須輔助使用權限。請於機上完成授權，結果將自動更新。",
+    "permissionsIntro": "請於受控 Mac 授權。觀其桌面須錄屏，用鍵鼠須許 Cindy 控制應用。畢則自驗。",
     "permissionsReady": "系統權柄已備，可重連。",
     "screenRecording": "螢幕錄製",
-    "accessibility": "輔助使用",
-    "screenRecordingHelp": "啟系統設定，為今之 Cindy 啟用螢幕錄製。若系統令重啟，請重啟 Cindy 而後連線。",
-    "accessibilityHelp": "點啟設定後，為系統授權提示所指之應用程式啟用輔助使用。歸來後將自動檢測實際輸入權限。",
+    "accessibility": "鍵鼠操控",
+    "screenRecordingHelp": "於「螢幕錄製」或「螢幕與系統音訊錄製」許今所用之 Cindy 錄屏。若 macOS 有請，再啟 Cindy。",
+    "accessibilityHelp": "於「隱私權與安全性」選系統所示之應用。若見「System & App Protection Override」，選可控之應用；舊版於「輔助使用」開啟。",
     "permissionChecking": "方察…",
     "permissionGranted": "已授",
     "permissionUnknown": "未明",
@@ -1343,7 +1345,9 @@
       }
     },
     "lockOnExitHintPrivacy": "退出遠端桌面後覆以隱私畫面，AI 可續作；有人觸機即鎖屏。",
-    "lockedEnablePrivacyHint": "欲令 AI 於君離座時續用此機，可於其「規制 → 通則 → 離座之時」中啟隱私畫面。"
+    "lockedEnablePrivacyHint": "欲令 AI 於君離座時續用此機，可於其「規制 → 通則 → 離座之時」中啟隱私畫面。",
+    "revealCurrentApp": "於 Finder 中顯示 {{app}}",
+    "openPermissionInNewWindow": "另啟一窗"
   },
   "ipcError": {
     "SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN": "$t(subscriptionAccounts.loginIdentityUnknown)",
@@ -1935,6 +1939,7 @@
       },
       "footnote": "初版僅支援 SSH 連線管理；於遠端行 Agent 之能，將於後續版本增之。",
       "viaAuth": "經 {{label}} 認證",
+      "managedAliasConflict": "此 SSH 別名在 Cindy 管理的設定與外部設定中都有定義。連線資訊為唯讀，無法在此移除此主機。",
       "readOnlyFromSshConfig": "連線資訊出自 SSH 設定",
       "importedAgentHint": "由本機 SSH 密鑰代理（ssh-agent）驗身。終端 ssh 雖可通，未必代理已備。",
       "agentError": {
@@ -2200,6 +2205,13 @@
       }
     },
     "appearance": {
+      "chatLayout": {
+        "label": "對談布置",
+        "standard": "常式",
+        "wide": "寬式",
+        "width": "內容之寬",
+        "hint": "以對談兩旁留白之外為準。欄狹則自調。"
+      },
       "title": "儀容",
       "modeLabel": "顯示之式",
       "appIcon": {
@@ -2790,7 +2802,8 @@
         "errorBusy": "已有一次上呈方行，請稍候",
         "errorFailed": "日誌上呈未成，請察網路後再試",
         "unavailableNotConfigured": "此版未設日誌上呈。",
-        "unavailableNoConsent": "須先允《隱私政策》。"
+        "unavailableNoConsent": "須先允《隱私政策》。",
+        "consentPrompt": "上呈之前，請閱<policy>《隱私政策》</policy>而<accept>允之</accept>。"
       },
       "openLogsDirError": "日誌目錄未能啟",
       "autoUpdateLabel": "閒時自裝更新",
@@ -3161,7 +3174,7 @@
         },
         "accessibility": {
           "label": "自書",
-          "tooltip": "輔助使用權限用以於他 App 中自輸語音所得、讀游標附近文字為潤色上下文，並識外部修改以進詞典。"
+          "tooltip": "許 Cindy 於所選應用錄入語音所得、讀游標近文、辨其改動。視 Mac 所示，於「輔助使用」或「System & App Protection Override」授權。"
         }
       },
       "interactionSound": {
@@ -3392,6 +3405,7 @@
       "description": "將他家 AI 程式設計工具之差事接入 Cindy，續而為之。唯讀原始記錄，不改分毫。",
       "rescan": "再察",
       "allSources": "諸源",
+      "sourceFilterAria": "源",
       "search": "尋差事或卷匣",
       "projectFilter": "唯覽 {{name}}",
       "clearProjectFilter": "示諸案",
@@ -4110,6 +4124,7 @@
         "refreshReconnect": "模型清單重整未成。請重連此供方，再試。",
         "refreshFetchDisabled": "模型目錄遠端擷取未啟，已略重整",
         "withdrawn": {
+          "rowStatus": "上次重整未列",
           "refreshFound": "上游已不復供 {{count}} 個模型",
           "refreshAdded": "新得 {{added}} 個模型，另有 {{count}} 個上游已不復供",
           "refreshSuspicious": "此番 {{count}} 個模型未見回傳，或上游一時未全",
@@ -4454,6 +4469,16 @@
         "groupLocal": "此機模型",
         "metaLocalRecommended": "薦 · 於 Cindy 內取下",
         "metaLocalConnect": "連方行之此機服務",
+        "configurePlugin": "配置",
+        "installAndConfigure": "安裝並配置",
+        "pluginLoading": "正讀法器…",
+        "engineState": {
+          "available": "已備",
+          "unavailable": "不可用",
+          "unknown": "候引擎報其狀"
+        },
+        "retryPlugin": "再試",
+        "officialModelPlugins": "官方模型法器",
         "moreLocal": "更多此機服務"
       },
       "local": {
@@ -4778,7 +4803,68 @@
         "hint": "經已繫之飛書或 Lark 機器人，私遣君一訊；唯於視窗失焦時遣之。",
         "disabledHint": "須先設 Bot，並遣之一訊以成其繫。"
       },
-      "bind": "繫之"
+      "bind": "繫之",
+      "groups": {
+        "title": "群議",
+        "description": "為機器人所在之某群另定專案、模型與權柄。",
+        "rules": "未另定者：已繫專案之群從「案與模型」中該專案之設，未繫專案之群從上方「新言談配置」與「群議新差事之權柄檔」。群之主線與其話題共一群之設。",
+        "expand": "展",
+        "collapse": "收",
+        "groupCount_one": "{{count}} 群",
+        "groupCount_other": "{{count}} 群",
+        "customCount_one": "{{count}} 群另設",
+        "customCount_other": "{{count}} 群另設",
+        "refresh": "重讀",
+        "loading": "正讀群錄…",
+        "loadFailed": "群錄未能讀得，請稍後點「重讀」再試。",
+        "saveFailed": "群設未能存",
+        "notConnected": "機器人連上後方能列其所在之群。下方唯列已另設之群。",
+        "empty": "機器人尚未入群。引之入群後，再來此設之。",
+        "listPermission": "未能讀機器人所在之群：請於飛書開放平台為此應用開「獲取群組資訊」之權。下方先列機器人曾用之群。",
+        "listUnavailable": "暫未能讀機器人所在之群，下方先列機器人曾用之群。",
+        "unnamed": "無名之群（{{id}}）",
+        "summaryModel": "另定模型",
+        "summaryPermission": "另定權柄",
+        "expandAria": "設「{{name}}」",
+        "searchLabel": "尋群",
+        "searchPlaceholder": "以群名尋之",
+        "customHeading": "另設者",
+        "followHeading": "從渠道之設者",
+        "showMore": "再顯 {{count}} 個",
+        "showLess": "收",
+        "noMatch": "未見名含「{{query}}」之群",
+        "project": {
+          "label": "專案",
+          "follow": "言談",
+          "missing": "{{name}}（已離側欄）",
+          "hint": "於群中初 @ 機器人、開新話題或發 /new 時乃行，進行之差事不移。擇專案，則模型與權柄常從此專案於「案與模型」之設；擇「言談」，則差事置於機器人之言談目錄，從上方「新言談配置」。唯可擇側欄中本機之專案。"
+        },
+        "model": {
+          "label": "模型與思之深淺",
+          "hintFollow": "從「新言談配置」。於此換模型或思之深淺，則唯及此群。",
+          "hintFollowProject": "從專案「{{project}}」於「案與模型」之設。於此換模型或思之深淺，則唯及此群。",
+          "hintProjectUnavailable": "專案「{{project}}」於「案與模型」所定之模型今不可用。可往彼處重擇，或於此為此群另擇之。",
+          "hintFixed": "此群另定模型。群中未另改模型之差事，得下一言時即換之；新差事徑用之。"
+        },
+        "permission": {
+          "label": "權柄",
+          "hintFollow": "今從「群議新差事之權柄檔」。唯及此後於此群新開之差事，既有差事請於群中以 /permission 切換。",
+          "hintFollowProject": "今從專案「{{project}}」於「案與模型」之權柄。唯及此後於此群新開之差事，既有差事請於群中以 /permission 切換。",
+          "hintFixed": "此群另定權柄。唯及此後於此群新開之差事，既有差事請於群中以 /permission 切換。"
+        },
+        "fullAccessConfirm": {
+          "title": "令「{{name}}」以完全存取行之乎？",
+          "description": "此後於此群新開之差事皆徑行，不復逐項確認，群中無論何人 @ 機器人皆然。群議之言由成員掌之，請確保群中之人皆可信。",
+          "confirm": "改為完全存取",
+          "cancel": "罷"
+        },
+        "widerConfirm": {
+          "title": "寬「{{name}}」之權柄乎？",
+          "description": "此後於此群新開之差事，將由「{{current}}」易為「{{next}}」，群中無論何人 @ 機器人皆然。群議之言由成員掌之，請確保群中之人皆可信。",
+          "confirm": "仍改之",
+          "cancel": "罷"
+        }
+      }
     },
     "wechatBot": {
       "title": "個人微信",
@@ -5079,6 +5165,7 @@
       "formHint": "使用者 ID 為純數字；私聊 @userinfobot 可查己之 ID。",
       "connect": "連之",
       "connectingAction": "方連…",
+      "connectTimedOut": "連線逾時，請再試",
       "errorCode": {
         "invalid-token": "Bot Token 無效或已重置，請重填",
         "provider-api": "Telegram 服務回報謬誤，請稍後再試",
@@ -5387,10 +5474,96 @@
       "budget": "減價",
       "subscription": "訂閱",
       "saveFailed": "輔佐模型之設存之未成",
+      "testFailed": "模型連線測試失敗：{{model}}",
+      "save": "儲存輔助模型",
+      "saving": "正在儲存並測試…",
+      "saveSuccess": "連線測試通過，輔助模型已啟用",
+      "retrySave": "連線測試失敗，請修復連線後重試儲存。",
+      "notice": {
+        "auto-title": "未能自擬對話之題",
+        "title": "未能擬對話之題",
+        "task-summary": "未能撮任務之要",
+        "prompt-prediction": "未能薦下句",
+        "working-status": "未能述進度",
+        "tool-loop-review": "未能察工具之重複執行",
+        "unavailable": "一項輔助之事未成",
+        "dismiss": "收起此示",
+        "unavailableBody": "輔助模型暫不可用。",
+        "recovered": "輔助模型已復",
+        "recoveredBody": "最近一次輔助請求已成。",
+        "details": "詳情",
+        "settings": "輔助模型設定"
+      },
+      "viewSettings": "查看設定",
+      "healthRecent": "{{model}} 近來成功率 {{rate}}% · 今狀：{{status}}。",
+      "lastError": "末次錯誤",
+      "healthPaused": "暫停",
+      "healthMonitoring": "監測中",
+      "healthWarning": "{{model}} 近來敗 {{count}} 次（{{reason}}）。",
+      "healthIsolated": "{{model}} 暫停之（{{reason}}）。{{switched}}",
+      "healthSwitched": "今用備用模型。",
+      "healthNoSwitch": "此請未得備用模型之答。",
+      "healthRecovered": "輔助模型 {{model}} 復可用。",
+      "cannotEnable": "此模型未能啟用",
+      "failedKeep": "未能存設，仍循舊設",
+      "failedAuto": "未能存設，仍由系統擇用",
+      "failedSlot": "{{slot}} · {{model}} 未通過檢驗",
+      "testingHint": "正逐一驗所選模型，悉數通過乃用新設。",
+      "draft": "所改尚未存",
+      "restored": "已復自動擇用",
+      "restoring": "正復自動擇用…",
+      "retryAction": "再試存儲",
+      "attempts": "近 {{total}} 請，失其 {{failed}}。",
+      "http": {
+        "401": "認證未成",
+        "403": "存取見拒",
+        "404": "所求資源未得",
+        "429": "請求受限",
+        "server": "供應商服務有誤",
+        "other": "請求未成"
+      },
+      "healthReasons": {
+        "http_error": "上游請求之錯",
+        "timeout": "久候未應",
+        "request_failed": "請求敗",
+        "empty_response": "空回應",
+        "model_unavailable": "模型不可用",
+        "not_authenticated": "尚未驗明身分",
+        "auth_probe_failed": "驗證檢查敗",
+        "api_key_missing": "缺 API 鍵",
+        "endpoint_missing": "缺端點",
+        "unsupported_transport": "不支援之協定",
+        "agent_unavailable": "Agent 不可用",
+        "permission_denied": "供應商拒其請（403）。請核此戶可用之模型。",
+        "quota": "請向供應商核其餘額及配額。"
+      },
       "chain": {
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 Flash",
         "cindyQwen38Flash": "Qwen 3.8 Flash"
+      },
+      "health": {
+        "configTitle": "輔佐模型皆不可用",
+        "configDescription": "差事自動命名、置頂差事摘要、Help 與法器差事（如字幕翻譯）皆受其累。請治下列諸弊，或於自擬中擇他可用之模型。",
+        "runtimeTitle": "輔佐模型近屢請而敗",
+        "runtimeDescription": "或網路、或服務暫有不諧，復常則此示自去。若久而不去，可於自擬中擇他可用之模型。",
+        "fallback": "法器差事暫改用 {{model}}，思之深淺從淺，或稍遲、所耗限額稍多。",
+        "candidate": "{{model}}：{{reason}}",
+        "openProviders": "啟模型供方",
+        "customize": "自擬輔佐模型",
+        "issues": {
+          "signed_out": "須登門 Cindy",
+          "provider_disabled": "供方已停",
+          "model_disabled": "模型已停",
+          "payment_required": "今之方案或餘額不及",
+          "no_credential": "缺登門之憑或金鑰",
+          "unavailable": "今不可用"
+        },
+        "toast": {
+          "config": "輔佐模型皆不可用，差事命名、摘要與字幕翻譯等法器差事皆受其累。",
+          "runtime": "輔佐模型近屢請而敗，差事命名、摘要與字幕翻譯等法器差事或受其累。",
+          "open": "往規制"
+        }
       }
     },
     "compaction": {
@@ -5722,7 +5895,8 @@
         "title": "代操瀏覽器",
         "description": "Agent 專用之獨立瀏覽器，與君日常之 Chrome 兩不相擾",
         "toggleAria": "切換代操瀏覽器",
-        "toggleHint": "僅於新開之 Agent 會話生效",
+        "toggleHint": "本案之瀏覽器設定，於本案 Agent 會話開啟或重啟時生效。",
+        "userDefaultToggleHint": "更易瀏覽器常例，Cindy 待本機 Codex 閒時自動更新。原差事與對話紀錄悉存。Codex 重讀諸內置工具之設定，先從各案覆寫。Pi 等其餘 Agent 俟再啟之時從瀏覽器常例。",
         "noProjectHint": "自案中差事開「規制」，可為該案開關代操瀏覽器。",
         "detected": "已偵得 {{browser}}",
         "notDetected": "此機未見瀏覽器。安裝 Chrome 後即可代操瀏覽器。",
@@ -5751,10 +5925,10 @@
         "toggleAria": "用我之瀏覽器登入態",
         "confirmTitle": "許 Agent 用君之瀏覽器登入態乎？",
         "confirmDescription": "Agent 將能以君已登入之身分開網頁，信箱、雲端硬碟與公司後台皆在其列。可隨時關之，拷貝即刪。",
-        "confirmDescriptionMac": "Agent 將能以君已登入之身分開網頁，信箱、雲端硬碟與公司後台皆在其列。讀 Chrome 登入檔另需「完全磁碟存取權」。可隨時關之，拷貝即刪。",
+        "confirmDescriptionMac": "Agent 將能以君已登入之身分開網頁，信箱、雲端硬碟與公司後台皆在其列。可隨時關之，拷貝即刪。 若問檔案夾之權，選所需瀏覽器資料夾。",
         "confirm": "用我之登入態",
-        "readDeniedTitle": "需完全磁碟存取權",
-        "readDeniedDescription": "讀 Chrome 登入檔，需系統許 Cindy 為之。請於「隱私權與安全性 → 完全磁碟存取權」中開啟 Cindy，再歸此處重試。",
+        "readDeniedTitle": "瀏覽器資料未能讀取",
+        "readDeniedDescription": "於「隱私權與安全性 → 完整磁碟取用權」選今所用之 Cindy。若可選檔案夾，惟取所需之瀏覽器資料夾，再試之。",
         "openFullDiskAccess": "開系統設定",
         "readDeniedLater": "容後",
         "toast": {
@@ -5926,7 +6100,7 @@
         "permissionIntro": {
           "title": "啟代操此機",
           "description": "{{appName}} 將於此機安裝或啟動 Cua Driver，用以讀螢幕並行點選、輸入等操作。請僅於君親自發起代操此機之差事時啟用。",
-          "macosDescription": "其次 {{appName}} 將安裝或開啟 Cua Driver 之授權流程，或跳至 macOS 系統設定。請先為 CuaDriver 授「輔助使用」與「螢幕錄製」二項核心權限；此後使用之際，macOS 或仍依目標 App 或具體動作另彈確認。唯君親自發起 Computer Use 差事時，方宜確認此等請求。畢後歸 {{appName}}，將自行檢查並啟用。",
+          "macosDescription": "{{appName}} 將於此機安裝或啟動 Cua Driver，用以讀螢幕並行點選、輸入等操作。請僅於君親自發起代操此機之差事時啟用。為 CuaDriver 開錄屏。若見「System & App Protection Override」，選其可控之應用；macOS 舊版於「輔助使用」開啟。",
           "confirm": "續",
           "cancel": "容後"
         },
@@ -5947,8 +6121,8 @@
         },
         "permissions": {
           "title": "系統權柄",
-          "macosHint": "代操此機需「輔助使用」與「螢幕錄製」。實際使用時，macOS 或仍依目標 App 或具體動作另彈確認。",
-          "accessibilityLabel": "輔助使用",
+          "macosHint": "為 CuaDriver 開錄屏。若見「System & App Protection Override」，選其可控之應用；舊版於「輔助使用」開啟。",
+          "accessibilityLabel": "鍵鼠操控",
           "screenRecordingLabel": "螢幕錄製",
           "grant": "往授",
           "accessibility": "輔助使用：{{status}}",
@@ -5994,7 +6168,7 @@
           "toggleFailed": "切換徑操此機未成",
           "installFailed": "cua-driver 安裝未成",
           "permissionFailed": "代操此機之權限未備",
-          "permissionPending": "請完成此二項系統權限，再歸此處點“再察”",
+          "permissionPending": "於 Mac 授權。狀態若未更，點「重新檢查」。",
           "permissionSettingsOpened": "系統權限設定已開。授權畢，請歸此處點“再察”。",
           "permissionSettingsMonitoring": "系統權限設定已開。授權畢，狀態將自行更新。",
           "openPermissionSettingsFailed": "無法開系統權限設定"
@@ -6006,7 +6180,7 @@
       "description": "設 Agent 會話之常例，或為指定之案另立覆寫。案之設定先於使用者常例。",
       "empty": "工具匣中空空，暫無可用者。",
       "toggleAria": "啟閉 {{name}} 之器",
-      "toggleHint": "變更僅於新開或重啟之 Agent 會話生效，方行之 Agent 會話不受其擾。",
+      "toggleHint": "Agent 會話新開或重啟，乃從此處之工具設定。",
       "loadFailed": "工具列表載入未成",
       "scopePicker": {
         "ariaLabel": "切換內建工具設定之範圍",
@@ -6500,7 +6674,7 @@
           "defaultWorkspaceChip": "常例：{{name}}",
           "defaultWorkspaceAria": "擇派差事時所用之常例案",
           "defaultWorkspaceRadioAria": "立「{{name}}」為常例案",
-          "defaultWorkspaceRowHint": "所選者即常例案：Telegram、飛書 / Lark 與 X 中，未另擇案之私聊與群，差事皆落於此。",
+          "defaultWorkspaceRowHint": "所選者即常例案：Telegram、飛書 / Lark、X 與 Discord 中，未另擇案之私聊與群，差事皆落於此。",
           "defaultProjectTag": "常例",
           "defaultProjectFullAccessWarning": "常例案「{{name}}」之權限為完全存取：任一群中 @ 機器人，皆將以完全存取之權於其中執行，慎之。",
           "sharedSettingsPointer": "案、模型與權限，諸官方機器人共用。",
@@ -6741,6 +6915,40 @@
           "workingDeviceThisComputer": "此機",
           "workingDeviceUnknown": "工作電腦尚未同步",
           "workingDeviceUnnamed": "未命名電腦"
+        },
+        "discord": {
+          "description": "關聯 Discord 名籍，於私訊或伺服器中藉官方 bot 為 Cindy 派差事。",
+          "disabledHint": "開此開關則得關聯碼，遣予 Discord 中之 Cindy 機器人，即成關聯。",
+          "toggleAria": "啟閉 Discord 連線",
+          "connect": "關聯 Discord",
+          "openApp": "增 Cindy 入 Discord",
+          "cancel": "罷關聯",
+          "retry": "重關聯",
+          "openBot": "開 Cindy bot",
+          "addToGroup": "增入 Discord 伺服器",
+          "unlink": "解綁 Discord",
+          "unlinkConfirmTitle": "解綁 Discord 乎？",
+          "unlinkConfirmDescription": "解綁之後，Discord 不能再向此臺裝置派訊；本地之案與他渠道不受影響。",
+          "status": {
+            "checking": "方察伺服器支援…",
+            "unavailable": "此伺服器尚未開放",
+            "disabled": "已停",
+            "none": "未綁",
+            "pending": "請將關聯碼遣予 Cindy 機器人",
+            "awaiting_confirmation": "請於 Discord 內確認關聯",
+            "confirmed": "已關聯 {{user}}",
+            "denied": "關聯已拒",
+            "expired": "關聯碼已逾期",
+            "failed": "關聯未成",
+            "revoked": "關聯已解",
+            "superseded": "已關聯至他臺裝置"
+          },
+          "bindCode": {
+            "label": "關聯碼",
+            "copy": "錄關聯碼",
+            "copied": "關聯碼已錄",
+            "hint": "於 Discord 中將關聯碼私遣予 Cindy 機器人，或行 /bind 並填關聯碼。未增 Cindy 者，先增之入 Discord。"
+          }
         }
       },
       "summary": {
@@ -6824,7 +7032,15 @@
           "encrypted": "端對端加密",
           "legacyConnection": "舊版連線",
           "encryptionUnknown": "尚未核實",
-          "legacyEncryptionHint": "舊路經中繼時，內容未施端對端加密。"
+          "legacyEncryptionHint": "舊路經中繼時，內容未施端對端加密。",
+          "routePreference": "擇路",
+          "routeAuto": "自動",
+          "routeDirect": "直連",
+          "routeRelay": "中繼",
+          "routeUnavailable": "不可達",
+          "routeMeasuring": "測速中…",
+          "routeDirectUnavailableHint": "今網路未能直達此器",
+          "routePreferenceFailed": "易道未成，請復試之"
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -6965,6 +7181,7 @@
         "providerTelegram": "Telegram",
         "providerX": "X",
         "providerFeishu": "飛書 / Lark",
+        "providerDiscord": "Discord",
         "requireConnected": "連上 {{provider}} 後方可修（先於上方開啟相應開關，候其連線成功）。",
         "offlineLocal": "{{provider}} 暫連不上，變更存於此機；連上後同步至言談中之模型卡。",
         "requireBinding": "須先完成 {{provider}} 名籍關聯，方可修。",
@@ -6992,11 +7209,20 @@
       "connectionIssue": {
         "device-removed": "此裝置已自名籍中移除，請於此裝置辭出後重新登入。",
         "auth-failed": "登入已失效，請復登入",
-        "replaced": "連線為他處同一裝置所替",
+        "replaced": "連線為另一 Cindy 所替，或在此機，或在被認作此機之他機",
         "too-many-connections": "同名籍連線數已達上限",
         "version-mismatch": "協議版本不一，請升級應用",
         "unstable": "連線屢斷屢連，請察網路；若持續如此，請重啟 Cindy",
         "agent-net-relay-down": "不能達 Agent-Net 中轉，方復連；已直連之電腦如常可用，餘裝置暫不能連"
+      },
+      "rejoin": {
+        "hint": "此裝置已自名籍中移除，點「重新加入」即可復歸。",
+        "action": "重新加入",
+        "done": "已重新加入",
+        "doneWithoutAgentNet": "已重新加入，Agent-Net 暫未復，姑以 Device Link 相連",
+        "unsupported": "伺服器尚不支援重新加入，請於此裝置辭出後重新登入",
+        "agentNetFailed": "Agent-Net 暫未復。解「唯用 Agent-Net」之限，可先以 Device Link 相連",
+        "failed": "重新加入未成，請察網路後再試"
       },
       "refresh": "重整",
       "empty": "海內尚無知己機。於另一臺機上以同一名籍登入 {{appName}}，此處即見之。",
@@ -7015,7 +7241,7 @@
       "renameCancel": "罷",
       "delete": "刪",
       "deleteTitle": "刪「{{name}}」乎？",
-      "deleteMessage": "將此裝置自名籍中移除，並中斷遠端連線。裝置上之差事與卷仍存，重新登入後可再加入。",
+      "deleteMessage": "將此裝置自名籍中移除，並中斷遠端連線。裝置上之差事與卷仍存，其後於彼裝置點「重新加入」即可復歸。",
       "deleteOnlineHint": "今伺服器尚不支援移除在線裝置，請俟服務升級後再試。",
       "error": {
         "unavailable": "裝置互聯服務暫不可用(服務端未啟用或網路有異)",
@@ -7042,6 +7268,22 @@
       },
       "control": "控",
       "standbyHint": "此機另一 Cindy 例項方用遠端連線。闔之後，此例項將自行接管。",
+      "identityConflict": {
+        "notice": "此機與「{{name}}」被認作同一臺電腦，兩相爭奪遠端連線，或致登出。擇其一易新身分，即可解之。",
+        "replace": "為此機易新身分",
+        "blockedSelfHostedRelay": "此機方用自設中繼，今不可易身分。歸官方中繼後，可於此易之。",
+        "confirmTitle": "為此機易新身分乎？",
+        "confirmRestart": "Cindy 將即刻重啟，進行中之任務將中斷。",
+        "confirmNewDevice": "重啟後須再登入一次，此機將以新電腦見於裝置清單。",
+        "confirmKeptByOther": "舊身分下所記之設定（如裝置名、同伴之主力電腦、所分享之供方），皆留予「{{name}}」，此機須重設。",
+        "confirmOtherUnaffected": "「{{name}}」如故，彼機無須再操作。",
+        "confirmAction": "易身分並重啟 Cindy",
+        "failed": "未能為此機易身分",
+        "toastTitle": "此機與「{{name}}」被認作同一臺電腦",
+        "toastBody": "兩相爭奪遠端連線，或致登出。擇其一易新身分，即可解之。",
+        "toastAction": "啟諸器互聯",
+        "toastDismiss": "稍後"
+      },
       "apps": {
         "cindy": "Cindy",
         "cindyFriend": "Cindy Friend"
@@ -8350,6 +8592,8 @@
         "badgeDetail": "有新內容時，其可於左側導覽之法器入口及自身卡片上亮一綠點，並附一句摘要；君啟其面板即清零。綠點無聲、不震，亦不入系統通知中心，與上述系統提示為兩項獨立之權柄。",
         "confirm": "可彈確認框徵君同意",
         "confirmDetail": "其行事前可彈一與 Cindy 同款之確認框問君，所問由其提供，框上標其名；允或罷皆由君親點，其不能自點。同時至多一框，彈之過頻即被攔下。",
+        "form": "可彈表單請君填寫",
+        "formDetail": "其可彈一與 Cindy 同款之表單請君填寫，單上標其名；所填唯君點「存之」後方交予之，罷則一無所與。唯君正觀 Cindy 時方彈，同時至多一單，彈之過頻即被攔下。",
         "fsWrite": "可管理自己的私有檔案",
         "fsWriteDetail": "可讀寫、列舉和刪除自己的私有資料。當前 Agent 呼叫期間，也可讀取、列舉和監聽差事的工作目錄。寫入與刪除沿用差事權限；允許寫入不代表允許刪除。呼叫結束即停止監聽。檔案操作均由宿主執行。",
         "deviceSync": "於君諸機間同步法器資料",
@@ -8573,7 +8817,7 @@
           "updated": "插件已更新。",
           "empty": "暫無可安裝的版本。",
           "sign-in": "請登入 GitHub 後檢查更新。",
-          "forbidden": "目前的 GitHub 登入無權讀取此私人儲存庫。",
+          "forbidden": "無法讀取 GitHub Release。請檢查儲存庫連結與 GitHub 帳號的存取權限。",
           "unavailable": "無法檢查或安裝更新，請重試。"
         },
         "customSlotTitle": "法器自訂設定區",
@@ -8672,6 +8916,8 @@
         "slotNetwork": "網路存取",
         "slotNotify": "系統之示",
         "slotBadge": "未讀之標",
+        "slotConfirm": "確認之框",
+        "slotForm": "表單之框",
         "slotFs": "寫卷",
         "slotLibrary": "久藏之庫",
         "slotSkill": "Agent 技藝",
@@ -8791,6 +9037,17 @@
       "saveAs": {
         "dialogTitle": "法器「{{name}}」另存為",
         "dialogMessage": "法器「{{name}}」請君另存一份"
+      },
+      "form": {
+        "save": "存之",
+        "cancel": "罷",
+        "addItem": "增之",
+        "removeItem": "刪之",
+        "removeNamed": "刪「{{name}}」",
+        "required": "此項必填",
+        "incomplete": "尚有必填之項未填",
+        "itemTitle": "{{label}} {{index}}",
+        "srDescription": "法器「{{name}}」請君填寫"
       },
       "confirm": {
         "dialogTitle": "法器「{{name}}」請君確認"
@@ -9650,6 +9907,12 @@
       "guidance": "請稍待再取驗證碼。重新啟動、重新安裝或切換網路，皆不保解除限制。",
       "support": "稍待之後仍無法登入，請將記錄私下寄予 feedback@cindy.app，並附作業系統、Cindy 版本、出錯時間及下方錯誤碼。請勿公開發布記錄。"
     }
+  },
+  "legalTermsUpdate": {
+    "title": "服務條款與隱私政策已更",
+    "body": "Cindy 之<terms>服務條款</terms>與<privacy>隱私政策</privacy>已更，請閱而允之，方可續用。",
+    "agree": "允",
+    "disagree": "辭出"
   },
   "legacyMigration": {
     "title": "遷舊版之資料",
@@ -11082,6 +11345,11 @@
       "pinned": "已置首",
       "needsAttention": "待處置",
       "duplicate": "複製同伴",
+      "duplicating": "正複製同伴…",
+      "duplicateFailed": "未能複製同伴",
+      "duplicateModelRequired": "複製之前，請先於規制中為同伴擇常例模型",
+      "pinFailed": "同伴置首未能更易",
+      "hideFailed": "同伴隱顯未能更易",
       "moreActions": "{{name}} 之餘事",
       "viewIcons": "圖標",
       "showCollapsedTeammateAvatars": "收時示頭像",
@@ -12116,46 +12384,15 @@
     },
     "guided": {
       "title": "立同伴",
-      "reviewTitle": "君之新同伴",
-      "question": "略述君之所期",
-      "placeholder": "如：伴吾習英語，可話家常，亦能認真糾吾措辭。",
       "generate": "造同伴",
-      "generating": "方構思同伴…",
-      "generationFailed": "暫不能成，君之所想已留，請再試。",
       "modelRequired": "請於上方擇可用模型，乃續。",
       "modelFollowsDefault": "從同伴預設模型。",
       "modelForThisBot": "此擇僅用於此同伴。",
-      "cindyDescription": "吾可助君用 Cindy、接器具，亦與君共成其事。",
-      "cindySummary": "掌 Cindy，接器具，成其事。",
-      "openCindy": "啟 Cindy",
-      "addCindy": "納 Cindy",
-      "done": "畢",
-      "editName": "修名",
       "duplicateName": "已有同名同伴，易一易辨之名可也。",
-      "introduction": "自述",
-      "editIntroduction": "修自述",
-      "refine": "調同伴",
-      "refinePlaceholder": "尚欲改何處？如：少些客套，多些詼諧。",
-      "back": "歸",
-      "invite": "邀同伴",
       "portrait": "像 {{number}}",
       "upload": "上呈圖",
       "generateAvatar": "造像",
-      "useAvatar": "用此",
-      "examples": {
-        "english": {
-          "label": "習英語",
-          "prompt": "伴吾習英語，自日常話題始，耐心而不敷衍，認真糾不自然之措辭。"
-        },
-        "ideas": {
-          "label": "共思妙策",
-          "prompt": "一富想像亦有主見之創作同伴，伴吾論文章與產品之思，助吾化想法為實策。"
-        },
-        "life": {
-          "label": "閒話生活",
-          "prompt": "一溫厚詼諧之同伴，願聽吾生活瑣事，不急於獻策。"
-        }
-      }
+      "useAvatar": "用此"
     },
     "import": {
       "title": "納同伴",
@@ -12505,6 +12742,7 @@
           "conflict": "此機器人已用於此機：或在 規制 → IM 機器人，或在另一同伴處。",
           "botUnavailable": "{{name}} 今不可用，待其復後再試。",
           "connectFailed": "連之未成：{{reason}}",
+          "connectTimedOut": "連線逾時，請再試。",
           "failed": "未竟，請稍後再試。",
           "personalBotGone": "規制 → IM 機器人 中已無此機器人，請改填憑證。"
         },
@@ -12528,6 +12766,7 @@
           "listenPortLabel": "本機偵聽埠",
           "listenPortPlaceholder": "18747",
           "hint": "於本地網路接 BlueBubbles，僅理所選言談。接入前，須先停此等言談中其餘自動應答程式。",
+          "automationDenied": "發訊時，macOS 禁 BlueBubbles 控制「訊息」。請於運行 BlueBubbles 之 Mac 查「系統設定 → 隱私權與安全性 → 自動化」。",
           "uncertain": "{{count}} 則訊尚待核驗。先查言談記錄，再議重試，勿重答。"
         }
       },
@@ -12719,16 +12958,22 @@
     "listSeparator": "、",
     "crossAgentConvert": {
       "asking": {
-        "title": "察得工作區配置可轉",
-        "description": "此工作區含 {{sourceAgent}} 之案級配置。欲為 {{targetAgent}} 生相應配置否？所改僅寫入此工作區目錄。",
-        "primary": "轉之",
-        "cancel": "不必"
+        "title": "亦為 {{targetAgent}} 採用此案設定乎？",
+        "description": "此案已有 {{sourceAgent}} 之設定如下。可於案中為 {{targetAgent}} 另存一份，亦可逕啟差事。",
+        "primary": "添予 {{targetAgent}}",
+        "cancel": "逕啟差事"
       },
       "running": {
-        "title": "方轉配置…",
-        "description": "方為 {{targetAgent}} 寫入工作區配置，勿闔視窗。",
-        "primary": "轉之",
-        "cancel": "不必"
+        "title": "方添此案設定…",
+        "description": "方存 {{targetAgent}} 之設定於此案。",
+        "primary": "方添…",
+        "cancel": "逕啟差事"
+      },
+      "items": {
+        "agents-md": "此案說明與行事之約",
+        "agents": "此案自訂之助手職分",
+        "hooks": "自動所行之事（如執行指令碼）",
+        "mcp": "外部工具之連線"
       }
     },
     "confirmDialog": {
@@ -13211,7 +13456,8 @@
           "subject": {
             "githubIssue": "「呈 GitHub Issue」之確認卡",
             "renameSessions": "「批次易差事之名」之確認卡",
-            "pluginFileGrant": "「法器卷帙授權」之確認卡"
+            "pluginFileGrant": "「法器卷帙授權」之確認卡",
+            "mediaPathReveal": "「許 Agent 知圖等媒體卷於機上之所在」之確認卡"
           }
         },
         "replyWords": {
@@ -14359,7 +14605,6 @@
       "regionAria": "待遣之訊佇列",
       "listAria": "佇列之訊",
       "pausedFooter": "差事已止，佇列暫停",
-
       "steerUnsupportedNotice": "此引擎不受插話，待遣之訊俟此輪畢乃遣。",
       "resumeAction": "續遣",
       "resumeAria": "續遣佇列之訊",
@@ -15081,7 +15326,6 @@
     "runningStatus": {
       "currentRate": "近速",
       "lastRequestRate": "前請均速",
-      "recentTokenRate": "近速 {{rate}} tok/s",
       "waitingSample": "方取樣",
       "averageRate": "本輪均速",
       "rateHistory": "生成速率史",
@@ -15115,6 +15359,7 @@
       "codexHelperUnverified": "未能核實此差事之 cindy_helper 是否可用；差事結果或無法回傳。",
       "requestFormatError": "應用程式所發請求格式有謬，此答未能竟。",
       "replyFailed": "答未竟",
+      "queuedSendRecovery": "前訊未遣。點「再試」可依原樣遣發。若遣新訊，則取代前訊。",
       "retryTitle": "再遣末一訊",
       "cancelTitle": "闔謬誤之示",
       "retry": "再試",
@@ -15242,6 +15487,7 @@
       "prCheck_rate-limit": "GitHub 暫限 {{device}} 之請。凡 {{failures}} 次未成，將於 {{retry}} 復檢。",
       "prCheck_unknown": "{{device}} 檢 PR 未成，詳見紀錄。凡 {{failures}} 次未成，將於 {{retry}} 復檢。",
       "precheck": "自動查驗暫受阻。",
+      "preRunBlocked": "行前查驗未過，此輪未啟。",
       "rateLimited": "自動查驗暫受阻：請求限流。",
       "pluginMissing": "自動查驗暫受阻：「{{name}}」法器未裝，裝畢自復。",
       "pluginMissingUnnamed": "自動查驗暫受阻：所需法器未裝，裝畢自復。",
@@ -15852,7 +16098,7 @@
       "viewThread": "覽 thread 上下文 ({{count}})",
       "memberFromGroup": "{{name}} · 自 {{platform}} 群議「{{group}}」來",
       "memberFromPlatform": "{{name}} · 自 {{platform}} 群議來",
-      "guestFromDm": "{{name}} · 自 {{platform}} 私訊來（非主人）",
+      "guestFromDm": "{{name}} · 自 {{platform}} 私訊來",
       "unknownSender": "群議中人"
     },
     "rewind": {
@@ -15906,6 +16152,7 @@
       "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "今所連者無權用前一模型，故易模型時未能壓縮上下文。",
       "MODEL_SELECTION_UNAVAILABLE": "所擇模型於此供方下已不可用。請於規制中察其連線，或另擇可用之模型。",
       "MODEL_CATALOG_UNCONFIRMED": "模型清單暫未能核實。已保留所選模型，可刷新清單後重試。",
+      "SNAPSHOT_DISPATCH_INTENT_TIMEOUT": "未傳送訊息，Cindy 未能及時確認安全記錄",
       "HARNESS_SWITCH_NOT_READY": "Harness 尚未易畢。請覽謬誤詳情，待 Harness 就緒再試。",
       "DEVICE_LINK_BUSY": "遠端方忙，請稍後再試。",
       "REMOTE_DAEMON_CLOSED": "遠端連線中斷，或方更新。此輪已終，請再遣。",
@@ -16170,7 +16417,13 @@
       "open": "啟差事「{{title}}」",
       "untitled": "無名之差事",
       "startedOne": "已啟差事",
-      "handedToOne": "付與差事"
+      "handedToOne": "付與差事",
+      "status": {
+        "running": "方行",
+        "needsAction": "候君示下",
+        "error": "有誤",
+        "idle": "閑"
+      }
     },
     "botTaskLetter": {
       "replied": "覆書",
@@ -17657,6 +17910,7 @@
       }
     },
     "editor": {
+      "reviewModelReadFailed": "未能讀取自動化模型設定，請關閉編輯器後重開再試。",
       "promptDialog": {
         "titleEdit": "修自運",
         "titleCreate": "立自運",
@@ -18000,11 +18254,13 @@
         "effortHeading": "思之深淺",
         "effortDefault": "常例",
         "followSession": "隨差事",
+        "followTeammate": "隨同伴主模型",
         "modelListAria": "模型錄",
         "modelSelectorAria": "擇模型",
         "categoryListAria": "{{category}} 模型",
         "effortListAria": "思之深淺",
-        "boundLocationLocked": "所繫差事仍於原機行之，請擇彼機之模型。"
+        "boundLocationLocked": "所繫差事仍於原機行之，請擇彼機之模型。",
+        "modelGroupTitle": "模型組「{{name}}」：新立任務則依式擇源"
       }
     },
     "toast": {
@@ -20343,6 +20599,7 @@
       "totalDetail_other": "{{count}} 張 × {{amount}}",
       "pay": "前往付款",
       "refundNote": "禮品卡不能兌換現金。卡被領取或兌換後不退款；未領取的卡如需退款，請聯絡支援人員。",
+      "termsNote": "點「前往付款」，即為已閱並允<terms>《禮品卡購買與使用條款》</terms>。",
       "cancel": "取消",
       "loadFailed": "暫時無法讀取購買限制，請稍後重試。",
       "checkoutSubtitle_other": "禮品卡 {{amount}} × {{count}} · 付款成功後立即產生",
@@ -20431,7 +20688,7 @@
     "epermGuidance": {
       "title": "macOS 拒入資料夾",
       "message": "Cindy 無從入君之“{{folder}}”資料夾",
-      "detail": "macOS 已拒其入。請開“系統設定”授以權柄，再行 Agent 命令。",
+      "detail": "於「檔案與檔案夾」許 Cindy 取用此夾，再試之。",
       "openSystemSettings": "開系統設定",
       "cancel": "罷",
       "folderNames": {
@@ -21516,6 +21773,9 @@
     "actionFailed": "此法器操作未成，請重試。"
   },
   "mcpApps": {
+    "composerDragFailed": "附件未入，請再拖之，或按「加到輸入框」。",
+    "composerAttachmentFormat": "可納圖、PDF 及純文，每件以 64 MiB 為限。",
+    "composerAttachmentBusy": "請稍候再添附件。",
     "sharedTaskReadOnly": "此卡唯差事之主可操作。",
     "retry": "重載",
     "loadFailed": "應用程式載入未成。請察連線後重載。",
@@ -22115,6 +22375,11 @@
     }
   },
   "subscriptionAccounts": {
+    "pluginSignIn": {
+      "method": "登入之法",
+      "secretHint": "Key 唯付法器，藏於此帳號之篋；Cindy 不存，亦不傳他機。",
+      "browserHint": "法器將啟瀏覽器，登入畢，歸此。"
+    },
     "placement": {
       "needsUpdate": "行此事之機當先更新 Cindy，方可如是調號。",
       "moveTo": "移至…",
@@ -22257,6 +22522,18 @@
       "cheapest": {
         "title": "最省",
         "hint": "訂閱尚有限額者先用，不另費錢；餘者依標價由低至高，無標價者居後。"
+      },
+      "drain": {
+        "title": "盡而後易",
+        "hint": "恆用前番之源，待其限額盡或不可用乃易其次；前者復可用，亦不復歸。"
+      },
+      "headroom": {
+        "title": "餘多者先",
+        "hint": "餘額之比最高者先用（有週限者視週限）；不得其限額者居後。"
+      },
+      "weighted": {
+        "title": "依權",
+        "hint": "新差事依諸源之權，錯落分之；不可用者此番不與。"
       }
     },
     "picker": {
@@ -22284,6 +22561,11 @@
       "tight": "五小時限額將滿，姑不用",
       "cheapest": "標價最低",
       "cheapestFree": "訂閱尚有限額，不另費錢",
+      "drain": "續用之，待其限額盡",
+      "drainNext": "前源已盡或不可用，易至此",
+      "headroom": "餘額最多",
+      "headroomQuota": "限額尚餘 {{left}}%，多於諸源",
+      "weighted": "依權此番分至彼",
       "noVision": "訊中有圖，彼不能觀圖",
       "exceptionImage": "訊中有圖，唯於能觀圖之源中擇",
       "exceptionImageFallback": "訊中有圖，然無能觀圖之源，照常擇之",
@@ -22303,6 +22585,9 @@
       "effort": "思之深淺",
       "effortUnset": "不指定",
       "effortHint": "所擇模型不支此檔時，依其常例而行。",
+      "weight": "權",
+      "weightAria": "「{{name}}」之權",
+      "weightHint": "依權分時，權愈重者得新差事愈多，一至一千。",
       "sources": "可用之源",
       "sourcesHint": "可納不同模型；實用何者，書於差事之中。",
       "sourcesEmpty": "尚無源。於下增已連線之模型。",
@@ -22335,6 +22620,7 @@
         "empty": "尚無例外，每一新差事皆依上之擇法。",
         "imageRule": "訊中有圖時，唯用能觀圖之源",
         "hoursRule": "{{from}}–{{to}} 改行「{{name}}」",
+        "hoursRuleDays": "{{days}} {{from}}–{{to}} 改行「{{name}}」",
         "remove": "刪此例外",
         "add": "增例外",
         "choose": "擇一情形",
@@ -22343,6 +22629,9 @@
         "from": "自",
         "to": "至",
         "useRoute": "改行",
+        "days": "日",
+        "daysHint": "不擇則日日皆然；跨子夜之時段，以始之日為準。",
+        "dayRange": "{{from}}至{{to}}",
         "addHours": "增",
         "sameHour": "起訖不可同時。",
         "full": "至多 {{count}} 條例外。",

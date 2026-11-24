@@ -73,7 +73,7 @@ vi.mock('../dialogue.js', () => ({ CompanionCallDialogue: class {
 
 import { createGenericOAuthService } from '../../maker-host/generic-oauth.js';
 import { normalizeVoiceInputSettings } from '../../../shared/voiceInputData.js';
-import { registerVoiceConversationIpc } from '../index.js';
+import { getVoiceSettingsHostApi, registerVoiceConversationIpc } from '../index.js';
 import { outboundFetch } from '../../maker-host/outbound-fetch.desktop.js';
 import { clearModelVisibilityMirror, setModelVisibilityMirror } from '../../maker-host/model-visibility-mirror.js';
 const sender = (id = 1) => ({ sender: { id, once: vi.fn(), on: vi.fn() } });
@@ -242,8 +242,13 @@ it('keeps untrusted upstream errors generic rather than forwarding their text or
 
 it('patches playback without replacing the saved route and validates boolean overrides', async () => {
   const choice = { modelId: 'voice-test', voice: 'alloy', speed: 1.15 };
-  await call('set-preference', 'bot-a', choice);
+  const host = getVoiceSettingsHostApi()!;
+  const initial = await host.selfPreference('bot-a');
+  expect(initial.sources).toEqual({ selection: 'device', sentencePlayback: 'device' });
+  await host.setPreference('bot-a', choice, undefined, initial.revision);
   await call('set-preference', 'bot-a', undefined, false);
+  await expect(host.setPreference('bot-a', null, null, initial.revision)).rejects.toThrow('VOICE_PREFERENCE_CHANGED');
+  expect((await host.selfPreference('bot-a')).sources).toEqual({ selection: 'teammate', sentencePlayback: 'teammate' });
   expect(await call('preference', 'bot-a')).toEqual({
     selection: choice,
     customized: true,

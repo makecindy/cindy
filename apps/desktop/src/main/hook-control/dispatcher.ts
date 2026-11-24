@@ -140,6 +140,7 @@ export interface HookSessionRunner {
     workingDir: string | null;
     usable: boolean;
     resumableArchive?: boolean;
+    companionOwned?: boolean;
   } | null>;
   /** 跑一个完整 turn, 收口(done / terminal error)后返回。 */
   run(req: HookRunRequest): Promise<HookRunOutcome>;
@@ -700,10 +701,11 @@ interface PendingTurnEnd {
  * 放进来与它共享 session 事件流 / origin / 交互路由(codex review #1490)。
  * 与权限档**无关** —— 群轮次不再改用户配的权限模式(见 session-runner)。
  * execute() 与续跑观察共用同一判据, 分叉会让续跑轮丢掉这层独占。
- * 官方飞书 / Lark 的群消息一律在话题里回复(`feishu:topic:…`), 同样是多人可见的群轮次。
+ * 官方飞书 / Lark 的群消息一律在话题里回复(`feishu:topic:…`), 同样是多人可见的群轮次;
+ * 官方 Discord 的服务器频道 / 子区(`discord:ch:…`)同理。
  */
 function deriveLaneKind(externalKey: string): 'dm' | 'group' {
-  return /^(?:telegram|feishu):(?:group|topic):/.test(externalKey) ? 'group' : 'dm';
+  return /^(?:(?:telegram|feishu):(?:group|topic)|discord:ch):/.test(externalKey) ? 'group' : 'dm';
 }
 
 interface PendingReopen {
@@ -2449,7 +2451,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       // Inspect and restore together so a pre-cleanup stat cannot revive a removed worktree.
       return withSessionRouteLock(sessionId, async () => {
         const info = await runner.inspect(sessionId, canRestoreIn);
-        if (!info?.resumableArchive || !canRestoreIn(info.workingDir)) return info;
+        if (info?.companionOwned || !info?.resumableArchive || !canRestoreIn(info.workingDir)) return info;
         await deps.restoreArchivedSession!(sessionId, { routeLockHeld: true });
         return isCurrentGeneration(generation) ? runner.inspect(sessionId) : null;
       });
@@ -2464,6 +2466,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     if (payload.sessionId !== null) {
       const info = await inspectForMessage(payload.sessionId, (dir) => inWhitelistNow(dir) || inDialogueRoot(dir));
       if (!isCurrentGeneration(generation)) return { reject: 'disabled' };
+      if (info?.companionOwned) return { reject: 'workspace_not_allowed' };
       if (info !== null) awaitingPersist.delete(payload.sessionId);
       /**
        * 首次失效接管的 ACK 会把 replacement sessionId 回给 server。若 server 在
@@ -2643,6 +2646,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       const info = await inspectForMessage(bound, inRequestedProject);
       if (!isCurrentGeneration(generation)) return { reject: 'disabled' };
       // 查得到 = 已落库, 此后一律走映射校验
+      if (info?.companionOwned) return { reject: 'workspace_not_allowed' };
       if (info !== null) awaitingPersist.delete(bound);
       /**
        * 免检窗口里那个会话建在哪 —— 必须拿它跟**当前**映射再比一次: 会话还没
@@ -2823,7 +2827,8 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     const legacyText = payload.source?.userText == null && !/^[<\[]|[\r\n]/.test(plainPrompt) ? plainPrompt : '';
     const titleText = payload.source?.userText?.trim() || legacyText;
     const context = payload.source?.teamName ||
-      (payload.source?.im === 'telegram' || payload.source?.im === 'x' || payload.source?.im === 'feishu'
+      (payload.source?.im === 'telegram' || payload.source?.im === 'x' || payload.source?.im === 'feishu' ||
+        payload.source?.im === 'discord'
         ? payload.source.channelName : null);
     const title = buildHookSessionTitle(channel, titleText, context);
     return {
@@ -3237,6 +3242,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           }
           return (
             info.usable === true &&
+            (!info.companionOwned || companionTargets.has(sessionId)) &&
             info.workingDir !== null &&
             dirStillAllowed(connectionId, info.workingDir, sessionId)
           );
@@ -3346,6 +3352,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
             if (
               isCurrentGeneration(admittedGeneration) &&
               info?.usable === true &&
+              (!info.companionOwned || companionTargets.has(previous)) &&
               info.workingDir !== null &&
               dirStillAllowed(connectionId, info.workingDir, previous)
             ) {

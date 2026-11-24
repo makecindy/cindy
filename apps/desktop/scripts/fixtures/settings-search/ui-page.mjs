@@ -34,6 +34,9 @@ export default {
     'archive-legacy': { about: 'The previous Task management link opens Storage and highlights auto archive', data: { tab: 'storage', routeTab: 'task-management' } },
     'visibility-desktop-commit': { about: 'Desktop visibility previews during a real pointer drag and commits once', data: { tab: 'appearance', previewBackground: 'none', visibility: 0.4 } },
     'visibility-wallpaper-commit': { about: 'Wallpaper visibility has the same preview/commit behavior', data: { tab: 'appearance', previewBackground: 'cindy-window', visibility: 0.4 } },
+    'chat-layout': { about: 'Find the chat layout, choose Wide, preview and keep a custom width', data: { tab: 'appearance', chatLayout: true } },
+    'chat-layout-narrow': { about: 'Compact chat layout controls stay usable below Wallpaper in a narrow Settings window',
+      viewport: { width: 800, height: 820 }, data: { tab: 'appearance', chatLayout: true } },
     ...Object.fromEntries(['none', 'cindy-window'].flatMap(background => [0.5, 1].map(visibility => [
       `glass-${background}-${visibility * 100}`, { about: 'Background sources share readable translucent cards', data: { tab: 'appearance', glassBackground: background, visibility } },
     ]))),
@@ -273,6 +276,94 @@ export default {
         await away.locator('#settings-search-settings-devices-keepAwake.settings-search-target-highlight').waitFor();
         await ui.capture('away-from-computer');
       }
+      return;
+    }
+    if (ui.data.chatLayout) {
+      const row = panel.locator('#settings-chat-layout');
+      const widthRow = panel.locator('#settings-chat-width');
+      const slider = panel.getByRole('slider', { name: await ui.t('settings.appearance.chatLayout.width'), exact: true });
+      const previewColumn = panel.getByTestId('chat-layout-preview-column');
+      const standard = row.getByRole('radio', { name: await ui.t('settings.appearance.chatLayout.standard'), exact: true });
+      const wide = row.getByRole('radio', { name: await ui.t('settings.appearance.chatLayout.wide'), exact: true });
+      const search = page.getByRole('combobox', { name: await ui.t('settings.search.ariaLabel') });
+      const restoreName = await ui.t('settings.defaults.restore');
+      const restoreLayout = row.getByRole('button', { name: restoreName, exact: true });
+      const restoreWidth = widthRow.getByRole('button', { name: restoreName, exact: true });
+      const savedMode = () => page.evaluate(() => localStorage.getItem('chat.layoutMode'));
+      const savedWidth = () => page.evaluate(() => localStorage.getItem('chat.layoutWidthPercent'));
+      // Feedback #12: place both compact controls with the layout settings below Wallpaper.
+      assert.ok(await row.evaluate(el => {
+        const wallpaper = document.getElementById('settings-search-target-appearance-wallpaper');
+        return el.closest('#settings-search-target-appearance-sidebar') &&
+          (wallpaper.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING);
+      }));
+      await row.scrollIntoViewIfNeeded();
+      assert.equal(await standard.getAttribute('aria-checked'), 'true');
+      assert.equal(await slider.count(), 0);
+      assert.equal(await restoreLayout.count(), 0);
+      await ui.capture('standard');
+      await standard.press('ArrowRight');
+      await slider.waitFor();
+      await slider.scrollIntoViewIfNeeded();
+      assert.equal(await wide.getAttribute('aria-checked'), 'true');
+      assert.equal(await slider.getAttribute('aria-valuetext'), '75%');
+      assert.equal(await savedWidth(), null);
+      assert.ok(await restoreLayout.isVisible(), 'A saved layout override can be restored');
+      assert.equal(await restoreWidth.count(), 0);
+      const defaultPreviewWidth = (await previewColumn.boundingBox()).width;
+      await ui.capture('wide-default');
+
+      const track = await slider.locator('xpath=ancestor::*[contains(@class,"cindy-slider")][1]').boundingBox();
+      const thumb = await slider.boundingBox();
+      const widthBounds = await widthRow.boundingBox();
+      assert.ok(track.width >= 100 && track.height >= 36 && track.x + track.width <= widthBounds.x + widthBounds.width,
+        'Slider keeps its hit area inside the settings row');
+      if (ui.viewport.width >= 1200) assert.ok(widthBounds.height <= 90, 'Width controls share a single compact row');
+      console.log('APPEARANCE_CHAT_LAYOUT', JSON.stringify({ viewport: ui.viewport.width, locale: ui.locale,
+        rowHeight: widthBounds.height, trackWidth: track.width }));
+      await page.mouse.move(thumb.x + thumb.width / 2, thumb.y + thumb.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(track.x + track.width * 0.8, track.y + track.height / 2, { steps: 8 });
+      const preview = Number(await slider.getAttribute('aria-valuenow'));
+      assert.equal(preview, 90);
+      assert.equal(await savedWidth(), null);
+      assert.equal(await restoreWidth.count(), 0, 'An uncommitted drag does not shift the control');
+      assert.ok((await previewColumn.boundingBox()).width > defaultPreviewWidth);
+      await page.mouse.up();
+      assert.equal(await savedWidth(), String(preview));
+      await slider.press('Home');
+      assert.equal(await slider.getAttribute('aria-valuetext'), '50%');
+      const minimumPreviewWidth = (await previewColumn.boundingBox()).width;
+      await slider.press('ArrowRight');
+      assert.equal(await slider.getAttribute('aria-valuetext'), '55%');
+      assert.ok((await previewColumn.boundingBox()).width > minimumPreviewWidth);
+      await ui.capture('wide-55');
+      await slider.press('End');
+      assert.equal(await slider.getAttribute('aria-valuetext'), '100%');
+      assert.equal(await savedWidth(), '100');
+      // PR #11486: the shared restore controls remove each override independently.
+      // This UI scenario covers the reset action missing from the mode/width selection checks.
+      await restoreLayout.click();
+      assert.equal(await slider.count(), 0);
+      assert.equal(await savedMode(), null);
+      assert.equal(await savedWidth(), '100');
+      await wide.click();
+      assert.equal(await slider.getAttribute('aria-valuetext'), '100%');
+      assert.equal(await savedMode(), 'wide');
+      await ui.capture('wide-maximum');
+      await restoreWidth.click();
+      assert.equal(await slider.getAttribute('aria-valuetext'), '75%');
+      assert.equal(await savedWidth(), null);
+      assert.equal(await savedMode(), 'wide');
+      assert.equal(await restoreWidth.count(), 0);
+      const findWidth = async target => {
+        await search.fill(await ui.t('settings.appearance.chatLayout.width'));
+        await page.locator('[id="settings-search-result-appearance.chatWidth"]').click();
+        await page.waitForFunction(id => document.getElementById(id)?.classList.contains('settings-search-target-highlight'), target);
+      };
+      await findWidth('settings-chat-width');
+      await standard.click();
+      await findWidth('settings-chat-layout');
       return;
     }
     // Product regression: the opt-in must remain off until selected. Exercise the
