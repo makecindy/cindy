@@ -544,7 +544,7 @@ export function currentPluginImProjectWorkspaces(): Readonly<Record<string, stri
 /** 官方 IM 机器人可选的项目跟随侧栏项目(见 projectWorkspaces.ts)。 */
 const projectWorkspaceSync = createProjectWorkspaceSync({
   getStore: () => store,
-  loadCatalog: loadImProjectCatalog,
+  loadCatalog: () => loadImProjectCatalog({ includeTeammateProjects: true }),
   registerDirectory: async (directory) => {
     // 升级前配置的目录此刻不在(外接盘没插)也照样登记 —— 侧栏本来就能显示暂时不可用的项目。
     const registered = await registerImProjectDirectory(directory, { requireExisting: false });

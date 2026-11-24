@@ -57,7 +57,7 @@ Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询�
 「项目」，「工作目录」只指 Agent 实际干活的那个目录（术语表）。
 
 - **官方机器人**（Slack / Telegram / X / 飞书）：可选项目 = 侧栏的本机项目（登记过的目录减去侧栏里
-  移除的；不含远程电脑上的项目与伙伴自己的项目），外加内置「对话」。`hook-control/projectWorkspaces.ts`
+  移除的；含本机伙伴已登记的项目，不含远程电脑上的项目或伙伴搬家留下的副本），外加内置「对话」。`hook-control/projectWorkspaces.ts`
   把项目列表投影成协议里的「名称 → 目录」表，名称跟随侧栏；`projectWorkspaceSync.ts` 在账号就绪、
   项目列表变化（`projectCatalogEvents.ts`）、打开设置页与 IM 里查询项目之前各整理一次。设置页只列出
   这些项目并提供「添加项目」（登记进侧栏），改名与移除在侧栏做。升级前手动配置的目录在第一次整理时

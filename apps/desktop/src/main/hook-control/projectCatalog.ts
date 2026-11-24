@@ -3,21 +3,22 @@
  * ---------------------------------------------------------------------------
  * 侧栏的本机项目, 供官方 IM 机器人使用: 登记过的目录减去已移除的, 名字取用户起的
  * 名字、否则目录名。与 Agent 的 list_projects、伙伴的关联项目读的是同一份数据
- * (recent_workdirs + project_aliases + 侧栏移除标记); 伙伴自己的项目不在其中 ——
- * 它只从伙伴进入, 不作为普通项目出现在选择里。
+ * (recent_workdirs + project_aliases + 侧栏移除标记)。IM 共用项目也可以使用本机伙伴已登记的项目目录。
  */
 
 import path from 'node:path';
 
-import { desc } from 'drizzle-orm';
+import { desc, inArray } from 'drizzle-orm';
 import { BrowserWindow } from 'electron';
 import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
 
-import { getActiveDataOwnerPushStamp, isAppSessionBoundaryPending } from '../appSessionState.js';
+import { getActiveDataOwnerPushStamp, isAppSessionBoundaryPending, ownerScopedUserDataPath } from '../appSessionState.js';
 import { tryGetDbClient } from '../localDb/client/current.js';
 import { listProjectAliases } from '../localDb/ipc/projectAliases.js';
 import { upsertRecentWorkdir } from '../localDb/ipc/recentWorkdirs.js';
-import { recentWorkdirs } from '../localDb/schema.js';
+import { companionHomes } from '../companion-cloud/homes.js';
+import { workingDirComparisonKey } from '../../shared/workingDir.js';
+import { botProfiles, recentWorkdirs } from '../localDb/schema.js';
 import {
   validateExistingLocalProjectDirectory,
   validateLocalProjectDirectory,
@@ -31,7 +32,7 @@ const identity = (directory: string): string | null =>
   projectKeyComparisonKey(`local:${directory}`, process.platform);
 
 /** 读当前账号的侧栏本机项目(最近使用在前); 存储没就绪或账号正在切换时返回 null。 */
-export async function loadImProjectCatalog(): Promise<ProjectCatalogSnapshot | null> {
+export async function loadImProjectCatalog({ includeTeammateProjects = false } = {}): Promise<ProjectCatalogSnapshot | null> {
   const client = tryGetDbClient();
   if (!client || isAppSessionBoundaryPending()) return null;
   const owner = getActiveDataOwnerPushStamp();
@@ -52,6 +53,22 @@ export async function loadImProjectCatalog(): Promise<ProjectCatalogSnapshot | n
     listProjectAliases(client),
   ]);
   if (!isCurrent()) return null;
+  // A recent directory can outlive its teammate or a move to another computer.
+  const localTeammatePaths = new Set<string | null>();
+  if (includeTeammateProjects && rows.some(row => isTeammateProjectPath(row.path))) {
+    const ownerRoot = ownerScopedUserDataPath();
+    const [{ teammateWorkspaceDir }, profiles] = await Promise.all([
+      import('../maker-ipc/botProjectMemory.js'),
+      client.drizzle.select({ id: botProfiles.id }).from(botProfiles)
+        .where(inArray(botProfiles.status, ['active', 'paused', 'error'])),
+    ]);
+    if (!isCurrent()) return null;
+    for (const { id } of profiles) {
+      if (companionHomes.isHomeHere(id) && !companionHomes.isShadowed(id)) {
+        localTeammatePaths.add(workingDirComparisonKey(teammateWorkspaceDir(ownerRoot, id)));
+      }
+    }
+  }
   const hidden = new Set(
     loadSidebarSettingsSnapshot().hiddenProjectKeys.map((key) =>
       projectKeyComparisonKey(key, process.platform),
@@ -64,7 +81,9 @@ export async function loadImProjectCatalog(): Promise<ProjectCatalogSnapshot | n
     if (!names.has(key)) names.set(key, row.alias);
   }
   const projects = rows
-    .filter((row) => !hidden.has(identity(row.path)) && !isTeammateProjectPath(row.path))
+    .filter((row) => !hidden.has(identity(row.path)) && (
+      !isTeammateProjectPath(row.path) || localTeammatePaths.has(workingDirComparisonKey(row.path))
+    ))
     .map((row) => ({
       path: row.path,
       name: names.get(identity(row.path)) ?? (path.basename(row.path) || row.path),
