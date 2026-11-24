@@ -1,15 +1,33 @@
+import { promises as fsp } from 'node:fs';
 import { BrowserWindow } from 'electron';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { getDbClient, tryGetDbClient } from '../localDb/client/current.js';
 import { getPluginHostToolCaller } from '../mcp-integrations/hostToolCaller.js';
 import { assertTaskActionCurrent, captureTaskActionSyncGuard } from '../maker-ipc/taskActionAuthorization.js';
 import { getGhostHandoffStore } from '../cindy-brain/handoffStore.desktop.js';
+import { sanitizeSaveFileName, writeNewSaveFile } from '../cindy-brain/dirDeposit.js';
+import { createLogger } from '../logger.js';
+import { readTaskExportDirectory } from '../task-export-settings.js';
 import { captureDataOwnerBroadcastScope } from '../device-link/broadcast-tap.js';
 import { handleIncomingShareFile } from '../deepLink.js';
 import { exportSessionShare } from './sessionShareExport.js';
 import { inspectShareFile, inspectShareBytes, cancelShareDraft } from './sessionShareImport.js';
-import { chooseSessionShareExportPath, commitSessionShareOnHost } from './sessionShareHost.desktop.js';
+import { chooseSessionShareExportPath, commitSessionShareOnHost, sessionShareExportFileName } from './sessionShareHost.desktop.js';
 import { createSessionShareToolCallbacks } from './sessionShareTools.js';
+
+const log = createLogger('session-share-tools');
+
+/** The Settings export folder at its canonical path; a set but unusable folder fails instead of opening a dialog. */
+async function presetExportDestination(sessionId: string) {
+  const configured = readTaskExportDirectory();
+  if (!configured) return null;
+  const directory = await fsp.realpath(configured).catch(() => null);
+  if (!directory || !(await fsp.stat(directory).then(stat => stat.isDirectory(), () => false))) {
+    log.warn('task export directory unavailable');
+    throw new Error('EXPORT_DIRECTORY_UNAVAILABLE');
+  }
+  return { directory, fileName: sanitizeSaveFileName(await sessionShareExportFileName(sessionId)) };
+}
 
 /** No I/O, timers or background work until a discovered tool is called. */
 export function createDesktopSessionShareCallbacks() {
@@ -34,6 +52,7 @@ export function createDesktopSessionShareCallbacks() {
     inspectShare: (filePath, bytes) => bytes ? inspectShareBytes(bytes, filePath) : inspectShareFile(filePath),
     commitShare: commitSessionShareOnHost,
     cancelDraft: cancelShareDraft, chooseExportPath: chooseSessionShareExportPath, handoff: getGhostHandoffStore,
+    presetExportDestination, writeExportFile: writeNewSaveFile,
     openImportWizard: filePath => {
       if (!BrowserWindow.getAllWindows().some(win => !win.isDestroyed())) throw new Error('HOST_NOT_READY');
       handleIncomingShareFile(filePath, 'host-tool', captureDataOwnerBroadcastScope());

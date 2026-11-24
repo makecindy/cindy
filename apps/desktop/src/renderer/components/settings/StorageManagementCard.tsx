@@ -40,6 +40,7 @@ import { DefaultOverrideControls } from './DefaultOverrideControls';
 import { SettingsTextInput } from './SettingsTextInput';
 import { DialogueDirectorySection } from './DialogueDirectorySection';
 import { ProjectsRootSection } from './ProjectsRootSection';
+import { TaskExportDirectorySection } from './TaskExportDirectorySection';
 import { TaskManagementSection } from './TaskManagementSection';
 import {
   DB_SLIMMING_ARCHIVE_AGE_OPTIONS,
@@ -286,6 +287,8 @@ export function StorageManagementCard() {
         <DialogueDirectorySection />
 
         <ProjectsRootSection />
+
+        <TaskExportDirectorySection />
 
         {/* 占用总览 */}
         <div

@@ -402,8 +402,9 @@ function dedupeFileName(fileName: string, n: number): string {
 /**
  * 在 canonical 根下原子创建一个不覆盖的文件。先用 O_EXCL/O_NOFOLLOW
  * 钉住句柄，再核对根路径、目标真身与句柄 identity，最后才写入字节。
+ * 任务包导出到用户设定目录时复用同一写法(sessionShareTools.desktop.ts)。
  */
-async function writeNewSaveFile(
+export async function writeNewSaveFile(
   dirRealPath: string,
   fileName: string,
   bytes: Uint8Array,

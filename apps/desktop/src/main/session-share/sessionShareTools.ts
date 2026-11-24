@@ -9,6 +9,9 @@ import { readBoundedFileNoFollow, readToLength } from '../utils/readBoundedFile.
 import type { SessionShareExportOptions, SessionShareExportOutcome } from './sessionShareExport.js';
 import type { CommitShareImportOptions, CommitShareImportResult, InspectResult } from './sessionShareImport.js';
 
+/** The packer caps unpacked content at 256 MiB; this only bounds reading back its own output. */
+const PRESET_EXPORT_MAX_BYTES = 512 * 1024 * 1024;
+
 /** The two callers share native package services; only their file handoff differs. */
 export function createSessionShareToolCallbacks(ports: {
   capture(context: LiziMcpSessionContext): Promise<{ pluginId?: string; assertCurrent(): void }>;
@@ -17,6 +20,10 @@ export function createSessionShareToolCallbacks(ports: {
   commitShare(options: CommitShareImportOptions, assertCurrent: () => void): Promise<CommitShareImportResult>;
   cancelDraft(draftId: string): void;
   chooseExportPath(sessionId: string): Promise<string | null>;
+  /** Owner-chosen folder for Agent exports (canonical path) and the file name to use; null = ask with the dialog. */
+  presetExportDestination(sessionId: string): Promise<{ directory: string; fileName: string } | null>;
+  /** Creates a new file in the folder without overwriting; returns the name actually written, or null. */
+  writeExportFile(directory: string, fileName: string, bytes: Uint8Array): Promise<string | null>;
   openImportWizard(filePath: string): void;
   handoff(): {
     import(instance: string, files: Array<{ name: string; bytes: Uint8Array }>, assertCurrent: () => void): Promise<Array<Pick<GhostHandoffFile, 'ref' | 'name' | 'size' | 'sha256'>>>;
@@ -29,13 +36,15 @@ export function createSessionShareToolCallbacks(ports: {
     const candidate = typeof value?.code === 'string' ? value.code : value?.message;
     const known = new Set(['PERMISSION_DENIED', 'INVALID_ARGS', 'UNSUPPORTED_CAPABILITY', 'HANDOFF_UNAVAILABLE',
       'HANDOFF_TOO_LARGE', 'HOST_NOT_READY', 'NOT_FOUND', 'PRECONDITION_FAILED', 'SHARE_EXPORT_FAILED', 'SHARE_IMPORT_FAILED',
-      'SHARE_FILE_INVALID', 'SHARE_VERSION_UNSUPPORTED', 'SHARE_CONFLICT', 'SHARE_WORKTREE_NOT_GIT', 'SHARE_WORKTREE_FAILED']);
+      'SHARE_FILE_INVALID', 'SHARE_VERSION_UNSUPPORTED', 'SHARE_CONFLICT', 'SHARE_WORKTREE_NOT_GIT', 'SHARE_WORKTREE_FAILED',
+      'EXPORT_DIRECTORY_UNAVAILABLE']);
     const errorCode = typeof candidate === 'string' && known.has(candidate) ? candidate : 'SHARE_TRANSFER_FAILED';
     const hints: Record<string, string> = {
       HANDOFF_UNAVAILABLE: 'Obtain a new file through the existing authorized handoff flow.',
       HANDOFF_TOO_LARGE: 'The package exceeds the existing 64 MiB handoff limit. Export without media or use the native export UI.',
       SHARE_CONFLICT: 'The package conflicts with an existing task. Replace it only when the owner intends to overwrite.',
       PERMISSION_DENIED: 'The caller or account changed. Check the current task state before retrying.',
+      EXPORT_DIRECTORY_UNAVAILABLE: 'The export folder set in Settings → Storage could not be written. Ask the owner to check or change it there.',
     };
     return { ok: false as const, errorCode, message: hints[errorCode] ?? `Native task transfer failed (${errorCode}). Check the source and current task state before retrying.` };
   };
@@ -51,7 +60,12 @@ export function createSessionShareToolCallbacks(ports: {
         scope.assertCurrent();
         if (context.remoteHostId || params.sessionId.includes('::')) throw new Error('UNSUPPORTED_CAPABILITY');
         let targetPath: string | null;
-        if (scope.pluginId) {
+        // An owner-chosen folder skips the dialog. The packer still writes only into a
+        // private temporary folder; the result is then created in the chosen folder
+        // without overwriting or following links (#9979 kept caller paths out).
+        const preset = scope.pluginId ? null : await ports.presetExportDestination(params.sessionId);
+        scope.assertCurrent();
+        if (scope.pluginId || preset) {
           temporary = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-task-export-')));
           targetPath = path.join(temporary, 'task.cshare');
         } else targetPath = await ports.chooseExportPath(params.sessionId);
@@ -64,6 +78,15 @@ export function createSessionShareToolCallbacks(ports: {
         const summary = { ok: true as const, scope: 'local', status: 'ok', fidelity: result.fidelity,
           unpacked_bytes: result.unpackedBytes, missing_transcript_count: result.missingTranscripts.length,
           media_missing: result.mediaMissing, media_dropped: result.mediaDropped, orca_workers: result.orcaWorkers };
+        if (preset) {
+          const packed = await readBoundedFileNoFollow(targetPath, PRESET_EXPORT_MAX_BYTES,
+            { containWithin: temporary!, verifyContentStability: true });
+          scope.assertCurrent();
+          if (!packed) throw new Error('SHARE_EXPORT_FAILED');
+          const written = await ports.writeExportFile(preset.directory, preset.fileName, packed);
+          if (!written) throw new Error('EXPORT_DIRECTORY_UNAVAILABLE');
+          return { ...summary, file_path: path.join(preset.directory, written) };
+        }
         if (!scope.pluginId) return { ...summary, file_path: result.filePath };
         const bytes = await readBoundedFileNoFollow(targetPath, GHOST_HANDOFF_MAX_BYTES_PER_FILE,
           { containWithin: temporary!, verifyContentStability: true });

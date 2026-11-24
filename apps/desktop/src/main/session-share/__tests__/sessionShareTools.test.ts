@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import { XdtHelperToolRegistry } from '../../../../../../packages/lizi-mcps/src/lizi_xdtHelperToolRegistry.js';
 import { registerSessionShareTools } from '../../../../../../packages/lizi-mcps/src/xdt-helper/session_share.js';
 import { createSessionShareToolCallbacks } from '../sessionShareTools.js';
+import { writeNewSaveFile } from '../../cindy-brain/dirDeposit.js';
 
 // Unit, capability list #10/#15 and plugin authoring §4: a native export must
 // stay in its caller's existing handoff storage. Existing package roundtrips
@@ -44,6 +45,8 @@ describe('native package Host tools', () => {
       inspectShare: vi.fn(async () => ({ draftId: 'draft', encrypted: false as const, preview })),
       commitShare: vi.fn(async () => ({ sessionId: 'imported', fidelity: 'full' as const, notes: [], orcaWorkers: 0 })),
       cancelDraft: vi.fn(), chooseExportPath: vi.fn(async () => path.join(directory, 'chosen.cshare')),
+      presetExportDestination: vi.fn(async (): Promise<{ directory: string; fileName: string } | null> => null),
+      writeExportFile: vi.fn(writeNewSaveFile),
       openImportWizard: vi.fn(), handoff: () => handoff,
     };
     return { ports, handoff, callbacks: createSessionShareToolCallbacks(ports) };
@@ -56,6 +59,7 @@ describe('native package Host tools', () => {
     expect(JSON.stringify(result)).not.toContain('filePath');
     expect(f.handoff.import).toHaveBeenCalledWith('installed', [{ name: 'task.cshare', bytes: Buffer.from('package') }], expect.any(Function));
     expect(f.ports.chooseExportPath).not.toHaveBeenCalled();
+    expect(f.ports.presetExportDestination).not.toHaveBeenCalled();
     const exportedPath = f.ports.exportShare.mock.calls[0][0].targetPath;
     await expect(fs.stat(exportedPath)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await f.callbacks.import({ attachmentRef: ref, overwrite: false, useWorktree: false }, plugin))
@@ -141,5 +145,43 @@ describe('native package Host tools', () => {
       { agentKind: 'codex', workingDir: directory, sessionId: 'caller', remoteHostId: 'ssh' })).toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
     expect(f.ports.exportShare).not.toHaveBeenCalled();
     expect(f.ports.inspectShare).not.toHaveBeenCalled();
+  });
+  // Unit, #11480: with an owner-chosen Settings folder, repeated Agent exports
+  // finish unattended and return paths, never overwrite an existing package,
+  // and the packer never writes into that folder directly (#9979). The dialog
+  // test above does not cover this branch. Minimum input: one existing
+  // same-named file and two exports.
+  it('saves Agent exports into the Settings folder without the dialog or overwriting', async () => {
+    const f = fixture(), context = { agentKind: 'codex', sessionId: 'caller', workingDir: directory };
+    await fs.mkdir(path.join(directory, 'exports'));
+    const exports = await fs.realpath(path.join(directory, 'exports'));
+    await fs.writeFile(path.join(exports, 'Task.cshare'), 'earlier');
+    f.ports.presetExportDestination.mockResolvedValue({ directory: exports, fileName: 'Task.cshare' });
+    const registry = new XdtHelperToolRegistry();
+    registerSessionShareTools(registry, { callbacks: f.callbacks, getSessionContext: () => context });
+    const paths: string[] = [];
+    for (let i = 0; i < 2; i++) {
+      const content = (await registry.call('export_session', { session_id: 'task' })).content[0];
+      expect(content.type).toBe('text');
+      if (content.type === 'text') paths.push(JSON.parse(content.text).file_path);
+    }
+    expect(paths).toEqual([path.join(exports, 'Task (1).cshare'), path.join(exports, 'Task (2).cshare')]);
+    expect(await fs.readFile(path.join(exports, 'Task.cshare'), 'utf8')).toBe('earlier');
+    for (const written of paths) expect(await fs.readFile(written, 'utf8')).toBe('package');
+    expect(f.ports.chooseExportPath).not.toHaveBeenCalled();
+    for (const [{ targetPath }] of f.ports.exportShare.mock.calls) {
+      expect(path.dirname(targetPath)).not.toBe(exports);
+      await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    }
+  });
+  // Unit, #11480: a set but missing folder must fail clearly instead of
+  // silently falling back to a dialog nobody is there to answer.
+  it('reports an unavailable Settings folder without packing or opening the dialog', async () => {
+    const f = fixture();
+    f.ports.presetExportDestination.mockRejectedValueOnce(new Error('EXPORT_DIRECTORY_UNAVAILABLE'));
+    expect(await f.callbacks.export({ sessionId: 'task', excludeMedia: false }, { agentKind: 'codex', sessionId: 'caller', workingDir: directory }))
+      .toMatchObject({ ok: false, errorCode: 'EXPORT_DIRECTORY_UNAVAILABLE' });
+    expect(f.ports.exportShare).not.toHaveBeenCalled();
+    expect(f.ports.chooseExportPath).not.toHaveBeenCalled();
   });
 });
