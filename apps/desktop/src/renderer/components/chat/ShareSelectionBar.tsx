@@ -25,7 +25,7 @@ import {
 import { useTranslation } from 'react-i18next';
 
 import { blobToDataUrl } from '@/lib/annotationBurnIn';
-import { isEditableKeyboardTarget } from '@/lib/editableKeyboardTarget';
+import { editableTargetConsumesKey } from '@/lib/editableKeyboardTarget';
 import { createLogger } from '@/lib/logger';
 import { copyPngBlobToClipboard } from '@/lib/rasterizeToImage';
 import {
@@ -176,7 +176,8 @@ export function ShareSelectionBar({
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (e.defaultPrevented) return;
-      if (isEditableKeyboardTarget(e.target)) return;
+      // 勾选消息或点「全选」后焦点停在原生勾选框上；它只要空格，Esc / ⌘A 仍归分享栏。
+      if (editableTargetConsumesKey(e.target, e.key)) return;
       if (busy) return;
       if (e.key === 'Escape') {
         e.preventDefault();
