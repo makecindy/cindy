@@ -59,6 +59,24 @@
   `[UNSUPPORTED_CAPABILITY]` 提示更新，非法字段拒绝，不回退到按供应商关注，不重放写请求。服务端先部署到供应商所属区域
   的全部副本，再发布客户端；完整精确归属要求 O、C 都更新。服务端仅返回已有摘要，无数据库 migration、鉴权或 relay 帧变化。
   本机绑定的可选解除记录见 [P2a](provider-group-same-account-direct.md)「本地数据」。
+- **手机作为管理端（2026-11-24）**：手机(同账号控制端)经同一 channel 发 `manage-share` 的 `owned`(带 `includeUsage:false`)、
+  `create-link`、`approve`、`reject`、`quota-account`，以及只读的 `view`；不发 `manage-group`，不发其余分享者动作。
+  不新增 action、channel、字段或 relay 帧，O 的校验与回包不变，自建中转照旧透明转发，无需适配；本次没有 Desktop 改动。
+  - `owned`：手机只读成员与申请。旧 O 忽略 `includeUsage:false`、照旧附带用量时手机不读那些字段，不因此报需要更新
+    （与上面 Agent 工具的严格核对不同：手机是界面读取，旧 O 的完整读取成本等同于打开着一张电脑上的管理页）。
+  - `create-link`：与电脑 C 相同，必须拿到合法 `linkId`，缺失按需要更新处理、不退回按供应商关注；有效期用
+    `expiresAt - respondedAt` 换算到手机时钟。O 同样为这条链接静默 7 分钟；手机在该窗口内每 5 秒读一次 `owned`，
+    申请显示在手机的管理页。手机没有弹窗归属的持久化：关注只在页面内存里，离开页面或 App 被回收后不再关注，
+    申请留在各端「待处理」，窗口内 O 不弹窗的结果与生成链接的电脑已关闭时相同（见上一条）。
+  - `quota-account`：手机直接向组内每台同账号电脑读(组所在电脑读自己那一份)，回包 `{ state, windows, balance, accounts? }`
+    按原结构解析，同时最多 3 台，约每 60 秒一次；O 侧原有 30 秒缓存与在途合并不变。分享来的电脑不读。
+  - `view`：不带 `display`，取完整组视图；O 没对这个供应商开放远程调用时回 `config: null`，手机按没有组显示。
+  - 写请求只发一次，`preSend` 在实际发送前核对手机账号未切换；超时或断连时不重放，改为重新读取 `owned`。
+  - 旧 O（`CHANNEL_NOT_ALLOWED`、`unknown provider group action`、`[INVALID_PARAMS] Unknown command`、
+    `[UNSUPPORTED_CAPABILITY]`）一律显示「更新那台电脑上的 Cindy」，不影响手机其它功能。
+  - 手机回包解析独立于 Desktop：`apps/mobile/src/provider-share/providerShareManagement.ts`；回归见
+    `apps/mobile/src/__tests__/providerShareManagement.test.ts`、`providerShareManagementScreens.test.tsx`。改这些动作的
+    回包结构时两处一起核对。
 - 实现：`apps/desktop/src/main/provider-group/management.ts`(O)、`managementClient.ts`(C)、`remoteRegistration.ts`，
   `apps/desktop/src/main/device-link/providerShareHost.ts`(静默与关注)、`providerShareRuntime.ts`；回归见
   `provider-group/__tests__/{managementClient,ipc,stores}.test.ts`、`device-link/__tests__/providerShareRuntime.test.ts`、

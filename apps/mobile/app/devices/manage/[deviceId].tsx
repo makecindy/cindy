@@ -175,6 +175,15 @@ function DeviceInformationContent({ deviceId }: { deviceId: string }) {
                 {t('remoteDesktop.title')}
               </ListItem>
             ) : null}
+            {/* 这台电脑分享出去的供应商:与设置里的「我分享的供应商」同一页,只看这一台。 */}
+            {presentation?.canOpen ? (
+              <ListItem
+                onPress={() => push({ pathname: '/provider-shares', params: { deviceId } })}
+                testID="deviceInformation.providerShares"
+              >
+                {t('providerShare.manage.list.title')}
+              </ListItem>
+            ) : null}
           </DeviceInformationList>
         </Host>
       ) : null}

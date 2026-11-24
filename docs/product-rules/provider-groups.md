@@ -8,7 +8,7 @@
 > `packages/device-link/src/providerGroup.ts`、`apps/desktop/src/renderer/lib/**/remoteProviderGroups*`、
 > `apps/desktop/src/renderer/features/provider-share/**/SharedProviderGroupStatus*`、
 > `apps/desktop/src/renderer/__tests__/modelSelectorProviderGroup*`、
-> `apps/mobile/src/**/{remoteProviderGroups,useSessionProviderGroup}*`、
+> `apps/mobile/src/**/{remoteProviderGroups,useSessionProviderGroup}*`、`apps/mobile/src/provider-share/**`、
 > `apps/desktop/scripts/fixtures/{provider-group-accounts,provider-group-rebalance,provider-group-status}/**`、
 > `apps/desktop/src/main/maker-ipc/sessionAgentSwitchHandler.ts`
 
@@ -861,7 +861,9 @@
   - 页面里「本机」那一行指建组电脑，用电脑名称呼；用量、配额都读建组电脑，不误显示当前电脑的数据。
   - 在这里生成的分享链接，申请由当前电脑弹审批窗（供应商分享 §4.1 第 4 步）。
   - 只开放组设置与分享者操作，受邀者与共享任务访客拿不到；不经建组电脑再转发给第三台。供应商本身的凭证与开关
-    仍到那台电脑上配置。手机本期不提供组管理。
+    仍到那台电脑上配置。
+  - 手机经同一通道只做查看与分享者的三项操作（2026-11-24）：组内电脑的状态与各账号配额、生成分享链接、处理申请，
+    见[供应商分享](provider-sharing.md) §7.6。组设置（添加或移出电脑、并发上限、权重、策略、暂停分配）不在手机上改。
 - **自己的组显示版本与分享兼容提示**（2026-10-12 用户裁决）：建组电脑的设置页、同账号另一台电脑查看组的只读详情，
   默认两行展示：名称行附上简短版本号，下一行显示运行状态，不为版本另占第三行。本机使用当前应用版本，
   同账号电脑使用设备目录最近上报的版本；离线时版本不代表已重新确认。分享来源或旧端未提供版本时不常驻「版本未知」，
@@ -1007,7 +1009,8 @@
   复用原生转录的导入／导出与有界交接兜底；仅迁移 Agent 时不复制任务、工作文件或凭证。
 - [用量上限自动继续](usage-limit-auto-continue.md)：冷却的重置时刻口径与之一致；有组时先换电脑，组里所有电脑都失败且其中有
   撞上限的，才按该文等最早恢复的一台；组内电脑冷却期间，自动继续不会分到这台。
-- 手机端：模型列表与桌面一样收起组里的电脑(§10)；供应商组的设置、组内电脑状态与用量只在电脑上。
+- 手机端：模型列表与桌面一样收起组里的电脑(§10)；供应商组的设置与用量只在电脑上，组内电脑的状态与配额可以在手机
+  「我分享的供应商」里看([供应商分享](provider-sharing.md) §7.6，2026-11-24)。
 
 ## 12. 分期
 

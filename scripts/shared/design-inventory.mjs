@@ -1543,6 +1543,7 @@ export function mobileCatalogSurfaces() {
     ['chat.session', '任务内容与输入', ['sessions/[sessionId].tsx']],
     ['chat.sharing', '共享任务邀请与成员；供应商分享链接提示', ['shared-session.tsx', 'provider-share.tsx']],
     ['chat.incoming-share', '外部分享内容预览与任务、伙伴目标选择', ['incoming-share.tsx']],
+    ['provider-shares', '供应商分享管理：我分享的供应商、分享详情与选择供应商', ['provider-shares/index.tsx', 'provider-shares/detail.tsx', 'provider-shares/pick.tsx']],
     ['chat.new', '新建任务', ['sessions/new.tsx']],
     ['files', '任务文件与预览', ['files/[sessionId].tsx', 'files/preview/[sessionId].tsx']],
     ['relay-join', '扫码加入自建中转', ['relay-join.tsx']],

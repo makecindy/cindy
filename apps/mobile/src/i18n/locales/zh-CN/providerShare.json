@@ -14,5 +14,111 @@
     "copy": "复制分享链接",
     "copied": "分享链接已复制",
     "copyFailed": "没能复制分享链接，请稍后重试"
+  },
+  "manage": {
+    "loadFailed": "分享信息没有加载出来，请稍后重试。",
+    "notReady": "分享服务暂时不可用。确认已登录、网络正常后会自动重试。",
+    "needsUpdate": "供应商所在电脑的 Cindy 更新后，才能在手机上管理这个分享。",
+    "offline": "暂时连不上供应商所在的电脑，连上后会自动重试。",
+    "list": {
+      "title": "我分享的供应商",
+      "separator": "、",
+      "membersCount_other": "已分享给 {{count}} 人",
+      "pendingCount_other": "{{count}} 个分享申请待处理",
+      "shareOther": "分享其他供应商",
+      "emptyTitle": "没有可以管理的电脑",
+      "emptyCopy": "让电脑上的 Cindy 保持在线并允许远程控制，就能在这里查看配额、生成分享链接和处理申请。",
+      "unreachable": "不在线或没有允许远程控制：{{devices}}。能连上后会显示在这里。",
+      "needsUpdate": "{{devices}} 上的 Cindy 更新后，才能在手机上管理分享。",
+      "failed": "{{devices}} 的分享信息没有加载出来，下拉可以重试。",
+      "note": "分享保存在供应商所在的电脑上，管理时那台电脑需要在线。"
+    },
+    "pick": {
+      "title": "选择要分享的供应商",
+      "empty": "这台电脑上没有可以分享的供应商",
+      "footer": "只列出已连接并打开了「允许被远程调用」的供应商。这个开关在那台电脑的「设置 → 模型供应商」里。"
+    },
+    "link": {
+      "title": "分享链接",
+      "create": "生成分享链接",
+      "regenerate": "重新生成链接",
+      "generating": "正在生成链接…",
+      "copy": "复制链接",
+      "copied": "已复制",
+      "copyFailed": "没能复制链接，请手动选中后复制",
+      "send": "发送链接",
+      "oneTime": "只能使用一次",
+      "expiresIn": "{{time}} 后过期",
+      "expired": "已过期",
+      "waiting": "等待对方申请…",
+      "checking": "正在确认这个供应商的状态…",
+      "footer": "链接只能使用一次，生成后 5 分钟内有效。发给对方后请留在这一页，对方申请时在上方核对配对码再同意。",
+      "gateInvocation": "这个供应商还没有打开「允许被远程调用」，已有的分享暂时不可用，也不能生成新链接。",
+      "gateMissing": "那台电脑上找不到这个供应商，可能已被移除。",
+      "failed": "没能生成分享链接，请稍后重试。",
+      "needsUpdate": "供应商所在电脑的 Cindy 或分享服务更新后，才能在手机上生成链接。"
+    },
+    "pending": {
+      "title": "待处理",
+      "heading": "{{name}} 申请使用你分享的 {{provider}}",
+      "requestedAt": "{{time}}申请",
+      "pairingLabel": "配对码",
+      "pairingAria": "配对码 {{digits}}",
+      "pairingHint": "同意前可以通过发链接的渠道问对方一句：「你看到的配对码是多少？」一致再同意。",
+      "callout": "同意后，{{name}} 可以在自己的任务里使用 {{provider}} 的模型。Agent 在供应商所在的电脑上运行，用量计入你的 {{provider}}。你可以随时在「{{provider}} · 远程与分享」里关闭或删除。",
+      "calloutGroup": "同意后，{{name}} 可以在自己的任务里使用 {{provider}} 的模型。由供应商组选一台电脑运行 Agent，用量计入你的 {{provider}}。你可以随时在「{{provider}} · 远程与分享」里关闭或删除。",
+      "calloutClaudeEmail": "{{name}} 使用时，Agent 能看到你登录 Claude 用的邮箱。",
+      "calloutUnknown": "如果你不认识申请人，请拒绝；拒绝后这条链接作废。",
+      "approve": "同意分享",
+      "reject": "拒绝申请",
+      "approved": "已同意分享 {{provider}} 给 {{name}}",
+      "rejected": "已拒绝 {{name}} 的申请，链接已作废",
+      "gone": "这个申请已在别处处理、被撤回或已过期。",
+      "uncertain": "那台电脑没有回应，申请可能已经处理。请以刷新后的内容为准。",
+      "failed": "操作没有完成，请稍后重试。",
+      "checking": "正在确认供应商信息，确认后才能同意。"
+    },
+    "computers": {
+      "title": "电脑与配额",
+      "footer": "配额来自每台电脑上登录的账号，约每分钟更新一次。别人分享来的电脑不在这里显示配额。",
+      "runningCount_other": "{{count}} 个任务运行中",
+      "shareComputer": "{{name}} 的电脑",
+      "shareComputerUnknown": "分享来的电脑",
+      "status": {
+        "idle": "空闲",
+        "full": "已满",
+        "paused": "已暂停分配",
+        "cooling": "冷却中",
+        "quotaExhausted": "配额已用完",
+        "offline": "不在线",
+        "unavailable": {
+          "provider-off": "那台电脑没有对这个供应商打开「允许被远程调用」",
+          "disconnected": "供应商未连接或已停用",
+          "share-paused": "分享已暂停",
+          "share-removed": "分享已删除"
+        }
+      },
+      "quota": {
+        "loading": "正在读取配额…",
+        "unavailable": "暂时读不到这台电脑的配额",
+        "none": "这个供应商没有配额信息",
+        "offline": "这台电脑不在线，读不到配额",
+        "needsUpdate": "这台电脑的 Cindy 更新后才能查看配额",
+        "unsupported": "这个供应商暂不支持读取配额",
+        "unlimited": "未设置个人限额",
+        "session": "当前周期",
+        "week": "每周",
+        "scoped": "独立周期",
+        "account": "账号 {{number}}"
+      }
+    },
+    "members": {
+      "title": "已分享的人",
+      "statusActive": "正常",
+      "statusRunning_other": "正常 · {{count}} 个任务运行中",
+      "statusPaused": "已暂停",
+      "empty": "还没有分享给任何人。生成分享链接发给对方，对方申请、你同意后会出现在这里。",
+      "footer": "暂停或删除分享、调整供应商组，请在电脑上的「设置 → 模型供应商」里操作。"
+    }
   }
 }

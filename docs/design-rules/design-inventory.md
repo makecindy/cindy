@@ -11,7 +11,7 @@
 
 可达组件、样式来源与 Token / 裸颜色 / 裸圆角统计不入库：需要时运行 `pnpm design:inventory:report`，输出到 `tmp/design-inventory-report.md`；要看某次提交时的数字，在该提交上重跑。
 
-登记 surface 数：60。平台包含 Desktop 与 Mobile；静态入口发现不表示已迁移或已实机验证。
+登记 surface 数：61。平台包含 Desktop 与 Mobile；静态入口发现不表示已迁移或已实机验证。
 
 | ID | 平台 | 标题 | 生产入口 |
 | --- | --- | --- | --- |
@@ -71,6 +71,7 @@
 | `mobile.mail` | mobile | 邮件阅读与附件预览 | app/mail-preview.tsx |
 | `mobile.overlay.connection-startup` | mobile | 根布局挂载的启动与连接反馈 | app/_layout.tsx → StartupSplashOverlay / ConnectionNoticeProvider；各页面 ConnectionBanner |
 | `mobile.plugins` | mobile | 插件目录、页面与原生交互 | app/plugins.tsx |
+| `mobile.provider-shares` | mobile | 供应商分享管理：我分享的供应商、分享详情与选择供应商 | app/provider-shares/index.tsx / app/provider-shares/detail.tsx / app/provider-shares/pick.tsx |
 | `mobile.relay-join` | mobile | 扫码加入自建中转 | app/relay-join.tsx |
 | `mobile.remote-desktop` | mobile | 远程桌面 | app/devices/desktop/[deviceId].tsx |
 | `mobile.resources` | mobile | 远程资源列表与详情 | app/resources/[collectionId].tsx / app/resources/[collectionId]/[resourceId].tsx |
@@ -151,6 +152,9 @@
 | apps/mobile/app/mail-preview.tsx | MailPreviewScreen | `mobile.mail` |
 | apps/mobile/app/plugins.tsx | @/plugins/PluginsScreen | `mobile.plugins` |
 | apps/mobile/app/provider-share.tsx | ProviderShareLinkScreen | `mobile.chat.sharing` |
+| apps/mobile/app/provider-shares/detail.tsx | @/provider-share/ProviderShareDetailScreen | `mobile.provider-shares` |
+| apps/mobile/app/provider-shares/index.tsx | @/provider-share/ProviderSharesScreen | `mobile.provider-shares` |
+| apps/mobile/app/provider-shares/pick.tsx | @/provider-share/ProviderSharePickScreen | `mobile.provider-shares` |
 | apps/mobile/app/relay-join.tsx | RelayJoinScreen | `mobile.relay-join` |
 | apps/mobile/app/resources/[collectionId]/[resourceId].tsx | RemoteResourceResolverScreen | `mobile.resources` |
 | apps/mobile/app/resources/[collectionId].tsx | RemoteCollectionScreen | `mobile.resources` |
@@ -260,6 +264,7 @@ Mobile 已由 DS-7 纳入同一台账（2026-09-10 静态入口发现），保�
 | `mobile.mail` | unassigned | legacy | — | DS-7 发现入口，Mobile 独立阶段接管；未迁移 | 保持现状；发现问题记下一动作，本张不修视觉 |
 | `mobile.overlay.connection-startup` | kirozeng 协调 / Codex 发现维护；页面 owner 待认领 | legacy | — | DS-7 已发现入口；Mobile 独立阶段接管，未迁移 | 待定；动态内容、平台实际呈现留 Mobile 独立阶段验证 |
 | `mobile.plugins` | unassigned | legacy | — | DS-7 发现入口，Mobile 独立阶段接管；未迁移 | 保持现状；发现问题记下一动作，本张不修视觉 |
+| `mobile.provider-shares` | unassigned（外部贡献 PR 引入；页面 owner 待维护者认领） | legacy | — | 手机分享管理新入口；沿用 Mobile 主题、Typography 与设置分组行，未声明整体设计系统迁移 | 2026-11-24 仅完成静态检查与组件测试；模拟器 / 真机 Light·Dark 与真实电脑↔手机流程未验证，补齐前不记为已验收 |
 | `mobile.relay-join` | unassigned | legacy | — | DS-7 发现入口，Mobile 独立阶段接管；未迁移 | 保持现状；发现问题记下一动作，本张不修视觉 |
 | `mobile.remote-desktop` | kirozeng 协调 / Codex 发现维护；页面 owner 待认领 | legacy | — | DS-7 已发现入口；Mobile 独立阶段接管，未迁移 | 待定；动态内容、平台实际呈现留 Mobile 独立阶段验证 |
 | `mobile.resources` | kirozeng 协调 / Codex 发现维护；页面 owner 待认领 | legacy | — | DS-7 已发现入口；Mobile 独立阶段接管，未迁移 | 待定；动态内容、平台实际呈现留 Mobile 独立阶段验证 |

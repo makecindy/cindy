@@ -14,5 +14,111 @@
     "copy": "录分享链接",
     "copied": "分享链接已录",
     "copyFailed": "分享链接未能录，请稍后再试"
+  },
+  "manage": {
+    "loadFailed": "分享信息未载，请稍后再试。",
+    "notReady": "分享服务暂不可用。确认已登门且网络无恙后，将自动再试。",
+    "needsUpdate": "须先更新供方所在之机的 Cindy，方可于手机理此分享。",
+    "offline": "暂不得连供方所在之机，连通后自当再试。",
+    "list": {
+      "title": "吾所分享之供方",
+      "separator": "、",
+      "membersCount_other": "已分享予 {{count}} 人",
+      "pendingCount_other": "{{count}} 件分享之请待理",
+      "shareOther": "分享他供方",
+      "emptyTitle": "无可理之机",
+      "emptyCopy": "使机上之 Cindy 在线，且许远程控制，即可于此察限额、生分享链接、理来请。",
+      "unreachable": "不在线或未许远程控制：{{devices}}。可连之后，自见于此。",
+      "needsUpdate": "须先更新 {{devices}} 上之 Cindy，方可于手机理分享。",
+      "failed": "{{devices}} 之分享信息未载，下拉可再试。",
+      "note": "分享存于供方所在之机，理之时彼机须在线。"
+    },
+    "pick": {
+      "title": "择欲分享之供方",
+      "empty": "此机无可分享之供方",
+      "footer": "唯列已连且已启「许远程调用」之供方。此开关在彼机之「规制 → 模型供方」中。"
+    },
+    "link": {
+      "title": "分享之链",
+      "create": "生分享链接",
+      "regenerate": "重生链接",
+      "generating": "方生链接…",
+      "copy": "录链接",
+      "copied": "已录",
+      "copyFailed": "未能录链接，请手选而录之",
+      "send": "遣链接",
+      "oneTime": "仅可用一次",
+      "expiresIn": "{{time}} 后逾期",
+      "expired": "已逾期",
+      "waiting": "候彼来请…",
+      "checking": "方核此供方之状…",
+      "footer": "链接唯可用一次，生后 5 分钟内有效。遣予彼后请留于此页，待彼来请，于上方核对合符码而后许之。",
+      "gateInvocation": "此供方尚未启「允许远程调用」，既有分享暂不可用，亦不能生新链接。",
+      "gateMissing": "彼机上寻不得此供方，或已移除。",
+      "failed": "分享链接未能生，请稍后再试。",
+      "needsUpdate": "须先更新供方所在之机的 Cindy 或分享服务，方可于手机生链接。"
+    },
+    "pending": {
+      "title": "待理",
+      "heading": "{{name}} 请用君所分享之 {{provider}}",
+      "requestedAt": "{{time}}所请",
+      "pairingLabel": "合符码",
+      "pairingAria": "合符码 {{digits}}",
+      "pairingHint": "许之前，可经遣链接之管道问彼一句：「君所见之配对码为何？」相符乃许。",
+      "callout": "许之，则 {{name}} 可于己之差事中用 {{provider}} 之模型。Agent 于供方所在之机运行，耗用计入君之 {{provider}}。君可随时于「{{provider}} · 远程与分享」中闭之或删之。",
+      "calloutGroup": "许之，则 {{name}} 可于己之差事中用 {{provider}} 之模型。由供方组择一机运行 Agent，耗用计入君之 {{provider}}。君可随时于「{{provider}} · 远程与分享」中闭之或删之。",
+      "calloutClaudeEmail": "{{name}} 用之时，Agent 可见君登录 Claude 所用之电子邮件地址。",
+      "calloutUnknown": "若君不识申请之人，请拒之；拒后此链接即废。",
+      "approve": "许分享",
+      "reject": "拒其请",
+      "approved": "已许分享 {{provider}} 予 {{name}}",
+      "rejected": "已拒 {{name}} 之请，链接已废",
+      "gone": "此请已于他处理毕、已撤回，或已逾期。",
+      "uncertain": "彼机未应，此请或已理毕。请以重新加载后所见为准。",
+      "failed": "此举未成，请稍后再试。",
+      "checking": "方核供方信息，核毕方可许之。"
+    },
+    "computers": {
+      "title": "机与限额",
+      "footer": "限额出自各机所登之名籍，约每分钟更新一次。他人分享之机，不于此显限额。",
+      "runningCount_other": "{{count}} 件差事方行",
+      "shareComputer": "{{name}} 之机",
+      "shareComputerUnknown": "分享而来之机",
+      "status": {
+        "idle": "闲",
+        "full": "盈矣",
+        "paused": "暂止分派",
+        "cooling": "冷却中",
+        "quotaExhausted": "限额已尽",
+        "offline": "失联",
+        "unavailable": {
+          "provider-off": "彼机未对此供方启「允许远程调用」",
+          "disconnected": "供方未连或已禁用",
+          "share-paused": "分享暂止",
+          "share-removed": "分享已删"
+        }
+      },
+      "quota": {
+        "loading": "方读限额…",
+        "unavailable": "此机之限额暂读不得",
+        "none": "此供方无限额信息",
+        "offline": "此机不在线，读不得限额",
+        "needsUpdate": "更新此机之 Cindy 后，方可察其限额",
+        "unsupported": "此供方暂不支持读限额",
+        "unlimited": "未设个人限额",
+        "session": "今之周期",
+        "week": "每周",
+        "scoped": "自成一期",
+        "account": "名籍 {{number}}"
+      }
+    },
+    "members": {
+      "title": "已分享之人",
+      "statusActive": "无恙",
+      "statusRunning_other": "无恙 · {{count}} 件差事方行",
+      "statusPaused": "已暂止",
+      "empty": "尚未与人分享。生分享链接遣之，待彼来请、君颔首许之，其名自见于此。",
+      "footer": "欲暂停或删除分享、调整供方组，请于机上之「规制 → 模型供方」行之。"
+    }
   }
 }

@@ -963,6 +963,16 @@ export default function SettingsScreen() {
           />
         </SettingsGroup>
 
+        {/* 供应商分享:查看配额、生成分享链接、处理申请(分享保存在供应商所在的电脑上)。 */}
+        <SettingsGroup testID="settings.providerShares" title={t('providerShare.link.title')}>
+          <ActionInfoRow
+            accessibilityLabel={t('providerShare.manage.list.title')}
+            label={t('providerShare.manage.list.title')}
+            onPress={() => router.push('/provider-shares')}
+            testID="settings.providerShares.row"
+          />
+        </SettingsGroup>
+
         <PromptRecommendationSettings />
 
         {/* 显示模式:默认跟随系统,手动选择浅色 / 深色即持久化 override(恢复跟随系统 = 清除 override) */}

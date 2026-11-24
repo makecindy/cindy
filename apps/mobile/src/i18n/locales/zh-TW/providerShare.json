@@ -14,5 +14,111 @@
     "copy": "複製分享連結",
     "copied": "分享連結已複製",
     "copyFailed": "未能複製分享連結，請稍後重試"
+  },
+  "manage": {
+    "loadFailed": "分享資訊沒有載入，請稍後重試。",
+    "notReady": "分享服務暫時無法使用。確認已登入且網路正常後會自動重試。",
+    "needsUpdate": "供應商所在電腦的 Cindy 更新後，才能在手機上管理這個分享。",
+    "offline": "暫時連不上供應商所在的電腦，連上後會自動重試。",
+    "list": {
+      "title": "我分享的供應商",
+      "separator": "、",
+      "membersCount_other": "已分享給 {{count}} 人",
+      "pendingCount_other": "{{count}} 個分享申請待處理",
+      "shareOther": "分享其他供應商",
+      "emptyTitle": "沒有可以管理的電腦",
+      "emptyCopy": "讓電腦上的 Cindy 保持在線上並允許遠端控制，就能在這裡查看配額、產生分享連結和處理申請。",
+      "unreachable": "不在線上或沒有允許遠端控制：{{devices}}。能連上後會顯示在這裡。",
+      "needsUpdate": "{{devices}} 上的 Cindy 更新後，才能在手機上管理分享。",
+      "failed": "{{devices}} 的分享資訊沒有載入，下拉可以重試。",
+      "note": "分享儲存在供應商所在的電腦上，管理時那台電腦需要在線上。"
+    },
+    "pick": {
+      "title": "選擇要分享的供應商",
+      "empty": "這台電腦上沒有可以分享的供應商",
+      "footer": "只列出已連線並開啟了「允許遠端呼叫」的供應商。這個開關在那台電腦的「設定 → 模型供應商」裡。"
+    },
+    "link": {
+      "title": "分享連結",
+      "create": "產生分享連結",
+      "regenerate": "重新產生連結",
+      "generating": "正在產生連結…",
+      "copy": "複製連結",
+      "copied": "已複製",
+      "copyFailed": "未能複製連結，請手動選取後複製",
+      "send": "傳送連結",
+      "oneTime": "只能使用一次",
+      "expiresIn": "{{time}} 後過期",
+      "expired": "已過期",
+      "waiting": "等待對方申請…",
+      "checking": "正在確認這個供應商的狀態…",
+      "footer": "連結只能使用一次，產生後 5 分鐘內有效。傳給對方後請留在這一頁，對方申請時在上方核對配對碼再同意。",
+      "gateInvocation": "這個供應商還沒有開啟「允許遠端呼叫」，已有的分享暫時無法使用，也不能產生新連結。",
+      "gateMissing": "那台電腦上找不到這個供應商，可能已被移除。",
+      "failed": "未能產生分享連結，請稍後重試。",
+      "needsUpdate": "供應商所在電腦的 Cindy 或分享服務更新後，才能在手機上產生連結。"
+    },
+    "pending": {
+      "title": "待處理",
+      "heading": "{{name}} 申請使用你分享的 {{provider}}",
+      "requestedAt": "{{time}}申請",
+      "pairingLabel": "配對碼",
+      "pairingAria": "配對碼 {{digits}}",
+      "pairingHint": "同意前可以透過傳連結的管道問對方一句：「你看到的配對碼是多少？」一致再同意。",
+      "callout": "同意後，{{name}} 可以在自己的任務裡使用 {{provider}} 的模型。Agent 在供應商所在的電腦上執行，用量計入你的 {{provider}}。你可以隨時在「{{provider}} · 遠端與分享」裡暫停或刪除。",
+      "calloutGroup": "同意後，{{name}} 可以在自己的任務裡使用 {{provider}} 的模型。由供應商組選一台電腦執行 Agent，用量計入你的 {{provider}}。你可以隨時在「{{provider}} · 遠端與分享」裡暫停或刪除。",
+      "calloutClaudeEmail": "{{name}} 使用時，Agent 能看到你登入 Claude 用的電子郵件地址。",
+      "calloutUnknown": "如果你不認識申請人，請拒絕；拒絕後這條連結作廢。",
+      "approve": "同意分享",
+      "reject": "拒絕申請",
+      "approved": "已同意分享 {{provider}} 給 {{name}}",
+      "rejected": "已拒絕 {{name}} 的申請，連結已作廢",
+      "gone": "這個申請已在別處處理、被撤回或已過期。",
+      "uncertain": "那台電腦沒有回應，申請可能已經處理。請以重新整理後的內容為準。",
+      "failed": "操作沒有完成，請稍後重試。",
+      "checking": "正在確認供應商資訊，確認後才能同意。"
+    },
+    "computers": {
+      "title": "電腦與配額",
+      "footer": "配額來自每台電腦上登入的帳號，約每分鐘更新一次。別人分享來的電腦不在這裡顯示配額。",
+      "runningCount_other": "{{count}} 個任務執行中",
+      "shareComputer": "{{name}} 的電腦",
+      "shareComputerUnknown": "分享來的電腦",
+      "status": {
+        "idle": "空閒",
+        "full": "已滿",
+        "paused": "已暫停分配",
+        "cooling": "冷卻中",
+        "quotaExhausted": "配額已用完",
+        "offline": "離線",
+        "unavailable": {
+          "provider-off": "那台電腦沒有對這個供應商開啟「允許遠端呼叫」",
+          "disconnected": "供應商未連線或已停用",
+          "share-paused": "分享已暫停",
+          "share-removed": "分享已刪除"
+        }
+      },
+      "quota": {
+        "loading": "正在讀取配額…",
+        "unavailable": "暫時讀不到這台電腦的配額",
+        "none": "這個供應商沒有配額資訊",
+        "offline": "這台電腦不在線上，讀不到配額",
+        "needsUpdate": "這台電腦的 Cindy 更新後才能查看配額",
+        "unsupported": "這個供應商暫不支援讀取配額",
+        "unlimited": "未設定個人限額",
+        "session": "目前週期",
+        "week": "每週",
+        "scoped": "獨立週期",
+        "account": "帳號 {{number}}"
+      }
+    },
+    "members": {
+      "title": "已分享的人",
+      "statusActive": "正常",
+      "statusRunning_other": "正常 · {{count}} 個任務執行中",
+      "statusPaused": "已暫停",
+      "empty": "還沒有分享給任何人。產生分享連結傳給對方，對方申請、你同意後會出現在這裡。",
+      "footer": "暫停或刪除分享、調整供應商組，請在電腦上的「設定 → 模型供應商」裡操作。"
+    }
   }
 }
