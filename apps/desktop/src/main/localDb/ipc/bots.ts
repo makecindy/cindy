@@ -2251,13 +2251,15 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
   let regeneratedDefaultIdentity = false;
   // Only an untouched Cindy-generated default follows a name/description edit.
   // Migrate/seed the authoritative Home first: an old non-owner Home may still
-  // hold a hand-edited SOUL that has not reached this owner's directory yet.
+  // hold a hand-edited SOUL that has not reached this owner's directory yet. Use
+  // the committed config here so a rejected save cannot leak uncommitted context
+  // into the Home files before the transaction succeeds.
   if (
     body.identitySource === undefined
     && identityMetadataChanged
     && previousIdentitySource === buildDefaultBotIdentity(current.displayName, current.description)
   ) {
-    const homeReady = await ensureBotProfileFolderSeeded(id, previousIdentitySource, normalizedNextConfig, owner.userDataDir);
+    const homeReady = await ensureBotProfileFolderSeeded(id, previousIdentitySource, previous, owner.userDataDir);
     owner.assertCurrent();
     regeneratedDefaultIdentity = homeReady && await folderSourcesUnchanged(
       owner.userDataDir,

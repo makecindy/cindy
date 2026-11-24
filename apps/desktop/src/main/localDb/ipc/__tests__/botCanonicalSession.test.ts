@@ -4493,12 +4493,14 @@ describe('Bot canonical Session lifecycle', () => {
      * - Bug／规则依据：F1 默认身份旧名残留；`docs/product-rules/cindy-bots-runtime.md` §1
      *   要求伙伴名字以当前 Profile 为准，历史快照另属 F2。
      * - 现有覆盖缺口：相邻用例只验证显式清空 identity 时重建默认身份，未覆盖普通改名、
-     *   文件夹回写、连续改名、用户手写 SOUL、旧版 Home 迁移，以及保存暂停期间的手改。
+     *   文件夹回写、连续改名、用户手写 SOUL、旧版 Home 迁移、保存暂停期间的手改，
+     *   以及失败保存前预检查 Home 的已提交配置播种。
      * - 不变量：只有在实际写入边界仍与冻结快照逐字节一致的 Home 文件，才可被这次保存改写；
-     *   旧版 Home 必须先迁移，读取失败或手改一律 fail-closed，由后续对账收进版本行。
+     *   旧版 Home 必须先迁移，读取失败或手改一律 fail-closed，由后续对账收进版本行；
+     *   事务提交前的 Home 播种只能用已提交配置，不能让被拒绝的保存部分生效。
      * - 最小失败输入：以 OldName 创建、未显式提供 identitySource 的伙伴，只提交 `name: NewName`。
      * - tier：db/integration；沿用本文件既有真实 SQLite 与 Bot Home 夹具，不新增模块重载或真实等待。
-     * - 实测耗时：新增用例单独运行 22.74s（收集 19.67s，用例 77ms）；本文件原有依赖收集耗时超过单文件预算。
+     * - 实测耗时：新增用例单独运行 135.35s（收集 119.82s，用例 888ms）；本机负载导致收集耗时远超单文件预算，沿用既有重型集成文件。
      */
     const home = (botId: string) =>
       join(h.userDataDir, createHash('sha256').update(h.ownerScopeKey).digest('hex'), 'bots', botId);
@@ -4663,6 +4665,30 @@ describe('Bot canonical Session lifecycle', () => {
       expect(soul(created.id)).toBe(handEdited);
       expect(await reconcileBotProfileFolder(created.id)).not.toBeNull();
       expect(latestIdentity(created.id)).toBe(handEdited);
+    });
+
+    it('seeds a pre-check Home with committed config when the rename save is rejected', async () => {
+      await createDefaultBuddy('taken-name', { name: 'Taken Name' });
+      const created = await createDefaultBuddy('rejected-pre-check-home', {
+        userContextSource: 'Old context',
+      });
+      rmSync(home(created.id), { recursive: true, force: true });
+
+      await expect(invoke('local-db:bots:update', {
+        id: created.id,
+        name: 'Taken Name',
+        userContextSource: 'New context',
+      })).rejects.toMatchObject({ code: 'ALREADY_EXISTS' });
+
+      expect(readFileSync(join(home(created.id), 'memories', 'USER.md'), 'utf8')).toBe('Old context');
+      expect(soul(created.id)).toBe(buildDefaultBotIdentity('OldName'));
+      expect(await reconcileBotProfileFolder(created.id)).toBeNull();
+      const row = h
+        .sqlite!.prepare(
+          'SELECT capabilities_json AS capabilitiesJson FROM bot_profile_versions WHERE bot_id = ? ORDER BY version DESC LIMIT 1',
+        )
+        .get(created.id) as { capabilitiesJson: string };
+      expect(JSON.parse(row.capabilitiesJson).userContextSource).toBe('Old context');
     });
   });
 
