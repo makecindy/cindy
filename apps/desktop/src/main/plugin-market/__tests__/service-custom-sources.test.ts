@@ -421,6 +421,25 @@ describe('PluginMarketService 自定义市场聚合', () => {
     expect(h.api.catalog).toHaveBeenCalledTimes(1);
   });
 
+  // Unit, #12263: ordinary lookup discovers custom markets. Renewing one visible
+  // official icon must return its current release without waiting for discovery.
+  it('renews only the requested official recommendations without discovering custom markets', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-recommendation-renewal-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    const official = serverSummary({ publisherKind: 'official' });
+    const community = serverSummary({ id: `c${'d'.repeat(24)}`, publisherKind: 'personal' });
+    const h = harness([official, community], [{ name: 'team-lib', dir }]);
+    const discovery = vi.spyOn(MarketSourceManager.prototype, 'forEachDiscoveredSource');
+
+    const renewed = await h.service.recommendations([official.id, community.id]);
+    expect(renewed.map(item => item.pluginId)).toEqual([official.id]);
+    expect(h.api.resolve).toHaveBeenCalledExactlyOnceWith([
+      { key: '0', pluginId: official.id }, { key: '1', pluginId: community.id },
+    ]);
+    expect(discovery).not.toHaveBeenCalled();
+  });
+
   // Unit, #9487: lookup replaced a snapshot that preserved local items on server failure.
   // One readable local source plus a rejected server target read must still return the plugin.
   it('looks up a local market plugin when the server target read fails', async () => {

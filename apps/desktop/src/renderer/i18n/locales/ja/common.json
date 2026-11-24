@@ -2188,6 +2188,13 @@
       }
     },
     "appearance": {
+      "chatLayout": {
+        "label": "チャットのレイアウト",
+        "standard": "標準",
+        "wide": "ワイド",
+        "width": "コンテンツの幅",
+        "hint": "チャット欄の左右の余白を除いた幅に対する割合です。狭い欄では自動で調整されます。"
+      },
       "title": "外観",
       "modeLabel": "表示モード",
       "appIcon": {
@@ -2433,6 +2440,10 @@
       }
     },
     "windowBehavior": {
+      "trayCard": {
+        "label": "トレイのホバーカード",
+        "hint": "システムトレイの Cindy アイコンにポインターを合わせると、残りのクォータと未読のタスクを表示します。"
+      },
       "menubar": {
         "label": "メニューバーに残り使用量を表示",
         "hint": "macOS のメニューバーに Cindy アイコンを置きます。クリックすると、サブスクリプションの残り、Cindy 残高、今日の使用量を確認できます。"
@@ -8171,6 +8182,7 @@
           "official": "公式",
           "community": "コミュニティ"
         },
+        "communityDisclaimer": "このプラグインはコミュニティの開発者が開発・保守しています。Cindy はこのバージョンを審査しましたが、あらゆる場面で安全に使えることを保証するものではありません。",
         "publisherDescription": {
           "official": "Cindy が公式に公開・保守しています",
           "community": "コミュニティ開発者が公開・保守しています",
@@ -8285,7 +8297,7 @@
             "authTitle": "プライベートリポジトリ",
             "authBody": "認証はすべてシステムの Git 設定に依存し、Cindy は Git の認証情報を一切保存しません。SSH の場合: 利用可能な key がマシンに設定されている必要があります。組織が SAML SSO を強制している場合は、GitHub の SSH key 設定で Configure SSO からその組織に key を承認してください。HTTPS の場合: Personal Access Token を使用し、システムの credential helper に保存します。",
             "rulesTitle": "インストールルール",
-            "rulesBody": "プラグイン id はグローバルに一意で先着順です。インストール済みプラグインとの競合は明示されます。id に公式予約プレフィックス（{{reservedGhostIdPrefixes}}）を使うプラグインは、ドラッグ、ファイル選択、カスタムプラグインマーケットからインストールできません。宣言された権限は詳細ページに表示されます。インストールをクリックすると、追加の権限確認ダイアログなしでインストールが完了し、自動的に有効になります。",
+            "rulesBody": "プラグイン id はグローバルに一意で先着順です。インストール済みプラグインとの競合は明示されます。id に公式予約プレフィックス（{{reservedGhostIdPrefixes}}）を使うプラグインは、ドラッグ、ファイル選択、カスタムプラグインマーケットからインストールできません。宣言された権限は詳細ページに表示されます。初めて手動でインストールするときは、Cindy が要求される権限の確認を求めます。インストール後、プラグインは自動的に有効になります。",
             "copy": "ガイドをコピー",
             "copied": "ガイドをクリップボードにコピーしました。",
             "copyFailed": "コピーに失敗しました。もう一度お試しください。"
@@ -8398,6 +8410,8 @@
         "installMeta": "バージョン {{version}} · {{source}}",
         "updateMeta": "バージョン {{from}} → {{to}} · {{source}}",
         "installDescription": "確認するまでインストールされません。インストール後はすぐに有効になり、プラグインページからいつでも無効化・アンインストールできます。",
+        "customMarketSourceNotice": "このマーケットが信頼できることを確かめ、プラグインが要求する権限を確認してください。",
+        "localFileSourceNotice": "信頼できるところから入手したファイルか確認してから、インストールを続けてください。",
         "updateDescription": "確認後に更新します。それまでは現在のバージョンをそのまま使えます。",
         "grantsTitle": "インストール後に持つ権限:",
         "noPermissions": "このプラグインは追加の権限を宣言していません。",
@@ -17631,15 +17645,15 @@
   "scheduler": {
     "prTrigger": {
       "fallback": "GitHub App の通知を受け取れない間も定期チェックは続きます。",
-      "label": "PR",
-      "url": "PR の URL",
+      "label": "PR / MR",
+      "url": "PR または MR の URL",
       "condition": "実行条件",
-      "any": "PR の更新",
+      "any": "更新時",
       "merged": "マージ時",
       "review": "レビューの更新",
       "ci": "CI 状態の変更",
       "timed": "定期的にも確認",
-      "invalid": "GitHub PR の URL を入力してください。"
+      "invalid": "GitHub PR または GitLab MR の URL を入力してください。"
     },
     "presentation": {
       "status": {

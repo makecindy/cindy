@@ -190,9 +190,9 @@ export function registerPluginMarketIpc(): void {
     return invokePluginMarket(() => service().officialModelPlugins(cursor, () =>
       !sender.isDestroyed() && activeProviderPages.get(sender) === page));
   });
-  ipcMain.handle('plugin-market:recommendations', (event) => {
+  ipcMain.handle('plugin-market:recommendations', (event, pluginIds?: unknown) => {
     assertTrustedAppRendererEvent(event);
-    return invokePluginMarket(() => service().recommendations());
+    return invokePluginMarket(() => service().recommendations(pluginIds));
   });
   ipcMain.handle('plugin-market:lookup', (event, ghostIds: unknown) => {
     assertTrustedAppRendererEvent(event);
