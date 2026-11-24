@@ -20,7 +20,8 @@ export function hasSubscriptionEstimateSource(
 function hasSubscriptionSource(money: RegionalMoney | undefined, source: TurnUsageDetails['billingSource']): boolean {
   if (source && source !== 'unknown') return source === 'subscription';
   const reasons = money?.estimateReasons;
-  return reasons?.includes('subscription-value') === true && !reasons.includes('legacy-usd');
+  return reasons?.includes('subscription-value') === true &&
+    (!reasons.includes('legacy-usd') || money?.subscriptionSourceConfirmed === true);
 }
 
 function withEstimateSource(money: RegionalMoney, details: TurnUsageDetails | undefined): RegionalMoney {
@@ -29,7 +30,14 @@ function withEstimateSource(money: RegionalMoney, details: TurnUsageDetails | un
   const estimateReasons = subscription
     ? [...new Set([...reasons, 'subscription-value' as const])]
     : reasons.filter(reason => reason !== 'subscription-value');
-  return { ...money, kind: 'value-estimate', approximate: true, estimateReasons };
+  const { subscriptionSourceConfirmed: _confirmation, ...value } = money;
+  return {
+    ...value,
+    kind: 'value-estimate',
+    approximate: true,
+    estimateReasons,
+    ...(subscription && reasons.includes('legacy-usd') ? { subscriptionSourceConfirmed: true } : {}),
+  };
 }
 
 function correctStaleUsdEstimate(

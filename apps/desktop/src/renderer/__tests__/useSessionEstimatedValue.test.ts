@@ -9,6 +9,7 @@ import { combineSessionUsageMoney } from '@/hooks/useSessionUsageMoney';
 import type { ChatMessage } from '@/lib/makerChatStore';
 import { buildTurnUsageDetails } from '../../shared/turnUsageDetails';
 import type { RegionalMoney } from '../../shared/regionalMoney';
+import { hasSubscriptionEstimateSource, turnEstimateAmounts } from '../../shared/turnEstimateAmounts';
 
 function usdEstimate(amount: number): RegionalMoney {
   return {
@@ -124,6 +125,27 @@ describe('syncEstimatedValueCostsFromStoreSnapshot', () => {
 });
 
 describe('resolveEstimatedValueTurnCostEntry', () => {
+  // PR #12622: estimates outside the loaded message window are replayed from
+  // the history projection without the original billing details.
+  it.each(['subscription', 'provider', 'unknown', undefined] as const)(
+    'preserves the recorded legacy %s classification on history replay',
+    (billingSource) => {
+      const [money] = turnEstimateAmounts({
+        turnCostUsd: 0.53,
+        turnCostIsEstimate: true,
+        turnUsageDetails: buildTurnUsageDetails({ inputTokens: 200, billingSource }),
+      });
+      const replay = resolveEstimatedValueTurnCostEntry({
+        clientId: 'historical-estimate',
+        turnMoney: money,
+        turnCostIsEstimate: true,
+      })?.money;
+      expect(replay).toMatchObject({ amount: 0.53, currency: 'USD', approximate: true, kind: 'value-estimate' });
+      expect(replay?.estimateReasons).toContain('legacy-usd');
+      expect(hasSubscriptionEstimateSource(replay)).toBe(billingSource === 'subscription');
+    },
+  );
+
   // PR #12622: the session estimate keeps the subscription source and only
   // the model amount when the same turn includes a separately charged image.
   it('retains subscription value alongside a separate media charge', () => {

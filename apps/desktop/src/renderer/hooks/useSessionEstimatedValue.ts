@@ -57,7 +57,8 @@ function areMoneyEqual(a: RegionalMoney, b: RegionalMoney): boolean {
     a.amount !== b.amount ||
     a.currency !== b.currency ||
     a.approximate !== b.approximate ||
-    a.kind !== b.kind
+    a.kind !== b.kind ||
+    a.subscriptionSourceConfirmed !== b.subscriptionSourceConfirmed
   ) {
     return false;
   }
@@ -156,11 +157,14 @@ function sumCosts(costs: Map<string, RegionalMoney[]>): RegionalMoney[] {
   const otherEstimateCurrencies = new Set(estimates
     .filter(money => !hasSubscriptionEstimateSource(money))
     .map(money => money.currency));
-  return sumMoneyByCurrency(estimates).map(total =>
-    otherEstimateCurrencies.has(total.currency)
-      ? { ...total, estimateReasons: total.estimateReasons?.filter(reason => reason !== 'subscription-value') }
-      : total,
-  );
+  return sumMoneyByCurrency(estimates).map(total => {
+    if (otherEstimateCurrencies.has(total.currency)) {
+      return { ...total, estimateReasons: total.estimateReasons?.filter(reason => reason !== 'subscription-value') };
+    }
+    return total.estimateReasons?.includes('legacy-usd')
+      ? { ...total, subscriptionSourceConfirmed: true }
+      : total;
+  });
 }
 
 const NOOP_UNSUBSCRIBE = () => {};
