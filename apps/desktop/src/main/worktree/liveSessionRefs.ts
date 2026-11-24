@@ -102,7 +102,7 @@ async function readLiveSessionPathKeys(
     for (const meta of store.getAll()) {
       const untrackedRegistration = meta.sessionId !== opts.excludeSessionId && !knownSessionIds.has(meta.sessionId);
       if (subagentReferences.has(meta.sessionId) || untrackedRegistration) {
-        await add(meta.path, untrackedRegistration ? sources?.other : undefined);
+        await add(meta.path, untrackedRegistration ? sources?.other : sources?.pi);
       }
     }
     for (const row of rows) {
@@ -117,7 +117,7 @@ async function readLiveSessionPathKeys(
           && (!row.currentDatabase || opts.isSessionRuntimeAlive?.(row.id) !== true));
       if (!hasSubagentRuns && !independentlyReferenced) continue;
       for (const value of [row.workingDir, row.worktreePath]) {
-        if (value) await add(value, independentlyReferenced ? sources?.other : undefined);
+        if (value) await add(value, independentlyReferenced ? sources?.other : sources?.pi);
       }
     }
     return keys;

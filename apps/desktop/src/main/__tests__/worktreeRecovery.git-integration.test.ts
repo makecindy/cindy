@@ -111,9 +111,17 @@ describe('worktree recovery with real Git', () => {
 
   // #6625: existing recovery cases do not bridge a durable runner record to the
   // audit and storage status. Real Git and an offline RPC peer require git-integration.
-  it('explains a Pi record retaining an archived worktree in audit and storage status', async () => {
-    const meta = await createFixture('pi-recycle-diagnostic');
-    const runs = piSubagentRunRoot(path.join(state.root, 'pi-agent-home'), meta.sessionId);
+  it.each(['direct', 'registration', 'database'] as const)('explains worktree retention from Pi records via %s', async (source) => {
+    const name = `pi-recycle-${source}`;
+    const meta = await createFixture(name);
+    const parent = source === 'database' ? await createFixture('pi-recycle-parent') : meta;
+    const cwd = source === 'direct' ? meta.path : await fs.mkdtemp(path.join(state.root, 'pi-cwd-'));
+    const databasePath = source === 'registration' ? cwd : meta.path;
+    state.refs[state.refs.length - 1] = {
+      id: parent.sessionId, status: 'archived', source: 'desktop', currentDatabase: true,
+      workingDir: databasePath, worktreePath: databasePath,
+    };
+    const runs = piSubagentRunRoot(path.join(state.root, 'pi-agent-home'), parent.sessionId);
     const runId = randomUUID();
     const runDir = path.join(runs, runId);
     const childConfigHome = path.join(runDir, 'pi-home');
@@ -149,16 +157,16 @@ events.on('line', line => {
 process.stdin.on('end', () => process.exit(0));
 `);
     await fs.writeFile(configFile, JSON.stringify({
-      version: 1, runId, taskId: 'fixture-task', parentSessionId: meta.sessionId, runDir,
-      cwd: meta.path, binary: process.execPath, binaryPrefixArgs: [peer, ready, release],
+      version: 1, runId, taskId: 'fixture-task', parentSessionId: parent.sessionId, runDir,
+      cwd, binary: process.execPath, binaryPrefixArgs: [peer, ready, release],
       childConfigHome, bridgeExtension, permissionFile: path.join(runDir, 'permission.json'),
       mode: 'single', context: 'fresh', timeoutMs: 8_000,
       tasks: [{ childId: sessionId, stepId: 'step-1', sessionId, sessionDir,
         agent: 'scout', task: 'read the fixture file', tools: 'read', profilePrompt: 'fixture',
-        provider: 'fixture', model: 'fixture-model', cwd: meta.path }],
+        provider: 'fixture', model: 'fixture-model', cwd }],
     }));
     const runner = exec(process.execPath, [runnerFile, configFile], {
-      cwd: meta.path, env: { PATH: process.env.PATH }, timeout: 10_000,
+      cwd, env: { PATH: process.env.PATH }, timeout: 10_000,
     });
     void runner.catch(() => {}); // Surfaced by the await below; allow time for the readiness probe.
     const recycle = () => recycleManagedWorktree(meta, { canRemove: async () => true });
@@ -171,14 +179,14 @@ process.stdin.on('end', () => process.exit(0));
 
     const checkDiagnostic = async (reason: string, referenced: boolean | null) => {
       const rows = await listWorktreeRecycleStatus();
-      expect(rows).toContainEqual(expect.objectContaining({ path: meta.path, state: 'waiting', reason }));
+      expect.soft(rows).toContainEqual(expect.objectContaining({ path: meta.path, state: 'waiting', reason }));
       await auditRegisteredWorktrees();
       const audit = JSON.parse(await fs.readFile(path.join(state.root, 'worktree-audit.json'), 'utf8'));
       const entry = audit.entries.find((item: { path: string }) => item.path === meta.path);
       expect(entry).toMatchObject({ referenced, directory: 'present' });
-      expect(entry.retentionReason).toBe(reason === 'pi-subagent-reference' ? reason : undefined);
+      expect.soft(entry.retentionReason).toBe(reason === 'pi-subagent-reference' ? reason : undefined);
       expect(await readRecycleRecord(meta.path)).toEqual(retained);
-      expect(await fs.readFile(path.join(meta.path, 'draft.txt'), 'utf8')).toBe('pi-recycle-diagnostic contents\n');
+      expect(await fs.readFile(path.join(meta.path, 'draft.txt'), 'utf8')).toBe(`${name} contents\n`);
     };
 
     try {
@@ -194,17 +202,19 @@ process.stdin.on('end', () => process.exit(0));
       state.runtimePaths.delete(meta.path);
       await checkRetention();
       await checkDiagnostic('pi-subagent-reference', true);
-      state.refs.push({ id: 'pi-diagnostic-borrower', status: 'active', source: 'desktop',
-        currentDatabase: false, workingDir: meta.path });
-      await checkDiagnostic('in-use', true);
-      state.refs.pop();
+      for (const status of ['active', null]) {
+        state.refs.push({ id: 'pi-diagnostic-borrower', status, source: 'desktop',
+          currentDatabase: false, workingDir: meta.path });
+        await checkDiagnostic('in-use', true);
+        state.refs.pop();
+      }
       await fs.writeFile(configFile, '{');
       await checkDiagnostic('in-use', null);
     } finally {
       await fs.writeFile(release, '');
       await runner.catch(() => {});
       state.runtimePaths.delete(meta.path);
-      state.refs = state.refs.filter((row) => ![meta.sessionId, 'pi-diagnostic-borrower'].includes((row as { id: string }).id));
+      state.refs = state.refs.filter((row) => ![meta.sessionId, parent.sessionId, 'pi-diagnostic-borrower'].includes((row as { id: string }).id));
       await fs.rm(runs, { recursive: true, force: true });
     }
   });
