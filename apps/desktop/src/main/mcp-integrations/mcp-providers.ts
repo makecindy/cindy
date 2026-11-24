@@ -1293,6 +1293,8 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         if (!targetSessionId && device && device !== 'local' && device !== getDeviceId()) {
           if (providerId !== undefined)
             return { ok: false, errorCode: 'INVALID_ARGS', message: 'provider_id 仅支持在本机新建任务。' };
+          if (agentKind === 'acp')
+            return { ok: false, errorCode: 'INVALID_ARGS', message: '插件引擎暂仅支持在本机新建任务。' };
           if (!remoteSessionHandoff || !dispatcherSessionId)
             return { ok: false, errorCode: 'REMOTE_UNSUPPORTED', message: 'Remote task creation is unavailable in this host.' };
           const id = randomUUID();

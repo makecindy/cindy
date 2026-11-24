@@ -32,7 +32,11 @@ import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, AUTO_REVIEW_DELEGA
 import { restoreAutoReviewUserIntent } from '../autoReviewUserIntent.js';
 import { verifiedOwnerRequestText } from '../../../shared/forwardedRequest.js';
 import { createWireNoteMemory } from '../wireNoteMemory.js';
-import { resolveSendToSessionCreateRoute } from '../sendToSessionExecutionConfig.js';
+import {
+  resolveSendToSessionCreateRoute,
+  resolveSendToSessionPluginEngineCreate,
+} from '../sendToSessionExecutionConfig.js';
+import { admitPluginEngineSession } from '../pluginEngineSessionAdmission.js';
 import { builtinAgentKindOrNull, hasBuiltinAgentKind, requireBuiltinAgentKind } from '../../maker-host/engineKind.js';
 import { createGhostAgentTurnRunner, type GhostAgentTurnRunnerDeps } from '../ghostAgentTurnRunner.js';
 import { sanitizeSourceName, buildMessageSourceNote, messageSourceSenderFromMeta } from '@cindy/maker-shared/message-source';
@@ -219,6 +223,11 @@ function botTaskDispatchHarness(
     beginTurnChangeSetAtDispatch: asyncNoop,
     // Plugin-engine guards from register.ts use the real helpers.
     hasBuiltinAgentKind, requireBuiltinAgentKind, builtinAgentKindOrNull,
+    resolveSendToSessionPluginEngineCreate,
+    admitPluginEngineSession,
+    getPluginHarnessRegistry: () => ({ list: () => [] }),
+    pluginEngineModelsOf: () => [],
+    pluginEngineSettingsOf: () => ({}),
     clearPendingTurnChangeSets: noop,
     gitSnapshotCoordinator: null,
     deferredProductTurnFailureGate: { clearSession: noop },
@@ -989,5 +998,129 @@ describe('unbound Codex pre-send history wiring', () => {
     expect(cancelUsageLimitWait).toHaveBeenCalledExactlyOnceWith('old-task');
     expect(order).toEqual(['durable-handoff', 'cancel-wait']);
     expect(failover).not.toHaveBeenCalled();
+  });
+});
+
+describe('sendToSessionInternal create from plugin engine (#12127)', () => {
+  const AGY_PROVIDER = 'acp-plugin:agy-acp:agy';
+  const agyHarness = (state: 'available' | 'unavailable' = 'available', message?: string) => ({
+    key: 'agy-acp:agy',
+    pluginId: 'agy-acp',
+    harnessId: 'agy',
+    name: 'Antigravity',
+    entryPath: '/plugins/agy/entry.js',
+    availability: state === 'available' ? { state } : { state, message },
+    models: [{ id: 'gemini-4-neon', name: 'Gemini 4 Neon', efforts: ['low', 'high'] }],
+    modes: ['default', 'auto'],
+    defaultMode: 'default',
+  });
+
+  const makeAcpCreateHarness = (harnesses: unknown[]) => {
+    const opened: Array<Record<string, unknown>> = [];
+    const dbChain = {
+      from: () => dbChain,
+      where: () => dbChain,
+      limit: async () => [{ effort: 'high', fastMode: false, providerId: AGY_PROVIDER, permissionMode: 'auto' }],
+    };
+    const h = botTaskDispatchHarness({}, {}, {
+      getDbClient: () => ({ drizzle: { select: () => dbChain } }),
+      maker: {
+        getSession: () => undefined,
+        getSessionMeta: async (id: string) => ({
+          id,
+          agentKind: 'acp',
+          workDir: '/tmp/proj',
+          projectDir: '/tmp/proj',
+          workspaceKind: 'project',
+          model: 'gemini-4-neon',
+          sdkSessionId: 'native-agy-1',
+        }),
+        getCapabilities: () => ({
+          availableModels: [{ id: 'gpt-5.6-sol', efforts: ['high'], defaultEffort: 'high' }],
+        }),
+      },
+      getSelfDeviceId: () => 'device-self',
+      getPluginHarnessRegistry: () => ({ list: () => harnesses }),
+      pluginEngineModelsOf: (item: { models?: Array<{ id: string; name: string; efforts?: string[] }> }) =>
+        (item.models ?? []).map((m) => ({ id: m.id, displayName: m.name, ...(m.efforts ? { efforts: m.efforts } : {}) })),
+      pluginEngineSettingsOf: () => ({}),
+      getProviderRoutingContext: async () => ({
+        availability: {
+          codex: [{ id: 'openai', name: 'OpenAI', models: ['gpt-5.6-sol'] }],
+          'claude-code': [],
+          pi: [],
+        },
+        resolveDefaultProviderIdForModel: () => 'openai',
+      }),
+      readClaudeApiKey: () => null,
+      openSession: async (input: { body: Record<string, unknown> }, commit: (row: Record<string, unknown>, assertCurrent: () => void) => Promise<unknown>) => {
+        opened.push(input.body);
+        const row = {
+          id: 'new-child-1',
+          model: input.body.model,
+          providerId: input.body.providerId,
+          effort: input.body.effort ?? '',
+          fastMode: Boolean(input.body.fastMode),
+          workingDir: input.body.workingDir,
+          workspaceKind: input.body.workspaceKind ?? 'project',
+        };
+        const value = await commit(row, () => undefined);
+        return { row, value };
+      },
+      broadcastSessionCreated: () => undefined,
+    });
+    return { ...h, opened };
+  };
+
+  it('inherits acp provider and model on default create, and refuses unavailable engine without fallback', async () => {
+    const okHarness = makeAcpCreateHarness([agyHarness('available')]);
+    const created = await okHarness.sendToSessionInternal({
+      dispatcherSessionId: 'source-agy',
+      message: 'Investigate issue',
+    });
+    expect(created).toMatchObject({
+      ok: true,
+      agentKind: 'acp',
+      wakeKind: 'created',
+      providerId: AGY_PROVIDER,
+      model: 'gemini-4-neon',
+    });
+    expect(okHarness.opened).toHaveLength(1);
+    expect(okHarness.opened[0]).toMatchObject({ agentKind: 'acp', providerId: AGY_PROVIDER, model: 'gemini-4-neon' });
+
+    const badHarness = makeAcpCreateHarness([agyHarness('unavailable', 'sign in required')]);
+    const refused = await badHarness.sendToSessionInternal({
+      dispatcherSessionId: 'source-agy',
+      message: 'Investigate issue',
+    });
+    expect(refused).toMatchObject({
+      ok: false,
+      errorCode: 'PROVIDER_ROUTE_UNAVAILABLE',
+      message: expect.stringContaining('sign in required'),
+    });
+    expect(badHarness.opened).toHaveLength(0);
+  });
+
+  it('requires explicit model when switching from acp source to a builtin engine', async () => {
+    const h = makeAcpCreateHarness([agyHarness('available')]);
+    const missingModel = await h.sendToSessionInternal({
+      dispatcherSessionId: 'source-agy',
+      message: 'Run on codex',
+      execution: { agentKind: 'codex' },
+    });
+    expect(missingModel).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(h.opened).toHaveLength(0);
+
+    const switched = await h.sendToSessionInternal({
+      dispatcherSessionId: 'source-agy',
+      message: 'Run on codex',
+      execution: { agentKind: 'codex', model: 'gpt-5.6-sol' },
+    });
+    expect(switched).toMatchObject({
+      ok: true,
+      agentKind: 'codex',
+      wakeKind: 'created',
+      model: 'gpt-5.6-sol',
+    });
   });
 });
