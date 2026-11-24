@@ -74,11 +74,12 @@ const LABEL_BRACKET_ENDS = new Map([['(', ')'], ['[', ']'], ['{', '}']]);
  * 这样未闭合的形状不会让下一个候选重新扫描同一段。
  */
 function indexLabelEnds(line: string) {
+  const Offsets = line.length > 0xffff ? Uint32Array : Uint16Array;
   const bracketEnds = new Map([...LABEL_BRACKET_ENDS.values()].map(
-    (end) => [end, new Uint16Array(line.length + 1)],
+    (end) => [end, new Offsets(line.length + 1)],
   ));
   const shapeEnds = new Map([...new Set(SHAPE_ENDS.values())].map(
-    (end) => [end, new Uint16Array(line.length + 1)],
+    (end) => [end, new Offsets(line.length + 1)],
   ));
   const allEnds = [...bracketEnds, ...shapeEnds];
   let nextQuote = -1;
@@ -197,10 +198,10 @@ function findShapeDataEnd(source: string, start: number): number {
   return -1;
 }
 
-function repairOutsideShapeData(source: string, chartStart: number): string {
+function repairFlowchart(source: string, chartStart: number): string {
   // 从节点 ID 后的 @{ 识别属性，把 YAML 语法交给 Mermaid。
   // 回调、样式声明和类选择器里的连字符属于名称或值。
-  const tokens = /^[^\S\r\n]*(?:%%|\/\/)[^\n]*|(?:^|;)[^\S\r\n]*(?:acc(?:Title|Descr)[^\S\r\n]*:[^\n]*|accDescr[^\S\r\n]*\{[^}]*\}|(?:click|classDef|class|style|linkStyle)[^\S\r\n]+(?:"[^"\r\n]*"|[^";\r\n])*)|"[^"]*"|"[^"\n]*|\|[^|\n]+\||:::[\p{L}\p{N}\p{M}_]+(?:[.-]+[\p{L}\p{N}\p{M}_]+)*|[-.=]+[>xo]?|(?<=[\p{L}\p{N}\p{M}_.!,?#$%*+/:&'`\\-])(?:@\{|\([^()[\]{}"\n]*\)|\[[^()[\]{}"\n]*\]|\{[^()[\]{}"\n]*\}|\({2,3}|\(\[|\[[[(\/\\]|\{\{|[({\[>])/gmu;
+  const tokens = /^[^\S\r\n]*(?:%%|\/\/)[^\n]*|(?:^|;)[^\S\r\n]*(?:acc(?:Title|Descr)[^\S\r\n]*:[^\n]*|accDescr[^\S\r\n]*\{[^}]*\}|(?:click|classDef|class|style|linkStyle)[^\S\r\n]+(?:"[^"\r\n]*"|[^";\r\n])*)|"[^"]*"|"[^"\n]*|\|[^|\n]+\||:::[\p{L}\p{N}\p{M}_]+(?:[.-]+[\p{L}\p{N}\p{M}_]+)*|(?<![^\s;])[^\s"@;]+@(?=[^\S\r\n]*[xo<]?(?:--|==|-\.|\.+-|~~~))|[-.=]+[>xo]?|(?<=[\p{L}\p{N}\p{M}_.!,?#$%*+/:&'`\\-])(?:@\{|\([^()[\]{}"\n]*\)|\[[^()[\]{}"\n]*\]|\{[^()[\]{}"\n]*\}|\({2,3}|\(\[|\[[[(\/\\]|\{\{|[({\[>])/gmu;
   tokens.lastIndex = chartStart;
   const edgeLabelClosers = new Map([['--', /^--+[-xo>]$/], ['==', /^==+[=xo>]$/], ['-.', /^\.+-[xo>]?$/]]);
   let result = '';
@@ -209,6 +210,8 @@ function repairOutsideShapeData(source: string, chartStart: number): string {
   let labelLineStart = 0;
   let labelLineEnd = -1;
   let labelEnds: ReturnType<typeof indexLabelEnds> | undefined;
+  let documentLabelEnds: ReturnType<typeof indexLabelEnds> | undefined;
+  const lastLabelClose = Math.max(source.lastIndexOf(']'), source.lastIndexOf(')'), source.lastIndexOf('}'));
   for (let match = tokens.exec(source); match; match = tokens.exec(source)) {
     const token = match[0];
     // 旧式边标签位于两段连接符之间，例如 A -- text --> B。
@@ -217,6 +220,7 @@ function repairOutsideShapeData(source: string, chartStart: number): string {
     if (edgeLabelEnd) continue;
     const shapeEnd = SHAPE_ENDS.get(token);
     const bracketEnd = LABEL_BRACKET_ENDS.get(token);
+    let preservedEnd = -1;
     if (shapeEnd || bracketEnd) {
       // 节点标签里的 --、==、-. 是文字，不开启边标签。
       if (match.index >= labelLineEnd) {
@@ -227,19 +231,30 @@ function repairOutsideShapeData(source: string, chartStart: number): string {
         // 只有可能改变边或属性扫描状态的行才需要索引。
         labelEnds = /--|==|-\.|@\{/.test(labelLine) ? indexLabelEnds(labelLine) : undefined;
       }
-      if (!labelEnds) continue;
-      const offsets = shapeEnd ? labelEnds.shapeEnds.get(shapeEnd) : labelEnds.bracketEnds.get(bracketEnd!);
-      const end = offsets![tokens.lastIndex - labelLineStart];
-      if (end) tokens.lastIndex = labelLineStart + end;
-      continue;
+      const offsets = shapeEnd ? labelEnds?.shapeEnds.get(shapeEnd) : labelEnds?.bracketEnds.get(bracketEnd!);
+      const end = offsets?.[tokens.lastIndex - labelLineStart];
+      if (end) {
+        tokens.lastIndex = labelLineStart + end;
+        continue;
+      }
+      if (labelLineEnd < lastLabelClose) {
+        documentLabelEnds ??= indexLabelEnds(source);
+        const multilineOffsets = shapeEnd
+          ? documentLabelEnds.shapeEnds.get(shapeEnd)
+          : documentLabelEnds.bracketEnds.get(bracketEnd!);
+        const multilineEnd = multilineOffsets![tokens.lastIndex];
+        if (multilineEnd > labelLineEnd) preservedEnd = multilineEnd;
+      }
+    } else if (token === '@{') {
+      preservedEnd = findShapeDataEnd(source, tokens.lastIndex);
+      if (preservedEnd === -1) break;
+    } else if (token.startsWith('"') && token.includes('\n')) {
+      preservedEnd = tokens.lastIndex;
     }
-    if (token !== '@{') continue;
-    const end = findShapeDataEnd(source, tokens.lastIndex);
-    // 未闭合属性走普通修复，同一残缺后缀只扫描一次。
-    if (end === -1) break;
+    if (preservedEnd === -1) continue;
     result += repairLines(source.slice(start, match.index), true, start === 0);
-    result += source.slice(match.index, end);
-    start = tokens.lastIndex = end;
+    result += source.slice(match.index, preservedEnd);
+    start = tokens.lastIndex = preservedEnd;
   }
   return result + repairLines(source.slice(start), true, start === 0);
 }
@@ -253,7 +268,9 @@ export function repairMermaidSource(source: string): string {
   const lines = source.split('\n');
   if (lines.some((l) => l.length > MAX_REPAIR_LINE_LENGTH)) return source;
   const startLine = flowchartStartLine(lines);
-  if (startLine === -1 || !source.includes('@{')) return repairLines(source, startLine !== -1);
+  if (startLine === -1 || (!source.includes('@{') && source.search(UNICODE_ARROW_RE) === -1)) {
+    return repairLines(source, startLine !== -1);
+  }
   const chartStart = lines.slice(0, startLine).reduce((offset, line) => offset + line.length + 1, 0);
-  return repairOutsideShapeData(source, chartStart);
+  return repairFlowchart(source, chartStart);
 }

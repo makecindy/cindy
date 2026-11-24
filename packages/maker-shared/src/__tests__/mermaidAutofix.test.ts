@@ -169,6 +169,19 @@ describe('repairMermaidSource', () => {
     },
   );
 
+  it.each(['A[[first\n→ second]]', 'A([first\n→ second])', 'A>first\n→ second]', 'A["first\n→ second"]'])(
+    'preserves a multiline node label while repairing the next connection (%s)',
+    (node) => {
+      const chart = `flowchart TD\n${node} → B`;
+      expect(repairMermaidSource(chart)).toBe(`flowchart TD\n${node} --> B`);
+    },
+  );
+
+  it.each(['e==1@-->', 'e--1@ ==>', 'e-.1@-->'])('preserves metadata after an edge ID containing a link marker (%s)', (link) => {
+    const prefix = `flowchart TD\nA ${link} B\nC@{ shape: rect, label: start → done }\n`;
+    expect(repairMermaidSource(prefix + 'C → D')).toBe(prefix + 'C --> D');
+  });
+
   it('未闭合的形状不会吞掉后面的完整标签和连线', () => {
     const prefix = 'flowchart TD\n' + 'A(('.repeat(600);
     expect(repairMermaidSource(prefix + ' C([go → stop]) → B')).toBe(
