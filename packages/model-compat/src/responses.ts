@@ -18,6 +18,7 @@ import { createResponsesFieldBackfillBlockRewrite, backfillResponsesFieldsJson }
 import { createTranslatorBudget } from './upstream/lib/translator-budget';
 import { collectDeclaredWireToolNames } from './upstream/server/responses-undeclared-tool-guard';
 import { composeSseBlockRewrites, payloadRewriteAsBlockRewrite, nextSseBlock, type SseBlockRewrite } from './upstream/server/sse-payload-rewrite';
+import { isPlainObject } from './object';
 
 /** Wire names of custom declarations that live inside a namespace group, before lowering rewrites them. */
 function collectNamespaceCustomToolNames(body: unknown): Set<string> {
@@ -38,6 +39,70 @@ function collectNamespaceCustomToolNames(body: unknown): Set<string> {
     }
   }
   return names;
+}
+
+type NativeTool = { type: string; name: string; namespace?: string };
+
+function collectNativeToolSelectors(body: unknown) {
+  const bare = new Map<string, NativeTool | null>();
+  const groupedBare = new Map<string, NativeTool | null>();
+  const namespaced = new Map<string, NativeTool | null>();
+  const record = (catalog: Map<string, NativeTool | null>, key: string, tool: NativeTool) => {
+    const previous = catalog.get(key);
+    if (previous === undefined) catalog.set(key, tool);
+    else if (previous && (previous.type !== tool.type || previous.name !== tool.name || previous.namespace !== tool.namespace)) {
+      catalog.set(key, null);
+    }
+  };
+  for (const group of collectResponsesToolGroups(body)) {
+    for (const tool of group) {
+      if (!isPlainObject(tool) || typeof tool.name !== 'string' || typeof tool.type !== 'string') continue;
+      if (tool.type !== 'namespace') {
+        record(bare, tool.name, { type: tool.type, name: tool.name });
+      } else if (Array.isArray(tool.tools)) {
+        for (const child of tool.tools) {
+          if (!isPlainObject(child) || typeof child.name !== 'string' || typeof child.type !== 'string') continue;
+          if (tool.name === 'functions') record(groupedBare, child.name, { type: child.type, name: child.name });
+          else record(namespaced, `${tool.name}__${child.name}`, { type: child.type, name: child.name, namespace: tool.name });
+        }
+      }
+    }
+  }
+  for (const [name, tool] of groupedBare) {
+    if (!bare.has(name)) bare.set(name, tool);
+  }
+  return { bare, namespaced };
+}
+
+function disambiguateNativeToolChoice(original: unknown, forwarded: unknown): unknown {
+  if (!isPlainObject(original) || !isPlainObject(forwarded)) return forwarded;
+  const before = original.tool_choice;
+  const after = forwarded.tool_choice;
+  if (!isPlainObject(before) || !isPlainObject(after)) return forwarded;
+  const originalTools = collectNativeToolSelectors(original);
+  const forwardedTools = collectNativeToolSelectors(forwarded);
+  const select = (selector: unknown, lowered: unknown): unknown => {
+    if (!isPlainObject(selector) || !isPlainObject(lowered) || 'namespace' in selector
+      || (selector.type !== 'function' && selector.type !== 'custom') || typeof selector.name !== 'string') return lowered;
+    const bare = originalTools.bare.get(selector.name);
+    const child = originalTools.namespaced.get(selector.name);
+    const outgoingBare = forwardedTools.bare.get(selector.name);
+    const outgoingChild = forwardedTools.namespaced.get(selector.name);
+    if (!bare || !child || !outgoingBare || !outgoingChild || child.type !== selector.type
+      || bare.type !== (selector.type === 'function' ? 'custom' : 'function')
+      || (lowered.type === selector.type && outgoingBare.type === bare.type && outgoingChild.type === child.type)) return lowered;
+    return { ...lowered, ...outgoingChild };
+  };
+  if (before.type === 'allowed_tools' && after.type === 'allowed_tools'
+    && Array.isArray(before.tools) && Array.isArray(after.tools)) {
+    const originalSelectors = before.tools;
+    const forwardedSelectors = after.tools;
+    const tools = forwardedSelectors.map((tool, index) => select(originalSelectors[index], tool));
+    return tools.some((tool, index) => tool !== forwardedSelectors[index])
+      ? { ...forwarded, tool_choice: { ...after, tools } } : forwarded;
+  }
+  const toolChoice = select(before, after);
+  return toolChoice === after ? forwarded : { ...forwarded, tool_choice: toolChoice };
 }
 
 /** Selected from the actual route; native OpenAI and non-Responses traffic do not enter this adapter. */
@@ -64,7 +129,10 @@ export function prepareResponsesCompatibility(body: unknown, policy: ResponsesCo
   const namespace = policy.namespaceTools === 'functions'
     ? rewriteRoutedNamespaceToolsForUpstream(search.body, custom.names, bareCustomNames, collectNamespaceCustomToolNames(body),
         body && typeof body === 'object' ? (body as { tool_choice?: unknown }).tool_choice : undefined)
-    : { body: search.body, aliases: new Map(), renamedWireNames: new Map<string, string>(), renamedKinds: new Map<string, 'function' | 'custom'>() };
+    : {
+        body: custom.body !== body ? disambiguateNativeToolChoice(body, search.body) : search.body,
+        aliases: new Map(), renamedWireNames: new Map<string, string>(), renamedKinds: new Map<string, 'function' | 'custom'>(),
+      };
   // Native requests retain their declarations, but response restoration and schema lookup still
   // need one collision-safe identity plan, including original kinds and loaded search tools.
   const repairPlan = policy.repairFunctionArguments && policy.namespaceTools !== 'functions'

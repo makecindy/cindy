@@ -175,10 +175,14 @@ describe('request-owned Responses compatibility', () => {
       for (const allowed of [false, true]) {
         const adapter = createCodexResponsesCompatibilityAdapter();
         const selector = { type: 'function', name: 'workspace__read' };
-        adapter.adaptRequest({ tools: [
+        const outbound = adapter.adaptRequest({ tools: [
           { type: 'namespace', name: 'functions', tools: [{ type: 'custom', name: 'workspace__read' }] },
           { type: 'namespace', name: 'workspace', tools: [{ type: 'function', name: 'read', parameters: { type: 'object', properties: { line: { type: 'integer' } } } }] },
         ], tool_choice: allowed ? { type: 'allowed_tools', tools: [selector] } : selector }, 10096, undefined, lowerNamespaces);
+        if (!lowerNamespaces) {
+          const selected = { type: 'function', name: 'read', namespace: 'workspace' };
+          expect(outbound).toMatchObject({ tool_choice: allowed ? { type: 'allowed_tools', tools: [selected] } : selected });
+        }
         const output = { status: 'completed', output: [{ type: 'function_call', ...(lowerNamespaces ? { name: 'workspace__read_2' } : { namespace: 'workspace', name: 'read' }), call_id: 'child', arguments: '{"line":12.0}' }] };
         const sse = contentType === 'text/event-stream';
         const wire = sse ? `data: ${JSON.stringify({ type: 'response.completed', response: output })}\n\n` : JSON.stringify(output);
@@ -189,6 +193,19 @@ describe('request-owned Responses compatibility', () => {
         expect((sse ? parsed.response : parsed).output[0]).toMatchObject({ type: 'function_call', namespace: 'workspace', name: 'read', arguments: '{"line":12}' });
       }
     }
+  });
+
+  it.each([['read', 'function'], ['apply_patch', 'custom']])('keeps a native custom child selector at its actual forwarded kind (%s)', (name, type) => {
+    const adapter = createCodexResponsesCompatibilityAdapter();
+    const wireName = `workspace__${name}`;
+    const outbound = adapter.adaptRequest({
+      tools: [
+        { type: 'function', name: wireName },
+        { type: 'namespace', name: 'workspace', tools: [{ type: 'custom', name }] },
+      ],
+      tool_choice: { type: 'custom', name: wireName },
+    }, 10097);
+    expect(outbound).toMatchObject({ tool_choice: { type, name, namespace: 'workspace' } });
   });
 
   it.each(['application/json', 'text/event-stream'])('restores default functions custom calls as bare tools (%s)', async contentType => {
