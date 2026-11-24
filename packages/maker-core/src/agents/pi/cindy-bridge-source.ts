@@ -3472,11 +3472,12 @@ function isNameEnvelopeSchema(schema: unknown, surface?: SchemaParameterSurface 
   if (!root) return false;
   // 不能只在根层命中 name+args 就提前 return: 兄弟字段可能声明在 allOf/anyOf/$ref 等组合分支里。
   const resolved = surface === undefined ? schemaParameterSurface(root) : surface;
-  return Boolean(resolved?.envelope)
-    && !resolved!.truncated
-    && resolved!.names.size === 2
-    && resolved!.names.has('name')
-    && resolved!.names.has('args');
+  if (!resolved) return false;
+  return Boolean(resolved.envelope)
+    && !resolved.truncated
+    && resolved.names.size === 2
+    && resolved.names.has('name')
+    && resolved.names.has('args');
 }
 
 /**
