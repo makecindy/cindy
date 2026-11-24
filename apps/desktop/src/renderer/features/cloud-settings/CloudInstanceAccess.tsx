@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { isForeground, onForegroundChange } from './foreground';
 import { useAuth } from '@/contexts/AuthContext';
 import {
   getDataOwnerGeneration,
@@ -73,19 +74,19 @@ export function CloudInstanceAccessProvider({ children }: { children: ReactNode 
       }
     };
     const visible = () => {
-      if (document.visibilityState !== 'hidden') void refresh();
+      if (isForeground()) void refresh();
     };
     const timer = window.setInterval(visible, 60_000);
     window.addEventListener('focus', visible);
     window.addEventListener('online', visible);
-    document.addEventListener('visibilitychange', visible);
+    const stopFollowing = onForegroundChange(visible);
     stopListening = () => {
       window.clearInterval(timer);
       if (retryTimer !== undefined) window.clearTimeout(retryTimer);
       retryTimer = undefined;
       window.removeEventListener('focus', visible);
       window.removeEventListener('online', visible);
-      document.removeEventListener('visibilitychange', visible);
+      stopFollowing();
     };
     void refresh();
     return () => {

@@ -34,6 +34,7 @@ import { resolveSettingsSearchEntry } from '@/components/settings/settingsSearch
 import { SettingsSearchNavigationContext } from '@/components/settings/SettingsSearchNavigation';
 import { useSettingsSectionTarget } from '@/components/settings/useSettingsSectionTarget';
 import { useAuth } from '@/contexts/AuthContext';
+import { isForeground, onForegroundChange } from './foreground';
 import {
   getDataOwnerGeneration,
   isDataOwnerGenerationCurrent,
@@ -946,7 +947,7 @@ function AuthorizedCloudSettingsView({ plugins: Plugins }: { plugins?: CloudPlug
     let disposed = false;
     let inFlight = false;
     const refresh = async () => {
-      if (disposed || inFlight || document.visibilityState === 'hidden') return;
+      if (disposed || inFlight || !isForeground()) return;
       inFlight = true;
       try {
         const view = await own.instance!();
@@ -962,13 +963,13 @@ function AuthorizedCloudSettingsView({ plugins: Plugins }: { plugins?: CloudPlug
     const interval = window.setInterval(() => void refresh(), 30_000);
     window.addEventListener('focus', refresh);
     window.addEventListener('online', refresh);
-    document.addEventListener('visibilitychange', refresh);
+    const stopFollowing = onForegroundChange(() => void refresh());
     return () => {
       disposed = true;
       window.clearInterval(interval);
       window.removeEventListener('focus', refresh);
       window.removeEventListener('online', refresh);
-      document.removeEventListener('visibilitychange', refresh);
+      stopFollowing();
     };
   }, [own, scope, selected, device?.online]);
   const client = own;

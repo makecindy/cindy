@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { isForeground } from './foreground';
 
 /**
  * The system checks, and says only what it knows: when a write's outcome is unknown, its result
@@ -82,7 +83,7 @@ export function useSettleUnknown<C>({
       if (delay === undefined) break;
       // A hidden window waits; nothing is read until it is shown again.
       if (!(await wait(id, delay))) return;
-      while (document.visibilityState === 'hidden') if (!(await wait(id, 1_000))) return;
+      while (!isForeground()) if (!(await wait(id, 1_000))) return;
       if (await read(id, value)) return;
     }
     if (id === run.current) setState('unreadable');
@@ -169,7 +170,7 @@ export function useSettleUnknownByKey<C>({
       for (const delay of delays) {
         if (!(await wait(key, id, delay))) return;
         // A hidden window waits; nothing is read until it is shown again.
-        while (document.visibilityState === 'hidden') if (!(await wait(key, id, 1_000))) return;
+        while (!isForeground()) if (!(await wait(key, id, 1_000))) return;
         if (await read(key, id, value)) return;
       }
       if (current(key, id)) put(key, { state: 'unreadable', context: value });

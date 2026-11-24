@@ -7,6 +7,7 @@ import type {
 } from '../../../shared/cloudSettingsClient';
 import type { CloudInstanceView } from '../../../shared/cloudInstanceControl';
 import { stableInstanceState, canChangeInstancePower } from './instanceState';
+import { isForeground, onForegroundChange } from './foreground';
 import {
   SETTLE_DELAYS_MS,
   useSettleUnknown,
@@ -232,20 +233,21 @@ export function useCloudInstances(api: CloudInstancesApi, onOpen: (deviceId: str
   useEffect(() => {
     const pending =
       powerPending.size > 0 || instances?.some((v) => v.loginRequired || !stableInstanceState(v));
+    // A hidden or minimised window reads nothing, even with background throttling off; coming
+    // back reads once.
     const timer = setInterval(
       () => {
         // While a result is read back on its own schedule, the list waits for it.
-        if (document.visibilityState !== 'hidden' && !checking) void load();
+        if (isForeground() && !checking) void load();
       },
       hurrying ? 2_000 : pending ? 5_000 : 30_000,
     );
-    const visible = () => {
-      if (document.visibilityState !== 'hidden' && !checking) void load();
-    };
-    document.addEventListener('visibilitychange', visible);
+    const stopFollowing = onForegroundChange((foreground) => {
+      if (foreground && !checking) void load();
+    });
     return () => {
       clearInterval(timer);
-      document.removeEventListener('visibilitychange', visible);
+      stopFollowing();
     };
   }, [instances, load, powerPending, checking, hurrying]);
   useEffect(() => {

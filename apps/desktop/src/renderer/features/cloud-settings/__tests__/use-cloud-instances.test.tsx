@@ -55,6 +55,22 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+// Unit: a minimised window keeps document.visibilityState visible when background throttling is
+// off; the host's hidden mark alone stops the list polls, and coming back reads it once.
+it('reads nothing while the host has hidden the window, then reads once when it is shown', async () => {
+  const f = await setup([running]);
+  f.api.instanceList.mockClear();
+  document.documentElement.setAttribute('data-app-hidden', '');
+  try {
+    expect(document.visibilityState).not.toBe('hidden');
+    await act(() => vi.advanceTimersByTimeAsync(120_000));
+    expect(f.api.instanceList).not.toHaveBeenCalled();
+  } finally {
+    await act(async () => { document.documentElement.removeAttribute('data-app-hidden'); });
+  }
+  await waitFor(() => expect(f.api.instanceList).toHaveBeenCalledTimes(1));
+});
+
 it('reading the list claims, signs in and wakes nothing', async () => {
   const f = await setup([target, sleeping]);
   expect(f.api.instanceClaim).not.toHaveBeenCalled();
