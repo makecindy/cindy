@@ -4050,7 +4050,7 @@ it('keeps copy/share in the more menu and includes folded human text in exported
       const row = document.querySelector<HTMLElement>(`[data-bot-group-message-id="${id}"]`)!.querySelector('article')!;
       expect(prepareShareMessageClone(row)?.textContent).toContain('final export line');
     }
-    expect(within(article).getByRole('checkbox').getAttribute('aria-checked')).toBe('true');
+    expect((within(article).getByRole('checkbox') as HTMLInputElement).checked).toBe(true);
     expect(screen.getByRole('button', { name: 'chat.shareImage.copy' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'chat.shareImage.cancel' }));
     expect(shareSelectionStore.getActiveSessionId()).toBeNull();
@@ -4960,19 +4960,19 @@ describe('thread previews and posting to the main chat', () => {
     await user.click(await screen.findByRole('button', { name: 'bots.groupChat.server.startTopic' }));
     const panel = await screen.findByRole('complementary');
     const toggle = within(panel).getByRole('checkbox', { name: t('alsoSend') });
-    expect(toggle.getAttribute('aria-checked')).toBe('false');
+    expect((toggle as HTMLInputElement).checked).toBe(false);
     await user.type(within(panel).getByRole('textbox'), 'thread only{Enter}');
     await waitFor(() => expect(mocks.reply).toHaveBeenCalledTimes(1));
     expect(mocks.shareToMain).not.toHaveBeenCalled();
     await user.click(toggle);
-    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    expect((toggle as HTMLInputElement).checked).toBe(true);
     mocks.reply.mockResolvedValueOnce({ ok: true, messageId: 'reply-2' });
     await user.type(within(panel).getByRole('textbox'), '@咪咪 both{Enter}');
     await waitFor(() => expect(mocks.shareToMain).toHaveBeenCalledWith({ groupId: 'g1', messageId: 'reply-2' }));
     expect(mocks.reply).toHaveBeenCalledTimes(2);
     expect(mocks.reply.mock.calls[1][0]).toMatchObject({ rootId: 'u1', text: '@咪咪 both' });
     // Each send starts from the default again.
-    await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('false'));
+    await waitFor(() => expect((toggle as HTMLInputElement).checked).toBe(false));
   });
 
   // Unit, topic latency reproduction: the HTTP receipt arrived seconds before
@@ -5083,7 +5083,7 @@ describe('thread previews and posting to the main chat', () => {
     await user.type(within(panel).getByRole('textbox'), 'both{Enter}');
     await waitFor(() => expect(mocks.reply).toHaveBeenCalledTimes(1));
     expect(mocks.shareToMain).not.toHaveBeenCalled();
-    expect(within(panel).getByRole('checkbox', { name: t('alsoSend') }).getAttribute('aria-checked')).toBe('true');
+    expect((within(panel).getByRole('checkbox', { name: t('alsoSend') }) as HTMLInputElement).checked).toBe(true);
     await user.click(within(panel).getByRole('button', { name: 'bots.groupChat.server.sendReply' }));
     await waitFor(() => expect(mocks.shareToMain).toHaveBeenCalledTimes(1));
     expect(mocks.reply.mock.calls[1][0].clientId).toBe(mocks.reply.mock.calls[0][0].clientId);
@@ -5098,7 +5098,7 @@ describe('thread previews and posting to the main chat', () => {
     await user.click(within(await screen.findByRole('complementary')).getByRole('checkbox', { name: t('alsoSend') }));
     await user.click(second!);
     await screen.findByText('Reply to u2');
-    expect(within(screen.getByRole('complementary')).getByRole('checkbox', { name: t('alsoSend') }).getAttribute('aria-checked')).toBe('false');
+    expect((within(screen.getByRole('complementary')).getByRole('checkbox', { name: t('alsoSend') }) as HTMLInputElement).checked).toBe(false);
   });
 
   it('posts an existing reply, including someone else’s, from its menu', async () => {
@@ -6134,7 +6134,7 @@ it('sends a rich control only to its thread and keeps the thread draft and main-
   await waitFor(() => expect(mocks.reply).toHaveBeenCalledWith(expect.objectContaining({ groupId: 'g1', rootId: 'u1', text: 'Reply from the card' })));
   expect(mocks.shareToMain).not.toHaveBeenCalled();
   expect(composer.value).toBe('Thread draft');
-  expect(alsoSend.getAttribute('aria-checked')).toBe('true');
+  expect((alsoSend as HTMLInputElement).checked).toBe(true);
 });
 
 it.each(['archived', 'dissolved'])('disables rich answer submissions in %s group history', async state => {

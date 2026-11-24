@@ -2759,6 +2759,10 @@ function createCodexResponseObserver(): ResponseObserver {
 }
 
 function codexCustomProviderRouteFailure(status: number, code: string): RoutingDecision {
+  return codexRouteFailure(status, code, 'This custom Provider route is unavailable.');
+}
+
+function codexRouteFailure(status: number, code: string, message: string): RoutingDecision {
   return {
     localHandler: async ({ res }) => {
       res.writeHead(status, {
@@ -2770,7 +2774,7 @@ function codexCustomProviderRouteFailure(status: number, code: string): RoutingD
           error: {
             type: 'invalid_request_error',
             code,
-            message: 'This custom Provider route is unavailable.',
+            message,
           },
         }),
       );
@@ -3255,6 +3259,9 @@ function resolveCodexCustomProviderRoutingDecision(
     const authorizationModel = model === CODEX_AUTO_REVIEW_MODEL && guardianParentThreadIdFromHeaders(ctx.headers) && sessionId
       ? reviewerModelBySession.get(sessionId) ?? model : model;
     if (model && !hostedProviderOffersModel(sessionId, explicitProviderId, 'codex', authorizationModel)) {
+      if (getActiveCatalog().providers.some((provider) => provider.id === explicitProviderId && provider.source === 'builtin')) {
+        return codexRouteFailure(403, 'remote_model_not_allowed', 'This model is not available for this remote task.');
+      }
       return codexCustomProviderRouteFailure(403, 'remote_model_not_allowed');
     }
     // 推理请求钉在 Claude 订阅上(旧会话 / 子代理快照):本地拒绝,不落任何默认上游。

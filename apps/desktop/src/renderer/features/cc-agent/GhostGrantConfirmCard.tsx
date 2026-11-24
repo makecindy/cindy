@@ -24,6 +24,7 @@ import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 import type { PendingGhostGrantConfirm } from '@/lib/makerChatStore';
+import { Checkbox } from '@/components/ui/checkbox';
 
 interface GhostGrantConfirmCardProps {
   pending: PendingGhostGrantConfirm;
@@ -160,11 +161,9 @@ export function GhostGrantConfirmCard({ pending, onRespond }: GhostGrantConfirmC
 
       {pending.lane === 'attachments' ? (
         <label className="mt-3 flex cursor-pointer items-center gap-2 text-12 text-[var(--status-bar-meta)]">
-          <input
-            type="checkbox"
+          <Checkbox
             checked={allowDirs}
             onChange={(e) => setAllowDirs(e.target.checked)}
-            className="size-3.5 accent-[var(--accent-cta-bg)]"
           />
           <span>{t('ghostGrant.confirm.allowDirs')}</span>
         </label>

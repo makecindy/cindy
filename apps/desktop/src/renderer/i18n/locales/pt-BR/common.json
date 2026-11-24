@@ -2256,6 +2256,13 @@
       }
     },
     "appearance": {
+      "chatLayout": {
+        "label": "Layout do chat",
+        "standard": "Padrão",
+        "wide": "Amplo",
+        "width": "Largura do conteúdo",
+        "hint": "Usa o espaço entre as margens do chat. Painéis estreitos se ajustam automaticamente."
+      },
       "title": "Aparência",
       "modeLabel": "Modo de aparência",
       "appIcon": {
@@ -2501,6 +2508,10 @@
       }
     },
     "windowBehavior": {
+      "trayCard": {
+        "label": "Cartão da bandeja do sistema",
+        "hint": "Passe o mouse sobre o ícone da Cindy na bandeja para ver a cota restante e as tarefas não lidas."
+      },
       "menubar": {
         "label": "Mostrar uso restante na barra de menus",
         "hint": "Adiciona um ícone do Cindy à barra de menus do macOS. Clique nele para ver o que resta nas suas assinaturas, seu saldo do Cindy e o uso de hoje."
@@ -2846,7 +2857,8 @@
         "errorBusy": "Já há um envio em andamento. Aguarde",
         "errorFailed": "Falha ao enviar logs. Verifique sua conexão e tente novamente",
         "unavailableNotConfigured": "O envio de logs não está configurado nesta compilação.",
-        "unavailableNoConsent": "Você precisa aceitar a Política de Privacidade primeiro."
+        "unavailableNoConsent": "Você precisa aceitar a Política de Privacidade primeiro.",
+        "consentPrompt": "Antes de enviar, leia a <policy>Política de Privacidade</policy> e selecione <accept>Aceitar</accept>."
       },
       "openLogsDirError": "Não foi possível abrir o diretório de logs",
       "autoUpdateLabel": "Instalar atualizações durante a inatividade",
@@ -3448,6 +3460,7 @@
       "description": "Traga sessões de outras ferramentas de programação com IA para o Cindy e continue trabalhando. O Cindy apenas lê os originais e nunca os altera.",
       "rescan": "Buscar novamente",
       "allSources": "Todas as origens",
+      "sourceFilterAria": "Origem",
       "search": "Buscar sessões ou pastas",
       "projectFilter": "Somente {{name}}",
       "clearProjectFilter": "Mostrar todos os projetos",
@@ -5240,6 +5253,7 @@
       "formHint": "O ID de usuário é numérico; envie uma mensagem direta ao @userinfobot para consultar seu ID.",
       "connect": "Conectar",
       "connectingAction": "Conectando…",
+      "connectTimedOut": "O tempo de conexão esgotou. Tente novamente.",
       "errorCode": {
         "invalid-token": "O token do bot é inválido ou foi redefinido — insira-o novamente",
         "provider-api": "O Telegram retornou um erro — tente novamente em instantes",
@@ -8280,6 +8294,7 @@
           "official": "Oficial",
           "community": "Comunidade"
         },
+        "communityDisclaimer": "Este plugin é desenvolvido e mantido por membros da comunidade. A Cindy revisou esta versão, mas não pode garantir a segurança do plugin em todas as situações de uso.",
         "publisherDescription": {
           "official": "Publicado e mantido pela Cindy",
           "community": "Publicado e mantido por desenvolvedores da comunidade",
@@ -8395,7 +8410,7 @@
             "authTitle": "Repositórios privados",
             "authBody": "A autenticação depende inteiramente da configuração Git do seu sistema — o Cindy nunca armazena credenciais Git. SSH: é preciso configurar uma chave funcional nesta máquina; se a organização exigir SAML SSO, autorize a chave para essa organização em Configure SSO nas configurações de chaves SSH do GitHub. HTTPS: use um Personal Access Token armazenado pelo auxiliar de credenciais do sistema.",
             "rulesTitle": "Regras de instalação",
-            "rulesBody": "Os IDs dos plugins são globalmente únicos, por ordem de chegada — conflitos com plugins instalados são indicados explicitamente. Plugins cujos IDs usam os prefixos oficiais reservados ({{reservedGhostIdPrefixes}}) não podem ser instalados arrastando um pacote, escolhendo um arquivo ou usando um marketplace de plugins personalizado. As permissões declaradas são exibidas na página de detalhes; clicar em Instalar conclui a instalação e ativa o plugin sem outra caixa de confirmação de permissões.",
+            "rulesBody": "Os IDs dos plugins são globalmente únicos, por ordem de chegada — conflitos com plugins instalados são indicados explicitamente. Plugins cujos IDs usam os prefixos oficiais reservados ({{reservedGhostIdPrefixes}}) não podem ser instalados arrastando um pacote, escolhendo um arquivo ou usando um marketplace de plugins personalizado. As permissões declaradas são exibidas na página de detalhes. Na primeira instalação manual de um plugin, Cindy pede que você confirme as permissões solicitadas. O plugin é ativado automaticamente após a instalação.",
             "copy": "Copiar guia",
             "copied": "Guia copiado para a área de transferência.",
             "copyFailed": "Falha ao copiar. Tente novamente."
@@ -8512,6 +8527,8 @@
         "installMeta": "Versão {{version}} · {{source}}",
         "updateMeta": "Versão {{from}} → {{to}} · {{source}}",
         "installDescription": "Nada é instalado até você confirmar. O plugin é ativado logo após a instalação, e você pode desativá-lo ou desinstalá-lo a qualquer momento na página Plugins.",
+        "customMarketSourceNotice": "Confirme que você confia nesse marketplace e confira as permissões solicitadas pelo plugin.",
+        "localFileSourceNotice": "Antes de continuar a instalação, confira se o arquivo veio de uma fonte confiável.",
         "updateDescription": "A atualização só começa após sua confirmação. A versão atual continua disponível até lá.",
         "grantsTitle": "Após a instalação, ele terá:",
         "noPermissions": "Este plugin não declara permissões adicionais.",
@@ -12863,6 +12880,7 @@
           "conflict": "Este bot já está conectado neste computador, em Configurações → Bots de mensagens ou em outro amigo.",
           "botUnavailable": "{{name}} está indisponível no momento. Tente novamente quando voltar.",
           "connectFailed": "Não foi possível conectar: {{reason}}",
+          "connectTimedOut": "O tempo de conexão esgotou. Tente novamente.",
           "failed": "Não foi possível concluir. Tente novamente mais tarde.",
           "personalBotGone": "Este bot não está mais configurado em Configurações → Bots de mensagens. Insira as credenciais dele."
         },
@@ -15637,6 +15655,7 @@
       "prCheck_rate-limit": "O GitHub limitou as solicitações de {{device}}. Falhas consecutivas: {{failures}}. Próxima verificação automática: {{retry}}.",
       "prCheck_unknown": "A verificação do PR falhou em {{device}}. Consulte os detalhes da execução. Falhas consecutivas: {{failures}}. Próxima verificação automática: {{retry}}.",
       "precheck": "As verificações automáticas estão temporariamente bloqueadas.",
+      "preRunBlocked": "A verificação prévia falhou. Esta execução não foi iniciada.",
       "rateLimited": "As verificações automáticas estão temporariamente bloqueadas por um limite de frequência de solicitações.",
       "pluginMissing": "As verificações automáticas estão bloqueadas: o plugin {{name}} não está instalado. Elas serão retomadas após a instalação.",
       "pluginMissingUnnamed": "As verificações automáticas estão bloqueadas: um plugin necessário não está instalado. Elas serão retomadas após a instalação.",
@@ -16304,6 +16323,7 @@
       "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "Não foi possível compactar o contexto ao trocar de modelo porque esta conexão não permite usar o modelo anterior.",
       "MODEL_SELECTION_UNAVAILABLE": "O modelo selecionado não está mais disponível no provedor. Verifique a conexão em Configurações ou escolha outro modelo disponível.",
       "MODEL_CATALOG_UNCONFIRMED": "Não foi possível confirmar a lista de modelos. O modelo selecionado foi mantido. Atualize a lista de modelos e tente novamente.",
+      "SNAPSHOT_DISPATCH_INTENT_TIMEOUT": "Mensagem não enviada. O Cindy não conseguiu confirmar o registro de segurança a tempo.",
       "HARNESS_SWITCH_NOT_READY": "A troca de Harness não está pronta. Verifique os detalhes do erro e tente novamente quando o Harness estiver pronto.",
       "DEVICE_LINK_BUSY": "O computador remoto está ocupado. Tente novamente em breve.",
       "REMOTE_DAEMON_CLOSED": "A conexão remota caiu, possivelmente durante uma atualização. Este turno foi encerrado. Envie a mensagem novamente.",
@@ -16615,7 +16635,13 @@
       "open": "Abrir a tarefa “{{title}}”",
       "untitled": "Tarefa sem título",
       "startedOne": "Iniciada",
-      "handedToOne": "Repassada a"
+      "handedToOne": "Repassada a",
+      "status": {
+        "running": "Em execução",
+        "needsAction": "Aguardando você",
+        "error": "Erro",
+        "idle": "Inativa"
+      }
     },
     "botTaskLetter": {
       "replied": "respondeu",
@@ -17862,15 +17888,15 @@
   "scheduler": {
     "prTrigger": {
       "fallback": "As verificações agendadas continuam sem notificações do GitHub App.",
-      "label": "PR",
-      "url": "URL da pull request",
+      "label": "PR / MR",
+      "url": "URL de PR ou MR",
       "condition": "Executar quando",
-      "any": "Atividade na PR",
+      "any": "Atividade",
       "merged": "Mesclagem",
       "review": "Atividade de revisão",
       "ci": "Alterações na CI",
       "timed": "Verificar também periodicamente",
-      "invalid": "Insira a URL de uma pull request do GitHub."
+      "invalid": "Insira a URL de uma PR do GitHub ou MR do GitLab."
     },
     "presentation": {
       "status": {

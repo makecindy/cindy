@@ -84,6 +84,7 @@ import { MANAGED_LLAMACPP_PROVIDER_ID, supportsLlamaCppMillionContext, llamaCppM
 import { modelBrand } from './modelManagementPresentation';
 import { ModelPriceOverrideDialog } from './ModelPriceOverrideDialog';
 import type { UnionModelRow } from './UnifiedModelList';
+import { ResetGroupButton } from '@/components/ui/reset-buttons';
 
 const AGENT_LABEL: Record<AgentKind, string> = {
   'claude-code': 'Claude Code',
@@ -919,20 +920,14 @@ export function ModelAdvancedDrawer({
                         );
                       })}
                       {visibilityCustomized && !paymentRequired && selectionAvailable && (
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          tone="quiet"
-                          compact
-                          type="button"
+                        <ResetGroupButton
                           onClick={async () => {
                             if (!await resetModelVisibilities(provider.id, visibilityTargets))
                               toast.error(t('settings.providers.models.visibilityWriteFailed'));
                           }}
                           className="mt-2"
-                        >
-                          {t('settings.providers.models.advanced.restoreDefault')}
-                        </Button>
+                          label={t('settings.providers.models.advanced.restoreDefault')}
+                        />
                       )}
                     </Section>
                   )}
@@ -974,12 +969,7 @@ export function ModelAdvancedDrawer({
                         (a) =>
                           rememberedEffort(a, row.byAgent[a]!.id) !== undefined,
                       ) && (
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          tone="quiet"
-                          compact
-                          type="button"
+                        <ResetGroupButton
                           disabled={paymentRequired}
                           onClick={() => {
                             if (groupRow?.aliasRows) {
@@ -991,9 +981,8 @@ export function ModelAdvancedDrawer({
                               clearProviderModelEffort(a, provider.id, row.byAgent[a]!.id);
                           }}
                           className="mt-2"
-                        >
-                          {t('settings.providers.models.advanced.restoreDefault')}
-                        </Button>
+                          label={t('settings.providers.models.advanced.restoreDefault')}
+                        />
                       )}
                     </Section>
                   )}
@@ -1065,18 +1054,12 @@ export function ModelAdvancedDrawer({
                               })}
                             </span>
                             {ctx.isCustomized && (
-                              <Button data-settings-search-action="Restore the default context limit for this model"
-                                variant="secondary"
-                                size="sm"
-                                tone="quiet"
-                                compact
-                                type="button"
+                              <ResetGroupButton data-settings-search-action="Restore the default context limit for this model"
                                 onClick={resetCtx}
                                 disabled={paymentRequired || ctx.loading || localConfigurationBlocked}
                                 className="shrink-0"
-                              >
-                                {t('settings.providers.models.advanced.restoreDefault')}
-                              </Button>
+                                label={t('settings.providers.models.advanced.restoreDefault')}
+                              />
                             )}
                           </div>
                           {(ctxInvalid || ctx.error || ctx.mixed) && (
