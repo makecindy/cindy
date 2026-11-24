@@ -143,6 +143,17 @@ describe('RunHistoryCard 前置检查结果', () => {
     expect(screen.queryByText('chat.unreadFailedScheduleBanner.text')).toBeNull();
   });
 
+  // #12544, unit/DOM: an immediate busy skip needs its own recovery copy.
+  it('shows busy-session recovery for a prompt blocked before dispatch', () => {
+    renderRun({ id: 'busy-before-dispatch', scheduleId: 'schedule-1', sessionId: 'busy-task',
+      firedAt: 1, finishedAt: 2, status: 'skipped', readAt: 2,
+      resultText: '[SESSION_BUSY_BEFORE_DISPATCH] Target session was busy. The prompt was not sent.',
+    });
+    expect(screen.getByText('scheduler.runs.sessionBusyRecovery')).toBeTruthy();
+    expect(screen.queryByText('scheduler.runs.queueWaitTimeoutRecovery')).toBeNull();
+    expect(screen.queryByText(/SESSION_BUSY_BEFORE_DISPATCH/)).toBeNull();
+  });
+
   // A failed model selection is persisted in errorMsg, not an agent message.
   // Verify this separate consumer also hides technical text behind details.
   it.each(['', 'scheduled task auto-resume failed: '])('shows switch guidance with expandable diagnostics in failed run history (%s)', (prefix) => {

@@ -18090,6 +18090,7 @@
     },
     "runs": {
       "queueWaitTimeoutRecovery": "O tempo de espera expirou antes de a mensagem ser enviada. Quando a sessão de destino estiver livre, escolhe {{action}} para a executar.",
+      "sessionBusyRecovery": "A sessão de destino está ocupada e o pedido não foi enviado. Quando estiver livre, selecione «{{action}}».",
       "status": {
         "running": "Em execução",
         "success": "Sucesso",

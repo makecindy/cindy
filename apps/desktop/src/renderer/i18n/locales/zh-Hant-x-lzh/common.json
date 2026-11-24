@@ -17848,6 +17848,7 @@
     },
     "runs": {
       "queueWaitTimeoutRecovery": "排候逾時，提示詞未發。待所繫任務閒，按「{{action}}」補行。",
+      "sessionBusyRecovery": "所繫差事方行，提示詞未發。俟其閒，可點「{{action}}」復行。",
       "status": {
         "running": "方行",
         "success": "成",

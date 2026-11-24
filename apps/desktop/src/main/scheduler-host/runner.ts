@@ -1143,8 +1143,10 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // A scheduled message restores its ordinary target just like user input.
     // Do this before hooks/model selection, while keeping deleted-target behavior
     // and service-owned Bot lifecycle separate.
+    const target = schedule.source !== 'bot' && schedule.targetSessionId
+      ? await this.runtime.getSessionRowSnapshot(schedule.targetSessionId)
+      : null;
     if (schedule.source !== 'bot' && schedule.targetSessionId) {
-      const target = await this.runtime.getSessionRowSnapshot(schedule.targetSessionId);
       if (primaryHostTargetIsRemote(schedule, target)) return skipPrimaryHostRun(ctx, 'The persistent task moved off the automation host.', schedule.targetSessionId);
       if (target && !schedule.persistentSession && (target.status === 'deleted'
         || (target.status === 'archived' && this.runtime.isManagedScheduledTarget(target)))) {
@@ -1327,6 +1329,18 @@ export class MakerScheduleRunner implements ScheduleRunner {
             }
           : undefined;
       if (selection && this.deps.schedulerQueue?.isSessionBusy(sessionId)) {
+        // Only classify a confirmed local turn blocked before model selection and enqueue.
+        if (
+          ctx.timed && !schedule.recurring && !this.canDefer(schedule, ctx)
+          && target?.status === 'active' && !target.agentDeviceId && !target.remoteHostId
+          && !selection.agentDeviceId && this.runtime.isSessionInTurn(sessionId)
+        ) {
+          return {
+            sessionId,
+            skipped: true,
+            resultText: '[SESSION_BUSY_BEFORE_DISPATCH] Target session was busy. The prompt was not sent.',
+          };
+        }
         return this.failOrDeferSessionRunning(schedule, ctx, sessionId, true);
       }
       if (selection && !this.deps.acquirePendingAgentSwitch) {

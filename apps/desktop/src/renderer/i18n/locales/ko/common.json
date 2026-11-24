@@ -17848,6 +17848,7 @@
     },
     "runs": {
       "queueWaitTimeoutRecovery": "대기 시간이 초과되어 프롬프트가 전송되지 않았습니다. 대상 세션이 유휴 상태가 되면 {{action}}을 선택하여 실행하세요.",
+      "sessionBusyRecovery": "대상 세션이 실행 중이라 프롬프트를 보내지 않았습니다. 실행이 끝나면 ‘{{action}}’을 선택하세요.",
       "status": {
         "running": "실행 중",
         "success": "성공",

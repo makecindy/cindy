@@ -18090,6 +18090,7 @@
     },
     "runs": {
       "queueWaitTimeoutRecovery": "L’attente a expiré avant l’envoi du message. Une fois la session cible libre, choisissez {{action}} pour l’exécuter.",
+      "sessionBusyRecovery": "La session cible est occupée et l’invite n’a pas été envoyée. Sélectionnez « {{action}} » quand la session est libre.",
       "status": {
         "running": "En cours",
         "success": "Réussie",

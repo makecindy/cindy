@@ -408,7 +408,11 @@ export function RunHistoryCard({
               {t('scheduler.runs.queueWaitTimeoutRecovery', { action: t('scheduler.button.runNow') })}
             </span>
           )}
-          {run.resultText}
+          {run.resultText.startsWith('[SESSION_BUSY_BEFORE_DISPATCH] ') ? (
+            <span className="font-sans">
+              {t('scheduler.runs.sessionBusyRecovery', { action: t('scheduler.button.runNow') })}
+            </span>
+          ) : run.resultText}
         </p>
       )}
     </article>

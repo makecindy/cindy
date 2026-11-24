@@ -2636,6 +2636,43 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     expect(queue.enqueueCalls).toHaveLength(0);
   });
 
+  // #12544, unit: clock-fired one-shot with an explicit model and a live local
+  // turn must retain a skipped result without switching models or enqueuing.
+  it('records an undispatched skip for a timed one-shot blocked by a local turn', async () => {
+    mocks.isSessionInTurn.mockReturnValue(true);
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    Object.assign(h.session, { agentKind: 'codex' });
+    const queue = createQueueHarness({ busy: true });
+    const acquirePendingAgentSwitch = vi.fn(async () => {
+      throw new Error('must not switch before the turn finishes');
+    });
+    const { runner } = createRunnerHarness(h.session, queue.deps, { acquirePendingAgentSwitch });
+
+    await expect(runner.fire(
+      heartbeatSchedule({ recurring: false, agentKind: 'codex', modelAgentKind: 'codex', model: 'gpt-5.4' }),
+      { ...createFireContext(), timed: true },
+    )).resolves.toMatchObject({
+      sessionId: SESSION_ID,
+      skipped: true,
+      resultText: expect.stringContaining('[SESSION_BUSY_BEFORE_DISPATCH]'),
+    });
+    expect(acquirePendingAgentSwitch).not.toHaveBeenCalled();
+    expect(queue.enqueueCalls).toHaveLength(0);
+  });
+
+  it('keeps the original failure when queue busy does not confirm an active turn', async () => {
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    Object.assign(h.session, { agentKind: 'codex' });
+    const queue = createQueueHarness({ busy: true });
+    const { runner } = createRunnerHarness(h.session, queue.deps);
+
+    await expect(runner.fire(
+      heartbeatSchedule({ recurring: false, agentKind: 'codex', modelAgentKind: 'codex', model: 'gpt-5.4' }),
+      { ...createFireContext(), timed: true },
+    )).rejects.toThrow('SESSION_RUNNING');
+    expect(queue.enqueueCalls).toHaveLength(0);
+  });
+
   it('busy 心跳跨 dynamic identity 时不入旧 thread 队列，而是顺延到安全重建点', async () => {
     const [routeA, routeB] = queuedImageGenerationRoutes;
     setCodexAppliedCustomProviderRoutes(queuedImageGenerationRoutes);

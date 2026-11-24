@@ -17848,6 +17848,7 @@
     },
     "runs": {
       "queueWaitTimeoutRecovery": "待機時間を超えたため、プロンプトは送信されませんでした。対象のセッションが空いたら「{{action}}」で実行できます。",
+      "sessionBusyRecovery": "対象のセッションが実行中のため、プロンプトは送信されませんでした。実行が終わったら「{{action}}」を選択してください。",
       "status": {
         "running": "実行中",
         "success": "成功",

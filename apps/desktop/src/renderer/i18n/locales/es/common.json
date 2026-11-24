@@ -18090,6 +18090,7 @@
     },
     "runs": {
       "queueWaitTimeoutRecovery": "La espera en cola venció antes de enviar el mensaje. Cuando la sesión de destino esté libre, elige {{action}} para ejecutarlo.",
+      "sessionBusyRecovery": "La sesión de destino está ocupada y la instrucción no se envió. Cuando quede libre, selecciona «{{action}}».",
       "status": {
         "running": "En ejecución",
         "success": "Éxito",

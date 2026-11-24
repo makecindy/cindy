@@ -17922,6 +17922,7 @@
     },
     "runs": {
       "queueWaitTimeoutRecovery": "Queue wait expired before the prompt was sent. When the target session is idle, choose {{action}} to run it.",
+      "sessionBusyRecovery": "The target session is busy, so the prompt wasn’t sent. Choose {{action}} when the session is idle.",
       "status": {
         "running": "Running",
         "success": "Success",

@@ -17848,6 +17848,7 @@
     },
     "runs": {
       "queueWaitTimeoutRecovery": "排隊等待逾時，提示詞未傳送。目標任務閒置後可點擊「{{action}}」補跑。",
+      "sessionBusyRecovery": "目標任務正忙，提示詞未傳送。目標任務空閒後可點擊「{{action}}」補跑。",
       "status": {
         "running": "執行中",
         "success": "成功",
