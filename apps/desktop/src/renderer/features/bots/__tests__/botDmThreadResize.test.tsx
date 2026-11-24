@@ -58,6 +58,7 @@ vi.mock('../BotGroupTimelineItem', () => ({
 import { BotDmThreadsValue, useBotDmThreads } from '../botDmThreadsContext';
 import { BotDmThreadHost } from '../BotDmThreadHost';
 import { TodoListCard } from '@/components/chat/TodoListCard';
+import { isForegroundComposerEscapeLayer, registerComposerEscapeLayer } from '@/components/chat/composerEscapeLayers';
 
 /** The production entry the header's 创建话题 button uses. */
 function OpenThreadButton({ rootClientId }: { rootClientId: string }) {
@@ -160,6 +161,37 @@ describe('private topic panel resize', () => {
     expect(plan.getAttribute('aria-expanded')).toBe('true');
     fireEvent.keyDown(plan, { key: 'Escape' });
     expect(plan.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  // A rail opened before the topic uses the production Escape ownership registry.
+  it('gives a focused private topic Escape before an older sidebar rail', async () => {
+    render(
+      <BotDmThreadHost enabled bot={{ id: 'bot', name: 'Cindy' } as never} rootSessionId="chat"
+        mentions={[]}>
+        <button type="button">sidebar rail</button>
+        <OpenThreadButton rootClientId="c1" />
+      </BotDmThreadHost>,
+    );
+    const rail = screen.getByRole('button', { name: 'sidebar rail' });
+    const unregister = registerComposerEscapeLayer(rail);
+    const railEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && isForegroundComposerEscapeLayer(rail)) event.preventDefault();
+    };
+    window.addEventListener('keydown', railEscape);
+    try {
+      fireEvent.click(screen.getByRole('button', { name: 'open topic' }), { detail: 0 });
+      const panel = await screen.findByRole('complementary');
+      rail.focus();
+      expect(isForegroundComposerEscapeLayer(rail)).toBe(true);
+      const close = within(panel).getByRole('button', { name: 'bots.close' });
+      close.focus();
+      fireEvent.keyDown(close, { key: 'Escape' });
+      expect(screen.queryByRole('complementary')).toBeNull();
+      expect(isForegroundComposerEscapeLayer(rail)).toBe(true);
+    } finally {
+      window.removeEventListener('keydown', railEscape);
+      unregister();
+    }
   });
 
   it('sizes the panel with the arrow keys on the same handle', async () => {

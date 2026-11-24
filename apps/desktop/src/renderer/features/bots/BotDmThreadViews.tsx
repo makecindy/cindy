@@ -5,6 +5,7 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { isForegroundComposerEscapeLayer, registerComposerEscapeLayer } from '@/components/chat/composerEscapeLayers';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import { makerChatStore } from '@/lib/makerChatStore';
@@ -74,9 +75,15 @@ export function BotDmThreadPanel({ bot, rootSessionId, rootClientId, state, ment
   }, [lastAssistantAt, threadSessionId]);
 
   useEffect(() => {
+    const panel = panelRef.current;
+    if (panel) return registerComposerEscapeLayer(panel, () => panel.contains(document.activeElement));
+  }, []);
+
+  useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
-      if (!panelRef.current?.contains(document.activeElement)) return;
+      const panel = panelRef.current;
+      if (!panel || !isForegroundComposerEscapeLayer(panel)) return;
       // The task view's own overlays (menus, approvals) close first.
       if (document.activeElement?.closest('[role="dialog"],[role="menu"]')) return;
       event.preventDefault();
