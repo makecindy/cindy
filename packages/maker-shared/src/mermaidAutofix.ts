@@ -106,7 +106,7 @@ function indexLabelEnds(line: string) {
 function replaceArrowsOutsideLabels(line: string): string {
   if (line.search(UNICODE_ARROW_RE) === -1) return line;
   // 先跳过完整引号段或节点形状，再继续同一行的边。未闭合形状沿用普通扫描。
-  const protectedStarts = /"[^"]*(?:"|$)|(?<!-)--+>|(?<!=)==+>|-\.+->|(?<=[\p{L}\p{N}\p{M}_.!,?#$%*+/:&'`\\-])(?:\({2,3}|\(\[|\[[[(\/\\]|\{\{|>)/gu;
+  const protectedStarts = /"[^"]*(?:"|$)|(?<!-)--+>|(?<!=)==+>|(?<!\.)-?\.+->|(?<=[\p{L}\p{N}\p{M}_.!,?#$%*+/:&'`\\-])(?:\({2,3}|\(\[|\[[[(\/\\]|\{\{|>)/gu;
   let result = '';
   let start = 0;
   let labelEnds: ReturnType<typeof indexLabelEnds> | undefined;

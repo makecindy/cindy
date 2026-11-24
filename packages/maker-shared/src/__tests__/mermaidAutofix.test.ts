@@ -102,6 +102,13 @@ describe('repairMermaidSource', () => {
     );
   });
 
+  it.each(['A .-> B', 'A -. label .-> B'])('保留点线边和非对称节点，修复中间的 Unicode 连线 (%s)', (edge) => {
+    const node = 'C>draft → final]';
+    expect(repairMermaidSource(`flowchart TD\n${edge} → ${node}`)).toBe(
+      `flowchart TD\n${edge} --> ${node}`,
+    );
+  });
+
   // #7687 的 unit 回归。既有用例只覆盖符号形状；@{...} 的标签同样需要保留箭头，
   // 连线仍须修复。最小失败输入是 A@{ shape: stadium, label: start → done } → B。
   it.each([
