@@ -10,6 +10,7 @@ import { acceptTaskActionRecoveryCopy, assertTaskActionCurrent, bindTaskActionIn
 import { isBotGroupClientId } from '../../shared/botGroupChat.js';
 import { BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON } from './botCandidateRecovery.js';
 import { BotCapabilityRefreshDeferredError } from './botCompactRuntimeRefresh.js';
+import { RemoteAccountReadUnavailable } from '../subscription-accounts/remotePreflight.js';
 import { SchedulerQueuedPreparationError } from './schedulerQueuedPreparation.js';
 import { SnapshotOperationDeadlineError } from '../utils/operationBudget.js';
 import { ProviderGroupUsageLimitError } from '../provider-group/failurePolicy.js';
@@ -1407,6 +1408,8 @@ export class AgentInputCoordinator {
   }
 
   private readonly states = new Map<string, SessionInputState>();
+  private readonly remoteAccountWaits = new WeakMap<NonNullable<AgentInputRecovery>, string>();
+  private readonly remoteAccountFallbackUsed = new WeakSet<AgentInputQueuedMessage>();
   private readonly botCapabilityRefreshWaits = new WeakMap<AgentInputQueuedMessage, {
     waiting: boolean;
     timer: ReturnType<typeof setTimeout> | null;
@@ -2367,8 +2370,10 @@ export class AgentInputCoordinator {
     //    continue 项不入队,避免 A 与 continue 双发。
     // 自动来源(scheduler / orca)不代表用户表态,维持「不清」语义。暂停队列的
     // Continue 则由 resume 原子清除与当前队首匹配的 recovery 后重发原消息。
-    if (state.recovery?.kind === 'queue-head' && !automaticOrigin) {
-      const abandonedClientId = state.recovery.clientId;
+    const queueHeadRecovery = state.recovery;
+    if (queueHeadRecovery?.kind === 'queue-head' && !automaticOrigin &&
+      (!this.remoteAccountWaits.has(queueHeadRecovery) || isUiContinuationItem(item))) {
+      const abandonedClientId = queueHeadRecovery.clientId;
       if (isUiContinuationItem(item)) {
         state.error = null;
         clearErrorProjectionSignals(state);
@@ -3665,10 +3670,16 @@ export class AgentInputCoordinator {
    *  - `superseded`：目标已消失（用户自己接手 / 清了会话）——他已经在处理，别再弹横幅。
    *  - `no-progress`：保留给无法构造安全重试项的异常路径（例如 image-only fallback）。
    */
-  async autoRetryLastError(sessionId: string, attemptToken: number): Promise<AutoRetryOutcome> {
+  async autoRetryLastError(
+    sessionId: string,
+    attemptToken: number,
+    /** Added to the recorded continuation, e.g. the model group's source switch (model-groups.md §4.6). */
+    resumeExtra?: Pick<AutoResumeInfo, 'agentSwitch'>,
+  ): Promise<AutoRetryOutcome> {
     const { outcome } = await this.performRetryLastError(sessionId, {
       auto: true,
       attemptToken,
+      ...(resumeExtra ? { resumeExtra } : {}),
     });
     return outcome;
   }
@@ -3697,6 +3708,7 @@ export class AgentInputCoordinator {
       expectedSwitchRevision?: number;
       /** Quota/group continuation shares the wait token, but retains its actual recovery owner. */
       usageLimitWait?: { token: number; info: AutoResumeInfo; recoveryOwner: 'quota-reset' | 'provider-group' };
+      resumeExtra?: Pick<AutoResumeInfo, 'agentSwitch'>;
     },
   ): Promise<{ projection: AgentInputProjection; outcome: AutoRetryOutcome }> {
     const state = this.getState(sessionId);
@@ -3746,7 +3758,7 @@ export class AgentInputCoordinator {
     // summary to append to an otherwise successful continuation.
     // 额度重置后的续跑记录带上当初的限额原文，作为活动行展开详情里的原因。
     const automaticResumeInfo = opts?.auto
-      ? previousAutoResumeInfo
+      ? previousAutoResumeInfo && opts.resumeExtra ? { ...previousAutoResumeInfo, ...opts.resumeExtra } : previousAutoResumeInfo
       : usageWait
         ? { ...usageWait.info, ...(state.error && !providerRestart ? { error: state.error } : {}) }
         : null;
@@ -4390,6 +4402,9 @@ export class AgentInputCoordinator {
     next.splice(insertIndex, 0, entry);
     const previousHead = state.pendingQueue[0];
     state.pendingQueue = next;
+    if (this.clearDisplacedRemoteAccountWait(state)) {
+      this.scheduleDrain(sessionId, 'remote-account-head-moved');
+    }
     if (previousHead !== next[0] && this.botCapabilityRefreshWaits.has(previousHead)) {
       this.scheduleDrain(sessionId, 'bot-capability-refresh-head-moved');
     }
@@ -5196,7 +5211,13 @@ export class AgentInputCoordinator {
   }
 
   private toProjection(sessionId: string, state: SessionInputState): AgentInputProjection {
-    const pendingQueue = state.pendingQueue.map((item) => this.toProjectedItem(item));
+    const wait = state.recovery?.kind === 'queue-head' && this.remoteAccountWaits.has(state.recovery)
+      ? state.recovery.clientId : null;
+    const pendingQueue = state.pendingQueue.map((item) => {
+      const projected = this.toProjectedItem(item);
+      if (wait === item.clientId) projected.waitingForRemoteAccount = true;
+      return projected;
+    });
     // 供应商组正在换电脑：错误先不呈现(没有红横幅、没有限额倒计时)，聊天流里只有「正在换一台电脑继续」。
     const groupSwitchHeld = isProviderGroupSwitchHoldLive(state);
     const error = groupSwitchHeld || (state.autoResumePending?.reason === 'orca-report-preparation'
@@ -5268,6 +5289,7 @@ export class AgentInputCoordinator {
     Reflect.deleteProperty(projected, TELEGRAM_QUESTION_ORIGIN);
     delete projected[HOST_ONLY_AGENT_PREFIX];
     delete projected.hostAcceptedAtMs;
+    delete projected.waitingForRemoteAccount;
     delete projected.orcaReportDelivery;
     delete projected.orcaReportDeliveryFence;
     delete projected.mergedDeliveryClientIds;
@@ -6215,6 +6237,19 @@ export class AgentInputCoordinator {
         clearErrorProjectionSignals(latest);
         latest.stickyError = null;
         latest.recovery = { kind: 'queue-head', clientId: head.clientId };
+        if (err instanceof RemoteAccountReadUnavailable && this.manualUiInputs.has(head) && !isAutomaticOriginItem(head)
+          && !head.sourcePlugin && !head.botTaskCoordination) {
+          const recovery = latest.recovery;
+          this.remoteAccountWaits.set(recovery, err.deviceId);
+          latest.error = null;
+          if (!this.remoteAccountFallbackUsed.has(head)) {
+            this.remoteAccountFallbackUsed.add(head);
+            const timer = setTimeout(() => this.resumeRemoteAccountWait(sessionId, recovery), 10_000);
+            timer.unref?.();
+          }
+          this.emit(sessionId);
+          return;
+        }
         log.warn('pre-accept send failed; restored queue head', {
           sessionId,
           clientId: head.clientId,
@@ -6640,6 +6675,30 @@ export class AgentInputCoordinator {
     }
   }
 
+  onRemoteAccountDeviceReady(deviceId: string): void {
+    for (const [sessionId, state] of this.states) {
+      const recovery = state.recovery;
+      if (recovery && this.remoteAccountWaits.get(recovery) === deviceId) this.resumeRemoteAccountWait(sessionId, recovery);
+    }
+  }
+
+  private resumeRemoteAccountWait(sessionId: string, recovery: NonNullable<AgentInputRecovery>): void {
+    const state = this.states.get(sessionId);
+    if (state?.recovery !== recovery || recovery.kind !== 'queue-head' ||
+      state.pendingQueue[0]?.clientId !== recovery.clientId) return;
+    state.recovery = null;
+    this.scheduleDrain(sessionId, 'remote-account-recheck');
+    this.emit(sessionId);
+  }
+
+  private clearDisplacedRemoteAccountWait(state: SessionInputState): boolean {
+    const recovery = state.recovery;
+    if (recovery?.kind !== 'queue-head' || !this.remoteAccountWaits.has(recovery) ||
+      state.pendingQueue[0]?.clientId === recovery.clientId) return false;
+    state.recovery = null;
+    return true;
+  }
+
   onBotCapabilityRefreshReady(sessionId: string): void {
     const state = this.states.get(sessionId);
     if (!state) return;
@@ -6723,6 +6782,7 @@ export class AgentInputCoordinator {
   private prependQueueHeadIfMissing(state: SessionInputState, item: AgentInputQueuedMessage): void {
     if (state.pendingQueue.some((q) => q.clientId === item.clientId)) return;
     state.pendingQueue = [item, ...state.pendingQueue];
+    this.clearDisplacedRemoteAccountWait(state);
     this.prependPendingCompactWaitClientId(state, item.clientId);
   }
 

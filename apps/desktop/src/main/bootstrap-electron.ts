@@ -475,7 +475,7 @@ import {
 } from './filePathPolicy';
 import { readFileThumbnail } from './fileThumbnail';
 import { createOpenWithHandlers, decodeRegOutput, parseChcpCodepage } from './openWithApps';
-import { resolveShellOpenPathTarget } from './shellOpenPath';
+import { resolveLocalOriginalForPluginOpen, resolveShellOpenPathTarget } from './shellOpenPath';
 import { posixDrivePathToWin32 } from '../shared/pathText';
 import { handleOpenFileInBrowser } from './openFileInBrowser';
 import { createWindowsFileUrlOpener } from './windowsFileUrlOpener';
@@ -936,6 +936,7 @@ import {
   createLocalProjectFromTaskHandlers,
   createProjectsRootSettingsHandlers,
 } from './createProjectFromTaskHost.js';
+import { createTaskExportDirectoryHandlers } from './task-export-settings.js';
 import { cleanupActiveReviewArtifactSnapshots } from './reviewer/reviewArtifactSnapshot.js';
 import { MAKER_INVOKE as MAKER_IPC_INVOKE, MAKER_PUSH, MAKER_SEND } from './maker-ipc/channels.js';
 import {
@@ -1282,6 +1283,7 @@ import {
   diagnoseScheduleHookPluginForActiveOwner,
   getLiveScreenHost,
   pluginLiveScreenViews,
+  openFileWithPluginFileOpener,
 } from './cindy-brain/index.js';
 import { createCodexImageAuthAcquirer, setCodexImageAuthBinding } from './cindy-brain/codexImageAuthBinding.js';
 import { configureMailAttachmentHost } from './cindy-brain/mailAttachmentUpload.js';
@@ -8568,12 +8570,26 @@ const registerIpcHandlers = () => {
     ): Promise<{ success: boolean; error?: string }> => {
       try {
         assertTrustedAppRendererEvent(event);
+        const { generation } = getActiveAppSession();
+        const requestIsCurrent = () =>
+          !isAppSessionBoundaryPending() && getActiveAppSession().generation === generation;
+        if (!requestIsCurrent()) return { success: false, error: 'App session changed' };
         const filePath = resolveShellOpenPathTarget(filePathOrUrl);
         if (filePath === null) {
           return { success: false, error: 'Path must be absolute' };
         }
         if (!isPathAllowed(filePath)) {
           return { success: false, error: '不允许访问该路径' };
+        }
+        // 先问声明了该扩展名的插件(fileOpener);只交本机原件,插件没处理就照常交给系统。
+        const pluginPath = await resolveLocalOriginalForPluginOpen(
+          filePathOrUrl, filePath, [getRemoteFileCacheRoot(), getChatAttachmentCacheRoot()], isPathAllowed,
+        );
+        if (!requestIsCurrent()) return { success: false, error: 'App session changed' };
+        if (pluginPath) {
+          const routed = await openFileWithPluginFileOpener(pluginPath, requestIsCurrent);
+          if (!requestIsCurrent()) return { success: false, error: 'App session changed' };
+          if (routed.handled) return { success: true };
         }
         // shell.openPath returns '' on success, error string on failure.
         const errMsg = await shell.openPath(filePath);
@@ -9695,6 +9711,33 @@ const registerIpcHandlers = () => {
           if (isIpcError(error)) throw error;
           dbClientLog.warn('projects root settings request failed', { action });
           throwIpcError('INTERNAL', 'projects root settings request failed');
+        }
+      });
+    }
+    // Agent task export folder: the native picker is the owner's approval, so it stays on this computer (not in device-link).
+    const taskExportDirectoryHandlers = createTaskExportDirectoryHandlers({
+      chooseDirectory: async () => {
+        const options: Electron.OpenDialogOptions = {
+          title: t('settings.about.storage.taskExportDirectoryChoose'),
+          properties: ['openDirectory', 'createDirectory'],
+        };
+        const ownerWindow = BrowserWindow.getFocusedWindow() ?? mainWindowRef;
+        const result =
+          ownerWindow && !ownerWindow.isDestroyed()
+            ? await dialog.showOpenDialog(ownerWindow, options)
+            : await dialog.showOpenDialog(options);
+        return result.canceled ? null : (result.filePaths[0] ?? null);
+      },
+    });
+    for (const action of ['get', 'choose', 'reset'] as const) {
+      ipcMain.handle('task-export-directory:' + action, async (event) => {
+        assertTrustedAppRendererEvent(event);
+        try {
+          return await taskExportDirectoryHandlers[action]();
+        } catch (error) {
+          if (isIpcError(error)) throw error;
+          dbClientLog.warn('task export directory settings request failed', { action });
+          throwIpcError('INTERNAL', 'task export directory settings request failed');
         }
       });
     }
