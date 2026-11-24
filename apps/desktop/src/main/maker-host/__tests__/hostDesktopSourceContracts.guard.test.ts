@@ -239,7 +239,7 @@ describe('Host engine assembly (runtime.ts) against the desktop construction sit
     for (const line of [
       'claudeAllowedTools: getDesktopClaudeReadOnlyAllowedTools(),',
       'registerClaudeSubagentTask: (task) => claudeSubagentUsageBridge.registerTask(task),',
-      'getClaudeSubagentTaskUsage: (taskId) => claudeSubagentUsageBridge.getTaskUsage(taskId),',
+      'getClaudeSubagentTaskUsage: (taskId, sdkId) => claudeSubagentUsageBridge.getTaskUsage(taskId, sdkId),',
     ]) {
       assert.equal(desktop.split(line).length - 1, 1, `desktop: ${line}`);
       assert.equal(host.split(line).length - 1, 1, `host: ${line}`);

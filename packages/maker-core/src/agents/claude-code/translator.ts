@@ -36,7 +36,8 @@ import {
   CONTEXT_OVERFLOW_REASON,
   isContextOverflowErrorMessage,
 } from '../shared/context-overflow-error.js';
-import type { UsageTracker } from '../shared/usage-tracker.js';
+import type { ClaudeSubagentTaskUsage } from '../base-agent.js';
+import type { UsageSegment, UsageTracker } from '../shared/usage-tracker.js';
 import { isModelAccessDenied } from './model-access-error.js';
 import { attachLiveGeneration, sampleGenerationDuration } from '../shared/live-generation-snapshot.js';
 import {
@@ -62,6 +63,9 @@ import {
 //  - thinkingBuf: thinking_delta 跨多个 stream_event 累积; assistant.thinking final 时关闭
 
 export interface TurnState {
+  /** Agent tool calls issued in this turn, paired with their async launch receipt. */
+  subagentTasks?: Map<string, string | undefined>;
+  segmentByMessageId?: Map<string, string>;
   text: string;
   toolUses: number;
   /** 本 turn 内真实 Claude API call 次数；message_start 触发时递增。 */
@@ -357,11 +361,44 @@ function ccLiveStatus(
   };
 }
 
+/** A completed proxy response supplies a request boundary for background agents
+ * whose SDK events never reached the parent. Keep SDK identities and scope for
+ * any request already present, including a parent request matching a child prompt. */
+function mergeProxyUsage(ctx: TranslateContext, sdk: UsageSegment[]): UsageSegment[] {
+  if (!ctx.turn.subagentTasks?.size) return sdk;
+  const merged = [...sdk];
+  const knownSegments = new Set(ctx.turn.segmentByMessageId?.values());
+  const indexBySegment = new Map(sdk.map((segment, index) => [segment.id, index]));
+  const added = new Set<string>();
+  for (const [parent, taskId] of ctx.turn.subagentTasks) {
+    if (!taskId) continue;
+    const hasAnonymousRequest = sdk.some(s => s.id?.endsWith(`:${parent}`) && !knownSegments.has(s.id));
+    const billing = ctx.getSubagentTaskUsage?.(taskId, ctx.getSdkSessionId())?.billing;
+    if (!billing || billing.sdkSessionId !== ctx.getSdkSessionId()) continue;
+    for (const request of billing.segments) {
+      if (!request.id || added.has(request.id)) continue;
+      const sdkId = ctx.turn.segmentByMessageId?.get(request.id);
+      if (!sdkId && hasAnonymousRequest) continue;
+      if (sdkId && !sdkId.endsWith(`:${parent}`)) continue;
+      const index = sdkId ? indexBySegment.get(sdkId) : undefined;
+      if (index === undefined) {
+        merged.push({ ...request, id: `claude:proxy/${request.id}:${parent}` });
+      } else if (!merged[index]?.complete) {
+        merged[index] = { ...request, id: sdkId };
+      }
+      added.add(request.id);
+    }
+  }
+  return merged;
+}
+
 /**
  * 清掉一个 turn 的非 usage 累积状态(usage 由 UsageTracker.endTurn 内部 reset)。
  * turn 收尾共用:正常 Done/done 路径与 empty-response 终态 error 提前 return 路径。
  */
 function resetTurnState(turn: TurnState): void {
+  turn.subagentTasks?.clear();
+  turn.segmentByMessageId?.clear();
   turn.text = '';
   turn.toolUses = 0;
   turn.apiCalls = 0;
@@ -562,6 +599,7 @@ function readToolResultFullText(blockRaw: unknown): ToolResultPair | null {
  * 或流式子消息时序推断可靠，应直接投影成 AgentTaskUpdate。
  */
 interface SubagentToolResult {
+  agentId?: string;
   taskId: string;
   parentToolUseId: string;
   prompt?: string;
@@ -625,7 +663,7 @@ function extractSubagentToolResult(
   if (toolUses !== undefined) usage.toolUses = toolUses;
   if (durationMs !== undefined) usage.durationMs = durationMs;
   return {
-    taskId,
+    taskId, agentId,
     parentToolUseId: toolResult.toolUseId,
     model,
     prompt,
@@ -751,7 +789,7 @@ interface TranslateContext {
     prompt: string;
     model?: string;
   }) => void;
-  getSubagentTaskUsage?: (taskId: string) => AgentTaskUsage | undefined;
+  getSubagentTaskUsage?: (taskId: string, sdkSessionId?: string) => (AgentTaskUsage & Pick<ClaudeSubagentTaskUsage, 'billing'>) | undefined;
   /**
    * Maker Memory flush 观察器 — 翻译 status / message_delta event 时, push 完
    * eventQueue 后调一下 (传当前 contextTokens / contextWindow 让 controller 算 ratio)。
@@ -858,6 +896,9 @@ export function translateSdkMessage(
         }
         if (actualModel) {
           ctx.rt.publishedSubagentModelByParentToolUseId.set(parentToolUseId, actualModel);
+        }
+        if (subagentResult.agentId && ctx.turn.subagentTasks?.has(parentToolUseId)) {
+          ctx.turn.subagentTasks.set(parentToolUseId, subagentResult.agentId);
         }
         if (status === 'running' && prompt && !isTerminal) {
           ctx.onSubagentTaskLaunched?.({ taskId, parentToolUseId, prompt, model: actualModel });
@@ -1650,6 +1691,9 @@ function rememberClaudeToolUseId(
   toolName: unknown,
 ): string | null {
   if (typeof toolUseId !== 'string' || toolUseId.length === 0) return null;
+  if ((toolName === 'Agent' || toolName === 'Task') && !ctx.turn.subagentTasks?.has(toolUseId)) {
+    (ctx.turn.subagentTasks ??= new Map()).set(toolUseId, undefined);
+  }
   const existingName = ctx.rt.toolUseIdToName.get(toolUseId);
   ctx.rt.toolUseIdToName.set(
     toolUseId,
@@ -1944,6 +1988,9 @@ function handleStreamEvent(
     // 上一请求缺 message_stop(中断、重试)时，在新请求开段前补收口。
     if (!parentToolUseId) settleMainRequest(ctx);
     const segmentId = `claude:${++ctx.rt.usageSegmentSeq}:${parentStreamKey}`;
+    if (typeof eventRequestId === 'string' && eventRequestId) {
+      (ctx.turn.segmentByMessageId ??= new Map()).set(eventRequestId, segmentId);
+    }
     ctx.rt.activeUsageSegmentByParent.set(parentStreamKey, segmentId);
     if (!parentToolUseId) {
       ctx.rt.mainOpenRequest = {
@@ -2224,7 +2271,8 @@ function handleResult(
 
   // turn 桶快照 — endTurn 会清掉 turn 桶, 必须在调用之前先取出来给后面日志用
   const preTurnEndCacheStats = ctx.tracker.getCacheStats();
-  const turnUsageSegments = ctx.tracker.getTurnUsageSegments();
+  const sdkSegments = ctx.tracker.getTurnUsageSegments();
+  const turnUsageSegments = mergeProxyUsage(ctx, sdkSegments);
   const segmentTotals = turnUsageSegments.reduce<{
     inputTokens: number;
     outputTokens: number;
@@ -2261,7 +2309,7 @@ function handleResult(
   const liveTurnOutput = liveParentOutputTokens(
     ctx,
     resultUsage?.outputTokens,
-    resultUsage != null && segmentTotals.outputTokens === resultUsage.outputTokens,
+    resultUsage != null && sdkSegments.reduce((sum, s) => sum + s.outputTokens, 0) === resultUsage.outputTokens,
   );
   const liveGeneration = ctx.rt.generation;
   // Snap to this turn's streamed main-thread usage: the result aggregate can be

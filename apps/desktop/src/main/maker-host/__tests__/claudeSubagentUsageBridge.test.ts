@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { Buffer } from 'node:buffer';
+import { createAsyncQueue } from '../../../../../../packages/maker-core/src/agents/shared/async-queue.js';
+import { UsageTracker } from '../../../../../../packages/maker-core/src/agents/shared/usage-tracker.js';
+import { translateSdkMessage, newRuntimeState, type TurnState } from '../../../../../../packages/maker-core/src/agents/claude-code/translator.js';
+import { type AgentEvent } from '../../../../../../packages/maker-core/src/types/events.js';
+import { normalizeTurnUsageSegments, resolveClaudeTurnCostSinks } from '../../usage/turnCostCalculator.js';
+
 
 import {
   ClaudeSubagentUsageBridge,
@@ -340,4 +346,116 @@ describe('ClaudeSubagentUsageBridge', () => {
     expect(bridge.getTaskUsage('agent-a')).toEqual({ totalTokens: 110 });
     expect(bridge.getTaskUsage('agent-b')).toEqual({ totalTokens: 220 });
   });
+});
+
+it.each(['proxy', 'sdk-and-proxy', 'legacy', 'truncated', 'foreign-session', 'untagged', 'late-launch', 'early-response'] as const)(
+  'prices the main model and only identifiable completed background requests (%s)',
+  async mode => {
+    const bridge = new ClaudeSubagentUsageBridge();
+    const queue = createAsyncQueue<AgentEvent>();
+    const sdkSessionId = 'sdk-session';
+    const model = 'child-model';
+    const prompt = 'Count the blue flowers';
+    bridge.registerTask({ taskId: 'finished-task', parentToolUseId: 'older-tool', prompt, model });
+    const turn: TurnState = {
+      text: '', toolUses: 0, apiCalls: 0, sawCompactBoundary: false, hasEmittedText: false,
+      uiEmittedText: '', pendingApiError: null, interruptRequested: false, generation: 0,
+      interruptGeneration: 0, lastAssistantMsgHadSubstance: true,
+    };
+    const ctx = {
+      rt: newRuntimeState(), turn, tracker: new UsageTracker(),
+      getModel: () => 'main-model', getSdkSessionId: () => sdkSessionId,
+      getEffort: () => 'medium', getPermissionMode: () => 'auto', getLogTitle: () => undefined,
+      log: { debug() {}, info() {}, warn() {} }, onSessionId() {},
+      onSubagentTaskLaunched: (task: Parameters<typeof bridge.registerTask>[0]) =>
+        bridge.registerTask(task),
+      getSubagentTaskUsage: (id: string, sid?: string) => bridge.getTaskUsage(id, sid),
+    };
+    const usage = { input_tokens: 100, output_tokens: 10, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
+    const emit = (msg: Parameters<typeof translateSdkMessage>[0]) => translateSdkMessage(msg, queue, ctx);
+    function sdkRequest(id: string, model: string, parent?: string) {
+      for (const event of [
+        { type: 'message_start', message: { id, model, usage } },
+        { type: 'message_delta', usage }, { type: 'message_stop' },
+      ]) emit({ type: 'stream_event', parent_tool_use_id: parent, event });
+    }
+    sdkRequest('msg-main', 'main-model');
+    if (mode !== 'late-launch') {
+      emit({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tool-a', name: 'Agent', input: { prompt } }] } });
+    }
+    const launch = () => emit({
+      type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tool-a', content: 'launched' }] },
+      tool_use_result: { isAsync: true, agentId: 'agent-a', resolvedModel: model, prompt },
+    });
+    if (mode !== 'early-response') launch();
+    if (mode === 'sdk-and-proxy') sdkRequest('msg-child', model, 'tool-a');
+    if (mode !== 'legacy') {
+      const transform = createClaudeSubagentUsageRequestTransform(bridge);
+      for (const reqId of [1, 2]) {
+        transform(requestPayload(model, prompt), {
+          reqId, method: 'POST', url: '/v1/messages',
+          headers: {
+            'x-claude-code-session-id': mode === 'foreign-session' ? 'foreign' : sdkSessionId,
+            ...(mode === 'untagged' ? {} : { 'x-claude-code-agent-id': 'agent-a' }),
+          },
+        });
+        const sink = createClaudeSubagentUsageResponseObserver(bridge)({
+          reqId, method: 'POST', url: '/v1/messages', upstreamBase: 'https://example.test', status: 200,
+          requestHeaders: {}, responseHeaders: { 'content-type': 'text/event-stream' },
+          requestBody: requestBody(model, prompt),
+        });
+        const frames = [
+          { type: 'message_start', message: { id: 'msg-child', model, usage: { ...usage, output_tokens: 0 } } },
+          { type: 'message_delta', usage: { output_tokens: 10 } },
+          ...(mode === 'truncated' ? [] : [{ type: 'message_stop' }]),
+        ];
+        sink?.onData?.(Buffer.from(frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join('')));
+        sink?.onEnd?.();
+      }
+    }
+    if (mode === 'early-response') {
+      emit({ type: 'system', subtype: 'task_notification', status: 'completed', task_id: 'agent-a', tool_use_id: 'tool-a' });
+      launch();
+    }
+    emit({ type: 'result', result: 'done', usage: { ...usage, input_tokens: 200, output_tokens: 20 } });
+    queue.end();
+    let segments = normalizeTurnUsageSegments([]);
+    for await (const event of queue) {
+      if (event.type === 'done') segments = normalizeTurnUsageSegments((event.data as { usageSegments?: unknown }).usageSegments);
+    }
+    const models = ['main-model', model];
+    const { perModel } = resolveClaudeTurnCostSinks(models.map(model => ({
+      model, inputTokensDelta: 100, outputTokensDelta: 10, cacheReadTokensDelta: 0,
+      cacheCreateTokensDelta: 0, costUsdDelta: 0,
+    })), { supplier: Object.fromEntries(models.map((modelId, index) => [modelId, {
+      modelId, providerId: 'supplier', source: 'user-override', currency: 'USD', approximate: true,
+      inputPerMtok: 10 * (index + 1), outputPerMtok: 0,
+    }])) }, { providerId: 'supplier', billingRoute: 'provider-api', region: 'global' }, segments);
+    expect(perModel.map(row => [row.model, row.money?.amount ?? null])).toEqual([
+      ['main-model', 0.001], [model, ['proxy', 'sdk-and-proxy', 'early-response'].includes(mode) ? 0.002 : null],
+    ]);
+  },
+);
+
+it('retains an accepted billing receipt when the card registry evicts its task', () => {
+  const bridge = new ClaudeSubagentUsageBridge();
+  const sdkSessionId = 'sdk';
+  for (let reqId = 1; reqId <= 201; reqId++) {
+    const taskId = `task-${reqId}`;
+    bridge.registerTask({ taskId, parentToolUseId: `tool-${reqId}`, prompt: 'count' });
+    bridge.reserveRequest(reqId, requestPayload('child', 'count'), sdkSessionId, taskId);
+    const sink = createClaudeSubagentUsageResponseObserver(bridge)({
+      reqId, method: 'POST', url: '/v1/messages', upstreamBase: 'https://example.test',
+      status: 200, requestHeaders: {}, responseHeaders: { 'content-type': 'application/json' },
+      requestBody: requestBody('child', 'count'),
+    });
+    sink?.onData?.(Buffer.from(JSON.stringify({
+      id: `msg-${reqId}`, model: 'child', usage: { input_tokens: 3, output_tokens: 1 },
+    })));
+    sink?.onEnd?.();
+  }
+  expect(bridge.getTaskUsage('task-1', sdkSessionId)?.billing?.segments).toMatchObject([
+    { id: 'msg-1', inputTokens: 3, outputTokens: 1 },
+  ]);
+  expect(bridge.getTaskUsage('task-1', sdkSessionId)?.billing).toBeUndefined();
 });

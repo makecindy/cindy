@@ -720,7 +720,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     // The process-wide usage bridge the loopback proxy (anthropicCompatProxyHostCore) fills, as on
     // the desktop: concurrent external-model subagents report their real usage.
     registerClaudeSubagentTask: (task) => claudeSubagentUsageBridge.registerTask(task),
-    getClaudeSubagentTaskUsage: (taskId) => claudeSubagentUsageBridge.getTaskUsage(taskId),
+    getClaudeSubagentTaskUsage: (taskId, sdkId) => claudeSubagentUsageBridge.getTaskUsage(taskId, sdkId),
     // As the desktop: an explicit Agent/Task model is checked against the live account facts at
     // each call; only an authoritative XD snapshot can deny it.
     resolveClaudeSubagentModelAccess: createHostClaudeSubagentModelAccess({

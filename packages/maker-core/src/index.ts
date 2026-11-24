@@ -59,7 +59,7 @@ export type {
   PiOversizedFrameHandler,
 } from './agents/pi/transport.js';
 // pi 远端 agentHome 文件操作原语(host 经 SSH 实现)。
-export type { PiRemoteFileOps } from './agents/base-agent.js';
+export type { ClaudeSubagentTaskRegistration, ClaudeSubagentTaskUsage, PiRemoteFileOps } from './agents/base-agent.js';
 // 设备托管会话的链路往来快照(host 的任务隧道记录)。
 export type { DeviceHostedLinkActivity } from './agents/base-agent.js';
 

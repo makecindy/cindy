@@ -7,6 +7,8 @@
  */
 
 import type { RequestTransform, ResponseObserver } from '@cindy/anthropic-compat-proxy';
+import type { ClaudeSubagentTaskRegistration, ClaudeSubagentTaskUsage } from '@cindy/maker-core';
+import type { TurnUsageSegment } from '../usage/turnCostCalculator.js';
 import { Buffer } from 'node:buffer';
 
 import {
@@ -18,18 +20,12 @@ import {
 
 const MAX_TRACKED_TASKS = 200;
 const MAX_PENDING_REQUESTS = 1_000;
+// Reclaim orphaned receipts if an interrupted session never reaches settlement.
+const ORPHAN_RETENTION_MS = 24 * 60 * 60 * 1_000;
+const MAX_SEGMENTS_PER_TASK = 1_000;
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 
-export interface ClaudeSubagentTaskRegistration {
-  taskId: string;
-  parentToolUseId: string;
-  prompt: string;
-  model?: string;
-}
-
-export interface ClaudeSubagentTaskUsage {
-  totalTokens: number;
-}
+export type { ClaudeSubagentTaskRegistration, ClaudeSubagentTaskUsage } from '@cindy/maker-core';
 
 interface TrackedTask extends ClaudeSubagentTaskRegistration {
   normalizedPrompt: string;
@@ -78,19 +74,67 @@ function requestUserTexts(body: Record<string, unknown>): string[] {
   return texts;
 }
 
+/** Price only a complete provider response. Delta counters are snapshots and may omit
+ * cache fields or repeat zero placeholders from the start frame. */
+function recordBillingSegment(
+  segments: Map<string, TurnUsageSegment>,
+  message: Record<string, unknown> | null,
+  final: Record<string, unknown> | null,
+  requestedFast: boolean,
+): void {
+  if (!message || !final || typeof message.id !== 'string' || !message.id ||
+      typeof message.model !== 'string' || !message.model.trim() || !isPlainObject(message.usage)) return;
+  const start = message.usage;
+  const speed = final.speed ?? start.speed ?? (requestedFast ? 'fast' : 'standard');
+  const tier = final.service_tier ?? start.service_tier;
+  if (speed !== 'standard' && speed !== 'fast') return;
+  if (tier != null && tier !== 'standard' && tier !== 'priority' && tier !== 'batch' && tier !== 'default') return;
+  const validCount = (value: unknown) =>
+    typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+  if (!validCount(start.input_tokens) || !validCount(final.output_tokens)) return;
+  for (const field of ['input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens']) {
+    if ((start[field] !== undefined && !validCount(start[field])) ||
+        (final[field] !== undefined && !validCount(final[field]))) return;
+  }
+  const inputCount = (key: string) => Math.max(numberField(start, key), numberField(final, key));
+  const cacheCreate = inputCount('cache_creation_input_tokens');
+  const ttl = final.cache_creation ?? start.cache_creation;
+  const cache1h = isPlainObject(ttl) ? numberField(ttl, 'ephemeral_1h_input_tokens') : 0;
+  if (ttl != null && (!isPlainObject(ttl) ||
+      (ttl.ephemeral_1h_input_tokens !== undefined && !validCount(ttl.ephemeral_1h_input_tokens)))) return;
+  if (cache1h > cacheCreate) return;
+  const id = message.id;
+  if (segments.has(id) || segments.size >= MAX_SEGMENTS_PER_TASK) return;
+  segments.set(id, {
+    id, model: message.model, modelConfirmed: true, complete: true,
+    priceVariant: speed === 'fast' || tier === 'priority' ? 'priority' : tier === 'batch' ? 'batch' : 'standard',
+    inputTokens: inputCount('input_tokens'), outputTokens: numberField(final, 'output_tokens'),
+    cacheReadTokens: inputCount('cache_read_input_tokens'), cacheCreateTokens: cacheCreate,
+    cacheCreate1hTokens: cache1h,
+  });
+}
+
 /** In-memory bridge shared by the Claude agent host and loopback proxy observer. */
 export class ClaudeSubagentUsageBridge {
   private readonly tasks = new Map<string, TrackedTask>();
-  private readonly taskIdByRequestId = new Map<number, string>();
+  private readonly reservations = new Map<number, {
+    taskId: string;
+    billing?: { segments: Map<string, TurnUsageSegment>; requestedFast: boolean };
+  }>();
   private readonly activeResponseCountByTaskId = new Map<string, number>();
+  // A background request can complete before the SDK sends its async launch receipt.
+  private readonly segmentsByOwner = new Map<string, {
+    taskId: string;
+    registered: boolean;
+    lastRequestAt: number;
+    segments: Map<string, TurnUsageSegment>;
+  }>();
   private nextRegistrationOrder = 0;
 
   /** Enforces the task cap without evicting entries still referenced by in-flight responses. */
   private trimTasks(): void {
-    const reservedTaskIds = new Set([
-      ...this.taskIdByRequestId.values(),
-      ...this.activeResponseCountByTaskId.keys(),
-    ]);
+    const reservedTaskIds = new Set(this.activeResponseCountByTaskId.keys());
+    for (const { taskId } of this.reservations.values()) reservedTaskIds.add(taskId);
     while (this.tasks.size > MAX_TRACKED_TASKS) {
       let oldestEvictableTaskId: string | undefined;
       for (const taskId of this.tasks.keys()) {
@@ -106,6 +150,9 @@ export class ClaudeSubagentUsageBridge {
   registerTask(task: ClaudeSubagentTaskRegistration): void {
     const normalizedPrompt = normalizePrompt(task.prompt);
     if (!task.taskId || !task.parentToolUseId || !normalizedPrompt) return;
+    for (const entry of this.segmentsByOwner.values()) {
+      if (entry.taskId === task.taskId) entry.registered = true;
+    }
     this.tasks.set(task.taskId, {
       ...task,
       normalizedPrompt,
@@ -117,7 +164,7 @@ export class ClaudeSubagentUsageBridge {
     this.trimTasks();
   }
 
-  private selectTask(body: Record<string, unknown>): TrackedTask | null {
+  private selectTask(body: Record<string, unknown>) {
     const model = typeof body.model === 'string' ? body.model : undefined;
     const userTexts = requestUserTexts(body);
     if (userTexts.length === 0) return null;
@@ -136,31 +183,65 @@ export class ClaudeSubagentUsageBridge {
       }
       return left.registrationOrder - right.registrationOrder;
     });
-    const selected = candidates[0];
-    if (!selected) return null;
-    return selected;
+    return candidates[0] ?? null;
   }
 
   /** Reserves a task while the proxy is handling the request, before responses can reorder. */
-  reserveRequest(reqId: number, body: Record<string, unknown>): string | null {
-    const reservedTaskId = this.taskIdByRequestId.get(reqId);
-    if (reservedTaskId) return reservedTaskId;
+  reserveRequest(reqId: number, body: Record<string, unknown>, sdkSessionId?: string, agentId?: string): string | null {
+    const reserved = this.reservations.get(reqId);
+    if (reserved) return reserved.taskId;
     // Never evict an in-flight reservation to make room: doing so would also
     // remove its task from trimTasks() protection before the response is recorded.
-    if (this.taskIdByRequestId.size >= MAX_PENDING_REQUESTS) return null;
+    if (this.reservations.size >= MAX_PENDING_REQUESTS) return null;
 
-    const selected = this.selectTask(body);
-    if (!selected) return null;
-    selected.matchedRequests += 1;
-    this.taskIdByRequestId.set(reqId, selected.taskId);
-    return selected.taskId;
+    const selected = agentId ? this.tasks.get(agentId) : this.selectTask(body);
+    const taskId = selected?.taskId ?? (sdkSessionId ? agentId : undefined);
+    if (!taskId) return null;
+    if (selected) selected.matchedRequests += 1;
+    let segments: Map<string, TurnUsageSegment> | undefined;
+    if (sdkSessionId && agentId) {
+      const owner = JSON.stringify([sdkSessionId, agentId]);
+      const current = this.segmentsByOwner.get(owner);
+      if (current) current.lastRequestAt = Date.now();
+      segments = current?.segments;
+      if (!segments) {
+        if (this.segmentsByOwner.size >= MAX_TRACKED_TASKS) {
+          // Only reclaim abandoned, unregistered owners. An observer may still be writing
+          // through its reservation, or the launched task may be awaiting settlement.
+          const protectedTasks = new Set(this.activeResponseCountByTaskId.keys());
+          for (const reservation of this.reservations.values()) protectedTasks.add(reservation.taskId);
+          for (const [key, entry] of this.segmentsByOwner) {
+            const expired = Date.now() - entry.lastRequestAt > ORPHAN_RETENTION_MS;
+            if ((!entry.registered || expired) && !protectedTasks.has(entry.taskId)) {
+              this.segmentsByOwner.delete(key);
+              break;
+            }
+          }
+        }
+        if (this.segmentsByOwner.size < MAX_TRACKED_TASKS) {
+          segments = new Map();
+          this.segmentsByOwner.set(owner, { taskId, segments, registered: Boolean(selected), lastRequestAt: Date.now() });
+        }
+      }
+    }
+    this.reservations.set(reqId, {
+      taskId,
+      billing: segments && (body.speed == null || body.speed === 'standard' || body.speed === 'fast')
+        ? { segments, requestedFast: body.speed === 'fast' }
+        : undefined,
+    });
+    return taskId;
+  }
+
+  billingForRequest(reqId: number) {
+    return this.reservations.get(reqId)?.billing;
   }
 
   /** Transfers request protection to a compact per-task counter once the response starts. */
   activateReservedTask(reqId: number): string | null {
-    const taskId = this.taskIdByRequestId.get(reqId);
+    const taskId = this.reservations.get(reqId)?.taskId;
     if (!taskId) return null;
-    this.taskIdByRequestId.delete(reqId);
+    this.reservations.delete(reqId);
     this.activeResponseCountByTaskId.set(
       taskId,
       (this.activeResponseCountByTaskId.get(taskId) ?? 0) + 1,
@@ -170,7 +251,7 @@ export class ClaudeSubagentUsageBridge {
 
   /** Ends the in-flight protection after the response is fully handled. */
   releaseReservedTask(reqId: number): void {
-    this.taskIdByRequestId.delete(reqId);
+    this.reservations.delete(reqId);
   }
 
   /** Ends task protection after an active response has committed or been abandoned. */
@@ -191,16 +272,23 @@ export class ClaudeSubagentUsageBridge {
     task.cumulativeOutputTokens += numberField(usage, 'output_tokens');
   }
 
-  getTaskUsage(taskId: string): ClaudeSubagentTaskUsage | undefined {
+  getTaskUsage(taskId: string, sdkSessionId?: string): ClaudeSubagentTaskUsage | undefined {
     const task = this.tasks.get(taskId);
-    if (!task) return undefined;
-    const totalTokens = task.latestInputTokens + task.cumulativeOutputTokens;
+    const totalTokens = task ? task.latestInputTokens + task.cumulativeOutputTokens : 0;
+    if (sdkSessionId) {
+      // Only billing settlement supplies the SDK session. Notifications read the card total.
+      const owner = JSON.stringify([sdkSessionId, taskId]);
+      const segments = this.segmentsByOwner.get(owner)?.segments;
+      this.segmentsByOwner.delete(owner);
+      if (segments?.size) return { totalTokens, billing: { sdkSessionId, segments: [...segments.values()] } };
+    }
     return totalTokens > 0 ? { totalTokens } : undefined;
   }
 
   clear(): void {
+    this.segmentsByOwner.clear();
     this.tasks.clear();
-    this.taskIdByRequestId.clear();
+    this.reservations.clear();
     this.activeResponseCountByTaskId.clear();
   }
 }
@@ -218,7 +306,11 @@ export function createClaudeSubagentUsageRequestTransform(
 ): RequestTransform {
   return (body, ctx) => {
     if (ctx.method !== 'POST' || !isMessagesPath(ctx.url)) return null;
-    if (isPlainObject(body)) bridge.reserveRequest(ctx.reqId, body);
+    if (isPlainObject(body)) {
+      bridge.reserveRequest(ctx.reqId, body,
+        headerValue(ctx.headers, 'x-claude-code-session-id'),
+        headerValue(ctx.headers, 'x-claude-code-agent-id'));
+    }
     return null;
   };
 }
@@ -238,6 +330,7 @@ export function createClaudeSubagentUsageResponseObserver(
       bridge.releaseReservedTask(ctx.reqId);
       return null;
     }
+    const billing = bridge.billingForRequest(ctx.reqId);
     const taskId = bridge.activateReservedTask(ctx.reqId);
     if (!taskId) return null;
 
@@ -248,7 +341,10 @@ export function createClaudeSubagentUsageResponseObserver(
     let latestInputUsage: Record<string, unknown> | null = null;
     let latestOutputUsage: Record<string, unknown> | null = null;
 
-    const commitUsage = (): void => {
+    let message: Record<string, unknown> | null = null;
+    let finalUsage: Record<string, unknown> | null = null;
+    let responseError = false;
+    const commitUsage = (complete = false): void => {
       if (usageCommitted) return;
       usageCommitted = true;
       const usage = {
@@ -262,6 +358,9 @@ export function createClaudeSubagentUsageResponseObserver(
         output_tokens: latestOutputUsage ? numberField(latestOutputUsage, 'output_tokens') : 0,
       };
       bridge.recordResponseUsage(taskId, usage);
+      if (billing && complete && !responseError) {
+        recordBillingSegment(billing.segments, message, finalUsage, billing.requestedFast);
+      }
     };
 
     const finishWithoutUsage = (): void => {
@@ -273,9 +372,12 @@ export function createClaudeSubagentUsageResponseObserver(
     const processFrame = (frame: string): void => {
       const data = readSseFrameData(frame);
       if (!data) return;
-      const message = isPlainObject(data.message) ? data.message : null;
-      const usage = message && isPlainObject(message.usage)
-        ? message.usage
+      if (data.type === 'error') responseError = true;
+      const start = isPlainObject(data.message) ? data.message : null;
+      if (data.type === 'message_start') message = start;
+      if (data.type === 'message_delta' && isPlainObject(data.usage)) finalUsage = data.usage;
+      const usage = start && isPlainObject(start.usage)
+        ? start.usage
         : isPlainObject(data.usage)
           ? data.usage
           : null;
@@ -286,7 +388,7 @@ export function createClaudeSubagentUsageResponseObserver(
         if (inputTokens > 0) latestInputUsage = usage;
         if (numberField(usage, 'output_tokens') > 0) latestOutputUsage = usage;
       }
-      if (data.type === 'message_stop') commitUsage();
+      if (data.type === 'message_stop') commitUsage(true);
     };
 
     const drain = (flush: boolean): void => {
@@ -314,11 +416,13 @@ export function createClaudeSubagentUsageResponseObserver(
       } else {
         const body = parseJsonObject(buffer);
         if (body && isPlainObject(body.usage)) {
+          message = body;
+          finalUsage = body.usage;
           latestInputUsage = body.usage;
           latestOutputUsage = body.usage;
         }
       }
-      commitUsage();
+      commitUsage(isJson);
       done = true;
       bridge.releaseActiveTask(taskId);
     };

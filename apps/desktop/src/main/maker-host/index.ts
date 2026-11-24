@@ -1538,7 +1538,7 @@ export function getMaker(): Maker {
         ),
       ),
       registerClaudeSubagentTask: (task) => claudeSubagentUsageBridge.registerTask(task),
-      getClaudeSubagentTaskUsage: (taskId) => claudeSubagentUsageBridge.getTaskUsage(taskId),
+      getClaudeSubagentTaskUsage: (taskId, sdkId) => claudeSubagentUsageBridge.getTaskUsage(taskId, sdkId),
       // 远端 Claude 会话的路由 materialization:把该会话真实上游 + 鉴权 + 定制头解析成 cc
       // env(native OAuth 订阅 / 自定义 Claude Code 供应商),覆盖「远端恒用网关」旧行为。
       // 返回 null = 有效路由是 XD 网关,maker-core 维持既有网关远端路径。见 remote-claude-route.ts。

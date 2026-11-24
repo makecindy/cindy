@@ -3398,6 +3398,8 @@ export class ClaudeCodeAgent extends BaseAgent {
     const beginNewTurn = (priceVariant: 'standard' | 'priority' = mutableFastMode ? 'priority' : 'standard'): void => {
       // usageTracker.beginTurn() 只清 usage 桶；translator 的 turnState 也要在新 turn
       // 开始时清掉，避免上一轮 abnormal/abort 没走 result 时污染下一轮状态。
+      turnState.subagentTasks?.clear();
+      turnState.segmentByMessageId?.clear();
       usageTracker.beginTurn();
       resetClaudeGenerationTiming(runtimeState.generation);
       runtimeState.activeUsageSegmentByParent.clear();
@@ -6139,10 +6141,7 @@ export class ClaudeCodeAgent extends BaseAgent {
               onSubagentTaskLaunched: (task) => {
                 registerClaudeSubagentTask?.(task);
               },
-              getSubagentTaskUsage: (taskId) => {
-                const usage = getClaudeSubagentTaskUsage?.(taskId);
-                return usage ? { totalTokens: usage.totalTokens } : undefined;
-              },
+              getSubagentTaskUsage: (taskId, sdkId) => getClaudeSubagentTaskUsage?.(taskId, opts.remoteHostId ? undefined : sdkId),
               onTurnEnd: () => {
                 if (deferResumeFailureBoundary) {
                   deferredResumeTurnEnd = true;
