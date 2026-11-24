@@ -47,7 +47,10 @@
   - **登记通了不等于数据通（2026-11-22）。** 登记只证明小包能来回。设备经 UDP 发出数据后，4 秒内一个经中继转来的数据报
     （UDP 或 WebSocket）都没收到，且这期间又发了至少 3 次、跨过 1 秒（核心在重发；单个没人回应的纯确认包不算），就判定这条
     UDP 只通登记、不通数据：两个方向退回 WebSocket，登记照常低频发（每 15 秒，带「收不到」），冷却 30 秒、5 分钟、30 分钟
-    后再试，经 UDP 收到数据后冷却回到第一档。停用期间的确认不触发立即重新登记。只改设备一侧，包格式、中继和自建中转都不变。
+    后再试。冷却结束即可用 UDP 传业务数据。Desktop 和 Node Host 连续一分钟在每个 5 秒观察窗里都经 UDP 收发了数据报、
+    且中转连接累计被对端确认的字节数持续增加，才把下次故障的冷却恢复到 30 秒。请求超时中断这段观察。单向收到对端的重传
+    曾使上传反复回到同一条故障线路。设备使用可靠传输核心已有的确认计数，无需发送探测包。停用期间的确认不触发立即重新登记。
+    官方与自建中继沿用已有登记与数据报格式，仅升级设备即可生效。
     日志写作 `agent-net relayed datagrams now go over the relay WebSocket (relay UDP answered registrations but carried no data back; retrying UDP in 30s)`。
   - **收得到、发不出去也要退回。** 对端一直在重发时本机总有数据进来，上一条看不出来。会话层（`AgentNetSessionLinks`）发往一个
     此刻走中转的对端的请求超时，就报给承载它的连接（Desktop `agentNetRelayStalled`，Host `node.relayStalled`，经 worker 的

@@ -106,6 +106,20 @@ describe('opening a task on a plugin engine', () => {
       .toEqual(admitPluginEngineSession(body({ model: 'deepseek-v4', effort: 'max' }), available));
   });
 
+  // A provider taken out of an engine is a provider of its own (review of #12242). Minimal input: it
+  // is turned off, or one of its models is, while the engine itself is on.
+  it('checks a provider taken out of an engine against its own settings', () => {
+    const available = [harness({ state: 'available' })];
+    const taken = 'acp-plugin:_ns__local__dsh-acp:dsh~ab12cd34';
+    const own = (patch: { suspended?: boolean; disabledModels?: string[] }) =>
+      (provider: { key: string }) => provider.key.endsWith('~ab12cd34') ? patch : {};
+    expect(() => admitWith(body({ providerId: taken }), available, () => models, own({ suspended: true }))).toThrow('停用');
+    expect(admitWith(body(), available, () => models, own({ suspended: true })).providerId).toBe('acp-plugin:_ns__local__dsh-acp:dsh');
+    const modelOff = own({ disabledModels: ['deepseek-v4'] });
+    expect(() => admitWith(body({ providerId: taken, model: 'deepseek-v4' }), available, () => models, modelOff)).toThrow('关闭');
+    expect(admitWith(body({ model: 'deepseek-v4' }), available, () => models, modelOff).model).toBe('deepseek-v4');
+  });
+
   it.each(['mac-mini', 'share:6f1c'])('admits an engine of %s without needing the plugin installed here', (agentDeviceId) => {
     expect(admitPluginEngineSession(body({ agentDeviceId, model: '', effort: 'high', fastMode: true }), [])).toMatchObject({
       agentKind: 'acp',

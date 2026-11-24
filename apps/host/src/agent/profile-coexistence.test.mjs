@@ -124,11 +124,15 @@ test('an unidentified live PID is queried again until its identity is known, the
 test('a record whose process ended, or whose PID now belongs to another program, does not block', async t => {
   const child = await liveChild(t);
   const p = profile(t);
-  const scan = createDesktopScanner(p.dir);
+  // This case requires a known identity. An OS query timeout correctly blocks
+  // an unknown live PID (covered above), even when the registration is old.
+  const startedAtMs = Date.now();
+  const { ports } = countingPorts(new Map([[child.pid, { startedAtMs, command: process.execPath }]]));
+  const scan = createDesktopScanner(p.dir, ports);
   // Recorded an hour before this process started, by a Cindy at another path: the PID was reused.
-  p.write(child.pid, { startedAtMs: Date.now() - 3_600_000, rootDir: path.join(p.dir, 'some-other-cindy') });
+  p.write(child.pid, { startedAtMs: startedAtMs - 3_600_000, rootDir: path.join(p.dir, 'some-other-cindy') });
   assert.deepEqual(await scan(), []);
-  p.write(child.pid);
+  p.write(child.pid, { startedAtMs });
   assert.deepEqual(await scan(), [child.pid]);
   const exited = once(child, 'exit');
   child.kill();

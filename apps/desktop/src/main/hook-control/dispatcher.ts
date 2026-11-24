@@ -700,10 +700,11 @@ interface PendingTurnEnd {
  * 放进来与它共享 session 事件流 / origin / 交互路由(codex review #1490)。
  * 与权限档**无关** —— 群轮次不再改用户配的权限模式(见 session-runner)。
  * execute() 与续跑观察共用同一判据, 分叉会让续跑轮丢掉这层独占。
- * 官方飞书 / Lark 的群消息一律在话题里回复(`feishu:topic:…`), 同样是多人可见的群轮次。
+ * 官方飞书 / Lark 的群消息一律在话题里回复(`feishu:topic:…`), 同样是多人可见的群轮次;
+ * 官方 Discord 的服务器频道 / 子区(`discord:ch:…`)同理。
  */
 function deriveLaneKind(externalKey: string): 'dm' | 'group' {
-  return /^(?:telegram|feishu):(?:group|topic):/.test(externalKey) ? 'group' : 'dm';
+  return /^(?:(?:telegram|feishu):(?:group|topic)|discord:ch):/.test(externalKey) ? 'group' : 'dm';
 }
 
 interface PendingReopen {
@@ -2823,7 +2824,8 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     const legacyText = payload.source?.userText == null && !/^[<\[]|[\r\n]/.test(plainPrompt) ? plainPrompt : '';
     const titleText = payload.source?.userText?.trim() || legacyText;
     const context = payload.source?.teamName ||
-      (payload.source?.im === 'telegram' || payload.source?.im === 'x' || payload.source?.im === 'feishu'
+      (payload.source?.im === 'telegram' || payload.source?.im === 'x' || payload.source?.im === 'feishu' ||
+        payload.source?.im === 'discord'
         ? payload.source.channelName : null);
     const title = buildHookSessionTitle(channel, titleText, context);
     return {

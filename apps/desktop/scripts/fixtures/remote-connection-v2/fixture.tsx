@@ -195,6 +195,8 @@ if (ctx.case === 'remote-switch-controller-strict') data.links = data.links.filt
  */
 const selfEncrypted = ctx.case !== 'self-device-link';
 if (!selfEncrypted) for (const l of data.links) l.encrypted = false;
+/** 这台电脑在官方网络上被移除了：本机卡片说明原因并给「重新加入」(deviceRejoin.ts)。 */
+const removed = ctx.case === 'removed-rejoin';
 /**
  * 远程切换连接方式的模拟对端(remote-switch):代替那台电脑回答 `peer-agent-net`,并像真实切换一样
  * 让与它的连接先断开、再以新方式连回来。MacBook Air 是旧版 Cindy(不认识这个请求)，Spare PC 在当前中转上
@@ -254,12 +256,13 @@ void mountPage({
   route: '/settings?tab=remote-control',
   host: {
     deviceLink: {
-      listDevices: async () => ({ devices: data.devices }),
+      // A removed computer is no longer on the account's device list; its own card stays, stopped on the removal.
+      listDevices: async () => ({ devices: removed ? data.devices.filter((d) => !d.isSelf) : data.devices }),
       getState: async () => ({
         remoteControlEnabled: ctx.case !== 'empty',
         keepAwake: false,
-        linkStatus: 'online',
-        connectionIssue: null,
+        linkStatus: removed ? 'stopped' : 'online',
+        connectionIssue: removed ? { kind: 'device-removed', closeCode: 4410, at: Date.now(), rejoinable: true } : null,
         standby: false,
         controlledBy: ctx.case === 'default' ? [{ deviceId: 'win', name: 'Work PC' }] : [],
         revokedControllers: [],
@@ -296,6 +299,10 @@ void mountPage({
         if (index >= 0) data.devices.splice(index, 1);
         return { deviceId, deleted: index >= 0 };
       },
+      rejoin: removed ? async () => {
+        (window as unknown as { __rejoinCalls?: number }).__rejoinCalls = ((window as unknown as { __rejoinCalls?: number }).__rejoinCalls ?? 0) + 1;
+        return { agentNet: 'rejoined' as const };
+      } : forbid('deviceLink.rejoin'),
     },
     selfHostedRelay: {
       command: async (command: SelfHostedRelayCommand) => ({

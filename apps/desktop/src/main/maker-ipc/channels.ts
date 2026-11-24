@@ -432,13 +432,20 @@ export const MAKER_INVOKE = {
   IM_DEFAULT_SETTINGS_GET: 'maker:im-default-settings:get',
   IM_DEFAULT_SETTINGS_SET: 'maker:im-default-settings:set',
   IM_DEFAULT_SETTINGS_RESET: 'maker:im-default-settings:reset',
+  /** 个人飞书 / Lark 机器人的按群设置（项目、模型、权限）。仅本机设置页，不进远程白名单。 */
+  FEISHU_GROUP_SETTINGS_LIST: 'maker:feishu-group-settings:list',
+  FEISHU_GROUP_SETTINGS_SET: 'maker:feishu-group-settings:set',
   /** Claude / Codex 子代理模型覆盖；null 表示沿用 agent 原生逻辑。 */
   SUBAGENT_MODEL_SETTINGS_GET: 'maker:subagent-model-settings:get',
   SUBAGENT_MODEL_SETTINGS_SET: 'maker:subagent-model-settings:set',
   SUBAGENT_MODEL_SETTINGS_RESET: 'maker:subagent-model-settings:reset',
   /** Global exact-model choices for short host-generated text tasks. */
   AUXILIARY_MODEL_SETTINGS_GET: 'maker:auxiliary-model-settings:get',
+  AUXILIARY_MODEL_ROUTE_HEALTH_GET: 'maker:auxiliary-model-route-health:get',
   AUXILIARY_MODEL_SETTINGS_SET: 'maker:auxiliary-model-settings:set',
+  AUXILIARY_MODEL_SETTINGS_TEST: 'maker:auxiliary-model-settings:test',
+  AUXILIARY_MODEL_HEALTH_DISMISS: 'maker:auxiliary-model-health:dismiss',
+  AUXILIARY_MODEL_HEALTH_GET: 'maker:auxiliary-model-health:get',
   SILENT_ENCRYPTED_RETRY_GET: 'maker:silent-encrypted-retry:get',
   SILENT_ENCRYPTED_RETRY_SET: 'maker:silent-encrypted-retry:set',
   SILENT_ENCRYPTED_RETRY_RESET: 'maker:silent-encrypted-retry:reset',
@@ -936,6 +943,7 @@ export const MAKER_PUSH = {
   AGENTS_CHANGED: 'maker:agents:changed',
   TURN_CHANGE_SET_UPDATED: 'maker:turn-change-set:updated',
   STATUS_CHANGED: 'maker:status-changed',
+  AUXILIARY_MODEL_HEALTH_CHANGED: 'maker:auxiliary-model-health',
   /** 用户从独立 Computer Use 授权引导浮窗主动取消。 */
   COMPUTER_PERMISSION_GUIDE_CANCELLED: 'maker:computer:permission-guide-cancelled',
   /** Native Computer Use onboarding status changed while System Settings is open. */

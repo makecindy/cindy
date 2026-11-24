@@ -974,13 +974,15 @@ describe('AppServerHost MCP readiness', () => {
   });
 
   it('retries a negative tool probe instead of permanently caching it', async () => {
+    const probeTimeoutMs = 10;
     let available = false;
+    const publishedTools = vi.fn(() => available ? { js: {} } : {});
     const transport = new NotificationTransport((method) => (
       method === 'mcpServerStatus/list'
         ? {
             data: [{
               name: 'node_repl',
-              tools: available ? { js: {} } : {},
+              tools: publishedTools(),
               authStatus: 'notApplicable',
             }],
             nextCursor: null,
@@ -991,14 +993,28 @@ describe('AppServerHost MCP readiness', () => {
       createTransport: () => transport,
       logger,
       clientInfo: { name: 'cindy-test', version: '0.0.0' },
-      codexBrowserUseStartupTimeoutMs: 10,
+      codexBrowserUseStartupTimeoutMs: probeTimeoutMs,
     });
 
-    await expect(host.waitForMcpTool('node_repl', 'js')).resolves.toBe(false);
-    available = true;
-    await expect(host.waitForMcpTool('node_repl', 'js')).resolves.toBe(true);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      // Let the empty catalog reach the Host before expiring its probe budget.
+      const initialProbe = host.waitForMcpTool('node_repl', 'js');
+      await vi.advanceTimersByTimeAsync(probeTimeoutMs);
+      await expect(initialProbe).resolves.toBe(false);
+      expect(publishedTools).toHaveBeenCalledOnce();
+      expect(publishedTools).toHaveReturnedWith({});
 
-    await host.shutdown();
+      available = true;
+      const retry = host.waitForMcpTool('node_repl', 'js');
+      await vi.advanceTimersByTimeAsync(probeTimeoutMs);
+      await expect(retry).resolves.toBe(true);
+      expect(publishedTools).toHaveBeenCalledTimes(2);
+      expect(publishedTools).toHaveNthReturnedWith(2, { js: {} });
+    } finally {
+      vi.useRealTimers();
+      await host.shutdown();
+    }
   });
 
   it('re-probes MCP readiness after the app-server respawns', async () => {

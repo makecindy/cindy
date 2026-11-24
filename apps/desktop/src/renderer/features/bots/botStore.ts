@@ -396,11 +396,28 @@ function applyGlobalModelChain(
   emit();
 }
 
+/**
+ * Re-reads and re-projections build fresh rows even when nothing changed. Keep
+ * each unchanged row, and the whole array when every row is kept, by identity:
+ * `useBotProfiles()` subscribers then skip re-rendering for a no-op refresh.
+ */
+function keepUnchangedProfiles(previous: BotProfile[], next: BotProfile[]): BotProfile[] {
+  const previousById = new Map(previous.map((bot) => [bot.id, bot]));
+  let changed = next.length !== previous.length;
+  const merged = next.map((bot, index) => {
+    const old = previousById.get(bot.id);
+    const kept = old && JSON.stringify(old) === JSON.stringify(bot) ? old : bot;
+    if (kept !== previous[index]) changed = true;
+    return kept;
+  });
+  return changed ? merged : previous;
+}
+
 function projectGlobalModelChain(): void {
   if (!globalModelChainCache) return;
   const chain = getEffectiveBotModelChain();
   const primary = chain[0] ?? { model: '', providerId: null, effort: '', fastMode: false };
-  profiles = profiles.map((bot) =>
+  profiles = keepUnchangedProfiles(profiles, profiles.map((bot) =>
     bot.capabilities.modelChainOverride === null
       ? {
           ...bot,
@@ -413,7 +430,7 @@ function projectGlobalModelChain(): void {
           },
         }
       : bot,
-  );
+  ));
 }
 
 export async function setBotGlobalModelChain(chain: BotModelRoute[]): Promise<void> {
@@ -778,6 +795,9 @@ async function hydrateFromDatabase(): Promise<void> {
   const owner = getDataOwnerGeneration();
   const generation = ++hydrationGeneration;
   const isCurrent = () => isDataOwnerGenerationCurrent(owner) && generation === hydrationGeneration;
+  // Stays a per-refresh 'pending': RemoteBotSessionView's local-recovery hand-off
+  // waits for it as "the roster caught up". keepUnchangedProfiles keeps this
+  // emit from re-rendering useBotProfiles() subscribers.
   profileLoadState = 'pending';
   emit();
   try {
@@ -804,10 +824,12 @@ async function hydrateFromDatabase(): Promise<void> {
     const rows = await api.list({ lastReadAtByBotId: getBotLastReadAtMap(), welcomeContext: readCachedBotWelcomeContext(), locale: getEffectiveLocale() });
     if (!isCurrent()) return;
     const dbProfiles = rows.map(normalizeDbProfile).filter((item): item is BotProfile => !!item);
+    const previous = profiles;
     profiles = dbProfiles;
     profileListLoaded = true;
     profileLoadState = 'ready';
     projectGlobalModelChain();
+    profiles = keepUnchangedProfiles(previous, profiles);
     applyUnreadCounts(rows);
     // Discovery is not an acknowledgement; absent/hidden rows never delete shared reads.
     seedMissingBotReadState(profiles.map((bot) => bot.id));
