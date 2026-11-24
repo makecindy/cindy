@@ -130,16 +130,39 @@ describe('TodoListCard flyout interaction', () => {
     expect(trigger.getAttribute('aria-expanded')).toBe('false');
   });
 
-  it('closes a pinned flyout with Escape', () => {
-    render(<TodoListCard todos={TODOS} animated={false} />);
+  it('claims Escape from a pinned plan before it reaches a lower layer', () => {
+    render(<TodoListCard todos={TODOS} />);
+    const trigger = screen.getByRole('button', { name: 'Step 1 / 2' });
+    const closeLowerLayer = vi.fn();
+    const handleLowerLayer = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !event.defaultPrevented) closeLowerLayer();
+    };
+    window.addEventListener('keydown', handleLowerLayer);
+    try {
+      fireEvent.click(trigger);
+      expect(trigger.getAttribute('aria-expanded')).toBe('true');
 
+      fireEvent.keyDown(document.body, { key: 'Escape' });
+      expect(trigger.getAttribute('aria-expanded')).toBe('false');
+      expect(closeLowerLayer).not.toHaveBeenCalled();
+
+      fireEvent.keyDown(document.body, { key: 'Escape' });
+      expect(closeLowerLayer).toHaveBeenCalledOnce();
+    } finally {
+      window.removeEventListener('keydown', handleLowerLayer);
+    }
+  });
+
+  it('keeps the plan pinned when another layer has handled Escape', () => {
+    render(<TodoListCard todos={TODOS} />);
     const trigger = screen.getByRole('button', { name: 'Step 1 / 2' });
     fireEvent.click(trigger);
+    const escape = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    escape.preventDefault();
+
+    fireEvent(document.body, escape);
+
     expect(trigger.getAttribute('aria-expanded')).toBe('true');
-
-    fireEvent.keyDown(document, { key: 'Escape' });
-
-    expect(trigger.getAttribute('aria-expanded')).toBe('false');
   });
 
   it('toggles the pinned flyout for keyboard-generated clicks', () => {

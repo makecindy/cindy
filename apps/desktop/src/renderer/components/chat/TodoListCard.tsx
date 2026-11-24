@@ -312,7 +312,9 @@ export function TodoListCard({
       setOpenMode('closed');
     };
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpenMode('closed');
+      if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing) return;
+      event.preventDefault();
+      setOpenMode('closed');
     };
 
     document.addEventListener('pointerdown', handlePointerDownOutside, true);
