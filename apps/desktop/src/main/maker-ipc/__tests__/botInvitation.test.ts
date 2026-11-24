@@ -20,6 +20,7 @@ const h = vi.hoisted(() => ({
   generate: vi.fn(),
   auxiliary: vi.fn(),
   createMessage: vi.fn(),
+  discardLegacyQueuedWelcome: vi.fn(),
   broadcast: vi.fn(),
   prepareAvatar: vi.fn(),
   finishAvatar: vi.fn(),
@@ -40,7 +41,12 @@ vi.mock('../botInvitationAvatar.js', () => ({
   finishBotInvitationAvatar: h.finishAvatar,
 }));
 import { tx as runWorkerTx } from '../../localDb/worker/opHandlers/tx.js';
-import { buildStaticBotGreeting, queueBotInvitation as enqueueBotInvitation } from '../botInvitation.js';
+import {
+  buildStaticBotGreeting,
+  queueBotInvitation as enqueueBotInvitation,
+  setBotInvitationRuntimeReady,
+} from '../botInvitation.js';
+import { UI_ACTION_TRIGGER_PREFIX } from '../../../shared/interruptedTurn.js';
 import { readBotSkill, seedBotSkillIfMissing } from '../botSkillStore.js';
 import { readBotProfileFolder } from '../botProfileFolder.js';
 import { parseBotInvitationDraft, botInvitationPrompt } from '../botInvitationDraft.js';
@@ -110,6 +116,8 @@ beforeEach(async ({ task }) => {
   ioTimeout = task.timeout;
   vi.clearAllMocks();
   h.createMessage.mockReset().mockResolvedValue(undefined);
+  h.discardLegacyQueuedWelcome.mockReset().mockResolvedValue(true);
+  setBotInvitationRuntimeReady({ discardLegacyQueuedWelcome: h.discardLegacyQueuedWelcome });
   h.owner = 'owner-a';
   h.userName = 'Chris';
   h.root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-invitation-'));
@@ -385,6 +393,57 @@ describe('companion invitation with SQLite and real skill files', () => {
     queueBotInvitation('bot-1');
     await waitForIo(() => expect(state().stage).toBe('ready'));
     expect(h.createMessage).toHaveBeenCalledOnce();
+  });
+
+  it('keeps cold-start recovery pending until runtime readiness is installed', async () => {
+    setBotInvitationRuntimeReady(null);
+    seed({ stage: 'welcome' }, { modelChain: [{ harness: 'codex', providerId: 'user-provider', model: 'user-model' }] });
+    const createCanonicalSession = vi.fn(async () => ({ canonicalSessionId: 'chat-1' }));
+    enqueueBotInvitation('bot-1', { canStartWelcome: async () => true, createCanonicalSession, broadcastProfileChanged: h.broadcast, getUserName: () => h.userName });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(state().stage).toBe('welcome');
+    expect(createCanonicalSession).not.toHaveBeenCalled();
+    setBotInvitationRuntimeReady({ discardLegacyQueuedWelcome: h.discardLegacyQueuedWelcome });
+    await waitForIo(() => expect(state().stage).toBe('ready'));
+    expect(createCanonicalSession).toHaveBeenCalledOnce();
+    expect(h.createMessage).toHaveBeenCalledOnce();
+  });
+
+  it('discards legacy queued welcome items before clearing welcomeClientId, retrying when queue restore is unavailable', async () => {
+    vi.useFakeTimers();
+    try {
+      seed({ stage: 'welcome', welcomeClientId: 'legacy-welcome-1' });
+      h.discardLegacyQueuedWelcome.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+      queueBotInvitation('bot-1');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.discardLegacyQueuedWelcome).toHaveBeenCalledWith('chat-1');
+      expect(state()).toMatchObject({ stage: 'welcome', welcomeClientId: 'legacy-welcome-1' });
+      expect(h.createMessage).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(h.discardLegacyQueuedWelcome).toHaveBeenCalledTimes(2);
+      expect(h.createMessage).toHaveBeenCalledOnce();
+      expect(state().stage).toBe('ready');
+      expect(state().welcomeClientId).toBeUndefined();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('ignores legacy hidden synthetic welcome user rows when checking whether the user already spoke', async () => {
+    seed({ stage: 'welcome', welcomeClientId: 'legacy-welcome-1' });
+    sqlite.prepare("UPDATE bot_profiles SET canonical_session_id = 'chat-1'").run();
+    sqlite.prepare('INSERT INTO messages (id, client_id, session_id, role, content) VALUES (?, ?, ?, ?, ?)')
+      .run('u-syn-1', 'legacy-welcome-1', 'chat-1', 'user', JSON.stringify({ text: `${UI_ACTION_TRIGGER_PREFIX}The user has just invited you.` }));
+    sqlite.prepare('INSERT INTO messages (id, client_id, session_id, role, content) VALUES (?, ?, ?, ?, ?)')
+      .run('u-syn-2', 'legacy-welcome-2', 'chat-1', 'user', `${UI_ACTION_TRIGGER_PREFIX}raw synthetic`);
+    queueBotInvitation('bot-1');
+    await waitForIo(() => expect(state().stage).toBe('ready'));
+    expect(h.discardLegacyQueuedWelcome).toHaveBeenCalledWith('chat-1');
+    expect(h.createMessage).toHaveBeenCalledOnce();
+    expect(written()[0]).toMatchObject({
+      clientId: 'bot-opening:invitation-1',
+      role: 'assistant',
+      content: '嗨，Chris，我是阿橙。有事直接跟我说。',
+    });
   });
 
   it.each(['cindy', 'dash', 'lizi'])(

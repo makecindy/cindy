@@ -10,6 +10,7 @@ import { botProfiles, botProfileVersions, messages } from '../localDb/schema.js'
 import { createLogger } from '../logger.js';
 import { subscribeNewMakerDefaults } from '../maker-host/newMakerDefaultsCache.js';
 import { resolveSystemLocale, type SupportedLocale } from '../../shared/locale.js';
+import { isSyntheticUserMessageContent } from '../../shared/interruptedTurn.js';
 import { type BotWelcomeContext } from '../../shared/botWelcomeContext.js';
 import { prepareBotInvitationAvatar, finishBotInvitationAvatar } from './botInvitationAvatar.js';
 import { botInvitationProgress, type BotInvitationProgress } from '../../shared/botInvitation.js';
@@ -47,6 +48,21 @@ interface Invitation extends BotInvitationProgress {
   welcomeClientId?: string;
   /** Bundled Market package opening; absent for every other invitation. */
   opening?: BotPackageOpening;
+}
+
+/**
+ * Runtime hooks installed by registerMakerIpc() after both setSessionOpeningModelAdmission()
+ * and AgentInputCoordinator are ready. Keeps cold-start recovery pending until openSession()
+ * can admit models and lets upgrade recovery discard legacy queued welcome items before
+ * clearing welcomeClientId.
+ */
+export interface BotInvitationRuntimeHooks {
+  discardLegacyQueuedWelcome?(sessionId: string): Promise<boolean>;
+}
+let runtimeHooks: BotInvitationRuntimeHooks | undefined;
+export function setBotInvitationRuntimeReady(hooks: BotInvitationRuntimeHooks | null): void {
+  runtimeHooks = hooks ?? undefined;
+  if (runtimeHooks) drainInvitations();
 }
 
 const log = createLogger('botInvitation');
@@ -308,14 +324,30 @@ export function queueBotInvitation(
       // Host writes the opening directly as a normal teammate message — no companion-model
       // turn or auxiliary-model rewrite — unless the user has already spoken.
       const sessionId = canonical.canonicalSessionId;
-      const userHasSpoken = async () =>
-        (
-          await db
-            .select({ id: messages.id })
-            .from(messages)
-            .where(and(eq(messages.sessionId, sessionId), eq(messages.role, 'user')))
-            .limit(1)
-        ).length > 0;
+      // Upgrade compatibility: an unfinished legacy invitation may have left a hidden
+      // model-welcome item in the session's restored queue. Clear it before clearing
+      // welcomeClientId so the user's first message never releases a duplicate model greeting.
+      if ((current.invitation?.welcomeClientId || current.profile.canonicalSessionId) && runtimeHooks?.discardLegacyQueuedWelcome) {
+        const cleared = await runtimeHooks.discardLegacyQueuedWelcome(sessionId);
+        assertOwner();
+        if (!cleared && current.invitation?.welcomeClientId) {
+          const count = (openingWriteFailures.get(invitationId) ?? 0) + 1;
+          if (count >= OPENING_WRITE_ATTEMPTS) {
+            openingWriteFailures.delete(invitationId);
+            throw new Error('INVITATION_LEGACY_QUEUE_UNAVAILABLE');
+          }
+          openingWriteFailures.set(invitationId, count);
+          log.warn('legacy queued welcome not cleared; retrying', { botId, count });
+          return 'waiting-for-model';
+        }
+      }
+      const userHasSpoken = async () => {
+        const rows = await db
+          .select({ content: messages.content })
+          .from(messages)
+          .where(and(eq(messages.sessionId, sessionId), eq(messages.role, 'user')));
+        return rows.some(row => !isSyntheticUserMessageContent(row.content));
+      };
       if (!(await userHasSpoken())) {
         assertOwner();
         const opening = current.invitation?.opening;
@@ -388,6 +420,9 @@ const OPENING_WRITE_ATTEMPTS = 3;
 const openingWriteFailures = new Map<string, number>();
 
 function drainInvitations(): void {
+  // Cold-start DB recovery can precede Maker IPC registration (and openSession's model
+  // admission). Keep owner-bound invitations queued until the runtime barrier opens.
+  if (!runtimeHooks) return;
   while (running.size < MAX_RUNNING && pending.size) {
     const [key, task] = pending.entries().next().value!;
     pending.delete(key);
