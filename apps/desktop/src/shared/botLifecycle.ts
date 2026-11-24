@@ -34,6 +34,7 @@ export interface BotLifecycleActionResult {
     deliveries: number;
     worktrees: number;
   };
+  /** COMPANION_LOCAL_COPY_DELETED limits the receipt to deletion of the local profile. */
   warnings?: string[];
 }
 

@@ -11,6 +11,7 @@ import type {
 } from '../../shared/botLifecycle.js';
 import { normalizeWorkingDirForStorage, workingDirEquals } from '../../shared/workingDir.js';
 import { getDbClient } from '../localDb/client/current.js';
+import { companionHomes } from '../companion-cloud/homes.js';
 import { deleteBotProfileAndDetachSessionsInDb } from '../localDb/ipc/sessions.js';
 import { removeRecentWorkdir } from '../localDb/ipc/recentWorkdirsCore.js';
 import { escapeLikePattern } from '../localDb/workingDirHistoryFilter.js';
@@ -377,6 +378,11 @@ export function createBotLifecycleService(deps: BotLifecycleServiceDeps) {
     );
     try {
       assertOwnerUnchanged();
+      // The local transaction committed. A shadowed copy (including one homed
+      // here) or a copy homed elsewhere only warrants a local deletion receipt.
+      if (companionHomes.isShadowed(request.botId) || !companionHomes.isHomeHere(request.botId)) {
+        preparationWarnings.push('COMPANION_LOCAL_COPY_DELETED');
+      }
       await deps.onDeleted?.(request.botId, assertOwnerUnchanged);
     } catch {
       // The DB is already committed. Keep the deletion result truthful; the
