@@ -65,6 +65,7 @@ export type DbTxName =
   | 'bots.createChannelLane'
   | 'bots.createThreadLane'
   | 'bots.archiveChannelLanes'
+  | 'bots.pruneEmptyLegacyRoutineHistory'
   | 'botGroups.create'
   | 'botGroups.setMembers'
   | 'botGroups.delete'
@@ -1399,6 +1400,7 @@ export type DbTxArgsByName = {
   'bots.createChannelLane': BotsCreateChannelLaneArgs;
   'bots.createThreadLane': BotsCreateThreadLaneArgs;
   'bots.archiveChannelLanes': BotsArchiveChannelLanesArgs;
+  'bots.pruneEmptyLegacyRoutineHistory': { neverDispatchedSessionIds: string[] };
   'botGroups.create': BotGroupsCreateArgs;
   'botGroups.setMembers': BotGroupsSetMembersArgs;
   'botGroups.delete': BotGroupsDeleteArgs;
@@ -1501,6 +1503,7 @@ export type DbTxResultByName = {
   'bots.createChannelLane': BotGroupsCreateLaneResult;
   'bots.createThreadLane': BotGroupsCreateLaneResult;
   'bots.archiveChannelLanes': { archivedSessionIds: string[] };
+  'bots.pruneEmptyLegacyRoutineHistory': { removed: number; botIds: string[] };
   'botGroups.create': undefined;
   'botGroups.setMembers': BotGroupsSetMembersResult;
   'botGroups.delete': { archivedSessionIds: string[] };

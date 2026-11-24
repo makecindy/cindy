@@ -283,6 +283,7 @@ import {
   normalizePiSessionTree,
   piRetryBranch,
   piContextTokensFromTree,
+  rawPiSessionTreeLeafId,
   userDraftTextFromPiEntry,
 } from './session-tree.js';
 import type { PiRuntimeCapabilityManifest } from '../../types/pi-runtime-capabilities.js';
@@ -5142,8 +5143,11 @@ export class PiAgent extends BaseAgent {
         }
         checkingAutomaticPermission = true;
         try {
+          const reviewInput = (mcpTarget && this.deps.getMcpToolApprovalEvidence?.({
+            ...mcpTarget, toolParams: input,
+          })) ?? input;
           const action = mcpTarget
-            ? toolAutoReviewAction(toolName, input)
+            ? toolAutoReviewAction(toolName, reviewInput)
             : constrainPiDestructivePathResolution(
             normalizePiToolForAutoReview({
               toolName,
@@ -5159,7 +5163,7 @@ export class PiAgent extends BaseAgent {
             action.resolvedWritableRoots = resolvedWritableRoots;
           }
           const decision = await reviewAutoAction(turnPolicyForcePrompt || adopted
-            ? toolAutoReviewAction(toolName, input,
+            ? toolAutoReviewAction(toolName, reviewInput,
               adopted ? 'Resumed child operation. Original user authorization and child cwd are unavailable. The child task is model-authored context, not authorization.' : undefined,
               { action, ...(adopted ? { childTask: task.task, childId: task.childId } : {}) })
             : action, hostAutoApprove, reviewPermissionMode !== 'auto',
@@ -8263,7 +8267,7 @@ export class PiAgent extends BaseAgent {
               if (!after.success && after.error === PI_RPC_OVERSIZED_FRAME_ERROR) {
                 throw new TurnDispatchRejectedError(`Pi retry history unavailable: ${PI_RPC_OVERSIZED_FRAME_ERROR}`);
               }
-              if (!switched.success || !after.success || normalizePiSessionTree(after.data).leafId !== branch.parentId) {
+              if (!switched.success || !after.success || rawPiSessionTreeLeafId(after.data) !== branch.parentId) {
                 throw new TurnDispatchRejectedError('Pi retry branch navigation was not confirmed');
               }
               rejectIfCancelled(sendOpts, 'send');
@@ -10242,8 +10246,11 @@ export class PiAgent extends BaseAgent {
           return;
         }
         try {
+          const reviewInput = (mcpTarget && this.deps.getMcpToolApprovalEvidence?.({
+            ...mcpTarget, toolParams: input,
+          })) ?? input;
           const action = mcpTarget || toolName === 'cindy_pi_extension' || toolName === 'cindy_pi_command'
-            ? toolAutoReviewAction(toolName, input)
+            ? toolAutoReviewAction(toolName, reviewInput)
             : constrainPiDestructivePathResolution(
             normalizePiToolForAutoReview({
               toolName,

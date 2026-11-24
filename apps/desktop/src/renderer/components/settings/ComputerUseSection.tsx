@@ -1669,7 +1669,11 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
           </p>
         ) : null}
         <p className={SETTINGS_HINT}>
-          {t('settings.computerUse.browser.toggleHint')}
+          {t(
+            workingDir
+              ? 'settings.computerUse.browser.toggleHint'
+              : 'settings.computerUse.browser.userDefaultToggleHint',
+          )}
         </p>
       </SettingsSection>
 

@@ -3149,7 +3149,7 @@ export async function setSessionProviderIdInDb(
 /** Persist the provider-facing source for a newly-created shared IM session. */
 export async function setSessionSourceInDb(
   sessionId: string,
-  source: 'telegram' | 'x' | 'feishu',
+  source: 'telegram' | 'x' | 'feishu' | 'discord-hook',
 ): Promise<void> {
   try {
     const db = getDbClient().drizzle;

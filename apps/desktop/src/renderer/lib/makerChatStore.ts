@@ -67,6 +67,7 @@ import {
   type DataOwnerGeneration,
 } from '@/contexts/dataOwnerGeneration';
 import { isDataOwnerPushStamp } from '../../shared/dataOwnerPush';
+import { isPluginInstanceKey } from '../../shared/pluginIdentity';
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion';
 import { isPluginEngineKind, pluginEngineKeyFromProviderId } from '../../shared/pluginEngines';
 import {
@@ -3095,6 +3096,7 @@ export type SessionChatLightState = Pick<
 > & {
   /** 窗口是否掺进过孤岛(由 historyWindowIslands 派生,给 UI / 判定用)。 */
   historyWindowHasIsland: boolean;
+  queueHeadRetry: boolean;
 };
 
 /** 没有孤岛的空模型(共享只读实例,避免无谓分配)。 */
@@ -3277,6 +3279,7 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
 export const EMPTY_LIGHT_STATE: SessionChatLightState = Object.freeze({
   ...EMPTY_SESSION_STATE,
   historyWindowHasIsland: false,
+  queueHeadRetry: false,
 });
 
 // ---------------------------------------------------------------------------
@@ -10257,17 +10260,22 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       if (!isCurrentLocalLiveIngress(ownerStamp)) return;
       if (isSidebarWindow() || isSecondaryWindow()) return;
       const p = raw as {
+        ghostId?: string;
         name?: string;
         iconDataUrl?: string;
         sessionId?: string;
         url?: string;
+        reuseExisting?: true;
       } | null;
       if (!p || typeof p.name !== 'string') return;
       if (typeof p.sessionId !== 'string' || typeof p.url !== 'string') return;
       // userInitiated:false —— 这是插件在后台干完活自己要求开的页,不是用户点的。
       // 标签照常落地、内容照常加载,但不得把侧边栏子窗口抢到前台打断用户
       // (detached 形态 + Windows 上 focus() 即抢前台)。
-      void openUrlInSidebarBrowser(p.sessionId, p.url, { userInitiated: false }).catch(() => {
+      const pluginPreview = isPluginInstanceKey(p.ghostId) && isDataOwnerPushStampCurrent(ownerStamp)
+        ? { instanceId: p.ghostId, ownerStamp, ...(p.reuseExisting === true ? { reuseExisting: true as const } : {}) }
+        : undefined;
+      void openUrlInSidebarBrowser(p.sessionId, p.url, { userInitiated: false, pluginPreview }).catch(() => {
         /* 标签落地失败(会话桶异常等)不致命,静默 */
       });
       toast.info(i18n.t('chat.ghostPreview.opened'), {
@@ -10532,6 +10540,7 @@ function visibleAskUser(state: SessionChatState): PendingAskUser | null {
 }
 
 function selectLightState(state: SessionChatState): SessionChatLightState {
+  const queueHead = state.pendingQueue[0];
   return {
     agentSwitchIntent: state.agentSwitchIntent,
     agentStatus: state.agentStatus,
@@ -10543,6 +10552,9 @@ function selectLightState(state: SessionChatState): SessionChatLightState {
     outputLimit: state.outputLimit,
     recoverableError: state.recoverableError,
     errorRetryText: state.errorRetryText,
+    queueHeadRetry: state.inputRecovery?.kind === 'queue-head'
+      && queueHead?.clientId === state.inputRecovery.clientId
+      && !queueHead.origin && !queueHead.originalSyntheticTrigger && !queueHead.sourcePlugin,
     errorCanContinue: state.errorCanContinue,
     errorPersistId: state.errorPersistId,
     disposedErrorPersistId: state.disposedErrorPersistId,
@@ -10602,6 +10614,7 @@ function lightStateEquals(a: SessionChatLightState, b: SessionChatLightState): b
     a.outputLimit === b.outputLimit &&
     a.recoverableError === b.recoverableError &&
     a.errorRetryText === b.errorRetryText &&
+    a.queueHeadRetry === b.queueHeadRetry &&
     a.errorCanContinue === b.errorCanContinue &&
     a.errorPersistId === b.errorPersistId &&
     a.disposedErrorPersistId === b.disposedErrorPersistId &&

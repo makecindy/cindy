@@ -409,6 +409,7 @@ describe('selected plugin host', () => {
     const mounted = render(view(true));
     await screen.findByText('computer-a');
     fireEvent.click(screen.getByRole('tab', { name: /^settings.ghosts.page.marketSection/ }));
+    fireEvent.click(screen.getByRole('radio', { name: /settings.ghosts.page.filterAll/ }));
     await screen.findByText('Old market release');
     mounted.rerender(view(false));
     marketName = 'New market release';
@@ -1586,7 +1587,8 @@ it.each([[120, 50], [-50, 0]])('switches a remote source without forcing an unpi
   render(<RemotePluginPage device={{ deviceId: 'computer-a', name: 'A' }} online />);
   await screen.findByText('computer-a');
   fireEvent.click(screen.getByRole('tab', { name: /^settings.ghosts.page.marketSection/ }));
-  const radio = await screen.findByRole('radio', { name: /settings.ghosts.page.origin.public/ });
+  expect(await screen.findByRole('radio', { name: /settings.ghosts.market.publisherKind.official/, checked: true })).toBeTruthy();
+  const radio = screen.getByRole('radio', { name: /settings.ghosts.market.publisherKind.community/ });
   const marker = radio.closest('[role="radiogroup"]')!.parentElement!.parentElement!.previousElementSibling!;
   const root = screen.getByRole('main');
   vi.spyOn(root, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 800, 800));

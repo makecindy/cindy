@@ -1411,6 +1411,22 @@ describe('local plugin engine worktree submission', () => {
 // 覆盖缺口：此前 Desktop 新建页对 isDeviceLinkDraft 禁用了插件引擎且 sendWithPluginEngine 只支持本机 createSession。
 // 最小失败输入与 tier：unit；deviceId='task-b' 选插件引擎仍调本机 createSession、把 /plan 分流到 setPending，或目录未到时落入内置模型。
 describe('controlled-computer plugin engine submission', () => {
+  const activePluginEngine: ActivePluginEngine = {
+    engine: {
+      key: 'agy-plugin:agy',
+      providerId: 'acp-plugin:agy-plugin:agy',
+      ghostId: 'agy-plugin',
+      harnessId: 'agy',
+      name: 'Antigravity',
+      availability: { state: 'available' },
+      models: [{ id: 'gemini-3-pro', displayName: 'Gemini 3 Pro', efforts: ['low', 'high'], defaultEffort: 'high' }],
+      permissionModes: [{ id: 'default', displayName: 'Default' }, { id: 'bypassPermissions', displayName: 'Full access' }],
+      defaultPermissionMode: 'default',
+    },
+    modelId: 'gemini-3-pro',
+    effort: 'high',
+    permissionMode: 'default',
+  };
   it('creates an acp session on computer B and sends a slash first message directly without local session creation', async () => {
     const result = await submit({
       deviceId: 'task-b',
@@ -1443,6 +1459,23 @@ describe('controlled-computer plugin engine submission', () => {
       expect.any(Object),
     );
     expect(result.setPending).not.toHaveBeenCalled();
+  });
+
+  // 2026-11-23 用户反馈：A 远控 B 新建任务时用不了 B 收到的插件供应商分享(内置供应商分享可以)。
+  // 最小失败输入：被控电脑草稿选中 B 名单里 `share:s1` 的引擎；修复前 maker:create-session 不带 agentDeviceId，
+  // B 会在自己身上找这个引擎(没装就失败，装了同款就悄悄用错)。任务仍建在 B，Agent 在分享上运行。
+  it('creates the task on computer B with its Agent on the share chosen from B’s sources', async () => {
+    const result = await submit({
+      deviceId: 'task-b',
+      message: 'hello',
+      activePluginEngine: { ...activePluginEngine, engine: { ...activePluginEngine.engine, deviceId: 'share:s1' } },
+      createRemote: async (id) => ({ sessionId: id, workDir: '/peer/dialogue' }),
+    });
+    expect(result.errors).toEqual([]);
+    expect(result.createSession).not.toHaveBeenCalled();
+    expect(result.invokeRemote).toHaveBeenCalledWith('task-b', 'maker:create-session', [
+      expect.objectContaining({ agentKind: 'acp', providerId: 'acp-plugin:agy-plugin:agy', agentDeviceId: 'share:s1' }),
+    ]);
   });
 
   it('blocks sending when computer B’s selected plugin engine is unavailable instead of falling through to a built-in model', async () => {

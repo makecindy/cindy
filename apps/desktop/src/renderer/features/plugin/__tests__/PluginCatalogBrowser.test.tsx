@@ -6,6 +6,7 @@ import type { PluginMarketItem, PluginMarketPage, PluginMarketQuery } from '../.
 import type { InstalledGhost } from '../../../../shared/ghost';
 import { emptyPluginBrowserCache, PluginCatalogBrowser } from '../PluginCatalogBrowser';
 import { GhostPluginIcon } from '../GhostPluginIcon';
+import type { PluginCatalogFilter } from '../lib/pluginMarketPresentation';
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 let readVisibleRange: ((first: number, last: number) => void) | undefined;
@@ -38,7 +39,7 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); intersections.clear(); vi.uns
 
 function item(index: number): PluginMarketItem {
   return { pluginId: `plugin-${index}`, ghostId: `tool-${index}`, name: `Tool ${index}`, description: null,
-    author: null, scope: 'public', organizationId: null, defaultInstall: false, releaseId: `release-${index}`,
+    author: null, scope: 'public', publisherKind: 'official', organizationId: null, defaultInstall: false, releaseId: `release-${index}`,
     version: '1.0.0', publishedAt: '2026-11-01T00:00:00Z', icon: null, installState: 'not-installed', enabled: null,
     sourceType: 'server', sourceMarketName: null };
 }
@@ -51,13 +52,79 @@ function page(start: number, total = 120): PluginMarketPage {
 function fixture(loadPage: (query: PluginMarketQuery) => Promise<PluginMarketPage>, renderItem = (item: PluginMarketItem) => <article>{item.name}</article>) {
   const cache = { current: emptyPluginBrowserCache() };
   const scroll = createRef<HTMLElement | null>();
-  const view = (query = '', visible = true, scope: NonNullable<PluginMarketQuery['scope']> = 'all', revision = 'revision', installedGhosts?: InstalledGhost[], installedItems?: PluginMarketItem[], ownerKey = 'owner', reader = loadPage) => <main ref={scroll}><PluginCatalogBrowser cacheRef={cache}
+  const view = (query = '', visible = true, scope: PluginCatalogFilter = 'all', revision = 'revision', installedGhosts?: InstalledGhost[], installedItems?: PluginMarketItem[], ownerKey = 'owner', reader = loadPage) => <main ref={scroll}><PluginCatalogBrowser cacheRef={cache}
     ownerKey={ownerKey} revision={revision} query={query} scope={scope} onScope={() => {}}
     visible={visible} showOrganization={false} scrollRef={scroll} loadPage={reader}
     installedGhosts={installedGhosts} installedItems={installedItems}
     renderItem={renderItem} /></main>;
   return { cache, view };
 }
+
+it('shows both server totals before visiting a second public page', async () => {
+  const load = vi.fn(async (input: PluginMarketQuery) => ({ ...page(0, 250),
+    counts: input.counts ? { all: 250, public: 250, organization: 0, personal: 0, custom: 0, official: 210, community: 39 } : null,
+  }));
+  const { view } = fixture(load);
+  const mounted = render(view('', true, 'official'));
+  await screen.findByText('Tool 0');
+  await waitFor(() => expect(screen.getByRole('radio', { name: /publisherKind.community/ }).textContent).toMatch(/39$/));
+  expect(screen.getByRole('radio', { name: /publisherKind.official/ }).textContent).toMatch(/210$/);
+  mounted.rerender(view('', true, 'community'));
+  expect(screen.getByRole('radio', { name: /publisherKind.community/ }).textContent).toMatch(/39$/);
+  expect(load.mock.calls.some(([input]) => input.cursor)).toBe(false);
+  expect(load.mock.calls.filter(([input]) => input.counts)).toHaveLength(1);
+});
+
+// Cold market entry: the first batch can contain no community plugin. Neither
+// counts nor the first category switch may depend on scrolling the official list.
+it('counts both publishers on first entry without a scroll and shares the rows between filters', async () => {
+  const official = { ...item(0), publisherKind: 'official' as const };
+  const community = { ...item(1), publisherKind: 'personal' as const };
+  const unknown = { ...item(2), author: 'Cindy', publisherKind: null };
+  const load = vi.fn(async (input: PluginMarketQuery) => ({
+    ...page(0, 3), items: input.cursor ? [community] : [official, unknown],
+    nextCursor: input.cursor ? null : 'second',
+  }));
+  const { view } = fixture(load);
+  const mounted = render(view('', true, 'official'));
+  await screen.findByText(official.name);
+  await waitFor(() => expect(screen.getByRole('radio', { name: /publisherKind.community/ }).textContent).toMatch(/1$/));
+  expect(screen.queryByText(unknown.name)).toBeNull();
+  expect(screen.getByRole('radio', { name: /publisherKind.community/ }).textContent).toMatch(/1$/);
+  expect(screen.getByRole('radio', { name: /publisherKind.official/ }).textContent).toMatch(/1$/);
+  const reads = load.mock.calls.length;
+  mounted.rerender(view('', true, 'community'));
+  expect(screen.getByText(community.name)).toBeTruthy();
+  expect(screen.queryByText(official.name)).toBeNull();
+  mounted.rerender(view('', true, 'official'));
+  expect(screen.getByText(official.name)).toBeTruthy();
+  expect(load.mock.calls.length).toBe(reads);
+  expect(load.mock.calls.filter(([input]) => !input.counts).map(([input]) => input.scope)).toEqual(['public', 'public']);
+});
+
+// The old ten-row read hid an entire publisher on first entry. A realistic
+// catalog honors the requested limit; switching should use the same page and grid.
+it('shows the first public batch and both exact counts before the first publisher switch', async () => {
+  const rows = Array.from({ length: 24 }, (_, i) => ({
+    ...item(i), publisherKind: i < 15 ? 'official' as const : i < 23 ? 'personal' as const : null,
+  }));
+  const load = vi.fn(async (input: PluginMarketQuery) => {
+    const start = Number(input.cursor ?? 0);
+    const items = rows.slice(start, start + (input.limit ?? 10));
+    return { ...page(0, rows.length), items, nextCursor: start + items.length < rows.length ? String(start + items.length) : null,
+      counts: input.counts ? page(0, rows.length).counts : null };
+  });
+  const { cache, view } = fixture(load);
+  const mounted = render(view('', true, 'official'));
+  await screen.findByText(rows[0]!.name);
+  expect(screen.getByRole('radio', { name: /publisherKind.official/ }).textContent).toMatch(/15$/);
+  expect(screen.getByRole('radio', { name: /publisherKind.community/ }).textContent).toMatch(/8$/);
+  const grid = cache.current.grid;
+  mounted.rerender(view('', true, 'community'));
+  expect(screen.getByText(rows[15]!.name)).toBeTruthy();
+  expect(cache.current.grid).toBe(grid);
+  expect(load.mock.calls.filter(([input]) => !input.counts)).toHaveLength(1);
+});
 
 // Unit / user-feedback-1: the revised catalog rule excludes installed cards.
 // Existing receipt coverage deliberately kept them, missing count/list parity
@@ -205,7 +272,7 @@ it.each([
   await act(async () => { refresh = cache.current.refresh!({ force: true }); });
   expect(finish).toBeTypeOf('function');
   if (transition === 'scope') {
-    mounted.rerender(view('', true, 'public'));
+    mounted.rerender(view('', true, 'official'));
     // Returning to the same warm cache must not revive the departed refresh.
     mounted.rerender(view());
   } else if (transition === 'query') mounted.rerender(view('changed'));
@@ -480,7 +547,7 @@ it('keeps fallback custom plugins unique across resident batches during an outag
   expect(items.filter(row => row.pluginId === 'plugin-20')).toHaveLength(1);
   expect(items.filter(row => row.pluginId === 'plugin-21')).toHaveLength(1);
   expect(items).toHaveLength(22);
-  expect([...cache.current.sizes.values()].reduce((sum, size) => sum + size, 0)).toBe(22);
+  expect([...cache.current.sizes.values()].reduce((sum, size) => sum + size.all, 0)).toBe(22);
   expect(items.filter(row => row.sourceType === 'server')).toHaveLength(20);
   expect(screen.getByText('Tool 0')).toBe(firstCard);
 });
@@ -512,7 +579,7 @@ it.each(['unknown', 'failed'])('throttles %s counts across tab and scope switche
   await screen.findByText('Tool 0');
   mounted.rerender(view('', false));
   mounted.rerender(view('', true));
-  mounted.rerender(view('', true, 'public'));
+  mounted.rerender(view('', true, 'official'));
   await screen.findByText('Tool 0');
   expect(load.mock.calls.filter(([input]) => input.counts === true)).toHaveLength(1);
 });
@@ -566,11 +633,11 @@ it('reuses search-wide counts across source filters and recounts for a new searc
   const { cache, view } = fixture(load);
   const mounted = render(view());
   await screen.findByText('Tool 0');
-  mounted.rerender(view('', true, 'public'));
+  mounted.rerender(view('', true, 'official'));
   await waitFor(() => expect(load).toHaveBeenCalledTimes(3));
   expect(load).toHaveBeenLastCalledWith(expect.objectContaining({ scope: 'public', counts: false }));
   expect(cache.current.counts?.all).toBe(120);
-  mounted.rerender(view('new search', true, 'public'));
+  mounted.rerender(view('new search', true, 'official'));
   await waitFor(() => expect(load).toHaveBeenCalledTimes(5));
   expect(load).toHaveBeenLastCalledWith(expect.objectContaining({ query: 'new search', counts: true }));
 });
@@ -693,7 +760,7 @@ it('keeps cards while a source loads and reuses unchanged warm source cards', as
   const original = await screen.findByText('Tool 0');
   await act(async () => {});
   vi.useFakeTimers();
-  mounted.rerender(view('', true, 'public'));
+  mounted.rerender(view('', true, 'official'));
   expect(screen.queryByText('Tool 0')).toBe(original);
   await act(async () => { await vi.advanceTimersByTimeAsync(300); });
   expect(screen.getByText('Tool 0')).toBe(original);
@@ -702,7 +769,7 @@ it('keeps cards while a source loads and reuses unchanged warm source cards', as
   expect(screen.getByText('Tool 0')).toBe(original);
   expect(screen.queryByText('ccAgent.common.loading')).toBeNull();
   const reads = load.mock.calls.length, renders = rendered.mock.calls.length;
-  for (const scope of ['all', 'public', 'all', 'public'] as const) {
+  for (const scope of ['all', 'official', 'all', 'official'] as const) {
     mounted.rerender(view('', true, scope));
     expect(screen.getByText('Tool 0')).toBe(original);
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
@@ -720,14 +787,14 @@ it('evicts the least recently used source after four keys and isolates a new own
   const mounted = render(view()); await screen.findByText('Tool 0');
   await act(async () => {});
   vi.useFakeTimers();
-  for (const scope of ['public', 'organization', 'custom', 'all'] as const) {
+  for (const scope of ['official', 'organization', 'custom', 'all'] as const) {
     mounted.rerender(view('', true, scope));
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
     expect(screen.queryByText('Tool 0')).toBeTruthy();
     expect(cache.current.variants!.size).toBeLessThanOrEqual(4);
   }
   const beforeWarm = load.mock.calls.length;
-  mounted.rerender(view('', true, 'public')); await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  mounted.rerender(view('', true, 'official')); await act(async () => { await vi.advanceTimersByTimeAsync(0); });
   expect(load).toHaveBeenCalledTimes(beforeWarm);
   mounted.rerender(view('Tool', true, 'all'));
   await act(async () => { await vi.advanceTimersByTimeAsync(250); });
@@ -752,7 +819,7 @@ it('keeps usable cards on a failed source and shares its pending count across so
   const { cache, view } = fixture(load);
   const mounted = render(view()); const original = await screen.findByText('Tool 0');
   await waitFor(() => expect(counts).toBeDefined());
-  vi.useFakeTimers(); mounted.rerender(view('', true, 'public'));
+  vi.useFakeTimers(); mounted.rerender(view('', true, 'official'));
   await act(async () => { await vi.advanceTimersByTimeAsync(300); });
   expect(screen.getByText('Tool 0')).toBe(original);
   expect(screen.getByRole('button', { name: 'commonUi.retry' })).toBeTruthy();

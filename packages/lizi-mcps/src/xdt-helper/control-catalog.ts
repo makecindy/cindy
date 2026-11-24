@@ -211,6 +211,9 @@ export function createControlReader(deps: Deps) {
     return { ok: true, items, total: matching.length, complete: offset + items.length >= matching.length,
       nextCursor: offset + items.length < matching.length ? Buffer.from(JSON.stringify({ fingerprint, offset: offset + items.length })).toString('base64url') : null,
       scope: '当前任务工具面；离线或未接通不等于产品不支持。',
+      ...(term && matching.length === 0 ? {
+        hint: '查询未命中。可缩短关键词，或省略 query 查看可用类目；用 list_tools({category}) 浏览已知类目，或用 list_tools({name}) 查精确工具名。',
+      } : {}),
     };
   };
 }

@@ -3,7 +3,7 @@ import { mapMembershipToAuthUser, type User, type CurrentUser } from '../shared/
 import { HOST_NOT_STARTED, readHostUnavailableReason, type HostUnavailable } from '../shared/hostStartFailure.js';
 import { createIpcError } from '../shared/ipc-errors.js';
 export type { User } from '../shared/authUser.js';
-import { resolveRuntimeDeviceId } from './deviceId.js';
+import { resolveRuntimeDeviceIdentity, writeReplacementDeviceId } from './deviceId.js';
 /**
  * authManager.ts
  * ---------------------------------------------------------------------------
@@ -370,8 +370,21 @@ function isOwnerChangeShellPending(): boolean {
  * dev-only 覆盖:设了 `XDT_DEVICE_ID_OVERRIDE` 则用它——用于在同一台机器上跑多个
  * desktop 实例模拟「多设备」(device-link 跨设备远程控制本地联调)。deviceId 只是
  * 同账号下区分设备的标识、非鉴权凭证(鉴权走 auth-server 签发的 JWT),覆盖无安全风险。
+ *
+ * 用户在设备身份冲突提示里给这台电脑换过身份时，用 profile 根下记录的新身份
+ * (deviceId.ts `DEVICE_IDENTITY_FILE`，只在原硬件身份上生效)。
  */
-const deviceId = resolveRuntimeDeviceId(machineIdSync);
+const deviceIdentity = resolveRuntimeDeviceIdentity(machineIdSync, undefined, profileDirForDeviceIdentity());
+const deviceId = deviceIdentity.deviceId;
+
+function profileDirForDeviceIdentity(): string | undefined {
+  try {
+    const dir = app.getPath('userData');
+    return typeof dir === 'string' && dir ? dir : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 // The offline entry is a renderer landing page, not an auth-server flow step.
 let loginFlowState: Exclude<DesktopLoginState, { step: 'entry' }> | null = null;
@@ -4363,6 +4376,27 @@ export function getCurrentMembershipDisplayName(): string | undefined {
 /** SkillHub 跨设备识别：本机 deviceId（machineIdSync 结果），登录前后都可用 */
 export function getDeviceId(): string {
   return deviceId;
+}
+
+/**
+ * 这台电脑主动让出的设备身份，包括多次换身份时的旧设备号。
+ * 仅用于识别留在本地的旧记录，例如 Agent-Net 证书。
+ */
+export function getRetiredDeviceIds(): readonly string[] {
+  return deviceIdentity.retiredDeviceIds ?? [];
+}
+
+/**
+ * 设备身份冲突时，用户确认后给这台电脑换一个新身份，下次启动生效。不调用服务端登出：
+ * 旧身份的续期凭证与另一台电脑共用，作废它会把那台电脑一起登出。新身份首次续期得到
+ * DEVICE_MISMATCH 后按既有路径以未登录启动，用户重新登录。
+ */
+export function replaceDeviceIdentityForNextStart(): void {
+  const profileDir = profileDirForDeviceIdentity();
+  if (deviceIdentity.source === 'override' || !deviceIdentity.hardwareId || !profileDir) {
+    throw new Error('DEVICE_IDENTITY_NOT_REPLACEABLE');
+  }
+  writeReplacementDeviceId(profileDir, deviceIdentity.hardwareId, deviceId);
 }
 
 export function getAuthState(): AuthState {

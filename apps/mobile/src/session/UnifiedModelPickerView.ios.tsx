@@ -201,7 +201,33 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
       ) : null}
       {/* 插件引擎：每个引擎一段，列在内置模型之前；选中且有档位时下面是思考深度。 */}
       {(p.pluginEngines?.groups ?? []).map((group) => (
-        <Section key={group.key} title={group.title}>
+        <Section
+          key={group.key}
+          title={group.title}
+          header={group.quota?.summary ? (
+            <HStack spacing={6}>
+              <Text modifiers={[font({ textStyle: "caption", weight: "medium" }), foregroundStyle(colors.textSecondary)]}>
+                {group.title}
+              </Text>
+              <Spacer />
+              <Text
+                modifiers={[
+                  font({ textStyle: "caption" }),
+                  foregroundStyle(
+                    group.quota.level === "crit"
+                      ? colors.quotaBarCrit
+                      : group.quota.level === "warn"
+                        ? colors.quotaBarWarn
+                        : colors.textSecondary,
+                  ),
+                  accessibilityLabel(group.quota.accessibilityLabel),
+                ]}
+              >
+                {group.quota.summary}
+              </Text>
+            </HStack>
+          ) : undefined}
+        >
           {group.rows.flatMap((row) => [
             <ComposerNativeRow
               key={row.key}

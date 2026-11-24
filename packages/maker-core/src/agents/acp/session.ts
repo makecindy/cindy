@@ -34,13 +34,17 @@ import {
   ACP_PROTOCOL_VERSION,
   ACP_STEERING_METHOD,
   JSONRPC_METHOD_NOT_FOUND,
+  acpCindyErrorSignals,
   asNonEmptyString,
+  readAcpCindyError,
+  type AcpCindyError,
   asRecord,
   normalizeConfigOptions,
   normalizeInitializeResult,
   normalizePermissionOptions,
   normalizeStopReason,
   normalizeToolCallFields,
+  normalizeTurnUsage,
   type AcpAuthMethod,
   type AcpConfigOption,
   type AcpContentBlock,
@@ -126,9 +130,10 @@ export interface OpenAcpSessionOptions {
   /**
    * Host text sent ahead of the first message of a newly created agent session (for example
    * collaboration role instructions; plugin engines get no Cindy system prompt). A resumed or
-   * loaded session already has it in its own history, so it is not repeated.
+   * loaded session already has it in its own history, so it is not repeated. A function receives
+   * the names of the MCP servers the agent accepted, so the text only names tools it really has.
    */
-  briefing?: string;
+  briefing?: string | ((acceptedMcpServers: readonly string[]) => string);
   /** Current companion settings for the first prompt after restoring the native conversation. */
   resumedCompanionBriefing?: string;
   /** Called once when the session's event stream ends (closed, or the endpoint exited). */
@@ -151,6 +156,25 @@ export class AcpAuthRequiredError extends Error {
   constructor(readonly authMethods: readonly AcpAuthMethod[]) {
     super('The agent needs you to sign in before it can start a session');
     this.name = 'AcpAuthRequiredError';
+  }
+}
+
+/**
+ * The agent refused to open a session because of its account (`error.data._meta.cindy`): used up,
+ * signed out or overloaded. The message carries the stable account codes Cindy's failure policy
+ * and the chat's error copy already know, never the agent's own text.
+ */
+export class AcpAccountError extends Error {
+  readonly signals: Record<string, unknown>;
+  constructor(readonly classified: AcpCindyError, readonly cause?: unknown) {
+    super(classified.kind === 'usage-limit'
+      ? '[SUBSCRIPTION_ACCOUNT_LIMITED] The plugin engine account has reached its usage limit'
+        + (classified.resetsAt !== undefined ? `\nresetAtMs=${classified.resetsAt}` : '')
+      : classified.kind === 'auth-required'
+        ? '[SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED] The plugin engine account requires login'
+        : 'The plugin engine service is currently overloaded');
+    this.name = 'AcpAccountError';
+    this.signals = acpCindyErrorSignals(classified);
   }
 }
 
@@ -185,7 +209,9 @@ export function filterMcpServers(
 }
 
 function authAware(error: unknown, init: AcpInitializeResult): unknown {
-  return error instanceof AcpRpcError && error.code === ACP_ERROR_AUTH_REQUIRED
+  const classified = error instanceof AcpRpcError ? readAcpCindyError(error.data) : null;
+  if (classified && classified.kind !== 'auth-required') return new AcpAccountError(classified, error);
+  return error instanceof AcpRpcError && (error.code === ACP_ERROR_AUTH_REQUIRED || classified?.kind === 'auth-required')
     ? new AcpAuthRequiredError(init.authMethods)
     : error;
 }
@@ -274,7 +300,8 @@ export async function openAcpSession(opts: OpenAcpSessionOptions): Promise<AcpSe
         );
       } catch (error) {
         const mapped = authAware(error, init);
-        if (mapped instanceof AcpAuthRequiredError || error instanceof AcpConnectionClosedError) throw mapped;
+        if (mapped instanceof AcpAuthRequiredError || mapped instanceof AcpAccountError
+          || error instanceof AcpConnectionClosedError) throw mapped;
         throw new AcpResumeUnavailableError(opts.resumeSessionId, 'failed', error);
       }
       sessionId = opts.resumeSessionId;
@@ -302,6 +329,9 @@ export async function openAcpSession(opts: OpenAcpSessionOptions): Promise<AcpSe
       configOptions: normalizeConfigOptions(result.configOptions),
       resumeOutcome: outcome,
       droppedMcpServers: dropped,
+      briefing: outcome === 'new'
+        ? typeof opts.briefing === 'function' ? opts.briefing(accepted.map((server) => server.name)) : opts.briefing ?? ''
+        : '',
       options: opts,
     });
     router.attach(session, Array.isArray(result.configOptions));
@@ -326,6 +356,8 @@ interface AcpSessionInit {
   configOptions: AcpConfigOption[];
   resumeOutcome: AcpResumeOutcome;
   droppedMcpServers: string[];
+  /** Briefing for a new session, resolved against the accepted MCP servers. */
+  briefing: string;
   options: OpenAcpSessionOptions;
 }
 
@@ -418,7 +450,7 @@ export class AcpSession {
     this.onEnded = init.options.onEnded;
     this.now = init.options.now ?? Date.now;
     this.openToolQuietCapMs = init.options.openToolQuietCapMs ?? ACP_OPEN_TOOL_QUIET_CAP_MS;
-    const briefing = init.resumeOutcome === 'new' ? init.options.briefing : init.options.resumedCompanionBriefing;
+    const briefing = init.resumeOutcome === 'new' ? init.briefing : init.options.resumedCompanionBriefing;
     this.pendingBriefing = briefing?.trim() ? briefing : null;
     this.translator = new AcpUpdateTranslator({ blockIdPrefix: `acp-${init.sessionId}` });
     if (init.options.permissionMode) this.applyPermissionMode(init.options.permissionMode);
@@ -740,7 +772,11 @@ export class AcpSession {
     this.usage = { ...this.usage, tokenUsage: 0 };
     this.emit([{ type: 'status', data: { status: 'running', ...this.usage, isRunning: true } }]);
     this.connection.request('session/prompt', { sessionId: this.id, prompt }, { timeoutMs: null }).then(
-      (result) => this.finishTurn(turn.token, { stopReason: normalizeStopReason(result) }),
+      (result) => {
+        // The prompt result is the only per-turn token report; `usage_update` only carries the context size.
+        const usage = normalizeTurnUsage(result);
+        this.finishTurn(turn.token, { stopReason: normalizeStopReason(result), ...(usage ? { usage } : {}) });
+      },
       (error: unknown) => this.finishTurn(turn.token, this.errorOutcome(error)),
     );
   }
@@ -785,8 +821,18 @@ export class AcpSession {
     if (error instanceof AcpConnectionClosedError) {
       return { error: 'The agent process ended unexpectedly.', reason: 'acp-agent-exited' };
     }
-    if (error instanceof AcpRpcError && error.code === ACP_ERROR_AUTH_REQUIRED) {
+    const classified = error instanceof AcpRpcError ? readAcpCindyError(error.data) : null;
+    if (error instanceof AcpRpcError && (error.code === ACP_ERROR_AUTH_REQUIRED || classified?.kind === 'auth-required')) {
       return { error: 'The agent needs you to sign in again.', reason: 'acp-auth-required' };
+    }
+    if (classified) {
+      return {
+        error: classified.kind === 'usage-limit'
+          ? 'The plugin engine account has reached its usage limit.'
+          : 'The plugin engine service is currently overloaded.',
+        reason: classified.kind === 'usage-limit' ? 'acp-usage-limit' : 'acp-overloaded',
+        signals: acpCindyErrorSignals(classified),
+      };
     }
     return { error: error instanceof Error ? error.message : String(error), reason: 'acp-request-failed' };
   }

@@ -52,6 +52,7 @@ describe('默认态与持久化', () => {
       telegramEnabled: false,
       xEnabled: false,
       feishuEnabled: false,
+      discordEnabled: false,
       xCompanionBotId: null,
       urlOverride: null,
       workspaces: {},
@@ -62,9 +63,11 @@ describe('默认态与持久化', () => {
       telegramBindingCache: null,
       xBindingCache: null,
       feishuBindingCache: null,
+      discordBindingCache: null,
       xDefaultWorkspace: null,
       telegramDefaultWorkspace: null,
       feishuDefaultWorkspace: null,
+      discordDefaultWorkspace: null,
     });
     expect(store.effectiveUrl()).toBe(TEST_DEFAULT_URL);
   });
@@ -187,6 +190,7 @@ describe('旧多连接文件迁移', () => {
       telegramEnabled: false,
       xEnabled: false,
       feishuEnabled: false,
+      discordEnabled: false,
       xCompanionBotId: null,
       urlOverride: null,
       workspaces: {},
@@ -197,9 +201,11 @@ describe('旧多连接文件迁移', () => {
       telegramBindingCache: null,
       xBindingCache: null,
       feishuBindingCache: null,
+      discordBindingCache: null,
       xDefaultWorkspace: null,
       telegramDefaultWorkspace: null,
       feishuDefaultWorkspace: null,
+      discordDefaultWorkspace: null,
     });
   });
 });
@@ -405,23 +411,27 @@ describe('provider 与 Cindy 账号隔离', () => {
     });
 
     // 规则: 默认项目所有官方机器人共用一个(不再每个机器人各选一个)。
-    // 生产入口: store 的读写。可观察结果: 从任一机器人的入口改, 三处读到同一个值, 清空也一起清。
+    // 生产入口: store 的读写。可观察结果: 从任一机器人的入口改, 各处读到同一个值, 清空也一起清;
+    // 官方 Discord 的 hello 默认项目也是这一个(否则 Discord 任务落在用户没选过的「对话」里)。
     // 最小失败输入: 先后从两个入口各写一次。tier: unit。
-    it('默认项目所有官方机器人共用一个: 任一入口写入或清空, 三处一起变', () => {
+    it('默认项目所有官方机器人共用一个: 任一入口写入或清空, 各处一起变', () => {
       const store = makeStore();
       store.setWorkspaces({ cindy: '/code/cindy', other: '/tmp/other' });
 
       store.setProviderDefaultWorkspace('telegram', 'cindy');
       expect(store.get()).toMatchObject({
         telegramDefaultWorkspace: 'cindy', xDefaultWorkspace: 'cindy', feishuDefaultWorkspace: 'cindy',
+        discordDefaultWorkspace: 'cindy',
       });
       store.setProviderDefaultWorkspace('x', 'other');
       expect(store.get()).toMatchObject({
         telegramDefaultWorkspace: 'other', xDefaultWorkspace: 'other', feishuDefaultWorkspace: 'other',
+        discordDefaultWorkspace: 'other',
       });
       store.setProviderDefaultWorkspace('feishu', null);
       expect(store.get()).toMatchObject({
         telegramDefaultWorkspace: null, xDefaultWorkspace: null, feishuDefaultWorkspace: null,
+        discordDefaultWorkspace: null,
       });
     });
 
