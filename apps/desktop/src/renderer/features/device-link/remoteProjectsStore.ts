@@ -775,6 +775,40 @@ const actions = {
     recomputeScheduleIndex();
     subs.forEach((fn) => fn());
   },
+  patchDeviceScheduleTiming(
+    deviceId: string,
+    patch: { scheduleId: string; nextFireAt: number; preRunCheckSucceeded?: boolean },
+  ): boolean {
+    const shard = shards.get(deviceId);
+    if (!shard?.scheduleIndex) return false;
+    for (const info of shard.scheduleIndex.values()) {
+      if (info.scheduleId === patch.scheduleId && patch.preRunCheckSucceeded && info.hasFailedRun) {
+        return false;
+      }
+    }
+    let changed = false;
+    const next = new Map<string, AutomationScheduleSessionInfo>();
+    for (const [sessionId, info] of shard.scheduleIndex) {
+      if (info.scheduleId === patch.scheduleId && info.nextFireAt !== patch.nextFireAt) {
+        changed = true;
+        next.set(sessionId, {
+          ...info,
+          nextFireAt: patch.nextFireAt,
+          ...(info.latestFailedRun && info.scheduleStatus === 'active'
+            ? { latestFailedRun: { ...info.latestFailedRun, nextFireAt: patch.nextFireAt } }
+            : {}),
+        });
+      } else {
+        next.set(sessionId, info);
+      }
+    }
+    if (changed) {
+      shard.scheduleIndex = next;
+      recomputeScheduleIndex();
+      subs.forEach((fn) => fn());
+    }
+    return true;
+  },
   getSessionScheduleInfo(sessionId: string): AutomationScheduleSessionInfo | undefined {
     const deviceId = sessionDeviceIndex.get(sessionId);
     return deviceId ? shards.get(deviceId)?.scheduleIndex?.get(sessionId) : undefined;

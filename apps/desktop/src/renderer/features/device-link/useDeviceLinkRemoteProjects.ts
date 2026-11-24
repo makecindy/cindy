@@ -35,7 +35,10 @@ import { evictTaskTagCatalog } from '../task-tags/taskTagEvents';
 
 import { useEffect, useRef } from 'react';
 import { isSharedTaskPeer, readProviderMetadataContinuity } from '@cindy/device-link';
-import { projectScheduleEvent } from '@cindy/maker-shared/schedule-events';
+import {
+  isPatchableSkippedScheduleEvent,
+  projectScheduleEvent,
+} from '@cindy/maker-shared/schedule-events';
 import { isCindyApp } from '@cindy/maker-shared/device-list';
 import { historyTurnEnded } from '@cindy/maker-shared/message-window';
 import { PROJECT_ALIASES_CHANGED_CHANNEL } from '@cindy/maker-shared/project-alias-sync';
@@ -468,7 +471,11 @@ export function useDeviceLinkRemoteProjects(
     }
 
     let disposed = false;
-    const scheduleEventRefreshes = new Map<string, { timer: ReturnType<typeof setTimeout>; firstAt: number }>();
+    const scheduleEventRefreshes = new Map<
+      string,
+      { timer: ReturnType<typeof setTimeout>; firstAt: number; onlyFiredRuns: Set<string> | null }
+    >();
+    const patchedSkippedRuns = new Map<string, Map<string, string>>();
     /** Count of schedule events skipped while the window was hidden or idle. */
     const scheduleEventsMissed = new Map<string, number>();
     const markScheduleEventMissed = (deviceId: string) =>
@@ -1350,14 +1357,51 @@ export function useDeviceLinkRemoteProjects(
           markScheduleEventMissed(push.deviceId);
           return;
         }
+        const deviceId = push.deviceId;
         // 与手机同一份事件投影：运行诊断、静默提醒这类不改索引的事件不重拉，
         // 否则 run 进行期间高频推送会反复取消在途的列表 / 索引读取。
-        const { refresh } = projectScheduleEvent(push.payload);
-        if (!refresh.sessionIndex && !refresh.scheduleList && !refresh.unreadSummary) return;
-        const deviceId = push.deviceId;
+        const { event, refresh } = projectScheduleEvent(push.payload);
+        if (
+          event.type === 'changed' &&
+          event.skippedRunId &&
+          patchedSkippedRuns.get(deviceId)?.get(event.scheduleId) === event.skippedRunId
+        ) {
+          return;
+        }
+        if (isPatchableSkippedScheduleEvent(event)) {
+          if (remoteProjectsStore.patchDeviceScheduleTiming(deviceId, event)) {
+            let perSchedule = patchedSkippedRuns.get(deviceId);
+            if (!perSchedule) {
+              perSchedule = new Map();
+              patchedSkippedRuns.set(deviceId, perSchedule);
+            }
+            perSchedule.set(event.scheduleId, event.runId);
+            const pending = scheduleEventRefreshes.get(deviceId);
+            const runKey = `${event.scheduleId}:${event.runId}`;
+            if (pending?.onlyFiredRuns?.delete(runKey) && pending.onlyFiredRuns.size === 0) {
+              clearTimeout(pending.timer);
+              scheduleEventRefreshes.delete(deviceId);
+            }
+            return;
+          }
+          patchedSkippedRuns.get(deviceId)?.delete(event.scheduleId);
+        } else if (event.type === 'ready' || event.type === 'unknown') {
+          patchedSkippedRuns.delete(deviceId);
+        } else if ('scheduleId' in event) {
+          patchedSkippedRuns.get(deviceId)?.delete(event.scheduleId);
+        }
+        const forceUnseededOrFailureSkipRefresh = isPatchableSkippedScheduleEvent(event);
+        if (!forceUnseededOrFailureSkipRefresh && !refresh.sessionIndex && !refresh.scheduleList && !refresh.unreadSummary) {
+          return;
+        }
         const pending = scheduleEventRefreshes.get(deviceId);
         if (pending) clearTimeout(pending.timer);
         const firstAt = pending?.firstAt ?? Date.now();
+        let onlyFiredRuns: Set<string> | null = null;
+        if (event.type === 'fired' && (pending === undefined || pending.onlyFiredRuns !== null)) {
+          onlyFiredRuns = pending?.onlyFiredRuns ? new Set(pending.onlyFiredRuns) : new Set();
+          onlyFiredRuns.add(`${event.scheduleId}:${event.runId}`);
+        }
         const delay = Math.min(SCHEDULE_EVENT_QUIET_MS, Math.max(0, firstAt + SCHEDULE_EVENT_MAX_WAIT_MS - Date.now()));
         const timer = setTimeout(() => {
           scheduleEventRefreshes.delete(deviceId);
@@ -1371,7 +1415,7 @@ export function useDeviceLinkRemoteProjects(
             if (result === 'revoked' && !disposed) handleRevoked(deviceId);
           });
         }, delay);
-        scheduleEventRefreshes.set(deviceId, { timer, firstAt });
+        scheduleEventRefreshes.set(deviceId, { timer, firstAt, onlyFiredRuns });
         return;
       }
       // Main fences in-flight catalog reads for each of these source changes.
@@ -1573,6 +1617,7 @@ export function useDeviceLinkRemoteProjects(
       stopDirectoryRetry();
       for (const { timer } of scheduleEventRefreshes.values()) clearTimeout(timer);
       scheduleEventRefreshes.clear();
+      patchedSkippedRuns.clear();
       clearConnectingGrace();
       stopRecoveryTimer();
       recoveryInFlight.clear();

@@ -326,13 +326,48 @@ export function useAutomationScheduleSessionIndex(
       } else if (event.type === 'deferred' || event.type === 'skipped') {
         clearSchedulerOwnedRun(event.runId);
       }
+      const skippedNeedsIndexRefresh =
+        event.type === 'skipped' &&
+        (Boolean(event.sessionId) ||
+          (event.preRunCheckSucceeded === true &&
+            [...publishedIndex.values()].some(
+              (info) => info.scheduleId === event.scheduleId && info.hasFailedRun,
+            )));
+      if (
+        event.type === 'skipped' &&
+        !skippedNeedsIndexRefresh &&
+        event.nextFireAt !== undefined &&
+        publishedIndex.size > 0
+      ) {
+        let patched = false;
+        const next = new Map<string, AutomationScheduleSessionInfo>();
+        for (const [sid, info] of publishedIndex) {
+          if (info.scheduleId === event.scheduleId && info.nextFireAt !== event.nextFireAt) {
+            patched = true;
+            next.set(sid, {
+              ...info,
+              nextFireAt: event.nextFireAt,
+              ...(info.latestFailedRun && info.scheduleStatus === 'active'
+                ? { latestFailedRun: { ...info.latestFailedRun, nextFireAt: event.nextFireAt } }
+                : {}),
+            });
+          } else {
+            next.set(sid, info);
+          }
+        }
+        if (patched) {
+          setIndex(next);
+          publishIndex(next);
+        }
+      }
       if (
         event.type === 'changed' ||
         event.type === 'completed' ||
         event.type === 'failed' ||
         event.type === 'session-bound' ||
         event.type === 'read' ||
-        event.type === 'all-read'
+        event.type === 'all-read' ||
+        skippedNeedsIndexRefresh
       ) {
         void refresh();
       }

@@ -333,6 +333,39 @@ describe('handleSchedulerEvent', () => {
 
     expect(listMock).toHaveBeenCalledTimes(baseline);
   });
+
+  // 测试价值
+  // - 生产入口与可观察结果：handleSchedulerEvent 处理周期任务的 skipped 事件时原位更新缓存时间戳且不触发 list IPC。
+  // - 规则依据：docs/dev-rules/engineering-conventions.md 高频状态刷新与缓存性能约束。
+  // - 现有覆盖缺口：此前周期 skipped 依赖紧随其后的 changed 全表重拉，未覆盖无 IPC 的原位时间戳更新。
+  // - 最小失败输入：带 lastFiredAt / lastFinishedAt / nextFireAt 的 skipped 事件。
+  // - tier：unit。
+  it('"skipped" patches schedule timestamps in-place without extra list IPC', async () => {
+    await schedulesStore.ensure();
+    const baseline = listMock.mock.calls.length;
+    const notifySpy = vi.fn();
+    schedulesStore.subscribe(notifySpy);
+
+    handleSchedulerEvent({
+      type: 'skipped',
+      scheduleId: 's1',
+      runId: 'r-skip',
+      sessionId: '',
+      lastFiredAt: 1000,
+      lastFinishedAt: 1050,
+      nextFireAt: 301050,
+    });
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(listMock).toHaveBeenCalledTimes(baseline);
+    expect(notifySpy).toHaveBeenCalledTimes(1);
+    expect(schedulesStore.getSnapshot()?.[0]).toMatchObject({
+      id: 's1',
+      lastFiredAt: 1000,
+      lastFinishedAt: 1050,
+      nextFireAt: 301050,
+    });
+  });
 });
 
 describe('handleAuthStateChange', () => {

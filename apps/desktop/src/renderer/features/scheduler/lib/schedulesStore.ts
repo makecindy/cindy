@@ -162,6 +162,31 @@ export function handleSchedulerEvent(raw: unknown): void {
     });
     return;
   }
+  if (ev.type === 'skipped' && cache !== null) {
+    // 活跃周期任务的前置检查空跳不再额外广播 'changed';直接原位推进缓存里的排期时间戳,避免重拉整表。
+    const hasTimingPatch =
+      ev.lastFiredAt !== undefined ||
+      ev.lastFinishedAt !== undefined ||
+      ev.nextFireAt !== undefined;
+    if (hasTimingPatch) {
+      let updated = false;
+      const next = cache.map((item) => {
+        if (item.id !== ev.scheduleId) return item;
+        updated = true;
+        return {
+          ...item,
+          ...(ev.lastFiredAt !== undefined ? { lastFiredAt: ev.lastFiredAt } : {}),
+          ...(ev.lastFinishedAt !== undefined ? { lastFinishedAt: ev.lastFinishedAt } : {}),
+          ...(ev.nextFireAt !== undefined ? { nextFireAt: ev.nextFireAt } : {}),
+        };
+      });
+      if (updated) {
+        cache = next;
+        notify();
+      }
+    }
+    return;
+  }
   // fired/completed/failed/session-bound/read/all-read 等事件不影响 schedules
   // 列表本身的数据 — 留给 useSchedules / useRuns / badge hook 各自处理。
 }
