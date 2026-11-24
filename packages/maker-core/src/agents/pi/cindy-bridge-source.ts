@@ -3310,6 +3310,10 @@ function parseJsonObject(value: string): Record<string, unknown> | null {
 const SCHEMA_WALK_MAX_NODES = 512;
 const SCHEMA_WALK_MAX_DEPTH = 32;
 const SCHEMA_COMBINATORS = ['allOf', 'anyOf', 'oneOf'];
+/** 条件分支: 这些节点里声明的属性也是服务端认的参数(条件成立时的 then / 不成立时的 else)。 */
+const SCHEMA_CONDITIONAL_KEYWORDS = ['if', 'then', 'else'];
+/** 依赖分支: dependentSchemas 的每个取值都是一份 schema, 里面的声明同样算数。 */
+const SCHEMA_DEPENDENCY_KEYWORDS = ['dependentSchemas'];
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -3333,64 +3337,95 @@ function resolveLocalSchemaRef(root: Record<string, unknown>, ref: string): Reco
 }
 
 /**
- * 工具 schema 收集到的「表态」: 声明过的参数名、是否放开额外字段、以及 patternProperties 模式。
+ * 工具 schema 收集到的「表态」: 声明过的参数名、是不是信封形状、是否放开额外字段、
+ * patternProperties 模式、以及这份表态本身是否完整。
  *
- * 组合声明: allOf / anyOf / oneOf 分支与文档内的本地 $ref(第三方 schema 常把公共字段抽成
- * $defs 再 allOf 进来)。只读根层 properties 会把这些字段全判成「没声明」, 平铺到顶层的
- * 它们于是被记成 unmapped 不转发。
+ * 组合声明: allOf / anyOf / oneOf 分支、条件分支(if / then / else)、依赖分支
+ * (dependentSchemas)与文档内的本地 $ref(第三方 schema 常把公共字段抽成 $defs 再 allOf
+ * 进来)。只读根层 properties 会把这些字段全判成「没声明」, 平铺到顶层的它们于是被记成
+ * unmapped 不转发。
  *
  * 分支里声明的字段也收: 某个 anyOf / oneOf 分支声明了这个键, 它就是服务端认的参数。
  * 同理, 分支里放开 additionalProperties、或给出 patternProperties, 也算这个 schema 表态过 ——
  * 否则「根层只有 $ref、声明在被引用文档里」的 schema 会因为名字被收下、额外字段却被丢掉而
  * 半懂不懂。
  *
- * 遍历有预算: 同一个节点只走一次(循环引用靠它终止), 节点数与深度封顶, 超出部分不再展开。
+ * 遍历有预算: 同一个节点只走一次(循环引用靠它终止), 节点数与深度封顶。**被截断时这份表态
+ * 是不完整的**(truncated)—— 剩下的声明我们没看到, 于是不能证明某个键「没声明」, 调用方
+ * 按「不丢参数」处理(见 normalizeGatewayArgs)。解析不了的 $ref(远程引用、指向不存在节点的
+ * 指针)同样算不完整。
  */
 interface SchemaParameterSurface {
   /** 走到的节点声明过的参数名。 */
   names: Set<string>;
+  /** 走到的节点里有没有「{name, args} 信封形状」的节点。 */
+  envelope: boolean;
   /** 有节点明确放开了额外字段(additionalProperties 为 true 或一个 schema)。 */
   additionalAllowed: boolean;
   /** 走到的节点给出的 patternProperties 模式(去重, 数量封顶)。 */
   patterns: string[];
+  /** 这份表态是否不完整(预算截断 / 有解析不了的引用)。 */
+  truncated: boolean;
 }
 
 function schemaParameterSurface(schema: Record<string, unknown> | undefined): SchemaParameterSurface | null {
   if (!schema) return null;
   const surface: SchemaParameterSurface = {
     names: new Set<string>(),
+    envelope: false,
     additionalAllowed: false,
     patterns: [],
+    truncated: false,
   };
   const seenPatterns = new Set<string>();
   const visited = new Set<Record<string, unknown>>();
   let remainingNodes = SCHEMA_WALK_MAX_NODES;
   const walk = (node: unknown, depth: number): void => {
-    if (!isPlainRecord(node) || remainingNodes <= 0 || depth > SCHEMA_WALK_MAX_DEPTH || visited.has(node)) return;
+    if (!isPlainRecord(node) || visited.has(node)) return;
+    if (depth > SCHEMA_WALK_MAX_DEPTH || remainingNodes <= 0) {
+      // 预算用尽: 剩下的声明我们看不到, 这份表态不完整。
+      surface.truncated = true;
+      return;
+    }
     visited.add(node);
     remainingNodes--;
     if (isPlainRecord(node.properties)) {
       for (const name of Object.keys(node.properties)) surface.names.add(name);
     }
+    if (isNameEnvelopeNode(node)) surface.envelope = true;
     const additional = node.additionalProperties;
     if (additional === true || (typeof additional === 'object' && additional !== null)) {
       surface.additionalAllowed = true;
     }
-    if (surface.patterns.length < SCHEMA_PATTERN_MAX_COUNT && isPlainRecord(node.patternProperties)) {
+    if (isPlainRecord(node.patternProperties)) {
       for (const pattern of Object.keys(node.patternProperties)) {
+        // 数量封顶在循环内生效: 一个 patternProperties 里塞上百条模式时, 只看前 N 条,
+        // 否则单次调用要把上百条模式全部编译并跑一遍(Codex P1 on #10908)。
+        if (surface.patterns.length >= SCHEMA_PATTERN_MAX_COUNT) break;
         if (seenPatterns.has(pattern)) continue;
         seenPatterns.add(pattern);
         surface.patterns.push(pattern);
       }
     }
-    if (typeof node.$ref === 'string') walk(resolveLocalSchemaRef(schema, node.$ref), depth + 1);
+    if (typeof node.$ref === 'string') {
+      const resolved = resolveLocalSchemaRef(schema, node.$ref);
+      // 解析不了的引用(远程引用、指向不存在节点的指针)那边的声明我们看不到。
+      if (resolved) walk(resolved, depth + 1);
+      else surface.truncated = true;
+    }
     for (const keyword of SCHEMA_COMBINATORS) {
       const branches = node[keyword];
       if (!Array.isArray(branches)) continue;
-      for (const branch of branches) {
-        if (remainingNodes <= 0) break;
-        walk(branch, depth + 1);
-      }
+      for (const branch of branches) walk(branch, depth + 1);
+    }
+    for (const keyword of SCHEMA_CONDITIONAL_KEYWORDS) {
+      if (node[keyword] === undefined) continue;
+      walk(node[keyword], depth + 1);
+    }
+    for (const keyword of SCHEMA_DEPENDENCY_KEYWORDS) {
+      const dependencies = node[keyword];
+      if (!isPlainRecord(dependencies)) continue;
+      for (const dependency of Object.values(dependencies)) walk(dependency, depth + 1);
     }
   };
   walk(schema, 0);
@@ -3398,7 +3433,7 @@ function schemaParameterSurface(schema: Record<string, unknown> | undefined): Sc
 }
 
 /**
- * 这个 schema 是不是 Cindy 通用 call_tool 的 {name, args} 信封形状。
+ * 这个节点自己是不是 Cindy 通用 call_tool 的 {name, args} 信封形状。
  *
  * 判据必须用**形状指纹**而不是名字或单个字段：Pi 也接入用户自接的第三方 MCP，它们可能
  * 同样叫 call_tool（但信封是 {tool_name, arguments}），也可能有个叫 name 的必填字符串
@@ -3407,17 +3442,27 @@ function schemaParameterSurface(schema: Record<string, unknown> | undefined): Sc
  *
  * 归一化(平铺信封重建)与执行前的信封检查必须用同一判据，否则两处对「这是不是信封」
  * 的理解会分叉：重建出来的形状与检查时的形状对不上。
+ *
+ * 信封也可能藏在组合声明后面（根层 $ref 指向一份定义，或 allOf 分支里声明），所以判据在
+ * **每个走到的节点**上各判一次，而不是只看根层（Codex P2 on #10908）。
  */
-function isNameEnvelopeSchema(schema: unknown): boolean {
-  const typed = schema as {
-    required?: unknown;
-    properties?: Record<string, { type?: unknown } | undefined>;
-  } | null;
-  const properties = typed?.properties;
-  return Array.isArray(typed?.required)
-    && typed.required.includes('name')
-    && properties?.name?.type === 'string'
-    && properties?.args?.type === 'object';
+function isNameEnvelopeNode(node: Record<string, unknown>): boolean {
+  const properties = isPlainRecord(node.properties) ? node.properties : null;
+  if (!properties) return false;
+  const required = Array.isArray(node.required) ? node.required : [];
+  if (!required.includes('name')) return false;
+  const name = properties.name;
+  const args = properties.args;
+  return isPlainRecord(name) && name.type === 'string'
+    && isPlainRecord(args) && args.type === 'object';
+}
+
+function isNameEnvelopeSchema(schema: unknown, surface?: SchemaParameterSurface | null): boolean {
+  const root = isPlainRecord(schema) ? schema : null;
+  if (!root) return false;
+  if (isNameEnvelopeNode(root)) return true;
+  const resolved = surface === undefined ? schemaParameterSurface(root) : surface;
+  return Boolean(resolved?.envelope);
 }
 
 /**
@@ -3577,6 +3622,7 @@ function patternBacktrackBudget(pattern: string, keyLength: number): number {
  *   组合 schema 里任何走到的分支放开它也算数。
  * - patternProperties 命中某个模式 → 收。但只跑回溯组合数有上界的模式(见 patternBacktrackBudget):
  *   模式是服务端给的、键是模型给的, 判不了的模式不跑, 那个键按没声明处理。
+ *   一轮里**所有模式**的估算总和也有上界: 单条都过关、合起来仍可能把同步路径拖住。
  * - 其余（没写 additionalProperties，或写成 false）→ 不收：schema 没表态，宁漏不误转。
  *   JSON Schema 默认允许额外字段，但「默认允许」不等于「这个键是模型想给的参数」，
  *   把模型的私货转过去只会让服务端多一条校验错误。
@@ -3585,9 +3631,14 @@ function schemaAcceptsKey(surface: SchemaParameterSurface | null, key: string): 
   if (!surface) return false;
   if (surface.additionalAllowed) return true;
   if (key.length > SCHEMA_PATTERN_KEY_MAX_LENGTH) return false;
+  let spent = 0;
   for (const pattern of surface.patterns) {
     if (pattern.length > SCHEMA_PATTERN_MAX_LENGTH) continue;
-    if (patternBacktrackBudget(pattern, key.length) > SCHEMA_PATTERN_BACKTRACK_BUDGET) continue;
+    const estimate = patternBacktrackBudget(pattern, key.length);
+    if (estimate > SCHEMA_PATTERN_BACKTRACK_BUDGET) continue;
+    // 总量上限: 每条都过关不代表合起来还过得去(Codex P1 on #10908)。
+    spent += estimate;
+    if (spent > SCHEMA_PATTERN_BACKTRACK_BUDGET) break;
     try {
       if (new RegExp(pattern).test(key)) return true;
     } catch {
@@ -3648,6 +3699,10 @@ function normalizeGatewayArgs(record: Record<string, unknown>, tool: ConnectedMc
   // schema 没声明参数名时, 只有明确禁止额外字段才不转发 —— JSON Schema 默认允许额外字段,
   // 这类工具(如只声明类型不声明 properties 的)把顶层键折进去才是服务端能接住的那一份。
   const foldAll = !declared && schema?.additionalProperties !== false;
+  // 声明面不完整(遍历被预算截断 / 有解析不了的引用): 剩下的声明我们没看到, 不能证明某个
+  // 顶层键「没声明」—— 就不丢它。丢一个声明过的参数, 服务端会按缺省值执行(本 PR 要修的
+  // 那类静默错误); 多转一个键最坏是服务端一条校验错误, 看得见。
+  const incomplete = Boolean(surface?.truncated);
   const folded: string[] = [];
   const unmapped: string[] = [];
   // 信封被平铺: 顶层 name 是信封层的内层工具名(选择器), args 容器是内层工具自己的参数。
@@ -3662,7 +3717,7 @@ function normalizeGatewayArgs(record: Record<string, unknown>, tool: ConnectedMc
     && typeof params.name === 'string'
     && Object.prototype.hasOwnProperty.call(params, 'args')
     && (params.name === selector || selector === tool.name);
-  const flattenedEnvelope = isNameEnvelopeSchema(schema)
+  const flattenedEnvelope = isNameEnvelopeSchema(schema, surface)
     && provided
     && selector !== undefined
     && !repeatsEnvelope;
@@ -3670,7 +3725,7 @@ function normalizeGatewayArgs(record: Record<string, unknown>, tool: ConnectedMc
     if (GATEWAY_OWN_KEYS.has(key)) continue;
     if (flattenedEnvelope && key === 'name') continue; // 信封层, 不是内层参数。
     if (Object.prototype.hasOwnProperty.call(params, key)) continue;
-    if (!foldAll && !(declared?.has(key) ?? false) && !schemaAcceptsKey(surface, key)) {
+    if (!foldAll && !incomplete && !(declared?.has(key) ?? false) && !schemaAcceptsKey(surface, key)) {
       unmapped.push(key);
       continue;
     }

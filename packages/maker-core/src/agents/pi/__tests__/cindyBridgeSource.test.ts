@@ -3286,7 +3286,9 @@ it('folds top-level keys that a composed schema declares (allOf / anyOf / local 
   expect(requests[0].params).toEqual({ name: 'set_cell', arguments: { file_id: 'doc-1', row: 10, col: 2 } });
   await gateway.executeCall({ server: 'cindy_sheets', tool: 'read_range', args: { file_id: 'doc-1' }, range: 'A1:B2' });
   expect(requests[1].params).toEqual({ name: 'read_range', arguments: { file_id: 'doc-1', range: 'A1:B2' } });
-  // 循环引用的 $ref 只走一次; 深度超过预算的部分不再展开(那一层的键按未声明处理), 两种都要即时返回。
+  // 循环引用的 $ref 只走一次; 深度超过预算时遍历被截断 —— 截断意味着「声明面不完整」,
+  // 不能证明 deep 没被声明, 于是按「不丢参数」转发它(服务端据此报校验错误, 看得见),
+  // 而不是静默丢掉让服务端按缺省值写。两边都要即时返回。
   // (节点数预算是同一道闸: 分支多到超出预算时同样停在那里, 不再展开。)
   let chain: Record<string, unknown> = { properties: { deep: { type: 'integer' } } };
   for (let depth = 0; depth < 400; depth++) chain = { allOf: [chain] };
@@ -3303,7 +3305,7 @@ it('folds top-level keys that a composed schema declares (allOf / anyOf / local 
   const started = performance.now();
   await gateway.executeCall({ server: 'cindy_graph', tool: 'node', args: { id: 'n1' }, label: 'root', deep: 9 });
   expect(performance.now() - started).toBeLessThan(1000);
-  expect(requests[2].params).toEqual({ name: 'node', arguments: { id: 'n1', label: 'root' } });
+  expect(requests[2].params).toEqual({ name: 'node', arguments: { id: 'n1', label: 'root', deep: 9 } });
 });
 
 // 评审 P1 的收尾(参数名改成走组合遍历之后): 「根层只有 $ref、声明在被引用文档里」的 schema,
@@ -3336,6 +3338,170 @@ it('forwards extra keys that a referenced schema definition explicitly allows', 
   await gateway.listResult({ server: 'cindy_meta', tool: 'patch' });
   await gateway.executeCall({ server: 'cindy_meta', tool: 'patch', args: { id: 'x-1' }, extra: 'keep' });
   expect(requests[0].params).toEqual({ name: 'patch', arguments: { id: 'x-1', extra: 'keep' } });
+});
+
+// 评审 P1(模式条数封顶没在循环内生效): 收集 patternProperties 时, 条数上限只在**进循环前**
+// 看了一次 —— 一个 patternProperties 里塞 20 条模式时, 20 条全被收下、全部被编译并跑一遍。
+// 条数上限必须落在循环内。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 真正发出的 tools/call 参数 + 单次调用耗时。
+// - Bug 依据:codex 对 8d212dd4cf 的 P1。
+// - 覆盖缺口:上一轮只钉了「单条灾难性模式不跑」, 没钉「模式条数」。
+// - 最小失败输入:patternProperties 有 20 条, 第 20 条命中模型给的键。
+// - tier:unit。
+it('stops examining patternProperties after the count cap', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'OK' }] };
+  } };
+  const patternProperties: Record<string, unknown> = {};
+  for (let index = 0; index < 20; index++) patternProperties[`^p${index}$`] = { type: 'string' };
+  const gateway = new Gateway();
+  gateway.add('cindy_patterns', client, [{
+    name: 'tag',
+    inputSchema: {
+      type: 'object',
+      properties: { file_id: { type: 'string' } },
+      patternProperties,
+    },
+  }]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_patterns', tool: 'tag' });
+  const started = performance.now();
+  const result = await gateway.executeCall({
+    server: 'cindy_patterns', tool: 'tag', args: { file_id: 'doc-1' }, p19: 'late pattern',
+  });
+  expect(performance.now() - started).toBeLessThan(1000);
+  // 第 20 条在封顶之外 → 不看它 → 这个键按「schema 没声明」处理(回执里写明没转发)。
+  expect(requests[0].params).toEqual({ name: 'tag', arguments: { file_id: 'doc-1' } });
+  const note = result.content.map(block => block.text ?? '').join('\n');
+  expect(note).toContain('were not forwarded because the tool schema does not declare them: p19');
+});
+
+// 评审 P1(单条都过关、合起来仍可能拖住同步路径): 每条模式的回溯组合数各自都有上界,
+// 一轮里所有模式的**总和**也必须有上界 —— 否则服务端给十几条「接近预算」的模式, 一次调用
+// 就能把权限与执行两条同步路径拖住。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 真正发出的 tools/call 参数 + 单次调用耗时。
+// - Bug 依据:codex 对 8d212dd4cf 的 P1。
+// - 覆盖缺口:上一轮只钉了「单条模式的预算」, 没钉「一轮里所有模式的总量」。
+// - 最小失败输入:7 条估算各约 3.3 万步的模式, 第 7 条命中模型给的键。
+// - tier:unit。
+it('caps the total pattern work of one call, not only each pattern', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'OK' }] };
+  } };
+  const patternProperties: Record<string, unknown> = {};
+  for (const letter of ['a', 'b', 'c', 'd', 'e', 'f', 'g']) {
+    patternProperties[`^(${letter}{1,8}){1,4}$`] = { type: 'string' };
+  }
+  const gateway = new Gateway();
+  gateway.add('cindy_patterns', client, [{
+    name: 'tag',
+    inputSchema: {
+      type: 'object',
+      properties: { file_id: { type: 'string' } },
+      patternProperties,
+    },
+  }]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_patterns', tool: 'tag' });
+  const started = performance.now();
+  const result = await gateway.executeCall({
+    server: 'cindy_patterns', tool: 'tag', args: { file_id: 'doc-1' }, gggggggg: 'past the total budget',
+  });
+  expect(performance.now() - started).toBeLessThan(1000);
+  // 前 6 条的估算合计已接近单条预算, 第 7 条不再看 → 这个键按「schema 没声明」处理。
+  expect(requests[0].params).toEqual({ name: 'tag', arguments: { file_id: 'doc-1' } });
+  const note = result.content.map(block => block.text ?? '').join('\n');
+  expect(note).toContain('were not forwarded because the tool schema does not declare them: gggggggg');
+});
+
+// 评审 P2(信封藏在组合声明后面): 判据只看根层 —— 根层 $ref 指向一份带 properties 与
+// required 的定义时, 判不出这是 {name, args} 信封。平铺的 {name, args} 于是被当成普通参数:
+// 顶层 name 折进参数容器, 信封的 args 层消失, 内层工具被按空参数调用; 执行前的信封检查
+// 也一并放行。判据要在每个走到的节点上各判一次。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 真正发出的 tools/call 参数。
+// - Bug 依据:codex 对 8d212dd4cf 的 P2。
+// - 覆盖缺口:信封用例只盖了「信封声明在根层」。
+// - 最小失败输入:inputSchema = {$ref:'#/$defs/Envelope', $defs:{Envelope:{properties:{name,args}, required:['name']}}}。
+// - tier:unit。
+it('rebuilds the envelope when the envelope schema is declared behind a local ref', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'WROTE' }] };
+  } };
+  const gateway = new Gateway();
+  gateway.add('cindy_memory', client, [{
+    name: 'call_tool',
+    inputSchema: {
+      $ref: '#/$defs/Envelope',
+      $defs: {
+        Envelope: {
+          type: 'object',
+          properties: { name: { type: 'string' }, args: { type: 'object' } },
+          required: ['name'],
+        },
+      },
+    },
+  }]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_memory', tool: 'call_tool' });
+  await gateway.executeCall({
+    server: 'cindy_memory', tool: 'call_tool', name: 'memory_write', args: { type: 'project' },
+  });
+  expect(requests[0].params).toEqual({
+    name: 'call_tool',
+    arguments: { name: 'memory_write', args: { type: 'project' } },
+  });
+});
+
+// 评审 P2(条件分支里的声明被丢): 参数名只收 allOf/anyOf/oneOf 与 $ref —— 只在
+// if/then/else 或 dependentSchemas 里声明的参数不在声明面里, 平铺过来就被记成未映射丢掉,
+// 服务端按缺省坐标执行。条件与依赖分支同样要走那趟有预算的遍历。
+//
+// - 生产入口与可观察结果:CindyMcpGateway.executeCall 真正发出的 tools/call 参数。
+// - Bug 依据:codex 对 8d212dd4cf 的 P2。
+// - 覆盖缺口:组合用例只盖了 allOf/anyOf/oneOf/$ref。
+// - 最小失败输入:根层 properties.file_id + then.properties.row, 顶层 row。
+// - tier:unit。
+it('folds top-level keys declared in conditional and dependent schema branches', async () => {
+  const { Gateway } = loadGatewayHarness();
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'OK' }] };
+  } };
+  const gateway = new Gateway();
+  gateway.add('cindy_grid', client, [{
+    name: 'set_cell',
+    inputSchema: {
+      type: 'object',
+      properties: { file_id: { type: 'string' } },
+      required: ['file_id'],
+      if: { properties: { mode: { const: 'grid' } } },
+      then: { properties: { row: { type: 'integer' }, col: { type: 'integer' } } },
+      else: { properties: { range: { type: 'string' } } },
+      dependentSchemas: { file_id: { properties: { sheet_id: { type: 'string' } } } },
+    },
+  }]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_grid', tool: 'set_cell' });
+  await gateway.executeCall({
+    server: 'cindy_grid', tool: 'set_cell', args: { file_id: 'doc-1' }, row: 10, col: 2, sheet_id: 'sheet-1',
+  });
+  expect(requests[0].params).toEqual({
+    name: 'set_cell',
+    arguments: { file_id: 'doc-1', row: 10, col: 2, sheet_id: 'sheet-1' },
+  });
 });
 
 it('intercepts a double-wrapped envelope and an entry-tool name before they reach the server', async () => {
