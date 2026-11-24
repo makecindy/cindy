@@ -20,7 +20,7 @@ import { listRegisteredProjectPaths } from '../localDb/ipc/recentWorkdirsCore';
 import { PROJECT_AUTOMATION_REL_SEGMENTS } from '../../shared/projectAutomationPaths';
 import { isTempPath, tempPathClassification } from '../session-import/classify';
 import { migrateLegacyXdmakerDir } from '../utils/legacyXdmakerMigration';
-import { realpathWorkingDirectory } from '../workdir-probe-host';
+import { realpathAutomationAlias, realpathWorkingDirectory } from '../workdir-probe-host';
 import { detectCwd } from '../worktree/detectCwd';
 import type { DrizzleScheduleStorage, SchedulerDrizzleDb } from './storage.desktop';
 import type { TeammateProjectState } from './ownTeammateProject';
@@ -579,7 +579,7 @@ export class ProjectAutomationLoader {
         protectedDirs = new Set();
         for (const dir of [...savedDirs, ...registered]) {
           protectedDirs.add(workingDirKey(dir));
-          const real = await realpathWorkingDirectory(dir).catch(() => null);
+          const real = await realpathAutomationAlias(dir).catch(() => null);
           if (real) protectedDirs.add(workingDirKey(real));
         }
       }

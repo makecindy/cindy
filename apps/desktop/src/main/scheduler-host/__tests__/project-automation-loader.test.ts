@@ -35,7 +35,11 @@ it('discovers registered and saved aliases while a directory probe is unavailabl
   const dirs = [review, registered, saved, unknown, unknownGit];
   const timeout = Object.assign(new Error('synthetic probe timeout'), { code: 'WORKDIR_PROBE_TIMEOUT' });
   const realpath = vi.spyOn(workdirProbe, 'realpathWorkingDirectory').mockImplementation(async (dir) => {
-    if (dir === stalled || dir === unknown) throw timeout;
+    if (dir === unknown) throw timeout;
+    return dir;
+  });
+  const aliases = vi.spyOn(workdirProbe, 'realpathAutomationAlias').mockImplementation(async (dir) => {
+    if (dir === stalled) throw timeout;
     if (dir === registeredAlias) return registered;
     if (dir === savedAlias) return saved;
     return dir;
@@ -70,6 +74,7 @@ it('discovers registered and saved aliases while a directory probe is unavailabl
     expect(pending.map(item => item.workingDir)).toEqual([registered, saved, unknown, unknownGit]);
   } finally {
     detect.mockRestore();
+    aliases.mockRestore();
     realpath.mockRestore();
     await fs.rm(root, { recursive: true, force: true });
   }

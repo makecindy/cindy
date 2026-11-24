@@ -2036,7 +2036,7 @@ function rebindChatEmbeddingSettingsWatcher(): void {
 
 // The quit coordinator finishes with app.exit(), which bypasses will-quit.
 onQuit('chat-embedding-settings-watcher', () => chatEmbeddingSettingsWatcher.dispose());
-onQuit('workdir-probe-host', () => workdirProbeHostClient.dispose(), 'sync');
+onQuit('workdir-probe-host', () => disposeWorkdirProbes(), 'sync');
 
 /**
  * 「聊天嵌入」关闭时的收尾: 总是让 chat 的 enqueue 守卫立即失效; 但只有在没有插件
@@ -3229,7 +3229,7 @@ import { APPLICATION_MENU_LABELS, type ApplicationMenuLocale } from './applicati
 import { installCindyCliCommand, CLI_COMMAND_NAME } from './installCliCommand.js';
 // Keep these three last. Static imports evaluate in source order, so listing them
 // first would load everything they reach ahead of the existing startup sequence.
-import { workdirProbeHostClient } from './workdir-probe-host/index.js';
+import { disposeWorkdirProbes } from './workdir-probe-host/index.js';
 import { setToolProcessMediaRemoteReader } from './cindy-media/toolProcessMedia.js';
 import { materializeSshRemoteMedia } from './file-browser/ssh-media.js';
 
