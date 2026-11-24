@@ -2064,6 +2064,54 @@ describe('Chat Server result delivery and refresh', () => {
     else expect(deliveries()[0][2]).not.toHaveProperty('mentions');
   });
 
+  // #10717 / bot-group-chat.md §4.1 (unit): settle an ordinary reply against a two-owner roster.
+  // The existing reply cases supply displayName; a snapshot with only name must still resolve a unique short label.
+  it.each([
+    { scenario: 'unique short name', label: 'Luna', resolves: true },
+    { scenario: 'duplicate short name', label: 'Luna', duplicate: true },
+    { scenario: 'full name with duplicate short names', label: 'Luna (Alice)', duplicate: true, resolves: true },
+    { scenario: 'same owner', label: 'Luna', sameOwner: true, resolves: true },
+    { scenario: 'departed namesake', label: 'Luna', duplicate: true, departed: true, resolves: true },
+    { scenario: 'departed target', label: 'Luna (Alice)', left: true },
+    { scenario: 'capability disabled', label: 'Luna', disabled: true },
+  ])('settles an ordinary group reply with snapshot names: $scenario', async ({
+    label, resolves, duplicate, sameOwner, departed, left, disabled,
+  }) => {
+    const alice = '30000000-0000-4000-8000-000000000002';
+    const luna = '20000000-0000-4000-8000-000000000002';
+    const owner = { id: selfId, kind: 'human', name: 'Owner', state: 'joined', role: 'owner' };
+    const speaker = { id: botId, kind: 'bot', name: 'Bot', state: 'joined', role: 'member',
+      ownerActorId: selfId, nickname: null, guestAccess: 'chat', accessRevision: 1 };
+    const members = [
+      owner,
+      { ...owner, id: alice, name: 'Alice', role: 'member' },
+      speaker,
+      { ...speaker, id: luna, name: 'Luna', ownerActorId: sameOwner ? selfId : alice, state: left ? 'left' : 'joined' },
+      ...(duplicate ? [{ ...speaker, id: '20000000-0000-4000-8000-000000000003', name: 'Luna',
+        state: departed ? 'left' : 'joined' }] : []),
+    ];
+    const source = { id: execution.source_message_id, seq: '1', authorId: alice, author: { kind: 'human', name: 'Alice' },
+      origin: 'user', content: [{ type: 'text', text: 'Please review' }], deleted: false, threadRootId: null,
+      createdAt: '2026-10-03T00:00:00Z' };
+    fixture.handle.mockImplementation(route => {
+      if (route === '/me') return { body: { actor: { id: selfId },
+        capabilities: { independentReplies: 1, groupSingleSpeaker: 1, ...(disabled ? {} : { groupTeammateMentions: 1 }) } } };
+      if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members, messages: [source], cursor: '1' } };
+      if (route.endsWith(`/messages/${source.id}`)) return { body: source };
+      if (route === '/executions/claim') {
+        const next = claimed ? null : { ...execution, requester_id: alice };
+        claimed = true;
+        return { body: { execution: next } };
+      }
+      return response(route);
+    });
+    await start();
+    expect(await service.settleLaneTurn({ ...terminal, resultText: `@${label} please take over.` })).toBe(true);
+    expect(deliveries()).toHaveLength(1);
+    if (resolves) expect(deliveries()[0][2].mentions).toEqual([luna]);
+    else expect(deliveries()[0][2]).not.toHaveProperty('mentions');
+  });
+
   // bot-group-chat.md §4.0 (#10009 review): during a rolling deploy or after a rollback, `/me` can
   // promise groupTeammateMentions while the replica taking `complete` still validates the strict old
   // body and refuses `mentions` with 400 INVALID_INPUT; the whole reply was then lost. Unit: real

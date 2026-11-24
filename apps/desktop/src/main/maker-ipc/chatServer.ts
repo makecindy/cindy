@@ -82,7 +82,7 @@ import { groupRepositoryKey, groupRepositoryLabel, parseGroupRepository, readGro
 
 interface Actor { id: string; kind: string; externalId: string; name: string; avatar?: string | null; avatarSource?: string | null; homeDeviceId?: string | null; disabled?: boolean }
 interface Member { id: string; kind: 'human' | 'bot' | 'integration'; name: string; state: string; role: 'owner' | 'admin' | 'member' | 'guest';
-  displayName: string; avatar: string | null; groupAvatar?: string | null; defaultAvatarUrl?: string | null; nickname: string | null; ownerActorId: string; ownerName: string;
+  displayName?: string; avatar: string | null; groupAvatar?: string | null; defaultAvatarUrl?: string | null; nickname: string | null; ownerActorId: string; ownerName: string;
   guestAccess: 'none' | 'chat' | 'tools'; accessRevision: number;
   /** The group's own Cindy (servers with `groupAssistant`), nobody's companion. */
   assistant?: boolean }
@@ -2944,7 +2944,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const bots = snapshot.members.filter(member => member.kind === 'bot' && member.state === 'joined');
     if (!bots.some(member => member.id !== speakerId)) return undefined;
     return bots.map(member => ({ botId: member.id, name: memberName(member, snapshot.members),
-      displayName: member.displayName, nickname: member.nickname }));
+      displayName: member.displayName ?? (isAssistant(member) ? undefined : member.name), nickname: member.nickname }));
   }
 
   function replyMention(source: Message, run: Running) {
