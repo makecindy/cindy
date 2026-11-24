@@ -64,6 +64,7 @@ import { SettingsTextInput } from './SettingsTextInput';
 import { modelsAfterProviderEndpointEdit } from '@/lib/customProviderEndpointEdit';
 import type { DetectedProviderDraft } from '../../../shared/providerDetection';
 import { SpeechModelChoices } from './SpeechModelChoices';
+import { isRealtimeModel } from '../../../shared/speechProviderSetup';
 import { isSpeechModel, SPEECH_API_PRESETS, speechReferenceModels, speechSetupTarget, withSpeechApiPresets } from '../../../shared/speechProviderSetup';
 
 import {
@@ -421,6 +422,7 @@ export function AddProviderWizard({
         recommended: boolean;
         speechReference?: boolean;
         manualSpeech?: boolean;
+        realtime?: boolean;
         agents: AgentKind[];
         /** 列模型端点上报的上下文窗口,**按 agent 分槽**(同一 id 双端可不同,如
          *  cc=1M / codex=272K);完成创建时按所属 runtime 取值,作为供应商事实单独保存。 */
@@ -1003,6 +1005,8 @@ export function AddProviderWizard({
 
     for (const agent of agents) {
       for (const m of preset.runtimes[agent]?.models ?? []) {
+        // A realtime preset describes capabilities. Only discovery adds account membership.
+        if (isRealtimeModel(m, modelRegistry)) continue;
         const existing = initial.get(m.id);
         if (existing) {
           if (!existing.agents.includes(agent)) existing.agents.push(agent);
@@ -1035,6 +1039,7 @@ export function AddProviderWizard({
       if (runtime.requestPath) continue;
       const baseUrl = presetRuntimeBaseUrl(preset, agent, presetBaseUrls);
       for (const model of presetSupplementalModels(preset, agent, modelRegistry, baseUrl)) {
+        if (isRealtimeModel(model, modelRegistry)) continue;
         const existing = initial.get(model.id);
         if (existing) {
           if (!existing.agents.includes(agent)) existing.agents.push(agent);
@@ -1410,6 +1415,7 @@ export function AddProviderWizard({
         routes: v.routes,
         interfaceIds: v.interfaceIds,
         manualSpeech: v.manualSpeech,
+        realtime: v.realtime,
       }));
     if (!bindGeminiImages && !selected.some(model => model.checked)) {
       toast.error(t('settings.providers.wizard.noModelSelected'));
@@ -1465,7 +1471,7 @@ export function AddProviderWizard({
               discoverySnapshotId: m.discoverySnapshotIds?.[agent],
               opaqueModelId: m.opaqueModelIds?.[agent],
               ...(m.discoveredCosts?.[agent] ? { discoveredCost: m.discoveredCosts[agent] } : {}),
-              ...(m.manualSpeech ? { mode: 'audio_speech' as const } : presetModel?.mode ? { mode: presetModel.mode } : {}),
+              ...(m.realtime ? { mode: 'realtime' as const, modalities: { input: ['audio', 'text'], output: ['audio', 'text'] } } : m.manualSpeech ? { mode: 'audio_speech' as const } : presetModel?.mode ? { mode: presetModel.mode } : {}),
               ...(presetModel?.modalities ? { modalities: { input: [...presetModel.modalities.input], output: [...presetModel.modalities.output] } } : {}),
               ...(presetModel?.officialDocs ? { officialDocs: presetModel.officialDocs } : {}),
               // Known models follow the maintained preset after refresh. Only
@@ -1561,7 +1567,10 @@ export function AddProviderWizard({
   const speechPicks = [...picks.entries()].filter(([id, value]) => value.manualSpeech || value.agents.some(agent =>
     isSpeechModel({ id, discoveredMetadata: value.discoveredMetadata?.[agent], mode: sel?.kind === 'preset' ? sel.preset.runtimes[agent]?.models.find(model => model.id === id)?.mode : undefined })));
   const speechIds = new Set(speechPicks.map(([id]) => id));
-  const generalPicks = [...picks.entries()].filter(([id]) => !speechIds.has(id));
+  const realtimePicks = [...picks.entries()].filter(([id, value]) => value.realtime || value.agents.some(agent =>
+    isRealtimeModel({ id, discoveredMetadata: value.discoveredMetadata?.[agent] }, modelRegistry)));
+  const realtimeIds = new Set(realtimePicks.map(([id]) => id));
+  const generalPicks = [...picks.entries()].filter(([id]) => !speechIds.has(id) && !realtimeIds.has(id));
   const togglePick = (id: string) => setPicks(previous => {
     const next = new Map(previous); const value = next.get(id);
     if (value) next.set(id, { ...value, checked: !value.checked });
@@ -2199,6 +2208,7 @@ export function AddProviderWizard({
                       const agent = speechTarget?.agent ?? speechPicks[0]?.[1].agents[0];
                       if (!agent) return;
                       setPicks(previous => {
+                        if (previous.has(id) && !speechIds.has(id)) return previous;
                         const next = new Map(previous); const existing = next.get(id);
                         next.set(id, { ...existing, name: existing?.name ?? id, checked: true,
                           recommended: existing?.recommended ?? false, agents: existing?.agents ?? [agent],
@@ -2206,7 +2216,22 @@ export function AddProviderWizard({
                         return next;
                       });
                     }} />}
-                  {speechPicks.length > 0 && generalPicks.length > 0 && <p className="text-13 font-medium text-[var(--text-primary)]">{t('settings.providers.speechSetup.otherModels')}</p>}
+                  {(speechTarget?.service === 'openai' || speechTarget?.service === 'bailian' || realtimePicks.length > 0) && <SpeechModelChoices
+                    mode="realtime"
+                    choices={realtimePicks.map(([id, value]) => ({ id, ...value, manual: value.realtime }))}
+                    onToggle={togglePick}
+                    onAdd={id => {
+                      const agent = speechTarget?.agent ?? realtimePicks[0]?.[1].agents[0];
+                      if (!agent) return;
+                      setPicks(previous => {
+                        if (previous.has(id) && !realtimeIds.has(id)) return previous;
+                        const next = new Map(previous), old = next.get(id);
+                        next.set(id, { ...old, name: old?.name ?? id, checked: true, recommended: false,
+                          agents: old?.agents ?? [agent], realtime: true });
+                        return next;
+                      });
+                    }} />}
+                  {(speechPicks.length > 0 || realtimePicks.length > 0) && generalPicks.length > 0 && <p className="text-13 font-medium text-[var(--text-primary)]">{t('settings.providers.speechSetup.otherModels')}</p>}
                   {generalPicks.length > 0 && (
                     <div
                       className="flex flex-col overflow-hidden rounded-xl border"

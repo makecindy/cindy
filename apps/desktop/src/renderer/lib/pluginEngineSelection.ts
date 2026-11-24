@@ -145,36 +145,43 @@ export function resolveActivePluginEngine(
   };
 }
 
-/**
- * The level a model of this engine runs with: the chosen one when the model offers it, else the
- * model's own default; null when the model offers none (the default entry, or no levels listed).
- */
+type PluginEngineEffortPurpose = 'new-task' | 'session';
+
+function modelDefaultEffort(model: PluginEngineModel | undefined, purpose: PluginEngineEffortPurpose): PluginEngineEffort | undefined {
+  const value = purpose === 'session' && model?.declaredDefaultEffort !== undefined
+    ? model.declaredDefaultEffort : model?.defaultEffort;
+  return isPluginEngineEffort(value) && model?.efforts?.includes(value) ? value : undefined;
+}
+
+/** A supported explicit choice wins. Existing tasks without one follow the plugin's default. */
 export function resolvePluginEngineEffort(
   engine: Pick<PluginEngineView, 'models'> | null | undefined,
   modelId: string | null | undefined,
   requested: unknown,
+  purpose: PluginEngineEffortPurpose = 'new-task',
 ): PluginEngineEffort | null {
   const model = engine?.models.find((item) => item.id === modelId);
-  const offered = model?.efforts ?? [];
-  if (isPluginEngineEffort(requested) && offered.includes(requested)) return requested;
-  return model?.defaultEffort && offered.includes(model.defaultEffort) ? model.defaultEffort : null;
+  if (isPluginEngineEffort(requested) && model?.efforts?.includes(requested)) return requested;
+  return modelDefaultEffort(model, purpose) ?? null;
 }
 
 /**
- * Effort for an in-session plugin engine pick: carries over the active effort only when staying on
- * the same plugin engine (and computer); switching to another engine uses the target model's own
- * default level, matching what the picker rows display.
+ * Carries a supported effort from the running engine or the pending selection when reselecting
+ * that same engine and computer. A different engine uses its own launch default.
  */
 export function resolvePluginEngineSessionSwitchEffort(
   selection: PluginEngineSelection,
   targetEngine: Pick<PluginEngineView, 'models'> | null | undefined,
-  currentActive?: { providerId: string; deviceId?: string | null; effort?: unknown } | null,
+  running?: { providerId: string; deviceId?: string | null; effort?: unknown } | null,
+  pending?: { providerId: string; deviceId?: string | null; effort?: unknown } | null,
 ): PluginEngineEffort | undefined {
   if (selection.effort) return selection.effort;
-  const carriedEffort = currentActive && isSamePluginEngineChoice(selection, currentActive)
-    ? currentActive.effort
-    : undefined;
-  return resolvePluginEngineEffort(targetEngine, selection.modelId, carriedEffort) ?? undefined;
+  const sameEngine = isSamePluginEngineChoice(selection, running);
+  const carriedEffort = sameEngine ? running?.effort
+    : isSamePluginEngineChoice(selection, pending) ? pending?.effort : undefined;
+  return resolvePluginEngineEffort(
+    targetEngine, selection.modelId, carriedEffort, sameEngine ? 'session' : 'new-task',
+  ) ?? undefined;
 }
 
 /**
@@ -185,15 +192,19 @@ export function resolvePluginEngineSessionSwitchEffort(
 export function pluginEngineModelRows(
   engine: Pick<PluginEngineView, 'models' | 'defaultModelAllowed'>,
   activeModelId?: string | null,
+  purpose: PluginEngineEffortPurpose = 'new-task',
 ): PluginEngineModelRow[] {
-  const models: PluginEngineModelRow[] = engine.models.map((model: PluginEngineModel) => ({
-    id: model.id,
-    name: model.displayName,
-    ...(model.description ? { description: model.description } : {}),
-    isDefault: false,
-    efforts: model.efforts ?? [],
-    ...(model.defaultEffort ? { defaultEffort: model.defaultEffort } : {}),
-  }));
+  const models: PluginEngineModelRow[] = engine.models.map(model => {
+    const defaultEffort = modelDefaultEffort(model, purpose);
+    return {
+      id: model.id,
+      name: model.displayName,
+      ...(model.description ? { description: model.description } : {}),
+      isDefault: false,
+      efforts: model.efforts ?? [],
+      ...(defaultEffort ? { defaultEffort } : {}),
+    };
+  });
   const defaultRow: PluginEngineModelRow = { id: PLUGIN_ENGINE_DEFAULT_MODEL, isDefault: true, efforts: [] };
   if (models.length === 0) return engine.defaultModelAllowed === false ? [] : [defaultRow];
   return activeModelId === PLUGIN_ENGINE_DEFAULT_MODEL && engine.defaultModelAllowed !== false

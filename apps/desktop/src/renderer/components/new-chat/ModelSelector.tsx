@@ -5081,7 +5081,7 @@ export function ModelSelector({
         name: pluginEngineSession.engineName,
         engine: pluginEngineSession.engine,
         modelId: pluginEngineSession.modelId,
-        effort: resolvePluginEngineEffort(pluginEngineSession.engine, pluginEngineSession.modelId, pluginEngineSession.effort),
+        effort: resolvePluginEngineEffort(pluginEngineSession.engine, pluginEngineSession.modelId, pluginEngineSession.effort, 'session'),
       }
     : (() => {
         const active = pluginEngines?.active;

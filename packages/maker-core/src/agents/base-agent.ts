@@ -2760,6 +2760,8 @@ export interface AgentSessionHandle {
   getUsageSnapshot(): UsageSnapshot;
   /** Replayable authoritative usage for Host-synthesized terminal events. */
   getPendingTurnUsage?(): Record<string, unknown> | undefined;
+  /** True only while a delivered reply is waiting for automatic compaction. */
+  isCompactingDeliveredReply?(): boolean;
 
   /** Structured context usage breakdown. Only Claude Code implements this today. */
   getContextUsage?(): Promise<ContextUsageData>;

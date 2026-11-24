@@ -157,6 +157,8 @@ export interface CompanionCloudRuntime {
 export const COMPANION_INSTALL_KEY = 'companion.install.v1';
 const INSTALL_RECHECK_MS = 2 * 60_000;
 
+type TakeOverFailureStage = 'actor-lookup' | 'profile-check' | 'home-cas' | 'local-demotion' | 'install-claim' | 'local-restore';
+
 let active: CompanionCloudRuntime | null = null;
 /** The running sync of the current account, or null when the feature is off. */
 export function activeCompanionCloud(): CompanionCloudRuntime | null { return active; }
@@ -329,11 +331,12 @@ export function startCompanionCloud(input: {
 
   /** Explicit home actions must leave a diagnostic, without logging response text or paths. */
   function homeActionFailure(action: 'takeOver' | 'transfer' | 'switchHome', botId: string, error: unknown,
-    fallback: 'FAILED' | 'OFFLINE' = 'FAILED'): CompanionCloudActionResult {
+    { fallback, stage }: { fallback?: 'FAILED' | 'OFFLINE'; stage?: TakeOverFailureStage } = {}): CompanionCloudActionResult {
     const result = actionFailure(error, fallback);
     const reason = errorCode(error);
     input.log?.warn('Companion home change failed', { action, botId,
       code: /^[A-Z][A-Z0-9_]{0,79}$/.test(reason) ? reason : (result.ok ? 'FAILED' : result.code),
+      ...(stage ? { stage } : {}),
       ...(error instanceof CompanionIdentityConflict ? { conflictingBotId: error.conflictingBotId } : {}),
     });
     return !result.ok && error instanceof CompanionIdentityConflict
@@ -1014,10 +1017,12 @@ export function startCompanionCloud(input: {
       if (!self || !live() || !input.host.materializer) return { ok: false, code: 'NOT_ENABLED' };
       let actor = actorOf(botId);
       if (!actor) {
-        try { await refreshForeground?.(); } catch (error) { return homeActionFailure('takeOver', botId, error); }
+        try { await refreshForeground?.(); } catch (error) {
+          return homeActionFailure('takeOver', botId, error, { stage: 'actor-lookup' });
+        }
         actor = actorOf(botId);
       }
-      if (!actor) return homeActionFailure('takeOver', botId, new Error('COMPANION_NOT_FOUND'));
+      if (!actor) return homeActionFailure('takeOver', botId, new Error('COMPANION_NOT_FOUND'), { stage: 'actor-lookup' });
       const actorId = actor.id;
       const pendingCorrection = state.bot(botId);
       if (!correction && pendingCorrection?.actorId === actorId && pendingCorrection.profileCorrection
@@ -1042,7 +1047,7 @@ export function startCompanionCloud(input: {
         identityConflicts.delete(actor.externalId);
       } catch (error) {
         recordProfileFailure(actor, actorId, error);
-        return homeActionFailure('takeOver', botId, error);
+        return homeActionFailure('takeOver', botId, error, { stage: 'profile-check' });
       }
       // Always compare-and-set, even when the cached home already says "here": the cache may be
       // stale (another computer took over while this one was offline). Unchanged homes are a no-op.
@@ -1050,7 +1055,7 @@ export function startCompanionCloud(input: {
         await input.api(`/actors/${actor.id}`, 'PATCH', { homeDeviceId: self,
           expectedHomeDeviceId: correction ? correction.home : actor.homeDeviceId ?? null });
       } catch (error) {
-        const failure = homeActionFailure('takeOver', botId, error);
+        const failure = homeActionFailure('takeOver', botId, error, { stage: 'home-cas' });
         if (!failure.ok && failure.code === 'HOME_CONFLICT') {
           actor.homeDeviceId = failure.homeDeviceId ?? null;
           await refreshForeground?.().catch(() => undefined);
@@ -1059,10 +1064,15 @@ export function startCompanionCloud(input: {
         return failure;
       }
       actor.homeDeviceId = self;
+      let stage: TakeOverFailureStage = 'local-demotion';
       try {
         // Taking over from this installation also takes it from another install on the same device.
         demoteNow(actor);
-        if (await claimInstall(actor, 'takeover', input.api) !== 'mine') return homeActionFailure('takeOver', botId, new Error('INSTALL_CLAIM_LOST'));
+        stage = 'install-claim';
+        if (await claimInstall(actor, 'takeover', input.api) !== 'mine') {
+          return homeActionFailure('takeOver', botId, new Error('INSTALL_CLAIM_LOST'), { stage });
+        }
+        stage = 'local-restore';
         if (correction) {
           const accepted = { homeDeviceId: self, version: correction.version,
             values: Object.fromEntries(Object.entries(correction.values).map(([key, value]) => [key, value.trim()])) };
@@ -1079,7 +1089,7 @@ export function startCompanionCloud(input: {
       } catch (error) {
         recordProfileFailure(actor, actorId, error);
         publish();
-        return homeActionFailure('takeOver', botId, error);
+        return homeActionFailure('takeOver', botId, error, { stage });
       }
       publish(); mirrors.kick(actor.externalId); uploads.kick(actor.externalId);
       return { ok: true };
@@ -1157,7 +1167,7 @@ export function startCompanionCloud(input: {
         // A lost answer may still have moved it: show where it runs now.
         await refreshForeground?.().catch(() => undefined);
         publish();
-        return homeActionFailure('switchHome', botId, error, 'OFFLINE');
+        return homeActionFailure('switchHome', botId, error, { fallback: 'OFFLINE' });
       }
       // Moved here: re-read homes now so the automatic take-over starts without waiting for the push.
       if (result.ok || result.code === 'HOME_CONFLICT') await refreshForeground?.().catch(() => undefined);

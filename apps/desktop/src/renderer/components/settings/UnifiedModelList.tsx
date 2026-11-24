@@ -477,6 +477,7 @@ export function UnifiedModelList({
   provider,
   onRefresh,
   onAddSpeechModels,
+  onAddRealtimeModels,
   refreshing,
   refreshDisabled,
   refreshIdleLabel,
@@ -491,6 +492,7 @@ export function UnifiedModelList({
   /** 「刷新模型」；内置供应商走各自真源，自定义供应商走 additions-only 发现。 */
   onRefresh?: () => void;
   onAddSpeechModels?: () => void;
+  onAddRealtimeModels?: () => void;
   refreshing?: boolean;
   /** 其它供应商正在刷新时禁用，避免并发刷新造成反馈归属不清。 */
   refreshDisabled?: boolean;
@@ -1315,7 +1317,7 @@ export function UnifiedModelList({
                 ]}
               />
             )}
-            {visibilityControls && (unionRows.length > 0 || onAddSpeechModels) && (
+            {visibilityControls && (unionRows.length > 0 || onAddSpeechModels || onAddRealtimeModels) && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button data-settings-search-action="Open the model management menu" variant="secondary" size="sm" compact type="button" className="shrink-0">
@@ -1324,6 +1326,9 @@ export function UnifiedModelList({
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
+                  {onAddRealtimeModels && <DropdownMenuItem onSelect={onAddRealtimeModels}>
+                    {t('bots.voiceMode.realtime.add')}
+                  </DropdownMenuItem>}
                   {onAddSpeechModels && (
                     <DropdownMenuItem onSelect={onAddSpeechModels}>
                       {t('settings.providers.speechSetup.add')}

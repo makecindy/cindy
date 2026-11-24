@@ -940,6 +940,76 @@ describe('a task running on a plugin engine', () => {
     expect(onSelectModel).toHaveBeenLastCalledWith('plain');
   });
 
+  // Unit: a task with no recorded effort follows the plugin default even after the draft default changes.
+  it.each(['plugin panel', 'unified menu', 'unified menu with a pending engine switch'] as const)('keeps the plugin default for a running task in the %s', async (surface) => {
+    const [pro, flash, plain] = leveled.models;
+    const engine = {
+      ...leveled,
+      models: [
+        { ...pro!, defaultEffort: 'low' as const, declaredDefaultEffort: 'high' as const },
+        { ...flash!, declaredDefaultEffort: null },
+        plain!,
+      ],
+    };
+    const selection = { providerId: engine.providerId, modelId: 'pro' };
+    const active = resolveActivePluginEngine([engine], selection)!;
+    const pendingSwitch = surface === 'unified menu with a pending engine switch';
+    const unifiedMenu = surface !== 'plugin panel';
+    const nextEngine = {
+      ...agy,
+      models: [{ ...engine.models[0]!, displayName: 'Next model' }],
+    };
+    const pendingSelection = { providerId: nextEngine.providerId, modelId: 'pro', effort: 'high' as const };
+    const onSelect = vi.fn((picked: typeof selection) => {
+      const target = picked.providerId === engine.providerId ? engine : nextEngine;
+      return resolvePluginEngineSessionSwitchEffort(picked, target, selection, pendingSwitch ? pendingSelection : null) === 'high';
+    });
+    expect(pluginEngineSessionCreateFields(active).effort).toBe('low');
+
+    render(React.createElement(ModelSelector, {
+      modelId: 'pro',
+      effort: '',
+      onModelChange: vi.fn(),
+      onEffortChange: vi.fn(),
+      vendorKey: 'cc',
+      remoteAgent: undefined,
+      actualRoute: true,
+      ...(unifiedMenu ? {
+        pluginEngines: {
+          engines: pendingSwitch ? [engine, nextEngine] : [engine],
+          active: pendingSwitch ? pendingSelection : selection,
+          running: selection,
+          onSelect,
+        },
+      } : {}),
+      pluginEngineSession: {
+        providerId: engine.providerId, engine, engineName: engine.name, modelId: 'pro', onSelectModel: vi.fn(),
+      },
+    }));
+    const trigger = screen.getByRole('button', { name: 'Select model. Current: DeepSeek Harness · Pro · high' });
+    await act(async () => { fireEvent.click(trigger); });
+    const list = await screen.findByRole('listbox', { name: 'Models' });
+    const group = unifiedMenu ? within(list).getByRole('group', { name: 'DeepSeek Harness' }) : list;
+    expect(within(group).getAllByRole('option').map(levelOf)).toEqual(['high', null, null]);
+    if (pendingSwitch) {
+      const next = within(list).getByRole('group', { name: 'Antigravity' });
+      const nextRow = within(next).getByRole('option', { name: /Next model/ });
+      expect(levelOf(nextRow)).toBe('high');
+      await act(async () => { fireEvent.click(nextRow); });
+      expect(onSelect).toHaveReturnedWith(true);
+      await act(async () => { fireEvent.click(trigger); });
+    }
+    if (unifiedMenu) {
+      const search = screen.getByRole('textbox', { name: 'Search models' });
+      await act(async () => { fireEvent.change(search, { target: { value: 'Pro' } }); });
+      const row = within(await screen.findByRole('listbox', { name: 'Models' })).getByRole('option', { name: /Pro/ });
+      expect(levelOf(row)).toBe('high');
+      await act(async () => { fireEvent.click(row); });
+      expect(onSelect).toHaveBeenLastCalledWith(selection);
+      expect(onSelect).toHaveLastReturnedWith(true);
+    }
+  });
+
   it('falls back to the generic engine label when the plugin is gone', () => {
     renderTaskTrigger(null);
     expect(screen.getByRole('button', { name: 'Select model. Current: Plugin engine · Model details unavailable' })).toBeTruthy();
