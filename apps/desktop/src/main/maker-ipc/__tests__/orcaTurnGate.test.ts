@@ -7,10 +7,12 @@ vi.mock('../../utility-model/oneShotCandidates.js', () => ({
 }));
 vi.mock('../../maker-host/index.js', () => ({ getMaker: () => ({}) }));
 
+import { noteLeadDispatchFact } from '../orcaDispatchClaims.js';
 import {
   arrearsCount,
   arrearsDue,
   clearWorkerArrears,
+  evaluateTurnGate,
   forgetTurnGate,
   judgeDispatchClaim,
   leadSettleCount,
@@ -170,5 +172,28 @@ describe('worker arrears', () => {
     forgetTurnGate('lead-1');
     expect(arrearsCount('lead-1')).toBe(0);
     expect(leadSettleCount('lead-1')).toBe(0);
+  });
+});
+
+describe('gate trigger scope', () => {
+  const base = { leadSessionId: 'lead-1', turnGeneration: 2, workerLabels: ['research'] };
+
+  it('does not let a dispatch from an earlier turn silence this turn', async () => {
+    requestUtilityText.mockResolvedValue({ ok: true, text: 'claim' });
+    noteLeadDispatchFact('lead-1', {
+      workerId: 'w-1',
+      workerLabel: 'research',
+      dispatchId: 'q-earlier',
+      delivery: 'queued',
+      turnGeneration: 1,
+      at: Date.now(),
+    });
+    await expect(evaluateTurnGate({ ...base, finalText: '已派给它了。' })).resolves.toBeTruthy();
+    expect(requestUtilityText).toHaveBeenCalledTimes(1);
+  });
+
+  it('still treats a namespaced Orca tool name as Orca', () => {
+    noteTurnToolUse('lead-1', 2, 'mcp__cindy__send_to_worker');
+    expect(turnOrcaToolUseCount('lead-1', 2)).toBe(1);
   });
 });

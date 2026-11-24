@@ -4,7 +4,9 @@ import { getMaker } from '../maker-host/index.js';
 import { createLogger } from '../logger.js';
 import {
   consumeDispatchClaimReminder,
+  dispatchFactsForTurn,
   findUnbackedDispatchClaim,
+  sessionInstanceToken,
   type UnbackedDispatchClaim,
 } from './orcaDispatchClaims.js';
 
@@ -53,6 +55,9 @@ const judgedByTurn = new Map<string, 'claim' | 'quiet' | 'unavailable'>();
 const currentGeneration = new Map<string, number>();
 /** 引擎侧已经判过的回合，宿主 settle 不再重判——一个会话只能有一个否决点。 */
 const handledByTurn = new Map<TurnKey, number | undefined>();
+/** 每个会话最后一次看到的回合号与实例标记，用来发现「换了实例、代次从头数」。 */
+const lastGeneration = new Map<string, number>();
+const instanceOf = new Map<string, number>();
 
 const turnKey = (sessionId: string, generation: number): TurnKey => `${sessionId}:${generation}`;
 
@@ -80,16 +85,40 @@ export function noteTurnToolUse(
   toolName?: string,
   instance?: number,
 ): void {
+  const previous = lastGeneration.get(sessionId);
+  // 实例标记变了、或代次回退，都说明会话被重建过：旧实例同一代次的计数必须丢掉，
+  // 否则新实例第 1 轮会被当成「调过工具」而跳过判定。
+  const regressed =
+    previous !== undefined &&
+    (generation < previous || (instance !== undefined && instanceOf.get(sessionId) !== instance));
+  if (regressed) forgetTurnGate(sessionId);
+  lastGeneration.set(sessionId, generation);
+  if (instance !== undefined) instanceOf.set(sessionId, instance);
+
   const key = turnKey(sessionId, generation);
-  const existing = countsByTurn.get(key);
-  // 换了会话实例：代次从头数，旧实例同一代次的计数必须丢掉。
+  const stored = regressed ? undefined : countsByTurn.get(key);
   const counts =
-    existing && existing.instance === instance ? existing : { tools: 0, orcaTools: 0, instance };
+    stored && stored.instance === instance ? stored : { tools: 0, orcaTools: 0, instance };
   counts.tools += 1;
-  if (toolName && ORCA_TOOL_NAMES.has(toolName)) counts.orcaTools += 1;
+  if (toolName && isOrcaTool(toolName)) counts.orcaTools += 1;
   countsByTurn.set(key, counts);
   currentGeneration.set(sessionId, generation);
   trimTracked(countsByTurn, MAX_TRACKED_TURNS);
+}
+
+/** 当前会话实例标记：Hook 与 settle 两个出口都要按同一个实例写账。 */
+export function currentTurnInstance(sessionId: string): number | undefined {
+  return instanceOf.get(sessionId);
+}
+
+/**
+ * Orca 工具名判定。MCP 侧可能带命名空间（`mcp__cindy__send_to_worker`、`cindy/send_to_worker`），
+ * 所以只比最后一段，避免换一种拼接就整体失效。
+ */
+function isOrcaTool(toolName: string): boolean {
+  if (ORCA_TOOL_NAMES.has(toolName)) return true;
+  const tail = toolName.split('__').pop()?.split('/').pop() ?? toolName;
+  return ORCA_TOOL_NAMES.has(tail);
 }
 
 export function turnToolUseCount(sessionId: string, generation: number, instance?: number): number {
@@ -225,6 +254,8 @@ export function forgetTurnGate(sessionId?: string): void {
     leadSettles.clear();
     currentGeneration.clear();
     handledByTurn.clear();
+    lastGeneration.clear();
+    instanceOf.clear();
     return;
   }
   const prefix = `${sessionId}:`;
@@ -234,6 +265,8 @@ export function forgetTurnGate(sessionId?: string): void {
   for (const key of handledByTurn.keys()) if (key.startsWith(prefix)) handledByTurn.delete(key);
   leadSettles.delete(sessionId);
   currentGeneration.delete(sessionId);
+  lastGeneration.delete(sessionId);
+  instanceOf.delete(sessionId);
 }
 
 function judgePrompt(workerLabels: string[], finalText: string): string {
@@ -340,8 +373,6 @@ export async function evaluateTurnGate(input: {
   turnGeneration: number;
   finalText: string | undefined;
   workerLabels: string[];
-  /** 本回合被宿主接受的派发数（调用方从凭据账按代次筛选，这里不推进账本观察）。 */
-  turnDispatchCount: number;
   /** 会话实例标记；换实例后代次重用，计数与凭据都不能沿用。 */
   instance?: number;
 }): Promise<string | undefined> {
@@ -365,8 +396,13 @@ export async function evaluateTurnGate(input: {
   // 只剩「纯口语声称已派」这一格需要语义判定：本回合零派发、且没碰过任何 Orca 工具。
   // 用「零 Orca 工具」而不是「零工具」：读了几个文件再说已派同样可疑，
   // 而那正是 Claude Code 用户最常见的形态。
+  // 派发数在这里自己数：交给调用方算，就会有人把「整本账」当成「本回合」，
+  // 于是历史上派过一次之后，后面零派发的回合永远跳过判定。
+  const turnDispatches = dispatchFactsForTurn(input.leadSessionId, input.turnGeneration).filter(
+    (fact) => fact.turnGeneration === input.turnGeneration,
+  );
   if (
-    input.turnDispatchCount > 0 ||
+    turnDispatches.length > 0 ||
     turnOrcaToolUseCount(input.leadSessionId, input.turnGeneration, input.instance) > 0
   ) {
     return undefined;

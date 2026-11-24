@@ -21,6 +21,7 @@ import {
   arrearsDue,
   clearWorkerArrears,
   currentTurnGeneration,
+  currentTurnInstance,
   evaluateTurnGate,
   forgetTurnGate,
   markArrearsNudged,
@@ -781,7 +782,8 @@ async function evaluateLeadTurnGateFor(
   }
 
   // 读一次凭据：推进轮次观察并清掉过期项，核对本身看整本账。
-  const facts = dispatchFactsForTurn(params.leadSessionId, params.turnGeneration);
+  // 推进轮次观察并清掉过期项（evaluateTurnGate 内部自己数本回合的派发）。
+  dispatchFactsForTurn(params.leadSessionId, params.turnGeneration);
   return evaluateTurnGate({
     leadSessionId: params.leadSessionId,
     turnGeneration: params.turnGeneration,
@@ -789,7 +791,6 @@ async function evaluateLeadTurnGateFor(
     workerLabels: workers
       .map((worker) => worker.label)
       .filter((label): label is string => Boolean(label)),
-    turnDispatchCount: facts.length,
   });
 }
 
@@ -2518,7 +2519,13 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     turnGeneration: number;
     finalText?: string;
   }): Promise<void> {
-    if (turnGateHandled(params.leadSessionId, params.turnGeneration)) {
+    if (
+      turnGateHandled(
+        params.leadSessionId,
+        params.turnGeneration,
+        currentTurnInstance(params.leadSessionId),
+      )
+    ) {
       deps.log.info('orca turn gate skipped after engine hook', {
         leadSessionId: params.leadSessionId,
         turnGeneration: params.turnGeneration,
