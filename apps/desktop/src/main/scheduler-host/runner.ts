@@ -1153,6 +1153,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       // A plugin-engine target is refused before hooks, restore or any engine switch.
       if (target && isPluginEngineKind(target.agentKind)) {
         const refusal = new PluginEngineUnsupportedError(SCHEDULED_TASKS_FEATURE);
+        refusal.message += '. Switch the linked task back to a built-in engine or link the automation to a task that uses one.';
         await this.notifyFailureSilent(schedule, ctx, refusal.message);
         throw refusal;
       }
