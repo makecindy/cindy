@@ -16227,6 +16227,7 @@
     },
     "turnChanges": {
       "title": "已更改 {{count}} 個檔案",
+      "recordedTitle": "已記錄 {{count}} 個檔案",
       "partialTitle": "本條訊息的檔案變更未完整記錄",
       "review": "審查",
       "undo": "撤銷",

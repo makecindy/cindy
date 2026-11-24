@@ -16228,6 +16228,7 @@
     },
     "turnChanges": {
       "title": "已更改 {{count}} 个文件",
+      "recordedTitle": "已记录 {{count}} 个文件",
       "partialTitle": "本条消息的文件变更未完整记录",
       "review": "审查",
       "undo": "撤销",

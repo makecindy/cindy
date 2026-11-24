@@ -200,6 +200,20 @@ describe('TurnChangesCard file actions', () => {
     expect(mocks.toastSuccess).toHaveBeenCalledWith('chat.turnChanges.undoSuccess');
   });
 
+  it('labels a partial turn count as recorded files', () => {
+    const view = render(<TurnChangesCard sessionId="session-1" changeSet={CHANGE_SET} />);
+    expect(screen.getByText('chat.turnChanges.title:1')).toBeTruthy();
+
+    view.rerender(<TurnChangesCard sessionId="session-1" changeSet={{
+      ...CHANGE_SET,
+      state: 'partial',
+      incompleteReasons: ['opaque-tool'],
+    }} />);
+
+    expect(screen.getByText('chat.turnChanges.recordedTitle:1')).toBeTruthy();
+    expect(screen.queryByText('chat.turnChanges.title:1')).toBeNull();
+  });
+
   it('offers partial undo for the exactly captured subset and explains the boundary', async () => {
     const partial: TurnChangeSetSummary = {
       ...CHANGE_SET,

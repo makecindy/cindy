@@ -16293,6 +16293,7 @@
     },
     "turnChanges": {
       "title": "Changed {{count}} files",
+      "recordedTitle": "Files recorded: {{count}}",
       "partialTitle": "File changes were not fully captured",
       "review": "Review",
       "undo": "Undo",

@@ -16228,6 +16228,7 @@
     },
     "turnChanges": {
       "title": "{{count}} ファイルを変更",
+      "recordedTitle": "記録済みファイル: {{count}} 件",
       "partialTitle": "このメッセージのファイル変更を完全には取得できませんでした",
       "review": "レビュー",
       "undo": "元に戻す",

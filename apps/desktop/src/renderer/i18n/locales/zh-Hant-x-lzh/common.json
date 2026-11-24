@@ -16219,6 +16219,7 @@
     },
     "turnChanges": {
       "title": "已改 {{count}} 卷",
+      "recordedTitle": "已錄 {{count}} 卷",
       "partialTitle": "此訊之卷變更未盡錄",
       "review": "審",
       "undo": "撤",

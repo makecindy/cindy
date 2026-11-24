@@ -16228,6 +16228,7 @@
     },
     "turnChanges": {
       "title": "파일 {{count}}개 변경",
+      "recordedTitle": "기록된 파일 {{count}}개",
       "partialTitle": "이 메시지의 파일 변경 사항이 완전히 캡처되지 않았습니다",
       "review": "검토",
       "undo": "실행 취소",

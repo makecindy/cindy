@@ -16399,6 +16399,7 @@
     },
     "turnChanges": {
       "title": "{{count}} arquivos alterados",
+      "recordedTitle": "Arquivos registrados: {{count}}",
       "partialTitle": "As alterações nos arquivos não foram capturadas integralmente",
       "review": "Revisar",
       "undo": "Desfazer",
