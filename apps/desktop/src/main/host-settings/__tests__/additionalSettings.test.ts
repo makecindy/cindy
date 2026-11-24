@@ -119,7 +119,7 @@ describe('expanded settings use the real native stores', () => {
   });
   it('terminal writes are seen by existing native consumers and reset clears the override', async () => {
     // Only a shell present on this host is accepted (`sh` does not exist on Windows).
-    const shell = probeAvailableShells().find(item => item.id !== 'auto')!.id;
+    const shell = probeAvailableShells()[0]!.id;
     await updateHostSettings(caller, await request('terminal', { set: { defaultShellPref: shell } }));
     expect(getDefaultShellPref()).toBe(shell);
     await updateHostSettings(caller, await request('terminal', { clear: ['defaultShellPref'] }));
