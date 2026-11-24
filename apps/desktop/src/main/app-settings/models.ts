@@ -107,7 +107,13 @@ export async function manageAppModels(input: AppModelsRequest, assertCurrent: ()
       case 'visible': {
         const catalog = await api.list(false);
         await guard();
-        const model = catalog.providers.find(provider => provider.id === target.providerId)?.models[target.agent]?.find(model => model.id === target.modelId);
+        const provider = catalog.providers.find(entry => entry.id === target.providerId);
+        // Chat models are listed per agent; media models are listed once for the provider.
+        // The same override map governs both, so a media model is still "in the catalog".
+        const model = provider?.models[target.agent]?.find(model => model.id === target.modelId)
+          ?? [...(provider?.imageModels ?? []), ...(provider?.videoModels ?? []),
+            ...(provider?.audioModels ?? []), ...(provider?.evaluationModels ?? []),
+            ...(provider?.embeddingModels ?? [])].find(model => model.id === target.modelId);
         // A provider that left the catalog keeps its overrides. value=null only removes the
         // stored choice, so it must stay available for those orphan keys; an explicit on/off
         // choice still needs a catalog entry to resolve the default.

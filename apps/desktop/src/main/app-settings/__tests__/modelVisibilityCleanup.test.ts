@@ -43,6 +43,26 @@ describe('model visibility override cleanup', () => {
     expect(manageAppPreferences).not.toHaveBeenCalled();
   });
 
+  // Codex P2: media models live in provider.imageModels / videoModels, not in
+  // models[agent]. They are still catalog entries: treating them as orphans handed
+  // defaultEnabled: undefined to the receipt, which then reported the wrong visibility.
+  it('uses the real default of a media model that is not listed per agent', async () => {
+    configureModelSettingsActions({
+      owner: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }),
+      list: async () => ({ providers: [{ id: 'relay', models: { pi: [] },
+        imageModels: [{ id: 'openai/old-image', name: 'Old Image', defaultEnabled: false }] }],
+        modelVisibilityOverrides: {} }),
+    } as unknown as Parameters<typeof configureModelSettingsActions>[0]);
+    manageAppPreferences.mockResolvedValue({ modelVisibility: { visible: false, customized: false } });
+
+    await manageAppModels({ operation: 'set',
+      target: { providerId: 'relay', agent: 'pi', modelId: 'openai/old-image' },
+      change: { setting: 'visible', value: null } }, async () => {});
+
+    expect(manageAppPreferences).toHaveBeenCalledWith('model-visibility', undefined,
+      { target: { providerId: 'relay', agent: 'pi', modelId: 'openai/old-image' }, visible: null, defaultEnabled: false });
+  });
+
   it('keeps refusing an explicit on/off choice for a model outside the catalog', async () => {
     await expect(manageAppModels({ operation: 'set', target: orphan, change: { setting: 'visible', value: true } },
       async () => {})).rejects.toThrow('MODEL_NOT_IN_CATALOG');
