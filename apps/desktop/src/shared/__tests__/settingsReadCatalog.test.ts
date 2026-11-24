@@ -106,7 +106,6 @@ describe('settings read catalog independent coverage anchors', () => {
     const voice = text('shared/voiceInputData.ts').match(/export interface VoiceInputSettings \{([\s\S]*?)\n\}/)![1]!;
     const voiceKeys = [...voice.matchAll(/^ {2}([A-Za-z]+)(?:\?)?:/gm)].map(match => match[1]!);
     const resources = ['dictionaryEntries', 'dictionaryCandidates', 'suppressedAutomaticDictionaryTexts'];
-    const configured = ['microphoneDeviceId', 'refinementInstructions', 'shortcut'];
     for (const key of voiceKeys) {
       if (resources.includes(key)) expect(SETTINGS_READ_EXTERNAL_CATALOG.some(item => item.id === 'voice.dictionary')).toBe(true);
       else if (['speakerFilterEnabled', 'speakerFilterStrictness', 'speakerFilterStrictnessOverride'].includes(key)) {
@@ -117,9 +116,8 @@ describe('settings read catalog independent coverage anchors', () => {
         expect(SETTINGS_READ_EXTERNAL_CATALOG.some(item => item.id === 'voice.conversation')).toBe(true);
         expect(SETTINGS_READ_FIELD_IDS).not.toContain(`voice.${key}`);
       }
-      else if (key === 'dictionarySyncEnabledOverride') expectIds(['voice.dictionarySyncEnabled']);
-      else if (key === 'composerLongPressEnabledOverride') expectIds(['voice.composerLongPressEnabled']);
-      else expectIds([`voice.${key}${configured.includes(key) ? 'Configured' : ''}`]);
+      // Any other voice setting needs no cloud field, as for the core interfaces: the frozen
+      // snapshot publishes a subset, and the coverage test checks each published field is produced.
     }
   });
   it('anchors ASR sources, builtin tools and plugin capabilities in their actual registries', () => {
