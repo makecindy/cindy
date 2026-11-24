@@ -90,6 +90,25 @@ afterEach(async () => {
 });
 
 describe('scheduler queue wiring', () => {
+  // #12168, unit: a timer with an MR and a pre-run hook must only read status.
+  // The resulting watch event can dispatch the runner after the task page has closed.
+  it('samples GitLab status on a timer and dispatches the runner only on the follow-up event', async () => {
+    const refreshSchedulePr = vi.fn();
+    await startScheduler({
+      maker: {} as StartSchedulerDeps['maker'], getDb: vi.fn(), getMainWindow: () => null,
+      feishuIm: {} as StartSchedulerDeps['feishuIm'], logger: {}, refreshSchedulePr,
+    });
+    const schedule = { id: 'mr', prTrigger: { url: 'https://git.example.test/group/project/-/merge_requests/3', change: 'any' },
+      preRunHook: { command: 'check' } };
+    const ctx = { runId: 'poll', firedAt: 0, signal: new AbortController().signal };
+    const runner = mocks.schedulerOptions!.runner;
+    expect((await runner.fire(schedule as never, { ...ctx, timed: true })).skipped).toBe(true);
+    expect(refreshSchedulePr).toHaveBeenCalledExactlyOnceWith(schedule.prTrigger.url, schedule);
+    expect(mocks.runnerFire).not.toHaveBeenCalled();
+    mocks.runnerFire.mockResolvedValue({ sessionId: 'task' });
+    await runner.fire(schedule as never, { ...ctx, runId: 'change', trigger: { kind: 'watch', source: 'pr-status', detail: schedule.prTrigger.url } });
+    expect(mocks.runnerFire).toHaveBeenCalledTimes(1);
+  });
   it('checks the primary account before any pre-run plugin or model on a follower', async () => {
     const screenControlPoint = vi.fn();
     mocks.accountRun.mockResolvedValue({ granted: false });

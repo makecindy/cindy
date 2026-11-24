@@ -2188,6 +2188,13 @@
       }
     },
     "appearance": {
+      "chatLayout": {
+        "label": "對談布置",
+        "standard": "常式",
+        "wide": "寬式",
+        "width": "內容之寬",
+        "hint": "以對談兩旁留白之外為準。欄狹則自調。"
+      },
       "title": "儀容",
       "modeLabel": "顯示之式",
       "appIcon": {
@@ -2433,6 +2440,10 @@
       }
     },
     "windowBehavior": {
+      "trayCard": {
+        "label": "盤中浮箋",
+        "hint": "移標駐 Cindy 盤中圖記，可覽餘額及未閱之務。"
+      },
       "menubar": {
         "label": "於選單列顯餘量",
         "hint": "於 macOS 選單列置一 Cindy 圖示，點之可觀訂閱餘量、Cindy 餘資與今日耗用。"
@@ -8171,6 +8182,7 @@
           "official": "官設",
           "community": "社群"
         },
+        "communityDisclaimer": "此法器由社群作者開發與維護，Cindy 已審核此版本，但無法保證其在所有使用情境下皆安全。",
         "publisherDescription": {
           "official": "Cindy 官方所製，發布維護",
           "community": "社群開發者所製，發布維護",
@@ -8284,7 +8296,7 @@
             "authTitle": "私庫",
             "authBody": "認證全賴系統之 Git 設定，Cindy 不存任何 Git 憑證。SSH 之法：此機須已設可用之 key；若組織啟 SAML SSO，尚須於 GitHub 之 SSH key 設定中為該組織點 Configure SSO 授權。HTTPS 之法：用 Personal Access Token，由系統 credential helper 存之。",
             "rulesTitle": "納器之規",
-            "rulesBody": "法器 id 全域唯一，先納者得之——與已納法器相衝時必明示。id 用官方保留字首（{{reservedGhostIdPrefixes}}）之法器，不可經拖入、擇檔或自訂法器坊納之。法器所宣告之權柄示於詳情頁；點「納」即納畢並自啟，不再另彈窗確認權柄。",
+            "rulesBody": "法器 id 全域唯一，先納者得之——與已納法器相衝時必明示。id 用官方保留字首（{{reservedGhostIdPrefixes}}）之法器，不可經拖入、擇檔或自訂法器坊納之。法器所宣告之權柄示於詳情頁。初次手納，Cindy 請核所請權柄。納畢自啟。",
             "copy": "錄指南",
             "copied": "指南已錄至剪貼簿，拿去便是。",
             "copyFailed": "錄之未成，請再試。"
@@ -8398,6 +8410,8 @@
         "installMeta": "版 {{version}} · {{source}}",
         "updateMeta": "版 {{from}} → {{to}} · {{source}}",
         "installDescription": "君確認後方納；納畢即啟用，可隨時於法器頁停用或卸除。",
+        "customMarketSourceNotice": "宜先信此法器坊，再核法器所請權柄。",
+        "localFileSourceNotice": "檔之來處可信，方可續納。",
         "updateDescription": "君確認後方更新；在此之前，舊版照常可用。",
         "grantsTitle": "納後其將得：",
         "noPermissions": "此法器未宣告額外權柄。",
@@ -17635,15 +17649,15 @@
   "scheduler": {
     "prTrigger": {
       "fallback": "GitHub App 消息未通，仍依時查驗。",
-      "label": "PR",
-      "url": "PR 之鏈",
+      "label": "PR / MR",
+      "url": "PR 或 MR 之鏈",
       "condition": "何時行之",
-      "any": "PR 有變",
+      "any": "有變",
       "merged": "已合併",
       "review": "評議有變",
       "ci": "CI 有變",
       "timed": "亦定時查驗",
-      "invalid": "請填 GitHub PR 全鏈。"
+      "invalid": "請填 GitHub PR 或 GitLab MR 全鏈。"
     },
     "presentation": {
       "status": {

@@ -48,6 +48,7 @@ export type GhostInstallConsentPolicy =
       prompt: GhostInstallConsentPrompt;
       initiator: GhostInstallConsentInitiator;
       origin: GhostInstallConsentOrigin;
+      communityMarket?: GhostInstallConsentRequest['communityMarket'];
       originLabel?: string;
       trust?: GhostInstallConsentRequest['trust'];
       target?: GhostInstallConsentRequest['target'];
@@ -213,6 +214,7 @@ export async function obtainGhostInstallConsent(
     confirmed = await policy.prompt({
       initiator: policy.initiator,
       origin: policy.origin,
+      ...(policy.communityMarket ? { communityMarket: policy.communityMarket } : {}),
       installationSource: policy.origin === 'custom-market' ? { kind: 'third-party' }
         : policy.origin === 'local-file' || policy.origin === 'forge' ? { kind: 'local' }
         : policy.target?.namespace && policy.target.namespace !== 'local' ? { kind: 'organization', namespace: policy.target.namespace }

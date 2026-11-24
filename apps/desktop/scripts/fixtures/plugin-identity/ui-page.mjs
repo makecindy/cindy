@@ -23,7 +23,7 @@ export default {
       await page.getByRole('heading', { level: 1, name: 'ntfy' }).waitFor();
       assert.equal(await page.locator('.plugin-detail-primary-action').isDisabled(), true);
     } else if (ui.case === 'market-detail') {
-      await page.getByText(await ui.t('settings.ghosts.market.publisherDescription.community'), { exact: true }).waitFor();
+      await page.getByText(await ui.t('settings.ghosts.market.communityDisclaimer'), { exact: true }).waitFor();
     } else if (ui.case === 'local-detail') {
       await page.getByText(await ui.t('settings.ghosts.market.publisherDescription.local'), { exact: true }).waitFor();
     } else {
