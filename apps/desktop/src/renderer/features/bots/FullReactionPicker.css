@@ -1,0 +1,23 @@
+.chat-full-reaction-picker {
+  margin-top: 4px;
+  border: 0;
+  border-top: 1px solid var(--border-default);
+  --epr-picker-border-radius: 0;
+  --epr-picker-border-color: transparent;
+  --epr-bg-color: var(--surface-elevated);
+  --epr-text-color: var(--text-primary);
+  --epr-highlight-color: var(--text-primary);
+  --epr-hover-bg-color: var(--surface-hover);
+  --epr-focus-bg-color: var(--surface-hover);
+  --epr-search-input-bg-color: var(--surface-hover);
+  --epr-search-input-text-color: var(--text-primary);
+  --epr-search-input-placeholder-color: var(--text-tertiary);
+  --epr-category-icon-active-color: var(--text-primary);
+  --epr-category-icon-inactive-color: var(--text-tertiary);
+  --epr-category-label-bg-color: var(--surface-elevated);
+  --epr-category-label-text-color: var(--text-secondary);
+}
+
+.chat-full-reaction-picker [data-epr-part='emoji'] {
+  color: rgb(from var(--text-primary) r g b / 1);
+}

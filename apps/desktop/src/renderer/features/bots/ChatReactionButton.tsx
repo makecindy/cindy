@@ -38,11 +38,10 @@ function reactorNames(reactors: ChatReactor[], t: TFunction, language: string) {
  * badge shows their avatars instead of a number; avatars come from the group member projection,
  * and actors without one fall back to an initial, never an invented identity.
  */
-export function ChatReactionButton({ groupId, messageId, reaction, revision = 0, members, disabled, onToggle, gesture, onFinishGesture, optimistic = false, corner = false }: {
+export function ChatReactionButton({ groupId, messageId, reaction, revision = 0, members, disabled, onToggle, gesture, onFinishGesture, optimistic = false, compact = false }: {
   groupId?: string; messageId: string; reaction: Reaction; revision?: string | number; members?: readonly BotGroupMemberView[]; disabled: boolean; onToggle: () => void;
-  /** Pinned to a bubble's corner: a small card-colored badge, your own reaction marked by a stronger outline. */
   gesture?: ReactionGesture; onFinishGesture?: (gesture: ReactionGesture) => void;
-  optimistic?: boolean; corner?: boolean;
+  optimistic?: boolean; compact?: boolean;
 }) {
   const { t, i18n } = useTranslation();
   const [loaded, setLoaded] = useState<Loaded | null>(null);
@@ -88,12 +87,12 @@ export function ChatReactionButton({ groupId, messageId, reaction, revision = 0,
   const label = reactors?.length
     ? t(key('reactionWho'), { emoji: reaction.emoji, count: reaction.count, names: reactorNames(reactors, t, i18n.language) })
     : countLabel;
-  const ringClass = corner ? 'ring-2 ring-[var(--surface-elevated)]' : 'ring-2 ring-[var(--button-face-bg)]';
+  const ringClass = compact ? 'ring-2 ring-[var(--surface-elevated)]' : 'ring-2 ring-[var(--button-face-bg)]';
   return (
-    <Button ref={badgeRef} variant={reaction.me && !corner ? 'primary' : 'secondary'} size="sm" compact
+    <Button ref={badgeRef} variant={reaction.me && !compact ? 'primary' : 'secondary'} size="sm" compact
       disabled={disabled} aria-pressed={reaction.me} aria-label={label}
-      // Corner badges paint through the shared face variables; your own reaction gets a stronger outline.
-      className={cn(showAvatars && 'pr-1', corner && cn('h-7 gap-1 px-1.5 text-13 [--button-face-bg:var(--surface-elevated)]',
+      // Compact badges paint through the shared face variables; your own reaction gets a stronger outline.
+      className={cn(showAvatars && 'pr-1', compact && cn('h-7 gap-1 px-1.5 text-13 [--button-face-bg:var(--surface-elevated)]',
         reaction.me ? '[--button-face-border:var(--text-tertiary)]' : '[--button-face-border:var(--border-default)]'))}
       onClick={onToggle}>
       <span className="relative inline-flex">

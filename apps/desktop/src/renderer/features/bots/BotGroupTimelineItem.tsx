@@ -464,7 +464,6 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
   const hasText = message.content.trim().length > 0;
   const hasAttachments = (message.attachments?.length ?? 0) > 0;
   const self = message.authorKind === 'user' && message.isSelf !== false;
-  const hasReactions = !message.pending && controls.reactions.length > 0;
   // One check once sent, two once another member has read it; not while sending or after a failed send.
   // It sits inside the bubble at the bottom right, at the end of the last line when there is room (the
   // text reserves that space, see `placeReadTail`). In a server group it opens who has read the message.
@@ -473,8 +472,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
     <ChatReadReceipt groupId={props.reactionGroupId} messageId={message.id} read={message.readByOthers!} members={members}
       interactive={props.readersEnabled === true && !sharing} />
   ) : null;
-  // Your own message's reactions hang over the left corner of its bubble, or of its first block without text.
-  const reactions = hasReactions ? <ChatMessageReactions corner groupId={props.reactionGroupId} message={message} members={members} reactionRevision={props.reactionRevision} align="right" controls={controls} /> : null;
+  const reactions = !message.pending ? <ChatMessageReactions compact groupId={props.reactionGroupId} message={message} members={members} reactionRevision={props.reactionRevision} align={self ? 'right' : 'left'} controls={controls} /> : null;
   const quote = props.quoteDisplay ? (
     <BotGroupQuoteBlock
       display={props.quoteDisplay}
@@ -505,7 +503,6 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
         message={message}
         members={members}
         align={self ? 'right' : 'left'}
-        besideReactions={hasReactions}
         onQuote={props.onQuote ? () => props.onQuote!(message.id) : undefined}
         onReply={props.onOpenThread ? () => props.onOpenThread!(message.id) : undefined}
         controls={controls}
@@ -528,14 +525,11 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
         >
           {sharing && shareable ? <ShareMessageCheckbox clientId={message.id} /> : null}
           <div className={cn('flex min-w-0 flex-col items-end gap-1.5 transition-opacity', share ? 'chat-bubble-column max-w-[min(560px,calc(100%-var(--chat-bubble-gutter,120px)))]' : CHAT_BUBBLE_COLUMN_CLASS, sending && message.outbox?.status !== 'failed' && 'opacity-60')}>
-            {/* The toolbar and the reaction corner hang off the message's own content. */}
             <div className={cn("relative flex min-w-0 max-w-full flex-col items-end gap-1.5", threadPreview && "self-stretch")}>
-              {share ? <>{reactions}<div className="relative flex w-full min-w-0 max-w-full flex-col items-end gap-1.5">{quote}{shareBody}{actions}</div></> : null}
+              {share ? <div className="relative flex w-full min-w-0 max-w-full flex-col items-end gap-1.5">{quote}{shareBody}{actions}</div> : null}
               {/* A short root and its wider thread entry share the column width and both edges. */}
               {!share && (hasText || hasAttachments) ? (
                 <div className={cn("flex min-w-0 max-w-full flex-col", threadPreview ? "w-full" : "w-fit")}>
-                  {reactions}
-                  {/* Keep actions outside the read-receipt anchor and below reaction rows. */}
                   <div className="relative min-w-0 max-w-full">
                     <ChatBubble speaker="user"
                       data-testid="bot-group-self-bubble"
@@ -551,7 +545,8 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
                   </div>
                 </div>
               ) : null}
-              {!share && !hasText && !hasAttachments ? <>{reactions}<div className="relative">{quote}{actions}</div></> : null}
+              {!share && !hasText && !hasAttachments ? <div className="relative">{quote}{actions}</div> : null}
+              {reactions}
             </div>
             {threadPreview}
             {props.footer}
@@ -635,7 +630,6 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
           ) : null}
           <div className={cn('relative flex min-w-0 flex-col', CHAT_BUBBLE_COLUMN_CLASS,
             message.authorKind === 'bot' && hasRichAnswer(share?.content ?? message.content) && 'w-full')}>
-            <ChatMessageReactions corner groupId={props.reactionGroupId} message={message} members={members} reactionRevision={props.reactionRevision} controls={controls} />
             {message.process && message.process.groupId === props.reactionGroupId ? <BotGroupProcess process={message.process}
               member={members.find(member => member.botId === message.authorBotId)} /> : null}
             <ChatBubble data-testid="bot-group-bubble" className="flex flex-col gap-2">
@@ -681,6 +675,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
               )}
               {actions}
             </ChatBubble>
+            {reactions}
           </div>
           {threadPreview}
           {props.footer}

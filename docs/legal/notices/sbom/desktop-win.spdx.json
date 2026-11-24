@@ -3,7 +3,7 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "cindy-desktop-win",
-  "documentNamespace": "https://cindy.app/spdx/desktop-win/befe00d48adc5916eff44b6f598d1ce3fa418fe5e14d07b2684838b41b2c3a1b",
+  "documentNamespace": "https://cindy.app/spdx/desktop-win/789e12889c3d6e9b2b31d6e05cc5bff474635b3bb1630cc2bca85486f9c717c1",
   "creationInfo": {
     "created": "2026-11-23T12:35:11Z",
     "creators": [
@@ -12444,6 +12444,23 @@
       ]
     },
     {
+      "name": "emoji-picker-react",
+      "SPDXID": "SPDXRef-Package-69887a9596f99d4a",
+      "versionInfo": "5.1.4",
+      "downloadLocation": "https://github.com/ealush/emoji-picker-react",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/emoji-picker-react@5.1.4"
+        }
+      ]
+    },
+    {
       "name": "emoji-regex",
       "SPDXID": "SPDXRef-Package-703901d46418c942",
       "versionInfo": "8.0.0",
@@ -19295,6 +19312,23 @@
       ]
     },
     {
+      "name": "shipstyles",
+      "SPDXID": "SPDXRef-Package-2e7f4cf6ef50598a",
+      "versionInfo": "1.0.0",
+      "downloadLocation": "https://github.com/ealush/shipstyles",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/shipstyles@1.0.0"
+        }
+      ]
+    },
+    {
       "name": "side-channel",
       "SPDXID": "SPDXRef-Package-b92f70c0533794b9",
       "versionInfo": "1.1.1",
@@ -24811,6 +24845,11 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-69887a9596f99d4a"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-703901d46418c942"
     },
     {
@@ -26822,6 +26861,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-5d6e174c6d9e0a2f"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-2e7f4cf6ef50598a"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",

@@ -108,7 +108,7 @@ export default {
     },
     'no-sidebar': { about: 'Collapsed sidebar layout', data: { ...base, sidebar: false } },
     bubbles: {
-      about: 'Teammate bubbles: quote, corner reaction, thread entry, task card, long text at the width cap; hover shows the toolbar beside the bubble',
+      about: 'Teammate bubbles: quote, reaction footer, thread entry, task card, long text at the width cap; hover shows the toolbar beside the bubble',
       data: { ...base, bubbles: true },
     },
     'reaction-motion': {
@@ -117,7 +117,7 @@ export default {
     },
     'reaction-colors': {
       about: 'Color emoji retain full opacity in the reaction picker and badges in both themes',
-      data: { ...base, bubbles: true },
+      data: { ...base, bubbles: true, reactionMotion: true },
     },
     arrangement: {
       about: 'Single-speaker server group, nobody named: the queue card stands on its own, Aster answered and Nova is speaking next by itself',
@@ -244,10 +244,15 @@ export default {
     }
     if (ui.case === 'reaction-motion') {
       await page.emulateMedia({ reducedMotion: 'no-preference' });
-      const row = page.locator('[data-bot-group-message-id="a2"]');
+      const row = page.locator('[data-bot-group-message-id="b1"]');
       const add = row.getByRole('button', { name: await ui.t('bots.groupChat.server.addReaction'), exact: true });
       await row.hover();
       await add.click();
+      const gapToPrevious = () => row.evaluate(node => {
+        const previous = node.previousElementSibling;
+        return node.querySelector('[data-testid="bot-group-bubble"]').getBoundingClientRect().top - previous.getBoundingClientRect().bottom;
+      });
+      const originalGap = await gapToPrevious();
       const choice = page.getByRole('button', { name: '❤️', exact: true });
       await choice.click();
       const flight = row.locator('.chat-reaction-flight[data-from-picker]');
@@ -257,12 +262,14 @@ export default {
       assert.ok(rect?.width > 0 && rect.height > 0);
       const badge = row.getByRole('button', { name: /❤️/ });
       assert.equal(await badge.getAttribute('aria-pressed'), 'true');
+      assert.equal(await gapToPrevious(), originalGap);
       const rowHeight = await row.evaluate(node => node.offsetHeight);
       await ui.capture('reaction-landing');
       await anchor.waitFor({ state: 'detached' });
       assert.equal(await row.evaluate(node => node.offsetHeight), rowHeight, 'playing the effect never resizes the row');
       assert.equal(await badge.getAttribute('aria-pressed'), 'true', 'failed write leaves the selected badge visible');
       await badge.click();
+      assert.equal(await gapToPrevious(), originalGap);
       assert.equal(await anchor.count(), 0, 'undo is quiet');
       await page.emulateMedia({ reducedMotion: 'reduce' });
       await row.hover();
@@ -297,13 +304,26 @@ export default {
       assert.equal(await picker.locator('button[aria-pressed]').count(), 6, 'six quick reactions before expanding');
       const more = picker.getByRole('button', { name: await ui.t('bots.groupChat.server.moreReactions') });
       await more.click();
-      await picker.getByRole('button', { name: '🚀', exact: true }).waitFor();
+      const search = picker.locator('[data-epr-part="search-input"]');
+      await search.waitFor();
+      await picker.locator('[data-epr-part="category-tab"]').first().waitFor();
       await ui.capture('reaction-picker-expanded');
+      await search.fill(ui.locale.startsWith('zh') ? '奶茶' : 'bubble tea');
+      const tea = picker.locator('[data-epr-part="emoji"]').filter({ hasText: '🧋' }).first();
+      await tea.waitFor();
+      assert.equal(await tea.evaluate(inkAlpha), 255);
+      await tea.click();
+      const selected = row.locator('[data-message-reactions]').getByRole('button', { name: /🧋/ });
+      assert.equal(await selected.getAttribute('aria-pressed'), 'true');
+      await selected.click();
+      assert.equal(await selected.count(), 0);
+      await row.hover();
+      await row.getByRole('button', { name: await ui.t('bots.groupChat.server.addReaction'), exact: true }).click();
       await choice.hover();
       await choice.focus();
       assert.equal(await glyph.evaluate(inkAlpha), 255, 'hover and focus preserve emoji colors');
       await page.keyboard.press('Escape');
-      const badge = row.locator('[data-reaction-corner] button .chat-reaction-glyph').first();
+      const badge = row.locator('[data-message-reactions] button .chat-reaction-glyph').first();
       assert.equal(await badge.evaluate(inkAlpha), 255, 'reaction badges preserve emoji colors');
       return;
     }
@@ -912,21 +932,29 @@ export default {
         `toolbar stays below narrow content or beside wide content: ${JSON.stringify(geometry)}`);
       assert.ok(geometry.inside, 'toolbar stays inside the timeline');
       assert.ok(await toolbar.isVisible());
-      // Reactions wider than a short message's text stay over its own bubble and inside the timeline.
-      const corners = await page.evaluate(() => ['a2', 'q3'].map((id) => {
+      // A full row of reactions can wrap below the message without shifting its top.
+      const footers = await page.evaluate(() => ['a2', 'q3'].map((id) => {
         const row = `[data-bot-group-message-id="${id}"]`;
-        const reactions = document.querySelector(`${row} [data-reaction-corner]`);
-        const corner = reactions.getBoundingClientRect();
+        const reactions = document.querySelector(`${row} [data-message-reactions]`);
+        const footer = reactions.getBoundingClientRect();
         const bubble = document.querySelector(`${row} [data-testid="bot-group-bubble"], ${row} [data-testid="bot-group-self-bubble"]`).getBoundingClientRect();
         const bar = document.querySelector(`${row} [data-bot-group-message-actions]`).getBoundingClientRect();
         const timeline = document.querySelector('[data-testid="bot-group-timeline"]').getBoundingClientRect();
-        return { id, left: corner.left - bubble.left, right: corner.right - bubble.right, inside: corner.left >= timeline.left && corner.right <= timeline.right,
+        const anchor = document.querySelector(row);
+        const offset = () => anchor.querySelector('[data-testid$="bubble"]').getBoundingClientRect().top - anchor.getBoundingClientRect().top;
+        const withReactions = offset();
+        reactions.style.display = 'none';
+        const withoutReactions = offset();
+        reactions.style.removeProperty('display');
+        return { id, displacement: withReactions - withoutReactions, below: footer.top >= bubble.bottom - 1,
+          inside: footer.left >= timeline.left && footer.right <= timeline.right,
           narrow: document.querySelector(`${row} .chat-bubble-layout`).getBoundingClientRect().width <= 480,
-          toolbarTop: bar.top - bubble.top, wrapped: corner.height > reactions.firstElementChild.getBoundingClientRect().height };
+          toolbarTop: bar.top - bubble.top, wrapped: footer.height > reactions.firstElementChild.getBoundingClientRect().height };
       }));
-      for (const c of corners) {
+      for (const c of footers) {
         assert.ok(c.inside, `${c.id} reactions stay inside the timeline`);
-        assert.ok(c.left >= -12 && c.right <= 12, `${c.id} reactions stay over the bubble (${c.left}, ${c.right})`);
+        assert.ok(c.below, `${c.id} reactions stay below the bubble`);
+        assert.equal(c.displacement, 0, `${c.id} gap before the bubble is stable`);
         assert.ok(c.narrow ? c.toolbarTop > 0 : Math.abs(c.toolbarTop) <= 1,
           `${c.id} toolbar follows the available content width (${c.toolbarTop}px)`);
         if (ui.case === 'bubbles-wrapped') assert.ok(c.wrapped, `${c.id} exercises multiple reaction rows`);
@@ -954,7 +982,7 @@ export default {
         const geometry = await shared.evaluate(row => {
           const card = row.querySelector('figure').getBoundingClientRect();
           const entry = row.querySelector('[data-thread-preview]')?.getBoundingClientRect();
-          const reactions = row.querySelector('[data-reaction-corner]')?.getBoundingClientRect();
+          const reactions = row.querySelector('[data-message-reactions]')?.getBoundingClientRect();
           const article = row.querySelector('article').getBoundingClientRect();
           return { width: card.width, right: article.right - card.right,
             entryLeft: entry ? entry.left - card.left : null,
@@ -965,7 +993,7 @@ export default {
         assert.ok(Math.abs(geometry.right) <= 1, 'shared reply stays right-aligned');
         if (geometry.entryLeft !== null) assert.ok(Math.abs(geometry.entryLeft) <= 1, `shared root entry aligns with card (${geometry.entryLeft}px)`);
         if (geometry.reactionLeft !== null) {
-          assert.ok(Math.abs(geometry.reactionLeft + 10) <= 1, `shared reply reactions stay on the left corner (${geometry.reactionLeft}px)`);
+          assert.ok(geometry.reactionLeft >= -1, `shared reply reactions fit below the card (${geometry.reactionLeft}px)`);
           assert.ok(geometry.reactionRight <= 1, 'shared reply reactions stay inside the card width');
         }
       }
