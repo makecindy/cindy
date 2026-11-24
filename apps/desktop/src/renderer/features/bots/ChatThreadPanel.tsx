@@ -46,7 +46,8 @@ import {
   type BotGroupTimelineMessage,
 } from './BotGroupTimelineModel';
 import { ChatReactionReads } from './useChatReactions';
-import { chatErrorKey, messageReactionRevision } from './ChatServerControls';
+import { chatErrorKey } from './chatError';
+import { messageReactionRevision } from './ChatServerControls';
 import { ThreadPanel, ThreadPanelRoot } from './ThreadPanel';
 import type { ThreadPanelResize } from './useThreadPanelResize';
 import { ThreadMessageWindow } from './ThreadMessageWindow';

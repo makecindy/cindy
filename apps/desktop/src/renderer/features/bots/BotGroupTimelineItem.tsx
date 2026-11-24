@@ -472,7 +472,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
     <ChatReadReceipt groupId={props.reactionGroupId} messageId={message.id} read={message.readByOthers!} members={members}
       interactive={props.readersEnabled === true && !sharing} />
   ) : null;
-  const reactions = !message.pending ? <ChatMessageReactions compact groupId={props.reactionGroupId} message={message} members={members} reactionRevision={props.reactionRevision} align={self ? 'right' : 'left'} controls={controls} /> : null;
+  const reactions = !message.pending ? <ChatMessageReactions groupId={props.reactionGroupId} message={message} members={members} reactionRevision={props.reactionRevision} align={self ? 'right' : 'left'} controls={controls} /> : null;
   const quote = props.quoteDisplay ? (
     <BotGroupQuoteBlock
       display={props.quoteDisplay}

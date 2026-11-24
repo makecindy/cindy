@@ -74,6 +74,7 @@ export function useChatReactions(groupId: string | undefined, message: BotGroupM
     const mine = previous?.desired ?? server.some(r => r.emoji === emoji && r.me);
     const edit = previous ?? { desired: mine, writing: false };
     edit.stopWaiting?.();
+    edit.stopWaiting = undefined;
     edit.expiresAt = undefined;
     edit.desired = !mine;
     setGesture(mine ? null : { emoji, from, scope: edits });

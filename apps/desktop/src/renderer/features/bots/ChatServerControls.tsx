@@ -1,6 +1,6 @@
 import { Plus, ChevronUp } from 'lucide-react';
 import { lazy, Suspense, useState } from 'react';
-import { type ChatReactionReads, useChatReactions } from './useChatReactions';
+import type { useChatReactions } from './useChatReactions';
 import { ChatReactionMotion, ReactionGlyph } from './ChatReactionMotion';
 import { ChatReactionButton } from './ChatReactionButton';
 import { useTranslation } from 'react-i18next';
@@ -16,37 +16,31 @@ const key = (name: string) => `bots.groupChat.server.${name}`;
 const quickReactions = ['👍', '❤️', '😂', '🎉', '👀', '🙏'];
 const FullReactionPicker = lazy(() => import('./FullReactionPicker'));
 const iconClass = 'flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] disabled:opacity-50';
-export { chatErrorKey } from './chatError';
 
 /** A message's reaction version: the room's reset version plus the message's own realtime changes. */
 export const messageReactionRevision = (group: Pick<BotGroupDetail, 'reactionRevision' | 'reactionRevisions'>, messageId: string) =>
   `${group.reactionRevision ?? 0}:${group.reactionRevisions?.[messageId] ?? 0}`;
 
 interface ChatMessageActionProps {
-  reactionReads?: ChatReactionReads;
   pluginUi: PluginUiMessageCandidates;
   groupId?: string; shareScope: string; message: BotGroupMessageView; align?: 'left' | 'right';
-  /** Who can be named on a reaction badge, and the message's reaction version (see `messageReactionRevision`). */
   members?: readonly BotGroupMemberView[]; reactionRevision?: string | number;
-  /** 引用回复: a new main-timeline message that quotes this one. */
   onQuote?: () => void;
-  /** Opens the message's Thread (话题) — 创建话题 before anyone answered, 查看话题 after. */
   onReply?: () => void;
   replyCountShown?: boolean;
   copyText?: string;
   menuActions?: Parameters<typeof MessageActionBar>[0]['menuActions'];
-  /** The current actor's reaction on `messageId` changed: re-read that message's copy. */
-  onChanged: (messageId: string) => void;
+  controls: ReturnType<typeof useChatReactions>;
 }
 
-export function ChatMessageReactions({ groupId, message, members, reactionRevision, align = 'left', compact = false, controls }: Pick<ChatMessageActionProps, 'groupId' | 'message' | 'members' | 'reactionRevision' | 'align'> & { compact?: boolean; controls: ReturnType<typeof useChatReactions> }) {
+export function ChatMessageReactions({ groupId, message, members, reactionRevision, align = 'left', controls }: Pick<ChatMessageActionProps, 'groupId' | 'message' | 'members' | 'reactionRevision' | 'align' | 'controls'>) {
   const { t } = useTranslation();
   const { reactions, gesture } = controls;
   if (!reactions.length) return null;
-  const stacked = compact && reactions.length > 1;
+  const stacked = reactions.length > 1;
   const badges = reactions.map(reaction => (
     <ChatReactionButton key={reaction.emoji} groupId={groupId} messageId={message.id} reaction={reaction} revision={reactionRevision} members={members}
-      optimistic={!message.reactions?.includes(reaction)} compact={compact && !stacked} disabled={!groupId}
+      optimistic={!message.reactions?.includes(reaction)} compact={!stacked} disabled={!groupId}
       gesture={!stacked && gesture?.emoji === reaction.emoji ? gesture : undefined}
       onFinishGesture={controls.finishGesture} onToggle={() => void controls.toggle(reaction.emoji)} />
   ));
@@ -54,7 +48,7 @@ export function ChatMessageReactions({ groupId, message, members, reactionRevisi
   const label = t(key('reactionCount'), { emoji: reactions.slice(0, 2).map(r => r.emoji).join(' '), count: total });
   return (
     <div {...{ [SHARE_EXCLUDE_ATTR]: '' }} data-message-reactions=""
-      className={compact ? cn('absolute -top-2.5 z-[5] w-max', align === 'right' ? '-left-1' : '-right-1') : cn('mt-1 flex flex-wrap items-center gap-1', align === 'right' && 'justify-end')}>
+      className={cn('absolute -top-2.5 z-[5] w-max', align === 'right' ? '-left-1' : '-right-1')}>
       {stacked ? <Popover>
         <PopoverTrigger asChild>
           <button type="button" aria-label={label} className="relative flex h-[22px] items-center gap-0.5 rounded-full border border-[var(--border-default)] bg-popover px-1.5 text-13 focus-visible:ring-2 focus-visible:ring-ring">
@@ -96,53 +90,23 @@ function ReactionPicker({ controls, onChoose }: { controls: ReturnType<typeof us
   </>;
 }
 
-function ChatMessageToolbar({ groupId, shareScope, message, align = 'left', onQuote, onReply, replyCountShown, copyText, menuActions, controls, picker, onPickerChange, compact = false, pluginUi }: Omit<ChatMessageActionProps, 'onChanged'> & {
-  controls: ReturnType<typeof useChatReactions>;
-  picker: boolean; onPickerChange: (open: boolean) => void; compact?: boolean;
-}) {
+export function ChatMessageHoverActions({ groupId, shareScope, message, align = 'left', onQuote, onReply, replyCountShown, copyText, menuActions, controls, pluginUi }: ChatMessageActionProps) {
   const { t } = useTranslation();
-  return (
-    <MessageActionBar pluginUi={pluginUi} copyText={copyText ?? message.content} menuActions={menuActions} createdAt={message.createdAt ? new Date(message.createdAt).toISOString() : undefined}
-      align={align} hovered simplifiedBotConversation compact={compact}
-      onShareAsImage={() => shareSelectionStore.enter(shareScope, message.id)}
-      quoteAction={onQuote ? { onClick: onQuote, label: t(key('quoteReply')) } : undefined}
-      replyAction={onReply ? { onClick: onReply, count: replyCountShown ? undefined : message.replyCount,
-        label: message.replyCount ? t(key('openTopic'), { count: message.replyCount }) : t(key('startTopic')) } : undefined}
-      reactionAction={groupId ? { label: t(key('addReaction')), open: picker, onOpenChange: onPickerChange,
-        content: <ReactionPicker controls={controls} onChoose={(emoji, rect) => {
-          onPickerChange(false);
-          void controls.toggle(emoji, rect && { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
-        }} />,
-      } : undefined} />
-  );
-}
-
-/**
- * The compact toolbar (引用回复, 话题, reaction, more) beside its message bubble: on the outer side of the
- * bubble (right of others, left of your own), level with its top, inside the message row so moving
- * the pointer across the gap keeps the row hovered. It shows while the message (`group/message`) is hovered, while keyboard focus is
- * inside, while its reaction picker is open, and always on touch screens. Copy, share and the exact
- * time are in its more menu.
- */
-export function ChatMessageHoverActions(props: Omit<ChatMessageActionProps, 'onChanged'> & { controls: ReturnType<typeof useChatReactions> }) {
   const [picker, setPicker] = useState(false);
   return (
-    <BubbleHoverToolbar marker="data-bot-group-message-actions" side={props.align === 'right' ? 'left' : 'right'}
-      open={picker}>
-      <ChatMessageToolbar {...props} compact picker={picker} onPickerChange={setPicker} />
+    <BubbleHoverToolbar marker="data-bot-group-message-actions" side={align === 'right' ? 'left' : 'right'} open={picker}>
+      <MessageActionBar pluginUi={pluginUi} copyText={copyText ?? message.content} menuActions={menuActions} createdAt={message.createdAt ? new Date(message.createdAt).toISOString() : undefined}
+        align={align} hovered simplifiedBotConversation compact
+        onShareAsImage={() => shareSelectionStore.enter(shareScope, message.id)}
+        quoteAction={onQuote ? { onClick: onQuote, label: t(key('quoteReply')) } : undefined}
+        replyAction={onReply ? { onClick: onReply, count: replyCountShown ? undefined : message.replyCount,
+          label: message.replyCount ? t(key('openTopic'), { count: message.replyCount }) : t(key('startTopic')) } : undefined}
+        reactionAction={groupId ? { label: t(key('addReaction')), open: picker, onOpenChange: setPicker,
+          content: <ReactionPicker controls={controls} onChoose={(emoji, rect) => {
+            setPicker(false);
+            void controls.toggle(emoji, rect && { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
+          }} />,
+        } : undefined} />
     </BubbleHoverToolbar>
-  );
-}
-
-/** Reactions and the toolbar stacked under the text, always visible. */
-export function ChatMessageActions(props: ChatMessageActionProps) {
-  const [picker, setPicker] = useState(false);
-  const controls = useChatReactions(props.groupId, props.message, props.onChanged, props.reactionReads);
-  const align = props.align ?? (props.message.isSelf ? 'right' : 'left');
-  return (
-    <div {...{ [SHARE_EXCLUDE_ATTR]: '' }} className="mt-1 flex flex-col gap-1">
-      <ChatMessageReactions {...props} controls={controls} align={align} />
-      <ChatMessageToolbar {...props} controls={controls} align={align} picker={picker} onPickerChange={setPicker} />
-    </div>
   );
 }

@@ -13,8 +13,7 @@ type Reaction = NonNullable<BotGroupMessageView['reactions']>[number];
 type Loaded = { summary: string; reactors: ChatReactor[] | null };
 
 const key = (name: string) => `bots.groupChat.server.${name}`;
-/** Like Telegram: a few reactors appear as avatars on the badge; more than this shows the count. */
-export const REACTION_AVATAR_LIMIT = 3;
+const REACTION_AVATAR_LIMIT = 3;
 
 /** Self first, then current and former members by name. Actors without a member record are counted, never named. */
 function reactorOrder(reactors: ChatReactor[], language: string) {
@@ -33,11 +32,6 @@ function reactorNames(reactors: ChatReactor[], t: TFunction, language: string) {
   return new Intl.ListFormat(language, { style: 'long', type: 'conjunction' }).format(labels);
 }
 
-/**
- * A reaction badge. Clicking toggles the current actor's reaction. With only a few reactors the
- * badge shows their avatars instead of a number; avatars come from the group member projection,
- * and actors without one fall back to an initial, never an invented identity.
- */
 export function ChatReactionButton({ groupId, messageId, reaction, revision = 0, members, disabled, onToggle, gesture, onFinishGesture, optimistic = false, compact = false }: {
   groupId?: string; messageId: string; reaction: Reaction; revision?: string | number; members?: readonly BotGroupMemberView[]; disabled: boolean; onToggle: () => void;
   gesture?: ReactionGesture; onFinishGesture?: (gesture: ReactionGesture) => void;
@@ -45,8 +39,7 @@ export function ChatReactionButton({ groupId, messageId, reaction, revision = 0,
 }) {
   const { t, i18n } = useTranslation();
   const [loaded, setLoaded] = useState<Loaded | null>(null);
-  // Changes on every add/remove, local or remote — including a same-count swap of who reacted,
-  // which only the message's realtime reaction revision reveals.
+  // The revision distinguishes two sets of reactors with the same count.
   const summary = `${reaction.count}:${reaction.me}:${revision}`;
   const wantsAvatars = !optimistic && !!groupId && reaction.count > 0 && reaction.count <= REACTION_AVATAR_LIMIT;
   // Only badges near the viewport read, so opening a long history does not fire one read per badge.
@@ -60,7 +53,6 @@ export function ChatReactionButton({ groupId, messageId, reaction, revision = 0,
     return () => observer.disconnect();
   }, [wantsAvatars]);
   const loadedSummary = loaded?.summary;
-  // Read when a visible badge's summary changes; a superseded or cross-account read never lands.
   useEffect(() => {
     if (!wantsAvatars || !groupId || !nearViewport || loadedSummary === summary) return;
     let superseded = false;
@@ -72,12 +64,8 @@ export function ChatReactionButton({ groupId, messageId, reaction, revision = 0,
       .then(result => settle(result.ok ? result.reactors : null), () => settle(null));
     return () => { superseded = true; };
   }, [wantsAvatars, groupId, nearViewport, loadedSummary, messageId, reaction.emoji, summary]);
-  // Reactors read for an older summary are never shown for the current one. A failed read, or a list
-  // that disagrees with the count (a change still in flight), keeps the honest count instead.
   const current = loaded?.summary === summary ? loaded : null;
   const showAvatars = wantsAvatars && (!current || current.reactors?.length === reaction.count);
-  // Membership follows the latest projection both ways: a current member takes its current name, and a
-  // named actor missing from it has left since the read. Only unrecorded actors stay unnamed.
   const reactors = showAvatars && current?.reactors ? reactorOrder(current.reactors.map(r => {
     if (!members) return r;
     const member = members.find(m => m.actorId === r.actorId);
@@ -87,11 +75,10 @@ export function ChatReactionButton({ groupId, messageId, reaction, revision = 0,
   const label = reactors?.length
     ? t(key('reactionWho'), { emoji: reaction.emoji, count: reaction.count, names: reactorNames(reactors, t, i18n.language) })
     : countLabel;
-  const ringClass = compact ? 'ring-2 ring-[var(--surface-elevated)]' : 'ring-2 ring-[var(--button-face-bg)]';
+  const ringClass = 'ring-2 ring-[var(--button-face-bg)]';
   return (
     <Button ref={badgeRef} variant={reaction.me && !compact ? 'primary' : 'secondary'} size="sm" compact
       disabled={disabled} aria-pressed={reaction.me} aria-label={label} title={compact ? label : undefined}
-      // Compact badges paint through the shared face variables; your own reaction gets a stronger outline.
       className={cn(showAvatars && !compact && 'pr-1', compact && cn('h-[22px] gap-0.5 px-1.5 text-13 [--button-face-bg:var(--surface-elevated)]',
         reaction.me ? '[--button-face-border:var(--text-tertiary)]' : '[--button-face-border:var(--border-default)]'))}
       onClick={onToggle}>

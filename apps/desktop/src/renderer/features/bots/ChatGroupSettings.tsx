@@ -33,7 +33,7 @@ import { SETTINGS_HINT, SettingsCard, SettingsNotice, SettingsRow, SettingsRowIc
 import { useBotProfiles } from './botStore';
 import { BotAvatar } from './BotAvatar';
 import { BotGroupSidebarAvatar } from './BotGroupAvatars';
-import { chatErrorKey } from './ChatServerControls';
+import { chatErrorKey } from './chatError';
 import { refreshBotGroups } from './botGroupStore';
 import { chatGroupMembership } from '@cindy/maker-shared/botGroupPresentation';
 import { BOT_GROUP_SETTINGS_PAGE_PARAM, BOT_GROUP_SETTINGS_PARAM, botGroupPathBasename } from './botGroupPresentation';

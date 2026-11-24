@@ -6,7 +6,7 @@ import { Tooltip } from '@/components/ui/tooltip';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { toast } from '@/lib/toast';
 import { ChatReactionReads } from '../useChatReactions';
-import { ChatMessageActions } from '../ChatServerControls';
+import { GroupReactionFixture } from './GroupReactionFixture';
 import type { BotGroupMemberView, BotGroupMessageView, ChatReactor } from '../../../../shared/botGroupChat';
 
 const mocks = vi.hoisted(() => ({ react: vi.fn(), reactors: vi.fn(), ownerCurrent: true }));
@@ -41,14 +41,15 @@ const members = [
 const message = (reactions: BotGroupMessageView['reactions']) =>
   ({ id: 'root', authorName: 'Human', content: 'Root', reactions }) as BotGroupMessageView;
 const actions = (reactions: BotGroupMessageView['reactions'], props: {
-  reactionReads?: ChatReactionReads; onChanged?: () => void; groupId?: string;
+  details?: boolean; reactionReads?: ChatReactionReads; onChanged?: () => void; groupId?: string;
 } = {}) =>
-  <ChatMessageActions pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} shareScope="group:room" groupId="room" message={message(reactions)} members={members} onChanged={vi.fn()} {...props} />;
+  <GroupReactionFixture pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} shareScope="group:room" groupId="room" message={message(reactions)} members={members} onChanged={vi.fn()} {...props} />;
 // The message toolbar expects the app-level tooltip provider.
 const render = (ui: ReactNode) => {
   const view = renderUI(<Tooltip.Provider>{ui}</Tooltip.Provider>);
   return { ...view, rerender: (next: ReactNode) => view.rerender(<Tooltip.Provider>{next}</Tooltip.Provider>) };
 };
+const detailActions = (reactions: BotGroupMessageView['reactions']) => actions(reactions, { details: true });
 const badge = () => screen.getByRole('button', { name: /^👍 · / });
 const avatars = () => badge().querySelector('[data-testid="reaction-avatars"]');
 const images = () => [...badge().querySelectorAll('img')].map(img => img.getAttribute('src'));
@@ -66,7 +67,7 @@ describe('reaction avatars', () => {
     mocks.reactors.mockResolvedValue({ ok: true, reactors: [
       reactor('c2', 'Cindy (Dana)'), reactor('a', 'Dash', { isSelf: true }), reactor('c1', 'Cindy (Chris)'),
     ] });
-    render(actions([{ emoji: '👍', count: 3, me: true }]));
+    render(detailActions([{ emoji: '👍', count: 3, me: true }]));
     expect(mocks.reactors).toHaveBeenCalledWith({ groupId: 'room', messageId: 'root', emoji: '👍' });
     // The current actor first; same-name companions keep their own avatars.
     await waitFor(() => expect(images()).toEqual([
@@ -84,7 +85,7 @@ describe('reaction avatars', () => {
       observe() {} disconnect() {}
     });
     mocks.reactors.mockResolvedValue({ ok: true, reactors: [reactor('z', 'Zoe')] });
-    render(actions([{ emoji: '👍', count: 1, me: false }]));
+    render(detailActions([{ emoji: '👍', count: 1, me: false }]));
     // Off-screen history badges keep their slots without reading.
     expect(avatars()?.children).toHaveLength(1);
     expect(mocks.reactors).not.toHaveBeenCalled();
@@ -97,7 +98,7 @@ describe('reaction avatars', () => {
   });
 
   it('keeps the count above the avatar limit and reads nothing', () => {
-    render(actions([{ emoji: '👍', count: 4, me: false }]));
+    render(detailActions([{ emoji: '👍', count: 4, me: false }]));
     expect(badge().textContent).toBe('👍4');
     expect(avatars()).toBeNull();
     expect(mocks.reactors).not.toHaveBeenCalled();
@@ -106,7 +107,7 @@ describe('reaction avatars', () => {
   it('reserves one slot per reactor while loading and falls back to the count if the read fails', async () => {
     let resolve!: (value: unknown) => void;
     mocks.reactors.mockImplementation(() => new Promise(r => { resolve = r; }));
-    render(actions([{ emoji: '👍', count: 2, me: false }]));
+    render(detailActions([{ emoji: '👍', count: 2, me: false }]));
     expect(avatars()?.children).toHaveLength(2);
     await act(async () => { resolve({ ok: false, errorCode: 'REQUEST_FAILED' }); });
     expect(avatars()).toBeNull();
@@ -116,14 +117,14 @@ describe('reaction avatars', () => {
 
   it('keeps the count while the list disagrees with it, never showing a partial set of faces', async () => {
     mocks.reactors.mockResolvedValue({ ok: true, reactors: [reactor('z', 'Zoe')] });
-    render(actions([{ emoji: '👍', count: 2, me: false }]));
+    render(detailActions([{ emoji: '👍', count: 2, me: false }]));
     await waitFor(() => expect(badge().textContent).toBe('👍2'));
     expect(images()).toEqual([]);
   });
 
   it('degrades honestly for former and unresolved members', async () => {
     mocks.reactors.mockResolvedValue({ ok: true, reactors: [reactor('x', null), reactor('f', 'Ada', { formerMember: true }), reactor('z', 'Zoe')] });
-    render(actions([{ emoji: '👍', count: 3, me: false }]));
+    render(detailActions([{ emoji: '👍', count: 3, me: false }]));
     await waitFor(() => expect(badge().getAttribute('aria-label')).toBe('👍 · 3: Zoe, Ada (left), and 1 unavailable'));
     // No member record: initials only, never a borrowed picture or invented name.
     expect(images()).toEqual([]);
@@ -134,9 +135,9 @@ describe('reaction avatars', () => {
     let resolveFirst!: (value: unknown) => void;
     mocks.reactors.mockImplementationOnce(() => new Promise(resolve => { resolveFirst = resolve; }))
       .mockResolvedValueOnce({ ok: true, reactors: [reactor('a', 'Dash', { isSelf: true }), reactor('z', 'Zoe')] });
-    const view = render(actions([{ emoji: '👍', count: 1, me: false }]));
+    const view = render(detailActions([{ emoji: '👍', count: 1, me: false }]));
     // A remote add arrives before the first read settles.
-    view.rerender(actions([{ emoji: '👍', count: 2, me: true }]));
+    view.rerender(detailActions([{ emoji: '👍', count: 2, me: true }]));
     await waitFor(() => expect(badge().getAttribute('aria-label')).toBe('👍 · 2: You and Zoe'));
     await act(async () => { resolveFirst({ ok: true, reactors: [reactor('z', 'Zoe')] }); });
     expect(badge().getAttribute('aria-label')).toBe('👍 · 2: You and Zoe');
@@ -146,11 +147,11 @@ describe('reaction avatars', () => {
   it('re-reads when who reacted changes but the count does not', async () => {
     mocks.reactors.mockResolvedValueOnce({ ok: true, reactors: [reactor('z', 'Zoe')] })
       .mockResolvedValueOnce({ ok: true, reactors: [reactor('c1', 'Cindy (Chris)')] });
-    const view = render(<ChatMessageActions pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} shareScope="group:room" groupId="room" members={members} onChanged={vi.fn()}
+    const view = render(<GroupReactionFixture details pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} shareScope="group:room" groupId="room" members={members} onChanged={vi.fn()}
       reactionRevision={3} message={message([{ emoji: '👍', count: 1, me: false }])} />);
     await waitFor(() => expect(badge().getAttribute('aria-label')).toBe('👍 · 1: Zoe'));
     // Zoe removed 👍 and Chris's companion added it: same count and `me`, a new room reaction revision.
-    view.rerender(<ChatMessageActions pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} shareScope="group:room" groupId="room" members={members} onChanged={vi.fn()}
+    view.rerender(<GroupReactionFixture details pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} shareScope="group:room" groupId="room" members={members} onChanged={vi.fn()}
       reactionRevision={4} message={message([{ emoji: '👍', count: 1, me: false }])} />);
     await waitFor(() => expect(badge().getAttribute('aria-label')).toBe('👍 · 1: Cindy (Chris)'));
     expect(images()).toEqual(['https://example.test/cindy-chris.png']);
@@ -158,10 +159,10 @@ describe('reaction avatars', () => {
 
   it('marks a reactor who left after the read, without another read', async () => {
     mocks.reactors.mockResolvedValue({ ok: true, reactors: [reactor('z', 'Zoe')] });
-    const view = render(actions([{ emoji: '👍', count: 1, me: false }]));
+    const view = render(detailActions([{ emoji: '👍', count: 1, me: false }]));
     await waitFor(() => expect(badge().getAttribute('aria-label')).toBe('👍 · 1: Zoe'));
     // Zoe leaves; her reaction stays and the member list no longer has her.
-    view.rerender(<ChatMessageActions pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} shareScope="group:room" groupId="room" members={members.filter(m => m.actorId !== 'z')}
+    view.rerender(<GroupReactionFixture details pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} shareScope="group:room" groupId="room" members={members.filter(m => m.actorId !== 'z')}
       onChanged={vi.fn()} message={message([{ emoji: '👍', count: 1, me: false }])} />);
     expect(badge().getAttribute('aria-label')).toBe('👍 · 1: Zoe (left)');
     expect(mocks.reactors).toHaveBeenCalledTimes(1);
@@ -169,10 +170,10 @@ describe('reaction avatars', () => {
 
   it('follows member renames without another read', async () => {
     mocks.reactors.mockResolvedValue({ ok: true, reactors: [reactor('z', 'Zoe')] });
-    const view = render(actions([{ emoji: '👍', count: 1, me: false }]));
+    const view = render(detailActions([{ emoji: '👍', count: 1, me: false }]));
     await waitFor(() => expect(badge().getAttribute('aria-label')).toBe('👍 · 1: Zoe'));
     const renamed = members.map(m => m.actorId === 'z' ? { ...m, name: 'Zoey' } : m);
-    view.rerender(<ChatMessageActions pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} shareScope="group:room" groupId="room" members={renamed} onChanged={vi.fn()}
+    view.rerender(<GroupReactionFixture details pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} shareScope="group:room" groupId="room" members={renamed} onChanged={vi.fn()}
       message={message([{ emoji: '👍', count: 1, me: false }])} />);
     expect(badge().getAttribute('aria-label')).toBe('👍 · 1: Zoey');
     expect(mocks.reactors).toHaveBeenCalledTimes(1);
@@ -180,7 +181,7 @@ describe('reaction avatars', () => {
 
   it('keeps click as the toggle', async () => {
     mocks.reactors.mockResolvedValue({ ok: true, reactors: [reactor('a', 'Dash', { isSelf: true })] });
-    render(actions([{ emoji: '👍', count: 1, me: true }]));
+    render(detailActions([{ emoji: '👍', count: 1, me: true }]));
     await waitFor(() => expect(images()).toHaveLength(1));
     fireEvent.click(badge());
     await waitFor(() => expect(mocks.react).toHaveBeenCalledWith({ groupId: 'room', messageId: 'root', emoji: '👍', present: false }));

@@ -196,7 +196,7 @@ export default {
         members: [{ botId: 'g', actorId: 'g', name: 'Ada' }, { botId: 'h', actorId: 'h', name: 'Kai' }] },
     },
     'bubbles-wrapped': {
-      about: 'PR #6549: wrapped reactions keep both toolbars level with their bubbles; server messages with empty mention ids still open unique member cards',
+      about: 'Stacked reactions keep both toolbars level with their bubbles; server messages with empty mention ids still open unique member cards',
       viewport: { width: 800, height: 800 },
       data: { ...base, bubbles: true, wrappedReactions: true },
     },
@@ -288,7 +288,6 @@ export default {
       await ui.capture('reaction-picker');
       // Visual regression: translucent text ink also fades native color emoji.
       // jsdom cannot paint color fonts; sample the actual computed ink alpha in Electron.
-      // Old code fails with tertiary alpha in the picker and primary alpha in badges.
       const inkAlpha = element => {
         const canvas = document.createElement('canvas');
         canvas.width = canvas.height = 1;
@@ -299,14 +298,17 @@ export default {
       };
       const choice = picker.getByRole('button', { name: '👍', exact: true });
       const glyph = choice.locator('.chat-reaction-glyph');
-      // Use the button itself in the pre-fix comparison, before the emoji span existed.
-      assert.equal(await ((await glyph.count()) ? glyph : choice).evaluate(inkAlpha), 255, 'picker emoji must not inherit translucent text ink');
+      assert.equal(await glyph.evaluate(inkAlpha), 255, 'picker emoji must not inherit translucent text ink');
       assert.equal(await picker.locator('button[aria-pressed]').count(), 6, 'six quick reactions before expanding');
       const more = picker.getByRole('button', { name: await ui.t('bots.groupChat.server.moreReactions') });
       await more.click();
       const search = picker.locator('[data-epr-part="search-input"]');
       await search.waitFor();
       await picker.locator('[data-epr-part="category-tab"]').first().waitFor();
+      assert.ok(await picker.evaluate(el => {
+        const bounds = el.getBoundingClientRect();
+        return bounds.top >= 0 && bounds.bottom <= window.innerHeight + 1;
+      }), 'expanded picker fits the window');
       await ui.capture('reaction-picker-expanded');
       await search.fill(ui.locale.startsWith('zh') ? '奶茶' : 'bubble tea');
       const tea = picker.locator('[data-epr-part="emoji"]').filter({ hasText: '🧋' }).first();
@@ -980,8 +982,7 @@ export default {
       assert.ok(shortThread.entryWiderThanText, 'short root exercises an entry wider than its text');
       assert.ok(Math.abs(shortThread.offset) <= 1, `short self thread entry aligns with bubble left (${shortThread.offset}px)`);
       assert.ok(Math.abs(shortThread.right) <= 1, `short self bubble stays right-aligned (${shortThread.right}px)`);
-      // r4325061150: self-authored shares must also follow their wider siblings,
-      // both when a share becomes a root and when only its reactions make it wider.
+      // A self-authored share anchors both its thread entry and its reaction badge.
       for (const id of ['q4', 'q5']) {
         const shared = page.locator(`[data-bot-group-message-id="${id}"]`);
         await shared.scrollIntoViewIfNeeded();
@@ -992,8 +993,7 @@ export default {
           const article = row.querySelector('article').getBoundingClientRect();
           return { width: card.width, right: article.right - card.right,
             entryLeft: entry ? entry.left - card.left : null,
-            reactionLeft: reactions ? reactions.left - card.left : null,
-            reactionRight: reactions ? reactions.right - card.right : null };
+            reactionLeft: reactions ? reactions.left - card.left : null };
         });
         assert.ok(geometry.width <= 560, 'shared reply keeps its existing width cap');
         assert.ok(Math.abs(geometry.right) <= 1, 'shared reply stays right-aligned');

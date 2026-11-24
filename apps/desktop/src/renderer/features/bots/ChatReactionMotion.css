@@ -70,7 +70,7 @@
 
 [role='dialog']:has(.chat-full-reaction-picker),
 [role='dialog']:has(.chat-full-reaction-space) {
-  --chat-reaction-catalog-height: min(256px, calc(100vh - 72px));
+  --chat-reaction-catalog-height: clamp(0px, calc(var(--radix-popover-content-available-height, 100vh) - 54px), 256px);
 }
 
 .chat-full-reaction-space {
