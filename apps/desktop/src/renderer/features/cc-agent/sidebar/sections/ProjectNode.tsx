@@ -46,9 +46,7 @@ import { toast } from '@/lib/toast';
 import { buildProjectDeepLink } from '@/lib/deepLink';
 import { createLogger } from '@/lib/logger';
 import { SectionCollapse } from '../SectionCollapse';
-import { SessionEntryListContent, useSessionEntryListView } from '../SessionEntryList';
-import { SessionCollapseToggle } from '../SessionCollapseToggle';
-import { useCollapsibleShowAll } from '../hooks/useCollapsibleShowAll';
+import { SessionEntryList } from '../SessionEntryList';
 import type { SessionClickHandler } from '../SessionItem';
 import type { ProjectNode as ProjectNodeData } from '../../lib/projectGrouping';
 import type {
@@ -63,7 +61,7 @@ import type { SessionMoveTarget } from '../sessionMoveTarget';
 import type { FilterStatus } from '../../hooks/useSidebarFilter';
 import { MENU_ITEM_CLASS } from '../menuStyles';
 import { RemoteProjectIcon } from '../RemoteProjectIcon';
-import { SidebarGroupHeaderActions } from '../SidebarGroupHeaderActions';
+import { SidebarRightStatusIndicator } from '../SidebarRightStatusIndicator';
 import { isDeviceLinkWriteBlocked } from '../../lib/remoteSessionWriteGuard';
 import { projectBulkArchiveActionForStatus } from '../../lib/projectBulkArchiveAction';
 import { getRemoteProjectMachineIdentity } from '../../lib/remoteProjectIdentity';
@@ -167,18 +165,6 @@ export const ProjectNode = memo(function ProjectNode({
   onBrowseFiles,
   onArchiveAll,
 }: ProjectNodeProps) {
-  const [showAll, setShowAll] = useCollapsibleShowAll(isCollapsed || parentSectionCollapsed);
-  const view = useSessionEntryListView({
-    sessions: displaySessions ?? project.sessions,
-    notifications,
-    scheduleSessionIndex,
-    activeSessionId,
-    runningSessionIds,
-    foldExemptSessionIds,
-    collapsible: true,
-    collapseLimit: getProjectSessionCollapseLimit(),
-    disableCollapse: disableSessionCollapse,
-  });
   return (
     // 两个 data 属性各自服务不同消费者:
     //   - data-project-working-dir : Sortable drop-target 识别 (历史: ProjectsSection 手写拖拽热区,
@@ -191,12 +177,6 @@ export const ProjectNode = memo(function ProjectNode({
       className={cn('relative flex flex-col w-full select-none')}
     >
       <ProjectHeader
-        canToggleIdle={view.canToggleIdle}
-        showAll={showAll}
-        onShowAllChange={(value) => {
-          if (isCollapsed) onToggle(project.projectKey);
-          setShowAll(value);
-        }}
         project={project}
         statusFilter={statusFilter}
         isCollapsed={isCollapsed}
@@ -221,15 +201,17 @@ export const ProjectNode = memo(function ProjectNode({
       <SectionCollapse collapsed={isCollapsed} data-no-drag>
         {/* 组间留白由外层树的 4px gap 承担，组内任务保持 2px 间隔。 */}
         <div className="flex flex-col gap-0.5 pt-0.5">
-          <SessionEntryListContent
-            view={view}
-            showAll={showAll}
-            onShowAllChange={setShowAll}
+          <SessionEntryList
+            sessions={displaySessions ?? project.sessions}
             activeSessionId={activeSessionId}
             runningSessionIds={runningSessionIds}
             attachedSessionIds={attachedSessionIds}
             notifications={notifications}
+            scheduleSessionIndex={scheduleSessionIndex}
             selectedSessionIds={selectedSessionIds}
+            collapsible
+            collapseLimit={getProjectSessionCollapseLimit()}
+            disableCollapse={disableSessionCollapse}
             foldExemptSessionIds={foldExemptSessionIds}
             sectionCollapsed={isCollapsed || parentSectionCollapsed}
             onSessionClick={onSessionClick}
@@ -263,16 +245,9 @@ type ProjectHeaderProps = Pick<
   | 'onOpenInExplorer'
   | 'onBrowseFiles'
   | 'onArchiveAll'
-> & {
-  canToggleIdle: boolean;
-  showAll: boolean;
-  onShowAllChange: (showAll: boolean) => void;
-};
+>;
 
 const ProjectHeader = memo(function ProjectHeader({
-  canToggleIdle,
-  showAll,
-  onShowAllChange,
   lamp,
   project,
   statusFilter,
@@ -489,39 +464,74 @@ const ProjectHeader = memo(function ProjectHeader({
             />
           )}
         </div>
+        {/* 右侧状态槽几何与 SessionItem 同一份:ml-auto + h-6 + 16px 指示器入流,
+            hover 时 invisible spacer 把槽撑成按钮宽。绿/红点因此与任务行同大小、
+            同右边缘(pr-2 + size-4 槽 + size-2 圆点)。 */}
         {!isEditingName && (
-          <SidebarGroupHeaderActions status={isCollapsed ? collapsedStatusTone : null} menuOpen={menuPos !== null}>
-            {canToggleIdle && (
-              <SessionCollapseToggle showAll={!isCollapsed && showAll} onChange={onShowAllChange} />
-            )}
-            {/* More 按钮 —— 点击锚定 menuPos 到按钮正下方,复用下面同一份
-                DropdownMenu(右键也走它,菜单 items 一份维护)。原本 Search /
-                ShowFiles / OpenInExplorer 三个独立按钮整合到这个菜单里。 */}
-            <ProjectAction
-              label={t('ccAgent.common.moreActions')}
-              onClick={(e) => {
-                const rect = e.currentTarget.getBoundingClientRect();
-                setMenuPos({ x: rect.left, y: rect.bottom + 2 });
-              }}
-            >
-              <EllipsisVertical size={14} strokeWidth={2} />
-            </ProjectAction>
-            {/* delayed-create:在此目录新建会话——保留为独立按钮(primary 操作,
-                跟 SessionItem 的 Archive/Undo 等位)。父层会预填 workingDir 到
-                newMakerDraft store 并 navigate('/cc-agent/new')。vendor 由
-                NewMakerDraftRoute 内的 segmented switcher 决定(默认走用户上次选择)。 */}
-            <ProjectAction
-              label={
-                projectWritesBlocked
-                  ? t('ccAgent.remoteSession.actionsUnavailable')
-                  : t('ccAgent.sidebar.projectAction.newInDirectory')
-              }
-              disabled={projectWritesBlocked}
-              onClick={handleCreateInProject}
-            >
-              <SquarePen size={14} strokeWidth={2} />
-            </ProjectAction>
-          </SidebarGroupHeaderActions>
+          <div className="group/slot relative ml-auto flex h-6 shrink-0 items-center justify-end">
+            <div className="grid h-6 grid-cols-[max-content] items-center justify-items-end">
+              {isCollapsed && collapsedStatusTone ? (
+                <div
+                  className={cn(
+                    'col-start-1 row-start-1 flex items-center gap-1',
+                    'transition-opacity duration-[120ms]',
+                    'group-hover:opacity-0 group-focus-within/slot:opacity-0',
+                    menuPos !== null && 'opacity-0',
+                  )}
+                >
+                  <SidebarRightStatusIndicator kind={collapsedStatusTone} isActive={false} />
+                </div>
+              ) : null}
+              <div
+                aria-hidden
+                className={cn(
+                  'invisible col-start-1 row-start-1 h-6 items-center gap-0.5',
+                  menuPos !== null
+                    ? 'flex'
+                    : 'hidden group-hover:flex group-focus-within/slot:flex',
+                )}
+              >
+                <span className="size-5 shrink-0" />
+                <span className="size-5 shrink-0" />
+              </div>
+              <div
+                className={cn(
+                  'absolute right-0 top-0 flex h-6 items-center gap-0.5',
+                  menuPos !== null
+                    ? 'opacity-100'
+                    : 'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100',
+                )}
+              >
+                {/* More 按钮 —— 点击锚定 menuPos 到按钮正下方,复用下面同一份
+                    DropdownMenu(右键也走它,菜单 items 一份维护)。原本 Search /
+                    ShowFiles / OpenInExplorer 三个独立按钮整合到这个菜单里。 */}
+                <ProjectAction
+                  label={t('ccAgent.common.moreActions')}
+                  onClick={(e) => {
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    setMenuPos({ x: rect.left, y: rect.bottom + 2 });
+                  }}
+                >
+                  <EllipsisVertical size={14} strokeWidth={2} />
+                </ProjectAction>
+                {/* delayed-create:在此目录新建会话——保留为独立按钮(primary 操作,
+                    跟 SessionItem 的 Archive/Undo 等位)。父层会预填 workingDir 到
+                    newMakerDraft store 并 navigate('/cc-agent/new')。vendor 由
+                    NewMakerDraftRoute 内的 segmented switcher 决定(默认走用户上次选择)。 */}
+                <ProjectAction
+                  label={
+                    projectWritesBlocked
+                      ? t('ccAgent.remoteSession.actionsUnavailable')
+                      : t('ccAgent.sidebar.projectAction.newInDirectory')
+                  }
+                  disabled={projectWritesBlocked}
+                  onClick={handleCreateInProject}
+                >
+                  <SquarePen size={14} strokeWidth={2} />
+                </ProjectAction>
+              </div>
+            </div>
+          </div>
         )}
       </div>
 

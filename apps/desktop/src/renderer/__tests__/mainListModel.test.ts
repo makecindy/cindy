@@ -269,8 +269,7 @@ describe('Cindy Make sidebar group', () => {
 });
 
 describe('manual drag with folded sidebar rows (#11233)', () => {
-  // Unit: existing mixed-list tests cover sorting, but not whether an idle
-  // standalone session in a two-project list should disable project dragging.
+  // An idle standalone row alone must not disable manual project dragging.
   it('blocks project dragging only when a project row is hidden', () => {
     const entries: MainListEntry[] = [
       { kind: 'project', project: project('/a', []) },

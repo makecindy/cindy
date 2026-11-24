@@ -114,7 +114,7 @@ import { projectKeyComparisonKey } from '../../lib/projectGrouping';
 import { buildSessionSourceLabelMap } from '../../lib/sessionSourceLabel';
 import { aggregateSessionLamps, type SessionLampAggregate } from '../../lib/sessionLampAggregation';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
-import { SidebarGroupHeaderActions } from '../SidebarGroupHeaderActions';
+import { SidebarRightStatusIndicator } from '../SidebarRightStatusIndicator';
 import { useSessionAttentionKindsWithOrcaLeads } from '../../lib/orcaLeadWorkerAttention';
 import { useSessionAttentionUrgencySet } from '../../contexts/SessionAttentionUrgencyContext';
 import {
@@ -127,9 +127,8 @@ import type { DialogueDeviceTarget } from '../../lib/dialogueCreateTarget';
 import { MainListScopeHeader } from '../MainListScopeHeader';
 import { DeviceSectionHeader } from '../DeviceSectionHeader';
 import { SectionCollapse } from '../SectionCollapse';
-import { SessionEntryListContent, SessionEntryRows, useSessionEntryListView } from '../SessionEntryList';
+import { SessionEntryList, SessionEntryRows } from '../SessionEntryList';
 import { TaskInbox, type TaskInboxProps } from '../TaskInbox';
-import { SessionCollapseToggle } from '../SessionCollapseToggle';
 import { sessionRowKey } from '../sessionRowKey';
 import { useCollapsibleShowAll } from '../hooks/useCollapsibleShowAll';
 import { useAutomationGroupsCollapsed } from '../../hooks/useAutomationGroupCollapsed';
@@ -178,9 +177,9 @@ export function holdSidebarViewedPriority(
   holdViewedPriorityRank(viewedPriorityHold, sessionId, ctx);
 }
 
-/** 侧栏列表的展开页脚，按实际隐藏的条目计数。 */
-export function ShowAllEntriesButton({ count, onClick, showAll = false }: {
-  count: number; onClick: () => void; showAll?: boolean;
+/** 顶层条目折叠的「显示全部 N 项」页脚(单段路径与设备分组的每段共用同一份样式)。 */
+function ShowAllEntriesButton({ count = 0, onClick, showAll = false }: {
+  count?: number; onClick: () => void; showAll?: boolean;
 }) {
   const { t } = useTranslation();
   return (
@@ -195,7 +194,7 @@ export function ShowAllEntriesButton({ count, onClick, showAll = false }: {
     >
       {showAll
         ? t('ccAgent.sidebar.collapseInactiveSessions')
-        : t('ccAgent.sidebar.showMoreSessions', { count })}
+        : t('ccAgent.sidebar.showAllSessions', { count })}
     </button>
   );
 }
@@ -486,8 +485,11 @@ export function ProjectsSection({
   // toggleDisabled 用 allKnownProjects（不是过滤后的 projects），避免 filter 收窄到 0 时
   // 即便没真正可折叠的目标，也保留视觉一致——但禁用按钮以避免无意义点击。
   const projectNodesToggleDisabled = allKnownProjects.length === 0;
-  // 显式筛选应展示全部命中；分组与排序偏好本身不禁用闲置折叠。
-  const disableSessionCollapse = filter.isSessionContentFiltered;
+  // 折叠上限始终生效(用户定稿):任何筛选(最近活跃 / 状态 / 项目 / Vendor)、任何排序
+  // (含「时间」)下,每项目都最多显示 N 条 + 「显示全部」。折叠是纯显示上限,与筛选正交;
+  // 文字搜索是独立面板、不在本段内联过滤,故无需为它禁用。
+  // 例外:开启闲置折叠时普通任务没有数量保底,显式筛选需展示全部命中。
+  const disableSessionCollapse = idleCollapseEnabled && filter.isSessionContentFiltered;
 
   // 优先级排序的运行时上下文。三个集合都在本地链路之上并入 device-link 远程
   // 活动镜像(2026-08-13 review P1:此前只喂本地 maker/attention,远程行自己的
@@ -673,7 +675,9 @@ export function ProjectsSection({
     scheduleSessionIndex,
   });
 
-  // 默认保留主列表原有条数规则。开启闲置折叠后，散排任务按活动时间收起，分组标题仍有独立上限。
+  // 顶层条目折叠:最多显示 N 条,超出收起 + 「显示全部 N 项」。与会话同一套
+  // 规则(getSessionListCollapseView):始终保留"有需关注会话"的条目、以及包含当前会话的
+  // 条目;任何排序/筛选下都生效。
   const entrySessions = getMainListEntrySessions;
   // 折叠视图共用一份参数:非设备分组 = 全列表一份;设备分组 = 每段各一份(见
   // deviceSections)。豁免口径 = attention ∪ running(priorityContext,含远程
@@ -708,14 +712,14 @@ export function ProjectsSection({
         isActiveEntry: (entry) => entrySessions(entry).some((s) => s.id === viewedIdForSort),
         hasAttentionEntry: (entry) =>
           entrySessions(entry).some((s) => lampFoldExemptIds.has(s.id)) ||
-          entrySessions(entry).some((s) => !!s.pinnedAt),
+          (idleCollapseEnabled && entrySessions(entry).some((s) => !!s.pinnedAt)),
       }),
     [viewedIdForSort, entrySessions, lampFoldExemptIds, nowMs, disableSessionCollapse, idleCollapseEnabled],
   );
   const {
     visibleEntries: visibleMixedEntries,
     isOverflowing: projectsOverflow,
-    hiddenCount: hiddenEntryCount,
+    totalCount: projectsTotal,
   } = collapseEntries(mixedEntries, showAllProjects);
   // SortableList 拖拽仍只作用于项目行(手动排序收窄裁决,设计文档 §9.3):
   // 混排下把可见条目切成「连续的项目行 run + 其间的散排条目」,项目 run 内可拖。
@@ -1211,7 +1215,7 @@ export function ProjectsSection({
           ) : null}
           {/* 混排渲染(D / E 期):
               - 自定义项目顺序:Cindy Make 固定在前,项目段走 SortableList,
-                其后是散排对话 / 对话组。只有项目行被折叠时才禁用拖拽。
+                其后是散排对话 / 对话组。折叠+溢出时禁用拖拽,点「显示全部」后再拖。
                 可与设备分组叠加:每段各自拖本段项目。
               - 按最近活动:按 deviceSections 切段(设备分组开启时),段内项目行与
                 散排对话按任务排序口径交错,项目行不可拖。 */}
@@ -1222,7 +1226,9 @@ export function ProjectsSection({
                 getId={getProjectId}
                 onReorder={handleReorder}
                 disabled={
-                  !projectDragEnabled || hasHiddenProjectRows(mixedEntries, visibleProjectNodes.length)
+                  !projectDragEnabled || (idleCollapseEnabled
+                    ? hasHiddenProjectRows(mixedEntries, visibleProjectNodes.length)
+                    : projectsOverflow && !showAllProjects)
                 }
                 reducedMotion={reducedMotion}
                 handle={MANUAL_PROJECT_SORT_HANDLE}
@@ -1360,7 +1366,9 @@ export function ProjectsSection({
                                     onReorder={handleReorder}
                                     disabled={
                                       !projectDragEnabled ||
-                                      hasHiddenProjectRows(section.entries, sectionProjects.length)
+                                      (idleCollapseEnabled
+                                        ? hasHiddenProjectRows(section.entries, sectionProjects.length)
+                                        : sectionView.isOverflowing && !expandedDeviceSections.has(key))
                                     }
                                     reducedMotion={reducedMotion}
                                     handle={MANUAL_PROJECT_SORT_HANDLE}
@@ -1387,7 +1395,7 @@ export function ProjectsSection({
                               )}
                               {sectionView.isOverflowing && (
                                 <ShowAllEntriesButton
-                                  count={sectionView.hiddenCount}
+                                  count={sectionView.totalCount}
                                   onClick={() =>
                                     setExpandedDeviceSections((prev) => new Set(prev).add(key))
                                   }
@@ -1395,7 +1403,6 @@ export function ProjectsSection({
                               )}
                               {idleCollapseEnabled && !disableSessionCollapse && expandedDeviceSections.has(key) && (
                                 <ShowAllEntriesButton
-                                  count={sectionView.hiddenCount}
                                   showAll
                                   onClick={() => setExpandedDeviceSections((prev) => {
                                     const next = new Set(prev);
@@ -1426,11 +1433,10 @@ export function ProjectsSection({
           )}
           {/* 全局「显示全部」只属于未按设备分组的单段路径;设备分组下折叠与 footer 都在段内。 */}
           {!deviceGroupingActive && projectsOverflow && (
-            <ShowAllEntriesButton count={hiddenEntryCount} onClick={() => setShowAllProjects(true)} />
+            <ShowAllEntriesButton count={projectsTotal} onClick={() => setShowAllProjects(true)} />
           )}
           {!deviceGroupingActive && idleCollapseEnabled && !disableSessionCollapse && showAllProjects && (
             <ShowAllEntriesButton
-              count={hiddenEntryCount}
               showAll
               onClick={() => setShowAllProjects(false)}
             />
@@ -1553,26 +1559,11 @@ export function SessionGroupNode({
 }) {
   const { t } = useTranslation();
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
-  const [showAll, setShowAll] = useCollapsibleShowAll(parentSectionCollapsed || collapsed);
-  const view = useSessionEntryListView({
-    sessions,
-    notifications,
-    scheduleSessionIndex,
-    activeSessionId,
-    runningSessionIds,
-    foldExemptSessionIds,
-    collapsible: true,
-    collapseLimit: getProjectSessionCollapseLimit(),
-    disableCollapse: disableSessionCollapse,
-  });
   const headerRef = useRef<HTMLDivElement>(null);
   const restoreHeaderFocusOnClose = useRef(false);
   // 与 ProjectNode 同款:标题右侧 hover 渐显的展开/收起指示箭头。
   const Chevron = collapsed ? ChevronRight : ChevronDown;
   const showRunning = collapsed && lamp?.running;
-  const collapsedStatus = collapsed ? lamp?.dotTone : undefined;
-  const { canToggleIdle } = view;
-  const hasHeaderActions = canToggleIdle || Boolean(onCreateDialogue);
   return (
     <div className="relative flex w-full select-none flex-col" data-no-drag>
       {/* 段头:与 ProjectNode Header 同款规格(h-8 药丸 hover / pl-3 pr-2 /
@@ -1631,55 +1622,56 @@ export function SessionGroupNode({
             className="shrink-0 text-[var(--cmd-palette-item-meta)] opacity-0 transition-opacity duration-[120ms] group-hover:opacity-100"
           />
         </div>
-        {(hasHeaderActions || collapsedStatus) && (
-          <SidebarGroupHeaderActions status={collapsedStatus} menuOpen={menuPos !== null} hasActions={hasHeaderActions}>
-            {canToggleIdle && (
-              <SessionCollapseToggle
-                showAll={!collapsed && showAll}
-                onChange={(value) => {
-                  if (collapsed) onToggle();
-                  setShowAll(value);
+        {/* 聚合状态与普通任务行保持同一右侧槽位；展开后由子任务行分别显示。 */}
+        {collapsed && lamp?.dotTone && (
+          <div className="ml-auto flex h-6 shrink-0 items-center justify-end">
+            <SidebarRightStatusIndicator kind={lamp.dotTone} isActive={false} />
+          </div>
+        )}
+        {/* 悬浮工具组:与 ProjectNode Header 同款——常态隐藏,hover 整行淡入。
+            新建(SquarePen)与项目行等位，右键菜单独立于新建与折叠操作。 */}
+        {onCreateDialogue && (
+          <div
+            className={cn(
+              'flex shrink-0 items-center gap-0.5',
+              'opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100',
+            )}
+          >
+            <Tip text={createDisabledReason ?? createLabel ?? t('ccAgent.sidebar.newDialogue')}>
+              <button
+                type="button"
+                aria-label={createDisabledReason ?? createLabel ?? t('ccAgent.sidebar.newDialogue')}
+                disabled={isCreateDisabled}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (!isCreateDisabled) onCreateDialogue();
                 }}
-              />
-            )}
-            {onCreateDialogue && (
-              <Tip text={createDisabledReason ?? createLabel ?? t('ccAgent.sidebar.newDialogue')}>
-                <button
-                  type="button"
-                  aria-label={createDisabledReason ?? createLabel ?? t('ccAgent.sidebar.newDialogue')}
-                  disabled={isCreateDisabled}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (!isCreateDisabled) onCreateDialogue();
-                  }}
-                  onPointerDown={(e) => e.stopPropagation()}
-                  onKeyDown={(e) => e.stopPropagation()}
-                  className={cn(
-                    'flex size-6 shrink-0 items-center justify-center rounded-full',
-                    'text-sidebar-action-icon hover:text-foreground',
-                    'hover:bg-sidebar-item-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                    'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent',
-                  )}
-                >
-                  <SquarePen size={14} strokeWidth={2} />
-                </button>
-              </Tip>
-            )}
-          </SidebarGroupHeaderActions>
+                onPointerDown={(e) => e.stopPropagation()}
+                onKeyDown={(e) => e.stopPropagation()}
+                className={cn(
+                  'flex size-6 shrink-0 items-center justify-center rounded-full',
+                  'text-sidebar-action-icon hover:text-foreground',
+                  'hover:bg-sidebar-item-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                  'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent',
+                )}
+              >
+                <SquarePen size={14} strokeWidth={2} />
+              </button>
+            </Tip>
+          </div>
         )}
       </div>
       {/* 组内会话:与 ProjectNode 的会话区同款容器(gap / pt)
           与同一份折叠上限(getProjectSessionCollapseLimit)。 */}
       <SectionCollapse collapsed={collapsed} data-no-drag>
         <div className="flex flex-col gap-0.5 pt-0.5">
-          <SessionEntryListContent
-            view={view}
-            showAll={showAll}
-            onShowAllChange={setShowAll}
+          <SessionEntryList
+            sessions={sessions}
             activeSessionId={activeSessionId}
             runningSessionIds={runningSessionIds}
             attachedSessionIds={attachedSessionIds}
             notifications={notifications}
+            scheduleSessionIndex={scheduleSessionIndex}
             selectedSessionIds={selectedSessionIds}
             onSessionClick={onSessionClick}
             onAction={onAction}
@@ -1688,6 +1680,9 @@ export function SessionGroupNode({
             onMoveSession={onMoveSession}
             projectOptions={projectOptions}
             onScheduleAction={onScheduleAction}
+            collapsible
+            collapseLimit={getProjectSessionCollapseLimit()}
+            disableCollapse={disableSessionCollapse}
             foldExemptSessionIds={foldExemptSessionIds}
             sectionCollapsed={parentSectionCollapsed || collapsed}
             sessionVariant={sessionVariant}

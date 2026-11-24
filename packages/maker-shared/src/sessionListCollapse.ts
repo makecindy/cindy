@@ -16,10 +16,6 @@ export interface SessionListCollapseViewInput<T> {
   recentWindowMs?: number;
   /** 取条目最近活动时间戳(ms);传入即开启 24h 豁免。 */
   getActivityMs?: (entry: T) => number;
-  /** 传入后，只有容器占用前 N 条名额，且容器不应用最近活动豁免。 */
-  isContainerEntry?: (entry: T) => boolean;
-  /** 当前条目落入折叠区时默认展开整组，可改为只保留当前条目。 */
-  expandGroupForHiddenActiveEntry?: boolean;
 }
 
 export interface SessionListCollapseView<T> {
@@ -40,8 +36,6 @@ export function getSessionListCollapseView<T>({
   isFiltering,
   isActiveEntry,
   hasAttentionEntry,
-  isContainerEntry,
-  expandGroupForHiddenActiveEntry = true,
 }: SessionListCollapseViewInput<T>): SessionListCollapseView<T> {
   const totalCount = entries.length;
   const allVisible = {
@@ -64,26 +58,17 @@ export function getSessionListCollapseView<T>({
     getActivityMs && typeof nowMs === 'number' && Number.isFinite(nowMs)
       ? nowMs - Math.max(0, recentWindowMs)
       : Infinity;
-  let containerCount = 0;
-  const visibleEntries: T[] = [];
+  const isEntryVisible = (entry: T, index: number): boolean =>
+    index < visibleHeadCount ||
+    (getActivityMs ? getActivityMs(entry) >= recentSinceMs : false) ||
+    hasAttentionEntry(entry);
 
-  for (const [index, entry] of entries.entries()) {
-    const isContainer = isContainerEntry?.(entry) ?? false;
-    const withinHead = isContainerEntry
-      ? isContainer && containerCount++ < visibleHeadCount
-      : index < visibleHeadCount;
-    if (
-      withinHead ||
-      (!isContainer && getActivityMs != null && getActivityMs(entry) >= recentSinceMs) ||
-      hasAttentionEntry(entry)
-    ) {
-      visibleEntries.push(entry);
-    } else if (isActiveEntry(entry)) {
-      if (expandGroupForHiddenActiveEntry) return allVisible;
-      visibleEntries.push(entry);
-    }
-  }
+  const activeInCollapsedRegion = entries.some(
+    (entry, index) => isActiveEntry(entry) && !isEntryVisible(entry, index),
+  );
+  if (activeInCollapsedRegion) return allVisible;
 
+  const visibleEntries = entries.filter(isEntryVisible);
   const hiddenCount = totalCount - visibleEntries.length;
 
   return {

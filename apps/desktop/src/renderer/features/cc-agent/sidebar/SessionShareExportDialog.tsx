@@ -118,8 +118,6 @@ export function SessionShareExportDialog({
         if (!next && !exporting) resetAndClose();
       }}
     >
-      {/* Keep the owning sidebar row visible while the form is in a portal. */}
-      {open && <span hidden data-sidebar-activity-overlay="" />}
       <AlertDialog.Portal>
         {/* Radix Portal 只搬 DOM 不搬 React 树:本弹窗仍是 SessionItem 行的 React
             子节点,click / keydown 会沿 React 树冒泡触发行的选中导航(review bot

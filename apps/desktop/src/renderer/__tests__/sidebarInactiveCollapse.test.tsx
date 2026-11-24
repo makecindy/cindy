@@ -2,17 +2,18 @@
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { MemoryRouter } from 'react-router-dom';
 import type { Session } from '@/lib/ccAgent.types';
+import { TaskTagEditor } from '@/features/task-tags/TaskTags';
 import {
   SidebarActivityClock,
   useSidebarActivityNow,
   useSidebarIdleCollapse,
 } from '../features/cc-agent/sidebar/SidebarActivityClock';
 import { SIDEBAR_IDLE_COLLAPSE_KEY } from '../features/cc-agent/lib/sidebarCollapseConfig';
-import { ProjectNode, type ProjectNodeProps } from '../features/cc-agent/sidebar/sections/ProjectNode';
 import { SessionEntryList, type SessionEntryListProps } from '../features/cc-agent/sidebar/SessionEntryList';
-import { SessionShareExportDialog } from '../features/cc-agent/sidebar/SessionShareExportDialog';
+import { railPanelStore } from '../features/cc-agent/sidebar/railPanelStore';
 
 const translate = (key: string, options?: { count?: number }) =>
   options?.count === undefined ? key : `${key}: ${options.count}`;
@@ -20,23 +21,15 @@ vi.mock('react-i18next', async (importOriginal) => ({
   ...await importOriginal<typeof import('react-i18next')>(),
   useTranslation: () => ({ t: translate, i18n: { language: 'en' } }),
 }));
-// Row presentation and unopened project settings are unrelated to folding. The
-// real ProjectNode, SessionEntryList, grouping, toggle and clock remain loaded.
 vi.mock('../features/cc-agent/sidebar/SessionItem', () => ({
   SessionItem: ({ session }: { session: Session }) => <button>{session.title}</button>,
 }));
 vi.mock('../features/cc-agent/sidebar/SessionCard', () => ({
   SessionCard: ({ session }: { session: Session }) => <button>{session.title}</button>,
 }));
-vi.mock('../features/cc-agent/sidebar/ProjectSettingsDialog', () => ({ ProjectSettingsDialog: () => null }));
 
-// #11233: real list/project entry points must change visible rows with time and
-// header clicks. Existing collapse-reset tests do not exercise idle folding or
-// project controls. Minimal failure: one 31m-old task in an expanded project.
-// Tier: unit/jsdom; fake timers, no task IPC or external I/O.
-// Standalone Vitest duration: 2.23s (2026-11-18).
+// #11233 idle folding through the real SessionEntryList and clock (unit/jsdom, fake timers).
 const now = Date.parse('2026-11-18T04:00:00Z');
-const expand = 'ccAgent.sidebar.expandAllSessions';
 const fold = 'ccAgent.sidebar.collapseInactiveSessions';
 const hostListeners = new Set<(hidden: boolean) => void>();
 const noop = () => {};
@@ -50,15 +43,16 @@ function listProps(sessions: Session[]): SessionEntryListProps {
     attachedSessionIds: new Set(), scheduleSessionIndex: new Map(), onSessionClick: noop,
     onAction: noop, onRename: noop, onTogglePin: noop, onScheduleAction: noop };
 }
-function projectProps(id: string): ProjectNodeProps {
-  return { ...listProps([task(`${id}-old`)]),
-    project: { projectKey: `local:/${id}`, workingDir: `/${id}`, displayName: id, scope: 'local',
-      sessions: [task(`${id}-old`)], latestActivityAt: '', segments: 1 } as ProjectNodeProps['project'],
-    statusFilter: 'active', isCollapsed: false, parentSectionCollapsed: false,
-    disableSessionCollapse: false, onToggle: vi.fn(),
-    onSettings: noop, onRenameProject: async () => {},
-    onCreateInProject: noop, onOpenConversationSearch: noop, onOpenInExplorer: noop,
-    onBrowseFiles: noop, onArchiveAll: noop };
+function weeklyScheduleIndex(runs: Session[]) {
+  const schedule = {
+    scheduleId: 'weekly',
+    scheduleName: 'Weekly automation',
+    scheduleStatus: 'active' as const,
+    unreadRunIds: [],
+    unreadFailedRunIds: [],
+    hasUnreadRun: false,
+  };
+  return new Map(runs.map((run) => [run.id, schedule] as const));
 }
 beforeEach(() => {
   localStorage.setItem(SIDEBAR_IDLE_COLLAPSE_KEY, 'true');
@@ -75,6 +69,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  railPanelStore.closeAll();
   localStorage.removeItem(SIDEBAR_IDLE_COLLAPSE_KEY);
   localStorage.removeItem('sidebar.collapse.projectSessionLimit');
   hostListeners.clear();
@@ -104,7 +99,7 @@ describe('sidebar idle folding interactions', () => {
     expect(screen.getByText('expires')).toBeTruthy();
     act(() => vi.advanceTimersByTime(60_000));
     expect(screen.queryByText('expires')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'ccAgent.sidebar.showMoreSessions: 2' }));
+    fireEvent.click(screen.getByRole('button', { name: 'ccAgent.sidebar.showAllSessions: 2' }));
     act(() => vi.advanceTimersByTime(60_000));
     expect(screen.getByText('expires')).toBeTruthy();
     expect(screen.getByText('old')).toBeTruthy();
@@ -112,75 +107,25 @@ describe('sidebar idle folding interactions', () => {
     expect(screen.queryByText('old')).toBeNull();
   });
 
-  it('lets project headers expand and refold independently without collapsing the project', () => {
-    const a = projectProps('A');
-    const b = projectProps('B');
-    render(<><section aria-label="A"><ProjectNode {...a} /></section><section aria-label="B"><ProjectNode {...b} /></section></>, { wrapper: Preview });
-    const left = within(screen.getByRole('region', { name: 'A' }));
-    const right = within(screen.getByRole('region', { name: 'B' }));
-    expect(left.queryByText('A-old')).toBeNull();
-    expect(right.queryByText('B-old')).toBeNull();
-    fireEvent.click(left.getByRole('button', { name: expand }));
-    expect(left.getByText('A-old')).toBeTruthy();
-    expect(right.queryByText('B-old')).toBeNull();
-    fireEvent.click(left.getAllByRole('button', { name: fold })[0]);
-    expect(left.queryByText('A-old')).toBeNull();
-    expect(a.onToggle).not.toHaveBeenCalled();
+  // #11233: an explicit filter shows every idle match without folding controls.
+  it('shows every filtered match without idle folding controls', () => {
+    render(<SessionEntryList {...listProps([task('recent', 5), task('idle')])} disableCollapse />, { wrapper: Preview });
+    expect(screen.getByText('idle')).toBeTruthy();
+    expect(screen.queryAllByRole('button', { name: /showAllSessions|collapseInactiveSessions/ })).toHaveLength(0);
   });
 
-  // A filtered project with an idle match has no folding action. The existing
-  // unfiltered project cases cannot catch a button that does nothing in this mode.
-  it('hides the project folding action while showing all filtered matches', () => {
-    const props = projectProps('A');
-    const { rerender } = render(<ProjectNode {...props} />, { wrapper: Preview });
-    fireEvent.click(screen.getByRole('button', { name: expand }));
-
-    rerender(<ProjectNode {...props} disableSessionCollapse />);
-    expect(screen.getByText('A-old')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: fold })).toBeNull();
-    expect(screen.queryByRole('button', { name: expand })).toBeNull();
-
-    rerender(<ProjectNode {...props} />);
-    expect(screen.getByRole('button', { name: fold })).toBeTruthy();
-  });
-
-  // #11282: toggle the production preference while a project still has a
-  // legacy hidden row. The title action disappears and the old footer works.
-  it('hides the title action immediately when idle folding is switched off', () => {
-    localStorage.setItem('sidebar.collapse.projectSessionLimit', '0');
+  // #11282: switching the preference off restores the legacy count floor at once.
+  it('restores the legacy list immediately when idle folding is switched off', () => {
     function PreferenceControl() {
       const { setIdleCollapseEnabled } = useSidebarIdleCollapse();
       return <button onClick={() => setIdleCollapseEnabled(false)}>Turn idle folding off</button>;
     }
-    const props = projectProps('A');
-    props.project.sessions = [task('A-older', 24 * 60 + 1)];
-    render(<><PreferenceControl /><ProjectNode {...props} /></>, { wrapper: Preview });
-    expect(screen.getByRole('button', { name: expand })).toBeTruthy();
-
+    render(<><PreferenceControl /><SessionEntryList {...listProps([task('recent', 5), task('idle')])} /></>, { wrapper: Preview });
+    expect(screen.queryByText('idle')).toBeNull();
+    expect(screen.getByRole('button', { name: 'ccAgent.sidebar.showAllSessions: 2' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Turn idle folding off' }));
-    expect(screen.queryByRole('button', { name: expand })).toBeNull();
-    expect(screen.queryByRole('button', { name: fold })).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'ccAgent.sidebar.showMoreSessions: 1' }));
-    expect(screen.getByText('A-older')).toBeTruthy();
-  });
-
-  // #11282: recent rows and an exempt idle task make the action a no-op.
-  // Exercise the real header in both modes using the same list as its body.
-  it('only offers the idle action when collapsing can actually hide a row', () => {
-    const props = projectProps('A');
-    const retained = Array.from({ length: 5 }, (_, index) => task(`retained-${index}`, 5));
-    const sixth = task('sixth');
-    props.project.sessions = [...retained, sixth];
-    const view = render(<ProjectNode {...props} />, { wrapper: Preview });
-    expect(screen.queryByText('sixth')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: expand }));
-    expect(screen.getByText('sixth')).toBeTruthy();
-    expect(screen.getByRole('button', { name: fold })).toBeTruthy();
-
-    view.rerender(<ProjectNode {...props} notifications={new Set(['sixth'])} />);
-    expect(screen.getByText('sixth')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: fold })).toBeNull();
-    expect(screen.queryByRole('button', { name: expand })).toBeNull();
+    expect(screen.getByText('idle')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'ccAgent.sidebar.showAllSessions: 2' })).toBeNull();
   });
 
   it('stops the single clock for hidden windows and refreshes immediately on return', () => {
@@ -198,8 +143,7 @@ describe('sidebar idle folding interactions', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  // #11282: one row crossing the cutoff exercises the production timer and
-  // pointer listeners; the unguarded clock test cannot catch row movement.
+  // #11282: a row crossing the cutoff must not move while the pointer is inside.
   it('defers automatic folding until the pointer leaves the sidebar', () => {
     render(<SessionEntryList {...listProps([task('hovered', 29.5)])} />, { wrapper: Preview });
     const sidebar = screen.getByTestId('sidebar-clock-area');
@@ -210,58 +154,79 @@ describe('sidebar idle folding interactions', () => {
     expect(screen.queryByText('hovered')).toBeNull();
   });
 
-  // #11252: the menu coverage does not open the independent export portal.
-  // One task crossing the cutoff while its form has focus reproduces input loss. Unit/jsdom.
-  it('keeps an independent export dialog and its input open across the idle cutoff', () => {
-    function ExportableTask() {
+  // #11252: an open portalled dialog (tags, export) keeps its row and unsaved input.
+  it('preserves an unsaved tag while the owning task crosses the idle cutoff', async () => {
+    Object.assign(window.electronAPI, {
+      localDb: { taskTags: { execute: vi.fn().mockResolvedValue({ tags: [], sessions: [] }) } },
+    });
+    const session = task('tagged-task', 29.5);
+    function TaggableTask() {
       const [open, setOpen] = useState(false);
-      const visible = useSidebarActivityNow() < now + 30_000;
-      if (!visible) return null;
+      if (useSidebarActivityNow() >= now + 30_000) return null;
       return <>
-        <button onClick={() => setOpen(true)}>Export task</button>
-        {open && <SessionShareExportDialog open sessionId="export-task" onOpenChange={setOpen} />}
+        <button onClick={() => setOpen(true)}>Edit tags</button>
+        {open && <TaskTagEditor session={session} onClose={() => setOpen(false)} />}
       </>;
     }
 
-    render(<ExportableTask />, { wrapper: Preview });
-    fireEvent.click(screen.getByRole('button', { name: 'Export task' }));
-    const dialog = screen.getByRole('alertdialog');
-    expect(screen.getByTestId('sidebar-clock-area').contains(dialog)).toBe(false);
-    fireEvent.click(within(dialog).getByRole('checkbox'));
-    const password = within(dialog).getByPlaceholderText('sessionShare.export.passwordPlaceholder');
-    fireEvent.change(password, { target: { value: 'example-passphrase' } });
+    render(<TaggableTask />, { wrapper: Preview });
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Edit tags' })));
+    const dialog = screen.getByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'taskTags.add' }));
+    const name = within(dialog).getByRole('textbox', { name: 'taskTags.name' });
+    fireEvent.change(name, { target: { value: 'Unsaved tag' } });
     act(() => vi.advanceTimersByTime(60_000));
-    expect(screen.getByRole('alertdialog')).toBe(dialog);
-    expect(within(dialog).getByDisplayValue('example-passphrase')).toBe(password);
+    expect(within(screen.getByRole('dialog')).getByDisplayValue('Unsaved tag')).toBe(name);
 
-    fireEvent.click(within(dialog).getByRole('button', { name: 'sessionShare.export.cancel' }));
-    expect(screen.queryByRole('alertdialog')).toBeNull();
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeNull();
     act(() => vi.advanceTimersByTime(60_000));
-    expect(screen.queryByRole('button', { name: 'Export task' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Edit tags' })).toBeNull();
   });
 
-  // #11252: the task menu and export tests do not use the automation folder's
-  // independent Radix menu. Two runs form a folder and the latest crosses the cutoff. Unit/jsdom.
+  // #11252: a rail update after the cutoff used to unmount the hovered row.
+  it('keeps the rail snapshot stable until reopening, while running tasks stay visible', () => {
+    const sessions = [task('rail-recent', 29.5), task('rail-old'), task('rail-running')];
+    const props = listProps(sessions);
+    const trigger = document.createElement('button');
+    const openRail = () => act(() => railPanelStore.openSection('dialogues', { right: 0, top: 0 }, trigger));
+    const view = (notifications: Set<string>) => (
+      <SidebarActivityClock enabled={false}>
+        {createPortal(
+          <SessionEntryList {...props} notifications={notifications} runningSessionIds={new Set(['rail-running'])} />,
+          document.body,
+        )}
+      </SidebarActivityClock>
+    );
+
+    openRail();
+    const rendered = render(view(new Set()));
+    const recent = screen.getByRole('button', { name: 'rail-recent' });
+    expect(screen.queryByRole('button', { name: 'rail-old' })).toBeNull();
+    act(() => vi.advanceTimersByTime(60_000));
+    rendered.rerender(view(new Set(['rail-old'])));
+    expect(screen.getByRole('button', { name: 'rail-recent' })).toBe(recent);
+    expect(screen.getByRole('button', { name: 'rail-old' })).toBeTruthy();
+
+    act(() => railPanelStore.closeAll());
+    openRail();
+    expect(screen.queryByRole('button', { name: 'rail-recent' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'rail-running' })).toBeTruthy();
+  });
+
+  // #11252: an open automation folder menu survives its latest run going idle.
   it('keeps an automation folder menu open after its latest run becomes idle', () => {
     const runs = [
       task('weekly-run', 29.5, { source: 'scheduler' }),
       task('previous-run', 90, { source: 'scheduler' }),
     ];
-    const schedule = {
-      scheduleId: 'weekly',
-      scheduleName: 'Weekly automation',
-      scheduleStatus: 'active' as const,
-      unreadRunIds: [],
-      unreadFailedRunIds: [],
-      hasUnreadRun: false,
-    };
     const onScheduleAction = vi.fn();
     render(
       <MemoryRouter>
         <SessionEntryList
           {...listProps(runs)}
           onScheduleAction={onScheduleAction}
-          scheduleSessionIndex={new Map(runs.map((run) => [run.id, schedule]))}
+          scheduleSessionIndex={weeklyScheduleIndex(runs)}
         />
       </MemoryRouter>,
       { wrapper: Preview },
@@ -285,6 +250,29 @@ describe('sidebar idle folding interactions', () => {
       vi.advanceTimersByTime(60_000);
     });
     expect(screen.queryByText('Weekly automation')).toBeNull();
+  });
+
+  // #11252: nested 24h run history uses the same interaction-protected clock.
+  it('uses the same protected clock for automation run history', () => {
+    const runs = [
+      ...Array.from({ length: 5 }, (_, index) => task(`recent-run-${index}`, index + 1, { source: 'scheduler' })),
+      task('historical-run', 24 * 60 - 0.5, { source: 'scheduler' }),
+    ];
+    const props = { ...listProps(runs), scheduleSessionIndex: weeklyScheduleIndex(runs) };
+    const view = (notifications: Set<string>) => (
+      <MemoryRouter><SessionEntryList {...props} notifications={notifications} /></MemoryRouter>
+    );
+    const rendered = render(view(new Set()), { wrapper: Preview });
+    fireEvent.click(screen.getByRole('button', { name: 'ccAgent.sidebar.automationGroup.expand' }));
+    const historyRun = screen.getByRole('button', { name: 'historical-run' });
+    const sidebar = screen.getByTestId('sidebar-clock-area');
+    fireEvent.pointerEnter(sidebar);
+    act(() => vi.advanceTimersByTime(60_000));
+    rendered.rerender(view(new Set(['recent-run-0'])));
+    expect(screen.getByRole('button', { name: 'historical-run' })).toBe(historyRun);
+
+    fireEvent.pointerLeave(sidebar);
+    expect(screen.queryByRole('button', { name: 'historical-run' })).toBeNull();
   });
 
   it('keeps the default 24h behavior without scheduling a periodic refresh', () => {

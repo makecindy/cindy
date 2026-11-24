@@ -1,13 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import {
-  getSessionListCollapseView,
-  getSidebarSessionCollapseView,
-} from '../features/cc-agent/lib/sessionListCollapse';
+import { getSidebarSessionCollapseView } from '../features/cc-agent/lib/sessionListCollapse';
 
-// #11282: opt-in replaces the task count floor with the shorter activity window.
-// Shared tests do not exercise this preference. One 31-minute-old task in a
-// project with the default floor reproduces the difference. Tier: unit.
-// Standalone Vitest duration: 833ms (2026-11-18, --exclude '**/*.test.tsx').
+// #11282: the opt-in replaces the count floor with a 30-minute window (unit).
 type Entry = { id: string; activity: number; container?: boolean };
 const now = Date.parse('2026-11-18T04:00:00Z');
 function view(entries: Entry[], overrides = {}) {
@@ -76,17 +70,5 @@ describe('desktop sidebar idle folding (#11233)', () => {
   it.each(['showAll', 'disableCollapse', 'isFiltering'])('shows every match when %s is enabled', (key) => {
     const entries = [{ id: 'idle', activity: 0 }];
     expect(view(entries, { minVisibleCount: 0, [key]: true }).visibleEntries).toEqual(entries);
-  });
-
-  it('leaves the shared mobile policy unchanged', () => {
-    const entries = [{ id: 'hour-old', activity: now - 60 * 60_000 }];
-    expect(view(entries, { idleCollapseEnabled: true }).hiddenCount).toBe(1);
-    const shared = getSessionListCollapseView({
-      entries, nowMs: now, minVisibleCount: 0, showAll: false,
-      disableCollapse: false, isFiltering: false,
-      getActivityMs: (entry) => entry.activity,
-      isActiveEntry: () => false, hasAttentionEntry: () => false,
-    });
-    expect(shared.visibleEntries).toEqual(entries);
   });
 });

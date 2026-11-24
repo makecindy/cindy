@@ -96,8 +96,7 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('sidebar display settings menu', () => {
-  // #11282: the production display menu must default to unchecked and restore
-  // an explicit choice on remount. Other menu tests do not cover persistence.
+  // #11282: the opt-in defaults to off and persists across remounts.
   it('persists the opt-in for 30-minute folding', async () => {
     localStorage.removeItem(SIDEBAR_IDLE_COLLAPSE_KEY);
     const mount = () => render(

@@ -1,12 +1,16 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode, type RefObject } from 'react';
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useState, useSyncExternalStore, type ReactNode, type RefObject } from 'react';
 import { isWindowHidden } from '@/lib/hiddenAnimationGate';
 import { SIDEBAR_IDLE_COLLAPSE_KEY } from '../lib/sidebarCollapseConfig';
+import { railPanelStore } from './railPanelStore';
 
 const SidebarActivityNow = createContext<number | undefined>(undefined);
-const SidebarIdleCollapse = createContext({
-  idleCollapseEnabled: false,
-  setIdleCollapseEnabled: (_enabled: boolean) => {},
-});
+const SidebarIdleCollapse = createContext<{
+  idleCollapseEnabled: boolean;
+  setIdleCollapseEnabled: (enabled: boolean) => void;
+}>({ idleCollapseEnabled: false, setIdleCollapseEnabled: () => {} });
+// Portalled menus/dialogs keep their owning row: time does not advance while one is open.
+const OPEN_OVERLAY_SELECTOR = '[data-state="open"]:is([role="menu"],[role="dialog"],[role="alertdialog"])';
+const getRailSection = () => railPanelStore.getSnapshot().openSection;
 
 function loadIdleCollapse(): boolean {
   try {
@@ -43,6 +47,11 @@ export function SidebarActivityClock({ enabled, interactionRoot, children }: {
 
   const clockEnabled = enabled && idleCollapseEnabled;
   const [now, setNow] = useState(Date.now);
+  // Stopped (rail / file browser): time stays frozen; opening a rail panel samples once.
+  const railSection = useSyncExternalStore(railPanelStore.subscribe, getRailSection);
+  useLayoutEffect(() => {
+    if (idleCollapseEnabled && !enabled && railSection) setNow(Date.now());
+  }, [idleCollapseEnabled, enabled, railSection]);
   useEffect(() => {
     if (!clockEnabled) return;
     const root = interactionRoot?.current;
@@ -52,7 +61,7 @@ export function SidebarActivityClock({ enabled, interactionRoot, children }: {
     const isVisible = () => !hostHidden && document.visibilityState !== 'hidden';
     const refresh = (focused = document.activeElement) => {
       if (!isVisible() || pointerInside ||
-          root?.querySelector('[data-sidebar-activity-overlay]') ||
+          document.querySelector(OPEN_OVERLAY_SELECTOR) ||
           (root?.contains(focused) && focused?.matches(':focus-visible'))) return;
       setNow(Date.now());
     };
@@ -62,14 +71,14 @@ export function SidebarActivityClock({ enabled, interactionRoot, children }: {
       refresh();
     };
     const focusOut = (event: FocusEvent) => {
-      if (event.relatedTarget instanceof Node && root?.contains(event.relatedTarget)) return;
-      refresh(null);
+      const next = event.relatedTarget instanceof Element ? event.relatedTarget : null;
+      if (!root?.contains(next)) refresh(next);
     };
     const updateVisibility = (initial = false) => {
       clearInterval(timer);
       timer = undefined;
       if (!isVisible()) return;
-      if (initial) setNow(Date.now());
+      if (initial && !document.querySelector(OPEN_OVERLAY_SELECTOR)) setNow(Date.now());
       else refresh();
       timer = setInterval(refresh, 60_000);
     };
@@ -98,7 +107,7 @@ export function SidebarActivityClock({ enabled, interactionRoot, children }: {
   }), [idleCollapseEnabled, setIdleCollapseEnabled]);
   return (
     <SidebarIdleCollapse.Provider value={preference}>
-      <SidebarActivityNow.Provider value={clockEnabled ? now : undefined}>
+      <SidebarActivityNow.Provider value={idleCollapseEnabled ? now : undefined}>
         {children}
       </SidebarActivityNow.Provider>
     </SidebarIdleCollapse.Provider>
@@ -110,6 +119,5 @@ export function useSidebarIdleCollapse() {
 }
 
 export function useSidebarActivityNow(): number {
-  // Standalone lists (rail panels, UI fixtures) still calculate using current time.
   return useContext(SidebarActivityNow) ?? Date.now();
 }

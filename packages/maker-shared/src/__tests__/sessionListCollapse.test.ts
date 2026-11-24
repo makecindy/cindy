@@ -4,7 +4,6 @@ import {
   SESSION_LIST_COLLAPSE_MIN_VISIBLE_COUNT,
   SESSION_LIST_COLLAPSE_RECENT_WINDOW_MS,
   getSessionListCollapseView,
-  type SessionListCollapseViewInput,
 } from '../sessionListCollapse.js';
 
 interface TestSessionEntry {
@@ -15,8 +14,8 @@ interface TestSessionEntry {
   attention?: boolean;
 }
 
-interface TestGroupEntry {
-  kind: 'automation-group' | 'project';
+interface TestAutomationEntry {
+  kind: 'automation-group';
   id: string;
   sessions: Array<{
     id: string;
@@ -26,7 +25,7 @@ interface TestGroupEntry {
   }>;
 }
 
-type TestEntry = TestSessionEntry | TestGroupEntry;
+type TestEntry = TestSessionEntry | TestAutomationEntry;
 
 const nowMs = Date.parse('2026-06-04T12:00:00.000Z');
 const recentMs = nowMs - 60 * 60 * 1000;
@@ -51,7 +50,7 @@ function hasAttentionEntry(entry: TestEntry): boolean {
   return entry.sessions.some((item) => item.attention === true);
 }
 
-function collapse(entries: readonly TestEntry[], overrides: Partial<SessionListCollapseViewInput<TestEntry>> = {}) {
+function collapse(entries: readonly TestEntry[], overrides = {}) {
   return getSessionListCollapseView({
     entries,
     nowMs,
@@ -100,6 +99,30 @@ describe('session list collapse view', () => {
     expect(view.isOverflowing).toBe(true);
     expect(view.hiddenCount).toBe(2);
     expect(view.visibleEntries.map((entry) => entry.id)).toEqual(['s1', 's2', 's3', 's4', 's5']);
+  });
+
+  it('shows all entries after showAll is enabled', () => {
+    const entries = ['s1', 's2', 's3', 's4', 's5', 's6'].map((id) => session(id));
+    const view = collapse(entries, { showAll: true });
+
+    expect(view.isOverflowing).toBe(false);
+    expect(view.hiddenCount).toBe(0);
+    expect(view.visibleEntries).toEqual(entries);
+  });
+
+  it('does not collapse while content filtering or project search is active', () => {
+    const entries = ['s1', 's2', 's3', 's4', 's5', 's6'].map((id) => session(id));
+
+    expect(collapse(entries, { disableCollapse: true })).toMatchObject({
+      visibleEntries: entries,
+      isOverflowing: false,
+      hiddenCount: 0,
+    });
+    expect(collapse(entries, { isFiltering: true })).toMatchObject({
+      visibleEntries: entries,
+      isOverflowing: false,
+      hiddenCount: 0,
+    });
   });
 
   it('expands all entries when the active entry is in the collapsed region', () => {
@@ -181,68 +204,5 @@ describe('session list collapse view', () => {
   it('exports the default product policy constants', () => {
     expect(SESSION_LIST_COLLAPSE_MIN_VISIBLE_COUNT).toBe(5);
     expect(SESSION_LIST_COLLAPSE_RECENT_WINDOW_MS).toBe(24 * 60 * 60 * 1000);
-  });
-});
-
-// #11252: the existing default-only cases cannot detect drift between modes.
-// A shared mixed list exercises common bypasses and differences in the count
-// floor, activity window, and active-row reveal through the public API. Unit.
-const justActive = nowMs - 5 * 60_000;
-const mixedEntries: TestEntry[] = [
-  session('old-first'),
-  { kind: 'project', id: 'project-first', sessions: [] },
-  session('hour-old', recentMs),
-  { kind: 'project', id: 'project-second', sessions: [] },
-  session('recent-task', justActive),
-  { kind: 'project', id: 'project-over-limit', sessions: [session('recent-child', justActive)] },
-  session('old-hidden'),
-  { ...session('attention'), attention: true },
-  session('current'),
-];
-
-describe.each([
-  {
-    name: 'default',
-    policy: {},
-    foldedIds: ['old-first', 'project-first', 'hour-old', 'recent-task', 'project-over-limit', 'attention'],
-    activeIds: null,
-  },
-  {
-    name: 'idle',
-    policy: {
-      recentWindowMs: 30 * 60_000,
-      isContainerEntry: (entry: TestEntry) => entry.kind === 'project',
-      expandGroupForHiddenActiveEntry: false,
-    },
-    foldedIds: ['project-first', 'project-second', 'recent-task', 'attention'],
-    activeIds: ['project-first', 'project-second', 'recent-task', 'attention', 'current'],
-  },
-])('$name policy with the same mixed list', ({ policy, foldedIds, activeIds }) => {
-  const options = { minVisibleCount: 2, ...policy };
-
-  it('keeps attention entries visible and counts only the rows actually hidden', () => {
-    const view = collapse(mixedEntries, options);
-    expect(view.visibleEntries.map((entry) => entry.id)).toEqual(foldedIds);
-    expect(view).toMatchObject({
-      totalCount: mixedEntries.length,
-      hiddenCount: mixedEntries.length - foldedIds.length,
-      isOverflowing: true,
-    });
-  });
-
-  it('reveals the current entry according to the selected policy', () => {
-    const view = collapse(mixedEntries, { ...options, isActiveEntry: (entry) => entry.id === 'current' });
-    const expectedIds = activeIds ?? mixedEntries.map((entry) => entry.id);
-    expect(view.visibleEntries.map((entry) => entry.id)).toEqual(expectedIds);
-    expect(view.hiddenCount).toBe(mixedEntries.length - expectedIds.length);
-  });
-
-  it.each(['showAll', 'disableCollapse', 'isFiltering'] as const)('shows every match when %s is set', (flag) => {
-    expect(collapse(mixedEntries, { ...options, [flag]: true })).toEqual({
-      visibleEntries: mixedEntries,
-      totalCount: mixedEntries.length,
-      hiddenCount: 0,
-      isOverflowing: false,
-    });
   });
 });

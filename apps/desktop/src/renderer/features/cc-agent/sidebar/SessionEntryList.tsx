@@ -61,13 +61,10 @@ export interface SessionEntryListProps {
    * 仅时间排序视图会注入;项目分组下不传(项目名已由 ProjectNode 表头承载)。
    */
   sourceLabelMap?: ReadonlyMap<string, string>;
-  /** 启用闲置折叠（保留需关注、运行中、置顶与当前会话）。不传则全量渲染。 */
+  /** 启用「最多显示 N 条 + 显示全部」折叠(保留需关注 / 当前会话)。不传则全量渲染。 */
   collapsible?: boolean;
-  /** 默认模式保留在收起视图中的最少条目数。 */
+  /** collapsible 时的显示上限(由调用方按场景给:对话段 / 项目内会话各自不同)。 */
   collapseLimit?: number;
-  /** 带标题操作的分组受控展开，底部只保留快捷展开入口。 */
-  showAll?: boolean;
-  onShowAllChange?: (showAll: boolean) => void;
   /** collapsible 时临时禁用(如按内容搜索/筛选中,应展开全部命中)。 */
   disableCollapse?: boolean;
   /**
@@ -199,24 +196,19 @@ export function SessionEntryRows({
   );
 }
 
-type SessionEntryListViewInput = Pick<
-  SessionEntryListProps,
-  'sessions' | 'activeSessionId' | 'runningSessionIds' | 'notifications' |
-  'scheduleSessionIndex' | 'collapsible' | 'collapseLimit' | 'disableCollapse' | 'foldExemptSessionIds'
->;
-
-/** Share the folded result between a group's title action and its task list. */
-export function useSessionEntryListView({
+export function SessionEntryList({
   sessions,
-  activeSessionId,
-  runningSessionIds,
   notifications,
   scheduleSessionIndex,
   collapsible = false,
   collapseLimit,
   disableCollapse = false,
+  sectionCollapsed = false,
   foldExemptSessionIds,
-}: SessionEntryListViewInput) {
+  ...props
+}: SessionEntryListProps) {
+  const { t } = useTranslation();
+  const [showAll, setShowAll] = useCollapsibleShowAll(sectionCollapsed);
   const nowMs = useSidebarActivityNow();
   const { idleCollapseEnabled } = useSidebarIdleCollapse();
   const entries = useMemo(
@@ -224,67 +216,51 @@ export function useSessionEntryListView({
     [notifications, scheduleSessionIndex, sessions],
   );
 
-  // 默认保留前 N 条；开启闲置折叠后按活动时间收起，需关注等任务继续保留。
+  if (!collapsible) {
+    return (
+      <SessionEntryRows
+        entries={entries}
+        notifications={notifications}
+        foldExemptSessionIds={foldExemptSessionIds}
+        {...props}
+      />
+    );
+  }
+
+  // 对话段与项目内会话共用这套折叠:默认前 N 条 + 永远保留 24h 内活动 /
+  // 需关注 / 运行中 / 当前打开的会话;超出收起,底部「显示全部 N 个」一次展开。
   // running 豁免与上层聚合灯同口径(Greptile P1):项目行/设备段头的呼吸灯为
   // running 会话点亮,该会话就不能折进「显示全部」——灯亮进去必须找得到行。
   // foldExemptSessionIds 供父层追加口径(如展开态并入 device-link 远程镜像)。
-  const folded = useMemo(
-    () => getSidebarSessionCollapseView({
-      entries,
-      minVisibleCount: collapseLimit,
-      showAll: false,
-      disableCollapse: disableCollapse || !collapsible,
-      isFiltering: false,
-      nowMs,
-      idleCollapseEnabled,
-      getActivityMs: getEntryActivityMs,
-      isActiveEntry: (entry) => entryIsActive(entry, activeSessionId),
-      hasAttentionEntry: (entry) =>
-        entryHasAttention(entry, notifications) ||
-        entryHasAttention(entry, runningSessionIds) ||
-        (entry.kind === 'session' ? !!entry.session.pinnedAt : entry.group.sessions.some((s) => !!s.pinnedAt)) ||
-        (foldExemptSessionIds != null && entryHasAttention(entry, foldExemptSessionIds)),
-    }),
-    [entries, collapseLimit, disableCollapse, collapsible, nowMs, idleCollapseEnabled,
-      activeSessionId, notifications, runningSessionIds, foldExemptSessionIds],
-  );
-  return { entries, folded, canToggleIdle: idleCollapseEnabled && folded.isOverflowing };
-}
-
-export function SessionEntryList(props: SessionEntryListProps) {
-  const view = useSessionEntryListView(props);
-  const { sessions, scheduleSessionIndex, collapsible, collapseLimit, disableCollapse, ...contentProps } = props;
-  return <SessionEntryListContent {...contentProps} view={view} />;
-}
-
-export function SessionEntryListContent({
-  view,
-  showAll: controlledShowAll,
-  onShowAllChange,
-  sectionCollapsed = false,
-  ...props
-}: Omit<SessionEntryListProps, 'sessions' | 'scheduleSessionIndex' | 'collapsible' | 'collapseLimit' | 'disableCollapse'> & {
-  view: ReturnType<typeof useSessionEntryListView>;
-}) {
-  const { t } = useTranslation();
-  const [localShowAll, setLocalShowAll] = useCollapsibleShowAll(sectionCollapsed);
-  const showAll = controlledShowAll ?? localShowAll;
-  const setShowAll = onShowAllChange ?? setLocalShowAll;
-  const { visibleEntries, isOverflowing, hiddenCount } = view.folded;
-
-  // 有标题按钮的分组即使没有可见任务，也可以从标题展开。
-  const hasHeaderToggle = view.canToggleIdle && controlledShowAll !== undefined;
-  const showFooter = showAll
-    ? view.canToggleIdle && !hasHeaderToggle
-    : isOverflowing && (!hasHeaderToggle || visibleEntries.length > 0);
+  // 开启闲置折叠后普通任务按活动时间收起(置顶也保留),展开后底部可收回。
+  const { visibleEntries, isOverflowing, totalCount } = getSidebarSessionCollapseView({
+    entries,
+    minVisibleCount: collapseLimit,
+    showAll: false,
+    disableCollapse,
+    isFiltering: false,
+    nowMs,
+    idleCollapseEnabled,
+    getActivityMs: getEntryActivityMs,
+    isActiveEntry: (entry) => entryIsActive(entry, props.activeSessionId),
+    hasAttentionEntry: (entry) =>
+      entryHasAttention(entry, notifications) ||
+      entryHasAttention(entry, props.runningSessionIds) ||
+      (idleCollapseEnabled &&
+        (entry.kind === 'session' ? !!entry.session.pinnedAt : entry.group.sessions.some((s) => !!s.pinnedAt))) ||
+      (foldExemptSessionIds != null && entryHasAttention(entry, foldExemptSessionIds)),
+  });
+  const canCollapseAgain = showAll && idleCollapseEnabled && isOverflowing;
 
   return (
     <>
       <SessionEntryRows
-        entries={showAll ? view.entries : visibleEntries}
+        entries={showAll ? entries : visibleEntries}
+        notifications={notifications}
+        foldExemptSessionIds={foldExemptSessionIds}
         {...props}
       />
-      {showFooter && (
+      {((!showAll && isOverflowing) || canCollapseAgain) && (
         <button
           type="button"
           className={cn(
@@ -296,7 +272,7 @@ export function SessionEntryListContent({
         >
           {showAll
             ? t('ccAgent.sidebar.collapseInactiveSessions')
-            : t('ccAgent.sidebar.showMoreSessions', { count: hiddenCount })}
+            : t('ccAgent.sidebar.showAllSessions', { count: totalCount })}
         </button>
       )}
     </>

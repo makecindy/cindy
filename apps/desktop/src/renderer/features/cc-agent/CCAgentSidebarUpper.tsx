@@ -219,7 +219,6 @@ import {
   holdSidebarViewedPriority,
   ProjectsSection,
   SessionGroupNode,
-  ShowAllEntriesButton,
   viewedPriorityHold,
 } from './sidebar/sections/ProjectsSection';
 import { advanceViewedPriorityHold, partitionCindyMakeSessions, sortSessionsForMainList } from './lib/mainListModel';
@@ -277,7 +276,7 @@ import {
   getProjectSessionCollapseLimit,
 } from './lib/sidebarCollapseConfig';
 import { getSessionListCollapseView } from './lib/sessionListCollapse';
-import { SidebarActivityClock } from './sidebar/SidebarActivityClock';
+import { SidebarActivityClock, useSidebarIdleCollapse } from './sidebar/SidebarActivityClock';
 import { hasSessionSelectionModifier, type SessionClickModifiers } from './sidebar/SessionItem';
 import { sessionMoveFailureFeedback } from '../../../shared/worktreeMoveGuardError';
 import type { CreateProjectFromTaskResult } from '../../../shared/projectsRoot';
@@ -947,6 +946,7 @@ function ExpandedView({
   persistentLocalProjects,
 }: ExpandedProps) {
   const { t, i18n } = useTranslation();
+  const { idleCollapseEnabled } = useSidebarIdleCollapse();
   const location = useLocation();
   const localPlatform = window.electronAPI.platform;
   const sessions = useMemo(
@@ -3878,8 +3878,8 @@ function ExpandedView({
                       notifications={sidebarNotifications}
                       scheduleSessionIndex={automationGroupingIndex}
                       selectedSessionIds={selectedSessionIds}
-                      // 置顶项目在任务列表只跟随状态筛选，收件箱的置顶快捷入口独立于筛选。
-                      disableSessionCollapse={taskListMode === 'tasks' && filter.status !== 'active'}
+                      // 闲置折叠开启时，置顶项目在任务列表只跟随状态筛选；收件箱的置顶快捷入口独立于筛选。
+                      disableSessionCollapse={idleCollapseEnabled && taskListMode === 'tasks' && filter.status !== 'active'}
                       onToggle={collapse.toggle}
                       onSettings={setSettingsProject}
                       onRenameProject={handleProjectAliasChange}
@@ -4036,7 +4036,6 @@ function ExpandedView({
           与「显示全部」),见 railPanelStore 头注。 */}
       <RailPanels
         projects={visibleRailProjectsWithVendor}
-        disableSessionCollapse={filter.isSessionContentFiltered}
         sortBy={filter.sortBy}
         unclassified={railUnclassified}
         dialogues={railDialogues}
@@ -4298,7 +4297,6 @@ function RailPanelShell({
 interface RailPanelsProps {
   sortBy: Parameters<typeof sortSessionsForMainList>[1];
   projects: ProjectNode[];
-  disableSessionCollapse: boolean;
   /** 未分类(草稿等)会话——展开态 UnclassifiedSection 同源,面板内平铺在项目列表之上。 */
   unclassified: Session[];
   dialogues: Session[];
@@ -4331,14 +4329,14 @@ interface RailPanelsProps {
 /**
  * RailPanels — 折叠 rail「项目 / 对话」的二级(+项目三级)面板。
  * 由 ExpandedView 渲染以直连其全套会话 handler(见 railPanelStore 头注);
- * 会话行复用 SessionEntryList；项目列表与展开态共用「再显示 N 项」页脚。
+ * 会话行 = SessionEntryList 原装(SessionItem 全量行为 + 折叠上限 +
+ * 「显示全部 N 项」页脚),与展开态零差异:
  *   - 对话面板:collapseLimit = getDialogueCollapseLimit()(默认 10,24h 活动豁免);
  *   - 项目内会话:collapseLimit = getProjectSessionCollapseLimit()(默认 5);
  *   - 项目列表:getProjectCollapseLimit()(默认 20)纯硬性上限 + 同款页脚。
  */
 function RailPanels({
   projects: inputProjects,
-  disableSessionCollapse,
   unclassified: inputUnclassified,
   dialogues: inputDialogues,
   sortBy,
@@ -4392,7 +4390,7 @@ function RailPanels({
   // Lead 的 kind 已并入其 Worker 的出错 / 等待确认(notifications 由 ExpandedView 同口径合并)。
   const attentionKinds = useSessionAttentionKindsWithOrcaLeads();
   const urgentSet = useSessionAttentionUrgencySet();
-  // 项目列表展开状态在面板关闭后复位，与 ProjectsSection 的段收起一致。
+  // 项目列表「显示全部」:面板关闭后复位(与 ProjectsSection 的段收起复位同语义)。
   const [showAllProjects, setShowAllProjects] = useState(false);
   useEffect(() => {
     if (panelState.openSection !== 'projects') {
@@ -4617,14 +4615,14 @@ function RailPanels({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- remoteActivityRevision 代表 remoteLampOf 读到的整表内容
   }, [notifications, dialogues, unclassified, projects, cindyMake, remoteActivityRevision]);
 
-  // 项目列表默认显示前 20 项，页脚按实际隐藏的项目数计数。
+  // 项目列表折叠:纯硬性上限(ProjectsSection 同口径,默认 20)+「显示全部 N 项」。
   const projectsView = useMemo(
     () =>
       getSessionListCollapseView({
         entries: projects,
         minVisibleCount: getProjectCollapseLimit(),
         showAll: showAllProjects,
-        disableCollapse: disableSessionCollapse,
+        disableCollapse: false,
         isFiltering: false,
         isActiveEntry: (p) => p.sessions.some((s) => s.id === visibilityActiveId),
         // 豁免并入本地 running:第 20 名开外的项目若有会话在跑,rail 段灯已在
@@ -4633,7 +4631,7 @@ function RailPanels({
         hasAttentionEntry: (p) =>
           p.sessions.some((s) => panelNotifications.has(s.id) || runningSessionIds.has(s.id)),
       }),
-    [projects, showAllProjects, disableSessionCollapse, visibilityActiveId, panelNotifications, runningSessionIds],
+    [projects, showAllProjects, visibilityActiveId, panelNotifications, runningSessionIds],
   );
 
   const entryListShared = {
@@ -4740,7 +4738,6 @@ function RailPanels({
                 sessions={dialogues}
                 {...entryListShared}
                 collapsible
-                disableCollapse={disableSessionCollapse}
                 collapseLimit={getDialogueCollapseLimit()}
               />
             </div>
@@ -4763,7 +4760,7 @@ function RailPanels({
                   onToggle={() => setCindyMakeCollapsed((value) => !value)}
                   isCreateDisabled={false}
                   parentSectionCollapsed={false}
-                  disableSessionCollapse={disableSessionCollapse}
+                  disableSessionCollapse={false}
                   sessionVariant="text"
                 />
               )}
@@ -4774,7 +4771,6 @@ function RailPanels({
                   sessions={unclassified}
                   {...entryListShared}
                   collapsible
-                  disableCollapse={disableSessionCollapse}
                   collapseLimit={getProjectSessionCollapseLimit()}
                 />
               )}
@@ -4859,10 +4855,17 @@ function RailPanels({
                 );
               })}
               {projectsView.isOverflowing && (
-                <ShowAllEntriesButton
-                  count={projectsView.hiddenCount}
+                <button
+                  type="button"
+                  className={cn(
+                    'flex h-6 w-full items-center justify-center rounded-full px-2 text-xs font-normal',
+                    'text-[var(--cmd-palette-item-meta)] transition-colors hover:bg-sidebar-item-hover hover:text-foreground',
+                    'focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--focus-ring)]',
+                  )}
                   onClick={() => setShowAllProjects(true)}
-                />
+                >
+                  {t('ccAgent.sidebar.showAllSessions', { count: projectsView.totalCount })}
+                </button>
               )}
             </div>
           </>
@@ -4902,7 +4905,6 @@ function RailPanels({
               sessions={openProject.sessions}
               {...entryListShared}
               collapsible
-              disableCollapse={disableSessionCollapse}
               collapseLimit={getProjectSessionCollapseLimit()}
             />
           </div>

@@ -54,6 +54,7 @@ import {
 } from './projectCollapsedAttention';
 import { AutomationTimerIcon } from './AutomationTimerIcon';
 import { SessionCard } from './SessionCard';
+import { useSidebarActivityNow } from './SidebarActivityClock';
 import { sessionRowKey } from './sessionRowKey';
 import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopover';
 import type { SessionMoveTarget } from './sessionMoveTarget';
@@ -233,7 +234,8 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
     // childView 的 24h 豁免依赖实时 now,必须每次渲染直接算,不能进 useMemo —— 否则依赖项
     // 不变时时间窗口会被冻结,跨过 24h 阈值的运行不会及时移出豁免。与普通对话列表
     // SessionEntryList 一致(它也是 render 内直接算 getSessionListCollapseView、不 memo);
-    // 计算本身是 O(组内运行数) 的轻量过滤,无需 memo。
+    // 计算本身是 O(组内运行数) 的轻量过滤,无需 memo。闲置收起开启时 now 来自受交互保护的侧栏时钟。
+    const activityNow = useSidebarActivityNow();
     const childView = getAutomationGroupChildView(group, {
       notifications,
       runningSessionIds,
@@ -241,7 +243,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
       activeSessionId,
       frozenVisibleSessionIds: frozen?.visibleSessionIds ?? null,
       // 实时 now:启用「最近 24h 内有活动不折叠」豁免,和普通对话列表一致。
-      nowMs: Date.now(),
+      nowMs: activityNow,
       collapsed,
       collapsedAttentionSessionIds,
       headerSessionId,
@@ -812,7 +814,6 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                               <button
                                 type="button"
                                 data-automation-group-inline-action="true"
-                                data-sidebar-activity-overlay={menuOpen ? '' : undefined}
                                 onClick={(event) => {
                                   event.stopPropagation();
                                   event.currentTarget.blur();
