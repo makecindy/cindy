@@ -33,7 +33,8 @@
 | 文档 | 内容 |
 |---|---|
 | [自有电脑验证 Host](owned-machine-verification.md) | 三个平台的任务内工具链、Host 门禁，以及发布前的 macOS 文件监听和桌面测试 |
-| [headless-runtime-plan.md](headless-runtime-plan.md) | 当前架构目标、能力缺口、分批交付与完整无界面验收 |
+| [headless-runtime-plan.md](headless-runtime-plan.md) | 当前架构目标、分阶段路线、能力缺口、分批交付与完整无界面验收 |
+| [phase0-sealed-work.md](phase0-sealed-work.md) | 阶段 0 封存清单：2026-11 封存的工作线、已证实的发现、已进入主线的独立修复与重启前提 |
 | [architecture-and-status.md](architecture-and-status.md) | 原 PR 阶段的模块分析与实验记录；现状以基础网页版和当前计划为准 |
 | [maintenance-plan.md](maintenance-plan.md) | PR #9246 合并后的维护计划与逐批验收边界 |
 | [feature-parity.md](feature-parity.md) | 原 PR 阶段的逐项功能记录与审计，保留历史验证范围 |
