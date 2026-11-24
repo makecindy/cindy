@@ -12839,16 +12839,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           message: `session ${targetSessionId} not found`,
         };
       }
-      // The group dispatcher owns the turn and publishes its reply from this group lane.
-      const managedGroupTurn = (hostDispatch === 'group' && dispatchCompanionLink?.role === 'group')
-        || (hostDispatch === 'group-assistant' && !dispatchCompanionLink);
-      if (meta.agentKind === 'acp' && params.origin?.kind !== 'orca' && !managedGroupTurn) {
-        return {
-          ok: false as const,
-          errorCode: 'UNSUPPORTED_CAPABILITY' as const,
-          message: `session ${targetSessionId} runs on a plugin engine; sending messages to it is not supported yet`,
-        };
-      }
       const targetAgentKind: EngineKind = meta.agentKind;
       if (dbRow.status === 'archived') {
         return {
@@ -13172,9 +13162,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           resumeSessionId: meta.sdkSessionId,
           // 插件任务的档位由用户在任务设置里给定(errand 还会再收窄),不能借 lazy-resume
           // 的缺省 bypass 提权;档位不一致还会让 errand 复用判定每轮都失败、另开新会话
-          // (#5788)。由宿主的插件派发、伙伴后台任务派发等入口显式要求,未要求的 main 侧
-          // 通路(Orca 派活等)保持既有缺省。
-          permissionMode: params.resumeWithStoredPermissionMode
+          // (#5788)。插件引擎(acp)任务同样沿用落库权限档与 effort，防止跨任务投递静默提权。
+          permissionMode: params.resumeWithStoredPermissionMode || targetAgentKind === 'acp'
             ? permissionModeOrAsk(dbRow.permissionMode)
             : 'bypassPermissions',
           // 计划模式同理按落库状态起档,运行态才与库内一致(心跳等权限边界读取方要求两者
@@ -13186,6 +13175,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           // 订阅 / 自定义来源的伙伴会以 AGENT_NOT_READY 起不来,委派结果停在外发
           // 队列里,表现就是「对方做完了,发起方没被叫醒」。
           ...(dbRow.providerId ? { providerId: dbRow.providerId } : {}),
+          ...(dbRow.effort ? { effort: dbRow.effort as CreateOpts['effort'] } : {}),
+          ...(dbRow.agentDeviceId ? { agentDeviceId: dbRow.agentDeviceId } : {}),
         });
         await synthesizeOrcaVendorOptionsFromDb(targetSessionId, createOpts);
         if (createOpts.extraDirs === undefined) {
@@ -13286,6 +13277,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             clientId,
             'send_to_session:resumed:failed-before-dispatch',
           );
+        }
+        if (
+          err instanceof Error
+          && err.name === 'AcpResumeUnavailableError'
+          && (err as { why?: unknown }).why === 'unsupported'
+        ) {
+          return {
+            ok: false as const,
+            errorCode: 'UNSUPPORTED_CAPABILITY' as const,
+            message: `session ${targetSessionId} runs on a plugin engine that does not support resuming dormant sessions: ${err.message}`,
+          };
         }
         return {
           ok: false as const,

@@ -321,4 +321,9 @@ describe('cross-device send_to_session sender', () => {
     expect(late).toMatchObject({ ok: false, errorCode: 'DELIVERY_UNKNOWN' });
     expect(JSON.stringify(late)).not.toContain('old account task');
   });
+
+  it('accepts plugin-engine agentKind "acp" in remote handoff receipts', async () => {
+    const { send } = setup({ ok: true, result: { ...accepted, agentKind: 'acp', wakeKind: 'resumed' } });
+    expect(await send()).toMatchObject({ ok: true, agentKind: 'acp', wakeKind: 'resumed' });
+  });
 });

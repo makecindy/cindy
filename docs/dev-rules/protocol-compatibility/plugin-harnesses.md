@@ -79,6 +79,8 @@ worktree 或 SSH Lead 时拒绝（INVALID_PARAMS）。`maker:worker:list` 与团
 `pluginEngineTrustedCaller`（只 acp 引擎读取，不跨端）。回归见 `orcaWorkerCreationService.test.ts`「plugin engine Worker」、maker-core
 `acp-session.test.ts`（briefing / trusted caller）、renderer `CreateWorkerPopover.test.tsx` 与 maker-shared `orcaTeam.test.ts`。
 
+跨任务投递（`send_to_session` jump）：本机与跨电脑（`deviceId::sessionId`）向已有插件引擎任务投递消息不再统一报 `UNSUPPORTED_CAPABILITY`。休眠任务的 lazy-resume 强制沿用任务落库的 `permissionMode` 与 `effort`（不提权到 `bypassPermissions`）；目标插件引擎不支持 `session/resume` / `session/load`（`AcpResumeUnavailableError(reason='unsupported')`）时返回 `UNSUPPORTED_CAPABILITY` 并说明原因。`sessionHandoffRemote` 的回执 `agentKind` 接受 `'acp'`；旧版发送端收到 `'acp'` 按既有未知 `agentKind` 降级，不新增 wire channel 或字段。
+
 ## 免装远程调用与跨账号分享插件引擎（2026-11-21）
 
 任务在 A(文件、命令与任务记录所在)，Agent 用 B 上插件提供的引擎运行；B 可以是同账号的另一台电脑，也可以是跨账号分享给 A 的直连分享来源(`share:<shareId>`)。A 上无需预装对应的 `.cindy` 插件或 CLI。复用 [远程 Agent](remote-agent.md) 的 `maker:remote-agent:v1`、影子目录、工具隧道与 `provider-share-v1` 直连通道，不新增 wire channel、relay kind 或服务端表结构，官方与自建中转无需修改即可转发既有帧。

@@ -28,7 +28,7 @@ import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import { normalizeAutoTitle } from '@cindy/maker-shared/session-title';
-import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, AUTO_REVIEW_DELEGATED_CONTINUATION, TurnDispatchRejectedError, type SendOptions } from '@cindy/maker-core';
+import { AcpResumeUnavailableError, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, AUTO_REVIEW_DELEGATED_CONTINUATION, TurnDispatchRejectedError, type SendOptions } from '@cindy/maker-core';
 import { restoreAutoReviewUserIntent } from '../autoReviewUserIntent.js';
 import { verifiedOwnerRequestText } from '../../../shared/forwardedRequest.js';
 import { createWireNoteMemory } from '../wireNoteMemory.js';
@@ -53,9 +53,9 @@ function lazyResumeCreateOpts(): string {
 }
 
 describe('sendToSessionInternal lazy-resume permission mode', () => {
-  it('restores the stored permission mode when the host asks for it', () => {
+  it('restores the stored permission mode when the host asks for it or target is acp', () => {
     expect(lazyResumeCreateOpts()).toContain(
-      `permissionMode: params.resumeWithStoredPermissionMode
+      `permissionMode: params.resumeWithStoredPermissionMode || targetAgentKind === 'acp'
             ? permissionModeOrAsk(dbRow.permissionMode)
             : 'bypassPermissions',`,
     );
@@ -500,15 +500,11 @@ describe('external handoff to hidden group lanes', () => {
     const h = groupHarness(false, { maker });
     const input = { targetSessionId: 'child', message: 'Reply to the group', clientId: 'bot-group:managed-turn' };
     expect(await h.sendToSessionInternal(input)).toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
-    expect(await h.dispatchBotSessionMessage(input)).toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
     expect(await h.groupDispatch(input)).toMatchObject({ ok: true, wakeKind: 'queued', queuedMessageId: input.clientId });
     expect(h.scope.enqueueSendToSessionMessage).toHaveBeenCalledTimes(1);
 
     const ordinary = botTaskDispatchHarness({ child: { permissionMode: 'ask', planModeEnabled: false } }, {}, { maker });
-    expect(await ordinary.groupDispatch(input)).toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
-    expect(ordinary.scope.enqueueSendToSessionMessage).not.toHaveBeenCalled();
     const visible = { ...input, groupAssistantTask: true };
-    expect(await ordinary.sendToSessionInternal(visible)).toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
     expect(await ordinary.groupDispatch(visible)).toMatchObject({ ok: true, wakeKind: 'queued' });
     expect(ordinary.scope.enqueueSendToSessionMessage).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
       targetSessionId: visible.targetSessionId, clientId: visible.clientId,
@@ -551,6 +547,102 @@ describe('external handoff to hidden group lanes', () => {
     expect(await h.ensureGroupAssistantSession(request)).toMatchObject({ ok: false });
     expect(openSession).toHaveBeenCalledTimes(1);
     push(undefined);
+  });
+
+  it('delivers to an ordinary plugin-engine session preserving stored permissionMode, effort, and agentDeviceId on lazy resume', async () => {
+    const maker = {
+      getSession: () => undefined,
+      getSessionMeta: async () => ({
+        id: 'acp-task',
+        agentKind: 'acp',
+        workDir: '/tmp/proj',
+        model: 'gemini-4-neon',
+        sdkSessionId: 'native-acp-1',
+      }),
+    };
+    const h = botTaskDispatchHarness(
+      { 'acp-task': { permissionMode: 'auto', planModeEnabled: false } },
+      {},
+      {
+        maker,
+        getSessionRowSnapshot: async () => ({
+          status: 'active',
+          title: 'ACP Task',
+          userSendAt: null,
+          providerId: 'acp-plugin:agy-acp:agy',
+          permissionMode: 'auto',
+          planModeEnabled: false,
+          effort: 'high',
+          agentDeviceId: 'device-b',
+        }),
+      },
+    );
+    const res = await h.sendToSessionInternal({
+      targetSessionId: 'acp-task',
+      message: 'Follow up on investigation',
+      dispatcherSessionId: 'caller-task',
+    });
+    expect(res).toMatchObject({ ok: true, agentKind: 'acp', wakeKind: 'resumed' });
+    expect(h.bootstrapped).toHaveLength(1);
+    expect(h.bootstrapped[0]).toMatchObject({
+      id: 'acp-task',
+      agentKind: 'acp',
+      permissionMode: 'auto',
+      effort: 'high',
+      providerId: 'acp-plugin:agy-acp:agy',
+      agentDeviceId: 'device-b',
+    });
+  });
+
+  it('maps unsupported AcpResumeUnavailableError to UNSUPPORTED_CAPABILITY on lazy resume', async () => {
+    const maker = {
+      getSession: () => undefined,
+      getSessionMeta: async () => ({
+        id: 'acp-no-resume',
+        agentKind: 'acp',
+        workDir: '/tmp/proj',
+        model: 'default',
+        sdkSessionId: 'native-no-resume',
+      }),
+    };
+    const resumeErr = new AcpResumeUnavailableError('native-no-resume', 'unsupported');
+    const h = botTaskDispatchHarness(
+      { 'acp-no-resume': { permissionMode: 'ask', planModeEnabled: false } },
+      {},
+      {
+        maker,
+        bootstrapSession: async () => { throw resumeErr; },
+      },
+    );
+    const res = await h.sendToSessionInternal({
+      targetSessionId: 'acp-no-resume',
+      message: 'Wake up',
+      dispatcherSessionId: 'caller-task',
+    });
+    expect(res).toMatchObject({
+      ok: false,
+      errorCode: 'UNSUPPORTED_CAPABILITY',
+      message: expect.stringContaining('does not support resuming dormant sessions'),
+    });
+
+    const failedErr = new AcpResumeUnavailableError('native-no-resume', 'failed');
+    const hFailed = botTaskDispatchHarness(
+      { 'acp-no-resume': { permissionMode: 'ask', planModeEnabled: false } },
+      {},
+      {
+        maker,
+        bootstrapSession: async () => { throw failedErr; },
+      },
+    );
+    const resFailed = await hFailed.sendToSessionInternal({
+      targetSessionId: 'acp-no-resume',
+      message: 'Wake up',
+      dispatcherSessionId: 'caller-task',
+    });
+    expect(resFailed).toMatchObject({
+      ok: false,
+      errorCode: 'AGENT_NOT_READY',
+    });
   });
 
   it('preserves host continuations inside a group lane', async () => {
