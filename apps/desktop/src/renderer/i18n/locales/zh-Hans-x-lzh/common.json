@@ -12938,6 +12938,13 @@
       "toggle": "启「{{name}}」",
       "manage": "于自运之页管理",
       "create": "往自运之页新建"
+    },
+    "appearance": {
+      "title": "仪容",
+      "hint": "唯行于此机。启此同伴之言谈时，全窗易为此所择之主题与壁纸；去之则复应用之仪容。",
+      "theme": "主题",
+      "wallpaper": "壁纸",
+      "followGlobal": "从应用之设"
     }
   },
   "common": {

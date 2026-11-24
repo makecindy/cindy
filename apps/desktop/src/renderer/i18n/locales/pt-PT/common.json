@@ -13086,6 +13086,13 @@
       "toggle": "Ativar «{{name}}»",
       "manage": "Gerir em Automatizações",
       "create": "Criar em Automatizações"
+    },
+    "appearance": {
+      "title": "Aspeto",
+      "hint": "Aplica-se apenas neste computador. Enquanto a conversa com este Amigo estiver aberta, toda a janela usa o tema e a imagem de fundo escolhidos aqui; ao sair, volta ao aspeto da app.",
+      "theme": "Tema",
+      "wallpaper": "Imagem de fundo",
+      "followGlobal": "Usar definição da app"
     }
   },
   "common": {

@@ -8,6 +8,7 @@ import { BotGroupSettingsDrawer } from './BotGroupSettingsDrawer';
 import { GroupMaskProvider } from './GroupMaskProvider';
 import { useBotProfiles } from './botStore';
 import { useBotGroupSummary } from './botGroupStore';
+import { useBotAppearanceOverride } from './botAppearance';
 
 /**
  * 外层任务布局统一注册侧栏；只有活动伙伴面板拥有窗口的设置抽屉。
@@ -20,6 +21,8 @@ export function BotsFeatureLayout() {
   const navigate = useNavigate();
   const bots = useBotProfiles();
   const selectedGroup = useBotGroupSummary(groupId ?? null);
+  // Only the focused pane dresses the window in a teammate's own theme and wallpaper.
+  useBotAppearanceOverride(focused && botId ? botId : null);
   const previousGroup = useRef(selectedGroup);
   useEffect(() => {
     const previous = previousGroup.current;

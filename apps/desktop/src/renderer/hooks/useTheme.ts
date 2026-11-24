@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { createElement, type ReactNode } from 'react';
 import { flushSync } from 'react-dom';
 
@@ -11,6 +11,7 @@ import {
 import { onLocalThemesChange } from '../themes/local-themes';
 import { prepareThemeSelection, presentTheme } from '../appearance/AppearancePresenter';
 import { AppearanceMotionContext } from '../appearance/AppearanceMotionContext';
+import { getAppearanceOverride, useAppearanceOverrideFamilyId } from '../appearance/appearanceOverride';
 import type { ThemeType } from '../themes/types';
 
 export type Theme = 'system' | 'light' | 'dark';
@@ -98,9 +99,19 @@ export function getStoredFamilyId(): string {
   return DEFAULT_FAMILY_ID;
 }
 
+/**
+ * A view-scoped override (a teammate's own theme) wins over the saved family while it is
+ * shown. It is never written to storage; an ID that no longer resolves (a removed local
+ * theme) falls back to the saved family.
+ */
+function overrideFamilyId(): string | null {
+  const id = getAppearanceOverride()?.familyId;
+  return id && tryGetFamily(id) ? id : null;
+}
+
 function resolveActiveTheme(mode: Theme) {
   const isDark = resolveIsDark(mode);
-  return resolveFamilyVariant(getStoredFamilyId(), isDark ? 'dark' : 'light');
+  return resolveFamilyVariant(overrideFamilyId() ?? getStoredFamilyId(), isDark ? 'dark' : 'light');
 }
 
 function resolveSessionActiveTheme(mode: Theme) {
@@ -294,6 +305,13 @@ export function ThemeProvider({
   // Invalidate memos that depend on family membership when local themes change.
   // Read latest values from storage to avoid closure staleness races.
   const [localThemeRev, bumpLocalThemeRev] = useReducer((n: number) => n + 1, 0);
+  const requestedOverrideFamily = useAppearanceOverrideFamilyId();
+  const overrideFamily = useMemo(() => {
+    void localThemeRev;
+    return requestedOverrideFamily && tryGetFamily(requestedOverrideFamily) ? requestedOverrideFamily : null;
+  }, [requestedOverrideFamily, localThemeRev]);
+  // The family actually on screen: a teammate's theme while its chat is open, else the saved one.
+  const shownFamilyId = overrideFamily ?? familyId;
   useEffect(() => onLocalThemesChange(() => {
     let rawFamily: string | null = null;
     try { rawFamily = localStorage.getItem(FAMILY_KEY); } catch { /* ok */ }
@@ -337,11 +355,20 @@ export function ThemeProvider({
     applyThemeClass(theme);
   }, [theme]);
 
+  // Entering or leaving a teammate with its own theme. Mount already applied the right
+  // variant above; only later changes reapply (package defaults follow the shown theme).
+  const appliedOverride = useRef(overrideFamily);
+  useEffect(() => {
+    if (appliedOverride.current === overrideFamily) return;
+    appliedOverride.current = overrideFamily;
+    applyThemeClass(theme, true);
+  }, [overrideFamily, theme]);
+
   useEffect(() => {
     window.electronAPI?.setUpdateRelaunchTheme?.(
       document.documentElement.classList.contains('dark') ? 'dark' : 'light',
     );
-  }, [familyId, systemPrefersDark, theme]);
+  }, [shownFamilyId, systemPrefersDark, theme]);
 
   // OS 色偏好变化: 在 system 模式下重新 apply, 同时同步 systemPrefersDark
   // 让 fallbackFromType 刷新。非 system 模式只同步 state, 不动 DOM。
@@ -385,10 +412,10 @@ export function ThemeProvider({
       if (state === lastState) return;
       lastState = state;
       window.electronAPI?.theme?.applyVibrancy?.(
-        familyId,
+        shownFamilyId,
         resolveSessionIsDark(theme),
         theme,
-        systemModeFollowsSystem(familyId),
+        systemModeFollowsSystem(shownFamilyId),
         covered,
         desktopBlur,
       );
@@ -397,7 +424,7 @@ export function ThemeProvider({
     const observer = new MutationObserver(sync);
     observer.observe(root, { attributes: true, attributeFilter: ['data-wallpaper-active', 'data-desktop-background', 'data-desktop-blur'] });
     return () => observer.disconnect();
-  }, [familyId, localThemeRev, syncWindowVibrancy, theme, systemPrefersDark]);
+  }, [shownFamilyId, localThemeRev, syncWindowVibrancy, theme, systemPrefersDark]);
 
   const fallbackFromType = useMemo<ThemeType | null>(() => {
     void localThemeRev;
@@ -412,7 +439,7 @@ export function ThemeProvider({
     void localThemeRev;
     const active = resolveSessionActiveTheme(theme).theme;
     return !!(active.packageSha256 && active.appearance);
-  }, [familyId, theme, systemPrefersDark, localThemeRev]);
+  }, [shownFamilyId, theme, systemPrefersDark, localThemeRev]);
   const [appearanceReduced, setAppearanceReduced] = useState(false);
   useEffect(() => {
     if (!packageActive) { setAppearanceReduced(false); return; }

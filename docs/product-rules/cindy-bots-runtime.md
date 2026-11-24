@@ -478,6 +478,21 @@ Cindy 应用，也不取消伙伴已开的独立任务。操作中禁用重复�
 实现见 `RemoteTeammateSettings.tsx`、`remoteBotSettingsTarget.ts`、`localBotSettingsTarget.ts`、`BotSettingsDrawer.tsx`，
 主机侧见 `main/localDb/ipc/botRemoteSettingsHost.ts` 与 `botRemoteSettingsOps.ts`；手机见 Mobile `CompanionProfileSheet.tsx`。
 
+### 伙伴外观（2026-11-24，提案，待维护者确认）
+
+伙伴设置首页最后一行「外观」：主题、壁纸各一个下拉，默认「跟随应用设置」。主题可选全部内置与本地主题，
+壁纸可选「无」与内置壁纸（自定义图片仍只走全局壁纸）。焦点所在的伙伴视图（`/bots/:botId/**`，含远程伙伴；
+分屏时只认获得焦点的面板）存在选择时整窗换上它的主题和壁纸，离开或失焦即回到全局外观。远程伙伴所在电脑
+版本过旧、只能用旧版远程设置页时没有这一行。
+
+- 只存本机 renderer localStorage `bots.appearance`（按伙伴 ID 记录显式覆盖），与全局 `theme.familyId`
+  同层；不进伙伴资料、数据库或跨端协议，不写 `appearance-settings.json`，也不改全局主题选择。
+- 覆盖只在内存中投影（`renderer/appearance/appearanceOverride.ts`）：主题经 `useTheme` 的同一解析与
+  `presentTheme` 应用，壁纸经同一张 `WallpaperSettingsProvider` 画布绘制，不新增第二张画布。
+- 指向的本地主题被删除时回落全局，不改写记录；选「跟随应用设置」删除该项。
+- 实现与回归：`features/bots/botAppearance.ts`、`BotAppearanceSettings.tsx`；`useTheme.test.tsx`、
+  `useWallpaperSettings.test.tsx` 的伙伴外观用例。
+
 ### 伙伴的项目在界面上（2026-11-08 主人裁决）
 
 桌面与手机的下列入口按伙伴身份组织项目。IM 项目选择遵循本节末尾的独立约定：

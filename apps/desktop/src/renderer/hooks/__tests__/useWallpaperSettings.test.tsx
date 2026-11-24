@@ -8,6 +8,7 @@ import type { WallpaperDownloadProgress } from '@/../shared/appearanceSettings';
 import manifest from '@/../shared/wallpaper-video-manifest.json';
 import { getBuiltinWallpaperBackground } from '@/lib/wallpaper';
 import { useReducedMotion } from '../useReducedMotion';
+import { BOT_APPEARANCE_STORAGE_KEY, useBotAppearanceOverride } from '@/features/bots/botAppearance';
 
 function Controls() {
   const settings = useWallpaperSettings();
@@ -512,6 +513,33 @@ describe('application wallpaper lifecycle', () => {
     expect(document.documentElement.style.getPropertyValue('--app-wallpaper-image')).toBe('');
     unmount();
     expect(document.documentElement.dataset.wallpaperActive).toBeUndefined();
+  });
+
+  // Teammate appearance: a teammate's own wallpaper is drawn while its chat is open and
+  // the saved setting returns on leaving, without writing appearance settings. Minimal
+  // input: saved "none", a teammate with a built-in still; unit tier, real provider/canvas.
+  it('draws a teammate wallpaper only while its view holds the override, never saving it', () => {
+    const setPatch = vi.fn();
+    vi.stubGlobal('electronAPI', { appearanceSettings: {
+      getSync: () => DEFAULT_APPEARANCE_SETTINGS, onChanged: () => () => {}, setPatch,
+      ensureWallpaperImage: vi.fn().mockResolvedValue(null),
+    } });
+    localStorage.setItem(BOT_APPEARANCE_STORAGE_KEY, JSON.stringify({ 'bot-1': { wallpaperId: 'night-launch' } }));
+    function TeammateView({ botId }: { botId: string | null }) {
+      useBotAppearanceOverride(botId);
+      return null;
+    }
+    const { rerender } = render(
+      <WallpaperSettingsProvider><TeammateView botId="bot-1" /></WallpaperSettingsProvider>,
+    );
+    const root = document.documentElement;
+    expect(root.dataset.wallpaperActive).toBe('true');
+    expect(root.style.getPropertyValue('--app-wallpaper-image'))
+      .toBe(getBuiltinWallpaperBackground('night-launch'));
+    rerender(<WallpaperSettingsProvider><TeammateView botId={null} /></WallpaperSettingsProvider>);
+    expect(root.dataset.wallpaperActive).toBeUndefined();
+    expect(setPatch).not.toHaveBeenCalled();
+    localStorage.clear();
   });
 
   it('applies another window’s settings and removes the image when that window disables it', () => {

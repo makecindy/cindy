@@ -12938,6 +12938,13 @@
       "toggle": "啟「{{name}}」",
       "manage": "於自運之頁管理",
       "create": "往自運之頁新建"
+    },
+    "appearance": {
+      "title": "儀容",
+      "hint": "唯行於此機。啟此同伴之言談時，全窗易為此所擇之主題與桌布；去之則復應用之儀容。",
+      "theme": "主題",
+      "wallpaper": "桌布",
+      "followGlobal": "從應用之設"
     }
   },
   "common": {

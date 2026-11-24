@@ -13086,6 +13086,13 @@
       "toggle": "Ativar “{{name}}”",
       "manage": "Gerenciar em Automações",
       "create": "Criar em Automações"
+    },
+    "appearance": {
+      "title": "Aparência",
+      "hint": "Vale só neste computador. Enquanto a conversa com este Amigo estiver aberta, a janela inteira usa o tema e o papel de parede escolhidos aqui; ao sair, volta à aparência do app.",
+      "theme": "Tema",
+      "wallpaper": "Papel de parede",
+      "followGlobal": "Usar configuração do app"
     }
   },
   "common": {

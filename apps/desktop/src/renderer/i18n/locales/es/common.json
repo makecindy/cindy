@@ -13086,6 +13086,13 @@
       "toggle": "Activar “{{name}}”",
       "manage": "Gestionar en Automatizaciones",
       "create": "Crear en Automatizaciones"
+    },
+    "appearance": {
+      "title": "Apariencia",
+      "hint": "Solo se aplica en esta computadora. Mientras el chat de este Amigo esté abierto, toda la ventana usa el tema y el fondo de pantalla elegidos aquí; al salir, vuelve la apariencia de la app.",
+      "theme": "Tema",
+      "wallpaper": "Fondo de pantalla",
+      "followGlobal": "Usar ajuste de la app"
     }
   },
   "common": {

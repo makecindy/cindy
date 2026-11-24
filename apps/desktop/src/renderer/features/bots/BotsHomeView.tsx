@@ -58,6 +58,7 @@ import { useCompanionCloud } from './companionCloudStore';
 import { cloudCompanionAt, withoutShadowedBots } from './companionCloudPresentation';
 import { BotHomeComputerSetting } from './BotHomeComputerSetting';
 import { CindyMergeSetting } from './CindyMergeSetting';
+import { BotAppearanceSettings } from './BotAppearanceSettings';
 import { BotLifecycleSettings } from './BotLifecycleSettings';
 import { BotInvitationWelcome } from './BotInvitationWelcome';
 import { BotModelChainEditor } from './BotModelChainEditor';
@@ -156,6 +157,7 @@ export function BotSettings({
     | 'memory'
     | 'projects'
     | 'automations'
+    | 'appearance'
   >(initialPage);
   const voiceLeaveRef = useRef<(() => Promise<boolean>) | null>(null);
   const memoryLeaveRef = useRef<(() => Promise<boolean>) | null>(null);
@@ -179,7 +181,9 @@ export function BotSettings({
                   ? t('bots.capabilities.title')
                   : page === 'personality'
                     ? t('bots.profile.personality')
-                    : t('bots.profile.title');
+                    : page === 'appearance'
+                      ? t('bots.appearance.title')
+                      : t('bots.profile.title');
   const [folderError, setFolderError] = useState<string | null>(null);
   const avatarInFlight = useRef(false);
   const [avatarBusy, setAvatarBusy] = useState(false);
@@ -465,6 +469,11 @@ export function BotSettings({
     // The Home folder is a path on the teammate's own computer.
     ['advanced', botSettingsIcons.advanced, t('bots.homeFolder.title')],
   ] as const).filter(([id]) => target.pages.has(id) && (id !== 'automations' || capabilities.projectMode === true));
+  // Appearance is this computer's own display choice, so it is offered for every teammate.
+  const allSettingsRows = [
+    ...settingsRows,
+    ['appearance', botSettingsIcons.appearance, t('bots.appearance.title')] as const,
+  ];
   return (
     <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pb-8">
       <div className="mx-auto w-full max-w-xl">
@@ -521,7 +530,7 @@ export function BotSettings({
               ) : null}
             </div>
             <div className="overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]">
-              {settingsRows.map(([next, Icon, title]) => (
+              {allSettingsRows.map(([next, Icon, title]) => (
                 <button
                   key={next}
                   ref={(node) => {
@@ -753,6 +762,7 @@ export function BotSettings({
             </div> : null}
           </div>
         ) : null}
+        {page === 'appearance' ? <BotAppearanceSettings botId={bot.id} /> : null}
         {page === 'voice' ? (
           <CompanionVoiceSettings botId={bot.id} sessionId={canonicalBotSessionId(bot) ?? undefined}
             beforeLeaveRef={voiceLeaveRef}

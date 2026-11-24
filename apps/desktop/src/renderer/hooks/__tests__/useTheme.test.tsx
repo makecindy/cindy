@@ -14,7 +14,7 @@ import { createElement, type ReactNode } from 'react';
 import '../../themes/colors';
 import { bootstrapLocalThemesSync, getLocalThemes } from '../../themes/local-themes';
 import { themeService } from '../../themes/theme-service';
-import { tryGetFamily } from '../../themes/families';
+import { findFamilyByThemeId, tryGetFamily } from '../../themes/families';
 import { DEFAULT_APPEARANCE_SETTINGS } from '../../../shared/appearanceSettings';
 import type { LocalThemesResult } from '../../../shared/local-themes';
 import {
@@ -25,6 +25,7 @@ import {
   ThemeProvider,
   useTheme,
 } from '../useTheme';
+import { BOT_APPEARANCE_STORAGE_KEY, useBotAppearanceOverride } from '../../features/bots/botAppearance';
 
 const applyVibrancyMock = vi.fn();
 vi.mock('../../lib/toast', () => ({ toast: { error: vi.fn() } }));
@@ -77,6 +78,35 @@ describe('useTheme 跨窗口主题同步(D2-3)', () => {
   // Earlier migration tests asserted the replacement ownership, not this
   // compatibility contract. A throwing Host plus an old dark/default choice
   // reproduces both the startup regression and the lost synchronous setter.
+  // Teammate appearance: opening a teammate's chat shows its own theme family, the
+  // focused pane wins over a background one, and leaving restores the saved family.
+  // The saved `theme.familyId` must never change (it is the global choice). Minimal
+  // input: saved "cindy", teammate "default"; unit tier, real ThemeProvider.
+  it('shows a teammate theme while its view holds the override and restores the saved one', () => {
+    localStorage.setItem('theme.familyId', 'cindy');
+    localStorage.setItem(BOT_APPEARANCE_STORAGE_KEY, JSON.stringify({ 'bot-1': { familyId: 'default' } }));
+    const applied = vi.mocked(themeService.applyTheme);
+    const shownFamily = () => findFamilyByThemeId(applied.mock.lastCall?.[0].id)?.id;
+    const { rerender, unmount } = renderHook(
+      ({ focused, background }: { focused: string | null; background: string | null }) => {
+        useBotAppearanceOverride(focused);
+        useBotAppearanceOverride(background);
+      },
+      { wrapper, initialProps: { focused: 'bot-1' as string | null, background: null as string | null } },
+    );
+    expect(shownFamily()).toBe('default');
+    expect(applyVibrancyMock.mock.lastCall?.[0]).toBe('default');
+    // A background pane releasing (or holding nothing) cannot clear the focused override.
+    rerender({ focused: 'bot-1', background: 'bot-2' });
+    rerender({ focused: 'bot-1', background: null });
+    expect(shownFamily()).toBe('default');
+    rerender({ focused: null, background: null });
+    expect(shownFamily()).toBe('cindy');
+    expect(applyVibrancyMock.mock.lastCall?.[0]).toBe('cindy');
+    expect(localStorage.getItem('theme.familyId')).toBe('cindy');
+    unmount();
+  });
+
   it('starts and switches builtin themes from legacy storage even when Host settings are unreadable', () => {
     const unavailable = vi.fn(() => { throw new Error('Appearance file unreadable'); });
     Object.assign(window.electronAPI, { appearanceSettings: {

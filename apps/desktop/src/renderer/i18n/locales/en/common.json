@@ -12984,6 +12984,13 @@
       "toggle": "Turn on “{{name}}”",
       "manage": "Manage in Automations",
       "create": "Create in Automations"
+    },
+    "appearance": {
+      "title": "Appearance",
+      "hint": "Applies on this computer only. While this Buddy's chat is open, the whole window uses the theme and wallpaper chosen here, then returns to your app appearance.",
+      "theme": "Theme",
+      "wallpaper": "Wallpaper",
+      "followGlobal": "Use app setting"
     }
   },
   "common": {

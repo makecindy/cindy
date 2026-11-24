@@ -12984,6 +12984,13 @@
       "toggle": "„{{name}}“ einschalten",
       "manage": "Unter Automatisierungen verwalten",
       "create": "Unter Automatisierungen erstellen"
+    },
+    "appearance": {
+      "title": "Darstellung",
+      "hint": "Gilt nur auf diesem Computer. Solange der Chat dieses Freundes geöffnet ist, nutzt das ganze Fenster das hier gewählte Design und Hintergrundbild; danach gilt wieder die Darstellung der App.",
+      "theme": "Design",
+      "wallpaper": "Hintergrundbild",
+      "followGlobal": "App-Einstellung verwenden"
     }
   },
   "common": {

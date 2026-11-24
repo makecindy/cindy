@@ -29,6 +29,7 @@ import { useWallpaperAsset } from './useWallpaperAsset';
 import { useWallpaperBackground } from './useWallpaperBackground';
 import { useReducedMotion } from './useReducedMotion';
 import { AppearanceMotionContext } from '../appearance/AppearanceMotionContext';
+import { useAppearanceOverrideWallpaperId } from '../appearance/appearanceOverride';
 import type { DownloadRetryReason } from '@/../shared/downloadProgress';
 
 export interface WallpaperSettings {
@@ -119,13 +120,20 @@ export function WallpaperSettingsProvider({
   const isDark = useIsDarkMode();
   const isDarkRef = useRef(isDark);
   isDarkRef.current = isDark;
-  const visibility = visibilityPreview ?? getBackgroundVisibility(settings, isDark);
+  // A view-scoped wallpaper (a teammate's own) replaces only what is drawn; the saved
+  // settings, and everything the settings page reads and writes, stay unchanged.
+  const overrideWallpaperId = useAppearanceOverrideWallpaperId();
+  const shown = useMemo<WallpaperSettings>(
+    () => (overrideWallpaperId ? { ...settings, wallpaperId: overrideWallpaperId } : settings),
+    [overrideWallpaperId, settings],
+  );
+  const visibility = visibilityPreview ?? getBackgroundVisibility(shown, isDark);
   const reducedMotion = useReducedMotion() || settings.motion === 0;
-  const imageAsset = useWallpaperAsset(settings.wallpaperId, 'image', visibility > 0);
+  const imageAsset = useWallpaperAsset(shown.wallpaperId, 'image', visibility > 0);
   const videoAsset = useWallpaperAsset(
-    settings.wallpaperId,
+    shown.wallpaperId,
     'video',
-    visibility > 0 && settings.wallpaperMotion === 'dynamic' && !reducedMotion,
+    visibility > 0 && shown.wallpaperMotion === 'dynamic' && !reducedMotion,
   );
   const downloadPending = imageAsset.loading || videoAsset.loading;
   const downloadFailed = imageAsset.failed || videoAsset.failed;
@@ -137,27 +145,27 @@ export function WallpaperSettingsProvider({
     imageAsset.retry();
     videoAsset.retry();
   }, [imageAsset.retry, videoAsset.retry]);
-  const customUrl = normalizeCustomWallpaperUrl(settings.customWallpaperUrl);
+  const customUrl = normalizeCustomWallpaperUrl(shown.customWallpaperUrl);
   const background =
-    settings.wallpaperId === 'custom'
+    shown.wallpaperId === 'custom'
       ? customUrl
         ? isCustomWallpaperVideo(customUrl)
-          ? settings.customWallpaperFallbackUrl ? `url("${normalizeCustomWallpaperUrl(settings.customWallpaperFallbackUrl)}")` : 'none'
+          ? shown.customWallpaperFallbackUrl ? `url("${normalizeCustomWallpaperUrl(shown.customWallpaperFallbackUrl)}")` : 'none'
           : `url("${customUrl}")`
         : undefined
       : imageAsset.url
         ? `url("${imageAsset.url}")`
-        : getBuiltinWallpaperBackground(settings.wallpaperId);
+        : getBuiltinWallpaperBackground(shown.wallpaperId);
   useWallpaperBackground({
     background,
     // 0% keeps the original window backdrop (frosted sidebar over the theme material)
     // until opt-in; above it, the sidebar tint follows the same transparency.
-    desktopBackground: desktopBackground && settings.wallpaperId === 'none' && visibility > 0,
+    desktopBackground: desktopBackground && shown.wallpaperId === 'none' && visibility > 0,
     visibility,
     blur: blurPreview ?? settings.wallpaperBlur ?? 0,
     reducedMotion,
     decodeUrl:
-      settings.wallpaperId === 'custom' && !isCustomWallpaperVideo(customUrl)
+      shown.wallpaperId === 'custom' && !isCustomWallpaperVideo(customUrl)
         ? customUrl || undefined
         : undefined,
   });
@@ -349,9 +357,9 @@ export function WallpaperSettingsProvider({
       <WallpaperSettingsContext.Provider value={value}>
         {visibility > 0 && (
           <WallpaperVideo
-            wallpaperId={settings.wallpaperId}
-            motion={settings.wallpaperMotion}
-            customWallpaperUrl={settings.customWallpaperUrl}
+            wallpaperId={shown.wallpaperId}
+            motion={shown.wallpaperMotion}
+            customWallpaperUrl={shown.customWallpaperUrl}
             officialVideoUrl={videoAsset.url}
             onFailure={onPlaybackFailure}
             onReady={onPlaybackReady}

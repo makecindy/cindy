@@ -13086,6 +13086,13 @@
       "toggle": "Activer « {{name}} »",
       "manage": "Gérer dans Automatisations",
       "create": "Créer dans Automatisations"
+    },
+    "appearance": {
+      "title": "Apparence",
+      "hint": "S’applique uniquement sur cet ordinateur. Tant que la conversation avec cet Ami est ouverte, toute la fenêtre utilise le thème et le fond d’écran choisis ici, puis reprend l’apparence de l’app.",
+      "theme": "Thème",
+      "wallpaper": "Fond d’écran",
+      "followGlobal": "Utiliser le réglage de l’app"
     }
   },
   "common": {
