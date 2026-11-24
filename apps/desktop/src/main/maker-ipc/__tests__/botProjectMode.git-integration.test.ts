@@ -27,6 +27,7 @@ vi.mock('@cindy/maker-core', async () => {
 });
 
 import { BOT_PROJECT_MEMORY_GITIGNORE, ensureTeammateProjectIgnored, prepareBotProjectWorkspace, readWorkspaceRepositoryStatus } from '../botProjectMode.js';
+import { BOT_PROJECT_GITIGNORE } from '../botProjectGitignore.js';
 import { legacyTeammateProjectMemoryDir, teammateProjectMemoryDir, teammateWorkspaceDir } from '../botProjectMemory.js';
 import { gitExec } from '../../worktree/gitExec.js';
 import { createShadowSavepoint } from '../../git-snapshot/gitSnapshotService.js';
@@ -226,9 +227,10 @@ describe('buddy repository initialization (#10216)', () => {
     if (await firstPreparationWithUnwritableIgnore('linked_first', 'link') === 'skipped') ctx.skip();
   });
 
-  // Maintainer review 2026-11-24 (07:18): lines were compared trimmed and as a set. Git reads
-  // ` token.json` (leading space) as another pattern, and exceptions written above `.env.*` are
-  // overridden by it, yet both counted as present and the receipt let versions go ahead.
+  // Maintainer review 2026-11-24 (07:18, 08:03): lines were compared trimmed and as a set. Git reads
+  // ` token.json` (leading space) as another pattern, exceptions written above `.env.*` are
+  // overridden by it, and a later `!*.json` lets token.json back in; each counted as present and the
+  // receipt let versions go ahead. The old rules stay at the start; the block goes below them.
   async function preparedWithOldRules(botId: string, rules: string) {
     const workspace = teammateWorkspaceDir(root, botId);
     await fs.mkdir(workspace, { recursive: true });
@@ -256,6 +258,40 @@ describe('buddy repository initialization (#10216)', () => {
 
   it('re-adds env template exceptions an old .gitignore lists above .env.*', async () => {
     await preparedWithOldRules('early_exceptions', '!.env.example\n!.env.sample\n!.env.template\n.env\n.env.*\n');
+  });
+
+  // Maintainer review 2026-11-24 (08:03): a later rule of the owner's matched the file the other way.
+  it('keeps token.json out when an old .gitignore lets JSON back in below it', async () => {
+    await preparedWithOldRules('json_back_in', 'token.json\n!*.json\n');
+  });
+
+  // Review rounds 2026-11-24: each round found one more Git ignore rule our own reading of an old
+  // .gitignore got wrong. The block now goes at the end; Git itself checks the outcome for old files
+  // written to defeat it (later negations, spacing, order, line endings, our block not last).
+  it.each([
+    ['a later !*.json', 'token.json\n!*.json\n'],
+    ['a negated token.json', '!token.json\n'],
+    ['a leading space', ' token.json\n'],
+    ['exceptions above .env.*', '!.env.example\n.env.*\n'],
+    ['CRLF and a negated .env', 'node_modules/\r\n!.env\r\n'],
+    ['no final newline', 'node_modules/'],
+    ['negated folders', '!.venv/\n!venv/\n!.cindy-worktrees/\n!.cindy/memory/MEMORY.md\n'],
+    ['the default list followed by negations', `${BOT_PROJECT_GITIGNORE}!token.json\n!*.pem\n`],
+  ])('completes an old .gitignore with %s so Git ignores what the lists name', async (_name, rules) => {
+    const workspace = teammateWorkspaceDir(root, `adversarial_${rules.length}_${_name.replace(/\W+/g, '_')}`);
+    await fs.mkdir(workspace, { recursive: true });
+    await gitExec(['init'], workspace);
+    await fs.writeFile(path.join(workspace, '.gitignore'), rules);
+    await expect(ensureTeammateProjectIgnored({ workspace })).resolves.toBe('ready');
+    expect((await fs.readFile(path.join(workspace, '.gitignore'), 'utf8')).startsWith(rules)).toBe(true);
+    const ignored = (file: string) => gitExec(['check-ignore', '-q', file], workspace).then(() => true, () => false);
+    for (const file of ['token.json', '.env', '.env.local', 'credentials.json', 'key.pem', '.venv/bin/python', 'venv/lib/x.py',
+      '.cindy-worktrees/t/a.txt', '.agents/skills/a/token.json', '.cindy/memory/MEMORY.md', '.cindy/memory/fts.db']) {
+      expect(await ignored(file), file).toBe(true);
+    }
+    for (const file of ['.env.example', '.cindy/memory/project_launch.md', '.cindy/memory/.cindy-memory-migration-v1.json', 'notes.md']) {
+      expect(await ignored(file), file).toBe(false);
+    }
   });
 
   // Codex review 2026-11-24 (07:28): while a teammate project's .gitignore cannot take the entries

@@ -37,7 +37,7 @@ vi.mock('../../localDb/ipc/projectAliases.js', () => ({
 vi.mock('../../localDb/ipc/recentWorkdirs.js', () => ({ normalizeRecentWorkdirPath: (p: string) => p, upsertRecentWorkdir: async () => false }));
 vi.mock('../../worktree/WorktreeManager.js', () => ({ detectCwd: async () => ({ gitInstalled: false }) }));
 
-import { BOT_PROJECT_MEMORY_GITIGNORE, BOT_PROJECT_MEMORY_REVIEW_ID, createBotDefaultProjectSchedule, ensureBotProjectAutomations, ensureTeammateProjectIgnored, moveTeammateMemoryIntoProject, nameBotProject, prepareBotProjectWorkspace } from '../botProjectMode.js';
+import { BOT_PROJECT_LOCAL_GITIGNORE, BOT_PROJECT_MEMORY_GITIGNORE, BOT_PROJECT_MEMORY_REVIEW_ID, createBotDefaultProjectSchedule, ensureBotProjectAutomations, ensureTeammateProjectIgnored, moveTeammateMemoryIntoProject, nameBotProject, prepareBotProjectWorkspace } from '../botProjectMode.js';
 import { legacyTeammateProjectMemoryDir, teammateProjectMemoryDir, teammateWorkspaceDir } from '../botProjectMemory.js';
 import { importBotSkillFiles } from '../botSkillStore.js';
 import { OWN_RULES_HEADING, importedStandardSkill } from '../botProjectTemplate.js';
@@ -609,7 +609,12 @@ describe('ensureTeammateProjectIgnored', () => {
   let root = '';
   afterEach(async () => { if (root) await fs.rm(root, { recursive: true, force: true }); });
 
-  it('appends only the missing entries, once, keeping the owner\'s lines', async () => {
+  // The list spells out the memory store's receipt so the snapshot kernel needs no maker-core.
+  it('keeps the memory store receipt versioned under the name maker-core writes', () => {
+    expect(BOT_PROJECT_MEMORY_GITIGNORE).toContain(`!.cindy/memory/${MEMORY_STORAGE_MIGRATION_RECEIPT}`);
+  });
+
+  it('appends the ordered block below the owner\'s lines, once', async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'teammate-gitignore-'));
     const workspace = teammateWorkspaceDir(root, 'bot_mia');
     await fs.mkdir(workspace, { recursive: true });
@@ -619,11 +624,10 @@ describe('ensureTeammateProjectIgnored', () => {
 
     await expect(ensureTeammateProjectIgnored({ botId: 'bot_mia', workspace })).resolves.toBe('ready');
     const text = await fs.readFile(path.join(workspace, '.gitignore'), 'utf8');
-    expect(text).toBe(`${before}\r\n${[
-      '.env.*', '!.env.example', '!.env.sample', '!.env.template',
-      'token.json', 'credentials.json', 'client_secret*.json', '*.pem', '*.p12', '*.pfx',
-      '.venv/', 'venv/', '__pycache__/', '.cindy-worktrees/', '.xdt-worktrees/',
-      ...BOT_PROJECT_MEMORY_GITIGNORE,
+    // The whole ordered block goes below the owner's lines, even the `.env` it already had.
+    expect(text).toBe(`${before}\r\n\r\n${[
+      '# Cindy: keep credentials, environments, worktrees and memory caches out of versions',
+      ...BOT_PROJECT_LOCAL_GITIGNORE, ...BOT_PROJECT_MEMORY_GITIGNORE,
     ].join('\r\n')}\r\n`);
     await expect(fs.readFile(path.join(workspace, '.env'), 'utf8')).resolves.toBe('COMMITTED=1');
 

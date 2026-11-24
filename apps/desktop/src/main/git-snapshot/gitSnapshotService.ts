@@ -14,6 +14,7 @@ import path from 'node:path';
 
 import { createLogger } from '../logger';
 import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
+import { ensureTeammateProjectIgnored } from '../maker-ipc/botProjectGitignore';
 import { gitExec, GitExecError } from '../worktree/gitExec';
 import { isolatedGitExec, snapshotGitIsolationArgs } from './isolatedGitExec';
 import { gitPathOutput } from '../worktree/gitPathOutput';
@@ -458,7 +459,6 @@ export interface ShadowSavepointResult {
  */
 async function assertTeammateProjectIgnoreReady(repoPath: string): Promise<void> {
   if (!isTeammateProjectPath(repoPath)) return;
-  const { ensureTeammateProjectIgnored } = await import('../maker-ipc/botProjectGitignore.js');
   if (await ensureTeammateProjectIgnored({ workspace: repoPath }) !== 'ready') {
     throw new Error('Teammate project .gitignore is not complete yet; savepoint deferred');
   }

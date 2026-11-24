@@ -3,15 +3,12 @@
  * worktrees and the memory's derived files out of its versions, and the gate every version and
  * savepoint of the project waits for (snapshotTeammateProject, the repository's first commit, cloud
  * rule arrivals, createShadowSavepoint). Kept free of Electron and database modules: the Git snapshot
- * kernel, shared with the Node host, loads it for teammate projects.
+ * kernel, shared with the Node host, imports it.
  */
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
-import { MEMORY_STORAGE_MIGRATION_RECEIPT } from '@cindy/maker-core';
-
 import { createLogger } from '../logger.js';
-import { TEAMMATE_PROJECT_MEMORY_SEGMENTS } from './botProjectMemory.js';
 
 const log = createLogger('maker-ipc:bot-project-gitignore');
 
@@ -49,11 +46,19 @@ async function writeIfMissing(filePath: string, content: string): Promise<boolea
  * The store's copy receipt is versioned too: a `git clean` must not make it copy the old records
  * again over later deletions.
  */
+/** The memory folder, relative to the teammate's project (botProjectMemory.ts re-exports it). */
+export const TEAMMATE_PROJECT_MEMORY_SEGMENTS = ['.cindy', 'memory'] as const;
+/**
+ * The memory store's copy receipt, `MEMORY_STORAGE_MIGRATION_RECEIPT` in @cindy/maker-core, spelled
+ * out so this module needs no package that the snapshot kernel's tests replace (botProjectMode.test.ts
+ * checks they match).
+ */
+const MEMORY_STORE_RECEIPT = '.cindy-memory-migration-v1.json';
 const MEMORY_DIR = TEAMMATE_PROJECT_MEMORY_SEGMENTS.join('/');
 export const BOT_PROJECT_MEMORY_GITIGNORE = [
   `${MEMORY_DIR}/*`,
   `!${MEMORY_DIR}/*.md`,
-  `!${MEMORY_DIR}/${MEMORY_STORAGE_MIGRATION_RECEIPT}`,
+  `!${MEMORY_DIR}/${MEMORY_STORE_RECEIPT}`,
   `${MEMORY_DIR}/MEMORY.md`,
 ];
 
@@ -79,41 +84,27 @@ export const BOT_PROJECT_GITIGNORE = [
 ].join('\n');
 
 /**
- * Both lists a teammate project's `.gitignore` needs, in blocks whose order matters: an exception
- * (`!…`) only applies below its pattern, and `MEMORY.md` is ignored again after the `*.md` exception.
- * A block not in effect is appended whole at the end, so its lines keep their order.
+ * Both lists in their order, as one block. A rule only counts when nothing below it matches the same
+ * file the other way (Git applies the last matching line: ` token.json` is another pattern, an
+ * exception above `.env.*` is overridden, a later `!*.json` lets `token.json` back in). So the first
+ * completion puts the whole block at the end of the file, after the owner's rules (maintainer review,
+ * 2026-11-24); a file that already ends with it, like every new project's, is left as it is.
  */
-const TEAMMATE_PROJECT_IGNORE_BLOCKS: readonly (readonly string[])[] = (() => {
-  const blocks: string[][] = [];
-  for (const line of BOT_PROJECT_LOCAL_GITIGNORE) {
-    if (line.startsWith('!')) blocks[blocks.length - 1]!.push(line);
-    else blocks.push([line]);
-  }
-  return [...blocks, [...BOT_PROJECT_MEMORY_GITIGNORE]];
-})();
+const TEAMMATE_PROJECT_IGNORE_BLOCK: readonly string[] = [...BOT_PROJECT_LOCAL_GITIGNORE, ...BOT_PROJECT_MEMORY_GITIGNORE];
+const BLOCK_COMMENT = '# Cindy: keep credentials, environments, worktrees and memory caches out of versions';
 
-/**
- * Whether `block` is in effect as written: each line present verbatim (Git reads a leading space as
- * part of the pattern; only a missing carriage return is tolerated) and, as Git applies the last
- * matching line, each line's last occurrence below the previous line's.
- */
-function inEffect(current: string, block: readonly string[]): boolean {
-  const last = new Map<string, number>();
-  current.split(/\r?\n/).forEach((line, index) => last.set(line, index));
-  let previous = -1;
-  for (const line of block) {
-    const at = last.get(line);
-    if (at === undefined || at <= previous) return false;
-    previous = at;
-  }
-  return true;
+function endsWithBlock(current: string): boolean {
+  const lines = current.split(/\r?\n/);
+  while (lines.length && lines[lines.length - 1] === '') lines.pop();
+  const tail = lines.slice(-TEAMMATE_PROJECT_IGNORE_BLOCK.length);
+  return tail.length === TEAMMATE_PROJECT_IGNORE_BLOCK.length && tail.every((line, index) => line === TEAMMATE_PROJECT_IGNORE_BLOCK[index]);
 }
 
 /**
- * Appends the blocks a project's `.gitignore` does not have in effect, keeping its own lines as they are; a missing file
- * gets the whole default list. `unavailable` when the `.gitignore` is not a regular file (a folder, or
- * a link, which Git does not read either): it is left alone and its entries are not in effect.
- * Write failures (a read-only file) throw.
+ * Puts the block at the end of a project's `.gitignore` unless it already ends with it, keeping the
+ * owner's lines as they are; a missing file gets the whole default list. `unavailable` when the
+ * `.gitignore` is not a regular file (a folder, or a link, which Git does not read either): it is
+ * left alone and its entries are not in effect. Write failures (a read-only file) throw.
  */
 async function ensureIgnored(workspace: string): Promise<'changed' | 'unchanged' | 'unavailable'> {
   const file = path.join(workspace, '.gitignore');
@@ -121,11 +112,10 @@ async function ensureIgnored(workspace: string): Promise<'changed' | 'unchanged'
   if (await writeIfMissing(file, BOT_PROJECT_GITIGNORE)) return 'changed';
   if (!(await fs.lstat(file)).isFile()) return 'unavailable';
   const current = await fs.readFile(file, 'utf8');
-  const missing = TEAMMATE_PROJECT_IGNORE_BLOCKS.filter((block) => !inEffect(current, block)).flat();
-  if (!missing.length) return 'unchanged';
+  if (endsWithBlock(current)) return 'unchanged';
   const newline = current.includes('\r\n') ? '\r\n' : '\n';
-  const separator = current === '' || current.endsWith('\n') ? '' : newline;
-  await fs.writeFile(file, `${current}${separator}${missing.join(newline)}${newline}`, 'utf8');
+  const separator = current === '' ? '' : current.endsWith('\n') ? newline : `${newline}${newline}`;
+  await fs.writeFile(file, `${current}${separator}${[BLOCK_COMMENT, ...TEAMMATE_PROJECT_IGNORE_BLOCK].join(newline)}${newline}`, 'utf8');
   return 'changed';
 }
 
