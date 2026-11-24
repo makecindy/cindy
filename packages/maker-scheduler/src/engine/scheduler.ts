@@ -2229,18 +2229,36 @@ export class Scheduler extends EventEmitter {
       return;
     }
 
-    const updated = await this.finishRunSchedule(schedule, firedAt, finishedAt, 'automatic');
-    const recoversPotentialFailure =
-      skippedPersisted && preRunCheckSucceeded && !this.schedulesWithKnownCleanCheck.has(schedule.id);
-    if (skippedPersisted && preRunCheckSucceeded) {
-      this.schedulesWithKnownCleanCheck.add(schedule.id);
-    }
+    const finish = () => this.finishRunSchedule(schedule, firedAt, finishedAt, 'automatic');
     if (skippedPersisted) {
+      await this.finishSkippedRun(schedule, runId, sessionId ?? '', preRunCheckSucceeded, finish);
+    } else {
+      await finish();
+      this.emitEvent({ type: 'changed', scheduleId: schedule.id });
+    }
+  }
+
+  private async finishSkippedRun(
+    schedule: Schedule,
+    runId: string,
+    sessionId: string,
+    preRunCheckSucceeded: boolean,
+    finish: () => Promise<Schedule | null>,
+  ): Promise<void> {
+    let updated: Schedule | null = null;
+    try {
+      updated = await finish();
+    } finally {
+      // The terminal run has already been persisted. Subscribers need its
+      // outcome even when replanning fails and no timing patch is available.
+      const recoversPotentialFailure =
+        preRunCheckSucceeded && !this.schedulesWithKnownCleanCheck.has(schedule.id);
+      if (preRunCheckSucceeded) this.schedulesWithKnownCleanCheck.add(schedule.id);
       this.emitEvent({
         type: 'skipped',
         scheduleId: schedule.id,
         runId,
-        sessionId: sessionId ?? '',
+        sessionId,
         ...(updated
           ? {
               lastFiredAt: updated.lastFiredAt,
@@ -2250,10 +2268,9 @@ export class Scheduler extends EventEmitter {
           : {}),
         ...(preRunCheckSucceeded ? { preRunCheckSucceeded: true } : {}),
       });
-    }
-    const nonSkippedOutcome = !skipped || stallAborted || wasAborted || runError !== undefined;
-    if (nonSkippedOutcome || !skippedPersisted || updated?.status !== schedule.status || recoversPotentialFailure) {
-      this.emitEvent({ type: 'changed', scheduleId: schedule.id });
+      if (updated?.status !== schedule.status || recoversPotentialFailure) {
+        this.emitEvent({ type: 'changed', scheduleId: schedule.id });
+      }
     }
   }
 
@@ -2652,39 +2669,16 @@ export class Scheduler extends EventEmitter {
     // Aborted 路径同 fireOne:schedule 大概率已被 delete/pause,不要重写 lastFinishedAt
     // (避免污染已删除/已暂停 schedule 的字段)。守卫 abort 例外:schedule 仍在,
     // "跑完了一次(以失败收场)"该如实反映到列表。
-    let updated: Schedule | null = null;
-    if (!wasAborted || stallAborted) {
-      const finishSource = recovery
-        ? 'recovery'
-        : !options?.webhook && options?.trigger?.source === 'pr-status'
-          ? 'pr-watch'
-          : 'run-now';
-      updated = await this.finishRunSchedule(schedule, firedAt, finishedAt, finishSource, options?.trigger);
-    }
-    const nonSkippedOutcome = !skipped || stallAborted || wasAborted || runError !== undefined;
-    const recoversPotentialFailure =
-      !nonSkippedOutcome && preRunCheckSucceeded && !this.schedulesWithKnownCleanCheck.has(schedule.id);
-    if (!nonSkippedOutcome && preRunCheckSucceeded) {
-      this.schedulesWithKnownCleanCheck.add(schedule.id);
-    }
-    if (!nonSkippedOutcome) {
-      this.emitEvent({
-        type: 'skipped',
-        scheduleId: schedule.id,
-        runId,
-        sessionId: runSessionId ?? '',
-        ...(updated
-          ? {
-              lastFiredAt: updated.lastFiredAt,
-              lastFinishedAt: updated.lastFinishedAt,
-              nextFireAt: updated.nextFireAt,
-            }
-          : {}),
-        ...(preRunCheckSucceeded ? { preRunCheckSucceeded: true } : {}),
-      });
-    }
-    // Revalidate history/list when non-skipped, when schedule status changed, or when recovering a failure.
-    if (nonSkippedOutcome || updated?.status !== schedule.status || recoversPotentialFailure) {
+    const finishSource = recovery
+      ? 'recovery'
+      : !options?.webhook && options?.trigger?.source === 'pr-status'
+        ? 'pr-watch'
+        : 'run-now';
+    const finish = () => this.finishRunSchedule(schedule, firedAt, finishedAt, finishSource, options?.trigger);
+    if (skipped && !wasAborted && !stallAborted && runError === undefined) {
+      await this.finishSkippedRun(schedule, runId, runSessionId ?? '', preRunCheckSucceeded, finish);
+    } else {
+      if (!wasAborted || stallAborted) await finish();
       this.emitEvent({ type: 'changed', scheduleId: schedule.id });
     }
     return { runId, ...(silenced ? { silenced: true } : {}) };

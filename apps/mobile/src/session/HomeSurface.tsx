@@ -1066,10 +1066,13 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         if (homeAccountGenerationRef.current !== expectedAccountGeneration) return;
         if (!isCurrentHomeSyncTarget(deviceId, expectedHomeSyncGeneration)) return;
         if (getScheduleIndexInvalidationVersion(deviceId) !== invalidationVersion) return;
+        // A patchable skipped event does not invalidate this read. Keep its
+        // newer timing even if the host read the index before the skip.
+        const timings = remoteScheduleEventStore.getSnapshot(deviceId).scheduleTimings;
         setScheduleIndex((current) => replaceSessionScheduleIndexEntries(
           current,
           sessionIds,
-          nextIndex,
+          applyRemoteScheduleTimingsToIndex(nextIndex, timings),
         ));
         if (homeScheduleIndexDirtyRef.current.get(deviceId) === pendingSeq) {
           homeScheduleIndexDirtyRef.current.delete(deviceId);

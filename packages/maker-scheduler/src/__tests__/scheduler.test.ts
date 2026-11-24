@@ -6682,6 +6682,32 @@ describe('Scheduler preRunHook results', () => {
     expect((await h.storage.get(multiPr.id))?.nextFireAt).toBe(multiInitialNext);
   });
 
+  // Unit: once a skipped run is persisted, a schedule write failure still
+  // publishes exactly one terminal event, without claiming new timing.
+  it.each(['tick', 'runNow'] as const)('emits a bare skipped event if %s cannot persist the new schedule timing', async (source) => {
+    const h = makeHarness({ runnerImpl: async () => ({ sessionId: '', skipped: true }) });
+    const schedule = await h.scheduler.create({ ...baseInput, intervalMs: 60_000 });
+    const update = h.storage.update.bind(h.storage);
+    vi.spyOn(h.storage, 'update').mockImplementation(async (id, patch, expected) => {
+      if (patch.lastFinishedAt !== undefined) throw new Error('schedule write failed');
+      return update(id, patch, expected);
+    });
+    const fired = vi.fn();
+    const skipped = vi.fn();
+    const changed = vi.fn();
+    h.scheduler.on('fired', fired).on('skipped', skipped).on('changed', changed);
+    h.clock.setTo(schedule.nextFireAt!);
+    const run = source === 'tick' ? h.scheduler.tick() : h.scheduler.runNow(schedule.id);
+    await expect(run).rejects.toThrow('schedule write failed');
+    expect(fired).toHaveBeenCalledTimes(1);
+    const [record] = await h.scheduler.listRuns(schedule.id);
+    expect(record?.status).toBe('skipped');
+    expect(skipped).toHaveBeenCalledExactlyOnceWith({
+      type: 'skipped', scheduleId: schedule.id, runId: record?.id, sessionId: '',
+    });
+    expect(changed).toHaveBeenLastCalledWith({ type: 'changed', scheduleId: schedule.id });
+  });
+
   // 测试价值
   // - 生产入口与可观察结果：Scheduler 在失败后及冷启动后首次健康 skipped 时立即广播 changed，稳态连续 skipped 不再广播 changed。
   // - 规则依据：docs/dev-rules/protocol-compatibility.md 与 docs/dev-rules/server-channel-review.md —— 失败恢复/未读清除对新旧客户端都必须零延迟生效，稳态空跳不产生整表广播风暴。
