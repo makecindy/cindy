@@ -75,7 +75,8 @@ export function createHostPiNativeProviders(options: {
    * byte-for-byte contract between the desktop and the Host.
    */
   const subscriptionSourceConnected = createPiSubscriptionConnectionReader({
-    getActiveCatalog,
+    // 架构规则 §5:端口转调,不在装配时把函数本身存下来。
+    getActiveCatalog: () => getActiveCatalog(),
     hasGrokOAuthLogin: id => config.grok.hasGrokOAuthLogin(id),
     codexAccountState: id => config.codexAccounts.codexAccountState(id),
     hasCodexOAuthLoginReadOnly: () => hasHostCodexHomeLogin(path.join(options.userDataDir, 'codex-home')),

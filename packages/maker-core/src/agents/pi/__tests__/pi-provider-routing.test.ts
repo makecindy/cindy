@@ -3346,6 +3346,66 @@ describe("Pi provider-aware model routing", () => {
     await handle.close();
   });
 
+  // greptile P1 on #12329: the startup filter alone is not enough — a live catalog
+  // refresh rebuilds every native route from the provider list, which carries no
+  // connection state, so a disconnected source would re-enter modelRoutes and
+  // restore the #12298 dispatch-then-fail path.
+  it("keeps a disconnected subscription source out of the routes after a live catalog refresh", async () => {
+    let magpieUrl = "http://magpie.test";
+    const deps = byomDeps(
+      async () => ({
+        providers: [
+          {
+            id: "openai-codex",
+            sourceProviderId: "openai",
+            name: "OpenAI (ChatGPT)",
+            baseUrl: "http://openai.test",
+            api: "openai-codex-responses" as const,
+            modelIdAliases: {
+              "chatgpt/gpt-5.5-pro": "chatgpt/gpt-5.5-pro",
+              "gpt-5.5-pro": "chatgpt/gpt-5.5-pro",
+            },
+            models: [{ id: "chatgpt/gpt-5.5-pro", wireId: "gpt-5.5-pro" }],
+          },
+          {
+            id: "magpie",
+            sourceProviderId: "magpie",
+            name: "Magpie",
+            baseUrl: magpieUrl,
+            api: "openai-responses" as const,
+            models: [{ id: "gpt-5.5-pro", wireId: "gpt-5.5-pro", contextWindow: 200_000 }],
+          },
+        ],
+        env: {},
+      }),
+    );
+    deps.isNativeProviderSourceConnected = sourceProviderId => sourceProviderId !== "openai";
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: "subagent-refresh-disconnected",
+      workingDir: cwd,
+      model: "gpt-5.5-pro",
+      providerId: "magpie",
+    });
+    const readRoutes = (): Record<string, Array<{ provider: string; model: string }>> =>
+      (JSON.parse(readFileSync(runtimeFileOf("subagent", "subagent-refresh-disconnected"), "utf8")) as {
+        modelRoutes: Record<string, Array<{ provider: string; model: string }>>;
+      }).modelRoutes;
+    // 启动时过滤已生效:断开来源不在路由里。
+    expect(readRoutes()["chatgpt/gpt-5.5-pro"]).toBeUndefined();
+    // 改动当前 provider 的端点 → 预演判为 refresh,刷新会按 provider 清单整体重建路由。
+    magpieUrl = "http://magpie-b.test";
+    expect(await handle.previewModelSwitch?.("gpt-5.5-pro", { providerId: "magpie" }))
+      .toMatchObject({ action: "refresh" });
+    await handle.setModel!("gpt-5.5-pro", { providerId: "magpie" });
+    const routes = readRoutes();
+    // 刷新后断开来源仍不得回到路由里;仍连接的来源照常在。
+    expect(routes["chatgpt/gpt-5.5-pro"]).toBeUndefined();
+    expect(routes["gpt-5.5-pro"]).toEqual([
+      { provider: "magpie", model: "gpt-5.5-pro", sourceProviderId: "magpie" },
+    ]);
+    await handle.close();
+  });
+
   it("fails closed when provider-less aliases are ambiguous", async () => {
     const agent = new PiAgent(
       byomDeps(async () => ({

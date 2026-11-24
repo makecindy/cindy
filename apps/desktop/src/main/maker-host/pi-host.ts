@@ -151,11 +151,12 @@ export function resolvePiBinaryPath(): string | null {
  * 清单是桌面与 Node Host 的逐字节契约(host↔desktop parity),连接态是宿主各自的凭证事实。
  */
 const subscriptionSourceConnected = createPiSubscriptionConnectionReader({
-  getActiveCatalog,
-  hasGrokOAuthLogin,
-  codexAccountState,
+  // 架构规则 §5:端口在调用时才取值(转调),不在模块加载时把函数本身存下来。
+  getActiveCatalog: () => getActiveCatalog(),
+  hasGrokOAuthLogin: (...args) => hasGrokOAuthLogin(...args),
+  codexAccountState: (...args) => codexAccountState(...args),
   hasCodexOAuthLoginReadOnly: () => desktopCodexAuthAdapter.hasCodexOAuthLoginReadOnly(),
-  hasConnectedSubscriptionPool,
+  hasConnectedSubscriptionPool: (...args) => hasConnectedSubscriptionPool(...args),
   onReadFailure: (providerId, error) => log.warn(
     'pi: subscription connection read failed; keeping the source listed',
     {
