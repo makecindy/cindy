@@ -15,6 +15,7 @@ import { scheduleCreateToRow, schedulePatchToRow, scheduleToCamel } from '../../
 import { PROJECT_AUTOMATION_REL_SEGMENTS } from '../../../shared/projectAutomationPaths';
 import { projectAutomationConsents, recentWorkdirs, schedules, sessions } from '../../localDb/schema';
 import * as workdirProbe from '../../workdir-probe-host';
+import { MainProcessWorkdirProbeError } from '../../workdir-probe-host/MainProcessWorkdirProbeClient';
 import * as worktreeDetection from '../../worktree/detectCwd';
 
 const workingDir = 'C:\\project';
@@ -22,29 +23,30 @@ const workingDir = 'C:\\project';
 // #11839 / unit: the loader's public discovery gives the renderer its list.
 // Existing tests exercise explicit reconcile only. A session-only linked
 // checkout and a stalled registration probe are enough to expose the gap.
-it('discovers registered and saved aliases while a directory probe is unavailable', async () => {
+it('preserves direct registrations and retries deferred aliases on the next discovery', async () => {
   const root = await fs.mkdtemp(path.join(tmpdir(), 'cindy-project-discovery-'));
   const review = path.join(root, 'review');
   const registered = path.join(root, 'registered');
   const saved = path.join(root, 'saved');
   const unknown = path.join(root, 'unknown');
   const unknownGit = path.join(root, 'unknown-git');
+  const direct = path.join(root, 'direct');
   const stalled = path.join(root, 'stalled-registration');
   const registeredAlias = path.join(root, 'registered-alias');
   const savedAlias = path.join(root, 'saved-alias');
-  const dirs = [review, registered, saved, unknown, unknownGit];
+  const dirs = [review, registered, saved, unknown, unknownGit, direct];
+  let aliasBlocked = true;
   const timeout = Object.assign(new Error('synthetic probe timeout'), { code: 'WORKDIR_PROBE_TIMEOUT' });
-  const realpath = vi.spyOn(workdirProbe, 'realpathWorkingDirectory').mockImplementation(async (dir) => {
-    if (dir === unknown) throw timeout;
-    return dir;
-  });
-  const aliases = vi.spyOn(workdirProbe, 'realpathAutomationAlias').mockImplementation(async (dir) => {
-    if (dir === stalled) throw timeout;
+  const realpath = vi.spyOn(workdirProbe, 'realpathAutomationDirectory').mockImplementation(async (dir) => {
+    if (dir === stalled || dir === unknown) throw timeout;
+    if (dir === registeredAlias && aliasBlocked) {
+      throw new MainProcessWorkdirProbeError('WORKDIR_PROBE_TIMEOUT', 'synthetic queued probe timeout', true);
+    }
     if (dir === registeredAlias) return registered;
     if (dir === savedAlias) return saved;
     return dir;
   });
-  const detect = vi.spyOn(worktreeDetection, 'detectCwd').mockImplementation(async (dir) => {
+  const detect = vi.spyOn(worktreeDetection, 'detectAutomationWorktree').mockImplementation(async (dir) => {
     if (dir === unknownGit) throw timeout;
     return { isGitRepo: true, isInsideWorktree: true, gitInstalled: true };
   });
@@ -62,7 +64,7 @@ it('discovers registered and saved aliases while a directory probe is unavailabl
           from: (table: unknown) => {
             if (table === sessions) return { where: async () => dirs.map(dir => ({ workingDir: dir })) };
             if (table === schedules) return { where: async () => [{ workingDir: savedAlias }] };
-            if (table === recentWorkdirs) return { orderBy: async () => [{ path: stalled }, { path: registeredAlias }] };
+            if (table === recentWorkdirs) return { orderBy: async () => [stalled, registeredAlias, direct].map(dir => ({ path: dir })) };
             if (table === projectAutomationConsents) return { where: () => ({ limit: async () => [] }) };
             throw new Error('Unexpected discovery table');
           },
@@ -70,11 +72,14 @@ it('discovers registered and saved aliases while a directory probe is unavailabl
       }) as unknown as ReturnType<ConstructorParameters<typeof ProjectAutomationLoader>[0]['getDb']>,
       logger: {},
     });
-    const pending = await loader.listPendingImports();
-    expect(pending.map(item => item.workingDir)).toEqual([registered, saved, unknown, unknownGit]);
+    expect((await loader.listPendingImports()).map(item => item.workingDir)).toEqual([direct]);
+    aliasBlocked = false;
+    realpath.mockClear();
+    expect((await loader.listPendingImports()).map(item => item.workingDir)).toEqual([registered, saved, direct]);
+    const probed = realpath.mock.calls.map(([dir]) => dir);
+    expect(probed.indexOf(registeredAlias)).toBeLessThan(probed.indexOf(stalled));
   } finally {
     detect.mockRestore();
-    aliases.mockRestore();
     realpath.mockRestore();
     await fs.rm(root, { recursive: true, force: true });
   }

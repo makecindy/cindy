@@ -20,8 +20,9 @@ import { listRegisteredProjectPaths } from '../localDb/ipc/recentWorkdirsCore';
 import { PROJECT_AUTOMATION_REL_SEGMENTS } from '../../shared/projectAutomationPaths';
 import { isTempPath, tempPathClassification } from '../session-import/classify';
 import { migrateLegacyXdmakerDir } from '../utils/legacyXdmakerMigration';
-import { realpathAutomationAlias, realpathWorkingDirectory } from '../workdir-probe-host';
-import { detectCwd } from '../worktree/detectCwd';
+import { realpathAutomationDirectory } from '../workdir-probe-host';
+import { MainProcessWorkdirProbeError } from '../workdir-probe-host/MainProcessWorkdirProbeClient';
+import { detectAutomationWorktree } from '../worktree/detectCwd';
 import type { DrizzleScheduleStorage, SchedulerDrizzleDb } from './storage.desktop';
 import type { TeammateProjectState } from './ownTeammateProject';
 
@@ -119,6 +120,7 @@ type CachedRead =
 type Listener = (event: ProjectAutomationEvent) => void;
 
 export class ProjectAutomationLoader {
+  private nextAliasProbe?: string;
   private readonly cache = new Map<string, { value: CachedRead; ts: number }>();
   private readonly inflight = new Map<string, Promise<CachedRead>>();
   private readonly listeners = new Set<Listener>();
@@ -561,33 +563,64 @@ export class ProjectAutomationLoader {
 
     if (!found.size) return [];
     const tempRoot = tmpdir();
-    const resolvedTempRoot = await realpathWorkingDirectory(tempRoot).catch(() => null);
+    const resolvedTempRoot = await realpathAutomationDirectory(tempRoot).catch(() => null);
     const classification = tempPathClassification(tempRoot, resolvedTempRoot);
-    const savedDirs = projectSchedules.flatMap(({ workingDir }) => workingDir ? [workingDir] : []);
-    let protectedDirs: Set<string> | undefined;
-    for (const [key, workingDir] of found) {
-      if (!isTempPath(key, classification)) continue;
-      const physical = await realpathWorkingDirectory(key).catch(() => null);
-      if (!physical || !isTempPath(physical, classification)) continue;
-      const git = await detectCwd(physical, { repairSafeDirectory: false }).catch(() => null);
-      if (!git?.isInsideWorktree) continue;
+    const temporaryDirs = [...found.keys()].filter(key => isTempPath(key, classification));
+    if (!temporaryDirs.length) return [...found.values()];
 
-      // History alone must not discover temporary linked checkouts. Honor
-      // registered and previously imported directories, including path aliases.
-      if (!protectedDirs) {
-        const registered = await listRegisteredProjectPaths({ drizzle: db });
-        protectedDirs = new Set();
-        for (const dir of [...savedDirs, ...registered]) {
-          protectedDirs.add(workingDirKey(dir));
-          const real = await realpathAutomationAlias(dir).catch(() => null);
-          if (real) protectedDirs.add(workingDirKey(real));
-        }
-      }
-      if (!protectedDirs.has(workingDirKey(workingDir)) && !protectedDirs.has(workingDirKey(physical))) {
+    const protectedPaths = new Set(await listRegisteredProjectPaths({ drizzle: db }));
+    for (const { workingDir } of projectSchedules) {
+      if (workingDir) protectedPaths.add(workingDir);
+    }
+    const protectedKeys = new Set([...protectedPaths].map(workingDirKey));
+    const linkedCandidates = new Map<string, string>();
+    let queueBlocked = false;
+    for (const key of temporaryDirs) {
+      if (protectedKeys.has(workingDirKey(key))) continue;
+      if (queueBlocked) {
         found.delete(key);
+        continue;
+      }
+      try {
+        const physical = await realpathAutomationDirectory(key);
+        const identity = workingDirKey(physical);
+        if (protectedKeys.has(identity) || !isTempPath(physical, classification)) continue;
+        if ((await detectAutomationWorktree(physical)).isInsideWorktree) {
+          linkedCandidates.set(key, identity);
+        }
+      } catch (error) {
+        // History is not proof of project ownership. Retry on the next scan.
+        found.delete(key);
+        queueBlocked = error instanceof MainProcessWorkdirProbeError && error.waitingForSlot;
       }
     }
 
+    if (linkedCandidates.size) {
+      let incomplete = queueBlocked;
+      const retry = this.nextAliasProbe;
+      // Give the first path that missed a slot priority on a later discovery.
+      const aliasPaths = retry && protectedPaths.has(retry) ? new Set([retry, ...protectedPaths]) : protectedPaths;
+      for (const dir of queueBlocked ? [] : aliasPaths) {
+        try {
+          protectedKeys.add(workingDirKey(await realpathAutomationDirectory(dir)));
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code !== 'ENOENT' && code !== 'ENOTDIR') incomplete = true;
+          if (error instanceof MainProcessWorkdirProbeError && error.waitingForSlot) {
+            this.nextAliasProbe = dir;
+            break;
+          }
+        }
+        if (this.nextAliasProbe === dir) this.nextAliasProbe = undefined;
+      }
+      let deferred = 0;
+      for (const [key, identity] of linkedCandidates) {
+        if (protectedKeys.has(identity)) continue;
+        found.delete(key);
+        if (incomplete) deferred++;
+      }
+      if (deferred) this.deps.logger.debug?.('[project-automation] candidate ownership pending next scan', { count: deferred });
+    }
     return [...found.values()];
   }
 

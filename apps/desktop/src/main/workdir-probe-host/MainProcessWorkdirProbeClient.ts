@@ -41,6 +41,7 @@ export class MainProcessWorkdirProbeError extends Error {
   constructor(
     readonly code: MainProcessWorkdirProbeErrorCode,
     message: string,
+    readonly waitingForSlot = false,
   ) {
     super(message);
     this.name = 'MainProcessWorkdirProbeError';
@@ -156,7 +157,7 @@ export class MainProcessWorkdirProbeClient {
       if (this.remainingMs(entry) <= 0) {
         this.rejectEntry(
           entry,
-          this.timeout('directory probe deadline elapsed'),
+          this.timeout('directory probe deadline elapsed', true),
           'deadline-before-dispatch',
         );
         continue;
@@ -170,7 +171,7 @@ export class MainProcessWorkdirProbeClient {
       const index = this.queue.indexOf(entry);
       if (index < 0) return;
       this.queue.splice(index, 1);
-      this.rejectEntry(entry, this.timeout('timed out waiting for a probe slot'), 'queue-timeout');
+      this.rejectEntry(entry, this.timeout('timed out waiting for a probe slot', true), 'queue-timeout');
     }, this.remainingMs(entry));
     entry.queueTimer.unref?.();
   }
@@ -314,8 +315,8 @@ export class MainProcessWorkdirProbeClient {
     return Math.max(0, entry.deadline - Date.now());
   }
 
-  private timeout(message: string): MainProcessWorkdirProbeError {
-    return new MainProcessWorkdirProbeError('WORKDIR_PROBE_TIMEOUT', message);
+  private timeout(message: string, waitingForSlot = false): MainProcessWorkdirProbeError {
+    return new MainProcessWorkdirProbeError('WORKDIR_PROBE_TIMEOUT', message, waitingForSlot);
   }
 
   private unavailable(
@@ -325,7 +326,7 @@ export class MainProcessWorkdirProbeClient {
     reason: string,
     cause?: unknown,
   ): MainProcessWorkdirProbeError {
-    const error = new MainProcessWorkdirProbeError('WORKDIR_PROBE_UNAVAILABLE', message);
+    const error = new MainProcessWorkdirProbeError('WORKDIR_PROBE_UNAVAILABLE', message, reason === 'queue-full');
     this.deps.log.warn('workdir probe unavailable', {
       ...(dir ? { operation: kind, directoryRef: workdirDiagnosticId(dir) } : {}),
       reason,

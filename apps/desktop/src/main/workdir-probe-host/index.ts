@@ -9,9 +9,9 @@ import type { WorkdirProbeRequest } from './protocol.js';
 const log = createLogger('workdir-diagnostics');
 
 export const workdirProbeHostClient = new MainProcessWorkdirProbeClient({ log });
-// Alias scans can touch projects outside the active workspace. Their stalled
+// Automation discovery can touch paths outside the active workspace. Its stalled
 // filesystem calls must not hold the foreground directory probe slots.
-const automationAliasProbeClient = new MainProcessWorkdirProbeClient({
+const automationDiscoveryProbeClient = new MainProcessWorkdirProbeClient({
   log,
   maxInFlight: 2,
   maxQueued: 8,
@@ -19,7 +19,7 @@ const automationAliasProbeClient = new MainProcessWorkdirProbeClient({
 
 export function disposeWorkdirProbes(): void {
   workdirProbeHostClient.dispose();
-  automationAliasProbeClient.dispose();
+  automationDiscoveryProbeClient.dispose();
 }
 
 /** Bounded filesystem identity probe for local cwd recovery; never expose paths to a controller. */
@@ -60,8 +60,8 @@ export function realpathWorkingDirectory(dir: string): Promise<string> {
   return resolveDirectoryPath(dir, workdirProbeHostClient);
 }
 
-export function realpathAutomationAlias(dir: string): Promise<string> {
-  return resolveDirectoryPath(dir, automationAliasProbeClient);
+export function realpathAutomationDirectory(dir: string): Promise<string> {
+  return resolveDirectoryPath(dir, automationDiscoveryProbeClient);
 }
 
 export async function findSimilarWorkingDirectory(dir: string): Promise<string | null> {
