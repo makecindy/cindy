@@ -18,7 +18,7 @@ afterEach(() => {
 // Unit: the first-run close dialog must release the window even when the main
 // profile write is refused. The renderer may apply the chosen action once.
 it('dismisses the first Windows close dialog and applies the unsaved choice once', async () => {
-  const refuse = new Error('[ATTACHED_LOCAL_WRITE_REFUSED] fixture refusal');
+  const refuse = new Error('[PRECONDITION_FAILED] fixture refusal');
   const windowClose = vi.fn();
   const errorToast = vi.spyOn(toast, 'error').mockImplementation(() => undefined as never);
   const setWindowsCloseBehavior = vi.fn().mockRejectedValue(refuse);
@@ -40,6 +40,6 @@ it('dismisses the first Windows close dialog and applies the unsaved choice once
   await waitFor(() => expect(windowClose).toHaveBeenCalledExactlyOnceWith('tray'));
 
   expect(setWindowsCloseBehavior).toHaveBeenCalledExactlyOnceWith('tray');
-  expect(errorToast).toHaveBeenCalledExactlyOnceWith('ipcError.ATTACHED_LOCAL_WRITE_REFUSED');
+  expect(errorToast).toHaveBeenCalledExactlyOnceWith('ipcError.PRECONDITION_FAILED');
   expect(screen.queryByText('settings.windowBehavior.closePrompt.title')).toBeNull();
 });

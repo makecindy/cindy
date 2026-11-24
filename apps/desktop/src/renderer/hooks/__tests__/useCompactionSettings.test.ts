@@ -66,7 +66,7 @@ describe('useCompactionSettings', () => {
     vi.stubGlobal('electronAPI', {
       maker: {
         compactionGetState: vi.fn().mockResolvedValue({ pct: 90, isCustomized: false, defaultPct: 90 }),
-        compactionSetPct: vi.fn().mockRejectedValue(new Error('[ATTACHED_LOCAL_WRITE_REFUSED] fixture refusal')),
+        compactionSetPct: vi.fn().mockRejectedValue(new Error('[PRECONDITION_FAILED] fixture refusal')),
         compactionResetPct: vi.fn(),
       },
     });
@@ -74,6 +74,6 @@ describe('useCompactionSettings', () => {
     await act(async () => { await Promise.resolve(); });
     act(() => hook.result.current.setPct(80));
     await act(async () => hook.unmount());
-    expect(errorToast).toHaveBeenCalledExactlyOnceWith('ipcError.ATTACHED_LOCAL_WRITE_REFUSED');
+    expect(errorToast).toHaveBeenCalledExactlyOnceWith('ipcError.PRECONDITION_FAILED');
   });
 });

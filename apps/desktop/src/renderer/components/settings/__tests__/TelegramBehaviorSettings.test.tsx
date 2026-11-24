@@ -72,7 +72,7 @@ afterEach(() => {
 // value. A rejected flush still has to reach the user's notification.
 it('reports a refused Telegram persona autosave when settings close', async () => {
   const persona = { botName: 'Fixture bot', soul: 'Old note' };
-  const save = vi.fn().mockRejectedValue(new Error('[ATTACHED_LOCAL_WRITE_REFUSED] fixture refusal'));
+  const save = vi.fn().mockRejectedValue(new Error('[PRECONDITION_FAILED] fixture refusal'));
   vi.stubGlobal('electronAPI', {
     telegramBot: { getPersona: vi.fn().mockResolvedValue(persona), setPersona: save },
   });
@@ -83,7 +83,7 @@ it('reports a refused Telegram persona autosave when settings close', async () =
   await act(async () => view.unmount());
 
   expect(save).toHaveBeenCalledExactlyOnceWith({ ...persona, soul: 'New note' });
-  expect(errorToast).toHaveBeenCalledExactlyOnceWith('ipcError.ATTACHED_LOCAL_WRITE_REFUSED');
+  expect(errorToast).toHaveBeenCalledExactlyOnceWith('ipcError.PRECONDITION_FAILED');
 });
 
 describe('official Telegram behavior settings', () => {

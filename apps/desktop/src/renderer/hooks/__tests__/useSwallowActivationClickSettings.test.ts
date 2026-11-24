@@ -16,7 +16,7 @@ afterEach(() => {
 // click adapter's current value intact.
 it('keeps the last applied activation setting when the new value is refused', async () => {
   localStorage.setItem('input.swallowActivationClick', 'false');
-  const save = vi.fn().mockRejectedValue(new Error('[ATTACHED_LOCAL_WRITE_REFUSED] fixture refusal'));
+  const save = vi.fn().mockRejectedValue(new Error('[PRECONDITION_FAILED] fixture refusal'));
   vi.stubGlobal('electronAPI', { windowBehavior: { setSwallowActivationClick: save } });
   const errorToast = vi.spyOn(toast, 'error').mockImplementation(() => undefined as never);
   const { result } = renderHook(useSwallowActivationClickSettings);
@@ -26,5 +26,5 @@ it('keeps the last applied activation setting when the new value is refused', as
   expect(save).toHaveBeenCalledExactlyOnceWith(true);
   expect(result.current.enabled).toBe(false);
   expect(getSwallowActivationClickEnabled()).toBe(false);
-  expect(errorToast).toHaveBeenCalledExactlyOnceWith('ipcError.ATTACHED_LOCAL_WRITE_REFUSED');
+  expect(errorToast).toHaveBeenCalledExactlyOnceWith('ipcError.PRECONDITION_FAILED');
 });
