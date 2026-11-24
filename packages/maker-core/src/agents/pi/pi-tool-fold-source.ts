@@ -202,14 +202,20 @@ export default function (pi) {
   }
   // 落盘之后身份只剩原文，标记只能靠结构认回：以标记收尾、点名同一个调用 id。
   // 「当时用的是哪种措辞、当时的额度是多少」都不参与——写下去的东西必须和读回来时的
-  // 配置无关，否则同一份会话换个配置就把截断预览当成全文。共同锚点只有这两条，所以
-  // 以后换措辞也不会让老会话失效。
+  // 配置无关，否则同一份会话换个配置就把截断预览当成全文。
+  // 标记必须是「N of M chars;」这种带数字的完整形态，且 M > N。
+  // 只要求「文本里出现过 [truncated 与 id」会误判真实结果（例如以 [truncated by upstream]
+  // 结尾、调用 id 又很短），误判会让原文被当成预览丢掉。
   function isTruncatedPreview(id, text) {
     var key = String(id);
     if (typeof text !== 'string' || text.charAt(text.length - 1) !== ']') return false;
     var open = text.lastIndexOf('[truncated ');
     if (open < 0) return false;
-    return text.slice(open).indexOf(key) >= 0;
+    var tail = text.slice(open);
+    var head = /\[truncated (\d+) of (\d+) chars; /.exec(tail);
+    if (!head) return false;
+    if (Number(head[2]) <= Number(head[1])) return false;
+    return tail.indexOf(key) >= 0;
   }
 
   // Pins: callId -> { ts, chars }. ts is a monotonic recovery clock so the eviction
@@ -525,25 +531,48 @@ export default function (pi) {
   // 预算按「优先级 + 前缀」分配：最新结果整份放不下时给能放下的前缀，而不是跳过它、
   // 把预算花在更旧的载荷上——这一回合工具全禁，模型正要用的是最新那份，而它连取回的
   // 机会都没有。后缀永远读不到，所以只放前缀，并在末尾说明这是预览。
-  function prefixBlocks(blocks, room, total, id) {
+  // keep 是「总共保留多少字符」，不是「还能新增多少」：额度是按已显示的预览之上算出的
+  // 增量，拿它当总量会把一份更短的文本盖在已有正文上（恢复反而变短）。
+  // 末尾那行预览说明也算进预算（不然放回量会超出 pin 预算一个说明的宽度），非文字块按
+  // 序列化字节计入——和入库的账本是同一把尺；带图的那份放不进预算时不带图，只放文字。
+  function prefixBlocks(blocks, keep, total, id) {
+    var tail = truncationTails(String(id)).named;
+    var nonText = 0;
+    for (var j = 0; j < blocks.length; j++) {
+      var part = blocks[j];
+      if (part && !(part.type === 'text' && typeof part.text === 'string')) {
+        try { nonText += JSON.stringify(part).length; } catch (error) { /* ignore */ }
+      }
+    }
+    var withExtras = nonText <= keep;
+    var textBudget = Math.max(0, keep - (withExtras ? nonText : 0));
     var out = [];
-    var used = 0;
     var shown = 0;
-    for (var i = 0; i < blocks.length; i++) {
-      var block = blocks[i];
-      if (!block) continue;
-      if (block.type !== 'text' || typeof block.text !== 'string') { out.push(block); continue; }
-      var text = block.text;
-      var roomNow = room - used;
-      if (roomNow <= 0) break;
-      if (text.length <= roomNow) { out.push(block); shown += text.length; used += text.length; continue; }
-      var end = cutBefore(text, roomNow);
-      if (end > 0) { out.push({ type: 'text', text: text.slice(0, end) }); shown += end; }
-      used = room;
-      break;
+    var trailer = '';
+    for (var pass = 0; pass < 3; pass++) {
+      out = [];
+      shown = 0;
+      var room = Math.max(0, textBudget - trailer.length);
+      for (var i = 0; i < blocks.length; i++) {
+        var block = blocks[i];
+        if (!block) continue;
+        if (block.type !== 'text' || typeof block.text !== 'string') {
+          if (withExtras) out.push(block);
+          continue;
+        }
+        var text = block.text;
+        var roomNow = room - shown;
+        if (roomNow <= 0) continue;
+        if (text.length <= roomNow) { out.push(block); shown += text.length; continue; }
+        var end = cutBefore(text, roomNow);
+        if (end > 0) { out.push({ type: 'text', text: text.slice(0, end) }); shown += end; }
+      }
+      var next = '[truncated ' + shown + ' of ' + total + ' chars; ' + tail + ']';
+      if (next.length === trailer.length) break;
+      trailer = next;
     }
     if (shown === 0) return null;
-    out.push({ type: 'text', text: '[truncated ' + shown + ' of ' + total + ' chars; ' + truncationTails(String(id)).named + ']' });
+    out.push({ type: 'text', text: trailer });
     return out;
   }
 
@@ -560,15 +589,19 @@ export default function (pi) {
       var added = giant.bytes - costOfContent(message.content);
       if (!(added > 0)) continue;
       if (added <= left) { left -= added; picks.push({ at: i, blocks: giant.blocks }); continue; }
-      if (picks.length === 0 && left >= PARTIAL_FLOOR_CHARS) { picks.push({ at: i, blocks: giant.blocks, room: left, total: giant.bytes }); left = 0; }
+      if (picks.length === 0 && left >= PARTIAL_FLOOR_CHARS) {
+        // 已显示多少 + 还能新增多少 = 这一段总共保留多少字符。
+        picks.push({ at: i, blocks: giant.blocks, add: left, have: textChars(message.content), total: textChars(giant.blocks) });
+        left = 0;
+      }
     }
     if (picks.length === 0) return undefined;
     var out = messages.slice();
     for (var p = 0; p < picks.length; p++) {
       var pick = picks[p];
       var content = pick.blocks;
-      if (pick.room !== undefined) {
-        content = prefixBlocks(pick.blocks, pick.room, pick.total, messages[pick.at].toolCallId);
+      if (pick.add !== undefined) {
+        content = prefixBlocks(pick.blocks, pick.have + pick.add, pick.total, messages[pick.at].toolCallId);
         if (content === null) continue;
       }
       out[pick.at] = Object.assign({}, messages[pick.at], { content: content });
@@ -618,6 +651,18 @@ export default function (pi) {
       if (!block) continue;
       if (block.type === 'text' && typeof block.text === 'string') total += block.text.length;
       else { try { total += JSON.stringify(block).length; } catch (error) { /* ignore */ } }
+    }
+    return total;
+  }
+
+  // 纯文本字符数（非文本块不计）。标记里「N of M chars」和放回额度都按这把尺。
+  function textChars(content) {
+    if (typeof content === 'string') return content.length;
+    if (!Array.isArray(content)) return 0;
+    var total = 0;
+    for (var i = 0; i < content.length; i++) {
+      var block = content[i];
+      if (block && block.type === 'text' && typeof block.text === 'string') total += block.text.length;
     }
     return total;
   }

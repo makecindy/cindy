@@ -2117,6 +2117,20 @@ describe('cindy-tool-fold extension source', () => {
     }
   });
 
+  it('returns a result that merely ends with a bracketed note, instead of calling it a preview', async () => {
+    // 真实结果可能以方括号说明收尾，里面恰好有调用 id（例如上游代理自己截断过）。
+    // 结构识别必须要求「N of M chars;」这种带数字的标记：只认「出现 [truncated 与 id」
+    // 会把原文当成预览丢掉，取回时再拒绝，等于把一份读得到的原文换成了拒绝。
+    const tool = loadExtension({});
+    const id = 'call-fp-1';
+    const body = 'line' + String.fromCharCode(10) + '[truncated by the upstream proxy; see ' + id + ']';
+    projection(tool.context, [call(id, 'bash', { command: 'x' }), result(id, 'bash', body)]);
+    const read = await tool.tool.execute('r', { call_id: id });
+    const said = String(read.content![0].text);
+    expect(said).toContain('[truncated by the upstream proxy');
+    expect(said).not.toMatch(/no longer available|not retained|Cannot page/);
+  });
+
   it('never tells the model to repeat a call whose output it cannot return', () => {
     // 扩展不知道被折的命令是否幂等：重复一次 rm 或 push 就是第二次副作用。
     // 取回失败只陈述事实（已经执行过），并要求先核实状态，不劝「重跑」。
