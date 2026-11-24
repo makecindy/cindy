@@ -113,6 +113,7 @@ import { configureProviderShareApprovalWindows } from './providerShareApprovalWi
 import {
   findReceivedShare,
   providerShareAccessEpoch,
+  providerShareReceivedChangeSequence,
   getReceivedShares,
   isReceivedSharesReady,
   getReceivedSharesSnapshot,
@@ -1328,9 +1329,12 @@ async function execute(command: ProviderShareCommand, assertCurrent: () => void 
       emit(PROVIDER_SHARE_IPC.OWNED_CHANGED, null);
       return { ok: true };
     }
-    case 'retry-model-catalog':
+    case 'retry-model-catalog': {
+      const previousSequence = providerShareReceivedChangeSequence();
       await resolveRemoteAgentTargetWhenReady(command.agentDeviceId, { retryDirectory: true });
-      return { ok: true };
+      const receivedChangeSequence = providerShareReceivedChangeSequence();
+      return previousSequence === receivedChangeSequence ? { ok: true } : { ok: true, receivedChangeSequence };
+    }
     case 'received':
       if (running) void refreshReceivedShares('ui');
       return getReceivedShares();

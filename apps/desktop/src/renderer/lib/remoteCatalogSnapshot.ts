@@ -39,6 +39,11 @@ const refreshes = new Map<
 >();
 
 const shareCatalogRetries = new Map<string, Promise<void>>();
+const shareCatalogRecoverySequences = new Map<string, number>();
+
+export function wasShareCatalogRecovered(deviceId: string, receivedChangeSequence: number): boolean {
+  return shareCatalogRecoverySequences.get(deviceId) === receivedChangeSequence;
+}
 
 export function retryProviderShareCatalog(deviceId: string): Promise<void> {
   const pending = shareCatalogRetries.get(deviceId);
@@ -46,10 +51,15 @@ export function retryProviderShareCatalog(deviceId: string): Promise<void> {
   const owner = getDataOwnerGeneration();
   const generation = getDeviceProvidersGeneration(deviceId);
   const retry = (async () => {
-    await window.electronAPI?.providerShare?.command({ action: 'retry-model-catalog', agentDeviceId: deviceId });
+    const result = await window.electronAPI?.providerShare?.command({ action: 'retry-model-catalog', agentDeviceId: deviceId });
     // A push or eviction during the directory refresh owns the newer catalog.
     if (isDataOwnerGenerationCurrent(owner) && isDeviceProvidersGenerationCurrent(deviceId, generation)) {
-      await refreshRemoteCatalogSnapshot(deviceId);
+      const refresh = refreshRemoteCatalogSnapshot(deviceId);
+      // The matching received snapshot may arrive after this catalog read finishes.
+      if (result?.receivedChangeSequence !== undefined) {
+        shareCatalogRecoverySequences.set(deviceId, result.receivedChangeSequence);
+      }
+      await refresh;
     }
   })().finally(() => {
     if (shareCatalogRetries.get(deviceId) === retry) shareCatalogRetries.delete(deviceId);
@@ -145,6 +155,7 @@ export function invalidateRemoteCatalogSnapshots(): void {
   evictAllRemoteCapabilities();
   refreshes.clear();
   shareCatalogRetries.clear();
+  shareCatalogRecoverySequences.clear();
 }
 
 export async function refreshRemoteCatalogSnapshot(deviceId: string, notification?: unknown,
@@ -155,6 +166,7 @@ export async function refreshRemoteCatalogSnapshot(deviceId: string, notificatio
   const retainDisplaySnapshot = !options?.retireOnly
     && readProviderMetadataContinuity(notification)?.remainingMs !== 0;
   const retireOnly = options?.retireOnly === true;
+  shareCatalogRecoverySequences.delete(deviceId);
   // Capture in-flight-only consumers before eviction removes their request keys.
   // The direct source and every affected task-host route retain separate caches
   // and refresh generations; never reopen aliases for a denial/retirement.

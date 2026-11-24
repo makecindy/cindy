@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { __testing as dataOwnerTesting, setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { ensureProviderShareReceivedStarted, resetProviderShareStoreForTests } from '@/features/provider-share/providerShareStore';
 import * as providers from '@/hooks/useDeviceProviders';
+import type { ProviderShareReceived } from '@cindy/device-link';
+import type { ProviderShareCommand } from '../../shared/providerShare';
 import * as capabilities from '@/hooks/useAgentCapabilities';
 import { invalidateRemoteCatalogSnapshots, refreshRemoteCatalogSnapshot, retryProviderShareCatalog } from '@/lib/remoteCatalogSnapshot';
 import { CONTROLLED_MODEL_CATALOG_CHANNEL, modelCatalogKey } from '../../shared/controlledModelCatalog';
@@ -8,7 +12,11 @@ beforeEach(() => {
   invalidateRemoteCatalogSnapshots();
   vi.clearAllMocks();
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  resetProviderShareStoreForTests();
+  dataOwnerTesting.reset();
+  vi.unstubAllGlobals();
+});
 
 function deferred() {
   let resolve!: () => void;
@@ -39,6 +47,79 @@ describe('explicit shared catalog retries', () => {
     confirmation.resolve();
     await Promise.all([first, second]);
     expect(invoke.mock.calls.filter(([, channel]) => channel === 'maker:provider:list')).toHaveLength(retired ? 0 : 1);
+  });
+});
+
+describe('shared catalog recovery notification', () => {
+  // Unit: hold the real store's recovery snapshot until the button has read
+  // the catalog, then check that only a later publication can refresh it again.
+  it('reads once across the retry response and a delayed membership snapshot', async () => {
+    const deviceId = 'share:recovering';
+    const share: ProviderShareReceived = {
+      shareId: 'recovering', memberId: 'member', providerId: 'anthropic', providerLabel: 'Anthropic',
+      hostDeviceId: 'host', deviceName: 'Host', status: 'active', hostOnline: true, hostCapable: true,
+      owner: { displayName: 'Owner', avatarUrl: null, region: 'global' },
+    };
+    const ownerStamp = { dataOwnerId: 'recipient', ownerGeneration: 1 };
+    setDataOwnerGeneration(ownerStamp.dataOwnerId, ownerStamp.ownerGeneration);
+    const snapshot = (sequence: number, received: ProviderShareReceived[]) => ({
+      ownerStamp, confirmedRegions: ['global'], received, receivedChangeSequence: sequence,
+      regionBudget: { global: { id: String(sequence), order: sequence, remainingMs: 60_000, generatedAt: Date.now() } },
+    });
+    const heldSnapshot = deferred();
+    let publication = snapshot(1, []);
+    let receivedChanged: (received: ProviderShareReceived[]) => void = () => {};
+    let snapshotReads = 0;
+    const command = vi.fn(async (request: ProviderShareCommand) => {
+      if (request.action === 'retry-model-catalog') {
+        publication = snapshot(2, [share]);
+        receivedChanged(publication.received);
+        return { ok: true, receivedChangeSequence: 2 };
+      }
+      if (request.action !== 'received-snapshot') throw new Error('Unexpected provider share command');
+      if (!request.favoriteRecovery) snapshotReads++;
+      const current = publication;
+      if (!request.favoriteRecovery && current.receivedChangeSequence === 2) await heldSnapshot.promise;
+      return current;
+    });
+    const invoke = vi.fn(async (_device: string, channel: string) => (
+      channel === 'maker:provider:list' ? { providers: [] }
+        : { availableModels: [], hasFastMode: false, effortLevels: [], permissionModes: [] }
+    ));
+    const countProviderReads = () => invoke.mock.calls.filter(([, channel]) => channel === 'maker:provider:list').length;
+    vi.stubGlobal('window', { electronAPI: {
+      providerShare: {
+        command,
+        onReceivedChanged: (handler: typeof receivedChanged) => { receivedChanged = handler; },
+      },
+      deviceLink: { invoke },
+    } });
+    const off = providers.subscribeDeviceProviders(deviceId, () => {});
+    try {
+      ensureProviderShareReceivedStarted();
+      await vi.waitFor(() => expect(command.mock.calls.some(([request]) =>
+        request.action === 'received-snapshot' && request.favoriteRecovery)).toBe(true));
+      await retryProviderShareCatalog(deviceId);
+      expect(countProviderReads()).toBe(1);
+
+      heldSnapshot.resolve();
+      await vi.waitFor(() => expect(command.mock.calls.filter(([request]) =>
+        request.action === 'received-snapshot' && request.favoriteRecovery)).toHaveLength(2));
+      expect(snapshotReads).toBe(2);
+      expect(countProviderReads()).toBe(1);
+
+      publication = snapshot(3, [share]);
+      receivedChanged(publication.received);
+      await vi.waitFor(() => expect(countProviderReads()).toBe(2));
+
+      publication = snapshot(4, []);
+      receivedChanged(publication.received);
+      await vi.waitFor(() => expect(providers.getCachedDeviceProviders(deviceId)).toBeNull());
+      expect(countProviderReads()).toBe(2);
+    } finally {
+      heldSnapshot.resolve();
+      off();
+    }
   });
 });
 

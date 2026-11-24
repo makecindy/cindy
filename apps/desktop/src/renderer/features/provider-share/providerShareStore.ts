@@ -24,7 +24,7 @@ import {
   markRemotePluginEnginesStale,
   prefetchRemotePluginEngines,
 } from '@/hooks/usePluginEngines';
-import { refreshRemoteCatalogSnapshot } from '@/lib/remoteCatalogSnapshot';
+import { refreshRemoteCatalogSnapshot, wasShareCatalogRecovered } from '@/lib/remoteCatalogSnapshot';
 import { createLogger } from '@/lib/logger';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerPushStampCurrent } from '@/contexts/dataOwnerGeneration';
 import { getProviderShareFavoriteRegions, reconcileProviderShareFavorites } from '@/state/providerShareFavorites';
@@ -251,10 +251,17 @@ function expireRegionRetention(): void {
   armRegionRetentionTimer();
 }
 
+interface ReceivedCatalogUpdate {
+  clearEmpty?: boolean;
+  skipCatalogs?: boolean;
+  refreshShareIds?: ReadonlySet<string>;
+  receivedChangeSequence?: number;
+}
+
 function invalidateShareCatalogs(
   previous: readonly ProviderShareReceived[],
   next: readonly ProviderShareReceived[],
-  options?: { clearEmpty?: boolean; skipCatalogs?: boolean; retireShareIds?: ReadonlySet<string>; refreshShareIds?: ReadonlySet<string> },
+  options?: ReceivedCatalogUpdate & { retireShareIds?: ReadonlySet<string> },
 ): void {
   // 旧 Main 把临时不可达也投影成空列表；调用方只有在确认区域完整时
   // 才允许用空列表撤权，否则必须保留上一份有界显示。
@@ -267,6 +274,8 @@ function invalidateShareCatalogs(
   const nextById = new Map(next.map((share) => [share.shareId, share]));
   const { changed, removed, revoked } = diffReceivedShares(previous, next);
   const revokedById = new Set(revoked);
+  const sequence = options?.receivedChangeSequence;
+  const recovered = (deviceId: string) => sequence !== undefined && wasShareCatalogRecovered(deviceId, sequence);
   for (const shareId of changed) {
     const deviceId = providerShareAgentDeviceId(shareId);
     const after = nextById.get(shareId);
@@ -283,7 +292,7 @@ function invalidateShareCatalogs(
       continue;
     }
     if (options?.retireShareIds?.has(shareId)) void refreshRemoteCatalogSnapshot(deviceId, revokedCatalog, { retireOnly: true }).catch(() => undefined);
-    else void refreshRemoteCatalogSnapshot(deviceId, mustClear ? revokedCatalog : undefined)
+    else if (mustClear || !recovered(deviceId)) void refreshRemoteCatalogSnapshot(deviceId, mustClear ? revokedCatalog : undefined)
       .catch(() => undefined);
   }
   for (const shareId of removed) {
@@ -307,6 +316,7 @@ function invalidateShareCatalogs(
       }
       continue;
     }
+    if (recovered(deviceId)) continue;
     // A received-list push is also a catalog invalidation even when membership
     // is unchanged. Refresh live consumers, including successful empty results;
     // retire an unused cached copy so reopening reads once without background polling.
@@ -329,7 +339,7 @@ function invalidateShareCatalogs(
 
 function setReceived(
   next: readonly ProviderShareReceived[],
-  options?: { clearEmpty?: boolean; skipCatalogs?: boolean; ownerId?: string | null; ownerGeneration?: number; loaded?: boolean; refreshShareIds?: ReadonlySet<string> },
+  options?: ReceivedCatalogUpdate & { ownerId?: string | null; ownerGeneration?: number; loaded?: boolean },
 ): void {
   const previous = receivedSnapshot.received;
   const expiredShareIds = new Set<string>();
@@ -400,6 +410,8 @@ function readReceivedSnapshot(value: unknown): ProviderShareReceivedSnapshot | n
   return {
     ownerStamp: row.ownerStamp,
     confirmedRegions: row.confirmedRegions,
+    ...(typeof row.receivedChangeSequence === 'number' && Number.isSafeInteger(row.receivedChangeSequence)
+      ? { receivedChangeSequence: row.receivedChangeSequence } : {}),
     received: row.received,
     ...(Array.isArray(row.unavailableShareIds) ? { unavailableShareIds: row.unavailableShareIds.filter((id): id is string => typeof id === 'string') } : {}),
     ...(typeof row.active === 'boolean' ? { active: row.active } : {}),
@@ -441,6 +453,7 @@ function applyReceivedSnapshot(snapshot: ProviderShareReceivedSnapshot, requestS
   const next = [...incoming, ...retained];
   setReceived(next, { clearEmpty: true, skipCatalogs: ownerChanged, ownerId,
     ownerGeneration: snapshot.ownerStamp.ownerGeneration, loaded,
+    receivedChangeSequence: snapshot.receivedChangeSequence,
     ...(refreshCatalogs ? { refreshShareIds: new Set(incoming.map(share => share.shareId)) } : {}) });
   armRegionRetentionTimer();
 }

@@ -140,6 +140,11 @@ let receivedFingerprint = '';
  * catalog push to every controlling computer is only sent on a real change.
  */
 let notifiedFingerprint = '';
+let receivedChangeSequence = 0;
+
+export function providerShareReceivedChangeSequence(): number {
+  return receivedChangeSequence;
+}
 let viewAnchorSequence = 0;
 let leftMemberSequence = 0;
 type DepartureReceipts = { ids: Set<string>; revision: number };
@@ -269,6 +274,7 @@ function emitChanged(rt: Runtime): Promise<void> | void {
     if (!current(rt)) return;
     const changed = notified !== notifiedFingerprint;
     notifiedFingerprint = notified;
+    receivedChangeSequence++;
     rt.events.changed(received.filter(share => !unavailable.has(share.shareId)), changed);
     for (const listener of receivedListeners) {
       try {
@@ -671,6 +677,7 @@ export function getReceivedSharesSnapshot(recovery?: ProviderShareFavoriteRecove
   const unavailable = valid ? [...unavailableShareIds(rt)] : [];
   return {
     ownerStamp,
+    receivedChangeSequence,
     confirmedRegions: loadedRegions,
     received,
     ...(departure ? { leftMemberIds: [...departure.ids], leftMemberRevision: departure.revision } : {}),
