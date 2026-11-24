@@ -3589,6 +3589,32 @@ describe('OrcaTeamService', () => {
     expect(leadMessages[0]).not.toContain('已完成');
   });
 
+  it('keeps the no-state header even when the delivery carries remote dispatch metadata', async () => {
+    const leadMessages: string[] = [];
+    const sendAutoBridgeToLead = vi.fn(async (_leadSessionId: string, message: string) => {
+      leadMessages.push(message);
+      return { accepted: true };
+    });
+    const { service } = createDeps({ sendAutoBridgeToLead });
+
+    await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: '做这个',
+    });
+    await service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'done',
+      finalText: '做完了',
+      remoteReport: { proxySessionId: 'proxy-1', inputClientIds: ['client-1'] },
+    } as never);
+
+    // 远端投递信息只描述消息怎么送来的,不代表这一轮交了结构化回报。
+    expect(leadMessages).toHaveLength(1);
+    expect(leadMessages[0]!.startsWith(AUTO_BRIDGED_NO_STATE)).toBe(true);
+    expect(leadMessages[0]).not.toContain('[Orca Worker report:');
+  });
+
   it('bridges the terminal diagnostic when an errored worker produced no output', async () => {
     const leadMessages: string[] = [];
     const { service } = createDeps({
