@@ -17559,6 +17559,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         offer.providerId === current.providerId && offer.model === current.model)) return { candidate: null };
       return { candidate: { agentKind: dbToMakerAgentKind(offer.agentKind), model: offer.model,
         providerId: offer.providerId, agentDeviceId: null, effort: (offer.effort as SessionRuntimeProfile['effort']) ?? null, fastMode: false },
+        labels: { from: offer.fromLabel ?? current.model, to: `${offer.modelName} · ${offer.sourceName}` },
         bindCommittedRoute: profile => {
           if (profile.providerId) bindModelGroupSession(sessionId, binding.selection, modelGroupCandidateKey({
             agentKind: makerToDbAgentKind(profile.agentKind), model: profile.model, providerId: profile.providerId,
@@ -18632,7 +18633,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     inputCoordinator: {
       isExecutionPaused: (sessionId) => inputCoordinator.isExecutionPaused(sessionId),
       isAutoResumeAttemptCurrent: (sessionId, attemptToken) => inputCoordinator.isAutoResumeAttemptCurrent(sessionId, attemptToken),
-      autoRetryLastError: (sessionId, attemptToken) => inputCoordinator.autoRetryLastError(sessionId, attemptToken),
+      autoRetryLastError: (sessionId, attemptToken, resumeExtra) => inputCoordinator.autoRetryLastError(sessionId, attemptToken, resumeExtra),
     },
     resumeQuotaWait: (sessionId, item, signals) => inputCoordinator.resumeModelGroupQuotaWait(sessionId, item, signals),
     interruptedTurnAutoResumeGuard, autoResumeBookkeeping, botFallbackInputs, modelGroupInputs, scheduledQuotaInputs, workerInputs, saveTurnStartedAtForDeferred,

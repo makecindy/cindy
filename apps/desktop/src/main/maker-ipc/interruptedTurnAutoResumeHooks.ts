@@ -11,7 +11,7 @@ import {
 } from './interruptedTurnAutoResume.js';
 import {
   BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON, MODEL_GROUP_SAME_SOURCE_RETRIES, canResumeAfterRuntimeFallback, isBotCandidateUnavailable,
-  modelGroupFailureScope, type ModelGroupRecovery, type RuntimeFallbackResult,
+  modelGroupFailureScope, modelGroupSwitchCause, type ModelGroupRecovery, type ModelGroupSwitchCause, type RuntimeFallbackResult,
 } from './botCandidateRecovery.js';
 import { isAccountUsageLimitError } from './usageLimitAutoResume.js';
 
@@ -25,7 +25,7 @@ export interface InterruptedTurnAutoResumeHookPorts<RuntimeSession extends objec
   inputCoordinator: {
     isExecutionPaused(sessionId: string): boolean;
     isAutoResumeAttemptCurrent(sessionId: string, attemptToken: number): boolean;
-    autoRetryLastError(sessionId: string, attemptToken: number): Promise<'resumed' | 'superseded' | 'no-progress'>;
+    autoRetryLastError(sessionId: string, attemptToken: number, resumeExtra?: { agentSwitch?: { from: string; to: string; cause: ModelGroupSwitchCause } }): Promise<'resumed' | 'superseded' | 'no-progress'>;
   };
   interruptedTurnAutoResumeGuard: Pick<InterruptedTurnAutoResumeGuard, 'onInterruptedTurn' | 'noteResumeSendFailed'>;
   /** Settle a still-current paused retry into history without a banner. Opted into by the Node Host. */
@@ -251,9 +251,12 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
               // A queue-head retry keeps its original input ID and has no
               // replacement turn to release the guard. Retain the attempt budget.
               if (reportPreparation || startupAdmission) interruptedTurnAutoResumeGuard.noteResumeSendFailed(sessionId, decision.attemptToken);
+              // model-groups.md §4.6: say which source the group moved to and why, on the continuation's activity line.
+              const sourceSwitch = modelGroupInput && fallback.outcome === 'switched' ? fallback.sourceSwitch : undefined;
               const outcome = await inputCoordinator.autoRetryLastError(
                 sessionId,
                 decision.attemptToken,
+                ...(sourceSwitch ? [{ agentSwitch: { ...sourceSwitch, cause: modelGroupSwitchCause(signals, groupScope) } }] as const : []),
               );
               if (!attempt.isCurrent()) {
                 log.debug('interrupted-turn auto-resume completion superseded', {

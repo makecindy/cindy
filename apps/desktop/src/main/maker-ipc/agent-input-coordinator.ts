@@ -3665,10 +3665,16 @@ export class AgentInputCoordinator {
    *  - `superseded`：目标已消失（用户自己接手 / 清了会话）——他已经在处理，别再弹横幅。
    *  - `no-progress`：保留给无法构造安全重试项的异常路径（例如 image-only fallback）。
    */
-  async autoRetryLastError(sessionId: string, attemptToken: number): Promise<AutoRetryOutcome> {
+  async autoRetryLastError(
+    sessionId: string,
+    attemptToken: number,
+    /** Added to the recorded continuation, e.g. the model group's source switch (model-groups.md §4.6). */
+    resumeExtra?: Pick<AutoResumeInfo, 'agentSwitch'>,
+  ): Promise<AutoRetryOutcome> {
     const { outcome } = await this.performRetryLastError(sessionId, {
       auto: true,
       attemptToken,
+      ...(resumeExtra ? { resumeExtra } : {}),
     });
     return outcome;
   }
@@ -3697,6 +3703,7 @@ export class AgentInputCoordinator {
       expectedSwitchRevision?: number;
       /** Quota/group continuation shares the wait token, but retains its actual recovery owner. */
       usageLimitWait?: { token: number; info: AutoResumeInfo; recoveryOwner: 'quota-reset' | 'provider-group' };
+      resumeExtra?: Pick<AutoResumeInfo, 'agentSwitch'>;
     },
   ): Promise<{ projection: AgentInputProjection; outcome: AutoRetryOutcome }> {
     const state = this.getState(sessionId);
@@ -3746,7 +3753,7 @@ export class AgentInputCoordinator {
     // summary to append to an otherwise successful continuation.
     // 额度重置后的续跑记录带上当初的限额原文，作为活动行展开详情里的原因。
     const automaticResumeInfo = opts?.auto
-      ? previousAutoResumeInfo
+      ? previousAutoResumeInfo && opts.resumeExtra ? { ...previousAutoResumeInfo, ...opts.resumeExtra } : previousAutoResumeInfo
       : usageWait
         ? { ...usageWait.info, ...(state.error && !providerRestart ? { error: state.error } : {}) }
         : null;

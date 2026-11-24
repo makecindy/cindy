@@ -99,10 +99,28 @@ export interface ModelGroupRecovery {
   hasImages: boolean;
 }
 
+/** The activity line's cause, the same words as a provider group's computer switch (agentInputQueue.ts AutoResumeAgentSwitchCause). */
+export type ModelGroupSwitchCause = 'usage-limit' | 'auth' | 'unavailable' | 'overload' | 'failed';
+
+export function modelGroupSwitchCause(signals: InterruptedTurnErrorSignals, scope: ModelGroupFailureScope | null): ModelGroupSwitchCause {
+  const reason = signals.reason ?? '';
+  const tag = signals.sdkError ?? '';
+  if (signals.usageLimit === true || signals.codexErrorInfo === 'usageLimitExceeded' || reason === 'acp-usage-limit'
+    || reason === 'provider_quota_limit' || matchesDeterministicUsageExhaustionText(signals.message ?? '')) return 'usage-limit';
+  if (['provider_auth_or_access', 'acp-auth-required'].includes(reason) || ['authentication_failed', 'authentication_error'].includes(tag)
+    || signals.errorStatus === 401) return 'auth';
+  if (scope === 'transient') return 'overload';
+  if (isRemoteAgentRouteLostReason(signals.reason) || ['model_unavailable', 'user_model_access_denied', 'agent-start-failed'].includes(reason)
+    || tag === 'model_not_found') return 'unavailable';
+  return 'failed';
+}
+
 /** The Session reference is only a teardown lease, never proof that a route changed. */
 export interface RuntimeFallbackResult<T> {
   session: T | null;
   outcome: 'unchanged' | 'switched' | 'exhausted' | 'failed' | 'superseded';
+  /** A model group moved the task to another source: the display names, for the activity line (model-groups.md §4.6). */
+  sourceSwitch?: { from: string; to: string };
 }
 
 /**

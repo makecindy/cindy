@@ -122,8 +122,9 @@ describe('computeModelGroupSwitchOffer', () => {
       current: CANDIDATES[index], accountUnavailable, visited,
       recordUnavailable: candidate => visited.add(modelGroupCandidateKey(candidate)),
     });
-    expect(await recover(0, true)).toMatchObject({ providerId: 'anthropic' });
-    expect(await recover(2, false)).toMatchObject({ providerId: 'acct-b' });
+    // The activity line names the source it moved away from (model-groups.md §4.6).
+    expect(await recover(0, true)).toMatchObject({ providerId: 'anthropic', fromLabel: 'M · A' });
+    expect(await recover(2, false)).toMatchObject({ providerId: 'acct-b', fromLabel: 'M · Claude' });
     expect(await recover(3, false)).toBeNull();
     visited.clear();
     expect(await recover(0, false)).toMatchObject({ providerId: 'acct-a', model: 'gpt-mini' });

@@ -71,6 +71,8 @@ export interface SessionRuntimeFallbackPorts<RuntimeSession extends { agentKind:
   readModelGroupFallbackCandidate?(sessionId: string, current: SessionRuntimeProfile, visited: readonly string[], recovery: ModelGroupRecovery, generation: number): Promise<{
     candidate: SessionRuntimeProfile | null;
     bindCommittedRoute?(profile: SessionRuntimeProfile): void;
+    /** Display names of the failed source and the candidate («model · source»). */
+    labels?: { from: string; to: string };
   } | null>;
   readSessionAgentDeviceId(sessionId: string): Promise<string | null | undefined>;
   readSessionRuntimeFallbackSettings(): { enabled: boolean };
@@ -170,6 +172,10 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
         : null;
       if (!isCurrent()) return { session: null, outcome: 'superseded' };
       if (group) candidate = group.candidate;
+      let groupLabels = group?.labels;
+      const switchedResult = (session: RuntimeSession | null): RuntimeFallbackResult<RuntimeSession> => ({
+        session, outcome: 'switched', ...(group && groupLabels ? { sourceSwitch: groupLabels } : {}),
+      });
       if (!botFallback.isBot && !group) {
         if (profiles.effective.agentKind === 'acp') return { session: null, outcome: requireRouteChange ? 'exhausted' : 'unchanged' };
         if (await readSessionAgentDeviceId(sessionId)) return { session: null, outcome: requireRouteChange ? 'exhausted' : 'unchanged' };
@@ -248,6 +254,7 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
           const next = await readModelGroupFallbackCandidate?.(sessionId, currentForFallback,
             latest.control.visitedRoutes, groupRecovery, latest.control.generation);
           candidate = next?.candidate ?? null;
+          groupLabels = next?.labels;
           return candidate !== null;
         }
         if (!botFallback.isBot) return false;
@@ -353,7 +360,7 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
             toProviderId: selected.providerId,
             toModel: selected.model,
           });
-          return { session: runtimeSession, outcome: 'switched' };
+          return switchedResult(runtimeSession);
         }
         let result: Awaited<ReturnType<typeof applySessionRuntimeSelection>>;
         try {
@@ -409,7 +416,7 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
           toModel: selected.model,
           applied: !result.superseded,
         });
-        return { session: runtimeSession, outcome: result.superseded ? 'superseded' : 'switched' };
+        return result.superseded ? { session: runtimeSession, outcome: 'superseded' } : switchedResult(runtimeSession);
       }
       return { session: runtimeSession, outcome: 'exhausted' };
     } catch (error) {

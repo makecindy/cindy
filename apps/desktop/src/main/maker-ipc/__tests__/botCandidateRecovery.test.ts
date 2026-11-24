@@ -471,11 +471,12 @@ describe('model group failure handling', () => {
     let episodeAttempt = 0;
     const scheduled: Array<() => Promise<void>> = [];
     const delays: number[] = [];
-    const fallback = vi.fn(async (..._args: unknown[]) => ({ session: null, outcome: 'unchanged' as string }));
+    const fallback = vi.fn(async (..._args: unknown[]): Promise<Record<string, unknown>> => ({ session: null, outcome: 'unchanged' }));
+    const resume = vi.fn(async (..._args: unknown[]) => 'resumed');
     const modelGroupInputs = new WeakSet<object>([item.createOpts]);
     const hooks = createInterruptedTurnAutoResumeHooks({
       inputCoordinator: { isExecutionPaused: vi.fn(() => false), isAutoResumeAttemptCurrent: vi.fn(() => true),
-        autoRetryLastError: vi.fn(async () => 'resumed') },
+        autoRetryLastError: resume },
       interruptedTurnAutoResumeGuard: {
         onInterruptedTurn: vi.fn(() => {
           episodeAttempt += 1;
@@ -508,7 +509,7 @@ describe('model group failure handling', () => {
       const call = fallback.mock.calls.at(-1)!;
       return { requireRouteChange: call[3], recovery: call[5] as { retrySameSource?: boolean; accountUnavailable: boolean } };
     };
-    return { fail, fallback, delays };
+    return { fail, fallback, delays, resume };
   }
 
   it('retries a transient failure on the same source twice before switching, and gives the new source its own retries', async () => {
@@ -533,5 +534,22 @@ describe('model group failure handling', () => {
     expect(requireRouteChange).toBe(true);
     expect(recovery).toMatchObject({ retrySameSource: false, accountUnavailable: wholeConnection });
     expect(h.delays).toEqual([0]);
+  });
+
+  it.each([
+    ['an account quota', { usageLimit: true }, 'usage-limit'],
+    ['a dead login', { reason: 'provider_auth_or_access' }, 'auth'],
+    ['a removed model', { reason: 'model_unavailable' }, 'unavailable'],
+  ] as const)('says on the continuation which source it moved to after %s', async (_name, signals, cause) => {
+    const h = groupHarness();
+    h.fallback.mockResolvedValueOnce({ session: null, outcome: 'switched', sourceSwitch: { from: 'Claude · A', to: 'GPT · B' } });
+    await h.fail(signals);
+    expect(h.resume.mock.calls.at(-1)).toEqual(['s', 1, { agentSwitch: { from: 'Claude · A', to: 'GPT · B', cause } }]);
+  });
+
+  it('records nothing extra when the source stayed', async () => {
+    const h = groupHarness();
+    await h.fail({ errorStatus: 503 });
+    expect(h.resume.mock.calls.at(-1)).toEqual(['s', 1]);
   });
 });
