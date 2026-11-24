@@ -14885,7 +14885,8 @@ describe('Orca report durable recovery', () => {
   // A rejected steer write before Stop must stay visible once Stop cancels recovery.
   it.each([
     'before-backoff', 'after-backoff', 'after-close', 'after-takeover',
-    'before-stopped-write', 'before-stop', 'before-replacement-failure', 'after-dismissal', 'after-manual-retry',
+    'before-stopped-write', 'before-stop', 'before-unconfirmed-continue',
+    'before-replacement-failure', 'after-dismissal', 'after-manual-retry',
     'during-manual-progress-read', 'during-manual-snapshot-read',
   ] as const)('settles Worker recovery when steer ACK arrives %s', async timing => {
     vi.useFakeTimers();
@@ -15005,6 +15006,12 @@ describe('Orca report durable recovery', () => {
       } else {
         mocks.createMessage.mockRejectedValueOnce(new Error('steer row unavailable'));
       }
+      if (timing === 'before-unconfirmed-continue') {
+        h.sendToAgent.mockImplementationOnce(async (sessionId, _message, _opts, sendOpts) => {
+          await persistQueuedUserMessage(sessionId, sendOpts);
+          throw turnDispatchUnconfirmedError('Continue delivery unconfirmed');
+        });
+      }
       ack.resolve();
       await expect(steering).resolves.toBe('steered');
       if (timing === 'before-stop') {
@@ -15019,6 +15026,10 @@ describe('Orca report durable recovery', () => {
       expect(h.sendToAgent.mock.lastCall?.[1]).toEqual({
         type: 'user', content: timing === 'after-takeover' ? 'My next instruction' : CONTINUE_AFTER_ERROR_PROMPT,
       });
+      if (timing === 'before-unconfirmed-continue') {
+        expect(h.coordinator.getProjection('worker').error).toBe('Continue delivery unconfirmed');
+        expect(h.coordinator.clearError('worker').error).toBe('Failed to persist user message: steer row unavailable');
+      }
       if (timing === 'before-backoff' || timing === 'after-backoff' || timing === 'after-close') {
         expect(h.coordinator.getProjection('worker').error).toBeNull();
       }

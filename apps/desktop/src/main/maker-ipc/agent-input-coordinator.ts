@@ -7052,7 +7052,7 @@ export class AgentInputCoordinator {
     state.activeTurn = null;
     this.notifyPersistedSendRejected(sessionId, message, item);
     if (isTurnDispatchUnconfirmedError(outcome) && this.autoResumeAttemptIsCurrent(state, item)) {
-      this.commitAutoResumeDispatch(sessionId, item);
+      this.commitAutoResumeDispatch(sessionId, item, 'unconfirmed');
       this.notifyUnconfirmedAutoResumeTurn(sessionId, item);
       state.error = message;
       clearErrorProjectionSignals(state);
@@ -7251,7 +7251,11 @@ export class AgentInputCoordinator {
   }
 
   /** 自动续跑项已真正进入 vendor，之后不再需要 pre-vendor 回滚信息。 */
-  private commitAutoResumeDispatch(sessionId: string, item: AgentInputQueuedMessage): void {
+  private commitAutoResumeDispatch(
+    sessionId: string,
+    item: AgentInputQueuedMessage,
+    confirmation: 'confirmed' | 'unconfirmed' = 'confirmed',
+  ): void {
     const pending = this.pendingAutoResumeRecoveries.get(item.clientId);
     this.pendingAutoResumeRecoveries.delete(item.clientId);
     this.autoResumeDispatchAttempts.delete(item.clientId);
@@ -7264,6 +7268,7 @@ export class AgentInputCoordinator {
     ) {
       const failedSteer = state.detachedSteerPersistenceError;
       if (
+        confirmation === 'confirmed' &&
         pending?.stateRef === state &&
         pending.attemptToken === attemptToken &&
         failedSteer?.recoveryClientId === pending.recovery.item.clientId
