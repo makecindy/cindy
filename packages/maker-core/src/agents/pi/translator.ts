@@ -100,7 +100,7 @@ interface PiPendingAssistantError {
   message: string;
   sdkError: string;
   piCacheCompatibility?: import('./cache-compatibility.js').PiCacheCompatibility;
-  errorStatus?: NonSecretErrorSignals['errorStatus'];
+  errorStatus?: NonSecretErrorSignals['errorStatus'] | 400;
   usageLimit?: true;
   reason?: typeof CONTEXT_OVERFLOW_REASON | typeof UPSTREAM_STREAM_INTERRUPTED_REASON | typeof PI_GATEWAY_DROP_REASON | typeof UNSUPPORTED_REQUEST_OPTION_REASON;
 }
@@ -755,13 +755,28 @@ function isPiAbortedRequest(error: string): boolean {
   return /^Request was aborted[.!]?$/i.test(error.trim());
 }
 
+/** OpenAI-compatible gateways can wrap the upstream JSON error in a JSON string. */
+function isPiInvalidRequestEnvelope(rawError: string): boolean {
+  if (!rawError.startsWith('400:')) return false;
+  try {
+    const body = JSON.parse(rawError.slice(4));
+    const upstream = typeof body?.message === 'string' && !body.error
+      ? JSON.parse(body.message)
+      : body;
+    return upstream?.error?.type === 'invalid_request_error';
+  } catch {
+    return false;
+  }
+}
+
 function piAssistantErrorOf(rawError: string): PiPendingAssistantError {
   const signals = extractNonSecretErrorSignals(rawError);
+  const errorStatus = signals.errorStatus ?? (isPiInvalidRequestEnvelope(rawError) ? 400 : undefined);
   const redactedError = redactSensitiveText(rawError);
   return {
     message: redactedError,
     sdkError: redactedError,
-    ...(signals.errorStatus !== undefined ? { errorStatus: signals.errorStatus } : {}),
+    ...(errorStatus !== undefined ? { errorStatus } : {}),
     ...(signals.usageLimit ? { usageLimit: true } : {}),
     ...(isContextOverflowErrorMessage(redactedError)
       ? { reason: CONTEXT_OVERFLOW_REASON }

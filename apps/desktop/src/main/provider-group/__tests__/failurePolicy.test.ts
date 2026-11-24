@@ -5,6 +5,10 @@
  */
 import { SESSION_CLOSED_MID_TURN_MESSAGE } from '@cindy/maker-core';
 import { describe, expect, it } from 'vitest';
+import { createPiTranslateContext, disposePiTranslateContext, translatePiEvent } from '../../../../../../packages/maker-core/src/agents/pi/translator';
+import { createAsyncQueue } from '../../../../../../packages/maker-core/src/agents/shared/async-queue';
+import { createConsoleLogger } from '../../../../../../packages/maker-core/src/interfaces/logger';
+import type { AgentEvent } from '../../../../../../packages/maker-core/src/types/events';
 
 import {
   decideProviderGroupFailure,
@@ -26,6 +30,42 @@ const switchTo = (cause: string, connection: 'lost' | 'check' | null = null) => 
 const stay = (why: string) => ({ action: 'stay', why });
 
 const PHASES: ProviderGroupFailurePhase[] = ['start', 'run', 'target'];
+
+// #12473 (unit): Pi receives a string, while the group's existing 400 fixture already has a status.
+const gatewayBody = JSON.stringify({ message: JSON.stringify({ error: {
+  message: "This request carries 102 images in all; model takes at most 100 per request, earlier turns' images included.",
+  type: 'invalid_request_error', code: 'bad_request', param: 'messages',
+} }) });
+
+it.each([
+  [`400: ${gatewayBody}`, stay('invalid-request')],
+  [`HTTP 401: ${gatewayBody}`, switchTo('auth')],
+  [`HTTP 429: ${gatewayBody}`, switchTo('usage-limit')],
+  ['400: upstream connection reset', switchTo('failed')],
+  [`Connection reset after 400: ${gatewayBody}`, switchTo('failed')],
+] as const)('settles one Pi failure and routes it by cause (%s)', async (errorMessage, expected) => {
+  const ctx = createPiTranslateContext(createConsoleLogger());
+  const queue = createAsyncQueue<AgentEvent>();
+  try {
+    translatePiEvent({ type: 'agent_start' }, queue, ctx);
+    translatePiEvent({ type: 'message_end', message: {
+      role: 'assistant', content: [], stopReason: 'error', errorMessage,
+    } }, queue, ctx);
+    translatePiEvent({ type: 'agent_end' }, queue, ctx);
+    translatePiEvent({ type: 'agent_settled' }, queue, ctx);
+    queue.end();
+    const decisions = [];
+    for await (const event of queue) {
+      if (event.type === 'error') {
+        expect(event.data).toMatchObject({ isTerminal: true });
+        decisions.push(decideProviderGroupFailure(providerGroupFailureSignals(event.data), 'run'));
+      }
+    }
+    expect(decisions).toEqual([expected]);
+  } finally {
+    disposePiTranslateContext(ctx);
+  }
+});
 
 describe('decideProviderGroupFailure — the account on that computer', () => {
   it.each<[string, InterruptedTurnErrorSignals, ReturnType<typeof switchTo>]>([
