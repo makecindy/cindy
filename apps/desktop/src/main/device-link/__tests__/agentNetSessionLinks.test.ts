@@ -19,8 +19,10 @@
  * - tier：unit，两个真实的 SessionPeer 在内存里相连，真实的 Node 压缩编码器。 */
 import { describe, expect, it, vi } from 'vitest';
 import { AgentNetSessionLinks, SESSION_INVOKE_REPLAY, SessionPeer, agentNetSessionLane, routeSessionPeers, type AgentNetSessionLinksOptions, type SessionLane } from '@cindy/agent-net';
-import { DeviceLinkError, providerShareGuestPeer, providerShareHostPeer, type DeviceLinkClient, type DeviceLinkPeerRouteStateChanged, type Envelope,
-  type InvokeResultPayload } from '@cindy/device-link';
+import { DeviceLinkError, DeviceLinkUnsentInvokeError, REMOTE_DESKTOP_CHANNEL, REMOTE_RESOURCE_LIST_CHANNEL, providerShareGuestPeer, providerShareHostPeer, DeviceLinkClient, type DeviceLinkPeerRouteStateChanged, type Envelope,
+  type InvokePayload, type InvokeResultPayload } from '@cindy/device-link';
+import WebSocket from 'ws';
+import { createRelayFixture } from '../../../../../../scripts/device-link/relayFixture';
 import { desktopTransferCodec } from '../transferCodec';
 
 const quiet = { debug() {}, info() {}, warn() {}, error() {} };
@@ -395,6 +397,118 @@ describe('AgentNetSessionLinks', () => {
     // 对方的 presence 说关了远程控制：不发出去，当场报 REMOTE_DISABLED。
     links.controller.noteRemoteControlDisabled('a-host');
     await expect(links.controller.openLink('a-host', openPayload)).rejects.toMatchObject({ code: 'REMOTE_DISABLED' });
+  });
+
+  // Integration tier: both facades use real Device Link sockets and SessionPeers.
+  // Lose one direction's reliable pushes. After the window drains the old transport must
+  // deliver its 27 messages and never deliver the desktop start a second time.
+  it('opens a desktop once over the peer session while a ready loopback Device Link has 27 unacknowledged frames', async () => {
+    const relay = await createRelayFixture();
+    const client = (id: string) => new DeviceLinkClient({
+      getWsUrl: () => relay.url, getToken: async () => 'fixture-' + id,
+      getHello: () => ({ deviceName: id, platform: 'darwin', appVersion: '1', remoteControlEnabled: true, busy: false }),
+      createWebSocket: (url, headers) => new WebSocket(url, { headers }),
+      timing: { transportRetryIntervalMs: 100 }, logger: quiet,
+    });
+    const host = client('a-host');
+    const viewer = client('b-controller');
+    const { links } = pair();
+    const receiver = routeSessionPeers(host, links.host);
+    const sender = routeSessionPeers(viewer, links.controller);
+    const received: string[] = [];
+    const pushes: number[] = [];
+    receiver.onFrame(env => {
+      if (env.kind === 'link-open') receiver.sendLinkAccept(env.src!, env.id!, { appVersion: 'host', allowlistHash: 'hash' });
+      if (env.kind === 'push') {
+        const push = env.payload as { channel: string; payload: number };
+        if (push.channel === 'maker:event') pushes.push(push.payload);
+      }
+      if (env.kind !== 'invoke') return;
+      const { channel, args } = env.payload as InvokePayload;
+      const op = channel === REMOTE_DESKTOP_CHANNEL ? (args[0] as { op: string }).op : channel;
+      received.push((links.host.ownsRequest(env.src!, env.id!) ? 'session:' : 'device-link:') + op);
+      receiver.sendInvokeResult(env.src!, env.id!, { ok: true, result: op === 'start' ? { lease: 'test-lease' } : op });
+    });
+    try {
+      host.start();
+      viewer.start();
+      await vi.waitFor(() => expect(host.getStatus() === 'online' && viewer.getStatus() === 'online').toBe(true));
+      await viewer.openLink('a-host', openPayload);
+      relay.dropFrames(env => env.src === 'b-controller' && env.dst === 'a-host' && env.kind === 'push');
+      for (let i = 0; i < 27; i++) viewer.sendPush('a-host', 'maker:event', i);
+      expect(viewer.isLinkReady('a-host')).toBe(true);
+      expect(viewer.getReliableSendQueueDepth('a-host')).toBe(27);
+      await sender.invoke('a-host', { channel: REMOTE_RESOURCE_LIST_CHANNEL, args: [] });
+      await sender.invoke('a-host', { channel: REMOTE_DESKTOP_CHANNEL, args: [{ op: 'start', displayId: '1' }] });
+      relay.dropFrames(() => false);
+      await vi.waitFor(() => {
+        expect(pushes).toHaveLength(27);
+        expect(viewer.getReliableSendQueueDepth('a-host')).toBe(0);
+      }, { timeout: 4000 });
+      await sender.invoke('a-host', { channel: REMOTE_DESKTOP_CHANNEL, args: [{ op: 'heartbeat', lease: 'test-lease' }] });
+      expect(received).toEqual(['session:' + REMOTE_RESOURCE_LIST_CHANNEL, 'session:start', 'session:heartbeat']);
+      expect(pushes).toEqual(Array.from({ length: 27 }, (_, i) => i));
+    } finally {
+      viewer.stop();
+      host.stop();
+      await relay.close();
+    }
+  });
+
+  // Mac Studio -> MacBook: the old link stays ready with 27 queued frames. Follow a fresh
+  // desktop lease through start, input and stop, and distinguish a local withdrawal from errors on the wire.
+  it('moves an unwritten negotiation and keeps only the granted desktop lease on its session', async () => {
+    const { links, connect } = pair();
+    const seen: string[] = [];
+    links.host.onFrame(env => {
+      if (env.kind !== 'invoke') return;
+      const { channel, args } = env.payload as InvokePayload;
+      const op = channel === REMOTE_DESKTOP_CHANNEL ? (args?.[0] as { op: string }).op : channel;
+      seen.push(op);
+      links.host.sendInvokeResult(env.src!, env.id!, { ok: true, result: op === 'start' ? { lease: 'new' } : 'session' });
+    });
+    const old = idleDeviceLink([]);
+    old.isLinkReady = () => true;
+    old.isOutboundExplicitlyClosed = () => false;
+    old.getReliableSendQueueDepth = () => 27;
+    let failure: DeviceLinkError | undefined;
+    old.invoke = vi.fn(async (_dst, _payload, _timeout, options) => {
+      if (failure) throw failure;
+      if (options?.canRerouteBeforeWrite?.()) throw new DeviceLinkUnsentInvokeError();
+      return { ok: true as const, result: 'device-link' };
+    });
+    const router = routeSessionPeers(old, links.controller);
+    const desktop = (op: string, lease?: string) => router.invoke('a-host', { channel: REMOTE_DESKTOP_CHANNEL,
+      args: [{ op, ...(lease ? { lease } : { displayId: '1' }) }] });
+    await expect(router.invoke('a-host', { channel: REMOTE_RESOURCE_LIST_CHANNEL, args: [] })).resolves.toMatchObject({ result: 'session' });
+    await expect(desktop('capabilities')).resolves.toMatchObject({ result: 'session' });
+    const cancelled = () => { throw new Error('viewer closed'); };
+    await expect(router.invoke('a-host', { channel: REMOTE_DESKTOP_CHANNEL, args: [{ op: 'start' }] },
+      1_000, { beforeDispatch: cancelled })).rejects.toThrow('viewer closed');
+    await expect(desktop('start')).resolves.toMatchObject({ result: { lease: 'new' } });
+    await expect(desktop('input', 'old')).resolves.toMatchObject({ result: 'device-link' });
+    const calls = vi.mocked(old.invoke).mock.calls.length;
+    await expect(desktop('input', 'new')).resolves.toMatchObject({ result: 'session' });
+    await expect(desktop('stop', 'new')).resolves.toMatchObject({ result: 'session' });
+    expect(old.invoke).toHaveBeenCalledTimes(calls);
+    await expect(desktop('input', 'new')).resolves.toMatchObject({ result: 'device-link' });
+    await expect(router.invoke('other-host', { channel: REMOTE_RESOURCE_LIST_CHANNEL, args: [] })).resolves.toMatchObject({ result: 'device-link' });
+    failure = new DeviceLinkError('BACKPRESSURE', 'peer reported backpressure');
+    await expect(desktop('start')).rejects.toBe(failure);
+    failure = new DeviceLinkError('INVOKE_TIMEOUT', 'already written');
+    failure.inFlight = true;
+    await expect(desktop('start')).rejects.toBe(failure);
+    failure = undefined;
+    await desktop('start');
+    connect();
+    await expect(desktop('input', 'new')).rejects.toMatchObject({ code: 'LINK_NOT_OPEN' });
+    old.invoke = async (_dst, _payload, _timeout, options) => {
+      expect(options?.canRerouteBeforeWrite?.()).toBe(true);
+      connect(); // New authenticated session before the async rejection reaches the router.
+      throw new DeviceLinkUnsentInvokeError();
+    };
+    await expect(desktop('start')).rejects.toBeInstanceOf(DeviceLinkUnsentInvokeError);
+    expect(seen).toEqual([REMOTE_RESOURCE_LIST_CHANNEL, 'capabilities', 'start', 'input', 'stop', 'start']);
   });
 
   it('routes a peer to the session unless a Device Link link is up or waiting to recover, and replies on the path a request came by', async () => {

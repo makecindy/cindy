@@ -9,7 +9,7 @@
  *   2026-11-15 隔离验收时列表与探测先经 Device Link 发出，对端的 Device Link 还记着之前的可靠链路，把结果放进这本机已经
  *   没有的链路里，59 秒后超时、再引发重开。Device Link 上有活着的链路（就绪、等恢复、有待发）时照旧走 Device Link：
  *   那上面已确认的请求只能等它重建后补回结果。等恢复时新发的同账号只读快照可经会话独立取回；
- *   旧帧与业务回包均已排空时，下一次控制握手可转到会话。
+ *   旧帧与业务回包均已排空时，下一次控制握手可转到会话。已就绪但写不进去时，只让尚未写出的独立查询和新远程桌面协商换路。
  * - 对端连接刚建好（或换了一条）、会话还没到时，Device Link 上又没有它的链路状态，建链和调用先等会话一小段
  *   （AgentNetSessionLinks.sessionPendingMs）：不等的话这一次会落到 Device Link，之后一直用到那条链路断开。
  *   对方此刻在 Agent-Net 上在线、连接还没建（本机刚启动、连接刚断）时也一样，先连上它再等（sessionWait）。
@@ -17,8 +17,11 @@
  * - 跨账号对端（供应商分享、共享任务）同样按上面选路；它的会话在它自己的分享连接上，受邀者第一次建链前先连上对方电脑再等会话。
  * 连接本身的（在线状态、通知、代次、起停）和只有 Device Link 传输层才有的（自建中转的直连路径等）交给 Device Link。
  */
-import { isCompletedInvokeRetryableReadChannel, isScopedPeer, type DeviceLinkClient, type DeviceLinkPeerRouteStateChanged, type Envelope,
-  type InvokePayload, type LinkClosePayload } from '@cindy/device-link';
+import {
+  DeviceLinkError, DeviceLinkUnsentInvokeError, REMOTE_DESKTOP_CHANNEL, REMOTE_RESOURCE_GET_CHANNEL,
+  REMOTE_RESOURCE_LIST_CHANNEL, REMOTE_RESOURCE_MANIFEST_CHANNEL, isCompletedInvokeRetryableReadChannel, isScopedPeer,
+  type DeviceLinkClient, type DeviceLinkPeerRouteStateChanged, type Envelope, type LinkClosePayload,
+} from '@cindy/device-link';
 import { isSessionUnlinkedPushChannel, type AgentNetSessionLinks } from './sessionLinks.js';
 import {
   PEER_LINK_CONNECTION_METHODS, PEER_LINK_DEVICE_LINK_TRANSPORT_METHODS,
@@ -75,6 +78,58 @@ export function routeSessionPeers(target: DeviceLinkClient, links: AgentNetSessi
     const off = [first(), second()];
     return () => { for (const unsubscribe of off) unsubscribe(); };
   };
+  // A host grants one active desktop lease. Keep its input, signaling and stop on the session
+  // that returned it, even if the unrelated Device Link backlog drains in the meantime.
+  const desktopLeases = new Map<string, { lease: string; session: string }>();
+  const invoke: Routed['invoke'] = (dst, payload, timeoutMs, options) => routed(dst, async (useSession) => {
+    const desktop = payload.channel === REMOTE_DESKTOP_CHANNEL
+      ? payload.args?.[0] as { op?: string; lease?: string; action?: string; kind?: string } | undefined : undefined;
+    const lease = desktop?.lease;
+    const bound = desktop && typeof lease === 'string' ? desktopLeases.get(dst) : undefined;
+    const pinned = !!bound && bound.lease === lease;
+    const session = isScopedPeer(dst) ? null : links.sessionStreamId(dst);
+    if (pinned && session !== bound.session) throw new DeviceLinkError('LINK_NOT_OPEN', 'desktop lease session closed');
+    const read = isCompletedInvokeRetryableReadChannel(payload.channel);
+    if (!pinned && (useSession || (session && read && target.needsLinkRecovery(dst)))) {
+      return links.invoke(dst, payload, timeoutMs, options);
+    }
+    // Only a new desktop negotiation or a standalone lookup can leave the old stream.
+    // Lease-bound writes on an existing Device Link desktop retain their original order.
+    const bootstrap = desktop?.op === 'capabilities' || desktop?.op === 'screens' || desktop?.op === 'start'
+      || (desktop?.op === 'permissions' && desktop.action === 'check')
+      || (desktop?.op === 'credential' && (desktop.kind === 'open' || desktop.kind === 'exchange' || desktop.kind === 'prepare' || desktop.kind === 'status'));
+    const eligible = read || bootstrap || payload.channel === REMOTE_RESOURCE_MANIFEST_CHANNEL
+      || payload.channel === REMOTE_RESOURCE_LIST_CHANNEL || payload.channel === REMOTE_RESOURCE_GET_CHANNEL;
+    if (!session || (!pinned && (!eligible || !target.isLinkReady(dst)))) return target.invoke(dst, payload, timeoutMs, options);
+    const control = useSession ? links : target;
+    const generation = control.getPeerLinkGeneration(dst);
+    const current = () => links.sessionStreamId(dst) === session && !control.isOutboundExplicitlyClosed(dst)
+      && control.getPeerLinkGeneration(dst) === generation;
+    const deadline = timeoutMs === undefined ? Infinity : performance.now() + timeoutMs;
+    const guarded = { ...options, beforeDispatch: () => {
+      options?.beforeDispatch?.();
+      if (!current()) throw new DeviceLinkError('LINK_NOT_OPEN', 'route changed before session dispatch');
+      if (performance.now() >= deadline) throw new DeviceLinkError('BACKPRESSURE', 'invoke expired before session dispatch');
+    } };
+    if (pinned) {
+      const result = await links.invoke(dst, payload, timeoutMs, guarded);
+      if (desktop?.op === 'stop' && result.ok && desktopLeases.get(dst) === bound) desktopLeases.delete(dst);
+      return result;
+    }
+    try {
+      return await target.invoke(dst, payload, timeoutMs, { ...options, canRerouteBeforeWrite: current });
+    } catch (error) {
+      if (!(error instanceof DeviceLinkUnsentInvokeError) || !current() || performance.now() >= deadline) throw error;
+      log?.debug(`agent-net routing unsent invoke to session peer=${dst.slice(0, 8)} channel=${payload.channel}`);
+      const remaining = timeoutMs === undefined ? undefined : Math.ceil(deadline - performance.now());
+      const result = await links.invoke(dst, payload, remaining, guarded);
+      if (desktop?.op === 'start' && result.ok) {
+        const granted = (result.result as { lease?: unknown } | null)?.lease;
+        if (typeof granted === 'string' && granted) desktopLeases.set(dst, { session, lease: granted });
+      }
+      return result;
+    }
+  });
   const perPeer: Routed = {
     openLink: (dst, payload, timeoutMs) => routed(dst, (useSession) => {
       // Agent-Net 关着、对端和它无关时不记：和原来的 Device Link 一样（2026-11-17 review）。
@@ -94,14 +149,7 @@ export function routeSessionPeers(target: DeviceLinkClient, links: AgentNetSessi
       const session = direction === 'inbound' ? links.ownsInbound(dst) : links.ownsOutbound(dst) || links.needsLinkRecovery(dst);
       if (session) links.closeLink(dst, reason, direction); else target.closeLink(dst, reason, direction);
     },
-    invoke: (dst: string, payload: InvokePayload, timeoutMs?: number, options?: Parameters<DeviceLinkClient['invoke']>[3]) =>
-      routed(dst, (useSession) => {
-        // A new listing has its own request ID and the reply follows the session request.
-        // Leave the old reliable stream (including its pending writes and replies) to recover.
-        const readOnSession = !useSession && !isScopedPeer(dst) && isCompletedInvokeRetryableReadChannel(payload.channel)
-          && target.needsLinkRecovery(dst) && links.available(dst);
-        return useSession || readOnSession ? links.invoke(dst, payload, timeoutMs, options) : target.invoke(dst, payload, timeoutMs, options);
-      }),
+    invoke,
     isLinkReady: (dst) => (links.ownsOutbound(dst) ? links.isLinkReady(dst) : target.isLinkReady(dst)),
     // 控制方向的恢复与显式关闭只看出站：对端经会话控制本机时，本机经 Device Link 那条的状态照旧由 Device Link 报。
     needsLinkRecovery: (dst) => (links.knowsOutbound(dst) ? links.needsLinkRecovery(dst) : target.needsLinkRecovery(dst)),
@@ -137,7 +185,7 @@ export function routeSessionPeers(target: DeviceLinkClient, links: AgentNetSessi
       return [...sessions, ...target.getPeerLinkSnapshots().filter((snapshot) => !seen.has(snapshot.deviceId))];
     },
     start: () => { links.start(); return target.start(); },
-    stop: (options) => { links.stop(options); return target.stop(options); },
+    stop: (options) => { desktopLeases.clear(); links.stop(options); return target.stop(options); },
   };
   /** 业务拿到的连接要是这一层：入口里有不少「connectionFor(peer) === client」这样的身份比较，client 是这一层。 */
   const own = (connection: DeviceLinkClient): PeerLinks => ((connection as unknown) === target ? router : connection);

@@ -218,6 +218,11 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
 
   /** 这个对端现在能走会话（双方都启用了，连接在）。 */
   available(deviceId: string): boolean { return !this.stopped && !!this.live(deviceId); }
+  /** Identity of this authenticated session, for work that must expire when it is replaced. */
+  sessionStreamId(deviceId: string): string | null {
+    const session = this.stopped ? null : this.live(deviceId);
+    return session && this.streamIdFor(session);
+  }
   /** 本机对这个对端的控制链路正走会话（建链中或已建好）。 */
   ownsOutbound(deviceId: string): boolean { return this.peers.get(deviceId)?.outbound !== undefined && this.peers.get(deviceId)!.outbound !== 'idle'; }
   /** 对端对本机的控制链路走会话（已接受，或 link-open 正等本机回答）。 */
@@ -475,6 +480,7 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
     const priority = resolveInvokePriority(payload.channel, options?.background, payload.args);
     const slotBudgetMs = Math.min(timeoutMs ?? this.requestTimeout(), 30_000);
     const send = async (): Promise<InvokeResultPayload> => {
+      if (this.remoteControlDisabled.has(dst)) throw new DeviceLinkError('REMOTE_DISABLED', 'remote control is disabled by the target');
       options?.preSend?.();
       options?.beforeDispatch?.();
       const peer = this.peer(dst);
