@@ -46,7 +46,8 @@ describe('native package Host tools', () => {
       commitShare: vi.fn(async () => ({ sessionId: 'imported', fidelity: 'full' as const, notes: [], orcaWorkers: 0 })),
       cancelDraft: vi.fn(), chooseExportPath: vi.fn(async () => path.join(directory, 'chosen.cshare')),
       presetExportDestination: vi.fn(async (): Promise<{ directory: string; fileName: string } | null> => null),
-      writeExportFile: vi.fn(writeNewSaveFile),
+      writeExportFile: vi.fn((directory: string, fileName: string, bytes: Uint8Array, assertCurrent: () => void) =>
+        writeNewSaveFile(directory, fileName, bytes, { assertCurrent, exactCase: true })),
       openImportWizard: vi.fn(), handoff: () => handoff,
     };
     return { ports, handoff, callbacks: createSessionShareToolCallbacks(ports) };
@@ -211,7 +212,7 @@ describe('native package Host tools', () => {
     f.ports.presetExportDestination.mockResolvedValue({ directory: exports, fileName: 'Task.cshare' });
     f.ports.writeExportFile.mockImplementationOnce(async (dir, name, bytes, assertCurrent) => {
       current = false;
-      return writeNewSaveFile(dir, name, bytes, assertCurrent);
+      return writeNewSaveFile(dir, name, bytes, { assertCurrent, exactCase: true });
     });
     expect(await f.callbacks.export({ sessionId: 'task', excludeMedia: false }, context))
       .toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });

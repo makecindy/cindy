@@ -82,9 +82,11 @@ function assertScope(scope: string): void {
   }
 }
 
-/** Never returns one owner's path after the active owner changed while it was being read. */
-async function readState(): Promise<TaskExportDirectoryState> {
-  const scope = activeOwnerScopeKey();
+/**
+ * Never returns another owner's path: every read is fenced to `scope`, the owner the IPC request
+ * started under, so a request outlived by an account switch fails instead of answering for B.
+ */
+async function readState(scope = activeOwnerScopeKey()): Promise<TaskExportDirectoryState> {
   assertScope(scope);
   const settings = await readSettings();
   assertScope(scope);
@@ -101,7 +103,7 @@ export function createTaskExportDirectoryHandlers(deps: { chooseDirectory(): Pro
   const choose = async () => {
     const scope = activeOwnerScopeKey();
     const directory = await deps.chooseDirectory();
-    if (directory === null) return readState();
+    if (directory === null) return readState(scope);
     assertScope(scope);
     if (!validDirectory(directory)) throwIpcError('INVALID_PARAMS', 'invalid task export directory');
     const realPath = await fs.promises.realpath(directory).catch(() => null);
@@ -111,13 +113,14 @@ export function createTaskExportDirectoryHandlers(deps: { chooseDirectory(): Pro
     if (await readSettings() === 'unreadable') await store.resetAtomic();
     assertScope(scope);
     await store.updateAtomic(() => ({ directory, realPath }));
-    return readState();
+    return readState(scope);
   };
   const reset = async () => {
-    assertScope(activeOwnerScopeKey());
+    const scope = activeOwnerScopeKey();
+    assertScope(scope);
     // resetAtomic removes the file, so this is also the recovery path for an unreadable one.
     await store.resetAtomic();
-    return readState();
+    return readState(scope);
   };
-  return { get: readState, choose, reset };
+  return { get: () => readState(), choose, reset };
 }

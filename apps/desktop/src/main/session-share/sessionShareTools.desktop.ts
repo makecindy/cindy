@@ -56,7 +56,9 @@ export function createDesktopSessionShareCallbacks() {
     inspectShare: (filePath, bytes) => bytes ? inspectShareBytes(bytes, filePath) : inspectShareFile(filePath),
     commitShare: commitSessionShareOnHost,
     cancelDraft: cancelShareDraft, chooseExportPath: chooseSessionShareExportPath, handoff: getGhostHandoffStore,
-    presetExportDestination, writeExportFile: writeNewSaveFile,
+    presetExportDestination,
+    writeExportFile: (directory, fileName, bytes, assertCurrent) =>
+      writeNewSaveFile(directory, fileName, bytes, { assertCurrent, exactCase: true }),
     openImportWizard: filePath => {
       if (!BrowserWindow.getAllWindows().some(win => !win.isDestroyed())) throw new Error('HOST_NOT_READY');
       handleIncomingShareFile(filePath, 'host-tool', captureDataOwnerBroadcastScope());

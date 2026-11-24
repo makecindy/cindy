@@ -59,4 +59,20 @@ describe('task export folder setting', () => {
     expect(await handlers.choose()).toEqual({ path: chosen, exists: true, unreadable: false });
     expect(await readTaskExportDirectory()).toEqual({ realPath: await fs.realpath(chosen) });
   });
+
+  // #12461 review: a picker opened under account A and cancelled after a switch to B must
+  // fail rather than answer A's request with B's saved path.
+  it('fails a picker result that arrives after the account changed', async () => {
+    await fs.mkdir(path.join(h.dir, 'owner-b'), { recursive: true });
+    const bFolder = path.join(h.dir, 'b-exports');
+    await fs.mkdir(bFolder);
+    h.owner = 'owner-b';
+    chosen = bFolder;
+    await handlers.choose();
+    h.owner = 'owner-a';
+    const switching = createTaskExportDirectoryHandlers({
+      chooseDirectory: async () => { h.owner = 'owner-b'; return null; },
+    });
+    await expect(switching.choose()).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+  });
 });

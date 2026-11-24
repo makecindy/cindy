@@ -6,15 +6,12 @@ import path from 'node:path';
 import type { LiziMcpSessionContext, SessionShareCallbacks } from '@cindy/mcps';
 import { GHOST_HANDOFF_MAX_BYTES_PER_FILE, type GhostHandoffFile } from '../../shared/ghost.js';
 import { readBoundedFileNoFollow, readToLength } from '../utils/readBoundedFile.js';
+import { sameRealPathExactCase } from '../cindy-brain/dirDeposit.js';
 import type { SessionShareExportOptions, SessionShareExportOutcome } from './sessionShareExport.js';
 import type { CommitShareImportOptions, CommitShareImportResult, InspectResult } from './sessionShareImport.js';
 
 /** The packer caps unpacked content at 256 MiB; this only bounds reading back its own output. */
 const PRESET_EXPORT_MAX_BYTES = 512 * 1024 * 1024;
-
-function sameRealPath(a: string, b: string): boolean {
-  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
-}
 
 /** The two callers share native package services; only their file handoff differs. */
 export function createSessionShareToolCallbacks(ports: {
@@ -78,7 +75,7 @@ export function createSessionShareToolCallbacks(ports: {
         scope.assertCurrent();
         // The approved location must still be its own canonical path: a folder or ancestor later
         // replaced by a symlink or junction would otherwise redirect the export.
-        if (preset && !sameRealPath(await fs.realpath(preset.directory).catch(() => ''), preset.directory)) {
+        if (preset && !sameRealPathExactCase(await fs.realpath(preset.directory).catch(() => ''), preset.directory)) {
           throw new Error('EXPORT_DIRECTORY_UNAVAILABLE');
         }
         if (scope.pluginId || preset) {

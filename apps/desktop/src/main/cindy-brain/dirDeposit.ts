@@ -150,6 +150,17 @@ function sameRealPath(a: string, b: string): boolean {
   return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
 }
 
+/**
+ * 保留大小写的比较，只归一 Windows 盘符(同 readBoundedFile.ts)：开启目录级
+ * 大小写敏感的 Windows 目录里，仅大小写不同的路径可能是另一个目录。
+ */
+export function sameRealPathExactCase(a: string, b: string): boolean {
+  const drive = (value: string) => process.platform === 'win32'
+    ? value.replace(/^([A-Za-z]):/, (_, letter: string) => `${letter.toLowerCase()}:`)
+    : value;
+  return drive(a) === drive(b);
+}
+
 interface VaultEntry {
   callId?: string;
   ghostId: string;
@@ -403,15 +414,19 @@ function dedupeFileName(fileName: string, n: number): string {
  * 在 canonical 根下原子创建一个不覆盖的文件。先用 O_EXCL/O_NOFOLLOW
  * 钉住句柄，再核对根路径、目标真身与句柄 identity，最后才写入字节。
  * 任务包导出到用户设定目录时复用同一写法(sessionShareTools.desktop.ts)。
- * assertCurrent(可选)在写入字节前与提交成功前各调用一次；抛错即按失败
+ * options.assertCurrent 在写入字节前与提交成功前各调用一次；抛错即按失败
  * 路径清空并删除本次新建的文件，用于调用方在等待期间被撤权的情形。
+ * options.exactCase 让根目录核对保留大小写(任务包导出使用)；不传时沿用
+ * 原有比较，插件交接路径行为不变。
  */
 export async function writeNewSaveFile(
   dirRealPath: string,
   fileName: string,
   bytes: Uint8Array,
-  assertCurrent?: () => void,
+  options: { assertCurrent?: () => void; exactCase?: boolean } = {},
 ): Promise<string | null> {
+  const { assertCurrent } = options;
+  const same = options.exactCase ? sameRealPathExactCase : sameRealPath;
   const flags =
     fs.constants.O_WRONLY |
     fs.constants.O_CREAT |
@@ -425,7 +440,7 @@ export async function writeNewSaveFile(
     } catch {
       return null;
     }
-    if (!sameRealPath(currentRoot, dirRealPath)) return null;
+    if (!same(currentRoot, dirRealPath)) return null;
 
     const candidate = dedupeFileName(fileName, n);
     const target = path.join(dirRealPath, candidate);
@@ -447,8 +462,8 @@ export async function writeNewSaveFile(
       const pathStat = fs.statSync(target);
       if (
         !openedStat.isFile() ||
-        !sameRealPath(rootAfter, dirRealPath) ||
-        !sameRealPath(path.dirname(targetAfter), dirRealPath) ||
+        !same(rootAfter, dirRealPath) ||
+        !same(path.dirname(targetAfter), dirRealPath) ||
         pathStat.dev !== openedStat.dev ||
         pathStat.ino !== openedStat.ino
       ) {
@@ -466,8 +481,8 @@ export async function writeNewSaveFile(
       const pathStatAfterWrite = fs.statSync(target);
       if (
         !writtenStat.isFile() ||
-        !sameRealPath(rootAfterWrite, dirRealPath) ||
-        !sameRealPath(path.dirname(targetAfterWrite), dirRealPath) ||
+        !same(rootAfterWrite, dirRealPath) ||
+        !same(path.dirname(targetAfterWrite), dirRealPath) ||
         writtenStat.dev !== openedStat.dev ||
         writtenStat.ino !== openedStat.ino ||
         pathStatAfterWrite.dev !== writtenStat.dev ||
