@@ -3005,7 +3005,12 @@
         "reconcileButton": "Check",
         "reconcileFailed": "Check failed",
         "reconcileHealthy": "Ledger and disk match. No issues found.",
-        "reconcileIssues": "Issues found: {{orphans}} untracked files ({{orphanSize}}), {{missing}} missing files, {{stray}} unrecognized entries. See the app log for the full list."
+        "reconcileIssues": "Issues found: {{orphans}} untracked files ({{orphanSize}}), {{missing}} missing files, {{stray}} unrecognized entries. See the app log for the full list.",
+        "buddyWorkspaceDirectoryTitle": "Buddy workspace",
+        "buddyWorkspaceDirectoryDescription": "Where new buddies create their workspaces. Existing buddies stay where they are and can be moved individually in their Advanced configuration.",
+        "buddyWorkspaceDirectoryDetails": "Cindy creates an account-specific subfolder here for new buddies' workspaces while keeping their canonical paths linked.",
+        "buddyWorkspaceDirectoryChoose": "Change directory",
+        "buddyWorkspaceDirectoryFailed": "Could not update the buddy workspace folder."
       },
       "piKernel": {
         "manage": "Manage Pi version",
@@ -10022,6 +10027,18 @@
       "title": "Auto-update failed",
       "description": "The updater could not be launched, possibly blocked by system security policy. Please download the latest installer manually.",
       "confirm": "Go to download"
+    },
+    "workspaceMigration": {
+      "title": "Moving buddy workspace",
+      "progressLabel": "Buddy workspace migration progress",
+      "safetyHint": "Copying and verifying files before switching. Keep Cindy open until it finishes.",
+      "phase": {
+        "preparing": "Preparing workspace",
+        "copying": "Copying files",
+        "verifying": "Verifying files",
+        "switching": "Switching location",
+        "cleaning": "Cleaning up backup"
+      }
     }
   },
   "welcome": {
@@ -11354,6 +11371,66 @@
           "corrections": "Corrections you made",
           "routines": "Routines to check",
           "upgrade": "Not carried over automatically"
+        }
+      },
+      "workspaceLocation": {
+        "title": "Workspace location",
+        "description": "Move this buddy's workspace to another local disk to free system-drive space. Cindy keeps the original path linked so existing tasks, automations, and scripts keep working.",
+        "movedDescription": "This workspace is stored at the target folder above. Keep both the target folder and the link at the original path so tasks and scripts continue working.",
+        "chooseDialogTitle": "Choose destination folder for buddy workspace",
+        "fullPath": "Full path",
+        "targetPathLabel": "Target folder",
+        "logicalPathLabel": "Original linked path",
+        "copyPath": "Copy path",
+        "pathCopied": "Path copied",
+        "pathCopyFailed": "Could not copy path",
+        "openTarget": "Open folder",
+        "moveAction": "Move workspace",
+        "chooseAnother": "Choose another folder",
+        "restartNow": "Restart now",
+        "restartAndMove": "Restart and move",
+        "scheduleNextRestart": "Move on next restart",
+        "cancel": "Cancel",
+        "dismissFailed": "Dismiss",
+        "scheduledToast": "Workspace move scheduled for the next restart",
+        "cancelledToast": "Workspace move cancelled",
+        "previewTitle": "Ready to move workspace",
+        "previewSummary": "{{size}} · {{files}} files · {{links}} links",
+        "previewNotice": "Close external editors or scripts using this workspace before restarting. Cindy copies and verifies all files on startup before switching.",
+        "pendingTarget": "Scheduled target: {{target}}",
+        "pendingHint": "Close external programs using this workspace, then restart Cindy to start the move.",
+        "unavailableTitle": "Moved workspace is unavailable",
+        "unavailableDescription": "Cindy could not reach {{target}}. Reconnect the drive or restore the folder; Cindy will not create an empty folder over it.",
+        "errorTitle": "Workspace could not be moved",
+        "failedTitle": "Previous workspace move failed",
+        "interruptedTitle": "Workspace move needs recovery",
+        "backupRemainingHint": "Original backup kept for review at: {{backup}}",
+        "personalPreviewHint": "Close personal preview instances and start the primary Cindy build to schedule or run workspace moves.",
+        "status": {
+          "default": "Default",
+          "pending": "Pending restart",
+          "moved": "Moved",
+          "failed": "Failed",
+          "interrupted": "Recovery needed",
+          "unavailable": "Unavailable"
+        },
+        "warnings": {
+          "waitingExclusive": "Waiting for an exclusive startup. Close other Cindy instances sharing this profile, then restart Cindy to run the move.",
+          "receiptUpdateFailed": "The workspace is usable, but updating the migration record failed and will be retried on the next restart."
+        },
+        "errors": {
+          "insufficientSpace": "The target drive does not have enough free space for this workspace.",
+          "overlapsCindyData": "Choose a folder outside Cindy's own data directory and outside the current workspace.",
+          "localDiskRequired": "Choose a local disk folder rather than a network share.",
+          "unsupportedFileOrHardLink": "This workspace contains hard links or special files that cannot be moved safely right now.",
+          "alreadyRedirected": "This workspace is already redirected. Moving a relocated workspace a second time is not supported yet.",
+          "botHomeRedirected": "This buddy's home folder is manually redirected, so Cindy cannot move its workspace automatically.",
+          "targetExists": "The destination folder already exists. Choose a different location.",
+          "workspaceChanged": "Files in the workspace changed during verification. Close external programs using it and try again.",
+          "backupRetained": "The move succeeded, but the backup differed and was kept so nothing is lost.",
+          "backupCleanupIncomplete": "The move succeeded, but cleaning up the temporary backup did not finish; Cindy will retry on the next restart.",
+          "cutoverInterrupted": "The previous switch was interrupted and Cindy restored the original workspace. Choose a new empty folder to retry.",
+          "generic": "Could not complete the workspace move request. Try again."
         }
       }
     },

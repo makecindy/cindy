@@ -3043,7 +3043,12 @@
         "reconcileButton": "Verificar",
         "reconcileFailed": "Falha na verificação",
         "reconcileHealthy": "O registro e o disco correspondem. Nenhum problema encontrado.",
-        "reconcileIssues": "Problemas encontrados: {{orphans}} arquivos não rastreados ({{orphanSize}}), {{missing}} arquivos ausentes, {{stray}} entradas não reconhecidas. Consulte o log do aplicativo para ver a lista completa."
+        "reconcileIssues": "Problemas encontrados: {{orphans}} arquivos não rastreados ({{orphanSize}}), {{missing}} arquivos ausentes, {{stray}} entradas não reconhecidas. Consulte o log do aplicativo para ver a lista completa.",
+        "buddyWorkspaceDirectoryTitle": "Espaço de trabalho dos amigos",
+        "buddyWorkspaceDirectoryDescription": "Pasta onde novos amigos criam seus espaços de trabalho. Amigos existentes continuam onde estão e podem ser movidos individualmente na configuração avançada.",
+        "buddyWorkspaceDirectoryDetails": "A Cindy cria aqui uma subpasta específica da conta para novos espaços de trabalho, mantendo o link no caminho original.",
+        "buddyWorkspaceDirectoryChoose": "Alterar pasta",
+        "buddyWorkspaceDirectoryFailed": "Não foi possível atualizar a pasta do espaço de trabalho dos amigos."
       },
       "piKernel": {
         "manage": "Gerenciar versão do Pi",
@@ -10096,6 +10101,18 @@
       "title": "Falha na atualização automática",
       "description": "Não foi possível iniciar o atualizador, possivelmente por bloqueio da política de segurança do sistema. Baixe o instalador mais recente manualmente.",
       "confirm": "Ir para o download"
+    },
+    "workspaceMigration": {
+      "title": "Movendo espaço de trabalho",
+      "progressLabel": "Progresso da movimentação do espaço de trabalho",
+      "safetyHint": "Copiando e verificando arquivos antes de trocar o local. Mantenha a Cindy aberta até concluir.",
+      "phase": {
+        "preparing": "Preparando",
+        "copying": "Copiando arquivos",
+        "verifying": "Verificando arquivos",
+        "switching": "Trocando localização",
+        "cleaning": "Limpando backup"
+      }
     }
   },
   "welcome": {
@@ -11440,6 +11457,66 @@
           "corrections": "Suas correções",
           "routines": "Rotinas para revisar",
           "upgrade": "Não transferido automaticamente"
+        }
+      },
+      "workspaceLocation": {
+        "title": "Localização do espaço de trabalho",
+        "description": "Mova o espaço de trabalho deste amigo para outro disco local para liberar espaço no disco do sistema. A Cindy mantém um link no caminho original para que tarefas, automações e scripts continuem funcionando.",
+        "movedDescription": "Este espaço de trabalho está salvo na pasta de destino acima. Mantenha tanto a pasta de destino quanto o link no caminho original.",
+        "chooseDialogTitle": "Escolher pasta de destino para o espaço de trabalho",
+        "fullPath": "Caminho completo",
+        "targetPathLabel": "Pasta de destino",
+        "logicalPathLabel": "Caminho original vinculado",
+        "copyPath": "Copiar caminho",
+        "pathCopied": "Caminho copiado",
+        "pathCopyFailed": "Não foi possível copiar o caminho",
+        "openTarget": "Abrir pasta",
+        "moveAction": "Mover espaço de trabalho",
+        "chooseAnother": "Escolher outra pasta",
+        "restartNow": "Reiniciar agora",
+        "restartAndMove": "Reiniciar e mover",
+        "scheduleNextRestart": "Mover no próximo reinício",
+        "cancel": "Cancelar",
+        "dismissFailed": "Fechar",
+        "scheduledToast": "Movimentação agendada para o próximo reinício da Cindy",
+        "cancelledToast": "Movimentação cancelada",
+        "previewTitle": "Pronto para mover o espaço de trabalho",
+        "previewSummary": "{{size}} · {{files}} arquivos · {{links}} links",
+        "previewNotice": "Feche editores ou scripts externos que estejam usando esta pasta antes de reiniciar. A Cindy copia e verifica todos os arquivos na inicialização antes de trocar o caminho.",
+        "pendingTarget": "Destino agendado: {{target}}",
+        "pendingHint": "Feche programas externos usando esta pasta e reinicie a Cindy para iniciar a movimentação.",
+        "unavailableTitle": "Espaço de trabalho movido indisponível",
+        "unavailableDescription": "A Cindy não conseguiu acessar {{target}}. Reconecte o disco ou restaure a pasta; a Cindy não criará uma pasta vazia por cima.",
+        "errorTitle": "Não foi possível mover o espaço de trabalho",
+        "failedTitle": "A movimentação anterior falhou",
+        "interruptedTitle": "A movimentação precisa de recuperação",
+        "backupRemainingHint": "Backup original mantido para conferência em: {{backup}}",
+        "personalPreviewHint": "Feche as instâncias de prévia pessoal e abra a versão principal da Cindy para agendar ou executar movimentações.",
+        "status": {
+          "default": "Padrão",
+          "pending": "Aguardando reinício",
+          "moved": "Movido",
+          "failed": "Falhou",
+          "interrupted": "Recuperação necessária",
+          "unavailable": "Indisponível"
+        },
+        "warnings": {
+          "waitingExclusive": "Aguardando inicialização exclusiva. Feche outras instâncias da Cindy que compartilhem este perfil e reinicie.",
+          "receiptUpdateFailed": "O espaço de trabalho pode ser usado, mas a atualização do registro falhou e será tentada novamente no próximo reinício."
+        },
+        "errors": {
+          "insufficientSpace": "O disco de destino não tem espaço livre suficiente.",
+          "overlapsCindyData": "Escolha uma pasta fora dos dados da Cindy e fora do espaço de trabalho atual.",
+          "localDiskRequired": "Escolha uma pasta em um disco local, e não um compartilhamento de rede.",
+          "unsupportedFileOrHardLink": "Este espaço de trabalho contém hard links ou arquivos especiais que não podem ser movidos com segurança agora.",
+          "alreadyRedirected": "Este espaço de trabalho já foi redirecionado. Ainda não é possível movê-lo uma segunda vez.",
+          "botHomeRedirected": "A pasta principal deste amigo foi redirecionada manualmente e não pode ser movida automaticamente.",
+          "targetExists": "A pasta de destino já existe. Escolha outro local.",
+          "workspaceChanged": "Os arquivos mudaram durante a verificação. Feche programas externos e tente novamente.",
+          "backupRetained": "A movimentação foi concluída, mas o backup apresentou diferença e foi mantido por segurança.",
+          "backupCleanupIncomplete": "A movimentação foi concluída, mas a limpeza do backup temporário será tentada novamente no próximo reinício.",
+          "cutoverInterrupted": "A troca anterior foi interrompida e o original foi restaurado. Escolha uma nova pasta vazia para tentar novamente.",
+          "generic": "Não foi possível concluir a movimentação. Tente novamente."
         }
       }
     },

@@ -66,6 +66,7 @@ import {
 import type { MobileCodexRateLimitsResult, MobileCodexRateLimitResetResult } from '@cindy/maker-shared/device-link-contract';
 import type { AppearanceSettings } from '../shared/appearanceSettings';
 import type { DialogueWorkspaceSettingsState } from '../shared/dialogueWorkspaceSettings';
+import type { BuddyWorkspaceSettingsState } from '../shared/buddyWorkspaceSettings';
 import type {
   CreateProjectFromTaskInput,
   CreateProjectFromTaskResult,
@@ -5061,6 +5062,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     reset: (): Promise<DialogueWorkspaceSettingsState> =>
       ipcRenderer.invoke('dialogue-workspace:reset'),
   },
+  buddyWorkspace: {
+    open: (): Promise<{ success: boolean }> => ipcRenderer.invoke('buddy-workspace:open'),
+    get: (): Promise<BuddyWorkspaceSettingsState> =>
+      ipcRenderer.invoke('buddy-workspace:get'),
+    choose: (): Promise<BuddyWorkspaceSettingsState> =>
+      ipcRenderer.invoke('buddy-workspace:choose'),
+    reset: (): Promise<BuddyWorkspaceSettingsState> =>
+      ipcRenderer.invoke('buddy-workspace:reset'),
+  },
   projectsRoot: {
     get: (): Promise<ProjectsRootState> => ipcRenderer.invoke('projects-root:get'),
     choose: (): Promise<ProjectsRootState> => ipcRenderer.invoke('projects-root:choose'),
@@ -6398,6 +6408,52 @@ contextBridge.exposeInMainWorld('electronAPI', {
     bots: {
       projectRepository: (botId: string, retry: boolean): Promise<import('../shared/botProjectMode').BotProjectRepositoryStatus> =>
         ipcRenderer.invoke('local-db:bots:project-repository', botId, retry),
+      workspaceMigration: {
+        getStatus: (
+          botId: string,
+        ): Promise<import('../shared/workspaceMigration').WorkspaceMigrationStatus> =>
+          ipcRenderer.invoke('local-db:bots:workspace-migration:status', botId),
+        chooseTarget: (
+          botId: string,
+        ): Promise<import('../shared/workspaceMigration').WorkspaceMigrationChooseTargetResult> =>
+          ipcRenderer.invoke('local-db:bots:workspace-migration:choose-target', botId),
+        schedule: (
+          input: import('../shared/workspaceMigration').WorkspaceMigrationScheduleInput,
+        ): Promise<import('../shared/workspaceMigration').WorkspaceMigrationScheduleResult> =>
+          ipcRenderer.invoke('local-db:bots:workspace-migration:schedule', input),
+        cancel: (
+          botId: string,
+        ): Promise<import('../shared/workspaceMigration').WorkspaceMigrationStatus> =>
+          ipcRenderer.invoke('local-db:bots:workspace-migration:cancel', botId),
+        restart: (botId: string): Promise<{ relaunching: boolean }> =>
+          ipcRenderer.invoke('local-db:bots:workspace-migration:restart', botId),
+        getStartupProgress: (): Promise<
+          import('../shared/workspaceMigration').WorkspaceMigrationStartupProgress | null
+        > => ipcRenderer.invoke('local-db:bots:workspace-migration:startup-progress'),
+        onStartupProgress: (
+          callback: (
+            progress:
+              | import('../shared/workspaceMigration').WorkspaceMigrationStartupProgress
+              | null,
+          ) => void,
+        ): (() => void) => {
+          const handler = (
+            _event: Electron.IpcRendererEvent,
+            progress:
+              | import('../shared/workspaceMigration').WorkspaceMigrationStartupProgress
+              | null,
+          ) => callback(progress);
+          ipcRenderer.on(
+            'local-db:bots:workspace-migration-startup-progress-changed',
+            handler,
+          );
+          return () =>
+            ipcRenderer.removeListener(
+              'local-db:bots:workspace-migration-startup-progress-changed',
+              handler,
+            );
+        },
+      },
       generateAvatar: (token: string): Promise<{ avatarImageBase64: string }> =>
         ipcRenderer.invoke('local-db:bots:generate-avatar', token),
       generateDraft: (

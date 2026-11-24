@@ -550,6 +550,12 @@ import {
   readDialogueWorkspaceSettings,
   writeDialogueWorkspaceDirectory,
 } from './dialogue-workspace-settings.js';
+import {
+  checkBuddyWorkspaceDirectoryWritable,
+  customBuddyWorkspaceRoot,
+  readBuddyWorkspaceSettings,
+  writeBuddyWorkspaceDirectory,
+} from './buddy-workspace-settings.js';
 import { writeDbSlimmingDevRelaunchSignal } from './localDb/devDbSlimmingRelaunch';
 import {
   cancelDbSlimmingStartupProgress,
@@ -557,6 +563,15 @@ import {
   subscribeDbSlimmingStartupProgress,
 } from './localDb/dbSlimmingStartupState';
 import { DB_SLIMMING_STARTUP_PROGRESS_CHANGED_CHANNEL } from '../shared/localDbMaintenance';
+import { WORKSPACE_MIGRATION_STARTUP_PROGRESS_CHANGED_CHANNEL } from '../shared/workspaceMigration';
+import { createWorkspaceMigrationIpcHandlers } from './workspace-migration/ipc';
+import {
+  getWorkspaceMigrationStartupProgress,
+  subscribeWorkspaceMigrationStartupProgress,
+} from './workspace-migration/startupState';
+import { activeCompanionCloud } from './companion-cloud/runtime';
+import { botProfiles } from './localDb/schema';
+import { eq } from 'drizzle-orm';
 import {
   resolveBetterSqliteModuleEntry,
   resolveBetterSqliteNativeBinding,
@@ -9688,6 +9703,47 @@ const registerIpcHandlers = () => {
       });
     }
 
+    const buddyWorkspaceHandlers = createDialogueWorkspaceHandlers({
+      captureScope: () => {
+        if (!getActiveAppSession().dataOwnerId || isAppSessionBoundaryPending()) {
+          throwIpcError('PRECONDITION_FAILED', 'buddy workspace requires an active owner');
+        }
+        return activeOwnerScopeKey();
+      },
+      isScopeCurrent: (scope) => !isAppSessionBoundaryPending() && activeOwnerScopeKey() === scope,
+      read: readBuddyWorkspaceSettings,
+      write: writeBuddyWorkspaceDirectory,
+      chooseDirectory: async () => {
+        const options: Electron.OpenDialogOptions = {
+          title: t('settings.about.storage.buddyWorkspaceDirectoryChoose'),
+          properties: ['openDirectory', 'createDirectory'],
+        };
+        const ownerWindow = BrowserWindow.getFocusedWindow() ?? mainWindowRef;
+        const result =
+          ownerWindow && !ownerWindow.isDestroyed()
+            ? await dialog.showOpenDialog(ownerWindow, options)
+            : await dialog.showOpenDialog(options);
+        return result.canceled ? null : (result.filePaths[0] ?? null);
+      },
+      resolveDirectory: (selected) =>
+        customBuddyWorkspaceRoot(selected, path.basename(ownerScopedUserDataPath())),
+      checkWritable: (directory) =>
+        checkBuddyWorkspaceDirectoryWritable(ownerScopedUserDataPath(), directory),
+      openDirectory: (directory) => shell.openPath(directory),
+    });
+    for (const action of ['get', 'choose', 'reset', 'open'] as const) {
+      ipcMain.handle('buddy-workspace:' + action, async (event) => {
+        assertTrustedAppRendererEvent(event);
+        try {
+          return await buddyWorkspaceHandlers[action]();
+        } catch (error) {
+          if (isIpcError(error)) throw error;
+          dbClientLog.warn('buddy workspace settings request failed', { action });
+          throwIpcError('INTERNAL', 'buddy workspace settings request failed');
+        }
+      });
+    }
+
     // Projects root and "new project from task": native pickers stay on this computer (not in device-link).
     const chooseProjectsFolder = async () => {
       const options: Electron.OpenDialogOptions = {
@@ -9925,6 +9981,118 @@ const registerIpcHandlers = () => {
       const target = mainWindowRef;
       if (!target || target.isDestroyed() || target.webContents.isDestroyed()) return;
       target.webContents.send(DB_SLIMMING_STARTUP_PROGRESS_CHANGED_CHANNEL, progress);
+    });
+
+    const workspaceMigrationHandlers = createWorkspaceMigrationIpcHandlers({
+      captureOwner: () => {
+        const ownerId = getActiveAppSession().dataOwnerId;
+        if (!ownerId || isAppSessionBoundaryPending()) return null;
+        return {
+          ownerId,
+          scopeKey: activeOwnerScopeKey(),
+          ownerRoot: ownerScopedUserDataPath(),
+        };
+      },
+      isOwnerCurrent: ({ ownerId, scopeKey }) =>
+        !isAppSessionBoundaryPending() &&
+        getActiveAppSession().dataOwnerId === ownerId &&
+        activeOwnerScopeKey() === scopeKey,
+      canSchedule: () => process.env.XDT_PASSIVE_SHARED_USER_DATA !== '1',
+      assertLocalBuddy: async (botId) => {
+        const db = getDbClient();
+        const [profile] = await db.drizzle
+          .select({ status: botProfiles.status })
+          .from(botProfiles)
+          .where(eq(botProfiles.id, botId))
+          .limit(1);
+        if (!profile || profile.status === 'deleting') {
+          throwIpcError('NOT_FOUND', 'BUDDY_NOT_FOUND');
+        }
+        const cloud = activeCompanionCloud();
+        if (cloud && (await cloud.homeChoices(botId)).mode !== 'local') {
+          throwIpcError('PRECONDITION_FAILED', 'BUDDY_WORKSPACE_IS_ON_ANOTHER_COMPUTER');
+        }
+      },
+      selectTargetParentDirectory: async () => {
+        const options = {
+          title: t('bots.homeFolder.workspaceLocation.chooseDialogTitle'),
+          properties: ['openDirectory', 'createDirectory'] as Array<
+            'openDirectory' | 'createDirectory'
+          >,
+        };
+        const ownerWindow = BrowserWindow.getFocusedWindow() ?? mainWindowRef;
+        const result =
+          ownerWindow && !ownerWindow.isDestroyed()
+            ? await dialog.showOpenDialog(ownerWindow, options)
+            : await dialog.showOpenDialog(options);
+        return result.canceled ? null : (result.filePaths[0] ?? null);
+      },
+      relaunch: (botId) => {
+        dbClientLog.info('buddy workspace migration relaunch requested', { botId });
+        if (app.isPackaged) {
+          app.relaunch({ args: process.argv.slice(1) });
+        } else {
+          writeDbSlimmingDevRelaunchSignal(`workspace-migration:${botId}`);
+        }
+        app.quit();
+      },
+    });
+    const invokeWorkspaceMigrationIpc = async <T>(
+      action: string,
+      operation: () => T | Promise<T>,
+    ): Promise<T> => {
+      try {
+        return await operation();
+      } catch (error) {
+        if (isIpcError(error)) throw error;
+        dbClientLog.error('workspace migration IPC failed', {
+          action,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throwIpcError(
+          'INTERNAL',
+          error instanceof Error ? error.message : 'workspace migration request failed',
+        );
+      }
+    };
+    ipcMain.handle('local-db:bots:workspace-migration:status', (event, botId) => {
+      assertTrustedAppRendererEvent(event);
+      return invokeWorkspaceMigrationIpc('status', () =>
+        workspaceMigrationHandlers.getStatus(botId),
+      );
+    });
+    ipcMain.handle('local-db:bots:workspace-migration:choose-target', (event, botId) => {
+      assertTrustedAppRendererEvent(event);
+      return invokeWorkspaceMigrationIpc('choose-target', () =>
+        workspaceMigrationHandlers.chooseTarget(botId),
+      );
+    });
+    ipcMain.handle('local-db:bots:workspace-migration:schedule', (event, input) => {
+      assertTrustedAppRendererEvent(event);
+      return invokeWorkspaceMigrationIpc('schedule', () =>
+        workspaceMigrationHandlers.schedule(input),
+      );
+    });
+    ipcMain.handle('local-db:bots:workspace-migration:cancel', (event, botId) => {
+      assertTrustedAppRendererEvent(event);
+      return invokeWorkspaceMigrationIpc('cancel', () =>
+        workspaceMigrationHandlers.cancel(botId),
+      );
+    });
+    ipcMain.handle('local-db:bots:workspace-migration:restart', (event, botId) => {
+      assertTrustedAppRendererEvent(event);
+      return invokeWorkspaceMigrationIpc('restart', () =>
+        workspaceMigrationHandlers.restartForPending(botId),
+      );
+    });
+    ipcMain.handle('local-db:bots:workspace-migration:startup-progress', (event) => {
+      assertTrustedAppRendererEvent(event);
+      return getWorkspaceMigrationStartupProgress();
+    });
+    subscribeWorkspaceMigrationStartupProgress((progress) => {
+      const target = mainWindowRef;
+      if (!target || target.isDestroyed() || target.webContents.isDestroyed()) return;
+      target.webContents.send(WORKSPACE_MIGRATION_STARTUP_PROGRESS_CHANGED_CHANNEL, progress);
     });
   }
 

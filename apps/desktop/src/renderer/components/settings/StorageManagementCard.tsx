@@ -40,6 +40,7 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
 import { SettingsTextInput } from './SettingsTextInput';
 import { DialogueDirectorySection } from './DialogueDirectorySection';
+import { BuddyWorkspaceDirectorySection } from './BuddyWorkspaceDirectorySection';
 import { ProjectsRootSection } from './ProjectsRootSection';
 import { TaskExportDirectorySection } from './TaskExportDirectorySection';
 import { TaskManagementSection } from './TaskManagementSection';
@@ -286,6 +287,8 @@ export function StorageManagementCard() {
       {/* 目录与占用总览同属一组，彼此 14px */}
       <SettingsSection>
         <DialogueDirectorySection />
+
+        <BuddyWorkspaceDirectorySection />
 
         <ProjectsRootSection />
 

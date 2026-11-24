@@ -2975,7 +2975,12 @@
         "reconcileButton": "體檢",
         "reconcileFailed": "體檢失敗",
         "reconcileHealthy": "帳實一致，沒有發現異常。",
-        "reconcileIssues": "發現異常：無帳檔案 {{orphans}} 個（{{orphanSize}}）、缺失檔案 {{missing}} 個、無法識別 {{stray}} 個。詳細清單見應用程式日誌。"
+        "reconcileIssues": "發現異常：無帳檔案 {{orphans}} 個（{{orphanSize}}）、缺失檔案 {{missing}} 個、無法識別 {{stray}} 個。詳細清單見應用程式日誌。",
+        "buddyWorkspaceDirectoryTitle": "夥伴工作區",
+        "buddyWorkspaceDirectoryDescription": "新建夥伴的工作區預設存放於此目錄。既有夥伴維持原位，可在各自的高級設定中單獨遷移。",
+        "buddyWorkspaceDirectoryDetails": "Cindy 會在此目錄下為目前帳號建立獨立子目錄存放新建夥伴的工作區，並在原路徑保留目錄連結。",
+        "buddyWorkspaceDirectoryChoose": "變更目錄",
+        "buddyWorkspaceDirectoryFailed": "無法更新夥伴工作區目錄。"
       },
       "piKernel": {
         "manage": "管理 Pi 版本",
@@ -9979,6 +9984,18 @@
       "title": "自動更新失敗",
       "description": "更新程式無法啟動，可能被系統安全策略攔截。請手動下載最新版安裝包完成更新。",
       "confirm": "前往下載"
+    },
+    "workspaceMigration": {
+      "title": "正在遷移夥伴工作區",
+      "progressLabel": "夥伴工作區遷移進度",
+      "safetyHint": "正在複製並驗證檔案，切換前不會更動原資料，請勿強制關閉 Cindy。",
+      "phase": {
+        "preparing": "正在準備遷移",
+        "copying": "正在複製檔案",
+        "verifying": "正在驗證檔案",
+        "switching": "正在切換位置",
+        "cleaning": "正在清理備份"
+      }
     }
   },
   "welcome": {
@@ -11309,6 +11326,66 @@
           "corrections": "你糾正過的做法",
           "routines": "需要看一下的例行任務",
           "upgrade": "升級時沒能自動帶過來的"
+        }
+      },
+      "workspaceLocation": {
+        "title": "工作區位置",
+        "description": "可將此夥伴的工作區遷移至本機其他磁碟以釋放系統碟空間。Cindy 會在原路徑保留目錄連結，既有任務、自動化與腳本可繼續正常運作。",
+        "movedDescription": "目前工作區已存放於上方目標位置。請同時保留目標目錄與原路徑連結，確保任務與腳本正常讀寫。",
+        "chooseDialogTitle": "選擇夥伴工作區遷移的目標位置",
+        "fullPath": "完整路徑",
+        "targetPathLabel": "目標目錄",
+        "logicalPathLabel": "原邏輯連結路徑",
+        "copyPath": "複製路徑",
+        "pathCopied": "已複製路徑",
+        "pathCopyFailed": "複製路徑失敗",
+        "openTarget": "開啟資料夾",
+        "moveAction": "遷移工作區",
+        "chooseAnother": "另選資料夾",
+        "restartNow": "立即重新啟動",
+        "restartAndMove": "重新啟動並遷移",
+        "scheduleNextRestart": "下次重啟時遷移",
+        "cancel": "取消",
+        "dismissFailed": "關閉紀錄",
+        "scheduledToast": "已登記遷移，將於下次重啟 Cindy 時執行",
+        "cancelledToast": "已取消工作區遷移",
+        "previewTitle": "準備遷移工作區",
+        "previewSummary": "{{size}} · {{files}} 個檔案 · {{links}} 個連結",
+        "previewNotice": "重啟前請先關閉使用此工作區的外部編輯器或腳本。Cindy 會在啟動時完成複製與驗證後再切換路徑。",
+        "pendingTarget": "排定目標：{{target}}",
+        "pendingHint": "請先關閉佔用該目錄的外部程式，再重啟 Cindy 執行遷移。",
+        "unavailableTitle": "已遷移的工作區無法使用",
+        "unavailableDescription": "Cindy 無法存取 {{target}}。請重新連接磁碟或還原資料夾；Cindy 不會建立空資料夾覆蓋它。",
+        "errorTitle": "無法遷移工作區",
+        "failedTitle": "上次工作區遷移失敗",
+        "interruptedTitle": "工作區遷移待還原",
+        "backupRemainingHint": "原目錄備份已保留供核對：{{backup}}",
+        "personalPreviewHint": "請關閉共用資料的個人測試版，改用主版本 Cindy 登記或執行工作區遷移。",
+        "status": {
+          "default": "預設位置",
+          "pending": "等待重啟",
+          "moved": "已遷移",
+          "failed": "遷移失敗",
+          "interrupted": "待還原",
+          "unavailable": "目標不可用"
+        },
+        "warnings": {
+          "waitingExclusive": "正在等待獨佔啟動。請關閉共用此帳號資料的其他 Cindy 執行個體，再重啟以執行遷移。",
+          "receiptUpdateFailed": "工作區目前可用，但遷移紀錄更新失敗，將於下次重啟時自動修復。"
+        },
+        "errors": {
+          "insufficientSpace": "目標磁碟可用空間不足，無法容納目前工作區。",
+          "overlapsCindyData": "請選擇 Cindy 資料目錄與目前工作區之外的資料夾。",
+          "localDiskRequired": "請選擇本機磁碟資料夾，不支援網路共用路徑。",
+          "unsupportedFileOrHardLink": "工作區包含硬連結或特殊檔案，暫不支援直接安全遷移。",
+          "alreadyRedirected": "此工作區已被重新導向，暫不支援再次遷移。",
+          "botHomeRedirected": "此夥伴主目錄已被手動重新導向，無法自動遷移其工作區。",
+          "targetExists": "目標資料夾已存在，請另選位置。",
+          "workspaceChanged": "驗證期間工作區內容有所變更，請關閉外部佔用程式後重試。",
+          "backupRetained": "遷移已完成，但原備份驗證存在差異，已保留備份以免遺失資料。",
+          "backupCleanupIncomplete": "遷移已完成，但暫存備份未能清除，將於下次重啟時自動重試。",
+          "cutoverInterrupted": "上次切換中斷，Cindy 已還原原工作區。請另選空資料夾重新遷移。",
+          "generic": "無法完成工作區遷移請求，請重試。"
         }
       }
     },

@@ -3005,7 +3005,12 @@
         "reconcileButton": "Prüfen",
         "reconcileFailed": "Prüfung fehlgeschlagen",
         "reconcileHealthy": "Medienregister und Festplatte stimmen überein. Keine Probleme gefunden.",
-        "reconcileIssues": "Gefundene Probleme: {{orphans}} nicht erfasste Dateien ({{orphanSize}}), {{missing}} fehlende Dateien, {{stray}} nicht erkannte Einträge. Die vollständige Liste findest du im App-Protokoll."
+        "reconcileIssues": "Gefundene Probleme: {{orphans}} nicht erfasste Dateien ({{orphanSize}}), {{missing}} fehlende Dateien, {{stray}} nicht erkannte Einträge. Die vollständige Liste findest du im App-Protokoll.",
+        "buddyWorkspaceDirectoryTitle": "Freund-Arbeitsbereich",
+        "buddyWorkspaceDirectoryDescription": "Speicherort für Arbeitsbereiche neu erstellter Freunde. Bestehende Freunde bleiben an ihrem Ort und können einzeln in der erweiterten Konfiguration verschoben werden.",
+        "buddyWorkspaceDirectoryDetails": "Cindy legt hier einen kontospezifischen Unterordner für neue Freund-Arbeitsbereiche an und hält den ursprünglichen Pfad verknüpft.",
+        "buddyWorkspaceDirectoryChoose": "Ordner ändern",
+        "buddyWorkspaceDirectoryFailed": "Der Ordner für Freund-Arbeitsbereiche konnte nicht aktualisiert werden."
       },
       "piKernel": {
         "manage": "Pi-Version verwalten",
@@ -10022,6 +10027,18 @@
       "title": "Automatisches Update fehlgeschlagen",
       "description": "Das Update-Programm konnte nicht gestartet werden, möglicherweise aufgrund einer Systemsicherheitsrichtlinie. Lade das neueste Installationsprogramm manuell herunter.",
       "confirm": "Zum Download"
+    },
+    "workspaceMigration": {
+      "title": "Freund-Arbeitsbereich wird verschoben",
+      "progressLabel": "Fortschritt der Arbeitsbereich-Migration",
+      "safetyHint": "Dateien werden vor dem Umschalten kopiert und geprüft. Lass Cindy bis zum Abschluss geöffnet.",
+      "phase": {
+        "preparing": "Wird vorbereitet",
+        "copying": "Dateien werden kopiert",
+        "verifying": "Dateien werden geprüft",
+        "switching": "Speicherort wird umgestellt",
+        "cleaning": "Sicherung wird bereinigt"
+      }
     }
   },
   "welcome": {
@@ -11354,6 +11371,66 @@
           "corrections": "Deine Korrekturen",
           "routines": "Zu prüfende Routinen",
           "upgrade": "Nicht automatisch übernommen"
+        }
+      },
+      "workspaceLocation": {
+        "title": "Arbeitsbereich-Speicherort",
+        "description": "Verschiebe den Arbeitsbereich dieses Freunds auf ein anderes lokales Laufwerk, um Platz auf dem Systemlaufwerk zu sparen. Cindy behält am ursprünglichen Pfad eine Verknüpfung, damit Aufgaben, Automationen und Skripte weiter funktionieren.",
+        "movedDescription": "Dieser Arbeitsbereich liegt im oben genannten Zielordner. Behalte sowohl den Zielordner als auch die Verknüpfung am ursprünglichen Pfad.",
+        "chooseDialogTitle": "Zielordner für den Freund-Arbeitsbereich wählen",
+        "fullPath": "Vollständiger Pfad",
+        "targetPathLabel": "Zielordner",
+        "logicalPathLabel": "Ursprünglicher verknüpfter Pfad",
+        "copyPath": "Pfad kopieren",
+        "pathCopied": "Pfad kopiert",
+        "pathCopyFailed": "Pfad konnte nicht kopiert werden",
+        "openTarget": "Ordner öffnen",
+        "moveAction": "Arbeitsbereich verschieben",
+        "chooseAnother": "Anderen Ordner wählen",
+        "restartNow": "Jetzt neu starten",
+        "restartAndMove": "Neu starten und verschieben",
+        "scheduleNextRestart": "Beim nächsten Neustart verschieben",
+        "cancel": "Abbrechen",
+        "dismissFailed": "Schließen",
+        "scheduledToast": "Verschiebung für den nächsten Cindy-Neustart vorgemerkt",
+        "cancelledToast": "Verschiebung abgebrochen",
+        "previewTitle": "Bereit zum Verschieben",
+        "previewSummary": "{{size}} · {{files}} Dateien · {{links}} Links",
+        "previewNotice": "Schließe vor dem Neustart externe Editoren oder Skripte, die diesen Ordner nutzen. Cindy kopiert und prüft alle Dateien beim Start vor der Umstellung.",
+        "pendingTarget": "Geplantes Ziel: {{target}}",
+        "pendingHint": "Schließe externe Programme, die diesen Ordner verwenden, und starte Cindy neu.",
+        "unavailableTitle": "Verschobener Arbeitsbereich nicht erreichbar",
+        "unavailableDescription": "Cindy konnte {{target}} nicht erreichen. Verbinde das Laufwerk erneut oder stelle den Ordner wieder her; Cindy erstellt keinen leeren Ordner darüber.",
+        "errorTitle": "Arbeitsbereich konnte nicht verschoben werden",
+        "failedTitle": "Vorherige Verschiebung fehlgeschlagen",
+        "interruptedTitle": "Wiederherstellung erforderlich",
+        "backupRemainingHint": "Ursprüngliche Sicherung zur Prüfung behalten unter: {{backup}}",
+        "personalPreviewHint": "Schließe persönliche Vorschau-Instanzen und starte die Hauptversion von Cindy, um Verschiebungen auszuführen.",
+        "status": {
+          "default": "Standard",
+          "pending": "Neustart ausstehend",
+          "moved": "Verschoben",
+          "failed": "Fehlgeschlagen",
+          "interrupted": "Wiederherstellung nötig",
+          "unavailable": "Nicht verfügbar"
+        },
+        "warnings": {
+          "waitingExclusive": "Warte auf exklusiven Start. Schließe andere Cindy-Instanzen mit diesem Profil und starte neu.",
+          "receiptUpdateFailed": "Der Arbeitsbereich ist nutzbar, aber das Migrationsprotokoll konnte nicht aktualisiert werden und wird beim nächsten Start repariert."
+        },
+        "errors": {
+          "insufficientSpace": "Auf dem Ziellaufwerk ist nicht genügend freier Speicherplatz vorhanden.",
+          "overlapsCindyData": "Wähle einen Ordner außerhalb der Cindy-Daten und außerhalb des aktuellen Arbeitsbereichs.",
+          "localDiskRequired": "Wähle einen lokalen Datenträger statt einer Netzwerkfreigabe.",
+          "unsupportedFileOrHardLink": "Der Arbeitsbereich enthält Hardlinks oder Spezialdateien und kann derzeit nicht sicher verschoben werden.",
+          "alreadyRedirected": "Dieser Arbeitsbereich wurde bereits umgeleitet. Ein erneutes Verschieben wird noch nicht unterstützt.",
+          "botHomeRedirected": "Das Hauptverzeichnis dieses Freunds wurde manuell umgeleitet und kann nicht automatisch verschoben werden.",
+          "targetExists": "Der Zielordner existiert bereits. Wähle einen anderen Speicherort.",
+          "workspaceChanged": "Dateien wurden während der Prüfung geändert. Schließe externe Programme und versuche es erneut.",
+          "backupRetained": "Die Verschiebung war erfolgreich, aber die Sicherung wich ab und wurde zur Sicherheit behalten.",
+          "backupCleanupIncomplete": "Die Verschiebung war erfolgreich, aber die temporäre Sicherung wird beim nächsten Neustart erneut bereinigt.",
+          "cutoverInterrupted": "Die vorherige Umstellung wurde unterbrochen und der Originalordner wiederhergestellt. Wähle einen neuen leeren Ordner.",
+          "generic": "Verschiebung konnte nicht abgeschlossen werden. Bitte erneut versuchen."
         }
       }
     },

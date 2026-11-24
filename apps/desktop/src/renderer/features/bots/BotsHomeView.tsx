@@ -77,6 +77,8 @@ import { BotSettingsSaveStatus } from './BotSettingsSaveStatus';
 import { BotProjectsSettings } from './BotProjectsSettings';
 import { BotAutomationsSettings } from './BotAutomationsSettings';
 import { BotProjectRepositorySettings } from './BotProjectRepositorySettings';
+import { SettingsBlock, SettingsCard, SettingsRow } from '@/components/ui/settings-rows';
+import { BotWorkspaceLocationSettings } from './BotWorkspaceLocationSettings';
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 
@@ -722,35 +724,58 @@ export function BotSettings({
           />
         ) : null}
         {page === 'advanced' ? (
-          <div className="mt-4 flex flex-col gap-5 px-3">
-            <BotProjectRepositorySettings key={bot.id} botId={bot.id} />
-            {!isRemote ? <div className="flex items-center gap-3">
-              <FolderOpen size={16} className="shrink-0 text-[var(--text-tertiary)]" />
-              <div className="min-w-0 flex-1">
-                <Button
-                  variant="secondary"
-                  size="lg"
-                  compact
-                  type="button"
-                  disabled={!bot.homeDir}
-                  onClick={() => {
-                    if (!bot.homeDir) return;
-                    setFolderError(null);
-                    void window.electronAPI.openPath(bot.homeDir).then((result) => {
-                      if (shouldShowOpenPathError(result))
-                        setFolderError(result.error ?? t('bots.homeFolder.openFailed'));
-                    });
-                  }}
-                >
-                  {t('bots.homeFolder.open')}
-                </Button>
-                {folderError ? (
-                  <p className="mt-2 text-11 text-[var(--text-danger)]" role="alert">
+          <div className="mt-4 flex flex-col gap-5 px-4 pb-6">
+            {!isRemote ? <BotWorkspaceLocationSettings key={bot.id} botId={bot.id} /> : null}
+            <SettingsCard>
+              <SettingsBlock className="px-5 py-4">
+                <BotProjectRepositorySettings key={bot.id} botId={bot.id} />
+              </SettingsBlock>
+              {!isRemote ? (
+                <SettingsRow
+                  wrap
+                  className="px-5"
+                  title={t('bots.homeFolder.title')}
+                  hint={
+                    bot.homeDir ? (
+                      <span
+                        className="block max-w-full truncate font-mono text-12 text-[var(--text-secondary)]"
+                        title={bot.homeDir}
+                      >
+                        {bot.homeDir}
+                      </span>
+                    ) : undefined
+                  }
+                  trailing={
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      compact
+                      type="button"
+                      className="gap-1.5"
+                      disabled={!bot.homeDir}
+                      onClick={() => {
+                        if (!bot.homeDir) return;
+                        setFolderError(null);
+                        void window.electronAPI.openPath(bot.homeDir).then((result) => {
+                          if (shouldShowOpenPathError(result))
+                            setFolderError(result.error ?? t('bots.homeFolder.openFailed'));
+                        });
+                      }}
+                    >
+                      <FolderOpen size={13} aria-hidden />
+                      {t('bots.homeFolder.open')}
+                    </Button>
+                  }
+                />
+              ) : null}
+              {!isRemote && folderError ? (
+                <SettingsBlock className="px-5 py-3">
+                  <p className="text-12 text-[var(--text-danger)]" role="alert">
                     {folderError}
                   </p>
-                ) : null}
-              </div>
-            </div> : null}
+                </SettingsBlock>
+              ) : null}
+            </SettingsCard>
           </div>
         ) : null}
         {page === 'voice' ? (

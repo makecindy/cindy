@@ -2975,7 +2975,12 @@
         "reconcileButton": "體察",
         "reconcileFailed": "體察未成",
         "reconcileHealthy": "帳實相符，未見異狀。",
-        "reconcileIssues": "見異狀：無帳之卷 {{orphans}} 個({{orphanSize}})、缺失之卷 {{missing}} 個、不可識者 {{stray}} 個。詳錄見應用日誌。"
+        "reconcileIssues": "見異狀：無帳之卷 {{orphans}} 個({{orphanSize}})、缺失之卷 {{missing}} 個、不可識者 {{stray}} 個。詳錄見應用日誌。",
+        "buddyWorkspaceDirectoryTitle": "同伴工坊",
+        "buddyWorkspaceDirectoryDescription": "新立同伴之工坊皆置於此。舊有同伴仍居故址，可於其進階設定中各自遷徙。",
+        "buddyWorkspaceDirectoryDetails": "Cindy 將於此目錄下為本號別立子目錄以置新伴工坊，並留連結於舊徑。",
+        "buddyWorkspaceDirectoryChoose": "易其目錄",
+        "buddyWorkspaceDirectoryFailed": "未能更易同伴工坊目錄。"
       },
       "piKernel": {
         "manage": "理 Pi 版本",
@@ -9979,6 +9984,18 @@
       "title": "自動更新未成",
       "description": "更新程式無法啟動，或為系統安全策略所攔。請手動下載最新版安裝包以完成更新。",
       "confirm": "往取之"
+    },
+    "workspaceMigration": {
+      "title": "方遷夥伴工坊",
+      "progressLabel": "夥伴工坊遷徙之進",
+      "safetyHint": "方抄錄校驗諸卷，未畢前不動故本，切勿強閉 Cindy。",
+      "phase": {
+        "preparing": "備遷",
+        "copying": "抄錄諸卷",
+        "verifying": "校驗諸卷",
+        "switching": "易徑",
+        "cleaning": "清舊備"
+      }
     }
   },
   "welcome": {
@@ -11309,6 +11326,66 @@
           "corrections": "君所糾正",
           "routines": "例行之務待查",
           "upgrade": "升級時未能自攜者"
+        }
+      },
+      "workspaceLocation": {
+        "title": "工坊所在",
+        "description": "可遷此伴工坊於本機他盤，以寬系統盤之餘地。Cindy 仍留連結於舊徑，諸務與腳本皆如常無礙。",
+        "movedDescription": "今工坊已置於上示新址。請並存新址與舊徑連結，庶免諸務讀寫受阻。",
+        "chooseDialogTitle": "擇夥伴工坊遷往之所",
+        "fullPath": "全徑",
+        "targetPathLabel": "新址目錄",
+        "logicalPathLabel": "舊徑連結",
+        "copyPath": "錄其徑",
+        "pathCopied": "已錄其徑",
+        "pathCopyFailed": "未能錄徑",
+        "openTarget": "啟其目錄",
+        "moveAction": "遷徙工坊",
+        "chooseAnother": "另擇目錄",
+        "restartNow": "即刻重啟",
+        "restartAndMove": "重啟並遷",
+        "scheduleNextRestart": "俟後啟再遷",
+        "cancel": "罷之",
+        "dismissFailed": "闔舊錄",
+        "scheduledToast": "已登遷徙之約，俟下次重啟 Cindy 行之",
+        "cancelledToast": "已罷工坊遷徙",
+        "previewTitle": "工坊遷徙已備",
+        "previewSummary": "{{size}} · 卷 {{files}} · 鏈 {{links}}",
+        "previewNotice": "重啟前請先息用此工坊之外器與腳本。Cindy 將於啟時抄錄校驗畢，乃易其徑。",
+        "pendingTarget": "約遷之址：{{target}}",
+        "pendingHint": "請先息佔此目錄之外程式，再重啟 Cindy 以行遷徙。",
+        "unavailableTitle": "已遷工坊今不可達",
+        "unavailableDescription": "Cindy 未能及 {{target}}。請復接磁碟或復其目錄；Cindy 不另立空目錄覆之。",
+        "errorTitle": "工坊未能遷徙",
+        "failedTitle": "前番工坊遷徙未成",
+        "interruptedTitle": "工坊遷徙待復",
+        "backupRemainingHint": "舊本仍留以備覆核：{{backup}}",
+        "personalPreviewHint": "請先退共享資料之個人試版，改以主版 Cindy 登記或行遷徙。",
+        "status": {
+          "default": "故址",
+          "pending": "待重啟",
+          "moved": "已遷",
+          "failed": "未成",
+          "interrupted": "待復",
+          "unavailable": "不可達"
+        },
+        "warnings": {
+          "waitingExclusive": "方候獨啟。請閉同享此號資料之餘 Cindy 實例，再重啟以遷。",
+          "receiptUpdateFailed": "工坊尚可用，然遷錄未得更，俟下次重啟自修。"
+        },
+        "errors": {
+          "insufficientSpace": "新盤餘量不足，未能容此工坊。",
+          "overlapsCindyData": "請擇 Cindy 資料與今工坊之外地。",
+          "localDiskRequired": "請擇本機磁碟之目錄，不納網路共享徑。",
+          "unsupportedFileOrHardLink": "工坊內含硬鏈或異卷，暫未便徑遷。",
+          "alreadyRedirected": "此工坊既經轉引，暫不復遷。",
+          "botHomeRedirected": "此伴主舍既經手轉，未便自遷其工坊。",
+          "targetExists": "新址既在，請另擇空地。",
+          "workspaceChanged": "校驗之際工坊有變，請閉外佔程式再試。",
+          "backupRetained": "遷徙既成，然舊備有異，已留存以防失遺。",
+          "backupCleanupIncomplete": "遷徙既成，暫備未盡除，俟後啟再清。",
+          "cutoverInterrupted": "前番易徑中輟，已復故工坊。請另擇空目錄重行。",
+          "generic": "工坊遷徙未竟，請復試之。"
         }
       }
     },
