@@ -168,7 +168,7 @@ vi.mock('react-native', () => ({
   StyleSheet: { create: (value: unknown) => value, hairlineWidth: 1 },
   Platform: { get OS() { return state.platform; } },
   AppState: {
-    currentState: 'active',
+    get currentState() { return state.foreground; },
     addEventListener: (_name: string, listener: (state: string) => void) => {
       state.appStateListeners.add(listener);
       return { remove: () => state.appStateListeners.delete(listener) };
@@ -261,6 +261,7 @@ beforeEach(() => {
   state.props = {};
   state.mode = 'light';
   state.platform = 'android';
+  state.foreground = 'active';
   state.prepare.mockReset().mockResolvedValue(nativeDocument);
   state.invoke.mockImplementation(async (_device, _channel, [, input]) =>
     input.op === 'open' ? { ...doc } : input.op === 'poll' ? new Promise(() => {}) : {},
@@ -661,16 +662,32 @@ it('does not reuse a previous account height', async () => {
   expect(state.props.style.height).toBe(320);
 });
 
-it('reopens a fresh View after background shutdown without replaying App tools', async () => {
+// #12457 unit: a notification overlay keeps the mounted card, while returning
+// through inactive after a real background must wait for active to reopen it.
+it('retains the iOS card across inactive and reopens it after background', async () => {
+  state.platform = 'ios';
   const close = vi.fn(async () => {});
   state.prepare.mockResolvedValue({ ...nativeDocument, close });
   await act(async () => render(<McpAppCard deviceId="device" sessionId="task" clientId="card" title="App" />));
-  const background = (value: string) => { for (const listener of state.appStateListeners) listener(value); };
+  const transition = (value: string) => act(async () => {
+    state.foreground = value;
+    for (const listener of state.appStateListeners) listener(value);
+  });
   const original = container.querySelector('[data-host]')?.getAttribute('data-host');
-  await act(async () => background('background'));
+  const slot = container.querySelector('[data-slot]');
+  expect(slot).not.toBeNull();
+  await transition('inactive');
+  expect(container.querySelector('[data-slot]')).toBe(slot);
+  await transition('active');
+  expect(container.querySelector('[data-slot]')).toBe(slot);
+  expect(close).not.toHaveBeenCalled();
+  expect(state.mounts).toBe(1);
+  await transition('background');
   expect(container.querySelector('[data-slot]')).toBeNull();
   expect(close).toHaveBeenCalledOnce();
-  await act(async () => background('active'));
+  await transition('inactive');
+  expect(container.querySelector('[data-slot]')).toBeNull();
+  await transition('active');
   expect(container.querySelector('[data-host]')?.getAttribute('data-host')).not.toBe(original);
   const ops = state.invoke.mock.calls.map(([, , [, input]]) => input.op);
   expect(ops.filter((op) => op === 'open')).toHaveLength(2);

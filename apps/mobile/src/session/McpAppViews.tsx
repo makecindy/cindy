@@ -16,6 +16,11 @@ const Context = createContext<{
 export const useMcpAppViews = () => useContext(Context);
 export { NativeMcpAppSlot, mcpAppSurfaceAvailable };
 
+function canOpenInCurrentAppState() {
+  const state = AppState.currentState;
+  return state !== 'background' && (state !== 'inactive' || Platform.OS === 'ios');
+}
+
 /** Hosts stay at the app root; native slots place their content inline inside
  * the real navigation screen. No root overlay, coordinates or touch interception. */
 export function McpAppViewsProvider({ children }: { children: ReactNode }) {
@@ -23,7 +28,7 @@ export function McpAppViewsProvider({ children }: { children: ReactNode }) {
   const views = useRef(new Set<McpAppView>());
   const mounted = useRef(true);
   const [, refresh] = useState(0);
-  const [foreground, setForeground] = useState(AppState.currentState !== 'background' && AppState.currentState !== 'inactive');
+  const [foreground, setForeground] = useState(canOpenInCurrentAppState);
   const changed = useCallback(() => { if (mounted.current) refresh((n) => n + 1); }, []);
   const open = useCallback((deviceId: string, sessionId: string, clientId: string, context: Record<string, unknown>, isPlugin: boolean, quotaVisible: () => boolean, placeholder: number) => {
     const view = new McpAppView(invoke, deviceId, sessionId, clientId, changed,
@@ -35,7 +40,7 @@ export function McpAppViewsProvider({ children }: { children: ReactNode }) {
       }, getMobileAuthOwner().generation, placeholder, isPlugin, getUserCloseEpoch, onUserClose);
     views.current.add(view);
     changed();
-    void view.open(context, () => mounted.current && AppState.currentState !== 'background' && AppState.currentState !== 'inactive' && quotaVisible());
+    void view.open(context, () => mounted.current && canOpenInCurrentAppState() && quotaVisible());
     return view;
   }, [invoke, changed, getUserCloseEpoch, onUserClose]);
   useEffect(() => {
@@ -43,6 +48,9 @@ export function McpAppViewsProvider({ children }: { children: ReactNode }) {
     const subscription = AppState.addEventListener('change', (state) => {
       const active = state === 'active';
       if (!active) void getMobileHeights()?.flush();
+      // iOS passes through inactive in both directions. Keep the previous
+      // foreground state until the app reaches background or active.
+      if (state === 'inactive' && Platform.OS === 'ios') return;
       if (!active) for (const view of views.current) void view.close();
       setForeground(active);
     });
