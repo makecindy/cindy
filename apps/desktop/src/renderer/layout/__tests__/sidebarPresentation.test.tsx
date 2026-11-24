@@ -224,6 +224,8 @@ it('reads the startup route from the URL, not from the sidebar declaration', () 
   // 无侧栏页面上」，不能记成无侧栏启动，否则每次普通重启都会把存档开着的侧栏挤窄。
   expect(isTasklessPageRoute('/')).toBe(false);
   expect(isTasklessPageRoute('/cc-agent')).toBe(false);
+  // 副窗也是从 /cc-agent/boot 换进真正的任务，同样不是落地。
+  expect(isTasklessPageRoute('/cc-agent/boot')).toBe(false);
   expect(isTasklessPageRoute('/cc-agent/session-a')).toBe(false);
   for (const pathname of ['/settings', '/bots/roster', '/plugins', '/cc-agent/new']) {
     expect(isTasklessPageRoute(pathname)).toBe(true);
@@ -276,6 +278,34 @@ it('releases a superseded resize wait instead of leaving its listener behind', a
   abort.mockClear();
   frame();
   expect(abort).toHaveBeenCalled();
+});
+
+// Codex P1: 无任务语境的全局页被弹到独立窗口、那个窗口崩了再回来时，自动收起路径已经把
+// 当前矩形登记成新基准（窗口不再占着展开宽度），回来这一次也就不是用户开栏，不能再拉宽。
+it('does not expand again when a crashed global tab brings the view back', async () => {
+  const resize = vi.fn(async (requested: number) => (requested > 0 ? 400 : 0));
+  const settle = vi.fn(async () => undefined);
+  window.electronAPI = { windowSidebarExpansion: resize, windowSidebarSettle: settle } as never;
+  const hook = (props: { ready: boolean; collapsed: boolean; userToggle: boolean; retract: boolean }) =>
+    useSidebarPresentation(root, props.collapsed, props.ready, width, props.userToggle, '',
+      false, props.retract, true);
+  const { rerender } = renderHook(hook, {
+    initialProps: { ready: true, collapsed: true, userToggle: false, retract: true },
+  });
+  // 用户在 /plugins 亲手展开：这一次占窗口宽度。
+  await act(async () => { rerender({ ready: true, collapsed: false, userToggle: true, retract: true }); });
+  expect(resize).toHaveBeenCalledWith(800);
+  window.innerWidth = 1800;
+  frame();
+  await act(async () => undefined);
+  resize.mockClear();
+  // 全局页弹到独立窗口：就绪先消失，面板走自动收起（retractOnUnready=false）并 settle。
+  await act(async () => { rerender({ ready: false, collapsed: false, userToggle: false, retract: false }); });
+  expect(settle).toHaveBeenCalled();
+  // 那个窗口崩了、页签回来：MainLayout 按「崩溃回收不是用户手势」把来源置回非用户，
+  // 所以这一次也不能再拉宽。用户主动合并（reason=merge）仍按用户开栏处理。
+  await act(async () => { rerender({ ready: true, collapsed: false, userToggle: false, retract: false }); });
+  expect(resize).not.toHaveBeenCalled();
 });
 
 it('keeps the standalone width when a readiness gap lands on another task passively', async () => {

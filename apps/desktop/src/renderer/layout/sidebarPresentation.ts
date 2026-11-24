@@ -52,11 +52,12 @@ export function isTaskSessionRoute(pathname: string): boolean {
 }
 
 /**
- * 启动时先停在这两个路径只是重定向：`/` 交给 MainEntryRedirect，`/cc-agent` 交给
- * CCAgentIndexRedirect 恢复上次的任务。它们不是「用户落在无侧栏的页面上」，
+ * 启动时先停在这些路径只是重定向：`/` 交给 MainEntryRedirect，`/cc-agent` 交给
+ * CCAgentIndexRedirect 恢复上次的任务，副窗的 `/cc-agent/boot` 交给
+ * SecondaryWindowBootGate 换成真正的任务路由。它们不是「用户落在无侧栏的页面上」，
  * 所以不能拿它们记「本次挂载先停在无侧栏路由」。
  */
-const TRANSIENT_STARTUP_PATHS = new Set(['/', '/cc-agent']);
+const TRANSIENT_STARTUP_PATHS = new Set(['/', '/cc-agent', '/cc-agent/boot']);
 
 /**
  * 内容区当前是否停在一个确定没有任务侧栏的页面（`/settings`、`/bots`、`/plugins`、
@@ -169,6 +170,13 @@ export function useSidebarPresentation(
       // persistence and the next user open must not use the forgotten expansion.
       if (autoSettled || (restored && collapsed)) {
         void window.electronAPI.windowSidebarSettle?.().catch(() => undefined);
+      }
+      if (autoSettled) {
+        // The live rect just became the standalone base: the expansion that owned the old
+        // width is gone in main, so whoever brings the panel back (a crashed global tab
+        // returning, an agent re-opening it) must land passively instead of widening again.
+        const snapshot = beforeGap.current;
+        if (snapshot) beforeGap.current = { ...snapshot, ownsWidth: false };
       }
       setPresentation({ collapsed, instant: true,
         ...(ready && !collapsed && width > 0 ? { expandedWidth: width } : {}),
