@@ -235,7 +235,12 @@ export function createCloudSettingsService(deps: {
         s.authorizations.has(command.operationId)
       )
         throw new CloudClientError('CLOUD_SETTINGS_NOT_READY');
-      if (s.authorizations.size >= 128) throw new CloudClientError('CLOUD_SETTINGS_BUSY');
+      if (s.authorizations.size >= 128) {
+        // Only unfinished operations hold a place; the oldest finished one stops being answerable.
+        const finished = [...s.authorizations].find((id) => !s.pending.has(id));
+        if (finished === undefined) throw new CloudClientError('CLOUD_SETTINGS_BUSY');
+        s.authorizations.delete(finished);
+      }
       s.actions.delete(command.actionId);
       s.authorizations.add(command.operationId);
       s.pending.add(command.operationId);

@@ -141,6 +141,23 @@ it('keeps saving for a long session and still answers the latest receipt', async
   expect(f.history.filter((c) => c.kind === 'update')).toHaveLength(300);
   await expect(f.bridge.receipt({ handle, operationId })).resolves.toMatchObject({ ok: true });
 });
+// Unit: finished management operations do not use up the session; only unfinished ones count.
+it('keeps running management actions for a long session', async () => {
+  const f = await setup(),
+    handle = f.session.handle;
+  for (let i = 0; i < 200; i++) {
+    const page = await f.bridge.manage({ handle, command: { operation: 'list', section: 'providers' } });
+    if (!page.ok || !('management' in page) || page.management.kind !== 'page') throw Error('fixture');
+    const operationId = randomUUID();
+    await f.bridge.manage({
+      handle,
+      command: { operation: 'run', actionId: page.management.items[0]!.actions[0]!.id, operationId, values: {} },
+    });
+    // The user closes each authorization, which ends it.
+    await f.bridge.manage({ handle, command: { operation: 'cancel', operationId } });
+  }
+  expect(f.history.filter((c) => c.kind === 'manage' && c.command.operation === 'run')).toHaveLength(200);
+});
 it('rejects responses correlated to a different queue request', async () => {
   const f = await setup();
   f.request.mockResolvedValueOnce({
