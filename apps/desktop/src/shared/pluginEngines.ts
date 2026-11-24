@@ -66,6 +66,14 @@ export function isPluginEnginePermissionModeId(value: unknown): value is PluginE
   return typeof value === 'string' && (PLUGIN_ENGINE_PERMISSION_MODE_IDS as readonly string[]).includes(value);
 }
 
+export interface NewTaskPluginEngineSelection {
+  providerId: string;
+  deviceId?: string;
+  modelId: string;
+  permissionMode?: PluginEnginePermissionModeId;
+  effort?: PluginEngineEffort;
+}
+
 export interface PluginEnginePermissionMode {
   id: PluginEnginePermissionModeId;
   displayName: string;
