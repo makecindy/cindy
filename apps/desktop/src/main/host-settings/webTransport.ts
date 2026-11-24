@@ -15,6 +15,8 @@ export interface SettingsWebTransportOptions {
   hostCalls?: { channels: string[]; desktopV1: true };
 }
 const envelope = z.strictObject({ requestId: z.string().uuid(), runtimeId: z.string().uuid(), sessionKey: z.string().regex(/^[a-f0-9]{64}$/u), expiresAtMs: z.number().safe().int(), command: settingsWebCommandSchema });
+/** A failure the service may recover from: no answer, a timeout, a 5xx or a throttle. */
+const retryable = (error: unknown) => !(error instanceof TransportError) || error.status >= 500 || error.status === 429;
 class TransportError extends Error {
   constructor(readonly status: number, readonly retryAfterMs: number | null = null) { super('SETTINGS_WEB_TRANSPORT_UNAVAILABLE'); }
 }
@@ -96,8 +98,8 @@ export function createSettingsWebTransport(options: SettingsWebTransportOptions)
         else {
           try { await post(context, `requests/${held.requestId}/result`, { runtimeId, result: held.result }); }
           catch (error) {
-            // Kept only while the service asks to wait; a refusal means it no longer wants the result.
-            if (!(error instanceof TransportError && error.retryAfterMs !== null)) undelivered = null;
+            // Kept until the service takes it; only a refusal drops it (a new account or runtime does above).
+            if (!retryable(error)) undelivered = null;
             throw error;
           }
           undelivered = null;
@@ -125,7 +127,11 @@ export function createSettingsWebTransport(options: SettingsWebTransportOptions)
             undelivered = { scope, runtimeId, requestId: request.requestId, result };
             throw error;
           }
-          if (attempt === 2 || !current(context) || error instanceof TransportError && error.status < 500) throw error;
+          if (attempt === 2 || !current(context) || error instanceof TransportError && error.status < 500) {
+            // A result the service may still take is kept and delivered again, never re-executed.
+            if (current(context) && retryable(error)) undelivered = { scope, runtimeId, requestId: request.requestId, result };
+            throw error;
+          }
         }
       }
       return 50;

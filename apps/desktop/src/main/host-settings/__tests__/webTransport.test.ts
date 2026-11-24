@@ -46,6 +46,34 @@ describe('web settings Host transport', () => {
       f.transport.stop();
     } finally { vi.useRealTimers(); }
   });
+  // A result kept for redelivery survives a network failure on the way: it is delivered again after
+  // the backoff, the same result, with the command run once and no new command taken meanwhile.
+  it('keeps a held result through a network failure and delivers it again afterwards', async () => {
+    vi.useFakeTimers();
+    try {
+      const f = fixture();
+      let results = 0;
+      const base = f.fetch.getMockImplementation()!;
+      f.fetch.mockImplementation(async (url, init) => {
+        if (!String(url).endsWith('/result')) return base(url, init);
+        results += 1;
+        if (results === 1) return new Response('', { status: 503, headers: { 'Retry-After': '60' } });
+        if (results === 2) throw new TypeError('network down');
+        return base(url, init);
+      });
+      f.transport.start();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(results).toBe(2);
+      const calls = (suffix: string) => f.fetch.mock.calls.filter(([url]) => String(url).endsWith(suffix));
+      expect(calls('/poll')).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(results).toBe(3);
+      const bodies = calls('/result').map(([, init]) => JSON.parse(String(init?.body)).result);
+      expect(bodies[2]).toEqual(bodies[0]);
+      expect(f.execute).toHaveBeenCalledTimes(1);
+      f.transport.stop();
+    } finally { vi.useRealTimers(); }
+  });
   // The service's Retry-After sets the earliest next poll, for a minute or a quarter hour alike.
   it.each([60, 900])('waits out a %s s Retry-After before polling again', async seconds => {
     vi.useFakeTimers();
