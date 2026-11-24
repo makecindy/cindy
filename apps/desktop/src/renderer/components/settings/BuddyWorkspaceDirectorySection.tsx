@@ -1,21 +1,28 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { FolderInput, RotateCcw } from 'lucide-react';
+import { ChevronRight, Copy, Folder, Info, MoreHorizontal, RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { SettingsCard } from '@/components/ui/settings-rows';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import {
+  SETTINGS_HINT,
+  SettingsBlock,
+  SettingsCard,
+  SettingsRow,
+} from '@/components/ui/settings-rows';
 import { Tip } from '@/components/ui/tooltip';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 import type { BuddyWorkspaceSettingsState } from '../../../shared/buddyWorkspaceSettings';
 import { additionalSettings } from './AdditionalSettings.settings-search';
+import { dialogueDirectoryDisplayParts } from './dialogueDirectoryDisplay';
 import { useSettingDefinition } from './useSettingDefinition';
-import { WorkspacePathField } from './WorkspacePathField';
 
 /**
  * Default parent folder for brand-new buddies' workspaces (decoupled from Cindy's app data).
  * Existing buddies keep their current location and can be moved individually in their
- * Advanced configuration.
+ * Advanced configuration. Visual layout mirrors DialogueDirectorySection so every card
+ * in Settings -> Storage shares the exact same row, pill button, and footer rhythm.
  */
 export function BuddyWorkspaceDirectorySection() {
   const setting = useSettingDefinition(additionalSettings.buddyWorkspaceDirectory);
@@ -81,9 +88,10 @@ export function BuddyWorkspaceDirectorySection() {
     }
   };
 
-  const copyPath = async (value: string) => {
+  const copyPath = async () => {
+    if (!state) return;
     try {
-      await navigator.clipboard.writeText(value);
+      await navigator.clipboard.writeText(state.directory);
       toast.success(t('settings.about.storage.dialogueDirectoryCopied'));
     } catch {
       toast.error(t('settings.about.storage.dialogueDirectoryCopyFailed'));
@@ -101,53 +109,89 @@ export function BuddyWorkspaceDirectorySection() {
   };
 
   if (!api) return null;
-
   return (
     <SettingsCard {...setting.anchorProps}>
-      <div className="flex flex-col gap-3 px-5 py-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <span
-                role="heading"
-                aria-level={3}
-                className="text-13 font-medium leading-[1.4] text-[var(--settings-section-title)]"
-              >
-                {setting.title}
-              </span>
-              {state ? (
-                <span
-                  className={cn(
-                    'inline-flex items-center gap-1.5 rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-11 font-medium',
-                    state.isCustomized
-                      ? 'text-[var(--text-primary)]'
-                      : 'text-[var(--text-secondary)]',
-                  )}
-                >
-                  <span
-                    className={cn(
-                      'size-1.5 shrink-0 rounded-full',
-                      state.isCustomized
-                        ? 'bg-[var(--status-info)]'
-                        : 'bg-[var(--text-tertiary)]',
+      <SettingsRow
+        wrap
+        title={
+          <span role="heading" aria-level={3}>
+            {setting.title}
+          </span>
+        }
+        tag={
+          state && (
+            <span className="rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-11 text-[var(--text-secondary)]">
+              {t(
+                state.isCustomized
+                  ? 'settings.defaults.customizedBadge'
+                  : 'settings.about.storage.dialogueDirectoryDefault',
+              )}
+            </span>
+          )
+        }
+        hint={
+          state && (
+            <span className="flex min-w-0 items-center gap-1.5">
+              <Folder size={15} className="shrink-0" aria-hidden />
+              {dialogueDirectoryDisplayParts(state.directory, window.electronAPI.platform).map(
+                (part, index) => (
+                  <span key={index} className="flex min-w-0 items-center gap-1.5">
+                    {index > 0 && (
+                      <ChevronRight
+                        size={12}
+                        className="shrink-0 text-[var(--text-tertiary)]"
+                        aria-hidden
+                      />
                     )}
-                    aria-hidden
-                  />
-                  {t(
-                    state.isCustomized
-                      ? 'settings.defaults.customizedBadge'
-                      : 'settings.about.storage.dialogueDirectoryDefault',
-                  )}
-                </span>
-              ) : null}
-            </div>
-            <p className="mt-1 text-12 leading-[1.45] text-[var(--text-secondary)] [text-wrap:pretty]">
-              {setting.description}
-            </p>
-          </div>
-
-          <div className="flex shrink-0 items-center gap-2 pt-0.5">
-            {state?.isCustomized ? (
+                    <span className="max-w-[180px] truncate">{part}</span>
+                  </span>
+                ),
+              )}
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Tip text={t('settings.about.storage.dialogueDirectoryFullPath')}>
+                    <Button
+                      {...setting.controlProps}
+                      variant="secondary"
+                      size="md"
+                      className="w-8 border-transparent bg-transparent px-0"
+                      aria-label={t('settings.about.storage.dialogueDirectoryFullPath')}
+                    >
+                      <MoreHorizontal size={15} aria-hidden />
+                    </Button>
+                  </Tip>
+                </PopoverTrigger>
+                <PopoverContent
+                  align="start"
+                  className="w-[340px] max-w-[calc(100vw-32px)] rounded-xl border-[var(--border-default)] bg-[var(--surface-elevated)] p-4 text-[var(--text-primary)] shadow-none"
+                >
+                  <p className="mb-2 text-12 text-[var(--text-secondary)]">
+                    {t('settings.about.storage.dialogueDirectoryFullPath')}
+                  </p>
+                  <p className="select-text break-all font-mono text-12 leading-relaxed">
+                    {state.directory}
+                  </p>
+                  <p className="mt-2 text-12 leading-relaxed text-[var(--text-secondary)]">
+                    {t('settings.about.storage.buddyWorkspaceDirectoryDetails')}
+                  </p>
+                  <Button
+                    {...setting.controlProps}
+                    variant="secondary"
+                    size="md"
+                    className="mt-3 gap-1.5"
+                    onClick={() => void copyPath()}
+                  >
+                    <Copy size={14} aria-hidden />
+                    {t('settings.about.storage.dialogueDirectoryCopy')}
+                  </Button>
+                </PopoverContent>
+              </Popover>
+            </span>
+          )
+        }
+        trailing={
+          <div className="flex shrink-0 items-center gap-2">
+            {state?.isCustomized && (
               <Tip text={t('settings.about.storage.dialogueDirectoryReset')}>
                 <Button
                   {...setting.controlProps}
@@ -159,39 +203,41 @@ export function BuddyWorkspaceDirectorySection() {
                   aria-label={t('settings.about.storage.dialogueDirectoryReset')}
                   onClick={() => void update('reset')}
                 >
-                  <RotateCcw size={14} aria-hidden />
+                  <RotateCcw size={15} aria-hidden />
                 </Button>
               </Tip>
-            ) : null}
+            )}
             <Button
               {...setting.controlProps}
               variant="secondary"
-              size="sm"
-              compact
+              size="md"
+              className="gap-1.5"
+              disabled={busy || !state}
+              onClick={() => void openDirectory()}
+            >
+              <Folder size={14} aria-hidden />
+              {t('settings.about.storage.dialogueDirectoryOpen')}
+            </Button>
+            <Button
+              {...setting.controlProps}
+              variant="secondary"
+              size="md"
               className="gap-1.5"
               disabled={busy}
               onClick={() => void update('choose')}
             >
-              <FolderInput size={13} aria-hidden />
               {t('settings.about.storage.buddyWorkspaceDirectoryChoose')}
+              <ChevronRight size={14} aria-hidden />
             </Button>
           </div>
-        </div>
-
-        {state ? (
-          <WorkspacePathField
-            path={state.directory}
-            fullPathLabel={t('settings.about.storage.dialogueDirectoryFullPath')}
-            detailsText={t('settings.about.storage.buddyWorkspaceDirectoryDetails')}
-            copyLabel={t('settings.about.storage.dialogueDirectoryCopy')}
-            openLabel={t('settings.about.storage.dialogueDirectoryOpen')}
-            onCopy={copyPath}
-            onOpen={openDirectory}
-            disabled={busy}
-            controlProps={setting.controlProps}
-          />
-        ) : null}
-      </div>
+        }
+      />
+      <SettingsBlock>
+        <p className={cn('flex items-start gap-1.5', SETTINGS_HINT)}>
+          <Info size={13} className="mt-0.5 shrink-0" aria-hidden />
+          {setting.description}
+        </p>
+      </SettingsBlock>
     </SettingsCard>
   );
 }

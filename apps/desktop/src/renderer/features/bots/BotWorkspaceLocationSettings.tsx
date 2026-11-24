@@ -13,7 +13,7 @@ import {
   extractDriveBadge,
   formatCompactPath,
   WorkspacePathField,
-} from '@/components/settings/WorkspacePathField';
+} from './WorkspacePathField';
 import { Button } from '@/components/ui/button';
 import { ErrorNotice } from '@/components/ui/error-notice';
 import { SETTINGS_HINT, SettingsBlock, SettingsCard } from '@/components/ui/settings-rows';
