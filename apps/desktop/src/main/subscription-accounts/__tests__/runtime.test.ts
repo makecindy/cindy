@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { EventEmitter } from 'node:events';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   SubscriptionAccountCommand,
@@ -314,7 +315,7 @@ import { createContextOverflowRollover } from '../../maker-ipc/contextOverflowRo
 import { acceptSessionRuntimeMutation, applySessionRuntimeOverrideForStart, clearAllSessionRuntimeControlStates } from '../../maker-ipc/sessionRuntimeControl.js';
 import { AgentInputCoordinator, type AgentInputCoordinatorDeps } from '../../maker-ipc/agent-input-coordinator.js';
 import { providerGroupSwitchCause } from '../../provider-group/failurePolicy.js';
-import { providerShareGuestPeer } from '@cindy/device-link';
+import { DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT, DeviceLinkClient, PROTOCOL_VERSION, providerShareGuestPeer, type Envelope } from '@cindy/device-link';
 import type { RemoteAgentOpenPayload } from '../../remote-agent/wire.js';
 import { createProviderGroupGuestSwitch } from '../../provider-group/guestSwitch.js';
 import {
@@ -6661,7 +6662,23 @@ describe('shared subscription recovery through controller and account allocation
     { original: 'second', phase: 'session-reconnect', boundary: 'close-not-closed' },
     { original: 'second', phase: 'session-reconnect', boundary: 'replacement-start-failed' },
     { original: 'second', phase: 'session-reconnect', boundary: 'replacement-send-rejected' },
+    // Unit: a provider rejection returned as accepted:false must advance the same
+    // FIFO as a thrown failure. Use the real host result and Session conversion.
+    { original: 'second', phase: 'session-reconnect', boundary: 'original-send-rejected' },
+    // Unit: beyond admission, a real client's first-write timeout differs from
+    // its reply timeout. One held socket frame (or a written request with no ACK)
+    // exercises the transport proof through send_to_session and the coordinator.
+    { original: 'second', phase: 'session-reconnect', boundary: 'original-not-written' },
+    { original: 'second', phase: 'session-reconnect', boundary: 'replacement-not-written' },
     { original: 'second', phase: 'session-reconnect', boundary: 'original-ack-timeout' },
+    { original: 'second', phase: 'session-reconnect', boundary: 'original-accepted' },
+    // Unit: Session's own cancellation still returns a non-accepted result.
+    // Its position relative to the actual write, independently of coordinator
+    // Stop, distinguishes a safe release from an unconfirmed send.
+    { original: 'second', phase: 'session-reconnect', boundary: 'original-cancel-before-write' },
+    { original: 'second', phase: 'session-reconnect', boundary: 'replacement-cancel-before-write' },
+    { original: 'second', phase: 'session-reconnect', boundary: 'original-ack-timeout-returned' },
+    { original: 'second', phase: 'session-reconnect', boundary: 'replacement-ack-timeout-returned' },
     { original: 'second', phase: 'session-reconnect', boundary: 'replacement-accepted-then-closed' },
     { original: 'second', phase: 'scheduled-reconnect', boundary: 'none' },
     { original: 'second', phase: 'legacy-reconnect', boundary: 'none' },
@@ -6710,16 +6727,32 @@ describe('shared subscription recovery through controller and account allocation
     let staleInput = false;
     let runtimeGeneration = 0;
     const replacesStoppedRun = ['replacement-start-failed', 'replacement-send-rejected', 'replacement-accepted-then-closed'].includes(boundary);
-    const releaseFailedHead = phase === 'session-reconnect' && [
+    const originalRejected = boundary === 'original-send-rejected';
+    const notWritten = boundary === 'original-not-written' || boundary === 'replacement-not-written';
+    const originalAckTimeout = boundary === 'original-ack-timeout' || boundary === 'original-ack-timeout-returned';
+    const timeoutReturned = boundary.endsWith('ack-timeout-returned');
+    const cancelBeforeWrite = boundary.endsWith('cancel-before-write');
+    const sessionAbort = new AbortController();
+    const returnedCancellation = vi.fn();
+    const observeSessionCancellation = (session: Session) => {
+      const send = session.send.bind(session);
+      vi.spyOn(session, 'send').mockImplementationOnce(async (message, opts) => {
+        const result = await send(message, { ...opts, signal: sessionAbort.signal });
+        returnedCancellation(result);
+        return result;
+      });
+    };
+    const realSendTransport = notWritten || originalAckTimeout || timeoutReturned;
+    const originalReconnectSucceeds = boundary.startsWith('original-');
+    const releaseFailedHead = notWritten || originalRejected || cancelBeforeWrite || (phase === 'session-reconnect' && [
       'late-revoke', 'late-owner-change', 'late-generation-change', 'close-failed', 'close-not-closed',
       'replacement-start-failed', 'replacement-send-rejected',
-    ].includes(boundary);
+    ].includes(boundary));
     const closesAwaitingAck = boundary === 'replacement-closed-awaiting-ack';
-    const originalAckTimeout = boundary === 'original-ack-timeout';
-    const unknownDispatch = originalAckTimeout || boundary === 'replacement-ack-timeout' || closesAwaitingAck;
+    const unknownDispatch = originalAckTimeout || boundary === 'replacement-ack-timeout' || timeoutReturned || closesAwaitingAck;
     const receivedBeforeClose = Promise.withResolvers<void>();
     const settleNativeSend = Promise.withResolvers<void>();
-    let rejectedReplacementSend = false;
+    let rejectedSend = false;
     const queueTailBeforeSettlement = releaseFailedHead || unknownDispatch;
     let shareListKnown = boundary !== 'share-list-unknown';
     const published = weekly ? 'anthropic' : boundary === 'old-share' ? b : a;
@@ -6764,9 +6797,9 @@ describe('shared subscription recovery through controller and account allocation
       const emit = (event: AgentEvent) => { queue.push(event); wake?.(); wake = undefined; };
       return { id, agentKind: 'claude-code', model, setInteractionResolver() {}, abort: async () => {},
         send: async (message: unknown) => {
-          if (boundary === 'replacement-send-rejected' && received.length === 1 && !rejectedReplacementSend) {
-            rejectedReplacementSend = true;
-            throw new TurnDispatchRejectedError('Fixture replacement rejected');
+          if ((originalRejected || boundary === 'replacement-send-rejected') && received.length === 1 && !rejectedSend) {
+            rejectedSend = true;
+            throw new TurnDispatchRejectedError('Fixture provider rejected before dispatch');
           }
           received.push(message);
           if (closesAwaitingAck && received.length === 2) {
@@ -6833,8 +6866,54 @@ describe('shared subscription recovery through controller and account allocation
     const invokeTimeout = remoteAgentInvoker(route, async () => ({
       ok: false, error: { code: 'DEVICE_LINK_TIMEOUT', message: 'Fixture send acknowledgement timed out' },
     }));
+    // Only the selected send uses this real client. The socket fixture can hold
+    // the frame before write or forward the actual request without returning an ACK.
+    const enteredTransport = Promise.withResolvers<void>();
+    const socket = Object.assign(new EventEmitter(), {
+      bufferedAmount: 0,
+      send: (data: string) => {
+        const frame = JSON.parse(data) as Envelope;
+        if (frame.kind === 'invoke' && frame.id) onSocketWrite?.(frame.id);
+      },
+      close: () => {},
+    });
+    let onSocketWrite: ((id: string) => void) | undefined;
+    const writtenRequestIds = new Set<string>();
+    const transportDevice = 'fixture-transport-peer';
+    const relayFrame = (envelope: Omit<Envelope, 'v'>) => socket.emit('message', JSON.stringify({
+      v: PROTOCOL_VERSION, ...envelope,
+    }));
+    const transport = realSendTransport ? new DeviceLinkClient({
+      getWsUrl: () => 'ws://fixture.invalid',
+      getToken: async () => 'fixture-token',
+      getHello: () => ({ deviceName: 'Fixture', platform: 'darwin', appVersion: '1', remoteControlEnabled: true, busy: false }),
+      createWebSocket: () => socket,
+      timing: { pingIntervalMs: 600_000 },
+    }) : undefined;
+    const invokeViaClient = transport && remoteAgentInvoker(transportDevice, (device, channel, args, opts) =>
+      transport.invoke(device, { channel, args }, 100, opts));
     const poller = new RemoteAgentPoller(async (args, invokeOptions) => {
       const request = JSON.parse(JSON.stringify(args[0]));
+      if (invokeViaClient && request.op === 'call' && request.method === 'send' && sendCalls === 1
+        && !onSocketWrite) {
+        onSocketWrite = id => {
+          // Reliable retransmissions share one request ID and host execution.
+          if (writtenRequestIds.has(id)) return;
+          writtenRequestIds.add(id);
+          sendCalls++;
+          void host.handle(peer, request);
+          if (timeoutReturned) sessionAbort.abort();
+        };
+        socket.bufferedAmount = notWritten ? 700 * 1024 : 0;
+        try {
+          return await invokeViaClient(args, { beforeDispatch: () => {
+            invokeOptions?.beforeDispatch?.();
+            enteredTransport.resolve();
+          } });
+        } finally {
+          socket.bufferedAmount = 0;
+        }
+      }
       if (nextInputBeforeReplayRpc && opens.length === 3 && sendCalls === 1
         && request.op === 'call' && request.method === 'send') {
         expect(invokeOptions?.beforeDispatch).toBeTypeOf('function');
@@ -6955,10 +7034,27 @@ describe('shared subscription recovery through controller and account allocation
       isTurnRunning: () => false, hasLiveSession: () => true, continueSession, fallback,
       readResetAt: () => null, now: Date.now, sleep: async () => {}, guestSwitch, log: { info() {}, warn() {} },
     });
-    if (weekly) vi.useFakeTimers({ toFake: boundary === 'host-quit-offline'
+    if (weekly) vi.useFakeTimers({ toFake: boundary === 'host-quit-offline' || realSendTransport
       ? ['Date', 'setInterval', 'clearInterval', 'setTimeout', 'clearTimeout']
       : ['Date', 'setInterval', 'clearInterval'] });
     try {
+      if (transport) {
+        transport.start();
+        await vi.advanceTimersByTimeAsync(1);
+        socket.emit('open');
+        relayFrame({ kind: 'hello-ack', payload: { serverProtocolVersion: PROTOCOL_VERSION,
+          deviceId: 'fixture-transport-self', userId: 'fixture-transport-account' } });
+        transport.onFrame(frame => {
+          if (frame.kind === 'link-open' && frame.src && frame.id) {
+            transport.sendLinkAccept(frame.src, frame.id, { appVersion: '1', allowlistHash: 'fixture' });
+          }
+        });
+        relayFrame({ kind: 'link-open', src: transportDevice, id: 'fixture-link', payload: {
+          appVersion: '1', controllerName: 'Fixture', protocolVersion: PROTOCOL_VERSION,
+          capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT], transportStreamId: 'fixture-stream', transportBaseSeq: 1,
+        } });
+        await vi.advanceTimersByTimeAsync(0);
+      }
       // Created-share binding is derived using the real host's same identity function.
       const hostTask = hostSessionIdFor(peer, task);
       if (phase !== 'pre-pool') h.bindings.set(`task:${hostTask}`, {
@@ -6993,7 +7089,7 @@ describe('shared subscription recovery through controller and account allocation
           await vi.advanceTimersByTimeAsync(5_000);
           vi.mocked(guestLog.info).mockClear();
 
-          if (boundary !== 'running-target' && !originalAckTimeout) {
+          if (boundary !== 'running-target' && !originalReconnectSucceeds) {
             const exhausted = await acquireSubscriptionAccount(published, model, [], true, { accountId: original, remote: true });
             expect(exhausted!.observeFailure({ sdkError: 'rate_limit', usageResetAt: resetAtMs }, model, 'run')).toBe(true);
             exhausted!.release();
@@ -7014,6 +7110,7 @@ describe('shared subscription recovery through controller and account allocation
         session.onStatusChange(status => {
           if (status === 'closed' && live === session) live = undefined;
         });
+        if (boundary === 'original-ack-timeout-returned') observeSessionCancellation(session);
         const persisted: string[] = [];
         const persistedError = vi.fn(() => {
           // The executor comes online after the first failure, before the
@@ -7109,6 +7206,9 @@ describe('shared subscription recovery through controller and account allocation
             }
             live = guestSession = new Session({ id: task, agentKind: 'claude-code', permissionMode: 'bypassPermissions',
               workDir: '/controller/work', agentDeviceId: route, handle, capabilities: {} as never, logger: guestLog });
+            if (boundary === 'replacement-ack-timeout-returned' && bootstrapped.mock.calls.length === 1) {
+              observeSessionCancellation(live);
+            }
             if (firstReplacement && boundary === 'replacement-accepted-then-closed') {
               const replacement = live;
               const nativeSend = replacement.send.bind(replacement);
@@ -7177,6 +7277,13 @@ describe('shared subscription recovery through controller and account allocation
           getAgentKind: () => 'claude-code', getSdkSessionId: async () => live?.sdkSessionId,
           getTurnGeneration: () => live?.getTurnGeneration() ?? null, getTurnSessionIdentity: () => live ?? null,
           emitProjection, persistTerminalSendError: persistedError, onUsageLimitedTurnError,
+          ...(cancelBeforeWrite ? {
+            beforeDispatchUserTurn: async (_id, item) => {
+              if (item.clientId === 'after-idle' && (boundary === 'original-cancel-before-write' || bootstrapped.mock.calls.length === 1)) {
+                expect(live?.cancelPendingSend()).toBe(true);
+              }
+            },
+          } : {}),
           onAcceptedQueuedMessage: async (id, item) => {
             accepted(id, item);
             if (queueTailBeforeSettlement && item.clientId === 'after-idle') {
@@ -7515,13 +7622,28 @@ describe('shared subscription recovery through controller and account allocation
           expect(persistedError).not.toHaveBeenCalled();
           return;
         }
+        if (realSendTransport) {
+          await enteredTransport.promise;
+          await vi.advanceTimersByTimeAsync(100);
+          expect(writtenRequestIds.size).toBe(notWritten ? 0 : 1);
+        }
+        if (boundary === 'original-accepted') {
+          await expect(send.mock.results[0].value).resolves.toMatchObject({ dispatched: true });
+          expect(received).toHaveLength(2);
+          expect(coordinator.getProjection(task).recovery).toBeNull();
+          expect(bootstrapped).not.toHaveBeenCalled();
+          expect(sendCalls).toBe(2);
+          expect(persisted).toEqual(['after-idle']);
+          return;
+        }
         if (unknownDispatch) {
           const expectedError = closesAwaitingAck ? '[REMOTE_AGENT_EXPIRED]' : '[REMOTE_AGENT_TIMEOUT]';
           if (closesAwaitingAck) {
             await expect(send.mock.results[0].value).rejects.toThrow(expectedError);
           } else {
             await expect(send.mock.results[0].value).rejects.toMatchObject({
-              code: 'DEVICE_LINK_TIMEOUT', message: expect.stringContaining(expectedError),
+              code: realSendTransport ? 'INVOKE_TIMEOUT' : 'DEVICE_LINK_TIMEOUT',
+              message: expect.stringContaining(expectedError),
             });
           }
           await vi.waitFor(() => expect(coordinator.getProjection(task).recovery).toMatchObject({
@@ -7542,6 +7664,9 @@ describe('shared subscription recovery through controller and account allocation
           });
           expect(coordinator.getQueueControlSnapshot(task).pendingQueue.map(item => item.clientId)).toEqual(['queued-tail']);
           expect(send).toHaveBeenCalledOnce();
+          if (timeoutReturned) expect(returnedCancellation).toHaveBeenCalledExactlyOnceWith({
+            accepted: false, reason: 'cancelled-before-dispatch',
+          });
           expect(opens).toHaveLength(originalAckTimeout ? 2 : 3);
           if (originalAckTimeout) {
             expect(opens[1]).not.toHaveProperty('groupSwitchToken');
@@ -7573,11 +7698,18 @@ describe('shared subscription recovery through controller and account allocation
             else recoveryAllowed = false;
             resolveProbe!();
           }
-          await expect(send.mock.results[0].value).rejects.toThrow('SUBSCRIPTION_ACCOUNT_LIMITED');
+          const errorText = originalRejected ? 'Fixture provider rejected before dispatch'
+            : boundary === 'original-not-written' ? 'REMOTE_AGENT_LINK_BUSY'
+              : boundary === 'original-cancel-before-write' ? 'cancelled before vendor dispatch' : 'SUBSCRIPTION_ACCOUNT_LIMITED';
+          const firstOutcome = await send.mock.results[0].value.catch((error: unknown) => error);
+          if (originalRejected) expect(rejectedSend).toBe(true);
+          else if (notWritten) expect(writtenRequestIds.size).toBe(0);
           await vi.waitFor(() => expect(emitProjection).toHaveBeenCalledWith(expect.objectContaining({
-            error: expect.stringContaining('SUBSCRIPTION_ACCOUNT_LIMITED'), recovery: null,
+            error: expect.stringContaining(errorText), recovery: null,
           })));
-          expect(persistedError).toHaveBeenCalledWith(task, expect.stringContaining('SUBSCRIPTION_ACCOUNT_LIMITED'));
+          expect(firstOutcome).toBeInstanceOf(Error);
+          expect((firstOutcome as Error).message).toContain(errorText);
+          expect(persistedError).toHaveBeenCalledWith(task, expect.stringContaining(errorText));
           await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(2));
           await send.mock.results[1].value.catch(() => undefined);
           expect(send.mock.calls[1][3].persistUserMessage?.clientId).toBe('queued-tail');
@@ -7986,6 +8118,7 @@ describe('shared subscription recovery through controller and account allocation
       await guestSession?.close();
       await remoteHandle?.close({ reason: 'navigation' });
       for (const client of clients) client.abandon('test-finished');
+      transport?.stop();
       await host.dispose();
       if (weekly) vi.useRealTimers();
     }

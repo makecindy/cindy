@@ -13,6 +13,7 @@ import { promisify } from 'node:util';
 import { gzip } from 'node:zlib';
 
 import {
+  DeviceLinkError,
   REMOTE_AGENT_CHANNEL,
   REMOTE_AGENT_MAX_INLINE_PAYLOAD_CHARS,
   REMOTE_AGENT_MAX_PAYLOAD_BYTES,
@@ -602,8 +603,12 @@ export function remoteAgentLinkError(error: { code?: string; message?: string } 
   // The requested route may be a share/group rather than a resolved computer.
   // Report only this known reference and channel, not a guessed name or status.
   const context = target ? `\nrequestedTarget=${shortDeviceRef(target)}; channel=${REMOTE_AGENT_CHANNEL}` : '';
-  const wrapped = new Error(keepRemoteError
-    ? message : `[${displayCode ?? 'REMOTE_AGENT_UNAVAILABLE'}] ${diagnostic}${context}`);
+  const wrapped = new Error(
+    keepRemoteError ? message : `[${displayCode ?? 'REMOTE_AGENT_UNAVAILABLE'}] ${diagnostic}${context}`,
+    // The local transport can attest that this request never reached a socket.
+    // A remote error envelope cannot supply that evidence.
+    error instanceof DeviceLinkError && error.inFlight === false ? { cause: error } : undefined,
+  );
   return typeof code === 'string' ? Object.assign(wrapped, { code }) : wrapped;
 }
 

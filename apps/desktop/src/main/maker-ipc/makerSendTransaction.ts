@@ -1938,8 +1938,14 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       const reconnect = !recovery && createOpts && persistUserMessage && reconnectInput
         && reconnectInput.canCapture?.(sess) !== false
         ? deps.captureSharedReconnectRecovery?.(sess) : undefined;
+      const settleReturnedFailure = sess.agentKind !== 'codex' && sess.agentKind !== 'pi';
       const sendEvidence = recovery?.observeSend?.evidence
-        ?? (reconnect && reconnectInput?.onUndispatchedFailure ? { handedToTransport: false } : undefined);
+        ?? (reconnect && reconnectInput?.onUndispatchedFailure
+          ? { handedToTransport: false, trackUnwritten: settleReturnedFailure } : undefined);
+      const replacementEvidence: SharedReconnectSendEvidence = { handedToTransport: false, trackUnwritten: settleReturnedFailure };
+      let replacementDispatched = false;
+      let completion: { result: DesktopMakerSendResult } | { error: unknown };
+      let originalFailure: { error: unknown } | undefined;
       try {
         let cindyLearnInvocation: CindyLearnInvocationGrant | null = null;
         // Every Cindy harness consumes this exact-path pin at its provider
@@ -2261,12 +2267,12 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         if (directPreDispatchHookStarted && !sendResult.accepted) {
           deps.onUndispatchedDirectUserTurn?.(sessionId);
         }
-        return toCompatibleMakerSendResult(
+        completion = { result: toCompatibleMakerSendResult(
           toDesktopSessionDispatchOutcome(sendResult, {
             source: 'maker-ipc',
             context: `SEND/${sessionId}/send`,
           }),
-        );
+        ) };
       } catch (error) {
         const err = sendEvidence?.failure?.kind === 'unconfirmed' ? sendEvidence.failure.error : error;
         if (!sendAccepted) {
@@ -2283,11 +2289,11 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         if (directPreDispatchHookStarted) {
           deps.onUndispatchedDirectUserTurn?.(sessionId);
         }
+        completion = { error: err };
         if (reconnect && reconnectInput && sess.agentDeviceId && !sendAccepted && userMessagePersisted && persistUserMessage) {
+          originalFailure = { error: err };
           const shareDeviceId = sess.agentDeviceId;
           const schedulerRunSignal = reconnectInput.schedulerRunSignal;
-          let replacementDispatched = false;
-          const replacementEvidence: SharedReconnectSendEvidence = { handedToTransport: false };
           const attempt = async () => {
             const offer = sendEvidence?.handedToTransport ? undefined : reconnect.takeOffer(err);
             if (!offer) {
@@ -2406,27 +2412,32 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
             result => ({ ok: true as const, result }),
             error => ({ ok: false as const, error }),
           );
-          // The initial row already exists. A proven failure with no
-          // replacement should advance the FIFO, but never supersede Stop,
-          // new input or an ambiguous dispatch.
-          if (reconnectInput.onUndispatchedFailure && sendEvidence && !replacementDispatched
-            && (!sendEvidence.handedToTransport || sendEvidence.failure?.kind === 'rejected')
-            && (!replacementEvidence.handedToTransport || replacementEvidence.failure?.kind === 'rejected')
-            && !(outcome.ok && outcome.result?.accepted)
-            && !requestedSendOpts.signal?.aborted && !schedulerRunSignal?.aborted
-            && !reconnectInput.wasStopped?.() && reconnectInput.isCurrent()) {
-            reconnectInput.onUndispatchedFailure();
-            throw err;
+          if (!outcome.ok) completion = { error: outcome.error };
+          else if (outcome.result !== undefined) completion = { result: outcome.result };
+          else if (deps.isSessionRunningError(err)) {
+            throwIpcError('SESSION_RUNNING', `Session ${sessionId} is already running a turn`);
           }
-          if (!outcome.ok) throw outcome.error;
-          if (outcome.result !== undefined) return outcome.result;
-        }
-        if (deps.isSessionRunningError(err)) {
+        } else if (deps.isSessionRunningError(err)) {
           throwIpcError('SESSION_RUNNING', `Session ${sessionId} is already running a turn`);
         }
-        throw err;
       } finally {
         reconnect?.dispose();
       }
+
+      // Both Session's non-accepted return and a thrown failure settle here.
+      // Each attempt must independently prove the input did not reach the agent.
+      if (reconnect && reconnectInput?.onUndispatchedFailure && sendEvidence && userMessagePersisted
+        && (settleReturnedFailure || originalFailure) && !sendAccepted && !replacementDispatched && !('result' in completion && completion.result.accepted)
+        && !reconnectInput.signal.aborted && !requestedSendOpts.signal?.aborted
+        && !reconnectInput.schedulerRunSignal?.aborted && !reconnectInput.wasStopped?.() && reconnectInput.isCurrent()
+        && [sendEvidence, replacementEvidence].every(evidence => !evidence.handedToTransport
+          || evidence.failure?.kind === 'not-written' || evidence.failure?.kind === 'rejected')) {
+        reconnectInput.onUndispatchedFailure();
+        if (originalFailure) throw originalFailure.error;
+        if (sendEvidence.failure) throw sendEvidence.failure.error;
+        if ('result' in completion && !completion.result.accepted) throw new Error(completion.result.outcome.message);
+      }
+      if ('error' in completion) throw completion.error;
+      return completion.result;
   }
 }

@@ -12,7 +12,7 @@
 import fsp from 'node:fs/promises';
 import { markSessionSendTerminal, readSessionSendTerminalStatus, MAIN_OWNED_SEND_CONTEXT, TurnDispatchRejectedError } from '@cindy/maker-core';
 
-import type { RemoteAgentMethod, RemoteAgentReply, RemoteAgentReverseRequest, RemoteAgentTeardownReason } from '@cindy/device-link';
+import { DeviceLinkError, type RemoteAgentMethod, type RemoteAgentReply, type RemoteAgentReverseRequest, type RemoteAgentTeardownReason } from '@cindy/device-link';
 import type {
   AgentEvent,
   AgentKind,
@@ -249,7 +249,9 @@ export function fixedRemoteAgentLink(client: RemoteAgentRunClient): RemoteAgentL
 
 export interface SharedReconnectSendEvidence {
   handedToTransport: boolean;
-  failure?: { kind: 'rejected' | 'unconfirmed'; error: unknown };
+  /** Codex and Pi retain their previous shared reconnect settlement. */
+  trackUnwritten: boolean;
+  failure?: { kind: 'rejected' | 'not-written' | 'unconfirmed'; error: unknown };
 }
 
 export interface RemoteHandleDeps {
@@ -493,7 +495,9 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       if (evidence?.handedToTransport) {
         // A stream close can settle the handle before Session returns. Keep the
         // actual call failure for the transaction, including its link error code.
-        evidence.failure = { kind: rejected ? 'rejected' : 'unconfirmed', error };
+        const linkError = error instanceof Error ? error.cause : undefined;
+        const notWritten = evidence.trackUnwritten && linkError instanceof DeviceLinkError && linkError.inFlight === false;
+        evidence.failure = { kind: rejected ? 'rejected' : notWritten ? 'not-written' : 'unconfirmed', error };
       }
       // The ordered error/done below already settles this send. Do not race it with
       // a second send rejection that can replace the host-owned recovery receipt.
