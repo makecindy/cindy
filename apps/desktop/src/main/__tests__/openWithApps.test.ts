@@ -8,6 +8,8 @@ import {
   parseCommandLineExe,
   parseRegSubkeys,
   parseRegValues,
+  registeredLaunchArgs,
+  splitWindowsCommandLine,
   type OpenWithDeps,
 } from '../openWithApps';
 
@@ -177,6 +179,72 @@ describe('createOpenWithHandlers.open', () => {
     await expect(handlers.open({ filePath: 'relative.xlsx', appId: 'x' })).rejects.toThrow(
       /INVALID_PARAMS/,
     );
+  });
+});
+
+/*
+ * 测试价值
+ * - 生产入口与可观察结果：createOpenWithHandlers 的 list → open；断言真正交给系统启动的参数。
+ * - Bug 依据：ElyOffice 登记 `"…\ely-doc-start.exe" ely-doc ElyDoc "%1"`，旧实现只传
+ *   [文件路径]，启动器把路径当成第一个参数，弹出「ElyDoc 无法启动」。
+ * - 现有覆盖缺口：上面的用例只有 `"%1"` 单参数命令，看不出登记参数被丢弃。
+ * - 最小失败输入：ProgId 命令 `"C:\Ely\ely-doc-start.exe" ely-doc ElyDoc "%1"`。
+ * - tier：unit（注入假注册表与 spawn，无真实进程）。
+ */
+describe('createOpenWithHandlers.open with registered launch arguments', () => {
+  const DOC = 'C:\\work\\季度 报告.docx';
+  const progIdDeps = (command: string) =>
+    makeDeps({
+      regQuery: async (keyPath: string) =>
+        ({
+          'HKCR\\.docx\\OpenWithProgids': '    Some.Doc    REG_NONE    \r\n',
+          'HKCR\\Some.Doc\\shell\\open\\command': `    (Default)    REG_SZ    ${command}\r\n`,
+          'HKCR\\Some.Doc': '    (Default)    REG_SZ    Some Doc\r\n',
+        })[keyPath] ?? '',
+    });
+
+  it.each([
+    {
+      name: 'launcher-style commands keep the arguments in front of the file',
+      command: '"C:\\Ely\\ely-doc-start.exe" ely-doc ElyDoc "%1"',
+      exe: 'C:\\Ely\\ely-doc-start.exe',
+      args: ['ely-doc', 'ElyDoc', DOC],
+    },
+    {
+      name: 'switch-only commands keep passing just the file, as before',
+      command: '"C:\\Office\\WINWORD.EXE" /n "%1" /o "%u"',
+      exe: 'C:\\Office\\WINWORD.EXE',
+      args: [DOC],
+    },
+    {
+      name: 'commands without a file placeholder keep passing just the file',
+      command: '"C:\\Office\\WINWORD.EXE" /dde',
+      exe: 'C:\\Office\\WINWORD.EXE',
+      args: [DOC],
+    },
+  ])('$name', async ({ command, exe, args }) => {
+    const deps = progIdDeps(command);
+    const handlers = createOpenWithHandlers(deps);
+    const res = await handlers.list({ filePath: DOC });
+    expect(res.apps.map((a) => a.label)).toEqual(['Some Doc']);
+    await handlers.open({ filePath: DOC, appId: res.apps[0].id });
+    expect(deps.spawnDetached).toHaveBeenCalledWith(exe, args);
+  });
+
+  it('splits registered commands with Windows quoting rules', () => {
+    expect(splitWindowsCommandLine('"C:\\Program Files\\A\\a.exe" --name "Two Words" "%1"')).toEqual([
+      'C:\\Program Files\\A\\a.exe',
+      '--name',
+      'Two Words',
+      '%1',
+    ]);
+    expect(splitWindowsCommandLine('a.exe "C:\\dir\\\\" x\\"y')).toEqual(['a.exe', 'C:\\dir\\', 'x"y']);
+  });
+
+  it('drops unknown placeholders and expands environment variables in kept arguments', () => {
+    expect(
+      registeredLaunchArgs('"C:\\L\\start.exe" app %AppName% "%1" %u', 'D:\\f.docx', { AppName: 'Doc' }),
+    ).toEqual(['app', 'Doc', 'D:\\f.docx']);
   });
 });
 
