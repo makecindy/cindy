@@ -12491,6 +12491,8 @@
       "transferBusy": "{{name}} 方在回复，待此轮毕再换机",
       "targetUnavailable": "「{{device}}」今不可用，须在线并开远程控制",
       "targetOutdated": "「{{device}}」之 Cindy 版本较旧，未能运行「{{name}}」，请先于彼机更新 Cindy",
+      "skillTargetOutdated": "「{{name}}」有技艺正文逾 64 KB，「{{device}}」之旧版 Cindy 无法接收。请先更新彼机之 Cindy，再换主力之机。同伴仍留原机",
+      "skillTargetOutdated_skill": "「{{device}}」之旧版 Cindy 无法接收技艺「{{slug}}」，其正文 {{bodyBytes, number}} 字节，逾 64 KB。「{{name}}」仍行于原机。请更新彼机之 Cindy，再换主力之机。",
       "targetOutdatedItem": "移至「{{device}}」· 旧版 Cindy",
       "targetOutdatedMeta": "旧版 Cindy",
       "olderTargetNote": "「{{device}}」之 Cindy 为旧版，{{name}} 于彼依旧法而行：言谈记录照常同步，案之规约与自运于彼不行。",
