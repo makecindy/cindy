@@ -5,7 +5,7 @@ const invoke = vi.hoisted(() => vi.fn());
 vi.mock('electron', () => ({ ipcRenderer: { invoke, on: vi.fn(), removeListener: vi.fn() } }));
 import { cloudWindowBridges } from '../cloudBridges';
 import { createCloudWindowArgument, readCloudWindowRole } from '../../shared/cloudWindow';
-import { CLOUD_CLIENT_CHANNELS } from '../../shared/cloudSettingsClient';
+import { CLOUD_CLIENT_CHANNELS } from '../../shared/cloudSettingsChannels';
 
 describe('cloud window bridges', () => {
   it('gives a window without the main window argument no cloud bridge', () => {

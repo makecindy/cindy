@@ -1,6 +1,7 @@
 import { ipcRenderer } from 'electron';
 import { CLOUD_LOGIN_WINDOW, type CloudLoginWindowApi } from '../shared/cloudLoginWindow';
-import { CLOUD_CLIENT_CHANNELS, type CloudSettingsRendererApi } from '../shared/cloudSettingsClient';
+import { CLOUD_CLIENT_CHANNELS } from '../shared/cloudSettingsChannels';
+import type { CloudSettingsRendererApi } from '../shared/cloudSettingsClient';
 import type { HostSettingsRendererApi } from '../shared/hostSettings';
 import { readCloudWindowRole } from '../shared/cloudWindow';
 
