@@ -103,8 +103,8 @@ function isTaskBaseToken(value: unknown): value is string {
  * 旧控制端不带 `tasksBase`,或重启/淘汰未命中时回完整集合,保持双向无损兼容。
  */
 export function createUsageTaskDeltaCache(maxSnapshots = MAX_TASK_DELTA_SNAPSHOTS): UsageTaskDeltaCache {
-  const entries = new Map<string, { token: string; byId: Map<string, string> }>();
-  const latestByScope = new Map<string, { token: string; byId: Map<string, string> }>();
+  const limit = Math.max(1, maxSnapshots);
+  const entries = new Map<string, { scopeKey: string; token: string; byId: Map<string, string> }>();
 
   return {
     encode(scopeKey, requestedBase, visibleTasks) {
@@ -112,7 +112,10 @@ export function createUsageTaskDeltaCache(maxSnapshots = MAX_TASK_DELTA_SNAPSHOT
       for (const task of visibleTasks) {
         currentById.set(task.sessionId, JSON.stringify(task));
       }
-      const latest = latestByScope.get(scopeKey);
+      let latest: { scopeKey: string; token: string; byId: Map<string, string> } | undefined;
+      for (const entry of entries.values()) {
+        if (entry.scopeKey === scopeKey) latest = entry;
+      }
       let token: string;
       let storedById: Map<string, string>;
       if (
@@ -125,19 +128,17 @@ export function createUsageTaskDeltaCache(maxSnapshots = MAX_TASK_DELTA_SNAPSHOT
       } else {
         token = randomUUID();
         storedById = currentById;
-        latestByScope.set(scopeKey, { token, byId: storedById });
       }
+      const baseKey = isTaskBaseToken(requestedBase) ? `${scopeKey}\u0000${requestedBase}` : null;
+      const base = baseKey ? entries.get(baseKey) : undefined;
       const currentKey = `${scopeKey}\u0000${token}`;
       entries.delete(currentKey);
-      entries.set(currentKey, { token, byId: storedById });
-      while (entries.size > maxSnapshots) {
+      entries.set(currentKey, { scopeKey, token, byId: storedById });
+      while (entries.size > limit) {
         const oldest = entries.keys().next().value;
         if (oldest === undefined) break;
         entries.delete(oldest);
       }
-      const base = isTaskBaseToken(requestedBase)
-        ? entries.get(`${scopeKey}\u0000${requestedBase}`)
-        : undefined;
       if (!base) {
         return { tasks: [...visibleTasks], tasksToken: token };
       }

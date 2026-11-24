@@ -781,5 +781,22 @@ describe('incremental task metadata delta sync', () => {
     if (crossAccountDecoded?.kind !== 'rows') throw new Error('expected rows');
     expect(crossAccountDecoded.tasksDelta).toBeUndefined();
     expect(crossAccountDecoded.rows.tasks.map((t) => t.sessionId)).toEqual(['task-5']);
+
+    // Rotating owner generations evict old scope snapshots completely once maxSnapshots is exceeded.
+    const boundedCache = createUsageTaskDeltaCache(3);
+    const scopeTokens: string[] = [];
+    for (let gen = 0; gen < 5; gen += 1) {
+      const encoded = boundedCache.encode(`user-a#gen-${gen}`, null, [historicalTasks[gen]]);
+      scopeTokens.push(encoded.tasksToken);
+    }
+    // Generation 0 and 1 were evicted completely (neither entries nor any secondary per-scope map retains them).
+    const evictedGen0 = boundedCache.encode('user-a#gen-0', scopeTokens[0], [historicalTasks[0]]);
+    expect(evictedGen0.tasksDelta).toBeUndefined();
+    expect(evictedGen0.tasksToken).not.toBe(scopeTokens[0]);
+    // Recent generation still in the bounded window reuses its token and returns an empty delta when unchanged.
+    const retainedGen4 = boundedCache.encode('user-a#gen-4', scopeTokens[4], [historicalTasks[4]]);
+    expect(retainedGen4.tasksToken).toBe(scopeTokens[4]);
+    expect(retainedGen4.tasks).toEqual([]);
+    expect(retainedGen4.tasksDelta).toEqual({ removedTaskIds: [] });
   });
 });

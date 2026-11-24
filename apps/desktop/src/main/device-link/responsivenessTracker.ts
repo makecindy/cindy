@@ -318,7 +318,10 @@ export function createResponsivenessTracker(
   const shouldExcuseTimeoutForActiveDelivery = (deviceId: string, startedAt: number): boolean => {
     const at = now();
     const elapsedMs = Math.max(0, at - startedAt);
-    if (deps.isPeerDeliveringTraffic?.(deviceId, elapsedMs) !== true) return false;
+    if (deps.isPeerDeliveringTraffic?.(deviceId, elapsedMs) !== true) {
+      activeDeliverySince.delete(deviceId);
+      return false;
+    }
     const since = activeDeliverySince.get(deviceId) ?? at;
     if (!activeDeliverySince.has(deviceId)) activeDeliverySince.set(deviceId, since);
     return at - since <= PEER_ACTIVE_DELIVERY_PATIENCE_MS;

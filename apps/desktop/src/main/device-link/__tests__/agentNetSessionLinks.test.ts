@@ -592,6 +592,8 @@ describe('AgentNetSessionLinks', () => {
     const dlCalls: string[] = [];
     let hostReturnStalled = true;
     let hostPending = true;
+    let releasePreStallCall!: () => void;
+    const preStallGate = new Promise<void>((resolve) => { releasePreStallCall = resolve; });
     const old = idleDeviceLink(dlCalls, 4);
     old.isLinkReady = (dst) => dst === 'a-host' || dst === 'other-host';
     old.isOutboundExplicitlyClosed = () => false;
@@ -600,6 +602,10 @@ describe('AgentNetSessionLinks', () => {
     old.invoke = async (dst, payload) => {
       const op = (payload.args?.[0] as { op?: string } | undefined)?.op;
       dlCalls.push(`device-link:invoke:${dst}:${op ? `${payload.channel}:${op}` : payload.channel}`);
+      if (dst === 'a-host' && op === 'pre-stall') {
+        await preStallGate;
+        return { ok: true, result: 'pre-stall-device-link' };
+      }
       if (dst === 'a-host' && hostReturnStalled) {
         const timeout = new DeviceLinkError('INVOKE_TIMEOUT', 'return path blocked behind large response');
         timeout.inFlight = true;
@@ -608,14 +614,31 @@ describe('AgentNetSessionLinks', () => {
       return { ok: true, result: 'device-link' };
     };
     const router = routeSessionPeers(old, links.controller);
-    await expect(router.invoke('a-host', { channel: 'local-db:sessions:list', args: [] })).rejects.toMatchObject({ code: 'INVOKE_TIMEOUT' });
-    // Subsequent eligible reads (including remote-agent poll/caps and list probes) bypass the stalled Device Link return path.
+    // An older slow request is already in flight on Device Link when a concurrent read times out
+    // and triggers the guardInvoke -> recoverLink -> openLink callback.
+    const preStallInFlight = router.invoke('a-host', { channel: 'maker:remote-agent:v1', args: [{ op: 'pre-stall' }] });
+    await vi.advanceTimersByTimeAsync(10);
+    await expect(
+      router.invoke('a-host', { channel: 'local-db:sessions:list', args: [] }).catch(async (err) => {
+        // Recovery openLink while hasPendingRequestsTo('a-host') === true stays on Device Link
+        // and must NOT erase targetReturnStalled.
+        await expect(router.openLink('a-host', openPayload)).resolves.toMatchObject({ appVersion: 'dl' });
+        throw err;
+      }),
+    ).rejects.toMatchObject({ code: 'INVOKE_TIMEOUT' });
+    expect(links.controller.ownsOutbound('a-host')).toBe(false);
+    // Subsequent eligible reads (including remote-agent poll/caps and list probes) still bypass the stalled Device Link return path.
     await expect(router.invoke('a-host', { channel: 'maker:remote-agent:v1', args: [{ op: 'poll', runs: [] }] })).resolves.toEqual({ ok: true, result: 'session' });
     await expect(router.invoke('a-host', { channel: 'maker:remote-agent:v1', args: [{ op: 'caps' }] })).resolves.toEqual({ ok: true, result: 'session' });
+    // Even if the older pre-stall request finishes while newer responses remain backed up, reads keep bypassing Device Link.
+    releasePreStallCall();
+    await expect(preStallInFlight).resolves.toEqual({ ok: true, result: 'pre-stall-device-link' });
     await expect(router.invoke('a-host', { channel: 'local-db:sessions:list', args: [] })).resolves.toEqual({ ok: true, result: 'session' });
-    // Non-idempotent remote-agent commands stay ordered on the existing stream, and other peers are unaffected.
+    // Non-idempotent remote-agent commands stay ordered on the existing stream; once a post-stall call succeeds, the stall mark clears.
+    await vi.advanceTimersByTimeAsync(10);
     hostReturnStalled = false;
     await expect(router.invoke('a-host', { channel: 'maker:remote-agent:v1', args: [{ op: 'call', method: 'send' }] })).resolves.toEqual({ ok: true, result: 'device-link' });
+    await expect(router.invoke('a-host', { channel: 'local-db:sessions:list', args: [] })).resolves.toEqual({ ok: true, result: 'device-link' });
     await expect(router.invoke('other-host', { channel: 'local-db:sessions:list', args: [] })).resolves.toEqual({ ok: true, result: 'device-link' });
     // Once in-flight work drains, re-opening upgrades the ready Device Link to the live session and closes both cleanly on user disconnect.
     hostPending = false;

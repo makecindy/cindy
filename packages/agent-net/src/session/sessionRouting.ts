@@ -83,7 +83,14 @@ export function routeSessionPeers(target: DeviceLinkClient, links: AgentNetSessi
   const desktopLeases = new Map<string, { lease: string; session: string }>();
   // Asymmetric return-path congestion: controller outbound writes immediately on Device Link,
   // while host replies time out behind a large outbound queue even though an Agent-Net session is ready.
-  const targetReturnStalled = new Map<string, { generation: number; session: string }>();
+  const targetReturnStalled = new Map<string, { generation: number; session: string; since: number }>();
+  const pruneStalledPeers = () => {
+    for (const [peer, entry] of targetReturnStalled) {
+      if (links.sessionStreamId(peer) !== entry.session || target.getPeerLinkGeneration(peer) !== entry.generation) {
+        targetReturnStalled.delete(peer);
+      }
+    }
+  };
   const invoke: Routed['invoke'] = (dst, payload, timeoutMs, options) => routed(dst, async (useSession) => {
     const desktop = payload.channel === REMOTE_DESKTOP_CHANNEL
       ? payload.args?.[0] as { op?: string; lease?: string; action?: string; kind?: string } | undefined : undefined;
@@ -106,7 +113,31 @@ export function routeSessionPeers(target: DeviceLinkClient, links: AgentNetSessi
       || (desktop?.op === 'credential' && (desktop.kind === 'open' || desktop.kind === 'exchange' || desktop.kind === 'prepare' || desktop.kind === 'status'));
     const eligible = read || bootstrap || payload.channel === REMOTE_RESOURCE_MANIFEST_CHANNEL
       || payload.channel === REMOTE_RESOURCE_LIST_CHANNEL || payload.channel === REMOTE_RESOURCE_GET_CHANNEL;
-    if (!session || (!pinned && (!eligible || !target.isLinkReady(dst)))) return target.invoke(dst, payload, timeoutMs, options);
+    pruneStalledPeers();
+    const invokeOnTarget = async (callOptions: Parameters<DeviceLinkClient['invoke']>[3]) => {
+      const targetWasReady = target.isLinkReady(dst);
+      const targetGeneration = targetWasReady && session ? target.getPeerLinkGeneration(dst) : 0;
+      const invokeStartedAt = performance.now();
+      try {
+        const result = await target.invoke(dst, payload, timeoutMs, callOptions);
+        const activeStalled = targetReturnStalled.get(dst);
+        if (activeStalled && invokeStartedAt >= activeStalled.since) {
+          targetReturnStalled.delete(dst);
+        }
+        return result;
+      } catch (error) {
+        if (error instanceof DeviceLinkError && error.code === 'INVOKE_TIMEOUT'
+          && targetWasReady && session && links.sessionStreamId(dst) === session
+          && target.getPeerLinkGeneration(dst) === targetGeneration) {
+          const existing = targetReturnStalled.get(dst);
+          if (!existing || existing.generation !== targetGeneration || existing.session !== session) {
+            targetReturnStalled.set(dst, { generation: targetGeneration, session, since: performance.now() });
+          }
+        }
+        throw error;
+      }
+    };
+    if (!session || (!pinned && (!eligible || !target.isLinkReady(dst)))) return invokeOnTarget(options);
     const control = useSession ? links : target;
     const generation = control.getPeerLinkGeneration(dst);
     const current = () => links.sessionStreamId(dst) === session && !control.isOutboundExplicitlyClosed(dst)
@@ -136,23 +167,19 @@ export function routeSessionPeers(target: DeviceLinkClient, links: AgentNetSessi
       return invokeOnSession(timeoutMs);
     }
     try {
-      const result = await target.invoke(dst, payload, timeoutMs, { ...options, canRerouteBeforeWrite: current });
-      targetReturnStalled.delete(dst);
-      return result;
+      return await invokeOnTarget({ ...options, canRerouteBeforeWrite: current });
     } catch (error) {
       if (error instanceof DeviceLinkUnsentInvokeError && current() && performance.now() < deadline) {
         log?.debug(`agent-net routing unsent invoke to session peer=${dst.slice(0, 8)} channel=${payload.channel}`);
         const remaining = timeoutMs === undefined ? undefined : Math.ceil(deadline - performance.now());
         return invokeOnSession(remaining);
       }
-      if (error instanceof DeviceLinkError && error.code === 'INVOKE_TIMEOUT' && links.sessionStreamId(dst) === session) {
-        targetReturnStalled.set(dst, { generation, session });
-      }
       throw error;
     }
   });
   const perPeer: Routed = {
     openLink: (dst, payload, timeoutMs) => routed(dst, (useSession) => {
+      pruneStalledPeers();
       // Agent-Net 关着、对端和它无关时不记：和原来的 Device Link 一样（2026-11-17 review）。
       if (useSession || links.involves(dst)) log?.debug(`agent-net session route openLink peer=${dst.slice(0, 24)} session=${useSession} owned=${links.ownsOutbound(dst)}`
         + ` available=${links.available(dst)} deviceLinkReady=${target.isLinkReady(dst)} deviceLinkRecovery=${target.needsLinkRecovery(dst)}`
@@ -162,8 +189,10 @@ export function routeSessionPeers(target: DeviceLinkClient, links: AgentNetSessi
         && (target.needsLinkRecovery(dst) || target.isLinkReady(dst))
         && target.getReliableSendQueueDepth(dst) === 0 && !target.hasPendingRequestsTo(dst);
       if (handoff) log?.debug(`agent-net control recovery switching to session peer=${dst.slice(0, 8)}`);
-      targetReturnStalled.delete(dst);
-      if (useSession || handoff) return links.openLink(dst, payload, timeoutMs);
+      if (useSession || handoff) {
+        targetReturnStalled.delete(dst);
+        return links.openLink(dst, payload, timeoutMs);
+      }
       links.noteDeviceLinkLink(dst, 'outbound');
       return target.openLink(dst, payload, timeoutMs);
     }),
@@ -205,7 +234,11 @@ export function routeSessionPeers(target: DeviceLinkClient, links: AgentNetSessi
     onPeerStreamAccepted: (cb: (peer: string, streamId: string) => void) =>
       both(() => target.onPeerStreamAccepted(cb), () => links.onPeerStreamAccepted(cb)),
     onInboundPeerReleased: (cb: (peer: string) => void) => both(() => target.onInboundPeerReleased(cb), () => links.onInboundPeerReleased(cb)),
-    noteRemoteControlDisabled: (deviceId) => { links.noteRemoteControlDisabled(deviceId); target.noteRemoteControlDisabled(deviceId); },
+    noteRemoteControlDisabled: (deviceId) => {
+      targetReturnStalled.delete(deviceId);
+      links.noteRemoteControlDisabled(deviceId);
+      target.noteRemoteControlDisabled(deviceId);
+    },
     noteRemoteControlEnabled: (deviceId) => { links.noteRemoteControlEnabled(deviceId); target.noteRemoteControlEnabled(deviceId); },
     getPeerLinkSnapshots: () => {
       const sessions = links.getPeerLinkSnapshots();
