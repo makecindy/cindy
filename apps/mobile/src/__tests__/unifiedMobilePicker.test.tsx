@@ -77,6 +77,34 @@ it('only closes after selection succeeds and passes the full wire configuration'
   expect(onSelect).toHaveBeenCalledWith({providerId:'account',modelId:'codex/model',agent:'codex',effort:'medium',fast:false},{deviceId:null});
   expect(onClose).toHaveBeenCalledOnce();
 });
+// #9087 follow-up, unit: the companion opt-in must retain a changed local candidate effort
+// through detail navigation and submit it with the model. The selected-row tests miss this
+// branch. Minimal input: an unselected model with two supported levels and no model memory.
+it('submits the companion candidate effort without updating shared model preferences', async () => {
+  const onSelect = vi.fn(async () => true);
+  await mount(onSelect, {
+    activeModelId: 'another-model',
+    modelMemory: undefined,
+    unified: {
+      scope: 'user-device', agents: ['codex', 'claude-code'],
+      loadCapabilities: async () => ({ hasFastMode: true }),
+      draftCandidateEffort: true, onSelect,
+    },
+  });
+  const row = () => test.view.groups[0].rows[0];
+  expect(row().selected).toBe(false);
+  await act(async () => test.view.onOptions(row()));
+  await act(async () => test.view.options.onChange({ ...test.view.options.row.config, effort: 'high' }));
+  expect(onSelect).not.toHaveBeenCalled();
+  expect(test.save).not.toHaveBeenCalled();
+  expect(test.view.options.row.config.effort).toBe('high');
+  await act(async () => test.view.onBack());
+  await act(async () => test.view.onSelect(row()));
+  expect(onSelect).toHaveBeenCalledWith(
+    { providerId: 'account', modelId: 'codex/model', agent: 'codex', effort: 'high', fast: false },
+    { deviceId: null },
+  );
+});
 it('shows favorites before recommendations, with selected mark only on the model',async()=>{
   test.prefs.favorites=[{uid:'fav',providerId:'account',modelId:'codex/model',agent:'codex',effort:'high',fast:true}];
   await mount();expect(test.view.groups.map((g:any)=>g.key)).toEqual(['favorites','recommended']);

@@ -155,6 +155,7 @@ export function CompanionModelPicker({ visible, deviceId, route, onClose, onClos
       scope: JSON.stringify([user?.id, deviceId]),
       agents: ['claude-code', 'codex', 'pi'],
       loadCapabilities: async agent => { const value = normalizeMobileAgentCapabilities(await maker.getCapabilities(agent)); if (!value) throw new Error('Capabilities unavailable'); return value; },
+      draftCandidateEffort: true,
       onSelect: select,
       ...(groupRows.length ? { modelGroups: { rows: groupRows, onSelect: selectGroup } } : {}),
       ...(pluginEngines.engines.length || activePluginEngine

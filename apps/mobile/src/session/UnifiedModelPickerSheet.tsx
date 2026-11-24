@@ -167,6 +167,8 @@ export type MobileModelPickerSource = { remote: UnifiedMobileRemoteOptions | und
 export type UnifiedMobilePickerOptions = UnifiedMobilePickerBaseOptions & MobileModelPickerSource;
 
 export interface UnifiedMobilePickerBaseOptions {
+  /** Keep local candidate effort in this opening until the companion route is selected. */
+  draftCandidateEffort?: boolean;
   /** Request-owned edits, including favorites, never change persisted preferences. */
   preferenceScope?: 'request';
   /** Editing a selected row can update a draft without submitting the selection. */
@@ -348,6 +350,9 @@ export function UnifiedModelPickerSheet(
   const [remoteConfigs, setRemoteConfigs] = useState<
     ReadonlyMap<string, MobileModelConfiguration>
   >(new Map());
+  const [candidateEfforts, setCandidateEfforts] = useState<
+    ReadonlyMap<string, Pick<MobileModelConfiguration, 'agent' | 'effort'>>
+  >(new Map());
   // 打开时 Agent 在另一台电脑:目录读到后停在那台电脑的当前供应商上(用户先手动换过就不再跳)。
   const initialRemoteFilter = useRef(false);
   // 用户这次打开后自己点过来源:归组的任务读回来得晚,也不再把列表挪到组那一项。
@@ -385,6 +390,7 @@ export function UnifiedModelPickerSheet(
     filterTouched.current = false;
     setTarget(null);
     setRemoteConfigs(new Map());
+    setCandidateEfforts(new Map());
     setFavoriteEdit(null);
     setNotice(null);
     setError(null);
@@ -656,18 +662,25 @@ export function UnifiedModelPickerSheet(
     favorite?: MobileModelFavorite,
   ): UnifiedMobileRow => {
     const provider = p.providers.find((item) => item.id === entry.providerId);
-    const selected =
+    const selectedModel =
       entry.providerId === sourceId && matchesEntry(entry, p.activeModelId);
-    const config = resolveMobileModelConfig(entry, {
+    const selected = !favorite && selectedModel && !otherChoiceActive;
+    const key = favorite?.uid ?? modelKey(entry.providerId, entry.modelId);
+    const resolved = resolveMobileModelConfig(entry, {
       favorite,
-      live: !favorite && selected ? selection : undefined,
+      live: !favorite && selectedModel ? selection : undefined,
       pinned: p.existingSessionRoute ? p.agentKind : undefined,
       override: prefs.value.engines[modelKey(entry.providerId, entry.modelId)],
       memory: p.modelMemory,
       fastCapable,
     });
+    const draft = !favorite && !selected ? candidateEfforts.get(key) : undefined;
+    const config = draft?.agent === resolved.agent &&
+      entry.capabilities[resolved.agent]?.efforts.some(effort => effort === draft.effort)
+      ? { ...resolved, effort: draft.effort }
+      : resolved;
     return {
-      key: favorite?.uid ?? modelKey(entry.providerId, entry.modelId),
+      key,
       entry,
       config,
       favorite,
@@ -678,7 +691,7 @@ export function UnifiedModelPickerSheet(
         logoKind: provider?.logoKind,
         customIcon: provider?.customIcon,
       },
-      selected: !favorite && selected && !otherChoiceActive,
+      selected,
       disabled:
         !caps[config.agent] ||
         budgetRowDisabled(
@@ -1210,6 +1223,18 @@ export function UnifiedModelPickerSheet(
       return;
     }
     const remoteDevice = row.remoteDevice;
+    if (
+      !reset && p.unified.draftCandidateEffort && !remoteDevice && !row.selected && !target?.uid &&
+      sameConfiguration(row.config, { ...config, effort: row.config.effort })
+    ) {
+      if (lock.current || p.disabled || !prefs.ready || config.effort === row.config.effort) return;
+      setCandidateEfforts(current => {
+        const next = new Map(current);
+        next.set(row.key, { agent: config.agent, effort: config.effort });
+        return next;
+      });
+      return;
+    }
     if (remoteDevice) {
       // 正在用的那行直接生效。effort / Fast 记在这台远程电脑自己的记忆里,
       // 不写被控电脑的引擎偏好或本机模型记忆。引擎调整仍只留在这次打开期间。
@@ -1313,6 +1338,13 @@ export function UnifiedModelPickerSheet(
           );
         }
         if (!isCurrent()) return;
+        if (reset && candidateEfforts.has(row.key)) {
+          setCandidateEfforts(current => {
+            const next = new Map(current);
+            next.delete(row.key);
+            return next;
+          });
+        }
         if (target?.config) setTarget({ ...target, config });
         setNotice(
           t(
