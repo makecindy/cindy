@@ -5,6 +5,7 @@ import { isBotGroupInTaskClientId } from '../../../shared/botGroupChat.js';
 import { isShadowedCompanionSession } from '../botSessionInputGuard.js';
 import { createScheduledModelScope } from '../scheduledModelSelection.js';
 import { assertTaskActionCurrent, hasTaskActionAuthorization } from '../taskActionAuthorization.js';
+import { withRemoteAccountReads } from '../../subscription-accounts/remotePreflight.js';
 /**
  * #5788:插件 errand 派活走 sendToSessionInternal 的 lazy-resume 时,必须按会话落库的
  * 权限档恢复,不能落到 main 侧通路的缺省 bypass。否则插件任务被提权,errand 复用判定也会
@@ -927,7 +928,7 @@ describe('unbound Codex pre-send history wiring', () => {
     });
     // A plugin engine account pool is asked first (plugin-engine-accounts/failover.ts); a Codex task is not its.
     const pluginPrepare = vi.fn(async () => false);
-    const ports = { subscriptionAccountRecoveryDeps: { rebuild },
+    const ports = { withRemoteAccountReads, subscriptionAccountRecoveryDeps: { rebuild },
       readCodexThreadStorageReadOnly: history,
       preparePluginEngineAccountForSend: pluginPrepare, readSubscriptionRuntimeSession: vi.fn(),
       prepareSubscriptionAccountForSend: prepare, prepareSubscriptionAccountFailover: failover,

@@ -91,6 +91,16 @@ function deps(overrides: {
 }
 
 describe('computeModelGroupSwitchOffer', () => {
+  // §4.5 / #12440, unit: a mode can be switched off after dispatch; the automatic
+  // candidate lookup must decline while a manual banner can still offer the same source.
+  it('honors a disabled group during recovery and keeps the manual switch offer', async () => {
+    const d = deps({ config: { routes: [{ ...route('order'), autoSwitch: false }] } });
+    expect(await computeModelGroupSwitchOffer(d, 's1', {
+      current: CANDIDATES[0], visited: new Set(), accountUnavailable: true, recordUnavailable: vi.fn(),
+    })).toBeNull();
+    expect(await computeModelGroupSwitchOffer(d, 's1')).toMatchObject({ providerId: 'anthropic' });
+  });
+
   it.each(['high', undefined])('keeps the route effort only when the fallback supports it: %s', async effort => {
     const d = deps({
       config: { routes: [{ ...route('order'), effort: 'high' }] },
@@ -122,8 +132,9 @@ describe('computeModelGroupSwitchOffer', () => {
       current: CANDIDATES[index], accountUnavailable, visited,
       recordUnavailable: candidate => visited.add(modelGroupCandidateKey(candidate)),
     });
-    expect(await recover(0, true)).toMatchObject({ providerId: 'anthropic' });
-    expect(await recover(2, false)).toMatchObject({ providerId: 'acct-b' });
+    // The activity line names the source it moved away from (model-groups.md §4.6).
+    expect(await recover(0, true)).toMatchObject({ providerId: 'anthropic', fromLabel: 'M · A' });
+    expect(await recover(2, false)).toMatchObject({ providerId: 'acct-b', fromLabel: 'M · Claude' });
     expect(await recover(3, false)).toBeNull();
     visited.clear();
     expect(await recover(0, false)).toMatchObject({ providerId: 'acct-a', model: 'gpt-mini' });
