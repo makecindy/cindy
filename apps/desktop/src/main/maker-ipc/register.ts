@@ -17838,11 +17838,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     setSessionRuntime: (params) => sessionControlService.setSessionRuntime(params),
     sendToSession: async (params, fromSessionTool) => {
       const ownerScope = captureDataOwnerBroadcastScope();
-      // A local task qualifies through its own MCP bridge even with a shared executor; direct device-link input cannot opt in.
+      // A task owned by this host qualifies through its own MCP bridge wherever its Agent runs.
       const dispatcher = fromSessionTool && params.targetSessionId && params.dispatcherSessionId && !isDeviceLinkInvoke()
         ? maker.getSession(params.dispatcherSessionId) : undefined;
-      const localSessionTool = Boolean(dispatcher && dispatcher.getStatus() === 'active' && !dispatcher.remoteHostId
-        && (!dispatcher.agentDeviceId || isProviderShareAgentDeviceId(dispatcher.agentDeviceId)));
+      const localSessionTool = dispatcher?.getStatus() === 'active';
       const pluginSource = !params.dispatcherSessionId ? hostPluginInputSource() : undefined;
       let projectFromWorkingDir = false;
       if (!params.targetSessionId && !params.createDefaults) {

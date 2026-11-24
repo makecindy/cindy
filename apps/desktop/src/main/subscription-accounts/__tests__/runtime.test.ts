@@ -293,6 +293,11 @@ import { createProviderGroupService, type ProviderGroupSessionRow } from '../../
 import type { ProviderGroupBinding } from '../../provider-group/bindings.js';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare.js';
 import { normalizeProviderGroupConfig } from '../../../shared/providerGroup.js';
+import type { LiziMcpSessionContext } from '@cindy/mcps';
+import type { RemoteHost } from '@cindy/maker-remote-ssh';
+import type { CodexHttpBridge } from '../../mcp-integrations/codexHttpBridge.desktop.js';
+import { buildCcRemoteHttpMcpServers } from '../../maker-host/cc-remote-mcp.js';
+import { isDeviceLinkInvoke } from '../../device-link/invoke-context.js';
 import type { TunnelHandlers } from '../../remote-agent/host/tunnel.js';
 import { createRemoteAgentHost, GROUP_SWITCH_TOKEN_TTL_MS } from '../../remote-agent/host/runHost.js';
 import { RemoteAgentPoller, RemoteAgentRunClient, remoteAgentInvoker } from '../../remote-agent/controller/runClient.js';
@@ -6611,6 +6616,13 @@ describe('shared subscription recovery through controller and account allocation
     // execution on the sharing computer does not erase an owned task's bound
     // bridge context. The idle target must queue and recover one such message.
     { original: 'second', phase: 'session-reconnect', boundary: 'shared-sender' },
+    // P1-1, unit: one bound send_to_session call per execution route. The
+    // shared route alone could not catch rejection based on device/SSH IDs.
+    // Use reverse frames for the own-device case and the real SSH bridge
+    // registration with a fake forward for SSH. Both reclaim targets must
+    // return queued, use the offered switch, and persist/deliver only once.
+    { original: 'second', phase: 'session-reconnect', boundary: 'own-device-sender' },
+    { original: 'second', phase: 'session-reconnect', boundary: 'ssh-sender' },
     // Unit (real host/controller, in-memory device link): app-quit publishes the
     // same idle-release event, which the quota cases did not cover. One queued
     // input while O is offline must surface its failure and release the next item.
@@ -7114,7 +7126,7 @@ describe('shared subscription recovery through controller and account allocation
           let nextToolClientId = 'after-idle';
           let sender: Session | undefined;
           const toolPorts = {
-            isProviderShareAgentDeviceId,
+            isDeviceLinkInvoke, isProviderShareAgentDeviceId,
             maker: {
               ...maker,
               getSession: (id: string) => id === task ? live : id === senderId
@@ -7143,7 +7155,7 @@ describe('shared subscription recovery through controller and account allocation
               current.send(msg, opts),
           };
           const sendTool = sharedAccountSessionTool(senderId, toolPorts);
-          const sendFromHostedTask = async () => {
+          const sendFromHostedTask = async (agentDeviceId: string) => {
             const tunnel = Promise.withResolvers<TunnelHandlers['http']>();
             const bridgeUrl = 'http://mcp.invalid/fixture-sender';
             let bridgeTool: typeof sendTool | undefined;
@@ -7170,7 +7182,7 @@ describe('shared subscription recovery through controller and account allocation
               });
               h.captureTunnelHttp = undefined;
               sender = new Session({ id: senderId, agentKind: 'claude-code', permissionMode: 'bypassPermissions',
-                workDir: '/controller/work', agentDeviceId: route, handle, capabilities: {} as never, logger: guestLog });
+                workDir: '/controller/work', agentDeviceId, handle, capabilities: {} as never, logger: guestLog });
               const http = await tunnel.promise;
               const response = await http({
                 method: 'POST', path: '/mcp/cindy_helper',
@@ -7184,6 +7196,41 @@ describe('shared subscription recovery through controller and account allocation
               h.captureTunnelHttp = undefined;
               await sender?.close();
               fetch.mockRestore();
+            }
+          };
+          const sendFromSshTask = async () => {
+            const host = { id: 'fixture-ssh-host' } as RemoteHost;
+            const handle = {
+              id: 'ssh-native', agentKind: 'claude-code', model, send: vi.fn(), close: async () => {},
+              setInteractionResolver() {},
+            } as unknown as AgentSessionHandle;
+            sender = new Session({ id: senderId, agentKind: 'claude-code', permissionMode: 'bypassPermissions',
+              workDir: '/controller/work', remoteHostId: host.id, handle, capabilities: {} as never, logger: guestLog });
+            const registered = new Map<string, LiziMcpSessionContext>();
+            const bridge = {
+              instanceId: 'fixture-bridge',
+              registerSessionCtx: (id: string, context: LiziMcpSessionContext) => registered.set(id, context),
+              unregisterSessionCtx: (id: string) => registered.delete(id),
+            } as unknown as CodexHttpBridge;
+            const injected = await buildCcRemoteHttpMcpServers({
+              host, sessionId: sender.id, sessionInstanceId: sender.instanceId, workingDir: sender.workDir, vendorOptions: {},
+            }, {
+              ensureBridgeStarted: async () => ({ port: 38080, serverNames: ['cindy_helper'], bridge }),
+              ensureForward: async () => 47921,
+              getBridgeToken: () => 'fixture-ssh-bridge-token',
+            });
+            try {
+              // Model the SSH HTTP transport using the context registered by
+              // the real query builder, just as the local bridge resolves it.
+              const url = new URL(injected.servers.cindy_helper.url);
+              const context = registered.get(url.searchParams.get('session') ?? '');
+              expect(context).toMatchObject({ sessionId: sender.id, sessionInstanceId: url.searchParams.get('instance'),
+                remoteHostId: host.id, mcpCallerAttested: true });
+              if (!context?.sessionId) throw new Error('Missing SSH MCP session context');
+              return await sharedAccountSessionTool(context.sessionId, toolPorts)(task, 'Continue.');
+            } finally {
+              injected.cleanup();
+              await sender.close();
             }
           };
           const remoteInput = createInputEnqueueHarness(coordinator, { remote: true });
@@ -7221,7 +7268,14 @@ describe('shared subscription recovery through controller and account allocation
           if (boundary === 'remote-session' || boundary === 'remote-orca') {
             await remoteInput.enqueue({}, task, { ...inputItem('after-idle', 'Continue.'), origin });
           } else {
-            const receipt = boundary === 'shared-sender' ? await sendFromHostedTask() : await sendTool(task, 'Continue.');
+            const sendFromSender = {
+              'shared-sender': () => sendFromHostedTask(route),
+              'own-device-sender': () => sendFromHostedTask('fixture-own-executor'),
+              'ssh-sender': sendFromSshTask,
+            };
+            const receipt = boundary in sendFromSender
+              ? await sendFromSender[boundary as keyof typeof sendFromSender]()
+              : await sendTool(task, 'Continue.');
             if (boundary === 'connected-idle' || boundary === 'cold-target') {
               expect(receipt, JSON.stringify(receipt)).toMatchObject({
                 ok: true, wake_kind: boundary === 'cold-target' ? 'resumed' : 'already-active',
