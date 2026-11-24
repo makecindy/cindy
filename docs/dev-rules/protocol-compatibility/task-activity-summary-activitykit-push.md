@@ -68,3 +68,18 @@ invoke/push 信封，无需变更服务端、凭证或自建中转协议。
 App 使用已有订阅重新读取执行电脑。对同一活动，每个冲突时间戳在一次前台停留期间最多触发一次核对。
 后台继续由 APNs 更新。旧桌面、旧手机、自建中转降级路径不变。桌面和 iOS 可以分别升级，
 两者均支持后启用前台更新。iOS 需要包含新原生方法的安装包。
+
+## 前台摘要携带伙伴身份（2026-11-25）
+
+`agent-island:task-activity` 摘要的 `selected` 增量可选 `companion`：`hue`、`glyph`、
+`glyphIsInitial`，以及可选 `imageJpeg`（base64，最多 2048 字符，与 macOS 实时活动同一上限，
+保证 ActivityKit 4 KB 内容上限内）。只在所选任务属于伙伴且不是运行中（等你处理或有新回复）时
+出现，与 macOS 实时活动规则一致；标题授权沿用同一摘要的既有过滤。
+
+官方 `PUT /api/device-link/task-activity` 的 body 不变，仍只含任务 ID、截断标题和状态，所以
+手机退到后台后由 APNs 更新的内容仍显示 Cindy，直到服务端另行支持透传该字段。iOS 在
+`ContentState` 增加可选 `companion`，缺省（APNs、旧 Desktop、旧 JS）时显示原 Cindy 角色；
+字段格式不合法时只丢弃 `companion`，不丢弃整份摘要。旧手机忽略新增字段。中转继续透明传输
+原有 invoke/push 信封，无需变更自建中转。实现见 `apps/desktop/src/main/device-link/taskActivity.ts`
+与 `apps/mobile/src/widgets/foregroundTaskActivity.ts`，视图需随 iOS 原生包交付。
+
