@@ -12405,8 +12405,8 @@
       "footnote": "Ce texte est intégré au contexte d'identité de l’ami. Les réglages rapides de personnalité sont stockés séparément et sont conservés lorsque ce texte change."
     },
     "welcome": {
-      "generic": "Bonjour, je suis {{name}}. Dites-moi désormais tout ce dont vous avez besoin ; je prends mes repères en attendant.",
-      "withRole": "Bonjour, je suis {{name}} : {{description}}. Dites-moi simplement ce dont vous avez besoin."
+      "generic": "Bonjour, je suis {{name}}. Dites-moi ce dont vous avez besoin.",
+      "withUser": "Bonjour {{userName}}, je suis {{name}}. Dites-moi ce dont vous avez besoin."
     },
     "invitation": {
       "title": "Préparation de la rencontre",

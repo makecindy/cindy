@@ -12304,8 +12304,8 @@
       "footnote": "This enters the buddy's identity context. Quick personality settings are stored separately and are preserved when this text changes."
     },
     "welcome": {
-      "generic": "Hi, I'm {{name}}. Tell me anything you need from now on — I will get my bearings in the meantime.",
-      "withRole": "Hi, I'm {{name}} — {{description}}. Just tell me what you need."
+      "generic": "Hi, I’m {{name}}. Just tell me what you need.",
+      "withUser": "Hi {{userName}}, I’m {{name}}. Just tell me what you need."
     },
     "invitation": {
       "title": "Getting ready to meet",

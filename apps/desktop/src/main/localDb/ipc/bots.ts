@@ -117,6 +117,7 @@ import type { BotPackageOpening } from '../../../shared/botMarket.js';
 import { botDmThreadRouteKey, parseBotDmThreadRouteKey, type BotDmThreadSummary } from '../../../shared/botDmThread.js';
 import { botGroupLaneRouteKey, botGroupPlanRouteKey, chatGroupLaneRouteKey, chatGroupTalkRouteKey, chatGroupThreadRouteKey, groupLaneOfRouteKey, groupLaneUsesChatWorkspace, parseBotGroupIdFromRouteKey, type ChatLaneAccess } from '../../../shared/botGroupChat.js';
 import { queueBotInvitation as enqueueBotInvitation } from '../../maker-ipc/botInvitation.js';
+import { getAuthState } from '../../authManager.js';
 import { getMakerIfReady, validateBotCapabilityAdditions } from '../../maker-host/index.js';
 import type { BotCapabilityUpdate } from '../../maker-ipc/botCapabilityService.js';
 import { getResolvedMainLocale } from '../../i18n.desktop.js';
@@ -133,7 +134,8 @@ function queueBotInvitation(botId: string, retry = false): void {
   enqueueBotInvitation(
     botId,
     { createCanonicalSession: createBotCanonicalSession, broadcastProfileChanged: broadcastBotProfileChanged,
-      canStartWelcome: async config => (await readEffectiveBotModelChain(config)).length > 0 },
+      canStartWelcome: async config => (await readEffectiveBotModelChain(config)).length > 0,
+      getUserName: () => getAuthState().user?.name },
     retry,
   );
 }
