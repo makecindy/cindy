@@ -127,7 +127,9 @@ export default function (pi) {
   var MIN_CHARS = intEnv('CINDY_PI_TOOL_FOLD_MIN_CHARS', 36000, 1, 1000000000);
   var PIN_BUDGET_CHARS = intEnv('CINDY_PI_TOOL_FOLD_PIN_BUDGET', 64000, 2000, 100000000);
   var INGEST_LIMIT = intEnv('CINDY_PI_TOOL_FOLD_INGEST_LIMIT', 20000, 4000, 100000000);
-  var INGEST_KEEP = intEnv('CINDY_PI_TOOL_FOLD_INGEST_KEEP', 2000, 500, 32000);
+  // 关闭条件：预览（正文加标记）必须仍低于入库阈值，否则扩展自己写的预览下一次投影会被
+  // 当成新的巨型结果再截一次，原文被预览顶掉。所以保留额度必须给标记留出位置。
+  var INGEST_KEEP = Math.min(intEnv('CINDY_PI_TOOL_FOLD_INGEST_KEEP', 2000, 500, 32000), INGEST_LIMIT - 1024);
   var GIANT_KEEP = intEnv('CINDY_PI_TOOL_FOLD_GIANTS', 64, 8, 512);
   var GIANT_BUDGET_CHARS = intEnv('CINDY_PI_TOOL_FOLD_GIANT_BUDGET', 2000000, 100000, 1000000000);
   var LINE = 160;
@@ -184,59 +186,32 @@ export default function (pi) {
     return ('\n\n[truncated: ' + 999999999999999 + ' chars remaining. Call ' + readCall(widest) + ' to continue.]').length + 2;
   }
 
-  // The endings an ingest marker can have. Emitting and recognizing share this
-  // one definition. legacyNamed is the shape earlier versions persisted:
-  // resumed sessions still carry it, and not recognizing it would make
-  // resolve() hand the truncated preview back as if it were the full text.
+  // 入库标记的尾部。唯一没有上界的是回显的调用 id，而标记长度有一条硬约束：预览
+  // （不超过 INGEST_KEEP 的正文加上这条标记）必须仍低于 INGEST_LIMIT。这不是讲究——入库
+  // 只按长度放行，标记超了上限，下一次投影就会把扩展自己写的预览当成新的巨型结果再截一次，
+  // 原文被预览顶掉。上限靠构造保证，不靠事后识别。
+  var MARKER_ROOM = Math.max(64, INGEST_LIMIT - INGEST_KEEP - 32);
   function truncationTails(id) {
     var key = String(id);
     var named = readCall({ call_id: key }) + ' returns the full text';
     var evicted = 'full text not retained (call "' + key + '"); it already ran';
-    // 标记跟着预览进入每一次请求。调用 id 比预览额度还长时不能再原样重复：降级为点名（限长）。
-    var tooLong = named.length > INGEST_KEEP;
-    return {
-      named: tooLong ? 'call id ' + oneLine(key) + ' (' + key.length + ' chars) is too long to repeat; it already ran, or pass the id as "call_id" to ' + READ_TOOL + ' (needs CINDY_PI_TOOL_FOLD_RECOVERY_CHARS of at least ' + singleReadFloor(key) + ')' : named,
-      legacyNamed: READ_TOOL + '("' + key + '") returns the full text',
-      evicted: tooLong ? 'full text not retained (call id ' + oneLine(key) + ', ' + key.length + ' chars); it already ran' : evicted,
-    };
+    if (singleReadFloor(key) <= RECOVERY_READ_MAX_CHARS && named.length <= MARKER_ROOM && evicted.length <= MARKER_ROOM) return { named: named, evicted: evicted };
+    // 两条硬上界，任一不满足就改成不重复全文 id 的说法：页尾必须放得进单次读取上限（否则
+    // 一页连 id 都放不下，游标永远不前进），预览加标记必须放得进入库阈值。
+    // 装不下就降级：点名只回显开头，长度要求给出数字而不是把 id 再抄一遍。
+    var head = oneLine(key.slice(0, 120)).slice(0, 48);
+    var tooLongNamed = 'call id "' + head + '" (' + key.length + ' chars) is too long to repeat; it already ran, or pass the full id as "call_id" to ' + READ_TOOL + ' (needs CINDY_PI_TOOL_FOLD_RECOVERY_CHARS of at least ' + singleReadFloor(key) + ')';
+    var tooLongEvicted = 'full text not retained (call id "' + head + '", ' + key.length + ' chars); it already ran';
+    if (tooLongNamed.length <= MARKER_ROOM) return { named: tooLongNamed, evicted: tooLongEvicted };
+    var bare = 'it already ran; the call id (' + key.length + ' chars) is too long to repeat';
+    return { named: bare, evicted: bare };
   }
-  // 落盘之后身份只剩原文，标记只能靠结构认回：以标记收尾、点名同一个调用 id。
-  // 「当时用的是哪种措辞、当时的额度是多少」都不参与——写下去的东西必须和读回来时的
-  // 配置无关，否则同一份会话换个配置就把截断预览当成全文。
-  // 归属也不按 id：标记里的 id 会被限长渲染，两个前缀相同的长 id 渲染成同一个名字，按名字
-  // 归因只能靠「标记记下的字符数」补救，而渲染本身已经把信息丢了。改看长度：标记之前的字符
-  // 数必须正好等于「总数 − 被截掉」——这是写预览时的构造，引用这段文字的真实结果长度不同。
-  // 两种错法各有用例守着：把别人的标记当成自己的预览（原文丢成一句拒绝）、把预览当成正文。
-  // 量它必须用写它时那把尺子：预览有两种落法。标记单独成块时（多块结果按块截、文本回合
-  // 按前缀放回），前面的正文是「各文本块长度之和」——块之间拼接插入的换行不是原文，拿拼接
-  // 后的整段文本去减一个换行，会把每个块间换行都多算一次，多块预览就此被当成原文交回去。
-  // 标记并进唯一的正文块时（字符串结果是拼成一段存的），那个换行是拼进去的，要减掉。
-  function isTruncatedPreview(content) {
-    var blocks = typeof content === 'string' ? [{ type: 'text', text: content }] : content;
-    if (!Array.isArray(blocks) || blocks.length === 0) return false;
-    var last = blocks[blocks.length - 1];
-    if (!last || last.type !== 'text' || typeof last.text !== 'string') return false;
-    var text = last.text;
-    if (text.charAt(text.length - 1) !== ']') return false;
-    var open = text.lastIndexOf('[truncated ');
-    if (open < 0) return false;
-    var head = /\[truncated (\d+) of (\d+) chars; /.exec(text.slice(open));
-    if (!head) return false;
-    var dropped = Number(head[1]);
-    var total = Number(head[2]);
-    if (total <= dropped) return false;
-    var prefix = 0;
-    for (var i = 0; i < blocks.length - 1; i++) {
-      var block = blocks[i];
-      if (block && block.type === 'text' && typeof block.text === 'string') prefix += block.text.length;
-    }
-    if (open > 0) {
-      var before = open;
-      if (text.charAt(before - 1) === '\n') before--;
-      prefix += before;
-    }
-    return prefix === total - dropped;
-  }
+  // 入库这一步截过谁、给它留没留原文，只有这本账知道。取回时按它判断「上下文里那份
+  // 结果是不是预览」，不看内容形状。按形状推断等于让任一工具输出用字面量冒充标记，
+  // 代价是丢掉一份本来放得下的结果——这正是本扩展要防的失效，不能自己制造。
+  // 账与 giants 同寿：重启之后没有原文可取，取回就把上下文里的字节原样交出。
+  var clippedHidden = new Map();
+  var CLIPPED_KEEP = 4096;
 
   // Pins: callId -> { ts, chars }. ts is a monotonic recovery clock so the eviction
   // victim is the least-recently-recovered entry, not the earliest-pinned one.
@@ -702,10 +677,9 @@ export default function (pi) {
     // 的地方，所以它是写入的必填项，由两个写入点各自显式给出。
     var cost = costOfContent(blocks);
     if (cost > GIANT_BUDGET_CHARS) return false; // a single payload over budget is never retained
-    // 先按大小决定收不收，再要全文：被拒的载荷不该先付一整份副本的内存。
-    // 带截断标记的文本是预览，不是原文：收下它就等于把预览登记成「原文」，取回时再也分不出来。
-    // 判定只看块结构，所以能在拼全文之前做完。
-    if (isTruncatedPreview(blocks)) return false;
+    // 收不收只看大小。曾经在这里按内容形状判断「这是不是预览」：那个判断可以被结果
+    // 自己的字面量伪造，而伪造的代价是把一份放得下的原文换成不可恢复的预览。预览不会
+    // 回到这里——入库标记的长度有上限，成形的预览永远低于入库阈值。
     var text = makeText();
     if (giants.has(id)) {
       giantBytes -= giants.get(id).bytes;
@@ -741,6 +715,9 @@ export default function (pi) {
     }
     if (total <= INGEST_LIMIT) return null;
     var retained = admitGiant(id, blocks, function () { return textOf(blocks); }, isError === true);
+    clippedHidden.delete(id);
+    clippedHidden.set(id, retained ? 'retained' : 'dropped');
+    if (clippedHidden.size > CLIPPED_KEEP) clippedHidden.delete(clippedHidden.keys().next().value);
     var kept = 0;
     var truncated = 0;
     var parts = [];
@@ -811,24 +788,14 @@ export default function (pi) {
     var resultMsg = site && site.result ? site.result : null;
     var giantEntry = giants.has(key) ? giants.get(key) : null;
     var giant = giantEntry === null ? null : giantEntry.text;
-    var truncatedPreview = null;
-    // Ingestion truncation appends exactly one marker and it is the last thing in
-    // result. Only that full shape counts as a preview: a
-    // result that merely quotes the wording stays recoverable.
-    if (giant === null && resultMsg) {
-      if (isTruncatedPreview(resultMsg.content)) {
-        var resultText = textOf(resultMsg.content);
-        truncatedPreview = resultText.slice(resultText.lastIndexOf('[truncated '));
-      }
-    }
     // The registry holds the FULL text of an ingestion-truncated payload (the transcript
     // only has the preview). Prefer it, and combine it with the call block so recovery
     // returns arguments + result as the tool promises.
-    // Evicted/lost giant with only the truncation preview in context (the marker ends
-    // the text): refuse rather than serve the preview as the original.
-    if (giant === null && truncatedPreview) {
-      return { ok: false, reason: truncatedPreview.indexOf('not retained') !== -1 ? 'not-retained' : 'evicted' };
-    }
+    // 原文不在登记表里时，判断「上下文那份是预览还是原文」只查入库账：账说截过、原文
+    // 又没了，就明说取不到；账上没有这条（别的进程、别的会话），上下文里的字节就是全部
+    // 存在的东西，照原样交出。
+    if (giant === null && clippedHidden.get(key) === 'dropped') return { ok: false, reason: 'not-retained' };
+    if (giant === null && clippedHidden.get(key) === 'retained') return { ok: false, reason: 'evicted' };
     // 调用还在、结果消息已不在、登记表里也没有：没有可取回的正文。只交出头会让模型把
     // 「结果为空」当成原文——按缺项点名。
     if (!resultMsg && giant === null) return { ok: false, reason: 'missing' };
