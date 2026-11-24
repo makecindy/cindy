@@ -1607,7 +1607,7 @@ export class AgentInputCoordinator {
       const pending = this.pendingAutoResumeRecoveries.get(clientId);
       if (!pending) return this.scheduledQuotaRetryItems.has(state.activeTurn.item)
         ? this.quotaScheduleOrigins.get(state.activeTurn.item) : undefined;
-      if (pending.stateRef !== state || pending.recoveryOwner !== 'quota-reset') return undefined;
+      if (pending.stateRef !== state || pending.recoveryOwner === 'interrupted') return undefined;
       recovery = pending.recovery;
     } else if (!isUsageLimitCandidateCurrent(state)) return undefined;
     const item = recovery?.kind === 'active-turn' ? recovery.item
@@ -3954,7 +3954,7 @@ export class AgentInputCoordinator {
     const previousToolLoop = state.toolLoop;
     const previousOutputLimit = state.outputLimit;
     const previousStickyError = state.stickyError;
-    const quotaOrigin = usageWait?.recoveryOwner === 'quota-reset' ? this.scheduledQuotaOrigin(sessionId) : undefined;
+    const quotaOrigin = usageWait ? this.scheduledQuotaOrigin(sessionId) : undefined;
     let retryItem = recovery.kind === 'active-turn' ? recovery.item : null;
     if (retryItem && groupRecovery) retryItem = { ...retryItem, text: groupRecoveryText };
     if (
@@ -8053,8 +8053,8 @@ export class AgentInputCoordinator {
     signals?: Omit<InterruptedTurnErrorSignals, 'message'>,
   ): void {
     state.providerGroupSwitchHold = null;
-    // Scheduled quota waits belong to the runner; do not hide their error behind
-    // a provider-group takeover that this scheduled path does not start.
+    // Scheduled recovery belongs to the runner callback, which claims the group
+    // budget itself. Do not claim or hide its error through this ordinary hold.
     if (isSchedulerOriginItem(item) || this.quotaScheduleOrigins.has(item)) return;
     if (!this.willNotifyUsageLimitedTurnError(state, item)) return;
     const cause = this.getProviderGroupSwitchCandidate(sessionId, item, message, signals, true);

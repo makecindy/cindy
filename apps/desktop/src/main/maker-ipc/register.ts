@@ -2080,10 +2080,15 @@ onCodexAutoResetRestored(providerId => usageLimitAutoResume.resumeRestored(id =>
 // Schedule 不另建重试状态机：真正的恢复仍由 AgentInputCoordinator +
 // AutoResumeBookkeeping 独占。这里仅把「这一轮 scheduler run 已被普通自动续跑接管」
 // 和「最终仍失败」桥给 runner，让同一个 run 继续等待或正确失败。
-const pendingSchedulerAutoResumeRunBySession = new Map<
-  string,
-  { runId: string; attemptToken: number; usageLimitToken?: number; retryClientId?: string; error?: string }
->();
+interface SchedulerAutoResumePending {
+  runId: string;
+  attemptToken: number;
+  usageLimitToken?: number;
+  retryClientId?: string;
+  error?: string;
+  providerGroupPending?: boolean;
+}
+const pendingSchedulerAutoResumeRunBySession = new Map<string, SchedulerAutoResumePending>();
 interface SchedulerRecoveryListener {
   failed(error?: string, stopped?: true): void;
   quotaWait?: { start(): void; resume(): boolean };
@@ -2154,6 +2159,31 @@ function finishSchedulerUsageLimitWait(sessionId: string, token: number): void {
   notifySchedulerAutoResumeFailed(sessionId, pending.runId, pending.attemptToken);
   usageLimitAutoResume.clear(sessionId);
   agentInputCoordinatorHolder?.releaseScheduledUsageLimitRecovery(sessionId, pending.runId, pending.retryClientId);
+}
+
+/** Group recovery keeps the running slot; only exhausted/declined groups enter quota waiting. */
+function waitForUsageLimitAfterGroup(
+  sessionId: string,
+  signals: Parameters<UsageLimitAutoResume['onTurnError']>[1],
+  token: number,
+  recovery?: Parameters<UsageLimitAutoResume['onTurnError']>[3],
+  pending?: SchedulerAutoResumePending,
+): Promise<boolean> {
+  // A rearmed token may belong to this same entry. A later run must never be
+  // adopted just because it uses the same session (or even the same token).
+  if (pendingSchedulerAutoResumeRunBySession.get(sessionId) !== pending) return Promise.resolve(false);
+  if (pending?.usageLimitToken !== undefined) {
+    pending.usageLimitToken = token;
+    pending.providerGroupPending = false;
+    for (const listener of schedulerAutoResumeFailureListeners.get(schedulerAutoResumeRunKey(sessionId, pending.runId)) ?? []) {
+      listener.quotaWait?.start();
+    }
+  }
+  return usageLimitAutoResume.onTurnError(sessionId, signals, token, recovery).then(armed => {
+    if (!armed && pending && pendingSchedulerAutoResumeRunBySession.get(sessionId) === pending &&
+      pending.usageLimitToken === token) finishSchedulerUsageLimitWait(sessionId, token);
+    return armed;
+  });
 }
 
 export function isSchedulerAutoResumePending(sessionId: string, runId: string): boolean {
@@ -19954,42 +19984,44 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     claimExternalAutomaticRecovery: (sessionId) =>
       interruptedTurnAutoResumeGuard.claimExternalAutomaticRecovery(sessionId).action === 'allow',
     onUsageLimitedTurnError: (sessionId, signals, item, candidateToken) => {
+      let schedulerPending: SchedulerAutoResumePending | undefined;
       if (item.origin?.kind === 'scheduler' && item.origin.runId) {
         // Claim synchronously, before the runner consumes this error. Reset-time
         // lookup is async; unknown/unsafe resets release the run but keep Retry.
-        pendingSchedulerAutoResumeRunBySession.set(sessionId, {
+        schedulerPending = {
           runId: item.origin.runId, attemptToken: 0, usageLimitToken: candidateToken,
-          error: signals.message ? schedulerFailureDetail(signals.message) : undefined,
-        });
-        for (const listener of schedulerAutoResumeFailureListeners.get(schedulerAutoResumeRunKey(sessionId, item.origin.runId)) ?? []) {
-          listener.quotaWait?.start();
-        }
-        void usageLimitAutoResume.onTurnError(sessionId, signals, candidateToken).then(armed => {
-          if (!armed) finishSchedulerUsageLimitWait(sessionId, candidateToken);
-        });
-        return;
+          error: signals.message ? schedulerFailureDetail(signals.message) : undefined, providerGroupPending: true,
+        };
+        pendingSchedulerAutoResumeRunBySession.set(sessionId, schedulerPending);
       }
+      const waitForReset = (token: number, recovery?: Parameters<UsageLimitAutoResume['onTurnError']>[3]) =>
+        waitForUsageLimitAfterGroup(sessionId, signals, token, recovery, schedulerPending);
       // Restored provenance is not a live runner. Re-arm quota waiting without
       // rebinding its expired run or entering immediate provider-group recovery.
-      if (inputCoordinator.scheduledQuotaOrigin(sessionId)) {
+      if (item.origin?.kind !== 'scheduler' && inputCoordinator.scheduledQuotaOrigin(sessionId)) {
         void usageLimitAutoResume.onTurnError(sessionId, signals, candidateToken);
         return;
       }
       // 供应商组分配的任务先试自动换电脑，不换时由它交回额度重置后自动继续。
       if (!providerGroupService || signals.providerGroupUsageLimit) {
-        usageLimitAutoResume.onTurnError(sessionId, signals, candidateToken);
+        void waitForReset(candidateToken);
         return;
       }
       // Provider-group recovery shares the interrupted-turn budget. Once it is
       // exhausted, do not enter the group's failover loop; keep the normal
       // manual/usage-limit recovery path instead.
-      if (interruptedTurnAutoResumeGuard.isBudgetExhausted(sessionId)) {
-        usageLimitAutoResume.onTurnError(sessionId, signals, candidateToken);
+      // Ordinary inputs already claim in the coordinator's switch hold. Live
+      // scheduler inputs skip that hold, so claim their shared budget here.
+      const groupBudgetExhausted = item.origin?.kind === 'scheduler'
+        ? interruptedTurnAutoResumeGuard.claimExternalAutomaticRecovery(sessionId).action !== 'allow'
+        : interruptedTurnAutoResumeGuard.isBudgetExhausted(sessionId);
+      if (groupBudgetExhausted) {
+        void waitForReset(candidateToken);
         return;
       }
       // 先不呈现的那次错误：换成了丢掉，不换了先放出来再交回原有处理；一直没有结局时到点放出来。
       const holdId = inputCoordinator.getProviderGroupSwitchHoldId(sessionId);
-      let hooks: ProviderGroupTurnErrorHooks | undefined;
+      let hooks: ProviderGroupTurnErrorHooks = { fallback: (token, recovery) => { void waitForReset(token, recovery); } };
       let holdTimer: ReturnType<typeof setTimeout> | undefined;
       if (holdId !== null) {
         // 久久没有结局时到点放出来。每次重试、开始换电脑时重新计时：等原电脑恢复本身就可能要一两分钟，
@@ -20007,6 +20039,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // 协同 Worker 的终态与 error 行按同一次登记结算：换成了不回报这次异常终止，没换成才回报给 Lead。
         const recoveryOwner = activeOwnerScopeKey();
         hooks = {
+          ...hooks,
           notHandled: () => recoveryOwner === activeOwnerScopeKey() && inputCoordinator.resumeAfterProviderGroupDeclined(
             sessionId, candidateToken, signals, (attemptToken) => {
               const detail = providerGroupHeldErrors.takeForRecovery(sessionId, holdId);
@@ -20041,6 +20074,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           });
         })
         .finally(() => {
+          const pending = schedulerPending;
+          if (pending && pendingSchedulerAutoResumeRunBySession.get(sessionId) === pending &&
+            pending.usageLimitToken === candidateToken && pending.providerGroupPending) {
+            pending.providerGroupPending = false;
+            // No fallback and no accepted continuation means the group lost its
+            // input/grant. Settle this run instead of leaving its waiter behind.
+            if (!pending.retryClientId) finishSchedulerUsageLimitWait(sessionId, candidateToken);
+          }
           if (holdId === null) return;
           clearTimeout(holdTimer);
           // 用户中途接手、错误已被新的一轮换掉等：补落 error 行，错误已不是当前状态时不再呈现。
@@ -20416,7 +20457,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         forgetSavedUsageLimitWait(projection.sessionId);
       }
       const quotaClaim = pendingSchedulerAutoResumeRunBySession.get(projection.sessionId);
-      if (quotaClaim?.usageLimitToken !== undefined && !quotaClaim.retryClientId &&
+      if (quotaClaim?.usageLimitToken !== undefined && !quotaClaim.retryClientId && !quotaClaim.providerGroupPending &&
         !inputCoordinator.hasUsageLimitRecovery(projection.sessionId, quotaClaim.usageLimitToken)) {
         finishSchedulerUsageLimitWait(projection.sessionId, quotaClaim.usageLimitToken);
       }
