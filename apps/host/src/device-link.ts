@@ -161,7 +161,6 @@ export interface HostDeviceLinkPorts {
   preparePiSkillRuntime(id: string, workingDir: string, route?: { model: string; nextInputChars?: number }): Promise<void>;
   createRuntimeSession(input: unknown): Promise<unknown>;
   closeRuntimeSession(sessionId: string, opts?: unknown): Promise<void>;
-  closeRuntimeSession(sessionId: string, opts?: unknown): Promise<void>;
   /** The desktop-compatible maker:send transaction (agent/input-queue.mjs). */
   send(sessionId: string, message: unknown, createOpts?: unknown, sendOpts?: unknown): Promise<unknown>;
   /** Captures the current clear boundary and input generation before a direct send. */
