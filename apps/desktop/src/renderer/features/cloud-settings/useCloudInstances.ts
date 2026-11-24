@@ -8,6 +8,7 @@ import type {
 import type { CloudInstanceView } from '../../../shared/cloudInstanceControl';
 import { stableInstanceState, canChangeInstancePower } from './instanceState';
 import { isForeground, onForegroundChange } from './foreground';
+import { cloudBusyRetryAfterMs } from '../../../shared/cloudSettingsErrors';
 import {
   SETTLE_DELAYS_MS,
   useSettleUnknown,
@@ -98,6 +99,8 @@ export function useCloudInstances(api: CloudInstancesApi, onOpen: (deviceId: str
     next.delete(deviceId);
     return next;
   };
+  // The service's earliest next list read after it throttled one: polls, retries and reloads wait.
+  const notBefore = useRef(0);
   const live = useRef(false),
     inFlight = useRef(false),
     openWhenReady = useRef<string | undefined>(undefined);
@@ -137,7 +140,7 @@ export function useCloudInstances(api: CloudInstancesApi, onOpen: (deviceId: str
   checks.current = { power: powerCheck, claim: claimCheck };
   const load = useCallback(
     async (explicit = false) => {
-      if (inFlight.current) return;
+      if (inFlight.current || Date.now() < notBefore.current) return;
       inFlight.current = true;
       try {
         const next = await api.instanceList({});
@@ -194,7 +197,9 @@ export function useCloudInstances(api: CloudInstancesApi, onOpen: (deviceId: str
             return kept;
           });
         }
-      } catch {
+      } catch (error) {
+        const wait = cloudBusyRetryAfterMs(String((error as Error | undefined)?.message));
+        if (wait !== null) notBefore.current = Date.now() + wait;
         if (live.current) {
           setError('readFailed');
           setFailures((count) => count + 1);

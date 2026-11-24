@@ -71,6 +71,22 @@ it('reads nothing while the host has hidden the window, then reads once when it 
   await waitFor(() => expect(f.api.instanceList).toHaveBeenCalledTimes(1));
 });
 
+// Unit: a throttled list read waits for the service's time; polls and reloads in between send
+// nothing, and the next read goes out once the wait is over.
+it('waits out a throttled list read before reading the list again', async () => {
+  const f = await setup([running]);
+  f.api.instanceList.mockClear();
+  f.api.instanceList.mockRejectedValueOnce(new Error('[CLOUD_SETTINGS_BUSY] CLOUD_SETTINGS_BUSY retryAfterMs=90000'));
+  await act(async () => { await f.result.current.load(true); });
+  expect(f.api.instanceList).toHaveBeenCalledTimes(1);
+  await act(() => vi.advanceTimersByTimeAsync(60_000));
+  await act(async () => { await f.result.current.load(true); });
+  expect(f.api.instanceList).toHaveBeenCalledTimes(1);
+  await act(() => vi.advanceTimersByTimeAsync(31_000));
+  await act(async () => { await f.result.current.load(true); });
+  expect(f.api.instanceList.mock.calls.length).toBeGreaterThan(1);
+});
+
 it('reading the list claims, signs in and wakes nothing', async () => {
   const f = await setup([target, sleeping]);
   expect(f.api.instanceClaim).not.toHaveBeenCalled();
