@@ -138,6 +138,7 @@ it.each(['onContentProcessDidTerminate', 'onRenderProcessGone'])('releases the L
 });
 
 it('does not accept LAN bridge callbacks across backgrounding, owner changes or unmount', () => {
+  vi.useFakeTimers();
   const bridge = createDirectRuntimeBridge(), closed = vi.fn();
   const events = { closed, open() {}, message() {}, drained() {} };
   const ready = { nativeEvent: { data: '{"type":"ready"}' } };
@@ -147,6 +148,14 @@ it('does not accept LAN bridge callbacks across backgrounding, owner changes or 
   bridge.runtime.create('one', events);
   const old = state.props;
   act(() => { for (const fn of state.appStateListeners) fn('background'); });
+  act(() => vi.advanceTimersByTime(2499));
+  expect(closed).not.toHaveBeenCalled();
+  act(() => { for (const fn of state.appStateListeners) fn('active'); });
+  act(() => { for (const fn of state.appStateListeners) fn('inactive'); });
+  act(() => vi.advanceTimersByTime(3000));
+  expect(closed).not.toHaveBeenCalled();
+  act(() => { for (const fn of state.appStateListeners) fn('background'); });
+  act(() => vi.advanceTimersByTime(2500));
   expect(closed).toHaveBeenCalledOnce();
   act(() => { for (const fn of state.appStateListeners) fn('active'); });
   act(() => old.onMessage(ready));

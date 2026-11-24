@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { AppState, View } from 'react-native';
+import { observeTransportAppState } from './transportAppState';
 import { WebView } from 'react-native-webview';
 import { DIRECT_LINK_RUNTIME_SOURCE, MAX_FRAME_BYTES, type createDirectRuntimeBridge } from '@cindy/device-link';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
@@ -32,11 +33,11 @@ export function DirectLinkTransport({ bridge, enabled, owner }: {
   activeRef.current = active;
   const release = () => { detach.current?.(); detach.current = undefined; };
   useEffect(() => {
-    const subscription = AppState.addEventListener('change', (state) => {
-      if (state !== 'active') { activeRef.current = false; release(); setLifecycle(n => n + 1); }
-      setForeground(state === 'active');
+    const unsubscribe = observeTransportAppState((available) => {
+      if (!available) { activeRef.current = false; release(); setLifecycle(n => n + 1); }
+      setForeground(available);
     });
-    return () => { activeRef.current = false; live.current = 'disposed'; subscription.remove(); release(); };
+    return () => { activeRef.current = false; live.current = 'disposed'; unsubscribe(); release(); };
   }, []);
   useEffect(() => () => release(), [key, active, bridge]);
   const terminated = () => {
