@@ -1,5 +1,5 @@
 import { coerceIntegerToolArguments } from "../lib/tool-argument-integers";
-import { namespacedToolName } from "../types/tools";
+import { dottedToolName, namespacedToolName } from "../types/tools";
 import { rewriteRoutedNamespaceToolsForUpstream } from "./namespace-tool-compat";
 
 export interface FunctionCallRepairSchema {
@@ -37,13 +37,15 @@ function selectorAllows(
   lowered: unknown,
   wireName: string,
   identity: FunctionCallRepairSchema,
+  historySelectors?: ReadonlyMap<string, string | null>,
 ): boolean {
   if (!isObject(selector) || selector.type !== "function" || typeof selector.name !== "string") return false;
   if ("namespace" in selector) {
     if (typeof selector.namespace !== "string" || selector.namespace.length === 0) return false;
     return namespaceOf(selector.namespace) === identity.namespace && selector.name === identity.name;
   }
-  return isObject(lowered) && lowered.type === "function" && lowered.name === wireName;
+  return isObject(lowered) && lowered.type === "function" && (lowered.name === wireName
+    || (lowered.name === selector.name && historySelectors?.get(selector.name) === wireName));
 }
 
 /** Caller supplies currentTurnWireToolCatalogBody BEFORE provider schema lowering. */
@@ -98,14 +100,17 @@ export function collectFunctionCallRepairSchemas(
       if (isObject(tool) && tool.type !== "namespace" && typeof tool.name === "string") canonicalBareNames.add(tool.name);
     }
   }
-  // The forwarded request owns both the wire names and the lowered selector. Rebuilding them from
-  // a combined catalog would let replayed history change either, which the request itself never
-  // did; only a caller without a plan falls back to the local view.
+  // The forwarded request owns all wire names. Search history can only resolve selectors that
+  // had no match when the request was lowered; it must never allocate its own wire names here.
   const { loweredToolChoice: loweredChoice, renamedWireNames } = plan ?? deriveFunctionCallRepairPlan(body);
   const choice = body.tool_choice;
+  const historySelectors = replayedGroups.length > 0 && isObject(choice)
+    ? new Map<string, string | null>()
+    : undefined;
   const occupied = new Map<string, { kind: unknown; identity: FunctionCallRepairSchema; live: boolean } | null>();
-  const register = (tool: unknown, namespace: string | undefined, live: boolean): void => {
+  const register = (tool: unknown, declaredNamespace: string | undefined, live: boolean): void => {
     if (!isObject(tool) || typeof tool.name !== "string" || tool.name.length === 0) return;
+    const namespace = namespaceOf(declaredNamespace);
     const identity: FunctionCallRepairSchema = {
       name: tool.name,
       ...(namespace ? { namespace } : {}),
@@ -115,6 +120,13 @@ export function collectFunctionCallRepairSchemas(
     // Only a namespace child can be displaced; a bare declaration keeps its own name even when it
     // happens to spell the same preferred wire name.
     const key = namespace ? (renamedWireNames.get(preferred) ?? preferred) : preferred;
+    if (historySelectors) {
+      const names = declaredNamespace ? [tool.name, dottedToolName(declaredNamespace, tool.name)] : [tool.name];
+      for (const name of names) {
+        const previous = historySelectors.get(name);
+        historySelectors.set(name, previous === undefined || previous === key ? key : null);
+      }
+    }
     if (occupied.has(key)) {
       const previous = occupied.get(key);
       if (!previous) return;
@@ -152,21 +164,25 @@ export function collectFunctionCallRepairSchemas(
         for (const child of tool.tools) {
           if (tool.name === "functions" && isObject(child) && typeof child.name === "string"
             && canonicalBareNames.has(child.name)) continue;
-          register(child, namespaceOf(tool.name), live);
+          register(child, tool.name, live);
         }
       } else if (tool.type === "function" && isObject(tool.function)) {
         register({ ...tool.function, type: "function" }, undefined, live);
       } else register(tool, undefined, live);
     }
   }
+  // An unchanged selector can already be a wire name. That exact identity takes precedence
+  // over an unqualified history match even if the exact identity has no repairable schema.
+  if (historySelectors) for (const key of occupied.keys()) historySelectors.delete(key);
   for (const [key, entry] of occupied) {
     if (!entry || entry.kind !== "function") continue;
     let allowed = choice === undefined || choice === "auto" || choice === "required";
     if (isObject(choice)) {
+      const fallback = entry.live ? undefined : historySelectors;
       if (choice.type === "allowed_tools" && Array.isArray(choice.tools)) {
         const selectors = isObject(loweredChoice) && Array.isArray(loweredChoice.tools) ? loweredChoice.tools : [];
-        allowed = choice.tools.some((selector, index) => selectorAllows(selector, selectors[index], key, entry.identity));
-      } else allowed = selectorAllows(choice, loweredChoice, key, entry.identity);
+        allowed = choice.tools.some((selector, index) => selectorAllows(selector, selectors[index], key, entry.identity, fallback));
+      } else allowed = selectorAllows(choice, loweredChoice, key, entry.identity, fallback);
     }
     if (allowed) schemas.set(key, entry.identity);
   }

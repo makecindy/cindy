@@ -223,22 +223,49 @@ describe('request-owned Responses compatibility', () => {
     }
   });
 
-  // Native tool-search history is a real schema source even without live declarations.
-  // Keep its unqualified selector repair when sharing the native identity plan (#11199).
-  it.each(['application/json', 'text/event-stream'])('repairs native tools discovered only in search history (%s)', async contentType => {
+  // #11199: the Codex adapter must repair historical tool arguments even after tool search
+  // lowering removes the structured catalog. A forced short name plus an integer is the
+  // smallest unit case. Exercise both response transports and both selector forms.
+  it.each([
+    ['application/json', false], ['text/event-stream', false],
+    ['application/json', true], ['text/event-stream', true],
+  ] as const)('repairs tools discovered only in search history (%s, lowerNamespaces=%s)', async (contentType, lowerNamespaces) => {
     const adapter = createCodexResponsesCompatibilityAdapter();
-    const input = { input: [{ type: 'tool_search_output', tools: [{ type: 'namespace', name: 'workspace', tools: [
+    const input = [{ type: 'tool_search_output', tools: [{ type: 'namespace', name: 'workspace', tools: [
       { type: 'function', name: 'read', parameters: { type: 'object', properties: { line: { type: 'integer' } } } },
-    ] }] }], tool_choice: { type: 'function', name: 'read' } };
-    adapter.adaptRequest(input, 10088);
+    ] }] }];
     const output = { status: 'completed', output: [{ type: 'function_call', namespace: 'workspace', name: 'read', call_id: 'history', arguments: '{"line":12.0}' }] };
     const sse = contentType === 'text/event-stream';
     const wire = sse ? `data: ${JSON.stringify({ type: 'response.completed', response: output })}\n\n` : JSON.stringify(output);
-    const transform = adapter.createResponseTransform(10088, { contentType, contentEncoding: '' });
-    expect(transform).not.toBeNull();
-    const text = await responseText(transform!, wire);
-    const parsed = JSON.parse(sse ? text.trim().slice(6) : text);
-    expect((sse ? parsed.response : parsed).output[0]).toEqual({ ...output.output[0], arguments: '{"line":12}' });
+    for (const name of ['read', 'workspace.read']) {
+      const selector = { type: 'function', name };
+      for (const toolChoice of [selector, { type: 'allowed_tools', tools: [selector] }]) {
+        adapter.adaptRequest({ input, tool_choice: toolChoice }, 10088, undefined, lowerNamespaces);
+        const transform = adapter.createResponseTransform(10088, { contentType, contentEncoding: '' });
+        expect(transform).not.toBeNull();
+        const text = await responseText(transform!, wire);
+        const parsed = JSON.parse(sse ? text.trim().slice(6) : text);
+        expect((sse ? parsed.response : parsed).output[0]).toEqual({ ...output.output[0], arguments: '{"line":12}' });
+      }
+    }
+  });
+
+  it('keeps a live selector authoritative and skips ambiguous short names in search history', async () => {
+    const adapter = createCodexResponsesCompatibilityAdapter();
+    const read = { type: 'function', name: 'read', parameters: { type: 'object', properties: { line: { type: 'integer' } } } };
+    const history = { type: 'namespace', name: 'workspace', tools: [read] };
+    const other = { type: 'namespace', name: 'other', tools: [read] };
+    const call = { type: 'function_call', namespace: 'workspace', name: 'read', call_id: 'history', arguments: '{"line":12.0}' };
+    const wire = JSON.stringify({ status: 'completed', output: [call] });
+    for (const input of [
+      { tools: [other], input: [{ type: 'tool_search_output', tools: [history] }] },
+      { tools: [read], input: [{ type: 'tool_search_output', tools: [history] }] },
+      { input: [{ type: 'tool_search_output', tools: [history, other] }] },
+    ]) {
+      adapter.adaptRequest({ ...input, tool_choice: { type: 'function', name: 'read' } }, 10088, undefined, true);
+      const transform = adapter.createResponseTransform(10088, { contentType: 'application/json', contentEncoding: '' });
+      expect(JSON.parse(transform ? await responseText(transform, wire) : wire).output).toEqual([call]);
+    }
   });
 
   // #11199 native collision regression: public Codex transport, unit tier. The earlier native
