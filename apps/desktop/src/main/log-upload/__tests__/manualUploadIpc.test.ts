@@ -74,6 +74,7 @@ const accept = (version: unknown = LEGAL_TERMS_VERSION) =>
   mocks.handlers.get('log-upload:accept-manual-consent')!({}, version);
 const settings = () => mocks.handlers.get('log-upload:settings-get')!({});
 const settingsFile = () => join(mocks.userData, 'log-upload-settings.json');
+const consentFile = () => join(mocks.userData, 'manual-log-upload-consent.json');
 
 beforeAll(initLogUploadService);
 beforeEach(() => {
@@ -123,8 +124,8 @@ describe('manual log upload IPC', () => {
     expect(mocks.send).not.toHaveBeenCalled();
     expect(JSON.parse(readFileSync(settingsFile(), 'utf8'))).toEqual({
       crashAutoUploadEnabled: true,
-      manualConsentVersion: LEGAL_TERMS_VERSION,
     });
+    expect(JSON.parse(readFileSync(consentFile(), 'utf8'))).toBe(LEGAL_TERMS_VERSION);
     expect(mocks.broadcast).toHaveBeenCalledWith('log-upload:settings-change', expect.objectContaining({
       privacyConsentAccepted: false,
       manualUploadAvailable: true,
@@ -136,14 +137,36 @@ describe('manual log upload IPC', () => {
     expect(mocks.send).toHaveBeenCalledTimes(1);
   });
 
-  it('accepts an existing manual grant from disk and requires a new click for a stale grant', async () => {
-    writeFileSync(settingsFile(), JSON.stringify({ manualConsentVersion: 'older-policy' }));
+  it('reads the current grant even if another instance changes or removes it', async () => {
+    writeFileSync(consentFile(), JSON.stringify('older-policy'));
     await expect(settings()).resolves.toMatchObject({
       manualUploadAvailable: false, manualUploadConsentRequired: true,
     });
     await expect(upload()).rejects.toThrow('[PRIVACY_CONSENT_REQUIRED]');
-    writeFileSync(settingsFile(), JSON.stringify({ manualConsentVersion: LEGAL_TERMS_VERSION }));
+    writeFileSync(consentFile(), JSON.stringify(LEGAL_TERMS_VERSION));
+    await expect(settings()).resolves.toMatchObject({
+      manualUploadAvailable: true, manualUploadConsentRequired: false,
+    });
     await expect(upload()).resolves.toMatchObject({ recordCount: 1 });
+    rmSync(consentFile());
+    await expect(settings()).resolves.toMatchObject({
+      manualUploadAvailable: false, manualUploadConsentRequired: true,
+    });
+    await expect(upload()).rejects.toThrow('[PRIVACY_CONSENT_REQUIRED]');
+  });
+
+  it('preserves a grant from another instance when updating or resetting the crash preference', async () => {
+    writeFileSync(settingsFile(), JSON.stringify({ crashAutoUploadEnabled: true }));
+    await expect(settings()).resolves.toMatchObject({ crashAutoUploadEnabled: true });
+    writeFileSync(consentFile(), JSON.stringify(LEGAL_TERMS_VERSION));
+
+    await expect(mocks.handlers.get('log-upload:set-crash-auto')!({}, false)).resolves.toMatchObject({
+      manualUploadAvailable: true, crashAutoUploadEnabled: false, crashAutoUploadCustomized: true,
+    });
+    await expect(mocks.handlers.get('log-upload:reset-crash-auto')!({})).resolves.toMatchObject({
+      manualUploadAvailable: true, crashAutoUploadEnabled: false, crashAutoUploadCustomized: false,
+    });
+    expect(JSON.parse(readFileSync(consentFile(), 'utf8'))).toBe(LEGAL_TERMS_VERSION);
   });
 
   it('uploads without an explicit policy version when consent is already saved', async () => {
@@ -168,10 +191,11 @@ describe('manual log upload IPC', () => {
     expect(mocks.collect).not.toHaveBeenCalled();
   });
 
-  it('does not let consent replace unreadable crash settings', async () => {
-    writeFileSync(settingsFile(), '{corrupt');
+  it('keeps a damaged manual grant unavailable and preserves its file', async () => {
+    writeFileSync(consentFile(), '{corrupt');
     await expect(accept()).rejects.toThrow('[PRIVACY_CONSENT_REQUIRED]');
-    expect(readFileSync(settingsFile(), 'utf8')).toBe('{corrupt');
+    await expect(upload()).rejects.toThrow('[PRIVACY_CONSENT_REQUIRED]');
+    expect(readFileSync(consentFile(), 'utf8')).toBe('{corrupt');
     await expect(settings()).resolves.toMatchObject({
       manualUploadAvailable: false, manualUploadConsentRequired: false,
     });

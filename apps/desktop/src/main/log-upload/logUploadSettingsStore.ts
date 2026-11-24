@@ -5,7 +5,8 @@
  *
  * 为什么单独一份文件、不并进 `analytics-settings.json`：那份文件承载的是「隐私政策同意」
  * 这个**事实记录**与使用统计的 opt-out 偏好；日志上报是另一件事，混在一起会让「恢复默认」
- * 与迁移语义互相纠缠。既有隐私同意仍读 analytics；这里只存日志上报自己的开关及手动上传授权。
+ * 与迁移语义互相纠缠。同意事实照旧复用 analytics 那份（不再存第二份），这里只存本功能
+ * 自己的开关。
  *
  * override 语义（configuration-and-overrides §2/§4）：
  *  - 默认值 `false`（默认关闭，需求 §4.3）；
@@ -27,13 +28,10 @@ const log = desktopMakerLogger.child('log-upload-settings');
 export interface LogUploadSettings {
   /** 崩溃时自动上传日志。默认关闭。 */
   crashAutoUploadEnabled: boolean;
-  /** 单独授予手动上传权限时接受的隐私政策版本。 */
-  manualConsentVersion: string | null;
 }
 
 const DEFAULTS: LogUploadSettings = {
   crashAutoUploadEnabled: false,
-  manualConsentVersion: null,
 };
 
 function settingsFilePath(): string {
@@ -48,7 +46,6 @@ function normalize(raw: unknown): LogUploadSettings {
       typeof r.crashAutoUploadEnabled === 'boolean'
         ? r.crashAutoUploadEnabled
         : DEFAULTS.crashAutoUploadEnabled,
-    manualConsentVersion: typeof r.manualConsentVersion === 'string' ? r.manualConsentVersion : null,
   };
 }
 
@@ -148,17 +145,6 @@ export function isLogUploadSettingsReadable(): boolean {
 export function readLogUploadSettings(): LogUploadSettings {
   probeRecordOnce();
   return store.read();
-}
-
-/** undefined means unreadable, null means no manual grant on this device. */
-export function readManualConsentVersion(): string | null | undefined {
-  if (probeRecordOnce() === 'invalid') return undefined;
-  return store.read().manualConsentVersion;
-}
-
-export function recordManualConsent(version: string): void {
-  store.writePatch({ manualConsentVersion: version });
-  recordProbe = 'valid';
 }
 
 export function isCrashAutoUploadEnabled(): boolean {

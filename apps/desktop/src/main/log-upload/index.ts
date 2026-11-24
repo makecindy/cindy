@@ -40,6 +40,7 @@ import { createLogger, getLogDir } from '../logger';
 import { outboundFetch } from '../maker-host/outbound-fetch.desktop';
 import { getPreviousRunReports } from '../startup-diagnostics';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
+import { atomicWriteFileSync } from '../utils/atomicWriteFile.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { collectLogsFromDisk } from './collectRuntime';
 import {
@@ -56,8 +57,6 @@ import {
   isCrashAutoUploadCustomized,
   isCrashAutoUploadEnabled,
   isLogUploadSettingsReadable,
-  readManualConsentVersion,
-  recordManualConsent,
   refreshLogUploadSettingsFromDisk,
   setCrashAutoUploadEnabled,
 } from './logUploadSettingsStore';
@@ -152,14 +151,35 @@ const gateDeps: ConsentGateDeps = {
   },
 };
 
+function manualConsentPath(): string {
+  // Separate from crash overrides so another instance can change those without erasing the grant.
+  return path.join(app.getPath('userData'), 'manual-log-upload-consent.json');
+}
+
+function parseManualConsent(content: string): boolean {
+  const version: unknown = JSON.parse(content);
+  if (typeof version !== 'string' || !version) throw new Error('invalid manual log upload consent');
+  return version === LEGAL_TERMS_VERSION;
+}
+
+async function readManualConsentForDisplay(): Promise<boolean | null> {
+  try {
+    return parseManualConsent(await fs.promises.readFile(manualConsentPath(), 'utf8'));
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ENOENT' ? false : null;
+  }
+}
+
 const manualGateDeps: ConsentGateDeps = {
   ...gateDeps,
   readPrivacyConsentAccepted: () => {
     if (gateDeps.readPrivacyConsentAccepted()) return true;
-    if (!isLogUploadSettingsReadable()) {
-      throw new Error('log upload settings record is present but unreadable');
+    try {
+      return parseManualConsent(fs.readFileSync(manualConsentPath(), 'utf8'));
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
+      throw err;
     }
-    return readManualConsentVersion() === LEGAL_TERMS_VERSION;
   },
 };
 
@@ -234,16 +254,15 @@ async function logUploadSettingsPayload(): Promise<LogUploadSettingsPayload> {
   const privacyConsent = targetConfigured && !privacyConsentAccepted
     ? await readAnalyticsConsentForDisplay()
     : null;
-  const manualConsentVersion = privacyConsent === false ? readManualConsentVersion() : undefined;
-  const manualConsentAccepted = manualConsentVersion === LEGAL_TERMS_VERSION;
+  const manualConsent = privacyConsent === false ? await readManualConsentForDisplay() : null;
   return {
     targetConfigured,
     privacyConsentAccepted,
     crashAutoUploadEnabled: isCrashAutoUploadEnabled(),
     crashAutoUploadCustomized: isCrashAutoUploadCustomized(),
     manualUploadAvailable: targetConfigured &&
-      (privacyConsentAccepted || privacyConsent === true || manualConsentAccepted),
-    manualUploadConsentRequired: manualConsentVersion !== undefined && !manualConsentAccepted,
+      (privacyConsentAccepted || privacyConsent === true || manualConsent === true),
+    manualUploadConsentRequired: manualConsent === false,
   };
 }
 
@@ -451,7 +470,7 @@ export function initLogUploadService(): void {
         return throwIpcError('LOG_UPLOAD_UNAVAILABLE', 'log upload is unavailable');
       }
       try {
-        recordManualConsent(policyVersion);
+        atomicWriteFileSync(manualConsentPath(), JSON.stringify(policyVersion));
       } catch (err) {
         log.error('write manual log upload consent failed', err);
         return throwIpcError('INTERNAL', 'failed to persist manual log upload consent');
