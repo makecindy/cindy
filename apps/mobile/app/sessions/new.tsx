@@ -456,7 +456,7 @@ import {
 import { mobileAgentLabel, mobileAgentVendor } from '@/session/sessionAgentSwitch';
 import { MobileModelIconMark } from '@/session/MobileProviderMark';
 import { draftModelMemoryFor, hydrateDraftModelMemory } from '@/session/draftModelMemory';
-import { effortLabelFromRuntime, rowFastEditable } from '@/session/modelPickerRows';
+import { composerModelLabel, effortLabelFromRuntime, rowFastEditable } from '@/session/modelPickerRows';
 import { useRemoteAgentCatalogs, useRemoteAgentCatalogsWithStatus } from '@/session/useRemoteAgentCatalogs';
 import { restoredRemoteAgentUnusable as restoredRemoteAgentUnusableCheck } from '@/session/remoteAgentCatalogs';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
@@ -1406,10 +1406,12 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     // 每台电脑落定那一刻记一次。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runtimeSettledDeviceId]);
+  const catalogModel = activeSourceProvider ? getModel(activeSourceProvider, draft.model, draft.agentKind) : undefined;
+  const catalogModelName = catalogModel?.name;
   const runtimeSummary = useMemo(
-    () => buildDraftRuntimeSummary(draft, runtimeOptions),
+    () => buildDraftRuntimeSummary(draft, runtimeOptions, catalogModelName),
     // effort / 权限标签按 app 语言解析,切换语言时必须重算,否则停留在上一语言。
-    [draft, runtimeOptions, i18nInstance.language],
+    [draft, runtimeOptions, catalogModelName, i18nInstance.language],
   );
   // 选了另一台电脑的模型:药丸写那台目录里的模型名与档位,读屏一并读出电脑名(与已建任务同口径)。
   const remoteAgentModelName = remoteAgentPick && remoteAgentPillProvider
@@ -1418,10 +1420,9 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   // 选了插件引擎：药丸写引擎的模型(+ 思考深度)，读屏带上引擎名。
   const pluginEnginePillSummary = activePluginEngine
     ? [
-        pluginEngineModelName(activePluginEngine.engine, activePluginEngine.modelId)
-          ?? (activePluginEngine.modelId === PLUGIN_ENGINE_DEFAULT_MODEL
-            ? t('models.pluginEngines.defaultModel')
-            : activePluginEngine.modelId),
+        activePluginEngine.modelId === PLUGIN_ENGINE_DEFAULT_MODEL
+          ? t('models.pluginEngines.defaultModel')
+          : composerModelLabel(activePluginEngine.modelId, pluginEngineModelName(activePluginEngine.engine, activePluginEngine.modelId)),
         activePluginEngine.effort
           ? t(`models.options.effortLevels.${activePluginEngine.effort}`, { defaultValue: activePluginEngine.effort })
           : null,
@@ -1430,7 +1431,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   // 草稿底层模型的名字：模式没选到来源、沿用原模型时，说明里写它。
   const basePillModelSummary = pluginEnginePillSummary ?? (remoteAgentPick
     ? [
-        remoteAgentModelName || remoteAgentPick.model,
+        composerModelLabel(remoteAgentPick.model, remoteAgentModelName),
         effortLabelFromRuntime({ currentModel: null, effortOptions: runtimeOptions.effortOptions }, remoteAgentPick.effort),
       ].filter(Boolean).join(' · ')
     : runtimePending
@@ -3681,7 +3682,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
             // 图标统一规则(桌面同源):模型条目 icon(AI Gateway 设定)优先,缺省回落来源标。
             <MobileModelIconMark
               color={colors.textSecondary}
-              icon={getModel(activeSourceProvider, draft.model, draft.agentKind)?.icon}
+              icon={catalogModel?.icon}
               name={activeSourceProvider.name}
               providerId={activeSourceProvider.id}
               routing={activeSourceProvider.routing}
@@ -6534,8 +6535,9 @@ function readRouteString(value: unknown): string | null {
 function buildDraftRuntimeSummary(
   draft: NewSessionDraft,
   runtime: MobileSessionRuntimeOptions,
+  catalogModelName?: string,
 ): { modelSummary: string; permissionLabel: string } {
-  const modelLabel = runtime.currentModel?.label ?? draft.model;
+  const modelLabel = composerModelLabel(draft.model, catalogModelName, runtime.currentModel?.label);
   const effortLabel = effortLabelFromRuntime(runtime, draft.effort);
   return {
     modelSummary: [modelLabel, effortLabel].filter(Boolean).join(' · '),
