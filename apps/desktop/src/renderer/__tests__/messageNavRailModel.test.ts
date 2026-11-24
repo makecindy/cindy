@@ -64,6 +64,9 @@ describe('deriveNavRailEntries', () => {
       [{ hookSource: { ...hook, origin: { sender: { isOwner: false } } } }, false],
       [{ sourcePlugin: { pluginId: 'relay' }, hookSource: hook }, false],
       [{ automationOrigin: { kind: 'session', senderBotId: 'bot' } }, false],
+      // 群里的 Cindy 请求与任务卡话题插话由宿主核实为主人本人（bot-group-chat.md）。
+      [{ automationOrigin: { kind: 'session', groupRequest: { groupId: 'g', speakerId: 'me' } } }, true],
+      [{ automationOrigin: { kind: 'session', senderBotId: 'bot', groupThread: { groupId: 'g', speakerId: 'me' } } }, true],
       [{ sharedAuthorName: 'Alex', sourceDevice: remote }, false],
       [{ content: '{"orcaSource":"lead","content":"Review"}' }, false],
     ];
