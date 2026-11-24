@@ -2181,6 +2181,33 @@ describe('cindy-tool-fold extension source', () => {
     }
   });
 
+  it('shortens external strings only through the one clipping primitive', () => {
+    // 固定列宽截断只允许出现在 clipText 里：它在 cutBefore 落刀，绝不切开代理对。
+    // 这条规则按源码结构检查，不按已知调用点枚举——枚举漏掉一处，下一个特例就会从
+    // 漏掉的那处进来（上一轮的降级标记头就是这么溜过去的）。
+    const source = CINDY_TOOL_FOLD_EXTENSION_SOURCE;
+    const at = source.indexOf('function clipText(');
+    expect(at).toBeGreaterThan(0);
+    const body = source.slice(at, source.indexOf('\n  }', at));
+    expect(body).toContain('.slice(0, cutBefore(');
+    const fixed: string[] = [];
+    for (const match of source.matchAll(/\.slice\(0, (\d+)\)/g)) {
+      if ((match.index ?? 0) >= at && (match.index ?? 0) < at + body.length) continue;
+      fixed.push(match[0]);
+    }
+    expect(fixed, 'fixed-column cuts outside clipText').toEqual([]);
+    // 降级标记头是这条规则唯一的外部字符串落点：长 id 让单次读取装不下，改点名开头。
+    for (let pad = 0; pad < 4; pad += 1) {
+      // 表情符号横跨第 48 个单元（以及第 120 个单元）时，裸 slice 会留下半个字符。
+      const id = 'a'.repeat(47 - pad) + '😀' + 'b'.repeat(110 - pad) + '😀' + 'c'.repeat(2000);
+      const only = loadExtension({ CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: '1000' });
+      const folded = only.toolResult({ toolName: 'bash', toolCallId: id, content: 'z'.repeat(50000) }) as { content: Block[] };
+      const text = folded.content.map((block) => String((block as { text?: string }).text ?? '')).join('\n');
+      expect(text, 'pad ' + pad).toContain('is too long to repeat');
+      expect(loneSurrogate(text), 'pad ' + pad).toBe(false);
+    }
+  });
+
   it('writes the retention ledger in one place and never without the error state', () => {
     // 登记表是「结果」的唯一账本：写入只能有一处，错误状态是必填参数——漏传在源码上就不成立，
     // 不靠每个调用点记得传。

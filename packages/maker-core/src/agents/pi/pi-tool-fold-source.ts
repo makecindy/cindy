@@ -199,7 +199,7 @@ export default function (pi) {
     // 两条硬上界，任一不满足就改成不重复全文 id 的说法：页尾必须放得进单次读取上限（否则
     // 一页连 id 都放不下，游标永远不前进），预览加标记必须放得进入库阈值。
     // 装不下就降级：点名只回显开头，长度要求给出数字而不是把 id 再抄一遍。
-    var head = oneLine(key.slice(0, 120)).slice(0, 48);
+    var head = clipText(oneLine(clipText(key, 120)), 48);
     var tooLongNamed = 'call id "' + head + '" (' + key.length + ' chars) is too long to repeat; it already ran, or pass the full id as "call_id" to ' + READ_TOOL + ' (needs CINDY_PI_TOOL_FOLD_RECOVERY_CHARS of at least ' + singleReadFloor(key) + ')';
     var tooLongEvicted = 'full text not retained (call id "' + head + '", ' + key.length + ' chars); it already ran';
     if (tooLongNamed.length <= MARKER_ROOM) return { named: tooLongNamed, evicted: tooLongEvicted };
@@ -225,7 +225,7 @@ export default function (pi) {
   function turnKey(message) {
     if (!message) return '';
     var text = textOf(message.content);
-    return String(message.timestamp || '') + '|' + text.length + '|' + text.slice(0, 24);
+    return String(message.timestamp || '') + '|' + text.length + '|' + clipText(text, 24);
   }
   // Raw conversation snapshot from the latest context pass. Recovery reads originals
   // here instead of persisting payloads: pi already holds the full transcript.
@@ -252,10 +252,18 @@ export default function (pi) {
     return foldedBatch[String(id)] || String(id);
   }
 
+  // 缩短外部字符串只有这一个原语：它只经 cutBefore 落刀，绝不切开代理对。任何一处裸
+  // slice 都可能把表情符号切成两半，让扩展自己写出的提示成为乱码——那是本扩展要防的
+  // 失效，不能自己制造。0x20 之外的可读字符（含代理对）都按整字符保留。
+  function clipText(value, limit) {
+    var text = typeof value === 'string' ? value : value === undefined || value === null ? '' : String(value);
+    return text.length > limit ? text.slice(0, cutBefore(text, limit)) : text;
+  }
+
   function oneLine(value) {
     if (typeof value !== 'string') return '';
     var text = value.replace(/\s+/g, ' ').trim();
-    return text.length > LINE ? text.slice(0, cutBefore(text, LINE - 1)) + '\u2026' : text;
+    return text.length > LINE ? clipText(text, LINE - 1) + '\u2026' : text;
   }
 
   function textOf(content) {
