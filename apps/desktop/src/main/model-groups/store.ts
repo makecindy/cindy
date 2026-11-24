@@ -17,7 +17,11 @@ const store = createOverrideSettingsFile<ModelGroupsConfig>({
   filePath: () => ownerScopedPath('model-groups.json'),
   defaults: MODEL_GROUPS_DEFAULTS,
   normalize: normalizeModelGroupsConfig,
-  mergeOverrides: ({ next }) => (next.routes.length > 0 ? { routes: next.routes } : {}),
+  mergeOverrides: ({ next }) => ({
+    ...(next.routes.length > 0 ? { routes: next.routes } : {}),
+    // 「出问题时自动换来源」默认开，只存关掉的状态(model-groups.md §4.5)。
+    ...(next.autoSwitch === false ? { autoSwitch: false } : {}),
+  }),
   log,
   label: 'model groups',
   maxBytes: 512 * 1024,
@@ -31,7 +35,8 @@ export function readModelGroupsConfig(): ModelGroupsConfig {
 }
 
 export function writeModelGroupsConfig(config: ModelGroupsConfig): ModelGroupsConfig {
-  store.writePatch(config);
+  // 整份配置替换：开关打开时 config 里没有 autoSwitch，显式带上 undefined 才能清掉之前存下的 false。
+  store.writePatch({ ...config, autoSwitch: config.autoSwitch });
   const saved = store.read();
   log.info('model groups written', { routes: saved.routes.length });
   return saved;
