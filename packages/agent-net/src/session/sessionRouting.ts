@@ -8,7 +8,8 @@
  *   （包括不需要建链的列表、探测）都走会话；建好的会话链路一直用到本机关链、对端关链或会话断掉。一个对端只走一条路：
  *   2026-11-15 隔离验收时列表与探测先经 Device Link 发出，对端的 Device Link 还记着之前的可靠链路，把结果放进这本机已经
  *   没有的链路里，59 秒后超时、再引发重开。Device Link 上有活着的链路（就绪、等恢复、有待发）时照旧走 Device Link：
- *   那上面已确认的请求只能等它重建后补回结果。
+ *   那上面已确认的请求只能等它重建后补回结果。等恢复时新发的同账号只读快照可经会话独立取回；
+ *   旧帧与业务回包均已排空时，下一次控制握手可转到会话。
  * - 对端连接刚建好（或换了一条）、会话还没到时，Device Link 上又没有它的链路状态，建链和调用先等会话一小段
  *   （AgentNetSessionLinks.sessionPendingMs）：不等的话这一次会落到 Device Link，之后一直用到那条链路断开。
  *   对方此刻在 Agent-Net 上在线、连接还没建（本机刚启动、连接刚断）时也一样，先连上它再等（sessionWait）。
@@ -16,7 +17,7 @@
  * - 跨账号对端（供应商分享、共享任务）同样按上面选路；它的会话在它自己的分享连接上，受邀者第一次建链前先连上对方电脑再等会话。
  * 连接本身的（在线状态、通知、代次、起停）和只有 Device Link 传输层才有的（自建中转的直连路径等）交给 Device Link。
  */
-import { isScopedPeer, type DeviceLinkClient, type DeviceLinkPeerRouteStateChanged, type Envelope,
+import { isCompletedInvokeRetryableReadChannel, isScopedPeer, type DeviceLinkClient, type DeviceLinkPeerRouteStateChanged, type Envelope,
   type InvokePayload, type LinkClosePayload } from '@cindy/device-link';
 import { isSessionUnlinkedPushChannel, type AgentNetSessionLinks } from './sessionLinks.js';
 import {
@@ -80,7 +81,12 @@ export function routeSessionPeers(target: DeviceLinkClient, links: AgentNetSessi
       if (useSession || links.involves(dst)) log?.debug(`agent-net session route openLink peer=${dst.slice(0, 24)} session=${useSession} owned=${links.ownsOutbound(dst)}`
         + ` available=${links.available(dst)} deviceLinkReady=${target.isLinkReady(dst)} deviceLinkRecovery=${target.needsLinkRecovery(dst)}`
         + ` deviceLinkQueue=${target.getReliableSendQueueDepth(dst)}`);
-      if (useSession) return links.openLink(dst, payload, timeoutMs);
+      // A down reliable stream can remain marked as recovering even after its last reply drained.
+      // Only transfer control/subscriptions through a new handshake when nothing needs the old stream.
+      const handoff = !useSession && !isScopedPeer(dst) && links.available(dst) && target.needsLinkRecovery(dst)
+        && target.getReliableSendQueueDepth(dst) === 0 && !target.hasPendingRequestsTo(dst);
+      if (handoff) log?.debug(`agent-net control recovery switching to session peer=${dst.slice(0, 8)}`);
+      if (useSession || handoff) return links.openLink(dst, payload, timeoutMs);
       links.noteDeviceLinkLink(dst, 'outbound');
       return target.openLink(dst, payload, timeoutMs);
     }),
@@ -89,7 +95,13 @@ export function routeSessionPeers(target: DeviceLinkClient, links: AgentNetSessi
       if (session) links.closeLink(dst, reason, direction); else target.closeLink(dst, reason, direction);
     },
     invoke: (dst: string, payload: InvokePayload, timeoutMs?: number, options?: Parameters<DeviceLinkClient['invoke']>[3]) =>
-      routed(dst, (useSession) => (useSession ? links.invoke(dst, payload, timeoutMs, options) : target.invoke(dst, payload, timeoutMs, options))),
+      routed(dst, (useSession) => {
+        // A new listing has its own request ID and the reply follows the session request.
+        // Leave the old reliable stream (including its pending writes and replies) to recover.
+        const readOnSession = !useSession && !isScopedPeer(dst) && isCompletedInvokeRetryableReadChannel(payload.channel)
+          && target.needsLinkRecovery(dst) && links.available(dst);
+        return useSession || readOnSession ? links.invoke(dst, payload, timeoutMs, options) : target.invoke(dst, payload, timeoutMs, options);
+      }),
     isLinkReady: (dst) => (links.ownsOutbound(dst) ? links.isLinkReady(dst) : target.isLinkReady(dst)),
     // 控制方向的恢复与显式关闭只看出站：对端经会话控制本机时，本机经 Device Link 那条的状态照旧由 Device Link 报。
     needsLinkRecovery: (dst) => (links.knowsOutbound(dst) ? links.needsLinkRecovery(dst) : target.needsLinkRecovery(dst)),

@@ -405,13 +405,15 @@ describe('AgentNetSessionLinks', () => {
     });
     const calls: string[] = [];
     let deviceLinkRecovering = true;
+    let queued = 64;
+    let pending = true;
     const deviceLink = {
       onPresenceChanged: () => () => {},
       isLinkReady: () => false,
       needsLinkRecovery: () => deviceLinkRecovering,
       // 列表这类不需要链路的请求还在途：不挡会话。
-      hasPendingRequestsTo: () => true,
-      getReliableSendQueueDepth: () => 0,
+      hasPendingRequestsTo: () => pending,
+      getReliableSendQueueDepth: () => queued,
       openLink: async () => { calls.push('device-link:openLink'); return { appVersion: 'dl', allowlistHash: 'dl' }; },
       invoke: async () => { calls.push('device-link:invoke'); return { ok: true, result: 'device-link' }; },
       sendInvokeResult: () => { calls.push('device-link:sendInvokeResult'); },
@@ -423,6 +425,12 @@ describe('AgentNetSessionLinks', () => {
     expect(controller.crossAccountConnection()).toBe(controller);
     await expect(controller.invoke('a-host', { channel: 'device-link:remote-desktop:v1', args: [] })).resolves.toEqual({ ok: true, result: 'device-link' });
     await expect(controller.openLink('a-host', openPayload)).resolves.toMatchObject({ appVersion: 'dl' });
+    // A fresh read bypasses the 64-frame backlog. New writes stay on the old transport.
+    await expect(controller.invoke('a-host', { channel: 'local-db:sessions:list', args: [] })).resolves.toEqual({ ok: true, result: 'session' });
+    queued = 0;
+    pending = false;
+    await expect(controller.openLink('a-host', openPayload)).resolves.toMatchObject({ appVersion: 'host' });
+    await expect(controller.invoke('a-host', { channel: 'device-link:subscribe', args: [] })).resolves.toEqual({ ok: true, result: 'session' });
     deviceLinkRecovering = false;
     // 还没建链的调用也走会话。
     await expect(controller.invoke('a-host', { channel: 'device-link:remote-desktop:v1', args: [] })).resolves.toEqual({ ok: true, result: 'session' });
@@ -482,7 +490,9 @@ describe('AgentNetSessionLinks', () => {
     answerOnSession(links.host);
     const calls: string[] = [];
     const controller = routeSessionPeers(idleDeviceLink(calls), links.controller);
-    await expect(controller.openLink('a-host', openPayload)).resolves.toMatchObject({ appVersion: 'host' });
+    const opens = await Promise.all(Array.from({ length: 4 }, () => controller.openLink('a-host', { ...openPayload })));
+    expect(opens.map(accepted => accepted.appVersion)).toEqual(['host', 'host', 'host', 'host']);
+    expect(links.controller.getPeerLinkGeneration('a-host')).toBe(1);
     await expect(controller.invoke('a-host', { channel: 'local-db:sessions:list', args: [] })).resolves.toEqual({ ok: true, result: 'session' });
     expect(dialed).toEqual(['a-host']);
     expect(calls).toEqual([]);
@@ -497,6 +507,31 @@ describe('AgentNetSessionLinks', () => {
     await expect(controller.openLink('d-gone', openPayload)).resolves.toMatchObject({ appVersion: 'dl' });
     expect(performance.now() - goneAt).toBeLessThan(500);
     expect(dialed).toEqual(['a-host', 'd-gone']);
+  });
+
+  // Unit: an expired dial finishing during the next foreground attempt must
+  // not send that attempt down the older carrier before the session arrives.
+  it('keeps the next wait alive when a previous dial fails late', async () => {
+    vi.useFakeTimers();
+    try {
+      const dials: ((connected: boolean) => void)[] = [];
+      const { links, connect } = pair({ connected: false, agentNetPeer: () => 'online',
+        connect: () => new Promise<boolean>(resolve => dials.push(resolve)) });
+      answerOnSession(links.host);
+      const calls: string[] = [];
+      const client = routeSessionPeers(idleDeviceLink(calls), links.controller);
+      const first = client.openLink('a-host', openPayload);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await expect(first).resolves.toMatchObject({ appVersion: 'dl' });
+      const second = client.openLink('a-host', openPayload);
+      expect(dials).toHaveLength(2);
+      dials[0](false);
+      await vi.advanceTimersByTimeAsync(0);
+      connect();
+      dials[1](true);
+      await expect(second).resolves.toMatchObject({ appVersion: 'host' });
+      expect(calls).toEqual(['device-link:openLink:a-host']);
+    } finally { vi.useRealTimers(); }
   });
 
   // 同日真机：Host 重启时先连上 Device Link 中转，0.7 秒后才上 Agent-Net；控制端在这段时间里重试建链，中转上的探测拿到它

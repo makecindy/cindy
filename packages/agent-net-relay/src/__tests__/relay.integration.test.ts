@@ -862,6 +862,22 @@ describe('independent V2 relay', () => {
     expect(elsewhere.downs()).toEqual([]);
   });
 
+  // Integration: a phone must be able to verify the authenticated WebSocket
+  // independently of any peer. Previously any non-presence control closed it.
+  it('answers the mobile relay probe on the authenticated socket', async () => {
+    const f = await fixture();
+    const ws = new WebSocket(f.relay.url.replace(/^http/, 'ws') + API + '/ws', {
+      headers: { authorization: authorization(f.owner, f.certificate, 'GET', API + '/ws') },
+    });
+    cleanups.push(() => { ws.terminate(); });
+    const [hello] = await once(ws, 'message');
+    expect(JSON.parse(hello.toString())).toMatchObject({ type: 'hello', relayProbe: true });
+    const reply = once(ws, 'message');
+    ws.send('{"type":"relay-probe"}');
+    const [pong] = await reply;
+    expect(JSON.parse(pong.toString())).toEqual({ type: 'relay-pong' });
+  });
+
   // 2026-11-17 review: UDP credentials are a reusable secret. On an owner-pinned private relay over plain http (the
   // Desktop gateway on a LAN says so with X-Forwarded-Proto: http) the relay must not hand them out and the client
   // must not ask. Real relay socket and the production client entry. Smallest input: one upgrade. Tier: integration.

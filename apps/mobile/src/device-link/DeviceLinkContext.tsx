@@ -73,7 +73,7 @@ import { getMobileAgentNetPreferences, useMobileAgentNetPreferences, waitForMobi
   mobileAgentNetAllowsLegacy, mobileAgentNetRequiresEncryption } from './agentNetPreferences';
 import { isMobileAgentNetActive, openMobileAgentNetSocket, mobileAgentNetShouldUseLegacyPeer,
   mobileAgentNetShouldProbeLegacyPeer, mobileAgentNetPrefersPrimary, verifyMobileAgentNetTransportProof,
-  connectMobileAgentNetSessionPeer, mobileAgentNetPeerConnectedAt, mobileAgentNetPeerRoute, mobileAgentNetPeerState,
+  connectMobileAgentNetSessionPeer, mobileAgentNetPeerConnectedAt, mobileAgentNetPeerRoute, mobileAgentNetPeerState, mobileAgentNetRelayStalled,
   mobileAgentNetSession, notifyMobileAgentNetNetworkChanged, useMobileAgentNetSessions,
   clearMobileAgentNetIdentityRefusal } from './agentNetRuntime';
 import { AgentNetSessionLinks, agentNetSessionLane, outboundOnSession, routeSessionPeers, type PeerLinks } from '@cindy/agent-net/portable';
@@ -1486,6 +1486,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       selfDeviceId: () => routed.getSelfDeviceId(),
       transferCodec: connectionOptions.transferCodec,
       path: (deviceId) => mobileAgentNetPeerRoute(deviceId).path,
+      onRelayStall: mobileAgentNetRelayStalled,
       rttMs: (deviceId) => mobileAgentNetPeerRoute(deviceId).rttMs,
       connectedAt: mobileAgentNetPeerConnectedAt,
       // The link to it broke with its previous session and a new one is here: recover it as after a Device Link transport reset.
