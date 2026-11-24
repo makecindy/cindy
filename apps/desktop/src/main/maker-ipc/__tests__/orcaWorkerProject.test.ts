@@ -586,11 +586,13 @@ describe('Worker worktree source resolution', () => {
   // Real resolver, injected read/probe; invalid remembered refs must fall back, explicit refs must fail.
   // PR #7933 P2 (unit): a different subdirectory/checkout of the same repo must keep its HEAD.
   // Previously only identical directories bypassed the repository preference.
-  it.each(['valid', 'missing', 'read-failed', 'same', 'same-subdir', 'same-worktree', 'same-main', 'explicit'])(
+  it.each(['valid', 'local-origin-name', 'remote-default', 'missing', 'read-failed', 'same', 'same-subdir', 'same-worktree', 'same-main', 'explicit'])(
     'resolves remembered source: %s', async scenario => {
       const read = vi.fn(() => {
         if (scenario === 'read-failed') throw new Error('store unavailable');
-        return { baseRepo: '/repo', sourceBranch: 'release', revision: 1 };
+        const sourceBranch = scenario === 'local-origin-name' ? 'origin/main'
+          : scenario === 'remote-default' ? 'refs/remotes/origin/main' : 'release';
+        return { baseRepo: '/repo', sourceBranch, revision: 1 };
       });
       const sameRepo = scenario.startsWith('same');
       const directory = scenario === 'same-subdir' ? '/repo/apps/api'
@@ -607,7 +609,11 @@ describe('Worker worktree source resolution', () => {
       }, async () => {
         const result = await resolveWorkerWorktreeSourceSelection(directory, scenario === 'explicit' ? 'picked' : undefined,
           probe, leadDirectory, read);
-        expect(result.sourceBranch).toBe(scenario === 'valid' ? 'release' : scenario === 'explicit' ? 'picked' : 'main');
+        // #12391: short local preferences need namespacing; the saved remote ref is already full.
+        const expected = scenario === 'local-origin-name' ? 'refs/heads/origin/main'
+          : scenario === 'remote-default' ? 'refs/remotes/origin/main'
+          : scenario === 'valid' ? 'release' : scenario === 'explicit' ? 'picked' : 'main';
+        expect(result.sourceBranch).toBe(expected);
         if (scenario === 'missing' || scenario === 'read-failed') expect(result.fallbackReason).toContain('current checkout');
         if (sameRepo || scenario === 'explicit') expect(read).not.toHaveBeenCalled();
         else expect(read).toHaveBeenCalledWith('/repo');

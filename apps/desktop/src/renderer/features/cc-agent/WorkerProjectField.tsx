@@ -9,9 +9,10 @@ import { BranchWorktreeChip } from '@/components/new-chat/WorktreeChipsRow';
 import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { Button } from '@/components/ui/button';
 import { workingDirEquals } from '../../../shared/workingDir';
-import type {
-  WorkerProjectContext,
-  WorkerWorktreeRequest,
+import {
+  qualifyLocalWorkerBranch,
+  type WorkerProjectContext,
+  type WorkerWorktreeRequest,
 } from '../../../shared/orca-worker-project';
 
 const basename = (value: string) =>
@@ -127,10 +128,10 @@ export function useWorkerProjectSelection(
     sourceBranch || (snapshot?.key === key ? snapshot.preferredBranch : undefined);
   const currentBranch = context?.selected.branch ?? '';
   const branch = explicitBranch || currentBranch;
-  // The current checkout is local, even when its branch name looks like a remote ref.
+  // Picker and preference values already use a full ref for the remote option.
   const checkoutSource =
-    !explicitBranch && context?.selected.headState === 'branch' && currentBranch.startsWith('origin/')
-      ? `refs/heads/${currentBranch}`
+    explicitBranch || context?.selected.headState === 'branch'
+      ? qualifyLocalWorkerBranch(branch)
       : branch;
   return {
     context,

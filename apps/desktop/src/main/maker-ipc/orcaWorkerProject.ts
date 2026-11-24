@@ -14,10 +14,11 @@ import {
 import { gitExec } from '../worktree/gitExec';
 import { checkWorktreeSourceRef } from '../worktree/sourceRef';
 import * as WorktreeManager from '../worktree/WorktreeManager';
-import type {
-  WorkerProjectContext,
-  WorkerOwnedWorktree,
-  WorkerWorktreeSourceSelection,
+import {
+  qualifyLocalWorkerBranch,
+  type WorkerProjectContext,
+  type WorkerOwnedWorktree,
+  type WorkerWorktreeSourceSelection,
 } from '../../shared/orca-worker-project';
 
 const log = createLogger('orca-worker-project');
@@ -298,6 +299,8 @@ export async function resolveWorkerWorktreeSourceSelection(
       if (sourceBranch !== undefined) {
         try {
           validateWorktreeSource(sourceBranch);
+          // The new-task picker stores the remote option as a full tracking ref.
+          sourceBranch = qualifyLocalWorkerBranch(sourceBranch);
           await gitExec(
             ['rev-parse', '--verify', '--quiet', '--end-of-options', `${sourceBranch}^{commit}`],
             directory,
@@ -331,9 +334,8 @@ export async function resolveWorkerWorktreeSourceSelection(
     throw new Error('Worker worktree requires a repository with a commit');
   }
   // A checkout's attached branch is local even when its name looks like an origin ref.
-  const currentBranch = info.headState === 'branch' && info.branch.startsWith('origin/')
-    ? `refs/heads/${info.branch}`
-    : info.branch;
+  const currentBranch =
+    info.headState === 'branch' ? qualifyLocalWorkerBranch(info.branch) : info.branch;
   return { sourceBranch: currentBranch, source, ...(fallbackReason ? { fallbackReason } : {}) };
 }
 

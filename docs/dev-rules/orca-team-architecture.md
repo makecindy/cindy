@@ -226,7 +226,8 @@ Worker 权限是 **Worker 创建偏好**，与 Agent、模型、effort、Fast �
 记忆读取失败或分支不存在时退回当前检出分支；显式源分支仍严格校验提交引用。
 源分支是 origin 默认分支（`refs/remotes/origin/main` 或 `origin/main`）时，创建前与桌面新建任务
 一样先在网络预算内拉取它，拉取失败时使用本地已有的远端跟踪引用。创建和记录均使用完整远端引用。
-显式指定同名本地分支时用 `refs/heads/origin/main`，沿用当前检出时也保留本地分支。
+工具显式指定同名本地分支时用 `refs/heads/origin/main`。面板选择、仓库记忆与当前检出
+也会补全形如 `origin/main` 的本地分支引用，保留所选分支。
 工具结果的 `worktree_source` 写明实际源分支、来源与记忆回退原因。旧 Host 缺少读取能力时，
 面板也使用当前分支，不新增远程协议或 relay 恢复行为。
 
