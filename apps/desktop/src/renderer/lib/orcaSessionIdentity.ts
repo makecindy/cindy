@@ -1,5 +1,5 @@
 import type { OrcaRole, Session } from '@/lib/ccAgent.types';
-import { getSessionFor, orcaWorkflowsFor } from '@/lib/makerTransport';
+import { getSessionFor, orcaWorkflowsFor, orcaWorkflowsForDevice } from '@/lib/makerTransport';
 import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
 import { botRouteForOwnedSession, readLoadedBotProfiles } from '@/features/bots/botSessionOwners';
 
@@ -61,17 +61,20 @@ function loadedBotChatRoute(sessionId: string): string | null {
 export async function resolveSessionRoute(
   sessionId: string,
   session?: Pick<Session, 'orcaRole'> & Partial<Pick<Session, 'source'>> | null,
-  options?: { remote?: boolean },
+  options?: { remote?: boolean; deviceId?: string | null },
 ): Promise<string> {
   const targetSession = session ?? (await getSessionFor(sessionId).catch(() => null));
   if (!CINDY_MAKE_ENABLED && isCindyMakeSource(targetSession?.source)) return '/cc-agent';
 
   if (targetSession && isOrcaLeadSession(targetSession)) {
-    return `/cc-agent/${sessionId}`;
+    return standardSessionRoute(sessionId);
   }
 
   if (targetSession && isOrcaWorkerSession(targetSession)) {
-    const workflow = await orcaWorkflowsFor(sessionId)
+    const workflows = options?.deviceId === undefined
+      ? orcaWorkflowsFor(sessionId)
+      : options.deviceId ? orcaWorkflowsForDevice(options.deviceId) : window.electronAPI.localDb.orcaWorkflows;
+    const workflow = await workflows
       .getByWorkerSession(sessionId)
       .catch(() => null);
     return workflow ? orcaWorkerSessionRoute(workflow.leadSessionId, sessionId) : '/cc-agent';
@@ -81,7 +84,7 @@ export async function resolveSessionRoute(
   const botRoute = options?.remote ? null : loadedBotChatRoute(sessionId);
   if (botRoute) return botRoute;
 
-  return `/cc-agent/${sessionId}`;
+  return standardSessionRoute(sessionId);
 }
 
 /** Open the exact task with the ordinary UI, without resolving its parent or companion. */

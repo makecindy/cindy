@@ -60,7 +60,7 @@ export function RemoteWorkerSessionPane({
     const owner = getDataOwnerGeneration();
     setState('loading');
     void (async () => {
-      const existingOrigin = remoteProjectsStore.getSessionDeviceId(remoteSessionId);
+      const existingOrigin = remoteProjectsStore.getSessionDeviceId(remoteSessionId, true);
       if (existingOrigin && existingOrigin !== deviceId)
         throw new Error('Conflicting session owner');
       // 归属必须先于任何读写登记，任务视图才会把请求发到运行设备。
@@ -139,6 +139,7 @@ export function RemoteWorkerSessionPane({
           <CCAgentSessionView
             key={`${deviceId}:${remoteSessionId}`}
             sessionIdProp={remoteSessionId}
+            localSession={runsHere}
             compact
             compactToolbar
             viewVisible={viewVisible}

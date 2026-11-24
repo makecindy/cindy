@@ -20,19 +20,22 @@ import { isCompanionChatTarget } from '../bots/companionChatTarget';
  * 渲染中性占位(content-area 底色),不出现空白帧。bootSession 缺失时回落 /cc-agent。
  */
 
-import { useEffect } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { getBootDeviceId, getBootSessionId, getBootMessageClientId } from '@/lib/secondaryWindow';
-import { getSessionFor } from '@/lib/makerTransport';
-import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
-import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
+import { getDataOwnerGeneration, subscribeDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { resolveSessionNavigationRoute } from '@/lib/sessionNavigationTarget';
 import { createLogger } from '@/lib/logger';
+import { SessionEntryError, sessionEntryFailure } from './SessionEntryError';
 
 const log = createLogger('SecondaryWindowBootGate');
 
 export function SecondaryWindowBootGate() {
   const navigate = useNavigate();
+  const owner = useSyncExternalStore(subscribeDataOwnerGeneration, getDataOwnerGeneration);
+  const [failure, setFailure] = useState<ReturnType<typeof sessionEntryFailure> | null>(null);
+  const [retry, setRetry] = useState(0);
   useEffect(() => {
     const bootSessionId = getBootSessionId();
     if (!bootSessionId) {
@@ -41,25 +44,17 @@ export function SecondaryWindowBootGate() {
       return;
     }
 
+    setFailure(null);
     let cancelled = false;
+    const isCurrent = () => !cancelled && owner === getDataOwnerGeneration();
     const bootDeviceId = getBootDeviceId();
     const messageClientId = getBootMessageClientId();
     void (async () => {
       if (isCompanionChatTarget(bootSessionId)) return bootSessionId;
-      if (!bootDeviceId) return resolveSessionRoute(bootSessionId);
-
-      // The remote session is not in the local DB. Pin its origin before any
-      // metadata read so getSessionFor tunnels to the owning device even when
-      // the secondary window's remote mirror has not hydrated yet.
-      remoteProjectsStore.pinSessionOrigin(bootDeviceId, bootSessionId);
-      const mirroredSession = remoteProjectsStore
-        .getVisibleMergedRemoteSessions()
-        .find((session) => session.id === bootSessionId);
-      const remoteSession = mirroredSession ?? (await getSessionFor(bootSessionId));
-      return resolveSessionRoute(bootSessionId, remoteSession);
+      return resolveSessionNavigationRoute({ sessionId: bootSessionId, deviceHint: bootDeviceId, isCurrent });
     })()
       .then((target) => {
-        if (cancelled) return;
+        if (!target || !isCurrent()) return;
         navigate(target, {
           replace: true,
           ...(messageClientId
@@ -78,18 +73,20 @@ export function SecondaryWindowBootGate() {
         });
       })
       .catch((err) => {
-        log.warn('failed to resolve boot session route, falling back to /cc-agent', {
+        if (!isCurrent()) return;
+        log.warn('failed to resolve boot session route', {
           bootSessionId,
           error: err instanceof Error ? err.message : String(err),
         });
-        if (!cancelled) navigate('/cc-agent', { replace: true });
+        setFailure(sessionEntryFailure(err));
       });
 
     return () => {
       cancelled = true;
     };
-  }, [navigate]);
+  }, [navigate, owner, retry]);
 
+  if (failure) return <SessionEntryError reason={failure} onRetry={() => setRetry(value => value + 1)} />;
   // 中性占位:解析完成前不渲染任何 session 视图,只铺 content-area 底色撑满,
   // 避免空白帧 / 单栏闪现(规则 12)。
   return <div className="h-full w-full bg-content-area" />;

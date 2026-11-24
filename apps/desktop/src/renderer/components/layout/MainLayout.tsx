@@ -152,6 +152,7 @@ import { requestSessionSwitch } from '@/features/cc-agent/lib/sessionSwitchComma
 import { makeFolderPickerNewMakerRouteState } from '@/features/cc-agent/lib/newMakerRouteState';
 import { makeGenericNewMakerRouteState } from '@/features/cc-agent/lib/genericNewMakerRouteState';
 import { resolveSessionRoute, standardSessionRoute } from '@/lib/orcaSessionIdentity';
+import { resolveSessionNavigationRoute, restoreSessionNavigationOrigin } from '@/lib/sessionNavigationTarget';
 import { canonicalBotSessionId, ensureBotProfilesLoaded, getBotProfiles, useBotProfiles } from '@/features/bots/botStore';
 import { botRouteForOwnedSession, createSessionEntryNavigator, findBotProfileForSession, remoteBotRouteForSession, resolveBotRouteForSessionEntry } from '@/features/bots/botSessionOwners';
 import { readRemoteBots } from '@/features/bots/useRemoteBots';
@@ -162,6 +163,7 @@ import { ProviderShareGlobalHost } from '@/features/provider-share/ProviderShare
 import { RelayShareGlobalHost } from '@/features/relay-share/RelayShareGlobalHost';
 import { applyScreenshotComposeRequest } from '@/features/region-screenshot/screenshotTaskHandoff';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
+import { getLastVerifiedSessionDeviceId, getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import {
   isAgentIslandVisibleSessionOwnedByWorkdirBrowseRoute,
   isAgentIslandVisibleSessionOwnedByBotRoute,
@@ -504,7 +506,7 @@ export function MainLayout() {
   // (下面的 `!isSettingsRoute && <ChromeActions>`)，快捷键不能跟着一起消失——
   // hook 的语义包含「从设置等栈外页后退回最近任务」。浏览栈按数据所有者
   // (账号 + 恢复代次)隔离：切号时不能把上一个账号的任务带过来。
-  const { dataOwnerId, dataOwnerRecoveryEpoch, dataOwnerGeneration, mode: authMode, user: authUser } = useAuth();
+  const { dataOwnerId, dataOwnerRecoveryEpoch, dataOwnerGeneration, deviceId: selfDeviceId, mode: authMode, user: authUser } = useAuth();
   // 礼品卡链接到达时的身份。只在确定不是个人身份（未登录 Cindy 账号，或当前是组织身份）时拦下；
   // 账号资料还没加载出来时照常放行，由计费页自己的可见性判断兜底。用 ref 读最新值，
   // 不让链接处理器随身份变化重建。
@@ -618,19 +620,29 @@ export function MainLayout() {
   currentPathRef.current = `${location.pathname}${location.search}`;
   const navigateToOrdinarySession = useCallback(
     (sessionId: string, messageClientId?: string, isLatest: () => boolean = () => true, deviceId?: string) => {
-      // 已知镜像可提前解析 Orca 角色；明确指定电脑时，先由任务入口恢复并校验
-      // 来源，避免读到本机同 ID。Worker 后续转到 Lead 时保留 device 和 searchJump。
-      const remoteSession =
-        remoteProjectsStore.getVisibleMergedRemoteSessions().find((s) =>
-          s.id === sessionId && (!deviceId || s.deviceLinkDeviceId === deviceId)) ?? null;
-      const route = deviceId === 'local'
-        ? Promise.resolve(standardSessionRoute(sessionId))
-        : deviceId
-        ? Promise.resolve(remoteBotRouteForSession(readRemoteBots().filter(bot => bot.deviceId === deviceId), sessionId)?.route
-          ?? `/cc-agent/${encodeURIComponent(sessionId)}`)
-        : resolveSessionRoute(sessionId, remoteSession);
-      void route.then((target) => {
-        if (!isLatest()) return;
+      const resolveTarget = async () => {
+        if (deviceId) {
+          const addressedBot = deviceId === 'local' ? null : deviceId === selfDeviceId
+            ? botRouteForOwnedSession(getBotProfiles(), sessionId)
+            : remoteBotRouteForSession(readRemoteBots().filter(bot => bot.deviceId === deviceId), sessionId);
+          if (addressedBot && !addressedBot.route.startsWith('/cc-agent/')) {
+            // Companion routes do not mount the ordinary task origin gate.
+            const restored = await restoreSessionNavigationOrigin({
+              sessionId, deviceHint: deviceId, selfDeviceId, isCurrent: isLatest,
+            });
+            return restored ? addressedBot.route : null;
+          }
+          // The ordinary gate validates the requested computer and any Orca Lead.
+          return standardSessionRoute(sessionId);
+        }
+        if (getStickySessionDeviceId(sessionId) && !getLastVerifiedSessionDeviceId(sessionId)) {
+          return resolveSessionNavigationRoute({ sessionId, selfDeviceId, isCurrent: isLatest });
+        }
+        const remoteSession = remoteProjectsStore.getVisibleMergedRemoteSessions().find(row => row.id === sessionId);
+        return resolveSessionRoute(sessionId, remoteSession);
+      };
+      void resolveTarget().then((target) => {
+        if (!target || !isLatest()) return;
         if (deviceId && target !== '/cc-agent') {
           const url = new URL(target, 'https://cindy.invalid');
           url.searchParams.set('device', deviceId);
@@ -654,9 +666,9 @@ export function MainLayout() {
           navigate(target);
         }
 
-      });
+      }).catch(() => { if (isLatest()) toast.error(t('chat.markdownRenderer.openLinkFailed')); });
     },
-    [navigate],
+    [navigate, selfDeviceId, t],
   );
   const sessionEntryDepsRef = useRef({ navigate, navigateToOrdinarySession });
   sessionEntryDepsRef.current = { navigate, navigateToOrdinarySession };
@@ -667,7 +679,6 @@ export function MainLayout() {
       const owner = getDataOwnerGeneration();
       return () => isDataOwnerGenerationCurrent(owner);
     },
-    isRemoteDevice: async (deviceId) => deviceId !== await window.electronAPI.getDeviceId(),
     readKnownBotRoute: (sessionId) => botRouteForOwnedSession(getBotProfiles(), sessionId)
       ?? remoteBotRouteForSession(readRemoteBots(), sessionId),
     resolveBotRoute: (sessionId) => resolveBotRouteForSessionEntry(sessionId, {

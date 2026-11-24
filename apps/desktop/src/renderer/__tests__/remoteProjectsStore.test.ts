@@ -8,7 +8,7 @@
  *  - markDeviceDisconnected:断线保留快照 + 在线索引清理;removeDevice / clear:明确移除时清理
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   remoteProjectsStore,
@@ -24,6 +24,10 @@ import { commitRemoteSessionHandoff, previewRemoteCreation } from '@/features/cc
 import * as remoteRefresh from '@/features/device-link/refreshRemoteSessions';
 import { clearSessionStarting } from '@/lib/sessionStartingStore';
 import type { Session } from '@/lib/ccAgent.types';
+import { getSessionFor } from '@/lib/makerTransport';
+import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
+import { resolveSessionNavigationRoute, restoreSessionNavigationOrigin } from '@/lib/sessionNavigationTarget';
 
 /** 造一个最小可用 Session(store 只存/透传,不校验字段)。 */
 function mk(id: string, partial: Partial<Session> = {}): Session {
@@ -55,6 +59,178 @@ function mk(id: string, partial: Partial<Session> = {}): Session {
     updatedAt: '2026-01-01T00:00:00.000Z',
   };
 }
+
+// Unit: navigation previously bound a host even when its request failed, and
+// session-ID-only reads then went to that host. Keep both production caches and
+// the routed transport real, with only the local and device IPCs stubbed.
+describe('session navigation and shared remote origins', () => {
+  const local = vi.fn<(id: string) => Promise<Session | null>>();
+  const remote = vi.fn<(device: string, channel: string, args: unknown[]) => Promise<unknown>>();
+  const target = { sessionId: 'task', selfDeviceId: 'this-mac', isCurrent: () => true };
+  const creation = {
+    deviceId: 'partner', deviceName: 'Partner', remoteSessionId: 'task', logTag: 'test',
+    nowIso: '2026-11-18T00:00:00.000Z',
+    createArgs: { id: 'task', agentKind: 'codex', workspaceKind: 'project', model: 'fixture',
+      effort: 'medium', permissionMode: 'default', fastMode: false, workingDir: '/fixture' },
+  } as const;
+
+  beforeEach(() => {
+    setDataOwnerGeneration('navigation-owner');
+    local.mockReset().mockResolvedValue(null);
+    remote.mockReset().mockResolvedValue(null);
+    vi.stubGlobal('window', { electronAPI: {
+      localDb: { sessions: { get: local } }, deviceLink: { invoke: remote },
+    } });
+  });
+
+  afterEach(() => {
+    clearSessionStarting('task');
+    setDataOwnerGeneration(null);
+    vi.unstubAllGlobals();
+  });
+
+  it.each(['offline', 'missing', 'same-id row'] as const)('leaves the local transport intact after a remote link returns %s', async (outcome) => {
+    const task = mk('task');
+    local.mockResolvedValue(task);
+    if (outcome === 'offline') remote.mockRejectedValue(new Error('[DEVICE_LINK_DEVICE_OFFLINE] Offline'));
+    if (outcome === 'same-id row') remote.mockResolvedValue(mk('task', { title: 'Other task' }));
+
+    await expect(restoreSessionNavigationOrigin({ ...target, deviceHint: 'unknown-computer' })).rejects.toThrow();
+    expect(getSessionDeviceId('task')).toBeUndefined();
+    await expect(getSessionFor('task')).resolves.toBe(task);
+    expect(remote).toHaveBeenCalledExactlyOnceWith('unknown-computer', 'local-db:sessions:get', ['task']);
+  });
+
+  it('repairs a provisional origin and its sticky lookup when the self link confirms a local task', async () => {
+    previewRemoteCreation(creation, 'Draft', { clientId: 'first', role: 'user', content: 'Draft', createdAt: creation.nowIso });
+    remoteProjectsStore.clearCreationPreview('task');
+    expect(getStickySessionDeviceId('task')).toBe('partner');
+    const task = mk('task');
+    local.mockResolvedValue(task);
+
+    const observedOrigins: (string | undefined)[] = [];
+    const unsubscribe = remoteProjectsStore.subscribe(() => observedOrigins.push(getStickySessionDeviceId('task')));
+    try {
+      await expect(restoreSessionNavigationOrigin({ ...target, deviceHint: 'this-mac' })).resolves.toBe(true);
+    } finally {
+      unsubscribe();
+    }
+    expect(observedOrigins).toEqual([undefined]);
+    expect(getSessionDeviceId('task')).toBeUndefined();
+    expect(getStickySessionDeviceId('task')).toBeUndefined();
+    await expect(getSessionFor('task')).resolves.toBe(task);
+    expect(remote).not.toHaveBeenCalled();
+  });
+
+  it('keeps an offline confirmed creation on its host after a mirror clear', async () => {
+    const refresh = vi.spyOn(remoteRefresh, 'refreshRemoteDeviceSessions').mockResolvedValue('ok');
+    try { commitRemoteSessionHandoff(creation); } finally { refresh.mockRestore(); }
+    remoteProjectsStore.clear();
+    local.mockResolvedValue(mk('task'));
+    remote.mockRejectedValue(new Error('[DEVICE_LINK_DEVICE_OFFLINE] Offline'));
+
+    await expect(restoreSessionNavigationOrigin({ ...target, deviceHint: 'partner' })).rejects.toThrow('Offline');
+    expect(local).not.toHaveBeenCalled();
+    await expect(restoreSessionNavigationOrigin({ ...target, deviceHint: 'local' })).rejects.toThrow('Conflicting task origins');
+    await expect(getSessionFor('task')).rejects.toThrow('Offline');
+    expect(remote.mock.calls).toEqual([
+      ['partner', 'local-db:sessions:get', ['task']],
+      ['partner', 'local-db:sessions:get', ['task']],
+    ]);
+    setDataOwnerGeneration('another-navigation-owner');
+    expect(getStickySessionDeviceId('task')).toBeUndefined();
+    await expect(getSessionFor('task')).resolves.toMatchObject({ id: 'task' });
+  });
+
+  it('keeps the current origin when two remote computers have the same task ID', async () => {
+    remoteProjectsStore.setDeviceSessions('partner', 'Partner', [mk('task')]);
+    remoteProjectsStore.setDeviceSessions('other', 'Other', [mk('task')]);
+    const original = getSessionDeviceId('task');
+
+    await expect(restoreSessionNavigationOrigin({ ...target, deviceHint: 'partner' })).rejects.toThrow('Conflicting task origins');
+    expect(getSessionDeviceId('task')).toBe(original);
+    expect(remote).not.toHaveBeenCalled();
+  });
+
+  it('repairs a provisional pin from the confirmed remote row and keeps the new origin on reconnect', async () => {
+    previewRemoteCreation(creation, 'Draft', { clientId: 'first', role: 'user', content: 'Draft', createdAt: creation.nowIso });
+    remoteProjectsStore.clearCreationPreview('task');
+    expect(getStickySessionDeviceId('task')).toBe('partner');
+    const row = mk('task', { title: 'The archived task', status: 'archived' });
+    remote.mockResolvedValue(row);
+
+    await expect(restoreSessionNavigationOrigin({ ...target, deviceHint: 'actual-host' })).resolves.toBe(true);
+    expect(remoteProjectsStore.getDeviceSessions('actual-host')[0]?.title).toBe('The archived task');
+    remoteProjectsStore.clear();
+    expect(getStickySessionDeviceId('task')).toBe('actual-host');
+    await expect(getSessionFor('task')).resolves.toBe(row);
+    expect(remote.mock.calls.map(([device]) => device)).toEqual(['actual-host', 'actual-host']);
+  });
+
+  it.each(['another owner', 'another generation', 'cancelled click'] as const)('discards in-flight metadata after %s', async (boundary) => {
+    let settleOld!: (row: Session) => void;
+    const oldRead = new Promise<Session>((resolve) => { settleOld = resolve; });
+    remote.mockReturnValueOnce(oldRead).mockResolvedValueOnce(mk('task', { title: 'Current owner task' }));
+    let current = true;
+    const oldNavigation = restoreSessionNavigationOrigin({ ...target, deviceHint: 'partner', isCurrent: () => current });
+    expect(remote).toHaveBeenCalledTimes(1);
+    if (boundary === 'another owner') setDataOwnerGeneration('another-navigation-owner');
+    if (boundary === 'another generation') setDataOwnerGeneration('navigation-owner');
+    if (boundary === 'cancelled click') current = false;
+
+    if (boundary !== 'cancelled click') {
+      await expect(restoreSessionNavigationOrigin({ ...target, deviceHint: 'partner' })).resolves.toBe(true);
+    }
+    settleOld(mk('task', { title: 'Prior owner task' }));
+    await expect(oldNavigation).resolves.toBe(false);
+    expect(remoteProjectsStore.getDeviceSessions('partner')[0]?.title)
+      .toBe(boundary === 'cancelled click' ? undefined : 'Current owner task');
+    expect(remote).toHaveBeenCalledTimes(boundary === 'cancelled click' ? 1 : 2);
+  });
+
+  it('does not bind a worker when the workflow cannot open its lead', async () => {
+    remote.mockImplementation(async (_device, channel, [id]) => {
+      if (channel === 'local-db:sessions:get') return { ...mk(String(id)), orcaRole: 'worker' };
+      throw new Error('Workflow unavailable');
+    });
+
+    await expect(resolveSessionNavigationRoute({ ...target, deviceHint: 'partner' })).resolves.toBe('/cc-agent');
+    expect(getSessionDeviceId('task')).toBeUndefined();
+    expect(remoteProjectsStore.getDeviceSessions('partner')).toEqual([]);
+  });
+
+  it('rejects a same-ID lead conflict before binding either task from a worker link', async () => {
+    remote.mockImplementation(async (_device, channel, [id]) => {
+      if (channel === 'local-db:orca-workflows:get-by-worker-session') return { leadSessionId: 'lead' };
+      return { ...mk(String(id)), orcaRole: id === 'task' ? 'worker' : 'lead' };
+    });
+    local.mockImplementation(async id => id === 'lead' ? mk(id) : null);
+
+    await expect(resolveSessionNavigationRoute({ ...target, deviceHint: 'partner' })).rejects.toThrow('Conflicting task origins');
+    expect(getSessionDeviceId('task')).toBeUndefined();
+    expect(getSessionDeviceId('lead')).toBeUndefined();
+    expect(remoteProjectsStore.getDeviceSessions('partner')).toEqual([]);
+  });
+
+  it('discards a route if the host changes the task role during the local collision check', async () => {
+    let notifyLocalRead!: () => void;
+    const localReadStarted = new Promise<void>(resolve => { notifyLocalRead = resolve; });
+    let finishLocalRead!: (row: Session | null) => void;
+    const localRead = new Promise<Session | null>(resolve => { finishLocalRead = resolve; });
+    local.mockImplementation(() => { notifyLocalRead(); return localRead; });
+    remote.mockResolvedValue(mk('task'));
+
+    const navigation = resolveSessionNavigationRoute({ ...target, deviceHint: 'partner' });
+    await localReadStarted;
+    remoteProjectsStore.setDeviceSessions('partner', 'Partner', [{ ...mk('task'), orcaRole: 'worker' }]);
+    finishLocalRead(null);
+
+    await expect(navigation).rejects.toThrow('Remote task read invalidated');
+    expect(remoteProjectsStore.getDeviceSessions('partner')[0]?.orcaRole).toBe('worker');
+    remoteProjectsStore.clear();
+    expect(getSessionDeviceId('task')).toBeUndefined();
+  });
+});
 
 describe('remoteProjectsStore', () => {
   // Unit: a delayed create can overlap both a stale listing and its first real row.
