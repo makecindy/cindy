@@ -18097,10 +18097,20 @@ describe('usage-limit wait (ordinary tasks)', () => {
   const LIMIT_SIGNALS = { sdkError: 'rate_limit', usageResetAt: 5_000_000 };
   // Regression: scheduled quota failures used to discard recovery before the
   // reset-time resolver could run. A real run keeps Retry and the same origin.
-  it.each([true, false])('keeps scheduled quota recovery and resumes once; progress=%s', async (progress) => {
+  // Group retries also keep host-owned schedule provenance through preparation.
+  it.each((['quota-reset', 'provider-group'] as const).flatMap(owner =>
+    [true, false].map(progress => ({ owner, progress }))),
+  )('keeps scheduled quota recovery and resumes once through $owner; progress=$progress', async ({ owner, progress }) => {
     const h = createHarness();
     const sid = 'scheduled-quota';
     const origin = { kind: 'scheduler', scheduleId: 'sch-1', scheduleName: 'Check', runId: 'run-1' } as const;
+    const send = h.sendToAgent.getMockImplementation()!;
+    h.sendToAgent.mockImplementation((id, message, create, opts) => {
+      if (h.sendToAgent.mock.calls.length > 1) {
+        expect(h.coordinator.scheduledQuotaOrigin(id, opts.persistUserMessage?.clientId)).toEqual(origin);
+      }
+      return send(id, message, create, opts);
+    });
     h.setHasAssistantProgressAfter(async () => progress);
     h.coordinator.enqueue(sid, makeItem('quota-original', 'original work', { origin }));
     await flush();
@@ -18111,8 +18121,11 @@ describe('usage-limit wait (ordinary tasks)', () => {
     expect(h.coordinator.armUsageLimitWait(sid, token, 9_000_000)).toBe(true);
     h.coordinator.onTurnEvent(sid, 'done');
     expect(h.coordinator.getProjection(sid).usageLimitWait).toEqual({ resumeAt: 9_000_000 });
-    expect(await h.coordinator.continueAfterUsageLimitReset(sid, token, INFO)).toBe('resumed');
-    expect(await h.coordinator.continueAfterUsageLimitReset(sid, token, INFO)).toBe('superseded');
+    const resume = owner === 'provider-group'
+      ? () => h.coordinator.continueAfterProviderGroupRecovery(sid, token, INFO)
+      : () => h.coordinator.continueAfterUsageLimitReset(sid, token, INFO);
+    expect(await resume()).toBe('resumed');
+    expect(await resume()).toBe('superseded');
     await flush();
     expect(h.sendToAgent).toHaveBeenCalledTimes(2);
     expect(h.sendToAgent.mock.calls[1][1]).toMatchObject({ content: progress ? CONTINUE_AFTER_ERROR_PROMPT : 'original work' });
@@ -18954,6 +18967,12 @@ describe('provider group computer switch hold', () => {
   it.each([
     { name: 'zero output', progress: false, blocked: false },
     { name: 'partial output', progress: true, blocked: false },
+    { name: 'scheduled relay zero output', progress: false, blocked: false, patch: {
+      origin: { kind: 'scheduler', scheduleId: 'schedule', scheduleName: 'Check', runId: 'run' },
+    } },
+    { name: 'scheduled direct partial output', progress: true, blocked: false, patch: {
+      origin: { kind: 'scheduler', scheduleId: 'schedule', scheduleName: 'Check', runId: 'run' },
+    } },
     { name: 'phone input', progress: false, blocked: false, patch: { fromMobileClient: true, fromDeviceLinkClient: true } },
     { name: 'session closes before eligibility', progress: false, blocked: false },
     { name: 'close then user takeover', progress: false, blocked: true },
@@ -19024,7 +19043,7 @@ describe('provider group computer switch hold', () => {
       const dispatch = () => {
         eligibleAtSend.push(h.coordinator.ownsCompanionProviderGroupInput(id, {
           kind: 'before-send', clientId: sendOpts.persistUserMessage?.clientId,
-        }));
+        }) || !!h.coordinator.scheduledQuotaOrigin(id, sendOpts.persistUserMessage?.clientId));
         return vendorSend(id, message, createOpts, sendOpts);
       };
       if (saveHost && vendorSend.mock.calls.length === 1) {
@@ -19046,11 +19065,12 @@ describe('provider group computer switch hold', () => {
     });
     const eligibility = createAutomaticContinueEligibility({
       ownerEpoch: () => 'owner', isPaused: id => h.coordinator.isExecutionPaused(id),
-      readSession: async () => ({ source: 'bot', status: 'active' }), isShared: () => false,
+      readSession: async () => ({ source: 'bot', status: 'active', agentDeviceId: 'share:group' }), isShared: () => false,
       goalOwnsRecovery: async () => false,
       readCompanion: async () => ({ role: 'canonical', profileStatus: 'active', hiddenAt: null, shadowed: false }),
       ownsCompanionInput: (id, context) => (context.kind === 'failure' || context.kind === 'before-send')
         && h.coordinator.ownsCompanionProviderGroupInput(id, context),
+      ownsScheduledQuotaInput: (id, clientId) => !!h.coordinator.scheduledQuotaOrigin(id, clientId),
     });
     const switchAgentLocation = vi.fn<ProviderGroupServiceDeps['switchAgentLocation']>(async id => {
       if (!groupMode) expect(guestSwitch.takeForOpen(id)).toBe(offerToken);
@@ -19075,6 +19095,7 @@ describe('provider group computer switch hold', () => {
     const router = createProviderGroupRouter({ directory, readGroup: () => config,
       listBindings: () => ({ [sid]: binding }), isTurnRunning: () => false, now: () => now, random: () => 0 });
     const fallback = vi.fn();
+    const directGuest = { ownerRoute: 'share:group', requestSwitch: async () => offerToken };
     group = createProviderGroupService({
       router, directory, readGroup: () => config,
       readBinding: () => groupMode ? binding : null,
@@ -19101,6 +19122,7 @@ describe('provider group computer switch hold', () => {
         return h.coordinator.continueAfterProviderGroupRecovery(id, token, info);
       },
       switchAgentLocation, guestSwitch, fallback, now: () => now, log: mocks.logger,
+      ...(name === 'scheduled direct partial output' ? { directGuestSession: () => directGuest } : {}),
     // The service supplies real continuation metadata for each routing path.
     } satisfies Partial<ProviderGroupServiceDeps> as unknown as ProviderGroupServiceDeps);
     let handling: Promise<void> | undefined;
@@ -19126,7 +19148,7 @@ describe('provider group computer switch hold', () => {
       return 'sdk-session';
     });
     expect(h.coordinator.ownsCompanionProviderGroupInput(sid, { kind: 'before-send', clientId: 'other' })).toBe(false);
-    guestSwitch.offer(sid, offerToken);
+    if (name !== 'scheduled direct partial output') guestSwitch.offer(sid, offerToken);
     h.setRunning(false);
     // The reported Codex error had only message/providerId, no sdkError code.
     h.coordinator.onTurnEvent(sid, 'error', limitMessage, reason ? { reason } : undefined);
@@ -19169,6 +19191,7 @@ describe('provider group computer switch hold', () => {
     if (!blocked) {
       expect(vendorSend.mock.calls[1]![1]).toEqual({ type: 'user', content: progress ? CONTINUE_AFTER_ERROR_PROMPT : 'finish the task' });
       expect(fallback).not.toHaveBeenCalled();
+      if (name.startsWith('scheduled ')) expect(vendorSend.mock.calls[1]![3].origin).toMatchObject({ kind: 'scheduler', runId: 'run' });
       const originalToken = h.onUsageLimitedTurnError.mock.calls[0]![3];
       expect(h.coordinator.ownsCompanionProviderGroupInput(sid, { kind: 'failure', token: originalToken })).toBe(false);
     } else if (name !== 'user takeover' && name !== 'close then user takeover') {
@@ -19204,7 +19227,10 @@ describe('provider group computer switch hold', () => {
       expect(h.coordinator.getProjection(sid).error).toBeNull();
       expect(guestSwitch.takeForOpen(sid)).toBeUndefined();
     }
-    expect(eligibleAtSend).toEqual(Array(eligibleAtSend.length).fill(name !== 'unknown author' && name !== 'another task'));
+    const expectedEligibility = Array(eligibleAtSend.length).fill(name !== 'unknown author' && name !== 'another task');
+    // Initial scheduled input is not a human action; only its owned quota retry qualifies here.
+    if (name.startsWith('scheduled ')) expectedEligibility[0] = false;
+    expect(eligibleAtSend).toEqual(expectedEligibility);
     h.coordinator.onSessionClosed(sid);
   });
   const LIMIT_SIGNALS = { sdkError: 'rate_limit', usageResetAt: 5_000_000 };
