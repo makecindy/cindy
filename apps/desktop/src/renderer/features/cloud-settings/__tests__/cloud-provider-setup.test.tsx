@@ -370,7 +370,9 @@ describe('cloud provider setup while a keyed detection is running', () => {
       within(dialog).getByRole('button', { name: 'settings.providers.connection.saveProvider' }),
     );
     // The save reaches the instance while the detection still holds it.
-    await waitFor(() => expect(stages.map((stage) => stage.kind)).toContain('custom-create'));
+    await waitFor(() => expect(stages.map((stage) => stage.kind)).toContain('custom-create'), {
+      timeout: 3000,
+    });
     // Its ticket run waits while the instance is still running the detection.
     await act(() => vi.advanceTimersByTimeAsync(200));
     expect(runs).toHaveLength(1);

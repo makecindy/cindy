@@ -21,6 +21,8 @@ vi.mock('react-i18next', () => ({
     i18n: { language: 'en' },
   }),
 }));
+// The first instance read can take longer than 1 s on a loaded CI runner.
+const FIRST_LOAD = { timeout: 3000 };
 const mock = vi.hoisted(() => ({
   access: 'allowed',
   confirm: vi.fn<(input: { title?: string; confirmText?: string }) => Promise<boolean>>(),
@@ -158,7 +160,7 @@ describe('cloud instances on My devices cards', () => {
     mock.access = access;
     renderDevices();
     // An admitted account loads the instance operations on first use; the card is drawn again.
-    if (access === 'allowed') await waitFor(() => expect(api.instanceList).toHaveBeenCalled());
+    if (access === 'allowed') await waitFor(() => expect(api.instanceList).toHaveBeenCalled(), FIRST_LOAD);
     const cloudRow = row(CLOUD);
     if (access !== 'allowed') {
       expect(within(cloudRow).getByRole('button', { name: 'settings.devices.delete' })).toBeTruthy();
@@ -173,7 +175,7 @@ describe('cloud instances on My devices cards', () => {
       return;
     }
     // CIS state replaces the directory's online / last seen in the subtitle; no separate state row.
-    await within(cloudRow).findByText(/· cloudSettings\.instance\.state\.running$/);
+    await within(cloudRow).findByText(/· cloudSettings\.instance\.state\.running$/, {}, FIRST_LOAD);
     expect(within(cloudRow).queryByText(/settings\.devices\.status\.online/)).toBeNull();
     // Running and signed in: the actions are in the ⋯ menu, nothing under the header.
     expect(manage()).toBeTruthy();
@@ -199,7 +201,7 @@ describe('cloud instances on My devices cards', () => {
   it('saves maintenance as it changes in the dialog, and closes without asking', async () => {
     api.instancePolicy = vi.fn(async () => withPolicy(CLOUD, false).maintenance);
     const router = renderDevices();
-    await within(row(CLOUD)).findByText(/· cloudSettings\.instance\.state\.running$/);
+    await within(row(CLOUD)).findByText(/· cloudSettings\.instance\.state\.running$/, {}, FIRST_LOAD);
     expect(api.instanceRead).not.toHaveBeenCalled();
     const trigger = manage();
     await run('cloudSettings.instance.updates');
@@ -228,7 +230,7 @@ describe('cloud instances on My devices cards', () => {
 
   it('closes with 完成', async () => {
     renderDevices();
-    await within(row(CLOUD)).findByText(/· cloudSettings\.instance\.state\.running$/);
+    await within(row(CLOUD)).findByText(/· cloudSettings\.instance\.state\.running$/, {}, FIRST_LOAD);
     await run('cloudSettings.instance.updates');
     const dialog = await screen.findByRole('dialog', { name: 'cloudSettings.instance.updates' });
     fireEvent.click(within(dialog).getByRole('button', { name: 'cloudSettings.instance.done' }));
@@ -243,7 +245,7 @@ describe('cloud instances on My devices cards', () => {
     ]);
     api.instanceUpgrade = vi.fn(async () => ({ operationId: 'op', phase: 'requested', active: true, updatedAtMs: 1 }));
     renderDevices();
-    await within(row(CLOUD)).findByText(/· cloudSettings\.instance\.state\.running$/);
+    await within(row(CLOUD)).findByText(/· cloudSettings\.instance\.state\.running$/, {}, FIRST_LOAD);
     await run('cloudSettings.instance.updates');
     const dialog = await screen.findByRole('dialog');
     const upgrade = await within(dialog).findByRole('button', { name: 'cloudSettings.instance.upgradeNow' });
@@ -269,7 +271,7 @@ describe('cloud instances on My devices cards', () => {
     const timer = vi.spyOn(globalThis, 'setInterval');
     api.instanceList!.mockResolvedValue([view(CLOUD, extra)]);
     renderDevices();
-    await within(row(CLOUD)).findByText(/· cloudSettings\.instance\.state\.running$/);
+    await within(row(CLOUD)).findByText(/· cloudSettings\.instance\.state\.running$/, {}, FIRST_LOAD);
     expect(!!manage().querySelector('.bg-\\[var\\(--status-bar-accent\\)\\]')).toBe(marked);
     const updates = item(await openMenu(), 'cloudSettings.instance.updates');
     expect(updates.textContent).toBe(
@@ -354,7 +356,7 @@ describe('cloud instances on My devices cards', () => {
       view(CLOUD, { observedAtMs: 1_000, upgradeOperation: { operationId: 'op', phase: 'completed', active: false, updatedAtMs: 2_000 } }),
     ]);
     renderDevices();
-    await within(row(CLOUD)).findByText(/· cloudSettings\.instance\.state\.running$/);
+    await within(row(CLOUD)).findByText(/· cloudSettings\.instance\.state\.running$/, {}, FIRST_LOAD);
   });
 
   // Regression: the card offers no explicit refresh, so an unknown sleep/wake result must not stay
@@ -368,7 +370,7 @@ describe('cloud instances on My devices cards', () => {
       mock.confirm.mockResolvedValue(true);
       renderDevices();
       const cloudRow = row(CLOUD);
-      await within(cloudRow).findByText(/· cloudSettings\.instance\.state\.running$/);
+      await within(cloudRow).findByText(/· cloudSettings\.instance\.state\.running$/, {}, FIRST_LOAD);
       await run('cloudSettings.instance.sleep');
       // Unknown: the card shows it under way while it reads back.
       await within(cloudRow).findByText(/· cloudSettings\.instance\.state\.stopping$/);
@@ -399,7 +401,7 @@ describe('the card ⋯ menu', () => {
   const cloudRow = () => row(CLOUD);
   it('opens settings, the updates dialog and the sleep confirmation', async () => {
     const router = renderDevices();
-    await within(cloudRow()).findByText(/· cloudSettings\.instance\.state\.running$/);
+    await within(cloudRow()).findByText(/· cloudSettings\.instance\.state\.running$/, {}, FIRST_LOAD);
     await run('cloudSettings.instance.updates');
     const dialog = await screen.findByRole('dialog', { name: 'cloudSettings.instance.updates' });
     fireEvent.click(await within(dialog).findByRole('button', { name: 'cloudSettings.instance.done' }));
@@ -436,7 +438,7 @@ describe('the card ⋯ menu', () => {
   it('is a sliders icon named Manage, before remote desktop and rename', async () => {
     api.instanceList!.mockResolvedValue([view(CLOUD, { updateAvailable: true })]);
     renderDevices();
-    await within(cloudRow()).findByText(/· cloudSettings\.instance\.state\.running$/);
+    await within(cloudRow()).findByText(/· cloudSettings\.instance\.state\.running$/, {}, FIRST_LOAD);
     const entry = manage();
     expect(entry.querySelector('svg.lucide-sliders-horizontal')).toBeTruthy();
     expect(entry.getAttribute('data-cloud-updates-opener')).toBe(CLOUD);
@@ -452,7 +454,7 @@ describe('the card ⋯ menu', () => {
     cleanup();
     mock.access = 'allowed';
     renderDevices();
-    await within(cloudRow()).findByText(/· cloudSettings\.instance\.state\.running$/);
+    await within(cloudRow()).findByText(/· cloudSettings\.instance\.state\.running$/, {}, FIRST_LOAD);
     expect(row('mac-1').outerHTML).toBe(before);
   });
   // The ⋯ stays ⋯; what is in progress spins on its own item.
@@ -601,12 +603,12 @@ describe('claiming another cloud Cindy and refusals on the card', () => {
     api.instanceList!.mockResolvedValue([view(CLOUD)]);
     api.instanceCapacity = vi.fn().mockResolvedValue({ limit: 1, used: 1 });
     renderDevices();
-    await within(cloudRow()).findByText(/· cloudSettings\.instance\.state\.running$/);
+    await within(cloudRow()).findByText(/· cloudSettings\.instance\.state\.running$/, {}, FIRST_LOAD);
     expect(screen.queryByRole('button', { name: 'cloudSettings.onboarding.claimAnother' })).toBeNull();
     cleanup();
     api.instanceCapacity = vi.fn().mockResolvedValue(null);
     renderDevices();
-    await within(cloudRow()).findByText(/· cloudSettings\.instance\.state\.running$/);
+    await within(cloudRow()).findByText(/· cloudSettings\.instance\.state\.running$/, {}, FIRST_LOAD);
     expect(screen.queryByRole('button', { name: 'cloudSettings.onboarding.claimAnother' })).toBeNull();
   });
 
