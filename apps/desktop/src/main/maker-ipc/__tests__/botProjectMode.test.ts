@@ -37,7 +37,7 @@ vi.mock('../../localDb/ipc/projectAliases.js', () => ({
 vi.mock('../../localDb/ipc/recentWorkdirs.js', () => ({ normalizeRecentWorkdirPath: (p: string) => p, upsertRecentWorkdir: async () => false }));
 vi.mock('../../worktree/WorktreeManager.js', () => ({ detectCwd: async () => ({ gitInstalled: false }) }));
 
-import { BOT_PROJECT_MEMORY_REVIEW_ID, createBotDefaultProjectSchedule, ensureBotProjectAutomations, ensureTeammateProjectIgnored, moveTeammateMemoryIntoProject, nameBotProject, prepareBotProjectWorkspace } from '../botProjectMode.js';
+import { BOT_PROJECT_MEMORY_GITIGNORE, BOT_PROJECT_MEMORY_REVIEW_ID, createBotDefaultProjectSchedule, ensureBotProjectAutomations, ensureTeammateProjectIgnored, moveTeammateMemoryIntoProject, nameBotProject, prepareBotProjectWorkspace } from '../botProjectMode.js';
 import { legacyTeammateProjectMemoryDir, teammateProjectMemoryDir, teammateWorkspaceDir } from '../botProjectMemory.js';
 import { importBotSkillFiles } from '../botSkillStore.js';
 import { OWN_RULES_HEADING, importedStandardSkill } from '../botProjectTemplate.js';
@@ -623,6 +623,7 @@ describe('ensureTeammateProjectIgnored', () => {
       '.env.*', '!.env.example', '!.env.sample', '!.env.template',
       'token.json', 'credentials.json', 'client_secret*.json', '*.pem', '*.p12', '*.pfx',
       '.venv/', 'venv/', '__pycache__/', '.cindy-worktrees/', '.xdt-worktrees/',
+      ...BOT_PROJECT_MEMORY_GITIGNORE,
     ].join('\r\n')}\r\n`);
     await expect(fs.readFile(path.join(workspace, '.env'), 'utf8')).resolves.toBe('COMMITTED=1');
 

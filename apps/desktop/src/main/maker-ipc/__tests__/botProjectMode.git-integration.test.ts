@@ -27,7 +27,7 @@ vi.mock('@cindy/maker-core', async () => {
 });
 
 import { BOT_PROJECT_MEMORY_GITIGNORE, ensureTeammateProjectIgnored, prepareBotProjectWorkspace, readWorkspaceRepositoryStatus } from '../botProjectMode.js';
-import { teammateWorkspaceDir } from '../botProjectMemory.js';
+import { legacyTeammateProjectMemoryDir, teammateProjectMemoryDir, teammateWorkspaceDir } from '../botProjectMemory.js';
 import { gitExec } from '../../worktree/gitExec.js';
 
 /*
@@ -168,6 +168,61 @@ describe('buddy repository initialization (#10216)', () => {
     await prepare('readonly_ignore');
     await expect(gitExec(['check-ignore', '-q', 'token.json'], workspace)).resolves.toBeDefined();
     expect(await versioned()).toBe(false);
+  });
+
+  // Maintainer review 2026-11-24 (06:37): a first-time teammate (no project-memory-move.json) whose
+  // old .gitignore has neither list. Read-only: the memory move wrote the same file again and its
+  // EACCES stopped the preparation. A link: the memory move counted it as unchanged and wrote its
+  // receipt, so once a regular file was back only the credential rules were added and the memory's
+  // derived files stayed versionable. Nothing is prefilled; the retry uses a writable regular file.
+  async function firstPreparationWithUnwritableIgnore(botId: string, kind: 'read-only' | 'link'): Promise<'skipped' | void> {
+    const workspace = teammateWorkspaceDir(root, botId);
+    await fs.mkdir(workspace, { recursive: true });
+    await gitExec(['init'], workspace);
+    await gitExec(['config', '--local', 'user.name', 'Test Author'], workspace);
+    await gitExec(['config', '--local', 'user.email', 'author@example.invalid'], workspace);
+    const ignore = path.join(workspace, '.gitignore');
+    if (kind === 'link') {
+      const target = path.join(root, `${botId}.gitignore`);
+      await fs.writeFile(target, 'node_modules/\ntoken.json\n');
+      try { await fs.symlink(target, ignore); } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'EPERM') return 'skipped';
+        throw error;
+      }
+    } else await fs.writeFile(ignore, 'node_modules/\n');
+    await gitExec(['add', '.gitignore'], workspace);
+    await gitExec(['commit', '-m', 'v1'], workspace);
+    const outside = await legacyTeammateProjectMemoryDir(root, workspace);
+    await fs.mkdir(outside, { recursive: true });
+    await fs.writeFile(path.join(outside, 'project_launch.md'), 'Launch on Friday\n');
+    await fs.writeFile(path.join(workspace, 'token.json'), '{"refresh_token":"fixture"}\n');
+    const versioned = async () => (await gitExec(['log', '--all', '--name-only', '--format='], workspace)).stdout.split('\n').includes('token.json');
+    const ignored = (file: string) => gitExec(['check-ignore', '-q', file], workspace).then(() => true, () => false);
+
+    if (kind === 'read-only') await fs.chmod(ignore, 0o444);
+    try {
+      await expect(prepare(botId)).resolves.toMatchObject({ workingDir: workspace });
+      // Not interrupted: the memory moved in; no version took the untracked credential.
+      expect(await fs.readFile(path.join(teammateProjectMemoryDir(workspace), 'project_launch.md'), 'utf8')).toBe('Launch on Friday\n');
+      expect(await versioned()).toBe(false);
+    } finally { if (kind === 'read-only') await fs.chmod(ignore, 0o644); }
+
+    // Next start with a writable regular file: both lists are completed, still nothing versioned.
+    if (kind === 'link') { await fs.rm(ignore); await fs.writeFile(ignore, 'node_modules/\n'); }
+    await expect(prepare(botId)).resolves.toMatchObject({ workingDir: workspace });
+    for (const file of ['token.json', '.cindy/memory/MEMORY.md', '.cindy/memory/fts.db', '.cindy/memory/meta.json']) {
+      expect(await ignored(file), file).toBe(true);
+    }
+    expect(await ignored('.cindy/memory/project_launch.md')).toBe(false);
+    expect(await versioned()).toBe(false);
+  }
+
+  it.skipIf(process.getuid?.() === 0)('keeps preparing a first-time teammate whose read-only .gitignore lacks both lists, completing them later', async () => {
+    await firstPreparationWithUnwritableIgnore('readonly_first', 'read-only');
+  });
+
+  it('keeps preparing a first-time teammate whose .gitignore is a link, completing both lists once it is a file', async (ctx) => {
+    if (await firstPreparationWithUnwritableIgnore('linked_first', 'link') === 'skipped') ctx.skip();
   });
 
   it('does not treat a branch referencing a missing commit as unborn', async () => {
