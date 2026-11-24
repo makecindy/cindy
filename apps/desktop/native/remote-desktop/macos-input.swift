@@ -1090,60 +1090,13 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--verify-own
   RunLoop.main.run()
   exit(2)
 }
-// The system's authentication control, drawn into a transparent panel we own. The system
-// still judges the check; we only choose where it appears, so the owner's screen is not
-// taken over by the standard authentication alert. `sharingType = .none` keeps it out of
-// screenshots and recordings, which the standard alert cannot do.
-final class OwnerPromptPanel {
-  let panel: NSPanel
-  /**
-   * Built closed on purpose: Main needs the window number in its capture exclusion filter
-   * before the control becomes visible, so the caller announces the id first and asks for
-   * the panel to be shown afterwards (a remote lease can otherwise start in between).
-   */
-  init(context: LAContext, alpha: CGFloat, show: Bool = true) {
-    let side: CGFloat = 32
-    panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: side, height: side),
-      styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-    panel.isOpaque = false
-    panel.backgroundColor = .clear
-    panel.hasShadow = false
-    panel.animationBehavior = .none
-    panel.alphaValue = alpha
-    panel.level = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 1)
-    panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-    panel.sharingType = .none
-    let host = NSView(frame: NSRect(x: 0, y: 0, width: side, height: side))
-    let control = LAAuthenticationView(context: context, controlSize: .small)
-    control.translatesAutoresizingMaskIntoConstraints = false
-    host.addSubview(control)
-    NSLayoutConstraint.activate([
-      control.centerXAnchor.constraint(equalTo: host.centerXAnchor),
-      control.centerYAnchor.constraint(equalTo: host.centerYAnchor),
-    ])
-    panel.contentView = host
-    if let screen = NSScreen.main {
-      // Just above the Dock, centered: quiet enough to read as part of the cover.
-      let visible = screen.visibleFrame
-      panel.setFrameOrigin(NSPoint(x: visible.midX - side / 2, y: visible.minY + 72))
-    }
-    panel.alphaValue = show ? alpha : 0
-    if show { panel.orderFrontRegardless() }
-  }
-  /** Puts the panel on screen at `alpha`, after Main has the window number. */
-  func show(alpha: CGFloat) {
-    panel.alphaValue = alpha
-    panel.orderFrontRegardless()
-  }
-  func close() {
-    panel.orderOut(nil)
-  }
-  /** The window Main excludes from remote capture; ScreenCaptureKit ignores sharingType. */
-  var windowNumber: Int { panel.windowNumber }
-}
 // `--owner-prompt <reason>`: while the privacy screen itself keeps the display awake,
 // the owner's Touch ID check stays armed so a finger on the sensor uncovers the screen
 // instead of pressing a key, which locks (docs/product-rules/privacy-screen.md).
+// The system draws its own authentication panel: an app-drawn `LAAuthenticationView`
+// never receives the sensor's events from a background helper (2026-11-24 real-device
+// test: no `finger-on` at all, at any opacity), so the cover is uncovered only by the
+// request macOS itself puts on screen.
 // Main takes the prompt down with `stop` on stdin; a closed stdin means Main is gone.
 // Fixed words on stdout: `ready owner-prompt`, verified, denied, unavailable, locked, stopped.
 if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--owner-prompt" {
@@ -1160,58 +1113,12 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--owner-prom
     print("unavailable"); exit(0)
   }
   let reason = String(CommandLine.arguments[2].prefix(200))
-  // Invisible by intent (2026-11-20 user decision): the system draws its control, but the
-  // panel sits at two percent opacity, so nothing recognizable reaches the screen. A system
-  // that refuses to verify against a control the user cannot see is not something we can
-  // argue with, so a refusal that arrives instantly re-mounts the same control at full
-  // opacity and asks once more, rather than leaving touch-to-return silently broken.
-  var panel = OwnerPromptPanel(context: context, alpha: 0.02, show: false)
   var answered = false
-  var retried = false
-  // The check that is live right now. The visible retry arms its own context, so the stop
-  // path must invalidate that one: killing the process alone leaves a biometric request
-  // behind, and the original context has already answered by then.
-  var armed = context
-  // Main needs this id for its capture exclusion filter: `sharingType = .none` alone is
-  // ignored by modern ScreenCaptureKit, which only filters ids it was handed
-  // (`macos-capture.m`). A window that keeps its id until it closes stays out of frames
-  // even when a remote lease starts in the middle of a two-second tick.
-  func announce(_ panel: OwnerPromptPanel) {
-    print("panel \(panel.windowNumber)"); fflush(stdout)
+  context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason) { success, _ in
+    guard !answered else { return }
+    answered = true
+    print(success ? "verified" : "denied"); fflush(stdout); exit(0)
   }
-  announce(panel)
-  panel.show(alpha: 0.02)
-  func arm(_ context: LAContext) {
-    armed = context
-    let started = DispatchTime.now()
-    context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason) { success, error in
-      guard !answered else { return }
-      let code = (error as NSError?)?.code
-      let instant = DispatchTime.now().uptimeNanoseconds &- started.uptimeNanoseconds < 1_500_000_000
-      if !success, !retried, instant,
-        code == LAError.notInteractive.rawValue || code == LAError.systemCancel.rawValue {
-        retried = true
-        // The reply block runs on LocalAuthentication's own queue, and AppKit only builds
-        // and orders windows on the main thread: swap the visible fallback there, then ask
-        // again. `answered` is re-checked on the main thread in case the prompt was taken
-        // down while this hop was queued.
-        DispatchQueue.main.async {
-          guard !answered else { return }
-          panel.close()
-          let visible = LAContext()
-          visible.localizedFallbackTitle = ""
-          panel = OwnerPromptPanel(context: visible, alpha: 1, show: false)
-          announce(panel)
-          panel.show(alpha: 1)
-          arm(visible)
-        }
-        return
-      }
-      answered = true
-      print(success ? "verified" : "denied"); fflush(stdout); exit(0)
-    }
-  }
-  arm(context)
   // Versioned greeting: an older helper that predates this mode falls through to the
   // generic input loop and would also print a bare `ready`, so Main must not read that as
   // "the system sheet is up". Only this exact token arms the prompt.
@@ -1221,11 +1128,9 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--owner-prom
       guard command.utf8.count <= 16 else { exit(2) }
       if command == "stop" { break }
     }
-    // Killing this process alone leaves the prompt on screen for about ten seconds.
     DispatchQueue.main.async {
       answered = true
-      armed.invalidate()
-      panel.close()
+      context.invalidate()
       print("stopped"); fflush(stdout); exit(0)
     }
   }
