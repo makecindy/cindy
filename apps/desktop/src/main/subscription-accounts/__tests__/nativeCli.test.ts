@@ -49,7 +49,33 @@ import {
   loginLegacyCodexProviderAccount,
 } from '../nativeCli.js';
 import { isAccountServiceUnreachable } from '../accountServiceError.js';
-import { refreshClaudeCliLoginStatus, runClaudeCliLogin } from '../../maker-host/claude-native-cli.desktop.js';
+import { readClaudeCliPlanUsage, refreshClaudeCliLoginStatus, runClaudeCliLogin } from '../../maker-host/claude-native-cli.desktop.js';
+import { subscriptionUsageView } from '../usageView.js';
+
+// #12425, standard tier: the native reader previously discarded credits without a time window.
+it('retains an extra-usage-only reading without publishing a synthetic time window', async () => {
+  vi.mocked(readClaudeCliPlanUsage).mockResolvedValueOnce({
+    rateLimits: { extra_usage: { is_enabled: true, used_credits: 0 } },
+  });
+  const { claudeUsage } = await readNativeAccountUsage('anthropic', '/fixture/enterprise');
+  expect(claudeUsage).toMatchObject({
+    extraUsage: { isEnabled: true, usedCredits: 0, monthlyLimit: null, utilization: null },
+    fiveHour: null, sevenDay: null, scoped: [], updatedAt: expect.any(Number),
+  });
+  expect(subscriptionUsageView({
+    provider: 'anthropic', providerId: 'anthropic', accountId: 'fixture',
+    authenticated: true, usage: { claude: claudeUsage ?? undefined },
+  }, Date.now())).toMatchObject({ windows: [], updatedAt: null, usageStatus: 'unavailable' });
+});
+
+it.each([
+  { is_enabled: false, used_credits: 0 },
+  { is_enabled: true, monthly_limit: 10 },
+  { is_enabled: true, used_credits: false, utilization: [] },
+])('ignores disabled or missing standalone readings (%j)', async extra_usage => {
+  vi.mocked(readClaudeCliPlanUsage).mockResolvedValueOnce({ rateLimits: { extra_usage } });
+  await expect(readNativeAccountUsage('anthropic', '/fixture/enterprise')).resolves.toEqual({ claudeUsage: null });
+});
 
 const children: (EventEmitter & {
   stdin: EventEmitter & { write: ReturnType<typeof vi.fn> };
