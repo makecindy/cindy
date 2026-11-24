@@ -69,7 +69,12 @@ export function persistSessionStreamEventCore(
     }
   }
   if (event.type === 'text') {
-    const td = event.data as { text?: unknown; isFinal?: unknown; isFullText?: unknown } | null;
+    const td = event.data as {
+      text?: unknown;
+      isFinal?: unknown;
+      isFullText?: unknown;
+      agentMessageId?: unknown;
+    };
     // A Host runtime-recovery notice (#4349) is not the worker's reply: it is
     // persisted and broadcast like any assistant text below, but must never be
     // captured as an Orca worker result. Otherwise an error terminal that lacks
@@ -79,18 +84,9 @@ export function persistSessionStreamEventCore(
         isFinal: td.isFinal === true,
       });
     }
-    persistId = onAssistantTextEvent(
-      session.id,
-      event.data as {
-        text?: unknown;
-        isFinal?: unknown;
-        isFullText?: unknown;
-        agentMessageId?: unknown;
-      },
-      eventAgentMeta,
-      event.turnScope,
-      localClaude,
-    );
+    persistId = localClaude
+      ? onAssistantTextEvent(session.id, td, eventAgentMeta, event.turnScope, true)
+      : onAssistantTextEvent(session.id, td, eventAgentMeta, event.turnScope);
     // Pi message_end carries the authoritative whole assistant message. Commit
     // its calibrated block now: agent_settled may arrive much later (or never),
     // and a subsequent assistant message must not overwrite this one in memory.
@@ -113,7 +109,11 @@ export function persistSessionStreamEventCore(
     const acpTool = session.agentKind === 'acp';
     persistedOnly = acpTool && data.acpInputPatch === true;
     if (!persistedOnly && event.turnScope !== 'background') {
-      flushAssistantBlock(session.id, eventAgentMeta, localClaude ? eventAgentMeta?.parentUuid ?? null : undefined);
+      if (localClaude) {
+        flushAssistantBlock(session.id, eventAgentMeta, eventAgentMeta?.parentUuid ?? null);
+      } else {
+        flushAssistantBlock(session.id, eventAgentMeta);
+      }
     }
     persistId = onToolUseEvent(
       session.id,
