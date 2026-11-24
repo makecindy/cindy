@@ -19,13 +19,14 @@ function desktopPluginEnvironment(ghostId: string): NodeJS.ProcessEnv {
   const env = pluginNodeEnvironment(ghostId);
   const endpoints: NodeJS.ProcessEnv = {};
   const exclusions: NodeJS.ProcessEnv = {};
+  const loopback = ['localhost', '127.0.0.1', '::1'];
   for (const key of ['no_proxy', 'NO_PROXY']) {
     const value = process.env[key];
     if (!value) continue;
     // A malformed bypass list must never silently redirect private traffic.
     const entries = value.split(/[,\t ]+/).filter(Boolean);
     if (!entries.every(entry => /^[a-z0-9_.*:[\]-]+(?:\/\d{1,3})?$/i.test(entry))) return env;
-    exclusions[key] = value;
+    exclusions[key] = [...new Set([...entries, ...loopback])].join(',');
   }
   for (const name of ['http_proxy', 'https_proxy']) {
     const keys = [name, name.toUpperCase()];
@@ -39,7 +40,14 @@ function desktopPluginEnvironment(ghostId: string): NodeJS.ProcessEnv {
       for (const key of keys) if (process.env[key]) endpoints[key] = process.env[key];
     }
   }
-  return Object.keys(endpoints).length ? Object.assign(env, endpoints, exclusions) : env;
+  if (!Object.keys(endpoints).length) return env;
+  // CLIs differ in which spelling they read. Preserve each configured route
+  // and mirror a single configured list for clients using the other spelling.
+  const fallback = exclusions.no_proxy ?? exclusions.NO_PROXY ?? loopback.join(',');
+  return Object.assign(env, endpoints, {
+    no_proxy: exclusions.no_proxy ?? fallback,
+    NO_PROXY: exclusions.NO_PROXY ?? fallback,
+  });
 }
 
 /**
