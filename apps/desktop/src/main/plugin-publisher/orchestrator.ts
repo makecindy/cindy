@@ -21,6 +21,13 @@ import {
   type ActiveAppSession,
 } from '../appSessionState.js';
 import { sameActiveAppSessionOwner } from '../cindy-brain/forgePackPublishConsume.js';
+import type {
+  PluginPublisherConfirmDecision,
+  PublisherAudienceContext,
+  PublisherAudienceHint,
+  PublisherDeniedReason,
+} from '../../shared/pluginPublisher.js';
+import { audienceToSend, PublisherAudienceInvalidError } from './audienceContext.js';
 import { PluginPublisherApi, PluginPublisherApiError } from './api.js';
 import { hashLocalFile, PluginPublisherHashCancelledError } from './hashFile.js';
 import { PluginPublisherPutError, putLocalFile } from './putObject.js';
@@ -46,6 +53,7 @@ export interface PluginPublisherOrchestratorDeps {
     name: string;
     version: string;
   }>;
+  /** Resolves true/false, or the user's decision including the chosen visibility audience. */
   confirm(
     facts: {
       orgSlug: string;
@@ -56,7 +64,13 @@ export interface PluginPublisherOrchestratorDeps {
       sizeBytes: number;
     },
     signal: AbortSignal,
-  ): Promise<boolean>;
+    audience?: PublisherAudienceContext,
+  ): Promise<boolean | PluginPublisherConfirmDecision>;
+  /** Reads what the confirmation screen may do with the visibility audience. Never throws. */
+  audienceContext?(
+    input: { ghostId: string; orgSlug: string; hint?: PublisherAudienceHint },
+    signal: AbortSignal,
+  ): Promise<PublisherAudienceContext>;
   identity(): PluginPublisherIdentity | null | Promise<PluginPublisherIdentity | null>;
   owner?: () => ActiveAppSession;
   now?: () => number;
@@ -111,21 +125,21 @@ function isPathSafeForPublish(filePath: string): boolean {
 class PluginPublisherPutDeadlineExpiredError extends Error {}
 
 async function waitForConfirmationOrAbort(
-  confirmation: Promise<boolean>,
+  confirmation: Promise<boolean | PluginPublisherConfirmDecision>,
   signal: AbortSignal,
-): Promise<boolean> {
-  if (signal.aborted) return false;
-  return new Promise<boolean>((resolve, reject) => {
+): Promise<PluginPublisherConfirmDecision> {
+  if (signal.aborted) return { confirmed: false };
+  return new Promise<PluginPublisherConfirmDecision>((resolve, reject) => {
     const onAbort = (): void => {
       cleanup();
-      resolve(false);
+      resolve({ confirmed: false });
     };
     const cleanup = (): void => signal.removeEventListener('abort', onAbort);
     signal.addEventListener('abort', onAbort, { once: true });
     confirmation.then(
-      (confirmed) => {
+      (decision) => {
         cleanup();
-        resolve(confirmed);
+        resolve(typeof decision === 'boolean' ? { confirmed: decision } : decision);
       },
       (error: unknown) => {
         cleanup();
@@ -191,6 +205,8 @@ export class PluginPublisherOrchestrator {
     extras?: {
       confirm?: PluginPublisherOrchestratorDeps['confirm'];
       sourceBinding?: PluginPublisherSourceBinding;
+      /** Audience the user asked for in the conversation; preselected on the confirmation screen. */
+      audienceHint?: PublisherAudienceHint;
     },
   ): PluginPublisherStartResult {
     const transferId = randomUUID();
@@ -214,6 +230,7 @@ export class PluginPublisherOrchestrator {
       record,
       extras?.confirm ?? this.deps.confirm,
       extras?.sourceBinding,
+      extras?.audienceHint,
     ).catch(() => undefined);
     this.emit(record);
     return { transferId, uploadId: null };
@@ -329,6 +346,7 @@ export class PluginPublisherOrchestrator {
     record: TransferRecord,
     confirm: PluginPublisherOrchestratorDeps['confirm'],
     sourceBinding?: PluginPublisherSourceBinding,
+    audienceHint?: PublisherAudienceHint,
   ): Promise<void> {
     const signal = record.controller.signal;
     let handle: fsPromises.FileHandle | null = null;
@@ -389,7 +407,17 @@ export class PluginPublisherOrchestrator {
         orgSlug: identity.orgSlug,
         totalBytes: stat.size,
       });
-      const confirmed = await waitForConfirmationOrAbort(
+      const audienceContext = this.deps.audienceContext
+        ? await this.deps.audienceContext(
+          { ghostId: inspected.ghostId, orgSlug: identity.orgSlug, ...(audienceHint ? { hint: audienceHint } : {}) },
+          signal,
+        )
+        : null;
+      if (signal.aborted || !sameActiveAppSessionOwner(record.owner, this.owner())) {
+        this.update(record, { stage: 'cancelled', message: cancelMessage(false) });
+        return;
+      }
+      const decision = await waitForConfirmationOrAbort(
         confirm(
           {
             orgSlug: identity.orgSlug,
@@ -400,12 +428,26 @@ export class PluginPublisherOrchestrator {
             sizeBytes: stat.size,
           },
           signal,
+          ...(audienceContext ? [audienceContext] : []),
         ),
         signal,
       );
       this.releasePendingConfirmation(record.owner);
       pendingConfirmationHeld = false;
-      if (!confirmed || signal.aborted) {
+      if (audienceContext?.kind === 'denied' && !signal.aborted) {
+        // The server said the upload fails for anyone; the screen explained it and could not confirm.
+        const denied = DENIED_PUBLISH[audienceContext.reason];
+        this.fail(record, denied.code, denied.message);
+        return;
+      }
+      if (audienceContext?.kind === 'blocked' && !signal.aborted) {
+        // An explicit audience that cannot be applied always ends as this failure, whatever the
+        // window answered, so the Agent learns why instead of seeing a plain cancellation. The
+        // screen blocks confirming too; Main enforces it so no window can confirm around it.
+        this.fail(record, 'AUDIENCE_INTENT_UNAVAILABLE', BLOCKED_AUDIENCE_MESSAGES[audienceContext.reason]);
+        return;
+      }
+      if (!decision.confirmed || signal.aborted) {
         this.update(record, {
           stage: signal.aborted ? 'cancelled' : 'failed',
           errorCode: signal.aborted ? null : 'CONFIRM_UNAVAILABLE',
@@ -414,6 +456,16 @@ export class PluginPublisherOrchestrator {
             : '请在 Cindy 窗口内重试',
         });
         return;
+      }
+      let visibilityAudience: ReturnType<typeof audienceToSend>;
+      try {
+        visibilityAudience = audienceToSend(audienceContext, decision);
+      } catch (error) {
+        if (error instanceof PublisherAudienceInvalidError) {
+          this.fail(record, 'INVALID_PARAMS', '可见范围无效，请重新选择');
+          return;
+        }
+        throw error;
       }
 
       await this.acquireSlot(signal);
@@ -440,6 +492,7 @@ export class PluginPublisherOrchestrator {
           prepared = await this.deps.api.prepare({
             sizeBytes: digest.sizeBytes,
             sha256: digest.sha256,
+            ...(visibilityAudience ? { visibilityAudience } : {}),
           });
         } catch (error) {
           if (isUnsupportedPrepareEndpoint(error)) {
@@ -682,6 +735,19 @@ export class PluginPublisherOrchestrator {
     this.update(record, { stage: 'failed', errorCode, message });
   }
 }
+
+const BLOCKED_AUDIENCE_MESSAGES: Record<Extract<PublisherAudienceContext, { kind: 'blocked' }>['reason'], string> = {
+  locked: '无法按你指定的可见范围发布：你不能修改这个插件的可见范围，或暂时读不到它。可以不指定范围发布，或请插件作者修改',
+  legacyRoles: '无法按你指定的可见范围发布：这个插件当前的范围含旧的角色条件，发布时不能修改。可以不指定范围发布，发布后到插件详情修改范围',
+};
+
+/** Same codes the upload would return, so the Agent sees the server's reason. */
+const DENIED_PUBLISH: Record<PublisherDeniedReason, { code: string; message: string }> = {
+  forbidden: { code: 'FORBIDDEN', message: '无法发布：本企业未开启成员发布，或你没有发布权限，请联系管理员' },
+  archived: { code: 'PLUGIN_ARCHIVED', message: '无法发布：这个插件已归档，不能再发布新版本' },
+  commonManaged: { code: 'COMMON_PLUGIN_MANAGED', message: '无法发布：这个插件由平台通用插件生成，企业不能为它发布版本' },
+  repositoryManaged: { code: 'PLUGIN_REPOSITORY_MANAGED', message: '无法发布：这个插件由代码仓库发布管理，请通过仓库发布新版本' },
+};
 
 function cancelMessage(commitAlreadySent: boolean): string {
   return commitAlreadySent ? '已停止跟踪，服务端仍在处理' : '已取消发布';

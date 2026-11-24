@@ -38,6 +38,9 @@ const harness = vi.hoisted(() => ({
   releases: vi.fn(),
   history: vi.fn(),
   put: vi.fn(),
+  orgOwner: null as string | null,
+  orgChanges: vi.fn(),
+  orgList: vi.fn(),
 }));
 vi.mock('electron', () => ({ app: { getPath: () => harness.root, get isPackaged() { return harness.packaged; } } }));
 vi.mock('../../clientEndpointsService', () => ({ getClientEndpoint: () => harness.pluginEndpoint }));
@@ -55,6 +58,10 @@ vi.mock('../../serverApiClient.desktop', () => ({
   },
 }));
 vi.mock('../../lifecycle', () => ({ onQuit: vi.fn() }));
+vi.mock('../../plugin-author/host', () => ({
+  pluginAuthorOwnerKey: () => harness.orgOwner,
+  createPluginAuthorApi: () => ({ changes: harness.orgChanges, listPages: harness.orgList }),
+}));
 vi.mock('../../logger', () => ({ createLogger: () => ({ warn: vi.fn() }) }));
 vi.mock('../../cindy-brain/index', () => ({
   getGhostManager: () => ({
@@ -592,6 +599,50 @@ describe('review result reading state', () => {
     harness.changes.mockRejectedValueOnce(new Error('changes offline'));
     await expect(service.reviewUpdates()).rejects.toThrow('changes offline');
     expect(harness.list).toHaveBeenCalledTimes(2);
+  });
+  // #1541 review: public and team (organization) results are separate entry points, so a pending
+  // or failing side neither delays nor fails the other. Minimal failing input: public never settles.
+  it('reads team results while the public read is pending and keeps either side independent of the other failing', async () => {
+    harness.orgOwner = 'org-owner';
+    harness.orgChanges.mockResolvedValue({ changedAt: at, eventCount: 1 });
+    harness.orgList.mockResolvedValue({ nextCursor: null, plugins: [{ id: 't1', ghostId: 'g', name: 'G', myRole: 'creator',
+      status: 'active', latestRelease: { id: 'r1', version: '1', reviewStatus: 'rejected' },
+      latestReviewEvent: { id: 'e-t1', kind: 'rejected', at, releaseId: 'r1', actorType: 'organization' } }] });
+    try {
+      let release!: () => void;
+      harness.changes.mockImplementationOnce(() => new Promise((_, reject) => { release = () => reject(new Error('public offline')); }));
+      const service = await import('../reviewUpdates');
+      const publicRead = service.reviewUpdates();
+      expect((await service.organizationReviewUpdates()).updates).toEqual([expect.objectContaining({ pluginId: 'org:t1', status: 'rejected', unread: true })]);
+      release();
+      await expect(publicRead).rejects.toThrow('public offline');
+      harness.list.mockResolvedValue({ plugins: [plugin()], nextCursor: null });
+      harness.orgChanges.mockRejectedValueOnce(new Error('team offline'));
+      await expect(service.organizationReviewUpdates()).rejects.toThrow('team offline');
+      expect((await service.reviewUpdates()).map(item => item.pluginId)).toEqual(['plugin-1']);
+    } finally {
+      harness.orgOwner = null;
+    }
+  });
+  // Greptile review on #12208: a first submission (pending) or becoming a maintainer is not a
+  // review result, so the team list must follow the change signal itself. Minimal failing input:
+  // eventCount moves while the only plugin is pending — no review update, but a new token.
+  it('reports the team change signal even when the change is not a review result', async () => {
+    harness.orgOwner = 'org-owner';
+    harness.orgChanges.mockResolvedValueOnce({ changedAt: at, eventCount: 10 }).mockResolvedValueOnce({ changedAt: at, eventCount: 11 });
+    harness.orgList.mockResolvedValue({ nextCursor: null, plugins: [{ id: 't2', ghostId: 'g2', name: 'G2', myRole: 'creator',
+      status: 'active', latestRelease: { id: 'r1', version: '1', reviewStatus: 'pending' }, latestReviewEvent: null }] });
+    try {
+      const service = await import('../reviewUpdates');
+      const first = await service.organizationReviewUpdates();
+      const second = await service.organizationReviewUpdates();
+      expect(first.updates).toEqual([]);
+      expect(second.updates).toEqual([]);
+      expect(first.changeToken).not.toBeNull();
+      expect(second.changeToken).not.toBe(first.changeToken);
+    } finally {
+      harness.orgOwner = null;
+    }
   });
   it('retains the token read before a full refresh so an event arriving during it is fetched next time', async () => {
     harness.list.mockResolvedValue({ plugins: [plugin()], nextCursor: null });
