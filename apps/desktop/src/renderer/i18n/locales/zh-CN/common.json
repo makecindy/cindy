@@ -12798,6 +12798,20 @@
       }
     },
     "voiceMode": {
+      "realtime": {
+        "systemVoices": "系统音色",
+        "myVoices": "我的音色",
+        "refreshMyVoices": "刷新我的音色",
+        "callMode": "通话方式",
+        "messageReadAloud": "消息朗读",
+        "callVoice": "实时通话音色",
+        "readAloudVoice": "朗读音色",
+        "readAloudHint": "点击伙伴文字回复下方的小喇叭，即可用这个声音朗读。",
+        "resetReadAloud": "恢复默认朗读设置",
+        "title": "实时语音",
+        "add": "添加实时语音模型",
+        "off": "使用语音合成"
+      },
       "openConversation": "打开对话",
       "inCallWith": "正在与 {{name}} 通话",
       "showDetails": "展开通话记录",
@@ -12819,7 +12833,7 @@
       "settingsTitle": "语音",
       "openSettings": "语音设置",
       "startConversation": "开始语音对话",
-      "settingsHint": "选择这位伙伴使用的朗读模型和音色。设置完成后，从输入框开始语音对话。",
+      "settingsHint": "使用语音合成通话时，通话和消息朗读共用下方的模型和音色。",
       "previewNeedsChat": "与伙伴开始对话后可试听。",
       "voiceId": "音色 ID",
       "manualVoice": "手动输入音色 ID",

@@ -12946,6 +12946,20 @@
       }
     },
     "voiceMode": {
+      "realtime": {
+        "systemVoices": "Voces del sistema",
+        "myVoices": "Mis voces",
+        "refreshMyVoices": "Actualizar mis voces",
+        "callMode": "Modo de llamada",
+        "messageReadAloud": "Lectura de mensajes en voz alta",
+        "callVoice": "Voz para llamadas en tiempo real",
+        "readAloudVoice": "Voz de lectura",
+        "readAloudHint": "Pulsa el altavoz bajo una respuesta de texto para escucharla con esta voz.",
+        "resetReadAloud": "Restablecer los ajustes de lectura",
+        "title": "Audio en tiempo real",
+        "add": "Añadir modelos de audio en tiempo real",
+        "off": "Usar síntesis de voz"
+      },
       "openConversation": "Abrir conversación",
       "inCallWith": "En llamada con {{name}}",
       "showDetails": "Mostrar transcripción de la llamada",
@@ -12967,7 +12981,7 @@
       "settingsTitle": "Voz",
       "openSettings": "Configuración de voz",
       "startConversation": "Iniciar conversación de voz",
-      "settingsHint": "Elige el modelo de síntesis de voz y la voz de este amigo y luego inicia una conversación de voz desde el editor de mensajes.",
+      "settingsHint": "Cuando las llamadas usan síntesis de voz, comparten el modelo y la voz de abajo con la lectura de mensajes.",
       "previewNeedsChat": "Inicia una conversación con este amigo para escuchar una muestra de voz.",
       "voiceId": "ID de voz",
       "manualVoice": "Ingresa un ID de voz",

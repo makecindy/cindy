@@ -12798,6 +12798,20 @@
       }
     },
     "voiceMode": {
+      "realtime": {
+        "systemVoices": "システム音声",
+        "myVoices": "マイボイス",
+        "refreshMyVoices": "マイボイスを更新",
+        "callMode": "通話モード",
+        "messageReadAloud": "メッセージの読み上げ",
+        "callVoice": "リアルタイム通話の声",
+        "readAloudVoice": "読み上げの声",
+        "readAloudHint": "仲間のテキスト返信の下にあるスピーカーを押すと、この声で読み上げます。",
+        "resetReadAloud": "読み上げ設定を既定値に戻す",
+        "title": "リアルタイム音声",
+        "add": "リアルタイム音声モデルを追加",
+        "off": "音声合成を使用"
+      },
       "openConversation": "会話を開く",
       "inCallWith": "{{name}} と通話中",
       "showDetails": "通話記録を表示",
@@ -12819,7 +12833,7 @@
       "settingsTitle": "音声",
       "openSettings": "音声設定",
       "startConversation": "音声会話を開始",
-      "settingsHint": "この仲間の読み上げモデルと声を選択し、入力欄から音声会話を開始できます。",
+      "settingsHint": "音声合成で通話する場合、通話とメッセージの読み上げには以下のモデルと声を使います。",
       "previewNeedsChat": "仲間との会話を開始すると試聴できます。",
       "voiceId": "音声 ID",
       "manualVoice": "音声 ID を手動入力",
