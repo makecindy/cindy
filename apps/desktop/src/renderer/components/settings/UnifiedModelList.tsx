@@ -26,7 +26,7 @@ import { modelManagementState } from './modelManagementState';
  * 同一模式下同一轴的控件形态唯一 —— 这是本组件的硬约束(v4 交互稿定稿延续)。
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronDown, Info, Lock, RefreshCw, Search, SlidersHorizontal } from 'lucide-react';
 
@@ -470,6 +470,7 @@ export function UnifiedModelList({
   provider,
   onRefresh,
   onAddSpeechModels,
+  onAddRealtimeModels,
   refreshing,
   refreshDisabled,
   refreshIdleLabel,
@@ -483,6 +484,7 @@ export function UnifiedModelList({
   /** 「刷新模型」；内置供应商走各自真源，自定义供应商走 additions-only 发现。 */
   onRefresh?: () => void;
   onAddSpeechModels?: () => void;
+  onAddRealtimeModels?: () => void;
   refreshing?: boolean;
   /** 其它供应商正在刷新时禁用，避免并发刷新造成反馈归属不清。 */
   refreshDisabled?: boolean;
@@ -516,14 +518,14 @@ export function UnifiedModelList({
   };
   /** 类型筛选(全部 / 对话 / 图像 / 视频…):只有该来源真存在多类时才渲染整条。 */
   const [kindFilter, setKindFilter] = useState<ModelCategory | 'chat' | 'all'>('all');
+  // The detail is keyed by provider. Reconnecting effects after sharing keeps its
+  // filters and drawer; only a new catalog snapshot supersedes optimistic changes.
+  const previousProvider = useRef(provider);
   useEffect(() => {
-    setPendingDisabled({});
-    setAdvancedRow(null);
-    setAdvancedOpen(false);
-    setKindFilter('all');
-  }, [provider.id]);
-  useEffect(() => {
-    setPendingDisabled({});
+    if (previousProvider.current !== provider) {
+      previousProvider.current = provider;
+      setPendingDisabled({});
+    }
   }, [provider]);
 
   // 报价快照:与模型选择器同两份来源(XD 实付价 / 非 XD 参考价),派生逻辑共用
@@ -1030,6 +1032,28 @@ export function UnifiedModelList({
     </Tip>
   );
 
+  const renderModelName = (row: UnionModelRow, color: string) => {
+    const rep = row.byAgent[row.avail[0]]!;
+    const absentFromAllRoutes = provider.source === 'user' && provider.auth.method === 'apiKey' &&
+      (row.aliasRows ?? [row]).every(member => member.avail.every(agent =>
+        member.byAgent[agent]?.userModelConfig?.missingUpstream === true,
+      ));
+    const name = (
+      <span className="min-w-0 truncate text-14 font-medium" style={{ color }}>
+        {localizedModelName(rep.name, t)}
+      </span>
+    );
+    if (!absentFromAllRoutes) return name;
+    return (
+      <span className="flex min-w-0 flex-col">
+        {name}
+        <span className="break-words text-12 text-[var(--text-secondary)]">
+          {t('settings.providers.models.withdrawn.rowStatus')}
+        </span>
+      </span>
+    );
+  };
+
   /**
    * 一行模型的渲染。抽成函数是因为它现在有**两个调用点**:厂商分组里,以及底部
    * 「未启用」沉底区。两边必须逐像素一致 —— 复制一份 150 行 JSX 的话,任何一次
@@ -1089,17 +1113,8 @@ export function UnifiedModelList({
             </CustomProviderIcon>
           )}
         </span>
-        <span
-          className="min-w-0 truncate text-14 font-medium"
-          style={{
-            color:
-              (capability ? capabilityOn && state.ready : state.ready && anyOn)
-                ? 'var(--settings-section-title)'
-                : 'var(--text-tertiary)',
-          }}
-        >
-          {localizedModelName(rep.name, t)}
-        </span>
+        {renderModelName(row, (capability ? capabilityOn && state.ready : state.ready && anyOn)
+          ? 'var(--settings-section-title)' : 'var(--text-tertiary)')}
         {/* 价格档与折扣紧跟模型名(不单独成列):这一列不是用来纵向比价的,
                 是用来在读到某个模型名时顺手知道它贵不贵。拿不到报价就整个
                 不渲染 —— 不画假的「$」也不画「—」。 */}
@@ -1263,7 +1278,7 @@ export function UnifiedModelList({
                 ]}
               />
             )}
-            {(unionRows.length > 0 || onAddSpeechModels) && (
+            {(unionRows.length > 0 || onAddSpeechModels || onAddRealtimeModels) && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button data-settings-search-action="Open the model management menu" variant="secondary" size="sm" compact type="button" className="shrink-0">
@@ -1272,6 +1287,9 @@ export function UnifiedModelList({
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
+                  {onAddRealtimeModels && <DropdownMenuItem onSelect={onAddRealtimeModels}>
+                    {t('bots.voiceMode.realtime.add')}
+                  </DropdownMenuItem>}
                   {onAddSpeechModels && (
                     <DropdownMenuItem onSelect={onAddSpeechModels}>
                       {t('settings.providers.speechSetup.add')}
@@ -1537,12 +1555,7 @@ export function UnifiedModelList({
                               'bg-[var(--surface-hover)] ring-2 ring-[var(--focus-ring)]',
                           )}
                         >
-                          <span
-                            className="min-w-0 truncate text-14 font-medium"
-                            style={{ color: 'var(--text-disabled)' }}
-                          >
-                            {localizedModelName(rep.name, t)}
-                          </span>
+                          {renderModelName(row, 'var(--text-disabled)')}
                           {/* 来源分组注记:启用后会回到哪个组,别让用户猜。 */}
                           <span
                             className="shrink-0 text-12"

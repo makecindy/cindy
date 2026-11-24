@@ -5,6 +5,7 @@ import {
   GHOST_HARNESS_REMOTE_WORKSPACE_ARG,
   parseGhostHarnessAvailability,
 } from '../pluginHarnesses.js';
+import { ghostFileOpenerMatches, ghostFileOpenerWithinCap } from '../pluginFileOpener.js';
 import { describe, expect, it } from 'vitest';
 import {
   GHOST_MANUAL_DESCRIPTION_MAX_CHARS,
@@ -98,6 +99,52 @@ describe('Ghost manifest contract', () => {
     expect(stored).toMatchObject({ ok: true, manifest: { cindy: { image: ['generate'] } } });
     if (stored.ok) expect(stored.manifest.cindy?.models).toEqual(models);
   });
+  /*
+   * 测试价值
+   * - 生产入口与可观察结果：validateGhostManifest / validateStoredGhostManifest 对 `fileOpener` 的
+   *   接受、拒绝与规范化结果；ghostFileOpenerMatches / ghostFileOpenerWithinCap 的命中与上限判定。
+   * - Bug／规则依据：plugin-security-and-authoring.md §1.2（v3 直接字段）、§4（宿主绝对路径只给声明
+   *   node 的插件）、§5（已存 Release 不因新校验失效）。
+   * - 现有覆盖缺口：新字段，此前作为未知字段原样保留。
+   * - 最小失败输入：没有 node 的 fileOpener；大写扩展名；已存 Release 里不合规的历史 fileOpener。
+   * - tier：unit（纯函数矩阵）。实测耗时：随本文件整体 < 1s。
+   */
+  describe('fileOpener', () => {
+    const node = { entry: 'worker.js', protocol: 'json-rpc-stdio' };
+    const v3 = (extra: Record<string, unknown>) => ({ ...validManifest, schemaVersion: 3, minCindyVersion: '0.1.145', slots: undefined, node, ...extra });
+
+    it('keeps a valid declaration and unknown subfields', () => {
+      const fileOpener = { extensions: ['.docx', '.xlsx', '.tar.gz'], label: 'future' };
+      expect(validateGhostManifest(v3({ fileOpener }))).toMatchObject({ ok: true, manifest: { fileOpener } });
+    });
+
+    it.each([
+      ['not an object', { fileOpener: ['.docx'] }],
+      ['no extensions', { fileOpener: { extensions: [] } }],
+      ['uppercase extension', { fileOpener: { extensions: ['.DOCX'] } }],
+      ['missing dot', { fileOpener: { extensions: ['docx'] } }],
+      ['duplicate extension', { fileOpener: { extensions: ['.docx', '.docx'] } }],
+      ['too many extensions', { fileOpener: { extensions: Array.from({ length: 33 }, (_, i) => `.x${i}`) } }],
+      ['no node', { node: undefined, fileOpener: { extensions: ['.docx'] } }],
+    ])('rejects %s for a new package but drops it from a stored release', (_label, extra) => {
+      expect(validateGhostManifest(v3(extra)).ok).toBe(false);
+      const stored = validateStoredGhostManifest(v3(extra));
+      expect(stored.ok).toBe(true);
+      if (stored.ok) expect(stored.manifest.fileOpener).toBeUndefined();
+    });
+
+    it('matches by file name suffix and caps a package to the reviewed extensions', () => {
+      const decl = { extensions: ['.docx', '.xlsx'] };
+      expect(ghostFileOpenerMatches(decl, 'C:\\报告\\Q3.DOCX')).toBe(true);
+      expect(ghostFileOpenerMatches(decl, '/home/a/notes.doc')).toBe(false);
+      expect(ghostFileOpenerMatches(decl, '/home/a/.docx')).toBe(false);
+      expect(ghostFileOpenerWithinCap({ extensions: ['.docx'] }, decl)).toBe(true);
+      expect(ghostFileOpenerWithinCap({ extensions: ['.docx', '.pdf'] }, decl)).toBe(false);
+      expect(ghostFileOpenerWithinCap(decl, undefined)).toBe(false);
+      expect(ghostFileOpenerWithinCap(undefined, undefined)).toBe(true);
+    });
+  });
+
   /*
    * 测试价值
    * - 生产入口与可观察结果：validateGhostManifest / validateStoredGhostManifest 对 `harnesses` 的
@@ -1042,6 +1089,7 @@ describe('Ghost manifest contract', () => {
       notify: true,
       fs: true,
       library: true,
+      form: true,
       tools: [
         {
           name: 'run_helper',
@@ -1089,6 +1137,7 @@ describe('Ghost manifest contract', () => {
     expect(result.manifest.notify).toBe(true);
     expect(result.manifest.fs).toBe(true);
     expect(result.manifest.library).toBe(true);
+    expect(result.manifest.form).toBe(true);
     expect(result.manifest.unknownField).toBe('ignored');
   });
 

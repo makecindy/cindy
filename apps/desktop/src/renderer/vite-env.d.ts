@@ -101,6 +101,7 @@ type RemoteHostSnapshot = {
     identityFileName?: string;
     source: 'ssh-config' | 'manual';
     managedByCindy: boolean;
+    managedAliasConflict?: boolean;
   };
   status: import('@cindy/maker-remote-ssh').RemoteStatus;
   lastError?: string;
@@ -259,7 +260,7 @@ type VoiceInputState = import('@cindy/voice-input-core').VoiceInputState;
 type VoiceAudioTrace = import('@cindy/voice-input-core').AudioTrace;
 type VoiceSpeechSegment = import('@cindy/voice-input-core').SpeechSegment;
 type VoiceInputGlobalErrorCode =
-  'empty' | 'unavailable' | 'unconfirmed' | 'permission' | 'failed' | 'superseded';
+  'empty' | 'unavailable' | 'unconfirmed' | 'permission' | 'appNotAllowed' | 'failed' | 'superseded';
 type VoiceInputGlobalResult =
   { ok: true } | { ok: false; error: string; errorCode?: VoiceInputGlobalErrorCode };
 type VoiceEditableRange = import('@cindy/voice-input-core').EditableRange;
@@ -1466,6 +1467,9 @@ interface ElectronAPI {
       id: string,
       config: Record<string, unknown> | null,
     ) => Promise<{ config: Record<string, unknown> }>;
+    /** 「用插件打开文件」开关(只对声明了 fileOpener 的插件有意义;默认开)。 */
+    fileOpener: (id: string) => Promise<{ declared: boolean; enabled: boolean }>;
+    setFileOpener: (id: string, enabled: boolean) => Promise<{ declared: boolean; enabled: boolean }>;
     /** 系统文件选择框(.cindy 过滤),只选不装;取消返回 { canceled: true }。 */
     githubRelease: (action: 'check' | 'update' | 'sign-in', instanceId: string, assetId?: number) =>
       Promise<import('../shared/githubPluginRelease').GithubPluginReleaseResult | boolean>;
@@ -1486,7 +1490,7 @@ interface ElectronAPI {
       unsupportedSlots: string[];
       iconDataUrl?: string;
     }>;
-    uninstall: (id: string) => Promise<{ ok: true }>;
+    uninstall: (id: string, confirmed?: import('../shared/ghost').ConfirmedGhostUninstall) => Promise<{ ok: true }>;
     /** 详情页「导出 .cindy」:打包安装目录 → 保存对话框落盘。 */
     export: (
       id: string,
@@ -1725,6 +1729,19 @@ interface ElectronAPI {
     /** confirm 槽回包:把用户的点击送回 main 结算挂起的管子请求。 */
     onConfirmDismissed?: (callback: (payload: { requestId: string }) => void) => () => void;
     resolveConfirm: (requestId: string, confirmed: boolean) => Promise<{ handled: boolean }>;
+    /** form 槽:插件请求弹主机画的表单(main 已资格审+净化+限速+单飞,且本窗口正获得焦点)。
+     *  收到即本窗口负责弹;答复用 resolveForm 回包。dismissed = main 那边超时或清理,收起表单。 */
+    onFormRequest?: (
+      callback: (payload: {
+        requestId: string;
+        ghostId: string;
+        ghostName: string;
+        iconDataUrl?: string;
+        spec: import('../shared/ghostForm').GhostFormSpec;
+      }) => void,
+    ) => () => void;
+    onFormDismissed?: (callback: (payload: { requestId: string }) => void) => () => void;
+    resolveForm?: (requestId: string, answer: import('../shared/ghostForm').GhostFormAnswer) => Promise<{ handled: boolean }>;
     onModelPickerRequest: (callback: (request: import('../shared/pluginModelPicker').PluginModelPickerPresentation) => void) => () => void;
     onModelPickerDismissed: (callback: (request: { requestId: string }) => void) => () => void;
     resolveModelPicker: (requestId: string, route: import('../shared/pluginTasks').PluginTaskRoute | null) => Promise<{ handled: boolean; accepted: boolean }>;
@@ -1803,9 +1820,11 @@ interface ElectronAPI {
 
   /** Plugin Protocol v2 市场；网络、下载与安装全部在 main 进程完成。 */
   pluginMarket: {
+    cancelOfficialModelPlugins: () => Promise<void>;
+    officialModelPlugins: (cursor: string | null) => Promise<import('../shared/pluginMarket').OfficialModelPluginPage>;
     query: (input: import('../shared/pluginMarket').PluginMarketQuery) => Promise<import('../shared/pluginMarket').PluginMarketPage>;
     lookup: (ghostIds: string[]) => Promise<import('../shared/pluginMarket').PluginMarketSnapshot>;
-    recommendations: () => Promise<import('../shared/pluginMarket').PluginMarketItem[]>;
+    recommendations: (pluginIds?: string[]) => Promise<import('../shared/pluginMarket').PluginMarketItem[]>;
     snapshot: () => Promise<import('../shared/pluginMarket').PluginMarketSnapshot>;
     detail: (pluginId: string) => Promise<import('../shared/pluginMarket').PluginMarketDetail>;
     prepareShare: (pluginId: string, options?: import('../shared/share').ShareOptions) => Promise<import('../shared/share').ShareContent>;
@@ -1820,7 +1839,7 @@ interface ElectronAPI {
       pluginId: string,
       options: import('../shared/pluginMarket').PluginMarketInstallOptions,
     ) => Promise<import('../shared/pluginMarket').PluginMarketInstallResult>;
-    uninstall: (pluginId: string) => Promise<{ ok: true }>;
+    uninstall: (pluginId: string, confirmed?: import('../shared/ghost').ConfirmedGhostUninstall) => Promise<{ ok: true }>;
     consumeRemovalNotice: () => Promise<
       import('../shared/pluginMarket').PluginRemovalUserNotice | null
     >;
@@ -2413,6 +2432,7 @@ interface ElectronAPI {
    * `LOG_UPLOAD_EMPTY`(采到 0 条)/ `LOG_UPLOAD_FAILED`(网络)/ `LOG_UPLOAD_BUSY`。
    */
   uploadLogsNow: () => Promise<LogUploadResult>;
+  acceptManualLogUploadConsent: (policyVersion: string) => Promise<LogUploadSettingsPayload>;
   onLogUploadSettingsChange: (callback: (payload: LogUploadSettingsPayload) => void) => () => void;
 
   // ── Profile 编辑(设置 → 用户卡片编辑名字 / 头像;直写服务端,跨设备生效) ──
@@ -2511,6 +2531,8 @@ interface ElectronAPI {
     setConfig: (payload: { token: string; ownerUserId: string }) => Promise<{
       status: TelegramBotTransportStatus;
       saveErrorStatus?: TelegramBotTransportStatus;
+      /** 保存失败只是建连握手超时(界面保留输入、提示重试)。 */
+      saveTimedOut?: boolean;
       ownerUserId: string | null;
       botUsername: string | null;
     }>;
@@ -2704,6 +2726,7 @@ interface ElectronAPI {
     appDefaultModelRequestId?: string;
     ownerStamp: import('../shared/dataOwnerPush').DataOwnerPushStamp;
     selectedRoute?: import('../shared/botModelChain').BotModelRoute;
+    selectedPluginEngine?: import('../shared/pluginEngines').NewTaskPluginEngineSelection;
     lastByVendor: Partial<
       Record<
         'cc' | 'codex' | 'pi',
@@ -2757,7 +2780,7 @@ interface ElectronAPI {
     cb: (payload: {
       selectDraftAgent?: true;
       appDefaultSelection?: import('../shared/appDefaultModelSelection').AppDefaultModelSelection;
-      agent: 'claude-code' | 'codex' | 'pi';
+      agent: 'claude-code' | 'codex' | 'pi' | 'acp';
       providerId: string;
       modelId: string;
       active: boolean;
@@ -4138,6 +4161,11 @@ interface ElectronAPI {
     choose(): Promise<import('../shared/projectsRoot').ProjectsRootState>;
     reset(): Promise<import('../shared/projectsRoot').ProjectsRootState>;
   };
+  taskExportDirectory?: {
+    get(): Promise<import('../shared/taskExportDirectory').TaskExportDirectoryState>;
+    choose(): Promise<import('../shared/taskExportDirectory').TaskExportDirectoryState>;
+    reset(): Promise<import('../shared/taskExportDirectory').TaskExportDirectoryState>;
+  };
   createProjectFromTask: {
     prepare(sessionId: string): Promise<import('../shared/projectsRoot').PreparedProjectFromTask>;
     chooseParent(): Promise<string | null>;
@@ -4748,7 +4776,7 @@ interface ElectronAPI {
       enabled: boolean,
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     setProviderEnabled: (
-      provider: 'telegram' | 'x' | 'feishu',
+      provider: 'telegram' | 'x' | 'feishu' | 'discord',
       enabled: boolean,
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     /** 把一个本机目录加进项目列表(侧栏与 IM 机器人共用)。 */
@@ -4759,7 +4787,7 @@ interface ElectronAPI {
     setXCompanion: (botId: string | null, expectedBotId: string | null) =>
       Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     setProviderDefaultWorkspace: (
-      provider: 'telegram' | 'x' | 'feishu',
+      provider: 'telegram' | 'x' | 'feishu' | 'discord',
       alias: string | null,
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     bindStart: () => Promise<{ ok: true }>;
@@ -4778,22 +4806,22 @@ interface ElectronAPI {
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     cancelPendingBind: () => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     providerBindStart: (
-      provider: 'telegram' | 'x' | 'feishu',
+      provider: 'telegram' | 'x' | 'feishu' | 'discord',
       scopeId?: string,
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     providerBindCancel: (
-      provider: 'telegram' | 'x' | 'feishu',
+      provider: 'telegram' | 'x' | 'feishu' | 'discord',
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     providerBindSelect: (
-      provider: 'telegram' | 'x' | 'feishu',
+      provider: 'telegram' | 'x' | 'feishu' | 'discord',
       bindingId?: string,
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     providerBindRevoke: (
-      provider: 'telegram' | 'x' | 'feishu',
+      provider: 'telegram' | 'x' | 'feishu' | 'discord',
       bindingId?: string,
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     openProviderAction: (
-      provider: 'telegram' | 'x' | 'feishu',
+      provider: 'telegram' | 'x' | 'feishu' | 'discord',
       action: import('../shared/hookControlIpc').ProviderOpenAction,
       scopeId?: string,
     ) => Promise<{ ok: true }>;
@@ -6551,6 +6579,7 @@ interface ElectronAPI {
     enableOrca: (
       leadSessionId: string,
       opts: {
+        modelGroup?: string;
         /** 'acp' = 第一个 Worker 放在插件引擎上(providerId 指出是哪一个)。 */
         workerAgent: 'claude-code' | 'codex' | 'pi' | 'acp';
         delegateTask?: string;
@@ -7020,6 +7049,18 @@ interface ElectronAPI {
       channel?: ImDefaultSettingsChannel,
     ) => Promise<ImDefaultSettingsState>;
     imDefaultSettingsReset: (channel?: ImDefaultSettingsChannel) => Promise<ImDefaultSettingsState>;
+    /** 个人飞书 / Lark 机器人所在的群与各群单独的项目、模型、权限。 */
+    feishuGroupSettingsList: (options?: {
+      /** 用户点了「刷新」：不复用 30 秒内的群名单。 */
+      refresh?: boolean;
+      /** 只给收起时的群数与头像用：不解析项目模型（`project.config` 都是 null）。 */
+      summary?: boolean;
+    }) => Promise<import('../shared/feishuGroupSettings').FeishuGroupSettingsList>;
+    feishuGroupSettingsSet: (
+      chatId: string,
+      patch: import('../shared/feishuGroupSettings').FeishuGroupSettingsPatch,
+      name: string | null,
+    ) => Promise<import('../shared/feishuGroupSettings').FeishuGroupSettingsView>;
 
     /** 子代理模型覆盖。null 表示不注入覆盖，仅对新建 agent 会话生效。 */
     subagentModelSettingsGet: () => Promise<SubagentModelSettingsState>;
@@ -7030,7 +7071,15 @@ interface ElectronAPI {
     auxiliaryModelSettingsGet: () => Promise<AuxiliaryModelSettingsState>;
     auxiliaryModelSettingsSet: (
       patch: AuxiliaryModelSettingsPatch,
-    ) => Promise<AuxiliaryModelSettingsState>;
+    ) => Promise<import('../shared/auxiliaryModelSettings').AuxiliaryModelSaveResult>;
+    auxiliaryModelSettingsTest: (
+      patch: AuxiliaryModelSettingsPatch,
+    ) => Promise<import('../shared/auxiliaryModelSettings').AuxiliaryModelSettingsTestResult>;
+    auxiliaryModelHealthDismiss: (sessionId: string, noticeId: number) => Promise<void>;
+    auxiliaryModelRouteHealthGet: (sessionId?: string) => Promise<import('../shared/auxiliaryModelHealth').AuxiliaryModelHealthSnapshot[]>;
+    onAuxiliaryModelHealthChanged: (
+      callback: (event: import('../shared/auxiliaryModelHealth').AuxiliaryModelHealthEvent) => void,
+    ) => () => void;
     auxiliaryModelHealthGet: () => Promise<AuxiliaryModelHealth>;
 
     /** Agent 资源占用治理(命令并发上限/进程优先级/工具链限核)。 */

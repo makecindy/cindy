@@ -5,7 +5,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { open } from 'node:fs/promises';
 import { statSync, type Stats } from 'node:fs';
-import { cleanProcessEnv, type AuthState } from '@cindy/maker-core';
+import { cleanProcessEnv, type AccountRateLimitsResponse, type AuthState } from '@cindy/maker-core';
 import { getReadyBinaryPath } from '../agent-binaries/index.js';
 import {
   refreshClaudeCliLoginStatus,
@@ -112,7 +112,11 @@ export async function readNativeAccount(
       ...(result.loginExpiresAt ? { loginExpiresAt: result.loginExpiresAt } : {}),
     };
   }
-  const result = (await codexAccountRpc(directory, 'account/read', { refreshToken: false }, options?.codexCanDispatch)) as {
+  return parseNativeCodexAccount(await codexAccountRpc(directory, 'account/read', { refreshToken: false }, options?.codexCanDispatch));
+}
+
+function parseNativeCodexAccount(value: unknown): AuthState & { plan?: string; planType?: string } {
+  const result = value as {
     account?: { type?: string; email?: string; planType?: string } | null;
     requiresOpenaiAuth?: boolean;
   };
@@ -127,6 +131,37 @@ export async function readNativeAccount(
     ...(result.account === null && result.requiresOpenaiAuth === false
       ? { errorReason: 'codex_provider_managed_auth' }
       : {}),
+  };
+}
+
+/** The initial identity and quota can share startup while the selected credential stays current. */
+export async function readNativeCodexAccountAndRateLimits(
+  directory: string,
+  assertCurrent: () => void | Promise<void>,
+) {
+  await assertCurrent();
+  const tokens = await readNativeCodexTokens(directory);
+  const checkCredential = () => {
+    if (!tokens.canDispatch()) throw new Error('PRECONDITION_FAILED: ChatGPT account changed');
+  };
+  const canDispatch = async () => {
+    await assertCurrent();
+    return true;
+  };
+  const [account, response] = await runCodexAccountRpc(directory, [
+    { method: 'account/read', params: { refreshToken: false } },
+    { method: 'account/rateLimits/read', params: {}, checkPrevious: previous => {
+      const auth = parseNativeCodexAccount(previous);
+      if (!auth.authenticated || !auth.identity)
+        throw new Error('PRECONDITION_FAILED: ChatGPT account changed');
+    } },
+  ], { canDispatch, checkCredential });
+  await assertCurrent();
+  checkCredential();
+  const auth = parseNativeCodexAccount(account);
+  return {
+    identity: { email: auth.identity ?? null, accountId: tokens.chatgptAccountId },
+    response: response as AccountRateLimitsResponse,
   };
 }
 
@@ -228,6 +263,19 @@ export function codexAccountRpc(
   canDispatch?: () => boolean | Promise<boolean>,
   refreshId?: string,
 ): Promise<unknown> {
+  return runCodexAccountRpc(directory, [{ method, params }], { canDispatch, refreshId })
+    .then(([result]) => result);
+}
+
+function runCodexAccountRpc(
+  directory: string,
+  requests: ReadonlyArray<{ method: string; params: unknown; checkPrevious?: (result: unknown) => void }>,
+  { canDispatch, refreshId, checkCredential }: {
+    canDispatch?: () => boolean | Promise<boolean>;
+    refreshId?: string;
+    checkCredential?: () => void;
+  },
+): Promise<unknown[]> {
   const binary = getReadyBinaryPath('codex');
   if (!binary) return Promise.reject(new Error('Codex CLI unavailable'));
   return new Promise((resolve, reject) => {
@@ -241,19 +289,25 @@ export function codexAccountRpc(
     if (refreshId) desktopMakerLogger.debug('Codex model/list probe started', { refreshId, pid: child.pid });
     let settled = false;
     let buffer = '';
-    const finish = (error?: Error, result?: unknown) => {
+    const results: unknown[] = [];
+    let expectedId: number | undefined = 1;
+    const finish = (error?: Error) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       child.kill();
       if (error) reject(error);
-      else resolve(result);
+      else resolve(results);
     };
     // A stalled read is almost always the CLI waiting on its account service (startup refreshes).
-    const timer = setTimeout(() => finish(new AccountServiceUnreachableError('Codex account read timed out')), 15_000);
+    const startTimeout = () => setTimeout(
+      () => finish(new AccountServiceUnreachableError('Codex account read timed out')), 15_000);
+    let timer = startTimeout();
     const send = (message: unknown) => child.stdin.write(JSON.stringify(message) + '\n');
     const dispatch = async () => {
       try {
+        const request = requests[results.length];
+        request.checkPrevious?.(results.at(-1));
         if (canDispatch) {
           const allowed = canDispatch();
           // Existing synchronous proofs and the write must stay in the same synchronous segment.
@@ -261,7 +315,12 @@ export function codexAccountRpc(
             return finish(new Error('Codex account changed before dispatch'));
         }
         // An asynchronous credential/source check can outlive this control connection.
-        if (!settled) send({ id: 2, method, params });
+        if (!settled) {
+          // Check the file again synchronously after an asynchronous owner/source check.
+          checkCredential?.();
+          expectedId = results.length + 2;
+          send({ id: expectedId, method: request.method, params: request.params });
+        }
       } catch {
         finish(new Error('Codex account changed before dispatch'));
       }
@@ -283,12 +342,22 @@ export function codexAccountRpc(
           continue;
         }
         if (message.error) return finish(codexRequestError(message.error));
+        if (expectedId === undefined || message.id !== expectedId) continue;
+        expectedId = undefined;
         if (message.id === 1) {
           send({ method: 'initialized', params: {} });
           // Startup may await configuration/auth refresh. A reset must still use
           // the exact credential observed before spawning this control connection.
           void dispatch();
-        } else if (message.id === 2) finish(undefined, message.result);
+        } else {
+          results.push(message.result);
+          if (results.length === requests.length) finish();
+          else {
+            clearTimeout(timer);
+            timer = startTimeout();
+            void dispatch();
+          }
+        }
       }
     });
     send({

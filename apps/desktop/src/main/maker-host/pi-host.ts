@@ -85,7 +85,8 @@ import {
 } from './anthropic-compat-proxy-host.js';
 import { hostCredentialEndpointAllowed } from './pi-provider-transport.js';
 import { hasGrokOAuthLogin } from './grok-oauth-login.desktop.js';
-import { isOpenAiSubscriptionProviderId } from './codex-account-auth.desktop.js';
+import { codexAccountState, isOpenAiSubscriptionProviderId } from './codex-account-auth.desktop.js';
+import { hasConnectedSubscriptionPool } from '../subscription-accounts/runtime.js';
 import { withProviderAppAttribution } from './provider-app-attribution.js';
 import { createLogger } from '../logger.js';
 import { registerPiProxySession } from './pi-proxy-session-auth.js';
@@ -108,11 +109,13 @@ import {
 import { mutateAuthorizedPiManagedPackage } from './pi-managed-package-mutation.js';
 import {
   createPiNativeProviderResolver,
+  createPiSubscriptionConnectionReader,
   resolvePiCindyGatewayModelApi,
   resolvePiCindyGatewayModelSpec,
 } from './piNativeProvidersCore.js';
 export {
   buildPiSubscriptionNativeProviders,
+  createPiSubscriptionConnectionReader,
   listedPiModelIds,
   mergePiNativeProviderResults,
   parsePiListModels,
@@ -140,6 +143,29 @@ const log = createLogger('pi-host');
 export function resolvePiBinaryPath(): string | null {
   return getReadyBinaryPath('pi') ?? null;
 }
+
+/**
+ * #12298: 订阅来源的连接态(与「设置 → 模型供应商」列表同口径,纯读、无自愈副作用)。
+ * 断开的订阅仍留在会话目录里(重连后父会话可直接切换),但子代理路由不能列它。
+ *
+ * 它接在 AgentDeps.isNativeProviderSourceConnected 上,不进入 provider 清单本身 ——
+ * 清单是桌面与 Node Host 的逐字节契约(host↔desktop parity),连接态是宿主各自的凭证事实。
+ */
+const subscriptionSourceConnected = createPiSubscriptionConnectionReader({
+  // 架构规则 §5:端口在调用时才取值(转调),不在模块加载时把函数本身存下来。
+  getActiveCatalog: () => getActiveCatalog(),
+  hasGrokOAuthLogin: (...args) => hasGrokOAuthLogin(...args),
+  codexAccountState: (...args) => codexAccountState(...args),
+  hasCodexOAuthLoginReadOnly: () => desktopCodexAuthAdapter.hasCodexOAuthLoginReadOnly(),
+  hasConnectedSubscriptionPool: (...args) => hasConnectedSubscriptionPool(...args),
+  onReadFailure: (providerId, error) => log.warn(
+    'pi: subscription connection read failed; keeping the source listed',
+    {
+      providerId,
+      message: error instanceof Error ? error.message : String(error),
+    },
+  ),
+});
 
 // The desktop's ports for the Pi native providers shared with the Node Host (piNativeProvidersCore.ts).
 const piNativeProviderResolver = createPiNativeProviderResolver({
@@ -397,6 +423,8 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     },
     registerPiProxySession,
     resolvePiNativeProviders: (ctx) => resolvePiNativeProviders(ctx),
+    // #12298: 子代理路由不列确知断开的订阅来源(连接态是桌面宿主的凭证事实,纯读)。
+    isNativeProviderSourceConnected: subscriptionSourceConnected,
     resolvePiRuntimeModelDescriptor: opts.resolvePiRuntimeModelDescriptor,
     resolvePiRuntimeModels: opts.resolvePiRuntimeModels,
     resolvePiGatewayModelDescriptor: opts.resolvePiGatewayModelDescriptor,

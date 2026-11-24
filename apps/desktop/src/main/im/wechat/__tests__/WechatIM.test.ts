@@ -7,6 +7,7 @@ import {
 } from '@cindy/wechat-ilink';
 
 import type { DbClient } from '../../../localDb/client/DbClient';
+import { PluginEngineUnsupportedError } from '../../../maker-host/engineKind';
 import {
   beginInteractionRoute, installDesktopInteractionHandler, requestHostInteraction,
 } from '../../../maker-ipc/interactionRouter';
@@ -104,6 +105,42 @@ describe('WechatIM host boundary', () => {
       await im.dispose();
       vi.useRealTimers();
     }
+  });
+
+  // #12592, unit: exercise the pump through init, with a bounded queue and a simulated transport.
+  it('settles a plugin engine refusal and continues pumping the inbox', async () => {
+    const { im, db, transport } = restoredConnection(() => 0);
+    const pending = ['unsupported', 'next'];
+    const lease = vi.fn(() => {
+      const id = pending.shift();
+      return id ? {
+        id, bindingEpoch: 'epoch', peerId: id, sessionId: id, conversationEpoch: 1,
+        payloadJson: JSON.stringify({ text: 'hello', attachments: [], unsupportedMedia: [] }),
+        context: encryptWechatContextToken('context', Buffer.alloc(32, 3), 'epoch', id),
+        attempts: 0, receivedAt: 1, expiresAt: Date.now() + 60_000,
+      } : null;
+    });
+    vi.mocked(db.tx).mockImplementation((async (name: string) =>
+      name === 'wechatLeaseNextTask' ? lease() : null) as DbClient['tx']);
+    transport.getTypingTicket = vi.fn(async () => 'ticket');
+    transport.setTyping = vi.fn();
+    const dispatchAgentTurn = vi.fn()
+      .mockRejectedValueOnce(new PluginEngineUnsupportedError('IM channels'))
+      .mockResolvedValueOnce({ kind: 'accepted', terminal: Promise.resolve({ kind: 'done' }) });
+    im.attachTurnRuntime({ runner: { companionBotIdFor: () => 'bot', dispatchAgentTurn, stopActiveTurn: vi.fn() } } as never);
+    await im.init();
+    try {
+      await vi.waitFor(() => expect(lease.mock.results.some(result => result.value === null)).toBe(true));
+      expect(dispatchAgentTurn.mock.calls.map(([input]) => input.userMessageId)).toEqual(['unsupported', 'next']);
+      expect(vi.mocked(transport.setTyping).mock.calls.map(([peer, , typing]) => [peer, typing]))
+        .toEqual([['unsupported', true], ['unsupported', false], ['next', true], ['next', false]]);
+      expect(im.getActivePeerIdForSession('unsupported')).toBeNull();
+      expect(db.tx).toHaveBeenCalledWith('wechatCommitPreDispatchFailure', expect.objectContaining({
+        bindingEpoch: 'epoch', taskId: 'unsupported', errorCode: 'PLUGIN_ENGINE_UNSUPPORTED',
+        outbox: [expect.objectContaining({ kind: 'error', text: expect.any(String) })],
+      }));
+      expect(db.tx).not.toHaveBeenCalledWith('wechatReleaseDispatch', expect.anything());
+    } finally { await im.dispose(); }
   });
 
   // Exercise the durable inbox through the public host lifecycle. Only the

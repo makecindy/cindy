@@ -268,6 +268,9 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // 菜单时拉一次,才能给出「更大」的档位。无 event.sender / 无本机副作用,不写任何存储。
   // 老被控端无 handler → CHANNEL_NOT_ALLOWED → 控制端退回「只允许收紧」。
   'maker:get-context-window-bounds',
+  // Same-account, read-only native window numbers. No config contents, paths or
+  // credentials; no settings writes. Old hosts reject this channel as unsupported.
+  'maker:model-context-limit:get',
   'maker:set-extra-dirs',
   'maker:set-writable-dirs',
   // Pi 原生分支树:只读快照 + 当前会话内导航。导航业务 handler 在被控端原子同步
@@ -793,6 +796,8 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   'worktree:discard-precreated',
   'worktree:cancel-precreated',
   'worktree:removal-preview',
+  'worktree:restore-status',
+  'worktree:restore-for-session',
   // —— 个人 Telegram bot 跨设备上下线(准入论证见上方 DL_TELEGRAM_* 常量注释)——
   // 两条都由被控端 dispatch 拦截执行, 不是 ipcMain handler。
   DL_TELEGRAM_STATUS_CHANNEL,
@@ -980,6 +985,7 @@ export const INVOKE_TIMEOUT_OVERRIDES_MS: Readonly<Record<string, number>> = {
   // NTFS 复制模式更慢)。控制端在此期间显示创建中,给 5 分钟执行预算 + 回程余量。
   // 旧控制端仍按 60s 超时,超时后走既有预创建补偿;被控端执行不受此值影响。
   'worktree:create': 300_000,
+  'worktree:restore-for-session': 300_000,
   // 被控端 await agent.startSession:Codex app-server 冷启动 + thread/start 没有更短
   // deadline,机器高负载时实测 41.6s / 42.4s(2026-11-18)。默认 30s 会让控制端先超时:
   // 被控端照样建完任务,控制端却当失败处理,首条消息没发、用户重试又建一个新任务,

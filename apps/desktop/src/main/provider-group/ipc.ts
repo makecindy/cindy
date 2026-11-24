@@ -11,6 +11,7 @@ import {
   PROVIDER_GROUP_IPC,
   isProviderGroupProviderId,
   normalizeProviderGroupConfig,
+  parseProviderGroupDisplayRead,
   parseProviderGroupRemoteView,
   type ProviderGroupCommand,
   type ProviderGroupLocalCommand,
@@ -18,6 +19,7 @@ import {
   type ProviderGroupRebalanceSuggestion,
   type ProviderGroupReshareSummary,
   type ProviderGroupSessionGroup,
+  type ProviderGroupDisplayRead,
   type ProviderGroupView,
 } from '../../shared/providerGroup.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
@@ -62,7 +64,7 @@ export interface ProviderGroupCommandDeps {
   /** 当前账号：等远端目录期间换了账号时不写入(否则会把上一个账号的组写进新账号)。 */
   ownerKey(): string;
   /** 另一台电脑上某个供应商的组与组内电脑状态(设置页只读展示)。 */
-  remoteView(deviceId: string, providerId: string): Promise<ProviderGroupView>;
+  remoteView(deviceId: string, providerId: string, display?: ProviderGroupDisplayRead): Promise<ProviderGroupView>;
   /** 本机设备 id(另一台电脑的组里可能也有本机这台)。 */
   localDeviceId(): string | null;
   /** 本机全部组的设置(不读远端，模型列表据此收起本机组里的远程供应商)。 */
@@ -155,7 +157,8 @@ export function parseProviderGroupCommand(raw: unknown): ProviderGroupCommand {
       if (typeof value.deviceId !== 'string' || !REMOTE_DEVICE_ID_PATTERN.test(value.deviceId)) {
         throwIpcError('INVALID_PARAMS', 'deviceId required');
       }
-      return { action: 'remote-view', providerId, deviceId: value.deviceId as string };
+      return { action: 'remote-view', providerId, deviceId: value.deviceId as string,
+        ...(value.display !== undefined ? { display: parseProviderGroupDisplayRead(value.display) } : {}) };
     }
     case 'save': {
       if (!value.config || typeof value.config !== 'object') throwIpcError('INVALID_PARAMS', 'config required');
@@ -249,7 +252,7 @@ async function runProviderGroupCommand(
       return withReshare(deps, view);
     }
     case 'remote-view': {
-      const view = await deps.remoteView(command.deviceId, providerId);
+      const view = await deps.remoteView(command.deviceId, providerId, command.display);
       assertCurrent();
       return markMembersUnreachableHere(view, deps.directory, deps.localDeviceId());
     }
@@ -351,7 +354,7 @@ export function createProviderGroupCommandDeps(
     writeGroup: writeProviderGroup,
     pruneBindings: pruneProviderGroupBindings,
     ownerKey: activeOwnerScopeKey,
-    remoteView: (deviceId, providerId) => getProviderGroupRemoteClient().view(deviceId, providerId, { includeGuestSupport: true }),
+    remoteView: (deviceId, providerId, display) => getProviderGroupRemoteClient().view(deviceId, providerId, { includeGuestSupport: true, display }),
     localDeviceId: getSelfDeviceId,
     listGroups: listProviderGroups,
     sessionGroup: readProviderGroupOfSession,

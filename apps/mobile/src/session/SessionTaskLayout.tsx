@@ -50,7 +50,7 @@ export function SessionTaskLayout({ children }: {
       sessionId, deviceId, deviceName: deviceDisplayName(deviceId, readRouteParam(params.deviceName)),
       focusClientId: readRouteParam(params.focusClientId) ?? undefined,
       ...taskListEntryParams(params),
-    });
+    }, false);
   }, [legacyHistory, deviceId, sessionId, navigation, params.deviceName, params.focusClientId, params.taskListEntry]);
   const paneLayout = useSessionPaneLayout();
   const adaptiveWindow = useAdaptiveWindow();

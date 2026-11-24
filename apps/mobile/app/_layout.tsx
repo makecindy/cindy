@@ -31,6 +31,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, type ReactElement } 
 import { useTranslation } from 'react-i18next';
 import { Alert, AppState, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { Text } from '@/components/AppText';
+import { CenteredScreen } from '@/components/CenteredScreen';
 import { ConnectionNoticeProvider } from '@/components/ConnectionNoticeOverlay';
 import { RootErrorBoundary } from '@/components/RootErrorBoundary';
 import { fontWeight, lineHeight, radius, spacing, typeScale, useThemedStyles, type ThemeColors } from '@/theme';
@@ -191,6 +192,10 @@ function NavigationGate() {
   // 显示模式偏好读回前不释放，避免已选浅色 / 深色的用户先看到系统外观再切换。
   useHomeStartupSplashRelease(preferenceReady ? releaseSplash : holdSplash);
 
+  useEffect(() => {
+    if (auth.recoveringSession && preferenceReady) releaseSplash();
+  }, [auth.recoveringSession, preferenceReady, releaseSplash]);
+
   // 启动链走完 = 本次热更 reload(如果有)确实落地:清掉 reload 闸门记录。
   // 只在目标 update 已成为当前运行版本时才清,判定在 markStartupOtaLaunchSuccess 内。
   useEffect(() => {
@@ -232,6 +237,9 @@ function NavigationGate() {
     auth.consumeAccountDeletionRestored,
     auth.isAuthenticated,
   ]);
+
+  if (auth.recoveringSession) return <CenteredScreen title={loginText('restoringSession')} />;
+  if (!auth.initialized) return null;
 
   return (
     <NavigationThemeProvider value={navigationTheme}>

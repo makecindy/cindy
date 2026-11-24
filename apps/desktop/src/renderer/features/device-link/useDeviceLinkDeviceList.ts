@@ -56,6 +56,12 @@ const EXPIRED_REQUEST_STATE: DeviceLinkDeviceListRequestState = { status: 'loadi
  */
 let initialRequestSettled = false;
 /**
+ * The displayed rows come from a complete, fresh read. A stale fallback or one-leg read is
+ * still `ready`, but its online flags are not current evidence (stale rows are projected
+ * offline unless their data path is verified), so it cannot settle connectivity.
+ */
+let directoryAuthoritative = false;
+/**
  * 加载代次:**每次 refresh 发起**与**每次清空(登出 / relay stop)**都自增,作废所有更早的在途
  * listDevices 响应 —— 只有"最新一次操作"的响应能落地(同 remoteProjectsStore 的 snapshotEpoch 思路)。
  * 解决两类乱序:
@@ -225,7 +231,9 @@ function setDevices(
   }
   const settledChanged = !initialRequestSettled;
   const requestChanged = setRequestState('ready', null);
-  if (!devicesChanged && !membershipChanged && !settledChanged && !requestChanged) return true;
+  const authorityChanged = directoryAuthoritative !== authoritative;
+  directoryAuthoritative = authoritative;
+  if (!devicesChanged && !membershipChanged && !settledChanged && !requestChanged && !authorityChanged) return true;
   devices = sorted;
   initialRequestSettled = true;
   subs.forEach((fn) => fn());
@@ -247,8 +255,10 @@ function clearDevices(): void {
   clearDirectoryExpiry();
   loadGeneration += 1; // 作废所有在途 listDevices 响应(见 loadGeneration 注释)。
   const requestChanged = setRequestState('ready', null);
-  const changed = devices !== null || registeredDeviceIds !== null || !initialRequestSettled || requestChanged;
+  const changed = devices !== null || registeredDeviceIds !== null || !initialRequestSettled || requestChanged
+    || directoryAuthoritative;
   registeredDeviceIds = null;
+  directoryAuthoritative = false;
   if (!changed) return;
   devices = null;
   initialRequestSettled = true;
@@ -319,6 +329,7 @@ function retireDirectoryAtExpiry(): void {
   // read path revalidate; in-flight reads keep their own generation.
   const hadRows = devices !== null;
   const wasSettled = initialRequestSettled;
+  directoryAuthoritative = false;
   devices = null;
   initialRequestSettled = false;
   const requestChanged = setRequestState('loading', null);
@@ -690,6 +701,19 @@ function getRequestStateSnapshot(): DeviceLinkDeviceListRequestState {
     return requestState.status === 'error' ? requestState : EXPIRED_REQUEST_STATE;
   }
   return requestState;
+}
+
+function getAuthoritativeSnapshot(): boolean {
+  if (observeDirectoryExpiry()) {
+    scheduleDirectoryRetire();
+    return false;
+  }
+  return directoryAuthoritative;
+}
+
+/** Whether the shown rows are a complete, fresh read (not a stale fallback or one leg). */
+export function useDeviceLinkDeviceListAuthoritative(): boolean {
+  return useSyncExternalStore(subscribe, getAuthoritativeSnapshot);
 }
 
 /** 设备目录的 loading / ready / error 状态；只有 ready + [] 才是权威空目录。 */

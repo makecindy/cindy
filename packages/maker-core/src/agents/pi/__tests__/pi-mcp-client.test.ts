@@ -537,9 +537,24 @@ describe('Pi MCP request lifecycle', () => {
     const search = (await h.list({ query: 'NEEDLE', server: 'catalog', offset: 100 })).details;
     expect(search.total).toBe(117);
     expect(search.tools).toHaveLength(17);
+    const pastLastPage = (await h.list({ query: 'NEEDLE', server: 'catalog', offset: 117 })).details;
+    expect(pastLastPage).toMatchObject({ total: 117, tools: [], hint: search.hint });
+    expect(pastLastPage).not.toHaveProperty('nextOffset');
     const exact = (await h.list({ server: 'catalog', tool: 'tool_116' })).details;
     expect(exact.tools[0].description).toBe(description);
     expect(exact.tools[0].inputSchema.properties.value.type).toBe('string');
+  });
+
+  // #10721: the registered discovery tool should not describe an empty catalog
+  // as a failed filter. Existing pagination coverage uses only nonempty catalogs.
+  // Unit tier: refresh the only server to an empty list, then pass a query.
+  it('does not suggest query recovery when the catalog has no tools', async () => {
+    const h = gatewayWithFetch(vi.fn());
+    h.gateway.add('cindy', h.client, []);
+    const unfiltered = (await h.list()).details;
+    const filtered = (await h.list({ query: 'qzv10721xkfj982none' })).details;
+    expect(filtered).toEqual(unfiltered);
+    expect(filtered).toMatchObject({ ok: true, total: 0, tools: [], availableServers: [] });
   });
 
   it.each([false, true])('keeps structured data model-visible (isError=%s) without exposing private metadata', async (isError) => {

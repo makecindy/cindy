@@ -83,6 +83,106 @@ let subscribed = false;
 /** 已批量取过卡的会话(ensureSessionCards 幂等,避免重复打 IPC)。 */
 const loadedSessions = new Set<string>();
 
+// A stream or PR preview can display turn cards and spawned cards without individual
+// lookups. Keep its session together until the last view releases it.
+const localViews = new Map<string, number>();
+const viewedIds = new Map<string, Set<string>>();
+let retryTimer: ReturnType<typeof setTimeout> | undefined;
+const cacheSizes = new Map<string, number>();
+const historyEntries = new WeakSet<GhostCardEntry>();
+const verifyAfter = new WeakMap<GhostCardEntry, number>();
+const encoder = new TextEncoder();
+let cacheBytes = 0;
+let trimScheduled = false;
+
+function setReady(callId: string, entry: Extract<GhostCardEntry, { status: 'ready' }>, historical = false): void {
+  const previous = byCallId.get(callId);
+  const oldSize = cacheSizes.get(callId) ?? 0;
+  const bytes = previous?.status === 'ready' && previous.html === entry.html && previous.animatedHtml === entry.animatedHtml
+    ? oldSize : encoder.encode(entry.html).length + (entry.animatedHtml ? encoder.encode(entry.animatedHtml).length : 0);
+  cacheBytes += bytes - oldSize;
+  cacheSizes.delete(callId);
+  cacheSizes.set(callId, bytes);
+  if (historical || (previous?.status === 'ready' && historyEntries.has(previous) && previous.html === entry.html))
+    historyEntries.add(entry);
+  byCallId.set(callId, entry);
+  scheduleTrim();
+}
+
+function overBudget(): boolean {
+  return cacheBytes > 16 * 1024 * 1024 || cacheSizes.size > 512;
+}
+
+function protectedCard(id: string, entry: Extract<GhostCardEntry, { status: 'ready' }>): boolean {
+  // Remote HTML has no local history backing; keep the last successful read for offline views.
+  if (entry.remote || entry.state === 'working') return true;
+  if (entry.sessionId && localViews.has(entry.sessionId)) return true;
+  const root = ghostCardRootCallId(id);
+  for (const ids of viewedIds.values()) if (ids.has(id) || ids.has(root)) return true;
+  return false;
+}
+
+function scheduleTrim(): void {
+  if (trimScheduled || !overBudget()) return;
+  trimScheduled = true;
+  queueMicrotask(() => { void trimHistory(); });
+}
+
+async function trimHistory(): Promise<void> {
+  let changed = false;
+  let earliestRetry = Infinity;
+  clearTimeout(retryTimer);
+  try {
+    for (const [id, size] of cacheSizes) {
+      if (!overBudget()) break;
+      const entry = byCallId.get(id);
+      if (entry?.status !== 'ready' || protectedCard(id, entry)) continue;
+      // Push delivery may precede (or survive failure of) its DB write. Check only
+      // under pressure, one local read at a time, and recheck identity after awaiting.
+      if (!historyEntries.has(entry)) {
+        const retryAt = verifyAfter.get(entry) ?? 0;
+        if (retryAt > Date.now()) {
+          earliestRetry = Math.min(earliestRetry, retryAt);
+          continue;
+        }
+        const saved = await window.electronAPI?.ghosts?.getCard?.(id).catch(() => null);
+        if (!saved?.card || saved.card.html !== entry.html || saved.card.ghostId !== entry.ghostId) {
+          const next = Date.now() + 60_000;
+          verifyAfter.set(entry, next);
+          earliestRetry = Math.min(earliestRetry, next);
+          continue;
+        }
+        if (byCallId.get(id) !== entry || protectedCard(id, entry)) continue;
+      }
+      if (entry.sessionId) loadedSessions.delete(entry.sessionId);
+      cacheSizes.delete(id);
+      byCallId.delete(id);
+      cacheBytes -= size;
+      changed = true;
+    }
+  } finally {
+    trimScheduled = false;
+    if (overBudget() && Number.isFinite(earliestRetry))
+      retryTimer = setTimeout(scheduleTrim, Math.max(0, earliestRetry - Date.now()));
+    if (changed) bump();
+  }
+}
+
+export function retainLocalCardSession(sessionId: string): () => void {
+  localViews.set(sessionId, (localViews.get(sessionId) ?? 0) + 1);
+  if (!viewedIds.has(sessionId)) viewedIds.set(sessionId, new Set());
+  ensureSessionCards(sessionId);
+  return () => {
+    const count = (localViews.get(sessionId) ?? 1) - 1;
+    if (count) localViews.set(sessionId, count);
+    else {
+      localViews.delete(sessionId);
+      viewedIds.delete(sessionId);
+    }
+    scheduleTrim();
+  };
+}
+
 function bump(): void {
   version += 1;
   snapshot = { version, byCallId, liveCards };
@@ -115,7 +215,7 @@ export function ingestCardPush(payload: {
   const now = Date.now();
   sweepLive(now);
   const previous = byCallId.get(payload.callId);
-  byCallId.set(payload.callId, {
+  setReady(payload.callId, {
     status: 'ready',
     ghostId: payload.ghostId,
     sessionId: payload.sessionId ?? (previous?.status === 'ready' ? previous.sessionId : undefined),
@@ -185,10 +285,10 @@ export function ensureSessionCards(sessionId: string): void {
       for (const c of cards) {
         const cur = byCallId.get(c.callId);
         if (cur?.status === 'ready') {
-          if (!cur.sessionId) { byCallId.set(c.callId, { ...cur, sessionId }); changed = true; }
+          if (!cur.sessionId) { setReady(c.callId, { ...cur, sessionId }); changed = true; }
           continue; // 推送先到,以更新者为准
         }
-        byCallId.set(c.callId, { status: 'ready', sessionId, ghostId: c.ghostId, html: c.html, height: c.height });
+        setReady(c.callId, { status: 'ready', sessionId, ghostId: c.ghostId, html: c.html, height: c.height }, true);
         changed = true;
       }
       if (changed) bump();
@@ -249,8 +349,15 @@ export function listSpawnCards(
  * 历史卡片按需取件(幂等):未知 → loading → invoke → ready/missing。
  * missing 结果缓存(不反复打 IPC);推送先到则直接 ready,不再取。
  */
-export function ensureCard(callId: string): void {
-  if (!callId || byCallId.has(callId)) return;
+export function ensureCard(callId: string, sessionId?: string): void {
+  if (!callId) return;
+  if (sessionId) viewedIds.get(sessionId)?.add(callId);
+  const existing = byCallId.get(callId);
+  if (existing) {
+    if (existing.status === 'ready' && !existing.sessionId && sessionId)
+      setReady(callId, { ...existing, sessionId });
+    return;
+  }
   ensureSubscribed();
   byCallId.set(callId, { status: 'loading' });
   const api = (window as unknown as {
@@ -273,15 +380,12 @@ export function ensureCard(callId: string): void {
       // 推送竞态:取件在途时推送已把它置 ready,以更新者为准,不回退。
       const current = byCallId.get(callId);
       if (current && current.status === 'ready') return;
-      byCallId.set(
-        callId,
-        card
-          ? { status: 'ready', ghostId: card.ghostId, html: card.html, height: card.height }
-          : { status: 'missing' },
-      );
+      if (card) setReady(callId, { status: 'ready', sessionId, ghostId: card.ghostId, html: card.html, height: card.height }, true);
+      else byCallId.set(callId, { status: 'missing' });
       bump();
     })
     .catch(() => {
+      if (byCallId.get(callId)?.status === 'ready') return;
       byCallId.set(callId, { status: 'missing' });
       bump();
     });
@@ -297,7 +401,7 @@ export function ensureCard(callId: string): void {
 export function noteCardMeasuredHeight(callId: string, measured: number): void {
   const entry = byCallId.get(callId);
   if (!entry || entry.status !== 'ready' || entry.height === measured) return;
-  byCallId.set(callId, { ...entry, height: measured });
+  setReady(callId, { ...entry, height: measured });
   bump();
 }
 
@@ -341,6 +445,7 @@ export function retainRemoteCardSession(deviceId: string, sessionId: string): ()
     const remaining = (remoteViews.get(key) ?? 1) - 1;
     if (remaining) remoteViews.set(key, remaining);
     else remoteViews.delete(key);
+    scheduleTrim();
   };
 }
 
@@ -362,7 +467,7 @@ function readRemoteCard(deviceId: string, sessionId: string, callId: string): Pr
     if (card) {
       remoteRetryAt.delete(callId);
       remoteUnread.delete(callId);
-      byCallId.set(callId, {
+      setReady(callId, {
         status: 'ready',
         ghostId: card.ghostId,
         sessionId,
@@ -381,6 +486,8 @@ function readRemoteCard(deviceId: string, sessionId: string, callId: string): Pr
     // A card already shown keeps its last version when a refresh fails.
     if (current?.status === 'ready' && (!result || result.failed)) return;
     if (current?.status !== 'missing') {
+      cacheBytes -= cacheSizes.get(callId) ?? 0;
+      cacheSizes.delete(callId);
       byCallId.set(callId, { status: 'missing' });
       bump();
     }
@@ -449,6 +556,10 @@ export function ensureRemoteCard(deviceId: string, sessionId: string, callId: st
 }
 
 /** Read a shown remote card again (after an action, or when its version was refused). */
+export function isUnloadedRemoteCard(callId: string): boolean {
+  return remoteUnread.has(callId) && byCallId.get(callId)?.status !== 'ready';
+}
+
 export function refreshRemoteCard(callId: string): void {
   const entry = byCallId.get(callId);
   if (entry?.status === 'ready' && entry.remote) void readRemoteCard(entry.remote.deviceId, entry.remote.sessionId, callId);
@@ -457,6 +568,11 @@ export function refreshRemoteCard(callId: string): void {
 /** 测试专用:清空全部状态(模块级单例,跨用例隔离)。 */
 export function __resetGhostCardStoreForTest(): void {
   byCallId.clear();
+  cacheSizes.clear();
+  cacheBytes = 0;
+  localViews.clear();
+  viewedIds.clear();
+  clearTimeout(retryTimer);
   liveCards = [];
   version = 0;
   snapshot = { version, byCallId, liveCards };

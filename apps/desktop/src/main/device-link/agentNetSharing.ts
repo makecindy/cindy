@@ -23,6 +23,7 @@ import { relayDataPath, secureStorageAvailable, readRelayConfig } from './selfHo
 import { activeSelfHostedRelay } from './selfHostedRelayRouting.js';
 import { hostJoinBaseUrl } from './selfHostedRelayAddress.js';
 import { agentNetAllowsLegacy } from './agentNetRuntime.js';
+import { directoryRetryDeadline, directoryThrottleMembershipOf, recordDirectoryRetryDeadline } from './directoryThrottle.js';
 import { agentNetSelectionKey, supportsPrivateAgentNetSharing } from './agentNetRuntime.js';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { createSharedTaskJournal } from '../localDb/sharedTasks.js';
@@ -558,17 +559,36 @@ export async function listAgentNetProviderShares(received: boolean, legacy: () =
   if (agentNetAllowsLegacy()) sources.push({ route: undefined as unknown as AgentNetSharingRoute, key: providerListKey(received),
     departedMembers: new Set<string>(), work: () => legacy() });
   if (received) for (const source of sources) state.providerListReads.add(source);
+  const throttleOwner = directoryThrottleMembershipOf(state.key);
   const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 12_000);
   const values: PromiseSettledResult<unknown>[] = new Array(sources.length); let cursor = 0;
   try {
     await Promise.all(Array.from({ length: Math.min(4, sources.length) }, async () => {
       for (;;) {
         const i = cursor++; if (i >= sources.length) break;
-        try { state.guard(); if (controller.signal.aborted) throw new Error('AGENT_NET_DIRECTORY_DEADLINE');
-          const value = await sources[i].work(controller.signal), rows = (value as { shares?: unknown })?.shares;
+        const source = sources[i];
+        const deadline = received ? directoryRetryDeadline(throttleOwner, source.key) : 0;
+        if (deadline) {
+          values[i] = { status: 'rejected', reason: { status: 429 } };
+          continue;
+        }
+        try {
+          state.guard();
+          if (controller.signal.aborted) throw new Error('AGENT_NET_DIRECTORY_DEADLINE');
+          const value = await source.work(controller.signal);
+          const rows = (value as { shares?: unknown })?.shares;
           if (!Array.isArray(rows) || rows.length > 10_000) throw new Error('INVALID_AGENT_NET_PROVIDER_LIST');
-          values[i] = { status: 'fulfilled', value: rows }; }
-        catch (reason) { values[i] = { status: 'rejected', reason }; }
+          values[i] = { status: 'fulfilled', value: rows };
+        } catch (reason) {
+          const failure = reason as { status?: number; statusCode?: number; code?: string; retryAt?: number } | null | undefined;
+          if (received && ((failure?.statusCode ?? failure?.status) === 429 || failure?.code === 'RATE_LIMITED')) {
+            state.guard();
+            const retryAt = failure?.retryAt;
+            recordDirectoryRetryDeadline(throttleOwner, source.key,
+              typeof retryAt === 'number' && Number.isFinite(retryAt) ? retryAt : Date.now() + 60_000);
+          }
+          values[i] = { status: 'rejected', reason };
+        }
       }
     }));
   } finally {

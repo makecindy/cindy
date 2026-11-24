@@ -475,7 +475,7 @@ import {
 } from './filePathPolicy';
 import { readFileThumbnail } from './fileThumbnail';
 import { createOpenWithHandlers, decodeRegOutput, parseChcpCodepage } from './openWithApps';
-import { resolveShellOpenPathTarget } from './shellOpenPath';
+import { resolveLocalOriginalForPluginOpen, resolveShellOpenPathTarget } from './shellOpenPath';
 import { posixDrivePathToWin32 } from '../shared/pathText';
 import { handleOpenFileInBrowser } from './openFileInBrowser';
 import { createWindowsFileUrlOpener } from './windowsFileUrlOpener';
@@ -936,6 +936,7 @@ import {
   createLocalProjectFromTaskHandlers,
   createProjectsRootSettingsHandlers,
 } from './createProjectFromTaskHost.js';
+import { createTaskExportDirectoryHandlers } from './task-export-settings.js';
 import { cleanupActiveReviewArtifactSnapshots } from './reviewer/reviewArtifactSnapshot.js';
 import { MAKER_INVOKE as MAKER_IPC_INVOKE, MAKER_PUSH, MAKER_SEND } from './maker-ipc/channels.js';
 import {
@@ -1033,8 +1034,9 @@ import {
 } from './secrets/builtinApiKeyBridge.js';
 import {
   isCustomProviderRuntimeKeyStorageKey,
-  isRendererAccessibleSafeStorageKey,
+  isRendererSafeStorageOperationAllowed,
   type ProviderSecretId,
+  type RendererSafeStorageOperation,
 } from '../shared/providerSecrets.js';
 import {
   readCodexCompactionState,
@@ -1083,6 +1085,7 @@ import {
 import { registerWorkingStatusIpc } from './maker-ipc/workingStatus.js';
 import { registerMakerTitleIpc } from './maker-ipc/title.js';
 import { registerAuxiliaryModelSettingsIpc } from './maker-ipc/auxiliary-model-settings.js';
+import { setAuxiliaryModelHealthBroadcaster } from './utility-model/auxiliary-model-health.js';
 import { registerMakerHelpIpc } from './maker-ipc/help.js';
 import { registerHelpFeedbackIpc } from './maker-ipc/help-feedback.js';
 import { registerMyIssuesIpc } from './maker-ipc/my-issues.js';
@@ -1267,6 +1270,7 @@ import {
   getGhostSessionActivityTracker,
   interruptGhostCallsForAccountBoundary,
   reconcileGhostOauthAccountsForActiveOwner,
+  readGitlabPluginToken,
   refreshGhostLocalization,
   registerGhostIpc,
   setRemotePluginManagementServices,
@@ -1280,6 +1284,7 @@ import {
   diagnoseScheduleHookPluginForActiveOwner,
   getLiveScreenHost,
   pluginLiveScreenViews,
+  openFileWithPluginFileOpener,
 } from './cindy-brain/index.js';
 import { createCodexImageAuthAcquirer, setCodexImageAuthBinding } from './cindy-brain/codexImageAuthBinding.js';
 import { configureMailAttachmentHost } from './cindy-brain/mailAttachmentUpload.js';
@@ -1304,6 +1309,8 @@ import { getResolvedMainLocale, setMainClassicalStyle, setMainLocale, t } from '
 import { isClassicalReplyStyle } from '@cindy/maker-shared/classical-reply';
 import { registerModelGroupDecisionIpc } from './model-groups/decisionIpc.js';
 import { registerModelGroupsIpc } from './model-groups/ipc.js';
+import { registerFeishuGroupSettingsIpc } from './im/feishu/groupSettingsIpc.js';
+import { wireFeishuGroupProjectPorts } from './im/feishu/groupProjectPortsWiring.js';
 import { requireObject, requireString, throwIpcError } from './utils/ipcValidate.js';
 import { pickNativeAtResource } from './nativeAtResourcePicker.js';
 // Scheduler (Phase 3) — 启动单例需要 maker / localDb / mainWindow 都 ready，但
@@ -1672,7 +1679,7 @@ voiceCallCoordinator.configure({
  * 都满足时尝试启动"，幂等性由 startScheduler 自己保证；切账号场景 `resetScheduler()`
  * 把 `_scheduler` 置 null，下次进来自然会重新启动。
  *
- * IPC 注册模型(重构):maker:schedule:* handler 在 registerMakerIpcsAfterSplash 内
+ * IPC 注册模型(重构):maker:schedule:* handler 在 Device Link 服务启动之前
  * 通过 `registerScheduleHandlers()` 提前一次性注册,**不依赖 scheduler 实例**;
  * 本函数拿到 scheduler 后只调 `attachSchedulerEventListeners(scheduler, storage)`
  * 把 scheduler.on 挂上 + setSchedulerReady 喂入实例 + broadcast 'ready'。
@@ -1761,8 +1768,8 @@ async function attemptStartSchedulerOnce(): Promise<void> {
     // scheduler 真正 ready 后挂 listener + 喂入 readiness holder。WeakSet 按实例
     // 去重:localDb onReady 重试可能再次拿到同实例，此时 no-op；
     // 切账号后新实例不在 set 里，会重新 attach。
-    // 注意:schedule:* IPC handler 不在这里注册 — 它们在 registerMakerIpcsAfterSplash
-    // 内通过 registerScheduleHandlers() 提前挂好,handler 内部 awaitReady 等本行
+    // 注意:schedule:* IPC handler 不在这里注册 — 它们在 Device Link 启动前
+    // 通过 registerScheduleHandlers() 提前挂好,handler 内部 awaitReady 等本行
     // setSchedulerReady 调用。
     if (!_scheduleIpcRegistered.has(scheduler)) {
       scheduler.on('changed', event => {
@@ -3045,7 +3052,7 @@ registerAppShortcutIpc();
 registerAppearanceSettingsIpc();
 registerAccessibilitySupportIpc();
 registerLoginItemIpc();
-registerMenubarIpc();
+registerMenubarIpc(() => windowsQuotaPanel);
 registerAwayGuardIpc({
   read: () => {
     const settings = readWindowBehaviorSettings();
@@ -5745,6 +5752,8 @@ const registerIpcHandlers = () => {
     }
     return imDefaultSettingsWire(channel);
   });
+  wireFeishuGroupProjectPorts();
+  registerFeishuGroupSettingsIpc();
   registerModelGroupsIpc();
   registerModelGroupDecisionIpc();
   ipcMain.handle(MAKER_IPC_INVOKE.SUBAGENT_MODEL_SETTINGS_GET, async () => {
@@ -6652,8 +6661,9 @@ const registerIpcHandlers = () => {
 
   // safeStorage IPC handlers
   const isValidKey = (key: string): boolean => /^[a-zA-Z0-9_-]+$/.test(key);
-  const isValidRendererKey = (key: string): boolean =>
-    isValidKey(key) && isRendererAccessibleSafeStorageKey(key);
+  // Renderer 只能对白名单登记的键类别做登记的操作（shared/providerSecrets RENDERER_SAFE_STORAGE_GRANTS）。
+  const isValidRendererKey = (key: string, operation: RendererSafeStorageOperation): boolean =>
+    isValidKey(key) && isRendererSafeStorageOperationAllowed(key, operation);
   const resolveSafeStorageFilepath = (key: string): string | null => {
     const scopedKey = resolveOwnerScopedSecretStorageKey(key);
     return scopedKey
@@ -6731,7 +6741,7 @@ const registerIpcHandlers = () => {
     async (event: Electron.IpcMainInvokeEvent, key: string, value: string): Promise<boolean> => {
       try {
         assertTrustedAppRendererEvent(event);
-        if (!isValidRendererKey(key)) return false;
+        if (!isValidRendererKey(key, 'store')) return false;
         const filepath = resolveSafeStorageFilepath(key);
         if (!filepath) return false;
         if (!safeStorage.isEncryptionAvailable()) return false;
@@ -6786,7 +6796,7 @@ const registerIpcHandlers = () => {
       const strictCustomProviderRead = isCustomProviderRuntimeKeyStorageKey(key);
       try {
         assertTrustedAppRendererEvent(event);
-        if (!isValidRendererKey(key)) return null;
+        if (!isValidRendererKey(key, 'read')) return null;
         const filepath = resolveSafeStorageFilepath(key);
         if (!filepath) return null;
         if (!safeStorage.isEncryptionAvailable()) {
@@ -6826,7 +6836,7 @@ const registerIpcHandlers = () => {
     ): Promise<{ success: boolean; error?: string }> => {
       try {
         assertTrustedAppRendererEvent(event);
-        if (!isValidRendererKey(key)) {
+        if (!isValidRendererKey(key, 'remove')) {
           return { success: false, error: 'invalid key' };
         }
         const filepath = resolveSafeStorageFilepath(key);
@@ -7336,6 +7346,11 @@ const registerIpcHandlers = () => {
       });
       registerMakerTitleIpc({ isSessionTurnPendingCompletion });
       registerWorkingStatusIpc();
+      setAuxiliaryModelHealthBroadcaster((channel, payload) => {
+        for (const win of BrowserWindow.getAllWindows()) {
+          if (isTrustedAppRendererWindow(win)) win.webContents.send(channel, payload);
+        }
+      });
       registerAuxiliaryModelSettingsIpc();
       registerMakerHelpIpc(ipcMaker);
       registerHelpFeedbackIpc();
@@ -7397,20 +7412,6 @@ const registerIpcHandlers = () => {
       // learn:* handler 提前一次性注册(eager,同 goal);handler 内部读取 controller
       // 单例,invoke 时 controller 已由 startLearnHost 启动。
       registerLearnIpc();
-      // maker:schedule:* handler 提前一次性注册;handler 内部 awaitReady 等真实
-      // scheduler 实例(由后续 attemptStartScheduler 通过 attachSchedulerEventListeners
-      // → setSchedulerReady 喂入)。这条修复 cold-start race:之前 handler 在
-      // attemptStartScheduler 内才挂,renderer mount useSchedules 落在那 3 秒窗口
-      // 内会拿到 "No handler registered" 错误且无 retry → UI 卡死。
-      // getMaker 惰性注入:仅「AI 生成前置检查脚本」handler 用(utility model 单次生成),
-      // invoke 时才解引用;maker 未就绪时 handler 内部报 INTERNAL 而非注册期崩溃。
-      registerScheduleHandlers(() => {
-        try {
-          return getMakerCore();
-        } catch {
-          return null;
-        }
-      });
       // Project automation shares the scheduler gate; register even before its loader exists.
       registerProjectAutomationIpc(async () => {
         await awaitAccountSchedulerReady();
@@ -8571,12 +8572,26 @@ const registerIpcHandlers = () => {
     ): Promise<{ success: boolean; error?: string }> => {
       try {
         assertTrustedAppRendererEvent(event);
+        const { generation } = getActiveAppSession();
+        const requestIsCurrent = () =>
+          !isAppSessionBoundaryPending() && getActiveAppSession().generation === generation;
+        if (!requestIsCurrent()) return { success: false, error: 'App session changed' };
         const filePath = resolveShellOpenPathTarget(filePathOrUrl);
         if (filePath === null) {
           return { success: false, error: 'Path must be absolute' };
         }
         if (!isPathAllowed(filePath)) {
           return { success: false, error: '不允许访问该路径' };
+        }
+        // 先问声明了该扩展名的插件(fileOpener);只交本机原件,插件没处理就照常交给系统。
+        const pluginPath = await resolveLocalOriginalForPluginOpen(
+          filePathOrUrl, filePath, [getRemoteFileCacheRoot(), getChatAttachmentCacheRoot()], isPathAllowed,
+        );
+        if (!requestIsCurrent()) return { success: false, error: 'App session changed' };
+        if (pluginPath) {
+          const routed = await openFileWithPluginFileOpener(pluginPath, requestIsCurrent);
+          if (!requestIsCurrent()) return { success: false, error: 'App session changed' };
+          if (routed.handled) return { success: true };
         }
         // shell.openPath returns '' on success, error string on failure.
         const errMsg = await shell.openPath(filePath);
@@ -9701,6 +9716,33 @@ const registerIpcHandlers = () => {
         }
       });
     }
+    // Agent task export folder: the native picker is the owner's approval, so it stays on this computer (not in device-link).
+    const taskExportDirectoryHandlers = createTaskExportDirectoryHandlers({
+      chooseDirectory: async () => {
+        const options: Electron.OpenDialogOptions = {
+          title: t('settings.about.storage.taskExportDirectoryChoose'),
+          properties: ['openDirectory', 'createDirectory'],
+        };
+        const ownerWindow = BrowserWindow.getFocusedWindow() ?? mainWindowRef;
+        const result =
+          ownerWindow && !ownerWindow.isDestroyed()
+            ? await dialog.showOpenDialog(ownerWindow, options)
+            : await dialog.showOpenDialog(options);
+        return result.canceled ? null : (result.filePaths[0] ?? null);
+      },
+    });
+    for (const action of ['get', 'choose', 'reset'] as const) {
+      ipcMain.handle('task-export-directory:' + action, async (event) => {
+        assertTrustedAppRendererEvent(event);
+        try {
+          return await taskExportDirectoryHandlers[action]();
+        } catch (error) {
+          if (isIpcError(error)) throw error;
+          dbClientLog.warn('task export directory settings request failed', { action });
+          throwIpcError('INTERNAL', 'task export directory settings request failed');
+        }
+      });
+    }
     const projectFromTaskHandlers = createLocalProjectFromTaskHandlers({
       isSessionBusy: (id) => isSessionInTurn(id) || isSessionTurnPendingCompletion(id),
       chooseDirectory: chooseProjectsFolder,
@@ -10788,7 +10830,7 @@ app.on('ready', async () => {
     );
   });
   // session-git-pr-context: git-context:* channel(分支查询/HEAD 监听/PR 引用/PR 状态)
-  registerGitContextIpc();
+  registerGitContextIpc({ readGitlabPluginToken });
   registerGitReviewIpc({
     isSessionRunning: (sessionId) => {
       try {
@@ -10917,6 +10959,10 @@ app.on('ready', async () => {
   // 设备互联(跨设备远程控制):登录后连 relay,登出即断;开关与设备列表 IPC 一并注册
   let updateRelaunchRemoteBusy = false;
   setUsageWidgetSnapshotReader(readUsageWidgetSnapshot);
+  if (!hostClientMode) registerScheduleHandlers(() => {
+    try { return getMakerCore(); } catch { return null; }
+  });
+  registerRemoteResourcesIpc();
   initDeviceLinkService({
     taskActivity: getAgentIslandService() ?? undefined,
     onControlledStateChanged: refreshQuotaPanelsControlState,
@@ -10934,9 +10980,6 @@ app.on('ready', async () => {
   // renderer 就可能发起缓存读,而 gate 默认是"已放行"(review: copilot)。
   const startupPurgeDrain = drainPurgeQueue();
   setMirrorCacheReadGate(startupPurgeDrain);
-  // Stable module-neutral façade. Feature providers were registered with their
-  // owning modules above; future collections/actions do not add tunnel channels.
-  registerRemoteResourcesIpc();
   registerSettingsNavigationIpc();
   registerDeviceLinkIpc();
   registerTaskMigrationIpc((sessionId, workingDir, assertAuthority) =>

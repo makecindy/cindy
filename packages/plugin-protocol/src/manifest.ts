@@ -5,6 +5,7 @@ import { parseGhostSecretCheck, type GhostSecretCheckDecl } from './secretCheck.
 import { parseGhostRoutineEvents, type GhostRoutineEvents } from './routineEvents.js';
 import { parseGhostModelsNeeds, type GhostModelsNeeds } from './pluginModels.js';
 import { parseGhostHarnesses, type GhostHarnessDecl } from './pluginHarnesses.js';
+import { parseGhostFileOpener, type GhostFileOpenerDecl } from './pluginFileOpener.js';
 import { parseGhostSystemPromptFragments, type GhostSystemPromptFragment } from './runtimeContext.js';
 import { GHOST_LOCALES, type GhostLocale } from './locales.js';
 import { validateGhostReadmeDeclaration } from './readme.js';
@@ -113,6 +114,7 @@ export const LEGACY_GHOST_SLOTS = [
   'notify',
   'badge',
   'confirm',
+  'form',
   'fs',
   'library',
   'device-sync',
@@ -1071,6 +1073,11 @@ export interface GhostManifest {
    */
   harnesses?: GhostHarnessDecl[];
   /**
+   * File types the plugin opens for the user instead of the system default app (v3 only;
+   * requires `node`). See `pluginFileOpener.ts`.
+   */
+  fileOpener?: GhostFileOpenerDecl;
+  /**
    * network 能力与访问范围。
    * 域名白名单 + 凭证声明由插件详情逐项展示,运行期主机代发并守门。
    */
@@ -1109,6 +1116,7 @@ export interface GhostManifest {
   notify?: true;
   badge?: true;
   confirm?: true;
+  form?: true;
   fs?: true;
   /** 持久作品库；卸载不删数据，位置和删除由 Host 设置页管理。 */
   library?: true;
@@ -1281,6 +1289,7 @@ const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
   'routineEvents',
   'models',
   'harnesses',
+  'fileOpener',
   'systemPrompt',
   'schemaVersion',
   'id',
@@ -1325,6 +1334,7 @@ const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
   'notify',
   'badge',
   'confirm',
+  'form',
   'fs',
   'library',
   'deviceSync',
@@ -1339,6 +1349,7 @@ const V3_BOOLEAN_CAPABILITY_FIELDS = [
   'notify',
   'badge',
   'confirm',
+  'form',
   'fs',
   'library',
   'deviceSync',
@@ -1368,6 +1379,7 @@ const V3_BOOLEAN_TO_LEGACY_SLOT: Record<(typeof V3_BOOLEAN_CAPABILITY_FIELDS)[nu
   notify: 'notify',
   badge: 'badge',
   confirm: 'confirm',
+  form: 'form',
   fs: 'fs',
   library: 'library',
   deviceSync: 'device-sync',
@@ -3596,6 +3608,14 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
     if (parsed.ok) harnesses = parsed.harnesses;
     else if (!preserveHistoricalParameterSize) return { ok: false, reason: parsed.reason };
   }
+  // 插件接管打开的文件类型(v3 only;v2 slots 不映射)。历史快照里本 Host 认识之前写下、
+  // 不合规的值只丢弃,不让已装插件失效。
+  let fileOpener: GhostFileOpenerDecl | undefined;
+  if (prepared.schemaVersion === 3 && raw.fileOpener !== undefined) {
+    const parsed = parseGhostFileOpener(raw.fileOpener, node);
+    if (parsed.ok) fileOpener = parsed.fileOpener;
+    else if (!preserveHistoricalParameterSize) return { ok: false, reason: parsed.reason };
+  }
   if (node?.secretBindings) {
     for (const binding of node.secretBindings) {
       if (network?.secrets?.some((secret) => secret.key === binding.key)) {
@@ -4111,6 +4131,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
       ...(routineEvents !== undefined ? { routineEvents } : {}),
       ...(models !== undefined ? { models } : {}),
       ...(harnesses !== undefined ? { harnesses } : {}),
+      ...(fileOpener !== undefined ? { fileOpener } : {}),
       ...(systemPrompt !== undefined ? { systemPrompt } : {}),
       ...(network !== undefined ? { network } : {}),
       ...(raw.command !== undefined ? { command: raw.command as string } : {}),
@@ -4123,6 +4144,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
       ...(prepared.schemaVersion === 3 && slots.includes('notify') ? { notify: true as const } : {}),
       ...(prepared.schemaVersion === 3 && slots.includes('badge') ? { badge: true as const } : {}),
       ...(prepared.schemaVersion === 3 && slots.includes('confirm') ? { confirm: true as const } : {}),
+      ...(prepared.schemaVersion === 3 && slots.includes('form') ? { form: true as const } : {}),
       ...(prepared.schemaVersion === 3 && slots.includes('fs') ? { fs: true as const } : {}),
       ...(slots.includes('device-sync') ? { deviceSync: true as const } : {}),
       ...(prepared.schemaVersion === 3 && slots.includes('library')

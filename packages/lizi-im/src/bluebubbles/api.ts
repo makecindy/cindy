@@ -148,6 +148,10 @@ export class BlueBubblesApi {
   download(guid: string): Promise<Uint8Array> {
     return this.request('GET', `/api/v1/attachment/${encodeURIComponent(guid)}/download?original=true`, undefined, true);
   }
+  downloadImagePreview(guid: string): Promise<Uint8Array> {
+    // BlueBubbles re-encodes resized images as PNG on the Mac hosting Messages.
+    return this.request('GET', `/api/v1/attachment/${encodeURIComponent(guid)}/download?original=false&width=1600&quality=better`, undefined, true);
+  }
   /** Stream the stored original to `dest` (written via a temporary file); returns the byte count. */
   async downloadToFile(guid: string, dest: string, limit = BLUEBUBBLES_ORIGINAL_MAX_BYTES, timeoutMs = 15 * 60_000): Promise<number> {
     const url = new URL(`/api/v1/attachment/${encodeURIComponent(guid)}/download?original=true`, this.origin);

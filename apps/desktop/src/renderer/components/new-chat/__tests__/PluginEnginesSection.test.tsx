@@ -940,6 +940,76 @@ describe('a task running on a plugin engine', () => {
     expect(onSelectModel).toHaveBeenLastCalledWith('plain');
   });
 
+  // Unit: a task with no recorded effort follows the plugin default even after the draft default changes.
+  it.each(['plugin panel', 'unified menu', 'unified menu with a pending engine switch'] as const)('keeps the plugin default for a running task in the %s', async (surface) => {
+    const [pro, flash, plain] = leveled.models;
+    const engine = {
+      ...leveled,
+      models: [
+        { ...pro!, defaultEffort: 'low' as const, declaredDefaultEffort: 'high' as const },
+        { ...flash!, declaredDefaultEffort: null },
+        plain!,
+      ],
+    };
+    const selection = { providerId: engine.providerId, modelId: 'pro' };
+    const active = resolveActivePluginEngine([engine], selection)!;
+    const pendingSwitch = surface === 'unified menu with a pending engine switch';
+    const unifiedMenu = surface !== 'plugin panel';
+    const nextEngine = {
+      ...agy,
+      models: [{ ...engine.models[0]!, displayName: 'Next model' }],
+    };
+    const pendingSelection = { providerId: nextEngine.providerId, modelId: 'pro', effort: 'high' as const };
+    const onSelect = vi.fn((picked: typeof selection) => {
+      const target = picked.providerId === engine.providerId ? engine : nextEngine;
+      return resolvePluginEngineSessionSwitchEffort(picked, target, selection, pendingSwitch ? pendingSelection : null) === 'high';
+    });
+    expect(pluginEngineSessionCreateFields(active).effort).toBe('low');
+
+    render(React.createElement(ModelSelector, {
+      modelId: 'pro',
+      effort: '',
+      onModelChange: vi.fn(),
+      onEffortChange: vi.fn(),
+      vendorKey: 'cc',
+      remoteAgent: undefined,
+      actualRoute: true,
+      ...(unifiedMenu ? {
+        pluginEngines: {
+          engines: pendingSwitch ? [engine, nextEngine] : [engine],
+          active: pendingSwitch ? pendingSelection : selection,
+          running: selection,
+          onSelect,
+        },
+      } : {}),
+      pluginEngineSession: {
+        providerId: engine.providerId, engine, engineName: engine.name, modelId: 'pro', onSelectModel: vi.fn(),
+      },
+    }));
+    const trigger = screen.getByRole('button', { name: 'Select model. Current: DeepSeek Harness · Pro · high' });
+    await act(async () => { fireEvent.click(trigger); });
+    const list = await screen.findByRole('listbox', { name: 'Models' });
+    const group = unifiedMenu ? within(list).getByRole('group', { name: 'DeepSeek Harness' }) : list;
+    expect(within(group).getAllByRole('option').map(levelOf)).toEqual(['high', null, null]);
+    if (pendingSwitch) {
+      const next = within(list).getByRole('group', { name: 'Antigravity' });
+      const nextRow = within(next).getByRole('option', { name: /Next model/ });
+      expect(levelOf(nextRow)).toBe('high');
+      await act(async () => { fireEvent.click(nextRow); });
+      expect(onSelect).toHaveReturnedWith(true);
+      await act(async () => { fireEvent.click(trigger); });
+    }
+    if (unifiedMenu) {
+      const search = screen.getByRole('textbox', { name: 'Search models' });
+      await act(async () => { fireEvent.change(search, { target: { value: 'Pro' } }); });
+      const row = within(await screen.findByRole('listbox', { name: 'Models' })).getByRole('option', { name: /Pro/ });
+      expect(levelOf(row)).toBe('high');
+      await act(async () => { fireEvent.click(row); });
+      expect(onSelect).toHaveBeenLastCalledWith(selection);
+      expect(onSelect).toHaveLastReturnedWith(true);
+    }
+  });
+
   it('falls back to the generic engine label when the plugin is gone', () => {
     renderTaskTrigger(null);
     expect(screen.getByRole('button', { name: 'Select model. Current: Plugin engine · Model details unavailable' })).toBeTruthy();
@@ -953,5 +1023,61 @@ describe('a task running on a plugin engine', () => {
     [null, 'cc'],
   ] as const)('task identity icon for agent_kind %s', (kind, icon) => {
     expect(engineIconKindOf(kind)).toBe(icon);
+  });
+
+  // Unit: plugin engines declaring reportsUsage must surface their remaining quota or balance
+  // on the Desktop model picker group header through the shared usage reader. Minimal failing
+  // input: EngineBlock omits PluginEngineGroupQuota so no [data-plugin-engine-quota] renders.
+  it('shows remaining quota on the plugin engine group header when reportsUsage is enabled', async () => {
+    const getPluginEngineUsage = vi.fn(async () => ({
+      updatedAt: Date.now(),
+      windows: [{ label: 'Weekly', remainingPercent: 64, resetsAt: Date.now() + 2 * 3_600_000 }],
+    }));
+    const prevApi = window.electronAPI;
+    window.electronAPI = { ...(prevApi ?? {}), maker: { ...(prevApi?.maker ?? {}), getPluginEngineUsage } } as typeof window.electronAPI;
+    try {
+      const reporting = engine('quota-demo:dsh', 'Quota Demo', { reportsUsage: true });
+      renderDraftPicker({ engines: [reporting], active: null, onSelect: vi.fn() });
+      const quotaEl = await screen.findByLabelText(/Weekly · 64%/);
+      expect(quotaEl.getAttribute('data-plugin-engine-quota')).toBe(reporting.providerId);
+      expect(quotaEl.textContent).toContain('64%');
+      expect(getPluginEngineUsage).toHaveBeenCalledWith(reporting.key);
+    } finally {
+      window.electronAPI = prevApi;
+    }
+  });
+
+  // Regression (#12247 review): while the Desktop picker remains open across a plugin window's
+  // reset time, the local display clock must drop the expired window and promote the next valid
+  // window without triggering extra usage IPC calls.
+  it('advances the local clock while open to hide expired plugin windows without re-fetching', async () => {
+    vi.useFakeTimers();
+    const baseNow = new Date('2026-11-23T10:00:00.000Z').getTime();
+    vi.setSystemTime(baseNow);
+    const getPluginEngineUsage = vi.fn(async () => ({
+      updatedAt: baseNow,
+      windows: [
+        { label: 'Short', remainingPercent: 15, resetsAt: baseNow + 90_000 },
+        { label: 'Weekly', remainingPercent: 82, resetsAt: baseNow + 3 * 3_600_000 },
+      ],
+    }));
+    const prevApi = window.electronAPI;
+    window.electronAPI = { ...(prevApi ?? {}), maker: { ...(prevApi?.maker ?? {}), getPluginEngineUsage } } as typeof window.electronAPI;
+    try {
+      const reporting = engine('quota-clock:dsh', 'Quota Clock', { reportsUsage: true });
+      renderDraftPicker({ engines: [reporting], active: null, onSelect: vi.fn() });
+      await act(async () => { await Promise.resolve(); });
+      expect(screen.getByLabelText(/Short · 15%/)).toBeTruthy();
+
+      await act(async () => {
+        vi.advanceTimersByTime(95_000);
+      });
+      expect(screen.queryByLabelText(/Short · 15%/)).toBeNull();
+      expect(screen.getByLabelText(/Weekly · 82%/)).toBeTruthy();
+      expect(getPluginEngineUsage).toHaveBeenCalledTimes(1);
+    } finally {
+      window.electronAPI = prevApi;
+      vi.useRealTimers();
+    }
   });
 });

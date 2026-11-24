@@ -1601,10 +1601,17 @@ describe('codexHttpBridge', () => {
     });
   });
 
-  it('blocks a tool call using the policy frozen on its Codex thread', async () => {
+  // #4932: the HTTP tools/call result for a disabled Browser on a local Codex
+  // thread must explain how to continue in that task. The existing SSH case
+  // covers the frozen policy but cannot catch Browser's distinct recovery path.
+  // Unit tier: one registered thread and an in-process SDK tool server.
+  it.each([
+    ['ssh', 'start a new session'],
+    ['browser', 'then retry in this task'],
+  ])('blocks a disabled %s call and returns its recovery guidance', async (pluginId, recovery) => {
     bridge = await startCodexHttpBridge({
       serverFactories: { lizi_test: createTestServer },
-      pluginIdByServerName: { lizi_test: 'ssh' },
+      pluginIdByServerName: { lizi_test: pluginId },
       logger: noopLogger(),
     });
     bridge.registerThreadContext('thread-disabled', {
@@ -1613,7 +1620,7 @@ describe('codexHttpBridge', () => {
       sessionInstanceId: 'instance-disabled',
       workingDir: '/repo',
       vendorOptions: {
-        [CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY]: ['ssh'],
+        [CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY]: [pluginId],
       },
     });
 
@@ -1662,7 +1669,7 @@ describe('codexHttpBridge', () => {
     expect(await readRpcResponse(callResp)).toMatchObject({
       result: {
         isError: true,
-        content: [{ type: 'text', text: expect.stringContaining('ssh') }],
+        content: [{ type: 'text', text: expect.stringMatching(new RegExp(`"${pluginId}".*${recovery}`)) }],
       },
     });
 
@@ -1680,7 +1687,7 @@ describe('codexHttpBridge', () => {
     expect(await readRpcResponse(withoutThreadId)).toMatchObject({
       result: {
         isError: true,
-        content: [{ type: 'text', text: expect.stringContaining('ssh') }],
+        content: [{ type: 'text', text: expect.stringContaining(pluginId) }],
       },
     });
   });

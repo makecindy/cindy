@@ -235,18 +235,21 @@ function parseCustomProviderUpdateOptions(input: unknown, creating = false): Cus
     return creating && Object.keys(input).length === 1 && input.bindGeminiImages === true ? { bindGeminiImages: true } : null;
   }
   const entries = Object.entries(input as Record<string, unknown>);
-  if (entries.some(([key]) => key !== 'source' && key !== 'codexImageGenerationRestartPolicy' && key !== 'appendSpeechModelsOnly' && key !== 'speechReferenceRefreshAgents' && key !== 'removeWithdrawnModels' && key !== 'listingReceipts'))
+  if (entries.some(([key]) => key !== 'source' && key !== 'codexImageGenerationRestartPolicy' && key !== 'appendSpeechModelsOnly' && key !== 'appendRealtimeModelsOnly' && key !== 'speechReferenceRefreshAgents' && key !== 'removeWithdrawnModels' && key !== 'listingReceipts'))
     return null;
   const source = (input as Record<string, unknown>).source;
   if (source !== undefined && source !== 'manual-settings') return null;
   const policy = (input as Record<string, unknown>).codexImageGenerationRestartPolicy;
   const append = (input as Record<string, unknown>).appendSpeechModelsOnly;
+  const realtime = (input as Record<string, unknown>).appendRealtimeModelsOnly;
   const refreshAgents = (input as Record<string, unknown>).speechReferenceRefreshAgents;
   if (refreshAgents !== undefined && (!Array.isArray(refreshAgents) ||
     refreshAgents.length === 0 || refreshAgents.length > VALID_AGENTS.length ||
     refreshAgents.some(agent => !VALID_AGENTS.includes(agent)) ||
     new Set(refreshAgents).size !== refreshAgents.length)) return null;
   if (append !== undefined && append !== true) return null;
+  if (realtime !== undefined && realtime !== true) return null;
+  if (realtime && entries.length !== 1) return null;
   if (policy !== undefined && policy !== 'interrupt') return null;
   if (append && (source || policy || refreshAgents)) return null;
   const withdrawn = (input as Record<string, unknown>).removeWithdrawnModels;
@@ -267,6 +270,7 @@ function parseCustomProviderUpdateOptions(input: unknown, creating = false): Cus
     ...(source === 'manual-settings' ? { source } : {}),
     ...(policy ? { codexImageGenerationRestartPolicy: policy } : {}),
     ...(append ? { appendSpeechModelsOnly: true as const } : {}),
+    ...(realtime ? { appendRealtimeModelsOnly: true as const } : {}),
     ...(refreshAgents ? { speechReferenceRefreshAgents: refreshAgents as AgentKind[] } : {}),
     ...(withdrawn ? { removeWithdrawnModels: (withdrawn as { agent: AgentKind; modelId: string }[])
       .map(({ agent, modelId }) => ({ agent, modelId })) } : {}),
@@ -406,6 +410,8 @@ export interface ProviderHandlerDeps {
    * event 与不受信的子 frame 都会得到 false，于是退化为纯读。缺省视为不可信。
    */
   isTrustedSender?(event: unknown): boolean;
+  /** Main-owned Device Link context; only same-account linked reads, never mutations. */
+  isRemoteContextRead?(): boolean;
   /**
    * 通用 OAuth 登录 / 登出 / 取消（生产接 generic-oauth Runner + 目录描述符解析；
    * login 成功后由生产 deps 负责模型发现与 PROVIDER_CHANGED 广播）。
@@ -2403,6 +2409,7 @@ export function registerProviderHandlers(
   });
 
   const modelSettingsGetContext = async (input: unknown) => {
+    const owner = captureProviderOwnerSession();
     const targets = parseContextTargets(input);
     // 读不做目录成员校验:目录漂移后 UI 仍要能显示并清掉指向已下架 id 的陈旧 override。
     const view = readContextTargets(targets);
@@ -2411,12 +2418,14 @@ export function registerProviderHandlers(
       if (sessionId !== undefined && (typeof sessionId !== 'string' || sessionId.length === 0 || sessionId.length > 200)) {
         throwIpcError('INVALID_PARAMS', 'invalid context session id');
       }
-      return { ...view, codexContext: await deps.readCodexContextWindowInfo?.(targets[0]!, sessionId as string | undefined) ?? null };
+      const codexContext = await deps.readCodexContextWindowInfo?.(targets[0]!, sessionId as string | undefined) ?? null;
+      assertProviderMutationOwner(owner, 'active account changed during context read');
+      return { ...view, codexContext };
     }
     return view;
   };
   registry.handle(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_GET, async (event, input: unknown) => {
-    assertTrustedProviderMutationSender(event);
+    if (!deps.isRemoteContextRead?.()) assertTrustedProviderMutationSender(event);
     return modelSettingsGetContext(input);
   });
 
@@ -2687,9 +2696,12 @@ export function registerProviderHandlers(
           const validation = validateCustomProviderConfig(config, { allowLegacyXai: true });
           if (!validation.ok) throwIpcError(validation.code, validation.message);
           separated = splitCustomProviderHeaders(config);
-        } else if (options.appendSpeechModelsOnly) {
+        } else if (options.appendSpeechModelsOnly || options.appendRealtimeModelsOnly) {
           if (Object.keys(keys).length) throwIpcError('INVALID_PARAMS', 'speech additions cannot change credentials');
-          try { config = appendSpeechModels(previous, config, deps.listPresets()); }
+          try {
+            config = appendSpeechModels(previous, config, deps.listPresets(),
+              options.appendRealtimeModelsOnly ? 'realtime' : 'audio_speech', deps.getModelCatalog().modelRegistry);
+          }
           catch { throwIpcError('INVALID_PARAMS', 'connection changed or invalid speech additions'); }
           const validation = validateCustomProviderConfig(config, { allowLegacyXai: true });
           if (!validation.ok) throwIpcError(validation.code, validation.message);

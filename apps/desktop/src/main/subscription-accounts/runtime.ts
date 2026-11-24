@@ -8,6 +8,7 @@ import { subscriptionImageModelId } from '../cindy-media/sharedSubscriptionImage
 import { getCodexHome } from '../maker-host/codex-home-path.js';
 import { mkdir, readFile, readdir } from 'node:fs/promises';
 import { type AuthState, type NativeSubscriptionAccount } from '@cindy/maker-core';
+import { readAccountBeforeSend } from './remotePreflight.js';
 import { matchScopedWindowForModel } from '@cindy/maker-shared/subscription-usage';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import {
@@ -86,6 +87,7 @@ import {
 import {
   loginNativeAccount,
   readNativeAccount,
+  readNativeCodexAccountAndRateLimits,
   readNativeAccountUsage,
   readNativeCodexTokens,
   readLegacyCodexAccount,
@@ -586,6 +588,7 @@ export function pooledCodexResetTarget(scope: string): (CodexRateLimitResetServi
   };
   return {
     readAccountIdentity,
+    readAccountAndRateLimits: () => readNativeCodexAccountAndRateLimits(directory, assertCurrent),
     readRateLimits: async () => {
       assertCurrent();
       const result = await codexAccountRpc(directory, 'account/rateLimits/read', {});
@@ -1698,35 +1701,49 @@ export async function readSubscriptionSessionUsage(provider: SubscriptionProvide
 }
 
 /**
- * Provider group §5/§6.1 pre-send check for one bound account: it cannot take this model now
- * when it remembers a real failure (cooling), its Claude quota snapshot is exhausted, or it is
- * signed out. Unknown quota is not exhaustion. Paused or removed accounts are not judged here.
+ * Why a bound account should give up this model before the next send:
+ * - `unusable`: it remembers a real failure (cooling), is signed out, lacks the model, or its
+ *   Claude quota snapshot is exhausted;
+ * - `plan-exhausted`: a ChatGPT account whose trusted plan window for the model is used up. Upstream
+ *   may still run it on credits, so it only moves to an account with plan quota left and otherwise
+ *   keeps the task (subscription-account-pools.md「ChatGPT 套餐用完先换号」, 2026-11-24).
+ * Unknown quota is not exhaustion. Paused or removed accounts are not judged here.
  * Runs before every send, so it only reads what this owner already knows (failures, the cached
  * snapshot kept fresh by quota events and list reads) and never waits for the native CLI.
  */
+export function readSubscriptionAccountBlockReason(
+  provider: SubscriptionProvider,
+  accountId: string,
+  model: string | undefined,
+): 'unusable' | 'plan-exhausted' | null {
+  const pool = readPool(provider);
+  // Only accounts sharing the task account's provider can take over; a provider with a single
+  // account (an independent connection) never moves its tasks (subscription-account-pools.md).
+  if (!pool || disconnectedFor(pool, provider, accountId)) return null;
+  if (!pool.accounts.some((account) => account.id === accountId && !account.paused)) return null;
+  const state = currentRuntime();
+  if (accountProfileGroups(state, provider, accountSiblings(provider, pool.accounts, accountId)).length < 2) return null;
+  if (accountCooling(state, provider, accountId, model)) return 'unusable';
+  const info = state.cache.get(keyOf(provider, accountId));
+  if (!info || info.unavailable) return null;
+  if (!info.auth.authenticated) return 'unusable';
+  if (provider === 'openai' && model && state.codexModels.has(accountId)
+    && state.codexModels.get(accountId)?.failedAt === undefined
+    && !codexAccountSupportsModel(state, accountId, model)) return 'unusable';
+  const limited = providerGroupMemberUsageState(info.usage ?? {},
+    provider === 'openai' ? model?.replace(/^chatgpt\//, '') : model,
+    Date.now(), provider === 'openai' ? 'codex' : 'claude-code').limited;
+  if (!limited) return null;
+  return provider === 'openai' ? 'plan-exhausted' : 'unusable';
+}
+
+/** Whether the bound account should hand this task to another account before sending. */
 export function readSubscriptionAccountBlocked(
   provider: SubscriptionProvider,
   accountId: string,
   model: string | undefined,
 ): boolean {
-  const pool = readPool(provider);
-  // Only accounts sharing the task account's provider can take over; a provider with a single
-  // account (an independent connection) never moves its tasks (subscription-account-pools.md).
-  if (!pool || disconnectedFor(pool, provider, accountId)) return false;
-  if (!pool.accounts.some((account) => account.id === accountId && !account.paused)) return false;
-  const state = currentRuntime();
-  if (accountProfileGroups(state, provider, accountSiblings(provider, pool.accounts, accountId)).length < 2) return false;
-  if (accountCooling(state, provider, accountId, model)) return true;
-  const info = state.cache.get(keyOf(provider, accountId));
-  if (!info || info.unavailable) return false;
-  if (!info.auth.authenticated) return true;
-  if (provider === 'openai' && model && state.codexModels.has(accountId)
-    && state.codexModels.get(accountId)?.failedAt === undefined
-    && !codexAccountSupportsModel(state, accountId, model)) return true;
-  // ChatGPT plan windows do not establish whether upstream can spend credits. Only a real
-  // failure (checked above) can retire this account and its native context before sending.
-  if (provider === 'openai') return false;
-  return providerGroupMemberUsageState(info.usage ?? {}, model, Date.now(), 'claude-code').limited;
+  return readSubscriptionAccountBlockReason(provider, accountId, model) !== null;
 }
 
 /** A positive result can retire a member/model cooldown, so unknown quota is
@@ -1816,7 +1833,7 @@ export async function readSubscriptionSessionAccount(
     });
   if (keys.legacyProviderId && !legacyRouteAdmits())
     return { providerId: provider, state: 'unavailable' };
-  const canReplace = async (accountId: string, selectedDestination?: string): Promise<boolean> => {
+  const canReplace = async (accountId: string, selectedDestination?: string, planQuotaOnly = false): Promise<boolean> => {
     const originalOwner = accountProviderId(provider, accountId);
     const destination = selectedDestination ?? originalOwner;
     const admits = () => accountProviderId(provider, accountId) === originalOwner
@@ -1832,7 +1849,7 @@ export async function readSubscriptionSessionAccount(
       const available = await Promise.race([
         acquireSubscriptionAccount(destination, keys.model, [], false, {
           remote: options.remote === true, ownComputer: options.ownComputer === true,
-          exclude: new Set([accountId]), dryRun: true,
+          exclude: new Set([accountId]), planQuotaOnly, dryRun: true,
         }).then(() => true),
         new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), budget); }),
       ]);
@@ -1895,11 +1912,13 @@ export async function readSubscriptionSessionAccount(
   // The controller hands the task off only when a fresh start here would take another account
   // (same judgment as the local pre-send failover). Accounts merged from a legacy connection move
   // too (2026-11-13): a task on the `openai` route bound to one is an ordinary pool task.
-  const blocked = keys.model !== undefined && !config.paused
-    && readSubscriptionAccountBlocked(provider, config.id, keys.model);
+  const blockReason = keys.model !== undefined && !config.paused
+    ? readSubscriptionAccountBlockReason(provider, config.id, keys.model) : null;
+  const blocked = blockReason !== null;
   // Quota alone cannot authorize retiring native history. Probe actual replacement admission
   // without reserving or rebinding, within the original query's shared budget.
-  const switchAvailable = (blocked || config.paused) && await canReplace(config.id);
+  const switchAvailable = (blocked || config.paused)
+    && await canReplace(config.id, undefined, blockReason === 'plan-exhausted');
   const latestPool = readPool(provider);
   if (!latestPool || disconnectedFor(latestPool, provider, config.id)
     || !latestPool.accounts.some(account => account.id === config.id)
@@ -2311,7 +2330,8 @@ async function readRemoteTaskAccount(
   const legacyProviderId = provider === 'openai' && row.providerId && !taskSubscriptionProvider(row)
     ? row.providerId : undefined;
   const routeProviderId = legacyProviderId ? undefined : row.providerId ?? undefined;
-  const reply = await invokeRemote(row.agentDeviceId, SUBSCRIPTION_ACCOUNTS_CHANNEL, [{
+  const read = readAccountBeforeSend(invokeRemote, state);
+  const reply = await read(row.agentDeviceId, SUBSCRIPTION_ACCOUNTS_CHANNEL, [{
     action: 'session', providerId: provider,
     ...(row.sdkSessionId ? { nativeSessionId: row.sdkSessionId } : {}),
     ...(row.model ? { model: row.model } : {}),
@@ -2341,7 +2361,7 @@ async function readRemoteTaskAccount(
   if (!paused || view.routeProviderId !== undefined) return { number, paused, blocked, ...replacement,
     available: (blocked || paused) && view.account.switchAvailable === true };
   if (!row.model) return { number, paused, blocked, available: false };
-  const availableReply = await invokeRemote(row.agentDeviceId, 'maker:subscription-pool:quota',
+  const availableReply = await read(row.agentDeviceId, 'maker:subscription-pool:quota',
     [provider, row.model], { preSend });
   assertOwner(state);
   const available = availableReply.ok
@@ -2491,6 +2511,11 @@ export async function acquireSubscriptionAccount(
     resuming?: boolean;
     /** Accounts already tried for this start (provider group: each member at most once per round). */
     exclude?: ReadonlySet<string>;
+    /**
+     * Moving a task off a ChatGPT account whose plan window is used up: only an account with plan
+     * quota left may take it. Without this, credits-only accounts are a last resort for new picks.
+     */
+    planQuotaOnly?: boolean;
     /** Only check that the policy can select an account (throws otherwise); reserve nothing, return null. */
     dryRun?: boolean;
     /** Internal read-only projection, delivered only with dryRun before admission errors. */
@@ -2540,7 +2565,12 @@ export async function acquireSubscriptionAccount(
   // A task resumes only its own home. For fresh assignment each profile completes its own
   // auth + model discovery; one slow sibling must not put a barrier in front of healthy peers.
   const snapshots = new Map<string, AccountSnapshot>();
-  const pendingReads = new Set<Promise<void>>();
+  const pendingReads = new Set<Promise<unknown>>();
+  const trackRead = (read: Promise<unknown>) => {
+    if (pendingReads.has(read)) return;
+    pendingReads.add(read);
+    void read.finally(() => pendingReads.delete(read)).catch(() => {});
+  };
   // Diagnostics only: the slowest account (login) read and model read of this selection.
   const selectionStartedAt = performance.now();
   let accountReadMs = 0;
@@ -2576,9 +2606,7 @@ export async function acquireSubscriptionAccount(
     // accounts already tried this round are read for identity, never ranked.
     const ranked = reads.filter(account => !options.exclude?.has(account.id)).length > 1;
     for (const account of reads) {
-      const read = prepareAccount(account.id, ranked && !options.exclude?.has(account.id) ? 'recent' : 'known');
-      pendingReads.add(read);
-      void read.finally(() => pendingReads.delete(read)).catch(() => {});
+      trackRead(prepareAccount(account.id, ranked && !options.exclude?.has(account.id) ? 'recent' : 'known'));
     }
     // Fairness uses all ready profiles after the same window, never whichever CLI replies first.
     // Leave native timeouts and coalesced flights intact. With no admissible candidate we keep
@@ -2612,10 +2640,13 @@ export async function acquireSubscriptionAccount(
     // paused binding; with nowhere else to go the task keeps its account and admission. Resumes and
     // explicit account routes (a legacy connection id pins its own account) never move here; an
     // `openai` task bound to an account merged from a legacy connection does (2026-11-13).
-    const freshBlockedBinding = options.resuming === false && !control && !freshPausedBinding
+    const freshBlockReason = options.resuming === false && !control && !freshPausedBinding
       && !!boundAccount && !options.accountId
-      && readSubscriptionAccountBlocked(provider, boundAccount.id, model);
-    const buildMembers = (rebind: boolean) => group.map((a) => {
+      ? readSubscriptionAccountBlockReason(provider, boundAccount.id, model) : null;
+    const freshBlockedBinding = freshBlockReason !== null;
+    // Leaving an account that could still spend credits only pays off for an account with plan quota.
+    const planQuotaOnly = options.planQuotaOnly === true || freshBlockReason === 'plan-exhausted';
+    const buildMembers = (rebind: boolean, credits: boolean) => group.map((a) => {
       const imported = provider === 'openai' ? readLegacyCodexProviderId(a.id) : undefined;
       const info = snapshots.has(a.id) ? state.cache.get(keyOf(provider, a.id)) : undefined;
       // Cached equality is only for duplicate-home capacity/cooling, never for admission.
@@ -2641,10 +2672,10 @@ export async function acquireSubscriptionAccount(
         auth: info?.auth,
         unavailable: info?.unavailable,
         usage,
-        // Like goal continuation, ChatGPT admission belongs to upstream: cached windows and
-        // credits cannot establish whether this request can run. Keep quota ranking and real cooling.
-        usable: !loggingIn && info?.auth.authenticated === true && (control || ((provider === 'openai' || !usage.limited)
-          && !cooling))
+        // A used-up ChatGPT plan window does not prove upstream rejects the request (it may spend
+        // credits), so with `credits` such an account stays admissible; real failures still cool it.
+        usable: !loggingIn && info?.auth.authenticated === true && (control || ((!usage.limited
+          || (provider === 'openai' && credits)) && !cooling))
           && (!createdImage || (info.codexImageAuth === true && !info.unavailable))
           && (!needsModelMembership || codexAccountSupportsModel(state, a.id, model))
           && (control || !imported || legacyCodexAccountCanRun(imported, createdImage ? subscriptionImageModelId(imported) : model, {
@@ -2661,14 +2692,38 @@ export async function acquireSubscriptionAccount(
     // Reopening an old task without a recorded binding must keep its original default home.
     if (binding && options.accountId && binding.accountId !== options.accountId)
       throw new Error('The task subscription account changed');
-    let members = buildMembers(freshPausedBinding || freshBlockedBinding);
-    let pinned = (freshPausedBinding || freshBlockedBinding ? undefined : binding?.accountId) ?? options.accountId;
+    const rebinding = freshPausedBinding || freshBlockedBinding;
+    let pinned = (rebinding ? undefined : binding?.accountId) ?? options.accountId;
     const exclude = freshBlockedBinding
       ? new Set([...(options.exclude ?? []), boundAccount!.id])
       : options.exclude;
-    const grouped = accountCandidates(state, provider, members, {
-      lastPicked: state.lastPicked.get(selectionProvider), exclude,
-    });
+    // A pinned account keeps running on credits. A new pick prefers ChatGPT accounts with plan quota
+    // left and falls back to credits-only accounts only when none can take the task (2026-11-24).
+    const candidateOptions = { lastPicked: state.lastPicked.get(selectionProvider), exclude };
+    let members = buildMembers(rebinding, pinned !== undefined);
+    let grouped = accountCandidates(state, provider, members, candidateOptions);
+    if (provider === 'openai' && !control && pinned === undefined
+      && providerGroupSchedulingCandidates(grouped.candidates, grouped).length === 0) {
+      const creditMembers = buildMembers(rebinding, true);
+      const creditGroup = accountCandidates(state, provider, creditMembers, candidateOptions);
+      // Account preparation can finish before its quota flight when it used a recent snapshot.
+      // Join those flights before falling back to credits or giving up on a quota-only handoff.
+      // A completed refresh that opens a plan slot can win immediately on the next selection.
+      for (const candidate of creditGroup.candidates) {
+        if (!candidate.usable || candidate.paused || creditGroup.exclude.has(candidate.key)
+          || candidate.running >= candidate.limit) continue;
+        for (const id of accountProfilePeers(state, provider, candidate.id)) {
+          if (!creditMembers.some(member => member.id === id && member.usable && !member.paused)) continue;
+          const key = keyOf(provider, id);
+          const flight = state.flights.get(key);
+          if (flight && state.cache.get(key)?.quotaPending) trackRead(flight.promise);
+        }
+      }
+      if (!planQuotaOnly && pendingReads.size === 0) {
+        members = creditMembers;
+        grouped = creditGroup;
+      }
+    }
     if (options.dryRun && options.reportScheduling) {
       // An explicitly weighted pool cannot predict its next random account without
       // reserving it. Keep the physical-member fallback rather than overriding weights.
@@ -2699,7 +2754,7 @@ export async function acquireSubscriptionAccount(
     if (!choice && pendingReads.size) return null;
     if (freshBlockedBinding && !choice) {
       // Every other account is blocked, full or already tried: stay on the bound account.
-      members = buildMembers(false);
+      members = buildMembers(false, true);
       pinned = boundAccount!.id;
       choice = pinned;
     }

@@ -1,3 +1,4 @@
+import { mailTextParagraphs } from '@cindy/maker-shared/mail-text-edit';
 import { forwardedRequestDisplayText } from '@cindy/maker-shared/message-source';
 import { captureImContext, type ImMessageSource } from '../../../shared/imMessageSource';
 /**
@@ -70,6 +71,116 @@ export function resolveHookGroupContext(source: {
   return captureImContext({ groupPrefix: source.content }).groupContext ?? null;
 }
 
+export function isFeishuIm(im: string | undefined): boolean {
+  return im === 'feishu' || im === 'lark';
+}
+
+const paragraphFormattingTags = /<\/?(?:p|strong|b|em|i|s|u|del|sub|sup|span)\s*>|<br\s*\/?>/gi;
+const remainingMarkup = /<(?:[!?]|\/?[a-z][\w:-]*(?:[\s/>]|$))/i;
+const codeWithMarkup = /```|`[^`\r\n]*<[^`\r\n]*`/;
+
+function paragraphsAsText(fragment: string): string {
+  // Old producers flatten both text and rich text, with no format marker.
+  // Only decode the paragraph compatibility subset and keep other examples intact.
+  if (codeWithMarkup.test(fragment) || remainingMarkup.test(fragment.replace(paragraphFormattingTags, ''))) {
+    return fragment;
+  }
+  const text = mailTextParagraphs(fragment, { preserveMultilineWhitespace: true })
+    .map((paragraph) => paragraph.text).join('\n\n');
+  return text.trim() ? text : fragment;
+}
+
+/** Feishu/Lark rich text can arrive as a paragraph-wrapped string. */
+function displayImParagraphs(im: string | undefined, text: string): string {
+  if (!isFeishuIm(im)) return text;
+  const fragment = text.trim();
+  if (!/^<p(?:\s[^>]*)?>/i.test(fragment) || !/<\/p>$/i.test(fragment)) return text;
+  return paragraphsAsText(fragment);
+}
+
+const historyTime = String.raw`(?:\d{4}-)?(?:\d{2}-\d{2} )?\d{2}:\d{2}(?: UTC| \(UTC[+-]\d{2}:\d{2}\))?`;
+const contextAuthor = String.raw`\[[^\r\n]*?\][ \t]+`;
+// Do not consume a later opening paragraph when a closing tag is missing.
+const contextParagraph = String.raw`<p(?:[ \t][^>\r\n]*)?>(?:(?!<\/?p(?:\s|>))[\s\S])*?(?:<\/p>|\[…已截断\])`;
+const contextParagraphRun = String.raw`${contextParagraph}(?:\s*${contextParagraph})*`;
+const groupAuthor = String.raw`${contextAuthor}${historyTime}[ \t]+`;
+const contextParagraphEnd = String.raw`(?=\r?$|[ \t]+\[(?:图片[；\]]|文件[:：]))`;
+const groupParagraphs = new RegExp(
+  String.raw`^(${groupAuthor})(${contextParagraphRun})${contextParagraphEnd}`,
+  'gim',
+);
+const replyAuthor = String.raw`(?:${contextAuthor}(?:(?:${historyTime}|\[时间未知\])[ \t]+)?)?`;
+const replyParagraphs = new RegExp(
+  String.raw`^(${replyAuthor})(${contextParagraphRun})${contextParagraphEnd}`,
+  'gim',
+);
+// The group snapshot timestamps only the outer forward, not its child messages.
+const groupEntryStart = new RegExp(String.raw`^${groupAuthor}`, 'gm');
+const forwardHeading = new RegExp(String.raw`^${groupAuthor}\[合并转发消息\][ \t]*\r?\n`);
+const forwardedParagraphs = new RegExp(
+  String.raw`^(${contextAuthor})(${contextParagraphRun})${contextParagraphEnd}`,
+  'gim',
+);
+
+// Feishu prefixes a stored quote's first line with its author and time.
+const fenceLines = new RegExp(String.raw`^(${replyAuthor})[ \t]{0,3}(\x60{3,}|~{3,})([^\r\n]*)`, 'gm');
+const fenceAttachmentSuffix = /^(?:[ \t]*\[(?:图片|文件[:：][^\]\r\n]*)\])*[ \t]*$/;
+
+function contextFenceRanges(text: string): Array<{ start: number; end: number }> {
+  const ranges: Array<{ start: number; end: number }> = [];
+  let open: { marker: string; start: number } | undefined;
+  for (const match of text.matchAll(fenceLines)) {
+    const [line, author, marker, suffix] = match;
+    if (!open) {
+      if (marker[0] !== '`' || !suffix.includes('`')) open = { marker, start: match.index };
+    } else if (!author && marker[0] === open.marker[0] && marker.length >= open.marker.length
+      && fenceAttachmentSuffix.test(suffix)) {
+      ranges.push({ start: open.start, end: match.index + line.length });
+      open = undefined;
+    }
+  }
+  if (open) ranges.push({ start: open.start, end: text.length });
+  return ranges;
+}
+
+function replaceContextParagraphs(prefix: string, markup: string): string {
+  const truncation = '[…已截断]';
+  return markup.endsWith(truncation)
+    ? prefix + paragraphsAsText(markup.slice(0, -truncation.length)) + truncation
+    : prefix + paragraphsAsText(markup);
+}
+
+/** Convert paragraph runs while retaining author lines, attachments and the saved appendix. */
+export function displayImContext(im: string, text: string, kind: 'group' | 'reply'): string {
+  if (!isFeishuIm(im)) return text;
+  // Group snapshots may end with actual file text, where tags are content.
+  const appendix = kind === 'group'
+    ? text.search(/\n(?:历史附件实际提供情况（JSON 数据）：|\[历史消息 [^\r\n]+ 的内容\])/)
+    : -1;
+  const context = appendix < 0 ? text : text.slice(0, appendix);
+  const trailing = appendix < 0 ? '' : text.slice(appendix);
+  const fences = contextFenceRanges(context);
+  const overlapsFence = (start: number, end: number) =>
+    fences.some(fence => start < fence.end && fence.start < end);
+  const project = (source: string, pattern: RegExp, offset = 0) =>
+    source.replace(pattern, (matched, prefix: string, markup: string, index: number) => {
+      const start = offset + index;
+      return overlapsFence(start, start + matched.length)
+        ? matched
+        : replaceContextParagraphs(prefix, markup);
+    });
+  if (kind === 'reply') return project(context, replyParagraphs);
+
+  const entries = [...context.matchAll(groupEntryStart)]
+    .filter(match => !overlapsFence(match.index, match.index + match[0].length));
+  const leading = context.slice(0, entries[0]?.index ?? context.length);
+  const displayed = entries.map((match, index) => {
+    const entry = context.slice(match.index, entries[index + 1]?.index ?? context.length);
+    return project(entry, forwardHeading.test(entry) ? forwardedParagraphs : groupParagraphs, match.index);
+  });
+  return leading + displayed.join('') + trailing;
+}
+
 /**
  * 输入按结构收敛到两个字段,不 import ChatMessage / props 类型:
  * UserMessage 传的是 props(content + hookSource),导航条传的是 ChatMessage,
@@ -77,7 +188,7 @@ export function resolveHookGroupContext(source: {
  */
 export interface UserDisplayTextSource {
   content: string;
-  hookSource?: { userText?: string } | null;
+  hookSource?: { im?: string; userText?: string } | null;
   automationOrigin?: { kind: string };
 }
 
@@ -93,7 +204,8 @@ export function resolveUserDisplayText(
   const rawDisplayContent = orcaCommunication?.content ?? source.content;
   if (!source.hookSource) return source.automationOrigin?.kind === 'session'
     ? forwardedRequestDisplayText(rawDisplayContent) : rawDisplayContent;
-  return (
-    source.hookSource.userText ?? rawDisplayContent.replace(THREAD_CONTEXT_PREFIX_RE, '').trim()
+  return displayImParagraphs(
+    source.hookSource.im,
+    source.hookSource.userText ?? rawDisplayContent.replace(THREAD_CONTEXT_PREFIX_RE, '').trim(),
   );
 }

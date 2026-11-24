@@ -97,6 +97,37 @@ export async function inspectAppDefaultModel() {
   return { current, available };
 }
 
+/**
+ * This computer's plugin engines as choices for a teammate's own model chain, the same engines
+ * the teammate settings editor lists: available, not hidden from this computer's pickers, with
+ * the models the user left on (or the engine default). Never valid as the application default,
+ * which only routes built-in engines (`normalizeModelRoute`).
+ */
+export function teammatePluginEngineModelChoices(engines: ReturnType<typeof listPluginEngineViews> = listPluginEngineViews()) {
+  return engines.filter(engine => engine.availability.state !== 'unavailable' && !engine.hidden && !engine.suspended)
+    .flatMap(engine => {
+      // The engine default stays a choice whenever the engine allows it, as the saved-chain check
+      // (`resolveAvailableTaskModels`) does: a chain saved with it must stay editable once the engine
+      // reports its models.
+      const models = engine.defaultModelAllowed === false || engine.models.some(model => model.id === PLUGIN_ENGINE_DEFAULT_MODEL)
+        ? engine.models
+        : [{ id: PLUGIN_ENGINE_DEFAULT_MODEL, displayName: PLUGIN_ENGINE_DEFAULT_MODEL }, ...engine.models];
+      return models.map(model => {
+        const efforts = (model.efforts ?? []).filter(isPluginEngineEffort);
+        const route: BotModelRoute = { harness: 'acp', providerId: engine.providerId, model: model.id, effort: '', fastMode: false };
+        return { id: JSON.stringify([route.harness, route.providerId, route.model]), route, efforts,
+          supportsFastMode: false, supportsUltrafastMode: false, teammateOnly: true as const,
+          engine: engine.name, ...(model.displayName && model.displayName !== model.id ? { displayName: model.displayName } : {}) };
+      });
+    });
+}
+
+/** Model choices for a teammate's own chain: the application's choices plus this computer's plugin engines. */
+export async function inspectTeammateModelChoices() {
+  const { current, available } = await inspectAppDefaultModel();
+  return { current, available: [...available, ...teammatePluginEngineModelChoices()] };
+}
+
 export interface TaskModelSelection {
   id: string;
   effort?: string;
