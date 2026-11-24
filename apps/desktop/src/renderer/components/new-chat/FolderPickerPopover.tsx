@@ -230,29 +230,33 @@ export function FolderPickerPopover({
     () => filterFolderPickerOptions(effectiveProjectOptions, activeProjectQuery),
     [effectiveProjectOptions, activeProjectQuery],
   );
-  // 当前高亮的项目行:回车选它,方向键与鼠标移动都改它。高亮记在「哪个搜索词下」,
-  // 换词(含 Esc 清空)即回到默认 —— 有词指向首个结果,无词不高亮,无需额外的重置 effect。
+  // 当前高亮的项目行:回车选它,方向键与鼠标移动都改它。null = 默认:有词指向首个结果,
+  // 无词不高亮。每次改词(输入、Esc 清空、关闭)都显式回到默认,回到曾输入过的词也不复活
+  // 旧高亮;另记下所在的搜索词,搜索框因项目数变化出现/消失时同样回到默认。
   // 列表异步变短时夹到末项;空列表时为 -1。
-  const [highlight, setHighlight] = useState({ query: '', index: -1 });
-  const defaultHighlightIndex = activeProjectQuery ? 0 : -1;
+  const [highlight, setHighlight] = useState<{ query: string; index: number | null }>({
+    query: '',
+    index: null,
+  });
+  const resetHighlight = () => setHighlight({ query: '', index: null });
   const highlightIndex = Math.min(
-    highlight.query === activeProjectQuery ? highlight.index : defaultHighlightIndex,
+    highlight.index !== null && highlight.query === activeProjectQuery
+      ? highlight.index
+      : activeProjectQuery
+        ? 0
+        : -1,
     visibleProjectOptions.length - 1,
   );
   const setHighlightIndex = (index: number) => {
     if (index === highlightIndex) return;
     setHighlight({ query: activeProjectQuery, index });
   };
-  // 方向键滚动列表时,行会自己滑到静止的指针下;浏览器可能为此补发 mousemove,
-  // 只有指针坐标真的变了才算用户在用鼠标,避免高亮被拽回指针所在行。
-  const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
 
   // 每次打开都从完整列表开始,不残留上次的搜索词与高亮。
   useEffect(() => {
     if (!open) {
       setProjectQuery('');
-      setHighlight({ query: '', index: -1 });
-      lastPointerRef.current = null;
+      setHighlight({ query: '', index: null });
       setBrowseFailed(false);
     }
   }, [open]);
@@ -336,9 +340,9 @@ export function FolderPickerPopover({
         data-folder-picker-index={index}
         data-highlighted={isHighlighted || undefined}
         onMouseMove={(e) => {
-          const last = lastPointerRef.current;
-          if (last && last.x === e.clientX && last.y === e.clientY) return;
-          lastPointerRef.current = { x: e.clientX, y: e.clientY };
+          // 方向键滚动(或弹层刚出现)时,行会滑到静止的指针下,浏览器为此补发的 mousemove
+          // 没有位移;只有指针真的动了才算用户在用鼠标,高亮不会被拽到指针所在行。
+          if (e.movementX === 0 && e.movementY === 0) return;
           setHighlightIndex(index);
         }}
         className={cn(
@@ -474,6 +478,7 @@ export function FolderPickerPopover({
           if (!projectQuery) return;
           e.preventDefault();
           setProjectQuery('');
+          resetHighlight();
         }}
         aria-busy={selectionPending}
       >
@@ -521,6 +526,7 @@ export function FolderPickerPopover({
                     value={projectQuery}
                     onChange={(e) => {
                       setProjectQuery(e.target.value);
+                      resetHighlight();
                       if (projectScrollEl) projectScrollEl.scrollTop = 0;
                     }}
                     onKeyDown={(e) => {
