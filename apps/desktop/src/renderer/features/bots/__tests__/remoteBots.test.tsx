@@ -519,6 +519,28 @@ it('stops waiting for a stalled attribution read, pauses the host, and does not 
   } finally { vi.useRealTimers(); }
 });
 
+// Unit, #11997 review: the 60 s restored check stalls on A, and no roster or delegation change
+// follows. B, cached and never tried, must still be read once the host pause ends, or a task an
+// older host added while the app was closed keeps no creator. Minimal input: cached A, B; A's
+// read never answers; no other refresh until 100 s.
+it('continues the delayed restored check after a stalled read once the host pause ends', async () => {
+  h.devices = [host('a')];
+  const row = (id: string, sessionId: string) => ({ id, deviceId: 'a', deviceName: 'a', name: 'Writer', avatar: '', avatarColor: '',
+    description: '', preview: '', activityAt: 100, sessionId, delegatedSessionIds: [`${sessionId}-old`] });
+  localStorage.setItem(`cindy.remoteBots.v1.${h.owner}`, JSON.stringify([row('same-bot', 'canonical'), row('second-bot', 'second')]));
+  h.invoke.mockImplementation((_device, channel, args) => channel === REMOTE_RESOURCE_LIST_CHANNEL
+    ? Promise.resolve(teammatesAB()) : args[0] === 'canonical' ? new Promise(() => {}) : Promise.resolve(createdBy(args[0])));
+  vi.useFakeTimers();
+  try {
+    const { result } = renderHook(useRoster);
+    await act(async () => { await vi.advanceTimersByTimeAsync(99_000); });
+    expect(taskTargets()).toEqual(['canonical']);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+    expect(taskTargets()).toEqual(['canonical', 'second']);
+    expect(result.current.find(bot => bot.id === 'second-bot')?.delegatedSessionIds).toEqual(['second-child']);
+  } finally { vi.useRealTimers(); }
+});
+
 // Unit, same rule: an older host pushes a delegation change and the forced re-read stops at A's
 // timeout. B was skipped though its cached mark may be stale; the next ordinary refresh after the
 // host pause must still read it, also when that refresh only comes after A's 5-minute backoff and

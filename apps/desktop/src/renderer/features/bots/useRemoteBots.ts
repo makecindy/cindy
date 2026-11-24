@@ -138,6 +138,16 @@ export function useRemoteBotSync(): void {
     /** Per host: delegation pushes seen, so a round only clears the ones it has consumed. */
     const delegationPushes = new Map<string, number>();
     const current = () => !disposed && owner === nextOwner && isDataOwnerGenerationCurrent(dataOwner);
+    /** Teammates on this host not read yet this sign-in: unknown, marked unconfirmed, or a due restored check. */
+    const awaitingFirstRead = (deviceId: string) => {
+      const restoredDue = Date.now() >= (restoredCheckAt.get(deviceId) ?? Infinity);
+      return snapshot.some(bot => {
+        if (bot.deviceId !== deviceId || !bot.sessionId) return false;
+        const entry = delegationRetryAt.get(`${deviceId}\n${bot.id}\n${bot.sessionId}`);
+        return entry === 0 || (entry === undefined && (bot.delegatedSessionIds === undefined
+          || (restoredDue && restoredAttribution.has(`${deviceId}\n${bot.id}`))));
+      });
+    };
     async function refresh(deviceId: string, refreshTasks = false) {
       const host = byId.get(deviceId);
       if (!host?.online || !relayAvailable || !current()) return;
@@ -244,6 +254,14 @@ export function useRemoteBotSync(): void {
               // refresh after the pause still reads them instead of trusting their cached marks.
               if (refreshTasks) for (const rest of readOrder.slice(readOrder.indexOf(bot) + 1)) {
                 if (rest.sessionId && !delegationRetryAt.has(retryKeyOf(rest))) delegationRetryAt.set(retryKeyOf(rest), 0);
+              }
+              // Teammates still waiting for a first read (this sign-in's restored check included) are
+              // read once the pause ends, not left to an unrelated refresh.
+              if (!restoredCheckTimers.has(deviceId)) {
+                restoredCheckTimers.set(deviceId, setTimeout(() => {
+                  restoredCheckTimers.delete(deviceId);
+                  if (awaitingFirstRead(deviceId)) void refresh(deviceId);
+                }, DELEGATION_HOST_PAUSE_MS));
               }
               break;
             }
