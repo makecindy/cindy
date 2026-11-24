@@ -50,7 +50,7 @@ export function resolveConfiguredContextWindow(
   providerId: string | null | undefined,
   modelId: string,
   sessionBudget?: number | null,
-  verification?: 'required',
+  verification?: 'required' | 'required-or-budget',
 ): number | null {
   return desktopContextBudget.resolveConfiguredContextWindow(catalog, agent, providerId, modelId, sessionBudget, verification);
 }

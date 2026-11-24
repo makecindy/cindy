@@ -994,7 +994,9 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
         pid: string | null,
       ): number | null => resolveConfiguredContextWindow(
         getActiveCatalog(), agentKind, pid, routeModelId, sessionContextWindowBudget,
-        ownerWindowRebuild ? 'required' : undefined,
+        // 主人远程切模要走窗口闸门，但闸门的目标窗口就是这次重建 env 与重放共同使用的
+        // 收敛值：目录未核实时按任务预算认，否则上游不发布窗口的连接永远切不了模。
+        ownerWindowRebuild ? 'required-or-budget' : undefined,
       );
       if (runtimeAgentKind && (runtimeRouteChanged || piConfigurationRefresh || confirmedContextWindow !== undefined)) {
         const resolveRouteWindow = (_agentKind: string, modelId: string, pid: string | null) =>

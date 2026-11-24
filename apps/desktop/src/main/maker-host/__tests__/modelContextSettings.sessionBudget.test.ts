@@ -173,6 +173,62 @@ describe('resolveConfiguredContextWindow on an unverified route', () => {
   });
 });
 
+describe('resolveConfiguredContextWindow for the owner rebuild gate (required-or-budget)', () => {
+  // 远程主人切模走 `required-or-budget`：宿主要在重建前确定目标窗口。目录未核实时，用户显式
+  // 设过的工作窗口（模型级上限或任务预算）就是重建 env 与重放窗口共同使用的值 —— 它必须算数，
+  // 否则上游不发布窗口的连接会让远程主人永远切不了模（2026-11-25 实测 [PRECONDITION_FAILED]）。
+  const resolveOwnerRebuild = (
+    route: Pick<Catalog, 'providers'>,
+    model: string,
+    sessionBudget?: number | null,
+  ): number | null => resolveConfiguredContextWindow(
+    route, 'claude-code', 'xd', model, sessionBudget, 'required-or-budget',
+  );
+
+  it('accepts the model-level cap when the route declares no window', () => {
+    mockModelLimit = 262_144;
+    expect(resolveOwnerRebuild(undeclaredCatalog, 'undeclared-model')).toBe(262_144);
+  });
+
+  it('accepts the saved budget for a route the catalog does not carry', () => {
+    // 上游不发布窗口的自定义连接常常整条模型行都不在目录里（发现流程只拿到供应商）。
+    // 重建用的窗口就是预算值，闸门拿它当目标窗口。
+    mockModelLimit = 262_144;
+    expect(resolveOwnerRebuild(undeclaredCatalog, 'model-absent-from-catalog')).toBe(262_144);
+  });
+
+  it('keeps the default relaxed resolution unchanged for the same route', () => {
+    mockModelLimit = 262_144;
+    expect(resolveConfiguredContextWindow(undeclaredCatalog, 'claude-code', 'xd', 'model-absent-from-catalog'))
+      .toBeNull();
+  });
+
+  it('accepts the task budget on the same kind of route', () => {
+    expect(resolveOwnerRebuild(undeclaredCatalog, 'undeclared-model', 200_000)).toBe(200_000);
+  });
+
+  it('still clamps the task budget by the declared physical max', () => {
+    expect(resolveOwnerRebuild(unverifiedCatalog, 'discovered-model', 10_000_000)).toBe(400_000);
+  });
+
+  it('keeps the gate closed when the user configured no window', () => {
+    // 没有显式预算时目标窗口依然不可核实：闸门的原意保留。
+    expect(resolveOwnerRebuild(undeclaredCatalog, 'undeclared-model')).toBeNull();
+  });
+
+  it('keeps using the verified catalog window when there is one', () => {
+    expect(resolveOwnerRebuild(catalog, 'long-window-model')).toBe(200_000);
+  });
+
+  it('does not widen the handoff contract to a saved budget', () => {
+    // 交接/探测的 `required` 不认预算：那里的窗口要供另一台宿主按它压缩，没有用户意图覆盖。
+    mockModelLimit = 262_144;
+    expect(resolveConfiguredContextWindow(
+      undeclaredCatalog, 'claude-code', 'xd', 'undeclared-model', null, 'required',
+    )).toBeNull();
+  });
+});
+
 describe('contextWindowBudgetChangesEffectiveWindow', () => {
   const changes = (previous: number | null, next: number | null): boolean =>
     contextWindowBudgetChangesEffectiveWindow({

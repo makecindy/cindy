@@ -113,7 +113,7 @@ export function createSessionContextBudget(ports: SessionContextBudgetPorts) {
     providerId: string | null | undefined,
     modelId: string,
     sessionBudget?: number | null,
-    verification?: 'required',
+    verification?: 'required' | 'required-or-budget',
   ): number | null {
     const source = ports.resolveContextProviderId(catalog, agent, providerId, modelId);
     const modelLimit = source ? readModelContextLimit(agent, source, modelId) : null;
@@ -136,12 +136,20 @@ export function createSessionContextBudget(ports: SessionContextBudgetPorts) {
     const clampedByCatalog = requested !== null && declaredMax !== null
       ? Math.min(requested, declaredMax) : requested;
     const budget = tighterBudget(clampedByCatalog, modelLimit);
+    const budgetValue = typeof budget === 'number' && Number.isFinite(budget) && budget > 0 ? budget : null;
     const verified = resolveVerifiedContextWindow(catalog, agent, source, modelId, budget);
-    if (verified !== null || verification === 'required') return verified;
+    if (verified !== null) return verified;
+    // A handoff/probe contract asks for capacity verified by the catalog or the runtime only.
+    if (verification === 'required') return null;
+    if (budgetValue === null) return null;
+    // The owner-source switch gate (`required-or-budget`) resolves the window the rebuilt
+    // runtime and the replayed context both use, so a saved budget is the target it can
+    // verify. Rejecting it stranded remote owners on providers that publish no capacity
+    // (2026-11-25, [PRECONDITION_FAILED] target-window-unverified).
+    if (verification === 'required-or-budget') return budgetValue;
     // A saved budget configures the native runtime even if catalog capacity is
     // unknown. It is a working ceiling, not evidence of physical model capacity.
-    return rows.length === 1 && rows[0]!.contextWindowVerified !== true && typeof budget === 'number' && Number.isFinite(budget) && budget > 0
-      ? budget : null;
+    return rows.length === 1 && rows[0]!.contextWindowVerified !== true ? budgetValue : null;
   }
 
   /**
