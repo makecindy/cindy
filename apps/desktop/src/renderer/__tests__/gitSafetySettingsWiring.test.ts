@@ -280,24 +280,34 @@ describe('Git safety settings wiring', () => {
     expect(getGitSafetyAutoSnapshotEnabled()).toBe(false);
   });
 
-  it('refreshes customized state when another window re-selects the same mode', async () => {
+  it('reconciles same-mode storage notifications without publishing a reply', async () => {
+    let isCustomized = false;
     const api = installGitSafetyApi({
       gitSafetyGet: async () => ({
         mode: 'existing-git',
         autoSnapshotEnabled: true,
-        isCustomized: true,
+        isCustomized,
         defaultAutoSnapshotEnabled: true,
       }),
     });
 
     const { result } = renderHook(() => useGitSafetySettings());
-    await waitFor(() => expect(api.gitSafetyGet).toHaveBeenCalledTimes(1));
-    expect(result.current.isCustomized).toBe(true);
+    await waitFor(() => expect(localStorage.getItem('gitSafety.mode')).toBe('existing-git'));
+    expect(result.current.isCustomized).toBe(false);
 
-    act(() => {
-      window.dispatchEvent(new StorageEvent('storage', { key: 'gitSafety.sync', newValue: '2' }));
-    });
+    for (const next of [true, false]) {
+      isCustomized = next;
+      const signal = String(next);
+      localStorage.setItem('gitSafety.sync', signal);
+      act(() => {
+        window.dispatchEvent(new StorageEvent('storage', { key: 'gitSafety.sync', newValue: signal }));
+      });
 
-    await waitFor(() => expect(api.gitSafetyGet).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(result.current.isCustomized).toBe(next));
+      expect(localStorage.getItem('gitSafety.sync')).toBe(signal);
+    }
+    expect(api.gitSafetyGet).toHaveBeenCalledTimes(3);
+    expect(api.gitSafetySet).not.toHaveBeenCalled();
+    expect(api.gitSafetyReset).not.toHaveBeenCalled();
   });
 });

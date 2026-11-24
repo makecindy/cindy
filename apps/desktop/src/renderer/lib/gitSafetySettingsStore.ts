@@ -41,11 +41,17 @@ export function setGitSafetyAutoSnapshotEnabled(next: boolean): void {
 }
 
 export function setGitSafetyMode(next: GitSafetyMode): void {
+  mirrorGitSafetyMode(next, { notifySameMode: true });
+}
+
+export function mirrorGitSafetyMode(next: GitSafetyMode, { notifySameMode = false } = {}): void {
   try {
-    localStorage.setItem(STORAGE_KEY, next);
-    // Same-mode writes still need a storage event so other Settings windows
-    // refresh isCustomized. Bump an unrelated key instead of adding a bus.
-    localStorage.setItem(SYNC_KEY, String(Date.now()));
+    if (notifySameMode && localStorage.getItem(STORAGE_KEY) === next) {
+      // Explicit writes can change isCustomized without changing the mode.
+      localStorage.setItem(SYNC_KEY, crypto.randomUUID());
+    } else {
+      localStorage.setItem(STORAGE_KEY, next);
+    }
   } catch {
     // localStorage unavailable — ignore; callers still get main IPC errors.
   }
@@ -121,7 +127,7 @@ export async function bootstrapGitSafetySettingsFromMain(): Promise<void> {
         : settings.autoSnapshotEnabled
           ? 'all-projects'
           : 'off';
-    setGitSafetyMode(mode);
+    mirrorGitSafetyMode(mode);
   } catch {
     // preload unavailable / IPC failed — keep local fallback.
   }

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   getGitSafetyMode,
   getGitSafetyAutoSnapshotEnabled,
+  mirrorGitSafetyMode,
   persistLegacyGitSafetyOptOut,
   setGitSafetyMode,
   subscribeGitSafetyAutoSnapshotEnabled,
@@ -94,9 +95,12 @@ export function useGitSafetySettings(): {
   const [autoSnapshotEnabled, setEnabledState] = useState<boolean>(getGitSafetyAutoSnapshotEnabled);
   const [isCustomized, setIsCustomized] = useState(false);
 
-  const refresh = useCallback(async (isCancelled: () => boolean = () => false) => {
+  const refresh = useCallback(async (
+    isCancelled: () => boolean,
+    source: 'local' | 'storage' = 'local',
+  ) => {
     try {
-      if (await persistLegacyGitSafetyOptOut()) {
+      if (source === 'local' && await persistLegacyGitSafetyOptOut()) {
         if (isCancelled()) return;
         setModeState('off');
         setEnabledState(false);
@@ -109,7 +113,7 @@ export function useGitSafetySettings(): {
     const settings = await window.electronAPI.maker.gitSafetyGet();
     if (isCancelled()) return;
     const nextMode = modeFromWire(settings);
-    setGitSafetyMode(nextMode);
+    if (source === 'local') mirrorGitSafetyMode(nextMode);
     setModeState(nextMode);
     setEnabledState(nextMode !== 'off');
     setIsCustomized(settings.isCustomized);
@@ -148,9 +152,8 @@ export function useGitSafetySettings(): {
       if (!cancelled) {
         setModeState(next);
         setEnabledState(next !== 'off');
-        // The mode mirror cannot carry isCustomized. Refresh main's complete
-        // wire state so Settings windows also converge on override/reset changes.
-        if (source === 'storage') void refresh(() => cancelled).catch(() => undefined);
+        // Read isCustomized from main without sending a reply to the other window.
+        if (source === 'storage') void refresh(() => cancelled, source).catch(() => undefined);
       }
     });
     return () => {
