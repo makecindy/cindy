@@ -753,6 +753,7 @@ export class GoalController {
         // 不放进 fireTurn(Fix A 后 'first' 可能重发,会重复落库;编辑路径自己落 updated:true)。
         await this.deps.persistUserMessage?.(sessionId, objective, {
           goalObjective: { updated: false },
+          ...(input.persistInitialTitle ? { persistInitialTitle: true } : {}),
         });
       });
       if (this.turns.get(sessionId) !== createBoundary) return null;

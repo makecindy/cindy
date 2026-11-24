@@ -84,6 +84,8 @@ export interface GoalState {
 export interface SetGoalInput {
   sessionId: string;
   objective: string;
+  /** New remote task: use the first objective as its draft title. */
+  persistInitialTitle?: boolean;
   /** 留空则由 controller 从活动会话(SessionLike.agentKind)解析。 */
   agentKind?: AgentKind;
   /** 新建时的上限(GUI 新建弹窗的高级设置)。留空 → 走系统默认(getDefaults)。仅新建路径用;编辑改 objective 不动上限。 */
@@ -228,7 +230,7 @@ export interface GoalControllerDeps {
   persistUserMessage?: (
     sessionId: string,
     content: string,
-    opts?: { goalObjective?: { updated: boolean } },
+    opts?: { goalObjective?: { updated: boolean }; persistInitialTitle?: boolean },
   ) => Promise<void>;
   /**
    * 持久化一条 goal 达成记录(注入 createMessage,role:'assistant' + agentMeta.goalCompletion)。

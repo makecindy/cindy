@@ -9,6 +9,7 @@ import { getActiveCatalog, setCustomProviders } from '../../maker-host/active-ca
 import { AgentInputCoordinator, type AgentInputCoordinatorDeps } from '../../maker-ipc/agent-input-coordinator';
 import { MAKER_INVOKE } from '../../maker-ipc/channels';
 import { registerGoalHandlers } from '../../maker-ipc/goal';
+import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
 import { acquireSendToSessionLock, withSendToSessionLock } from '../../maker-ipc/sendToSessionLock';
 
 const host = vi.hoisted(() => ({
@@ -19,6 +20,9 @@ const host = vi.hoisted(() => ({
   goalHandlers: new Map<string, (event: unknown, input: unknown) => Promise<unknown>>(),
   acquireGoalRoute: vi.fn<(sessionId: string) => Promise<() => void>>(),
   goalInputBlocked: vi.fn<(sessionId: string) => boolean>(),
+  dbOwner: {} as object,
+  createMessage: vi.fn<() => Promise<void>>(),
+  persistInitialTaskTitle: vi.fn<(id: string, title: string, expected: string) => Promise<boolean>>(),
 }));
 
 vi.mock('electron', () => ({
@@ -42,7 +46,14 @@ vi.mock('../../maker-ipc/register.js', () => ({
   resolveSessionRuntimeRoute: () => ({ providerId: host.row.providerId, modelId: host.row.model }),
 }));
 vi.mock('../../device-link/sharedTaskDispatch.js', () => ({ isSessionSharedTaskActive: () => false }));
-vi.mock('../../localDb/ipc/messages.js', () => ({ createMessage: async () => {} }));
+vi.mock('../../localDb/ipc/messages.js', () => ({ createMessage: host.createMessage }));
+vi.mock('../../localDb/client/current.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../localDb/client/current.js')>(),
+  getCurrentDbClientSnapshot: () => host.dbOwner,
+}));
+vi.mock('../../maker-ipc/createdTaskTitles.js', () => ({
+  persistInitialTaskTitle: host.persistInitialTaskTitle,
+}));
 vi.mock('../../localDb/ipc/sessions.js', () => ({
   getSessionRowSnapshot: async () => host.row,
   touchSessionActivityInDb: async () => {},
@@ -85,7 +96,7 @@ import { resetGoalController, startGoalController, waitForGoalController } from 
 const NOW = Date.parse('2026-10-29T10:00:00Z');
 const RESET = NOW + 7 * 24 * 60 * 60 * 1000;
 
-async function start(agentKind: SessionLike['agentKind'] = 'codex', viaIpc = false) {
+async function start(agentKind: SessionLike['agentKind'] = 'codex', viaIpc = false, persistInitialTitle?: true) {
   let listener: ((event: AgentEvent) => void) | null = null;
   const send = vi.fn(async (_message: unknown, options?: {
     onDispatching?: () => void;
@@ -112,7 +123,9 @@ async function start(agentKind: SessionLike['agentKind'] = 'codex', viaIpc = fal
   await vi.advanceTimersByTimeAsync(0);
   if (viaIpc) {
     registerGoalHandlers();
-    await host.goalHandlers.get(MAKER_INVOKE.GOAL_SET)!(null, { sessionId: 's1', objective: 'Finish the work' });
+    await host.goalHandlers.get(MAKER_INVOKE.GOAL_SET)!(null, {
+      sessionId: 's1', objective: 'Finish the work', persistInitialTitle,
+    });
   } else {
     await controller.setGoal({ sessionId: 's1', objective: 'Finish the work', agentKind });
   }
@@ -140,6 +153,9 @@ beforeEach(() => {
   vi.setSystemTime(NOW);
   host.goals.clear();
   host.goalHandlers.clear();
+  host.dbOwner = {};
+  host.createMessage.mockReset().mockResolvedValue(undefined);
+  host.persistInitialTaskTitle.mockReset().mockResolvedValue(true);
   host.acquireGoalRoute.mockReset().mockImplementation(async () => () => {});
   host.goalInputBlocked.mockReset().mockReturnValue(false);
   host.row = { providerId: 'openai', model: 'gpt-6-astra', agentDeviceId: null };
@@ -297,6 +313,71 @@ afterEach(async () => {
 // decisions after success. Controller-only tests inject a different quota reader.
 // This unit exercises startGoalController -> real controller -> persisted state/send;
 // memory storage/session boundaries prevent live model requests or owner-data access.
+describe('initial goal title over maker:goal:set', () => {
+  it('waits for the initial title write before acknowledging the new goal', async () => {
+    let remoteTitle = DEFAULT_DRAFT_SESSION_TITLE;
+    const writeStarted = Promise.withResolvers<void>();
+    const releaseWrite = Promise.withResolvers<void>();
+    host.persistInitialTaskTitle.mockImplementation(async (_id, title, expected) => {
+      writeStarted.resolve();
+      await releaseWrite.promise;
+      if (remoteTitle !== expected) return false;
+      remoteTitle = title;
+      return true;
+    });
+    let acknowledged = false;
+    const creating = start('codex', true, true).then(() => { acknowledged = true; });
+    await Promise.race([writeStarted.promise, creating]);
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(acknowledged).toBe(false);
+      expect(remoteTitle).toBe(DEFAULT_DRAFT_SESSION_TITLE);
+    } finally {
+      releaseWrite.resolve();
+      await creating;
+    }
+    expect(remoteTitle).toBe('Finish the work');
+    expect(host.persistInitialTaskTitle).toHaveBeenCalledWith(
+      's1', 'Finish the work', DEFAULT_DRAFT_SESSION_TITLE,
+    );
+    expect(host.createMessage.mock.invocationCallOrder[0])
+      .toBeLessThan(host.persistInitialTaskTitle.mock.invocationCallOrder[0]);
+  });
+
+  it('keeps the title when new-goal persistence races a manual rename', async () => {
+    let remoteTitle = DEFAULT_DRAFT_SESSION_TITLE;
+    host.createMessage.mockImplementationOnce(async () => { remoteTitle = 'My manual title'; });
+    host.persistInitialTaskTitle.mockImplementation(async (_id, title, expected) => {
+      if (remoteTitle !== expected) return false;
+      remoteTitle = title;
+      return true;
+    });
+    await start('codex', true, true);
+    expect(remoteTitle).toBe('My manual title');
+  });
+
+  it('leaves desktop title generation and subsequent goal edits to their existing paths', async () => {
+    await start('codex', true);
+    await host.goalHandlers.get(MAKER_INVOKE.GOAL_SET)!(null, {
+      sessionId: 's1', objective: 'A revised objective', persistInitialTitle: true,
+    });
+    expect(host.persistInitialTaskTitle).not.toHaveBeenCalled();
+  });
+
+  it('skips the title when the current database changes while the objective is saved', async () => {
+    host.createMessage.mockImplementationOnce(async () => { host.dbOwner = {}; });
+    await start('codex', true, true);
+    expect(host.persistInitialTaskTitle).not.toHaveBeenCalled();
+  });
+
+  it('allows the goal to start when title storage fails', async () => {
+    host.persistInitialTaskTitle.mockRejectedValueOnce(new Error('title store unavailable'));
+    await start('codex', true, true);
+    expect(host.goals.get('s1')?.objective).toBe('Finish the work');
+    expect(host.persistInitialTaskTitle).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('ChatGPT goal admission', () => {
   it.each([
     { agent: 'codex', provider: 'openai' },

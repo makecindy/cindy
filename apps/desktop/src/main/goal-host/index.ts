@@ -9,6 +9,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type { AgentKind, EngineKind, Maker } from '@cindy/maker-core';
+import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
 
 import { accountUsageLimitFromExhaustedResets } from '../../shared/accountUsageLimit.js';
 import { isOpenCodeGoProvider, opencodeGoUsageEndpoint } from '../../shared/opencodeGoUsage.js';
@@ -27,6 +28,8 @@ import {
 } from '../maker-ipc/register.js';
 import { isSessionSharedTaskActive } from '../device-link/sharedTaskDispatch.js';
 import { createMessage } from '../localDb/ipc/messages.js';
+import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
+import { persistInitialTaskTitle } from '../maker-ipc/createdTaskTitles.js';
 import { isPluginEngineTask } from '../maker-host/engineKind.js';
 import { readGoalSettings, writeGoalSettings } from '../maker-host/goal-settings-store.js';
 import { getSessionRowSnapshot, touchSessionActivityInDb } from '../localDb/ipc/sessions.js';
@@ -113,6 +116,7 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
     // controller.fireTurn 里)。不打 agentMeta.origin —— guard f 区分 goal/user turn
     // 靠事件的 turnOrigin,持久化消息无需重复标记(且 AgentMeta.origin 当前不含 'goal')。
     persistUserMessage: async (sessionId, content, opts) => {
+      const titleOwner = opts?.persistInitialTitle ? getCurrentDbClientSnapshot() : null;
       await createMessage(sessionId, {
         clientId: randomUUID(),
         role: 'user',
@@ -120,6 +124,15 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
         // /goal 目标设定/更新 → 标记该消息,renderer 在气泡上方渲「目标 / 目标已更新」徽标。
         ...(opts?.goalObjective ? { agentMeta: { goalObjective: opts.goalObjective } } : {}),
       });
+      if (titleOwner && titleOwner === getCurrentDbClientSnapshot()) {
+        // Goal startup bypasses the regular enqueue auto-title path. Use the
+        // host's conditional writer so a concurrent user rename still wins.
+        try {
+          await persistInitialTaskTitle(sessionId, content, DEFAULT_DRAFT_SESSION_TITLE);
+        } catch {
+          logger.warn('[goal-host] initial goal title unavailable', { sessionId });
+        }
+      }
     },
     // 达成时落一条持久记录(空 content + agentMeta.goalCompletion),renderer 渲成
     // "目标已达成 · N 轮 · 耗时 X"分隔条。与 persistUserMessage 对称:起点落目标、
