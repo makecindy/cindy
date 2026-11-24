@@ -993,8 +993,11 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   经现有安装或更新流程批准后，调用 `cindy.send({ type: 'cindy-request', kind: 'media_request',
   operation, model, ...args })`。Host 只用当前账号的 Cindy AI 连接，校验实际模型和操作后代发。
   插件提供该模型的请求参数，Host 掌握 URL、方法、认证和路由头。此入口无需 Agent 会话。
-  - `image.generate`、`video.generate`、`audio.speech` 使用 `body` 对象。
+  - `image.generate`、`image.edit`、`video.generate`、`audio.speech` 使用 `body` 对象。
     图像和视频走该模型官方 Guide 中的 JSON 接口。Host 写入协议指定的模型字段。
+    `image.edit` 由插件把参考图按 Guide 声明的 JSON 字段放进 `body`（例如 data URL），
+    Host 不读取、不改写图片；Guide 的编辑接口为 multipart 时返回 `UNAVAILABLE`。
+    `media_request` 已获准的插件无需重新批准即可使用 `image.edit`，旧宿主按不支持此操作处理。
   - `audio.transcribe` 使用文本字段组成的 `body`，并通过 `audioHash` 提供该插件有权使用的
     受管音频指纹。可先通过 `deposit_media` 寄存已有音频。Host 构造文件表单。
   - 异步视频的成功提交响应在可识别任务 ID 时附带 `jobRef`。用相同 `model` 和该引用请求

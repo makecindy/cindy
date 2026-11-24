@@ -28,6 +28,8 @@ function setup() {
       schemaVersion: 1, guideId: 'test-guide', revision: '1',
       operations: [
         { ...operation, capability: 'image.generate', response: { mode: 'sync', media: [] } },
+        // A distinct path proves editing uses its own guide entry, not the generation route.
+        { ...operation, capability: 'image.edit', request: { ...operation.request, path: '/media/{model}/edit' }, response: { mode: 'sync', media: [] } },
         { ...operation, capability: 'video.generate', response: { mode: 'async', taskIdPath: ['task', 'id'], poll } },
       ],
     },
@@ -86,6 +88,42 @@ describe('plugin media gateway dispatch', () => {
       ok: false, errorCode: 'PERMISSION_DENIED',
     });
     expect(send).not.toHaveBeenCalled();
+  });
+
+  // Protocol contract: `media_request` accepts `image.edit` with a JSON body (the plugin supplies the reference
+  // image fields from the model guide). Before this operation existed the host answered INVALID_INPUT.
+  it('edits an image through its own JSON guide route, with the same model gate and billing as generation', async () => {
+    const { context, dispatch, send, allowsModel, prepareBilling, recordBilling } = setup();
+    send.mockResolvedValue(Response.json({ data: [{ b64_json: 'AQID' }] }));
+    const body = { prompt: 'make it blue', images: ['data:image/png;base64,AQID'] };
+    expect(await dispatch({ operation: 'image.edit', model, body }, context)).toMatchObject({ ok: true, status: 200 });
+    expect(allowsModel).toHaveBeenCalledWith(model, 'image.edit');
+    expect(send).toHaveBeenCalledExactlyOnceWith('https://gateway.test/media/vendor%2Fmedia-model/edit', expect.objectContaining({
+      method: 'POST', body: JSON.stringify({ ...body, model }),
+    }));
+    expect(prepareBilling).toHaveBeenCalledOnce();
+    expect(recordBilling).toHaveBeenCalledOnce();
+
+    allowsModel.mockReturnValueOnce(false);
+    expect(await dispatch({ operation: 'image.edit', model, body }, context)).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses image.edit when the model has no JSON edit route, before billing or dispatch', async () => {
+    const { context, dispatch, send, getGuide, prepareBilling } = setup();
+    const editGuide = async (request: object | undefined): Promise<ResolvedMediaInvocationGuide> => {
+      const { guide, modelId } = await getGuide();
+      return { modelId, guide: { ...guide, operations: guide.operations.flatMap(item => item.capability !== 'image.edit' ? [item]
+        : request ? [{ ...item, request: { ...item.request, ...request } }] : []) } };
+    };
+    for (const request of [undefined, { bodyEncoding: 'multipart' as const, multipartFiles: [{ bodyField: 'image', formField: 'image', kind: 'image' as const, maxItems: 1 }] }]) {
+      getGuide.mockResolvedValueOnce(await editGuide(request));
+      expect(await dispatch({ operation: 'image.edit', model, body: { prompt: 'x' } }, context)).toMatchObject({
+        ok: false, errorCode: 'UNAVAILABLE',
+      });
+    }
+    expect(send).not.toHaveBeenCalled();
+    expect(prepareBilling).not.toHaveBeenCalled();
   });
 
   it('polls a video on the original trusted route only for the submitting account and plugin', async () => {

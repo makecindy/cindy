@@ -97,7 +97,7 @@ const result = await cindy.send({
 });
 ```
 
-- `image.generate`、`video.generate`、`audio.speech` 提供 `body` 对象。图像和视频使用该模型官方 Guide 的 JSON 参数。
+- `image.generate`、`image.edit`、`video.generate`、`audio.speech` 提供 `body` 对象。图像和视频使用该模型官方 Guide 的 JSON 参数；`image.edit` 把参考图按该模型 Guide 声明的 JSON 字段放进 `body`（例如 data URL），不支持 multipart，模型的编辑接口为 multipart 时返回 `UNAVAILABLE`。
 - `audio.transcribe` 提供由文本字段组成的 `body` 和受管音频的 `audioHash`。可用 `deposit_media` 寄存已有音频，文件表单由 Host 构造。
 - 异步视频提交返回 `jobRef` 时，使用同一 `model` 和 `jobRef` 调用 `video.poll`。仅在模型提供独立下载接口时调用 `video.content`。引用绑定账号和插件实例，最长保留 30 分钟，重启或淘汰后失效。
 

@@ -6016,8 +6016,8 @@ export function getGhostCindySlot(): GhostCindySlot {
               && audioModels.some(candidate => candidate.id === model && candidate.availability === 'available')
               && !isModelDisabledWithUniqueLegacyBasename(access, 'xd', model, audioModels.map(candidate => candidate.id));
           }
-          const kind = operation === 'image.generate' ? 'image' : 'video';
-          const capability = kind === 'image' ? 'image.generate' : 'video.generate';
+          const kind = operation === 'image.generate' || operation === 'image.edit' ? 'image' : 'video';
+          const capability = operation === 'image.edit' ? 'image.edit' : kind === 'image' ? 'image.generate' : 'video.generate';
           return filterEnabledGatewayMediaModels(models, capability, access).some(candidate =>
             candidate.id === model && isCatalogMediaModelVisible('xd', model, candidate.defaultEnabled, undefined, kind));
         },

@@ -8759,7 +8759,7 @@ export const GHOST_CINDY_EMBED_TIMEOUT_MS = 60_000;
  * 两者都给时 model 优先。意识永远不经手 key,也决定不了白名单之外的路由。
  */
 export const GHOST_DIRECT_MEDIA_OPERATIONS = [
-  'image.generate', 'video.generate', 'video.poll', 'video.content',
+  'image.generate', 'image.edit', 'video.generate', 'video.poll', 'video.content',
   'audio.speech', 'audio.transcribe',
 ] as const;
 export type GhostDirectMediaOperation = (typeof GHOST_DIRECT_MEDIA_OPERATIONS)[number];
@@ -8769,7 +8769,7 @@ export type GhostDirectMediaRequest = {
   kind: 'media_request';
   model: string;
 } & (
-  | { operation: 'image.generate' | 'video.generate' | 'audio.speech'; body: Record<string, unknown> }
+  | { operation: 'image.generate' | 'image.edit' | 'video.generate' | 'audio.speech'; body: Record<string, unknown> }
   | { operation: 'audio.transcribe'; body: Record<string, string>; audioHash: string }
   | { operation: 'video.poll' | 'video.content'; jobRef: string }
 );
