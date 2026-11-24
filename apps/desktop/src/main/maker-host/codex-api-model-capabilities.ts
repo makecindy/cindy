@@ -30,13 +30,21 @@ const OFFICIAL_API_FAST_FALLBACK_MODELS = new Set([
   'gpt-5.3-codex',
 ]);
 
+// https://developers.openai.com/api/docs/guides/ultrafast-mode
+const OFFICIAL_API_ULTRAFAST_MODELS = new Set([
+  'gpt-6.2-astra',
+  'gpt-6.2-sol',
+  'gpt-6-astra',
+  'gpt-6.1-sol',
+]);
+
 /** model/list describes engine capabilities, not account membership or API entitlement. */
 function isOpenAiApiCodexRoute(
   agent: AgentKind,
   model: Pick<ProviderRuntimeModelConfig, 'route' | 'api'>,
   routing: RoutingDescriptor,
 ): boolean {
-  if (agent !== 'codex' || routing.authStrategy !== 'api-key-header') return false;
+  if (agent !== 'codex' || routing.disabled || routing.authStrategy !== 'api-key-header') return false;
   const wire = model.route?.wireProtocol ?? routing.wireProtocol ?? 'openai-responses';
   if (wire !== 'openai-responses' || (model.api && model.api !== 'openai-responses')) return false;
   // Match providerRoutingForModel: a model route replaces the runtime path.
@@ -61,17 +69,20 @@ export function codexApiModelMetadata(
   agent: AgentKind,
   model: ProviderRuntimeModelConfig,
   routing: RoutingDescriptor,
-): ModelMetadata | undefined {
+): (ModelMetadata & Pick<CatalogModel, 'supportsUltrafastMode'>) | undefined {
   if (!isOpenAiApiCodexRoute(agent, model, routing)) return undefined;
   const report = models?.find(candidate => candidate.id === model.id)?.discoveredMetadata;
   const supportsFastMode = report?.supportsFastMode ??
     (OFFICIAL_API_FAST_FALLBACK_MODELS.has(model.id) && model.discoveredMetadata?.supportsFastMode === undefined
       ? true : undefined);
-  if (!report && supportsFastMode === undefined) return undefined;
+  // Native Codex account discovery does not determine official API Ultrafast eligibility.
+  const supportsUltrafastMode = OFFICIAL_API_ULTRAFAST_MODELS.has(model.id);
+  if (!report && supportsFastMode === undefined && !supportsUltrafastMode) return undefined;
   return {
     ...(report?.efforts !== undefined ? { efforts: report.efforts } : {}),
     ...(report?.defaultEffort !== undefined ? { defaultEffort: report.defaultEffort } : {}),
     ...(supportsFastMode !== undefined ? { supportsFastMode } : {}),
+    ...(supportsUltrafastMode ? { supportsUltrafastMode } : {}),
   };
 }
 
@@ -85,6 +96,16 @@ export function needsOpenAiApiCodexFastDeclaration(
   const model = provider.models.codex?.find(candidate => candidate.id === modelId);
   return !!routing && !routing.disabled && model?.supportsFastMode === true &&
     isOpenAiApiCodexRoute('codex', { route: model.route, api: model.userModelConfig?.api }, routing);
+}
+
+/** Add the API tier only for the selected model whose picker exposes it. */
+export function needsOpenAiApiCodexUltrafastDeclaration(
+  provider: Provider | undefined,
+  modelId: string,
+): boolean {
+  return OFFICIAL_API_ULTRAFAST_MODELS.has(modelId) &&
+    needsOpenAiApiCodexFastDeclaration(provider, modelId) &&
+    provider?.models.codex?.some(model => model.id === modelId && model.supportsUltrafastMode === true) === true;
 }
 
 let probe: (() => void) | null = null;

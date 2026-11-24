@@ -75,7 +75,8 @@ describe('Codex API engine capabilities', () => {
     expect(projected.filter(entry => entry.supportsFastMode).map(entry => entry.id)).toEqual(supportedIds);
     expect(projected.filter(entry => needsOpenAiApiCodexFastDeclaration(provider, entry.id)).map(entry => entry.id))
       .toEqual(supportedIds);
-    expect(projected.some(entry => entry.supportsUltrafastMode)).toBe(false);
+    expect(projected.filter(entry => entry.supportsUltrafastMode).map(entry => entry.id))
+      .toEqual(['gpt-6.2-astra', 'gpt-6.2-sol', 'gpt-6-astra', 'gpt-6.1-sol']);
   });
 
   // #12423 unit: the installed Codex catalog can omit a known API model.
@@ -91,7 +92,8 @@ describe('Codex API engine capabilities', () => {
     setCodexApiModelCapabilities([live()]);
     const provider = getActiveCatalog().providers.find(entry => entry.id === stored.id);
     expect(model()).toMatchObject({ id: modelId, supportsFastMode: true });
-    expect(model().supportsUltrafastMode).not.toBe(true);
+    expect(model().supportsUltrafastMode).toBe(true);
+    expect(model(relay.id).supportsUltrafastMode).not.toBe(true);
     expect(needsOpenAiApiCodexFastDeclaration(provider, modelId)).toBe(true);
     expect(model(relay.id).supportsFastMode).not.toBe(true);
     expect(needsOpenAiApiCodexFastDeclaration(
@@ -101,6 +103,7 @@ describe('Codex API engine capabilities', () => {
     stored.runtimes.codex!.models[0]!.supportsFastMode = false;
     setCustomProviderConfigs([stored, relay]);
     expect(model().supportsFastMode).toBe(false);
+    expect(model().supportsUltrafastMode).not.toBe(true);
     expect(needsOpenAiApiCodexFastDeclaration(
       getActiveCatalog().providers.find(entry => entry.id === stored.id), modelId,
     )).toBe(false);
@@ -146,7 +149,7 @@ describe('Codex API engine capabilities', () => {
     expect(model()).toMatchObject({ efforts: [...efforts], supportsFastMode: true,
       defaultEffort: previous.defaultEffort, contextWindow: previous.contextWindow,
       userModelConfig: stored.runtimes.codex!.models[0] });
-    expect(model().supportsUltrafastMode).not.toBe(true);
+    expect(model().supportsUltrafastMode).toBe(true);
     expect(stored.runtimes.codex!.models[0]!.discoveredMetadata).toBeUndefined();
     expect(getActiveCatalog().providers.find(p => p.id === stored.id)!.models.codex!.map(m => m.id))
       .toEqual(['gpt-6.1-sol', 'private-alias']);

@@ -5423,7 +5423,7 @@ assertRouteCurrent();
         ...(reviewMode
           ? {
               hostPurpose: 'review' as const,
-              ...(opts.fastMode === true && this.deps.needsCodexFastCatalog?.(opts.providerId, opts.model)
+              ...(opts.fastMode && this.deps.needsCodexFastCatalog?.(opts.providerId, opts.model)
                 ? { customContextModel: opts.model, customContextProviderId: opts.providerId }
                 : {}),
             }
