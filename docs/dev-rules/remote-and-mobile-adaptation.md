@@ -422,8 +422,10 @@ WebSocket ping，45 秒收不到 pong 就关闭这条连接，交给 worker 既�
 加密连接）保留，device-link 链路不复位、不重放；在持续丢包的线路上最坏约每分钟重连一次，不会
 形成紧循环；③ `packages/agent-net/src/__tests__/workerSocket.test.ts` 用本机真实 WebSocket
 中继验证：不回 pong 时断开，正常回 pong 时超过时限也不断开。用的是标准控制帧，官方中继和自建
-中继（同一 V2 内核，默认自动回 pong）都无需改动。手机端（React Native 的 WebSocket 没有 ping
-接口）仍是同一盲区，尚未处理。
+中继的 WebSocket 都默认自动回复标准 pong。手机端的 React Native WebSocket 没有标准 ping
+接口，改用中继通过 hello 声明支持的 `relay-probe`，在拨号或业务失败后按需验证本机与中继的往返。
+见本文件「同一台电脑的旧可靠连接与新会话同时存在」及
+[Agent-Net 会话兼容说明](protocol-compatibility/agent-net-session.md#手机按需验证中继上行)。
 
 ### Agent-Net 中继发送排队上限
 

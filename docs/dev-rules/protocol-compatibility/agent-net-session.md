@@ -188,3 +188,5 @@ session between two new nodes alongside Device Link frames」（真实核心上 
 ### 手机按需验证中继上行
 
 V2 成员连接的中继可在已鉴权的 WebSocket hello 中声明 `relayProbe: true`。支持方才会在拨号或经中继的业务请求失败后发送文本帧 `{"type":"relay-probe"}`，中继在同一连接回复 `{"type":"relay-pong"}`。探测只验证本机与中继的往返；目标设备的业务可用性仍需业务回包确认。探测不携带设备号、任务数据或账号凭据。新客户端遇到未声明能力的中继不发送该帧，旧客户端忽略新增字段；访客连接继续拒绝成员控制帧。中继和手机可以分批上线，两边更新后手机探测才生效。桌面继续使用标准 WebSocket 控制帧。自建与官方中继的实现和套接字验收见 `packages/agent-net-relay/src/server.ts` 和 `relay.integration.test.ts`。
+
+自建服务器的 V1 和 V2 程序共用的部署版本升至 `0.5.6`。带新版中转包的桌面客户端可为旧部署显示升级入口。升级自建服务器后，由中继 hello 的能力声明启用已更新手机的探测。

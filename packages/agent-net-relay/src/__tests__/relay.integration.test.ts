@@ -19,7 +19,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
 import { createSocket } from 'node:dgram';
-import { once } from 'node:events';
+import { on, once } from 'node:events';
 import type { AddressInfo, Socket } from 'node:net';
 import { createServer } from 'node:http';
 import { Readable } from 'node:stream';
@@ -870,12 +870,22 @@ describe('independent V2 relay', () => {
       headers: { authorization: authorization(f.owner, f.certificate, 'GET', API + '/ws') },
     });
     cleanups.push(() => { ws.terminate(); });
-    const [hello] = await once(ws, 'message');
-    expect(JSON.parse(hello.toString())).toMatchObject({ type: 'hello', relayProbe: true });
-    const reply = once(ws, 'message');
-    ws.send('{"type":"relay-probe"}');
-    const [pong] = await reply;
-    expect(JSON.parse(pong.toString())).toEqual({ type: 'relay-pong' });
+    const messages = on(ws, 'message', { signal: AbortSignal.timeout(3_000) });
+    try {
+      const { value: [hello] } = await messages.next();
+      expect(JSON.parse(hello.toString())).toMatchObject({ type: 'hello', relayProbe: true });
+      ws.send('{"type":"relay-probe"}');
+      // The relay can broadcast directory updates on the same socket before replying.
+      for await (const [data] of messages) {
+        const frame = JSON.parse(data.toString());
+        if (frame.type === 'directory') continue;
+        expect(frame).toEqual({ type: 'relay-pong' });
+        return;
+      }
+      throw new Error('Relay message stream ended before relay-pong');
+    } finally {
+      await messages.return?.();
+    }
   });
 
   // 2026-11-17 review: UDP credentials are a reusable secret. On an owner-pinned private relay over plain http (the
