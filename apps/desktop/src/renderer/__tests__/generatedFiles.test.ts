@@ -44,6 +44,22 @@ describe('collectGeneratedFiles', () => {
     expect(packed('mcp__cindy__ghost_forge_pack', { ok: false, cindyPath: path })).toEqual([]);
   });
 
+  it('accepts a Forge result inside the Windows share used by the task', () => {
+    const cwd = '\\\\files\\projects\\quiet';
+    const packed = (path: string, workingDir = cwd) => collectGeneratedFiles([
+      { ...toolUse('ghost_forge_pack', { dir: cwd }), toolUseId: 'pack' },
+      { role: 'tool_result', toolUseId: 'pack', content: JSON.stringify({ ok: true, cindyPath: path }) },
+    ], workingDir);
+    const path = cwd + '\\dist\\quiet.cindy';
+    expect(packed(path)).toEqual([
+      { path, name: 'quiet.cindy', source: 'tool', artifactConfirmed: true, packageToolUseId: 'pack' },
+    ]);
+    expect(packed('\\\\files\\other\\quiet.cindy')).toEqual([]);
+    expect(packed('\\\\other\\projects\\quiet\\quiet.cindy')).toEqual([]);
+    expect(packed('//files/projects/quiet/dist/quiet.cindy', '/')).toEqual([]);
+    expect(packed('quiet.cindy')).toEqual([]);
+  });
+
   it('tracks the latest successful pack when Forge overwrites the same path', () => {
     const path = '/work/quiet/plugin.cindy';
     const result = (toolUseId: string, ok: boolean) => [

@@ -26,6 +26,7 @@ import {
 } from '@cindy/maker-shared';
 
 import { extractCommandOutputPathCandidates } from '../../shared/commandOutputPaths';
+import { toWorkdirRel } from '../../shared/workdirPath';
 import { resolveToolFilePath } from './localPathResolver';
 import { basename } from './utils';
 
@@ -296,6 +297,18 @@ function canonicalizeWindowsShape(abs: string): string {
 }
 
 
+function isForgePackagePath(path: string, workingDir: string): boolean {
+  if (!/\.cindy$/i.test(path)) return false;
+  const normalized = path.replace(/\\/g, '/');
+  if (normalized.startsWith('//')) {
+    // Restoring history must not initiate reads from a different network share.
+    return /^[\\/]{2}/.test(workingDir)
+      && /^\/\/(?![?.]\/)[^/]+\/[^/]+\//.test(normalized)
+      && toWorkdirRel(workingDir, path) !== null;
+  }
+  return /^(?:\/|[A-Za-z]:[\\/])/.test(path);
+}
+
 /**
  * 一组消息(通常是一个 turn 的切片,但对任意切片都成立)→ 新建文件的有序去重
  * 列表。路径经 `resolveToolFilePath` 解析成绝对路径;`workingDir` 为空时按原样
@@ -387,7 +400,7 @@ export function collectGeneratedFiles(
       const result = parseToolResult(resultContent);
       const path = stringField(result, 'cindyPath');
       if (result?.ok === true && !result.publishToken && asRecord(msg.toolInput)?.intent !== 'publish' &&
-          path && /^(?:\/|[A-Za-z]:[\\/])/.test(path) && /\.cindy$/i.test(path)) {
+          path && isForgePackagePath(path, workingDir)) {
         addPath(path, 'tool');
         const file = byKey.get(dedupeKeyForPath(canonicalizeWindowsShape(path)));
         if (file) {
