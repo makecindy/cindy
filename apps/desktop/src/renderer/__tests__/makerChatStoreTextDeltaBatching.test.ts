@@ -2335,16 +2335,24 @@ describe('makerChatStore text delta batching', () => {
     { label: 'child tool during root', toolParent: 'toolu_child', preserve: true },
     { label: 'tool of the active child', activeParent: 'toolu_child', toolParent: 'toolu_child', preserve: false },
     { label: 'tool of another child', activeParent: 'toolu_other', toolParent: 'toolu_child', preserve: true },
+    { label: 'proven root tool during child', activeParent: 'toolu_child', toolParent: null, preserve: true },
+    { label: 'proven root tool during root', toolParent: null, preserve: false },
+    { label: 'legacy tool during child', activeParent: 'toolu_child', preserve: false },
+    { label: 'another engine with null', source: 'codex', activeParent: 'toolu_child', toolParent: null, preserve: false },
+    { label: 'remote frame with null', remote: true, activeParent: 'toolu_child', toolParent: null, preserve: false },
     { label: 'ordinary root tool', preserve: false },
     { label: 'transcript edge only', transcriptParent: 'toolu_child', preserve: false },
-  ])('applies the Claude boundary to the owning stream ($label)', ({ activeParent, toolParent, transcriptParent, preserve }) => {
-    const send = (type: string, persistId: string, data: unknown, agentMeta?: object) => onEvent?.({
-      sessionId: SESSION_ID, persistId, event: { type, source: 'claude-code', data, agentMeta },
-    });
+  ])('applies the Claude boundary to the owning stream ($label)', ({ activeParent, toolParent, transcriptParent, preserve, source = 'claude-code', remote }) => {
+    if (remote) remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    const send = (type: string, persistId: string, data: unknown, agentMeta?: object) => {
+      const payload = { sessionId: SESSION_ID, persistId, event: { type, source, data, agentMeta } };
+      if (remote) onRemotePush?.({ deviceId: 'device-1', channel: 'maker:event', payload });
+      else onEvent?.(payload);
+    };
     send('text', 'before', { text: 'prefix', isFinal: false }, activeParent ? { parentUuid: activeParent } : undefined);
     vi.advanceTimersByTime(32);
     send('tool_use', 'tool-row', { toolUseId: 'toolu_read', toolName: 'Read', input: {} },
-      toolParent ? { parentUuid: toolParent } : transcriptParent ? { transcriptParentUuid: transcriptParent } : undefined);
+      toolParent !== undefined ? { parentUuid: toolParent } : transcriptParent ? { transcriptParentUuid: transcriptParent } : undefined);
     send('text', preserve ? 'before' : 'after', { text: ' suffix', isFinal: false },
       activeParent ? { parentUuid: activeParent } : undefined);
     vi.advanceTimersByTime(32);

@@ -5,7 +5,7 @@
  * persistence. Every other import is unchanged.
  */
 
-import type { AgentEvent } from '@cindy/maker-core';
+import { CLAUDE_EXPLICIT_ROOT_TOOL_USE, type AgentEvent } from '@cindy/maker-core';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import { redactToolInputForUntrustedBoundary } from '../toolInputRedaction.js';
 
@@ -13,6 +13,7 @@ export function redactEventForRenderer(event: AgentEvent): AgentEvent {
   // These are main/maker-core lifecycle fields, not renderer data. Keep them on the main-side
   // event used for bookkeeping but never expose them through the raw renderer channel.
   const rendererEvent = { ...event };
+  delete rendererEvent[CLAUDE_EXPLICIT_ROOT_TOOL_USE];
   delete rendererEvent.turnAttemptToken;
   delete rendererEvent.backgroundTurnStartedAt;
   delete rendererEvent.sessionTurnGeneration;

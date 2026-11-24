@@ -190,7 +190,11 @@ export interface SendOrigin {
   goalSessionId?: string;
 }
 
+/** In-process evidence from an explicit null on a Claude SDK tool envelope. */
+export const CLAUDE_EXPLICIT_ROOT_TOOL_USE = Symbol('claude-explicit-root-tool-use');
+
 export interface AgentEvent {
+  [CLAUDE_EXPLICIT_ROOT_TOOL_USE]?: true;
   type: AgentEventType;
   data: unknown;
   /** 事件来源标识，便于调试 */

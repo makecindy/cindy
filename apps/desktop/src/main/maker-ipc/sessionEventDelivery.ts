@@ -1,4 +1,4 @@
-import type { AgentEvent, Session } from '@cindy/maker-core';
+import { CLAUDE_EXPLICIT_ROOT_TOOL_USE, type AgentEvent, type Session } from '@cindy/maker-core';
 
 import type { GitSnapshotCoordinator } from '../git-snapshot/gitSnapshotCoordinator.js';
 import { reserveTurnErrorPersistId } from '../messagePersistBroadcaster.desktop.js';
@@ -34,7 +34,7 @@ export interface DeliverSessionEventDeps {
     string,
     { sessionId: string; event: AgentEvent; persistId?: string; resolvedContent?: unknown }
   >;
-  readonly broadcastToAllWindows: (channel: string, payload: unknown) => void;
+  readonly broadcastToAllWindows: (channel: string, payload: unknown, ownerScope?: undefined, localPayload?: unknown) => void;
   readonly handleAgentIslandEventAfterBroadcast: (
     session: {
       id: string;
@@ -150,12 +150,16 @@ export function deliverSessionEvent(
       resolvedContent,
     });
   } else {
-    deps.broadcastToAllWindows(MAKER_PUSH.EVENT, {
-      sessionId: session.id,
-      event: broadcastEvent,
-      persistId,
-      resolvedContent,
-    });
+    const payload = { sessionId: session.id, event: broadcastEvent, persistId, resolvedContent };
+    if (event.type === 'tool_use' && event.source === 'claude-code' && !session.remoteHostId &&
+        event[CLAUDE_EXPLICIT_ROOT_TOOL_USE] === true) {
+      deps.broadcastToAllWindows(MAKER_PUSH.EVENT, payload, undefined, {
+        ...payload,
+        event: { ...broadcastEvent, agentMeta: { ...broadcastEvent.agentMeta, parentUuid: null } },
+      });
+    } else {
+      deps.broadcastToAllWindows(MAKER_PUSH.EVENT, payload);
+    }
     deps.handleAgentIslandEventAfterBroadcast(session, broadcastEvent);
   }
   if (shouldMarkTurnTerminalIdleAfterBroadcast) {
