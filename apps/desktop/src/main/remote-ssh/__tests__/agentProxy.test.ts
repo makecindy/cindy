@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { FileHostKeyStore, hostKeyFingerprint, RemoteHost } from '@cindy/maker-remote-ssh';
-import { disposeAllTunnels } from '../agent-proxy-tunnel';
+import { disposeAllTunnels, ensureTunnelUp } from '../agent-proxy-tunnel';
 /**
  * agent-proxy 策略层单测 (固定端口 + 双模式版)。
  *
@@ -817,6 +817,9 @@ describe('automatic ready-hook proxy trust', () => {
       if (mode === 'deleted') {
         expect(tunnel?.snapshot().lastError).toContain('SSH_HOST_UNVERIFIED');
         await expect(fs.stat(file)).rejects.toMatchObject({ code: 'ENOENT' });
+        await applying;
+        await store.set(key, matching);
+        await expect(ensureTunnelUp(host)).resolves.toEqual({ remotePort: 17893 });
       } else {
         expect(JSON.parse(await fs.readFile(file, 'utf8'))).toEqual({ [key]: mode === 'known' ? matching : 'SHA256:old' });
         if (mode === 'changed') expect(tunnel?.snapshot().hostKeyMismatch).toBeDefined();

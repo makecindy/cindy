@@ -218,6 +218,8 @@ describe('trusted-only SSH connections (#8403)', () => {
     let value: string | null = matching;
     const store = { reload: vi.fn(), get: vi.fn(async () => value), set: vi.fn() };
     const host = new RemoteHost(config, { logger, hostKeys: store });
+    const onStatus = vi.fn();
+    host.onStatus(onStatus);
     try {
       await host.connect({ allowFirstTrust: false });
       value = null;
@@ -225,6 +227,10 @@ describe('trusted-only SSH connections (#8403)', () => {
       await vi.advanceTimersByTimeAsync(1000);
       expect(host.getStatus()).toBe('failed');
       expect(host.snapshot().lastError).toContain('SSH_HOST_UNVERIFIED');
+      expect(onStatus).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'failed' }),
+        expect.objectContaining({ code: 'SSH_HOST_UNVERIFIED' }),
+      );
       expect(store.set).not.toHaveBeenCalled();
       expect(host.retryAfterNetworkChange()).toBe(false);
       await vi.advanceTimersByTimeAsync(60000);

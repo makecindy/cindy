@@ -87,7 +87,7 @@ function unverifiedHostError(): Error {
   return Object.assign(new Error('[SSH_HOST_UNVERIFIED]'), { code: 'SSH_HOST_UNVERIFIED' });
 }
 
-export type StatusListener = (snapshot: HostSnapshot) => void;
+export type StatusListener = (snapshot: HostSnapshot, hostKeyRejection?: Error) => void;
 
 export interface ExecOpts {
   /** stdin payload; channel is `end()`-ed after the write. */
@@ -1492,9 +1492,7 @@ export class RemoteHost {
         this.log.warn('ssh connect failed', { id: this.id, error: err.message, ...connectFailureHint(err) });
         // Reject with the friendly message so IPC layer's toast also gets
         // the actionable copy (it pulls from `.message`).
-        const rejectErr = agentError ?? new Error(this.lastError);
-        if (this.hostKeyUnverified) Object.assign(rejectErr, { code: 'SSH_HOST_UNVERIFIED' });
-        if (this.hostKeyMismatch) Object.assign(rejectErr, { code: 'SSH_HOST_KEY_MISMATCH' });
+        const rejectErr = agentError ?? this.hostKeyRejection() ?? new Error(this.lastError);
         // Preserve original for tests / debugging that key off message text.
         (rejectErr as Error & { cause?: unknown }).cause = err;
         reject(rejectErr);
@@ -1663,7 +1661,15 @@ export class RemoteHost {
     if (this.status === next) return;
     this.status = next;
     this.statusChangedAt = Date.now();
-    this.events.emit('status', this.snapshot());
+    this.events.emit('status', this.snapshot(), next === 'failed' ? this.hostKeyRejection() : undefined);
+  }
+
+  private hostKeyRejection(): Error | undefined {
+    if (this.hostKeyUnverified) return unverifiedHostError();
+    if (this.hostKeyMismatch) {
+      return Object.assign(new Error(this.hostKeyError ?? undefined), { code: 'SSH_HOST_KEY_MISMATCH' });
+    }
+    return undefined;
   }
 
   /** Wait until status leaves {connecting, authenticating}. */
