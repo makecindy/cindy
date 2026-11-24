@@ -91,6 +91,8 @@ interface ErrorBannerProps {
   retryText?: string | null;
   onRetry: (text: string) => void;
   queuedSendRecovery?: boolean;
+  /** Optional nonvisual capability mounted only for an enabled original-input retry. */
+  nativeRetrySlot?: React.ReactNode;
   /** 已停止且有任务上下文，但无原始恢复记录：发送现有隐藏续跑指令。 */
   onContinueAfterError?: () => Promise<void>;
   onCancel?: () => void;
@@ -176,6 +178,7 @@ export function ErrorBanner({
   retryText,
   onRetry,
   queuedSendRecovery,
+  nativeRetrySlot,
   onContinueAfterError,
   onCancel,
   dismissOnEscape = false,
@@ -1058,6 +1061,7 @@ export function ErrorBanner({
               <span className="min-w-0 truncate">{modelGroupSwitch.label}</span>
             </Button>
           )}
+          {safeRetryText && !forkStripEncryptedRunning && !retrying && !switchingModelGroupSource && nativeRetrySlot}
           {retryAction && (
             <Button
               size="sm"

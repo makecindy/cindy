@@ -24,6 +24,7 @@ import { inferBotTemplatePresetId } from '../../../../shared/botTemplatePreset.j
 import type Database from 'better-sqlite3';
 
 import type { DbTxName, SessionsSetTerminalStatusResult } from '../../client/tx/types.js';
+import { dagHistoryTx, type DagTxRequest } from './dagHistoryTx.js';
 import { runChatCacheTransaction, type ChatCacheTransaction } from './chatCacheTx.js';
 import { computeForkSourceMessagesDigest, type ForkSourceMessage } from '../../forkRecoverySnapshot.js';
 import { normalizeWorkingDirForStorage } from '../../../../shared/workingDir.js';
@@ -77,6 +78,7 @@ function dispatchTransaction(db: Database.Database, args: unknown): unknown {
   const name = expectString(payload.name, 'name') as DbTxName;
   const txArgs = payload.args;
 
+  if (payload.name === 'dag.historyEdit') return dagHistoryTx(db, txArgs as DagTxRequest);
   switch (name) {
     case 'usage.recordModelUsage':
       return db.transaction(() => writeModelUsage(db, txArgs as ModelUsageWrite))();
@@ -2948,6 +2950,14 @@ function forkSession(db: Database.Database, args: unknown): { messageCount: numb
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
   );
   const transaction = db.transaction(() => {
+    if (payload.emptyUserAnchor !== undefined && (newMessageIds.length !== 0 || !db.prepare(
+      `SELECT 1 FROM messages m JOIN sessions s ON s.id = m.session_id
+       WHERE s.id = ? AND s.status = 'active' AND s.hidden_at IS NULL AND s.cleared_at IS ?
+         AND (s.cleared_at IS NULL OR m.created_at > s.cleared_at)
+         AND m.client_id = ? AND m.role = 'user' AND m.created_at = ? AND m.rowid = ? AND m.rewind_at IS NULL`,
+    ).get(sourceSessionId, sourceClearedAt, expectString(payload.emptyUserAnchor, 'emptyUserAnchor'), targetCreatedAt, targetRowid))) {
+      throw invalidArgs('Source question changed before creating an empty-prefix branch');
+    }
     if (newSession.source === 'side-chat' && !db.prepare(
       "SELECT 1 FROM sessions WHERE id = ? AND status = 'active' AND cleared_at IS ?",
     ).get(sourceSessionId, sourceClearedAt)) {

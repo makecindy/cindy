@@ -152,7 +152,13 @@ import {
 } from '@/state/conversationSearchRequest';
 import { searchDevicesFromSwitcher } from '@/lib/conversationSearchFanout';
 
-import { emitRefresh, onPatch } from '@/lib/sessionsBus';
+import { emitRefresh, onPatch, onRefresh } from '@/lib/sessionsBus';
+import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
+import { useSessionDagEnabled } from './useSessionDagEnabled';
+import {
+  buildSessionDagIndex, EMPTY_SESSION_DAG, missingSessionDagKey, projectSessionDagRows,
+  readSessionDagAncestors, sessionDagHighlight, SidebarDagBranches, type SessionDagIndex,
+} from './lib/sessionDagRows';
 
 import { useProjectGroups } from './hooks/useProjectGroups';
 import { useProjectAliases } from './hooks/useProjectAliases';
@@ -439,6 +445,39 @@ function sameStringSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean 
 
 const EMPTY_INBOX_TEAMMATES: readonly never[] = [];
 
+const remoteDagOrigin = getStickySessionDeviceId;
+
+function useSidebarDagAncestors(rows: Session[]) {
+  const owner = getDataOwnerGeneration();
+  const key = useMemo(() => missingSessionDagKey(rows, remoteDagOrigin), [rows]);
+  const latest = useRef(rows);
+  useLayoutEffect(() => { latest.current = rows; }, [rows]);
+  const [revision, setRevision] = useState(0);
+  const request = useMemo(() => ({ key, owner, revision }), [key, owner, revision]);
+  const [loaded, setLoaded] = useState<{ request: typeof request; rows: Session[] } | null>(null);
+  useEffect(() => {
+    if (!key) { setLoaded(null); return; }
+    let disposed = false;
+    const current = () => !disposed && isDataOwnerGenerationCurrent(owner);
+    const attempted = new Set<string>();
+    const refresh = () => { if (current()) { disposed = true; setRevision(r => r + 1); } };
+    const changed = (id: string) => { if (attempted.has(id)) refresh(); };
+    const unsub = onRefresh(refresh);
+    const unpatch = onPatch(changed);
+    const unpush = window.electronAPI.localDb?.sessionsPush?.onPatched(({ sessionId }, stamp) => {
+      if (isDataOwnerPushCurrent(stamp)) changed(sessionId);
+    });
+    void readSessionDagAncestors(latest.current, ids => {
+      for (const id of ids) attempted.add(id);
+      return sessionService.list(ids.length, 'all', { ids });
+    }, remoteDagOrigin, current).then(ancestors => {
+      if (current()) setLoaded({ request, rows: ancestors });
+    }).catch(() => { /* No verified parent: retain the native entry. */ });
+    return () => { disposed = true; unsub(); unpatch(); unpush?.(); };
+  }, [key, owner, request]);
+  return key && loaded?.request === request ? loaded.rows : EMPTY_SESSION_LIST;
+}
+
 export function CCAgentSidebarUpper() {
   const { t } = useTranslation();
   const localPlatform = window.electronAPI.platform;
@@ -467,6 +506,21 @@ export function CCAgentSidebarUpper() {
     remoteProjectsStore.subscribe,
     remoteProjectsStore.getMergedRemoteSessions,
   );
+  const sessionDagEnabled = useSessionDagEnabled();
+  const dagRows = useMemo(() => sessionDagEnabled ? [
+    ...new Map([...allSessionsForAttention, ...sessionsHook.sessions].map(s => [s.id, s])).values(),
+    ...remoteProjectSessionsRaw,
+  ] : EMPTY_SESSION_LIST, [sessionDagEnabled, allSessionsForAttention, sessionsHook.sessions, remoteProjectSessionsRaw]);
+  const dagAncestors = useSidebarDagAncestors(dagRows);
+  const dagCatalog = useMemo(() => {
+    const known = new Set(dagRows.map(s => s.id));
+    return [...dagRows, ...dagAncestors.filter(s => !known.has(s.id))];
+  }, [dagRows, dagAncestors]);
+  const status = sessionsHook.effectiveIncludeArchived === 'all' ? filter.status : sessionsHook.effectiveIncludeArchived;
+  const regularDag = useMemo(() => sessionDagEnabled ? buildSessionDagIndex(dagCatalog, status, remoteDagOrigin) : EMPTY_SESSION_DAG,
+    [sessionDagEnabled, dagCatalog, status]);
+  const inboxDag = useMemo(() => sessionDagEnabled && taskListMode === 'inbox' && status !== 'all'
+    ? buildSessionDagIndex(dagCatalog, 'all', remoteDagOrigin) : regularDag, [sessionDagEnabled, dagCatalog, taskListMode, status, regularDag]);
   const remoteProjectSessions = useRemoteProjectSessions();
   const remoteDevices = useRemoteDevices();
   const selectedMachineId = useEffectiveSelectedMachineId();
@@ -583,7 +637,8 @@ export function CCAgentSidebarUpper() {
   // clicked the file-text button on a Project, we swap sidebar contents to
   // the lazy file tree of that session's workdir.
   const { search } = useLocation();
-  const filesDeviceId = filesSessionId ? new URLSearchParams(search).get('device') : null;
+  const routeDevice = new URLSearchParams(search).get('device');
+  const filesDeviceId = filesSessionId ? routeDevice : null;
   const filesSession = useMemo(
     () => resolveDocModeFilesSession(allSessionsForAttention, filesSessionId, remoteProjectSessions, filesDeviceId),
     [allSessionsForAttention, filesSessionId, remoteProjectSessions, filesDeviceId],
@@ -650,11 +705,11 @@ export function CCAgentSidebarUpper() {
   const visibleSessionsWithRemote = useMemo(
     () =>
       sidebarSessionsWithHiddenProjectsAsDialogues(
-        statusFilteredSessionsWithRemote,
+        projectSessionDagRows(statusFilteredSessionsWithRemote, regularDag),
         hiddenProjectKeys,
         localPlatform,
       ),
-    [statusFilteredSessionsWithRemote, hiddenProjectKeys, localPlatform],
+    [statusFilteredSessionsWithRemote, regularDag, hiddenProjectKeys, localPlatform],
   );
 
   /* Codex Micro 的 6 个任务键跟侧栏走。主进程只能查本地 sessions 表,看不见被控
@@ -758,6 +813,7 @@ export function CCAgentSidebarUpper() {
   const handleRailPinnedReorder = useCallback(
     (visibleNewOrder: string[]) => {
       const pinnedSessionIds = pinnedSessionIdsInDisplayOrder([
+        ...dagAncestors,
         ...sessionsHook.sessions,
         ...remoteProjectSessions,
       ]);
@@ -779,7 +835,7 @@ export function CCAgentSidebarUpper() {
         toast.error(t('ccAgent.sidebar.pinFailed'));
       });
     },
-    [sessionsHook.sessions, remoteProjectSessions, filter, localPlatform, t],
+    [dagAncestors, sessionsHook.sessions, remoteProjectSessions, filter, localPlatform, t],
   );
 
   return (
@@ -832,6 +888,9 @@ export function CCAgentSidebarUpper() {
               aria-hidden={filesSession && filesSession.workingDir ? true : undefined}
             >
               <ExpandedView
+                regularDag={regularDag}
+                inboxDag={inboxDag}
+                dagAncestors={dagAncestors}
                 sessionsHook={sessionsHook}
                 allSessionsForAttention={allSessionsForAttention}
                 allSessionsForNotification={allSessionsForAttentionRaw}
@@ -863,6 +922,7 @@ export function CCAgentSidebarUpper() {
               searchableSessionIds={visibleSearchSessionIds}
               hiddenProjectKeys={hiddenProjectKeys}
               sessions={visibleSessionsWithRemote}
+              highlightedSessionId={sessionDagHighlight(activeSessionId, routeDevice, regularDag)}
               activeSessionId={activeSessionId}
               attentionSessionId={activeSessionId ?? filesSessionId ?? viewedBotSessionId}
               notifications={railNotifications}
@@ -883,6 +943,9 @@ type SessionsHook = ReturnType<typeof useCCSessions>;
 /* ============================== Expanded ============================== */
 
 interface ExpandedProps {
+  regularDag: SessionDagIndex;
+  inboxDag: SessionDagIndex;
+  dagAncestors: Session[];
   sessionsHook: SessionsHook;
   allSessionsForAttention: Session[];
   allSessionsForNotification: Session[];
@@ -928,6 +991,7 @@ const CONFIRM_INITIAL: ConfirmState = {
 };
 
 function ExpandedView({
+  regularDag, inboxDag, dagAncestors,
   sessionsHook,
   allSessionsForAttention,
   allSessionsForNotification,
@@ -957,6 +1021,7 @@ function ExpandedView({
     setProjectHidden,
     initialSnapshot: sidebarSettingsSnapshot,
   } = hiddenProjects;
+
   const projectPickerOptions = useProjectPickerOptions();
 
   // 自动化任务本身仍在顶部 Automations 入口管理；自动化任务 fire 后创建出的
@@ -1627,11 +1692,11 @@ function ExpandedView({
   const sidebarSessions = useMemo(
     () =>
       sidebarSessionsWithHiddenProjectsAsDialogues(
-        scopedSidebarSessions,
+        projectSessionDagRows(scopedSidebarSessions, regularDag),
         hiddenProjectKeys,
         localPlatform,
       ),
-    [scopedSidebarSessions, hiddenProjectKeys, localPlatform],
+    [scopedSidebarSessions, regularDag, hiddenProjectKeys, localPlatform],
   );
 
   const taskCreatorIndex = useTaskCreatorIndex();
@@ -1648,8 +1713,8 @@ function ExpandedView({
       .filter(session => !isOrcaWorkerSession(session)
         && session.status !== 'deleted'
         && (!session.deviceLinkDeviceId || !isSharedTaskPeer(session.deviceLinkDeviceId)));
-    return sidebarSessionsWithHiddenProjectsAsDialogues(scoped, hiddenProjectKeys, localPlatform);
-  }, [allSessionsForAttention, remoteProjectSessions, selectedMachineId, hiddenProjectKeys, localPlatform]);
+    return sidebarSessionsWithHiddenProjectsAsDialogues(projectSessionDagRows(scoped, inboxDag), hiddenProjectKeys, localPlatform);
+  }, [allSessionsForAttention, remoteProjectSessions, selectedMachineId, hiddenProjectKeys, localPlatform, inboxDag]);
   const inboxFilter = filter.inbox;
   const inboxSourceSessions = useMemo(
     () => filterSidebarTasks(statusIndependentSidebarSessions, inboxFilter, taskCreatorIndex),
@@ -2235,6 +2300,11 @@ function ExpandedView({
     );
   }, [visibleProjects, vendorPredicate, filter.vendor, hostProjectSort, localPlatform, projectPriorityContext]);
 
+  const listDag = taskListMode === 'inbox' ? inboxDag : regularDag;
+  const routeDevice = new URLSearchParams(location.search).get('device');
+  const highlightedId = sessionDagHighlight(activeSessionId, routeDevice, listDag);
+  const railId = sessionDagHighlight(activeSessionId, routeDevice, regularDag);
+
   /**
    * Pinned 拖拽落定回调。SortableList 给的是当前 visible（含 vendor / projectsFilter
    * 过滤 + manualPinnedOrder 应用后）段内的新顺序 id 列表。
@@ -2249,6 +2319,7 @@ function ExpandedView({
       // baseline 与置顶段同序(pinnedSessionIdsInDisplayOrder 内部按 status→pinnedAt desc 排,含归档
       // 置顶),保证首次过滤态拖拽、manualPinnedOrder 还空时,隐藏置顶项不因 baseline 顺序不符而跳位。
       const pinnedSessionIds = pinnedSessionIdsInDisplayOrder([
+        ...dagAncestors,
         ...sessions,
         ...remoteProjectSessions,
       ]);
@@ -2270,7 +2341,7 @@ function ExpandedView({
         toast.error(t('ccAgent.sidebar.pinFailed'));
       });
     },
-    [sessions, remoteProjectSessions, filter, localPlatform, t],
+    [dagAncestors, sessions, remoteProjectSessions, filter, localPlatform, t],
   );
 
   // D 期:按日期分组已删除(visibleDateSessions 随 DateGroupedSessionsSection 一并下线)。
@@ -2306,6 +2377,8 @@ function ExpandedView({
   // attention / running / 未读集合更是:点进去会先清通知,若留在 deps 里,刚点的
   // 那一下就会换掉整表 onClick,把「切任务」变成「全表重画」。
   const activeSessionIdRef = useRef(activeSessionId);
+  const highlightedIdRef = useRef(highlightedId);
+  highlightedIdRef.current = highlightedId;
   activeSessionIdRef.current = activeSessionId;
   const urgentSetRef = useRef(urgentSet);
   urgentSetRef.current = urgentSet;
@@ -2469,8 +2542,8 @@ function ExpandedView({
   // 含远程会话:device-link 远程行也渲染在可选行里,bulk 选择/归档/删除必须能解析到它们
   // (否则选中远程行 → 计数加了但 archive/delete 查 sessionsById 落空、静默忽略)。
   const sessionsById = useMemo(
-    () => new Map([...allSessionsForAttention, ...sessions, ...remoteProjectSessions].map((session) => [session.id, session])),
-    [allSessionsForAttention, sessions, remoteProjectSessions],
+    () => new Map([...dagAncestors, ...allSessionsForAttention, ...sessions, ...remoteProjectSessions].map((session) => [session.id, session])),
+    [dagAncestors, allSessionsForAttention, sessions, remoteProjectSessions],
   );
   // 与 sessionsRef 同理:行级 handler 只在「点击那一刻」查表,不该因为表换了引用就
   // 重建自身 —— 否则 SessionItem 的 memo 会被整表打穿(SessionItem.tsx 不变量第 3 条)。
@@ -2729,7 +2802,7 @@ function ExpandedView({
     return onRequestSessionSwitch((direction) => {
       const visibleIds = getVisibleSidebarSessionIds(sidebarScrollRef.current);
       // 已经停在新建页时按"第 0 站"计,这样右转能进入列表第一条。
-      const activeId = onNewMakerMatchRef.current ? null : (activeSessionIdRef.current ?? null);
+      const activeId = onNewMakerMatchRef.current ? null : (highlightedIdRef.current ?? null);
       const target = pickAdjacentSessionId(visibleIds, activeId, direction);
       if (!target) return;
       if (target.kind === 'new-task') {
@@ -3848,6 +3921,7 @@ function ExpandedView({
                  * 整个侧栏在 loading↔ready 间上下移动，造成可见闪烁。设备目录失败
                  * 同样不展示，继续使用本地与已缓存内容即可。
                  */}
+                <SidebarDagBranches.Provider value={listDag}>
                 <PinnedSection
                   sortBy={filter.pinnedSortBy}
                   onSortByChange={filter.setPinnedSortBy}
@@ -3873,7 +3947,7 @@ function ExpandedView({
                       parentSectionCollapsed={parentSectionCollapsed}
                       lamp={pinnedProjectLamp(displaySessions ?? project.sessions)}
                       foldExemptSessionIds={pinnedFoldExemptIds}
-                      activeSessionId={activeSessionId}
+                      activeSessionId={highlightedId}
                       runningSessionIds={displayRunningSessionIds}
                       attachedSessionIds={attachedSessionIds}
                       notifications={sidebarNotifications}
@@ -3897,7 +3971,7 @@ function ExpandedView({
                       onArchiveAll={handleArchiveAllInProject}
                     />
                   )}
-                  activeSessionId={activeSessionId}
+                  activeSessionId={highlightedId}
                   runningSessionIds={displayRunningSessionIds}
                   attachedSessionIds={attachedSessionIds}
                   notifications={sidebarNotifications}
@@ -3927,7 +4001,7 @@ function ExpandedView({
                   filter={filter}
                   collapsed={collapse.collapsed}
                   isAllCollapsed={collapse.isAllCollapsed}
-                  activeSessionId={activeSessionId}
+                  activeSessionId={highlightedId}
                   viewedSessionId={viewedSessionId}
                   priorityContext={projectPriorityContext}
                   priorityHold={projectPriorityProjection.hold}
@@ -3960,6 +4034,7 @@ function ExpandedView({
                   onCreateDialogue={handleCreateDialogue}
                   isCreateDialogueDisabled={dialogueCreatePending}
                 />
+                </SidebarDagBranches.Provider>
               </>
             )}
           </div>
@@ -4035,12 +4110,13 @@ function ExpandedView({
           本视图渲染(portal 不受隐藏 wrapper 影响):零复制复用展开态全套会话
           行为(hover 操作钮 / 右键菜单 / 重命名 / 移动 / schedule 操作 / 折叠上限
           与「显示全部」),见 railPanelStore 头注。 */}
+      <SidebarDagBranches.Provider value={regularDag}>
       <RailPanels
         projects={visibleRailProjectsWithVendor}
         sortBy={filter.sortBy}
         unclassified={railUnclassified}
         dialogues={railDialogues}
-        activeSessionId={activeSessionId}
+        activeSessionId={railId}
         viewedSessionId={viewedSessionId}
         runningSessionIds={displayRunningSessionIds}
         attachedSessionIds={attachedSessionIds}
@@ -4059,6 +4135,7 @@ function ExpandedView({
         onCreateInProject={handleCreateInProject}
         onSettings={setSettingsProject}
       />
+      </SidebarDagBranches.Provider>
       {deleteScheduleDialog}
     </>
   );
@@ -4074,6 +4151,7 @@ interface CollapsedProps {
   hiddenProjectKeys: ReadonlySet<string>;
   /** rail 数据源——全量可见 sessions(本地 + 远程镜像合并),RailNav 内部切片。 */
   sessions: Session[];
+  highlightedSessionId: string | undefined;
   activeSessionId: string | undefined;
   /** 与 ExpandedView 同口径的「注视中」会话(含正在看的伙伴会话),只用于运行状态 hook。 */
   attentionSessionId: string | undefined;
@@ -4098,6 +4176,7 @@ function CollapsedView({
   searchableSessionIds,
   hiddenProjectKeys,
   sessions,
+  highlightedSessionId,
   activeSessionId,
   attentionSessionId,
   notifications,
@@ -4200,6 +4279,7 @@ function CollapsedView({
 
       {/* 置顶 / 项目 / 对话 三段导航(hover 出可交互二级面板,项目段三级级联)。 */}
       <RailNav
+        highlightedSessionId={highlightedSessionId}
         navigate={navigate}
         sessions={sessions}
         activeSessionId={activeSessionId}

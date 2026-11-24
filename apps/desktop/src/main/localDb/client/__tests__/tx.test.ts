@@ -2279,6 +2279,26 @@ describe('db worker tx handlers', () => {
     }, { useInlineWorker });
   });
 
+  // DB tier: a clear/rewind between the initial read and commit must never promote a stale question to a first input.
+  it.each([false, true])('fork.session revalidates an empty user prefix atomically and leaves the source untouched (inline=%s)', async useInlineWorker => {
+    await withClient(async client => {
+      await client.exec('ALTER TABLE sessions ADD COLUMN hidden_at INTEGER');
+      await seedSession(client, 'src');
+      await client.exec(`INSERT INTO messages (id,client_id,session_id,role,content,created_at) VALUES ('q','q','src','user','original',100)`);
+      const row = await client.queryOne<{rowid:number}>(`SELECT rowid FROM messages WHERE id='q'`);
+      const args = {sourceSessionId:'src',sourceClearedAt:null,emptyUserAnchor:'q',targetCreatedAt:100,targetRowid:row!.rowid,
+        newSession:sessionRow('edited',{sdkSessionId:null,parentSessionId:'src',forkedAtMessageId:'q'}),newMessageIds:[],uuidMap:[]};
+      await client.exec(`UPDATE sessions SET cleared_at=100 WHERE id='src'`);
+      await expect(client.tx('fork.session',{...args,sourceClearedAt:100})).rejects.toThrow('Source question changed');
+      await client.exec(`UPDATE sessions SET cleared_at=NULL WHERE id='src'`);
+      await client.exec(`UPDATE messages SET rewind_at=101 WHERE id='q'`);
+      await expect(client.tx('fork.session',args)).rejects.toThrow('Source question changed');
+      await client.exec(`UPDATE messages SET rewind_at=NULL WHERE id='q'`);
+      await expect(client.tx('fork.session',args)).resolves.toEqual({messageCount:0});
+      expect(await client.query('SELECT content FROM messages WHERE session_id=?',['src'])).toEqual([{content:'original'}]);
+    }, {useInlineWorker});
+  });
+
   // Real worker persistence: a source marker in orchestration alone would silently become desktop.
   // Cover both shipped transports and parent archival/deletion during native fork preparation (DB tier).
   it.each([false, true])('persists side-chat identity and directory grants atomically (inline=%s)', async useInlineWorker => {

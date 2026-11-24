@@ -2595,6 +2595,18 @@ export const pluginTaskRequests = sqliteTable('plugin_task_requests', {
   index('plugin_task_target').on(table.targetId, table.pluginId),
 ]);
 
+/** Durable operation identities and compare-and-swap receipts; never used for model input. */
+export const dagHistoryEdits = sqliteTable('dag_history_edits', {
+  id: text('id').primaryKey(),
+  sessionId: text('session_id').notNull(),
+  clientId: text('client_id').notNull(),
+  action: text('action').notNull(),
+  state: text('state').notNull(),
+  undoData: text('undo_data'),
+  fingerprint: text('fingerprint').notNull(),
+  createdAt: integer('created_at').notNull(),
+});
+
 /** Account-local observed facts and independent consumer cursors, never credentials. */
 export const githubObservations = sqliteTable('github_observations', {
   key: text('key').primaryKey(),

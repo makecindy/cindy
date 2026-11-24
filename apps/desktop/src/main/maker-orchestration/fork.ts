@@ -882,7 +882,7 @@ export async function forkSessionAtMessage(
       rowid: messageRowid,
     })
     .from(messages)
-    .where(and(eq(messages.sessionId, sourceSessionId), eq(messages.clientId, messageClientId)))
+    .where(and(eq(messages.sessionId, sourceSessionId), eq(messages.clientId, messageClientId), isNull(messages.rewindAt)))
     .limit(1);
   if (!target) {
     throw forkError('MESSAGE_NOT_FOUND', `Message ${messageClientId} 不存在于 ${sourceSessionId}`);
@@ -978,7 +978,11 @@ export async function forkSessionAtMessage(
     target.role,
     forkSource.agentKind,
   );
-  if (!usesTailTurnFork && forkSource.sdkSessionId) {
+  // An empty prefix has no transcript to fork. Never use this to discard a
+  // nonempty but unreadable history, or to skip a remote executor's fork checks.
+  const emptyUserAnchor = forkSource.agentKind === 'cc' && !!forkSource.sdkSessionId && !forkSource.agentDeviceId &&
+    source.status === 'active' && !source.hiddenAt && target.role === 'user' && sourceMessages.length === 0;
+  if (!usesTailTurnFork && forkSource.sdkSessionId && !emptyUserAnchor) {
     claudeAnchorIndex = forkSource.agentDeviceId ? null : await loadClaudeTranscriptAnchorIndex({
       sdkSessionId: forkSource.sdkSessionId,
       workingDir: source.workingDir,
@@ -1142,6 +1146,7 @@ export async function forkSessionAtMessage(
       targetCreatedAt: snapshotBoundary.createdAt,
       targetRowid: snapshotBoundary.rowid,
       sourceMessagesDigest,
+      ...(emptyUserAnchor && { emptyUserAnchor: messageClientId }),
       newSession: {
         id: newSessionId,
         ...(options.sideChat ? { source: 'side-chat' as const } : {}),

@@ -1,0 +1,53 @@
+/** Feature-local Chinese copy. Shared host locale files are outside this patch. */
+export const copy = {
+  canvasTitle: '会话脉络',
+  emptyHint: '还没有可展示的轮次',
+  toolbar: {
+    fit: '适配画布',
+    map: '画布缩略图',
+    rearrange: '整理布局',
+    addReference: '实线表示继承。虚线从来源卡指向使用摘要的轮次。',
+  },
+  card: {
+    question: '问',
+    answer: '答',
+    open: '打开原生对话',
+    move: '移动卡片（拖动或使用方向键）',
+    menu: '轮次操作',
+    pin: '固定到对照栏',
+    turn: '对话轮次',
+    edit: '编辑问答',
+    retry: '重问',
+    advance: '推进',
+    aside: '旁问',
+    reference: '引用此卡提问…',
+    removeReference: '移除引用',
+    versions: '版本',
+    origin: '模型原答',
+    manualRevision: '手动修订',
+    manualHint: '手动修订不会覆盖模型原答，旧内容在版本历史中保留',
+    sideBadge: '旁问',
+    history: '修订历史',
+  },
+  preview: { cancel: '取消' },
+  branch: { ask: '提问', noReceipt: '未取得发送确认，已保留问题。' },
+  reference: {
+    title: '引用此卡提问',
+    dropTitle: '引用并提问',
+    sourceLabel: '被引用卡（内容来源）',
+    targetLabel: '从此卡继续',
+    summaryLabel: '摘要快照',
+    summaryHint: '点「提问」将问题和摘要一起发送。目标卡是空闲末端就在原分支继续，是历史位置才分叉；末端忙碌时保留输入。',
+    cancel: '取消',
+    rejectSelf: '不能引用自身',
+    rejectDuplicate: '已存在相同的引用，无需重复添加',
+    rejectCycle: '该引用会让实线继承与虚线引用合并后形成循环，已拒绝',
+    pickHint: '选择从哪张卡片继续提问。',
+  },
+  edge: {
+    inherit: '继承',
+    reference: '引用',
+  },
+} as const;
+
+export type SessionDagCopy = typeof copy;

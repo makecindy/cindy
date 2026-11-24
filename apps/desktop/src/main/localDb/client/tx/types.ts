@@ -152,6 +152,8 @@ export interface ForkSessionArgs {
   /** Reject edits to the ordered history selected before the native fork awaited. */
   sourceMessagesDigest?: string;
   sourceSessionId: string;
+  /** Revalidate the live first input before committing a fork with no native transcript. */
+  emptyUserAnchor?: string;
   /** /clear 之前的行不属于当前可见/原生上下文，fork 时不得重新带回。 */
   sourceClearedAt?: number | null;
   targetCreatedAt: number;

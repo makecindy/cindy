@@ -1666,6 +1666,14 @@ export class AgentInputCoordinator {
         || (state.usageLimitWait?.recovery === recovery && state.usageLimitWait.resumeAt !== null));
   }
 
+  private readonly historyEditFences = new Set<string>();
+  setDagHistoryWriteFence(sessionId: string, enabled: boolean): void {
+    if (enabled) {
+      if (this.historyEditFences.has(sessionId)) throw new Error('已有历史修改正在进行。');
+      this.historyEditFences.add(sessionId);
+    } else this.historyEditFences.delete(sessionId);
+  }
+
   getProjection(sessionId: string): AgentInputProjection {
     return this.toProjection(sessionId, this.getState(sessionId));
   }
@@ -2258,6 +2266,10 @@ export class AgentInputCoordinator {
     },
   ): AgentInputProjection {
     const state = this.getState(sessionId);
+    // A reversible subtree edit cannot defer a new input: its session may disappear
+    // at commit. Refuse before remembering its client ID or touching the queue.
+    if (this.historyEditFences.has(sessionId))
+      throw new Error('正在修改会话历史，未接收这条输入。');
     item = captureOriginalSyntheticTrigger(item);
     assertSharedTaskQueueMutation(getDeviceLinkInvokeContext()?.sharedTask, sessionId, 'input.send');
     // 幂等去重(弱网重发防线,PR #881):同 clientId 重复投递说明是控制端(手机

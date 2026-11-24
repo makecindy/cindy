@@ -1,4 +1,8 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Link } from 'react-router-dom';
+import { standardSessionRoute } from '@/lib/orcaSessionIdentity';
+import { SidebarDagBranches } from '../lib/sessionDagRows';
+import { getSessionDisplayTitle } from '../lib/sessionDisplayTitle';
 import { ChevronRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -109,6 +113,8 @@ function ActiveSessionTaskMenu({
   const { t } = useTranslation();
   const { dataOwnerId } = useAuth();
   const ownerGeneration = getDataOwnerGeneration().generation;
+  const dag = useContext(SidebarDagBranches);
+  const branches = dag.branches.get(session.id);
   const peer = parseSharedTaskPeer(session.deviceLinkDeviceId ?? '');
   const guest = peer?.role === 'host';
   const [sharing, setSharing] = useState<SharedTaskHostState | null>(null);
@@ -259,6 +265,22 @@ function ActiveSessionTaskMenu({
                 action={snoozeAction}
                 onCustom={() => setDialog({ kind: 'custom-snooze' })}
               />
+            )}
+            {branches && (
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger className={MENU_ROW_CLASS}>
+                  {t('ccAgent.sidebar.sessionMenu.sessionBranches')}
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent className="max-h-[var(--radix-dropdown-menu-content-available-height)] max-w-72 overflow-y-auto">
+                  {branches.map(branch => (
+                    <DropdownMenuItem asChild className={MENU_ITEM_CLASS} key={branch.id}>
+                      <Link to={standardSessionRoute(branch.id, branch.deviceLinkDeviceId)}>
+                        <span className="truncate">{getSessionDisplayTitle(branch, t('ccAgent.common.unnamedSession'), t)}</span>
+                      </Link>
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
             )}
             {item('rename', onRename, ownerActionsBlocked)}
             {/* 提醒归任务所在的那台设备发，device-link 任务（别人的任务）在这里设不了。 */}

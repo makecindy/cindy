@@ -27,7 +27,8 @@ import { TaskMigrationStatus } from './TaskMigrationStatus';
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, Ellipsis, MessagesSquare, Pin } from 'lucide-react';
+import { ArrowLeft, Ellipsis, GitFork, MessagesSquare, Pin } from 'lucide-react';
+import { ChromeIconButton } from '@/components/title-bar/ChromeIconButton';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
@@ -87,6 +88,23 @@ import { isSharedTaskPeer } from '@cindy/device-link';
 
 const log = createLogger('SessionContentHeader');
 
+interface SessionDagToggle {
+  pressed: boolean;
+  toggle: () => void;
+}
+
+export function useSessionDagToggle(task: Session | null): SessionDagToggle | undefined {
+  const scope = task && JSON.stringify([task.userId, task.deviceLinkDeviceId, task.remoteHostId, task.id]);
+  const [openScope, setOpenScope] = useState<string | null>(null);
+  useEffect(() => {
+    if (scope === null) setOpenScope(null);
+  }, [scope]);
+  return useMemo(() => scope === null ? undefined : {
+    pressed: openScope === scope,
+    toggle: () => setOpenScope(current => current === scope ? null : scope),
+  }, [openScope, scope]);
+}
+
 /**
  * 注册器组件：由路由直挂的 CCAgentSessionView 条件渲染（仅当该实例"拥有"
  * 当前路由时），把 SessionContentHeader 注进 ContentHeader 槽位。
@@ -102,12 +120,8 @@ export function SessionContentHeaderRegistration({
   remoteSessionUnavailable = false,
   remoteSyncing = false,
   readOnly = false,
-}: {
-  session: Session;
-  remoteSessionUnavailable?: boolean;
-  remoteSyncing?: boolean;
-  readOnly?: boolean;
-}) {
+  dagToggle,
+}: SessionContentHeaderProps) {
   useRegisterContentHeader(
     useMemo(
       () => (
@@ -116,9 +130,10 @@ export function SessionContentHeaderRegistration({
           remoteSessionUnavailable={remoteSessionUnavailable}
           remoteSyncing={remoteSyncing}
           readOnly={readOnly}
+          dagToggle={dagToggle}
         />
       ),
-      [readOnly, session, remoteSessionUnavailable, remoteSyncing],
+      [readOnly, session, remoteSessionUnavailable, remoteSyncing, dagToggle],
     ),
   );
   return null;
@@ -129,6 +144,7 @@ interface SessionContentHeaderProps {
   remoteSessionUnavailable?: boolean;
   remoteSyncing?: boolean;
   readOnly?: boolean;
+  dagToggle?: SessionDagToggle;
 }
 
 export function SessionContentHeader({
@@ -136,6 +152,7 @@ export function SessionContentHeader({
   remoteSessionUnavailable = false,
   remoteSyncing = false,
   readOnly = false,
+  dagToggle,
 }: SessionContentHeaderProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -664,6 +681,21 @@ export function SessionContentHeader({
 
       {!isEditing && <BotTaskOwnerChip session={session} />}
 
+      {!isEditing && !readOnly && dagToggle && (
+        <ChromeIconButton
+          aria-label="DAG"
+          aria-pressed={dagToggle.pressed}
+          tooltip={dagToggle.pressed
+            ? t('ccAgent.workdirBrowse.tabClose', { name: 'DAG' })
+            : t('settings.ghosts.retirement.open', { name: 'DAG' })}
+          tooltipSide="bottom"
+          style={WINDOW_NO_DRAG_STYLE}
+          className="shrink-0 aria-pressed:bg-titlebar-button-hover aria-pressed:text-foreground"
+          onClick={dagToggle.toggle}
+        >
+          <GitFork size={15} aria-hidden />
+        </ChromeIconButton>
+      )}
       {!isEditing && !readOnly && (!sharedGuest || session.status === 'active') && (
         // 菜单打开就把归档/删除的 dirty 预检发出去:用户从展开菜单到点条目至少
         // 一次反应时间,足够这次 git status 跑完,点下去时命中缓存、零等待。

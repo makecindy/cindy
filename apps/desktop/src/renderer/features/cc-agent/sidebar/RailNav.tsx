@@ -51,6 +51,7 @@ export interface RailNavProps {
   /** 全量可见 sessions(本地 + 远程镜像合并)——置顶/对话段数据源。 */
   sessions: Session[];
   activeSessionId: string | undefined;
+  highlightedSessionId?: string;
   /** 与展开态共用的置顶顺序(平铺瓷砖同序)。 */
   manualPinnedOrder: readonly string[];
   pinnedSortBy: PinnedSortBy;
@@ -160,6 +161,7 @@ export function RailNav({
   navigate,
   sessions,
   activeSessionId,
+  highlightedSessionId = activeSessionId,
   manualPinnedOrder,
   pinnedSortBy,
   runningSessionIds,
@@ -292,7 +294,7 @@ export function RailNav({
         className="flex w-full shrink-0 flex-col items-center gap-0.5"
         filter="input, textarea, select, a, [data-no-drag]"
         renderItem={(session) => {
-        const isActive = session.id === activeSessionId;
+        const isActive = session.id === highlightedSessionId;
         // 置顶瓷砖与聚合灯同口径:远程会话的 running/未读并入远程活动镜像。
         const remoteLamp = remoteLampOf(session.id, session.deviceLinkDeviceId);
         const isRunning =

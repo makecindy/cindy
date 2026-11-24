@@ -2101,6 +2101,11 @@ function forkSession(readyDb, args) {
     'INSERT INTO messages (id, client_id, session_id, role, content, tool_use_id, agent_meta, agent_kind, created_at, rewind_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)',
   );
   return readyDb.transaction(() => {
+    if (payload.emptyUserAnchor !== undefined && (newMessageIds.length !== 0 || !readyDb.prepare(
+      "SELECT 1 FROM messages m JOIN sessions s ON s.id = m.session_id WHERE s.id = ? AND s.status = 'active' AND s.hidden_at IS NULL AND s.cleared_at IS ? AND (s.cleared_at IS NULL OR m.created_at > s.cleared_at) AND m.client_id = ? AND m.role = 'user' AND m.created_at = ? AND m.rowid = ? AND m.rewind_at IS NULL",
+    ).get(sourceSessionId, sourceClearedAt, expectString(payload.emptyUserAnchor, 'emptyUserAnchor'), targetCreatedAt, targetRowid))) {
+      throw invalidArgs('Source question changed before creating an empty-prefix branch');
+    }
     if (newSession.source === 'side-chat' && !readyDb.prepare(
       "SELECT 1 FROM sessions WHERE id = ? AND status = 'active' AND cleared_at IS ?",
     ).get(sourceSessionId, sourceClearedAt)) {

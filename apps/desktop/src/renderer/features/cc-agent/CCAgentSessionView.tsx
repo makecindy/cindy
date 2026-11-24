@@ -228,7 +228,7 @@ import { useCCAgentChat } from '@/hooks/useCCAgentChat';
 import { ackErrorAlertHandled } from '@/lib/errorAlertAck';
 import { cleanupRemovedCachedImage, useAttachments } from '@/hooks/useAttachments';
 import { useCCSessions } from '@/hooks/useCCSessions';
-import { SessionContentHeaderRegistration } from './SessionContentHeader';
+import { SessionContentHeaderRegistration, useSessionDagToggle } from './SessionContentHeader';
 import { LinkedSideChatOrigin } from './LinkedSideChatOrigin';
 import { resolveSessionInterruptCandidate } from './sessionInterruptBannerModel';
 import { useSessionBinding } from '@/hooks/useSessionBinding';
@@ -493,6 +493,12 @@ import {
   type ConversationSearchJump,
 } from '../../../shared/conversationSearchJump';
 
+import { useSessionDagEnabled } from './useSessionDagEnabled';
+import { DagWorkspace } from './DagWorkspace';
+import { DagPendingRecall, DagPendingRecallRecovery } from './DagPendingRecall';
+import { DagChildSendBridge, type DagChildSend } from './DagChildSend';
+import { DagFailedRetryBridge, DagRetryAvailable, dagFailedRetryTarget, type DagFailedRetry } from './DagFailedRetry';
+
 const log = createLogger('CCAgentSessionView');
 /**
  * 子代理页签只登记、不抢占。
@@ -630,6 +636,12 @@ interface CCAgentSessionViewProps {
   disableAutofocus?: boolean;
   /** 打开就是为了输入的紧凑视图（伙伴私聊话题面板）：照常把焦点放进输入框。 */
   focusComposerOnOpen?: boolean;
+  /** Other DAG panes share this renderer. Only handle commands addressed to this session. */
+  dagPane?: boolean;
+  dagSubmission?: DagChildSend;
+  /** A hidden handoff may finish while the user looks at another pane of this workspace. */
+  dagWorkspaceVisible?: boolean;
+  dagFailedRetry?: DagFailedRetry;
   /** 历史回查只读视图：保留消息流与上下文，但不允许发送或修改 Session。 */
   readOnly?: boolean;
   /** Bot 路由提供的其它持久 Bot，交给标准输入框作为结构化委派目标。 */
@@ -914,6 +926,10 @@ function CCAgentSessionContent({
   sidebarTargetSessionId,
   disableAutofocus = false,
   focusComposerOnOpen = false,
+  dagPane = false,
+  dagSubmission,
+  dagWorkspaceVisible = false,
+  dagFailedRetry,
   readOnly = false,
   botMentions,
   botIdentity,
@@ -1091,6 +1107,7 @@ function CCAgentSessionContent({
   // 发, 飞书那边的 setInteractionListener 会接管, 这里渲染保持兜底视觉一致
   // (实际接管期间 desktop renderer 收不到 INTERACTION_REQUEST 广播)。
   const sessionBinding = useSessionBinding(sessionId);
+  const sessionDagPlugin = useSessionDagEnabled();
 
   // ---------------------------------------------------------------------------
   // Session data: always fetch from server on sessionId change (requirement 1).
@@ -1147,6 +1164,10 @@ function CCAgentSessionContent({
   const voiceModeOpen = voiceCall.open && voiceCall.sessionId === sessionId;
   const activeVoiceCallId = voiceCall.sessionId === sessionId ? voiceCall.callId : null;
   const voiceQuestionBridge = useRef<VoiceQuestionTarget | null>(null);
+  const dagToggle = useSessionDagToggle(
+    sessionDagPlugin && ownsRoute && navigationMode === 'route-owner' && !isCompactRail &&
+    !isOrcaMode && !readOnly && !botChatIdentity && !awaitingCreation ? session : null,
+  );
   const companionSettingsOpen = new URLSearchParams(location.search).get('settings') === '1';
   const openVoiceSettings = useCallback(() => {
     const search = new URLSearchParams(location.search);
@@ -1691,7 +1712,8 @@ function CCAgentSessionContent({
     files: readonly AttachedFile[];
   } | null>(null);
   const composerDraftKey = activeQueueComposerEdit?.draftKey ?? sessionId;
-  const attachmentState = useAttachments(sessionId, composerDraftKey);
+  // While the canvas is showing, only its native chat pane owns the attachment tray.
+  const attachmentState = useAttachments(dagToggle?.pressed ? undefined : sessionId, dagToggle?.pressed ? undefined : composerDraftKey);
   const queueComposerEditAttachmentsRef = useRef<readonly AttachedFile[]>([]);
   queueComposerEditAttachmentsRef.current = attachmentState.attachments;
   const isCurrentQueueComposerEdit = useCallback(
@@ -3347,7 +3369,7 @@ function CCAgentSessionContent({
 
   useEffect(() => {
     const unsub = window.electronAPI.maker.onDesktopCommandTriggered((payload) => {
-      if (readOnly) return;
+      if (readOnly || dagToggle?.pressed || (dagPane && !payload.sessionId)) return;
       if (payload.sessionId && payload.sessionId !== sessionId) return;
       if (payload.command === 'help') {
         void insertHelpCard();
@@ -3413,7 +3435,7 @@ function CCAgentSessionContent({
       // 'issue' 命令由下方独立 effect 处理(需要 handleSend,其声明在本 effect 之后)。
     });
     return unsub;
-  }, [clearSession, insertHelpCard, insertSystemCard, readOnly, sessionId, session?.source, canNavigateSession, sideChatBlockedKey, navigate, t]);
+  }, [clearSession, insertHelpCard, insertSystemCard, readOnly, dagToggle?.pressed, dagPane, sessionId, session?.source, canNavigateSession, sideChatBlockedKey, navigate, t]);
 
   // F-COLLAB: 协同模式真实状态。enabled 来自 session.orcaRole === 'lead';
   // worker(显示用)从 active workflow 的 Worker session 列表查到 agentKind。
@@ -4657,6 +4679,8 @@ function CCAgentSessionContent({
         baselineRecovery?: boolean;
         literalText?: boolean;
         independent?: boolean;
+        isTargetCurrent?: () => boolean;
+        expectedDagTip?: { answerId: string; userMessageId: string };
         beforeEnqueue?: () => Promise<boolean>;
         onInputCreated?: (clientId: string) => void;
         builtInSkillIntent?: BuiltInSkillDraftIntent;
@@ -4979,19 +5003,22 @@ function CCAgentSessionContent({
         });
       }
 
+      // Rebalance and authentication can outlive the pane or its device/owner binding.
+      if (opts?.isTargetCurrent && !opts.isTargetCurrent()) return false;
       // ④ Execute send — effort + permissionMode came straight from ChatInput (fresh value)
       let rebalanceClientId: string | undefined;
       // 伙伴私聊引用回复:点发送时的待发引用随这条消息一起落库,送出后从输入框上方撤下。
       const replyQuote = botChatIdentity && !opts?.independent ? getPendingBotReplyQuote(sessionId) : null;
       const callerBeforeEnqueue = opts?.beforeEnqueue;
       const sendOptions = {
+        ...(opts?.expectedDagTip && {expectedDagTip:opts.expectedDagTip}),
         ...(replyQuote ? { replyQuote } : {}),
         // 顺序:供应商检查 → 调用方钩子 → 记录换号选择(只有确定发出才记)。
         beforeEnqueue: vendorAuthBeforeEnqueue || recordRebalance ? async () => {
           if (vendorAuthBeforeEnqueue && !(await vendorAuthBeforeEnqueue())) return false;
           if (callerBeforeEnqueue && !(await callerBeforeEnqueue())) return false;
           if (recordRebalance && rebalanceClientId) await recordRebalance(rebalanceClientId);
-          return true;
+          return opts?.isTargetCurrent?.() ?? true;
         } : callerBeforeEnqueue,
         onInputCreated: recordRebalance ? (clientId: string) => {
           rebalanceClientId = clientId;
@@ -5156,7 +5183,7 @@ function CCAgentSessionContent({
   // sessionId,防止多视图(orca split / 多窗口)同时挂载时重复发送。
   useEffect(() => {
     const unsub = window.electronAPI.maker.onDesktopCommandTriggered((payload) => {
-      if (readOnly) return;
+      if (readOnly || dagToggle?.pressed) return;
       if (payload.command !== 'issue') return;
       if (!payload.sessionId || payload.sessionId !== sessionId || !session) return;
       const details = payload.args?.trim()
@@ -5175,7 +5202,7 @@ function CCAgentSessionContent({
       );
     });
     return unsub;
-  }, [handleSend, readOnly, session, sessionId, t]);
+  }, [handleSend, readOnly, dagToggle?.pressed, session, sessionId, t]);
 
   const { confirm: confirmDialog } = useConfirmDialog();
   // 防双击重入:ConfirmDialogProvider 是队列语义,弹窗 mount 前的连续点击会入队
@@ -5325,15 +5352,22 @@ function CCAgentSessionContent({
   // 成功路径已经有更可靠的收敛点:turn 真正跑起来 → store 清掉终止错误 →
   // useSessionRunningStatus 在 running 上升沿把 orphan 的 error 角标 explicit 清掉。
   // 失败路径则天然保留红点,与仍在展示的横幅一致。
+  const retryInFlight = useRef(false);
+  const nativeRetryAvailable = useRef(false);
+  const withPreparedRetry = useCallback(async (dispatch: () => Promise<void>) => {
+    if (retryInFlight.current || isHistoryRecoveryPending()) return;
+    retryInFlight.current = true;
+    try {
+      invalidateHistoryRecoveryNavigation();
+      await rebuildClaudeSubscriptionSessionBeforeRetry(errorReason);
+      await dispatch();
+    } finally {
+      retryInFlight.current = false;
+    }
+  }, [errorReason, invalidateHistoryRecoveryNavigation, isHistoryRecoveryPending, rebuildClaudeSubscriptionSessionBeforeRetry]);
   const handleRetry = useCallback(() => {
-    if (isHistoryRecoveryPending()) return;
-    invalidateHistoryRecoveryNavigation();
-    void rebuildClaudeSubscriptionSessionBeforeRetry(errorReason)
-      .then(() => retryLastError())
-      .catch((error) => {
-        log.warn('retryLastError failed', error);
-      });
-  }, [errorReason, invalidateHistoryRecoveryNavigation, isHistoryRecoveryPending, rebuildClaudeSubscriptionSessionBeforeRetry, retryLastError]);
+    void withPreparedRetry(retryLastError).catch(error => log.warn('retryLastError failed', error));
+  }, [withPreparedRetry, retryLastError]);
 
   const handleSwitchToClaudeSubscription = useCallback(async (): Promise<void> => {
     if (!sessionId || !session || !canSwitchToClaudeSubscription) return;
@@ -6014,16 +6048,27 @@ function CCAgentSessionContent({
   const openVoiceTask = useCallback((clientId: string) => {
     if (sessionId) requestChatTaskFocus(sessionId, clientId);
   }, [sessionId]);
+  const dagQueueWritable = Boolean(dagPane && viewVisible && session && session.id === confirmedSessionId && session.id === sessionIdProp &&
+    session.status === 'active' && !session.hiddenAt && !readOnly && !remoteDeviceId && !session.remoteHostId && !remoteWritesBlocked &&
+    !sessionBinding.attached && !cindyMakeInputLocked && !activeQueueComposerEdit && !queueAbortPending && !sessionHandoffPreparing);
+  const dagQueueTarget = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    dagQueueTarget.current = dagQueueWritable && sessionId ? sessionId : null;
+    return () => { dagQueueTarget.current = null; };
+  }, [dagQueueWritable, sessionId]);
   const pendingMessages = useMemo(() => pendingQueue.map((entry) => entry.chatMessage), [pendingQueue]);
   const renderPendingMessage = (message: ChatMessage, pluginUi: import('@/cindy-brain/PluginUiContributions').PluginUiMessageCandidates) => {
     const index = pendingQueue.findIndex((entry) => entry.clientId === message.clientId);
     const entry = pendingQueue[index];
-    return entry ? <PendingQueueBubble pluginUi={pluginUi} entry={entry} sessionId={sessionId} index={index} count={pendingQueue.length}
+    return entry ? <><PendingQueueBubble pluginUi={pluginUi} entry={entry} sessionId={sessionId} index={index} count={pendingQueue.length}
       editingClientId={activeQueueComposerEdit?.clientId ?? null}
       steeringClientIds={steeringQueueClientIds} editLocks={queueEditLocks} interactionLocks={queueInteractionLocks}
       readOnly={readOnly || queueAbortPending}
       simplifiedBotConversation={Boolean(botChatIdentity)} localSend={isLocalUserSend(entry.clientId)} onEdit={beginQueueComposerEdit}
-      onSteer={steerUnsupported ? undefined : steerQueuedMessage} onRemove={removeFromQueue} onMove={moveQueueItem} /> : null;
+      onSteer={steerUnsupported ? undefined : steerQueuedMessage} onRemove={removeFromQueue} onMove={moveQueueItem} />
+      {dagQueueWritable && session && !entry.isPendingEnqueue && !entry.origin && !entry.originalSyntheticTrigger && isLocalUserSend(entry.clientId) &&
+        <DagPendingRecall session={session} entry={entry} writable={() => dagQueueTarget.current === session.id} />}
+    </> : null;
   };
   const showErrorTailBanner = !readOnly && !!errorTailMsg && !errorTailBannerHidden
     && !syntheticContinuationPending && !error && !credentialSwitchWait
@@ -6035,6 +6080,7 @@ function CCAgentSessionContent({
     ? getLiveErrorMessageClientId({ error, errorPersistId, historyLoaded, messages, disposedErrorPersistId })
     : showErrorTailBanner ? errorTailMsg!.clientId : null;
   const queueNotices = <>
+            {dagQueueWritable && sessionId && <DagPendingRecallRecovery id={sessionId} />}
             {/* Error display.
               - agentKind 传到 ErrorBanner 让 codex 401 / Missing bearer 不仅在远端
                 能 hide Retry (走 syncCodexAuth 引导), 本地 codex session 401 也能
@@ -6160,6 +6206,7 @@ function CCAgentSessionContent({
                 queuedSendRecovery={queueHeadRetry && !remoteDeviceId && Boolean(session?.agentDeviceId
                   && !isProviderShareAgentDeviceId(session.agentDeviceId))}
                 onRetry={handleRetry}
+                nativeRetrySlot={dagFailedRetry && <DagRetryAvailable flag={nativeRetryAvailable} />}
                 onContinueAfterError={canContinueError ? handleContinueAfterError : undefined}
                 onSilentStopContinue={handleSilentStopContinue}
                 usageLimitWait={usageLimitWait}
@@ -6285,12 +6332,8 @@ function CCAgentSessionContent({
   const originDeviceId = rightSidebarDeviceLinkDeviceId ?? null;
   const originAccessAvailable = !readOnly && !remoteSessionUnavailable && !isSharedTaskPeer(originDeviceId ?? '');
 
-  const content = (
-    // Layout: single scroll container (full height) + sticky input overlay at bottom.
-    // FP-7: when the Plan Viewer is expanded/edit, the viewer needs to occupy
-    // the full bottom region — we disable pointer-events-none on the overlay
-    // in that case so the card catches scroll/click events without a wrapper
-    // swap that would flash the layout.
+  // The route owns shell chrome regardless of which task body is visible.
+  const routeRegistrations = (
     <>
       {/* ContentHeader 注入：仅 ownsRoute 实例注册。普通路由仍由历史判据获得主权；
           SplitGroup 则把主权交给活动 pane，非活动 pane 不覆盖 header。 */}
@@ -6305,6 +6348,7 @@ function CCAgentSessionContent({
             remoteSessionUnavailable={remoteSessionUnavailable}
             remoteSyncing={remoteLoading === 'syncing'}
             readOnly={readOnly}
+            dagToggle={dagToggle}
           />
         )
       ) : null}
@@ -6359,6 +6403,30 @@ function CCAgentSessionContent({
           declare={setRightSidebarWorkdir}
         />
       )}
+    </>
+  );
+
+  const dagReadOnly = readOnly || remoteWritesBlocked || isSharedTaskPeer(remoteDeviceId ?? '') || cindyMakeInputLocked || Boolean(sessionBinding.attached) || Boolean(activeQueueComposerEdit);
+  const content = dagToggle?.pressed && session ? (
+    <DagWorkspace
+      key={JSON.stringify([session.userId, session.deviceLinkDeviceId, session.remoteHostId, session.id])}
+      session={session}
+      sessions={allSessions}
+      messages={messages}
+      readOnly={dagReadOnly}
+      refresh={() => { emitRefresh(); }}
+      renderChat={(pane, consume, submission, retry, background) => (
+        <CCAgentSessionView
+          key={pane.id}
+          sessionIdProp={pane.id}
+          dagSubmission={submission} dagFailedRetry={retry} dagWorkspaceVisible={viewVisible} viewVisible={viewVisible && !background}
+          compact compactToolbar dagPane navigationMode="sidebar-embedded" disableAutofocus
+          readOnly={dagReadOnly}
+          sidebarTargetSessionId={session.id} searchJumpProp={pane.jump} onSearchJumpConsumed={consume}
+        />
+      )}
+    />
+  ) : (
       <section
         className="relative flex h-full w-full flex-col bg-content-area"
         data-plugin-ui-task={!session?.remoteHostId && !session?.deviceLinkDeviceId ? sessionId : undefined}
@@ -7263,7 +7331,6 @@ function CCAgentSessionContent({
             rightSidebarSide === 'right' && <div aria-hidden className="h-7 w-7 shrink-0" />}
         </TopRightChipStack>
       </section>
-    </>
   );
 
   return (
@@ -7299,7 +7366,39 @@ function CCAgentSessionContent({
             nativeSessionId={session?.sdkSessionId}
             refreshKey={agentStatus.isRunning}
           >
-            <TopRightChipStackProvider>{content}</TopRightChipStackProvider>
+            <TopRightChipStackProvider>
+              {dagPane && dagFailedRetry && historyLoaded && session && session.id === confirmedSessionId && session.id === sessionIdProp && (
+                <DagFailedRetryBridge request={dagFailedRetry} id={session.id} withPreparedRetry={withPreparedRetry}
+                  target={() => {
+                    if (!dagWorkspaceVisible || dagReadOnly || !nativeRetryAvailable.current || sessionHandoffPreparing ||
+                        session.status !== 'active' || session.hiddenAt || session.source === 'review' || isHistoryRecoveryPending() ||
+                        remoteTurnActive || errorIsRecoverable || syntheticContinuationPending || session.deviceLinkDeviceId !== remoteDeviceId ||
+                        getSessionDeviceId(session.id) !== remoteDeviceId) return null;
+                    const state = makerChatStore.getSnapshot(session.id);
+                    if (state.error !== error || state.errorReason !== errorReason || state.errorPersistId !== errorPersistId ||
+                        state.errorRetryText !== errorRetryText || !state.historyLoaded) return null;
+                    return dagFailedRetryTarget(state, dagFailedRetry.userMessageId, JSON.stringify([dataOwnerGeneration,
+                      session.userId, session.id, remoteDeviceId, session.remoteHostId, session.agentDeviceId, session.agentKind,
+                      session.workingDir, session.model, session.providerId, session.permissionMode]));
+                  }}
+                  retry={observe => makerChatStore.retryLastError(session.id, undefined, observe)}
+                />
+              )}
+              {dagPane && dagSubmission && historyLoaded && session && session.id === confirmedSessionId && session.id === sessionIdProp && (
+                <DagChildSendBridge
+                  key={JSON.stringify([session.id, session.userId, session.parentSessionId, session.forkedAtMessageId, remoteDeviceId,
+                    session.deviceLinkDeviceId, session.remoteHostId, session.agentDeviceId, session.workingDir, session.model, session.permissionMode, session.providerId])}
+                  request={dagSubmission} session={session}
+                  writable={dagWorkspaceVisible && !dagReadOnly && !sessionHandoffPreparing && session.status === 'active' && !session.hiddenAt &&
+                    session.source !== 'review' && !!session.workingDir && !attachmentState.attachments.length &&
+                    remoteDeviceId === session.deviceLinkDeviceId}
+                  send={(text, options) => handleSend(text, session.model, session.effort as Effort, session.permissionMode as PermissionMode,
+                    undefined, undefined, options)}
+                />
+              )}
+              {routeRegistrations}
+              {content}
+            </TopRightChipStackProvider>
           </SessionSubscriptionAccountProvider>
         </ChatDisplaySnapshotProvider>
       </SessionNavigationModeProvider>
