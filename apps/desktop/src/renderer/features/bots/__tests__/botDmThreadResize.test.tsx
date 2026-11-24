@@ -163,6 +163,31 @@ describe('private topic panel resize', () => {
     expect(plan.getAttribute('aria-expanded')).toBe('false');
   });
 
+  it('lets an already-open topic handle Escape when focus returns after pinning the parent plan', async () => {
+    const { container } = render(
+      <BotDmThreadHost enabled bot={{ id: 'bot', name: 'Cindy' } as never} rootSessionId="chat"
+        mentions={[]}>
+        <TodoListCard todos={[{ content: 'Check topic', status: 'in_progress' }]} />
+        <OpenThreadButton rootClientId="c1" />
+      </BotDmThreadHost>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'open topic' }), { detail: 0 });
+    const close = within(await screen.findByRole('complementary')).getByRole('button', { name: 'bots.close' });
+    close.focus();
+    const plan = container.querySelector<HTMLButtonElement>('button[aria-expanded]')!;
+    plan.focus();
+    fireEvent.click(plan, { detail: 0 });
+    close.focus();
+
+    fireEvent.keyDown(close, { key: 'Escape' });
+
+    expect(screen.queryByRole('complementary')).toBeNull();
+    expect(plan.getAttribute('aria-expanded')).toBe('true');
+    plan.focus();
+    fireEvent.keyDown(plan, { key: 'Escape' });
+    expect(plan.getAttribute('aria-expanded')).toBe('false');
+  });
+
   // A rail opened before the topic uses the production Escape ownership registry.
   it('gives a focused private topic Escape before an older sidebar rail', async () => {
     render(

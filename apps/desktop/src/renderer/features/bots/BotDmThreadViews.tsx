@@ -76,7 +76,19 @@ export function BotDmThreadPanel({ bot, rootSessionId, rootClientId, state, ment
 
   useEffect(() => {
     const panel = panelRef.current;
-    if (panel) return registerComposerEscapeLayer(panel, () => panel.contains(document.activeElement));
+    if (!panel) return;
+    const isActive = () => panel.contains(document.activeElement);
+    let unregister = registerComposerEscapeLayer(panel, isActive);
+    const onFocusIn = (event: FocusEvent) => {
+      if (event.relatedTarget instanceof Node && panel.contains(event.relatedTarget)) return;
+      unregister();
+      unregister = registerComposerEscapeLayer(panel, isActive);
+    };
+    panel.addEventListener('focusin', onFocusIn);
+    return () => {
+      panel.removeEventListener('focusin', onFocusIn);
+      unregister();
+    };
   }, []);
 
   useEffect(() => {
