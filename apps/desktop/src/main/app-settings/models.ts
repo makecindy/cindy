@@ -108,37 +108,26 @@ export async function manageAppModels(input: AppModelsRequest, assertCurrent: ()
         const catalog = await api.list(false);
         await guard();
         const provider = catalog.providers.find(entry => entry.id === target.providerId);
-        // Chat models are listed per agent; media models are listed once for the provider.
-        // The same override map governs both, so a media model is still "in the catalog".
-        const chatModel = provider?.models[target.agent]?.find(model => model.id === target.modelId);
-        // Media catalogs are not in the chat selector: their `visible` switch belongs to
-        // the media settings, and the legacy override only filters their catalog. So the
-        // fallback is for clearing a stored override (value=null) and its real default;
-        // an explicit on/off is still the chat selector's switch and needs a chat entry.
-        const mediaModel = change.value === null
-          ? [...(provider?.imageModels ?? []), ...(provider?.videoModels ?? []),
-            ...(provider?.audioModels ?? []), ...(provider?.evaluationModels ?? []),
-            ...(provider?.embeddingModels ?? [])].find(model => model.id === target.modelId)
-          : undefined;
-        // A media entry is read through its own source agents (`codex:p:m`, not `pi:p:m`
-        // just because the caller said pi). Clearing the wrong key reports success while
-        // the override that actually filters the media catalog stays.
-        const mediaSourceAgents = mediaModel?.sourceAgents?.length
-          ? mediaModel.sourceAgents
-          : mediaModel?.sourceAgent ? [mediaModel.sourceAgent] : undefined;
-        const model = chatModel ?? (mediaModel && (!mediaSourceAgents || mediaSourceAgents.includes(target.agent))
-          ? mediaModel
-          : undefined);
+        // Chat models are listed per agent; media models are listed once for the provider
+        // and are handled by the media settings, never by this selector switch.
+        const model = provider?.models[target.agent]?.find(model => model.id === target.modelId);
+        // Media entries (image / video / audio / …) are listed once for the provider, are
+        // not in the chat selector, and are read through their own source agent. This
+        // tool's `visible` is the selector switch, so it never edits them: the media
+        // settings page owns those. Refusing beats reporting a reset that cleaned a key
+        // nobody reads.
+        const mediaEntry = !model && [...(provider?.imageModels ?? []), ...(provider?.videoModels ?? []),
+          ...(provider?.audioModels ?? []), ...(provider?.evaluationModels ?? []),
+          ...(provider?.embeddingModels ?? [])].some(entry => entry.id === target.modelId);
         // A provider that left the catalog keeps its overrides. value=null only removes the
         // stored choice, so it must stay available for those orphan keys; an explicit on/off
         // choice still needs a catalog entry to resolve the default.
-        if (!model && change.value !== null) throw new Error('MODEL_NOT_IN_CATALOG');
+        if (!model && (change.value !== null || mediaEntry)) throw new Error('MODEL_NOT_IN_CATALOG');
         // Resetting a key that never existed is not a no-op: the renderer records every
         // reset in `followCatalogKeys` and nothing removes such a key again, so a typo
-        // would accumulate in local storage forever. Only an override that is really
-        // stored may be cleared without a catalog entry.
-        if (!model && change.value === null
-          && catalog.modelVisibilityOverrides[`${target.agent}:${target.providerId}:${target.modelId}`] === undefined) {
+        // would accumulate in local storage forever. Only a stored override may be cleared
+        // without a catalog entry.
+        if (!model && catalog.modelVisibilityOverrides[`${target.agent}:${target.providerId}:${target.modelId}`] === undefined) {
           throw new Error('MODEL_NOT_IN_CATALOG');
         }
         await guard();

@@ -43,66 +43,23 @@ describe('model visibility override cleanup', () => {
     expect(manageAppPreferences).not.toHaveBeenCalled();
   });
 
-  // Codex P2: media models live in provider.imageModels / videoModels, not in
-  // models[agent]. They are still catalog entries: treating them as orphans handed
-  // defaultEnabled: undefined to the receipt, which then reported the wrong visibility.
-  it('uses the real default of a media model that is not listed per agent', async () => {
-    configureModelSettingsActions({
-      owner: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }),
-      list: async () => ({ providers: [{ id: 'relay', models: { pi: [] },
-        imageModels: [{ id: 'openai/old-image', name: 'Old Image', defaultEnabled: false }] }],
-        modelVisibilityOverrides: {} }),
-    } as unknown as Parameters<typeof configureModelSettingsActions>[0]);
-    manageAppPreferences.mockResolvedValue({ modelVisibility: { visible: false, customized: false } });
-
-    await manageAppModels({ operation: 'set',
-      target: { providerId: 'relay', agent: 'pi', modelId: 'openai/old-image' },
-      change: { setting: 'visible', value: null } }, async () => {});
-
-    expect(manageAppPreferences).toHaveBeenCalledWith('model-visibility', undefined,
-      { target: { providerId: 'relay', agent: 'pi', modelId: 'openai/old-image' }, visible: null, defaultEnabled: false });
-  });
-
-  // Codex P1: a media model is in its own catalog, not in the chat selector. An explicit
-  // on/off there would persist an override that filters the executable media catalog while
-  // the receipt talks about the selector — the fallback is for cleanup only.
-  it('keeps refusing explicit on/off for a media-only model', async () => {
-    configureModelSettingsActions({
-      owner: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }),
-      list: async () => ({ providers: [{ id: 'relay', models: { pi: [] },
-        imageModels: [{ id: 'openai/old-image', name: 'Old Image', defaultEnabled: false }] }],
-        modelVisibilityOverrides: {} }),
-    } as unknown as Parameters<typeof configureModelSettingsActions>[0]);
-
-    await expect(manageAppModels({ operation: 'set',
-      target: { providerId: 'relay', agent: 'pi', modelId: 'openai/old-image' },
-      change: { setting: 'visible', value: false } }, async () => {})).rejects.toThrow('MODEL_NOT_IN_CATALOG');
-    expect(manageAppPreferences).not.toHaveBeenCalled();
-  });
-
-  // Codex P1: media entries are read through their own source agents. Resetting with the
-  // wrong agent builds a different key: the receipt says customized=false while the
-  // override that filters the media catalog is still there.
-  it('refuses to reset a media override through an agent that does not source it', async () => {
+  // Codex P1: media entries are not in the chat selector and are read through their own
+  // source agent. This tool only owns the selector switch, so it never edits them —
+  // refusing beats reporting a reset that cleaned a key nobody reads.
+  it('never edits a media-only model through the selector switch', async () => {
     configureModelSettingsActions({
       owner: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }),
       list: async () => ({ providers: [{ id: 'relay', models: { pi: [], codex: [] },
         imageModels: [{ id: 'openai/old-image', name: 'Old Image', defaultEnabled: false, sourceAgent: 'codex' }] }],
         modelVisibilityOverrides: { 'codex:relay:openai/old-image': false } }),
     } as unknown as Parameters<typeof configureModelSettingsActions>[0]);
-    manageAppPreferences.mockResolvedValue({ modelVisibility: { visible: true, customized: false } });
 
-    await expect(manageAppModels({ operation: 'set',
-      target: { providerId: 'relay', agent: 'pi', modelId: 'openai/old-image' },
-      change: { setting: 'visible', value: null } }, async () => {})).rejects.toThrow('MODEL_NOT_IN_CATALOG');
+    for (const value of [null, false, true] as const) {
+      await expect(manageAppModels({ operation: 'set',
+        target: { providerId: 'relay', agent: 'codex', modelId: 'openai/old-image' },
+        change: { setting: 'visible', value } }, async () => {})).rejects.toThrow('MODEL_NOT_IN_CATALOG');
+    }
     expect(manageAppPreferences).not.toHaveBeenCalled();
-
-    // Through the agent that actually sources the catalog the same reset goes through.
-    await manageAppModels({ operation: 'set',
-      target: { providerId: 'relay', agent: 'codex', modelId: 'openai/old-image' },
-      change: { setting: 'visible', value: null } }, async () => {});
-    expect(manageAppPreferences).toHaveBeenCalledWith('model-visibility', undefined,
-      { target: { providerId: 'relay', agent: 'codex', modelId: 'openai/old-image' }, visible: null, defaultEnabled: false });
   });
 
   it('keeps refusing an explicit on/off choice for a model outside the catalog', async () => {
