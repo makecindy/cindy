@@ -79,8 +79,26 @@ describe('provider group guest relay planner', () => {
     expect(await env.relay.plan(PLAN)).toMatchObject({ memberKey: FRIEND.key });
     expect(await env.relay.plan(PLAN)).toMatchObject({ memberKey: FRIEND.key });
     available = true;
-    expect(await env.relay.plan(PLAN)).toMatchObject({ memberKey: MINI.key });
+    const recovered = await Promise.all([env.relay.plan(PLAN), env.relay.plan(PLAN)]);
+    expect(recovered).toEqual([expect.objectContaining({ memberKey: MINI.key }), expect.objectContaining({ memberKey: MINI.key })]);
     expect(env.router.markCooling).not.toHaveBeenCalled();
+  });
+  it('rechecks a known full executor after the legacy evidence deadline', async () => {
+    const env = setup([MINI, FRIEND]);
+    env.invoke.mockResolvedValue({ version: 1, agents: [], maxRuns: 16, uploadChunkBytes: 1024,
+      maxPayloadBytes: 1024, runCapacityAvailable: false });
+    env.relay.noteStartFailure('anthropic', { memberKey: MINI.key, agentDeviceId: 'mini',
+      providerId: MINI.providerId, sameAccount: true }, new Error('[REMOTE_AGENT_BUSY] [DEVICE_LIMIT] full'));
+    env.advance(120_001);
+    expect(await env.relay.plan(PLAN)).toMatchObject({ memberKey: FRIEND.key });
+    expect(env.invoke).toHaveBeenCalledOnce();
+  });
+  it('does not probe a paused member while assigning a new task', async () => {
+    const env = setup([FRIEND], { ...CONFIG, members: [{ ...MINI, paused: true }, FRIEND] });
+    env.relay.noteStartFailure('anthropic', { memberKey: MINI.key, agentDeviceId: 'mini',
+      providerId: MINI.providerId, sameAccount: true }, new Error('[REMOTE_AGENT_BUSY] [DEVICE_LIMIT] full'));
+    expect(await env.relay.plan(PLAN)).toMatchObject({ memberKey: FRIEND.key });
+    expect(env.invoke).not.toHaveBeenCalled();
   });
   it('bounds legacy holds, isolates direct admission and discards capacity evidence on account change', async () => {
     const env = setup([MINI, FRIEND]);

@@ -59,7 +59,7 @@ export function createProviderGroupGuestRelay(deps: ProviderGroupGuestRelayDeps)
   // Capacity is about retained instances, not runningTurns or model quota.
   // Remember only actual executor refusals; new executors can explicitly confirm
   // recovery on the next plan. Legacy/unreachable executors get a bounded hold.
-  const full = new Map<string, { until: number; isCurrent(): boolean; read?: Promise<boolean | undefined> }>();
+  const full = new Map<string, { providerId: string; until: number; isCurrent(): boolean; read?: Promise<boolean | undefined> }>();
 
   async function capacityBlocked(agentDeviceId: string): Promise<boolean> {
     const entry = full.get(agentDeviceId);
@@ -75,7 +75,9 @@ export function createProviderGroupGuestRelay(deps: ProviderGroupGuestRelayDeps)
         timer = setTimeout(() => resolve(undefined), 1_500);
       })]);
     } finally { clearTimeout(timer); }
-    if (full.get(agentDeviceId) !== entry) return true; // a newer refusal wins
+    // Removal means another waiter confirmed recovery. Only a replacement
+    // entry is newer refusal evidence and must override this response.
+    if (full.get(agentDeviceId) !== entry) return full.has(agentDeviceId);
     if (available === true || !entry.isCurrent() || (available === undefined && deps.now() >= entry.until)) {
       full.delete(agentDeviceId);
       return false;
@@ -125,7 +127,9 @@ export function createProviderGroupGuestRelay(deps: ProviderGroupGuestRelayDeps)
       // No background polling; forgotten/removed devices cannot accumulate
       // indefinitely as groups and accounts change.
       for (const [deviceId, entry] of full) {
-        if (!entry.isCurrent() || entry.until <= deps.now()) full.delete(deviceId);
+        if (!entry.isCurrent() || !deps.readGroup(entry.providerId)?.members.some(member => member.agentDeviceId === deviceId)) {
+          full.delete(deviceId);
+        }
       }
       const skip = new Set(exclude);
       let capacitySkipped = false;
@@ -135,7 +139,7 @@ export function createProviderGroupGuestRelay(deps: ProviderGroupGuestRelayDeps)
         if (reshareBlocked(member, reshareKey)) skip.add(member.key);
       }
       if (!direct && capability !== 'image.generate') await Promise.all(config.members
-        .filter(member => member.agentDeviceId && !skip.has(member.key))
+        .filter(member => member.agentDeviceId && !member.paused && !skip.has(member.key))
         .map(async member => {
           if (await capacityBlocked(member.agentDeviceId!)) { skip.add(member.key); capacitySkipped = true; }
         }));
@@ -184,7 +188,7 @@ export function createProviderGroupGuestRelay(deps: ProviderGroupGuestRelayDeps)
       if (!config?.members.some((m) => m.key === member.memberKey)) return false;
       const message = errorText(error);
       if (isRemoteRunLimitError(error)) {
-        full.set(member.agentDeviceId, { until: deps.now() + PROVIDER_GROUP_FAILURE_COOLDOWN_MS,
+        full.set(member.agentDeviceId, { providerId, until: deps.now() + PROVIDER_GROUP_FAILURE_COOLDOWN_MS,
           isCurrent: deps.scope().isCurrent });
       }
       // 同账号那台太旧、还不能按受邀者隔离：不冷却它(本机自己的任务照常分过去)，只是一阵子不再给它受邀者的任务。

@@ -877,26 +877,30 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
   const runDisposals = new Map<Run, Promise<void>>();
   const directGuestLocks = new Map<string, {
     tail: Promise<void>;
-    forgets: Map<string, Promise<unknown>>;
+    pending: Map<string, Promise<unknown>>;
+    mutationEpoch: number;
   }>();
   let directGuestOperations = 0;
 
   /** M serializes direct mutations per local account + guest, never across relay scopes.
    * O's device identity stays in the ownership check and dedupe key: another O
-   * cannot inherit a successful forget ACK. Settled queues are removed; queued
+   * cannot inherit another owner's ACK. Settled queues are removed; queued
    * work is bounded even when a native startup or filesystem operation stalls.
    */
   function withDirectGuestLock(peer: string, fn: () => Promise<unknown>,
-    forget?: { controller: string; forgetId: string; cleanupEpoch: number }): Promise<unknown> {
+    dedupe?: { kind: 'forget' | 'revoke'; key: string }): Promise<unknown> {
     const ownerScope = deps.directGuestExecution?.ownerScope();
     if (!ownerScope) fail('REMOTE_AGENT_INVALID', 'direct guest account is unavailable');
     const scope = JSON.stringify([ownerScope, peer]);
-    const forgetKey = forget && JSON.stringify([forget.controller, forget.forgetId, forget.cleanupEpoch]);
     const previous = directGuestLocks.get(scope);
-    const duplicate = forgetKey ? previous?.forgets.get(forgetKey) : undefined;
+    const queue = previous ?? { tail: Promise.resolve(), pending: new Map<string, Promise<unknown>>(), mutationEpoch: 0 };
+    // A grant/open between two revokes is an ordering boundary: the later
+    // revoke must not borrow an ACK from before the intervening mutation.
+    const dedupeKey = dedupe && JSON.stringify([dedupe.kind, dedupe.kind === 'revoke' ? queue.mutationEpoch : null, dedupe.key]);
+    const duplicate = dedupeKey ? queue.pending.get(dedupeKey) : undefined;
     if (duplicate) return duplicate;
     if (directGuestOperations >= 256) fail('REMOTE_AGENT_BUSY', 'too many pending shared task operations');
-    const queue = previous ?? { tail: Promise.resolve(), forgets: new Map<string, Promise<unknown>>() };
+    if (dedupe?.kind !== 'revoke') queue.mutationEpoch += 1;
     const owner = deps.captureOwner();
     directGuestOperations += 1;
     const work = queue.tail.then(() => {
@@ -907,11 +911,11 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     });
     const tail = work.then(() => undefined, () => undefined).finally(() => {
       directGuestOperations -= 1;
-      if (forgetKey) queue.forgets.delete(forgetKey);
+      if (dedupeKey && queue.pending.get(dedupeKey) === work) queue.pending.delete(dedupeKey);
       if (queue.tail === tail) directGuestLocks.delete(scope);
     });
     queue.tail = tail;
-    if (forgetKey) queue.forgets.set(forgetKey, work);
+    if (dedupeKey) queue.pending.set(dedupeKey, work);
     directGuestLocks.set(scope, queue);
     return work;
   }
@@ -3572,7 +3576,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         if (trustOf(controller) !== 'owner' || !deps.directGuestExecution) fail('REMOTE_AGENT_INVALID', 'delegation requires the owner account');
         if (!directLocked) return withDirectGuestLock(
           providerShareGuestPeer(request.shareId, request.memberId, request.guestDeviceId),
-          () => handleRequest(controller, request, signal, true));
+          () => handleRequest(controller, request, signal, true), request.action === 'revoke'
+            ? { kind: 'revoke', key: JSON.stringify([controller, request]) } : undefined);
         const revoked = await deps.directGuestExecution.delegate(controller, request);
         if (request.action === 'grant') {
           try {
@@ -3880,7 +3885,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           const peer = providerShareGuestPeer(request.directGuest.shareId, request.directGuest.memberId,
             request.directGuest.guestDeviceId);
           if (!directLocked) return withDirectGuestLock(peer,
-            () => handleRequest(controller, request, signal, true), { controller, ...request.directGuest });
+            () => handleRequest(controller, request, signal, true), { kind: 'forget',
+              key: JSON.stringify([controller, request.directGuest.forgetId, request.directGuest.cleanupEpoch]) });
           const record = (await loadGuestIndex()).get(guestDigest(peer));
           const ownerScopeKey = deps.directGuestExecution.ownerScope();
           if (!ownerScopeKey) fail('REMOTE_AGENT_INVALID', 'direct guest account is unavailable');
