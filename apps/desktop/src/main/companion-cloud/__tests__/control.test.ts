@@ -7,6 +7,7 @@ import { restoreCloudAvatar } from '../avatarRestore.js';
 import { readTranscriptPage } from '../room.js';
 import { startCompanionCloud, type CompanionCloudHost, type CompanionCloudRuntime, type CompanionRuntimeActor } from '../runtime.js';
 import type { CompanionApi } from '../types.js';
+import { createWorkRequestGate, WorkRequestDeferred } from '../../maker-ipc/chatWorkPolling.js';
 import { fakeApi, fakeLocal, memoryState, rejection, type ApiHandler } from './fakes.js';
 
 const ROOM = '10000000-0000-4000-8000-000000000001';
@@ -22,6 +23,8 @@ let runtime: CompanionCloudRuntime | undefined;
 afterEach(() => { runtime?.dispose(); runtime = undefined; });
 
 function setup(options: { home: string | null; handler?: ApiHandler; devices?: DeviceLinkDeviceView[]; profiles?: string[]; backgroundIdentityApi?: CompanionApi;
+  backgroundMirror?: Parameters<typeof startCompanionCloud>[0]['backgroundMirror'];
+  rowsAfter?: CompanionCloudHost['rowsAfter']; latestRows?: CompanionCloudHost['latestRows'];
   readActors?: () => Promise<CompanionRuntimeActor[]>; identityDeferred?: (error: unknown) => boolean;
   installationId?: string; probe?: (deviceId: string) => Promise<boolean>; values?: Array<{ key: string; value: unknown }>;
   readValues?: CompanionCloudHost['readValues']; syncProfile?: (botId: string) => Promise<void>;
@@ -50,7 +53,7 @@ function setup(options: { home: string | null; handler?: ApiHandler; devices?: D
     retireLocalCopy: options.retireLocalCopy,
     homes: createCompanionHomeRegistry(), openState: () => state,
     readValues: options.readValues ?? (async () => options.values ?? [{ key: 'companion.profile.v1', value: { name: 'Mia' } }]),
-    canonicalSession: options.canonicalSession ?? (async () => 'session-1'), rowsAfter: async () => [], latestRows: async () => [],
+    canonicalSession: options.canonicalSession ?? (async () => 'session-1'), rowsAfter: options.rowsAfter ?? (async () => []), latestRows: options.latestRows ?? (async () => []),
     deliverToCanonical: async () => ({ ok: true }),
     materializer: local.host, listDevices: async () => options.devices ?? [],
     ...(options.installationId ? { installationId: () => options.installationId! } : {}),
@@ -62,12 +65,50 @@ function setup(options: { home: string | null; handler?: ApiHandler; devices?: D
   };
   runtime = startCompanionCloud({ api, ...(options.backgroundIdentityApi ? { backgroundIdentity: {
     api: options.backgroundIdentityApi, isDeferred: options.identityDeferred ?? (() => false) } } : {}),
-    store: options.store, host, endpoint: 'https://chat', humanActorId: 'human', selfDeviceId: 'desk', current: options.current ?? (() => true),
+    backgroundMirror: options.backgroundMirror, store: options.store, host, endpoint: 'https://chat', humanActorId: 'human', selfDeviceId: 'desk', current: options.current ?? (() => true),
     bots: () => actors.filter(a => a.homeDeviceId === 'desk' && !state.isDemoted(a.externalId)).map(a => ({ botId: a.externalId, actorId: a.id, name: a.name })),
     actors: () => actors, refresh, refreshForeground: options.refreshForeground, publish, onShadowChanged, log, ...(options.syncProfile ? { syncProfile: options.syncProfile } : {}),
     ...(options.paused ? { paused: options.paused } : {}) });
   return { runtime, actors, calls, local, state, files, refresh, publish, onShadowChanged, host, log };
 }
+
+it('retries the same pending mirror batch after the account cooldown without advancing the cursor early', async () => {
+  vi.useFakeTimers();
+  try {
+    const row = { id: 'local-1', clientId: 'input-1', role: 'user', content: 'pending', agentMeta: null, createdAt: 1234 };
+    const gate = createWorkRequestGate(error => error as { status?: number; retryAt?: number });
+    const posted: unknown[] = [];
+    const api: CompanionApi = async <T>(route: string, _method?: string, body?: unknown): Promise<T> => {
+      gate.check();
+      if (!route.endsWith('/import')) throw new Error('Unexpected mirror route');
+      posted.push(body);
+      if (posted.length === 1) {
+        const error = { status: 429, code: 'RATE_LIMITED', retryAt: Date.now() + 120000 };
+        gate.observe(error);
+        throw error;
+      }
+      return {} as T;
+    };
+    const t = setup({ home: 'desk', backgroundMirror: { api, check: gate.check },
+      backgroundIdentityApi: fakeApi(() => []).api, identityDeferred: error => error instanceof WorkRequestDeferred,
+      latestRows: async () => [row], rowsAfter: async (_sid, cursor) => cursor.createdAt < row.createdAt ? [row] : [] });
+    t.state.update('bot_mia', 'actor-1', entry => { entry.roomId = ROOM; });
+    t.runtime.kickMirror('bot_mia');
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(posted).toHaveLength(1);
+    expect(t.state.bot('bot_mia')?.mirror?.createdAt).toBe(0);
+    t.runtime.kickMirror('bot_mia');
+    await vi.advanceTimersByTimeAsync(119999);
+    expect(posted).toHaveLength(1);
+    expect(t.state.bot('bot_mia')?.mirror?.createdAt).toBe(0);
+    await vi.advanceTimersByTimeAsync(15001);
+    expect(posted).toEqual([posted[0], posted[0]]);
+    expect(t.state.bot('bot_mia')?.mirror?.createdAt).toBe(row.createdAt);
+  } finally {
+    runtime?.dispose();
+    vi.useRealTimers();
+  }
+});
 
 describe('private report recovery', () => {
   it('retries a failed local import into the canonical chat without duplicating the report or marking read', async () => {
