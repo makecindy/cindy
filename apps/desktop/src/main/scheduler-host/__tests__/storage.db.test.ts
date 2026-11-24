@@ -835,6 +835,35 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
     }
   });
 
+  // #12397, DB tier. A second writer repoints one rule without changing the
+  // count, status, or due time. Both affected picker entries must refresh.
+  it('refreshes plugin eligibility when another writer changes a schedule binding', async () => {
+    const { db, storage, close } = createStorageHarness();
+    const other = new DrizzleScheduleStorage(() => db);
+    try {
+      await storage.insert(baseSchedule({ id: 'run-rule' }));
+      for (const id of ['old-target', 'new-target']) {
+        db.run(sql`INSERT INTO sessions (id, title, source) VALUES (${id}, ${id}, 'scheduler')`);
+        await storage.insertRun({
+          id, scheduleId: 'run-rule', sessionId: id, firedAt: 1, finishedAt: 2, status: 'success',
+        });
+      }
+      await other.insert(baseSchedule({ id: 'binding', targetSessionId: 'old-target' }));
+      const picker = async (id: string) =>
+        (await storage.listSidebarIndexRuns()).findLast(run => run.sessionId === id)?.canSwitchPluginEngine === true;
+      await expect(picker('old-target')).resolves.toBe(false);
+      await expect(picker('new-target')).resolves.toBe(true);
+
+      await other.update('binding', { targetSessionId: 'new-target' });
+      await expect(storage.canSwitchCompletedAutomationSession('old-target')).resolves.toBe(true);
+      await expect(storage.canSwitchCompletedAutomationSession('new-target')).resolves.toBe(false);
+      await expect(picker('old-target')).resolves.toBe(true);
+      await expect(picker('new-target')).resolves.toBe(false);
+    } finally {
+      close();
+    }
+  });
+
   it('recovers warnings per automation without erasing unread history; healthy skips only recover checks', async () => {
     const harness = createStorageHarness();
     try {

@@ -457,6 +457,11 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         nextFireSum: sql<number>`coalesce(sum(${schedules.nextFireAt}), 0)`.mapWith(Number),
         nextFireN: sql<number>`coalesce(sum(case when ${schedules.nextFireAt} is not null then 1 else 0 end), 0)`.mapWith(Number),
         activeN: sql<number>`coalesce(sum(case when ${schedules.status} = 'active' then 1 else 0 end), 0)`.mapWith(Number),
+        // A different instance can repoint a rule without changing those totals.
+        boundTasks: sql<string>`(SELECT json_group_array(bound.target_session_id) FROM (
+          SELECT DISTINCT target_session_id FROM schedules
+          WHERE target_session_id IS NOT NULL ORDER BY target_session_id
+        ) AS bound)`,
       })
       .from(schedules);
     return [
@@ -470,6 +475,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       scheduleStats?.nextFireSum ?? 0,
       scheduleStats?.nextFireN ?? 0,
       scheduleStats?.activeN ?? 0,
+      scheduleStats?.boundTasks ?? '[]',
     ].join(':');
   }
 
