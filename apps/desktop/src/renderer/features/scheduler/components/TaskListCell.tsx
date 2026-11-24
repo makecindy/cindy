@@ -383,7 +383,7 @@ export function TaskListCell({
               'border-[var(--cmd-palette-border)] text-[var(--cmd-palette-item-meta)]',
             )}
           >
-            {prRule ? t('scheduler.prTrigger.label') : s.webhookTrigger ? t('scheduler.cell.tagWebhook') : s.manual ? t('scheduler.cell.tagManual') : t('scheduler.cell.tagOnce')}
+            {prRule ? (prRule.url.includes('/-/merge_requests/') ? 'MR' : 'PR') : s.webhookTrigger ? t('scheduler.cell.tagWebhook') : s.manual ? t('scheduler.cell.tagManual') : t('scheduler.cell.tagOnce')}
           </span>
         )}
       </div>

@@ -23,6 +23,17 @@ describe('fillGhostCardPrStatus', () => {
     return document.querySelector('div')!;
   };
 
+  it('matches a GitLab archive button to its instance even when two projects share the same path and IID', () => {
+    const url = 'https://git.team.test/group/sub/project/-/merge_requests/2';
+    const key = 'gitlab:git.team.test/group/sub/project#2';
+    document.body.innerHTML = `<button data-ghost-task-archive="${url}" data-ghost-task-archive-auto></button>`;
+    expect(readPrStatusSlotKey(document.body.innerHTML)).toBe(key);
+    const states = new Map([['gitlab:other.test/group/sub/project#2', status({ status: 'merged' })]]);
+    expect(fillGhostCardPrStatus(document, id => states.get(id), t, true)).toBe(false);
+    states.set(key, status({ status: 'merged' }));
+    expect(fillGhostCardPrStatus(document, id => states.get(id), t, true)).toBe(true);
+  });
+
   it('replaces the snapshot with the title bar status for the same PR', () => {
     expect(readPrStatusSlotKey(' <div data-ghost-pr-status="Octo/Repo#9">')).toBe('octo/repo#9');
     const slot = card();
