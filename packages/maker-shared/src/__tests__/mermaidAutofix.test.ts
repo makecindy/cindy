@@ -169,7 +169,7 @@ describe('repairMermaidSource', () => {
     },
   );
 
-  it.each(['A[[first\n→ second]]', 'A([first\n→ second])', 'A>first\n→ second]', 'A["first\n→ second"]'])(
+  it.each(['A[[first\n→ second]]', 'A([first\n→ second])', 'A>first\n→ second]', 'A->first\n→ second]', 'A.>first\n→ second]', 'A["first\n→ second"]'])(
     'preserves a multiline node label while repairing the next connection (%s)',
     (node) => {
       const chart = `flowchart TD\n${node} → B`;

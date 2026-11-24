@@ -201,7 +201,7 @@ function findShapeDataEnd(source: string, start: number): number {
 function repairFlowchart(source: string, chartStart: number): string {
   // 从节点 ID 后的 @{ 识别属性，把 YAML 语法交给 Mermaid。
   // 回调、样式声明和类选择器里的连字符属于名称或值。
-  const tokens = /^[^\S\r\n]*(?:%%|\/\/)[^\n]*|(?:^|;)[^\S\r\n]*(?:acc(?:Title|Descr)[^\S\r\n]*:[^\n]*|accDescr[^\S\r\n]*\{[^}]*\}|(?:click|classDef|class|style|linkStyle)[^\S\r\n]+(?:"[^"\r\n]*"|[^";\r\n])*)|"[^"]*"|"[^"\n]*|\|[^|\n]+\||:::[\p{L}\p{N}\p{M}_]+(?:[.-]+[\p{L}\p{N}\p{M}_]+)*|(?<![^\s;])[^\s"@;]+@(?=[^\S\r\n]*[xo<]?(?:--|==|-\.|\.+-|~~~))|[-.=]+[>xo]?|(?<=[\p{L}\p{N}\p{M}_.!,?#$%*+/:&'`\\-])(?:@\{|\([^()[\]{}"\n]*\)|\[[^()[\]{}"\n]*\]|\{[^()[\]{}"\n]*\}|\({2,3}|\(\[|\[[[(\/\\]|\{\{|[({\[>])/gmu;
+  const tokens = /^[^\S\r\n]*(?:%%|\/\/)[^\n]*|(?:^|;)[^\S\r\n]*(?:acc(?:Title|Descr)[^\S\r\n]*:[^\n]*|accDescr[^\S\r\n]*\{[^}]*\}|(?:click|classDef|class|style|linkStyle)[^\S\r\n]+(?:"[^"\r\n]*"|[^";\r\n])*)|"[^"]*"|"[^"\n]*|\|[^|\n]+\||:::[\p{L}\p{N}\p{M}_]+(?:[.-]+[\p{L}\p{N}\p{M}_]+)*|(?<![^\s;])[^\s"@;]+@(?=[^\S\r\n]*[xo<]?(?:--|==|-\.|\.+-|~~~))|--+[-xo>]|--|==+[=xo>]|==|(?<!\.)-?\.+-[xo>]?|-\.|~~~+|(?<=[\p{L}\p{N}\p{M}_.!,?#$%*+/:&'`\\-])(?:@\{|\([^()[\]{}"\n]*\)|\[[^()[\]{}"\n]*\]|\{[^()[\]{}"\n]*\}|\({2,3}|\(\[|\[[[(\/\\]|\{\{|[({\[>])/gmu;
   tokens.lastIndex = chartStart;
   const edgeLabelClosers = new Map([['--', /^--+[-xo>]$/], ['==', /^==+[=xo>]$/], ['-.', /^\.+-[xo>]?$/]]);
   let result = '';
