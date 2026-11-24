@@ -57,6 +57,7 @@ vi.mock('../BotGroupTimelineItem', () => ({
 
 import { BotDmThreadsValue, useBotDmThreads } from '../botDmThreadsContext';
 import { BotDmThreadHost } from '../BotDmThreadHost';
+import { TodoListCard } from '@/components/chat/TodoListCard';
 
 /** The production entry the header's 创建话题 button uses. */
 function OpenThreadButton({ rootClientId }: { rootClientId: string }) {
@@ -135,6 +136,30 @@ describe('private topic panel resize', () => {
     fireEvent.pointerUp(handle, { pointerId: 1 });
     fireEvent.pointerMove(handle, { pointerId: 1, clientX: 100 });
     expect(panel.style.width).toBe('648px');
+  });
+
+  // #12437 (unit): a focused topic owns Escape while the real parent plan remains pinned.
+  it('closes the keyboard-opened topic before the parent plan', async () => {
+    const { container } = render(
+      <BotDmThreadHost enabled bot={{ id: 'bot', name: 'Cindy' } as never} rootSessionId="chat"
+        mentions={[]}>
+        <TodoListCard todos={[{ content: 'Check topic', status: 'in_progress' }]} />
+        <OpenThreadButton rootClientId="c1" />
+      </BotDmThreadHost>,
+    );
+    const plan = container.querySelector<HTMLButtonElement>('button[aria-expanded]')!;
+    fireEvent.click(plan, { detail: 0 });
+    fireEvent.click(screen.getByRole('button', { name: 'open topic' }), { detail: 0 });
+    const panel = await screen.findByRole('complementary');
+    const close = within(panel).getByRole('button', { name: 'bots.close' });
+    close.focus();
+
+    fireEvent.keyDown(close, { key: 'Escape' });
+
+    expect(screen.queryByRole('complementary')).toBeNull();
+    expect(plan.getAttribute('aria-expanded')).toBe('true');
+    fireEvent.keyDown(plan, { key: 'Escape' });
+    expect(plan.getAttribute('aria-expanded')).toBe('false');
   });
 
   it('sizes the panel with the arrow keys on the same handle', async () => {

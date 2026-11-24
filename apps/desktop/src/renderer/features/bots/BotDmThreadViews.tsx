@@ -75,10 +75,11 @@ export function BotDmThreadPanel({ bot, rootSessionId, rootClientId, state, ment
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
       if (!panelRef.current?.contains(document.activeElement)) return;
       // The task view's own overlays (menus, approvals) close first.
       if (document.activeElement?.closest('[role="dialog"],[role="menu"]')) return;
+      event.preventDefault();
       onClose();
     };
     window.addEventListener('keydown', onKey);

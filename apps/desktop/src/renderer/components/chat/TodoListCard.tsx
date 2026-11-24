@@ -318,6 +318,8 @@ export function TodoListCard({
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
       if (!isForegroundComposerEscapeLayer(card)) return;
+      const focusedTopic = document.activeElement?.closest('[data-dm-thread-panel]');
+      if (focusedTopic && !focusedTopic.contains(card)) return;
       // Other foreground layers may close without cancelling the key event.
       if (document.querySelector(
         '[data-preview-scrim]:not([data-preview-closing]), [aria-modal="true"], '
