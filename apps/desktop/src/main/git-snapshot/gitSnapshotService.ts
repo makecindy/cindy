@@ -13,6 +13,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { createLogger } from '../logger';
+import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
 import { gitExec, GitExecError } from '../worktree/gitExec';
 import { isolatedGitExec, snapshotGitIsolationArgs } from './isolatedGitExec';
 import { gitPathOutput } from '../worktree/gitPathOutput';
@@ -450,6 +451,20 @@ export interface ShadowSavepointResult {
 }
 
 /**
+ * A savepoint takes every file the project's `.gitignore` lets through. A teammate project gets none
+ * before its `.gitignore` keeps credentials out: the entries are completed here first if they can be,
+ * otherwise this throws, so the caller records its usual rewind gap (a content-free marker) or stops
+ * the rollback (maintainer and Codex review, 2026-11-24). Other projects are not affected.
+ */
+async function assertTeammateProjectIgnoreReady(repoPath: string): Promise<void> {
+  if (!isTeammateProjectPath(repoPath)) return;
+  const { ensureTeammateProjectIgnored } = await import('../maker-ipc/botProjectGitignore.js');
+  if (await ensureTeammateProjectIgnored({ workspace: repoPath }) !== 'ready') {
+    throw new Error('Teammate project .gitignore is not complete yet; savepoint deferred');
+  }
+}
+
+/**
  * Creates a shadow savepoint on refs/cindy/savepoints/<sessionId>.
  *
  * Uses plumbing only (temporary index + write-tree + commit-tree + update-ref),
@@ -464,6 +479,7 @@ export async function createShadowSavepoint(
     ? performance.now() + input.captureBudget.timeoutMs
     : undefined;
   checkSnapshotCaptureDeadline(deadlineAtMs);
+  await assertTeammateProjectIgnoreReady(repoPath);
   const blockedState = await detectBlockedGitState(repoPath, deadlineAtMs);
   if (blockedState) {
     throw new SnapshotBlockedByGitStateError(blockedState);

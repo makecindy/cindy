@@ -12,12 +12,12 @@ import { createSnapshotDetailed } from '../git-snapshot/gitSnapshotService.js';
 import { botProfileMemoryDir } from '../maker-ipc/botProfileFolder.js';
 import {
   hasTeammateMemoryMoved,
-  isTeammateProjectIgnoreReady,
   legacyTeammateProjectMemoryDir,
   teammateProjectMemoryDir,
   unlinkedTeammateProjectMemoryDir,
   teammateWorkspaceDir as teammateWorkspace,
 } from '../maker-ipc/botProjectMemory.js';
+import { isTeammateProjectIgnoreReady } from '../maker-ipc/botProjectGitignore.js';
 import { BOT_V2_CARRYOVER_FILE } from '../maker-ipc/botV2Carryover.js';
 import { readTeammateProjectMode } from '../maker-ipc/botWorkspaceRuntime.js';
 import type { ProjectScheduleConfig } from '../scheduler-host/project-automation-loader.js';

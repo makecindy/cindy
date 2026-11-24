@@ -32,14 +32,12 @@ import { detectCwd } from '../worktree/WorktreeManager.js';
 import { botProfileDir, botProfileMemoryDir, ensureBotWorkspaceDir } from './botProfileFolder.js';
 import {
   hasTeammateUpgraded,
-  TEAMMATE_GITIGNORE_RECEIPT_FILE,
   TEAMMATE_MEMORY_MOVE_RECEIPT_FILE,
-  TEAMMATE_PROJECT_MEMORY_SEGMENTS,
-  isTeammateProjectIgnoreReady,
   legacyTeammateProjectMemoryDir,
   teammateProjectMemoryDir,
   unlinkedTeammateProjectMemoryDir,
 } from './botProjectMemory.js';
+import { BOT_PROJECT_GITIGNORE, ensureTeammateProjectIgnored, isTeammateProjectIgnoreReady } from './botProjectGitignore.js';
 import { setBotProjectSkillsDir } from './botSkillStore.js';
 import { TEAMMATE_TEMPLATE_VERSION, applyTeammateTemplate, type ReadPreviousTemplate } from './botProjectTemplate.js';
 import { ensureMemoryReviewHook, MEMORY_REVIEW_HOOK_COMMAND, LEGACY_MEMORY_REVIEW_HOOK_COMMAND } from './botProjectMemoryReview.js';
@@ -224,100 +222,7 @@ async function copySkillFolders(sourceDir: string, workspace: string): Promise<{
   return { copied, skippedLinks, targetDir };
 }
 
-/**
- * The memory records are the teammate's own work and are versioned; what the memory store derives
- * beside them (the rebuilt MEMORY.md index, search database, folder metadata, temp files) is not.
- * The store's copy receipt is versioned too: a `git clean` must not make it copy the old records
- * again over later deletions.
- */
-const MEMORY_DIR = TEAMMATE_PROJECT_MEMORY_SEGMENTS.join('/');
-export const BOT_PROJECT_MEMORY_GITIGNORE = [
-  `${MEMORY_DIR}/*`,
-  `!${MEMORY_DIR}/*.md`,
-  `!${MEMORY_DIR}/${MEMORY_STORAGE_MIGRATION_RECEIPT}`,
-  `${MEMORY_DIR}/MEMORY.md`,
-];
-
-/**
- * A teammate puts whatever its work needs in its project: a skill's `.env` or token file, Python
- * environments, worktrees of the repositories it works on. Versions are for its own work, so these
- * stay out of Git (and out of every automatic snapshot's file count). Env templates stay versioned;
- * their exceptions follow `.env.*`, which they must, also when appended to an existing file.
- */
-export const BOT_PROJECT_LOCAL_GITIGNORE = [
-  '.env', '.env.*', '!.env.example', '!.env.sample', '!.env.template',
-  'token.json', 'credentials.json', 'client_secret*.json', '*.pem', '*.p12', '*.pfx',
-  '.venv/', 'venv/', '__pycache__/', '.cindy-worktrees/', '.xdt-worktrees/',
-];
-
-const BOT_PROJECT_GITIGNORE = [
-  'node_modules/', 'tmp/', '.DS_Store', '*.log',
-  '*.zip', '*.tar', '*.tar.gz', '*.tgz', '*.dmg', '*.iso',
-  '*.db', '*.sqlite', '*.sqlite3', '*-wal', '*-shm', 'pg_wal/',
-  ...BOT_PROJECT_LOCAL_GITIGNORE,
-  ...BOT_PROJECT_MEMORY_GITIGNORE,
-  '',
-].join('\n');
-
-/**
- * Both lists a teammate project's `.gitignore` needs, in blocks whose order matters: an exception
- * (`!…`) only applies below its pattern, and `MEMORY.md` is ignored again after the `*.md` exception.
- * A block with any line missing is appended whole, so its lines keep their order.
- */
-const TEAMMATE_PROJECT_IGNORE_BLOCKS: readonly (readonly string[])[] = (() => {
-  const blocks: string[][] = [];
-  for (const line of BOT_PROJECT_LOCAL_GITIGNORE) {
-    if (line.startsWith('!')) blocks[blocks.length - 1]!.push(line);
-    else blocks.push([line]);
-  }
-  return [...blocks, [...BOT_PROJECT_MEMORY_GITIGNORE]];
-})();
-
-/**
- * Appends the blocks a project's `.gitignore` lacks, keeping its own lines as they are; a missing file
- * gets the whole default list. `unavailable` when the `.gitignore` is not a regular file (a folder, or
- * a link, which Git does not read either): it is left alone and its entries are not in effect.
- * Write failures (a read-only file) throw.
- */
-async function ensureIgnored(workspace: string): Promise<'changed' | 'unchanged' | 'unavailable'> {
-  const file = path.join(workspace, '.gitignore');
-  // Exclusive create: an existing entry of any kind, even a dangling link, is never written through.
-  if (await writeIfMissing(file, BOT_PROJECT_GITIGNORE)) return 'changed';
-  if (!(await fs.lstat(file)).isFile()) return 'unavailable';
-  const current = await fs.readFile(file, 'utf8');
-  const lines = new Set(current.split(/\r?\n/).map((line) => line.trim()));
-  const missing = TEAMMATE_PROJECT_IGNORE_BLOCKS.filter((block) => block.some((line) => !lines.has(line))).flat();
-  if (!missing.length) return 'unchanged';
-  const newline = current.includes('\r\n') ? '\r\n' : '\n';
-  const separator = current === '' || current.endsWith('\n') ? '' : newline;
-  await fs.writeFile(file, `${current}${separator}${missing.join(newline)}${newline}`, 'utf8');
-  return 'changed';
-}
-
-/**
- * The one place a teammate project's `.gitignore` is completed: the local entries
- * ({@link BOT_PROJECT_LOCAL_GITIGNORE}) and the memory's derived files
- * ({@link BOT_PROJECT_MEMORY_GITIGNORE}), once, with one receipt for both. Only `.gitignore` changes:
- * files already in the history stay versioned and nothing on disk is removed. No version is recorded
- * here: the teammate's next version includes the change, and a startup snapshot has no size bound.
- * Never throws. `failed` (a read-only file, a folder or a link) keeps the teammate usable and its
- * memory moving, but defers its versions; it is retried on the next start or repository retry.
- */
-export async function ensureTeammateProjectIgnored(input: { workspace: string; botId?: string }): Promise<'ready' | 'failed'> {
-  try {
-    if (await isTeammateProjectIgnoreReady(input.workspace)) return 'ready';
-    const result = await ensureIgnored(input.workspace);
-    // Left alone, but its entries are not in effect: no receipt, so versions keep waiting.
-    if (result === 'unavailable') throw new Error('.gitignore is not a regular file');
-    await fs.writeFile(path.join(path.dirname(input.workspace), TEAMMATE_GITIGNORE_RECEIPT_FILE),
-      `${JSON.stringify({ version: 1, at: new Date().toISOString(), changed: result === 'changed' }, null, 2)}\n`, 'utf8');
-    if (result === 'changed') log.info('teammate project .gitignore completed', { botId: input.botId });
-    return 'ready';
-  } catch (error) {
-    log.warn('teammate project .gitignore update failed; its versions wait until it is completed', { botId: input.botId, error: String(error) });
-    return 'failed';
-  }
-}
+export { BOT_PROJECT_LOCAL_GITIGNORE, BOT_PROJECT_MEMORY_GITIGNORE, ensureTeammateProjectIgnored } from './botProjectGitignore.js';
 
 async function isOwnRepository(workspace: string): Promise<boolean> {
   return fs.lstat(path.join(workspace, '.git')).then(() => true, () => false);

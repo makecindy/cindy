@@ -29,6 +29,7 @@ vi.mock('@cindy/maker-core', async () => {
 import { BOT_PROJECT_MEMORY_GITIGNORE, ensureTeammateProjectIgnored, prepareBotProjectWorkspace, readWorkspaceRepositoryStatus } from '../botProjectMode.js';
 import { legacyTeammateProjectMemoryDir, teammateProjectMemoryDir, teammateWorkspaceDir } from '../botProjectMemory.js';
 import { gitExec } from '../../worktree/gitExec.js';
+import { createShadowSavepoint } from '../../git-snapshot/gitSnapshotService.js';
 
 /*
  * #10216: prepareBotProjectWorkspace must recover a failed first commit, keep files/config,
@@ -223,6 +224,64 @@ describe('buddy repository initialization (#10216)', () => {
 
   it('keeps preparing a first-time teammate whose .gitignore is a link, completing both lists once it is a file', async (ctx) => {
     if (await firstPreparationWithUnwritableIgnore('linked_first', 'link') === 'skipped') ctx.skip();
+  });
+
+  // Maintainer review 2026-11-24 (07:18): lines were compared trimmed and as a set. Git reads
+  // ` token.json` (leading space) as another pattern, and exceptions written above `.env.*` are
+  // overridden by it, yet both counted as present and the receipt let versions go ahead.
+  async function preparedWithOldRules(botId: string, rules: string) {
+    const workspace = teammateWorkspaceDir(root, botId);
+    await fs.mkdir(workspace, { recursive: true });
+    await gitExec(['init'], workspace);
+    await gitExec(['config', '--local', 'user.name', 'Test Author'], workspace);
+    await gitExec(['config', '--local', 'user.email', 'author@example.invalid'], workspace);
+    await fs.writeFile(path.join(workspace, '.gitignore'), rules);
+    await gitExec(['add', '.gitignore'], workspace);
+    await gitExec(['commit', '-m', 'v1'], workspace);
+    await fs.writeFile(path.join(workspace, 'token.json'), '{"refresh_token":"fixture"}\n');
+    await fs.writeFile(path.join(workspace, '.env.example'), 'API_KEY=\n');
+    await expect(prepare(botId)).resolves.toMatchObject({ workingDir: workspace });
+    const versioned = (await gitExec(['log', '--all', '--name-only', '--format='], workspace)).stdout.split('\n');
+    const ignored = (file: string) => gitExec(['check-ignore', '-q', file], workspace).then(() => true, () => false);
+    expect(await fs.readFile(path.join(workspace, '.gitignore'), 'utf8')).toMatch(new RegExp(`^${rules.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+    expect(versioned).not.toContain('token.json');
+    expect(await ignored('token.json')).toBe(true);
+    expect(await ignored('.env.local')).toBe(true);
+    expect(await ignored('.env.example')).toBe(false);
+  }
+
+  it('adds a rule an old .gitignore only has with a leading space', async () => {
+    await preparedWithOldRules('spaced_rule', 'node_modules/\n token.json\n');
+  });
+
+  it('re-adds env template exceptions an old .gitignore lists above .env.*', async () => {
+    await preparedWithOldRules('early_exceptions', '!.env.example\n!.env.sample\n!.env.template\n.env\n.env.*\n');
+  });
+
+  // Codex review 2026-11-24 (07:28): while a teammate project's .gitignore cannot take the entries
+  // (here: a folder) preparation goes on, so an ordinary turn's savepoint (GitSnapshotCoordinator →
+  // createShadowSavepoint, also the pre-rollback one) stored the untracked token under refs/cindy.
+  it('takes no savepoint of a teammate project before its .gitignore is complete', async () => {
+    // The layout the host gives a teammate project: <userData>/owners/<account>/bots/<teammate>/workspace.
+    const workspace = teammateWorkspaceDir(path.join(root, 'owners', 'test-owner'), 'savepoint_gate');
+    await fs.mkdir(path.join(workspace, '.gitignore'), { recursive: true });
+    await gitExec(['init'], workspace);
+    await gitExec(['config', '--local', 'user.name', 'Test Author'], workspace);
+    await gitExec(['config', '--local', 'user.email', 'author@example.invalid'], workspace);
+    await fs.writeFile(path.join(workspace, 'notes.md'), 'notes\n');
+    await gitExec(['add', 'notes.md'], workspace);
+    await gitExec(['commit', '-m', 'v1'], workspace);
+    await fs.writeFile(path.join(workspace, 'token.json'), '{"refresh_token":"fixture"}\n');
+    const versioned = async () => (await gitExec(['log', '--all', '--name-only', '--format='], workspace)).stdout.split('\n').includes('token.json');
+    const turnStart = () => createShadowSavepoint(workspace, { sessionId: 'turn-session', label: 'turn start', meta: { kind: 'turn-start' } });
+
+    await expect(turnStart()).rejects.toThrow();
+    expect(await versioned()).toBe(false);
+    // A regular file again: the next turn completes the rules first, then the savepoint leaves the token out.
+    await fs.rm(path.join(workspace, '.gitignore'), { recursive: true });
+    await fs.writeFile(path.join(workspace, '.gitignore'), 'node_modules/\n');
+    await expect(turnStart()).resolves.toMatchObject({ commit: expect.any(String) });
+    expect(await versioned()).toBe(false);
   });
 
   it('does not treat a branch referencing a missing commit as unborn', async () => {
