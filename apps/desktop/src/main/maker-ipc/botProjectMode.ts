@@ -262,17 +262,17 @@ const BOT_PROJECT_GITIGNORE = [
 
 /**
  * Appends the entries a project's `.gitignore` lacks, keeping its own lines as they are. A missing
- * file gets the whole default list; a `.gitignore` the project made a link is left alone. True when
- * it changed.
+ * file gets the whole default list. True when it changed; null when the `.gitignore` is not a regular
+ * file (a folder, or a link, which Git does not read either): it is left alone.
  */
-async function ensureIgnored(workspace: string, entries: readonly string[]): Promise<boolean> {
+async function ensureIgnored(workspace: string, entries: readonly string[]): Promise<boolean | null> {
   const file = path.join(workspace, '.gitignore');
   const stat = await fs.lstat(file).catch((error: NodeJS.ErrnoException) => {
     if (error.code === 'ENOENT') return null;
     throw error;
   });
   if (stat === null) return writeIfMissing(file, BOT_PROJECT_GITIGNORE);
-  if (!stat.isFile()) return false;
+  if (!stat.isFile()) return null;
   const current = await fs.readFile(file, 'utf8');
   const lines = new Set(current.split(/\r?\n/).map((line) => line.trim()));
   const missing = entries.filter((line) => !lines.has(line));
@@ -296,6 +296,8 @@ export async function ensureTeammateProjectIgnored(input: { workspace: string; b
   try {
     if (await isTeammateProjectIgnoreReady(input.workspace)) return 'ready';
     const changed = await ensureIgnored(input.workspace, BOT_PROJECT_LOCAL_GITIGNORE);
+    // Left alone, but its entries are not in effect: no receipt, so versions keep waiting.
+    if (changed === null) throw new Error('.gitignore is not a regular file');
     await fs.writeFile(path.join(path.dirname(input.workspace), TEAMMATE_GITIGNORE_RECEIPT_FILE), `${JSON.stringify({ version: 1, at: new Date().toISOString(), changed }, null, 2)}\n`, 'utf8');
     if (changed) log.info('teammate project .gitignore completed', { botId: input.botId });
     return 'ready';
@@ -343,7 +345,7 @@ export async function moveTeammateMemoryIntoProject(input: {
   await fs.mkdir(target, { recursive: true });
   await writeIfMissing(path.join(target, MEMORY_STORAGE_MIGRATION_RECEIPT),
     `${JSON.stringify({ schemaVersion: 1, migratedAt: new Date().toISOString() })}\n`);
-  const ignoreChanged = await ensureIgnored(input.workspace, BOT_PROJECT_MEMORY_GITIGNORE);
+  const ignoreChanged = await ensureIgnored(input.workspace, BOT_PROJECT_MEMORY_GITIGNORE) === true;
   if (copied > 0 || ignoreChanged) await snapshotTeammateProject(input.botId, input.workspace, 'Move teammate memory into the project');
   await fs.writeFile(receipt, `${JSON.stringify({ version: 1, movedAt: new Date().toISOString(), copied }, null, 2)}\n`, 'utf8');
   if (copied > 0) log.info('teammate memory moved into its project', { botId: input.botId, copied });

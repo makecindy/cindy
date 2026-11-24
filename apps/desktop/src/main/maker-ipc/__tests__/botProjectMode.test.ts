@@ -632,6 +632,18 @@ describe('ensureTeammateProjectIgnored', () => {
     expect(await fs.readFile(path.join(workspace, '.gitignore'), 'utf8')).not.toContain('token.json');
   });
 
+  // Codex review 2026-11-24: a `.gitignore` that is a folder (or a link, which Git does not follow)
+  // was left alone but counted as ready, so versions went ahead without the rules.
+  it('reports a .gitignore it cannot write as failed, leaving it alone and writing no receipt', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'teammate-gitignore-dir-'));
+    const workspace = teammateWorkspaceDir(root, 'bot_mia');
+    await fs.mkdir(path.join(workspace, '.gitignore'), { recursive: true });
+    await expect(ensureTeammateProjectIgnored({ botId: 'bot_mia', workspace })).resolves.toBe('failed');
+    expect((await fs.stat(path.join(workspace, '.gitignore'))).isDirectory()).toBe(true);
+    await expect(fs.readdir(path.join(workspace, '.gitignore'))).resolves.toEqual([]);
+    await expect(fs.lstat(path.join(path.dirname(workspace), 'project-gitignore.json'))).rejects.toThrow();
+  });
+
   it('completes an existing project\'s .gitignore during the first upgrade', async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'teammate-gitignore-upgrade-'));
     const workspace = teammateWorkspaceDir(root, 'bot_mia');
