@@ -4,6 +4,11 @@ import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { ScriptTarget, transpileModule } from 'typescript';
 import { shouldNotifyAgentIslandForSession } from '../agent-island/notificationPolicy.js';
+import {
+  forgetKnownOrcaWorkerSession as forgetWorkerIdentity,
+  isKnownOrcaWorkerSession,
+  markKnownOrcaWorkerSession,
+} from '../maker-ipc/orcaManualInterrupt.js';
 
 import { createSetSessionThinkingEnabled } from '../maker-ipc/sessionRuntimeAxisSettings';
 
@@ -40,6 +45,31 @@ describe('maker Orca role marking IPC boundary', () => {
     expect(gate('worker')).toBe(true);
     expect(gate('ordinary')).toBe(true);
     expect(gate('hidden')).toBe(false);
+  });
+
+  // #12570 review: register's shared forget boundary must discard live projections
+  // while the Worker identity still suppresses notifications. Ordinary close keeps
+  // unread activity, so forgetting first can publish it as a normal task. Unit;
+  // service.test.ts covers the real close/discard/display/relay projections.
+  it('discards Worker activity before forgetting its notification identity', () => {
+    const source = registerSource.match(/function forgetKnownOrcaWorkerSession\(sessionId: string\): void \{[\s\S]*?\n\}/)?.[0];
+    if (!source) throw new Error('Worker activity cleanup boundary missing');
+    const handleSessionClosed = vi.fn(() => {
+      expect(isKnownOrcaWorkerSession('archive-worker')).toBe(true);
+    });
+    const forget = new Function('getAgentIslandService', 'forgetOrcaWorkerIdentity',
+      transpileModule(`${source}\nreturn forgetKnownOrcaWorkerSession;`, {
+        compilerOptions: { target: ScriptTarget.ES2022 },
+      }).outputText,
+    )(() => ({ handleSessionClosed }), forgetWorkerIdentity) as (id: string) => void;
+    markKnownOrcaWorkerSession('archive-worker');
+    try {
+      forget('archive-worker');
+      expect(handleSessionClosed).toHaveBeenCalledWith('archive-worker', { reason: 'discarded' });
+      expect(isKnownOrcaWorkerSession('archive-worker')).toBe(false);
+    } finally {
+      forgetWorkerIdentity('archive-worker');
+    }
   });
 
   it('rejects Review sessions before either Orca entry point can mutate state', () => {

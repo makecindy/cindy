@@ -34,7 +34,7 @@ import {
   type AgentIslandSoundSettings,
 } from '../../../shared/agentIsland.js';
 import { AGENT_ISLAND_DISPLAY_CONFIG } from '../displayConfig.js';
-import { clearOrcaManualInterruptTestingState, markKnownOrcaWorkerSession } from '../../maker-ipc/orcaManualInterrupt.js';
+import { clearOrcaManualInterruptTestingState, forgetKnownOrcaWorkerSession, markKnownOrcaWorkerSession } from '../../maker-ipc/orcaManualInterrupt.js';
 import { createSessionActivityReader } from '../../maker-ipc/sessionActivityProjection.js';
 import type { AgentIslandNativeFrame } from '../MacAgentIslandNativeHost.js';
 import { markAppContentWindow } from '../../windowFocusClassifier.js';
@@ -720,6 +720,44 @@ describe('AgentIslandService native publishing', () => {
     expect(service.getSessionActivitySnapshot('worker')?.phase).not.toBe('completed');
     service.resetRuntimeState();
     expect(service.getSessionActivitySnapshots()).toEqual([]);
+  });
+
+  // #12570 review, unit: archive/end-team discard -> identity removal -> late
+  // process-close must not reintroduce a terminal Worker as an ordinary unread
+  // task, sound or public relay row. Existing tests stopped at known-Worker done.
+  it.each(['completed', 'error'] as const)('keeps a forgotten %s Worker out of notifications after a late close', async phase => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn<(state: AgentIslandDisplayState) => boolean>(() => true);
+    const playSound = vi.fn();
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish, playSound },
+    });
+    syncEnabledForTest(service, publish);
+    const meta = { sessionId: 'archived-worker', agentKind: 'codex' };
+    markKnownOrcaWorkerSession(meta.sessionId);
+    service.handleAgentEvent(meta, { type: 'status', data: { isRunning: true, status: 'Running' } });
+    service.handleAgentEvent(meta, phase === 'error' ? terminalErrorEvent('interrupted') : doneEvent());
+    expect(service.getSessionActivitySnapshot(meta.sessionId)?.phase).toBe(phase);
+    // A process closed by end-team first still retains unread evidence quietly.
+    service.handleSessionClosed(meta.sessionId, { reason: 'process-closed' });
+    expect(service.getSessionActivitySnapshot(meta.sessionId)?.phase).toBe(phase);
+    expect(service.getTaskOverview()).toEqual([]);
+
+    // register's production forget boundary is exercised in makerOrcaRoleMarking.
+    service.handleSessionClosed(meta.sessionId, { reason: 'discarded' });
+    forgetKnownOrcaWorkerSession(meta.sessionId);
+    service.handleSessionClosed(meta.sessionId, { reason: 'process-closed' });
+    service.handleNotificationMuteChanged();
+    expect(service.getSessionActivitySnapshot(meta.sessionId)).toBeNull();
+    expect(service.getTaskOverview()).toEqual([]);
+    expect(playSound).not.toHaveBeenCalled();
+    expect(mocks.tapWindowBroadcast).not.toHaveBeenCalledWith(SESSION_ACTIVITY_CHANNEL,
+      expect.objectContaining({ sessionId: meta.sessionId }));
+    const replay = vi.fn();
+    service.replaySessionActivity(replay);
+    expect(replay).not.toHaveBeenCalled();
+    service.resetRuntimeState();
   });
   beforeEach(async () => {
     // Load after the outer mock setup, outside the first behavior test's budget.

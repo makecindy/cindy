@@ -1218,7 +1218,7 @@ import {
 } from './orcaSessionStartOptions.js';
 import {
   clearManualInterrupt,
-  forgetKnownOrcaWorkerSession,
+  forgetKnownOrcaWorkerSession as forgetOrcaWorkerIdentity,
   getManualInterrupt,
   isKnownOrcaWorkerSession,
   markKnownOrcaWorkerSession,
@@ -5579,6 +5579,15 @@ function handleAgentIslandSessionClosedAfterCleanup(
       error: error instanceof Error ? error.message : String(error),
     });
   }
+}
+
+function forgetKnownOrcaWorkerSession(sessionId: string): void {
+  // Archive/rollback/end-team can forget the Worker before its process closes.
+  // Discard the live projection while its identity still suppresses notifications;
+  // process-closed otherwise retains unread activity and republishes it as a task.
+  // This only clears runtime activity, never persisted messages or error history.
+  getAgentIslandService()?.handleSessionClosed(sessionId, { reason: 'discarded' });
+  forgetOrcaWorkerIdentity(sessionId);
 }
 
 function handleAgentIslandSessionStopped(
