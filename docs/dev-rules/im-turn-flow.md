@@ -57,14 +57,13 @@ Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询�
 「项目」，「工作目录」只指 Agent 实际干活的那个目录（术语表）。
 
 - **官方机器人**（Slack / Telegram / X / 飞书）：可选项目 = 侧栏的本机项目（登记过的目录减去侧栏里
-  移除的；含本机伙伴已登记的项目，不含远程电脑上的项目或伙伴搬家留下的副本），外加内置「对话」。`hook-control/projectWorkspaces.ts`
+  移除的；包含本机已登记的伙伴项目，伙伴搬家后留下的目录继续作为普通项目使用），外加内置「对话」。`hook-control/projectWorkspaces.ts`
   把项目列表投影成协议里的「名称 → 目录」表，名称跟随侧栏；`projectWorkspaceSync.ts` 在账号就绪、
-  项目清单、伙伴所在电脑或伙伴状态变化时，以及打开设置页与 IM 查询项目时整理。派发前复核伙伴目录是否仍在本机，
-  普通渠道不能接管伙伴私有任务；已绑定的 X 伙伴专线仍由宿主单独解析。设置页只列出
+  项目列表变化（`projectCatalogEvents.ts`）、打开设置页与 IM 里查询项目之前各整理一次。设置页只列出
   这些项目并提供「添加项目」（登记进侧栏），改名与移除在侧栏做。升级前手动配置的目录在第一次整理时
   登记成项目，原别名改为侧栏名字，旧别名留作查找；按名称存的偏好与默认项目跟着改名。这份表同时是
   「IM 能驱动哪些目录」的边界：一个项目要被执行，仍须由主人在 IM 里用 `/project` 选中，或在设置里设为
-  默认项目。协议约定见 [`protocol-compatibility/hook-project-names.md`](protocol-compatibility/hook-project-names.md)。
+  默认项目。项目选择只授权目录，伙伴私有任务仍按其专用入口校验。协议约定见 [`protocol-compatibility/hook-project-names.md`](protocol-compatibility/hook-project-names.md)。
 - **官方机器人共用一套项目配置**：每个项目的 Agent、模型、思考强度、权限档与模型来源只有一份
   （`hook-control/sharedProjectPrefs.ts`，存在本机偏好文件里渠道键为 `shared` 的行），飞书、Telegram、
   Slack、X 用到同一个项目时都按它跑；默认项目同样只有一个（Telegram / 飞书 / X 共用，Slack 仍在每个
@@ -87,7 +86,7 @@ Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询�
   worktree 照旧跟随）。在 IM 里把会话从项目 A 切到 B 后，下一条消息在 B 里新建任务，不再进 A 的旧任务；
   桌面端把任务移到别的项目同理，原会话下一条消息在它点名的项目里新建。
 - **个人机器人**：`/ctr` 第一步与 `/project` 切换卡列的也是侧栏项目（`im/shared/controlProjects.ts`，
-  名字跟随侧栏，包含本机伙伴项目与没有任务的项目，排除已移除的目录和搬家副本）；`/ctr` 另带不在任何项目里的对话任务目录。
+  名字跟随侧栏、含没有任务的项目、不含已移除的）；`/ctr` 另带不在任何项目里的对话任务目录。
   `/project` 在个人 Telegram 与个人飞书可用；用它切进项目的会话，启动时的托管目录归一与分组补写
   （`im/index.ts`、`feishu/legacySessionBackfill.ts`）都不得把它改回去。
 - **个人飞书机器人的按群设置**（2026-11-23）：设置页「飞书 / Lark 机器人 → 群聊」可给机器人所在的群单独

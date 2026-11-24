@@ -55,13 +55,13 @@ describe('/ctr control project/session picker', () => {
   });
 
   // PR #12405 (unit): a live ordinary task inside a teammate project counts for recency;
-  // rows left on the previous computer must not restore a missing project to the picker.
+  // only an explicitly removed project drops out of the picker.
   it('uses the shared catalogue for teammate projects and their activity', async () => {
     const local = '/data/owners/me/bots/local/workspace';
     const old = '/data/owners/me/bots/moved/workspace';
     dbMock.rows = [local, old].map(workingDir => ({ id: workingDir, workingDir, updatedAt: 7, userSendAt: null }));
     setControlProjectCatalogSource(async () => ({
-      projects: [{ name: 'Buddy', path: local, lastUsedAtMs: 1 }], isRemoved: () => false,
+      projects: [{ name: 'Buddy', path: local, lastUsedAtMs: 1 }], isRemoved: dir => dir === old,
     }));
     expect(await listProjectsForControl()).toEqual([{ workingDir: local, displayName: 'Buddy', latestActivityMs: 7 }]);
   });

@@ -353,8 +353,6 @@ export interface HookDispatcherDeps {
     workingDir: string;
     initialTopicTitle?: string;
   }>;
-  /** Live home check for a project or a task directory nested inside it. */
-  isDirectoryAvailable?: (directory: string) => boolean;
   getConnection: (id: string) => HookConnectionConfig | null;
   bindings: HookBindingStore;
   /** Durable terminal request state, injected by the Electron owner boundary. */
@@ -2296,7 +2294,6 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       return !!companion && companion.connectionId === connectionId
         && companion.botId === config.companionBotId && path.resolve(companion.workingDir) === path.resolve(dir);
     }
-    if (deps.isDirectoryAvailable?.(dir) === false) return false;
     if (Object.values(config.workspaces).some((root) => isPathWithin(root, dir))) return true;
     return dialogue !== undefined && (dialogue.rootDirs?.() ?? [dialogue.rootDir()])
       .some((root) => isPathWithin(root, dir));
@@ -2408,7 +2405,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
      * 会被当成越界删掉, 那条 thread 就白白换了新对话(PR #733 review 指出)。
      */
     const inWhitelistNow = (dir: string | null): boolean =>
-      dir !== null && deps.isDirectoryAvailable?.(dir) !== false &&
+      dir !== null &&
       Object.values(getConnection(connectionId)?.workspaces ?? config.workspaces).some((base) =>
         isPathWithin(base, dir),
       );
@@ -2614,7 +2611,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       return normalize(left) === normalize(right);
     };
     const inRequestedProject = (target: string | null): boolean => {
-      if (target === null || deps.isDirectoryAvailable?.(target) === false) return false;
+      if (target === null) return false;
       if (isChat) return inDialogueRoot(target);
       if (dir === undefined) return false;
       const root = Object.values(getConnection(connectionId)?.workspaces ?? config.workspaces)
@@ -2764,7 +2761,6 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     // 重校验(inWhitelist(info.workingDir))会拒掉它, 导致同 key 每条消息都
     // 重新建会话 —— 别名映射到仓库子目录时 worktree 建在仓库根下就会越界,
     // 这种配置直接回退共享目录。
-    if (dir && deps.isDirectoryAvailable?.(dir) === false) return { reject: 'workspace_not_allowed' };
     let sessionId: string = randomUUID();
     let runDir: string;
     if (isChat) {
