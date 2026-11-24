@@ -7,15 +7,17 @@ import { app } from 'electron';
 import { getDbClient } from '../localDb/client/current';
 import { createLogger } from '../logger';
 import {
-  listRecycleRecords, listRecycleRecordsWithHistory, pruneUnreferencedRecoveryArchives, readRecycleRecord,
-  watchRecycleJournal, worktreeGeneration, writeRecycleRecord, type WorktreeRecycleRecord,
+  listPresentRecoveryArchives, listRecycleRecords, listRecycleRecordsWithHistory,
+  pruneUnreferencedRecoveryArchives, readRecycleRecord, readRecycleRecordById,
+  removeObsoleteRecoveryArchive, watchRecycleJournal, worktreeGeneration, writeRecycleRecord,
+  type WorktreeRecycleRecord,
 } from './recycleJournal';
 import { listSnapshotRefs, releaseSnapshotRef, SNAPSHOT_REF_PREFIX } from './contentSnapshot';
 import type { LocalWorktreeReference } from '../localDb/worker/worktreeReferences';
 import { recycleManagedWorktree } from './managedRecycle';
 import { hasLiveSessionReference, loadLiveSessionPathKeys, pathKey } from './liveSessionRefs';
 import * as store from './worktreeStore';
-import { physicalWorktreeKey, withWorktreeResourceLock } from './resourceLock';
+import { physicalWorktreeKey, withWorktreeResourceLock, withWorktreeResourceLocks } from './resourceLock';
 import { subscribeWorktreeRecycleEvents } from './recycleEvents';
 import { retryPendingWorktreeRuntimeLeaseReleases } from './runtimeLeases';
 
@@ -332,12 +334,161 @@ export class WorktreeRecycleMaintenance {
  * candidates, plus one per ref actually deleted. Metadata is indexed in bounded batches;
  * the Git phase has a time budget, leaving unfinished refs for the next startup.
  */
+interface ArchiveGenerationGroup {
+  id: string;
+  generation: string;
+  sessionId: string;
+  path: string;
+  ambiguous: boolean;
+  kept: boolean;
+  phases: Set<WorktreeRecycleRecord['phase']>;
+}
+
+interface IndexedArchiveReferences {
+  paths: Set<string>;
+  groups: Map<string, ArchiveGenerationGroup>;
+}
+
+type ArchiveGroupDisposition = 'keep' | 'obsolete' | 'needs-owner';
+
+type ArchiveEntryDisposition =
+  | { kind: 'keep' }
+  | { kind: 'obsolete' }
+  | { kind: 'needs-owners'; owners: Set<string> };
+
+function isExplicitlyKeptRecord(record: WorktreeRecycleRecord): boolean {
+  return record.retryPolicy?.state === 'kept' || record.reason === 'user-kept';
+}
+
+function indexArchiveReferences(
+  records: readonly WorktreeRecycleRecord[],
+  targetArchives: ReadonlySet<string>,
+): Map<string, IndexedArchiveReferences> {
+  const byArchive = new Map<string, IndexedArchiveReferences>();
+  for (const record of records) {
+    const archiveFile = record.archive?.file;
+    if (!archiveFile || !targetArchives.has(archiveFile)) continue;
+    let entry = byArchive.get(archiveFile);
+    if (!entry) {
+      entry = { paths: new Set(), groups: new Map() };
+      byArchive.set(archiveFile, entry);
+    }
+    entry.paths.add(record.meta.path);
+    const groupKey = `${record.id}\0${record.generation}`;
+    let group = entry.groups.get(groupKey);
+    if (!group) {
+      group = {
+        id: record.id,
+        generation: record.generation,
+        sessionId: record.meta.sessionId,
+        path: record.meta.path,
+        ambiguous: false,
+        kept: false,
+        phases: new Set(),
+      };
+      entry.groups.set(groupKey, group);
+    } else if (group.sessionId !== record.meta.sessionId || group.path !== record.meta.path) {
+      group.ambiguous = true;
+    }
+    group.kept ||= isExplicitlyKeptRecord(record);
+    group.phases.add(record.phase);
+  }
+  return byArchive;
+}
+
+function buildDeletedOwnersMap(rows: readonly LocalWorktreeReference[]): Map<string, boolean> {
+  const deletedOwners = new Map<string, boolean>();
+  for (const row of rows) {
+    const id = row.id;
+    deletedOwners.set(
+      id,
+      (deletedOwners.get(id) ?? true) && row.source !== 'bot' && row.status === 'deleted',
+    );
+  }
+  return deletedOwners;
+}
+
+function classifyArchiveGroup(
+  group: ArchiveGenerationGroup,
+  currentRoot: WorktreeRecycleRecord | null,
+): ArchiveGroupDisposition {
+  if (group.ambiguous || group.kept || !currentRoot || currentRoot.id !== group.id) {
+    return 'keep';
+  }
+  if (isExplicitlyKeptRecord(currentRoot)) {
+    return 'keep';
+  }
+  for (const phase of group.phases) {
+    if (phase !== 'removed' && phase !== 'restored') return 'keep';
+  }
+  if (currentRoot.generation === group.generation) {
+    if (currentRoot.meta.sessionId !== group.sessionId || currentRoot.meta.path !== group.path) {
+      return 'keep';
+    }
+    if (currentRoot.phase === 'restored') return 'obsolete';
+    return currentRoot.phase === 'removed' && group.phases.size === 1 && group.phases.has('removed')
+      ? 'needs-owner'
+      : 'keep';
+  }
+  // Path was reused by a newer generation: historical copies of this older generation remain
+  // restorable unless none were marked kept and its own task is confirmed deleted everywhere.
+  return group.phases.size === 1 && group.phases.has('removed') ? 'needs-owner' : 'keep';
+}
+
+function classifyArchiveEntry(
+  entry: IndexedArchiveReferences,
+  rootsById: ReadonlyMap<string, WorktreeRecycleRecord | null>,
+): ArchiveEntryDisposition {
+  if (entry.groups.size === 0) return { kind: 'keep' };
+  const owners = new Set<string>();
+  for (const group of entry.groups.values()) {
+    const disposition = classifyArchiveGroup(group, rootsById.get(group.id) ?? null);
+    if (disposition === 'keep') return { kind: 'keep' };
+    if (disposition === 'needs-owner') owners.add(group.sessionId);
+  }
+  return owners.size === 0 ? { kind: 'obsolete' } : { kind: 'needs-owners', owners };
+}
+
+function archiveDispositionSatisfied(
+  disposition: ArchiveEntryDisposition,
+  deletedOwners: ReadonlyMap<string, boolean>,
+): boolean {
+  if (disposition.kind === 'keep') return false;
+  if (disposition.kind === 'obsolete') return true;
+  for (const owner of disposition.owners) {
+    if (deletedOwners.get(owner) !== true) return false;
+  }
+  return true;
+}
+
+async function readCurrentRootByGroup(
+  groups: Iterable<ArchiveGenerationGroup>,
+): Promise<Map<string, WorktreeRecycleRecord | null> | null> {
+  const byId = new Map<string, WorktreeRecycleRecord | null>();
+  for (const group of groups) {
+    if (byId.has(group.id)) continue;
+    try {
+      byId.set(group.id, await readRecycleRecordById(group.id));
+    } catch {
+      return null;
+    }
+  }
+  return byId;
+}
+
 export async function releaseObsoleteRecoverySnapshots(
   readRows: () => Promise<readonly LocalWorktreeReference[]>,
   canContinue: () => boolean = () => true,
 ): Promise<number> {
   const records = await listRecycleRecordsWithHistory();
   if (!records || !canContinue()) return 0;
+  let presentArchives: ReadonlySet<string> = new Set();
+  try {
+    presentArchives = await listPresentRecoveryArchives();
+  } catch {
+    presentArchives = new Set();
+  }
+  if (!canContinue()) return 0;
   // History keeps an older copy of the same record, so decide per ref across all copies.
   const copies = new Map<string, {
     baseRepo: string; commit: string; restored: boolean; removed: boolean; owners: Set<string>;
@@ -360,10 +511,39 @@ export async function releaseObsoleteRecoverySnapshots(
     copy.removed &&= record.phase === 'removed';
     copy.owners.add(record.meta.sessionId);
   }
+  const archiveRefs = presentArchives.size > 0
+    ? indexArchiveReferences(records, presentArchives)
+    : new Map<string, IndexedArchiveReferences>();
+  const initialRoots = archiveRefs.size > 0
+    ? await readCurrentRootByGroup(
+        [...archiveRefs.values()].flatMap((entry) => [...entry.groups.values()]),
+      )
+    : new Map<string, WorktreeRecycleRecord | null>();
+  if (!canContinue()) return 0;
+
+  const initialDispositions = new Map<string, ArchiveEntryDisposition>();
+  if (initialRoots) {
+    for (const [archiveFile, entry] of archiveRefs) {
+      if (++scanned % 128 === 0) {
+        await setImmediate();
+        if (!canContinue()) return 0;
+      }
+      initialDispositions.set(archiveFile, classifyArchiveEntry(entry, initialRoots));
+    }
+  }
+
   let needsOwners = false;
   for (const copy of copies.values()) {
     if (++scanned % 128 === 0) await setImmediate();
     if (!copy.restored && copy.removed) { needsOwners = true; break; }
+  }
+  if (!needsOwners) {
+    for (const disposition of initialDispositions.values()) {
+      if (disposition.kind === 'needs-owners') {
+        needsOwners = true;
+        break;
+      }
+    }
   }
   if (!canContinue()) return 0;
   const rows = needsOwners ? await readRows() : [];
@@ -375,6 +555,17 @@ export async function releaseObsoleteRecoverySnapshots(
     if (++scanned % 128 === 0) {
       await setImmediate();
       if (!canContinue()) return 0;
+    }
+  }
+  const candidateArchives: Array<{ archiveFile: string; paths: string[] }> = [];
+  for (const [archiveFile, disposition] of initialDispositions) {
+    if (++scanned % 128 === 0) {
+      await setImmediate();
+      if (!canContinue()) return 0;
+    }
+    const entry = archiveRefs.get(archiveFile);
+    if (entry && archiveDispositionSatisfied(disposition, deletedOwners)) {
+      candidateArchives.push({ archiveFile, paths: [...entry.paths] });
     }
   }
   const byRepo = new Map<string, Array<{ ref: string; commit: string }>>();
@@ -401,6 +592,41 @@ export async function releaseObsoleteRecoverySnapshots(
   const deadlineAtMs = performance.now() + SNAPSHOT_CLEANUP_BUDGET_MS;
   const gitOptions = { timeoutMs: SNAPSHOT_GIT_TIMEOUT_MS, deadlineAtMs };
   let released = 0;
+  for (const candidate of candidateArchives) {
+    if (!canContinue() || performance.now() >= deadlineAtMs) return released;
+    try {
+      const removed = await withWorktreeResourceLocks(candidate.paths, async () => {
+        if (!canContinue() || performance.now() >= deadlineAtMs) return false;
+        const lockedPhysicalKeys = new Set(
+          await Promise.all(candidate.paths.map(physicalWorktreeKey)),
+        );
+        const latestRecords = await listRecycleRecordsWithHistory();
+        if (!latestRecords || !canContinue()) return false;
+        const reindexed = indexArchiveReferences(latestRecords, new Set([candidate.archiveFile]));
+        const latestEntry = reindexed.get(candidate.archiveFile);
+        // If no record references it any longer, leave it to the 2h unreferenced sweep;
+        // if a new physical path appeared outside our held locks, keep the archive.
+        if (!latestEntry || latestEntry.groups.size === 0) return false;
+        for (const latestPath of latestEntry.paths) {
+          if (!lockedPhysicalKeys.has(await physicalWorktreeKey(latestPath))) return false;
+        }
+        const latestRoots = await readCurrentRootByGroup(latestEntry.groups.values());
+        if (!latestRoots || !canContinue()) return false;
+        const latestDisposition = classifyArchiveEntry(latestEntry, latestRoots);
+        if (latestDisposition.kind === 'keep') return false;
+        const latestDeletedOwners =
+          latestDisposition.kind === 'needs-owners'
+            ? buildDeletedOwnersMap(await readRows())
+            : new Map<string, boolean>();
+        if (!canContinue()) return false;
+        if (!archiveDispositionSatisfied(latestDisposition, latestDeletedOwners)) return false;
+        return removeObsoleteRecoveryArchive(candidate.archiveFile);
+      });
+      if (removed) released++;
+    } catch {
+      continue;
+    }
+  }
   for (const [baseRepo, candidates] of byRepo) {
     if (!canContinue() || performance.now() >= deadlineAtMs) break;
     let existing: Map<string, string>;
