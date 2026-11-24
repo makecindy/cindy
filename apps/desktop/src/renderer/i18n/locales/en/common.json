@@ -15533,6 +15533,7 @@
       "prCheck_rate-limit": "GitHub rate-limited requests from {{device}}. Consecutive failures: {{failures}}. Next automatic probe: {{retry}}.",
       "prCheck_unknown": "The PR check failed on {{device}}. See the run details. Consecutive failures: {{failures}}. Next automatic probe: {{retry}}.",
       "precheck": "Automatic checks are temporarily blocked.",
+      "preRunBlocked": "The pre-run check failed. This run did not start.",
       "rateLimited": "Automatic checks are temporarily blocked by a request rate limit.",
       "pluginMissing": "Automatic checks are blocked: the {{name}} plugin is not installed. They resume once it is installed.",
       "pluginMissingUnnamed": "Automatic checks are blocked: a required plugin is not installed. They resume once it is installed.",

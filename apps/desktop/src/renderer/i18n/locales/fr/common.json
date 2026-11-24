@@ -15636,6 +15636,7 @@
       "prCheck_rate-limit": "GitHub limite les requêtes de {{device}}. Échecs consécutifs : {{failures}}. Prochaine vérification automatique : {{retry}}.",
       "prCheck_unknown": "La vérification de la PR a échoué sur {{device}}. Consultez les détails de l’exécution. Échecs consécutifs : {{failures}}. Prochaine vérification automatique : {{retry}}.",
       "precheck": "Les vérifications automatiques sont temporairement bloquées.",
+      "preRunBlocked": "La vérification préalable a échoué. Cette exécution n’a pas démarré.",
       "rateLimited": "Les vérifications automatiques sont temporairement bloquées par une limite de débit des requêtes.",
       "pluginMissing": "Les vérifications automatiques sont bloquées : le plugin {{name}} n'est pas installé. Elles reprendront une fois le plugin installé.",
       "pluginMissingUnnamed": "Les vérifications automatiques sont bloquées : un plugin requis n'est pas installé. Elles reprendront une fois le plugin installé.",

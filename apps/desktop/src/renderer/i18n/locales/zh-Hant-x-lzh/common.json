@@ -15459,6 +15459,7 @@
       "prCheck_rate-limit": "GitHub 暫限 {{device}} 之請。凡 {{failures}} 次未成，將於 {{retry}} 復檢。",
       "prCheck_unknown": "{{device}} 檢 PR 未成，詳見紀錄。凡 {{failures}} 次未成，將於 {{retry}} 復檢。",
       "precheck": "自動查驗暫受阻。",
+      "preRunBlocked": "行前查驗未過，此輪未啟。",
       "rateLimited": "自動查驗暫受阻：請求限流。",
       "pluginMissing": "自動查驗暫受阻：「{{name}}」法器未裝，裝畢自復。",
       "pluginMissingUnnamed": "自動查驗暫受阻：所需法器未裝，裝畢自復。",
