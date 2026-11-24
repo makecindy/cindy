@@ -17,6 +17,7 @@ import {
   type CommitPluginMemberUploadRequest,
   type PreparePluginMemberUploadRequest,
 } from '../memberUpload.js';
+import { parseVisibilityAudience, sameVisibilityAudience, type VisibilityAudience } from '../visibilityAudience.js';
 
 const SHA256 = 'a'.repeat(64);
 const NOW = '2026-08-09T03:00:00.000Z';
@@ -84,6 +85,14 @@ describe('member upload contract', () => {
         organizationId: 'forged-org',
       }),
     ).toThrow(/organizationId/);
+    // Same fixture as cindy-server plugin-protocol (#1553): shape only at the wire layer.
+    const visibilityAudience = { type: 'matchAny' as const, departmentIds: ['dept-1'], membershipIds: ['member-1'] };
+    expect(parsePreparePluginMemberUploadRequest({ sizeBytes: 1, sha256: SHA256, visibilityAudience }))
+      .toEqual({ sizeBytes: 1, sha256: SHA256, visibilityAudience });
+    for (const value of [null, [], 'all']) {
+      expect(() => parsePreparePluginMemberUploadRequest({ sizeBytes: 1, sha256: SHA256, visibilityAudience: value }))
+        .toThrow(/visibilityAudience/);
+    }
     expect(parseCommitPluginMemberUploadRequest(undefined)).toEqual({});
     expect(parseCommitPluginMemberUploadRequest({})).toEqual({});
     expect(() => parseCommitPluginMemberUploadRequest({ ghostId: 'forged' })).toThrow(/ghostId/);
@@ -311,7 +320,55 @@ describe('member upload contract', () => {
     expectTypeOf<PreparePluginMemberUploadRequest>().toEqualTypeOf<{
       sizeBytes: number;
       sha256: string;
+      visibilityAudience?: VisibilityAudience;
     }>();
     expectTypeOf<CommitPluginMemberUploadRequest>().toEqualTypeOf<Record<string, never>>();
+  });
+});
+
+// Mirrors plugin-server managementContract.parseVisibilityAudience: the client must never send an
+// audience the server rejects, and must compare audiences after the same normalization so an
+// unchanged audience is not sent (an unchanged copy must not overwrite someone else's edit).
+describe('visibility audience rules', () => {
+  it('normalizes like plugin-server and rejects what it rejects', () => {
+    expect(parseVisibilityAudience({ type: 'all', membershipIds: ['ignored'] })).toEqual({ type: 'all' });
+    expect(parseVisibilityAudience({
+      type: 'matchAny',
+      membershipIds: ['m2', 'm1', 'm2'],
+      departmentIds: [],
+      emails: ['B@Example.com', 'b@example.com'],
+      roles: ['member'],
+    })).toEqual({ type: 'matchAny', membershipIds: ['m1', 'm2'], emails: ['b@example.com'], roles: ['member'] });
+    for (const [value, message] of [
+      [{ type: 'matchAny' }, /至少包含一个匹配项/],
+      [{ type: 'matchAny', departmentIds: [] }, /至少包含一个匹配项/],
+      [{ type: 'everyone' }, /type/],
+      [{ type: 'matchAny', departmentUnitIds: ['u1'] }, /departmentUnitIds/],
+      [{ type: 'matchAny', roles: ['model_admin'] }, /roles\[0\]/],
+      [{ type: 'matchAny', membershipIds: ['x'.repeat(129)] }, /membershipIds\[0\]/],
+      [{ type: 'matchAny', emails: Array.from({ length: 501 }, (_, i) => `u${i}@e.com`) }, /500/],
+    ] as const) {
+      expect(() => parseVisibilityAudience(value)).toThrow(message);
+    }
+  });
+
+  // Same as plugin-server preservesLegacyAudience: authors keep or remove roles already on the
+  // plugin (even names outside today's five), but never add one.
+  it('keeps existing legacy roles and refuses new ones when existing roles are given', () => {
+    expect(parseVisibilityAudience({ type: 'matchAny', roles: ['model_admin'], emails: ['a@e.com'] },
+      'visibilityAudience', { existingRoles: ['model_admin'] }))
+      .toEqual({ type: 'matchAny', emails: ['a@e.com'], roles: ['model_admin'] });
+    expect(() => parseVisibilityAudience({ type: 'matchAny', roles: ['admin'] }, 'visibilityAudience', { existingRoles: ['model_admin'] }))
+      .toThrow(/不能新增/);
+    expect(() => parseVisibilityAudience({ type: 'matchAny', roles: ['model_admin'] })).toThrow(/roles\[0\]/);
+  });
+
+  it('treats audiences as equal only after normalization', () => {
+    expect(sameVisibilityAudience(
+      { type: 'matchAny', emails: ['A@e.com'], departmentIds: ['d2', 'd1'] },
+      { type: 'matchAny', departmentIds: ['d1', 'd2'], emails: ['a@e.com'] },
+    )).toBe(true);
+    expect(sameVisibilityAudience({ type: 'all' }, { type: 'matchAny', departmentIds: ['d1'] })).toBe(false);
+    expect(sameVisibilityAudience({ type: 'matchAny' }, { type: 'matchAny' })).toBe(false);
   });
 });
