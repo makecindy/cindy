@@ -9619,6 +9619,7 @@
       },
       "reason": {
         "in-use": "仍在用",
+        "pi-subagent-reference": "Pi Subagent 之記錄猶引用此 worktree，故留之",
         "changed": "卷之內容已變",
         "kept": "已請留存",
         "integrity": "備份驗證未成",

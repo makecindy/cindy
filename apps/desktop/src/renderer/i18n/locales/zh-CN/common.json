@@ -9619,6 +9619,7 @@
       },
       "reason": {
         "in-use": "仍在使用",
+        "pi-subagent-reference": "仍被 Pi Subagent 记录引用，已保留",
         "changed": "文件内容已变化",
         "kept": "已要求保留",
         "integrity": "备份校验失败",

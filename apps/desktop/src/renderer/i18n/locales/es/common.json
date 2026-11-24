@@ -9736,6 +9736,7 @@
       },
       "reason": {
         "in-use": "Aún en uso",
+        "pi-subagent-reference": "Se ha conservado porque un registro de Pi Subagent sigue haciendo referencia a este worktree",
         "changed": "El contenido cambió",
         "kept": "Conservado a petición",
         "integrity": "Falló la verificación de la copia de seguridad",

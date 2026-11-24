@@ -9619,6 +9619,7 @@
       },
       "reason": {
         "in-use": "사용 중",
+        "pi-subagent-reference": "Pi 하위 에이전트 기록이 이 worktree를 여전히 참조하고 있어 보존됨",
         "changed": "내용이 변경됨",
         "kept": "유지 요청됨",
         "integrity": "백업 검증 실패",

@@ -58,8 +58,20 @@ export interface LoadLiveSessionPathKeysOptions {
   isSessionRuntimeAlive?: (sessionId: string) => boolean | undefined;
 }
 
-export async function loadLiveSessionPathKeys(
+export function loadLiveSessionPathKeys(
   opts: LoadLiveSessionPathKeysOptions = {},
+): Promise<LiveSessionPathKeys> {
+  return readLiveSessionPathKeys(opts);
+}
+
+interface ReferenceSources {
+  pi: Set<string>;
+  other: Set<string>;
+}
+
+async function readLiveSessionPathKeys(
+  opts: LoadLiveSessionPathKeysOptions,
+  sources?: ReferenceSources,
 ): Promise<LiveSessionPathKeys> {
   try {
     const db = getDbClient();
@@ -70,37 +82,42 @@ export async function loadLiveSessionPathKeys(
     const subagentReferences = await readPiSubagentWorktreeReferences();
     if (!subagentReferences) return null;
     const keys = new Set(runtimePaths);
+    if (sources) for (const key of runtimePaths) sources.other.add(key);
+    const add = async (value: string, source?: Set<string>): Promise<void> => {
+      const key = pathKey(value);
+      if (key) {
+        keys.add(key);
+        source?.add(key);
+      }
+      const physical = await physicalWorktreeKey(value);
+      keys.add(physical);
+      source?.add(physical);
+    };
     // Config cwd can refer to an earlier workdir or a child-specific directory,
     // even after the parent row changes or disappears from the task database.
     for (const paths of subagentReferences.values()) {
-      for (const value of paths) {
-        keys.add(pathKey(value)!);
-        keys.add(await physicalWorktreeKey(value));
-      }
+      for (const value of paths) await add(value, sources?.pi);
     }
     const knownSessionIds = new Set(rows.map((row) => row.id));
     for (const meta of store.getAll()) {
-      if (subagentReferences.has(meta.sessionId)
-        || (meta.sessionId !== opts.excludeSessionId && !knownSessionIds.has(meta.sessionId))) {
-        const metaPathKey = pathKey(meta.path);
-        if (metaPathKey) keys.add(metaPathKey);
-        keys.add(await physicalWorktreeKey(meta.path));
+      const untrackedRegistration = meta.sessionId !== opts.excludeSessionId && !knownSessionIds.has(meta.sessionId);
+      if (subagentReferences.has(meta.sessionId) || untrackedRegistration) {
+        await add(meta.path, untrackedRegistration ? sources?.other : undefined);
       }
     }
     for (const row of rows) {
       const hasSubagentRuns = subagentReferences.has(row.id);
       // The same id in another database is not the row the caller just closed.
-      if (!hasSubagentRuns && row.currentDatabase && opts.excludeSessionId && row.id === opts.excludeSessionId) continue;
+      const excluded = row.currentDatabase && opts.excludeSessionId && row.id === opts.excludeSessionId;
       const isTerminal = row.status === 'archived' || row.status === 'deleted';
-      if (!hasSubagentRuns && row.source !== 'bot' && isTerminal && (!row.currentDatabase || opts.isSessionRuntimeAlive?.(row.id) !== true)) {
-        continue;
-      }
-      const workingDirKey = pathKey(row.workingDir);
-      const worktreePathKey = pathKey(row.worktreePath);
-      if (workingDirKey) keys.add(workingDirKey);
-      if (worktreePathKey) keys.add(worktreePathKey);
+      // Collect independent references only for diagnostics if the Pi record
+      // already makes this row a blocker.
+      const independentlyReferenced = (!hasSubagentRuns || sources !== undefined) && !excluded
+        && !(row.source !== 'bot' && isTerminal
+          && (!row.currentDatabase || opts.isSessionRuntimeAlive?.(row.id) !== true));
+      if (!hasSubagentRuns && !independentlyReferenced) continue;
       for (const value of [row.workingDir, row.worktreePath]) {
-        if (value) keys.add(await physicalWorktreeKey(value));
+        if (value) await add(value, independentlyReferenced ? sources?.other : undefined);
       }
     }
     return keys;
@@ -114,11 +131,31 @@ export async function loadLiveSessionPathKeys(
   }
 }
 
-export function hasLiveSessionReference(
-  meta: Pick<WorktreeMeta, 'path' | 'quarantinePath'>,
-  liveSessionPathKeys: LiveSessionPathKeys,
-): boolean {
-  if (!liveSessionPathKeys) return true;
+/** Display-only provenance for an otherwise generic retention reason. */
+export async function loadWorktreeReferenceDiagnostics() {
+  const sources: ReferenceSources = { pi: new Set(), other: new Set() };
+  const paths = await readLiveSessionPathKeys({}, sources);
+  return {
+    paths,
+    retentionReason(meta: ReferenceTarget): 'pi-subagent-reference' | undefined {
+      if (!paths || sources.pi.size === 0) return;
+      const targets = referenceTargets(meta);
+      if (targets && matchesReference(targets, sources.pi) && !matchesReference(targets, sources.other)) {
+        return 'pi-subagent-reference';
+      }
+    },
+  };
+}
+
+type ReferenceTarget = Pick<WorktreeMeta, 'path' | 'quarantinePath'>;
+
+export function hasLiveSessionReference(meta: ReferenceTarget, paths: LiveSessionPathKeys): boolean {
+  if (!paths) return true;
+  const targets = referenceTargets(meta);
+  return !targets || matchesReference(targets, paths);
+}
+
+function referenceTargets(meta: ReferenceTarget): string[] | null {
   const targets = [meta.path, meta.quarantinePath]
     .map((value) => pathKey(value))
     .filter((value): value is string => value !== null);
@@ -127,12 +164,15 @@ export function hasLiveSessionReference(
       const real = pathKey(fs.realpathSync(value));
       if (real && !targets.includes(real)) targets.push(real);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return true;
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return null;
     }
   }
-  if (targets.length === 0) return true;
+  return targets.length ? targets : null;
+}
+
+function matchesReference(targets: readonly string[], paths: ReadonlySet<string>): boolean {
   for (const target of targets) {
-    for (const candidate of liveSessionPathKeys) {
+    for (const candidate of paths) {
       const relative = path.relative(target, candidate);
       if (
         relative === '' ||

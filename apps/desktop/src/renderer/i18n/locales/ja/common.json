@@ -9619,6 +9619,7 @@
       },
       "reason": {
         "in-use": "使用中",
+        "pi-subagent-reference": "Pi のサブエージェントの記録がこの worktree を参照しているため、保持しました",
         "changed": "内容が変更されました",
         "kept": "保持が指定されています",
         "integrity": "バックアップ検証に失敗",

@@ -6,7 +6,7 @@ export interface WorktreeRecycleStatus {
   path: string;
   state: 'retrying' | 'waiting' | 'paused' | 'kept';
   failures: number;
-  reason: 'in-use' | 'changed' | 'kept' | 'integrity' | 'storage' | 'identity' | 'failed' | 'pending';
+  reason: 'in-use' | 'pi-subagent-reference' | 'changed' | 'kept' | 'integrity' | 'storage' | 'identity' | 'failed' | 'pending';
 }
 export interface WorktreeRecycleAction {
   id: string;

@@ -9662,6 +9662,7 @@
       },
       "reason": {
         "in-use": "Noch in Verwendung",
+        "pi-subagent-reference": "Beibehalten, da ein Pi-Subagent-Eintrag noch auf diesen worktree verweist",
         "changed": "Inhalt geändert",
         "kept": "Auf Wunsch beibehalten",
         "integrity": "Backup-Prüfung fehlgeschlagen",

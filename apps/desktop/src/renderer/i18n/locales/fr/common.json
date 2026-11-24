@@ -9736,6 +9736,7 @@
       },
       "reason": {
         "in-use": "Toujours utilisé",
+        "pi-subagent-reference": "Conservé, car un enregistrement de sous-Agent Pi référence encore ce worktree",
         "changed": "Contenu modifié",
         "kept": "Conservé à votre demande",
         "integrity": "Échec de la vérification de la sauvegarde",

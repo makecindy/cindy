@@ -13,7 +13,7 @@ import {
 import { listSnapshotRefs, releaseSnapshotRef, SNAPSHOT_REF_PREFIX } from './contentSnapshot';
 import type { LocalWorktreeReference } from '../localDb/worker/worktreeReferences';
 import { recycleManagedWorktree } from './managedRecycle';
-import { hasLiveSessionReference, loadLiveSessionPathKeys, pathKey } from './liveSessionRefs';
+import { hasLiveSessionReference, loadWorktreeReferenceDiagnostics, pathKey } from './liveSessionRefs';
 import * as store from './worktreeStore';
 import { physicalWorktreeKey, withWorktreeResourceLock } from './resourceLock';
 import { subscribeWorktreeRecycleEvents } from './recycleEvents';
@@ -428,7 +428,7 @@ export function stopWorktreeRecycleMaintenance(): void {
 
 /** Read-only classification: upgrading never turns historical registrations into deletion requests. */
 export async function auditRegisteredWorktrees(): Promise<void> {
-  const refs = await loadLiveSessionPathKeys();
+  const diagnostics = await loadWorktreeReferenceDiagnostics();
   const entries = [];
   for (const meta of store.getAll()) {
     let directory: 'present' | 'missing' | 'unreadable' | 'residual' = 'present';
@@ -444,8 +444,10 @@ export async function auditRegisteredWorktrees(): Promise<void> {
     }
     const record = await readRecycleRecord(meta.path);
     entries.push({ sessionId: meta.sessionId, path: meta.path, physicalPath, directory,
-      referenced: refs === null ? null : hasLiveSessionReference(meta, refs),
+      referenced: diagnostics.paths === null ? null : hasLiveSessionReference(meta, diagnostics.paths),
       recycle: record?.phase ?? 'historical-review', reason: record?.reason,
+      retentionReason: record?.reason === 'referenced-or-runtime-unavailable'
+        && record.generation === worktreeGeneration(meta) ? diagnostics.retentionReason(meta) : undefined,
     });
   }
   const summary = {
