@@ -19,6 +19,15 @@ export function deviceName(): string {
   return resolvedName ?? hostnameFallback();
 }
 
+/**
+ * Every name this computer may have reported in this process: the hostname before the macOS
+ * ComputerName lookup resolved, and the resolved name after. Used to tell this computer's own
+ * report apart from another computer's.
+ */
+export function localDeviceNameCandidates(): string[] {
+  return [...new Set([deviceName(), hostnameFallback()])];
+}
+
 async function readDeviceName(): Promise<string> {
   if (process.platform === 'darwin') {
     try {

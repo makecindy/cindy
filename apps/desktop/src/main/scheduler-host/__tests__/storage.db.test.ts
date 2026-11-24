@@ -153,6 +153,7 @@ const SCHEDULER_DDL = [
       provider_id TEXT,
       agent_device_id TEXT,
       effort TEXT,
+      model_group TEXT,
       fast_mode INTEGER NOT NULL DEFAULT 0,
       working_dir TEXT,
       workspace_kind TEXT NOT NULL DEFAULT 'project',
@@ -753,6 +754,7 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       expect(run).toMatchObject({
         runId: 'blocked-missing-plugin',
         failureKind: 'precheck',
+        preRunBlocked: true,
         ...diagnosis,
       });
     } finally {
@@ -873,6 +875,7 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       expect(await harness.storage.listSidebarIndexRuns()).toEqual([
         expect.objectContaining({ runId: 'legacy-check', failureKind: 'precheck' }),
       ]);
+      expect((await harness.storage.listSidebarIndexRuns())[0]).not.toHaveProperty('preRunBlocked');
       await harness.storage.insertRun({ id: 'execution', scheduleId: 'sch-1', firedAt: 2,
         status: 'failed', sessionId: 'legacy-check-session', errorMsg: 'agent failed' });
       await harness.storage.insertRun({ id: 'healthy', scheduleId: 'sch-1', firedAt: 3, status: 'skipped',

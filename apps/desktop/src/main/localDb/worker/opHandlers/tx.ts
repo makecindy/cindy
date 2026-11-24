@@ -5,6 +5,7 @@ import { extractToolResultDiagnostics } from '@cindy/maker-shared/tool-result-co
 import { runPluginUsageTransaction } from './pluginUsageTx.js';
 import { runSessionImportTransaction } from './sessionImportTx.js';
 import { runTaskTagsTransaction } from './taskTagsTx.js';
+import { botsPruneEmptyLegacyRoutineHistory } from './botLegacyRoutineHistoryTx.js';
 import { recordMediaSpend } from './mediaSpendTx.js';
 import { writeModelUsage, type ModelUsageWrite } from './modelUsageTx.js';
 import { recordPiUsage } from './piUsageTx.js';
@@ -205,6 +206,8 @@ function dispatchTransaction(db: Database.Database, args: unknown): unknown {
       return botsCreateThreadLane(db, txArgs as BotsCreateThreadLaneArgs);
     case 'bots.archiveChannelLanes':
       return botsArchiveChannelLanes(db, txArgs as BotsArchiveChannelLanesArgs);
+    case 'bots.pruneEmptyLegacyRoutineHistory':
+      return botsPruneEmptyLegacyRoutineHistory(db, txArgs);
     case 'botGroups.create':
       return botGroupsCreate(db, txArgs as Parameters<typeof botGroupsCreate>[1]);
     case 'botGroups.setMembers':
@@ -2976,6 +2979,10 @@ function forkSession(db: Database.Database, args: unknown): { messageCount: numb
       throw invalidArgs(
         `newMessageIds length mismatch: expected ${sourceMessages.length}, got ${newMessageIds.length}`,
       );
+    }
+    if (payload.sourceMessagesDigest != null && computeForkSourceMessagesDigest(sourceMessages)
+      !== expectString(payload.sourceMessagesDigest, 'sourceMessagesDigest')) {
+      throw invalidArgs('Source history changed while preparing fork');
     }
     const childCreatedAt = expectNumber(newSession.createdAt, 'newSession.createdAt');
     // Keep inherited history strictly before the side-chat visibility boundary,

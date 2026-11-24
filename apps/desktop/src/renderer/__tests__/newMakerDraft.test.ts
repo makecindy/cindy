@@ -2220,3 +2220,54 @@ describe('remote engine is a window-local choice', () => {
     expect(draftStore.getDraft().vendor).toBe('cc');
   });
 });
+
+// Regression (#12247 review): preselecting a local plugin engine from the quota panel must set
+// draft.pluginEngine and clear mutually exclusive selections without corrupting Claude prefs.
+describe('applyPluginEngineDraftRoute', () => {
+  it('selects draft.pluginEngine, routes off remote/SSH locations, leaves cc prefs untouched, and clears mutually exclusive selections', () => {
+    draftStore.patchVendorPrefs('cc', { model: 'claude-opus-5', providerId: 'anthropic', effort: 'high' });
+    draftStore.patchDraft({
+      vendor: 'orca',
+      deviceLinkDeviceId: 'desk-9',
+      deviceLinkDeviceName: 'Lab Mac',
+      remoteHostId: 'ssh-prod',
+      workingDir: '/remote/repo',
+      explicitNoProject: true,
+      pluginEngine: { providerId: 'acp-plugin:old:eng', modelId: 'default', permissionMode: 'acceptEdits' },
+      pluginModel: { pluginId: 'g1', modelId: 'm1' },
+      modelGroup: { type: 'route', id: 'grp-1' },
+      agentDeviceId: 'desk-2',
+      agentDeviceName: 'Office Mac',
+    });
+
+    expect(draftStore.applyPluginEngineDraftRoute({
+      providerId: 'acp-plugin:dsh:dsh',
+      modelId: 'default',
+    })).toBe(true);
+
+    const draft = draftStore.getDraft();
+    expect(draft.vendor).toBe('cc');
+    expect(draft.deviceLinkDeviceId).toBeNull();
+    expect(draft.deviceLinkDeviceName).toBeNull();
+    expect(draft.remoteHostId).toBeNull();
+    expect(draft.workingDir).toBeNull();
+    expect(draft.explicitNoProject).toBe(false);
+    expect(draft.pluginEngine).toEqual({
+      providerId: 'acp-plugin:dsh:dsh',
+      modelId: 'default',
+      permissionMode: 'acceptEdits',
+    });
+    expect(draft.pluginModel).toBeNull();
+    expect(draft.modelGroup).toBeNull();
+    expect(draft.agentDeviceId).toBeNull();
+    expect(draft.agentDeviceName).toBeNull();
+    expect(draft.lastByVendor.cc).toMatchObject({
+      model: 'claude-opus-5',
+      providerId: 'anthropic',
+      effort: 'high',
+    });
+    expect(draftStore.consumePendingLocalPluginEngineNavigation()).toBe(true);
+    expect(draftStore.consumePendingLocalPluginEngineNavigation()).toBe(false);
+    expect(draftStore.applyPluginEngineDraftRoute({ providerId: 'anthropic', modelId: 'claude-opus-5' })).toBe(false);
+  });
+});

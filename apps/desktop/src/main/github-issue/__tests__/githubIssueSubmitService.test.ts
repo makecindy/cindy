@@ -9,6 +9,7 @@ import {
   submitGithubIssueWithConfirm,
   type GithubIssueSubmitServiceDeps,
 } from '../githubIssueSubmitService';
+import { getIssueOsInfo } from '../issueOsInfo';
 import type { IssueConfirmDecision } from '../issueConfirmBridge';
 
 const REQ = {
@@ -51,6 +52,24 @@ function makeDeps(over: Partial<GithubIssueSubmitServiceDeps> = {}) {
 }
 
 describe('submitGithubIssueWithConfirm', () => {
+  it.each([
+    ['darwin', 'arm64', '27.0.0', '27.0.1', 'macOS', '27.0.1 · Darwin 27.0.0'],
+    ['darwin', 'arm64', '27.0.0', '', 'macOS', 'Darwin 27.0.0'],
+    ['win32', 'x64', '10.0.26300', undefined, 'win32', '10.0.26300'],
+  ] as const)(
+    'uses the same %s system version in confirmation and the submitted issue',
+    async (platform, arch, kernel, product, label, version) => {
+      const { deps, confirm, postIssue } = makeDeps({
+        getOsInfo: () => getIssueOsInfo(platform, arch, kernel, product),
+      });
+
+      await expect(submitGithubIssueWithConfirm(deps, REQ)).resolves.toMatchObject({ ok: true });
+
+      expect(confirm.mock.calls[0]?.[2]).toMatchObject({ platform: label, arch, osVersion: version });
+      expect(postIssue.mock.calls[0]?.[1]().description).toContain(`**OS**: ${label} ${arch} (${version})`);
+    },
+  );
+
   it('确认门: cancelled / timeout 时 postIssue 零调用', async () => {
     for (const [reason, errorCode] of [
       ['cancelled', 'USER_CANCELLED'],

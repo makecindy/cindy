@@ -14,6 +14,7 @@ import { savedCredentialsNoteKey, shouldShowSavedCredentialsCard } from './feish
 import { ImChannelSettingsCard, useImChannelSettingsSummary } from './ImChannelSettingsCard';
 import { ImDefaultSettingsSection } from './ImDefaultSettingsSection';
 import { FeishuBotNotificationSection } from './FeishuBotNotificationSection';
+import { FeishuGroupSettingsSection } from './FeishuGroupSettingsSection';
 
 const APP_LAUNCHER_URL: Record<FeishuBotService, string> = {
   feishu: 'https://open.feishu.cn/page/launcher?from=backend_oneclick',
@@ -184,6 +185,8 @@ export function FeishuBotSection({
       <ImDefaultSettingsSection channel="feishu" embedded onSummaryChange={setRouteSummary} />
       {hasSavedCreds && (
         <>
+          <div className="h-px w-full bg-[var(--border-default)]" />
+          <FeishuGroupSettingsSection />
           <div className="h-px w-full bg-[var(--border-default)]" />
           <FeishuBotNotificationSection />
         </>

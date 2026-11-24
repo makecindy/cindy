@@ -1191,6 +1191,7 @@ export function createTurnExecutor(deps) {
 
   async function sendUnlocked(sessionId, message, createOpts, sendOpts) {
     createOpts = { ...createOpts };
+    sendOpts = sendOpts ?? {};
     const turn = openTurn(sessionId, createOpts, sendOpts, sendOpts.persistUserMessage?.clientId);
     // An automatic resume continues an earlier input whose stream (/api/chat) still waits for it.
     if (sendOpts.persistUserMessage?.autoResume === true) turn.resumeOf = deps.resumeOriginOf?.(sessionId);

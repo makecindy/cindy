@@ -9,15 +9,16 @@ export const MEMORY_REVIEW_HOOK_COMMAND = 'cindy-node-script "../.memory-review-
 /** The bundled check lives beside the workspace, not in its Git history: its database path is
  * local account data. Memory itself remains ordinary portable project files. No model or new
  * scheduler setting is needed to decide whether there is anything to review: 20 human messages
- * in the last day, or memory / skill files changed since the last review and a week passed
+ * since the last review, or memory / skill files changed since then and a week passed
  * (2026-11-22: teammates of owners who chat less were never reviewed). Its record of the last
- * review sits beside it, outside Git. */
+ * review sits beside it, outside Git. `bundledCheck` is false when the owner edited the check;
+ * it is not part of the hook config. */
 export async function ensureMemoryReviewHook(input: {
   workingDir: string;
   botId: string;
   databasePath: string;
   previousCommand?: string;
-}): Promise<{ command: string; timeoutMs: number }> {
+}): Promise<{ command: string; timeoutMs: number; bundledCheck: boolean }> {
   const filename = '.memory-review-check-v1.cjs';
   const check = String.raw`
 (async () => {
@@ -46,6 +47,7 @@ let pending = typeof state.pending?.runId === 'string' && Number.isFinite(state.
 let previousRunning = false;
 const minimumHumanMessages = 20;
 let humanMessages = 0;
+let messagesSince = event.firedAt - 24 * 60 * 60 * 1000;
 const db = new DatabaseSync(source.databasePath, { readOnly: true });
 try {
   function messageText(content) {
@@ -67,15 +69,6 @@ try {
     if (messageText(row.content).startsWith(source.syntheticPrefix)) return false;
     return !origin?.kind || (origin.kind === 'scheduler'
       && typeof origin.scheduleId === 'string' && origin.scheduleId.startsWith('hook:'));
-  }
-  // Stop once the bundled minimum is met; synthetic messages never contribute.
-  const rows = db.prepare(
-    "SELECT m.content, m.agent_meta FROM bot_session_links l JOIN messages m ON m.session_id = l.session_id " +
-    "WHERE l.bot_id = ? AND m.role = 'user' AND m.rewind_at IS NULL " +
-    "AND m.created_at > ? AND m.created_at <= ?"
-  ).iterate(source.botId, event.firedAt - 24 * 60 * 60 * 1000, event.firedAt);
-  for (const row of rows) {
-    if (humanInput(row) && ++humanMessages >= minimumHumanMessages) break;
   }
   // A review counts once its run succeeded. A failed, cancelled or never-started run leaves
   // the material for the next one.
@@ -100,6 +93,25 @@ try {
     } else {
       pending = null;
     }
+  }
+  // Count human messages since the last confirmed review, else since this automation was set up
+  // on this computer: skipped and failed nights do not reset the count. A review or setup dated
+  // after this fire (clock moved back), or no local record of this automation (a test run),
+  // falls back to the last day.
+  if (reviewedAt > 0 && reviewedAt < event.firedAt) messagesSince = reviewedAt;
+  else {
+    const schedule = typeof event.scheduleId === 'string'
+      ? db.prepare('SELECT created_at FROM schedules WHERE id = ?').get(event.scheduleId) : undefined;
+    if (Number.isFinite(schedule?.created_at) && schedule.created_at < event.firedAt) messagesSince = schedule.created_at;
+  }
+  // Stop once the bundled minimum is met; synthetic messages never contribute.
+  const rows = db.prepare(
+    "SELECT m.content, m.agent_meta FROM bot_session_links l JOIN messages m ON m.session_id = l.session_id " +
+    "WHERE l.bot_id = ? AND m.role = 'user' AND m.rewind_at IS NULL " +
+    "AND m.created_at > ? AND m.created_at <= ?"
+  ).iterate(source.botId, messagesSince, event.firedAt);
+  for (const row of rows) {
+    if (humanInput(row) && ++humanMessages >= minimumHumanMessages) break;
   }
 } finally {
   db.close();
@@ -158,15 +170,18 @@ if (event.scheduleId !== 'self-test' && next !== stored) {
   fs.renameSync(temp, statePath);
 }
 const unchecked = truncated ? '\n(Stopped after ' + budget + ' entries; the rest of the folders were not checked.)' : '';
+const conversations = 'Review conversations since ' + new Date(messagesSince).toISOString() + '.';
 if (run && changed.length > 0) {
-  console.log('Memory and skill files changed since the last review (check these and the records they relate to):\n'
+  console.log(conversations + '\nMemory and skill files changed since the last review (check these and the records they relate to):\n'
     + changed.slice(0, 40).join('\n') + (changed.length > 40 ? '\n…and ' + (changed.length - 40) + ' more' : '') + unchecked);
-} else if (!run) {
+} else if (run) {
+  console.log(conversations);
+} else {
   console.log(previousRunning
     ? 'The previous memory and skills review is still running; skipped.'
     : changed.length > 0
       ? changed.length + ' memory or skill files changed; the next review waits until a week after the last one.' + unchecked
-      : 'Only ' + humanMessages + '/' + minimumHumanMessages + ' human messages in the last day and no memory or skill changes; memory and skills review skipped.' + unchecked);
+      : 'Only ' + humanMessages + '/' + minimumHumanMessages + ' human messages since ' + new Date(messagesSince).toISOString() + ' and no memory or skill changes; memory and skills review skipped.' + unchecked);
   process.exitCode = 2;
 }
 process.stdout.write('', () => process.exit(process.exitCode || 0));
@@ -196,15 +211,21 @@ process.stdout.write('', () => process.exit(process.exitCode || 0));
       || createHash('sha256').update(oldCheck).digest('hex')
         === '8e97ec8f8733954427efb43d81b9cd58d5940baa2d4f238737727a3903e6dd65'
       || createHash('sha256').update(oldCheck).digest('hex')
-        === 'dff1c6e5c4b697265735fb990b878cf6ef97b6810e9e4612ccf35a7da579f9d3';
+        === 'dff1c6e5c4b697265735fb990b878cf6ef97b6810e9e4612ccf35a7da579f9d3'
+      // Messages counted over the last day only (before the count since the last review).
+      || createHash('sha256').update(oldCheck).digest('hex')
+        === 'ed9421bcbc8a12756db140f78f6aa0e15f4eb7941b4d35fbe9e7e6eb6ffa4ece';
     if (oldCheck !== check && !previousBundled && input.previousCommand) {
-      return { command: input.previousCommand, timeoutMs: 10_000 };
+      return { command: input.previousCommand, timeoutMs: 10_000, bundledCheck: false };
     }
-    if (old !== source && old.startsWith('const source = {') && (oldCheck === check || previousBundled)) {
+    if (!old.startsWith('const source = {') || (oldCheck !== check && !previousBundled)) {
+      return { command: MEMORY_REVIEW_HOOK_COMMAND, timeoutMs: 10_000, bundledCheck: false };
+    }
+    if (old !== source) {
       const temp = `${file}.${process.pid}.tmp`;
       await fs.writeFile(temp, source, { flag: 'wx' });
       await fs.rename(temp, file);
     }
   }
-  return { command: MEMORY_REVIEW_HOOK_COMMAND, timeoutMs: 10_000 };
+  return { command: MEMORY_REVIEW_HOOK_COMMAND, timeoutMs: 10_000, bundledCheck: true };
 }

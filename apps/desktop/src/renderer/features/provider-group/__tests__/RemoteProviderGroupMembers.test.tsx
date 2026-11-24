@@ -71,6 +71,7 @@ function mountWith(
   options: {
     config?: ProviderGroupConfig;
     devices?: DeviceVersions['devices'];
+    onWindowHiddenChange?: (callback: (hidden: boolean) => void) => () => void;
     readDevices?: () => Promise<DeviceVersions>;
     readView?: () => Promise<ProviderGroupView>;
   } = {},
@@ -85,7 +86,7 @@ function mountWith(
   };
   const command = vi.fn(options.readView ?? (async () => view));
   const listDevices = vi.fn(options.readDevices ?? (async () => ({ devices })));
-  Object.assign(window, { electronAPI: { providerGroup: { command }, deviceLink: { listDevices } } });
+  Object.assign(window, { electronAPI: { onWindowHiddenChange: options.onWindowHiddenChange, providerGroup: { command }, deviceLink: { listDevices } } });
   const mounted = render(<RemoteProviderGroupMembers deviceId="mini" providerId="anthropic" config={config} />);
   return { command, listDevices, ...mounted };
 }
@@ -123,6 +124,28 @@ afterEach(() => {
 });
 
 describe('RemoteProviderGroupMembers', () => {
+  // Unit regression for #12404: a native hide while the document is visible must retire the
+  // pending worker, stop interval reads and coalesce duplicate show signals into one refresh.
+  it('pauses member dispatch on native hide and refreshes once when shown', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const pending = deferred<ProviderGroupView>();
+    const roster: ProviderGroupView = { providerId: 'anthropic', config: CONFIG, members: [], rosterOnly: true };
+    let notify!: (hidden: boolean) => void;
+    const readView = vi.fn().mockResolvedValueOnce(roster).mockReturnValueOnce(pending.promise)
+      .mockResolvedValue(viewWithBudget(CONFIG));
+    mountWith({}, { readView, onWindowHiddenChange: handler => { notify = handler; return () => {}; } });
+    await flushAsync();
+    expect(readView).toHaveBeenCalledTimes(2);
+    act(() => notify(true));
+    await act(async () => pending.resolve(viewWithBudget(CONFIG)));
+    await act(async () => vi.advanceTimersByTimeAsync(30_000));
+    expect(readView).toHaveBeenCalledTimes(2);
+    act(() => { notify(false); document.dispatchEvent(new Event('visibilitychange')); });
+    await flushAsync();
+    expect(readView).toHaveBeenCalledTimes(3);
+    expect(screen.getByTestId('remote-provider-group-member').getAttribute('data-member-state')).toBe('available');
+  });
+
   // Unit regression: the same-account read-only list must retain the owner's
   // confirmed exhaustion reason without dropping running tasks or requiring expansion.
   it('shows confirmed quota exhaustion in the collapsed remote row and keeps the running count', async () => {

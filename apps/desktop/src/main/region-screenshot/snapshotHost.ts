@@ -369,11 +369,13 @@ export class SnapshotHelper {
   }
 
   /** Windows capture in the current user session; no elevated desktop broker. */
-  async capture(rect: RegionRect, edge: number): Promise<RegionScreenshotBitmap | null> {
+  async capture(rect: RegionRect, edge: number, displayProfile: boolean | 'verify-sdr' = false): Promise<(RegionScreenshotBitmap & { icc?: Uint8Array<ArrayBuffer> }) | null> {
     // Opt-in keeps new native helpers compatible with older hosts; old helpers
     // ignore encoding and continue returning their existing base64 JSON reply.
-    const response = await this.request({ op: 'frame', ...rect, edge, encoding: 'bgra' }, 1500);
+    const response = await this.request({ op: 'frame', ...rect, edge, encoding: 'bgra',
+      ...(displayProfile && { displayProfile: true }), ...(displayProfile === 'verify-sdr' && { verifySdr: true }) }, 1500);
     if (!response) return null;
+    if (displayProfile === 'verify-sdr' && response.sdrVerified !== true) return null;
     const { width, height } = response;
     if (typeof width !== 'number' || typeof height !== 'number' || !validFrameSize(width, height, edge)) return null;
     let bytes: Buffer;
@@ -385,6 +387,8 @@ export class SnapshotHelper {
     if (bytes.length !== width * height * 4) return null;
     return {
       width, height,
+      ...(displayProfile && typeof response.icc === 'string' && response.icc.length <= 5592408
+        && { icc: new Uint8Array(Buffer.from(response.icc, 'base64')) }),
       data: bytes.buffer instanceof ArrayBuffer && bytes.byteLength === bytes.buffer.byteLength
         ? new Uint8Array(bytes.buffer) : new Uint8Array(bytes),
     };
