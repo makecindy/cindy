@@ -33,6 +33,7 @@ import { performSessionAgentSwitch, type AgentSwitchSessionRow } from '../sessio
 import * as delegationHistory from '../botDelegationHistory.js';
 import { modelGroupCandidateKey, type ModelGroupCandidate } from '../../../shared/modelGroups.js';
 import { AgentInputCoordinator } from '../agent-input-coordinator.desktop.js';
+import { RemoteAccountReadUnavailable } from '../../subscription-accounts/remotePreflight.js';
 import { canRecoverUndeliveredOrcaReport } from '../../../shared/sharedTaskRecovery.js';
 import { AutoResumeBookkeeping } from '../autoResumeBookkeeping.js';
 import { createInterruptedTurnAutoResumeHooks } from '../interruptedTurnAutoResumeHooks.js';
@@ -6736,6 +6737,92 @@ describe('AgentInputCoordinator send transaction', () => {
     h.coordinator.retryLastError(sid);
     await flush();
     expect(dispatched).toEqual(['following']);
+  });
+
+  it.each([true, false])('waits for the account device before sending the original queue head (cancel=%s)', async cancel => {
+    const harness = createHarness();
+    const sessionId = 'remote-admission';
+    harness.sendToAgent.mockRejectedValueOnce(new RemoteAccountReadUnavailable('peer-a', new Error('timeout')));
+    harness.coordinator.enqueue(sessionId, makeItem('input-a', 'original'), { manualUiSend: true });
+    await flush();
+    expect(latestProjection(harness.projections)).toMatchObject({
+      error: null, pendingQueue: [{ clientId: 'input-a', waitingForRemoteAccount: true }],
+    });
+    harness.coordinator.enqueue(sessionId, makeItem('input-b', 'next'), { manualUiSend: true });
+    await flush();
+    expect(latestProjection(harness.projections)).toMatchObject({
+      error: null, pendingQueue: [
+        { clientId: 'input-a', waitingForRemoteAccount: true },
+        { clientId: 'input-b' },
+      ],
+    });
+    expect(harness.onDiscardedQueuedMessage).not.toHaveBeenCalled();
+    harness.coordinator.onRemoteAccountDeviceReady('peer-b');
+    await flush();
+    expect(harness.sendToAgent).toHaveBeenCalledTimes(1);
+    if (cancel) harness.coordinator.remove(sessionId, 'input-a');
+    harness.coordinator.onRemoteAccountDeviceReady('peer-a');
+    harness.coordinator.onRemoteAccountDeviceReady('peer-a');
+    await flush();
+    expect(harness.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(mocks.createMessage).toHaveBeenCalledTimes(1);
+    expect(mocks.createMessage).toHaveBeenNthCalledWith(
+      1, sessionId, expect.objectContaining({ clientId: cancel ? 'input-b' : 'input-a' }), expect.anything(),
+    );
+    if (!cancel) {
+      harness.setRunning(false);
+      harness.coordinator.onTurnEvent(sessionId, 'done');
+      await flush();
+      expect(mocks.createMessage).toHaveBeenCalledTimes(2);
+      expect(mocks.createMessage).toHaveBeenNthCalledWith(
+        2, sessionId, expect.objectContaining({ clientId: 'input-b' }), expect.anything(),
+      );
+    }
+  });
+
+  it('releases the old wait when a priority input takes the queue head', async () => {
+    const harness = createHarness();
+    const sessionId = 'remote-admission';
+    harness.sendToAgent.mockRejectedValueOnce(new RemoteAccountReadUnavailable('peer-a', new Error('timeout')));
+    harness.coordinator.enqueue(sessionId, makeItem('input-a', 'original'), { manualUiSend: true });
+    await flush();
+    harness.coordinator.reserveNextInput(sessionId, makeItem('priority', 'priority'));
+    await flush();
+    expect(latestProjection(harness.projections).pendingQueue.map(item => item.clientId)).toEqual(['input-a']);
+    expect(harness.onDiscardedQueuedMessage).not.toHaveBeenCalled();
+    harness.setRunning(false);
+    harness.coordinator.onTurnEvent(sessionId, 'done');
+    await flush();
+    expect(mocks.createMessage).toHaveBeenNthCalledWith(
+      1, sessionId, expect.objectContaining({ clientId: 'priority' }), expect.anything(),
+    );
+    expect(mocks.createMessage).toHaveBeenNthCalledWith(
+      2, sessionId, expect.objectContaining({ clientId: 'input-a' }), expect.anything(),
+    );
+  });
+
+  it('rechecks only once without a device event and never dispatches a cancelled wait', async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = createHarness();
+      const sessionId = 'remote-admission';
+      const unavailable = new RemoteAccountReadUnavailable('peer-a', new Error('timeout'));
+      harness.sendToAgent.mockRejectedValue(unavailable);
+      harness.coordinator.enqueue(sessionId, makeItem('input-a', 'original'), { manualUiSend: true });
+      await flush();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(harness.sendToAgent).toHaveBeenCalledTimes(2);
+      expect(latestProjection(harness.projections)).toMatchObject({
+        error: null, pendingQueue: [{ clientId: 'input-a', waitingForRemoteAccount: true }],
+      });
+      harness.coordinator.remove(sessionId, 'input-a');
+      harness.coordinator.onRemoteAccountDeviceReady('peer-a');
+      await flush();
+      expect(harness.sendToAgent).toHaveBeenCalledTimes(2);
+      expect(mocks.createMessage).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('rolls back every pre-accept send failure to the queue head and retries by typed recovery', async () => {
@@ -14825,6 +14912,41 @@ describe('Orca report durable recovery', () => {
     },
   );
 
+  // 2026-11-24: a Worker's direct Lead assignment hit "You've hit your 5-hour limit"
+  // and its error banner offered neither Retry nor Continue: the explicit error
+  // dropped the direct receipt, so the projection had no retry text and
+  // errorCanContinue=false (Desktop and Mobile both gate the button on it).
+  // The failure still keeps no replayable record and no usage-limit wait.
+  it.each([
+    ['direct assignment', true],
+    ['stopped assignment', false],
+    ['turn without a receipt', false],
+  ] as const)('offers manual Continue after an explicit Worker failure: %s', async (boundary, expected) => {
+    const h = createHarness();
+    const runtime = { instanceId: 'worker-runtime' };
+    h.setTurnSessionIdentity(runtime);
+    h.setTurnGeneration(1);
+    const item = makeItem('assignment', 'write the third draft');
+    item.createOpts.orcaRole = 'worker';
+    if (boundary !== 'turn without a receipt') {
+      h.coordinator.rememberDirectWorkerInput(runtime, 1, item, h.coordinator.getInputAbortSignal('worker'));
+    }
+    if (boundary === 'stopped assignment') h.coordinator.stop('worker');
+    const meta = { sessionInstanceId: runtime.instanceId, sessionTurnGeneration: 1 };
+    h.coordinator.onTurnEvent('worker', 'error', "You've hit your 5-hour limit · resets 2:10pm (Pacific/Auckland)",
+      { sdkError: 'rate_limit', usageLimit: true, usageResetAt: 5_000_000 }, meta);
+    h.coordinator.onTurnEvent('worker', 'done', undefined, undefined, meta);
+    await flush();
+
+    const projection = h.coordinator.getProjection('worker');
+    expect(projection.error).toContain('5-hour limit');
+    expect(projection.errorCanContinue === true).toBe(expected);
+    expect(projection.errorRetryText).toBeNull();
+    expect(projection.usageLimitWait ?? null).toBeNull();
+    expect(h.onUsageLimitedTurnError).not.toHaveBeenCalled();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+  });
+
   // Unit regression: the real coordinator must give a remote Bot Schedule quota
   // terminal to its wait owner before candidate fallback can switch suppliers.
   it('hands scheduled companion quota failure to waiting instead of candidate fallback', async () => {
@@ -15834,7 +15956,11 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     });
     const hooks = createInterruptedTurnAutoResumeHooks<Session>({
       inputCoordinator: h.coordinator, interruptedTurnAutoResumeGuard: guard, autoResumeBookkeeping: book,
-      botFallbackInputs: new WeakSet(), modelGroupInputs: new WeakSet([item.createOpts]),
+      botFallbackInputs: new WeakSet(),
+      modelGroupInputs: {
+        get: (opts) => opts === item.createOpts ? 'enabled' : undefined,
+        isInterruptedTurnAutoResumeEnabled: () => false,
+      },
       saveTurnStartedAtForDeferred: vi.fn(), beginSchedulerAutoResume: vi.fn(), getStableSessionForTurnBoundary: () => null,
       pendingContinuationOnlyAutoResumeRebuilds: new Map(), pendingSessionRuntimeFallbackRebuilds: new Set(),
       providerGroupHeldErrors: { stash: vi.fn() }, providerGroupHeldTerminals: { stash: vi.fn() },
@@ -15916,6 +16042,20 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: CONTINUE_AFTER_ERROR_PROMPT });
     expect(h.coordinator.isActiveInputOwnerContinuation(sid)).toBe(expected);
     expect(h.coordinator.isActiveInputOwnerAuthored(sid)).toBe(false);
+  });
+
+  // model-groups.md §4.6: a model group's source switch is recorded on the continuation, so its activity line says
+  // which source the task moved to and why (rendered like a provider group's computer switch).
+  it('records the model group source switch on the automatic continuation', async () => {
+    const { h, fail } = availabilityHarness();
+    const sid = 'model-group-source-switch';
+    h.coordinator.enqueue(sid, availabilityInput());
+    await flush();
+    await fail(sid, { toolResult: true });
+    const agentSwitch = { from: 'Claude · A', to: 'GPT · B', cause: 'usage-limit' as const };
+    expect(await h.coordinator.autoRetryLastError(sid, 1, { agentSwitch })).toBe('resumed');
+    await flush();
+    expect(h.sendToAgent.mock.calls[1]?.[3].persistUserMessage).toMatchObject({ autoResume: true, autoResumeInfo: { agentSwitch } });
   });
 
   it('continues after a completed tool and stops at the existing host retry budget', async () => {

@@ -426,6 +426,7 @@
       "description": "仅限远程调用，不涉此机使用。存后，于立差事、易模型及遣下一轮讯时生效。",
       "all": "诸模型",
       "selected": "已开 {{count}} 个模型",
+      "selectionExcludesModels": "尚有模型未选。日后新增者，须亲选而后开放。",
       "choose": "择模型",
       "memberTitle": "可用模型",
       "memberDescription": "设 {{name}} 可用之模型，仅能择远程已开者。经此人转分享之调用亦适用。",
@@ -1927,6 +1928,7 @@
       },
       "footnote": "初版仅支持 SSH 连接管理；于远程行 Agent 之能，将于后续版本增之。",
       "viaAuth": "经 {{label}} 认证",
+      "managedAliasConflict": "此 SSH 别名在 Cindy 管理的配置和外部配置中均有定义。连接信息为只读，无法在此移除该主机。",
       "readOnlyFromSshConfig": "连接信息出自 SSH 设置",
       "importedAgentHint": "由本机 SSH 密钥代理（ssh-agent）验身。终端 ssh 虽可通，未必代理已备。",
       "agentError": {
@@ -2192,6 +2194,13 @@
       }
     },
     "appearance": {
+      "chatLayout": {
+        "label": "对谈布置",
+        "standard": "常式",
+        "wide": "宽式",
+        "width": "内容之宽",
+        "hint": "以对谈两旁留白之外为准。栏狭则自调。"
+      },
       "title": "仪容",
       "modeLabel": "显示之式",
       "appIcon": {
@@ -2437,6 +2446,10 @@
       }
     },
     "windowBehavior": {
+      "trayCard": {
+        "label": "盘中浮笺",
+        "hint": "移标驻 Cindy 盘中图记，可览余额及未阅之务。"
+      },
       "menubar": {
         "label": "于菜单栏显余量",
         "hint": "于 macOS 菜单栏置一 Cindy 图标，点之可观订阅余量、Cindy 余资与今日耗用。"
@@ -2782,7 +2795,8 @@
         "errorBusy": "已有一次上呈方行，请稍候",
         "errorFailed": "日志上呈未成，请察网络后再试",
         "unavailableNotConfigured": "此版未设日志上呈。",
-        "unavailableNoConsent": "须先允《隐私政策》。"
+        "unavailableNoConsent": "须先允《隐私政策》。",
+        "consentPrompt": "上呈之前，请阅<policy>《隐私政策》</policy>而<accept>允之</accept>。"
       },
       "openLogsDirError": "日志目录未能启",
       "autoUpdateLabel": "闲时自装更新",
@@ -2829,6 +2843,14 @@
         "projectsRootReset": "复荐处",
         "projectsRootDescription": "于差事中立新案时，案之卷匣置于此。未设则依君旧案所在荐之。",
         "projectsRootFailed": "新案存放处更之未成",
+        "taskExportDirectoryTitle": "差事输出处",
+        "taskExportDirectoryUnset": "每次择之",
+        "taskExportDirectoryMissing": "卷匣不存",
+        "taskExportDirectoryUnreadable": "设定不可读",
+        "taskExportDirectoryChoose": "择目录",
+        "taskExportDirectoryReset": "复每次择之",
+        "taskExportDirectoryDescription": "既设，Agent 所输差事径存于此，不复每次问所，亦不覆同名之档。未设则每输由君择所。",
+        "taskExportDirectoryFailed": "差事输出处更之未成",
         "dialogueDirectoryOpen": "启目录",
         "dialogueDirectoryChoose": "易目录",
         "dialogueDirectoryReset": "复预设处",
@@ -3384,6 +3406,7 @@
       "description": "将他家 AI 编程工具之差事接入 Cindy，续而为之。唯读原始记录，不改分毫。",
       "rescan": "再察",
       "allSources": "诸源",
+      "sourceFilterAria": "源",
       "search": "寻差事或卷匣",
       "projectFilter": "唯览 {{name}}",
       "clearProjectFilter": "示诸案",
@@ -5143,6 +5166,7 @@
       "formHint": "用户 ID 为纯数字；私聊 @userinfobot 可查己之 ID。",
       "connect": "连之",
       "connectingAction": "方连…",
+      "connectTimedOut": "连接逾时，请再试",
       "errorCode": {
         "invalid-token": "Bot Token 无效或已重置，请重填",
         "provider-api": "Telegram 服务回报谬误，请稍后再试",
@@ -5872,7 +5896,8 @@
         "title": "代操浏览器",
         "description": "Agent 专用之独立浏览器，与君日常之 Chrome 两不相扰",
         "toggleAria": "切换代操浏览器",
-        "toggleHint": "仅于新开之 Agent 会话生效",
+        "toggleHint": "本案之浏览器设定，于本案 Agent 会话开启或重启时生效。",
+        "userDefaultToggleHint": "更易浏览器常例，Cindy 待本机 Codex 闲时自动更新。原差事与对话纪录悉存。Codex 重读诸内置工具之设定，先从各案覆写。Pi 等其余 Agent 俟再启之时从浏览器常例。",
         "noProjectHint": "自案中差事开「规制」，可为该案开关代操浏览器。",
         "detected": "已侦得 {{browser}}",
         "notDetected": "此机未见浏览器。安装 Chrome 后即可代操浏览器。",
@@ -6156,7 +6181,7 @@
       "description": "设 Agent 会话之常例，或为指定之案另立覆写。案之设置先于用户常例。",
       "empty": "工具匣中空空，暂无可用者。",
       "toggleAria": "启闭 {{name}} 之器",
-      "toggleHint": "变更仅于新开或重启之 Agent 会话生效，方行之 Agent 会话不受其扰。",
+      "toggleHint": "Agent 会话新开或重启，乃从此处之工具设定。",
       "loadFailed": "工具列表加载未成",
       "scopePicker": {
         "ariaLabel": "切换内置工具设置之范围",
@@ -8171,6 +8196,7 @@
           "official": "官设",
           "community": "社区"
         },
+        "communityDisclaimer": "此法器由社区作者开发与维护，Cindy 已审核此版本，但无法保证其在所有使用情境下皆安全。",
         "publisherDescription": {
           "official": "Cindy 官方所制，发布维护",
           "community": "社区开发者所制，发布维护",
@@ -8284,7 +8310,7 @@
             "authTitle": "私库",
             "authBody": "认证全赖系统之 Git 设置，Cindy 不存任何 Git 凭证。SSH 之法：此机须已设可用之 key；若组织启 SAML SSO，尚须于 GitHub 之 SSH key 设置中为该组织点 Configure SSO 授权。HTTPS 之法：用 Personal Access Token，由系统 credential helper 存之。",
             "rulesTitle": "纳器之规",
-            "rulesBody": "法器 id 全域唯一，先纳者得之——与已纳法器相冲时必明示。id 用官方保留前缀（{{reservedGhostIdPrefixes}}）之法器，不可经拖入、择档或自订法器坊纳之。法器所声明之权柄示于详情页；点「纳」即纳毕并自启，不再另弹窗确认权柄。",
+            "rulesBody": "法器 id 全域唯一，先纳者得之——与已纳法器相冲时必明示。id 用官方保留前缀（{{reservedGhostIdPrefixes}}）之法器，不可经拖入、择档或自订法器坊纳之。法器所声明之权柄示于详情页。初次手纳，Cindy 请核所请权柄。纳毕自启。",
             "copy": "录指南",
             "copied": "指南已录至剪贴板，拿去便是。",
             "copyFailed": "录之未成，请再试。"
@@ -8398,6 +8424,8 @@
         "installMeta": "版 {{version}} · {{source}}",
         "updateMeta": "版 {{from}} → {{to}} · {{source}}",
         "installDescription": "君确认后方纳；纳毕即激活，可随时于法器页禁用或卸除。",
+        "customMarketSourceNotice": "宜先信此法器坊，再核法器所请权柄。",
+        "localFileSourceNotice": "档之来处可信，方可续纳。",
         "updateDescription": "君确认后方更新；在此之前，旧版照常可用。",
         "grantsTitle": "纳后其将得：",
         "noPermissions": "此法器未声明额外权柄。",
@@ -8606,6 +8634,8 @@
         "liveScreenDetail": "借远端桌面，手机或他电脑可观其所供器物之画面(如模拟器)，并触之、按之、书文字于其上。唯自手机或他电脑开启时方连，不示此电脑他物。",
         "preview": "可于右侧栏浏览器中启下列网站之预览页",
         "previewDetail": "仅能启下方所列网站；每启一页，皆示为何法器所启。",
+        "fileOpener": "君于 Cindy 中启下列诸类文件时，由此法器启之",
+        "fileOpenerDetail": "法器得文件之全径，代系统默认之器启之；不能启则仍用默认之器。可于法器详情中关之。",
         "browserExtension": "可令其自带之浏览器扩充功能连 Cindy",
         "browserNativeHost": "可注册浏览器连接「{{name}}」",
         "browserNativeHostDetail": "所注册程序行于沙箱之外，依系统账号与授权访问本机。",
@@ -8867,6 +8897,8 @@
         "configurationTitle": "设置",
         "sidebarEntryTitle": "导览入口",
         "showInSidebar": "现于左侧导览",
+        "fileOpenerTitle": "以此法器启文件",
+        "fileOpenerDescription": "于 Cindy 中启 {{extensions}} 文件时，改以 {{name}} 启之，不复用系统默认之器。他机之文件仍以默认之器启之。",
         "sidebarEntryDescription": "启之，则「{{title}}」现于左侧导览，与「自运」「法器」并列。置于最外层或收入「余者」，可于「余者 → 自订」中调之。隐其入口不禁用法器。",
         "openTool": "观 Tool {{name}} 之详情",
         "noToolDescription": "此 Tool 暂无描述。",
@@ -12477,6 +12509,8 @@
       "transferBusy": "{{name}} 方在回复，待此轮毕再换机",
       "targetUnavailable": "「{{device}}」今不可用，须在线并开远程控制",
       "targetOutdated": "「{{device}}」之 Cindy 版本较旧，未能运行「{{name}}」，请先于彼机更新 Cindy",
+      "skillTargetOutdated": "「{{name}}」有技艺正文逾 64 KB，「{{device}}」之旧版 Cindy 无法接收。请先更新彼机之 Cindy，再换主力之机。同伴仍留原机",
+      "skillTargetOutdated_skill": "「{{device}}」之旧版 Cindy 无法接收技艺「{{slug}}」，其正文 {{bodyBytes, number}} 字节，逾 64 KB。「{{name}}」仍行于原机。请更新彼机之 Cindy，再换主力之机。",
       "targetOutdatedItem": "移至「{{device}}」· 旧版 Cindy",
       "targetOutdatedMeta": "旧版 Cindy",
       "olderTargetNote": "「{{device}}」之 Cindy 为旧版，{{name}} 于彼依旧法而行：言谈记录照常同步，案之规约与自运于彼不行。",
@@ -12718,6 +12752,7 @@
           "conflict": "此机器人已用于此机：或在 规制 → IM 机器人，或在另一同伴处。",
           "botUnavailable": "{{name}} 今不可用，待其复后再试。",
           "connectFailed": "连之未成：{{reason}}",
+          "connectTimedOut": "连接逾时，请再试。",
           "failed": "未竟，请稍后再试。",
           "personalBotGone": "规制 → IM 机器人 中已无此机器人，请改填凭证。"
         },
@@ -14571,6 +14606,7 @@
       "missingDir": "目录不存"
     },
     "pendingQueue": {
+      "waitingForDevice": "尚未发，俟彼机复通乃发",
       "stopping": "方止",
       "queued": "方候",
       "editingInComposer": "方于下方输入框修之…",
@@ -15334,6 +15370,7 @@
       "codexHelperUnverified": "未能核实此差事之 cindy_helper 是否可用；差事结果或无法回传。",
       "requestFormatError": "应用程序所发请求格式有谬，此答未能竟。",
       "replyFailed": "答未竟",
+      "queuedSendRecovery": "前讯未遣。点「再试」可依原样遣发。若遣新讯，则取代前讯。",
       "retryTitle": "再遣末一讯",
       "cancelTitle": "阖谬误之示",
       "retry": "再试",
@@ -15455,12 +15492,13 @@
       "actionExpired": "这次操作的任务授权已失效。请查看自动化最近一次运行的结果。",
       "actionRecovered": "这次操作的授权已失效。同一自动化后来已成功运行。",
       "text": "前有自运未成。",
-      "prCheck_dns": "{{device}} 未能析 {{host}} 之址。若屡然，宜察此机之网路与 DNS。凡 {{failures}} 次未成，将于 {{retry}} 复检。",
-      "prCheck_timeout": "{{device}} 连 GitHub 逾时。凡 {{failures}} 次未成，将于 {{retry}} 复检。",
-      "prCheck_auth": "请于 {{device}} 重登 GitHub。凡 {{failures}} 次未成，将于 {{retry}} 复检。",
-      "prCheck_rate-limit": "GitHub 暂限 {{device}} 之请。凡 {{failures}} 次未成，将于 {{retry}} 复检。",
-      "prCheck_unknown": "{{device}} 检 PR 未成，详见纪录。凡 {{failures}} 次未成，将于 {{retry}} 复检。",
+      "prCheck_dns": "{{device}} 未能析 {{host}} 之址。若屡然，宜察此机之网路与 DNS。凡 {{failures}} 次未成。自 {{retry}} 始，循例可复检。",
+      "prCheck_timeout": "{{device}} 连 GitHub 逾时。凡 {{failures}} 次未成。自 {{retry}} 始，循例可复检。",
+      "prCheck_auth": "请于 {{device}} 重登 GitHub。凡 {{failures}} 次未成。自 {{retry}} 始，循例可复检。",
+      "prCheck_rate-limit": "GitHub 暂限 {{device}} 之请。凡 {{failures}} 次未成。自 {{retry}} 始，循例可复检。",
+      "prCheck_unknown": "{{device}} 检 PR 未成，详见纪录。凡 {{failures}} 次未成。自 {{retry}} 始，循例可复检。",
       "precheck": "自动查验暂受阻。",
+      "preRunBlocked": "行前查验未过，此轮未启。",
       "rateLimited": "自动查验暂受阻：请求限流。",
       "pluginMissing": "自动查验暂受阻：「{{name}}」法器未装，装毕自复。",
       "pluginMissingUnnamed": "自动查验暂受阻：所需法器未装，装毕自复。",
@@ -16125,6 +16163,7 @@
       "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "今所连者无权用前一模型，故易模型时未能压缩上下文。",
       "MODEL_SELECTION_UNAVAILABLE": "所择模型于此供方下已不可用。请于规制中察其连接，或另择可用之模型。",
       "MODEL_CATALOG_UNCONFIRMED": "模型清单暂未能核实。已保留所选模型，可刷新清单后重试。",
+      "SNAPSHOT_DISPATCH_INTENT_TIMEOUT": "未发送消息，Cindy 未能及时确认安全记录",
       "HARNESS_SWITCH_NOT_READY": "Harness 尚未易毕。请览谬误详情，待 Harness 就绪再试。",
       "DEVICE_LINK_BUSY": "远程方忙，请稍后再试。",
       "REMOTE_DAEMON_CLOSED": "远程连接中断，或方更新。此轮已终，请再遣。",
@@ -16389,7 +16428,13 @@
       "open": "启差事「{{title}}」",
       "untitled": "无名之差事",
       "startedOne": "已启差事",
-      "handedToOne": "付与差事"
+      "handedToOne": "付与差事",
+      "status": {
+        "running": "方行",
+        "needsAction": "候君示下",
+        "error": "有误",
+        "idle": "闲"
+      }
     },
     "botTaskLetter": {
       "replied": "覆书",
@@ -17621,15 +17666,15 @@
   "scheduler": {
     "prTrigger": {
       "fallback": "GitHub App 消息未通，仍依时查验。",
-      "label": "PR",
-      "url": "PR 之链",
+      "label": "PR / MR",
+      "url": "PR 或 MR 之链",
       "condition": "何时行之",
-      "any": "PR 有变",
+      "any": "有变",
       "merged": "已合并",
       "review": "评议有变",
       "ci": "CI 有变",
       "timed": "亦定时查验",
-      "invalid": "请填 GitHub PR 全链。"
+      "invalid": "请填 GitHub PR 或 GitLab MR 全链。"
     },
     "presentation": {
       "status": {
@@ -22539,6 +22584,10 @@
       "separator": "；"
     },
     "settings": {
+      "autoSwitch": {
+        "title": "遇阻自换来源",
+        "hint": "此模式所用来源有阻，则自换次一可用者，并于该轮下书明。关之，则仅于出错时提议换源。"
+      },
       "newRoute": "立模式",
       "newRouteName": "新模式",
       "routesEmpty": "尚无模式。立其一，纳数源于中。",

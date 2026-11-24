@@ -182,6 +182,7 @@ import { createSchedulerRemoteDeps } from './schedulerDevices.js';
 import { createRemoteSessionHandoff } from './sessionHandoffRemote.js';
 import { createRemoteSessionsSnoozeSetter, createRemoteSessionsStatusSetter, remoteSessionMutationFailure } from './sessionStatusRemote.js';
 import { DeviceLinkError } from '@cindy/device-link';
+import { asWechatIlinkError } from '@cindy/wechat-ilink';
 import { MAKER_INVOKE } from '../maker-ipc/channels.js';
 import { isCindyLearnSkillEnabled } from '../skillhub/activationPreferences.js';
 import { botLearningTracker } from '../maker-ipc/botLearningTracker.js';
@@ -576,12 +577,19 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           const { messageId } = await wechatIm.sendText(peerId, text);
           return { ok: true, messageId };
         } catch (error) {
+          const safe = asWechatIlinkError(error);
+          const reason = safe.code === 'SEND_REJECTED'
+            ? safe.ret === undefined ? 'SEND_REJECTED' : `SEND_REJECTED:${safe.ret}`
+            : 'SEND_FAIL';
+          const detail = safe.code === 'SEND_REJECTED'
+            ? reason
+            : (error instanceof Error ? error.message : String(error));
           createLogger('mcp/cindy_wechat').warn(
             'sendMessage failed target=...%s detail=%s',
             peerId.slice(-8),
-            error instanceof Error ? error.message : String(error),
+            detail,
           );
-          return { ok: false, reason: 'SEND_FAIL' };
+          return { ok: false, reason };
         }
       },
       sendFile: async (peerId, absPath, displayName) => {
@@ -1366,9 +1374,9 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             },
             sshConfigProblem: () => sshConfigProblem,
             isSshKeyKnown: async (hostname, port) => (await loadRemoteSsh()).isRemoteHostKeyKnown(hostname, port),
-            readSsh: async (id) => {
+            readSsh: async (id, options) => {
               const remoteSsh = await loadRemoteSsh();
-              await remoteSsh.ensureRemoteHostReady(id);
+              await remoteSsh.ensureRemoteHostReady(id, options);
               const remote = (await remoteSsh.getRemoteSshPoolHydrated()).get(id);
               if (!remote) throw new Error('[SSH_HOST_NOT_FOUND]');
               return (await remote.exec(SSH_STATUS_COMMAND, { timeoutMs: 8_000, label: `list_machines(${id})`, maxOutputBytes: 64 * 1024 })).stdout;
@@ -1392,8 +1400,13 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           const runtime = activeCompanionCloud();
           if (!runtime) return { ok: false, errorCode: 'NOT_ENABLED', message: 'Cloud companions are not available on this server' };
           const result = await runtime.switchHome(teammateId, targetDeviceId, whenBusy ? { whenBusy } : undefined);
-          return result.ok ? { ok: true, teammateId, homeDeviceId: targetDeviceId }
-            : { ok: false, errorCode: result.code, message: `The buddy did not move (${result.code})` };
+          if (result.ok) return { ok: true, teammateId, homeDeviceId: targetDeviceId };
+          if (result.code === 'SKILL_TARGET_OUTDATED') {
+            const skill = result.oversizedSkill;
+            const reason = skill ? `Skill "${skill.slug}" has a ${skill.bodyBytes}-byte body, above the target's 64 KiB limit.` : "A skill exceeds the target's 64 KiB limit.";
+            return { ok: false, errorCode: result.code, message: `${reason} The buddy is still on its original computer. Update Cindy on the target computer and retry.` };
+          }
+          return { ok: false, errorCode: result.code, message: `The buddy did not move (${result.code})` };
         },
       },
       botProfiles: {

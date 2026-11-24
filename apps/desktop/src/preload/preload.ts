@@ -14,7 +14,7 @@ import type { CompanionImportApi, CompanionImportSelection } from '@cindy/maker-
 import { TASK_MIGRATION_LOCAL_CHANNEL } from '@cindy/device-link';
 import type { PluginModelSelection } from '@cindy/device-link';
 import type { WorktreeRecycleAction, WorktreeRecycleStatus } from '../shared/worktreeRecycle';
-import type { GhostControlPointCandidate, GhostControlPointInfo, GhostPickerModel, GhostStartTaskPointData, GhostStartTaskRouteResult } from '../shared/ghost';
+import type { ConfirmedGhostUninstall, GhostControlPointCandidate, GhostControlPointInfo, GhostPickerModel, GhostStartTaskPointData, GhostStartTaskRouteResult } from '../shared/ghost';
 import {
   SETUP_MIGRATION_IPC,
   type SetupMigrationApi,
@@ -72,6 +72,7 @@ import type {
   PreparedProjectFromTask,
   ProjectsRootState,
 } from '../shared/projectsRoot';
+import type { TaskExportDirectoryState } from '../shared/taskExportDirectory';
 import type {
   CustomProviderUpdateOptions,
   CustomProviderUpdateResult,
@@ -1601,6 +1602,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       config: Record<string, unknown> | null,
     ): Promise<{ config: Record<string, unknown> }> =>
       ipcRenderer.invoke('ghosts:errand-prefs:set', id, config),
+    fileOpener: (id: string): Promise<{ declared: boolean; enabled: boolean }> =>
+      ipcRenderer.invoke('ghosts:file-opener:get', id),
+    setFileOpener: (id: string, enabled: boolean): Promise<{ declared: boolean; enabled: boolean }> =>
+      ipcRenderer.invoke('ghosts:file-opener:set', id, enabled),
     githubRelease: (action: 'check' | 'update' | 'sign-in', instanceId: string, assetId?: number):
       Promise<import('../shared/githubPluginRelease').GithubPluginReleaseResult | boolean> =>
       ipcRenderer.invoke('ghosts:github-release', action, instanceId, assetId),
@@ -1622,7 +1627,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }> => opts === undefined
       ? ipcRenderer.invoke('ghosts:inspect', lizFilePath)
       : ipcRenderer.invoke('ghosts:inspect', lizFilePath, opts),
-    uninstall: (id: string): Promise<{ ok: true }> => ipcRenderer.invoke('ghosts:uninstall', id),
+    uninstall: (id: string, confirmed?: ConfirmedGhostUninstall): Promise<{ ok: true }> =>
+      ipcRenderer.invoke('ghosts:uninstall', id, confirmed),
     /** 详情页「导出 .cindy」:main 打包安装目录 → 系统保存对话框落盘。 */
     export: (
       id: string,
@@ -1876,8 +1882,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     cancelOfficialModelPlugins: (): Promise<void> => ipcRenderer.invoke('plugin-market:cancel-official-model-plugins'),
     officialModelPlugins: (cursor: string | null): Promise<import('../shared/pluginMarket').OfficialModelPluginPage> =>
       ipcRenderer.invoke('plugin-market:official-model-plugins', cursor),
-    recommendations: (): Promise<import('../shared/pluginMarket').PluginMarketItem[]> =>
-      ipcRenderer.invoke('plugin-market:recommendations'),
+    recommendations: (pluginIds?: string[]): Promise<import('../shared/pluginMarket').PluginMarketItem[]> =>
+      ipcRenderer.invoke('plugin-market:recommendations', pluginIds),
     snapshot: (): Promise<import('../shared/pluginMarket').PluginMarketSnapshot> =>
       ipcRenderer.invoke('plugin-market:snapshot'),
     detail: (pluginId: string): Promise<import('../shared/pluginMarket').PluginMarketDetail> =>
@@ -1901,8 +1907,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       options: import('../shared/pluginMarket').PluginMarketInstallOptions,
     ): Promise<import('../shared/pluginMarket').PluginMarketInstallResult> =>
       ipcRenderer.invoke('plugin-market:install', pluginId, options),
-    uninstall: (pluginId: string): Promise<{ ok: true }> =>
-      ipcRenderer.invoke('plugin-market:uninstall', pluginId),
+    uninstall: (pluginId: string, confirmed?: ConfirmedGhostUninstall): Promise<{ ok: true }> =>
+      ipcRenderer.invoke('plugin-market:uninstall', pluginId, confirmed),
     consumeRemovalNotice: (): Promise<
       import('../shared/pluginMarket').PluginRemovalUserNotice | null
     > => ipcRenderer.invoke('plugin-market:consume-removal-notice'),
@@ -2780,6 +2786,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }): Promise<{
       status: TelegramBotStatusWire;
       saveErrorStatus?: TelegramBotStatusWire;
+      /** 保存失败只是建连握手超时(界面保留输入、提示重试)。 */
+      saveTimedOut?: boolean;
       ownerUserId: string | null;
       botUsername: string | null;
     }> => ipcRenderer.invoke('telegramBot:set-config', payload),
@@ -4796,6 +4804,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** 恢复默认:删掉 override,重新跟随当前版本默认的“已有 Git 项目”模式。 */
   resetLogUploadCrashAuto: (): Promise<LogUploadSettingsPayload> =>
     ipcRenderer.invoke('log-upload:reset-crash-auto'),
+  acceptManualLogUploadConsent: (policyVersion: string): Promise<LogUploadSettingsPayload> =>
+    ipcRenderer.invoke('log-upload:accept-manual-consent', policyVersion),
   /** 手动上传一次。失败以 IPC 错误码返回(LOG_UPLOAD_* / PRIVACY_CONSENT_REQUIRED)。 */
   uploadLogsNow: (): Promise<LogUploadResult> => ipcRenderer.invoke('log-upload:upload-now'),
   onLogUploadSettingsChange: (
@@ -4810,7 +4820,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         typeof raw.privacyConsentAccepted !== 'boolean' ||
         typeof raw.crashAutoUploadEnabled !== 'boolean' ||
         typeof raw.crashAutoUploadCustomized !== 'boolean' ||
-        typeof raw.manualUploadAvailable !== 'boolean'
+        typeof raw.manualUploadAvailable !== 'boolean' ||
+        typeof raw.manualUploadConsentRequired !== 'boolean'
       ) {
         return;
       }
@@ -4820,6 +4831,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         crashAutoUploadEnabled: raw.crashAutoUploadEnabled,
         crashAutoUploadCustomized: raw.crashAutoUploadCustomized,
         manualUploadAvailable: raw.manualUploadAvailable,
+        manualUploadConsentRequired: raw.manualUploadConsentRequired,
       });
     };
     ipcRenderer.on(LOG_UPLOAD_SETTINGS_CHANGE_CHANNEL, handler);
@@ -5052,6 +5064,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     get: (): Promise<ProjectsRootState> => ipcRenderer.invoke('projects-root:get'),
     choose: (): Promise<ProjectsRootState> => ipcRenderer.invoke('projects-root:choose'),
     reset: (): Promise<ProjectsRootState> => ipcRenderer.invoke('projects-root:reset'),
+  },
+  taskExportDirectory: {
+    get: (): Promise<TaskExportDirectoryState> => ipcRenderer.invoke('task-export-directory:get'),
+    choose: (): Promise<TaskExportDirectoryState> => ipcRenderer.invoke('task-export-directory:choose'),
+    reset: (): Promise<TaskExportDirectoryState> => ipcRenderer.invoke('task-export-directory:reset'),
   },
   createProjectFromTask: {
     prepare: (sessionId: string): Promise<PreparedProjectFromTask> =>
@@ -5538,6 +5555,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
           identityFileName?: string;
           source: 'ssh-config' | 'manual';
           managedByCindy: boolean;
+          managedAliasConflict?: boolean;
           displayName?: string;
         };
         status:

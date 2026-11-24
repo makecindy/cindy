@@ -9,6 +9,7 @@ import { useWechatBot } from '@/hooks/useWechatBot';
 import { cn } from '@/lib/utils';
 import { ImChannelSettingsCard, useImChannelSettingsSummary } from './ImChannelSettingsCard';
 import { ImDefaultSettingsSection } from './ImDefaultSettingsSection';
+import { ResetGroupButton } from '@/components/ui/reset-buttons';
 
 const STATUS_KEYS: Record<WechatBotPhase, string> = {
   disconnected: 'settings.wechatBot.status.disconnected',
@@ -120,6 +121,8 @@ export function WechatBotSection({
       description: t('settings.wechatBot.unbind.description'),
       confirmText: t('settings.wechatBot.unbind.confirm'),
       cancelText: t('settings.wechatBot.unbind.cancel'),
+      // 解绑会删除本机微信凭证并清理未完成的执行，不可撤回（DESIGN.md §4 Destructive actions）。
+      confirmVariant: 'destructive',
     });
     if (accepted) await unbind();
   }, [confirm, t, unbind]);
@@ -345,16 +348,12 @@ function WechatWorkingDirectory({
           </span>
         </Button>
         {configured && (
-          <Button data-setting-id={imBotSettings.wechat.id}
-            variant="secondary"
-            size="lg"
-            type="button"
+          <ResetGroupButton data-setting-id={imBotSettings.wechat.id}
             onClick={onReset}
             disabled={pending}
             className="shrink-0"
-          >
-            {t('settings.wechatBot.workingDir.reset')}
-          </Button>
+            label={t('settings.wechatBot.workingDir.reset')}
+          />
         )}
       </div>
       {settings && !settings.workingDirAvailable && (

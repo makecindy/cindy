@@ -307,6 +307,7 @@ import { createProviderGroupGuestSwitch } from '../../provider-group/guestSwitch
 import {
   applyPendingAgentSwitchIfIdle,
   createPendingAgentSwitchRegistry,
+  performSessionAgentSwitch,
   registerMakerSessionAgentSwitchHandler,
   relocateForFreshStart,
   type AgentSwitchSessionRow,
@@ -314,6 +315,7 @@ import {
 } from '../../maker-ipc/sessionAgentSwitchHandler.js';
 import { prependHandoffToUserMessage } from '../../maker-ipc/agentHandoff.js';
 import { hostSessionIdFor } from '../../remote-agent/host/sessionIdentity.js';
+import { readAccountBinding } from '../store.js';
 import { BUNDLED_CATALOG, type ProviderView } from '@cindy/model-providers';
 import { resolveSubscriptionPoolProvider } from '../placement.js';
 import { createAccountCodexImageChannel, createCodexImageAuthAcquirer, setCodexImageAuthBinding } from '../../cindy-brain/codexImageAuthBinding.js';
@@ -2581,6 +2583,32 @@ describe('paused account next-turn handoff', () => {
     next!.release();
     h.pools[provider]!.accounts[1].paused = true;
     await expect(needsSubscriptionAccountHandoff('task-a', { providerId: provider, agentKind: provider === 'anthropic' ? 'cc' : 'codex', sdkSessionId: 'new-history' })).rejects.toThrow('No subscription account');
+  });
+
+  it('shares an executor decision only within one send and checks paused accounts again on retry', async () => {
+    const { withRemoteAccountReads } = await import('../remotePreflight.js');
+    const row = { providerId: 'anthropic', model: 'claude-sonnet', agentKind: 'cc', sdkSessionId: 'native-a', agentDeviceId: 'peer' };
+    const reply = (paused: boolean) => ({ ok: true, result: { providerId: 'anthropic', routeProviderId: 'anthropic', state: 'bound',
+      account: { isDefault: true, number: 1, paused, status: 'ready', switchAvailable: false } } });
+    h.remote.mockResolvedValueOnce(reply(false)).mockResolvedValueOnce(reply(true));
+    await withRemoteAccountReads(async () => {
+      expect(await needsSubscriptionAccountHandoff('task', row)).toBe(false);
+      expect(await needsSubscriptionAccountHandoff('task', row)).toBe(false);
+    });
+    await expect(withRemoteAccountReads(() => needsSubscriptionAccountHandoff('task', row))).rejects.toThrow('No subscription account');
+    expect(h.remote).toHaveBeenCalledTimes(2);
+  });
+
+  it('marks only a transient read during send preparation as waiting for the executor', async () => {
+    const { RemoteAccountReadUnavailable, withRemoteAccountReads } = await import('../remotePreflight.js');
+    const row = { providerId: 'anthropic', model: 'claude-sonnet', agentKind: 'cc', sdkSessionId: 'native-a', agentDeviceId: 'peer' };
+    const check = () => needsSubscriptionAccountHandoff('task', row);
+    const timeout = Object.assign(new Error('no result within 30000ms'), { code: 'INVOKE_TIMEOUT' });
+    const denied = Object.assign(new Error('not allowed'), { code: 'FORBIDDEN' });
+    h.remote.mockRejectedValueOnce(timeout).mockRejectedValueOnce(denied).mockRejectedValueOnce(timeout);
+    await expect(withRemoteAccountReads(check)).rejects.toBeInstanceOf(RemoteAccountReadUnavailable);
+    await expect(withRemoteAccountReads(check)).rejects.toBe(denied);
+    await expect(check()).rejects.toBe(timeout);
   });
 
   it('checks the executing computer for a paused remote task and leaves shared providers alone', async () => {
@@ -6251,6 +6279,147 @@ describe('unbound Codex history account recovery', () => {
       expect(h.bindings.size).toBe(0);
       if (failure !== 'rebuild-failed') expect(deps.rebuild).not.toHaveBeenCalled();
     });
+});
+
+// #12183, unit with synthetic storage and native engine. The allocator tests do not
+// cover the Desktop switch bootstrapping twice through the account wrapper. A transferred
+// native ID and a pool without default must still deliver the next input with full context.
+describe('Desktop handoff to a Claude pool without default', () => {
+  it.each([
+    { initial: 'unbound', reason: 'manual', candidate: 'same-pool' },
+    { initial: 'removed-default', reason: 'quota', candidate: 'same-pool' },
+    { initial: 'removed-default', reason: 'quota', candidate: 'signed-out' },
+    { initial: 'removed-default', reason: 'quota', candidate: 'different-pool' },
+    { initial: 'removed-default', reason: 'quota', candidate: 'outside-grant' },
+  ] as const)('starts the replacement only when available ($initial, $reason, $candidate)', async ({
+    initial, reason, candidate,
+  }) => {
+    const task = 'incoming-task';
+    const oldNative = 'transferred-native';
+    const newNative = 'replacement-native';
+    const model = 'claude-sonnet-5-5';
+    const history = 'Previous turn on the source computer.';
+    const input = 'Continue from there.';
+    const workingDir = '/synthetic-project';
+    h.pools.anthropic = { strategy: 'order', accounts: [account('second')] };
+    if (candidate === 'signed-out') h.read.mockResolvedValue({ authenticated: false });
+    if (candidate === 'different-pool') h.placement['anthropic:second'] = 'anthropic-sub-bbbbbbbb';
+    const originalBinding = initial === 'removed-default'
+      ? { providerId: 'anthropic' as const, accountId: 'default' }
+      : undefined;
+    if (originalBinding) {
+      h.bindings.set(`task:${task}`, originalBinding);
+      h.bindings.set(`native:${oldNative}`, originalBinding);
+    }
+    const bindings = () => [`task:${task}`, `native:${oldNative}`]
+      .map(key => readAccountBinding(key, 'anthropic')?.accountId);
+
+    const send = vi.fn(async (_message: unknown) => {});
+    const nativeStart = vi.fn(async (_options: StartSessionOptions) =>
+      ({ id: newNative, send, close: async () => {} }) as unknown as AgentSessionHandle);
+    const agent = withSubscriptionAccounts({ kind: 'claude-code', startSession: nativeStart } as unknown as BaseAgent);
+    const row: AgentSwitchSessionRow = {
+      id: task, status: 'active', agentKind: 'cc', model, providerId: 'anthropic',
+      agentDeviceId: 'source-computer', remoteHostId: null, orcaRole: null,
+      sdkSessionId: 'source-native', workingDir,
+    };
+    let live: AgentSessionHandle | undefined;
+    let pendingHandoff: string | undefined;
+    const attempts: Array<{ resume: string | null; bindings: Array<string | undefined>; error?: string }> = [];
+    const deps: MakerSessionAgentSwitchHandlerDeps = {
+      getSessionRow: async () => ({ ...row }),
+      getLiveSession: () => live && { sdkSessionId: live.id, isTurnRunning: () => false },
+      closeSession: async () => { await live?.close(); live = undefined; },
+      withCloseSuppressed: (_id, run) => run(),
+      relocateNativeHistory: async () => oldNative,
+      listMessagesForHandoff: async () => [{ role: 'assistant', content: history, createdAt: 1 }],
+      applyAgentSwitchToDb: async (_id, patch) => { Object.assign(row, patch); },
+      setSessionProvider: (_id, providerId) => { row.providerId = providerId; },
+      insertBoundaryMessage: async () => 'handoff-boundary',
+      applyResumeFallbackAtomically: async () => { row.sdkSessionId = null; },
+      setPendingHandoff: (_id, handoff) => { pendingHandoff = handoff; },
+      bootstrapSwitchedSession: async () => {
+        const resume = row.sdkSessionId;
+        let error: string | undefined;
+        try {
+          live = await agent.startSession({ sessionId: task, providerId: row.providerId,
+            workingDir, model, resumeSessionId: resume ?? undefined,
+            ...(candidate === 'outside-grant' ? { deviceHosted: {
+              workingDir, extraDirs: [], writableDirs: [], platform: 'darwin', shell: '/bin/zsh',
+              isGitRepo: false, tunnelUrl: 'http://tunnel.invalid', tunnelToken: 'synthetic-token',
+              mcpServers: [], guest: true,
+              guestProvider: { providerId: 'other-provider', routeToken: 'synthetic-grant', modelIds: [model] },
+            } } : {}),
+          });
+        } catch (failure) {
+          error = failure instanceof Error ? failure.message : String(failure);
+          throw failure;
+        } finally {
+          attempts.push({ resume, bindings: bindings(), error });
+        }
+      },
+      log: { info() {}, warn() {} },
+    };
+
+    try {
+      const result = await performSessionAgentSwitch(deps, {
+        sessionId: task, targetAgentKind: 'claude-code', model, providerId: 'anthropic',
+        agentDeviceId: null, applyNow: true,
+        ...(reason === 'quota' ? { providerGroupSwitchReason: 'quota-rebalance' as const } : {}),
+      });
+      if (live && pendingHandoff) {
+        const content = prependHandoffToUserMessage(input, pendingHandoff);
+        if (typeof content !== 'string') throw new Error('Expected a text handoff');
+        await live.send({ type: 'user', content });
+      }
+      const shouldStart = candidate === 'same-pool';
+      expect.soft(result.engineReady, JSON.stringify(attempts)).toBe(shouldStart);
+      expect.soft(attempts.map(attempt => attempt.resume)).toEqual([oldNative, null]);
+      expect.soft(attempts[0]).toMatchObject({
+        bindings: [originalBinding?.accountId, originalBinding?.accountId],
+        error: expect.stringMatching(/SUBSCRIPTION_ACCOUNT_UNAVAILABLE|Subscription account was removed/),
+      });
+      expect.soft(bindings()).toEqual([shouldStart ? 'second' : originalBinding?.accountId, originalBinding?.accountId]);
+      expect.soft(readAccountBinding(`native:${newNative}`, 'anthropic')?.accountId).toBe(shouldStart ? 'second' : undefined);
+      expect.soft(nativeStart.mock.calls.map(([options]) => options[NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir))
+        .toEqual(shouldStart ? ['anthropic/second'] : []);
+      expect.soft(h.read.mock.calls.some(([, directory]) => directory === 'anthropic/default')).toBe(false);
+      expect.soft(send.mock.calls).toHaveLength(shouldStart ? 1 : 0);
+      if (shouldStart) {
+        expect(send).toHaveBeenCalledWith({ type: 'user', content: expect.stringContaining(history) });
+        expect(send).toHaveBeenCalledWith({ type: 'user', content: expect.stringContaining(input) });
+      }
+      if (candidate === 'outside-grant') expect(attempts[1]?.error).toContain('REMOTE_AGENT_PROVIDER_NOT_ALLOWED');
+    } finally {
+      await live?.close();
+    }
+  });
+
+  it.each(['new-task', 'bound-resume'] as const)(
+    'keeps the original start route for %s', async scenario => {
+      const task = 'local-task';
+      const native = 'local-native';
+      const resumeSessionId = scenario === 'new-task' ? undefined : native;
+      const originalBinding = { providerId: 'anthropic' as const, accountId: 'second' };
+      if (scenario === 'bound-resume') {
+        h.bindings.set(`task:${task}`, originalBinding);
+        h.bindings.set(`native:${native}`, originalBinding);
+      }
+      h.pools.anthropic!.accounts.shift();
+      const start = vi.fn(async (_options: StartSessionOptions) => ({ id: native, close: async () => {} }));
+      const agent = withSubscriptionAccounts({ kind: 'claude-code', startSession: start } as unknown as BaseAgent);
+      const handle = await agent.startSession({ sessionId: task, providerId: 'anthropic',
+        workingDir: '/synthetic-project', model: 'claude-sonnet-5-5', resumeSessionId });
+      try {
+        expect(readAccountBinding(`task:${task}`, 'anthropic')).toEqual(originalBinding);
+        expect(readAccountBinding(`native:${native}`, 'anthropic')).toEqual(originalBinding);
+      } finally {
+        await handle.close();
+      }
+      expect(start.mock.calls.map(([options]) => [options.resumeSessionId, options[NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir]))
+        .toEqual([[resumeSessionId, 'anthropic/second']]);
+    },
+  );
 });
 
 // Unit regression (2026-11-11): retry reused a disabled account despite another account

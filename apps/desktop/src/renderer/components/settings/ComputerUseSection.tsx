@@ -81,6 +81,7 @@ import {
   confirmEnableRealProfile,
   guideFullDiskAccessAfterReadDenied,
 } from './realProfilePermissionGuide';
+import { ResetGroupButton } from '@/components/ui/reset-buttons';
 
 const log = createLogger('ComputerUseSection');
 
@@ -1669,7 +1670,11 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
           </p>
         ) : null}
         <p className={SETTINGS_HINT}>
-          {t('settings.computerUse.browser.toggleHint')}
+          {t(
+            workingDir
+              ? 'settings.computerUse.browser.toggleHint'
+              : 'settings.computerUse.browser.userDefaultToggleHint',
+          )}
         </p>
       </SettingsSection>
 
@@ -2194,16 +2199,11 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
                 >
                   {t('settings.computerUse.android.adb.save')}
                 </Button>
-                <Button data-setting-id={computerUseSettings.androidAdbTitle.id}
-                  variant="secondary"
-                  size="sm"
-                  className="px-3"
-                  type="button"
+                <ResetGroupButton data-setting-id={computerUseSettings.androidAdbTitle.id}
                   onClick={() => void handleUseDefaultAndroidAdbPath()}
                   disabled={androidAdbPathBusy}
-                >
-                  {t('settings.computerUse.android.adb.useDefault')}
-                </Button>
+                  label={t('settings.computerUse.android.adb.useDefault')}
+                />
               </div>
             }
           />

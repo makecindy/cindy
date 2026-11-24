@@ -431,6 +431,7 @@
       "description": "Sólo limita el uso remoto. El uso local no cambia. Los cambios guardados se aplican al crear una tarea, cambiar de modelo o enviar el siguiente mensaje.",
       "all": "Todos los modelos",
       "selected": "{{count}} modelos permitidos",
+      "selectionExcludesModels": "Hay modelos sin seleccionar. Para permitir los que se añadan en el futuro, selecciónalos manualmente.",
       "choose": "Elige modelos",
       "memberTitle": "Modelos permitidos",
       "memberDescription": "Elige qué modelos puede usar {{name}}, dentro de los modelos abiertos para uso remoto. Estos límites también se aplican al uso que esta persona vuelva a compartir.",
@@ -1995,6 +1996,7 @@
       },
       "footnote": "Fase A: solo administración de conexiones SSH. Una actualización posterior permitirá ejecutar Agents en la computadora remota.",
       "viaAuth": "vía {{label}}",
+      "managedAliasConflict": "Este alias SSH está definido tanto en la configuración que gestiona Cindy como en una configuración externa. Los detalles de conexión son de solo lectura y no puedes quitar este host aquí.",
       "readOnlyFromSshConfig": "Los detalles de conexión provienen de la configuración SSH.",
       "importedAgentHint": "Se autentica mediante el agente local de claves SSH (ssh-agent). Poder conectar con ssh desde la terminal no garantiza que el agente esté listo.",
       "agentError": {
@@ -2260,6 +2262,13 @@
       }
     },
     "appearance": {
+      "chatLayout": {
+        "label": "Diseño del chat",
+        "standard": "Estándar",
+        "wide": "Ancho",
+        "width": "Ancho del contenido",
+        "hint": "Se calcula sobre el espacio entre los márgenes del chat. Los paneles estrechos se ajustan automáticamente."
+      },
       "title": "Apariencia",
       "modeLabel": "Modo de apariencia",
       "appIcon": {
@@ -2505,6 +2514,10 @@
       }
     },
     "windowBehavior": {
+      "trayCard": {
+        "label": "Tarjeta de la bandeja del sistema",
+        "hint": "Sitúa el puntero sobre el icono de Cindy en la bandeja para ver la cuota restante y las tareas sin leer."
+      },
       "menubar": {
         "label": "Mostrar el uso restante en la barra de menú",
         "hint": "Agrega un icono de Cindy a la barra de menús de macOS. Haz clic en él para ver lo que te queda de tus suscripciones, tu saldo de Cindy y el uso de hoy."
@@ -2850,7 +2863,8 @@
         "errorBusy": "Ya hay una carga en progreso, espera",
         "errorFailed": "Error al cargar el registro. Comprueba tu red y vuelve a intentarlo.",
         "unavailableNotConfigured": "La carga de registros no está configurada en esta compilación.",
-        "unavailableNoConsent": "Primero debes aceptar la Política de privacidad."
+        "unavailableNoConsent": "Primero debes aceptar la Política de privacidad.",
+        "consentPrompt": "Antes de subir los registros, lee la <policy>Política de privacidad</policy> y selecciona <accept>Aceptar</accept>."
       },
       "openLogsDirError": "No se pudo abrir el directorio de registros",
       "autoUpdateLabel": "Instalar actualizaciones mientras está inactivo",
@@ -2897,6 +2911,14 @@
         "projectsRootReset": "Restaurar ubicación sugerida",
         "projectsRootDescription": "Aquí se crean las carpetas de proyecto cuando creas un proyecto desde una sesión. Si no se define, se sugiere una ubicación según tus proyectos existentes.",
         "projectsRootFailed": "No se pudo actualizar la ubicación de nuevos proyectos",
+        "taskExportDirectoryTitle": "Ubicación de exportación de sesiones",
+        "taskExportDirectoryUnset": "Preguntar cada vez",
+        "taskExportDirectoryMissing": "No se encontró la carpeta",
+        "taskExportDirectoryUnreadable": "No se puede leer el ajuste",
+        "taskExportDirectoryChoose": "Elegir directorio",
+        "taskExportDirectoryReset": "Volver a preguntar cada vez",
+        "taskExportDirectoryDescription": "Si se define, las sesiones que exporta el Agent se guardan aquí sin preguntar la ubicación y nunca se reemplazan archivos existentes. Si no se define, eliges la ubicación en cada exportación.",
+        "taskExportDirectoryFailed": "No se pudo actualizar la ubicación de exportación de sesiones",
         "dialogueDirectoryOpen": "Abrir directorio",
         "dialogueDirectoryChoose": "Cambiar directorio",
         "dialogueDirectoryReset": "Restaurar ubicación predeterminada",
@@ -3452,6 +3474,7 @@
       "description": "Trae sesiones de otras herramientas de programación con IA a Cindy y sigue trabajando. Cindy solo lee los originales y nunca los modifica.",
       "rescan": "Buscar de nuevo",
       "allSources": "Todos los orígenes",
+      "sourceFilterAria": "Origen",
       "search": "Buscar sesiones o carpetas",
       "projectFilter": "Solo {{name}}",
       "clearProjectFilter": "Mostrar todos los proyectos",
@@ -5244,6 +5267,7 @@
       "formHint": "El ID de usuario es numérico; escribe a @userinfobot por mensaje directo para consultar tu ID.",
       "connect": "Conectar",
       "connectingAction": "Conectando…",
+      "connectTimedOut": "Se agotó el tiempo de conexión. Vuelve a intentarlo.",
       "errorCode": {
         "invalid-token": "El token del bot no es válido o se restableció: vuelve a introducirlo",
         "provider-api": "Telegram devolvió un error; inténtalo de nuevo en breve",
@@ -5975,7 +5999,8 @@
         "title": "Automatización del navegador",
         "description": "Un navegador para los Agents, separado de tu Chrome habitual",
         "toggleAria": "Alternar automatización del navegador",
-        "toggleHint": "Solo se aplica a las nuevas sesiones de Agent.",
+        "toggleHint": "El ajuste del navegador de este proyecto se aplica al iniciar o reiniciar sus sesiones de Agent.",
+        "userDefaultToggleHint": "Al cambiar el valor predeterminado del navegador, Codex local se actualiza automáticamente cuando queda inactivo. Se conservan tus sesiones y el historial del chat. Codex vuelve a cargar los ajustes de todas las herramientas integradas y da prioridad a los del proyecto. Pi y los demás Agents aplican el valor predeterminado del navegador al iniciar o reiniciar sus sesiones.",
         "noProjectHint": "Abre Configuración desde una sesión de proyecto para activar o desactivar la automatización del navegador en ese proyecto.",
         "detected": "Detectado {{browser}}",
         "notDetected": "No se detectó ningún navegador local. Instala Chrome para usar la automatización del navegador.",
@@ -6256,15 +6281,15 @@
     },
     "builtinTools": {
       "title": "Herramientas integradas",
-      "description": "Establece los valores predeterminados para las sesiones nuevas o personalízalos para un proyecto. La configuración del proyecto tiene prioridad.",
+      "description": "Establece los valores predeterminados de las herramientas o personalízalos para un proyecto. La configuración del proyecto tiene prioridad.",
       "empty": "No hay herramientas disponibles.",
       "toggleAria": "Activar o desactivar la herramienta {{name}}",
-      "toggleHint": "Los cambios solo se aplican a las sesiones de Agent nuevas o reiniciadas. Las sesiones en ejecución no se ven afectadas.",
+      "toggleHint": "Las sesiones de Agent nuevas o reiniciadas adoptan estos ajustes de herramientas.",
       "loadFailed": "No se pudo cargar la lista de herramientas",
       "scopePicker": {
         "ariaLabel": "Cambiar el ámbito de configuración de las herramientas integradas",
-        "userDefault": "Valores predeterminados para sesiones nuevas",
-        "userDefaultDescription": "Se usa en sesiones nuevas sin configuración específica del proyecto"
+        "userDefault": "Valores predeterminados de las sesiones de Agent",
+        "userDefaultDescription": "Se aplican si el proyecto no tiene su propia configuración"
       },
       "source": {
         "project": "proyecto",
@@ -8283,6 +8308,7 @@
           "official": "Oficial",
           "community": "Comunidad"
         },
+        "communityDisclaimer": "Este complemento lo desarrollan y mantienen miembros de la comunidad. Cindy ha revisado esta versión, pero no puede garantizar que sea seguro en todas las situaciones de uso.",
         "publisherDescription": {
           "official": "Publicado y mantenido por Cindy",
           "community": "Publicado y mantenido por desarrolladores de la comunidad",
@@ -8398,7 +8424,7 @@
             "authTitle": "Repositorios privados",
             "authBody": "La autenticación depende por completo de la configuración de Git de tu sistema: Cindy nunca almacena credenciales de Git. SSH: debes tener una clave funcional configurada en este equipo; si la organización exige SAML SSO, autoriza la clave para esa organización mediante Configure SSO en la configuración de claves SSH de GitHub. HTTPS: usa un Personal Access Token almacenado por el asistente de credenciales del sistema.",
             "rulesTitle": "Reglas de instalación",
-            "rulesBody": "Los identificadores de los complementos son únicos a nivel global y se asignan por orden de llegada; los conflictos con complementos instalados se señalan explícitamente. Los complementos cuyos identificadores usan los prefijos oficiales reservados ({{reservedGhostIdPrefixes}}) no se pueden instalar arrastrando un paquete, eligiendo un archivo ni usando un mercado de complementos personalizado. Los permisos declarados se muestran en la página de detalles; al hacer clic en Instalar, se completa la instalación y se habilita el complemento sin otro diálogo de confirmación de permisos.",
+            "rulesBody": "Los identificadores de los complementos son únicos a nivel global y se asignan por orden de llegada; los conflictos con complementos instalados se señalan explícitamente. Los complementos cuyos identificadores usan los prefijos oficiales reservados ({{reservedGhostIdPrefixes}}) no se pueden instalar arrastrando un paquete, eligiendo un archivo ni usando un mercado de complementos personalizado. Los permisos declarados se muestran en la página de detalles. Al instalar un complemento manualmente por primera vez, Cindy te pide que confirmes los permisos solicitados. El complemento se habilita automáticamente después de la instalación.",
             "copy": "Copiar guía",
             "copied": "Guía copiada al portapapeles.",
             "copyFailed": "No se pudo copiar. Inténtalo de nuevo."
@@ -8515,6 +8541,8 @@
         "installMeta": "Versión {{version}} · {{source}}",
         "updateMeta": "Versión {{from}} → {{to}} · {{source}}",
         "installDescription": "No se instala nada hasta que confirmes. El complemento se activa justo después de instalarse y puedes desactivarlo o desinstalarlo cuando quieras en la página Complementos.",
+        "customMarketSourceNotice": "Asegúrate de que confías en este mercado y revisa los permisos que solicita el complemento.",
+        "localFileSourceNotice": "Antes de continuar, comprueba que el archivo procede de una fuente de confianza.",
         "updateDescription": "La actualización comienza solo cuando confirmes. La versión actual seguirá disponible hasta entonces.",
         "grantsTitle": "Después de la instalación tendrá:",
         "noPermissions": "Este complemento no declara permisos adicionales.",
@@ -8757,6 +8785,8 @@
         "liveScreenDetail": "A través del escritorio remoto, tu teléfono o tus otros ordenadores pueden mostrar las pantallas de dispositivos que ofrece (como simuladores) y enviarles toques, botones y texto. Solo se conecta cuando lo abres desde uno de esos dispositivos y no muestra nada más de este ordenador.",
         "preview": "Puede abrir páginas de vista previa de los siguientes sitios en el navegador de la barra lateral",
         "previewDetail": "Solo se pueden abrir los sitios que se enumeran a continuación; cada página que abre se atribuye a este complemento.",
+        "fileOpener": "Puede abrir los tipos de archivo siguientes cuando los abres desde Cindy",
+        "fileOpenerDetail": "El complemento recibe la ruta completa del archivo y lo abre en lugar de tu aplicación predeterminada; si no puede, lo abre la aplicación predeterminada. Puedes desactivarlo en los detalles del complemento.",
         "browserExtension": "Permite que su extensión de navegador incluida se conecte a Cindy",
         "browserNativeHost": "Puede registrar la conexión de navegador “{{name}}”",
         "browserNativeHostDetail": "El programa registrado se ejecuta fuera del entorno aislado y accede al equipo con tu cuenta y los permisos del sistema.",
@@ -8998,6 +9028,8 @@
         "configurationTitle": "Configuración",
         "sidebarEntryTitle": "Entrada de navegación",
         "showInSidebar": "Mostrar en la navegación izquierda",
+        "fileOpenerTitle": "Abrir archivos con este complemento",
+        "fileOpenerDescription": "Cuando abres archivos {{extensions}} desde Cindy, {{name}} los abre en lugar de tu aplicación predeterminada. Los archivos de otros equipos se siguen abriendo con la aplicación predeterminada.",
         "sidebarEntryDescription": "Al activar esta opción, “{{title}}” aparece en la navegación izquierda junto a Automatizaciones y Complementos, ya sea en la parte superior o en Más. Elige dónde en Más → Personalizar. Ocultarlo no desactiva el complemento.",
         "openTool": "Ver detalles de la herramienta {{name}}",
         "noToolDescription": "No hay una descripción disponible para esta herramienta.",
@@ -12623,6 +12655,8 @@
       "transferBusy": "{{name}} todavía está trabajando en una respuesta. Muévelo después de que termine la respuesta.",
       "targetUnavailable": "“{{device}}” no está disponible. Debe estar en línea y tener el control remoto activado",
       "targetOutdated": "“{{device}}” ejecuta una versión antigua de Cindy que aún no puede ejecutar a {{name}}. Actualiza Cindy allí primero",
+      "skillTargetOutdated": "Una Habilidad de {{name}} tiene un contenido de más de 64 KB que la versión antigua de Cindy en “{{device}}” no puede recibir. Actualiza Cindy en ese ordenador antes de mover a tu amigo. Tu amigo sigue en el ordenador original",
+      "skillTargetOutdated_skill": "La versión antigua de Cindy en «{{device}}» no puede recibir la habilidad «{{slug}}». Su contenido ocupa {{bodyBytes, number}} bytes y supera el límite de 64 KB. {{name}} sigue en el ordenador original. Actualiza Cindy en el ordenador de destino y vuelve a intentarlo.",
       "targetOutdatedItem": "Mover a “{{device}}” · Cindy antigua",
       "targetOutdatedMeta": "Cindy antigua",
       "olderTargetNote": "“{{device}}” ejecuta una versión antigua de Cindy, así que {{name}} funcionará allí como antes: el historial del chat se sigue sincronizando, pero las reglas y automatizaciones del proyecto no se aplican allí.",
@@ -12866,6 +12900,7 @@
           "conflict": "Este bot ya está conectado en esta computadora, en Configuración → Bots de mensajería instantánea o en otro amigo.",
           "botUnavailable": "{{name}} no está disponible en este momento. Inténtalo cuando vuelva.",
           "connectFailed": "No se pudo conectar: {{reason}}",
+          "connectTimedOut": "Se agotó el tiempo de conexión. Vuelve a intentarlo.",
           "failed": "No se pudo terminar. Inténtalo más tarde.",
           "personalBotGone": "Este bot ya no está configurado en Configuración → Bots de mensajería instantánea. Ingresa sus credenciales."
         },
@@ -14742,6 +14777,7 @@
       "missingDir": "Carpeta no encontrada"
     },
     "pendingQueue": {
+      "waitingForDevice": "Sin enviar · Se enviará cuando el otro equipo se reconecte",
       "stopping": "Parando",
       "queued": "En cola",
       "editingInComposer": "Editando en el cuadro de entrada a continuación…",
@@ -15506,6 +15542,7 @@
       "codexHelperUnverified": "No se pudo comprobar si cindy_helper está disponible en esta tarea. Es posible que no se pueda comunicar el resultado de la tarea.",
       "requestFormatError": "La aplicación envió una solicitud no válida, por lo que no se pudo completar esta respuesta.",
       "replyFailed": "No se pudo completar la respuesta",
+      "queuedSendRecovery": "Tu mensaje no se envió. Selecciona «Reintentar» para enviarlo tal cual. Si envías un mensaje nuevo, reemplazará al anterior.",
       "retryTitle": "Reenviar el último mensaje",
       "cancelTitle": "Cerrar aviso de error",
       "retry": "Reintentar",
@@ -15632,12 +15669,13 @@
       "actionExpired": "La autorización de la sesión para esta acción ha caducado. Consulta la última ejecución de la automatización.",
       "actionRecovered": "La autorización para esta acción caducó. La misma automatización se ejecutó correctamente más tarde.",
       "text": "Error en la ejecución automática.",
-      "prCheck_dns": "{{device}} no pudo resolver {{host}}. Si el problema persiste, comprueba la red o el DNS de ese dispositivo. Fallos consecutivos: {{failures}}. Próxima comprobación automática: {{retry}}.",
-      "prCheck_timeout": "La conexión a GitHub agotó el tiempo de espera en {{device}}. Fallos consecutivos: {{failures}}. Próxima comprobación automática: {{retry}}.",
-      "prCheck_auth": "Vuelve a iniciar sesión en GitHub en {{device}}. Fallos consecutivos: {{failures}}. Próxima comprobación automática: {{retry}}.",
-      "prCheck_rate-limit": "GitHub limitó las solicitudes de {{device}}. Fallos consecutivos: {{failures}}. Próxima comprobación automática: {{retry}}.",
-      "prCheck_unknown": "Falló la comprobación de la PR en {{device}}. Consulta los detalles de la ejecución. Fallos consecutivos: {{failures}}. Próxima comprobación automática: {{retry}}.",
+      "prCheck_dns": "{{device}} no pudo resolver {{host}}. Si el problema persiste, comprueba la red o el DNS de ese dispositivo. Fallos consecutivos: {{failures}}. Las comprobaciones programadas podrán reintentarse a partir de {{retry}}.",
+      "prCheck_timeout": "La conexión a GitHub agotó el tiempo de espera en {{device}}. Fallos consecutivos: {{failures}}. Las comprobaciones programadas podrán reintentarse a partir de {{retry}}.",
+      "prCheck_auth": "Vuelve a iniciar sesión en GitHub en {{device}}. Fallos consecutivos: {{failures}}. Las comprobaciones programadas podrán reintentarse a partir de {{retry}}.",
+      "prCheck_rate-limit": "GitHub limitó las solicitudes de {{device}}. Fallos consecutivos: {{failures}}. Las comprobaciones programadas podrán reintentarse a partir de {{retry}}.",
+      "prCheck_unknown": "Falló la comprobación de la PR en {{device}}. Consulta los detalles de la ejecución. Fallos consecutivos: {{failures}}. Las comprobaciones programadas podrán reintentarse a partir de {{retry}}.",
       "precheck": "Los controles automáticos están bloqueados temporalmente.",
+      "preRunBlocked": "La comprobación previa falló. Esta ejecución no se inició.",
       "rateLimited": "Los controles automáticos están bloqueados temporalmente por un límite de frecuencia de solicitudes.",
       "pluginMissing": "Los controles automáticos están bloqueados: el complemento {{name}} no está instalado. Se reanudarán al instalarlo.",
       "pluginMissingUnnamed": "Los controles automáticos están bloqueados: un complemento necesario no está instalado. Se reanudarán al instalarlo.",
@@ -16305,6 +16343,7 @@
       "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "No se pudo compactar el contexto al cambiar de modelo porque esta conexión no permite usar el modelo anterior.",
       "MODEL_SELECTION_UNAVAILABLE": "El modelo seleccionado ya no está disponible en su proveedor. Comprueba la conexión en Ajustes o elige otro modelo disponible.",
       "MODEL_CATALOG_UNCONFIRMED": "No se ha podido confirmar la lista de modelos. Se ha conservado el modelo seleccionado. Actualiza la lista de modelos y vuelve a intentarlo.",
+      "SNAPSHOT_DISPATCH_INTENT_TIMEOUT": "No se envió el mensaje. Cindy no pudo confirmar a tiempo el registro de seguridad.",
       "HARNESS_SWITCH_NOT_READY": "El cambio de Harness aún no está listo. Revisa los detalles del error y vuelve a intentarlo cuando el Harness esté listo.",
       "DEVICE_LINK_BUSY": "La computadora remota está ocupada. Vuelve a intentarlo en breve.",
       "REMOTE_DAEMON_CLOSED": "La conexión remota se interrumpió, posiblemente durante una actualización. Este turno ha terminado. Envía el mensaje nuevamente.",
@@ -16616,7 +16655,13 @@
       "open": "Abrir la tarea «{{title}}»",
       "untitled": "Tarea sin título",
       "startedOne": "Iniciada",
-      "handedToOne": "Encargada a"
+      "handedToOne": "Encargada a",
+      "status": {
+        "running": "En ejecución",
+        "needsAction": "Esperando tu acción",
+        "error": "Error",
+        "idle": "Inactiva"
+      }
     },
     "botTaskLetter": {
       "replied": "respondió",
@@ -17863,15 +17908,15 @@
   "scheduler": {
     "prTrigger": {
       "fallback": "Las comprobaciones programadas continúan sin notificaciones de GitHub App.",
-      "label": "PR",
-      "url": "URL de la pull request",
+      "label": "PR / MR",
+      "url": "URL de PR o MR",
       "condition": "Ejecutar cuando",
-      "any": "Actividad de la PR",
+      "any": "Actividad",
       "merged": "Fusión",
       "review": "Actividad de revisión",
       "ci": "Cambios de CI",
       "timed": "Comprobar también periódicamente",
-      "invalid": "Introduce la URL de una pull request de GitHub."
+      "invalid": "Introduce la URL de una PR de GitHub o una MR de GitLab."
     },
     "presentation": {
       "status": {
@@ -22843,6 +22888,10 @@
       "separator": "; "
     },
     "settings": {
+      "autoSwitch": {
+        "title": "Cambiar de fuente automáticamente si falla",
+        "hint": "Cuando falla la fuente que usa este modo, pasar a la siguiente disponible y anotarlo bajo ese turno. Si está desactivado, solo se propone el cambio en el error."
+      },
       "newRoute": "Nuevo modo",
       "newRouteName": "Nuevo modo",
       "routesEmpty": "Aún no hay modos. Crea uno y añade varias fuentes.",

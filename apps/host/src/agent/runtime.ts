@@ -916,6 +916,9 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         // As the desktop (pi-host.ts): the shared resolver with the Host's ports (pi-native-providers.ts),
         // and the Cindy gateway block's API and compat from the same probe state.
         resolvePiNativeProviders: (ctx) => piNativeProviders.resolvePiNativeProviders(ctx),
+        // #12298: the Host's own subscription connection state (read-only), so subagent
+        // routes skip a source the Host knows is disconnected.
+        isNativeProviderSourceConnected: piNativeProviders.subscriptionSourceConnected,
         // As the desktop (pi-host.ts): durable Subagent runners, forked as Node child processes (pi-subagent-runner.ts).
         spawnPiSubagentRunner: (request) => spawnHostPiSubagentRunner(request),
         resolvePiManagedPackageResources: piPackages.deps.resolvePiManagedPackageResources,

@@ -516,6 +516,7 @@ export function SessionContentHeader({
         (dirtyWorktree ? ' ' + t('ccAgent.sidebar.confirmDelete.dirtyWorktreeWarning') : ''),
       confirmText: t('ccAgent.sidebar.confirmDelete.confirm'),
       cancelText: t('ccAgent.sidebar.confirmDelete.cancel'),
+      confirmVariant: 'destructive',
     });
     if (!ok) return;
     const visibleSessionIds = getVisibleSidebarSessionIds();

@@ -182,6 +182,24 @@ describe('MarketPluginDetailView', () => {
   it('presents server catalog permissions before the package is downloaded', () => {
     renderDetail();
     expect(screen.getByText('settings.ghosts.perm.grantsTitle')).toBeTruthy();
+    expect(screen.queryByText('settings.ghosts.installConsent.customMarketSourceNotice')).toBeNull();
+    expect(screen.queryByText('settings.ghosts.market.communityDisclaimer')).toBeNull();
+  });
+
+  it('uses the source line under the detail header for the community disclaimer', () => {
+    renderDetail({ publisherKind: 'personal' });
+    const action = screen.getByRole('button', { name: 'settings.ghosts.market.install' });
+    const notice = screen.getByText('settings.ghosts.market.communityDisclaimer');
+    expect(action.getAttribute('aria-describedby')).toBe(notice.id);
+    expect(notice).toBe(action.closest('.plugin-detail-hero')?.nextElementSibling);
+    expect(screen.queryByText('settings.ghosts.market.publisherDescription.community')).toBeNull();
+  });
+
+  it('places the custom marketplace source notice in the install and permissions section', () => {
+    renderDetail({ sourceType: 'git-market', sourceMarketName: 'Example marketplace' });
+    const heading = screen.getByRole('heading', { name: 'settings.ghosts.market.securityTitle' });
+    const notice = screen.getByText('settings.ghosts.installConsent.customMarketSourceNotice');
+    expect(notice.closest('section')).toBe(heading.closest('section'));
   });
 
   it('offers an explicit same-id replacement and binds its explanation to the action', () => {

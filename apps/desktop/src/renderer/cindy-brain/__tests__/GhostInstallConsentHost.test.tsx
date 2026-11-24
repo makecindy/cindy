@@ -190,6 +190,28 @@ describe('GhostInstallConsentHost', () => {
     expect(unsubscribe).toHaveBeenCalledTimes(2);
   });
 
+  it.each([
+    ['custom-market', undefined, 'settings.ghosts.installConsent.customMarketSourceNotice'],
+    ['local-file', undefined, 'settings.ghosts.installConsent.localFileSourceNotice'],
+    ['market', true, 'settings.ghosts.market.communityDisclaimer'],
+    ['market', undefined, null],
+    ['forge', undefined, null],
+  ] as const)('shows only the relevant %s source notice (community: %s) above permissions', async (origin, communityMarket, key) => {
+    render(<GhostInstallConsentHost />);
+    await act(async () => push?.({
+      requestId: origin, initiator: 'user', origin, communityMarket,
+      facts: { kind: 'install', ghostId: 'demo', name: 'Demo', version: '1', permissions: [HOST] },
+    }));
+    const { content } = mocks.confirm.mock.calls[0][0];
+    const view = render(content);
+    const permissions = screen.getByRole('heading', { name: 'settings.ghosts.installConsent.grantsTitle' });
+    const notices = view.queryAllByText(/settings\.ghosts\.(installConsent\..*SourceNotice|market\.communityDisclaimer)/);
+    expect(notices.map(notice => notice.textContent)).toEqual(key ? [key] : []);
+    if (notices[0]) {
+      expect(notices[0].compareDocumentPosition(permissions) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+  });
+
   // #9496 exposed protocol subjects/JSON in consent. Existing tests only cover
   // ordinary permissions. Unit: render real consent with one host declaration;
   // presentation must change without mutating the exact approval projection.

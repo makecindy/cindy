@@ -1064,6 +1064,18 @@ describe('hook session 精确接管边界', () => {
     expect(info?.resumableArchive === true).toBe(canResume);
   });
 
+  // PR #12405: a shared project can contain a private teammate task. Ordinary hook
+  // routing must distinguish it even when active; archived/remote cases don't cover this (unit).
+  it('identifies teammate-owned tasks during hook target inspection', async () => {
+    const { getSessionRowSnapshotStrict } = await import('../../localDb/ipc/sessions.js');
+    vi.mocked(getSessionRowSnapshotStrict).mockResolvedValueOnce({
+      status: 'active', source: 'bot', workingDir: '/repo', title: null, userSendAt: 1,
+      workspaceKind: 'project', providerId: null,
+    });
+    await expect(createMakerHookSessionRunner({ log }).inspect('companion'))
+      .resolves.toMatchObject({ companionOwned: true });
+  });
+
   it('拒绝接管 SSH 远程会话和内部 worker 会话', async () => {
     const { getSessionRowSnapshot } = await import('../../localDb/ipc/sessions.js');
     vi.mocked(getSessionRowSnapshot)

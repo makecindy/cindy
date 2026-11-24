@@ -5,6 +5,7 @@ import { isBotGroupInTaskClientId } from '../../../shared/botGroupChat.js';
 import { isShadowedCompanionSession } from '../botSessionInputGuard.js';
 import { createScheduledModelScope } from '../scheduledModelSelection.js';
 import { assertTaskActionCurrent, hasTaskActionAuthorization } from '../taskActionAuthorization.js';
+import { withRemoteAccountReads } from '../../subscription-accounts/remotePreflight.js';
 /**
  * #5788:插件 errand 派活走 sendToSessionInternal 的 lazy-resume 时,必须按会话落库的
  * 权限档恢复,不能落到 main 侧通路的缺省 bypass。否则插件任务被提权,errand 复用判定也会
@@ -447,7 +448,7 @@ it('advances an accepted send_to_session with a dispatcher without touching huma
 // public group timeline. Guard tier executes the real handoff and group-dispatch
 // closures; existing permission tests did not cover role=group or false receipts.
 describe('external handoff to hidden group lanes', () => {
-  function groupHarness(live: boolean) {
+  function groupHarness(live: boolean, overrides: Record<string, unknown> = {}) {
     const sync = vi.fn(async () => undefined);
     const persist = vi.fn(async () => undefined);
     const accepted = vi.fn();
@@ -459,7 +460,7 @@ describe('external handoff to hidden group lanes', () => {
       live ? { child: { id: 'child', agentKind: 'codex' } } : {}, {
         getDbClient: () => ({ drizzle: { select: () => dbChain } }),
         botSessionLinks: links,
-        syncBotLanePermission: sync, persistUserTurnMessage: persist,
+        syncBotLanePermission: sync, persistUserTurnMessage: persist, ...overrides,
       });
     return { ...h, sync, persist, accepted };
   }
@@ -488,6 +489,20 @@ describe('external handoff to hidden group lanes', () => {
     expect(h.scope.enqueueSendToSessionMessage).toHaveBeenCalledWith(expect.objectContaining({
       targetSessionId: 'child', clientId: 'bot-group:managed-turn', message: 'Managed group turn',
     }));
+  });
+
+  it('queues a plugin-engine group turn only from the group dispatcher', async () => {
+    const maker = { getSession: () => undefined, getSessionMeta: async () => ({ id: 'child', agentKind: 'acp' }) };
+    const h = groupHarness(false, { maker });
+    const input = { targetSessionId: 'child', message: 'Reply to the group', clientId: 'bot-group:managed-turn' };
+    expect(await h.sendToSessionInternal(input)).toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
+    expect(await h.dispatchBotSessionMessage(input)).toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
+    expect(await h.groupDispatch(input)).toMatchObject({ ok: true, wakeKind: 'queued', queuedMessageId: input.clientId });
+    expect(h.scope.enqueueSendToSessionMessage).toHaveBeenCalledTimes(1);
+
+    const ordinary = botTaskDispatchHarness({ child: { permissionMode: 'ask', planModeEnabled: false } }, {}, { maker });
+    expect(await ordinary.groupDispatch(input)).toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
+    expect(ordinary.scope.enqueueSendToSessionMessage).not.toHaveBeenCalled();
   });
 
   it('preserves host continuations inside a group lane', async () => {
@@ -913,7 +928,7 @@ describe('unbound Codex pre-send history wiring', () => {
     });
     // A plugin engine account pool is asked first (plugin-engine-accounts/failover.ts); a Codex task is not its.
     const pluginPrepare = vi.fn(async () => false);
-    const ports = { subscriptionAccountRecoveryDeps: { rebuild },
+    const ports = { withRemoteAccountReads, subscriptionAccountRecoveryDeps: { rebuild },
       readCodexThreadStorageReadOnly: history,
       preparePluginEngineAccountForSend: pluginPrepare, readSubscriptionRuntimeSession: vi.fn(),
       prepareSubscriptionAccountForSend: prepare, prepareSubscriptionAccountFailover: failover,

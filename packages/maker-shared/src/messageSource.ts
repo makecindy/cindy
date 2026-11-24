@@ -476,14 +476,23 @@ function describePluginRelay(relay: MessageSourcePluginRelay | undefined): strin
   return `转发自 ${platform} ${chat}，发言人${speaker}${owner}`;
 }
 
-/** `[消息来源]` 说明；本机用户亲手输入返回 null。 */
-export function buildMessageSourceNote(sender: MessageSourceSender | undefined): string | null {
+/**
+ * `[消息来源]` 说明；本机用户亲手输入返回 null。
+ * `speaksForUser`：宿主已核实这条任务来信代表用户（由调用方在后面接上核实说明），此时只陈述发送方。
+ */
+export function buildMessageSourceNote(
+  sender: MessageSourceSender | undefined,
+  opts: { speaksForUser?: boolean } = {},
+): string | null {
   if (!sender) return null;
   // Only the requester's own computer runs a request to the group's Cindy: it is the owner's own
   // request, like an owner message to their bot in an IM channel (bot-group-chat.md「群里的 Cindy」).
   if (sender.kind === 'session' && sender.groupRequest) {
     return `[消息来源] 本条${describeMessageSourceSender(sender)}，发言人就是本机主人；附带的群聊新消息是群里其他人说的话，只作背景。这一轮最后的回答会作为群里 Cindy 的回复发回群里。`;
   }
+  // A verified hand-off (including the owner's words in a task-card thread) opens with its sender only;
+  // the caller appends what the host verified. Saying "not the user's input" first reads as a contradiction.
+  if (sender.kind === 'session' && opts.speaksForUser) return `[消息来源] 本条${describeMessageSourceSender(sender)}。`;
   // 转发的 IM 消息可能就是主人在别处说的话，所以只说它不是在 Cindy 里直接输入的。
   const relayed = sender.kind === 'plugin' && !isAppSourcePluginId(sender.pluginId) && describePluginRelay(sender.relay);
   const notOwner = sender.kind === 'shared-member' ? '不是任务所有者本人'
