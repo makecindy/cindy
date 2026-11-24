@@ -21,25 +21,22 @@ import { composeSseBlockRewrites, payloadRewriteAsBlockRewrite, nextSseBlock, ty
 import { isPlainObject } from './object';
 import { collectCurrentToolSearchGroups, indexOfCurrentTurnInlineTools } from './cindy/tool-context';
 
-/** Wire names of custom declarations that live inside a namespace group, before lowering rewrites them. */
-function collectNamespaceCustomToolNames(body: unknown): Set<string> {
-  const names = new Set<string>();
-  if (!body || typeof body !== 'object' || Array.isArray(body)) return names;
+/** Original kinds in the same declaration order used by namespace emission. */
+function collectNamespaceToolKinds(body: unknown): Map<string, 'function' | 'custom'> {
+  const kinds = new Map<string, 'function' | 'custom'>();
   for (const group of collectResponsesToolGroups(body)) {
-    if (!Array.isArray(group)) continue;
     for (const tool of group) {
-      if (!tool || typeof tool !== 'object') continue;
-      const { type, name, tools } = tool as { type?: unknown; name?: unknown; tools?: unknown };
+      if (!isPlainObject(tool)) continue;
+      const { type, name, tools } = tool;
       if (type !== 'namespace' || typeof name !== 'string' || name === 'functions' || !Array.isArray(tools)) continue;
       for (const child of tools) {
-        if (!child || typeof child !== 'object') continue;
-        const { type: childType, name: childName } = child as { type?: unknown; name?: unknown };
-        if (childType !== 'custom' || typeof childName !== 'string') continue;
-        names.add(`${name}__${childName}`);
+        if (!isPlainObject(child) || child.type === 'namespace' || typeof child.name !== 'string') continue;
+        const key = `${name}__${child.name}`;
+        if (!kinds.has(key)) kinds.set(key, child.type === 'custom' ? 'custom' : 'function');
       }
     }
   }
-  return names;
+  return kinds;
 }
 
 type NativeTool = { type: string; name: string; namespace?: string };
@@ -152,9 +149,11 @@ export function prepareResponsesCompatibility(body: unknown, policy: ResponsesCo
   const search = policy.toolSearch === 'function'
     ? rewriteRoutedToolSearchForUpstream(custom.body)
     : { body: custom.body, names: new Set<string>() };
+  const canonicalNamespaceKinds = policy.namespaceTools === 'functions' ? collectNamespaceToolKinds(catalog) : undefined;
   const namespace = policy.namespaceTools === 'functions'
-    ? rewriteRoutedNamespaceToolsForUpstream(search.body, custom.names, bareCustomNames, collectNamespaceCustomToolNames(catalog),
-        body && typeof body === 'object' ? (body as { tool_choice?: unknown }).tool_choice : undefined, currentInlineIndex)
+    ? rewriteRoutedNamespaceToolsForUpstream(search.body, custom.names, bareCustomNames, canonicalNamespaceKinds,
+        isPlainObject(body) ? body.tool_choice : undefined, currentInlineIndex,
+        isPlainObject(body) && isPlainObject(body.tool_choice) ? collectNativeToolSelectors(body).bare : undefined)
     : {
         body: custom.body !== body ? disambiguateNativeToolChoice(body, search.body, custom.body) : search.body,
         aliases: new Map(), renamedWireNames: new Map<string, string>(), renamedKinds: new Map<string, 'function' | 'custom'>(),
@@ -166,6 +165,7 @@ export function prepareResponsesCompatibility(body: unknown, policy: ResponsesCo
     : {
         renamedWireNames: namespace.renamedWireNames,
         renamedKinds: namespace.renamedKinds,
+        canonicalNamespaceKinds,
         loweredToolChoice: namespace.body && typeof namespace.body === 'object'
           ? (namespace.body as { tool_choice?: unknown }).tool_choice
           : undefined,

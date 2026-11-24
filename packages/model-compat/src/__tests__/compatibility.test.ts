@@ -305,6 +305,51 @@ describe('request-owned Responses compatibility', () => {
     expect(request.tool_choice).toEqual(allowed ? { type: 'allowed_tools', tools: [wireSelector] } : wireSelector);
   });
 
+  // #11199: response kind follows the emitted top-level definition when inline tools repeat it.
+  it.each(['application/json', 'text/event-stream'])('restores the emitted namespace tool kind (%s)', async contentType => {
+    const adapter = createCodexResponsesCompatibilityAdapter();
+    const group = (type: 'custom' | 'function') => ({ type: 'namespace', name: 'workspace', tools: [
+      type === 'custom' ? { type, name: 'read', description: 'Read a location' } : { type, name: 'read', parameters: {} },
+    ] });
+    for (const type of ['custom', 'function'] as const) {
+      const selected = { type, name: 'read', namespace: 'workspace' };
+      const request = adapter.adaptRequest({
+        tools: [group(type)],
+        input: [{ type: 'additional_tools', tools: [group(type === 'custom' ? 'function' : 'custom')] }],
+        tool_choice: selected,
+      }, 10104, undefined, true) as { tools: unknown[]; input: unknown[] };
+      expect(request.tools).toMatchObject([{ type: 'function', name: 'workspace__read' }]);
+      expect(request.input).toMatchObject([{ type: 'additional_tools', tools: [] }]);
+      const item = { type: 'function_call', name: 'workspace__read', call_id: 'emitted', arguments: '{"input":"text"}' };
+      const response = { status: 'completed', output: [item] };
+      const sse = contentType === 'text/event-stream';
+      const wire = sse ? `data: ${JSON.stringify({ type: 'response.completed', response })}\n\n` : JSON.stringify(response);
+      const transform = adapter.createResponseTransform(10104, { contentType, contentEncoding: '' });
+      const text = transform ? await responseText(transform, wire) : wire;
+      const expected = type === 'custom'
+        ? { type: 'custom_tool_call', name: 'read', namespace: 'workspace', call_id: 'emitted', input: 'text' }
+        : { ...item, name: 'read', namespace: 'workspace' };
+      expect((sse ? JSON.parse(text.trim().slice(6)).response : JSON.parse(text)).output).toEqual([expected]);
+    }
+  });
+
+  // A post-boundary search loads a current bare selector owner even if an older group reserves the name.
+  it.each([false, true])('keeps the current search-loaded bare selector (allowed=%s)', allowed => {
+    const selector = { type: 'function', name: 'workspace__read' };
+    const adapter = createCodexResponsesCompatibilityAdapter();
+    const bare = { type: 'function', name: 'workspace__read' };
+    const request = adapter.adaptRequest({
+      tools: [{ type: 'namespace', name: 'workspace', tools: [{ type: 'function', name: 'read' }] }],
+      input: [
+        { type: 'additional_tools', tools: [bare] },
+        { type: 'additional_tools', tools: [] },
+        { type: 'tool_search_output', tools: [bare] },
+      ],
+      tool_choice: allowed ? { type: 'allowed_tools', tools: [selector] } : selector,
+    }, 10105, undefined, true) as { tool_choice: unknown };
+    expect(request.tool_choice).toEqual(allowed ? { type: 'allowed_tools', tools: [selector] } : selector);
+  });
+
   // Replayed search output must not invalidate the current turn's search-loaded integer schema.
   it.each(['application/json', 'text/event-stream'])('repairs with the current search definition (%s)', async contentType => {
     const adapter = createCodexResponsesCompatibilityAdapter();

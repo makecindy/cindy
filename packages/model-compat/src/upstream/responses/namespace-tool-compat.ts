@@ -476,9 +476,10 @@ export function rewriteRoutedNamespaceToolsForUpstream(
   body: unknown,
   convertedCustomToolNames?: ReadonlySet<string>,
   bareCustomNames?: ReadonlySet<string>,
-  namespaceCustomToolNames?: ReadonlySet<string>,
+  canonicalNamespaceKinds?: ReadonlyMap<string, "function" | "custom">,
   originalToolChoice?: unknown,
   currentInlineIndex?: number,
+  currentBareSelectors?: ReadonlyMap<string, { type: string } | null>,
 ): {
   body: unknown;
   aliases: Map<string, RoutedNamespaceToolIdentity>;
@@ -509,7 +510,6 @@ export function rewriteRoutedNamespaceToolsForUpstream(
   const originalBareCustomNames = bareCustomNames ?? collectBareCustomToolNames(body);
   const plan = buildRewritePlan(priorityGroups);
   const currentBareWireNames = currentInlineIndex === undefined ? undefined : new Set<string>();
-  const currentGroupedBareNames = new Set<string>();
   const currentChildNames = new Set<string>();
   if (currentBareWireNames) {
     for (const group of currentGroups) {
@@ -518,10 +518,7 @@ export function rewriteRoutedNamespaceToolsForUpstream(
           currentBareWireNames.add(tool.name);
         }
         const parsed = parseNamespaceGroup(tool);
-        if (!parsed) continue;
-        if (parsed.namespace === BUILTIN_FUNCTIONS_NAMESPACE) {
-          for (const child of parsed.children) currentGroupedBareNames.add(child.name as string);
-        } else {
+        if (parsed && parsed.namespace !== BUILTIN_FUNCTIONS_NAMESPACE) {
           for (const child of parsed.children) currentChildNames.add(loweredWireName(parsed.namespace, child.name as string));
         }
       }
@@ -547,17 +544,16 @@ export function rewriteRoutedNamespaceToolsForUpstream(
 
   // The adapter lowers custom tools before namespaces, which rewrites a `custom` child declaration
   // into a `function` one, so the declaration type left in the body no longer says what this child
-  // was. `namespaceCustomToolNames` carries that knowledge from before the lowering pass; it also
+  // was. The canonical kind carries that knowledge from before the lowering pass; it also
   // keeps a custom child custom when a bare custom tool happens to share its wire name.
   const renamedKinds = new Map<string, "function" | "custom">();
   for (const entry of plan.renamedChildren) {
     const custom = entry.declaredType === "custom"
-      || namespaceCustomToolNames?.has(entry.preferred) === true
       || (
         convertedCustomToolNames?.has(entry.preferred) === true
         && bareCustomNames?.has(entry.preferred) !== true
       );
-    renamedKinds.set(entry.preferred, custom ? "custom" : "function");
+    renamedKinds.set(entry.preferred, canonicalNamespaceKinds?.get(entry.preferred) ?? (custom ? "custom" : "function"));
   }
   // Custom lowering erases selector kinds. A flat spelling can still select the displaced
   // child when only its original kind matches; history keeps its explicit coordinates.
@@ -570,11 +566,11 @@ export function rewriteRoutedNamespaceToolsForUpstream(
     if (!allocated) return lowered;
     if (currentBareWireNames && !currentChildNames.has(original.name)) return lowered;
     const childKind = renamedKinds.get(original.name);
-    const bareCustom = originalBareCustomNames.has(original.name);
-    const bareKind = bareCustom ? "custom" : "function";
+    const bare = currentBareSelectors?.get(original.name);
+    if (bare === null) return lowered;
+    const bareKind = bare?.type ?? (originalBareCustomNames.has(original.name) ? "custom" : "function");
     // Replayed bare tools still reserve a wire name. They cannot claim a selector over a current child.
-    const currentChildOnly = currentBareWireNames && !currentBareWireNames.has(original.name)
-      && !currentGroupedBareNames.has(original.name);
+    const currentChildOnly = currentBareSelectors && !currentBareSelectors.has(original.name);
     return original.type === childKind && (childKind !== bareKind || currentChildOnly)
       ? { ...lowered, name: allocated } : lowered;
   };
@@ -592,6 +588,11 @@ export function rewriteRoutedNamespaceToolsForUpstream(
     if (wireName !== preferred) {
       const displacedKind = renamedKinds.get(preferred);
       if (displacedKind) identity.kind = displacedKind;
+      continue;
+    }
+    const canonicalKind = canonicalNamespaceKinds?.get(preferred);
+    if (canonicalKind) {
+      identity.kind = canonicalKind;
       continue;
     }
     if (!convertedCustomToolNames?.has(preferred)) continue;

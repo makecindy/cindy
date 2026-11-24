@@ -73,6 +73,8 @@ export interface FunctionCallRepairPlan {
   renamedWireNames: ReadonlyMap<string, string>;
   /** `tool_choice` after the request's own lowering, so selectors match the forwarded body. */
   loweredToolChoice?: unknown;
+  /** Original kinds of the canonical namespaces in a flattened request. */
+  canonicalNamespaceKinds?: ReadonlyMap<string, "function" | "custom">;
 }
 
 /** Native repair has no lowered live request; retain loaded tool-search schemas and selectors. */
@@ -147,6 +149,8 @@ export function collectFunctionCallRepairSchemas(
       ...(isObject(tool.parameters) ? { parameters: tool.parameters } : {}),
     };
     const preferred = namespacedToolName(namespace, tool.name);
+    const canonicalKind = namespace && live ? plan?.canonicalNamespaceKinds?.get(preferred) : undefined;
+    if (canonicalKind !== undefined && canonicalKind !== tool.type) return;
     const wireName = namespace ? (renamedWireNames.get(preferred) ?? preferred) : preferred;
     const key = identityKey(namespace, tool.name);
     // Type restoration uses the live declaration when present, independently of schema conflicts.
