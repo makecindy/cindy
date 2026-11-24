@@ -1,6 +1,6 @@
 import type { ModelGroupTraceQuota } from '../../shared/modelGroups.js';
 import { activeOwnerScopeKey } from '../appSessionState.js';
-import { getPluginModelPickerAgents, isPluginRouteHarnessInstalled } from '../cindy-brain/ghostModelPicker.js';
+import { getPluginModelPickerAgents, isPluginModelPickerRouteAvailable, isPluginRouteHarnessInstalled } from '../cindy-brain/ghostModelPicker.js';
 import { remoteBackgroundInvoke } from '../device-link/index.js';
 import { isSessionSharedTaskActive } from '../device-link/sharedTaskDispatch.js';
 import { getGoalController } from '../goal-host/index.js';
@@ -15,7 +15,7 @@ import { readDeviceProviderCatalog } from '../remote-agent/controller/deviceCata
 import { recordModelGroupDecision } from './decisionLog.js';
 import { createModelGroupResolver, modelGroupQuotaKey, MODEL_GROUP_REMOTE_WAIT_MS } from './resolver.js';
 import { readModelGroupSessionBinding } from './sessionBindings.js';
-import { readModelGroupsConfig } from './store.js';
+import { readModelGroupsConfig, setModelGroupSourceCatalog } from './store.js';
 import { computeModelGroupSwitchOffer } from './switchOffer.js';
 
 
@@ -49,10 +49,29 @@ async function quotaWindows() {
   return byProvider;
 }
 
+/**
+ * 本机供应商目录的快照(不触发发现或登录)。每次读出来顺手交给配置读取：供应商路由按它合成和展开，取配置与
+ * 解析路由都先读目录，所以两处看到的供应商路由与目录是同一时刻的。
+ */
+async function localViews() {
+  const views = await getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true });
+  const agents = getPluginModelPickerAgents();
+  setModelGroupSourceCatalog({
+    views, agents,
+    available: (candidate) => isPluginModelPickerRouteAvailable({ ...candidate, effort: '', fastMode: false }, views, agents),
+  });
+  return views;
+}
+
+/** 取配置前调用：让返回的配置带上此刻的供应商路由。读目录失败时沿用上一次的。 */
+export async function refreshAutoModelGroupRoutes(): Promise<void> {
+  await localViews().catch(() => undefined);
+}
+
 export const resolver = createModelGroupResolver({
   config: readModelGroupsConfig,
   recordDecision: recordModelGroupDecision,
-  views: () => getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true }),
+  views: localViews,
   // 另一台电脑借这台跑 Agent 时只用开了「允许被远程调用」的连接(与设置里那个开关同一份)。
   remoteInvocable: isRemoteProviderInvocationAllowed,
   agents: getPluginModelPickerAgents,

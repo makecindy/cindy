@@ -847,20 +847,6 @@
       "loadFailed": "Não foi possível carregar o grupo de fornecedores",
       "note": "Para sessões neste computador e sessões das pessoas com quem partilha, o grupo escolhe o computador que executa o Agent"
     },
-    "strategy": {
-      "label": "Estratégia do grupo",
-      "least": "Menos ocupado",
-      "round": "Rotação",
-      "order": "Por ordem",
-      "weight": "Por peso",
-      "quotaFirst": "Quando a utilização da subscrição está disponível, os computadores cuja quota é reposta em breve e que ainda têm bastante disponível têm prioridade, para que cada conta seja utilizada de forma equilibrada ao longo do tempo; os semelhantes seguem a estratégia do grupo",
-      "description": {
-        "least": "Encaminha para o menos ocupado",
-        "round": "Alterna entre computadores",
-        "order": "Primeiro os que estão no início da lista",
-        "weight": "Distribui por peso"
-      }
-    },
     "autoSwitch": {
       "label": "Mudar de computador automaticamente",
       "description": "Muda quando um atinge o limite, está inacessível ou tem a sessão terminada"
@@ -22735,7 +22721,6 @@
       "useCodex": "Iniciar sessão com o Codex"
     },
     "title": "Contas de subscrição",
-    "strategy": "Distribuição de carga",
     "add": "Adicionar conta",
     "defaultTag": "Predefinida",
     "ready": "Ligada",
@@ -22967,6 +22952,39 @@
     },
     "switchOffer": {
       "action": "Continuar com {{model}}"
+    },
+    "auto": {
+      "accounts_one": "{{count}} conta",
+      "accounts_many": "{{count}} contas",
+      "accounts_other": "{{count}} contas",
+      "computers_one": "{{count}} computador",
+      "computers_many": "{{count}} computadores",
+      "computers_other": "{{count}} computadores",
+      "pickFor": "Estratégia de {{name}}",
+      "hiddenTag": "Oculto",
+      "hide": "Ocultar no seletor de modelos",
+      "hideAria": "Ocultar {{name}} no seletor de modelos",
+      "show": "Mostrar no seletor de modelos",
+      "showAria": "Mostrar {{name}} no seletor de modelos",
+      "assignedBy": "As novas tarefas são atribuídas por «{{strategy}}»",
+      "adjust": "Ajustar em Grupos de modelos",
+      "quotaFirst": "Entre contas ou computadores, seja qual for a estratégia, quando a utilização da subscrição pode ser lida vai primeiro quem tem mais quota antes da próxima renovação; a estratégia decide entre os que estão semelhantes."
+    },
+    "sources": {
+      "title": "Modos de fornecedores",
+      "description": "Combine várias fontes num modo que funciona como um único fornecedor: escolha o modelo como habitualmente e o modo decide que fonte o executa. Os fornecedores da mesma marca são combinados automaticamente.",
+      "models_one": "{{count}} modelo",
+      "models_many": "{{count}} modelos",
+      "models_other": "{{count}} modelos",
+      "autoTag": "Automático",
+      "new": "Combinar fornecedores",
+      "newName": "Novo modo de fornecedores",
+      "empty": "Ainda não há nada para combinar. Ligue dois ou mais fornecedores da mesma marca e serão combinados automaticamente, ou escolha os seus em Combinar fornecedores.",
+      "addProvider": "Adicionar fornecedor",
+      "chooseProvider": "Escolher fornecedor",
+      "removeAria": "Remover {{name}} deste modo",
+      "deleteAria": "Eliminar o modo {{name}}",
+      "note": "Os modos automáticos acompanham os seus fornecedores ligados. Os membros não podem ser alterados; pode mudar a estratégia ou ocultá-los."
     }
   },
   "projectSettings": {

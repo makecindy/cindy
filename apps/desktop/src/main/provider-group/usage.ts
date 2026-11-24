@@ -98,7 +98,11 @@ function paceOf(
 /** 排序用的急不急，加上算出它的那个窗口；读不到时两者都是 null。 */
 function paceState(windows: readonly ProviderGroupMemberQuota[] | null, now: number) {
   const pace = windows ? paceOf(windows, now) : null;
-  return { urgency: pace?.urgency ?? null, quota: pace?.window ?? null };
+  return {
+    urgency: pace?.urgency ?? null, quota: pace?.window ?? null,
+    // 「余量最多的先用」：几个窗口取最紧的那个的剩余占比；读不到为 null。
+    headroom: windows && windows.length > 0 ? Math.max(0, 100 - Math.max(...windows.map((w) => w.usedPercent))) : null,
+  };
 }
 
 /**

@@ -37,16 +37,18 @@ import {
 import { decideProviderGroupFailure, providerGroupFailureSignals } from '../provider-group/failurePolicy.js';
 import { PROVIDER_GROUP_DEFAULT_COOLDOWN_MS, PROVIDER_GROUP_LOCAL_PROVISIONAL_MS } from '../provider-group/router.js';
 import {
-  pickProviderGroupMember,
-  providerGroupMembersFull,
+  applyRouteWeightStep,
+  pickRouteMember,
+  routeMembersFull,
+  type RouteWeightStep,
   type SchedulableMember,
 } from '../provider-group/scheduler.js';
 import { quotaWindowsScheduleState } from '../provider-group/usage.js';
 import {
   concurrencyLimitPatch,
   effectiveConcurrencyLimit,
-  type ProviderGroupStrategy,
 } from '../../shared/providerGroup.js';
+import { DEFAULT_ROUTE_STRATEGY, type RouteStrategy } from '../../shared/routeStrategy.js';
 import {
   MAX_SUBSCRIPTION_ACCOUNTS,
   type SubscriptionAccountCommand,
@@ -111,6 +113,8 @@ interface RuntimeState {
   running: Map<string, Set<string>>;
   pendingStarts: Map<string, { accountId: string; token: string; until: number }>;
   lastPicked: Map<string, string>;
+  /** 「按权重」的计数，键与 lastPicked 相同。只在内存里，重启后重新开始。 */
+  weightCounters: Map<string, Map<string, number>>;
   cooling: Map<string, Record<string, number>>;
   logins: Map<string, LoginState>;
 }
@@ -130,6 +134,7 @@ function currentRuntime(): RuntimeState {
       running: new Map(),
       pendingStarts: new Map(),
       lastPicked: new Map(),
+      weightCounters: new Map(),
       cooling: new Map(),
       logins: new Map(),
     };
@@ -194,8 +199,8 @@ function providerAccounts(pool: PluginEnginePoolConfig, suffix: string | null): 
   return pool.accounts.filter(account => (pool.placement?.[account.id] ?? null) === suffix);
 }
 
-function providerStrategy(pool: PluginEnginePoolConfig, suffix: string | null): ProviderGroupStrategy {
-  return suffix === null ? pool.strategy : pool.providers?.[suffix]?.strategy ?? 'least';
+function providerStrategy(pool: PluginEnginePoolConfig, suffix: string | null): RouteStrategy {
+  return suffix === null ? pool.strategy : pool.providers?.[suffix]?.strategy ?? DEFAULT_ROUTE_STRATEGY;
 }
 
 /** The provider an account belongs to now. */
@@ -342,6 +347,7 @@ export function pluginUsageState(usage: GhostHarnessUsage | null | undefined, mo
       ? Math.max(...full.map(window => window.resetsAt!)) : null,
     urgency: schedule?.urgency ?? null,
     fiveHourTight: schedule?.fiveHourTight ?? false,
+    headroom: schedule?.headroom ?? null,
   };
 }
 
@@ -512,6 +518,8 @@ export async function acquirePluginEngineAccount(
     if (timer !== undefined) clearTimeout(timer);
   }
 
+  /** The weighted step of the latest pick; recorded only when that pick is actually used. */
+  let weightStep: RouteWeightStep | undefined;
   const select = () => {
     assertOwner(state);
     const latest = effectivePluginEnginePool(engineKey);
@@ -541,6 +549,7 @@ export async function acquirePluginEngineAccount(
         weight: account.weight,
         urgency: usage.urgency,
         fiveHourTight: usage.fiveHourTight,
+        headroom: usage.headroom,
       };
     });
     // The same account signed in twice (the plugin's fingerprint) counts once: the first of them that
@@ -559,9 +568,13 @@ export async function acquirePluginEngineAccount(
       if (!member.paused) primary.limit = Math.min(primary.limit, member.limit);
     }
     const strategy = providerStrategy(latest, selectionSuffix);
-    let choice = pinnedTarget ?? pickProviderGroupMember(members, strategy, {
+    const picked = pinnedTarget === undefined ? pickRouteMember(members, strategy, {
       exclude, lastPicked: state.lastPicked.get(selectionProvider),
-    });
+      weightCounters: state.weightCounters.get(selectionProvider),
+      quotaFirst: true,
+    }) : null;
+    weightStep = picked?.weightStep;
+    let choice = pinnedTarget ?? picked?.key ?? null;
     if (!choice && pending.size) return null;
     let pinned = pinnedTarget !== undefined;
     // Every other account is blocked, full or tried: a fresh session stays on its bound account.
@@ -572,7 +585,7 @@ export async function acquirePluginEngineAccount(
     const member = members.find(entry => entry.id === choice);
     if (reserved && member && member.running - (reserved.accountId === choice ? 1 : 0) >= member.limit)
       throw new Error(PLUGIN_ENGINE_ACCOUNTS_FULL_ERROR);
-    if (!choice && providerGroupMembersFull(members, { exclude })) throw new Error(PLUGIN_ENGINE_ACCOUNTS_FULL_ERROR);
+    if (!choice && routeMembersFull(members, { exclude })) throw new Error(PLUGIN_ENGINE_ACCOUNTS_FULL_ERROR);
     if (!choice || !member) {
       if (!pinned) throw new Error('No subscription account is available');
       throw new Error('[SUBSCRIPTION_ACCOUNT_UNAVAILABLE] The task subscription account is unavailable');
@@ -607,6 +620,8 @@ export async function acquirePluginEngineAccount(
   }
   active.add(token);
   state.lastPicked.set(selectionProvider, selected);
+  if (weightStep?.pickedKey === selected)
+    state.weightCounters.set(selectionProvider, applyRouteWeightStep(state.weightCounters.get(selectionProvider), weightStep));
   changed(engineKey, 'load');
   let released = false;
   let handedOff = false;
@@ -992,7 +1007,7 @@ export async function runPluginEngineAccountCommand(
         let providers = current.providers ?? {};
         if (target === null) {
           createdSuffix = newPluginEngineProviderSuffix(new Set(Object.keys(providers)));
-          providers = { ...providers, [createdSuffix]: { strategy: 'least' } };
+          providers = { ...providers, [createdSuffix]: { strategy: DEFAULT_ROUTE_STRATEGY } };
           placement[command.accountId] = createdSuffix;
         } else if (target.suffix === null) delete placement[command.accountId];
         else placement[command.accountId] = target.suffix;

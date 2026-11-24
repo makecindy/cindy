@@ -8,7 +8,7 @@ import { createGuestSupportReader, readSharedGroupStatus, SHARED_GROUP_STATUS_TI
 function setup(states: ProviderGroupMemberState[] = ['available', 'full', 'cooling', 'offline', 'paused', 'unavailable']) {
   let current = true;
   let config: ProviderGroupConfig | null = {
-    strategy: 'least', autoSwitch: true,
+    strategy: 'expiring', autoSwitch: true,
     members: states.map((state, index) => ({
       key: `private-key-${index}`, label: `Secret Computer ${index}`, kind: index === 0 ? 'local' : 'device',
       agentDeviceId: index === 0 ? null : `private-device-${index}`, providerId: 'anthropic',

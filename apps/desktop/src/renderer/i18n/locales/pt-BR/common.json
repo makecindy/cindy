@@ -847,20 +847,6 @@
       "loadFailed": "Não foi possível carregar o grupo de provedores",
       "note": "Nas sessões deste computador e nas sessões das pessoas com quem você compartilha, o grupo escolhe o computador que executa o Agent"
     },
-    "strategy": {
-      "label": "Estratégia do grupo",
-      "least": "Menos ocupado",
-      "round": "Rodízio",
-      "order": "Em ordem",
-      "weight": "Por peso",
-      "quotaFirst": "Quando o uso da assinatura está disponível, computadores com bastante cota restante e renovação próxima têm prioridade, para que cada conta seja usada de forma equilibrada ao longo do tempo; os semelhantes seguem a estratégia do grupo",
-      "description": {
-        "least": "Encaminha para o menos ocupado",
-        "round": "Alterna entre computadores",
-        "order": "Primeiro os que estão no início da lista",
-        "weight": "Distribui por peso"
-      }
-    },
     "autoSwitch": {
       "label": "Alternar computadores automaticamente",
       "description": "Alterna quando um atinge o limite, fica inacessível ou está desconectado da conta"
@@ -22736,7 +22722,6 @@
       "useCodex": "Entrar com o Codex"
     },
     "title": "Contas de assinatura",
-    "strategy": "Balanceamento de carga",
     "add": "Adicionar conta",
     "defaultTag": "Padrão",
     "ready": "Conectada",
@@ -22968,6 +22953,39 @@
     },
     "switchOffer": {
       "action": "Continuar com {{model}}"
+    },
+    "auto": {
+      "accounts_one": "{{count}} conta",
+      "accounts_many": "{{count}} contas",
+      "accounts_other": "{{count}} contas",
+      "computers_one": "{{count}} computador",
+      "computers_many": "{{count}} computadores",
+      "computers_other": "{{count}} computadores",
+      "pickFor": "Estratégia de {{name}}",
+      "hiddenTag": "Oculto",
+      "hide": "Ocultar no seletor de modelos",
+      "hideAria": "Ocultar {{name}} no seletor de modelos",
+      "show": "Mostrar no seletor de modelos",
+      "showAria": "Mostrar {{name}} no seletor de modelos",
+      "assignedBy": "Novas tarefas são atribuídas por “{{strategy}}”",
+      "adjust": "Ajustar em Grupos de modelos",
+      "quotaFirst": "Entre contas ou computadores, seja qual for a estratégia, quando o uso da assinatura pode ser lido vai primeiro quem tem mais cota antes da próxima renovação; a estratégia decide entre os que estão parecidos."
+    },
+    "sources": {
+      "title": "Modos de provedores",
+      "description": "Combine várias fontes em um modo que funciona como um único provedor: escolha o modelo como sempre e o modo decide qual fonte o executa. Provedores da mesma marca são combinados automaticamente.",
+      "models_one": "{{count}} modelo",
+      "models_many": "{{count}} modelos",
+      "models_other": "{{count}} modelos",
+      "autoTag": "Automático",
+      "new": "Combinar provedores",
+      "newName": "Novo modo de provedores",
+      "empty": "Ainda não há nada para combinar. Conecte dois ou mais provedores da mesma marca e eles serão combinados automaticamente, ou escolha os seus em Combinar provedores.",
+      "addProvider": "Adicionar provedor",
+      "chooseProvider": "Escolher provedor",
+      "removeAria": "Remover {{name}} deste modo",
+      "deleteAria": "Excluir o modo {{name}}",
+      "note": "Os modos automáticos acompanham seus provedores conectados. Os membros não podem ser alterados; você pode mudar a estratégia ou ocultá-los."
     }
   },
   "projectSettings": {

@@ -55,7 +55,7 @@ const SHARE_B = member('share:b:anthropic', 'share', 'share:b');
 // could distinguish two accounts on A from one on B under equal hardware budgets.
 describe('subscription pools within a group', () => {
   const remote = member('b:anthropic', 'device', 'b');
-  const config: ProviderGroupConfig = { strategy: 'least', autoSwitch: true, members: [LOCAL, remote] };
+  const config: ProviderGroupConfig = { strategy: 'expiring', autoSwitch: true, members: [LOCAL, remote] };
   const summary = (accounts: number, running: number, totalRunning = running) => ({
     version: 1 as const, accounts, running, totalRunning, full: false, urgency: null, fiveHourTight: false,
   });
@@ -74,7 +74,7 @@ describe('subscription pools within a group', () => {
   });
 
   it('gives two ready accounts two round-robin turns without changing machine weights', async () => {
-    const router = harness({}, {}, [], { ...config, strategy: 'round' }, {
+    const router = harness({}, {}, [], { ...config, strategy: 'rotate' }, {
       readPoolScheduling: async m => summary(m.kind === 'local' ? 2 : 1, 0),
     });
     const counts = { local: 0, remote: 0 };
@@ -112,7 +112,7 @@ function harness(
   reported: Record<string, number>,
   bindings: Record<string, ProviderGroupBinding> = {},
   running: string[] = [],
-  config: ProviderGroupConfig = { strategy: 'least', autoSwitch: true, members: [SHARE_A, SHARE_B, LOCAL] },
+  config: ProviderGroupConfig = { strategy: 'expiring', autoSwitch: true, members: [SHARE_A, SHARE_B, LOCAL] },
   overrides: Partial<ProviderGroupRouterDeps> = {},
 ) {
   const directory: ProviderGroupDirectory = {
@@ -143,7 +143,6 @@ function harness(
     listBindings: () => bindings,
     isTurnRunning: (sessionId) => running.includes(sessionId),
     now: () => 1_000,
-    random: () => 0,
     ...overrides,
   });
 }
@@ -178,7 +177,7 @@ it('routes a shared image model only to a group member that offers it', async ()
       version: 1, accounts: modelId === model ? 0 : 1,
       running: 0, totalRunning: 0, full: false, urgency: null, fiveHourTight: false,
     }),
-    readGroup: () => ({ strategy: 'least', autoSwitch: true, members: [local, localOnly, remote] }),
+    readGroup: () => ({ strategy: 'expiring', autoSwitch: true, members: [local, localOnly, remote] }),
   });
   expect(await router.pick({
     providerId: 'openai', agentKind: 'codex', model, capability: 'image.generate',
@@ -193,7 +192,7 @@ describe('provider group hard concurrency limits', () => {
   const capped = (entry: ProviderGroupMember, limit: number): ProviderGroupMember => ({ ...entry, limit, limitSet: true });
 
   it('reports a full group instead of overfilling the least busy computer', async () => {
-    const config: ProviderGroupConfig = { strategy: 'least', autoSwitch: true,
+    const config: ProviderGroupConfig = { strategy: 'expiring', autoSwitch: true,
       members: [capped(SHARE_A, 2), capped(LOCAL, 1)] };
     const router = harness({ [SHARE_A.key]: 2, [LOCAL.key]: 1 }, {}, [], config);
     await expect(router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model: MODEL, localTask: true }))
@@ -215,7 +214,7 @@ describe('provider group hard concurrency limits', () => {
 
 describe('group view source continuity', () => {
   it('keeps source budgets isolated per provider', async () => {
-    const configFor = (providerId: string): ProviderGroupConfig => ({ strategy: 'least', autoSwitch: true,
+    const configFor = (providerId: string): ProviderGroupConfig => ({ strategy: 'expiring', autoSwitch: true,
       members: [{ key: 'device:m:' + providerId, kind: 'device', agentDeviceId: 'm', providerId,
         limit: 4, weight: 1, paused: false }] });
     const directory: ProviderGroupDirectory = {
@@ -233,7 +232,7 @@ describe('group view source continuity', () => {
     };
     const router = createProviderGroupRouter({ directory,
       readGroup: (providerId) => providerId === 'openai' || providerId === 'anthropic' ? configFor(providerId) : null,
-      listBindings: () => ({}), isTurnRunning: () => false, now: () => 1_000, random: () => 0 });
+      listBindings: () => ({}), isTurnRunning: () => false, now: () => 1_000 });
     await expect(router.view('openai')).resolves.toMatchObject({
       providerContinuity: { stale: true, remainingMs: 60_000 },
     });
@@ -253,7 +252,7 @@ describe('provider group details capability reader lifetime', () => {
 
   function detailsRouter(readCaps: NonNullable<ProviderGroupRouterDeps['readCaps']>) {
     return harness({}, {}, [], undefined, {
-      readGroup: () => ({ strategy: 'least', autoSwitch: true, members: devices }), readCaps,
+      readGroup: () => ({ strategy: 'expiring', autoSwitch: true, members: devices }), readCaps,
     });
   }
 
@@ -299,7 +298,7 @@ describe('provider group details capability reader lifetime', () => {
     const reported = { [device.key]: 0 };
     const readCaps = vi.fn<NonNullable<ProviderGroupRouterDeps['readCaps']>>().mockResolvedValue(supportedCaps);
     const router = harness(reported, {}, [], undefined, {
-      readGroup: () => ({ strategy: 'least', autoSwitch: true, members: [device] }), readCaps,
+      readGroup: () => ({ strategy: 'expiring', autoSwitch: true, members: [device] }), readCaps,
     });
     expect((await router.view('anthropic', detailsOptions)).members[0]).toMatchObject({
       guestSupport: 'supported', state: 'available', running: 0,
@@ -326,7 +325,7 @@ describe('provider group details capability reader lifetime', () => {
       new Promise((resolve) => setTimeout(() => resolve(supportedCaps), 1)));
     const router = harness({}, {}, [], undefined, {
       readGroup: (providerId) => ({
-        strategy: 'least', autoSwitch: true, members: [providerId === 'anthropic' ? device : otherProvider],
+        strategy: 'expiring', autoSwitch: true, members: [providerId === 'anthropic' ? device : otherProvider],
       }),
       readCaps,
     });
@@ -348,7 +347,7 @@ describe('provider group details capability reader lifetime', () => {
       .mockImplementationOnce(() => new Promise((resolve) => { finishOldProbe = resolve; }))
       .mockResolvedValue(olderCaps);
     const overrides = {
-      readGroup: (): ProviderGroupConfig => ({ strategy: 'least', autoSwitch: true, members: [devices[0]] }), readCaps,
+      readGroup: (): ProviderGroupConfig => ({ strategy: 'expiring', autoSwitch: true, members: [devices[0]] }), readCaps,
     };
     const oldRouter = harness({}, {}, [], undefined, overrides);
     const first = oldRouter.view('anthropic', detailsOptions);
@@ -363,7 +362,7 @@ describe('provider group details capability reader lifetime', () => {
 });
 
 describe('own tasks and incoming tasks', () => {
-  it.each(['least', 'order', 'round', 'weight'] as const)('assigns own tasks by %s like incoming tasks, letting them use a paused local computer', async (strategy) => {
+  it.each(['expiring', 'order', 'rotate', 'weighted'] as const)('assigns own tasks by %s like incoming tasks, letting them use a paused local computer', async (strategy) => {
     const input = { providerId: 'anthropic', agentKind: 'claude-code' as const, model: MODEL };
     // 本机满载：本机任务也按并发上限分到别的电脑，不再固定留在本机。
     const full: ProviderGroupConfig = { strategy, autoSwitch: true, members: [SHARE_A, { ...LOCAL, paused: true }] };
@@ -378,7 +377,7 @@ describe('own tasks and incoming tasks', () => {
   });
 
   it('lets own tasks take their turn in round-robin allocation', async () => {
-    const config: ProviderGroupConfig = { strategy: 'round', autoSwitch: true, members: [SHARE_A, SHARE_B, LOCAL] };
+    const config: ProviderGroupConfig = { strategy: 'rotate', autoSwitch: true, members: [SHARE_A, SHARE_B, LOCAL] };
     const router = harness({}, {}, [], config);
     const input = { providerId: 'anthropic', agentKind: 'claude-code' as const, model: MODEL };
     expect(await router.pick(input)).toMatchObject({ kind: 'member', member: { key: SHARE_A.key } });
@@ -401,7 +400,7 @@ describe('provider group running count', () => {
     const device = member('device:old:anthropic', 'device', 'old');
     const readCaps = vi.fn(async () => ({ virtualWorkspace: true }) as RemoteAgentCaps);
     const router = harness({}, {}, [], undefined, {
-      readGroup: () => ({ strategy: 'least', autoSwitch: true, members: [device] }), readCaps,
+      readGroup: () => ({ strategy: 'expiring', autoSwitch: true, members: [device] }), readCaps,
     });
     expect(await router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model: MODEL })).toMatchObject({ kind: 'member' });
     await router.view('anthropic');
@@ -454,7 +453,7 @@ describe('provider group picks for this computer’s own tasks', () => {
   // position. Earlier exclusion coverage used order, not a prior round pick.
   // Minimal sequence: A, B, then exclude B; the next executor must be C, not A.
   it('continues round selection after an excluded remote without resetting to the first member', async () => {
-    const router = harness({}, {}, [], { strategy: 'round', autoSwitch: true, members: [LOCAL, SHARE_A, SHARE_B] });
+    const router = harness({}, {}, [], { strategy: 'rotate', autoSwitch: true, members: [LOCAL, SHARE_A, SHARE_B] });
     const input = { providerId: 'anthropic', agentKind: 'claude-code' as const, model: MODEL, localTask: true as const };
     expect(await router.pick(input)).toMatchObject({ kind: 'member', member: { key: LOCAL.key } });
     expect(await router.pick(input)).toMatchObject({ kind: 'member', member: { key: SHARE_A.key } });
@@ -507,7 +506,7 @@ describe('provider group quick picks with busy usable computers', () => {
     const router = createProviderGroupRouter({
       directory, readGroup: () => config, listBindings: () => ({}), isTurnRunning: () => false,
       externalRunning: (_providerId, key) => key === FAST.key ? fastLoad ?? 0 : key === LOCAL.key ? localGroupLoad : 0,
-      now: () => 1_000, random: () => 0,
+      now: () => 1_000,
     });
     return { router, config, localRunning, readDeviceProviders };
   }
@@ -534,7 +533,7 @@ describe('provider group quick picks with busy usable computers', () => {
       try {
         const localLoad = new Promise<number | null>(() => undefined);
         const { router, config } = quickRouter(localLoad, fastLoad, view('anthropic'), 2);
-        config.strategy = 'least';
+        config.strategy = 'expiring';
         const done = vi.fn();
         void router.pick({
           providerId: 'anthropic', agentKind: 'claude-code', model: MODEL, ...(own ? { localTask: true as const } : {}),
@@ -641,7 +640,7 @@ describe('provider group quick picks with busy usable computers', () => {
 
 describe('group pick source budget', () => {
   function continuityRouter(remainingMs: number) {
-    const config: ProviderGroupConfig = { strategy: 'least', autoSwitch: true,
+    const config: ProviderGroupConfig = { strategy: 'expiring', autoSwitch: true,
       members: [member('device:m:anthropic', 'device', 'm')] };
     const directory: ProviderGroupDirectory = {
       async resolveMembers(_providerId, current) {
@@ -656,7 +655,7 @@ describe('group pick source budget', () => {
       invalidate: () => undefined,
     };
     return createProviderGroupRouter({ directory, readGroup: () => config,
-      listBindings: () => ({}), isTurnRunning: () => false, now: () => 1_000, random: () => 0 });
+      listBindings: () => ({}), isTurnRunning: () => false, now: () => 1_000 });
   }
 
   it('keeps a stale source usable while its 30-minute budget remains', async () => {

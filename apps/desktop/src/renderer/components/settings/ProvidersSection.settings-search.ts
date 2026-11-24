@@ -30,7 +30,7 @@ export const providersSettings = defineSettings({
     sectionKey: 'settings.tabs.providers',
     keywordKeys: [
       'subscriptionAccounts.add',
-      'subscriptionAccounts.strategy',
+      'modelGroups.auto.adjust',
       'settings.providers.detail.sameAccountConnections',
       'settings.providers.detail.sameAccountConnectionsHint',
     ],

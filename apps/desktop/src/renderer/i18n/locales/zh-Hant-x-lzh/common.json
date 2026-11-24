@@ -832,20 +832,6 @@
       "loadFailed": "供方組未能讀",
       "note": "此機上之差事，及受君分享者之差事，皆由組擇一機執行 Agent"
     },
-    "strategy": {
-      "label": "組之策",
-      "least": "最閒者先",
-      "round": "輪替",
-      "order": "依序",
-      "weight": "依權重",
-      "quotaFirst": "能讀訂閱耗用時，先用將重置而所餘尚多之機，使各名籍按時均勻用盡；相差無幾時，依組之策",
-      "description": {
-        "least": "予最閒之機",
-        "round": "依序輪替",
-        "order": "居前者先",
-        "weight": "依權重之比"
-      }
-    },
     "autoSwitch": {
       "label": "自動易機",
       "description": "達上限、連不上或登入失效時，自動易一機"
@@ -22433,7 +22419,6 @@
       "useCodex": "以 Codex 登入"
     },
     "title": "訂閱帳號",
-    "strategy": "負載平衡",
     "add": "新增帳號",
     "defaultTag": "預設",
     "ready": "已連線",
@@ -22663,6 +22648,33 @@
     },
     "switchOffer": {
       "action": "易用 {{model}} 續之"
+    },
+    "auto": {
+      "accounts_other": "{{count}} 帳號",
+      "computers_other": "{{count}} 機",
+      "pickFor": "{{name}} 之擇法",
+      "hiddenTag": "已隱",
+      "hide": "擇模型時不列",
+      "hideAria": "擇模型時不列「{{name}}」",
+      "show": "擇模型時列之",
+      "showAria": "擇模型時列「{{name}}」",
+      "assignedBy": "新任務依「{{strategy}}」分之",
+      "adjust": "於模型組調之",
+      "quotaFirst": "帳號之間、諸機之間，無論何擇法，能讀訂閱用量者，先用將復而餘多者；相若乃依擇法。"
+    },
+    "sources": {
+      "title": "供應商之模式",
+      "description": "合數源為一模式，用之如一供應商：擇模型如常，由模式定此番用何源。同家之供應商自合。",
+      "models_other": "{{count}} 模型",
+      "autoTag": "自成",
+      "new": "合供應商",
+      "newName": "新供應商之模式",
+      "empty": "尚無可合之源。連同家供應商二以上則自合，亦可點「合供應商」自擇。",
+      "addProvider": "添供應商",
+      "chooseProvider": "擇供應商",
+      "removeAria": "自此模式去 {{name}}",
+      "deleteAria": "刪模式「{{name}}」",
+      "note": "自成之模式隨供應商之連接增減，其員不可改，可易擇法或隱之。"
     }
   },
   "projectSettings": {

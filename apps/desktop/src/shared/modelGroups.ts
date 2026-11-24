@@ -4,6 +4,8 @@
  * 产品规则见 docs/product-rules/model-groups.md。
  */
 
+import { ROUTE_STRATEGIES, type RouteStrategy } from './routeStrategy.js';
+
 export const MODEL_GROUPS_IPC = {
   GET: 'model-groups:get',
   SET: 'model-groups:set',
@@ -33,15 +35,9 @@ export const MODEL_GROUPS_REMOTE_CHANNELS = [
   MODEL_GROUPS_IPC.ROUTE_NOTE,
 ] as const;
 
-export const MODEL_GROUP_STRATEGIES = ['expiring', 'order', 'rotate', 'cheapest', 'drain', 'headroom', 'weighted'] as const;
-/**
- * expiring = 快作废的额度先用；order = 按顺序；rotate = 每个新任务换一个；
- * cheapest = 最省钱：还有配额的订阅不另外花钱，其余按该来源的标价从低到高；
- * drain = 用完再换：一直用上一次选中的，它用完或用不了才换列表里下一个；
- * headroom = 余量最多的先用：剩余配额占比最高的先用；
- * weighted = 按权重：新任务按各来源的权重比例交错分配。
- */
-export type ModelGroupStrategy = (typeof MODEL_GROUP_STRATEGIES)[number];
+/** 选法只有一套(shared/routeStrategy.ts)，账号池与供应商组也用它。 */
+export const MODEL_GROUP_STRATEGIES = ROUTE_STRATEGIES;
+export type ModelGroupStrategy = RouteStrategy;
 
 /**
  * 2026-11-23 之前的手机与电脑只认识前四种选法：旧手机会整条不列认不出的模式，旧电脑把它当成「快作废的先用」。
@@ -56,7 +52,9 @@ const LEGACY_STRATEGY: Record<ModelGroupStrategy, 'expiring' | 'order' | 'rotate
 /** 发给手机与另一台电脑的模式配置(model-groups:get 与伙伴设置里的模型组)：见 LEGACY_STRATEGY。 */
 export function modelGroupsConfigForRemote(config: ModelGroupsConfig): ModelGroupsConfig {
   return {
-    routes: config.routes.map((route) => (LEGACY_STRATEGY[route.strategy] === route.strategy
+    // 隐藏的供应商路由展开出来的不发给别的设备：旧版不认识 hidden，会照常列出来。供应商路由本身(sourceRoutes)也不发：
+    // 它们只在这台电脑上按目录展开，别的设备拿到的是展开后的普通路由。
+    routes: config.routes.filter((route) => !route.hidden).map((route) => (LEGACY_STRATEGY[route.strategy] === route.strategy
       ? route
       : { ...route, strategy: LEGACY_STRATEGY[route.strategy], pick: route.strategy } as ModelGroupRoute)),
   };
@@ -138,11 +136,50 @@ export interface ModelGroupRoute {
    * 关掉后用这个模式的任务出问题不自动换，只在横幅里提议。
    */
   autoSwitch?: false;
+  /**
+   * 这条路由是某条供应商路由在一个模型上的展开(见 ModelGroupSourceRoute)：由这台电脑按目录生成，不存盘。
+   * 界面把它列在那条供应商路由下面，不当作单独的一条路由。
+   */
+  parent?: { id: string; name: string };
+  /** 所属的供应商路由被用户隐藏了：选择器不列，设置页里能找回。 */
+  hidden?: true;
+}
+
+/** 供应商路由的成员：一整个供应商(它提供的全部模型)，不指定模型。目前只支持本机的供应商。 */
+export interface ModelGroupSource {
+  providerId: string;
+  /** 用户暂时不让这条路由用它；保留在列表里。 */
+  off?: boolean;
+  /** 「按权重」时的权重，1–1000；不设为 1。 */
+  weight?: number;
+}
+
+/**
+ * 供应商路由(2026-11-24 用户裁决)：把几个供应商合成一条路由，用起来像一个合并后的供应商——照常选模型，
+ * 由路由按选法决定这次用哪个供应商。它在每个模型上展开成一条普通路由(routes 里带 parent 的那些)，
+ * 选路、任务里的说明、撞配额换来源都走普通路由已有的那一套，不另写。
+ * auto = 同一家的几个供应商自动合成的：成员跟着连接增减，不存盘，只能改选法或隐藏。
+ */
+export interface ModelGroupSourceRoute {
+  id: string;
+  name: string;
+  strategy: ModelGroupStrategy;
+  sources: ModelGroupSource[];
+  effort?: string;
+  auto?: true;
+  hidden?: true;
 }
 
 /** 2026-11-11 起只有路线；旧版存下的 modes 读取时忽略。 */
 export interface ModelGroupsConfig {
+  /** 读取时：用户排的路由在前，供应商路由展开出来的(带 parent)在后。保存时只存用户排的。 */
   routes: ModelGroupRoute[];
+  /** 读取时：用户建的供应商路由在前，自动合成的(auto)在后。保存时只存用户建的。 */
+  sourceRoutes?: ModelGroupSourceRoute[];
+  /** 用户隐藏的自动供应商路由 id。 */
+  hiddenAuto?: string[];
+  /** 用户给自动供应商路由改的选法；没改过的按默认「快作废的先用」。 */
+  autoStrategy?: Record<string, ModelGroupStrategy>;
 }
 
 /** 用了这个模式的任务出问题时是否自动换来源(默认开)。 */
@@ -156,7 +193,17 @@ export function modelGroupAutoSwitchFor(config: ModelGroupsConfig, selection: Mo
   return !!route && modelGroupAutoSwitchOn(route);
 }
 
+/** 自动供应商路由的 id 前缀(后面是那一家的标识)，以及展开出来的路由的 id 前缀。用户建的都不用这两个前缀。 */
+export const MODEL_GROUP_AUTO_PREFIX = 'auto:';
+export const MODEL_GROUP_EXPANDED_PREFIX = 'src:';
+export const isAutoModelGroupId = (id: string): boolean => id.startsWith(MODEL_GROUP_AUTO_PREFIX);
+export const isExpandedModelGroupId = (id: string): boolean => id.startsWith(MODEL_GROUP_EXPANDED_PREFIX);
+
 export const MODEL_GROUPS_DEFAULTS: ModelGroupsConfig = { routes: [] };
+
+/** 供应商路由最多展开出这么多条(每条供应商路由的每个模型一条)，以及最多记这么多条隐藏。 */
+export const MODEL_GROUP_EXPANDED_LIMIT = 512;
+export const MODEL_GROUP_HIDDEN_AUTO_LIMIT = 128;
 
 export const MODEL_GROUP_LIMITS = { routes: 32, candidates: 16, exceptions: 8, name: 40, id: 64, field: 256, effort: 32, weight: 1000 } as const;
 
@@ -226,6 +273,8 @@ export interface ModelGroupResolvedRoute {
   /** 选中的来源在另一台电脑或是分享来的：新任务的 Agent 在那里运行。本机省略。 */
   agentDeviceId?: string;
   effort?: string;
+  /** 用户要的 Fast，且选中的来源支持；否则省略。 */
+  fastMode?: true | 'ultrafast';
 }
 
 /**
@@ -274,8 +323,12 @@ export interface ModelGroupResolveRequest {
   selection: ModelGroupSelection;
   /** 只看会选谁：不推进「轮流」的顺序。 */
   dryRun?: boolean;
-  /** 第一条消息的情况；时间由主进程自己取，不信界面传来的。 */
-  context?: { hasImages?: boolean };
+  /**
+   * 第一条消息的情况；时间由主进程自己取，不信界面传来的。
+   * effort / fastMode = 用户在选择器里给这个模型选的思考深度与 Fast：只对供应商路由展开出来的路由生效
+   * (它们在选择器里就是普通模型行，这两项用户照常能调)，选中的来源不支持时不带。
+   */
+  context?: { hasImages?: boolean; effort?: string; fastMode?: true | 'ultrafast' };
   /**
    * 只在这个运行位置的来源里选(agentDeviceId null = 本机)：进行中的任务里选模式时用，任务换不了电脑。
    * 省略 = 不限(新任务)。
@@ -367,9 +420,40 @@ function normalizeModelGroupRoute(raw: unknown): ModelGroupRoute | null {
     .filter((item): item is ModelGroupException => !!item)
     .slice(0, MODEL_GROUP_LIMITS.exceptions);
   const effort = text(value.effort, MODEL_GROUP_LIMITS.effort);
+  // 展开出来的路由只凭 id 前缀认：用户排的路由 id 不带这个前缀，带了 parent 也不算。
+  const parentRaw = isExpandedModelGroupId(id) && value.parent && typeof value.parent === 'object' ? value.parent as Record<string, unknown> : null;
+  const parent = parentRaw ? { id: text(parentRaw.id, MODEL_GROUP_LIMITS.id), name: text(parentRaw.name, MODEL_GROUP_LIMITS.name) } : null;
   return {
     id, name, strategy, candidates, ...(exceptions.length > 0 ? { exceptions } : {}), ...(effort ? { effort } : {}),
     ...(value.autoSwitch === false ? { autoSwitch: false as const } : {}),
+    ...(parent?.id && parent.name ? { parent } : {}),
+    ...(parent?.id && value.hidden === true ? { hidden: true as const } : {}),
+  };
+}
+
+function normalizeSourceRoute(raw: unknown): ModelGroupSourceRoute | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const value = raw as Record<string, unknown>;
+  const id = text(value.id, MODEL_GROUP_LIMITS.id);
+  const name = text(value.name, MODEL_GROUP_LIMITS.name);
+  if (!id || !name || isExpandedModelGroupId(id)) return null;
+  const seen = new Set<string>();
+  const sources = (Array.isArray(value.sources) ? value.sources : []).flatMap((item): ModelGroupSource[] => {
+    const entry = item && typeof item === 'object' ? item as Record<string, unknown> : null;
+    const providerId = entry ? text(entry.providerId, MODEL_GROUP_LIMITS.field) : '';
+    if (!entry || !providerId || seen.has(providerId)) return [];
+    seen.add(providerId);
+    const weight = modelGroupWeight(entry.weight);
+    return [{ providerId, ...(entry.off === true ? { off: true } : {}), ...(weight !== 1 ? { weight } : {}) }];
+  }).slice(0, MODEL_GROUP_LIMITS.candidates);
+  const strategy = MODEL_GROUP_STRATEGIES.find((item) => item === value.pick)
+    ?? MODEL_GROUP_STRATEGIES.find((item) => item === value.strategy) ?? 'expiring';
+  const effort = text(value.effort, MODEL_GROUP_LIMITS.effort);
+  const auto = isAutoModelGroupId(id);
+  return {
+    id, name, strategy, sources, ...(effort ? { effort } : {}),
+    ...(auto ? { auto: true as const } : {}),
+    ...(auto && value.hidden === true ? { hidden: true as const } : {}),
   };
 }
 
@@ -439,13 +523,27 @@ function uniqueById<T extends { id: string }>(items: readonly T[], max: number):
  */
 export function normalizeModelGroupsConfig(raw: unknown): ModelGroupsConfig {
   const value = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
-  const routes = uniqueById(
-    (Array.isArray(value.routes) ? value.routes : []).map(normalizeModelGroupRoute).filter((item): item is ModelGroupRoute => !!item),
-    MODEL_GROUP_LIMITS.routes,
-  );
+  const all = (Array.isArray(value.routes) ? value.routes : []).map(normalizeModelGroupRoute).filter((item): item is ModelGroupRoute => !!item);
+  // 展开出来的路由不存盘，数量由生成方封顶；用户排的路由仍按上限截断。
+  const routes = [
+    ...uniqueById(all.filter((route) => !route.parent), MODEL_GROUP_LIMITS.routes),
+    ...uniqueById(all.filter((route) => route.parent), MODEL_GROUP_EXPANDED_LIMIT),
+  ];
   const routeIds = new Set(routes.map((route) => route.id));
+  const sourceRoutes = uniqueById(
+    (Array.isArray(value.sourceRoutes) ? value.sourceRoutes : []).map(normalizeSourceRoute).filter((item): item is ModelGroupSourceRoute => !!item),
+    MODEL_GROUP_LIMITS.routes * 2,
+  );
+  const hiddenAuto = [...new Set((Array.isArray(value.hiddenAuto) ? value.hiddenAuto : [])
+    .map((id) => text(id, MODEL_GROUP_LIMITS.id)).filter(isAutoModelGroupId))].slice(0, MODEL_GROUP_HIDDEN_AUTO_LIMIT);
+  const autoStrategy = Object.fromEntries(Object.entries(value.autoStrategy && typeof value.autoStrategy === 'object' ? value.autoStrategy : {})
+    .filter(([id, strategy]) => isAutoModelGroupId(id) && id.length <= MODEL_GROUP_LIMITS.id && MODEL_GROUP_STRATEGIES.includes(strategy as ModelGroupStrategy))
+    .slice(0, MODEL_GROUP_HIDDEN_AUTO_LIMIT)) as Record<string, ModelGroupStrategy>;
   return {
     routes: routes.map((route) => pruneExceptions(route, routeIds)),
+    ...(sourceRoutes.length > 0 ? { sourceRoutes } : {}),
+    ...(hiddenAuto.length > 0 ? { hiddenAuto } : {}),
+    ...(Object.keys(autoStrategy).length > 0 ? { autoStrategy } : {}),
   };
 }
 

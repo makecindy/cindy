@@ -29,7 +29,7 @@ import { assertModelGroupsCaller } from './remoteAccess.js';
 import { acceptModelGroupRouteNote, type ModelGroupRouteNotePorts } from './routeNote.js';
 import { bindModelGroupSession } from './sessionBindings.js';
 import { readModelGroupsConfig, writeModelGroupsConfig } from './store.js';
-import { readModelGroupRecoveryOffer, resolver } from './desktopResolver.js';
+import { readModelGroupRecoveryOffer, refreshAutoModelGroupRoutes, resolver } from './desktopResolver.js';
 
 function sessionIdOf(value: Record<string, unknown>): string {
   const sessionId = value.sessionId;
@@ -69,14 +69,17 @@ const routeNotePorts: ModelGroupRouteNotePorts = {
 };
 
 export function registerModelGroupsIpc(): void {
-  ipcMain.handle(MODEL_GROUPS_IPC.GET, (event) => {
+  ipcMain.handle(MODEL_GROUPS_IPC.GET, async (event) => {
     assertModelGroupsCaller(event);
+    await refreshAutoModelGroupRoutes();
     return isDeviceLinkInvoke() ? modelGroupsConfigForRemote(readModelGroupsConfig()) : readModelGroupsConfig();
   });
   ipcMain.handle(MODEL_GROUPS_IPC.SET, (event, raw: unknown) => {
     assertTrustedAppRendererEvent(event);
     if (!raw || typeof raw !== 'object') throwIpcError('INVALID_PARAMS', 'model groups config must be an object');
-    return writeModelGroupsConfig(normalizeModelGroupsConfig(raw));
+    // 这次写入没带的字段(只改路由的界面、旧界面)不动已存的。
+    const keep = (['sourceRoutes', 'hiddenAuto', 'autoStrategy'] as const).filter((key) => !Object.hasOwn(raw, key));
+    return writeModelGroupsConfig(normalizeModelGroupsConfig(raw), keep);
   });
   ipcMain.handle(MODEL_GROUPS_IPC.RESOLVE, async (event, raw: unknown) => {
     assertModelGroupsCaller(event);
@@ -94,7 +97,11 @@ export function registerModelGroupsIpc(): void {
     const request: ModelGroupResolveRequest = {
       selection,
       dryRun: value.dryRun === true,
-      ...(context?.hasImages === true ? { context: { hasImages: true } } : {}),
+      ...(context ? { context: {
+        ...(context.hasImages === true ? { hasImages: true } : {}),
+        ...(typeof context.effort === 'string' && /^[a-z]{1,32}$/.test(context.effort) ? { effort: context.effort } : {}),
+        ...(context.fastMode === true || context.fastMode === 'ultrafast' ? { fastMode: context.fastMode } : {}),
+      } } : {}),
       ...(rawLocation ? { location: { agentDeviceId: locationId } } : {}),
       ...(value.remoteInvocableOnly === true ? { remoteInvocableOnly: true } : {}),
     };

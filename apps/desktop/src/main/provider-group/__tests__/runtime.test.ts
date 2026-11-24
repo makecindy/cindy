@@ -174,7 +174,7 @@ describe('provider group runtime', () => {
     const read = vi.spyOn(scope.router, 'view').mockImplementationOnce(async (providerId) => {
       owner = 'next-detail-owner';
       return {
-        providerId, config: { strategy: 'least', autoSwitch: true, members: [] },
+        providerId, config: { strategy: 'expiring', autoSwitch: true, members: [] },
         members: [{ key: 'local', kind: 'local', label: 'private', state: 'available', running: 0, limit: 4, weight: 1, paused: false }],
       };
     });
@@ -215,7 +215,7 @@ describe('remote group continuity wiring', () => {
     owner = 'continuity-wiring-owner';
     io.invoke.mockReset();
     io.catalog.mockReset();
-    const config = normalizeProviderGroupConfig({ strategy: 'least', autoSwitch: true, allowFast: false,
+    const config = normalizeProviderGroupConfig({ strategy: 'expiring', autoSwitch: true, allowFast: false,
       members: [{ kind: 'device', agentDeviceId: 'executor', providerId: 'openai' }] }, 'openai')!;
     io.invoke.mockResolvedValueOnce({ ok: true, result: { kind: 'member',
       member: { key: config.members[0].key, kind: 'device', agentDeviceId: 'executor', providerId: 'openai' },
@@ -252,7 +252,7 @@ describe('remote group continuity wiring', () => {
     io.catalog.mockReset();
     io.catalogState.mockReset();
     io.status.mockReturnValue('online');
-    const config = normalizeProviderGroupConfig({ strategy: 'least', autoSwitch: true, allowFast: false,
+    const config = normalizeProviderGroupConfig({ strategy: 'expiring', autoSwitch: true, allowFast: false,
       members: [{ kind: 'device', agentDeviceId: 'live-executor', providerId: 'openai' }] }, 'openai')!;
     const member = config.members[0]!;
     const releases: Array<(views: ProviderView[]) => void> = [];
@@ -306,7 +306,7 @@ describe('remote group continuity wiring', () => {
     owner = 'continuity-unavailable-owner';
     io.invoke.mockReset();
     io.catalog.mockReset();
-    const config = normalizeProviderGroupConfig({ strategy: 'least', autoSwitch: true, allowFast: false,
+    const config = normalizeProviderGroupConfig({ strategy: 'expiring', autoSwitch: true, allowFast: false,
       members: [{ kind: 'device', agentDeviceId: 'executor', providerId: 'openai' }] }, 'openai')!;
     const member = config.members[0]!;
     const grant: GroupContinuityGrant = { id: 'grant-unavailable', group: 'openai', controller: 'C',
@@ -355,7 +355,7 @@ describe('remote group continuity wiring', () => {
     io.catalog.mockReset();
     io.status.mockReturnValue('online');
     const configFor = (providerId: string) => normalizeProviderGroupConfig({
-      strategy: 'least', autoSwitch: true, allowFast: false,
+      strategy: 'expiring', autoSwitch: true, allowFast: false,
       members: [{ kind: 'device', agentDeviceId: 'executor', providerId }],
     }, providerId)!;
     const openai = configFor('openai');
@@ -413,7 +413,7 @@ describe('remote group continuity wiring', () => {
     invalidateProviderMetadataContinuity();
     const target = 'continuity-directory-O-' + lane.replaceAll(' ', '-');
     getProviderGroupDirectory().invalidate(target);
-    const configFor = (providerId: string) => normalizeProviderGroupConfig({ strategy: 'least', autoSwitch: true,
+    const configFor = (providerId: string) => normalizeProviderGroupConfig({ strategy: 'expiring', autoSwitch: true,
       allowFast: false, members: [{ kind: 'device', agentDeviceId: 'executor', providerId }] }, providerId)!;
     const openai = configFor('openai'), anthropic = configFor('anthropic');
     const oldResult = { providers: [], providerContinuity: { stale: false, remainingMs: 1_800_000 } };
@@ -475,7 +475,7 @@ describe('remote group continuity wiring', () => {
     io.catalog.mockReset();
     io.status.mockReturnValue('online');
     const configFor = (providerId: string) => normalizeProviderGroupConfig({
-      strategy: 'least', autoSwitch: true, allowFast: false,
+      strategy: 'expiring', autoSwitch: true, allowFast: false,
       members: [{ kind: 'device', agentDeviceId: 'executor', providerId }],
     }, providerId)!;
     const openai = configFor('openai');
@@ -534,7 +534,7 @@ describe('remote group continuity wiring', () => {
     io.invoke.mockReset();
     io.catalog.mockReset();
     io.status.mockReturnValue('online');
-    const config = normalizeProviderGroupConfig({ strategy: 'least', autoSwitch: true, allowFast: false,
+    const config = normalizeProviderGroupConfig({ strategy: 'expiring', autoSwitch: true, allowFast: false,
       members: [{ kind: 'device', agentDeviceId: 'capacity-executor', providerId: 'openai' }] }, 'openai')!;
     let livePicks = 0;
     io.invoke.mockImplementation(async (device: string, channel: string, args: unknown[]) => {
@@ -580,7 +580,7 @@ describe('remote group continuity wiring', () => {
   // - Tier: unit (real runtime facade and directory read state; only transport mocked).
   it('does not report a stale directory snapshot as the current group membership', async () => {
     owner = 'stale-membership-owner';
-    const staleConfig = normalizeProviderGroupConfig({ strategy: 'least', autoSwitch: true, allowFast: false,
+    const staleConfig = normalizeProviderGroupConfig({ strategy: 'expiring', autoSwitch: true, allowFast: false,
       members: [{ kind: 'device', agentDeviceId: 'stale-executor', providerId: 'openai' }] }, 'openai')!;
     io.catalogState.mockResolvedValueOnce({ views: [{
       id: 'openai', name: 'OpenAI', agents: ['codex'], models: { codex: [] }, connected: true,
@@ -604,7 +604,7 @@ describe('remote group continuity wiring', () => {
     io.catalog.mockReset();
     io.status.mockReturnValue('online');
     const serviceOwner = 'continuity-service-owner';
-    const config = normalizeProviderGroupConfig({ strategy: 'least', autoSwitch: true, allowFast: false,
+    const config = normalizeProviderGroupConfig({ strategy: 'expiring', autoSwitch: true, allowFast: false,
       members: [{ kind: 'device', agentDeviceId: 'service-executor', providerId: 'openai' }] }, 'openai')!;
     let livePicks = 0;
     io.invoke.mockImplementation(async (device: string, channel: string, args: unknown[]) => {
@@ -918,7 +918,7 @@ describe('provider group runtime quota account selection', () => {
     // Healthy runs more tasks: only its readable quota puts it ahead. Since 2026-11-19 an unreadable member stays a
     // candidate (provider-groups.md §5), so a timed-out read must fall back to load, i.e. the less loaded busy one.
     io.catalog.mockImplementation(async (_invoke, deviceId) => [provider(providerId, deviceId === 'busy' ? 2 : 3)]);
-    h.config.members = normalizeProviderGroupConfig({ strategy: 'least', members: devices.map(agentDeviceId => ({
+    h.config.members = normalizeProviderGroupConfig({ strategy: 'expiring', members: devices.map(agentDeviceId => ({
       kind: 'device', agentDeviceId, providerId,
     })) }, h.localId)!.members;
     io.group.mockReturnValue(h.config);

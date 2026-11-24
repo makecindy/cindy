@@ -24,7 +24,6 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { SegmentedControl } from '@/components/ui/segmented-control';
 import { SETTINGS_HINT, SETTINGS_SECTION_TITLE_CLASS, SettingsBlock, SettingsCard, SettingsRow } from '@/components/ui/settings-rows';
 import { Select } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
@@ -40,13 +39,13 @@ import {
   concurrencyLimitOptionValue,
   concurrencyLimitPatch,
   PROVIDER_GROUP_MAX_WEIGHT,
-  PROVIDER_GROUP_STRATEGIES,
   providerGroupDeviceCount,
   type ProviderGroupConfig,
   type ProviderGroupMember,
   type ProviderGroupMemberStatus,
-  type ProviderGroupStrategy,
 } from '../../../shared/providerGroup';
+import type { RouteStrategy } from '../../../shared/routeStrategy';
+import { RouteStrategyNote } from '@/components/settings/RouteStrategyNote';
 import { providerShareComputerName, useProviderShareOwnerNameOf } from '../provider-share/providerShareNames';
 import { GroupMemberQuota, groupMemberQuotaTarget } from './GroupMemberQuota';
 import { GroupMemberReshare, reshareSummaryText } from './GroupMemberReshare';
@@ -63,13 +62,6 @@ import { providerManagementErrorKey } from './providerManagement';
 
 export { memberStatusText };
 
-/**
- * Claude 订阅的配额排序已对所有组策略生效(provider-groups.md §5，2026-10-15)，不再单列「用量均衡」；
- * 旧组存的 `usage` 与最少占用挑法相同，按最少占用显示，用户改选时才写回新值。
- */
-const SELECTABLE_STRATEGIES = PROVIDER_GROUP_STRATEGIES.filter((value) => value !== 'usage');
-const selectableStrategy = (strategy: ProviderGroupStrategy): ProviderGroupStrategy =>
-  strategy === 'usage' ? 'least' : strategy;
 const WEIGHT_OPTIONS = ['1', '2', '3', '5', '10', '20', '50', String(PROVIDER_GROUP_MAX_WEIGHT)];
 const MEMBER_MORE_BUTTON =
   'flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[var(--text-tertiary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]';
@@ -235,27 +227,9 @@ export function ProviderGroupSection({ providerId, providerName, deviceId, devic
                 </div>
               );
             })}
-            <SettingsBlock className="flex flex-col gap-1.5">
-              <div className="flex flex-wrap items-center gap-3">
-                <span className="text-13 text-[var(--text-primary)]">{t('providerGroup.strategy.label')}</span>
-                <SegmentedControl
-                  value={selectableStrategy(config.strategy)}
-                  onValueChange={(strategy: ProviderGroupStrategy) => void save({ ...config, strategy })}
-                  aria-label={t('providerGroup.strategy.label')}
-                  options={SELECTABLE_STRATEGIES.map((value) => ({
-                    value,
-                    label: t(`providerGroup.strategy.${value}`),
-                    disabled: blocked,
-                  }))}
-                />
-                <span className="flex-1" />
-                <span className="text-12 text-[var(--text-secondary)]">
-                  {t(`providerGroup.strategy.description.${selectableStrategy(config.strategy)}`)}
-                </span>
-              </div>
-              <span className="text-12 leading-[1.4] text-[var(--text-tertiary)]">
-                {t('providerGroup.strategy.quotaFirst')}
-              </span>
+            {/* 组里的几台电脑就是一条自动路由：选法只在「智能路由」里改，这里说明现状并给出入口。 */}
+            <SettingsBlock>
+              <RouteStrategyNote strategy={config.strategy} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1" />
             </SettingsBlock>
             <SettingsRow
               title={t('providerGroup.autoSwitch.label')}
@@ -384,7 +358,7 @@ function MemberRow({
 }: {
   member: ProviderGroupMember;
   status: ProviderGroupMemberStatus | undefined;
-  strategy: ProviderGroupStrategy;
+  strategy: RouteStrategy;
   first: boolean;
   /** 同一台电脑上有几个账号时，这是第几个(从 1 起)：行收在电脑下面，只写账号；不传就是一台电脑一行。 */
   account?: number;
@@ -506,7 +480,7 @@ function MemberRow({
               disabled={disabled}
               width="xs"
             />
-            {strategy === 'weight' && (
+            {strategy === 'weighted' && (
               <Select
                 label={t('providerGroup.member.weightAria', { name: label })}
                 value={String(member.weight)}

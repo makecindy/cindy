@@ -716,7 +716,7 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
     const order: string[] = [];
     const directory = createProviderGroupDirectory({ listLocalProviders: async () => [], localDeviceName: () => 'fixture',
       listDevices: async () => [], readDeviceProviders: async () => [], listReceivedShares: () => [], isMobilePlatform: () => false, now: Date.now });
-    const router = createProviderGroupRouter({ directory, readGroup: () => null, listBindings: () => ({}), isTurnRunning: () => false, now: Date.now, random: () => 0 });
+    const router = createProviderGroupRouter({ directory, readGroup: () => null, listBindings: () => ({}), isTurnRunning: () => false, now: Date.now});
     const externalLoad = createProviderGroupExternalLoad({ now: Date.now });
     let hostNow = Date.now();
     const host = createRemoteAgentHost({ runsRoot: path.join(caseRoot, 'host'),

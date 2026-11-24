@@ -21,6 +21,11 @@ export interface ModelGroupsPickerProps {
   /** 当前选中的模式；null = 用普通模型(进行中的任务里总是 null：选一次换一次，不留选中态)。 */
   active: ModelGroupSelection | null;
   onSelect(selection: ModelGroupSelection): void;
+  /**
+   * 新任务草稿才传：选了供应商路由下的一个模型后，只记下「这次由这条路由决定用哪个成员」，不动刚选好的模型、
+   * 思考深度与 Fast。传了它，面板就把供应商路由当成普通供应商列出来(sourceRouteProviders.ts)。
+   */
+  onAttach?(selection: ModelGroupSelection): void;
   /** 打开设置里的「模型组」。组属于另一台电脑(远程控制它的伙伴)时不传：这台电脑的设置管不到那边的组。 */
   onManage?(): void;
   /** 另一台电脑自己的模式，每台一格；只列有模式的电脑。选中的 selection 带上那台的 deviceId。 */
@@ -43,6 +48,8 @@ interface PickerRow {
   selection: ModelGroupSelection;
   name: string;
   hint: string;
+  /** 供应商路由在这个模型上的展开：列在那条供应商路由的名字下面。 */
+  parent?: { id: string; name: string };
 }
 
 export function useModelGroupPickerRows(config: ModelGroupsConfig, deviceId?: string): PickerRow[] {
@@ -57,10 +64,12 @@ export function buildModelGroupPickerRows(config: ModelGroupsConfig, t: TFunctio
     t(`modelGroups.strategy.${route.strategy}.title`),
     route.effort ? t(`effortLevels.${route.effort}`, { defaultValue: route.effort }) : '',
   ].filter(Boolean).join(' · ');
-  return config.routes.map((route) => ({
+  // 隐藏了的供应商路由不列(设置页里能找回)；用户排的在前，供应商路由在后，与设置页同一顺序。
+  return config.routes.filter((route) => !route.hidden).map((route) => ({
     selection: { type: 'route', id: route.id, ...(deviceId ? { deviceId } : {}) },
     name: route.name,
     hint: hint(route),
+    ...(route.parent ? { parent: route.parent } : {}),
   }));
 }
 
@@ -112,8 +121,17 @@ export function ModelGroupsPickerSection({
   const shown = variant === 'favorites'
     ? favorites.flatMap((id) => rows.filter((row) => row.selection.id === id))
     : matches(rows, query);
+  // 收藏按收藏顺序整段列；其余位置每条供应商路由单独一段：段名是它的名字，下面是它能用的模型，像一个合并后的供应商。
+  const split = variant !== 'favorites';
+  const title = device ? t('modelGroups.picker.deviceTitle', { device: device.name }) : t('modelGroups.title');
+  const parents = split ? [...new Map(shown.flatMap((row) => (row.parent ? [[row.parent.id, row.parent] as const] : []))).values()] : [];
   const groups = [
-    { key: 'modes', label: device ? t('modelGroups.picker.deviceTitle', { device: device.name }) : t('modelGroups.title'), rows: shown },
+    { key: 'modes', label: title, rows: split ? shown.filter((row) => !row.parent) : shown },
+    ...parents.map((parent) => ({
+      key: `source:${parent.id}`,
+      label: device ? `${parent.name} · ${device.name}` : parent.name,
+      rows: shown.filter((row) => row.parent?.id === parent.id),
+    })),
   ].filter((group) => group.rows.length > 0);
   // 只有「模型组」一格显示空态与管理入口；其余位置没有可列的就不占地方。
   const searchOnly = variant !== 'rail';

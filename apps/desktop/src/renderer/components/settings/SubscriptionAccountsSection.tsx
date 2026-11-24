@@ -1,12 +1,4 @@
-import {
-  ChartNoAxesColumn,
-  CircleMinus,
-  FolderOpen,
-  LogIn,
-  MoreHorizontal,
-  Plus,
-  UserRound,
-} from 'lucide-react';
+import { ChartNoAxesColumn, ChevronRight, CircleMinus, FolderOpen, LogIn, MoreHorizontal, Plus, UserRound } from 'lucide-react';
 import {
   createContext,
   useCallback,
@@ -19,7 +11,6 @@ import {
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
-import { SegmentedControl } from '@/components/ui/segmented-control';
 import { Switch } from '@/components/ui/switch';
 import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
@@ -44,6 +35,7 @@ import {
   QuotaWindowSubgridContext,
 } from '../status/QuotaHoverCard';
 import { buildSubscriptionAccountUsageCard } from '../status/usageCardModel';
+import { QUOTA_TEXT_COLOR_CLASSES, quotaSeverity } from '../status/QuotaBar';
 import {
   isPluginEngineProviderIdShape,
   isUnusedDefaultAccount,
@@ -57,11 +49,11 @@ import {
   CONCURRENCY_LIMIT_UNLIMITED,
   concurrencyLimitFromOption,
   concurrencyLimitOptionValue,
-  type ProviderGroupStrategy,
 } from '../../../shared/providerGroup';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 import { isClassicalLocale, modernLocaleOf } from '../../../shared/locale';
 import { providersSettings } from './ProvidersSection.settings-search';
+import { RouteStrategyNote } from './RouteStrategyNote';
 import { useSettingDefinition } from './useSettingDefinition';
 import { codexResetScope } from '../../../shared/subscriptionAccounts';
 import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
@@ -90,7 +82,6 @@ function AccountResetCredits({ scope }: { scope: string }) {
     onReset={credit => void reset.reset(credit)} />;
 }
 
-const strategies: ProviderGroupStrategy[] = ['least', 'round', 'order', 'weight'];
 const statusDot: Record<SubscriptionAccountView['status'], string> = {
   ready: 'var(--remote-status-ready)',
   limited: 'var(--warning-fg)',
@@ -284,20 +275,49 @@ export function SubscriptionAccountsSection({
   const accounts = view && !isUnusedDefaultSlot(view.accounts) ? view.accounts : [];
   // Strategy and weights only choose between accounts; a single account has nothing to balance.
   const balancing = accounts.length > 1;
+  // 账号区默认收成一行（2026-11-24 用户裁决：用量不占大块篇幅，模型列表才是这页的主体）：每个账号的余量写在这一行，
+  // 点开才是账号列表、额度窗口、额度重置与分配设置，功能一样不少。有账号要登录、读取失败、正在登录或还没有账号时
+  // 自动展开，不把需要处理的事藏起来；用户自己点过之后按用户的。
+  const [openChoice, setOpenChoice] = useState<boolean | null>(null);
+  const needsAttention = failed || busy || !view || accounts.length === 0
+    || accounts.some((account) => account.status === 'signed-out' || account.status === 'unavailable' || !!account.authIssue);
+  const expanded = openChoice ?? needsAttention;
+  const summaryNow = Date.now();
+  const summary = accounts.map((account, index) => {
+    const card = plugin ? null : buildSubscriptionAccountUsageCard(account.usage, t, summaryNow, locale);
+    // 最紧的那个额度窗口代表这个账号：剩余 = 100 - 已用。
+    const remaining = card && card.windows.length > 0
+      ? Math.round(Math.max(0, Math.min(...card.windows.map((item) => 100 - item.window.utilization))))
+      : null;
+    return {
+      id: account.id,
+      name: account.identity || t('providerGroup.member.accountFallback', { index: index + 1 }),
+      remaining,
+    };
+  });
   return (
     <section
       {...accountSetting.anchorProps}
-      className="border-t border-[var(--border-default)] px-5 py-5 [container-type:inline-size]"
+      className={cn('border-t border-[var(--border-default)] px-5 [container-type:inline-size]', expanded ? 'py-5' : 'py-3.5')}
       data-testid="subscription-accounts"
     >
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
           <h3 className="text-16 font-medium text-[var(--text-primary)]">
-            {t('subscriptionAccounts.title')}
+            <button
+              type="button"
+              data-settings-search-action="Expand or collapse the subscription accounts, usage and resets of this provider"
+              aria-expanded={expanded}
+              onClick={() => setOpenChoice(!expanded)}
+              className="-ml-1.5 flex items-center gap-1 rounded-lg px-1.5 py-0.5 text-left transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
+            >
+              <ChevronRight size={14} aria-hidden className={cn('shrink-0 text-[var(--text-tertiary)] transition-transform motion-reduce:transition-none', expanded && 'rotate-90')} />
+              {t('subscriptionAccounts.title')}
+              {accounts.length > 0 && (
+                <span className="ml-1 text-12 font-normal tabular-nums text-[var(--text-tertiary)]">{accounts.length}</span>
+              )}
+            </button>
           </h3>
-          {accounts.length > 0 && (
-            <span className="text-12 text-[var(--text-tertiary)]">{accounts.length}</span>
-          )}
           {locationLabel && <span className="text-12 text-[var(--text-secondary)]">{locationLabel}</span>}
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
@@ -343,6 +363,28 @@ export function SubscriptionAccountsSection({
           </Button>}
         </div>
       </div>
+      {!expanded && summary.length > 0 && (
+        <button
+          type="button"
+          data-testid="subscription-accounts-summary"
+          data-settings-search-action="Expand the subscription accounts of this provider"
+          aria-label={t('subscriptionAccounts.title')}
+          onClick={() => setOpenChoice(true)}
+          className="mt-1.5 flex w-full flex-wrap items-center gap-x-4 gap-y-1 rounded-lg text-left text-12 leading-[1.4] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
+        >
+          {summary.map((item) => (
+            <span key={item.id} className="flex min-w-0 items-center gap-1.5 text-[var(--text-secondary)]">
+              <span className="min-w-0 [overflow-wrap:anywhere]">{item.name}</span>
+              {item.remaining !== null && (
+                <span className={cn('shrink-0 tabular-nums', QUOTA_TEXT_COLOR_CLASSES[quotaSeverity(100 - item.remaining)] ?? 'text-[var(--text-tertiary)]')}>
+                  {t('quotaCard.remainingPercent', { percent: item.remaining })}
+                </span>
+              )}
+            </span>
+          ))}
+        </button>
+      )}
+      <div data-testid="subscription-accounts-body" className={expanded ? undefined : 'hidden'}>
       {failed && (
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <p role="alert" className="text-12 text-[var(--text-danger)]">
@@ -364,33 +406,8 @@ export function SubscriptionAccountsSection({
       )}
       {view && accounts.length > 0 && (
         <>
-          {balancing && (
-            <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
-              <span className="text-13 font-medium text-[var(--text-secondary)]">
-                {t('subscriptionAccounts.strategy')}
-              </span>
-              {/* Same control and option order as the provider group strategy (ProviderGroupSection). */}
-              <SegmentedControl
-                {...accountSetting.controlProps}
-                aria-label={t('subscriptionAccounts.strategy')}
-                value={view.strategy === 'usage' ? 'least' : view.strategy}
-                disabled={busy}
-                options={strategies.map((value) => ({
-                  value,
-                  label: t(`providerGroup.strategy.${value}`),
-                }))}
-                onValueChange={(value) => {
-                  // Only a changed strategy is saved, as with the previous picker.
-                  if (value === (view.strategy === 'usage' ? 'least' : view.strategy)) return;
-                  void run({
-                    action: 'configure',
-                    providerId,
-                    strategy: value,
-                  });
-                }}
-              />
-            </div>
-          )}
+          {/* 几个账号就是一条自动路由：选法只在「智能路由」里改，这里说明现状并给出入口。 */}
+          {balancing && <RouteStrategyNote strategy={view.strategy} />}
           {/* One grid for every account: each usage card joins it as a subgrid, so the bars of all
               accounts start and end at the same columns. */}
           <QuotaWindowSubgridContext.Provider value={true}>
@@ -572,7 +589,7 @@ export function SubscriptionAccountsSection({
                             })
                           }
                         />
-                        {balancing && view.strategy === 'weight' && (
+                        {balancing && view.strategy === 'weighted' && (
                           <Select
                             {...accountSetting.controlProps}
                             label={t('providerGroup.member.weightAria', { name })}
@@ -701,6 +718,7 @@ export function SubscriptionAccountsSection({
           </QuotaWindowSubgridContext.Provider>
         </>
       )}
+      </div>
     </section>
   );
 }

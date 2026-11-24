@@ -8,6 +8,7 @@
 import { isProviderShareAgentDeviceId, PROVIDER_SHARE_AGENT_DEVICE_PREFIX } from './providerShare.js';
 import type { ProviderManagementRequest, ProviderManagementResult } from './providerManagement';
 import { readProviderMetadataContinuity, type ProviderMetadataContinuity } from '@cindy/device-link';
+import { legacyPoolStrategy, routeStrategyOf, type LegacyPoolStrategy, type RouteStrategy } from './routeStrategy.js';
 
 export const PROVIDER_GROUP_IPC = {
   /** Renderer → Main：全部操作走同一个命令通道。 */
@@ -16,8 +17,6 @@ export const PROVIDER_GROUP_IPC = {
   CHANGED: 'provider-group:changed',
 } as const;
 
-export type ProviderGroupStrategy = 'least' | 'round' | 'order' | 'weight' | 'usage';
-export const PROVIDER_GROUP_STRATEGIES: readonly ProviderGroupStrategy[] = ['least', 'round', 'order', 'weight', 'usage'];
 
 export type ProviderGroupMemberKind = 'local' | 'device' | 'share';
 
@@ -97,7 +96,8 @@ export interface ProviderGroupMember {
 export interface ProviderGroupConfig {
   /** Subscription-only speed policy. Absent preserves the existing allowed default. */
   allowFast?: boolean;
-  strategy: ProviderGroupStrategy;
+  /** 选法与智能路由是同一套(shared/routeStrategy.ts)；旧版存下的四种分配方式读取时换成对应的选法。 */
+  strategy: RouteStrategy;
   /** 组内电脑失败时自动换一台继续，默认开启。 */
   autoSwitch: boolean;
   members: ProviderGroupMember[];
@@ -431,9 +431,8 @@ export function normalizeProviderGroupConfig(raw: unknown, groupProviderId: stri
   if (!isProviderGroupProviderId(groupProviderId)) return null;
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const value = raw as Record<string, unknown>;
-  const strategy = PROVIDER_GROUP_STRATEGIES.includes(value.strategy as ProviderGroupStrategy)
-    ? value.strategy as ProviderGroupStrategy
-    : 'least';
+  // 新版电脑发来的摘要把真实选法放在 pick，strategy 留给旧版读(providerGroupSummaryForWire)。
+  const strategy = routeStrategyOf(value.pick ?? value.strategy);
   const members: ProviderGroupMember[] = [];
   const seen = new Set<string>();
   for (const entry of Array.isArray(value.members) ? value.members : []) {
@@ -456,7 +455,9 @@ export function normalizeProviderGroupConfig(raw: unknown, groupProviderId: stri
  */
 export interface ProviderGroupWireSummary {
   allowFast?: boolean;
-  strategy: ProviderGroupStrategy;
+  /** 旧版电脑只认识原来的四种分配方式，这里写最接近的那一种；新版读 pick。 */
+  strategy: LegacyPoolStrategy;
+  pick?: RouteStrategy;
   autoSwitch: boolean;
   members: Array<Pick<ProviderGroupMember,
     'key' | 'kind' | 'agentDeviceId' | 'providerId' | 'label' | 'providerName' | 'hostDeviceId' | 'paused'>>;
@@ -465,7 +466,8 @@ export interface ProviderGroupWireSummary {
 export function providerGroupSummaryForWire(config: ProviderGroupConfig): ProviderGroupWireSummary {
   return {
     ...(config.allowFast !== undefined ? { allowFast: config.allowFast } : {}),
-    strategy: config.strategy,
+    strategy: legacyPoolStrategy(config.strategy),
+    pick: config.strategy,
     autoSwitch: config.autoSwitch,
     members: config.members.map((m) => ({
       key: m.key,

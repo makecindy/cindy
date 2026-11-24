@@ -120,7 +120,8 @@ export function SettingsSidebarNav({
     <>
       <SettingsSearchBox requestedQuery={requestedQuery} visibleTabIds={tabIds} searchContext={searchContext} additionalDocuments={pluginSearchDocuments} onSelect={onSelectSearchResult} />
       <nav role="tablist" aria-label={t('settings.title')} className="flex flex-col gap-0.5">
-        {tabIds.map((tabId) => {
+        {/* 「智能路由」(model-groups) 并在模型供应商页里，是可路由的标签但不在左侧单独列出（2026-11-24 用户裁决）。 */}
+        {tabIds.filter((tabId) => tabId !== 'model-groups').map((tabId) => {
           const selected = activeTab === tabId && !selectedPluginPage;
           const Icon = TAB_ICON[tabId];
           return (

@@ -27,7 +27,7 @@ import {
 } from '../../shared/providerGroup.js';
 import type { ProviderGroupBinding } from './bindings.desktop.js';
 import type { ProviderGroupDirectory, ResolvedProviderGroupMember } from './directory.js';
-import { pickProviderGroupMember, providerGroupMembersFull, type SchedulableMember } from './scheduler.js';
+import { applyRouteWeightStep, pickRouteMember, routeMembersFull, type SchedulableMember } from './scheduler.js';
 import { createGuestSupportReader } from './sharedStatus.js';
 import { providerGroupMemberUsageState, providerGroupRebalanceTarget, PROVIDER_GROUP_USAGE_READ_TIMEOUT_MS } from './usage.js';
 import { coolingScope, currentCooling, PROVIDER_GROUP_COOLING_SCOPE_CAP, type ProviderGroupPersistedCooling } from './cooling.js';
@@ -89,7 +89,6 @@ export interface ProviderGroupRouterDeps {
     write(value: ProviderGroupPersistedCooling): void;
   };
   now(): number;
-  random(): number;
 }
 
 export interface ProviderGroupPickInput {
@@ -196,6 +195,8 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
 
   const lastPicked = new Map<string, string>();
   const roundPicks = new Map<string, number>();
+  /** 「按权重」的计数：供应商 → 组内电脑 → 计数。只在内存里，重启后重新开始。 */
+  const weightCounters = new Map<string, Map<string, number>>();
   const tried = new Map<string, { at: number; keys: Set<string> }>();
   /** 本机任务刚选中、还没开始运行一轮的临时占用：任务 id → 那台。 */
   const provisional = new Map<string, { providerId: string; memberKey: string; until: number }>();
@@ -424,17 +425,21 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
           weight: r.member.weight,
           urgency: schedule ? schedule.urgency : quota.urgency,
           fiveHourTight: schedule ? schedule.fiveHourTight : quota.fiveHourTight,
+          // 账号调度摘要不带余量：有摘要的成员按读不到处理，「余量最多的先用」时排在读得到的后面。
+          headroom: schedule ? null : quota.headroom,
         };
       });
-      const key = pickProviderGroupMember(schedulable, config.strategy, {
+      const picked = pickRouteMember(schedulable, config.strategy, {
         exclude: input.exclude,
         lastPicked: lastPicked.get(input.providerId) ?? null,
         roundPicks: roundPicks.get(input.providerId),
-        random: deps.random,
+        weightCounters: weightCounters.get(input.providerId),
+        quotaFirst: true,
         keepUnknownQuota: true,
       });
+      const key = picked.key;
       if (!key) {
-        if (!input.quotaRebalance && providerGroupMembersFull(schedulable, { exclude: input.exclude })) {
+        if (!input.quotaRebalance && routeMembersFull(schedulable, { exclude: input.exclude })) {
           return { kind: 'unavailable', resolved, full: true };
         }
         // Only members that could take this model after a quota reset count. A paused,
@@ -467,6 +472,8 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
       }
       roundPicks.set(input.providerId, lastPicked.get(input.providerId) === key ? (roundPicks.get(input.providerId) ?? 0) + 1 : 1);
       lastPicked.set(input.providerId, key);
+      if (picked.weightStep)
+        weightCounters.set(input.providerId, applyRouteWeightStep(weightCounters.get(input.providerId), picked.weightStep));
       if (input.reserveFor) {
         provisional.set(input.reserveFor, {
           providerId: input.providerId,

@@ -47,6 +47,7 @@ import {
   type ModelGroupStrategy,
 } from '../../../shared/modelGroups';
 import { ModelGroupRouteExceptions } from './ModelGroupRouteExceptions';
+import { ModelGroupsAutoRoutes } from './ModelGroupsAutoRoutes';
 import { modelGroupsSettings } from './ModelGroupsSection.settings-search';
 import { ModelGroupsOverview } from './ModelGroupsOverview';
 import { SettingsTextInput } from './SettingsTextInput';
@@ -135,7 +136,11 @@ export function ModelGroupsSection() {
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage ?? i18n.language;
   const { confirm } = useConfirmDialog();
-  const { config, loaded } = useModelGroups();
+  // 设置页读全部：隐藏了的自动路由要能在这里找回。
+  const { config, loaded } = useModelGroups(true, { includeHidden: true });
+  // 这里能打开、能改的是用户按模型排的路由；供应商路由(及它们在每个模型上的展开)在下面单独一段(ModelGroupsAutoRoutes)。
+  const userRoutes = useMemo(() => config.routes.filter((item) => !item.parent), [config]);
+  const shownConfig = useMemo(() => ({ ...config, routes: userRoutes }), [config, userRoutes]);
   // 时段例外可能改走别的路线：「试一下」里会出现别的路线的来源，名字一起备好。
   const allCandidates = useMemo(() => config.routes.flatMap((item) => item.candidates), [config]);
   const namesOf = useModelGroupCandidateNames(allCandidates);
@@ -183,7 +188,7 @@ export function ModelGroupsSection() {
   const back = () => setView({ kind: 'list' });
 
   // ── 路线详情 ───────────────────────────────────────────────────────────────
-  const route = view.kind === 'route' ? config.routes.find((item) => item.id === view.id) : undefined;
+  const route = view.kind === 'route' ? userRoutes.find((item) => item.id === view.id) : undefined;
   if (view.kind === 'route' && route) {
     const move = (index: number, delta: number) => updateRoute(route.id, (current) => {
       const candidates = [...current.candidates];
@@ -460,14 +465,15 @@ export function ModelGroupsSection() {
   // ── 列表 ───────────────────────────────────────────────────────────────────
   return (
     <SettingsSection variant="page" title={t('modelGroups.title')} description={t('modelGroups.description')} testId="model-groups-settings">
-      <ModelGroupsOverview config={config} onOpenRoute={(id) => setView({ kind: 'route', id })} />
+      <ModelGroupsOverview config={shownConfig}
+        onOpenRoute={(id) => { if (userRoutes.some((item) => item.id === id)) setView({ kind: 'route', id }); }} />
       <SettingsSection
         title={t('modelGroups.routes')}
         titleId={modelGroupsSettings.routes.targetId}
         description={t('modelGroups.routesDescription')}
         caption={t('modelGroups.settings.scopeNote')}
         action={
-          <Button variant="secondary" size="md" onClick={() => void addRoute()} disabled={!loaded || config.routes.length >= MODEL_GROUP_LIMITS.routes}
+          <Button variant="secondary" size="md" onClick={() => void addRoute()} disabled={!loaded || userRoutes.length >= MODEL_GROUP_LIMITS.routes}
             data-settings-search-action="Creates a route and opens it">
             <Plus size={14} aria-hidden />
             {t('modelGroups.settings.newRoute')}
@@ -475,7 +481,7 @@ export function ModelGroupsSection() {
         }
       >
         <SettingsCard>
-          {config.routes.map((item) => (
+          {userRoutes.map((item) => (
             <SettingsRow
               key={item.id}
               media
@@ -488,11 +494,12 @@ export function ModelGroupsSection() {
               onClick={() => setView({ kind: 'route', id: item.id })}
             />
           ))}
-          {config.routes.length === 0 && (
+          {userRoutes.length === 0 && (
             <SettingsBlock className="text-13 leading-[1.5] text-[var(--text-secondary)]">{t('modelGroups.settings.routesEmpty')}</SettingsBlock>
           )}
         </SettingsCard>
       </SettingsSection>
+      <ModelGroupsAutoRoutes config={config} save={save} />
     </SettingsSection>
   );
 }

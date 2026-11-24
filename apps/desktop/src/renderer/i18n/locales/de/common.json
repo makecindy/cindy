@@ -837,20 +837,6 @@
       "loadFailed": "Anbietergruppe konnte nicht geladen werden",
       "note": "Für Sitzungen auf diesem Computer und Sitzungen von Personen, mit denen du teilst, wählt die Gruppe den Computer aus, auf dem der Agent läuft"
     },
-    "strategy": {
-      "label": "Gruppenstrategie",
-      "least": "Geringste Auslastung",
-      "round": "Round Robin",
-      "order": "Der Reihe nach",
-      "weight": "Nach Gewichtung",
-      "quotaFirst": "Wenn die Abonnementnutzung verfügbar ist, werden Computer bevorzugt, deren Kontingent bald zurückgesetzt wird und noch reichlich übrig ist. So wird jedes Konto im Laufe der Zeit gleichmäßig ausgeschöpft. Bei ähnlichen Werten gilt die Gruppenstrategie",
-      "description": {
-        "least": "Nutzt den Computer mit der geringsten Auslastung",
-        "round": "Wechselt reihum zwischen den Computern",
-        "order": "Bevorzugt Computer weiter oben in der Liste",
-        "weight": "Verteilt nach Gewichtung"
-      }
-    },
     "autoSwitch": {
       "label": "Computer automatisch wechseln",
       "description": "Wechselt, wenn ein Computer sein Limit erreicht, nicht erreichbar oder abgemeldet ist"
@@ -22521,7 +22507,6 @@
       "useCodex": "Mit Codex anmelden"
     },
     "title": "Abonnementkonten",
-    "strategy": "Lastverteilung",
     "add": "Konto hinzufügen",
     "defaultTag": "Standard",
     "ready": "Verbunden",
@@ -22752,6 +22737,36 @@
     },
     "switchOffer": {
       "action": "Mit {{model}} fortfahren"
+    },
+    "auto": {
+      "accounts_one": "{{count}} Konto",
+      "accounts_other": "{{count}} Konten",
+      "computers_one": "{{count}} Computer",
+      "computers_other": "{{count}} Computer",
+      "pickFor": "Strategie für {{name}}",
+      "hiddenTag": "Ausgeblendet",
+      "hide": "In der Modellauswahl ausblenden",
+      "hideAria": "{{name}} in der Modellauswahl ausblenden",
+      "show": "In der Modellauswahl anzeigen",
+      "showAria": "{{name}} in der Modellauswahl anzeigen",
+      "assignedBy": "Neue Aufgaben werden nach „{{strategy}}“ verteilt",
+      "adjust": "In Modellgruppen anpassen",
+      "quotaFirst": "Zwischen Konten oder Computern gilt unabhängig von der Strategie: Lässt sich die Abo-Nutzung lesen, kommt zuerst, wer vor dem nächsten Zurücksetzen am meisten Kontingent übrig hat; bei ähnlichem Stand entscheidet die Strategie."
+    },
+    "sources": {
+      "title": "Anbieter-Modi",
+      "description": "Mehrere Quellen zu einem Modus zusammenfassen, der wie ein einzelner Anbieter funktioniert: Modell wie gewohnt wählen, der Modus entscheidet, welche Quelle es ausführt. Anbieter derselben Marke werden automatisch zusammengefasst.",
+      "models_one": "{{count}} Modell",
+      "models_other": "{{count}} Modelle",
+      "autoTag": "Automatisch",
+      "new": "Anbieter zusammenfassen",
+      "newName": "Neuer Anbieter-Modus",
+      "empty": "Noch nichts zum Zusammenfassen. Verbinde zwei oder mehr Anbieter derselben Marke, dann werden sie automatisch zusammengefasst, oder wähle selbst über „Anbieter zusammenfassen“.",
+      "addProvider": "Anbieter hinzufügen",
+      "chooseProvider": "Anbieter wählen",
+      "removeAria": "{{name}} aus diesem Modus entfernen",
+      "deleteAria": "Modus {{name}} löschen",
+      "note": "Automatische Modi folgen deinen verbundenen Anbietern. Ihre Mitglieder lassen sich nicht ändern; Strategie ändern oder ausblenden ist möglich."
     }
   },
   "projectSettings": {

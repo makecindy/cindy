@@ -147,7 +147,7 @@ describe('parseProviderGroupCommand', () => {
   });
 
   it('requires an explicit editing snapshot for conditional writes and rejects legacy remote writes', () => {
-    const config: ProviderGroupConfig = { strategy: 'least', autoSwitch: true, members: [LOCAL] };
+    const config: ProviderGroupConfig = { strategy: 'expiring', autoSwitch: true, members: [LOCAL] };
     for (const action of ['save-if-current', 'delete-if-current'] as const) {
       for (const expectedConfig of [null, config]) {
         const parsed = parseProviderGroupCommand({ action, providerId: 'anthropic', config, expectedConfig });
@@ -171,7 +171,7 @@ describe('parseProviderGroupCommand', () => {
 describe('executeProviderGroupCommand reads', () => {
   it('lists local groups without touching the network and forwards remote views', async () => {
     const d = deps([]);
-    const listGroups = vi.fn(() => ({ anthropic: { strategy: 'least', autoSwitch: true, members: [] } }));
+    const listGroups = vi.fn(() => ({ anthropic: { strategy: 'expiring', autoSwitch: true, members: [] } }));
     const remoteView = vi.fn(async () => ({ providerId: 'anthropic', config: null, members: [] }));
     Object.assign(d, { listGroups, remoteView });
     expect(await executeProviderGroupCommand(d, { action: 'list' })).toEqual({ anthropic: expect.any(Object) });
@@ -182,7 +182,7 @@ describe('executeProviderGroupCommand reads', () => {
 
   it('marks a computer in another computer’s group that this computer cannot reach', async () => {
     const config: ProviderGroupConfig = {
-      strategy: 'least',
+      strategy: 'expiring',
       autoSwitch: true,
       members: [
         LOCAL,
@@ -222,7 +222,7 @@ describe('executeProviderGroupCommand reads', () => {
   });
 
   it.each([MINI, SHARED])('leaves a reachable $kind member unchanged, and skips probing before login', async (member) => {
-    const config: ProviderGroupConfig = { strategy: 'least', autoSwitch: true, members: [LOCAL, member] };
+    const config: ProviderGroupConfig = { strategy: 'expiring', autoSwitch: true, members: [LOCAL, member] };
     const view = {
       providerId: 'anthropic',
       config,
@@ -237,7 +237,7 @@ describe('executeProviderGroupCommand reads', () => {
   });
 
   it.each(['available', 'full'] as const)('marks a shared member reported as %s when it is unavailable on this computer', async (state) => {
-    const config: ProviderGroupConfig = { strategy: 'least', autoSwitch: true, members: [LOCAL, SHARED] };
+    const config: ProviderGroupConfig = { strategy: 'expiring', autoSwitch: true, members: [LOCAL, SHARED] };
     const view = {
       providerId: 'anthropic', config,
       members: [{ key: SHARED.key, kind: SHARED.kind, label: 'Kai', state, running: 4, limit: 4, weight: 1, paused: false }],
@@ -253,7 +253,7 @@ describe('executeProviderGroupCommand reads', () => {
   it.each([MINI, SHARED])('does not hold the group view on a slow $kind member, and does not mark it', async (member) => {
     vi.useFakeTimers();
     try {
-      const config: ProviderGroupConfig = { strategy: 'least', autoSwitch: true, members: [LOCAL, member] };
+      const config: ProviderGroupConfig = { strategy: 'expiring', autoSwitch: true, members: [LOCAL, member] };
       const view = {
         providerId: 'anthropic',
         config,
@@ -280,7 +280,7 @@ describe('executeProviderGroupCommand reads', () => {
 });
 
 describe('provider group IPC remote management', () => {
-  const config: ProviderGroupConfig = { strategy: 'least', autoSwitch: true, members: [LOCAL, MINI] };
+  const config: ProviderGroupConfig = { strategy: 'expiring', autoSwitch: true, members: [LOCAL, MINI] };
   const view = {
     providerId: 'anthropic', config,
     members: [{ key: MINI.key, kind: 'device' as const, label: 'mini', state: 'available' as const, running: 2, limit: 4, weight: 1, paused: false }],
@@ -431,7 +431,7 @@ describe('executeProviderGroupCommand save', () => {
     expect(candidates).toHaveLength(2);
     for (const count of [1, 2]) {
       const expectedConfig = d.readGroup('openai');
-      const config: ProviderGroupConfig = { strategy: 'round', autoSwitch: true,
+      const config: ProviderGroupConfig = { strategy: 'rotate', autoSwitch: true,
         members: accounts.slice(0, count).map((account) => ({ key: `device:mini:${account.id}`, kind: 'device',
           agentDeviceId: 'mini', providerId: account.id, limit: 4, weight: 1, paused: false })) };
       await executeProviderGroupCommand(d, { action: 'save-if-current', providerId: 'openai', config, expectedConfig });
@@ -443,7 +443,7 @@ describe('executeProviderGroupCommand save', () => {
   it.each(['save-if-current', 'delete-if-current'] as const)(
     'does not publish or prune %s under a new owner after Fast synchronization fails',
     async (action) => {
-      const config: ProviderGroupConfig = { strategy: 'least', autoSwitch: true, members: [LOCAL] };
+      const config: ProviderGroupConfig = { strategy: 'expiring', autoSwitch: true, members: [LOCAL] };
       const d = deps([], config);
       d.syncFastPolicy = vi.fn(async () => { d.switchOwner('owner-b'); throw Error('native busy'); });
       await expect(executeProviderGroupCommand(d, {
@@ -457,7 +457,7 @@ describe('executeProviderGroupCommand save', () => {
   it.each(['save-if-current', 'delete-if-current'] as const)(
     'publishes the committed %s and prunes bindings even if native Fast synchronization fails',
     async (action) => {
-      const config: ProviderGroupConfig = { strategy: 'least', autoSwitch: true, members: [LOCAL] };
+      const config: ProviderGroupConfig = { strategy: 'expiring', autoSwitch: true, members: [LOCAL] };
       const d = deps([], config);
       d.syncFastPolicy = vi.fn(async () => { throw Error('native busy'); });
       await expect(executeProviderGroupCommand(d, {
@@ -475,7 +475,7 @@ describe('executeProviderGroupCommand save', () => {
     vi.mocked(isAppSessionBoundaryPending).mockReturnValue(true);
     await expect(executeProviderGroupCommand(d, {
       action, providerId: 'anthropic', expectedConfig: null,
-      config: { strategy: 'least', autoSwitch: true, members: [LOCAL] },
+      config: { strategy: 'expiring', autoSwitch: true, members: [LOCAL] },
     })).rejects.toThrow(/PRECONDITION_FAILED/);
     expect(d.directory.listCandidates).not.toHaveBeenCalled();
     expect(d.writeGroup).not.toHaveBeenCalled();
@@ -491,7 +491,7 @@ describe('executeProviderGroupCommand save', () => {
     });
     await expect(executeProviderGroupCommand(d, {
       action: 'save-if-current', providerId: 'anthropic', expectedConfig: null,
-      config: { strategy: 'least', autoSwitch: true, members: [LOCAL, MINI] },
+      config: { strategy: 'expiring', autoSwitch: true, members: [LOCAL, MINI] },
     })).rejects.toThrow(/PRECONDITION_FAILED/);
     expect(d.writeGroup).not.toHaveBeenCalled();
     expect(d.pruneBindings).not.toHaveBeenCalled();
@@ -501,7 +501,7 @@ describe('executeProviderGroupCommand save', () => {
     ['save-if-current', 'write'], ['save-if-current', 'prune'], ['save-if-current', 'view'],
     ['delete-if-current', 'write'], ['delete-if-current', 'prune'], ['delete-if-current', 'view'],
   ] as const)('stops %s after teardown begins during %s', async (action, stage) => {
-    const config: ProviderGroupConfig = { strategy: 'least', autoSwitch: true, members: [LOCAL] };
+    const config: ProviderGroupConfig = { strategy: 'expiring', autoSwitch: true, members: [LOCAL] };
     const d = deps([], config);
     const beginBoundary = () => vi.mocked(isAppSessionBoundaryPending).mockReturnValue(true);
     if (stage === 'write') d.writeGroup.mockImplementationOnce(async () => { beginBoundary(); return config; });
@@ -515,7 +515,7 @@ describe('executeProviderGroupCommand save', () => {
   });
 
   it('passes the editing snapshot through candidate validation to the atomic writer', async () => {
-    const initial: ProviderGroupConfig = { strategy: 'least', autoSwitch: true, members: [LOCAL] };
+    const initial: ProviderGroupConfig = { strategy: 'expiring', autoSwitch: true, members: [LOCAL] };
     const d = deps([{ key: MINI.key, kind: 'device', agentDeviceId: 'mini', providerId: MINI.providerId, label: 'Mac mini', providerName: 'Claude' }], initial);
     // 目录读取期间另一个编辑已落盘；最终写入处检查，而不是只在开始时检查。
     d.writeGroup.mockRejectedValueOnce(new Error('[PROVIDER_GROUP_CHANGED] changed while reading candidates'));
@@ -532,7 +532,7 @@ describe('executeProviderGroupCommand save', () => {
   });
 
   it('does not release task bindings when a stale delete is rejected', async () => {
-    const initial: ProviderGroupConfig = { strategy: 'least', autoSwitch: true, members: [LOCAL] };
+    const initial: ProviderGroupConfig = { strategy: 'expiring', autoSwitch: true, members: [LOCAL] };
     const d = deps([], initial);
     d.writeGroup.mockRejectedValueOnce(new Error('[PROVIDER_GROUP_CHANGED] changed before delete'));
     await expect(executeProviderGroupCommand(d, {
@@ -549,7 +549,7 @@ describe('executeProviderGroupCommand save', () => {
       action: 'save',
       providerId: 'anthropic',
       // 渲染端带来的账号名只是快照，以目录为准。
-      config: { strategy: 'least', autoSwitch: true, members: [LOCAL, { ...MINI, providerName: 'Stale name' }] },
+      config: { strategy: 'expiring', autoSwitch: true, members: [LOCAL, { ...MINI, providerName: 'Stale name' }] },
     });
     const written = d.writeGroup.mock.calls[0][1] as ProviderGroupConfig;
     expect(written.members.map((m) => m.key)).toEqual(['local', MINI.key]);
@@ -564,14 +564,14 @@ describe('executeProviderGroupCommand save', () => {
     await executeProviderGroupCommand(d, {
       action: 'save',
       providerId: 'anthropic',
-      config: { strategy: 'least', autoSwitch: true, members: [LOCAL, { ...SHARED, hostDeviceId: 'forged' }] },
+      config: { strategy: 'expiring', autoSwitch: true, members: [LOCAL, { ...SHARED, hostDeviceId: 'forged' }] },
     });
     expect((d.writeGroup.mock.calls[0][1] as ProviderGroupConfig).members[1].hostDeviceId).toBe('kai-pc');
     // 设置页即使带着伪造的快照保存(例如只改了暂停)，也以目录里的值为准。
     await executeProviderGroupCommand(d, {
       action: 'save',
       providerId: 'anthropic',
-      config: { strategy: 'least', autoSwitch: true, members: [LOCAL, { ...SHARED, paused: true, hostDeviceId: 'forged-again' }] },
+      config: { strategy: 'expiring', autoSwitch: true, members: [LOCAL, { ...SHARED, paused: true, hostDeviceId: 'forged-again' }] },
     });
     expect((d.writeGroup.mock.calls[1][1] as ProviderGroupConfig).members[1]).toMatchObject({ paused: true, hostDeviceId: 'kai-pc' });
   });
@@ -579,7 +579,7 @@ describe('executeProviderGroupCommand save', () => {
   it('does not trust a shared host id when the renderer has a stale member snapshot', async () => {
     const SHARED = { key: 'share:s1:anthropic', kind: 'share' as const, agentDeviceId: 'share:s1', providerId: 'anthropic', limit: 4, weight: 1, paused: false };
     const existing: ProviderGroupConfig = {
-      strategy: 'least',
+      strategy: 'expiring',
       autoSwitch: true,
       members: [LOCAL, { ...SHARED, hostDeviceId: 'kai-pc' }],
     };
@@ -599,44 +599,44 @@ describe('executeProviderGroupCommand save', () => {
     await expect(executeProviderGroupCommand(d, {
       action: 'save',
       providerId: 'anthropic',
-      config: { strategy: 'least', autoSwitch: true, members: [LOCAL, MINI] },
+      config: { strategy: 'expiring', autoSwitch: true, members: [LOCAL, MINI] },
     })).rejects.toThrow(/PRECONDITION_FAILED/);
     expect(d.writeGroup).not.toHaveBeenCalled();
   });
 
   it('does not re-check members that were already in the group (they may be offline)', async () => {
-    const existing: ProviderGroupConfig = { strategy: 'least', autoSwitch: true, members: [LOCAL, MINI] };
+    const existing: ProviderGroupConfig = { strategy: 'expiring', autoSwitch: true, members: [LOCAL, MINI] };
     const d = deps([], existing);
     await executeProviderGroupCommand(d, {
       action: 'save',
       providerId: 'anthropic',
-      config: { ...existing, strategy: 'round' },
+      config: { ...existing, strategy: 'rotate' },
     });
     expect(d.directory.listCandidates).not.toHaveBeenCalled();
-    expect((d.writeGroup.mock.calls[0][1] as ProviderGroupConfig).strategy).toBe('round');
+    expect((d.writeGroup.mock.calls[0][1] as ProviderGroupConfig).strategy).toBe('rotate');
   });
 
   it('deletes the group when the last member is removed', async () => {
-    const d = deps([], { strategy: 'least', autoSwitch: true, members: [LOCAL] });
+    const d = deps([], { strategy: 'expiring', autoSwitch: true, members: [LOCAL] });
     await executeProviderGroupCommand(d, {
       action: 'save',
       providerId: 'anthropic',
-      config: { strategy: 'least', autoSwitch: true, members: [] },
+      config: { strategy: 'expiring', autoSwitch: true, members: [] },
     });
     expect(d.writeGroup).toHaveBeenCalledWith('anthropic', null);
     expect(d.pruneBindings).toHaveBeenCalledWith('anthropic', null);
   });
 
   it('releases tasks bound to computers that were removed from the group', async () => {
-    const d = deps([], { strategy: 'least', autoSwitch: true, members: [LOCAL, MINI] });
+    const d = deps([], { strategy: 'expiring', autoSwitch: true, members: [LOCAL, MINI] });
     await executeProviderGroupCommand(d, {
       action: 'save',
       providerId: 'anthropic',
-      config: { strategy: 'least', autoSwitch: true, members: [LOCAL] },
+      config: { strategy: 'expiring', autoSwitch: true, members: [LOCAL] },
     });
     expect(d.pruneBindings).toHaveBeenCalledWith('anthropic', new Set(['local']));
 
-    const removed = deps([], { strategy: 'least', autoSwitch: true, members: [LOCAL] });
+    const removed = deps([], { strategy: 'expiring', autoSwitch: true, members: [LOCAL] });
     await executeProviderGroupCommand(removed, { action: 'delete', providerId: 'anthropic' });
     expect(removed.pruneBindings).toHaveBeenCalledWith('anthropic', null);
   });
@@ -650,7 +650,7 @@ describe('executeProviderGroupCommand save', () => {
     await expect(executeProviderGroupCommand(d, {
       action: 'save',
       providerId: 'anthropic',
-      config: { strategy: 'least', autoSwitch: true, members: [LOCAL, MINI] },
+      config: { strategy: 'expiring', autoSwitch: true, members: [LOCAL, MINI] },
     })).rejects.toThrow(/PRECONDITION_FAILED/);
     expect(d.writeGroup).not.toHaveBeenCalled();
     expect(d.pruneBindings).not.toHaveBeenCalled();
@@ -667,7 +667,7 @@ describe('provider management receiver account boundary', () => {
     expect(broadcast).not.toHaveBeenCalledWith('maker:provider:changed', {});
   });
   it('refreshes reshare coordination after a remote group edit without adding local-only consent details to the reply', async () => {
-    const config: ProviderGroupConfig = { strategy: 'least', autoSwitch: true, members: [LOCAL] };
+    const config: ProviderGroupConfig = { strategy: 'expiring', autoSwitch: true, members: [LOCAL] };
     const d = deps([], config);
     vi.mocked(getProviderGroupDirectory).mockReturnValue(d.directory);
     vi.mocked(getProviderGroupRouter).mockReturnValue(d.router);

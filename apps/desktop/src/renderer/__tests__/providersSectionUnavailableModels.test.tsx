@@ -278,7 +278,7 @@ beforeEach(() => {
     modelAccess: { getByokStatus: vi.fn(async () => ({ providers: [] })) },
     subscriptionAccounts: {
       command: vi.fn(async ({ providerId }: { providerId: string }) => ({
-        providerId, configured: false, strategy: 'least', accounts: [],
+        providerId, configured: false, strategy: 'expiring', accounts: [],
       })),
       onChanged: vi.fn(() => () => undefined),
     },

@@ -296,7 +296,7 @@ describe('collectMenubarInputs', () => {
   // Existing coverage only deduplicated remote sources. Minimal failure: one provider,
   // two accounts; or two local providers pointing at the same account.
   const pool: SubscriptionPoolView = {
-    providerId: 'openai', configured: true, strategy: 'round',
+    providerId: 'openai', configured: true, strategy: 'rotate',
     accounts: ['default', 'extra'].map((id, index) => ({
       id, paused: false, limit: 4, weight: 1, directory: `/fixture/${id}`,
       identity: `${id}@example.com`, plan: index ? 'pro' : 'plus', status: 'ready', running: index,

@@ -847,20 +847,6 @@
       "loadFailed": "Impossible de charger le groupe de fournisseurs",
       "note": "Pour les sessions de cet ordinateur et celles des personnes avec qui vous partagez, le groupe choisit l'ordinateur qui exécute l'Agent"
     },
-    "strategy": {
-      "label": "Stratégie du groupe",
-      "least": "Le moins occupé",
-      "round": "Tourniquet",
-      "order": "Dans l'ordre",
-      "weight": "Par poids",
-      "quotaFirst": "Lorsque la consommation de l'abonnement est disponible, les ordinateurs dont le quota se réinitialise bientôt avec une large marge restante passent en premier, afin que chaque compte soit consommé de façon régulière dans le temps ; les ordinateurs similaires suivent la stratégie du groupe",
-      "description": {
-        "least": "Va à l'ordinateur le moins occupé",
-        "round": "Alterne entre les ordinateurs",
-        "order": "Les premiers de la liste d'abord",
-        "weight": "Répartition selon le poids"
-      }
-    },
     "autoSwitch": {
       "label": "Changer d'ordinateur automatiquement",
       "description": "Change d'ordinateur lorsque l'un atteint sa limite, est injoignable ou est déconnecté"
@@ -22735,7 +22721,6 @@
       "useCodex": "Se connecter avec Codex"
     },
     "title": "Comptes d’abonnement",
-    "strategy": "Répartition de charge",
     "add": "Ajouter un compte",
     "defaultTag": "Par défaut",
     "ready": "Connecté",
@@ -22967,6 +22952,39 @@
     },
     "switchOffer": {
       "action": "Continuer avec {{model}}"
+    },
+    "auto": {
+      "accounts_one": "{{count}} compte",
+      "accounts_many": "{{count}} comptes",
+      "accounts_other": "{{count}} comptes",
+      "computers_one": "{{count}} ordinateur",
+      "computers_many": "{{count}} ordinateurs",
+      "computers_other": "{{count}} ordinateurs",
+      "pickFor": "Stratégie pour {{name}}",
+      "hiddenTag": "Masqué",
+      "hide": "Masquer dans le sélecteur de modèles",
+      "hideAria": "Masquer {{name}} dans le sélecteur de modèles",
+      "show": "Afficher dans le sélecteur de modèles",
+      "showAria": "Afficher {{name}} dans le sélecteur de modèles",
+      "assignedBy": "Les nouvelles tâches sont réparties selon « {{strategy}} »",
+      "adjust": "Ajuster dans Groupes de modèles",
+      "quotaFirst": "Entre comptes ou ordinateurs, quelle que soit la stratégie, celui qui a le plus de quota avant sa prochaine réinitialisation passe en premier lorsque l’utilisation de l’abonnement est lisible ; la stratégie départage ceux qui sont proches."
+    },
+    "sources": {
+      "title": "Modes de fournisseurs",
+      "description": "Réunissez plusieurs sources en un mode qui fonctionne comme un seul fournisseur : choisissez le modèle comme d’habitude, le mode décide quelle source l’exécute. Les fournisseurs d’une même marque sont réunis automatiquement.",
+      "models_one": "{{count}} modèle",
+      "models_many": "{{count}} modèles",
+      "models_other": "{{count}} modèles",
+      "autoTag": "Automatique",
+      "new": "Réunir des fournisseurs",
+      "newName": "Nouveau mode de fournisseurs",
+      "empty": "Rien à réunir pour l’instant. Connectez au moins deux fournisseurs de la même marque pour qu’ils soient réunis automatiquement, ou choisissez les vôtres avec Réunir des fournisseurs.",
+      "addProvider": "Ajouter un fournisseur",
+      "chooseProvider": "Choisir un fournisseur",
+      "removeAria": "Retirer {{name}} de ce mode",
+      "deleteAria": "Supprimer le mode {{name}}",
+      "note": "Les modes automatiques suivent vos fournisseurs connectés. Leurs membres ne sont pas modifiables ; vous pouvez changer la stratégie ou les masquer."
     }
   },
   "projectSettings": {

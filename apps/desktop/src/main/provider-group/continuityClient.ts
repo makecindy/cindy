@@ -4,7 +4,7 @@ import { parseGroupContinuityAck } from '../../shared/providerGroupContinuity.js
 import { PROVIDER_GROUP_FULL_ERROR } from './failurePolicy.js';
 import { ProviderGroupLocalCapacityError } from './localCapacity.js';
 import type { ProviderGroupRemoteClient, ProviderGroupRemoteInvoke } from './remoteClient.js';
-import { pickProviderGroupMember, providerGroupMembersFull } from './scheduler.js';
+import { pickRouteMember, routeMembersFull } from './scheduler.js';
 
 type Input = Parameters<ProviderGroupRemoteClient['pick']>[1];
 type Pick = Extract<ProviderGroupRemotePick, { kind: 'member' }>;
@@ -131,8 +131,8 @@ export function createGroupContinuityClient(deps: {
         running: live.find(row => row.row.pick.member.key === member.key)?.running ?? 0,
         limit: effectiveConcurrencyLimit(member),
       }));
-      const key = pickProviderGroupMember(members, first.config.strategy, { exclude: excluded, lastPicked: cursors.get(cursor) });
-      if (!key) throw providerGroupMembersFull(members, { exclude: excluded }) ? new Error(PROVIDER_GROUP_FULL_ERROR) : original;
+      const key = pickRouteMember(members, first.config.strategy, { exclude: excluded, lastPicked: cursors.get(cursor), quotaFirst: true }).key;
+      if (!key) throw routeMembersFull(members, { exclude: excluded }) ? new Error(PROVIDER_GROUP_FULL_ERROR) : original;
       const selected = live.find(row => row.row.pick.member.key === key)!;
       const row = selected.row, id = row.pick.continuity!.id;
       try {

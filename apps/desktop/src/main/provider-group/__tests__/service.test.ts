@@ -119,7 +119,6 @@ function harness(options: {
     listBindings: () => Object.fromEntries(bindings),
     isTurnRunning: () => false,
     now: () => now,
-    random: () => 0,
   });
   const row: ProviderGroupSessionRow = {
     agentKind: 'claude-code',

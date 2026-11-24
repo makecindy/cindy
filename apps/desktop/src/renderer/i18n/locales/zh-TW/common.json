@@ -832,20 +832,6 @@
       "loadFailed": "未能讀取供應商組",
       "note": "這台電腦上的任務和你分享的人的任務，都由組選一台電腦執行 Agent"
     },
-    "strategy": {
-      "label": "組策略",
-      "least": "最少佔用",
-      "round": "輪詢",
-      "order": "依順序",
-      "weight": "依權重",
-      "quotaFirst": "能讀取訂閱用量時，先用快重置、還剩得多的電腦，各帳號會依時間均勻用掉；差不多時依組策略",
-      "description": {
-        "least": "給最閒的那台",
-        "round": "依序輪流",
-        "order": "排前面的優先",
-        "weight": "依權重比例"
-      }
-    },
     "autoSwitch": {
       "label": "自動換電腦",
       "description": "達到上限、連不上或登入失效時自動換一台"
@@ -1867,7 +1853,7 @@
       "imBot": "IM 機器人",
       "ghosts": "插件",
       "cindyMake": "Cindy Make",
-      "modelGroups": "模型組"
+      "modelGroups": "智慧路由"
     },
     "sections": {
       "user": "使用者",
@@ -6274,7 +6260,7 @@
     "sessionRuntimeFallback": {
       "cell": {
         "label": "任務模型自動降級",
-        "description": "模型組遇到故障時會嘗試組內其他可用模型。跨引擎時沿用任務交接流程，並儲存新選擇。一般任務連續失敗時會在目前引擎內嘗試其他來源或建議模型。預設關閉。"
+        "description": "智慧路由遇到故障時會嘗試組內其他可用模型。跨引擎時沿用任務交接流程，並儲存新選擇。一般任務連續失敗時會在目前引擎內嘗試其他來源或建議模型。預設關閉。"
       },
       "toggleAria": "切換任務模型自動降級",
       "toast": {
@@ -18267,7 +18253,7 @@
         "categoryListAria": "{{category}} 模型",
         "effortListAria": "推理強度",
         "boundLocationLocked": "繫結的任務在原來的電腦上執行，請選擇那台電腦上的模型。",
-        "modelGroupTitle": "模型組「{{name}}」：建立新任務時依模式選來源"
+        "modelGroupTitle": "智慧路由「{{name}}」：建立新任務時依模式選來源"
       }
     },
     "toast": {
@@ -22433,7 +22419,6 @@
       "useCodex": "使用 Codex 登入"
     },
     "title": "訂閱帳號",
-    "strategy": "負載平衡",
     "add": "新增帳號",
     "defaultTag": "預設",
     "ready": "已連線",
@@ -22508,10 +22493,10 @@
     "refreshFailed": "主題已載入，但清單無法重新整理，請在外觀設定中重新整理"
   },
   "modelGroups": {
-    "title": "模型組",
-    "description": "把模型供應商裡已有的幾個來源合成一個可選項。選模型時在「模型組」裡選它，由 Cindy 決定這次用哪個來源。",
-    "routes": "模式",
-    "routesDescription": "一個模式裡放幾個來源，開新任務時按選法挑一個。",
+    "title": "智慧路由",
+    "description": "把模型供應商裡已有的幾個來源合成一個可選項。選模型時在「智慧路由」裡選它，由 Cindy 決定這次用哪個來源。",
+    "routes": "路由",
+    "routesDescription": "一個路由裡放幾個來源，開新任務時按選法挑一個。",
     "sourceCount_other": "{{count}} 個來源",
     "strategy": {
       "expiring": {
@@ -22544,9 +22529,9 @@
       }
     },
     "picker": {
-      "empty": "還沒有模型組。在設定裡把幾個來源合成一個模式，就能在這裡選它。",
-      "manage": "管理模型組",
-      "deviceTitle": "模型組 · {{device}}",
+      "empty": "還沒有智慧路由。在設定裡把幾個來源合成一個路由，就能在這裡選它。",
+      "manage": "管理智慧路由",
+      "deviceTitle": "智慧路由 · {{device}}",
       "switched": "「{{name}}」把這個任務換成了 {{model}}",
       "switchUnavailable": "「{{name}}」裡現在沒有能給這個任務用的來源，模型沒換。",
       "chooseUnavailable": "「{{name}}」裡現在沒有能用的來源，沒有選它。"
@@ -22561,7 +22546,7 @@
       "soonestUntil": "所有來源的配額都用完了，它最早恢復（{{reset}}）",
       "standby": "這次沒輪到",
       "standbyQuota": "還剩 {{left}}% 配額，{{reset}} 才重設，先留著",
-      "off": "已在這個模式裡停用",
+      "off": "已在這個路由裡停用",
       "unavailable": "沒有連線，或這個模型現在不可選",
       "limited": "配額用完了",
       "limitedUntil": "配額用完了，{{reset}} 恢復",
@@ -22582,16 +22567,16 @@
     "settings": {
       "autoSwitch": {
         "title": "出問題時自動換來源",
-        "hint": "這個模式正在用的來源出問題時，自動換到下一個能用的來源，並在那一輪下面寫明。關掉後只在出錯時提議換來源。"
+        "hint": "這條路由正在用的來源出問題時，自動換到下一個能用的來源，並在那一輪下面寫明。關掉後只在出錯時提議換來源。"
       },
-      "newRoute": "新增模式",
-      "newRouteName": "新模式",
-      "routesEmpty": "還沒有模式。新增一個，把幾個來源放進去。",
-      "scopeNote": "模型組用於這台電腦上的任務：開新任務時選定一個來源；在進行中的任務裡選它，會當場換一次，之後不會自己換。",
-      "back": "返回模型組",
+      "newRoute": "新增路由",
+      "newRouteName": "新路由",
+      "routesEmpty": "還沒有路由。新增一個，把幾個來源放進去。",
+      "scopeNote": "智慧路由用於這台電腦上的任務：開新任務時選定一個來源；在進行中的任務裡選它，會當場換一次，之後不會自己換。",
+      "back": "返回智慧路由",
       "name": "名字",
       "nameHint": "選模型時顯示這個名字。",
-      "routeShownAs": "選模型時在「模型組」裡顯示。",
+      "routeShownAs": "選模型時在「智慧路由」裡顯示。",
       "pick": "這次用哪個",
       "effort": "推理強度",
       "effortUnset": "不指定",
@@ -22602,14 +22587,14 @@
       "sources": "可以用的來源",
       "sourcesHint": "可以放不同的模型；實際用了哪個會寫在任務裡。",
       "sourcesEmpty": "還沒有來源。從下面加入已經連線的模型。",
-      "sourcesFull": "一個模式最多 {{count}} 個來源。",
+      "sourcesFull": "一個路由最多 {{count}} 個來源。",
       "addSource": "新增來源",
       "chooseModel": "選一個模型",
       "notConnected": "沒有連線",
       "moveUp": "上移",
       "moveDown": "下移",
-      "remove": "移出這個模式",
-      "useSource": "讓這個模式使用 {{name}}",
+      "remove": "移出這個路由",
+      "useSource": "讓這個路由使用 {{name}}",
       "try": {
         "title": "試一下",
         "hint": "看看現在開新任務會用誰。不傳訊息，不花配額。",
@@ -22617,11 +22602,11 @@
         "picked": "用它",
         "standby": "備用",
         "skipped": "跳過",
-        "unavailable": "這個模式裡現在沒有能用的來源，新任務會用你原來選的模型。"
+        "unavailable": "這個路由裡現在沒有能用的來源，新任務會用你原來選的模型。"
       },
-      "deleteRoute": "刪除這個模式",
+      "deleteRoute": "刪除這個路由",
       "deleteRouteConfirmTitle": "刪除「{{name}}」？",
-      "deleteRouteConfirmDescription": "別的模式裡改走它的時段例外會一起刪除。已經開始的任務不受影響。",
+      "deleteRouteConfirmDescription": "別的路由裡改走它的時段例外會一起刪除。已經開始的任務不受影響。",
       "delete": "刪除",
       "cancel": "取消",
       "saveFailed": "沒有儲存成功，請重試。",
@@ -22646,23 +22631,50 @@
         "addHours": "新增",
         "sameHour": "開始和結束不能是同一個時刻。",
         "full": "最多 {{count}} 條例外。",
-        "needOtherRoute": "再建一個模式，才能按時段改走它。"
+        "needOtherRoute": "再建一個路由，才能按時段改走它。"
       }
     },
     "overview": {
       "mapTitle": "現在怎麼走",
-      "mapDescription": "從左到右：走哪個模式，最後落到哪個來源。點模式可以修改。",
+      "mapDescription": "從左到右：走哪個路由，最後落到哪個來源。點路由可以修改。",
       "columnSources": "來源",
       "columnEmpty": "還沒有",
-      "openRoute": "開啟模式「{{name}}」",
+      "openRoute": "開啟路由「{{name}}」",
       "recentTitle": "最近的選擇",
-      "recentEmpty": "還沒有任務用過模式。",
+      "recentEmpty": "還沒有任務用過路由。",
       "keptOriginal": "裡面沒有現在能用的模型，沿用了原來選的模型。",
       "keptOriginalShort": "沿用原來的模型",
       "latest": "最近一次任務走的路"
     },
     "switchOffer": {
       "action": "換到 {{model}} 繼續"
+    },
+    "auto": {
+      "accounts_other": "{{count}} 個帳號",
+      "computers_other": "{{count}} 台電腦",
+      "pickFor": "{{name}} 的選法",
+      "hiddenTag": "已隱藏",
+      "hide": "選模型時不顯示",
+      "hideAria": "選模型時不顯示「{{name}}」",
+      "show": "選模型時顯示",
+      "showAria": "選模型時顯示「{{name}}」",
+      "assignedBy": "新任務依「{{strategy}}」分配",
+      "adjust": "在智慧路由中調整",
+      "quotaFirst": "帳號之間、電腦之間不論選哪種選法，讀得到訂閱用量時都先用快重置、還剩得多的那個；差不多時才依選法挑。"
+    },
+    "sources": {
+      "title": "供應商路由",
+      "description": "把幾個來源合成一條路由，用起來像一個合併後的供應商：照常選模型，由路由決定這次用哪個。同一家的幾個供應商會自動合好。",
+      "models_other": "{{count}} 個模型",
+      "autoTag": "自動",
+      "new": "合併供應商",
+      "newName": "新的供應商路由",
+      "empty": "還沒有可以合併的來源。連接兩個以上同一家的供應商會自動合成一條，也可以點「合併供應商」自己挑。",
+      "addProvider": "新增供應商",
+      "chooseProvider": "選擇供應商",
+      "removeAria": "把 {{name}} 從這條路由中移除",
+      "deleteAria": "刪除路由「{{name}}」",
+      "note": "自動合成的路由會跟著供應商的連接增減，成員不能改，可以改選法或隱藏。"
     }
   },
   "projectSettings": {

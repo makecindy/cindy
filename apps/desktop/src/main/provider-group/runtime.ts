@@ -385,7 +385,6 @@ function runtimeForActiveOwner(): OwnerRuntime {
       },
     },
     now: () => Date.now(),
-    random: () => Math.random(),
   });
   applicationLoad.subscribe((id) => {
     if (activeOwnerScopeKey() === owner) applicationLoadListener?.(id);

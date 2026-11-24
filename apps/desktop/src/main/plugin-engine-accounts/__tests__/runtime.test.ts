@@ -274,7 +274,7 @@ describe('plugin engine account pool', () => {
   // the handoff must bind through it. Minimal input: task on S bound to A, S merged back, A paused.
   it('keeps a handed-off task on its new account when its taken-out provider was merged back', async () => {
     const S = `${PROVIDER}~ab12cd34`;
-    await updatePluginEnginePool(ENGINE, pool => ({ ...pool, providers: { ab12cd34: { strategy: 'least' } }, placement: { [A]: 'ab12cd34' } }));
+    await updatePluginEnginePool(ENGINE, pool => ({ ...pool, providers: { ab12cd34: { strategy: 'expiring' } }, placement: { [A]: 'ab12cd34' } }));
     const lease = await acquirePluginEngineAccount(S, undefined, ['task:t1']);
     expect(lease!.accountId).toBe(A);
     await lease!.bind(['task:t1', 'native:native-1']);

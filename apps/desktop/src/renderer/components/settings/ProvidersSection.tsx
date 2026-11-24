@@ -54,6 +54,7 @@ import {
   Plus,
   RefreshCw,
   Trash2,
+  Waypoints,
 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
@@ -113,6 +114,8 @@ import { BILLING_CURRENCY, formatBillingAmount } from '@/features/billing/money'
 import { canAccessBillingSettings } from './billingVisibility';
 import { resolveXdAssetModuleState } from './providerAssetModule';
 import { useProviderSubscriptionCard } from './useProviderSubscriptionCard';
+import { ModelGroupsSection } from './ModelGroupsSection';
+import { OpenSmartRoutingContext } from './RouteStrategyNote';
 import { SubscriptionAccountsSection, SubscriptionPoolViewCache } from './SubscriptionAccountsSection';
 import { subscriptionAccountErrorKey } from './subscriptionAccountErrors';
 import { placementErrorKey } from './SubscriptionPlacement';
@@ -2694,8 +2697,13 @@ function SuggestionRow({
 // Section
 // ---------------------------------------------------------------------------
 
-export function ProvidersSection() {
+export function ProvidersSection({ routing = false, onRoutingChange }: {
+  /** 右栏显示「智能路由」（原模型组设置）而不是某个供应商；地址是 `?tab=model-groups`。 */
+  routing?: boolean;
+  onRoutingChange?: (routing: boolean) => void;
+} = {}) {
   const { t } = useTranslation();
+  const openSmartRouting = useCallback(() => onRoutingChange?.(true), [onRoutingChange]);
   const reducedMotion = useReducedMotion();
   const signInToCindy = useSignInToCindy();
   const { dataOwnerId } = useAuth();
@@ -3709,7 +3717,7 @@ export function ProvidersSection() {
       renderItem={(provider, index) => (
         <ListRow
           provider={provider}
-          selected={!otherDeviceSelected && !cindySigninActive && (effectiveSelected?.id === provider.id || localDuplicates.get(effectiveSelected?.id ?? '') === provider.id)}
+          selected={!routing && !otherDeviceSelected && !cindySigninActive && (effectiveSelected?.id === provider.id || localDuplicates.get(effectiveSelected?.id ?? '') === provider.id)}
           reconnectRequired={
             (provider.id === 'openai' && openaiReconnectRequired) ||
             provider.openAiAccount?.reconnectRequired === true
@@ -3736,7 +3744,7 @@ export function ProvidersSection() {
   const renderRemoteProviderRows = (entries: readonly OwnRemoteProvider[]) => (
     <OwnRemoteProviderRows
       entries={entries}
-      selectedKey={selectedRemote?.key ?? null}
+      selectedKey={routing ? null : selectedRemote?.key ?? null}
       onSelect={key => {
         setFocusedModel(null);
         selectRemote(key);
@@ -3747,7 +3755,7 @@ export function ProvidersSection() {
   const renderEngineRows = (engines: readonly PluginEngineView[]) => (
     <PluginEngineProviderRows
       engines={engines}
-      selectedKey={selectedEngine?.key ?? null}
+      selectedKey={routing ? null : selectedEngine?.key ?? null}
       onSelect={key => {
         setFocusedModel(null);
         selectEngine(key);
@@ -3819,10 +3827,43 @@ export function ProvidersSection() {
             className="flex w-[224px] shrink-0 flex-col border-r"
             style={{ borderColor: 'var(--settings-theme-card-border)' }}
           >
-            <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-2">
+            <div
+              className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-2"
+              // 点左栏里任何一个供应商（或它的展开/排序控件之外的按钮）时，右栏从智能路由回到供应商。
+              onClickCapture={(event) => {
+                if (routing && !(event.target as HTMLElement).closest('[data-provider-routing-entry]')) onRoutingChange?.(false);
+              }}
+            >
+              <button
+                data-provider-routing-entry
+                data-settings-search-action="Open smart routing inside the model providers page"
+                type="button"
+                // 只在选中时标 current：没选中时它不是「供应商列表里的一行」，不带这个属性。
+                aria-current={routing ? 'true' : undefined}
+                onClick={() => onRoutingChange?.(true)}
+                className={cn(
+                  'flex w-full shrink-0 items-center gap-2.5 rounded-lg py-2 pl-3 pr-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring-soft)]',
+                  routing ? 'bg-[var(--settings-menu-bg-selected)]' : 'hover:bg-[var(--settings-menu-bg-hover)]',
+                )}
+              >
+                <span
+                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg"
+                  style={{
+                    backgroundColor: 'var(--settings-integration-avatar-bg)',
+                    border: '1px solid var(--settings-integration-avatar-border)',
+                    color: 'var(--settings-integration-avatar-icon)',
+                  }}
+                >
+                  <Waypoints size={14} aria-hidden />
+                </span>
+                <span className="min-w-0 flex-1 truncate text-13 font-medium" style={{ color: 'var(--settings-section-title)' }}>
+                  {t('modelGroups.title')}
+                </span>
+              </button>
+              <div aria-hidden className="mx-2.5 my-1.5 h-px shrink-0 bg-[var(--settings-theme-card-border)]" />
               {showCindySignin && (
                 <CindySigninRow
-                  selected={cindySigninActive && !otherDeviceSelected}
+                  selected={!routing && cindySigninActive && !otherDeviceSelected}
                   onSelect={() => {
                     selectProvider(CINDY_SIGNIN_ID);
                   }}
@@ -3846,7 +3887,7 @@ export function ProvidersSection() {
               {/* 自己其他电脑开放的插件引擎：接在远程供应商后面，图标带远程角标、名字后带「插件」标识。 */}
               <OwnRemotePluginEngineRows
                 entries={remotePluginEngines}
-                selectedKey={selectedRemoteEngine?.key ?? null}
+                selectedKey={routing ? null : selectedRemoteEngine?.key ?? null}
                 onSelect={key => {
                   setFocusedModel(null);
                   selectEngine(key);
@@ -3869,7 +3910,7 @@ export function ProvidersSection() {
               )}
               {/* 分享给我的供应商(受邀者)：单独成组，没有分享时不显示。 */}
               <ProviderShareReceivedRailGroup
-                selectedShareId={selectedShare?.shareId ?? null}
+                selectedShareId={routing ? null : selectedShare?.shareId ?? null}
                 hiddenShareIds={groupedShareIds}
                 onSelect={(shareId) => {
                   setFocusedModel(null);
@@ -3924,9 +3965,12 @@ export function ProvidersSection() {
           </div>
 
           {/* 右栏身份固定；说明、资产和模型共用 DetailHeader 的滚动区。 */}
+          <OpenSmartRoutingContext.Provider value={onRoutingChange ? openSmartRouting : null}>
           <div
             key={
-              selectedShare || retryCatalogShareId
+              routing
+                ? 'routing'
+                : selectedShare || retryCatalogShareId
                 ? `share:${selectedShare?.shareId ?? retryCatalogShareId}`
                 : selectedRemote
                   ? `remote:${selectedRemote.key}`
@@ -3938,7 +3982,11 @@ export function ProvidersSection() {
             }
             className="flex min-h-0 min-w-0 flex-1 flex-col"
           >
-            {selectedShare ? (
+            {routing ? (
+              <div id="settings-panel-model-groups" data-testid="provider-routing-pane" className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
+                <ModelGroupsSection />
+              </div>
+            ) : selectedShare ? (
               <ProviderShareReceivedDetail share={selectedShare} />
             ) : retryCatalogShareId ? (
               <ProviderShareReceivedCatalogRetry shareId={retryCatalogShareId} />
@@ -4295,6 +4343,7 @@ export function ProvidersSection() {
               </div>
             )}
           </div>
+          </OpenSmartRoutingContext.Provider>
         </div>
       )}
 

@@ -18,7 +18,7 @@ export function createSharedReconnectFixture() {
   const readGroup = () => null;
   const isTurnRunning = () => false;
   const router = createProviderGroupRouter({
-    directory, readGroup, isTurnRunning, listBindings: () => ({}), now, random: () => 0,
+    directory, readGroup, isTurnRunning, listBindings: () => ({}), now, 
   });
   const service = createProviderGroupService({
     router, directory, readGroup, isTurnRunning, guestSwitch, now,

@@ -837,20 +837,6 @@
       "loadFailed": "Couldn’t load the provider group",
       "note": "For sessions on this computer and sessions of people you share with, the group picks the computer that runs the Agent"
     },
-    "strategy": {
-      "label": "Group Strategy",
-      "least": "Least Busy",
-      "round": "Round Robin",
-      "order": "In Order",
-      "weight": "By Weight",
-      "quotaFirst": "When subscription usage is available, computers whose quota resets soon with plenty left go first, so each account is used up evenly over time; similar ones follow the group strategy",
-      "description": {
-        "least": "Goes to the least busy one",
-        "round": "Rotates across computers",
-        "order": "Earlier in the list first",
-        "weight": "Split by weight"
-      }
-    },
     "autoSwitch": {
       "label": "Switch Computers Automatically",
       "description": "Switches when one hits its limit, is unreachable or is signed out"
@@ -1897,7 +1883,7 @@
       "imBot": "IM bots",
       "ghosts": "Plugins",
       "cindyMake": "Cindy Make",
-      "modelGroups": "Model groups"
+      "modelGroups": "Smart routing"
     },
     "sections": {
       "user": "User",
@@ -3715,7 +3701,7 @@
         "formatEndpoint": "Required for each endpoint. protocol accepts \"openai-chat\", \"openai-responses\", \"anthropic-messages\" and \"google-generative-ai\". Set baseUrl to the full HTTP(S) endpoint URL; HTTPS is recommended.",
         "formatTargets": "Optional engine array: \"claude-code\", \"codex\" or \"pi\". Omit it to match engines by protocol, or specify engines explicitly. Claude Code also supports OpenAI and Google protocols. The example enables only Pi.",
         "formatModels": "Optional. Use model ID strings or objects with id (name is optional). Omit the list or leave it empty to fetch models after confirmation. A nonempty list skips automatic fetching.",
-        "formatMetadata": "Optional model fields: group is the model group, contextWindow is the context length, and maxOutputTokens is the output limit (both in tokens). Example numbers are illustrative; use the model’s actual capabilities.",
+        "formatMetadata": "Optional model fields: group is the smart routing, contextWindow is the context length, and maxOutputTokens is the output limit (both in tokens). Example numbers are illustrative; use the model’s actual capabilities.",
         "formatEffort": "Optional model fields: efforts lists supported effort levels; defaultEffort selects one of them as the default. Remove both fields if unsure.",
         "formatLimits": "Up to 8 endpoints per provider and 10,000 models per endpoint, within the 4 MiB file limit.",
         "exampleTitle": "JSON example (same as the download)",
@@ -6317,7 +6303,7 @@
     "sessionRuntimeFallback": {
       "cell": {
         "label": "Automatic task model fallback",
-        "description": "On failure, a model group tries its other available models. Switching agents uses the normal handoff and updates the task’s saved selection. Other tasks try a different source or recommended model within the same agent after repeated failures. Off by default."
+        "description": "On failure, a smart routing tries its other available models. Switching agents uses the normal handoff and updates the task’s saved selection. Other tasks try a different source or recommended model within the same agent after repeated failures. Off by default."
       },
       "toggleAria": "Toggle automatic task model fallback",
       "toast": {
@@ -18341,7 +18327,7 @@
         "categoryListAria": "{{category}} models",
         "effortListAria": "Reasoning effort",
         "boundLocationLocked": "Bound tasks keep running where they are. Choose a model from that computer.",
-        "modelGroupTitle": "Model group “{{name}}”: picks a source when a run starts a new task"
+        "modelGroupTitle": "Smart routing “{{name}}”: picks a source when a run starts a new task"
       }
     },
     "toast": {
@@ -22521,7 +22507,6 @@
       "useCodex": "Sign in with Codex"
     },
     "title": "Subscription accounts",
-    "strategy": "Load balancing",
     "add": "Add account",
     "defaultTag": "Default",
     "ready": "Connected",
@@ -22596,10 +22581,10 @@
     "refreshFailed": "Theme installed, but the list could not refresh. Refresh it in Appearance settings."
   },
   "modelGroups": {
-    "title": "Model groups",
-    "description": "Combine sources you already have under Model providers into one choice. Pick it under Model groups in the model picker and Cindy decides which source to use.",
-    "routes": "Modes",
-    "routesDescription": "A mode holds several sources. Each new task picks one by the mode's rule.",
+    "title": "Smart routing",
+    "description": "Combine sources you already have under Model providers into one choice. Pick it under Smart routing in the model picker and Cindy decides which source to use.",
+    "routes": "Routes",
+    "routesDescription": "A route holds several sources. Each new task picks one by the route's rule.",
     "sourceCount_one": "{{count}} source",
     "sourceCount_other": "{{count}} sources",
     "strategy": {
@@ -22633,9 +22618,9 @@
       }
     },
     "picker": {
-      "empty": "No model groups yet. Combine a few sources into a mode in Settings to pick it here.",
-      "manage": "Manage model groups",
-      "deviceTitle": "Model groups · {{device}}",
+      "empty": "No smart routing yet. Combine a few sources into a route in Settings to pick it here.",
+      "manage": "Manage smart routing",
+      "deviceTitle": "Smart routing · {{device}}",
       "switched": "“{{name}}” switched this task to {{model}}",
       "switchUnavailable": "“{{name}}” has no source this task can use right now. The model was not changed.",
       "chooseUnavailable": "“{{name}}” has no source that can be used right now, so it was not selected."
@@ -22650,7 +22635,7 @@
       "soonestUntil": "Every source is out of quota; this one recovers first ({{reset}})",
       "standby": "Not picked this time",
       "standbyQuota": "{{left}}% of its quota is left and does not reset until {{reset}}, so it is kept for later",
-      "off": "Off in this mode",
+      "off": "Off in this route",
       "unavailable": "Not connected, or this model cannot be selected now",
       "limited": "Out of quota",
       "limitedUntil": "Out of quota until {{reset}}",
@@ -22671,16 +22656,16 @@
     "settings": {
       "autoSwitch": {
         "title": "Switch sources automatically when one fails",
-        "hint": "When the source this mode is using fails, switch to the next usable one and note it under that turn. When off, a switch is only offered on the error."
+        "hint": "When the source this route is using fails, switch to the next usable one and note it under that turn. When off, a switch is only offered on the error."
       },
-      "newRoute": "New mode",
-      "newRouteName": "New mode",
-      "routesEmpty": "No modes yet. Create one and add a few sources.",
-      "scopeNote": "Model groups apply to tasks on this computer. A new task picks a source when it starts. Choosing one in a task already under way switches it once, right away; it does not switch by itself afterwards.",
-      "back": "Back to model groups",
+      "newRoute": "New route",
+      "newRouteName": "New route",
+      "routesEmpty": "No routes yet. Create one and add a few sources.",
+      "scopeNote": "Smart routing applies to tasks on this computer. A new task picks a source when it starts. Choosing one in a task already under way switches it once, right away; it does not switch by itself afterwards.",
+      "back": "Back to smart routing",
       "name": "Name",
       "nameHint": "Shown in the model picker.",
-      "routeShownAs": "Shown under Model groups in the model picker.",
+      "routeShownAs": "Shown under Smart routing in the model picker.",
       "pick": "Which one to use",
       "effort": "Reasoning effort",
       "effortUnset": "Not set",
@@ -22691,14 +22676,14 @@
       "sources": "Sources it can use",
       "sourcesHint": "Different models can sit together. The task shows which one was used.",
       "sourcesEmpty": "No sources yet. Add a connected model below.",
-      "sourcesFull": "A mode can hold up to {{count}} sources.",
+      "sourcesFull": "A route can hold up to {{count}} sources.",
       "addSource": "Add source",
       "chooseModel": "Choose a model",
       "notConnected": "Not connected",
       "moveUp": "Move up",
       "moveDown": "Move down",
-      "remove": "Remove from this mode",
-      "useSource": "Let this mode use {{name}}",
+      "remove": "Remove from this route",
+      "useSource": "Let this route use {{name}}",
       "try": {
         "title": "Try it",
         "hint": "See which source a new task would use right now. Nothing is sent and no quota is used.",
@@ -22706,11 +22691,11 @@
         "picked": "Use this",
         "standby": "Standby",
         "skipped": "Skipped",
-        "unavailable": "No source in this mode can be used right now. A new task will use the model you had selected."
+        "unavailable": "No source in this route can be used right now. A new task will use the model you had selected."
       },
-      "deleteRoute": "Delete this mode",
+      "deleteRoute": "Delete this route",
       "deleteRouteConfirmTitle": "Delete “{{name}}”?",
-      "deleteRouteConfirmDescription": "Time-of-day exceptions in other modes that switch to it are removed too. Tasks already started are not affected.",
+      "deleteRouteConfirmDescription": "Time-of-day exceptions in other routes that switch to it are removed too. Tasks already started are not affected.",
       "delete": "Delete",
       "cancel": "Cancel",
       "saveFailed": "Could not save. Try again.",
@@ -22735,23 +22720,53 @@
         "addHours": "Add",
         "sameHour": "Start and end cannot be the same time.",
         "full": "Up to {{count}} exceptions.",
-        "needOtherRoute": "Create another mode to switch to it by time of day."
+        "needOtherRoute": "Create another route to switch to it by time of day."
       }
     },
     "overview": {
       "mapTitle": "How new tasks pick a model",
-      "mapDescription": "Left to right: the mode a new task takes and the source it lands on. Click a mode to change it.",
+      "mapDescription": "Left to right: the route a new task takes and the source it lands on. Click a route to change it.",
       "columnSources": "Sources",
       "columnEmpty": "None yet",
-      "openRoute": "Open mode “{{name}}”",
+      "openRoute": "Open route “{{name}}”",
       "recentTitle": "Recent choices",
-      "recentEmpty": "No task has used a mode yet.",
+      "recentEmpty": "No task has used a route yet.",
       "keptOriginal": "Nothing in it was available, so the task kept the model you had chosen.",
       "keptOriginalShort": "Kept your model",
       "latest": "The path the latest task took"
     },
     "switchOffer": {
       "action": "Continue with {{model}}"
+    },
+    "auto": {
+      "accounts_one": "{{count}} account",
+      "accounts_other": "{{count}} accounts",
+      "computers_one": "{{count}} computer",
+      "computers_other": "{{count}} computers",
+      "pickFor": "Strategy for {{name}}",
+      "hiddenTag": "Hidden",
+      "hide": "Hide from the model picker",
+      "hideAria": "Hide {{name}} from the model picker",
+      "show": "Show in the model picker",
+      "showAria": "Show {{name}} in the model picker",
+      "assignedBy": "New tasks are assigned by “{{strategy}}”",
+      "adjust": "Adjust in Smart routing",
+      "quotaFirst": "Between accounts or computers, whatever the strategy, the one with the most quota left before its next reset goes first when subscription usage can be read; the strategy decides among those that are about the same."
+    },
+    "sources": {
+      "title": "Provider routes",
+      "description": "Combine several sources into one route that works like a single merged provider: pick a model as usual and the route decides which source runs it. Providers of the same brand are combined automatically.",
+      "models_one": "{{count}} model",
+      "models_other": "{{count}} models",
+      "autoTag": "Automatic",
+      "new": "Combine providers",
+      "newName": "New provider route",
+      "empty": "Nothing to combine yet. Connect two or more providers of the same brand and they are combined automatically, or choose Combine providers to pick your own.",
+      "addProvider": "Add a provider",
+      "chooseProvider": "Choose a provider",
+      "removeAria": "Remove {{name}} from this route",
+      "deleteAria": "Delete route {{name}}",
+      "note": "Automatic routes follow your connected providers. Their members cannot be changed; you can change the strategy or hide them."
     }
   },
   "projectSettings": {

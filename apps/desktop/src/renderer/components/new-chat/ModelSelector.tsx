@@ -82,6 +82,7 @@ import {
 } from './UnifiedModelPanel';
 import { matchPluginModels, PluginModelIcon, PluginModelsSection, type PluginModelsPickerProps } from './PluginModelsSection';
 import { MODEL_GROUPS_DEFAULTS } from '../../../shared/modelGroups';
+import { withSourceRouteProviders } from '@/features/model-groups/sourceRouteProviders';
 import { buildModelGroupPickerRows, isModelGroupSelected, matchModelGroupRows, ModelGroupIcon, ModelGroupsPickerSection, useFavoriteModelGroupCount, useModelGroupPickerRows, type ModelGroupsPickerProps } from './ModelGroupsPickerSection';
 import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
 import {
@@ -1335,7 +1336,7 @@ const NO_MODEL_SELECTION = { providerId: null, modelId: '' } as const;
 
 function ModelSelectorContentView({
   pluginModels,
-  modelGroups,
+  modelGroups: modelGroupsProp,
   pluginEngines,
   providersOverride,
   providersOverrideState,
@@ -1362,7 +1363,7 @@ function ModelSelectorContentView({
   taskStarted = false,
   maxVisibleModelRows,
   overlayContentClassName,
-  currentProviderId,
+  currentProviderId: currentProviderIdProp,
   onProviderChange,
   onNavigateToProviders,
   followSession,
@@ -1375,7 +1376,7 @@ function ModelSelectorContentView({
   recordRecentUsage = false,
   selectedFavoriteUid = null,
   onSessionFavoriteAnchorChange,
-  onUnifiedSelect,
+  onUnifiedSelect: onUnifiedSelectProp,
   reselectEmitsChange = false,
   selectedRowClickOpensConfiguration = false,
   pointerRevealRequiresIntent = false,
@@ -1393,6 +1394,10 @@ function ModelSelectorContentView({
   referencePricing: ModelPricingCatalog | null;
   modelAccessAccountTier: ModelAccessAccountTier | null;
 }) {
+  // 草稿里供应商路由已经作为普通供应商列在侧栏(见下方 sourceRoutes)，「智能路由」一格只列用户按模型排的路由。
+  const modelGroups = useMemo(() => (modelGroupsProp?.onAttach
+    ? { ...modelGroupsProp, config: { ...modelGroupsProp.config, routes: modelGroupsProp.config.routes.filter((route) => !route.parent) } }
+    : modelGroupsProp), [modelGroupsProp]);
   const confirmDialog = useOptionalConfirmDialog();
   // 面板打开时请插件引擎刷新模型列表(或读取同账号其他电脑开放的插件引擎)，与供应商模型在同一时机自动刷新(冷却由 main 控制)。
   const hasPluginEngines = (pluginEngines?.engines.length ?? 0) > 0;
@@ -1432,7 +1437,7 @@ function ModelSelectorContentView({
     /** null = 还不知道该落在哪个供应商格(等那台的目录到了再按当前来源 / 首个供应商定)。 */
     providerId: string | null;
   } | null>(() =>
-    preferredBrowseDeviceId ? { deviceId: preferredBrowseDeviceId, providerId: currentProviderId ?? null } : null,
+    preferredBrowseDeviceId ? { deviceId: preferredBrowseDeviceId, providerId: currentProviderIdProp ?? null } : null,
   );
   // 落点在面板之外变了(那台电脑被解除配对而回到本机等):跟到新落点,不停在旧目录上。
   const lastPreferredBrowseDeviceIdRef = useRef(preferredBrowseDeviceId);
@@ -1519,7 +1524,7 @@ function ModelSelectorContentView({
   // A field that only persists a model must not offer another Harness.
   // 调用方给的引擎集合是**草稿当前落点**那台电脑上已注册的;浏览另一台时不套用(fail-open)。
   const unifiedAgents = (browsingSelectedCatalog ? requestedUnifiedAgents : undefined) ??
-    (vendorKey && agentKind && !onUnifiedSelect && !sessionEngineFilter ? [agentKind] : undefined);
+    (vendorKey && agentKind && !onUnifiedSelectProp && !sessionEngineFilter ? [agentKind] : undefined);
   const browseTargetLabel =
     browseVendor === 'codex' ? 'Codex' : browseVendor === 'pi' ? 'Pi' : 'Claude Code';
   const enqueueAgentSwitch = (
@@ -1553,9 +1558,9 @@ function ModelSelectorContentView({
       remoteAgentBrowsing
         ? remoteAgentProviders(remoteProviders.providers).filter(provider =>
           !catalogDeviceId || !remoteDisable.isDisabled(catalogDeviceId, provider.id)
-            || (remoteAgentDeviceId === catalogDeviceId && currentProviderId === provider.id))
+            || (remoteAgentDeviceId === catalogDeviceId && currentProviderIdProp === provider.id))
         : remoteProviders.providers.map(withEffectiveModelContextWindows),
-    [remoteAgentBrowsing, remoteProviders.providers, catalogDeviceId, remoteDisable, remoteAgentDeviceId, currentProviderId],
+    [remoteAgentBrowsing, remoteProviders.providers, catalogDeviceId, remoteDisable, remoteAgentDeviceId, currentProviderIdProp],
   );
   const sshCodexProviders = sshCodex?.providers;
   const sshCatalogProviders = useMemo(
@@ -1566,9 +1571,29 @@ function ModelSelectorContentView({
     () => withFollowedAccountSource(localProviders.providers.map(withSubscriptionDisplayModels), taskSourceProvider ?? null),
     [localProviders.providers, taskSourceProvider],
   );
-  const providers = deviceId
+  const listedProviders = deviceId
     ? remoteCatalogProviders
     : providersOverride ?? sshCatalogProviders ?? localTaskProviders;
+  // 供应商路由在面板里就是一个普通供应商(sourceRouteProviders.ts)：只在新任务草稿、看本机目录时这样列。
+  const sourceRoutesListed = !!modelGroupsProp?.onAttach && !!onUnifiedSelectProp && !deviceId && !providersOverride && !sshCatalogProviders;
+  const sourceRouteConfig = sourceRoutesListed ? modelGroupsProp?.config : null;
+  const sourceRoutes = useMemo(
+    () => withSourceRouteProviders(listedProviders, sourceRouteConfig, { providerId: currentProviderIdProp, modelId }),
+    [listedProviders, sourceRouteConfig, currentProviderIdProp, modelId],
+  );
+  const providers = sourceRoutes.providers;
+  // 草稿里记的是一个真实成员的模型；它属于某条供应商路由时，面板里选中的是合并后的那个条目。
+  const currentProviderId = sourceRoutes.shownAs(currentProviderIdProp, modelGroupsProp?.active?.id) ?? currentProviderIdProp;
+  const activeSourceRoute = !!modelGroupsProp?.active && sourceRoutes.shownAs(null, modelGroupsProp.active.id) !== null;
+  const attachSourceRoute = modelGroupsProp?.onAttach;
+  const onUnifiedSelect = useMemo<typeof onUnifiedSelectProp>(() => onUnifiedSelectProp && ((selection) => {
+    const hit = sourceRoutes.hit(selection.providerId, selection.modelId);
+    if (!hit) return onUnifiedSelectProp(selection);
+    // 草稿照常记下一个真实成员的模型(显示名、思考深度、Fast 都按它来)，再记下由哪条路由决定这次用哪个成员。
+    const applied = onUnifiedSelectProp({ ...selection, providerId: hit.candidate.providerId, modelId: hit.candidate.model });
+    void Promise.resolve(applied).then((ok) => { if (ok !== false) attachSourceRoute?.({ type: 'route', id: hit.route.id }); });
+    return applied;
+  }), [onUnifiedSelectProp, sourceRoutes, attachSourceRoute]);
   // SSH 目录里 Codex 来自远端主机：本机账号用量、本机供应商组都不能代表它。
   const sshCodexActive = sshCodex !== undefined;
   const mixedCatalog = !!providersOverride || sshCodexActive;
@@ -2008,7 +2033,12 @@ function ModelSelectorContentView({
     [remoteAgentDevices, remoteDeviceCatalogs],
   );
   const hasRemoteAgent = remoteAgent !== undefined;
-  const homeProviders = homeDeviceId ? homeDeviceProviders.providers : localProviders.providers;
+  // 有其他电脑可选时，本机那一段的侧栏另从这份列表建：供应商路由同样作为一个普通供应商列在里面。
+  const homeSourceRoutes = useMemo(
+    () => withSourceRouteProviders(localProviders.providers, sourceRouteConfig, { providerId: currentProviderIdProp, modelId }),
+    [localProviders.providers, sourceRouteConfig, currentProviderIdProp, modelId],
+  );
+  const homeProviders = homeDeviceId ? homeDeviceProviders.providers : homeSourceRoutes.providers;
   const homeModelVisibilityOverrides = homeDeviceProviders.modelVisibilityOverrides;
   const remoteAgentLocalRailItems = useMemo(() => {
     if (!hasRemoteAgent) return undefined;
@@ -3987,8 +4017,8 @@ function ModelSelectorContentView({
             panelWidthFluid={fluidWidth}
             readableRows={readableRows}
             // 选中插件模型时选中的是插件那一行，普通模型行不再同时显示选中底色。
-            selected={pluginModels?.active || modelGroups?.active || pluginEngines?.active ? NO_MODEL_SELECTION : panelSelection}
-            selectedFavoriteUid={browsingSelectedCatalog && !pluginModels?.active && !modelGroups?.active && !pluginEngines?.active
+            selected={pluginModels?.active || (modelGroups?.active && !activeSourceRoute) || pluginEngines?.active ? NO_MODEL_SELECTION : panelSelection}
+            selectedFavoriteUid={browsingSelectedCatalog && !pluginModels?.active && !(modelGroups?.active && !activeSourceRoute) && !pluginEngines?.active
               ? selectedFavoriteUid : null}
             liveAgentKind={
               unifiedSelectionPolicy === 'official' || !browsingLiveCatalog ? null : currentAgentKind
@@ -5056,6 +5086,8 @@ export function ModelSelector({
         : modelGroupRows
       ).find((row) => isModelGroupSelected(modelGroups.active, row.selection)) ?? null
     : null;
+  // 供应商路由下的模型在草稿里就是普通模型：按钮照常写「模型 · 思考深度」，不写路由名。
+  const shownModelGroupRow = activeModelGroupRow?.parent && modelGroups?.onAttach ? null : activeModelGroupRow;
   const triggerTitleBase = withAgentDeviceLabel(pendingSelectionTitle
     ? `${pendingSelectionTitle}${showSourceIssue ? ` · ${sourceIssueLabel}` : ''}`
     : showSourceIssue ? baseAriaLabel : displayIdentityLabel);
@@ -5116,8 +5148,8 @@ export function ModelSelector({
       ].filter(Boolean).join(' · ')
     : activePluginModel
     ? `${activePluginModel.name} · ${activePluginModel.pluginName}`
-    : activeModelGroupRow
-      ? [activeModelGroupRow.name, activeModelGroupRow.hint].filter(Boolean).join(' · ')
+    : shownModelGroupRow
+      ? [shownModelGroupRow.name, shownModelGroupRow.hint].filter(Boolean).join(' · ')
       : triggerTitleBase;
   // 多实例同屏(IM 目录偏好)时前置「字段名 · 行别名」,读屏才能区分行与行。
   const accessibleLabel = triggerEngine
@@ -5128,7 +5160,7 @@ export function ModelSelector({
             .filter(Boolean).join(' · '),
         })
       : t('newChat.modelSelector.trigger.aria', { model: triggerTitle })
-    : activePluginModel || activeModelGroupRow ? triggerTitle : (pendingSelectionTitle ? triggerTitle : withAgentDeviceLabel(baseAriaLabel));
+    : activePluginModel || shownModelGroupRow ? triggerTitle : (pendingSelectionTitle ? triggerTitle : withAgentDeviceLabel(baseAriaLabel));
   const ariaLabel = ariaContext ? `${ariaContext}:${accessibleLabel}` : accessibleLabel;
   const isBudget = isCodexGatewayWireModel(modelId);
   const isFieldTrigger = triggerVariant === 'field';
@@ -5351,11 +5383,11 @@ export function ModelSelector({
             {activePluginModel.name}
           </span>
         </>
-      ) : activeModelGroupRow ? (
+      ) : shownModelGroupRow ? (
         <>
           <ModelGroupIcon size={14} />
           <span ref={pillLabelRef} className={cn('min-w-0 truncate font-medium text-[var(--text-primary)]', dense ? 'text-12' : 'text-13')}>
-            {activeModelGroupRow.name}
+            {shownModelGroupRow.name}
           </span>
         </>
       ) : noSource ? (

@@ -1,4 +1,11 @@
 import assert from 'node:assert/strict';
+/** 账号区读到之后默认收成一行(每个账号的余量写在这一行)；这里检查的是账号列表本身，先点开。 */
+async function expandAccounts(page) {
+  await page.locator('[data-testid="subscription-accounts-summary"], [data-testid="subscription-accounts-body"]:not(.hidden)').first().waitFor({ state: 'attached' });
+  const summary = page.getByTestId('subscription-accounts-summary');
+  if (await summary.count()) await summary.first().click();
+}
+
 export default {
   name: 'subscription-accounts',
   entry: './fixture.tsx',
@@ -38,6 +45,7 @@ export default {
       return;
     }
     await page.getByTestId('subscription-accounts').waitFor();
+    await expandAccounts(page);
     assert.equal(await page.locator('main').evaluate(element => element.scrollWidth <= element.clientWidth), true);
     if (ui.case.startsWith('plugin-engine')) {
       const rows = page.getByTestId('subscription-account');
@@ -113,7 +121,9 @@ export default {
       await ui.capture('account-resets');
     }
     assert.equal(await page.getByRole('switch').count(), codex ? 6 : 3);
-    assert.equal(await page.getByRole('radiogroup', { name: await ui.t('subscriptionAccounts.strategy'), exact: true }).getAttribute('data-setting-id'), 'providers.subscriptionAccounts');
+    // The accounts are one automatic route: this section states how tasks are assigned; the strategy itself is set under Smart routing.
+    await page.getByTestId('route-strategy-note').waitFor();
+    assert.equal(await page.getByRole('radiogroup').count(), 0);
     // Every account's bars share one column, whatever each account's own labels and numbers are.
     const bars = await page.getByRole('progressbar').evaluateAll(elements =>
       elements.map(element => {

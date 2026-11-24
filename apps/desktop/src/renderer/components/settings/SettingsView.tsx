@@ -78,7 +78,6 @@ const AppearanceSection = lazy(() => import('./AppearanceSection').then(module =
 const SubagentModelSection = lazy(() => import('./SubagentModelSection').then(module => ({ default: module.SubagentModelSection })));
 const AuxiliaryModelSection = lazy(() => import('./AuxiliaryModelSection').then(module => ({ default: module.AuxiliaryModelSection })));
 const ProvidersSection = lazy(() => import('./ProvidersSection').then(module => ({ default: module.ProvidersSection })));
-const ModelGroupsSection = lazy(() => import('./ModelGroupsSection').then(module => ({ default: module.ModelGroupsSection })));
 const McpServersSection = lazy(() => import('./McpServersSection').then(module => ({ default: module.McpServersSection })));
 const RemoteControlSection = lazy(() => import('./RemoteControlSection').then(module => ({ default: module.RemoteControlSection })));
 const LocalAgentSection = lazy(() => import('./LocalAgentSection').then(module => ({ default: module.LocalAgentSection })));
@@ -424,7 +423,7 @@ function SettingsViewContent() {
             requestedQuery={searchParams.get('query') ?? ''}
             tabIds={visibleTabIds}
             searchContext={searchContext}
-            activeTab={activeTab}
+            activeTab={activeTab === 'model-groups' ? 'providers' : activeTab}
             onSelectTab={handleSelectTab}
             onSelectSearchResult={handleSelectSearchResult}
             pluginPages={pluginPages}
@@ -448,7 +447,7 @@ function SettingsViewContent() {
             // providers 与 import / ghosts 同属「内部自己滚」:模型列表要贴着窗口底,
             // 外层再滚一层会让卡片高度只能靠猜(原先卡片写 calc(100vh-14rem),
             // 扣除量与真实 chrome 不符时下方就空出一条 —— 正是 pb-32 那 128px)。
-            activeTab === 'import' || activeTab === 'ghosts' && !selectedPluginFields || activeTab === 'providers'
+            activeTab === 'import' || activeTab === 'ghosts' && !selectedPluginFields || activeTab === 'providers' || activeTab === 'model-groups'
               ? 'overflow-hidden'
               : 'overflow-y-auto',
           )}
@@ -461,7 +460,9 @@ function SettingsViewContent() {
             key={`${activeTab}:${selectedPluginPage?.id ?? (piExtensionsPanelOpen ? 'pi-extensions' : 'root')}`}
             className={cn(
               'mx-auto w-full min-w-0 max-w-[920px] px-1',
-              activeTab === 'import' || activeTab === 'ghosts' || activeTab === 'providers'
+              // 模型供应商页的内容比别的设置页多（供应商、账号用量、模型列表），放宽到 1200px（2026-11-24 用户裁决）。
+              (activeTab === 'providers' || activeTab === 'model-groups') && 'max-w-[1200px]',
+              activeTab === 'import' || activeTab === 'ghosts' || activeTab === 'providers' || activeTab === 'model-groups'
                 ? 'h-full min-h-0'
                 : 'pb-32',
               activeTab === 'ghosts' && 'max-w-none px-0',
@@ -723,13 +724,7 @@ function SettingsViewContent() {
               </div>
             )}
 
-            {activeTab === 'model-groups' && (
-              <div role="tabpanel" id="settings-panel-model-groups" aria-labelledby="settings-tab-model-groups">
-                <ModelGroupsSection />
-              </div>
-            )}
-
-            {activeTab === 'providers' && (
+            {(activeTab === 'providers' || activeTab === 'model-groups') && (
               <div
                 role="tabpanel"
                 id={providersSettings.modelCompaction.targetId}
@@ -740,7 +735,10 @@ function SettingsViewContent() {
                   className="flex h-full min-h-0 flex-col pb-[18px]"
                   aria-label={t(providersSettings.providers.sectionKey)}
                 >
-                  <ProvidersSection />
+                  <ProvidersSection
+                    routing={activeTab === 'model-groups'}
+                    onRoutingChange={(next) => handleSelectTab(next ? 'model-groups' : 'providers')}
+                  />
                 </section>
               </div>
             )}

@@ -24,11 +24,10 @@ import {
 } from '../../shared/modelGroups.js';
 import { GHOST_REMOTE_AGENT_MODELS } from '../cindy-brain/ghostAgentModels.js';
 import { isGhostCardModelRouteAvailable, isPluginModelPickerRouteAvailable } from '../cindy-brain/ghostModelPicker.js';
+import { applyRouteWeightStep, type RouteWeightStep } from '../provider-group/scheduler.js';
 import {
-  applyModelGroupWeightStep,
   pickModelGroupCandidate,
   type ModelGroupCandidateFacts,
-  type ModelGroupWeightStep,
 } from './pick.js';
 import { modelGroupRouteFor } from './routeFor.js';
 
@@ -155,12 +154,12 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
   };
   const pending = new Map<string, {
     scope: string; at: number; selection: ModelGroupResolveRequest['selection']; result: ModelGroupResolveResult; routeId?: string;
-    weightStep?: { step: ModelGroupWeightStep; signature: string };
+    weightStep?: { step: RouteWeightStep; signature: string };
   }>();
 
   function prepare(
     request: ModelGroupResolveRequest, scope: string, result: ModelGroupResolveResult, routeId?: string,
-    weightStep?: { step: ModelGroupWeightStep; signature: string },
+    weightStep?: { step: RouteWeightStep; signature: string },
   ): ModelGroupResolveResult {
     if (request.dryRun || scope !== deps.scope()) return result;
     // 未采用的结果不写盘；限制暂存数量和生命周期，避免取消操作不断积累。
@@ -188,7 +187,7 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
       const routeNow = item.weightStep && deps.config().routes.find((route) => route.id === item.routeId);
       if (item.weightStep && routeNow && weightSignature(routeNow) === item.weightStep.signature) {
         const { signature, step } = item.weightStep;
-        weightCounters.set(key, { signature, counters: applyModelGroupWeightStep(countersFor(key, signature), step) });
+        weightCounters.set(key, { signature, counters: applyRouteWeightStep(countersFor(key, signature), step) });
       }
     }
     return true;
@@ -226,8 +225,13 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
     };
   }
 
-  async function inspect(route: ModelGroupRoute, views: ProviderView[]): Promise<ModelGroupCandidateFacts[]> {
+  async function inspect(
+    route: ModelGroupRoute, views: ProviderView[], context?: ModelGroupResolveRequest['context'],
+  ): Promise<ModelGroupCandidateFacts[]> {
     const agents = deps.agents();
+    // 供应商路由展开出来的路由在选择器里是普通模型行：思考深度与 Fast 用用户在那里选的；路由自己设了思考深度时以它为准。
+    const wantedEffort = route.effort ?? (route.parent ? context?.effort : undefined);
+    const wantedFast = route.parent ? context?.fastMode : undefined;
     // 远程读取与读额度同时进行，整体仍在额度等待的时限内。
     const remote = remoteReads(route);
     const quota = await deps.quotaWindows().catch(() => new Map<string, never[]>());
@@ -264,9 +268,12 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
         : installed.get(agent) === true && isPluginModelPickerRouteAvailable(exact, views, agents);
       return {
         available,
-        ...(available && route.effort && isPluginModelPickerRouteAvailable(
-          { ...exact, effort: route.effort }, catalog.views, catalog.agents,
-        ) ? { effort: route.effort } : {}),
+        ...(available && wantedEffort && isPluginModelPickerRouteAvailable(
+          { ...exact, effort: wantedEffort }, catalog.views, catalog.agents,
+        ) ? { effort: wantedEffort } : {}),
+        ...(available && wantedFast && isPluginModelPickerRouteAvailable(
+          { ...exact, fastMode: wantedFast }, catalog.views, catalog.agents,
+        ) ? { fastMode: wantedFast } : {}),
         modelName,
         sourceName: view?.name ?? candidate.providerId,
         windows: windows && windows.length > 0 ? windows : null,
@@ -282,6 +289,8 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
   async function resolve(request: ModelGroupResolveRequest): Promise<ModelGroupResolveResult> {
     const scope = deps.scope();
     const now = deps.now();
+    // 先读目录再读配置：自动路由是按目录生成的，配置要与这次用的目录是同一时刻的。
+    const allViews = await deps.views();
     const target = modelGroupRouteFor(deps.config(), request.selection, now);
     if (target.outcome === 'missing') return prepare(request, scope, { outcome: 'missing', groupName: target.groupName, trace: [] });
     const { groupName, via } = target;
@@ -296,11 +305,10 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
         }
       : target.route;
     const needsImage = request.context?.hasImages === true && !!route.exceptions?.some((item) => item.when.type === 'image');
-    const allViews = await deps.views();
     // 为另一台电脑跑 Agent 时只认允许被远程调用的连接：别的连接在这次选路里按没有连接处理。
     const remoteInvocable = (view: ProviderView) => (deps.remoteInvocable ? deps.remoteInvocable(view.id) : view.remoteInvocationEnabled === true);
     const views = request.remoteInvocableOnly ? allViews.filter(remoteInvocable) : allViews;
-    const facts = await inspect(route, views);
+    const facts = await inspect(route, views, request.context);
     const picked = pickModelGroupCandidate(route, facts, {
       now, lastPickedKey: lastPicked.get(`${scope}\u0000${route.id}`) ?? null, needsImage,
       weightCounters: countersFor(`${scope}\u0000${route.id}`, weightSignature(target.route)),
@@ -315,13 +323,14 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
     const entry = picked.trace[picked.index];
     const chosen = { agentKind: candidate.agentKind, providerId: candidate.providerId, model: candidate.model };
     // 推理强度按选中来源所在位置的目录看支不支持。
-    const effort = facts[picked.index].effort;
+    const { effort, fastMode } = facts[picked.index];
     return prepare(request, scope, {
       outcome: 'routed', groupName,
       route: {
         ...chosen,
         ...(candidate.agentDeviceId ? { agentDeviceId: candidate.agentDeviceId } : {}),
         ...(effort ? { effort } : {}),
+        ...(fastMode ? { fastMode } : {}),
       },
       modelName: entry.modelName, sourceName: entry.sourceName,
       why: entry.why, quota: entry.quota, trace: picked.trace,

@@ -127,7 +127,7 @@ afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
 // #10405 extends the same user entry to a named target; readPool only accepts kinds,
 // so the old overview gate discarded it before the collector could show its accounts.
 it.each(['openai', 'legacy-target'])('refreshes the %s account pool through the native refresh button', async providerId => {
-  mocks.pool = { providerId, kind: 'openai', configured: true, strategy: 'round', accounts: [{
+  mocks.pool = { providerId, kind: 'openai', configured: true, strategy: 'rotate', accounts: [{
     id: 'extra', paused: false, limit: 4, weight: 1, directory: '/fixture/extra', running: 0,
     identity: 'extra@example.com', status: 'ready', usage: { codex: { credits: null, buckets: { codex: {
       limitId: 'codex', limitName: null, updatedAt: Date.now(), primary: null,
@@ -157,7 +157,7 @@ it.each(['openai', 'legacy-target'])('refreshes the %s account pool through the 
 // account changes. Earlier tests mocked the collector and only covered ledger invalidation.
 // Minimal input: one pooled account changes its quota, then is removed during a read.
 it('refreshes pooled quota in panel and widgets and rejects a read overtaken by account removal', async () => {
-  mocks.pool = { providerId: 'openai', configured: true, strategy: 'round', accounts: [{
+  mocks.pool = { providerId: 'openai', configured: true, strategy: 'rotate', accounts: [{
     id: 'extra', paused: false, limit: 4, weight: 1, directory: '/fixture/extra', running: 0,
     identity: 'extra@example.com', plan: 'pro', status: 'ready', usage: { codex: { credits: null, buckets: {
       codex: { limitId: 'codex', limitName: null, updatedAt: Date.now(), primary: null,

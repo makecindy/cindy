@@ -16,8 +16,9 @@ import {
   isNativeProviderAuthBound,
   isNativeProviderAuthSharedSystemCredential,
 } from '../maker-host/nativeProviderAuthBinding.js';
-import { pickProviderGroupMember, providerGroupMembersFull, providerGroupSchedulingCandidates, type SchedulableMember } from '../provider-group/scheduler.js';
+import { applyRouteWeightStep, pickRouteMember, routeMembersFull, routeSchedulingCandidates, type RouteWeightStep, type SchedulableMember } from '../provider-group/scheduler.js';
 import { concurrencyLimitPatch, effectiveConcurrencyLimit } from '../../shared/providerGroup.js';
+import { DEFAULT_ROUTE_STRATEGY } from '../../shared/routeStrategy.js';
 import { providerGroupMemberUsageState } from '../provider-group/usage.js';
 import {
   coolingScope,
@@ -224,6 +225,8 @@ interface OwnerRuntime {
   pendingStarts: Map<string, { accountId: string; token: string; until: number }>;
   /** Keyed by the provider that owns the picked accounts (subscription-account placement). */
   lastPicked: Map<string, string>;
+  /** 「按权重」的计数，键与 lastPicked 相同。只在内存里，重启后重新开始。 */
+  weightCounters: Map<string, Map<string, number>>;
   logins: Map<string, { abort: AbortController; accountId: string }>;
   invalidated: Map<string, { token: string; reason: string }>;
   /** Actual account failures outrank optimistic cached quota for new assignments. */
@@ -344,6 +347,7 @@ function currentRuntime(): OwnerRuntime {
       running: new Map(),
       pendingStarts: new Map(),
       lastPicked: new Map(),
+      weightCounters: new Map(),
       logins: new Map(),
       invalidated: new Map(),
       quotaCooling: loadCooling(),
@@ -448,7 +452,8 @@ function accountCandidates<T extends SchedulableMember & { id: string; accountKe
       weight: group[0].weight,
     };
   });
-  return { candidates, exclude, lastPicked };
+  // Accounts of one provider are interchangeable: quota comes first whatever the strategy.
+  return { candidates, exclude, lastPicked, quotaFirst: true as const };
 }
 
 /** Management acts on the account shown by readSubscriptionPool, including its retained homes.
@@ -2006,12 +2011,14 @@ export async function readSubscriptionPoolUsage(
         limit: Number.POSITIVE_INFINITY,
         urgency: usage.urgency,
         fiveHourTight: usage.fiveHourTight,
+        headroom: usage.headroom,
       }];
     });
     const grouped = accountCandidates(state, provider, candidates, {
       lastPicked: state.lastPicked.get(ref.providerId),
     });
-    const id = pickProviderGroupMember(grouped.candidates, providerStrategy(ref.providerId, provider, latest), grouped);
+    const id = pickRouteMember(grouped.candidates, providerStrategy(ref.providerId, provider, latest),
+      { ...grouped, weightCounters: state.weightCounters.get(ref.providerId) }).key;
     return id
       ? members.findIndex((a) => a.id === id)
       : accounts.findIndex((a, i) => a && !a.paused && infos[i].auth.authenticated);
@@ -2287,7 +2294,7 @@ function providerStrategy(
   kind: SubscriptionProvider,
   pool: { strategy: SubscriptionPoolView['strategy'] },
 ): SubscriptionPoolView['strategy'] {
-  return providerId === kind ? pool.strategy : readProviderStrategy(providerId) ?? 'least';
+  return providerId === kind ? pool.strategy : readProviderStrategy(providerId) ?? DEFAULT_ROUTE_STRATEGY;
 }
 
 /** Every assignable account is at its concurrency limit (2026-11-11: full accounts take no new task). */
@@ -2621,6 +2628,8 @@ export async function acquireSubscriptionAccount(
       if (timer !== undefined) clearTimeout(timer);
     }
   }
+  /** The weighted step of the latest pick; recorded only when that pick is actually used. */
+  let weightStep: RouteWeightStep | undefined;
   const selectAccount = () => {
     assertOwner(state);
     // Settings may change while the official CLI is answering.
@@ -2687,6 +2696,7 @@ export async function acquireSubscriptionAccount(
         limit: control ? Number.POSITIVE_INFINITY : effectiveConcurrencyLimit(a),
         urgency: usage.urgency,
         fiveHourTight: usage.fiveHourTight,
+        headroom: usage.headroom,
       };
     });
     // Reopening an old task without a recorded binding must keep its original default home.
@@ -2700,10 +2710,12 @@ export async function acquireSubscriptionAccount(
     // A pinned account keeps running on credits. A new pick prefers ChatGPT accounts with plan quota
     // left and falls back to credits-only accounts only when none can take the task (2026-11-24).
     const candidateOptions = { lastPicked: state.lastPicked.get(selectionProvider), exclude };
+    const strategy = providerStrategy(selectionProvider, provider, latest);
+    const weightCounters = state.weightCounters.get(selectionProvider);
     let members = buildMembers(rebinding, pinned !== undefined);
     let grouped = accountCandidates(state, provider, members, candidateOptions);
     if (provider === 'openai' && !control && pinned === undefined
-      && providerGroupSchedulingCandidates(grouped.candidates, grouped).length === 0) {
+      && routeSchedulingCandidates(grouped.candidates, strategy, grouped).length === 0) {
       const creditMembers = buildMembers(rebinding, true);
       const creditGroup = accountCandidates(state, provider, creditMembers, candidateOptions);
       // Account preparation can finish before its quota flight when it used a recent snapshot.
@@ -2725,32 +2737,29 @@ export async function acquireSubscriptionAccount(
       }
     }
     if (options.dryRun && options.reportScheduling) {
-      // An explicitly weighted pool cannot predict its next random account without
-      // reserving it. Keep the physical-member fallback rather than overriding weights.
-      if (providerStrategy(selectionProvider, provider, latest) === 'weight') return { scheduling: true as const };
+      // A weighted pool's next account depends on picks that are not committed yet.
+      // Keep the physical-member fallback rather than overriding weights.
+      if (strategy === 'weighted') return { scheduling: true as const };
       // A legacy alias with no own accounts is pinned for history, not new capacity.
       // The summary also cannot count the ungranted CLI default as an extra account.
       const eligible = grouped.candidates.map(m => ({ ...m,
         usable: m.usable && !m.unavailable && (m.id !== 'default' || defaultAccountBound(provider)),
       }));
-      const open = providerGroupSchedulingCandidates(eligible, grouped);
-      const selected = pickProviderGroupMember(eligible, providerStrategy(selectionProvider, provider, latest), { ...grouped,
-        // A read must not draw from or advance the actual weighted scheduler's random stream.
-        random: () => 0,
-      });
+      const open = routeSchedulingCandidates(eligible, strategy, grouped);
+      const selected = pickRouteMember(eligible, strategy, { ...grouped, weightCounters }).key;
       const next = open.find(m => m.key === selected);
       if (!next && pendingReads.size) return null;
       options.reportScheduling({ version: 1, accounts: next && !pinned ? open.length : 0,
         running: next?.running ?? 0,
         totalRunning: grouped.candidates.reduce((sum, m) => sum + m.running, 0),
-        full: !pinned && providerGroupMembersFull(eligible, grouped),
+        full: !pinned && routeMembersFull(eligible, grouped),
         urgency: next?.urgency ?? null, fiveHourTight: next?.fiveHourTight ?? false,
       });
       return { scheduling: true as const };
     }
-    let choice =
-      pinned ??
-      pickProviderGroupMember(grouped.candidates, providerStrategy(selectionProvider, provider, latest), grouped);
+    const picked = pinned === undefined ? pickRouteMember(grouped.candidates, strategy, { ...grouped, weightCounters }) : null;
+    weightStep = picked?.weightStep;
+    let choice = pinned ?? picked?.key ?? null;
     if (!choice && pendingReads.size) return null;
     if (freshBlockedBinding && !choice) {
       // Every other account is blocked, full or already tried: stay on the bound account.
@@ -2764,7 +2773,7 @@ export async function acquireSubscriptionAccount(
     const reserved = pending && pending.accountId === selected && state.running.get(keyOf(provider, pending.accountId))?.has(pending.token) ? 1 : 0;
     if (pending && capacity && capacity.running - reserved >= capacity.limit)
       throw new Error(SUBSCRIPTION_ACCOUNTS_FULL_ERROR);
-    if (!selected && !pinned && providerGroupMembersFull(grouped.candidates, grouped))
+    if (!selected && !pinned && routeMembersFull(grouped.candidates, grouped))
       throw new Error(SUBSCRIPTION_ACCOUNTS_FULL_ERROR);
     if (!selected || !member || !member.usable || (!control && member.paused)) {
       if (!pinned) {
@@ -2834,6 +2843,8 @@ export async function acquireSubscriptionAccount(
     }
     active.add(token);
     state.lastPicked.set(selectionProvider, selected);
+    if (weightStep?.pickedKey === selected)
+      state.weightCounters.set(selectionProvider, applyRouteWeightStep(state.weightCounters.get(selectionProvider), weightStep));
     changed(provider, undefined, 'load');
   }
   let released = false;

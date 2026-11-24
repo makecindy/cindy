@@ -1,5 +1,5 @@
 import type { GhostHarnessAccountMethod, GhostHarnessUsage } from '@cindy/plugin-protocol';
-import type { ProviderGroupStrategy } from './providerGroup.js';
+import type { RouteStrategy } from './routeStrategy.js';
 import type { ClaudeSubscriptionUsageSnapshot } from './claudeSubscriptionUsage.js';
 
 export const SUBSCRIPTION_ACCOUNTS_CHANNEL = 'maker:subscription-accounts';
@@ -58,7 +58,7 @@ export interface SubscriptionPoolConfig {
   legacyCodexDefault?: boolean;
   /** Upgrade aliases: old connection ID -> pool account ID. Retained after removal to prevent re-import. */
   legacyCodexAccounts?: Record<string, string>;
-  strategy: ProviderGroupStrategy;
+  strategy: RouteStrategy;
   accounts: SubscriptionAccountConfig[];
 }
 interface SubscriptionCodexUsageWindow {
@@ -117,7 +117,7 @@ export interface SubscriptionPoolView {
   /** Pool kind of the provider (optional; older hosts omit it and only serve built-in providers). */
   kind?: SubscriptionProvider;
   configured: boolean;
-  strategy: ProviderGroupStrategy;
+  strategy: RouteStrategy;
   /** Present only for an explicitly task-scoped read; null means no recorded binding. */
   boundAccountId?: string | null;
   accounts: SubscriptionAccountView[];
@@ -173,7 +173,7 @@ export type SubscriptionAccountCommand =
   | {
       action: 'configure';
       providerId: string;
-      strategy?: ProviderGroupStrategy;
+      strategy?: RouteStrategy;
       accountId?: string;
       paused?: boolean;
       /** null clears the setting: unlimited concurrency. */

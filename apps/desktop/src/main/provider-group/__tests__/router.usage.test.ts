@@ -3,7 +3,8 @@ import type { ProviderShareReceived } from '@cindy/device-link';
 import type { ProviderView } from '@cindy/model-providers';
 import { describe, expect, it, vi } from 'vitest';
 import type { ClaudeSubscriptionUsageSnapshot } from '../../../shared/claudeSubscriptionUsage';
-import { normalizeProviderGroupConfig, PROVIDER_GROUP_STRATEGIES, type ProviderGroupMember } from '../../../shared/providerGroup';
+import { normalizeProviderGroupConfig, type ProviderGroupMember } from '../../../shared/providerGroup';
+import { ROUTE_STRATEGIES } from '../../../shared/routeStrategy';
 import { createProviderGroupDirectory } from '../directory';
 import { createProviderGroupRouter, type ProviderGroupRouterDeps } from '../router';
 import { providerGroupCodexUsageSnapshot, providerGroupShareQuotaFromInsights } from '../usage';
@@ -49,13 +50,13 @@ describe('OpenAI subscription group routing', () => {
     });
     const writeCooling = vi.fn();
     const router = createProviderGroupRouter({ directory, readGroup: () => config, listBindings: () => ({}),
-      isTurnRunning: () => false, now: () => NOW, random: () => 0,
+      isTurnRunning: () => false, now: () => NOW,
       coolingStore: { read: () => ({}), write: writeCooling } });
     const pick = (model = GPT, agentKind: 'codex' | 'pi' = 'codex') => router.pick({ providerId: 'openai', agentKind, model });
     return { config, usage, router, pick, writeCooling, remote: config.members[1].key };
   }
 
-  it.each(PROVIDER_GROUP_STRATEGIES)('excludes exhausted windows and prefers the most urgent weekly quota (%s)', async (strategy) => {
+  it.each(ROUTE_STRATEGIES)('excludes exhausted windows and prefers the most urgent weekly quota (%s)', async (strategy) => {
     const h = openaiHarness();
     h.config.strategy = strategy;
     h.usage.set(h.remote, quota(40, 60));
@@ -119,7 +120,7 @@ describe('OpenAI subscription group routing', () => {
 function harness(readPoolModelAvailability?: ProviderGroupRouterDeps['readPoolModelAvailability']) {
   let now = NOW;
   const config = normalizeProviderGroupConfig({
-    strategy: 'usage', members: [{ kind: 'local' }, { kind: 'device', agentDeviceId: 'mini', providerId: 'anthropic' }],
+    strategy: 'expiring', members: [{ kind: 'local' }, { kind: 'device', agentDeviceId: 'mini', providerId: 'anthropic' }],
   }, 'anthropic')!;
   const usage = new Map<string, ClaudeSubscriptionUsageSnapshot | null>();
   const readUsage = vi.fn(async (member: ProviderGroupMember) => usage.get(member.key) ?? null);
@@ -134,7 +135,7 @@ function harness(readPoolModelAvailability?: ProviderGroupRouterDeps['readPoolMo
   const router = createProviderGroupRouter({
     directory, readGroup: () => config, listBindings: () => ({}), isTurnRunning: () => false,
     readPoolModelAvailability,
-    coolingStore: { read: () => ({}), write: writeCooling }, now: () => now, random: () => 0,
+    coolingStore: { read: () => ({}), write: writeCooling }, now: () => now,
   });
   const pick = (model = OPUS, reserveFor?: string) => router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model, reserveFor });
   return { config, usage, router, pick, writeCooling, readUsage, advance: (ms: number) => { now += ms; } };
@@ -288,7 +289,7 @@ describe('provider-group quota routing', () => {
     expect(await h.pick(SONNET)).toMatchObject({ member: { key: 'local' } });
     expect(await h.pick(OPUS)).toMatchObject({ member: { key: remote } });
   });
-  it.each(PROVIDER_GROUP_STRATEGIES)('gives own tasks the same %s choice as incoming tasks, apart from the external pause', async (strategy) => {
+  it.each(ROUTE_STRATEGIES)('gives own tasks the same %s choice as incoming tasks, apart from the external pause', async (strategy) => {
     const remote = harness().config.members[1].key;
     const choose = async (localTask: boolean, paused: boolean, localUsage: [number, number]) => {
       const h = harness();
@@ -383,7 +384,7 @@ describe('provider-group quota routing', () => {
     expect((await h.router.view('anthropic')).members[1].quota).toEqual(weekly(20));
   });
 
-  it.each(PROVIDER_GROUP_STRATEGIES)('applies quota prefiltering to own tasks with the %s strategy', async (strategy) => {
+  it.each(ROUTE_STRATEGIES)('applies quota prefiltering to own tasks with the %s strategy', async (strategy) => {
     const context = harness();
     context.config.strategy = strategy;
     context.config.members[0].paused = true;
@@ -399,7 +400,7 @@ describe('provider-group quota routing', () => {
     expect(await context.router.pick({ ...input, model: SONNET })).toMatchObject({ kind: 'member', member: { key: 'local' } });
   });
 
-  it.each(PROVIDER_GROUP_STRATEGIES)('excludes an exhausted account for the %s strategy', async (strategy) => {
+  it.each(ROUTE_STRATEGIES)('excludes an exhausted account for the %s strategy', async (strategy) => {
     const h = harness();
     h.config.strategy = strategy;
     const remote = h.config.members[1].key;
@@ -480,7 +481,7 @@ describe('received share computers in a provider group', () => {
     ] }] },
     usage: null,
   });
-  function shareHarness(strategy: 'least' | 'order') {
+  function shareHarness(strategy: 'expiring' | 'order') {
     const config = normalizeProviderGroupConfig({ strategy, members: [
       { kind: 'local' },
       { kind: 'device', agentDeviceId: 'mini', providerId: 'anthropic' },
@@ -507,14 +508,14 @@ describe('received share computers in a provider group', () => {
       .concat([...Array(2)].map((_, i) => [`dhl${i}`, { providerId: 'anthropic', memberKey: mini }])));
     const router = createProviderGroupRouter({ directory, readGroup: () => config,
       listBindings: () => bindings as unknown as ReturnType<ProviderGroupRouterDeps['listBindings']>,
-      isTurnRunning: () => true, now: () => NOW, random: () => 0,
+      isTurnRunning: () => true, now: () => NOW,
       coolingStore: { read: () => ({}), write: vi.fn() } });
     const pick = () => router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model: OPUS });
     return { router, pick, local, shared, readShareQuota, setShare: (raw: unknown) => { shareInsights = raw; } };
   }
 
   it('assigns an idle share computer whose quota is not shared even when the group’s own computers report quota', async () => {
-    const h = shareHarness('least');
+    const h = shareHarness('expiring');
     expect(await h.pick()).toMatchObject({ kind: 'member', member: { key: h.shared } });
     expect(h.readShareQuota).toHaveBeenCalled();
   });

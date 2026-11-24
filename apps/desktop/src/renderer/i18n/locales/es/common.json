@@ -847,20 +847,6 @@
       "loadFailed": "No se pudo cargar el grupo de proveedores",
       "note": "Para las sesiones en esta computadora y las de las personas con las que compartes, el grupo elige la computadora que ejecuta el Agent"
     },
-    "strategy": {
-      "label": "Estrategia de grupo",
-      "least": "Menos ocupado",
-      "round": "Rotación",
-      "order": "En orden",
-      "weight": "Por peso",
-      "quotaFirst": "Cuando el uso de la suscripción está disponible, van primero las computadoras cuya cuota se restablece pronto y a las que les queda bastante, de modo que cada cuenta se agote de manera uniforme con el tiempo; las que estén parejas siguen la estrategia del grupo",
-      "description": {
-        "least": "Va a la menos ocupada",
-        "round": "Gira entre computadoras",
-        "order": "Primero las que están antes en la lista",
-        "weight": "Se reparte según el peso"
-      }
-    },
     "autoSwitch": {
       "label": "Cambiar de computadora automáticamente",
       "description": "Cambia cuando una alcanza su límite, no se puede acceder a ella o tiene la sesión cerrada"
@@ -22735,7 +22721,6 @@
       "useCodex": "Iniciar sesión con Codex"
     },
     "title": "Cuentas de suscripción",
-    "strategy": "Equilibrio de carga",
     "add": "Añadir cuenta",
     "defaultTag": "Predeterminada",
     "ready": "Conectada",
@@ -22967,6 +22952,39 @@
     },
     "switchOffer": {
       "action": "Continuar con {{model}}"
+    },
+    "auto": {
+      "accounts_one": "{{count}} cuenta",
+      "accounts_many": "{{count}} cuentas",
+      "accounts_other": "{{count}} cuentas",
+      "computers_one": "{{count}} ordenador",
+      "computers_many": "{{count}} ordenadores",
+      "computers_other": "{{count}} ordenadores",
+      "pickFor": "Estrategia de {{name}}",
+      "hiddenTag": "Oculto",
+      "hide": "Ocultar en el selector de modelos",
+      "hideAria": "Ocultar {{name}} en el selector de modelos",
+      "show": "Mostrar en el selector de modelos",
+      "showAria": "Mostrar {{name}} en el selector de modelos",
+      "assignedBy": "Las tareas nuevas se asignan según «{{strategy}}»",
+      "adjust": "Ajustar en Grupos de modelos",
+      "quotaFirst": "Entre cuentas u ordenadores, sea cual sea la estrategia, si se puede leer el uso de la suscripción va primero la que tenga más cuota antes de su próximo reinicio; la estrategia decide entre las que están parecidas."
+    },
+    "sources": {
+      "title": "Modos de proveedores",
+      "description": "Combina varias fuentes en un modo que funciona como un único proveedor: elige el modelo como siempre y el modo decide qué fuente lo ejecuta. Los proveedores de la misma marca se combinan automáticamente.",
+      "models_one": "{{count}} modelo",
+      "models_many": "{{count}} modelos",
+      "models_other": "{{count}} modelos",
+      "autoTag": "Automático",
+      "new": "Combinar proveedores",
+      "newName": "Nuevo modo de proveedores",
+      "empty": "Aún no hay nada que combinar. Conecta dos o más proveedores de la misma marca y se combinarán automáticamente, o elige los tuyos con Combinar proveedores.",
+      "addProvider": "Añadir proveedor",
+      "chooseProvider": "Elegir proveedor",
+      "removeAria": "Quitar {{name}} de este modo",
+      "deleteAria": "Eliminar el modo {{name}}",
+      "note": "Los modos automáticos siguen tus proveedores conectados. Sus miembros no se pueden cambiar; puedes cambiar la estrategia u ocultarlos."
     }
   },
   "projectSettings": {

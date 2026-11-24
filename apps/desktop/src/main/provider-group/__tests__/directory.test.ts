@@ -115,7 +115,7 @@ describe('listCandidates', () => {
       kind === 'device' ? 'one-host' : `share:s${i}`, account.id, account.name,
     ]));
     // Same normalization runs when saving and reading group settings; JSON is the persisted shape.
-    const config = normalizeProviderGroupConfig(JSON.parse(JSON.stringify({ strategy: 'round',
+    const config = normalizeProviderGroupConfig(JSON.parse(JSON.stringify({ strategy: 'rotate',
       members: candidates.map((candidate) => ({ ...candidate, limit: 4, weight: 1, paused: false })),
     })), 'openai')!;
     expect(config.members.map((m) => m.key)).toEqual(candidates.map((c) => c.key));
@@ -123,7 +123,7 @@ describe('listCandidates', () => {
     expect((await directory.listCandidates('openai', { ...config, members: config.members.slice(0, 1) }))
       .map((c) => c.blocked ?? null)).toEqual(['member', null]);
     const router = createProviderGroupRouter({ directory, readGroup: () => config,
-      listBindings: () => ({}), isTurnRunning: () => false, now: () => 0, random: () => 0 });
+      listBindings: () => ({}), isTurnRunning: () => false, now: () => 0 });
     const input = { providerId: 'openai', agentKind: 'codex' as const, model: 'gpt-5.4', localTask: true as const };
     const first = await router.pick(input);
     const second = await router.pick(input);
@@ -189,7 +189,7 @@ describe('listCandidates', () => {
   it('marks computers already in the group', async () => {
     const directory = createProviderGroupDirectory(deps());
     const config: ProviderGroupConfig = {
-      strategy: 'least',
+      strategy: 'expiring',
       autoSwitch: true,
       members: [{ key: 'device:mini:anthropic-1a2b3c4d', kind: 'device', agentDeviceId: 'mini', providerId: 'anthropic-1a2b3c4d', limit: 4, weight: 1, paused: false }],
     };
@@ -219,7 +219,7 @@ describe('resolveMembers', () => {
       readClaudeUsage: async () => { await quota; return { updatedAt: 1_000, fiveHour: { utilization: 100 } }; },
     }));
     const router = createProviderGroupRouter({ directory, readGroup: () => config,
-      listBindings: () => ({}), isTurnRunning: () => false, now: () => 1_000, random: () => 0 });
+      listBindings: () => ({}), isTurnRunning: () => false, now: () => 1_000 });
     const externalLoad = createProviderGroupExternalLoad({ now: () => 1_000 });
     const client = createProviderGroupRemoteClient(async (_device, _channel, args) => ({
       ok: true,
@@ -249,7 +249,7 @@ describe('resolveMembers', () => {
       { key: 'off', kind: 'device', agentDeviceId: 'off', providerId: 'anthropic', limit: 4, weight: 1, paused: false },
       { key: 'share', kind: 'share', agentDeviceId: 'share:s1', providerId: 'anthropic', limit: 4, weight: 1, paused: false },
     ];
-    const resolved = await directory.resolveMembers('anthropic', { strategy: 'least', autoSwitch: true, members });
+    const resolved = await directory.resolveMembers('anthropic', { strategy: 'expiring', autoSwitch: true, members });
     expect(resolved.map((m) => m.appVersion)).toEqual(['0.1.104-beta', '1.0.0', '1.0.0', undefined]);
     expect(resolved[2].state).toBe('offline');
   });
@@ -264,7 +264,7 @@ describe('resolveMembers', () => {
     });
     const members = [member('local', null, 'anthropic'), member('device', 'mini', 'anthropic-1a2b3c4d'),
       member('device', 'mini', 'deepseek'), member('device', 'off', 'anthropic'), member('share', 'share:s1', 'anthropic')];
-    const result = await directory.resolveMembers('anthropic', { strategy: 'usage', autoSwitch: true, members });
+    const result = await directory.resolveMembers('anthropic', { strategy: 'expiring', autoSwitch: true, members });
     expect(readClaudeUsage).toHaveBeenCalledTimes(2);
     expect(readClaudeUsage).toHaveBeenCalledWith(members[0]);
     expect(readClaudeUsage).toHaveBeenCalledWith(members[1]);
@@ -289,7 +289,7 @@ describe('resolveMembers', () => {
     const members = [member('local', null, 'openai'), member('device', 'mini', 'openai'),
       member('device', 'mini', 'openai-api'), member('device', 'off', 'openai'),
       member('share', 'share:s1', 'openai'), member('local', null, 'openai-disabled')];
-    await directory.resolveMembers('openai', { strategy: 'least', autoSwitch: true, members });
+    await directory.resolveMembers('openai', { strategy: 'expiring', autoSwitch: true, members });
     expect(readCodexUsage.mock.calls.map(([entry]) => entry.key)).toEqual(members.slice(0, 2).map((m) => m.key));
   });
 
@@ -298,7 +298,7 @@ describe('resolveMembers', () => {
       listReceivedShares: () => [share('s1'), share('s2', { status: 'paused' })],
     }));
     const config: ProviderGroupConfig = {
-      strategy: 'least',
+      strategy: 'expiring',
       autoSwitch: true,
       members: [
         { key: 'local', kind: 'local', agentDeviceId: null, providerId: 'anthropic', limit: 4, weight: 1, paused: false },
@@ -336,7 +336,7 @@ describe('resolveMembers', () => {
       key, kind, agentDeviceId, providerId, limit: 4, weight: 1, paused: false,
     });
     const resolved = await directory.resolveMembers('anthropic', {
-      strategy: 'least',
+      strategy: 'expiring',
       autoSwitch: true,
       members: [
         member('device:mini:anthropic-1a2b3c4d', 'device', 'mini', 'anthropic-1a2b3c4d'),
@@ -367,7 +367,7 @@ describe('resolveMembers', () => {
       key, kind, agentDeviceId, providerId, limit: 4, weight: 1, paused: false,
     });
     const resolved = await directory.resolveMembers('anthropic', {
-      strategy: 'least',
+      strategy: 'expiring',
       autoSwitch: true,
       members: [
         member('local', 'local', null, 'anthropic'),
@@ -385,7 +385,7 @@ describe('resolveMembers', () => {
   it('leaves the local count out when it cannot be read', async () => {
     const directory = createProviderGroupDirectory(deps({ localRunning: async () => { throw new Error('db busy'); } }));
     const [resolved] = await directory.resolveMembers('anthropic', {
-      strategy: 'least',
+      strategy: 'expiring',
       autoSwitch: true,
       members: [{ key: 'local', kind: 'local', agentDeviceId: null, providerId: 'anthropic', limit: 4, weight: 1, paused: false }],
     });
@@ -405,7 +405,7 @@ describe('resolveMembers', () => {
       }));
       const done = vi.fn();
       void directory.resolveMembers('anthropic', {
-        strategy: 'least',
+        strategy: 'expiring',
         autoSwitch: true,
         members: [{ key: 'local', kind: 'local', agentDeviceId: null, providerId: 'anthropic', limit: 4, weight: 1, paused: false }],
       }).then(done);
@@ -438,7 +438,7 @@ describe('resolveMembers', () => {
     const d = deps();
     const directory = createProviderGroupDirectory(d);
     const config: ProviderGroupConfig = {
-      strategy: 'least',
+      strategy: 'expiring',
       autoSwitch: true,
       members: [{ key: 'device:mini:anthropic-1a2b3c4d', kind: 'device', agentDeviceId: 'mini', providerId: 'anthropic-1a2b3c4d', limit: 4, weight: 1, paused: false }],
     };
@@ -571,7 +571,7 @@ describe('probe (waiting for a computer to come back, §6.1)', () => {
     const d = deps({ listDevices: async () => [device('self', { isSelf: true }), device('mini', { online: miniOnline })] });
     const directory = createProviderGroupDirectory(d);
     const config: ProviderGroupConfig = {
-      strategy: 'least',
+      strategy: 'expiring',
       autoSwitch: true,
       members: [{ key: 'device:mini:anthropic-1a2b3c4d', kind: 'device', agentDeviceId: 'mini', providerId: 'anthropic-1a2b3c4d', limit: 4, weight: 1, paused: false }],
     };
@@ -631,7 +631,7 @@ describe('resolving members quickly when choosing a computer (2026-10-11)', () =
         readClaudeUsage: vi.fn(async (member: ProviderGroupMember) => member.key === MINI.key ? usage : null),
       }));
       const done = vi.fn();
-      void directory.resolveMembers('anthropic', { strategy: 'usage', autoSwitch: true, members: [MINI, OTHER] }, {
+      void directory.resolveMembers('anthropic', { strategy: 'expiring', autoSwitch: true, members: [MINI, OTHER] }, {
         quickMs: 3_000,
         enough: (r) => r.state === 'ok',
       }).then(done);

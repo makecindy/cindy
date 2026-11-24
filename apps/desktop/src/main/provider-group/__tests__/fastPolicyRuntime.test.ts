@@ -273,7 +273,7 @@ beforeEach(() => {
   state.switchToken.mockReset().mockImplementation(() => randomUUID());
   state.notify.mockReset().mockResolvedValue(undefined);
   state.config = {
-    strategy: 'least',
+    strategy: 'expiring',
     autoSwitch: true,
     allowFast: false,
     members: ['one', 'two'].map((device) => ({
