@@ -16349,6 +16349,7 @@
       "daemonNotReady": "{{manager}} foi atualizado, mas o daemon remoto ainda não iniciou — reenvie sua mensagem manualmente"
     },
     "remoteError": {
+      "SCHEDULE_BOUND_PLUGIN_ENGINE": "A tarefa selecionada usa um mecanismo de plugin. Escolha uma tarefa que use um mecanismo integrado ou configure a automação para criar uma tarefa a cada execução.",
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "Esta tarefa SSH não pode trocar de Harness. Escolha um modelo no Harness atual ou crie uma nova tarefa SSH com o Harness necessário.",
       "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "Não foi possível compactar o contexto ao trocar de modelo porque esta conexão não permite usar o modelo anterior.",
       "MODEL_SELECTION_UNAVAILABLE": "O modelo selecionado não está mais disponível no provedor. Verifique a conexão em Configurações ou escolha outro modelo disponível.",

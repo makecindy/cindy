@@ -276,7 +276,8 @@ export interface SchedulerOptions {
   validateTargetSession?: (
     targetSessionId: string,
     operation: 'create' | 'update' | 'fire',
-    selection: Pick<Schedule, 'modelAgentKind' | 'modelAgentDeviceId' | 'primaryHostKey'>,
+    selection: Pick<Schedule, 'modelAgentKind' | 'modelAgentDeviceId' | 'primaryHostKey' | 'executionMode'>,
+    previous?: Pick<Schedule, 'targetSessionId' | 'executionMode'>,
   ) => Promise<void>;
   /**
    * 被动模式:本实例不参与自动触发 —— start() 不装 tick 时钟、不做僵尸 run 清理
@@ -2854,7 +2855,7 @@ export class Scheduler extends EventEmitter {
       },
     );
     if (candidate.targetSessionId) {
-      await this.validateTargetSession?.(candidate.targetSessionId, 'update', candidate);
+      await this.validateTargetSession?.(candidate.targetSessionId, 'update', candidate, existing);
     }
     await this.validateModelSelection?.(candidate, existing);
     // 到期但尚未执行的 Once 可以通过修改截止时间恢复；已经消费的 Once 保持终态。

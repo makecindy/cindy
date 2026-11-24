@@ -3866,7 +3866,8 @@ describe('Scheduler', () => {
     expect((await local.storage.get(schedule.id))?.modelAgentKind).toBe('codex');
     await local.scheduler.update(schedule.id, { name: 'same route' });
     expect(validateTargetSession).toHaveBeenLastCalledWith('bound', 'update',
-      expect.objectContaining({ modelAgentKind: 'codex' }));
+      expect.objectContaining({ modelAgentKind: 'codex' }),
+      expect.objectContaining({ targetSessionId: 'bound' }));
 
     // A changed host capability must also be checked on automatic and manual runs.
     allowedAgent = 'pi';

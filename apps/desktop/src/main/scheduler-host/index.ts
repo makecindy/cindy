@@ -10,7 +10,8 @@ import type { GhostControlPointResult, GhostScheduleRunPointData } from '../../s
 import type { DiagnosePreRunHookFailure } from './pre-run-hook-diagnosis';
 import { sessions } from '../localDb/schema.js';
 import { isReviewSessionSource } from '../../shared/sessionSource.js';
-import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
+import { dbToMakerAgentKind, isPluginEngineKind } from '../../shared/agentKindConversion.js';
+import { throwIpcError } from '../utils/ipcValidate.js';
 import { assertScheduledHarnessSupported } from '../maker-ipc/scheduledModelSelection';
 import type { DrizzleScheduleStorage, SchedulerDrizzleDb } from './storage';
 import { ProjectAutomationLoader } from './project-automation-loader';
@@ -160,7 +161,7 @@ export function createSchedulerHost<Deps extends SchedulerHostStartDeps>(runtime
       // Review sessions are host-owned read-only tasks, not normal unattended
       // automation targets. Re-read their durable source for CRUD and every fire
       // so renderer filtering or a restored schedule row cannot bypass isolation.
-      validateTargetSession: async (targetSessionId, _operation, selection) => {
+      validateTargetSession: async (targetSessionId, operation, selection, previous) => {
         const [row] = await deps
           .getDb()
           .select({ source: sessions.source, agentKind: sessions.agentKind,
@@ -178,6 +179,12 @@ export function createSchedulerHost<Deps extends SchedulerHostStartDeps>(runtime
         // 插件引擎只用于每次新建任务的自动任务(docs/plans/acp-plugin-bridge.md)，不能绑定已有任务。
         if (selection.modelAgentKind === 'acp') {
           throw new Error('A plugin engine schedule starts a new task each run');
+        }
+        // Keep existing bindings editable, including schedules whose task switched engines later.
+        if (operation !== 'fire' && selection.executionMode !== 'script' && isPluginEngineKind(row?.agentKind)
+          && (previous?.targetSessionId !== targetSessionId || previous?.executionMode === 'script')) {
+          throwIpcError('SCHEDULE_BOUND_PLUGIN_ENGINE',
+            'The selected task uses a plugin engine. Choose a task that uses a built-in engine or set the automation to create a new task each run.');
         }
         assertScheduledHarnessSupported(row ? {
           ...row, agentKind: dbToMakerAgentKind(row.agentKind),

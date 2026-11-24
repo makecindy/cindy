@@ -16178,6 +16178,7 @@
       "daemonNotReady": "{{manager}} 升级完成，但远端 daemon 暂未启动，请手动重新发送消息"
     },
     "remoteError": {
+      "SCHEDULE_BOUND_PLUGIN_ENGINE": "所选任务使用插件引擎。请选择使用内置引擎的任务，或将自动化设为「每次新建」。",
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 任务暂不支持切换 Harness。请选择当前 Harness 下的模型，或使用所需 Harness 新建 SSH 任务。",
       "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "当前连接无法使用上一个模型，切换模型时的上下文压缩失败。",
       "MODEL_SELECTION_UNAVAILABLE": "所选模型在该供应商下已不可用。请在设置中检查连接，或重新选择可用模型。",

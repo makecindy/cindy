@@ -16243,6 +16243,7 @@
       "daemonNotReady": "{{manager}} upgraded, but the remote daemon hasn’t started yet — resend your message manually"
     },
     "remoteError": {
+      "SCHEDULE_BOUND_PLUGIN_ENGINE": "The selected task uses a plugin engine. Choose a task that uses a built-in engine or set the automation to create a new task each run.",
       "SSH_HARNESS_SWITCH_UNSUPPORTED": "This SSH task cannot switch Harness. Choose a model in its current Harness, or create a new SSH task with the Harness you need.",
       "CONTEXT_COMPACTION_MODEL_UNAVAILABLE": "Context compaction failed during the switch because this connection cannot use the previous model.",
       "MODEL_SELECTION_UNAVAILABLE": "The selected model is no longer available from its provider. Check the connection in Settings or choose another available model.",
