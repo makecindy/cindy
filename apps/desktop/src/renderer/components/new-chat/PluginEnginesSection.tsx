@@ -62,6 +62,8 @@ export interface PluginEnginesPickerProps {
   engines: readonly PluginEngineChoice[];
   /** Current engine choice (already resolved against the list); null = a built-in model is used. */
   active: PluginEngineSelection | null;
+  /** The task's current engine and effort, even when the picker highlights a pending switch. */
+  running?: PluginEngineSelection | null;
   /** Existing tasks wait for the host to accept the choice. False leaves the panel open. */
   onSelect(selection: PluginEngineSelection): void | boolean | Promise<boolean>;
   /** Device Link picker reloads its own computer's list when opened. */
@@ -496,10 +498,8 @@ export function PluginEnginesSection({
   picker,
   query,
   onPicked,
-  existingTask = false,
 }: {
   picker: PluginEnginesPickerProps;
-  existingTask?: boolean;
   query: string;
   onPicked(): void;
 }) {
@@ -524,11 +524,14 @@ export function PluginEnginesSection({
   const blocks = picker.engines
     .map((engine) => {
       const activeModelId = activePluginEngineModelId(picker.active, engine);
-      const purpose = existingTask && activeModelId !== null ? 'session' as const : 'new-task' as const;
+      const running = isSamePluginEngineChoice(picker.running, engine) ? picker.running : null;
+      const effort = running ? running.effort : activeModelId !== null ? picker.active?.effort : undefined;
+      const purpose = running ? 'session' as const : 'new-task' as const;
       return {
         engine,
         activeModelId,
         purpose,
+        effort,
         rows: engineMatches(engine, pluginEngineModelRows(engine, activeModelId, purpose), needle, defaultLabel),
       };
     })
@@ -539,7 +542,7 @@ export function PluginEnginesSection({
     // Each engine carries its own group label (like a provider), so the section has no visible
     // heading of its own; the 「插件引擎」 name stays for assistive technology and the rail tab.
     <div ref={sectionRef} role="group" aria-label={label} data-plugin-engines-section>
-      {blocks.map(({ engine, rows, activeModelId, purpose }) => (
+      {blocks.map(({ engine, rows, activeModelId, purpose, effort }) => (
         <EngineBlock
           key={pluginEngineChoiceKey(engine)}
           engine={engine}
@@ -550,7 +553,7 @@ export function PluginEnginesSection({
           }, true); }}
           // A row shows the level it would run with: the chosen one where it is offered, else its own.
           effortOf={(row) => resolvePluginEngineEffort(
-            engine, row.id, activeModelId !== null ? picker.active?.effort : undefined, purpose)}
+            engine, row.id, effort, purpose)}
           onChooseEffort={(modelId, effort) => { void choose({
             providerId: engine.providerId, modelId, effort, ...(engine.deviceId ? { deviceId: engine.deviceId } : {}),
           }, false); }}

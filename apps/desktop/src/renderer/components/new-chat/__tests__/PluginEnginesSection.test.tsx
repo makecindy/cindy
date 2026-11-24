@@ -941,7 +941,7 @@ describe('a task running on a plugin engine', () => {
   });
 
   // Unit: a task with no recorded effort follows the plugin default even after the draft default changes.
-  it.each(['plugin panel', 'unified menu'] as const)('keeps the plugin default for a running task in the %s', async (surface) => {
+  it.each(['plugin panel', 'unified menu', 'unified menu with a pending engine switch'] as const)('keeps the plugin default for a running task in the %s', async (surface) => {
     const [pro, flash, plain] = leveled.models;
     const engine = {
       ...leveled,
@@ -953,6 +953,12 @@ describe('a task running on a plugin engine', () => {
     };
     const selection = { providerId: engine.providerId, modelId: 'pro' };
     const active = resolveActivePluginEngine([engine], selection)!;
+    const pendingSwitch = surface === 'unified menu with a pending engine switch';
+    const unifiedMenu = surface !== 'plugin panel';
+    const nextEngine = {
+      ...agy,
+      models: [{ ...engine.models[0]!, displayName: 'Next model' }],
+    };
     const onSelect = vi.fn((picked: typeof selection) => {
       expect(resolvePluginEngineSessionSwitchEffort(picked, engine, selection)).toBe('high');
       return true;
@@ -967,7 +973,14 @@ describe('a task running on a plugin engine', () => {
       vendorKey: 'cc',
       remoteAgent: undefined,
       actualRoute: true,
-      ...(surface === 'unified menu' ? { pluginEngines: { engines: [engine], active: selection, onSelect } } : {}),
+      ...(unifiedMenu ? {
+        pluginEngines: {
+          engines: pendingSwitch ? [engine, nextEngine] : [engine],
+          active: pendingSwitch ? { providerId: nextEngine.providerId, modelId: 'pro' } : selection,
+          running: selection,
+          onSelect,
+        },
+      } : {}),
       pluginEngineSession: {
         providerId: engine.providerId, engine, engineName: engine.name, modelId: 'pro', onSelectModel: vi.fn(),
       },
@@ -975,9 +988,13 @@ describe('a task running on a plugin engine', () => {
     const trigger = screen.getByRole('button', { name: 'Select model. Current: DeepSeek Harness · Pro · high' });
     await act(async () => { fireEvent.click(trigger); });
     const list = await screen.findByRole('listbox', { name: 'Models' });
-    const group = surface === 'unified menu' ? within(list).getByRole('group', { name: 'DeepSeek Harness' }) : list;
+    const group = unifiedMenu ? within(list).getByRole('group', { name: 'DeepSeek Harness' }) : list;
     expect(within(group).getAllByRole('option').map(levelOf)).toEqual(['high', null, null]);
-    if (surface === 'unified menu') {
+    if (pendingSwitch) {
+      const next = within(list).getByRole('group', { name: 'Antigravity' });
+      expect(within(next).getAllByRole('option').map(levelOf)).toEqual(['low']);
+    }
+    if (unifiedMenu) {
       const search = screen.getByRole('textbox', { name: 'Search models' });
       await act(async () => { fireEvent.change(search, { target: { value: 'Pro' } }); });
       const row = within(await screen.findByRole('listbox', { name: 'Models' })).getByRole('option', { name: /Pro/ });

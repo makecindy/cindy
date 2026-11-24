@@ -3895,7 +3895,7 @@ function ModelSelectorContentView({
                       deviceId={device.deviceId} onPicked={() => onDismiss?.()} variant="search" />
                   ))}
                   {visiblePluginEngines && visiblePluginEngines.engines.length > 0 && (
-                    <PluginEnginesSection picker={visiblePluginEngines} existingTask={actualRoute} query={query} onPicked={() => onDismiss?.()} />
+                    <PluginEnginesSection picker={visiblePluginEngines} query={query} onPicked={() => onDismiss?.()} />
                   )}
                 </>
               ),
@@ -3934,7 +3934,6 @@ function ModelSelectorContentView({
               })),
               renderPluginEngine: (providerId: string, engineDeviceId?: string) => (
                 <PluginEnginesSection
-                  existingTask={actualRoute}
                   picker={{
                     ...visiblePluginEngines,
                     engines: visiblePluginEngines.engines.filter((engine) =>
@@ -5069,7 +5068,7 @@ export function ModelSelector({
         name: pluginEnginePending.engineName,
         engine: pluginEnginePending.engine,
         modelId: pluginEnginePending.modelId,
-        effort: resolvePluginEngineEffort(pluginEnginePending.engine, pluginEnginePending.modelId, pluginEnginePending.effort, 'session'),
+        effort: resolvePluginEngineEffort(pluginEnginePending.engine, pluginEnginePending.modelId, pluginEnginePending.effort),
         pending: true,
       }
     : pluginEngineSession
