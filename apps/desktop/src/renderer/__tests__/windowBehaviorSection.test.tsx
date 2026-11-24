@@ -234,8 +234,18 @@ describe('WindowBehaviorSection close behavior', () => {
 
   it('keeps tray and quit on Windows', async () => {
     const api = installWindowBehaviorApi('win32');
+    // Unit regression for #11277: exercise the searchable Windows hover-card switch.
+    const { windowBehavior } = window.electronAPI;
+    windowBehavior.getMenubarState = vi.fn().mockResolvedValue({ available: true, enabled: true });
+    windowBehavior.setMenubarEnabled = vi.fn(async (enabled) => ({ available: true, enabled }));
 
     render(<WindowBehaviorSection />);
+
+    const card = await screen.findByRole('switch', { name: windowBehaviorSettings.trayCardLabel.titleKey });
+    expect(card.getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(card);
+    await waitFor(() => expect(card.getAttribute('aria-checked')).toBe('false'));
+    expect(windowBehavior.setMenubarEnabled).toHaveBeenCalledWith(false);
 
     expect(await screen.findByText('settings.windowBehavior.closeBehavior.label')).toBeTruthy();
     expect(api.getWindowsCloseBehavior).toHaveBeenCalledTimes(1);

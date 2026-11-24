@@ -2433,6 +2433,10 @@
       }
     },
     "windowBehavior": {
+      "trayCard": {
+        "label": "托盘悬浮卡片",
+        "hint": "鼠标停在 Cindy 托盘图标上时，显示剩余配额和未读任务。"
+      },
       "menubar": {
         "label": "在菜单栏显示余量",
         "hint": "在 macOS 菜单栏放一个 Cindy 图标，点开查看订阅余量、Cindy 余额和今天的用量。"

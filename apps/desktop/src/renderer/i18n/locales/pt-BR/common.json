@@ -2501,6 +2501,10 @@
       }
     },
     "windowBehavior": {
+      "trayCard": {
+        "label": "Cartão da bandeja do sistema",
+        "hint": "Passe o mouse sobre o ícone da Cindy na bandeja para ver a cota restante e as tarefas não lidas."
+      },
       "menubar": {
         "label": "Mostrar uso restante na barra de menus",
         "hint": "Adiciona um ícone do Cindy à barra de menus do macOS. Clique nele para ver o que resta nas suas assinaturas, seu saldo do Cindy e o uso de hoje."

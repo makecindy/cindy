@@ -2501,6 +2501,10 @@
       }
     },
     "windowBehavior": {
+      "trayCard": {
+        "label": "Cartão da área de notificação",
+        "hint": "Passe o ponteiro sobre o ícone da Cindy na área de notificação para ver a cota restante e as tarefas por ler."
+      },
       "menubar": {
         "label": "Mostrar utilização restante na barra de menus",
         "hint": "Adiciona um ícone do Cindy à barra de menus do macOS. Clique nele para ver o que resta nas suas subscrições, o seu saldo Cindy e a utilização de hoje."

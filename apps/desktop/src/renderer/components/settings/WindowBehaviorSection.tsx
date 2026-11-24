@@ -120,18 +120,19 @@ export function WindowBehaviorSection() {
   }
 
   if (menubar.available) {
+    const setting = isWindows ? windowBehaviorSettings.trayCardLabel : windowBehaviorSettings.menubarLabel;
     rows.push({
       key: 'menubar',
       node: (
         <BehaviorRow
-          id={windowBehaviorSettings.menubarLabel.targetId}
-          data-setting-id={windowBehaviorSettings.menubarLabel.id}
-          label={t(windowBehaviorSettings.menubarLabel.titleKey)}
-          hint={t(windowBehaviorSettings.menubarLabel.descriptionKey)}
+          id={setting.targetId}
+          data-setting-id={setting.id}
+          label={t(setting.titleKey)}
+          hint={t(setting.descriptionKey)}
           checked={menubar.state?.enabled === true}
           disabled={menubar.busy}
           onCheckedChange={(enabled) => void menubar.setEnabled(enabled)}
-          ariaLabel={t(windowBehaviorSettings.menubarLabel.titleKey)}
+          ariaLabel={t(setting.titleKey)}
         />
       ),
     });

@@ -2463,6 +2463,10 @@
       }
     },
     "windowBehavior": {
+      "trayCard": {
+        "label": "Tray hover card",
+        "hint": "Hover over the Cindy tray icon to see remaining quota and unread tasks."
+      },
       "menubar": {
         "label": "Show remaining usage in the menu bar",
         "hint": "Adds a Cindy icon to the macOS menu bar. Click it to see what's left on your subscriptions, your Cindy balance and today's usage."

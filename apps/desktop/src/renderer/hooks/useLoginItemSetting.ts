@@ -6,7 +6,7 @@ import { extractIpcError } from '@/utils/ipcError';
 /** Reads native state on mount/focus; serializes edits and discards stale reads. */
 export function useLoginItemSetting() {
   const [state, setState] = useState<LoginItemState | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState(true);
   const [error, setError] = useState<'loadFailed' | 'saveFailed' | 'notApplied' | null>(null);
   const mounted = useRef(false);
   const generation = useRef(0);
@@ -17,7 +17,6 @@ export function useLoginItemSetting() {
   const refresh = useCallback(async () => {
     if (saving.current) return;
     const current = ++generation.current;
-    setBusy(true);
     try {
       const next = await window.electronAPI.windowBehavior.getLoginItem();
       if (mounted.current && generation.current === current) {
