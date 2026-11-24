@@ -1034,7 +1034,7 @@ import {
   interruptUpstreamMergeTurn,
   prepareUpstreamMergeTurn,
 } from '../cindy-make/upstreamMergeRuntime.js';
-import { type IpcErrorCode } from '../../shared/ipc-errors.js';
+import { isIpcError, type IpcErrorCode } from '../../shared/ipc-errors.js';
 import { piPackageCommandDiagnostic } from '../maker-host/pi-package-diagnostic.js';
 import {
   runPiPackageListIpcBoundary,
@@ -19325,6 +19325,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           });
           sess = lazySess;
         } catch (err) {
+          if (isIpcError(err) && err.code === 'SSH_EXEC_FAILED') throw err;
           throwIpcError(
             'INTERNAL',
             err instanceof Error ? err.message : 'context usage lazy create failed',

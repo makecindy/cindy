@@ -1381,6 +1381,7 @@
     "SSH_CONFIG_RELOAD_REQUIRED": "SSH 設定已存，然 Cindy 重整未成。請重載 SSH 設定。",
     "SSH_CONFIG_OWNERSHIP_REQUIRED": "Cindy 不能安全管理此 SSH 設定。請重載，並確認 Cindy 所有權標記尚存且主機別名唯一。",
     "SSH_CONFIG_AUTH_UNSUPPORTED": "Cindy 不能安全重現此主機之部分 SSH 設定規則。終端 SSH 或仍可成；請察 Match、條件式 Include、IdentityAgent、IdentitiesOnly 與公開金鑰設定。",
+    "SSH_EXEC_FAILED": "SSH 未能執令，稍候再試。",
     "SSH_AGENT_UNAVAILABLE": "本機 SSH 密鑰之代理（ssh-agent）不可用。請察其已啟，並以 ssh-add -l 驗所需之鑰已載；排障之法見「管理密鑰」。",
     "SSH_HOST_PREFS_WRITE_FAILED": "主機仍已存，然顯示名稱或 Agent Proxy 設定未能存。請察此機儲存權限而後再試。",
     "REMOTE_WORKDIR_INVALID": "遠端案目錄無效，請重擇案目錄。",

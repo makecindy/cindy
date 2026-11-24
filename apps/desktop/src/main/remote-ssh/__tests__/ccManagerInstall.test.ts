@@ -46,7 +46,7 @@ describe('Claude Code SSH startup probes', () => {
 
       await expect(ensureCcManagerInstalledOrInstall({ host })).rejects.toMatchObject({
         code: 'SSH_EXEC_FAILED',
-        message: expect.stringContaining('Could not open an SSH command channel'),
+        message: expect.stringContaining('SSH command channel open failed'),
       });
       expect(exec).toHaveBeenCalledTimes(stage === 'manager' ? 2 : 1);
 

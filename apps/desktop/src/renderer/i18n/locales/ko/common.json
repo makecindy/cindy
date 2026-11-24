@@ -1385,6 +1385,7 @@
     "SSH_CONFIG_RELOAD_REQUIRED": "SSH 설정은 저장되었지만 Cindy에서 새로 고치지 못했습니다. SSH 설정을 다시 불러오세요.",
     "SSH_CONFIG_OWNERSHIP_REQUIRED": "Cindy가 이 SSH 구성을 안전하게 관리할 수 없습니다. 다시 불러온 후 Cindy 소유권 표시와 호스트 별칭의 고유성을 확인하세요.",
     "SSH_CONFIG_AUTH_UNSUPPORTED": "Cindy가 이 호스트의 일부 SSH 설정 규칙을 안전하게 재현할 수 없습니다. 터미널 SSH는 계속 작동할 수 있으니 Match, 조건부 Include, IdentityAgent, IdentitiesOnly 및 공개 키 설정을 확인하세요.",
+    "SSH_EXEC_FAILED": "SSH로 명령을 실행하지 못했습니다. 잠시 후 다시 시도하세요.",
     "SSH_AGENT_UNAVAILABLE": "이 컴퓨터의 SSH 키 에이전트(ssh-agent)를 사용할 수 없습니다. 실행 중인지 확인하고 ssh-add -l로 필요한 키가 로드되었는지 확인하세요. 키 관리에서 문제 해결 안내를 볼 수 있습니다.",
     "SSH_HOST_PREFS_WRITE_FAILED": "호스트는 저장되었지만 표시 이름 또는 Agent Proxy 설정을 저장하지 못했습니다. 로컬 저장소 권한을 확인한 후 다시 시도하세요.",
     "RIGHT_SIDEBAR_TOO_MANY_TABS": "이 작업의 탭 한도에 도달했습니다. 일부 탭을 닫아 주세요",

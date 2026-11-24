@@ -1416,6 +1416,7 @@
     "SSH_CONFIG_RELOAD_REQUIRED": "La configuración de SSH se guardó, pero Cindy no pudo actualizarla. Vuelve a cargar la configuración de SSH.",
     "SSH_CONFIG_OWNERSHIP_REQUIRED": "Cindy no puede gestionar de forma segura esta configuración de SSH. Vuelve a cargarla y luego comprueba el marcador de propiedad de Cindy y que el alias del host sea único.",
     "SSH_CONFIG_AUTH_UNSUPPORTED": "Cindy no puede reproducir de forma segura algunas reglas de configuración SSH de este servidor. La conexión SSH desde la terminal podría funcionar. Revisa Match, Include condicional, IdentityAgent, IdentitiesOnly y la configuración de claves públicas.",
+    "SSH_EXEC_FAILED": "No se pudo ejecutar el comando por SSH. Vuelve a intentarlo en unos instantes.",
     "SSH_AGENT_UNAVAILABLE": "El agente local de claves SSH (ssh-agent) no está disponible. Comprueba que esté en ejecución y que ssh-add -l muestre la clave necesaria. Consulta Administrar claves para resolver el problema.",
     "SSH_HOST_PREFS_WRITE_FAILED": "El host sigue guardado, pero no se pudo guardar su nombre para mostrar ni la configuración del proxy Agent. Revisa los permisos de almacenamiento local e inténtalo de nuevo.",
     "RIGHT_SIDEBAR_TOO_MANY_TABS": "Esta tarea ha alcanzado su límite de pestañas. Cierra algunas pestañas primero",

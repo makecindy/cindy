@@ -1,3 +1,4 @@
+import { extractIpcError } from '@/utils/ipcError';
 import { formatCompactionDuration, formatSessionDuration, formatShellDuration } from '@/lib/sessionDurationFormat';
 import { IMPORT_SOURCE_NAMES, ImportSourceMark } from '@/components/icons/ImportSourceMark';
 import { isImportSourceId } from '../../../shared/sessionImport';
@@ -222,7 +223,10 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
   const rawUsage = data?.usage;
   const usage =
     rawUsage === undefined || rawUsage === null || isContextUsageData(rawUsage) ? rawUsage : null;
-  const error = typeof data?.error === 'string' ? data.error : '';
+  const errorDetail = typeof data?.error === 'string' ? data.error : '';
+  const error = extractIpcError(new Error(errorDetail))?.code === 'SSH_EXEC_FAILED'
+    ? t('ipcError.SSH_EXEC_FAILED')
+    : errorDetail;
 
   if (usage === undefined) {
     return (

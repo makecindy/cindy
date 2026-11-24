@@ -1398,6 +1398,7 @@
     "SSH_CONFIG_RELOAD_REQUIRED": "Die SSH-Konfiguration wurde gespeichert, aber Cindy konnte sie nicht aktualisieren. Lade die SSH-Konfiguration neu.",
     "SSH_CONFIG_OWNERSHIP_REQUIRED": "Cindy kann diese SSH-Konfiguration nicht sicher verwalten. Lade sie neu und prüfe dann die Cindy-Eigentumsmarkierung sowie die Eindeutigkeit des Host-Alias.",
     "SSH_CONFIG_AUTH_UNSUPPORTED": "Cindy kann einige SSH-Konfigurationsregeln für diesen Host nicht sicher nachbilden. SSH im Terminal funktioniert möglicherweise weiterhin. Überprüfe Match, bedingte Include-Regeln, IdentityAgent, IdentitiesOnly und die Einstellungen für öffentliche Schlüssel.",
+    "SSH_EXEC_FAILED": "Der Befehl konnte nicht über SSH ausgeführt werden. Versuche es in einem Moment erneut.",
     "SSH_AGENT_UNAVAILABLE": "Der lokale SSH-Schlüsselagent (ssh-agent) ist nicht verfügbar. Prüfe, ob er läuft und ob ssh-add -l den benötigten Schlüssel auflistet. Hinweise findest du unter Schlüssel verwalten.",
     "SSH_HOST_PREFS_WRITE_FAILED": "Der Host ist weiterhin gespeichert, aber sein Anzeigename oder seine Agent-Proxy-Einstellungen konnten nicht gespeichert werden. Prüfe die lokalen Speicherberechtigungen und versuch es erneut.",
     "RIGHT_SIDEBAR_TOO_MANY_TABS": "Diese Aufgabe hat ihr Tab-Limit erreicht. Schließe zuerst einige Tabs",

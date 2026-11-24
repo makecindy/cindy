@@ -120,3 +120,14 @@ it.each(SUPPORTED_LOCALES)('distinguishes a summary fallback from native resume:
   expect(screen.getByText(i18n.t('chat.systemCard.agentSwitch.resumedBadge'))).toBeTruthy();
   expect(screen.queryByText(i18n.t('chat.systemCard.agentSwitch.fallbackBadge'))).toBeNull();
 });
+
+// #12574: the context card decodes a serialized startup failure and uses the active locale.
+it('shows local SSH retry guidance in the context card', async () => {
+  await i18n.changeLanguage('zh-CN');
+  render(<SystemCard cardType="context" data={{
+    usage: null,
+    error: "Error invoking remote method 'maker:context-usage': Error: [SSH_EXEC_FAILED] SSH command channel open failed",
+  }} />);
+  expect(screen.getByText('无法通过 SSH 执行命令。请稍后重试。')).toBeTruthy();
+  expect(screen.queryByText(/SSH command channel open failed/)).toBeNull();
+});

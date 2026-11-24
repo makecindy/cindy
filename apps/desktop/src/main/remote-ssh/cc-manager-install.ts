@@ -262,7 +262,7 @@ function joinInstallAfterRejectedProbe(hostId: string, error: unknown): Promise<
   // A same-host install may have started while this probe was in flight.
   const installing = inFlightCcManagerInstall.get(hostId);
   if (installing) return installing.promise;
-  throwIpcError('SSH_EXEC_FAILED', 'Could not open an SSH command channel. Try again in a moment.');
+  throwIpcError('SSH_EXEC_FAILED', 'SSH command channel open failed');
 }
 
 /**

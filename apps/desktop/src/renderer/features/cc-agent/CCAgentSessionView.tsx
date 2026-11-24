@@ -4615,9 +4615,10 @@ function CCAgentSessionContent({
         })
         .catch((err) => {
           const ipcError = extractIpcError(err);
+          const rawError = err instanceof Error ? err.message : String(err);
           updateSystemCardData(cardClientId, {
             usage: null,
-            error: ipcError?.message || (err instanceof Error ? err.message : String(err)),
+            error: ipcError?.code === 'SSH_EXEC_FAILED' ? rawError : ipcError?.message || rawError,
           });
         });
       return true;

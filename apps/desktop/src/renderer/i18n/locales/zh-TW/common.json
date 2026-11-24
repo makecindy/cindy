@@ -1381,6 +1381,7 @@
     "SSH_CONFIG_RELOAD_REQUIRED": "SSH 設定已儲存，但 Cindy 重新整理失敗。請重新載入 SSH 設定。",
     "SSH_CONFIG_OWNERSHIP_REQUIRED": "Cindy 無法安全管理此 SSH 設定。請重新載入，並確認 Cindy 所有權標記存在且主機別名唯一。",
     "SSH_CONFIG_AUTH_UNSUPPORTED": "Cindy 無法安全重現此主機的部分 SSH 設定規則。終端 SSH 仍可能成功；請檢查 Match、條件式 Include、IdentityAgent、IdentitiesOnly 與公開金鑰設定。",
+    "SSH_EXEC_FAILED": "無法透過 SSH 執行命令。請稍後再試。",
     "SSH_AGENT_UNAVAILABLE": "本機 SSH 金鑰代理程式（ssh-agent）無法使用。請確認代理程式已啟動，並用 ssh-add -l 檢查所需金鑰是否已載入；可在「管理金鑰」中查看疑難排解指引。",
     "SSH_HOST_PREFS_WRITE_FAILED": "主機仍已儲存，但顯示名稱或 Agent Proxy 設定未能儲存。請檢查本機儲存權限後再試。",
     "REMOTE_WORKDIR_INVALID": "遠端專案目錄無效，請重新選擇專案目錄。",

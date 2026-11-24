@@ -12,6 +12,7 @@ export function chatRemoteErrorGuidanceKey(
   sessionSource: unknown,
 ): string | undefined {
   if (!code) return undefined;
+  if (code === 'SSH_EXEC_FAILED') return 'ipcError.SSH_EXEC_FAILED';
   if (code === 'REMOTE_CODEX_SOURCE_UNSUPPORTED') {
     return 'settings.remote.startSession.unsupportedCodexSource';
   }
