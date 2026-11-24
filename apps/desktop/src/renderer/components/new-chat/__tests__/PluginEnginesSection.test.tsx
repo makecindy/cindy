@@ -959,9 +959,10 @@ describe('a task running on a plugin engine', () => {
       ...agy,
       models: [{ ...engine.models[0]!, displayName: 'Next model' }],
     };
+    const pendingSelection = { providerId: nextEngine.providerId, modelId: 'pro', effort: 'high' as const };
     const onSelect = vi.fn((picked: typeof selection) => {
-      expect(resolvePluginEngineSessionSwitchEffort(picked, engine, selection)).toBe('high');
-      return true;
+      const target = picked.providerId === engine.providerId ? engine : nextEngine;
+      return resolvePluginEngineSessionSwitchEffort(picked, target, selection, pendingSwitch ? pendingSelection : null) === 'high';
     });
     expect(pluginEngineSessionCreateFields(active).effort).toBe('low');
 
@@ -976,7 +977,7 @@ describe('a task running on a plugin engine', () => {
       ...(unifiedMenu ? {
         pluginEngines: {
           engines: pendingSwitch ? [engine, nextEngine] : [engine],
-          active: pendingSwitch ? { providerId: nextEngine.providerId, modelId: 'pro' } : selection,
+          active: pendingSwitch ? pendingSelection : selection,
           running: selection,
           onSelect,
         },
@@ -992,7 +993,11 @@ describe('a task running on a plugin engine', () => {
     expect(within(group).getAllByRole('option').map(levelOf)).toEqual(['high', null, null]);
     if (pendingSwitch) {
       const next = within(list).getByRole('group', { name: 'Antigravity' });
-      expect(within(next).getAllByRole('option').map(levelOf)).toEqual(['low']);
+      const nextRow = within(next).getByRole('option', { name: /Next model/ });
+      expect(levelOf(nextRow)).toBe('high');
+      await act(async () => { fireEvent.click(nextRow); });
+      expect(onSelect).toHaveReturnedWith(true);
+      await act(async () => { fireEvent.click(trigger); });
     }
     if (unifiedMenu) {
       const search = screen.getByRole('textbox', { name: 'Search models' });
@@ -1000,7 +1005,8 @@ describe('a task running on a plugin engine', () => {
       const row = within(await screen.findByRole('listbox', { name: 'Models' })).getByRole('option', { name: /Pro/ });
       expect(levelOf(row)).toBe('high');
       await act(async () => { fireEvent.click(row); });
-      expect(onSelect).toHaveBeenCalledWith(selection);
+      expect(onSelect).toHaveBeenLastCalledWith(selection);
+      expect(onSelect).toHaveLastReturnedWith(true);
     }
   });
 

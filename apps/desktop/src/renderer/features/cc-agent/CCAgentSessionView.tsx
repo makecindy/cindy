@@ -3933,6 +3933,7 @@ function CCAgentSessionContent({
       selection,
       targetEngine,
       runningSessionPluginEngineChoice,
+      activeSessionPluginEngineChoice,
     );
     const api = pluginEngineDeviceId ? makerApiForDevice(pluginEngineDeviceId) : makerApiFor(sessionId);
     // 被控电脑上的任务：它自己的引擎不点名位置(沿用原行为)；被控电脑名单里另一台电脑或分享的引擎带上位置。
@@ -3974,7 +3975,7 @@ function CCAgentSessionContent({
       finishSwitch();
     }
   }, [sessionId, session, pluginEngineSwitchEligible, remoteWritesBlocked, pluginEngineDeviceId,
-    pluginEngineTask, runningSessionPluginEngineChoice, pluginEngineAgentDeviceId, switchablePluginEngines,
+    pluginEngineTask, runningSessionPluginEngineChoice, activeSessionPluginEngineChoice, pluginEngineAgentDeviceId, switchablePluginEngines,
     pluginEngineChoiceLabel, handlePluginEngineModelSelect, t]);
   // 打开模型选择器时：本机已装插件引擎请插件重报模型，同时读取同账号其他电脑开放的引擎(与新建任务一致)。
   // 引用必须稳定——选择器在这个函数变化时重读，列表读回又会让下面的 picker 重算，不稳定就成了打开期间的循环读取。

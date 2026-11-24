@@ -178,18 +178,19 @@ export function resolvePluginEngineEffort(
 }
 
 /**
- * Effort for an in-session plugin engine pick: carries over the active effort only when staying on
- * the same plugin engine (and computer); switching to another engine uses the target model's own
- * default level, matching what the picker rows display.
+ * Carries a supported effort from the running engine or the pending selection when reselecting
+ * that same engine and computer. A different engine uses its own launch default.
  */
 export function resolvePluginEngineSessionSwitchEffort(
   selection: PluginEngineSelection,
   targetEngine: Pick<PluginEngineView, 'models'> | null | undefined,
-  currentActive?: { providerId: string; deviceId?: string | null; effort?: unknown } | null,
+  running?: { providerId: string; deviceId?: string | null; effort?: unknown } | null,
+  pending?: { providerId: string; deviceId?: string | null; effort?: unknown } | null,
 ): PluginEngineEffort | undefined {
   if (selection.effort) return selection.effort;
-  const sameEngine = isSamePluginEngineChoice(selection, currentActive);
-  const carriedEffort = sameEngine ? currentActive?.effort : undefined;
+  const sameEngine = isSamePluginEngineChoice(selection, running);
+  const carriedEffort = sameEngine ? running?.effort
+    : isSamePluginEngineChoice(selection, pending) ? pending?.effort : undefined;
   return resolvePluginEngineEffort(
     targetEngine, selection.modelId, carriedEffort, sameEngine ? 'session' : 'new-task',
   ) ?? undefined;
