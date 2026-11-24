@@ -124,6 +124,24 @@ describe('unbacked dispatch claim detection', () => {
     expect(findUnbackedDispatchClaim('lead-1', '已派给 research 去改注入表了。')).toBeNull();
   });
 
+  it('checks every cited id, so a real one cannot cover a fabricated one', () => {
+    noteLeadDispatchFact('lead-1', {
+      workerId: 'worker-1',
+      workerLabel: 'research',
+      dispatchId: 'd'.repeat(22),
+      turnGeneration: 3,
+      delivery: 'queued',
+      queuedMessageId: 'realidrealidrealid12',
+      at: Date.now(),
+    });
+    expect(
+      findUnbackedDispatchClaim(
+        'lead-1',
+        '两笔：queued_message_id: realidrealidrealid12 与 queued_message_id: fakeidfakeidfakeid34',
+      ),
+    ).toMatchObject({ kind: 'id', token: 'fakeidfakeidfakeid34' });
+  });
+
   it('reports the first problem only, so one reminder names one place', () => {
     expect(
       findUnbackedDispatchClaim('lead-1', 'wake_kind=queued，编号 queued_message_id: abcdefgh1234'),
@@ -136,6 +154,18 @@ describe('claim reminder budget', () => {
     expect(consumeDispatchClaimReminder('lead-1', 3)).toBe(true);
     expect(consumeDispatchClaimReminder('lead-1', 3)).toBe(false);
     expect(consumeDispatchClaimReminder('lead-1', 4)).toBe(true);
+  });
+
+  it('does not repeat the same claim when the turn generation advances', () => {
+    const claim = { kind: 'id', token: 'fakeidfakeidfakeid34' };
+    expect(consumeDispatchClaimReminder('lead-1', 5, claim)).toBe(true);
+    // 纠正会开启新一轮，轮次号前进；同一条假凭据不该再提醒一次。
+    expect(consumeDispatchClaimReminder('lead-1', 6, claim)).toBe(false);
+    expect(consumeDispatchClaimReminder('lead-1', 7, claim)).toBe(false);
+    // 换一条凭据仍然可以提醒。
+    expect(
+      consumeDispatchClaimReminder('lead-1', 8, { kind: 'id', token: 'otheridotheridother8' }),
+    ).toBe(true);
   });
 
   it('re-arms after the session instance restarts', () => {

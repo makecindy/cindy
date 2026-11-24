@@ -171,9 +171,9 @@ export function finishSessionTerminalEvent(
     groupLaneInputClientId,
   } = prepared;
   const { persistId, workerTerminalCapture, providerGroupHoldId } = delivery;
-  // 收口闸门的机械扳机:每事件必经处只数 tool_use,不关心具体工具。
+  // 收口闸门的机械扳机:每事件必经处记下工具名与代次,判定在收口时做。
   if (event.type === 'tool_use' && typeof event.sessionTurnGeneration === 'number') {
-    noteTurnToolUse(session.id, event.sessionTurnGeneration);
+    noteTurnToolUse(session.id, event.sessionTurnGeneration, (event.data as { toolName?: string }).toolName);
   }
   const terminalOwner =
     event.type === 'done' || isTerminalTurnErrorEvent(event)

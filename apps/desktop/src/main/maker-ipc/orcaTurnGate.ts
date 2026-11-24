@@ -1,6 +1,11 @@
 import { requestUtilityText } from '../utility-model/oneShotCandidates.js';
 import { getMaker } from '../maker-host/index.js';
 import { createLogger } from '../logger.js';
+import {
+  consumeDispatchClaimReminder,
+  findUnbackedDispatchClaim,
+  type UnbackedDispatchClaim,
+} from './orcaDispatchClaims.js';
 
 const log = createLogger('orca-turn-gate');
 
@@ -16,8 +21,35 @@ const MAX_TRACKED_TURNS = 512;
 
 type TurnKey = `${string}:${number}`;
 
-const toolUseByTurn = new Map<TurnKey, number>();
+interface TurnCounts {
+  tools: number;
+  orcaTools: number;
+}
+
+/**
+ * Orca 自身的工具名。闸门只看「有没有碰过派发面」：读了几个文件不影响判断，
+ * 而一旦调过任何一个 Orca 工具，凭据层就已经能核对，不需要语义判定。
+ */
+const ORCA_TOOL_NAMES = new Set([
+  'send_to_worker',
+  'send_to_lead',
+  'create_worker',
+  'list_workers',
+  'update_worker',
+  'interrupt_worker',
+  'move_queued_message',
+  'get_worker_queue_status',
+  'switch_focus',
+  'wait_for_workers',
+  'report_progress',
+]);
+
+const countsByTurn = new Map<TurnKey, TurnCounts>();
 const judgedByTurn = new Map<string, 'claim' | 'quiet' | 'unavailable'>();
+/** 每个会话当前回合号：Stop hook 只拿得到 sessionId，没有事件里的代次。 */
+const currentGeneration = new Map<string, number>();
+/** 引擎侧已经判过的回合，宿主 settle 不再重判——一个会话只能有一个否决点。 */
+const handledByTurn = new Map<TurnKey, true>();
 
 const turnKey = (sessionId: string, generation: number): TurnKey => `${sessionId}:${generation}`;
 
@@ -29,18 +61,43 @@ function trimTracked(map: Map<string, unknown>, limit: number): void {
   }
 }
 
-/**
- * 收口闸门的机械扳机:本回合有没有任何工具调用。
- * 只数次数,不关心哪个工具——闸门要的是「这轮到底做没做事」。
- */
-export function noteTurnToolUse(sessionId: string, generation: number): void {
+/** 每个事件都调：记住当前回合号，Stop hook 才能按代次取到凭据与本轮计数。 */
+export function noteTurnGeneration(sessionId: string, generation: number): void {
+  currentGeneration.set(sessionId, generation);
+}
+
+export function currentTurnGeneration(sessionId: string): number | undefined {
+  return currentGeneration.get(sessionId);
+}
+
+/** 收口闸门的机械扳机：本轮调过哪些工具，其中有没有 Orca 自己的工具。 */
+export function noteTurnToolUse(sessionId: string, generation: number, toolName?: string): void {
   const key = turnKey(sessionId, generation);
-  toolUseByTurn.set(key, (toolUseByTurn.get(key) ?? 0) + 1);
-  trimTracked(toolUseByTurn, MAX_TRACKED_TURNS);
+  const counts = countsByTurn.get(key) ?? { tools: 0, orcaTools: 0 };
+  counts.tools += 1;
+  if (toolName && ORCA_TOOL_NAMES.has(toolName)) counts.orcaTools += 1;
+  countsByTurn.set(key, counts);
+  currentGeneration.set(sessionId, generation);
+  trimTracked(countsByTurn, MAX_TRACKED_TURNS);
 }
 
 export function turnToolUseCount(sessionId: string, generation: number): number {
-  return toolUseByTurn.get(turnKey(sessionId, generation)) ?? 0;
+  return countsByTurn.get(turnKey(sessionId, generation))?.tools ?? 0;
+}
+
+/** 本回合碰过 Orca 工具的次数。0 表示它没碰过派发面。 */
+export function turnOrcaToolUseCount(sessionId: string, generation: number): number {
+  return countsByTurn.get(turnKey(sessionId, generation))?.orcaTools ?? 0;
+}
+
+/** 标记该回合已由引擎侧闸门判过（无论结论是拦还是放）。 */
+export function markTurnGateHandled(sessionId: string, generation: number): void {
+  handledByTurn.set(turnKey(sessionId, generation), true);
+  trimTracked(handledByTurn, MAX_TRACKED_TURNS);
+}
+
+export function turnGateHandled(sessionId: string, generation: number): boolean {
+  return handledByTurn.has(turnKey(sessionId, generation));
 }
 
 /**
@@ -135,17 +192,21 @@ export function arrearsCount(leadSessionId: string): number {
 /** 会话结束或重建时清账,避免旧代次的计数被新一轮读到。 */
 export function forgetTurnGate(sessionId?: string): void {
   if (!sessionId) {
-    toolUseByTurn.clear();
+    countsByTurn.clear();
     judgedByTurn.clear();
     arrearsByWorker.clear();
     leadSettles.clear();
+    currentGeneration.clear();
+    handledByTurn.clear();
     return;
   }
   const prefix = `${sessionId}:`;
-  for (const key of toolUseByTurn.keys()) if (key.startsWith(prefix)) toolUseByTurn.delete(key);
+  for (const key of countsByTurn.keys()) if (key.startsWith(prefix)) countsByTurn.delete(key);
   for (const key of judgedByTurn.keys()) if (key.startsWith(prefix)) judgedByTurn.delete(key);
   for (const key of arrearsByWorker.keys()) if (key.startsWith(prefix)) arrearsByWorker.delete(key);
+  for (const key of handledByTurn.keys()) if (key.startsWith(prefix)) handledByTurn.delete(key);
   leadSettles.delete(sessionId);
+  currentGeneration.delete(sessionId);
 }
 
 function judgePrompt(workerLabels: string[], finalText: string): string {
@@ -204,4 +265,81 @@ export async function judgeDispatchClaim(params: {
   judgedByTurn.set(key, verdict);
   trimTracked(judgedByTurn, MAX_TRACKED_TURNS);
   return verdict;
+}
+
+/** 拦下收口时回灌给模型的说明。L0 与 L1 用同一段结构，只有第一句不同。 */
+function unbackedClaimReason(claim: UnbackedDispatchClaim): string {
+  const detail =
+    claim.kind === 'wake-kind'
+      ? `You wrote \`${claim.label}=${claim.token}\`, but the host accepted no dispatch for this session.`
+      : `You wrote \`${claim.label}: ${claim.token}\`, but no such dispatch exists in this session.`;
+  return [
+    '[Orca host] You cited a dispatch record the host does not have.',
+    detail,
+    'Either dispatch now with send_to_worker, or say plainly that nothing was dispatched.',
+  ].join('\n');
+}
+
+const JUDGED_CLAIM_REASON = [
+  '[Orca host] This turn dispatched nothing, and no worker received work from you.',
+  'You wrote that work was already handed to a worker. Either dispatch now with send_to_worker, or say plainly that nothing was dispatched.',
+].join('\n');
+
+/**
+ * 收口闸门的唯一判定入口。返回 reason 表示不允许收口（引擎 Stop hook 会据此 block）；
+ * 返回 undefined 表示放行。
+ *
+ * 两个出口共用这里的判定、上限与文案：
+ * - Claude Code：注册在引擎自己的 Stop 里，和用户 hook 同场评估、一次续跑；
+ * - Codex / pi：宿主 settle 里调（Codex 的 hooks 在 Cindy 下是关闭的，不存在叠加）。
+ *
+ * 每回合最多拦一次，记在 `consumeDispatchClaimReminder` 里，两个出口共享同一本账。
+ */
+export async function evaluateTurnGate(input: {
+  leadSessionId: string;
+  turnGeneration: number;
+  finalText: string | undefined;
+  workerLabels: string[];
+  /** 本回合被宿主接受的派发数（调用方从凭据账取，这里不推进账本观察）。 */
+  factsCount: number;
+}): Promise<string | undefined> {
+  const text = input.finalText?.trim() ?? '';
+  markTurnGateHandled(input.leadSessionId, input.turnGeneration);
+  if (!text) return undefined;
+
+  const claim = findUnbackedDispatchClaim(input.leadSessionId, text);
+  if (claim) {
+    if (
+      !consumeDispatchClaimReminder(input.leadSessionId, input.turnGeneration, {
+        kind: claim.kind,
+        token: claim.token,
+      })
+    ) {
+      return undefined;
+    }
+    return unbackedClaimReason(claim);
+  }
+
+  // 只剩「纯口语声称已派」这一格需要语义判定：本回合零派发、且没碰过任何 Orca 工具。
+  // 用「零 Orca 工具」而不是「零工具」：读了几个文件再说已派同样可疑，
+  // 而那正是 Claude Code 用户最常见的形态。
+  if (input.factsCount > 0 || turnOrcaToolUseCount(input.leadSessionId, input.turnGeneration) > 0) {
+    return undefined;
+  }
+  const verdict = await judgeDispatchClaim({
+    leadSessionId: input.leadSessionId,
+    turnGeneration: input.turnGeneration,
+    finalText: text,
+    workerLabels: input.workerLabels,
+  });
+  if (verdict !== 'claim') return undefined;
+  if (
+    !consumeDispatchClaimReminder(input.leadSessionId, input.turnGeneration, {
+      kind: 'judge',
+      token: 'turn-gate',
+    })
+  ) {
+    return undefined;
+  }
+  return JUDGED_CLAIM_REASON;
 }

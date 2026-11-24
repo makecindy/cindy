@@ -47,6 +47,11 @@ interface LeadLedger {
   facts: LeadDispatchFact[];
   /** 已经就哪一轮的不实凭据提醒过。同一轮只提醒一次，避免空转。 */
   remindedGeneration: number | null;
+  /**
+   * 已经提醒过的凭据身份（`kind:token`）及时间。纠正会开启新一轮、轮次号前进，
+   * 只按轮次去重会让同一条假凭据在每一轮被重新提醒一次。
+   */
+  remindedClaims: Map<string, number>;
   /** 账本属于哪个会话实例。换实例后旧账整体作废，新实例从第一条凭据重新记。 */
   instanceToken?: number;
 }
@@ -54,6 +59,8 @@ interface LeadLedger {
 const ledgers = new Map<string, LeadLedger>();
 /** 派发凭据只在本轮有用，留一天足够覆盖跨重启的收口。 */
 const FACT_RETENTION_MS = 24 * 60 * 60 * 1000;
+/** 同一条不实凭据的重复提醒窗口：纠正会让轮次号前进，只按轮次去重挡不住复述。 */
+const CLAIM_REMINDER_RETENTION_MS = 30 * 60 * 1000;
 const MAX_FACTS = 200;
 
 function ledgerFor(leadSessionId: string): LeadLedger {
@@ -63,6 +70,7 @@ function ledgerFor(leadSessionId: string): LeadLedger {
       turnGeneration: 0,
       facts: [],
       remindedGeneration: null,
+      remindedClaims: new Map(),
     };
     ledgers.set(leadSessionId, ledger);
   }
@@ -82,6 +90,7 @@ function observeGeneration(ledger: LeadLedger, turnGeneration: number): void {
 function ledgersReset(ledger: LeadLedger): void {
   ledger.facts = [];
   ledger.remindedGeneration = null;
+  ledger.remindedClaims.clear();
   ledger.instanceToken = undefined;
 }
 
@@ -137,8 +146,8 @@ export interface UnbackedDispatchClaim {
 /** 派发结果值闭集：这些值只可能来自工具返回。 */
 const WAKE_KIND_PATTERN = /\bwake_kind\s*[=:]\s*`?([a-z][a-z-]{2,20})`?/i;
 /** 宿主签发编号的协议标签：只认这几个标签，不猜裸 id。 */
-const LABELED_ID_PATTERN =
-  /\b(queued_message_id|message_id|dispatch_id)\s*[=:]\s*`?([A-Za-z0-9_-]{8,64})`?/i;
+const LABELED_ID_ALL_PATTERN =
+  /\b(queued_message_id|message_id|dispatch_id)\s*[=:]\s*`?([A-Za-z0-9_-]{8,64})`?/gi;
 
 /**
  * 找出回复里「引用了宿主没有的派发凭据」的第一处。
@@ -160,8 +169,9 @@ export function findUnbackedDispatchClaim(
     return { kind: 'wake-kind', token: wakeKind[1]!, label: 'wake_kind' };
   }
 
-  const labeledId = text.match(LABELED_ID_PATTERN);
-  if (labeledId) {
+  // 一条回复里可能列出多个编号：逐个核对，只要有一个查不到就拦住。
+  // 只看第一个的话，前面放一个真编号就能把后面的假编号遮住。
+  for (const labeledId of text.matchAll(LABELED_ID_ALL_PATTERN)) {
     const label = labeledId[1]!;
     const token = labeledId[2]!;
     const known = facts.some(
@@ -180,10 +190,18 @@ export function findUnbackedDispatchClaim(
 export function consumeDispatchClaimReminder(
   leadSessionId: string,
   turnGeneration: number,
+  claim?: { kind: string; token: string },
 ): boolean {
   const ledger = ledgerFor(leadSessionId);
   observeGeneration(ledger, turnGeneration);
   if (ledger.remindedGeneration === turnGeneration) return false;
+  if (claim) {
+    const key = `${claim.kind}:${claim.token}`;
+    const now = Date.now();
+    const last = ledger.remindedClaims.get(key);
+    if (last !== undefined && now - last < CLAIM_REMINDER_RETENTION_MS) return false;
+    ledger.remindedClaims.set(key, now);
+  }
   ledger.remindedGeneration = turnGeneration;
   return true;
 }

@@ -222,6 +222,7 @@ import {
 } from './claude-hooks/bash-concurrency-hook.js';
 import { createReadImageHook } from './claude-hooks/read-image-hook.js';
 import { createDesktopInputShellGuardHooks } from './claude-hooks/desktop-input-shell-guard-hook.js';
+import { createOrcaTurnGateStopHooks } from './claude-hooks/orca-turn-gate-hook.js';
 import { readAgentResourceSettings } from './agent-resource-settings-store.js';
 import { createCommandConcurrencyGate } from './command-concurrency-gate.js';
 import {
@@ -1514,6 +1515,9 @@ export function getMaker(): Maker {
           () => getPluginRegistry().isEnabled('computer'),
           desktopMakerLogger,
         ),
+        // 收口闸门放在引擎自己的 Stop 评估里:和用户自己的 Stop hook 同场,
+        // 一次续跑解决,不会出现「用户拦一次、宿主再拦一次」。
+        createOrcaTurnGateStopHooks(),
       ),
       registerClaudeSubagentTask: (task) => claudeSubagentUsageBridge.registerTask(task),
       getClaudeSubagentTaskUsage: (taskId) => claudeSubagentUsageBridge.getTaskUsage(taskId),
