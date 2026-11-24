@@ -506,9 +506,13 @@ describe('MakerScheduleRunner send outcome policy', () => {
     const h = createSessionHarness(async () => ({ accepted: true }));
     const acquirePendingAgentSwitch = vi.fn();
     const { runner, maker, notifier } = createRunnerHarness(h.session, { acquirePendingAgentSwitch });
-    await expect(runner.fire(baseSchedule({ targetSessionId: h.session.id }), createFireContext()))
-      .rejects.toMatchObject({ code: 'PLUGIN_ENGINE_UNSUPPORTED' });
-    expect(latestNotifiedRun(notifier)).toMatchObject({ status: 'failed', errorMsg: expect.stringContaining('plugin engine') });
+    const error = await runner.fire(baseSchedule({ targetSessionId: h.session.id }), createFireContext())
+      .catch((refusal: unknown) => refusal);
+    expect(error).toMatchObject({
+      code: 'PLUGIN_ENGINE_UNSUPPORTED',
+      message: expect.stringContaining('Switch the linked task back to a built-in engine or link the automation to a task that uses one.'),
+    });
+    expect(latestNotifiedRun(notifier)).toMatchObject({ status: 'failed', errorMsg: (error as Error).message });
     expect(mocks.restoreArchivedSessionForSend).not.toHaveBeenCalled();
     expect(acquirePendingAgentSwitch).not.toHaveBeenCalled();
     expect(maker.createSession).not.toHaveBeenCalled();

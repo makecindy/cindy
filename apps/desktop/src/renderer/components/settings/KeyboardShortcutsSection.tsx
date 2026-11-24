@@ -1,4 +1,6 @@
 import { appShortcutSettings, keyboardShortcutsSettings } from './KeyboardShortcutsSection.settings-search';
+import { useSettingsSubpageScroll } from './useSettingsSubpageScroll';
+import { useSettingsSubpageBack } from './useSettingsEscape';
 import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
 import { Button } from '@/components/ui/button';
 import { Tip } from '@/components/ui/tooltip';
@@ -23,7 +25,7 @@ import { Tip } from '@/components/ui/tooltip';
  * 「配件」始终列出全部可见设备，不因为某台已经出现在外面就从列表里拿掉。
  */
 
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Package, Pencil, RotateCcw, Trash2 } from 'lucide-react';
 
@@ -69,6 +71,7 @@ import {
   type GamepadFamily,
 } from '../../../shared/xboxGamepad';
 import { XboxGamepadEntry, XboxGamepadSettings } from './XboxGamepadSettings';
+import { RestoreDefaultButton } from '@/components/ui/reset-buttons';
 
 const log = createLogger('settings:keyboard-shortcuts');
 
@@ -111,7 +114,7 @@ interface RecordingError {
   message: string;
 }
 
-export function KeyboardShortcutsSection() {
+export function KeyboardShortcutsSection({ scrollRef }: { scrollRef?: RefObject<HTMLDivElement | null> }) {
   const { t } = useTranslation();
   const platform = getAppShortcutPlatform();
   // overrides 快照订阅: 改绑 / reset 后 main 广播 → appShortcutStore 通知 →
@@ -131,9 +134,17 @@ export function KeyboardShortcutsSection() {
   const [hardwarePane, setHardwarePane] = useState<HardwarePane>('list');
   const { entry: searchEntry, activation: searchActivation } = useSettingsSearchNavigation();
   useEffect(() => {
-    if (searchEntry?.id.startsWith('shortcuts.')) setHardwarePane('list');
+    if (searchEntry?.tab === 'shortcuts') setHardwarePane('list');
   }, [searchEntry, searchActivation]);
   const [hardwareReturnTo, setHardwareReturnTo] = useState<'list' | 'accessories'>('list');
+  const back = () => setHardwarePane(hardwarePane === 'accessories' ? 'list' : hardwareReturnTo);
+  useSettingsSubpageBack(hardwarePane === 'list' ? null : back);
+  const depth = hardwarePane === 'list' ? 0 : hardwarePane === 'accessories' || hardwareReturnTo === 'list' ? 1 : 2;
+  const captureScroll = useSettingsSubpageScroll(scrollRef, depth, searchActivation);
+  const openHardwarePane = (pane: HardwarePane) => {
+    captureScroll();
+    setHardwarePane(pane);
+  };
   const workLouderCodex = useWorkLouderCodex({ model: 'codex-micro', watchConnection: true });
   const workLouderCreator = useWorkLouderCodex({
     model: 'creator-micro-2',
@@ -184,13 +195,9 @@ export function KeyboardShortcutsSection() {
     }
   }, [workLouderOpenRequested]);
 
-  const openWorkLouder = (model: WorkLouderModel, from: 'list' | 'accessories') => {
+  const openDevice = (device: WorkLouderModel | GamepadFamily, from: 'list' | 'accessories') => {
     setHardwareReturnTo(from);
-    setHardwarePane(model);
-  };
-  const openGamepad = (family: GamepadFamily, from: 'list' | 'accessories') => {
-    setHardwareReturnTo(from);
-    setHardwarePane(family);
+    openHardwarePane(device);
   };
 
   const mutationErrorMessage = useCallback(
@@ -373,7 +380,7 @@ export function KeyboardShortcutsSection() {
     return (
       <WorkLouderCodexSettings
         model={hardwarePane}
-        onBack={() => setHardwarePane(hardwareReturnTo)}
+        onBack={back}
       />
     );
   }
@@ -381,7 +388,7 @@ export function KeyboardShortcutsSection() {
     return (
       <XboxGamepadSettings
         family={hardwarePane as GamepadFamily}
-        onBack={() => setHardwarePane(hardwareReturnTo)}
+        onBack={back}
       />
     );
   }
@@ -390,7 +397,7 @@ export function KeyboardShortcutsSection() {
       <div className="flex flex-col gap-6">
         <SettingsPageHeader
           title={t(keyboardShortcutsSettings.shortcutsAccessoriesTitle.titleKey)}
-          onBack={() => setHardwarePane('list')}
+          onBack={back}
           backLabel={t('settings.shortcuts.accessories.back')}
           backProps={{ 'data-setting-id': keyboardShortcutsSettings.shortcutsAccessoriesTitle.id }}
         />
@@ -402,7 +409,7 @@ export function KeyboardShortcutsSection() {
               state={workLouderBoards[model].state}
               loading={workLouderBoards[model].loading}
               grouped
-              onOpen={() => openWorkLouder(model, 'accessories')}
+              onOpen={() => openDevice(model, 'accessories')}
             />
           ))}
           {VISIBLE_GAMEPAD_FAMILIES.map((family) => (
@@ -412,7 +419,7 @@ export function KeyboardShortcutsSection() {
               state={gamepads[family].state}
               loading={gamepads[family].loading}
               grouped
-              onOpen={() => openGamepad(family, 'accessories')}
+              onOpen={() => openDevice(family, 'accessories')}
             />
           ))}
         </SettingsCard>
@@ -447,7 +454,7 @@ export function KeyboardShortcutsSection() {
             model={model}
             state={workLouderBoards[model].state}
             loading={workLouderBoards[model].loading}
-            onOpen={() => openWorkLouder(model, 'list')}
+            onOpen={() => openDevice(model, 'list')}
           />
         ))}
         {VISIBLE_GAMEPAD_FAMILIES.filter((family) => gamepadConnected[family]).map((family) => (
@@ -456,10 +463,10 @@ export function KeyboardShortcutsSection() {
             family={family}
             state={gamepads[family].state}
             loading={gamepads[family].loading}
-            onOpen={() => openGamepad(family, 'list')}
+            onOpen={() => openDevice(family, 'list')}
           />
         ))}
-        <AccessoriesEntry onOpen={() => setHardwarePane('accessories')} />
+        <AccessoriesEntry onOpen={() => openHardwarePane('accessories')} />
 
         {/* 快捷键列表是带组合键与行内报错的紧凑列表，不套 SettingsRow */}
         <SettingsCard className="flex flex-col gap-1 p-5">
@@ -498,19 +505,11 @@ export function KeyboardShortcutsSection() {
 
                 {/* 单项恢复默认在控件左侧 (CONTROLS decision 3), 仅已自定义时出现 */}
                 {customized && !isRecording && (
-                  <Tip text={t('settings.shortcuts.reset')}>
-                    <Button data-setting-id={controlSetting.id}
-                      variant="secondary"
-                      tone="quiet"
-                      size="sm"
-                      type="button"
-                      onClick={() => handleResetOne(def.id)}
-                      className={iconButtonClass}
-                      aria-label={t('settings.shortcuts.reset')}
-                    >
-                      <RotateCcw size={15} aria-hidden />
-                    </Button>
-                  </Tip>
+                  <RestoreDefaultButton
+                    data-setting-id={controlSetting.id}
+                    label={t('settings.shortcuts.reset')}
+                    onClick={() => handleResetOne(def.id)}
+                  />
                 )}
 
                 {/* 组合键展示位: 录制中显示提示, 无绑定显示"未设置" */}

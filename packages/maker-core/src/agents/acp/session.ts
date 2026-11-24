@@ -771,11 +771,12 @@ export class AcpSession {
     this.turn = turn;
     this.usage = { ...this.usage, tokenUsage: 0 };
     this.emit([{ type: 'status', data: { status: 'running', ...this.usage, isRunning: true } }]);
+    const usageModel = this.model;
     this.connection.request('session/prompt', { sessionId: this.id, prompt }, { timeoutMs: null }).then(
       (result) => {
         // The prompt result is the only per-turn token report; `usage_update` only carries the context size.
         const usage = normalizeTurnUsage(result);
-        this.finishTurn(turn.token, { stopReason: normalizeStopReason(result), ...(usage ? { usage } : {}) });
+        this.finishTurn(turn.token, { stopReason: normalizeStopReason(result), ...(usage ? { usage, usageModel } : {}) });
       },
       (error: unknown) => this.finishTurn(turn.token, this.errorOutcome(error)),
     );

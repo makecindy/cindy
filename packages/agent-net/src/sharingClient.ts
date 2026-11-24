@@ -19,7 +19,17 @@ export interface SharingClientOptions {
   privateSharing?: boolean;
 }
 export class AgentNetSharingError extends Error {
-  constructor(readonly status: number, readonly code: string) { super(code); }
+  constructor(readonly status: number, readonly code: string, readonly retryAt?: number) { super(code); }
+}
+
+function retryDeadline(headers: Headers): number | undefined {
+  const value = headers.get('retry-after')?.trim();
+  if (!value) return;
+  const now = Date.now();
+  const serverTime = Date.parse(headers.get('date') ?? '');
+  const delay = /^\d+$/.test(value) ? Number(value) * 1000
+    : Date.parse(value) - (Number.isFinite(serverTime) ? serverTime : now);
+  if (Number.isFinite(delay) && delay >= 0) return now + delay;
 }
 /** Portable, key-bound account API. Only short-lived identity cards cross the
  * private relay boundary; the host obtains those from its own account service. */
@@ -118,12 +128,16 @@ export class AgentNetSharingClient {
       } else text = await response.text();
       if (utf8(text).length > MAX_CONTROL_BYTES) throw new Error('SHARING_RESPONSE_TOO_LARGE');
       let value: any;
-      try { value = JSON.parse(text); } catch { throw new Error('INVALID_SHARING_RESPONSE'); }
+      try {
+        value = JSON.parse(text);
+      } catch {
+        if (response.status !== 429) throw new Error('INVALID_SHARING_RESPONSE');
+      }
       if (!response.ok) {
         this.current(options.isCurrent);
         if (response.status === 401) this.cached = null;
         throw new AgentNetSharingError(response.status, typeof value?.error?.code === 'string' && /^[A-Z0-9_]{1,80}$/.test(value.error.code)
-          ? value.error.code : 'AGENT_NET_SHARING_FAILED');
+          ? value.error.code : 'AGENT_NET_SHARING_FAILED', response.status === 429 ? retryDeadline(response.headers) : undefined);
       }
       options.observeResponse?.(value);
       this.current(options.isCurrent);

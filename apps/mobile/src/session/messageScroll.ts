@@ -532,7 +532,8 @@ function findClientIdInRenderItem(
   clientId: string,
   scrollTargetKey: string,
 ): string | null {
-  if (item.type === 'message' && mobileMessageClientId(item.message) === clientId) {
+  if (item.type === 'message'
+    && (mobileMessageClientId(item.message) === clientId || item.collapsedClientIds?.includes(clientId))) {
     return scrollTargetKey;
   }
   if (item.type === 'thinking' && mobileMessageClientId(item.message) === clientId) {

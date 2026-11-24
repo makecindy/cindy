@@ -28,6 +28,9 @@ export default {
     'archive-legacy': { about: 'The previous Task management link opens Storage and highlights auto archive', data: { tab: 'storage', routeTab: 'task-management' } },
     'visibility-desktop-commit': { about: 'Desktop visibility previews during a real pointer drag and commits once', data: { tab: 'appearance', previewBackground: 'none', visibility: 0.4 } },
     'visibility-wallpaper-commit': { about: 'Wallpaper visibility has the same preview/commit behavior', data: { tab: 'appearance', previewBackground: 'cindy-window', visibility: 0.4 } },
+    'chat-layout': { about: 'Find the chat layout, choose Wide, preview and keep a custom width', data: { tab: 'appearance', chatLayout: true } },
+    'chat-layout-narrow': { about: 'Compact chat layout controls stay usable below Wallpaper in a narrow Settings window',
+      viewport: { width: 800, height: 820 }, data: { tab: 'appearance', chatLayout: true } },
     ...Object.fromEntries(['none', 'cindy-window'].flatMap(background => [0.5, 1].map(visibility => [
       `glass-${background}-${visibility * 100}`, { about: 'Background sources share readable translucent cards', data: { tab: 'appearance', glassBackground: background, visibility } },
     ]))),
@@ -36,6 +39,8 @@ export default {
     'shortcuts-unsupported-macos': { about: 'macOS 13 neither exposes nor indexes the unsupported away shortcut', data: { tab: 'shortcuts', osRelease: '22.6.0' } },
     'personalization-custom': { about: 'Custom auxiliary slots forward search IDs to real model selector buttons', data: { tab: 'personalization', customAuxiliary: true } },
     'worktree-model-naming': { about: 'Model naming defaults off, can be found in search, and clears its override on reset', data: { tab: 'personalization', worktreeModelNaming: true } },
+    'accessories-escape': { about: 'Escape returns from a device through Accessories to keyboard shortcuts', data: { tab: 'shortcuts' } },
+    'pi-return': { about: 'Returning from Pi extensions restores the location in General', data: { tab: 'general' } },
     'tab-switch': { about: 'Committed settings tabs paint at full opacity with normal motion enabled', data: { tab: 'personalization', tabSwitch: true } },
     'remote-signed-in': { about: 'Signed-in device controls and relay section with searchable targets', data: { tab: 'remote-control', cloud: true } },
     ...Object.fromEntries([
@@ -48,6 +53,148 @@ export default {
     await panel.waitFor();
     if (ui.data.osRelease === '22.6.0') assert.equal(await page.locator('#settings-shortcut-away-guard').count(), 0);
     assert.equal(await panel.getAttribute('id'), `settings-panel-${ui.data.tab}`);
+    if (ui.data.chatLayout) {
+      const row = panel.locator('#settings-chat-layout');
+      const widthRow = panel.locator('#settings-chat-width');
+      const slider = panel.getByRole('slider', { name: await ui.t('settings.appearance.chatLayout.width'), exact: true });
+      const previewColumn = panel.getByTestId('chat-layout-preview-column');
+      const standard = row.getByRole('radio', { name: await ui.t('settings.appearance.chatLayout.standard'), exact: true });
+      const wide = row.getByRole('radio', { name: await ui.t('settings.appearance.chatLayout.wide'), exact: true });
+      const search = page.getByRole('combobox', { name: await ui.t('settings.search.ariaLabel') });
+      const restoreName = await ui.t('settings.defaults.restore');
+      const restoreLayout = row.getByRole('button', { name: restoreName, exact: true });
+      const restoreWidth = widthRow.getByRole('button', { name: restoreName, exact: true });
+      const savedMode = () => page.evaluate(() => localStorage.getItem('chat.layoutMode'));
+      const savedWidth = () => page.evaluate(() => localStorage.getItem('chat.layoutWidthPercent'));
+      // Feedback #12: place both compact controls with the layout settings below Wallpaper.
+      assert.ok(await row.evaluate(el => {
+        const wallpaper = document.getElementById('settings-search-target-appearance-wallpaper');
+        return el.closest('#settings-search-target-appearance-sidebar') &&
+          (wallpaper.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING);
+      }));
+      await row.scrollIntoViewIfNeeded();
+      assert.equal(await standard.getAttribute('aria-checked'), 'true');
+      assert.equal(await slider.count(), 0);
+      assert.equal(await restoreLayout.count(), 0);
+      await ui.capture('standard');
+      await standard.press('ArrowRight');
+      await slider.waitFor();
+      await slider.scrollIntoViewIfNeeded();
+      assert.equal(await wide.getAttribute('aria-checked'), 'true');
+      assert.equal(await slider.getAttribute('aria-valuetext'), '75%');
+      assert.equal(await savedWidth(), null);
+      assert.ok(await restoreLayout.isVisible(), 'A saved layout override can be restored');
+      assert.equal(await restoreWidth.count(), 0);
+      const defaultPreviewWidth = (await previewColumn.boundingBox()).width;
+      await ui.capture('wide-default');
+
+      const track = await slider.locator('xpath=ancestor::*[contains(@class,"cindy-slider")][1]').boundingBox();
+      const thumb = await slider.boundingBox();
+      const widthBounds = await widthRow.boundingBox();
+      assert.ok(track.width >= 100 && track.height >= 36 && track.x + track.width <= widthBounds.x + widthBounds.width,
+        'Slider keeps its hit area inside the settings row');
+      if (ui.viewport.width >= 1200) assert.ok(widthBounds.height <= 90, 'Width controls share a single compact row');
+      console.log('APPEARANCE_CHAT_LAYOUT', JSON.stringify({ viewport: ui.viewport.width, locale: ui.locale,
+        rowHeight: widthBounds.height, trackWidth: track.width }));
+      await page.mouse.move(thumb.x + thumb.width / 2, thumb.y + thumb.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(track.x + track.width * 0.8, track.y + track.height / 2, { steps: 8 });
+      const preview = Number(await slider.getAttribute('aria-valuenow'));
+      assert.equal(preview, 90);
+      assert.equal(await savedWidth(), null);
+      assert.equal(await restoreWidth.count(), 0, 'An uncommitted drag does not shift the control');
+      assert.ok((await previewColumn.boundingBox()).width > defaultPreviewWidth);
+      await page.mouse.up();
+      assert.equal(await savedWidth(), String(preview));
+      await slider.press('Home');
+      assert.equal(await slider.getAttribute('aria-valuetext'), '50%');
+      const minimumPreviewWidth = (await previewColumn.boundingBox()).width;
+      await slider.press('ArrowRight');
+      assert.equal(await slider.getAttribute('aria-valuetext'), '55%');
+      assert.ok((await previewColumn.boundingBox()).width > minimumPreviewWidth);
+      await ui.capture('wide-55');
+      await slider.press('End');
+      assert.equal(await slider.getAttribute('aria-valuetext'), '100%');
+      assert.equal(await savedWidth(), '100');
+      // PR #11486: the shared restore controls remove each override independently.
+      // This UI scenario covers the reset action missing from the mode/width selection checks.
+      await restoreLayout.click();
+      assert.equal(await slider.count(), 0);
+      assert.equal(await savedMode(), null);
+      assert.equal(await savedWidth(), '100');
+      await wide.click();
+      assert.equal(await slider.getAttribute('aria-valuetext'), '100%');
+      assert.equal(await savedMode(), 'wide');
+      await ui.capture('wide-maximum');
+      await restoreWidth.click();
+      assert.equal(await slider.getAttribute('aria-valuetext'), '75%');
+      assert.equal(await savedWidth(), null);
+      assert.equal(await savedMode(), 'wide');
+      assert.equal(await restoreWidth.count(), 0);
+      const findWidth = async target => {
+        await search.fill(await ui.t('settings.appearance.chatLayout.width'));
+        await page.locator('[id="settings-search-result-appearance.chatWidth"]').click();
+        await page.waitForFunction(id => document.getElementById(id)?.classList.contains('settings-search-target-highlight'), target);
+      };
+      await findWidth('settings-chat-width');
+      await standard.click();
+      await findWidth('settings-chat-layout');
+      return;
+    }
+    if (ui.case === 'accessories-escape') {
+      const accessories = panel.getByTestId('settings-shortcuts-accessories');
+      const device = panel.getByRole('button', { name: await ui.t('settings.shortcuts.xboxGamepad.openAria') });
+      await accessories.click();
+      await device.click();
+      await panel.getByRole('button', { name: await ui.t('settings.shortcuts.xboxGamepad.back') }).waitFor();
+      await page.keyboard.press('Escape');
+      await device.waitFor();
+      await page.keyboard.press('Escape');
+      await accessories.waitFor();
+      assert.equal(await panel.getAttribute('id'), 'settings-panel-shortcuts');
+      await ui.capture('back-to-shortcuts');
+      return;
+    }
+    if (ui.case === 'pi-return') {
+      const entrySelector = '[data-setting-id="general.piExtensions"]';
+      const entry = panel.locator(entrySelector);
+      const viewport = panel.locator('xpath=../..');
+      const back = panel.getByRole('button', { name: await ui.t('settings.piPackages.backToGeneral') });
+      for (const action of ['button', 'Escape']) {
+        await entry.scrollIntoViewIfNeeded();
+        assert.ok(await viewport.evaluate(el => el.scrollTop > 0));
+        const before = await entry.evaluate(el => el.getBoundingClientRect().top);
+        await entry.click();
+        await back.waitFor();
+        assert.equal(await viewport.evaluate(el => el.scrollTop), 0);
+
+        // Start sampling before the input. Waiting for the entry through Playwright
+        // first can miss a frame where General is visible in the wrong position.
+        const recording = await page.evaluateHandle(selector => ({
+          positions: new Promise(resolve => {
+            const frames = [];
+            const sample = () => {
+              const row = document.querySelector(selector);
+              if (row?.checkVisibility({ visibilityProperty: true, opacityProperty: true })) {
+                frames.push(row.getBoundingClientRect().top);
+              }
+              if (frames.length === 12) resolve(frames);
+              else requestAnimationFrame(sample);
+            };
+            requestAnimationFrame(sample);
+          }),
+        }), entrySelector);
+        if (action === 'button') await back.click();
+        else await page.keyboard.press('Escape');
+        await entry.waitFor();
+        const frames = await recording.evaluate(value => value.positions);
+        await recording.dispose();
+        assert.ok(frames.every(y => Math.abs(y - before) <= 1),
+          `${action}: entry was at ${before}px before opening, returned at ${frames.join(', ')}px`);
+        await ui.capture(`general-restored-${action}`);
+      }
+      return;
+    }
     // Product regression: the opt-in must remain off until selected. Exercise the
     // real setting, search and local override; existing cases only read controls.
     if (ui.data.modelTokens) {

@@ -20,12 +20,13 @@ import { accountDirectory, readPool } from '../subscription-accounts/store.js';
 import {
   codexAccountRpc,
   readNativeAccount,
+  readNativeCodexAccountAndRateLimits,
   readNativeCodexTokens,
 } from '../subscription-accounts/nativeCli.js';
 
 type ResetTarget = Pick<
   CodexRateLimitResetServiceDeps,
-  'readRateLimits' | 'consumeResetCredit' | 'readAccountIdentity' | 'recordRateLimitSnapshot'
+  'readRateLimits' | 'readAccountAndRateLimits' | 'consumeResetCredit' | 'readAccountIdentity' | 'recordRateLimitSnapshot'
 >;
 
 function defaultAccountAvailable(): boolean {
@@ -93,6 +94,10 @@ export function withDetachedDefaultCodexHome(
     assertScope();
   };
   return {
+    readAccountAndRateLimits: async () => {
+      const home = await resolveHome();
+      return home ? readNativeCodexAccountAndRateLimits(home, () => assertHome(home)) : undefined;
+    },
     readAccountIdentity: async () => {
       const home = await resolveHome();
       if (!home) {

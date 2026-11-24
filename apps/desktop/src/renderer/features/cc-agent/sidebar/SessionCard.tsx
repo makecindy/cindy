@@ -93,6 +93,7 @@ import { useRemoteSessionScheduleInfo } from '@/features/device-link/remoteProje
 import { useRemoteSessionActivity } from '@/features/device-link/remoteSessionActivityStore';
 import { useSessionBoundSchedules } from '@/features/scheduler/lib/scheduleSessionBinding';
 import { projectSidebarSessionActivity, resolveSidebarRightStatus } from './sidebarRightStatus';
+import { useSidebarIssueConfirm } from './useSidebarIssueConfirm';
 import { Tip } from '@/components/ui/tooltip';
 import { BotFollowMark, useSessionFollowers } from '@/features/bots/BotFollowMark';
 import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
@@ -191,8 +192,12 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   const isUrgentFromContext = useSessionAttentionUrgency(session.id);
   const remoteActivity = useRemoteSessionActivity(session.id, session.deviceLinkDeviceId);
   const remoteSchedule = useRemoteSessionScheduleInfo(session.id);
+  const pendingIssueConfirm = useSidebarIssueConfirm(
+    session.deviceLinkDeviceId || session.remoteHostId || navigationOnly ? undefined : session.id,
+  );
   const sessionActivity = projectSidebarSessionActivity({
     interruption: session,
+    pendingIssueConfirm,
     sessionId: session.id,
     title: session.title,
     recordStatus: session.status,

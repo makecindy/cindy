@@ -96,6 +96,7 @@ import { useRemoteSessionScheduleInfo } from '@/features/device-link/remoteProje
 import { useRemoteSessionActivity } from '@/features/device-link/remoteSessionActivityStore';
 import { useAgentIslandActivity } from '@/state/agentIslandActivity';
 import { projectSidebarSessionActivity, resolveSidebarRightStatus } from './sidebarRightStatus';
+import { useSidebarIssueConfirm } from './useSidebarIssueConfirm';
 import { AutomationSessionButton } from './AutomationSessionButton';
 import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
 import {
@@ -425,8 +426,12 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
   // 会话恒 undefined 零开销)。镜像只保留活跃态与未读终态,映射与本地五档同一张色表。
   const remoteActivity = useRemoteSessionActivity(session.id, session.deviceLinkDeviceId);
   const remoteSchedule = useRemoteSessionScheduleInfo(session.id);
+  const pendingIssueConfirm = useSidebarIssueConfirm(
+    session.deviceLinkDeviceId || session.remoteHostId || navigationOnly ? undefined : session.id,
+  );
   const sessionActivity = projectSidebarSessionActivity({
     interruption: session,
+    pendingIssueConfirm,
     sessionId: session.id,
     title: session.title,
     recordStatus: session.status,

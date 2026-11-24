@@ -7,7 +7,7 @@ import { PROVIDER_SHARE_DIRECT_SIGNAL_CAPABILITY } from '@cindy/device-link-prot
 import { gunzipSync, gzipSync } from 'node:zlib';
 import { describe, it, expect, vi } from 'vitest';
 import { REMOTE_AGENT_CHANNEL, REMOTE_AGENT_READ_WAIT_MS } from '../remoteAgent.js';
-import { DeviceLinkClient, DeviceLinkRegistrationRemovedError, SYSTEM_SUSPEND_RECONNECT_HOLD_MS, computeReconnectDelayMs, type WsLike } from '../client.js';
+import { DeviceLinkClient, DeviceLinkUnsentInvokeError, DeviceLinkRegistrationRemovedError, SYSTEM_SUSPEND_RECONNECT_HOLD_MS, computeReconnectDelayMs, type WsLike } from '../client.js';
 import {
   PROTOCOL_VERSION,
   DeviceLinkError,
@@ -4219,7 +4219,10 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
-  it('peer reset 后幂等读请求立即返回 PEER_RESET，交给 host 做一次重开重试', async () => {
+  it.each([
+    { channel: 'local-db:sessions:list', args: [] },
+    { channel: 'worktree:restore-status', args: ['session-1'] },
+  ])('peer reset 后 $channel 立即返回 PEER_RESET，交给 host 做一次重开重试', async (request) => {
     const logs: unknown[][] = [];
     const h = makeHarness({
       peerResetReadRetry: true,
@@ -4255,7 +4258,7 @@ describe('DeviceLinkClient', () => {
     });
     await open;
 
-    const invoke = h.client.invoke('dev-b', { channel: 'local-db:sessions:list', args: [] });
+    const invoke = h.client.invoke('dev-b', request);
     const sent = h.current().sent.find((env) => env.kind === 'invoke')!;
     h.current().push({
       v: PROTOCOL_VERSION,
@@ -10531,6 +10534,48 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
     }, { pingIntervalMs: 600_000 });
   });
 
+  // The MacBook incident had a ready reliable stream and 27 older frames. A new negotiation
+  // may yield before its first byte, without consuming another sequence or disturbing the backlog.
+  it('yields an unsent invoke on a ready, backlogged peer without replaying it after drain', async () => {
+    await withFakeTimers(async (h, advance) => {
+      const socket = h.current();
+      socket.bufferedAmount = 700 * 1024;
+      for (let i = 0; i < 27; i++) h.client.sendPush('dev-b', 'maker:event', { i });
+      expect(h.client.getReliableSendQueueDepth('dev-b')).toBe(27);
+      const request = { channel: 'device-link:remote-desktop:v1', args: [{ op: 'start', displayId: '1' }] };
+      await expect(h.client.invoke('dev-b', request, 10_000, { canRerouteBeforeWrite: () => true }))
+        .rejects.toBeInstanceOf(DeviceLinkUnsentInvokeError);
+      expect(h.client.hasPendingRequestsTo('dev-b')).toBe(false);
+      expect(h.client.getReliableSendQueueDepth('dev-b')).toBe(27);
+      socket.bufferedAmount = 0;
+      await advance(1_000);
+      expect(socket.sent.some(env => env.kind === 'invoke')).toBe(false);
+      expect(socket.sent.some(env => env.kind === 'push')).toBe(true);
+    }, { pingIntervalMs: 600_000 });
+  });
+
+  it('retires the reserved sequence before yielding a request held by a direct buffer', async () => {
+    await withFakeTimers(async (h, advance) => {
+      const frames: Envelope[] = [];
+      let buffered = DIRECT_PATH_HIGH_WATER_BYTES;
+      const direct = h.client.attachDirectPath('dev-b', {
+        get bufferedAmount() { return buffered; },
+        send: data => frames.push(JSON.parse(data)), close() {},
+      });
+      const request = { channel: 'device-link:remote-desktop:v1', args: [{ op: 'start', displayId: '1' }] };
+      await expect(h.client.invoke('dev-b', request, 10_000, { canRerouteBeforeWrite: () => true }))
+        .rejects.toBeInstanceOf(DeviceLinkUnsentInvokeError);
+      expect(h.client.hasPendingRequestsTo('dev-b')).toBe(false);
+      expect(h.client.getReliableSendQueueDepth('dev-b')).toBe(1);
+      buffered = 0;
+      direct!.drained();
+      await advance(250);
+      const commands = frames.filter(env => env.kind === 'invoke');
+      expect(commands.length).toBeGreaterThan(0);
+      expect(commands.every(env => isTransportSkipPayload(JSON.parse(parseTransportPayload(env.payload)!.data)))).toBe(true);
+    }, { pingIntervalMs: 600_000 });
+  });
+
   it.each(['stop', 'closeLink'] as const)('reports partial writes separately from unsent commands on %s', async (action) => {
     await withFakeTimers(async (h, advance) => {
       const socket = h.current();
@@ -10540,8 +10585,8 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
         if (JSON.parse(data).kind === 'invoke' && ++chunks === 2) throw new Error('socket write interrupted');
         send(data);
       });
-      const written = h.client.invoke('dev-b', { channel: 'maker:send', args: ['x'.repeat(200 * 1024)] }, 12_000)
-        .catch((error: unknown) => error);
+      const written = h.client.invoke('dev-b', { channel: 'maker:send', args: ['x'.repeat(200 * 1024)] }, 12_000,
+        { canRerouteBeforeWrite: () => true }).catch((error: unknown) => error);
       expect(chunks).toBe(2);
       expect(socket.sent.filter(env => env.kind === 'invoke')).toHaveLength(1);
       writer.mockRestore();
