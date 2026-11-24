@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  applyCloseOnce,
   applyLinuxMainWindowCloseBehavior,
   cancelPendingWindowHide,
   createCloseBehaviorPromptFallbackController,
@@ -315,5 +316,49 @@ describe('main window close behavior prompt', () => {
 
     expect(harness.deps.showRendererPrompt).toHaveBeenCalledTimes(2);
     expect(harness.deps.schedule).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Unit, the real close-once branch of the 'window-close' handler with fake windows.
+// Test value: when the close dialog could not save the chosen behavior, the renderer
+// asks Main to apply it to this close only. Minimal failing input: a secondary window,
+// an untrusted sender, or an unknown behavior that still closes or hides the main window.
+describe('applyCloseOnce', () => {
+  const main = { id: 'main' };
+  const other = { id: 'other' };
+  const setup = (platform: NodeJS.Platform, trusted = true) => {
+    const applyWindows = vi.fn();
+    const applyLinux = vi.fn();
+    const deps = {
+      platform,
+      isMainWindow: (window: { id: string }) => window === main,
+      isTrustedSender: () => trusted,
+      isWindowsBehavior: (value: unknown) => value === 'quit' || value === 'tray',
+      isLinuxBehavior: (value: unknown) => value === 'quit' || value === 'tray' || value === 'minimize',
+      applyWindows,
+      applyLinux,
+    };
+    return { deps, applyWindows, applyLinux };
+  };
+
+  it('applies the chosen behavior once to the trusted main window on its platform', () => {
+    const win = setup('win32');
+    applyCloseOnce(main, 'tray', win.deps);
+    expect(win.applyWindows).toHaveBeenCalledExactlyOnceWith(main, 'tray');
+    const linux = setup('linux');
+    applyCloseOnce(main, 'minimize', linux.deps);
+    expect(linux.applyLinux).toHaveBeenCalledExactlyOnceWith(main, 'minimize');
+  });
+
+  it('does nothing for another window, an untrusted sender, an unknown behavior or another platform', () => {
+    for (const [platform, window, once, trusted] of [
+      ['win32', other, 'tray', true], ['win32', null, 'tray', true], ['win32', main, 'tray', false],
+      ['win32', main, 'minimize', true], ['linux', main, 'hide', true], ['darwin', main, 'quit', true],
+    ] as const) {
+      const fixture = setup(platform, trusted);
+      applyCloseOnce(window, once, fixture.deps);
+      expect(fixture.applyWindows).not.toHaveBeenCalled();
+      expect(fixture.applyLinux).not.toHaveBeenCalled();
+    }
   });
 });

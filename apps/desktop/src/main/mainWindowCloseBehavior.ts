@@ -186,3 +186,24 @@ export function createCloseBehaviorPromptFallbackController<TBehavior>(
     },
   };
 }
+
+export interface CloseOnceDependencies<TWindow> {
+  readonly platform: NodeJS.Platform;
+  readonly isMainWindow: (window: TWindow) => boolean;
+  readonly isTrustedSender: () => boolean;
+  readonly isWindowsBehavior: (value: unknown) => boolean;
+  readonly isLinuxBehavior: (value: unknown) => boolean;
+  readonly applyWindows: (window: TWindow, behavior: never) => void;
+  readonly applyLinux: (window: TWindow, behavior: never) => void;
+}
+
+/**
+ * The close dialog's "close once" request: when the chosen behavior could not be
+ * saved, apply it to this close only. Only the trusted main window may ask, and
+ * only with a behavior its platform understands; anything else does nothing.
+ */
+export function applyCloseOnce<TWindow>(window: TWindow | null, once: unknown, deps: CloseOnceDependencies<TWindow>): void {
+  if (!window || !deps.isMainWindow(window) || !deps.isTrustedSender()) return;
+  if (deps.platform === 'win32' && deps.isWindowsBehavior(once)) deps.applyWindows(window, once as never);
+  else if (deps.platform === 'linux' && deps.isLinuxBehavior(once)) deps.applyLinux(window, once as never);
+}

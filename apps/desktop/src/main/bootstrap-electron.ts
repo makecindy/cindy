@@ -1169,6 +1169,7 @@ import {
 } from './windowsTrayLifecycle.js';
 import { createLinuxTrayController } from './linuxTrayLifecycle.js';
 import {
+  applyCloseOnce,
   applyLinuxMainWindowCloseBehavior,
   cancelPendingWindowHide,
   createCloseBehaviorPromptFallbackController,
@@ -6443,12 +6444,16 @@ const registerIpcHandlers = () => {
   ipcMain.on('window-close', (event, once: unknown) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     if (once !== undefined) {
-      if (!win || win !== mainWindowRef || !isTrustedAppRendererEvent(event)) return;
-      if (process.platform === 'win32' && isWindowsCloseBehavior(once)) {
-        applyWindowsCloseBehavior(win, once);
-      } else if (process.platform === 'linux' && isLinuxCloseBehavior(once)) {
-        applyLinuxMainWindowCloseBehavior(win, once, () => app.quit(), () => minimizeWindow(win));
-      }
+      applyCloseOnce(win, once, {
+        platform: process.platform,
+        isMainWindow: (window) => window === mainWindowRef,
+        isTrustedSender: () => isTrustedAppRendererEvent(event),
+        isWindowsBehavior: isWindowsCloseBehavior,
+        isLinuxBehavior: isLinuxCloseBehavior,
+        applyWindows: (window, behavior) => applyWindowsCloseBehavior(window, behavior),
+        applyLinux: (window, behavior) =>
+          applyLinuxMainWindowCloseBehavior(window, behavior, () => app.quit(), () => minimizeWindow(window)),
+      });
       return;
     }
     if (!win || win === mainWindowRef) {
