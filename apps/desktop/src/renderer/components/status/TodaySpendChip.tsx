@@ -682,6 +682,7 @@ function toQuotaHoverCardTurnUsage(
     costText,
     costIsEstimate,
     costIsSubscriptionValue: costIsEstimate
+      && !details.additionalCosts?.length
       && !details.userTurnAmounts?.some(money => money.kind === 'actual-cost')
       && hasSubscriptionEstimateSource(summary.money, details),
     isUserTurnTotal: summary.isUserTurnTotal,

@@ -3,6 +3,7 @@ import { resolveStaleCodexSubscriptionValueEstimate } from './codexSubscriptionV
 import { normalizeRegionalMoney, usdMoney, USD_TO_CNY_FIXED_RATE, type RegionalMoney } from './regionalMoney.js';
 import { normalizeTurnUsageDetails, type TurnUsageDetails } from './turnUsageDetails.js';
 
+/** Classify the model estimate independently of separately charged media. */
 export function hasSubscriptionEstimateSource(
   money: RegionalMoney | undefined,
   details?: TurnUsageDetails,
@@ -11,9 +12,9 @@ export function hasSubscriptionEstimateSource(
     return details.perModelCost.every(row =>
       row.money.kind === 'value-estimate' &&
       hasSubscriptionSource(row.money, row.billingSource ?? details.billingSource),
-    ) && !details.additionalCosts?.length;
+    );
   }
-  return !details?.additionalCosts?.length && hasSubscriptionSource(money, details?.billingSource);
+  return hasSubscriptionSource(money, details?.billingSource);
 }
 
 function hasSubscriptionSource(money: RegionalMoney | undefined, source: TurnUsageDetails['billingSource']): boolean {

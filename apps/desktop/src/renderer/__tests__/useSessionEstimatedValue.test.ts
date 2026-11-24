@@ -124,6 +124,24 @@ describe('syncEstimatedValueCostsFromStoreSnapshot', () => {
 });
 
 describe('resolveEstimatedValueTurnCostEntry', () => {
+  // PR #12622: the session estimate keeps the subscription source and only
+  // the model amount when the same turn includes a separately charged image.
+  it('retains subscription value alongside a separate media charge', () => {
+    const subscription = usdEstimate(0.53);
+    const image: RegionalMoney = { amount: 0.22, currency: 'USD', approximate: false, kind: 'actual-cost' };
+    expect(resolveEstimatedValueTurnCostEntry({
+      clientId: 'image-in-subscription-turn',
+      turnMoney: subscription,
+      turnCostIsEstimate: true,
+      turnUsageDetails: buildTurnUsageDetails({
+        inputTokens: 200,
+        billingSource: 'subscription',
+        perModelCost: [{ model: 'model-a', money: subscription, billingSource: 'subscription' }],
+        additionalCosts: [image],
+      }),
+    })).toEqual({ clientId: 'image-in-subscription-turn', money: subscription });
+  });
+
   // Unit: persisted model evidence and the live segment must produce the same two values on replay.
   it('preserves the other native estimate without counting the primary model twice', () => {
     const dollars = usdEstimate(2);
