@@ -2837,6 +2837,14 @@
         "projectsRootReset": "推奨の保存先に戻す",
         "projectsRootDescription": "セッションからプロジェクトを作成するとき、プロジェクトフォルダーはここに作成されます。未設定の場合は、既存のプロジェクトの場所から提案します。",
         "projectsRootFailed": "新規プロジェクトの保存先を更新できませんでした",
+        "taskExportDirectoryTitle": "セッションのエクスポート先",
+        "taskExportDirectoryUnset": "毎回選択",
+        "taskExportDirectoryMissing": "フォルダーが見つかりません",
+        "taskExportDirectoryUnreadable": "設定を読み込めません",
+        "taskExportDirectoryChoose": "フォルダーを選択",
+        "taskExportDirectoryReset": "毎回選択に戻す",
+        "taskExportDirectoryDescription": "設定すると、Agent がエクスポートするセッションは保存先を尋ねずにここへ保存され、同名のファイルは上書きされません。未設定の場合は、エクスポートのたびに保存先を選びます。",
+        "taskExportDirectoryFailed": "セッションのエクスポート先を更新できませんでした",
         "dialogueDirectoryOpen": "フォルダーを開く",
         "dialogueDirectoryChoose": "フォルダーを変更",
         "dialogueDirectoryReset": "既定の保存先に戻す",
@@ -8657,6 +8665,8 @@
         "liveScreenDetail": "リモートデスクトップ経由で、スマートフォンやほかのコンピューターからこのプラグインが提供するデバイス画面（シミュレーターなど）を表示し、タッチ、ボタン、文字入力で操作できます。それらから開いたときだけ接続し、このコンピューターのほかの内容は表示しません。",
         "preview": "以下のサイトのプレビューページをサイドバーのブラウザで開けます",
         "previewDetail": "開けるのは下に列挙されたサイトだけです。ページを開くたびに、どのプラグインが開いたかが表示されます。",
+        "fileOpener": "Cindy から次の種類のファイルを開くとき、このプラグインで開きます",
+        "fileOpenerDetail": "プラグインはファイルのフルパスを受け取り、既定のアプリの代わりに開きます。開けないときは既定のアプリで開きます。プラグインの詳細でオフにできます。",
         "browserExtension": "同梱のブラウザ拡張を Cindy に接続できます",
         "browserNativeHost": "ブラウザー接続「{{name}}」を登録できます",
         "browserNativeHostDetail": "登録するプログラムはサンドボックス外で動作し、ユーザーアカウントとシステムの権限でローカルにアクセスします。",
@@ -8898,6 +8908,8 @@
         "configurationTitle": "設定",
         "sidebarEntryTitle": "ナビゲーション項目",
         "showInSidebar": "左側ナビゲーションに表示",
+        "fileOpenerTitle": "このプラグインでファイルを開く",
+        "fileOpenerDescription": "Cindy から {{extensions}} ファイルを開くと、既定のアプリではなく {{name}} で開きます。ほかのコンピューターのファイルは引き続き既定のアプリで開きます。",
         "sidebarEntryDescription": "オンにすると、「{{title}}」が左側ナビゲーションに「自動化」「プラグイン」と並んで表示されます。最上部に置くか「その他」にまとめるかは「その他 → カスタマイズ」で変更できます。非表示にしてもプラグインは無効になりません。",
         "openTool": "Tool {{name}} の詳細を表示",
         "noToolDescription": "この Tool には説明がありません。",
@@ -9175,6 +9187,7 @@
         "enableBeforeConfigure": "このプラグインは無効です。設定するには、上のスイッチをオンにしてください。",
         "settingsPageUnavailable": "{{device}} の Cindy でこのプラグインの設定ページを開いてください。接続先の現在のバージョンではリモート表示に対応していません。",
         "offlineNotice": "{{device}}はオフラインです。接続が復旧すると管理を再開できます。",
+        "publishOnTarget": "プラグインは {{device}} の Cindy で公開するか、その端末の Cindy を更新してリモートで公開してください。",
         "managingTarget": "管理対象：{{device}}",
         "managingDescription": "変更はこのコンピューターに保存されます。",
         "viewingTarget": "{{device}} にインストール済み",
@@ -12788,6 +12801,20 @@
       }
     },
     "voiceMode": {
+      "realtime": {
+        "systemVoices": "システム音声",
+        "myVoices": "マイボイス",
+        "refreshMyVoices": "マイボイスを更新",
+        "callMode": "通話モード",
+        "messageReadAloud": "メッセージの読み上げ",
+        "callVoice": "リアルタイム通話の声",
+        "readAloudVoice": "読み上げの声",
+        "readAloudHint": "仲間のテキスト返信の下にあるスピーカーを押すと、この声で読み上げます。",
+        "resetReadAloud": "読み上げ設定を既定値に戻す",
+        "title": "リアルタイム音声",
+        "add": "リアルタイム音声モデルを追加",
+        "off": "音声合成を使用"
+      },
       "openConversation": "会話を開く",
       "inCallWith": "{{name}} と通話中",
       "showDetails": "通話記録を表示",
@@ -12809,7 +12836,7 @@
       "settingsTitle": "音声",
       "openSettings": "音声設定",
       "startConversation": "音声会話を開始",
-      "settingsHint": "この仲間の読み上げモデルと声を選択し、入力欄から音声会話を開始できます。",
+      "settingsHint": "音声合成で通話する場合、通話とメッセージの読み上げには以下のモデルと声を使います。",
       "previewNeedsChat": "仲間との会話を開始すると試聴できます。",
       "voiceId": "音声 ID",
       "manualVoice": "音声 ID を手動入力",
@@ -14591,6 +14618,7 @@
       "missingDir": "フォルダが見つかりません"
     },
     "pendingQueue": {
+      "waitingForDevice": "未送信 · もう一方のコンピュータが再接続したら送信します",
       "stopping": "停止処理中",
       "queued": "順番待ち",
       "editingInComposer": "下の入力欄で編集中…",
@@ -15065,6 +15093,7 @@
       "unavailable": "現在のアプリでは自動入力できません。認識テキストをコピーして手動で入力してください。",
       "unconfirmed": "自動入力が成功したか確認できません。必要に応じて認識テキストをコピーしてください。",
       "permission": "現在のアプリへ音声入力するにはアクセシビリティ権限が必要です。権限を許可してから再試行してください。",
+      "appNotAllowed": "{{app}} はこのアプリの制御を許可されていないため、自動入力できませんでした。「System & App Protection Override」で {{app}} にこのアプリを追加するか、テキストをコピーして手動で貼り付けてください。",
       "failed": "自動入力に失敗しました。認識テキストをコピーして手動で入力してください。"
     },
     "permissionPrompts": {
@@ -15485,11 +15514,11 @@
       "actionExpired": "この操作に対するセッションの許可が失効しました。自動化の直近の実行結果を確認してください。",
       "actionRecovered": "この操作の許可は失効しましたが、その後、同じ自動化が正常に実行されました。",
       "text": "自動実行に失敗した記録があります。",
-      "prCheck_dns": "{{device}} で {{host}} を名前解決できません。問題が続く場合は、この端末のネットワークか DNS を確認してください。連続失敗回数は {{failures}} 回です。次回の自動確認は {{retry}} です。",
-      "prCheck_timeout": "{{device}} から GitHub への接続がタイムアウトしました。連続失敗回数は {{failures}} 回です。次回の自動確認は {{retry}} です。",
-      "prCheck_auth": "{{device}} で GitHub に再度サインインしてください。連続失敗回数は {{failures}} 回です。次回の自動確認は {{retry}} です。",
-      "prCheck_rate-limit": "GitHub が {{device}} からのリクエストを制限しました。連続失敗回数は {{failures}} 回です。次回の自動確認は {{retry}} です。",
-      "prCheck_unknown": "{{device}} で PR の確認に失敗しました。実行の詳細を確認してください。連続失敗回数は {{failures}} 回です。次回の自動確認は {{retry}} です。",
+      "prCheck_dns": "{{device}} で {{host}} を名前解決できません。問題が続く場合は、この端末のネットワークか DNS を確認してください。連続失敗回数は {{failures}} 回です。{{retry}} 以降の定期確認で再試行できます。",
+      "prCheck_timeout": "{{device}} から GitHub への接続がタイムアウトしました。連続失敗回数は {{failures}} 回です。{{retry}} 以降の定期確認で再試行できます。",
+      "prCheck_auth": "{{device}} で GitHub に再度サインインしてください。連続失敗回数は {{failures}} 回です。{{retry}} 以降の定期確認で再試行できます。",
+      "prCheck_rate-limit": "GitHub が {{device}} からのリクエストを制限しました。連続失敗回数は {{failures}} 回です。{{retry}} 以降の定期確認で再試行できます。",
+      "prCheck_unknown": "{{device}} で PR の確認に失敗しました。実行の詳細を確認してください。連続失敗回数は {{failures}} 回です。{{retry}} 以降の定期確認で再試行できます。",
       "precheck": "自動チェックが一時的に停止しています。",
       "preRunBlocked": "実行前のチェックに失敗しました。今回の実行は開始されていません。",
       "rateLimited": "リクエスト制限により自動チェックが一時的に停止しています。",
@@ -18803,7 +18832,7 @@
       "expired": "待ち時間が長すぎたため、代理入力は終了しました。"
     },
     "failure": {
-      "permission": "この Mac の画面を読み取れません。実行中の Cindy に操作の許可があるか確認してください。操作の許可は macOS 27.3 以降では「System & App Protection Override」、以前のバージョンでは「アクセシビリティ」で確認できます。",
+      "permission": "この Mac の画面を読み取れません。実行中の Cindy に操作の許可があるか確認してください。操作の許可は macOS 27.3 以降では「System & App Protection Override」、以前のバージョンでは「アクセシビリティ」で確認できます。Cindy に一部のアプリだけを許可している場合は、このアプリも追加してください。",
       "target_gone": "対象のウィンドウが閉じられました。",
       "unreadable": "この画面を読み取れません。ホストのコンピュータで直接完了してから Agent に戻してください。",
       "action_failed": "直前の操作が反映されませんでした。画面を確認してもう一度お試しください。",
@@ -22568,6 +22597,10 @@
       "separator": "、"
     },
     "settings": {
+      "autoSwitch": {
+        "title": "問題が起きたらソースを自動で切り替える",
+        "hint": "このモードで使用中のソースに問題が起きたら、次に使えるソースへ自動で切り替え、そのターンの下に記録します。オフにすると、エラー時に切り替えを提案するだけです。"
+      },
       "newRoute": "モードを作成",
       "newRouteName": "新しいモード",
       "routesEmpty": "モードはまだありません。作成してソースを追加してください。",
@@ -22800,6 +22833,8 @@
   "macControlPermission": {
     "pane": "System & App Protection Override",
     "selectApp": "「System & App Protection Override」で {{app}} の右の ⓘ をクリックします。一覧にない場合は「＋」で実行中のアプリを追加します。",
-    "review": "$t(macControlPermission.selectApp)\n「アプリを選択」が表示された場合は、制御できるアプリを限定できます。Mac 全体の制御を許可すると、すべてのアプリとデータにアクセスできます。同意する場合は各項目を読んで確認し、最後に画面下部で許可します。"
+    "review": "$t(macControlPermission.selectApp)\n「アプリを選択」が表示された場合は、制御できるアプリを限定できます。Mac 全体の制御を許可すると、すべてのアプリとデータにアクセスできます。同意する場合は各項目を読んで確認し、最後に画面下部で許可します。",
+    "reviewWholeMac": "$t(macControlPermission.selectApp)\nリモートのキーボードとマウスは Mac 全体を操作するため、Mac 全体の制御が必要です。「＋」で追加するときは「Override System Protections」を選び、一覧にある場合は ⓘ で「Control Your Entire Mac and All Apps」をオンにします。一部のアプリだけを許可していると、macOS はリモートのキーボードとマウス操作をすべてブロックします。許可する前に、macOS が示すアクセス範囲を確認してください。",
+    "chosenAppsOnly": "{{app}} は選択したアプリしか制御できないため、macOS がリモートのキーボードとマウス操作をすべてブロックしています。リモート操作するには、「System & App Protection Override」で {{app}} の右の ⓘ をクリックし、「Control Your Entire Mac and All Apps」をオンにします。"
   }
 }

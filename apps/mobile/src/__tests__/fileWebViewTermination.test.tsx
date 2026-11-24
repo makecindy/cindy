@@ -14,6 +14,7 @@ import { HtmlPreviewLoading } from '@/session/HtmlPreviewLoading';
 
 const state = vi.hoisted(() => ({
   props: {} as Record<string, (...args: any[]) => void>,
+  app: 'active',
   mounts: 0,
   unregister: vi.fn(),
   unregisterInvoke: vi.fn(),
@@ -30,7 +31,7 @@ vi.mock('react-native', () => ({
   View: ({ children }: { children: unknown }) => children,
   ActivityIndicator: () => null,
   StyleSheet: { create: (value: unknown) => value },
-  AppState: { currentState: 'active', addEventListener: (_event: string, listener: (value: string) => void) => {
+  AppState: { get currentState() { return state.app; }, addEventListener: (_event: string, listener: (value: string) => void) => {
     state.appStateListeners.add(listener);
     return { remove() { state.appStateListeners.delete(listener); } };
   } },
@@ -68,6 +69,7 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root | undefined;
 afterEach(() => {
   act(() => root?.unmount()); root = undefined;
+  state.app = 'active';
   state.mounts = 0; state.install.mockClear(); state.unregister.mockClear();
   state.unregisterInvoke.mockClear(); state.unregisterUpload.mockClear(); state.unregisterReset.mockClear();
   state.goBack.mockClear(); state.goForward.mockClear();
@@ -171,6 +173,7 @@ it('keeps the same open LAN path through inactive and still handles network loss
 });
 
 it('does not accept LAN bridge callbacks across backgrounding, owner changes or unmount', () => {
+  vi.useFakeTimers();
   const bridge = createDirectRuntimeBridge(), closed = vi.fn();
   const events = { closed, open() {}, message() {}, drained() {} };
   const ready = { nativeEvent: { data: '{"type":"ready"}' } };
@@ -180,6 +183,14 @@ it('does not accept LAN bridge callbacks across backgrounding, owner changes or 
   bridge.runtime.create('one', events);
   const old = state.props;
   act(() => { for (const fn of state.appStateListeners) fn('background'); });
+  act(() => vi.advanceTimersByTime(2499));
+  expect(closed).not.toHaveBeenCalled();
+  act(() => { for (const fn of state.appStateListeners) fn('active'); });
+  act(() => { for (const fn of state.appStateListeners) fn('inactive'); });
+  act(() => vi.advanceTimersByTime(3000));
+  expect(closed).not.toHaveBeenCalled();
+  act(() => { for (const fn of state.appStateListeners) fn('background'); });
+  act(() => vi.advanceTimersByTime(2500));
   expect(closed).toHaveBeenCalledOnce();
   act(() => { for (const fn of state.appStateListeners) fn('active'); });
   act(() => old.onMessage(ready));
@@ -196,6 +207,44 @@ it('does not accept LAN bridge callbacks across backgrounding, owner changes or 
   act(() => root!.unmount()); root = undefined;
   act(() => disposed.onMessage(ready));
   expect(() => bridge.runtime.create('three', events)).toThrow('UNAVAILABLE');
+});
+
+// Unit regression: native suspension skips JS timers; eviction during grace must
+// release the live transport without spending a foreground restart attempt.
+it.each(['data', 'file'])('recovers the %s transport from suspension and background eviction', kind => {
+  vi.useFakeTimers();
+  const bridge = createDirectRuntimeBridge();
+  const closed = vi.fn();
+  const events = { closed, open() {}, message() {}, drained() {} };
+  const ready = { nativeEvent: { data: '{"type":"ready"}' } };
+  function change(app: string) {
+    act(() => {
+      state.app = app;
+      for (const fn of state.appStateListeners) fn(app);
+    });
+  }
+  root = createRoot(document.createElement('div'));
+  act(() => root!.render(kind === 'data'
+    ? createElement(DirectLinkTransport, { bridge, enabled: true, owner: 'one' })
+    : createElement(PeerFileTransport)));
+  for (const [index, cause] of ['suspend', 'evict', 'evict'].entries()) {
+    const old = state.props;
+    act(() => old.onMessage(ready));
+    if (kind === 'data') bridge.runtime.create(String(index), events);
+    change('background');
+    if (cause === 'suspend') vi.setSystemTime(Date.now() + 3000);
+    else act(() => old.onContentProcessDidTerminate());
+    expect(state.mounts).toBe(index + 1);
+    change('active');
+    expect(state.mounts).toBe(index + 2);
+    expect(kind === 'data' ? closed : state.unregister).toHaveBeenCalledTimes(index + 1);
+    act(() => old.onMessage(ready));
+    if (kind === 'data') expect(() => bridge.runtime.create('stale', events)).toThrow('UNAVAILABLE');
+    else expect(state.install).toHaveBeenCalledTimes(index + 1);
+  }
+  act(() => state.props.onMessage(ready));
+  if (kind === 'data') bridge.runtime.create('restored', events);
+  else expect(state.install).toHaveBeenCalledTimes(4);
 });
 
 it.each(['onContentProcessDidTerminate', 'onRenderProcessGone'])('routes snapshot %s to the existing error owner', (event) => {

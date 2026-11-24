@@ -629,8 +629,18 @@ export function buildUserProvider(
         // Reused adapter data is a fallback, not a configured route default.
         defaultEffort: m.discoveredMetadata?.defaultEffort,
       }) : undefined;
+      // Pi's language-model catalog describes text execution. A realtime session
+      // uses the model's published audio capabilities on its separate voice endpoint.
+      const baseDefaults = (imported || catalogDefaults)
+        ? findBaseModel(options.modelRegistry ?? BUNDLED_CATALOG.modelRegistry, m.id)?.defaults
+        : undefined;
       const defaults = imported || catalogDefaults || presetDefaults
-        ? mergeModelMetadata(imported && !imported.inheritedFrom ? providerModelMetadata(imported) : exactRelayDefaults, catalogDefaults, presetDefaults)
+        ? mergeModelMetadata(
+            imported && !imported.inheritedFrom ? providerModelMetadata(imported) : exactRelayDefaults,
+            catalogDefaults,
+            baseDefaults?.mode === 'realtime' ? { modalities: baseDefaults.modalities } : undefined,
+            presetDefaults,
+          )
         : undefined;
       // A verified catalog identity can reuse the manufacturer's declaration.
       // Execution protocols and prices still belong to this exact connection.

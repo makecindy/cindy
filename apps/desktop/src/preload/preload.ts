@@ -72,6 +72,7 @@ import type {
   PreparedProjectFromTask,
   ProjectsRootState,
 } from '../shared/projectsRoot';
+import type { TaskExportDirectoryState } from '../shared/taskExportDirectory';
 import type {
   CustomProviderUpdateOptions,
   CustomProviderUpdateResult,
@@ -406,7 +407,7 @@ type VoiceInputGlobalResult =
   | {
       ok: false;
       error: string;
-      errorCode?: 'empty' | 'unavailable' | 'unconfirmed' | 'permission' | 'failed' | 'superseded';
+      errorCode?: 'empty' | 'unavailable' | 'unconfirmed' | 'permission' | 'appNotAllowed' | 'failed' | 'superseded';
     };
 type VoiceInputSettingsUpdateResult =
   | {
@@ -1601,6 +1602,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       config: Record<string, unknown> | null,
     ): Promise<{ config: Record<string, unknown> }> =>
       ipcRenderer.invoke('ghosts:errand-prefs:set', id, config),
+    fileOpener: (id: string): Promise<{ declared: boolean; enabled: boolean }> =>
+      ipcRenderer.invoke('ghosts:file-opener:get', id),
+    setFileOpener: (id: string, enabled: boolean): Promise<{ declared: boolean; enabled: boolean }> =>
+      ipcRenderer.invoke('ghosts:file-opener:set', id, enabled),
     githubRelease: (action: 'check' | 'update' | 'sign-in', instanceId: string, assetId?: number):
       Promise<import('../shared/githubPluginRelease').GithubPluginReleaseResult | boolean> =>
       ipcRenderer.invoke('ghosts:github-release', action, instanceId, assetId),
@@ -1970,6 +1975,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('plugin-publisher:resolve-confirm', { requestId, confirmed }),
   },
   voiceConversation: {
+    realtimeCustomVoices: (route, id) => ipcRenderer.invoke('voice-conversation:realtime-custom-voices', route, id),
+    cancelRealtimeCustomVoices: (id) => ipcRenderer.invoke('voice-conversation:cancel-realtime-custom-voices', id),
+    realtimeModels: () => ipcRenderer.invoke('voice-conversation:realtime-models'),
+    setRealtimePreference: (botId, selection) => ipcRenderer.invoke('voice-conversation:set-realtime-preference', botId, selection),
+    setRealtimeQuestion: (callId, pending) => ipcRenderer.invoke('voice-conversation:realtime-question', callId, pending),
     promoteTurn: (callId, inputId) => ipcRenderer.invoke("voice-conversation:promote-turn", callId, inputId),
     submitTurn: (callId, inputId, text, forceHandoff) => ipcRenderer.invoke("voice-conversation:submit-turn", callId, inputId, text, forceHandoff),
     models: () => ipcRenderer.invoke('voice-conversation:models'),
@@ -1988,7 +1998,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     end: (callId) => ipcRenderer.invoke('voice-conversation:end', callId),
     speak: (input) => ipcRenderer.invoke('voice-conversation:speak', input),
     readSpeech: (callId, requestId) => ipcRenderer.invoke('voice-conversation:read-speech', callId, requestId),
-    interrupt: (callId) => ipcRenderer.invoke('voice-conversation:interrupt', callId),
+    interrupt: (callId, position, throughResponse) => ipcRenderer.invoke('voice-conversation:interrupt', callId, position, throughResponse),
     callStatus: () => ipcRenderer.invoke('voice-conversation:call-status'),
     publishCallStatus: (update) => ipcRenderer.send('voice-conversation:call-publish', update),
     callCommand: (command) => ipcRenderer.invoke('voice-conversation:call-command', command),
@@ -3077,6 +3087,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   syncNewMakerDraft: (snapshot: {
     ownerStamp: import('../shared/dataOwnerPush').DataOwnerPushStamp;
     selectedRoute?: import('../shared/botModelChain').BotModelRoute;
+    selectedPluginEngine?: import('../shared/pluginEngines').NewTaskPluginEngineSelection;
     lastByVendor: Partial<
       Record<
         'cc' | 'codex' | 'pi',
@@ -5059,6 +5070,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     get: (): Promise<ProjectsRootState> => ipcRenderer.invoke('projects-root:get'),
     choose: (): Promise<ProjectsRootState> => ipcRenderer.invoke('projects-root:choose'),
     reset: (): Promise<ProjectsRootState> => ipcRenderer.invoke('projects-root:reset'),
+  },
+  taskExportDirectory: {
+    get: (): Promise<TaskExportDirectoryState> => ipcRenderer.invoke('task-export-directory:get'),
+    choose: (): Promise<TaskExportDirectoryState> => ipcRenderer.invoke('task-export-directory:choose'),
+    reset: (): Promise<TaskExportDirectoryState> => ipcRenderer.invoke('task-export-directory:reset'),
   },
   createProjectFromTask: {
     prepare: (sessionId: string): Promise<PreparedProjectFromTask> =>
@@ -7763,6 +7779,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     enableOrca: (
       leadSessionId: string,
       opts: {
+        modelGroup?: string;
         workerAgent: 'claude-code' | 'codex';
         delegateTask?: string;
         role?: string;

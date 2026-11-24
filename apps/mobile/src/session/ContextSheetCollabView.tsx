@@ -109,7 +109,7 @@ export function OrcaWorkerFormView({
   const { t } = useTranslation();
   const { colors } = useTheme();
   const [moreOpen, setMoreOpen] = useState(false);
-  const modelLabel = form.model?.id ?? `${orcaAgentLabel(form.agent)} · ${t('session.collab.modelDefault')}`;
+  const modelLabel = form.modelGroup?.name ?? form.model?.id ?? `${orcaAgentLabel(form.agent)} · ${t('session.collab.modelDefault')}`;
   const permission = permissionPresentation(form.permissionMode);
   const remoteDirInvalid = form.remoteDirMode === 'path' && !!form.remoteDir && !isAbsoluteOrcaWorkerDir(form.remoteDir);
   const executionDeviceMissing = !!form.executionDeviceId
@@ -204,7 +204,7 @@ export function OrcaWorkerFormView({
       {showMore ? (
         <>
           <ContextSheetGroup
-            footer={form.model ? null : t('session.collab.modelDefaultHint')}
+            footer={form.modelGroup || form.model ? null : t('session.collab.modelDefaultHint')}
             label={title(t('session.collab.agentLabel'))}
           >
             <ContextSheetChoiceRow

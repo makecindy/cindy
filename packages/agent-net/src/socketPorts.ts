@@ -4,6 +4,7 @@ export interface SocketUplink {
   readonly kind: 'agent-net';
   readonly devices: DeviceView[];
   readonly notifications?: boolean;
+  probeRelay?(): void;
   readonly delegations?: Delegation[];
   readonly delegationRequests?: DelegationRequest[];
   /** This session's UDP relay credentials when the relay offered them (over TLS); null or absent keeps WebSocket. */
