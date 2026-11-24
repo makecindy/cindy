@@ -75,3 +75,76 @@ export function issueChangeFromEvents(events: readonly string[] | undefined): Is
   const key = [...new Set(events ?? [])].sort().join(',');
   return ISSUE_CHANGES.find((change) => [...ISSUE_CHANGE_EVENTS[change]].sort().join(',') === key) ?? null;
 }
+
+/**
+ * GitLab 的 MR（!N）和 Issue（#N）是两套编号，所以同一个输入框靠链接或前缀区分：
+ * 链接（…/-/merge_requests/N、…/-/issues/N、…/-/work_items/N）、group/project!N、group/project#N，
+ * 或在已知项目时只填 !N / #N。只写编号无法区分，返回 null。
+ */
+export interface GitlabItemReference {
+  /** 实例域名，小写；只用短写法且没有已知项目时为空。 */
+  host?: string;
+  /** group/subgroup/project，小写。 */
+  project: string;
+  number: number;
+  kind: 'mr' | 'issue';
+}
+
+const GITLAB_PROJECT = /^[a-z\d_.-]+(?:\/[a-z\d_.-]+)+$/i;
+const GITLAB_HOST = /^[a-z\d](?:[a-z\d.-]*[a-z\d])?$/i;
+
+export function parseGitlabItemReference(input: string, known?: { host?: string; project: string }): GitlabItemReference | null {
+  const text = input.trim();
+  if (!text) return null;
+  const kindOf = (sigil: string): 'mr' | 'issue' => (sigil === '!' ? 'mr' : 'issue');
+  const validProject = (project: string) => GITLAB_PROJECT.test(project) && !project.split('/').some((part) => part === '.' || part === '..');
+  const bare = /^([!#])(\d+)$/.exec(text);
+  if (bare) {
+    const number = positive(bare[2]!);
+    return number && known && validProject(known.project)
+      ? { ...(known.host ? { host: known.host.toLowerCase() } : {}), project: known.project.toLowerCase(), number, kind: kindOf(bare[1]!) }
+      : null;
+  }
+  const short = /^([^\s!#]+)([!#])(\d+)$/.exec(text);
+  if (short && !short[1]!.includes(':')) {
+    const number = positive(short[3]!);
+    return number && validProject(short[1]!)
+      ? { ...(known?.host ? { host: known.host.toLowerCase() } : {}), project: short[1]!.toLowerCase(), number, kind: kindOf(short[2]!) }
+      : null;
+  }
+  let url: URL;
+  try {
+    url = new URL(text);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'https:' || url.port || url.username || url.password || !GITLAB_HOST.test(url.hostname)) return null;
+  const match = /^\/(.+?)\/-\/(merge_requests|issues|work_items)\/(\d+)(?:\/.*)?$/.exec(url.pathname);
+  if (!match || !validProject(match[1]!)) return null;
+  const number = positive(match[3]!);
+  if (!number) return null;
+  return { host: url.hostname.toLowerCase(), project: match[1]!.toLowerCase(), number, kind: match[2] === 'merge_requests' ? 'mr' : 'issue' };
+}
+
+export function gitlabItemUrl(item: GitlabItemReference & { host: string }): string {
+  return `https://${item.host}/${item.project}/-/${item.kind === 'mr' ? 'merge_requests' : 'issues'}/${item.number}`;
+}
+
+/** 指定 GitLab Issue 的条件，对应 GitLab Webhook 的 Issue 事件（object_kind=issue，action=open/close/reopen/update）。 */
+export const GITLAB_ISSUE_CHANGES = ['any', 'closed', 'reopened'] as const;
+export type GitlabIssueChange = (typeof GITLAB_ISSUE_CHANGES)[number];
+
+const GITLAB_ISSUE_CHANGE_EVENTS: Record<GitlabIssueChange, readonly string[]> = {
+  any: ['issue'],
+  closed: ['issue.close'],
+  reopened: ['issue.reopen'],
+};
+
+export function gitlabIssueChangeEvents(change: GitlabIssueChange): string[] {
+  return [...GITLAB_ISSUE_CHANGE_EVENTS[change]];
+}
+
+export function gitlabIssueChangeFromEvents(events: readonly string[] | undefined): GitlabIssueChange | null {
+  const key = [...new Set(events ?? [])].sort().join(',');
+  return GITLAB_ISSUE_CHANGES.find((change) => [...GITLAB_ISSUE_CHANGE_EVENTS[change]].sort().join(',') === key) ?? null;
+}

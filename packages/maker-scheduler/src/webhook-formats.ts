@@ -428,7 +428,11 @@ export type ScheduleWebhookSource =
   | { preset: 'github-app'; repositories: string[]; number?: number }
   /** 插件事件：本机插件经 routine-request 发布，不需要接收地址、密钥或账号。 */
   | { preset: 'plugin'; sources: SchedulePluginEventSource[] }
-  | { preset: ScheduleWebhookPresetId; signed?: boolean }
+  /**
+   * 普通地址型发送方。repository + number：只看这个项目里这个编号的事件（如指定 GitLab Issue），
+   * 只在本机按事件里的 repository / number 复核，不改变服务器上的地址与格式。
+   */
+  | { preset: ScheduleWebhookPresetId; signed?: boolean; repository?: string; number?: number }
   | { preset: 'custom'; format: WebhookFormat };
 
 /** 由宿主管理、没有公网接收地址和密钥的来源：GitHub App 与插件事件。 */
@@ -495,9 +499,17 @@ export function normalizeScheduleWebhookSource(value: unknown): ScheduleWebhookS
     return { preset: 'custom', format };
   }
   const preset = scheduleWebhookPreset(value.preset);
-  if (!preset || !hasOnlyKeys(value, ['preset'], ['signed'])) throw new Error('invalid webhook source');
+  if (!preset || !hasOnlyKeys(value, ['preset'], ['signed', 'repository', 'number'])) throw new Error('invalid webhook source');
   if (value.signed !== undefined && typeof value.signed !== 'boolean') throw new Error('invalid webhook source');
-  return value.signed === false ? { preset: preset.id, signed: false } : { preset: preset.id };
+  const base = value.signed === false ? { preset: preset.id, signed: false } : { preset: preset.id };
+  if (value.repository === undefined && value.number === undefined) return base;
+  // A specific item narrows one project's events: both the project path and a positive number are required.
+  const repository = typeof value.repository === 'string' ? value.repository.trim().toLowerCase() : '';
+  if (!/^[a-z\d_.-]+(?:\/[a-z\d_.-]+)+$/.test(repository) || repository.split('/').some(part => part === '.' || part === '..')
+    || typeof value.number !== 'number' || !Number.isSafeInteger(value.number) || value.number < 1) {
+    throw new Error('A specific item requires a project path and a positive number');
+  }
+  return { ...base, repository, number: value.number };
 }
 
 /** 发给服务器的格式。来自更新版本、本机认不出的预设返回 null，这时不改服务器上的格式。 */

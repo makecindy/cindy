@@ -38,14 +38,19 @@ export { EFFORT_VALUES, isEffortValue } from '../lib/scheduleFormLogic';
 export type { EffortValue, ScheduleFormState, RunMode } from '../lib/scheduleFormLogic';
 export { deriveRunMode, hasRealBinding, PENDING_SESSION_ID } from '../lib/scheduleFormLogic';
 
-import { normalizePrTrigger, schedulePrTriggers } from '@cindy/maker-scheduler/pr-trigger';
+import { isGithubPrTriggerUrl, normalizePrTrigger, schedulePrTriggers } from '@cindy/maker-scheduler/pr-trigger';
+import { parseGitlabItemReference } from '@cindy/maker-scheduler/github-item';
 
 function prFields(schedule: Schedule): Partial<ScheduleFormState> {
   if (schedule.webhookTrigger && schedule.prTrigger === undefined) return {};
   const rules = schedulePrTriggers(schedule);
   if (rules.length !== 1) return schedule.prTrigger === null ? { prEnabled: false } : {};
-  return { prEnabled: true, prUrl: rules[0]!.url, prChange: rules[0]!.change, githubItem: rules[0]!.url,
-    githubItemRepository: rules[0]!.url.split('/').slice(3, 5).join('/') };
+  const url = rules[0]!.url;
+  const gitlab = isGithubPrTriggerUrl(url) ? null : parseGitlabItemReference(url);
+  return { prEnabled: true, prUrl: url, prChange: rules[0]!.change,
+    ...(gitlab
+      ? { gitlabItem: url, gitlabItemHost: gitlab.host, gitlabItemProject: gitlab.project }
+      : { githubItem: url, githubItemRepository: url.split('/').slice(3, 5).join('/') }) };
 }
 
 const DEFAULT_FORM: ScheduleFormState = {
@@ -566,6 +571,9 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
     }
     if (form.webhookEnabled && form.webhookPreset === 'github-item') {
       return { key: 'scheduler.editor.webhook.item.required' };
+    }
+    if (form.webhookEnabled && form.webhookPreset === 'gitlab-item') {
+      return { key: 'scheduler.editor.webhook.gitlabItem.required' };
     }
     if (form.webhookEnabled && form.webhookPreset === 'plugin' && !form.webhookPluginSources?.length) {
       return { key: 'scheduler.editor.webhook.plugin.required' };

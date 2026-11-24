@@ -18,6 +18,19 @@ import type { GhostEventSourceCandidate } from '../../../../shared/ghost';
 
 const hintClass = 'text-12 leading-relaxed text-[var(--text-secondary)]';
 
+/** GitHub / GitLab are one sender each; scope and connection are chosen below the sender. */
+type Family = 'github' | 'gitlab';
+const FAMILY_PRESETS: Record<Family, { item: string; connections: readonly [string, string] }> = {
+  github: { item: 'github-item', connections: ['github-app', 'github'] },
+  gitlab: { item: 'gitlab-item', connections: ['gitlab', 'gitlab-token'] },
+};
+const familyOf = (preset: string): Family | null =>
+  (Object.keys(FAMILY_PRESETS) as Family[]).find((family) =>
+    FAMILY_PRESETS[family].item === preset || FAMILY_PRESETS[family].connections.includes(preset)) ?? null;
+const CONNECTION_LABELS: Record<string, string> = {
+  'github-app': 'cindy', github: 'manual', gitlab: 'gitlabSigned', 'gitlab-token': 'gitlabToken',
+};
+
 interface WebhookSourceFieldsProps {
   preset: string;
   signed: boolean;
@@ -27,17 +40,24 @@ interface WebhookSourceFieldsProps {
   onRepositoriesChange?(value: string): void;
   onEventsChange(value: string): void;
   footerAction?: ReactNode;
+  /** Sender or scope change; github-item / gitlab-item select the specific-item scope. */
   onPresetChange(value: string): void;
+  /** Connection change inside a family (keeps the scope and any specific item). Defaults to onPresetChange. */
+  onConnectionChange?(value: string): void;
   onSignedChange(value: boolean): void;
   onFormatChange(value: string): void;
   /** 插件事件来源（preset=plugin）。 */
   pluginSources?: readonly SchedulePluginEventSource[];
   pluginCandidates?: readonly GhostEventSourceCandidate[] | null;
   onPluginSourcesChange?(value: SchedulePluginEventSource[]): void;
-  /** 这台电脑能接收 Webhook 地址（已登录且有接收服务）；否则只能选插件事件或指定 PR。 */
+  /** 这台电脑能接收 Webhook 地址（已登录且有接收服务）；否则只能选插件事件或指定 PR / MR。 */
   addressSourcesAvailable?: boolean;
-  /** GitHub「指定 PR 或 Issue」范围（preset=github-item）时显示的输入框与条件。 */
+  /** GitHub / GitLab 当前是「指定 PR / MR / Issue」范围。 */
+  itemScope?: boolean;
+  /** 指定范围下显示的输入框与条件。 */
   itemFields?: ReactNode;
+  /** 指定的是需要接收地址的对象（GitLab Issue），在指定范围下也要选接法。 */
+  itemNeedsConnection?: boolean;
 }
 
 /** 发送方、是否验证签名，以及自定义格式。密钥和接收地址在任务详情里管理。 */
@@ -51,40 +71,53 @@ export function WebhookSourceFields({
   onEventsChange,
   footerAction,
   onPresetChange,
+  onConnectionChange = onPresetChange,
   onSignedChange,
   onFormatChange,
   pluginSources = [],
   pluginCandidates = null,
   onPluginSourcesChange,
   addressSourcesAvailable = true,
+  itemScope = false,
   itemFields,
+  itemNeedsConnection = false,
 }: WebhookSourceFieldsProps) {
   const { t } = useTranslation();
   const [advancedOpen, setAdvancedOpen] = useState(!signed);
   const connectionId = useId();
-  const appSource = preset === 'github-app';
-  const pluginSource = preset === 'plugin';
-  const itemSource = preset === 'github-item';
-  // GitHub is one sender; its scope is the whole repository (App or manual Webhook) or one PR / Issue.
-  const repositorySource = appSource || preset === 'github';
-  const githubSource = repositorySource || itemSource;
-  // Remembers the repository connection so switching scope back keeps the user's choice.
-  const [lastRepositoryPreset, setLastRepositoryPreset] = useState<'github-app' | 'github'>(preset === 'github' ? 'github' : 'github-app');
   const scopeId = useId();
-  const known = githubSource || pluginSource || preset === 'custom' || SCHEDULE_WEBHOOK_PRESETS.some((item) => item.id === preset);
+  const family = familyOf(preset);
+  const pluginSource = preset === 'plugin';
+  const repositoryScope = !!family && !itemScope;
+  // Address-based settings (events, signing) apply to a whole repository/project or a GitLab issue.
+  const connectionVisible = !!family && (repositoryScope || itemNeedsConnection);
+  const addressPreset = family && FAMILY_PRESETS[family].connections.includes(preset) ? preset : null;
+  const appSource = repositoryScope && preset === 'github-app';
+  // Remembers each family's repository connection so switching scope back keeps the user's choice.
+  const [lastConnection, setLastConnection] = useState<Record<Family, string>>({
+    github: preset === 'github' ? 'github' : 'github-app',
+    gitlab: preset === 'gitlab-token' ? 'gitlab-token' : 'gitlab',
+  });
+  const known = !!family || pluginSource || preset === 'custom' || SCHEDULE_WEBHOOK_PRESETS.some((item) => item.id === preset);
   const pluginOption = pluginSource || (pluginCandidates?.length ?? 0) > 0
     ? [{ value: 'plugin', label: t('scheduler.editor.webhook.plugin.source') }] : [];
-  const githubOption = { value: 'github', label: SCHEDULE_WEBHOOK_PRESETS.find((item) => item.id === 'github')?.label ?? 'GitHub' };
+  const familyOption = (value: Family) => ({ value, label: value === 'github' ? 'GitHub' : 'GitLab' });
   const options = addressSourcesAvailable ? [
-    ...SCHEDULE_WEBHOOK_PRESETS.map((item) => ({ value: item.id, label: item.label })),
+    ...SCHEDULE_WEBHOOK_PRESETS.filter((item) => item.id !== 'gitlab-token')
+      .map((item) => (item.id === 'github' || item.id === 'gitlab' ? familyOption(item.id) : { value: item.id, label: item.label })),
     { value: 'custom', label: t('scheduler.editor.webhook.sourceCustom') },
     ...pluginOption,
     // 更新的版本写入的发送方：照原样显示，不改就不会被覆盖。
     ...(known ? [] : [{ value: preset, label: preset }]),
-  ] : [...pluginOption, githubOption];
-  const chooseRepositoryPreset = (value: 'github-app' | 'github') => {
-    setLastRepositoryPreset(value);
-    onPresetChange(value);
+  ] : [...pluginOption, familyOption('github'), familyOption('gitlab')];
+  const chooseConnection = (value: string) => {
+    if (family) setLastConnection((current) => ({ ...current, [family]: value }));
+    onConnectionChange(value);
+  };
+  const chooseFamily = (value: Family) => {
+    if (family === value) return;
+    // A single PR / MR needs no account; whole-repository events need a receiver on this computer.
+    onPresetChange(addressSourcesAvailable ? lastConnection[value] : FAMILY_PRESETS[value].item);
   };
   const formatInvalid =
     preset === 'custom' && formatText.trim() !== '' && !parseWebhookFormatText(formatText);
@@ -98,28 +131,27 @@ export function WebhookSourceFields({
               {...control}
               label={t('scheduler.editor.webhook.sourceLabel')}
               className="w-full"
-              value={githubSource ? 'github' : preset}
+              value={family ?? preset}
               options={options}
-              // A single PR needs no account; repository scope needs a receiver on this computer.
-              onValueChange={(value) => onPresetChange(value === 'github'
-                ? (githubSource ? preset : addressSourcesAvailable ? lastRepositoryPreset : 'github-item') : value)}
+              onValueChange={(value) => (value === 'github' || value === 'gitlab' ? chooseFamily(value) : onPresetChange(value))}
             />
           )}
         </FormField>
       </div>
-      {githubSource && (
+      {family && (
         <fieldset className="flex min-w-0 flex-col gap-3">
           <legend className="mb-2 text-13 font-medium text-[var(--text-primary)]">{t('scheduler.editor.webhook.scopeLabel')}</legend>
           {(['repository', 'item'] as const).map((scope) => {
-            const checked = scope === 'item' ? itemSource : repositorySource;
-            const disabled = scope === 'repository' && !addressSourcesAvailable && !repositorySource;
-            const label = t(`scheduler.editor.webhook.scope.${scope}`);
-            const hint = disabled ? t('scheduler.editor.webhook.scope.repositoryNeedsAccount') : t(`scheduler.editor.webhook.scope.${scope}Hint`);
+            const checked = scope === 'item' ? itemScope : repositoryScope;
+            const disabled = scope === 'repository' && !addressSourcesAvailable && !repositoryScope;
+            const key = family === 'gitlab' ? (scope === 'item' ? 'gitlabItem' : 'project') : scope;
+            const label = t(`scheduler.editor.webhook.scope.${key}`);
+            const hint = disabled ? t('scheduler.editor.webhook.scope.repositoryNeedsAccount') : t(`scheduler.editor.webhook.scope.${key}Hint`);
             return <label key={scope} className={cn('flex min-w-0 items-start gap-2 py-1 text-13 text-[var(--text-primary)]',
               disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer')}>
               <input type="radio" name={scopeId} checked={checked} disabled={disabled} aria-label={label}
                 aria-describedby={`${scopeId}-${scope}`} className="mt-1 shrink-0 accent-[var(--text-primary)]"
-                onChange={() => (scope === 'item' ? onPresetChange('github-item') : onPresetChange(lastRepositoryPreset))} />
+                onChange={() => onPresetChange(scope === 'item' ? FAMILY_PRESETS[family].item : lastConnection[family])} />
               <span className="min-w-0">
                 <span>{label}</span>
                 <span id={`${scopeId}-${scope}`} className={`mt-1 block ${hintClass}`}>{hint}</span>
@@ -128,16 +160,16 @@ export function WebhookSourceFields({
           })}
         </fieldset>
       )}
-      {itemSource && itemFields}
-      {repositorySource && (
+      {itemScope && itemFields}
+      {connectionVisible && (
         <fieldset className="flex min-w-0 flex-col gap-3">
           <legend className="mb-2 text-13 font-medium text-[var(--text-primary)]">{t('scheduler.editor.webhook.connectionLabel')}</legend>
-          {(['github-app', 'github'] as const).map((value) => {
-            const mode = value === 'github-app' ? 'cindy' : 'manual';
+          {FAMILY_PRESETS[family!].connections.map((value) => {
+            const mode = CONNECTION_LABELS[value];
             return <label key={value} className="flex min-w-0 cursor-pointer items-start gap-2 py-1 text-13 text-[var(--text-primary)]">
-              <input type="radio" name={connectionId} checked={preset === value}
+              <input type="radio" name={connectionId} checked={addressPreset === value}
                 aria-label={t(`scheduler.editor.webhook.${mode}Connection`)} aria-describedby={`${connectionId}-${mode}`} className="mt-1 shrink-0 accent-[var(--text-primary)]"
-                onChange={() => chooseRepositoryPreset(value)} />
+                onChange={() => chooseConnection(value)} />
               <span className="min-w-0">
                 <span>{t(`scheduler.editor.webhook.${mode}Connection`)}</span>
                 <span id={`${connectionId}-${mode}`} className={`mt-1 block ${hintClass}`}>{t(`scheduler.editor.webhook.${mode}ConnectionHint`)}</span>
@@ -166,8 +198,9 @@ export function WebhookSourceFields({
           {footerAction}
         </>
       )}
-      {!pluginSource && !itemSource && <WebhookEventSelect key={preset} preset={preset} value={events} onChange={onEventsChange} />}
-      {preset === 'github' && <p className={hintClass}>{t('scheduler.editor.webhook.manualSetupHint')}</p>}
+      {!pluginSource && !itemScope && <WebhookEventSelect key={preset} preset={preset} value={events} onChange={onEventsChange} />}
+      {repositoryScope && preset === 'github' && <p className={hintClass}>{t('scheduler.editor.webhook.manualSetupHint')}</p>}
+      {connectionVisible && family === 'gitlab' && <p className={hintClass}>{t('scheduler.editor.webhook.gitlabSetupHint')}</p>}
       {preset === 'custom' ? (
         <FormField
           label={t('scheduler.editor.webhook.customLabel')}
@@ -186,12 +219,12 @@ export function WebhookSourceFields({
           )}
         </FormField>
       ) : null}
-      {!appSource && !pluginSource && !itemSource && preset !== 'custom' && !signed && (
+      {!appSource && !pluginSource && (!itemScope || itemNeedsConnection) && preset !== 'custom' && !signed && (
         <p className="text-12 leading-relaxed text-[var(--text-primary)]">
           {t('scheduler.editor.webhook.unsignedWarning')}
         </p>
       )}
-      {!appSource && !pluginSource && !itemSource && <div>
+      {!appSource && !pluginSource && (!itemScope || itemNeedsConnection) && <div>
         <div className="flex flex-wrap items-center gap-2">
           <Button
             variant="secondary"

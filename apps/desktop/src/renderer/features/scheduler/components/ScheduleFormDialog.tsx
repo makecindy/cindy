@@ -43,7 +43,9 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { ScriptCapabilityMultiSelect } from './ScriptCapabilityMultiSelect';
 import { WebhookSourceFields } from './WebhookSourceFields';
 import { GithubItemFields } from './GithubItemFields';
-import { githubItemUrl } from '@cindy/maker-scheduler/github-item';
+import { GitlabItemFields } from './GitlabItemFields';
+import { githubItemUrl, gitlabItemUrl } from '@cindy/maker-scheduler/github-item';
+import { isGithubPrTriggerUrl } from '@cindy/maker-scheduler/pr-trigger';
 import { usePluginEventSources } from './PluginEventSourceFields';
 import { WebhookAccountManager } from './WebhookAccountManager';
 
@@ -341,16 +343,29 @@ export function ScheduleFormDialog({
   // A single PR is one of the event sources (2026-11-24); its storage stays the separate prTrigger field.
   const triggerMode = form.prEnabled || form.webhookEnabled ? 'webhook' : form.manual ? 'manually' : 'automatic';
   const eventMode = triggerMode === 'webhook';
-  // GitHub「指定 PR 或 Issue」：PR 存为 prTrigger，Issue 存为带编号的 GitHub App 来源，github-item 表示尚未识别。
-  const githubItemScope = !!form.prEnabled || form.webhookPreset === 'github-item'
+  // 指定对象：GitHub PR / Issue 与 GitLab MR / Issue。PR、MR 存为 prTrigger（按链接区分平台）；GitHub Issue
+  // 存为带编号的 GitHub App 来源，GitLab Issue 存为带项目与编号的 GitLab 地址；*-item 表示尚未识别。
+  const prIsGitlab = !!form.prEnabled && !!form.prUrl && !isGithubPrTriggerUrl(form.prUrl);
+  const githubItemScope = (!!form.prEnabled && !prIsGitlab) || form.webhookPreset === 'github-item'
     || (form.webhookPreset === 'github-app' && form.githubItemNumber !== undefined);
+  const gitlabItemScope = prIsGitlab || form.webhookPreset === 'gitlab-item'
+    || ((form.webhookPreset === 'gitlab' || form.webhookPreset === 'gitlab-token') && form.gitlabItemNumber !== undefined);
+  const itemScope = githubItemScope || gitlabItemScope;
   const githubItemDefaultRepository = form.githubItemRepository
     || (() => { const repositories = parseGithubRepositories(form.webhookRepositories); return repositories.length === 1 ? repositories[0] : undefined; })();
-  const enterGithubItemPending = () => {
+  const leaveItemScope = () => {
     if (form.prEnabled) setField('prEnabled', false);
     setField('webhookEnabled', true);
-    setField('webhookPreset', 'github-item');
     setField('githubItemNumber', undefined);
+    setField('gitlabItemNumber', undefined);
+  };
+  const enterGithubItemPending = () => {
+    leaveItemScope();
+    setField('webhookPreset', 'github-item');
+  };
+  const enterGitlabItemPending = () => {
+    leaveItemScope();
+    setField('webhookPreset', 'gitlab-item');
   };
   // Address-based senders still need an account; a saved one stays hidden (and preserved) while signed out.
   const webhookSettingsVisible = !isProjectAutomationMode && form.webhookEnabled
@@ -1327,11 +1342,24 @@ export function ScheduleFormDialog({
                         )}
                       </div>
                       {/* 项目配置不保存接收地址；未登录时保留已配置的触发方式。 */}
-                      {webhookSettingsVisible && !githubItemScope && webhookReceiverReady && form.webhookPreset !== 'github-app' && form.webhookPreset !== 'plugin'
+                      {webhookSettingsVisible && webhookReceiverReady && form.webhookPreset !== 'github-app' && form.webhookPreset !== 'plugin'
+                        && (!itemScope || (gitlabItemScope && form.gitlabItemNumber !== undefined))
                         && <WebhookAccountManager allowOpenSchedule={false} />}
-                      {eventMode && (webhookSettingsVisible || githubItemScope) && (
+                      {eventMode && (webhookSettingsVisible || itemScope) && (
                           <WebhookSourceFields
-                            preset={githubItemScope ? 'github-item' : form.webhookPreset ?? DEFAULT_SCHEDULE_WEBHOOK_PRESET}
+                            preset={githubItemScope ? (form.githubItemNumber !== undefined ? 'github-app' : 'github-item')
+                              : gitlabItemScope ? (form.gitlabItemNumber !== undefined ? form.webhookPreset ?? 'gitlab' : 'gitlab-item')
+                              : form.webhookPreset ?? DEFAULT_SCHEDULE_WEBHOOK_PRESET}
+                            itemScope={itemScope}
+                            itemNeedsConnection={gitlabItemScope && form.gitlabItemNumber !== undefined}
+                            onConnectionChange={(value) => {
+                              // A GitLab issue keeps its project and number while switching the signing method.
+                              if (gitlabItemScope && form.gitlabItemNumber !== undefined) setField('webhookPreset', value);
+                              else {
+                                leaveItemScope();
+                                setField('webhookPreset', value);
+                              }
+                            }}
                             signed={form.webhookSigned !== false}
                             formatText={form.webhookFormat ?? ''}
                             events={form.webhookEvents ?? ''}
@@ -1339,14 +1367,16 @@ export function ScheduleFormDialog({
                             onRepositoriesChange={(value) => setField('webhookRepositories', value)}
                             onEventsChange={(value) => setField('webhookEvents', value)}
                             onPresetChange={(value) => {
-                              // A specific PR / Issue is resolved by GithubItemFields; every other sender is a webhookTrigger.
+                              // A specific item is resolved by its item fields; every other sender is a webhookTrigger.
                               if (value === 'github-item') {
                                 if (!githubItemScope) enterGithubItemPending();
                                 return;
                               }
-                              if (form.prEnabled) setField('prEnabled', false);
-                              setField('webhookEnabled', true);
-                              setField('githubItemNumber', undefined);
+                              if (value === 'gitlab-item') {
+                                if (!gitlabItemScope) enterGitlabItemPending();
+                                return;
+                              }
+                              leaveItemScope();
                               // 切到自定义时，用当前预设的格式作为起点，避免从空白开始写。
                               if (value === 'custom' && !form.webhookFormat?.trim()) {
                                 const current = form.webhookPreset ?? DEFAULT_SCHEDULE_WEBHOOK_PRESET;
@@ -1365,7 +1395,44 @@ export function ScheduleFormDialog({
                             pluginCandidates={pluginEventCandidates}
                             onPluginSourcesChange={(value) => setField('webhookPluginSources', value)}
                             addressSourcesAvailable={webhookReceiverReady}
-                            itemFields={
+                            itemFields={gitlabItemScope ? (
+                              <GitlabItemFields
+                                text={form.gitlabItem ?? ''}
+                                known={form.gitlabItemProject ? { host: form.gitlabItemHost, project: form.gitlabItemProject } : undefined}
+                                prChange={form.prChange ?? 'any'}
+                                issueChange={form.gitlabIssueChange}
+                                addressAvailable={webhookReceiverReady}
+                                applied={prIsGitlab || form.gitlabItemNumber !== undefined}
+                                onTextChange={(value) => setField('gitlabItem', value)}
+                                onResolved={(item) => {
+                                  setField('gitlabItemProject', item.project);
+                                  if (item.host) setField('gitlabItemHost', item.host);
+                                  if (item.kind === 'mr' && item.host) {
+                                    setField('prEnabled', true);
+                                    setField('webhookEnabled', false);
+                                    setField('prUrl', gitlabItemUrl({ ...item, host: item.host }));
+                                    setField('gitlabItemNumber', undefined);
+                                    setField('webhookPreset', 'gitlab-item');
+                                    // GitLab has no push: state changes are found by the timed check, so turn it on.
+                                    if (form.manual) {
+                                      setField('manual', false);
+                                      setField('recurring', true);
+                                      setField('cronExpr', '*/10 * * * *');
+                                      setField('intervalMs', undefined);
+                                    }
+                                    return;
+                                  }
+                                  if (form.prEnabled) setField('prEnabled', false);
+                                  setField('webhookEnabled', true);
+                                  setField('webhookPreset', form.webhookPreset === 'gitlab-token' ? 'gitlab-token' : 'gitlab');
+                                  setField('gitlabItemNumber', item.number);
+                                  if (!form.gitlabIssueChange) setField('gitlabIssueChange', 'any');
+                                }}
+                                onUnresolved={enterGitlabItemPending}
+                                onPrChange={(value) => setField('prChange', value)}
+                                onIssueChange={(value) => setField('gitlabIssueChange', value)}
+                              />
+                            ) : (
                               <GithubItemFields
                                 text={form.githubItem ?? ''}
                                 defaultRepository={githubItemDefaultRepository}
@@ -1395,7 +1462,7 @@ export function ScheduleFormDialog({
                                 onPrChange={(value) => setField('prChange', value)}
                                 onIssueChange={(value) => setField('issueChange', value)}
                               />
-                            }
+                            )}
                           />
                       )}
                       {/* 2026-11-24：所有事件来源都可以同时定时检查，用来兜底离线或漏掉的事件。 */}

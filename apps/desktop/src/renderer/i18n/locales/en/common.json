@@ -17999,13 +17999,23 @@
           "hint": "Plugins don't filter any events for you, including messages this automation sends itself. Say what to handle in the prompt or a pre-run check. Events are missed while the computer is asleep or off, or while the plugin is disabled.",
           "offlineHint": "Events are missed while the computer is asleep or off, or while the plugin is disabled. If none may be missed, also add a scheduled check.",
           "required": "Choose at least one plugin event",
-          "filters": "Field conditions: {{count}}",
           "state": {
             "listening": "Listening",
             "disconnected": "Disconnected",
             "error": "Connection error",
             "stopped": "Not running",
             "unknown": "Waiting for the plugin to report"
+          },
+          "filterOnly": "Only",
+          "filterField": "Field",
+          "filterOperator": "Condition",
+          "filterValue": "Value",
+          "filterRemove": "Remove condition",
+          "filterAdd": "Add “only” condition",
+          "operators": {
+            "equals": "equals",
+            "contains": "contains",
+            "not-equals": "does not equal"
           }
         },
         "scopeLabel": "Scope",
@@ -18014,7 +18024,11 @@
           "repositoryHint": "Runs on new repository events, such as new pull requests, comments or finished CI.",
           "repositoryNeedsAccount": "Sign in to a Cindy account to receive repository events.",
           "item": "Specific pull request or issue",
-          "itemHint": "Watches one pull request or issue: a pull request runs when its state actually changes, an issue runs on new activity."
+          "itemHint": "Watches one pull request or issue: a pull request runs when its state actually changes, an issue runs on new activity.",
+          "project": "Whole project",
+          "projectHint": "Runs on new project events, such as new merge requests, issues or finished pipelines.",
+          "gitlabItem": "Specific merge request or issue",
+          "gitlabItemHint": "Watches one merge request or issue: a merge request runs when its state actually changes, an issue when it changes."
         },
         "item": {
           "label": "Pull request or issue",
@@ -18037,6 +18051,37 @@
           "issueChange": {
             "any": "Issue activity",
             "comment": "New comment",
+            "closed": "Issue closed",
+            "reopened": "Issue reopened"
+          },
+          "mr": "Merge request !{{number}}"
+        },
+        "gitlabSignedConnection": "Signing token (GitLab 19+)",
+        "gitlabSignedConnectionHint": "Use a signing token in the GitLab project webhook settings for stronger security.",
+        "gitlabTokenConnection": "Secret token",
+        "gitlabTokenConnectionHint": "For older GitLab versions: enter a secret token in the webhook settings.",
+        "gitlabSetupHint": "After saving, copy the receiver URL and secret from the task details into the GitLab project under Settings › Webhooks.",
+        "gitlabItem": {
+          "label": "Merge request or issue",
+          "placeholder": "!12, #12, group/project!12 or a link",
+          "hint": "Write !number for a merge request, #number for an issue, or paste a link.",
+          "required": "Enter the merge request or issue to watch.",
+          "mrHint": "GitLab has no push notifications. Cindy reads the merge request state on the “Also check on a schedule” timing (without running the task); glab must be signed in on this computer.",
+          "issueHint": "Changes to this issue arrive through a GitLab webhook. Comment events cannot tell merge requests and issues apart, so only the issue itself being opened, edited, closed or reopened counts.",
+          "errors": {
+            "invalid": "Enter !number, #number, group/project!number, or a GitLab merge request or issue link.",
+            "ambiguous": "GitLab numbers merge requests and issues separately. Write !12 (merge request) or #12 (issue), or paste a link.",
+            "needs-link": "A specific merge request needs its GitLab instance. Paste the merge request link.",
+            "needs-account": "This is an issue. A specific GitLab issue requires a Cindy account to receive GitLab webhooks."
+          },
+          "mrChange": {
+            "any": "Merge request activity",
+            "merged": "Merged",
+            "review": "Review activity",
+            "ci": "Pipeline status changes"
+          },
+          "issueChange": {
+            "any": "Issue changes",
             "closed": "Issue closed",
             "reopened": "Issue reopened"
           }

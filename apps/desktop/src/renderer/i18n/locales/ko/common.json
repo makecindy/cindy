@@ -17925,13 +17925,23 @@
           "hint": "플러그인은 이벤트를 대신 걸러 주지 않습니다. 이 자동화가 직접 보낸 메시지도 포함됩니다. 처리할지 여부는 프롬프트나 사전 검사에서 정하세요. 컴퓨터가 잠자기 중이거나 꺼져 있거나 플러그인이 꺼져 있는 동안의 이벤트는 받을 수 없습니다.",
           "offlineHint": "컴퓨터가 잠자기 중이거나 꺼져 있거나 플러그인이 꺼져 있는 동안의 이벤트는 받을 수 없습니다. 놓치면 안 되는 경우 예약 검사도 추가하세요.",
           "required": "플러그인 이벤트를 하나 이상 선택하세요",
-          "filters": "필드 조건: {{count}}개",
           "state": {
             "listening": "수신 대기 중",
             "disconnected": "연결 끊김",
             "error": "연결 오류",
             "stopped": "실행 중 아님",
             "unknown": "플러그인 상태 보고를 기다리는 중"
+          },
+          "filterOnly": "다음만",
+          "filterField": "필드",
+          "filterOperator": "조건",
+          "filterValue": "값",
+          "filterRemove": "조건 삭제",
+          "filterAdd": "\"다음만\" 조건 추가",
+          "operators": {
+            "equals": "같음",
+            "contains": "포함",
+            "not-equals": "같지 않음"
           }
         },
         "scopeLabel": "범위",
@@ -17940,7 +17950,11 @@
           "repositoryHint": "새 PR, 댓글, CI 완료 등 저장소에 새 이벤트가 생기면 실행합니다.",
           "repositoryNeedsAccount": "저장소 이벤트를 받으려면 Cindy 계정에 로그인해야 합니다.",
           "item": "특정 PR 또는 Issue",
-          "itemHint": "PR 또는 Issue 하나만 지켜봅니다. PR은 상태가 실제로 바뀔 때, Issue는 새 활동이 있을 때 실행합니다."
+          "itemHint": "PR 또는 Issue 하나만 지켜봅니다. PR은 상태가 실제로 바뀔 때, Issue는 새 활동이 있을 때 실행합니다.",
+          "project": "프로젝트 전체",
+          "projectHint": "새 MR, Issue, 파이프라인 완료 등 프로젝트에 새 이벤트가 생기면 실행합니다.",
+          "gitlabItem": "특정 MR 또는 Issue",
+          "gitlabItemHint": "MR 또는 Issue 하나만 지켜봅니다. MR은 상태가 실제로 바뀔 때, Issue는 변경이 있을 때 실행합니다."
         },
         "item": {
           "label": "PR 또는 Issue",
@@ -17963,6 +17977,37 @@
           "issueChange": {
             "any": "Issue 새 활동",
             "comment": "새 댓글",
+            "closed": "Issue 닫힘",
+            "reopened": "Issue 다시 열림"
+          },
+          "mr": "MR !{{number}}"
+        },
+        "gitlabSignedConnection": "서명 토큰 (GitLab 19 이상)",
+        "gitlabSignedConnectionHint": "GitLab 프로젝트의 Webhook 설정에서 서명 토큰을 사용하면 더 안전합니다.",
+        "gitlabTokenConnection": "Secret token",
+        "gitlabTokenConnectionHint": "이전 버전의 GitLab: Webhook 설정에 Secret token을 입력하세요.",
+        "gitlabSetupHint": "저장한 뒤 작업 상세에서 수신 주소와 비밀 키를 복사해 GitLab 프로젝트의 설정 › Webhooks에 입력하세요.",
+        "gitlabItem": {
+          "label": "MR 또는 Issue",
+          "placeholder": "!12, #12, group/project!12 또는 링크",
+          "hint": "MR은 !번호, Issue는 #번호로 쓰거나 링크를 붙여 넣으세요.",
+          "required": "지켜볼 MR 또는 Issue를 입력하세요.",
+          "mrHint": "GitLab에는 푸시 알림이 없어 Cindy가 \"예약 검사도 함께\" 간격으로 MR 상태를 읽습니다(작업은 실행하지 않음). 이 컴퓨터에서 glab에 로그인되어 있어야 합니다.",
+          "issueHint": "이 Issue의 변경은 GitLab Webhook으로 받습니다. 댓글 이벤트는 MR과 Issue를 구분할 수 없어 Issue 자체의 생성, 수정, 닫기, 다시 열기에만 반응합니다.",
+          "errors": {
+            "invalid": "!번호, #번호, group/project!번호 또는 GitLab 링크를 입력하세요.",
+            "ambiguous": "GitLab은 MR과 Issue 번호가 따로입니다. !12(MR) 또는 #12(Issue)로 쓰거나 링크를 붙여 넣으세요.",
+            "needs-link": "특정 MR에는 GitLab 인스턴스가 필요합니다. MR 링크를 붙여 넣으세요.",
+            "needs-account": "Issue입니다. 특정 GitLab Issue는 GitLab Webhook을 받기 위해 Cindy 계정이 필요합니다."
+          },
+          "mrChange": {
+            "any": "MR 새 활동",
+            "merged": "병합됨",
+            "review": "리뷰 새 활동",
+            "ci": "파이프라인 상태 변경"
+          },
+          "issueChange": {
+            "any": "Issue 변경",
             "closed": "Issue 닫힘",
             "reopened": "Issue 다시 열림"
           }

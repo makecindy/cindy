@@ -17925,13 +17925,23 @@
           "hint": "插件不会替你过滤任何事件，包括这个自动化自己发出的消息；要不要处理，请在提示词或前置检查里说明。电脑休眠、关机或插件停用期间的事件收不到。",
           "offlineHint": "电脑休眠、关机或插件停用期间的事件收不到；不能漏掉事件时，请再加一个定时检查。",
           "required": "请至少选择一个插件事件",
-          "filters": "另有 {{count}} 个字段条件",
           "state": {
             "listening": "正在监听",
             "disconnected": "已断开",
             "error": "连接出错",
             "stopped": "未运行",
             "unknown": "等待插件报告状态"
+          },
+          "filterOnly": "只看",
+          "filterField": "字段",
+          "filterOperator": "条件",
+          "filterValue": "值",
+          "filterRemove": "删除条件",
+          "filterAdd": "添加「只看」条件",
+          "operators": {
+            "equals": "等于",
+            "contains": "包含",
+            "not-equals": "不等于"
           }
         },
         "scopeLabel": "范围",
@@ -17940,7 +17950,11 @@
           "repositoryHint": "仓库里有新事件时运行，例如新 PR、评论、CI 完成。",
           "repositoryNeedsAccount": "需要登录 Cindy 账号才能接收仓库事件。",
           "item": "指定 PR 或 Issue",
-          "itemHint": "只盯一条 PR 或 Issue：PR 在状态确实变化时运行，Issue 在有新动态时运行。"
+          "itemHint": "只盯一条 PR 或 Issue：PR 在状态确实变化时运行，Issue 在有新动态时运行。",
+          "project": "整个项目",
+          "projectHint": "项目里有新事件时运行，例如新 MR、Issue、流水线完成。",
+          "gitlabItem": "指定 MR 或 Issue",
+          "gitlabItemHint": "只盯一个 MR 或 Issue：MR 在状态确实变化时运行，Issue 在有变化时运行。"
         },
         "item": {
           "label": "PR 或 Issue",
@@ -17963,6 +17977,37 @@
           "issueChange": {
             "any": "Issue 有新动态",
             "comment": "有新评论",
+            "closed": "Issue 已关闭",
+            "reopened": "Issue 重新打开"
+          },
+          "mr": "MR !{{number}}"
+        },
+        "gitlabSignedConnection": "签名令牌（GitLab 19 及以上）",
+        "gitlabSignedConnectionHint": "在 GitLab 项目的 Webhook 设置里使用签名令牌，安全性更高。",
+        "gitlabTokenConnection": "Secret token",
+        "gitlabTokenConnectionHint": "适用于较早版本的 GitLab：在 Webhook 设置里填写 Secret token。",
+        "gitlabSetupHint": "保存后在任务详情里拿到接收地址和密钥，填到 GitLab 项目的「设置 › Webhooks」。",
+        "gitlabItem": {
+          "label": "MR 或 Issue",
+          "placeholder": "!12、#12、group/project!12 或链接",
+          "hint": "MR 写 !编号，Issue 写 #编号，也可以直接粘贴链接。",
+          "required": "请填写要盯的 MR 或 Issue。",
+          "mrHint": "GitLab 没有推送通知，Cindy 会按「同时定时检查」的时间读取 MR 状态（不运行任务），需要这台电脑的 glab 已登录。",
+          "issueHint": "通过 GitLab Webhook 接收这个 Issue 的变化。评论事件无法区分 MR 和 Issue，所以只响应 Issue 本身的新建、编辑、关闭和重新打开。",
+          "errors": {
+            "invalid": "请按 !12（MR）、#12（Issue）或 group/project!12 的格式填写，也可以粘贴 GitLab 上的链接。",
+            "ambiguous": "GitLab 的 MR 和 Issue 编号是分开的，请写 !12（MR）或 #12（Issue），或粘贴链接。",
+            "needs-link": "指定 MR 需要知道 GitLab 实例，请粘贴 MR 链接。",
+            "needs-account": "这是一个 Issue。指定 GitLab Issue 需要登录 Cindy 账号，以便接收 GitLab Webhook。"
+          },
+          "mrChange": {
+            "any": "MR 有新动态",
+            "merged": "MR 已合并",
+            "review": "评审有新动态",
+            "ci": "流水线状态变化"
+          },
+          "issueChange": {
+            "any": "Issue 有变化",
             "closed": "Issue 已关闭",
             "reopened": "Issue 重新打开"
           }

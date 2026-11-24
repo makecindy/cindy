@@ -299,6 +299,15 @@ it('offers plugin events while signed out and saves the chosen plugin', async ()
   await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
     manual: true, webhookTrigger: { events: [], source: { preset: 'plugin', sources: [{ plugin: 'public/chat', events: ['mention'] }] } },
   }), true));
+  // Narrow to one chat; an empty condition row is not saved.
+  fireEvent.click(screen.getByRole('button', { name: 'scheduler.editor.webhook.plugin.filterAdd' }));
+  fireEvent.click(screen.getByRole('button', { name: 'scheduler.editor.webhook.plugin.filterAdd' }));
+  fireEvent.change(screen.getAllByRole('textbox', { name: 'scheduler.editor.webhook.plugin.filterValue' })[0]!, { target: { value: 'c1' } });
+  form.save();
+  await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({
+    webhookTrigger: { events: [], source: { preset: 'plugin', sources: [{ plugin: 'public/chat', events: ['mention'],
+      filters: [{ field: 'chatId', operator: 'equals', value: 'c1' }] }] } },
+  }), true));
 });
 
 // 2026-11-24 product decision (supersedes 2026-11-04), unit/jsdom: every event source may add a
@@ -377,6 +386,40 @@ it('identifies an Issue from owner/repo#number and saves it as a numbered GitHub
     webhookTrigger: { events: ['issues', 'issue_comment'], source: { preset: 'github-app', repositories: ['example/project'], number: 7 } },
   }), true));
   expect((form.onSubmit.mock.lastCall?.[0] as { prTrigger?: unknown } | undefined)?.prTrigger ?? null).toBeNull();
+});
+
+// 2026-11-24: GitLab is one sender like GitHub. A specific MR (link) becomes a state-followed prTrigger with
+// a timed check switched on (GitLab has no push); a specific issue an address sender narrowed to project + number.
+it.each([
+  ['https://gitlab.example.com/Group/App/-/merge_requests/12', {
+    manual: false, recurring: true, cronExpr: '*/10 * * * *',
+    prTrigger: { url: 'https://gitlab.example.com/group/app/-/merge_requests/12', change: 'any' },
+  }],
+  ['https://gitlab.example.com/group/app/-/issues/3', {
+    manual: true,
+    webhookTrigger: { events: ['issue'], source: { preset: 'gitlab', repository: 'group/app', number: 3 } },
+  }],
+] as const)('saves a specific GitLab item from %s', async (link, expected) => {
+  const form = mount(schedule({}));
+  fireEvent.click(await screen.findByRole('radio', { name: 'scheduler.editor.trigger.event' }));
+  fireEvent.click(screen.getByRole('combobox', { name: 'scheduler.editor.webhook.sourceLabel' }));
+  fireEvent.click(screen.getByRole('option', { name: 'GitLab' }));
+  fireEvent.click(screen.getByRole('radio', { name: 'scheduler.editor.webhook.scope.gitlabItem' }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'scheduler.editor.webhook.gitlabItem.label' }), { target: { value: link } });
+  form.save();
+  await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining(expected), true));
+});
+
+it('asks for a sigil when a GitLab item is only a number', async () => {
+  const form = mount(schedule({}));
+  fireEvent.click(await screen.findByRole('radio', { name: 'scheduler.editor.trigger.event' }));
+  fireEvent.click(screen.getByRole('combobox', { name: 'scheduler.editor.webhook.sourceLabel' }));
+  fireEvent.click(screen.getByRole('option', { name: 'GitLab' }));
+  fireEvent.click(screen.getByRole('radio', { name: 'scheduler.editor.webhook.scope.gitlabItem' }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'scheduler.editor.webhook.gitlabItem.label' }), { target: { value: '12' } });
+  expect(await screen.findByText('scheduler.editor.webhook.gitlabItem.errors.ambiguous')).toBeTruthy();
+  form.save();
+  await waitFor(() => expect(form.onSubmit).not.toHaveBeenCalled());
 });
 
 // Without an account or event plugins, the event trigger falls back to the source that needs neither.

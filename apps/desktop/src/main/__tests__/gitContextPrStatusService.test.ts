@@ -884,6 +884,22 @@ describe('PR follow watch', () => {
     expect(runNow).toHaveBeenCalledTimes(1);
   });
 
+  // 2026-11-24: a specific GitLab MR is a prTrigger followed by timed status reads. It must never be
+  // sent to the GitHub App subscription, and a verified merge observed by the shared reader runs it.
+  it('follows a GitLab MR trigger through status observations only', async () => {
+    const mr = 'https://gitlab.example.com/group/app/-/merge_requests/12';
+    const tasks = [schedule('mr', mr, { prTrigger: { url: mr, change: 'merged' } })];
+    const runNow = vi.fn(async () => null);
+    const watch = new PrFollowWatch({ listActive: async () => tasks, runNow, inflight: () => 0,
+      autoRunAllowed: () => true, hasCapacity: () => true });
+    expect(followedGithubPrs(tasks)).toEqual([]);
+    const query = { provider: 'gitlab' as const, host: 'gitlab.example.com', owner: 'group', repo: 'app', prNumber: 12 };
+    watch.observe(query, { ok: true, status: 'open' } as never);
+    watch.observe(query, { ok: true, status: 'merged' } as never);
+    await new Promise(resolve => setImmediate(resolve));
+    expect(runNow).toHaveBeenCalledWith('mr', expect.objectContaining({ detail: mr }), tasks[0]);
+  });
+
   it('runs the selected merge condition for event-only automations, independent of an incidental hook URL', async () => {
     const target = 'https://github.com/makecindy/cindy/pull/85';
     const other = 'https://github.com/makecindy/cindy/pull/8';

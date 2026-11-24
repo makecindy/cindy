@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { PLUGIN_EVENT_LIMITS, subscribedEventPlugins, toPluginWebhookEvent } from '../plugin-events.js';
-import { issueChangeEvents, issueChangeFromEvents, parseGithubItemReference } from '../github-item.js';
+import { gitlabIssueChangeEvents, gitlabIssueChangeFromEvents, issueChangeEvents, issueChangeFromEvents, parseGithubItemReference, parseGitlabItemReference } from '../github-item.js';
+import { normalizePrTrigger } from '../pr-trigger.js';
 import { normalizeScheduleWebhookSource } from '../webhook-formats.js';
 
 // 测试价值
@@ -63,5 +64,33 @@ describe('specific GitHub PR or Issue', () => {
     expect(issueChangeFromEvents(issueChangeEvents('closed'))).toBe('closed');
     expect(issueChangeFromEvents(['issue_comment', 'issues'])).toBe('any');
     expect(issueChangeFromEvents(['issues.labeled'])).toBeNull();
+  });
+});
+
+// 2026-11-24: GitLab numbers MRs (!N) and issues (#N) separately, so the one field needs a link or a sigil;
+// an MR becomes a state-followed prTrigger, an issue an address-based GitLab sender narrowed to project + number.
+describe('specific GitLab MR or issue', () => {
+  const known = { host: 'gitlab.example.com', project: 'group/app' };
+  it.each([
+    ['https://gitlab.example.com/Group/Sub/App/-/merge_requests/12/diffs', undefined, { host: 'gitlab.example.com', project: 'group/sub/app', number: 12, kind: 'mr' }],
+    ['https://gitlab.example.com/group/app/-/issues/3', undefined, { host: 'gitlab.example.com', project: 'group/app', number: 3, kind: 'issue' }],
+    ['https://gitlab.example.com/group/app/-/work_items/3', undefined, { host: 'gitlab.example.com', project: 'group/app', number: 3, kind: 'issue' }],
+    ['!12', known, { host: 'gitlab.example.com', project: 'group/app', number: 12, kind: 'mr' }],
+    ['#12', known, { host: 'gitlab.example.com', project: 'group/app', number: 12, kind: 'issue' }],
+    ['group/app#5', undefined, { project: 'group/app', number: 5, kind: 'issue' }],
+    ['12', known, null],
+    ['!12', undefined, null],
+  ])('parses %s', (input, context, expected) => {
+    expect(parseGitlabItemReference(input, context)).toEqual(expected);
+  });
+
+  it('saves an MR as a canonical prTrigger and an issue as a narrowed address sender', () => {
+    expect(normalizePrTrigger({ url: 'https://GitLab.Example.com/Group/App/-/merge_requests/12', change: 'merged' }))
+      .toEqual({ url: 'https://gitlab.example.com/group/app/-/merge_requests/12', change: 'merged' });
+    expect(() => normalizePrTrigger({ url: 'https://gitlab.example.com/group/app/-/issues/12', change: 'any' })).toThrow();
+    expect(normalizeScheduleWebhookSource({ preset: 'gitlab', repository: 'Group/App', number: 3 }))
+      .toEqual({ preset: 'gitlab', repository: 'group/app', number: 3 });
+    expect(() => normalizeScheduleWebhookSource({ preset: 'gitlab', number: 3 })).toThrow('project path');
+    expect(gitlabIssueChangeFromEvents(gitlabIssueChangeEvents('closed'))).toBe('closed');
   });
 });

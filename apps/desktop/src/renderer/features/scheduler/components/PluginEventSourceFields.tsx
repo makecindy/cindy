@@ -2,20 +2,31 @@
  * PluginEventSourceFields — 自动化「事件」触发选择插件提供的事件（收到消息、新邮件等）。
  * ---------------------------------------------------------------------------
  * 只列本机已启用、声明了事件的插件；任务里保存的插件后来不可用时仍保留显示，不悄悄去掉。
- * 勾选插件 = 全部事件；也可以只勾其中几种。字段条件（filters）由 Agent 设置，这里只提示并原样保留。
+ * 勾选插件 = 全部事件；也可以只勾其中几种。「只看」条件按插件声明的字段筛选（例如只看某个会话或某个人），
+ * 同一插件内的条件全部满足才触发。
  * 规则见 docs/product-rules/plugin-event-triggers.md。颜色只用语义 token，Light / Dark 自动适配。
  */
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { Plus, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
-import type { SchedulePluginEventSource } from '@cindy/maker-scheduler/plugin-events';
+import { Input } from '@/components/ui/input';
+import { Select } from '@/components/ui/select';
+import {
+  PLUGIN_EVENT_FILTER_OPERATORS,
+  PLUGIN_EVENT_LIMITS,
+  type PluginEventFilterOperator,
+  type SchedulePluginEventFilter,
+  type SchedulePluginEventSource,
+} from '@cindy/maker-scheduler/plugin-events';
 import type { GhostEventSourceCandidate } from '../../../../shared/ghost';
 import {
   pluginCheckState,
   pluginEventChecked,
   setPluginEventSelected,
+  setPluginFilters,
   setPluginSelected,
 } from '../lib/pluginEventSelection';
 
@@ -49,6 +60,58 @@ export function usePluginEventSources(enabled = true): GhostEventSourceCandidate
   return sources;
 }
 
+/** 「只看」条件：字段 + 等于 / 包含 / 不等于 + 值。空值的条件不保存。 */
+function PluginFilterRows({
+  fields,
+  filters,
+  onChange,
+}: {
+  fields: readonly string[];
+  filters: readonly SchedulePluginEventFilter[];
+  onChange(next: SchedulePluginEventFilter[]): void;
+}) {
+  const { t } = useTranslation();
+  const declared = [...new Set(fields)];
+  if (!declared.length && !filters.length) return null;
+  const update = (index: number, patch: Partial<SchedulePluginEventFilter>) =>
+    onChange(filters.map((filter, i) => (i === index ? { ...filter, ...patch } : filter)));
+  const fieldLabel = t('scheduler.editor.webhook.plugin.filterField');
+  const operatorLabel = t('scheduler.editor.webhook.plugin.filterOperator');
+  const valueLabel = t('scheduler.editor.webhook.plugin.filterValue');
+  return (
+    <div className="mt-2 flex min-w-0 flex-col gap-2 pl-6">
+      {filters.map((filter, index) => {
+        const options = [...new Set([...declared, filter.field])].map((field) => ({ value: field, label: field }));
+        return (
+          <div key={index} className="flex min-w-0 flex-wrap items-center gap-2">
+            <span className={hintClass}>{t('scheduler.editor.webhook.plugin.filterOnly')}</span>
+            <Select label={fieldLabel} size="compact" width="sm" className="min-w-0 shrink" value={filter.field} options={options}
+              onValueChange={(field) => update(index, { field })} />
+            <Select label={operatorLabel} size="compact" width="xs" value={filter.operator}
+              options={PLUGIN_EVENT_FILTER_OPERATORS.map((operator) => ({ value: operator, label: t(`scheduler.editor.webhook.plugin.operators.${operator}`) }))}
+              onValueChange={(operator) => update(index, { operator: operator as PluginEventFilterOperator })} />
+            <Input aria-label={valueLabel} className="min-w-[120px] flex-1" value={filter.value}
+              maxLength={PLUGIN_EVENT_LIMITS.filterValueChars} onChange={(text) => update(index, { value: text })} />
+            <Button variant="secondary" tone="quiet" size="sm" compact aria-label={t('scheduler.editor.webhook.plugin.filterRemove')}
+              onClick={() => onChange(filters.filter((_, i) => i !== index))}>
+              <X size={14} aria-hidden />
+            </Button>
+          </div>
+        );
+      })}
+      {declared.length > 0 && filters.length < PLUGIN_EVENT_LIMITS.filtersPerSource && (
+        <div>
+          <Button variant="secondary" tone="quiet" size="sm" compact
+            onClick={() => onChange([...filters, { field: declared[0]!, operator: 'equals', value: '' }])}>
+            <Plus size={14} aria-hidden />
+            {t('scheduler.editor.webhook.plugin.filterAdd')}
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function PluginEventSourceFields({
   value,
   candidates,
@@ -72,7 +135,7 @@ export function PluginEventSourceFields({
       )}
       {candidates.map((candidate) => {
         const state = pluginCheckState(value, candidate.plugin);
-        const filters = value.find((source) => source.plugin === candidate.plugin)?.filters?.length ?? 0;
+        const filters = value.find((source) => source.plugin === candidate.plugin)?.filters ?? [];
         return (
           <div key={candidate.plugin} className="min-w-0 rounded-xl border border-[var(--border-default)] px-3 py-2">
             <label className="flex min-h-9 min-w-0 cursor-pointer items-center gap-2 text-13 text-[var(--text-primary)]">
@@ -101,8 +164,12 @@ export function PluginEventSourceFields({
                 </label>
               ))}
             </div>
-            {filters > 0 && (
-              <p className={`pl-6 ${hintClass}`}>{t('scheduler.editor.webhook.plugin.filters', { count: filters })}</p>
+            {state !== 'none' && (
+              <PluginFilterRows
+                fields={candidate.events.flatMap((event) => event.fields)}
+                filters={filters}
+                onChange={(next) => onChange(setPluginFilters(value, candidate.plugin, next))}
+              />
             )}
           </div>
         );

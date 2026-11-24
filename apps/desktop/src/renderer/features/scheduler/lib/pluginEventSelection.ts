@@ -56,3 +56,16 @@ export function setPluginEventSelected(
   };
   return existing ? sources.map((item) => (item.plugin === choice.plugin ? next : item)) : [...sources, next];
 }
+
+/** 替换某个已选插件的字段条件（「只看某个会话 / 某个人」）；未选中的插件不变。 */
+export function setPluginFilters(
+  sources: readonly SchedulePluginEventSource[],
+  plugin: string,
+  filters: SchedulePluginEventSource['filters'],
+): SchedulePluginEventSource[] {
+  return sources.map((item) => {
+    if (item.plugin !== plugin) return item;
+    const { filters: _previous, ...rest } = item;
+    return filters?.length ? { ...rest, filters } : rest;
+  });
+}

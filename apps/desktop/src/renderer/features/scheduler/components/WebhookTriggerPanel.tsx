@@ -280,7 +280,11 @@ export function WebhookTriggerPanel({ schedule, connectionSetupVisible = true }:
               <span role="status">{t(`scheduler.editor.webhook.plugin.state.${candidate ? state : 'stopped'}`)}</span>
             </p>
             <p className="break-words">{eventNames}</p>
-            {item.filters?.length ? <p>{t('scheduler.editor.webhook.plugin.filters', { count: item.filters.length })}</p> : null}
+            {item.filters?.map((filter, index) => (
+              <p key={index} className="break-words">
+                {`${t('scheduler.editor.webhook.plugin.filterOnly')} ${filter.field} ${t(`scheduler.editor.webhook.plugin.operators.${filter.operator}`)} ${filter.value}`}
+              </p>
+            ))}
           </li>;
         })}
       </ul>

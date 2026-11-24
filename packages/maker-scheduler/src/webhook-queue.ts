@@ -63,9 +63,16 @@ function matchesTrigger(trigger: Schedule['webhookTrigger'], event: ScheduleWebh
   // Plugin events only ever match plugin sources, and only from the plugin the user chose.
   if (source?.preset === 'plugin') return pluginEventMatches(source.sources, event);
   if (event.source !== undefined) return false;
-  return scheduleWebhookEventMatches(trigger?.events, event)
-    && (source?.preset !== 'github-app' || (source.repositories.some(repo => repo.toLowerCase() === event.repository?.toLowerCase())
-      && (source.number === undefined || event.number === source.number)));
+  if (!scheduleWebhookEventMatches(trigger?.events, event)) return false;
+  if (source?.preset === 'github-app') {
+    return source.repositories.some(repo => repo.toLowerCase() === event.repository?.toLowerCase())
+      && (source.number === undefined || event.number === source.number);
+  }
+  // An address-based sender narrowed to one item (e.g. a specific GitLab issue).
+  if (source && 'number' in source && source.number !== undefined) {
+    return event.number === source.number && event.repository?.toLowerCase() === source.repository;
+  }
+  return true;
 }
 
 function canReceive(schedule: Schedule | null, now: number): schedule is Schedule {
@@ -261,7 +268,9 @@ export class ScheduleWebhookQueue {
           this.discardPending(endpoint);
           return;
         }
-        if (isManagedWebhookSource(schedule.webhookTrigger?.source)) {
+        const itemScoped = !!schedule.webhookTrigger?.source && 'number' in schedule.webhookTrigger.source
+          && schedule.webhookTrigger.source.number !== undefined;
+        if (isManagedWebhookSource(schedule.webhookTrigger?.source) || itemScoped) {
           // Recheck restored data too: earlier test builds persisted unscoped
           // github.reconcile markers that must never bypass selected filters.
           const retained = endpoint.pending.filter(event => matchesTrigger(schedule.webhookTrigger, event));

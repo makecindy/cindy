@@ -9,7 +9,8 @@ export const webhookSourceSchema = z
     signed: z.boolean().optional(),
     format: z.record(z.string(), z.unknown()).optional(),
     repositories: z.array(z.string().min(1).max(140)).min(1).max(50).optional(),
-    number: z.number().int().positive().optional().describe('仅 github-app：只看这个编号的 Issue（或 PR）的事件，此时 repositories 只能有一个。要按 PR 状态（合并、CI、评审）触发请改用 prTrigger'),
+    number: z.number().int().positive().optional().describe('只看这个编号的事件。github-app：此时 repositories 只能有一个（指定 Issue）。地址型预设（如 gitlab / gitlab-token，指定 GitLab Issue）：须同时给 repository。要按 PR / MR 状态（合并、CI、评审）触发请改用 prTrigger'),
+    repository: z.string().min(3).max(300).optional().describe('地址型预设配合 number 使用：项目路径（如 GitLab 的 group/project），只接收这个项目里这个编号的事件'),
     sources: z.array(z.strictObject({
       plugin: z.string().min(1).max(512).describe('插件 id，取 schedule_list_event_sources 返回的 plugin'),
       events: z.array(z.string().min(1).max(128)).max(32).optional().describe('该插件声明的事件类型；省略 = 该插件的全部事件'),
@@ -51,4 +52,4 @@ export function assertWebhookReceiverAvailable(
 export const schedulePrTriggerSchema = z.strictObject({
   url: z.string().url(),
   change: z.enum(['any', 'merged', 'review', 'ci']),
-}).nullable().optional().describe('在指定 GitHub PR 变化时提前运行。any 包含评论和状态；merged 只在合并时，review 在评审时，ci 在检查变化时。可与重复定时检查并用。null 关闭 PR 提前触发。');
+}).nullable().optional().describe('在指定 GitHub PR 或 GitLab MR（https://<实例>/group/project/-/merge_requests/N）变化时提前运行。GitLab 没有推送，靠定时检查读取状态，建议同时设 manual:false 的定时条件。any 包含评论和状态；merged 只在合并时，review 在评审时，ci 在检查变化时。可与重复定时检查并用。null 关闭 PR 提前触发。');

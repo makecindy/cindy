@@ -17999,13 +17999,23 @@
           "hint": "Plugins filtern keine Ereignisse für dich, auch nicht Nachrichten, die diese Automatisierung selbst sendet. Lege im Prompt oder in einer Vorabprüfung fest, was bearbeitet werden soll. Solange der Computer schläft oder aus ist oder das Plugin deaktiviert ist, gehen Ereignisse verloren.",
           "offlineHint": "Solange der Computer schläft oder aus ist oder das Plugin deaktiviert ist, gehen Ereignisse verloren. Wenn nichts verloren gehen darf, füge zusätzlich eine geplante Prüfung hinzu.",
           "required": "Wähle mindestens ein Plugin-Ereignis aus",
-          "filters": "Feldbedingungen: {{count}}",
           "state": {
             "listening": "Hört zu",
             "disconnected": "Getrennt",
             "error": "Verbindungsfehler",
             "stopped": "Läuft nicht",
             "unknown": "Warte auf Statusmeldung des Plugins"
+          },
+          "filterOnly": "Nur",
+          "filterField": "Feld",
+          "filterOperator": "Bedingung",
+          "filterValue": "Wert",
+          "filterRemove": "Bedingung entfernen",
+          "filterAdd": "„Nur“-Bedingung hinzufügen",
+          "operators": {
+            "equals": "ist",
+            "contains": "enthält",
+            "not-equals": "ist nicht"
           }
         },
         "scopeLabel": "Umfang",
@@ -18014,7 +18024,11 @@
           "repositoryHint": "Läuft bei neuen Repository-Ereignissen, z. B. neuen Pull Requests, Kommentaren oder abgeschlossener CI.",
           "repositoryNeedsAccount": "Melde dich bei einem Cindy-Konto an, um Repository-Ereignisse zu empfangen.",
           "item": "Bestimmter Pull Request oder bestimmtes Issue",
-          "itemHint": "Beobachtet einen Pull Request oder ein Issue: ein Pull Request löst aus, wenn sich sein Status tatsächlich ändert, ein Issue bei neuer Aktivität."
+          "itemHint": "Beobachtet einen Pull Request oder ein Issue: ein Pull Request löst aus, wenn sich sein Status tatsächlich ändert, ein Issue bei neuer Aktivität.",
+          "project": "Gesamtes Projekt",
+          "projectHint": "Läuft bei neuen Projektereignissen, z. B. neuen Merge Requests, Issues oder abgeschlossenen Pipelines.",
+          "gitlabItem": "Bestimmter Merge Request oder bestimmtes Issue",
+          "gitlabItemHint": "Beobachtet einen Merge Request oder ein Issue: ein Merge Request löst bei tatsächlicher Statusänderung aus, ein Issue bei Änderungen."
         },
         "item": {
           "label": "Pull Request oder Issue",
@@ -18037,6 +18051,37 @@
           "issueChange": {
             "any": "Issue-Aktivität",
             "comment": "Neuer Kommentar",
+            "closed": "Issue geschlossen",
+            "reopened": "Issue wieder geöffnet"
+          },
+          "mr": "Merge Request !{{number}}"
+        },
+        "gitlabSignedConnection": "Signaturtoken (GitLab 19+)",
+        "gitlabSignedConnectionHint": "Verwende in den Webhook-Einstellungen des GitLab-Projekts ein Signaturtoken für mehr Sicherheit.",
+        "gitlabTokenConnection": "Secret token",
+        "gitlabTokenConnectionHint": "Für ältere GitLab-Versionen: Gib in den Webhook-Einstellungen ein Secret Token ein.",
+        "gitlabSetupHint": "Kopiere nach dem Speichern Empfangsadresse und Schlüssel aus den Aufgabendetails in das GitLab-Projekt unter Einstellungen › Webhooks.",
+        "gitlabItem": {
+          "label": "Merge Request oder Issue",
+          "placeholder": "!12, #12, group/project!12 oder Link",
+          "hint": "Schreibe !Nummer für einen Merge Request, #Nummer für ein Issue oder füge einen Link ein.",
+          "required": "Gib den Merge Request oder das Issue ein.",
+          "mrHint": "GitLab sendet keine Push-Benachrichtigungen. Cindy liest den Status im Takt von „Zusätzlich zeitgesteuert prüfen“ (ohne die Aufgabe auszuführen); glab muss auf diesem Computer angemeldet sein.",
+          "issueHint": "Änderungen an diesem Issue kommen über einen GitLab-Webhook. Kommentarereignisse unterscheiden nicht zwischen Merge Requests und Issues, daher zählen nur Erstellen, Bearbeiten, Schließen und Wiederöffnen des Issues.",
+          "errors": {
+            "invalid": "Gib !Nummer, #Nummer, group/project!Nummer oder einen GitLab-Link ein.",
+            "ambiguous": "GitLab nummeriert Merge Requests und Issues getrennt. Schreibe !12 (Merge Request) oder #12 (Issue) oder füge einen Link ein.",
+            "needs-link": "Ein bestimmter Merge Request braucht seine GitLab-Instanz. Füge den Link ein.",
+            "needs-account": "Das ist ein Issue. Ein bestimmtes GitLab-Issue erfordert ein Cindy-Konto, um GitLab-Webhooks zu empfangen."
+          },
+          "mrChange": {
+            "any": "Merge-Request-Aktivität",
+            "merged": "Gemergt",
+            "review": "Review-Aktivität",
+            "ci": "Pipeline-Status ändert sich"
+          },
+          "issueChange": {
+            "any": "Issue ändert sich",
             "closed": "Issue geschlossen",
             "reopened": "Issue wieder geöffnet"
           }

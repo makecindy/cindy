@@ -17925,13 +17925,23 @@
           "hint": "法器不代汝濾事，雖此自動化自發之訊亦然；當否處之，宜於提示或前置檢查中言明。機寐、機關或法器停用之時，事不可得。",
           "offlineHint": "機寐、機關或法器停用之時，事不可得；不容遺漏者，宜另設定時之察。",
           "required": "請至少擇一法器之事",
-          "filters": "另有欄位之約 {{count}} 條",
           "state": {
             "listening": "方聽",
             "disconnected": "已斷",
             "error": "連接有誤",
             "stopped": "未行",
             "unknown": "待法器報其狀"
+          },
+          "filterOnly": "唯察",
+          "filterField": "字段",
+          "filterOperator": "約",
+          "filterValue": "值",
+          "filterRemove": "除此約",
+          "filterAdd": "增「唯察」之約",
+          "operators": {
+            "equals": "等於",
+            "contains": "含",
+            "not-equals": "不等於"
           }
         },
         "scopeLabel": "所及",
@@ -17940,7 +17950,11 @@
           "repositoryHint": "庫有新事則行，如新 PR、評語、CI 竣事。",
           "repositoryNeedsAccount": "須登 Cindy 之號，乃能受庫之事。",
           "item": "指定之 PR 或 Issue",
-          "itemHint": "唯察一 PR 或 Issue：PR 狀實有變乃行，Issue 有新動則行。"
+          "itemHint": "唯察一 PR 或 Issue：PR 狀實有變乃行，Issue 有新動則行。",
+          "project": "全項",
+          "projectHint": "項有新事則行，如新 MR、Issue、流水竣事。",
+          "gitlabItem": "指定之 MR 或 Issue",
+          "gitlabItemHint": "唯察一 MR 或 Issue：MR 狀實有變乃行，Issue 有變則行。"
         },
         "item": {
           "label": "PR 或 Issue",
@@ -17963,6 +17977,37 @@
           "issueChange": {
             "any": "Issue 有新動",
             "comment": "有新評",
+            "closed": "Issue 已閉",
+            "reopened": "Issue 復開"
+          },
+          "mr": "MR !{{number}}"
+        },
+        "gitlabSignedConnection": "簽名之令（GitLab 十九以上）",
+        "gitlabSignedConnectionHint": "於 GitLab 項之 Webhook 設中用簽名之令，更為穩妥。",
+        "gitlabTokenConnection": "Secret token",
+        "gitlabTokenConnectionHint": "宜於舊版 GitLab：於 Webhook 設中書 Secret token。",
+        "gitlabSetupHint": "存後於差事詳情取收址與密鑰，書於 GitLab 項之「設置 › Webhooks」。",
+        "gitlabItem": {
+          "label": "MR 或 Issue",
+          "placeholder": "!12、#12、group/project!12 或鏈",
+          "hint": "MR 書 !編號，Issue 書 #編號，亦可逕貼其鏈。",
+          "required": "請書所察之 MR 或 Issue。",
+          "mrHint": "GitLab 無推報，Cindy 依「兼定時察」之時讀 MR 之狀（不行差事），須此機之 glab 已登。",
+          "issueHint": "藉 GitLab Webhook 受此 Issue 之變。評語之事不能辨 MR 與 Issue，故唯應 Issue 自身之新立、修改、閉與復開。",
+          "errors": {
+            "invalid": "請依 !12（MR）、#12（Issue）或 group/project!12 之式書之，亦可貼 GitLab 之鏈。",
+            "ambiguous": "GitLab 之 MR 與 Issue 編號各別，請書 !12（MR）或 #12（Issue），或貼其鏈。",
+            "needs-link": "指定 MR 須知 GitLab 之所，請貼 MR 之鏈。",
+            "needs-account": "此乃 Issue。指定 GitLab Issue 須登 Cindy 之號，以受 GitLab Webhook。"
+          },
+          "mrChange": {
+            "any": "MR 有新動",
+            "merged": "MR 已合",
+            "review": "審有新動",
+            "ci": "流水之狀有變"
+          },
+          "issueChange": {
+            "any": "Issue 有變",
             "closed": "Issue 已閉",
             "reopened": "Issue 復開"
           }

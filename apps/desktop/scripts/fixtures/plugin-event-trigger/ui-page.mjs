@@ -35,6 +35,9 @@ export default {
     }
     await page.getByText(legend, { exact: true }).scrollIntoViewIfNeeded();
     await ui.capture('plugin-sources');
+    // The saved Agent condition (飞书: fromSelf ≠ true) is editable as an "only" row.
+    await page.getByRole('textbox', { name: await ui.t('scheduler.editor.webhook.plugin.filterValue') }).first().scrollIntoViewIfNeeded();
+    await ui.capture('plugin-filters');
     // A saved plugin that is no longer installed stays visible and removable.
     await page.getByText(await ui.t('scheduler.editor.webhook.plugin.hint'), { exact: true }).scrollIntoViewIfNeeded();
     await page.getByText(await ui.t('scheduler.editor.webhook.plugin.unavailable'), { exact: true }).waitFor();

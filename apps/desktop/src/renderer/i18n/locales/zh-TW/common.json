@@ -17925,13 +17925,23 @@
           "hint": "插件不會替你過濾任何事件，包括這個自動化自己發出的訊息；要不要處理，請在提示詞或前置檢查裡說明。電腦休眠、關機或插件停用期間的事件收不到。",
           "offlineHint": "電腦休眠、關機或插件停用期間的事件收不到；不能漏掉事件時，請再加一個定時檢查。",
           "required": "請至少選擇一個插件事件",
-          "filters": "另有 {{count}} 個欄位條件",
           "state": {
             "listening": "正在監聽",
             "disconnected": "已中斷",
             "error": "連線出錯",
             "stopped": "未執行",
             "unknown": "等待插件回報狀態"
+          },
+          "filterOnly": "只看",
+          "filterField": "欄位",
+          "filterOperator": "條件",
+          "filterValue": "值",
+          "filterRemove": "刪除條件",
+          "filterAdd": "新增「只看」條件",
+          "operators": {
+            "equals": "等於",
+            "contains": "包含",
+            "not-equals": "不等於"
           }
         },
         "scopeLabel": "範圍",
@@ -17940,7 +17950,11 @@
           "repositoryHint": "倉庫有新事件時執行，例如新 PR、留言、CI 完成。",
           "repositoryNeedsAccount": "需要登入 Cindy 帳號才能接收倉庫事件。",
           "item": "指定 PR 或 Issue",
-          "itemHint": "只盯一條 PR 或 Issue：PR 在狀態確實變化時執行，Issue 在有新動態時執行。"
+          "itemHint": "只盯一條 PR 或 Issue：PR 在狀態確實變化時執行，Issue 在有新動態時執行。",
+          "project": "整個專案",
+          "projectHint": "專案有新事件時執行，例如新 MR、Issue、流水線完成。",
+          "gitlabItem": "指定 MR 或 Issue",
+          "gitlabItemHint": "只盯一個 MR 或 Issue：MR 在狀態確實變化時執行，Issue 在有變化時執行。"
         },
         "item": {
           "label": "PR 或 Issue",
@@ -17963,6 +17977,37 @@
           "issueChange": {
             "any": "Issue 有新動態",
             "comment": "有新留言",
+            "closed": "Issue 已關閉",
+            "reopened": "Issue 重新開啟"
+          },
+          "mr": "MR !{{number}}"
+        },
+        "gitlabSignedConnection": "簽名權杖（GitLab 19 以上）",
+        "gitlabSignedConnectionHint": "在 GitLab 專案的 Webhook 設定裡使用簽名權杖，安全性更高。",
+        "gitlabTokenConnection": "Secret token",
+        "gitlabTokenConnectionHint": "適用於較早版本的 GitLab：在 Webhook 設定裡填寫 Secret token。",
+        "gitlabSetupHint": "儲存後在任務詳情裡取得接收位址和密鑰，填到 GitLab 專案的「設定 › Webhooks」。",
+        "gitlabItem": {
+          "label": "MR 或 Issue",
+          "placeholder": "!12、#12、group/project!12 或連結",
+          "hint": "MR 寫 !編號，Issue 寫 #編號，也可以直接貼上連結。",
+          "required": "請填寫要盯的 MR 或 Issue。",
+          "mrHint": "GitLab 沒有推送通知，Cindy 會按「同時定時檢查」的時間讀取 MR 狀態（不執行任務），需要這台電腦的 glab 已登入。",
+          "issueHint": "透過 GitLab Webhook 接收這個 Issue 的變化。留言事件無法區分 MR 和 Issue，所以只回應 Issue 本身的新建、編輯、關閉和重新開啟。",
+          "errors": {
+            "invalid": "請按 !12（MR）、#12（Issue）或 group/project!12 的格式填寫，也可以貼上 GitLab 上的連結。",
+            "ambiguous": "GitLab 的 MR 和 Issue 編號是分開的，請寫 !12（MR）或 #12（Issue），或貼上連結。",
+            "needs-link": "指定 MR 需要知道 GitLab 執行個體，請貼上 MR 連結。",
+            "needs-account": "這是一個 Issue。指定 GitLab Issue 需要登入 Cindy 帳號，以便接收 GitLab Webhook。"
+          },
+          "mrChange": {
+            "any": "MR 有新動態",
+            "merged": "MR 已合併",
+            "review": "審查有新動態",
+            "ci": "流水線狀態變化"
+          },
+          "issueChange": {
+            "any": "Issue 有變化",
             "closed": "Issue 已關閉",
             "reopened": "Issue 重新開啟"
           }

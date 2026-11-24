@@ -112,6 +112,19 @@ describe('ScheduleWebhookQueue', () => {
     h.queue.stop();
   });
 
+  // 2026-11-24: an address sender narrowed to one GitLab issue ignores other items and other projects
+  // that may reuse the same receiver address.
+  it('admits address-sender events only for the chosen project and number', async () => {
+    const h = setup();
+    h.setSchedule({ id: 's1', status: 'active', webhookTrigger: { endpointId: 'e1', events: ['issue'],
+      source: { preset: 'gitlab', repository: 'group/app', number: 3 } } } as Schedule);
+    await h.queue.start();
+    const issue = (deliveryId: string, repository: string, number: number) => ({ ...event(deliveryId, 'issue'), action: 'close', repository, number });
+    expect(await h.queue.acceptBatch('s1', [issue('mine', 'Group/App', 3), issue('other-number', 'group/app', 4),
+      issue('other-project', 'group/other', 3)], 0, 'e1')).toEqual(['queued', 'filtered', 'filtered']);
+    h.queue.stop();
+  });
+
   // PR #9378 / security review: old on-disk recovery markers carry no scope.
   // Exercise restart through the real queue, including interrupted preparation.
   it.each(['pending', 'preparing'] as const)('filters legacy unscoped recovery markers from restored %s', async where => {

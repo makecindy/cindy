@@ -17925,13 +17925,23 @@
           "hint": "プラグインはイベントを代わりに絞り込みません。この自動化が自分で送ったメッセージも届きます。処理するかどうかはプロンプトか事前チェックで指定してください。コンピュータのスリープ中や電源オフ中、プラグインの停止中のイベントは受け取れません。",
           "offlineHint": "コンピュータのスリープ中や電源オフ中、プラグインの停止中のイベントは受け取れません。取りこぼせない場合は、定期チェックも追加してください。",
           "required": "プラグインのイベントを 1 つ以上選んでください",
-          "filters": "フィールド条件：{{count}} 件",
           "state": {
             "listening": "待ち受け中",
             "disconnected": "切断",
             "error": "接続エラー",
             "stopped": "停止中",
             "unknown": "プラグインの状態報告を待っています"
+          },
+          "filterOnly": "限定",
+          "filterField": "フィールド",
+          "filterOperator": "条件",
+          "filterValue": "値",
+          "filterRemove": "条件を削除",
+          "filterAdd": "「限定」条件を追加",
+          "operators": {
+            "equals": "等しい",
+            "contains": "含む",
+            "not-equals": "等しくない"
           }
         },
         "scopeLabel": "範囲",
@@ -17940,7 +17950,11 @@
           "repositoryHint": "新しい PR、コメント、CI 完了など、リポジトリの新しいイベントで実行します。",
           "repositoryNeedsAccount": "リポジトリのイベントを受け取るには Cindy アカウントへのログインが必要です。",
           "item": "特定の PR または Issue",
-          "itemHint": "1 つの PR または Issue を見ます。PR は状態が実際に変わったとき、Issue は新しい動きがあったときに実行します。"
+          "itemHint": "1 つの PR または Issue を見ます。PR は状態が実際に変わったとき、Issue は新しい動きがあったときに実行します。",
+          "project": "プロジェクト全体",
+          "projectHint": "新しい MR、Issue、パイプライン完了など、プロジェクトの新しいイベントで実行します。",
+          "gitlabItem": "特定の MR または Issue",
+          "gitlabItemHint": "1 つの MR または Issue を見ます。MR は状態が実際に変わったとき、Issue は変化があったときに実行します。"
         },
         "item": {
           "label": "PR または Issue",
@@ -17963,6 +17977,37 @@
           "issueChange": {
             "any": "Issue の新しい動き",
             "comment": "新しいコメント",
+            "closed": "Issue がクローズ",
+            "reopened": "Issue が再オープン"
+          },
+          "mr": "MR !{{number}}"
+        },
+        "gitlabSignedConnection": "署名トークン（GitLab 19 以降）",
+        "gitlabSignedConnectionHint": "GitLab プロジェクトの Webhook 設定で署名トークンを使うと、より安全です。",
+        "gitlabTokenConnection": "Secret token",
+        "gitlabTokenConnectionHint": "古い GitLab 向け：Webhook 設定で Secret token を入力します。",
+        "gitlabSetupHint": "保存後、タスク詳細の受信アドレスと秘密鍵を GitLab プロジェクトの「設定 › Webhooks」に入力してください。",
+        "gitlabItem": {
+          "label": "MR または Issue",
+          "placeholder": "!12、#12、group/project!12 またはリンク",
+          "hint": "MR は !番号、Issue は #番号で入力するか、リンクを貼り付けてください。",
+          "required": "監視する MR または Issue を入力してください。",
+          "mrHint": "GitLab にはプッシュ通知がないため、Cindy は「定期チェックも行う」の間隔で MR の状態を読み取ります（タスクは実行しません）。このコンピュータで glab にログインしている必要があります。",
+          "issueHint": "この Issue の変化は GitLab Webhook で受け取ります。コメントイベントは MR と Issue を区別できないため、Issue 自体の作成・編集・クローズ・再オープンだけに反応します。",
+          "errors": {
+            "invalid": "!番号、#番号、group/project!番号、または GitLab のリンクを入力してください。",
+            "ambiguous": "GitLab の MR と Issue は番号が別です。!12（MR）か #12（Issue）と書くか、リンクを貼り付けてください。",
+            "needs-link": "特定の MR には GitLab のインスタンスが必要です。MR のリンクを貼り付けてください。",
+            "needs-account": "これは Issue です。特定の GitLab Issue には、GitLab Webhook を受け取るための Cindy アカウントが必要です。"
+          },
+          "mrChange": {
+            "any": "MR の新しい動き",
+            "merged": "マージ済み",
+            "review": "レビューの新しい動き",
+            "ci": "パイプラインの状態変化"
+          },
+          "issueChange": {
+            "any": "Issue の変化",
             "closed": "Issue がクローズ",
             "reopened": "Issue が再オープン"
           }

@@ -26,7 +26,7 @@ import { manageSessionPrs } from './manageSessionPrs';
 
 import { app, BrowserWindow, ipcMain } from 'electron';
 import { GithubClient } from '@cindy/github-client';
-import { prStatusKey, isPrHost, sessionPrUrl } from '@cindy/maker-shared';
+import { prStatusKey, isPrHost, parseSessionPrUrl, sessionPrUrl } from '@cindy/maker-shared';
 import { getScheduleWebhookHost } from '../scheduler-host/webhook/runtime';
 import { GITHUB_EVENT_CACHE_TTL_MS, type GithubPrRefresh } from '../scheduler-host/webhook/github';
 import { cachedGithubPrHeads, refreshGithubPrEvents } from './githubPrEvents';
@@ -192,9 +192,11 @@ const prFollowWatch = new PrFollowWatch({
 /** Re-read current facts before running the existing follow-up gate. No new agent task. */
 export async function refreshSchedulePr(url: string): Promise<void> {
   if (!prStatusService) throw new Error('HOST_NOT_READY');
-  const [, owner, repo, , number] = new URL(url).pathname.split('/');
-  const [result] = await prStatusService.getStatuses([{ owner: owner!, repo: repo!, prNumber: Number(number) }],
-    { waitForFresh: true, refresh: true });
+  // GitHub PR or GitLab MR: the same host-qualified identity the status reader and follow watcher use.
+  const identity = parseSessionPrUrl(url);
+  if (!identity) throw new Error('PR_VERIFICATION_FAILED');
+  const { url: _url, ...query } = identity;
+  const [result] = await prStatusService.getStatuses([query], { waitForFresh: true, refresh: true });
   if (!result?.ok) throw new Error('PR_VERIFICATION_FAILED');
 }
 

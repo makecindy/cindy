@@ -31,7 +31,15 @@ import {
   type ScheduleWebhookSource,
 } from '@cindy/maker-scheduler/webhook-formats';
 import type { SchedulePluginEventSource } from '@cindy/maker-scheduler/plugin-events';
-import { githubItemUrl, issueChangeEvents, issueChangeFromEvents, type IssueChange } from '@cindy/maker-scheduler/github-item';
+import {
+  githubItemUrl,
+  gitlabIssueChangeEvents,
+  gitlabIssueChangeFromEvents,
+  issueChangeEvents,
+  issueChangeFromEvents,
+  type GitlabIssueChange,
+  type IssueChange,
+} from '@cindy/maker-scheduler/github-item';
 import { parseScheduleDeadline } from '@cindy/maker-shared/schedule-form';
 
 /** Effort 白名单 — 与 Phase 2 mapper enum 一致;UI 提交前的最后一道关卡。 */
@@ -178,6 +186,16 @@ export interface ScheduleFormState {
   githubItemNumber?: number;
   /** 指定 Issue 的条件；为空时保留已保存的事件筛选。 */
   issueChange?: IssueChange;
+  /**
+   * GitLab「指定 MR 或 Issue」的输入框原文。MR 存为 prTrigger（GitLab MR 链接）；Issue 存为地址型
+   * GitLab 发送方加 gitlabItemProject / gitlabItemNumber。webhookPreset 为 gitlab-item 表示尚未识别。
+   */
+  gitlabItem?: string;
+  gitlabItemHost?: string;
+  gitlabItemProject?: string;
+  /** 识别为 Issue 时的编号；为空表示不是指定 GitLab Issue。 */
+  gitlabItemNumber?: number;
+  gitlabIssueChange?: GitlabIssueChange;
   agentKind: 'claude-code' | 'codex' | 'pi';
   modelAgentKind?: 'claude-code' | 'codex' | 'pi';
   /**
@@ -666,7 +684,8 @@ export function webhookSourceFormFields(
   source: ScheduleWebhookSource | undefined,
   events?: readonly string[],
 ): Pick<ScheduleFormState, 'webhookPreset' | 'webhookSigned' | 'webhookFormat' | 'webhookRepositories' | 'webhookPluginSources'
-  | 'githubItem' | 'githubItemRepository' | 'githubItemNumber' | 'issueChange'> {
+  | 'githubItem' | 'githubItemRepository' | 'githubItemNumber' | 'issueChange'
+  | 'gitlabItem' | 'gitlabItemProject' | 'gitlabItemNumber' | 'gitlabIssueChange'> {
   if (source?.preset === 'github-app' && source.number !== undefined) {
     const repository = source.repositories[0] ?? '';
     const change = issueChangeFromEvents(events);
@@ -683,10 +702,16 @@ export function webhookSourceFormFields(
   if (source?.preset === 'custom') {
     return { webhookPreset: 'custom', webhookSigned: true, webhookFormat: JSON.stringify(source.format, null, 2) };
   }
+  const item = source && 'number' in source && source.number !== undefined && source.repository
+    ? { repository: source.repository, number: source.number } : null;
+  const gitlabChange = item ? gitlabIssueChangeFromEvents(events) : null;
   return {
     webhookPreset: source?.preset ?? DEFAULT_SCHEDULE_WEBHOOK_PRESET,
     webhookSigned: !(source && 'signed' in source && source.signed === false),
     webhookFormat: '',
+    // A specific GitLab issue: an address-based GitLab sender narrowed to one project and number.
+    ...(item ? { gitlabItem: `${item.repository}#${item.number}`, gitlabItemProject: item.repository, gitlabItemNumber: item.number,
+      ...(gitlabChange ? { gitlabIssueChange: gitlabChange } : {}) } : {}),
   };
 }
 
@@ -713,14 +738,25 @@ function webhookSourceInput(form: ScheduleFormState): { source?: ScheduleWebhook
     return { source: { preset, repositories: [form.githubItemRepository], number: form.githubItemNumber } };
   }
   if (preset === 'github-app') return { source: { preset, repositories: parseGithubRepositories(form.webhookRepositories) } };
-  if (preset === 'plugin') return { source: { preset, sources: form.webhookPluginSources ?? [] } };
+  if (preset === 'plugin') {
+    // A condition row whose value was left empty is not a condition yet.
+    const sources = (form.webhookPluginSources ?? []).map((source) => {
+      const filters = source.filters?.filter((filter) => filter.value.trim() !== '');
+      const { filters: _all, ...rest } = source;
+      return filters?.length ? { ...rest, filters } : rest;
+    });
+    return { source: { preset, sources } };
+  }
   if (preset === 'custom') {
     const source = parseWebhookFormatText(form.webhookFormat);
     return source ? { source } : {};
   }
   const known = scheduleWebhookPreset(preset);
   if (!known) return {};
-  return { source: form.webhookSigned === false ? { preset: known.id, signed: false } : { preset: known.id } };
+  const base = form.webhookSigned === false ? { preset: known.id, signed: false } : { preset: known.id };
+  return form.gitlabItemNumber !== undefined && form.gitlabItemProject
+    ? { source: { ...base, repository: form.gitlabItemProject, number: form.gitlabItemNumber } }
+    : { source: base };
 }
 
 export function parseGithubRepositories(text: string | undefined): string[] {
@@ -780,7 +816,9 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
               // A specific Issue saves its condition as event filters; an unknown saved set is kept as is.
               : form.webhookPreset === 'github-app' && form.githubItemNumber !== undefined && form.issueChange
                 ? issueChangeEvents(form.issueChange)
-                : (form.webhookEvents ?? '').split(',').map((name) => name.trim()).filter(Boolean),
+                : form.gitlabItemNumber !== undefined && form.gitlabIssueChange
+                  ? gitlabIssueChangeEvents(form.gitlabIssueChange)
+                  : (form.webhookEvents ?? '').split(',').map((name) => name.trim()).filter(Boolean),
             ...webhookSourceInput(form),
           }
         : null,

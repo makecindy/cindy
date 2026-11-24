@@ -37,6 +37,19 @@
     组合时界面原样保留。需要登录 Cindy 并通过 Cindy 连接 GitHub；未登录时识别到 Issue 会说明原因且不能保存。
   - 两种存储互斥，旧版本、手机和 Agent 工具不受影响；`number` 是 GitHub App 来源的可选字段，旧执行端拒绝认不出的
     字段，不会静默扩大为整个仓库。
+- **GitLab 同样是一个发送方。** 原先两个 GitLab 预设（签名令牌 / Secret token）合并为「GitLab」，其下先选范围
+  「整个项目」（再选接法：签名令牌（GitLab 19+）或 Secret token，存储仍是 `gitlab` / `gitlab-token` 预设）或
+  「指定 MR 或 Issue」。GitLab 的 MR（`!N`）与 Issue（`#N`）编号各自独立，所以同一个输入框靠链接或前缀区分：
+  `…/-/merge_requests/N`、`…/-/issues/N`、`…/-/work_items/N`、`group/project!N`、`group/project#N`，或已知项目时的
+  `!N` / `#N`；只填数字时提示加前缀，不向服务器查询。
+  - **MR** 按状态变化触发：存为 `prTrigger`（GitLab MR 链接，任意 HTTPS 实例），复用 MR 状态读取（本机 glab 令牌）与
+    PR 跟进的状态比较，条件为任何动态、已合并、评审、流水线。GitLab 没有推送，变化由定时检查读取状态发现
+    （只读状态、不运行任务），所以选中 MR 时若未勾「同时定时检查」会自动勾上并设为每 10 分钟。需要链接里的实例域名。
+    这改变了「GitLab 不新增后台跟进」的约定（2026-11-24 用户确认），只针对用户显式指定的 MR。
+  - **Issue** 按 GitLab Webhook 事件触发：存为地址型 GitLab 发送方加 `repository`（项目路径）与 `number`，只在本机按事件的
+    项目与编号复核。条件对应 Issue 事件：有变化（`issue`）、已关闭（`issue.close`）、重新打开（`issue.reopen`）。评论事件
+    （`note`）的编号无法区分 MR 与 Issue，所以指定 Issue 不响应评论，界面说明。需要登录 Cindy，并在项目里配置接收地址；
+    接法选择与整个项目相同。
 - **未登录时**「事件」仍始终可选：有声明了事件的插件时默认插件事件，否则默认 GitHub 的「指定 PR 或 Issue」；
   「整个仓库」不可选并说明需要登录。
 - **所有事件来源都可以「同时定时检查」。** 选择「事件」后显示「同时定时检查」及时间选择，勾选即保存为
