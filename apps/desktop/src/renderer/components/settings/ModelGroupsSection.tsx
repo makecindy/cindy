@@ -262,6 +262,25 @@ export function ModelGroupsSection() {
                     />
                   }
                 />
+                <SettingsRow
+                  title={t('modelGroups.settings.autoSwitch.title')}
+                  hint={t('modelGroups.settings.autoSwitch.hint')}
+                  wrap
+                  trailing={
+                    <Switch
+                      data-setting-id={modelGroupsSettings.routes.id}
+                      data-model-group-auto-switch
+                      checked={modelGroupAutoSwitchOn(route)}
+                      aria-label={t('modelGroups.settings.autoSwitch.title')}
+                      onCheckedChange={(on) => void updateRoute(route.id, (current) => {
+                        // 默认开：开着时不存这一项，关掉才存 false(model-groups.md §4.5)。
+                        const { autoSwitch: _was, ...rest } = current;
+                        void _was;
+                        return on ? rest : { ...rest, autoSwitch: false };
+                      })}
+                    />
+                  }
+                />
               </SettingsCard>
             </SettingsSection>
 
@@ -440,28 +459,6 @@ export function ModelGroupsSection() {
   // ── 列表 ───────────────────────────────────────────────────────────────────
   return (
     <SettingsSection variant="page" title={t('modelGroups.title')} description={t('modelGroups.description')} testId="model-groups-settings">
-      <SettingsSection>
-        <SettingsCard id={modelGroupsSettings.autoSwitch.targetId}>
-          <SettingsRow
-            title={t('modelGroups.settings.autoSwitch.title')}
-            hint={t('modelGroups.settings.autoSwitch.hint')}
-            trailing={
-              <Switch
-                data-setting-id={modelGroupsSettings.autoSwitch.id}
-                checked={modelGroupAutoSwitchOn(config)}
-                disabled={!loaded}
-                aria-label={t('modelGroups.settings.autoSwitch.title')}
-                onCheckedChange={(on) => void save((latest) => {
-                  // 默认开：开着时不存这一项，关掉才存 false(model-groups.md §4.5)。
-                  const { autoSwitch: _was, ...rest } = latest;
-                  void _was;
-                  return on ? rest : { ...rest, autoSwitch: false };
-                })}
-              />
-            }
-          />
-        </SettingsCard>
-      </SettingsSection>
       <ModelGroupsOverview config={config} onOpenRoute={(id) => setView({ kind: 'route', id })} />
       <SettingsSection
         title={t('modelGroups.routes')}

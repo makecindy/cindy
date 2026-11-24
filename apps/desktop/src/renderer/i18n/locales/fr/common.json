@@ -22775,7 +22775,7 @@
     "settings": {
       "autoSwitch": {
         "title": "Changer de source automatiquement en cas de problème",
-        "hint": "Quand la source utilisée par une tâche échoue, les tâches sur un groupe de modèles passent à la source utilisable suivante du groupe, sans que vous ayez à surveiller. Chaque changement est noté sous ce tour. Les tâches hors groupe de modèles suivent « Modèle de secours automatique pour les tâches »."
+        "hint": "Quand la source utilisée par ce mode échoue, passer à la suivante utilisable et le noter sous ce tour. Désactivé, le changement est seulement proposé sur l’erreur."
       },
       "newRoute": "Nouveau mode",
       "newRouteName": "Nouveau mode",

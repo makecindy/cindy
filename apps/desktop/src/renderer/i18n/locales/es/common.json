@@ -22775,7 +22775,7 @@
     "settings": {
       "autoSwitch": {
         "title": "Cambiar de fuente automáticamente si falla",
-        "hint": "Cuando falla la fuente que usa una tarea, las tareas en un grupo de modelos pasan a la siguiente fuente disponible del grupo, sin que tengas que vigilar. Cada cambio se anota bajo ese turno. Las tareas sin grupo de modelos siguen «Modelo alternativo automático para tareas»."
+        "hint": "Cuando falla la fuente que usa este modo, pasar a la siguiente disponible y anotarlo bajo ese turno. Si está desactivado, solo se propone el cambio en el error."
       },
       "newRoute": "Nuevo modo",
       "newRouteName": "Nuevo modo",

@@ -22776,7 +22776,7 @@
     "settings": {
       "autoSwitch": {
         "title": "Trocar de fonte automaticamente quando houver problema",
-        "hint": "Quando a fonte usada por uma tarefa falha, tarefas em um grupo de modelos passam para a próxima fonte disponível do grupo, sem você precisar acompanhar. Cada troca é anotada abaixo daquela rodada. Tarefas sem grupo de modelos seguem “Alternativa automática de modelo da tarefa”."
+        "hint": "Quando a fonte usada por este modo falhar, trocar para a próxima disponível e anotar abaixo daquela rodada. Desligado, a troca só é sugerida no erro."
       },
       "newRoute": "Novo modo",
       "newRouteName": "Novo modo",

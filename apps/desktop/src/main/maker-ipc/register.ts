@@ -1465,7 +1465,7 @@ import {
   setSessionEffort,
   setSessionFastMode,
 } from '../maker-host/session-effort-store.js';
-import { modelGroupAutoSwitchOn, modelGroupCandidateKey } from '../../shared/modelGroups.js';
+import { modelGroupAutoSwitchFor, modelGroupCandidateKey } from '../../shared/modelGroups.js';
 import { botModelGroupsSignature, expandBotModelGroups, modelGroupCandidateRoute } from '../model-groups/botRoutes.js';
 import { pickModelGroupRoute, readModelGroupRecoveryOffer } from '../model-groups/desktopResolver.js';
 import { modelGroupSessionStart } from '../model-groups/sessionStart.desktop.js';
@@ -2311,7 +2311,7 @@ const {
   // A task on a model group keeps its retries and source switching (model-groups.md §4.5) whatever these settings say.
   isInterruptedTurnAutoResumeEnabled: (sessionId) =>
     readInterruptedTurnAutoResumeSettings().enabled || readSessionRuntimeFallbackSettings().enabled ||
-    (!!readModelGroupSessionBinding(sessionId) && modelGroupAutoSwitchOn(readModelGroupsConfig())),
+    modelGroupAutoSwitchFor(readModelGroupsConfig(), readModelGroupSessionBinding(sessionId)?.selection),
   guardLog: {
     debug: (message, meta) => log.debug(message, meta),
     warn: (message, meta) => log.warn(message, meta),
@@ -17634,7 +17634,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         fallbackEnabled: await hasExplicitSessionTaskModel(sessionId) ? false : botFallback.isBot
           ? botFallback.candidate !== null
           : readModelGroupSessionBinding(sessionId)
-            ? modelGroupAutoSwitchOn(readModelGroupsConfig())
+            ? modelGroupAutoSwitchFor(readModelGroupsConfig(), readModelGroupSessionBinding(sessionId)?.selection)
             : readSessionRuntimeFallbackSettings().enabled,
       };
     },
@@ -18700,7 +18700,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // 自动化发出的这一轮也按任务的模式接替：接管后由 beginSchedulerAutoResume 把这次运行交给续跑(与伙伴的例行运行同一条路)。
         // 任务当前来源不是记下的那个(自动化指定了别的模型)时 activeModelGroupBinding 不认，不会误换。
         const groupFallback = !ownsQuotaRoute() && !!botInput && isModelGroupRecoverySource(botInput.source) && !botInput.remoteHostId && !botInput.agentDeviceId &&
-          !botInput.orcaRole && modelGroupAutoSwitchOn(readModelGroupsConfig()) && !!(await activeModelGroupBinding(sessionId, botInput)) && !isSessionSharedTaskActive(sessionId);
+          !botInput.orcaRole && modelGroupAutoSwitchFor(readModelGroupsConfig(), (await activeModelGroupBinding(sessionId, botInput))?.selection) &&
+          !isSessionSharedTaskActive(sessionId);
         if (groupFallback) modelGroupInputs.add(args[2]);
         else modelGroupInputs.delete(args[2]);
         if (botInput?.source === 'bot' && ['canonical', 'delegation', 'group', 'channel', 'thread', 'routine'].includes(botInput.role ?? '')) {
