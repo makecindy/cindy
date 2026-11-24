@@ -313,6 +313,7 @@ export function TodoListCard({
     };
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing) return;
+      if (cardRef.current?.checkVisibility?.({ checkVisibilityCSS: true }) === false) return;
       // Previews can handle Escape later, and morph popovers close without cancelling it.
       if (document.querySelector('[data-preview-scrim], [aria-modal="true"], [data-morph-side]')) return;
       event.preventDefault();
