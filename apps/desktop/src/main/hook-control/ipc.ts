@@ -1,4 +1,5 @@
 import { registerGroupImageReader, fetchOfficialGroupImage } from './groupImageBridge.js';
+import { createIntegrationsDirectory } from './integrationsDirectory.js';
 /**
  * hook-control/ipc.ts
  * ---------------------------------------------------------------------------
@@ -147,6 +148,28 @@ import { setSlackCommunicationsFromIpc } from './slackCommunicationsIpc.js';
 
 const log = createLogger('hook-control');
 
+/**
+ * 三方应用集成服务只有 integrationsBaseUrl 一个清单地址, 各官方应用的连接地址按路径派生;
+ * 清单未配置时为空串(入口不显示, 已开启的连接报地址未配置)。
+ */
+function integrationsWsUrl(path: '/telegram' | '/discord'): string {
+  const base = getClientEndpoint('integrationsBaseUrl');
+  return base ? `${base.replace(/^http/, 'ws')}${path}` : '';
+}
+
+/** 服务端开启了哪些官方应用; 列表变化后重发设置页快照(未开启的用户才受影响)。 */
+const integrationsDirectory = createIntegrationsDirectory({
+  getBaseUrl: () => getClientEndpoint('integrationsBaseUrl'),
+  onChange: () => {
+    if (!hookControlAvailable()) {
+      broadcastStatus({ ...disabledHookView(), workspaces: store?.get().workspaces ?? {} });
+      return;
+    }
+    if (manager) broadcastStatus(manager.snapshot());
+  },
+  log,
+});
+
 let store: SlackHookStore | null = null;
 let manager: HookControlManager | null = null;
 let disposeAuthListener: (() => void) | null = null;
@@ -203,7 +226,7 @@ function disabledHookView(): SlackHookView {
     serverMultiTeam: false,
     telegram: {
       enabled: false,
-      url: getClientEndpoint('telegramHookWsUrl'),
+      url: integrationsDirectory.isOffered('telegram') ? integrationsWsUrl('/telegram') : '',
       status: 'disabled',
       lastError: null,
       available: false,
@@ -233,7 +256,7 @@ function disabledHookView(): SlackHookView {
     },
     discord: {
       enabled: false,
-      url: getClientEndpoint('discordHookWsUrl'),
+      url: integrationsDirectory.isOffered('discord') ? integrationsWsUrl('/discord') : '',
       status: 'disabled',
       lastError: null,
       available: false,
@@ -648,7 +671,7 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
         > = {
           telegram: {
             name: `${BRAND_NAME} Telegram`,
-            url: getClientEndpoint('telegramHookWsUrl'),
+            url: integrationsWsUrl('/telegram'),
             enabled: config.telegramEnabled,
           },
           x: {
@@ -663,7 +686,7 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
           },
           discord: {
             name: `${BRAND_NAME} Discord`,
-            url: getClientEndpoint('discordHookWsUrl'),
+            url: integrationsWsUrl('/discord'),
             enabled: config.discordEnabled,
           },
           slack: {
@@ -783,10 +806,11 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       store,
       isAvailable: hookControlAvailable,
       createTransport: createHookTransport,
-      getTelegramUrl: () => getClientEndpoint('telegramHookWsUrl'),
+      getTelegramUrl: () => integrationsWsUrl('/telegram'),
       getXUrl: () => getClientEndpoint('xHookWsUrl'),
       getFeishuUrl: () => getClientEndpoint('feishuHookWsUrl'),
-      getDiscordUrl: () => getClientEndpoint('discordHookWsUrl'),
+      getDiscordUrl: () => integrationsWsUrl('/discord'),
+      isIntegrationOffered: (provider) => integrationsDirectory.isOffered(provider),
       // 与 device-link 同款 token 源: 现值优先, 缺失 refresh 一次
       getAuthToken: async () => {
         if (!hookControlAvailable()) return null;
@@ -895,7 +919,7 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       const token = authManager.getAccessToken();
       if (!token) return null;
       const bytes = await fetchOfficialGroupImage(
-        getClientEndpoint('telegramHookWsUrl'),
+        getClientEndpoint('integrationsBaseUrl'),
         token,
         downloadToken,
       );
@@ -993,6 +1017,8 @@ export function readXCompanionSummary(): { available: boolean; visible: boolean;
 
 /** 注册 IPC 并按配置 + 登录态拉起连接。bootstrap 里调用一次。 */
 export function registerHookControlIpc(): void {
+  // 启动时读一次服务端开启的官方应用(端点清单此前已阻断式解析); 不随账号切换重读。
+  integrationsDirectory.start();
   registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.GET, async () => {
     if (!hookControlAvailable()) {
       const { workspaces } = await readPluginImProjectCatalog();

@@ -23,9 +23,16 @@ Desktop 与 Mobile 共用端点清单。源码、随包文件和线上 CDN 是�
 
 地址非空只开放客户端入口。开关打开后，服务仍按当前账号与组织配置协商可用能力，组织接入和个人关联分别完成。
 
-## 官方 Discord
+## 三方应用集成（官方 Telegram / Discord）
 
-`discordHookWsUrl` 开放官方 Discord 入口（与个人 Discord bot 无关）。服务寄宿在 telegram-hook-server 的 `/discord` 路径，只在海外部署一套，cn 与 global 两个正式清单都填 `wss://telegram-hook.cindy.app/discord`。地址缺省或为空时不显示入口；已开启的用户保留卡片并显示地址未配置，以便关闭。服务端开关 `DISCORD_ENABLED` 关闭时 `/discord` 返回 404，客户端只显示连接失败，不影响其它渠道。dev 默认留空（Discord 在中国大陆不可达，联调在可访问 Discord 的本地环境进行）。按服务端文档的顺序，确认服务端 `/healthz` 的 `discordGateway` 为 `ready` 后再发布填好该字段的线上清单。
+`integrationsBaseUrl` 是三方应用集成服务的唯一地址，填 `https://` 开头的服务根地址。客户端按路径派生各业务地址：Telegram 连接 `/telegram`、Discord 连接 `/discord`、群历史图片 `/telegram/group-image`。以后新增三方应用不再增加清单字段。服务目前由 telegram-hook-server 承载，只在海外部署一套，cn 与 global 两个正式清单都填 `https://telegram-hook.cindy.app`；新域名 `integrations.cindy.app` 实测 HTTPS 与 WSS 可用后，只改这一个字段即可切换，不用发版。dev 默认留空。
+
+哪些官方入口显示由服务端决定：客户端启动时读一次 `GET <integrationsBaseUrl>/integrations`，只显示列出的应用，新应用上线只需服务端打开开关。已开启的用户始终保留卡片，以便关闭；列表读取失败只影响尚未开启的用户能否看到入口，不影响已有连接。服务端还没有这个接口（返回 404）时按只有 Telegram 处理。字段为空时不显示这些官方入口。
+
+两个正式清单保留更早客户端读的两个旧字段，新客户端都不读，不要删除：
+
+- `telegramHookWsUrl`：没有 `integrationsBaseUrl` 的版本连官方 Telegram 用，保持 `wss://telegram-hook.cindy.app`。
+- `discordHookWsUrl`：带官方 Discord 卡片、但还没有 `integrationsBaseUrl` 的版本用，填 `wss://telegram-hook.cindy.app/discord`。这些版本只在它非空时显示官方 Discord 入口，所以线上清单要等服务端打开 Discord 并确认 `/healthz` 的 `discordGateway` 为 `ready` 后再填；清空可让这些版本隐藏入口。
 
 ## 更新与核验
 

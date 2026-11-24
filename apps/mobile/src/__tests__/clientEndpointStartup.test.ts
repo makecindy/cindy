@@ -32,7 +32,7 @@ const FULL_MANIFEST_OBJECT = {
   oauthBrokerApiBaseUrl: 'https://oauth-next.example.com',
   ossApiBaseUrl: 'https://oss-next.example.com',
   heartbeatUrl: 'https://heartbeat-next.example.com',
-  telegramHookWsUrl: 'wss://telegram-hook-next.example.com',
+  integrationsBaseUrl: 'https://integrations-next.example.com',
   slackHookWsUrl: 'wss://hook-next.example.com',
   websiteUrl: 'https://www.next.example.com',
   modelAccessApiBaseUrl: 'https://model-access-next.example.com',

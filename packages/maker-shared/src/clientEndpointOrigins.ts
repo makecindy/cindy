@@ -37,10 +37,9 @@ export const REGION_ENDPOINT_DOMAIN: Readonly<Record<'cn' | 'global', string>> =
 export const CROSS_REGION_ENDPOINT_KEYS: ReadonlySet<string> = new Set([
   'chatApiBaseUrl',
   'slackHookWsUrl',
-  'telegramHookWsUrl',
+  'integrationsBaseUrl',
   'xHookWsUrl',
   'feishuHookWsUrl',
-  'discordHookWsUrl',
 ]);
 
 /** 缓存端点的来源策略:按 key 决定它允许落在哪个域。 */

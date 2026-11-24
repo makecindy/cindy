@@ -101,7 +101,7 @@ const FULL_MANIFEST = JSON.stringify({
   oauthBrokerApiBaseUrl: 'https://oauth.remote.example.com',
   ossApiBaseUrl: 'https://oss.remote.example.com',
   heartbeatUrl: 'https://heartbeat.remote.example.com',
-  telegramHookWsUrl: 'wss://telegram-hook.remote.example.com',
+  integrationsBaseUrl: 'https://integrations.remote.example.com',
   slackHookWsUrl: 'wss://hook.remote.example.com',
   websiteUrl: 'https://www.remote.example.com',
   modelAccessApiBaseUrl: 'https://model-access.remote.example.com',

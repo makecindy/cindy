@@ -26,9 +26,10 @@
 
 客户端接线（`apps/desktop/src/main/hook-control`）：
 
-- 端点清单新增 `discordHookWsUrl`（`wss:`），登记为跨区域端点；cn 与 global 两份正式清单都指向
-  `wss://telegram-hook.cindy.app/discord`。缺省或清空时不显示入口，可用于回滚；dev 默认留空。
-  见[端点清单说明](../../../config/README.md)。
+- 端点清单：本能力首个版本读 `discordHookWsUrl`（`wss://telegram-hook.cindy.app/discord`，跨区域端点），
+  非空才显示入口。之后的版本改为从 `integrationsBaseUrl` 派生 `/discord`，入口是否显示看服务端
+  `GET /integrations` 是否列出 `discord`，见[三方应用集成服务的统一地址](official-integrations-base-url.md)；
+  线上清单为前一类版本保留 `discordHookWsUrl`。见[端点清单说明](../../../config/README.md)。
 - `manager.ts` 的 `discordConfig` lane。`pending` 的 `connectUrl` 进入设置页快照前按 `discordDeepLink.ts`
   精确校验（主机 `discord.com`、路径 `/oauth2/authorize`、唯一参数 `client_id`），且 `client_id` 必须等于
   `scopeId`；不合规转为 `failed/invalid-connect-url`，清除链接与关联码。「打开机器人」
@@ -48,8 +49,10 @@
 
 兼容与发布顺序：旧桌面端不认识 `discord`，按未知 provider 拒绝该帧但不断连，也不会协商到
 `provider:discord`；新桌面端连到未开启 Discord 的服务端时 `/discord` 返回 404，卡片只显示连接失败，
-不影响其它渠道。服务端先发布（`DISCORD_ENABLED` 默认关闭），注入密钥、完成 Discord 开发者后台配置并确认
-`/healthz` 的 `discordGateway` 为 `ready` 后，再发布填好 `discordHookWsUrl` 的线上清单与带官方 Discord 卡片的客户端。
+不影响其它渠道。服务端先发布（`DISCORD_ENABLED` 默认关闭），此时 `/integrations` 不列出 `discord`，线上清单的 `discordHookWsUrl`
+也留空，两类客户端都不显示入口。注入密钥、完成 Discord 开发者后台配置并打开开关后，`/integrations` 列出
+`discord`，新版本随即显示入口；确认 `/healthz` 的 `discordGateway` 为 `ready` 后，再在线上清单填
+`discordHookWsUrl`，让只认这个字段的版本也显示入口。
 客户端没有数据库 migration、新增环境变量、Device Link 或自建中转变化；`sessions.source` 新增的
 `discord-hook` 是 SQLite text 列的新取值，不需要 schema 变更。
 

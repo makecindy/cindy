@@ -24,6 +24,7 @@ import {
   CLIENT_ENDPOINT_KEYS,
   CLIENT_ENDPOINT_REVIEW_KEY,
   CLIENT_ENDPOINTS_SCHEMA_VERSION,
+  LEGACY_CLIENT_ENDPOINT_KEYS,
   parseClientEndpointManifest,
 } from '../clientEndpoints';
 
@@ -76,6 +77,7 @@ describe.each(MANIFESTS)('config/endpoint*.json 守门($label)', ({ filePath, le
     );
     const allowed = new Set<string>([
       ...CLIENT_ENDPOINT_KEYS,
+      ...LEGACY_CLIENT_ENDPOINT_KEYS,
       CLIENT_ENDPOINT_REVIEW_KEY,
     ]);
     expect(keys.filter((key) => !allowed.has(key))).toEqual([]);
