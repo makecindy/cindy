@@ -152,6 +152,63 @@ it('cancels a still-starting prompt through the helper, not by killing it', asyn
   f.child.emit('close');
 });
 
+it('releases the panel as soon as a helper confirms its own teardown', async () => {
+  vi.useFakeTimers();
+  const f = fixture();
+  const panels: Promise<void>[] = [];
+  const starting = watchOwnerPrompt(
+    () => {},
+    'remove the privacy screen',
+    { resolveBinary: async () => '/helper', spawn: () => f.child as unknown as ChildProcessWithoutNullStreams },
+    undefined,
+    undefined,
+    (gone) => panels.push(gone),
+  );
+  await Promise.resolve();
+  f.line('ready owner-prompt\n');
+  const prompt = await starting;
+  let released = false;
+  void panels[0].then(() => { released = true; });
+  const stopping = prompt.stop();
+  // The helper ran `context.invalidate()` itself: nothing of the request outlives it.
+  f.line('stopped\n');
+  f.child.emit('close');
+  await stopping;
+  await vi.advanceTimersByTimeAsync(0);
+  expect(released).toBe(true);
+});
+
+// Codex P1: 必须被杀掉的助手没有跑 `context.invalidate()`，系统自己还会把验证请求画约十秒
+// （macos-input.swift）。这时 close 就等于「可以拍屏幕」会把验证框拍进 Computer Use。
+// 就绪要等这段残留过去；只写 stop 就被确认的路径不受影响。
+it('keeps the panel blocked for the residual request after a forced kill', async () => {
+  vi.useFakeTimers();
+  const f = fixture();
+  const panels: Promise<void>[] = [];
+  const starting = watchOwnerPrompt(
+    () => {},
+    'remove the privacy screen',
+    { resolveBinary: async () => '/helper', spawn: () => f.child as unknown as ChildProcessWithoutNullStreams },
+    undefined,
+    undefined,
+    (gone) => panels.push(gone),
+  );
+  await Promise.resolve();
+  f.line('ready owner-prompt\n');
+  const prompt = await starting;
+  let released = false;
+  void panels[0].then(() => { released = true; });
+  const stopping = prompt.stop();
+  await vi.advanceTimersByTimeAsync(2000);
+  expect(f.child.kill).toHaveBeenCalledOnce();
+  f.child.emit('close');
+  await stopping;
+  await vi.advanceTimersByTimeAsync(9_999);
+  expect(released).toBe(false);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(released).toBe(true);
+});
+
 it('never spawns the helper when the cover is released while the binary is still resolving', async () => {
   // A cold build of the native helper takes seconds; the task can end inside that wait.
   let releaseBinary: (binary: string) => void = () => {};

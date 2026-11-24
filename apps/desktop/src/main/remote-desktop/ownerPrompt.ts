@@ -11,6 +11,13 @@ import { resolveDesktopInputBinary } from './inputHost';
  */
 export type OwnerAnswer = 'verified' | 'denied' | 'unavailable';
 
+/**
+ * A helper that had to be killed leaves the system's own request on screen for about ten
+ * seconds (`macos-input.swift`): `context.invalidate()` never runs, so nobody in this
+ * process can take it down. Whoever keeps that display out of a capture waits this out.
+ */
+const KILLED_PROMPT_RESIDUAL_MS = 10_000;
+
 export interface OwnerPrompt {
   /** Takes the prompt down. Resolves once the helper is gone. */
   stop(): Promise<void>;
@@ -37,11 +44,13 @@ export async function watchOwnerPrompt(
    */
   onPanel?: (windowId: number | null) => void,
   /**
-   * The helper process this call spawned, by its `close`. A start that is cancelled never
-   * yields a prompt object, yet its panel can stay on screen until this settles — the
-   * caller keeps that panel out of captures until then.
+   * The panel is certainly off screen, not just the process gone. A start that is cancelled
+   * never yields a prompt object, yet its panel can still be up — the caller keeps that
+   * panel out of captures until this settles. A clean stop ends with the process; a helper
+   * that had to be killed leaves the system request up for about ten seconds, so this
+   * settles after that residual instead of at `close`.
    */
-  onHelperClosed?: (closed: Promise<void>) => void,
+  onHelperClosed?: (panelGone: Promise<void>) => void,
 ): Promise<OwnerPrompt> {
   if (signal?.aborted) throw new Error('DESKTOP_PRIVACY_UNAVAILABLE');
   // Resolving the helper can take a while (a cold build of the native source, a slow
@@ -51,11 +60,23 @@ export async function watchOwnerPrompt(
   const binary = await runtime.resolveBinary();
   if (signal?.aborted) throw new Error('DESKTOP_PRIVACY_UNAVAILABLE');
   const child = runtime.spawn(binary, ['--owner-prompt', reason]);
-  const closed = new Promise<void>((resolve) => child.once('close', () => resolve()));
-  onHelperClosed?.(closed);
   let buffer = '';
   let started = false;
   let done = false;
+  /** The helper ran `context.invalidate()` itself, so its panel is gone when it exits. */
+  let stopped = false;
+  let stopRequested = false;
+  const closed = new Promise<void>((resolve) => child.once('close', () => resolve()));
+  const panelGone = closed.then(() => {
+    // Killing the helper never runs `context.invalidate()`: the system draws the request
+    // for about ten more seconds, and a capture taken now would still show it.
+    if (!started || !stopRequested || stopped) return;
+    return new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, KILLED_PROMPT_RESIDUAL_MS);
+      (timer as { unref?: () => void }).unref?.();
+    });
+  });
+  onHelperClosed?.(panelGone);
   let settle: ((error?: Error) => void) | undefined;
   const ready = new Promise<void>((resolve, reject) => {
     settle = (error) => (error ? reject(error) : resolve());
@@ -93,6 +114,7 @@ export async function watchOwnerPrompt(
   // takes a prompt down uses this protocol, also while the helper is still starting
   // (`stop` waits in the pipe until it reads stdin).
   const requestStop = () => {
+    stopRequested = true;
     child.stdin.write('stop\n');
     const kill = setTimeout(() => child.kill(), 2000);
     kill.unref();
@@ -119,13 +141,19 @@ export async function watchOwnerPrompt(
     settle?.(new Error('DESKTOP_PRIVACY_UNAVAILABLE'));
   });
   child.stdout.on('data', (data: Buffer) => {
-    if (done) return;
     buffer += data.toString();
     if (buffer.length > 1024) return emit('unavailable');
     let index: number;
     while ((index = buffer.indexOf('\n')) >= 0) {
       const line = buffer.slice(0, index).trim();
       buffer = buffer.slice(index + 1);
+      // The helper's own teardown acknowledgement still matters once the caller has taken
+      // the prompt down: it separates a clean stop from one that ended in a kill.
+      if (line === 'stopped') {
+        stopped = true;
+        continue;
+      }
+      if (done) continue;
       // Anything else is a helper this build cannot use; the cover stays locked down.
       // The greeting is versioned: a helper that predates this mode falls through to its
       // generic input loop and prints a bare `ready`, which must not arm a prompt that is

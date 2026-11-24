@@ -47,10 +47,10 @@ const DISPLAY_SLEEP_REFRESH_MS = 60_000;
 const LOCK_SCREEN_SETTLE_MS = 1500;
 
 /**
- * Helper processes that have not closed yet. The system prompt's panel can still be on
- * screen until its helper is gone, and the exclusion list only reaches the remote viewer's
- * capture: Computer Use reads the same display through its own MCP session, so it waits on
- * this barrier before it touches the desktop.
+ * Panels that may still be on screen. The system prompt's panel can outlive its helper
+ * (a killed helper leaves the request up for about ten seconds), and the exclusion list
+ * only reaches the remote viewer's capture: Computer Use reads the same display through
+ * its own MCP session, so it waits on this barrier before it touches the desktop.
  */
 const pendingOwnerPromptHelpers = new Set<Promise<void>>();
 
