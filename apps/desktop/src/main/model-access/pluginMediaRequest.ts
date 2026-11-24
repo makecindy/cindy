@@ -262,6 +262,10 @@ export function createPluginMediaRequester(deps: Dependencies) {
           if (!media || media.request.bodyEncoding === 'multipart') {
             return failure('UNAVAILABLE', '此模型没有可用的 Cindy AI JSON 媒体接口');
           }
+          // 只有视频生成提供 jobRef 与 video.poll；异步的编辑接口会提交并计费，却没有可轮询的引用，提交前就拒绝。
+          if (operation === 'image.edit' && media.response.mode === 'async') {
+            return failure('UNAVAILABLE', '此模型的图像编辑接口为异步，Cindy AI 媒体直调暂不支持');
+          }
           path = media.request.path;
           modelPath = media.request.bodyModelPath;
           headers = media.request.headers ?? {};

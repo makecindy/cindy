@@ -109,15 +109,22 @@ describe('plugin media gateway dispatch', () => {
     expect(send).toHaveBeenCalledTimes(1);
   });
 
-  it('refuses image.edit when the model has no JSON edit route, before billing or dispatch', async () => {
+  it('refuses image.edit when the model has no usable JSON edit route, before billing or dispatch', async () => {
     const { context, dispatch, send, getGuide, prepareBilling } = setup();
-    const editGuide = async (request: object | undefined): Promise<ResolvedMediaInvocationGuide> => {
+    // `undefined` removes the edit entry; otherwise the entry is changed as given. An async edit guide would be
+    // submitted and billed with no jobRef to poll (only video.generate issues one), so it must be refused up front.
+    const editGuide = async (change: { request?: object; response?: object } | undefined): Promise<ResolvedMediaInvocationGuide> => {
       const { guide, modelId } = await getGuide();
       return { modelId, guide: { ...guide, operations: guide.operations.flatMap(item => item.capability !== 'image.edit' ? [item]
-        : request ? [{ ...item, request: { ...item.request, ...request } }] : []) } };
+        : change ? [{ ...item, request: { ...item.request, ...change.request }, ...(change.response ? { response: change.response } : {}) } as typeof item] : []) } };
     };
-    for (const request of [undefined, { bodyEncoding: 'multipart' as const, multipartFiles: [{ bodyField: 'image', formField: 'image', kind: 'image' as const, maxItems: 1 }] }]) {
-      getGuide.mockResolvedValueOnce(await editGuide(request));
+    const variants = [
+      undefined,
+      { request: { bodyEncoding: 'multipart' as const, multipartFiles: [{ bodyField: 'image', formField: 'image', kind: 'image' as const, maxItems: 1 }] } },
+      { response: { mode: 'async', taskIdPath: ['task', 'id'], poll } },
+    ];
+    for (const change of variants) {
+      getGuide.mockResolvedValueOnce(await editGuide(change));
       expect(await dispatch({ operation: 'image.edit', model, body: { prompt: 'x' } }, context)).toMatchObject({
         ok: false, errorCode: 'UNAVAILABLE',
       });
