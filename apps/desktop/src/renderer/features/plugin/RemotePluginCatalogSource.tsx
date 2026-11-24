@@ -1,11 +1,9 @@
 import { pluginSourceWarningKey } from '@cindy/maker-shared/mcp-apps';
 import { getPluginToolUi } from '@cindy/plugin-protocol';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { mergePluginSnapshot, pluginCatalogMemory, pluginCatalogPartitionKey, pluginInstalledGrid, usePluginCatalogState } from './lib/pluginCatalogMemory';
 import { samePluginValue, PLUGIN_CATALOG_REFRESH_MS } from './lib/pluginBrowserCache';
-import { PluginRecommendationSlots } from './lib/PluginRecommendationSlots';
-import { PluginCatalogPanels } from './lib/PluginCatalogPanels';
 import { usePluginMarketForegroundRefresh } from './lib/usePluginMarketForegroundRefresh';
 import {
   REMOTE_RESOURCE_CHANGED_CHANNEL,
@@ -13,7 +11,6 @@ import {
 } from '@cindy/device-link';
 import { Button } from '@/components/ui/button';
 import { AddRemoteProjectDialog } from '@/components/new-chat/AddRemoteProjectDialog';
-import { SegmentedControl } from '@/components/ui/segmented-control';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import {
   getDataOwnerGeneration,
@@ -33,29 +30,21 @@ import type {
   PluginManagementReceipt,
   PluginManagementProject,
   PluginManagementProjectState,
+  RemotePluginPublicationStatus,
 } from '../../../shared/pluginManagement';
 import type { PluginMarketDetail, PluginMarketItem } from '../../../shared/pluginMarket';
 import { GhostPluginCard, MarketPluginCard } from './GhostPluginPage';
-import { PluginCatalogBrowser, PLUGIN_PAGE_SIZE } from './PluginCatalogBrowser';
-import { PluginVirtualGrid } from './PluginVirtualGrid';
+import { PLUGIN_PAGE_SIZE } from './PluginCatalogBrowser';
 import { usePluginListScrollRestoration } from './lib/usePluginListScrollRestoration';
 import { hasPluginCatalogPaging, parsePluginManagementMarketPage, parsePluginManagementRecommendations } from './remotePluginManagementClient';
 import type { PluginMarketQuery, PluginMarketPage } from '../../../shared/pluginMarket';
 import { GhostPluginActions } from './GhostPluginActions';
+import { PluginCatalogView } from './PluginCatalogView';
+import { PluginPublishDialog, type PluginSubmitOptions } from './PluginPublishDialog';
+import { localPublishingUnavailableKey } from './lib/ghostPluginDetailModel';
 import type { CatalogDeviceControl } from './useCatalogDevice';
-import { GhostPluginDetailView } from './GhostPluginDetailView';
 import { RemotePluginConfiguration } from './RemotePluginConfiguration';
-import { RemotePluginReadOnlyDetail } from './RemotePluginReadOnlyDetail';
-import { MarketPluginDetailView } from './MarketPluginDetailView';
-import {
-  PluginManagementLayout,
-  InstalledCatalogHeader,
-  CatalogTargetControls,
-  CatalogManagementNotice,
-  PluginManagementPage,
-  PLUGIN_INSTALLED_CARD_GRID_CLASS,
-  PLUGIN_MANAGEMENT_CARD_GRID_CLASS,
-} from './PluginManagementLayout';
+import { CatalogManagementNotice } from './PluginManagementLayout';
 import { PluginProjectMenu } from './PluginScopePicker';
 import { toGhostPluginDetail, toGhostPluginListItem } from './lib/ghostPluginViewModel';
 import {
@@ -70,6 +59,8 @@ import {
   parsePluginManagementProject,
   parsePluginManagementDetail,
   parsePluginManagementReceipt,
+  parseRemotePublicationPreview,
+  parseRemotePublicationStatus,
   readLegacyManagedPlugins,
   readLegacyManagedPlugin,
   type LegacyManagedPlugin,
@@ -77,7 +68,7 @@ import {
 } from './remotePluginManagementClient';
 
 /** Every async closure belongs to this mounted owner + selected computer. Never uses local Ghost IPC. */
-export function RemotePluginPage({
+export function RemotePluginCatalogSource({
   device,
   online,
   active = true,
@@ -750,291 +741,330 @@ export function RemotePluginPage({
       .toLocaleLowerCase()
       .includes(normalizedQuery),
   );
-  const pageHeading = (
-    <header className="mb-8" data-catalog-region="heading">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-28 font-medium leading-tight text-[var(--text-primary)]">
-          {t('settings.ghosts.title')}
-        </h1>
-        <CatalogTargetControls
-          computer={
-            deviceControl ?? {
-              selected: device,
-              onSelect: () => {},
-              directory: { candidates: [], target: undefined, online, relayOnline: online },
-            }
-          }
-          projectLabel={project?.name}
-          project={
-            <PluginProjectMenu
-              scopeDir={project?.id ?? null}
-              activeSessionWorkingDir={undefined}
-              recentWorkdirs={[]}
-              computerName={device.name}
-              projectOptions={snapshot?.projects ?? []}
-              onBrowse={snapshot?.projectBrowse ? () => setProjectPickerOpen(true) : undefined}
-              disabled={!online || !snapshot || !snapshot.projects || !!operation.current}
-              unavailable={unsupported || (!!snapshot && !snapshot.projects)}
-              onPick={pickProject}
-            />
-          }
-        />
-      </div>
-      <p className="mt-2 text-14 leading-6 text-[var(--text-secondary)]">
-        {t('settings.ghosts.description')}
-      </p>
-    </header>
+  const publicationSupported = snapshot?.communityPublication === true;
+  const publishableGhosts = (snapshot?.ghosts ?? []).filter(installed =>
+    installed.publishingSource?.kind === 'local' && !localPublishingUnavailableKey(
+      installed, snapshot?.market.items.find(item => marketItemMatchesInstalledGhost(item, installed)),
+    ),
   );
-  return (
-    <div className="flex h-full min-h-0 flex-col bg-[var(--surface)]">
-      {projectPickerOpen ? (
-        <AddRemoteProjectDialog
-          open={projectPickerOpen}
-          onOpenChange={(open) => { ++projectPickerRevision.current; setProjectPickerOpen(open); }}
-          initialDeviceId={device.deviceId}
-          fixedDeviceId={device.deviceId}
-          title={t('settings.ghosts.scopePicker.projectsForComputer', { device: device.name })}
-          confirmText={t('newChat.folderPicker.selectFolder')}
-          errorText={t('settings.ghosts.remote.projectReadFailed')}
-          onProjectAdded={async (target) => {
-            if (target.kind !== 'device-link' || target.deviceId !== device.deviceId ||
-              !projectPickerCurrent.current || !writable() || operation.current) return;
-            const revision = ++projectPickerRevision.current;
-            const next = parsePluginManagementProject(await invoke('project-select', { path: target.path }));
-            if (!projectPickerCurrent.current || !writable() || revision !== projectPickerRevision.current) return;
-            // Re-read the Host catalogue so a previous transient browse does not remain selectable.
-            await refresh();
-            if (!projectPickerCurrent.current || !writable() || revision !== projectPickerRevision.current) return;
-            applyProject(next);
-          }}
-        />
+  const [publicationDialog, setPublicationDialog] = useState<{ instanceId?: string } | null>(null);
+  const [publicationReceipt, setPublicationReceipt] = useState<string | null>(null);
+  const [publicationBusy, setPublicationBusy] = useState(false);
+  const [publicationReadFailed, setPublicationReadFailed] = useState(false);
+  const [publicationCheck, setPublicationCheck] = useState(0);
+  const submitting = useRef(false);
+  useEffect(() => {
+    if (!online || !active) setPublicationDialog(null);
+  }, [online, active]);
+  const publicationReader = useMemo(() => ({
+    prepare: async (instanceId: string) => {
+      const installed = snapshot?.ghosts.find(item => installedGhostStoragePart(item) === instanceId);
+      if (!writable() || !installed) throw new Error('[NOT_FOUND] Target installation is no longer available');
+      return parseRemotePublicationPreview(await invoke('publish-prepare', {
+        expectedInstalledApproval: ghostInstallApprovalToken(installed.approval),
+        expectedVersion: installed.manifest.version,
+      }, instanceId));
+    },
+    discard: async (preparedId: string) => {
+      await invoke('publish-discard', { preparedId });
+    },
+  }), [invoke, snapshot, writable]);
+  const finishPublication = useCallback((result: RemotePluginPublicationStatus) => {
+    if (result.stage === 'pending') return;
+    setPublicationReceipt(null);
+    if (result.stage === 'submitted') toast.success(t('settings.ghosts.contribution.pendingVersion'));
+    else if ('errorCode' in result) toast.error(t(`settings.ghosts.contribution.errors.${result.errorCode}`, {
+      defaultValue: t('settings.ghosts.contribution.submitFailed'),
+    }));
+  }, [t]);
+  useEffect(() => {
+    if (!publicationReceipt || !online || !active) return;
+    let disposed = false;
+    let timer: number | undefined;
+    let attempts = 0;
+    setPublicationReadFailed(false);
+    const check = async () => {
+      try {
+        const result = parseRemotePublicationStatus(await invoke('publish-status', { preparedId: publicationReceipt }));
+        if (disposed || !current()) return;
+        if (result.stage !== 'pending') {
+          finishPublication(result);
+          return;
+        }
+        if (++attempts < 45) {
+          timer = window.setTimeout(() => void check(), 2000);
+          return;
+        }
+      } catch {
+        if (disposed || !current()) return;
+      }
+      setPublicationReadFailed(true);
+    };
+    void check();
+    return () => {
+      disposed = true;
+      window.clearTimeout(timer);
+    };
+  }, [active, online, publicationReceipt, publicationCheck, invoke, current, finishPublication]);
+  const submitPublication = async (instanceId: string, options?: PluginSubmitOptions) => {
+    const prepared = options?.prepared;
+    if (!writable() || submitting.current || publicationReceipt || !prepared || prepared.instanceId !== instanceId) return false;
+    submitting.current = true;
+    setPublicationBusy(true);
+    try {
+      const result = parseRemotePublicationStatus(await invoke('publish-submit', { preparedId: prepared.preparedId }));
+      if (!current()) return false;
+      if (result.stage === 'pending') {
+        setPublicationDialog(null);
+        setPublicationReceipt(prepared.preparedId);
+      } else finishPublication(result);
+      return result.stage !== 'failed';
+    } catch {
+      // A lost response does not tell us whether B started this submission.
+      if (!current()) return false;
+      setPublicationDialog(null);
+      setPublicationReceipt(prepared.preparedId);
+      return true;
+    } finally {
+      submitting.current = false;
+      if (current()) setPublicationBusy(false);
+    }
+  };
+  const publicationPending = publicationBusy || publicationReceipt !== null;
+  const publicationUnavailable = !publicationSupported && (snapshot || unsupported) ? (
+    <p className="mb-3 text-13 text-[var(--text-secondary)]">
+      {t('settings.ghosts.remote.publishOnTarget', { device: device.name })}
+    </p>
+  ) : null;
+  const publicationProgress = publicationReceipt ? (
+    <div role="status" className="mb-3 flex items-center gap-3 text-13 text-[var(--text-secondary)]">
+      <p>{t(!online || publicationReadFailed ? 'settings.ghosts.remote.unknown' : 'settings.ghosts.contribution.loading')}</p>
+      {publicationReadFailed && online ? (
+        <Button size="sm" onClick={() => setPublicationCheck(value => value + 1)}>{t('settings.ghosts.remote.retry')}</Button>
       ) : null}
-      {(ghost || marketDetail) && (targetProblem || projectReadStatus) ? notice : null}
-      <div className="min-h-0 flex-1">
-        {unsupported && legacySelected ? (
-          <RemotePluginReadOnlyDetail
-            detail={legacyDetail?.id === legacySelected.id ? legacyDetail : legacySelected}
-            notice={notice}
-            loading={online && legacyDetailStatus === 'loading'}
-            failed={legacyDetailStatus === 'failed'}
-            online={online}
-            onBack={() => {
-              ++detailRevision.current;
-              restoreCatalogScroll();
-              setLegacySelected(null);
-              setLegacyDetail(null);
-              setLegacyDetailStatus(null);
-            }}
-            onRetry={() => void loadLegacyDetail(legacySelected)}
-          />
-        ) : ghost ? (
-          <GhostPluginDetailView
-            remote
-            remoteConfiguration={configuration}
-            ghost={effectiveGhost(ghost)}
-            marketItem={snapshot?.market.items.find((item) =>
-              marketItemMatchesInstalledGhost(item, ghost),
-            )}
-            detail={toGhostPluginDetail(effectiveGhost(ghost))}
-            panelStatus={null}
-            onBack={() => { restoreCatalogScroll(); setSelected(null); }}
-            onToggle={(enabled) => {
-              void begin(enabled ? 'enable' : 'disable', ghost);
-            }}
-            toggleDisabled={busy || !projectReady || (!!project && !ghost.enabled)}
-            onUse={() => {}}
-            updateBusy={busy}
-            updateVersion={update?.version}
-            onUpdate={() => {
-              if (update) void install(update);
-            }}
-            onUpdateFromFile={() => {
-              void installFile(ghost);
-            }}
-            remoteFileUpdate={(ghost.namespace === null || ghost.namespace === 'local') && !ghost.builtin}
-            onUninstall={() => {
-              void uninstall(ghost);
-            }}
-          />
-        ) : marketDetail ? (
-          <MarketPluginDetailView
-            detail={marketDetail}
-            busy={busy}
-            onBack={() => { restoreCatalogScroll(); setMarketDetail(null); }}
-            onInstall={
-              marketDetail.installState === 'conflict'
-                ? undefined
-                : () => {
-                    void install(marketDetail);
-                  }
-            }
-            onIconLoadError={() => {}}
-          />
-        ) : (
-          <PluginManagementLayout
-            activeTab="plugins"
-            embedded={embedded}
-            onSelectTab={onSelectCatalogTab}
-            query={query}
-            onQueryChange={value => { setQuery(value.slice(0, 100)); if (catalogScroller.current) catalogScroller.current.scrollTop = 0; }}
-            headerActions={
-              unsupported ? undefined : (
-                <GhostPluginActions
-                  disabled={busy}
-                  installTarget={device.name}
-                  onInstall={() => void installFile()}
-                />
-              )
-            }
-          >
-            <main ref={catalogScroller} onScroll={onListScroll} className="min-h-0 flex-1 overflow-y-auto">
-              <PluginManagementPage>
-                {pageHeading}
-                {!query.trim() && (!todayLoaded || todayPool.filter(item => {
-                  const latest = snapshot?.market.items.find(row => row.pluginId === item.pluginId) ?? item;
-                  return !consumedToday.has(item.pluginId) && latest.installState !== 'installed' && latest.installState !== 'update-available';
-                }).length >= 3) ? <section className="mb-6 min-w-0">
-                  <h2 className="mb-4 text-20 font-medium text-[var(--text-primary)]">{t('settings.ghosts.page.todayRecommendations')}</h2>
-                  <PluginRecommendationSlots loading={!todayLoaded}>
-                    {todayPool.filter(item => {
-                      const latest = snapshot?.market.items.find(row => row.pluginId === item.pluginId) ?? item;
-                      return !consumedToday.has(item.pluginId) && latest.installState !== 'installed' && latest.installState !== 'update-available';
-                    }).slice(0, 3).map(item => <MarketPluginCard compact key={item.pluginId} item={item} busy={busy}
-                      onSelect={() => void selectMarket(item)} onInstall={() => void install(item)} onIconLoadError={() => {}} />)}
-                  </PluginRecommendationSlots>
-                </section> : null}
-                {!unsupported && !query.trim() ? <><div ref={secondaryTabs} className="h-0" /><div className="sticky top-0 z-raised mb-6 flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-default)] app-wallpaper-surface bg-[var(--surface)] py-3">
-                  <SegmentedControl role="tablist" height={38} optionHeight={32}
-                    optionClassName="plugin-management-tab min-w-[88px] px-4 text-13" value={catalogTab} onValueChange={value => {
-                    if (value === 'market' && catalogTab !== 'market') setOriginFilter('official');
-                    setCatalogTab(value);
-                    const root = catalogScroller.current, tabs = secondaryTabs.current;
-                    if (root && tabs && tabs.getBoundingClientRect().top < root.getBoundingClientRect().top)
-                      root.scrollTop += tabs.getBoundingClientRect().top - root.getBoundingClientRect().top;
-                  }} aria-label={t('settings.ghosts.page.secondaryTabsAria')}
-                    options={[
-                      { value: 'installed', label: <>{t('settings.ghosts.page.installedSection')} <span className="ml-1.5 inline-block min-w-[3ch] text-right tabular-nums">{snapshot?.ghosts.length ?? 0}</span></> },
-                      { value: 'market', label: <>{t('settings.ghosts.page.marketSection')} <span className="ml-1.5 inline-block min-w-[3ch] text-right tabular-nums">{marketTotal ?? '\u00a0'}</span></> },
-                    ]} />
-                  <div ref={marketFiltersHost} className="min-w-0" />
-                </div></> : null}
-                <PluginCatalogPanels scrollRef={catalogScroller} query={query}>
-                <section hidden={!unsupported && !query.trim() && catalogTab !== 'installed'}>
-                  <InstalledCatalogHeader
-                    title={t('settings.ghosts.page.installedSection')}
-                    count={
-                      unsupported
-                        ? legacy
-                          ? filteredLegacy.length
-                          : undefined
-                        : filteredGhosts?.length
-                    }
-                  />
-                  {notice}
-                  <div className="min-w-0">
-                    {unsupported
-                      ? <PluginVirtualGrid scrollRef={catalogScroller} cache={installedGridCache}
-                        active={unsupported || !!query.trim() || catalogTab === 'installed'}
-                        count={Math.min(installedLimit, filteredLegacy.length)} renderItem={index => {
-                          const item = filteredLegacy[index]!;
-                          return (
-                          <GhostPluginCard
-                            key={item.id}
-                            readOnly
-                            item={item}
-                            showLocalUnread={false}
-                            onManage={() => {
-                              captureCatalogScroll();
-                              setLegacyDetail(null);
-                              setLegacyDetailStatus('loading');
-                              setLegacySelected(item);
-                            }}
-                            onPrimary={() => {
-                              captureCatalogScroll();
-                              setLegacyDetail(null);
-                              setLegacyDetailStatus('loading');
-                              setLegacySelected(item);
-                            }}
-                          />
-                        ); }} />
-                      : <PluginVirtualGrid scrollRef={catalogScroller} cache={installedGridCache}
-                          active={!!query.trim() || catalogTab === 'installed'}
-                          count={!project || projectState?.projectId === project.id ? Math.min(installedLimit, filteredGhosts?.length ?? 0) : 0}
-                          renderItem={index => {
-                            const g = filteredGhosts![index]!;
-                            const item = {
-                              ...toGhostPluginListItem(effectiveGhost(g)),
-                              canUse: false,
-                              tabPanel: false,
-                            };
-                            const market = snapshot?.market.items.find(
-                              (i) =>
-                                marketItemMatchesInstalledGhost(i, g) &&
-                                i.installState === 'update-available',
-                            );
-                            return (
-                              <GhostPluginCard
-                                key={installedGhostStoragePart(g)}
-                                item={item}
-                                author={g.manifest.author}
-                                marketItem={snapshot?.market.items.find((entry) =>
-                                  marketItemMatchesInstalledGhost(entry, g),
-                                )}
-                                showLocalUnread={false}
-                                sourceLabel={
-                                  g.namespace ?? t('settings.ghosts.remote.personalInstall')
-                                }
-                                onManage={() => {
-                                  captureCatalogScroll();
-                                  ++detailRevision.current;
-                                  setSelected(installedGhostStoragePart(g));
-                                }}
-                                onPrimary={() => { captureCatalogScroll(); setSelected(installedGhostStoragePart(g)); }}
-                                updateBusy={busy}
-                                updateVersion={market?.version}
-                                onUpdate={
-                                  market
-                                    ? () => {
-                                        void install(market);
-                                      }
-                                    : undefined
-                                }
-                              />
-                            );
-                          }} />}
-                  </div>
-                  <div ref={installedSentinel} className="h-1" />
-                  {(unsupported ? legacy?.length === 0 : snapshot && !snapshot.ghosts.length) ? (
-                    <p className="text-13 leading-5 text-[var(--text-tertiary)]">
-                      {t('settings.ghosts.remote.empty')}
-                    </p>
-                  ) : null}
-                </section>
-                {!unsupported ? <PluginCatalogBrowser cacheRef={browserCache}
-                  filterHost={marketFiltersHost}
-                  ownerKey={JSON.stringify([device.deviceId, scope.current.owner])}
-                  catalogKey={i18n.language}
-                  revision={JSON.stringify([snapshot?.market.items.map(item => [item.pluginId, item.installState, item.version]), snapshot?.market.customSourceNames])} installedItems={snapshot?.market.items}
-                  query={query} scope={originFilter}
-                  onScope={value => {
-                    setOriginFilter(value);
-                    const root = catalogScroller.current, tabs = secondaryTabs.current;
-                    if (root && tabs && tabs.getBoundingClientRect().top < root.getBoundingClientRect().top)
-                      root.scrollTop += tabs.getBoundingClientRect().top - root.getBoundingClientRect().top;
-                  }} showOrganization={true}
-                  visible={active && (!!query.trim() || catalogTab === 'market')} scrollRef={catalogScroller}
-                  loadPage={readMarketPage} onCounts={counts => setMarketTotal(counts?.all ?? null)} renderRevision={busy}
-                  renderItem={item => <MarketPluginCard key={item.pluginId} item={item} busy={busy}
-                    onSelect={() => void selectMarket(item)}
-                    onInstall={item.installState === 'installed' || item.installState === 'update-available' ? undefined : () => void install(item)}
-                    onIconLoadError={() => {}} />}
-                /> : null}
-                </PluginCatalogPanels>
-              </PluginManagementPage>
-            </main>
-          </PluginManagementLayout>
-        )}
-      </div>
     </div>
+  ) : null;
+  const publicationOverlay = publicationDialog && publicationSupported && online ? (
+    <PluginPublishDialog
+      open
+      ownerKey={catalogOwnerKey}
+      sourceDevice={device.name}
+      initialInstanceId={publicationDialog.instanceId}
+      reader={publicationReader}
+      localPlugins={publishableGhosts.map(installed => toGhostPluginListItem(installed))}
+      installedPluginCount={snapshot?.ghosts.length ?? 0}
+      installedRevision={JSON.stringify(publishableGhosts.map(installed => [
+        installedGhostStoragePart(installed), installed.manifest.version, ghostInstallApprovalToken(installed.approval),
+      ]))}
+      onOpenChange={open => { if (!open) setPublicationDialog(null); }}
+      onClosed={() => {}}
+      onSubmitUpdate={submitPublication}
+      submitBusy={publicationPending}
+    />
+  ) : null;
+  const projectPicker = projectPickerOpen ? (
+    <AddRemoteProjectDialog
+      open={projectPickerOpen}
+      onOpenChange={(open) => { ++projectPickerRevision.current; setProjectPickerOpen(open); }}
+      initialDeviceId={device.deviceId}
+      fixedDeviceId={device.deviceId}
+      title={t('settings.ghosts.scopePicker.projectsForComputer', { device: device.name })}
+      confirmText={t('newChat.folderPicker.selectFolder')}
+      errorText={t('settings.ghosts.remote.projectReadFailed')}
+      onProjectAdded={async (target) => {
+        if (target.kind !== 'device-link' || target.deviceId !== device.deviceId ||
+          !projectPickerCurrent.current || !writable() || operation.current) return;
+        const revision = ++projectPickerRevision.current;
+        const next = parsePluginManagementProject(await invoke('project-select', { path: target.path }));
+        if (!projectPickerCurrent.current || !writable() || revision !== projectPickerRevision.current) return;
+        // Re-read the Host catalogue so a previous transient browse does not remain selectable.
+        await refresh();
+        if (!projectPickerCurrent.current || !writable() || revision !== projectPickerRevision.current) return;
+        applyProject(next);
+      }}
+    />
+  ) : null;
+  const overlay = <>{projectPicker}{publicationOverlay}</>;
+  if (unsupported && legacySelected) return (
+    <PluginCatalogView overlay={overlay} detail={{ readOnly: {
+      detail: legacyDetail?.id === legacySelected.id ? legacyDetail : legacySelected,
+      notice: <>{notice}{publicationUnavailable}</>,
+      loading: online && legacyDetailStatus === 'loading',
+      failed: legacyDetailStatus === 'failed',
+      online,
+      onBack: () => {
+        ++detailRevision.current;
+        restoreCatalogScroll();
+        setLegacySelected(null);
+        setLegacyDetail(null);
+        setLegacyDetailStatus(null);
+      },
+      onRetry: () => void loadLegacyDetail(legacySelected),
+    } }} />
+  );
+
+  const detailNotice = <>
+    {targetProblem || projectReadStatus ? notice : null}
+    {publicationUnavailable}
+    {publicationProgress}
+  </>;
+  if (ghost) {
+    const installed = effectiveGhost(ghost);
+    return (
+      <PluginCatalogView overlay={overlay} notice={detailNotice} detail={{ installed: {
+        remote: true,
+        remoteConfiguration: configuration,
+        ghost: installed,
+        marketItem: snapshot?.market.items.find(item => marketItemMatchesInstalledGhost(item, ghost)),
+        detail: toGhostPluginDetail(installed),
+        panelStatus: null,
+        onBack: () => { restoreCatalogScroll(); setSelected(null); },
+        onToggle: enabled => void begin(enabled ? 'enable' : 'disable', ghost),
+        toggleDisabled: busy || !projectReady || (!!project && !ghost.enabled),
+        onUse: () => {},
+        updateBusy: busy,
+        updateVersion: update?.version,
+        onUpdate: () => { if (update) void install(update); },
+        onUpdateFromFile: () => void installFile(ghost),
+        remoteFileUpdate: (ghost.namespace === null || ghost.namespace === 'local') && !ghost.builtin,
+        onUninstall: () => void uninstall(ghost),
+        onContribute: publicationSupported && publishableGhosts.includes(ghost)
+          ? () => setPublicationDialog({ instanceId: installedGhostStoragePart(ghost) }) : undefined,
+        contributionBusy: publicationPending,
+        contributionUnavailableReason: !online ? t('settings.ghosts.contribution.offline') : undefined,
+      } }} />
+    );
+  }
+
+  if (marketDetail) return (
+    <PluginCatalogView overlay={overlay} notice={detailNotice} detail={{ market: {
+      detail: marketDetail,
+      busy,
+      onBack: () => { restoreCatalogScroll(); setMarketDetail(null); },
+      onInstall: marketDetail.installState === 'conflict' ? undefined : () => void install(marketDetail),
+      onIconLoadError: () => {},
+    } }} />
+  );
+
+  const todayItems = todayPool.filter(item => {
+    const latest = snapshot?.market.items.find(row => row.pluginId === item.pluginId) ?? item;
+    return !consumedToday.has(item.pluginId) && latest.installState !== 'installed' && latest.installState !== 'update-available';
+  }).slice(0, 3);
+  return (
+    <PluginCatalogView
+      overlay={overlay}
+      catalog={{
+        embedded,
+        onSelectCatalogTab,
+        query,
+        onQueryChange: setQuery,
+        scrollRef: catalogScroller,
+        onScroll: onListScroll,
+        tabsRef: secondaryTabs,
+        filtersRef: marketFiltersHost,
+        tab: catalogTab,
+        onSelectTab: setCatalogTab,
+        target: {
+          computer: deviceControl ?? {
+            selected: device,
+            onSelect: () => {},
+            directory: { candidates: [], target: undefined, online, relayOnline: online },
+          },
+          projectLabel: project?.name,
+          project: <PluginProjectMenu
+            scopeDir={project?.id ?? null}
+            activeSessionWorkingDir={undefined}
+            recentWorkdirs={[]}
+            computerName={device.name}
+            projectOptions={snapshot?.projects ?? []}
+            onBrowse={snapshot?.projectBrowse ? () => setProjectPickerOpen(true) : undefined}
+            disabled={!online || !snapshot || !snapshot.projects || !!operation.current}
+            unavailable={unsupported || (!!snapshot && !snapshot.projects)}
+            onPick={pickProject}
+          />,
+        },
+        publication: publicationSupported ? {
+          open: () => setPublicationDialog({}),
+          disabled: !online || publicationPending,
+        } : undefined,
+        notice: <>{publicationUnavailable}{publicationProgress}</>,
+        headerActions: unsupported ? undefined : (
+          <GhostPluginActions disabled={busy} installTarget={device.name} onInstall={() => void installFile()} />
+        ),
+        installedTotal: snapshot?.ghosts.length ?? 0,
+        installedCount: unsupported ? (legacy ? filteredLegacy.length : undefined) : filteredGhosts?.length,
+        installedNotice: notice,
+        installedSentinel,
+        installedGrid: {
+          cache: installedGridCache,
+          count: unsupported
+            ? Math.min(installedLimit, filteredLegacy.length)
+            : !project || projectState?.projectId === project.id
+              ? Math.min(installedLimit, filteredGhosts?.length ?? 0)
+              : 0,
+          renderItem: index => {
+            if (unsupported) {
+              const item = filteredLegacy[index]!;
+              const openDetail = () => {
+                captureCatalogScroll();
+                setLegacyDetail(null);
+                setLegacyDetailStatus('loading');
+                setLegacySelected(item);
+              };
+              return <GhostPluginCard key={item.id} readOnly item={item} showLocalUnread={false} onManage={openDetail} onPrimary={openDetail} />;
+            }
+            const installed = filteredGhosts![index]!;
+            const id = installedGhostStoragePart(installed);
+            const item = { ...toGhostPluginListItem(effectiveGhost(installed)), canUse: false, tabPanel: false };
+            const marketItem = snapshot?.market.items.find(entry => marketItemMatchesInstalledGhost(entry, installed));
+            const update = marketItem?.installState === 'update-available' ? marketItem : undefined;
+            return <GhostPluginCard
+              key={id}
+              item={item}
+              author={installed.manifest.author}
+              marketItem={marketItem}
+              showLocalUnread={false}
+              sourceLabel={installed.namespace ?? t('settings.ghosts.remote.personalInstall')}
+              onManage={() => {
+                captureCatalogScroll();
+                ++detailRevision.current;
+                setSelected(id);
+              }}
+              onPrimary={() => { captureCatalogScroll(); setSelected(id); }}
+              updateBusy={busy}
+              updateVersion={update?.version}
+              onUpdate={update ? () => void install(update) : undefined}
+            />;
+          },
+        },
+        installedEmpty: (unsupported ? legacy?.length === 0 : snapshot && !snapshot.ghosts.length) ? (
+          <p className="text-13 leading-5 text-[var(--text-tertiary)]">{t('settings.ghosts.remote.empty')}</p>
+        ) : undefined,
+        recommendations: !todayLoaded || todayItems.length === 3 ? {
+          loading: !todayLoaded,
+          cards: todayItems.map(item => <MarketPluginCard compact key={item.pluginId} item={item} busy={busy}
+            onSelect={() => void selectMarket(item)} onInstall={() => void install(item)} onIconLoadError={() => {}} />),
+        } : undefined,
+        market: unsupported ? undefined : {
+          cacheRef: browserCache,
+          ownerKey: JSON.stringify([device.deviceId, scope.current.owner]),
+          catalogKey: i18n.language,
+          revision: JSON.stringify([snapshot?.market.items.map(item => [item.pluginId, item.installState, item.version]), snapshot?.market.customSourceNames]),
+          installedItems: snapshot?.market.items,
+          scope: originFilter,
+          onScope: setOriginFilter,
+          showOrganization: true,
+          visible: active && (!!query.trim() || catalogTab === 'market'),
+          loadPage: readMarketPage,
+          onCounts: counts => setMarketTotal(counts?.all ?? null),
+          renderRevision: busy,
+          total: marketTotal,
+          renderItem: item => <MarketPluginCard key={item.pluginId} item={item} busy={busy}
+            onSelect={() => void selectMarket(item)}
+            onInstall={item.installState === 'installed' || item.installState === 'update-available' ? undefined : () => void install(item)}
+            onIconLoadError={() => {}} />,
+        },
+      }}
+    />
   );
 }

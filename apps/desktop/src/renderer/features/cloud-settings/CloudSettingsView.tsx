@@ -499,7 +499,7 @@ export function CloudSettingsPanel({
   // jump; an answer that rules the open category out moves to the first one it supports.
   const capabilitiesKnown = !!deviceId;
 
-  // The page's one notice (as the client's RemoteSkillsPage / RemotePluginPage): who is
+  // The page's one notice (as the client's RemoteSkillsPage / RemotePluginCatalogSource): who is
   // managed, and in its text what the page is doing: reading, could not read, offline, updating,
   // not supported. Until the instance has been read it is not known to be offline. The plugin
   // page reads over DeviceLink, not these settings, so there it says only the instance's state;

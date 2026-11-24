@@ -176,6 +176,7 @@ function syncNewMakerPrefs(appDefaultModelRequestId?: string) {
   window.electronAPI.syncNewMakerDraft({
     ...(appDefaultModelRequestId ? { appDefaultModelRequestId } : {}),
     ownerStamp: { dataOwnerId: owner.dataOwnerId, ownerGeneration: owner.generation },
+    selectedPluginEngine: draft.pluginEngine ?? undefined,
     selectedRoute: {
       ...(draft.agentDeviceId ? { agentDeviceId: draft.agentDeviceId } : {}),
       harness: draft.vendor === 'cc' || draft.vendor === 'orca' ? 'claude' : draft.vendor,

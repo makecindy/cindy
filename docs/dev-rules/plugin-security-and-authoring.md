@@ -256,7 +256,7 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   已接受的插件消息复用现有独立投递守卫，正常关闭逻辑页或回收 Node 不撤销；实际投递仍核对 owner、安装目录/批准版本、enabled、manifest 声明及精确目标/正文/clientId。停用、卸载、安装批准失效和账号变化仍撤销；宿主重启不持久恢复守卫。
   作者契约见 [宿主工具调用](../../apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-host-tools.md)。
   原生任务包由 `history/export_session` 和 `control/import_session` 开放，直接复用分享包导出与导入事务；插件按安装授权调用，Agent 运行时遵循自身权限流程。
-  插件仅经本实例既有 handoff 收取与提交包，不接受或返回宿主路径；Agent 导出由用户在原生保存对话框中选择位置，再返回最终路径，不接受 `output_path`。Agent 导入保留原生路径调用。
+  插件仅经本实例既有 handoff 收取与提交包，不接受或返回宿主路径；Agent 导出存到用户在「设置 → 存储空间」用原生选择器设定的导出位置（宿主命名、不覆盖同名文件、导出到私有临时目录后再落盘；位置失效返回 `EXPORT_DIRECTORY_UNAVAILABLE`，不改弹窗），未设定时由用户在原生保存对话框中选择位置，再返回最终路径，不接受 `output_path`。Agent 导入保留原生路径调用。
   加密包和未指定目录的项目包交原生导入向导，返回 `awaiting_user`，不能当成导入完成；工具不收密码。
   `browser/computer/ssh/docs` 直接复用相应现有 MCP server 的 validated handler；新组不改公共调用或调用方签名。
   browser recipe/切换用户浏览器/upload、电脑敏感输入与系统权限、SSH 认证和文档文件边界沿用原规则。

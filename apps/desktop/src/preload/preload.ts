@@ -73,6 +73,7 @@ import type {
   PreparedProjectFromTask,
   ProjectsRootState,
 } from '../shared/projectsRoot';
+import type { TaskExportDirectoryState } from '../shared/taskExportDirectory';
 import type {
   CustomProviderUpdateOptions,
   CustomProviderUpdateResult,
@@ -407,7 +408,7 @@ type VoiceInputGlobalResult =
   | {
       ok: false;
       error: string;
-      errorCode?: 'empty' | 'unavailable' | 'unconfirmed' | 'permission' | 'failed' | 'superseded';
+      errorCode?: 'empty' | 'unavailable' | 'unconfirmed' | 'permission' | 'appNotAllowed' | 'failed' | 'superseded';
     };
 type VoiceInputSettingsUpdateResult =
   | {
@@ -3084,6 +3085,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   syncNewMakerDraft: (snapshot: {
     ownerStamp: import('../shared/dataOwnerPush').DataOwnerPushStamp;
     selectedRoute?: import('../shared/botModelChain').BotModelRoute;
+    selectedPluginEngine?: import('../shared/pluginEngines').NewTaskPluginEngineSelection;
     lastByVendor: Partial<
       Record<
         'cc' | 'codex' | 'pi',
@@ -5066,6 +5068,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     get: (): Promise<ProjectsRootState> => ipcRenderer.invoke('projects-root:get'),
     choose: (): Promise<ProjectsRootState> => ipcRenderer.invoke('projects-root:choose'),
     reset: (): Promise<ProjectsRootState> => ipcRenderer.invoke('projects-root:reset'),
+  },
+  taskExportDirectory: {
+    get: (): Promise<TaskExportDirectoryState> => ipcRenderer.invoke('task-export-directory:get'),
+    choose: (): Promise<TaskExportDirectoryState> => ipcRenderer.invoke('task-export-directory:choose'),
+    reset: (): Promise<TaskExportDirectoryState> => ipcRenderer.invoke('task-export-directory:reset'),
   },
   createProjectFromTask: {
     prepare: (sessionId: string): Promise<PreparedProjectFromTask> =>

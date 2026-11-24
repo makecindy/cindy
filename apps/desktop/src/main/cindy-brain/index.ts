@@ -9427,6 +9427,18 @@ export function registerGhostIpc(): void {
     });
   remotePluginManagement = new RemotePluginManagement({
     list: availableGhosts,
+    publication: {
+      prepare: async (id, expected) => {
+        const host = await import('../plugin-contributions/host.js');
+        return host.prepareContribution(id, 'manual', expected).catch(host.mapContributionError);
+      },
+      submit: async (id, assertCaller) => {
+        const host = await import('../plugin-contributions/host.js');
+        return host.submitContribution(id, assertCaller).catch(host.mapContributionError);
+      },
+      status: async id => (await import('../plugin-contributions/host.js')).contributionTransferStatus(id),
+      discard: async id => (await import('../plugin-contributions/host.js')).discardContribution(id),
+    },
     settingsPage: true,
     ui: {
       suppressed: ghost => pluginUiPromptSuppressed(installedGhostStoragePart(ghost), ghost.manifest.version),

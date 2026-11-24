@@ -8,6 +8,7 @@ import { subscriptionImageModelId } from '../cindy-media/sharedSubscriptionImage
 import { getCodexHome } from '../maker-host/codex-home-path.js';
 import { mkdir, readFile, readdir } from 'node:fs/promises';
 import { type AuthState, type NativeSubscriptionAccount } from '@cindy/maker-core';
+import { readAccountBeforeSend } from './remotePreflight.js';
 import { matchScopedWindowForModel } from '@cindy/maker-shared/subscription-usage';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import {
@@ -2329,7 +2330,8 @@ async function readRemoteTaskAccount(
   const legacyProviderId = provider === 'openai' && row.providerId && !taskSubscriptionProvider(row)
     ? row.providerId : undefined;
   const routeProviderId = legacyProviderId ? undefined : row.providerId ?? undefined;
-  const reply = await invokeRemote(row.agentDeviceId, SUBSCRIPTION_ACCOUNTS_CHANNEL, [{
+  const read = readAccountBeforeSend(invokeRemote, state);
+  const reply = await read(row.agentDeviceId, SUBSCRIPTION_ACCOUNTS_CHANNEL, [{
     action: 'session', providerId: provider,
     ...(row.sdkSessionId ? { nativeSessionId: row.sdkSessionId } : {}),
     ...(row.model ? { model: row.model } : {}),
@@ -2359,7 +2361,7 @@ async function readRemoteTaskAccount(
   if (!paused || view.routeProviderId !== undefined) return { number, paused, blocked, ...replacement,
     available: (blocked || paused) && view.account.switchAvailable === true };
   if (!row.model) return { number, paused, blocked, available: false };
-  const availableReply = await invokeRemote(row.agentDeviceId, 'maker:subscription-pool:quota',
+  const availableReply = await read(row.agentDeviceId, 'maker:subscription-pool:quota',
     [provider, row.model], { preSend });
   assertOwner(state);
   const available = availableReply.ok

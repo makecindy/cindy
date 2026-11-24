@@ -1241,7 +1241,9 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
         hashes.set(session.hash.toString('hex'), principal.deviceId);
         ws.on('error', () => undefined);
         ws.on('pong', () => { session.lastPong = now(); });
-        ws.send(JSON.stringify({ type: 'hello', protocolVersion: 2, notifications: !!options.notify, networkId: principal.networkId, deviceId: principal.deviceId, devices: roster(principal), delegations: delegatedPeers(principal),
+        let lastProbeReply = -Infinity;
+        let probeReplyPending = false;
+        ws.send(JSON.stringify({ type: 'hello', protocolVersion: 2, relayProbe: !principal.delegation, notifications: !!options.notify, networkId: principal.networkId, deviceId: principal.deviceId, devices: roster(principal), delegations: delegatedPeers(principal),
           delegationRequests: principal.delegation ? [] : sharing?.requestsFor(principal.networkId, principal.deviceId) ?? [],
           ...(session.udp ? { udp: { session: session.udp.session.toString('base64url'), key: session.udp.key.toString('base64url') } } : {}) }));
         ws.on('message', (raw: RawData, binary: boolean) => {
@@ -1251,6 +1253,15 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
             if (principal.delegation || bytes.length > 4_096) { ws.close(1008, 'invalid control'); return; }
             try {
               const control = record(JSON.parse(bytes.toString('utf8')));
+              if (control.type === 'relay-probe') {
+                const at = performance.now();
+                if (!probeReplyPending && at - lastProbeReply >= 1_000) {
+                  lastProbeReply = at;
+                  probeReplyPending = true;
+                  ws.send('{"type":"relay-pong"}', () => { probeReplyPending = false; });
+                }
+                return;
+              }
               if (control.type !== 'presence' || typeof control.remoteControlEnabled !== 'boolean' || !Array.isArray(control.capabilities)
                 || control.capabilities.length > 64 || !control.capabilities.every((v) => typeof v === 'string' && ID_PATTERN.test(v))) throw new Error('invalid');
               session.remoteControlEnabled = control.remoteControlEnabled;

@@ -1,5 +1,5 @@
 import { lazy, Suspense, useMemo, useState } from 'react';
-import { RemotePluginPage } from '@/features/plugin/RemotePluginPage';
+import { RemotePluginCatalogSource } from '@/features/plugin/RemotePluginCatalogSource';
 import {
   usePluginDeviceDirectory,
   type CatalogDeviceControl,
@@ -47,7 +47,7 @@ export function CloudPluginManagement({
   return (
     <div className="h-full min-h-0">
       <div className={tab === 'plugins' ? 'h-full min-h-0' : 'hidden'}>
-        <RemotePluginPage
+        <RemotePluginCatalogSource
           device={device}
           online={directory.online}
           active={active && tab === 'plugins'}

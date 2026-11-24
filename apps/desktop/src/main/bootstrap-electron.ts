@@ -965,6 +965,7 @@ import {
   createLocalProjectFromTaskHandlers,
   createProjectsRootSettingsHandlers,
 } from './createProjectFromTaskHost.js';
+import { createTaskExportDirectoryHandlers } from './task-export-settings.js';
 import { cleanupActiveReviewArtifactSnapshots } from './reviewer/reviewArtifactSnapshot.js';
 import { MAKER_INVOKE as MAKER_IPC_INVOKE, MAKER_PUSH, MAKER_SEND } from './maker-ipc/channels.js';
 import {
@@ -9802,6 +9803,33 @@ const registerIpcHandlers = () => {
           if (isIpcError(error)) throw error;
           dbClientLog.warn('projects root settings request failed', { action });
           throwIpcError('INTERNAL', 'projects root settings request failed');
+        }
+      });
+    }
+    // Agent task export folder: the native picker is the owner's approval, so it stays on this computer (not in device-link).
+    const taskExportDirectoryHandlers = createTaskExportDirectoryHandlers({
+      chooseDirectory: async () => {
+        const options: Electron.OpenDialogOptions = {
+          title: t('settings.about.storage.taskExportDirectoryChoose'),
+          properties: ['openDirectory', 'createDirectory'],
+        };
+        const ownerWindow = BrowserWindow.getFocusedWindow() ?? mainWindowRef;
+        const result =
+          ownerWindow && !ownerWindow.isDestroyed()
+            ? await dialog.showOpenDialog(ownerWindow, options)
+            : await dialog.showOpenDialog(options);
+        return result.canceled ? null : (result.filePaths[0] ?? null);
+      },
+    });
+    for (const action of ['get', 'choose', 'reset'] as const) {
+      ipcMain.handle('task-export-directory:' + action, async (event) => {
+        assertTrustedAppRendererEvent(event);
+        try {
+          return await taskExportDirectoryHandlers[action]();
+        } catch (error) {
+          if (isIpcError(error)) throw error;
+          dbClientLog.warn('task export directory settings request failed', { action });
+          throwIpcError('INTERNAL', 'task export directory settings request failed');
         }
       });
     }

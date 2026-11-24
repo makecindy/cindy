@@ -18,8 +18,8 @@ type PageProps = {
 };
 const pages = vi.hoisted(() => ({ plugins: [] as unknown[], skills: [] as unknown[], online: true }));
 const instance = 'cloud-device-aaaaaaaaaaaaaaaaaaaaaaaa';
-vi.mock('@/features/plugin/RemotePluginPage', () => ({
-  RemotePluginPage: (props: PageProps) => {
+vi.mock('@/features/plugin/RemotePluginCatalogSource', () => ({
+  RemotePluginCatalogSource: (props: PageProps) => {
     pages.plugins.push(props);
     return (
       <div data-testid="plugins">

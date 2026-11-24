@@ -181,7 +181,19 @@ export async function readDesktopLockState(): Promise<'locked' | 'unlocked' | 'u
 export async function readDesktopInputPermission(
   operation: 'accessibility' | 'postEvents' = 'accessibility',
 ): Promise<DesktopPermissionStatus> {
-  if (process.platform !== 'darwin') return 'notRequired';
+  return (await readDesktopInputAccess(operation)).status;
+}
+
+/**
+ * `chosenAppsOnly`: macOS 27.3 lets this Cindy control only the apps the person
+ * chose. Remote keyboard and mouse are system-wide, and macOS drops them unless
+ * every app is allowed, so the status stays `missing`; the flag only lets local
+ * settings say why. It is never part of a device-link permission reply.
+ */
+export async function readDesktopInputAccess(
+  operation: 'accessibility' | 'postEvents' = 'accessibility',
+): Promise<{ status: DesktopPermissionStatus; chosenAppsOnly?: true }> {
+  if (process.platform !== 'darwin') return { status: 'notRequired' };
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     // A cold dev build must prepare the helper too; preparation does not prompt.
@@ -193,19 +205,20 @@ export async function readDesktopInputPermission(
         timer = setTimeout(() => reject(new Error('DESKTOP_INPUT_PREPARING')), 5000);
       }),
     ]);
-    // Only --request-permission may open the macOS authorization UI.
-    const args = operation === 'postEvents' ? ['--check', '--post-events'] : ['--check'];
+    // Only --request-permission may open the macOS authorization UI. A helper
+    // older than `--scope` ignores it and answers ready/permission as before.
+    const args = operation === 'postEvents' ? ['--check', '--post-events', '--scope'] : ['--check'];
     const { stdout } = await exec(binary, args, {
       timeout: 5000,
       maxBuffer: 1024,
     });
-    return stdout.trim() === 'ready'
-      ? 'granted'
-      : stdout.trim() === 'permission'
-        ? 'missing'
-        : 'unknown';
+    const answer = stdout.trim();
+    if (answer === 'ready') return { status: 'granted' };
+    if (answer === 'permission') return { status: 'missing' };
+    if (answer === 'chosen-apps') return { status: 'missing', chosenAppsOnly: true };
+    return { status: 'unknown' };
   } catch {
-    return 'unknown';
+    return { status: 'unknown' };
   } finally {
     if (timer) clearTimeout(timer);
   }
