@@ -311,18 +311,24 @@ describe('request-owned Responses compatibility', () => {
     const search = (type: string) => ({ type: 'tool_search_output', tools: [{ type: 'namespace', name: 'workspace', tools: [
       { type: 'function', name: 'read', parameters: { type: 'object', properties: { line: { type } } } },
     ] }] });
+    const oldBare = { type: 'tool_search_output', tools: [
+      { type: 'function', name: 'read', parameters: { type: 'object', properties: { line: { type: 'string' } } } },
+    ] };
     const sse = contentType === 'text/event-stream';
-    for (const lowerNamespaces of [false, true]) {
+    for (const [lowerNamespaces, oldSearch] of [
+      [false, oldBare], [true, oldBare], [false, search('number')], [true, search('number')],
+    ] as const) {
       adapter.adaptRequest({
-        input: [search('number'), { type: 'additional_tools', tools: [] }, search('integer')],
+        input: [oldSearch, { type: 'additional_tools', tools: [] }, search('integer')],
         tool_choice: { type: 'function', name: 'read' },
       }, 10103, undefined, lowerNamespaces);
       const item = { type: 'function_call', namespace: 'workspace', name: 'read', call_id: 'loaded', arguments: '{"line":12.0}' };
-      const response = { status: 'completed', output: [item] };
+      const bare = { type: 'function_call', name: 'read', call_id: 'previous', arguments: '{"line":12}' };
+      const response = { status: 'completed', output: [item, bare] };
       const wire = sse ? `data: ${JSON.stringify({ type: 'response.completed', response })}\n\n` : JSON.stringify(response);
       const transform = adapter.createResponseTransform(10103, { contentType, contentEncoding: '' });
       const text = transform ? await responseText(transform, wire) : wire;
-      expect((sse ? JSON.parse(text.trim().slice(6)).response : JSON.parse(text)).output).toEqual([{ ...item, arguments: '{"line":12}' }]);
+      expect((sse ? JSON.parse(text.trim().slice(6)).response : JSON.parse(text)).output).toEqual([{ ...item, arguments: '{"line":12}' }, bare]);
     }
   });
 

@@ -60,8 +60,11 @@ function selectorAllows(
     if (typeof selector.namespace !== "string" || selector.namespace.length === 0) return false;
     return namespaceOf(selector.namespace) === identity.namespace && selector.name === identity.name;
   }
-  return isObject(lowered) && lowered.type === "function" && typeof lowered.name === "string"
-    && (lowered.name === wireName || (lowered.name === selector.name && historySelectors?.get(selector.name) === key));
+  if (!isObject(lowered) || lowered.type !== "function" || typeof lowered.name !== "string") return false;
+  if (lowered.name === selector.name && historySelectors?.has(selector.name)) {
+    return historySelectors.get(selector.name) === key;
+  }
+  return lowered.name === wireName;
 }
 
 /** Caller supplies currentTurnWireToolCatalogBody BEFORE provider schema lowering. */
@@ -132,7 +135,7 @@ export function collectFunctionCallRepairSchemas(
     ? new Map<string, { key: string | null; historical: boolean }>()
     : undefined;
   const declarations = new Map<string, { kind: unknown; identity: FunctionCallRepairSchema; live: boolean; historical: boolean; wireName: string } | null>();
-  const wireOwners = new Map<string, { key: string; live: boolean; historical: boolean } | null>();
+  const wireOwners = new Map<string, { key: string | null; live: boolean; historical: boolean }>();
   const liveNamespacedIdentities = new Set<string>();
   const currentSearchIdentities = new Set<string>();
   const register = (tool: unknown, declaredNamespace: string | undefined, live: boolean, historical: boolean): void => {
@@ -157,7 +160,7 @@ export function collectFunctionCallRepairSchemas(
     // tool already owns its wire name. Two different tools with equal priority make the wire name ambiguous.
     const owner = wireOwners.get(wireName);
     if (owner === undefined) wireOwners.set(wireName, { key, live, historical });
-    else if (owner && owner.key !== key && owner.live === live && owner.historical === historical) wireOwners.set(wireName, null);
+    else if (owner.key !== key && owner.live === live && owner.historical === historical) owner.key = null;
     if (selectorOwners) {
       const names = declaredNamespace ? [tool.name, dottedToolName(declaredNamespace, tool.name)] : [tool.name];
       for (const name of names) {
@@ -195,10 +198,13 @@ export function collectFunctionCallRepairSchemas(
       } else register(tool, undefined, live, historical);
     }
   }
-  // An unchanged selector can already be a wire name. That exact identity takes precedence
-  // over an unqualified history match even if the exact identity has no repairable schema.
+  // An unchanged selector can already be a wire name. An exact owner in the same or a
+  // newer catalog takes precedence even when that owner has no repairable schema.
   const historySelectors = selectorOwners && new Map([...selectorOwners]
-    .filter(([name]) => !wireOwners.has(name))
+    .filter(([name, entry]) => {
+      const owner = wireOwners.get(name);
+      return !owner || (owner.historical && !entry.historical);
+    })
     .map(([name, entry]) => [name, entry.key]));
   for (const [key, entry] of declarations) {
     if (!entry || entry.kind !== "function") continue;
