@@ -21,6 +21,7 @@ import { resolveRuntimeDeviceIdentity, writeReplacementDeviceId } from './device
 
 import { BrowserWindow, net, safeStorage, app, shell, powerMonitor } from 'electron';
 import { getInstanceConfig, instanceRefreshDelay } from './instance-runtime/config.js';
+import { managedAuthRetryEpoch } from './instance-runtime/authRetryEpoch.js';
 import { acknowledgeInstanceLogin, assertInstanceAuthMutationAllowed, getInstanceSession, instanceAuthReady } from './instance-runtime/host.js';
 import type { InstanceRecoveryOptions } from './instance-runtime/session.js';
 import { projectCommittedAuthIdentity, type CommittedAuthIdentity } from './authCommittedIdentity.js';
@@ -5048,15 +5049,17 @@ function authenticateManagedInstance(): Promise<void> {
   managedAuthFlight = (async () => {
     // Transient retries belong to the auth state that started this attempt.
     const epoch = authStateEpoch;
+    let beforeCommit: number | null = null;
     try {
       const managed = getInstanceSession(authServerUrl(AUTH_REGION), AUTH_REGION, hasNoPersistedAuthCredentials);
       const pair = await managed.rotate();
+      beforeCommit = authStateEpoch;
       await completeLogin({ status: 'ok', ...pair });
     } catch (error) {
       if (error instanceof AuthApiError && [401, 403].includes(error.statusCode)) {
         await invalidateSession('instance-grant-invalid');
       } else {
-        scheduleRefreshRetryAfterTransientFailure(epoch);
+        scheduleRefreshRetryAfterTransientFailure(managedAuthRetryEpoch(epoch, beforeCommit, authStateEpoch));
       }
       const code = error instanceof Error && /^INSTANCE_[A-Z_]+$/.test(error.message) ? error.message : 'INSTANCE_AUTH_DEPENDENCY_FAILED';
       log.warn('instance authentication not ready', { code });
