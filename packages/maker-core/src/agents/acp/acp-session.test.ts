@@ -365,6 +365,80 @@ describe('AcpSession turns', () => {
     }
   });
 
+  // PR #12643 review (unit): usage_update before any text output (or in a tool-only turn) has no
+  // tokenSpeed snapshot yet, but must still emit running status with contextTokens/contextWindow/costUsd.
+  // Production entry: AcpSession send + usage_update notification -> status event.
+  it('emits context and cost status updates even when token speed has no snapshot yet', async () => {
+    const agent = createFakeAgent();
+    const { session, events } = await open(agent);
+    await session.send({ type: 'user', content: 'run tool' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+
+    agent.update({ sessionUpdate: 'usage_update', used: 12_000, size: 200_000, cost: { currency: 'USD', amount: 0.05 } });
+    await vi.waitFor(() => expect(events.filter((event) => event.type === 'status')).toHaveLength(2));
+    expect(events.filter((event) => event.type === 'status').at(-1)?.data).toMatchObject({
+      status: 'running',
+      isRunning: true,
+      contextTokens: 12_000,
+      contextWindow: 200_000,
+      costUsd: 0.05,
+    });
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await vi.waitFor(() => expect(events.at(-1)?.type).toBe('done'));
+  });
+
+  // PR #12643 review (unit): an out-of-band session/request_permission (without a preceding tool_call
+  // update) must pause the speed meter synchronously so user approval wait does not inflate durationMs.
+  // Production entry: AcpSession send + agent_message_chunk + session/request_permission -> done usage.
+  it('pauses the token speed meter while waiting on an out-of-band permission request', async () => {
+    let now = 1_000;
+    const agent = createFakeAgent();
+    const { session, events } = await open(agent, { now: () => now, permissionMode: 'ask' });
+    const permissionGate = deferred<InteractionDecision>();
+    session.setInteractionResolver(() => permissionGate.promise);
+
+    await session.send({ type: 'user', content: 'edit file' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+
+    // Stream enough text over 2s so the meter is actively running.
+    for (let i = 0; i < 5; i += 1) {
+      now = 1_000 + i * 500;
+      agent.update({
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'streaming some response words here ' },
+      });
+    }
+
+    // Agent requests permission directly without a prior tool_call notification.
+    const answerPromise = agent.requestPermission({
+      toolCall: { toolCallId: 'perm-1', title: 'Write file', kind: 'edit' },
+      options: PERMISSION_OPTIONS,
+    });
+    await vi.waitFor(() => expect(events.some((event) => event.type === 'tool_use')).toBe(true));
+
+    // Simulate a 60s user wait before approving.
+    now += 60_000;
+    permissionGate.resolve({ kind: 'permission', behavior: 'allow' });
+    await answerPromise;
+
+    now += 1_000;
+    agent.update({
+      sessionUpdate: 'agent_message_chunk',
+      content: { type: 'text', text: 'finished writing the file now' },
+    });
+    now += 1_000;
+    agent.prompts[0]!.settle.resolve({
+      stopReason: 'end_turn',
+      usage: { inputTokens: 100, outputTokens: 80, cachedReadTokens: 0, cachedWriteTokens: 0 },
+    });
+    await vi.waitFor(() => expect(events.at(-1)?.type).toBe('done'));
+
+    const doneUsage = (events.at(-1)?.data as AcpRecord).usage as AcpRecord;
+    expect(doneUsage.turnDurationMs).toBe(64_000);
+    expect(typeof doneUsage.durationMs).toBe('number');
+    expect(doneUsage.durationMs as number).toBeLessThan(10_000);
+  });
+
   it('runs one prompt at a time, in send order even when the first message carries a slow image', async () => {
     const agent = createFakeAgent({ agentCapabilities: { promptCapabilities: { image: true } } });
     const image = deferred<Uint8Array>();

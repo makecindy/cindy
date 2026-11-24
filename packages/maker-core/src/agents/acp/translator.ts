@@ -23,7 +23,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { createTwoFilesPatch } from 'diff';
 import { parseMessageToolUse } from '@cindy/maker-shared/message-normalize';
 import type { AgentEvent } from '../../types/events.js';
-import type { GenerationTrace } from '../shared/calibrated-token-speed.js';
+import type { GenerationTrace } from '@cindy/maker-shared/usage-format';
 import {
   asNonEmptyString,
   asRecord,

@@ -744,10 +744,14 @@ export class AcpSession {
     }
   }
 
-  private emitLiveStatus(): void {
+  private emitLiveStatus(includeBaseWithoutSpeed = false): void {
     const now = this.now();
     const tokenSpeed = this.tokenSpeed.snapshot(now);
-    if (!tokenSpeed) return;
+    if (!tokenSpeed) {
+      if (!includeBaseWithoutSpeed) return;
+      this.emit([{ type: 'status', data: { status: 'running', ...this.usage, isRunning: true } }]);
+      return;
+    }
     const snapshot = attachLiveGeneration(this.usage, {
       tokenSpeed,
       outputTokens: 0,
@@ -932,7 +936,7 @@ export class AcpSession {
       contextWindow: size,
       ...(cost.currency === 'USD' && typeof cost.amount === 'number' ? { costUsd: cost.amount } : {}),
     };
-    if (this.turn) this.emitLiveStatus();
+    if (this.turn) this.emitLiveStatus(true);
   }
 
   private applyPermissionMode(mode: PermissionMode): void {
@@ -949,6 +953,7 @@ export class AcpSession {
     const options = normalizePermissionOptions(params.options);
     const toolCall = normalizeToolCallFields(params.toolCall) ?? { toolCallId: `acp-permission-${this.permissionSeq + 1}` };
     this.emit(this.translator.noteToolCall(toolCall));
+    if (this.turn) this.tokenSpeed.pause(this.now());
     // Only the agent can define the lifetime and scope of a persistent grant.
     const allowOnce = firstOfKind(options, ['allow_once']);
     const reject = firstOfKind(options, ['reject_once']);

@@ -2341,6 +2341,52 @@ describe('usage through the production event pipeline', () => {
     }
   });
 
+  // PR #12643 review (unit): ACP prompt_end reports cacheCreationTokens, which must map to
+  // TurnUsageDetails.cacheCreateTokens so persisted per-turn totalTokens and cacheHitRate match.
+  // Production entry: sessionEventPipeline -> recordSessionAcpTurnUsage -> recordTurnUsageOnMessage.
+  // Minimal failing input: ACP turn with assistant text and nonzero cacheCreationTokens.
+  it('persists ACP cacheCreationTokens as cacheCreateTokens in turn usage details', async () => {
+    const h = harness(undefined, 'acp');
+    try {
+      effects.fn('consumeLastAssistantPersistId').mockReturnValueOnce('acp-msg-1');
+      h.emit({
+        type: 'done',
+        sessionTurnGeneration: 1,
+        data: {
+          type: 'acp/prompt_end',
+          status: 'completed',
+          usageModel: 'original-model',
+          usage: {
+            inputTokens: 1000,
+            outputTokens: 200,
+            cacheReadTokens: 3000,
+            cacheCreationTokens: 500,
+            durationMs: 4000,
+            turnDurationMs: 5500,
+          },
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(effects.fn('recordTurnUsageOnMessage')).toHaveBeenCalledWith(expect.objectContaining({
+        sessionId: 'task',
+        clientId: 'acp-msg-1',
+        turnUsageDetails: expect.objectContaining({
+          inputTokens: 1000,
+          outputTokens: 200,
+          cacheReadTokens: 3000,
+          cacheCreateTokens: 500,
+          totalTokens: 4700,
+          cacheHitRate: 3000 / 4500,
+          durationMs: 4000,
+          turnDurationMs: 5500,
+          model: 'original-model',
+        }),
+      }));
+    } finally {
+      await h.dispose();
+    }
+  });
+
   const tokens = { inputTokens: 100, outputTokens: 20, cacheReadTokens: 10, cacheCreateTokens: 0 };
   const segment = { ...tokens, model: 'test-model', priceVariant: 'standard' };
   function usage(source: 'codex' | 'pi') {

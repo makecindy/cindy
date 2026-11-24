@@ -42,7 +42,7 @@ export function recordSessionAcpTurnUsage(
   if (turnAssistantPersistId) {
     const turnUsageDetails = buildTurnUsageDetails({
       ...(hasFullTokens
-        ? { inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens }
+        ? { inputTokens, outputTokens, cacheReadTokens, cacheCreateTokens: cacheCreationTokens }
         : {}),
       ...(model ? { model } : {}),
       ...(isPositiveMs(durationMs) ? { durationMs } : {}),
