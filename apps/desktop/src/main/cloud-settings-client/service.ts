@@ -458,7 +458,10 @@ export function createCloudSettingsService(deps: {
         s.writes.has(change.operationId)
       )
         throw new CloudClientError('CLOUD_SETTINGS_NOT_READY');
-      if (s.writes.size >= 256) throw new CloudClientError('CLOUD_SETTINGS_BUSY');
+      // An issued operation is sent at most once, so only recent writes need to stay
+      // answerable for their receipts.
+      s.issued.delete(change.operationId);
+      if (s.writes.size >= 256) s.writes.delete(s.writes.keys().next().value!);
       s.writes.add(change.operationId);
       try {
         return await send(s, { kind: 'update', change });

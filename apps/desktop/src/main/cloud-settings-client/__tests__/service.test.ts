@@ -124,6 +124,23 @@ it('requires an issued revision and never resubmits the same write operation', a
   await expect(f.bridge.save({ handle, change })).rejects.toThrow('NOT_READY');
   expect(f.history.filter((c) => c.kind === 'update')).toHaveLength(1);
 });
+it('keeps saving for a long session and still answers the latest receipt', async () => {
+  const f = await setup(),
+    handle = f.session.handle;
+  // Like the settings page, every save uses an operation issued by a fresh read.
+  let operationId = '';
+  for (let i = 0; i < 300; i++) {
+    const [read] = await f.bridge.read({ handle, domains: ['memory'] });
+    if (!read.ok || !('settings' in read) || read.settings.status !== 'ready') throw Error('fixture');
+    operationId = read.settings.operationId;
+    await f.bridge.save({
+      handle,
+      change: { domain: 'memory', operationId, expectedRevision: read.settings.revision, set: { maker: i % 2 === 0 } },
+    });
+  }
+  expect(f.history.filter((c) => c.kind === 'update')).toHaveLength(300);
+  await expect(f.bridge.receipt({ handle, operationId })).resolves.toMatchObject({ ok: true });
+});
 it('rejects responses correlated to a different queue request', async () => {
   const f = await setup();
   f.request.mockResolvedValueOnce({
