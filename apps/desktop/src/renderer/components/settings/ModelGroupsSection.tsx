@@ -440,7 +440,6 @@ export function ModelGroupsSection() {
   // ── 列表 ───────────────────────────────────────────────────────────────────
   return (
     <SettingsSection variant="page" title={t('modelGroups.title')} description={t('modelGroups.description')} testId="model-groups-settings">
-      <ModelGroupsOverview config={config} onOpenRoute={(id) => setView({ kind: 'route', id })} />
       <SettingsSection>
         <SettingsCard id={modelGroupsSettings.autoSwitch.targetId}>
           <SettingsRow
@@ -463,6 +462,7 @@ export function ModelGroupsSection() {
           />
         </SettingsCard>
       </SettingsSection>
+      <ModelGroupsOverview config={config} onOpenRoute={(id) => setView({ kind: 'route', id })} />
       <SettingsSection
         title={t('modelGroups.routes')}
         titleId={modelGroupsSettings.routes.targetId}

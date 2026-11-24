@@ -62,14 +62,31 @@ export type ModelGroupFailureScope = 'transient' | 'model' | 'connection';
 /** Same-source retries a transient failure gets before the model group switches source (model-groups.md §4.1). */
 export const MODEL_GROUP_SAME_SOURCE_RETRIES = 2;
 
-export function modelGroupFailureScope(signals: InterruptedTurnErrorSignals): ModelGroupFailureScope | null {
-  const reason = signals.reason ?? '';
+/**
+ * Some engines hand the provider's reply on as text that starts with its HTTP status (Pi: `401: {"message":"Invalid
+ * token"}`), with no structured status. Read it there so a dead key is not taken for an unknown failure.
+ */
+function leadingHttpStatus(text: string): number | undefined {
+  const match = /^\s*(?:HTTP\s*)?([45]\d\d)\s*:/i.exec(text);
+  return match ? Number(match[1]) : undefined;
+}
+
+const MODEL_GROUP_AUTH_TEXT = /invalid (?:api[ _-]?key|token|x-api-key|access token)|unauthori[sz]ed|authentication (?:failed|error)|incorrect api key/i;
+
+export function modelGroupFailureScope(input: InterruptedTurnErrorSignals): ModelGroupFailureScope | null {
+  const reason = input.reason ?? '';
   // A stream the provider cut mid-reply after its own retries, and an ACP agent's quota, are not in the
   // candidate list above but are exactly what another source fixes.
   if (reason === 'acp-usage-limit') return 'connection';
   if (reason === 'upstream-stream-interrupted') return 'model';
-  if (!isBotCandidateUnavailable(signals)) return null;
-  const message = signals.message ?? '';
+  const text = input.message ?? (typeof input.sdkError === 'string' ? input.sdkError : '');
+  const status = input.errorStatus ?? leadingHttpStatus(text);
+  const signals = status !== undefined && input.errorStatus === undefined ? { ...input, errorStatus: status } : input;
+  if (!isBotCandidateUnavailable(signals)) {
+    // A dead key the engine reported only as text (no status, no tag).
+    return !reason && MODEL_GROUP_AUTH_TEXT.test(text) ? 'connection' : null;
+  }
+  const message = text;
   const tag = signals.sdkError ?? '';
   if (isModelGroupConnectionOutOfCredit(signals)
     || signals.usageLimit === true || signals.codexErrorInfo === 'usageLimitExceeded'
@@ -77,7 +94,8 @@ export function modelGroupFailureScope(signals: InterruptedTurnErrorSignals): Mo
     || ['provider_quota_limit', 'provider_auth_or_access', 'acp-auth-required'].includes(reason)
     || ['authentication_failed', 'authentication_error', 'billing_error'].includes(tag)
     || signals.errorStatus === 401
-    || /invalid api key|missing bearer token|no available oauth accounts|\byou['’]ve hit your session limit\b/i.test(message)) {
+    || MODEL_GROUP_AUTH_TEXT.test(message)
+    || /missing bearer token|no available oauth accounts|\byou['’]ve hit your session limit\b/i.test(message)) {
     return 'connection';
   }
   if (isInterruptedTurnError(signals)
@@ -107,8 +125,9 @@ export function modelGroupSwitchCause(signals: InterruptedTurnErrorSignals, scop
   const tag = signals.sdkError ?? '';
   if (signals.usageLimit === true || signals.codexErrorInfo === 'usageLimitExceeded' || reason === 'acp-usage-limit'
     || reason === 'provider_quota_limit' || matchesDeterministicUsageExhaustionText(signals.message ?? '')) return 'usage-limit';
+  const text = signals.message ?? (typeof signals.sdkError === 'string' ? signals.sdkError : '');
   if (['provider_auth_or_access', 'acp-auth-required'].includes(reason) || ['authentication_failed', 'authentication_error'].includes(tag)
-    || signals.errorStatus === 401) return 'auth';
+    || (signals.errorStatus ?? leadingHttpStatus(text)) === 401 || MODEL_GROUP_AUTH_TEXT.test(text)) return 'auth';
   if (scope === 'transient') return 'overload';
   if (isRemoteAgentRouteLostReason(signals.reason) || ['model_unavailable', 'user_model_access_denied', 'agent-start-failed'].includes(reason)
     || tag === 'model_not_found') return 'unavailable';

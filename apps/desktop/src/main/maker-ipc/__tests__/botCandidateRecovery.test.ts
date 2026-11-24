@@ -456,6 +456,9 @@ describe('model group failure handling', () => {
     ['a dead login', { reason: 'provider_auth_or_access' }, 'connection'],
     ['an unauthorized key', { errorStatus: 401 }, 'connection'],
     ['an ACP agent quota', { reason: 'acp-usage-limit' }, 'connection'],
+    // Seen on a Pi task with a dead Agnes AI key: the status only exists as the text's prefix.
+    ['a dead key reported only as text', { sdkError: '401: {"code":"","message":"Invalid token (request id: x)","type":"AgnesAI_error"}',
+      message: '401: {"code":"","message":"Invalid token (request id: x)","type":"AgnesAI_error"}' }, 'connection'],
     ['a removed model', { reason: 'model_unavailable' }, 'model'],
     ['a stream cut after the provider retried', { reason: 'upstream-stream-interrupted' }, 'model'],
     ['Pi giving up after its own retries', { reason: 'pi-gateway-drop' }, 'model'],
@@ -540,6 +543,7 @@ describe('model group failure handling', () => {
     ['an account quota', { usageLimit: true }, 'usage-limit'],
     ['a dead login', { reason: 'provider_auth_or_access' }, 'auth'],
     ['a removed model', { reason: 'model_unavailable' }, 'unavailable'],
+    ['a dead key reported only as text', { message: '401: {"message":"Invalid token"}' }, 'auth'],
   ] as const)('says on the continuation which source it moved to after %s', async (_name, signals, cause) => {
     const h = groupHarness();
     h.fallback.mockResolvedValueOnce({ session: null, outcome: 'switched', sourceSwitch: { from: 'Claude · A', to: 'GPT · B' } });
