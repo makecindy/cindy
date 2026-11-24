@@ -76,7 +76,7 @@ export function sharedAccountSendTransaction(ports: Pick<MakerSendTransactionDep
 
 // Load Main's actual wiring without starting Electron and replacing its DB or
 // device link process-wide. The send, bootstrap, relocation and starter stay real.
-const registerSource = fs.readFileSync(new URL('../../maker-ipc/register.ts', import.meta.url), 'utf8');
+const registerSource = fs.readFileSync(new URL('../../maker-ipc/register.ts', import.meta.url), 'utf8').replace(/\r\n?/g, '\n');
 function compileRegisterPart(startAt: string, endAt: string, wrap: (source: string) => string) {
   const start = registerSource.indexOf(startAt);
   const end = registerSource.indexOf(endAt, start);
@@ -100,7 +100,7 @@ const compiledSendToSessionInternal = compileRegisterPart('  async function send
 const compiledEnqueueSessionMessage = compileRegisterPart('  async function enqueueSendToSessionMessage(', '  const workerInputs =', source => source);
 const compiledCollabSendToSession = compileRegisterPart('    sendToSession: async (params', ',\n    enableOrca:', source =>
   `const collab = ({${source}}); return collab;`);
-const mcpSource = fs.readFileSync(new URL('../../mcp-integrations/mcp-providers.ts', import.meta.url), 'utf8');
+const mcpSource = fs.readFileSync(new URL('../../mcp-integrations/mcp-providers.ts', import.meta.url), 'utf8').replace(/\r\n?/g, '\n');
 const compiledToolAdapter = transpileModule(`return ({${mcpSource.slice(
   mcpSource.indexOf('      sendToSession: async ({'),
   mcpSource.indexOf('      botMessaging: {'),
