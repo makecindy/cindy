@@ -406,6 +406,18 @@ export function createBotLifecycleService(deps: BotLifecycleServiceDeps) {
       });
     }
 
+    // 伙伴自己的壁纸图片／视频和头像一样是它的自定义资源，随伙伴一起删；失败只记日志，
+    // 引用留在 bot-wallpapers.json 里，图片不会被误回收，也不影响「已删除」的结论。
+    try {
+      const { removeBotWallpaper } = await import('../custom-wallpaper.js');
+      if (await removeBotWallpaper(request.botId)) {
+        const { broadcastBotWallpapers } = await import('../appearance-settings-ipc.js');
+        await broadcastBotWallpapers();
+      }
+    } catch (cause) {
+      log.warn('remove teammate wallpaper failed', { botId: request.botId, error: String(cause) });
+    }
+
     try {
       if ((await removeRecentWorkdir(projectDir)).deleted) {
         for (const win of BrowserWindow.getAllWindows()) {

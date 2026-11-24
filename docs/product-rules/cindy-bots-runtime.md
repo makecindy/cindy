@@ -494,6 +494,7 @@ Cindy 应用，也不取消伙伴已开的独立任务。操作中禁用重复�
 - 伙伴自己的图片／视频与全局自定义壁纸同在 client-wallpaper 媒体库：引用只记在 main 的
   `userData/bot-wallpapers.json`（伙伴 ID → 媒体 URL），回收读取同一张引用表，读不了就延后清理，
   不会误删任何一张。localStorage 只记「选了自定义」；媒体缺失时按跟随全局显示，绝不借用全局自定义图片。
+  删除伙伴时与头像等自定义资源一起删除它的图片（`botLifecycleService` 删除收尾，失败只记日志）。
   通道 `appearance-settings:{get,import,remove}-bot-wallpaper(s)` 与推送 `bot-wallpapers-changed`
   只在本机桌面，不进远程白名单；文件路径只来自原生选择器。
 - 覆盖只作用于当前窗口的配色与壁纸画布。原生窗口背景（vibrancy）、Dock 图标与主题快照由 main 对所有

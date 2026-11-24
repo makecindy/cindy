@@ -578,6 +578,35 @@ describe('application wallpaper lifecycle', () => {
     localStorage.clear();
   });
 
+  // Review of makecindy/cindy#12542 (06f9cfc): a playback failure was recorded against the
+  // global custom URL, so a teammate's broken video made settings report the global media as
+  // unplayable. Minimal input: global and teammate custom videos, the teammate's fails;
+  // unit tier, real provider and video element with the IPC bridge stubbed.
+  it('records a teammate video failure against that video, not the global custom wallpaper', async () => {
+    __resetBotAppearanceCacheForTest();
+    const globalUrl = `cindy-media://client-wallpaper/${'c'.repeat(64)}.mp4`;
+    const teammateUrl = `cindy-media://client-wallpaper/${'d'.repeat(64)}.mp4`;
+    vi.stubGlobal('electronAPI', { appearanceSettings: {
+      getSync: () => ({ ...DEFAULT_APPEARANCE_SETTINGS, wallpaperId: 'custom', wallpaperMotion: 'dynamic', customWallpaperUrl: globalUrl }),
+      onChanged: () => () => {}, setPatch: vi.fn(),
+      getBotWallpapers: vi.fn().mockResolvedValue({ 'bot-1': teammateUrl }),
+      onBotWallpapersChanged: () => () => {},
+    } });
+    localStorage.setItem(BOT_APPEARANCE_STORAGE_KEY, JSON.stringify({ 'bot-1': { wallpaperId: 'custom' } }));
+    function Probe({ botId }: { botId: string | null }) {
+      useBotAppearanceOverride(botId);
+      return <span data-testid="failed">{String(useWallpaperSettings().playbackFailed)}</span>;
+    }
+    const { rerender } = render(<WallpaperSettingsProvider><Probe botId="bot-1" /></WallpaperSettingsProvider>);
+    await waitFor(() => expect(document.querySelector('video')?.getAttribute('src')).toBe(teammateUrl));
+    fireEvent.error(document.querySelector('video')!);
+    expect(screen.getByTestId('failed').textContent).toBe('false');
+    rerender(<WallpaperSettingsProvider><Probe botId={null} /></WallpaperSettingsProvider>);
+    await waitFor(() => expect(document.querySelector('video')?.getAttribute('src')).toBe(globalUrl));
+    expect(screen.getByTestId('failed').textContent).toBe('false');
+    localStorage.clear();
+  });
+
   it('applies another window’s settings and removes the image when that window disables it', () => {
     let changed: (value: typeof DEFAULT_APPEARANCE_SETTINGS) => void = () => {};
     const unsubscribes: ReturnType<typeof vi.fn>[] = [];

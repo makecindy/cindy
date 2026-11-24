@@ -8,6 +8,8 @@ const h = vi.hoisted(() => ({
   broadcastRemoteResourceChanged: vi.fn(),
   db: null as ReturnType<typeof drizzle> | null,
   tx: null as null | ((name: string, args: unknown) => Promise<unknown>),
+  removeBotWallpaper: vi.fn(async (_botId: string) => true),
+  broadcastBotWallpapers: vi.fn(async () => ({})),
 }));
 
 vi.mock('electron', () => ({
@@ -33,6 +35,10 @@ vi.mock('../botProfileFolder.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../botProfileFolder.js')>(),
   removeBotProfileFolder: vi.fn(),
 }));
+
+// Teammate wallpaper media is owned by the client-wallpaper store; its own tests cover recycling.
+vi.mock('../../custom-wallpaper.js', () => ({ removeBotWallpaper: h.removeBotWallpaper }));
+vi.mock('../../appearance-settings-ipc.js', () => ({ broadcastBotWallpapers: h.broadcastBotWallpapers }));
 
 import { createBotLifecycleService } from '../botLifecycleService.js';
 import * as botProjectMemory from '../botProjectMemory.js';
@@ -400,6 +406,9 @@ describe('Bot lifecycle coordinator', () => {
       status: 'archived',
     });
     expect(result).toMatchObject({ action: 'delete', status: 'deleted', affected: { sessions: 2 } });
+    // Like its avatar, the teammate's own wallpaper media goes with it and other windows hear about it.
+    expect(h.removeBotWallpaper).toHaveBeenCalledWith('bot-1');
+    expect(h.broadcastBotWallpapers).toHaveBeenCalled();
   });
 
   it('keeps transcripts as ordinary deleted tasks when discarding history', async () => {

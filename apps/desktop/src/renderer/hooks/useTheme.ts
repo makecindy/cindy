@@ -9,7 +9,12 @@ import {
   tryGetFamily,
 } from '../themes/families';
 import { onLocalThemesChange } from '../themes/local-themes';
-import { prepareThemeSelection, presentTheme } from '../appearance/AppearancePresenter';
+import {
+  isThemeSelectionPrepared,
+  prepareThemeSelection,
+  presentPaletteOnly,
+  presentTheme,
+} from '../appearance/AppearancePresenter';
 import { AppearanceMotionContext } from '../appearance/AppearanceMotionContext';
 import { getAppearanceOverride, useAppearanceOverrideFamilyId } from '../appearance/appearanceOverride';
 import type { ThemeType } from '../themes/types';
@@ -164,8 +169,13 @@ export function applyThemeClass(theme: Theme, force = false, prepare = true): vo
 
   // A view-scoped override is this window's palette only. Theme-package defaults
   // (fonts, wallpaper, motion) live in the shared AppearanceService and reach every
-  // window, so neither showing nor leaving an override may prepare or clear them.
-  presentTheme(nextTheme, true, prepare && overrideFamilyId() === null && !leavingOverride);
+  // window, so showing an override never prepares or clears them. Leaving re-prepares
+  // only if the saved variant changed meanwhile (system light/dark, or a new global theme).
+  if (overrideFamilyId() !== null) {
+    presentPaletteOnly(nextTheme);
+    return;
+  }
+  presentTheme(nextTheme, true, prepare && !(leavingOverride && isThemeSelectionPrepared(nextTheme)));
 }
 
 /** 无 ThemeProvider 的窗口用。 */

@@ -68,6 +68,21 @@ export function presentTheme(theme: Theme, notifyFailure = true, prepare = true)
     });
 }
 
+/**
+ * A view-scoped palette (a teammate's own theme) for this window only. The shared package
+ * defaults, and the record of which package main has prepared, stay untouched, so a later
+ * global change or leaving the view still compares against what main actually holds.
+ */
+export function presentPaletteOnly(theme: Theme): void {
+  themeService.applyTheme(theme);
+}
+
+/** Whether main already holds the package defaults (or none) that this theme needs. */
+export function isThemeSelectionPrepared(theme: Theme): boolean {
+  const value = packageThemeSelection(theme);
+  return value?.mode === packageSelection?.mode && value?.familyId === packageSelection?.familyId;
+}
+
 /** Errors use the existing toast; translation/notice modules stay off the default path. */
 export function notifyThemeAppearanceFailure(font = false): void {
   void Promise.all([import('../lib/toast'), import('../i18n')]).then(([{ toast }, { default: i18n }]) => {

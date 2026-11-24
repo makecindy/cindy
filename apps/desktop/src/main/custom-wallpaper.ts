@@ -103,15 +103,19 @@ export async function importBotWallpaper(parent: BrowserWindow, botId: string): 
   });
 }
 
-export async function removeBotWallpaper(botId: string): Promise<void> {
+/** Resolves true when this teammate had an image to remove. */
+export async function removeBotWallpaper(botId: string): Promise<boolean> {
   return withClientWallpaperLock(async () => {
+    let removed = false;
     await botWallpaperStore.updateAtomic(({ value }) => {
       if (!Object.hasOwn(value.wallpapers, botId)) return null;
+      removed = true;
       const next = { ...value.wallpapers };
       delete next[botId];
       return { wallpapers: next };
     });
-    await recycleUnusedWallpapers();
+    if (removed) await recycleUnusedWallpapers();
+    return removed;
   });
 }
 

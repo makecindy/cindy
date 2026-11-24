@@ -254,9 +254,17 @@ describe('client-owned custom wallpaper lifecycle', () => {
     expect((await listBlobFiles('client-wallpaper')).entries).toHaveLength(2);
   });
 
-  it('refuses recycling when teammate wallpaper references are unreadable', () => {
-    fs.writeFileSync(path.join(h.dir, 'bot-wallpapers.json'), '{broken');
-    expect(() => readReferencedClientWallpaperUrls()).toThrow();
+  // Review of makecindy/cindy#12542 (06f9cfc): parseable but malformed content used to read
+  // as "no references", so the next import or removal could delete a teammate's media.
+  it('refuses recycling when teammate wallpaper references are unreadable or malformed', () => {
+    const file = path.join(h.dir, 'bot-wallpapers.json');
+    for (const content of [
+      '{broken', '[]', 'null', '{"wallpapers":[]}', '{"wallpapers":"x"}',
+      '{"wallpapers":{"bot-1":"file:///private.webp"}}',
+    ]) {
+      fs.writeFileSync(file, content);
+      expect(() => readReferencedClientWallpaperUrls(), content).toThrow();
+    }
   });
 
   it('refuses recycling when custom references are unreadable or invalid instead of dropping the video', () => {

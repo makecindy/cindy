@@ -158,6 +158,85 @@ describe('useTheme 跨窗口主题同步(D2-3)', () => {
     installLocal([]);
   });
 
+  // Review of makecindy/cindy#12542 (06f9cfc): a teammate palette must not rewrite the
+  // record of which package main prepared. Otherwise (a) switching the global theme to a
+  // builtin from a teammate page never sends selectTheme(null), and (b) a system light/dark
+  // flip during the override leaves the shared defaults on the old variant after leaving.
+  // Minimal input: saved package family with light and dark variants, teammate on builtin;
+  // unit tier through the real ThemeProvider and override hook.
+  describe('keeps shared package defaults in step with the saved theme around a teammate theme', () => {
+    const installPaper = () => {
+      Object.assign(window.electronAPI, { localThemes: {
+        listSync: () => ({ success: true, diagnostics: [], themes: [
+          { id: 'paper-light-local', family: 'paper', name: 'Paper', type: 'light', colors: {},
+            packageSha256: 'a'.repeat(64), appearance: { motion: 0 } },
+          { id: 'paper-dark-local', family: 'paper', name: 'Paper', type: 'dark', colors: {},
+            packageSha256: 'b'.repeat(64), appearance: { motion: 0 } },
+        ] }), onChanged: () => () => {},
+      } });
+      bootstrapLocalThemesSync();
+    };
+    const cleanupPaper = () => {
+      localStorage.setItem('theme.familyId', 'default');
+      localStorage.setItem('theme', 'light');
+      systemPrefersDark = false;
+      act(() => applyThemeClass('light', true));
+      Object.assign(window.electronAPI, { localThemes: {
+        listSync: () => ({ success: true, diagnostics: [], themes: [] }), onChanged: () => () => {},
+      } });
+      bootstrapLocalThemesSync();
+    };
+    const setup = (mode: 'light' | 'system') => {
+      installPaper();
+      const selectTheme = vi.fn().mockResolvedValue(DEFAULT_APPEARANCE_SETTINGS);
+      Object.assign(window.electronAPI, { appearanceSettings: {
+        getSync: () => DEFAULT_APPEARANCE_SETTINGS, onChanged: () => () => {}, selectTheme,
+      } });
+      localStorage.setItem('theme', mode);
+      localStorage.setItem('theme.familyId', 'paper-local');
+      localStorage.setItem(BOT_APPEARANCE_STORAGE_KEY, JSON.stringify({ 'bot-1': { familyId: 'default' } }));
+      // Main holds the saved package, as after startup or choosing it.
+      act(() => applyThemeClass(mode, true));
+      const hook = renderHook(
+        ({ botId }: { botId: string | null }) => { useBotAppearanceOverride(botId); return useTheme(); },
+        { wrapper, initialProps: { botId: null as string | null } },
+      );
+      return { selectTheme, ...hook };
+    };
+
+    it('clears the package when the global theme becomes a builtin on a teammate page', async () => {
+      const { selectTheme, result, rerender, unmount } = setup('light');
+      await act(async () => {});
+      rerender({ botId: 'bot-1' });
+      await act(async () => {});
+      selectTheme.mockClear();
+      await act(async () => { await result.current.setFamily('default'); });
+      expect(selectTheme).toHaveBeenCalledExactlyOnceWith(null);
+      rerender({ botId: null });
+      await act(async () => {});
+      expect(selectTheme).toHaveBeenCalledOnce();
+      unmount();
+      cleanupPaper();
+    });
+
+    it('prepares the new system variant after leaving when light/dark flipped meanwhile', async () => {
+      systemPrefersDark = false;
+      const { selectTheme, rerender, unmount } = setup('system');
+      await act(async () => {});
+      rerender({ botId: 'bot-1' });
+      await act(async () => {});
+      selectTheme.mockClear();
+      systemPrefersDark = true;
+      act(() => applyThemeClass('system'));
+      expect(selectTheme).not.toHaveBeenCalled();
+      rerender({ botId: null });
+      await act(async () => {});
+      expect(selectTheme).toHaveBeenCalledExactlyOnceWith({ mode: 'dark', familyId: 'paper-local' });
+      unmount();
+      cleanupPaper();
+    });
+  });
+
   // Review of makecindy/cindy#12542: when storage is full, the in-memory fallback was
   // overwritten by the next read of the stale stored value, so the choice jumped back.
   // Minimal input: setItem throws once; the window must keep showing the new choice.

@@ -115,10 +115,6 @@ export function WallpaperSettingsProvider({
   const [failedUrl, setFailedUrl] = useState('');
   const lastBlurRef = useRef(10);
   if (settings.wallpaperBlur) lastBlurRef.current = settings.wallpaperBlur;
-  const onPlaybackFailure = useCallback(
-    () => setFailedUrl(settings.customWallpaperUrl ?? ''),
-    [settings.customWallpaperUrl],
-  );
   const onPlaybackReady = useCallback(() => setFailedUrl(''), []);
   const isDark = useIsDarkMode();
   const isDarkRef = useRef(isDark);
@@ -133,6 +129,12 @@ export function WallpaperSettingsProvider({
     // A teammate's own image or video; never fall through to the global custom media.
     return { ...settings, wallpaperId: 'custom', customWallpaperUrl: overrideCustomUrl ?? '', customWallpaperFallbackUrl: undefined };
   }, [overrideWallpaperId, overrideCustomUrl, settings]);
+  // Record the media that actually failed: a teammate's broken video must not mark the
+  // global custom wallpaper as unplayable in settings.
+  const onPlaybackFailure = useCallback(
+    () => setFailedUrl(shown.customWallpaperUrl ?? ''),
+    [shown.customWallpaperUrl],
+  );
   const visibility = visibilityPreview ?? getBackgroundVisibility(shown, isDark);
   const reducedMotion = useReducedMotion() || settings.motion === 0;
   const imageAsset = useWallpaperAsset(shown.wallpaperId, 'image', visibility > 0);

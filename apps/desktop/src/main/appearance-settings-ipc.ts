@@ -271,7 +271,7 @@ function appearanceForWindow(
   };
 }
 
-async function broadcastBotWallpapers(): Promise<BotWallpaperMap> {
+export async function broadcastBotWallpapers(): Promise<BotWallpaperMap> {
   const { readBotWallpapers } = await import('./bot-wallpaper-settings.js');
   const wallpapers = readBotWallpapers();
   for (const win of BrowserWindow.getAllWindows()) {
