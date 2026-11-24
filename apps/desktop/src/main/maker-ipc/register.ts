@@ -5586,8 +5586,11 @@ function forgetKnownOrcaWorkerSession(sessionId: string): void {
   // Discard the live projection while its identity still suppresses notifications;
   // process-closed otherwise retains unread activity and republishes it as a task.
   // This only clears runtime activity, never persisted messages or error history.
-  getAgentIslandService()?.handleSessionClosed(sessionId, { reason: 'discarded' });
-  forgetOrcaWorkerIdentity(sessionId);
+  try {
+    handleAgentIslandSessionClosedAfterCleanup(sessionId, 'discarded');
+  } finally {
+    forgetOrcaWorkerIdentity(sessionId);
+  }
 }
 
 function handleAgentIslandSessionStopped(
@@ -8786,7 +8789,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     assertCurrent();
     if (orcaRole === 'worker') {
       markKnownOrcaWorkerSession(sessionId);
-      getAgentIslandService()?.handleNotificationMuteChanged();
+      try {
+        getAgentIslandService()?.handleNotificationMuteChanged();
+      } catch (error) {
+        log.warn('Agent Island Worker notification refresh failed before role persistence', {
+          sessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
     try {
       await setSessionOrcaRole(sessionId, orcaRole, { owner: owner!, assertCurrent });

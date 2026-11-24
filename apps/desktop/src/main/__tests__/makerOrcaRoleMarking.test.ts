@@ -51,24 +51,64 @@ describe('maker Orca role marking IPC boundary', () => {
   // while the Worker identity still suppresses notifications. Ordinary close keeps
   // unread activity, so forgetting first can publish it as a normal task. Unit;
   // service.test.ts covers the real close/discard/display/relay projections.
-  it('discards Worker activity before forgetting its notification identity', () => {
+  it.each([false, true])('discards Worker activity before forgetting its notification identity (publish failure: %s)', publishFails => {
     const source = registerSource.match(/function forgetKnownOrcaWorkerSession\(sessionId: string\): void \{[\s\S]*?\n\}/)?.[0];
-    if (!source) throw new Error('Worker activity cleanup boundary missing');
+    const closeSource = registerSource.match(/function handleAgentIslandSessionClosedAfterCleanup\([\s\S]*?\n\}/)?.[0];
+    if (!source || !closeSource) throw new Error('Worker activity cleanup boundary missing');
+    const warn = vi.fn();
     const handleSessionClosed = vi.fn(() => {
       expect(isKnownOrcaWorkerSession('archive-worker')).toBe(true);
+      if (publishFails) throw new Error('projection publish failed');
     });
-    const forget = new Function('getAgentIslandService', 'forgetOrcaWorkerIdentity',
-      transpileModule(`${source}\nreturn forgetKnownOrcaWorkerSession;`, {
+    const forget = new Function('getAgentIslandService', 'forgetOrcaWorkerIdentity', 'log',
+      transpileModule(`${closeSource}\n${source}\nreturn forgetKnownOrcaWorkerSession;`, {
         compilerOptions: { target: ScriptTarget.ES2022 },
       }).outputText,
-    )(() => ({ handleSessionClosed }), forgetWorkerIdentity) as (id: string) => void;
+    )(() => ({ handleSessionClosed }), forgetWorkerIdentity, { warn }) as (id: string) => void;
     markKnownOrcaWorkerSession('archive-worker');
     try {
-      forget('archive-worker');
+      expect(() => forget('archive-worker')).not.toThrow();
       expect(handleSessionClosed).toHaveBeenCalledWith('archive-worker', { reason: 'discarded' });
       expect(isKnownOrcaWorkerSession('archive-worker')).toBe(false);
+      expect(warn).toHaveBeenCalledTimes(publishFails ? 1 : 0);
     } finally {
       forgetWorkerIdentity('archive-worker');
+    }
+  });
+
+  // #12570 review, unit: a display publisher exception must not skip the durable
+  // Worker role write. Prior coverage asserted source ordering, not this failure.
+  // Execute the production role boundary with an in-memory owner and DB port.
+  it('persists the Worker role despite a notification refresh failure', async () => {
+    const source = registerSource.match(/  async function markOrcaRoleIfNeeded\([\s\S]*?\n  \}/)?.[0];
+    if (!source) throw new Error('Orca role marking boundary missing');
+    const owner = {};
+    const warn = vi.fn();
+    const refresh = vi.fn(() => { throw new Error('notification publish failed'); });
+    let persistedRole: string | undefined;
+    const setSessionOrcaRole = vi.fn(async (_id: string, role: string,
+      options: { owner: object; assertCurrent(): void }) => {
+      expect(options.owner).toBe(owner);
+      options.assertCurrent();
+      persistedRole = role;
+    });
+    const markRole = new Function('getCurrentDbClientSnapshot', 'assertSessionCreationCurrent',
+      'assertReviewSettingsUnlocked', 'markKnownOrcaWorkerSession', 'getAgentIslandService',
+      'setSessionOrcaRole', 'log',
+      transpileModule(`${source}\nreturn markOrcaRoleIfNeeded;`, {
+        compilerOptions: { target: ScriptTarget.ES2022 },
+      }).outputText,
+    )(() => owner, () => {}, async () => {}, markKnownOrcaWorkerSession,
+      () => ({ handleNotificationMuteChanged: refresh }), setSessionOrcaRole,
+      { warn }) as (id: string, role: 'worker') => Promise<void>;
+    try {
+      await expect(markRole('new-worker', 'worker')).resolves.toBeUndefined();
+      expect(persistedRole).toBe('worker');
+      expect(isKnownOrcaWorkerSession('new-worker')).toBe(true);
+      expect(refresh).toHaveBeenCalledOnce();
+      expect(warn).toHaveBeenCalledOnce();
+    } finally {
+      forgetWorkerIdentity('new-worker');
     }
   });
 
