@@ -58,8 +58,10 @@ export default function GuestTaskReview({ peer, sessionId }: { peer: string; ses
       if (!current) return;
       const page = value as Message[];
       if (!Array.isArray(page) || page.some(row => row.sessionId !== sessionId)) throw new Error('Unexpected task history');
-      setRows(previous => request.before ? [...page, ...previous] : page);
-      setNext(page.length === PAGE_SIZE ? page[0]?.id : undefined);
+      const chronological = [...page].reverse();
+      setRows(previous => request.before ? [...chronological, ...previous] : chronological);
+      const hasMore = page.length >= PAGE_SIZE || page.some(row => row.agentMeta?.remoteRowsTrimmed === true);
+      setNext(hasMore ? page.at(-1)?.id : undefined);
       setStatus('ready');
     }).catch(() => {
       if (!current) return;
