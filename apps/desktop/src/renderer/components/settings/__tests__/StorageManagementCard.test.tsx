@@ -856,12 +856,16 @@ describe('StorageManagementCard database cleanup', () => {
       finish = () => resolve(result);
     }));
     render(<StorageManagementCard />);
-    fireEvent.click(screen.getByRole('button', { name: 'settings.about.storage.dbSlimmingScanButton' }));
+    const scanButton = screen.getByRole('button', { name: 'settings.about.storage.dbSlimmingScanButton' }) as HTMLButtonElement;
+    fireEvent.click(scanButton);
     fireEvent.click(await screen.findByRole('button', { name: 'settings.about.storage.cancelButton' }));
     expect(api.cancelScan).toHaveBeenCalledOnce();
     expect(document.body.dataset.appInteractionLocked).not.toBe('1');
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(scanButton.disabled).toBe(true);
     await act(async () => finish());
     expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(scanButton.disabled).toBe(false);
   });
 
   it('locks the full window while a database scan is running, then shows results in a dialog', async () => {

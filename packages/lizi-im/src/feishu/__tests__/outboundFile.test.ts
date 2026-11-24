@@ -102,9 +102,8 @@ describe('Feishu parent-chat file reuse', () => {
     );
   });
 
-  // The first Windows upload cold-starts PowerShell/Add-Type. Its production
-  // helper has a 15s deadline; allow it to finish before asserting the attested
-  // path instead of timing out at Vitest's default 5s (CI run 39577662696).
+  // Keep the real Windows handle-path helper in this unit test. CI run
+  // 45203752485 hit the helper deadline and returned an empty path.
   it('uploads a regular file once and reuses its file_key for the parent chat', async () => {
     const absPath = await fileFixture('报告.txt', 'trusted report');
 

@@ -43,9 +43,7 @@ import type { BotCredentials } from './internal-types.js';
 const FEISHU_FILE_SIZE_LIMIT = 30 * 1024 * 1024;
 /** 10 MB per image when sending as `msg_type:image`. */
 const FEISHU_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
-// PowerShell's first Add-Type invocation can be slow on hosted Windows
-// runners (Defender scans the generated compiler artifacts). Keep the helper
-// bounded and fail closed, but allow that one-time startup to finish.
+// The native helpers must stay bounded and fail closed when unavailable.
 const HANDLE_PATH_HELPER_TIMEOUT_MS = 15_000;
 const HANDLE_PATH_HELPER_MAX_BYTES = 256 * 1024;
 
@@ -55,22 +53,31 @@ const HANDLE_PATH_HELPER_MAX_BYTES = 256 * 1024;
  * handle's final path. It never accepts an Agent-controlled path argument.
  */
 const WINDOWS_HANDLE_PATH_SCRIPT = String.raw`
+$ErrorActionPreference = 'Stop'
 $utf8 = [System.Text.UTF8Encoding]::new($false)
 [Console]::OutputEncoding = $utf8
-Add-Type -TypeDefinition @'
-using System;
-using System.Text;
-using System.Runtime.InteropServices;
-public static class CindyHandlePath {
-  [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-  public static extern uint GetFinalPathNameByHandle(IntPtr handle, StringBuilder path, uint size, uint flags);
-  [DllImport("kernel32.dll")]
-  public static extern IntPtr GetStdHandle(int kind);
+# Define the two kernel entry points in memory. Add-Type on Windows PowerShell
+# invokes a disk-backed compiler whose cold start can exceed the helper deadline.
+$assemblyName = [Reflection.AssemblyName]::new('CindyHandlePath')
+$assembly = [AppDomain]::CurrentDomain.DefineDynamicAssembly(
+  $assemblyName, [Reflection.Emit.AssemblyBuilderAccess]::Run
+)
+$type = $assembly.DefineDynamicModule($assemblyName.Name).DefineType('CindyHandlePath', 'Public')
+function Add-KernelMethod([string]$name, [type]$result, [type[]]$parameters) {
+  $attributes = [Reflection.MethodAttributes]'Public, Static, PinvokeImpl'
+  $method = $type.DefinePInvokeMethod(
+    $name, 'kernel32.dll', $attributes, [Reflection.CallingConventions]::Standard,
+    $result, $parameters, [Runtime.InteropServices.CallingConvention]::Winapi,
+    [Runtime.InteropServices.CharSet]::Unicode
+  )
+  $method.SetImplementationFlags($method.GetMethodImplementationFlags() -bor [Reflection.MethodImplAttributes]::PreserveSig)
 }
-'@
-$handle = [CindyHandlePath]::GetStdHandle(-10)
-$path = New-Object System.Text.StringBuilder 32768
-$length = [CindyHandlePath]::GetFinalPathNameByHandle($handle, $path, $path.Capacity, 0)
+Add-KernelMethod 'GetStdHandle' ([IntPtr]) @([int])
+Add-KernelMethod 'GetFinalPathNameByHandleW' ([uint32]) @([IntPtr], [Text.StringBuilder], [uint32], [uint32])
+$kernel = $type.CreateType()
+$handle = $kernel::GetStdHandle(-10)
+$path = [Text.StringBuilder]::new(32768)
+$length = $kernel::GetFinalPathNameByHandleW($handle, $path, $path.Capacity, 0)
 if ($length -eq 0 -or $length -ge $path.Capacity) { exit 1 }
 [Console]::Out.Write($path.ToString())
 `;

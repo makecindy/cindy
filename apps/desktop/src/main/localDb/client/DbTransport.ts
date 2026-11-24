@@ -6,6 +6,7 @@ export interface DbTransport {
 
   onTerminated(cb: (info: DbTransportTerminationInfo) => void): void;
 
+  observeCorruption?(error: Error): void;
   close(): Promise<void>;
 }
 

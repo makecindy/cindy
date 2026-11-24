@@ -592,6 +592,7 @@ function DatabaseSlimmingSection({
     useState<DbSlimmingBackupDirectorySelection>({ selected: false });
   const [phase, setPhase] = useState<DbSlimmingPhase>({ kind: 'idle' });
   const [scanLoading, setScanLoading] = useState(false);
+  const [scanStopping, setScanStopping] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
   const [executionLocked, setExecutionLocked] = useState(false);
   const scanDismissed = useRef(false);
@@ -798,6 +799,7 @@ function DatabaseSlimmingSection({
       busyRef.current = false;
       if (!completed) releaseInteractionLock();
       setScanLoading(false);
+      setScanStopping(false);
     }
   };
 
@@ -866,7 +868,7 @@ function DatabaseSlimmingSection({
           size="md"
           className="gap-1.5"
           onClick={handleScan}
-          loading={scanLoading}
+          loading={scanLoading || scanStopping}
         >
           {t('settings.about.storage.dbSlimmingScanButton')}
         </Button>
@@ -992,6 +994,7 @@ function DatabaseSlimmingSection({
         onCancelScan={() => {
           scanDismissed.current = true;
           releaseInteractionLock();
+          setScanStopping(true);
           setScanLoading(false);
           void window.electronAPI.localDb.maintenance.cancelScan().catch(() => {});
         }}

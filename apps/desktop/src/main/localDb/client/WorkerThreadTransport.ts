@@ -2569,12 +2569,15 @@ async function dispatch(op, args) {
 }
 
 setDatabase(workerData || {});
+const quarantine = workerData?.quarantine;
 
 parentPort.on('message', async (req) => {
   const startedAt = performance.timeOrigin + performance.now();
   const timing = () => ({ startedAt, finishedAt: performance.timeOrigin + performance.now() });
   try {
-    if (corruptionError && req.op !== 'closeDb') throw createCorruptDbUnavailableError(corruptionError);
+    if (req.op !== 'closeDb' && (corruptionError || (quarantine && Atomics.load(quarantine, 0)))) {
+      throw createCorruptDbUnavailableError(corruptionError);
+    }
     const result = await dispatch(req.op, req.args);
     parentPort.postMessage({ id: req.id, ok: true, result, timing: timing() });
   } catch (err) {
@@ -2680,6 +2683,7 @@ export class WorkerThreadTransport implements DbTransport {
   private closed = false;
   private closing = false;
   private corruptionError: Error | null = null;
+  private readonly quarantine = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
   private vecLoaded = false;
   private readonly pending = new Map<number, PendingRpc>();
   private readonly queued: QueuedRpc[] = [];
@@ -2748,6 +2752,19 @@ export class WorkerThreadTransport implements DbTransport {
 
   onTerminated(cb: (info: DbTransportTerminationInfo) => void): void {
     this.terminatedListeners.add(cb);
+  }
+
+  observeCorruption(error: Error): void {
+    if (this.corruptionError || !isSqliteCorruption(error)) return;
+    this.corruptionError = error;
+    // The worker can see quarantine even before the messages already in its input queue.
+    Atomics.store(this.quarantine, 0, 1);
+    for (const queued of this.queued.splice(0)) {
+      if (queued.queueTimeout) clearTimeout(queued.queueTimeout);
+      queued.reject(createCorruptDbUnavailableError(error));
+    }
+    // Posted requests keep their actual outcomes, including writes that already committed.
+    try { this.opts.onCorruption?.(error); } catch { /* Admission remains closed. */ }
   }
 
   async close(): Promise<void> {
@@ -2963,7 +2980,8 @@ export class WorkerThreadTransport implements DbTransport {
   }
 
   private createWorker(): Worker {
-    const { onCorruption: _onCorruption, ...workerData } = this.opts;
+    const { onCorruption: _onCorruption, ...opts } = this.opts;
+    const workerData = { ...opts, quarantine: this.quarantine };
     // 显式 workerScriptPath 用于真实文件 worker 校验，不能被临时 inline fallback 覆盖。
     if (this.opts.workerScriptPath) {
       return new Worker(this.resolveWorkerScriptPath(), { workerData });
@@ -2994,15 +3012,8 @@ export class WorkerThreadTransport implements DbTransport {
     if ('id' in msg) {
       // A timed-out response still reports the health of this connection. Close
       // admission before resolving/rejecting promises or draining queued work.
-      if (!msg.ok && isSqliteCorruption(msg.error) && !this.corruptionError) {
-        this.corruptionError = Object.assign(new Error(msg.error.message), { code: msg.error.code });
-        for (const queued of this.queued.splice(0)) {
-          if (queued.queueTimeout) clearTimeout(queued.queueTimeout);
-          queued.reject(createCorruptDbUnavailableError(this.corruptionError));
-        }
-        // Keep already-posted requests pending: some may have committed. The
-        // worker rejects unstarted work and returns actual completed outcomes.
-        try { this.opts.onCorruption?.(this.corruptionError); } catch { /* Admission remains closed. */ }
+      if (!msg.ok && isSqliteCorruption(msg.error)) {
+        this.observeCorruption(Object.assign(new Error(msg.error.message), { code: msg.error.code }));
       }
       const pending = this.pending.get(msg.id);
       if (!pending) return;

@@ -14,6 +14,7 @@ import {
 
 interface DbWorkerStartupOptions extends DbWorkerRuntimeOptions {
   betterSqliteModulePath?: string;
+  quarantine?: Int32Array;
 }
 
 const workerPort = parentPort;
@@ -81,7 +82,10 @@ function setDatabase(opts: DbWorkerStartupOptions): void {
 }
 
 async function dispatchRequest(req: RpcRequest): Promise<unknown> {
-  if (corruptionError && req.op !== 'closeDb') throw createCorruptDbUnavailableError(corruptionError);
+  const { quarantine } = startupOptions;
+  if (req.op !== 'closeDb' && (corruptionError || (quarantine && Atomics.load(quarantine, 0)))) {
+    throw createCorruptDbUnavailableError(corruptionError);
+  }
   const readyDb = requireReadyDb();
   if (req.op === 'worktreeReferences') {
     return readLocalWorktreeReferences(readyDb, DatabaseCtor, startupOptions.nativeBinding);
