@@ -185,7 +185,11 @@ type LoweredNamespaceChild = {
   current: boolean;
 };
 
-function buildRewritePlan(groups: readonly unknown[][], currentGroupCount = groups.length): NamespaceRewritePlan {
+function buildRewritePlan(
+  groups: readonly unknown[][],
+  currentGroupCount = groups.length,
+  currentBareNames: Iterable<string> = [],
+): NamespaceRewritePlan {
   const aliases = new Map<string, RoutedNamespaceToolIdentity>();
   const bareWireNames = new Set<string>();
   const identities = new Map<string, string>();
@@ -194,6 +198,14 @@ function buildRewritePlan(groups: readonly unknown[][], currentGroupCount = grou
   const wireOwners = new Map<string, string>();
   const renamedWireNames = new Map<string, string>();
   const renamedChildren: { preferred: string; declaredType: unknown }[] = [];
+
+  // Search-loaded bare definitions are serialized elsewhere, but still own their wire names.
+  for (const name of currentBareNames) {
+    if (!isRepresentableName(name)) continue;
+    wireOwners.set(name, loweredIdentity(BUILTIN_FUNCTIONS_NAMESPACE, name));
+    addSelector(selectors, name, name);
+    currentWireNames.add(name);
+  }
 
   for (const [index, group] of groups.entries()) {
     const current = index < currentGroupCount;
@@ -525,11 +537,9 @@ export function rewriteRoutedNamespaceToolsForUpstream(
     ? [...currentGroups, ...groups.filter(group => group !== body.tools && group !== currentInlineTools)]
     : groups;
   const originalBareCustomNames = bareCustomNames ?? collectBareCustomToolNames(body);
-  const plan = buildRewritePlan(priorityGroups, currentInlineTools ? currentGroups.length : undefined);
-  // Search-loaded bare tools keep their own short selectors after their definitions are serialized.
-  for (const name of currentSelectors?.bare.keys() ?? []) {
-    if (isRepresentableName(name)) addSelector(plan.selectors, name, name);
-  }
+  const plan = buildRewritePlan(
+    priorityGroups, currentInlineTools ? currentGroups.length : undefined, currentSelectors?.bare.keys(),
+  );
   // A current search can reload an exact historical coordinate. Reuse its existing allocation.
   for (const tool of currentSelectors?.namespaced.values() ?? []) {
     if (!tool?.namespace) continue;

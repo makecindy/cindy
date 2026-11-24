@@ -2106,7 +2106,7 @@
  /**
   * Wire identity of a lowered tool. A `functions` child and an identical top-level declaration share
   * one identity because they denote the same logical tool: `buildTools` flattens the reserved group
-@@ -102,19 +126,77 @@ type NamespaceRewritePlan = {
+@@ -102,19 +126,89 @@ type NamespaceRewritePlan = {
    bareWireNames: Set<string>;
    identities: Map<string, string>;
    selectors: Map<string, string | null>;
@@ -2170,7 +2170,11 @@
 +  current: boolean;
 +};
 +
-+function buildRewritePlan(groups: readonly unknown[][], currentGroupCount = groups.length): NamespaceRewritePlan {
++function buildRewritePlan(
++  groups: readonly unknown[][],
++  currentGroupCount = groups.length,
++  currentBareNames: Iterable<string> = [],
++): NamespaceRewritePlan {
    const aliases = new Map<string, RoutedNamespaceToolIdentity>();
    const bareWireNames = new Set<string>();
    const identities = new Map<string, string>();
@@ -2179,6 +2183,14 @@
    const wireOwners = new Map<string, string>();
 +  const renamedWireNames = new Map<string, string>();
 +  const renamedChildren: { preferred: string; declaredType: unknown }[] = [];
++
++  // Search-loaded bare definitions are serialized elsewhere, but still own their wire names.
++  for (const name of currentBareNames) {
++    if (!isRepresentableName(name)) continue;
++    wireOwners.set(name, loweredIdentity(BUILTIN_FUNCTIONS_NAMESPACE, name));
++    addSelector(selectors, name, name);
++    currentWireNames.add(name);
++  }
 
 -  for (const group of groups) {
 +  for (const [index, group] of groups.entries()) {
@@ -2186,7 +2198,7 @@
      for (const tool of group) {
        if (isPlainObject(tool) && tool.type !== "namespace" && isRepresentableName(tool.name)) {
          // A bare declaration is the reserved group's flattened form, so it claims that identity:
-@@ -122,41 +204,97 @@ function buildRewritePlan(groups: readonly unknown[][]): NamespaceRewritePlan {
+@@ -122,41 +216,97 @@ function buildRewritePlan(groups: readonly unknown[][]): NamespaceRewritePlan {
          // collision, and `promoteClientLoadedTools` produces exactly that shape.
          wireOwners.set(tool.name, loweredIdentity(BUILTIN_FUNCTIONS_NAMESPACE, tool.name));
          bareWireNames.add(tool.name);
@@ -2305,7 +2317,7 @@
  }
 
  /**
-@@ -170,6 +308,7 @@ function rewriteToolList(
+@@ -170,6 +320,7 @@ function rewriteToolList(
    tools: unknown[],
    plan: NamespaceRewritePlan,
    emitted: Set<string>,
@@ -2313,7 +2325,7 @@
  ): unknown[] {
    let changed = false;
    const rewritten: unknown[] = [];
-@@ -184,7 +323,7 @@ function rewriteToolList(
+@@ -184,7 +335,7 @@ function rewriteToolList(
          // from the complete catalog rather than whichever container happens to be rewritten first.
          if (
            wireName === undefined
@@ -2322,7 +2334,7 @@
            || emitted.has(wireName)
          ) continue;
          emitted.add(wireName);
-@@ -246,8 +385,9 @@ function rewriteNamedSelector(
+@@ -246,8 +397,9 @@ function rewriteNamedSelector(
      return wireName === undefined || wireName === value.name ? value : { ...value, name: wireName };
    }
    const { namespace: _dropped, ...rest } = value;
@@ -2334,7 +2346,7 @@
    return { ...rest, name: wireName };
  }
 
-@@ -320,10 +460,15 @@ function authorizedAliases(
+@@ -320,10 +472,15 @@ function authorizedAliases(
    );
  }
 
@@ -2352,7 +2364,7 @@
      return tools === item.tools ? item : { ...item, tools };
    }
    if (
-@@ -344,32 +489,159 @@ function rewriteInputItem(item: unknown, plan: NamespaceRewritePlan, emitted: Se
+@@ -344,32 +501,157 @@ function rewriteInputItem(item: unknown, plan: NamespaceRewritePlan, emitted: Se
  export function rewriteRoutedNamespaceToolsForUpstream(
    body: unknown,
    convertedCustomToolNames?: ReadonlySet<string>,
@@ -2394,11 +2406,9 @@
 +    ? [...currentGroups, ...groups.filter(group => group !== body.tools && group !== currentInlineTools)]
 +    : groups;
 +  const originalBareCustomNames = bareCustomNames ?? collectBareCustomToolNames(body);
-+  const plan = buildRewritePlan(priorityGroups, currentInlineTools ? currentGroups.length : undefined);
-+  // Search-loaded bare tools keep their own short selectors after their definitions are serialized.
-+  for (const name of currentSelectors?.bare.keys() ?? []) {
-+    if (isRepresentableName(name)) addSelector(plan.selectors, name, name);
-+  }
++  const plan = buildRewritePlan(
++    priorityGroups, currentInlineTools ? currentGroups.length : undefined, currentSelectors?.bare.keys(),
++  );
 +  // A current search can reload an exact historical coordinate. Reuse its existing allocation.
 +  for (const tool of currentSelectors?.namespaced.values() ?? []) {
 +    if (!tool?.namespace) continue;
@@ -2519,7 +2529,7 @@
    const ambiguousDotted = collectAmbiguousDottedAliases(groups);
    // Authorize canonical identities first, then add only unambiguous spellings.
    // Selection cannot hide a collision elsewhere in the original declaration set.
-@@ -379,11 +651,6 @@ export function rewriteRoutedNamespaceToolsForUpstream(
+@@ -379,11 +661,6 @@ export function rewriteRoutedNamespaceToolsForUpstream(
        && !ambiguousDotted.has(dotted) && !plan.bareWireNames.has(dotted)
        && !aliases.has(dotted)) aliases.set(dotted, identity);
    }
@@ -2531,7 +2541,7 @@
    return {
      body: {
        ...body,
-@@ -392,6 +659,8 @@ export function rewriteRoutedNamespaceToolsForUpstream(
+@@ -392,6 +669,8 @@ export function rewriteRoutedNamespaceToolsForUpstream(
        ...(toolChoice !== body.tool_choice ? { tool_choice: toolChoice } : {}),
      },
      aliases,

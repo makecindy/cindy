@@ -350,6 +350,35 @@ describe('request-owned Responses compatibility', () => {
     expect(request.tool_choice).toEqual(allowed ? { type: 'allowed_tools', tools: [selector] } : selector);
   });
 
+  // #11199: the loaded bare definition reserves its name before the current child is lowered.
+  it.each(['application/json', 'text/event-stream'])('reserves the name of a current search-loaded bare tool (%s)', async contentType => {
+    const adapter = createCodexResponsesCompatibilityAdapter();
+    const name = 'workspace__read';
+    const child = { type: 'custom', name: 'read', description: 'Read a location' };
+    const bare = { type: 'function', name, parameters: { type: 'object', properties: { line: { type: 'integer' } } } };
+    for (const type of ['function', 'custom'] as const) {
+      const selector = { type, name };
+      const request = adapter.adaptRequest({
+        tools: [{ type: 'namespace', name: 'workspace', tools: [child] }],
+        input: [{ type: 'additional_tools', tools: [] }, { type: 'tool_search_output', tools: [bare] }],
+        tool_choice: type === 'function' ? selector : { type: 'allowed_tools', tools: [selector] },
+      }, 10108, undefined, true) as { tools: unknown[]; tool_choice: unknown };
+      expect(request.tools).toMatchObject([{ type: 'function', name: 'workspace__read_2' }]);
+      const selected = { type: 'function', name: type === 'function' ? name : 'workspace__read_2' };
+      expect(request.tool_choice).toEqual(type === 'function' ? selected : { type: 'allowed_tools', tools: [selected] });
+      const item = { type: 'function_call', name: selected.name, call_id: 'current', arguments: type === 'function' ? '{"line":4.0}' : '{"input":"text"}' };
+      const response = { status: 'completed', output: [item] };
+      const sse = contentType === 'text/event-stream';
+      const wire = sse ? `data: ${JSON.stringify({ type: 'response.completed', response })}\n\n` : JSON.stringify(response);
+      const transform = adapter.createResponseTransform(10108, { contentType, contentEncoding: '' });
+      const text = transform ? await responseText(transform, wire) : wire;
+      const expected = type === 'function'
+        ? { ...item, arguments: '{"line":4}' }
+        : { type: 'custom_tool_call', name: 'read', namespace: 'workspace', call_id: 'current', input: 'text' };
+      expect((sse ? JSON.parse(text.trim().slice(6)).response : JSON.parse(text)).output).toEqual([expected]);
+    }
+  });
+
   // #11199: the bare owner loaded by this turn's search uses its original custom call type.
   it.each(['application/json', 'text/event-stream'])('restores a search-loaded bare custom call (%s)', async contentType => {
     const adapter = createCodexResponsesCompatibilityAdapter();
