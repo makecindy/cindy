@@ -31,7 +31,16 @@ function dedupeExportName(fileName: string, n: number): string {
   return `${fileName.slice(0, fileName.length - ext.length)} (${n})${ext}`;
 }
 
-/** The single cleanup path: empty and close our handle if still open, then remove our own file only. */
+/** dev/ino of 0 (some SMB/FUSE volumes) cannot prove a path still names our file. */
+function hasVerifiableIdentity(stat: BigIntStats): boolean {
+  return stat.dev !== 0n && stat.ino !== 0n;
+}
+
+/**
+ * The single cleanup path. While our handle is open, empty the file through it (that reaches the
+ * created file even if its folder was moved), then close. Remove the path only when it still
+ * provably names our file; with an unverifiable identity, remove it only if it is still empty.
+ */
 async function discardExportFile(handle: FileHandle | null, target: string, created: BigIntStats | null): Promise<void> {
   if (handle) {
     if (created) await handle.truncate(0).catch(() => {});
@@ -39,17 +48,23 @@ async function discardExportFile(handle: FileHandle | null, target: string, crea
   }
   if (!created) return;
   const current = await fs.lstat(target, { bigint: true }).catch(() => null);
-  if (current && current.dev === created.dev && current.ino === created.ino) await fs.unlink(target).catch(() => {});
+  if (!current?.isFile()) return;
+  const ours = hasVerifiableIdentity(created)
+    ? current.dev === created.dev && current.ino === created.ino
+    : current.size === 0n;
+  if (ours) await fs.unlink(target).catch(() => {});
 }
 
 /**
  * Writes an export into the owner-approved folder. Invariants (#12461):
  * - creates a new file directly in `directory` (O_EXCL, no link following); never overwrites, adds " (n)";
  * - async I/O only, so a slow volume never blocks Main;
- * - reports the name only when, after the bytes are written and the handle is closed, the caller is
- *   still current, `directory` still resolves to itself (case preserved) and the path still names the
- *   created file; every other outcome removes the file it created and returns null (or throws the
- *   caller's revocation before anything was created).
+ * - fails closed where file identity cannot be verified (dev/ino of 0);
+ * - while still holding the handle, after writing: the path names the created file and `directory`
+ *   still resolves to itself (case preserved); otherwise the bytes are emptied through the handle;
+ * - the caller's authorization is checked again after close, immediately before success.
+ * Out of scope: the folder being moved by the same user in the instant between close and that
+ * last check while authorization is also revoked (they could move the finished file anyway).
  */
 export async function writeExportFileExclusive(
   directory: string, fileName: string, bytes: Uint8Array, assertCurrent: () => void,
@@ -71,16 +86,17 @@ export async function writeExportFileExclusive(
     let committed = false;
     try {
       created = await handle.stat({ bigint: true });
-      if (!created.isFile()) return null;
+      if (!created.isFile() || !hasVerifiableIdentity(created)) return null;
       assertCurrent();
       await handle.writeFile(bytes);
+      const onDisk = await fs.lstat(target, { bigint: true });
+      if (!onDisk.isFile() || onDisk.dev !== created.dev || onDisk.ino !== created.ino || !await resolvesToItself()) return null;
       const open = handle;
       handle = null;
       await open.close();
       assertCurrent();
-      const onDisk = await fs.lstat(target, { bigint: true });
-      committed = onDisk.isFile() && onDisk.dev === created.dev && onDisk.ino === created.ino && await resolvesToItself();
-      return committed ? name : null;
+      committed = true;
+      return name;
     } catch {
       return null;
     } finally {

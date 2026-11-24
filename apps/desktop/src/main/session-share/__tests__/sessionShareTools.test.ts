@@ -234,4 +234,46 @@ describe('native package Host tools', () => {
     }
     expect(await fs.readFile(path.join(exports, 'Task.cshare'), 'utf8')).toBe('earlier');
   });
+  // Unit, #12461 review: the approved folder (or an ancestor) moved after open() carries the
+  // created file with it; the failure path must still empty that file through the open handle
+  // instead of leaving the package in the moved folder. Also: a volume reporting dev/ino 0
+  // cannot prove identity, so the write fails closed and leaves nothing behind.
+  it.each(['moved', 'zero-identity'] as const)('leaves no package bytes when the write cannot be verified (%s)', async (mode) => {
+    await fs.mkdir(path.join(directory, 'exports'));
+    const exports = await fs.realpath(path.join(directory, 'exports'));
+    const moved = path.join(directory, 'exports-moved');
+    let movedAway = false;
+    let wrote = false;
+    const realOpen = fs.open.bind(fs);
+    const open = vi.spyOn(fs, 'open').mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+      const handle = await realOpen(...args);
+      if (mode === 'zero-identity') {
+        const realStat = handle.stat.bind(handle);
+        handle.stat = (async () => ({ ...await realStat({ bigint: true }), ino: 0n, isFile: () => true })) as typeof handle.stat;
+        const realWrite = handle.writeFile.bind(handle);
+        handle.writeFile = (async (data: Uint8Array) => { wrote = true; await realWrite(data); }) as typeof handle.writeFile;
+      } else {
+        const realWrite = handle.writeFile.bind(handle);
+        // Windows refuses to rename a folder holding an open file, so the race exists only elsewhere.
+        handle.writeFile = (async (data: Uint8Array) => {
+          await realWrite(data);
+          movedAway = await fs.rename(exports, moved).then(() => true, () => false);
+        }) as typeof handle.writeFile;
+      }
+      return handle;
+    });
+    const result = await writeExportFileExclusive(exports, 'Task.cshare', Buffer.from('package'), () => {});
+    open.mockRestore();
+    if (mode === 'moved' && !movedAway) {
+      expect(result).toBe('Task.cshare');
+      return;
+    }
+    expect(result).toBeNull();
+    const left = mode === 'moved' ? moved : exports;
+    for (const name of await fs.readdir(left)) expect((await fs.stat(path.join(left, name))).size).toBe(0);
+    if (mode === 'zero-identity') {
+      expect(wrote).toBe(false);
+      expect(await fs.readdir(exports)).toEqual([]);
+    }
+  });
 });
