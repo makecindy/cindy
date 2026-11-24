@@ -4160,6 +4160,11 @@ interface ElectronAPI {
     choose(): Promise<import('../shared/projectsRoot').ProjectsRootState>;
     reset(): Promise<import('../shared/projectsRoot').ProjectsRootState>;
   };
+  taskExportDirectory?: {
+    get(): Promise<import('../shared/taskExportDirectory').TaskExportDirectoryState>;
+    choose(): Promise<import('../shared/taskExportDirectory').TaskExportDirectoryState>;
+    reset(): Promise<import('../shared/taskExportDirectory').TaskExportDirectoryState>;
+  };
   createProjectFromTask: {
     prepare(sessionId: string): Promise<import('../shared/projectsRoot').PreparedProjectFromTask>;
     chooseParent(): Promise<string | null>;
