@@ -76,7 +76,7 @@ export function handleSessionEvent(
     );
     recordSessionCodexTurnUsage(deps, session, event, terminal.turnAssistantPersistId);
     recordSessionPiTurnUsage(deps, session, event, terminal.turnAssistantPersistId);
-    recordSessionAcpTurnUsage(session, event);
+    recordSessionAcpTurnUsage(session, event, terminal.turnAssistantPersistId);
     deps.recordProviderPartyUsage?.(session, event);
   };
   if (admitUsage === undefined) record();

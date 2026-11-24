@@ -17,6 +17,8 @@ import { NotSupportedError, type Capabilities } from '../../types/capabilities.j
 import type { Effort, PermissionMode, UserContentBlock, UserMessage } from '../../types/common.js';
 import type { AgentEvent, InteractionRequest, InteractionResolver, UsageSnapshot } from '../../types/events.js';
 import { createAsyncQueue } from '../shared/async-queue.js';
+import { CalibratedTokenSpeedMeter, estimateWordTokens } from '../shared/calibrated-token-speed.js';
+import { attachLiveGeneration } from '../shared/live-generation-snapshot.js';
 import {
   ACP_SUPPORTED_PERMISSION_MODES,
   findModeOption,
@@ -422,6 +424,11 @@ export class AcpSession {
   private turnSeq = 0;
   private permissionSeq = 0;
   private usage: UsageSnapshot = { tokenUsage: 0, contextTokens: 0, contextWindow: 0, costUsd: 0 };
+  private readonly tokenSpeed = new CalibratedTokenSpeedMeter({
+    estimate: estimateWordTokens,
+    thinkingScale: 1,
+  });
+  private turnStartedAt = 0;
   private title: string | undefined;
   private closing: Promise<void> | null = null;
   private ended = false;
@@ -725,12 +732,55 @@ export class AcpSession {
       default:
         if (STATE_UPDATES.has(update.sessionUpdate)) return;
         this.emit(this.translator.handleUpdate(update));
-        if (this.turn) return;
+        if (this.turn) {
+          this.observeTurnSpeed(update);
+          return;
+        }
         // Progress on a running call may change nothing on screen, yet it proves the agent
         // is still working: it keeps the runtime busy and restarts the open-call quiet bound.
         this.lastBackgroundAt = this.now();
         this.armOpenToolCap();
         this.armBackgroundSegmentClose();
+    }
+  }
+
+  private emitLiveStatus(): void {
+    const now = this.now();
+    const tokenSpeed = this.tokenSpeed.snapshot(now);
+    if (!tokenSpeed) return;
+    const snapshot = attachLiveGeneration(this.usage, {
+      tokenSpeed,
+      outputTokens: 0,
+      durationMs: 0,
+      openStartedAt: null,
+      reliable: true,
+    });
+    this.emit([{ type: 'status', data: { status: 'running', ...snapshot, isRunning: true } }]);
+  }
+
+  private observeTurnSpeed(update: AcpRecord): void {
+    const now = this.now();
+    switch (update.sessionUpdate) {
+      case 'agent_message_chunk': {
+        const block = asRecord(update.content);
+        if (block.type === 'text' && typeof block.text === 'string' && block.text.length > 0) {
+          if (this.tokenSpeed.recordDelta(block.text, now, 'visible')) this.emitLiveStatus();
+        }
+        return;
+      }
+      case 'agent_thought_chunk': {
+        const block = asRecord(update.content);
+        if (block.type === 'text' && typeof block.text === 'string' && block.text.length > 0) {
+          if (this.tokenSpeed.recordDelta(block.text, now, 'thinking')) this.emitLiveStatus();
+        }
+        return;
+      }
+      case 'tool_call':
+      case 'tool_call_update':
+        if (this.translator.openToolCount() > 0) this.tokenSpeed.pause(now);
+        return;
+      default:
+        return;
     }
   }
 
@@ -769,6 +819,8 @@ export class AcpSession {
     this.clearOpenToolCap();
     const turn: ActiveTurn = { token: ++this.turnSeq, settled: false, cancelTimer: null };
     this.turn = turn;
+    this.tokenSpeed.reset();
+    this.turnStartedAt = this.now();
     this.usage = { ...this.usage, tokenUsage: 0 };
     this.emit([{ type: 'status', data: { status: 'running', ...this.usage, isRunning: true } }]);
     const usageModel = this.model;
@@ -789,8 +841,30 @@ export class AcpSession {
     if (turn.cancelTimer) clearTimeout(turn.cancelTimer);
     this.cancelPermissions();
     this.turn = null;
+    const now = this.now();
+    let enrichedOutcome: AcpTurnOutcome = outcome;
+    if (!('error' in outcome)) {
+      const realOutput = outcome.usage && outcome.usage.outputTokens > 0 ? outcome.usage.outputTokens : undefined;
+      if (realOutput !== undefined) {
+        this.tokenSpeed.settle(realOutput, now);
+      }
+      this.tokenSpeed.stop(realOutput, now);
+      const snap = this.tokenSpeed.snapshot(now);
+      const generationTrace = this.tokenSpeed.trace();
+      const durationMs = snap && snap.elapsedMs > 0 ? Math.round(snap.elapsedMs) : undefined;
+      const turnDurationMs = this.turnStartedAt > 0 ? Math.max(0, now - this.turnStartedAt) : undefined;
+      enrichedOutcome = {
+        ...outcome,
+        ...(durationMs !== undefined ? { durationMs } : {}),
+        ...(turnDurationMs !== undefined ? { turnDurationMs } : {}),
+        ...(generationTrace ? { generationTrace } : {}),
+      };
+    } else {
+      this.tokenSpeed.stop(undefined, now);
+    }
+    this.turnStartedAt = 0;
     // Turn-closing events belong to the turn that just ended, so they are not tagged background.
-    for (const event of this.translator.finish(outcome)) this.queue.push(event);
+    for (const event of this.translator.finish(enrichedOutcome)) this.queue.push(event);
     this.pump();
     // Calls the agent left running continue as background work.
     if (!this.turn) this.armOpenToolCap();
@@ -858,7 +932,7 @@ export class AcpSession {
       contextWindow: size,
       ...(cost.currency === 'USD' && typeof cost.amount === 'number' ? { costUsd: cost.amount } : {}),
     };
-    if (this.turn) this.emit([{ type: 'status', data: { status: 'running', ...this.usage, isRunning: true } }]);
+    if (this.turn) this.emitLiveStatus();
   }
 
   private applyPermissionMode(mode: PermissionMode): void {

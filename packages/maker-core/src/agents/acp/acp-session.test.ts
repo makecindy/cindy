@@ -357,7 +357,12 @@ describe('AcpSession turns', () => {
     await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
     agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn', ...(reported ? { usage: reported } : {}) });
     await vi.waitFor(() => expect(events.at(-1)?.type).toBe('done'));
-    expect((events.at(-1)?.data as AcpRecord).usage).toEqual(expected);
+    const actualUsage = (events.at(-1)?.data as AcpRecord).usage;
+    if (expected) {
+      expect(actualUsage).toMatchObject(expected);
+    } else {
+      expect(actualUsage).toBeUndefined();
+    }
   });
 
   it('runs one prompt at a time, in send order even when the first message carries a slow image', async () => {

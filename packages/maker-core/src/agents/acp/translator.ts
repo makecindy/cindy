@@ -23,6 +23,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { createTwoFilesPatch } from 'diff';
 import { parseMessageToolUse } from '@cindy/maker-shared/message-normalize';
 import type { AgentEvent } from '../../types/events.js';
+import type { GenerationTrace } from '../shared/calibrated-token-speed.js';
 import {
   asNonEmptyString,
   asRecord,
@@ -53,7 +54,14 @@ export interface AcpUpdateTranslatorOptions {
 }
 
 export type AcpTurnOutcome =
-  | { stopReason: AcpStopReason; usage?: AcpTurnUsage; usageModel?: string }
+  | {
+      stopReason: AcpStopReason;
+      usage?: AcpTurnUsage;
+      usageModel?: string;
+      durationMs?: number;
+      turnDurationMs?: number;
+      generationTrace?: GenerationTrace;
+    }
   /** `signals`: structured failure fields (usage limit, sign-in, overload) the agent classified. */
   | { error: string; reason?: string; signals?: Record<string, unknown> };
 
@@ -240,6 +248,14 @@ export class AcpUpdateTranslator {
       });
       return events;
     }
+    const usagePayload = outcome.usage || outcome.durationMs || outcome.generationTrace
+      ? {
+          ...(outcome.usage ?? {}),
+          ...(outcome.durationMs && outcome.durationMs > 0 ? { durationMs: outcome.durationMs } : {}),
+          ...(outcome.turnDurationMs !== undefined ? { turnDurationMs: outcome.turnDurationMs } : {}),
+          ...(outcome.generationTrace ? { generationTrace: outcome.generationTrace } : {}),
+        }
+      : undefined;
     events.push({
       type: 'done',
       data: {
@@ -248,7 +264,7 @@ export class AcpUpdateTranslator {
         result: outcome.stopReason === 'cancelled' ? '' : result,
         stopReason: outcome.stopReason,
         // A cancelled turn still spent the tokens the agent reports for it.
-        ...(outcome.usage ? { usage: outcome.usage } : {}),
+        ...(usagePayload ? { usage: usagePayload } : {}),
         ...(outcome.usageModel ? { usageModel: outcome.usageModel } : {}),
       },
     });
