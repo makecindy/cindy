@@ -342,13 +342,15 @@ describe('disabled Cindy Make fork boundaries', () => {
 describe('forkSessionAtMessage', () => {
   // #11482, unit: real createSideChat and fork.session on isolated SQLite.
   // Existing queue fixtures cannot see source changes while the native fork awaits.
-  // Minimal race: q@1000, a@1100, then a later row at the same millisecond.
+  // Minimal races: q@1000, a@1100, then a same-millisecond append or a new Pi turn.
   it.each([
     ['append', 'inproc'], ['rewind', 'inproc'], ['delete', 'inproc'], ['edit', 'inproc'], ['unchanged', 'inproc'],
     ['append', 'file'], ['append', 'inline'], ['remote-append', 'inproc'],
+    ['pi-next-turn', 'inproc'], ['pi-unchanged', 'inproc'],
   ] as const)(
     'keeps the selected side-chat snapshot across native fork: %s (%s)', async (change, transport) => {
       const root = userDataDirRef.current;
+      const isPi = change === 'pi-next-turn' || change === 'pi-unchanged';
       const dbPath = transport === 'inproc' ? ':memory:' : path.join(root, 'snapshot.db');
       const sqlite = new Database(dbPath);
       try {
@@ -364,6 +366,7 @@ describe('forkSessionAtMessage', () => {
         const db = drizzle(sqlite, { schema });
         db.insert(sessions).values({ id: 'src-session', title: 'Snapshot', sdkSessionId: 'source-sdk',
           createdAt: 1, updatedAt: 1,
+          ...(isPi ? { agentKind: 'pi' } : {}),
           ...(change === 'remote-append' ? { agentDeviceId: 'device-b' } : {}) }).run();
         db.insert(messages).values([
           { id: 'q', clientId: 'q', sessionId: 'src-session', role: 'user', content: '"question"', createdAt: 1000 },
@@ -403,6 +406,10 @@ describe('forkSessionAtMessage', () => {
         // Attach rejection handling before changing the source.
         const outcome = opening.then(value => ({ value, error: null }), error => ({ value: null, error }));
         await Promise.race([waiting, opening]);
+        if (change === 'pi-next-turn') {
+          db.insert(messages).values({ id: 'next', clientId: 'next', sessionId: 'src-session',
+            role: 'user', content: '"next turn"', createdAt: 1200 }).run();
+        }
         if (change === 'append' || change === 'remote-append') db.insert(messages).values({ id: 'late', clientId: 'late', sessionId: 'src-session',
           role: 'assistant', content: '"late"', createdAt: 1100 }).run();
         if (change === 'rewind') sqlite.prepare("UPDATE messages SET rewind_at = 1200 WHERE id = 'a'").run();
@@ -410,14 +417,19 @@ describe('forkSessionAtMessage', () => {
         if (change === 'edit') sqlite.prepare("UPDATE messages SET content = '\"edited\"' WHERE id = 'a'").run();
         resume();
         const result = await outcome;
-        if (change === 'append' || change === 'remote-append' || change === 'unchanged') {
+        if (isPi) {
+          expect(forkSdkSessionMock).toHaveBeenCalledWith('pi', expect.objectContaining({ tailTurnsToDrop: 0 }));
+        }
+        if (change === 'append' || change === 'remote-append' || change === 'unchanged' || change === 'pi-unchanged') {
           expect(result.error).toBeNull();
           expect(sqlite.prepare('SELECT role, content FROM messages WHERE session_id = ? ORDER BY created_at, rowid')
             .all(result.value!.id)).toEqual([{ role: 'user', content: '"question"' }, { role: 'assistant', content: '"answer"' }]);
           if (change === 'remote-append') {
             expect(forkSdkSessionMock).not.toHaveBeenCalled();
             expect(remoteInvokeMock).toHaveBeenLastCalledWith('device-b', 'maker:remote-agent:v1', [expect.objectContaining({ op: 'fork', upToMessageId: 'native-anchor' })]);
-          } else expect(forkSdkSessionMock).toHaveBeenCalledWith('claude-code', expect.objectContaining({ upToMessageId: 'native-anchor' }));
+          } else if (!isPi) {
+            expect(forkSdkSessionMock).toHaveBeenCalledWith('claude-code', expect.objectContaining({ upToMessageId: 'native-anchor' }));
+          }
           expect(result.value!.parentSessionId).toBe('src-session');
         } else {
           expect(result.error).toBeInstanceOf(Error);

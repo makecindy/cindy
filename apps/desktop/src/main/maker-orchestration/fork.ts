@@ -948,11 +948,12 @@ export async function forkSessionAtMessage(
     )
     .orderBy(asc(messages.createdAt), asc(messageRowid));
 
-  // An open-ended assistant turn must stop at the history selected above,
-  // even if the parent appends at the same millisecond while native fork waits.
-  // Keep the original turn boundary for native rollback/anchor calculations.
+  // Freeze the open-ended SQLite copy while the native fork waits. Pi clones
+  // the live transcript at the tail, so keep checking for appends there to
+  // avoid committing a child whose native history exceeds its SQLite history.
   const lastSourceMessage = sourceMessages.at(-1);
-  const snapshotBoundary = copyBoundary.createdAt === Number.MAX_SAFE_INTEGER && lastSourceMessage
+  const snapshotBoundary = forkSource.agentKind !== 'pi'
+    && copyBoundary.createdAt === Number.MAX_SAFE_INTEGER && lastSourceMessage
     ? { createdAt: lastSourceMessage.createdAt, rowid: lastSourceMessage.rowid + 1 }
     : copyBoundary;
   const sourceMessagesDigest = computeForkSourceMessagesDigest(sourceMessages.map(row => ({
