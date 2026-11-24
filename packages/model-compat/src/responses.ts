@@ -19,6 +19,7 @@ import { createTranslatorBudget } from './upstream/lib/translator-budget';
 import { collectDeclaredWireToolNames } from './upstream/server/responses-undeclared-tool-guard';
 import { composeSseBlockRewrites, payloadRewriteAsBlockRewrite, nextSseBlock, type SseBlockRewrite } from './upstream/server/sse-payload-rewrite';
 import { isPlainObject } from './object';
+import { collectCurrentToolSearchGroups, indexOfCurrentTurnInlineTools } from './cindy/tool-context';
 
 /** Wire names of custom declarations that live inside a namespace group, before lowering rewrites them. */
 function collectNamespaceCustomToolNames(body: unknown): Set<string> {
@@ -48,6 +49,7 @@ function collectNativeToolSelectors(body: unknown) {
   const groupedBare = new Map<string, NativeTool | null>();
   const namespaced = new Map<string, NativeTool | null>();
   const historical = new Map<string, NativeTool | null>();
+  const loadedBare = new Map<string, NativeTool | null>();
   const record = (catalog: Map<string, NativeTool | null>, key: string, tool: NativeTool) => {
     const previous = catalog.get(key);
     if (previous === undefined) catalog.set(key, tool);
@@ -55,24 +57,23 @@ function collectNativeToolSelectors(body: unknown) {
       catalog.set(key, null);
     }
   };
-  const groups = collectResponsesToolGroups(body).map(tools => ({ tools, live: true }));
-  if (isPlainObject(body) && Array.isArray(body.input)) {
-    for (const entry of body.input) {
-      if (isPlainObject(entry) && entry.type === 'tool_search_output' && Array.isArray(entry.tools)) {
-        groups.push({ tools: entry.tools, live: false });
-      }
-    }
+  const groups: { tools: unknown[]; live: boolean }[] = [];
+  if (isPlainObject(body)) {
+    if (Array.isArray(body.tools)) groups.push({ tools: body.tools, live: true });
+    const inline = Array.isArray(body.input) ? body.input[indexOfCurrentTurnInlineTools(body.input)] : undefined;
+    if (isPlainObject(inline) && Array.isArray(inline.tools)) groups.push({ tools: inline.tools, live: true });
+    for (const tools of collectCurrentToolSearchGroups(body.input)) groups.push({ tools, live: false });
   }
   for (const { tools, live } of groups) {
     for (const tool of tools) {
       if (!isPlainObject(tool) || typeof tool.name !== 'string' || typeof tool.type !== 'string') continue;
       if (tool.type !== 'namespace') {
-        if (live) record(bare, tool.name, { type: tool.type, name: tool.name });
+        record(live ? bare : loadedBare, tool.name, { type: tool.type, name: tool.name });
       } else if (Array.isArray(tool.tools)) {
         for (const child of tool.tools) {
           if (!isPlainObject(child) || typeof child.name !== 'string' || typeof child.type !== 'string') continue;
           if (tool.name === 'functions') {
-            if (live) record(groupedBare, child.name, { type: child.type, name: child.name });
+            record(live ? groupedBare : loadedBare, child.name, { type: child.type, name: child.name });
           } else {
             record(live ? namespaced : historical, `${tool.name}__${child.name}`, { type: child.type, name: child.name, namespace: tool.name });
           }
@@ -81,6 +82,9 @@ function collectNativeToolSelectors(body: unknown) {
     }
   }
   for (const [name, tool] of groupedBare) {
+    if (!bare.has(name)) bare.set(name, tool);
+  }
+  for (const [name, tool] of loadedBare) {
     if (!bare.has(name)) bare.set(name, tool);
   }
   for (const [name, tool] of historical) {

@@ -220,6 +220,33 @@ describe('request-owned Responses compatibility', () => {
     expect(outbound).toMatchObject({ tool_choice: allowed ? { type: 'allowed_tools', tools: [selected] } : selected });
   });
 
+  it('does not use a search result from before the current native tool group', () => {
+    const adapter = createCodexResponsesCompatibilityAdapter();
+    const selector = { type: 'function', name: 'workspace__read' };
+    const outbound = adapter.adaptRequest({
+      tools: [{ type: 'custom', name: selector.name }],
+      input: [
+        { type: 'tool_search_output', tools: [{ type: 'namespace', name: 'workspace', tools: [{ type: 'function', name: 'read' }] }] },
+        { type: 'additional_tools', tools: [] },
+      ],
+      tool_choice: selector,
+    }, 10098);
+    expect((outbound as { tool_choice: unknown }).tool_choice).toEqual(selector);
+  });
+
+  it('disambiguates a native custom child against a bare function loaded by current search', () => {
+    const adapter = createCodexResponsesCompatibilityAdapter();
+    const outbound = adapter.adaptRequest({
+      tools: [{ type: 'namespace', name: 'workspace', tools: [{ type: 'custom', name: 'read' }] }],
+      input: [
+        { type: 'additional_tools', tools: [] },
+        { type: 'tool_search_output', tools: [{ type: 'function', name: 'workspace__read' }] },
+      ],
+      tool_choice: { type: 'custom', name: 'workspace__read' },
+    }, 10099);
+    expect(outbound).toMatchObject({ tool_choice: { type: 'function', namespace: 'workspace', name: 'read' } });
+  });
+
   it.each(['application/json', 'text/event-stream'])('restores default functions custom calls as bare tools (%s)', async contentType => {
     const adapter = createCodexResponsesCompatibilityAdapter();
     adapter.adaptRequest({ tools: [
