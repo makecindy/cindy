@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Select } from '@/components/ui/select';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Checkbox } from '@/components/ui/checkbox';
 
 /** The closed state occupies one small row; rules stay in a popover. */
 export function CodexResetAutoUseControl({ state, providerId, onChanged }: {
@@ -53,17 +54,17 @@ export function CodexResetAutoUseControl({ state, providerId, onChanged }: {
         </PopoverTrigger>
       </div>
       {/* The usage dialog is at 10000; keep rules above it and below Select's 10010. */}
-      <PopoverContent align="end" className="z-[10001] w-80 max-w-[calc(100vw-32px)] space-y-4 text-13">
+      <PopoverContent align="end" className="w-80 max-w-[calc(100vw-32px)] space-y-4 text-13">
         <div className="text-14 font-medium text-[var(--text-primary)]">{label('rules')}</div>
         <div className="space-y-2">
           <label className="flex items-start gap-2 text-[var(--text-primary)]">
-            <input type="checkbox" className="mt-0.5 accent-[var(--text-primary)]" checked={s.lowQuota} disabled={busy} onChange={e => condition('lowQuota', e.target.checked)} />
+            <Checkbox className="mt-0.5" checked={s.lowQuota} disabled={busy} onChange={e => condition('lowQuota', e.target.checked)} />
             {label('lowQuota')}
           </label>
           <div className="ml-5 space-y-2">
             <div className="text-12 text-[var(--text-secondary)]">{label('resetDistance')}</div>
             <Select label={label('resetDistance')} value={custom || ![0, 1, 2, 3].includes(s.minimumDays) ? 'custom' : String(s.minimumDays)}
-              disabled={busy || !s.lowQuota} className="min-h-8 text-13"
+              disabled={busy || !s.lowQuota} size="compact"
               options={[3, 2, 1, 0].map(n => ({ value: String(n), label: n ? label('days', { count: n }) : label('unlimited') })).concat({ value: 'custom', label: label('custom') })}
               onValueChange={value => { setCustom(value === 'custom'); if (value !== 'custom') void save({ minimumDays: Number(value) }); }} />
             {(custom || ![0, 1, 2, 3].includes(s.minimumDays)) && <form className="flex items-center gap-2" onSubmit={e => { e.preventDefault(); if (/^\d+$/.test(days) && Number(days) <= 365) void save({ minimumDays: Number(days) }); }}>
@@ -76,10 +77,10 @@ export function CodexResetAutoUseControl({ state, providerId, onChanged }: {
         </div>
         <div className="space-y-2">
           <label className="flex items-start gap-2 text-[var(--text-primary)]">
-            <input type="checkbox" className="mt-0.5 accent-[var(--text-primary)]" checked={s.expiring} disabled={busy} onChange={e => condition('expiring', e.target.checked)} />
+            <Checkbox className="mt-0.5" checked={s.expiring} disabled={busy} onChange={e => condition('expiring', e.target.checked)} />
             {label('expiring')}
           </label>
-          <div className="ml-5"><Select label={label('leadTime')} value={String(s.expiryMinutes)} disabled={busy || !s.expiring} className="min-h-8 text-13"
+          <div className="ml-5"><Select label={label('leadTime')} value={String(s.expiryMinutes)} disabled={busy || !s.expiring} size="compact"
             options={[30, 60, 360, 1440].map(n => ({ value: String(n), label: label(n === 30 ? 'minutes' : 'hours', { count: n === 30 ? 30 : n / 60 }) }))}
             onValueChange={value => void save({ expiryMinutes: Number(value) })} /></div>
         </div>

@@ -30,7 +30,7 @@ import { app, net } from 'electron';
 import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 
-import { subscriptionProviderAccountKeys, hasConnectedSubscriptionPool, hasUnavailableSubscriptionPoolAccount, lastConfirmedSubscriptionModelsAt, refreshSubscriptionPool,
+import { subscriptionProviderAccountKeys, hasConnectedSubscriptionPool, hasUnavailableSubscriptionPoolAccount, isSubscriptionPoolReadUnreachable, lastConfirmedSubscriptionModelsAt, refreshSubscriptionPool,
   refreshSubscriptionPoolCodexModels, readSubscriptionPoolCodexModels,
   refreshSubscriptionPoolClaudeModels, readSubscriptionPoolClaudeModels,
   resetDefaultSubscriptionCodexDiscovery } from '../subscription-accounts/runtime.js';
@@ -917,10 +917,10 @@ async function refreshSubscriptionPoolsOfKind(kind: 'openai' | 'anthropic'): Pro
 }
 
 /** Apply account membership to both selectable and full routing snapshots. */
-function projectSubscriptionPoolCatalog(catalog: Catalog, routingCatalog = false, include?: (p: Catalog['providers'][number]) => boolean): Catalog {
+function projectSubscriptionPoolCatalog(catalog: Catalog, routingCatalog = false, include?: (p: Catalog['providers'][number]) => boolean, includeLastConfirmed = false): Catalog {
   return projectSubscriptionPoolCatalogWith(catalog, { readPool, codexAccountState, readSubscriptionPoolCodexModels,
     getActiveCatalogWithCodexModels, readSubscriptionPoolClaudeModels, getActiveCatalogWithClaudeModels,
-    readMergedProviderAccount, accountProviderId, readProviderBoundAccountIds }, routingCatalog, include);
+    readMergedProviderAccount, accountProviderId, readProviderBoundAccountIds }, routingCatalog, include, includeLastConfirmed);
 }
 
 function getDesktopProviderModelAccessCatalog(): Catalog {
@@ -1002,8 +1002,8 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
         else void refreshSubscriptionPoolClaudeModels(false, provider.id).catch(() => log.warn('Background Claude model discovery unavailable'));
       }));
     },
-    projectCatalog: (catalog, routingCatalog, include) => {
-      const projected = projectSubscriptionPoolCatalog(catalog, routingCatalog, include);
+    projectCatalog: (catalog, routingCatalog, include, includeLastConfirmed) => {
+      const projected = projectSubscriptionPoolCatalog(catalog, routingCatalog, include, includeLastConfirmed);
       return routingCatalog ? projected : filterLegacyGptContextProfiles(projected);
     },
     connection: {
@@ -1073,11 +1073,13 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
     genericOAuthConnected: (providerId) => hasGenericOAuthLogin(storedCustomProviderId(providerId)),
     codexAccountConnected: (providerId, options) => resolveSubscriptionPoolProvider(providerId)
       ? hasConnectedSubscriptionPool(providerId, options) : codexAccountState(providerId).authenticated,
-    subscriptionPoolConnected: (providerId, options) => hasConnectedSubscriptionPool(providerId, options),
+    subscriptionPoolConnected: hasConnectedSubscriptionPool,
     subscriptionAccountConnected: (providerId) => subscriptionAccountState(providerId).authenticated,
     subscriptionModelsConfirmedAt: lastConfirmedSubscriptionModelsAt,
     subscriptionReadUnavailable: (providerId) => !!resolveSubscriptionPoolProvider(providerId)
       && hasUnavailableSubscriptionPoolAccount(providerId),
+    subscriptionReadUnreachable: (providerId) => !!resolveSubscriptionPoolProvider(providerId)
+      && isSubscriptionPoolReadUnreachable(providerId),
     subscriptionAccountInfo: async (providerId) => {
       if (providerId === 'anthropic') {
         const login = await readClaudeNativeLogin();

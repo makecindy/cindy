@@ -547,7 +547,7 @@ export function UpdateBanner({
   // ── Expanded state: full banner ──
   return withPrerequisiteDialogs(
     <div className="flex select-none flex-col border-t border-sidebar-border">
-      <div className="relative flex flex-col items-center gap-[10px] px-4 py-3">
+      <div className="relative flex flex-col items-center gap-2.5 px-4 py-3">
         {/* X dismiss —— 右上角。error 态 body 本就隐藏,superseding 允许 dismiss。
             hover 前 muted、hover 后主色,不抢主视觉;绝对定位保证不影响居中主内容。 */}
         <Tip text={t('update.banner.dismiss')} side="left">
@@ -685,7 +685,7 @@ export function FloatingUpdateBanner({
   const { revealRequested, pinnedByUser, dismissed } = useUpdateBannerDismiss();
   if (!enabled || (!revealRequested && (!pinnedByUser || dismissed))) return null;
   return (
-    <div className="fixed bottom-4 left-4 z-50 w-72 max-w-[calc(100vw-2rem)] rounded-xl border border-sidebar-border bg-sidebar empty:hidden">
+    <div className="fixed bottom-4 left-4 z-float w-72 max-w-[calc(100vw-2rem)] rounded-xl border border-sidebar-border bg-sidebar empty:hidden">
       <UpdateBanner
         isCollapsed={false}
         onOpenVersionNotice={onOpenVersionNotice}

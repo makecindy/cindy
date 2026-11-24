@@ -38,6 +38,7 @@ import {
   MODEL_GROUP_LIMITS,
   MODEL_GROUP_STRATEGIES,
   modelGroupCandidateKey,
+  modelGroupWeight,
   type ModelGroupCandidate,
   type ModelGroupResolveResult,
   type ModelGroupRoute,
@@ -97,6 +98,34 @@ function NameRow({ value, label, hint, onCommit }: { value: string; label: strin
           className="w-[240px] max-w-full"
         />
       }
+    />
+  );
+}
+
+/** 「按权重」时每个来源的权重：失焦或回车时保存，1–1000，空着或不是数字时恢复原值；保存失败也恢复成已保存的值。 */
+function WeightInput({ value, label, onCommit }: { value: number; label: string; onCommit(next: number): Promise<boolean> }) {
+  const [draft, setDraft] = useState(String(value));
+  const commit = () => {
+    const parsed = Number(draft.trim());
+    if (!draft.trim() || !Number.isFinite(parsed)) { setDraft(String(value)); return; }
+    const next = modelGroupWeight(parsed);
+    setDraft(String(next));
+    if (next !== value) void onCommit(next).then((saved) => { if (!saved) setDraft(String(value)); });
+  };
+  return (
+    <SettingsTextInput
+      aria-label={label}
+      data-settings-search-action="Sets how many new tasks one source gets when a route picks by weight"
+      data-model-group-weight
+      value={draft}
+      size="sm"
+      inputMode="numeric"
+      maxLength={4}
+      onChange={(next) => setDraft(next.replace(/[^0-9]/g, ''))}
+      onBlur={commit}
+      onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
+      className="w-[64px] shrink-0"
+      inputClassName="text-right tabular-nums"
     />
   );
 }
@@ -178,6 +207,7 @@ export function ModelGroupsSection() {
         description: t('modelGroups.settings.deleteRouteConfirmDescription'),
         confirmText: t('modelGroups.settings.delete'),
         cancelText: t('modelGroups.settings.cancel'),
+        confirmVariant: 'destructive',
       })) return;
       if (await save((latest) => ({ ...latest, routes: latest.routes.filter((item) => item.id !== route.id) }))) back();
     };
@@ -235,7 +265,10 @@ export function ModelGroupsSection() {
               </SettingsCard>
             </SettingsSection>
 
-            <SettingsSection title={t('modelGroups.settings.sources')} description={t('modelGroups.settings.sourcesHint')}>
+            <SettingsSection
+              title={t('modelGroups.settings.sources')}
+              description={route.strategy === 'weighted' ? t('modelGroups.settings.weightHint') : t('modelGroups.settings.sourcesHint')}
+            >
               <SettingsCard>
                 {route.candidates.map((candidate, index) => {
                   const names = namesOf(candidate);
@@ -249,7 +282,7 @@ export function ModelGroupsSection() {
                         <span className="flex items-center gap-3">
                           <span className="w-4 text-center text-12 tabular-nums leading-[1.33] text-[var(--text-tertiary)]">{index + 1}</span>
                           <SettingsRowIcon>
-                            <ProviderMark providerId={candidate.providerId} name={names.provider?.name} routing={names.provider?.routing} logoKind={names.provider?.logoKind}
+                            <ProviderMark providerId={candidate.providerId} name={names.provider?.name} routing={names.provider?.routing} logoKind={names.provider?.logoKind} customIcon={names.provider?.customIcon}
                               colorClass="text-[var(--text-primary)]" withMargin={false} />
                           </SettingsRowIcon>
                         </span>
@@ -260,6 +293,24 @@ export function ModelGroupsSection() {
                       className={cn(candidate.off && '[&>span:nth-child(-n+2)]:opacity-60')}
                       trailing={
                         <span className="flex shrink-0 items-center gap-1">
+                          {route.strategy === 'weighted' && (
+                            <span className="mr-2 flex items-center">
+                              <WeightInput
+                                key={`${modelGroupCandidateKey(candidate)}:${modelGroupWeight(candidate.weight)}`}
+                                value={modelGroupWeight(candidate.weight)}
+                                label={t('modelGroups.settings.weightAria', { name: label })}
+                                onCommit={(weight) => updateRoute(route.id, (current) => ({
+                                  ...current,
+                                  candidates: current.candidates.map((item, i) => {
+                                    if (i !== index) return item;
+                                    const { weight: _weight, ...rest } = item;
+                                    void _weight;
+                                    return weight === 1 ? rest : { ...rest, weight };
+                                  }),
+                                }))}
+                              />
+                            </span>
+                          )}
                           <RowIconButton label={t('modelGroups.settings.moveUp')} disabled={index === 0} onClick={() => void move(index, -1)}><ArrowUp size={15} /></RowIconButton>
                           <RowIconButton label={t('modelGroups.settings.moveDown')} disabled={index === route.candidates.length - 1} onClick={() => void move(index, 1)}><ArrowDown size={15} /></RowIconButton>
                           <RowIconButton label={t('modelGroups.settings.remove')}

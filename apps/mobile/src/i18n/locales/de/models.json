@@ -53,7 +53,8 @@
   },
   "switchOutcome": {
     "applied": "Der Wechsel des Modellanbieters ist jetzt wirksam.",
-    "failed": "Wechsel des Modellanbieters fehlgeschlagen. Wähle das Modell erneut."
+    "failed": "Wechsel des Modellanbieters fehlgeschlagen. Wähle das Modell erneut.",
+    "previousSettingsRetained": "Dieser Wechsel konnte nicht abgeschlossen werden. Die Aufgabe verwendet weiterhin die bisherigen Einstellungen."
   },
   "agentSwitch": {
     "browseAccessibility": "Modelle für {{agent}} durchsuchen"
@@ -119,8 +120,38 @@
       "expiring": "Bald Verfallendes zuerst",
       "order": "Der Reihe nach",
       "rotate": "Abwechselnd",
-      "cheapest": "Am günstigsten"
-    }
+      "cheapest": "Am günstigsten",
+      "drain": "Aufbrauchen, dann weiter",
+      "headroom": "Meistes Restkontingent",
+      "weighted": "Nach Gewichtung"
+    },
+    "sourceOnDevice": "{{provider}} · {{device}}",
+    "why": {
+      "expiringQuota": "Noch {{left}} % Kontingent, Zurücksetzung am {{reset}} – daher zuerst",
+      "expiring": "Nach Kontingent an erster Stelle",
+      "order": "Die erste verfügbare Quelle",
+      "rotate": "Diesmal an der Reihe",
+      "only": "Derzeit als einzige verfügbar",
+      "soonest": "Alle Quellen haben ihr Kontingent aufgebraucht; diese erholt sich zuerst",
+      "soonestUntil": "Alle Quellen haben ihr Kontingent aufgebraucht; diese erholt sich zuerst ({{reset}})",
+      "cheapest": "Niedrigster Listenpreis",
+      "cheapestFree": "Abo-Kontingent übrig, keine Zusatzkosten",
+      "drain": "Wird weiter genutzt, bis ihr Kontingent aufgebraucht ist",
+      "drainNext": "Die vorige Quelle war aufgebraucht oder nicht verfügbar, daher diese",
+      "headroom": "Meistes Restkontingent",
+      "headroomQuota": "Noch {{left}} % Kontingent, mehr als jede andere Quelle",
+      "weighted": "Laut Gewichtung an der Reihe",
+      "exceptionImage": "Die Nachricht enthält Bilder, daher wurden nur Quellen berücksichtigt, die Bilder sehen können",
+      "exceptionImageFallback": "Die Nachricht enthält Bilder, aber keine Quelle kann Bilder sehen – daher wie üblich gewählt",
+      "exceptionHours": "In diesem Zeitraum wird „{{name}}“ verwendet",
+      "separator": "; "
+    },
+    "picker": {
+      "switched": "„{{name}}“ hat diese Aufgabe auf {{model}} umgestellt",
+      "switchUnavailable": "„{{name}}“ hat gerade keine Quelle, die diese Aufgabe nutzen kann. Das Modell wurde nicht geändert.",
+      "chooseUnavailable": "„{{name}}“ hat gerade keine nutzbare Quelle und wurde nicht ausgewählt."
+    },
+    "anotherDevice": "Anderer Computer"
   },
   "pluginEngines": {
     "genericName": "Plugin-Engine",

@@ -8,9 +8,24 @@ export default {
   name: 'provider-template-catalog', entry: './fixture.tsx', viewport: { width: 1000, height: 900 },
   real: 'Every bundled preset, real custom dialog and wizard, simulated clicks through identification and save',
   notCovered: 'Discovery and saving are fake host interfaces. No real keys, OAuth, network, disk persistence or model generation.',
-  cases: { default: { about: 'Catalog completeness smoke' }, ...Object.fromEntries(cases.map(c => [c.id, { about: `${c.kind}: ${c.providerId} ${c.address}` }])) },
+  cases: { default: { about: 'Catalog completeness smoke' }, 'official-model-plugins': { about: 'Search the official engine and open its exact market entry' }, ...Object.fromEntries(cases.map(c => [c.id, { about: `${c.kind}: ${c.providerId} ${c.address}` }])) },
   async ready(page) { await page.getByRole('dialog').waitFor(); },
   async check(page, ui) {
+    if (ui.case === 'official-model-plugins') {
+      const search = page.getByRole('textbox', { name: await ui.t('settings.providers.wizard.searchPlaceholder') });
+      await search.fill('Antigravity');
+      const row = page.getByRole('button', { name: /Antigravity/ });
+      await row.waitFor();
+      assert.equal(await row.count(), 1);
+      await page.getByText(await ui.t('settings.providers.wizard.officialModelPlugins'), { exact: true }).waitFor();
+      await ui.capture('official-list');
+      await row.click();
+      await page.getByRole('button', { name: await ui.t('settings.providers.wizard.installAndConfigure') }).waitFor();
+      await ui.capture('official-setup');
+      await page.getByRole('button', { name: await ui.t('settings.providers.wizard.back') }).click();
+      assert.equal(await search.inputValue(), 'Antigravity');
+      return;
+    }
     assert.deepEqual(await page.evaluate(() => window.templateIds), presets.map(p => p.id));
     const item = cases.find(c => c.id === ui.case) ?? cases[0];
     const retained = item.id === 'wizard-deepseek-retained';

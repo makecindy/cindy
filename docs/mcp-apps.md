@@ -92,7 +92,7 @@ CSP 域名不得超出 `network.hosts`。旧 Host 保留 v3 顶层未知 `mcpApp
 ### 页面尺寸与操作确认
 
 对话卡片使用 28px 高、12px 字的紧凑标题栏，保留边框；内容高度范围为 80–5000 像素，
-通过 `containerDimensions: {width, maxHeight}` 通知页面。短时间连续增高或来回振荡的保护仅用于内容高度模式。
+通过 `containerDimensions: {width, maxHeight}` 通知页面。资源可以声明可选的 `initialHeight`（80–720 CSS px）作为首帧占位，宿主仍以页面就绪后上报的实际尺寸为准。短时间连续增高或来回振荡的保护仅用于内容高度模式。
 不要在此模式同时使用 `100vh` 和 SDK `autoResize`，以免分配高度又被当作内容高度反馈。
 本机卡片离屏保留、挂起与释放沿既有生命周期；远程卡片离屏即释放，卸载撤回待确认操作。
 

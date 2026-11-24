@@ -775,9 +775,9 @@ describe('Shared create project picker', () => {
   // 的行 —— 从 updater 副作用取值可能读到 undefined(Copilot review),`if (!restored) return`
   // 于是把恢复整个跳过,幻影删除又回来了。改由同步镜像 rowsRef 供数,写入统一走 commitRows。
   it('captures the removed row from a synchronous mirror, not a setState updater side effect', () => {
-    expect(deviceLinkProjectsHookSource).toContain('const loadedRef = useRef<{');
+    expect(deviceLinkProjectsHookSource).toContain('const loadedRef = useRef<typeof loaded>');
     expect(deviceLinkProjectsHookSource).toContain(
-      'loadedRef.current = { deviceId: ownerDeviceId, rows: next };',
+      'loadedRef.current = { deviceId: ownerDeviceId, rows: next, scope };',
     );
     // 读镜像时同时校验归属:归属不符说明当前显示的已是别的设备的行,乐观移除会改错列表。
     expect(deviceLinkProjectsHookSource).toContain(
@@ -1202,14 +1202,18 @@ describe('Shared create project picker', () => {
   it('routes every remote create path through the shared handoff', () => {
     const handoffCalls =
       newMakerDraftRouteSource.match(/\n\s+commitRemoteSessionHandoff\(\{/g) ?? [];
-    expect(handoffCalls.length).toBe(2);
+    expect(handoffCalls.length).toBe(3);
     // 组件不得自己碰这三步中的任何一步 —— 那就等于又开了一条绕过不变量的路。
     expect(newMakerDraftRouteSource).not.toContain('pinSessionOrigin(');
     expect(newMakerDraftRouteSource).not.toContain('mergeDeviceSessions(');
     expect(newMakerDraftRouteSource).not.toContain('buildProvisionalRemoteSession(');
-    // 两处都得把实际提交的 args 交给 handoff:临时行按它组装,不各自再推一遍
-    // model / permission / workspaceKind。
-    for (const marker of ["logTag: 'draft send'", "logTag: 'draft goal'"]) {
+    // 三处远程创建(插件引擎发送、普通发送、新建目标)都得把实际提交的 args 交给 handoff:
+    // 临时行按它组装,不各自再推一遍 model / permission / workspaceKind。
+    for (const marker of [
+      "logTag: 'draft send plugin engine'",
+      "logTag: 'draft send'",
+      "logTag: 'draft goal'",
+    ]) {
       const callStart = newMakerDraftRouteSource.lastIndexOf(
         'commitRemoteSessionHandoff({',
         newMakerDraftRouteSource.lastIndexOf(marker),
@@ -1218,7 +1222,7 @@ describe('Shared create project picker', () => {
       expect(newMakerDraftRouteSource.slice(callStart, callEnd)).toContain('createArgs,');
     }
     // workDir 取 create 响应(纯对话的运行目录由对端分配,控制端猜不到)。
-    expect((newMakerDraftRouteSource.match(/workDir: created\??\.workDir,/g) ?? []).length).toBe(2);
+    expect((newMakerDraftRouteSource.match(/workDir: created\??\.workDir,/g) ?? []).length).toBe(3);
   });
 
   // #807 review 第十七轮:handleSend 的第一个 await 是协同策略重取,它在上锁之前 —— 期间两个
@@ -1349,10 +1353,9 @@ describe('Shared create project picker', () => {
     const prefetchAt = handler.indexOf('prefetchDeviceCapabilities(target.deviceId)');
     expect(applyAt).toBeGreaterThan(-1);
     expect(prefetchAt).toBeGreaterThan(applyAt);
-    // 侧边栏点远程项目进草稿是**另一个组件**的路径,不经本路由的转移动作,自己 evict + prefetch。
-    // ⚠️ 这里原来只断言那三行 evict 存在 —— 于是它**保护住了**第 32 轮那个 P1(见下一条用例)。
-    expect(sidebarUpperSource).toContain('evictDeviceCapabilities(targetDeviceId);');
-    expect(sidebarUpperSource).toContain('evictDeviceProviders(targetDeviceId);');
+    // 侧边栏新建只预取模型目录，保留同一连接上仍有效的快照。
+    expect(sidebarUpperSource).not.toContain('evictDeviceCapabilities(targetDeviceId);');
+    expect(sidebarUpperSource).not.toContain('evictDeviceProviders(targetDeviceId);');
     expect(sidebarUpperSource).toContain('evictDeviceGitSafetySettings(targetDeviceId);');
   });
 
@@ -1384,8 +1387,8 @@ describe('Shared create project picker', () => {
       expect(body).toContain(call);
     }
     // prefetch 必须在 evict 之后,否则刚取回的又被作废。
-    expect(body.indexOf('prefetchDeviceCapabilities')).toBeGreaterThan(
-      body.indexOf('evictDeviceCapabilities'),
+    expect(body.indexOf('prefetchDeviceGitSafetySettings')).toBeGreaterThan(
+      body.indexOf('evictDeviceGitSafetySettings'),
     );
     // ② 设备域浏览器:同样可能是同一台设备,三个都要 prefetch(gitSafety 少了会让 Rewind 入口隐藏)。
     const added = newMakerDraftRouteSource.slice(

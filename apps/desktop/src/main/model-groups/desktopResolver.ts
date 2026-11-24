@@ -6,6 +6,7 @@ import { isSessionSharedTaskActive } from '../device-link/sharedTaskDispatch.js'
 import { getGoalController } from '../goal-host/index.js';
 import { getSessionRowSnapshot } from '../localDb/sessionDispatchSnapshot.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
+import { isRemoteProviderInvocationAllowed } from '../maker-host/remote-provider-access-store.js';
 import { readWorkerAgentLocations } from '../maker-ipc/workerAgentLocations.js';
 import { getQuotaOverviewService } from '../quota-overview/service.js';
 import { getGatewayModelPricing } from '../usage/modelPricing.js';
@@ -52,6 +53,8 @@ export const resolver = createModelGroupResolver({
   config: readModelGroupsConfig,
   recordDecision: recordModelGroupDecision,
   views: () => getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true }),
+  // 另一台电脑借这台跑 Agent 时只用开了「允许被远程调用」的连接(与设置里那个开关同一份)。
+  remoteInvocable: isRemoteProviderInvocationAllowed,
   agents: getPluginModelPickerAgents,
   // 别的电脑上的引擎问那台的 maker:agent:status，与插件选路同一判断。
   harnessInstalled: (agent, agentDeviceId) => isPluginRouteHarnessInstalled(agent, agentDeviceId, async (deviceId, name) => {

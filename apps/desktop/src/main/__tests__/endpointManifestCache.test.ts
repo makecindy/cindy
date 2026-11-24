@@ -176,10 +176,11 @@ describe('缓存端点的受信任域约束(安全边界)', () => {
     expect(REGION_ENDPOINT_DOMAIN.global).toBe('cindy.app');
   });
 
-  it('跨区例外只允许共享聊天服务和 slack / telegram / x / feishu hook', () => {
+  it('跨区例外只允许共享聊天服务和 slack / telegram / x / feishu / discord hook', () => {
     // 每加一个 key 就等于允许该端点跨区,而跨区 token 误发正是要防的事。
     expect([...CROSS_REGION_ENDPOINT_KEYS].sort()).toEqual([
       'chatApiBaseUrl',
+      'discordHookWsUrl',
       'feishuHookWsUrl',
       'slackHookWsUrl',
       'telegramHookWsUrl',
@@ -250,6 +251,8 @@ describe('缓存端点的受信任域约束(安全边界)', () => {
           xHookWsUrl: 'wss://x-hook.cindy.app',
           // 官方飞书 / Lark 同样只在海外部署一套,CN 清单指向 cindy.app。
           feishuHookWsUrl: 'wss://feishu-hook.cindy.app',
+          // 官方 Discord 寄宿在同一套海外 telegram-hook 部署的 /discord 路径。
+          discordHookWsUrl: 'wss://telegram-hook.cindy.app/discord',
           websiteUrl: 'https://cindy.com.cn',
           cdnBaseUrl: 'https://hotfix.cindy.com.cn/cindy',
           authDesktopCallbackUrl: 'https://auth.cindy.com.cn/api/auth/desktop/callback',

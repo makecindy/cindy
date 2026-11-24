@@ -406,6 +406,8 @@ export interface ProviderHandlerDeps {
    * event 与不受信的子 frame 都会得到 false，于是退化为纯读。缺省视为不可信。
    */
   isTrustedSender?(event: unknown): boolean;
+  /** Main-owned Device Link context; only same-account linked reads, never mutations. */
+  isRemoteContextRead?(): boolean;
   /**
    * 通用 OAuth 登录 / 登出 / 取消（生产接 generic-oauth Runner + 目录描述符解析；
    * login 成功后由生产 deps 负责模型发现与 PROVIDER_CHANGED 广播）。
@@ -483,6 +485,9 @@ export interface ProviderHandlerDeps {
   setModelsDisabled(providerId: string, modelIds: readonly string[], disabled: boolean): void;
   setProviderDisabled(providerId: string, disabled: boolean): void;
   getDisabledProviders?(): Record<string, boolean>;
+  /** 供应商级「在模型选择器中隐藏」(生产 = model-disable-store 的 setProviderHidden)。 */
+  setProviderHidden?(providerId: string, hidden: boolean): void;
+  getHiddenProviders?(): Record<string, boolean>;
   listRemoteProviders?(deviceId: string): Promise<ProviderView[]>;
   /** Per-provider opt-in for remote Agent use; absent means disabled. */
   getRemoteProviderInvocationEnabled?(providerId: string): boolean;
@@ -1322,13 +1327,15 @@ export function registerProviderHandlers(
       providerOrder: string[];
       modelVisibilityOverrides: Record<string, boolean>;
       disabledProviders?: Record<string, boolean>;
+      hiddenProviders?: Record<string, boolean>;
       deferredProviderIds?: string[];
     }> => {
       // 只有本机主页面能顺带触发绑定自愈与清单拉取:这条通道也服务 device-link(合成
       // event)和可能不受信的渲染上下文,它们只该拿到只读快照(PR #548 review)。
       const ownerAtIngress = captureProviderOwnerSession();
       const dataOwnerId = ownerAtIngress?.dataOwnerId ?? null;
-      const scope = getDeviceLinkInvokeContext()?.providerPicker;
+      const invokeContext = getDeviceLinkInvokeContext();
+      const scope = invokeContext?.providerPicker;
       let deferredProviderIds: string[] = [];
       let catalogOrder: string[] = [];
       const providers = await deps.listProviders({
@@ -1337,6 +1344,7 @@ export function registerProviderHandlers(
           deferredProviderIds = deferred;
         } } } : {}),
         allowSideEffects: trusted,
+        ...(trusted && !invokeContext ? { includeSubscriptionDisplayModels: true } : {}),
       });
       assertProviderMutationOwner(ownerAtIngress);
       let modelVisibilityOverrides: Record<string, boolean>;
@@ -1389,6 +1397,7 @@ export function registerProviderHandlers(
         providerOrder: scope === 'available' ? [...new Set([...providerOrder, ...catalogOrder])] : providerOrder,
         modelVisibilityOverrides,
         ...(trusted ? { disabledProviders: deps.getDisabledProviders?.() ?? {} } : {}),
+        ...(trusted ? { hiddenProviders: deps.getHiddenProviders?.() ?? {} } : {}),
       };
     };
   registry.handle(MAKER_INVOKE.PROVIDER_LIST, async (event) => {
@@ -1969,19 +1978,23 @@ export function registerProviderHandlers(
     ) {
       throwIpcError('INVALID_PARAMS', 'providerId required');
     }
-    if (i.kind !== 'model' && i.kind !== 'provider' && i.kind !== 'reset') {
-      throwIpcError('INVALID_PARAMS', 'kind must be "model", "provider" or "reset"');
+    if (
+      i.kind !== 'model' && i.kind !== 'provider' && i.kind !== 'provider-hidden' && i.kind !== 'reset'
+    ) {
+      throwIpcError('INVALID_PARAMS', 'kind must be "model", "provider", "provider-hidden" or "reset"');
     }
     if (i.remoteDeviceId !== undefined && (
-      i.kind !== 'provider' || typeof i.remoteDeviceId !== 'string' ||
+      (i.kind !== 'provider' && i.kind !== 'provider-hidden') || typeof i.remoteDeviceId !== 'string' ||
       !i.remoteDeviceId || i.remoteDeviceId.length > MAX_DISABLE_ID_LENGTH ||
       isProviderShareAgentDeviceId(i.remoteDeviceId)
     )) throwIpcError('INVALID_PARAMS', 'invalid remote provider disable target');
     const disableKey = typeof i.remoteDeviceId === 'string'
       ? remoteProviderDisableKey(i.remoteDeviceId, i.providerId as string)
       : i.providerId as string;
-    // reset = 删除整组 override(恢复默认),无 disabled 语义;其余两种必须显式带方向。
-    if (i.kind !== 'reset' && typeof i.disabled !== 'boolean') {
+    // reset = 删除整组 override(恢复默认),无 disabled 语义;其余必须显式带方向。
+    if (i.kind === 'provider-hidden') {
+      if (typeof i.hidden !== 'boolean') throwIpcError('INVALID_PARAMS', 'hidden required');
+    } else if (i.kind !== 'reset' && typeof i.disabled !== 'boolean') {
       throwIpcError('INVALID_PARAMS', 'disabled required');
     }
     if (
@@ -2044,6 +2057,16 @@ export function registerProviderHandlers(
         deps.broadcastChanged();
         return { ok: true };
       }
+      if (i.kind === 'provider-hidden') {
+        // 隐藏只改陈列:与停用同一串行队列、同样的目录成员校验(只在写入方向),
+        // 取消隐藏是删条目,目录漂移后也要能清掉。
+        if (!deps.setProviderHidden) throwIpcError('INTERNAL', 'provider visibility is not wired');
+        if (i.hidden) await requireCatalogProvider(i.providerId as string);
+        assertSameOwner();
+        persist(() => deps.setProviderHidden?.(disableKey, i.hidden as boolean));
+        deps.broadcastChanged();
+        return { ok: true };
+      }
       if (i.kind === 'model') {
         const modelIds = i.modelIds as string[];
         if (i.disabled) {
@@ -2077,6 +2100,10 @@ export function registerProviderHandlers(
       deps.broadcastChanged();
       return { ok: true };
     };
+    // 隐藏只改陈列,不收窄任何调用权限:不走「先撤销云端备用分享,再确认本机收窄」这一步。
+    // 否则一次纯显示操作会撤掉别人正在用的分享,服务器不可达时隐藏 / 取消隐藏还会直接失败。
+    // 账号复核与串行写入队列照常(都在 run / enqueueDisableWrite 里)。
+    if (i.kind === 'provider-hidden') return enqueueDisableWrite(run);
     return withAvailabilityPolicyMutation(disableKey, () => enqueueDisableWrite(run));
   };
   registry.handle(MAKER_INVOKE.MODEL_DISABLE_SET, async (event, input: unknown) => {
@@ -2378,6 +2405,7 @@ export function registerProviderHandlers(
   });
 
   const modelSettingsGetContext = async (input: unknown) => {
+    const owner = captureProviderOwnerSession();
     const targets = parseContextTargets(input);
     // 读不做目录成员校验:目录漂移后 UI 仍要能显示并清掉指向已下架 id 的陈旧 override。
     const view = readContextTargets(targets);
@@ -2386,12 +2414,14 @@ export function registerProviderHandlers(
       if (sessionId !== undefined && (typeof sessionId !== 'string' || sessionId.length === 0 || sessionId.length > 200)) {
         throwIpcError('INVALID_PARAMS', 'invalid context session id');
       }
-      return { ...view, codexContext: await deps.readCodexContextWindowInfo?.(targets[0]!, sessionId as string | undefined) ?? null };
+      const codexContext = await deps.readCodexContextWindowInfo?.(targets[0]!, sessionId as string | undefined) ?? null;
+      assertProviderMutationOwner(owner, 'active account changed during context read');
+      return { ...view, codexContext };
     }
     return view;
   };
   registry.handle(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_GET, async (event, input: unknown) => {
-    assertTrustedProviderMutationSender(event);
+    if (!deps.isRemoteContextRead?.()) assertTrustedProviderMutationSender(event);
     return modelSettingsGetContext(input);
   });
 

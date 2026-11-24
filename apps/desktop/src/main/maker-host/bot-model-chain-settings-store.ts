@@ -23,7 +23,7 @@ import {
 
 import { getModelVisibilityOverride, waitForModelVisibilityMirror } from './model-visibility-mirror.js';
 import { readModelGroupsConfig } from '../model-groups/store.js';
-import type { ModelGroupsConfig } from '../../shared/modelGroups.js';
+import { modelGroupsConfigForRemote, type ModelGroupsConfig } from '../../shared/modelGroups.js';
 
 const log = desktopMakerLogger.child('bot-model-chain-settings-store');
 
@@ -162,7 +162,7 @@ async function followMovedCindyAuto(
   providers: readonly ProviderView[] | undefined,
 ): Promise<BotModelRoute[]> {
   // 预设 auto 只在 Cindy AI 上、不会被挪动；只有模型组 Auto 才值得为此读一次目录。
-  if (!chain.some((route) => !route.agentDeviceId && route.model !== 'auto' && isCindyAutoModelId(route.model)))
+  if (!chain.some((route) => route.harness !== 'acp' && !route.agentDeviceId && route.model !== 'auto' && isCindyAutoModelId(route.model)))
     return chain;
   let views = providers;
   if (!views) {
@@ -180,7 +180,7 @@ async function followMovedCindyAuto(
   }
   const catalog = views;
   return chain.map((route) => {
-    if (route.agentDeviceId) return route;
+    if (route.agentDeviceId || route.harness === 'acp') return route;
     const providerId = movedCindyAutoSourceId(catalog, {
       agent: route.harness === 'claude' ? 'claude-code' : route.harness,
       model: route.model,
@@ -252,7 +252,7 @@ export async function readEffectiveBotPrimaryRoute(
  * 只有来源的供应商连接 id 与模型 id，与同账号可读的模型目录同一层级，不含凭证。
  */
 export function listBotModelGroupsForRemote(): ModelGroupsConfig {
-  return readModelGroupsConfig();
+  return modelGroupsConfigForRemote(readModelGroupsConfig());
 }
 
 /**

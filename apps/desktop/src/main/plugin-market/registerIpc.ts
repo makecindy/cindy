@@ -1,3 +1,4 @@
+import { readConfirmedGhostUninstall } from '../cindy-brain/confirmedGhostUninstall.js';
 import os from 'node:os';
 
 import { ipcMain } from 'electron';
@@ -176,9 +177,22 @@ export function registerPluginMarketIpc(): void {
     const query = requireObject(input, 'query');
     return invokePluginMarket(() => service().query(query));
   });
-  ipcMain.handle('plugin-market:recommendations', (event) => {
+  const activeProviderPages = new WeakMap<Electron.WebContents, symbol>();
+  ipcMain.handle('plugin-market:cancel-official-model-plugins', event => {
     assertTrustedAppRendererEvent(event);
-    return invokePluginMarket(() => service().recommendations());
+    activeProviderPages.delete(event.sender);
+  });
+  ipcMain.handle('plugin-market:official-model-plugins', (event, cursor: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const sender = event.sender;
+    const page = Symbol();
+    activeProviderPages.set(sender, page);
+    return invokePluginMarket(() => service().officialModelPlugins(cursor, () =>
+      !sender.isDestroyed() && activeProviderPages.get(sender) === page));
+  });
+  ipcMain.handle('plugin-market:recommendations', (event, pluginIds?: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    return invokePluginMarket(() => service().recommendations(pluginIds));
   });
   ipcMain.handle('plugin-market:lookup', (event, ghostIds: unknown) => {
     assertTrustedAppRendererEvent(event);
@@ -327,10 +341,10 @@ export function registerPluginMarketIpc(): void {
       });
     },
   );
-  ipcMain.handle('plugin-market:uninstall', (event, pluginId: unknown) => {
+  ipcMain.handle('plugin-market:uninstall', (event, pluginId: unknown, target?: unknown) => {
     assertTrustedAppRendererEvent(event);
     return invokePluginMarket(() =>
-      service().uninstall(requireString(pluginId, 'pluginId')),
+      service().uninstall(requireString(pluginId, 'pluginId'), readConfirmedGhostUninstall(target)),
     );
   });
 

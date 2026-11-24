@@ -736,6 +736,27 @@ describe('outboundFetch', () => {
     expect(second.body?.toString()).toBe('payload');
   });
 
+  // #11948 / unit: an image account revoked while PAC resolves must never hand its
+  // credentialed POST to either native fetch. Existing tests only covered cancellation.
+  it.each([null, 'http://127.0.0.1:7890'])('checks dispatch permission after proxy lookup (%s)', async proxy => {
+    const directFetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response());
+    let allowed = true;
+    const guard = () => { if (!allowed) throw new Error('Account moved'); };
+    resolverState.resolve.mockImplementation(async () => {
+      await Promise.resolve();
+      allowed = false;
+      return proxy;
+    });
+    try {
+      await expect(outboundFetch('https://chatgpt.com/backend-api/codex/images/generations',
+        { method: 'POST', body: '{}' }, guard)).rejects.toThrow('Account moved');
+      expect(directFetch).not.toHaveBeenCalled();
+      expect(undiciState.fetch).not.toHaveBeenCalled();
+    } finally {
+      directFetch.mockRestore();
+    }
+  });
+
   it('rejects with the abort reason instead of hanging on proxy resolution', async () => {
     const controller = new AbortController();
     resolverState.resolve.mockImplementation(() => new Promise(() => {}));

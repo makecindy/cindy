@@ -63,6 +63,11 @@ export function ProjectAutomationNotifyBridge() {
                 else if (pendingImports.get(pending.workingDir)?.configHash === pending.configHash) {
                   pendingImports.delete(pending.workingDir);
                 }
+                if (active && result.skipped === 'no-file') {
+                  toast.warning(t('scheduler.projectAutomation.import.fileMissing', {
+                    projectName: lastPathSegment(pending.workingDir),
+                  }));
+                }
               } catch (error) {
                 if (active) toast.error(error instanceof Error ? error.message : String(error));
               } finally {

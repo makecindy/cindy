@@ -4,7 +4,7 @@ import { PROJECT_ARCHIVE_CHANNEL } from '../../../shared/projectArchive.js';
 import { runProjectArchive } from '../projectArchive.js';
 import { getSessionRowSnapshot, getSessionRowSnapshotStrict, type SessionRowSnapshot } from '../sessionDispatchSnapshot.js';
 import { commitProvisionalSession as commitSessionDraft, discardProvisionalSessionRow as discardSessionDraft } from '../sessionDraftLifecycle.js';
-import { createUserSession, withWorktreeMutation } from './createUserSession.js';
+import { createUserSession, withWorktreeMutation, type UserSessionCreatePorts } from './createUserSession.js';
 import {
   assertReviewSessionPatchAllowed,
   assertSessionWorkspaceKindPatch,
@@ -20,7 +20,7 @@ import { captureSessionCreationCancellation } from '../sessionRuntimeCleanup.js'
 import { pagePermissionSessionChanged } from '../../mcp-apps/pagePermissions.js';
 import { scheduleNativeHistoryBackupCleanup } from '../../remote-agent/controller/nativeHistoryBackup.js';
 import { removeSessionModelInterface } from '../../maker-host/session-model-interface.js';
-import { isEndedWriteSuppressed } from '../sessionActiveTurn.js';
+import { getSilentContinuationTiming, isEndedWriteSuppressed } from '../sessionActiveTurn.js';
 import { writeSessionListActivity } from '../sessionActivityWrite.js';
 import { ensureOpenedProjectGit, openSession } from '../sessionOpening.js';
 import {
@@ -115,7 +115,11 @@ import {
 import { assertRendererSessionSourceAllowed } from './sessionSourceGuard.js';
 import type { SessionReference } from '../../../shared/sessionReference.js';
 import * as broadcastTap from '../../device-link/broadcast-tap.js';
-import { persistSessionFieldsWith, REMOTE_PERSIST_FIELDS } from '../sessionFieldPersistence.js';
+import {
+  persistSessionFieldsWith,
+  REMOTE_PERSIST_FIELDS,
+  type PersistSessionFieldsOptions,
+} from '../sessionFieldPersistence.js';
 import { hasTaskChangeListener, publishTaskChange } from '../taskEvents.js';
 import { notifyAgentIslandSessionPatch } from '../agentIslandSessionPatch';
 import { ensureSessionFlagRegistryLoaded, noteSessionNotificationsMuted } from '../sessionFlagRegistry.js';
@@ -229,10 +233,11 @@ export interface SessionRecycleScope {
 
 export interface RegisterSessionIpcOpts {
   isBusyForProjectArchive?: (sessionId: string) => boolean;
+  localPluginWorktrees?: UserSessionCreatePorts['localPluginWorktrees'];
   /** Use the same live catalog as runtime usage, without writing during reads. */
   resolveContextWindow?: (session: ContextWindowSession) => number | null;
-  /** Close a local Pi/Codex runtime only if its current turn is idle. */
-  closeIdleSessionForMove?: (sessionId: string) => Promise<boolean>;
+  /** Refuse a local move during a turn; the transcript mover handles closing an idle Claude runtime. */
+  closeIdleSessionForMove?: (sessionId: string, storedAgentKind: string) => Promise<boolean>;
   /**
    * 任务级上下文窗口预算（tokens）变化后，把新值应用到**活着的**运行实例上
    * （空闲关 handle 冷重建；回合中登记 pending，回合结束后生效）。
@@ -866,11 +871,12 @@ export async function persistSessionPermissionModeIfAuto(sessionId: string): Pro
 export async function persistSessionFields(
   sessionId: string,
   patch: Record<string, unknown>,
+  options?: PersistSessionFieldsOptions,
 ): Promise<void> {
   return persistSessionFieldsWith({
     captureOwnerScope, isOwnerScopeCurrent, broadcastSessionPatched,
     applyContextWindowBudget: () => registeredSessionIpcOpts.applyContextWindowBudget,
-  }, sessionId, patch);
+  }, sessionId, patch, options);
 }
 
 const MAX_LIMIT = 1000;
@@ -1370,6 +1376,7 @@ export function registerSessionIpc(
     return createUserSession(body, {
       senderId: event.sender.id,
       userDataDir: app.getPath('userData'),
+      localPluginWorktrees: opts.localPluginWorktrees,
       notifyPluginSessionCreated: (input) => {
         void import('../../cindy-brain/index.js').then(m => m.notifyGhostSessionEvent('created', input)).catch(() => {});
       },
@@ -1517,10 +1524,11 @@ export function registerSessionIpc(
 
   ipcMain.handle('local-db:sessions:get', async (_e, id: unknown) => {
     const sid = requireString(id, 'id');
-    const db = getDbClient().drizzle;
-    const row = await selectSessionWithCount(db, sid);
+    const dbClient = getDbClient();
+    const row = await selectSessionWithCount(dbClient.drizzle, sid);
     if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
-    return projectSessionDetail(row, opts.resolveContextWindow);
+    const timing = getSilentContinuationTiming(sid, row.activeTurnStartedAt, dbClient);
+    return projectSessionDetail(row, opts.resolveContextWindow, timing?.startedAt ?? undefined, timing?.settledEndAt);
   });
 
   /**
@@ -2543,6 +2551,53 @@ export async function setSessionsStatusInDb(
   }));
 }
 
+export interface SessionSnoozeChangeRow {
+  sessionId: string;
+  title: string | null;
+  workingDir: string | null;
+  snoozedUntil: string | null;
+}
+
+/**
+ * Agent 的「稍后处理 / 取回」（snooze_sessions）：逐个走界面同一入口 patchSessionMetaInDb，
+ * 校验唤回时间、写库并广播 sessions:patched，收件箱与手机即时收敛。先确认整批存在且未删除
+ * 再写；中途失败即停，`changed` 带回已写入的项，调用方据此报告，不重试。
+ */
+export async function setSessionsSnoozeInDb(
+  sessionIds: string[],
+  snoozedUntil: string | null,
+  beforeMutation?: () => Promise<void>,
+  /** Rechecked synchronously right before each row is written, after patch-meta's own waits. */
+  beforeWrite?: () => void,
+): Promise<{ changed: SessionSnoozeChangeRow[]; error?: { sessionId: string; cause: unknown } }> {
+  validateSnoozeTime(snoozedUntil);
+  const rows = sessionIds.length === 0 ? [] : await getDbClient().drizzle
+    .select({ id: sessions.id, status: sessions.status })
+    .from(sessions)
+    .where(inArray(sessions.id, sessionIds));
+  for (const id of sessionIds) {
+    const row = rows.find((item) => item.id === id);
+    if (!row) throwIpcError('NOT_FOUND', `Session 不存在: ${id}`);
+    if (row.status === 'deleted') throwIpcError('PRECONDITION_FAILED', `已删除的任务不能稍后处理: ${id}`);
+  }
+  const changed: SessionSnoozeChangeRow[] = [];
+  for (const sessionId of sessionIds) {
+    try {
+      await beforeMutation?.();
+      const updated = await patchSessionMetaInDb(sessionId, { snoozedUntil }, { beforeWrite });
+      changed.push({
+        sessionId,
+        title: updated.title ?? null,
+        workingDir: updated.workingDir ?? null,
+        snoozedUntil: updated.snoozedUntil ?? null,
+      });
+    } catch (cause) {
+      return { changed, error: { sessionId, cause } };
+    }
+  }
+  return { changed };
+}
+
 const piSubagentCleanupTimers = new Map<string, NodeJS.Timeout>();
 const piSubagentCleanupEpoch = new Map<string, number>();
 /** Longer than the adapter's own close budget, so a normal close is never cut short. */
@@ -3042,8 +3097,8 @@ function shouldUseUsageHistoryQuery(options: unknown): boolean {
  * source of truth 是 worktreeStore（electron-store）；DB 字段仅为 sidebar 渲染优化。
  *
  * 故意不通过 sessions:update IPC 暴露——renderer 不应也不能直接改这个字段。
- * 仅由 main 侧 worktreeStore.set/delete 内部调用；worktreeStore.delete 不调本函数
- * （保留历史值，徽标按 store 是否存在判定）。
+ * 本机插件引擎新任务在完整检出后直接随 INSERT 写入快照；既有任务由 worktreeStore.set 同步，
+ * 删除 store 记录时仍保留历史快照（徽标按 store 判定）。
  *
  * 失败仅日志告警，不抛——store 是 source of truth，DB 只是快照，落败不阻塞主流程。
  */
@@ -3094,7 +3149,7 @@ export async function setSessionProviderIdInDb(
 /** Persist the provider-facing source for a newly-created shared IM session. */
 export async function setSessionSourceInDb(
   sessionId: string,
-  source: 'telegram' | 'x' | 'feishu',
+  source: 'telegram' | 'x' | 'feishu' | 'discord-hook',
 ): Promise<void> {
   try {
     const db = getDbClient().drizzle;

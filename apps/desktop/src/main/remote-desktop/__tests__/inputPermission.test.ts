@@ -1,7 +1,7 @@
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { readDesktopInputPermission, resolveDesktopInputBinary } from '../inputHost';
+import { readDesktopInputPermission, requestDesktopInputPermission, resolveDesktopInputBinary } from '../inputHost';
 import { readLinuxDesktopInputSupport } from '../linuxInput';
 
 const mocks = vi.hoisted(() => ({
@@ -102,6 +102,20 @@ describe('desktop input permission detection', () => {
     mocks.access.mockRejectedValue(new Error('ENOENT'));
     mocks.exec.mockRejectedValue(new Error('compiler unavailable'));
     expect(await readDesktopInputPermission()).toBe('unknown');
+  });
+
+  // Remote keyboard/mouse control needs event posting. Other users of the same
+  // helper (window inspection and the away guard) request only their AX access.
+  it('checks event posting passively for remote control and requests it only on explicit action', async () => {
+    mocks.exec.mockResolvedValue({ stdout: 'permission\n' });
+    expect(await readDesktopInputPermission('postEvents')).toBe('missing');
+    expect(mocks.exec.mock.calls[0][1]).toEqual(['--check', '--post-events']);
+    const signal = new AbortController().signal;
+    expect(await requestDesktopInputPermission(() => true, signal, 'postEvents')).toBe(false);
+    expect(mocks.exec.mock.calls[1][1]).toEqual(['--request-permission', '--post-events']);
+    mocks.exec.mockResolvedValue({ stdout: 'ready\n' });
+    expect(await requestDesktopInputPermission(() => true, signal)).toBe(true);
+    expect(mocks.exec.mock.calls[2][1]).toEqual(['--request-permission']);
   });
 
   // Regression: a signed personal shell was probing an ad-hoc helper outside

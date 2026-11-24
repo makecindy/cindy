@@ -32,13 +32,19 @@ import type { AcpLineTransport, AcpTransportClosed } from './line-transport.js';
 import {
   ACP_ERROR_AUTH_REQUIRED,
   ACP_PROTOCOL_VERSION,
+  ACP_STEERING_METHOD,
+  JSONRPC_METHOD_NOT_FOUND,
+  acpCindyErrorSignals,
   asNonEmptyString,
+  readAcpCindyError,
+  type AcpCindyError,
   asRecord,
   normalizeConfigOptions,
   normalizeInitializeResult,
   normalizePermissionOptions,
   normalizeStopReason,
   normalizeToolCallFields,
+  normalizeTurnUsage,
   type AcpAuthMethod,
   type AcpConfigOption,
   type AcpContentBlock,
@@ -52,6 +58,8 @@ import { acpToolDisplayName, AcpUpdateTranslator, type AcpTurnOutcome } from './
 
 const DEFAULT_CANCEL_GRACE_MS = 15_000;
 const SESSION_CLOSE_TIMEOUT_MS = 5_000;
+/** Matched by the host's no-active-turn handling, which then delivers the message as the next turn. */
+const NO_ACTIVE_TURN_TO_STEER = 'No active turn to steer';
 /**
  * Work an agent does after answering a prompt (between turns) counts as live for
  * this long after its last update, so the runtime is not reclaimed mid-task.
@@ -110,6 +118,8 @@ export interface OpenAcpSessionOptions {
   /** ACP session id persisted for this task; resumes instead of creating a session. */
   resumeSessionId?: string;
   model?: string;
+  /** An explicit companion model must be accepted by this engine before it can receive a message. */
+  requireSelectedModel?: boolean;
   effort?: Effort;
   permissionMode?: PermissionMode;
   logger?: Logger;
@@ -120,9 +130,12 @@ export interface OpenAcpSessionOptions {
   /**
    * Host text sent ahead of the first message of a newly created agent session (for example
    * collaboration role instructions; plugin engines get no Cindy system prompt). A resumed or
-   * loaded session already has it in its own history, so it is not repeated.
+   * loaded session already has it in its own history, so it is not repeated. A function receives
+   * the names of the MCP servers the agent accepted, so the text only names tools it really has.
    */
-  briefing?: string;
+  briefing?: string | ((acceptedMcpServers: readonly string[]) => string);
+  /** Current companion settings for the first prompt after restoring the native conversation. */
+  resumedCompanionBriefing?: string;
   /** Called once when the session's event stream ends (closed, or the endpoint exited). */
   onEnded?: () => void;
   /** Overrides ACP_OPEN_TOOL_QUIET_CAP_MS (tests). */
@@ -143,6 +156,25 @@ export class AcpAuthRequiredError extends Error {
   constructor(readonly authMethods: readonly AcpAuthMethod[]) {
     super('The agent needs you to sign in before it can start a session');
     this.name = 'AcpAuthRequiredError';
+  }
+}
+
+/**
+ * The agent refused to open a session because of its account (`error.data._meta.cindy`): used up,
+ * signed out or overloaded. The message carries the stable account codes Cindy's failure policy
+ * and the chat's error copy already know, never the agent's own text.
+ */
+export class AcpAccountError extends Error {
+  readonly signals: Record<string, unknown>;
+  constructor(readonly classified: AcpCindyError, readonly cause?: unknown) {
+    super(classified.kind === 'usage-limit'
+      ? '[SUBSCRIPTION_ACCOUNT_LIMITED] The plugin engine account has reached its usage limit'
+        + (classified.resetsAt !== undefined ? `\nresetAtMs=${classified.resetsAt}` : '')
+      : classified.kind === 'auth-required'
+        ? '[SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED] The plugin engine account requires login'
+        : 'The plugin engine service is currently overloaded');
+    this.name = 'AcpAccountError';
+    this.signals = acpCindyErrorSignals(classified);
   }
 }
 
@@ -177,7 +209,9 @@ export function filterMcpServers(
 }
 
 function authAware(error: unknown, init: AcpInitializeResult): unknown {
-  return error instanceof AcpRpcError && error.code === ACP_ERROR_AUTH_REQUIRED
+  const classified = error instanceof AcpRpcError ? readAcpCindyError(error.data) : null;
+  if (classified && classified.kind !== 'auth-required') return new AcpAccountError(classified, error);
+  return error instanceof AcpRpcError && (error.code === ACP_ERROR_AUTH_REQUIRED || classified?.kind === 'auth-required')
     ? new AcpAuthRequiredError(init.authMethods)
     : error;
 }
@@ -241,6 +275,12 @@ export async function openAcpSession(opts: OpenAcpSessionOptions): Promise<AcpSe
     if (init.protocolVersion !== ACP_PROTOCOL_VERSION) throw new AcpProtocolVersionError(init.protocolVersion);
 
     const { accepted, dropped } = filterMcpServers(opts.mcpServers ?? [], init.agentCapabilities.mcpCapabilities);
+    if (dropped.length > 0) {
+      opts.logger?.warn('acp: dropping MCP servers whose transport the agent did not advertise', {
+        dropped,
+        mcpCapabilities: init.agentCapabilities.mcpCapabilities,
+      });
+    }
     const missing = (opts.requiredMcpServers ?? []).filter((name) => !accepted.some((server) => server.name === name));
     if (missing.length > 0) throw new AcpRequiredMcpUnavailableError(missing);
     let sessionId: string;
@@ -260,7 +300,8 @@ export async function openAcpSession(opts: OpenAcpSessionOptions): Promise<AcpSe
         );
       } catch (error) {
         const mapped = authAware(error, init);
-        if (mapped instanceof AcpAuthRequiredError || error instanceof AcpConnectionClosedError) throw mapped;
+        if (mapped instanceof AcpAuthRequiredError || mapped instanceof AcpAccountError
+          || error instanceof AcpConnectionClosedError) throw mapped;
         throw new AcpResumeUnavailableError(opts.resumeSessionId, 'failed', error);
       }
       sessionId = opts.resumeSessionId;
@@ -288,6 +329,9 @@ export async function openAcpSession(opts: OpenAcpSessionOptions): Promise<AcpSe
       configOptions: normalizeConfigOptions(result.configOptions),
       resumeOutcome: outcome,
       droppedMcpServers: dropped,
+      briefing: outcome === 'new'
+        ? typeof opts.briefing === 'function' ? opts.briefing(accepted.map((server) => server.name)) : opts.briefing ?? ''
+        : '',
       options: opts,
     });
     router.attach(session, Array.isArray(result.configOptions));
@@ -312,6 +356,8 @@ interface AcpSessionInit {
   configOptions: AcpConfigOption[];
   resumeOutcome: AcpResumeOutcome;
   droppedMcpServers: string[];
+  /** Briefing for a new session, resolved against the accepted MCP servers. */
+  briefing: string;
   options: OpenAcpSessionOptions;
 }
 
@@ -365,7 +411,11 @@ export class AcpSession {
   private readonly permissionControllers = new Set<AbortController>();
   private readonly capabilityListeners = new Set<(capabilities: Capabilities) => void>();
   private configOptions: AcpConfigOption[];
+  private readonly requireSelectedModel: boolean;
+  private readonly initialModel: string;
   private capabilitiesSnapshot: Capabilities;
+  /** Advertised `_session/steering`, and has not answered it with method-not-found. */
+  private steeringOffered: boolean;
   private permissionMode: 'ask' | 'bypassPermissions' = 'ask';
   private resolver: InteractionResolver | null = null;
   private turn: ActiveTurn | null = null;
@@ -390,14 +440,18 @@ export class AcpSession {
     this.resumeOutcome = init.resumeOutcome;
     this.droppedMcpServers = init.droppedMcpServers;
     this.configOptions = init.configOptions;
-    this.capabilitiesSnapshot = buildAcpCapabilities(init.init, init.configOptions);
+    this.requireSelectedModel = init.options.requireSelectedModel === true;
+    this.initialModel = this.model;
+    this.steeringOffered = init.init.steering;
+    this.capabilitiesSnapshot = this.buildCapabilities();
     this.logger = init.options.logger;
     this.readImage = init.options.readFile ?? ((path) => fsReadFile(path));
     this.cancelGraceMs = init.options.cancelGraceMs ?? DEFAULT_CANCEL_GRACE_MS;
     this.onEnded = init.options.onEnded;
     this.now = init.options.now ?? Date.now;
     this.openToolQuietCapMs = init.options.openToolQuietCapMs ?? ACP_OPEN_TOOL_QUIET_CAP_MS;
-    this.pendingBriefing = init.resumeOutcome === 'new' && init.options.briefing?.trim() ? init.options.briefing : null;
+    const briefing = init.resumeOutcome === 'new' ? init.briefing : init.options.resumedCompanionBriefing;
+    this.pendingBriefing = briefing?.trim() ? briefing : null;
     this.translator = new AcpUpdateTranslator({ blockIdPrefix: `acp-${init.sessionId}` });
     if (init.options.permissionMode) this.applyPermissionMode(init.options.permissionMode);
     this.connection.onClose((info) => this.handleConnectionClosed(info));
@@ -490,9 +544,63 @@ export class AcpSession {
     return accepted;
   }
 
-  /** Same-turn steering is not part of ACP v1; the input becomes the next turn. */
+  /**
+   * Adds the message to the running turn through ACP_STEERING_METHOD. Agents that do
+   * not offer it get the message as the next turn, as ACP v1 allows one prompt at a time.
+   *
+   * Rejections tell the host what happened: no active turn (the agent's turn already
+   * ended, so the host sends it as the next turn), "delivery uncertain" (sent, no
+   * answer; the agent may have it, so it must not be sent again), or the agent's error.
+   */
   async steer(message: UserMessage): Promise<void> {
-    await this.send(message);
+    if (!this.steeringOffered) {
+      await this.send(message);
+      return;
+    }
+    const turn = this.turn;
+    if (this.ended || this.closing) throw new Error('ACP session is closed');
+    if (!turn || turn.cancelTimer) throw new Error(NO_ACTIVE_TURN_TO_STEER);
+    const prompt = await this.toPrompt(message);
+    if (prompt.length === 0) throw new Error('Cannot send an empty message');
+    if (this.ended || this.closing || this.connection.closed) throw new Error('ACP session is closed');
+    // Attachments are read asynchronously: the turn may have ended or been stopped meanwhile.
+    if (this.turn !== turn || turn.cancelTimer) throw new Error(NO_ACTIVE_TURN_TO_STEER);
+    let result: AcpRecord;
+    try {
+      result = await this.connection.request(ACP_STEERING_METHOD, {
+        sessionId: this.id,
+        prompt,
+        // Without this an agent whose turn just ended starts a turn of its own, which Cindy does not track.
+        _meta: { steering: { idleBehavior: 'promptRequired' } },
+      }, {
+        onResult: (reply) => {
+          // Finish the old segment before the decoder handles any following update.
+          if (reply.outcome === 'injected' && this.turn === turn) this.emit(this.translator.flushPending());
+        },
+      });
+    } catch (error) {
+      if (!(error instanceof AcpRpcError)) {
+        throw new Error(`ACP steering delivery uncertain: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      if (error.code === JSONRPC_METHOD_NOT_FOUND) {
+        this.logger?.warn('acp: agent advertised steering but does not handle it; later messages wait for the next turn');
+        this.steeringOffered = false;
+        this.refreshCapabilities();
+      }
+      throw error;
+    }
+    switch (result.outcome) {
+      case 'injected':
+        return;
+      case 'promptRequired':
+        throw new Error(NO_ACTIVE_TURN_TO_STEER);
+      case 'startedNewTurn':
+        // Agents older than the idle opt-in run it themselves; its output arrives as background work.
+        this.logger?.info('acp: agent started the steered message as its own turn');
+        return;
+      default:
+        throw new Error(`ACP agent did not take the steered message (outcome: ${String(result.outcome)})`);
+    }
   }
 
   async abort(): Promise<void> {
@@ -523,10 +631,7 @@ export class AcpSession {
   }
 
   async setModel(model: string, opts?: { effort?: Effort }): Promise<void> {
-    const option = findModelOption(this.configOptions);
-    if (!option) throw new NotSupportedError('switchModel', { supported: false, reason: 'sdk-missing' });
-    if (!option.options.some((entry) => entry.value === model)) throw new Error(`The agent does not offer model "${model}"`);
-    if (option.currentValue !== model) await this.setConfigValue(option.id, model);
+    await this.selectModel(model);
     if (opts?.effort) {
       try {
         await this.setEffort(opts.effort);
@@ -535,6 +640,19 @@ export class AcpSession {
         this.logger?.debug('acp: effort not applied after model switch', { error: String(error) });
       }
     }
+  }
+
+  private async selectModel(model: string): Promise<void> {
+    const option = findModelOption(this.configOptions);
+    if (this.requireSelectedModel && model === 'default' && !option?.options.some(entry => entry.value === model)) {
+      // This host choice delegates back to the model the endpoint selected when the session opened.
+      if (!option || !this.initialModel) return;
+      model = this.initialModel;
+    }
+    if (!option) throw new NotSupportedError('switchModel', { supported: false, reason: 'sdk-missing' });
+    if (!option.options.some((entry) => entry.value === model)) throw new Error(`The agent does not offer model "${model}"`);
+    if (option.currentValue !== model) await this.setConfigValue(option.id, model);
+    if (this.requireSelectedModel && this.model !== model) throw new Error(`The agent did not select model "${model}"`);
   }
 
   async setEffort(effort: Effort): Promise<void> {
@@ -557,12 +675,13 @@ export class AcpSession {
     await this.setConfigValue(option.id, mapped.value);
   }
 
-  /** @internal Applies the host's stored model / effort after the handshake; never fails the task. */
+  /** @internal Apply the host selections after the engine handshake and before the first prompt. */
   async applyInitialSelection(model: string | undefined, effort: Effort | undefined, permissionMode?: PermissionMode): Promise<void> {
     if (model && model !== this.model) {
       try {
         await this.setModel(model);
       } catch (error) {
+        if (this.requireSelectedModel) throw error;
         this.logger?.warn('acp: stored model not applied; keeping the agent default', { error: String(error) });
       }
     }
@@ -653,7 +772,11 @@ export class AcpSession {
     this.usage = { ...this.usage, tokenUsage: 0 };
     this.emit([{ type: 'status', data: { status: 'running', ...this.usage, isRunning: true } }]);
     this.connection.request('session/prompt', { sessionId: this.id, prompt }, { timeoutMs: null }).then(
-      (result) => this.finishTurn(turn.token, { stopReason: normalizeStopReason(result) }),
+      (result) => {
+        // The prompt result is the only per-turn token report; `usage_update` only carries the context size.
+        const usage = normalizeTurnUsage(result);
+        this.finishTurn(turn.token, { stopReason: normalizeStopReason(result), ...(usage ? { usage } : {}) });
+      },
       (error: unknown) => this.finishTurn(turn.token, this.errorOutcome(error)),
     );
   }
@@ -698,8 +821,18 @@ export class AcpSession {
     if (error instanceof AcpConnectionClosedError) {
       return { error: 'The agent process ended unexpectedly.', reason: 'acp-agent-exited' };
     }
-    if (error instanceof AcpRpcError && error.code === ACP_ERROR_AUTH_REQUIRED) {
+    const classified = error instanceof AcpRpcError ? readAcpCindyError(error.data) : null;
+    if (error instanceof AcpRpcError && (error.code === ACP_ERROR_AUTH_REQUIRED || classified?.kind === 'auth-required')) {
       return { error: 'The agent needs you to sign in again.', reason: 'acp-auth-required' };
+    }
+    if (classified) {
+      return {
+        error: classified.kind === 'usage-limit'
+          ? 'The plugin engine account has reached its usage limit.'
+          : 'The plugin engine service is currently overloaded.',
+        reason: classified.kind === 'usage-limit' ? 'acp-usage-limit' : 'acp-overloaded',
+        signals: acpCindyErrorSignals(classified),
+      };
     }
     return { error: error instanceof Error ? error.message : String(error), reason: 'acp-request-failed' };
   }
@@ -820,8 +953,12 @@ export class AcpSession {
     this.configOptions = this.configOptions.map((entry) => entry.id === option.id ? { ...entry, currentValue: modeId } : entry);
   }
 
+  private buildCapabilities(): Capabilities {
+    return buildAcpCapabilities({ ...this.initializeResult, steering: this.steeringOffered }, this.configOptions);
+  }
+
   private refreshCapabilities(): void {
-    this.capabilitiesSnapshot = buildAcpCapabilities(this.initializeResult, this.configOptions);
+    this.capabilitiesSnapshot = this.buildCapabilities();
     for (const listener of this.capabilityListeners) {
       try {
         listener(this.capabilitiesSnapshot);

@@ -217,6 +217,7 @@ export type IpcErrorCode =
   | 'LEARN_BUSY' // 已有 learn run 在进行(全局并发 1)
   | 'LEARN_INVALID_STATE' // run 状态不允许该操作(如对非 awaiting-review 调 apply)
   // remote-ssh：连接阶段
+  | 'SSH_HOST_UNVERIFIED'
   | 'SSH_HOST_KEY_MISMATCH'
   | 'SSH_CONNECT_FAILED'
   | 'SSH_AUTH_FAILED'
@@ -479,6 +480,7 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'GOAL_NOT_FOUND',
   'LEARN_BUSY',
   'LEARN_INVALID_STATE',
+  'SSH_HOST_UNVERIFIED',
   'SSH_HOST_KEY_MISMATCH',
   'SSH_CONNECT_FAILED',
   'SSH_AUTH_FAILED',
@@ -624,4 +626,13 @@ export function createIpcError(
 
 export function isIpcError(err: unknown): err is Error & { code: IpcErrorCode } {
   return err instanceof Error && isIpcErrorCode((err as { code?: unknown }).code);
+}
+
+/** The profile has not finished recovering after desktop use (queue or plugins). Optional on structured precondition refusals. Electron invoke carries only the message. */
+export function isProfileReleaseFailure(value: unknown): value is {
+  code: 'PRECONDITION_FAILED'; reason: 'HOST_PROFILE_RELEASE_FAILED';
+} {
+  return typeof value === 'object' && value !== null
+    && 'code' in value && value.code === 'PRECONDITION_FAILED'
+    && 'reason' in value && value.reason === 'HOST_PROFILE_RELEASE_FAILED';
 }

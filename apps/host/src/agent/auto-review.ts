@@ -1,8 +1,8 @@
+import { holdError, type ProfileHold } from './profile-hold.js';
 import { createAuxiliaryUsageRecorder } from '../../../desktop/src/main/usage/auxiliaryUsage.js';
 import { createMemoryReviewOneShotCore } from '../../../desktop/src/main/maker-host/memory-review-one-shot-core.js';
 import { createOneShotRouteGuard } from '../../../desktop/src/main/maker-host/oneShotRouteGuardCore.js';
 import { verdictForModelRouteWithProviders } from '../../../desktop/src/main/maker-host/model-route-guard-catalog.js';
-import { throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.js';
 import type { AutoReviewDelegate, Maker } from '@cindy/maker-core';
 import { createOneShotCandidates, DEDICATED_AUTO_REVIEW_CANDIDATES } from '../../../desktop/src/main/utility-model/oneShotCandidatesCore.js';
 import { AUTO_REVIEW_ROUTER_GUARD_TIMEOUT_MS, createAutoReviewModelRouter } from '../../../desktop/src/main/maker-host/autoReviewModelRouterCore.js';
@@ -84,10 +84,10 @@ export function createHostAutoReview(options: {
   const toolLoopReviewer = createToolLoopReviewer({
     requestText: (prompt, opts) => oneShot.requestUtilityText(options.getMaker(), prompt, { ...opts, source: 'tool-loop-review' }),
   });
-  const memoryReview = (profileHold: () => string | null) => {
+  const memoryReview = (profileHold: () => ProfileHold | null) => {
     const assertNotHeld = () => {
       const held = profileHold();
-      if (held) throwIpcError('PRECONDITION_FAILED', held);
+      if (held) throw holdError(held);
     };
     const listRouteGuardProviders = () => config.publicViews(Boolean(options.gateway?.credential));
     const isDisabled = createOneShotRouteGuard({

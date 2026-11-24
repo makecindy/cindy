@@ -700,6 +700,23 @@ describe('review result reading state', () => {
 // 缺口：原用例依赖已撤除的关联记录，无法覆盖无回执和正常本地迭代。
 // 最小输入：本人 API 的一个目标和一个同 ID 安装；tier: unit。
 describe('author installation projection', () => {
+  // #11918, unit: reading an existing submission must still show its page access
+  // when the only stale field is the resource's former, untyped height hint.
+  it('shows page permissions in a stored submission with a historical height hint', async () => {
+    harness.detail.mockResolvedValue({
+      ...ownDetail(), plugin: { ...ownPlugin(), latestSubmission: submission() },
+      latestSubmissionContent: { manifest: { schemaVersion: 3, minCindyVersion: '0.1.122-beta',
+        id: 'hello', name: 'Hello', version: '1.0.0', entry: 'main.js',
+        tools: [{ name: 'open', description: 'Open' }],
+        mcpApps: { ui: { resources: [{ uri: 'ui://form', file: 'form.html', initialHeight: '240' }],
+          tools: { open: { resourceUri: 'ui://form' } } } },
+      } },
+    });
+    const { plugin } = await host.myPluginDetail('canonical-plugin');
+    expect(plugin.latestSubmission?.content?.permissions).toContainEqual(
+      expect.objectContaining({ key: 'ui:pages', detailArgs: expect.objectContaining({ pages: 'ui://form' }) }),
+    );
+  });
   // Author detail/list projection must preserve the server-owned market reason;
   // the previous hardcoded null erased every moderation explanation (unit).
   it('preserves a server market reason and keeps old responses without it readable', async () => {

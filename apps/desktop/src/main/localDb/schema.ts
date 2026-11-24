@@ -20,6 +20,7 @@ import {
   customType,
 } from 'drizzle-orm/sqlite-core';
 
+import type { MrRunObservation } from '@cindy/maker-scheduler';
 import type { SessionSource } from '../../shared/sessionSource.js';
 
 /** Rebuildable Chat Server projection inside the owner's database; namespace includes server and reader. */
@@ -106,6 +107,7 @@ const SESSION_SOURCES = [
   'telegram',
   'x',
   'discord',
+  'discord-hook',
   'wechat',
   'dingtalk',
   'wecom',
@@ -156,6 +158,7 @@ export const sessions = sqliteTable(
     sdkSessionId: text('sdk_session_id'),
     totalTokenUsage: integer('total_token_usage').notNull().default(0),
     totalCostUsd: real('total_cost_usd').notNull().default(0),
+    totalCostUsdIsApproximate: integer('total_cost_usd_is_approximate', { mode: 'boolean' }).notNull().default(false),
     /** 新版区域金额；legacy total_cost_usd 仍保留为历史 USD 事实。 */
     totalCostAmount: real('total_cost_amount').notNull().default(0),
     totalCostCurrency: text('total_cost_currency', { enum: ['CNY', 'USD'] }),
@@ -1549,6 +1552,11 @@ export const schedules = sqliteTable(
       enum: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
     }),
     /**
+     * 模型组(模式)id：设了时新建任务按模式选来源(发到已有任务按那个任务自己的模式)，上面的具体模型是选不出来时沿用的
+     * (model-groups.md §6.3)。NULL = 没选模式，与原来一致。
+     */
+    modelGroup: text('model_group'),
+    /**
      * 速度档位沿用整数列：0 标准、1 快速、2 超快。超快仅用于获授权的 Codex 模型。
      */
     fastMode: speedSetting('fast_mode').notNull().default(false),
@@ -1745,6 +1753,8 @@ export const scheduleRuns = sqliteTable(
     /** 新版区域真实费用与订阅价值；旧 USD 列只做历史兼容。 */
     costAmount: real('cost_amount').notNull().default(0),
     estimatedValueAmount: real('estimated_value_amount').notNull().default(0),
+    /** Estimate denominated in the other native currency (USD or CNY). */
+    otherEstimatedValueAmount: real('other_estimated_value_amount').notNull().default(0),
     costCurrency: text('cost_currency', { enum: ['CNY', 'USD'] }),
     costIsApproximate: integer('cost_is_approximate', { mode: 'boolean' }).notNull().default(false),
     /**
@@ -1766,6 +1776,7 @@ export const scheduleRuns = sqliteTable(
     preRunHookResult: text('pre_run_hook_result'),
     /** 本轮触发来源；NULL = 定时或手动。 */
     triggerSource: text('trigger_source'),
+    mrObservation: text('mr_observation', { mode: 'json' }).$type<MrRunObservation>(),
     readAt: integer('read_at'),
     /**
      * In-flight 心跳时间戳（毫秒）——跨实例的"仍有活实例在跑"租约信号。
@@ -1776,6 +1787,9 @@ export const scheduleRuns = sqliteTable(
   },
   (t) => ({
     idxBySchedule: index('idx_schedule_runs_schedule').on(t.scheduleId, t.firedAt),
+    idxMrObservation: index('idx_schedule_runs_mr_observation')
+      .on(t.scheduleId, t.status, t.firedAt, t.id)
+      .where(sql`${t.mrObservation} IS NOT NULL`),
     idxRunningSchedule: index('idx_schedule_runs_running_schedule')
       .on(t.scheduleId)
       .where(sql`${t.status} = 'running'`),

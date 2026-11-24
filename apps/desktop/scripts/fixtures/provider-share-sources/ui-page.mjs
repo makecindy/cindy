@@ -19,6 +19,7 @@ export default {
     'src/renderer/features/provider-share/providerShareStore': { partial: 'export const useProviderShareReceived = () => window.providerSourcesFixture.received;' },
   },
   cases: {
+    'slow-group': { about: 'Fast member status, then the slow member, then confirmed quota exhaustion in the remote provider detail' },
     'legacy-upgrade': { about: 'Old connection IDs remain in the host snapshot, while the actual settings rail shows one OpenAI supplier and both migrated accounts' },
     'legacy-upgrade-shared': { about: 'A migrated connection with an existing share keeps its selective revocation entry even when disconnected and paused, without duplicating unshared connections' },
     'subscription-claude-choice': { about: 'An existing Claude Code login is shown before choosing it or another account' },
@@ -40,6 +41,20 @@ export default {
     await page.getByTestId('provider-share-received').waitFor();
   },
   async check(page, ui) {
+    if (ui.case === 'slow-group') {
+      await page.locator('[data-listed-source="fixture-host:anthropic"]').click();
+      const rows = page.getByTestId('remote-provider-group-member');
+      await rows.first().locator('xpath=self::*[@data-member-state="available"]').waitFor();
+      assert.equal(await rows.nth(1).getAttribute('data-member-state'), 'loading');
+      await ui.capture('fast-member');
+      await page.evaluate(() => window.providerSourcesFixture.groupControl.releaseMember());
+      await rows.nth(1).locator('xpath=self::*[@data-member-state="available"]').waitFor();
+      assert.equal(await rows.first().getAttribute('data-member-state'), 'available');
+      await ui.capture('quota-pending');
+      await page.evaluate(() => window.providerSourcesFixture.groupControl.releaseQuota());
+      await rows.first().getByText(await ui.t('providerGroup.member.status.quotaExhausted')).waitFor();
+      return;
+    }
     if (ui.case.startsWith('legacy-upgrade')) {
       await page.getByRole('button', { name: /^OpenAI/ }).first().click();
       const accounts = page.getByTestId('subscription-accounts');

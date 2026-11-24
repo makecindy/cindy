@@ -23,6 +23,7 @@ import {
   type ImMessageOrigin,
   type ImMessageSource,
 } from '../../../shared/imMessageSource';
+import { displayImContext } from './userMessageDisplayText';
 import { mayExceedVisualLineThreshold, useUserMessageAutoCollapse } from './userMessageCollapse';
 
 type ThreadContextEntry = NonNullable<ImMessageSource['threadContext']>[number];
@@ -78,6 +79,8 @@ export function imLabel(im: string, t: TFunction): string {
       return t('settings.feishuBot.services.feishu');
     case 'lark':
       return t('settings.feishuBot.services.lark');
+    case 'imessage':
+      return t('bots.channels.platform.imessage');
     case 'discord':
       return t('settings.about.social.discordLabel');
     case 'wechat':
@@ -151,7 +154,7 @@ export default function HookTaskCard({
     <div
       className={cn(
         // 顶部留白放在卡片上而不是头部:分享图摘掉头部后正文仍不贴边。
-        'w-full rounded-[12px] overflow-hidden pt-[10px]',
+        'w-full rounded-xl overflow-hidden pt-2.5',
         'bg-[var(--msg-tool-card-bg)]',
         'border border-[var(--msg-tool-card-border)]',
       )}
@@ -159,7 +162,7 @@ export default function HookTaskCard({
       {/* Header: IM 图标 + Cindy 署名。属于来源标注,分享图不带(只留正文)。 */}
       <div
         {...{ [SHARE_SOURCE_ATTR]: '' }}
-        className="flex items-center gap-2 px-[14px] pb-[6px]"
+        className="flex items-center gap-2 px-3.5 pb-1.5"
       >
         <ImIcon im={im} />
         {(() => {
@@ -176,7 +179,7 @@ export default function HookTaskCard({
       </div>
 
       {/* Body: 用户实际提问 */}
-      <div className="px-[14px] pb-[12px] flex flex-col gap-2">
+      <div className="px-3.5 pb-3 flex flex-col gap-2">
         <div className="relative text-14 leading-[1.6] text-[var(--text-primary)] whitespace-pre-wrap [overflow-wrap:anywhere]">
           {measureBody && (
             <div
@@ -242,11 +245,11 @@ export default function HookTaskCard({
                         ? t('chat.threadContext.referencedMessages', { count: replyCount })
                         : t('chat.threadContext.referencedContext')}
                     </h4>
-                    {hasReplyContext && <div className="chat-content-text whitespace-pre-wrap">{replyContext}</div>}
+                    {hasReplyContext && <div className="chat-content-text whitespace-pre-wrap">{displayImContext(im, replyContext, 'reply')}</div>}
                     {entries.map((entry, i) => (
                       // biome-ignore lint/suspicious/noArrayIndexKey: 消息内容不可变,index 稳定。
                       <div key={i} className="chat-content-text whitespace-pre-wrap">
-                        <bdi className="font-semibold">[{entry.author}]</bdi> {entry.text}
+                        <bdi className="font-semibold">[{entry.author}]</bdi> {displayImContext(im, entry.text, 'reply')}
                       </div>
                     ))}
                   </section>
@@ -261,7 +264,7 @@ export default function HookTaskCard({
                         ? t('chat.threadContext.groupBackgroundCount', { count: groupCount })
                         : t('chat.threadContext.groupBackground')}
                     </h4>
-                    <div className="chat-content-text whitespace-pre-wrap">{groupContext}</div>
+                    <div className="chat-content-text whitespace-pre-wrap">{displayImContext(im, groupContext, 'group')}</div>
                   </section>
                 )}
               </div>

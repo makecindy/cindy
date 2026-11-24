@@ -358,11 +358,11 @@ export function registerMakerUsageIpc(maker: Maker): void {
   }
 
   // Account identity and automatic rules belong to the same owner and selected login as the read.
-  const readCodexRateLimits: CodexRateLimitsReader = async (providerId) => {
+  const readCodexRateLimits = async (providerId?: string, automatic = false): Promise<MobileCodexRateLimitsResult> => {
     const scope = activeOwnerScopeKey();
     const accountKey = await accountKeyFor(providerId);
     const service = getResetService(providerId);
-    const result = await service.read();
+    const result = await service.read(automatic);
     if (scope !== activeOwnerScopeKey()) throw new Error('PRECONDITION_FAILED: Account scope changed');
     if (accountKey !== await accountKeyFor(providerId)) throw new Error('ChatGPT account changed');
     return { ...result, providerId: providerId ?? 'openai', autoUse: codexResetAutoUseStore.read(providerId ?? 'openai', accountKey) };
@@ -370,7 +370,7 @@ export function registerMakerUsageIpc(maker: Maker): void {
   codexRateLimitsReader = readCodexRateLimits;
 
   const automatic = new CodexResetAutoUse({
-    scope: activeOwnerScopeKey, now: Date.now, read: readCodexRateLimits,
+    scope: activeOwnerScopeKey, now: Date.now, read: providerId => readCodexRateLimits(providerId, true),
     authorized: (providerId, snapshot) => {
       if (isAppSessionBoundaryPending() || !snapshot.autoUse?.accountKey) return false;
       const current = codexResetAutoUseStore.read(providerId, snapshot.autoUse.accountKey);

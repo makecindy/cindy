@@ -670,6 +670,12 @@ export function isCrossRegionShareListUnavailable(shareId: string): boolean {
   return stateForShare(shareId)?.listConfirmed === false;
 }
 
+/** Whether any current cross-region membership list is still unconfirmed. */
+export function hasUnconfirmedCrossRegionReceivedList(): boolean {
+  const rt = runtime;
+  return !!rt && current(rt) && [...rt.regions.values()].some(state => !state.listConfirmed);
+}
+
 export function getUnavailableCrossRegionShareIds(): string[] {
   const rt = runtime;
   if (!rt || !current(rt)) return [];
@@ -770,7 +776,7 @@ function crossRegionClientStopped(client: DeviceLinkClient | null): boolean {
 }
 
 export async function crossRegionInvoke(peerKey: string, channel: string, args: unknown[], timeoutMs?: number,
-  options?: { preSend?: () => void; beforeDispatch?: () => void; liveProviderMetadata?: true }): Promise<InvokeResultPayload> {
+  options?: { preSend?: () => void; beforeDispatch?: () => void; liveProviderMetadata?: true; ownFreshness?: true }): Promise<InvokeResultPayload> {
   const rt = runtime;
   const peer = parseProviderSharePeer(peerKey);
   const state = peer ? stateForShare(peer.shareId) : null;
@@ -788,7 +794,8 @@ export async function crossRegionInvoke(peerKey: string, channel: string, args: 
   if (options?.liveProviderMetadata) return crossRegionInvokeLive(peerKey, channel, args, timeoutMs, sendOptions);
   return invokeProviderMetadataContinuity(peerKey, channel, args,
     () => crossRegionInvokeLive(peerKey, channel, args, timeoutMs, sendOptions),
-    () => { try { preSend(); return true; } catch { return false; } });
+    () => { try { preSend(); return true; } catch { return false; } },
+    options?.ownFreshness ? { ownFreshness: true } : undefined);
 }
 
 async function crossRegionInvokeLive(peerKey: string, channel: string, args: unknown[], timeoutMs?: number,
