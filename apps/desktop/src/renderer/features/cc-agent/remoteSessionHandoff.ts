@@ -114,7 +114,7 @@ export function commitRemoteSessionHandoff(p: RemoteSessionHandoffParams): void 
 
 /** Pin the same task and message identities used for delivery, before opening the task. */
 export function previewRemoteCreation(p: RemoteSessionHandoffParams, title: string | null, message: ChatMessage, files?: AttachedFile[]): void {
-  remoteProjectsStore.pinSessionOrigin(p.deviceId, p.remoteSessionId);
+  remoteProjectsStore.pinSessionOrigin(p.deviceId, p.remoteSessionId, { verified: false });
   markSessionStarting(p.remoteSessionId);
   if (title) remoteProjectsStore.setPendingTitlePreview(p.remoteSessionId, title, Boolean(normalizeAutoTitle(message.content)));
   remoteProjectsStore.setPendingFirstSend(p.remoteSessionId, p.nowIso);

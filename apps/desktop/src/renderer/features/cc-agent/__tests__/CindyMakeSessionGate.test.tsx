@@ -6,6 +6,7 @@ import { CindyMakeSessionGate } from '../CindyMakeSessionGate';
 import { SessionRouteOriginGate } from '../SessionRouteOriginGate';
 import { sideChatTaskRoute } from '../../right-sidebar/plugins/side-chat/state';
 import { StrictMode, useEffect } from 'react';
+import { __resetStickySessionOriginForTest } from '@/features/device-link/stickySessionOrigin';
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 
@@ -13,6 +14,7 @@ const state = vi.hoisted(() => ({
   remote: [] as Array<{ id: string; source: string; model?: string; workingDir?: string }>,
   localSource: undefined as string | null | undefined,
   getSession: vi.fn(),
+  getLocalSession: vi.fn(),
   previewId: null as string | null,
   localListeners: new Set<() => void>(),
   origins: new Map<string, string>(),
@@ -24,6 +26,8 @@ vi.mock('@/features/device-link/remoteProjectsStore', () => ({
   subscribe: () => () => {}, getMergedRemoteSessions: () => state.remote,
   getCreationPreview: (id: string) => id === state.previewId ? {} : undefined,
   getSessionDeviceId: (id: string) => state.origins.get(id),
+  getVerifiedPinnedSessionDeviceId: (id: string) => state.origins.get(id),
+  clearUnverifiedSessionOrigin: (id: string) => { state.origins.delete(id); },
   pinSessionOrigin: (device: string, id: string) => { state.origins.set(id, device); },
   getDeviceSessions: () => state.remote,
   getDeviceName: () => 'Host',
@@ -38,14 +42,21 @@ vi.mock('@/lib/sessionsStore', () => ({ sessionsStore: {
   findById: () => state.localSource !== undefined ? { source: state.localSource } : null,
 } }));
 vi.mock('@/lib/makerTransport', () => ({ getSessionFor: state.getSession }));
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 beforeEach(() => {
+  __resetStickySessionOriginForTest();
   state.remote = [];
   state.previewId = null;
   state.localSource = undefined;
   state.getSession.mockReset().mockResolvedValue(null);
+  state.getLocalSession.mockReset().mockResolvedValue(null);
   state.origins.clear();
   state.readCurrent = true;
+  vi.stubGlobal('electronAPI', {
+    getDeviceId: async () => 'local-device',
+    localDb: { sessions: { get: state.getLocalSession } },
+    deviceLink: { invoke: (_device: string, _channel: string, [id]: [string]) => state.getSession(id) },
+  });
 });
 
 it('opens a legacy cached task with null source instead of waiting forever', () => {
@@ -56,8 +67,8 @@ it('opens a legacy cached task with null source instead of waiting forever', () 
 });
 
 // Unit #6529: the old hidden-task tests only covered warm origins. A route
-// surviving a renderer reload must pin its host before the first metadata read,
-// even when no mirror has persisted. Exercise the production gates and router.
+// surviving a renderer reload must read the named host before entering the
+// session view, even without a mirror. Exercise the production gates and router.
 describe('remote task route origin', () => {
   function mountRoute(route: string, ownsWindowRoute = true, sessionId = 'child') {
     return render(<StrictMode><MemoryRouter initialEntries={[route]}>
@@ -92,7 +103,7 @@ describe('remote task route origin', () => {
   it('recovers a hidden task from only the URL after losing all renderer origins', async () => {
     const route = sideChatTaskRoute('child', 'host/encoded');
     state.getSession.mockImplementation(async (id: string) => {
-      if (state.origins.get(id) !== 'host/encoded') throw new Error('Local task not found');
+      expect(state.origins.get(id)).toBeUndefined();
       return { id, source: 'side-chat', model: 'model', workingDir: '/host/work' };
     });
     // Remount with the original URL and fresh memory, without a disk/list row.
@@ -115,6 +126,8 @@ describe('remote task route origin', () => {
     });
     await act(async () => { mountRoute(sideChatTaskRoute('child', 'host')); });
     expect(screen.getByRole('alert')).toBeTruthy();
+    // A missing or unavailable route must not affect later session-only reads.
+    expect(state.origins.get('child')).toBeUndefined();
     fireEvent.click(screen.getByText('ccAgent.sessionEntry.back'));
     expect(screen.getByText('Task list')).toBeTruthy();
     expect(screen.queryByText('Remote composer')).toBeNull();
@@ -124,6 +137,7 @@ describe('remote task route origin', () => {
     let resolve!: (value: unknown) => void;
     state.getSession.mockReturnValue(new Promise(done => { resolve = done; }));
     const ui = mountRoute(sideChatTaskRoute('child', 'host'));
+    await act(async () => {});
     ui.unmount();
     await act(async () => resolve({ id: 'child', source: 'side-chat' }));
     expect(state.remote).toEqual([]);

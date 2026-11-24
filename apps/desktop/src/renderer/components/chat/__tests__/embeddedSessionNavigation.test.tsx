@@ -21,6 +21,8 @@ const mocks = vi.hoisted(() => ({
     title: `Session ${sessionId}`,
     status: 'active',
   })),
+  getLocalSession: vi.fn(),
+  invoke: vi.fn(),
   resolveSessionMessageText: vi.fn(async () => 'Target message\nfull text'),
   listSessions: vi.fn(async (): Promise<unknown[]> => []),
 }));
@@ -50,6 +52,14 @@ vi.mock('@/features/device-link/remoteProjectsStore', () => ({
   remoteProjectsStore: {
     getSessionDeviceId: mocks.getSessionDeviceId,
     getVisibleMergedRemoteSessions: () => mocks.remoteSessions,
+    getMergedRemoteSessions: () => mocks.remoteSessions,
+    getDeviceSessions: (deviceId: string) => mocks.remoteSessions.filter(row => row.deviceLinkDeviceId === deviceId),
+    getVerifiedPinnedSessionDeviceId: mocks.getSessionDeviceId,
+    getCreationPreview: () => undefined,
+    getDeviceName: () => 'Host',
+    captureSessionRead: () => Object.assign(() => true, { mergeActivity: (value: unknown) => value }),
+    mergeDeviceSessions: vi.fn(),
+    clearUnverifiedSessionOrigin: vi.fn(),
     pinSessionOrigin: mocks.pinSessionOrigin,
   },
 }));
@@ -117,9 +127,15 @@ describe('sidebar-embedded session navigation boundary', () => {
     vi.clearAllMocks();
     mocks.remoteSessions = [];
     mocks.getSessionDeviceId.mockReset();
+    mocks.getLocalSession.mockReset().mockImplementation(async (id: string) => ({ id }));
+    mocks.invoke.mockReset().mockImplementation(async (_device: string, _channel: string, [id]: string[]) => ({ id }));
     __resetStickySessionOriginForTest();
     Object.defineProperty(window, 'electronAPI', {
-      configurable: true, value: { maker: { openSessionInNewWindow: mocks.openSessionInNewWindow } },
+      configurable: true, value: {
+        maker: { openSessionInNewWindow: mocks.openSessionInNewWindow },
+        localDb: { sessions: { get: mocks.getLocalSession } },
+        deviceLink: { invoke: mocks.invoke },
+      },
     });
     Object.defineProperty(navigator, 'clipboard', {
       configurable: true, value: { writeText: mocks.writeText },
@@ -129,6 +145,7 @@ describe('sidebar-embedded session navigation boundary', () => {
   // Regression: a device::task receipt used to render inert text. Existing link tests
   // did not exercise the teammate receipt consumers. Unit tier: click production UI.
   it.each(['footer', 'chip', 'letter'] as const)('opens a cross-device %s task reference', async (kind) => {
+    mocks.getLocalSession.mockResolvedValue(null);
     const task = { sessionId: 'remote-mac::remote-task', title: 'Remote work', created: true };
     render(kind === 'footer' ? <BotStartedTasksFooter tasks={[task]} />
       : kind === 'chip' ? <BotStartedTasks tasks={[task]} />
@@ -136,7 +153,7 @@ describe('sidebar-embedded session navigation boundary', () => {
     fireEvent.click(screen.getByRole('button'));
     await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/remote-task', undefined));
     expect(mocks.pinSessionOrigin).toHaveBeenCalledWith('remote-mac', 'remote-task');
-    expect(mocks.resolveSessionRoute).toHaveBeenCalledWith('remote-task', null, { remote: true });
+    expect(mocks.resolveSessionRoute).toHaveBeenCalledWith('remote-task', { id: 'remote-task' }, { remote: true, deviceId: 'remote-mac' });
   });
 
   // Device priority is observable through the routed transport origin: a wrong
@@ -146,6 +163,7 @@ describe('sidebar-embedded session navigation boundary', () => {
     { receipt: 'receipt-mac::task-a', expectedDevice: 'receipt-mac', remote: true },
     { receipt: 'this-mac::task-a', expectedDevice: undefined, remote: false },
   ])('resolves $receipt from a remote chat to $expectedDevice', async ({ receipt, expectedDevice, remote }) => {
+    if (remote) mocks.getLocalSession.mockResolvedValue(null);
     mocks.getSessionDeviceId.mockImplementation((id) => id === 'host-chat' ? 'chat-mac' : undefined);
     render(<BotStartedTasksFooter
       hostSessionId="host-chat"
@@ -158,7 +176,7 @@ describe('sidebar-embedded session navigation boundary', () => {
     } else {
       expect(mocks.pinSessionOrigin).not.toHaveBeenCalled();
     }
-    expect(mocks.resolveSessionRoute).toHaveBeenCalledWith('task-a', null, { remote });
+    expect(mocks.resolveSessionRoute).toHaveBeenCalledWith('task-a', { id: 'task-a' }, { remote, deviceId: expectedDevice ?? null });
   });
 
   it('keeps same-device qualified receipts local and preserves embedded navigation boundaries', async () => {
@@ -285,17 +303,17 @@ describe('sidebar-embedded session navigation boundary', () => {
     expect(mocks.navigate).not.toHaveBeenCalled();
   });
 
-  // #7115: same-id copies on two computers must use the linked computer's
-  // route metadata as well as its transport origin; unit, real chip activation.
-  it('selects the linked remote computer when another snapshot has the same task id', async () => {
+  // #7115: a session-ID-only transport cannot share two origins safely.
+  // Unit tier: click a real chip with both computers' rows already visible.
+  it('rejects the link when two devices have verified rows for the same task id', async () => {
     const wrong = { id: 'same', title: 'Wrong', deviceLinkDeviceId: 'mac-a', orcaRole: 'worker' as const };
     const right = { id: 'same', title: 'Right', deviceLinkDeviceId: 'mac-b', orcaRole: null };
     mocks.remoteSessions = [wrong, right];
     render(<SessionLinkChip href="cindy://session/same?device=mac-b" label="Task" />);
     fireEvent.click(screen.getByRole('button', { name: 'Task' }));
-    await waitFor(() => expect(mocks.navigate).toHaveBeenCalled());
-    expect(mocks.pinSessionOrigin).toHaveBeenCalledWith('mac-b', 'same');
-    expect(mocks.resolveSessionRoute).toHaveBeenCalledWith('same', right, { remote: true });
+    await waitFor(() => expect(mocks.error).toHaveBeenCalledWith('chat.markdownRenderer.openLinkFailed'));
+    expect(mocks.navigate).not.toHaveBeenCalled();
+    expect(mocks.pinSessionOrigin).not.toHaveBeenCalled();
   });
 
   it.each([{ shiftKey: true }, { metaKey: true }, { ctrlKey: true }])(
@@ -307,6 +325,7 @@ describe('sidebar-embedded session navigation boundary', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Remote task' }), modifier);
       await waitFor(() => expect(mocks.openSessionInNewWindow)
         .toHaveBeenCalledWith('remote-task', 'remote-mac', 'm/1'));
+      expect(mocks.pinSessionOrigin).not.toHaveBeenCalled();
       expect(mocks.navigate).not.toHaveBeenCalled();
       expect(onNavigate).not.toHaveBeenCalled();
     },
@@ -315,7 +334,7 @@ describe('sidebar-embedded session navigation boundary', () => {
   it('supports Shift+Enter on an inline task chip', async () => {
     render(<SessionLinkChip href="cindy://session/local?device=this-mac" label="Local" />);
     fireEvent.keyDown(screen.getByRole('button', { name: 'Local' }), { key: 'Enter', shiftKey: true });
-    await waitFor(() => expect(mocks.openSessionInNewWindow).toHaveBeenCalledWith('local', undefined, null));
+    await waitFor(() => expect(mocks.openSessionInNewWindow).toHaveBeenCalledWith('local', 'this-mac', null));
     expect(mocks.navigate).not.toHaveBeenCalled();
   });
 
@@ -358,6 +377,7 @@ describe('sidebar-embedded session navigation boundary', () => {
   });
 
   it('routes an unmirrored remote history link through its host before resolving the task', async () => {
+    mocks.getLocalSession.mockResolvedValue(null);
     render(<SessionLinkChip href="cindy://session/archived-task?device=remote-mac" />);
     expect(mocks.getSession).not.toHaveBeenCalled();
     expect(mocks.pinSessionOrigin).not.toHaveBeenCalled();
@@ -366,7 +386,8 @@ describe('sidebar-embedded session navigation boundary', () => {
 
     await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/archived-task', undefined));
     expect(mocks.pinSessionOrigin).toHaveBeenCalledWith('remote-mac', 'archived-task');
-    expect(mocks.pinSessionOrigin.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(mocks.invoke).toHaveBeenCalledWith('remote-mac', 'local-db:sessions:get', ['archived-task']);
+    expect(mocks.invoke.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.resolveSessionRoute.mock.invocationCallOrder[0]!,
     );
   });
@@ -431,7 +452,7 @@ describe('sidebar-embedded session navigation boundary', () => {
     );
 
     fireEvent.click(screen.getByRole('button'));
-    expect(mocks.resolveSessionRoute).toHaveBeenCalledWith('session-target', null, { remote: false });
+    await waitFor(() => expect(mocks.resolveSessionRoute).toHaveBeenCalledWith('session-target', { id: 'session-target' }, { remote: false, deviceId: null }));
     view.unmount();
 
     await act(async () => {
@@ -706,7 +727,7 @@ describe('sidebar-embedded session navigation boundary', () => {
     render(<SessionLinkChip href="xdt-maker://session/session-d" label="Session D" />);
     fireEvent.click(screen.getByRole('button'));
 
-    await waitFor(() => expect(mocks.resolveSessionRoute).toHaveBeenCalledWith('session-d', null, { remote: false }));
+    await waitFor(() => expect(mocks.resolveSessionRoute).toHaveBeenCalledWith('session-d', { id: 'session-d' }, { remote: false, deviceId: null }));
     expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/session-d', undefined);
   });
 
@@ -729,7 +750,7 @@ describe('sidebar-embedded session navigation boundary', () => {
 
     fireEvent.click(screen.getByRole('button'));
     await waitFor(() =>
-      expect(mocks.resolveSessionRoute).toHaveBeenCalledWith('session-message', null, { remote: false }),
+      expect(mocks.resolveSessionRoute).toHaveBeenCalledWith('session-message', { id: 'session-message' }, { remote: false, deviceId: null }),
     );
     expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/session-message', {
       state: {

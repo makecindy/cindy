@@ -24,14 +24,17 @@ import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 
 import { cn } from '@/lib/utils';
 import { useOptionalAuthDeviceId } from '@/contexts/AuthContext';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { parseSessionDeepLinkHref } from '@/lib/deepLink';
-import { getSessionRouteOwnerId, resolveSessionRoute } from '@/lib/orcaSessionIdentity';
+import { getSessionRouteOwnerId } from '@/lib/orcaSessionIdentity';
 import { resolveSessionMessageText } from '@/lib/sessionMessageText';
+import { resolveSessionNavigationRoute } from '@/lib/sessionNavigationTarget';
 import * as sessionService from '@/lib/sessionService';
 import {
-  remoteProjectsStore,
+  getSessionDeviceId,
   useRemoteProjectSessions,
 } from '@/features/device-link/remoteProjectsStore';
+import { getLastVerifiedSessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import {
   useSessionNavigationIntent,
   useSessionNavigationMode,
@@ -75,34 +78,22 @@ export function useSessionLinkTarget(href: string) {
   );
   const openTarget = async (separate: boolean) => {
     if (!target || !sessionId) return;
-    // 只在点击时读一次远程镜像快照：不订阅整份远程任务列表，避免每个链接/来源标签
-    // 在列表变化时重渲染并各自扫描（来源标签随长聊天大量挂载）。
-    const remoteSession = remoteProjectsStore.getVisibleMergedRemoteSessions().find((s) =>
-      s.id === sessionId && (!targetDeviceId || s.deviceLinkDeviceId === targetDeviceId)) ?? null;
+    const owner = getDataOwnerGeneration();
     const navigationRequestVersion = ++navigationRequestVersionRef.current;
-    const resolveTargetRoute = async () => {
-      let deviceId = targetDeviceId ?? remoteProjectsStore.getSessionDeviceId(sessionId);
-      if (deviceId) {
-        const selfDeviceId = localDeviceId ?? (await window.electronAPI.getDeviceId());
-        if (navigationRequestVersionRef.current !== navigationRequestVersion) return null;
-        // 归档任务可能尚未进入远程镜像；先登记链接的归属，再由现有传输层按设备读取。
-        if (deviceId !== selfDeviceId) {
-          remoteProjectsStore.pinSessionOrigin(deviceId, sessionId);
-        } else {
-          deviceId = undefined;
-        }
-      }
+    const isCurrent = () => navigationRequestVersionRef.current === navigationRequestVersion
+      && isDataOwnerGenerationCurrent(owner);
+    try {
       if (separate) {
+        // The destination window validates this hint against its own data.
+        const deviceId = targetDeviceId ?? getSessionDeviceId(sessionId, true)
+          ?? getLastVerifiedSessionDeviceId(sessionId);
         await window.electronAPI.maker.openSessionInNewWindow(sessionId, deviceId, messageClientId);
-        return null;
+        return;
       }
-      return resolveSessionRoute(sessionId, remoteSession, { remote: !!deviceId });
-    };
-    // device-link 远程会话本地无 row,resolveSessionRoute 内部的 sessionService.get
-    // 会 miss → 远程 Orca 会话被当普通会话路由,后续 redirect 会丢 searchJump 锚点。
-    // 把远程镜像里的 session 对象直接传入,让 Orca 路由一步到位(Codex review P2)。
-    await resolveTargetRoute().then((route) => {
-      if (!route || navigationRequestVersionRef.current !== navigationRequestVersion) return;
+      const route = await resolveSessionNavigationRoute({
+        sessionId, deviceHint: targetDeviceId, selfDeviceId: localDeviceId, isCurrent,
+      });
+      if (!route || !isCurrent()) return;
       reportSessionNavigation?.(sessionId, getSessionRouteOwnerId(route) ?? sessionId);
       navigate(
         route,
@@ -120,7 +111,9 @@ export function useSessionLinkTarget(href: string) {
             }
           : undefined,
       );
-    });
+    } catch (error) {
+      if (isCurrent()) throw error;
+    }
   };
   return { openTarget, navigationMode };
 }

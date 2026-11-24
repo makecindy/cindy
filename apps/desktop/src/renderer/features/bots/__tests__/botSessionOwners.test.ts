@@ -144,28 +144,21 @@ describe('伙伴归属表', () => {
 });
 
 describe('通知入口在伙伴投影未加载时的路由', () => {
-  // External task links carry a device, including this computer's own id. Resolve
-  // it within the existing latest-entry guard before consulting local Bot ownership.
-  it.each([true, false])('routes an explicit device without letting a same-id local Bot win (remote=%s)', async (remote) => {
+  // External links carry a candidate device. The ordinary entry validates
+  // ownership before using a same-ID companion projection.
+  it('keeps an explicit candidate device attached to the validation entry', () => {
     const openOrdinary = vi.fn();
     const openBotRoute = vi.fn();
     const readKnownBotRoute = vi.fn(() => ({ route: '/bots/local', consumesAlert: false }));
     const open = createSessionEntryNavigator({
-      isRemoteDevice: async () => remote,
       readKnownBotRoute,
       resolveBotRoute: vi.fn(),
       openBotRoute, consumeAlert: vi.fn(), openOrdinary,
     });
     open('same', 'message-1', undefined, 'device-1');
-    await Promise.resolve();
-    if (remote) {
-      expect(openOrdinary).toHaveBeenCalledWith('same', 'message-1', expect.any(Function), 'device-1');
-      expect(readKnownBotRoute).not.toHaveBeenCalled();
-      expect(openBotRoute).not.toHaveBeenCalled();
-    } else {
-      expect(openBotRoute).toHaveBeenCalledWith('/bots/local', undefined, 'message-1', 'same');
-      expect(openOrdinary).not.toHaveBeenCalled();
-    }
+    expect(openOrdinary).toHaveBeenCalledWith('same', 'message-1', expect.any(Function), 'device-1');
+    expect(readKnownBotRoute).not.toHaveBeenCalled();
+    expect(openBotRoute).not.toHaveBeenCalled();
   });
 
   it('keeps an explicitly local session out of the cached remote companion route', () => {
@@ -181,19 +174,16 @@ describe('通知入口在伙伴投影未加载时的路由', () => {
     expect(openBotRoute).not.toHaveBeenCalled();
   });
 
-  it('drops a delayed device lookup after a newer entry has opened', async () => {
-    let resolveDevice!: (remote: boolean) => void;
-    const openOrdinary = vi.fn();
+  it('invalidates a device-qualified entry when another task opens', () => {
+    const openOrdinary = vi.fn<Parameters<typeof createSessionEntryNavigator>[0]['openOrdinary']>();
     const open = createSessionEntryNavigator({
-      isRemoteDevice: () => new Promise((resolve) => { resolveDevice = resolve; }),
       readKnownBotRoute: () => null, resolveBotRoute: async () => null,
       openBotRoute: vi.fn(), consumeAlert: vi.fn(), openOrdinary,
     });
     open('old', undefined, undefined, 'other-mac');
     open('new');
-    resolveDevice(true);
-    await Promise.resolve();
-    expect(openOrdinary).toHaveBeenCalledTimes(1);
+    expect(openOrdinary.mock.calls[0][2]()).toBe(false);
+    expect(openOrdinary.mock.calls[1][2]()).toBe(true);
     expect(openOrdinary).toHaveBeenCalledWith('new', undefined, expect.any(Function));
   });
 

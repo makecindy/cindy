@@ -24,8 +24,6 @@ export default {
   notCovered: 'Pending approvals, live guest content, teardown, session switching and native macOS pointer hit testing',
   stubs: {
     'src/renderer/lib/makerChatStore': 'export const makerChatStore = { subscribe: () => () => {}, getSnapshot: () => ({}) };',
-    'src/renderer/features/device-link/stickySessionOrigin':
-      'export const getStickySessionDeviceId = () => undefined;',
     'src/renderer/features/device-link/remoteProjectsStore':
       'export const getSessionDeviceId = () => undefined; export const remoteProjectsStore = { subscribe: () => () => {} };',
   },

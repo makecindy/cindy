@@ -579,6 +579,8 @@ interface CCAgentSessionViewProps {
   /** Topic root and reply divider, inside the existing message scroller. */
   messageStreamHeader?: ReactNode;
   sessionIdProp?: string;
+  /** A Team record places this embedded task on the current computer. */
+  localSession?: boolean;
   /** Host-read metadata for an embedded remote task intentionally absent from task lists. */
   sessionSnapshotProp?: Session | null;
   /**
@@ -887,7 +889,8 @@ export function CCAgentSessionView(props: CCAgentSessionViewProps) {
   }
   return (
     <SessionRouteOriginGate sessionId={props.sessionIdProp ?? sessionId}
-      ownsWindowRoute={!props.navigationMode || props.navigationMode === 'route-owner'}>
+      ownsWindowRoute={!props.navigationMode || props.navigationMode === 'route-owner'}
+      localSession={props.localSession}>
       <CindyMakeSessionGate sessionId={props.sessionIdProp ?? sessionId}>
         <CCAgentSessionContent {...props} />
       </CindyMakeSessionGate>
@@ -1211,9 +1214,9 @@ function CCAgentSessionContent({
   // 返回同一字符串,避免下游 effect 无谓重跑)。
   const wasRemoteSessionRef = useRef(false);
   const lastRemoteSessionIdRef = useRef<string | undefined>(undefined);
-  const storeRemoteDeviceId = useMemo(
-    () => (sessionId ? getSessionDeviceId(sessionId) : undefined),
-    [sessionId, remoteProjectSessions],
+  const storeRemoteDeviceId = useSyncExternalStore(
+    remoteProjectsStore.subscribe,
+    () => (sessionId ? getSessionDeviceId(sessionId, true) : undefined),
   );
   // 切会话:在 render 阶段同步重置"曾是远程会话"标记(不靠 effect,避免新会话首帧误判)。
   if (lastRemoteSessionIdRef.current !== sessionId) {
@@ -1228,9 +1231,9 @@ function CCAgentSessionContent({
   // 正是 makerApiForSticky 等消费方读的同一份,而它只在被查询时预热。视图各记各的,会出现
   // 「视图这份热了、模块那份还是冷的」—— 用户在**首次开启协同之前**撞上 relay 瞬断,
   // makerApiForSticky 就会退回本机,在控制端建出 team。一份缓存,不会有两份各自预热的问题。
-  const remoteDeviceId = useMemo(
+  const remoteDeviceId = useSyncExternalStore(
+    remoteProjectsStore.subscribe,
     () => (sessionId ? getStickySessionDeviceId(sessionId) : undefined),
-    [sessionId, remoteProjectSessions],
   );
   // 右栏本地-only 能力需要区分三态：字符串=远端、null=已确认本机、undefined=归属尚未解析。
   // 冷启动 / bootstrap 竞态期间宁可暂时禁用系统文件打开，也不能把被控端 file:// 交给控制端。
@@ -1436,6 +1439,7 @@ function CCAgentSessionContent({
   useEffect(() => {
     if (!sessionId) return;
     if (storeRemoteDeviceId !== undefined) {
+      // Correcting an unchecked origin for a local task is not a remote exit.
       wasRemoteSessionRef.current = true;
       return;
     }

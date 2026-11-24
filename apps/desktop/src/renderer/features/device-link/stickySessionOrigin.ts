@@ -7,27 +7,51 @@
  * 把远程会话的操作降级回本机(如 learn:apply 落到控制端)比隧道失败严重得多。
  *
  * 语义:查询时先读 store 现值;有值则记入缓存并返回;无值时返回最后已知值。
- * 设备变化(dev→dev')由现值覆盖。缓存按 sessionId 累积、不主动清理 —— 单次
- * app 运行内会话数量有限,量级可忽略;会话真正的归属不会从远程变回本机
- * (本机会话永远不会进过这张表),故粘滞不会造成误判。
+ * 同一账号重连保留结果。记录归属是否由业务记录或镜像确认，便于导航校验
+ * 纠正旧线索时保留已确认的远端归属。
  *
  * 各传输层 / hooks 统一走这里,粘滞状态跨适配器重建、effect 重跑存活
  * (Codex review #548:per-resolver 粘滞在 effect 重建时会丢)。
  */
 
 import { getSessionDeviceId } from './remoteProjectsStore';
+import { getDataOwnerGeneration, subscribeDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 
-const lastKnown = new Map<string, string>();
+let ownerId = getDataOwnerGeneration().dataOwnerId;
+const lastKnown = new Map<string, { deviceId: string; verifiedDeviceId?: string }>();
+
+function ensureCurrentOwner(): void {
+  const currentOwnerId = getDataOwnerGeneration().dataOwnerId;
+  if (currentOwnerId === ownerId) return;
+  ownerId = currentOwnerId;
+  lastKnown.clear();
+}
+subscribeDataOwnerGeneration(ensureCurrentOwner);
 
 /** 解析会话归属设备:store 现值优先,清空窗口内回退最后已知值。 */
 export function getStickySessionDeviceId(sessionId: string | null | undefined): string | undefined {
   if (!sessionId) return undefined;
+  ensureCurrentOwner();
+  const previous = lastKnown.get(sessionId);
   const fresh = getSessionDeviceId(sessionId);
   if (fresh !== undefined) {
-    lastKnown.set(sessionId, fresh);
+    const verifiedDeviceId = getSessionDeviceId(sessionId, true) ?? previous?.verifiedDeviceId;
+    if (fresh !== previous?.deviceId || verifiedDeviceId !== previous.verifiedDeviceId) {
+      lastKnown.set(sessionId, { deviceId: fresh, verifiedDeviceId });
+    }
     return fresh;
   }
-  return lastKnown.get(sessionId);
+  return previous?.deviceId;
+}
+
+export function getLastVerifiedSessionDeviceId(sessionId: string): string | undefined {
+  ensureCurrentOwner();
+  return lastKnown.get(sessionId)?.verifiedDeviceId;
+}
+
+export function forgetUnverifiedStickySessionOrigin(sessionId: string): void {
+  ensureCurrentOwner();
+  if (!lastKnown.get(sessionId)?.verifiedDeviceId) lastKnown.delete(sessionId);
 }
 
 /** 测试专用:清空粘滞缓存。 */

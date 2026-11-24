@@ -78,10 +78,8 @@ const bundle = await buildPage(
     stubs: {
       'src/renderer/lib/makerChatStore':
         'export const makerChatStore={subscribe:()=>()=>{},getSnapshot:()=>({})};',
-      'src/renderer/features/device-link/stickySessionOrigin':
-        'export const getStickySessionDeviceId=()=>undefined;',
       'src/renderer/features/device-link/remoteProjectsStore':
-        'export const remoteProjectsStore={subscribe:()=>()=>{}};',
+        'export const getSessionDeviceId=()=>undefined; export const remoteProjectsStore={subscribe:()=>()=>{}};',
     },
   },
   overlay,

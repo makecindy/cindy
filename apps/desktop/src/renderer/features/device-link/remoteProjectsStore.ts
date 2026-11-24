@@ -40,12 +40,13 @@ import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy
  */
 
 import { useSyncExternalStore } from 'react';
+import { getDataOwnerGeneration, subscribeDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
 import type { DeviceLinkConnectionStatus, Session } from '@/lib/ccAgent.types';
 import type { ListStatusFilter } from '@/lib/sessionService';
 import type { AutomationScheduleSessionInfo } from '../cc-agent/lib/automationSidebarGrouping';
 import { buildBindingMap, type ScheduleBinding } from '../scheduler/lib/scheduleBindingIndex';
-import { clearCachedMessages } from './mirrorCacheClient';
+import { cancelSessionListPersist, clearCachedMessages } from './mirrorCacheClient';
 
 export type RemoteSessionStatus = Exclude<ListStatusFilter, 'all'>;
 
@@ -209,15 +210,14 @@ const sessionTitleIndex = new Map<string, string>();
  * 那个窗口里 sessionDeviceIndex 没有这条,`getSessionDeviceId` 返回 undefined —— 传输层据此把
  * 一个**远程**会话的操作发给本机 maker:首条消息、setGoal、流订阅全落错边(#807 review P1)。
  *
- * 创建成功或打开带设备归属的链接后立刻把目标钉进来。recompute 时钉子优先于其它设备
+ * 业务记录或创建回执确认归属后把目标钉进来。recompute 时钉子优先于其它设备
  * 的同 id 分片(复制的任务可能保留 id)。钉子只选择 origin 与标题,不伪造会话行 —— 会话进列表仍等
  * 权威快照。
  *
- * 不主动清理(含 clear / removeDevice):与 stickySessionOrigin 同一论证 —— 归属是单向的
- * (会话不会从远程变回本机,本机会话永远不会进这张表),单次 app 运行内新建会话数量有限。
+ * 同一账号重连和 removeDevice 保留钉子。链接只提供候选，需要先独立校验。
  * 设备真被解除配对后,钉子只会让操作走隧道并明确报错,而不是静默落到本机执行 —— 后者严重得多。
  */
-const pinnedOrigins = new Map<string, string>();
+const pinnedOrigins = new Map<string, { deviceId: string; verified: boolean }>();
 
 const EMPTY: Session[] = [];
 
@@ -492,7 +492,7 @@ function recompute(): void {
   sessionTitleIndex.clear();
   // 先铺 origin 钉子:分片还没到的新建远程会话也必须能被判定为远程(见 pinnedOrigins)。
   // 其它设备的同 id 分片不能覆盖显式指定的 origin。
-  for (const [sessionId, deviceId] of pinnedOrigins) sessionDeviceIndex.set(sessionId, deviceId);
+  for (const [sessionId, { deviceId }] of pinnedOrigins) sessionDeviceIndex.set(sessionId, deviceId);
   if (shards.size === 0) {
     mergedSnapshot = EMPTY;
   } else {
@@ -504,7 +504,7 @@ function recompute(): void {
           shard.deviceId,
         );
         flat.push(projected);
-        const pinnedDeviceId = pinnedOrigins.get(s.id);
+        const pinnedDeviceId = pinnedOrigins.get(s.id)?.deviceId;
         if (!pinnedDeviceId || pinnedDeviceId === shard.deviceId) {
           sessionDeviceIndex.set(s.id, shard.deviceId);
           if (projected.title) sessionTitleIndex.set(s.id, projected.title);
@@ -1201,7 +1201,8 @@ const actions = {
     if (bootstrapFailedDeviceIds.size > 0) bootstrapFailedDeviceIds = new Set();
     if (archivedFailedDeviceIds.size > 0) archivedFailedDeviceIds = new Set();
     if (shards.size === 0) {
-      if (previewsChanged) recompute();
+      // An owner change can remove pin-only origins even with an empty mirror.
+      if (previewsChanged || sessionDeviceIndex.size > pinnedOrigins.size) recompute();
       else if (bootstrapStateChanged || initialDiscoveryChanged) subs.forEach(fn => fn());
       return;
     }
@@ -1348,7 +1349,7 @@ const actions = {
     pendingStatuses.clear();
   },
 
-  /** 测试专用:清空 origin 钉子(生产期刻意不清,见 pinnedOrigins)。 */
+  /** 测试专用:清空 origin 钉子。 */
   __resetPinnedOriginsForTest(): void {
     pinnedOrigins.clear();
     recompute();
@@ -1442,18 +1443,37 @@ const actions = {
    * origin 判定:给定 sessionId 返回其所属被控设备 deviceId;本地会话返回 undefined。
    * 传输层 / SessionView / 消息分页据此决定走本机 IPC 还是 deviceLink 隧道。
    */
-  getSessionDeviceId(sessionId: string): string | undefined {
+  getSessionDeviceId(sessionId: string, verifiedOnly = false): string | undefined {
+    const pin = verifiedOnly ? pinnedOrigins.get(sessionId) : undefined;
+    if (pin?.verified === false && !shards.get(pin.deviceId)?.sessions.some(row =>
+      row.id === sessionId && row.status !== 'deleted')) {
+      return undefined;
+    }
     return sessionDeviceIndex.get(sessionId);
   },
 
   /**
-   * 远程新建会话后**立刻**登记归属(见 pinnedOrigins)。只让 origin 判定即刻可用,不制造会话行;
-   * 权威快照回流后由分片派生值接管。幂等。
+   * 业务记录确认后登记归属，不制造会话行。创建预览仍可暂存待确认归属。
+   * 链接中的设备参数需经会话入口校验再登记。
    */
-  pinSessionOrigin(deviceId: string, sessionId: string): void {
-    if (pinnedOrigins.get(sessionId) === deviceId) return;
-    pinnedOrigins.set(sessionId, deviceId);
+  pinSessionOrigin(deviceId: string, sessionId: string, { verified = true } = {}): void {
+    const existing = pinnedOrigins.get(sessionId);
+    if (existing?.verified && !verified) return;
+    if (existing?.deviceId === deviceId && existing.verified === verified) return;
+    pinnedOrigins.set(sessionId, { deviceId, verified });
     recompute();
+  },
+
+  getVerifiedPinnedSessionDeviceId(sessionId: string): string | undefined {
+    const origin = pinnedOrigins.get(sessionId);
+    return origin?.verified ? origin.deviceId : undefined;
+  },
+
+  /** Call after clearing a disproven sticky origin so subscribers read the correction. */
+  clearUnverifiedSessionOrigin(sessionId: string): void {
+    if (pinnedOrigins.get(sessionId)?.verified) return;
+    if (pinnedOrigins.delete(sessionId)) recompute();
+    else subs.forEach(fn => fn());
   },
 
   /** 取设备友好名(tooltip / 日志用)。 */
@@ -1662,9 +1682,22 @@ export const remoteProjectsStore = {
   subscribeRemoved: subscribeRemoteSessionRemoval,
 };
 
+let originsOwnerId = getDataOwnerGeneration().dataOwnerId;
+subscribeDataOwnerGeneration(() => {
+  const nextOwnerId = getDataOwnerGeneration().dataOwnerId;
+  if (nextOwnerId === originsOwnerId) return;
+  const hadOwner = originsOwnerId !== null;
+  originsOwnerId = nextOwnerId;
+  if (!hadOwner && shards.size === 0 && pinnedOrigins.size === 0 && creationPreviews.size === 0) return;
+  pinnedOrigins.clear();
+  actions.clear();
+  // clear() can notify the old mirror writer before its owner effect is cleaned up.
+  cancelSessionListPersist();
+});
+
 /** 便捷导出:传输层只关心 origin 判定。 */
-export function getSessionDeviceId(sessionId: string): string | undefined {
-  return actions.getSessionDeviceId(sessionId);
+export function getSessionDeviceId(sessionId: string, verifiedOnly = false): string | undefined {
+  return actions.getSessionDeviceId(sessionId, verifiedOnly);
 }
 
 /**

@@ -20,6 +20,7 @@ import { CCAgentSessionView } from './CCAgentSessionView';
 import { CreateWorkerPopover } from './CreateWorkerPopover';
 import { EditWorkerPopover } from './EditWorkerPopover';
 import { RemoteWorkerSessionPane } from './RemoteWorkerSessionPane';
+import { SessionEntryError } from './SessionEntryError';
 import { WorkerListToolbar } from './RolePillDropdown';
 import { useOrcaWorkerSelection } from './hooks/useOrcaWorkerSelection';
 import { useWorkerAgentDevices } from './hooks/useWorkerAgentDevices';
@@ -66,13 +67,13 @@ export interface OrcaWorkerPanelProps {
  * 「Local project required」。远程 worker 的读取不得回退到本机。
  *
  * 只登记路由;访问仍由 main 的 invoke 边界按设备与任务授权。已归属其他设备的不改。
- * 返回值:选中的 worker 是否已经有归属,没有时任务视图先不挂载。
+ * 选中的 Worker 要等归属落地再挂载；不同设备上的同 ID 不能共用传输。
  */
 function useLeadDeviceWorkerOrigins(
   leadDeviceId: string | null,
   workerSessionIds: readonly string[],
   selectedSessionId: string | null,
-): boolean {
+): 'ready' | 'pending' | 'conflict' {
   // 数组引用每次渲染都会变:用内容键驱动,effect 内从键还原输入。
   const key = leadDeviceId
     ? JSON.stringify([leadDeviceId, [...workerSessionIds, ...(selectedSessionId ? [selectedSessionId] : [])]])
@@ -81,16 +82,17 @@ function useLeadDeviceWorkerOrigins(
     if (!key) return;
     const [deviceId, sessionIds] = JSON.parse(key) as [string, string[]];
     for (const sessionId of new Set(sessionIds)) {
-      if (remoteProjectsStore.getSessionDeviceId(sessionId) === undefined) {
+      if (remoteProjectsStore.getSessionDeviceId(sessionId, true) === undefined) {
         remoteProjectsStore.pinSessionOrigin(deviceId, sessionId);
       }
     }
   }, [key]);
   const selectedOrigin = useSyncExternalStore(
     remoteProjectsStore.subscribe,
-    () => (selectedSessionId ? remoteProjectsStore.getSessionDeviceId(selectedSessionId) : undefined),
+    () => (selectedSessionId ? remoteProjectsStore.getSessionDeviceId(selectedSessionId, true) : undefined),
   );
-  return !leadDeviceId || !selectedSessionId || selectedOrigin !== undefined;
+  if (!leadDeviceId || !selectedSessionId || selectedOrigin === leadDeviceId) return 'ready';
+  return selectedOrigin ? 'conflict' : 'pending';
 }
 
 function sameVisibleSessionPayload(
@@ -164,7 +166,7 @@ export function OrcaWorkerPanel({
     shownWorker && shownWorker.sessionId === workerSessionId
       ? shownWorker.executionDevice
       : undefined;
-  const workerOriginReady = useLeadDeviceWorkerOrigins(
+  const workerOrigin = useLeadDeviceWorkerOrigins(
     typeof deviceId === 'string' ? deviceId : null,
     workers.filter((worker) => !worker.executionDevice && worker.sessionId).map((worker) => worker.sessionId),
     workerSessionId && !remoteDevice ? workerSessionId : null,
@@ -302,10 +304,13 @@ export function OrcaWorkerPanel({
             viewVisible={viewVisible}
             chatRealtime={chatRealtime}
           />
-        ) : workerSessionId && !workerOriginReady ? null : workerSessionId ? (
+        ) : workerOrigin === 'conflict' ? (
+          <SessionEntryError reason="denied" />
+        ) : workerOrigin === 'pending' ? null : workerSessionId ? (
           <CCAgentSessionView
             key={workerSessionId}
             sessionIdProp={workerSessionId}
+            localSession={deviceId === null}
             compact
             orcaMode
             compactToolbar

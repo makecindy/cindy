@@ -115,7 +115,6 @@ export async function resolveBotRouteForSessionEntry(
 
 export interface SessionEntryNavigatorDeps {
   /** Compare an explicit link device with this computer before consulting local ownership. */
-  isRemoteDevice?: (deviceId: string) => Promise<boolean>;
   /** The target from the projection already in memory; null when it does not know the Session. */
   readKnownBotRoute: (sessionId: string) => BotSessionEntryTarget | null;
   /** Re-reads the projection for a Session it did not know (see resolveBotRouteForSessionEntry). */
@@ -184,16 +183,8 @@ export function createSessionEntryNavigator(
     committedSinceOpen = new Set();
     const ownerCurrent = deps.captureOwner?.() ?? (() => true);
     const isLatest = () => sequence === entry && ownerCurrent();
-    if (deviceId === 'local') {
-      deps.openOrdinary(sessionId, messageClientId, isLatest, deviceId);
-      return;
-    }
-    if (deviceId && deps.isRemoteDevice) {
-      void deps.isRemoteDevice(deviceId).then((remote) => {
-        if (!isLatest() || committedSinceOpen.size > 0) return;
-        if (remote) deps.openOrdinary(sessionId, messageClientId, isLatest, deviceId);
-        else openLocal();
-      }).catch(() => undefined);
+    if (deviceId) {
+      deps.openOrdinary(sessionId, messageClientId, () => isLatest() && committedSinceOpen.size === 0, deviceId);
       return;
     }
     openLocal();

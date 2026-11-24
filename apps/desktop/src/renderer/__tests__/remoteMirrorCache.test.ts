@@ -1000,10 +1000,10 @@ describe('缓存写点纪律', () => {
     // 已清掉旧 token;读完成时若直接写回,会把 A 的 owner root / 代际重新种回,导致 B 复用同一
     // sessionId 时被 main fail-closed 持续拒写。读完成前先校验 owner 仍是发起时身份,不是则丢弃。
     const s = sid();
-    registerRemote(s);
 
     // 账号 A 发起一次受保护缓存读,让它挂起(读完成前切换账号)
     setDataOwnerGeneration('owner-a', 1);
+    registerRemote(s);
     let resolveRead!: (v: CachedRead) => void;
     getMessages.mockImplementationOnce(
       () =>
@@ -1031,6 +1031,7 @@ describe('缓存写点纪律', () => {
     expect(rows).toEqual([]);
 
     // B 发起远端请求:owner root 应未知(B 的受保护读还没跑),写入不携带 A 的残留
+    registerRemote(s);
     cachedOwnerToken = 'opaque-owner-token-b';
     remoteList = [dbMessage(s, 'm1', 'x', '2026-01-01T00:00:00.000Z')];
     await listMessagesFor(s);
@@ -1543,8 +1544,8 @@ describe('会话作废计数补读的等待纪律', () => {
 
   it('补读完成前切换账号:旧账号计数作废且不写回 knownMainInvalidation', async () => {
     const s = sid();
-    registerRemote(s);
     setDataOwnerGeneration('owner-a', 1);
+    registerRemote(s);
     let resolveRead!: (value: CachedRead) => void;
     getMessages.mockImplementationOnce(
       () =>
@@ -1569,6 +1570,7 @@ describe('会话作废计数补读的等待纪律', () => {
     expect(putMessages).not.toHaveBeenCalled();
 
     // 第二次仍须补读:99 属于旧 owner,不能成为 B 的已知计数。
+    registerRemote(s);
     putMessages.mockClear();
     remoteList = [dbMessage(s, 'm2', 'y', '2026-01-01T00:00:01.000Z')];
     await listMessagesFor(s);

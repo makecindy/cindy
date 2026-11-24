@@ -1,63 +1,58 @@
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
-import { useLocation, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
-import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
-import { getSessionFor } from '@/lib/makerTransport';
+import { getDataOwnerGeneration, subscribeDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { resolveSessionNavigationRoute, restoreSessionNavigationOrigin } from '@/lib/sessionNavigationTarget';
+import { standardSessionRoute } from '@/lib/orcaSessionIdentity';
 import { SessionEntryError, sessionEntryFailure } from './SessionEntryError';
 
 /** Restore a route's host before any nested metadata read or composer mounts. */
-export function SessionRouteOriginGate({ sessionId, ownsWindowRoute, children }: {
+export function SessionRouteOriginGate({ sessionId, ownsWindowRoute, localSession, children }: {
   sessionId?: string;
   ownsWindowRoute: boolean;
+  localSession?: boolean;
   children: ReactNode;
 }) {
   const { sessionId: routeSessionId } = useParams<{ sessionId: string }>();
-  const { search } = useLocation();
+  const { search, state } = useLocation();
+  const navigate = useNavigate();
   // An embedded task must never inherit the host of the surrounding route.
-  const deviceId = ownsWindowRoute && sessionId === routeSessionId
+  const routeDevice = ownsWindowRoute && sessionId === routeSessionId
     ? new URLSearchParams(search).get('device') : null;
-  // Transport is still keyed by session id. If that id has a remote origin,
-  // refuse to mount a local editor rather than send its reads or writes there.
-  const localConflict = useSyncExternalStore(remoteProjectsStore.subscribe,
-    () => deviceId === 'local' && !!getStickySessionDeviceId(sessionId));
-  const key = deviceId && deviceId !== 'local' && sessionId ? JSON.stringify([sessionId, deviceId]) : null;
+  const owner = useSyncExternalStore(subscribeDataOwnerGeneration, getDataOwnerGeneration);
+  const embeddedLocalConflict = useSyncExternalStore(remoteProjectsStore.subscribe,
+    () => Boolean(localSession && getStickySessionDeviceId(sessionId)));
+  const deviceId = routeDevice ?? (embeddedLocalConflict ? 'local' : null);
+  const key = deviceId && sessionId
+    ? JSON.stringify([owner.dataOwnerId, owner.generation, sessionId, deviceId]) : null;
   const [registered, setRegistered] = useState<{ key: string; failure?: ReturnType<typeof sessionEntryFailure> } | null>(null);
   const [retry, setRetry] = useState(0);
   useEffect(() => {
     if (!key || !sessionId || !deviceId) return;
     let disposed = false;
-    const owner = getDataOwnerGeneration();
-    const valid = () => !disposed && isDataOwnerGenerationCurrent(owner);
-    const existing = remoteProjectsStore.getSessionDeviceId(sessionId);
-    if (existing && existing !== deviceId) {
-      setRegistered({ key, failure: 'denied' });
-      return;
-    }
-    // This is only a routing hint. The existing Main invoke boundary still
-    // authorizes the device and session; a URL cannot grant remote access.
-    remoteProjectsStore.pinSessionOrigin(deviceId, sessionId);
+    const isCurrent = () => !disposed && owner === getDataOwnerGeneration();
+    const target = { sessionId, deviceHint: deviceId, isCurrent };
     void (async () => {
-      if (!remoteProjectsStore.getDeviceSessions(deviceId).some(row => row.id === sessionId)) {
-        // Hidden branches never arrive in the ordinary task listing. Recover
-        // their metadata explicitly when the asynchronous disk cache is empty.
-        const current = remoteProjectsStore.captureSessionRead(deviceId, sessionId);
-        const value = await getSessionFor(sessionId);
-        if (!valid()) return;
-        if (!value || value.id !== sessionId) { setRegistered({ key, failure: 'missing' }); return; }
-        if (current()) {
-          remoteProjectsStore.mergeDeviceSessions(deviceId, remoteProjectsStore.getDeviceName(deviceId) ?? '',
-            [current.mergeActivity(value)]);
-        } else if (!remoteProjectsStore.getDeviceSessions(deviceId).some(row => row.id === sessionId)) {
-          throw new Error('Remote task read invalidated');
-        }
+      if (!routeDevice) {
+        if (await restoreSessionNavigationOrigin(target) && isCurrent()) setRegistered({ key });
+        return;
       }
-      if (valid()) setRegistered({ key });
-    })().catch(error => { if (valid()) setRegistered({ key, failure: sessionEntryFailure(error) }); });
+      const route = await resolveSessionNavigationRoute(target, { exactTask: true });
+      if (!route || !isCurrent()) return;
+      if (route === '/cc-agent') throw new Error('The task route is unavailable');
+      if (route === standardSessionRoute(sessionId)) {
+        setRegistered({ key });
+        return;
+      }
+      const leadRoute = new URL(route, 'https://cindy.invalid');
+      const params = new URLSearchParams(search);
+      for (const [name, value] of leadRoute.searchParams) params.set(name, value);
+      navigate(`${leadRoute.pathname}?${params}`, { replace: true, state });
+    })().catch((error) => { if (isCurrent()) setRegistered({ key, failure: sessionEntryFailure(error) }); });
     return () => { disposed = true; };
-  }, [key, sessionId, deviceId, retry]);
+  }, [key, sessionId, deviceId, owner, retry, routeDevice, navigate, search, state]);
 
-  if (localConflict) return <SessionEntryError reason="denied" />;
   if (key && registered?.key !== key) return null;
   if (key && registered?.failure) return <SessionEntryError reason={registered.failure} onRetry={() => setRetry(value => value + 1)} />;
   return children;

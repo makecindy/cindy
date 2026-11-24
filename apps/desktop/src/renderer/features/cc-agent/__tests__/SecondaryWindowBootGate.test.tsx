@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -9,7 +9,7 @@ const mocks = vi.hoisted(() => ({
   getBootSessionId: vi.fn<() => string | null>(),
   getBootMessageClientId: vi.fn<() => string | null>(),
   getVisibleMergedRemoteSessions: vi.fn<() => Array<Record<string, unknown>>>(),
-  getSessionFor: vi.fn(),
+  invoke: vi.fn(),
   navigate: vi.fn(),
   pinSessionOrigin: vi.fn(),
   resolveSessionRoute: vi.fn(),
@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('react-router-dom', () => ({
   useNavigate: () => mocks.navigate,
 }));
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 
 vi.mock('@/lib/secondaryWindow', () => ({
   getBootDeviceId: mocks.getBootDeviceId,
@@ -26,17 +27,21 @@ vi.mock('@/lib/secondaryWindow', () => ({
 }));
 
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
+  getSessionDeviceId: () => undefined,
   remoteProjectsStore: {
-    getVisibleMergedRemoteSessions: mocks.getVisibleMergedRemoteSessions,
+    getMergedRemoteSessions: mocks.getVisibleMergedRemoteSessions,
+    getDeviceSessions: () => [],
+    getVerifiedPinnedSessionDeviceId: () => undefined,
+    getCreationPreview: () => undefined,
+    getDeviceName: () => 'Host',
+    captureSessionRead: () => Object.assign(() => true, { mergeActivity: (value: unknown) => value }),
+    mergeDeviceSessions: vi.fn(),
     pinSessionOrigin: mocks.pinSessionOrigin,
   },
 }));
 
-vi.mock('@/lib/makerTransport', () => ({
-  getSessionFor: mocks.getSessionFor,
-}));
-
 vi.mock('@/lib/orcaSessionIdentity', () => ({
+  getSessionRouteOwnerId: (route: string) => /^\/cc-agent\/([^/?#]+)/.exec(route)?.[1] ?? null,
   resolveSessionRoute: mocks.resolveSessionRoute,
 }));
 
@@ -52,17 +57,24 @@ describe('SecondaryWindowBootGate', () => {
     mocks.getBootSessionId.mockReset();
     mocks.getBootMessageClientId.mockReturnValue(null);
     mocks.getVisibleMergedRemoteSessions.mockReset();
-    mocks.getSessionFor.mockReset();
+    mocks.invoke.mockReset().mockImplementation(async (_device: string, _channel: string, [id]: string[]) =>
+      ({ id, orcaRole: id === 'worker-remote' ? 'worker' : 'lead' }));
     mocks.navigate.mockReset();
     mocks.pinSessionOrigin.mockReset();
     mocks.resolveSessionRoute.mockReset();
     mocks.getBootSessionId.mockReturnValue('worker-remote');
     mocks.getBootDeviceId.mockReturnValue('device-remote');
     mocks.getVisibleMergedRemoteSessions.mockReturnValue([]);
+    vi.stubGlobal('electronAPI', {
+      getDeviceId: async () => 'this-mac',
+      localDb: { sessions: { get: async () => null } },
+      deviceLink: { invoke: mocks.invoke },
+    });
   });
 
   afterEach(() => {
     cleanup();
+    vi.unstubAllGlobals();
   });
 
   // Unit regression: these sidebar targets have no local task row at window boot.
@@ -77,9 +89,7 @@ describe('SecondaryWindowBootGate', () => {
     },
   );
 
-  it('reads remote Worker metadata after pinning when the mirror has not hydrated', async () => {
-    const workerSession = { id: 'worker-remote', orcaRole: 'worker' };
-    mocks.getSessionFor.mockResolvedValue(workerSession);
+  it('checks both worker and lead on the named host before registering either', async () => {
     mocks.resolveSessionRoute.mockResolvedValue('/cc-agent/lead-remote?worker=worker-remote');
 
     render(<SecondaryWindowBootGate />);
@@ -90,19 +100,16 @@ describe('SecondaryWindowBootGate', () => {
       }),
     );
     expect(mocks.pinSessionOrigin).toHaveBeenCalledWith('device-remote', 'worker-remote');
-    expect(mocks.getSessionFor).toHaveBeenCalledWith('worker-remote');
-    expect(mocks.resolveSessionRoute).toHaveBeenCalledWith('worker-remote', workerSession);
-    expect(mocks.pinSessionOrigin.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.getSessionFor.mock.invocationCallOrder[0],
-    );
-    expect(mocks.getSessionFor.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.resolveSessionRoute.mock.invocationCallOrder[0],
-    );
+    expect(mocks.pinSessionOrigin).toHaveBeenCalledWith('device-remote', 'lead-remote');
+    expect(mocks.invoke.mock.calls).toEqual([
+      ['device-remote', 'local-db:sessions:get', ['worker-remote']],
+      ['device-remote', 'local-db:sessions:get', ['lead-remote']],
+    ]);
+    expect(mocks.invoke.mock.invocationCallOrder[1]).toBeLessThan(mocks.pinSessionOrigin.mock.invocationCallOrder[0]);
   });
 
   it('retains the message anchor through remote Worker routing and StrictMode effect replay', async () => {
     mocks.getBootMessageClientId.mockReturnValue('message/42');
-    mocks.getSessionFor.mockResolvedValue({ id: 'worker-remote', orcaRole: 'worker' });
     mocks.resolveSessionRoute.mockResolvedValue('/cc-agent/lead-remote?worker=worker-remote');
     render(
       <StrictMode>
@@ -126,5 +133,15 @@ describe('SecondaryWindowBootGate', () => {
         },
       ),
     );
+  });
+
+  // The boot URL carries the same unchecked hint as the source chip. With
+  // no host metadata, the new window exposes the entry failure without binding.
+  it('shows an unavailable task without registering the hinted host', async () => {
+    mocks.invoke.mockResolvedValue(null);
+    render(<SecondaryWindowBootGate />);
+    expect(await screen.findByText('ccAgent.sessionEntry.missing')).toBeTruthy();
+    expect(mocks.navigate).not.toHaveBeenCalled();
+    expect(mocks.pinSessionOrigin).not.toHaveBeenCalled();
   });
 });
