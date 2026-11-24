@@ -1258,7 +1258,11 @@ describe('ProvidersSection — 允许被远程调用与供应商组', () => {
       providerGroup: { command, onChanged: () => () => undefined },
     });
     providersState.providers = [
-      makeProvider('anthropic', { name: 'Anthropic', connected: true, remoteInvocationEnabled: true }),
+      makeProvider('anthropic', {
+        name: 'Anthropic', connected: true, remoteInvocationEnabled: true,
+        models: { 'claude-code': [{ id: 'chat', name: 'Chat fixture', contextWindow: 128_000, efforts: [], defaultEffort: null }] },
+        imageModels: [{ id: 'image', name: 'Image fixture' }],
+      }),
     ];
     const page = (activation: number) => (
       <MemoryRouter initialEntries={['/settings?tab=providers&connect=anthropic']}>
@@ -1300,12 +1304,16 @@ describe('ProvidersSection — 允许被远程调用与供应商组', () => {
 
     // Unit regression: a round trip from a scrolled provider to sharing used to
     // lose both panes. The deep-link cases only checked the selected provider.
+    // The held detail must retain the chosen model filter when its effects reconnect.
+    const imageFilter = () => screen.getByRole('radio', { name: 'newChat.modelSelector.category.image' });
+    fireEvent.click(imageFilter());
     screen.getByTestId('provider-list-scroll').scrollTop = 75;
     screen.getByTestId('provider-detail-scroll').scrollTop = 246;
     fireEvent.click(within(row).getByTestId('provider-share-entry'));
     const sharing = await screen.findByTestId('share-manage-stub');
     expect(sharing.scrollTop).toBe(0);
     fireEvent.click(within(sharing).getByRole('button', { name: 'back to providers' }));
+    expect(imageFilter().getAttribute('aria-checked')).toBe('true');
     expect(screen.getByTestId('provider-list-scroll').scrollTop).toBe(75);
     expect(screen.getByTestId('provider-detail-scroll').scrollTop).toBe(246);
 

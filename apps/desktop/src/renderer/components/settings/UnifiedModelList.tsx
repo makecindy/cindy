@@ -26,7 +26,7 @@ import { modelManagementState } from './modelManagementState';
  * 同一模式下同一轴的控件形态唯一 —— 这是本组件的硬约束(v4 交互稿定稿延续)。
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronDown, Info, Lock, RefreshCw, Search, SlidersHorizontal } from 'lucide-react';
 
@@ -516,14 +516,14 @@ export function UnifiedModelList({
   };
   /** 类型筛选(全部 / 对话 / 图像 / 视频…):只有该来源真存在多类时才渲染整条。 */
   const [kindFilter, setKindFilter] = useState<ModelCategory | 'chat' | 'all'>('all');
+  // The detail is keyed by provider. Reconnecting effects after sharing keeps its
+  // filters and drawer; only a new catalog snapshot supersedes optimistic changes.
+  const previousProvider = useRef(provider);
   useEffect(() => {
-    setPendingDisabled({});
-    setAdvancedRow(null);
-    setAdvancedOpen(false);
-    setKindFilter('all');
-  }, [provider.id]);
-  useEffect(() => {
-    setPendingDisabled({});
+    if (previousProvider.current !== provider) {
+      previousProvider.current = provider;
+      setPendingDisabled({});
+    }
   }, [provider]);
 
   // 报价快照:与模型选择器同两份来源(XD 实付价 / 非 XD 参考价),派生逻辑共用

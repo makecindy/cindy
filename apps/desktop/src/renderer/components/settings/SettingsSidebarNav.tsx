@@ -128,6 +128,7 @@ export function SettingsSidebarNav({
           return (
             <button
               key={tabId}
+              data-settings-search-action="Navigate to the selected settings category"
               id={`settings-tab-${tabId}`}
               type="button"
               role="tab"
