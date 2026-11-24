@@ -1,11 +1,22 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
+import { ipcMain } from 'electron';
+import { notifyAppSettingsChanged } from '../../app-settings/changes.js';
+import { getDesktopSelectableCatalog } from '../../maker-host/createDesktopProviderService.js';
+import { readAuxiliaryModelSettings, readAuxiliaryModelSettingsState, writeAuxiliaryModelSettingsPatch } from '../../utility-model/auxiliary-model-settings-store.js';
+import { reportAuxiliaryChainOutcome } from '../../utility-model/auxiliaryChainOutcomeSink.js';
+import { hasOneshotProviderCredential } from '../../utility-model/oneshotProviderUsability.js';
+import { MAKER_INVOKE } from '../channels.js';
+
+vi.mock('../../app-settings/changes.js', () => ({ notifyAppSettingsChanged: vi.fn() }));
+vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => 'owner', isAppSessionBoundaryPending: () => false }));
 vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
-  getDesktopSelectableCatalog: () => ({ providers: [] }),
+  getDesktopSelectableCatalog: vi.fn(() => ({ providers: [] })),
 }));
 
 vi.mock('../../cindyAiProviderName.js', () => ({ getCindyAiProviderName: () => 'Cindy AI · 心动' }));
 
+vi.mock('../../maker-host/index.js', () => ({ getMaker: () => ({}) }));
 vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn() },
 }));
@@ -28,17 +39,21 @@ vi.mock('../../maker-host/provider-order-store.js', () => ({
 }));
 
 vi.mock('../../utility-model/auxiliary-model-settings-store.js', () => ({
+  readAuxiliaryModelSettings: vi.fn(),
   readAuxiliaryModelSettingsState: vi.fn(),
+  onAuxiliaryModelSettingsRead: vi.fn(),
   writeAuxiliaryModelSettingsPatch: vi.fn(),
 }));
 
 vi.mock('../../utility-model/oneshotProviderUsability.js', () => ({
-  hasOneshotProviderCredential: () => false,
+  hasOneshotProviderCredential: vi.fn(() => false),
 }));
 
 vi.mock('../../utility-model/oneShotCandidates.js', () => ({
+  captureAuxiliaryRoutes: () => () => true,
   isUtilityRouteDisabled: () => false,
   isUtilityRoutePaymentRequired: () => false,
+  requestUtilityText: vi.fn(),
 }));
 
 vi.mock('../../security/trustedAppRenderer.js', () => ({
@@ -48,10 +63,16 @@ vi.mock('../../security/trustedAppRenderer.js', () => ({
 import {
   buildAuxiliaryModelOptions,
   parseAuxiliaryModelSettingsPatch,
+  saveAuxiliaryModelSettings,
+  testAuxiliaryModelSettings,
+  registerAuxiliaryModelSettingsIpc,
 } from '../auxiliary-model-settings.js';
+import { requestUtilityText } from '../../utility-model/oneShotCandidates.js';
 
 const PIN = 'cat:openrouter:codex:openai/gpt-5-mini';
 const PROFILE = 'codex-gpt-5.4-mini';
+const requestText = vi.mocked(requestUtilityText);
+const writeSettings = vi.mocked(writeAuxiliaryModelSettingsPatch);
 
 function catalog() {
   return {
@@ -106,6 +127,49 @@ function builtinCodexCatalog() {
 }
 
 describe('auxiliary model settings IPC helpers', () => {
+  beforeEach(() => {
+    requestText.mockReset();
+    writeSettings.mockReset();
+  });
+  // Unit: a native Settings save must clear the observed config problem without
+  // a later health read or model request (auxiliary-model-health.md, recovery).
+  it('announces recovery when saving a usable replacement for a missing model', async () => {
+    const missing = 'cat:missing:codex:old-model';
+    const store = vi.mocked(readAuxiliaryModelSettings);
+    const state = vi.mocked(readAuxiliaryModelSettingsState);
+    const write = vi.mocked(writeAuxiliaryModelSettingsPatch);
+    const catalogRead = vi.mocked(getDesktopSelectableCatalog);
+    const credentials = vi.mocked(hasOneshotProviderCredential);
+    requestText.mockResolvedValue({ ok: true, text: 'New title', providerId: 'openrouter', model: 'openai/gpt-5-mini', transport: 'litellm-chat-completions' });
+    store.mockReturnValue({ models: [missing] });
+    const saved = { value: { models: [PIN] }, isCustomized: true, customizedKeys: ['models'], defaults: { models: [] } };
+    state.mockReturnValue(saved);
+    write.mockImplementation(async () => {
+      store.mockReturnValue({ models: [PIN] });
+    });
+    catalogRead.mockReturnValue(catalog());
+    credentials.mockReturnValue(true);
+    try {
+      registerAuxiliaryModelSettingsIpc();
+      reportAuxiliaryChainOutcome('no_candidate');
+      const notify = vi.mocked(notifyAppSettingsChanged);
+      expect(notify).toHaveBeenCalledWith('auxiliary-model-health');
+      notify.mockClear();
+
+      const handler = vi.mocked(ipcMain.handle).mock.calls.find(([channel]) => channel === MAKER_INVOKE.AUXILIARY_MODEL_SETTINGS_SET)?.[1];
+      expect(handler).toBeDefined();
+      await expect(handler!({} as Electron.IpcMainInvokeEvent, { models: [PIN] })).resolves.toMatchObject({ models: [PIN] });
+      expect(notify).toHaveBeenCalledExactlyOnceWith('auxiliary-model-health');
+    } finally {
+      reportAuxiliaryChainOutcome('success');
+      store.mockReset();
+      state.mockReset();
+      write.mockReset();
+      catalogRead.mockReset();
+      credentials.mockReset();
+    }
+  });
+
   // Unit: retain experimental remote settings for removal, but reject new selections.
   // Existing persisted-route cases do not distinguish execution computers.
   it('keeps a remote selection unavailable even when the local route is usable', () => {
@@ -276,5 +340,60 @@ describe('auxiliary model settings IPC helpers', () => {
       agentKind: 'claude-code',
       modelId: 'old-model',
     });
+  });
+
+  it('tests every selected route before allowing the chain to be saved', async () => {
+    requestText.mockResolvedValue({
+      ok: true,
+      text: '连接测试',
+      providerId: 'openrouter',
+      model: 'openai/gpt-5-mini',
+      transport: 'litellm-chat-completions',
+    });
+
+    const result = await testAuxiliaryModelSettings(
+      { models: [PIN, PROFILE] },
+      new Set([PIN]),
+      new Set([PROFILE]),
+      { maker: {} as never, requestText },
+    );
+
+    expect(result).toEqual({ ok: true, tested: [PIN, PROFILE] });
+    expect(requestText).toHaveBeenCalledTimes(2);
+    expect(requestText.mock.calls[0]?.[2]).toMatchObject({
+      providerId: 'openrouter',
+      agentKind: 'codex',
+      model: 'openai/gpt-5-mini',
+      maxTokens: 32,
+      disableReasoning: true,
+      bypassAuxiliaryModelHealth: true,
+    });
+    expect(requestText.mock.calls[1]?.[2]).toMatchObject({
+      pinnedProfileId: PROFILE,
+      bypassAuxiliaryModelHealth: true,
+    });
+  });
+
+  it('stops at the first failed route and reports that selection', async () => {
+    requestText.mockResolvedValue({ ok: false, reason: 'all_candidates_failed', attempts: [] });
+    await expect(testAuxiliaryModelSettings(
+      { models: [PIN, PROFILE] },
+      new Set([PIN]),
+      new Set([PROFILE]),
+      { maker: {} as never, requestText },
+    )).resolves.toEqual({ ok: false, model: PIN, reason: 'request_failed' });
+    expect(requestText).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not persist a chain when the save-boundary test fails', async () => {
+    requestText.mockResolvedValueOnce({ ok: true, model: 'small', providerId: 'test', transport: 'litellm-chat-completions', text: 'Title' });
+    requestText.mockResolvedValueOnce({ ok: false, reason: 'all_candidates_failed', attempts: [{
+      status: 'failed', reason: 'http_error', httpStatus: 403,
+      providerId: 'provider', model: 'backup', transport: 'codex-responses',
+    }] });
+    await expect(saveAuxiliaryModelSettings(
+      { models: [PIN, PROFILE] }, new Set([PIN]), new Set(), { maker: {} as never, requestText },
+    )).resolves.toEqual({ ok: false, model: PROFILE, reason: 'permission_denied', httpStatus: 403 });
+    expect(writeSettings).not.toHaveBeenCalled();
   });
 });

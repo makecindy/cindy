@@ -99,7 +99,7 @@ describe('ghost 写路径 IPC 的 owner 租约(源码契约)', () => {
     expect(service).toMatch(/finally\s*\{\s*release\(\)/);
   });
 
-  it('ghosts:uninstall 经 uninstallGhostAndCleanup 持租约(入口同步取,无异步窗口故无需 capture)', () => {
+  it('ghosts:uninstall 经 uninstallGhostAndCleanup 复核确认时的安装并持租约', () => {
     const block = handlerBlock(source, 'ghosts:uninstall');
     expect(block).toContain('uninstallGhostAndCleanup(');
     // main 的 per-ghost 屏障重构后,外层委托 withGhostInstallLock,实际清理与租约在

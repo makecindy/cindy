@@ -164,6 +164,7 @@ export function RunHistoryPane({
         description: t('scheduler.confirm.deleteRun.description'),
         confirmText: t('scheduler.confirm.deleteRun.confirm'),
         cancelText: t('scheduler.confirm.deleteRun.cancel'),
+        confirmVariant: 'destructive',
       });
       if (!ok) return;
       try {

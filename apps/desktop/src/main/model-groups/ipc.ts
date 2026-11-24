@@ -2,6 +2,7 @@
  * 模型组的 IPC：读写配置、解析选中的路线。改配置只接受可信的主界面；读、选路、提交、记绑定与写说明
  * 另外接受同账号本人控制的手机与电脑(model-groups.md §6.3)，分享来的任务等受限控制端不行。
  */
+import { and, asc, eq } from 'drizzle-orm';
 import { ipcMain } from 'electron';
 
 import {
@@ -10,12 +11,18 @@ import {
   modelGroupAgentDeviceId,
   modelGroupCandidateKey,
   modelGroupSelectionForOwner,
+  modelGroupResolveResultForRemote,
+  modelGroupsConfigForRemote,
   normalizeModelGroupsConfig,
   sanitizeModelGroupRouteNote,
   sanitizeModelGroupSelection,
   type ModelGroupResolveRequest,
 } from '../../shared/modelGroups.js';
 import { isDeviceLinkInvoke } from '../device-link/invoke-context.js';
+import { getDbClient } from '../localDb/client/current.js';
+import { createMessage } from '../localDb/ipc/messages.js';
+import { messages } from '../localDb/schema.js';
+import { getSessionRowSnapshotStrict } from '../localDb/sessionDispatchSnapshot.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { assertModelGroupsCaller } from './remoteAccess.js';
@@ -39,15 +46,9 @@ function remoteSafeSelection(raw: unknown) {
 
 const routeNotePorts: ModelGroupRouteNotePorts = {
   async sessionExists(sessionId) {
-    const { getSessionRowSnapshotStrict } = await import('../localDb/sessionDispatchSnapshot.js');
     return !!(await getSessionRowSnapshotStrict(sessionId));
   },
   async firstUserMessageAt(sessionId) {
-    const [{ getDbClient }, { messages }, { and, asc, eq }] = await Promise.all([
-      import('../localDb/client/current.js'),
-      import('../localDb/schema.js'),
-      import('drizzle-orm'),
-    ]);
     const [row] = await getDbClient().drizzle.select({ createdAt: messages.createdAt }).from(messages)
       .where(and(eq(messages.sessionId, sessionId), eq(messages.role, 'user')))
       .orderBy(asc(messages.createdAt)).limit(1);
@@ -56,7 +57,6 @@ const routeNotePorts: ModelGroupRouteNotePorts = {
     return Number.isFinite(at) ? at : null;
   },
   async createNote(sessionId, row) {
-    const { createMessage } = await import('../localDb/ipc/messages.js');
     await createMessage(sessionId, {
       clientId: row.clientId,
       role: 'assistant',
@@ -71,7 +71,7 @@ const routeNotePorts: ModelGroupRouteNotePorts = {
 export function registerModelGroupsIpc(): void {
   ipcMain.handle(MODEL_GROUPS_IPC.GET, (event) => {
     assertModelGroupsCaller(event);
-    return readModelGroupsConfig();
+    return isDeviceLinkInvoke() ? modelGroupsConfigForRemote(readModelGroupsConfig()) : readModelGroupsConfig();
   });
   ipcMain.handle(MODEL_GROUPS_IPC.SET, (event, raw: unknown) => {
     assertTrustedAppRendererEvent(event);
@@ -98,7 +98,10 @@ export function registerModelGroupsIpc(): void {
       ...(rawLocation ? { location: { agentDeviceId: locationId } } : {}),
       ...(value.remoteInvocableOnly === true ? { remoteInvocableOnly: true } : {}),
     };
-    return resolver.resolve(request);
+    // 在 await 之前读：调用来源只在同步段里可靠。
+    const remote = isDeviceLinkInvoke();
+    const result = await resolver.resolve(request);
+    return remote ? modelGroupResolveResultForRemote(result) : result;
   });
   ipcMain.handle(MODEL_GROUPS_IPC.COMMIT, (event, decisionId: unknown) => {
     assertModelGroupsCaller(event);

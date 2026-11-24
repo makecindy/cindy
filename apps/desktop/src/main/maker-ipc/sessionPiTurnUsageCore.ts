@@ -66,7 +66,7 @@ export function recordSessionPiTurnUsage(
   const raw = (event.data as { usage?: unknown } | undefined)?.usage;
   const identified = event.source === 'pi' && isPiReceiptPayload(raw);
   if (identified) {
-    const context = deps.turnUsageContextBySession.get(session.id) ?? captureTurnUsageContext(session.id, undefined, 'pi');
+    const context = deps.turnUsageContextBySession.get(session.id) ?? captureTurnUsageContext(session.id, undefined, 'pi', session.model);
     recordPiUsageReceipts(session, raw, context);
     if (event.type === 'account_usage') return;
     if (event.type !== 'done' && !isTerminalAgentErrorEvent(event)) return;
@@ -82,7 +82,7 @@ export function recordSessionPiTurnUsage(
   //   xd / 默认网关            → 实际 gateway cost。
   // usage 事实无论价格是否可解析都持久化，保证新模型也能看到 cache 命中明细。
   if ((event.type === 'done' || (identified && isTerminalAgentErrorEvent(event))) && event.source === 'pi') {
-    const turnContext = deps.turnUsageContextBySession.get(session.id) ?? captureTurnUsageContext(session.id, undefined, 'pi');
+    const turnContext = deps.turnUsageContextBySession.get(session.id) ?? captureTurnUsageContext(session.id, undefined, 'pi', session.model);
     const sessionProvider = turnContext.providerId;
     // New Pi payloads carry the tariff on every request segment. Keep the
     // turn-start snapshot only as a compatibility fallback for older or
@@ -251,6 +251,11 @@ export function recordSessionPiTurnUsage(
           const estimatedMonies: RegionalMoney[] = [];
           const perModelCost: Array<{ model: string; money: RegionalMoney }> = [];
           const modelWrites: Promise<unknown>[] = [];
+          const piOpaqueModelIds = turnContext.opaqueModelIdsByAgent?.pi;
+          const isSelectedOpaque = Boolean(
+            piOpaqueModelIds?.length &&
+              (pricingModel === 'unknown' || piOpaqueModelIds.includes(pricingModel)),
+          );
           for (const [model, group] of groupedSegments) {
             // Missing/incomplete request boundaries are explicitly unpriceable. A provider-
             // reported request cost may still win in resolveTurnCost; token × quote must not
@@ -268,6 +273,9 @@ export function recordSessionPiTurnUsage(
                 pricingSegments,
               );
             } else {
+              const includesMainSessionModel =
+                group.segments.length === 0 ||
+                group.segments.some((segment) => !segment.id?.startsWith('pi-child:'));
               money = resolveTurnCost({
                 rawModel: model,
                 agent: 'pi',
@@ -283,6 +291,19 @@ export function recordSessionPiTurnUsage(
                   billingRoute,
                   region: CURRENT_CINDY_REGION,
                   accessKind: turnContext.accessKind,
+                  ...(includesMainSessionModel && pricingModel !== 'unknown'
+                    ? { selectedModel: pricingModel }
+                    : {}),
+                  ...(includesMainSessionModel && isSelectedOpaque
+                    ? { opaqueModelId: true }
+                    : {}),
+                  opaqueModelIds: piOpaqueModelIds,
+                  ...(turnContext.officialAnthropicApi !== undefined
+                    ? { officialAnthropicApi: turnContext.officialAnthropicApi }
+                    : {}),
+                  ...(turnContext.officialAnthropicModels !== undefined
+                    ? { officialAnthropicModels: turnContext.officialAnthropicModels }
+                    : {}),
                 },
                 segments: pricingSegments,
               }).money;

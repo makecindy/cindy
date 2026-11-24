@@ -6,6 +6,9 @@ export function providerForExternalKey(externalKey: string): HookProvider | null
   if (externalKey.startsWith('x:')) return 'x';
   // Official Feishu / Lark lanes: feishu:dm:… and feishu:topic:…; Lark shares the prefix.
   if (externalKey.startsWith('feishu:')) return 'feishu';
+  // Official Discord lanes: discord:dm:… and discord:ch:…. The personal Discord bot
+  // never produces hook external keys, so the prefix only names the official service.
+  if (externalKey.startsWith('discord:')) return 'discord';
   if (
     externalKey.startsWith('slack:') ||
     externalKey.startsWith('team-slack:') ||
@@ -33,6 +36,24 @@ export function feishuLaneIdentityOf(externalKey: string): { appId: string; open
     return null;
   }
   return { appId: fields[0]!, openId: fields[expected - 1]! };
+}
+
+/**
+ * Application and sender of an official Discord lane:
+ *   discord:dm:<appId>:<userId>:g<n>
+ *   discord:ch:<appId>:<channelId>:<userId>:g<n>
+ * A dispatch is only accepted for the application and Discord user of this
+ * device's confirmed binding. Any other shape returns null so callers fail closed.
+ */
+export function discordLaneIdentityOf(externalKey: string): { appId: string; userId: string } | null {
+  const parts = externalKey.split(':');
+  if (parts[0] !== 'discord' || !/^g\d+$/.test(parts[parts.length - 1] ?? '')) return null;
+  const fields = parts.slice(2, -1);
+  const expected = parts[1] === 'dm' ? 2 : parts[1] === 'ch' ? 3 : 0;
+  if (expected === 0 || fields.length !== expected || fields.some((field) => !/^\d+$/.test(field))) {
+    return null;
+  }
+  return { appId: fields[0]!, userId: fields[expected - 1]! };
 }
 
 /** Missing source is legacy Slack only; explicit source must agree with the key. */

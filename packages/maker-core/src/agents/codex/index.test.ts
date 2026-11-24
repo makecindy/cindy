@@ -18901,6 +18901,8 @@ describe('CodexAgent MCP thread context hooks', () => {
     if (scenario === 'user') expect(JSON.stringify(steers)).toContain('User denied this tool call via Cindy');
     if (scenario === 'system') {
       expect(JSON.stringify(steers)).toContain('Cindy could not approve');
+      // Native Codex calls every decline "user rejected"; the steer must say nobody answered in time.
+      expect(JSON.stringify(steers)).toContain('the user did not reject it');
       expect(JSON.stringify(steers)).not.toContain('User denied');
     }
     expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(1);

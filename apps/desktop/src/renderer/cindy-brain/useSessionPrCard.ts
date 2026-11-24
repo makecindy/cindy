@@ -3,7 +3,7 @@ import { useEffect, useMemo, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
 import { readGhostCardSupersededBy } from '@cindy/maker-shared/ghost-card-form';
 import {
-  ensureSessionCards,
+  retainLocalCardSession,
   getGhostCardSnapshot,
   subscribeGhostCards,
   type GhostCardSnapshot,
@@ -126,7 +126,7 @@ export function useSessionPrCard(sessionId: string, prKey: string, enabled: bool
   const { t } = useTranslation();
   const snapshot = useSyncExternalStore(subscribeGhostCards, getGhostCardSnapshot);
   useEffect(() => {
-    if (enabled) ensureSessionCards(sessionId);
+    if (enabled) return retainLocalCardSession(sessionId);
   }, [enabled, sessionId]);
   const ghosts = useInstalledGhosts(enabled);
   return useMemo(() => {
