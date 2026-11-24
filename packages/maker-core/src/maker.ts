@@ -1500,7 +1500,12 @@ export class Maker {
   async closeSessionIfCurrent(
     session: Session,
     reason: Exclude<MakerSessionCloseReason, 'unexpected'> = 'requested',
-    opts?: { afterCurrentTurn?: boolean; failureEvent?: () => AgentEvent; onlyIfIdle?: boolean },
+    opts?: {
+      afterCurrentTurn?: boolean;
+      failureEvent?: () => AgentEvent;
+      onlyIfIdle?: boolean;
+      contextClearGeneration?: number;
+    },
   ): Promise<'closed' | 'deferred' | void> {
     if (this.activeSessions.get(session.id) !== session) return;
     let idleClose: Promise<boolean> | undefined;
@@ -1530,7 +1535,11 @@ export class Maker {
       return 'closed';
     }
     if (opts?.afterCurrentTurn) return session.closeAfterCurrentTurn(opts);
-    await session.close();
+    if (opts?.contextClearGeneration !== undefined) {
+      await session.close({ reason: 'navigation', contextClearGeneration: opts.contextClearGeneration });
+    } else {
+      await session.close();
+    }
     return 'closed';
     // status listener 会自动清理 activeSessions 并 emit
   }

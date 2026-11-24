@@ -6698,7 +6698,7 @@ interface ElectronAPI {
     getSessionTurnActive: (sessionId: string) => Promise<{ inTurn: boolean }>;
 
     abortSession: (sessionId: string) => Promise<void>;
-    closeSession: (sessionId: string, opts?: { preserveWorkspace?: boolean }) => Promise<void>;
+    closeSession: (sessionId: string, opts?: { preserveWorkspace?: boolean; contextClearedAt?: string }) => Promise<void>;
     /** 删除单条消息并让下一次发送从剩余本地历史重建 Agent 上下文。 */
     deleteMessage: (
       sessionId: string,

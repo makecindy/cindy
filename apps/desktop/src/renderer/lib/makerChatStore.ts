@@ -17559,7 +17559,10 @@ async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string):
   // preserveWorkspace: /clear 后停留在同一会话,worktree / cwd 必须原样保留,
   // 否则 onClose 副作用会把活会话的工作区静默 stash+删除(2026-07 实报)。
   const closePromise = clearOperation.api
-    .closeSession(sessionId, { preserveWorkspace: true })
+    .closeSession(sessionId, {
+      preserveWorkspace: true,
+      ...(!remoteDeviceId ? { contextClearedAt: clearedAt } : {}),
+    })
     .catch((err) => log.warn('maker.closeSession failed:', err));
 
   // The remote guard may have been waiting while the user composed another

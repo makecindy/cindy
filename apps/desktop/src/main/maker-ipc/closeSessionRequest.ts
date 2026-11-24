@@ -18,16 +18,20 @@ export interface CloseSessionRequestDeps {
 
 export interface CloseSessionRequestOptions {
   preserveWorkspace?: boolean;
+  contextClearedAt?: string;
 }
 
 /**
- * 解析 IPC 传来的 opts（跨进程边界，形状不可信）：只认 `{ preserveWorkspace: true }`，
+ * 解析 IPC 传来的 opts（跨进程边界，形状不可信）：仅软重启可携带上下文清理标记，
  * 其余一律当普通 close。老版本 renderer / 老被控端不传第二参 → undefined → 旧行为。
  */
 export function parseCloseSessionOptions(raw: unknown): CloseSessionRequestOptions {
   if (typeof raw !== 'object' || raw === null) return {};
-  const preserveWorkspace = (raw as { preserveWorkspace?: unknown }).preserveWorkspace;
-  return { preserveWorkspace: preserveWorkspace === true };
+  const { preserveWorkspace, contextClearedAt } = raw as Record<string, unknown>;
+  return {
+    preserveWorkspace: preserveWorkspace === true,
+    ...(preserveWorkspace === true && typeof contextClearedAt === 'string' ? { contextClearedAt } : {}),
+  };
 }
 
 export async function handleCloseSessionRequest(

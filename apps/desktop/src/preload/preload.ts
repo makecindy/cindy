@@ -7902,7 +7902,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     // preserveWorkspace: 软重启语义(/clear、鉴权重连)——close 不触发 worktree
     // 回收 / 临时附件清理等 onClose 重副作用,会话逻辑上还活着。
-    closeSession: (sessionId: string, opts?: { preserveWorkspace?: boolean }): Promise<void> =>
+    closeSession: (sessionId: string, opts?: { preserveWorkspace?: boolean; contextClearedAt?: string }): Promise<void> =>
       ipcRenderer.invoke('maker:close-session', sessionId, opts),
 
     /** 删除 user 目标行或 assistant 所属整轮输出，并从剩余本地历史重建 Agent 上下文。 */

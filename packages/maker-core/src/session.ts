@@ -1661,7 +1661,7 @@ export class Session {
    * and its database are unchanged, so an adapter's detached work survives.
    * Account boundaries go through `detach({ reason: 'account-boundary' })`.
    */
-  close(opts?: AgentSessionTeardownOptions): Promise<void> {
+  close(opts?: AgentSessionTeardownOptions & { contextClearGeneration?: number }): Promise<void> {
     if (this.closePromise) return this.closePromise;
     if (this.status === 'closed') return Promise.resolve();
 
@@ -1679,7 +1679,9 @@ export class Session {
       reject = onReject;
     });
     this.closePromise = closing;
-    void this.performClose(opts ?? { reason: 'navigation' }).then(resolve, reject);
+    const contextClearCancelled = this.agentKind === 'pi'
+      && opts?.contextClearGeneration === this.turnGeneration;
+    void this.performClose(opts ?? { reason: 'navigation' }, contextClearCancelled).then(resolve, reject);
     return closing;
   }
 
@@ -1769,13 +1771,13 @@ export class Session {
     return true;
   }
 
-  private async performClose(teardown: AgentSessionTeardownOptions): Promise<void> {
+  private async performClose(teardown: AgentSessionTeardownOptions, contextClearCancelled: boolean): Promise<void> {
     let closeSucceeded = false;
     try {
       // close() fences late provider events before entering here. Settle the
       // owned product turn ourselves before listeners and its claim are lost.
       // Never retry: tools may already have performed external side effects.
-      this.settleUnfinishedTurn(SESSION_CLOSED_MID_TURN_MESSAGE);
+      this.settleUnfinishedTurn(SESSION_CLOSED_MID_TURN_MESSAGE, contextClearCancelled);
       this.clearTurnStallWatchdog();
       this.clearTerminalErrorDrain();
       this.cancelSendReservation(this.sendReservation);
@@ -1815,10 +1817,10 @@ export class Session {
     }
   }
 
-  private settleUnfinishedTurn(message: string): void {
+  private settleUnfinishedTurn(message: string, contextClearCancelled = false): void {
     if (!this.hasUnsettledTurn()) return;
     const usage = this.handle.getPendingTurnUsage?.();
-    if (this.abortRecoveryScheduledFor === this.turnGeneration) {
+    if (contextClearCancelled || this.abortRecoveryScheduledFor === this.turnGeneration) {
       this.fanOutEvent({ type: 'done', data: { status: 'cancelled', ...(usage ? { usage } : {}) }, source: this.eventSource });
     } else {
       this.fanOutEvent({ type: 'error', data: {
