@@ -75,6 +75,7 @@
     "invalid": "請檢查輸入值的範圍與格式",
     "discard": "捨棄編輯並返回",
     "upgradingNotice": "「{{name}}」正在更新，暫時無法管理。更新完成後即可繼續。",
+    "accessUnverified": "暫時無法核實雲端實例權限。未儲存的內容會保留，恢復連線後可繼續儲存。",
     "authScope": "在這台電腦完成授權，帳號連結至 {{name}}。",
     "authAdd": "新增 {{provider}}",
     "authDisconnect": "中斷 {{name}} 上的 {{provider}} 連線？",

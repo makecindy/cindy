@@ -75,6 +75,7 @@
     "invalid": "Verifique o intervalo e o formato do valor inserido",
     "discard": "Descartar edições e voltar",
     "upgradingNotice": "“{{name}}” está sendo atualizado e não pode ser gerenciado agora. Você pode continuar quando a atualização terminar.",
+    "accessUnverified": "No momento não é possível confirmar o acesso às instâncias na nuvem. As alterações não salvas são mantidas; você poderá salvar quando a conexão voltar.",
     "authScope": "Autorize neste computador; a conta será conectada a {{name}}.",
     "authAdd": "Adicionar {{provider}}",
     "authDisconnect": "Desconectar {{provider}} em {{name}}?",

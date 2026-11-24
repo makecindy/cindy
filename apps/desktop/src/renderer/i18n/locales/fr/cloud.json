@@ -75,6 +75,7 @@
     "invalid": "Vérifiez la plage et le format de la saisie",
     "discard": "Abandonner les modifications et revenir",
     "upgradingNotice": "« {{name}} » est en cours de mise à jour et sa gestion est momentanément indisponible. Vous pourrez continuer une fois la mise à jour terminée.",
+    "accessUnverified": "Impossible de confirmer l’accès aux instances cloud pour le moment. Les modifications non enregistrées sont conservées ; vous pourrez enregistrer dès le retour de la connexion.",
     "authScope": "Autorisez sur cet ordinateur ; le compte est associé à {{name}}.",
     "authAdd": "Ajouter {{provider}}",
     "authDisconnect": "Déconnecter {{provider}} sur {{name}} ?",

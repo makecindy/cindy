@@ -75,6 +75,7 @@
     "invalid": "Prüfe Wertebereich und Format der Eingabe",
     "discard": "Änderungen verwerfen und zurück",
     "upgradingNotice": "„{{name}}“ wird aktualisiert und kann gerade nicht verwaltet werden. Nach dem Update kannst du weitermachen.",
+    "accessUnverified": "Der Zugriff auf Cloud-Instanzen lässt sich gerade nicht bestätigen. Nicht gespeicherte Änderungen bleiben erhalten; speichern kannst du, sobald die Verbindung wieder steht.",
     "authScope": "Autorisiere auf diesem Computer; das Konto wird mit {{name}} verbunden.",
     "authAdd": "{{provider}} hinzufügen",
     "authDisconnect": "{{provider}} auf {{name}} trennen?",

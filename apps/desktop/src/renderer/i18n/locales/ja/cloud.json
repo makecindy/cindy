@@ -75,6 +75,7 @@
     "invalid": "入力値の範囲と形式を確認してください",
     "discard": "編集内容を破棄して戻る",
     "upgradingNotice": "「{{name}}」は更新中のため、現在は管理できません。更新が完了すると続行できます。",
+    "accessUnverified": "現在、クラウドの権限を確認できません。未保存の内容は保持され、接続が戻ると保存できます。",
     "authScope": "このコンピューターで認証すると、アカウントは {{name}} に接続されます。",
     "authAdd": "{{provider}} を追加",
     "authDisconnect": "{{name}} の {{provider}} を切断しますか？",

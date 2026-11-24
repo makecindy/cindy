@@ -10,7 +10,7 @@ const state = vi.hoisted(() => ({
   access: 'allowed',
   deviceId: 'cloud-device-aaaaaaaaaaaaaaaaaaaaaaaa',
 }));
-vi.mock('../CloudInstanceAccess', () => ({ useCloudInstanceAccess: () => state.access }));
+vi.mock('../CloudInstanceAccess', () => ({ useCloudInstanceAccess: () => state.access, useCloudInstanceAccessUnverified: () => false }));
 vi.mock('react-i18next', async (original) => ({
   ...(await original<typeof import('react-i18next')>()),
   useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }),

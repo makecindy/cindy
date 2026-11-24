@@ -75,6 +75,7 @@
     "invalid": "請核所輸之範圍與格式",
     "discard": "棄所改而返",
     "upgradingNotice": "「{{name}}」方更新，暫不可理。更新畢，乃可續之。",
+    "accessUnverified": "今未能核雲實例之權。未存者留之，連接復則可續存。",
     "authScope": "於此機完成授權，名籍繫於 {{name}}。",
     "authAdd": "增 {{provider}}",
     "authDisconnect": "斷 {{name}} 上之 {{provider}} 乎？",

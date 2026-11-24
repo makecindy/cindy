@@ -8,6 +8,8 @@ import {
 
 type Access = 'checking' | 'allowed' | 'hidden';
 const CloudInstanceAccessContext = createContext<Access>('hidden');
+// Allowed for this account, but the latest recheck could not reach the service.
+const CloudInstanceAccessUnverifiedContext = createContext(false);
 const READ_RETRY_DELAYS_MS = [250, 1_000, 3_000] as const;
 
 /** Presentation only. Main holds credentials; CIS still authorizes every action.
@@ -23,7 +25,7 @@ export function CloudInstanceAccessProvider({ children }: { children: ReactNode 
     available && mode === 'cloud' && isAuthenticated && !isInitializing && canEnterApp && dataOwnerId
       ? JSON.stringify([dataOwnerId, dataOwnerGeneration])
       : null;
-  const [result, setResult] = useState<{ scope: string; access: Access } | null>(null);
+  const [result, setResult] = useState<{ scope: string; access: Access; unverified?: boolean } | null>(null);
 
   useEffect(() => {
     // Read here, not as a dependency: only the account starts a new check, never the bridge's identity.
@@ -55,9 +57,14 @@ export function CloudInstanceAccessProvider({ children }: { children: ReactNode 
           setResult({ scope, access: decision.allowed ? 'allowed' : 'hidden' });
         }
       } catch (error) {
-        // A rejected or unavailable check is not permission to display the feature.
+        // A rejected or unavailable check is not permission to display the feature. An account
+        // already allowed keeps its open pages, with saving paused, while the service is out of
+        // reach; a denial, a scope change or another account removes them.
         if (current()) {
-          setResult({ scope, access: 'hidden' });
+          const unreachable = String((error as Error | undefined)?.message).includes('[CLOUD_SETTINGS_UNAVAILABLE]');
+          setResult((previous) => unreachable && previous?.scope === scope && previous.access === 'allowed'
+            ? { scope, access: 'allowed', unverified: true }
+            : { scope, access: 'hidden' });
           // No cloud instance service in this region: nothing to check again for this account.
           if (String((error as Error | undefined)?.message).includes('[CLOUD_SETTINGS_UNSUPPORTED]')) {
             stopListening();
@@ -97,11 +104,19 @@ export function CloudInstanceAccessProvider({ children }: { children: ReactNode 
 
   // Hide synchronously on account/generation changes, before effect cleanup.
   const access = !scope ? 'hidden' : result?.scope === scope ? result.access : 'checking';
+  const unverified = access === 'allowed' && result?.unverified === true;
   return (
     <CloudInstanceAccessContext.Provider value={access}>
-      {children}
+      <CloudInstanceAccessUnverifiedContext.Provider value={unverified}>
+        {children}
+      </CloudInstanceAccessUnverifiedContext.Provider>
     </CloudInstanceAccessContext.Provider>
   );
+}
+
+/** The account was allowed but cannot be rechecked right now: pages stay, saving waits. */
+export function useCloudInstanceAccessUnverified(): boolean {
+  return useContext(CloudInstanceAccessUnverifiedContext);
 }
 
 export function useCloudInstanceAccess(): Access {

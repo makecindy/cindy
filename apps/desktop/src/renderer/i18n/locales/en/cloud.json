@@ -75,6 +75,7 @@
     "invalid": "Check the input range and format",
     "discard": "Discard Edits and Return",
     "upgradingNotice": "“{{name}}” is updating and can’t be managed now. You can continue when the update finishes.",
+    "accessUnverified": "Can’t confirm access to cloud instances right now. Unsaved changes stay here; you can save once the connection is back.",
     "authScope": "Authorize on this computer; the account connects to {{name}}.",
     "authAdd": "Add {{provider}}",
     "authDisconnect": "Disconnect {{provider}} on {{name}}?",

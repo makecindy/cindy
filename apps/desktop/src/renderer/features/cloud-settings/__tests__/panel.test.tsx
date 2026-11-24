@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi, type MockInstance } from 'vitest';
 import { CLOUD_SYNC_DEBOUNCE_MS } from '../cloudSettingsSync';
@@ -35,6 +35,21 @@ vi.mock('react-i18next', async (original) => ({
   }),
 }));
 vi.mock('@/lib/toast', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+// Whether access could be rechecked, as the provider reports it.
+const accessCheck = vi.hoisted(() => {
+  let unverified = false;
+  const listeners = new Set<() => void>();
+  return {
+    get: () => unverified,
+    set(value: boolean) { unverified = value; listeners.forEach((listener) => listener()); },
+    subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
+  };
+});
+vi.mock('../CloudInstanceAccess', async (original) => {
+  const { useSyncExternalStore } = await import('react');
+  return { ...(await original<typeof import('../CloudInstanceAccess')>()),
+    useCloudInstanceAccessUnverified: () => useSyncExternalStore(accessCheck.subscribe, accessCheck.get) };
+});
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: vi.fn() }));
 vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
   useDeviceLinkDeviceList: vi.fn(),
@@ -170,6 +185,21 @@ describe('shared native cloud settings', () => {
     await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
     await ready(input);
     expect(read!.mock.calls.length).toBe(before);
+  });
+  // Unit: access cannot be rechecked for a moment (the network dropped). The page and the unsaved
+  // instructions stay, saving waits, and it resumes when the check succeeds again.
+  it('keeps an unsaved prompt and holds saving while access cannot be rechecked', async () => {
+    onTestFinished(() => accessCheck.set(false));
+    const { save } = setup();
+    const input = await screen.findByRole('textbox', { name: 'settings.personalization.ariaLabel' });
+    await ready(input);
+    fireEvent.change(input, { target: { value: 'unsaved draft' } });
+    act(() => accessCheck.set(true));
+    expect((screen.getByRole('button', { name: 'settings.personalization.save' }) as HTMLButtonElement).disabled).toBe(true);
+    act(() => accessCheck.set(false));
+    await waitFor(() => expect((screen.getByRole('button', { name: 'settings.personalization.save' }) as HTMLButtonElement).disabled).toBe(false));
+    expect((input as HTMLTextAreaElement).value).toBe('unsaved draft');
+    expect(save).not.toHaveBeenCalled();
   });
   it('retains the native prompt editor draft across categories without a write', async () => {
     const { save } = setup();

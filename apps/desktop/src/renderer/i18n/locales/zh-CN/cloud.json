@@ -75,6 +75,7 @@
     "invalid": "请检查输入值的范围和格式",
     "discard": "放弃修改",
     "upgradingNotice": "「{{name}}」正在更新，暂时无法管理。更新完成后可继续。",
+    "accessUnverified": "暂时无法核实云实例权限。未保存的内容会保留，恢复连接后可继续保存。",
     "authScope": "在这台电脑完成授权，账号绑定到 {{name}}。",
     "authAdd": "添加 {{provider}}",
     "authDisconnect": "断开 {{name}} 上的 {{provider}}？",

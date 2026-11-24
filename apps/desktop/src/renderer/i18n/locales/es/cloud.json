@@ -75,6 +75,7 @@
     "invalid": "Revisa el rango y el formato del valor ingresado",
     "discard": "Descartar ediciones y volver",
     "upgradingNotice": "«{{name}}» se está actualizando y no se puede administrar ahora. Podrás continuar cuando termine la actualización.",
+    "accessUnverified": "Ahora no se puede confirmar el acceso a las instancias en la nube. Lo que no has guardado se conserva y podrás guardarlo cuando vuelva la conexión.",
     "authScope": "Autoriza en esta computadora; la cuenta se conecta a {{name}}.",
     "authAdd": "Agregar {{provider}}",
     "authDisconnect": "¿Desconectar {{provider}} en {{name}}?",

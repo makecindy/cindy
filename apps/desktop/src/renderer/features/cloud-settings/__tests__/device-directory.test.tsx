@@ -30,7 +30,7 @@ const mock = vi.hoisted(() => ({
 vi.mock('@/contexts/AuthContext', () => ({
   useAuth: () => ({ mode: 'cloud', dataOwnerId: 'owner' }),
 }));
-vi.mock('../CloudInstanceAccess', () => ({ useCloudInstanceAccess: () => mock.access }));
+vi.mock('../CloudInstanceAccess', () => ({ useCloudInstanceAccess: () => mock.access, useCloudInstanceAccessUnverified: () => false }));
 vi.mock('@/components/ui/confirm-dialog-provider', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/components/ui/confirm-dialog-provider')>()),
   useConfirmDialog: () => ({ confirm: mock.confirm }),

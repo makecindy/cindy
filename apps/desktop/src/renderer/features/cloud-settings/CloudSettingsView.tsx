@@ -50,7 +50,7 @@ import { toast } from '@/lib/toast';
 import { createCloudSettingsSync } from './cloudSettingsSync';
 import { CloudInstanceSection } from './CloudInstanceSection';
 import type { CloudInstanceView } from '../../../shared/cloudInstanceControl';
-import { useCloudInstanceAccess } from './CloudInstanceAccess';
+import { useCloudInstanceAccess, useCloudInstanceAccessUnverified } from './CloudInstanceAccess';
 import { cloudBaseName, cloudDisplayName } from './instanceName';
 import { instanceUpgrading } from './instanceState';
 import { CloudImSettings, cloudImSettingsSummary, useCloudImDisplays } from './CloudImSettings';
@@ -124,6 +124,8 @@ export function CloudSettingsPanel({
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
   const client = ownClient;
+  // Access could not be rechecked: the page and any unsaved input stay, saving waits.
+  const paused = useCloudInstanceAccessUnverified();
   const groups = visibility.tabs;
   const showInstance = visibility.instance && !!client.instance;
   const [tab, setTab] = useState<CloudSettingsPageTab>(
@@ -408,7 +410,7 @@ export function CloudSettingsPanel({
     clear?: string[],
   ) => {
     if (CONFIRMED_DOMAINS.has(state.domain)) return confirmedSave(state, set, clear);
-    if (!alive.current || !online || reconnecting || document.visibilityState === 'hidden')
+    if (!alive.current || !online || reconnecting || paused || document.visibilityState === 'hidden')
       throw new Error('NOT_READY');
     setResult(undefined);
     return sync.change(state.domain, set, clear, debounced(set, clear));
@@ -422,6 +424,7 @@ export function CloudSettingsPanel({
       !alive.current ||
       !fresh.current ||
       !online ||
+      paused ||
       pending.current ||
       document.visibilityState === 'hidden'
     )
@@ -523,6 +526,8 @@ export function CloudSettingsPanel({
               </Button>
             ),
           }
+        : paused
+          ? { text: t('cloudSettings.accessUnverified'), warning: true }
         : pluginPage
           ? { text: t('settings.ghosts.remote.managingDescription') }
         : failure === 'refused' && refusal
@@ -770,7 +775,7 @@ export function CloudSettingsPanel({
                                 !online || loading || writing || syncing || tab !== group
                               }
                               disabled={
-                                !online || reconnecting || writing || !!failure || tab !== group
+                                !online || reconnecting || paused || writing || !!failure || tab !== group
                               }
                               save={save}
                             />
@@ -814,7 +819,7 @@ export function CloudSettingsPanel({
                       (() => {
                         const sections = (
                           <fieldset
-                            disabled={!online || reconnecting || writing || !!failure || tab !== group}
+                            disabled={!online || reconnecting || paused || writing || !!failure || tab !== group}
                             className="m-0 min-w-0 border-0 p-0"
                           >
                             <NativeCloudSections
@@ -833,7 +838,7 @@ export function CloudSettingsPanel({
                               }
                               stale={sync.stale}
                               // Hidden categories do not read (e.g. the instance prompt) on every save.
-                              disabled={!online || reconnecting || writing || !!failure || tab !== group}
+                              disabled={!online || reconnecting || paused || writing || !!failure || tab !== group}
                               cpuCount={cpuCount}
                               appVersion={version}
                               trial={trial}

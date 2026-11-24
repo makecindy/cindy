@@ -75,6 +75,7 @@
     "invalid": "입력값의 범위와 형식을 확인하세요",
     "discard": "편집 내용 버리고 돌아가기",
     "upgradingNotice": "“{{name}}”을(를) 업데이트하는 중이라 지금은 관리할 수 없습니다. 업데이트가 완료되면 계속할 수 있습니다.",
+    "accessUnverified": "지금은 클라우드 권한을 확인할 수 없습니다. 저장하지 않은 내용은 유지되며, 연결이 복구되면 저장할 수 있습니다.",
     "authScope": "이 컴퓨터에서 인증하면 계정이 {{name}}에 연결됩니다.",
     "authAdd": "{{provider}} 추가",
     "authDisconnect": "{{name}}에서 {{provider}} 연결을 해제할까요?",

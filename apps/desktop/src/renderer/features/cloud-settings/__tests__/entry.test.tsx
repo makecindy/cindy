@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { CloudInstanceAccessProvider, useCloudInstanceAccess } from '../CloudInstanceAccess';
+import { CloudInstanceAccessProvider, useCloudInstanceAccess, useCloudInstanceAccessUnverified } from '../CloudInstanceAccess';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 
 const auth = vi.hoisted(() => ({
@@ -48,6 +48,9 @@ afterEach(() => {
 });
 function Probe() {
   return <output data-testid="access">{useCloudInstanceAccess()}</output>;
+}
+function UnverifiedProbe() {
+  return <output data-testid="unverified">{String(useCloudInstanceAccessUnverified())}</output>;
 }
 function content() {
   return (
@@ -131,6 +134,25 @@ it('rechecks visible permissions periodically and removes revoked access', async
   instanceAccess.mockRejectedValueOnce(new Error('CLOUD_SETTINGS_SCOPE_CHANGED'));
   await act(async () => vi.advanceTimersByTimeAsync(60_000));
   expect(access()).toBe('hidden');
+});
+
+// An allowed account whose recheck cannot reach the service keeps its pages, marked unverified,
+// until the service answers again; a denial still removes them.
+it('keeps an allowed account on its pages while a recheck cannot reach the service', async () => {
+  vi.useFakeTimers();
+  render(<CloudInstanceAccessProvider><Probe /><UnverifiedProbe /></CloudInstanceAccessProvider>);
+  const unverified = () => screen.getByTestId('unverified').textContent;
+  await act(async () => {});
+  expect([access(), unverified()]).toEqual(['allowed', 'false']);
+  instanceAccess.mockRejectedValue(new Error('[CLOUD_SETTINGS_UNAVAILABLE] timed out'));
+  await act(async () => vi.advanceTimersByTimeAsync(60_000));
+  expect([access(), unverified()]).toEqual(['allowed', 'true']);
+  instanceAccess.mockResolvedValue({ schemaVersion: 1, allowed: true });
+  await act(async () => { window.dispatchEvent(new Event('online')); });
+  expect([access(), unverified()]).toEqual(['allowed', 'false']);
+  instanceAccess.mockResolvedValue({ schemaVersion: 1, allowed: false });
+  await act(async () => vi.advanceTimersByTimeAsync(60_000));
+  expect([access(), unverified()]).toEqual(['hidden', 'false']);
 });
 
 // Query only after Main has committed login and Renderer finished startup.
