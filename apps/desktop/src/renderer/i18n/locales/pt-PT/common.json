@@ -8290,6 +8290,7 @@
           "official": "Oficial",
           "community": "Comunidade"
         },
+        "communityDisclaimer": "Este plugin é desenvolvido e mantido por membros da comunidade. A Cindy analisou esta versão, mas não pode garantir a segurança do plugin em todas as situações de utilização.",
         "publisherDescription": {
           "official": "Publicado e mantido pela Cindy",
           "community": "Publicado e mantido por programadores da comunidade",
@@ -8405,7 +8406,7 @@
             "authTitle": "Repositórios privados",
             "authBody": "A autenticação depende inteiramente da configuração Git do sistema — Cindy nunca guarda credenciais Git. SSH: deve existir uma chave funcional configurada neste computador; se a organização exigir SAML SSO, autorize a chave para essa organização através de Configure SSO nas definições de chaves SSH do GitHub. HTTPS: utilize um Personal Access Token guardado pelo gestor de credenciais do sistema.",
             "rulesTitle": "Regras de instalação",
-            "rulesBody": "Os identificadores dos plugins são globalmente únicos e atribuídos por ordem de chegada — os conflitos com plugins instalados são indicados explicitamente. Os plugins cujos identificadores utilizam os prefixos oficiais reservados ({{reservedGhostIdPrefixes}}) não podem ser instalados ao arrastar um pacote, escolher um ficheiro ou utilizar um mercado de plugins personalizado. As permissões declaradas são apresentadas na página de detalhes; clicar em Instalar conclui a instalação e ativa o plugin sem outro diálogo de confirmação de permissões.",
+            "rulesBody": "Os identificadores dos plugins são globalmente únicos e atribuídos por ordem de chegada — os conflitos com plugins instalados são indicados explicitamente. Os plugins cujos identificadores utilizam os prefixos oficiais reservados ({{reservedGhostIdPrefixes}}) não podem ser instalados ao arrastar um pacote, escolher um ficheiro ou utilizar um mercado de plugins personalizado. As permissões declaradas são apresentadas na página de detalhes. Na primeira instalação manual de um plugin, Cindy pede que confirme as permissões solicitadas. O plugin é ativado automaticamente após a instalação.",
             "copy": "Copiar guia",
             "copied": "Guia copiado para a área de transferência.",
             "copyFailed": "Não foi possível copiar. Tente novamente."
@@ -8522,6 +8523,8 @@
         "installMeta": "Versão {{version}} · {{source}}",
         "updateMeta": "Versão {{from}} → {{to}} · {{source}}",
         "installDescription": "Nada é instalado até confirmar. O plugin é ativado imediatamente após a instalação e pode desativá-lo ou desinstalá-lo a qualquer momento na página Plugins.",
+        "customMarketSourceNotice": "Confirme que confia neste mercado e verifique as permissões pedidas pelo plugin.",
+        "localFileSourceNotice": "Antes de continuar a instalação, confirme que o ficheiro veio de uma fonte de confiança.",
         "updateDescription": "A atualização só começa após a sua confirmação. A versão atual permanece disponível até lá.",
         "grantsTitle": "Após a instalação, o plugin terá:",
         "noPermissions": "Este plugin não declara permissões adicionais.",
