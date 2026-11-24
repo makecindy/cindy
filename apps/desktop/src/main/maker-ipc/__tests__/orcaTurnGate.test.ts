@@ -19,9 +19,10 @@ import {
   markArrearsNudged,
   markTurnGateHandled,
   noteLeadSettle,
-  noteTurnToolUse,
+  noteTurnEvent,
   noteWorkerReportArrears,
   turnGateHandled,
+  currentTurnGeneration,
   turnOrcaToolUseCount,
   turnToolUseCount,
 } from '../orcaTurnGate.js';
@@ -33,38 +34,47 @@ beforeEach(() => {
 
 describe('turn tool-use counter', () => {
   it('counts only the matching session and generation', () => {
-    noteTurnToolUse('lead-1', 3);
-    noteTurnToolUse('lead-1', 3);
-    noteTurnToolUse('lead-1', 4);
+    noteTurnEvent('lead-1', 3, 'Read');
+    noteTurnEvent('lead-1', 3, 'Read');
+    noteTurnEvent('lead-1', 4, 'Read');
     expect(turnToolUseCount('lead-1', 3)).toBe(2);
     expect(turnToolUseCount('lead-1', 4)).toBe(1);
     expect(turnToolUseCount('lead-2', 3)).toBe(0);
   });
 
   it('drops everything for a session when its runtime goes away', () => {
-    noteTurnToolUse('lead-1', 3);
-    noteTurnToolUse('lead-2', 3);
+    noteTurnEvent('lead-1', 3, 'Read');
+    noteTurnEvent('lead-2', 3, 'Read');
     forgetTurnGate('lead-1');
     expect(turnToolUseCount('lead-1', 3)).toBe(0);
     expect(turnToolUseCount('lead-2', 3)).toBe(1);
   });
 
+  it('tracks the turn generation even when the turn used no tool at all', () => {
+    // 无工具回合没有任何 tool_use；代次只能靠每个事件都记，否则 Stop hook 会
+    // 拿上一轮的代次去查凭据账。
+    noteTurnEvent('lead-gen', 2);
+    noteTurnEvent('lead-gen', 5);
+    expect(currentTurnGeneration('lead-gen')).toBe(5);
+    expect(turnToolUseCount('lead-gen', 5)).toBe(0);
+  });
+
   it('separates Orca tool use from unrelated tools', () => {
-    noteTurnToolUse('lead-1', 3, 'Read');
-    noteTurnToolUse('lead-1', 3, 'Bash');
+    noteTurnEvent('lead-1', 3, 'Read');
+    noteTurnEvent('lead-1', 3, 'Bash');
     expect(turnToolUseCount('lead-1', 3)).toBe(2);
     expect(turnOrcaToolUseCount('lead-1', 3)).toBe(0);
 
-    noteTurnToolUse('lead-1', 3, 'send_to_worker');
+    noteTurnEvent('lead-1', 3, 'send_to_worker');
     expect(turnOrcaToolUseCount('lead-1', 3)).toBe(1);
   });
 
   it('drops counts when the session instance restarts with the same generation', () => {
-    noteTurnToolUse('lead-1', 1, 'Read', 100);
+    noteTurnEvent('lead-1', 1, 'Read', 100);
     expect(turnToolUseCount('lead-1', 1, 100)).toBe(1);
     // 新实例从代次 1 重新数：旧实例同一代次的计数不能继承。
     expect(turnToolUseCount('lead-1', 1, 200)).toBe(0);
-    noteTurnToolUse('lead-1', 1, 'Read', 200);
+    noteTurnEvent('lead-1', 1, 'Read', 200);
     expect(turnToolUseCount('lead-1', 1, 200)).toBe(1);
   });
 
@@ -193,7 +203,7 @@ describe('gate trigger scope', () => {
   });
 
   it('still treats a namespaced Orca tool name as Orca', () => {
-    noteTurnToolUse('lead-1', 2, 'mcp__cindy__send_to_worker');
+    noteTurnEvent('lead-1', 2, 'mcp__cindy__send_to_worker');
     expect(turnOrcaToolUseCount('lead-1', 2)).toBe(1);
   });
 

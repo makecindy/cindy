@@ -77,8 +77,12 @@ export function currentTurnGeneration(sessionId: string): number | undefined {
   return currentGeneration.get(sessionId);
 }
 
-/** 收口闸门的机械扳机：本轮调过哪些工具，其中有没有 Orca 自己的工具。 */
-export function noteTurnToolUse(
+/**
+ * 收口闸门的单写点：每个事件都调一次。代次总是记录（无工具回合也要记），
+ * 只有真的带工具名时才累加计数——两件事拆成两个函数就会出现
+ * 「只在 tool_use 时更新代次」这种断点。
+ */
+export function noteTurnEvent(
   sessionId: string,
   generation: number,
   toolName?: string,
@@ -93,15 +97,16 @@ export function noteTurnToolUse(
   if (regressed) forgetTurnGate(sessionId);
   lastGeneration.set(sessionId, generation);
   if (instance !== undefined) instanceOf.set(sessionId, instance);
+  currentGeneration.set(sessionId, generation);
 
+  if (!toolName) return;
   const key = turnKey(sessionId, generation);
   const stored = regressed ? undefined : countsByTurn.get(key);
   const counts =
     stored && stored.instance === instance ? stored : { tools: 0, orcaTools: 0, instance };
   counts.tools += 1;
-  if (toolName && isOrcaTool(toolName)) counts.orcaTools += 1;
+  if (isOrcaTool(toolName)) counts.orcaTools += 1;
   countsByTurn.set(key, counts);
-  currentGeneration.set(sessionId, generation);
   trimTracked(countsByTurn, MAX_TRACKED_TURNS);
 }
 

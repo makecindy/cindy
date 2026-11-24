@@ -2,7 +2,7 @@ import { claimContextRecoveryTerminal, deferContextRecoveryTerminal, settleConte
 import { botLearningTracker } from './botLearningTracker.js';
 import { learningTurnIdentity } from './botLearningFeedback.js';
 import { settleBotGroupLaneTerminal, type BotGroupChatService, type BotGroupLaneTerminal } from './botGroupChatService.js';
-import { noteTurnToolUse } from './orcaTurnGate.js';
+import { noteTurnEvent } from './orcaTurnGate.js';
 import type { AgentEvent, Session } from '@cindy/maker-core';
 
 // sidebar-card-mode: turn-done 后刷新列表预览,并按需生成置顶卡片摘要
@@ -171,9 +171,13 @@ export function finishSessionTerminalEvent(
     groupLaneInputClientId,
   } = prepared;
   const { persistId, workerTerminalCapture, providerGroupHoldId } = delivery;
-  // 收口闸门的机械扳机:每事件必经处记下工具名与代次,判定在收口时做。
-  if (event.type === 'tool_use' && typeof event.sessionTurnGeneration === 'number') {
-    noteTurnToolUse(session.id, event.sessionTurnGeneration, (event.data as { toolName?: string }).toolName);
+  // 收口闸门的单写点：每个事件都调一次（含无工具回合），判定在收口时做。
+  if (typeof event.sessionTurnGeneration === 'number') {
+    noteTurnEvent(
+      session.id,
+      event.sessionTurnGeneration,
+      event.type === 'tool_use' ? (event.data as { toolName?: string }).toolName : undefined,
+    );
   }
   const terminalOwner =
     event.type === 'done' || isTerminalTurnErrorEvent(event)
