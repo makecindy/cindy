@@ -466,6 +466,26 @@ Git worktree，不改变供应商、模型与 Worker 创建权限偏好。
    `chat.userMessage.orcaHostNoticeDispatchClaim`。与不变量 3 的分工：3 管「什么时候可以
    静默结束 turn」，本条只核对「收口时回复里出现的凭据是否有记录」。
 
+3b. **收口闸门分三层，各自用可机判的输入（状态：不变量）**<br>
+   三层共享一个原则：**只用宿主状态或宿主铸造的标识判，不读语义**。任一命中都在收口处拦一次
+   （同一回合至多一次），注入纠正后不收口，让模型在同一 generation 内当场补做或改口。
+
+   - **L0 凭据**：不变量 3a，零模型、零延迟。
+   - **L1 判定**：只对本回合**零工具调用 + 零派发 + 有 Worker** 的 Lead 回合生效，避免正常
+     干活轮付代价。把本回合末段文本与宿主事实（工具调用数、派发数、Worker 名）交给辅助模型，
+     只要求回答「是否声称已经派活」。判定失败、超时（10 秒）、非布尔一律放行——闸门只减少
+     误导，不能卡住会话。每回合最多判一次、最多拦一次。
+   - **L2 欠账**：Worker 回报 `waiting` 且带问题时记账；同一问题跨两个 Lead 回合未被处理即
+     唤醒一次，文案是「某 Worker 在等你的决定」并引用问题原文，不指控撒谎。`blocked` 不计入
+     欠账（它等的可能不是 Lead）。Worker 再次回报或收到派发即清账。
+
+   **L2 的输入依赖结构化回报**：`waiting` 与问题原文来自 `send_to_lead` 的 `report`
+   入参（六态回报），该字段由结构化回报改动引入，尚未合并的上游分支里取不到；缺失时 L2
+   静默不生效，不影响 L0／L1。L1 依赖辅助模型链，未配置即降级为不判定。
+   实现指针：`apps/desktop/src/main/maker-ipc/orcaTurnGate.ts`（回合记录、判定、欠账）、
+   `orcaRemoteWorkerBridge.ts`（记录 waiting 欠账、清账）、`orcaTeamService.ts` 的
+   `handleLeadTurnSettled`／`clearRuntimeState`、`sessionEventTerminal.ts` 的每次事件计数。
+
 #### 消息派发与 auto-bridge
 
 1. **忙碌目标不丢消息（状态：不变量）**<br>

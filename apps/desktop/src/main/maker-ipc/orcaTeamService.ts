@@ -19,6 +19,15 @@ import {
   resetDispatchClaimState,
   sessionInstanceToken,
 } from './orcaDispatchClaims.js';
+import {
+  arrearsDue,
+  clearWorkerArrears,
+  forgetTurnGate,
+  judgeDispatchClaim,
+  markArrearsNudged,
+  noteLeadSettle,
+  turnToolUseCount,
+} from './orcaTurnGate.js';
 import { rebuildQueuedOrcaLeadMessage } from './orcaInterAgentDispatcher.js';
 import { isOrcaCollaborationMessage } from './orcaQueueNote.js';
 import {
@@ -890,6 +899,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
 
   function clearRuntimeState(sessionId: string): void {
     deletePendingReport(sessionId);
+    forgetTurnGate(sessionId);
     deps.clearManualInterrupt(sessionId);
     const provisional = provisionalDispatches.get(sessionId);
     if (provisional) {
@@ -1502,6 +1512,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         ...(leadRuntime ? { instanceToken: sessionInstanceToken(leadRuntime) } : {}),
         at: Date.now(),
       });
+      // 真的给了它活,先前等回答的欠账就算处理过。
+      clearWorkerArrears(link.leadSessionId, target.id);
       if (result.mode === 'dispatched') {
         // The dependency result is the direct vendor-dispatch settlement. Keep this idempotent
         // fallback even though the dispatcher also reports commit through the callback.
@@ -2448,10 +2460,80 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     const workers = await deps.listWorkersByLead(params.leadSessionId);
     if (workers.length === 0) return;
 
+    const settleIndex = noteLeadSettle(params.leadSessionId);
+    // L2 欠账闸门:有 Worker 在等回答,而它连续两个回合没收到任何东西。
+    // 判据是状态(谁在等、等了几个回合),不是文本;沉默的没做同样命中。
+    const due = arrearsDue(params.leadSessionId);
+    if (due.length > 0) {
+      const arrear = due[0];
+      markArrearsNudged(arrear.leadSessionId, arrear.workerId);
+      const arrearsLines = [
+        `[Orca host] Worker ${arrear.workerLabel} has been waiting ${settleIndex - arrear.settlesAtReport} turns and nothing has been sent to it since:`,
+        arrear.question,
+        'Answer it with send_to_worker, or tell the user what you are waiting for.',
+      ];
+      const delivered = await deps
+        .sendAutoBridgeToLead(
+          params.leadSessionId,
+          arrearsLines.join('\n'),
+          '',
+          undefined,
+          undefined,
+          'dispatch-claim',
+        )
+        .catch(() => ({ accepted: false }));
+      deps.log.info('orca arrears reminder', {
+        leadSessionId: params.leadSessionId,
+        worker: arrear.workerId,
+        turns: settleIndex - arrear.settlesAtReport,
+        accepted: delivered.accepted,
+      });
+      // 一轮只叫一次:欠账已经叫过,就不在同一轮再叠一条核对提醒。
+      if (delivered.accepted) return;
+    }
+
     // 读一次凭据：推进轮次观察并清掉过期项，核对本身看整本账。
     const facts = dispatchFactsForTurn(params.leadSessionId, params.turnGeneration);
     const claim = findUnbackedDispatchClaim(params.leadSessionId, text);
-    if (!claim) return;
+    if (!claim) {
+      // 没有可比对的凭据时,只剩「纯口语声称已派」这一格需要语义判定:
+      // 只在本回合零工具调用、零派发、有 Worker 时才问一次。
+      if (
+        facts.length === 0 &&
+        turnToolUseCount(params.leadSessionId, params.turnGeneration) === 0
+      ) {
+        const verdict = await judgeDispatchClaim({
+          leadSessionId: params.leadSessionId,
+          turnGeneration: params.turnGeneration,
+          finalText: text,
+          workerLabels: workers
+            .map((worker) => worker.label)
+            .filter((label): label is string => Boolean(label)),
+        });
+        if (
+          verdict === 'claim' &&
+          consumeDispatchClaimReminder(params.leadSessionId, params.turnGeneration)
+        ) {
+          const judgeLines = `[Orca host] This turn dispatched nothing, and no worker received work from you.
+You wrote that work was already handed to a worker. Either dispatch now with send_to_worker, or say plainly that nothing was dispatched.`;
+          const judged = await deps
+            .sendAutoBridgeToLead(
+              params.leadSessionId,
+              judgeLines,
+              '',
+              undefined,
+              undefined,
+              'dispatch-claim',
+            )
+            .catch(() => ({ accepted: false }));
+          deps.log.info('orca turn gate reminder', {
+            leadSessionId: params.leadSessionId,
+            accepted: judged.accepted,
+          });
+        }
+      }
+      return;
+    }
     if (!consumeDispatchClaimReminder(params.leadSessionId, params.turnGeneration)) {
       deps.log.info('orca dispatch claim reminder skipped', {
         leadSessionId: params.leadSessionId,

@@ -2,6 +2,7 @@ import { claimContextRecoveryTerminal, deferContextRecoveryTerminal, settleConte
 import { botLearningTracker } from './botLearningTracker.js';
 import { learningTurnIdentity } from './botLearningFeedback.js';
 import { settleBotGroupLaneTerminal, type BotGroupChatService, type BotGroupLaneTerminal } from './botGroupChatService.js';
+import { noteTurnToolUse } from './orcaTurnGate.js';
 import type { AgentEvent, Session } from '@cindy/maker-core';
 
 // sidebar-card-mode: turn-done 后刷新列表预览,并按需生成置顶卡片摘要
@@ -170,6 +171,10 @@ export function finishSessionTerminalEvent(
     groupLaneInputClientId,
   } = prepared;
   const { persistId, workerTerminalCapture, providerGroupHoldId } = delivery;
+  // 收口闸门的机械扳机:每事件必经处只数 tool_use,不关心具体工具。
+  if (event.type === 'tool_use' && typeof event.sessionTurnGeneration === 'number') {
+    noteTurnToolUse(session.id, event.sessionTurnGeneration);
+  }
   const terminalOwner =
     event.type === 'done' || isTerminalTurnErrorEvent(event)
       ? captureProductTurnFailureOwner(session, event, eventAgentMeta, prepared.pluginTargetInputIds)

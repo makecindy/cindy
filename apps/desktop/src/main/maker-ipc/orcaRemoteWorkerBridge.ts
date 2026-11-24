@@ -12,6 +12,7 @@ import type { OrcaToolResult } from '@cindy/orca-workflow';
 import type { OrcaRemoteLead } from '../../shared/orcaRemoteWorker.js';
 import type { OrcaWorkerRecord } from '../localDb/orcaTeamStore.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+import { noteWorkerReportArrears } from './orcaTurnGate.js';
 
 export interface OrcaRemoteWorkerBridgeDeps {
   getOwnerToken(): unknown;
@@ -213,6 +214,17 @@ export function createOrcaRemoteWorkerBridge(deps: OrcaRemoteWorkerBridgeDeps) {
       }
       assertOwner(owner);
       if (!result.isError) await settle?.();
+      // 欠账记录：依赖 #9818 的 `report.state`/`report.question`；字段缺席时本层静默失效。
+      if (request.tool === 'send_to_lead' && !result.isError) {
+        const report = (request.args as { report?: { state?: string; question?: string } }).report;
+        noteWorkerReportArrears({
+          leadSessionId: request.leadSessionId,
+          workerId: worker.id,
+          workerLabel: worker.label ?? worker.role ?? worker.id,
+          state: report?.state,
+          question: report?.question,
+        });
+      }
       return result;
     },
   };
