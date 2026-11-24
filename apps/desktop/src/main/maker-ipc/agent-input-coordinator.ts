@@ -2370,8 +2370,10 @@ export class AgentInputCoordinator {
     //    continue 项不入队,避免 A 与 continue 双发。
     // 自动来源(scheduler / orca)不代表用户表态,维持「不清」语义。暂停队列的
     // Continue 则由 resume 原子清除与当前队首匹配的 recovery 后重发原消息。
-    if (state.recovery?.kind === 'queue-head' && !automaticOrigin) {
-      const abandonedClientId = state.recovery.clientId;
+    const queueHeadRecovery = state.recovery;
+    if (queueHeadRecovery?.kind === 'queue-head' && !automaticOrigin &&
+      (!this.remoteAccountWaits.has(queueHeadRecovery) || isUiContinuationItem(item))) {
+      const abandonedClientId = queueHeadRecovery.clientId;
       if (isUiContinuationItem(item)) {
         state.error = null;
         clearErrorProjectionSignals(state);
@@ -4393,8 +4395,7 @@ export class AgentInputCoordinator {
     next.splice(insertIndex, 0, entry);
     const previousHead = state.pendingQueue[0];
     state.pendingQueue = next;
-    if (previousHead !== next[0] && state.recovery && this.remoteAccountWaits.has(state.recovery)) {
-      state.recovery = null;
+    if (this.clearDisplacedRemoteAccountWait(state)) {
       this.scheduleDrain(sessionId, 'remote-account-head-moved');
     }
     if (previousHead !== next[0] && this.botCapabilityRefreshWaits.has(previousHead)) {
@@ -6683,6 +6684,14 @@ export class AgentInputCoordinator {
     this.emit(sessionId);
   }
 
+  private clearDisplacedRemoteAccountWait(state: SessionInputState): boolean {
+    const recovery = state.recovery;
+    if (recovery?.kind !== 'queue-head' || !this.remoteAccountWaits.has(recovery) ||
+      state.pendingQueue[0]?.clientId === recovery.clientId) return false;
+    state.recovery = null;
+    return true;
+  }
+
   onBotCapabilityRefreshReady(sessionId: string): void {
     const state = this.states.get(sessionId);
     if (!state) return;
@@ -6766,6 +6775,7 @@ export class AgentInputCoordinator {
   private prependQueueHeadIfMissing(state: SessionInputState, item: AgentInputQueuedMessage): void {
     if (state.pendingQueue.some((q) => q.clientId === item.clientId)) return;
     state.pendingQueue = [item, ...state.pendingQueue];
+    this.clearDisplacedRemoteAccountWait(state);
     this.prependPendingCompactWaitClientId(state, item.clientId);
   }
 
