@@ -68,9 +68,13 @@ function CurrentPath() {
   return <output>{useLocation().pathname}</output>;
 }
 
-it.each(['existing', 'sidebar', 'window', 'page'] as const)(
-  'opens an installed main view in the expected place (%s)', async (target) => {
-    const manifest = { id: 'quiet', name: 'Quiet', version: '1', mainView: { html: 'main.html' } };
+it.each(['existing', 'sidebar', 'window', 'page', 'existing-panel', 'new-panel'] as const)(
+  'opens the installed plugin view in the expected place (%s)', async (target) => {
+    const panel = target === 'existing-panel' || target === 'new-panel';
+    const existing = target === 'existing' || target === 'existing-panel';
+    const manifest = { id: 'quiet', name: 'Quiet', version: '1', mainView: { html: 'main.html' },
+      ...(panel ? { panel: { position: 'right', html: 'panel.html' } } : {}),
+    };
     const ghost = {
       manifest, namespace: 'local', namespaceState: 'confirmed', enabled: true,
       approval: { state: 'approved' }, installedPackageSha256: 'digest',
@@ -80,8 +84,8 @@ it.each(['existing', 'sidebar', 'window', 'page'] as const)(
       inspect: async () => ({ manifest, packageSha256: 'digest' }),
       listSync: () => ({ ghosts: [ghost] }), onChanged: () => () => {},
     } });
-    const focus = vi.spyOn(placement, 'focusExistingPluginTab').mockReturnValue(target === 'existing');
-    const resolve = vi.spyOn(placement, 'resolvePluginOpenTarget').mockReturnValue(target === 'existing' ? 'page' : target);
+    const focus = vi.spyOn(placement, 'focusExistingPluginTab').mockReturnValue(existing);
+    const resolve = vi.spyOn(placement, 'resolvePluginOpenTarget').mockReturnValue(target === 'sidebar' || target === 'window' ? target : 'page');
     const sidebar = vi.spyOn(placement, 'openPluginInSidebar').mockResolvedValue();
     const popout = vi.spyOn(placement, 'openPluginInWindow').mockImplementation(() => {});
     const container = document.createElement('div');
@@ -94,9 +98,11 @@ it.each(['existing', 'sidebar', 'window', 'page'] as const)(
         </MemoryRouter>,
       ));
       await act(async () => container.querySelector('button')!.click());
-      expect(focus).toHaveBeenCalledWith(ghost);
-      expect(resolve).toHaveBeenCalledTimes(target === 'existing' ? 0 : 1);
-      expect(sidebar).toHaveBeenCalledTimes(target === 'sidebar' ? 1 : 0);
+      if (panel) expect(focus).toHaveBeenCalledWith(ghost, 'panel');
+      else expect(focus).toHaveBeenCalledWith(ghost);
+      expect(resolve).toHaveBeenCalledTimes(existing || panel ? 0 : 1);
+      expect(sidebar).toHaveBeenCalledTimes(target === 'sidebar' || target === 'new-panel' ? 1 : 0);
+      if (target === 'new-panel') expect(sidebar).toHaveBeenCalledWith(ghost, 'panel');
       expect(popout).toHaveBeenCalledTimes(target === 'window' ? 1 : 0);
       expect(container.querySelector('output')?.textContent).toBe(target === 'page' ? '/apps/_ns__local__quiet' : '/task');
     } finally {

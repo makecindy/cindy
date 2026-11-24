@@ -89,7 +89,7 @@ export function GeneratedPluginPackage({
       if (matched.manifest.panel?.position === 'tab') {
         navigate('/plugins?panel=' + encodeURIComponent(instanceId));
       } else if (matched.manifest.panel) {
-        await openPluginInSidebar(matched, 'panel');
+        if (!focusExistingPluginTab(matched, 'panel')) await openPluginInSidebar(matched, 'panel');
       } else if (matched.manifest.mainView) {
         if (focusExistingPluginTab(matched)) return;
         const target = resolvePluginOpenTarget(matched);
