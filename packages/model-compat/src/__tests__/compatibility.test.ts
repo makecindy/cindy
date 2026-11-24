@@ -247,6 +247,28 @@ describe('request-owned Responses compatibility', () => {
     expect(outbound).toMatchObject({ tool_choice: { type: 'function', namespace: 'workspace', name: 'read' } });
   });
 
+  // Replayed additional tools may remain in the request history but cannot assign the current
+  // call's kind. The public Codex adapter must preserve bare/function and child/custom responses.
+  it.each(['application/json', 'text/event-stream'])('restores current tool kinds despite replayed inline declarations (%s)', async contentType => {
+    const adapter = createCodexResponsesCompatibilityAdapter();
+    const bare = { type: 'function_call', name: 'workspace__read', call_id: 'bare', arguments: '{"line":4}' };
+    const child = { type: 'function_call', name: 'workspace__read_2', call_id: 'child', arguments: '{"input":"text"}' };
+    const currentFunction = { type: 'function', name: 'workspace__read' };
+    const group = (type: string) => ({ type: 'namespace', name: 'workspace', tools: [{ type, name: 'read' }] });
+    const sse = contentType === 'text/event-stream';
+    for (const { tools, replay, item, expected } of [
+      { tools: [currentFunction, group('function')], replay: [{ type: 'custom', name: currentFunction.name }], item: bare, expected: bare },
+      { tools: [currentFunction, group('custom')], replay: [group('function')], item: child,
+        expected: { type: 'custom_tool_call', name: 'read', namespace: 'workspace', call_id: 'child', input: 'text' } },
+    ]) {
+      adapter.adaptRequest({ tools, input: [{ type: 'additional_tools', tools: replay }, { type: 'additional_tools', tools: [] }] }, 10100, undefined, true);
+      const response = { status: 'completed', output: [item] };
+      const wire = sse ? `data: ${JSON.stringify({ type: 'response.completed', response })}\n\n` : JSON.stringify(response);
+      const text = await responseText(adapter.createResponseTransform(10100, { contentType, contentEncoding: '' })!, wire);
+      expect((sse ? JSON.parse(text.trim().slice(6)).response : JSON.parse(text)).output).toEqual([expected]);
+    }
+  });
+
   it.each(['application/json', 'text/event-stream'])('restores default functions custom calls as bare tools (%s)', async contentType => {
     const adapter = createCodexResponsesCompatibilityAdapter();
     adapter.adaptRequest({ tools: [

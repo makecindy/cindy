@@ -396,7 +396,28 @@
      next[key] = rewritten;
      changed ||= rewritten !== entry;
    }
-@@ -266,13 +304,14 @@ export function restoreRoutedCustomCalls(
+@@ -244,16 +282,17 @@ function rewriteForUpstream(
+ export function rewriteRoutedCustomToolsForUpstream(
+   body: unknown,
+   supportsResponsesCustomTools?: boolean,
++  catalog: unknown = body,
+ ): {
+   body: unknown;
+   names: Set<string>;
+   repairNames: Set<string>;
+ } {
+   const conversionNames = collectRoutedCustomToolNames(body, supportsResponsesCustomTools);
+-  const names = collectRoutedCustomToolWireNames(body, supportsResponsesCustomTools);
+-  const repairNames = collectRoutedCustomToolWireNames(body, supportsResponsesCustomTools, true);
++  const names = collectRoutedCustomToolWireNames(catalog, supportsResponsesCustomTools);
++  const repairNames = collectRoutedCustomToolWireNames(catalog, supportsResponsesCustomTools, true);
+   for (const name of repairNames) {
+-    if (!toolChoiceAllowsRoutedCustomTool(body, name, repairNames)) repairNames.delete(name);
++    if (!toolChoiceAllowsRoutedCustomTool(catalog, name, repairNames)) repairNames.delete(name);
+   }
+   if (conversionNames.size === 0) return { body, names, repairNames };
+   const callIds = new Set<string>();
+@@ -266,13 +305,14 @@ export function restoreRoutedCustomCalls(
    names: ReadonlySet<string>,
    repairNames: ReadonlySet<string> = new Set(),
    declaredNames?: ReadonlySet<string>,
@@ -412,7 +433,7 @@
      if (
        (item.type === "function_call" || item.type === "custom_tool_call")
        && typeof item.name === "string"
-@@ -362,7 +401,7 @@ export function restoreRoutedCustomCalls(
+@@ -362,7 +402,7 @@ export function restoreRoutedCustomCalls(
      && value.type.startsWith("response.")
      && isPlainObject(value.response)
    ) {
@@ -421,7 +442,7 @@
      if (response.changed) {
        restored.response = response.value;
        changed = true;
-@@ -377,6 +416,7 @@ export function restoreRoutedCustomCallsInJson(
+@@ -377,6 +417,7 @@ export function restoreRoutedCustomCallsInJson(
    names: ReadonlySet<string>,
    repairNames: ReadonlySet<string> = new Set(),
    declaredNames?: ReadonlySet<string>,
@@ -429,7 +450,7 @@
  ): string {
    if (names.size === 0 && repairNames.size === 0) return text;
    let payload: unknown;
-@@ -385,7 +425,7 @@ export function restoreRoutedCustomCallsInJson(
+@@ -385,7 +426,7 @@ export function restoreRoutedCustomCallsInJson(
    } catch {
      return text;
    }
@@ -2475,7 +2496,7 @@
 
  function isObject(value: unknown): value is Record<string, unknown> {
    return value !== null && typeof value === "object" && !Array.isArray(value);
-@@ -33,91 +35,188 @@ function namespaceOf(value: unknown): string | undefined {
+@@ -33,91 +35,191 @@ function namespaceOf(value: unknown): string | undefined {
    return typeof value === "string" && value !== "functions" ? value : undefined;
  }
 
@@ -2513,6 +2534,8 @@
  /** Caller supplies currentTurnWireToolCatalogBody BEFORE provider schema lowering. */
 -export function collectFunctionCallRepairSchemas(body: unknown): Map<string, FunctionCallRepairSchema> {
 -  const schemas = new Map<string, FunctionCallRepairSchema>();
+-  if (!isObject(body)) return schemas;
+-  const groups = collectResponsesToolGroups(body);
 +export interface FunctionCallRepairPlan {
 +  /** Wire names the live request allocated for displaced namespace children. */
 +  renamedWireNames: ReadonlyMap<string, string>;
@@ -2526,12 +2549,17 @@
 +} {
 +  if (!isObject(body)) return { renamedWireNames: new Map(), renamedKinds: new Map() };
 +  const groups: unknown[][] = Array.isArray(body.tools) ? [body.tools] : [];
-+  if (Array.isArray(body.input)) {
-+    for (const entry of body.input) {
+   if (Array.isArray(body.input)) {
+     for (const entry of body.input) {
+-      if (isObject(entry) && entry.type === "tool_search_output" && Array.isArray(entry.tools)) groups.push(entry.tools);
 +      if (isObject(entry) && (entry.type === "additional_tools" || entry.type === "tool_search_output")
 +        && Array.isArray(entry.tools)) groups.push(entry.tools);
-+    }
-+  }
+     }
+   }
+-  // Reuse namespace selector resolution, retaining schemas from the original objects below.
+-  // This local catalog view includes loaded definitions without revisiting replay history or
+-  // teaching the shared tool-group collector a new transport-wide interpretation.
+-  const lowered = rewriteRoutedNamespaceToolsForUpstream({ ...body, tools: groups.flat(), input: [] }).body;
 +  const derived = rewriteRoutedNamespaceToolsForUpstream({ ...body, tools: groups.flat(), input: [] });
 +  return {
 +    renamedWireNames: derived.renamedWireNames,
@@ -2543,22 +2571,23 @@
 +export function collectFunctionCallRepairSchemas(
 +  body: unknown,
 +  plan?: FunctionCallRepairPlan,
++  currentInlineIndex?: number,
 +): FunctionCallRepairSchemas {
 +  const byIdentity = new Map<string, FunctionCallRepairSchema>();
 +  const byWireName = new Map<string, FunctionCallRepairSchema>();
 +  const namespacedFunctions = new Set<string>();
 +  const schemas = { byIdentity, byWireName, namespacedFunctions };
-   if (!isObject(body)) return schemas;
--  const groups = collectResponsesToolGroups(body);
++  if (!isObject(body)) return schemas;
 +  const liveGroups: unknown[][] = [];
 +  if (Array.isArray(body.tools)) liveGroups.push(body.tools);
 +  const replayedGroups: unknown[][] = [];
-   if (Array.isArray(body.input)) {
-     for (const entry of body.input) {
--      if (isObject(entry) && entry.type === "tool_search_output" && Array.isArray(entry.tools)) groups.push(entry.tools);
++  if (Array.isArray(body.input)) {
++    for (const [index, entry] of body.input.entries()) {
 +      if (!isObject(entry) || !Array.isArray(entry.tools)) continue;
 +      if (entry.type === "tool_search_output") replayedGroups.push(entry.tools);
-+      else if (entry.type === "additional_tools") liveGroups.push(entry.tools);
++      else if (entry.type === "additional_tools") {
++        (currentInlineIndex === undefined || index === currentInlineIndex ? liveGroups : replayedGroups).push(entry.tools);
++      }
 +    }
 +  }
 +  // Namespace lowering keeps live top-level declarations over reserved-group duplicates.
@@ -2567,12 +2596,8 @@
 +  for (const group of liveGroups) {
 +    for (const tool of group) {
 +      if (isObject(tool) && tool.type !== "namespace" && typeof tool.name === "string") canonicalBareNames.add(tool.name);
-     }
-   }
--  // Reuse namespace selector resolution, retaining schemas from the original objects below.
--  // This local catalog view includes loaded definitions without revisiting replay history or
--  // teaching the shared tool-group collector a new transport-wide interpretation.
--  const lowered = rewriteRoutedNamespaceToolsForUpstream({ ...body, tools: groups.flat(), input: [] }).body;
++    }
++  }
 +  // The forwarded request owns all wire names. Search history can only resolve selectors that
 +  // had no match when the request was lowered; it must never allocate its own wire names here.
 +  const { loweredToolChoice: loweredChoice, renamedWireNames } = plan ?? deriveFunctionCallRepairPlan(body);
@@ -2700,7 +2725,7 @@
    const raw = item.arguments;
    if (raw !== "") {
      try {
-@@ -140,7 +239,7 @@ export function repairFunctionCalls(
+@@ -140,7 +242,7 @@ export function repairFunctionCalls(
    value: unknown,
    schemas: FunctionCallRepairSchemas,
  ): { value: unknown; changed: boolean } {
@@ -2709,7 +2734,7 @@
    if (typeof value.status === "string" && ["failed", "incomplete", "cancelled", "in_progress", "queued"].includes(value.status)) return { value, changed: false };
    let next: unknown = value;
    if (value.type === "function_call") next = repairItem(value, schemas, false);
-@@ -164,8 +263,11 @@ export function repairFunctionCalls(
+@@ -164,8 +266,11 @@ export function repairFunctionCalls(
    return { value: next, changed: next !== value };
  }
 

@@ -139,15 +139,21 @@ export interface ResponsesCompatibilityPolicy {
 
 /** One request owns both forward conversion and reverse tool identities. */
 export function prepareResponsesCompatibility(body: unknown, policy: ResponsesCompatibilityPolicy) {
-  const bareCustomNames = collectBareCustomToolNames(body);
+  const input = isPlainObject(body) ? body.input : undefined;
+  const currentInlineIndex = indexOfCurrentTurnInlineTools(input);
+  // Keep replayed declarations on the wire, but do not use their types to classify current calls.
+  const catalog = isPlainObject(body) && Array.isArray(input) && currentInlineIndex >= 0
+    ? { ...body, input: input.filter((item, index) => index === currentInlineIndex || !isPlainObject(item) || item.type !== 'additional_tools') }
+    : body;
+  const bareCustomNames = collectBareCustomToolNames(catalog);
   const custom = policy.customTools && policy.customTools !== 'native'
-    ? rewriteRoutedCustomToolsForUpstream(body, policy.customTools === 'functions' ? false : undefined)
+    ? rewriteRoutedCustomToolsForUpstream(body, policy.customTools === 'functions' ? false : undefined, catalog)
     : { body, names: new Set<string>(), repairNames: new Set<string>() };
   const search = policy.toolSearch === 'function'
     ? rewriteRoutedToolSearchForUpstream(custom.body)
     : { body: custom.body, names: new Set<string>() };
   const namespace = policy.namespaceTools === 'functions'
-    ? rewriteRoutedNamespaceToolsForUpstream(search.body, custom.names, bareCustomNames, collectNamespaceCustomToolNames(body),
+    ? rewriteRoutedNamespaceToolsForUpstream(search.body, custom.names, bareCustomNames, collectNamespaceCustomToolNames(catalog),
         body && typeof body === 'object' ? (body as { tool_choice?: unknown }).tool_choice : undefined)
     : {
         body: custom.body !== body ? disambiguateNativeToolChoice(body, search.body, custom.body) : search.body,
@@ -156,7 +162,7 @@ export function prepareResponsesCompatibility(body: unknown, policy: ResponsesCo
   // Native requests retain their declarations, but response restoration and schema lookup still
   // need one collision-safe identity plan, including original kinds and loaded search tools.
   const repairPlan = policy.repairFunctionArguments && policy.namespaceTools !== 'functions'
-    ? deriveFunctionCallRepairPlan(body)
+    ? deriveFunctionCallRepairPlan(catalog)
     : {
         renamedWireNames: namespace.renamedWireNames,
         renamedKinds: namespace.renamedKinds,
@@ -165,7 +171,7 @@ export function prepareResponsesCompatibility(body: unknown, policy: ResponsesCo
           : undefined,
       };
   const displacedKinds = repairPlan.renamedKinds;
-  const schemas = collectFunctionCallRepairSchemas(policy.repairFunctionArguments ? body : undefined, repairPlan);
+  const schemas = collectFunctionCallRepairSchemas(policy.repairFunctionArguments ? body : undefined, repairPlan, currentInlineIndex);
   const displacement = displacedKinds.size > 0 || (custom.names.size > 0 && schemas.namespacedFunctions.size > 0)
     ? {
         bareCustomNames, displacedKinds,
@@ -177,7 +183,7 @@ export function prepareResponsesCompatibility(body: unknown, policy: ResponsesCo
   for (const schema of schemas.byIdentity.values()) {
     if (!schema.namespace) bareFunctionNames.add(schema.name);
   }
-  const scrubAuthorization = collectSelfNamedNamespaceScrubAuthorization(body, new Set([...custom.names, ...custom.repairNames]), bareFunctionNames);
+  const scrubAuthorization = collectSelfNamedNamespaceScrubAuthorization(catalog, new Set([...custom.names, ...custom.repairNames]), bareFunctionNames);
   const restoreNamespace = (text: string) => restoreRoutedNamespaceCallsInJson(text, namespace.aliases);
   return {
     body: policy.namespaceTools === 'functions' ? stripCanonicalOnlyToolFields(namespace.body, false) : namespace.body,

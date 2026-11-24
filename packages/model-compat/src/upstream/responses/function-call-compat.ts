@@ -95,6 +95,7 @@ export function deriveFunctionCallRepairPlan(body: unknown): FunctionCallRepairP
 export function collectFunctionCallRepairSchemas(
   body: unknown,
   plan?: FunctionCallRepairPlan,
+  currentInlineIndex?: number,
 ): FunctionCallRepairSchemas {
   const byIdentity = new Map<string, FunctionCallRepairSchema>();
   const byWireName = new Map<string, FunctionCallRepairSchema>();
@@ -105,10 +106,12 @@ export function collectFunctionCallRepairSchemas(
   if (Array.isArray(body.tools)) liveGroups.push(body.tools);
   const replayedGroups: unknown[][] = [];
   if (Array.isArray(body.input)) {
-    for (const entry of body.input) {
+    for (const [index, entry] of body.input.entries()) {
       if (!isObject(entry) || !Array.isArray(entry.tools)) continue;
       if (entry.type === "tool_search_output") replayedGroups.push(entry.tools);
-      else if (entry.type === "additional_tools") liveGroups.push(entry.tools);
+      else if (entry.type === "additional_tools") {
+        (currentInlineIndex === undefined || index === currentInlineIndex ? liveGroups : replayedGroups).push(entry.tools);
+      }
     }
   }
   // Namespace lowering keeps live top-level declarations over reserved-group duplicates.

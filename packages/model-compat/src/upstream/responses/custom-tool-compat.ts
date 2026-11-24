@@ -282,16 +282,17 @@ function rewriteForUpstream(
 export function rewriteRoutedCustomToolsForUpstream(
   body: unknown,
   supportsResponsesCustomTools?: boolean,
+  catalog: unknown = body,
 ): {
   body: unknown;
   names: Set<string>;
   repairNames: Set<string>;
 } {
   const conversionNames = collectRoutedCustomToolNames(body, supportsResponsesCustomTools);
-  const names = collectRoutedCustomToolWireNames(body, supportsResponsesCustomTools);
-  const repairNames = collectRoutedCustomToolWireNames(body, supportsResponsesCustomTools, true);
+  const names = collectRoutedCustomToolWireNames(catalog, supportsResponsesCustomTools);
+  const repairNames = collectRoutedCustomToolWireNames(catalog, supportsResponsesCustomTools, true);
   for (const name of repairNames) {
-    if (!toolChoiceAllowsRoutedCustomTool(body, name, repairNames)) repairNames.delete(name);
+    if (!toolChoiceAllowsRoutedCustomTool(catalog, name, repairNames)) repairNames.delete(name);
   }
   if (conversionNames.size === 0) return { body, names, repairNames };
   const callIds = new Set<string>();
