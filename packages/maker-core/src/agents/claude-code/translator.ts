@@ -65,7 +65,7 @@ import {
 export interface TurnState {
   /** Agent tool calls issued in this turn, paired with their async launch receipt. */
   subagentTasks?: Map<string, string | undefined>;
-  segmentByMessageId?: Map<string, string>;
+  messageIdBySegment?: Map<string, string>;
   text: string;
   toolUses: number;
   /** 本 turn 内真实 Claude API call 次数；message_start 触发时递增。 */
@@ -384,7 +384,14 @@ function ccLiveStatus(
 function mergeProxyUsage(ctx: TranslateContext, sdk: UsageSegment[]): UsageSegment[] {
   if (!ctx.turn.subagentTasks?.size) return sdk;
   const merged = [...sdk];
-  const knownSegments = new Set(ctx.turn.segmentByMessageId?.values());
+  // A provider can reuse an ID after a tool result or retry. Keep every SDK
+  // boundary until settlement so an older receipt cannot replace a later call.
+  const segmentsByMessageId = new Map<string, string[]>();
+  for (const [segmentId, messageId] of ctx.turn.messageIdBySegment ?? []) {
+    const ids = segmentsByMessageId.get(messageId);
+    if (ids) ids.push(segmentId);
+    else segmentsByMessageId.set(messageId, [segmentId]);
+  }
   const indexBySegment = new Map(sdk.map((segment, index) => [segment.id, index]));
   const added = new Set<string>();
   const soleParentByTask = new Map<string, string | undefined>();
@@ -394,14 +401,19 @@ function mergeProxyUsage(ctx: TranslateContext, sdk: UsageSegment[]): UsageSegme
   }
   // SDK segment IDs are claude:<sequence>:<parent>. Parent IDs may themselves contain colons.
   const sdkParent = (id: string) => id.slice(id.indexOf(':', 'claude:'.length) + 1);
-  const anonymousParents = new Set(sdk.flatMap(s => s.id && !knownSegments.has(s.id) ? [sdkParent(s.id)] : []));
+  const anonymousParents = new Set(sdk.flatMap(s => s.id && !ctx.turn.messageIdBySegment?.has(s.id) ? [sdkParent(s.id)] : []));
   for (const [taskId, onlyParent] of soleParentByTask) {
     // Reading transfers the whole owner batch, including receipts for resumed calls.
     const billing = ctx.getSubagentTaskUsage?.(taskId, ctx.getSdkSessionId())?.billing;
     if (!billing || billing.sdkSessionId !== ctx.getSdkSessionId()) continue;
     for (const request of billing.segments) {
-      if (!request.id || added.has(request.id)) continue;
-      const sdkId = ctx.turn.segmentByMessageId?.get(request.id);
+      if (!request.id) continue;
+      const matches = segmentsByMessageId.get(request.id)?.filter(id =>
+        ctx.turn.subagentTasks?.get(sdkParent(id)) === taskId);
+      if (matches && matches.length !== 1) continue;
+      const sdkId = matches?.[0];
+      const receiptKey = sdkId ?? request.id;
+      if (added.has(receiptKey)) continue;
       const parent = sdkId ? sdkParent(sdkId) : onlyParent;
       if (!parent || ctx.turn.subagentTasks.get(parent) !== taskId || (!sdkId && anonymousParents.has(parent))) continue;
       const index = sdkId ? indexBySegment.get(sdkId) : undefined;
@@ -418,7 +430,7 @@ function mergeProxyUsage(ctx: TranslateContext, sdk: UsageSegment[]): UsageSegme
           cacheCreate1hTokens: Math.max(previous.cacheCreate1hTokens ?? 0, request.cacheCreate1hTokens ?? 0),
         };
       }
-      added.add(request.id);
+      added.add(receiptKey);
     }
   }
   return merged;
@@ -430,7 +442,7 @@ function mergeProxyUsage(ctx: TranslateContext, sdk: UsageSegment[]): UsageSegme
  */
 function resetTurnState(turn: TurnState): void {
   turn.subagentTasks?.clear();
-  turn.segmentByMessageId?.clear();
+  turn.messageIdBySegment?.clear();
   turn.text = '';
   turn.toolUses = 0;
   turn.apiCalls = 0;
@@ -2056,7 +2068,7 @@ function handleStreamEvent(
       });
     }
     if (typeof eventRequestId === 'string' && eventRequestId) {
-      (ctx.turn.segmentByMessageId ??= new Map()).set(eventRequestId, segmentId);
+      (ctx.turn.messageIdBySegment ??= new Map()).set(segmentId, eventRequestId);
     }
     ctx.rt.activeUsageSegmentByParent.set(parentStreamKey, segmentId);
     if (!parentToolUseId) {

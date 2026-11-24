@@ -113,8 +113,8 @@ function recordBillingSegment(
   requestedFast: boolean,
 ): void {
   if (!message || typeof message.id !== 'string' || !message.id ||
-      typeof message.model !== 'string' || !message.model.trim() || !isPlainObject(message.usage) ||
-      !validCount(message.usage.input_tokens) || usage.output_tokens === undefined) return;
+      typeof message.model !== 'string' || !message.model.trim() ||
+      usage.input_tokens === undefined || usage.output_tokens === undefined) return;
   const speed = usage.speed ?? (requestedFast ? 'fast' : 'standard');
   const tier = usage.tier;
   if (speed !== 'standard' && speed !== 'fast') return;
@@ -128,7 +128,7 @@ function recordBillingSegment(
     id, model: message.model, modelConfirmed: true,
     complete: usage.cache_read_input_tokens !== undefined && usage.cache_creation_input_tokens !== undefined,
     priceVariant: speed === 'fast' || tier === 'priority' ? 'priority' : tier === 'batch' ? 'batch' : 'standard',
-    inputTokens: usage.input_tokens ?? message.usage.input_tokens, outputTokens: usage.output_tokens,
+    inputTokens: usage.input_tokens, outputTokens: usage.output_tokens,
     cacheReadTokens: usage.cache_read_input_tokens ?? 0, cacheCreateTokens: cacheCreate,
     cacheCreate1hTokens: cache1h,
   });
@@ -355,7 +355,7 @@ export function createClaudeSubagentUsageResponseObserver(
     if (!taskId) return null;
 
     let done = false;
-    let usageCommitted = false;
+    let cardUsageCommitted = false;
     let totalBytes = 0;
     let buffer = '';
     let latestInputUsage: Record<string, unknown> | null = null;
@@ -363,11 +363,13 @@ export function createClaudeSubagentUsageResponseObserver(
 
     let message: Record<string, unknown> | null = null;
     let billingUsage: BillingUsage = {};
+    let sawInputStart = false;
     let sawOutputUpdate = false;
     let responseError = false;
-    const commitUsage = (complete = false): void => {
-      if (usageCommitted) return;
-      usageCommitted = true;
+    let cycleStopped = false;
+    const commitCardUsage = (): void => {
+      if (cardUsageCommitted) return;
+      cardUsageCommitted = true;
       const usage = {
         input_tokens: latestInputUsage ? numberField(latestInputUsage, 'input_tokens') : 0,
         cache_read_input_tokens: latestInputUsage
@@ -379,9 +381,6 @@ export function createClaudeSubagentUsageResponseObserver(
         output_tokens: latestOutputUsage ? numberField(latestOutputUsage, 'output_tokens') : 0,
       };
       bridge.recordResponseUsage(taskId, usage);
-      if (billing && complete && sawOutputUpdate && !responseError) {
-        recordBillingSegment(billing.segments, message, billingUsage, billing.requestedFast);
-      }
     };
 
     const finishWithoutUsage = (): void => {
@@ -390,17 +389,23 @@ export function createClaudeSubagentUsageResponseObserver(
       bridge.releaseActiveTask(taskId);
     };
 
+    const markInvalidData = (): void => { responseError = true; };
     const processFrame = (frame: string): void => {
-      const data = readSseFrameData(frame);
+      const data = readSseFrameData(frame, markInvalidData);
       if (!data) return;
       if (data.type === 'error') responseError = true;
       const start = isPlainObject(data.message) ? data.message : null;
       if (data.type === 'message_start') {
+        cycleStopped = false;
         if (!message || message.id !== start?.id) {
+          message = start;
           billingUsage = {};
+          sawInputStart = false;
           sawOutputUpdate = false;
+        } else if (!message.model && start?.model) {
+          message = start;
         }
-        message = start;
+        if (isPlainObject(start?.usage) && validCount(start.usage.input_tokens)) sawInputStart = true;
       }
       const usage = start && isPlainObject(start.usage)
         ? start.usage
@@ -418,7 +423,10 @@ export function createClaudeSubagentUsageResponseObserver(
         if (inputTokens > 0) latestInputUsage = usage;
         if (numberField(usage, 'output_tokens') > 0) latestOutputUsage = usage;
       }
-      if (data.type === 'message_stop') commitUsage(true);
+      if (data.type === 'message_stop') {
+        cycleStopped = true;
+        commitCardUsage();
+      }
     };
 
     const drain = (flush: boolean): void => {
@@ -448,6 +456,7 @@ export function createClaudeSubagentUsageResponseObserver(
         if (body && isPlainObject(body.usage)) {
           message = body;
           if (billing) {
+            sawInputStart = validCount(body.usage.input_tokens);
             sawOutputUpdate = validCount(body.usage.output_tokens);
             if (!mergeBillingUsage(billingUsage, body.usage)) responseError = true;
           }
@@ -455,7 +464,12 @@ export function createClaudeSubagentUsageResponseObserver(
           latestOutputUsage = body.usage;
         }
       }
-      commitUsage(isJson);
+      commitCardUsage();
+      // One HTTP response may carry several SSE cycles for the same message.
+      // Only its clean end and the last cycle's stop establish the billing boundary.
+      if (billing && (isJson || cycleStopped) && sawInputStart && sawOutputUpdate && !responseError) {
+        recordBillingSegment(billing.segments, message, billingUsage, billing.requestedFast);
+      }
       done = true;
       bridge.releaseActiveTask(taskId);
     };

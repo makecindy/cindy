@@ -3399,7 +3399,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       // usageTracker.beginTurn() 只清 usage 桶；translator 的 turnState 也要在新 turn
       // 开始时清掉，避免上一轮 abnormal/abort 没走 result 时污染下一轮状态。
       turnState.subagentTasks?.clear();
-      turnState.segmentByMessageId?.clear();
+      turnState.messageIdBySegment?.clear();
       usageTracker.beginTurn();
       resetClaudeGenerationTiming(runtimeState.generation);
       runtimeState.activeUsageSegmentByParent.clear();

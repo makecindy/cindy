@@ -363,6 +363,7 @@ it.each([
   ...Object.entries({
     proxy: 0.0027, 'sdk-and-proxy': 0.0027, legacy: null, truncated: null, 'foreign-session': null,
     untagged: null, 'late-launch': null, 'early-response': 0.0027, 'middle-delta': 0.304,
+    'same-response-cycles': 0.3027, 'truncated-second-cycle': null, 'malformed-next-cycle': null, 'reused-request-id': 0.0074,
     'resumed-agent': 0.0054, 'ambiguous-resume': 0.0027, 'restarted-stream': 0.0027, 'restart-without-output': null,
   }).map(([mode, expected]) => ({ mode, name: mode, cache: undefined, expected })),
   ...cacheCases.map(cache => ({ mode: 'proxy', name: cache.name, cache, expected: cache.expected })),
@@ -393,21 +394,23 @@ it.each([
       ...usage, cache_creation_input_tokens: 50,
       cache_creation: { ephemeral_5m_input_tokens: 20, ephemeral_1h_input_tokens: 30 },
     };
+    const splitResponse = mode === 'same-response-cycles' || mode === 'truncated-second-cycle';
+    const repeatedId = mode === 'reused-request-id';
     const resumed = mode === 'resumed-agent' || mode === 'ambiguous-resume';
     const middleUsage = {
       input_tokens: 150, output_tokens: 12, cache_read_input_tokens: 300_000, cache_creation_input_tokens: 80,
       cache_creation: { ephemeral_1h_input_tokens: 40 },
     };
     const emit = (msg: Parameters<typeof translateSdkMessage>[0]) => translateSdkMessage(msg, queue, ctx);
-    function sdkRequest(id: string, model: string, parent?: string) {
-      const sdkUsage = cache?.name.startsWith('SDK ') ? { ...usage, cache_read_input_tokens: 300_000 } : childUsage;
+    function sdkRequest(id: string, model: string, parent?: string, sdkUsage = cache?.name.startsWith('SDK ')
+      ? { ...usage, cache_read_input_tokens: 300_000 } : childUsage) {
       emit({ type: 'stream_event', parent_tool_use_id: parent, event: {
         type: 'message_start', message: { id, model, usage: parent ? sdkUsage : usage },
       } });
       if (parent && resumed) return;
       for (const event of [
         ...(parent && mode === 'middle-delta' ? [{ type: 'message_delta', usage: { cache_read_input_tokens: 300_000 } }] : []),
-        { type: 'message_delta', usage: parent ? (cache?.name === 'SDK confirms 300k' ? sdkUsage : { output_tokens: 10 }) : usage }, { type: 'message_stop' },
+        { type: 'message_delta', usage: parent ? (cache?.name === 'SDK confirms 300k' ? sdkUsage : { output_tokens: sdkUsage.output_tokens }) : usage }, { type: 'message_stop' },
       ]) emit({ type: 'stream_event', parent_tool_use_id: parent, event });
     }
     if (cache?.name === 'unknown prior cache baseline') {
@@ -426,6 +429,16 @@ it.each([
     if (mode === 'sdk-and-proxy') {
       // A second SDK block shares this provider request with the first block and both proxy receipts.
       sdkRequest('msg-child', model, 'tool-a');
+    }
+    if (mode === 'same-response-cycles') {
+      sdkRequest('msg-child', model, 'tool-a', { ...childUsage, cache_read_input_tokens: 300_000 });
+    }
+    if (repeatedId) {
+      sdkRequest('msg-child', model, 'tool-a');
+      emit({ type: 'user', parent_tool_use_id: 'tool-a', message: { content: [
+        { type: 'tool_result', tool_use_id: 'inner-tool', content: 'ok' },
+      ] } });
+      sdkRequest('msg-child', model, 'tool-a', { ...childUsage, input_tokens: 200, output_tokens: 20 });
     }
     if (resumed) {
       emit({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tool-b', name: 'Agent', input: { prompt } }] } });
@@ -448,20 +461,30 @@ it.each([
           requestHeaders: {}, responseHeaders: { 'content-type': 'text/event-stream' },
           requestBody: requestBody(model, prompt),
         });
+        const secondRequest = repeatedId && reqId === 2;
         const frames = [
+          ...(splitResponse ? [
+            { type: 'message_start', message: { id: 'msg-child', model, usage: { ...usage, output_tokens: 0 } } },
+            { type: 'message_delta', usage: { output_tokens: 0 } }, { type: 'message_stop' },
+          ] : []),
           ...(['restarted-stream', 'restart-without-output'].includes(mode) ? [
             { type: 'message_start', message: { id: 'abandoned', model, usage } },
             { type: 'message_delta', usage: middleUsage },
           ] : []),
-          { type: 'message_start', message: { id: reqId > 2 ? 'msg-resumed' : 'msg-child', model, usage: { ...childUsage, output_tokens: 0 } } },
+          { type: 'message_start', message: { id: reqId > 2 ? 'msg-resumed' : 'msg-child', model, usage: {
+            ...childUsage, ...(splitResponse ? { cache_read_input_tokens: 300_000 } : {}),
+            input_tokens: splitResponse ? undefined : secondRequest ? 200 : 100, output_tokens: 0,
+          } } },
           ...(mode === 'middle-delta' ? [{ type: 'message_delta', usage: middleUsage }] : []),
           { type: 'message_delta', usage: {
-            ...(mode === 'restart-without-output' ? {} : { output_tokens: 10 }),
+            ...(mode === 'restart-without-output' ? {} : { output_tokens: secondRequest ? 20 : 10 }),
             ...(!cache ? { cache_creation: mode === 'sdk-and-proxy' ? { ephemeral_1h_input_tokens: 0 } : { ephemeral_5m_input_tokens: 20 } } : {}),
           } },
-          ...(mode === 'truncated' ? [] : [{ type: 'message_stop' }]),
+          ...(mode === 'truncated' || mode === 'truncated-second-cycle' ? [] : [{ type: 'message_stop' }]),
         ];
         sink?.onData?.(Buffer.from(frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join('')));
+        const tail = mode === 'malformed-next-cycle' ? 'data: {"type":"message_start"' : ': keepalive\n\ndata: [DONE]\n\n';
+        sink?.onData?.(Buffer.from(tail));
         sink?.onEnd?.();
       }
     }
@@ -469,11 +492,11 @@ it.each([
       emit({ type: 'system', subtype: 'task_notification', status: 'completed', task_id: 'agent-a', tool_use_id: 'tool-a' });
       launch();
     }
-    const childInput = mode === 'middle-delta' ? 150 : resumed ? 200 : 100;
-    const childOutput = mode === 'middle-delta' ? 12 : resumed ? 20 : 10;
+    const childInput = repeatedId ? 300 : mode === 'middle-delta' ? 150 : resumed ? 200 : 100;
+    const childOutput = repeatedId ? 30 : mode === 'middle-delta' ? 12 : resumed ? 20 : 10;
     const reportedCache: { cache_read_input_tokens?: number; cache_creation_input_tokens?: number } = cache?.aggregate ?? {
-      cache_read_input_tokens: mode === 'middle-delta' ? 300_000 : 0,
-      cache_creation_input_tokens: mode === 'middle-delta' ? 80 : resumed ? 100 : 50,
+      cache_read_input_tokens: splitResponse || mode === 'middle-delta' ? 300_000 : 0,
+      cache_creation_input_tokens: mode === 'middle-delta' ? 80 : resumed || repeatedId ? 100 : 50,
     };
     const priorTurn = cache?.name === 'unknown prior cache baseline';
     emit({ type: 'result', result: 'done', usage: { input_tokens: childInput + (priorTurn ? 120 : 100), output_tokens: childOutput + (priorTurn ? 15 : 10), ...reportedCache } });
@@ -491,6 +514,12 @@ it.each([
       const childSegments = segments.filter(segment => segment.model === model);
       expect(childSegments).toHaveLength(1);
       expect(childSegments[0]).toMatchObject({ complete: true, cacheCreate1hTokens: 30 });
+    }
+    if (mode === 'same-response-cycles') expect(childSegment).toMatchObject({ cacheReadTokens: 300_000, outputTokens: 10, complete: true });
+    if (mode === 'truncated-second-cycle' || mode === 'malformed-next-cycle') expect(childSegment).toBeUndefined();
+    if (repeatedId) {
+      expect(segments.filter(s => s.model === model).map(s => [s.inputTokens, s.outputTokens])).toEqual([[100, 10], [200, 20]]);
+      expect(complete).toBe(true);
     }
     if (mode === 'restarted-stream') expect(childSegment?.outputTokens).toBe(10);
     if (mode === 'restart-without-output') expect(childSegment).toBeUndefined();
