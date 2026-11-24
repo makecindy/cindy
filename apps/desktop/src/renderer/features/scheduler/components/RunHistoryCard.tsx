@@ -154,6 +154,9 @@ export function RunHistoryCard({
   const errorKey = isScheduleActionExpired(run.errorMsg)
     ? `chat.unreadFailedScheduleBanner.${run.failureRecovered ? 'actionRecovered' : 'actionExpired'}`
     : errorCode ? `chat.remoteError.${errorCode}` : undefined;
+  const failureMessage = errorDetail?.startsWith('[SESSION_BUSY_BEFORE_DISPATCH] ')
+    ? t('scheduler.runs.sessionBusyRecovery', { action: t('scheduler.button.runNow') })
+    : errorKey && i18n.exists(errorKey) ? t(errorKey) : t('chat.unreadFailedScheduleBanner.text');
   const navigate = useNavigate();
   const isLegacySessionRun = run.id.startsWith(LEGACY_SESSION_RUN_ID_PREFIX);
   const showError =
@@ -367,13 +370,13 @@ export function RunHistoryCard({
 
       {showError && (run.status === 'failed' ? (
         <ErrorNotice
-          message={errorKey && i18n.exists(errorKey) ? t(errorKey) : t('chat.unreadFailedScheduleBanner.text')}
+          message={failureMessage}
           details={run.errorMsg!}
           onDiagnose={() => {
             // 当前自动化可能已切换或重新绑定；只信任这次运行记录保存的任务归属。
             prefillErrorDiagnosisDraft(buildErrorDiagnosisPrompt(t,
               run.sessionId ? buildSessionDeepLink(run.sessionId) : null, {
-                message: errorKey && i18n.exists(errorKey) ? t(errorKey) : t('chat.unreadFailedScheduleBanner.text'),
+                message: failureMessage,
                 details: scheduleFailureDetails({ ...run, runId: run.id }),
               }));
             navigate('/cc-agent/new');

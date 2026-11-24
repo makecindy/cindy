@@ -1335,11 +1335,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
           && target?.status === 'active' && !target.agentDeviceId && !target.remoteHostId
           && !selection.agentDeviceId && this.runtime.isSessionInTurn(sessionId)
         ) {
-          return {
-            sessionId,
-            skipped: true,
-            resultText: '[SESSION_BUSY_BEFORE_DISPATCH] Target session was busy. The prompt was not sent.',
-          };
+          const errMsg = '[SESSION_BUSY_BEFORE_DISPATCH] Target session was busy. The prompt was not sent.';
+          await this.notifyFailureSilent(schedule, ctx, errMsg);
+          throw new Error(errMsg);
         }
         return this.failOrDeferSessionRunning(schedule, ctx, sessionId, true);
       }

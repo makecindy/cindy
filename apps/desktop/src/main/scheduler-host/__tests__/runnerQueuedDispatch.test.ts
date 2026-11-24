@@ -2637,8 +2637,8 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
   });
 
   // #12544, unit: clock-fired one-shot with an explicit model and a live local
-  // turn must retain a skipped result without switching models or enqueuing.
-  it('records an undispatched skip for a timed one-shot blocked by a local turn', async () => {
+  // turn must report the undispatched failure and claim its notification once.
+  it('reports an undispatched failure for a timed one-shot blocked by a local turn', async () => {
     mocks.isSessionInTurn.mockReturnValue(true);
     const h = createSessionHarness(async () => ({ accepted: true }));
     Object.assign(h.session, { agentKind: 'codex' });
@@ -2646,16 +2646,18 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     const acquirePendingAgentSwitch = vi.fn(async () => {
       throw new Error('must not switch before the turn finishes');
     });
-    const { runner } = createRunnerHarness(h.session, queue.deps, { acquirePendingAgentSwitch });
+    const { runner, notifier } = createRunnerHarness(h.session, queue.deps, { acquirePendingAgentSwitch });
 
+    const onRunnerNotified = vi.fn();
     await expect(runner.fire(
       heartbeatSchedule({ recurring: false, agentKind: 'codex', modelAgentKind: 'codex', model: 'gpt-5.4' }),
-      { ...createFireContext(), timed: true },
-    )).resolves.toMatchObject({
-      sessionId: SESSION_ID,
-      skipped: true,
-      resultText: expect.stringContaining('[SESSION_BUSY_BEFORE_DISPATCH]'),
-    });
+      { ...createFireContext(), timed: true, onRunnerNotified },
+    )).rejects.toThrow('[SESSION_BUSY_BEFORE_DISPATCH]');
+    expect(onRunnerNotified).toHaveBeenCalledExactlyOnceWith('failure');
+    expect(notifier.notify).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ notify: expect.objectContaining({ desktop: true }) }),
+      expect.objectContaining({ status: 'failed', errorMsg: expect.stringContaining('[SESSION_BUSY_BEFORE_DISPATCH]') }),
+    );
     expect(acquirePendingAgentSwitch).not.toHaveBeenCalled();
     expect(queue.enqueueCalls).toHaveLength(0);
   });
