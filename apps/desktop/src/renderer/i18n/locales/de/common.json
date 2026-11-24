@@ -8158,7 +8158,6 @@
         "search": "Plugins suchen",
         "clearSearch": "Plugin-Suche leeren",
         "secondaryTabsAria": "Bereiche der Plugin-Seite",
-        "overviewTab": "Übersicht",
         "addPlugin": "Plugin hinzufügen",
         "addPluginAria": "Optionen zum Hinzufügen von Plugins",
         "githubInstall": {
@@ -9123,8 +9122,6 @@
         "skip": "Überspringen"
       },
       "publish": {
-        "section": "Meine Veröffentlichungen",
-        "action": "Plugin veröffentlichen…",
         "confirmTitle": "{{name}} veröffentlichen",
         "confirmDescription": "Nach deiner Bestätigung wird das Paket in die aktuelle Organisation hochgeladen.",
         "org": "Organisation",
@@ -9133,33 +9130,25 @@
         "size": "Größe",
         "confirm": "Veröffentlichen",
         "cancel": "Abbrechen",
-        "disabled": "Diese Organisation erlaubt Mitgliedern keine Veröffentlichungen. Wende dich an einen Admin.",
-        "loadFailed": "Deine Veröffentlichungen konnten nicht geladen werden",
-        "startFailed": "Veröffentlichung konnte nicht gestartet werden",
-        "empty": "Noch keine Veröffentlichungen",
-        "unknownPlugin": "Plugin",
-        "uploading": "Wird veröffentlicht",
-        "badge": {
-          "validating": "Wird geprüft",
-          "processing": "Wird verarbeitet",
-          "pending": "Prüfung ausstehend",
-          "approved": "Veröffentlicht",
-          "rejected": "Abgelehnt",
-          "failed": "Fehlgeschlagen",
-          "expired": "Abgelaufen"
+        "denied": {
+          "title": "Dieses Plugin kann nicht veröffentlicht werden",
+          "forbidden": "Das Veröffentlichen durch Mitglieder ist in deiner Organisation deaktiviert, oder dir fehlt die Berechtigung. Wende dich an einen Admin.",
+          "archived": "Dieses Plugin ist archiviert und kann keine neuen Versionen erhalten.",
+          "commonManaged": "Dieses Plugin stammt aus einem gemeinsamen Plattform-Plugin; deine Organisation kann keine Versionen davon veröffentlichen.",
+          "repositoryManaged": "Dieses Plugin wird aus seinem Code-Repository veröffentlicht. Veröffentliche neue Versionen dort."
         },
-        "stage": {
-          "confirming": "Warten auf Bestätigung",
-          "hashing": "Datei wird geprüft",
-          "preparing": "Upload wird erstellt",
-          "uploading": "Wird hochgeladen",
-          "committing": "Wird eingereicht",
-          "processing": "Wird verarbeitet",
-          "succeeded": "Abgeschlossen",
-          "failed": "Fehlgeschlagen",
-          "expired": "Abgelaufen",
-          "cancelled": "Abgebrochen",
-          "cancelledTracking": "Überwachung beendet. Der Server verarbeitet weiterhin."
+        "progress": {
+          "title": "Veröffentlichungen für die Team-Freigabe",
+          "dismiss": "Dieses Ergebnis ausblenden",
+          "publishing": "{{name}} wird veröffentlicht…",
+          "uploading": "{{name}} wird hochgeladen · {{percent}} %",
+          "submitted": "{{name}} {{version}} wurde zur Prüfung eingereicht",
+          "published": "{{name}} {{version}} wurde veröffentlicht",
+          "failed": "{{name}} konnte nicht veröffentlicht werden. Versuche es später erneut.",
+          "networkUnreachable": "{{name}} konnte nicht veröffentlicht werden: keine Netzwerkverbindung. Du kannst es erneut versuchen.",
+          "versionExists": "{{name}} {{version}} wurde bereits verwendet. Ändere die Version und veröffentliche erneut.",
+          "notAllowed": "{{name}} wurde nicht veröffentlicht: Dieses Plugin kann derzeit nicht veröffentlicht werden",
+          "expired": "Der Upload von {{name}} ist abgelaufen. Veröffentliche es erneut."
         }
       },
       "retirement": {
@@ -9385,7 +9374,15 @@
           "RELEASE_NOTES_REQUIRED": "Nicht zur Prüfung eingereicht: Vervollständige ghost.json.releaseNotes im Plugin-Quellcode, installiere das aktualisierte Plugin und reiche es dann zur Prüfung ein.",
           "VERSION_ALREADY_SUBMITTED": "Diese Version wurde bereits eingereicht. Ändere die Versionsnummer und installiere das aktualisierte Plugin, bevor du es erneut zur Prüfung einreichst.",
           "PLUGIN_PENDING_RELEASE_EXISTS": "Eine andere Version wird gerade geprüft. Sieh dir diese Prüfung zuerst an oder brich sie ab.",
-          "CONTRIBUTION_PACKAGE_CHANGED": "Das installierte Plugin hat sich seit der Anzeige der Zusammenfassung geändert. Aktualisiere die Ansicht und prüfe es erneut."
+          "CONTRIBUTION_PACKAGE_CHANGED": "Das installierte Plugin hat sich seit der Anzeige der Zusammenfassung geändert. Aktualisiere die Ansicht und prüfe es erneut.",
+          "PLUGIN_DISABLED_BY_ADMIN": "Von einem Admin zurückgezogen. Nur ein Admin kann es wieder veröffentlichen.",
+          "PLUGIN_REVIEW_REQUIRED": "Es gibt noch keine geprüfte Version, daher kann es nicht veröffentlicht werden.",
+          "PLUGIN_REVIEW_FINAL": "Diese Version wurde bereits geprüft, die Prüfung kann nicht abgebrochen werden.",
+          "PLUGIN_REVIEW_STATE_CHANGED": "Der Prüfstatus hat sich geändert. Aktualisiere und versuche es erneut.",
+          "PLUGIN_AUDIENCE_VALIDATION_UNAVAILABLE": "Die Sichtbarkeit kann gerade nicht geprüft werden. Versuche es später erneut.",
+          "PLUGIN_MEMBER_LOOKUP_UNAVAILABLE": "Das Mitglied kann gerade nicht bestätigt werden. Versuche es später erneut.",
+          "PLUGIN_MAINTAINER_EXISTS": "Dieses Mitglied ist bereits Betreuer.",
+          "COMMON_PLUGIN_MANAGED": "Dieses Plugin wird von deinen Admins verwaltet und kann hier nicht geändert werden."
         },
         "installForAccount": "Die ursprünglich ausgewählte Plugin-Installation wurde nicht gefunden. Wähle das Plugin im aktuellen Konto erneut aus und prüfe es, bevor du es zur Prüfung einreichst.",
         "releaseSha": "SHA-256 des Release-Pakets",
@@ -9432,7 +9429,40 @@
         "cancelReviewAlreadyFinal": "Die Prüfung war bereits abgeschlossen und wurde daher nicht abgebrochen. Das tatsächliche Ergebnis wird unten angezeigt.",
         "viewPendingVersion": "Version in Prüfung ansehen",
         "submitFailed": "Einreichung fehlgeschlagen",
-        "viewDetails": "Details ansehen"
+        "viewDetails": "Details ansehen",
+        "publishTo": "Veröffentlichen in",
+        "target": {
+          "team": "Im Team geteilt",
+          "teamHint": "Mitglieder von {{org}} können es installieren",
+          "public": "Öffentlicher Marktplatz"
+        },
+        "next": "Weiter",
+        "teamStartFailed": "Veröffentlichung konnte nicht gestartet werden. Versuche es später erneut.",
+        "introWithTeam": "Verwalte Releases, Updates und Prüfungen für Plugins auf dem öffentlichen Marktplatz und im Team geteilte Plugins",
+        "team": {
+          "delist": "Zurückziehen",
+          "list": "Veröffentlichen",
+          "delistTitle": "{{name}} zurückziehen?",
+          "delistDescription": "Mitglieder sehen es danach nicht mehr im Plugin-Marktplatz und können es nicht neu installieren. Bestehende Installationen bleiben nutzbar, erhalten aber keine Updates mehr.",
+          "listTitle": "{{name}} veröffentlichen?",
+          "listDescription": "Mitglieder im Sichtbarkeitsbereich können es im Plugin-Marktplatz finden und installieren.",
+          "delistedByAdmin": "Von einem Admin zurückgezogen. Nur ein Admin kann es wieder veröffentlichen.",
+          "edit": "Bearbeiten",
+          "save": "Speichern",
+          "editAudienceTitle": "Sichtbarkeit von {{name}} bearbeiten",
+          "maintainers": "Betreuer",
+          "addMaintainer": "Betreuer hinzufügen",
+          "add": "Hinzufügen",
+          "searchMaintainer": "Mitglieder nach Name oder E-Mail suchen",
+          "removeMaintainer": "Entfernen",
+          "removeMaintainerTitle": "{{name}} als Betreuer entfernen?",
+          "removeMaintainerDescription": "Du kannst die Person später wieder hinzufügen.",
+          "role": {
+            "creator": "Ersteller",
+            "maintainer": "Betreuer"
+          },
+          "decidedAt": "Entschieden am"
+        }
       },
       "fileTransfer": {
         "reading": "Dateien werden gelesen",
@@ -9441,6 +9471,58 @@
         "importing": "Dateien werden importiert",
         "finished": "Dateivorgang abgeschlossen",
         "importFinished": "Dateiimport abgeschlossen"
+      },
+      "audience": {
+        "title": "Sichtbarkeit",
+        "all": "Alle Mitglieder",
+        "specified": "Bestimmte Abteilungen und Mitglieder",
+        "choose": "Abteilungen und Mitglieder wählen",
+        "keepCurrent": "Aktuelle Sichtbarkeit beibehalten",
+        "requireOne": "Wähle mindestens eine Abteilung, ein Mitglied oder eine E-Mail-Adresse",
+        "notFound": "Nicht gefunden",
+        "ambiguous": "Mehrere Personen haben diesen Namen. Wähle in der Auswahl.",
+        "impact": "Mitglieder außerhalb des Bereichs behalten das installierte Plugin, erhalten aber keine Updates mehr.",
+        "unresolvedLabel": "Nicht zugeordnete Namen",
+        "selectedLabel": "Ausgewählter Bereich",
+        "roleLabels": {
+          "owner": "Inhaber",
+          "admin": "Admin",
+          "finance": "Finanzen",
+          "department_manager": "Abteilungsadmin",
+          "member": "Mitglied"
+        },
+        "picker": {
+          "title": "Abteilungen und Mitglieder wählen",
+          "search": "Abteilungen, Mitgliedernamen oder E-Mails suchen",
+          "departments": "Abteilungen",
+          "members": "Mitglieder",
+          "emails": "E-Mail-Adressen",
+          "roles": "Rollen",
+          "included": "Enthalten",
+          "loadMore": "Mehr laden",
+          "retry": "Erneut versuchen",
+          "loading": "Wird geladen…",
+          "loadFailed": "Laden fehlgeschlagen",
+          "noMembers": "Keine passenden Mitglieder",
+          "addEmail": "Per E-Mail hinzufügen: {{email}}",
+          "selected": "{{count}} ausgewählt",
+          "clear": "Leeren",
+          "noneSelected": "Keine Abteilungen oder Mitglieder ausgewählt",
+          "remove": "{{name}} entfernen",
+          "unknownDepartment": "Entfernte Abteilung",
+          "memberId": "Mitglied {{id}}",
+          "searchMembersOnly": "Mitglieder nach Name oder E-Mail suchen",
+          "expand": "{{name}} aufklappen",
+          "collapse": "{{name}} zuklappen",
+          "cancel": "Abbrechen",
+          "done": "Fertig"
+        },
+        "namesMore": "{{names}} und insgesamt {{count}}",
+        "separator": ", ",
+        "blocked": "Mit der gewünschten Sichtbarkeit kann nicht veröffentlicht werden",
+        "blockedLocked": "Du kannst die Sichtbarkeit dieses Plugins nicht ändern, oder sie konnte gerade nicht gelesen werden. Brich ab und veröffentliche ohne Angabe, oder bitte den Autor des Plugins, sie zu ändern.",
+        "blockedLegacyRoles": "Die aktuelle Sichtbarkeit dieses Plugins enthält veraltete Rollenbedingungen und kann beim Veröffentlichen nicht geändert werden. Brich ab und veröffentliche ohne Angabe, und ändere sie danach in den Plugin-Details.",
+        "legacyRolesNote": "Die aktuelle Sichtbarkeit enthält veraltete Rollenbedingungen. Ändere sie nach dem Veröffentlichen in den Plugin-Details."
       }
     },
     "mcp": {

@@ -8115,7 +8115,6 @@
         "search": "搜尋插件",
         "clearSearch": "清除插件搜尋",
         "secondaryTabsAria": "插件頁內容",
-        "overviewTab": "總覽",
         "addPlugin": "新增插件",
         "addPluginAria": "插件新增選項",
         "githubInstall": {
@@ -9080,8 +9079,6 @@
         "skip": "跳過"
       },
       "publish": {
-        "section": "我的發佈",
-        "action": "發佈插件…",
         "confirmTitle": "發佈 {{name}}",
         "confirmDescription": "確認後開始上傳到目前組織。",
         "org": "組織",
@@ -9090,33 +9087,25 @@
         "size": "大小",
         "confirm": "發佈",
         "cancel": "取消",
-        "disabled": "此組織未開啟成員發佈，請聯絡管理員",
-        "loadFailed": "發佈列表暫時無法使用",
-        "startFailed": "無法開始發佈",
-        "empty": "還沒有發佈記錄",
-        "unknownPlugin": "插件",
-        "uploading": "正在發佈",
-        "badge": {
-          "validating": "校驗中",
-          "processing": "處理中",
-          "pending": "待審核",
-          "approved": "已上架",
-          "rejected": "被駁回",
-          "failed": "失敗",
-          "expired": "已過期"
+        "denied": {
+          "title": "無法發佈這個插件",
+          "forbidden": "本企業未開啟成員發佈，或你沒有發佈權限。可以聯絡管理員。",
+          "archived": "這個插件已封存，不能再發佈新版本。",
+          "commonManaged": "這個插件由平台通用插件產生，企業不能為它發佈版本。",
+          "repositoryManaged": "這個插件由程式碼倉庫發佈管理，請透過倉庫發佈新版本。"
         },
-        "stage": {
-          "confirming": "等待確認",
-          "hashing": "正在校驗檔案",
-          "preparing": "正在建立上傳",
-          "uploading": "正在上傳",
-          "committing": "正在提交",
-          "processing": "正在處理",
-          "succeeded": "已完成",
-          "failed": "失敗",
-          "expired": "已過期",
-          "cancelled": "已取消",
-          "cancelledTracking": "已停止追蹤，伺服器仍在處理"
+        "progress": {
+          "title": "團隊共享發佈進度",
+          "dismiss": "移除這條結果",
+          "publishing": "正在發佈 {{name}}…",
+          "uploading": "正在上傳 {{name}} · {{percent}}%",
+          "submitted": "{{name}} {{version}} 已提交審核",
+          "published": "{{name}} {{version}} 已發佈",
+          "failed": "{{name}} 發佈失敗，請稍後重試",
+          "networkUnreachable": "{{name}} 發佈失敗：網路無法連線，可以重試",
+          "versionExists": "{{name}} {{version}} 這個版本號已用過，請修改版本號後重新發佈",
+          "notAllowed": "{{name}} 未發佈：這個插件目前不能發佈",
+          "expired": "{{name}} 上傳已過期，請重新發佈"
         }
       },
       "retirement": {
@@ -9342,7 +9331,15 @@
           "RELEASE_NOTES_REQUIRED": "尚未送審：請在插件原始碼的 ghost.json.releaseNotes 中補齊更新說明，安裝更新後重新提交審核。",
           "VERSION_ALREADY_SUBMITTED": "此版本已經送審，請更改版本號並安裝更新後重新提交審核。",
           "PLUGIN_PENDING_RELEASE_EXISTS": "此插件已有版本正在審核，請先查看或取消該次審核。",
-          "CONTRIBUTION_PACKAGE_CHANGED": "本機插件在摘要顯示後發生變更，請重新整理摘要後核對。"
+          "CONTRIBUTION_PACKAGE_CHANGED": "本機插件在摘要顯示後發生變更，請重新整理摘要後核對。",
+          "PLUGIN_DISABLED_BY_ADMIN": "管理員已下架，需由管理員重新上架",
+          "PLUGIN_REVIEW_REQUIRED": "還沒有審核通過的版本，暫時不能上架。",
+          "PLUGIN_REVIEW_FINAL": "這個版本已經審核完成，不能取消提審。",
+          "PLUGIN_REVIEW_STATE_CHANGED": "審核狀態已變化，請重新整理後重試。",
+          "PLUGIN_AUDIENCE_VALIDATION_UNAVAILABLE": "暫時無法核對可見範圍，請稍後重試。",
+          "PLUGIN_MEMBER_LOOKUP_UNAVAILABLE": "暫時無法核對成員身分，請稍後重試。",
+          "PLUGIN_MAINTAINER_EXISTS": "此成員已經是維護者。",
+          "COMMON_PLUGIN_MANAGED": "這個插件由管理員統一管理，不能在這裡修改。"
         },
         "installForAccount": "找不到原先選取的插件安裝。請在目前帳號下重新選取插件，確認後再提交審核。",
         "releaseSha": "實際版本套件 SHA-256",
@@ -9389,7 +9386,40 @@
         "cancelReviewAlreadyFinal": "審核已經完成，本次未取消。下方顯示實際審核結果。",
         "viewPendingVersion": "查看正在審核的版本",
         "submitFailed": "提交失敗",
-        "viewDetails": "查看詳情"
+        "viewDetails": "查看詳情",
+        "publishTo": "發佈到",
+        "target": {
+          "team": "團隊共享",
+          "teamHint": "{{org}}成員可安裝",
+          "public": "公開市場"
+        },
+        "next": "下一步",
+        "teamStartFailed": "無法開始發佈，請稍後重試",
+        "introWithTeam": "管理公開市場和團隊共享插件的發佈、更新與審核狀態",
+        "team": {
+          "delist": "下架",
+          "list": "上架",
+          "delistTitle": "下架 {{name}}？",
+          "delistDescription": "下架後成員在插件市場裡看不到、不能新安裝；已安裝的會保留，可以繼續使用，但不再收到更新。",
+          "listTitle": "上架 {{name}}？",
+          "listDescription": "上架後，可見範圍內的成員可以在插件市場看到並安裝。",
+          "delistedByAdmin": "管理員已下架，需由管理員重新上架",
+          "edit": "修改",
+          "save": "儲存",
+          "editAudienceTitle": "修改 {{name}} 的可見範圍",
+          "maintainers": "維護者",
+          "addMaintainer": "新增維護者",
+          "add": "新增",
+          "searchMaintainer": "依姓名或電子郵件搜尋成員",
+          "removeMaintainer": "移除",
+          "removeMaintainerTitle": "移除 {{name}} 的維護者身分？",
+          "removeMaintainerDescription": "之後可以重新新增。",
+          "role": {
+            "creator": "建立者",
+            "maintainer": "維護者"
+          },
+          "decidedAt": "處理時間"
+        }
       },
       "fileTransfer": {
         "reading": "正在讀取檔案",
@@ -9398,6 +9428,58 @@
         "importing": "正在匯入檔案",
         "finished": "檔案處理結束",
         "importFinished": "檔案匯入結束"
+      },
+      "audience": {
+        "title": "可見範圍",
+        "all": "全部成員",
+        "specified": "指定部門和成員",
+        "choose": "選擇部門和成員",
+        "keepCurrent": "沿用目前範圍",
+        "requireOne": "請至少選擇一個部門、成員或電子郵件",
+        "notFound": "找不到",
+        "ambiguous": "有多個同名，請在選擇器裡選",
+        "impact": "不在範圍內的成員，已安裝的插件會保留，但不再取得更新",
+        "unresolvedLabel": "未對上的名稱",
+        "selectedLabel": "已選範圍",
+        "roleLabels": {
+          "owner": "超級管理員",
+          "admin": "管理員",
+          "finance": "財務",
+          "department_manager": "部門管理員",
+          "member": "一般成員"
+        },
+        "picker": {
+          "title": "選擇部門和成員",
+          "search": "搜尋部門、成員姓名或電子郵件",
+          "departments": "部門",
+          "members": "成員",
+          "emails": "電子郵件",
+          "roles": "角色",
+          "included": "已包含",
+          "loadMore": "載入更多",
+          "retry": "重試",
+          "loading": "正在載入…",
+          "loadFailed": "載入失敗",
+          "noMembers": "沒有符合的成員",
+          "addEmail": "依電子郵件新增 {{email}}",
+          "selected": "已選 {{count}} 項",
+          "clear": "清空",
+          "noneSelected": "未選擇部門或成員",
+          "remove": "移除 {{name}}",
+          "unknownDepartment": "已失效的部門",
+          "memberId": "成員 {{id}}",
+          "searchMembersOnly": "輸入姓名或電子郵件搜尋成員",
+          "expand": "展開 {{name}}",
+          "collapse": "收合 {{name}}",
+          "cancel": "取消",
+          "done": "完成"
+        },
+        "namesMore": "{{names}} 等 {{count}} 項",
+        "separator": "、",
+        "blocked": "無法依你指定的範圍發佈",
+        "blockedLocked": "你不能修改這個插件的可見範圍，或暫時讀不到它。可以取消後不指定範圍發佈，或請插件作者修改。",
+        "blockedLegacyRoles": "這個插件目前的範圍含舊的角色條件，發佈時不能修改。可以取消後不指定範圍發佈，發佈後到插件詳情修改範圍。",
+        "legacyRolesNote": "目前範圍含舊的角色條件，請在發佈後到插件詳情修改範圍。"
       }
     },
     "mcp": {
