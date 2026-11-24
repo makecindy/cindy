@@ -49,7 +49,7 @@ export async function readCodexThreadMcpServersTools(
     if (remainingMs <= 0) throw new Error('Codex MCP status timed out');
     const status: CodexMcpServerStatusListResponse = await request<CodexMcpServerStatusListResponse>(
       Method.McpServerStatusList,
-      { cursor, limit: 100, detail: 'toolsAndAuthOnly', threadId, serverName },
+      { cursor, limit: 100, detail: 'toolsAndAuthOnly', threadId, serverNames: [...missing] },
       { timeoutMs: remainingMs },
     );
     for (const server of status.data) {
