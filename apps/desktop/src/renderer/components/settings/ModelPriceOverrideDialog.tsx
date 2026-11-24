@@ -85,6 +85,20 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange, pr
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const writableCurrencies = view?.allowedCurrencies ?? [];
+  const referenceCurrency = (view?.effective ?? view?.reference)?.currency;
+  const currencies = referenceCurrency && !writableCurrencies.includes(referenceCurrency)
+    ? [...writableCurrencies, referenceCurrency] : writableCurrencies;
+  const canWriteCurrency = writableCurrencies.includes(form.currency);
+  const changeCurrency = (currency: FormState['currency']) => {
+    if (!view || currency === form.currency) return;
+    const baseline = formFromView(view);
+    if (!writableCurrencies.includes(baseline.currency)) {
+      setForm(currency === baseline.currency ? baseline : { ...EMPTY_FORM, currency });
+    } else {
+      setForm(current => ({ ...current, currency }));
+    }
+  };
   const pendingRef = useRef(false);
   // The currency list renders in a portal outside the editor; while it is open, focus moving into
   // it is not leaving the editor, so blur must not save with the previous currency.
@@ -156,7 +170,7 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange, pr
   }, [open, target, t]);
 
   const save = async () => {
-    if (!target || !view || loading || (inline && (pendingRef.current || !view.editable))) return false;
+    if (!target || !view || !canWriteCurrency || loading || (inline && (pendingRef.current || !view.editable))) return false;
     const inputPerMtok = parseRequiredPrice(form.input);
     const outputPerMtok = parseRequiredPrice(form.output);
     const cacheReadPerMtok = parseOptionalPrice(form.cacheRead);
@@ -272,14 +286,14 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange, pr
             if (!dirty) setAgent(next);
             else void save().then((saved) => { if (saved) setAgent(next); });
           }} options={row.avail.map(candidate => ({ value: candidate, label: AGENT_LABEL[candidate] }))} />}
-        {(view?.allowedCurrencies.length ?? 0) > 1 && <div className="mt-2 flex items-center justify-between gap-4 text-12 text-[var(--text-secondary)]">
+        {currencies.length > 1 && <div className="mt-2 flex items-center justify-between gap-4 text-12 text-[var(--text-secondary)]">
           {t('settings.providers.models.priceOverride.currency')}
           {/* Changes are ignored while a save is pending (the trigger keeps focus). */}
           <Select {...pricingSetting.controlProps} label={t('settings.providers.models.priceOverride.currency')}
             size="compact" value={form.currency} disabled={unavailable}
             onOpenChange={(open) => { currencyOpenRef.current = open; }}
-            onValueChange={(value) => { if (!pendingRef.current) setForm(current => ({ ...current, currency: value as FormState['currency'] })); }}
-            options={(view?.allowedCurrencies ?? []).map(currency => ({ value: currency, label: currency }))} />
+            onValueChange={(value) => { if (!pendingRef.current) changeCurrency(value as FormState['currency']); }}
+            options={currencies.map(currency => ({ value: currency, label: currency }))} />
         </div>}
         {([['input', 'input'], ['output', 'output'], ['cacheRead', 'cacheRead'], ['cacheCreate', 'cacheWrite']] as const).map(([field, label]) => (
           <label key={field} className="flex min-h-[34px] flex-wrap items-center justify-between gap-x-4 gap-y-1 border-b border-[var(--settings-theme-card-border)] py-2 last:border-b-0">
@@ -287,7 +301,7 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange, pr
             <span className="ml-auto inline-flex min-w-0 max-w-full flex-wrap items-center justify-end gap-1 text-13 text-[var(--text-primary)]">
               <span aria-hidden className="shrink-0">{form.currency === 'CNY' ? '¥' : '$'}</span>
               <input ref={field === 'input' ? primaryInputRef : undefined} {...pricingSetting.controlProps} data-model-price-input type="number" min="0" step="any" inputMode="decimal"
-                value={form[field]} placeholder="—" disabled={unavailable} readOnly={saving}
+                value={form[field]} placeholder="—" disabled={unavailable} readOnly={saving || !canWriteCurrency}
                 aria-label={t('settings.providers.models.priceOverride.' + label)}
                 onChange={(event) => setForm(current => ({ ...current, [field]: event.target.value }))}
                 style={{ width: `calc(${Math.max(4, form[field].length + 1)}ch + var(--space-2) + 2px)`, maxWidth: '100%' }}
@@ -312,11 +326,11 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange, pr
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10001]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal-raised" />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
           className={cn(
-            'modal-panel fixed left-1/2 top-1/2 z-[10001] w-[520px] max-w-[92vw]',
+            'modal-panel fixed left-1/2 top-1/2 z-modal-raised w-[520px] max-w-[92vw]',
             '-translate-x-1/2 -translate-y-1/2 overflow-hidden',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
@@ -384,13 +398,8 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange, pr
                   label={t('settings.providers.models.priceOverride.currency')}
                   width="full"
                   value={form.currency}
-                  onValueChange={(value) =>
-                    setForm((current) => ({
-                      ...current,
-                      currency: value as 'USD' | 'CNY',
-                    }))
-                  }
-                  options={(view?.allowedCurrencies ?? ['USD']).map((currency) => ({
+                  onValueChange={value => changeCurrency(value as FormState['currency'])}
+                  options={currencies.map((currency) => ({
                     value: currency,
                     label: currency,
                   }))}
@@ -415,6 +424,7 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange, pr
                     min="0"
                     step="any"
                     value={form[field]}
+                    readOnly={!canWriteCurrency}
                     placeholder={field.startsWith('cache') ? '—' : '0'}
                     onChange={(event) =>
                       setForm((current) => ({ ...current, [field]: event.target.value }))
@@ -465,7 +475,7 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange, pr
                   loading={saving}
                   type="button"
                   onClick={() => void save()}
-                  disabled={loading || saving || !view}
+                  disabled={loading || saving || !view || !canWriteCurrency}
                 >
                   {t('settings.providers.models.priceOverride.save')}
                 </Button>

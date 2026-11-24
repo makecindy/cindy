@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { mountPage, subscription } from '../../ui-page/harness';
 import { SidebarFilterPopover } from '../../../src/renderer/features/cc-agent/sidebar/SidebarFilterPopover';
 import { persistCreators } from '../../../src/renderer/features/cc-agent/hooks/helpers/sidebarFilterCore';
+import { useTaskInfoFields } from '../../../src/renderer/features/cc-agent/hooks/useTaskInfoFields';
 import { useSidebarFilter } from '../../../src/renderer/features/cc-agent/hooks/useSidebarFilter';
 import { BotFollowMark, useSessionFollowers } from '../../../src/renderer/features/bots/BotFollowMark';
 import { matchesTaskCreators, useTaskCreatorIndex, useTaskCreatorOptions } from '../../../src/renderer/features/bots/botFollowScopes';
@@ -21,8 +22,10 @@ const tasks = [
   { id: 'remote', title: 'Lizi · Remote task', status: 'archived', deviceLinkDeviceId: 'laptop' },
 ].map(row => ({ status: 'active', source: 'desktop', ...row }) as Session);
 function TaskRow({ task }: { task: Session }) {
+  const { fields } = useTaskInfoFields();
+  const followers = useSessionFollowers(task);
   return <div className="flex items-center gap-2 py-2" data-task={task.id}>
-    <BotFollowMark followers={useSessionFollowers(task)} /><span>{task.title}</span>
+    {fields.includes('teammate') && <BotFollowMark followers={followers} />}<span>{task.title}</span>
   </div>;
 }
 function Fixture() {

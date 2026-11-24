@@ -12,7 +12,7 @@
 
 import { isCindyApp, isMobilePlatform } from '@cindy/maker-shared/device-list';
 import { selfDeviceName } from '@/components/settings/deviceLabels';
-import type { DeviceLinkAgentNetPeerRouteView } from '../../../shared/deviceLinkIpc';
+import type { DeviceLinkAgentNetPeerRouteView, DeviceLinkPeerPathPreference } from '../../../shared/deviceLinkIpc';
 
 export type TopologyStatus = 'direct' | 'relay' | 'connecting' | 'unlinked' | 'attention' | 'offline';
 export type AttentionReason = 'peer-control-off' | 'unresponsive';
@@ -62,6 +62,11 @@ export interface TopologyNode {
   /** 远程控制链路的协商状态，供需要控制链路的操作使用。 */
   controlLinkOpen: boolean;
   rttMs: number | null;
+  /** Agent-Net 双路测速(直连 / 经中转往返,ms);任一条未测得时为 null。 */
+  directRttMs?: number | null;
+  relayRttMs?: number | null;
+  /** 本机对该设备的 Agent-Net 选路偏好(auto / direct / relay)。 */
+  pathPreference?: DeviceLinkPeerPathPreference;
   /** 最近有没有业务消息在这条链路上走、往哪边走;没有为 null。只有直连 / 经中转的设备会有。 */
   flow: TopologyFlow | null;
   /** 写给人看的流向(行字、卡片):在 flow 的基础上放宽,见 LABEL_HOLD_MS;flow 为 null 时也为 null */
@@ -184,6 +189,9 @@ function deriveNode(
     controlLinkOpen: control !== undefined,
     encrypted,
     rttMs: control ? control.rttMs : route?.rttMs ?? null,
+    ...(route?.directRttMs !== undefined ? { directRttMs: route.directRttMs } : {}),
+    ...(route?.relayRttMs !== undefined ? { relayRttMs: route.relayRttMs } : {}),
+    ...(route?.pathPreference !== undefined ? { pathPreference: route.pathPreference } : {}),
     flow: control && (status === 'direct' || status === 'relay') ? flowOf(control) : null,
     flowText: control && (status === 'direct' || status === 'relay') ? flowTextOf(control) : null,
     busy: d.busy,

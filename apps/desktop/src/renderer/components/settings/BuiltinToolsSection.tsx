@@ -193,6 +193,8 @@ export function BuiltinToolsSection({ workingDir }: BuiltinToolsSectionProps) {
   // First render: null → blank (no flash). After data arrives: render list.
   if (!plugins) return null;
 
+  const toggleHint = t('settings.builtinTools.toggleHint');
+
   return (
     <SettingsSection
       titleId={builtinToolsSettings.title.targetId}
@@ -206,7 +208,11 @@ export function BuiltinToolsSection({ workingDir }: BuiltinToolsSectionProps) {
           onPick={setSelectedScope}
         />
       }
-      caption={t('settings.builtinTools.toggleHint')}
+      caption={
+        effectiveWorkingDir
+          ? toggleHint
+          : `${toggleHint} ${t('settings.computerUse.browser.userDefaultToggleHint')}`
+      }
     >
       {/* 工具列表自带图标与来源标签，行样式保留 */}
       <SettingsCard className="flex flex-col">
@@ -271,7 +277,7 @@ export function BuiltinToolRow({
   return (
     <div
       className={cn(
-        'flex items-center justify-between gap-3 px-4 py-[14px]',
+        'flex items-center justify-between gap-3 px-4 py-3.5',
         divider && 'border-t border-[var(--settings-theme-card-border)]',
       )}
     >
@@ -284,7 +290,7 @@ export function BuiltinToolRow({
         >
           <Puzzle size={16} className="text-[var(--settings-section-title)]" />
         </div>
-        <div className="flex flex-col gap-[8px] min-w-0">
+        <div className="flex flex-col gap-2 min-w-0">
           <div className="flex items-center gap-2">
             <p className="text-14 font-medium leading-[1.25] text-[var(--settings-section-title)] truncate">
               {name}

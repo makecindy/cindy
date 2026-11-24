@@ -59,6 +59,7 @@ import { RemoteAgentRemoteError } from '../../remote-agent/controller/runClient'
 import { MakerScheduleRunner } from '../runner.desktop';
 import { ScheduledModelSelectionBusyError } from '../../maker-ipc/scheduledModelSelection';
 import { isHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface';
+import { GitSnapshotCoordinator } from '../../git-snapshot/gitSnapshotCoordinator.js';
 
 type SessionSendOptions = Parameters<Session['send']>[1];
 type SendImpl = (
@@ -690,6 +691,44 @@ describe('MakerScheduleRunner send outcome policy', () => {
     expect(run.status).toBe('success');
     expect(run.resultText).toBe('done text');
     expect(ctx.removeAbortListener).toHaveBeenCalledTimes(1);
+  });
+
+  // #10161 / unit: the idle scheduler goes straight through this runner.
+  // Its generic error sanitization used to erase the safe, typed send diagnosis.
+  it('keeps the dispatch intent diagnosis in an idle scheduled run', async () => {
+    vi.useFakeTimers();
+    const receipt = Promise.withResolvers<{ attemptId: string }>();
+    const entered = Promise.withResolvers<void>();
+    const snapshots = new GitSnapshotCoordinator({
+      snapshotTimeoutMs: 50,
+      recordTurnAttempt: () => { entered.resolve(); return receipt.promise; },
+      readAutoSnapshotEnabled: () => true,
+      getSessionContext: vi.fn(), detectRepoRoot: vi.fn(),
+      createShadowSavepoint: vi.fn(), createShadowMarker: vi.fn(),
+      oneShot: vi.fn(), logger: createLogger(),
+    });
+    const dispatch = vi.fn();
+    const h = createSessionHarness(async (_message, opts) => {
+      await opts?.onAccepted?.();
+      dispatch();
+      return { accepted: true };
+    });
+    const { runner, notifier } = createRunnerHarness(h.session, {
+      beforeDispatchUserTurn: (id, signal) => snapshots.onTurnStart(id, signal),
+    });
+    try {
+      const result = runner.fire(baseSchedule(), createFireContext()).catch(error => error);
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(50);
+      const errorMsg = expect.stringMatching(/^\[SNAPSHOT_DISPATCH_INTENT_TIMEOUT\]/);
+      expect(await result).toMatchObject({ message: errorMsg });
+      expect(latestNotifiedRun(notifier)).toMatchObject({ status: 'failed', errorMsg });
+      expect(mocks.createMessage).toHaveBeenCalledOnce();
+      expect(dispatch).not.toHaveBeenCalled();
+    } finally {
+      receipt.resolve({ attemptId: 'late' });
+      vi.useRealTimers();
+    }
   });
 
   // Unit regression for the idle shared reconnect: after acceptance, a confirmed

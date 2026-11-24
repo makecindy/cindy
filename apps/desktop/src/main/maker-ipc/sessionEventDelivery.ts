@@ -56,7 +56,7 @@ export interface DeliverSessionEventDeps {
   readonly deferredCodexRestartHolder: Pick<DeferredCodexRestartService, 'onSessionSettled'> | null;
   readonly gatewayCodexRestartHolder?: Pick<DeferredCodexRestartService, 'onSessionSettled'> | null;
   readonly refreshRemoteCodexMcpOnTurnSettledHolder: ((sessionId: string) => void) | null;
-  readonly markTurnEndedAfterPersistDrain: (sessionId: string) => void;
+  readonly markTurnEndedAfterPersistDrain: (sessionId: string, event: AgentEvent) => void;
   readonly gitSnapshotCoordinator: Pick<GitSnapshotCoordinator, 'onTurnEnd' | 'onTurnAbort'> | null;
   /**
    * 智能体回合因 Cindy AI Key 失效终止时调用(按本机当前 Key 上报,触发凭据重新同步)。
@@ -184,7 +184,7 @@ export function deliverSessionEvent(
     const wasInTurn = deps.sessionTurnActivityTracker.isSessionInTurn(session.id);
     deps.sessionTurnActivityTracker.scheduleIdleAfterStatusBroadcast(session.id);
     // status:isRunning=false 即逻辑 turn 结束(可重试 error 不发这个信号)。
-    deps.markTurnEndedAfterPersistDrain(session.id);
+    deps.markTurnEndedAfterPersistDrain(session.id, event);
     if (
       wasInTurn && event.turnOrigin?.kind !== 'goal'
     ) {

@@ -267,7 +267,7 @@ export function TaskListCell({
       onKeyDown={handleKeyDown}
       onContextMenu={handleContextMenu}
       className={cn(
-        'group relative flex cursor-pointer flex-col gap-[5px] rounded-[10px] px-[14px] py-3',
+        'group relative flex cursor-pointer flex-col gap-1 rounded-xl px-[14px] py-3',
         'outline-none transition-colors',
         'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
         selected
@@ -367,7 +367,7 @@ export function TaskListCell({
         {!isEditing && isProjectSchedule && (
           <span
             className={cn(
-              'shrink-0 inline-flex items-center gap-1 rounded-full border px-2 py-[2px] text-11 font-medium leading-none',
+              'shrink-0 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-11 font-medium leading-none',
               'border-[var(--cmd-palette-border)] text-[var(--cmd-palette-item-meta)]',
             )}
             title={t('scheduler.projectAutomation.cell.tooltip')}
@@ -379,7 +379,7 @@ export function TaskListCell({
         {!isEditing && (prRule || s.webhookTrigger || s.manual || !s.recurring) && (
           <span
             className={cn(
-              'shrink-0 translate-x-[2px] rounded-full border px-2 py-[2px] text-11 font-medium leading-none',
+              'shrink-0 translate-x-[2px] rounded-full border px-2 py-0.5 text-11 font-medium leading-none',
               'border-[var(--cmd-palette-border)] text-[var(--cmd-palette-item-meta)]',
             )}
           >

@@ -10,6 +10,7 @@ vi.mock('@/contexts/AuthContext', () => ({
   }),
 }));
 vi.mock('@/hooks/useAgentCapabilities', () => ({
+  getDeviceCapabilitiesGeneration: () => 0,
   getInterestedDeviceCapabilityTargets: () => [],
   prefetchDeviceCapabilities: vi.fn(),
   evictDeviceCapabilities: vi.fn(),
@@ -44,6 +45,8 @@ import { prefetchDeviceCapabilities } from '@/hooks/useAgentCapabilities';
 import { prefetchDeviceGitSafetySettings } from '@/hooks/useGitSafetySettings';
 import { readCachedSessionList } from '@/features/device-link/mirrorCacheClient';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { useSelectedMachinePlaceholder } from '@/features/device-link/useMachineSwitcher';
+import { MACHINE_ALL, setSelectedMachineIdTransient } from '@/features/device-link/selectedMachineStore';
 
 /** Real hook/store/refresh orchestration with independent controllable peer transports. */
 const peers = ['slow', 'healthy'].map((deviceId) => ({
@@ -130,6 +133,87 @@ afterEach(() => {
 });
 
 describe('multi-device recovery lifecycle', () => {
+  // #5860 / unit: real listing, device directory and sidebar projection through fake IPC.
+  // Recovery-only cases missed a selected peer whose successful sessions list was empty.
+  it.each([
+    { taskCount: 0, offlinePlaceholder: 'offline' },
+    { taskCount: 1, offlinePlaceholder: null },
+  ])('projects a selected peer with $taskCount tasks across presence changes', async ({ taskCount, offlinePlaceholder }) => {
+    const api = window.electronAPI.deviceLink;
+    let online = true;
+    const tasks = taskCount === 0 ? [] : [{
+      id: 'synthetic-task',
+      title: 'Synthetic task',
+      workingDir: null,
+      model: 'gpt-x',
+      status: 'active',
+      agentKind: 'codex',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    }];
+    invoke.mockImplementation(async (peer, channel) => {
+      if (channel === 'maker:schedule:list-sidebar-index-runs') return { runs: [] };
+      return peer === 'slow' && channel === 'local-db:sessions:list' ? tasks : [];
+    });
+    const presence = new Set<Listener>();
+    vi.mocked(api.listDevices).mockImplementation(async () => ({
+      devices: peers.map((peer) => ({
+        ...peer,
+        online: peer.deviceId === 'slow' ? online : true,
+        platform: 'darwin',
+        appVersion: 'test',
+        lastSeenAt: null,
+        busy: false,
+        controlEnabled: true,
+      })),
+    }));
+    api.onPresenceChanged = (listener) => {
+      presence.add(listener);
+      return () => { presence.delete(listener); };
+    };
+
+    setSelectedMachineIdTransient(['slow']);
+    onTestFinished(() => setSelectedMachineIdTransient(MACHINE_ALL));
+    const { result } = renderHook(() => {
+      useDeviceLinkRemoteProjects();
+      return useSelectedMachinePlaceholder();
+    });
+    await settle();
+    const listRequests = () => invoke.mock.calls.filter(
+      ([peer, channel]) => peer === 'slow' && channel === 'local-db:sessions:list',
+    );
+    expect(listRequests()).toHaveLength(1);
+    expect(remoteProjectsStore.getDeviceList()).toContainEqual(expect.objectContaining({
+      deviceId: 'slow', sessionCount: taskCount, connected: true,
+    }));
+    expect(result.current).toBeNull();
+
+    const setPresence = (next: boolean) => act(() => {
+      online = next;
+      for (const listener of presence) {
+        listener({ deviceId: 'slow', deviceName: 'slow', online, remoteControlEnabled: true });
+      }
+    });
+    setPresence(false);
+    await settle();
+    expect(result.current).toBe(offlinePlaceholder);
+    expect(remoteProjectsStore.getDeviceSessions('slow').map((task) => task.id)).toEqual(
+      tasks.map((task) => task.id),
+    );
+    expect(listRequests()).toHaveLength(1);
+
+    const reopenedSidebar = renderHook(() => useSelectedMachinePlaceholder());
+    expect(reopenedSidebar.result.current).toBe(offlinePlaceholder);
+
+    setPresence(true);
+    await settle();
+    expect(listRequests()).toHaveLength(2);
+    expect(remoteProjectsStore.getDeviceList()).toContainEqual(expect.objectContaining({
+      deviceId: 'slow', sessionCount: taskCount, connected: true,
+    }));
+    expect(result.current).toBeNull();
+  });
+
   // Unit regression: Main fences all three source-change events, but the renderer
   // only refreshed providers on one of them, leaving failed in-flight reads stuck.
   // Exercise the real push listener and refresh coordinator; transport reads are mocked.
@@ -822,6 +906,9 @@ describe('stale device directory', () => {
   // setTimeout 溢出成「立刻触发」,退避变成对目录读的紧追循环。超过上限的等待必须按上限
   // 分片,每片到点按墙上时钟重新核对(Codex review #9360)。
   it('chunks a retry deadline beyond the 32-bit timer limit instead of tight-looping', async () => {
+    // Advance the retry timeouts without simulating weeks of periodic reconciliation.
+    vi.useRealTimers();
+    vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
     const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
     const listDevices = window.electronAPI.deviceLink.listDevices as unknown as ReturnType<typeof vi.fn>;
     const deadline = Date.now() + 3_000_000_000; // > 2^31 - 1(~24.8 天)
@@ -842,11 +929,15 @@ describe('stale device directory', () => {
       await vi.advanceTimersByTimeAsync(1_000_000);
     });
     expect(listDevices.mock.calls.length).toBe(initial);
-    // 分片走完、墙上期限到点之后,重读恢复(之后按自己的退避阶梯继续,这里不逐一数)。
+    // 第一片走完仍需等到服务端期限。
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(3_000_000_000);
+      await vi.advanceTimersByTimeAsync(deadline - Date.now() - 1);
     });
-    expect(listDevices.mock.calls.length).toBeGreaterThan(initial);
+    expect(listDevices.mock.calls.length).toBe(initial);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(listDevices.mock.calls.length).toBe(initial + 1);
   });
 
   // 账号边界:main 侧按 owner 记限流期限,渲染侧也得跟着清 —— 否则新账号的目录读失败时,

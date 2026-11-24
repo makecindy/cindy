@@ -59,6 +59,62 @@ function childProcess() {
   };
 }
 describe('native input lifecycle', () => {
+  // Unit regression for #11506: start() must not send Windows input-desktop errors
+  // to the Mac permission hint. Existing tests only handshook with ready.
+  it.each([
+    ['win32', 'error input_desktop 5\n', 'DESKTOP_INPUT_UNAVAILABLE'],
+    ['darwin', 'permission\n', 'DESKTOP_ACCESSIBILITY_REQUIRED'],
+    ['win32', 'ready\n', null],
+    ['darwin', 'ready\n', null],
+  ] as const)('classifies %s helper startup %j', async (platform, line, error) => {
+    const c = childProcess();
+    const host = new DesktopInputHost(vi.fn(), {
+      platform,
+      resolveBinary: async () => '/test/helper',
+      spawn: () => {
+        void Promise.resolve().then(() => c.child.stdout.emit('data', Buffer.from(line)));
+        return c.typed;
+      },
+    });
+    try {
+      if (error) {
+        await expect(host.start('1')).rejects.toThrow(error);
+        expect(c.child.stdin.end).toHaveBeenCalledWith('[{"kind":"release"}]\n');
+      } else await expect(host.start('1')).resolves.toBeUndefined();
+    } finally {
+      host.stop();
+      c.exit();
+      await host.release();
+    }
+    await expect(withAgentDesktopInput(async () => {})).resolves.toBeUndefined();
+  });
+
+  it.each(['error', 'exit', 'timeout'] as const)(
+    'reports unavailable when Windows helper startup ends with %s',
+    async (outcome) => {
+      vi.useFakeTimers();
+      const c = childProcess();
+      const host = new DesktopInputHost(vi.fn(), {
+        platform: 'win32',
+        resolveBinary: async () => '/test/helper',
+        spawn: () => c.typed,
+      });
+      try {
+        const rejected = expect(host.start('1')).rejects.toThrow('DESKTOP_INPUT_UNAVAILABLE');
+        await flush();
+        if (outcome === 'error') c.child.emit('error', new Error('spawn failed'));
+        else if (outcome === 'exit') c.exit();
+        else vi.advanceTimersByTime(8000);
+        await rejected;
+      } finally {
+        host.stop();
+        c.exit();
+        await host.release();
+      }
+      await expect(withAgentDesktopInput(async () => {})).resolves.toBeUndefined();
+    },
+  );
+
   it('retains Windows ownership until queued text and native release are acknowledged', async () => {
     vi.useFakeTimers();
     Object.defineProperty(process, 'platform', { value: 'win32' });
@@ -143,6 +199,41 @@ describe('native input lifecycle', () => {
     }
   });
 
+  // Unit: the controller's editable-field check needs the actual native acknowledgement.
+  // Existing ownership tests did not observe when the caller's click finishes.
+  it('completes a queued click only after the Agent and native injection finish', async () => {
+    const c = childProcess();
+    const host = new DesktopInputHost(vi.fn(), {
+      platform: 'darwin', resolveBinary: async () => '/test/helper',
+      spawn: () => {
+        void Promise.resolve().then(() => c.child.stdout.emit('data', Buffer.from('ready\n')));
+        return c.typed;
+      },
+    });
+    let finish!: () => void;
+    try {
+      await host.start('1');
+      const action = withAgentDesktopInput(() => new Promise<void>(resolve => { finish = resolve; }));
+      let done = false;
+      const delivered = host.input([{ kind: 'button', button: 0, down: false, x: 0.4, y: 0.8 }]);
+      void Promise.resolve(delivered).then(() => { done = true; });
+      await flush();
+      expect(done).toBe(false);
+      expect(c.child.stdin.write).not.toHaveBeenCalled();
+      finish();
+      await action;
+      await flush();
+      expect(c.child.stdin.write).toHaveBeenCalledOnce();
+      expect(done).toBe(false);
+      c.child.stdout.emit('data', Buffer.from('ok\n'));
+      expect(await delivered).toBe(true);
+    } finally {
+      finish?.();
+      host.stop();
+      c.exit();
+      await flush();
+    }
+  });
   it('keeps heartbeats alive while an Agent primitive finishes, and never replays queued input after stop', async () => {
     vi.useFakeTimers();
     const c = childProcess();

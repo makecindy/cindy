@@ -84,7 +84,7 @@ export type FilterProjectOrder = 'activity' | 'custom';
  * 任务行右侧信息项（复选）。存储数组的顺序 = 用户勾选先后(nextTaskInfoAfterToggle
  * 按序追加),列表行据此渲染(2026-08-12 用户裁决);菜单里选项的排列另有固定顺序。
  */
-export type TaskInfoField = 'time' | 'pr' | 'worktree' | 'tokens' | 'cost';
+export type TaskInfoField = 'time' | 'pr' | 'worktree' | 'tokens' | 'cost' | 'harness' | 'project' | 'teammate';
 export type ManualProjectDropPosition = 'before' | 'after';
 
 const STATUS_VALUES: ReadonlySet<string> = new Set<FilterStatus>(['active', 'archived', 'all']);
@@ -724,15 +724,18 @@ export function migrateLegacyManualSort(): void {
 
 /* ============================== taskInfo load/persist ============================== */
 
+// These identifiers were always visible before version 2 of the preference.
+const ROW_IDENTITY_FIELDS = ['harness', 'project', 'teammate'] as const;
 const TASK_INFO_VALUES: ReadonlySet<string> = new Set<TaskInfoField>([
   'time',
   'pr',
   'worktree',
   'tokens',
   'cost',
+  ...ROW_IDENTITY_FIELDS,
 ]);
-/** 默认仅显示最近活动时间。任务标签不属于可选信息项，始终跟在标题后显示。 */
-export const DEFAULT_TASK_INFO_FIELDS: readonly TaskInfoField[] = ['time'];
+/** 默认显示最近活动时间与行身份标识。任务标签不属于可选信息项，始终跟在标题后显示。 */
+export const DEFAULT_TASK_INFO_FIELDS: readonly TaskInfoField[] = ['time', ...ROW_IDENTITY_FIELDS];
 
 /**
  * 兼容旧 string[] 与带版本号的字段列表，保留字段及顺序（全不选合法）。
@@ -752,7 +755,8 @@ export function loadTaskInfoFields(mode: TaskListMode = 'tasks'): TaskInfoField[
   try {
     const parsed = JSON.parse(raw);
     const legacy = Array.isArray(parsed);
-    const values = legacy ? parsed : parsed?.version === 1 ? parsed.fields : null;
+    if (!legacy && parsed?.version !== 1 && parsed?.version !== 2) return [...DEFAULT_TASK_INFO_FIELDS];
+    const values = legacy ? parsed : parsed.fields;
     if (!Array.isArray(values)) return [...DEFAULT_TASK_INFO_FIELDS];
     const seen = new Set<string>();
     const cleaned: TaskInfoField[] = [];
@@ -760,6 +764,11 @@ export function loadTaskInfoFields(mode: TaskListMode = 'tasks'): TaskInfoField[
       if (typeof value !== 'string' || !TASK_INFO_VALUES.has(value) || seen.has(value)) continue;
       seen.add(value);
       cleaned.push(value as TaskInfoField);
+    }
+    if (legacy || parsed.version === 1) {
+      for (const field of ROW_IDENTITY_FIELDS) {
+        if (!seen.has(field)) cleaned.push(field);
+      }
     }
     return cleaned;
   } catch (err) {
@@ -772,7 +781,7 @@ export function persistTaskInfoFields(fields: readonly TaskInfoField[], mode: Ta
   const storage = safeStorage();
   if (!storage) return;
   try {
-    storage.setItem(sidebarModeKey(TASK_INFO_KEY, mode), JSON.stringify({ version: 1, fields }));
+    storage.setItem(sidebarModeKey(TASK_INFO_KEY, mode), JSON.stringify({ version: 2, fields }));
   } catch (err) {
     log.warn('[useSidebarFilter] failed to persist taskInfo:', err);
   }

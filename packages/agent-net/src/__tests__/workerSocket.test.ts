@@ -311,6 +311,11 @@ parentPort.on('message', (m) => {
   const post = async (...messages: unknown[]) => { socket.send(JSON.stringify(messages)); while (socket.bufferedAmount > 0) await new Promise((resolve) => setImmediate(resolve)); };
   const lines = () => infos.filter((line) => line.startsWith('agent-net peer'));
 
+  // Control the logging interval without depending on worker scheduling or CI load.
+  let now = 1_000;
+  const clock = vi.spyOn(performance, 'now').mockImplementation(() => now);
+  cleanup.push(() => clock.mockRestore());
+
   // A device that is known but never connected is not reported, in snapshots either.
   await post(status(null));
   await post({ type: 'path', id: 'peer-a', path: 'relay' }, status('relay'));
@@ -318,9 +323,10 @@ parentPort.on('message', (m) => {
   await post(status('direct'));
   expect(lines()).toEqual(['agent-net peer peer-a connected via relay', 'agent-net peer peer-a moved from relay to direct']);
   // Flipping inside the interval writes nothing more; after it, where the route ended up.
+  now += 39;
   await post(status('relay'), status('direct'), status('relay'));
   expect(lines()).toHaveLength(2);
-  await new Promise((resolve) => setTimeout(resolve, 60));
+  now += 1;
   await post(status('relay'));
   expect(lines().slice(2)).toEqual(['agent-net peer peer-a moved from direct to relay']);
   await post({ type: 'path', id: 'peer-a', path: null }, status(null));
