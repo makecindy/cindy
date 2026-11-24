@@ -17936,6 +17936,7 @@
       "openWorkdirFailed": "Failed to open folder"
     },
     "runs": {
+      "boundPluginEngineRecovery": "This automation didn’t run because its linked task uses a plugin engine. Switch the task back to a built-in engine or link the automation to a task that uses one.",
       "queueWaitTimeoutRecovery": "Queue wait expired before the prompt was sent. When the target session is idle, choose {{action}} to run it.",
       "status": {
         "running": "Running",
