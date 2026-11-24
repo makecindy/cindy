@@ -99,9 +99,10 @@ export function persistSessionStreamEventCore(
       pluginProgress ? { ...eventAgentMeta, pluginProgressInputId: progressInput } : eventAgentMeta,
       event.turnScope,
     );
-    // Close this exact block when progress finishes, even if the next tool takes a while.
-    // A late snapshot for an older item must not flush a newer streaming answer.
-    if (pluginProgress && event.source !== 'pi' && persistId &&
+    // Codex commentary carries a complete item snapshot. Keep Claude's block
+    // confirmations buffered until tool_use so later blocks cannot be written twice.
+    // A late Codex snapshot must not flush a newer streaming answer.
+    if (pluginProgress && event.source === 'codex' && persistId &&
         deps.persistence.getSessionTextSnapshot(session.id)?.persistId === persistId) {
       flushAssistantBlock(session.id, eventAgentMeta);
     }

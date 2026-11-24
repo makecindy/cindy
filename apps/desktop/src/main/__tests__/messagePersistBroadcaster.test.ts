@@ -341,6 +341,48 @@ it('makes completed plugin progress readable before the next event without flush
   expect(persistence.getSessionTextSnapshot(SESSION)?.event.data.text).toBe('答案草稿');
 });
 
+// Unit, PR #12557: the stream writer must persist one plugin progress row at
+// the Claude tool boundary. The Codex test above covers whole-item snapshots;
+// Claude can stream two text blocks and then confirm each separately.
+it('persists Claude multi-block plugin progress once at the tool boundary', async () => {
+  const { persistSessionStreamEventCore } = await import('../maker-ipc/sessionEventStreamCore.js');
+  const persistence = await import('../messagePersistBroadcaster.desktop.js');
+  type Args = Parameters<typeof persistSessionStreamEventCore>;
+  const session = { id: SESSION, agentKind: 'claude-code' } as Args[1];
+  const deps = {
+    persistence,
+    orcaTeamServiceForEvents: null,
+    log: { warn: vi.fn() },
+    broadcastSubagentRunsChanged: vi.fn(),
+  };
+  const inputId = 'plugin-task:r';
+  const emit = (event: Args[2]['event'], eventAgentMeta: Args[2]['eventAgentMeta']) =>
+    persistSessionStreamEventCore(deps, session, {
+      event, eventAgentMeta, groupLaneInputClientId: inputId,
+    });
+  const meta = { stopReason: 'tool_use', replyToClientId: inputId };
+  for (const text of ['First. ', 'Second.']) {
+    emit({ type: 'text', source: 'claude-code', data: { text, isFinal: false } }, null);
+  }
+  for (const text of ['First. ', 'Second.']) {
+    emit({ type: 'text', source: 'claude-code', data: { text, isFinal: true } }, meta);
+  }
+  emit({ type: 'tool_use', source: 'claude-code', data: {
+    toolUseId: 'progress-tool', toolName: 'Read', input: {},
+  } }, meta);
+  await drainPersistQueue();
+
+  const assistantRows = vi.mocked(createMessage).mock.calls
+    .map(([, row]) => row)
+    .filter((row) => row.role === 'assistant');
+  expect(assistantRows).toEqual([
+    expect.objectContaining({
+      content: 'First. Second.',
+      agentMeta: expect.objectContaining({ pluginProgressInputId: inputId }),
+    }),
+  ]);
+});
+
 describe('Codex done completion boundary', () => {
   it('only treats successful terminal data as a completed turn', () => {
     expect(isSuccessfulCodexDoneEventData({ raw: { status: 'completed' } })).toBe(true);
