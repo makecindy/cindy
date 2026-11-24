@@ -78,6 +78,19 @@ describe('双版本单请求上报', () => {
     expect(h.fetcher.mock.calls.filter(([, init]) => init.method === 'GET')).toHaveLength(2);
     expect(h.reports).toHaveLength(6); h.publisher.stop();
   });
+  // The service's Retry-After on the capabilities check also holds back the next check and report,
+  // a settings change in between included.
+  it.each([429, 503])('能力查询 %s 带 Retry-After 时到期前不再请求', async status => {
+    const h = setup();
+    h.fetcher.mockResolvedValueOnce(new Response('', { status, headers: { 'Retry-After': '900' } }));
+    h.publisher.start(); await vi.advanceTimersByTimeAsync(0);
+    h.publisher.requestPublish();
+    await vi.advanceTimersByTimeAsync(899_999);
+    expect(h.fetcher).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.fetcher.mock.calls.length).toBeGreaterThan(1);
+    h.publisher.stop();
+  });
   it('旧端404只发v1，不采样v2', async () => {
     const h = setup(); h.fetcher.mockResolvedValueOnce(response({}, 404));
     h.publisher.start(); await vi.advanceTimersByTimeAsync(0);

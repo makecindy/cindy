@@ -93,6 +93,8 @@ export async function getSettingsSnapshotProtocol(
   fetcher: SnapshotFetch,
   context: SnapshotPublishContext,
   signal: AbortSignal,
+  /** Told how long a throttled or unavailable service asked to wait. */
+  onRetryAfter?: (delayMs: number) => void,
 ): Promise<1 | 2 | null> {
   const publishUrl = settingsSnapshotPublishUrl(context.baseUrl);
   if (!publishUrl || !context.accessToken) return null;
@@ -107,7 +109,9 @@ export async function getSettingsSnapshotProtocol(
       return 1;
     }
     if (response.status !== 200) {
+      const delay = response.status === 429 || response.status === 503 ? retryAfterDelayMs(response) : null;
       await response.body?.cancel();
+      if (delay !== null) onRetryAfter?.(delay);
       return null;
     }
     const parsed = settingsSnapshotCapabilitiesSchema.safeParse(await readResponseJson(response));
@@ -257,7 +261,10 @@ export function createSettingsSnapshotPublisher(deps: {
       let version: 1 | 2 | null = 1;
       if (deps.readV2) {
         if (!protocol || protocol.expiresAt <= now()) {
-          version = await getSettingsSnapshotProtocol(deps.fetch, context, controller.signal);
+          // The capabilities check and the reports keep the same earliest next request.
+          version = await getSettingsSnapshotProtocol(deps.fetch, context, controller.signal, (delayMs) => {
+            nextAllowedAt = Math.max(nextAllowedAt, now() + delayMs);
+          });
           if (!current()) return;
           protocol = version === null ? null : { version, expiresAt: now() + CAPABILITIES_REFRESH_MS };
         } else {
