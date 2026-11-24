@@ -260,7 +260,7 @@ type VoiceInputState = import('@cindy/voice-input-core').VoiceInputState;
 type VoiceAudioTrace = import('@cindy/voice-input-core').AudioTrace;
 type VoiceSpeechSegment = import('@cindy/voice-input-core').SpeechSegment;
 type VoiceInputGlobalErrorCode =
-  'empty' | 'unavailable' | 'unconfirmed' | 'permission' | 'failed' | 'superseded';
+  'empty' | 'unavailable' | 'unconfirmed' | 'permission' | 'appNotAllowed' | 'failed' | 'superseded';
 type VoiceInputGlobalResult =
   { ok: true } | { ok: false; error: string; errorCode?: VoiceInputGlobalErrorCode };
 type VoiceEditableRange = import('@cindy/voice-input-core').EditableRange;
@@ -2726,6 +2726,7 @@ interface ElectronAPI {
     appDefaultModelRequestId?: string;
     ownerStamp: import('../shared/dataOwnerPush').DataOwnerPushStamp;
     selectedRoute?: import('../shared/botModelChain').BotModelRoute;
+    selectedPluginEngine?: import('../shared/pluginEngines').NewTaskPluginEngineSelection;
     lastByVendor: Partial<
       Record<
         'cc' | 'codex' | 'pi',
@@ -4159,6 +4160,11 @@ interface ElectronAPI {
     get(): Promise<import('../shared/projectsRoot').ProjectsRootState>;
     choose(): Promise<import('../shared/projectsRoot').ProjectsRootState>;
     reset(): Promise<import('../shared/projectsRoot').ProjectsRootState>;
+  };
+  taskExportDirectory?: {
+    get(): Promise<import('../shared/taskExportDirectory').TaskExportDirectoryState>;
+    choose(): Promise<import('../shared/taskExportDirectory').TaskExportDirectoryState>;
+    reset(): Promise<import('../shared/taskExportDirectory').TaskExportDirectoryState>;
   };
   createProjectFromTask: {
     prepare(sessionId: string): Promise<import('../shared/projectsRoot').PreparedProjectFromTask>;

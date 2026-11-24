@@ -37,7 +37,7 @@ vi.mock('../../localDb/ipc/projectAliases.js', () => ({
 vi.mock('../../localDb/ipc/recentWorkdirs.js', () => ({ normalizeRecentWorkdirPath: (p: string) => p, upsertRecentWorkdir: async () => false }));
 vi.mock('../../worktree/WorktreeManager.js', () => ({ detectCwd: async () => ({ gitInstalled: false }) }));
 
-import { BOT_PROJECT_MEMORY_REVIEW_ID, createBotDefaultProjectSchedule, ensureBotProjectAutomations, moveTeammateMemoryIntoProject, nameBotProject, prepareBotProjectWorkspace } from '../botProjectMode.js';
+import { BOT_PROJECT_LOCAL_GITIGNORE, BOT_PROJECT_MEMORY_GITIGNORE, BOT_PROJECT_MEMORY_REVIEW_ID, createBotDefaultProjectSchedule, ensureBotProjectAutomations, ensureTeammateProjectIgnored, moveTeammateMemoryIntoProject, nameBotProject, prepareBotProjectWorkspace } from '../botProjectMode.js';
 import { legacyTeammateProjectMemoryDir, teammateProjectMemoryDir, teammateWorkspaceDir } from '../botProjectMemory.js';
 import { importBotSkillFiles } from '../botSkillStore.js';
 import { OWN_RULES_HEADING, importedStandardSkill } from '../botProjectTemplate.js';
@@ -567,6 +567,8 @@ describe('moveTeammateMemoryIntoProject', () => {
     await put(outside, 'project_launch.md', 'only outside');
     await put(outside, 'MEMORY.md', 'old index');
     await put(inside, 'user_tea.md', 'newer');
+    // As both upgrade entries do: the local .gitignore entries come first, else the version is deferred.
+    await expect(ensureTeammateProjectIgnored({ workspace })).resolves.toBe('ready');
 
     await expect(moveTeammateMemoryIntoProject({ botId: 'bot_mia', ownerRoot: root, workspace })).resolves.toBe(1);
     expect(await fs.readFile(path.join(inside, 'user_tea.md'), 'utf8')).toBe('newer');
@@ -589,6 +591,94 @@ describe('moveTeammateMemoryIntoProject', () => {
     await expect(moveTeammateMemoryIntoProject({ botId: 'bot_mia', ownerRoot: root, workspace })).resolves.toBeNull();
     await expect(fs.stat(path.join(inside, 'project_launch.md'))).rejects.toThrow();
     expect(snapshot).toHaveBeenCalledOnce();
+  });
+});
+
+/*
+ * 测试价值
+ * - 生产入口与可观察结果：ensureTeammateProjectIgnored（启动时 botV2Migration 对已升级伙伴、首次升级时
+ *   prepareBotProjectWorkspace 调用）执行后 `.gitignore` 的内容、已提交文件与回执。Git 如何解读这些条目
+ *   （模板例外的顺序、已跟踪文件照旧跟踪）在 botProjectMode.git-integration.test.ts 用真 Git 核对。
+ * - 规则依据：cindy-bots-runtime.md §4「项目的 .gitignore（2026-11-21）」：存量项目只追加缺的条目一次，
+ *   不改用户的行，不删磁盘文件；凭证文件、虚拟环境、worktree 不进版本。
+ * - 现有覆盖缺口：此前只有记忆条目会补，凭证与虚拟环境条目没有补齐路径；首次升级也要在记版本前补上。
+ * - 最小失败输入：旧默认清单 + 用户自己的一行（CRLF），补齐后用户删掉一条再跑；首次升级时已有旧 `.gitignore`。
+ * - tier：unit（临时目录真实文件 I/O，无 Git）。
+ */
+describe('ensureTeammateProjectIgnored', () => {
+  let root = '';
+  afterEach(async () => { if (root) await fs.rm(root, { recursive: true, force: true }); });
+
+  // The list spells out the memory store's receipt so the snapshot kernel needs no maker-core.
+  it('keeps the memory store receipt versioned under the name maker-core writes', () => {
+    expect(BOT_PROJECT_MEMORY_GITIGNORE).toContain(`!.cindy/memory/${MEMORY_STORAGE_MIGRATION_RECEIPT}`);
+  });
+
+  it('appends the ordered block below the owner\'s lines, once', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'teammate-gitignore-'));
+    const workspace = teammateWorkspaceDir(root, 'bot_mia');
+    await fs.mkdir(workspace, { recursive: true });
+    const before = 'node_modules/\r\n.env\r\n# mine\r\n!keep.log';
+    await fs.writeFile(path.join(workspace, '.gitignore'), before);
+    await fs.writeFile(path.join(workspace, '.env'), 'COMMITTED=1');
+
+    await expect(ensureTeammateProjectIgnored({ botId: 'bot_mia', workspace })).resolves.toBe('ready');
+    const text = await fs.readFile(path.join(workspace, '.gitignore'), 'utf8');
+    // The whole ordered block goes below the owner's lines, even the `.env` it already had.
+    expect(text).toBe(`${before}\r\n\r\n${[
+      '# Cindy: keep credentials, environments, worktrees and memory caches out of versions',
+      ...BOT_PROJECT_LOCAL_GITIGNORE, ...BOT_PROJECT_MEMORY_GITIGNORE,
+    ].join('\r\n')}\r\n`);
+    await expect(fs.readFile(path.join(workspace, '.env'), 'utf8')).resolves.toBe('COMMITTED=1');
+
+    // Once: an entry the owner removes afterwards is not put back.
+    await fs.writeFile(path.join(workspace, '.gitignore'), text.replace('token.json\r\n', ''));
+    await expect(ensureTeammateProjectIgnored({ botId: 'bot_mia', workspace })).resolves.toBe('ready');
+    expect(await fs.readFile(path.join(workspace, '.gitignore'), 'utf8')).not.toContain('token.json');
+  });
+
+  // Codex review 2026-11-24: a `.gitignore` that is a folder (or a link, which Git does not follow)
+  // was left alone but counted as ready, so versions went ahead without the rules.
+  // Codex review 2026-11-24 (09:13): the startup upgrade and a task's savepoint can complete the same
+  // project at once. Each rewrote the file in place, so one could read the other's truncated file and
+  // write back only the block, dropping the owner's rules. Minimal input: two calls before either ends.
+  it('completes a project once when two callers ask at the same time', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'teammate-gitignore-race-'));
+    const workspace = teammateWorkspaceDir(root, 'bot_mia');
+    await fs.mkdir(workspace, { recursive: true });
+    const file = path.join(workspace, '.gitignore');
+    await fs.writeFile(file, 'auth.json\n');
+    const write = vi.spyOn(fs, 'writeFile');
+    try {
+      await expect(Promise.all([ensureTeammateProjectIgnored({ workspace }), ensureTeammateProjectIgnored({ workspace })]))
+        .resolves.toEqual(['ready', 'ready']);
+      // The owner's file is only appended to, never rewritten (exclusive-create attempts aside).
+      expect(write.mock.calls.filter(([target, , options]) => target === file && (options as { flag?: string } | undefined)?.flag !== 'wx')).toEqual([]);
+    } finally { write.mockRestore(); }
+    const text = await fs.readFile(file, 'utf8');
+    expect(text.startsWith('auth.json\n')).toBe(true);
+    expect(text.split('\n').filter(line => line === 'token.json')).toHaveLength(1);
+  });
+
+  it('reports a .gitignore it cannot write as failed, leaving it alone and writing no receipt', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'teammate-gitignore-dir-'));
+    const workspace = teammateWorkspaceDir(root, 'bot_mia');
+    await fs.mkdir(path.join(workspace, '.gitignore'), { recursive: true });
+    await expect(ensureTeammateProjectIgnored({ botId: 'bot_mia', workspace })).resolves.toBe('failed');
+    expect((await fs.stat(path.join(workspace, '.gitignore'))).isDirectory()).toBe(true);
+    await expect(fs.readdir(path.join(workspace, '.gitignore'))).resolves.toEqual([]);
+    await expect(fs.lstat(path.join(path.dirname(workspace), 'project-gitignore.json'))).rejects.toThrow();
+  });
+
+  it('completes an existing project\'s .gitignore during the first upgrade', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'teammate-gitignore-upgrade-'));
+    const workspace = teammateWorkspaceDir(root, 'bot_mia');
+    await fs.mkdir(workspace, { recursive: true });
+    await fs.writeFile(path.join(workspace, '.gitignore'), 'data/\n');
+    await prepareBotProjectWorkspace({ botId: 'bot_mia', displayName: 'Mia', ownerRoot: root });
+    const text = await fs.readFile(path.join(workspace, '.gitignore'), 'utf8');
+    expect(text.startsWith('data/\n')).toBe(true);
+    expect(text).toContain('\n.venv/\n');
   });
 });
 

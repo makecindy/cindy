@@ -196,7 +196,7 @@ it.each(['initial failure', 'fresh directory', 'channel close'])('redials an onl
   const certificate = issueCertificate(root, { networkId: bootstrap.networkId, subject: bootstrap.ownerCertificate.subject, identity: remote, role: 'member' });
   const device: DeviceView = { certificate, name: 'Remote', online: true, remoteControlEnabled: true, capabilities: [] };
   const uplink = Object.assign(new EventEmitter(), { kind: 'agent-net' as const, devices: [device], delegations: [],
-    send() {}, presence() {}, onDatagram() {}, close() {} });
+    probeRelay: vi.fn(), send() {}, presence() {}, onDatagram() {}, close() {} });
   const remoteId = Buffer.from(remote.transportKey, 'base64url').toString('hex');
   const drops: Array<() => void> = [];
   const connect = vi.fn(async (): Promise<PeerChannel> => ({ remoteId, send() {}, onData() {}, onClose(callback) { drops.push(callback); },
@@ -213,6 +213,7 @@ it.each(['initial failure', 'fresh directory', 'channel close'])('redials an onl
     socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'hello', payload: { deviceName: 'Local', platform: 'test', appVersion: '1', remoteControlEnabled: true, busy: false } }));
     await vi.advanceTimersByTimeAsync(0);
     expect(connect).toHaveBeenCalledOnce();
+    expect(uplink.probeRelay).toHaveBeenCalledTimes(failure === 'channel close' ? 0 : 1);
     if (failure === 'channel close') drops[0]();
     expect(socket.pathTo('b-remote')).toBeNull();
     if (failure === 'fresh directory') uplink.emit('directory');

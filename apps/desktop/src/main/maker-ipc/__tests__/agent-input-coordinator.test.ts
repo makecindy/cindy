@@ -33,6 +33,7 @@ import { performSessionAgentSwitch, type AgentSwitchSessionRow } from '../sessio
 import * as delegationHistory from '../botDelegationHistory.js';
 import { modelGroupCandidateKey, type ModelGroupCandidate } from '../../../shared/modelGroups.js';
 import { AgentInputCoordinator } from '../agent-input-coordinator.desktop.js';
+import { RemoteAccountReadUnavailable } from '../../subscription-accounts/remotePreflight.js';
 import { canRecoverUndeliveredOrcaReport } from '../../../shared/sharedTaskRecovery.js';
 import { AutoResumeBookkeeping } from '../autoResumeBookkeeping.js';
 import { createInterruptedTurnAutoResumeHooks } from '../interruptedTurnAutoResumeHooks.js';
@@ -6740,6 +6741,92 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(dispatched).toEqual(['following']);
   });
 
+  it.each([true, false])('waits for the account device before sending the original queue head (cancel=%s)', async cancel => {
+    const harness = createHarness();
+    const sessionId = 'remote-admission';
+    harness.sendToAgent.mockRejectedValueOnce(new RemoteAccountReadUnavailable('peer-a', new Error('timeout')));
+    harness.coordinator.enqueue(sessionId, makeItem('input-a', 'original'), { manualUiSend: true });
+    await flush();
+    expect(latestProjection(harness.projections)).toMatchObject({
+      error: null, pendingQueue: [{ clientId: 'input-a', waitingForRemoteAccount: true }],
+    });
+    harness.coordinator.enqueue(sessionId, makeItem('input-b', 'next'), { manualUiSend: true });
+    await flush();
+    expect(latestProjection(harness.projections)).toMatchObject({
+      error: null, pendingQueue: [
+        { clientId: 'input-a', waitingForRemoteAccount: true },
+        { clientId: 'input-b' },
+      ],
+    });
+    expect(harness.onDiscardedQueuedMessage).not.toHaveBeenCalled();
+    harness.coordinator.onRemoteAccountDeviceReady('peer-b');
+    await flush();
+    expect(harness.sendToAgent).toHaveBeenCalledTimes(1);
+    if (cancel) harness.coordinator.remove(sessionId, 'input-a');
+    harness.coordinator.onRemoteAccountDeviceReady('peer-a');
+    harness.coordinator.onRemoteAccountDeviceReady('peer-a');
+    await flush();
+    expect(harness.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(mocks.createMessage).toHaveBeenCalledTimes(1);
+    expect(mocks.createMessage).toHaveBeenNthCalledWith(
+      1, sessionId, expect.objectContaining({ clientId: cancel ? 'input-b' : 'input-a' }), expect.anything(),
+    );
+    if (!cancel) {
+      harness.setRunning(false);
+      harness.coordinator.onTurnEvent(sessionId, 'done');
+      await flush();
+      expect(mocks.createMessage).toHaveBeenCalledTimes(2);
+      expect(mocks.createMessage).toHaveBeenNthCalledWith(
+        2, sessionId, expect.objectContaining({ clientId: 'input-b' }), expect.anything(),
+      );
+    }
+  });
+
+  it('releases the old wait when a priority input takes the queue head', async () => {
+    const harness = createHarness();
+    const sessionId = 'remote-admission';
+    harness.sendToAgent.mockRejectedValueOnce(new RemoteAccountReadUnavailable('peer-a', new Error('timeout')));
+    harness.coordinator.enqueue(sessionId, makeItem('input-a', 'original'), { manualUiSend: true });
+    await flush();
+    harness.coordinator.reserveNextInput(sessionId, makeItem('priority', 'priority'));
+    await flush();
+    expect(latestProjection(harness.projections).pendingQueue.map(item => item.clientId)).toEqual(['input-a']);
+    expect(harness.onDiscardedQueuedMessage).not.toHaveBeenCalled();
+    harness.setRunning(false);
+    harness.coordinator.onTurnEvent(sessionId, 'done');
+    await flush();
+    expect(mocks.createMessage).toHaveBeenNthCalledWith(
+      1, sessionId, expect.objectContaining({ clientId: 'priority' }), expect.anything(),
+    );
+    expect(mocks.createMessage).toHaveBeenNthCalledWith(
+      2, sessionId, expect.objectContaining({ clientId: 'input-a' }), expect.anything(),
+    );
+  });
+
+  it('rechecks only once without a device event and never dispatches a cancelled wait', async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = createHarness();
+      const sessionId = 'remote-admission';
+      const unavailable = new RemoteAccountReadUnavailable('peer-a', new Error('timeout'));
+      harness.sendToAgent.mockRejectedValue(unavailable);
+      harness.coordinator.enqueue(sessionId, makeItem('input-a', 'original'), { manualUiSend: true });
+      await flush();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(harness.sendToAgent).toHaveBeenCalledTimes(2);
+      expect(latestProjection(harness.projections)).toMatchObject({
+        error: null, pendingQueue: [{ clientId: 'input-a', waitingForRemoteAccount: true }],
+      });
+      harness.coordinator.remove(sessionId, 'input-a');
+      harness.coordinator.onRemoteAccountDeviceReady('peer-a');
+      await flush();
+      expect(harness.sendToAgent).toHaveBeenCalledTimes(2);
+      expect(mocks.createMessage).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('rolls back every pre-accept send failure to the queue head and retries by typed recovery', async () => {
     const h = createHarness();
     const sid = 'send-rollback';
@@ -6866,6 +6953,81 @@ describe('AgentInputCoordinator send transaction', () => {
       vi.useRealTimers();
     }
   });
+
+  // #12531 / unit with SQLite: the existing live failure test never reloads the
+  // queue. Inject a lazy-create refusal and reopen through queue restoration.
+  it.each(['unchanged', 'route changed', 'head replaced', 'head reordered', 'ordinary queue'] as const)(
+    'reopens a persisted queue with the appropriate refusal hint (%s)', async scenario => {
+      const sid = 'remote-route-refusal';
+      const reason = '[REMOTE_COMPAT_MODE_UNSUPPORTED]';
+      const sqlite = new Database(':memory:');
+      sqlite.exec('CREATE TABLE agent_input_queue_snapshots (session_id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at INTEGER)');
+      setCurrentDbClient({ drizzle: drizzle(sqlite) } as unknown as DbClient, 'queue-refusal-test');
+      try {
+        const live = createHarness();
+        live.persistQueueSnapshot.mockImplementation(saveAgentInputQueueSnapshot);
+        live.setLoadQueueSnapshot(loadAgentInputQueueSnapshot);
+        await live.coordinator.ensureQueueRestored(sid);
+        if (scenario === 'ordinary queue' || scenario === 'head reordered') live.setRunning(true);
+        if (scenario !== 'ordinary queue') {
+          live.sendToAgent.mockResolvedValueOnce(hostSendFailure('LAZY_CREATE_FAILED', `${reason} private provider details`));
+        }
+        const item = makeItem('original', 'first');
+        if (scenario === 'ordinary queue') Object.assign(item, { dispatchRefusal: reason.slice(1, -1) });
+        live.coordinator.enqueue(sid, item);
+        if (scenario === 'head reordered') {
+          live.coordinator.enqueue(sid, makeItem('later', 'second'));
+          live.setRunning(false);
+          live.coordinator.onTurnEvent(sid, 'done');
+        }
+        await flush();
+        if (scenario !== 'ordinary queue') {
+          expect(live.coordinator.getProjection(sid).error).toContain(reason);
+          expect(live.sendToAgent).toHaveBeenCalledOnce();
+        }
+        if (scenario === 'route changed') {
+          live.coordinator.refreshQueuedRoute(sid, { model: 'new-model', providerId: 'new-provider' });
+        }
+        if (scenario === 'head replaced') {
+          live.setRunning(true);
+          live.coordinator.enqueue(sid, makeItem('later', 'second'));
+        }
+        if (scenario === 'head reordered') live.coordinator.move(sid, 'later', 0);
+        live.coordinator.onSessionClosed(sid);
+        await awaitAgentInputQueueSnapshotPersistence(sid);
+        const payload = sqlite.prepare('SELECT payload FROM agent_input_queue_snapshots WHERE session_id = ?')
+          .pluck().get(sid);
+        expect(payload).not.toContain('private provider details');
+        if (scenario === 'ordinary queue') expect(payload).not.toContain('dispatchRefusal');
+
+        const reopened = createHarness();
+        reopened.setLoadQueueSnapshot(loadAgentInputQueueSnapshot);
+        await reopened.coordinator.ensureQueueRestored(sid);
+        const projection = reopened.coordinator.getProjection(sid);
+        const expectedIds = scenario === 'head reordered' ? ['later', 'original']
+          : scenario === 'head replaced' ? ['later'] : ['original'];
+        expect(projection.pendingQueue.map(item => item.clientId)).toEqual(expectedIds);
+        expect(projection.queuePaused).toBe(true);
+        expect(reopened.sendToAgent).not.toHaveBeenCalled();
+        expect(mocks.createMessage).not.toHaveBeenCalled();
+        expect(projection.error).toBe(scenario === 'unchanged' ? reason : null);
+        expect(projection.recovery).toBeNull();
+        expect(projection.errorRetryText).toBeNull();
+        if (scenario === 'route changed') {
+          reopened.coordinator.resume(sid);
+          await flush();
+          expect(reopened.sendToAgent).toHaveBeenCalledOnce();
+          expect(reopened.sendToAgent.mock.calls[0][2]).toMatchObject({
+            model: 'new-model', providerId: 'new-provider',
+          });
+          expect(reopened.sendToAgent.mock.calls[0][3].persistUserMessage?.clientId).toBe('original');
+        }
+      } finally {
+        clearCurrentDbClient();
+        sqlite.close();
+      }
+    },
+  );
 
   it.each(['WORKDIR_MISSING', 'LAZY_CREATE_FAILED'] as const)('keeps %s recoverable without leaving an active turn', async code => {
     const h = createHarness();
@@ -16149,7 +16311,11 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     });
     const hooks = createInterruptedTurnAutoResumeHooks<Session>({
       inputCoordinator: h.coordinator, interruptedTurnAutoResumeGuard: guard, autoResumeBookkeeping: book,
-      botFallbackInputs: new WeakSet(), modelGroupInputs: new WeakSet([item.createOpts]),
+      botFallbackInputs: new WeakSet(),
+      modelGroupInputs: {
+        get: (opts) => opts === item.createOpts ? 'enabled' : undefined,
+        isInterruptedTurnAutoResumeEnabled: () => false,
+      },
       saveTurnStartedAtForDeferred: vi.fn(), beginSchedulerAutoResume: vi.fn(), getStableSessionForTurnBoundary: () => null,
       pendingContinuationOnlyAutoResumeRebuilds: new Map(), pendingSessionRuntimeFallbackRebuilds: new Set(),
       providerGroupHeldErrors: { stash: vi.fn() }, providerGroupHeldTerminals: { stash: vi.fn() },
@@ -16231,6 +16397,20 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: CONTINUE_AFTER_ERROR_PROMPT });
     expect(h.coordinator.isActiveInputOwnerContinuation(sid)).toBe(expected);
     expect(h.coordinator.isActiveInputOwnerAuthored(sid)).toBe(false);
+  });
+
+  // model-groups.md §4.6: a model group's source switch is recorded on the continuation, so its activity line says
+  // which source the task moved to and why (rendered like a provider group's computer switch).
+  it('records the model group source switch on the automatic continuation', async () => {
+    const { h, fail } = availabilityHarness();
+    const sid = 'model-group-source-switch';
+    h.coordinator.enqueue(sid, availabilityInput());
+    await flush();
+    await fail(sid, { toolResult: true });
+    const agentSwitch = { from: 'Claude · A', to: 'GPT · B', cause: 'usage-limit' as const };
+    expect(await h.coordinator.autoRetryLastError(sid, 1, { agentSwitch })).toBe('resumed');
+    await flush();
+    expect(h.sendToAgent.mock.calls[1]?.[3].persistUserMessage).toMatchObject({ autoResume: true, autoResumeInfo: { agentSwitch } });
   });
 
   it('continues after a completed tool and stops at the existing host retry budget', async () => {
