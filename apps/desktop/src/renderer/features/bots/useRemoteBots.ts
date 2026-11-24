@@ -88,6 +88,8 @@ export function useRemoteBotSync(): void {
       inFlightReads.clear();
       legacyDelegationHosts.clear();
       delegationRetryAt.clear();
+      restoredAttribution.clear();
+      restoredCheckAt.clear();
       let cached: RemoteBot[] = [];
       try {
         if (!nextOwner) {
@@ -112,6 +114,7 @@ export function useRemoteBotSync(): void {
           }
         }
       } catch { /* missing/corrupt cache */ }
+      for (const bot of cached) if (bot.delegatedSessionIds !== undefined) restoredAttribution.add(`${bot.deviceId}\n${bot.id}`);
       publish(cached);
     }
     if (!nextOwner) return;
@@ -130,6 +133,7 @@ export function useRemoteBotSync(): void {
     );
     const generations = new Map<string, number>();
     const timers = new Map<string, ReturnType<typeof setTimeout>>();
+    const restoredCheckTimers = new Map<string, ReturnType<typeof setTimeout>>();
     const taskRefreshes = new Set<string>();
     const current = () => !disposed && owner === nextOwner && isDataOwnerGenerationCurrent(dataOwner);
     async function refresh(deviceId: string, refreshTasks = false) {
@@ -175,6 +179,22 @@ export function useRemoteBotSync(): void {
         // carries the new main chat next to the previous attribution. Teammates whose read failed
         // go last, so one that keeps stalling cannot stop the round before the others are read.
         const retryKeyOf = (bot: RemoteBot) => `${deviceId}\n${bot.id}\n${bot.sessionId}`;
+        // Attribution restored from disk may be stale: an older host can add V1 tasks while this
+        // app is closed, with no push to tell it. Check it once per sign-in, a while after the
+        // host first answers so the startup burst is not joined, through the same serial reads
+        // and backoff. Ordinary refreshes before that keep using the cache.
+        const restoredKeyOf = (bot: RemoteBot) => `${deviceId}\n${bot.id}`;
+        if (bots.some(bot => restoredAttribution.has(restoredKeyOf(bot)))) {
+          if (!restoredCheckAt.has(deviceId)) restoredCheckAt.set(deviceId, Date.now() + RESTORED_CHECK_DELAY_MS);
+          const wait = restoredCheckAt.get(deviceId)! - Date.now();
+          if (wait > 0 && !restoredCheckTimers.has(deviceId)) {
+            restoredCheckTimers.set(deviceId, setTimeout(() => {
+              restoredCheckTimers.delete(deviceId);
+              void refresh(deviceId);
+            }, wait));
+          }
+        }
+        const restoredDue = Date.now() >= (restoredCheckAt.get(deviceId) ?? Infinity);
         const readOrder = [...bots.filter(bot => !delegationRetryAt.has(retryKeyOf(bot))),
           ...bots.filter(bot => delegationRetryAt.has(retryKeyOf(bot)))];
         for (const bot of readOrder) {
@@ -182,7 +202,8 @@ export function useRemoteBotSync(): void {
           if (!bot.sessionId) continue;
           const old = previous.get(bot.id);
           const retryKey = retryKeyOf(bot);
-          if (!refreshTasks && ((old?.delegatedSessionIds !== undefined && old.sessionId === bot.sessionId && !delegationRetryAt.has(retryKey))
+          if (!refreshTasks && ((old?.delegatedSessionIds !== undefined && old.sessionId === bot.sessionId && !delegationRetryAt.has(retryKey)
+            && !(restoredDue && restoredAttribution.has(restoredKeyOf(bot))))
             || Math.max(delegationRetryAt.get(retryKey) ?? 0, delegationRetryAt.get(deviceId) ?? 0) > Date.now())) continue;
           try {
             const tasks = await readLegacyDelegations(deviceId, bot.sessionId);
@@ -190,6 +211,7 @@ export function useRemoteBotSync(): void {
             const created = remoteBotCreatedTaskIds(tasks, bot.id);
             if (created === null) { delegationRetryAt.set(retryKey, Date.now() + DELEGATION_RETRY_MS); continue; }
             delegationRetryAt.delete(retryKey);
+            restoredAttribution.delete(restoredKeyOf(bot));
             publish(snapshot.map(row => row.deviceId === deviceId && row.id === bot.id
               ? { ...row, delegatedSessionIds: created } : row));
           } catch (error) {
@@ -275,6 +297,7 @@ export function useRemoteBotSync(): void {
       offPush();
       offStatus();
       timers.forEach(clearTimeout);
+      restoredCheckTimers.forEach(clearTimeout);
     };
   }, [dataOwnerId, isAuthenticated, devices, revoked, dataOwner]);
   useEffect(() => {
@@ -322,6 +345,12 @@ const DELEGATION_READ_TIMEOUT_MS = 10_000;
 const DELEGATION_RETRY_MS = 5 * 60_000;
 /** The default 30 s invoke budget: an abandoned read can hold the host's slot that long. */
 const DELEGATION_HOST_PAUSE_MS = 30_000;
+/** `deviceId\nbotId` whose attribution came from the display cache and is not confirmed since sign-in. */
+const restoredAttribution = new Set<string>();
+/** Per host: when this sign-in's one delayed check of restored attribution becomes due. */
+const restoredCheckAt = new Map<string, number>();
+/** Past the startup burst of roster, session and status reads. */
+const RESTORED_CHECK_DELAY_MS = 60_000;
 const DELEGATION_READ_TIMEOUT = new Error('legacy delegation read timed out');
 
 /**

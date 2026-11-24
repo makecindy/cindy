@@ -399,6 +399,38 @@ it('reads attribution only for cached teammates that do not have it yet', async 
   expect(h.invoke.mock.calls.filter(call => call[1] === 'maker:bot-delegations:list')).toEqual([['b', 'maker:bot-delegations:list', ['canonical']]]);
 });
 
+// Unit, #11997 review (changes requested): while this app was closed an older host added a V1
+// task; after restart the cache still has the old attribution, nothing is pushed, and the
+// legacy-host set starts empty. Ordinary refreshes keep using the cache, but one delayed check
+// per sign-in must add the new task's creator. Minimal input: cached mark, no push, 60 s pass.
+it('checks restored attribution once per sign-in so a task added while the app was closed gets its creator', async () => {
+  h.devices = [host('a')];
+  localStorage.setItem(`cindy.remoteBots.v1.${h.owner}`, JSON.stringify([{ id: 'same-bot', deviceId: 'a', deviceName: 'a',
+    name: 'Writer', avatar: '', avatarColor: '', description: '', preview: '', activityAt: 100, sessionId: 'canonical',
+    delegatedSessionIds: ['old-child'] }]));
+  h.invoke.mockImplementation(async (_device, channel) => channel === REMOTE_RESOURCE_LIST_CHANNEL ? collection() : {
+    ok: true, delegations: [{ requestingBotId: 'same-bot', childSessionId: 'old-child' }, { requestingBotId: 'same-bot', childSessionId: 'new-child' }] });
+  const online = async () => {
+    act(() => h.status({ status: 'online' }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  };
+  vi.useFakeTimers();
+  try {
+    const { result } = renderHook(useRoster);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    await online();
+    expect(rosterReads()).toBe(2);
+    expect(taskTargets()).toEqual([]);
+    expect(result.current[0].delegatedSessionIds).toEqual(['old-child']);
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(taskTargets()).toEqual(['canonical']);
+    expect(result.current[0].delegatedSessionIds).toEqual(['old-child', 'new-child']);
+    await online();
+    expect(taskTargets()).toEqual(['canonical']);
+  } finally { vi.useRealTimers(); }
+});
+
 /** Roster A (`same-bot`, chat `canonical`) then B (`second-bot`, chat `second`), both unknown. */
 const teammatesAB = () => {
   const roster = collection();
