@@ -51,7 +51,7 @@ import {
   COMPANION_CLOUD_MERGE_TIMEOUT_MS,
   COMPANION_CLOUD_TARGETS_CHANNEL,
 } from './companionCloud.js';
-import { SESSION_ACTIVITY_CHANNEL, SESSION_SYNC_CHANNEL } from './topics.js';
+import { TASK_ACTIVITY_SNAPSHOT, SESSION_ACTIVITY_CHANNEL, SESSION_SYNC_CHANNEL } from './topics.js';
 import { REMOTE_DESKTOP_INVOKE_MS } from './remoteDesktopIce.js';
 import {
   REMOTE_RESOURCE_CHANGED_CHANNEL,
@@ -268,6 +268,9 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // 菜单时拉一次,才能给出「更大」的档位。无 event.sender / 无本机副作用,不写任何存储。
   // 老被控端无 handler → CHANNEL_NOT_ALLOWED → 控制端退回「只允许收紧」。
   'maker:get-context-window-bounds',
+  // Same-account, read-only native window numbers. No config contents, paths or
+  // credentials; no settings writes. Old hosts reject this channel as unsupported.
+  'maker:model-context-limit:get',
   'maker:set-extra-dirs',
   'maker:set-writable-dirs',
   // Pi 原生分支树:只读快照 + 当前会话内导航。导航业务 handler 在被控端原子同步
@@ -279,9 +282,27 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // maker:set-model/effort/fast-mode + sessions:patched,不经此 channel。被控端转发给自身 renderer
   // 执行(无 sender 依赖、无本机副作用)。老被控端无 handler → CHANNEL_NOT_ALLOWED → 控制端吞掉降级。
   'maker:set-session-model-pref',
+  // —— 模型组(model-groups.md §6.3)——
+  // 手机与远程控制的电脑在被控电脑上新建 / 换模型时列出那台的模式，由那台按自己的规则选来源、提交选路记录、
+  // 记下任务用着哪个来源、在任务里写说明(远程不能裸写消息，说明由被控端代写)。被控端只接受同账号本人
+  // 控制的设备(分享来的任务等受限控制端拒绝)；改模式(model-groups:set)只在本机，不进表。
+  // 数据真相在被控端，无 sender 依赖、无本机 UI 副作用。老被控端无此准入 → CHANNEL_NOT_ALLOWED →
+  // 控制端按「那台电脑不支持模型组」隐藏入口。
+  'model-groups:get',
+  'model-groups:resolve',
+  'model-groups:commit',
+  'model-groups:bind-session',
+  'model-groups:route-note',
   // —— 能力查询 ——
   'maker:get-capabilities',
   'maker:list-available-agents',
+  // 插件提供的执行引擎(docs/plans/acp-plugin-bridge.md，只读)：手机在被控电脑上新建 / 切换到插件
+  // 引擎时读那台的引擎列表(名称、图标、模型、思考深度、工作模式)；刷新只请那台的插件重新上报模型
+  // (插件各自冷却)。数据真相在被控端，无 sender 依赖、无本机 UI 副作用。老被控端无此准入 →
+  // CHANNEL_NOT_ALLOWED → 控制端按「没有插件引擎」隐藏入口。
+  'maker:list-plugin-engines',
+  'maker:refresh-plugin-engines',
+  'maker:get-plugin-engine-usage',
   // device-link 远程草稿镜像(只读):控制端为被控设备新建项目草稿时,读被控端**当前 New Maker
   // 草稿**在该 vendor 的完整选择(model/effort/fast/permission/source),1:1 seed 控制端草稿。
   // 数据真相在被控端(其 renderer 草稿),无 sender 依赖、无本机副作用 → 准入。老被控端无此 handler
@@ -486,6 +507,7 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   'notification:clear-session-attention',
   // Completed-card action, guarded by an owner-issued token before any mutation.
   // Old hosts reject this channel; callers must not fall back to unguarded writes.
+  TASK_ACTIVITY_SNAPSHOT,
   'agent-island:completion-action',
   // —— Project automation ——
   'maker:project-automation:reconcile',
@@ -897,6 +919,7 @@ export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
   'local-db:sessions:created',
   'local-db:task-tags:changed',
   'local-db:sessions:patched',
+  TASK_ACTIVITY_SNAPSHOT,
   SESSION_ACTIVITY_CHANNEL,
   SESSION_SYNC_CHANNEL,
   'local-db:messages:created',

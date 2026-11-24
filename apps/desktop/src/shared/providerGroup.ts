@@ -233,7 +233,18 @@ export interface ProviderGroupReshareSummary {
   guests: ProviderGroupReshareGuest[];
 }
 
+/** Optional same-account settings read. Older owners ignore display and return the full view. */
+export type ProviderGroupDisplayRead = 'roster' | { memberKey: string; details?: true };
+
+export function parseProviderGroupDisplayRead(raw: unknown): ProviderGroupDisplayRead | undefined {
+  if (raw === undefined || raw === 'roster') return raw;
+  const value = remoteRecord(raw);
+  return { memberKey: remoteMemberKey(value.memberKey), ...(value.details === true ? { details: true } : {}) };
+}
+
 export interface ProviderGroupView {
+  /** Acknowledges a roster-only read. Absent on old group owners. */
+  rosterOnly?: true;
   providerContinuity?: ProviderMetadataContinuity;
   /** Some executors have not confirmed this group's subscription speed policy yet. */
   fastPolicyPending?: boolean;
@@ -284,7 +295,7 @@ export type ProviderGroupLocalCommand =
   | { action: 'save-if-current'; providerId: string; config: ProviderGroupConfig; expectedConfig: ProviderGroupConfig | null }
   | { action: 'delete-if-current'; providerId: string; expectedConfig: ProviderGroupConfig | null }
   /** 同账号另一台电脑上这个供应商的组与组内电脑状态(只读)。 */
-  | { action: 'remote-view'; providerId: string; deviceId: string }
+  | { action: 'remote-view'; providerId: string; deviceId: string; display?: ProviderGroupDisplayRead }
   /** 本机全部组的设置(不读远端)。 */
   | { action: 'list' }
   /** 这个任务此刻归哪个组(模型列表把它显示在组那一项下)。 */
@@ -525,7 +536,7 @@ export type ProviderGroupRemoteRequest =
   /** 这台电脑经组运行、正在跑的任务(整体替换上一份；seq 只增，乱序到达的旧份丢弃)。 */
   | { action: 'leases'; seq: number; entries: ProviderGroupRemoteLease[] }
   /** 组内电脑的状态(发送前检查、设置页展示)。 */
-  | { action: 'view'; providerId: string; model?: string; agentKind?: 'claude-code' | 'codex' | 'pi'; includeGuestSupport?: true }
+  | { action: 'view'; providerId: string; model?: string; agentKind?: 'claude-code' | 'codex' | 'pi'; includeGuestSupport?: true; display?: ProviderGroupDisplayRead }
   /**
    * 这台电脑经组、在组里别的电脑上运行的用量(组所在电脑经手不到)：整体替换这台从 sinceDay 起(含；null = 全部)
    * 报过的行。seq 只增，乱序到达的旧份丢弃。
@@ -683,6 +694,7 @@ export function parseProviderGroupRemoteRequest(raw: unknown): ProviderGroupRemo
         providerId: remoteProviderId(value.providerId),
         ...(value.model !== undefined ? { model: value.model } : {}),
         ...(value.agentKind !== undefined ? { agentKind: value.agentKind as 'claude-code' | 'codex' | 'pi' } : {}),
+        ...(value.display !== undefined ? { display: parseProviderGroupDisplayRead(value.display) } : {}),
         ...(value.includeGuestSupport === true ? { includeGuestSupport: true } : {}),
       };
     }
@@ -806,7 +818,7 @@ export function parseProviderGroupRemoteView(raw: unknown, groupProviderId: stri
     const usageLimit = member.kind !== 'share' && state === 'cooling' && limit
       && (reset === null || (typeof reset === 'number' && Number.isSafeInteger(reset) && reset > 0))
       ? { resetAtMs: reset } as ProviderGroupUsageLimit : undefined;
-    // 分享来的电脑不读配额(provider-groups.md §5「分享边界」)：回包里有也不收。
+    // 分享来的电脑的额度只在组所在电脑内部排先后，不随组状态外传(provider-groups.md §5「分享边界」)：回包里有也不收。
     const quota = member.kind === 'share' ? undefined : readProviderGroupMemberQuota(item.quota);
     const fiveHourTight = quota !== undefined && item.fiveHourTight === true;
     return [{
@@ -830,7 +842,7 @@ export function parseProviderGroupRemoteView(raw: unknown, groupProviderId: stri
       ...(fiveHourTight ? { fiveHourTight: true as const } : {}),
     }];
   });
-  return { providerId: groupProviderId, config, members, ...(model ? { model } : {}),
+  return { providerId: groupProviderId, config, members, ...(value.rosterOnly === true ? { rosterOnly: true as const } : {}), ...(model ? { model } : {}),
     ...(readProviderMetadataContinuity(raw) ? { providerContinuity: readProviderMetadataContinuity(raw) } : {}),
     ...(value.fastPolicyPending === true ? { fastPolicyPending: true } : {}) };
 }

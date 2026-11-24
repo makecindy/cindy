@@ -105,7 +105,7 @@ describe('pi translator', () => {
     const { queue, events } = makeQueue();
 
     translatePiEvent(
-      ev({ type: 'tool_execution_start', toolCallId: 'sa-1', toolName: 'subagent', args: {} }),
+      ev({ type: 'tool_execution_start', toolCallId: 'sa-1', toolName: 'cindy_subagent', args: {} }),
       queue,
       ctx,
     );
@@ -119,6 +119,14 @@ describe('pi translator', () => {
       queue,
       ctx,
     );
+    // #11339: a user extension named subagent is not a Cindy durable run.
+    translatePiEvent(ev({ type: 'tool_execution_start', toolCallId: 'native-1', toolName: 'subagent', args: {} }), queue, ctx);
+    translatePiEvent(ev({ type: 'tool_execution_end', toolCallId: 'native-1', result: 'native result' }), queue, ctx);
+    expect(events.find(event => event.type === 'tool_use' && (event.data as { toolUseId?: string }).toolUseId === 'sa-1')?.data)
+      .toMatchObject({ toolName: 'subagent' });
+
+    expect(events.find(event => event.type === 'tool_use' && (event.data as { toolUseId?: string }).toolUseId === 'native-1')?.data)
+      .toMatchObject({ toolName: 'dynamic:subagent' });
 
     const updates = events.filter((event) => event.type === 'agent_task_update');
     expect(updates.map((event) => event.data)).toEqual([
@@ -139,7 +147,7 @@ describe('pi translator', () => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();
     translatePiEvent(ev({
-      type: 'tool_execution_start', toolCallId: 'sa-title', toolName: 'subagent',
+      type: 'tool_execution_start', toolCallId: 'sa-title', toolName: 'cindy_subagent',
       args: { agent: 'scout', task: 'find the auth entry point' },
     }), queue, ctx);
     translatePiEvent(ev({
@@ -167,7 +175,7 @@ describe('pi translator', () => {
       ev({
         type: 'tool_execution_start',
         toolCallId: 'sa-list',
-        toolName: 'subagent',
+        toolName: 'cindy_subagent',
         args: { action: 'list' },
       }),
       queue,
@@ -188,7 +196,7 @@ describe('pi translator', () => {
       ev({
         type: 'tool_execution_start',
         toolCallId: 'sa-title',
-        toolName: 'subagent',
+        toolName: 'cindy_subagent',
         args: { title: 'Grok 连通性验证', agent: 'worker' },
       }),
       queue,
@@ -206,7 +214,7 @@ describe('pi translator', () => {
       ev({
         type: 'tool_execution_start',
         toolCallId: 'sa-batch-title',
-        toolName: 'subagent',
+        toolName: 'cindy_subagent',
         args: {
           tasks: [
             { agent: 'worker', task: 'Verify Grok routing and usage' },
@@ -227,7 +235,7 @@ describe('pi translator', () => {
     const { queue, events } = makeQueue();
 
     translatePiEvent(
-      ev({ type: 'tool_execution_start', toolCallId: 'sa-bg', toolName: 'subagent', args: { async: true } }),
+      ev({ type: 'tool_execution_start', toolCallId: 'sa-bg', toolName: 'cindy_subagent', args: { async: true } }),
       queue,
       ctx,
     );
@@ -268,7 +276,7 @@ describe('pi translator', () => {
       const { queue, events } = makeQueue();
 
       translatePiEvent(
-        ev({ type: 'tool_execution_start', toolCallId: 'sa-1', toolName: 'subagent', args: {} }),
+        ev({ type: 'tool_execution_start', toolCallId: 'sa-1', toolName: 'cindy_subagent', args: {} }),
         queue,
         ctx,
       );
@@ -2629,11 +2637,13 @@ describe('pi translator live token speed', () => {
     }
   });
 
+  // Also: the finished turn keeps the parent's speed chart. Child output makes the usage
+  // counters incomparable and clears their timing, which used to drop the chart as well.
   it('keeps delegated subagent output out of the parent generation meter', () => {
     vi.useFakeTimers();
     try {
       const ctx = createPiTranslateContext(noopLogger);
-      const { queue } = makeQueue();
+      const { queue, events } = makeQueue();
       vi.setSystemTime(1_000);
       translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
       translatePiEvent(ev({ type: 'message_start', message: { role: 'assistant' } }), queue, ctx);
@@ -2646,7 +2656,7 @@ describe('pi translator live token speed', () => {
       // A subagent runs during the tool window and reports its own output.
       vi.setSystemTime(2_000);
       translatePiEvent(ev({ type: 'message_update', assistantMessageEvent: {
-        type: 'toolcall_end', toolCall: { name: 'subagent' },
+        type: 'toolcall_end', toolCall: { name: 'cindy_subagent' },
       } }), queue, ctx);
       translatePiEvent(ev({
         type: 'tool_execution_update',
@@ -2671,6 +2681,10 @@ describe('pi translator live token speed', () => {
       expect(ctx.tokenSpeed.snapshot()).toMatchObject({ tokens: 4 });
       translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
       expect(ctx.tokenSpeed.snapshot()?.tokens).toBe(4);
+      const done = events.find((event) => event.type === 'done');
+      const usage = (done?.data as { usage?: { durationMs?: number; generationTrace?: { requests: number } } })?.usage;
+      expect(usage?.durationMs).toBeUndefined();
+      expect(usage?.generationTrace).toMatchObject({ requests: 1 });
     } finally {
       vi.useRealTimers();
     }
@@ -2944,6 +2958,9 @@ describe('pi translator live token speed', () => {
       expect(settled.elapsedMs).toBe(2_500);
       // 18 tokens over 2.5s of generation.
       expect(settled.average).toBeCloseTo(18_000 / 2_500, 6);
+      // The middle request had no report and the following retry lasted only 500 ms.
+      // Combining them would produce a spurious calibrated average.
+      expect(settled.measurement?.average).toBeNull();
       expect(settled.rate).toBe(settled.average);
       disposePiTranslateContext(ctx);
     } finally {
@@ -3033,6 +3050,7 @@ describe('pi translator live token speed', () => {
       const summarySnap = ctx.tokenSpeed.snapshot(15_950);
       expect(summarySnap?.rate).toBeGreaterThan(25);
       expect(summarySnap?.rate).toBeLessThan(35);
+      expect(summarySnap?.measurement?.latest).toBeNull();
 
       send({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'stop', timestamp: 1_000, usage: { input: 10, output: 500 } } }, 16_000);
       send({ type: 'agent_settled' }, 16_000);
@@ -3047,6 +3065,7 @@ describe('pi translator live token speed', () => {
       const verbatimSnap = ctx.tokenSpeed.snapshot(22_500);
       expect(verbatimSnap?.streaming).toBe(true);
       expect(verbatimSnap?.rate).toBeGreaterThan(80);
+      expect(verbatimSnap?.measurement?.latest?.kind).toBe('stream');
       disposePiTranslateContext(ctx);
     } finally {
       vi.useRealTimers();

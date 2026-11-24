@@ -106,6 +106,7 @@ const SESSION_SOURCES = [
   'telegram',
   'x',
   'discord',
+  'discord-hook',
   'wechat',
   'dingtalk',
   'wecom',
@@ -156,6 +157,7 @@ export const sessions = sqliteTable(
     sdkSessionId: text('sdk_session_id'),
     totalTokenUsage: integer('total_token_usage').notNull().default(0),
     totalCostUsd: real('total_cost_usd').notNull().default(0),
+    totalCostUsdIsApproximate: integer('total_cost_usd_is_approximate', { mode: 'boolean' }).notNull().default(false),
     /** 新版区域金额；legacy total_cost_usd 仍保留为历史 USD 事实。 */
     totalCostAmount: real('total_cost_amount').notNull().default(0),
     totalCostCurrency: text('total_cost_currency', { enum: ['CNY', 'USD'] }),
@@ -256,6 +258,9 @@ export const sessions = sqliteTable(
      * 进入桌面 sidebar；feishu 仍由飞书模块独立查询，不混进桌面主列表。
      */
     source: text('source', { enum: SESSION_SOURCES }).notNull().default('desktop'),
+    /** Display an Orca lead as an independent task while retaining its side-chat provenance. */
+    sideChatPromoted: integer('side_chat_promoted', { mode: 'boolean' }).notNull().default(false),
+    sideChatClosePending: integer('side_chat_close_pending', { mode: 'boolean' }).notNull().default(false),
     /**
      * feishu-bot: 对方的飞书 open_id（仅 source='feishu' 时有值）。
      * 99% 场景是 bot owner 自己。findActiveFeishu 用 (botAppId, openId) 复合查询。
@@ -1516,9 +1521,10 @@ export const schedules = sqliteTable(
      * 引擎 fireOne 优先用 intervalMs 算 nextFireAt；旧 cron 数据 0015 migration 自动回填。
      */
     intervalMs: integer('interval_ms'),
-    agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi'] }).notNull(),
+    // 'acp' = plugin engine (docs/plans/acp-plugin-bridge.md); TS-only enum, no CHECK constraint.
+    agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi', 'acp'] }).notNull(),
     /** NULL preserves legacy bound-task Harness inheritance. */
-    modelAgentKind: text('model_agent_kind', { enum: ['claude-code', 'codex', 'pi'] }),
+    modelAgentKind: text('model_agent_kind', { enum: ['claude-code', 'codex', 'pi', 'acp'] }),
     /** NULL inherits a bound task; empty string explicitly selects the automation host. */
     modelAgentDeviceId: text('model_agent_device_id'),
     inheritedProjectDir: text('inherited_project_dir'),
@@ -1538,6 +1544,11 @@ export const schedules = sqliteTable(
     effort: text('effort', {
       enum: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
     }),
+    /**
+     * 模型组(模式)id：设了时新建任务按模式选来源(发到已有任务按那个任务自己的模式)，上面的具体模型是选不出来时沿用的
+     * (model-groups.md §6.3)。NULL = 没选模式，与原来一致。
+     */
+    modelGroup: text('model_group'),
     /**
      * 速度档位沿用整数列：0 标准、1 快速、2 超快。超快仅用于获授权的 Codex 模型。
      */
@@ -1577,6 +1588,7 @@ export const schedules = sqliteTable(
      * 可并存(先问插件再跑脚本)。内存里与 on_failure 合成 `Schedule.preRunPlugin`。
      */
     preRunPluginId: text('pre_run_plugin_id'),
+    primaryHostKey: text('primary_host_key'),
     /** 插件没回应 / 出错 / 不可用时的处理:allow | skip | block。仅 plugin id 非空时有意义。 */
     preRunPluginOnFailure: text('pre_run_plugin_on_failure'),
     /**
@@ -1734,6 +1746,8 @@ export const scheduleRuns = sqliteTable(
     /** 新版区域真实费用与订阅价值；旧 USD 列只做历史兼容。 */
     costAmount: real('cost_amount').notNull().default(0),
     estimatedValueAmount: real('estimated_value_amount').notNull().default(0),
+    /** Estimate denominated in the other native currency (USD or CNY). */
+    otherEstimatedValueAmount: real('other_estimated_value_amount').notNull().default(0),
     costCurrency: text('cost_currency', { enum: ['CNY', 'USD'] }),
     costIsApproximate: integer('cost_is_approximate', { mode: 'boolean' }).notNull().default(false),
     /**
@@ -2006,6 +2020,38 @@ export const dailyModelUsage = sqliteTable(
     pk: primaryKey({ columns: [t.day, t.agentKind, t.model, t.costCurrency] }),
   }),
 );
+
+/** UTC execution-day token counts. Account and task identity stay outside this table. */
+export const dailyTokenAttribution = sqliteTable('daily_token_attribution', {
+  day: text('day').notNull(),
+  provider: text('provider').notNull(),
+  billingSource: text('billing_source').notNull(),
+  model: text('model').notNull(),
+  inputTokens: integer('input_tokens').notNull(),
+  outputTokens: integer('output_tokens').notNull(),
+  cacheReadTokens: integer('cache_read_tokens').notNull(),
+  cacheCreateTokens: integer('cache_create_tokens').notNull(),
+}, t => ({ pk: primaryKey({ columns: [t.day, t.provider, t.billingSource, t.model] }) }));
+
+// Only the first, partial UTC day needs an exact enrollment timestamp. All later days
+// reuse dailyTokenAttribution. A fresh generation isolates same-day opt-out/re-enrollment.
+export const tokenReportingWindow = sqliteTable('token_reporting_window', {
+  id: integer('id').primaryKey(),
+  generation: text('generation').notNull(),
+  day: text('day').notNull(),
+  startsAt: integer('starts_at').notNull(),
+});
+
+export const tokenReportingFirstDay = sqliteTable('token_reporting_first_day', {
+  provider: text('provider').notNull(),
+  billing: text('billing').notNull(),
+  model: text('model').notNull(),
+  generation: text('generation').notNull(),
+  input: integer('input').notNull(),
+  output: integer('output').notNull(),
+  cacheRead: integer('cache_read').notNull(),
+  cacheWrite: integer('cache_write').notNull(),
+}, t => ({ pk: primaryKey({ columns: [t.provider, t.billing, t.model] }) }));
 
 /**
  * 每日按任务 token 用量 (daily_session_usage) — 支撑用量历史「最耗 token 的任务」按所选

@@ -4,23 +4,73 @@
  * 规则：task-inbox.md；旧纯函数测试手动提交快照，漏掉组件没有更新快照。
  * 最小失败输入：悬停 A/B，完成 A，再恢复 A；unit，替代行内容与外部 store。
  */
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { Session } from '@/lib/ccAgent.types';
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (s: string) => s, i18n: { language: 'en' } }) }));
-vi.mock('@/features/device-link/remoteSessionActivityStore', () => ({ getRemoteSessionActivity: () => null, useRemoteSessionActivityRevision: () => 0 }));
+import { applyRemoteSessionActivity, clearRemoteSessionActivity } from '@/features/device-link/remoteSessionActivityStore';
 const following = vi.hoisted(() => new Set<Session>());
 vi.mock('@/features/scheduler/lib/scheduleSessionBinding', () => ({ useActiveFollowUpSessions: () => following }));
-vi.mock('../../lib/sidebarPriorityContext', () => ({ sidebarPriorityContext: (context: unknown) => context }));
 vi.mock('../SectionCollapse', () => ({ SectionCollapse: ({ children }: { children: React.ReactNode }) => children }));
 vi.mock('../SessionEntryList', () => ({ SessionEntryRows: ({ entries, onAction }: {
   entries: { session: Session }[]; onAction: (id: string, action: 'complete') => unknown;
-}) => <div data-testid="row">{entries[0].session.id}<button aria-label={`complete:${entries[0].session.id}`}
+}) => <div data-testid="row" data-device={entries[0].session.deviceLinkDeviceId}>{entries[0].session.id}<button data-inbox-complete aria-label={`complete:${entries[0].session.id}`}
   onClick={() => { void onAction(entries[0].session.id, 'complete'); }} /></div> }));
+vi.mock('@/features/bots/TeammateInboxRow', () => ({ TeammateInboxRow: ({ entry }: { entry: { key: string } }) =>
+  <div data-testid="row">{entry.key}<button data-inbox-complete aria-label={`complete:${entry.key}`} /></div> }));
+import type { TeammateInboxEntry } from '@/features/bots/teammateInbox';
+import { markSessionStarting, clearSessionStarting } from '@/lib/sessionStartingStore';
 import { TaskInbox } from '../TaskInbox';
+import { useInboxUnread } from '../useInboxUnread';
 beforeEach(() => following.clear());
-afterEach(cleanup);
-it('commits explicit moves before another restore while the pointer stays in the list', () => {
+afterEach(() => { cleanup(); clearRemoteSessionActivity(); });
+// The controller still has a running flag when the host sends the unread result.
+it('moves only the finished device’s task to Pending without a pointer or a list refresh', () => {
+  const sharedId = 'same-id';
+  const tasks = ['studio', 'other'].map(deviceLinkDeviceId => ({
+    id: sharedId, title: deviceLinkDeviceId, status: 'active', deviceLinkDeviceId,
+  } as Session));
+  const push = (device: string, phase: 'running' | 'completed', attention = false) =>
+    act(() => applyRemoteSessionActivity(device, { sessionId: sharedId, phase, attention }));
+  push('studio', 'running');
+  push('other', 'running');
+  const running = new Set([sharedId]);
+  const view = render(<TaskInbox sessions={tasks} priorityContext={{ runningSessionIds: running, attentionSessionIds: new Set() }}
+    runningSessionIds={running} attachedSessionIds={new Set()} notifications={new Set()}
+    onSessionClick={() => {}} onAction={() => {}} onRename={() => {}} onTogglePin={() => {}} onScheduleAction={() => {}} />);
+  const [pending, working] = view.container.querySelectorAll('section');
+  const rows = (section: Element) => Array.from(section.querySelectorAll('[data-device]'), row => row.getAttribute('data-device'));
+  expect(rows(working)).toEqual(['studio', 'other']);
+  push('studio', 'completed', true);
+  expect(rows(pending)).toEqual(['studio']);
+  expect(rows(working)).toEqual(['other']);
+  push('studio', 'completed'); // Reading the result clears the remote activity entry.
+  expect(rows(pending)).toEqual(['studio']);
+  push('studio', 'running');
+  expect(rows(pending)).toEqual([]);
+});
+
+it('moves a remote task to Working immediately after sending, before its first host push', () => {
+  const task = { id: 'remote-send', title: 'Remote', status: 'active', deviceLinkDeviceId: 'studio' } as Session;
+  const props: Parameters<typeof TaskInbox>[0] = {
+    sessions: [task], priorityContext: { runningSessionIds: new Set(), attentionSessionIds: new Set() },
+    runningSessionIds: new Set(), attachedSessionIds: new Set(), notifications: new Set(),
+    onSessionClick: () => {}, onAction: () => {}, onRename: () => {}, onTogglePin: () => {}, onScheduleAction: () => {},
+  };
+  const view = render(<TaskInbox {...props} />);
+  const [pending, working] = view.container.querySelectorAll('section');
+  expect(pending.contains(screen.getByTestId('row'))).toBe(true);
+  act(() => markSessionStarting(task.id, 'new-input'));
+  const starting = new Set([task.id]);
+  view.rerender(<TaskInbox {...props} priorityContext={{ ...props.priorityContext, runningSessionIds: starting }} />);
+  expect(working.contains(screen.getByTestId('row'))).toBe(true);
+  // A fast turn may finish before the controller absorbs the optimistic starting flag.
+  act(() => applyRemoteSessionActivity('studio', { sessionId: task.id, phase: 'completed', attention: true }));
+  expect(pending.contains(screen.getByTestId('row'))).toBe(true);
+  act(() => clearSessionStarting(task.id));
+});
+
+it('commits explicit moves before another restore while hovering another task’s Done button', () => {
   const task = (id: string, status = 'active') => ({ id, title: id, status }) as Session;
   const props: Parameters<typeof TaskInbox>[0] = {
     priorityContext: { runningSessionIds: new Set(), attentionSessionIds: new Set() },
@@ -29,11 +79,46 @@ it('commits explicit moves before another restore while the pointer stays in the
     onRename: () => {}, onTogglePin: () => {}, onScheduleAction: () => {},
   };
   const view = render(<TaskInbox {...props} />);
-  fireEvent.pointerEnter(view.container.firstChild!);
+  fireEvent.mouseOver(screen.getByRole('button', { name: 'complete:b' }));
   view.rerender(<TaskInbox {...props} sessions={[task('a', 'archived'), task('b')]} />);
   expect(screen.getAllByTestId('row').map(row => row.textContent)).toEqual(['b', 'a']);
   view.rerender(<TaskInbox {...props} />);
   expect(screen.getAllByTestId('row').map(row => row.textContent)).toEqual(['b', 'a']);
+});
+
+it('updates over a row, holds over Done, and catches up on returning to the row', () => {
+  const a = { id: 'a', status: 'active', title: 'A' } as Session;
+  const props: Parameters<typeof TaskInbox>[0] = {
+    sessions: [a], priorityContext: { runningSessionIds: new Set(), attentionSessionIds: new Set() },
+    runningSessionIds: new Set(), attachedSessionIds: new Set(), notifications: new Set(),
+    onSessionClick: () => {}, onAction: () => {}, onRename: () => {}, onTogglePin: () => {}, onScheduleAction: () => {},
+  };
+  const running = { ...props.priorityContext, runningSessionIds: new Set(['a']) };
+  const view = render(<TaskInbox {...props} priorityContext={running} />);
+  const pending = view.container.querySelector('section')!;
+  const renderIdle = () => view.rerender(<TaskInbox {...props} />);
+  fireEvent.mouseOver(screen.getByTestId('row'));
+  renderIdle();
+  expect(pending.contains(screen.getByTestId('row'))).toBe(true);
+  const done = screen.getByRole('button', { name: 'complete:a' });
+  fireEvent.mouseOver(done);
+  view.rerender(<TaskInbox {...props} priorityContext={running} />);
+  expect(pending.contains(done)).toBe(true);
+  fireEvent.mouseOut(done, { relatedTarget: done.parentElement });
+  expect(pending.contains(screen.getByTestId('row'))).toBe(false);
+});
+
+it('releases the layout when the hovered Done button disappears without a mouseout', async () => {
+  const task = (id: string) => ({ id, title: id, status: 'active' }) as Session;
+  const props: Parameters<typeof TaskInbox>[0] = {
+    sessions: [task('a')], priorityContext: { runningSessionIds: new Set(), attentionSessionIds: new Set() },
+    runningSessionIds: new Set(), attachedSessionIds: new Set(), notifications: new Set(),
+    onSessionClick: () => {}, onAction: () => {}, onRename: () => {}, onTogglePin: () => {}, onScheduleAction: () => {},
+  };
+  const view = render(<TaskInbox {...props} />);
+  fireEvent.mouseOver(screen.getByRole('button', { name: 'complete:a' }));
+  view.rerender(<TaskInbox {...props} sessions={[task('b')]} />);
+  expect(await screen.findByRole('button', { name: 'complete:b' })).toBeTruthy();
 });
 
 // PR #10685, 2026-11-18: an opened task is already read, but its held unread rank
@@ -53,7 +138,7 @@ it.each([false, true])('settles an already-read open task without another data u
   const view = render(<TaskInbox {...props} />);
   const rows = (index: number) => Array.from(view.container.querySelectorAll('section')[index].querySelectorAll('[data-testid="row"]'))
     .map(row => row.textContent);
-  if (hovered) fireEvent.pointerEnter(view.container.firstChild!);
+  if (hovered) fireEvent.mouseOver(screen.getByRole('button', { name: 'complete:b' }));
   expect(rows(0)).toEqual(['a', 'b']);
   fireEvent.click(screen.getByRole('button', { name: 'complete:a' }));
   await waitFor(() => expect(rows(0)).toEqual(['b']));
@@ -64,24 +149,25 @@ it.each([false, true])('settles an already-read open task without another data u
     view.rerender(<TaskInbox {...props} priorityContext={{ ...props.priorityContext,
       attentionSessionIds: new Set(['a']), waitingSessionIds: new Set(['a']) }} />);
     expect(rows(1)).toEqual(['a']);
-    fireEvent.pointerLeave(view.container.firstChild!);
+    fireEvent.mouseOut(screen.getByRole('button', { name: 'complete:b' }));
     expect(rows(0)).toContain('a');
-    fireEvent.pointerEnter(view.container.firstChild!);
+    fireEvent.mouseOver(screen.getByRole('button', { name: 'complete:b' }));
     view.rerender(<TaskInbox {...props} priorityContext={{ ...props.priorityContext, runningSessionIds: new Set(['a']) }} />);
     // The previous completion marker was consumed and cannot release this new hover.
     expect(rows(0)).toContain('a');
   }
-  fireEvent.pointerLeave(view.container.firstChild!);
+  fireEvent.mouseOut(screen.getByRole('button', { name: 'complete:b' }));
   view.rerender(<TaskInbox {...props} activeSessionId="b" />);
   view.rerender(<TaskInbox {...props} />);
   // Returning later is a new viewing lifecycle, not the previous completion.
   expect(rows(0)).toContain('a');
 });
 
-it('keeps a held task Pending when its completion was blocked', async () => {
+it('immediately removes a held task and restores it if the remote completion is blocked', async () => {
   const a = { id: 'a', status: 'active', title: 'A' } as Session;
   following.add(a);
-  const onAction = vi.fn(async () => {});
+  let cancel!: () => void;
+  const onAction = vi.fn(() => new Promise<void>(resolve => { cancel = resolve; }));
   const props: Parameters<typeof TaskInbox>[0] = {
     activeSessionId: 'a', sessions: [a], onAction,
     priorityContext: { runningSessionIds: new Set(), attentionSessionIds: new Set(), heldPriorityRanks: new Map([['a', 1]]) },
@@ -89,9 +175,11 @@ it('keeps a held task Pending when its completion was blocked', async () => {
     onSessionClick: () => {}, onRename: () => {}, onTogglePin: () => {}, onScheduleAction: () => {},
   };
   const view = render(<TaskInbox {...props} />);
-  fireEvent.pointerEnter(view.container.firstChild!);
+  fireEvent.mouseOver(screen.getByRole('button', { name: 'complete:a' }));
   fireEvent.click(screen.getByRole('button', { name: 'complete:a' }));
-  await waitFor(() => expect(onAction).toHaveBeenCalledOnce());
+  expect(screen.queryByTestId('row')).toBeNull();
+  expect(view.container.querySelector('section > button')?.lastElementChild?.textContent).toBe('0');
+  await act(async () => cancel());
   expect(view.container.querySelector('section')?.querySelector('[data-testid="row"]')?.textContent).toBe('a');
 });
 
@@ -119,4 +207,59 @@ it('keeps the new viewed task settled when an older completion returns late', as
   await waitFor(() => expect(pendingRows()).toHaveLength(0));
   await act(async () => { finishA('marked-read'); await aResult; });
   expect(pendingRows()).toHaveLength(0);
+});
+
+// 2026-11-20 user decision (task-inbox.md「伙伴主对话」): a teammate's main conversation is one
+// row placed by whose turn it is. No earlier test rendered a teammate in the inbox. Unit: real
+// placement, counts and Done-hover freeze with a stub row; minimal input is one teammate per state.
+it('places teammate conversations with the tasks and removes a read one even while Done is hovered', () => {
+  const teammate = (key: string, status: TeammateInboxEntry['status'], snoozedUntil: string | null = null) => ({
+    key, status, snooze: { snoozedUntil, snoozedAt: snoozedUntil && new Date().toISOString(), userSendAt: null },
+  }) as TeammateInboxEntry;
+  const props: Parameters<typeof TaskInbox>[0] = {
+    sessions: [{ id: 'task', title: 'Task', status: 'active' } as Session],
+    priorityContext: { runningSessionIds: new Set(), attentionSessionIds: new Set() },
+    runningSessionIds: new Set(), attachedSessionIds: new Set(), notifications: new Set(),
+    onSessionClick: () => {}, onAction: () => {}, onRename: () => {}, onTogglePin: () => {}, onScheduleAction: () => {},
+  };
+  const later = new Date(Date.now() + 3_600_000).toISOString();
+  const view = render(<TaskInbox {...props} teammates={[
+    teammate('unread', 'unread'), teammate('running', 'running'), teammate('idle', 'idle'), teammate('later', 'awaiting', later),
+  ]} />);
+  const rows = () => Array.from(view.container.querySelectorAll('section'), section =>
+    Array.from(section.querySelectorAll('[data-testid="row"]'), row => row.textContent));
+  expect(rows()).toEqual([['unread', 'task'], ['running'], ['later'], []]);
+  expect(Array.from(view.container.querySelectorAll('section > button'), button => button.lastElementChild?.textContent))
+    .toEqual(['2', '1', '1', '0']);
+  fireEvent.mouseOver(screen.getByRole('button', { name: 'complete:task' }));
+  view.rerender(<TaskInbox {...props} teammates={[teammate('unread', 'idle'), teammate('running', 'unread')]} />);
+  // Read leaves at once; a reply that arrived meanwhile waits for the pointer like any other move.
+  expect(rows()).toEqual([['task'], ['running'], [], []]);
+  fireEvent.mouseOut(screen.getByRole('button', { name: 'complete:task' }));
+  expect(rows()).toEqual([['running', 'task'], [], [], []]);
+});
+
+
+// Unit: task-inbox.md. Row placement tests cannot see the closed inbox's indicator.
+// A snoozed remote result wakes on time and clears on read despite the open row's held rank.
+it('lights for a due remote result and clears as soon as the host acknowledges it', () => {
+  vi.useFakeTimers();
+  try {
+    const session = { id: 'remote', deviceLinkDeviceId: 'studio', status: 'active',
+      snoozedUntil: new Date(Date.now() + 1000).toISOString() } as Session;
+    const priority = { runningSessionIds: new Set<string>(), attentionSessionIds: new Set<string>(),
+      heldPriorityRanks: new Map([['remote', 1]]) };
+    const publish = (attention: boolean) => act(() => applyRemoteSessionActivity('studio', {
+      sessionId: 'remote', phase: 'completed', attention,
+    }));
+    const view = renderHook(() => useInboxUnread([session], [], priority, () => false));
+    publish(true);
+    expect(view.result.current.hasUnread).toBe(false);
+    act(() => vi.advanceTimersByTime(1000));
+    expect(view.result.current.hasUnread).toBe(true);
+    publish(false);
+    expect(view.result.current.hasUnread).toBe(false);
+  } finally {
+    vi.useRealTimers();
+  }
 });

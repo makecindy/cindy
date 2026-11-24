@@ -143,6 +143,34 @@ describe('registerRelaunchBusyActivityIpc', () => {
     expect(h.log.info).not.toHaveBeenCalled();
   });
 
+  // Regression: starting a scheduled script while the banner awaits Pi must
+  // still block a manual restart, even though the script has no session.
+  it('横幅异步读取 Pi 时，手动重启仍能查到刚启动的定时脚本', async () => {
+    let schedulerRunning = false;
+    let finishBannerProbe!: (busy: boolean) => void;
+    const readPiActivityForBanner = vi.fn(() => new Promise<boolean>((resolve) => {
+      finishBannerProbe = resolve;
+    }));
+    const readPiForRestart = vi.fn(() => false);
+    registerRelaunchBusyActivityIpc(() => ({
+      ...countingSources(false)(),
+      anyPiSubagentRunning: readPiForRestart,
+      anySchedulerRunRunning: async () => schedulerRunning,
+    }), { readPiActivityForBanner });
+    const handler = h.handlers.get(RELAUNCH_BLOCKING_ACTIVITY_CHANNEL)!;
+
+    const banner = handler(fakeEvent, { silent: true });
+    expect(readPiActivityForBanner).toHaveBeenCalledOnce();
+    expect(readPiForRestart).not.toHaveBeenCalled();
+    schedulerRunning = true;
+    await expect(handler(fakeEvent)).resolves.toBe(true);
+    expect(readPiForRestart).toHaveBeenCalledTimes(2);
+
+    finishBannerProbe(false);
+    await expect(banner).resolves.toBe(true);
+    expect(readPiForRestart).toHaveBeenCalledTimes(2);
+  });
+
   it('非 boolean true 的 silent 不当静默', async () => {
     registerRelaunchBusyActivityIpc(countingSources(true));
     const handler = h.handlers.get(RELAUNCH_BLOCKING_ACTIVITY_CHANNEL)!;

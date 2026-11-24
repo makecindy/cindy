@@ -55,6 +55,7 @@ import path from 'node:path';
 import { parseProviderShareInvitationIntent, parseSharedTaskInvitationIntent } from '@cindy/device-link';
 import { buildAgentNetSharingInvitation, parseAgentNetSharingInvitation } from '@cindy/agent-net/portable';
 import { createLogger } from './logger';
+import { buildSessionDeepLink } from './sessionDeepLink';
 import { cancelPendingWindowHide } from './mainWindowCloseBehavior';
 import { isValidGhostId } from '../shared/ghost';
 import { registerWindowsDeepLinkName } from './deepLinkWindowsRegistration';
@@ -62,7 +63,6 @@ import {
   DEEP_LINK_PRIMARY_SCHEME,
   DEEP_LINK_SCHEMES,
   DEEP_LINK_URL_PREFIX,
-  buildTaskDeepLink,
   isDeepLinkProviderConnectId,
   matchDeepLinkPrefix,
 } from '../shared/deepLinkSchemes';
@@ -116,6 +116,7 @@ export type DeepLinkPayload =
       type: 'settings';
       tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot';
       connect?: string;
+      focusDeviceId?: string;
       intent?: 'topup';
       /** 仅 im-bot:定位到「官方」(cindy) 或「个人」(personal) 分区。 */
       imGroup?: 'cindy' | 'personal';
@@ -214,6 +215,10 @@ export function parseDeepLink(url: string): DeepLinkPayload | null {
     return null;
   }
   if (!decoded) return null;
+  if (type === 'devices') {
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(rawValue)) return null;
+    return { type: 'settings', tab: 'remote-control', focusDeviceId: rawValue };
+  }
   if (type === 'session') {
     const messageClientId = parseSessionQueryParam(rawValue, 'message');
     const deviceId = parseSessionQueryParam(rawValue, 'device');
@@ -315,12 +320,8 @@ function parseSessionQueryParam(rawValue: string, key: 'message' | 'device' | 'g
  * 注意:'new-session' 不提供 builder——它只由 --open-folder argv 产生,不进入
  * "可复制 / 可粘贴"的 URL 域,避免和现有 project deep link 在 URL 域语义混淆。
  */
-export function buildSessionDeepLink(
-  sessionId: string,
-  opts?: { deviceId?: string | null },
-): string {
-  return buildTaskDeepLink(sessionId, opts?.deviceId);
-}
+// The builder lives in sessionDeepLink.ts (no Electron) so the Node Host builds the same links.
+export { buildSessionDeepLink };
 
 /** History tools use qualified ids for remote tasks; links always name the owning computer. */
 export function buildHistorySessionDeepLink(sessionKey: string, localDeviceId: string): string {

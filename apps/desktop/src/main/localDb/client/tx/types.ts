@@ -5,6 +5,7 @@ import type { ChatCacheTransaction, ChatCacheResult } from '../../worker/opHandl
 
 export type DbTxName =
   | 'mcpApps.viewState.save'
+  | 'usage.recordModelUsage'
   | 'usage.recordPiUsage'
   | 'chatCache.execute'
   | 'usage.recordMediaSpend'
@@ -64,6 +65,7 @@ export type DbTxName =
   | 'bots.createChannelLane'
   | 'bots.createThreadLane'
   | 'bots.archiveChannelLanes'
+  | 'bots.pruneEmptyLegacyRoutineHistory'
   | 'botGroups.create'
   | 'botGroups.setMembers'
   | 'botGroups.delete'
@@ -374,6 +376,9 @@ export interface SessionsSetTerminalStatusArgs {
   projectGuard?: ProjectArchiveGuard;
   sessionId: string;
   status: 'archived' | 'deleted';
+  deleteTarget?: 'side-chat' | 'task';
+  /** Trusted host request only, recorded in the same transaction as the archive. */
+  sideChatCloseParentId?: string;
   /** Internal automatic housekeeping only; never accepted as renderer metadata. */
   idleArchiveCutoff?: number;
   unusedOnly?: boolean;
@@ -830,6 +835,7 @@ export interface BotsCreateThreadLaneArgs {
  * exceptBotId 非空时保留该伙伴的专线(改绑时只收旧伙伴的)。
  */
 export interface BotsArchiveChannelLanesArgs {
+  botId?: string;
   routeKey: string | null;
   routeKeyPrefix: string | null;
   exceptBotId: string | null;
@@ -1333,6 +1339,7 @@ export interface MediaSpendArgs {
 export type DbTxArgsByName = {
   'mcpApps.viewState.save': { binding: import('../../worker/opHandlers/mcpAppViewState.js').ViewStateBinding; json: string | null; bytes: number };
   'usage.recordMediaSpend': MediaSpendArgs;
+  'usage.recordModelUsage': import('../../worker/opHandlers/modelUsageTx.js').ModelUsageWrite;
   'usage.recordPiUsage': import('../../worker/opHandlers/piUsageTx.js').PiUsageWrite[];
   'authorization.readProjection': { sessionId: string; leadId: string };
   'rewind.commit': RewindCommitArgs;
@@ -1391,6 +1398,7 @@ export type DbTxArgsByName = {
   'bots.createChannelLane': BotsCreateChannelLaneArgs;
   'bots.createThreadLane': BotsCreateThreadLaneArgs;
   'bots.archiveChannelLanes': BotsArchiveChannelLanesArgs;
+  'bots.pruneEmptyLegacyRoutineHistory': { neverDispatchedSessionIds: string[] };
   'botGroups.create': BotGroupsCreateArgs;
   'botGroups.setMembers': BotGroupsSetMembersArgs;
   'botGroups.delete': BotGroupsDeleteArgs;
@@ -1423,9 +1431,11 @@ export type DbTxArgsByName = {
 
 export type DbTxResultByName = {
   'mcpApps.viewState.save': void;
+  'usage.recordModelUsage': void;
   'usage.recordPiUsage': { changed: boolean };
   'usage.recordMediaSpend': {
     legacyUsd: number;
+    usdApproximate: number;
     amount: number;
     currency: 'USD' | 'CNY';
     approximate: number;
@@ -1491,6 +1501,7 @@ export type DbTxResultByName = {
   'bots.createChannelLane': BotGroupsCreateLaneResult;
   'bots.createThreadLane': BotGroupsCreateLaneResult;
   'bots.archiveChannelLanes': { archivedSessionIds: string[] };
+  'bots.pruneEmptyLegacyRoutineHistory': { removed: number; botIds: string[] };
   'botGroups.create': undefined;
   'botGroups.setMembers': BotGroupsSetMembersResult;
   'botGroups.delete': { archivedSessionIds: string[] };

@@ -92,17 +92,30 @@ describe('apiFetchRaw', () => {
     expect(fetch.mock.calls[0]![1].headers).toMatchObject({ 'X-Chat-Actor': 'actor-1', Authorization: 'Bearer tok', 'Content-Type': 'application/json' });
   });
 
-  it('classifies RN offline failures as a typed NETWORK_UNAVAILABLE ApiError (中文文案,可被重试层识别)', async () => {
-    // RN 离线时 fetch 抛 TypeError("Network request failed")——不含 "fetch" 子串,
-    // 历史实现匹配不到,英文原文一路透传到 UI。
-    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Network request failed')));
+  // #4841 (unit): the Expo 58 wrapper extends Error, so the RN case alone
+  // misses Android DNS failures at the real API boundary.
+  it.each([
+    ['RN', new TypeError('Network request failed')],
+    ['Expo Android DNS', new Error('fetch failed: java.net.UnknownHostException: Unable to resolve host "relay.example.invalid": No address associated with hostname')],
+  ])('classifies %s offline failures as localized NETWORK_UNAVAILABLE', async (_runtime, transportError) => {
+    const log = vi.fn();
+    setMobileDebugSink(log);
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(transportError));
 
     const err = await apiFetchRaw('/api/auth/login', { baseUrl: 'https://auth.example.invalid' }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ApiError);
     expect((err as ApiError).code).toBe('NETWORK_UNAVAILABLE');
-    expect((err as ApiError).message).toContain('网络连接不可用');
-    // 非 web 环境不追加 CORS 提示
-    expect((err as ApiError).message).not.toContain('CORS');
+    expect((err as ApiError).message).toBe(i18n.t('apiErrors.networkUnavailable', { webHint: '' }));
+    expect(log).toHaveBeenCalledWith('warn', 'network', ['request failed', transportError]);
+  });
+
+  it.each([
+    'fetch failed: javax.net.ssl.SSLHandshakeException: Certificate rejected',
+    'fetch failed: java.lang.SecurityException: Permission denied',
+  ])('preserves other Expo transport rejections (%s)', async (message) => {
+    const error = new Error(message);
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(error));
+    await expect(apiFetchRaw('/api/resource', { baseUrl: 'https://api.example.invalid' })).rejects.toBe(error);
   });
 
   it('turns browser fetch failures into an actionable local-dev message', async () => {

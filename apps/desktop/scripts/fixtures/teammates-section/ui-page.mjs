@@ -505,6 +505,12 @@ export default {
     if (ui.case === 'running-preview-parity') {
       const expand = page.getByRole('button', { name: /Show all|显示全部|查看全部/ });
       if (await expand.count()) await expand.click();
+      // A draggable attribute alone cannot override the global native drag reset.
+      const chatSources = page.locator('[data-sidebar-section="teammates"] button[draggable=true]');
+      assert.equal(await chatSources.count(), 4);
+      for (const source of await chatSources.all()) {
+        assert.equal(await source.evaluate(node => getComputedStyle(node).webkitUserDrag), 'element');
+      }
       const previews = page.locator('[data-teammate-running-preview]');
       assert.equal(await previews.count(), 3);
       // The screenshot runner defaults to reduced motion. Verify both modes explicitly.

@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import ts from 'typescript';
+import type { TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
 import { afterEach, expect, it, vi } from 'vitest';
 import { formatSessionDuration } from '@/lib/sessionDurationFormat';
 import { RunningTokenCount } from '@/features/cc-agent/RunningTokenCount';
@@ -86,15 +87,7 @@ const RunningStatusBar = new Function(
   outputTokens: number;
   generationDurationMs: number;
   generationReliable?: boolean;
-  tokenSpeed?: {
-    rate: number;
-    average: number;
-    tokens: number;
-    elapsedMs: number;
-    streaming: boolean;
-    peak?: number;
-    totalOutputTokens?: number;
-  };
+  tokenSpeed?: TokenSpeedSnapshot;
 }>;
 
 afterEach(cleanup);
@@ -186,8 +179,8 @@ it('opens measured zero history and restores fallback across reliability and tur
   expect(trigger()).not.toBeNull();
 });
 
-it('paused token speed hides the current rate but keeps average and peak', () => {
-  const speed = { rate: 100, average: 100, tokens: 500, elapsedMs: 5_000, streaming: true, peak: 1750 };
+it('shows the last measurement in the panel during tool execution and request warm-up', () => {
+  const speed = { rate: 85, average: 100, tokens: 500, elapsedMs: 5_000, streaming: true, peak: 1750 };
   const props = {
     visible: true,
     status: 'Running bash…',
@@ -204,22 +197,31 @@ it('paused token speed hides the current rate but keeps average and peak', () =>
   expect(screen.getByRole('dialog')).toBeTruthy();
   const currentRate = () => screen.getByText('chat.runningStatus.currentRate').nextElementSibling;
   const value = (label: string) => screen.getByText(label).nextElementSibling;
-  expect(currentRate()?.textContent).toContain('100');
-
-  // A tool call pauses generation: the cached live rate (fresh for 60s) must not
-  // be shown as a current speed, while average and peak still describe the turn.
+  expect(currentRate()?.textContent).toContain('85');
   rerender(
     <RunningStatusBar {...props} tokenSpeed={{ ...speed, streaming: false, rate: speed.average, totalOutputTokens: 5_300 }} />,
   );
   expect(trigger()?.textContent).not.toContain('tokenRate');
-  expect(currentRate()?.textContent).toContain('—');
+  expect(currentRate()?.textContent).toContain('85');
   expect(value('chat.runningStatus.averageRate')?.textContent).toContain('100');
   expect(value('chat.runningStatus.outputTotal')?.textContent).toContain('5.3k');
   expect(value('chat.runningStatus.observedPeak')?.textContent).not.toContain('—');
 
-  // Streaming resumes: the live reading is back.
-  rerender(<RunningStatusBar {...props} />);
+  rerender(<RunningStatusBar {...props} tokenSpeed={{ ...speed, rate: 0 }} />);
+  expect(trigger()?.textContent).not.toContain('tokenRate');
+  expect(currentRate()?.textContent).toContain('85');
+
+  rerender(<RunningStatusBar {...props} tokenSpeed={{ ...speed, rate: 100 }} />);
   expect(currentRate()?.textContent).toContain('100');
+  // A new host settles during a tool pause. Both surfaces get the same timestamped reading.
+  const latest = { rate: 41.4, atMs: 5_000, kind: 'request' as const, measuredAt: Date.now() };
+  rerender(<RunningStatusBar {...props} tokenSpeed={{ ...speed, streaming: false,
+    measurement: { average: 37, latest } }} />);
+  // The status bar shows the speed itself, without a "recent" label in front of it.
+  expect(trigger()?.textContent).toContain('chat.runningStatus.tokenRate');
+  expect(trigger()?.textContent).not.toContain('recentTokenRate');
+  expect(screen.getByText('chat.runningStatus.lastRequestRate', { selector: 'div' }).nextElementSibling?.textContent).toContain('41.4');
+  expect(value('chat.runningStatus.averageRate')?.textContent).toContain('37');
 });
 
 it.each([true, false])(
@@ -260,14 +262,17 @@ it.each([true, false])(
 
 // 回合已结束、只有后台命令在跑:有命令仍在工作(跑测试、构建)时写「正在后台工作」并保留呼吸;
 // 只剩长驻服务(本地预览服务等)时任务已做完,写「后台服务运行中」且不再呼吸。
+// 插件引擎回答完仍在自己干活(2026-11-20 Antigravity)时写「正在后台继续工作」,不说成后台子任务。
 it.each([
-  ['commands still working', 2, 1, 'chat.backgroundActivity.bashWorkStatus', true],
-  ['only long-lived services left', 2, 0, 'chat.backgroundActivity.bashServiceStatus', false],
-] as const)('background commands: %s', (_label, total, working, statusKey, shimmers) => {
+  ['commands still working', 2, 1, false, 'chat.backgroundActivity.bashWorkStatus', true],
+  ['only long-lived services left', 2, 0, false, 'chat.backgroundActivity.bashServiceStatus', false],
+  ['a plugin engine still working after its answer', 0, 0, true, 'chat.backgroundActivity.pluginEngineStatus', true],
+] as const)('background commands: %s', (_label, total, working, pluginEngine, statusKey, shimmers) => {
   const Bar = RunningStatusBar as React.ComponentType<Record<string, unknown>>;
   const { container } = render(<Bar
     visible status="Done" startedAt={1} tokenUsage={0} outputTokens={0} generationDurationMs={0}
     backgroundTasksRunning backgroundBashOnlyCount={total} backgroundBashWorkCount={working}
+    backgroundPluginEngine={pluginEngine}
   />);
   expect(screen.getByText(statusKey)).toBeTruthy();
   expect(container.querySelector('.status-bar-shimmer') !== null).toBe(shimmers);

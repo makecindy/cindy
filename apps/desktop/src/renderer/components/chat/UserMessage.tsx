@@ -75,6 +75,7 @@ import {
 import { useChatSessionFile } from './ChatSessionFileContext';
 import { isRemoteFileOrigin, originDeviceId, toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import { rewriteToRemoteMediaOrigin } from '../../../shared/remoteMediaUrl';
+import { isPluginEngineKind } from '../../../shared/pluginEngines';
 import { ImageLightbox } from './ImageLightbox';
 import {
   joinChatQuoteTextSegments,
@@ -152,6 +153,7 @@ type UserImageItem =
   | { base64: string; mimeType: string; originalName?: string };
 
 interface UserMessageProps {
+  inputNotice?: 'oversized-input-skipped';
   pluginUi: PluginUiMessageCandidates;
   /** Pending delivery uses the same bubble, with queue actions instead of history actions. */
   pendingActions?: ReactNode;
@@ -199,6 +201,8 @@ interface UserMessageProps {
    *  fork IPC takes (sessionId, clientId) to locate the fork point. When
    *  omitted, the Fork button is not rendered. */
   messageClientId?: string;
+  /** Queued messages carry their stable row id before they have history actions. */
+  clientId?: string;
   /** Whether this session currently has an in-flight SDK turn. Rewind uses it
    *  to select stop-then-rewind confirmation; fork is allowed from stable history. */
   sessionRunning?: boolean;
@@ -284,7 +288,7 @@ function UserFileChip({
           if (event.button === 1) ctxMenu.onActivate(event, () => onClick(event));
         }}
         onContextMenu={ctxMenu.onContextMenu}
-        className="relative top-[-1px] -my-[1px] max-w-[min(240px,55vw)] align-middle"
+        className="relative top-[-1px] -my-px max-w-[min(240px,55vw)] align-middle"
       />
       {ctxMenu.menu}
     </>
@@ -448,7 +452,7 @@ function renderContentWithoutPastedText(
           key={`s-${li}`}
           label={slashLabel}
           tooltip={slashLabel}
-          className="relative top-[-1px] -my-[1px] max-w-[min(240px,55vw)] align-middle text-[var(--msg-user-text)]"
+          className="relative top-[-1px] -my-px max-w-[min(240px,55vw)] align-middle text-[var(--msg-user-text)]"
         />,
       );
       line = line.slice(slashMatch[0].length);
@@ -505,7 +509,7 @@ function renderContentWithoutPastedText(
               label={name}
               icon={<Sparkles aria-hidden />}
               tooltip={name}
-              className="relative top-[-1px] -my-[1px] max-w-[min(240px,55vw)] align-middle"
+              className="relative top-[-1px] -my-px max-w-[min(240px,55vw)] align-middle"
             />,
           );
         } else if (ref.endsWith('/')) {
@@ -520,7 +524,7 @@ function renderContentWithoutPastedText(
               icon={<FolderIcon aria-hidden />}
               tooltip={ref}
               tooltipMono
-              className="relative top-[-1px] -my-[1px] max-w-[min(240px,55vw)] align-middle"
+              className="relative top-[-1px] -my-px max-w-[min(240px,55vw)] align-middle"
             />,
           );
         } else {
@@ -570,7 +574,7 @@ function renderContentWithoutPastedText(
                 tooltip={ref}
                 tooltipMono
                 ariaLabel={fileName}
-                className="relative top-[-1px] -my-[1px] max-w-[min(240px,55vw)] align-middle"
+                className="relative top-[-1px] -my-px max-w-[min(240px,55vw)] align-middle"
               />
             ),
           );
@@ -776,7 +780,7 @@ export function renderContent(
           key={`slash-chip-${index}`}
           label={slashLabel}
           tooltip={slashLabel}
-          className="relative top-[-1px] -my-[1px] max-w-[min(240px,55vw)] align-middle text-[var(--msg-user-text)]"
+          className="relative top-[-1px] -my-px max-w-[min(240px,55vw)] align-middle text-[var(--msg-user-text)]"
         />
       );
     }
@@ -790,7 +794,7 @@ export function renderContent(
           tooltipMono
           tooltipContentClassName="max-h-64 w-80 max-w-[70vw] overflow-y-auto whitespace-pre-wrap [overflow-wrap:anywhere]"
           ariaLabel={token.display}
-          className="relative top-[-1px] -my-[1px] max-w-[min(240px,55vw)] align-middle"
+          className="relative top-[-1px] -my-px max-w-[min(240px,55vw)] align-middle"
           // 点击打开只读全文(与 composer 侧 pastedTextChip → ToolPayloadLightbox
           // 对齐)。hover tooltip 是 320×256 的小浮层,几百行日志在里面读不了,
           // 也无法选中复制,不能当作查看全文的唯一出口(issue #946)。
@@ -854,6 +858,7 @@ export function UserMessage({
   agentKind,
   remoteHostId,
   messageClientId,
+  clientId,
   sessionRunning,
   delivery,
   isFirstUserMessage,
@@ -866,6 +871,7 @@ export function UserMessage({
   sourcePlugin,
   goalBadge,
   blockedByGhost,
+  inputNotice,
 }: UserMessageProps) {
   const { t } = useTranslation();
   // Capability gate: 没传 agentKind (调用方未升级) → 默认两者都允许 (兼容旧路径)
@@ -873,6 +879,9 @@ export function UserMessage({
   // renderer 'cc' ↔ maker 'claude-code' 别名映射 (DB / Session 用 'cc', maker IPC 用 'claude-code')
   const makerKind: MakerAgentKind =
     agentKind === 'codex' || agentKind === 'pi' ? agentKind : 'claude-code';
+  // 插件引擎任务(agent_kind = 'acp')不支持分叉与回退，也不读任何内置 Harness 的能力
+  // (docs/plans/acp-plugin-bridge.md)。
+  const pluginEngineTask = isPluginEngineKind(agentKind);
   // device-link 远程会话:fork/rewind 能力按被控端读(本机会话 deviceId undefined,行为不变)。
   // 媒体来源(device/ssh)用于把附件/文件预览 URL 改写到 cindy-remote-media://(入方向媒体)。
   // 取自 ChatSessionFileContext(MessageStream 顶层订阅式构造,deviceId 迟到注册时
@@ -884,14 +893,14 @@ export function UserMessage({
     () => toRemoteMediaOrigin(sessionFileCtx.origin, sessionFileCtx.workingDir),
     [sessionFileCtx],
   );
-  const { capabilities } = useAgentCapabilities(makerKind, remoteDeviceId);
+  const { capabilities } = useAgentCapabilities(pluginEngineTask ? null : makerKind, remoteDeviceId);
   // 远端 cc daemon 会话暂不支持 Fork/Rewind 依赖的 query rebuild (MVP),
   // remoteHostId 非空时直接关掉这两个能力, 避免点了落到后端错误。
   const isRemote = Boolean(remoteHostId);
   const forkSupported =
-    !isRemote && (!agentKind || (capabilities?.fork?.supported ?? true));
+    !isRemote && !pluginEngineTask && (!agentKind || (capabilities?.fork?.supported ?? true));
   const rewindSupported =
-    !isRemote &&
+    !isRemote && !pluginEngineTask &&
     (!agentKind || (capabilities?.rewind?.supported ?? true));
 
   const hasImages = images && images.length > 0;
@@ -1189,9 +1198,9 @@ export function UserMessage({
         userSendAt: session.userSendAt,
       });
       // Force chat store to re-fetch messages (server filters rewind_at).
-      makerChatStore.reloadMessages(sessionId);
+      makerChatStore.reloadMessages(sessionId, { rewindFromClientId: messageClientId });
     },
-    [sessionId, draftBody, quoteDraftDocument, images, files],
+    [sessionId, messageClientId, draftBody, quoteDraftDocument, images, files],
   );
 
   // 第一条消息同样可回退：Codex / Pi 回到原生线程开头，Claude 目标之前没有可续接的
@@ -1375,6 +1384,12 @@ export function UserMessage({
       </div>
     ) : null;
 
+  const historyNotice = inputNotice === 'oversized-input-skipped' ? (
+    <p className="text-12 leading-[1.667] text-[var(--text-secondary)]" data-input-notice="">
+      {t('chat.userMessage.oversizedInputSkipped')}
+    </p>
+  ) : null;
+
   // If there are images, use vertical layout: images on top, text bubble below, right-aligned
   // If no images, render the text bubble alone, right-aligned (existing behavior)
   return (
@@ -1440,7 +1455,7 @@ export function UserMessage({
             />
             <div
               className={cn(
-                'w-full rounded-[8px] border border-[var(--msg-tool-card-border)]',
+                'w-full rounded-lg border border-[var(--msg-tool-card-border)]',
                 'bg-[var(--msg-tool-card-bg)] text-[var(--msg-tool-card-text)]',
                 'overflow-hidden',
               )}
@@ -1471,6 +1486,7 @@ export function UserMessage({
                 </div>
               )}
             </div>
+            {historyNotice}
           </>
         ) : botLetter ? (
           <>
@@ -1495,6 +1511,7 @@ export function UserMessage({
             )}
             {imageAttachmentNodes}
             {fileAttachmentNodes}
+            {historyNotice}
             {/* 伙伴对话的操作栏常显；来信收起时只占一行，展开后操作在悬停或聚焦时出现。 */}
             {letterExpanded && (
               <div className="opacity-0 transition-opacity group-hover/letter:opacity-100 focus-within:opacity-100 motion-reduce:transition-none">
@@ -1525,6 +1542,7 @@ export function UserMessage({
               groupMessageCount={hookSource.contextSnapshot?.groupMessageCount}
               replyMessageCount={hookSource.contextSnapshot?.replyMessageCount}
             />
+            {historyNotice}
             {!hasEmbeddedImPrompt(hookSource) && messageActions}
           </>
         ) : (
@@ -1731,7 +1749,7 @@ export function UserMessage({
                         )}
                       </div>
                     ) : displayBubbleBody.trim() ? (
-                      renderPluginUiBody(pluginUi.messageBody ? { position: 'message.body', role: 'user', sessionId,
+                      renderPluginUiBody(pluginUi.messageBody ? { position: 'message.body', role: 'user', sessionId, clientId: messageClientId ?? clientId,
                         disabled: isRemoteFileOrigin(sessionFileCtx.origin), plugin: sourcePlugin?.pluginId,
                         context: () => ({ message: { clientId: messageClientId, role: 'user', content } }) } : undefined,
                       <div
@@ -1847,6 +1865,7 @@ export function UserMessage({
                     />
                   </div>
                 )}
+                {historyNotice}
                 {/* message-actions V1.2: hover-revealed bar below the bubble,
                 right-aligned, order [time][copy][fork][edit][undo][more]。被拦消息只保留
             编辑和链接复制,fork/rewind/delete 对未发消息无意义。 */}

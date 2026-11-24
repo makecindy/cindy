@@ -1,5 +1,3 @@
-import { Button } from '@/components/ui/button';
-import { ErrorNotice } from '@/components/ui/error-notice';
 /**
  * BrowserTabBody —— web-browser tab 的 TabBody。
  *
@@ -31,8 +29,12 @@ import { ErrorNotice } from '@/components/ui/error-notice';
  */
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Gauge, RotateCw, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { Gauge, RotateCw, X } from 'lucide-react';
+
+import { Button } from '@/components/ui/button';
+import { ErrorNotice } from '@/components/ui/error-notice';
+import { Tip } from '@/components/ui/tooltip';
 
 import { normalizePersistableFavicon } from '../../../../../shared/faviconPersistence';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
@@ -40,7 +42,6 @@ import { createLogger } from '@/lib/logger';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
-import { Tip } from '@/components/ui/tooltip';
 import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 
 import { browserWebviewPool } from '../../lib/browserWebviewPool';
@@ -48,7 +49,7 @@ import { findNativePopupSurfaceForTab } from '../../lib/nativePopupTabs';
 import { forceKillBrowserTab, setForegroundBrowserTab } from '../../lib/rsbBrowserBridge';
 import { isLocalHtmlFileUrl } from '../../lib/openInSidebarBrowser';
 import { closeTab } from '../../store';
-import { useBrowserWebview } from '../../hooks/useBrowserWebview';
+import { useBrowserWebview, type UseBrowserWebviewResult } from '../../hooks/useBrowserWebview';
 import { useNativePopupSurface } from '../../hooks/useNativePopupSurface';
 import type { TabKindHostContext } from '../../types';
 
@@ -360,18 +361,19 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
     };
   }, [tabVisible, tabId]);
 
-  // webview guest 内 Cmd/Ctrl+L:main 推送过来,只有 active tab 响应。
+  // Several tab groups may be visible. An embedded guest's shortcut belongs
+  // to its focused group; native popup surfaces use the active browser tab.
   useEffect(() => {
     if (!active) return;
-    const off = window.electronAPI.onRsbBrowserFocusUrlBar(() => {
-      chromeRef.current?.focusUrlBar();
+    const ownsFocus = () => {
+      const focused = document.activeElement;
+      return focused?.tagName !== 'WEBVIEW' || rootRef.current?.contains(focused);
+    };
+    const offFocus = window.electronAPI.onRsbBrowserFocusUrlBar(() => {
+      if (ownsFocus()) chromeRef.current?.focusUrlBar();
     });
-    return off;
-  }, [active]);
-
-  useEffect(() => {
-    if (!active) return;
-    const off = window.electronAPI.onRsbBrowserCommand(({ command }) => {
+    const offCommand = window.electronAPI.onRsbBrowserCommand(({ command }) => {
+      if (!ownsFocus()) return;
       if (command === 'go-back') {
         if (canGoBackRef.current) goBackRef.current();
       } else if (command === 'go-forward') {
@@ -386,7 +388,7 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
         reloadRef.current();
       }
     });
-    return off;
+    return () => { offFocus(); offCommand(); };
   }, [active, sessionId, tabId]);
 
   // 截图:main 端对当前 tab 的 webview capturePage → 系统剪贴板。
@@ -515,60 +517,13 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
         className="relative min-h-0 flex-1 overflow-hidden"
         data-browser-tab-slot={tabId}
       >
-        {browser.crash && (
-          <BrowserCrashBanner
-            reason={browser.crash.reason}
-            cause={browser.crash.cause}
-            onRecover={handleRecover}
-            onForceKill={
-              browser.crash.reason === 'unresponsive'
-                ? () => void forceKillBrowserTab(tabId)
-                : undefined
-            }
-          />
-        )}
-        {/* 资源看门狗 cpu-alert 提示条:非阻断,固定在 slot 顶部居中。用户可
-            「强制终止」失控页面,或「忽略」继续(可能是正经的重页面)。 */}
-        {!browser.crash && browser.resourceAlert && (
-          <div
-            className={cn(
-              'absolute left-1/2 top-2 z-10 flex -translate-x-1/2 items-center gap-2',
-              'rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)]',
-              'py-1 pl-3 pr-1 text-11 text-[var(--text-secondary)] shadow-[shadow:var(--shadow-menu)]',
-            )}
-          >
-            <Gauge size={12} strokeWidth={2} className="shrink-0 text-[var(--warning-fg)]" />
-            <span>{t('rightSidebar.browser.resourceAlert.cpuHint')}</span>
-            <Button
-              variant="secondary"
-              size="xxs"
-              compact
-              tone="danger"
-              type="button"
-              onClick={() => {
-                browser.dismissResourceAlert();
-                void forceKillBrowserTab(tabId);
-              }}
-            >
-              {t('rightSidebar.browser.resourceAlert.terminate')}
-            </Button>
-            <Tip text={t('rightSidebar.browser.resourceAlert.dismiss')} side="bottom" disabled={!tabVisible}>
-              <button
-                type="button"
-                aria-label={t('rightSidebar.browser.resourceAlert.dismiss')}
-                onClick={browser.dismissResourceAlert}
-                className="flex size-5 items-center justify-center rounded-full text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
-              >
-                <X size={12} strokeWidth={2} />
-              </button>
-            </Tip>
-          </div>
-        )}
+        <BrowserResourceNotices tabId={tabId} tabVisible={tabVisible} crash={browser.crash}
+          resourceAlert={browser.resourceAlert} dismissResourceAlert={browser.dismissResourceAlert} onRecover={handleRecover} />
         {/* 评论模式提示条:点选中显示操作说明,固定在 slot 顶部居中,不挡 chrome。 */}
         {comment.mode === 'selecting' && (
           <div
             className={cn(
-              'pointer-events-none absolute left-1/2 top-2 z-10 -translate-x-1/2',
+              'pointer-events-none absolute left-1/2 top-2 z-raised -translate-x-1/2',
               'rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)]',
               'px-3 py-1 text-11 text-[var(--text-secondary)]',
             )}
@@ -595,6 +550,71 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
           )}
       </div>
     </div>
+  );
+}
+
+interface BrowserResourceNoticesProps extends Pick<UseBrowserWebviewResult, 'crash' | 'resourceAlert' | 'dismissResourceAlert'> {
+  tabId: string;
+  tabVisible: boolean;
+  onRecover: () => void;
+}
+
+export function BrowserResourceNotices({
+  tabId, tabVisible, crash, resourceAlert, dismissResourceAlert, onRecover,
+}: BrowserResourceNoticesProps) {
+  const { t } = useTranslation();
+  return (
+    <>
+      {crash && (
+        <BrowserCrashBanner
+          reason={crash.reason}
+          cause={crash.cause}
+          onRecover={onRecover}
+          onForceKill={
+            crash.reason === 'unresponsive'
+              ? () => void forceKillBrowserTab(tabId)
+              : undefined
+          }
+        />
+      )}
+      {/* 资源看门狗 cpu-alert 提示条:非阻断,固定在 slot 顶部居中。用户可
+          「强制终止」失控页面,或「忽略」继续(可能是正经的重页面)。 */}
+      {!crash && resourceAlert && (
+        <div
+          className={cn(
+            'absolute left-1/2 top-2 z-raised flex w-max max-w-[calc(100%_-_1rem)] -translate-x-1/2 items-center gap-2',
+            'rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)]',
+            'py-1 pl-3 pr-1 text-11 text-[var(--text-secondary)] shadow-[shadow:var(--shadow-menu)]',
+          )}
+        >
+          <Gauge size={12} strokeWidth={2} className="shrink-0 text-[var(--warning-fg)]" />
+          <span>{t('rightSidebar.browser.resourceAlert.cpuHint')}</span>
+          <Button
+            variant="secondary"
+            size="xxs"
+            compact
+            tone="danger"
+            type="button"
+            onClick={() => {
+              dismissResourceAlert();
+              void forceKillBrowserTab(tabId);
+            }}
+          >
+            {t('rightSidebar.browser.resourceAlert.terminate')}
+          </Button>
+          <Tip text={t('rightSidebar.browser.resourceAlert.dismiss')} side="bottom" disabled={!tabVisible}>
+            <button
+              type="button"
+              aria-label={t('rightSidebar.browser.resourceAlert.dismiss')}
+              onClick={dismissResourceAlert}
+              className="flex size-5 shrink-0 items-center justify-center rounded-full text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
+            >
+              <X size={12} strokeWidth={2} />
+            </button>
+          </Tip>
+        </div>
+      )}
+    </>
   );
 }
 

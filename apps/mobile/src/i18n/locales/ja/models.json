@@ -53,7 +53,8 @@
   },
   "switchOutcome": {
     "applied": "モデルプロバイダーの切り替えが有効になりました。",
-    "failed": "モデルプロバイダーの切り替えに失敗しました。モデルを選び直してください。"
+    "failed": "モデルプロバイダーの切り替えに失敗しました。モデルを選び直してください。",
+    "previousSettingsRetained": "切り替えは完了しませんでした。タスクは引き続き元の設定を使用します。"
   },
   "agentSwitch": {
     "browseAccessibility": "{{agent}} のモデルを表示"
@@ -109,5 +110,52 @@
     "quotaResetIn": "{{duration}}後にリセット",
     "quotaAverageHint": "週間クォータ · アカウントごとの単純平均",
     "quotaResetHint": "現在の利用ペースではリセット時にクォータが残る見込みです。24時間以内は黄色、6時間以内は赤色で表示します。"
+  },
+  "modelGroups": {
+    "title": "モデルグループ",
+    "sourceCount_other": "ソース {{count}} 件",
+    "strategy": {
+      "expiring": "失効が近いものを先に",
+      "order": "順番どおり",
+      "rotate": "交代で",
+      "cheapest": "最も安く",
+      "drain": "使い切ってから次へ",
+      "headroom": "残りが多い順",
+      "weighted": "重み付け"
+    },
+    "sourceOnDevice": "{{provider}} · {{device}}",
+    "why": {
+      "expiringQuota": "残り {{left}}%、{{reset}} にリセットされるため先に使用",
+      "expiring": "クォータの順で先頭",
+      "order": "利用できる先頭のソース",
+      "rotate": "今回はこのソースの番",
+      "only": "今使えるのはこれだけ",
+      "soonest": "すべてのソースのクォータを使い切りました。これが最も早く回復します",
+      "soonestUntil": "すべてのソースのクォータを使い切りました。これが最も早く回復します（{{reset}}）",
+      "cheapest": "定価が最も安い",
+      "cheapestFree": "サブスクリプションのクォータが残っており、追加費用なし",
+      "drain": "クォータがなくなるまで引き続き使用",
+      "drainNext": "前のソースを使い切ったか使えなくなったため、こちらに切り替え",
+      "headroom": "残りクォータが最も多い",
+      "headroomQuota": "残り {{left}}% で、ほかのどのソースよりも多い",
+      "weighted": "重みにより今回はこのソース",
+      "exceptionImage": "メッセージに画像があるため、画像を扱えるソースの中から選択",
+      "exceptionImageFallback": "メッセージに画像がありますが、画像を扱えるソースがないため通常どおり選択",
+      "exceptionHours": "この時間帯は「{{name}}」を使用",
+      "separator": "、"
+    },
+    "picker": {
+      "switched": "「{{name}}」でこのタスクを {{model}} に切り替えました",
+      "switchUnavailable": "「{{name}}」には、今このタスクで使えるソースがありません。モデルは変更していません。",
+      "chooseUnavailable": "「{{name}}」には今使えるソースがないため、選択しませんでした。"
+    },
+    "anotherDevice": "別のコンピュータ"
+  },
+  "pluginEngines": {
+    "genericName": "プラグインエンジン",
+    "defaultModel": "デフォルトモデル",
+    "unavailable": "{{engine}} は利用できません",
+    "unavailableWithHint": "{{engine}} は利用できません：{{hint}}",
+    "worktreeUnsupported": "プラグインエンジンはまだ worktree でタスクを開始できません。worktree をオフにしてから送信してください"
   }
 }

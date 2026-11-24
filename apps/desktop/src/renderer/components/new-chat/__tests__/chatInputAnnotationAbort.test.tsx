@@ -7,6 +7,9 @@
  */
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { GlobalDropImportListener } from '@/components/layout/GlobalDropImportListener';
+import * as cindyImport from '@/cindy-brain/importCindyFile';
+import { toast } from '@/lib/toast';
 import type { ComponentProps, ReactNode } from 'react';
 import type { Editor } from '@tiptap/react';
 import type { ProviderView } from '@cindy/model-providers';
@@ -23,6 +26,7 @@ import type { PermissionSelector } from '../PermissionSelector';
 import type { ModelSelector } from '../ModelSelector';
 import type { UseVoiceInputOptions, UseVoiceInputResult } from '@/voice-input/useVoiceInput';
 import { useAttachments } from '@/hooks/useAttachments';
+import { appendMcpAppComposerAttachment } from '@/lib/mcpAppComposerAttachment';
 import { dispatchInputDeviceAction } from '@/lib/inputDeviceActions';
 import { makerChatStore } from '@/lib/makerChatStore';
 import {
@@ -120,7 +124,16 @@ vi.mock('@/voice-input/useVoiceInput', () => ({ useVoiceInput: (editor: Editor |
   if (editor && editor !== h.editor) editor.on('transaction', ({ transaction }) => { if (transaction.docChanged) h.documentChanged(); });
   h.editor = editor;
   const state = h.voiceState ?? (h.listening ? 'listening' : 'idle');
-  return { state, prepare: h.prepare, getState: () => h.voiceState ?? (h.listening ? 'listening' : 'idle'), isListening: state === 'listening', isBusy: state === 'listening' || state === 'submitting' || state === 'refining', draftText: h.draftText, draftSource: h.draftSource, draftRange: h.draftRange, start: () => { h.listening = true; return true; }, stop: h.stop, cancel: h.cancel };
+  return {
+    state, prepare: h.prepare, stop: h.stop, cancel: h.cancel,
+    getState: () => h.voiceState ?? (h.listening ? 'listening' : 'idle'),
+    getLastSubmittedText: () => '',
+    getLastRefinement: () => null,
+    isListening: state === 'listening',
+    isBusy: state === 'listening' || state === 'submitting' || state === 'refining',
+    draftText: h.draftText, draftSource: h.draftSource, draftRange: h.draftRange,
+    start: () => { h.listening = true; return true; },
+  };
 } }));
 vi.mock('@/hooks/useProviders', () => ({ useProviders: () => ({ providers: h.localProviders, providerOrder: [], loading: false }) }));
 vi.mock('@/hooks/useDeviceProviders', () => ({ useDeviceProviders: () => ({ providers: [], loading: false, unsupported: false }) }));
@@ -128,13 +141,16 @@ vi.mock('@/hooks/useConnectedSource', () => ({ useConnectedSource: () => ({ hasC
 vi.mock('@/hooks/useAvailableAgents', () => ({ useAvailableAgents: () => ({ agents: [], loading: false }) }));
 vi.mock('@/hooks/useAgentCapabilities', async (original) => ({ ...await original<typeof import('@/hooks/useAgentCapabilities')>(), useAgentCapabilities: () => ({ capabilities: null, loading: false }) }));
 
+const redeemDrag = vi.fn();
 const noOp = () => {};
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const api: any = new Proxy({}, { get: (_obj, key) => {
+  if (key === 'takePendingInstall') return async () => ({ filePath: null });
+  if (key === 'redeemComposerAttachmentDrag') return redeemDrag;
   if (key === 'setModel') return h.setModel;
   if (key === 'uploadChatFolder') return h.uploadChatFolder;
   if (key === 'cacheImageFromBuffer') return h.cacheImageFromBuffer;
-  if (key === 'getFilePath') return () => '/controller/docs';
+  if (key === 'getFilePath') return (file: File) => file.name === 'pack.cindy' ? '/test/pack.cindy' : '/controller/docs';
   if (key === 'listAgentSkills') return h.listAgentSkills;
   if (key === 'listAgentCommands' || key === 'listDesktopCommands') return async () => ({ success: true, commands: [] });
   if (key === 'listSync') return () => ({ ghosts: [] });
@@ -185,7 +201,14 @@ beforeEach(() => {
   window.electronAPI = api;
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
 });
-afterEach(() => { cleanup(); clearDraft('composer-regression'); h.remoteProviders = []; vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(() => {
+  cleanup();
+  clearDraft('composer-regression');
+  clearDraft('dictation-destination');
+  h.remoteProviders = [];
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
 function TaskComposer(props: ComponentProps<typeof ChatInput>) {
   const botMentions = useTaskBotMentions(props.deviceLinkDeviceId, props.remoteHostId, props.botMentions);
@@ -207,6 +230,71 @@ function renderComposer(extra: Partial<ComponentProps<typeof ChatInput>> = {}, t
   const view = render(taskRoster ? <TaskComposer {...props} /> : <ChatInput {...props} />);
   return { ...view, props };
 }
+
+// Unit: the editor and outer file handlers share the same drop event. A reserved
+// MIME mixed with plain text must never insert text or fall through to addFiles.
+it('consumes a composer drag ticket before the editor and reports a rejected ticket', async () => {
+  const error = vi.spyOn(toast, 'error').mockImplementation(() => '');
+  redeemDrag.mockRejectedValueOnce(new Error('MCP_APP_COMPOSER_DRAG_INVALID'));
+  const view = renderComposer({ sessionId: 'composer-regression' });
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  const mime = 'application/x-cindy-composer-attachment-v1';
+  const ticket = 'ab'.repeat(24);
+  fireEvent.drop(h.editor!.view.dom, { dataTransfer: {
+    types: [mime, 'text/plain'], items: [], files: [],
+    getData: (type: string) => type === mime ? ticket : 'fallback',
+  } });
+  expect(redeemDrag).toHaveBeenCalledWith({ sessionId: 'composer-regression', ticket });
+  await waitFor(() => expect(error).toHaveBeenCalledWith('mcpApps.composerDragFailed'));
+  expect(h.editor!.getText()).not.toContain('fallback');
+  expect(view.props.attachmentState.addFiles).not.toHaveBeenCalled();
+});
+
+// Integration of the window capture listener with the local composer. Its package
+// handler runs before ChatInput, so a mixed drag used to select the wrong action.
+it('keeps package, file, mention and task-link drops separate from card resources', async () => {
+  supplyRangeGeometry();
+  const open = vi.spyOn(cindyImport, 'importCindyFile').mockResolvedValue(undefined);
+  redeemDrag.mockReset().mockResolvedValue(undefined);
+  render(<GlobalDropImportListener onOpenShareImport={vi.fn()} />);
+  const view = renderComposer({ sessionId: 'composer-regression' });
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  const target = h.editor!.view.dom.closest('[data-split-group-composer-drop-target]')!;
+  const file = new File(['test'], 'pack.cindy');
+  const drop = (values: Record<string, string>, files: File[] = []) => fireEvent.drop(target, { dataTransfer: {
+    types: [...Object.keys(values), ...(files.length ? ['Files'] : [])],
+    items: files.map(() => ({ kind: 'file' })), files, getData: (type: string) => values[type] ?? '',
+  } });
+  drop({ 'application/x-cindy-composer-attachment-v1': 'ab'.repeat(24) }, [file]);
+  expect(redeemDrag).toHaveBeenCalledOnce();
+  expect(open).not.toHaveBeenCalled();
+  drop({}, [file]);
+  expect(open).toHaveBeenCalledOnce();
+  const local = new File(['x'], 'note.txt');
+  drop({}, [local]);
+  expect(view.props.attachmentState.addFiles).toHaveBeenCalledWith([local]);
+  drop({ 'application/x-xdmaker-composer-mention': JSON.stringify({ type: 'file', relPath: 'a.md', name: 'a.md' }) });
+  await waitFor(() => expect(target.querySelector('[data-kind="file"]')?.getAttribute('data-path')).toBe('a.md'));
+  drop({ 'application/x-cindy-session-link': 'xdt-maker://session/ee59672a-5591-48a7-a44d-aa97e3808c64' });
+  await waitFor(() => expect(target.querySelector('[data-kind="session"]')).not.toBeNull());
+  expect(redeemDrag).toHaveBeenCalledTimes(1);
+});
+
+// Unit, project-settings.md: the panel-only tests cannot catch the project
+// shortcut replacing the task picker when a local task supports both.
+it('offers the task directory picker just before project settings in the + menu', async () => {
+  const openSettings = vi.fn();
+  renderComposer({ writableGrantScope: 'composer-regression', onWritableDirsChange: vi.fn(),
+    onOpenProjectSettings: openSettings });
+  fireEvent.click(screen.getByRole('button', { name: 'test-suggestions' }));
+  await waitFor(() => expect(h.atPanel?.embedded).toBe(true));
+  expect(h.atPanel!.entries.slice(-2)).toMatchObject([
+    { kind: 'action', action: { label: 'extraDirs.add', opensPanelPage: true } },
+    { kind: 'action', action: { label: 'projectSettings.title' } },
+  ]);
+  await act(async () => h.atPanel!.onSelect(h.atPanel!.entries.at(-1)!));
+  expect(openSettings).toHaveBeenCalledOnce();
+});
 
 // #8941 / #10257 mentions subscope. Unit: the shared production roster hook and
 // real ChatInput/Tiptap must offer a buddy beside its same-name task through both
@@ -336,6 +424,30 @@ it('does not replace the empty editor after an external empty-draft notification
   expect(h.editor!.state.selection.from).toBe(1);
 });
 
+// Unit: the MCP receipt can reach the real editor before its debounced keystroke
+// save. A stored-text assertion alone missed the visible rollback.
+it('keeps freshly typed text when a card immediately adds a composer attachment', async () => {
+  const sessionId = 'composer-regression';
+  saveDraft(sessionId, { text: plainTextToTiptapDoc('old'), attachments: [] });
+  renderComposer();
+  await waitFor(() => expect(h.editor?.getText()).toBe('old'));
+  vi.useFakeTimers();
+  try {
+    act(() => { h.editor!.commands.setContent('<p>fresh input</p>'); });
+    expect(getDraft(sessionId)?.text).toEqual(plainTextToTiptapDoc('old'));
+    act(() => appendMcpAppComposerAttachment(sessionId, {
+      id: 'receipt', name: 'sample.txt', ext: '.txt', path: '/cache/sample.txt',
+      size: 1, category: 'text', mimeType: 'text/plain',
+    }));
+    expect(h.editor!.getText()).toBe('fresh input');
+    await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+    expect(getDraft(sessionId)?.text).toEqual(plainTextToTiptapDoc('fresh input'));
+    expect(getDraft(sessionId)?.attachments.map(file => file.id)).toEqual(['receipt']);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 // #8084 / r4428883080: thread textarea coverage missed ChatInput's debounced text save.
 // Unit: real ChatInput/Tiptap + attachment hook, one pending image across a remount;
 // its late result must appear in the tray without replacing unsaved editor text.
@@ -415,6 +527,15 @@ it('does not rehydrate an empty stored document when voice busy state changes', 
   expect(h.editor!.state.selection.from).toBe(1);
 });
 
+function focusDictationHost(editor: Editor) {
+  // jsdom lacks Chromium's native editing session.
+  supplyRangeGeometry();
+  vi.stubGlobal('EditContext', EventTarget);
+  const host = Object.assign(editor.view.dom, { editContext: null as EventTarget | null });
+  act(() => editor.view.focus());
+  return host;
+}
+
 // Replaces voiceInputEditorEditability's source guard (PR #6196, section 3.2).
 // The voice hook is an external boundary; the editor and ChatInput lock effects
 // are real. Existing hydration tests never observe editability, attachment
@@ -425,11 +546,19 @@ it('does not rehydrate an empty stored document when voice busy state changes', 
 it('locks editor and attachments for the whole voice run, but keeps permissions available', async () => {
   const view = renderComposer();
   await waitFor(() => expect(h.editor).not.toBeNull());
+  const host = focusDictationHost(h.editor!);
+  let recordingContext: EventTarget | null = null;
   for (const state of ['idle', 'listening', 'submitting', 'refining', 'idle'] as const) {
     h.voiceState = state;
     view.rerender(<ChatInput {...view.props} />);
     const busy = state !== 'idle';
     expect(h.editor!.isEditable, state).toBe(!busy);
+    if (state === 'listening') {
+      expect(host.editContext).toBeInstanceOf(EventTarget);
+      recordingContext = host.editContext;
+    }
+    expect(host.editContext, state).toBe(busy ? recordingContext : null);
+    expect(host.getAttribute('aria-readonly'), state).toBe(busy ? 'true' : null);
     expect((screen.getByRole('button', { name: 'test-suggestions' }) as HTMLButtonElement).disabled, state).toBe(busy);
     expect((screen.getByTestId('permission-selector') as HTMLButtonElement).disabled, state).toBe(false);
     if (state === 'listening') {
@@ -440,6 +569,47 @@ it('locks editor and attachments for the whole voice run, but keeps permissions 
       expect(h.stop).toHaveBeenCalledExactlyOnceWith({ waitForRefinement: true, onReadyForEndCue: expect.any(Function) });
     }
   }
+});
+
+// A second lock can take over while the same composer is still read-only.
+// Calling setEditable again emits an update and schedules an unnecessary draft save.
+it('releases the native input session on a second lock and on switching drafts', async () => {
+  const view = renderComposer();
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  const editor = h.editor!;
+  const host = focusDictationHost(editor);
+  h.voiceState = 'listening';
+  view.rerender(<ChatInput {...view.props} />);
+  expect(host.editContext).toBeInstanceOf(EventTarget);
+
+  const update = vi.fn();
+  editor.on('update', update);
+  view.rerender(<ChatInput {...view.props} disabled />);
+  expect(editor.isEditable).toBe(false);
+  expect(host.editContext).toBeNull();
+  expect(update).not.toHaveBeenCalled();
+
+  view.rerender(<ChatInput {...view.props} />);
+  expect(host.editContext).toBeInstanceOf(EventTarget);
+  h.voiceState = 'refining';
+  h.draftText = 'Source dictation';
+  view.rerender(<ChatInput {...view.props} draftKey="dictation-destination" />);
+  expect(host.editContext).toBeNull();
+  expect(host.getAttribute('aria-readonly')).toBeNull();
+  expect(editor.isEditable).toBe(true);
+  expect(editor.getText()).toBe('');
+  expect(getDraft('composer-regression')?.text).toEqual(plainTextToTiptapDoc('Source dictation'));
+});
+
+it('uses the normal Windows editor lock even when EditContext is available', async () => {
+  window.electronAPI = Object.create(window.electronAPI, { platform: { value: 'win32' } });
+  const view = renderComposer();
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  const host = focusDictationHost(h.editor!);
+  h.voiceState = 'listening';
+  view.rerender(<ChatInput {...view.props} />);
+  expect(h.editor!.isEditable).toBe(false);
+  expect(host.editContext).toBeNull();
 });
 
 // User request 2026-10-24: empty composer hints must follow hover/hold/click,
@@ -1128,6 +1298,35 @@ it('keeps a remote draft with no directory local-scan-free, but searches nonempt
   expect(h.scan).toHaveBeenLastCalledWith('', expect.any(String), 2000, 'needle', 'remote-device', expect.objectContaining({ includeLocalContext: false, includeTaskHistory: true }));
 });
 
+// Unit, L342: the mounted composer sends the admitted route while a model
+// choice is a preview. A missing catalog row leaves the explicit provider in
+// the payload, and the default route stays null. The onSend port is the fixture.
+it.each([
+  ['active provider absent from the catalog', 'missing-connection', false],
+  ['current provider absent from the catalog during a preview', 'missing-connection', true],
+  ['default provider during a preview', null, true],
+] as const)('preserves the %s in the send payload', async (_label, providerId, preview) => {
+  const sessionId = 'composer-provider-route';
+  h.remoteProviders = [sshNativeCodexProvider([sshModel('remote-only'), sshModel('preview-only')])];
+  if (preview) {
+    makerChatStore.noteAgentSwitchIntent(sessionId, 'codex', { model: 'preview-only', providerId: 'openai' });
+  }
+  const onSend = vi.fn<ComponentProps<typeof ChatInput>['onSend']>().mockResolvedValue(true);
+  try {
+    renderComposer({ sessionId, ...(preview ? { remoteHostId: 'builder' } : { deviceLinkDeviceId: 'target' }),
+      runtimeAgentKind: 'codex', vendorKey: 'codex', initialModel: 'remote-only',
+      initialProviderId: providerId, initialEffort: 'low', onSend });
+    await waitFor(() => expect(h.editor).not.toBeNull());
+    await act(async () => { h.editor!.commands.setContent('<p>Continue the task</p>'); });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'newChat.sendButton.send' })); });
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+    expect(onSend.mock.calls[0][1]).toBe('remote-only');
+    expect(onSend.mock.calls[0][6]).toMatchObject({ providerId });
+  } finally {
+    makerChatStore.clearAgentSwitchIntent(sessionId);
+  }
+});
+
 it('restores text, attachments and strokes after an aborted annotated send', async () => {
   h.remoteProviders = [sshNativeCodexProvider([sshModel('remote-only')])];
   const restoreFiles = vi.fn((files: readonly AttachedFile[]) => [...files]);
@@ -1140,7 +1339,7 @@ it('restores text, attachments and strokes after an aborted annotated send', asy
     removeFile: noOp, updateFile: noOp, discardFiles: noOp, clearFiles, restoreFiles,
   };
   // makerChatStore 在烧录失败时返回 false(见 pendingQueueDefer 的中止用例)。
-  const onSend = vi.fn().mockResolvedValue(false);
+  const onSend = vi.fn().mockResolvedValueOnce(false).mockResolvedValue(true);
   const view = render(
     <ChatInput sessionId="ssh-annotated" initialWorkingDir="/workspace" runtimeAgentKind="codex"
       vendorKey="codex" deviceLinkDeviceId={null} remoteHostId="builder" attachmentState={attachmentState}
@@ -1163,6 +1362,12 @@ it('restores text, attachments and strokes after an aborted annotated send', asy
   expect(clearFiles).toHaveBeenCalled();
   const restored = restoreFiles.mock.calls.at(-1)?.[0] ?? [];
   expect(restored).toEqual([expect.objectContaining({ id: 'tray-annotated', annotationStrokes: strokes })]);
+  expect(h.editor!.isEditable).toBe(true);
+  await act(async () => { h.editor!.commands.setContent('<p>Edited before retry</p>'); });
+  await act(async () => { fireEvent.click(send); });
+  await waitFor(() => expect(onSend).toHaveBeenCalledTimes(2));
+  expect(onSend.mock.calls[1][0]).toBe('Edited before retry');
+  expect(onSend.mock.calls[1][4]).toEqual([expect.objectContaining({ id: 'tray-annotated' })]);
 });
 
 // PR #6433 / unit: retry a recovered creator draft through the real existing-task

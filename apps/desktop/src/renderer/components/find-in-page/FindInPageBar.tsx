@@ -724,7 +724,7 @@ export function FindInPageBar() {
       ref={rootRef}
       className={cn(
         // Stay below the window title bar or the foreground document toolbar.
-        previewHost ? 'absolute right-3 top-16 z-10' : 'fixed right-4 top-[54px] z-50',
+        previewHost ? 'absolute right-3 top-16 z-raised' : 'fixed right-4 top-[54px] z-float',
         'flex items-center gap-1',
         'rounded-lg border border-border',
         'bg-popover text-popover-foreground',

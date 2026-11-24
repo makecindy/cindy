@@ -30,6 +30,7 @@ import { restoreAutoReviewUserIntent } from '../autoReviewUserIntent.js';
 import { verifiedOwnerRequestText } from '../../../shared/forwardedRequest.js';
 import { createWireNoteMemory } from '../wireNoteMemory.js';
 import { resolveSendToSessionCreateRoute } from '../sendToSessionExecutionConfig.js';
+import { builtinAgentKindOrNull, hasBuiltinAgentKind, requireBuiltinAgentKind } from '../../maker-host/engineKind.js';
 import { createGhostAgentTurnRunner, type GhostAgentTurnRunnerDeps } from '../ghostAgentTurnRunner.js';
 import { sanitizeSourceName, buildMessageSourceNote, messageSourceSenderFromMeta } from '@cindy/maker-shared/message-source';
 
@@ -211,6 +212,8 @@ function botTaskDispatchHarness(
     noteChannelTurnSource: () => noop,
     channelTurnSourceFor: noop,
     beginTurnChangeSetAtDispatch: asyncNoop,
+    // Plugin-engine guards from register.ts use the real helpers.
+    hasBuiltinAgentKind, requireBuiltinAgentKind, builtinAgentKindOrNull,
     clearPendingTurnChangeSets: noop,
     gitSnapshotCoordinator: null,
     deferredProductTurnFailureGate: { clearSession: noop },
@@ -834,6 +837,23 @@ describe('stored-mode Host dispatch keeps the persisted permission and Plan', ()
  * drain 冷启动若照搬它,会话的计划模式就与库内不一致,绑定的心跳又会被判失配。会话起档必须
  * 取库内值;本轮意图由发送事务另按原快照传给 send,不经这里。
  */
+/**
+ * 插件引擎任务(agent_kind = 'acp',docs/plans/acp-plugin-bridge.md)的首次发送:lazy-create 前的
+ * 库内对齐曾用只认三种内置引擎的转换,把 'acp' 读成 Claude 并当作「引擎已切换」改写 createOpts,
+ * 第一条消息就会在 Claude 上启动。最小失败输入:库内与 createOpts 都是 'acp'。
+ */
+describe('cold start of a plugin engine task', () => {
+  it('keeps the plugin engine instead of reading the row as Claude', async () => {
+    const reconcile = createSessionOptionsReconciler({ log: { warn() {} }, readSession: async () => ({
+      agentKind: 'acp', model: 'deepseek-v4-pro', sdkSessionId: null, providerId: 'acp-plugin:dsh-acp:dsh',
+      fastMode: false, permissionMode: 'ask', planModeEnabled: false,
+    }) });
+    const co = { agentKind: 'acp', workingDir: '/repo', model: 'deepseek-v4-pro', providerId: 'acp-plugin:dsh-acp:dsh' };
+    await reconcile('task-1', co as unknown as MakerSessionCreateOpts);
+    expect(co).toMatchObject({ agentKind: 'acp', providerId: 'acp-plugin:dsh-acp:dsh', model: 'deepseek-v4-pro' });
+  });
+});
+
 describe('queued cold start keeps the persisted Plan', () => {
   function reconcileWithRow(row: SessionExecutionRow) {
     const reconcile = createSessionOptionsReconciler({ log: { warn() {} }, readSession: async () => row });
@@ -891,12 +911,16 @@ describe('unbound Codex pre-send history wiring', () => {
       await deps.rebuild(id, assertCurrent);
       return true;
     });
+    // A plugin engine account pool is asked first (plugin-engine-accounts/failover.ts); a Codex task is not its.
+    const pluginPrepare = vi.fn(async () => false);
     const ports = { subscriptionAccountRecoveryDeps: { rebuild },
       readCodexThreadStorageReadOnly: history,
+      preparePluginEngineAccountForSend: pluginPrepare, readSubscriptionRuntimeSession: vi.fn(),
       prepareSubscriptionAccountForSend: prepare, prepareSubscriptionAccountFailover: failover,
       agentInputCoordinatorHolder: { cancelUsageLimitWait }, contextOverflowRolloverHolder: undefined };
     const run = new Function(...Object.keys(ports), `${body}; return prepareUnhealthySessionForSend;`)(...Object.values(ports));
     expect(await run('old-task')).toBe(true);
+    expect(pluginPrepare).toHaveBeenCalledOnce();
     expect(history).toHaveBeenCalledExactlyOnceWith('legacy-thread');
     expect(rebuild).toHaveBeenCalledExactlyOnceWith('old-task', assertCurrent);
     expect(cancelUsageLimitWait).toHaveBeenCalledExactlyOnceWith('old-task');

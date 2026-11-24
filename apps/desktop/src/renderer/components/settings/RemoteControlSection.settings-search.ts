@@ -27,7 +27,19 @@ export const remoteControlSettings = defineSettings({
     targetId: 'settings-search-target-remote-devices',
     titleKey: 'settings.remoteControl.sections.myDevices',
     sectionKey: 'settings.sections.remoteControl',
+    // 「重新加入」: a removed computer's own card offers it here, so searching for it lands on this card.
+    keywordKeys: ['settings.devices.delete', 'settings.devices.deleteTitle', 'settings.devices.rejoin.action', 'settings.devices.rejoin.hint'],
     aliases: ['device link', 'devices', '设备互联', '我的设备', '设备列表'],
+  },
+  localNetwork: {
+    id: 'remoteControl.localNetwork',
+    isVisible: ({ mode }) => mode === 'cloud',
+    tab: 'remote-control',
+    targetId: 'settings-search-target-remote-devices',
+    titleKey: 'settings.devices.localNetwork.label',
+    descriptionKey: 'settings.devices.localNetwork.deniedHint',
+    sectionKey: 'settings.remoteControl.sections.myDevices',
+    aliases: ['local network', 'LAN', 'direct connection', '本地网络', '局域网', '直连', '本地网络权限'],
   },
   v2: {
     id: 'remoteControl.v2',
@@ -38,17 +50,6 @@ export const remoteControlSettings = defineSettings({
     descriptionKey: 'settings.remoteControl.v2.switch.hint',
     sectionKey: 'settings.remoteControl.v2.sectionTitle',
     aliases: ['Agent-Net', 'agent net', 'device-link', 'topology', 'new connection', '拓扑', '新版连接', '连接拓扑'],
-  },
-  onlyEncrypted: {
-    id: 'remoteControl.onlyEncrypted',
-    isVisible: ({ mode }) => mode === 'cloud',
-    tab: 'remote-control',
-    targetId: 'settings-search-target-remote-only-encrypted',
-    fallbackTargetId: 'settings-search-target-remote-v2',
-    titleKey: 'settings.remoteControl.v2.onlyEncrypted',
-    descriptionKey: 'settings.remoteControl.v2.onlyEncryptedHint',
-    sectionKey: 'settings.remoteControl.v2.sectionTitle',
-    aliases: ['Agent-Net only', 'encrypted connections', '仅使用 Agent-Net', '加密连接'],
   },
   ssh: {
     id: 'remoteControl.ssh',

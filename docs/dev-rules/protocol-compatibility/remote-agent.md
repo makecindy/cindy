@@ -13,6 +13,9 @@
 原点选对应的重试不会派发到改选目标。
 远控端仅向声明 `supportsQueueHeadRetry` 的任务电脑发送这个选项。旧端仍可手动重试。
 
+插件提供的引擎（2026-11-20）：`open.agentKind` 新增取值 `acp`，运行端以 `caps.pluginEngines` 声明支持，只对同账号
+控制端开放；字段、旧端降级与拒绝条件见[插件任务执行引擎](plugin-harnesses.md)「自己的其他电脑使用插件引擎」。
+
 ## 托管请求的附件预算与保存（2026-11-17）
 
 `open.acceptsAttachmentPreservation?: true` 表示任务所在电脑能接收被请求预算移出的附件。
@@ -372,7 +375,9 @@ Codex 原生图片恢复（#6412）在既有 `maker:remote-agent:v1` 上追加�
   各电脑自行向官方分享服务查询本账号的跨区分享，不新增成员授权。查询失败时仅保留当前位置，不改读控制端的授权。
   #8010 新增同账号只读 `maker:model-catalog:read`：`op: locations` 列任务所在电脑可用的来源；
   `op: read` 只代读固定的 `maker:provider:list`、`maker:get-capabilities`、`maker:list-available-agents`、
-  `maker:agent:status`。来源必须在主机当前名单中，回包前复核名单与账号代次；不接受任意 IPC 或写操作。
+  `maker:agent:status`，以及 2026-11-23 起的 `maker:list-plugin-engines`(远程控制下列出来源的插件引擎，见
+  [插件引擎](plugin-harnesses.md)「远程控制下同样可选」；旧主机回 `INVALID_PARAMS`，控制端只列被控电脑自己的引擎)。
+  来源必须在主机当前名单中，回包前复核名单与账号代次；不接受任意 IPC 或写操作。
   控制端自身和仅被控电脑加载的分享也参与候选。创建、换位置与发送沿用真实 `agentDeviceId`；
   Renderer 的 `(任务电脑, 来源电脑)` 目录缓存键仅用于读取，不作为运行设备传送或落盘。
   旧主机明确不支持新通道时保留原直接读取与两端分享交集行为；连接失败不触发此降级。
@@ -392,6 +397,13 @@ Codex 原生图片恢复（#6412）在既有 `maker:remote-agent:v1` 上追加�
   故障半径：仅驱逐对应任务电脑的目录缓存；只重读目录，不重建链路或重放创建/发送；其他任务电脑的缓存不失效。
   实现见 `apps/desktop/src/renderer/hooks/useControlledModelLocations.ts`，回归见
   `controlledTaskRemoteAgentPanel.test.tsx` 与 `remoteAgentRelocationWiring.test.ts`。
+  `op: read` 的错误语义（2026-11-23）：来源电脑的临时失败（超时、离线、断链、繁忙、无响应）经任务电脑转发时
+  保持临时语义，回给控制端 `DEVICE_LINK_TIMEOUT` / `DEVICE_LINK_DEVICE_OFFLINE` / `DEVICE_LINK_NOT_CONNECTED` /
+  `DEVICE_LINK_BUSY` / `DEVICE_LINK_DEVICE_UNRESPONSIVE`，不再一律改写成 `PRECONDITION_FAILED`；拒绝、移除等
+  非临时失败仍是 `PRECONDITION_FAILED`。任务电脑代读来源最多等 20 秒（短于控制端默认 30 秒），以便控制端拿到
+  任务电脑的答复而不是自己超时。这些都是既有错误码，新旧控制端都已按临时错误处理（保留有界显示、可重试），
+  旧任务电脑继续返回 `PRECONDITION_FAILED` 时行为与以前相同；不改帧、channel 或字段，自建中转无需修改。
+  实现见 `apps/desktop/src/main/maker-ipc/controlledModelCatalog.ts`，回归见 `controlledModelCatalog.test.ts`。
   桌面远程控制下新建任务(建到 A 上，2026-10-09)同样开放：判据与手机新建相同(A 的 `maker:provider:list` 带
   `remoteInvocationEnabled` 布尔标记，共享任务访客与 SSH 不开放)，模型面板先列 A 的全部供应商、再列其他同账号电脑
   已开放的供应商；选中后草稿的模型目录改按那台，`maker:create-session` 带 `agentDeviceId`，权限档沿用 A 的草稿值，
@@ -582,3 +594,8 @@ Codex 原生图片恢复（#6412）在既有 `maker:remote-agent:v1` 上追加�
 但不会获得新的文件优先提示。此兼容退化不丢记录；只有两端均升级才具备新提示行为。
 共享任务的虚拟路径映射复用 runHost 对所有字符串选项的投影。实机跨电脑/跨账号验证须单独记录，
 本次只验证编解码和现有宿主回归，不能据此宣称全矩阵实测。
+
+共享文生图沿用 `caps.sharedImageGeneration`。支持内置 OpenAI 订阅的执行端另报
+`sharedBuiltinOpenAiImage: true`。0.1.143 只报前者，接收端对这类分享端保留原有
+Codex 原生账号选项，隐藏内置订阅。供应商组选择内置 OpenAI 执行端时也复核新能力，
+缺少该声明则继续选择其他成员。两个字段都是可选能力，中转按原通道透传。

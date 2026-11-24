@@ -50,10 +50,40 @@ export default {
     lists: { about: '#10188: typed/restored composer lists keep each marker beside its mixed-direction item' },
     orca: { about: '#10188: expanded Lead/Worker messages retain per-paragraph direction and original text' },
     context: { about: '#10188: attached IM replies, thread messages and group background retain paragraph direction' },
+    'long-inline-code': { about: '#11312: unbroken inline-code tokens wrap inside the bubble instead of overflowing it' },
   },
   async check(page, ui) {
     const rtl = 'سلام، فایل index.html با API 123 آماده است.';
     const english = 'English paragraph: API 123 and https://example.com/docs.';
+    if (ui.case === 'long-inline-code') {
+      // #11312: real Chromium layout. jsdom and class-name assertions cannot see
+      // that an unbreakable inline-code token widens the bubble and paints past
+      // its right edge; this check fails on the pre-fix component for both a
+      // long path inline among prose and a single enormous standalone token.
+      const section = page.getByTestId('long-inline');
+      const codes = section.locator('code');
+      const count = await codes.count();
+      assert.ok(count >= 3, `expected inline code elements, got ${count}`);
+      for (let i = 0; i < count; i += 1) {
+        const overflows = await codes.nth(i).evaluate((element) => {
+          const bubble = element.closest('[data-ui-page-subject]') ?? document.body;
+          const limit = bubble.getBoundingClientRect();
+          const rects = Array.from(element.getClientRects()).filter(r => r.width > 0);
+          if (rects.length === 0) return null;
+          // Any painted fragment sticking out past the bubble's content edge
+          // means the token did not wrap inside the available width.
+          return Math.max(...rects.map(r => r.right)) - limit.right;
+        });
+        if (overflows === null) continue;
+        assert.ok(overflows <= 1, `inline code #${i} paints ${overflows.toFixed(1)}px past the container edge`);
+      }
+      // The wrapping must not swallow content: every token still present in full.
+      const text = await section.textContent();
+      assert.ok(text?.includes('JudgeAttributeFieldWithVeryLongName.tsx'), 'long path token must stay readable in full');
+      assert.ok(text?.includes(`${'a'.repeat(220)}.tsx`), 'standalone long token must stay readable in full');
+      await ui.capture('long-inline-code');
+      return;
+    }
     if (ui.case === 'context') {
       // The real UserMessage -> HookTaskCard disclosure renders three distinct
       // context leaves. jsdom covers their text/counts, but cannot detect this

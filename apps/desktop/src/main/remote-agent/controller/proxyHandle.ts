@@ -19,7 +19,9 @@ import type {
   AgentSessionHandle,
   AgentSessionTeardownOptions,
   BackgroundTaskSnapshot,
+  Capabilities,
   Effort,
+  EngineKind,
   InteractionDecision,
   InteractionRequest,
   InteractionResolver,
@@ -31,6 +33,8 @@ import type {
 import type { ExecutorAction } from '../executor/gate';
 import type { ExecutorConfirmation } from '../executor/executor';
 import type { ExecutorWorkspace } from '../executor/workspace';
+import { resolveExecutorShell } from '../executor/shell';
+import { describePermissionAction } from '@cindy/maker-shared';
 import { isProviderShareCredentialSessionApproval } from '../../../shared/providerShareCredentialConsent';
 import { encodeSendOptions, encodeUserMessage } from '../wire';
 import { RemoteAgentRemoteError, type RemoteAgentRunClient } from './runClient';
@@ -42,7 +46,8 @@ const MAX_REMEMBERED_SEND_CALLBACKS = 64;
 /** 对方运行的会话描述(open 成功时返回)。 */
 export interface RemoteStartedInfo {
   id: string;
-  agentKind: AgentKind;
+  /** `acp` = a plugin engine of the computer that runs the agent. */
+  agentKind: EngineKind;
   model: string;
   shadowDir: string;
   /** Agent 主机上的虚拟镜像根。 */
@@ -62,7 +67,7 @@ export interface RemoteStartedInfo {
   codexProductPromptDelivery?: { threadId: string; historyHasProductPrompt: boolean };
 }
 
-export function parseStartedInfo(value: Record<string, unknown>, kind: AgentKind): RemoteStartedInfo {
+export function parseStartedInfo(value: Record<string, unknown>, kind: EngineKind): RemoteStartedInfo {
   const str = (v: unknown) => (typeof v === 'string' ? v : undefined);
   const id = str(value.id);
   if (!id) throw new Error('[REMOTE_AGENT_INVALID] the other computer returned an invalid session');
@@ -152,10 +157,34 @@ export function innerShellScript(command: string): string {
 export function approvalActionsFor(
   request: InteractionRequest,
   workspace: ExecutorWorkspace,
+  pluginEngine = false,
+  cwd = workspace.workingDir,
 ): ExecutorAction[] {
   if (request.kind !== 'permission') return [];
-  const name = request.toolName.replace(/^mcp__cindy_exec__/, '').toLowerCase();
   const input = request.input ?? {};
+  if (pluginEngine) {
+    // Only grant actions shown by the same formatter as the confirmation card.
+    const action = describePermissionAction(request.toolName, input);
+    const tool = request.toolName.toLowerCase();
+    if (tool === 'bash' && action.kind === 'command' && action.preview === input.command) {
+      return [{
+        kind: 'exec',
+        command: workspace.mapCommand(action.preview, resolveExecutorShell().dialect),
+        cwd,
+      }];
+    }
+    const reads = tool === 'read';
+    if (!reads && tool !== 'write' && tool !== 'edit' && tool !== 'notebookedit') return [];
+    const target = tool === 'notebookedit' ? input.notebook_path : input.file_path;
+    if (action.kind !== (reads ? 'file-read' : 'file-write') || action.preview !== target) return [];
+    try {
+      const path = workspace.resolve(action.preview, cwd);
+      return reads ? [{ kind: 'read', path, exactFileApproval: true }] : [{ kind: 'write', path }];
+    } catch {
+      return [];
+    }
+  }
+  const name = request.toolName.replace(/^mcp__cindy_exec__/, '').toLowerCase();
   const actions: ExecutorAction[] = [];
   if (EXEC_TOOLS.has(name)) {
     const raw = input.command;
@@ -181,7 +210,8 @@ export function approvalActionsFor(
     .find((value): value is string => typeof value === 'string' && value.length > 0);
   if (target && (WRITE_TOOLS.has(name) || READ_TOOLS.has(name))) {
     try {
-      actions.push({ kind: WRITE_TOOLS.has(name) ? 'write' : 'read', path: workspace.resolve(target) });
+      // 路径批准对读写同样有效(编辑先读后写)。
+      actions.push({ kind: READ_TOOLS.has(name) ? 'read' : 'write', path: workspace.resolve(target) });
     } catch {
       // 路径不合法时不登记。
     }
@@ -218,6 +248,7 @@ export function fixedRemoteAgentLink(client: RemoteAgentRunClient): RemoteAgentL
 }
 
 export interface RemoteHandleDeps {
+  getExecutorCwd?(): string;
   /** 缺省时用 `client` 作为固定连接。 */
   link?: RemoteAgentLink;
   client?: RemoteAgentRunClient;
@@ -293,6 +324,8 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
   const queue = new EventQueue();
   const projection = new RemoteEventProjection(deps.workspace);
   let state: Record<string, unknown> = { ...started.state };
+  // 事件的 source 只标内置引擎；插件引擎的事件本来就不带(本机任务也一样)。
+  const eventSource: AgentKind | undefined = started.agentKind === 'acp' ? undefined : started.agentKind;
   let resolver: InteractionResolver | null = null;
   let disposed = false;
   let teardownRequested = false;
@@ -490,6 +523,11 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       return typeof state.requestSessionId === 'string' ? state.requestSessionId : started.requestSessionId;
     },
     agentKind: started.agentKind,
+    // 插件引擎的模型、思考深度与权限档来自它在那台电脑上的握手结果，随状态一起带回(内置引擎不带，沿用本机的静态能力)。
+    get negotiatedCapabilities() {
+      const value = state.negotiatedCapabilities;
+      return value && typeof value === 'object' && !Array.isArray(value) ? value as Capabilities : undefined;
+    },
     get model() {
       return typeof state.model === 'string' ? state.model : started.model;
     },
@@ -628,10 +666,28 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
           : { kind: 'permission', behavior: 'deny', reason: 'interaction_unavailable' };
       return { type: 'interaction', result: decision };
     }
-    let decision = await resolver(localPlanReview(request, deps.workspace));
+    const pluginEngine = started.agentKind === 'acp';
+    const pluginApprovals = pluginEngine
+      ? approvalActionsFor(request, deps.workspace, true, deps.getExecutorCwd?.())
+      : [];
+    const action = pluginApprovals[0];
+    const presented = request.kind === 'permission' && action
+      ? {
+          ...request,
+          input: {
+            ...request.input,
+            ...(action.kind === 'exec' ? { command: action.command, cwd: action.cwd }
+              : action.kind === 'fetch' ? {} : { file_path: action.path }),
+          },
+        }
+      : request;
+    let decision = await resolver(localPlanReview(presented, deps.workspace));
     if (decision.kind === 'permission' && decision.behavior === 'allow') {
+      // ACP selects an option and does not forward edited arguments to the engine.
       const effective = decision.updatedInput ? { ...request, input: decision.updatedInput } : request;
-      for (const action of approvalActionsFor(effective, deps.workspace)) deps.recordApproval(action);
+      for (const approval of pluginEngine ? pluginApprovals : approvalActionsFor(effective, deps.workspace)) {
+        deps.recordApproval(approval);
+      }
     }
     // 用户改过的计划按本机路径展示，交回 Agent 前换回它那边的写法。
     if (decision.kind === 'plan_review') {
@@ -700,7 +756,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
           message: '[REMOTE_AGENT_RESUME_LOST] The earlier conversation on the other computer could not be resumed, so the agent continues without it.',
           isTerminal: false,
         },
-        source: started.agentKind,
+        source: eventSource,
       });
     },
     onRequest(request) {
@@ -771,10 +827,10 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
         onUnsettled?.();
         if (sendOwnerOptions === ownerOptions) terminalEventDelivered = true;
         // Keep the iterator/executor live: the coordinator owns continuation.
-        return [markSessionSendTerminal(ownerOptions, { type: 'error', source: started.agentKind, data: {
+        return [markSessionSendTerminal(ownerOptions, { type: 'error', source: eventSource, data: {
           message: '[REMOTE_AGENT_UNAVAILABLE] The provider process stopped; reconnecting to the original conversation.',
           reason: 'remote_agent_restarted', isTerminal: true,
-        } }), { type: 'done', source: started.agentKind, data: { reason: 'remote_agent_restarted' } }];
+        } }), { type: 'done', source: eventSource, data: { reason: 'remote_agent_restarted' } }];
       });
     },
     onClosed(reason, message, runId = deps.client?.runId) {
@@ -793,7 +849,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
         const normalClose = reason === 'closed' || reason === 'detached' || reason === 'ended';
         // Replacement cancels the old product turn; EOF by itself never completes it.
         if (!teardownRequested && unfinished && !settled && reason === 'superseded') {
-          return markSessionSendTerminal(ownerOptions, { type: 'done', source: started.agentKind, data: { status: 'cancelled', reason,
+          return markSessionSendTerminal(ownerOptions, { type: 'done', source: eventSource, data: { status: 'cancelled', reason,
             remoteCloseReason: reason, ...(runId ? { remoteRunId: runId } : {}) } });
         } else if (!teardownRequested && !wasAborted && !abortRequested && !settled && reason !== 'superseded'
           && (unfinished || !normalClose)) {
@@ -812,7 +868,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
               reason: reason === 'controller-disconnected' ? 'user-revoked'
                 : reason === 'unreachable' ? 'remote_agent_lost' : 'remote_agent_closed',
             },
-            source: started.agentKind,
+            source: eventSource,
           });
         }
         return undefined;

@@ -492,6 +492,11 @@ export async function loadAllCommands(
     contextReady?: boolean;
     forceReload?: boolean;
     skipAgentSkills?: boolean;
+    /**
+     * Leave out the built-in Harness's own commands. Plugin engines (docs/plans/acp-plugin-bridge.md)
+     * read `/…` themselves, so offering Claude Code / Codex / Pi commands there would be wrong.
+     */
+    skipAgentCommands?: boolean;
     sessionId?: string;
     allowManagedPiPackagePreview?: boolean;
     onPiRuntimeStatus?: (status: PiPackageCommandRuntimeStatus) => void;
@@ -514,7 +519,7 @@ export async function loadAllCommands(
   const desktopP: Promise<CmdRes> = api.listDesktopCommands(
     deviceId ? { deviceId } : undefined,
   ).catch(() => ({ success: false }));
-  const builtinP: Promise<CmdRes> = (
+  const builtinP: Promise<CmdRes> = opts?.skipAgentCommands ? Promise.resolve({ success: true, commands: [] }) : (
     deviceId
       ? (window.electronAPI.deviceLink.invoke(deviceId, 'maker:list-agent-commands', [
           agentKind,

@@ -14,7 +14,16 @@
   "usageOnlyDevice": "{{name}} only",
   "usagePlans": "Plan allowances",
   "usageBudget": "Remaining period budget",
+  "usageWaiting": "Plan allowances and today’s usage appear once your computer connects",
+  "usageUpdateDesktop": "Update Cindy on your computer to see usage",
+  "usageWaitingTitle": "Your usage will appear here",
+  "usageWaitingCopy": "Once your phone connects to your computer, plan allowances and daily usage for each account sync automatically, usually within a few seconds.",
+  "usageUpdateDesktopTitle": "Update Cindy on your computer",
+  "usageUpdateDesktopCopy": "Cindy on your computer is too old to send usage to your phone. It will appear here after you update.",
   "management": {
+    "addCloud": "Add cloud computer",
+    "preparingCloud": "Cloud computer · preparing",
+    "manageCloud": "Manage cloud computer",
     "title": "Device Management",
     "openDevice": "View details for {{name}}",
     "details": "Device details",
@@ -23,7 +32,7 @@
     "notFound": "This device is no longer in your account.",
     "deleteDevice": "Delete device",
     "deleteTitle": "Delete {{name}}?",
-    "deleteMessage": "Remove this device from your account and disconnect remote access. Its sessions and files are kept. Sign in again on that device to rejoin.",
+    "deleteMessage": "Remove this device from your account and disconnect remote access. Its sessions and files are kept. Tap “Rejoin” on that device to bring it back.",
     "deleteFailed": "Could not delete the device.",
     "deleteOnline": "This server does not yet support removing online devices. Retry after the service is upgraded.",
     "deleteRejectedWhileOffline": "Couldn’t delete the device: the server still lists it as online, although it shows as offline here.",
@@ -384,6 +393,7 @@
       "showDeviceTasks": "Show sessions",
       "openDevice": "Open",
       "renameDevice": "Rename",
+      "groupDevice": "Device",
       "groupProject": "Project",
       "sortBy": {
         "priority": "Priority",
@@ -425,11 +435,15 @@
       "showCollapsedTeammateAvatars": "Show avatars when collapsed",
       "displayHeading": "Display",
       "view": {
+        "card": "Cards",
         "text": "Text",
         "list": "List"
       },
       "taskInfoHeading": "Session info",
       "taskInfo": {
+        "teammate": "Buddy avatar",
+        "project": "Project icon and name",
+        "harness": "Harness icon",
         "time": "Time",
         "pr": "PR status",
         "tokens": "Tokens",
@@ -440,6 +454,7 @@
       "filterEmptyCopy": "Adjust or reset Filters in Display settings.",
       "filterTeammatesHeading": "Buddies",
       "filterAnySource": "All",
+      "filterHideAutomations": "Hide automation tasks",
       "filterHideAllTeammates": "Hide all",
       "filterSelectedTeammates": "{{count}} selected",
       "inbox": {

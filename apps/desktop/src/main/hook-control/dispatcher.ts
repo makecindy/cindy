@@ -1,3 +1,4 @@
+import { withSessionRouteLock } from '../localDb/sessionRouteLock';
 import { formatTaskTopicTitle } from '@cindy/maker-shared/session-title';
 import { imChannelDisplayName } from '../../shared/imMessageSource.js';
 import { createHookQuestionPublisher } from './questionPublisher';
@@ -135,7 +136,11 @@ export interface HookSessionRunner {
    * workingDir 用于接管/复用时的白名单校验。检查失败会 reject, 上层必须
    * fail closed 并保留既有 binding, 不能把暂时读不到当成失效任务。
    */
-  inspect(sessionId: string): Promise<{ workingDir: string | null; usable: boolean } | null>;
+  inspect(sessionId: string, checkArchivedDir?: (dir: string) => boolean): Promise<{
+    workingDir: string | null;
+    usable: boolean;
+    resumableArchive?: boolean;
+  } | null>;
   /** 跑一个完整 turn, 收口(done / terminal error)后返回。 */
   run(req: HookRunRequest): Promise<HookRunOutcome>;
   /**
@@ -400,6 +405,7 @@ export interface HookDispatcherDeps {
    * patchSessionMetaInDb, 自带 sidebar 广播)。未注入时 archive 只清绑定。
    */
   archiveSessionRow?: (sessionId: string) => Promise<void>;
+  restoreArchivedSession?: (sessionId: string, options: { routeLockHeld: true }) => Promise<void>;
   /**
    * 可选: 按钮决策回流的配对出口(interaction.decision 用; 生产为
    * interactions.ts 的 resolveHookInteraction)。未注入时决策帧被忽略,
@@ -694,10 +700,11 @@ interface PendingTurnEnd {
  * 放进来与它共享 session 事件流 / origin / 交互路由(codex review #1490)。
  * 与权限档**无关** —— 群轮次不再改用户配的权限模式(见 session-runner)。
  * execute() 与续跑观察共用同一判据, 分叉会让续跑轮丢掉这层独占。
- * 官方飞书 / Lark 的群消息一律在话题里回复(`feishu:topic:…`), 同样是多人可见的群轮次。
+ * 官方飞书 / Lark 的群消息一律在话题里回复(`feishu:topic:…`), 同样是多人可见的群轮次;
+ * 官方 Discord 的服务器频道 / 子区(`discord:ch:…`)同理。
  */
 function deriveLaneKind(externalKey: string): 'dm' | 'group' {
-  return /^(?:telegram|feishu):(?:group|topic):/.test(externalKey) ? 'group' : 'dm';
+  return /^(?:(?:telegram|feishu):(?:group|topic)|discord:ch):/.test(externalKey) ? 'group' : 'dm';
 }
 
 interface PendingReopen {
@@ -2430,6 +2437,24 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     const laneKind = deriveLaneKind(payload.externalKey);
     const laneKey = bindingKey(connectionId, payload.externalKey);
     const namespacedBound = bindings.get(connectionId, payload.externalKey);
+    // Only the current connection's own conversation can reopen its archived task.
+    // Unbound takeovers and legacy account bindings still require an active target.
+    const inspectForMessage = async (
+      sessionId: string,
+      dirAllowed: (dir: string | null) => boolean,
+    ) => {
+      if (sessionId !== namespacedBound || !deps.restoreArchivedSession) return runner.inspect(sessionId);
+      const canRestoreIn = (dir: string | null) =>
+        isCurrentGeneration(generation) && getConnection(connectionId)?.enabled === true && dirAllowed(dir);
+      // Done cleanup holds this same lock until its directory reclamation finishes.
+      // Inspect and restore together so a pre-cleanup stat cannot revive a removed worktree.
+      return withSessionRouteLock(sessionId, async () => {
+        const info = await runner.inspect(sessionId, canRestoreIn);
+        if (!info?.resumableArchive || !canRestoreIn(info.workingDir)) return info;
+        await deps.restoreArchivedSession!(sessionId, { routeLockHeld: true });
+        return isCurrentGeneration(generation) ? runner.inspect(sessionId) : null;
+      });
+    };
     const trackedReplacement = staleTakeoverReplacements.get(laneKey);
     // v1 stored every mapping under the literal "slack" namespace.  A new
     // account/provider namespace may read it only as a candidate; it is moved
@@ -2438,7 +2463,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
 
     // 接管路径: server 显式指定已有 session(对话会话同样可接管)
     if (payload.sessionId !== null) {
-      const info = await runner.inspect(payload.sessionId);
+      const info = await inspectForMessage(payload.sessionId, (dir) => inWhitelistNow(dir) || inDialogueRoot(dir));
       if (!isCurrentGeneration(generation)) return { reject: 'disabled' };
       if (info !== null) awaitingPersist.delete(payload.sessionId);
       /**
@@ -2616,7 +2641,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       bindings.remove(legacyNamespace, payload.externalKey);
     };
     if ((!forceNew || reusesTrackedReplacement) && bound) {
-      const info = await runner.inspect(bound);
+      const info = await inspectForMessage(bound, inRequestedProject);
       if (!isCurrentGeneration(generation)) return { reject: 'disabled' };
       // 查得到 = 已落库, 此后一律走映射校验
       if (info !== null) awaitingPersist.delete(bound);
@@ -2799,7 +2824,8 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     const legacyText = payload.source?.userText == null && !/^[<\[]|[\r\n]/.test(plainPrompt) ? plainPrompt : '';
     const titleText = payload.source?.userText?.trim() || legacyText;
     const context = payload.source?.teamName ||
-      (payload.source?.im === 'telegram' || payload.source?.im === 'x' || payload.source?.im === 'feishu'
+      (payload.source?.im === 'telegram' || payload.source?.im === 'x' || payload.source?.im === 'feishu' ||
+        payload.source?.im === 'discord'
         ? payload.source.channelName : null);
     const title = buildHookSessionTitle(channel, titleText, context);
     return {

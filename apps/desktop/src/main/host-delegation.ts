@@ -27,8 +27,9 @@ export interface HostDelegationConfig {
   readonly instanceId?: string;
 }
 
-/** Env var that enables client mode; the value is the loopback base URL. */
-export const HOST_DELEGATION_ENV = 'CINDY_HOST_API';
+import { HOST_DELEGATION_ENV } from './hostDelegationEnv.js';
+
+export { HOST_DELEGATION_ENV };
 
 /**
  * Resolve the delegation target. Returns null when disabled, and throws when

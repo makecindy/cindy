@@ -4,6 +4,7 @@ import { BUNDLED_CATALOG, buildUserProvider, connectedProvidersForAgent, provide
 
 import { checkModelRoute } from '../model-route-guard.js';
 import { createProviderService, type ConnectionReadOptions } from '../provider-service.js';
+import { projectSubscriptionPoolCatalog } from '../subscriptionPoolCatalog.js';
 import { cindyAiAccountName, cindyAiAccountLogoKind } from '../../../shared/cindyAiPresentation.js';
 import { organizationProviderLogoKind } from '../../organizationProviderLogo.js';
 import type { XdOrgIdentity } from '../../../shared/xdOrg.js';
@@ -240,6 +241,103 @@ describe('createProviderService', () => {
       expect.objectContaining({ id: 'private-model', mode }),
     ]);
     expect(result[0].availableMediaModelIds).toEqual([]);
+  });
+
+  // Unit: the mobile picker paid one credential read per suspended connection before filtering.
+  // The full management view and a task explicitly bound to an old model have distinct contracts.
+  it('checks only included credentials and retains only the requested model of a suspended source', async () => {
+    const providers = ['on', 'off', 'other'].map(id => buildUserProvider({
+      id, name: id, runtimes: { codex: { baseUrl: 'https://provider.invalid/v1', models: [
+        { id: 'current', name: 'Current' }, { id: 'sibling', name: 'Sibling' },
+      ] } },
+    }, { modelRegistry: BUNDLED_CATALOG.modelRegistry }));
+    const reads: string[] = [];
+    const builtin = vi.fn(() => false);
+    const media = vi.fn(() => []);
+    const svc = createProviderService({
+      getCatalog: () => ({ ...BUNDLED_CATALOG, providers }),
+      getModelAccess: () => ({ disabledProviders: { off: true, other: true } }),
+      connection: { xd: builtin, anthropic: builtin, openai: builtin, xai: builtin },
+      customApiKeyConnected: p => { reads.push(p.id); return true; }, getAvailableMediaModels: media,
+    });
+    const describe = vi.fn();
+    const active = await svc.listProviders({ picker: { scope: 'available', describe } });
+    expect(active.map(p => p.id)).toEqual(['on']);
+    expect(reads.splice(0)).toEqual(['on']);
+    expect(describe).toHaveBeenCalledWith(['on', 'off', 'other'], ['off', 'other']);
+    const bound = await svc.listProviders({ picker: { scope: { agent: 'codex', providerId: 'off', modelId: 'current' } } });
+    expect(bound).toHaveLength(1);
+    expect(bound[0]).toMatchObject({ id: 'off', connected: true, suspended: true });
+    expect(bound[0].models.codex?.map(m => m.id)).toEqual(['current']);
+    expect(reads.splice(0)).toEqual(['off']);
+    const removed = { agent: 'codex' as const, providerId: 'off', modelId: 'no-longer-discovered' };
+    expect(await svc.listProviders({ picker: { scope: removed, describe } })).toEqual([]);
+    expect(describe).toHaveBeenLastCalledWith([], ['off']);
+    expect(reads).toEqual([]);
+    expect(builtin).not.toHaveBeenCalled();
+    expect(media).not.toHaveBeenCalled();
+    expect((await svc.listProviders()).map(p => p.id)).toEqual(['on', 'off', 'other']);
+    expect(reads).toEqual(['on', 'off', 'other']);
+  });
+
+  // PR #11693, unit: implicit legacy routes can need a model from a cold account pool.
+  // The explicit-source picker test starts with model membership already populated.
+  it.each(['openai', 'team-pool', 'imported-codex'])('restores an implicit model from the cold suspended pool %s', async id => {
+    const openai = BUNDLED_CATALOG.providers.find(p => p.id === 'openai')!;
+    const anthropic = BUNDLED_CATALOG.providers.find(p => p.id === 'anthropic')!;
+    const pool = { ...openai, id,
+      ...(id === 'team-pool' ? { subscriptionPool: 'openai' as const } : {}),
+      ...(id === 'imported-codex' ? { auth: { ...openai.auth, native: 'codex' as const } } : {}),
+    };
+    const model = { ...openai.models.codex![0], id: 'discovered-only' };
+    const unrelated = buildUserProvider({ id: 'other', name: 'Other', runtimes: {
+      codex: { baseUrl: 'https://other.invalid/v1', models: [{ id: 'other-model', name: 'Other model' }] },
+    } }, { modelRegistry: BUNDLED_CATALOG.modelRegistry });
+    const catalog = { ...BUNDLED_CATALOG, providers: [pool, unrelated, anthropic] };
+    let discovered = false;
+    const refreshes: string[][] = [];
+    const otherConnection = vi.fn(() => true);
+    const svc = createProviderService({
+      getCatalog: () => catalog,
+      getModelAccess: () => ({ disabledProviders: { [id]: true, other: true, anthropic: true } }),
+      refreshPickerPools: async providers => {
+        refreshes.push(providers.map(p => p.id));
+        discovered = providers.some(p => p.id === id);
+      },
+      projectCatalog: (base, routing, include) => projectSubscriptionPoolCatalog(base, {
+        readPool: () => ({ strategy: 'order', accounts: [], legacyCodexAccounts: { 'imported-codex': 'account' } }),
+        codexAccountState: () => ({ authenticated: false }), readMergedProviderAccount: () => undefined,
+        accountProviderId: () => 'openai', readProviderBoundAccountIds: () => new Set(),
+        readSubscriptionPoolCodexModels: () => discovered ? [model, { ...model, id: 'sibling' }] : [],
+        getActiveCatalogWithCodexModels: models => ({ ...base, providers: [{ ...openai, models: { codex: [...models] } }] }),
+        readSubscriptionPoolClaudeModels: () => null, getActiveCatalogWithClaudeModels: () => base,
+      }, routing, include),
+      connection: { openai: () => discovered, xd: otherConnection, anthropic: otherConnection, xai: otherConnection },
+      subscriptionPoolConnected: () => discovered, codexAccountConnected: () => discovered,
+      customApiKeyConnected: otherConnection,
+    });
+    expect(await svc.listProviders({ picker: { scope: 'available' } })).toEqual([]);
+    expect(refreshes.splice(0).flat()).toEqual([]);
+    const views = await svc.listProviders({ picker: { scope: { agent: 'codex', providerId: null, modelId: model.id } } });
+    expect(views).toMatchObject([{ id, connected: true, suspended: true, models: { codex: [{ id: model.id }] } }]);
+    expect(refreshes).toEqual([[id]]);
+    expect(otherConnection).not.toHaveBeenCalled();
+  });
+
+  it('preserves Auto membership for a suspended Cindy source without checking its login', async () => {
+    const xd = BUNDLED_CATALOG.providers.find(p => p.id === 'xd')!;
+    const sample = xd.models.codex![0];
+    const providers = [{ ...xd, models: { codex: [{ ...sample, id: 'auto/team' }, { ...sample, id: 'chat' }] } }];
+    const read = vi.fn(() => true);
+    const svc = createProviderService({
+      getCatalog: () => ({ ...BUNDLED_CATALOG, providers }),
+      getModelAccess: () => ({ disabledProviders: { xd: true } }),
+      connection: { xd: read, anthropic: read, openai: read, xai: read },
+    });
+    const [identity] = await svc.listProviders({ picker: { scope: 'available' } });
+    expect(identity).toMatchObject({ id: 'xd', suspended: true, routing: {} });
+    expect(identity.models.codex?.map(m => m.id)).toEqual(['auto/team']);
+    expect(read).not.toHaveBeenCalled();
   });
 
   it('lists providers with injected connection state', async () => {

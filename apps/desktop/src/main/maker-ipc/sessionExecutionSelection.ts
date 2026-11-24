@@ -3,7 +3,7 @@ import { resolveSendToSessionExecutionConfig, type SendToSessionExecutionConfig 
 
 export type SessionExecutionSelection = SendToSessionExecutionConfig;
 export interface SessionModelSelection {
-  agentKind?: 'cc' | AgentKind;
+  agentKind?: 'cc' | AgentKind | 'acp';
   model?: string;
   providerId?: string | null;
   effort?: string;
@@ -23,6 +23,7 @@ export function resolveSessionExecutionSelection(params: {
   locationChanged?: boolean;
 }): SessionExecutionSelection {
   const { selection, source, providerRouting } = params;
+  if (selection.agentKind === 'acp') throw new Error('插件引擎任务不经内置模型目录选路');
   const agentKind = selection.agentKind === 'cc' ? 'claude-code' : selection.agentKind ?? source?.agentKind;
   const model = selection.model ?? source?.model;
   const recover = '请在任务中重新选择模型，或在「设置 → 模型供应商」修复连接后重试。';
@@ -68,6 +69,7 @@ export function createSessionExecutionResolver(deps: SessionExecutionResolverDep
   ): Promise<SessionExecutionSelection> => {
     const assertOwner = deps.captureOwner();
     assertOwner();
+    if (selection.agentKind === 'acp') throw new Error('插件引擎任务不经内置模型目录选路');
     let source: SessionExecutionSelection | undefined;
     if (existing) {
       if (!['cc', 'claude-code', 'codex', 'pi'].includes(existing.agentKind)) throw new Error('任务 Agent 不可用，请重新选择模型');

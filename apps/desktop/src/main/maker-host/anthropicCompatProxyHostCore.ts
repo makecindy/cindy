@@ -19,6 +19,7 @@ import {
   createToolExchangeAdjacencyRecoveryRule,
   createToolUseProviderSpecificFieldsRecoveryRule,
   createToolReferenceRecoveryRule,
+  createNativeMcpHistoryRecoveryRule,
   createXaiModelInputRecoveryRule,
   createXaiModelInputSanitizeTransform,
   createAnthropicEffortCompatibilityRule,
@@ -42,6 +43,7 @@ import { getActiveCatalog } from './active-catalog.js';
 import { providerModelRecord, modelWithInterface, type Provider } from '@cindy/model-providers';
 import { invocationModelRecord, requiresNativeProviderAuth } from './pi-provider-transport.js';
 import { createClaudeProviderBridge } from './claude-provider-bridge.js';
+import { withCopilotForwardHeaders } from './copilot-account-url.js';
 import {
   OWNER_BOUNDARY_PENDING_ERROR,
   isOwnerBoundaryPendingError,
@@ -81,6 +83,7 @@ import {
   sessionProviderRoutingForModel,
   gatewayDefaultRouteDecision,
   getUserProviderIdForSession,
+  getSessionRoutingDescriptor,
   inferProviderIdForModel,
   resolveImplicitLocalBridgeRouteResolution,
   oauthRefreshFailedDecision,
@@ -191,6 +194,7 @@ function attachClaudeProviderBridge(route: RoutingDecision, providerId: string, 
       supportsFastMode: model.supportsFastMode === true,
       providerId: provider.id,
       catalogPresetId: model.catalogPresetId,
+      copilotOAuth: routing.authStrategy === 'oauth-token' && model.catalogPresetId === 'github-copilot',
       ...(row && (protocol === 'openai-chat' || model.api) ? { model: row, nativeUpstream: base } : {}),
       capabilities: {
         ...(model.supportsImageInput ? { imageInput: 'image_url' as const } : {}),
@@ -921,7 +925,10 @@ function createModelRoutingTransform(): RoutingTransform {
       // piProviderId 已过 registered 匹配门,就是授权边界也是路由来源;openai /
       // xai 在上方已按同一判据早返回,'xd' 留给网关分支(记账 + sanitize)。
       return resolveProviderRouteDecision(piProviderId, 'pi', gatewayKey)
-        .then((resolved) => resolved?.decision ?? unavailablePiProviderRoute(piProviderId))
+        .then((resolved) => withCopilotForwardHeaders(
+          resolved?.decision ?? null, !!wireModel && resolved?.routing.authStrategy === 'oauth-token'
+            && /\/responses\/?$/.test(ctx.url.split('?', 1)[0]), ctx,
+        ) ?? unavailablePiProviderRoute(piProviderId))
         .catch(() => unavailablePiProviderRoute(piProviderId));
     }
 
@@ -965,6 +972,11 @@ function createModelRoutingTransform(): RoutingTransform {
         }
         if (route && requestAgent === 'claude-code' && explicitCustomProvider && selectedProviderId) {
           return attachClaudeProviderBridge(route, selectedProviderId, wireModel, sessionId);
+        }
+        if (requestAgent === 'pi' && wireModel) {
+          const routing = getSessionRoutingDescriptor(sessionId, 'pi', wireModel);
+          route = withCopilotForwardHeaders(route,
+            routing?.authStrategy === 'oauth-token' && /\/responses\/?$/.test(ctx.url.split('?', 1)[0]), ctx);
         }
         return isPiGatewayRequest ? sanitizePiGatewayDecision(route, ctx.url) : route;
       };
@@ -1368,6 +1380,7 @@ async function startAnthropicCompatProxy(generation: number): Promise<void> {
         }),
         createToolUseProviderSpecificFieldsRecoveryRule(),
         createToolReferenceRecoveryRule(),
+        createNativeMcpHistoryRecoveryRule(),
         // tool 配对断裂 400(moonshot `tool_call_id is not found` / Anthropic
         // `unexpected tool_use_id` / `tool_use ids were found without tool_result`
         // / OpenAI 系 wording)→ 组合结构修复重发,always-on。

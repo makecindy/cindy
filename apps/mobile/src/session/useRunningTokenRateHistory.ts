@@ -56,6 +56,8 @@ export function useRunningTokenRateHistory(input: {
           : startedAt === null
             ? { ...cached, baseline: null, lastReport: null, latestRate: null }
             : cached;
+      // The host's own measurement stands on its own: the usage-paired timing flag only
+      // describes the legacy counters (a Claude turn with subagent output clears it).
       const recorded = tokenSpeed && generationReliable
         ? recordTokenSpeed(seeded, { startedAt, speed: tokenSpeed })
         : recordRunningTokenRate(seeded, {
@@ -90,17 +92,16 @@ export function useRunningTokenRateHistory(input: {
     );
     return () => clearTimeout(timer);
   }, [history.latestSampleAt, history.latestRate]);
-  const visibleHistory =
-    tokenSpeed?.streaming === false ||
-    history.latestSampleAt === undefined ||
-    Math.max(now, Date.now()) - history.latestSampleAt >= RATE_SAMPLE_FRESH_MS
-      ? { ...history, latestRate: null }
-      : history;
+  // The panel keeps the turn's last reading as long as the turn is shown; only the
+  // status pill treats it as live, and only for a minute after it was taken.
   const displayed =
     startedAt === null || history.startedAt === startedAt
-      ? visibleHistory
+      ? history
       : { ...history, startedAt, baseline: null, latestRate: null };
-  return streaming && startedAt === null
+  const current = streaming && startedAt === null
     ? { ...displayed, baseline: null, lastReport: null, latestRate: null }
     : displayed;
+  const latestRateFresh = current.latestRate !== null && history.latestSampleAt !== undefined &&
+    Math.max(now, Date.now()) - history.latestSampleAt < RATE_SAMPLE_FRESH_MS;
+  return { ...current, latestRateFresh };
 }

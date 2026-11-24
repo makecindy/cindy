@@ -13,14 +13,27 @@ export const DEVICE_LINK_INVOKE = {
   SET_KEEP_AWAKE: 'device-link:set-keep-awake',
   /** 控制端本地偏好:切换是否主动控制某个目标设备 */
   SET_DEVICE_CONTROL_ENABLED: 'device-link:set-device-control-enabled',
+  CLOUD_COMPUTER_ENTRY: 'device-link:cloud-computer-entry',
   /** 同账号设备列表(REST 经 main 转发,带 online/busy/开关三态) */
   LIST_DEVICES: 'device-link:list-devices',
   /** 远程连接拓扑:本机连接路径与 RTT 快照(纯本机读,不进隧道) */
   GET_PEER_LINKS: 'device-link:get-peer-links',
+  /** 远程连接拓扑:设置本机到指定设备的 Agent-Net 线路偏好(auto / direct / relay,纯本机持久化并通知对端) */
+  SET_PEER_PATH_PREFERENCE: 'device-link:set-peer-path-preference',
   /** 重命名设备 */
   RENAME_DEVICE: 'device-link:rename-device',
   /** 删除离线设备档案 */
   DELETE_DEVICE: 'device-link:delete-device',
+  /**
+   * 本机被移除后「重新加入」(官方网络,只作用于本机)。不进 device-link 隧道 allowlist:
+   * 被移除的设备连不上别人,别的设备也不该替它决定。
+   */
+  REJOIN: 'device-link:rejoin',
+  /**
+   * 设备身份冲突时，用户确认给这台电脑换一个新身份并重启 Cindy。
+   * 只在已确认冲突时接受；返回前已写入新身份，随后应用重启。不进 device-link 隧道 allowlist。
+   */
+  REPLACE_DEVICE_IDENTITY: 'device-link:replace-device-identity',
   // —— 控制端:远程会话视图用 ——
   /** 与目标设备建立控制链路(进入远程设备视图时) */
   OPEN_LINK: 'device-link:open-link',
@@ -108,6 +121,8 @@ export const DEVICE_LINK_PUSH = {
   KEEP_AWAKE_CHANGED: 'device-link:keep-awake-changed',
   /** 同机单持有者仲裁角色变化。payload: { standby: boolean }。 */
   OWNERSHIP_CHANGED: 'device-link:ownership-changed',
+  /** 另一台电脑在用本机设备身份的确认 / 撤销。payload: { conflict: DeviceLinkIdentityConflict | null }。 */
+  IDENTITY_CONFLICT: 'device-link:identity-conflict',
   /**
    * 控制端:某目标设备的「无响应」熔断状态翻转(连续 invoke 超时判定,弱网 / 对端
    * 卡死;presence 可能仍显示在线)。payload: { deviceId, unresponsive: boolean }。
@@ -153,6 +168,22 @@ export interface DeviceLinkDeviceInfo {
   modelLabel?: string;
 }
 
+/**
+ * 另一台电脑在用本机设备身份(两台电脑硬件身份相同，常见于同一系统镜像装机)。
+ * 本地判定，见 main/device-link/deviceIdentityConflict.ts。
+ */
+export interface DeviceLinkIdentityConflict {
+  /** 另一台电脑上报的名字(它的主机名)。 */
+  otherDeviceName: string;
+  /** unix ms */
+  detectedAt: number;
+  /**
+   * 不能在这台电脑上一键换身份的原因：正在使用自建中转时，中转上的设备登记跟着旧身份，
+   * 换身份需要重新加入中转；null = 可以换。
+   */
+  replaceBlockedBy: 'self-hosted-relay' | null;
+}
+
 /** GET_STATE 返回值 */
 export interface DeviceLinkState {
   remoteControlEnabled: boolean;
@@ -168,6 +199,8 @@ export interface DeviceLinkState {
   connectionIssue: DeviceLinkConnectionIssue | null;
   /** 本机另一个 Cindy 实例持有 device-link,当前实例处于待命。 */
   standby: boolean;
+  /** 已确认另一台电脑在用本机设备身份(变化走 IDENTITY_CONFLICT push)；缺省等同 null。 */
+  identityConflict?: DeviceLinkIdentityConflict | null;
   /** 当前正在控制本机的控制端(被控端可见性初值;后续变化走 CONTROLLED_STATE push) */
   controlledBy: ControlledByDevice[];
   /** 被撤销访问权限的控制端 deviceId 列表(逐设备黑名单,被控端 UI 渲染「已撤销」用) */
@@ -216,15 +249,33 @@ export interface DeviceLinkPeerLinkView {
   receivedAgoMs: number | null;
 }
 
+export type DeviceLinkPeerPathPreference = 'auto' | 'direct' | 'relay';
+
 /** 同账号 Agent-Net 传输路径，可在打开远程控制链路之前就绪。 */
 export interface DeviceLinkAgentNetPeerRouteView {
   deviceId: string;
   path: DeviceLinkPeerPath | 'connecting';
   rttMs: number | null;
+  /** 最近测得的直连往返(ms);未测得或不可达为 null。 */
+  directRttMs?: number | null;
+  /** 最近测得的经中转往返(ms);未测得或无中转为 null。 */
+  relayRttMs?: number | null;
+  /** 本机对该设备的选路偏好:auto(默认,自动选最快)/ direct / relay。 */
+  pathPreference?: DeviceLinkPeerPathPreference;
 }
+
+export interface LinkTrafficBytes {
+  sent: number;
+  received: number;
+}
+
+export type LinkTrafficTotals = Record<'agent-net' | 'device-link', LinkTrafficBytes>;
+export type LinkTrafficSnapshot = Record<'last5m' | 'lastHour' | 'lastDay', LinkTrafficTotals>;
 
 /** GET_PEER_LINKS 返回与 PEER_LINKS_CHANGED 推送的全量快照 */
 export interface DeviceLinkPeerLinksSnapshot {
+  /** Local transport counters for this account on this computer. Never sent to peers. */
+  traffic?: LinkTrafficSnapshot;
   links: DeviceLinkPeerLinkView[];
   agentNetRoutes?: DeviceLinkAgentNetPeerRouteView[];
   relayProtocol?: 'agent-net' | 'device-link';

@@ -1,0 +1,1388 @@
+/**
+ * Generic ACP v1 engine, driven through its public entry `openAcpSession` against
+ * an in-memory ACP agent (no subprocess, no network).
+ *
+ * 测试价值
+ * - 生产入口与可观察结果：openAcpSession / AcpSession 的公开方法；断言 Cindy 看到的
+ *   AgentEvent 序列，以及发回 Agent 的 JSON-RPC（权限选项、session/cancel、resume 方法）。
+ * - 规则依据：docs/plans/acp-plugin-bridge.md「一、maker-core：通用 ACP 引擎」的行为映射表；
+ *   ACP v1 规范（cancel 后对未决权限请求回 cancelled；每会话同时一个 prompt；load 回放不重复展示）。
+ * - 现有覆盖缺口：新模块，无既有覆盖。
+ * - 最小失败输入：见各用例（例如等待权限确认时 abort、对端进程中途退出、仅支持 loadSession 的恢复）。
+ * - tier：unit（进程内假对端，无真实等待；宽限期用 fake timers）。
+ */
+
+import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { AgentEvent, InteractionDecision, InteractionRequest } from '../../types/events.js';
+import { AcpLineDecoder, AcpLineTooLongError, type AcpLineTransport, type AcpTransportClosed } from './line-transport.js';
+import {
+  AcpAccountError,
+  AcpAuthRequiredError,
+  AcpResumeUnavailableError,
+  openAcpSession,
+  type AcpSession,
+  type OpenAcpSessionOptions,
+} from './session.js';
+import type { AcpRecord } from './protocol.js';
+import { AcpAgent, acpMcpServersFromBridge } from './acp-agent.js';
+import { AgentStartupCleanupPendingError, AgentStartupStoppedError } from '../base-agent.js';
+import { NATIVE_SUBSCRIPTION_ACCOUNT } from '../../interfaces/auth-adapter.js';
+import type { Logger } from '../../interfaces/logger.js';
+import { Session } from '../../session.js';
+
+type Handler = (params: AcpRecord) => unknown;
+
+interface FakeAgentOptions {
+  agentCapabilities?: AcpRecord;
+  authMethods?: AcpRecord[];
+  configOptions?: AcpRecord[];
+  handlers?: Record<string, Handler>;
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+}
+
+/** Agent side of an ACP connection, scripted by each test. */
+function createFakeAgent(options: FakeAgentOptions = {}) {
+  const lineListeners = new Set<(line: string) => void>();
+  const closeListeners = new Set<(info: AcpTransportClosed) => void>();
+  const sent: AcpRecord[] = [];
+  const pendingAgentRequests = new Map<number, (result: AcpRecord) => void>();
+  const prompts: Array<{ params: AcpRecord; settle: ReturnType<typeof deferred<AcpRecord>> }> = [];
+  let nextAgentRequestId = 1000;
+  let closed = false;
+  let closedByClient = false;
+
+  const toClient = (message: AcpRecord): void => {
+    const line = JSON.stringify(message);
+    for (const listener of [...lineListeners]) listener(line);
+  };
+
+  const handlers: Record<string, Handler> = {
+    initialize: () => ({
+      protocolVersion: 1,
+      agentCapabilities: options.agentCapabilities ?? {},
+      authMethods: options.authMethods ?? [],
+    }),
+    'session/new': () => ({ sessionId: 'sess-1', configOptions: options.configOptions ?? [] }),
+    'session/prompt': (params) => {
+      const settle = deferred<AcpRecord>();
+      prompts.push({ params, settle });
+      return settle.promise;
+    },
+    'session/set_config_option': () => ({ configOptions: options.configOptions ?? [] }),
+    ...options.handlers,
+  };
+
+  const receive = async (message: AcpRecord): Promise<void> => {
+    if (typeof message.method === 'string') {
+      if (message.id === undefined) return; // notification (session/cancel)
+      const handler = handlers[message.method];
+      try {
+        if (!handler) throw Object.assign(new Error('Method not found'), { code: -32601 });
+        const result = await handler((message.params ?? {}) as AcpRecord);
+        toClient({ jsonrpc: '2.0', id: message.id, result });
+      } catch (error) {
+        const code = typeof (error as { code?: unknown }).code === 'number' ? (error as { code: number }).code : -32603;
+        const data = (error as { data?: unknown }).data;
+        toClient({ jsonrpc: '2.0', id: message.id, error: { code, message: (error as Error).message, ...(data !== undefined ? { data } : {}) } });
+      }
+      return;
+    }
+    if (typeof message.id === 'number') pendingAgentRequests.get(message.id)?.((message.result ?? {}) as AcpRecord);
+  };
+
+  const transport: AcpLineTransport = {
+    write(line) {
+      if (closed) throw new Error('closed');
+      const message = JSON.parse(line) as AcpRecord;
+      sent.push(message);
+      queueMicrotask(() => { void receive(message); });
+    },
+    onLine(listener) {
+      lineListeners.add(listener);
+      return () => lineListeners.delete(listener);
+    },
+    onClose(listener) {
+      closeListeners.add(listener);
+      return () => closeListeners.delete(listener);
+    },
+    async close() {
+      closed = true;
+      closedByClient = true;
+    },
+  };
+
+  return {
+    transport,
+    sent,
+    prompts,
+    get closedByClient() { return closedByClient; },
+    methods: () => sent.filter((message) => typeof message.method === 'string').map((message) => message.method),
+    update(update: AcpRecord, sessionId = 'sess-1') {
+      toClient({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update } });
+    },
+    rawLine(line: string) {
+      for (const listener of [...lineListeners]) listener(line);
+    },
+    requestPermission(params: AcpRecord): Promise<AcpRecord> {
+      const id = nextAgentRequestId++;
+      return new Promise((resolve) => {
+        pendingAgentRequests.set(id, resolve);
+        toClient({ jsonrpc: '2.0', id, method: 'session/request_permission', params: { sessionId: 'sess-1', ...params } });
+      });
+    },
+    exit() {
+      closed = true;
+      for (const listener of [...closeListeners]) listener({ reason: 'peer-exited', detail: 'exit code 1' });
+    },
+  };
+}
+
+type FakeAgent = ReturnType<typeof createFakeAgent>;
+
+async function open(agent: FakeAgent, extra: Partial<OpenAcpSessionOptions> = {}): Promise<{ session: AcpSession; events: AgentEvent[]; ended: Promise<void> }> {
+  const session = await openAcpSession({
+    transport: agent.transport,
+    cwd: '/work/project',
+    clientInfo: { name: 'cindy', version: 'test' },
+    ...extra,
+  });
+  const events: AgentEvent[] = [];
+  const ended = (async () => { for await (const event of session.events()) events.push(event); })();
+  return { session, events, ended };
+}
+
+// Absolute on every platform; never read (images are injected through readFile).
+const SHOT = resolve('attachments', 'shot.png');
+const NOTES = resolve('attachments', 'notes.md');
+
+const PERMISSION_OPTIONS = [
+  { optionId: 'yes', name: 'Allow', kind: 'allow_once' },
+  { optionId: 'always', name: 'Always allow', kind: 'allow_always' },
+  { optionId: 'no', name: 'Reject', kind: 'reject_once' },
+];
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe('ACP line decoder (host stdout chunks)', () => {
+  it('splits CRLF lines, joins UTF-8 split across chunks, skips blanks and flushes the tail', () => {
+    const lines: string[] = [];
+    const decoder = new AcpLineDecoder((line) => lines.push(line));
+    const bytes = new TextEncoder().encode('{"a":"你好"}\r\n\n{"b":1}\n{"c":2}');
+    decoder.push(bytes.slice(0, 8)); // cuts inside a multi-byte character
+    decoder.push(bytes.slice(8));
+    decoder.flush();
+    expect(lines).toEqual(['{"a":"你好"}', '{"b":1}', '{"c":2}']);
+  });
+
+  it('rejects a runaway line instead of buffering without bound', () => {
+    const decoder = new AcpLineDecoder(() => {}, 8);
+    expect(() => decoder.push('0123456789')).toThrow(AcpLineTooLongError);
+  });
+});
+
+describe('openAcpSession handshake', () => {
+  it('negotiates v1 without client fs/terminal and drops MCP transports the agent did not advertise', async () => {
+    const agent = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: false } } });
+    const warn = vi.fn();
+    const logger: Logger = {
+      trace: () => {},
+      debug: () => {},
+      info: () => {},
+      warn,
+      error: () => {},
+      fatal: () => {},
+      child: () => logger,
+    };
+    const { session } = await open(agent, {
+      logger,
+      mcpServers: [
+        { type: 'http', name: 'cindy-tools', url: 'http://127.0.0.1:1/mcp', headers: [] },
+        { name: 'local', command: '/bin/tool', args: [], env: [] },
+      ],
+    });
+    const [initialize, sessionNew] = agent.sent;
+    expect(initialize).toMatchObject({
+      method: 'initialize',
+      params: { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false } },
+    });
+    expect(sessionNew).toMatchObject({ method: 'session/new', params: { cwd: '/work/project' } });
+    expect((sessionNew.params as AcpRecord).mcpServers).toEqual([{ name: 'local', command: '/bin/tool', args: [], env: [] }]);
+    expect(session.droppedMcpServers).toEqual(['cindy-tools']);
+    expect(warn).toHaveBeenCalledWith(
+      'acp: dropping MCP servers whose transport the agent did not advertise',
+      { dropped: ['cindy-tools'], mcpCapabilities: { http: false, sse: false } },
+    );
+    expect(session.id).toBe('sess-1');
+    expect(session.resumeOutcome).toBe('new');
+  });
+
+  it('maps auth-required to a typed error and closes the endpoint', async () => {
+    const agent = createFakeAgent({
+      authMethods: [{ id: 'login', name: 'Sign in' }],
+      handlers: { 'session/new': () => { throw Object.assign(new Error('auth'), { code: -32000 }); } },
+    });
+    const failure = await openAcpSession({ transport: agent.transport, cwd: '/w', clientInfo: { name: 'c', version: '1' } })
+      .catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(AcpAuthRequiredError);
+    expect((failure as AcpAuthRequiredError).authMethods).toEqual([{ id: 'login', name: 'Sign in' }]);
+    expect(agent.closedByClient).toBe(true);
+  });
+
+  it.each([
+    { name: 'session/resume when advertised', caps: { sessionCapabilities: { resume: {} }, loadSession: true }, method: 'session/resume', outcome: 'resumed' },
+    { name: 'session/load as fallback', caps: { loadSession: true }, method: 'session/load', outcome: 'loaded' },
+  ])('resumes with $name and never replays old history as new output', async ({ caps, method, outcome }) => {
+    const agent = createFakeAgent({
+      agentCapabilities: caps,
+      handlers: {
+        [method]: () => {
+          // A load replays history before answering; Cindy already has it on screen.
+          agent.update({ sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'old question' } }, 'old-1');
+          agent.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'old answer' } }, 'old-1');
+          return {};
+        },
+      },
+    });
+    const { session, events } = await open(agent, { resumeSessionId: 'old-1' });
+    expect(agent.methods()).toEqual(['initialize', method]);
+    expect(session.id).toBe('old-1');
+    expect(session.resumeOutcome).toBe(outcome);
+    await Promise.resolve();
+    expect(events).toEqual([]);
+  });
+
+  // 引擎账号(plugin-harnesses.md 引擎账号，2026-11-23)：入口把账号原因写在 error.data._meta.cindy 里，Cindy 据此冷却账号、
+  // 换号；消息只用 Cindy 自己的稳定码，不带 Agent 原文。最小失败输入：session/new 报额度用完并给重置时间。
+  it('turns an account classification on session/new into an account error the host can switch on', async () => {
+    const agent = createFakeAgent({
+      handlers: { 'session/new': () => { throw Object.assign(new Error('quota'), { code: -32603, data: { _meta: { cindy: { kind: 'usage-limit', resetsAt: 1_900_000_000_000 } } } }); } },
+    });
+    const failure = await openAcpSession({ transport: agent.transport, cwd: '/w', clientInfo: { name: 'c', version: '1' } })
+      .catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(AcpAccountError);
+    expect((failure as AcpAccountError).message).toMatch(/^\[SUBSCRIPTION_ACCOUNT_LIMITED\]/);
+    expect((failure as AcpAccountError).signals).toEqual({ usageLimit: true, usageResetAt: 1_900_000_000_000 });
+  });
+
+  it('refuses to silently start fresh when the agent cannot resume', async () => {
+    const agent = createFakeAgent();
+    await expect(open(agent, { resumeSessionId: 'old-1' })).rejects.toBeInstanceOf(AcpResumeUnavailableError);
+    expect(agent.methods()).toEqual(['initialize']);
+    expect(agent.closedByClient).toBe(true);
+  });
+});
+
+describe('AcpSession turns', () => {
+  it('streams thinking, text segments and tool calls in the shapes the built-in engines use', async () => {
+    const agent = createFakeAgent();
+    const { session, events } = await open(agent);
+    await session.send({ type: 'user', content: 'fix the bug' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    expect(agent.prompts[0]!.params).toEqual({ sessionId: 'sess-1', prompt: [{ type: 'text', text: 'fix the bug' }] });
+
+    agent.rawLine('Loading model… (banner printed on stdout)');
+    agent.update({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'Look at ' } });
+    agent.update({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'main.ts' } });
+    agent.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Editing.' } });
+    agent.update({ sessionUpdate: 'tool_call', toolCallId: 't1', title: 'Edit main.ts', kind: 'edit', status: 'pending' });
+    agent.update({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 't1',
+      status: 'in_progress',
+      rawInput: { path: 'main.ts' },
+    });
+    agent.update({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 't1',
+      status: 'completed',
+      rawInput: { path: 'main.ts' },
+      content: [{ type: 'diff', path: 'main.ts', oldText: 'a\n', newText: 'b\n' }],
+    });
+    agent.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Done.' } });
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await vi.waitFor(() => expect(events.at(-1)?.type).toBe('done'));
+
+    const summary = events.map((event) => {
+      const data = event.data as AcpRecord;
+      return `${event.type}:${String(data.stage ?? data.summary ?? (data.isFinal === true ? 'final' : data.isFinal === false ? 'delta' : ''))}`;
+    });
+    expect(summary).toEqual([
+      'status:',
+      'thinking:start', 'thinking:delta', 'thinking:delta', 'thinking:final',
+      'text:delta', 'text:final',
+      'tool_use:', 'tool_use:', 'tool_result_full:', 'tool_result:done',
+      'text:delta', 'text:final',
+      'done:',
+    ]);
+    expect(events.find((event) => event.type === 'thinking' && (event.data as AcpRecord).stage === 'final')?.data)
+      .toMatchObject({ text: 'Look at main.ts' });
+    expect(events.filter((event) => event.type === 'tool_use').map((event) => event.data)).toMatchObject([
+      { toolUseId: 't1', toolName: 'Edit main.ts', input: {} },
+      { toolUseId: 't1', toolName: 'Edit main.ts', input: { path: 'main.ts' }, acpInputPatch: true },
+    ]);
+    expect((events.find((event) => event.type === 'tool_result_full')?.data as AcpRecord).fullText).toContain('-a\n+b');
+    expect(events.at(-1)?.data).toMatchObject({ status: 'completed', result: 'Done.', stopReason: 'end_turn' });
+    expect(events.every((event) => event.turnScope === undefined)).toBe(true);
+  });
+
+  // 2026-11-23: plugin engine usage pages counted turns but showed no tokens, because the per-turn
+  // `usage` of the prompt result was dropped. Inputs are what Antigravity (agy 1.5.15) returned for two
+  // turns (input excludes the cache), the same counts in the input-includes-cache form, and a result
+  // without usage. Production entry: AcpSession send → done event; unit, in-process fake agent.
+  it.each([
+    ['input excludes the cache (agy turn 1)',
+      { inputTokens: 11516, outputTokens: 27, cachedReadTokens: 0, cachedWriteTokens: 0, thoughtTokens: 25, totalTokens: 11543 },
+      { inputTokens: 11516, outputTokens: 27, cacheReadTokens: 0, cacheCreationTokens: 0 }],
+    ['input excludes the cache (agy turn 2)',
+      { inputTokens: 2161, outputTokens: 15, cachedReadTokens: 9459, cachedWriteTokens: 0, thoughtTokens: 12, totalTokens: 11635 },
+      { inputTokens: 2161, outputTokens: 15, cacheReadTokens: 9459, cacheCreationTokens: 0 }],
+    ['input includes the cache',
+      { inputTokens: 11620, outputTokens: 15, cachedReadTokens: 9459, totalTokens: 11635 },
+      { inputTokens: 2161, outputTokens: 15, cacheReadTokens: 9459, cacheCreationTokens: 0 }],
+    ['no usage reported', undefined, undefined],
+  ])('reports the turn tokens from the prompt result: %s', async (_name, reported, expected) => {
+    const agent = createFakeAgent();
+    const { session, events } = await open(agent);
+    await session.send({ type: 'user', content: 'hi' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn', ...(reported ? { usage: reported } : {}) });
+    await vi.waitFor(() => expect(events.at(-1)?.type).toBe('done'));
+    expect((events.at(-1)?.data as AcpRecord).usage).toEqual(expected);
+  });
+
+  it('runs one prompt at a time, in send order even when the first message carries a slow image', async () => {
+    const agent = createFakeAgent({ agentCapabilities: { promptCapabilities: { image: true } } });
+    const image = deferred<Uint8Array>();
+    const { session, events } = await open(agent, { readFile: () => image.promise });
+    const first = session.send({ type: 'user', content: [{ type: 'image', path: SHOT }, { type: 'text', text: 'one' }] });
+    const second = session.send({ type: 'user', content: 'two' });
+    image.resolve(new Uint8Array([1, 2, 3]));
+    await Promise.all([first, second]);
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    expect(agent.prompts[0]!.params.prompt).toEqual([
+      { type: 'image', data: 'AQID', mimeType: 'image/png' },
+      { type: 'text', text: 'one' },
+    ]);
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(2));
+    expect(agent.prompts[1]!.params.prompt).toEqual([{ type: 'text', text: 'two' }]);
+    expect(events.filter((event) => event.type === 'done')).toHaveLength(1);
+  });
+
+  // 协作 Worker 的角色说明：插件引擎不收 Cindy system prompt，只能随第一条消息送达（docs/plans/acp-plugin-bridge.md 第二期「协作」）。
+  // 缺口：未覆盖时说明可能每条都带（浪费上下文）或恢复后重复；最小失败输入：新会话连发两条、恢复后发一条。
+  it('sends the host briefing once, ahead of the first message of a new session only', async () => {
+    const agent = createFakeAgent();
+    const { session } = await open(agent, { briefing: 'You are a Worker.' });
+    await session.send({ type: 'user', content: 'one' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    expect(agent.prompts[0]!.params.prompt).toEqual([
+      { type: 'text', text: 'You are a Worker.' },
+      { type: 'text', text: 'one' },
+    ]);
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await session.send({ type: 'user', content: 'two' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(2));
+    expect(agent.prompts[1]!.params.prompt).toEqual([{ type: 'text', text: 'two' }]);
+  });
+
+  it('does not repeat the briefing in a resumed session, which already has it in its history', async () => {
+    const agent = createFakeAgent({ agentCapabilities: { loadSession: true }, handlers: { 'session/load': () => ({}) } });
+    const { session } = await open(agent, { resumeSessionId: 'old-1', briefing: 'You are a Worker.' });
+    await session.send({ type: 'user', content: 'next' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    expect(agent.prompts[0]!.params.prompt).toEqual([{ type: 'text', text: 'next' }]);
+  });
+
+  it('passes attachments as resource links when the agent does not take images', async () => {
+    const agent = createFakeAgent();
+    const { session } = await open(agent);
+    await session.send({ type: 'user', content: [{ type: 'image', path: SHOT }, { type: 'file', path: NOTES }] });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    expect(agent.prompts[0]!.params.prompt).toEqual([
+      { type: 'resource_link', uri: pathToFileURL(SHOT).href, name: 'shot.png', mimeType: 'image/png' },
+      { type: 'resource_link', uri: pathToFileURL(NOTES).href, name: 'notes.md' },
+    ]);
+  });
+
+  it('marks agent output produced outside a prompt as background work', async () => {
+    const agent = createFakeAgent();
+    const { events } = await open(agent);
+    agent.update({ sessionUpdate: 'tool_call', toolCallId: 'bg', title: 'Subagent finished', status: 'completed' });
+    await vi.waitFor(() => expect(events).toHaveLength(3));
+    expect(events.map((event) => [event.type, event.turnScope])).toEqual([
+      ['tool_use', 'background'], ['tool_result_full', 'background'], ['tool_result', 'background'],
+    ]);
+  });
+
+  // Regression (Antigravity, 2026-11-20): the agent answered the prompt while its `git commit`
+  // was still running and reported the result 21 s later. The call used to be marked done at
+  // the end of the answer, and the real result arrived as a second card nobody saw as running.
+  it('keeps a call the agent is still running open past its answer and settles it with the later result', async () => {
+    let now = 1_000;
+    const agent = createFakeAgent();
+    const { session, events } = await open(agent, { now: () => now });
+    await session.send({ type: 'user', content: 'commit and open a PR' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    agent.update({ sessionUpdate: 'tool_call', toolCallId: 'commit', title: 'git commit', status: 'in_progress' });
+    agent.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Committing, then pushing.' } });
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await vi.waitFor(() => expect(events.at(-1)?.type).toBe('done'));
+    expect(events.some((event) => event.type === 'tool_result')).toBe(false);
+    await expect(session.hasLiveBackgroundWork()).resolves.toBe(true);
+
+    agent.update({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'commit',
+      status: 'completed',
+      content: [{ type: 'content', content: { type: 'text', text: '[fix 79a580a] fix' } }],
+    });
+    await vi.waitFor(() => expect(events.at(-1)?.type).toBe('tool_result'));
+    expect(events.filter((event) => event.type === 'tool_use')).toHaveLength(1);
+    expect(events.slice(-2).map((event) => [event.type, event.turnScope, (event.data as AcpRecord).summary]))
+      .toEqual([['tool_result_full', 'background', undefined], ['tool_result', 'background', 'done']]);
+    // Background output keeps the runtime busy for the quiet window, then it is idle.
+    await expect(session.hasLiveBackgroundWork()).resolves.toBe(true);
+    now += 30_001;
+    await expect(session.hasLiveBackgroundWork()).resolves.toBe(false);
+  });
+
+  // Live check against Antigravity (2026-11-20): after its command finished it wrote
+  // "The content of done.txt is: finished" between turns. Nothing ever closed that text, so it
+  // streamed forever and was never saved (no between-turn reply of the agent was in local history).
+  it('closes a reply the agent writes between turns once it pauses, so it is kept like any reply', async () => {
+    vi.useFakeTimers();
+    const agent = createFakeAgent();
+    const { events } = await open(agent);
+    agent.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'The content is: ' } });
+    agent.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '`finished`' } });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(events.map((event) => [event.type, (event.data as AcpRecord).isFinal])).toEqual([['text', false], ['text', false]]);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(events.at(-1)).toMatchObject({
+      type: 'text',
+      turnScope: 'background',
+      data: { text: 'The content is: `finished`', isFinal: true, isFullText: true },
+    });
+  });
+
+  // PR #11776 review: progress on a running call changes nothing on screen, so it produced no
+  // event, never restarted the quiet bound, and a command still reporting progress was marked done.
+  it('treats progress on a call left running as activity, so the quiet bound restarts', async () => {
+    vi.useFakeTimers();
+    const agent = createFakeAgent();
+    const { session, events } = await open(agent, { openToolQuietCapMs: 60_000 });
+    await session.send({ type: 'user', content: 'build it' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    agent.update({ sessionUpdate: 'tool_call', toolCallId: 'build', title: 'Build', status: 'in_progress' });
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await vi.waitFor(() => expect(events.at(-1)?.type).toBe('done'));
+    for (let i = 0; i < 3; i += 1) {
+      await vi.advanceTimersByTimeAsync(40_000);
+      agent.update({ sessionUpdate: 'tool_call_update', toolCallId: 'build', status: 'in_progress' });
+    }
+    await vi.advanceTimersByTimeAsync(40_000);
+    expect(events.some((event) => event.type === 'tool_result')).toBe(false);
+    await expect(session.hasLiveBackgroundWork()).resolves.toBe(true);
+  });
+
+  it('bounds calls left open between turns: settled after the quiet cap, interrupted when the agent exits', async () => {
+    vi.useFakeTimers();
+    const quiet = createFakeAgent();
+    const capped = await open(quiet, { openToolQuietCapMs: 60_000 });
+    await capped.session.send({ type: 'user', content: 'wait for CI' });
+    await vi.waitFor(() => expect(quiet.prompts).toHaveLength(1));
+    quiet.update({ sessionUpdate: 'tool_call', toolCallId: 'wait', title: 'Run schedule', status: 'in_progress' });
+    quiet.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await vi.waitFor(() => expect(capped.events.at(-1)?.type).toBe('done'));
+    // Stopping while the agent works between turns cancels that work (agents without a prompt in flight ignore it).
+    await capped.session.abort();
+    expect(quiet.methods()).toContain('session/cancel');
+    await vi.advanceTimersByTimeAsync(59_000);
+    expect(capped.events.at(-1)?.type).toBe('done');
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(capped.events.at(-1)).toMatchObject({ type: 'tool_result', turnScope: 'background', data: { summary: 'done' } });
+
+    const exiting = createFakeAgent();
+    const live = await open(exiting);
+    await live.session.send({ type: 'user', content: 'deploy' });
+    await vi.waitFor(() => expect(exiting.prompts).toHaveLength(1));
+    exiting.update({ sessionUpdate: 'tool_call', toolCallId: 'deploy', title: 'Deploy', status: 'in_progress' });
+    exiting.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await vi.waitFor(() => expect(live.events.at(-1)?.type).toBe('done'));
+    exiting.exit();
+    await live.ended;
+    expect(live.events.slice(-2)).toMatchObject([
+      { type: 'tool_result_full', turnScope: 'background', data: { isError: true } },
+      { type: 'tool_result', turnScope: 'background', data: { summary: 'failed' } },
+    ]);
+  });
+});
+
+// 插话：ACP v1 没有同轮输入，Agent 在 initialize 顶层 `_meta.steering.supported` 声明
+// `_session/steering` 扩展（claude-agent-acp / codex-acp 等）时才走同轮注入。
+// 缺口：此前插件引擎一律 sameTurnSteer 不支持，用户插话只能报错或等下一轮。
+// 最小失败输入：声明了扩展的 Agent 运行中插话一条；Agent 回 promptRequired / 不认识方法 / 不回答。
+describe('AcpSession same-turn steering', () => {
+  const steeringInit = (): AcpRecord => ({ protocolVersion: 1, agentCapabilities: {}, authMethods: [], _meta: { steering: { supported: true } } });
+  const finalTexts = (events: AgentEvent[]): unknown[] => events
+    .filter((event) => event.type === 'text' && (event.data as AcpRecord).isFinal === true)
+    .map((event) => (event.data as AcpRecord).text);
+
+  it('starts a new reply segment when the steer acknowledgement and text share a stdout chunk', async () => {
+    const agent = createFakeAgent({ handlers: { initialize: steeringInit, '_session/steering': () => new Promise(() => {}) } });
+    const { session, events } = await open(agent);
+    expect(session.capabilities.sameTurnSteer.supported).toBe(true);
+    await session.send({ type: 'user', content: 'fix the bug' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    agent.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Editing a.ts.' } });
+
+    const steer = session.steer({ type: 'user', content: 'use b.ts instead' });
+    await vi.waitFor(() => expect(agent.methods()).toContain('_session/steering'));
+    const request = agent.sent.find((message) => message.method === '_session/steering')!;
+    expect(agent.sent.filter((message) => message.method === '_session/steering').map((message) => message.params)).toEqual([{
+      sessionId: 'sess-1',
+      prompt: [{ type: 'text', text: 'use b.ts instead' }],
+      _meta: { steering: { idleBehavior: 'promptRequired' } },
+    }]);
+    const chunk = [
+      { jsonrpc: '2.0', id: request.id, result: { outcome: 'injected' } },
+      { jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'sess-1', update: {
+        sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Switching to b.ts.' },
+      } } },
+    ].map((message) => JSON.stringify(message) + '\n').join('');
+    new AcpLineDecoder(agent.rawLine).push(new TextEncoder().encode(chunk));
+    await steer;
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await vi.waitFor(() => expect(events.at(-1)?.type).toBe('done'));
+
+    expect(agent.prompts).toHaveLength(1);
+    expect(finalTexts(events)).toEqual(['Editing a.ts.', 'Switching to b.ts.']);
+    expect(events.filter((event) => event.type === 'done')).toHaveLength(1);
+  });
+
+  it('keeps an agent without the extension as before: the message waits for the next turn', async () => {
+    const agent = createFakeAgent();
+    const { session } = await open(agent);
+    expect(session.capabilities.sameTurnSteer.supported).toBe(false);
+    await session.send({ type: 'user', content: 'one' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    await session.steer({ type: 'user', content: 'two' });
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(2));
+    expect(agent.prompts[1]!.params.prompt).toEqual([{ type: 'text', text: 'two' }]);
+    expect(agent.methods()).not.toContain('_session/steering');
+  });
+
+  it.each([
+    // The agent's turn already ended: the host sends the message as the next turn instead.
+    { name: 'promptRequired', handler: () => ({ outcome: 'promptRequired', reason: 'noRunningTurn' }), error: /no active turn/i, stillOffered: true },
+    // Advertised but not handled: this message fails once, later ones wait for the next turn.
+    { name: 'method not found', handler: undefined, error: /-32601/, stillOffered: false },
+    // Sent without an answer: the agent may have it, so the host must not send it again.
+    { name: 'no answer', handler: () => new Promise(() => {}), error: /delivery uncertain/, stillOffered: true },
+  ])('reports $name to the host so the message is neither lost nor sent twice', async ({ handler, error, stillOffered }) => {
+    const agent = createFakeAgent({ handlers: { initialize: steeringInit, ...(handler ? { '_session/steering': handler } : {}) } });
+    const { session } = await open(agent, { requestTimeoutMs: 20 });
+    const offered: boolean[] = [];
+    session.onCapabilitiesChange((capabilities) => offered.push(capabilities.sameTurnSteer.supported));
+    await session.send({ type: 'user', content: 'one' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+
+    await expect(session.steer({ type: 'user', content: 'two' })).rejects.toThrow(error);
+    expect(session.capabilities.sameTurnSteer.supported).toBe(stillOffered);
+    expect(offered).toEqual(stillOffered ? [] : [false]);
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await Promise.resolve();
+    expect(agent.prompts).toHaveLength(1);
+  });
+});
+
+describe('AcpSession permissions', () => {
+  it.each([
+    { name: 'allow once', mode: 'ask' as const, decision: { kind: 'permission', behavior: 'allow' }, optionId: 'yes', asked: true },
+    { name: 'keeps Cindy session consent scoped to the current ACP request', mode: 'ask' as const, decision: { kind: 'permission', behavior: 'allow', permissionUpdates: [{ destination: 'session' }] }, optionId: 'yes', asked: true },
+    { name: 'deny', mode: 'ask' as const, decision: { kind: 'permission', behavior: 'deny' }, optionId: 'no', asked: true },
+    { name: 'full access approves without asking', mode: 'bypassPermissions' as const, decision: null, optionId: 'yes', asked: false },
+    { name: 'unsupported mode falls back to asking', mode: 'acceptEdits' as const, decision: { kind: 'permission', behavior: 'deny' }, optionId: 'no', asked: true },
+  ])('$name', async ({ mode, decision, optionId, asked }) => {
+    const agent = createFakeAgent();
+    const { session } = await open(agent, { permissionMode: mode });
+    const seen: InteractionRequest[] = [];
+    session.setInteractionResolver(async (request) => {
+      seen.push(request);
+      return decision as InteractionDecision;
+    });
+    await session.send({ type: 'user', content: 'go' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    const answer = await agent.requestPermission({
+      toolCall: { toolCallId: 't9', title: 'Run npm test', kind: 'execute', rawInput: { command: 'npm test' } },
+      options: PERMISSION_OPTIONS,
+    });
+    expect(answer).toEqual({ outcome: { outcome: 'selected', optionId } });
+    expect(seen).toHaveLength(asked ? 1 : 0);
+    if (asked) expect(seen[0]).toMatchObject({ kind: 'permission', toolUseId: 't9', toolName: 'Run npm test', input: { command: 'npm test' } });
+  });
+
+  it('rejects when no one can answer (no resolver attached)', async () => {
+    const agent = createFakeAgent();
+    const { session } = await open(agent);
+    await session.send({ type: 'user', content: 'go' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    const answer = await agent.requestPermission({ toolCall: { toolCallId: 't1', title: 'Write' }, options: PERMISSION_OPTIONS });
+    expect(answer).toEqual({ outcome: { outcome: 'selected', optionId: 'no' } });
+  });
+
+  it('does not convert allow once into persistent permission when the agent only offers the latter', async () => {
+    const agent = createFakeAgent();
+    const { session } = await open(agent, { permissionMode: 'ask' });
+    session.setInteractionResolver(async () => ({ kind: 'permission', behavior: 'allow' }));
+    const answer = await agent.requestPermission({
+      toolCall: { toolCallId: 'once-only', title: 'Write' },
+      options: PERMISSION_OPTIONS.filter((option) => option.kind !== 'allow_once'),
+    });
+    expect(answer).toEqual({ outcome: { outcome: 'selected', optionId: 'no' } });
+  });
+});
+
+describe('AcpSession stop and failure', () => {
+  it('stop while a permission prompt is open: cancels the prompt, answers cancelled, ends the turn as cancelled', async () => {
+    const agent = createFakeAgent();
+    const { session, events } = await open(agent);
+    session.setInteractionResolver(() => new Promise<InteractionDecision>(() => {})); // user never answers
+    await session.send({ type: 'user', content: 'go' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    agent.update({ sessionUpdate: 'tool_call', toolCallId: 't1', title: 'Delete build/', kind: 'delete', status: 'pending' });
+    const answer = agent.requestPermission({ toolCall: { toolCallId: 't1' }, options: PERMISSION_OPTIONS });
+    await vi.waitFor(() => expect(events.some((event) => event.type === 'tool_use')).toBe(true));
+
+    await session.abort();
+    expect(await answer).toEqual({ outcome: { outcome: 'cancelled' } });
+    expect(agent.methods()).toContain('session/cancel');
+    agent.prompts[0]!.settle.resolve({ stopReason: 'cancelled' });
+    await vi.waitFor(() => expect(events.at(-1)?.type).toBe('done'));
+    expect(events.at(-1)?.data).toMatchObject({ status: 'cancelled', result: '' });
+    expect(events.find((event) => event.type === 'tool_result')?.data).toEqual({ summary: 'failed', toolUseIds: ['t1'] });
+  });
+
+  it('stop also discards a message whose attachment was still being read', async () => {
+    const agent = createFakeAgent({ agentCapabilities: { promptCapabilities: { image: true } } });
+    const image = deferred<Uint8Array>();
+    const { session } = await open(agent, { readFile: () => image.promise });
+    const sending = session.send({ type: 'user', content: [{ type: 'image', path: SHOT }] });
+    await session.abort();
+    image.resolve(new Uint8Array([1]));
+    await sending;
+    await Promise.resolve();
+    expect(agent.methods()).toEqual(['initialize', 'session/new']);
+  });
+
+  it('retires the endpoint when the agent ignores a cancel past the grace period', async () => {
+    vi.useFakeTimers();
+    const agent = createFakeAgent();
+    const exit = deferred<void>();
+    const close = vi.spyOn(agent.transport, 'close').mockReturnValueOnce(exit.promise);
+    const onEnded = vi.fn();
+    const { session, events, ended } = await open(agent, { cancelGraceMs: 1_000, permissionMode: 'bypassPermissions', onEnded });
+    await session.send({ type: 'user', content: 'go' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    await session.abort();
+    await expect(agent.requestPermission({
+      toolCall: { toolCallId: 'after-stop', title: 'Write' },
+      options: PERMISSION_OPTIONS,
+    })).resolves.toEqual({ outcome: { outcome: 'cancelled' } });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(events.at(-1)).toMatchObject({ type: 'done', data: { status: 'cancelled' } });
+    expect(close).toHaveBeenCalledOnce();
+    // The product must keep this runtime until the host confirms its exit.
+    expect(onEnded).not.toHaveBeenCalled();
+    await expect(session.send({ type: 'user', content: 'again' })).rejects.toThrow('closed');
+    expect(agent.prompts).toHaveLength(1);
+    // A late answer for the abandoned prompt must not produce a second turn end.
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(events.filter((event) => event.type === 'done')).toHaveLength(1);
+    exit.resolve();
+    await ended;
+    expect(onEnded).toHaveBeenCalledOnce();
+  });
+
+  it('agent process exit mid-turn: terminal error, event stream ends, later sends are refused', async () => {
+    const agent = createFakeAgent();
+    const { session, events, ended } = await open(agent);
+    await session.send({ type: 'user', content: 'go' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    agent.exit();
+    await ended;
+    expect(events.at(-1)).toMatchObject({ type: 'error', data: { isTerminal: true, reason: 'acp-agent-exited' } });
+    await expect(session.send({ type: 'user', content: 'again' })).rejects.toThrow('closed');
+  });
+
+  // 引擎账号：运行中的额度用完、服务繁忙带上 Cindy 失败判定认得的字段；不认识的 kind 照普通错误处理。
+  it.each([
+    { kind: 'usage-limit', resetsAt: 1_900_000_000_000, expected: { reason: 'acp-usage-limit', usageLimit: true, usageResetAt: 1_900_000_000_000 } },
+    { kind: 'overloaded', expected: { reason: 'acp-overloaded', errorStatus: 529 } },
+    { kind: 'auth-required', expected: { reason: 'acp-auth-required' } },
+    { kind: 'something-new', expected: { reason: 'acp-request-failed' } },
+  ])('reports a turn the agent classified as $kind with failure fields Cindy understands', async ({ kind, resetsAt, expected }) => {
+    const agent = createFakeAgent();
+    const { session, events } = await open(agent);
+    await session.send({ type: 'user', content: 'go' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    agent.prompts[0]!.settle.reject(Object.assign(new Error('upstream said no'), { code: -32603, data: { _meta: { cindy: { kind, ...(resetsAt ? { resetsAt } : {}) } } } }));
+    await vi.waitFor(() => expect(events.at(-1)?.type).toBe('error'));
+    expect(events.at(-1)?.data).toMatchObject({ isTerminal: true, ...expected });
+  });
+
+  it('close() ends a running turn, closes the agent session and waits for the endpoint', async () => {
+    const agent = createFakeAgent({
+      agentCapabilities: { sessionCapabilities: { close: {} } },
+      handlers: { 'session/close': () => ({}) },
+    });
+    const { session, events, ended } = await open(agent);
+    await session.send({ type: 'user', content: 'go' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    await session.close();
+    await ended;
+    expect(agent.methods()).toEqual(expect.arrayContaining(['session/cancel', 'session/close']));
+    expect(agent.closedByClient).toBe(true);
+    expect(events.at(-1)).toMatchObject({ type: 'done', data: { status: 'cancelled' } });
+  });
+});
+
+describe('AcpSession model and effort', () => {
+  const configOptions = [
+    {
+      id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: 'v4-flash',
+      options: [{ group: 'deepseek', name: 'DeepSeek', options: [{ value: 'v4-pro', name: 'V4 Pro' }, { value: 'v4-flash', name: 'V4 Flash' }] }],
+    },
+    {
+      id: 'reasoning_effort', name: 'Reasoning', category: 'thought_level', type: 'select', currentValue: 'high',
+      options: [{ value: 'low', name: 'Low' }, { value: 'high', name: 'High' }, { value: 'turbo', name: 'Turbo' }],
+    },
+  ];
+
+  it('derives models and only the effort levels Cindy can name from the agent configuration', async () => {
+    const agent = createFakeAgent({ configOptions });
+    const { session } = await open(agent);
+    expect(session.model).toBe('v4-flash');
+    expect(session.capabilities.switchModel).toEqual({ supported: true });
+    expect(session.capabilities.availableModels.map((model) => [model.id, model.group, model.efforts])).toEqual([
+      ['v4-pro', 'DeepSeek', []],
+      ['v4-flash', 'DeepSeek', ['low', 'high']],
+    ]);
+    expect(session.capabilities.effortLevels.map((level) => level.id)).toEqual(['low', 'high']);
+    expect(session.getEffort()).toBe('high');
+    await expect(session.setEffort('max')).rejects.toThrow("'effort' not supported");
+  });
+
+  it('switches model through set_config_option and adopts the state the agent returns', async () => {
+    const switched = configOptions.map((option) => option.id === 'model' ? { ...option, currentValue: 'v4-pro' } : option);
+    const agent = createFakeAgent({ configOptions, handlers: { 'session/set_config_option': () => ({ configOptions: switched }) } });
+    const { session } = await open(agent);
+    const changes: string[] = [];
+    session.onCapabilitiesChange((caps) => changes.push(caps.availableModels.find((model) => model.efforts.length > 0)?.id ?? ''));
+    await session.setModel('v4-pro');
+    expect(agent.sent.at(-1)).toMatchObject({ method: 'session/set_config_option', params: { sessionId: 'sess-1', configId: 'model', value: 'v4-pro' } });
+    expect(session.model).toBe('v4-pro');
+    expect(changes).toEqual(['v4-pro']);
+    await expect(session.setModel('gpt-x')).rejects.toThrow('does not offer');
+  });
+
+  // Unit regression for PR #11549. The handle's own tests missed the product
+  // Session rejecting newly offered effort levels after a config update.
+  it('applies an effort level added after the product session started', async () => {
+    const agent = createFakeAgent({ configOptions: configOptions.slice(0, 1) });
+    const handle = await openAcpSession({ transport: agent.transport, cwd: '/w', clientInfo: { name: 'c', version: '1' } });
+    const session = new Session({
+      id: 'task', workDir: '/w', agentKind: 'acp', handle, capabilities: handle.capabilities, logger: silentLogger,
+    });
+    try {
+      await expect(session.setEffort('low')).rejects.toThrow("'effort' not supported");
+      agent.update({ sessionUpdate: 'config_option_update', configOptions });
+      await session.setEffort('low');
+      expect(agent.sent.at(-1)).toMatchObject({ method: 'session/set_config_option', params: { configId: 'reasoning_effort', value: 'low' } });
+    } finally {
+      await session.close();
+    }
+  });
+
+  it('applies the stored model on open but keeps the agent default when it is no longer offered', async () => {
+    const agent = createFakeAgent({ configOptions });
+    const { session } = await open(agent, { model: 'retired-model' });
+    expect(session.model).toBe('v4-flash');
+    expect(agent.methods()).toEqual(['initialize', 'session/new']);
+  });
+});
+
+// 2026-11-19:Antigravity(agy 1.5.12)在 configOptions 里公布 mode = default / accept-edits / auto / plan；
+// 用户决定权限菜单显示 Agent 的模式并保留「全部允许」，插件基座通用。
+describe('AcpSession agent modes', () => {
+  const configOptions = [
+    {
+      id: 'mode', name: 'Mode', category: 'mode', type: 'select', currentValue: 'default',
+      options: [
+        { value: 'default', name: 'Default' }, { value: 'accept-edits', name: 'Accept edits' },
+        { value: 'auto', name: 'Auto' }, { value: 'plan', name: 'Plan' }, { value: 'yolo-x', name: 'Agent only' },
+      ],
+    },
+  ];
+  const modeChanges = (agent: FakeAgent) => agent.sent
+    .filter((message) => message.method === 'session/set_config_option')
+    .map((message) => (message.params as AcpRecord).value);
+
+  it('offers the agent modes Cindy can name, then Full access, and switches the agent mode', async () => {
+    const agent = createFakeAgent({ configOptions });
+    const { session } = await open(agent);
+    expect(session.capabilities.permissionModes.map((mode) => [mode.id, mode.displayName])).toEqual([
+      ['default', 'Default'], ['acceptEdits', 'Accept edits'], ['auto', 'Auto'], ['plan', 'Plan'], ['bypassPermissions', 'Full access'],
+    ]);
+    await session.setPermissionMode('acceptEdits');
+    await session.setPermissionMode('plan');
+    // Full access is Cindy's own answer to permission requests; the agent keeps its mode.
+    await session.setPermissionMode('bypassPermissions');
+    expect(modeChanges(agent)).toEqual(['accept-edits', 'plan']);
+  });
+
+  it('applies the stored mode when the task starts and still asks you about permission requests', async () => {
+    const agent = createFakeAgent({ configOptions });
+    const { session } = await open(agent, { permissionMode: 'plan' });
+    expect(modeChanges(agent)).toEqual(['plan']);
+    const seen: InteractionRequest[] = [];
+    session.setInteractionResolver(async (request) => {
+      seen.push(request);
+      return { kind: 'permission', behavior: 'deny' } as InteractionDecision;
+    });
+    await session.send({ type: 'user', content: 'go' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    const answer = await agent.requestPermission({ toolCall: { toolCallId: 't1', title: 'Edit file' }, options: PERMISSION_OPTIONS });
+    expect(answer).toEqual({ outcome: { outcome: 'selected', optionId: 'no' } });
+    expect(seen).toHaveLength(1);
+  });
+
+  // Rule: agent-initiated current_mode_update updates the tracked mode (ignoring unknown mode IDs) so switching back still sends set_config_option.
+  // Minimal failing input: session opens in 'default', agent sends current_mode_update('plan'), user switches back to 'default'.
+  it('syncs tracked mode on current_mode_update so switching back is not skipped', async () => {
+    const agent = createFakeAgent({ configOptions });
+    const { session } = await open(agent);
+    agent.update({ sessionUpdate: 'current_mode_update', currentModeId: 'unknown-mode' });
+    await session.setPermissionMode('default');
+    expect(modeChanges(agent)).toEqual([]);
+    agent.update({ sessionUpdate: 'current_mode_update', currentModeId: 'plan' });
+    await session.setPermissionMode('plan');
+    expect(modeChanges(agent)).toEqual([]);
+    await session.setPermissionMode('default');
+    expect(modeChanges(agent)).toEqual(['default']);
+  });
+
+  // Rule: on session/load, pre-response current_mode_update is stale replay (dropped), while a post-response
+  // current_mode_update arriving in the same stdout chunk is newer than configOptions and must be preserved.
+  // Minimal failing input: one chunk carrying [replay('plan'), loadResponse('default'), live('accept-edits')] (and [replay('plan'), loadResponse('default')]).
+  it('drops pre-response current_mode_update replay on session/load while keeping post-response updates in the same chunk', async () => {
+    const runChunkedLoad = async (afterResponse?: string) => {
+      const lineListeners = new Set<(line: string) => void>();
+      const closeListeners = new Set<(info: AcpTransportClosed) => void>();
+      const decoder = new AcpLineDecoder((line) => { for (const fn of [...lineListeners]) fn(line); });
+      const sent: AcpRecord[] = [];
+      const transport: AcpLineTransport = {
+        write(line) {
+          const msg = JSON.parse(line) as AcpRecord;
+          sent.push(msg);
+          queueMicrotask(() => {
+            if (msg.method === 'initialize') {
+              decoder.push(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: 1, agentCapabilities: { loadSession: true }, authMethods: [] } }) + '\n');
+            } else if (msg.method === 'session/load') {
+              const frames: AcpRecord[] = [
+                { jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'old-1', update: { sessionUpdate: 'current_mode_update', currentModeId: 'plan' } } },
+                { jsonrpc: '2.0', id: msg.id, result: { configOptions } },
+              ];
+              if (afterResponse) {
+                frames.push({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'old-1', update: { sessionUpdate: 'current_mode_update', currentModeId: afterResponse } } });
+              }
+              decoder.push(frames.map((frame) => JSON.stringify(frame)).join('\n') + '\n');
+            } else if (msg.method === 'session/set_config_option') {
+              const value = (msg.params as AcpRecord).value;
+              const updated = [{ ...configOptions[0], currentValue: value }];
+              decoder.push(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { configOptions: updated } }) + '\n');
+            }
+          });
+        },
+        onLine(fn) { lineListeners.add(fn); return () => lineListeners.delete(fn); },
+        onClose(fn) { closeListeners.add(fn); return () => closeListeners.delete(fn); },
+        async close() { for (const fn of [...closeListeners]) fn({ reason: 'closed-by-client' }); },
+      };
+      const session = await openAcpSession({ transport, cwd: '/repo', clientInfo: { name: 'cindy', version: 'test' }, resumeSessionId: 'old-1' });
+      const changes = () => sent.filter((m) => m.method === 'session/set_config_option').map((m) => (m.params as AcpRecord).value);
+      return { session, changes };
+    };
+
+    // Guard for the pre-response replay-drop branch: stale 'plan' before response must not beat 'default'.
+    const replayOnly = await runChunkedLoad();
+    await replayOnly.session.setPermissionMode('default');
+    expect(replayOnly.changes()).toEqual([]);
+    await replayOnly.session.setPermissionMode('plan');
+    expect(replayOnly.changes()).toEqual(['plan']);
+
+    // Post-response update in the same chunk must win over the load response's 'default'.
+    const withPost = await runChunkedLoad('accept-edits');
+    await withPost.session.setPermissionMode('acceptEdits');
+    expect(withPost.changes()).toEqual([]);
+    await withPost.session.setPermissionMode('default');
+    expect(withPost.changes()).toEqual(['default']);
+  });
+
+  // Rule: a session/set_config_option response must be applied in wire order so a subsequent current_mode_update
+  // arriving in the same stdout chunk is not overwritten when the await resumes.
+  // Minimal failing input: one chunk carrying [setConfigResponse('plan'), current_mode_update('default')], then user requests 'plan' again.
+  it('applies set_config_option responses in wire order before same-chunk mode notifications', async () => {
+    const lineListeners = new Set<(line: string) => void>();
+    const closeListeners = new Set<(info: AcpTransportClosed) => void>();
+    const decoder = new AcpLineDecoder((line) => { for (const fn of [...lineListeners]) fn(line); });
+    const sent: AcpRecord[] = [];
+    let firstSet = true;
+    const transport: AcpLineTransport = {
+      write(line) {
+        const msg = JSON.parse(line) as AcpRecord;
+        sent.push(msg);
+        queueMicrotask(() => {
+          if (msg.method === 'initialize') {
+            decoder.push(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: 1, agentCapabilities: {}, authMethods: [] } }) + '\n');
+          } else if (msg.method === 'session/new') {
+            decoder.push(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { sessionId: 'sess-1', configOptions } }) + '\n');
+          } else if (msg.method === 'session/set_config_option') {
+            const value = (msg.params as AcpRecord).value;
+            const updated = [{ ...configOptions[0], currentValue: value }];
+            const frames: AcpRecord[] = [{ jsonrpc: '2.0', id: msg.id, result: { configOptions: updated } }];
+            if (firstSet) {
+              firstSet = false;
+              frames.push({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'sess-1', update: { sessionUpdate: 'current_mode_update', currentModeId: 'default' } } });
+            }
+            decoder.push(frames.map((frame) => JSON.stringify(frame)).join('\n') + '\n');
+          }
+        });
+      },
+      onLine(fn) { lineListeners.add(fn); return () => lineListeners.delete(fn); },
+      onClose(fn) { closeListeners.add(fn); return () => closeListeners.delete(fn); },
+      async close() { for (const fn of [...closeListeners]) fn({ reason: 'closed-by-client' }); },
+    };
+    const session = await openAcpSession({ transport, cwd: '/repo', clientInfo: { name: 'cindy', version: 'test' } });
+    await session.setPermissionMode('plan');
+    // Same-chunk current_mode_update moved the agent back to 'default'; requesting 'plan' again must send a new RPC.
+    await session.setPermissionMode('plan');
+    expect(sent.filter((m) => m.method === 'session/set_config_option').map((m) => (m.params as AcpRecord).value)).toEqual(['plan', 'plan']);
+  });
+});
+
+const silentLogger: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child: () => silentLogger };
+
+function createAcpAgent(connect: () => FakeAgent['transport'], seen: string[] = []) {
+  return new AcpAgent({
+    auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+    runtimeConfig: {}, binaryPath: '', logger: silentLogger,
+    clientInfo: { name: 'cindy', version: 'test' },
+    endpoints: { connect: async () => connect() },
+    onSessionCapabilities: (key) => seen.push(key),
+  });
+}
+
+describe('AcpAgent (the acp engine)', () => {
+  it('passes only the task-scoped Cindy HTTP bridge and omits external MCP credentials', () => {
+    expect(acpMcpServersFromBridge({
+      mcpBridge: { token: 'tok', servers: [
+        { name: 'cindy_tools', url: 'http://127.0.0.1:9/mcp/cindy_tools' },
+        { name: 'remote_ok', url: 'https://mcp.example/a', remote: { headerEnvVars: { 'X-Key': 'K1' }, startupTimeoutMs: 1, requestTimeoutMs: 1 } },
+        { name: 'remote_missing', url: 'https://mcp.example/b', remote: { headerEnvVars: { 'X-Key': 'K2' }, startupTimeoutMs: 1, requestTimeoutMs: 1 } },
+      ] },
+      mcpEnv: { K1: 'secret' },
+    })).toEqual([
+      { type: 'http', name: 'cindy_tools', url: 'http://127.0.0.1:9/mcp/cindy_tools', headers: [{ name: 'Authorization', value: 'Bearer tok' }] },
+    ]);
+  });
+
+  it('starts the harness named by the task and reports what it offers', async () => {
+    const seen: string[] = [];
+    const agent = createFakeAgent();
+    const handle = await createAcpAgent(() => agent.transport, seen).startSession({ workingDir: '/w', model: '', providerId: 'acp-plugin:dsh-acp:dsh' });
+    expect(handle.agentKind).toBe('acp');
+    expect(seen).toEqual(['dsh-acp:dsh']);
+    await expect(createAcpAgent(() => agent.transport).startSession({ workingDir: '/w', model: '', providerId: 'anthropic' })).rejects.toThrow('harness id');
+    await expect(createAcpAgent(() => agent.transport).startSession({ workingDir: '/w', model: '', providerId: 'acp-plugin:dsh-acp:dsh', remoteHostId: 'box' })).rejects.toThrow("'remoteSession' not supported");
+  });
+
+  // 引擎账号：宿主账号池选中 Cindy 加的账号时，入口带着这个账号的目录启动；插件原有的登录照旧不带参数。
+  // 拿出来的单独供应商(`…~<后缀>`)跑同一个引擎。最小失败输入：带账号能力启动；默认登录；带后缀的供应商 id。
+  it('starts the engine on the account the host picked, and a taken-out provider on its engine', async () => {
+    const connects: Array<{ key: string; options: unknown }> = [];
+    const engine = new AcpAgent({
+      auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+      runtimeConfig: {}, binaryPath: '', logger: silentLogger,
+      clientInfo: { name: 'cindy', version: 'test' },
+      endpoints: { connect: async (key, options) => { connects.push({ key, options }); return createFakeAgent().transport; } },
+    });
+    const account = (configDir: string, defaultProfile: boolean) => ({
+      id: 'a', configDir, defaultProfile, assertCurrent() {}, readState: async () => ({ authenticated: true }),
+    });
+    await engine.startSession({ workingDir: '/w', model: '', providerId: 'acp-plugin:dsh-acp:dsh~ab12cd34', [NATIVE_SUBSCRIPTION_ACCOUNT]: account('/accounts/a', false) });
+    await engine.startSession({ workingDir: '/w', model: '', providerId: 'acp-plugin:dsh-acp:dsh', [NATIVE_SUBSCRIPTION_ACCOUNT]: account('', true) });
+    expect(connects).toEqual([
+      { key: 'dsh-acp:dsh', options: { accountDir: '/accounts/a' } },
+      { key: 'dsh-acp:dsh', options: undefined },
+    ]);
+  });
+
+  // 用户决定（2026-11-19）：协作 Worker 整体信任插件 Agent，它的工具调用按任务自己发起（能回报 Lead）；
+  // 其他插件引擎任务仍是「来源未知」。最小失败输入：同一引擎，一次带信任标记、一次不带。
+  it.each([
+    { trusted: true, kind: 'root', attested: true },
+    { trusted: undefined, kind: 'unknown', attested: false },
+  ])('tool calls count as the task own calls only when the host trusts the engine as a whole ($trusted)', async ({ trusted, kind, attested }) => {
+    const contexts: Array<Record<string, unknown>> = [];
+    const agent = new AcpAgent({
+      auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+      runtimeConfig: {}, binaryPath: '', logger: silentLogger,
+      clientInfo: { name: 'cindy', version: 'test' },
+      endpoints: { connect: async () => createFakeAgent().transport },
+      preparePiExtraSpawnConfig: async (_providers, ctx) => { contexts.push(ctx as unknown as Record<string, unknown>); return null; },
+    });
+    await agent.startSession({ workingDir: '/w', model: '', providerId: 'acp-plugin:dsh-acp:dsh', botProfilePrompt: 'Prompt text alone cannot grant task privileges.', ...(trusted ? { pluginEngineTrustedCaller: true } : {}) });
+    expect(contexts).toHaveLength(1);
+    expect(contexts[0]).toMatchObject({ mcpCallerKind: kind, mcpCallerAttested: attested });
+  });
+
+  // 用户决定（2026-11-24）：插件引擎收不到 Cindy system prompt，内置引擎从 system prompt 知道的已装插件花名册、
+  // 从原生 Skill 加载知道的 Skill，改在新会话首条消息前告诉它。依据：用户反馈 Antigravity 任务不知道已装插件与 Skill，
+  // 发 PR 绕开了 GitHub 插件的 pr Skill。覆盖缺口：此前首轮 briefing 只有协作角色、伙伴与远程工作区说明。
+  // 最小失败输入（unit）：本机任务带花名册与 Skill；对端不收 HTTP MCP（插件网关没交出去）；伙伴任务。
+  const briefingEngine = (agent: FakeAgent, roster: ReturnType<typeof vi.fn>, skills: ReturnType<typeof vi.fn>) => new AcpAgent({
+    auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+    runtimeConfig: {}, binaryPath: '', logger: silentLogger, clientInfo: { name: 'cindy', version: 'test' },
+    endpoints: { connect: async () => agent.transport },
+    preparePiExtraSpawnConfig: async () => ({ mcpBridge: { token: 't', servers: [{ name: 'cindy', url: 'http://127.0.0.1:9/mcp/cindy' }] } }),
+    getGhostRosterPrompt: roster as unknown as (ctx: { workingDir?: string }) => string,
+    listSessionSkills: skills as unknown as (ctx: { workingDir: string }) => Promise<Array<{ name: string; description?: string; path?: string }>>,
+  });
+  const skillList = [
+    { name: 'cindy-plugin-github:pr', description: 'Carry a GitHub pull request\n from start to merge.', path: '/skills/pr/SKILL.md' },
+    { name: 'no-file', description: 'Has no readable SKILL.md.' },
+  ];
+  const firstPrompt = async (agent: FakeAgent, handle: { send(m: { type: 'user'; content: string }): Promise<unknown> }) => {
+    await handle.send({ type: 'user', content: 'open a PR' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    return agent.prompts[0]!.params.prompt as Array<{ type: string; text: string }>;
+  };
+
+  it('tells a new plugin-engine conversation which plugins and Skills it can use, once', async () => {
+    const agent = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: true } } });
+    const roster = vi.fn(() => '<ghost-roster>\n{"id":"cindy-github"}\n</ghost-roster>');
+    const skills = vi.fn(async () => skillList);
+    const handle = await briefingEngine(agent, roster, skills).startSession({
+      workingDir: '/repo', model: '', providerId: 'acp-plugin:agy:agy', pluginEngineBriefing: 'You are a Worker.',
+    });
+    expect(roster).toHaveBeenCalledWith({ workingDir: '/repo' });
+    expect(skills).toHaveBeenCalledWith({ workingDir: '/repo' });
+    const [briefing, message, more] = await firstPrompt(agent, handle);
+    expect(briefing!.text.indexOf('<ghost-roster>')).toBeLessThan(briefing!.text.indexOf('<cindy-skills>'));
+    expect(briefing!.text.indexOf('<cindy-skills>')).toBeLessThan(briefing!.text.indexOf('You are a Worker.'));
+    expect(briefing!.text).toContain('- cindy-plugin-github:pr: Carry a GitHub pull request from start to merge. ("/skills/pr/SKILL.md")');
+    expect(briefing!.text).not.toContain('no-file');
+    expect(message).toEqual({ type: 'text', text: 'open a PR' });
+    expect(more).toBeUndefined();
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await handle.send({ type: 'user', content: 'again' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(2));
+    expect(agent.prompts[1]!.params.prompt).toEqual([{ type: 'text', text: 'again' }]);
+  });
+
+  it('leaves the plugin roster out when the agent did not take the plugin gateway, and keeps the Skills', async () => {
+    const agent = createFakeAgent({ agentCapabilities: {} });
+    const handle = await briefingEngine(agent, vi.fn(() => '<ghost-roster></ghost-roster>'), vi.fn(async () => skillList))
+      .startSession({ workingDir: '/repo', model: '', providerId: 'acp-plugin:agy:agy' });
+    const [briefing] = await firstPrompt(agent, handle);
+    expect(briefing!.text).not.toContain('<ghost-roster>');
+    expect(briefing!.text).toContain('<cindy-skills>');
+  });
+
+  it('keeps a companion on its own capability set: no roster or Skill list', async () => {
+    const agent = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: true } } });
+    const roster = vi.fn(() => '<ghost-roster></ghost-roster>');
+    const skills = vi.fn(async () => skillList);
+    const policy = { mode: 'allowlist' as const, configured: [], catalog: [] };
+    const handle = await briefingEngine(agent, roster, skills).startSession({
+      workingDir: '/repo', model: '', providerId: 'acp-plugin:agy:agy', botProfilePrompt: 'You are Mika.',
+      botRuntimeProfile: { botId: 'mika', profileVersion: 1, skillPolicy: policy, mcpPolicy: policy, toolsetPolicy: policy },
+    });
+    expect(roster).not.toHaveBeenCalled();
+    expect(skills).not.toHaveBeenCalled();
+    const [briefing] = await firstPrompt(agent, handle);
+    expect(briefing!.text).toBe('You are Mika.');
+  });
+
+  // Review (#12294)：V2 项目伙伴（projectContext）按普通任务装配，与内置 Pi 一致要收到花名册与 Skill；恢复的会话
+  // 已有说明且恢复失败不会改开新会话，所以不读取。最小失败输入：projectContext 伙伴；带 resumeSessionId 启动。
+  it('briefs a project-context companion like any task, and reads nothing for a resumed session', async () => {
+    const agent = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: true } } });
+    const policy = { mode: 'allowlist' as const, configured: [], catalog: [] };
+    const handle = await briefingEngine(agent, vi.fn(() => '<ghost-roster></ghost-roster>'), vi.fn(async () => skillList)).startSession({
+      workingDir: '/repo', model: '', providerId: 'acp-plugin:agy:agy', botProfilePrompt: 'You are Mika.',
+      botRuntimeProfile: { botId: 'mika', profileVersion: 1, projectContext: true, skillPolicy: policy, mcpPolicy: policy, toolsetPolicy: policy },
+    });
+    const [briefing] = await firstPrompt(agent, handle);
+    expect(briefing!.text).toContain('You are Mika.');
+    expect(briefing!.text).toContain('<ghost-roster>');
+    expect(briefing!.text).toContain('<cindy-skills>');
+
+    const resumed = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: true }, sessionCapabilities: { resume: {} } },
+      handlers: { 'session/resume': () => ({}) } });
+    const roster = vi.fn(() => '<ghost-roster></ghost-roster>');
+    const skills = vi.fn(async () => skillList);
+    const again = await briefingEngine(resumed, roster, skills).startSession({
+      workingDir: '/repo', model: '', providerId: 'acp-plugin:agy:agy', resumeSessionId: 'old-1',
+    });
+    expect(roster).not.toHaveBeenCalled();
+    expect(skills).not.toHaveBeenCalled();
+    expect(await firstPrompt(resumed, again)).toEqual([{ type: 'text', text: 'open a PR' }]);
+  });
+
+  // 第三期(2026-11-20，docs/plans/acp-plugin-bridge.md)：任务的文件与命令在同账号另一台电脑上。插件引擎自带的
+  // 文件与命令工具只会作用在 Agent 所在的这台电脑，所以：入口以远程工作区方式启动(插件关掉自带工具)，
+  // 工具全部来自任务所在电脑的隧道，没有 cindy_exec 就拒绝；受邀者一律拒绝。此前这类会话在这里一律被拒，没有覆盖。
+  // 最小失败输入：带 deviceHosted 的启动；对端不支持 HTTP MCP；deviceHosted.guest。
+  const hosted = {
+    workingDir: '/shadow/p', extraDirs: [], writableDirs: [], platform: 'win32' as const, shell: 'bash', isGitRepo: true,
+    tunnelUrl: 'http://127.0.0.1:4711/', tunnelToken: 'tunnel-token', mcpServers: ['cindy', 'cindy_memory'],
+  };
+
+  it('runs a task of another computer with its own tools off and every tool coming through the task tunnel', async () => {
+    const agent = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: true } } });
+    const connected: unknown[] = [];
+    const prepared = vi.fn(async () => ({ mcpBridge: { token: 'local', servers: [{ name: 'local_tools', url: 'http://127.0.0.1:1/mcp/local_tools' }] } }));
+    const engine = new AcpAgent({
+      auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+      runtimeConfig: {}, binaryPath: '', logger: silentLogger, clientInfo: { name: 'cindy', version: 'test' },
+      preparePiExtraSpawnConfig: prepared,
+      endpoints: { connect: async (_key, options) => { connected.push(options); return agent.transport; } },
+    });
+    const handle = await engine.startSession({
+      workingDir: '/shadow/p', model: '', providerId: 'acp-plugin:dsh-acp:dsh', deviceHosted: hosted, pluginEngineBriefing: 'You are a Worker.',
+    });
+    expect(connected).toEqual([{ remoteWorkspace: true }]);
+    // This computer's own Cindy tools, plugins and memory stay out of a task that lives elsewhere.
+    expect(prepared).not.toHaveBeenCalled();
+    const bearer = [{ name: 'Authorization', value: 'Bearer tunnel-token' }];
+    expect((agent.sent.find((message) => message.method === 'session/new')!.params as AcpRecord).mcpServers).toEqual([
+      { type: 'http', name: 'cindy_exec', url: 'http://127.0.0.1:4711/mcp/cindy_exec', headers: bearer },
+      { type: 'http', name: 'cindy', url: 'http://127.0.0.1:4711/mcp/cindy', headers: bearer },
+      { type: 'http', name: 'cindy_memory', url: 'http://127.0.0.1:4711/mcp/cindy_memory', headers: bearer },
+    ]);
+    await handle.send({ type: 'user', content: 'hi' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    const [note, message, more] = agent.prompts[0]!.params.prompt as Array<{ text: string }>;
+    // The agent gets no Cindy system prompt: the first message tells it where the project is and which tools reach it.
+    expect(note!.text).toContain('/shadow/p');
+    expect(note!.text).toContain('cindy_exec');
+    expect(note!.text).toContain('You are a Worker.');
+    expect(message).toEqual({ type: 'text', text: 'hi' });
+    expect(more).toBeUndefined();
+
+    // Shared-provider guest tasks add guestWorkspace: true so the plugin isolates owner-local skills/fetch/state.
+    await engine.startSession({
+      workingDir: '/shadow/p', model: '', providerId: 'acp-plugin:dsh-acp:dsh',
+      deviceHosted: { ...hosted, guest: true },
+    });
+    expect(connected).toEqual([{ remoteWorkspace: true }, { remoteWorkspace: true, guestWorkspace: true }]);
+    expect(prepared).not.toHaveBeenCalled();
+  });
+
+  // Review (#12294, P1)：托管任务与内置引擎一致，附任务所在电脑带来的花名册快照（隧道提供 cindy 时），不读本机花名册，
+  // 也不附 Skill 清单。最小失败输入：带快照的托管启动；隧道没有 cindy 的托管启动。unit tier。
+  it.each([
+    { name: 'with the gateway', servers: ['cindy', 'cindy_memory'], expected: true },
+    { name: 'without the gateway', servers: ['cindy_memory'], expected: false },
+  ])('gives a hosted task the roster snapshot of the task computer $name, never this computer\'s', async ({ servers, expected }) => {
+    const agent = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: true } } });
+    const roster = vi.fn(() => '<ghost-roster>{"id":"local-only"}</ghost-roster>');
+    const skills = vi.fn(async () => skillList);
+    const handle = await briefingEngine(agent, roster, skills).startSession({
+      workingDir: '/shadow/p', model: '', providerId: 'acp-plugin:dsh-acp:dsh',
+      deviceHosted: { ...hosted, mcpServers: servers },
+      ghostRosterSnapshot: '<ghost-roster>\n{"id":"task-computer-plugin"}\n</ghost-roster>',
+    });
+    expect(roster).not.toHaveBeenCalled();
+    expect(skills).not.toHaveBeenCalled();
+    const [briefing] = await firstPrompt(agent, handle);
+    expect(briefing!.text.includes('task-computer-plugin')).toBe(expected);
+    expect(briefing!.text).not.toContain('local-only');
+    expect(briefing!.text).not.toContain('<cindy-skills>');
+  });
+
+  it.each([
+    ['the agent cannot connect to the tools of the task\'s computer', { agentCapabilities: {} }, { deviceHosted: hosted, model: '' }, 'PLUGIN_ENGINE_REMOTE_TOOLS_UNSUPPORTED'],
+    ['the task is on an SSH host', { agentCapabilities: { mcpCapabilities: { http: true } } }, { remoteHostId: 'box', model: '' }, "'remoteSession' not supported"],
+    ['a hosted guest requests an approved model that the engine does not apply', {
+      agentCapabilities: { mcpCapabilities: { http: true } },
+      configOptions: [{ id: 'model', category: 'model', name: 'Model', type: 'select', currentValue: 'default-unapproved', options: [{ value: 'default-unapproved', name: 'Default' }] }],
+    }, { deviceHosted: { ...hosted, guest: true }, model: 'approved-only' }, 'does not offer model'],
+  ])('refuses a remote task when %s', async (_name, agentOptions, extra, message) => {
+    const agent = createFakeAgent(agentOptions);
+    await expect(createAcpAgent(() => agent.transport).startSession({
+      workingDir: '/shadow/p', providerId: 'acp-plugin:dsh-acp:dsh', ...extra,
+    })).rejects.toThrow(message);
+    expect(agent.prompts).toHaveLength(0);
+  });
+
+  // Unit regressions for PR #11549. Simulate a failed resume with and without
+  // an exit receipt at AcpAgent.startSession, which Maker uses for cleanup.
+  it('preserves the old conversation and surfaces an actionable resume error', async () => {
+    const agent = createFakeAgent();
+    const confirmNativeReset = vi.fn(async () => true);
+    const start = createAcpAgent(() => agent.transport).startSession({
+      workingDir: '/w', model: '', providerId: 'acp-plugin:dsh-acp:dsh',
+      resumeSessionId: 'old-1', onInvalidResumeSession: confirmNativeReset,
+    });
+    const error = await start.catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(AgentStartupStoppedError);
+    expect(error).toMatchObject({ cause: { sessionId: 'old-1', message: expect.stringContaining('[PLUGIN_ENGINE_RESUME_UNAVAILABLE]') } });
+    expect(confirmNativeReset).not.toHaveBeenCalled();
+    expect(agent.methods()).toEqual(['initialize']);
+    expect(agent.closedByClient).toBe(true);
+  });
+
+  it('retains cleanup responsibility when resume fails and the endpoint is still running', async () => {
+    const agent = createFakeAgent();
+    const close = vi.spyOn(agent.transport, 'close').mockRejectedValueOnce(new Error('endpoint still running'));
+    const connect = vi.fn(() => agent.transport);
+    const error = await createAcpAgent(connect).startSession({
+      workingDir: '/w', model: '', providerId: 'acp-plugin:dsh-acp:dsh', resumeSessionId: 'old-1',
+    }).catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(AgentStartupCleanupPendingError);
+    if (!(error instanceof AgentStartupCleanupPendingError)) throw error;
+    const stopped = vi.fn();
+    void error.whenStopped.then(stopped);
+    await Promise.resolve();
+    expect(stopped).not.toHaveBeenCalled();
+    expect(connect).toHaveBeenCalledOnce();
+    await error.retryCleanup?.();
+    await error.whenStopped;
+    expect(close).toHaveBeenCalledTimes(2);
+    expect(stopped).toHaveBeenCalledOnce();
+  });
+
+  // 生产入口与可观察结果：AcpAgent.startSession 在伙伴会话中把身份/上下文/记忆快照/用户画像拼入新会话首轮 briefing，并按伙伴的工具允许列表挂载工具桥。
+  // 依据：docs/product-rules/cindy-bots-runtime.md §5，不改动内置引擎提示词，ACP 走首轮 briefing。
+  // 覆盖缺口：此前 AcpAgent 只转发 pluginEngineBriefing 与 pluginEngineTrustedCaller，忽略 botProfile* 字段。
+  // 最小失败输入与 tier：unit，带 botProfilePrompt / botProfileContextPrompt / makerMemoryIndexSnapshot / botUserProfilePrompt 启动并发送首条消息。
+  // A plugin may change its catalogue between saving the companion and starting its chat.
+  it.each(['missing', 'refused', 'kept-previous'] as const)('never sends a companion message on a different model: %s', async condition => {
+    const offered = { id: 'model', category: 'model', name: 'Model', type: 'select', currentValue: 'first',
+      options: [{ value: 'first', name: 'First' }, ...(condition === 'missing' ? [] : [{ value: 'chosen', name: 'Chosen' }])] };
+    const fake = createFakeAgent({ configOptions: [offered], handlers: { 'session/set_config_option': () => {
+      if (condition === 'refused') throw new Error('Model selection refused');
+      return { configOptions: [offered] };
+    } } });
+    const engine = createAcpAgent(() => fake.transport);
+    const policy = { mode: 'allowlist' as const, configured: [], catalog: [] };
+    await expect(engine.startSession({ workingDir: '/w', model: 'chosen', providerId: 'acp-plugin:sample:engine',
+      botRuntimeProfile: { botId: 'research', profileVersion: 1, skillPolicy: policy, mcpPolicy: policy, toolsetPolicy: policy },
+    })).rejects.toThrow(/model/i);
+    expect(fake.prompts).toHaveLength(0);
+    expect(fake.closedByClient).toBe(true);
+  });
+
+  // A profile edit rebuilds the runtime around the same native history. Only current companion context is replayable.
+  it.each([
+    { method: 'session/resume', caps: { sessionCapabilities: { resume: {} } } },
+    { method: 'session/load', caps: { loadSession: true } },
+  ])('restores the current companion profile once with $method and keeps the engine default', async ({ method, caps }) => {
+    const fake = createFakeAgent({ agentCapabilities: caps, handlers: { [method]: () => ({}) } });
+    const engine = createAcpAgent(() => fake.transport);
+    const policy = { mode: 'allowlist' as const, configured: [], catalog: [] };
+    const handle = await engine.startSession({
+      workingDir: '/w', model: 'default', providerId: 'acp-plugin:sample:engine', resumeSessionId: 'old-1',
+      botRuntimeProfile: { botId: 'research', profileVersion: 2, skillPolicy: policy, mcpPolicy: policy, toolsetPolicy: policy },
+      botProfilePrompt: 'Your new name is Lantern.', botUserProfilePrompt: 'The user now prefers short answers.',
+      pluginEngineBriefing: 'One-time handoff.',
+    });
+    expect(fake.methods()).toEqual(['initialize', method]);
+    await handle.send({ type: 'user', content: 'name?' });
+    await vi.waitFor(() => expect(fake.prompts).toHaveLength(1));
+    expect(fake.prompts[0]!.params).toMatchObject({ sessionId: 'old-1', prompt: [
+      { type: 'text', text: 'Your new name is Lantern.\n\nThe user now prefers short answers.' }, { type: 'text', text: 'name?' },
+    ] });
+    fake.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await handle.send({ type: 'user', content: 'again?' });
+    await vi.waitFor(() => expect(fake.prompts).toHaveLength(2));
+    expect(fake.prompts[1]!.params.prompt).toEqual([{ type: 'text', text: 'again?' }]);
+    fake.prompts[1]!.settle.resolve({ stopReason: 'end_turn' });
+    await handle.close();
+  });
+
+  it('sends as the companion with its selected plugin model and receives the reply', async () => {
+    const offered = { id: 'model', category: 'model', name: 'Model', type: 'select', currentValue: 'first',
+      options: [{ value: 'first', name: 'First' }, { value: 'chosen', name: 'Chosen' }] };
+    const fake = createFakeAgent({ configOptions: [offered], handlers: {
+      'session/set_config_option': ({ value }) => ({ configOptions: [{ ...offered, currentValue: value }] }),
+    } });
+    const connect = vi.fn(async (_key: string) => fake.transport);
+    const contexts: Array<Record<string, unknown>> = [];
+    const engine = new AcpAgent({
+      auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+      runtimeConfig: {}, binaryPath: '', logger: silentLogger, clientInfo: { name: 'cindy', version: 'test' },
+      endpoints: { connect },
+      preparePiExtraSpawnConfig: async (_providers, ctx) => { contexts.push(ctx as unknown as Record<string, unknown>); return null; },
+    });
+    const handle = await engine.startSession({
+      workingDir: '/w',
+      model: 'chosen',
+      providerId: 'acp-plugin:dsh-acp:dsh',
+      botProfilePrompt: 'You are Mika, a calm research buddy.',
+      botRuntimeProfile: {
+        botId: 'research', profileVersion: 1,
+        skillPolicy: { mode: 'allowlist', configured: [], catalog: [] },
+        toolsetPolicy: { mode: 'allowlist', configured: [], catalog: [] },
+        mcpPolicy: { mode: 'allowlist', configured: ['notes'], catalog: [{ name: 'notes', source: 'custom' }] },
+      },
+      botProfileContextPrompt: 'Teammate rules and capabilities.',
+      makerMemoryEnabled: true,
+      makerMemoryIndexSnapshot: 'Memory index: prefers concise tables.',
+      botUserProfilePrompt: 'The user prefers weekly summaries.',
+    });
+    expect(connect).toHaveBeenCalledWith('dsh-acp:dsh');
+    expect(handle.model).toBe('chosen');
+    expect(fake.sent).toContainEqual(expect.objectContaining({ method: 'session/set_config_option',
+      params: expect.objectContaining({ configId: 'model', value: 'chosen' }) }));
+    const events: Array<{ type: string; data: unknown }> = [];
+    const readReply = (async () => {
+      for await (const event of handle.events()) {
+        events.push(event);
+        if (event.type === 'done') break;
+      }
+    })();
+    expect(contexts).toEqual([expect.objectContaining({ mcpCallerKind: 'unknown', mcpCallerAttested: false, memoryEnabled: true,
+      botMcpPolicy: { mode: 'allowlist', configured: ['notes'], catalog: [{ name: 'notes', source: 'custom' }] } })]);
+    await handle.send({ type: 'user', content: 'hello' });
+    await vi.waitFor(() => expect(fake.prompts).toHaveLength(1));
+    const [brief, userMsg] = fake.prompts[0]!.params.prompt as Array<{ text: string }>;
+    expect(brief!.text).toContain('You are Mika, a calm research buddy.');
+    expect(brief!.text).toContain('Teammate rules and capabilities.');
+    expect(brief!.text).toContain('Memory index: prefers concise tables.');
+    expect(brief!.text).toContain('The user prefers weekly summaries.');
+    expect(userMsg).toEqual({ type: 'text', text: 'hello' });
+    fake.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Hello from the chosen model.' } });
+    fake.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await readReply;
+    expect(events).toContainEqual(expect.objectContaining({ type: 'text', data: expect.objectContaining({ text: 'Hello from the chosen model.' }) }));
+    await handle.setModel?.('default');
+    expect(handle.model).toBe('first');
+    await handle.close();
+  });
+});

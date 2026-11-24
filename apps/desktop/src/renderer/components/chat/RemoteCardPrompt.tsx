@@ -38,14 +38,14 @@ export function useRemoteCardPromptFor(callId: string): Extract<RemoteCardPrompt
 }
 
 /** The plugin asked for a model; the menu opens at the card's top edge. */
-export function RemoteCardModelRequest({ prompt, inDialog }: { prompt: Extract<RemoteCardPrompt, { kind: 'model' }>; inDialog?: boolean }) {
+export function RemoteCardModelRequest({ prompt }: { prompt: Extract<RemoteCardPrompt, { kind: 'model' }> }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(true);
   const chosen = useRef(false);
   const [attempt, setAttempt] = useState(0);
   if (!open) return null;
   return (
-    <GhostCardModelSelect key={attempt} inDialog={inDialog}
+    <GhostCardModelSelect key={attempt}
       rect={{ top: 0, left: 0, width: 0, height: 0 }}
       initial={routeForPicker(prompt.request.initial ?? null, prompt.remote)}
       onSelect={(route) => {

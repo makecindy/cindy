@@ -7383,7 +7383,8 @@ describe('CodexAgent fast mode service tier', () => {
   it.each(['standard', 'priority'] as const)('prices the actual proxy execution (%s) without clearing Fast', async priceVariant => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent, method => method === Method.TurnStart ? { turn: { id: 'turn-1' } } : undefined);
-    const resolveUsagePriceVariant = vi.fn(() => priceVariant);
+    const reportedModel = priceVariant === 'priority' ? 'served-model' : undefined;
+    const resolveUsagePriceVariant = vi.fn(() => reportedModel ? { priceVariant, model: reportedModel } : priceVariant);
     const handle = await agent.startSession({ sessionId: 'session-xai-pricing', model: 'xai/grok-4.7',
       fastMode: true, workingDir: '/repo', resolveUsagePriceVariant });
     const handlers = host.getThreadHandlers()!;
@@ -7399,9 +7400,13 @@ describe('CodexAgent fast mode service tier', () => {
     handlers.turnCompleted!({ threadId: 'start-thread-id', turn: { id: 'turn-1', status: 'completed' } });
     await sending;
     await waitForExpectation(() => expect(events.some(e => e.type === 'done')).toBe(true));
+    expect(events.find(e => e.type === 'done')?.data?.usage?.execution).toMatchObject({
+      model: 'xai/grok-4.7', providerId: null, credentialMode: 'provider-oauth',
+    });
     expect(resolveUsagePriceVariant).toHaveBeenCalledWith({ threadId: 'start-thread-id', inputTokens: 30, outputTokens: 5, cacheReadTokens: 10 });
     expect((events.find(e => e.type === 'done')?.data as { usage: { segments: unknown[] } }).usage.segments)
-      .toEqual([expect.objectContaining({ inputTokens: 20, outputTokens: 5, cacheReadTokens: 10, priceVariant })]);
+      .toEqual([expect.objectContaining({ inputTokens: 20, outputTokens: 5, cacheReadTokens: 10, priceVariant,
+        model: reportedModel ?? 'xai/grok-4.7', modelConfirmed: Boolean(reportedModel) })]);
     expect(handle.getFastMode?.()).toBe(true);
     await handle.close();
   });
@@ -9526,6 +9531,26 @@ describe('CodexAgent MCP thread context hooks', () => {
     expect(createdTransports[0].closed).toBe(true);
     expect(createdTransports[1].closed).toBe(false);
     await b.close(); await agent.dispose();
+  });
+
+  // Regression (2026-11-22, teammate iMessage lane): a subscription-account session's host key carries
+  // the account, the writer check did not, so the session's own host looked like another writer and every
+  // explicit route apply closed and relinked an unchanged session (provider-thread-relink, same provider).
+  it('treats the subscription account host of the same session as the target, not another writer', async () => {
+    const profile: NativeSubscriptionAccount = { id: 'pooled', configDir: '/fixture/.codex-pooled',
+      assertCurrent() {}, readState: async () => ({ authenticated: true }) };
+    const deps = createDeps();
+    deps.auth.getAuthEnv = async options => ({ CODEX_HOME: options?.nativeSubscriptionAccount?.configDir ?? '/fixture/legacy' });
+    const agent = new CodexAgent(deps);
+    try {
+      const handle = await agent.startSession({ sessionId: 'lane', providerId: 'openai', model: 'gpt-5.4', workingDir: '/repo', [NATIVE_SUBSCRIPTION_ACCOUNT]: profile });
+      createdTransports[0].setMockResponse('thread/loaded/list', { result: { data: [handle.id], nextCursor: null } });
+      const query = { sessionId: 'lane', threadId: handle.id, model: 'gpt-5.4', providerId: 'openai' };
+      expect(await agent.requiresCodexThreadHostTransfer({ ...query, [NATIVE_SUBSCRIPTION_ACCOUNT]: profile })).toBe(false);
+      // A route without that account still has to move the writer.
+      expect(await agent.requiresCodexThreadHostTransfer(query)).toBe(true);
+      await handle.close();
+    } finally { await agent.dispose(); }
   });
 
   it('propagates account host shutdown failure before another account can resume its rollout', async () => {
@@ -18876,6 +18901,8 @@ describe('CodexAgent MCP thread context hooks', () => {
     if (scenario === 'user') expect(JSON.stringify(steers)).toContain('User denied this tool call via Cindy');
     if (scenario === 'system') {
       expect(JSON.stringify(steers)).toContain('Cindy could not approve');
+      // Native Codex calls every decline "user rejected"; the steer must say nobody answered in time.
+      expect(JSON.stringify(steers)).toContain('the user did not reject it');
       expect(JSON.stringify(steers)).not.toContain('User denied');
     }
     expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(1);
@@ -27649,6 +27676,43 @@ describe('CodexAgent turn lifecycle', () => {
     }
   });
 
+  // Native can report the denial with a retry, with a terminal notification, or only on completion.
+  it.each([
+    ['retry', 'old', 'http', 'codex_compaction_model_unavailable'],
+    ['terminal', 'old', 'http', 'codex_compaction_model_unavailable'],
+    ['completed', 'old', 'http', 'codex_compaction_model_unavailable'],
+    ['retry', 'selected', 'http', 'model_unavailable'],
+    ['retry', 'old', 'bridge', 'codex_compaction_model_unavailable'],
+    ['terminal', 'old', 'bridge', 'codex_compaction_model_unavailable'],
+    ['completed', 'old', 'bridge', 'codex_compaction_model_unavailable'],
+  ] as const)('attributes a %s denial of %s via %s to the correct model', async (notification, rejected, transport, reason) => {
+    const agent = new CodexAgent(createDeps({}, {
+      getRejectedCodexDownshiftModel: (session, thread, turn) =>
+        session === 'downshift' && thread === 'start-thread-id' && turn === 'turn-1' ? { model: rejected, transport } : undefined,
+    }));
+    const host = installFakeHost(agent, method => method === Method.TurnInterrupt ? {} : undefined);
+    const handle = await agent.startSession({ sessionId: 'downshift', model: 'selected', workingDir: '/repo' });
+    try {
+      const handlers = host.getThreadHandlers()!;
+      const iterator = handle.events()[Symbol.asyncIterator]();
+      const threadId = 'start-thread-id';
+      const turnId = 'turn-1';
+      const error = { message: transport === 'bridge'
+        ? 'Native provider request failed [phase=adapter-event; HTTP 403; category=permission; request=fixture]'
+        : 'unexpected status 403: {"error":{"code":"user_model_access_denied"}}' };
+      handlers.turnStarted?.({ threadId, turn: { id: turnId } });
+      if (notification === 'completed') {
+        handlers.turnCompleted?.({ threadId, turn: { id: turnId, status: 'failed', error } });
+      } else {
+        handlers.error?.({ threadId, turnId, willRetry: notification === 'retry', error });
+      }
+      expect(await nextEvent(iterator)).toMatchObject({ type: 'error', data: { reason, isTerminal: true } });
+      expect(host.request.mock.calls.filter(([method]) => method === Method.TurnInterrupt)).toHaveLength(notification === 'retry' ? 1 : 0);
+    } finally {
+      await handle.close();
+    }
+  });
+
   it.each([true, false].flatMap(willRetry => [
     { willRetry, code: 'model_not_found', status: 400 },
     { willRetry, code: 'user_model_access_denied', status: 403 },
@@ -29581,6 +29645,53 @@ describe('CodexAgent turn lifecycle', () => {
     });
     expect(await nextEvent(iterator)).toMatchObject({ type: 'done' });
     await handle.close();
+  });
+
+  // #8309 / unit: notifications and failed completion snapshots share the
+  // diagnosis without adding turn/start calls. Existing tests only cover
+  // context overflow in the completion-only path, not nested exhausted 529.
+  it.each(['notification', 'completion-only'])('keeps nested overload terminal through %s', async delivery => {
+    vi.useFakeTimers();
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, method => method === Method.TurnStart
+      ? { turn: { id: 'turn-1' } } : undefined);
+    const handle = await agent.startSession({ sessionId: `session-nested-overload-${delivery}`,
+      model: 'gpt-5.4', workingDir: '/repo' });
+    try {
+      const handlers = (host.subscribeThread.mock.calls as unknown as Array<[string, ThreadEventHandlers]>)[0]![1];
+      const events: AgentEvent[] = [];
+      void (async () => { for await (const event of handle.events()) events.push(event); })();
+      await handle.send({ type: 'user', content: 'check the workspace' });
+      const error = { message: 'stream disconnected before completion',
+        codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 529 } } as const,
+        additionalDetails: 'HTTP 529: server_is_overloaded' };
+      const turnId = handle.getCurrentTurnId?.() ?? 'turn-1';
+      if (delivery === 'notification') {
+        handlers.error?.({ threadId: 'start-thread-id', turnId, willRetry: false, error });
+      } else {
+        handlers.turnCompleted?.({ threadId: 'start-thread-id', turn: { id: turnId, status: 'failed', error } });
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      expect(events.filter(event => event.type === 'error')).toEqual([expect.objectContaining({ type: 'error', data: expect.objectContaining({
+        reason: 'UPSTREAM_OVERLOADED', codexErrorInfo: 'responseTooManyFailedAttempts', isTerminal: true,
+      }) })]);
+      if (delivery === 'notification') {
+        expect(events.filter(event => event.type === 'status' &&
+          (event.data as { isRunning?: boolean }).isRunning === false)).toHaveLength(1);
+        // The notification settles the turn; its subsequent completion must not
+        // emit a second terminal error or restart the failed request.
+        handlers.turnCompleted?.({ threadId: 'start-thread-id', turn: { id: turnId, status: 'failed', error } });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(events.filter(event => event.type === 'error')).toHaveLength(1);
+      } else {
+        expect(events.filter(event => event.type === 'done')).toHaveLength(1);
+      }
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(1);
+    } finally {
+      await handle.close();
+      vi.useRealTimers();
+    }
   });
 
   it('preserves structured Codex error info when failed turn only reports it on turn/completed', async () => {

@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import * as ownerContext from '../../ownerContext.js';
+import { withCrossProcessLock } from '../../device-link/crossProcessLock.js';
 import * as runtimePreferences from '../../maker-host/runtime-plugin-settings.js';
 
 // Test value: the production controller must never load data or call plugins for
@@ -233,6 +234,48 @@ describe('task runtime plugin control', () => {
       expect(read).not.toHaveBeenCalled(); expect(stat).not.toHaveBeenCalled(); expect(exists).not.toHaveBeenCalled();
     } finally {
       read?.mockRestore(); stat?.mockRestore(); exists?.mockRestore(); owner.mockRestore(); ownerPath.mockRestore();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Unit with a temporary real preference file. The lookup test does not exercise the
+  // desktop writer: a write accepted behind another holder must only become visible after
+  // release, and a revoked Host request must leave the previous bytes and the lock intact.
+  it.each([false, true])('preserves task settings at the write lock (revoke while waiting: %s)', async revoke => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'runtime-plugin-write-'));
+    const file = path.join(dir, 'runtime-plugin-prefs.json');
+    const ownerPath = vi.spyOn(ownerContext, 'ownerScopedPath').mockReturnValue(file);
+    const old: RuntimePluginSettings = { 'will-start-turn': [{ pluginId: 'first', onFailure: 'allow' }] };
+    const next: RuntimePluginSettings = { 'will-start-turn': [{ pluginId: 'second', onFailure: 'block' }] };
+    try {
+      await runtimePreferences.writeRuntimePluginSettings('task', old);
+      const bytes = fs.readFileSync(file);
+      const denied = new Error('profile is in use');
+      let held = false;
+      const check = vi.fn(() => { if (held) throw denied; });
+      let write!: Promise<void>;
+      await withCrossProcessLock(file + '.lock', { label: 'test-holder', waitMs: 1000 }, async lock => {
+        expect(lock.held).toBe(true);
+        write = revoke
+          ? runtimePreferences.writeRuntimePluginSettings('task', next, check)
+          : runtimePreferences.writeRuntimePluginSettings('task', next);
+        held = true;
+        expect(check).not.toHaveBeenCalled();
+        expect(fs.readFileSync(file)).toEqual(bytes);
+      });
+      if (revoke) {
+        await expect(write).rejects.toBe(denied);
+        expect(check).toHaveBeenCalledTimes(1);
+        expect(fs.readFileSync(file)).toEqual(bytes);
+        expect(runtimePreferences.readRuntimePluginSettings('task')).toEqual(old);
+        await runtimePreferences.writeRuntimePluginSettings('task', next);
+      } else {
+        await write;
+      }
+      expect(JSON.parse(fs.readFileSync(file, 'utf8')).tasks.task).toEqual(next);
+      expect(runtimePreferences.readRuntimePluginSettings('task')).toEqual(next);
+    } finally {
+      ownerPath.mockRestore();
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });

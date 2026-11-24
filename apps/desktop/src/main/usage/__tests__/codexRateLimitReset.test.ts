@@ -439,13 +439,18 @@ describe('Codex rate-limit reset control plane', () => {
     expect(deps.consumeResetCredit).not.toHaveBeenCalled();
   });
 
-  it('does not record or mint an offer when identity changes during a rate-limit read', async () => {
-    const readAccountIdentity = vi.fn()
-      .mockResolvedValueOnce({ email: 'person@example.com', accountId: 'workspace-a' })
-      .mockResolvedValueOnce({ email: 'person@example.com', accountId: 'workspace-b' });
-    const { deps, service } = harness({ readAccountIdentity });
+  // #12390, standard: the combined probe still needs an independent post-read
+  // identity check. Two workspaces sharing an email must never share offers.
+  it.each([false, true])('does not record or mint an offer when identity changes (automatic: %s)', async automatic => {
+    const before = { email: 'person@example.com', accountId: 'workspace-a' };
+    const after = { ...before, accountId: 'workspace-b' };
+    const readAccountIdentity = vi.fn().mockResolvedValue(after);
+    if (!automatic) readAccountIdentity.mockResolvedValueOnce(before);
+    const readAccountAndRateLimits = vi.fn(async () => ({ identity: before, response: response() }));
+    const { deps, service } = harness({ readAccountIdentity, readAccountAndRateLimits });
 
-    await expect(service.read()).rejects.toMatchObject({ reason: 'ACCOUNT_CHANGED' });
+    await expect(service.read(automatic)).rejects.toMatchObject({ reason: 'ACCOUNT_CHANGED' });
+    expect(readAccountAndRateLimits).toHaveBeenCalledTimes(automatic ? 1 : 0);
     expect(deps.recordRateLimitSnapshot).not.toHaveBeenCalled();
     expect(deps.createIdempotencyKey).not.toHaveBeenCalled();
   });

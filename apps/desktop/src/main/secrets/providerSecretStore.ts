@@ -21,16 +21,14 @@ import {
   customProviderHeaderStorageKey,
   customProviderSecretStorageKey,
   customMcpSecretStorageKey,
-  CUSTOM_MCP_SECRET_PREFIX,
-  CUSTOM_PROVIDER_HEADER_SECRET_PREFIX,
   providerOAuthStorageKey,
   ghostSecretStorageKey,
   ghostSecretHintStorageKey,
   deriveGhostSecretTail,
-  GHOST_SECRET_PREFIX,
-  GHOST_SECRET_HINT_PREFIX,
   GHOST_QUARANTINED_OAUTH_PREFIX,
   PROVIDER_SECRET_IDS,
+  DYNAMIC_SECRET_PREFIXES,
+  PROVIDER_SECRET_OWNER_STORAGE_KEY,
   PI_PROXY_DERIVATION_KEY_STORAGE_KEY,
   MCP_APP_REVISION_KEY_STORAGE_KEY,
   REMOTE_MCP_BRIDGE_TOKEN_STORAGE_KEY,
@@ -39,9 +37,10 @@ import {
 import {
   getActiveAppSession,
   isAppSessionBoundaryPending,
-  dataOwnerStorageKey,
   LOCAL_DATA_OWNER_ID,
 } from '../appSessionState.js';
+import { ownerStoragePrefix, resolveOwnerScopedSecretStorageKey } from './providerSecretOwnerKey.js';
+export { resolveOwnerScopedSecretStorageKey } from './providerSecretOwnerKey.js';
 import { hasLegacyOwnerNamespaceClaim } from '../ownerNamespaceMigration.js';
 
 const log = createLogger('providerSecretStore');
@@ -51,7 +50,7 @@ const log = createLogger('providerSecretStore');
  * 用于账号边界:登录 / 冷启动确立 userId 后,若 owner 与之不同(同机换账号),清掉
  * 上一个账号留在本机的密钥防串号;同账号重新登录 / 会话过期重登则保留,不必重填。
  */
-const OWNER_STORAGE_KEY = 'provider_secret_owner';
+const OWNER_STORAGE_KEY = PROVIDER_SECRET_OWNER_STORAGE_KEY;
 
 /**
  * providerSecretStore.ts (main)
@@ -91,35 +90,11 @@ function secretDir(): string {
   return path.join(app.getPath('userData'), 'safe-storage');
 }
 
-const DYNAMIC_SECRET_PREFIXES = [
-  'ghost_alias_migration_',
-  'bot_environment_',
-  'byok_cache_',
-  CUSTOM_MCP_SECRET_PREFIX,
-  CUSTOM_PROVIDER_HEADER_SECRET_PREFIX,
-  'provider_key_',
-  'provider_oauth_',
-  GHOST_SECRET_PREFIX,
-  GHOST_SECRET_HINT_PREFIX,
-  GHOST_QUARANTINED_OAUTH_PREFIX,
-] as const;
-
 function isManagedSecretStorageKey(key: string): boolean {
   return (
     PROVIDER_SECRET_IDS.some((id) => providerSecretStorageKey(id) === key) ||
     DYNAMIC_SECRET_PREFIXES.some((prefix) => key.startsWith(prefix))
   );
-}
-
-function ownerStoragePrefix(ownerId: string): string {
-  return `owner_${dataOwnerStorageKey(ownerId)}_`;
-}
-
-/** Resolve a renderer/main logical provider-secret key into the active owner's key. */
-export function resolveOwnerScopedSecretStorageKey(storageKey: string): string | null {
-  const ownerId = getActiveAppSession().dataOwnerId;
-  if (!ownerId) return null;
-  return `${ownerStoragePrefix(ownerId)}${storageKey}`;
 }
 
 function readPhysical(storageKey: string): string | null {

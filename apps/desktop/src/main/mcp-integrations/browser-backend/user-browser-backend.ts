@@ -882,12 +882,19 @@ export class UserBrowserBackend implements BrowserBackend {
     const complete = new Set<string>();
     for (const client of clients) {
       // 新版扩展标出 Cindy 自己窗口里的页签,其余都是用户的;旧版不标,就不猜归属。
-      const knowsOwner = this.parity(gate.control, client.id);
+      const supportsParity = this.parity(gate.control, client.id);
       const listed = await gate.control.bridge.act('tabs', {
         browser: client.id,
         limit: Math.min(100, Math.max(1, req.limit ?? 50)),
       });
-      if (!listed.ok) return this.failureResult(req.action, listed);
+      if (!listed.ok) {
+        const failure = this.failureResult(req.action, listed);
+        if (listed.error !== 'EXTENSION_TIMEOUT' && listed.error !== 'BROWSER_TIMEOUT') return failure;
+        const recovery = supportsParity
+          ? '已知网页地址时，无需先调用 tabs。直接用 read（传 url）读取，或用 open（传 url）打开，再用返回的 targetId 操作。若有多个浏览器连接，先用 profiles 查看连接 id，再传 profile。'
+          : '请在浏览器的扩展管理页更新 Cindy 扩展，再重试 tabs。';
+        return { ...failure, message: `${failure.message} ${recovery}` };
+      }
       if (listed.truncated !== true) complete.add(client.id);
       for (const tab of (Array.isArray(listed.tabs) ? listed.tabs : []) as Array<
         Record<string, unknown>
@@ -913,7 +920,7 @@ export class UserBrowserBackend implements BrowserBackend {
         seen.add(record.targetId);
         tabs.push({
           ...this.describe(record),
-          ...(knowsOwner ? { owner: tab.cindyWindow === true ? 'cindy' : 'user' } : {}),
+          ...(supportsParity ? { owner: tab.cindyWindow === true ? 'cindy' : 'user' } : {}),
           active: tab.active === true,
           ...(tab.status ? { status: tab.status } : {}),
         });

@@ -25,6 +25,7 @@ import {
   clearRemoteSessionActivity,
 } from '@/features/device-link/remoteSessionActivityStore';
 
+import { TASK_INFO_KEY } from '../../hooks/helpers/sidebarFilterCore';
 import { SessionCard } from '../SessionCard';
 import type { Session } from '@/lib/ccAgent.types';
 import { SessionItem } from '../SessionItem';
@@ -156,6 +157,7 @@ vi.mock('@/lib/makerChatStore', () => ({
   makerChatStore: {
     ensureInitialMessages: mocks.ensureInitialMessages,
     subscribeAll: () => () => {},
+    hasPendingIssueConfirm: () => false,
     getRunningSnapshot: () =>
       new Map(
         [...mocks.pendingPluginSetupSessionIds].map((sessionId) => [
@@ -1024,8 +1026,9 @@ describe('SessionCard visual cases', () => {
     });
     const listArchive = within(listContainer).getByRole('button', { name: '归档' });
     for (const action of [listMore, listArchive]) {
+      expect(action.className).toContain('cindy-button-frame');
       expect(action.className).toContain('size-5');
-      expect(action.className).toContain('rounded-md');
+      expect(action.className).toContain('rounded-full');
       expect(action.className).toContain('text-sidebar-action-icon');
       expect(action.className).not.toMatch(/(?:^|\s)bg-sidebar(?:\s|$)/);
       expect(action.className).not.toContain('size-6');
@@ -1049,7 +1052,7 @@ describe('SessionCard visual cases', () => {
     expect(activeListMore.className).toContain('text-sidebar-item-active-foreground');
     expect(activeListMore.className).not.toContain('bg-sidebar-item-active');
     expect(activeListMore.className).toContain(
-      'hover:bg-[color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]',
+      'hover:[--button-face-bg:color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]',
     );
     cleanup();
 
@@ -1058,8 +1061,8 @@ describe('SessionCard visual cases', () => {
       name: moreActionsName,
     });
     expect(cardMore.className).toContain('size-6');
-    expect(cardMore.className).toContain('bg-[var(--cmd-palette-bg)]');
-    expect(cardMore.className).toContain('border-sidebar-border');
+    expect(cardMore.className).toContain('[--button-face-bg:var(--cmd-palette-bg)]');
+    expect(cardMore.className).toContain('[--button-face-border:hsl(var(--sidebar-border))]');
     expect(cardMore.className).not.toContain('size-5');
     expect(cardMore.querySelector('svg')?.getAttribute('width')).toBe('13');
   });
@@ -1115,6 +1118,26 @@ describe('SessionCard visual cases', () => {
       }
     },
   );
+
+  it('shows a single running indicator with Harness hidden in pinned cards and list rows', () => {
+    const previous = localStorage.getItem(TASK_INFO_KEY);
+    try {
+      localStorage.setItem(TASK_INFO_KEY, JSON.stringify({ version: 2, fields: [] }));
+      act(() => window.dispatchEvent(new StorageEvent('storage', { key: TASK_INFO_KEY })));
+      for (const variant of ['card', 'list']) {
+        for (const isRunning of [true, false]) {
+          const view = renderCase('running-loading', { variant, isRunning });
+          expect(view.container.querySelectorAll('[data-sidebar-right-status="running"]'))
+            .toHaveLength(isRunning ? 1 : 0);
+          view.unmount();
+        }
+      }
+    } finally {
+      if (previous === null) localStorage.removeItem(TASK_INFO_KEY);
+      else localStorage.setItem(TASK_INFO_KEY, previous);
+      act(() => window.dispatchEvent(new StorageEvent('storage', { key: TASK_INFO_KEY })));
+    }
+  });
 
   it('keeps running card mode on the stable preview while list mode can show live detail', () => {
     const visualCase = sessionCardVisualCases.find((item) => item.id === 'running-loading');

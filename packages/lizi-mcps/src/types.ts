@@ -643,6 +643,11 @@ export type ControlResult<T extends object = object, E extends string = never> =
  * LLM tool calls to fail zod enum validation.
  */
 export type ControlWorkerAgent = 'claude-code' | 'codex' | 'pi';
+/**
+ * Orca Worker 的执行引擎：内置引擎，或 'acp' = 本机插件提供的执行引擎(docs/plans/acp-plugin-bridge.md)，
+ * 配 provider_id = acp-plugin:<插件>:<引擎>。只用于创建 / 读取 Worker，普通任务仍只认内置引擎。
+ */
+export type ControlWorkerEngine = ControlWorkerAgent | 'acp';
 
 export interface ResolvedBrowserScreenshot {
   buffer: Buffer;
@@ -969,6 +974,8 @@ export type LiziMcpCallerKind = 'root' | 'descendant' | 'unknown';
 export interface LiziMcpSessionContext {
   agentKind: string;
   workingDir: string;
+  /** In-process identity shared by Codex startup and registered thread contexts. */
+  startupCatalogKey?: object;
   /** Host-attested plugin caller. This never supplies or inherits a Session identity. */
   hostCaller?: Extract<import('./tool-call-authority.js').HostToolCaller, { kind: 'plugin' }>;
   /** Host-owned memory namespace override shared with the agent prompt path. */

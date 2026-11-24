@@ -236,7 +236,7 @@ export const MarkdownMermaidBlock = memo(function MarkdownMermaidBlock({
       {showSourceView ? (
         <pre
           className={cn(
-            'overflow-x-auto rounded-[12px]',
+            'overflow-x-auto rounded-xl',
             'border border-[var(--msg-code-block-border)]',
             'bg-[var(--msg-code-block-bg)]',
             'p-4 font-mono text-[length:var(--app-code-font-size)] leading-[1.5]',
@@ -265,7 +265,7 @@ export const MarkdownMermaidBlock = memo(function MarkdownMermaidBlock({
           aria-label={t('chat.mermaid.clickToZoom')}
           title={t('chat.mermaid.clickToZoom')}
           className={cn(
-            'overflow-x-auto rounded-[12px]',
+            'overflow-x-auto rounded-xl',
             'border border-[var(--msg-code-block-border)]',
             'bg-[var(--msg-code-block-bg)]',
             'p-4 flex justify-center cursor-zoom-in',
@@ -282,7 +282,7 @@ export const MarkdownMermaidBlock = memo(function MarkdownMermaidBlock({
         // matching the code-block frame so layout doesn't jump.
         <pre
           className={cn(
-            'overflow-x-auto rounded-[12px]',
+            'overflow-x-auto rounded-xl',
             'border border-[var(--msg-code-block-border)]',
             'bg-[var(--msg-code-block-bg)]',
             'p-4 font-mono text-[length:var(--app-code-font-size)] leading-[1.5]',

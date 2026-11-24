@@ -148,6 +148,46 @@ function harness(
   });
 }
 
+it('routes a shared image model only to a group member that offers it', async () => {
+  const model = 'openai/gpt-image-2';
+  const remote = { ...member('remote', 'device', 'remote'), providerId: 'openai-independent' };
+  const localOnly = { ...member('pool', 'device', 'pool'), providerId: 'openai-sub-12345678' };
+  const local = { ...LOCAL, providerId: 'openai' };
+  const directory: ProviderGroupDirectory = {
+    async resolveMembers(_providerId, config) {
+      return config.members.map((member) => ({
+        member,
+        label: member.key,
+        state: 'ok',
+        view: {
+          ...view(member.providerId),
+          ...(member.key === localOnly.key ? { subscriptionPool: 'openai' as const } : {}),
+          imageModels: [{ id: `${member.providerId}/gpt-image-2`, name: model, disabled: member.kind === 'local' }],
+        },
+      }));
+    },
+    async listCandidates() { return []; },
+    async readDeviceCatalog() { return []; },
+    async probe() { return 'ok'; },
+    memberLabel: (member) => member.key,
+    invalidate: () => undefined,
+  };
+  const router = harness({}, {}, [], undefined, {
+    directory,
+    readPoolScheduling: async (_member, modelId) => ({
+      version: 1, accounts: modelId === model ? 0 : 1,
+      running: 0, totalRunning: 0, full: false, urgency: null, fiveHourTight: false,
+    }),
+    readGroup: () => ({ strategy: 'least', autoSwitch: true, members: [local, localOnly, remote] }),
+  });
+  expect(await router.pick({
+    providerId: 'openai', agentKind: 'codex', model, capability: 'image.generate',
+  })).toMatchObject({ kind: 'member', member: remote });
+  expect(await router.pick({
+    providerId: 'openai', agentKind: 'codex', model, capability: 'image.generate', exclude: new Set([remote.key]),
+  })).not.toMatchObject({ kind: 'member', member: localOnly });
+});
+
 // 2026-11-11 用户裁决：达到并发上限就不再分；没设置过上限的电脑不限制。
 describe('provider group hard concurrency limits', () => {
   const capped = (entry: ProviderGroupMember, limit: number): ProviderGroupMember => ({ ...entry, limit, limitSet: true });
