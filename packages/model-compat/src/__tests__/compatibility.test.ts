@@ -375,23 +375,30 @@ describe('request-owned Responses compatibility', () => {
   });
 
   // Replayed tool definitions still allocate names for old input call items, without selecting them.
-  it.each([false, true])('leaves a selector unresolved for replay-only tools (allowed=%s)', allowed => {
+  it.each([false, true])('uses the same replayed wire name only for reloaded tools (allowed=%s)', async allowed => {
     const adapter = createCodexResponsesCompatibilityAdapter();
     const selector = { type: 'function', name: 'read' };
     const toolChoice = allowed ? { type: 'allowed_tools', tools: [selector] } : selector;
-    const request = adapter.adaptRequest({
-      input: [
-        { type: 'additional_tools', tools: [
-          { type: 'function', name: 'workspace__read' },
-          { type: 'namespace', name: 'workspace', tools: [{ type: 'function', name: 'read' }] },
-        ] },
-        { type: 'function_call', name: 'read', namespace: 'workspace', call_id: 'previous', arguments: '{}' },
-        { type: 'additional_tools', tools: [] },
-      ],
-      tool_choice: toolChoice,
-    }, 10107, undefined, true) as { input: unknown[]; tool_choice: unknown };
-    expect(request.tool_choice).toEqual(toolChoice);
-    expect(request.input[1]).toMatchObject({ type: 'function_call', name: 'workspace__read_2' });
+    const child = { type: 'namespace', name: 'workspace', tools: [{ type: 'function', name: 'read' }] };
+    const history = [
+      { type: 'additional_tools', tools: [{ type: 'function', name: 'workspace__read' }, child] },
+      { type: 'function_call', name: 'read', namespace: 'workspace', call_id: 'previous', arguments: '{}' },
+      { type: 'additional_tools', tools: [] },
+    ];
+    for (const reloaded of [false, true]) {
+      const request = adapter.adaptRequest({
+        input: reloaded ? [...history, { type: 'tool_search_output', tools: [child] }] : history,
+        tool_choice: toolChoice,
+      }, 10107, undefined, true) as { input: unknown[]; tool_choice: unknown };
+      const expectedSelector = reloaded ? { ...selector, name: 'workspace__read_2' } : selector;
+      expect(request.tool_choice).toEqual(allowed ? { type: 'allowed_tools', tools: [expectedSelector] } : expectedSelector);
+      const wire = { type: 'function_call', name: 'workspace__read_2', call_id: 'current', arguments: '{}' };
+      const response = JSON.stringify({ status: 'completed', output: [wire] });
+      const transform = adapter.createResponseTransform(10107, { contentType: 'application/json', contentEncoding: '' });
+      const text = transform ? await responseText(transform, response) : response;
+      expect(JSON.parse(text).output).toEqual([reloaded ? { ...wire, name: 'read', namespace: 'workspace' } : wire]);
+      expect(request.input[1]).toMatchObject({ type: 'function_call', name: 'workspace__read_2' });
+    }
   });
 
   // Replayed search output must not invalidate the current turn's search-loaded integer schema.

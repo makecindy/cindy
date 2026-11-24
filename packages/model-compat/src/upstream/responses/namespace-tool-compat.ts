@@ -493,7 +493,10 @@ export function rewriteRoutedNamespaceToolsForUpstream(
   canonicalNamespaceKinds?: ReadonlyMap<string, "function" | "custom">,
   originalToolChoice?: unknown,
   currentInlineIndex?: number,
-  currentBareSelectors?: ReadonlyMap<string, { type: string } | null>,
+  currentSelectors?: {
+    bare: ReadonlyMap<string, { type: string } | null>;
+    namespaced: ReadonlyMap<string, { name: string; namespace?: string } | null>;
+  },
 ): {
   body: unknown;
   aliases: Map<string, RoutedNamespaceToolIdentity>;
@@ -524,20 +527,25 @@ export function rewriteRoutedNamespaceToolsForUpstream(
   const originalBareCustomNames = bareCustomNames ?? collectBareCustomToolNames(body);
   const plan = buildRewritePlan(priorityGroups, currentInlineTools ? currentGroups.length : undefined);
   // Search-loaded bare tools keep their own short selectors after their definitions are serialized.
-  for (const name of currentBareSelectors?.keys() ?? []) {
+  for (const name of currentSelectors?.bare.keys() ?? []) {
     if (isRepresentableName(name)) addSelector(plan.selectors, name, name);
   }
+  // A current search can reload an exact historical coordinate. Reuse its existing allocation.
+  for (const tool of currentSelectors?.namespaced.values() ?? []) {
+    if (!tool?.namespace) continue;
+    const wireName = plan.identities.get(loweredIdentity(tool.namespace, tool.name));
+    if (wireName === undefined) continue;
+    plan.currentWireNames.add(wireName);
+    addSelector(plan.selectors, wireName, wireName);
+    addSelector(plan.selectors, tool.name, wireName);
+    addSelector(plan.selectors, dottedToolName(tool.namespace, tool.name), wireName);
+  }
   const currentBareWireNames = currentInlineIndex === undefined ? undefined : new Set<string>();
-  const currentChildNames = new Set<string>();
   if (currentBareWireNames) {
     for (const group of currentGroups) {
       for (const tool of group) {
         if (isPlainObject(tool) && tool.type !== "namespace" && isRepresentableName(tool.name)) {
           currentBareWireNames.add(tool.name);
-        }
-        const parsed = parseNamespaceGroup(tool);
-        if (parsed && parsed.namespace !== BUILTIN_FUNCTIONS_NAMESPACE) {
-          for (const child of parsed.children) currentChildNames.add(loweredWireName(parsed.namespace, child.name as string));
         }
       }
     }
@@ -582,13 +590,13 @@ export function rewriteRoutedNamespaceToolsForUpstream(
       || typeof original.name !== "string") return lowered;
     const allocated = plan.renamedWireNames.get(original.name);
     if (!allocated) return lowered;
-    if (currentBareWireNames && !currentChildNames.has(original.name)) return lowered;
+    if (!plan.currentWireNames.has(allocated)) return lowered;
     const childKind = renamedKinds.get(original.name);
-    const bare = currentBareSelectors?.get(original.name);
+    const bare = currentSelectors?.bare.get(original.name);
     if (bare === null) return lowered;
     const bareKind = bare?.type ?? (originalBareCustomNames.has(original.name) ? "custom" : "function");
     // Replayed bare tools still reserve a wire name. They cannot claim a selector over a current child.
-    const currentChildOnly = currentBareSelectors && !currentBareSelectors.has(original.name);
+    const currentChildOnly = currentSelectors && !currentSelectors.bare.has(original.name);
     return original.type === childKind && (childKind !== bareKind || currentChildOnly)
       ? { ...lowered, name: allocated } : lowered;
   };
