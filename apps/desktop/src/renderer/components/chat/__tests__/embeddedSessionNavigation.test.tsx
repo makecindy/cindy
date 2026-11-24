@@ -14,6 +14,8 @@ const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   remoteSessions: [] as Array<{ id: string; title: string; deviceLinkDeviceId: string; orcaRole: 'lead' | 'worker' | null }>,
   pinSessionOrigin: vi.fn(),
+  readOnDevice: vi.fn(async (id: string) => ({ id })),
+  merge: vi.fn(),
   getSessionDeviceId: vi.fn<(sessionId: string) => string | undefined>(() => undefined),
   resolveSessionRoute: vi.fn(async (sessionId: string) => `/cc-agent/${sessionId}`),
   getSession: vi.fn(async (sessionId: string) => ({
@@ -51,9 +53,15 @@ vi.mock('@/features/device-link/remoteProjectsStore', () => ({
     getSessionDeviceId: mocks.getSessionDeviceId,
     getVisibleMergedRemoteSessions: () => mocks.remoteSessions,
     pinSessionOrigin: mocks.pinSessionOrigin,
+    getDeviceSessions: (device: string) => mocks.remoteSessions.filter(row => row.deviceLinkDeviceId === device),
+    captureSessionRead: () => Object.assign(() => true, { mergeActivity: (row: unknown) => row }),
+    getDeviceName: () => 'Host',
+    mergeDeviceSessions: mocks.merge,
   },
 }));
-vi.mock('@/lib/sessionService', () => ({ get: mocks.getSession, list: mocks.listSessions }));
+vi.mock('@/lib/makerTransport', async (original) => ({ ...await original<typeof import('@/lib/makerTransport')>(), getSessionOnDevice: mocks.readOnDevice }));
+vi.mock('@/lib/sessionService', () => ({ get: mocks.getSession, list: mocks.listSessions,
+  resolveReferences: async ([sessionId]: string[]) => [{ sessionId, state: 'missing' }] }));
 vi.mock('@/lib/toast', () => ({ toast: { error: mocks.error, success: vi.fn() } }));
 vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthDeviceId: () => 'this-mac' }));
 vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
@@ -135,8 +143,8 @@ describe('sidebar-embedded session navigation boundary', () => {
       : <BotTaskLetterOpen senderSessionId={task.sessionId} />);
     fireEvent.click(screen.getByRole('button'));
     await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/remote-task', undefined));
-    expect(mocks.pinSessionOrigin).toHaveBeenCalledWith('remote-mac', 'remote-task');
-    expect(mocks.resolveSessionRoute).toHaveBeenCalledWith('remote-task', null, { remote: true });
+    expect(mocks.readOnDevice).toHaveBeenCalledWith('remote-task', 'remote-mac');
+    expect(mocks.resolveSessionRoute).toHaveBeenCalledWith('remote-task', { id: 'remote-task' }, { remote: true });
   });
 
   // Device priority is observable through the routed transport origin: a wrong
@@ -154,11 +162,11 @@ describe('sidebar-embedded session navigation boundary', () => {
     fireEvent.click(screen.getByRole('button'));
     await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/task-a', undefined));
     if (expectedDevice) {
-      expect(mocks.pinSessionOrigin).toHaveBeenCalledExactlyOnceWith(expectedDevice, 'task-a');
+      expect(mocks.readOnDevice).toHaveBeenCalledExactlyOnceWith('task-a', expectedDevice);
     } else {
       expect(mocks.pinSessionOrigin).not.toHaveBeenCalled();
     }
-    expect(mocks.resolveSessionRoute).toHaveBeenCalledWith('task-a', null, { remote });
+    expect(mocks.resolveSessionRoute).toHaveBeenCalledWith('task-a', remote ? { id: 'task-a' } : null, { remote });
   });
 
   it('keeps same-device qualified receipts local and preserves embedded navigation boundaries', async () => {
@@ -294,7 +302,7 @@ describe('sidebar-embedded session navigation boundary', () => {
     render(<SessionLinkChip href="cindy://session/same?device=mac-b" label="Task" />);
     fireEvent.click(screen.getByRole('button', { name: 'Task' }));
     await waitFor(() => expect(mocks.navigate).toHaveBeenCalled());
-    expect(mocks.pinSessionOrigin).toHaveBeenCalledWith('mac-b', 'same');
+    expect(mocks.readOnDevice).not.toHaveBeenCalled();
     expect(mocks.resolveSessionRoute).toHaveBeenCalledWith('same', right, { remote: true });
   });
 
@@ -365,8 +373,8 @@ describe('sidebar-embedded session navigation boundary', () => {
     fireEvent.click(screen.getByRole('button'));
 
     await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/archived-task', undefined));
-    expect(mocks.pinSessionOrigin).toHaveBeenCalledWith('remote-mac', 'archived-task');
-    expect(mocks.pinSessionOrigin.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(mocks.readOnDevice).toHaveBeenCalledWith('archived-task', 'remote-mac');
+    expect(mocks.merge.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.resolveSessionRoute.mock.invocationCallOrder[0]!,
     );
   });

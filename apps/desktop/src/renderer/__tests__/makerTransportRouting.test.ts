@@ -67,6 +67,36 @@ function stubElectron() {
 const sess = (id: string): Session => ({ id }) as unknown as Session;
 
 describe('makerApiFor 路由(完整对等会话级操作)', () => {
+  // Unit #12500: gate-only mocks missed sticky reads made while a link was pending.
+  it('keeps a pending device hint out of ID-only transport and preserves a newer remote owner', async () => {
+    const { invoke, localSessions } = stubElectron();
+    Object.assign(window, { addEventListener: vi.fn() });
+    const { confirmSessionOrigin } = await import('@/features/device-link/confirmSessionOrigin');
+    const { remoteProjectsStore } = await import('@/features/device-link/remoteProjectsStore');
+    const { getSessionFor } = await import('@/lib/makerTransport');
+    const id = 'worker';
+    const local = sess(id);
+    localSessions.get.mockResolvedValue(local);
+    let finish!: (row: Session | null) => void;
+    invoke.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const pending = confirmSessionOrigin(id, 'hint', () => true);
+    expect(await getSessionFor(id)).toBe(local);
+    finish(null);
+    await expect(pending).rejects.toThrow('missing');
+    invoke.mockRejectedValueOnce(new Error('offline'));
+    await expect(confirmSessionOrigin(id, 'hint', () => true)).rejects.toThrow('offline');
+    expect(await getSessionFor(id)).toBe(local);
+    invoke.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const stale = confirmSessionOrigin(id, 'hint', () => true);
+    remoteProjectsStore.setDeviceSessions('owner', 'Owner', [sess(id)]);
+    finish(sess(id));
+    await expect(stale).rejects.toThrow('Conflicting');
+    remoteProjectsStore.clear();
+    invoke.mockRejectedValueOnce(new Error('offline'));
+    await expect(getSessionFor(id)).rejects.toThrow('offline');
+    expect(invoke).toHaveBeenLastCalledWith('owner', 'local-db:sessions:get', [id]);
+    expect(localSessions.get).toHaveBeenCalledTimes(2);
+  });
   it('accepts deferred switch outcomes only from the owning remote device and session', async () => {
     stubElectron();
     let listener: ((push: { deviceId: string; channel: string; payload: unknown }, stamp?: unknown) => void) | undefined;
