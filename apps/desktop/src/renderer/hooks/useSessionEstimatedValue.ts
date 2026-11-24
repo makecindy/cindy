@@ -13,7 +13,7 @@ import { useChatDisplaySnapshot } from '@/components/chat/ChatDisplaySnapshotCon
 import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import { makerChatStore, type ChatMessage } from '@/lib/makerChatStore';
 import { estimatedSessionValueFor } from '@/lib/makerTransport';
-import { legacyEstimateMoney, turnEstimateAmounts } from '../../shared/turnEstimateAmounts';
+import { hasSubscriptionEstimateSource, legacyEstimateMoney, turnEstimateAmounts } from '../../shared/turnEstimateAmounts';
 import {
   addCompatibleRegionalMoney,
   normalizeRegionalMoney,
@@ -152,7 +152,15 @@ export function resolveEstimatedValueTurnCostEntry(
 }
 
 function sumCosts(costs: Map<string, RegionalMoney[]>): RegionalMoney[] {
-  return sumMoneyByCurrency([...costs.values()].flat().filter(money => money.amount > 0));
+  const estimates = [...costs.values()].flat().filter(money => money.amount > 0);
+  const otherEstimateCurrencies = new Set(estimates
+    .filter(money => !hasSubscriptionEstimateSource(money))
+    .map(money => money.currency));
+  return sumMoneyByCurrency(estimates).map(total =>
+    otherEstimateCurrencies.has(total.currency)
+      ? { ...total, estimateReasons: total.estimateReasons?.filter(reason => reason !== 'subscription-value') }
+      : total,
+  );
 }
 
 const NOOP_UNSUBSCRIBE = () => {};

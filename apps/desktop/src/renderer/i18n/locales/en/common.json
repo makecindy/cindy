@@ -10056,6 +10056,7 @@
     "monthlyLimitLabel": "Cycle {{spend}}/{{limit}}",
     "creditLabel": "{{used}}/{{total}}",
     "sessionCostLabel": "Session {{cost}}",
+    "sessionEstimateLabel": "Estimated session cost {{cost}}",
     "codex": {
       "waiting": "Codex --",
       "noUsageLabel": "No usage yet",
@@ -10141,6 +10142,7 @@
     "extraUsageEnabled": "Extra usage enabled",
     "costLine": "Cost this message: {{cost}}",
     "valueLine": "Token value this message: {{cost}}",
+    "estimateLine": "Estimated cost this message: {{cost}}",
     "noBilledCost": "Cost unavailable for this message; showing usage only",
     "latestMessageTitle": "Latest message",
     "turnCostUnavailable": "Cost unavailable for this message",
@@ -22417,6 +22419,7 @@
     "additional": "Additional fees",
     "unknownModel": "Model not recorded",
     "estimate": "Estimated value",
+    "estimatedCost": "Estimated cost",
     "charged": "Usage charge",
     "loading": "Loading details…",
     "unavailable": "Details are unavailable for this record.",

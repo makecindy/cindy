@@ -40,7 +40,9 @@ export function UsageCostDetails({ rows }: { rows: UsageCostRow[] | null | undef
                     {' · '}
                     {t(
                       row.money.kind === 'value-estimate'
-                        ? 'usageCost.estimate'
+                        ? row.billingSource === 'subscription'
+                          ? 'usageCost.estimate'
+                          : 'usageCost.estimatedCost'
                         : 'usageCost.charged',
                     )}
                   </div>
@@ -51,7 +53,9 @@ export function UsageCostDetails({ rows }: { rows: UsageCostRow[] | null | undef
         })
       )}
       {rows?.length === 0 ? <p>{t('usageCost.unavailable')}</p> : null}
-      <p className="text-[var(--text-secondary)]">{t('usageCost.explanation')}</p>
+      {rows?.some(row => row.billingSource === 'subscription' && row.money.kind === 'value-estimate') ? (
+        <p className="text-[var(--text-secondary)]">{t('usageCost.explanation')}</p>
+      ) : null}
     </div>
   );
 }

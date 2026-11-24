@@ -1,11 +1,39 @@
 import { supplementalConversationEstimates } from '@cindy/maker-shared/usage-cost-details';
 import { resolveStaleCodexSubscriptionValueEstimate } from './codexSubscriptionValue.js';
-import { normalizeRegionalMoney, usdMoney, USD_TO_CNY_FIXED_RATE, asValueEstimateMoney, type RegionalMoney } from './regionalMoney.js';
-import { normalizeTurnUsageDetails } from './turnUsageDetails.js';
+import { normalizeRegionalMoney, usdMoney, USD_TO_CNY_FIXED_RATE, type RegionalMoney } from './regionalMoney.js';
+import { normalizeTurnUsageDetails, type TurnUsageDetails } from './turnUsageDetails.js';
+
+export function hasSubscriptionEstimateSource(
+  money: RegionalMoney | undefined,
+  details?: TurnUsageDetails,
+): boolean {
+  if (details?.perModelCost?.length) {
+    return details.perModelCost.every(row =>
+      row.money.kind === 'value-estimate' &&
+      hasSubscriptionSource(row.money, row.billingSource ?? details.billingSource),
+    ) && !details.additionalCosts?.length;
+  }
+  return !details?.additionalCosts?.length && hasSubscriptionSource(money, details?.billingSource);
+}
+
+function hasSubscriptionSource(money: RegionalMoney | undefined, source: TurnUsageDetails['billingSource']): boolean {
+  if (source && source !== 'unknown') return source === 'subscription';
+  const reasons = money?.estimateReasons;
+  return reasons?.includes('subscription-value') === true && !reasons.includes('legacy-usd');
+}
+
+function withEstimateSource(money: RegionalMoney, details: TurnUsageDetails | undefined): RegionalMoney {
+  const reasons = money.estimateReasons ?? [];
+  const subscription = hasSubscriptionEstimateSource(money, details);
+  const estimateReasons = subscription
+    ? [...new Set([...reasons, 'subscription-value' as const])]
+    : reasons.filter(reason => reason !== 'subscription-value');
+  return { ...money, kind: 'value-estimate', approximate: true, estimateReasons };
+}
 
 function correctStaleUsdEstimate(
   money: RegionalMoney,
-  turnUsageDetails: unknown,
+  turnUsageDetails: TurnUsageDetails | undefined,
   model?: string,
 ): RegionalMoney {
   const reasons = money.estimateReasons ?? [];
@@ -19,7 +47,7 @@ function correctStaleUsdEstimate(
     : money.amount;
   const corrected = resolveStaleCodexSubscriptionValueEstimate(
     amountUsd,
-    normalizeTurnUsageDetails(turnUsageDetails),
+    turnUsageDetails,
     model,
   );
   if (corrected == null) return money;
@@ -40,13 +68,24 @@ export function turnEstimateAmounts(
   meta: { turnCost?: unknown; turnCostUsd?: unknown; turnCostIsEstimate?: boolean; turnUsageDetails?: unknown; model?: string },
 ): RegionalMoney[] {
   const primary = normalizeRegionalMoney(meta.turnCost);
-  const supplemental = supplementalConversationEstimates(meta).map(asValueEstimateMoney);
+  const hasPrimaryEstimate = meta.turnCostIsEstimate === true || primary?.kind === 'value-estimate';
+  const supplementalAmounts = supplementalConversationEstimates(meta);
+  if (!hasPrimaryEstimate && !supplementalAmounts.length) return [];
+  const details = normalizeTurnUsageDetails(meta.turnUsageDetails);
+  const supplemental = supplementalAmounts.map(money => {
+    const rows = details?.perModelCost?.filter(row => row.money.currency === money.currency && row.money.kind === 'value-estimate');
+    return withEstimateSource(money, details && { ...details, perModelCost: rows });
+  });
   const estimates: RegionalMoney[] = [];
-  if (meta.turnCostIsEstimate || primary?.kind === 'value-estimate') {
+  if (hasPrimaryEstimate) {
     const value = primary ?? (typeof meta.turnCostUsd === 'number' ? legacyEstimateMoney(meta.turnCostUsd) : null);
     if (value && value.amount > 0) {
-      const estimate = asValueEstimateMoney(value);
-      estimates.push(supplemental.length ? estimate : correctStaleUsdEstimate(estimate, meta.turnUsageDetails, meta.model));
+      // Legacy USD keeps its compatibility markers. A recorded channel, when
+      // present, supplies a stronger description of the estimate.
+      const estimate = primary || details?.billingSource || details?.perModelCost?.length
+        ? withEstimateSource(value, details)
+        : value;
+      estimates.push(supplemental.length ? estimate : correctStaleUsdEstimate(estimate, details, meta.model));
     }
   }
   return [...estimates, ...supplemental];

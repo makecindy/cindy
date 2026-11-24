@@ -10013,6 +10013,7 @@
     "monthlyLimitLabel": "本期 {{spend}}/{{limit}}",
     "creditLabel": "{{used}}/{{total}}",
     "sessionCostLabel": "此差事 {{cost}}",
+    "sessionEstimateLabel": "此差事估算費用 {{cost}}",
     "codex": {
       "waiting": "Codex --",
       "noUsageLabel": "暫無耗用",
@@ -10098,6 +10099,7 @@
     "extraUsageEnabled": "額外耗用已啟",
     "costLine": "本輪所耗：{{cost}}",
     "valueLine": "此輪 token 之值：{{cost}}",
+    "estimateLine": "本輪估算費用：{{cost}}",
     "noBilledCost": "本輪費用暫不可得，僅示耗用",
     "latestMessageTitle": "近一輪",
     "turnCostUnavailable": "本輪費用暫無從估算",
@@ -21907,6 +21909,7 @@
     "additional": "額外之費",
     "unknownModel": "未記模型",
     "estimate": "估算之值",
+    "estimatedCost": "估算費用",
     "charged": "按量計費",
     "loading": "方讀明細…",
     "unavailable": "此錄暫無明細。",

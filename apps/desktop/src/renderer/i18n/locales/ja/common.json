@@ -10013,6 +10013,7 @@
     "monthlyLimitLabel": "今期 {{spend}}/{{limit}}",
     "creditLabel": "{{used}}/{{total}}",
     "sessionCostLabel": "セッション {{cost}}",
+    "sessionEstimateLabel": "セッションの推定費用 {{cost}}",
     "codex": {
       "waiting": "Codex --",
       "noUsageLabel": "使用量なし",
@@ -10098,6 +10099,7 @@
     "extraUsageEnabled": "追加使用量が有効です",
     "costLine": "このメッセージの消費: {{cost}}",
     "valueLine": "このメッセージのトークン価値: {{cost}}",
+    "estimateLine": "このメッセージの推定費用：{{cost}}",
     "noBilledCost": "このメッセージの料金は現在取得できないため、使用量のみ表示しています",
     "latestMessageTitle": "直近のメッセージ",
     "turnCostUnavailable": "このメッセージの料金は現在見積もれません",
@@ -22329,6 +22331,7 @@
     "additional": "追加費用",
     "unknownModel": "モデル未記録",
     "estimate": "推定価値",
+    "estimatedCost": "推定費用",
     "charged": "従量料金",
     "loading": "内訳を読み込み中…",
     "unavailable": "この記録の内訳は取得できません。",

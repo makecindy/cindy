@@ -10056,6 +10056,7 @@
     "monthlyLimitLabel": "Abrechnungszeitraum {{spend}}/{{limit}}",
     "creditLabel": "{{used}}/{{total}}",
     "sessionCostLabel": "Sitzung {{cost}}",
+    "sessionEstimateLabel": "Geschätzte Sitzungskosten {{cost}}",
     "codex": {
       "waiting": "Codex --",
       "noUsageLabel": "Noch keine Nutzung",
@@ -10141,6 +10142,7 @@
     "extraUsageEnabled": "Zusatznutzung aktiviert",
     "costLine": "Kosten dieser Nachricht: {{cost}}",
     "valueLine": "Token-Wert dieser Nachricht: {{cost}}",
+    "estimateLine": "Geschätzte Kosten dieser Nachricht: {{cost}}",
     "noBilledCost": "Kosten für diese Nachricht nicht verfügbar; nur Nutzung wird angezeigt",
     "latestMessageTitle": "Letzte Nachricht",
     "turnCostUnavailable": "Kosten für diese Nachricht nicht verfügbar",
@@ -22417,6 +22419,7 @@
     "additional": "Zusätzliche Gebühren",
     "unknownModel": "Modell nicht erfasst",
     "estimate": "Geschätzter Wert",
+    "estimatedCost": "Geschätzte Kosten",
     "charged": "Nutzungsgebühr",
     "loading": "Details werden geladen…",
     "unavailable": "Für diesen Eintrag sind keine Details verfügbar.",

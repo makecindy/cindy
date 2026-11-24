@@ -10130,6 +10130,7 @@
     "monthlyLimitLabel": "Cycle {{spend}}/{{limit}}",
     "creditLabel": "{{used}}/{{total}}",
     "sessionCostLabel": "Session {{cost}}",
+    "sessionEstimateLabel": "Coût estimé de la session {{cost}}",
     "codex": {
       "waiting": "Codex --",
       "noUsageLabel": "Aucune consommation",
@@ -10215,6 +10216,7 @@
     "extraUsageEnabled": "Consommation supplémentaire activée",
     "costLine": "Coût de ce message : {{cost}}",
     "valueLine": "Valeur en jetons de ce message : {{cost}}",
+    "estimateLine": "Coût estimé de ce message : {{cost}}",
     "noBilledCost": "Coût indisponible pour ce message ; seule la consommation est affichée",
     "latestMessageTitle": "Dernier message",
     "turnCostUnavailable": "Coût indisponible pour ce message",
@@ -22631,6 +22633,7 @@
     "additional": "Frais supplémentaires",
     "unknownModel": "Modèle non enregistré",
     "estimate": "Valeur estimée",
+    "estimatedCost": "Coût estimé",
     "charged": "Frais de consommation",
     "loading": "Chargement des détails…",
     "unavailable": "Les détails de cet enregistrement ne sont pas disponibles.",

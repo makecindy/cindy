@@ -10013,6 +10013,7 @@
     "monthlyLimitLabel": "주기 {{spend}}/{{limit}}",
     "creditLabel": "{{used}}/{{total}}",
     "sessionCostLabel": "세션 {{cost}}",
+    "sessionEstimateLabel": "세션 예상 비용 {{cost}}",
     "codex": {
       "waiting": "Codex --",
       "noUsageLabel": "아직 사용량 없음",
@@ -10098,6 +10099,7 @@
     "extraUsageEnabled": "추가 사용량 활성화됨",
     "costLine": "이번 메시지 비용: {{cost}}",
     "valueLine": "이번 메시지 토큰 가치: {{cost}}",
+    "estimateLine": "이 메시지의 예상 비용: {{cost}}",
     "noBilledCost": "이번 메시지의 비용을 현재 확인할 수 없어 사용량만 표시합니다",
     "latestMessageTitle": "최근 메시지",
     "turnCostUnavailable": "이 메시지의 비용을 현재 추정할 수 없습니다",
@@ -22329,6 +22331,7 @@
     "additional": "추가 비용",
     "unknownModel": "모델 미기록",
     "estimate": "추정 가치",
+    "estimatedCost": "예상 비용",
     "charged": "사용량 요금",
     "loading": "내역 불러오는 중…",
     "unavailable": "이 기록의 내역을 확인할 수 없습니다.",

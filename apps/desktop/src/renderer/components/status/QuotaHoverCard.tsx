@@ -25,6 +25,7 @@ import { quotaLevelFromSeverity, strongerQuotaLevel } from '@cindy/maker-shared/
 export interface QuotaHoverCardTurnUsage {
   costText?: string | null;
   costIsEstimate?: boolean;
+  costIsSubscriptionValue?: boolean;
   isUserTurnTotal?: boolean;
   totalTokensText?: string | null;
   inputTokensText?: string | null;
@@ -44,6 +45,7 @@ export interface QuotaHoverCardSessionUsage {
   costText?: string | null;
   tokensText?: string | null;
   costIsEstimate?: boolean;
+  costIsSubscriptionValue?: boolean;
   actualCostText?: string | null;
   estimatedValueText?: string | null;
 }
@@ -287,7 +289,7 @@ function TurnUsageSection({ turnUsage, t }: { turnUsage: QuotaHoverCardTurnUsage
 
   const renderCostLine = (
     costText: string | null | undefined,
-    isEstimate: boolean | undefined,
+    labelKey: string,
     unavailableKey: string,
   ) => (
     <div
@@ -298,7 +300,7 @@ function TurnUsageSection({ turnUsage, t }: { turnUsage: QuotaHoverCardTurnUsage
       }
     >
       {costText != null
-        ? t(isEstimate ? 'quotaCard.valueLine' : 'quotaCard.costLine', { cost: costText })
+        ? t(labelKey, { cost: costText })
         : t(unavailableKey)}
     </div>
   );
@@ -313,7 +315,9 @@ function TurnUsageSection({ turnUsage, t }: { turnUsage: QuotaHoverCardTurnUsage
       <div className="tabular-nums">
         {renderCostLine(
           turnUsage.costText,
-          turnUsage.costIsEstimate,
+          turnUsage.costIsSubscriptionValue
+            ? 'quotaCard.valueLine'
+            : turnUsage.costIsEstimate ? 'quotaCard.estimateLine' : 'quotaCard.costLine',
           'quotaCard.turnCostUnavailable',
         )}
       </div>
@@ -416,10 +420,13 @@ function SessionUsageSection({
   t: TFunction;
 }) {
   const hasMixedBreakdown = Boolean(sessionUsage.actualCostText && sessionUsage.estimatedValueText);
+  const estimateKey = sessionUsage.costIsSubscriptionValue
+    ? 'todaySpend.codex.sessionValueLabel'
+    : 'todaySpend.sessionEstimateLabel';
   const totalKey = hasMixedBreakdown
     ? 'todaySpend.sessionCostLabel'
     : sessionUsage.costIsEstimate
-      ? 'todaySpend.codex.sessionValueLabel'
+      ? estimateKey
       : 'todaySpend.tooltip.sessionUsed';
 
   return (
@@ -444,7 +451,7 @@ function SessionUsageSection({
         <div className="mt-1 space-y-0.5 text-12 text-[var(--text-secondary)]">
           <div>{t('todaySpend.tooltip.sessionUsed', { cost: sessionUsage.actualCostText })}</div>
           <div>
-            {t('todaySpend.codex.sessionValueLabel', {
+            {t(estimateKey, {
               cost: sessionUsage.estimatedValueText,
             })}
           </div>

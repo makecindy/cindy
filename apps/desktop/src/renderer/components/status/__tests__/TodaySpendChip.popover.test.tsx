@@ -73,6 +73,7 @@ vi.mock('react-i18next', () => ({
         'todaySpend.sessionCostLabel': '本任务 {{cost}}',
         'todaySpend.tooltip.sessionUsed': '本任务已用 {{cost}}',
         'todaySpend.codex.sessionValueLabel': '本任务价值 {{cost}}',
+        'todaySpend.sessionEstimateLabel': '本任务估算费用 {{cost}}',
         'todaySpend.unit.day': '天',
         'todaySpend.unit.hour': '小时',
         'todaySpend.unit.minute': '分钟',
@@ -97,6 +98,7 @@ vi.mock('react-i18next', () => ({
         'chat.messageActionBar.userTurnCostDetailsTitle': '本轮明细',
         'quotaCard.costLine': '本轮消耗：{{cost}}',
         'quotaCard.valueLine': '本轮 token 价值：{{cost}}',
+        'quotaCard.estimateLine': '本轮估算费用：{{cost}}',
         'quotaCard.noBilledCost': '本轮费用暂不可用，仅显示用量',
         'usageDetails.costBreakdownHeader': '按模型拆分：',
         'usageDetails.durationSeconds': '{{value}}秒',
@@ -224,6 +226,7 @@ function usdMoney(
     currency: 'USD',
     approximate: kind === 'value-estimate',
     kind,
+    ...(kind === 'value-estimate' ? { estimateReasons: ['subscription-value'] } : {}),
   };
 }
 
@@ -1183,6 +1186,22 @@ describe('TodaySpendChip Claude subscription popover', () => {
 
     expect(within(sessionSection).getByText('本任务已用 $0.25')).toBeTruthy();
     expect(within(sessionSection).queryByText('本任务价值 $0.25')).toBeNull();
+  });
+
+  it('labels a recorded API reference estimate as estimated cost', () => {
+    const estimate: RegionalMoney = { ...usdMoney(0.46, 'value-estimate'), estimateReasons: ['reference-price'] };
+    const sessionUsage = {
+      actualMoney: null,
+      estimatedValueMoney: estimate,
+      totalMoney: estimate,
+    };
+    mocks.sessionUsage = sessionUsage;
+    setLatestUsageMessage({ turnMoney: estimate, turnCostIsEstimate: true });
+    renderClaudeSubscriptionChip();
+    openCardFromHover();
+    expect(screen.getByTestId('task-usage-trigger').textContent).toContain('本任务估算费用 $0.46');
+    expect(within(screen.getByTestId('quota-session-usage')).getByText('本任务估算费用 $0.46')).toBeTruthy();
+    expect(screen.getByText('本轮估算费用：$0.46')).toBeTruthy();
   });
 
   it('纯订阅价值估算仍标为本任务价值', () => {
