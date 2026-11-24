@@ -25,6 +25,8 @@ import { decideProviderGroupFailure, providerGroupFailureSignals } from '../../p
 import { RemoteExecutor } from '../executor/executor';
 import { createRemoteAgentHost, type HostedStartInput } from '../host/runHost';
 import type { RemoteAgentLimits } from '../../../shared/remoteAgentLimits';
+import { GoalController } from '../../goal-host/controller';
+import type { GoalState } from '../../goal-host/types';
 
 // ─── 连接池本身 ────────────────────────────────────────────────────
 
@@ -1495,6 +1497,72 @@ describe('remote connection pool with a real host', () => {
       expect(scenario.calls.filter(call => call.method === 'send').map(call =>
         (call.args[0] as { content: string }).content)).toEqual(['first', 'not dispatched']);
     } finally {
+      vi.useRealTimers();
+      intercept = null;
+      await session.close();
+    }
+  });
+
+  // #12612 unit: Goal's provider-rejection backoff starts after preparation
+  // finishes. Exercise the actual Goal -> Session -> remote starter boundary:
+  // a three-minute caps failure must block, not begin another six RPCs.
+  it('blocks a Goal after six preparation timeouts without automatically starting another handshake', async () => {
+    limits = { perDevice: 16, total: 64 };
+    const pool = newPool();
+    const handle = await start(pool);
+    const logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return logger; } };
+    const session = new Session({ id: 'goal-caps-reconnect', agentKind: 'claude-code', workDir: project,
+      handle, capabilities: {} as never, logger, turnStallMs: 0 });
+    // Session also supports EngineKinds outside Goal's AgentKind contract.
+    const goalSession = {
+      id: session.id,
+      agentKind: 'claude-code' as const,
+      send: session.send.bind(session),
+      onEvent: session.onEvent.bind(session),
+      getStatus: session.getStatus.bind(session),
+      getTurnGeneration: session.getTurnGeneration.bind(session),
+      isTurnRunning: session.isTurnRunning.bind(session),
+      abort: session.abort.bind(session),
+    };
+    let goal: GoalState | null = null;
+    const controller = new GoalController({
+      storage: {
+        get: async () => goal,
+        upsert: async state => { goal = { ...state }; },
+        update: async (_id, patch) => goal ? (goal = { ...goal, ...patch }) : null,
+        clear: async () => { goal = null; },
+        listActive: async () => goal?.status === 'active' ? [goal] : [],
+        listUsageLimited: async () => [],
+      },
+      getSession: () => goalSession,
+      ensureSession: async () => goalSession,
+      isSessionInTurn: () => false,
+      stopActiveGoalTurn() {},
+      emitStatus() {},
+      getDefaults: () => ({ maxTurns: 20, budgetTokens: null, noProgressLimit: 3 }),
+      logger,
+    });
+    try {
+      expect(await session.send('first')).toMatchObject({ accepted: true });
+      await vi.waitFor(() => expect(session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'done' }));
+      expect(await pool.releaseForRetry(member('other', 0, false))).toBe(true);
+      let caps = 0;
+      vi.useFakeTimers();
+      intercept = request => request.op !== 'caps' ? undefined : new Promise((_resolve, reject) => {
+        caps++;
+        setTimeout(() => reject(Object.assign(new Error('[INVOKE_TIMEOUT] no invoke-result'),
+          { code: 'INVOKE_TIMEOUT', inFlight: true })), 30_000);
+      });
+      const setting = controller.setGoal({ sessionId: session.id, objective: 'continue the task' });
+      await vi.advanceTimersByTimeAsync(190_000);
+      await setting;
+      expect(goal).toMatchObject({ status: 'blocked', turnsUsed: 0 });
+      await vi.advanceTimersByTimeAsync(190_000);
+      expect(caps).toBe(6);
+      expect(opens).toBe(1);
+      expect(scenario.calls.filter(call => call.method === 'send')).toHaveLength(1);
+    } finally {
+      controller.dispose();
       vi.useRealTimers();
       intercept = null;
       await session.close();

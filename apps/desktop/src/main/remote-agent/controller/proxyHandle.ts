@@ -449,7 +449,10 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       // callWithId below. Do not let Session fence/close this handle as though
       // the send had an ambiguous tail. Confirmed startup errors retain their
       // identity: Main's stopped-open offer is keyed by that exact error object.
-      if (method !== 'send' || (error instanceof RemoteAgentRemoteError && error.phase === 'start')) throw error;
+      // Goal already blocks preparation errors; its provider-rejection result
+      // instead schedules a continuation and would repeat the full handshake.
+      if (method !== 'send' || opts?.origin?.kind === 'goal'
+        || (error instanceof RemoteAgentRemoteError && error.phase === 'start')) throw error;
       deps.log?.warn('remote agent: connection preparation failed before turn dispatch', { error: String(error) });
       throw new TurnDispatchRejectedError(error instanceof Error ? error.message : String(error), { cause: error });
     }
