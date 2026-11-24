@@ -888,4 +888,131 @@ describe('AgentNetSessionLinks', () => {
     expect(calls).toEqual(['device-link:openLink']);
     expect(dialed).toBe(1);
   });
+
+  it('coalesces concurrent session listing reads and piggybacks retired read request ids after timeout', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+    try {
+      const { links } = pair({ requestTimeoutMs: 500 });
+      const seenInvokes: Array<{ id: string; payload: InvokePayload }> = [];
+      links.host.onFrame((env) => {
+        if (env.kind === 'link-open') links.host.sendLinkAccept(env.src!, env.id!, { appVersion: 'host', allowlistHash: 'hash' });
+        if (env.kind === 'invoke') seenInvokes.push({ id: env.id!, payload: env.payload as InvokePayload });
+      });
+      const opened = links.controller.openLink('a-host', openPayload);
+      await vi.advanceTimersByTimeAsync(0);
+      await opened;
+
+      const timedOutA = links.controller.invoke('a-host', { channel: 'local-db:sessions:list', args: [] }).catch((e) => e);
+      const timedOutB = links.controller.invoke('a-host', { channel: 'local-db:sessions:list', args: [20, 'all', { includePinned: false }] }).catch((e) => e);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(seenInvokes).toHaveLength(1);
+      const firstId = seenInvokes[0]!.id;
+
+      await vi.advanceTimersByTimeAsync(600);
+      expect(await timedOutA).toMatchObject({ code: 'INVOKE_TIMEOUT' });
+      expect(await timedOutB).toMatchObject({ code: 'INVOKE_TIMEOUT' });
+
+      const retry = links.controller.invoke('a-host', { channel: 'local-db:sessions:list', args: [] });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(seenInvokes).toHaveLength(2);
+      expect(seenInvokes[1]!.payload.transfer?.retired).toEqual([firstId]);
+      links.host.sendInvokeResult('b-controller', seenInvokes[1]!.id, { ok: true, result: listResult(5) });
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(retry).resolves.toEqual({ ok: true, result: listResult(5) });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：AgentNetSessionLinks.invoke 经 RemoteListingReadCoalescer 处理不同超时同参请求（350ms 与 1500ms 间隔 5ms，被控端耗时 600ms）。
+  //   短预算调用者在 350ms 准时 INVOKE_TIMEOUT，长预算调用者按精确剩余预算自动续读并在 ~950ms 拿到结果；剩余预算不足 100ms（35ms）时按精确剩余预算截止，不被 100ms 下限延长。
+  // - Bug／规则依据：审阅实测回归 ②（350ms + 1500ms 间隔 5ms 在 353ms 双双超时，及 100ms 下限延长调用期限）。
+  // - 现有覆盖缺口：前序用例只测两笔相同 500ms 超时同时失败，未覆盖长短超时相差 5ms 同乘时的精确剩余预算续读与 <100ms 边界。
+  // - 最小失败输入：t=0 发起 350ms、t=5ms 发起 1500ms（每笔响应需 600ms）；以及 t=0 发起 350ms、t=5ms 发起 380ms（响应需 90ms）。
+  // - tier：unit（fake timers + 内存 SessionPeer，<20ms）。
+  it('continues a 1500ms co-waiter hatched 5ms after a 350ms timeout without extending sub-100ms deadlines', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+    try {
+      const { links } = pair({ requestTimeoutMs: 5_000 });
+      let nextDelay: () => number = () => 600;
+      const seenInvokes: Array<{ id: string; payload: InvokePayload }> = [];
+      links.host.onFrame((env) => {
+        if (env.kind === 'link-open') {
+          links.host.sendLinkAccept(env.src!, env.id!, { appVersion: 'host', allowlistHash: 'hash' });
+        }
+        if (env.kind === 'invoke') {
+          const id = env.id!;
+          seenInvokes.push({ id, payload: env.payload as InvokePayload });
+          const delay = nextDelay();
+          setTimeout(() => {
+            links.host.sendInvokeResult('b-controller', id, { ok: true, result: listResult(3) });
+          }, delay);
+        }
+      });
+      const opened = links.controller.openLink('a-host', openPayload);
+      await vi.advanceTimersByTimeAsync(0);
+      await opened;
+
+      let shortSettledAt: number | null = null;
+      let longSettledAt: number | null = null;
+      const startedAt = performance.now();
+      const shortCall = links.controller
+        .invoke('a-host', { channel: 'local-db:sessions:list', args: [] }, 350)
+        .then(
+          (v) => ({ ok: true as const, v }),
+          (e) => {
+            shortSettledAt = Math.round(performance.now() - startedAt);
+            return { ok: false as const, e };
+          },
+        );
+      await vi.advanceTimersByTimeAsync(5);
+      const longCall = links.controller
+        .invoke('a-host', { channel: 'local-db:sessions:list', args: [] }, 1_500)
+        .then(
+          (v) => {
+            longSettledAt = Math.round(performance.now() - startedAt);
+            return { ok: true as const, v };
+          },
+          (e) => ({ ok: false as const, e }),
+        );
+
+      await vi.advanceTimersByTimeAsync(350);
+      expect(await shortCall).toMatchObject({ ok: false, e: { code: 'INVOKE_TIMEOUT' } });
+      expect(shortSettledAt).toBeGreaterThanOrEqual(350);
+      expect(shortSettledAt).toBeLessThan(370);
+      expect(longSettledAt).toBeNull();
+
+      await vi.advanceTimersByTimeAsync(620);
+      const longRes = await longCall;
+      expect(longRes).toEqual({ ok: true, v: { ok: true, result: listResult(3) } });
+      expect(longSettledAt).toBeLessThanOrEqual(1_000);
+      expect(seenInvokes).toHaveLength(2);
+      expect(seenInvokes[1]!.payload.transfer?.retired).toEqual([seenInvokes[0]!.id]);
+
+      // Sub-100ms remaining budget (380ms joined 5ms after 350ms -> 35ms left at t=350ms; first attempt takes 400ms, continuation takes 90ms):
+      // must expire around 385ms, never stretched to 450ms by a 100ms floor!
+      const subDelays = [400, 90];
+      nextDelay = () => subDelays.shift() ?? 90;
+      const subStart = performance.now();
+      let subBSettledAt: number | null = null;
+      const subA = links.controller
+        .invoke('a-host', { channel: 'local-db:sessions:list', args: [50] }, 350)
+        .catch((e) => e);
+      await vi.advanceTimersByTimeAsync(5);
+      const subB = links.controller
+        .invoke('a-host', { channel: 'local-db:sessions:list', args: [50] }, 380)
+        .catch((e) => {
+          subBSettledAt = Math.round(performance.now() - subStart);
+          return e;
+        });
+      await vi.advanceTimersByTimeAsync(390);
+      expect(await subA).toMatchObject({ code: 'INVOKE_TIMEOUT' });
+      expect(await subB).toMatchObject({ code: 'INVOKE_TIMEOUT' });
+      expect(subBSettledAt).not.toBeNull();
+      expect(subBSettledAt!).toBeLessThanOrEqual(395);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

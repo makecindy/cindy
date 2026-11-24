@@ -157,6 +157,9 @@ export function routeSessionPeers(target: DeviceLinkClient, links: AgentNetSessi
     isOutboundExplicitlyClosed: (dst) => (links.knowsOutbound(dst) ? links.isOutboundExplicitlyClosed(dst) : target.isOutboundExplicitlyClosed(dst)),
     getPeerLinkGeneration: (dst) => (links.ownsGeneration(dst) ? links.getPeerLinkGeneration(dst) : target.getPeerLinkGeneration(dst)),
     getReliableSendQueueDepth: (dst) => (links.ownsInbound(dst) ? links.getReliableSendQueueDepth(dst) : target.getReliableSendQueueDepth(dst)),
+    hasReliableSendProgress: (dst) => (links.ownsInbound(dst)
+      ? links.hasReliableSendProgress(dst)
+      : (target.hasReliableSendProgress?.(dst) ?? true)),
     canSendPush: (dst) => (links.ownsInbound(dst) ? links.canSendPush(dst) : target.canSendPush(dst)),
     sendLinkAccept: (dst, requestId, payload) => {
       if (links.ownsLinkOpen(dst, requestId)) return links.sendLinkAccept(dst, requestId, payload);
@@ -177,6 +180,8 @@ export function routeSessionPeers(target: DeviceLinkClient, links: AgentNetSessi
     onPeerStreamAccepted: (cb: (peer: string, streamId: string) => void) =>
       both(() => target.onPeerStreamAccepted(cb), () => links.onPeerStreamAccepted(cb)),
     onInboundPeerReleased: (cb: (peer: string) => void) => both(() => target.onInboundPeerReleased(cb), () => links.onInboundPeerReleased(cb)),
+    onPeerSendProgress: (cb: (peer: string) => void) =>
+      both(() => target.onPeerSendProgress?.(cb) ?? (() => {}), () => links.onPeerSendProgress(cb)),
     noteRemoteControlDisabled: (deviceId) => { links.noteRemoteControlDisabled(deviceId); target.noteRemoteControlDisabled(deviceId); },
     noteRemoteControlEnabled: (deviceId) => { links.noteRemoteControlEnabled(deviceId); target.noteRemoteControlEnabled(deviceId); },
     getPeerLinkSnapshots: () => {
@@ -219,6 +224,7 @@ export function routeSessionPeers(target: DeviceLinkClient, links: AgentNetSessi
         onPeerRouteStateChanged: (cb) => connection.onPeerRouteStateChanged(cb),
         onPeerStreamAccepted: (cb) => connection.onPeerStreamAccepted(cb),
         onInboundPeerReleased: (cb) => connection.onInboundPeerReleased(cb),
+        onPeerSendProgress: (cb) => connection.onPeerSendProgress?.(cb) ?? (() => {}),
         noteRemoteControlDisabled: (deviceId) => connection.noteRemoteControlDisabled(deviceId),
         noteRemoteControlEnabled: (deviceId) => connection.noteRemoteControlEnabled(deviceId),
         getPeerLinkSnapshots: () => connection.getPeerLinkSnapshots(),

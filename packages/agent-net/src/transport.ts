@@ -511,6 +511,7 @@ class CoreChannel implements PeerChannel {
         this.bodyHandler = handler;
         for (const [key, bytes] of this.earlyBodies.splice(0)) handler(key, bytes);
       },
+      onDrain: (handler) => this.onDrain(handler),
     };
   }
 

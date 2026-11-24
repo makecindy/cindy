@@ -97,6 +97,8 @@ export interface SessionWire {
   openBody?(lane: 'control' | 'normal' | 'background', key: number): SessionBodyWriter | null;
   /** Bytes of a body stream the peer opened (after its kind and key), then `null` once that stream ended. Same rule as `onData`. */
   onBody?(handler: (key: number, bytes: Uint8Array | null) => void): void;
+  /** Optional: fires when the underlying channel backlog drains (`PeerChannel.onDrain`). */
+  onDrain?(handler: () => void): void;
 }
 /**
  * `onDrain` fires when the socket backlog falls back to this or below. Same as Device Link's socket low watermark

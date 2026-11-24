@@ -90,6 +90,7 @@ export function serveWorkerSessions(socket: SessionHost, send: (message: unknown
         onRequest: (request) => toMain(peer, { event: 'request', request }),
         onPush: (channel, payload) => toMain(peer, { event: 'push', channel, payload }),
         onPresence: (payload) => toMain(peer, { event: 'presence', payload }),
+        onDrain: () => taken(peer, 0),
         onBroken: (code) => {
           for (const [seq, ack] of acks) if (ack.peer === peer) { acks.delete(seq); ack.resolve(); }
           send({ type: 'session-broken', peer, code });
@@ -290,7 +291,12 @@ class WorkerSession implements SessionHandle {
     }
   }
   /** @internal */
-  taken(bytes: number, remote: number): void { this.posted = Math.max(0, this.posted - bytes); this.remote = remote; }
+  taken(bytes: number, remote: number): void {
+    const before = this.bufferedAmount;
+    this.posted = Math.max(0, this.posted - bytes);
+    this.remote = remote;
+    if (this.bufferedAmount < before) this.handlers.onDrain?.();
+  }
   /** @internal */
   broken(code: string): void {
     if (this.reason) return;

@@ -11,10 +11,10 @@
  */
 import {
   DEVICE_LINK_CAPABILITY_GITHUB_READ_V1, DeviceLinkError, HistoryViewDeltaCache, InboundInvokeTransferOptions, InvokeDeltaBases,
-  InvokeResultCache, InvokeScheduler, PROTOCOL_VERSION, SessionMessageReuse, acceptedPushDeflateDictionaries,
+  InvokeResultCache, InvokeScheduler, PROTOCOL_VERSION, RemoteListingReadCoalescer, RetiredInvokeTracker, SessionMessageReuse, acceptedPushDeflateDictionaries,
   bypassInvokeScheduling, decodeModelSpeedPayload, decodePushTransfer, decodeSessionTagCatalog, encodeInvokeResultTransfer,
   encodeModelSpeedPayload, encodePushTransfer, isEncodedPushPayload, isHistoryViewDeltaMiss, pushDeflateCapabilities,
-  isFilePeerStreamRead, isFilePeerStreamTransfer, isPeerResetRetryableInvoke, isRemoteAgentUploadChunk, isScopedPeer, isUnlinkedPushChannel, REMOTE_DESKTOP_CHANNEL, requestSessionTagCatalog, resolveInvokePriority,
+  isFilePeerStreamRead, isFilePeerStreamTransfer, isPeerResetRetryableInvoke, isPeerResetRetryableReadChannel, isRemoteAgentUploadChunk, isScopedPeer, isUnlinkedPushChannel, REMOTE_DESKTOP_CHANNEL, requestSessionTagCatalog, resolveInvokePriority,
   type DeviceLinkErrorCode, type DeviceLinkPeerLinkSnapshot, type DeviceLinkPeerRouteStateChanged, type DeviceLinkTransferCodec,
   type Envelope, type InvokePayload, type InvokeResultPayload, type LinkAcceptPayload, type LinkCloseReason, type PresenceSnapshot,
   type PushPayload, diagnosticChannel, invokeIntendedHoldMs, shortDeviceRef,
@@ -193,9 +193,12 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
   private readonly routeHandlers = new Set<(change: DeviceLinkPeerRouteStateChanged) => void>();
   private readonly acceptedHandlers = new Set<(peer: string, streamId: string) => void>();
   private readonly releasedHandlers = new Set<(peer: string) => void>();
+  private readonly progressHandlers = new Set<(peer: string) => void>();
   private readonly remoteControlDisabled = new Set<string>();
   private readonly pushDeflateRejected = new Set<string>();
   private readonly scheduler: InvokeScheduler;
+  private readonly listingReadCoalescer = new RemoteListingReadCoalescer(() => performance.now());
+  private readonly retiredReadInvokes = new RetiredInvokeTracker();
   private readonly invokeResultCache: InvokeResultCache;
   private readonly inboundTransfer = new InboundInvokeTransferOptions();
   private readonly deltaBases = new InvokeDeltaBases();
@@ -381,11 +384,15 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
         try { this.options.reopenLink?.(deviceId); } catch (error) { this.options.log.error('session link reopen threw', error); }
       });
     }
+    queueMicrotask(() => {
+      if (!this.stopped && this.live(deviceId)) this.emitPeerSendProgress(deviceId);
+    });
     return {
       onOpen: (id, payload) => this.receiveOpen(deviceId, id, payload),
       onRequest: (request) => this.receiveRequest(deviceId, request),
       onPush: (channel, payload) => this.receivePush(deviceId, channel, payload),
       onClose: (reason) => this.receiveClose(deviceId, reason),
+      onDrain: () => this.emitPeerSendProgress(deviceId),
       onBroken: (code) => this.broken(deviceId, code),
     };
   }
@@ -464,8 +471,11 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
       peer.outbound = 'idle';
       peer.outboundLost = false;
       peer.outboundClosed = true;
+      const closeError = new DeviceLinkError('LINK_NOT_OPEN', `control link closed locally (${reason})`);
+      this.listingReadCoalescer.cancelPeer(dst, closeError);
+      this.retiredReadInvokes.clear(dst);
       // 和 Device Link 一样，排队还没发出的调用随关链取消；已发出的等各自的结果或超时。
-      this.scheduler.cancel(dst, new DeviceLinkError('LINK_NOT_OPEN', `control link closed locally (${reason})`));
+      this.scheduler.cancel(dst, closeError);
       this.notifyReopen(dst);
     }
     try { this.live(dst)?.close(reason); }
@@ -478,20 +488,26 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
     if (!this.live(dst)) throw new DeviceLinkError('LINK_NOT_OPEN', 'no Agent-Net session with the target');
     const queuedAt = performance.now();
     const priority = resolveInvokePriority(payload.channel, options?.background, payload.args);
-    const slotBudgetMs = Math.min(timeoutMs ?? this.requestTimeout(), 30_000);
-    const send = async (): Promise<InvokeResultPayload> => {
+    const effectiveTimeoutMs = timeoutMs ?? this.requestTimeout();
+    const slotBudgetMs = Math.min(effectiveTimeoutMs, 30_000);
+    const executeWire = async (
+      wirePayload: InvokePayload,
+      wireTimeoutMs: number | undefined,
+      checkBeforeSend: () => void,
+      checkBeforeRetry: () => void,
+    ): Promise<InvokeResultPayload> => {
       if (this.remoteControlDisabled.has(dst)) throw new DeviceLinkError('REMOTE_DISABLED', 'remote control is disabled by the target');
-      options?.preSend?.();
-      options?.beforeDispatch?.();
+      checkBeforeSend();
       const peer = this.peer(dst);
-      if (payload.channel === 'git-context:github-read' && !peer.githubRead) {
+      if (wirePayload.channel === 'git-context:github-read' && !peer.githubRead) {
         return { ok: false, error: { code: 'IPC_ERROR', message: 'GITHUB_READ_UNSUPPORTED: update the target computer to use GitHub queries' } };
       }
+      const effectiveSlotBudgetMs = Math.min(wireTimeoutMs ?? this.requestTimeout(), 30_000);
       const sentAt = performance.now();
       // 跨账号对端和 Device Link 一样不用历史页增量和结果缓存（对方也不按这两样编码给受邀者的结果）。
       const scoped = isScopedPeer(dst);
       const attempt = async (fullHistory: boolean, timeout: number | undefined): Promise<Attempt> => {
-        const reuse = this.messageReuse.prepare(dst, payload);
+        const reuse = this.messageReuse.prepare(dst, wirePayload);
         const delta = scoped ? null : this.historyViewDelta.prepare(dst, reuse.payload, fullHistory);
         const tagged = requestSessionTagCatalog(delta?.payload ?? reuse.payload);
         // 文件块（stream-read，和带块内容的 stream-rpc，即附件块写入）每块参数都不同：不进结果缓存、不算标记，免得把列表的缓存挤掉；
@@ -501,16 +517,30 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
           || (isFilePeerStreamTransfer(tagged) && (tagged.args?.[0] as { body?: unknown } | undefined)?.body !== undefined);
         // noResultCache：和 Device Link 一样不缓存这条的结果（MCP App 的 open／poll）。
         const transfer = scoped || fileBlock ? null : this.invokeResultCache.prepare(dst, tagged, options?.noResultCache);
+        const retired = scoped || fileBlock ? undefined : this.retiredReadInvokes.peek(dst);
+        let outboundPayload = transfer?.payload ?? tagged;
+        if (retired && retired.length > 0) {
+          outboundPayload = {
+            ...outboundPayload,
+            transfer: { ...outboundPayload.transfer, retired },
+          };
+        }
         // 远程任务的上传块也走后台通道：控制端一次有几块在途，停止等交互请求不该排在它们后面（2026-11-19 实测，慢线路上停止要等 5 秒多）。
         // 只改通道，排队仍按原优先级，和 Device Link 同一套名额。
         const backgroundLane = fileBlock || isRemoteAgentUploadChunk(tagged);
         // Pass the resolved policy too: an explicit false would otherwise undo
         // a channel's default background lane after admission used its cap.
-        const raw = await this.request(dst, transfer?.payload ?? tagged, timeout, priority === 'background' || backgroundLane);
+        const raw = await this.request(
+          dst,
+          outboundPayload,
+          timeout,
+          priority === 'background' || backgroundLane,
+          retired && retired.length > 0 ? () => this.retiredReadInvokes.acknowledge(dst, retired) : undefined,
+        );
         const result = transfer ? await transfer.decode(raw) : raw;
         if (transfer?.retryWithoutBase()) return { result, retry: 'remaining-budget' };
         if (!result.ok) return { result };
-        const restored = reuse.decode(decodeModelSpeedPayload(payload.channel, decodeSessionTagCatalog(payload.channel, result.result)));
+        const restored = reuse.decode(decodeModelSpeedPayload(wirePayload.channel, decodeSessionTagCatalog(wirePayload.channel, result.result)));
         try {
           return { result: { ...result, result: delta ? delta.decode(restored) : restored } };
         } catch (error) {
@@ -519,18 +549,42 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
           return { retry: 'full-timeout', error };
         }
       };
-      let outcome = await attempt(false, timeoutMs);
+      let outcome = await attempt(false, wireTimeoutMs);
       if (outcome.retry) {
-        const remainingMs = slotBudgetMs - Math.round(performance.now() - sentAt);
+        const remainingMs = effectiveSlotBudgetMs - Math.round(performance.now() - sentAt);
         if (outcome.retry === 'full-timeout' || remainingMs >= 100) {
-          options?.preSend?.();
-          options?.beforeDispatch?.();
-          outcome = await attempt(outcome.retry === 'full-timeout', outcome.retry === 'full-timeout' ? timeoutMs : remainingMs);
+          checkBeforeRetry();
+          outcome = await attempt(outcome.retry === 'full-timeout', outcome.retry === 'full-timeout' ? wireTimeoutMs : remainingMs);
         }
       }
       if (!('result' in outcome)) throw outcome.error;
       return outcome.result;
     };
+    if (!bypassInvokeScheduling(payload)) {
+      const scopeKey = this.sessionStreamId(dst) ?? 'session';
+      const coalesced = this.listingReadCoalescer.run(
+        scopeKey,
+        dst,
+        payload,
+        priority,
+        effectiveTimeoutMs,
+        options,
+        (flightPriority, flightSlotBudgetMs, exec) => this.scheduler.run(
+          dst,
+          flightPriority,
+          flightSlotBudgetMs,
+          exec,
+          { channel: payload.channel, request: `session-${Math.round(queuedAt)}`, source: options?.diagnosticSource ?? 'client' },
+        ),
+        (ctx) => executeWire(ctx.payload, ctx.timeoutMs, () => {}, () => ctx.recheckBeforeRetry()),
+      );
+      if (coalesced) return coalesced;
+    }
+    const directGuards = () => {
+      options?.preSend?.();
+      options?.beforeDispatch?.();
+    };
+    const send = () => executeWire(payload, timeoutMs, directGuards, directGuards);
     return (bypassInvokeScheduling(payload) ? send() : this.scheduler.run(dst, priority, slotBudgetMs, send,
       { channel: payload.channel, request: `session-${Math.round(queuedAt)}`, source: options?.diagnosticSource ?? 'client' }));
   }
@@ -541,6 +595,12 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
   isOutboundExplicitlyClosed(dst: string): boolean { return this.peers.get(dst)?.outboundClosed === true; }
   getPeerLinkGeneration(dst: string): number { return this.peers.get(dst)?.generation ?? 0; }
   getReliableSendQueueDepth(dst: string): number { return Math.ceil((this.live(dst)?.bufferedAmount ?? 0) / QUEUE_DEPTH_UNIT_BYTES); }
+  /**
+   * 会话队列深度由底层 `bufferedAmount`（含核心缓冲，且 `DRAIN_LOW_WATER_BYTES = 128 KiB` 低于 `256 KiB` 软上限，
+   * 自定义 `SessionWire` 也未必实现可选的 `onDrain`）折算：有可写通知时经 `onPeerSendProgress` 立即唤醒，但不能假定每次降到软上限
+   * 以下都有通知，因此返回 false 让上层在停滞后保留低频兜底，绝不永久挂起最后一项。
+   */
+  hasReliableSendProgress(_dst: string): boolean { return false; }
   canSendPush(dst: string): boolean { return !!this.live(dst); }
 
   // ─── 被控端 ────────────────────────────────────────────────────────────────
@@ -593,6 +653,13 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
   onPeerRouteStateChanged(cb: (change: DeviceLinkPeerRouteStateChanged) => void): () => void { this.routeHandlers.add(cb); return () => this.routeHandlers.delete(cb); }
   onPeerStreamAccepted(cb: (peer: string, streamId: string) => void): () => void { this.acceptedHandlers.add(cb); return () => this.acceptedHandlers.delete(cb); }
   onInboundPeerReleased(cb: (peer: string) => void): () => void { this.releasedHandlers.add(cb); return () => this.releasedHandlers.delete(cb); }
+  onPeerSendProgress(cb: (peer: string) => void): () => void { this.progressHandlers.add(cb); return () => this.progressHandlers.delete(cb); }
+
+  private emitPeerSendProgress(deviceId: string): void {
+    for (const cb of this.progressHandlers) {
+      try { cb(deviceId); } catch (error) { this.options.log.error('peer send progress handler threw', error); }
+    }
+  }
 
   /** 和 Device Link 客户端一样，按在线快照记下「对端关了允许被控」，之后的调用立即报 REMOTE_DISABLED。 */
   notePresence(snapshot: PresenceSnapshot): void {
@@ -623,7 +690,10 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
   stop(options?: { retainResultCache?: boolean }): void {
     this.stopped = true;
     for (const wait of [...this.sessionWaits.values()]) wait.release();
-    this.scheduler.clear(new DeviceLinkError('NOT_CONNECTED', 'Agent-Net sessions stopped'));
+    const stoppedError = new DeviceLinkError('NOT_CONNECTED', 'Agent-Net sessions stopped');
+    this.listingReadCoalescer.clear(stoppedError);
+    this.retiredReadInvokes.clear();
+    this.scheduler.clear(stoppedError);
     if (options?.retainResultCache) this.invokeResultCache.fence(); else this.invokeResultCache.clear();
     this.inboundTransfer.clear();
     this.deltaBases.clear();
@@ -731,7 +801,9 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
         try { this.options.reopenLink?.(src); } catch (error) { this.options.log.error('session link reopen threw', error); }
       });
     }
-    this.scheduler.cancel(src, new DeviceLinkError('DEVICE_OFFLINE', `Agent-Net session ${code}`));
+    const offlineError = new DeviceLinkError('DEVICE_OFFLINE', `Agent-Net session ${code}`);
+    this.listingReadCoalescer.cancelPeer(src, offlineError);
+    this.scheduler.cancel(src, offlineError);
     if (!hadLink || this.stopped) return;
     const change: DeviceLinkPeerRouteStateChanged = { deviceId: src, state: 'offline', connectionEpoch: this.options.connectionEpoch(src), linkGeneration: peer.generation };
     for (const cb of this.routeHandlers) {
@@ -748,7 +820,7 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
    * 幂等读照旧报 PEER_RESET 让业务重读；文件块不在这里续（文件直传随会话收掉）。跨账号同样续：分享连接不会自己回来，会话断时就请业务重开
    * （broken）。
    */
-  private async request(dst: string, payload: InvokePayload, timeoutMs: number | undefined, background?: boolean): Promise<InvokeResultPayload> {
+  private async request(dst: string, payload: InvokePayload, timeoutMs: number | undefined, background?: boolean, onDispatched?: () => void): Promise<InvokeResultPayload> {
     let session = this.live(dst);
     if (!session) throw new DeviceLinkError('LINK_NOT_OPEN', 'no Agent-Net session with the target');
     const peer = this.peer(dst);
@@ -768,6 +840,7 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
       for (let attempt = 0; ; attempt++) {
         attempts = attempt + 1;
         const generation = peer.generation;
+        if (attempt === 0) onDispatched?.();
         outcome = await session.request(channel, args ?? [], { id, timeoutMs: Math.max(1, Math.round(deadline - performance.now())), background,
           // 幂等读不排在之前因为太大改走后台通道的请求后面；写照原来的先后（lanes.ts）。
           unordered: isPeerResetRetryableInvoke(channel, args),
@@ -795,6 +868,10 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
     }
     if (!outcome.ok) {
       const code = outcome.error.code;
+      if (code !== 'NOT_SENT' && (code === 'INVOKE_TIMEOUT' || code === 'DEVICE_OFFLINE')
+        && !isScopedPeer(dst) && isPeerResetRetryableReadChannel(channel)) {
+        this.retiredReadInvokes.note(dst, id);
+      }
       // 没写出去（NOT_SENT）可以放心重开再发；写出去以后丢了，只有幂等读和 Device Link 一样报 PEER_RESET 让业务重读一次。
       const error = code === 'DEVICE_OFFLINE' && isPeerResetRetryableInvoke(channel, args)
         ? new DeviceLinkError('PEER_RESET', `Agent-Net session lost: ${outcome.error.message}`)

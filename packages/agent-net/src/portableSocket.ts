@@ -374,6 +374,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
           },
         } : {}),
         ...(wire.onBody ? { onBody: (handler: Parameters<NonNullable<SessionWire['onBody']>>[0]) => wire.onBody!(handler) } : {}),
+        ...(wire.onDrain ? { onDrain: (handler: () => void) => wire.onDrain!(handler) } : {}),
       };
       // Session v2 only when both ends declared it: an older node closes the connection on a body stream.
       const bodies = !!wire.openBody && peer.channel.sessionBodies === true
@@ -382,6 +383,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
         wire: checked, role: scope.role, laneFor: config.laneFor, bodies,
         onOpen: guard(handlers.onOpen), onClose: guard(handlers.onClose), onRequest: guard(handlers.onRequest),
         onPush: guard(handlers.onPush),
+        onDrain: guard(handlers.onDrain),
         // This socket keeps presence for its Device Link client: a peer's session presence becomes the same local event as its frame.
         onPresence: scope.role === 'both' ? guard((payload: unknown) => this.peerPresence(peer, payload)) : guard(handlers.onPresence),
         onBroken: (code) => {

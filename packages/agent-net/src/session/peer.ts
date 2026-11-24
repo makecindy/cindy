@@ -56,6 +56,8 @@ export interface SessionPeerOptions {
   onRequest?(request: SessionRequest): void | Promise<void>;
   onPush?(channel: string, payload: unknown): void | Promise<void>;
   onPresence?(payload: unknown): void | Promise<void>;
+  /** Send backlog drained (`SessionWire.onDrain` or worker backlog report). */
+  onDrain?(): void;
   /** The session is unusable (bad frame, backlog, connection gone); pending requests have been failed. */
   onBroken?(code: string): void;
 }
@@ -158,6 +160,7 @@ export class SessionPeer {
     });
     options.wire.onData((lane, bytes) => { this.receivedAt = performance.now(); this.lanes.receive(lane, bytes); });
     options.wire.onBody?.((key, bytes) => { this.receivedAt = performance.now(); this.lanes.receiveBody(key, bytes); });
+    options.wire.onDrain?.(() => options.onDrain?.());
   }
 
   get bufferedAmount(): number { return this.options.wire.bufferedAmount; }
