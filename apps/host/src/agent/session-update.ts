@@ -1,3 +1,4 @@
+import { withSendToSessionLock } from '../../../desktop/src/main/maker-ipc/sendToSessionLock.ts';
 import { eq } from 'drizzle-orm';
 import { INDEFINITE_SNOOZE_UNTIL } from '@cindy/maker-shared/live-task-priority';
 import { getDbClient } from '../../../desktop/src/main/localDb/client/current.ts';
@@ -38,7 +39,7 @@ const DEDICATED_ENTRIES: Record<string, string> = {
 };
 
 /**
- * The Host's /sessions/update (main.ts wraps it in the task's route lock). The patch is checked before
+ * The Host's /sessions/update serializes writes under the task's route lock. The patch is checked before
  * anything is read or changed, and refused whole: a field this entry does not write is INVALID_PARAMS,
  * a runtime setting with its own entry is UNSUPPORTED_CAPABILITY naming that entry. A model or provider
  * change is the desktop's set-model (runtime-selection.ts, handleSetModel): a user's pick is an intent
@@ -50,7 +51,7 @@ const DEDICATED_ENTRIES: Record<string, string> = {
  * update but only drops the budget from a mixed one. Moving a task to another working directory or to a
  * dialogue runs the desktop's own move steps (sessionWorkingDirMove.ts, moved from updateSessionInDb) at
  * the places updateSessionInDb runs them: the route and worktree locks around everything (inside the
- * route lock main.ts already holds, re-entered), the workspaceKind check, the stored form of the
+ * route lock this entry already holds, re-entered), the workspaceKind check, the stored form of the
  * directory, the Review task check (for the whole patch, as the desktop), the worktree ownership guard
  * and closing an idle Pi/Codex runtime, the Claude transcript move, and the recent project record. The
  * patch they change in place (the stored directory, a resume id the transcript move persisted) is the
@@ -76,7 +77,7 @@ export function createHostSessionUpdate(deps: {
   };
 }) {
   // Runs inside the move locks (below), as updateSessionInDb's `update`.
-  const applyUpdate = async (sessionId: string, patch: Record<string, unknown>, fields: string[], dbClient: DbClient, options?: { deleteTarget?: 'side-chat' | 'task' }) => {
+  const applyUpdate = async (sessionId: string, patch: Record<string, unknown>, fields: string[], dbClient: DbClient, deletedIds: string[], options?: { deleteTarget?: 'side-chat' | 'task' }) => {
     const db = dbClient.drizzle;
     assertSessionWorkspaceKindPatch(patch);
     assertSessionContextWindowBudgetPatch(patch);
@@ -154,6 +155,7 @@ export function createHostSessionUpdate(deps: {
         ...(options?.deleteTarget ? { deleteTarget: options.deleteTarget } : {}),
       }) as { deletedSideChats?: Array<{ sessionId: string }> } | undefined;
       deletedSideChats = txResult?.deletedSideChats ?? [];
+      if (patch.status === 'deleted') deletedIds.push(sessionId, ...deletedSideChats.map(child => child.sessionId));
     }
     if (Object.keys(update).length > 0) {
       await getDbClient().drizzle.update(sessionTable).set(update).where(eq(sessionTable.id, sessionId));
@@ -165,10 +167,8 @@ export function createHostSessionUpdate(deps: {
     if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
     cleanupSessionRuntimeForTerminalStatus(sessionId, patch.status);
     if (patch.status === 'deleted') {
-      await deps.onSoftDelete?.(sessionId);
       for (const child of deletedSideChats) {
         cleanupSessionRuntimeForTerminalStatus(child.sessionId, 'deleted');
-        await deps.onSoftDelete?.(child.sessionId);
         deps.publish({ type: 'session_changed', action: 'update', sessionId: child.sessionId, patch: { status: 'deleted' }, status: 'deleted' });
       }
     }
@@ -196,7 +196,7 @@ export function createHostSessionUpdate(deps: {
     }
     return { ...result, ...(routeChange ? { runtimeSelection } : {}) };
   };
-  return async (sessionId: string, patch: Record<string, unknown>, options?: { deleteTarget?: 'side-chat' | 'task' }) => {
+  return async (sessionId: string, patch: Record<string, unknown>, options?: { deleteTarget?: 'side-chat' | 'task' }, assertWriteAllowed?: () => void) => {
     if (options?.deleteTarget !== undefined && ((options.deleteTarget !== 'side-chat' && options.deleteTarget !== 'task') || patch.status !== 'deleted')) {
       throwIpcError('INVALID_PARAMS', 'deleteTarget requires status deleted');
     }
@@ -216,16 +216,24 @@ export function createHostSessionUpdate(deps: {
         throwIpcError('INVALID_PARAMS', 'snoozedUntil must be a future ISO timestamp within one year');
       }
     }
-    const dbClient = getDbClient();
-    // As updateSessionInDb: a working-directory change runs under the task's route lock and its worktree
-    // locks (re-entering the route lock main.ts holds); anything else runs at once.
-    return withSessionWorkingDirMoveLocks(explicitPorts<Parameters<typeof withSessionWorkingDirMoveLocks>[0]>({
-      sid: sessionId, p: patch,
-      // The desktop's MCP move tool's guard (updateSessionInDb's moveGuard); the Host has no MCP move tool
-      // (host-tools.ts creates the MCP providers without moveSession).
-      moveGuard: undefined,
-      db: dbClient.drizzle,
-      update: () => applyUpdate(sessionId, patch, fields, dbClient, options),
-    }));
+    const deletedIds: string[] = [];
+    try {
+      return await withSendToSessionLock(sessionId, () => {
+        assertWriteAllowed?.();
+        const dbClient = getDbClient();
+        return withSessionWorkingDirMoveLocks(explicitPorts<Parameters<typeof withSessionWorkingDirMoveLocks>[0]>({
+          sid: sessionId, p: patch, moveGuard: undefined, db: dbClient.drizzle,
+          update: () => applyUpdate(sessionId, patch, fields, dbClient, deletedIds, options),
+        }));
+      });
+    } finally {
+      // A queued send may itself be waiting for the route lock. Drain only after releasing it.
+      const cleanups = await Promise.allSettled(deletedIds.map(async id => {
+        await deps.onSoftDelete?.(id);
+      }));
+      for (const cleanup of cleanups) {
+        if (cleanup.status === 'rejected') throw cleanup.reason;
+      }
+    }
   };
 }

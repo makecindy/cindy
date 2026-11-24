@@ -411,10 +411,9 @@ test('window budget: with a restart waiting on the task, the budget is saved wit
   f.runtime('budget-restart');
   t.after(() => { appliedContextWindowBudgets.delete('budget-restart'); pendingSessionContextWindowBudgetReconciles.delete('budget-restart'); });
   let restart;
-  await withSendToSessionLock('budget-restart', async () => {
-    // A restart registers its fence, then waits for the lock /sessions/update holds (as main.ts wraps it).
+  await f.update('budget-restart', { contextWindowBudget: 100_000 }, undefined, () => {
+    // The profile check runs after /sessions/update acquires the route lock.
     restart = withSessionRestartLock('budget-restart', async () => { await f.closeRuntime('budget-restart'); });
-    await f.update('budget-restart', { contextWindowBudget: 100_000 });
   });
   await restart;
   assert.equal(readSessionContextWindowBudget('budget-restart'), 100_000, 'the budget is saved');
@@ -1085,4 +1084,27 @@ test('archive and soft-delete use terminal transaction, guard deleteTarget, stop
   assert.deepEqual(softDeleted, ['del', 'child']);
   await assert.rejects(f.update('del', { status: 'archived', pinnedAt: null }), { code: 'PRECONDITION_FAILED' });
   assert.equal((await f.row('del')).status, 'deleted');
+});
+
+// PR 12316, SQLite integration: a queued send needs the route lock while parent cleanup
+// fails. Both committed deletions must reach observers and the child must still stop.
+test('soft delete releases the route lock before draining and isolates parent cleanup failure', { timeout: 10_000 }, async t => {
+  const cleaned = [];
+  let releaseSend;
+  const sendReady = new Promise(resolve => { releaseSend = resolve; });
+  const send = sendReady.then(() => withSendToSessionLock('parent', async () => {}));
+  const f = await fixture(t, { onSoftDelete: async id => {
+    cleaned.push(id);
+    if (id === 'parent') {
+      releaseSend();
+      await send;
+      throw new Error('parent abort failed');
+    }
+  } });
+  await f.task('parent');
+  await f.task('child');
+  await f.database.drizzle.update(sessions).set({ parentSessionId: 'parent', source: 'side-chat', sideChatPromoted: false }).where(eq(sessions.id, 'child'));
+  await assert.rejects(f.update('parent', { status: 'deleted' }), /parent abort failed/);
+  assert.deepEqual(cleaned.sort(), ['child', 'parent']);
+  for (const id of cleaned) assert.equal(movedEvents(f, id).at(-1).status, 'deleted');
 });

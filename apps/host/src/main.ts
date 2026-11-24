@@ -1794,11 +1794,10 @@ const serverDeps = {
     });
     return (sessionId: string, patch: Record<string, unknown>, options?: { deleteTarget?: 'side-chat' | 'task' }) => {
       const owner = activeOwnerScopeKey();
-      return withSendToSessionLock(sessionId, () => {
+      return run(sessionId, patch, options, () => {
         const held = inputQueue.profileHoldReason();
         if (held) throw holdError(held);
         if (activeOwnerScopeKey() !== owner || isAppSessionBoundaryPending()) throw new Error('[NOT_FOUND] Host account changed');
-        return run(sessionId, patch, options);
       });
     };
   })(),
