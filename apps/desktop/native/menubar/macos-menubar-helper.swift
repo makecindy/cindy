@@ -108,7 +108,7 @@ struct MBModelUsage: Decodable, Equatable {
   let excludedMoney: [MBExcludedMoney]?
 }
 
-struct MBExcludedMoney: Decodable, Equatable {
+struct MBExcludedMoney: Decodable, Hashable {
   let amount: Double
   let currency: String
   let kind: String
@@ -3369,12 +3369,34 @@ struct UsagePage: View {
         caption(present.isEmpty
           ? store.s(excluded.isEmpty ? "noUsage" : "chartCurrencyOnly")
           : present.map { "\(store.s("harness." + $0.key)) \(Fmt.money(row.money[$0.index]))" }.joined(separator: " · "))
-        excludedAmounts(excluded)
       } else {
         bigNumber(Fmt.money(total))
         caption(store.s("wideCaptionMoney", ["n": String(store.usageRange)]) + " · " + store.s(scope == "local" ? "scopeLocal" : "scopeAll"))
         caption(stats(daily: daily, total: total))
-        if daily.contains(where: { !($0.excludedMoney ?? []).isEmpty }) {
+      }
+      summaryDisclosure(daily: daily)
+    }
+  }
+
+  @ViewBuilder
+  private func summaryDisclosure(daily: [MBDaily]) -> some View {
+    let disclosures = Set(daily.compactMap(\.excludedMoney).filter { !$0.isEmpty })
+    if !disclosures.isEmpty {
+      ZStack(alignment: .topLeading) {
+        // Size against every distinct disclosure at the current width and locale so
+        // changing the selection cannot move the chart's hover target.
+        caption(store.s("chartCurrencyOnly")).hidden()
+        ForEach(Array(disclosures), id: \.self) { amounts in
+          VStack(alignment: .leading, spacing: 2) {
+            excludedAmounts(amounts)
+          }
+          .hidden()
+        }
+        if let selection, selection < daily.count {
+          VStack(alignment: .leading, spacing: 2) {
+            excludedAmounts(daily[selection].excludedMoney ?? [])
+          }
+        } else {
           caption(store.s("chartCurrencyOnly"))
         }
       }
