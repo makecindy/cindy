@@ -229,6 +229,32 @@ describe('Discord completed-input delivery identity', () => {
       h.trigger(); for (let i = 0; i < 8; i++) await Promise.resolve(); expect(inbound).toHaveBeenCalledTimes(1); expect(h.post).toHaveBeenCalledTimes(1);
     } finally { await im.dispose(); }
   });
+  it('delivers the body when the first chunk of a Discord reply is blank', async () => {
+    const h = terminalHarness();
+    const im = h.create();
+    await im.init();
+    try {
+      const received = new Promise<IMMessageEvent>(resolve => im.onMessage(resolve));
+      h.trigger();
+      const event = await received;
+      const answer = 'First line of the answer\nSecond line of the answer';
+      h.post.mockImplementation(async (_route, options) => {
+        const { content } = (options as { body: { content: string } }).body;
+        if (!content.trim()) throw Object.assign(new Error('Cannot send an empty message'), { status: 400 });
+        return { id: '90' };
+      });
+
+      const result = await im.commitFinalText(event.messageId, event.senderId, `${'\n'.repeat(2000)}${answer}`);
+
+      expect(result.state).toBe('delivered');
+      expect(h.post).toHaveBeenCalledExactlyOnceWith('/channels/30/messages', expect.objectContaining({
+        body: expect.objectContaining({ content: answer }),
+      }));
+    } finally {
+      await im.dispose();
+    }
+  });
+
   it('retains an already-started POST receipt while a configuration replacement fails', async () => {
     const h = terminalHarness(); const im = h.create(); await im.init();
     const posted = Promise.withResolvers<void>(); const response = Promise.withResolvers<{ id: string }>();

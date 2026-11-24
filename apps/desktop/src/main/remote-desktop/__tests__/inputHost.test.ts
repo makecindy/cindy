@@ -59,6 +59,62 @@ function childProcess() {
   };
 }
 describe('native input lifecycle', () => {
+  // Unit regression for #11506: start() must not send Windows input-desktop errors
+  // to the Mac permission hint. Existing tests only handshook with ready.
+  it.each([
+    ['win32', 'error input_desktop 5\n', 'DESKTOP_INPUT_UNAVAILABLE'],
+    ['darwin', 'permission\n', 'DESKTOP_ACCESSIBILITY_REQUIRED'],
+    ['win32', 'ready\n', null],
+    ['darwin', 'ready\n', null],
+  ] as const)('classifies %s helper startup %j', async (platform, line, error) => {
+    const c = childProcess();
+    const host = new DesktopInputHost(vi.fn(), {
+      platform,
+      resolveBinary: async () => '/test/helper',
+      spawn: () => {
+        void Promise.resolve().then(() => c.child.stdout.emit('data', Buffer.from(line)));
+        return c.typed;
+      },
+    });
+    try {
+      if (error) {
+        await expect(host.start('1')).rejects.toThrow(error);
+        expect(c.child.stdin.end).toHaveBeenCalledWith('[{"kind":"release"}]\n');
+      } else await expect(host.start('1')).resolves.toBeUndefined();
+    } finally {
+      host.stop();
+      c.exit();
+      await host.release();
+    }
+    await expect(withAgentDesktopInput(async () => {})).resolves.toBeUndefined();
+  });
+
+  it.each(['error', 'exit', 'timeout'] as const)(
+    'reports unavailable when Windows helper startup ends with %s',
+    async (outcome) => {
+      vi.useFakeTimers();
+      const c = childProcess();
+      const host = new DesktopInputHost(vi.fn(), {
+        platform: 'win32',
+        resolveBinary: async () => '/test/helper',
+        spawn: () => c.typed,
+      });
+      try {
+        const rejected = expect(host.start('1')).rejects.toThrow('DESKTOP_INPUT_UNAVAILABLE');
+        await flush();
+        if (outcome === 'error') c.child.emit('error', new Error('spawn failed'));
+        else if (outcome === 'exit') c.exit();
+        else vi.advanceTimersByTime(8000);
+        await rejected;
+      } finally {
+        host.stop();
+        c.exit();
+        await host.release();
+      }
+      await expect(withAgentDesktopInput(async () => {})).resolves.toBeUndefined();
+    },
+  );
+
   it('retains Windows ownership until queued text and native release are acknowledged', async () => {
     vi.useFakeTimers();
     Object.defineProperty(process, 'platform', { value: 'win32' });

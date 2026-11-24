@@ -2689,8 +2689,12 @@ export class ClaudeCodeAgent extends BaseAgent {
       let reviewedWritePath: string | null | undefined;
       let executionInput = input;
       const normalizedAction = normalizeBuiltinToolForAutoReview(toolName, input);
+      const mcpTarget = resolveMcpToolTarget(toolName, registeredMcpServerNames);
+      const reviewInput = (mcpTarget && this.deps.getMcpToolApprovalEvidence?.({
+        ...mcpTarget, toolParams: input,
+      })) ?? input;
       const builtinReviewAction = normalizedAction.kind === 'other'
-        ? toolAutoReviewAction(toolName, input)
+        ? toolAutoReviewAction(toolName, reviewInput)
         : normalizedAction;
       const directorySensitivePermission = builtinReviewAction?.kind === 'read'
         || builtinReviewAction?.kind === 'file-write';
@@ -2729,7 +2733,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           executionInput = bindClaudeFileWriteTarget(toolName, input, reviewedWritePath);
         }
         const autoDecision = await reviewAutoAction(
-          turnPolicyForcePrompt ? toolAutoReviewAction(toolName, input, undefined, action) : action,
+          turnPolicyForcePrompt ? toolAutoReviewAction(toolName, reviewInput, undefined, action) : action,
           workspaceRoots,
           writableRoots,
           hosted ? hosted.platform : opts.remoteHostId ? 'linux' : process.platform,

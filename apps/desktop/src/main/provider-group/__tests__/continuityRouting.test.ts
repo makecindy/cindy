@@ -20,6 +20,7 @@ vi.mock('@cindy/device-link', async () => {
     isProviderAccessDeniedError: metadata.isProviderAccessDeniedError,
     readProviderMetadataContinuity: metadata.readProviderMetadataContinuity,
     PROVIDER_METADATA_TRUST_MS: metadata.PROVIDER_METADATA_TRUST_MS,
+    REMOTE_CATALOG_FRESH_MS: metadata.REMOTE_CATALOG_FRESH_MS,
     isScopedPeer: protocol.isScopedPeer,
     PROVIDER_GROUP_REMOTE_CHANNEL: group.PROVIDER_GROUP_REMOTE_CHANNEL,
     providerShareGuestPeer: protocol.providerShareGuestPeer,

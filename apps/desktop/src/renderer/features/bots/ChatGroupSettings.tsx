@@ -286,7 +286,7 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
               }} />} />}
           <SettingsRow wrap title={t(shared('replyMode'))}
             hint={t(replyMode === 'mentioned' ? key('replyModeMentionedNote') : assistantAnswers ? key('replyModeAssistantNote') : shared('replyModeNote'))}
-            trailing={<Select label={t(shared('replyMode'))} value={replyMode} disabled={busy} size="compact" className="max-w-[220px]"
+            trailing={<Select label={t(shared('replyMode'))} value={replyMode} disabled={busy} size="compact"
               options={(['mentioned', 'all'] as const).map(value => ({ value,
                 label: t(value === 'all' && assistantAnswers ? key('replyModeAssistant') : REPLY_MODE_LABELS[value]) }))}
               onValueChange={value => void saveRules({ replyMode: value as typeof replyMode })} />} />
@@ -298,7 +298,7 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
           {/* Single-speaker servers always answer one teammate at a time, so there is no speaking mode. */}
           {!group.singleSpeaker && <SettingsRow wrap title={t(shared('speakingMode'))}
             hint={t(shared(speakingMode === 'auto' ? 'speakingModeAutoNote' : 'speakingModeSequentialNote'))}
-            trailing={<Select label={t(shared('speakingMode'))} value={speakingMode} disabled={busy} size="compact" className="max-w-[220px]"
+            trailing={<Select label={t(shared('speakingMode'))} value={speakingMode} disabled={busy} size="compact"
               options={(['auto', 'sequential'] as const).map(value => ({ value, label: t(SPEAKING_MODE_LABELS[value]) }))}
               onValueChange={value => void saveRules({ speakingMode: value as typeof speakingMode })} />} />}
         </SettingsCard>

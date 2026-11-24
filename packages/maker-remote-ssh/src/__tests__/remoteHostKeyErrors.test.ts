@@ -1,27 +1,33 @@
 import { EventEmitter } from "node:events";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
+let holdHandshake = false;
+const clients: FakeClient[] = [];
 class FakeClient extends EventEmitter {
+  verifyPending?: () => void;
+  constructor() { super(); clients.push(this); }
   connect(config: {
     hostVerifier: (key: Buffer, verify: (valid: boolean) => void) => void;
   }): void {
-    config.hostVerifier(Buffer.from("changed-key"), (valid) => {
+    this.verifyPending = () => config.hostVerifier(Buffer.from("changed-key"), (valid) => {
       this.emit(
         valid ? "ready" : "error",
         new Error("Host denied (verification failed)"),
       );
     });
+    if (!holdHandshake) this.verifyPending();
   }
   end(): void {
     this.emit("close");
   }
 }
 
-vi.mock("ssh2", () => ({ Client: vi.fn(() => new FakeClient()) }));
+vi.mock("ssh2", async (original) => ({ ...await original<typeof import("ssh2")>(), Client: vi.fn(() => new FakeClient()) }));
 vi.mock("../credentials.js", () => ({
   resolveAuth: vi.fn(async () => ({ label: "agent" })),
 }));
 
+import { ConnectionPool } from "../ConnectionPool.js";
 import { RemoteHost } from "../RemoteHost.js";
 import { hostKeyFingerprint, type HostKeyStore } from "../hostKeys.js";
 
@@ -128,5 +134,144 @@ describe("SSH host key connection errors", () => {
       filePath: store.filePath,
       fingerprint: hostKeyFingerprint(Buffer.from("changed-key")),
     });
+  });
+});
+
+// #8403 / cindy-machines §3, unit: real pool + verifier. Existing key-error
+// tests never prohibit first trust or interleave callers. Minimal input is a
+// missing synthetic fingerprint at handshake, including after a ready drop.
+afterEach(() => { holdHandshake = false; clients.length = 0; vi.useRealTimers(); });
+const matching = hostKeyFingerprint(Buffer.from("changed-key"));
+function keyStore(value: string | null = null) {
+  return { reload: vi.fn(), get: vi.fn(async () => value),
+    set: vi.fn(async (_key: string, next: string) => { value = next; }) };
+}
+async function handshakeClient(index = clients.length - 1) {
+  await vi.waitFor(() => expect(clients[index]?.verifyPending).toBeTypeOf('function'));
+  clients[index].verifyPending!();
+}
+describe('trusted-only SSH connections (#8403)', () => {
+  it.each([null, matching, 'SHA256:old'])('enforces handshake trust without writing: %s', async value => {
+    const store = keyStore(value);
+    const pool = new ConnectionPool({ logger, hostKeys: store });
+    pool.add(config);
+    try {
+      const result = pool.connect(config.id, { allowFirstTrust: false });
+      if (value === matching) await expect(result).resolves.toBeUndefined();
+      else await expect(result).rejects.toMatchObject({ code: value === null ? 'SSH_HOST_UNVERIFIED' : 'SSH_HOST_KEY_MISMATCH' });
+      expect(store.set).not.toHaveBeenCalled();
+    } finally { await pool.dispose(); }
+  });
+  it.each([false, true])('preserves active TOFU and automatic refusal; active first = %s', async activeFirst => {
+    holdHandshake = true;
+    const store = keyStore();
+    const host = new RemoteHost(config, { logger, hostKeys: store });
+    const first = host.connect({ allowFirstTrust: activeFirst });
+    const second = host.connect({ allowFirstTrust: !activeFirst });
+    const active = activeFirst ? first : second;
+    const automatic = activeFirst ? second : first;
+    const denied = expect(automatic).rejects.toMatchObject({ code: 'SSH_HOST_UNVERIFIED' });
+    try {
+      await handshakeClient(0);
+      await denied;
+      if (!activeFirst) await handshakeClient(1);
+      await active;
+      expect(store.set).toHaveBeenCalledTimes(1);
+      expect(host.getStatus()).toBe('ready');
+    } finally { await host.disconnect(); }
+  });
+  it('does not resurrect an explicit disconnect when an active caller joins a failing probe', async () => {
+    holdHandshake = true;
+    const store = keyStore();
+    const host = new RemoteHost(config, { logger, hostKeys: store });
+    const off = host.onStatus(snapshot => {
+      if (snapshot.status === 'failed') void host.disconnect();
+    });
+    try {
+      const outcomes = Promise.allSettled([host.connect({ allowFirstTrust: false }), host.connect()]);
+      holdHandshake = false; // A wrongly resurrected retry must complete, not time out.
+      await handshakeClient(0);
+      expect(await outcomes).toEqual([
+        { status: 'rejected', reason: expect.objectContaining({ code: 'SSH_HOST_UNVERIFIED' }) },
+        { status: 'rejected', reason: expect.objectContaining({ code: 'SSH_HOST_UNVERIFIED' }) },
+      ]);
+      expect(clients).toHaveLength(1);
+      expect(host.getStatus()).toBe('disconnected');
+      expect(store.set).not.toHaveBeenCalled();
+    } finally { off(); await host.disconnect(); }
+  });
+  it('joins a matching active handshake without replacing it', async () => {
+    holdHandshake = true;
+    const store = keyStore(matching);
+    const host = new RemoteHost(config, { logger, hostKeys: store });
+    try {
+      const active = host.connect();
+      const automatic = host.connect({ allowFirstTrust: false });
+      await handshakeClient(0);
+      await Promise.all([active, automatic]);
+      expect(clients).toHaveLength(1);
+      expect(store.set).not.toHaveBeenCalled();
+    } finally { await host.disconnect(); }
+  });
+  // #8403 / #12236, unit: connect() must enforce trusted-only for callers
+  // joining an automatic retry, beyond the initial-handshake coverage above.
+  // Start from a ready host and remove its fingerprint before the retry.
+  it('does not let a trusted-only caller consume a reconnect that creates first trust', async () => {
+    vi.useFakeTimers();
+    let value: string | null = matching;
+    const store = { reload: vi.fn(), get: vi.fn(async () => value), set: vi.fn() };
+    const host = new RemoteHost(config, { logger, hostKeys: store });
+    try {
+      await host.connect();
+      value = null;
+      clients[0].emit('close');
+      const active = host.connect();
+      const automatic = host.connect({ allowFirstTrust: false });
+      const results = Promise.allSettled([active, automatic]);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(await results).toEqual([
+        { status: 'fulfilled', value: undefined },
+        { status: 'rejected', reason: expect.objectContaining({ code: 'SSH_HOST_UNVERIFIED' }) },
+      ]);
+      expect(clients).toHaveLength(2);
+      expect(store.set).toHaveBeenCalledTimes(1);
+      expect(host.getStatus()).toBe('ready');
+    } finally { await host.disconnect(); }
+  });
+
+  it('keeps trusted-only policy on automatic reconnect after trust removal', async () => {
+    vi.useFakeTimers();
+    let value: string | null = matching;
+    const store = { reload: vi.fn(), get: vi.fn(async () => value), set: vi.fn() };
+    const host = new RemoteHost(config, { logger, hostKeys: store });
+    const onStatus = vi.fn();
+    host.onStatus(onStatus);
+    try {
+      await host.connect({ allowFirstTrust: false });
+      value = null;
+      clients[0].emit('close');
+      const results = Promise.allSettled([
+        host.connect(),
+        host.connect({ allowFirstTrust: false }),
+      ]);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(await results).toEqual([
+        { status: 'rejected', reason: expect.objectContaining({ code: 'SSH_HOST_UNVERIFIED' }) },
+        { status: 'rejected', reason: expect.objectContaining({ code: 'SSH_HOST_UNVERIFIED' }) },
+      ]);
+      expect(host.getStatus()).toBe('failed');
+      expect(host.snapshot().lastError).toContain('SSH_HOST_UNVERIFIED');
+      expect(onStatus).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'failed' }),
+        expect.objectContaining({ code: 'SSH_HOST_UNVERIFIED' }),
+      );
+      expect(store.set).not.toHaveBeenCalled();
+      expect(host.retryAfterNetworkChange()).toBe(false);
+      await vi.advanceTimersByTimeAsync(60000);
+      expect(clients).toHaveLength(2);
+      // A later explicit default connect retains existing TOFU behavior.
+      await host.connect();
+      expect(store.set).toHaveBeenCalledTimes(1);
+    } finally { await host.disconnect(); }
   });
 });

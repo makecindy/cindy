@@ -8,7 +8,8 @@ import { generateKeyPairSync } from 'node:crypto';
 import fs from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { AgentNetWorkerSocket } from '@cindy/agent-net';
-import { issueCertificate, publicBytes } from '@cindy/agent-net-relay';
+import { DeviceLinkRegistrationRemovedError } from '@cindy/device-link';
+import { generateIdentity, issueCertificate, publicBytes } from '@cindy/agent-net-relay';
 import { AgentNetClient } from '@cindy/agent-net-relay/client';
 import { outboundFetch } from '../../maker-host/outbound-fetch.desktop.js';
 const state = vi.hoisted(() => ({ owner: 'membership-a', pending: false, enabled: true, onlyEncrypted: false, secrets: null as any, writes: [] as any[],
@@ -64,6 +65,9 @@ it('runs on Device Link once Agent-Net refuses this identity, per account, and n
   await expect(createAgentNetOrLegacySocket(legacy)).rejects.toThrow('NETWORK_DOWN');
   state.onlyEncrypted = true;
   await expect(createAgentNetOrLegacySocket(legacy)).rejects.toThrow('refused');
+  // A cold renewal can confirm removal before there is a WebSocket to deliver 4410.
+  state.officialEnsure.mockRejectedValueOnce(Object.assign(new Error('revoked'), { code: 'DEVICE_REVOKED' }));
+  await expect(createAgentNetOrLegacySocket(legacy)).rejects.toBeInstanceOf(DeviceLinkRegistrationRemovedError);
   expect(isAgentNetActive()).toBe(true);
   expect(legacy).toHaveBeenCalledTimes(1);
 });
@@ -71,6 +75,33 @@ const relayId = '11111111-1111-4111-8111-111111111111';
 beforeEach(() => { state.owner = 'membership-a'; state.pending = false; state.enabled = true; state.onlyEncrypted = false; state.writes = [];
   state.official = false; state.officialApi = null; state.officialEnsure.mockReset(); });
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
+// A still-valid cached certificate skips enrollment, so a failed first relay connection must also reveal confirmed removal.
+it.each([true, false])('routes confirmed removal on a cached desktop identity (encrypted only=%s)', async (onlyEncrypted) => {
+  state.official = true;
+  state.onlyEncrypted = onlyEncrypted;
+  state.owner = 'cached-removal-' + onlyEncrypted;
+  const root = generateKeyPairSync('ed25519').privateKey;
+  const identity = generateIdentity('device-a');
+  const certificate = issueCertificate(root, { networkId: 'account:unit', subject: state.owner, identity, role: 'owner' });
+  const api = new AgentNetClient('https://agent-net.example.test', identity, certificate, publicBytes(root));
+  state.officialEnsure.mockResolvedValue(api);
+  const directory = vi.spyOn(api, 'directory').mockRejectedValue(Object.assign(new Error('revoked'), { code: 'DEVICE_REVOKED' }));
+  vi.spyOn(fs.promises, 'stat').mockRejectedValue(Object.assign(new Error('unit-cache-absent'), { code: 'ENOENT' }));
+  vi.spyOn(fs.promises, 'readFile').mockResolvedValue(Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]));
+  vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+  const socket = Object.assign(new EventEmitter(), { close: vi.fn(), relayConnected: () => false });
+  vi.spyOn(AgentNetWorkerSocket, 'open').mockResolvedValue(socket as unknown as AgentNetWorkerSocket);
+  const legacy = vi.fn(() => 'device-link');
+  if (onlyEncrypted) await expect(createAgentNetOrLegacySocket(legacy)).rejects.toBeInstanceOf(DeviceLinkRegistrationRemovedError);
+  else {
+    await expect(createAgentNetOrLegacySocket(legacy)).rejects.toThrow('AGENT_NET_IDENTITY_REFUSED');
+    expect(await createAgentNetOrLegacySocket(legacy)).toBe('device-link');
+  }
+  expect(directory).toHaveBeenCalledOnce();
+  expect(socket.close).toHaveBeenCalledOnce();
+  expect(legacy).toHaveBeenCalledTimes(onlyEncrypted ? 0 : 1);
+});
+
 // Privacy failure: an unpaired V2 device previously looked inactive and could use the V1 factory despite encrypted-only.
 // Unit tier: call the real route factory with no V2 identity; the existing legacy factory must never open.
 it('fails closed when encrypted-only is selected before a V2 identity is available', async () => {
@@ -295,6 +326,7 @@ it('keeps a healthy socket when early renewal returns the unchanged valid certif
   vi.mocked(outboundFetch).mockResolvedValue(Response.json({}));
   const socket = new EventEmitter() as any;
   socket.close = vi.fn(() => socket.emit('close', 1000)); socket.replaceClient = vi.fn(async () => {});
+  socket.relayConnected = () => true;
   vi.spyOn(AgentNetWorkerSocket, 'open').mockResolvedValue(socket);
   vi.useFakeTimers();
   try {

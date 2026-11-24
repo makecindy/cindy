@@ -138,6 +138,7 @@ import { listRecentHookSessions } from './recentSessions.js';
 import { validateTelegramExternalUrl } from './telegramDeepLink.js';
 import { validateXExternalUrl } from './xDeepLink.js';
 import { validateFeishuExternalUrl } from './feishuDeepLink.js';
+import { validateDiscordExternalUrl } from './discordDeepLink.js';
 import { isAppContentWindow } from '../windowFocusClassifier.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { getAgentIslandService } from '../agent-island/service.js';
@@ -160,11 +161,12 @@ function requireHookControl(): void {
   }
 }
 
-/** provider-neutral 线(Telegram / X / 飞书)的显示名, 只用于 IPC 错误文案。 */
+/** provider-neutral 线(Telegram / X / 飞书 / Discord)的显示名, 只用于 IPC 错误文案。 */
 const NEUTRAL_PROVIDER_DISPLAY_NAMES: Record<NeutralHookProvider, string> = {
   telegram: 'Telegram',
   x: 'X',
   feishu: 'Feishu',
+  discord: 'Discord',
 };
 
 /**
@@ -177,7 +179,7 @@ function requireNeutralProvider(payload: unknown): NeutralHookProvider {
     typeof p.provider !== 'string' ||
     !Object.prototype.hasOwnProperty.call(NEUTRAL_PROVIDER_DISPLAY_NAMES, p.provider)
   ) {
-    throwIpcError('INVALID_PARAMS', 'provider must be telegram, x or feishu');
+    throwIpcError('INVALID_PARAMS', 'provider must be telegram, x, feishu or discord');
   }
   return p.provider as NeutralHookProvider;
 }
@@ -222,6 +224,16 @@ function disabledHookView(): SlackHookView {
     feishu: {
       enabled: false,
       url: getClientEndpoint('feishuHookWsUrl'),
+      status: 'disabled',
+      lastError: null,
+      available: false,
+      capabilityPending: false,
+      binding: null,
+      defaultWorkspace: null,
+    },
+    discord: {
+      enabled: false,
+      url: getClientEndpoint('discordHookWsUrl'),
       status: 'disabled',
       lastError: null,
       available: false,
@@ -536,7 +548,7 @@ const projectWorkspaceSync = createProjectWorkspaceSync({
   registerDirectory: async (directory) => {
     // 升级前配置的目录此刻不在(外接盘没插)也照样登记 —— 侧栏本来就能显示暂时不可用的项目。
     const registered = await registerImProjectDirectory(directory, { requireExisting: false });
-    // 不能当项目的目录(对话托管目录、任务 worktree、伙伴的项目)跳过; 其余失败(存储没就绪、
+    // 不能当项目的目录(对话托管目录、任务 worktree)跳过; 其余失败(存储没就绪、
     // 写库失败)抛出去, 这次不算迁移完成, 下次整理再试 —— 否则这个目录会从机器人那里永久消失。
     if (!registered.ok && registered.errorCode !== 'INVALID_ARGS' && registered.errorCode !== 'NOT_A_DIRECTORY') {
       throw new Error(`${registered.errorCode}: ${registered.message}`);
@@ -648,6 +660,11 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
             name: `${BRAND_NAME} Feishu`,
             url: getClientEndpoint('feishuHookWsUrl'),
             enabled: config.feishuEnabled,
+          },
+          discord: {
+            name: `${BRAND_NAME} Discord`,
+            url: getClientEndpoint('discordHookWsUrl'),
+            enabled: config.discordEnabled,
           },
           slack: {
             name: `${BRAND_NAME} Slack`,
@@ -769,6 +786,7 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       getTelegramUrl: () => getClientEndpoint('telegramHookWsUrl'),
       getXUrl: () => getClientEndpoint('xHookWsUrl'),
       getFeishuUrl: () => getClientEndpoint('feishuHookWsUrl'),
+      getDiscordUrl: () => getClientEndpoint('discordHookWsUrl'),
       // 与 device-link 同款 token 源: 现值优先, 缺失 refresh 一次
       getAuthToken: async () => {
         if (!hookControlAvailable()) return null;
@@ -793,10 +811,12 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
         persistUnsolicitedServerPrefs('slack', view.prefs);
       },
       notifyProviderPrefs: (view) => {
-        if (view.provider === 'slack') return;
+        // 官方 Discord 没有 /model 卡, 不是偏好镜像渠道: 派发只读共用那一份(session-runner)。
+        if (view.provider === 'slack' || view.provider === 'discord') return;
         persistUnsolicitedServerPrefs(view.provider, view.prefs);
       },
       onHookReadyForPrefsMirror: (provider) => {
+        if (provider === 'discord') return;
         void mirrorWorkspacePrefs(provider);
       },
       notifyTelegramBehavior: broadcastTelegramBehavior,
@@ -856,6 +876,10 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       },
       openFeishuUrl: (url) => {
         const safeUrl = validateFeishuExternalUrl(url);
+        return shell.openExternal(safeUrl);
+      },
+      openDiscordUrl: (url) => {
+        const safeUrl = validateDiscordExternalUrl(url);
         return shell.openExternal(safeUrl);
       },
       log,
@@ -1110,7 +1134,8 @@ export function registerHookControlIpc(): void {
           err instanceof Error &&
           (err.name === 'TelegramDeepLinkValidationError' ||
             err.name === 'XLinkValidationError' ||
-            err.name === 'FeishuLinkValidationError')
+            err.name === 'FeishuLinkValidationError' ||
+            err.name === 'DiscordLinkValidationError')
         ) {
           throwIpcError('INVALID_PARAMS', err.message);
         }

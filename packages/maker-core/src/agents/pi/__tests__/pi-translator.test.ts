@@ -105,7 +105,7 @@ describe('pi translator', () => {
     const { queue, events } = makeQueue();
 
     translatePiEvent(
-      ev({ type: 'tool_execution_start', toolCallId: 'sa-1', toolName: 'subagent', args: {} }),
+      ev({ type: 'tool_execution_start', toolCallId: 'sa-1', toolName: 'cindy_subagent', args: {} }),
       queue,
       ctx,
     );
@@ -119,6 +119,14 @@ describe('pi translator', () => {
       queue,
       ctx,
     );
+    // #11339: a user extension named subagent is not a Cindy durable run.
+    translatePiEvent(ev({ type: 'tool_execution_start', toolCallId: 'native-1', toolName: 'subagent', args: {} }), queue, ctx);
+    translatePiEvent(ev({ type: 'tool_execution_end', toolCallId: 'native-1', result: 'native result' }), queue, ctx);
+    expect(events.find(event => event.type === 'tool_use' && (event.data as { toolUseId?: string }).toolUseId === 'sa-1')?.data)
+      .toMatchObject({ toolName: 'subagent' });
+
+    expect(events.find(event => event.type === 'tool_use' && (event.data as { toolUseId?: string }).toolUseId === 'native-1')?.data)
+      .toMatchObject({ toolName: 'dynamic:subagent' });
 
     const updates = events.filter((event) => event.type === 'agent_task_update');
     expect(updates.map((event) => event.data)).toEqual([
@@ -139,7 +147,7 @@ describe('pi translator', () => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();
     translatePiEvent(ev({
-      type: 'tool_execution_start', toolCallId: 'sa-title', toolName: 'subagent',
+      type: 'tool_execution_start', toolCallId: 'sa-title', toolName: 'cindy_subagent',
       args: { agent: 'scout', task: 'find the auth entry point' },
     }), queue, ctx);
     translatePiEvent(ev({
@@ -167,7 +175,7 @@ describe('pi translator', () => {
       ev({
         type: 'tool_execution_start',
         toolCallId: 'sa-list',
-        toolName: 'subagent',
+        toolName: 'cindy_subagent',
         args: { action: 'list' },
       }),
       queue,
@@ -188,7 +196,7 @@ describe('pi translator', () => {
       ev({
         type: 'tool_execution_start',
         toolCallId: 'sa-title',
-        toolName: 'subagent',
+        toolName: 'cindy_subagent',
         args: { title: 'Grok 连通性验证', agent: 'worker' },
       }),
       queue,
@@ -206,7 +214,7 @@ describe('pi translator', () => {
       ev({
         type: 'tool_execution_start',
         toolCallId: 'sa-batch-title',
-        toolName: 'subagent',
+        toolName: 'cindy_subagent',
         args: {
           tasks: [
             { agent: 'worker', task: 'Verify Grok routing and usage' },
@@ -227,7 +235,7 @@ describe('pi translator', () => {
     const { queue, events } = makeQueue();
 
     translatePiEvent(
-      ev({ type: 'tool_execution_start', toolCallId: 'sa-bg', toolName: 'subagent', args: { async: true } }),
+      ev({ type: 'tool_execution_start', toolCallId: 'sa-bg', toolName: 'cindy_subagent', args: { async: true } }),
       queue,
       ctx,
     );
@@ -268,7 +276,7 @@ describe('pi translator', () => {
       const { queue, events } = makeQueue();
 
       translatePiEvent(
-        ev({ type: 'tool_execution_start', toolCallId: 'sa-1', toolName: 'subagent', args: {} }),
+        ev({ type: 'tool_execution_start', toolCallId: 'sa-1', toolName: 'cindy_subagent', args: {} }),
         queue,
         ctx,
       );
@@ -2648,7 +2656,7 @@ describe('pi translator live token speed', () => {
       // A subagent runs during the tool window and reports its own output.
       vi.setSystemTime(2_000);
       translatePiEvent(ev({ type: 'message_update', assistantMessageEvent: {
-        type: 'toolcall_end', toolCall: { name: 'subagent' },
+        type: 'toolcall_end', toolCall: { name: 'cindy_subagent' },
       } }), queue, ctx);
       translatePiEvent(ev({
         type: 'tool_execution_update',

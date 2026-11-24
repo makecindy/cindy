@@ -1,6 +1,7 @@
 import { BUNDLED_CATALOG, type ProviderView } from '@cindy/model-providers';
 import { ProvidersSection } from '../../../src/renderer/components/settings/ProvidersSection';
 import { mountPage, subscription, forbid } from '../../ui-page/harness';
+import { normalizeProviderGroupConfig, type ProviderGroupDisplayRead } from '../../../src/shared/providerGroup';
 import type { SubscriptionAccountCommand } from '../../../src/shared/subscriptionAccounts';
 
 // The isolated HTTP fixture lacks secure-context randomUUID. These are only
@@ -18,7 +19,7 @@ const provider = (id: string, name?: string) => ({
 const providers: ProviderView[] = [provider('anthropic'), provider('openai')];
 const group = {
   strategy: 'least', autoSwitch: true,
-  members: [{ kind: 'local' }, { kind: 'device', agentDeviceId: 'fixture-executor', providerId: 'anthropic' }],
+  members: [{ kind: 'local', label: 'Studio' }, { kind: 'device', label: 'Notebook', agentDeviceId: 'fixture-executor', providerId: 'anthropic' }],
 };
 const entries = [provider('anthropic', 'Team Anthropic'), provider('openai', 'Private OpenAI')];
 entries[0] = { ...entries[0], group } as typeof entries[0];
@@ -54,8 +55,27 @@ const received = [{
   owner: { displayName: 'Alex', avatarUrl: null, region: 'global' },
   status: 'paused', hostOnline: true, hostCapable: true,
 }];
+const groupControl = { releaseMember: () => {}, releaseQuota: () => {} };
+const slowMember = new Promise<void>(resolve => { groupControl.releaseMember = resolve; });
+const slowQuota = new Promise<void>(resolve => { groupControl.releaseQuota = resolve; });
+const remoteConfig = normalizeProviderGroupConfig(group, 'anthropic')!;
+
+async function remoteGroupView(display?: ProviderGroupDisplayRead) {
+  if (display === 'roster') return { config: remoteConfig, members: [], rosterOnly: true };
+  const members = remoteConfig.members.filter(member => !display || member.key === display.memberKey);
+  const statuses = await Promise.all(members.map(async member => {
+    if (member.kind !== 'local') await slowMember;
+    if (!display || display.details) await slowQuota;
+    const exhausted = member.kind === 'local' && (!display || display.details);
+    return { ...member, label: member.kind === 'local' ? 'Studio' : 'Notebook', running: 0,
+      state: exhausted ? 'cooling' : 'available', ...(exhausted ? { usageLimit: { resetAtMs: null } } : {}) };
+  }));
+  return { config: remoteConfig, members: statuses };
+}
+
 Object.assign(window, { providerSourcesFixture: {
   snapshot,
+  groupControl,
   refreshControl,
   keySaveControl,
   subscriptionControl,
@@ -123,14 +143,15 @@ mountPage({
         onLocalModelStatus: subscription('localModelStatus'),
         onProviderOAuthProgress: subscription('providerOAuthProgress'),
       },
-      deviceLink: { getState: async () => ({ remoteControlEnabled: true }) },
+      deviceLink: { listDevices: async () => ({ devices: [] }), getState: async () => ({ remoteControlEnabled: true }) },
       providerShare: {
         command: async () => ({ ready: true, providerIds: ctx.case === 'no-outgoing-shares' ? []
           : ctx.case === 'legacy-upgrade-shared' ? ['legacy-openai-one'] : ['openai'] }),
         onOwnedChanged: subscription('ownedChanged'),
       },
       providerGroup: {
-        command: async (command: { action: string }) => command.action === 'list' ? {}
+        command: async (command: { action: string; display?: ProviderGroupDisplayRead }) => command.action === 'list' ? {}
+          : command.action === 'remote-view' && ctx.case === 'slow-group' ? remoteGroupView(command.display)
           : { ready: true, providerIds: ctx.case === 'no-outgoing-shares' ? [] : ['anthropic'] },
         onChanged: subscription('groupChanged'),
       },

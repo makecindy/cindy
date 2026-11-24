@@ -2,6 +2,7 @@ import { i18n } from '@/i18n';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { selfHostedRelayAuthorizationFor } from '@/device-link/selfHostedRelayRouting';
 import { isAgentNetMediaReference } from '@cindy/agent-net-protocol';
+import { isExpoAndroidDnsFailure } from './expoAndroidDnsFailure';
 
 /** 自建中转的 401 统一成这个码:只表示中转凭证失效,不可刷新账号 token,也不触发账号退出。 */
 export const RELAY_CREDENTIAL_INVALID = 'RELAY_CREDENTIAL_INVALID';
@@ -145,7 +146,7 @@ export async function apiFetchRaw<T>(
     if (isAbortError(err)) {
       throw new ApiError('REQUEST_TIMEOUT', 0, i18n.t('apiErrors.requestTimeout'));
     }
-    if (err instanceof TypeError) {
+    if (err instanceof TypeError || (err instanceof Error && isExpoAndroidDnsFailure(err.message))) {
       // fetch 的网络层失败统一走类型化离线错误:RN 离线抛 "Network request failed"
       // (不含 "fetch" 子串,旧分支匹配不到,英文原文会一路透传到 UI);浏览器
       // (Web 预览)抛 "Failed to fetch",还可能是 CORS——只在 web 环境附加提示。

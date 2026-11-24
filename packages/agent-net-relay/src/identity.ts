@@ -48,7 +48,7 @@ const id = (value: unknown): value is string => typeof value === 'string' && ID_
 const key = (value: unknown): value is string => typeof value === 'string' && KEY_PATTERN.test(value) && Buffer.from(value, 'base64url').length === 32 && Buffer.from(value, 'base64url').toString('base64url') === value;
 const time = (value: unknown): value is number => Number.isSafeInteger(value) && Number(value) >= 0;
 export function issueCertificate(
-  root: KeyObject, input: { networkId: string; subject: string; identity: Pick<Identity, 'deviceId' | 'signingKey' | 'transportKey'>; role: 'owner' | 'member'; now?: number; lifetimeMs?: number },
+  root: KeyObject, input: { networkId: string; subject: string; identity: Pick<Identity, 'deviceId' | 'signingKey' | 'transportKey'>; role: 'owner' | 'member'; now?: number; lifetimeMs?: number; serial?: string },
 ): DeviceCertificate {
   const issuedAt = input.now ?? Date.now();
   const maximum = input.networkId.startsWith('private:') ? PRIVATE_MEMBERSHIP_EXPIRES_AT - issuedAt : CERT_LIFETIME_MS;
@@ -57,7 +57,7 @@ export function issueCertificate(
   const unsigned: Omit<DeviceCertificate, 'signature'> = {
     v: 2, networkId: input.networkId, subject: input.subject, deviceId: input.identity.deviceId,
     signingKey: input.identity.signingKey, transportKey: input.identity.transportKey, role: input.role,
-    issuedAt, expiresAt: issuedAt + lifetime, serial: randomUUID(),
+    issuedAt, expiresAt: issuedAt + lifetime, serial: input.serial ?? randomUUID(),
   };
   const result = { ...unsigned, signature: signature(root, certificatePayload(unsigned)) };
   if (!verifyCertificate(publicBytes(root), result, issuedAt)) throw new Error('INVALID_CERTIFICATE');

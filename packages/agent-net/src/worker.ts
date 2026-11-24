@@ -102,6 +102,7 @@ port.on('message', (message) => {
       onDelegationRequests(requests) { send({ type: 'delegation-requests', requests }); },
       onDelegations(delegations) { send({ type: 'delegations', delegations }); },
       onPathChanged(id, path) { ids.add(id); send({ type: 'path', id, path }); snapshot(); },
+      onRelayReplaced() { if (message.reportRelayReplacements) send({ type: 'relay-replaced' }); },
       ...(message.tap ? { tap: (data, via) => send({ type: 'tap', data, via }) } : {}),
     }).then((value) => {
       socket = value;
@@ -130,6 +131,7 @@ port.on('message', (message) => {
     snapshot();
   }
   if (message.type === 'network-changed') socket.networkChanged();
+  if (message.type === 'duplicate-identity-cooldown') socket.setDuplicateIdentityCooldown(message.active === true);
   if (message.type === 'relay-stalled') socket.relayStalled();
   if (message.type === 'close') socket.close(message.code);
 });
