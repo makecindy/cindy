@@ -937,6 +937,12 @@ export function PeerFileTransport() {
       crashes,
     });
     setReady(null);
+    if (AppState.currentState !== "active") {
+      available.current = false;
+      setForeground(false);
+      setLifecycle(n => n + 1);
+      return;
+    }
     setCrashes((n) => Math.min(2, n + 1));
   };
   if (!enabled) return null;

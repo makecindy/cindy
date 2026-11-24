@@ -41,8 +41,14 @@ export function DirectLinkTransport({ bridge, enabled, owner }: {
   }, []);
   useEffect(() => () => release(), [key, active, bridge]);
   const terminated = () => {
-    if (live.current !== key) return;
+    if (!activeRef.current || live.current !== key) return;
+    activeRef.current = false;
     release();
+    if (AppState.currentState !== 'active') {
+      setForeground(false);
+      setLifecycle(n => n + 1);
+      return;
+    }
     setCrashes((n) => Math.min(2, n + 1));
     mobileDebugLog('warn', 'device-link', 'LAN transport process stopped; using relay');
   };
