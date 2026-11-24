@@ -13683,17 +13683,43 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         }
         const route = getSelectedNewMakerRoute(activeOwnerScopeKey());
         const agentKind = route ? (route.harness === 'claude' ? 'claude-code' : route.harness) : undefined;
-        const { row } = await openSession({ assertCurrent: assertOwner, body: {
-          title, projectDir, workspaceKind: projectDir ? 'project' : 'dialogue', workingDir: projectDir ?? undefined,
-          ...(route && agentKind ? { agentKind: agentKind === 'claude-code' ? 'cc' as const : agentKind, model: route.model,
-            providerId: route.providerId, effort: route.effort || '', fastMode: route.fastMode } : {}),
-          permissionMode: permissionModeOrAsk(agentKind ? getRemoteNewMakerDefaults(agentKind).permissionMode : undefined),
-        } });
+        const { row } = await (async () => {
+          try {
+            return await openSession({ assertCurrent: assertOwner, body: {
+              title, projectDir, workspaceKind: projectDir ? 'project' : 'dialogue', workingDir: projectDir ?? undefined,
+              ...(route && agentKind ? { agentKind: agentKind === 'claude-code' ? 'cc' as const : agentKind, model: route.model,
+                providerId: route.providerId, effort: route.effort || '', fastMode: route.fastMode } : {}),
+              permissionMode: permissionModeOrAsk(agentKind ? getRemoteNewMakerDefaults(agentKind).permissionMode : undefined),
+            } });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            // 群Cindy 的"新建任务默认模型"可能来自旧账号/旧草稿，对本账号不可用；回退一次让宿主编排可用模型。
+            // 只认真正的"模型不可用"，不要把 Fast/effort 校验失败的通用"重新选择模型"提示也当成回退信号。
+            if (!route || !/not available for/.test(message)) throw error;
+            const { available } = await inspectAppDefaultModel();
+            const pick = available[0]?.route;
+            if (!pick) throw error;
+            const pickAgentKind = pick.harness === 'claude' ? 'cc' : pick.harness;
+            // 权限按回退到的引擎读取，避免把原引擎的高权限带给另一种引擎（否则会落库成全权限并被群任务直接沿用）。
+            const pickEngineKind = pickAgentKind === 'cc' ? 'claude-code' : pickAgentKind;
+            log.warn('group-cindy: routed model unavailable for this account, retrying with an available model', { from: route.model, to: pick.model });
+            return await openSession({ assertCurrent: assertOwner, body: {
+              title, projectDir, workspaceKind: projectDir ? 'project' : 'dialogue', workingDir: projectDir ?? undefined,
+              agentKind: pickAgentKind, model: pick.model, providerId: pick.providerId, effort: pick.effort || '', fastMode: pick.fastMode,
+              permissionMode: permissionModeOrAsk(getRemoteNewMakerDefaults(pickEngineKind).permissionMode),
+            } });
+          }
+        })();
         // Before its first turn starts, so the task starts with the 群协作 Skill.
         markGroupCindyTask(row.id);
         broadcastSessionCreated(row.id);
         return { ok: true as const, sessionId: row.id, created: true };
       } catch (error) {
+        log.warn('group-cindy: openSession failed', {
+          sessionId, title, projectDir,
+          name: error instanceof Error ? error.name : typeof error,
+          message: error instanceof Error ? error.message : String(error),
+        });
         return { ok: false as const, errorCode: 'LANE_UNAVAILABLE', message: error instanceof Error ? error.message : String(error) };
       }
     },
