@@ -165,10 +165,20 @@ async function historicalCodexAccount(
  */
 function legacyConnectionAccount(providerId: string | null | undefined, keys: string[], agentKind: string, hasNativeHistory: boolean): string | undefined {
   const ref = resolveSubscriptionPoolProviderRef(providerId);
-  if (!ref?.ownAccount) return;
-  if (!readPool(ref.kind)?.accounts.some(entry => entry.id === ref.ownAccount)
-    && keys.some(key => readAccountBinding(key, ref.kind)?.accountId === ref.ownAccount))
-    throw new AgentNotAuthenticatedError(agentKind, 'Subscription account was removed');
+  const ownAccount = ref?.ownAccount;
+  if (!ref || !ownAccount) return;
+  if (!readPool(ref.kind)?.accounts.some(entry => entry.id === ownAccount)) {
+    const removedBinding = keys.map(key => readAccountBinding(key, ref.kind))
+      .find(binding => binding?.accountId === ownAccount);
+    if (removedBinding) {
+      // When starting fresh after handoff, let the built-in Claude pool replace its
+      // own removed binding. Native resumes and historical aliases still pin the old account.
+      if (!hasNativeHistory && ref.providerId === 'anthropic'
+        && (removedBinding.via ?? ref.kind) === ref.providerId
+        && accountProviderId(ref.kind, ownAccount) === ref.providerId) return;
+      throw new AgentNotAuthenticatedError(agentKind, 'Subscription account was removed');
+    }
+  }
   const fallback = readMergedProviderAccount(ref.providerId);
   if (!fallback) return;
   const bindings = keys.map(key => readAccountBinding(key, ref.kind)).filter(Boolean);
@@ -397,11 +407,14 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
             if (!provider) return startLegacy();
             const kind = kindOf(provider);
             imported ??= legacyConnectionAccount(options.providerId?.trim(), keys, target.kind, !!options.resumeSessionId);
-            if (!imported && options.resumeSessionId && !keys.some((key) => readAccountBinding(key, kind))) {
-              if (kind === 'openai') {
-                // Unknown private homes retain their legacy route; never pick another account.
-                return startLegacy();
-              } else await writeAccountBindings(keys, kind, 'default');
+            if (!imported && options.resumeSessionId && !keys.some(key => readAccountBinding(key, kind))) {
+              // Unknown Codex homes retain their legacy route; never pick another account.
+              if (kind === 'openai') return startLegacy();
+              // An unbound Claude resume can only use the default home. Do not
+              // pin the task to a removed account before the fresh handoff retry.
+              if (!readPool(kind)?.accounts.some(account => account.id === 'default'))
+                throw new Error('[SUBSCRIPTION_ACCOUNT_UNAVAILABLE] The task subscription account is unavailable');
+              await writeAccountBindings(keys, kind, 'default');
             }
           } catch (error) {
             // No underlying runtime has been started; Maker may release its worktree lease.
