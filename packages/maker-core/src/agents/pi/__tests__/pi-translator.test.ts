@@ -507,6 +507,34 @@ describe('pi translator', () => {
     disposePiTranslateContext(ctx);
   });
 
+  // #12473 (unit): native settlement must preserve a routable status for the
+  // nested image-count refusal. Generic 400s still have no structured status.
+  it.each([
+    ['image count rejection', 400, 'messages', 'This request carries 102 images in all; model takes at most 100 per request.', 400],
+    ['different parameter', 400, 'tools', 'This request carries 102 images in all; model takes at most 100 per request.', undefined],
+    ['other request error', 400, 'messages', 'Invalid message role.', undefined],
+    ['ambiguous image error', 400, 'messages', 'An image could not be decoded.', undefined],
+    ['non-400 status', 'HTTP 429', 'messages', 'This request carries 102 images in all; model takes at most 100 per request.', 429],
+  ])('preserves the expected structured status for %s', (_label, status, param, message, expectedStatus) => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    const error = { type: 'invalid_request_error', code: 'bad_request', param, message };
+    const errorMessage = `${status}: ${JSON.stringify({ message: JSON.stringify({ error }) })}`;
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(ev({ type: 'message_end', message: {
+      role: 'assistant', content: [], stopReason: 'error', errorMessage,
+    } }), queue, ctx);
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+    const failure = events.find(event => event.type === 'error');
+    expect(failure?.data).toMatchObject({ message: errorMessage, isTerminal: true });
+    if (expectedStatus === undefined) {
+      expect(failure?.data).not.toHaveProperty('errorStatus');
+    } else {
+      expect(failure?.data).toHaveProperty('errorStatus', expectedStatus);
+    }
+    disposePiTranslateContext(ctx);
+  });
+
   it('surfaces a terminal provider error after Pi settles instead of staying in Working', () => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();

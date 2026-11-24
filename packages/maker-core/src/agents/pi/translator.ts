@@ -100,7 +100,7 @@ interface PiPendingAssistantError {
   message: string;
   sdkError: string;
   piCacheCompatibility?: import('./cache-compatibility.js').PiCacheCompatibility;
-  errorStatus?: NonSecretErrorSignals['errorStatus'];
+  errorStatus?: 400 | NonSecretErrorSignals['errorStatus'];
   usageLimit?: true;
   reason?: typeof CONTEXT_OVERFLOW_REASON | typeof UPSTREAM_STREAM_INTERRUPTED_REASON | typeof PI_GATEWAY_DROP_REASON | typeof UNSUPPORTED_REQUEST_OPTION_REASON;
 }
@@ -755,13 +755,33 @@ function isPiAbortedRequest(error: string): boolean {
   return /^Request was aborted[.!]?$/i.test(error.trim());
 }
 
+/** #12473: Pi's OpenAI Chat error can wrap the gateway's JSON in a message string. */
+function isPiImageCountRejection(rawError: string): boolean {
+  const body = /^400:\s*(\{[\s\S]*\})\s*$/.exec(rawError)?.[1];
+  if (!body) return false;
+  try {
+    const envelope = JSON.parse(body);
+    if (typeof envelope.message !== 'string') return false;
+    const error = JSON.parse(envelope.message)?.error;
+    return error?.type === 'invalid_request_error'
+      && error.param === 'messages'
+      && typeof error.message === 'string'
+      && (/\btoo many images\b/i.test(error.message)
+        || (/^This request carries \d+ images\b/i.test(error.message)
+          && /\bat most \d+ per request\b/i.test(error.message)));
+  } catch {
+    return false;
+  }
+}
+
 function piAssistantErrorOf(rawError: string): PiPendingAssistantError {
   const signals = extractNonSecretErrorSignals(rawError);
+  const errorStatus = signals.errorStatus ?? (isPiImageCountRejection(rawError) ? 400 : undefined);
   const redactedError = redactSensitiveText(rawError);
   return {
     message: redactedError,
     sdkError: redactedError,
-    ...(signals.errorStatus !== undefined ? { errorStatus: signals.errorStatus } : {}),
+    ...(errorStatus !== undefined ? { errorStatus } : {}),
     ...(signals.usageLimit ? { usageLimit: true } : {}),
     ...(isContextOverflowErrorMessage(redactedError)
       ? { reason: CONTEXT_OVERFLOW_REASON }
