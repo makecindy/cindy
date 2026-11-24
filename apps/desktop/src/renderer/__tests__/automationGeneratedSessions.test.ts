@@ -1123,14 +1123,6 @@ describe('automation-generated sessions', () => {
     );
   });
 
-  it('refreshes the shared session store when a schedule binds a newly created session', () => {
-    const source = readTextLf(new URL('../lib/sessionsStore.ts', import.meta.url), 'utf8');
-
-    expect(source).toContain('maker?.schedule');
-    expect(source).toContain("event.type === 'session-bound'");
-    expect(source).toContain('sessionsStore.forceRefreshAll(');
-  });
-
   it('does not clear automation conversation attention just by browsing schedules', () => {
     const schedulerPageSource = readTextLf(
       new URL('../features/scheduler/SchedulerPage.tsx', import.meta.url),

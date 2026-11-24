@@ -32,17 +32,15 @@ import { normalizeTaskTags, reconcileTaskTags } from '@cindy/maker-shared';
  *                                   保留旧 createSession 的"省一次 IPC"优化。
  *   - forceRefresh(filter)         单桶强制重拉，drop 桶 + 走 ensure。
  *   - forceRefreshAll()            重拉已缓存或正在加载的桶，未访问桶不动。
- *                                   sessionsBus.onRefresh / sessionsPush.onCreated
- *                                   走这条，且带 isCurrent：重拉期间保留旧列表。
  *
  * 自订阅（模块加载时一次性挂上，hook 不再重复订阅）：
  *   - sessionsBus.onPatch                → patchLocal
- *   - sessionsBus.onRefresh              → forceRefreshAll
+ *   - sessionsBus.onRefresh              → refreshAfterNotification
  *   - electronAPI.sessionsPush.onPatched → patchLocal
- *   - electronAPI.sessionsPush.onCreated → forceRefreshAll
+ *   - electronAPI.sessionsPush.onCreated → refreshAfterNotification
  *     （payload 只带 sessionId 不带完整 row，无法 prepend，需要重拉）
  *   - electronAPI.onUsageSessionSpendChanged → patchLocal(totalCostUsd)
- *   - maker.schedule.onEvent session-bound → forceRefreshAll
+ *   - maker.schedule.onEvent session-bound → refreshAfterNotification
  *     （scheduler runner 在 main 进程创建 session，不一定走 localDb sessionsPush）
  */
 
@@ -94,6 +92,8 @@ class SessionBucketCache extends Map<ListStatusFilter, Session[]> {
 
 const cache = new SessionBucketCache();
 interface FilterRequest {
+  fresh: boolean;
+  replacesInitialLoad?: boolean;
   promise: Promise<void>;
   resolve: (replacement?: PromiseLike<void>) => void;
   reject: (reason: unknown) => void;
@@ -172,7 +172,7 @@ function mergeSessionPatch(
  * 自动起名的「即时标题预览」叠加层（sessionId → 预览标题）。
  *
  * 为什么必须是叠加层、而不是一次性 patchLocal：新建会话的 `sessions:created` push 会
- * 触发 `forceRefreshAll`，那次重拉从 DB 拿回的行**仍带默认哨兵**（权威标题要等
+ * 触发列表重拉，拿回的行**仍带默认哨兵**（权威标题要等
  * `maker:auto-title` 落库才有），会把只写进缓存的乐观标题冲掉 —— 表现为标题先显示
  * 用户那句话、又退回「未命名任务」，直到 IPC 回来（PR #1031 review P1）。
  *
@@ -217,7 +217,7 @@ function applyAutoTitlePreviews(list: Session[]): Session[] {
  * 请求发起于这次标题变更**之前**,它的快照里还是旧标题,回来会 `cache.set` 整桶覆盖,
  * 把刚 patch 进去的权威标题冲掉。
  *
- * 典型时序(新建会话):`sessions:created` push → `forceRefreshAll()` 起飞(快照里是
+ * 典型时序(新建会话):`sessions:created` push → 列表重拉起飞(快照里是
  * 哨兵)→ main 写完占位 → `sessions:patched` 落进缓存 → 那个更早的请求才回来,把哨兵
  * 写回去,界面退到「未命名任务」直到下一次刷新。乐观预览叠加层此刻已按权威值到达的
  * 规则回收,没人再替它顶回来(PR #1031 review P1)。
@@ -339,7 +339,7 @@ function clearPendingStatusTransition(
 }
 
 /** 同桶补查已有请求在途时只记一个 dirty 位，请求结束后最多追加一轮 fresh。 */
-const trailingFilterRefreshes = new Set<ListStatusFilter>();
+const trailingFilterRefreshes = new Map<ListStatusFilter, (() => boolean) | undefined>();
 
 function belongsInFilter(status: Session['status'], filter: ListStatusFilter): boolean {
   if (status === 'deleted') return false;
@@ -648,27 +648,34 @@ async function fetchFilter(
   return result;
 }
 
-function runFilterBackfill(filter: ListStatusFilter): void {
-  void sessionsStore.ensureByFilter(filter, { fresh: true }).catch(() => {
+function runFilterBackfill(filter: ListStatusFilter, isCurrent?: () => boolean): Promise<void> | undefined {
+  if (isCurrent && !isCurrent()) return;
+  const refresh = sessionsStore.ensureByFilter(filter, { fresh: true, isCurrent });
+  void refresh.catch(() => {
     /* 静默：后续状态广播、主动操作或 refresh 会再次兜底。 */
   });
+  return refresh;
 }
 
 /**
  * 缺少完整 row 时只补查需要包含它的桶。同桶若已有请求在途，不取消、不并发重启，
  * 只保留一个尾部 fresh；这样连续归档不会把每个状态事件放大成一轮列表查询。
  */
-function requestFilterBackfill(filter: ListStatusFilter): void {
+function requestFilterBackfill(filter: ListStatusFilter, isCurrent?: () => boolean): void {
   if (inflight.has(filter)) {
-    trailingFilterRefreshes.add(filter);
+    // A later status backfill must retain a queued notification's owner guard.
+    if (isCurrent || !trailingFilterRefreshes.has(filter)) {
+      trailingFilterRefreshes.set(filter, isCurrent);
+    }
     return;
   }
-  runFilterBackfill(filter);
+  runFilterBackfill(filter, isCurrent);
 }
 
-function runTrailingFilterBackfill(filter: ListStatusFilter): void {
+function runTrailingFilterBackfill(filter: ListStatusFilter): Promise<void> | undefined {
+  const isCurrent = trailingFilterRefreshes.get(filter);
   if (!trailingFilterRefreshes.delete(filter)) return;
-  runFilterBackfill(filter);
+  return runFilterBackfill(filter, isCurrent);
 }
 
 function recordSessionPinSummaryOverrides(
@@ -839,7 +846,7 @@ export const sessionsStore = {
         resolve = onResolve;
         reject = onReject;
       });
-      const request = { promise, resolve, reject };
+      const request: FilterRequest = { fresh: opts?.fresh === true, promise, resolve, reject };
       pending = request;
       inflight.set(filter, request);
       void fetchFilter(filter, opts)
@@ -860,7 +867,13 @@ export const sessionsStore = {
         .catch((e) => {
           if (inflight.get(filter) === request) {
             inflight.delete(filter);
-            runTrailingFilterBackfill(filter);
+            // 首次加载的替换请求失败时，有新通知就让等待者跟随这一轮尾刷。
+            const followNotification = request.replacesInitialLoad && trailingFilterRefreshes.get(filter);
+            const trailing = runTrailingFilterBackfill(filter);
+            if (followNotification && trailing) {
+              request.resolve(trailing);
+              return;
+            }
           }
           // 替换时 resolve 已接到新请求，之后旧请求的 reject 不会再改变结果。
           request.reject(e);
@@ -883,13 +896,8 @@ export const sessionsStore = {
     return cache.get(filter) ?? [];
   },
 
-  /**
-   * 重拉已缓存或正在加载的桶，未访问的桶不动。
-   * sessionsBus.onRefresh / sessionsPush.onCreated 走这条 ——
-   * 无完整 row 的列表成员变化（main 端新建等）需要让所有活跃订阅者同步刷新。
-   */
+  /** 重拉已缓存或正在加载的桶，未访问的桶不动。 */
   async forceRefreshAll(isCurrent?: () => boolean): Promise<void> {
-    // forceRefresh 会暂时移除缓存；这段窗口收到的新建通知仍需触发 fresh 读取。
     const filters = Array.from(new Set([...cache.keys(), ...inflight.keys()]));
     if (filters.length === 0) return;
     await Promise.all(filters.map((f) => this.forceRefresh(f, isCurrent)));
@@ -1336,9 +1344,21 @@ function refreshAfterNotification(): void {
   // 里刚收到消息的 Worker）会被整块卸载再重新挂载。账号切换由 reset 清空，这里只防迟到的
   // 读结果写进另一个账号的缓存；同账号的代次变化不丢弃这次刷新。
   const owner = getDataOwnerGeneration();
-  void sessionsStore.forceRefreshAll(() => isDataOwnerIdCurrent(owner)).catch(() => {
-    // 加载等待者会收到当前请求的错误；事件通知本身没有接收返回值的调用方。
-  });
+  const isCurrent = () => isDataOwnerIdCurrent(owner);
+  for (const filter of new Set([...cache.keys(), ...inflight.keys()])) {
+    const pending = inflight.get(filter);
+    if (!cache.has(filter) && pending && !pending.fresh) {
+      // 首次加载可以立刻跟随 fresh，避免等旧查询才看到新任务或错误。
+      // 已有 fresh 在途时，后续通知合并为一次尾刷。
+      void sessionsStore.forceRefresh(filter, isCurrent).catch(() => {
+        // 等待首次加载的调用方会收到替换请求的错误。
+      });
+      const replacement = inflight.get(filter);
+      if (replacement) replacement.replacesInitialLoad = true;
+    } else {
+      requestFilterBackfill(filter, isCurrent);
+    }
+  }
 }
 
 if (typeof window !== 'undefined') {
@@ -1352,7 +1372,7 @@ if (typeof window !== 'undefined') {
   //   - 已经起过名 / 用户手动改过名 / fork 与纯附件的合成占位 → 一律不动。能否覆写
   //     那几类占位由 main 的归属表裁决,这里猜错会把用户的标题在 UI 上顶掉。
   //
-  // 先记进 autoTitlePreviews 叠加层再 patch:光 patch 缓存会被随后的 forceRefreshAll
+  // 先记进 autoTitlePreviews 叠加层再 patch:光 patch 缓存会被随后的列表重拉
   // (新建会话的 sessions:created push 触发)用仍带哨兵的 DB 快照冲掉。**登记不看当前
   // 缓存**——桶未加载时 findById 拿不到行,但那之后的首次 fetch 同样需要叠加。
   //
