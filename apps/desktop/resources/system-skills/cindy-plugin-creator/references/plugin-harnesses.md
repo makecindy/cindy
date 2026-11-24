@@ -115,7 +115,11 @@ Agent 把内容注入当前这一轮后回 `{ "outcome": "injected" }`,插话之
 [§4.12.4 childSpawn](plugin-node-worker.md#4124-宿主代启子进程childspawn) 同一通道,但由 Cindy 发起,
 不需要声明 `childSpawn`)。一个任务一个进程:
 
-- 工作目录是系统临时目录,环境与插件 Node 进程相同(不含宿主的密钥类环境变量);
+- 工作目录是系统临时目录,基础环境与插件 Node 进程相同(不含宿主的密钥类环境变量);运行**本机任务**时,
+  Cindy 会额外注入宿主管理的原生 askpass 环境变量(`SUDO_ASKPASS`、`SSH_ASKPASS`、`SSH_ASKPASS_REQUIRE`、
+  `GIT_ASKPASS` 与 `CINDY_INPUT_HANDOFF_ROUTE`,仅含本机一次性路由、不含凭据),入口启动外部 Agent 时应保留这些
+  变量,以便 `sudo -A` / `git` / `ssh` 提示走 Cindy 原生安全输入;远程任务(`--cindy-remote-workspace`)与跨账号
+  分享受邀者任务(`--cindy-guest-workspace`)**严格不注入**这些变量;
 - `process.stdin` / `process.stdout` 只承载 ACP JSON-RPC,每条消息一行;日志写 `process.stderr`,
   Cindy 截断后写入插件日志;
 - 入口退出就是 Agent 退出;外部 Agent 退出时入口也要退出;

@@ -187,6 +187,7 @@ export interface GhostNodeRuntimeBrokerDeps {
     cwd: string,
     ghostId: string,
     args: string[],
+    extraEnv?: Record<string, string>,
   ) => NodeWorkerProcess;
   sendToGhost?: (ghostId: string, payload: GhostPipeEventPush) => void;
   now?: () => number;
@@ -1441,7 +1442,7 @@ export class GhostNodeRuntimeBroker {
   async spawnHarness(
     ghostId: string,
     harnessId: string,
-    options?: { remoteWorkspace?: boolean; guestWorkspace?: boolean; accountDir?: string },
+    options?: { remoteWorkspace?: boolean; guestWorkspace?: boolean; accountDir?: string; extraEnv?: Record<string, string> },
   ): Promise<NodeWorkerProcess> {
     const logRejection = (reason: string): void => {
       this.deps.log?.warn('ghost harness spawn rejected', { ghostId, harnessId, reason });
@@ -1483,7 +1484,13 @@ export class GhostNodeRuntimeBroker {
             : []),
         ...(options?.accountDir ? [GHOST_HARNESS_ACCOUNT_DIR_ARG, options.accountDir] : []),
       ];
-      proc = this.deps.spawnChildProcess(resolved.entryPath, resolved.root, ghostId, entryArgs);
+      const localExtraEnv = !options?.remoteWorkspace && !options?.guestWorkspace && options?.extraEnv
+        && Object.keys(options.extraEnv).length > 0
+        ? options.extraEnv
+        : undefined;
+      proc = localExtraEnv
+        ? this.deps.spawnChildProcess(resolved.entryPath, resolved.root, ghostId, entryArgs, localExtraEnv)
+        : this.deps.spawnChildProcess(resolved.entryPath, resolved.root, ghostId, entryArgs);
     } catch (error) {
       return reject(error instanceof Error ? error.message : 'Task engine failed to start');
     }

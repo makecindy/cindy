@@ -27,9 +27,12 @@ export function createUtilityNodeWorkerProcess(
   fork: UtilityFork = utilityProcess.fork,
   /** 提供即为"原样 stdio 子进程"模式(childSpawn 代启):透传启动参数,不参与协议。 */
   childArgs?: string[],
+  /** 仅本机任务执行引擎进程使用的附加环境变量(如原生 askpass)。 */
+  extraEnv?: Record<string, string>,
 ): NodeWorkerProcess {
   const isChild = childArgs !== undefined;
-  const env = pluginNodeEnvironment(ghostId);
+  const baseEnv = pluginNodeEnvironment(ghostId);
+  const env = extraEnv ? { ...baseEnv, ...extraEnv } : baseEnv;
   const workerEntry = path.join(__dirname, 'nodeRuntimeWorkerProcess.desktop.js');
   const forkArgs = isChild
     ? [entryPath, GHOST_NODE_CHILD_MODE_FLAG, ...childArgs]
@@ -54,8 +57,9 @@ const defaultSpawnChildProcess = (
   cwd: string,
   ghostId: string,
   args: string[],
+  extraEnv?: Record<string, string>,
 ): NodeWorkerProcess =>
-  createUtilityNodeWorkerProcess(entryPath, cwd, ghostId, utilityProcess.fork, args);
+  createUtilityNodeWorkerProcess(entryPath, cwd, ghostId, utilityProcess.fork, args, extraEnv);
 
 export class GhostNodeRuntimeBroker extends SharedGhostNodeRuntimeBroker {
   constructor(deps: GhostNodeRuntimeBrokerDeps) {

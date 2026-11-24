@@ -34,9 +34,11 @@ Cindy 对权限请求仍逐个询问。旧 Host 丢弃这两个字段；不发�
 不认识该消息的旧插件按未知消息忽略。
 
 Main 内部接口（不跨端）：`cindy-brain/pluginHarnesses.ts` 的注册表与 `nodeRuntimeBroker.spawnHarness`。引擎进程沿用 childSpawn 的
-utilityProcess 原样 stdio 模式，stdin 为 base64 字节帧、stdout 为原始字节，wire 不变。实现与回归见
+utilityProcess 原样 stdio 模式，stdin 为 base64 字节帧、stdout 为原始字节，wire 不变；仅本机任务会额外注入宿主管理的原生 askpass
+环境变量（`SUDO_ASKPASS`、`SSH_ASKPASS`、`SSH_ASKPASS_REQUIRE`、`GIT_ASKPASS`、`CINDY_INPUT_HANDOFF_ROUTE`），
+`remoteWorkspace` 与 `guestWorkspace` 任务严格不注入。实现与回归见
 `runtime/ghostHarnessesEndpoint.ts`、`ghostInstallConsent.ts`、`ghostInstallReceipt.ts` 及 `ghostHarnessesEndpoint.test.ts`、
-`pluginHarnesses.test.ts`、`nodeRuntimeBroker.test.ts`、`ghostLocalInstallIdentity.test.ts`。
+`pluginHarnesses.test.ts`、`nodeRuntimeBroker.test.ts`、`ghostLocalInstallIdentity.test.ts`、`acpAskpassEnv.test.ts`。
 ACP 工具晚到的输入参数更新原有历史行，控制端通过既有消息行广播收到，重复上报同一参数不重复写入。
 
 任务中换引擎（2026-11-19，第二期）：`sessions:patched` 的 `agentSwitchIntent`（`PublicAgentSwitchIntent`）与
