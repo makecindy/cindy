@@ -7,7 +7,7 @@ export interface LogUploadSettingsState {
   crashAutoUploadEnabled: boolean;
   /** 用户是否显式设置过开关;false = 跟随当前版本默认值(默认关闭)。 */
   crashAutoUploadCustomized: boolean;
-  /** 手动上传是否可用 = 已配置目标 && 已同意隐私政策。 */
+  /** 手动上传是否可用，结论由主进程给出。 */
   manualUploadAvailable: boolean;
   manualUploadConsentRequired: boolean;
   loading: boolean;
@@ -46,6 +46,7 @@ export function useLogUploadSettings(): {
   state: LogUploadSettingsState;
   setCrashAutoUpload: (enabled: boolean) => Promise<void>;
   resetCrashAutoUpload: () => Promise<void>;
+  acceptManualConsent: (policyVersion: string) => Promise<void>;
 } {
   const [state, setState] = useState<LogUploadSettingsState>(INITIAL);
 
@@ -86,5 +87,10 @@ export function useLogUploadSettings(): {
     setState(normalize(payload));
   }, []);
 
-  return { state, setCrashAutoUpload, resetCrashAutoUpload };
+  const acceptManualConsent = useCallback(async (policyVersion: string) => {
+    const payload = await window.electronAPI.acceptManualLogUploadConsent(policyVersion);
+    setState(normalize(payload));
+  }, []);
+
+  return { state, setCrashAutoUpload, resetCrashAutoUpload, acceptManualConsent };
 }

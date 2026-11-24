@@ -31,6 +31,7 @@ import {
 import * as authManager from '../authManager';
 import {
   isAnalyticsConsentRecordReadable,
+  readAnalyticsConsentForDisplay,
   readAnalyticsSettings,
   refreshAnalyticsSettingsFromDisk,
 } from '../analytics-settings-store';
@@ -55,6 +56,8 @@ import {
   isCrashAutoUploadCustomized,
   isCrashAutoUploadEnabled,
   isLogUploadSettingsReadable,
+  readManualConsentVersion,
+  recordManualConsent,
   refreshLogUploadSettingsFromDisk,
   setCrashAutoUploadEnabled,
 } from './logUploadSettingsStore';
@@ -149,6 +152,17 @@ const gateDeps: ConsentGateDeps = {
   },
 };
 
+const manualGateDeps: ConsentGateDeps = {
+  ...gateDeps,
+  readPrivacyConsentAccepted: () => {
+    if (gateDeps.readPrivacyConsentAccepted()) return true;
+    if (!isLogUploadSettingsReadable()) {
+      throw new Error('log upload settings record is present but unreadable');
+    }
+    return readManualConsentVersion() === LEGAL_TERMS_VERSION;
+  },
+};
+
 function buildMeta(args: {
   uploadCode: string;
   reason: LogUploadReason;
@@ -214,23 +228,26 @@ export async function uploadPerformanceTraceReport(
 
 // ── 设置 payload 与广播 ─────────────────────────────────────────────────────
 
-export function logUploadSettingsPayload(): LogUploadSettingsPayload {
+async function logUploadSettingsPayload(): Promise<LogUploadSettingsPayload> {
   const targetConfigured = currentTarget() !== null;
-  const consentReadable = targetConfigured && isAnalyticsConsentRecordReadable();
-  // 展示用的读取不强制现读盘:设置页由广播驱动,自己这一侧的写入会立刻广播。
   const privacyConsentAccepted = readAnalyticsSettings().privacyConsentAccepted;
+  const privacyConsent = targetConfigured && !privacyConsentAccepted
+    ? await readAnalyticsConsentForDisplay()
+    : null;
+  const manualConsentVersion = privacyConsent === false ? readManualConsentVersion() : undefined;
+  const manualConsentAccepted = manualConsentVersion === LEGAL_TERMS_VERSION;
   return {
     targetConfigured,
     privacyConsentAccepted,
     crashAutoUploadEnabled: isCrashAutoUploadEnabled(),
     crashAutoUploadCustomized: isCrashAutoUploadCustomized(),
-    manualUploadAvailable: consentReadable && privacyConsentAccepted,
-    manualUploadConsentRequired: consentReadable && !privacyConsentAccepted,
+    manualUploadAvailable: targetConfigured &&
+      (privacyConsentAccepted || privacyConsent === true || manualConsentAccepted),
+    manualUploadConsentRequired: manualConsentVersion !== undefined && !manualConsentAccepted,
   };
 }
 
-function broadcastSettingsChange(): void {
-  const payload = logUploadSettingsPayload();
+function broadcastSettingsChange(payload: LogUploadSettingsPayload): void {
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
     try {
@@ -383,7 +400,7 @@ export function initLogUploadService(): void {
     return logUploadSettingsPayload();
   });
 
-  ipcMain.handle('log-upload:set-crash-auto', (event, rawEnabled: unknown) => {
+  ipcMain.handle('log-upload:set-crash-auto', async (event, rawEnabled: unknown) => {
     assertTrustedAppRendererEvent(event);
     // 非布尔一律当关闭处理(fail closed)。
     const enabled = rawEnabled === true;
@@ -400,11 +417,12 @@ export function initLogUploadService(): void {
         log.info(`crash auto-upload disabled — cleared ${removed} pending marker(s)`);
       }
     }
-    broadcastSettingsChange();
-    return logUploadSettingsPayload();
+    const payload = await logUploadSettingsPayload();
+    broadcastSettingsChange(payload);
+    return payload;
   });
 
-  ipcMain.handle('log-upload:reset-crash-auto', (event) => {
+  ipcMain.handle('log-upload:reset-crash-auto', async (event) => {
     assertTrustedAppRendererEvent(event);
     try {
       clearCrashAutoUploadOverride();
@@ -414,32 +432,44 @@ export function initLogUploadService(): void {
     }
     // 恢复默认 = 回到默认关闭,同样要清标记(此刻自动上传已不再被授权)。
     if (!isCrashAutoUploadEnabled()) ensureMarkerStore().clearAll();
-    broadcastSettingsChange();
-    return logUploadSettingsPayload();
+    const payload = await logUploadSettingsPayload();
+    broadcastSettingsChange(payload);
+    return payload;
   });
 
-  ipcMain.handle('log-upload:upload-now', async (event, consentVersion: unknown): Promise<LogUploadResult> => {
+  ipcMain.handle('log-upload:accept-manual-consent', async (event, policyVersion: unknown) => {
     assertTrustedAppRendererEvent(event);
-    if (consentVersion !== undefined && consentVersion !== LEGAL_TERMS_VERSION) {
+    if (policyVersion !== LEGAL_TERMS_VERSION) {
       return throwIpcError('PRIVACY_CONSENT_REQUIRED', 'current privacy policy consent is required');
     }
+    const verdict = evaluateGate(manualGateDeps, 'manual');
+    if (verdict.kind === 'unknown') {
+      return throwIpcError('PRIVACY_CONSENT_REQUIRED', 'privacy consent could not be verified');
+    }
+    if (verdict.kind === 'denied') {
+      if (verdict.reason === 'not-configured') {
+        return throwIpcError('LOG_UPLOAD_UNAVAILABLE', 'log upload is unavailable');
+      }
+      try {
+        recordManualConsent(policyVersion);
+      } catch (err) {
+        log.error('write manual log upload consent failed', err);
+        return throwIpcError('INTERNAL', 'failed to persist manual log upload consent');
+      }
+    }
+    const payload = await logUploadSettingsPayload();
+    broadcastSettingsChange(payload);
+    return payload;
+  });
+
+  ipcMain.handle('log-upload:upload-now', async (event): Promise<LogUploadResult> => {
+    assertTrustedAppRendererEvent(event);
     if (manualUploadInFlight) {
       return throwIpcError('LOG_UPLOAD_BUSY', 'a log upload is already in progress');
     }
     manualUploadInFlight = true;
     try {
-      // Bind explicit consent to this request. Still read the existing record so a
-      // storage error remains unknown, and never write the analytics or crash settings.
-      const gate = consentVersion === LEGAL_TERMS_VERSION
-        ? {
-            ...gateDeps,
-            readPrivacyConsentAccepted: () => {
-              gateDeps.readPrivacyConsentAccepted();
-              return true;
-            },
-          }
-        : gateDeps;
-      const outcome = await runUpload(runnerDeps(gate), {
+      const outcome = await runUpload(runnerDeps(manualGateDeps), {
         reason: 'manual',
         anchors: [],
         claimed: [],

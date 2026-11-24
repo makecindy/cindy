@@ -2844,8 +2844,8 @@
         "errorBusy": "Já há um envio em andamento. Aguarde",
         "errorFailed": "Falha ao enviar logs. Verifique sua conexão e tente novamente",
         "unavailableNotConfigured": "O envio de logs não está configurado nesta compilação.",
-        "unavailableNoConsent": "Ao enviar os registros, você aceita a <policy>Política de Privacidade</policy>.",
-        "consentAndUploadButton": "Aceitar a Política de Privacidade e enviar"
+        "unavailableNoConsent": "Você precisa aceitar a Política de Privacidade primeiro.",
+        "consentPrompt": "Antes de enviar, leia a <policy>Política de Privacidade</policy> e selecione <accept>Aceitar</accept>."
       },
       "openLogsDirError": "Não foi possível abrir o diretório de logs",
       "autoUpdateLabel": "Instalar atualizações durante a inatividade",

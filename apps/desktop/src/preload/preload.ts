@@ -4787,9 +4787,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** 恢复默认:删掉 override,重新跟随当前版本默认的“已有 Git 项目”模式。 */
   resetLogUploadCrashAuto: (): Promise<LogUploadSettingsPayload> =>
     ipcRenderer.invoke('log-upload:reset-crash-auto'),
+  acceptManualLogUploadConsent: (policyVersion: string): Promise<LogUploadSettingsPayload> =>
+    ipcRenderer.invoke('log-upload:accept-manual-consent', policyVersion),
   /** 手动上传一次。失败以 IPC 错误码返回(LOG_UPLOAD_* / PRIVACY_CONSENT_REQUIRED)。 */
-  uploadLogsNow: (consentVersion?: string): Promise<LogUploadResult> =>
-    ipcRenderer.invoke('log-upload:upload-now', consentVersion),
+  uploadLogsNow: (): Promise<LogUploadResult> => ipcRenderer.invoke('log-upload:upload-now'),
   onLogUploadSettingsChange: (
     callback: (payload: LogUploadSettingsPayload) => void,
   ): (() => void) => {

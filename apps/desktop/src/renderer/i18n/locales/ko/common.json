@@ -2776,8 +2776,8 @@
         "errorBusy": "이미 업로드가 진행 중입니다. 잠시 기다려 주세요",
         "errorFailed": "로그 업로드에 실패했습니다. 네트워크를 확인한 후 다시 시도해 주세요",
         "unavailableNotConfigured": "이 빌드에는 로그 업로드가 구성되지 않았습니다.",
-        "unavailableNoConsent": "업로드하면 <policy>개인정보 처리방침</policy>에 동의하게 됩니다.",
-        "consentAndUploadButton": "개인정보 처리방침에 동의하고 업로드"
+        "unavailableNoConsent": "먼저 「개인정보 처리방침」에 동의해야 합니다.",
+        "consentPrompt": "업로드하기 전에 <policy>개인정보 처리방침</policy>을 읽고 <accept>동의</accept>를 선택하세요."
       },
       "openLogsDirError": "로그 디렉터리를 열지 못했습니다",
       "autoUpdateLabel": "유휴 상태일 때 업데이트 설치",

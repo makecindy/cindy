@@ -2776,8 +2776,8 @@
         "errorBusy": "已有一次上傳正在進行，請稍候",
         "errorFailed": "日誌上傳失敗，請檢查網路後重試",
         "unavailableNotConfigured": "當前版本未配置日誌上傳。",
-        "unavailableNoConsent": "上傳即表示你同意<policy>《隱私政策》</policy>。",
-        "consentAndUploadButton": "同意隱私政策並上傳"
+        "unavailableNoConsent": "需要先同意《隱私政策》。",
+        "consentPrompt": "上傳前請閱讀<policy>《隱私政策》</policy>並<accept>同意</accept>。"
       },
       "openLogsDirError": "開啟日誌目錄失敗",
       "autoUpdateLabel": "空閒時自動安裝更新",

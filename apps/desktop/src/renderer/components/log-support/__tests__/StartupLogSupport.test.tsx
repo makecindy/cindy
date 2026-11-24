@@ -26,6 +26,8 @@ const mocks = vi.hoisted(() => ({
   success: vi.fn(),
   openLogsDir: vi.fn(),
   uploadLogsNow: vi.fn(),
+  acceptManualLogUploadConsent: vi.fn(),
+  openExternal: vi.fn(),
   getLogUploadSettings: vi.fn(),
   writeText: vi.fn(),
 }));
@@ -63,6 +65,8 @@ beforeEach(() => {
   mocks.handoff.startSignals.loginPanelMounted = false;
   mocks.openLogsDir.mockResolvedValue({ success: true });
   mocks.uploadLogsNow.mockResolvedValue({ uploadCode: 'ABCD-EFGH', recordCount: 3 });
+  mocks.openExternal.mockResolvedValue({ success: true });
+  mocks.acceptManualLogUploadConsent.mockReset();
   mocks.writeText.mockResolvedValue(undefined);
   mocks.getLogUploadSettings.mockResolvedValue({
     targetConfigured: true,
@@ -77,6 +81,8 @@ beforeEach(() => {
     value: {
       openLogsDir: mocks.openLogsDir,
       uploadLogsNow: mocks.uploadLogsNow,
+      acceptManualLogUploadConsent: mocks.acceptManualLogUploadConsent,
+      openExternal: mocks.openExternal,
       getLogUploadSettings: mocks.getLogUploadSettings,
       onLogUploadSettingsChange: () => () => {},
       reportStartupGateStall: mocks.reportStartupGateStall,
@@ -122,20 +128,76 @@ describe('startup log support', () => {
     expect(mocks.openLogsDir).toHaveBeenCalledOnce();
   });
 
-  it('offers one-click consent and upload in About when consent is missing', async () => {
+  it('only enables the unchanged upload button after explicit inline consent in About', async () => {
     mocks.getLogUploadSettings.mockResolvedValue({
       targetConfigured: true,
       privacyConsentAccepted: false,
       manualUploadAvailable: false,
       manualUploadConsentRequired: true,
     });
+    mocks.acceptManualLogUploadConsent.mockResolvedValue({
+      targetConfigured: true,
+      privacyConsentAccepted: false,
+      manualUploadAvailable: true,
+      manualUploadConsentRequired: false,
+    });
     render(<UploadLogsRow />);
-    const upload = await screen.findByRole('button', { name: '同意隐私协议并上传' });
-    expect((upload as HTMLButtonElement).disabled).toBe(false);
+    const upload = screen.getByRole<HTMLButtonElement>('button', { name: '上传' });
+    const policy = await screen.findByRole('link', { name: '《隐私政策》' });
+    const accept = screen.getByRole('button', { name: '同意' });
+    expect(upload.disabled).toBe(true);
+    fireEvent.click(policy);
+    expect(mocks.openExternal).toHaveBeenCalledOnce();
+    expect(mocks.acceptManualLogUploadConsent).not.toHaveBeenCalled();
+    fireEvent.click(accept);
+    await waitFor(() => expect(upload.disabled).toBe(false));
+    expect(document.activeElement).toBe(upload);
+    expect(screen.queryByRole('button', { name: '同意' })).toBeNull();
+    expect(mocks.acceptManualLogUploadConsent).toHaveBeenCalledExactlyOnceWith(LEGAL_TERMS_VERSION);
     expect(mocks.uploadLogsNow).not.toHaveBeenCalled();
     fireEvent.click(upload);
     expect((await screen.findByRole('status')).textContent).toContain('ABCD-EFGH');
-    expect(mocks.uploadLogsNow).toHaveBeenCalledExactlyOnceWith(LEGAL_TERMS_VERSION);
+    expect(mocks.uploadLogsNow).toHaveBeenCalledExactlyOnceWith();
+  });
+
+  it('does not show the consent action for already-consented users in About', async () => {
+    render(<UploadLogsRow />);
+    const upload = screen.getByRole<HTMLButtonElement>('button', { name: '上传' });
+    await waitFor(() => expect(upload.disabled).toBe(false));
+    expect(screen.queryByRole('button', { name: '同意' })).toBeNull();
+    expect(screen.queryByRole('link')).toBeNull();
+    fireEvent.click(upload);
+    await waitFor(() => expect(mocks.uploadLogsNow).toHaveBeenCalledExactlyOnceWith());
+    expect(mocks.acceptManualLogUploadConsent).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('keeps the startup dialog unchanged with a manual-only grant of %s', async (manualUploadAvailable) => {
+    mocks.getLogUploadSettings.mockResolvedValue({
+      targetConfigured: true,
+      privacyConsentAccepted: false,
+      manualUploadAvailable,
+      manualUploadConsentRequired: !manualUploadAvailable,
+    });
+    openSupport();
+    await screen.findByText(zhCN.settings.about.logUpload.unavailableNoConsent);
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: '上传' }).disabled).toBe(true);
+    expect(screen.queryByRole('button', { name: '同意' })).toBeNull();
+  });
+
+  it('keeps upload disabled and consent retryable if saving fails', async () => {
+    mocks.getLogUploadSettings.mockResolvedValue({
+      targetConfigured: true,
+      manualUploadAvailable: false,
+      manualUploadConsentRequired: true,
+    });
+    mocks.acceptManualLogUploadConsent.mockRejectedValue(new Error('write failed'));
+    render(<UploadLogsRow />);
+    const accept = await screen.findByRole<HTMLButtonElement>('button', { name: '同意' });
+    fireEvent.click(accept);
+    await waitFor(() => expect(mocks.error).toHaveBeenCalledWith(zhCN.settings.about.logUpload.saveFailed));
+    expect(accept.disabled).toBe(false);
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: '上传' }).disabled).toBe(true);
+    expect(mocks.uploadLogsNow).not.toHaveBeenCalled();
   });
 
   it('keeps upload disabled when main cannot verify the consent record', async () => {
@@ -150,7 +212,7 @@ describe('startup log support', () => {
       zhCN.settings.about.logUpload.unavailableNotConfigured,
     )).toBeNull());
     expect(screen.queryByText(zhCN.settings.about.logUpload.errorFailed)).toBeNull();
-    expect(screen.queryByRole('button', { name: '同意隐私协议并上传' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '同意' })).toBeNull();
     const upload = screen.getByRole('button', { name: zhCN.settings.about.logUpload.uploadButton });
     expect((upload as HTMLButtonElement).disabled).toBe(true);
   });

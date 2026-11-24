@@ -122,21 +122,38 @@ const BOOLEAN_FIELDS = [
  * 迁移不受影响：`migrateExistingLoginAsConsented` 只在 `=== 'none'` 时迁移，而 `{}` 无论算
  * valid 还是 invalid 都 `!== 'none'`，结论一致（都不迁移）。
  */
-function classifyAnalyticsContent(fileContent: string | null): RecordProbe {
-  if (fileContent === null) return 'none';
+function parseAnalyticsRecord(fileContent: string): Record<string, unknown> | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(fileContent);
   } catch {
-    return 'invalid';
+    return null;
   }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return 'invalid';
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
   const obj = parsed as Record<string, unknown>;
-  if (Object.keys(obj).length === 0) return 'invalid';
+  if (Object.keys(obj).length === 0) return null;
   for (const field of BOOLEAN_FIELDS) {
-    if (field in obj && typeof obj[field] !== 'boolean') return 'invalid';
+    if (field in obj && typeof obj[field] !== 'boolean') return null;
   }
-  return 'valid';
+  return obj;
+}
+
+function classifyAnalyticsContent(fileContent: string | null): RecordProbe {
+  if (fileContent === null) return 'none';
+  return parseAnalyticsRecord(fileContent) ? 'valid' : 'invalid';
+}
+
+/** Read the upload settings display without blocking main or mutating the consent store. */
+export async function readAnalyticsConsentForDisplay(): Promise<boolean | null> {
+  try {
+    const content = await fs.promises.readFile(settingsFilePath(), 'utf-8');
+    if (recordProbe === 'invalid') return null;
+    const record = parseAnalyticsRecord(content);
+    return record ? record.privacyConsentAccepted === true : null;
+  } catch (error) {
+    if (recordProbe === 'invalid') return null;
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? false : null;
+  }
 }
 
 /** 现读盘一次并分类（文件不存在 ⇒ none；读盘本身失败 ⇒ invalid，绝不当「没有记录」）。 */
