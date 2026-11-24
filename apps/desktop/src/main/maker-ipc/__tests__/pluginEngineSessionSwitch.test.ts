@@ -114,7 +114,7 @@ describe('switching a task onto a plugin engine', () => {
     }));
   });
 
-  it('keeps the current route if a completed task becomes bound before send', async () => {
+  it('lets a newly bound automation send without consuming a pending manual plugin choice', async () => {
     const canSwitchCompletedAutomationSession = vi.fn(async () => true);
     const { deps, pendingSwitches } = makeDeps(makeRow({ source: 'scheduler' }), {
       canSwitchCompletedAutomationSession,
@@ -125,6 +125,10 @@ describe('switching a task onto a plugin engine', () => {
     });
     canSwitchCompletedAutomationSession.mockResolvedValue(false);
 
+    // The scheduler uses the saved route. The next manual send still gets a
+    // refusal instead of quietly sending through the previous engine.
+    await expect(applyPendingAgentSwitchIfIdle(deps, 's1', { scheduled: true })).resolves.toBeUndefined();
+    expect(pendingSwitches.get('s1')).toMatchObject({ targetAgentKind: 'acp' });
     await expect(applyPendingAgentSwitchIfIdle(deps, 's1')).rejects.toThrow('[UNSUPPORTED_CAPABILITY]');
     expect(deps.closeSession).not.toHaveBeenCalled();
     expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();

@@ -8,6 +8,9 @@ import type { DbTransport } from '../../localDb/client/DbTransport';
  */
 
 import type { Schedule, ScheduleRun } from '@cindy/maker-scheduler';
+import { mkdtempSync, rmdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
@@ -16,8 +19,7 @@ import * as schema from '../../localDb/schema';
 import { createDbClient } from '../../localDb/client/DbClient';
 import type { DbClient } from '../../localDb/client/DbClient';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current';
-import { setSessionRouteLockImplementation } from '../../localDb/sessionRouteLock';
-import { withSendToSessionLock } from '../../maker-ipc/sendToSessionLock';
+import { applyAgentSwitchToSessionRowWithPorts } from '../../localDb/agentSwitchRows';
 import { recordScheduleRunCostDirect, applyScheduleRunCostMetaChange } from '../runCostLedger';
 import { DrizzleScheduleStorage, type SchedulerDrizzleDb } from '../storage.desktop';
 
@@ -99,6 +101,13 @@ const SCHEDULER_DDL = [
       title TEXT NOT NULL,
       source TEXT NOT NULL DEFAULT 'desktop',
       agent_kind TEXT NOT NULL DEFAULT 'cc',
+      model TEXT,
+      provider_id TEXT,
+      sdk_session_id TEXT,
+      agent_device_id TEXT,
+      effort TEXT,
+      fast_mode INTEGER,
+      scheduled_model_baseline TEXT,
       status TEXT NOT NULL DEFAULT 'active',
       workspace_kind TEXT NOT NULL DEFAULT 'project',
       working_dir TEXT,
@@ -279,8 +288,8 @@ const SCHEDULER_DDL = [
   `,
 ];
 
-function createStorageHarness(queries?: { query: string; params: unknown[] }[]) {
-  const sqlite = new Database(':memory:');
+function createStorageHarness(queries?: { query: string; params: unknown[] }[], dbPath = ':memory:') {
+  const sqlite = new Database(dbPath);
   sqlite.pragma('foreign_keys = ON');
   for (const statement of SCHEDULER_DDL) sqlite.exec(statement);
 
@@ -2114,35 +2123,56 @@ it('offers the same plugin switch eligibility in the sidebar and send guard', as
   }
 });
 
-// #12397, DB tier. Queue a binding after its initial validation while
-// the real send/route lock is held by a switch that commits ACP first.
-// Saving a rule must fail without inserting or updating its target.
-it.each(['create', 'update'])('rechecks the task route before binding an automation (%s)', async operation => {
-  const { db, storage, close } = createStorageHarness();
-  setSessionRouteLockImplementation(withSendToSessionLock);
+// #12397, DB tier. Two SQLite connections pass the initial checks while
+// the task is still on a builtin engine. In either commit order only the
+// first operation may succeed, even without a shared JavaScript lock.
+it.each(['create', 'update'])('serializes plugin switching with a binding from another connection (%s)', async operation => {
+  const dir = mkdtempSync(join(tmpdir(), 'cindy-schedule-route-'));
+  const dbPath = join(dir, 'schedule.sqlite');
+  const { db, storage, close } = createStorageHarness(undefined, dbPath);
+  const second = new Database(dbPath);
+  const routes = drizzle(second, { schema });
+  setCurrentDbClient({ drizzle: routes } as unknown as DbClient, 'test-user');
+  const owner = {
+    captureOwnerScope: () => true,
+    isOwnerScopeCurrent: () => true,
+    broadcastSessionPatched: () => {},
+  };
   try {
-    db.run(sql`INSERT INTO sessions (id, title, source) VALUES ('switch-then-bind', 'task', 'scheduler')`);
-    const rule = baseSchedule({ id: 'new-binding' });
-    if (operation === 'update') await storage.insert(rule);
-    let releaseSwitch!: () => void;
-    const canCommit = new Promise<void>(resolve => { releaseSwitch = resolve; });
-    const switchRoute = withSendToSessionLock('switch-then-bind', async () => {
-      await canCommit;
-      db.run(sql`UPDATE sessions SET agent_kind = 'acp' WHERE id = 'switch-then-bind'`);
-    });
-    const bind = operation === 'create'
-      ? storage.insert({ ...rule, targetSessionId: 'switch-then-bind' })
-      : storage.update(rule.id, { targetSessionId: 'switch-then-bind' });
-    const rejected = expect(bind).rejects.toThrow('[UNSUPPORTED_CAPABILITY]');
-    releaseSwitch();
-    await switchRoute;
-    await rejected;
-    const saved = await storage.get(rule.id);
-    if (operation === 'create') expect(saved).toBeNull();
-    else expect(saved?.targetSessionId).toBeUndefined();
+    await storage.insert(baseSchedule({ id: 'run-rule' }));
+    for (const sessionId of ['bind-first', 'switch-first']) {
+      db.run(sql`INSERT INTO sessions (id, title, source) VALUES (${sessionId}, 'task', 'scheduler')`);
+      await storage.insertRun({
+        id: sessionId, scheduleId: 'run-rule', sessionId, firedAt: 1, finishedAt: 2, status: 'success',
+      });
+      const rule = baseSchedule({ id: `rule-${sessionId}` });
+      if (operation === 'update') await storage.insert(rule);
+      expect(await storage.canSwitchCompletedAutomationSession(sessionId)).toBe(true);
+      expect(second.prepare('SELECT agent_kind FROM sessions WHERE id = ?').pluck().get(sessionId)).toBe('cc');
+      const bind = () => operation === 'create'
+        ? storage.insert({ ...rule, targetSessionId: sessionId })
+        : storage.update(rule.id, { targetSessionId: sessionId });
+      const switchRoute = () => applyAgentSwitchToSessionRowWithPorts(
+        sessionId, { agentKind: 'acp', model: 'default', providerId: 'acp-plugin:test:engine' }, owner,
+      );
+
+      if (sessionId === 'bind-first') {
+        await expect(bind()).resolves.toMatchObject({ targetSessionId: sessionId });
+        await expect(switchRoute()).rejects.toThrow('[PRECONDITION_FAILED]');
+        expect(second.prepare('SELECT agent_kind FROM sessions WHERE id = ?').pluck().get(sessionId)).toBe('cc');
+      } else {
+        await switchRoute();
+        await expect(bind()).rejects.toThrow('[UNSUPPORTED_CAPABILITY]');
+        expect((await storage.get(rule.id))?.targetSessionId).toBeUndefined();
+        expect(second.prepare('SELECT agent_kind FROM sessions WHERE id = ?').pluck().get(sessionId)).toBe('acp');
+      }
+    }
   } finally {
-    setSessionRouteLockImplementation(null);
+    clearCurrentDbClient();
+    second.close();
     close();
+    rmSync(dbPath);
+    rmdirSync(dir);
   }
 });
 

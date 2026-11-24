@@ -4752,6 +4752,7 @@ let pendingAgentSwitchApplyHolder:
     selection?: ScheduledModelSelection,
     beforeApply?: () => Promise<boolean | void>,
     scheduledModelOverride?: boolean,
+    scheduledInput?: boolean,
   ) => Promise<{ release: () => void; selection?: ScheduledModelSelection }>) | null = null;
 let cancelPendingAgentSwitchHolder: ((sessionId: string) => void) | null = null;
 let prepareScheduledModelPreferencesHolder: ((sessionId: string, override: boolean) => Promise<void>) | null = null;
@@ -5121,7 +5122,7 @@ export async function acquirePendingAgentSwitchForDirectSend(
   scheduledModelOverride?: boolean,
 ): Promise<(() => void) | ScheduledModelSelectionLease> {
   if (selection && !pendingAgentSwitchApplyHolder) throw new Error('Scheduled model selection is not initialized');
-  const lease = await pendingAgentSwitchApplyHolder?.(sessionId, signal, selection, undefined, scheduledModelOverride);
+  const lease = await pendingAgentSwitchApplyHolder?.(sessionId, signal, selection, undefined, scheduledModelOverride, true);
   if (!selection) return lease?.release ?? (() => {});
   if (!lease?.selection) {
     lease?.release();
@@ -11852,20 +11853,24 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
     },
   });
+  const readScheduledPendingSwitch = (sessionId: string) => {
+    const intent = agentSwitchPending.get(sessionId);
+    return intent?.localAutomationSwitch ? undefined : intent;
+  };
   const scheduledModelScope = createScheduledModelScope({
     createId,
     ownerEpoch: captureSessionRuntimeControlOwnerEpoch,
     prepareBaseline: (sessionId) => reconcileScheduledModelRouteBeforeBaseline({
       reconcile: () => reconcileBotModelRoute(sessionId, true),
-      hasPendingRoute: () => !!agentSwitchPending.get(sessionId) || !!getPendingSessionRuntimeMutation(sessionId),
-      hasPendingSwitch: () => !!agentSwitchPending.get(sessionId),
+      hasPendingRoute: () => !!readScheduledPendingSwitch(sessionId) || !!getPendingSessionRuntimeMutation(sessionId),
+      hasPendingSwitch: () => !!readScheduledPendingSwitch(sessionId),
       isIdle: () => isSessionIdleForRouteApply(sessionId),
       applyPendingSwitch: async () => {
-        const stagedIntent = agentSwitchPending.get(sessionId);
-        await applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId, { bootstrapAfterSwitch: true });
+        const stagedIntent = readScheduledPendingSwitch(sessionId);
+        await applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId, { bootstrapAfterSwitch: true, scheduled: true });
         return settleSystemRouteSwitchIntent({
           stagedIntent,
-          remainingIntent: agentSwitchPending.get(sessionId),
+          remainingIntent: readScheduledPendingSwitch(sessionId),
           sessionIdle: isSessionIdleForRouteApply(sessionId),
         });
       },
@@ -11969,7 +11974,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   let recoverRenamedSessionModelOnSend: (sessionId: string) => Promise<void> = async () => {
     throw new Error('session model recovery is not ready');
   };
-  pendingAgentSwitchApplyHolder = async (sessionId, signal, selection, beforeApply, scheduledModelOverride) => {
+  pendingAgentSwitchApplyHolder = async (sessionId, signal, selection, beforeApply, scheduledModelOverride, scheduledInput) => {
     await takeOverLocalAgentVisibleSession(sessionId);
     let stage = 'direct-send:acquire';
     let deferPendingApply = false;
@@ -12001,6 +12006,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         await applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId, {
           bootstrapAfterSwitch: true,
           signal,
+          scheduled: scheduledInput,
         });
       }
       if (!deferPendingApply && !selection && !scheduledModelOverride && !signal?.aborted) {
@@ -18594,9 +18600,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!scheduled) await scheduledModelScope.restore(sessionId);
       const expectedSwitch = agentInputCoordinatorHolder?.takeRetrySwitchRevision(sessionId, options?.clientId);
       await applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId, {
-        signal: options?.signal, expectedRevision: expectedSwitch, nextInputChars: options?.nextInputChars,
+        signal: options?.signal, expectedRevision: expectedSwitch, nextInputChars: options?.nextInputChars, scheduled,
       });
-      if (agentSwitchPending.get(sessionId)?.targetAgentDeviceId !== undefined) {
+      const pending = scheduled ? readScheduledPendingSwitch(sessionId) : agentSwitchPending.get(sessionId);
+      if (pending?.targetAgentDeviceId !== undefined) {
         throwIpcError('HARNESS_SWITCH_NOT_READY', 'The selected computer is not ready; retry the send after recovery');
       }
       if (!scheduled) await recoverRenamedSessionModelOnSend(sessionId);
@@ -18605,7 +18612,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       await replayPendingSessionContextWindowBudgetUnderLock(sessionId);
       // Queued Orca delivery and resume both use this transaction. A failed
       // cross-engine preparation may retain its intent without throwing.
-      if (agentSwitchPending.get(sessionId)) {
+      if (pending) {
         const row = await getSessionRowSnapshotStrict(sessionId);
         // Execution-device Workers have an authoritative remote Lead binding,
         // not an orca_role. Do not use the incoming message's origin as identity.

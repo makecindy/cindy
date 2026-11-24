@@ -1799,8 +1799,9 @@ export function settleSystemRouteSwitchIntent(input: {
 export function applyPendingAgentSwitchIfIdle(
   deps: MakerSessionAgentSwitchHandlerDeps,
   sessionId: string,
-  opts?: { bootstrapAfterSwitch?: boolean; signal?: AbortSignal; expectedRevision?: number; nextInputChars?: number },
+  opts?: { bootstrapAfterSwitch?: boolean; signal?: AbortSignal; expectedRevision?: number; nextInputChars?: number; scheduled?: boolean },
 ): Promise<void> {
+  if (opts?.scheduled && deps.pendingSwitches?.get(sessionId)?.localAutomationSwitch) return Promise.resolve();
   if (opts?.expectedRevision !== undefined && (!deps.pendingSwitches?.get(sessionId)
     || deps.pendingSwitches.revision?.(sessionId) !== opts.expectedRevision)) {
     throwIpcError('HARNESS_SWITCH_NOT_READY', 'The selected computer changed before retry; confirm the new selection and retry');

@@ -15,9 +15,8 @@ import { supplementalConversationEstimates } from '@cindy/maker-shared/usage-cos
  *   - snake↔camel 全部走 `localDb/mapper.ts`，本文件不写字段转换代码。
  */
 
-import { eq, gte, desc, and, isNull, isNotNull, inArray, notInArray, or, sql } from 'drizzle-orm';
+import { eq, gte, desc, and, isNull, isNotNull, inArray, notInArray, or, sql, getTableColumns, is, SQL } from 'drizzle-orm';
 import { runAsBackgroundDbRpc } from '../localDb/client/rpcAdmission.js';
-import { withSessionRouteLock } from '../localDb/sessionRouteLock.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import type { broadcastSessionPatched as BroadcastSessionPatched } from '../localDb/ipc/sessions.js';
@@ -406,6 +405,18 @@ function canSwitchRunPluginEngine() {
   )`.mapWith(Boolean);
 }
 
+// Check as part of the write so another desktop instance cannot switch the
+// target between validation and persistence.
+function targetAcceptsAutomation(targetSessionId: string) {
+  return sql`NOT EXISTS (
+    SELECT 1 FROM sessions WHERE id = ${targetSessionId} AND source = 'scheduler' AND agent_kind = 'acp'
+  )`;
+}
+
+function rejectPluginAutomationTarget(): never {
+  throwIpcError('UNSUPPORTED_CAPABILITY', 'this plugin engine task cannot be bound to an automation');
+}
+
 export class DrizzleScheduleStorage implements ScheduleStorage {
   constructor(
     private readonly getDb: () => SchedulerDrizzleDb,
@@ -485,29 +496,24 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     return row ? scheduleToCamel(row) : null;
   }
 
-  private async writeWithTargetSession<T>(
-    targetSessionId: string | undefined,
-    write: (db: SchedulerDrizzleDb) => Promise<T>,
-  ): Promise<T> {
-    const db = this.getDb();
-    if (!targetSessionId) return write(db);
-    // Share the send/route lock with engine switching. A task may have
-    // changed engines after Scheduler validated the target at save time.
-    return withSessionRouteLock(targetSessionId, async () => {
-      const [pluginTask] = await db.select({ id: sessions.id }).from(sessions).where(and(
-        eq(sessions.id, targetSessionId), eq(sessions.source, 'scheduler'), eq(sessions.agentKind, 'acp'),
-      )).limit(1);
-      if (pluginTask) {
-        throwIpcError('UNSUPPORTED_CAPABILITY', 'this plugin engine task cannot be bound to an automation');
-      }
-      return write(db);
-    });
-  }
-
   async insert(s: Schedule): Promise<Schedule> {
-    await this.writeWithTargetSession(s.targetSessionId, async db => {
-      await db.insert(schedules).values(scheduleCreateToRow(s));
-    });
+    const db = this.getDb();
+    const row = scheduleCreateToRow(s);
+    if (row.targetSessionId) {
+      // Drizzle inserts SELECT values in table column order. Reuse its
+      // encoders and schema defaults, including columns omitted by the mapper.
+      const values = Object.entries(getTableColumns(schedules)).map(([key, column]) => {
+        const mapped = row[key as keyof typeof row];
+        const value = mapped === undefined ? column.default ?? null : mapped;
+        return is(value, SQL) ? value : sql.param(value, column);
+      });
+      const [inserted] = await db.insert(schedules)
+        .select(sql`SELECT ${sql.join(values, sql`, `)} WHERE ${targetAcceptsAutomation(row.targetSessionId)}`)
+        .returning({ id: schedules.id });
+      if (!inserted) rejectPluginAutomationTarget();
+    } else {
+      await db.insert(schedules).values(row);
+    }
     // 返回 round-tripped 版本（确保 timezone/booleans/默认值都按 DB 实际形态回流）
     const inserted = await this.get(s.id);
     if (!inserted) {
@@ -546,9 +552,16 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       const [current] = await db.select().from(schedules).where(where).limit(1);
       return current ? scheduleToCamel(current) : null;
     }
-    const [updated] = await this.writeWithTargetSession(patch.targetSessionId, async db =>
-      db.update(schedules).set(setObj).where(where).returning());
-    if (!updated) return null;
+    const targetCondition = patch.targetSessionId ? targetAcceptsAutomation(patch.targetSessionId) : undefined;
+    const [updated] = await db.update(schedules).set(setObj).where(and(where, targetCondition)).returning();
+    if (!updated) {
+      if (targetCondition) {
+        const [rejected] = await db.select({ id: schedules.id }).from(schedules)
+          .where(and(where, sql`NOT (${targetCondition})`)).limit(1);
+        if (rejected) rejectPluginAutomationTarget();
+      }
+      return null;
+    }
     this.bumpSidebarIndexCache();
     return scheduleToCamel(updated);
   }
