@@ -5140,6 +5140,7 @@
       "formHint": "사용자 ID는 숫자입니다. @userinfobot에게 DM을 보내면 자신의 ID를 확인할 수 있습니다.",
       "connect": "연결",
       "connectingAction": "연결 중…",
+      "connectTimedOut": "연결 시간이 초과되었습니다. 다시 시도하세요.",
       "errorCode": {
         "invalid-token": "Bot Token이 유효하지 않거나 재발급되었습니다. 다시 입력하세요",
         "provider-api": "Telegram에서 오류를 반환했습니다. 잠시 후 다시 시도하세요",
@@ -12716,6 +12717,7 @@
           "conflict": "이 봇은 이미 이 컴퓨터에서 사용 중입니다 (설정 → IM 봇, 또는 다른 동반자).",
           "botUnavailable": "{{name}}은(는) 지금 사용할 수 없습니다. 복구된 뒤 다시 시도하세요.",
           "connectFailed": "연결하지 못했습니다: {{reason}}",
+          "connectTimedOut": "연결 시간이 초과되었습니다. 다시 시도하세요.",
           "failed": "완료하지 못했습니다. 잠시 후 다시 시도하세요.",
           "personalBotGone": "설정 → IM 봇에 이 봇이 더 이상 없습니다. 인증 정보를 입력하세요."
         },

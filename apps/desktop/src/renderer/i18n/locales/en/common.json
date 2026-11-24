@@ -5183,6 +5183,7 @@
       "formHint": "The user ID is numeric; DM @userinfobot to look up your own ID.",
       "connect": "Connect",
       "connectingAction": "Connecting…",
+      "connectTimedOut": "Connection timed out. Try again.",
       "errorCode": {
         "invalid-token": "Bot token is invalid or was reset — enter it again",
         "provider-api": "Telegram returned an error — try again shortly",
@@ -12753,6 +12754,7 @@
           "conflict": "This bot is already connected on this computer, in Settings → IM bots or on another buddy.",
           "botUnavailable": "{{name}} is unavailable right now. Try again once it’s back.",
           "connectFailed": "Couldn’t connect: {{reason}}",
+          "connectTimedOut": "Connection timed out. Try again.",
           "failed": "Couldn’t finish. Try again later.",
           "personalBotGone": "This bot is no longer set up in Settings → IM bots. Enter its credentials instead."
         },
