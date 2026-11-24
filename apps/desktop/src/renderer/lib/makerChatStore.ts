@@ -6267,11 +6267,21 @@ export function handleStreamEvent(
         state.streamingClientId &&
         event.persistId !== state.streamingClientId,
       );
-      const textState = itemBoundary ? finalizeStreamingInState(state) : state;
+      // Local Claude can finish a child while the root keeps sending deltas
+      // under its original persistId.
+      const childFinalDuringRoot = Boolean(
+        itemBoundary && isFinal && text &&
+        event.source === 'claude-code' && state.remoteHostId === null &&
+        assistantMetaFields.parentToolUseId &&
+        state.messages.some((message) =>
+          message.clientId === state.streamingClientId &&
+          message.role === 'assistant' && message.isStreaming && !message.parentToolUseId),
+      );
+      const textState = itemBoundary && !childFinalDuringRoot ? finalizeStreamingInState(state) : state;
 
       if (isFinal) {
         // Confirmation of streamed text, or a non-streaming final burst.
-        if (!textState.streamingClientId && text) {
+        if ((!textState.streamingClientId || childFinalDuringRoot) && text) {
           // Guard: if the last message is an assistant with identical content,
           // this is a duplicate isFinal event from the SDK — skip it.
           const last = textState.messages[textState.messages.length - 1];
@@ -6292,7 +6302,9 @@ export function handleStreamEvent(
 
           return {
             ...textState,
-            lastAgentMeta: incomingMeta ?? textState.lastAgentMeta,
+            lastAgentMeta: childFinalDuringRoot
+              ? textState.lastAgentMeta
+              : incomingMeta ?? textState.lastAgentMeta,
             messages: [
               ...textState.messages,
               {

@@ -2297,6 +2297,37 @@ describe('makerChatStore text delta batching', () => {
     ]);
   });
 
+  // #1743 / unit: through local maker:event ingress, the main stream must
+  // keep rendering after a separate Claude child final. Existing item-boundary
+  // tests cover successive items, not a resumed delta on the first persistId.
+  it('continues streaming Claude root text after a child final', () => {
+    const send = (persistId: string, text: string, parentUuid?: string) => onEvent?.({
+      sessionId: SESSION_ID,
+      persistId,
+      event: {
+        type: 'text',
+        source: 'claude-code',
+        data: { text, isFinal: parentUuid !== undefined },
+        ...(parentUuid ? { agentMeta: { parentUuid } } : {}),
+      },
+    });
+    send('root', 'root prefix');
+    vi.advanceTimersByTime(32);
+    send('child', 'child reply', 'toolu_child');
+    onDbMessageCreated?.({ sessionId: SESSION_ID, message: {
+      id: 'child-db', clientId: 'child', role: 'assistant', content: 'child reply',
+      createdAt: new Date().toISOString(), agentMeta: { parentUuid: 'toolu_child' },
+    } });
+    send('root', ' then more');
+    vi.advanceTimersByTime(32);
+    const rows = makerChatStore.getSnapshot(SESSION_ID).messages;
+    expect(rows).toHaveLength(2);
+    expect(rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ clientId: 'root', content: 'root prefix then more', isStreaming: true }),
+      expect.objectContaining({ clientId: 'child', content: 'child reply', parentToolUseId: 'toolu_child', isStreaming: false }),
+    ]));
+  });
+
   it.each(['local', 'remote'] as const)('preserves newer queued text when an older item is retracted through %s ingress', (source) => {
     if (source === 'remote') remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
     const send = (channel: string, payload: unknown) => {
