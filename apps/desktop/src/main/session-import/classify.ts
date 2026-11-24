@@ -30,15 +30,12 @@ export interface ClassifyEnv {
 }
 
 export function defaultClassifyEnv(params: { appDataDir: string | null; dialogueRoots: string[] }): ClassifyEnv {
-  const tmp = safeRealpath(os.tmpdir());
-  const tempRoots = [os.tmpdir(), tmp, '/tmp', '/private/tmp', '/var/folders', '/private/var/folders']
-    .filter((v): v is string => !!v);
+  const tempRoot = os.tmpdir();
   return {
     homeDir: os.homedir(),
     appDataDir: params.appDataDir,
     dialogueRoots: params.dialogueRoots,
-    tempRoots: [...new Set(tempRoots)],
-    platform: process.platform,
+    ...tempPathClassification(tempRoot, safeRealpath(tempRoot)),
     exists: (p) => {
       try {
         return fs.statSync(p).isDirectory();
@@ -54,6 +51,11 @@ export function defaultClassifyEnv(params: { appDataDir: string | null; dialogue
       }
     },
   };
+}
+
+export function tempPathClassification(tempRoot: string, resolvedRoot: string | null): Pick<ClassifyEnv, 'tempRoots' | 'platform'> {
+  const roots = [tempRoot, resolvedRoot, '/tmp', '/private/tmp', '/var/folders', '/private/var/folders'];
+  return { tempRoots: [...new Set(roots.filter((root): root is string => !!root))], platform: process.platform };
 }
 
 function safeRealpath(p: string): string | null {
@@ -85,7 +87,7 @@ export function isCindyAppDataPath(cwd: string, env: ClassifyEnv): boolean {
   return top.startsWith('cindy') || top.startsWith('xdt');
 }
 
-export function isTempPath(cwd: string, env: ClassifyEnv): boolean {
+export function isTempPath(cwd: string, env: Pick<ClassifyEnv, 'tempRoots' | 'platform'>): boolean {
   return env.tempRoots.some((root) => isInside(cwd, root, env.platform));
 }
 

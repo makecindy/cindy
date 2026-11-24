@@ -13,8 +13,67 @@ import {
 } from '../project-automation-loader';
 import { scheduleCreateToRow, schedulePatchToRow, scheduleToCamel } from '../../localDb/mapper';
 import { PROJECT_AUTOMATION_REL_SEGMENTS } from '../../../shared/projectAutomationPaths';
+import { projectAutomationConsents, recentWorkdirs, schedules, sessions } from '../../localDb/schema';
+import * as workdirProbe from '../../workdir-probe-host';
+import * as worktreeDetection from '../../worktree/detectCwd';
 
 const workingDir = 'C:\\project';
+
+// #11839 / unit: the loader's public discovery gives the renderer its list.
+// Existing tests exercise explicit reconcile only. A session-only linked
+// checkout and a stalled registration probe are enough to expose the gap.
+it('discovers registered and saved aliases while a directory probe is unavailable', async () => {
+  const root = await fs.mkdtemp(path.join(tmpdir(), 'cindy-project-discovery-'));
+  const review = path.join(root, 'review');
+  const registered = path.join(root, 'registered');
+  const saved = path.join(root, 'saved');
+  const unknown = path.join(root, 'unknown');
+  const unknownGit = path.join(root, 'unknown-git');
+  const stalled = path.join(root, 'stalled-registration');
+  const registeredAlias = path.join(root, 'registered-alias');
+  const savedAlias = path.join(root, 'saved-alias');
+  const dirs = [review, registered, saved, unknown, unknownGit];
+  const timeout = Object.assign(new Error('synthetic probe timeout'), { code: 'WORKDIR_PROBE_TIMEOUT' });
+  const realpath = vi.spyOn(workdirProbe, 'realpathWorkingDirectory').mockImplementation(async (dir) => {
+    if (dir === stalled || dir === unknown) throw timeout;
+    if (dir === registeredAlias) return registered;
+    if (dir === savedAlias) return saved;
+    return dir;
+  });
+  const detect = vi.spyOn(worktreeDetection, 'detectCwd').mockImplementation(async (dir) => {
+    if (dir === unknownGit) throw timeout;
+    return { isGitRepo: true, isInsideWorktree: true, gitInstalled: true };
+  });
+  try {
+    for (const dir of dirs) {
+      const file = path.join(dir, ...PROJECT_AUTOMATION_REL_SEGMENTS);
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      await fs.writeFile(file, JSON.stringify({ version: 1, schedules: [projectConfig()] }));
+    }
+    const loader = new ProjectAutomationLoader({
+      scheduler: {} as Scheduler,
+      storage: { list: async () => [] } as unknown as ConstructorParameters<typeof ProjectAutomationLoader>[0]['storage'],
+      getDb: () => ({
+        select: () => ({
+          from: (table: unknown) => {
+            if (table === sessions) return { where: async () => dirs.map(dir => ({ workingDir: dir })) };
+            if (table === schedules) return { where: async () => [{ workingDir: savedAlias }] };
+            if (table === recentWorkdirs) return { orderBy: async () => [{ path: stalled }, { path: registeredAlias }] };
+            if (table === projectAutomationConsents) return { where: () => ({ limit: async () => [] }) };
+            throw new Error('Unexpected discovery table');
+          },
+        }),
+      }) as unknown as ReturnType<ConstructorParameters<typeof ProjectAutomationLoader>[0]['getDb']>,
+      logger: {},
+    });
+    const pending = await loader.listPendingImports();
+    expect(pending.map(item => item.workingDir)).toEqual([registered, saved, unknown, unknownGit]);
+  } finally {
+    detect.mockRestore();
+    realpath.mockRestore();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
 
 // #11134 / unit: real loader + Scheduler updates + database mapper round trips.
 // Existing coverage never changed a project definition after its first persistent

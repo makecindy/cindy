@@ -1,4 +1,5 @@
 import { promises as fs } from 'node:fs';
+import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 
@@ -17,8 +18,9 @@ import { projectAutomationConsents, schedules, sessions } from '../localDb/schem
 import { projectAutomationConsentToRow } from '../localDb/mapper';
 import { listRegisteredProjectPaths } from '../localDb/ipc/recentWorkdirsCore';
 import { PROJECT_AUTOMATION_REL_SEGMENTS } from '../../shared/projectAutomationPaths';
-import { defaultClassifyEnv, isTempPath } from '../session-import/classify';
+import { isTempPath, tempPathClassification } from '../session-import/classify';
 import { migrateLegacyXdmakerDir } from '../utils/legacyXdmakerMigration';
+import { realpathWorkingDirectory } from '../workdir-probe-host';
 import { detectCwd } from '../worktree/detectCwd';
 import type { DrizzleScheduleStorage, SchedulerDrizzleDb } from './storage.desktop';
 import type { TeammateProjectState } from './ownTeammateProject';
@@ -557,12 +559,15 @@ export class ProjectAutomationLoader {
       .where(isNotNull(sessions.workingDir));
     for (const row of projectSessions) add(row.workingDir);
 
-    const classification = defaultClassifyEnv({ appDataDir: null, dialogueRoots: [] });
+    if (!found.size) return [];
+    const tempRoot = tmpdir();
+    const resolvedTempRoot = await realpathWorkingDirectory(tempRoot).catch(() => null);
+    const classification = tempPathClassification(tempRoot, resolvedTempRoot);
     const savedDirs = projectSchedules.flatMap(({ workingDir }) => workingDir ? [workingDir] : []);
     let protectedDirs: Set<string> | undefined;
     for (const [key, workingDir] of found) {
       if (!isTempPath(key, classification)) continue;
-      const physical = await fs.realpath(key).catch(() => null);
+      const physical = await realpathWorkingDirectory(key).catch(() => null);
       if (!physical || !isTempPath(physical, classification)) continue;
       const git = await detectCwd(physical, { repairSafeDirectory: false }).catch(() => null);
       if (!git?.isInsideWorktree) continue;
@@ -574,7 +579,7 @@ export class ProjectAutomationLoader {
         protectedDirs = new Set();
         for (const dir of [...savedDirs, ...registered]) {
           protectedDirs.add(workingDirKey(dir));
-          const real = await fs.realpath(dir).catch(() => null);
+          const real = await realpathWorkingDirectory(dir).catch(() => null);
           if (real) protectedDirs.add(workingDirKey(real));
         }
       }
