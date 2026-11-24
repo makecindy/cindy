@@ -110,10 +110,16 @@ export async function manageAppModels(input: AppModelsRequest, assertCurrent: ()
         const provider = catalog.providers.find(entry => entry.id === target.providerId);
         // Chat models are listed per agent; media models are listed once for the provider.
         // The same override map governs both, so a media model is still "in the catalog".
-        const model = provider?.models[target.agent]?.find(model => model.id === target.modelId)
-          ?? [...(provider?.imageModels ?? []), ...(provider?.videoModels ?? []),
+        const chatModel = provider?.models[target.agent]?.find(model => model.id === target.modelId);
+        // Media catalogs are not in the chat selector: their `visible` switch belongs to
+        // the media settings, and the legacy override only filters their catalog. So the
+        // fallback is for clearing a stored override (value=null) and its real default;
+        // an explicit on/off is still the chat selector's switch and needs a chat entry.
+        const model = chatModel ?? (change.value === null
+          ? [...(provider?.imageModels ?? []), ...(provider?.videoModels ?? []),
             ...(provider?.audioModels ?? []), ...(provider?.evaluationModels ?? []),
-            ...(provider?.embeddingModels ?? [])].find(model => model.id === target.modelId);
+            ...(provider?.embeddingModels ?? [])].find(model => model.id === target.modelId)
+          : undefined);
         // A provider that left the catalog keeps its overrides. value=null only removes the
         // stored choice, so it must stay available for those orphan keys; an explicit on/off
         // choice still needs a catalog entry to resolve the default.
