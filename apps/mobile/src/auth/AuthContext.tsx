@@ -954,7 +954,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           passportId: identityResult.value.passportId,
           memberships: identityResult.value.identities,
         })
-          .then(refreshSavedAccountsSnapshot)
+          .then(() => refreshSavedAccountsSnapshot())
           .catch(() => undefined);
       } else if (isAccountUnavailableAuthError(identityResult.error)) {
         await terminateSessionImplRef.current('ACCOUNT_UNAVAILABLE');
