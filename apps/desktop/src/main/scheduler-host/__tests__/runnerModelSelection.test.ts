@@ -485,6 +485,27 @@ describe('MakerScheduleRunner model selection', () => {
     });
   });
 
+
+  // #12397, unit through runner.fire. A previous run's manual ACP route must
+  // never become the route or session id of a new per-round automation task.
+  it('starts the next independent run on the rule model after a previous task switched to ACP', async () => {
+    const h = createSessionHarness();
+    const previous = createSessionHarness().session;
+    Object.defineProperties(previous, {
+      id: { value: 'previous-run-task' },
+      agentKind: { value: 'acp' },
+      model: { value: 'gemini-scheduled-followup' },
+    });
+    const harness = createRunnerHarness(h, null, {
+      activeSessions: [previous],
+      resolveModelSelection: async (choice) => choice,
+    });
+    const opts = await fireToCompletion(harness, h, baseSchedule({
+      agentKind: 'codex', modelAgentKind: 'codex', model: 'gpt-automation', providerId: 'openai-work',
+    }));
+    expect(opts).toMatchObject({ agentKind: 'codex', model: 'gpt-automation', providerId: 'openai-work' });
+    expect(harness.createSession.mock.calls[0][0].id).not.toBe(previous.id);
+  });
   it('starts a fresh Claude task after a persisted project binding is cleared', async () => {
     const h = createSessionHarness();
     const harness = createRunnerHarness(h, { agentKind: 'codex', model: 'gpt-5.5', workDir: '/work' });

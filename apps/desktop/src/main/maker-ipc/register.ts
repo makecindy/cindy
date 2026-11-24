@@ -36,7 +36,7 @@ import { ghostToolDeclaresHandoff } from '../../shared/ghost.js';
 import { getCindyGhostsMcpDeps } from '../mcp-integrations/ghost.desktop.js';
 import { pluginAppResult } from '../mcp-apps/pluginCards.js';
 import { restorePluginPageSession } from '../mcp-apps/pluginPageCall.js';
-import { resumeInterruptedScheduleRun } from '../scheduler-host/index.desktop.js';
+import { getSchedulerIfInitialized, getScheduleStorageIfInitialized, resumeInterruptedScheduleRun } from '../scheduler-host/index.desktop.js';
 import { setVoiceTaskDispatch, setVoiceCallMemoryReader } from '../voice-conversation/taskBridge.js';
 import { buildBotMemoryScopeKey, SessionCreationCleanupPendingError } from '@cindy/maker-core';
 import { createOrcaWorkerProjectHandlers } from './orcaWorkerProjectHandlers';
@@ -11456,6 +11456,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     resolveProviderGroupTarget: (sessionId, target) =>
       providerGroupService ? providerGroupService.resolveSwitchTarget(sessionId, target) : Promise.resolve(null),
     withSessionLock: withSendToSessionLock,
+    canSwitchCompletedAutomationSession: async (sessionId) => {
+      const storage = getScheduleStorageIfInitialized();
+      if (!storage || !await storage.canSwitchCompletedAutomationSession(sessionId)) return false;
+      return !getSchedulerIfInitialized()?.resolveInflightRunForSession(sessionId)
+        && !hasPendingSchedulerTargetInput(sessionId);
+    },
     // 停用轴边界裁决:目标路由被停用 → 抛错;隐式默认落点被停用 → 返回启用替代来源。
     // Agent 在另一台电脑运行的任务：目标模型属于那台的目录，由那台的 Agent 启动时裁决(选择时另
     // 有 assertAgentDeviceRouteUsable 预检)。本次选择换了位置时按目标位置判断。

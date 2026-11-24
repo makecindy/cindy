@@ -40,7 +40,7 @@ import {
   isSharedTaskPeer,
   parseProviderSharePeer,
 } from '@cindy/device-link';
-import { deviceLinkInvokeControllerSupports, getDeviceLinkInvokeContext, isDeviceLinkInvoke, runOutsideDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
+import { deviceLinkInvokeControllerSupports, getDeviceLinkInvokeContext, isDeviceLinkInvoke, readDeviceLinkModelSelectionOrigin, runOutsideDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { parseOrcaRemoteLead } from '../../shared/orcaRemoteWorker.js';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import { createSharedTaskPendingSelectionGuard, createSharedTaskSettingGuard } from './sharedTaskSetting.js';
@@ -263,6 +263,8 @@ export interface MakerSessionAgentSwitchHandlerDeps {
   ): Promise<{ deferred: boolean; superseded?: boolean }>;
   /** 与 send / SET_MODEL 共用的 session 锁；生产注入，最小测试 harness 可省略。 */
   withSessionLock?<T>(sessionId: string, task: () => Promise<T>): Promise<T>;
+  /** Desktop admission for a completed, unbound automation task. */
+  canSwitchCompletedAutomationSession?(sessionId: string): Promise<boolean>;
   /**
    * 停用轴的边界裁决(生产 = register.ts 的 assertModelRouteUsable,内核纯逻辑在
    * model-route-guard.ts)。跨引擎切换是新的路由选择,目标 (agent, model, 来源) 被
@@ -488,6 +490,8 @@ export interface PendingAgentSwitchIntent {
   sameAgentSelection?: boolean;
   /** Original user input, before staging fills omitted axes from the current row. */
   credentialSelectionAxes?: { effort: boolean; fastMode: boolean };
+  /** A trusted local picker authorized this automation task's switch. Internal only. */
+  localAutomationSwitch?: true;
   /** Set by the host at selection time. Never projected or accepted from IPC. */
   deviceLinkModelSelectionOrigin?: 'owner' | 'scoped';
   /** 'acp' = 插件引擎，providerId 必为 acp-plugin:<插件>:<引擎>。 */
@@ -877,6 +881,7 @@ export async function performSessionAgentSwitch(
     configStaged?: boolean;
     /** Recheck caller CAS after asynchronous validation, before staging any intent. */
     assertSelectionCurrent?: () => void;
+    localWindowRequest?: boolean;
     beforeMutation?: () => Promise<void>;
     /** Internal forced group relocation: admit before an actual close or route commit, never during preparation. */
     onRelocationMutationStart?: () => void;
@@ -956,8 +961,24 @@ export async function performSessionAgentSwitch(
   const pluginTargetDeviceId = builtinTarget ? null : requestedAgentDeviceId ?? null;
   if (!builtinTarget || sourceIsPluginEngine) {
     // 从插件引擎换到内置引擎时目标位置照常：可以是另一台电脑或供应商组(下面按内置引擎换电脑裁决)。
-    if ((row.source && row.source !== 'desktop' && row.source !== 'bot') || row.orcaRole || parseOrcaRemoteLead(row.orcaRemoteLead)
-      || getDeviceLinkInvokeContext()?.sharedTask) {
+    if (row.orcaRole || parseOrcaRemoteLead(row.orcaRemoteLead) || getDeviceLinkInvokeContext()?.sharedTask) {
+      throwIpcError('UNSUPPORTED_CAPABILITY', 'this task cannot switch to or from a plugin engine yet');
+    }
+    if (row.source === 'scheduler') {
+      // Only the local window can choose this route. A same-account send can
+      // still apply that trusted choice, just like an ordinary task's choice.
+      const admittedCaller = params.localWindowRequest === true
+        && readDeviceLinkModelSelectionOrigin() !== 'scoped';
+      const localManualSwitch = admittedCaller && row.status === 'active' && !row.agentDeviceId
+        && !requestedAgentDeviceId && !params.runtimeSource && !params.configStaged;
+      if (!localManualSwitch || !await deps.canSwitchCompletedAutomationSession?.(sessionId)) {
+        throwIpcError('UNSUPPORTED_CAPABILITY', 'this automation task cannot switch to or from a plugin engine');
+      }
+      throwIfAgentSwitchAborted(signal);
+      if (deps.readOwnerGeneration?.() !== ownerGeneration) {
+        throwIpcError('PRECONDITION_FAILED', 'the signed-in account changed while choosing a plugin engine');
+      }
+    } else if (row.source && row.source !== 'desktop' && row.source !== 'bot') {
       throwIpcError('UNSUPPORTED_CAPABILITY', 'this task cannot switch to or from a plugin engine yet');
     }
     if (!builtinTarget) {
@@ -1192,6 +1213,7 @@ export async function performSessionAgentSwitch(
           ? existingIntent?.thinking
           : undefined;
     const intent: PendingAgentSwitchIntent = {
+      ...(row.source === 'scheduler' && params.localWindowRequest ? { localAutomationSwitch: true } : {}),
       ...(params.runtimeSource ? { runtimeSource: params.runtimeSource } : {}),
       ...(params.configStaged === true ? { configStaged: true } : {}),
       targetAgentKind,
@@ -1855,6 +1877,7 @@ export function applyPendingAgentSwitchIfIdle(
         // 当成用户选择打上 manual 墓碑, 任务永久脱离跟随(chatgpt-codex-connector P2,
         // PR #5155)。
         configStaged: intent.configStaged,
+        localWindowRequest: intent.localAutomationSwitch,
         model: intent.model,
         providerId: intent.providerId,
         effort: intent.effort,
@@ -1984,7 +2007,8 @@ export function registerMakerSessionAgentSwitchHandler(
         // An authorized manual choice supersedes recovery even if locked admission later rejects it.
         onUserSwitchRequested(event, valid.sessionId);
       }
-      const run = () => performSessionAgentSwitch(deps, request);
+      const localWindowRequest = !!onUserSwitchRequested && !isDeviceLinkInvoke();
+      const run = () => performSessionAgentSwitch(deps, { ...request, localWindowRequest });
       return typeof sessionId === 'string' && sessionId && deps.withSessionLock
         ? deps.withSessionLock(sessionId, run)
         : run();

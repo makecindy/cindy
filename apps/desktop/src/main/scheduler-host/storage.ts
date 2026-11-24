@@ -109,6 +109,7 @@ export interface ScheduleSidebarIndexRun {
   readAt?: number;
   firedAt?: number;
   finishedAt?: number;
+  canSwitchPluginEngine?: true;
   failureKind?: 'precheck' | 'rate-limit' | 'execution';
   preRunBlocked?: true;
   errorMsg?: string;
@@ -389,6 +390,20 @@ function legacyRunFromSession(
 /** Public automation history must not expose or mutate the routine execution ledger. */
 function publicScheduleRunWhere() {
   return sql`${scheduleRuns.scheduleId} NOT IN (SELECT id FROM schedules WHERE source = 'bot')`;
+}
+
+/** A finished run can change its own route only when no automation reuses this task. */
+function canSwitchRunPluginEngine() {
+  return sql<boolean>`(
+    ${scheduleRuns.sessionId} IS NOT NULL
+    AND ${scheduleRuns.finishedAt} IS NOT NULL
+    AND ${scheduleRuns.status} IN ('success', 'failed', 'aborted')
+    AND ${schedules.executionMode} = 'agent'
+    AND ${schedules.persistentSession} = 0
+    AND NOT EXISTS (
+      SELECT 1 FROM schedules AS bound WHERE bound.target_session_id = ${scheduleRuns.sessionId}
+    )
+  )`.mapWith(Boolean);
 }
 
 export class DrizzleScheduleStorage implements ScheduleStorage {
@@ -843,6 +858,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       readAt: scheduleRuns.readAt,
       firedAt: scheduleRuns.firedAt,
       finishedAt: scheduleRuns.finishedAt,
+      canSwitchPluginEngine: canSwitchRunPluginEngine(),
       failureRecovered: failureRecoveredSql('schedule_runs'),
       failureKind: failureKindSql('schedule_runs'),
       errorMsg: scheduleRuns.errorMsg,
@@ -929,6 +945,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       status: row.status,
       readAt: row.readAt ?? undefined,
       firedAt: row.firedAt ?? undefined,
+      ...(row.canSwitchPluginEngine && row.sessionId ? { canSwitchPluginEngine: true as const } : {}),
       ...(row.status === 'failed' || row.status === 'interrupted' ? {
         finishedAt: row.finishedAt ?? undefined,
         failureRecovered: Boolean(row.failureRecovered),
@@ -995,6 +1012,17 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     }
     return runs;
     });
+  }
+
+  async canSwitchCompletedAutomationSession(sessionId: string): Promise<boolean> {
+    const [run] = await this.getDb()
+      .select({ eligible: canSwitchRunPluginEngine() })
+      .from(scheduleSessionLatestRuns)
+      .innerJoin(scheduleRuns, eq(scheduleSessionLatestRuns.runId, scheduleRuns.id))
+      .innerJoin(schedules, eq(scheduleRuns.scheduleId, schedules.id))
+      .where(and(eq(scheduleSessionLatestRuns.sessionId, sessionId), publicScheduleRunWhere()))
+      .limit(1);
+    return run?.eligible === true;
   }
 
   /**

@@ -2289,9 +2289,12 @@ function CCAgentSessionContent({
   // Agent 被挪到另一台电脑(例如供应商组按额度挪过去)的任务照样可以选：选插件引擎时 Agent 回到任务所属电脑。
   const pluginEngineOnTaskComputer = !!session && !isSharedTaskPeer(pluginEngineDeviceId)
     && !session.remoteHostId;
+  const scheduleSessionInfo = useAutomationScheduleSessionInfo(sessionId);
+  const completedLocalAutomation = session?.source === 'scheduler' && !remoteDeviceId
+    && !pluginEngineDeviceId && !session.agentDeviceId && scheduleSessionInfo?.canSwitchPluginEngine === true;
   const pluginEngineSwitchEligible = pluginEngineOnTaskComputer && !!sessionId && !readOnly
     && !session.orcaRole && !session.orcaRemoteLead
-    && ((session.source ?? 'desktop') === 'desktop' || session.source === 'bot')
+    && ((session.source ?? 'desktop') === 'desktop' || session.source === 'bot' || completedLocalAutomation)
     && session.status !== 'archived';
   const localPluginEngines = usePluginEngines(!pluginEngineDeviceId && (pluginEngineTask || pluginEngineSwitchEligible));
   const remotePluginCatalogue = useRemotePluginEngines(
@@ -2437,7 +2440,7 @@ function CCAgentSessionContent({
         ? (session?.agentDeviceId ?? undefined)
         : (pluginEngineSwitchIntent.agentDeviceId ?? undefined))
     : undefined;
-  const canBrowseRemotePluginEngines = viewVisible && pluginEngineSwitchEligible && !pluginEngineDeviceId;
+  const canBrowseRemotePluginEngines = viewVisible && pluginEngineSwitchEligible && !pluginEngineDeviceId && !completedLocalAutomation;
   // 远程控制的被控电脑上的任务：与内置模型一样按被控电脑的名单列出同账号其他电脑与它收到的插件供应商分享
   // 开放的引擎，经被控电脑代读(provider-sharing.md §5.1)；被控电脑不提供名单时只列它自己的引擎。
   const canBrowseControlledPluginEngines = viewVisible && pluginEngineSwitchEligible && !!pluginEngineDeviceId
@@ -2824,7 +2827,6 @@ function CCAgentSessionContent({
   //     →「重试/关闭」
   // 后面有真实进展 = 任务已被推进；位置/模型/历史边界卡不代表恢复成功。
   // 只有实际渲染的横幅才认领 MessageStream 中同一条错误，避免双显或只读时丢失原因。
-  const scheduleSessionInfo = useAutomationScheduleSessionInfo(sessionId);
   const unreadFailedScheduleRunIds =
     scheduleSessionInfo?.unreadFailedRunIds ?? EMPTY_UNREAD_FAILED_RUN_IDS;
   useReadFailedScheduleRuns(unreadFailedScheduleRunIds, viewVisible && historyLoaded, remoteDeviceId ?? undefined);

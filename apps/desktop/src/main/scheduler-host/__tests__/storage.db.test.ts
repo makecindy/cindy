@@ -2074,6 +2074,41 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
   });
 });
 
+// #12397, DB tier. The sidebar and switch handler share the completed-run
+// predicate. A run resumed or a different automation bound to the same task
+// must no longer let that task pick a plugin engine.
+it('offers the same plugin switch eligibility in the sidebar and send guard', async () => {
+  const harness = createStorageHarness();
+  const { db, storage } = harness;
+  try {
+    await storage.insert(baseSchedule({ id: 'fresh-rule' }));
+    db.run(sql`INSERT INTO sessions (id, title, source) VALUES ('fresh-task', 'fresh task', 'scheduler')`);
+    await storage.insertRun({
+      id: 'first-run', scheduleId: 'fresh-rule', sessionId: 'fresh-task', firedAt: 1, status: 'running',
+    });
+    const eligibility = async () => ({
+      switch: await storage.canSwitchCompletedAutomationSession('fresh-task'),
+      picker: (await storage.listSidebarIndexRuns())
+        .findLast(run => run.sessionId === 'fresh-task')?.canSwitchPluginEngine === true,
+    });
+    await expect(eligibility()).resolves.toEqual({ switch: false, picker: false });
+    await storage.updateRun('first-run', { status: 'success', finishedAt: 2 });
+    await expect(eligibility()).resolves.toEqual({ switch: true, picker: true });
+
+    await storage.insert(baseSchedule({ id: 'bound-rule', targetSessionId: 'fresh-task', persistentSession: true }));
+    await expect(eligibility()).resolves.toEqual({ switch: false, picker: false });
+    await storage.delete('bound-rule');
+
+    await storage.insertRun({
+      id: 'interrupted-run', scheduleId: 'fresh-rule', sessionId: 'fresh-task',
+      firedAt: 3, finishedAt: 4, status: 'interrupted',
+    });
+    await expect(eligibility()).resolves.toEqual({ switch: false, picker: false });
+  } finally {
+    harness.close();
+  }
+});
+
 it('excludes internal routine rows in SQLite before materializing the public sidebar index', async () => {
   const queries: { query: string; params: unknown[] }[] = [];
   const harness = createStorageHarness(queries);

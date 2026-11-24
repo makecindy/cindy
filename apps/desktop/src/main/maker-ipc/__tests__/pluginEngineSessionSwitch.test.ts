@@ -15,6 +15,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import { providerShareGuestPeer } from '@cindy/device-link';
+import { runDeviceLinkInvokeContext } from '../../device-link/invoke-context';
 
 import {
   applyPendingAgentSwitchIfIdle,
@@ -77,6 +78,57 @@ function makeDeps(row: AgentSwitchSessionRow, overrides: Partial<MakerSessionAge
 }
 
 describe('switching a task onto a plugin engine', () => {
+  // #12397: a finished, separate automation task keeps its conversation and
+  // hands it to the selected plugin on the next manual send. Unit, same harness.
+  it.each([false, true])('applies a local plugin selection on next send from a completed automation (remote=%s)', async (remote) => {
+    const { deps, pendingSwitches } = makeDeps(makeRow({ source: 'scheduler' }), {
+      canSwitchCompletedAutomationSession: vi.fn(async () => true),
+    });
+    const staged = await performSessionAgentSwitch(deps, {
+      sessionId: 's1', targetAgentKind: 'acp', model: 'deepseek-v4', providerId: ENGINE,
+      localWindowRequest: true,
+    });
+
+    expect(staged).toMatchObject({ deferred: true, agentKind: 'acp' });
+    expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
+    const send = () => applyPendingAgentSwitchIfIdle(deps, 's1');
+    await (remote ? runDeviceLinkInvokeContext({ controllerDeviceId: 'my-device', channel: 'maker:send' }, send) : send());
+    expect(deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({
+      agentKind: 'acp', providerId: ENGINE, model: 'deepseek-v4', sdkSessionId: null,
+    }));
+    expect(deps.setPendingHandoff).toHaveBeenCalledWith('s1', expect.stringContaining('DeepSeek Harness'), undefined);
+    expect(pendingSwitches.get('s1')).toBeUndefined();
+  });
+
+
+  it('keeps the current route if a completed task becomes bound before send', async () => {
+    const canSwitchCompletedAutomationSession = vi.fn(async () => true);
+    const { deps, pendingSwitches } = makeDeps(makeRow({ source: 'scheduler' }), {
+      canSwitchCompletedAutomationSession,
+    });
+    await performSessionAgentSwitch(deps, {
+      sessionId: 's1', targetAgentKind: 'acp', model: 'default', providerId: ENGINE,
+      localWindowRequest: true,
+    });
+    canSwitchCompletedAutomationSession.mockResolvedValue(false);
+
+    await expect(applyPendingAgentSwitchIfIdle(deps, 's1')).rejects.toThrow('[UNSUPPORTED_CAPABILITY]');
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
+    expect(pendingSwitches.get('s1')).toMatchObject({ targetAgentKind: 'acp' });
+  });
+
+  it.each([false, true])('requires a trusted window choice for an automation switch (applyNow=%s)', async (applyNow) => {
+    const { deps, pendingSwitches } = makeDeps(makeRow({ source: 'scheduler' }), {
+      canSwitchCompletedAutomationSession: vi.fn(async () => true),
+    });
+    await expect(performSessionAgentSwitch(deps, {
+      sessionId: 's1', targetAgentKind: 'acp', model: 'default', providerId: ENGINE, applyNow,
+    })).rejects.toThrow('[UNSUPPORTED_CAPABILITY]');
+    expect(pendingSwitches.get('s1')).toBeUndefined();
+    expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
+  });
+
   it('stages the choice, then commits it as the plugin engine with a full handoff and no native resume', async () => {
     const { deps, pendingSwitches } = makeDeps(makeRow());
     const staged = await performSessionAgentSwitch(deps, {
