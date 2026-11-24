@@ -15,6 +15,7 @@ import { randomUUID } from 'node:crypto';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import { gateBuiltinMcpProviders } from './provider-gate.js';
 import { createIMessageMcpServer } from './imessageMcpServer';
+import { resolveIMessageLaneScope } from '../im/imessage/laneScope';
 import { createDiscordMcpServer } from './discordMcpServer';
 import { DiscordOperationError } from '@cindy/im';
 import { createTerminalToolExecutor } from '../terminal/terminalToolAccess.js';
@@ -102,7 +103,8 @@ import { getAndroidMcpDeps } from './android.js';
 import { getBrowserMcpDeps } from './browser.desktop.js';
 import { getComputerMcpDeps } from './computer.desktop.js';
 import { discordIm, feishuIm, wechatIm } from '../im';
-import { getBotFeishuTransport } from '../im/shared/botImConnectionRuntime';
+import { directDeliveryFile, prepareDirectDelivery } from '../im/imessage/directDelivery';
+import { getBotFeishuTransport, getBotIMessageDirectTarget, getBotIMessageLaneTarget } from '../im/shared/botImConnectionRuntime';
 import { createFeishuTransportResolver } from './feishuTransportRouting';
 import { readChannelToolScope } from '../im/shared/channelToolScope';
 import { hasImChannelVendorOptions } from '../../shared/botImConnection.js';
@@ -178,6 +180,7 @@ import { createSchedulerRemoteDeps } from './schedulerDevices.js';
 import { createRemoteSessionHandoff } from './sessionHandoffRemote.js';
 import { createRemoteSessionsSnoozeSetter, createRemoteSessionsStatusSetter, remoteSessionMutationFailure } from './sessionStatusRemote.js';
 import { DeviceLinkError } from '@cindy/device-link';
+import { asWechatIlinkError } from '@cindy/wechat-ilink';
 import { MAKER_INVOKE } from '../maker-ipc/channels.js';
 import { isCindyLearnSkillEnabled } from '../skillhub/activationPreferences.js';
 import { botLearningTracker } from '../maker-ipc/botLearningTracker.js';
@@ -187,6 +190,7 @@ import { consumeLearnInvocationGrant } from '../learn-host/invocationGrant.js';
 import { createSkillhubAgentTools } from '../skillhub/agentTools.js';
 import { startGrokDeviceLogin, grokDeviceLoginStatus, cancelGrokDeviceLogin } from '../maker-host/grok-device-login-service.js';
 import { resolveSessionTeammate } from '../maker-ipc/sessionTeammate.js';
+import { readModelGroupsConfig } from '../model-groups/store.js';
 
 export interface DesktopMcpProvidersDeps {
   askUserQuestionAsync?: XdtHelperMcpDeps['askUserQuestionAsync'];
@@ -194,6 +198,7 @@ export interface DesktopMcpProvidersDeps {
   runtimeCapabilities?: XdtHelperMcpDeps['runtimeCapabilities'];
   botCapabilities: Pick<ReturnType<typeof createBotCapabilityService>, 'list' | 'select'> & Partial<Pick<ReturnType<typeof createBotCapabilityService>, 'models' | 'setDefaultModel'>>;
   createMediaDownloadContext?: CindyGhostsHostDeps['createMediaDownloadContext'];
+  isStartupToolSessionCurrent?: CindyGhostsHostDeps['isStartupToolSessionCurrent'];
   /** 当前 Desktop 版本，供 Forge 为具体插件包生成默认 minCindyVersion。 */
   getAppVersion?: () => string;
   getMakerMemoryManager: () => MakerMemoryManager;
@@ -568,12 +573,19 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           const { messageId } = await wechatIm.sendText(peerId, text);
           return { ok: true, messageId };
         } catch (error) {
+          const safe = asWechatIlinkError(error);
+          const reason = safe.code === 'SEND_REJECTED'
+            ? safe.ret === undefined ? 'SEND_REJECTED' : `SEND_REJECTED:${safe.ret}`
+            : 'SEND_FAIL';
+          const detail = safe.code === 'SEND_REJECTED'
+            ? reason
+            : (error instanceof Error ? error.message : String(error));
           createLogger('mcp/cindy_wechat').warn(
             'sendMessage failed target=...%s detail=%s',
             peerId.slice(-8),
-            error instanceof Error ? error.message : String(error),
+            detail,
           );
-          return { ok: false, reason: 'SEND_FAIL' };
+          return { ok: false, reason };
         }
       },
       sendFile: async (peerId, absPath, displayName) => {
@@ -680,7 +692,18 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         },
       },
       // 运行位置与模型:与协同 Worker 的 list_available_models 同一份 host 实现。
-      listModels: wrap((s, params) => s.listAvailableModels(params)),
+      // 本机还列出用户的模型组(模式)，定时任务的 modelGroup 传其 id(model-groups.md §6.3)。
+      listModels: wrap(async (s, params) => {
+        const result = await s.listAvailableModels(params);
+        if (!result.ok || params.agentDeviceId) return result;
+        const modelGroups = readModelGroupsConfig().routes.map((route) => ({
+          id: route.id,
+          name: route.name,
+          strategy: route.strategy,
+          sources: route.candidates.filter((candidate) => !candidate.off).length,
+        }));
+        return modelGroups.length > 0 ? { ...result, modelGroups } : result;
+      }),
       logger: createLogger('mcp/cindy_scheduler'),
     },
     // cindy_ssh: agent 直接在已配置 SSH 主机上执行命令(远端零安装)。
@@ -1347,9 +1370,9 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             },
             sshConfigProblem: () => sshConfigProblem,
             isSshKeyKnown: async (hostname, port) => (await loadRemoteSsh()).isRemoteHostKeyKnown(hostname, port),
-            readSsh: async (id) => {
+            readSsh: async (id, options) => {
               const remoteSsh = await loadRemoteSsh();
-              await remoteSsh.ensureRemoteHostReady(id);
+              await remoteSsh.ensureRemoteHostReady(id, options);
               const remote = (await remoteSsh.getRemoteSshPoolHydrated()).get(id);
               if (!remote) throw new Error('[SSH_HOST_NOT_FOUND]');
               return (await remote.exec(SSH_STATUS_COMMAND, { timeoutMs: 8_000, label: `list_machines(${id})`, maxOutputBytes: 64 * 1024 })).stdout;
@@ -1373,8 +1396,13 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           const runtime = activeCompanionCloud();
           if (!runtime) return { ok: false, errorCode: 'NOT_ENABLED', message: 'Cloud companions are not available on this server' };
           const result = await runtime.switchHome(teammateId, targetDeviceId, whenBusy ? { whenBusy } : undefined);
-          return result.ok ? { ok: true, teammateId, homeDeviceId: targetDeviceId }
-            : { ok: false, errorCode: result.code, message: `The buddy did not move (${result.code})` };
+          if (result.ok) return { ok: true, teammateId, homeDeviceId: targetDeviceId };
+          if (result.code === 'SKILL_TARGET_OUTDATED') {
+            const skill = result.oversizedSkill;
+            const reason = skill ? `Skill "${skill.slug}" has a ${skill.bodyBytes}-byte body, above the target's 64 KiB limit.` : "A skill exceeds the target's 64 KiB limit.";
+            return { ok: false, errorCode: result.code, message: `${reason} The buddy is still on its original computer. Update Cindy on the target computer and retry.` };
+          }
+          return { ok: false, errorCode: result.code, message: `The buddy did not move (${result.code})` };
         },
       },
       botProfiles: {
@@ -1689,7 +1717,51 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     isEnabled: ctx => hasImChannelVendorOptions(ctx.vendorOptions, 'imessage')
       || ((ctx.agentKind === 'codex' || ctx.agentKind === 'pi') && !ctx.workingDir),
     toClaudeSdkConfig: ctx => ({ type: 'sdk', name: 'cindy_imessage',
-      instance: createIMessageMcpServer({ getSessionContext: () => resolveLiziMcpSessionContext(ctx) }) }),
+      instance: createIMessageMcpServer({
+        getSessionContext: () => resolveLiziMcpSessionContext(ctx),
+        sendDirectDelivery: async (context, targetSessionId, text) => {
+          const db = tryGetDbClient();
+          const session = context.sessionId;
+          if (!db || !session || !context.sessionInstanceId) throw new Error('OWNER_INPUT_REQUIRED');
+          const owner = activeOwnerScopeKey();
+          const boundary = getTaskActionInputState(session).boundary;
+          const assertCurrent = () => {
+            const input = getTaskActionInputState(session);
+            if (isAppSessionBoundaryPending() || owner !== activeOwnerScopeKey() || db !== tryGetDbClient() ||
+                !input.ownerInput || input.boundary !== boundary || getTaskActionSession(session)?.instanceId !== context.sessionInstanceId) {
+              throw new Error('OWNER_INPUT_REQUIRED');
+            }
+          };
+          assertCurrent();
+          const link = await db.queryOne<{ botId: string; role: string; routeKey: string | null }>(
+            `SELECT src.bot_id AS botId, dest.role, dest.route_key AS routeKey FROM bot_session_links src
+             JOIN bot_profiles p ON p.id = src.bot_id AND p.status = 'active'
+             JOIN bot_session_links dest ON dest.bot_id = p.id AND dest.archived_at IS NULL
+             JOIN sessions s ON s.id = dest.session_id AND s.status = 'active' AND s.source = 'bot'
+             WHERE src.session_id = ? AND src.role = 'canonical' AND src.archived_at IS NULL
+             AND dest.session_id = ? AND dest.role IN ('canonical', 'channel')`, [session, targetSessionId]);
+          assertCurrent();
+          if (!link || (link.role === 'channel' && !link.routeKey)) throw new Error('PRIVATE_CHAT_NOT_CONNECTED');
+          const target = getBotIMessageDirectTarget(link.botId, link.role === 'canonical' ? null : link.routeKey);
+          if (!target) throw new Error('PRIVATE_CHAT_NOT_CONNECTED');
+          const file = directDeliveryFile(link.botId, target.connection, target.origin, target.chat);
+          const record = prepareDirectDelivery(file, text);
+          const receipt = await target.im.sendDirectDelivery(target.chat, text, record.requestId);
+          assertCurrent();
+          return receipt;
+        },
+        laneScope: (context) => resolveIMessageLaneScope(context, {
+          session: getTaskActionSession,
+          input: id => getTaskActionInputState(id),
+          channelLink: async id => (await tryGetDbClient()?.queryOne<{ botId: string; routeKey: string | null }>(
+            `SELECT l.bot_id AS botId, l.route_key AS routeKey FROM bot_session_links l
+             JOIN bot_profiles p ON p.id = l.bot_id AND p.status = 'active'
+             JOIN sessions s ON s.id = l.session_id AND s.status = 'active' AND s.source = 'bot'
+             WHERE l.session_id = ? AND l.role = 'channel' AND l.archived_at IS NULL`, [id])) ?? null,
+          target: getBotIMessageLaneTarget,
+          boundary: () => isAppSessionBoundaryPending() ? Symbol('pending') : `${activeOwnerScopeKey()}`,
+        }),
+      }) }),
   });
 
   gated.push({
@@ -1771,6 +1843,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           getLiveSessionGrantState: deps.getLiveSessionGrantState,
           requestHostPermission: deps.requestHostPermission,
           createMediaDownloadContext: deps.createMediaDownloadContext,
+          isStartupToolSessionCurrent: deps.isStartupToolSessionCurrent,
         }),
       ),
     }),

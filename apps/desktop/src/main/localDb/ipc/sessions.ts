@@ -4,7 +4,7 @@ import { PROJECT_ARCHIVE_CHANNEL } from '../../../shared/projectArchive.js';
 import { runProjectArchive } from '../projectArchive.js';
 import { getSessionRowSnapshot, getSessionRowSnapshotStrict, type SessionRowSnapshot } from '../sessionDispatchSnapshot.js';
 import { commitProvisionalSession as commitSessionDraft, discardProvisionalSessionRow as discardSessionDraft } from '../sessionDraftLifecycle.js';
-import { createUserSession, withWorktreeMutation } from './createUserSession.js';
+import { createUserSession, withWorktreeMutation, type UserSessionCreatePorts } from './createUserSession.js';
 import {
   assertReviewSessionPatchAllowed,
   assertSessionWorkspaceKindPatch,
@@ -233,6 +233,7 @@ export interface SessionRecycleScope {
 
 export interface RegisterSessionIpcOpts {
   isBusyForProjectArchive?: (sessionId: string) => boolean;
+  localPluginWorktrees?: UserSessionCreatePorts['localPluginWorktrees'];
   /** Use the same live catalog as runtime usage, without writing during reads. */
   resolveContextWindow?: (session: ContextWindowSession) => number | null;
   /** Refuse a local move during a turn; the transcript mover handles closing an idle Claude runtime. */
@@ -1375,6 +1376,7 @@ export function registerSessionIpc(
     return createUserSession(body, {
       senderId: event.sender.id,
       userDataDir: app.getPath('userData'),
+      localPluginWorktrees: opts.localPluginWorktrees,
       notifyPluginSessionCreated: (input) => {
         void import('../../cindy-brain/index.js').then(m => m.notifyGhostSessionEvent('created', input)).catch(() => {});
       },
@@ -3095,8 +3097,8 @@ function shouldUseUsageHistoryQuery(options: unknown): boolean {
  * source of truth 是 worktreeStore（electron-store）；DB 字段仅为 sidebar 渲染优化。
  *
  * 故意不通过 sessions:update IPC 暴露——renderer 不应也不能直接改这个字段。
- * 仅由 main 侧 worktreeStore.set/delete 内部调用；worktreeStore.delete 不调本函数
- * （保留历史值，徽标按 store 是否存在判定）。
+ * 本机插件引擎新任务在完整检出后直接随 INSERT 写入快照；既有任务由 worktreeStore.set 同步，
+ * 删除 store 记录时仍保留历史快照（徽标按 store 判定）。
  *
  * 失败仅日志告警，不抛——store 是 source of truth，DB 只是快照，落败不阻塞主流程。
  */
@@ -3147,7 +3149,7 @@ export async function setSessionProviderIdInDb(
 /** Persist the provider-facing source for a newly-created shared IM session. */
 export async function setSessionSourceInDb(
   sessionId: string,
-  source: 'telegram' | 'x' | 'feishu',
+  source: 'telegram' | 'x' | 'feishu' | 'discord-hook',
 ): Promise<void> {
   try {
     const db = getDbClient().drizzle;

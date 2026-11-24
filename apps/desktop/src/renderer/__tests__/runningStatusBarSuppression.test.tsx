@@ -217,7 +217,9 @@ it('shows the last measurement in the panel during tool execution and request wa
   const latest = { rate: 41.4, atMs: 5_000, kind: 'request' as const, measuredAt: Date.now() };
   rerender(<RunningStatusBar {...props} tokenSpeed={{ ...speed, streaming: false,
     measurement: { average: 37, latest } }} />);
-  expect(trigger()?.textContent).toContain('chat.runningStatus.recentTokenRate');
+  // The status bar shows the speed itself, without a "recent" label in front of it.
+  expect(trigger()?.textContent).toContain('chat.runningStatus.tokenRate');
+  expect(trigger()?.textContent).not.toContain('recentTokenRate');
   expect(screen.getByText('chat.runningStatus.lastRequestRate', { selector: 'div' }).nextElementSibling?.textContent).toContain('41.4');
   expect(value('chat.runningStatus.averageRate')?.textContent).toContain('37');
 });

@@ -9533,6 +9533,26 @@ describe('CodexAgent MCP thread context hooks', () => {
     await b.close(); await agent.dispose();
   });
 
+  // Regression (2026-11-22, teammate iMessage lane): a subscription-account session's host key carries
+  // the account, the writer check did not, so the session's own host looked like another writer and every
+  // explicit route apply closed and relinked an unchanged session (provider-thread-relink, same provider).
+  it('treats the subscription account host of the same session as the target, not another writer', async () => {
+    const profile: NativeSubscriptionAccount = { id: 'pooled', configDir: '/fixture/.codex-pooled',
+      assertCurrent() {}, readState: async () => ({ authenticated: true }) };
+    const deps = createDeps();
+    deps.auth.getAuthEnv = async options => ({ CODEX_HOME: options?.nativeSubscriptionAccount?.configDir ?? '/fixture/legacy' });
+    const agent = new CodexAgent(deps);
+    try {
+      const handle = await agent.startSession({ sessionId: 'lane', providerId: 'openai', model: 'gpt-5.4', workingDir: '/repo', [NATIVE_SUBSCRIPTION_ACCOUNT]: profile });
+      createdTransports[0].setMockResponse('thread/loaded/list', { result: { data: [handle.id], nextCursor: null } });
+      const query = { sessionId: 'lane', threadId: handle.id, model: 'gpt-5.4', providerId: 'openai' };
+      expect(await agent.requiresCodexThreadHostTransfer({ ...query, [NATIVE_SUBSCRIPTION_ACCOUNT]: profile })).toBe(false);
+      // A route without that account still has to move the writer.
+      expect(await agent.requiresCodexThreadHostTransfer(query)).toBe(true);
+      await handle.close();
+    } finally { await agent.dispose(); }
+  });
+
   it('propagates account host shutdown failure before another account can resume its rollout', async () => {
     const agent = new CodexAgent(createDeps({}, { isCodexAccountProvider: (id) => id === 'account-a' }));
     const handle = await agent.startSession({ sessionId: 'account-close-failure', providerId: 'account-a', model: 'gpt-5.4', workingDir: '/repo' });
@@ -18881,6 +18901,8 @@ describe('CodexAgent MCP thread context hooks', () => {
     if (scenario === 'user') expect(JSON.stringify(steers)).toContain('User denied this tool call via Cindy');
     if (scenario === 'system') {
       expect(JSON.stringify(steers)).toContain('Cindy could not approve');
+      // Native Codex calls every decline "user rejected"; the steer must say nobody answered in time.
+      expect(JSON.stringify(steers)).toContain('the user did not reject it');
       expect(JSON.stringify(steers)).not.toContain('User denied');
     }
     expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(1);
@@ -36474,6 +36496,23 @@ describe('CodexAgent custom provider context window override', () => {
     // would also overwrite the previous model during native downshift compaction.
     expect(params.config?.model_context_window).toBeUndefined();
     expect(params.config?.model_auto_compact_token_limit).toBeUndefined();
+    await handle.close();
+  });
+
+  // #12423 unit: two connections share a model ID and window but carry different
+  // native catalog metadata. Exercise the public session model-switch gate.
+  it('rebuilds the local catalog when the same model and budget move to another connection', async () => {
+    const agent = new CodexAgent(createDeps({}, {
+      resolveCodexThreadContextWindow: () => 272_000,
+      needsCodexFastCatalog: providerId => providerId === 'cprov-openai',
+    }));
+    installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'connection-scoped-catalog', model: 'gpt-6.2-sol',
+      providerId: 'cprov-openai', workingDir: '/repo',
+    });
+    expect(await handle.requiresModelSwitchRebuild?.('gpt-6.2-sol', { providerId: 'cprov-openai' })).toBe(false);
+    expect(await handle.requiresModelSwitchRebuild?.('gpt-6.2-sol', { providerId: 'cprov-relay' })).toBe(true);
     await handle.close();
   });
 

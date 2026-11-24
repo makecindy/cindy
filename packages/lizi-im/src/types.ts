@@ -196,6 +196,12 @@ export interface IMUnsupportedEntry {
   type: string;
   /** Localised label suitable for showing the user. */
   label: string;
+  /**
+   * The model can fetch it with a channel tool (an original over the direct-delivery cap, or the
+   * original behind a preview). Such an entry still invokes the model and is not reported to the
+   * sender as unsupported.
+   */
+  retrievable?: boolean;
 }
 
 export interface IMMessageEvent {
@@ -435,6 +441,13 @@ export interface StreamingTextHandle {
 
 export interface SendFileResult {
   ok: boolean;
-  reason?: 'NOT_FOUND' | 'EMPTY' | 'TOO_LARGE' | 'UPLOAD_FAIL' | 'SEND_FAIL';
+  reason?:
+    | 'NOT_FOUND'
+    | 'EMPTY'
+    | 'TOO_LARGE'
+    | 'UPLOAD_FAIL'
+    | 'SEND_FAIL'
+    | 'SEND_REJECTED'
+    | `SEND_REJECTED:${number}`;
   messageId?: string;
 }

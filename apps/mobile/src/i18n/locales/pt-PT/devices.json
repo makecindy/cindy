@@ -32,7 +32,7 @@
     "notFound": "Este dispositivo já não está na sua conta.",
     "deleteDevice": "Eliminar dispositivo",
     "deleteTitle": "Eliminar {{name}}?",
-    "deleteMessage": "Remover este dispositivo da sua conta e desligar o acesso remoto. As sessões e os ficheiros serão mantidos. Inicie sessão novamente nesse dispositivo para voltar a adicioná-lo.",
+    "deleteMessage": "Remover este dispositivo da sua conta e desligar o acesso remoto. As sessões e os ficheiros serão mantidos. Toque em «Reintegrar» nesse dispositivo para o recuperar.",
     "deleteFailed": "Não foi possível eliminar o dispositivo.",
     "deleteOnline": "Este servidor ainda não permite remover dispositivos online. Tente novamente após a atualização do serviço.",
     "deleteRejectedWhileOffline": "Não foi possível eliminar o dispositivo: o servidor ainda o apresenta como online, embora apareça aqui como offline.",
@@ -396,6 +396,7 @@
       "showDeviceTasks": "Mostrar tarefas",
       "openDevice": "Abrir",
       "renameDevice": "Mudar nome",
+      "groupDevice": "Dispositivo",
       "groupProject": "Projeto",
       "sortBy": {
         "priority": "Prioridade",
@@ -437,11 +438,15 @@
       "showCollapsedTeammateAvatars": "Mostrar avatares quando recolhido",
       "displayHeading": "Apresentação",
       "view": {
+        "card": "Cartões",
         "text": "Texto",
         "list": "Lista"
       },
       "taskInfoHeading": "Informações da tarefa",
       "taskInfo": {
+        "teammate": "Avatar do amigo",
+        "project": "Ícone e nome do projeto",
+        "harness": "Ícone do harness",
         "time": "Tempo",
         "pr": "Estado do PR",
         "tokens": "Tokens",
@@ -962,6 +967,8 @@
     "timeout": "«{{device}}» ainda não está pronto. Certifique-se de que o Cindy está aberto e online nesse computador e tente novamente.",
     "conflict": "{{name}} já foi transferido para «{{device}}».",
     "switchFailed": "Não é possível alterar o computador principal neste momento. Tente mais tarde.",
+    "skillTargetOutdated": "Uma Skill de {{name}} tem um corpo de texto superior a 64 KB que a versão antiga do Cindy em «{{device}}» não consegue receber. Atualize o Cindy nesse computador antes de mover o seu amigo. O amigo permanece no computador original",
+    "skillTargetOutdated_skill": "A versão antiga do Cindy em «{{device}}» não consegue receber a Skill «{{slug}}». O texto tem {{bodyBytes, number}} bytes e excede o limite de 64 KB. {{name}} continua no computador original. Atualize o Cindy no computador de destino e tente novamente.",
     "unknownDevice": "outro computador",
     "runsOn": "Em execução em «{{device}}»",
     "homeTitle": "Computador principal",

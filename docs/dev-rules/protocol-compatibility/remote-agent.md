@@ -16,6 +16,14 @@
 插件提供的引擎（2026-11-20）：`open.agentKind` 新增取值 `acp`，运行端以 `caps.pluginEngines` 声明支持，只对同账号
 控制端开放；字段、旧端降级与拒绝条件见[插件任务执行引擎](plugin-harnesses.md)「自己的其他电脑使用插件引擎」。
 
+## 跨设备发送前的账号检查
+
+同账号远程订阅账号只读检查超时，且普通输入尚未落库派发时，任务电脑保留队首原消息，
+可通过可选投影字段 `waitingForRemoteAccount: true` 提示等待目标电脑，不把上一轮标为失败。
+旧查看端仍显示普通队列，可按原入口取消。任务电脑收到目标设备恢复信号时重新检查；
+未收到信号时，原消息最多额外定时检查一次。每次派发仍须通过完整账号检查；
+已取消的消息和可能已送达但未确认的发送不走这条重试路径。不改变中继协议。
+
 ## 托管请求的附件预算与保存（2026-11-17）
 
 `open.acceptsAttachmentPreservation?: true` 表示任务所在电脑能接收被请求预算移出的附件。
@@ -375,7 +383,9 @@ Codex 原生图片恢复（#6412）在既有 `maker:remote-agent:v1` 上追加�
   各电脑自行向官方分享服务查询本账号的跨区分享，不新增成员授权。查询失败时仅保留当前位置，不改读控制端的授权。
   #8010 新增同账号只读 `maker:model-catalog:read`：`op: locations` 列任务所在电脑可用的来源；
   `op: read` 只代读固定的 `maker:provider:list`、`maker:get-capabilities`、`maker:list-available-agents`、
-  `maker:agent:status`。来源必须在主机当前名单中，回包前复核名单与账号代次；不接受任意 IPC 或写操作。
+  `maker:agent:status`，以及 2026-11-23 起的 `maker:list-plugin-engines`(远程控制下列出来源的插件引擎，见
+  [插件引擎](plugin-harnesses.md)「远程控制下同样可选」；旧主机回 `INVALID_PARAMS`，控制端只列被控电脑自己的引擎)。
+  来源必须在主机当前名单中，回包前复核名单与账号代次；不接受任意 IPC 或写操作。
   控制端自身和仅被控电脑加载的分享也参与候选。创建、换位置与发送沿用真实 `agentDeviceId`；
   Renderer 的 `(任务电脑, 来源电脑)` 目录缓存键仅用于读取，不作为运行设备传送或落盘。
   旧主机明确不支持新通道时保留原直接读取与两端分享交集行为；连接失败不触发此降级。
@@ -383,7 +393,13 @@ Codex 原生图片恢复（#6412）在既有 `maker:remote-agent:v1` 上追加�
   分享仍以本次返回为准，完整结果确认移除后不再保留。此显示快照不授予读取或运行权限，
   宿主代读仍前后核对当前名单。控制端自身的 Agent 变化同时使经任务电脑读取的运行时列表失效，
   旧请求不得回填；不刷新其它任务电脑或本机直读缓存。
-  分享目录/名单变化以空载荷 `maker:model-catalog:changed` 推送到 `sessions` topic，控制端重新读取。
+  同账号控制端手动重试分享目录时，在同一通道发送 `op: retry-share-directory` 及目标 `agentDeviceId`。
+  任务电脑先按现有账号与分享授权有界恢复自己的名单，再由控制端继续普通目录读取。
+  旧任务电脑以 `INVALID_PARAMS` 拒绝未知操作时，继续使用该电脑原有目录读取路径。
+  分享目录/名单变化通过 `sessions` topic 发送 `maker:model-catalog:changed`。
+  名单变化通知与对应手动恢复回执可带同一任务电脑的 `receivedChangeSequence`，以合并同次恢复的目录读取。
+  后续独立变化仍刷新目录；旧控制端忽略可选序号。沿用既有中转透传，验证见
+  `controlledModelCatalog.test.ts`、`remoteCatalogSnapshot.test.ts` 与 `@cindy/device-link-relay interop`。
   `locations` 对有效分享可附带最小 `favoriteSource`（分享、成员、供应商 ID 与归属区域），只用于解析
   任务电脑保存的收藏，收藏仍通过原 `model-favorites` 通道读写任务电脑。不含凭证、不授予运行权限；
   旧控制端忽略此字段，新控制端遇到未提供此字段的主机不以自己电脑的成员身份替代。
@@ -395,6 +411,13 @@ Codex 原生图片恢复（#6412）在既有 `maker:remote-agent:v1` 上追加�
   故障半径：仅驱逐对应任务电脑的目录缓存；只重读目录，不重建链路或重放创建/发送；其他任务电脑的缓存不失效。
   实现见 `apps/desktop/src/renderer/hooks/useControlledModelLocations.ts`，回归见
   `controlledTaskRemoteAgentPanel.test.tsx` 与 `remoteAgentRelocationWiring.test.ts`。
+  `op: read` 的错误语义（2026-11-23）：来源电脑的临时失败（超时、离线、断链、繁忙、无响应）经任务电脑转发时
+  保持临时语义，回给控制端 `DEVICE_LINK_TIMEOUT` / `DEVICE_LINK_DEVICE_OFFLINE` / `DEVICE_LINK_NOT_CONNECTED` /
+  `DEVICE_LINK_BUSY` / `DEVICE_LINK_DEVICE_UNRESPONSIVE`，不再一律改写成 `PRECONDITION_FAILED`；拒绝、移除等
+  非临时失败仍是 `PRECONDITION_FAILED`。任务电脑代读来源最多等 20 秒（短于控制端默认 30 秒），以便控制端拿到
+  任务电脑的答复而不是自己超时。这些都是既有错误码，新旧控制端都已按临时错误处理（保留有界显示、可重试），
+  旧任务电脑继续返回 `PRECONDITION_FAILED` 时行为与以前相同；不改帧、channel 或字段，自建中转无需修改。
+  实现见 `apps/desktop/src/main/maker-ipc/controlledModelCatalog.ts`，回归见 `controlledModelCatalog.test.ts`。
   桌面远程控制下新建任务(建到 A 上，2026-10-09)同样开放：判据与手机新建相同(A 的 `maker:provider:list` 带
   `remoteInvocationEnabled` 布尔标记，共享任务访客与 SSH 不开放)，模型面板先列 A 的全部供应商、再列其他同账号电脑
   已开放的供应商；选中后草稿的模型目录改按那台，`maker:create-session` 带 `agentDeviceId`，权限档沿用 A 的草稿值，

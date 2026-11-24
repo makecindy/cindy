@@ -66,6 +66,14 @@ export function isPluginEnginePermissionModeId(value: unknown): value is PluginE
   return typeof value === 'string' && (PLUGIN_ENGINE_PERMISSION_MODE_IDS as readonly string[]).includes(value);
 }
 
+export interface NewTaskPluginEngineSelection {
+  providerId: string;
+  deviceId?: string;
+  modelId: string;
+  permissionMode?: PluginEnginePermissionModeId;
+  effort?: PluginEngineEffort;
+}
+
 export interface PluginEnginePermissionMode {
   id: PluginEnginePermissionModeId;
   displayName: string;
@@ -127,6 +135,16 @@ export interface PluginEngineView {
   declaredName?: string;
   /** The models the user turned off, as the engine lists them. Not sent to phones or other computers. */
   disabledModels?: PluginEngineModel[];
+  /**
+   * 2026-11-23 (subscription-account-pools.md 插件引擎的账号): the plugin reports this engine's
+   * account; with sign-in methods, Cindy can add accounts to it. Absent on older hosts and plugins.
+   */
+  accounts?: { methods: Array<{ id: string; label: string; kind: 'browser' | 'secret'; secretLabel?: string }> };
+  /**
+   * A provider the user took accounts out of this engine into: `key` is `<engine key>~<suffix>`
+   * and this names the engine it runs. Absent for the engine itself.
+   */
+  accountProviderOf?: string;
 }
 
 /** One change to an engine's settings; only the fields present are changed. */

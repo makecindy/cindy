@@ -2,6 +2,7 @@ import { seedBotReadPositions, markBotReadPositions, pruneBotReadState as pruneH
 import { listBotDelegationHistory } from '../../../maker-ipc/botDelegationHistory';
 import { readBotResponsibilityScope } from '../../../maker-ipc/botTaskCreation';
 import { emitSessionCreated } from '../sessionCreatedBroadcast.js';
+import { createSessionExecutionResolver } from '../../../maker-ipc/sessionExecutionSelection';
 import { setSessionOpeningModelAdmission } from '../../sessionOpening';
 import { createDrizzleProxy } from '../../client/drizzleProxy';
 import type { DbTransport } from '../../client/DbTransport';
@@ -10,6 +11,7 @@ import { setModelVisibilityMirror } from '../../../maker-host/model-visibility-m
 import { setMainLocale } from '../../../i18n.desktop';
 import Database from 'better-sqlite3';
 import { createMessage } from '../messages';
+import { setSessionRestoreObserver } from '../../sessionRestoreRetention';
 import type { ProviderView } from '@cindy/model-providers';
 import { createHash } from 'node:crypto';
 import { createCompanionCloudHost } from '../../../companion-cloud/host';
@@ -33,6 +35,7 @@ import type { BotModelRoute } from '../../../../shared/botModelChain';
 import type { AgentKind, EngineKind } from '@cindy/maker-core';
 import { requireBuiltinAgentKind } from '../../../maker-host/engineKind';
 import { createBotCapabilityService, type BotCapabilityUpdate } from '../../../maker-ipc/botCapabilityService';
+import * as botProjectMode from '../../../maker-ipc/botProjectMode';
 import { GroupToolAuthorizationError, registerGroupToolAuthority } from '../../../maker-ipc/botGroupToolAuthorization';
 import { buildBotMcpCatalog } from '../../../maker-host/botMcpCatalog';
 import { CustomMcpProvider } from '../../../mcp-integrations/custom-mcp-provider';
@@ -67,6 +70,11 @@ vi.mock('electron-store', () => ({ default: class {
   }
   delete(key: string) { this.values.delete(key); }
 } }));
+const pluginEngineViews = vi.hoisted(() => ({ list: null as null | (() => unknown[]) }));
+vi.mock('../../../maker-ipc/pluginEnginesIpc.js', async importOriginal => {
+  const real = await importOriginal<typeof import('../../../maker-ipc/pluginEnginesIpc.js')>();
+  return { ...real, listPluginEngineViews: () => (pluginEngineViews.list ? pluginEngineViews.list() : real.listPluginEngineViews()) };
+});
 vi.mock('../../../maker-ipc/appDefaultModelControl.js', async importOriginal => ({
   ...await importOriginal<typeof import('../../../maker-ipc/appDefaultModelControl.js')>(),
   validateTaskModel: vi.fn(async () => true),
@@ -270,6 +278,8 @@ import {
 } from '../bots';
 import { tx as runWorkerTx } from '../../worker/opHandlers/tx.js';
 import * as modelSettings from '../../../maker-host/bot-model-chain-settings-store.js';
+import * as teammateProjects from '../../../scheduler-host/ownTeammateProject.js';
+import * as appSessionState from '../../../appSessionState.js';
 import { assertTrustedAppRendererEvent } from '../../../security/trustedAppRenderer.js';
 import { runDeviceLinkInvokeContext } from '../../../device-link/invoke-context.js';
 import {
@@ -534,6 +544,9 @@ const capabilityDeps = {
 const { list: findBotCapabilities, select: selectBotCapability } = createBotCapabilityService(capabilityDeps);
 
 beforeEach(async () => {
+  // 任务管理服务随本文件的导入链在加载时装上全局恢复钩子，它要求账号状态已就绪；本文件不测归档保留，
+  // 与 sessionsUpdate / sessionsRestoreIfArchived 一样先清空，免得 CI 并行负载下账号未就绪时恢复失败。
+  setSessionRestoreObserver(null);
   h.dbReady = true;
   setSessionOpeningModelAdmission(async body => body);
   setModelVisibilityMirror({}, { fallback: true });
@@ -592,6 +605,52 @@ beforeEach(async () => {
       model: 'grok-4.5',
       permissions: 'trusted',
     },
+  });
+});
+
+// #10847 / unit: the registered editor metadata query must check actual account ownership
+// without provisioning or hydrating any profiles. Existing list tests exercise those side effects.
+// Minimal input: an owned workspace whose profile-version JSON cannot be read.
+describe('Bot project ownership IPC', () => {
+  const workspace = () => join(h.userDataDir, 'owners', testSha256(h.ownerScopeKey), 'bots', 'bot-1', 'workspace');
+
+  it('returns only ownership, including stopped profiles, without loading routes or provisioning', async () => {
+    const root = vi.spyOn(appSessionState, 'ownerScopedUserDataPath').mockImplementation((...parts: string[]) =>
+      join(h.userDataDir, 'owners', testSha256(h.ownerScopeKey), ...parts));
+    try {
+      h.sqlite!.prepare("UPDATE bot_profile_versions SET capabilities_json = '{' WHERE bot_id = ?").run('bot-1');
+      vi.mocked(provisionDefaultBot).mockClear();
+      await expect(invoke('local-db:bots:owns-project', workspace())).resolves.toBe(true);
+      h.sqlite!.prepare("UPDATE bot_profiles SET status = 'paused' WHERE id = ?").run('bot-1');
+      await expect(invoke('local-db:bots:owns-project', workspace())).resolves.toBe(true);
+      await expect(invoke('local-db:bots:owns-project', '/ordinary/project')).resolves.toBe(false);
+      await expect(invoke('local-db:bots:owns-project', join(h.userDataDir, 'owners', 'other-owner', 'bots', 'bot-1', 'workspace'))).resolves.toBe(false);
+      h.sqlite!.prepare('DELETE FROM bot_profiles WHERE id = ?').run('bot-1');
+      await expect(invoke('local-db:bots:owns-project', workspace())).resolves.toBe(false);
+      expect(provisionDefaultBot).not.toHaveBeenCalled();
+    } finally { root.mockRestore(); }
+  });
+
+  it('rejects untrusted senders, invalid input and account transitions', async () => {
+    vi.mocked(assertTrustedAppRendererEvent).mockImplementationOnce(() => { throw new Error('untrusted'); });
+    await expect(invoke('local-db:bots:owns-project', workspace())).rejects.toThrow('untrusted');
+    await expect(invoke('local-db:bots:owns-project', null)).rejects.toThrow('INVALID_PARAMS');
+    h.ownerBoundaryPending = true;
+    await expect(invoke('local-db:bots:owns-project', workspace())).rejects.toThrow('PRECONDITION_FAILED');
+    h.ownerBoundaryPending = false;
+    const read = vi.spyOn(teammateProjects, 'ownTeammateProjectState');
+    try {
+      read.mockImplementationOnce(async () => { h.ownerScopeKey = 'owner-b:2'; return 'active'; });
+      await expect(invoke('local-db:bots:owns-project', workspace())).rejects.toThrow('PRECONDITION_FAILED');
+    } finally { read.mockRestore(); }
+  });
+
+  it('reports a read failure without exposing local paths or pretending the project is unowned', async () => {
+    const read = vi.spyOn(teammateProjects, 'ownTeammateProjectState');
+    try {
+      read.mockRejectedValueOnce(new Error('/private/account/db.sqlite: unavailable'));
+      await expect(invoke('local-db:bots:owns-project', workspace())).rejects.toThrow('Could not check Bot project ownership');
+    } finally { read.mockRestore(); }
   });
 });
 
@@ -807,17 +866,17 @@ describe('Bot canonical Session lifecycle', () => {
     expect((await listBotRemoteResourceSources()).map((row) => row.id)).not.toContain(created.id);
   });
 
-  it('persists a shared model location when creating the canonical session', async () => {
+  it.each(['high', ''])('persists a shared model location and saved effort %j in the canonical session', async effort => {
     const route = { harness: 'codex', model: 'gpt-6-astra', providerId: 'openai',
-      agentDeviceId: 'share:test-account', effort: 'high', fastMode: false };
+      agentDeviceId: 'share:test-account', effort, fastMode: false };
     h.sqlite!.prepare('UPDATE bot_profile_versions SET capabilities_json = ? WHERE bot_id = ? AND version = 1')
       .run(JSON.stringify({ modelChainOverride: [route] }), 'bot-1');
     const canonical = await invoke('local-db:bots:create-canonical-session', {
       botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
     });
-    expect(h.sqlite!.prepare('SELECT agent_device_id, model, provider_id FROM sessions WHERE id = ?')
+    expect(h.sqlite!.prepare('SELECT agent_device_id, model, provider_id, effort FROM sessions WHERE id = ?')
       .get(canonical.session.id)).toEqual({ agent_device_id: route.agentDeviceId,
-        model: route.model, provider_id: route.providerId });
+        model: route.model, provider_id: route.providerId, effort });
   });
 
   it('creates the first canonical task on Codex when only its subscription is connected', async () => {
@@ -2474,6 +2533,48 @@ describe('Bot canonical Session lifecycle', () => {
     });
   });
 
+  it.each([
+    { providerId: 'hermes', saved: '', efforts: [], modelDefault: null, expected: '' },
+    { providerId: 'hermes', saved: '', efforts: ['low', 'medium'], modelDefault: 'medium', expected: 'medium' },
+    { providerId: 'hermes', saved: 'low', efforts: ['low', 'medium'], modelDefault: 'medium', expected: 'low' },
+    { providerId: null, saved: '', efforts: ['medium', 'high'], modelDefault: 'medium', expected: 'medium' },
+  ])('opens the first custom Pi group task with provider "$providerId", saved effort "$saved" and model default $modelDefault', async ({
+    providerId, saved, efforts, modelDefault, expected,
+  }) => {
+    const botId = 'custom-pi';
+    const model = 'hermes-agent';
+    await invoke('local-db:bots:create', {
+      id: botId, name: 'Hermes', capabilities: { harness: 'pi', model, providerId, effort: saved },
+    });
+    const readDefault = vi.fn(() => ({ agentKind: 'pi' as const, model, providerId: 'hermes', effort: 'xhigh' as const, fastMode: false }));
+    const resolve = createSessionExecutionResolver({
+      captureOwner: () => () => {},
+      readCaller: vi.fn(),
+      readDefault,
+      availableAgents: () => ['pi'],
+      availableModels: () => [{ id: model, efforts, defaultEffort: modelDefault }],
+      readProviderRouting: async () => ({
+        availability: { pi: [{ id: 'hermes', name: 'Hermes', models: [model] }], codex: [], 'claude-code': [] },
+        resolveDefaultProviderIdForModel: () => 'hermes',
+      }),
+      hasCindyAiApiKey: () => false,
+    });
+    setSessionOpeningModelAdmission(async (body, sourceSessionId) => {
+      const selected = await resolve(body, sourceSessionId);
+      return { ...body, providerId: selected.providerId, effort: selected.effort ?? '' };
+    });
+    h.sqlite!.exec('CREATE TABLE bot_group_members(group_id TEXT, bot_id TEXT)');
+    h.sqlite!.prepare('INSERT INTO bot_group_members VALUES (?, ?)').run('room', botId);
+    const lane = await ensureBotGroupLaneSession({
+      botId, groupId: 'room', title: 'Group', chatAccess: { mode: 'owner', revision: 1 },
+    });
+    if (!lane.ok) throw new Error(lane.message);
+    expect(lane.created).toBe(true);
+    expect(h.sqlite!.prepare('SELECT model, provider_id, effort FROM sessions WHERE id = ?').get(lane.sessionId))
+      .toEqual({ model, provider_id: 'hermes', effort: expected });
+    expect(readDefault).not.toHaveBeenCalled();
+  });
+
   it('continues a group task in its project, rebinds a missing project and isolates a chat grant', async () => {
     h.sqlite!.exec("CREATE TABLE bot_group_members(group_id TEXT, bot_id TEXT); INSERT INTO bot_group_members VALUES ('room','bot-1')");
     const lane = { botId: 'bot-1', groupId: 'room', title: 'Group', chatAccess: { mode: 'owner' as const, revision: 1 } };
@@ -2536,6 +2637,38 @@ describe('Bot canonical Session lifecycle', () => {
       { sessionSources: null },
     );
     expect(h.searchConversations.mock.lastCall?.[0].filters.sessionIds).toHaveLength(4);
+  });
+
+  // DB tier, review r4657940362. Verify the actual session chosen by the iMessage adapter and
+  // turn runner for two groups sharing one transport, beyond the HTTP receiver's dedup receipt.
+  it('routes only the delegated iMessage group to its new teammate session', async () => {
+    const { BlueBubblesIM } = await import('@cindy/im');
+    // The application-wide maker IPC registers native windows at import. This test only needs its
+    // disposable vendor-options subscription; the adapter, turn runner and lane database are real.
+    vi.doMock('../../../maker-ipc/register', () => ({ registerSwitchedSessionVendorOptionsResolver: () => () => {} }));
+    const { wireIMessageOrchestrator } = await import('../../../im/imessage/adapter')
+      .finally(() => vi.doUnmock('../../../maker-ipc/register'));
+    const store = await import('../../../im/shared/botImConnectionStore');
+    await invoke('local-db:bots:create', { id: 'bot-2', name: 'Group recipient' });
+    const selected = 'any;+;selected', other = 'any;+;control';
+    const authorization = 'ab'.repeat(32);
+    const connectionId = 'abcd12345678';
+    const contextId = `imessage-${connectionId}`;
+    const im = new BlueBubblesIM({} as never, { contextId: () => contextId } as never);
+    vi.spyOn(im, 'groupAuthorization').mockReturnValue(authorization);
+    const read = vi.spyOn(store, 'readBotImConnection').mockReturnValue({
+      id: connectionId, botId: 'bot-1', channel: 'imessage', createdAt: 1, botContextId: contextId,
+      iMessageGroupRoutes: { [selected]: { botId: 'bot-2', authorization, revision: 'abcdef123456', replyMode: 'always' } },
+    });
+    const router = wireIMessageOrchestrator(im, {} as never, { instanceKey: connectionId, companionBotId: 'bot-1', connectionId });
+    try {
+      for (const [group, botId] of [[selected, 'bot-2'], [other, 'bot-1']]) {
+        const target = await router.turnRunner.resolveRouteTarget(contextId, group);
+        expect(target?.botOwned).toEqual({ botId, lane: 'channel' });
+        const saved = h.sqlite!.prepare('SELECT bot_id,route_key FROM bot_session_links WHERE session_id=?').get(target!.row.id);
+        expect(saved).toMatchObject({ bot_id: botId, route_key: `im:imessage:${contextId}:g:${group}` });
+      }
+    } finally { router.unregister(); read.mockRestore(); await im.dispose(); }
   });
 
   it('creates one IM channel lane per route key, notifies the task list and keeps it out of private history search', async () => {
@@ -5333,6 +5466,34 @@ afterAll(() => {
 
 
 describe('Bot self control uses the same profile authority as settings', () => {
+  // DB tier: a versioned project file must use the same save and readback as the settings page.
+  it('applies only supported fields from the bound project and rejects stale files', async () => {
+    const canonical = await invoke('local-db:bots:create-canonical-session', { botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1 });
+    const sessionId = canonical.session.id;
+    const profile = await invoke('local-db:bots:get', 'bot-1');
+    // Provision the real project without loading the automation host for its nightly review.
+    const provisionAutomations = vi.spyOn(botProjectMode, 'ensureBotProjectAutomations').mockResolvedValue(false);
+    try {
+      await invoke('local-db:bots:update', { id: 'bot-1', capabilities: { projectMode: true } });
+    } finally {
+      provisionAutomations.mockRestore();
+    }
+    const service = createBotCapabilityService(capabilityDeps);
+    const current = await service.inspect({ callerSessionId: sessionId });
+    if (!current.ok) throw new Error(current.message);
+    const expectedVersion = current.state.profile.version;
+    const folder = join(profile.homeDir, 'workspace', '.cindy', 'settings');
+    mkdirSync(folder, { recursive: true });
+    const file = join(folder, 'profile.json');
+    const request = { callerSessionId: sessionId, expectedVersion, fromProject: true as const };
+    writeFileSync(file, JSON.stringify({ expectedVersion, permissions: 'trusted' }));
+    expect(await service.updateProfile(request)).toMatchObject({ ok: false });
+    writeFileSync(file, JSON.stringify({ expectedVersion, description: 'Family assistant', userContextSource: '' }));
+    expect(await service.updateProfile(request)).toMatchObject({ ok: true });
+    expect(await service.inspect({ callerSessionId: sessionId })).toMatchObject({ state: { profile: { description: 'Family assistant' } } });
+    expect(await service.updateProfile(request)).toMatchObject({ ok: false });
+  });
+
   it('reads only its own state and patches requested fields without replacing independent configuration', async () => {
     const canonical = await invoke('local-db:bots:create-canonical-session', { botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1 });
     const sessionId = canonical.session.id;
@@ -5639,6 +5800,32 @@ describe('Teammate model selection shares profile persistence and route reconcil
     expect(after.currentVersion).toBe(renamed.currentVersion + 1);
   });
 
+  // 用户反馈：伙伴用 update_teammate_profile 改自己的模型时选不到插件引擎（设置页可以）。DB tier：经真实
+  // 伙伴工具服务读到本机插件引擎、保存进伙伴自己的模型链，并由同一读取入口解析出插件引擎路由；应用默认不变。
+  it('saves a plugin engine of this computer into its own chain through the teammate tool', async () => {
+    const { service, sessionId } = await setupModelControl();
+    pluginEngineViews.list = () => [{ key: 'agy:agy', providerId: 'acp-plugin:agy:agy', ghostId: 'agy', harnessId: 'agy', name: 'Antigravity',
+      availability: { state: 'available' }, models: [{ id: 'gemini-3-pro', displayName: 'Gemini 3 Pro', efforts: ['high'] }],
+      permissionModes: [], defaultPermissionMode: 'ask' }];
+    try {
+      const appDefault = getSelectedNewMakerRoute(h.ownerScopeKey);
+      const listed = await service.models({ callerSessionId: sessionId });
+      if (!listed.ok) throw new Error(listed.message);
+      const choice = listed.available.find(item => item.route.harness === 'acp' && item.route.model === 'gemini-3-pro');
+      expect(choice).toMatchObject({ teammateOnly: true, route: { providerId: 'acp-plugin:agy:agy', model: 'gemini-3-pro' } });
+      expect(await service.updateProfile({ callerSessionId: sessionId, expectedVersion: 1,
+        modelChain: [{ id: choice!.id, effort: 'high', fastMode: false }] })).toMatchObject({ ok: true, effective: 'next-turn' });
+      const after = await invoke('local-db:bots:get', 'bot-1');
+      expect(await modelSettings.readEffectiveBotModelChain(after.capabilities)).toEqual([
+        { harness: 'acp', providerId: 'acp-plugin:agy:agy', model: 'gemini-3-pro', effort: 'high', fastMode: false },
+      ]);
+      expect(getSelectedNewMakerRoute(h.ownerScopeKey)).toEqual(appDefault);
+      // Fast is not offered for plugin engines.
+      expect(await service.updateProfile({ callerSessionId: sessionId, expectedVersion: after.currentVersion,
+        modelChain: [{ id: choice!.id, fastMode: true }] })).toMatchObject({ ok: false });
+    } finally { pluginEngineViews.list = null; }
+  });
+
   // DB regression: a per-teammate reset follows the teammate default even if
   // the new-task composer changes later; previously the two were coupled.
   it('saves its own model chain, applies it through the send resolver, and resets independently of new tasks', async () => {
@@ -5828,4 +6015,29 @@ it('rejects a roster read before DbClient publication instead of reporting no bu
   await expect(invoke('local-db:bots:list', undefined)).resolves.toEqual(
     expect.arrayContaining([expect.objectContaining({ id: 'bot-1' })]),
   );
+});
+
+// PR #12070 review: Bot creation and settings read the Skill catalog before any Agent launches;
+// startup only warms the shared Skill preparation, so the catalog must join it first.
+describe('Bot capability Skill catalog', () => {
+  it('joins shared Skill preparation before listing Skills for creation', async () => {
+    const order: string[] = [];
+    const service = createBotCapabilityService({
+      ...capabilityDeps,
+      prepareSharedSkills: async () => { order.push('prepare'); },
+      getMaker: () => ({
+        listAgentSkills: async () => {
+          order.push('list');
+          return { skills: [{ name: 'release-check', description: 'Release checklist', enabled: true }] };
+        },
+      }) as never,
+    });
+
+    const result = await service.forCreation({
+      botId: 'bot-new', workingDir: '/bots/bot-new/workspace', agentKind: 'pi', assertOwner: () => undefined,
+    });
+
+    expect(order).toEqual(['prepare', 'list']);
+    expect(result.skill.map((entry) => entry.name)).toContain('release-check');
+  });
 });

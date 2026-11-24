@@ -196,7 +196,7 @@ it.each(['initial failure', 'fresh directory', 'channel close'])('redials an onl
   const certificate = issueCertificate(root, { networkId: bootstrap.networkId, subject: bootstrap.ownerCertificate.subject, identity: remote, role: 'member' });
   const device: DeviceView = { certificate, name: 'Remote', online: true, remoteControlEnabled: true, capabilities: [] };
   const uplink = Object.assign(new EventEmitter(), { kind: 'agent-net' as const, devices: [device], delegations: [],
-    send() {}, presence() {}, onDatagram() {}, close() {} });
+    probeRelay: vi.fn(), send() {}, presence() {}, onDatagram() {}, close() {} });
   const remoteId = Buffer.from(remote.transportKey, 'base64url').toString('hex');
   const drops: Array<() => void> = [];
   const connect = vi.fn(async (): Promise<PeerChannel> => ({ remoteId, send() {}, onData() {}, onClose(callback) { drops.push(callback); },
@@ -213,6 +213,7 @@ it.each(['initial failure', 'fresh directory', 'channel close'])('redials an onl
     socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'hello', payload: { deviceName: 'Local', platform: 'test', appVersion: '1', remoteControlEnabled: true, busy: false } }));
     await vi.advanceTimersByTimeAsync(0);
     expect(connect).toHaveBeenCalledOnce();
+    expect(uplink.probeRelay).toHaveBeenCalledTimes(failure === 'channel close' ? 0 : 1);
     if (failure === 'channel close') drops[0]();
     expect(socket.pathTo('b-remote')).toBeNull();
     if (failure === 'fresh directory') uplink.emit('directory');
@@ -817,6 +818,43 @@ it('reconnects the relay at once when the network changes during its backoff', a
     expect(networkChanged).toHaveBeenCalledTimes(4);
     await vi.advanceTimersByTimeAsync(20_000);
     expect(connect).toHaveBeenCalledTimes(5);
+  } finally { vi.useRealTimers(); socket.close(); }
+});
+
+/** 生产入口：AgentNetSocket 收到中转 4409。仅使用 Agent-Net 时外层 socket 不关闭，
+ * 宿主仍须收到事件；仅在确认身份冲突后延长中转重连，换网不提前重连。
+ * 最小输入：同一设备身份接管前后各一次。tier：unit，内存中转、假时钟。 */
+it('reports relay replacement and backs off only after the host confirms the identity conflict', async () => {
+  const local = generateIdentity('local');
+  const { bootstrap } = createPrivateNetwork('Duplicate identity', local);
+  const makeUplink = () => Object.assign(new EventEmitter(), { kind: 'agent-net' as const, devices: [], delegations: [],
+    send() {}, presence() {}, onDatagram() {}, close() {} });
+  const first = makeUplink(), second = makeUplink(), third = makeUplink();
+  const connect = vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(second).mockResolvedValueOnce(third);
+  const onRelayReplaced = vi.fn();
+  const socket = await AgentNetSocket.openWithBindings({
+    client: { base: 'https://relay.example.test', rootPublicKey: bootstrap.rootPublicKey, certificate: bootstrap.ownerCertificate, identity: local, connect },
+    userId: bootstrap.ownerCertificate.subject, onRelayReplaced,
+    bindings: { verifyCertificate, createTransport: async () => ({ id: 'local', dial: {}, close: async () => undefined,
+      connect: async () => { throw new Error('No peer dial needed'); } }) },
+  });
+  const closed = vi.fn();
+  socket.on('close', closed);
+  vi.useFakeTimers();
+  try {
+    first.emit('close', 4409);
+    expect(onRelayReplaced).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(connect).toHaveBeenCalledTimes(2);
+    socket.setDuplicateIdentityCooldown(true);
+    second.emit('close', 4409);
+    socket.networkChanged();
+    expect(onRelayReplaced).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(3_499);
+    expect(connect).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1_501);
+    expect(connect).toHaveBeenCalledTimes(3);
+    expect(closed).not.toHaveBeenCalled();
   } finally { vi.useRealTimers(); socket.close(); }
 });
 

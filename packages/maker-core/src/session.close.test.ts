@@ -1124,17 +1124,22 @@ describe('Session shutdown-scoped terminal-error suppression', () => {
 // #9323: explicit app-quit reservation fences events before a host reaper
 // kills the transport; async detach then cancels. The older shutdown guard is
 // deliberately idle-only; normal active crashes still need to be delivered.
-describe('Session explicit host shutdown reservation', () => {
+// #11735: the existing Claude shutdown coverage missed Pi's close fallback.
+// Public send/prepare/detach must deliver cancellation with usage, not a model
+// failure, for an accepted unfinished turn (unit; no process or real waits).
+describe.each(['claude-code', 'pi'] as const)('Session %s explicit host shutdown reservation', (agentKind) => {
+  const usage = { inputTokens: 120, outputTokens: 8, cacheReadTokens: 60, cacheCreationTokens: 0 };
   function fixture() {
     const queue = createAsyncQueue<AgentEvent>();
     let running = false;
     const handle = {
-      id: 'shutdown-claude', agentKind: 'claude-code', model: 'm',
+      id: 'shutdown-runtime', agentKind, model: 'm',
       send: vi.fn(async () => { running = true; }), isTurnRunning: () => running,
       events: () => queue, abort: vi.fn(async () => {}),
       close: vi.fn(async () => { queue.end(); }), setInteractionResolver() {},
+      getPendingTurnUsage: () => usage,
     } as unknown as AgentSessionHandle;
-    const session = new Session({ id: 'shutdown-task', agentKind: 'claude-code', workDir: '/repo',
+    const session = new Session({ id: 'shutdown-task', agentKind, workDir: '/repo',
       handle, capabilities: {} as never, logger: createLogger(), turnStallMs: 0 });
     const seen: AgentEvent[] = [];
     session.onEvent(event => seen.push(event));
@@ -1150,12 +1155,12 @@ describe('Session explicit host shutdown reservation', () => {
     expect(handle.abort).not.toHaveBeenCalled();
     expect(seen).toEqual([]);
     await expect(session.send('late work')).rejects.toThrow();
-    queue.push({ type: 'error', source: 'claude-code',
+    queue.push({ type: 'error', source: agentKind,
       data: { message: 'SIGKILL', isTerminal: true, reason: 'sdk_stream_crashed' } });
     queue.end();
     await session.detach({ reason: 'app-quit' });
     expect(handle.close).toHaveBeenCalledOnce();
-    expect(seen.map(event => [event.type, event.data])).toEqual([['done', { status: 'cancelled' }]]);
+    expect(seen.map(event => [event.type, event.data])).toEqual([['done', { status: 'cancelled', usage }]]);
     expect(session.getStatus()).toBe('closed');
   });
 
@@ -1164,12 +1169,12 @@ describe('Session explicit host shutdown reservation', () => {
     const gate = createDeferred();
     let signal: AbortSignal | undefined;
     const handle = {
-      id: 'preparing', agentKind: 'claude-code', model: 'm',
+      id: 'preparing', agentKind, model: 'm',
       send: vi.fn(async () => {}), isTurnRunning: () => false,
       events: () => queue, abort: vi.fn(async () => {}),
       close: vi.fn(async () => { queue.end(); }), setInteractionResolver() {},
     } as unknown as AgentSessionHandle;
-    const session = new Session({ id: 'preparing-task', agentKind: 'claude-code', workDir: '/repo',
+    const session = new Session({ id: 'preparing-task', agentKind, workDir: '/repo',
       handle, capabilities: {} as never, logger: createLogger(), turnStallMs: 0 });
     const accepted = vi.fn(async (value?: AbortSignal) => { signal = value; await gate.promise; });
     const sending = session.send('not yet dispatched', { onAccepted: accepted });
@@ -1187,7 +1192,7 @@ describe('Session explicit host shutdown reservation', () => {
   it('keeps a real crash observed before quit and does not replace it with cancellation', async () => {
     const { queue, session, seen } = fixture();
     await session.send('work');
-    queue.push({ type: 'error', source: 'claude-code',
+    queue.push({ type: 'error', source: agentKind,
       data: { message: 'natural crash', isTerminal: true, reason: 'sdk_stream_crashed' } });
     await vi.waitFor(() => expect(seen).toHaveLength(1));
     session.prepareForHostShutdown();
@@ -1198,7 +1203,7 @@ describe('Session explicit host shutdown reservation', () => {
   it('does not add cancellation to a completed turn', async () => {
     const { queue, session, seen } = fixture();
     await session.send('work');
-    queue.push({ type: 'done', source: 'claude-code', data: { status: 'completed' } });
+    queue.push({ type: 'done', source: agentKind, data: { status: 'completed' } });
     await vi.waitFor(() => expect(seen).toHaveLength(1));
     session.prepareForHostShutdown();
     await session.detach({ reason: 'app-quit' });

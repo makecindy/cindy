@@ -88,9 +88,19 @@ worktree 或 SSH Lead 时拒绝（INVALID_PARAMS）。`maker:worker:list` 与团
 - **受邀者目录读取**：受邀者通道白名单(`PROVIDER_SHARE_CHANNELS` 与受邀者侧 `PROVIDER_SHARE_RENDERER_CHANNELS`)追加只读 `maker:list-plugin-engines` 与 `maker:refresh-plugin-engines`。B 在投影受邀者读取时只返回 `providerId` 命中该分享且 `shareSupported === true`、仍开启远程调用的单项引擎，剥离 `reportsUsage`，并按 `remoteModelAccess` 过滤 `models`；非插件引擎分享直接返回空数组，不向内置供应商分享发送插件引擎目录请求。
 - **能力位与打开**：`caps` 对同账号控制端和持有有效插件引擎直连分享授权的受邀者声明 `pluginEngines: true`。`open.agentKind = acp` 允许同账号控制端与直连分享受邀者(`!relayKey`、非 `groupAssigned`、非备用机委托)，受邀者载荷经 `sanitizeGuestOpenPayload` 清洗、会话续接经 `guestOwnsSession` 校验、凭证文件访问沿用受邀者逐次确认，且 `open` / `send` / `steer` / `setModel` 及模型权限变更时实时复核 `isPluginEngineOfferedToGuests` 与 `remoteModelAccess`(设有限制时 `default` 模型同样受控)。
 - **消费端免装**：A 的新建任务草稿与普通任务会话切换不再要求本机预装同款插件即可列出并选用同账号其他电脑及已收到插件引擎分享(`share:<shareId>`)提供的引擎；图标(`≤64 KiB` data URL)、模型、思考深度与权限档直接取自执行端目录。
+- **远程控制下同样可选**（2026-11-23 用户反馈后补齐）：A 远程控制 B 时，B 上的新建任务与已建任务的模型菜单除 B 自己的引擎外，
+  也按 B 的来源名单(`maker:model-catalog:read` 的 `op: locations`，与内置模型同一份，[远程 Agent](remote-agent.md) #8010)列出同账号其他电脑
+  (含 A)与 B 收到的插件供应商分享开放的引擎；内置供应商分享按名单里的 `favoriteSource.providerId` 排除，不发引擎目录请求。
+  引擎列表经 B 代读：`op: read` 的固定只读 channel 追加 `maker:list-plugin-engines`(参数只能为空)，B 按名单前后复核来源，回包只保留
+  `parseOfferedPluginEngines` 认可的引擎、去掉 `reportsUsage`，分享只保留授予的那一个引擎。选中后 `maker:create-session` 带
+  `agentKind: 'acp'` 与 `agentDeviceId`(`share:<shareId>` 或电脑 id)，已建任务的 `maker:switch-session-agent` 同样带 `agentDeviceId`；
+  B 沿用既有准入(`admitPluginEngineSessionElsewhere` / `admitRemotePluginEngineTarget`)与远程 Agent 启动路径，执行端照常实时复核授权。
+  不新增 channel、allowlist、relay 帧或字段，官方与自建中转按既有 invoke 帧透明转发、无需修改。旧版 B 对新 channel 回 `INVALID_PARAMS`，
+  A 记为不支持、只列 B 自己的引擎(与此前相同)；B 没有来源名单(更早的版本)时同样只列 B 自己的引擎。手机端尚未提供这两个来源。
+  来源名单或链接状态变化时丢弃该任务电脑的引擎目录与在途读取。重新发现来源后，只为已打开任务回读仍可用的来源。
 - **暂未开放**：插件引擎加入供应商组或备用机委托、转分享(`relayKey`)、协同 Worker 跨机运行插件引擎、分叉与回退。这些入口保持明确拒绝。
 
-实现见 `maker-host/pluginEngineRemoteUse.ts`、`device-link/providerShareHost.ts`、`device-link/providerShareRuntime.ts`、`device-link/dispatch.ts`、`remote-agent/host/service.ts`、`remote-agent/host/runHost.ts`、`remote-agent/controller/service.ts`、maker-core `agents/acp/acp-agent.ts`；回归见 `roundtrip.test.ts`、`providerShareDispatch.test.ts`、`pluginHarnesses.test.ts`、`nodeRuntimeBroker.test.ts`、`pluginEngineSessionAdmission.test.ts`、`PluginEnginesSection.test.tsx` 与 `PluginEngineRemoteUse.test.tsx`。
+实现见 `maker-host/pluginEngineRemoteUse.ts`、`device-link/providerShareHost.ts`、`device-link/providerShareRuntime.ts`、`device-link/dispatch.ts`、`remote-agent/host/service.ts`、`remote-agent/host/runHost.ts`、`remote-agent/controller/service.ts`、maker-core `agents/acp/acp-agent.ts`；远程控制下的来源与代读见 `maker-ipc/controlledModelCatalog.ts`、renderer `lib/pluginEngineSelection.ts`(`controlledPluginEngineSources`)与 `hooks/usePluginEngines.ts`；回归见 `roundtrip.test.ts`、`providerShareDispatch.test.ts`、`pluginHarnesses.test.ts`、`nodeRuntimeBroker.test.ts`、`pluginEngineSessionAdmission.test.ts`、`PluginEnginesSection.test.tsx`、`PluginEngineRemoteUse.test.tsx`、`controlledModelCatalog.test.ts` 与 `newMakerDraftSubmission.test.ts`。
 
 ## 插件引擎进入模型供应商列表（2026-11-22）
 
@@ -129,8 +139,17 @@ worktree 或 SSH Lead 时拒绝（INVALID_PARAMS）。`maker:worker:list` 与团
   停用或关掉模型后从下一轮起被拒绝(与关闭「允许被远程调用」相同)。
 - **中转**：走既有 invoke 帧与既有只读 channel，没有新帧、新 channel 进 allowlist 或恢复语义变化，官方与自建中转
   原样转发回包里多出的可选字段，无需修改；未做互通重跑，依据是 device-link 包与 allowlist 均无改动。
-- **暂未提供**：与普通供应商混排的拖动排序、模型选择器里的「已隐藏」展开区、设置页列出同账号其他电脑上的插件引擎、
-  供应商组与引擎切换。
+- **设置页列出同账号其他电脑开放的引擎**(2026-11-23 补齐)：renderer `OwnRemotePluginEngines.tsx` 复用新建任务模型
+  选择器的按电脑目录缓存(`useDevicesPluginEngines`)与筛选(`remotePluginEngineChoices`)，只列 `isPluginEngineOfferedRemotely`
+  的引擎，只读展示。读取量：打开「模型供应商」页时向每台在线、允许远程控制的同账号电脑各发一次既有的只读
+  `maker:list-plugin-engines`(后台档；与模型选择器共用 15 秒内不重读)。列表可见时，新上线或重连的电脑可补读，
+  复用重连预取，不轮询；进入分享管理页则释放列表订阅。
+  打开某一项详情时与模型选择器同一时机发一次 `maker:refresh-plugin-engines`(按电脑 60 秒冷却)并在 2.5 秒后复读。
+  该引擎带 `reportsUsage` 时，详情还经既有只读的 `maker:get-plugin-engine-usage`(后台档)读一次那台电脑的账号用量，
+  与本机详情同一组件，打开详情和窗口重新获得焦点时读，与任务里的用量标签共用按电脑、按引擎一分钟内的读取，不轮询；
+  不带 `reportsUsage` 的引擎不读。
+  没有新 channel、新字段或 allowlist 变化，旧电脑回 `CHANNEL_NOT_ALLOWED` 时不列出(用量读失败时不显示用量)。
+- **暂未提供**：与普通供应商混排的拖动排序、模型选择器里的「已隐藏」展开区、供应商组与引擎切换。
 
 实现见 `maker-host/plugin-engine-prefs-store.ts`、`maker-ipc/pluginEnginesIpc.ts`、`maker-ipc/pluginEngineSessionAdmission.ts`、
 `maker-host/pluginEngineRemoteUse.ts`、renderer `components/settings/PluginEngineProviders.tsx` 与 mobile
@@ -149,7 +168,59 @@ worktree 或 SSH Lead 时拒绝（INVALID_PARAMS）。`maker:worker:list` 与团
 
 同账号配对设备通过只读 `maker:get-plugin-engine-usage(key)` 查询执行电脑；SSH、分享访客与未配对调用没有账号用量入口。
 旧插件继续使用现有状态与模型，新插件在旧 Host 上仍可在自己的设置页获取用量。旧 Host 缺少该 channel 时控制端按无数据处理。
+支持区分 worker 错误的执行电脑会通过现有 invoke 错误返回临时读取失败。系统栏和小组件保留该引擎的上次读数、显示读取时间，并按已有失败节奏重试。成功的空读数和读取期间账号或授权失效仍返回空；旧版执行电脑返回的空值也按空读数处理。
 既有 Device Link invoke 帧和自建中转可原样转发，无需扩展中转协议。该变更不增加 manifest 权限、批准或安装迁移。
+
+## 引擎账号（多账号，2026-11-23，未发布）
+
+产品规则见[插件引擎的账号](../../product-rules/subscription-account-pools.md#插件引擎的账号2026-11-23-用户裁决未发布)。
+全部为 append-only 可选字段、宿主固定参数和新的 worker 方法，不改 manifest、权限行、批准状态或安装布局；存量插件影响：无
+（旧插件不发布 `accounts`，引擎照旧单账号；回归见 `pluginHarnesses.test.ts` 与 `ghostHarnessesEndpoint.test.ts`）。
+
+1. **声明**：`PUT /harnesses` 条目追加可选 `accounts: { methods: [{ id: slug, label: ≤64, kind: 'browser' | 'secret', secretLabel?: ≤64 }] ≤4 }`，
+   只在 `available: true` 时保留，且主 worker 为 `json-rpc-stdio` 时注册表才投影。`methods` 为空数组表示只报告原有登录的身份、不能添加账号；
+   至少一项表示支持多账号。形状错误、重复 id 按整份 400；本版不认识的 `kind` 跳过（新插件在旧 Host 上不丢其它方式），`secretLabel` 只随 `secret` 保留。
+   旧 Host 丢弃该字段，插件照旧单账号。
+2. **启动参数**：任务分到 Cindy 添加的账号时，`spawnHarness` 在既有参数后追加两项 `--cindy-account-dir <绝对路径>`。目录由 Host 建在
+   `owners/<账号>/plugin-engine-accounts/<插件实例>/<引擎 id>/<账号 id>/`，注册表核对它是这个引擎根目录下的一级子目录、引擎声明了登录方式，
+   否则拒绝启动；插件没有参数面。入口必须让外部 Agent 的登录、写入的设置与会话历史只用这个目录，做不到就写 stderr 并以非零状态退出，
+   不得回落到原有登录。与 `--cindy-remote-workspace` / `--cindy-guest-workspace` 可同时出现，分享模式的隔离以这个目录为来源。原有登录不带此参数。
+3. **worker 方法**（主 JSON-RPC worker，经 broker `handleRequest`；注册表调用前后复核实例、批准、可用状态与 owner）：
+   - `accountStatus({ harnessId, accountDir? })` → `null` 或 `{ state: 'signed-in' | 'signed-out', identity?: { email?: ≤254, name?: ≤80, detail?: ≤80 }, plan?: ≤64, fingerprint?: ≤128, models?: string[] ≤200 }`。
+     不带 `accountDir` 指原有登录。文字字段为不含控制字符的纯文本，形状不对的可选字段丢弃、不拒整份；`fingerprint` 只用于识别同一账号重复登录
+     （调度只计一次），不显示、不出 Main；`models` 缺省表示与引擎清单相同。26 秒超时。
+   - `accountLogin({ harnessId, accountDir?, methodId, secret? })` → `{ ok: true }` 或 `{ ok: false, error: 'cancelled' | 'timeout' | 'busy' | 'unsupported' | 'invalid-secret' | 'failed', message?: ≤200 }`；
+     不带 `accountDir` 是重新登录原有登录。以 broker 的「有动静就续期」调用：沉默窗口 60 秒、最长 11 分钟，浏览器登录等待期间 worker 要定期发进度或写 stderr。
+     `secret` 只在 `kind: 'secret'` 时出现（1–4096 字符）；只来自本机窗口的 Cindy 弹窗，经 Main 直接交给 worker，Cindy 不落盘、不进日志与模型；
+     device-link 带 `secret` 的命令一律 `PERMISSION_DENIED`，Helper 的工具参数没有这个字段。Host 在登录返回后再用 `accountStatus` 确认。
+   - `accountLoginCancel({ harnessId, accountDir? })` → `{ ok: true }`，结束对应的登录等待。
+   - 既有 `usage` 追加可选参数 `accountDir`（只发给声明了登录方式的引擎；旧插件收不到，避免把原有登录的用量当成每个账号的用量）；
+     窗口追加可选 `windowMinutes`（1–527040，窗口长度，用于按急迫度排序）与 `models`（该窗口只约束这些模型，缺省约束全部模型）。
+4. **错误类型**：入口在 `session/new`、`session/load`、`session/resume`、`session/prompt` 的 JSON-RPC 错误里可带
+   `error.data._meta.cindy = { kind: 'usage-limit' | 'auth-required' | 'overloaded', resetsAt?: 毫秒, model?: string }`。maker-core 把会话打开时的分类映射为
+   `AcpAccountError`（消息用 Cindy 稳定码 `[SUBSCRIPTION_ACCOUNT_LIMITED]` / `[SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED]`，并立即结束这个入口进程，让账号池能换下一个账号），
+   运行中的分类映射为终态错误字段 `usageLimit` + `usageResetAt` / reason `acp-auth-required` / `errorStatus: 529`。既有 `-32000` 仍按需要重新登录处理；
+   不认识的 `kind` 按普通错误处理；旧 Cindy 忽略 `data`。插件给的 `resetsAt` 是普通任务等重置后自动继续的唯一时间来源，不解析插件错误原文。
+5. **拿出的单独供应商**：`providerId` 为 `acp-plugin:<插件实例>:<引擎 id>~<8 位小写字母数字>`。引擎 id 不含 `~`，maker-core
+   `acpHarnessKeyFromProviderId` 与新版注册表据此拆出引擎；旧端按引擎键查不到而判为不可用，不会落到其他引擎或账号。
+   `maker:list-plugin-engines` 把它列为一项：`key` 为 `<引擎键>~<后缀>`，追加可选 `accountProviderOf`（所属引擎键），沿用引擎的模型与模式，
+   `remoteUse` 恒为不支持（不对其他电脑与分享开放）；显示名、隐藏、停用按自己的键存在 `plugin-engine-prefs.json`。
+6. **Device Link 与 IPC**：账号管理沿用既有 `maker:subscription-accounts`（账号命令的 `providerId` 接受插件引擎 id，任务账号的 `session` 读取仍只接受内置供应商，`add`/`login` 追加可选
+   `methodId`；视图追加可选 `pluginEngine`、账号用量 `usage.plugin`、`authIssue: 'account-mismatch'`）与推送 `subscription-accounts:changed`
+   （插件引擎的 providerId 也会出现，旧界面按不认识的 providerId 忽略）。旧执行电脑以 `INVALID_PARAMS` 拒绝插件引擎 id，控制端按不支持处理。
+   `maker:list-plugin-engines` 视图追加可选 `accounts`（登录方式，不含秘密）。`maker:get-plugin-engine-usage` 追加可选第二参数 `{ sessionId }`：
+   读该任务所绑账号的用量（本机窗口：未分配时为空）；device-link 调用（手机、同账号远控）带上时，执行电脑认识这个任务就读它所绑账号，
+   不认识就按原来的读法读引擎原有登录；旧 Host 忽略多余参数。
+   均为既有 invoke 帧与 channel 的可选字段或新取值，没有新 channel、relay 帧或 allowlist 变化，官方与自建中转原样转发，无需修改。
+7. **存储**（均按 Cindy 账号隔离）：`owners/<账号>/plugin-engine-accounts.json`（各引擎的账号设置、拿出的供应商与归属、任务与原生会话绑定）、
+   `owners/<账号>/plugin-engine-account-cooling.json`（与 `subscription-account-cooling.json` 同格式，单独存放：旧版写内置账号冷却会丢掉它不认识的键），
+   以及上面的账号目录。卸载插件时删除它引擎的账号设置、绑定与目录；停用保留。
+
+实现见 `packages/plugin-protocol/src/pluginHarnesses.ts`、`cindy-brain/pluginHarnesses.ts`、`nodeRuntimeBroker.ts`（`spawnHarness`）、
+maker-core `agents/acp/{protocol,session,acp-agent}.ts`、`main/plugin-engine-accounts/`（`store`、`runtime`、`agent`、`failover`）、
+`subscription-accounts/{commands,service,ipc}.ts`、`maker-ipc/pluginEnginesIpc.ts` 与 renderer `SubscriptionAccountsSection.tsx`、`PluginEngineSignIn.tsx`；
+回归见 `plugin-engine-accounts/__tests__/runtime.test.ts`、`pluginHarnesses.test.ts`、`ghostHarnessesEndpoint.test.ts`、maker-core `acp-session.test.ts`
+「account classification」「account the host picked」与 renderer `SubscriptionAccountsSection.test.tsx`「for plugin engines」。
 
 ## 插话（2026-11-22）
 

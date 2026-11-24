@@ -9,7 +9,7 @@ import { MAX_CONTROL_BYTES } from '@cindy/agent-net-protocol';
 import { shortDeviceRef } from '@cindy/device-link';
 import type { AgentNetSocketOptions } from './socket.js';
 import type { PeerRule } from './socketPorts.js';
-import { DRAIN_LOW_WATER_BYTES, type RelayRoute } from './types.js';
+import { DRAIN_LOW_WATER_BYTES, type PathPreference, type RelayRoute } from './types.js';
 import type { SessionConfig, SessionHandle } from './session/peer.js';
 import { WorkerSessions } from './session/workerSessions.js';
 
@@ -45,6 +45,8 @@ export type AgentNetAppSocket = Pick<import('./socket.js').AgentNetSocket,
     connectSession?(key: string): Promise<boolean>;
     /** See `PortableSocket.restrictPeers`. */
     restrictPeers?(rule: PeerRule): void;
+    /** Change a peer's local path preference (`auto` / `direct` / `relay`). */
+    setPeerPathPreference?(deviceId: string, preference: PathPreference): void;
   };
 export function workerClient(client: AgentNetClient) {
   return { base: client.base, identity: client.identity, certificate: client.certificate, rootPublicKey: client.rootPublicKey,
@@ -98,6 +100,9 @@ interface PeerStatus {
   available: boolean;
   path: 'direct' | 'relay' | null;
   rttMs: number | null;
+  directRttMs?: number | null;
+  relayRttMs?: number | null;
+  pathPreference?: PathPreference;
   dialing: boolean;
 }
 
@@ -107,7 +112,13 @@ function peerRoute(status: PeerStatus | undefined): 'direct' | 'relay' | 'connec
 }
 
 function peerRoutesChanged(previous: ReadonlyMap<string, PeerStatus>, next: ReadonlyMap<string, PeerStatus>): boolean {
-  for (const [id, status] of next) if (peerRoute(status) !== peerRoute(previous.get(id))) return true;
+  for (const [id, status] of next) {
+    const prev = previous.get(id);
+    if (peerRoute(status) !== peerRoute(prev)) return true;
+    if ((status.pathPreference ?? 'auto') !== (prev?.pathPreference ?? 'auto')) return true;
+    if ((status.directRttMs != null) !== (prev?.directRttMs != null)) return true;
+    if ((status.relayRttMs != null) !== (prev?.relayRttMs != null)) return true;
+  }
   for (const [id, status] of previous) if (!next.has(id) && peerRoute(status)) return true;
   return false;
 }
@@ -160,7 +171,7 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
       socket.worker.once('error', () => { finish(new Error('AGENT_NET_WORKER_FAILED')); socket.dispose(1006); });
       socket.worker.once('exit', () => { finish(new Error('AGENT_NET_WORKER_EXITED')); socket.dispose(1006); });
     });
-    const { onDirectory: _directory, onDelegationRequests: _requests, onDelegations: _grants, onPathChanged: _path, tap: _tap, client: _client, workerFile: _file, assertCurrent: _guard,
+    const { onDirectory: _directory, onDelegationRequests: _requests, onDelegations: _grants, onPathChanged: _path, onRelayReplaced, tap: _tap, client: _client, workerFile: _file, assertCurrent: _guard,
       log: _log, uplinkKeepalive: _keepalive, uplinkMaxQueueDelayMs: _queueDelay, networkChangeProbeMs: _probe, pathMoveLogIntervalMs: _moveLog, observeUdpTraffic, ...portable } = options;
     if (observeUdpTraffic) {
       // Only two integers cross the thread boundary. Sampling doesn't copy packets or post per-datagram messages.
@@ -169,7 +180,8 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
       const stop = observeUdpTraffic(() => ({ sent: Number(Atomics.load(bytes, 0)), received: Number(Atomics.load(bytes, 1)) }));
       socket.worker.once('exit', stop);
     }
-    socket.worker.postMessage({ type: 'init', options: portable, client: workerClient(options.client), tap: !!options.tap });
+    socket.worker.postMessage({ type: 'init', options: portable, client: workerClient(options.client), tap: !!options.tap,
+      reportRelayReplacements: !!onRelayReplaced });
     try { await ready; setImmediate(() => { if (!socket.closed) socket.emit('open'); }); return socket; }
     catch (error) { socket.dispose(1006); throw error; }
   }
@@ -187,12 +199,16 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
    */
   networkChanged(): void {
     if (this.closed) return;
-    for (const ws of this.network.values()) this.probeRelayConnection(ws);
+    for (const ws of this.network.values()) this.probeRelayConnection(ws, 'a network change');
     this.worker.postMessage({ type: 'network-changed' });
   }
   /** Session requests to a relayed peer timed out: let the transport judge whether relay UDP carries data (relayUdp.ts). */
   relayStalled(): void {
-    if (!this.closed) this.worker.postMessage({ type: 'relay-stalled' });
+    if (this.closed) return;
+    if (this.relayVia === 'websocket') {
+      for (const ws of this.network.values()) this.probeRelayConnection(ws, 'a relayed request timeout');
+    }
+    this.worker.postMessage({ type: 'relay-stalled' });
   }
   private readonly probing = new WeakSet<WebSocket>();
   /** Relay connections open now. The socket stays open without one (direct peers keep working); `relay` reports the change. */
@@ -202,6 +218,9 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
    * not the others, and phones get no pushes; it says so in its connection status (2026-11-17 review: it showed online).
    */
   relayConnected(): boolean { return this.relayOpen > 0; }
+  setDuplicateIdentityCooldown(active: boolean): void {
+    if (!this.closed) this.worker.postMessage({ type: 'duplicate-identity-cooldown', active });
+  }
   /**
    * The last ping round trip on a relay connection, in ms; null while none is open or before the first pong. The remote
    * connection page shows it as the relay's round trip while relayed datagrams use the WebSocket (2026-11-17: it was always
@@ -249,7 +268,7 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
     this.relayOpen = Math.max(0, this.relayOpen + delta);
     if (!this.closed && before !== this.relayOpen > 0) this.emit('relay', this.relayOpen > 0);
   }
-  private probeRelayConnection(ws: WebSocket): void {
+  private probeRelayConnection(ws: WebSocket, reason: string): void {
     if (typeof ws.ping !== 'function' || ws.readyState !== WebSocket.OPEN || this.probing.has(ws)) return;
     this.probing.add(ws);
     let answered = false;
@@ -258,7 +277,7 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
     const timer = setTimeout(() => {
       this.probing.delete(ws); ws.off('pong', pong);
       if (answered || this.closed || ws.readyState !== WebSocket.OPEN) return;
-      this.options.log?.warn('agent-net relay connection did not answer after a network change; reconnecting');
+      this.options.log?.warn(`agent-net relay connection did not answer after ${reason}; reconnecting`);
       ws.terminate();
     }, this.options.networkChangeProbeMs ?? AGENT_NET_NETWORK_CHANGE_PROBE_MS);
     (timer as { unref?: () => void }).unref?.();
@@ -266,6 +285,9 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
   }
   restrictPeers(rule: PeerRule): void {
     if (!this.closed) this.worker.postMessage({ type: 'restrict', rule: { allowed: rule.allowed && [...rule.allowed], refused: [...rule.refused] } });
+  }
+  setPeerPathPreference(deviceId: string, preference: PathPreference): void {
+    if (!this.closed) this.worker.postMessage({ type: 'set-peer-path-preference', deviceId, preference });
   }
   get bufferedAmount() { return this.queued + this.remoteQueued; }
   /** See PortableSocket.onDrain: fires when `bufferedAmount` falls back to DRAIN_LOW_WATER_BYTES after having been above. */
@@ -303,16 +325,38 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
   pathTo(id: string) { return this.status.get(this.sessions.device(id) ?? id)?.path ?? null; }
   peerSnapshot(id: string) {
     const status = this.status.get(this.sessions.device(id) ?? id);
-    return status?.path ? { path: status.path, rttMs: status.rttMs } : null;
+    return status?.path ? {
+      path: status.path,
+      rttMs: status.rttMs,
+      ...(status.directRttMs !== undefined ? { directRttMs: status.directRttMs } : {}),
+      ...(status.relayRttMs !== undefined ? { relayRttMs: status.relayRttMs } : {}),
+      ...(status.pathPreference !== undefined ? { pathPreference: status.pathPreference } : {}),
+    } : null;
   }
   /** Actual and in-progress transport routes to devices in this account's directory. */
-  peerRoutes(): Array<{ deviceId: string; path: 'direct' | 'relay' | 'connecting'; rttMs: number | null }> {
+  peerRoutes(): Array<{
+    deviceId: string;
+    path: 'direct' | 'relay' | 'connecting';
+    rttMs: number | null;
+    directRttMs?: number | null;
+    relayRttMs?: number | null;
+    pathPreference?: PathPreference;
+  }> {
     if (this.closed || this.closeTimer) return [];
     const routes = [];
     for (const [deviceId, status] of this.status) {
       if (deviceId === this.deviceId || !this.directory.has(deviceId)) continue;
       const path = peerRoute(status);
-      if (path) routes.push({ deviceId, path, rttMs: status.rttMs });
+      if (path) {
+        routes.push({
+          deviceId,
+          path,
+          rttMs: status.rttMs,
+          ...(status.directRttMs !== undefined ? { directRttMs: status.directRttMs } : {}),
+          ...(status.relayRttMs !== undefined ? { relayRttMs: status.relayRttMs } : {}),
+          ...(status.pathPreference !== undefined ? { pathPreference: status.pathPreference } : {}),
+        });
+      }
     }
     return routes;
   }
@@ -347,6 +391,7 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
       if (message.code) pending.reject(new Error(message.code)); else pending.resolve(); return;
     }
     if (message.type === 'closed') { this.dispose(message.code); return; }
+    if (message.type === 'relay-replaced') { this.options.onRelayReplaced?.(); return; }
     if (message.type === 'delegation-requests') { this.options.onDelegationRequests?.(message.requests); return; }
     if (message.type === 'delegations') {
       this.delegations = Array.isArray(message.delegations) ? message.delegations.filter((d: unknown): d is Delegation =>

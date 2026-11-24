@@ -1,3 +1,4 @@
+import { qualifiedCardPrKey } from '@cindy/maker-shared';
 import { DownloadImageMenuItem } from '@/components/chat/DownloadImageMenuItem';
 import { GhostCardSessionLink } from './GhostCardSessionLink';
 import { ghostCardSessionLinkId } from '@cindy/maker-shared/ghost-card-form';
@@ -435,7 +436,7 @@ function GhostCardCanvas({
       el.style.setProperty('display', 'inline-flex', 'important');
     });
     if (!prSlotKey) return;
-    setTaskAutoArchive(fillGhostCardPrStatus(doc, (key) => prStatusesRef.current.get(`github:github.com/${key}`) ?? prStatusesRef.current.get(key), t, taskArchiveEligible));
+    setTaskAutoArchive(fillGhostCardPrStatus(doc, (key) => prStatusesRef.current.get(qualifiedCardPrKey(key)!) ?? prStatusesRef.current.get(key), t, taskArchiveEligible));
     fillGhostCardTaskAutoArchiveHint(doc, taskArchiveEligible ? autoArchiveStateRef.current : 'inactive', {
       pending: t('chat.ghostCall.taskAutoArchivePending'),
       cancel: t('chat.ghostCall.taskAutoArchiveCancel'),
@@ -1017,7 +1018,7 @@ function GhostCardCanvas({
         }} /> : null}
       {/* Editable forms share a frame with their plugin-provided footer.
           Ordinary plugin posters keep their original transparent canvas. */}
-      <div className={formFields ? 'relative overflow-hidden rounded-b-xl border-t border-border' : 'relative overflow-hidden rounded-[10px]'}>
+      <div className={formFields ? 'relative overflow-hidden rounded-b-xl border-t border-border' : 'relative overflow-hidden rounded-xl'}>
         <iframe
           ref={iframeRef}
           sandbox="allow-same-origin"

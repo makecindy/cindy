@@ -224,6 +224,12 @@ Worker 权限是 **Worker 创建偏好**，与 Agent、模型、effort、Fast �
 仅不同仓库只读主任务的仓库源分支记忆，不反写；仓库身份按 canonical baseRepo 比较。
 工具省略 `source_branch` 时，同一仓库仍取目标目录当前分支；其他仓库先读仓库记忆。
 记忆读取失败或分支不存在时退回当前检出分支；显式源分支仍严格校验提交引用。
+源分支是 origin 默认分支（`refs/remotes/origin/main` 或 `origin/main`）时，创建前与桌面新建任务
+一样先在网络预算内拉取它，拉取失败时使用本地已有的远端跟踪引用。创建和记录均使用完整远端引用。
+Orca 工具的 `origin/<branch>` 简写在校验前展开为完整远端跟踪引用。探测默认分支只决定是否拉取，
+所选远端引用缺失时创建失败。桌面新建任务保留本地分支选择，刷新只接受完整远端引用。
+工具显式指定同名本地分支时用 `refs/heads/origin/main`。面板选择、仓库记忆与当前检出
+也会补全形如 `origin/main` 的本地分支引用，保留所选分支。
 工具结果的 `worktree_source` 写明实际源分支、来源与记忆回退原因。旧 Host 缺少读取能力时，
 面板也使用当前分支，不新增远程协议或 relay 恢复行为。
 
@@ -738,6 +744,11 @@ Worker turn 被 vendor 报终止型 error，但 interrupted-turn auto-resume 仍
       继续就向同一个 Worker `send_to_worker`，用量上限或模型不可用时先用 `cindy_orca` 的
       `set_worker_runtime` 给它换路线（坑点 #6 的发送边界切换，运行设备 Worker 不适用）；归档重建会丢上下文。它是回报正文的一部分（用户在 Lead 对话里也看得到），不进系统提示词。
       Worker 的用量上限仍不走普通任务的等待续跑（`isUsageLimitAutoResumeEligible`），由 Lead 决定。
+    - **直投派活明确失败时用户可以手动继续（2026-11-24）**：起因是一个 Worker 的直投派活撞上
+      5 小时用量上限，错误横幅既没有「重试」也没有「继续」——直投派活不经队列，明确错误（非意外中断）
+      落到无 active turn 的收尾，既不留重试记录也不标可续跑。现在同一回执（实例、轮次一致、未被用户停止、
+      队列空闲）遇到明确错误时只把投影标为 `errorCanContinue`：Desktop 与 Mobile 的横幅照常出现按钮，
+      点了发隐藏的续跑指令，不重放 Lead 的原派活，也不启动用量上限的等待续跑。
     - **换好的路线在派活时先落地（2026-11-17）**：起因是四个撞了 Claude 订阅上限的 Worker，Lead 已用
       `set_session_runtime` 登记新来源（`next_send`），`send_to_worker` 却回 `[SUBSCRIPTION_ACCOUNT_LIMITED]`：
       休眠的 Worker 在派发前先按数据库里的旧路线唤醒（`resumeWorkerSession`），撞上旧订阅的上限，登记的

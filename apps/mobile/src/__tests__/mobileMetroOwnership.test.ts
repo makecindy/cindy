@@ -1,6 +1,6 @@
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { metroEnvironmentFingerprint, probeMetroOwnership, windowsProcessSnapshot } from '../../scripts/sim-metro.mjs';
+import { metroEnvironmentFingerprint, probeMetroOwnership, reapOrphanMetros, windowsProcessSnapshot } from '../../scripts/sim-metro.mjs';
 import { classifySimMetroListener, inspectSimMetroIdentity, resolveSimMetroHandoff } from '../../scripts/lib/sim-whoami.mjs';
 
 const worktreeRoot = join('/worktrees', 'metro-owner');
@@ -188,4 +188,46 @@ it('rejects a non-Metro Unix listener before trusting persisted owner metadata',
     platform: 'darwin', listenerPid: () => '300', isMetroPid: () => false, readOwner,
   })).toEqual({ pid: '300', cwd: null, source: null });
   expect(readOwner).not.toHaveBeenCalled();
+});
+
+
+// PR #12199: a stale custom port could survive worktree removal. Existing
+// termination tests start after authorization, so this unit matrix exercises
+// the production sweep and changes one ownership observation at a time.
+describe('reapOrphanMetros', () => {
+  it.each([
+    ['matching orphan', true],
+    ['live checkout', false],
+    ['different source', false],
+    ['different parent', false],
+    ['replaced listener', false],
+  ] as const)('handles a custom port with %s', async (scenario, shouldStop) => {
+    const root = resolve('fixtures', 'metro-worktree');
+    const terminate = vi.fn(async (_pid: string | number, _options?: object) => true);
+    const port = 49235;
+    const listenerPid = 300;
+    const record = {
+      pid: 100, worktreeRoot: root, source: 'branch@commit', recordedAtMs: 1500,
+    };
+
+    await reapOrphanMetros({
+      platform: 'darwin',
+      readDirectory: () => [`port-${port}.json`],
+      stat: () => {
+        if (scenario === 'live checkout') return;
+        throw Object.assign(new Error('missing checkout'), { code: 'ENOENT' });
+      },
+      readOwner: (calledPort: number) => calledPort === port ? record : null,
+      probe: (calledPort: number) => calledPort === port ? {
+        pid: listenerPid,
+        cwd: join(root, 'apps', 'mobile'),
+        source: scenario === 'different source' ? 'other@commit' : record.source,
+      } : null,
+      readParentPid: () => scenario === 'different parent' ? 200 : 100,
+      findListener: () => scenario === 'replaced listener' ? '301' : String(listenerPid),
+      terminate,
+    });
+
+    expect(terminate.mock.calls).toEqual(shouldStop ? [[listenerPid, { worktreeRoot: root }]] : []);
+  });
 });

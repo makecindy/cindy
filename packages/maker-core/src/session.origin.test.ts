@@ -2097,24 +2097,36 @@ describe('Session host event-stream hold', () => {
   });
 
   it('stops waiting after the hold limit and still delivers the provider done', async () => {
+    const holdMs = 1;
     const h = createControllableHandle();
-    const session = makeHoldSession(h.handle, 1);
+    const session = makeHoldSession(h.handle, holdMs);
     const pending = deferred<readonly AgentEvent[]>();
+    const holdAccepted = deferred<boolean>();
     const seen: AgentEvent[] = [];
     session.onEvent((event) => {
       seen.push(event);
-      if (event.type === 'image') session.holdEventStream(pending.promise);
+      if (event.type === 'image') holdAccepted.resolve(session.holdEventStream(pending.promise));
     });
 
-    await session.send('draw it');
-    h.queue(imageEvent);
-    h.queue({ type: 'done', data: {} });
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    pending.resolve(followUps);
-    await flush();
+    vi.useFakeTimers();
+    try {
+      await session.send('draw it');
+      h.queue(imageEvent);
+      h.queue({ type: 'done', data: {} });
+      // Enqueueing the image does not start the hold. Wait for its listener first.
+      expect(await holdAccepted.promise).toBe(true);
+      expect(seen.map((event) => event.type)).toEqual(['image']);
 
-    expect(seen.map((event) => event.type)).toEqual(['image', 'done']);
-    await session.close();
+      await vi.advanceTimersByTimeAsync(holdMs);
+      expect(seen.map((event) => event.type)).toEqual(['image', 'done']);
+
+      pending.resolve(followUps);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(seen.map((event) => event.type)).toEqual(['image', 'done']);
+    } finally {
+      vi.useRealTimers();
+      await session.close();
+    }
   });
 
   it('keeps send admission fenced until the held turn done is consumed', async () => {

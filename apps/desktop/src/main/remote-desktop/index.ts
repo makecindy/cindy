@@ -12,7 +12,10 @@ import {
   type WebContents,
   type DesktopCapturerSource,
 } from 'electron';
+import { macPermissionAppPath } from '../../shared/macControlPermission.js';
 import { randomUUID } from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { readdirSync } from 'node:fs';
 import { release as osRelease } from 'node:os';
 import { createLogger } from '../logger';
@@ -110,7 +113,7 @@ import {
   readDesktopDisplayModes,
   isEditableDesktopPoint,
   setDesktopDisplayMode,
-  readDesktopInputPermission,
+  readDesktopInputAccess,
   resolveDesktopInputBinary,
   readDesktopLockState,
   lockDesktopScreen,
@@ -125,32 +128,44 @@ import {
 } from '../computer-permission-guide/request';
 
 const log = createLogger('remote-desktop');
+const runMacOpen = promisify(execFile);
 
+// Local settings only: why remote keyboard and mouse are still missing on
+// macOS 27.3 when the person allowed Cindy to control chosen apps only.
+let inputChosenAppsOnly = false;
 const permissions = new RemoteDesktopPermissionsService({
   required: process.platform === 'darwin',
   screen: () => {
     const status = systemPreferences.getMediaAccessStatus('screen');
     return status === 'granted' ? 'granted' : status === 'unknown' ? 'unknown' : 'missing';
   },
-  accessibility: readDesktopInputPermission,
-  request: async (permission, isCurrent, signal) => {
-    if (permission === 'accessibility') await requestDesktopInputPermission(isCurrent, signal);
-    else
-      await enumerateDesktopSources(
-        () =>
-          desktopCapturer.getSources({
-            types: ['screen'],
-            thumbnailSize: { width: 0, height: 0 },
-          }),
-        REMOTE_DESKTOP_OFFER_BUDGET.sourcesMs,
-      );
+  accessibility: async () => {
+    const access = await readDesktopInputAccess('postEvents');
+    inputChosenAppsOnly = access.chosenAppsOnly === true;
+    return access.status;
   },
-  openSettings: (permission) =>
-    shell.openExternal(
-      permission === 'screenRecording'
-        ? MAC_SCREEN_RECORDING_SETTINGS_URL
-        : MAC_ACCESSIBILITY_SETTINGS_URL,
-    ),
+  request: async (permission, isCurrent, signal) => {
+    if (permission === 'accessibility') return requestDesktopInputPermission(isCurrent, signal, 'postEvents');
+    await enumerateDesktopSources(
+      () =>
+        desktopCapturer.getSources({
+          types: ['screen'],
+          thumbnailSize: { width: 0, height: 0 },
+        }),
+      REMOTE_DESKTOP_OFFER_BUDGET.sourcesMs,
+    );
+    return systemPreferences.getMediaAccessStatus('screen') === 'granted';
+  },
+  openSettings: async (permission, separateWindow) => {
+    const url = permission === 'screenRecording' ? MAC_SCREEN_RECORDING_SETTINGS_URL : MAC_ACCESSIBILITY_SETTINGS_URL;
+    if (separateWindow) {
+      // Open a separate system-owned settings window without interacting with
+      // another pane's pending edits. Fixed app and URL, no shell interpolation.
+      await runMacOpen('/usr/bin/open', ['-n', '-b', 'com.apple.systempreferences', url], { timeout: 5000 });
+      return;
+    }
+    await shell.openExternal(url);
+  },
   showGuide: () => {
     const window = getDeepLinkMainWindow();
     if (window && !window.isDestroyed()) {
@@ -1488,9 +1503,18 @@ export function registerRemoteDesktopIpc(
       await permissions.showIfNeeded(() => readDeviceLinkSettings().remoteDesktopEnabled);
     }
   });
-  ipcMain.handle(DESKTOP_LOCAL.PERMISSIONS, (event) => {
+  ipcMain.handle(DESKTOP_LOCAL.PERMISSIONS, async (event) => {
     assertTrustedAppRendererEvent(event);
-    return permissions.read();
+    const status = await permissions.read();
+    // Finder can distinguish identically named official and personal installs.
+    // Never attach this local path to device-link permission replies.
+    const bundle = macPermissionAppPath(process.platform, process.execPath);
+    return {
+      ...status,
+      ...(bundle ? { appBundlePath: bundle } : {}),
+      ...(status.accessibility === 'missing' && inputChosenAppsOnly ? { accessibilityChosenAppsOnly: true } : {}),
+      separateWindowRetries: permissions.separateWindowRetries,
+    };
   });
   ipcMain.handle(DESKTOP_LOCAL.OPEN_PERMISSION, (event, permission: unknown) => {
     assertTrustedAppRendererEvent(event);

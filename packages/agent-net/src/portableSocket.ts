@@ -6,10 +6,10 @@ import {
   SHARED_TASK_RELAY_CAPABILITY, PROVIDER_SHARE_RELAY_CAPABILITY,
   type Envelope, type HelloPayload, type PresenceSnapshot,
 } from '@cindy/device-link-protocol';
-import type { WsLike } from '@cindy/device-link';
+import { computeDuplicateIdentityCooldownMs, type WsLike } from '@cindy/device-link';
 import { CERT_LIFETIME_MS, delegationEndpointCertificate, delegationVisibleTo, type Delegation, type DeviceView } from '@cindy/agent-net-protocol';
 import { frameMatchesDelegation, scopedFrame, delegatedPeerKey, delegatedPeerTarget, type ScopedPeerTarget } from './scopedRoutes.js';
-import { AGENT_NET_SESSION_V2, DRAIN_LOW_WATER_BYTES, MAX_CHANNEL_PENDING_BYTES, type PeerChannel, type RelayRoute, type RosterEntry, type SessionWire, type Transport } from './types.js';
+import { AGENT_NET_SESSION_V2, DRAIN_LOW_WATER_BYTES, MAX_CHANNEL_PENDING_BYTES, type PathPreference, type PeerChannel, type RelayRoute, type RosterEntry, type SessionWire, type Transport } from './types.js';
 import { SessionPeer, type SessionConfig, type SessionRole } from './session/peer.js';
 export type { SessionHandlers } from './session/peer.js';
 
@@ -147,10 +147,14 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
   private reconnect: ReturnType<typeof setTimeout> | null = null;
   private generation = 0;
   private retryMs = 500;
+  private duplicateIdentityCooldown = false;
+  private replacementStreak = 0;
+  private replacedReconnectUntil = 0;
   private rosterValidUntil = 0;
   private lan: SocketDiscovery | null = null;
   private lanCandidates = new Map<string, { address: string; port: number }>();
   private readonly rememberedCandidates = new Set<string>();
+  private readonly peerPathPreferences = new Map<string, PathPreference>();
   private openingRelay: Promise<void> | null = null;
   private directoryRevision = 0;
   private directoryRefresh: ReturnType<typeof setInterval> | undefined;
@@ -164,6 +168,11 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     const socket = new this(options);
     socket.rosterValidUntil = options.directoryExpiresAt ?? 0;
     if (options.peerRule) socket.peerRule = peerRuleOf(options.peerRule);
+    if (options.initialPeerPathPreferences) {
+      for (const [id, pref] of Object.entries(options.initialPeerPathPreferences)) {
+        if (pref === 'direct' || pref === 'relay') socket.peerPathPreferences.set(id, pref);
+      }
+    }
     // A cached online bit is not current liveness. Wait for authenticated
     // discovery instead of occupying the first cold-start dial with a dead relay.
     socket.updateDirectory((options.cachedDirectory ?? []).map(view => ({ ...view, online: false })), false);
@@ -449,11 +458,26 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
   pathTo(deviceId: string): 'direct' | 'relay' | null { return this.peers.get(this.sessionDevice(deviceId) ?? deviceId)?.channel.path?.() ?? null; }
   /** A local dial can be in progress even when the cached directory marks the peer offline. */
   isDialing(deviceId: string): boolean { return this.dialing.has(deviceId) && this.authorized(deviceId); }
-  peerSnapshot(deviceId: string): { path: 'direct' | 'relay'; rttMs: number | null } | null {
-    const channel = this.peers.get(this.sessionDevice(deviceId) ?? deviceId)?.channel, path = channel?.path?.();
+  peerSnapshot(deviceId: string): { path: 'direct' | 'relay'; rttMs: number | null; directRttMs?: number | null; relayRttMs?: number | null; pathPreference?: PathPreference } | null {
+    const resolvedId = this.sessionDevice(deviceId) ?? deviceId;
+    const channel = this.peers.get(resolvedId)?.channel, path = channel?.path?.();
     if (!channel || !path) return null;
     const rtt = channel.stats?.()?.srttUs;
-    return { path, rttMs: typeof rtt === 'number' && rtt > 0 ? rtt / 1000 : null };
+    const metrics = channel.pathMetrics?.();
+    return {
+      path,
+      rttMs: typeof rtt === 'number' && rtt > 0 ? rtt / 1000 : null,
+      ...(metrics ? {
+        directRttMs: metrics.directRttMs,
+        relayRttMs: metrics.relayRttMs,
+        pathPreference: this.peerPathPreferences.get(resolvedId) ?? metrics.preference,
+      } : {}),
+    };
+  }
+  setPeerPathPreference(deviceId: string, preference: PathPreference): void {
+    if (preference === 'auto') this.peerPathPreferences.delete(deviceId);
+    else this.peerPathPreferences.set(deviceId, preference);
+    this.peers.get(deviceId)?.channel.setPathPreference?.(preference);
   }
   async dial(deviceId: string): Promise<void> {
     if (this.closed || this.peers.has(deviceId)) return;
@@ -478,7 +502,15 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
         return this.transport.connect({ id: entry.id, dial: { relayId: deviceId } });
       }
     };
-    const dialing = connect().then((channel) => this.adopt(channel, true));
+    const uplink = this.uplink;
+    const dialing = connect().then((channel) => this.adopt(channel, true), error => {
+      // A lost relay may prevent even the first session. Only test the original
+      // socket, once per probe window; an offline peer alone cannot close it.
+      if (!this.closed && uplink === this.uplink && this.roster.get(deviceId)?.online && !this.peers.has(deviceId)) {
+        uplink?.probeRelay?.();
+      }
+      throw error;
+    });
     this.dialing.set(deviceId, dialing);
     try { await dialing; } finally { if (this.dialing.get(deviceId) === dialing) this.dialing.delete(deviceId); }
   }
@@ -693,7 +725,9 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
   }
   /** Session requests to a relayed peer timed out (see Transport.relayStalled). */
   relayStalled(): void {
-    if (!this.closed) this.transport?.relayStalled?.();
+    if (this.closed) return;
+    this.transport?.relayStalled?.();
+    if (this.transport?.relayRoute?.()?.via !== 'udp') this.uplink?.probeRelay?.();
   }
   /**
    * This device's own route changed (the phone: Wi-Fi ↔ cellular, lost and back). Besides `networkChanged`, the relay
@@ -715,6 +749,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
   /** Connects the relay now instead of after the backoff; without `force` an attempt already in flight is kept. */
   private reconnectRelayNow(force: boolean): void {
     this.resendWhenRelayBack = true;
+    if (Date.now() < this.replacedReconnectUntil) return;
     if (!force && !this.reconnect) return;
     if (this.reconnect) { clearTimeout(this.reconnect); this.reconnect = null; }
     const attempt = this.connectRelay(), generation = this.generation;
@@ -725,6 +760,13 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
   relayRoute(): RelayRoute | null { return this.closed ? null : this.transport?.relayRoute?.() ?? null; }
   /** Whether the relay WebSocket is currently up; false while offline or after an upgrade rejection fell back to cached directory. */
   relayConnected(): boolean { return !this.closed && this.uplink !== null; }
+  setDuplicateIdentityCooldown(active: boolean): void {
+    this.duplicateIdentityCooldown = active;
+    if (!active) {
+      this.replacementStreak = 0;
+      this.replacedReconnectUntil = 0;
+    }
+  }
   /** Resolves once the background initial relay connection attempt (`deferRelay`) finishes. */
   whenInitialRelaySettled(): Promise<void> { return this.openingRelay ?? Promise.resolve(); }
   /**
@@ -759,6 +801,8 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     if (this.closed || generation !== this.generation) { uplink.close(); return; }
     this.openingRelay = null;
     this.uplink = uplink; this.retryMs = 500;
+    this.replacedReconnectUntil = 0;
+    const connectedAt = Date.now();
     if (this.resendWhenRelayBack) { this.resendWhenRelayBack = false; this.transport?.networkChanged?.(); }
     this.updateDirectory(uplink.devices, true, uplink.delegations ?? []);
     this.options.onDelegationRequests?.(uplink.delegationRequests ?? []);
@@ -771,6 +815,14 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
       if (this.uplink !== uplink || this.closed) return;
       this.uplink = null;
       if ([4410, 4401, 4403].includes(code)) { this.closeOnIdentityRefusal('AGENT_NET_CLOSED_' + code); return; }
+      if (code === 4409) {
+        this.options.onRelayReplaced?.();
+        if (this.duplicateIdentityCooldown) {
+          if (Date.now() - connectedAt >= 5 * 60_000) this.replacementStreak = 0;
+          const floor = computeDuplicateIdentityCooldownMs({ streak: ++this.replacementStreak, baseMs: 5_000, maxMs: 60_000 });
+          this.replacedReconnectUntil = Date.now() + Math.round(floor * (0.7 + Math.random() * 0.3));
+        }
+      }
       this.acknowledgeHello();
       // Existing direct connections remain alive; loss of one relay does not tear down the app socket.
       this.scheduleReconnect();
@@ -796,7 +848,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
       // Another attempt (a network change) may have connected meanwhile.
       if (this.uplink) return;
       void this.connectRelay().catch(() => this.scheduleReconnect());
-    }, this.retryMs);
+    }, Math.max(this.retryMs, this.replacedReconnectUntil - Date.now()));
     unrefTimer(this.reconnect); this.retryMs = Math.min(15_000, this.retryMs * 2);
   }
   send(text: string): void {
@@ -920,6 +972,8 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     }
     const peer: Peer = { deviceId, key: channel.remoteId, channel, outbound, since: now };
     this.peers.set(deviceId, peer); previous?.channel.close();
+    const savedPreference = this.peerPathPreferences.get(deviceId);
+    if (savedPreference) channel.setPathPreference?.(savedPreference);
     const frames = new Frames();
     channel.onData((bytes) => {
       // The replaced, authenticated channel still drains already-written RPCs.

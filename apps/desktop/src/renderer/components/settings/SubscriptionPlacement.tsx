@@ -142,12 +142,16 @@ export function useMoveSubscriptionAccount(providerId: string, onDone?: () => vo
 /** A provider's 「并入其他供应商…」 button: every account moves into the chosen provider. */
 export function MergeProviderButton({
   kind,
+  targets: givenTargets,
   providerId,
   providerName,
   disabled,
   onDone,
 }: {
-  kind: SubscriptionProvider;
+  /** Built-in pools: targets are the connected providers of this kind. */
+  kind?: SubscriptionProvider;
+  /** Plugin engines (2026-11-23): the other providers of the same engine. */
+  targets?: readonly PlacementTarget[];
   providerId: string;
   providerName: string;
   disabled?: boolean;
@@ -155,7 +159,8 @@ export function MergeProviderButton({
 }) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
-  const targets = useSubscriptionPlacementTargets(kind, providerId);
+  const loadedTargets = useSubscriptionPlacementTargets(givenTargets ? null : kind ?? null, providerId);
+  const targets = givenTargets ?? loadedTargets;
   if (targets.length === 0) return null;
   const merge = async (target: PlacementTarget) => {
     const ok = await confirm({
