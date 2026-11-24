@@ -468,6 +468,15 @@ export function findLatestRebuildableError(
   return null;
 }
 
+function hasPersistedFollowupAfterError(messages: OverflowSourceMessage[]): boolean {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (message?.role === 'error') return false;
+    if (message?.role === 'user' && !isSyntheticUser(message)) return true;
+  }
+  return false;
+}
+
 export interface ContextOverflowRolloverDeps {
   /** Confirmed send_to_session route of the session about to be replayed; sampled before close. */
   sendToSessionHint?(sessionId: string): AgentSendToSessionHint | undefined;
@@ -1247,14 +1256,11 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     // An explicit Pi Retry reuses the failed native transcript entry so Pi can
     // perform its one-shot native compact. Only a later, newly persisted user
     // message is the short-follow-up path that needs Cindy's handoff rebuild.
-    const hasFollowupAfterRawPi413 = sendContext?.hasPendingFollowup === true ||
-      (sendContext?.isExplicitRetry !== true && sessionRow.agentKind === 'pi' && source.some((message, index) =>
-        message.role === 'user' && source.slice(0, index).some(previous =>
-          previous.role === 'error' && isPiRequestBodyTooLargeErrorData(errorContentToData(previous.content))),
-      ));
-    const piByteRecoveryFailed = sessionRow.agentKind === 'pi'
-      && (isPiRequestBodyRecoveryExhausted(lastError)
-        || (isPiRequestBodyTooLargeErrorData(lastError) && hasFollowupAfterRawPi413));
+    const rawPi413 = sessionRow.agentKind === 'pi' && isPiRequestBodyTooLargeErrorData(lastError);
+    const hasFollowupAfterRawPi413 = rawPi413 && sendContext?.isExplicitRetry !== true &&
+      (sendContext?.hasPendingFollowup === true || hasPersistedFollowupAfterError(source));
+    const piByteRecoveryFailed = sessionRow.agentKind === 'pi' &&
+      (isPiRequestBodyRecoveryExhausted(lastError) || hasFollowupAfterRawPi413);
     const tokenViolated =
       isContextOverflowErrorData(lastError, sessionRow.agentKind) ||
       isPiPromptRpcTimeoutError(lastError) ||
@@ -1292,10 +1298,11 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     // 待发出/失败的 user 还会由本次 send 或 Retry 再 wire 一次，交接里不能带。
     // 已完成的最后一轮（后面有非 error）要留在交接里。
     // lastUser 若不在 handoff 窗口里（index < 0），窗口全是其后的 tool/assistant，算已完成。
+    const keepFailedPiRequest = piByteRecoveryFailed && sendContext?.hasPendingFollowup === true;
     const pendingOutbound =
       lastUserIndex >= 0 &&
       source.slice(lastUserIndex + 1).every((message) => message.role === 'error') &&
-      sendContext?.hasPendingFollowup !== true;
+      !keepFailedPiRequest;
     const handoffGeneration = deps.readPendingHandoffGeneration?.(sessionId);
     const replaySource = await deps.listReplayMessages?.(sessionId) ?? source;
     const pendingIndex = pendingOutbound
