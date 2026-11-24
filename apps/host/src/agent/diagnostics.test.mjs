@@ -14,7 +14,7 @@
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -141,39 +141,80 @@ function startFake(t, recorded, script, name) {
     });
     child.once('exit', code => reject(new Error(`${name} exited early (${code})`)));
   });
-  return { pid: child.pid, facts, ready };
+  return { child, pid: child.pid, facts, ready };
 }
 
-test('Host exit reaps only the tool trees below the Host\'s own registered app-servers', { skip: process.platform === 'win32', timeout: TEST_TIMEOUT_MS }, async t => {
-  t = lifoCleanup(t);
-  const graph = buildGraph(t, 'diagnostics-reaper');
-  // Every process this test starts, by the PID recorded when it started; nothing else is stopped.
-  const recorded = new Set();
-  t.after(() => {
-    for (const pid of recorded) { try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ } }
-  });
-  const registered = startFake(t, recorded, appServerScript, 'fake-codex-app-server');
-  // The same command and name, never registered.
-  const sameName = startFake(t, recorded, appServerScript, 'fake-codex-app-server');
-  // Registered, but a grandchild of this process (as a reused PID would be).
-  const notChild = startFake(t, recorded, intermediateScript, 'fake-codex-intermediate');
-  await Promise.all([registered.ready, sameName.ready, notChild.ready]);
+// Inspect only the PIDs created by this fixture. No name or synthetic PPID grants ownership.
+function scopedFixtureSampler(recorded, fullTimesOut, calls) {
+  const ps = process.env.CINDY_TEST_CODEX_REAPER_PS
+    ?? (process.platform === 'darwin' || fs.existsSync('/bin/ps') ? '/bin/ps' : '/usr/bin/ps');
+  assert.ok(path.isAbsolute(ps));
+  return (query, timeout) => {
+    calls.push(query.kind);
+    if (query.kind === 'all' && fullTimesOut) {
+      return { stdout: '', status: null, signal: 'SIGKILL',
+        error: Object.assign(new Error('fixture full process scan timed out'), { code: 'ETIMEDOUT' }) };
+    }
+    const pids = query.kind === 'parents' ? query.pids : [...recorded];
+    assert.ok(pids.every(pid => recorded.has(pid)));
+    const result = spawnSync(ps, ['-p', pids.join(','), '-o', 'pid=,ppid='], { encoding: 'utf8', timeout });
+    if (query.kind !== 'children' || result.status !== 0 || result.error) return result;
+    const stdout = result.stdout.trim().split(/\r?\n/).map(line => line.trim().split(/\s+/).map(Number))
+      .filter(([, parent]) => parent === query.parentPid).map(([pid]) => pid).join('\n');
+    return { ...result, stdout };
+  };
+}
 
-  const disposers = [
-    graph.codex.deps.registerLocalCodexAppServerProcess({ pid: registered.pid, role: 'task-host' }),
-    graph.codex.deps.registerLocalCodexAppServerProcess({ pid: notChild.facts.server, role: 'task-host' }),
-  ];
-  t.after(() => { for (const dispose of disposers) dispose(); });
+for (const [mode, fullTimesOut] of [['scoped fixture', false], ['full scan times out', true], ['native process table', false]]) {
+  test('Host exit reaps only tools with a proven app-server owner: ' + mode,
+    { skip: process.platform === 'win32', timeout: TEST_TIMEOUT_MS }, async t => {
+      t = lifoCleanup(t);
+      const graph = buildGraph(t, 'diagnostics-reaper');
+      const recorded = new Set();
+      t.after(() => {
+        for (const pid of recorded) { try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ } }
+      });
+      const registered = startFake(t, recorded, appServerScript, 'fake-codex-app-server');
+      const native = mode === 'native process table';
+      const other = native ? [] : [
+        startFake(t, recorded, appServerScript, 'fake-codex-app-server'), // unregistered with the same name
+        startFake(t, recorded, appServerScript, 'fake-codex-app-server'), // registered by PID only
+        startFake(t, recorded, intermediateScript, 'fake-codex-intermediate'), // not a direct child
+      ];
+      await Promise.all([registered, ...other].map(app => app.ready));
+      const register = graph.codex.deps.registerLocalCodexAppServerProcess;
+      const disposers = [register({ pid: registered.pid, child: registered.child, role: 'task-host' })];
+      if (!native) {
+        const [, legacy, notChild] = other;
+        disposers.push(register({ pid: legacy.pid, role: 'task-host' }));
+        disposers.push(register({ pid: notChild.facts.server, child: notChild.child, role: 'task-host' }));
+        assert.ok(listCodexProcessPids().includes(legacy.pid));
+        assert.ok(listCodexProcessPids().includes(notChild.facts.server));
+      }
+      t.after(() => { for (const dispose of disposers) dispose?.(); });
 
-  const result = reapCodexToolTreesSync();
-  assert.equal(result.appServers, 1);
-  assert.equal(result.killedToolTrees, 1);
-  await until(() => !alive(registered.facts.tool) && !alive(registered.facts.grand), 'registered tool tree reaped');
-  // The app-server itself is left to its graceful close, as on the desktop.
-  assert.equal(alive(registered.pid), true);
-  for (const pid of [sameName.pid, sameName.facts.tool, sameName.facts.grand,
-    notChild.pid, notChild.facts.server, notChild.facts.tool, notChild.facts.grand]) {
-    assert.equal(alive(pid), true, `pid ${pid} untouched`);
-  }
-});
+      const calls = [];
+      // The native gate requires a process-table-permitted environment, as does the application.
+      const result = reapCodexToolTreesSync(native ? undefined : scopedFixtureSampler(recorded, fullTimesOut, calls));
+      assert.equal(result.appServers, 1);
+      assert.equal(result.killedToolTrees, 1);
+      assert.equal(result.scanFailed, fullTimesOut);
+      assert.equal(result.fallbackUsed, fullTimesOut);
+      assert.equal(result.unreapedAppServers, native ? 0 : 2);
+      if (!native) {
+        assert.equal(calls[0], 'all');
+        assert.equal(calls.includes('children'), fullTimesOut);
+        assert.equal(calls.filter(call => call === 'parents').length, 2);
+      }
+      await until(() => !alive(registered.facts.tool) && !alive(registered.facts.grand), 'registered tools received the real signal');
+      recorded.delete(registered.facts.tool);
+      recorded.delete(registered.facts.grand);
+      assert.equal(alive(registered.pid), true, 'app-server remains eligible for the usual graceful close');
+      for (const fixture of other) {
+        for (const pid of [fixture.pid, ...Object.values(fixture.facts)]) {
+          assert.equal(alive(pid), true, 'the different or unproved tree must be untouched');
+        }
+      }
+    });
+}
 

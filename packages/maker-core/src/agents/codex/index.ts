@@ -2017,7 +2017,7 @@ export class CodexAgent extends BaseAgent {
             ...(this.deps.disableCodexPluginRuntime ? ['--disable', 'plugins', '--disable', 'remote_plugin'] : []),
             '-c', 'cli_auth_credentials_store="ephemeral"',
           ],
-          onProcessSpawned: (pid) => this.deps.registerLocalCodexAppServerProcess?.({ pid, role: 'control-plane-service' }),
+          onProcessSpawned: (pid, child) => this.deps.registerLocalCodexAppServerProcess?.({ pid, child, role: 'control-plane-service' }),
         }),
         requireEphemeralAuth: true,
         logger: this.deps.logger,
@@ -3398,8 +3398,8 @@ assertRouteCurrent();
           : extraArgs,
         // 必须把注销函数交回 transport：进程退出后登记要随之移除，
         // 退出回收（codex-tool-tree-reaper）据此认领 PID，残留登记遇 PID 复用会误杀。
-        onProcessSpawned: (pid) => this.deps.registerLocalCodexAppServerProcess?.({
-          pid,
+        onProcessSpawned: (pid, child) => this.deps.registerLocalCodexAppServerProcess?.({
+          pid, child,
           role:
             hostPurpose === 'control-plane'
               ? 'control-plane-service'
