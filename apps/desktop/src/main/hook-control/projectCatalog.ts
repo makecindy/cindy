@@ -10,7 +10,7 @@ import path from 'node:path';
 
 import { desc, inArray } from 'drizzle-orm';
 import { BrowserWindow } from 'electron';
-import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
+import { isTeammateProjectPath, teammateFolderName } from '@cindy/maker-shared/teammate-project';
 
 import { getActiveDataOwnerPushStamp, isAppSessionBoundaryPending, ownerScopedUserDataPath } from '../appSessionState.js';
 import { tryGetDbClient } from '../localDb/client/current.js';
@@ -18,6 +18,7 @@ import { listProjectAliases } from '../localDb/ipc/projectAliases.js';
 import { upsertRecentWorkdir } from '../localDb/ipc/recentWorkdirs.js';
 import { companionHomes } from '../companion-cloud/homes.js';
 import { workingDirComparisonKey } from '../../shared/workingDir.js';
+import { teammateWorkspaceDir } from '../maker-ipc/botProjectMemory.js';
 import { botProfiles, recentWorkdirs } from '../localDb/schema.js';
 import {
   validateExistingLocalProjectDirectory,
@@ -31,8 +32,26 @@ import type { ProjectCatalogSnapshot } from './projectWorkspaceSync.js';
 const identity = (directory: string): string | null =>
   projectKeyComparisonKey(`local:${directory}`, process.platform);
 
+/** A saved mapping can outlive a home change. Check the directory, including task worktrees,
+ * against the current registry even while the debounced catalogue sync is pending. */
+export function isImProjectDirectoryAvailable(directory: string): boolean {
+  const homes = companionHomes.snapshot();
+  if (!homes.enabled && !homes.demotedBotIds.length) return true;
+  const relative = path.relative(path.join(ownerScopedUserDataPath(), 'bots'), directory);
+  const [folder, workspace] = relative.split(path.sep);
+  const key = (part: string | undefined) => process.platform === 'win32' ? part?.toLowerCase() : part;
+  if (key(workspace) !== 'workspace') return true;
+  const matches = (id: string) => key(teammateFolderName(id)) === key(folder);
+  return !homes.demotedBotIds.some(matches) && !(homes.enabled && homes.actors.some(actor =>
+    actor.homeDeviceId && actor.homeDeviceId !== homes.selfDeviceId && matches(actor.externalId)));
+}
+
+export function availableImWorkspaces(workspaces: Readonly<Record<string, string>>): Record<string, string> {
+  return Object.fromEntries(Object.entries(workspaces).filter(([, dir]) => isImProjectDirectoryAvailable(dir)));
+}
+
 /** 读当前账号的侧栏本机项目(最近使用在前); 存储没就绪或账号正在切换时返回 null。 */
-export async function loadImProjectCatalog({ includeTeammateProjects = false } = {}): Promise<ProjectCatalogSnapshot | null> {
+export async function loadImProjectCatalog(): Promise<ProjectCatalogSnapshot | null> {
   const client = tryGetDbClient();
   if (!client || isAppSessionBoundaryPending()) return null;
   const owner = getActiveDataOwnerPushStamp();
@@ -55,13 +74,10 @@ export async function loadImProjectCatalog({ includeTeammateProjects = false } =
   if (!isCurrent()) return null;
   // A recent directory can outlive its teammate or a move to another computer.
   const localTeammatePaths = new Set<string | null>();
-  if (includeTeammateProjects && rows.some(row => isTeammateProjectPath(row.path))) {
+  if (rows.some(row => isTeammateProjectPath(row.path))) {
     const ownerRoot = ownerScopedUserDataPath();
-    const [{ teammateWorkspaceDir }, profiles] = await Promise.all([
-      import('../maker-ipc/botProjectMemory.js'),
-      client.drizzle.select({ id: botProfiles.id }).from(botProfiles)
-        .where(inArray(botProfiles.status, ['active', 'paused', 'error'])),
-    ]);
+    const profiles = await client.drizzle.select({ id: botProfiles.id }).from(botProfiles)
+      .where(inArray(botProfiles.status, ['active', 'paused', 'error']));
     if (!isCurrent()) return null;
     for (const { id } of profiles) {
       if (companionHomes.isHomeHere(id) && !companionHomes.isShadowed(id)) {

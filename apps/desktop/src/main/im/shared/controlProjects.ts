@@ -124,6 +124,14 @@ export async function listProjectsForControl(
       ),
   ]);
 
+  /** 按归一化目录索引侧栏项目。 */
+  const sidebarByDir = new Map<string, ControlProjectCatalog['projects'][number]>();
+  for (const project of catalog?.projects ?? []) {
+    const dir = normalizeWorkingDir(project.path);
+    if (!dir || sidebarByDir.has(dir)) continue;
+    sidebarByDir.set(dir, project);
+  }
+
   // 按 normalize 后 dir 聚合最大 sortTime; 同时记录"最新那条会话"的 title,
   // 供下方 UUID 默认目录回退到标题显示。
   const latestByDir = new Map<string, number>();
@@ -133,8 +141,8 @@ export async function listProjectsForControl(
     if (isProvisionalSession(r.id)) continue;
     const dir = normalizeWorkingDir(r.projectDir ?? r.workingDir);
     if (!dir) continue;
-    // 侧栏里移除的项目、伙伴自己的项目不进清单(与侧栏一致)。
-    if (catalog !== null && (catalog.isRemoved(dir) || isTeammateProjectPath(dir))) continue;
+    // 伙伴目录由共用清单确认；旧任务不能让已搬走的副本重新出现。
+    if (catalog?.isRemoved(dir) || (isTeammateProjectPath(dir) && !sidebarByDir.has(dir))) continue;
     const t = r.userSendAt ?? r.updatedAt;
     if (!latestByDir.has(dir) || t > (latestByDir.get(dir) ?? 0)) {
       latestByDir.set(dir, t);
@@ -142,19 +150,14 @@ export async function listProjectsForControl(
     }
   }
 
-  /** 侧栏项目: 归一化目录 -> 侧栏名字。 */
-  const sidebarNameByDir = new Map<string, string>();
   if (catalog !== null) {
-    for (const project of catalog.projects) {
-      const dir = normalizeWorkingDir(project.path);
-      if (!dir || sidebarNameByDir.has(dir)) continue;
-      sidebarNameByDir.set(dir, project.name);
+    for (const [dir, project] of sidebarByDir) {
       // 没有活跃任务的项目也在清单里, 用它在侧栏的最近使用时间参与排序。
       if (!latestByDir.has(dir)) latestByDir.set(dir, project.lastUsedAtMs ?? 0);
     }
     if (options.projectsOnly) {
       for (const dir of [...latestByDir.keys()]) {
-        if (!sidebarNameByDir.has(dir)) latestByDir.delete(dir);
+        if (!sidebarByDir.has(dir)) latestByDir.delete(dir);
       }
     }
   }
@@ -174,7 +177,7 @@ export async function listProjectsForControl(
     const segs = dir.split('/').filter(Boolean);
     const basename = segs[segs.length - 1] ?? dir;
     const collides = (basenameCount.get(basename) ?? 0) > 1;
-    const sidebarName = sidebarNameByDir.get(dir);
+    const sidebarName = sidebarByDir.get(dir)?.name;
     let displayName =
       sidebarName !== undefined && sidebarName !== basename
         ? sidebarName

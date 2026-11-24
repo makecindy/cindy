@@ -2,10 +2,10 @@
 // projectWorkspaces 的用例从现成列表开始，覆盖不到读取源。unit，只替换宿主存储。
 import { expect, it, vi } from 'vitest';
 import { companionHomes } from '../../companion-cloud/homes.js';
-import { loadImProjectCatalog } from '../projectCatalog.js';
+import { availableImWorkspaces, isImProjectDirectoryAvailable, loadImProjectCatalog } from '../projectCatalog.js';
 
 const f = vi.hoisted(() => {
-  const root = '/profile/owners/current';
+  const root = process.platform === 'win32' ? 'C:/profile/owners/current' : '/profile/owners/current';
   const path = (id: string) => root + '/bots/' + id + '/workspace';
   const registered = [path('local'), path('away'), path('deleted'), path('hidden'), '/work'];
   const client = { drizzle: { select: () => ({ from: () => ({
@@ -31,10 +31,18 @@ vi.mock('../../sidebarSettingsStore.js', () => ({
 it('offers the registered local buddy by its project name, excluding removed and demoted copies', async () => {
   companionHomes.setPersistedShadows(['away']);
   try {
-    const catalog = await loadImProjectCatalog({ includeTeammateProjects: true });
+    const catalog = await loadImProjectCatalog();
     expect(catalog?.projects.map(project => [project.name, project.path])).toEqual([
       ['Buddy 葫芦', f.path('local')], ['work', '/work'],
     ]);
+    const saved = { buddy: f.path('local'), work: '/work' };
+    expect(availableImWorkspaces(saved)).toEqual(saved);
+    companionHomes.update({ enabled: true, selfDeviceId: 'here', humanActorId: null, demotedBotIds: [],
+      actors: [{ id: 'actor', externalId: 'local', name: 'Buddy', avatar: null, homeDeviceId: 'elsewhere' }] });
+    expect(isImProjectDirectoryAvailable(f.path('local') + '/task')).toBe(false);
+    companionHomes.reset();
+    companionHomes.setPersistedShadows(['away', 'local']);
+    expect(availableImWorkspaces(saved)).toEqual({ work: '/work' });
     expect((await loadImProjectCatalog())?.projects.map(project => project.path)).toEqual(['/work']);
   } finally {
     companionHomes.reset();

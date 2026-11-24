@@ -80,7 +80,9 @@ import {
   setSharedProjectPref,
 } from './sharedProjectPrefs.js';
 import { createProjectWorkspaceSync } from './projectWorkspaceSync.js';
-import { loadImProjectCatalog, registerImProjectDirectory } from './projectCatalog.js';
+import { availableImWorkspaces, isImProjectDirectoryAvailable, loadImProjectCatalog, registerImProjectDirectory } from './projectCatalog.js';
+import { companionHomes } from '../companion-cloud/homes.js';
+import { subscribeBotProfilesChanged } from '../maker-ipc/botProfilesChangedSignal.js';
 import { onProjectCatalogChanged } from '../projectCatalogEvents.js';
 import { patchSessionMetaInDb, restoreArchivedSessionForSend } from '../localDb/ipc/sessions.js';
 import {
@@ -533,18 +535,18 @@ export async function readPluginImProjectCatalog() {
   const { store: current } = ensureInstances();
   await projectWorkspaceSync.run();
   if (store !== current) throw new Error('IM project owner changed');
-  return { workspaces: { ...current.get().workspaces },
+  return { workspaces: availableImWorkspaces(current.get().workspaces),
     isCurrent: () => store === current,
-    currentWorkspaces: () => current.get().workspaces };
+    currentWorkspaces: () => availableImWorkspaces(current.get().workspaces) };
 }
 export function currentPluginImProjectWorkspaces(): Readonly<Record<string, string>> {
-  return store?.get().workspaces ?? {};
+  return availableImWorkspaces(store?.get().workspaces ?? {});
 }
 
 /** 官方 IM 机器人可选的项目跟随侧栏项目(见 projectWorkspaces.ts)。 */
 const projectWorkspaceSync = createProjectWorkspaceSync({
   getStore: () => store,
-  loadCatalog: () => loadImProjectCatalog({ includeTeammateProjects: true }),
+  loadCatalog: loadImProjectCatalog,
   registerDirectory: async (directory) => {
     // 升级前配置的目录此刻不在(外接盘没插)也照样登记 —— 侧栏本来就能显示暂时不可用的项目。
     const registered = await registerImProjectDirectory(directory, { requireExisting: false });
@@ -633,6 +635,7 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
   if (!manager) {
     const mediaStore = createHookMediaStore();
     const dispatcher = createHookDispatcher({
+      isDirectoryAvailable: isImProjectDirectoryAvailable,
       // 两个 provider 复用 dispatcher，但连接身份和服务地址彼此隔离。
       getConnection: (connectionId) => {
         const config = store!.get();
@@ -681,7 +684,7 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
           enabled: meta.enabled,
           ...(provider === 'x' ? { companionBotId: config.xCompanionBotId ?? null } : {}),
           // 现用名称 + 改名前的旧名称(只供查找): 服务端可能还按旧名称派发。
-          workspaces: lookupWorkspaces(config.workspaces, config.retiredWorkspaces ?? {}),
+          workspaces: availableImWorkspaces(lookupWorkspaces(config.workspaces, config.retiredWorkspaces ?? {})),
           retiredWorkspaceNames: Object.keys(config.retiredWorkspaces ?? {}).filter(
             (name) => !Object.hasOwn(config.workspaces, name),
           ),
@@ -823,7 +826,7 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       dispatcher,
       getAccountFingerprint: currentAccountFingerprint,
       accountInitiallyActive: false,
-      listRecentSessions: () => listRecentHookSessions(store!.get().workspaces),
+      listRecentSessions: () => listRecentHookSessions(currentPluginImProjectWorkspaces()),
       syncProjectWorkspaces: () => projectWorkspaceSync.run(),
       // /model /effort 实时问答的数据源: 与会话内模型选择器**同一套规则**——
       // live providers(含自定义供应商 + 实时连接态)-> 仅已连接供应商 ->
@@ -1004,9 +1007,13 @@ export function registerHookControlIpc(): void {
     return { hook };
   });
   disposeProjectCatalogListener?.();
-  disposeProjectCatalogListener = onProjectCatalogChanged(() => {
-    if (store) projectWorkspaceSync.schedule();
-  });
+  const scheduleProjectSync = () => { if (store) projectWorkspaceSync.schedule(); };
+  const subscriptions = [
+    onProjectCatalogChanged(scheduleProjectSync),
+    companionHomes.onChange(scheduleProjectSync),
+    subscribeBotProfilesChanged(scheduleProjectSync),
+  ];
+  disposeProjectCatalogListener = () => subscriptions.forEach(dispose => dispose());
 
   // 开关即绑定(设置页 toggle 直接调, 无确认弹窗): 开 = 连接 + 置自动绑定意图
   // (连上后 main 自动发起 OIDC 弹浏览器); 关 = 解除绑定并断开(再开需重新

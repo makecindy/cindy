@@ -54,6 +54,18 @@ describe('/ctr control project/session picker', () => {
     setControlProjectCatalogSource(null);
   });
 
+  // PR #12405 (unit): a live ordinary task inside a teammate project counts for recency;
+  // rows left on the previous computer must not restore a missing project to the picker.
+  it('uses the shared catalogue for teammate projects and their activity', async () => {
+    const local = '/data/owners/me/bots/local/workspace';
+    const old = '/data/owners/me/bots/moved/workspace';
+    dbMock.rows = [local, old].map(workingDir => ({ id: workingDir, workingDir, updatedAt: 7, userSendAt: null }));
+    setControlProjectCatalogSource(async () => ({
+      projects: [{ name: 'Buddy', path: local, lastUsedAtMs: 1 }], isRemoved: () => false,
+    }));
+    expect(await listProjectsForControl()).toEqual([{ workingDir: local, displayName: 'Buddy', latestActivityMs: 7 }]);
+  });
+
   // 规则(2026-11-13): 个人机器人 /ctr 与 /project 列的项目就是侧栏的本机项目。生产入口
   // listProjectsForControl(宿主注入侧栏项目)。此前清单只按活跃任务的目录分组: 没有任务的
   // 项目不出现, 侧栏里移除的项目还在, 名字也不跟侧栏。最小输入: 一个改过名且有任务的项目、

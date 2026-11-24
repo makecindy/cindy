@@ -140,6 +140,7 @@ export interface HookSessionRunner {
     workingDir: string | null;
     usable: boolean;
     resumableArchive?: boolean;
+    companionOwned?: boolean;
   } | null>;
   /** 跑一个完整 turn, 收口(done / terminal error)后返回。 */
   run(req: HookRunRequest): Promise<HookRunOutcome>;
@@ -352,6 +353,8 @@ export interface HookDispatcherDeps {
     workingDir: string;
     initialTopicTitle?: string;
   }>;
+  /** Live home check for a project or a task directory nested inside it. */
+  isDirectoryAvailable?: (directory: string) => boolean;
   getConnection: (id: string) => HookConnectionConfig | null;
   bindings: HookBindingStore;
   /** Durable terminal request state, injected by the Electron owner boundary. */
@@ -2293,6 +2296,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       return !!companion && companion.connectionId === connectionId
         && companion.botId === config.companionBotId && path.resolve(companion.workingDir) === path.resolve(dir);
     }
+    if (deps.isDirectoryAvailable?.(dir) === false) return false;
     if (Object.values(config.workspaces).some((root) => isPathWithin(root, dir))) return true;
     return dialogue !== undefined && (dialogue.rootDirs?.() ?? [dialogue.rootDir()])
       .some((root) => isPathWithin(root, dir));
@@ -2404,7 +2408,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
      * 会被当成越界删掉, 那条 thread 就白白换了新对话(PR #733 review 指出)。
      */
     const inWhitelistNow = (dir: string | null): boolean =>
-      dir !== null &&
+      dir !== null && deps.isDirectoryAvailable?.(dir) !== false &&
       Object.values(getConnection(connectionId)?.workspaces ?? config.workspaces).some((base) =>
         isPathWithin(base, dir),
       );
@@ -2450,7 +2454,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       // Inspect and restore together so a pre-cleanup stat cannot revive a removed worktree.
       return withSessionRouteLock(sessionId, async () => {
         const info = await runner.inspect(sessionId, canRestoreIn);
-        if (!info?.resumableArchive || !canRestoreIn(info.workingDir)) return info;
+        if (info?.companionOwned || !info?.resumableArchive || !canRestoreIn(info.workingDir)) return info;
         await deps.restoreArchivedSession!(sessionId, { routeLockHeld: true });
         return isCurrentGeneration(generation) ? runner.inspect(sessionId) : null;
       });
@@ -2465,6 +2469,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     if (payload.sessionId !== null) {
       const info = await inspectForMessage(payload.sessionId, (dir) => inWhitelistNow(dir) || inDialogueRoot(dir));
       if (!isCurrentGeneration(generation)) return { reject: 'disabled' };
+      if (info?.companionOwned) return { reject: 'workspace_not_allowed' };
       if (info !== null) awaitingPersist.delete(payload.sessionId);
       /**
        * 首次失效接管的 ACK 会把 replacement sessionId 回给 server。若 server 在
@@ -2609,7 +2614,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       return normalize(left) === normalize(right);
     };
     const inRequestedProject = (target: string | null): boolean => {
-      if (target === null) return false;
+      if (target === null || deps.isDirectoryAvailable?.(target) === false) return false;
       if (isChat) return inDialogueRoot(target);
       if (dir === undefined) return false;
       const root = Object.values(getConnection(connectionId)?.workspaces ?? config.workspaces)
@@ -2644,6 +2649,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       const info = await inspectForMessage(bound, inRequestedProject);
       if (!isCurrentGeneration(generation)) return { reject: 'disabled' };
       // 查得到 = 已落库, 此后一律走映射校验
+      if (info?.companionOwned) return { reject: 'workspace_not_allowed' };
       if (info !== null) awaitingPersist.delete(bound);
       /**
        * 免检窗口里那个会话建在哪 —— 必须拿它跟**当前**映射再比一次: 会话还没
@@ -2758,6 +2764,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     // 重校验(inWhitelist(info.workingDir))会拒掉它, 导致同 key 每条消息都
     // 重新建会话 —— 别名映射到仓库子目录时 worktree 建在仓库根下就会越界,
     // 这种配置直接回退共享目录。
+    if (dir && deps.isDirectoryAvailable?.(dir) === false) return { reject: 'workspace_not_allowed' };
     let sessionId: string = randomUUID();
     let runDir: string;
     if (isChat) {
@@ -3239,6 +3246,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           }
           return (
             info.usable === true &&
+            (!info.companionOwned || companionTargets.has(sessionId)) &&
             info.workingDir !== null &&
             dirStillAllowed(connectionId, info.workingDir, sessionId)
           );
@@ -3348,6 +3356,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
             if (
               isCurrentGeneration(admittedGeneration) &&
               info?.usable === true &&
+              (!info.companionOwned || companionTargets.has(previous)) &&
               info.workingDir !== null &&
               dirStillAllowed(connectionId, info.workingDir, previous)
             ) {
