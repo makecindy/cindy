@@ -211,6 +211,30 @@ describe('TodoListCard flyout interaction', () => {
     expect(plan.getAttribute('aria-expanded')).toBe('true');
   });
 
+  // #12437 (unit): a real project subpanel opens after the plan without a pointer event.
+  it('yields Escape to a project subpanel opened after the plan', () => {
+    const view = (showProject: boolean) => (
+      <>
+        <TodoListCard todos={TODOS} />
+        <RailPanelShell anchorRight={0} anchorTop={0} level={1} section="projects" onEnter={() => {}} onLeave={() => {}}>
+          Projects
+        </RailPanelShell>
+        {showProject && (
+          <RailPanelShell anchorRight={10} anchorTop={0} level={2} onEnter={() => {}} onLeave={() => {}}>
+            Project tasks
+          </RailPanelShell>
+        )}
+      </>
+    );
+    const { rerender } = render(view(false));
+    const plan = screen.getByRole('button', { name: 'Step 1 / 2' });
+    fireEvent.click(plan, { detail: 0 });
+    rerender(view(true));
+
+    expect(fireEvent.keyDown(screen.getByText('Project tasks'), { key: 'Escape' })).toBe(true);
+    expect(plan.getAttribute('aria-expanded')).toBe('true');
+  });
+
   // #12437 (unit): a collapsed document rail remains mounted and is clipped.
   it('closes the visible plan when a newer plan is inside a collapsed document rail', () => {
     const plans = (collapsed: boolean) => (

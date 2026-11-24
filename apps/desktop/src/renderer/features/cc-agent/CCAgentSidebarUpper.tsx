@@ -4240,6 +4240,7 @@ export function RailPanelShell({
   anchorTop,
   level,
   section,
+  projectKey,
   onEnter,
   onLeave,
   children,
@@ -4248,6 +4249,7 @@ export function RailPanelShell({
   anchorTop: number;
   level: 1 | 2;
   section?: RailPanelSection;
+  projectKey?: string;
   onEnter: () => void;
   onLeave: () => void;
   children: ReactNode;
@@ -4264,8 +4266,8 @@ export function RailPanelShell({
 
   useLayoutEffect(() => {
     const panel = ref.current;
-    if (level === 1 && panel) return registerComposerEscapeLayer(panel);
-  }, [level, section]);
+    if (panel) return registerComposerEscapeLayer(panel);
+  }, [level, section, projectKey]);
 
   return createPortal(
     <div
@@ -4528,8 +4530,8 @@ function RailPanels({
     if (!panelState.openSection) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || e.defaultPrevented || e.isComposing || e.keyCode === 229) return;
-      const panel = document.querySelector<HTMLElement>('[data-rail-panel][data-rail-panel-level="1"]');
-      if (!panel || !isForegroundComposerEscapeLayer(panel)) return;
+      const panels = document.querySelectorAll<HTMLElement>('[data-rail-panel]');
+      if (!Array.from(panels).some(isForegroundComposerEscapeLayer)) return;
       // 行内重命名编辑中:Esc 归编辑器(取消编辑),不整面板收掉。
       if (panelHasEditingFocus()) return;
       // 有浮层挂载时:这一记 Esc 归浮层(Radix 自己会 dismiss),不能同帧把
@@ -4891,6 +4893,7 @@ function RailPanels({
           anchorRight={panelState.projectAnchor.right}
           anchorTop={panelState.projectAnchor.top}
           level={2}
+          projectKey={openProject.projectKey}
           onEnter={() => {
             railPanelStore.cancelClose();
             railPanelStore.cancelProjectClose();

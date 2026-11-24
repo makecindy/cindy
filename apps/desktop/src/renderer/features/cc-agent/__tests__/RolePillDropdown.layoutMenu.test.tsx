@@ -229,20 +229,21 @@ describe('WorkerLayoutMenu hover interaction', () => {
     expect(screen.queryByText('orca.rolePill.workersHeader')).toBeNull();
   });
 
-  // #12437: the real worker layout menu handles Escape without cancelling it.
-  it('closes the keyboard-opened worker layout menu before the pinned plan', () => {
+  // #12437 (unit): register both real layers in either keyboard opening order.
+  it.each(['plan', 'menu'] as const)('closes the newest layer when the %s opened first', (first) => {
     const { container } = render(<TodoListCard todos={[{ content: 'Check worker', status: 'pending' }]} />);
     const plan = container.querySelector<HTMLButtonElement>('button[aria-expanded]')!;
-    fireEvent.click(plan, { detail: 0 });
     renderToolbar();
+    if (first === 'plan') fireEvent.click(plan, { detail: 0 });
     fireEvent.click(menuButton(), { detail: 0 });
-    expect(screen.getByText('orca.rolePill.workersHeader')).toBeTruthy();
+    if (first === 'menu') fireEvent.click(plan, { detail: 0 });
 
-    fireEvent.keyDown(menuButton(), { key: 'Escape' });
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(Boolean(screen.queryByText('orca.rolePill.workersHeader'))).toBe(first === 'menu');
+    expect(plan.getAttribute('aria-expanded')).toBe(first === 'plan' ? 'true' : 'false');
+
+    fireEvent.keyDown(document, { key: 'Escape' });
     expect(screen.queryByText('orca.rolePill.workersHeader')).toBeNull();
-    expect(plan.getAttribute('aria-expanded')).toBe('true');
-
-    fireEvent.keyDown(plan, { key: 'Escape' });
     expect(plan.getAttribute('aria-expanded')).toBe('false');
   });
 

@@ -24,6 +24,7 @@ import { Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Plus, X, Elli
 import { cn } from '@/lib/utils';
 import { useAppShortcutDisplay } from '@/hooks/useAppShortcut';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
+import { isForegroundComposerEscapeLayer, registerComposerEscapeLayer } from '@/components/chat/composerEscapeLayers';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Tip } from '@/components/ui/tooltip';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
@@ -547,6 +548,25 @@ function useAnchorMenuMaxWidth(
   return maxWidth;
 }
 
+function useWorkerMenuEscape(menuRef: { current: HTMLDivElement | null }, open: boolean, close: () => void) {
+  useLayoutEffect(() => {
+    const menu = menuRef.current;
+    if (!open || !menu) return;
+    const unregister = registerComposerEscapeLayer(menu);
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
+      if (!isForegroundComposerEscapeLayer(menu)) return;
+      event.preventDefault();
+      close();
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      unregister();
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [menuRef, open, close]);
+}
+
 function WorkerLayoutMenu({
   leadSessionId,
   layout,
@@ -573,6 +593,7 @@ function WorkerLayoutMenu({
   // 点击固定 (pinned)、移出后延迟关闭 —— 两种布局下 ⋮ 的操作体感一致。
   const [openMode, setOpenMode] = useState<DropdownOpenMode>(null);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
   const hoverOpenTimerRef = useRef<number | null>(null);
   const hoverCloseTimerRef = useRef<number | null>(null);
   const attention = useWorkerAttentionSnapshot();
@@ -593,6 +614,8 @@ function WorkerLayoutMenu({
     clearHoverTimers();
     setOpenMode(null);
   }, [clearHoverTimers]);
+
+  useWorkerMenuEscape(menuRef, open, closeMenu);
 
   const handleMouseEnter = useCallback(() => {
     if (openMode === 'pinned') return;
@@ -635,14 +658,9 @@ function WorkerLayoutMenu({
         closeMenu();
       }
     };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') closeMenu();
-    };
     document.addEventListener('mousedown', onMouseDown);
-    document.addEventListener('keydown', onKeyDown);
     return () => {
       document.removeEventListener('mousedown', onMouseDown);
-      document.removeEventListener('keydown', onKeyDown);
     };
   }, [closeMenu, open]);
 
@@ -677,6 +695,7 @@ function WorkerLayoutMenu({
       </Tip>
       {open && (
         <div
+          ref={menuRef}
           data-worker-dropdown
           className={cn(
             'absolute right-0 z-dropdown flex w-[320px] flex-col overflow-y-auto overflow-x-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]',
@@ -1321,6 +1340,8 @@ export function RolePillDropdown({
     setOpenMode(null);
   }, [clearHoverTimers]);
 
+  useWorkerMenuEscape(popoverRef, open && Boolean(worker), closeDropdown);
+
   const handleMouseEnter = useCallback(() => {
     if (openMode === 'pinned') return;
     clearTimerRef(hoverCloseTimerRef);
@@ -1358,14 +1379,9 @@ export function RolePillDropdown({
         closeDropdown();
       }
     };
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') closeDropdown();
-    };
     document.addEventListener('mousedown', onMouseDown);
-    document.addEventListener('keydown', onKeyDown);
     return () => {
       document.removeEventListener('mousedown', onMouseDown);
-      document.removeEventListener('keydown', onKeyDown);
     };
   }, [closeDropdown, open]);
 

@@ -321,7 +321,7 @@ export function TodoListCard({
       // Other foreground layers may close without cancelling the key event.
       if (document.querySelector(
         '[data-preview-scrim]:not([data-preview-closing]), [aria-modal="true"], '
-        + '[data-morph-side][data-state="open"], [data-worker-dropdown]',
+        + '[data-morph-side][data-state="open"]',
       )) return;
       event.preventDefault();
       setOpenMode('closed');
