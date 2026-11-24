@@ -9535,7 +9535,8 @@
             "creator": "Creador",
             "maintainer": "Mantenedor"
           },
-          "decidedAt": "Resuelto el"
+          "decidedAt": "Resuelto el",
+          "latestReview": "Último resultado de la revisión"
         }
       },
       "fileTransfer": {

@@ -9418,7 +9418,8 @@
             "creator": "만든 사람",
             "maintainer": "유지 관리자"
           },
-          "decidedAt": "처리 시간"
+          "decidedAt": "처리 시간",
+          "latestReview": "최근 심사 결과"
         }
       },
       "fileTransfer": {

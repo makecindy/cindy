@@ -9418,7 +9418,8 @@
             "creator": "建立者",
             "maintainer": "維護者"
           },
-          "decidedAt": "處理時間"
+          "decidedAt": "處理時間",
+          "latestReview": "最近審核結果"
         }
       },
       "fileTransfer": {

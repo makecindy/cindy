@@ -3,7 +3,13 @@
  * columns follow the public-market rows; rules follow the enterprise console (#1504).
  */
 import type { MyPluginFilter } from '../../../../shared/pluginContributions';
-import type { PersonalPluginSummary } from '../../../../shared/pluginAuthor';
+import {
+  organizationReviewDecision,
+  type PersonalPluginDetail,
+  type PersonalPluginSummary,
+  type PersonalRelease,
+  type PersonalReviewEvent,
+} from '../../../../shared/pluginAuthor';
 
 /** Same keys as the public rows: `contribution.market.*`. */
 export type TeamMarketState =
@@ -73,4 +79,34 @@ export function teamListingActions(plugin: PersonalPluginSummary): {
 /** Listed version icon; a never-listed plugin may show its pending version's icon. */
 export function teamPluginIconUrl(plugin: PersonalPluginSummary): string | undefined {
   return plugin.currentRelease?.icon?.url ?? plugin.pendingRelease?.icon?.url ?? undefined;
+}
+
+/**
+ * The latest review result for 「最近审核结果」 (#1593 latestReviewEvent; Greptile review on
+ * #12469). The detail carries only the listed, latest and pending versions, and the reason of a
+ * returned latest version. `incomplete` means the version or a return's reason is missing there;
+ * the page then reads the first release-history page once and passes the event's release in.
+ */
+export function teamReviewResult(plugin: PersonalPluginDetail, fromHistory?: PersonalRelease | null): {
+  event: PersonalReviewEvent;
+  version: string | null;
+  reason: string | null;
+  incomplete: boolean;
+} | null {
+  const event = plugin.latestReviewEvent;
+  const decision = organizationReviewDecision(plugin);
+  if (!event || !decision) return null;
+  const rejection = event.kind === 'rejected' && event.releaseId !== null && plugin.latestRelease?.id === event.releaseId
+    ? plugin.lastRejection?.detail?.reason?.trim() || null
+    : null;
+  const incomplete = (event.releaseId !== null && decision.version === null) || (event.kind === 'rejected' && !rejection);
+  const historyReason = event.kind === 'rejected' && fromHistory?.review?.outcome === 'rejected'
+    ? fromHistory.review.reason?.trim() || null
+    : null;
+  return {
+    event,
+    version: decision.version ?? fromHistory?.version ?? null,
+    reason: event.kind === 'rejected' ? rejection ?? historyReason : null,
+    incomplete,
+  };
 }

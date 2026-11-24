@@ -9461,7 +9461,8 @@
             "creator": "Creator",
             "maintainer": "Maintainer"
           },
-          "decidedAt": "Decided"
+          "decidedAt": "Decided",
+          "latestReview": "Latest review result"
         }
       },
       "fileTransfer": {

@@ -9535,7 +9535,8 @@
             "creator": "Créateur",
             "maintainer": "Mainteneur"
           },
-          "decidedAt": "Traité le"
+          "decidedAt": "Traité le",
+          "latestReview": "Dernier résultat d’examen"
         }
       },
       "fileTransfer": {

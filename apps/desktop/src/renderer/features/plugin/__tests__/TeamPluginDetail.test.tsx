@@ -183,6 +183,60 @@ describe('TeamPluginDetail', () => {
     expect(reviews.markRead).toHaveBeenCalledTimes(1);
   });
 
+  // Greptile review on #12469: the dot was cleared for a result the page never showed. Minimal
+  // failing input: v1.1.0 was returned, then v1.2.0 submitted — the latest event is still that
+  // return, but the detail only showed "1.2.0 pending". The detail now shows 「最近审核结果」 with
+  // the version and reason (read once from the first release-history page when the detail lacks
+  // them) before marking it read; without them (not found, read failed) it shows the result alone.
+  it('shows the latest review result, reading its version and reason once when missing, before marking it read', async () => {
+    const returned = plugin({
+      latestRelease: { id: 'r3', version: '1.2.0', reviewStatus: 'pending' },
+      pendingRelease: { id: 'r3', version: '1.2.0', reviewStatus: 'pending', publishedAt: '2026-11-20T00:00:00.000Z' },
+      latestReviewEvent: { id: 'e2', kind: 'rejected', at: '2026-11-12T00:00:00.000Z', releaseId: 'r2', actorType: 'organization' },
+    });
+    reviews.updates = [{ pluginId: 'org:p1', key: 'e2', status: 'rejected', unread: true }];
+    let answer!: (value: unknown) => void;
+    api.releases.mockReturnValueOnce(new Promise((resolve) => { answer = resolve; }));
+    mount(returned);
+    const result = await screen.findByRole('group', { name: `${team}.latestReview` });
+    expect(within(result).getByRole('status')).toBeTruthy();
+    expect(reviews.markRead).not.toHaveBeenCalled();
+    await act(async () => answer({ nextCursor: 'c2', releases: [
+      { id: 'r3', version: '1.2.0', reviewStatus: 'pending', review: null },
+      { id: 'r2', version: '1.1.0', reviewStatus: 'rejected',
+        review: { outcome: 'rejected', decidedAt: '2026-11-12T00:00:00.000Z', reason: '缺少隐私说明', actorType: 'organization' } },
+    ] }));
+    expect(await within(result).findByText('1.1.0')).toBeTruthy();
+    expect(within(result).getByText(`${copy}.event.rejected`)).toBeTruthy();
+    expect(within(result).getByText('缺少隐私说明')).toBeTruthy();
+    await waitFor(() => expect(reviews.markRead).toHaveBeenCalledWith('org:p1', 'e2'));
+    expect(api.releases).toHaveBeenCalledTimes(1);
+    expect(api.releases).toHaveBeenCalledWith('p1');
+
+    // The read fails: the result still shows (without version or reason) and is read; no retry.
+    cleanup();
+    reviews.markRead.mockClear();
+    api.releases.mockClear();
+    api.releases.mockRejectedValueOnce(new Error('[NETWORK_UNREACHABLE] offline'));
+    mount(returned);
+    const fallback = await screen.findByRole('group', { name: `${team}.latestReview` });
+    expect(await within(fallback).findByText(`${copy}.event.rejected`)).toBeTruthy();
+    expect(within(fallback).queryByText('1.1.0')).toBeNull();
+    await waitFor(() => expect(reviews.markRead).toHaveBeenCalledWith('org:p1', 'e2'));
+    expect(api.releases).toHaveBeenCalledTimes(1);
+
+    // Everything is in the detail (an approval of the listed version): nothing extra is read.
+    cleanup();
+    api.releases.mockClear();
+    reviews.updates = [{ pluginId: 'org:p1', key: 'e1', status: 'approved', unread: true }];
+    mount(plugin());
+    const approved = await screen.findByRole('group', { name: `${team}.latestReview` });
+    expect(within(approved).getByText('1.0.0')).toBeTruthy();
+    expect(within(approved).getByText(`${copy}.event.approved`)).toBeTruthy();
+    await waitFor(() => expect(reviews.markRead).toHaveBeenCalledWith('org:p1', 'e1'));
+    expect(api.releases).not.toHaveBeenCalled();
+  });
+
   it('waits until the page is visible before marking a result read', async () => {
     const key = 'e1';
     reviews.updates = [{ pluginId: 'org:p1', key, status: 'approved', unread: true }];

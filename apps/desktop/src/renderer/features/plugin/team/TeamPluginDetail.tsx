@@ -39,7 +39,7 @@ import type { GhostPluginListItem } from '../lib/ghostPluginViewModel';
 import { contributionErrorKey } from '../lib/useContributionPreview';
 import { PluginUsageCounters } from '../PluginSharedUsage';
 import { VersionFactsList } from '../PluginVersionFacts';
-import { teamListingActions, teamMarketState, teamPendingRelease, teamPluginIconUrl } from './teamPluginModel';
+import { teamListingActions, teamMarketState, teamPendingRelease, teamPluginIconUrl, teamReviewResult } from './teamPluginModel';
 
 const copy = 'settings.ghosts.contribution';
 const teamCopy = 'settings.ghosts.contribution.team';
@@ -159,9 +159,6 @@ export function TeamPluginDetail({
     }
   }, [load, loadHistory]);
 
-  // Opening the detail reads the review result shown here (issue #1541 rule 5): only once the
-  // detail on screen shows that exact result and the page is visible. A newer result arriving
-  // through the change signal reloads the detail first.
   // A publish started from this page, or any other change, must not leave the detail (and its
   // submit button) on the old state (Greptile review on #12469). The first value is the mount read.
   const seenSignal = useRef(refreshSignal);
@@ -171,11 +168,40 @@ export function TeamPluginDetail({
     reload();
   }, [refreshSignal, reload]);
 
+  // 「最近审核结果」 needs the event's version and, for a return, its reason. When the detail lacks
+  // them (an older version returned before a newer submission), the first release-history page is
+  // read once per event; not found there or failed, the result shows without them. No retries or
+  // further pages. A newer read, a newer event or leaving the page drops an older answer.
+  const [eventRelease, setEventRelease] = useState<{ eventId: string; release: PersonalRelease | null } | null>(null);
+  const eventRequest = useRef(0);
+  const baseResult = detail ? teamReviewResult(detail) : null;
+  const pendingEventId = baseResult?.incomplete ? baseResult.event.id : null;
+  const pendingReleaseId = baseResult?.incomplete ? baseResult.event.releaseId : null;
+  useEffect(() => {
+    if (!pendingEventId || eventRelease?.eventId === pendingEventId) return;
+    const id = ++eventRequest.current;
+    const settle = (release: PersonalRelease | null) => {
+      if (eventRequest.current === id && mounted.current) setEventRelease({ eventId: pendingEventId, release });
+    };
+    api.releases(pluginId).then(
+      (page) => settle(page.releases.find((release) => release.id === pendingReleaseId) ?? null),
+      () => settle(null),
+    );
+  }, [api, pluginId, pendingEventId, pendingReleaseId, eventRelease]);
+  const reviewResult = detail && baseResult
+    ? teamReviewResult(detail, eventRelease?.eventId === baseResult.event.id ? eventRelease.release : undefined)
+    : null;
+  const reviewResultShown = Boolean(reviewResult &&
+    (!reviewResult.incomplete || eventRelease?.eventId === reviewResult.event.id));
+
+  // Opening the detail reads the review result shown here (issue #1541 rule 5): only once
+  // 「最近审核结果」 on screen shows that exact event and the page is visible. A newer result
+  // arriving through the change signal reloads the detail first.
   const reviews = usePluginReviewUpdates();
   const unreadReview = reviews.updates.find((item) =>
     item.unread && item.pluginId === `${ORGANIZATION_REVIEW_ID_PREFIX}${pluginId}`);
-  // The event on screen; reading it marks exactly that event read (#1593 latestReviewEvent.id).
-  const shownKey = detail?.latestReviewEvent?.id ?? null;
+  // The event the detail carries (#1593 latestReviewEvent.id), and whether it is on screen yet.
+  const detailKey = detail?.latestReviewEvent?.id ?? null;
   const { markRead } = reviews;
   // A minimized or hidden window can still report visibilityState 'visible' while background
   // throttling is off, so Main's window-hidden signal must also say the window is shown.
@@ -183,13 +209,13 @@ export function TeamPluginDetail({
   const reloadedFor = useRef<string | null>(null);
   useEffect(() => {
     if (!detail || !unreadReview) return;
-    if (unreadReview.key === shownKey) {
-      if (visible) void markRead(unreadReview.pluginId, unreadReview.key);
+    if (unreadReview.key === detailKey) {
+      if (visible && reviewResultShown) void markRead(unreadReview.pluginId, unreadReview.key);
     } else if (reloadedFor.current !== unreadReview.key) {
       reloadedFor.current = unreadReview.key;
       reload();
     }
-  }, [detail, unreadReview, shownKey, visible, markRead, reload]);
+  }, [detail, unreadReview, detailKey, visible, reviewResultShown, markRead, reload]);
 
   const audienceDraft = useMemo(
     () => (detail ? draftOf(detail.visibilityAudience, detail.visibilityAudienceMembers ?? []) : null),
@@ -272,6 +298,9 @@ export function TeamPluginDetail({
   const pending = teamPendingRelease(detail);
   const rejected = detail.latestRelease?.reviewStatus === 'rejected' ? detail.latestRelease : null;
   const rejectionReason = detail.lastRejection?.detail?.reason?.trim();
+  // The returned latest version is that latest result: shown once, in 「最近审核结果」.
+  const rejectedIsLatestResult = Boolean(rejected && reviewResult?.event.kind === 'rejected' &&
+    reviewResult.event.releaseId === rejected.id);
   const listing = teamListingActions(detail);
   const isCreator = detail.myRole === 'creator';
   const localBlocker = localPlugin
@@ -421,7 +450,7 @@ export function TeamPluginDetail({
               <span>{pending.version}</span><span aria-hidden="true">·</span><span>{t(`${copy}.review.pending`)}</span>
             </p>
             <p className="text-13 leading-[1.54] text-[var(--text-secondary)]">{t(`${copy}.submittedAt`)} · {formatDate(pending.publishedAt)}</p>
-          </> : rejected ? <>
+          </> : rejected && !rejectedIsLatestResult ? <>
             <p className="flex flex-wrap gap-x-2 text-14 leading-[1.714] text-[var(--text-primary)]">
               <span>{rejected.version}</span><span aria-hidden="true">·</span><span>{t(`${copy}.review.rejected`)}</span>
             </p>
@@ -429,7 +458,23 @@ export function TeamPluginDetail({
               <h3 className="text-13 font-medium leading-[1.54] text-[var(--text-secondary)]">{t(`${copy}.reason`)}</h3>
               <p className="select-text whitespace-pre-wrap break-words text-14 leading-[1.714] text-[var(--text-primary)]">{rejectionReason}</p>
             </> : null}
-          </> : <p className={body}>{t(`${copy}.noSubmission`)}</p>}
+          </> : rejectedIsLatestResult ? null : <p className={body}>{t(`${copy}.noSubmission`)}</p>}
+          {reviewResult ? (
+            <div aria-label={t(`${teamCopy}.latestReview`)} role="group" className="space-y-1 pt-2">
+              <h3 className="text-13 font-medium leading-[1.54] text-[var(--text-secondary)]">{t(`${teamCopy}.latestReview`)}</h3>
+              {reviewResultShown ? <>
+                <p className="flex flex-wrap gap-x-2 text-14 leading-[1.714] text-[var(--text-primary)]">
+                  {reviewResult.version ? <><span>{reviewResult.version}</span><span aria-hidden="true">·</span></> : null}
+                  <span>{t(`${copy}.event.${reviewResult.event.kind}`)}</span>
+                </p>
+                <p className="text-13 leading-[1.54] text-[var(--text-secondary)]">{t(`${teamCopy}.decidedAt`)} · {formatDate(reviewResult.event.at)}</p>
+                {reviewResult.reason ? <>
+                  <h4 className="text-13 font-medium leading-[1.54] text-[var(--text-secondary)]">{t(`${copy}.reason`)}</h4>
+                  <p className="select-text whitespace-pre-wrap break-words text-14 leading-[1.714] text-[var(--text-primary)]">{reviewResult.reason}</p>
+                </> : null}
+              </> : <p role="status" className="text-13 leading-[1.54] text-[var(--text-tertiary)]">{t(`${copy}.loading`)}</p>}
+            </div>
+          ) : null}
         </section>
         <section aria-label={t(`${audienceCopy}.title`)} className={sectionClass}>
           <div className="flex flex-wrap items-center justify-between gap-3">

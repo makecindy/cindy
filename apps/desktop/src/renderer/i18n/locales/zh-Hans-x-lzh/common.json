@@ -9404,7 +9404,8 @@
             "creator": "创者",
             "maintainer": "维护者"
           },
-          "decidedAt": "处理之时"
+          "decidedAt": "处理之时",
+          "latestReview": "近审之果"
         }
       },
       "fileTransfer": {

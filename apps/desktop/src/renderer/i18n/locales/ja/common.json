@@ -9418,7 +9418,8 @@
             "creator": "作成者",
             "maintainer": "メンテナー"
           },
-          "decidedAt": "処理日時"
+          "decidedAt": "処理日時",
+          "latestReview": "最新の審査結果"
         }
       },
       "fileTransfer": {

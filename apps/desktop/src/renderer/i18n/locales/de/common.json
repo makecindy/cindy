@@ -9461,7 +9461,8 @@
             "creator": "Ersteller",
             "maintainer": "Betreuer"
           },
-          "decidedAt": "Entschieden am"
+          "decidedAt": "Entschieden am",
+          "latestReview": "Letztes Prüfergebnis"
         }
       },
       "fileTransfer": {
