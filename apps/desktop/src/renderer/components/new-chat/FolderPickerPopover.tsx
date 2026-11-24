@@ -13,7 +13,16 @@ import {
   Search,
   X,
 } from 'lucide-react';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
 
@@ -209,6 +218,11 @@ export function FolderPickerPopover({
   const selectionPendingRef = useRef(false);
   const [selectionPending, setSelectionPending] = useState(false);
   const [projectQuery, setProjectQuery] = useState('');
+  // 搜索结果的键盘高亮位置。方向键移动它,回车选中它;输入变化时归零。
+  const [activeProjectIndex, setActiveProjectIndex] = useState(0);
+  const [activeProjectAction, setActiveProjectAction] = useState(0);
+  // Grid 保留每行选择与删除的独立按钮语义,搜索时焦点仍留在输入框。
+  const projectGridId = useId();
   const [browseFailed, setBrowseFailed] = useState(false);
   const projectSearchRef = useRef<HTMLInputElement>(null);
   const [popoverEl, setPopoverEl] = useState<HTMLDivElement | null>(null);
@@ -230,12 +244,20 @@ export function FolderPickerPopover({
     () => filterFolderPickerOptions(effectiveProjectOptions, activeProjectQuery),
     [effectiveProjectOptions, activeProjectQuery],
   );
+  // 结果集可能在按键之间变短(远程项目异步到达、删除等),高亮不能停在列表外。
+  const activeProjectOptionIndex = Math.min(
+    activeProjectIndex,
+    Math.max(0, visibleProjectOptions.length - 1),
+  );
+  const hasProjectResults = deviceScope?.status !== 'loading' && visibleProjectOptions.length > 0;
 
-  // 每次打开都从完整列表开始,不残留上次的搜索词。
+  // 每次打开都从完整列表开始,不残留上次的搜索词和高亮位置。
   useEffect(() => {
     if (!open) {
       setProjectQuery('');
       setBrowseFailed(false);
+      setActiveProjectIndex(0);
+      setActiveProjectAction(0);
     }
   }, [open]);
 
@@ -271,6 +293,15 @@ export function FolderPickerPopover({
     updateScrollFade();
   }, [visibleProjectOptions, deviceScope?.status, updateScrollFade]);
 
+  // 方向键移动到可视区之外的高亮项时把它带回来。jsdom 没有 scrollIntoView,跳过即可。
+  useEffect(() => {
+    if (!activeProjectQuery || !projectScrollEl) return;
+    const row = projectScrollEl.querySelector<HTMLElement>(
+      `[data-folder-picker-index="${activeProjectOptionIndex}"]`,
+    );
+    row?.scrollIntoView?.({ block: 'nearest' });
+  }, [activeProjectOptionIndex, activeProjectQuery, projectScrollEl]);
+
   const handleSelectPath = async (
     folderPath: string,
     source: FolderPickerSelectSource,
@@ -302,90 +333,139 @@ export function FolderPickerPopover({
     void recentWorkdirsStore.remove(project.path);
   };
 
+  const handleProjectGridKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.nativeEvent.isComposing || !(e.target instanceof HTMLButtonElement)) return;
+    if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+    const rows = Array.from(e.currentTarget.querySelectorAll<HTMLElement>('[role="row"]'));
+    const row = e.target.closest<HTMLElement>('[role="row"]');
+    if (!row) return;
+    let rowIndex = rows.indexOf(row);
+    const buttons = Array.from(row.querySelectorAll<HTMLButtonElement>('button'));
+    let column = buttons.indexOf(e.target);
+    if (e.key === 'ArrowUp') rowIndex -= 1;
+    if (e.key === 'ArrowDown') rowIndex += 1;
+    if (e.key === 'ArrowLeft') column -= 1;
+    if (e.key === 'ArrowRight') column += 1;
+    if (e.key === 'Home' || e.key === 'End') {
+      if (e.ctrlKey) rowIndex = e.key === 'Home' ? 0 : rows.length - 1;
+      column = e.key === 'Home' ? 0 : 1;
+    }
+    const targetRow = rows[Math.max(0, Math.min(rowIndex, rows.length - 1))];
+    const targets = targetRow.querySelectorAll<HTMLButtonElement>('button');
+    e.preventDefault();
+    e.stopPropagation();
+    targets[Math.max(0, Math.min(column, targets.length - 1))]?.focus();
+  };
+
   const renderProject = (project: FolderPickerOption, index: number) => {
     const canRemove = allowRemove && (!project.remoteDevice || onRemoveRemoteProject !== undefined);
-    // 有搜索词时首个结果常亮:回车选中的就是它。
-    const isEnterTarget = activeProjectQuery !== '' && index === 0;
+    // 有搜索词时高亮跟随方向键,回车选中的就是它。
+    const isActiveTarget = activeProjectQuery !== '' && index === activeProjectOptionIndex;
     return (
-      /* 行容器**不可交互**(Codex review P1):选择与删除是**兄弟**控件。
-         之前为了避开 <button> 里嵌 <button> 的非法 HTML,把外层改成 div[role="button"] ——
-         那只换掉了 HTML 层面的问题:ARIA 同样不允许 role="button" 里再有交互后代,读屏可能把删除
-         按钮压平进项目按钮、或当成激活它的一部分,于是「删除」要么读不到、要么按下就选中了项目。
-         现在容器只负责布局与 hover 视觉(group),里面两个真正的 <button> 并列 —— 合法 HTML、
-         语义清晰,也不再需要 stopPropagation 去拦冒泡。 */
+      // option 会压平交互后代;用 row / gridcell 保留两个按钮的独立语义。
       <div
         key={project.key ?? project.path}
+        role="row"
+        aria-selected={isActiveTarget}
+        onFocus={(e) => {
+          setActiveProjectIndex(index);
+          setActiveProjectAction(
+            e.target.closest('button') === e.currentTarget.querySelector('button') ? 0 : 1,
+          );
+        }}
+        data-folder-picker-index={index}
         className={cn(
           'group flex w-full items-center gap-3 rounded-lg px-3 py-2.5',
           'transition-colors',
           'hover:bg-[var(--folder-item-hover)]',
-          isEnterTarget && 'bg-[var(--folder-item-hover)]',
+          isActiveTarget && 'bg-[var(--folder-item-hover)]',
         )}
       >
-        <button
-          type="button"
-          disabled={selectionPending}
-          onClick={() => handleSelectPath(project.path, 'project', project)}
-          className={cn(
-            'flex min-w-0 flex-1 cursor-pointer items-center gap-3 text-left',
-            'outline-none',
-          )}
-        >
-          <span aria-hidden="true" className={cn('shrink-0', project.missing && 'opacity-50')}>
-            <PickerProjectIcon project={project} />
-          </span>
-          <div className="flex min-w-0 flex-1 flex-col items-start">
-            <span
-              className={cn(
-                'w-full truncate text-sm font-medium text-[var(--folder-item-name)]',
-                project.missing && 'opacity-50',
-              )}
-            >
-              {project.name}
+        <div role="gridcell" id={`${projectGridId}-project-${index}`} className="min-w-0 flex-1">
+          <button
+            type="button"
+            tabIndex={
+              index === activeProjectOptionIndex && (!canRemove || activeProjectAction === 0) ? 0 : -1
+            }
+            disabled={selectionPending}
+            onClick={() => handleSelectPath(project.path, 'project', project)}
+            className={cn(
+              'flex w-full min-w-0 cursor-pointer items-center gap-3 rounded-full text-left',
+              'outline-none',
+              'focus-visible:ring-1 focus-visible:ring-[var(--focus-ring-soft)]',
+            )}
+          >
+            <span aria-hidden="true" className={cn('shrink-0', project.missing && 'opacity-50')}>
+              <PickerProjectIcon project={project} />
             </span>
-            {(project.description || project.missing) && (
+            <div className="flex min-w-0 flex-1 flex-col items-start">
               <span
                 className={cn(
-                  'w-full truncate text-xs text-[var(--folder-item-path)]',
+                  'w-full truncate text-sm font-medium text-[var(--folder-item-name)]',
                   project.missing && 'opacity-50',
                 )}
               >
-                {project.missing && (
-                  <span className="text-[var(--error-fg)]">
-                    {t('newChat.folderPicker.missingDir')}
-                    {project.description ? ' · ' : ''}
-                  </span>
-                )}
-                {project.description}
+                {project.name}
               </span>
-            )}
-          </div>
-        </button>
-        {canRemove && (
-          <button
-            type="button"
-            disabled={selectionPending}
-            aria-label={t('newChat.folderPicker.removeFromList')}
-            onClick={() => handleRemoveProject(project)}
-            className={cn(
-              // 圆角走 pill:DESIGN.md §5 只允许 8px(内控件)/ 12px(容器)/ 9999px(pill)三档,
-              // 6px 是被明文禁止的中间值。这里选 pill 而非 8px —— §5 把 8px 限定为「小到无法戴
-              // pill 的交互件」(多行输入、行高亮、块内小格),24×24 的图标按钮戴上 pill 就是个
-              // 正圆,完全成立;而外层行本身已是 8px,内层再用 8px 也不满足「内圆角要比容器小」。
-              // 同款 hover 才显形的小图标按钮在 ChatInput / PendingQueuePanel 里都是 rounded-full。
-              'flex h-6 w-6 shrink-0 items-center justify-center rounded-full',
-              'text-[var(--folder-item-path)] opacity-0 transition-opacity',
-              'group-hover:opacity-100 focus-visible:opacity-100',
-              'hover:bg-[var(--surface-hover)] hover:text-[var(--folder-item-name)]',
-              'outline-none',
-            )}
-          >
-            <X size={14} />
+              {(project.description || project.missing) && (
+                <span
+                  className={cn(
+                    'w-full truncate text-xs text-[var(--folder-item-path)]',
+                    project.missing && 'opacity-50',
+                  )}
+                >
+                  {project.missing && (
+                    <span className="text-[var(--error-fg)]">
+                      {t('newChat.folderPicker.missingDir')}
+                      {project.description ? ' · ' : ''}
+                    </span>
+                  )}
+                  {project.description}
+                </span>
+              )}
+            </div>
           </button>
+        </div>
+        {canRemove && (
+          <div role="gridcell" className="shrink-0">
+            <button
+              type="button"
+              tabIndex={index === activeProjectOptionIndex && activeProjectAction === 1 ? 0 : -1}
+              disabled={selectionPending}
+              aria-label={t('newChat.folderPicker.removeFromList')}
+              onClick={() => handleRemoveProject(project)}
+              className={cn(
+                // 圆角走 pill:DESIGN.md §5 只允许 8px(内控件)/ 12px(容器)/ 9999px(pill)三档,
+                // 6px 是被明文禁止的中间值。这里选 pill 而非 8px —— §5 把 8px 限定为「小到无法戴
+                // pill 的交互件」(多行输入、行高亮、块内小格),24×24 的图标按钮戴上 pill 就是个
+                // 正圆,完全成立;而外层行本身已是 8px,内层再用 8px 也不满足「内圆角要比容器小」。
+                // 同款 hover 才显形的小图标按钮在 ChatInput / PendingQueuePanel 里都是 rounded-full。
+                'flex h-6 w-6 shrink-0 items-center justify-center rounded-full',
+                'text-[var(--folder-item-path)] opacity-0 transition-opacity',
+                'group-hover:opacity-100 focus-visible:opacity-100',
+                'hover:bg-[var(--surface-hover)] hover:text-[var(--folder-item-name)]',
+                'outline-none',
+                'focus-visible:ring-1 focus-visible:ring-[var(--focus-ring-soft)]',
+              )}
+            >
+              <X size={14} />
+            </button>
+          </div>
         )}
       </div>
     );
   };
+
+  const projectGrid = (
+    <div
+      id={projectGridId}
+      role="grid"
+      aria-label={t('newChat.folderPicker.projects')}
+      onKeyDown={handleProjectGridKeyDown}
+    >
+      {deviceScope?.status !== 'loading' && visibleProjectOptions.map(renderProject)}
+    </div>
+  );
 
   const handleChooseDifferent = async () => {
     if (onCreateProject) {
@@ -444,6 +524,16 @@ export function FolderPickerPopover({
             e.preventDefault();
             return;
           }
+          // Radix 在原生 capture 阶段处理 Esc,先让行内操作返回搜索框,保留查询。
+          if (
+            projectSearchRef.current &&
+            document.activeElement?.closest('[role="grid"]')?.id === projectGridId
+          ) {
+            e.preventDefault();
+            projectSearchRef.current.focus();
+            setActiveProjectAction(0);
+            return;
+          }
           // 有搜索词时 Esc 先清空搜索,再按一次才关闭。
           if (!projectQuery) return;
           e.preventDefault();
@@ -495,19 +585,50 @@ export function FolderPickerPopover({
                     value={projectQuery}
                     onChange={(e) => {
                       setProjectQuery(e.target.value);
+                      // 换查询后高亮回到第一项,不延续上一次的位置。
+                      setActiveProjectIndex(0);
+                      setActiveProjectAction(0);
                       if (projectScrollEl) projectScrollEl.scrollTop = 0;
                     }}
                     onKeyDown={(e) => {
                       // 弹层经 portal 渲染,React 事件仍会冒泡到所在的输入区;搜索框的按键只归它自己。
                       e.stopPropagation();
-                      if (e.key !== 'Enter' || e.nativeEvent.isComposing) return;
-                      const first = activeProjectQuery ? visibleProjectOptions[0] : undefined;
-                      if (!first) return;
+                      // 输入法组合中的按键属于候选词,既不移动高亮也不选中。
+                      if (e.nativeEvent.isComposing || !activeProjectQuery) return;
+                      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                        if (visibleProjectOptions.length === 0) return;
+                        e.preventDefault();
+                        setActiveProjectAction(0);
+                        setActiveProjectIndex((prev) => {
+                          // 以当前**显示中**的高亮项为基准:结果集中途变短时原始值可能已越界。
+                          const base = Math.min(
+                            prev,
+                            Math.max(0, visibleProjectOptions.length - 1),
+                          );
+                          const next = e.key === 'ArrowDown' ? base + 1 : base - 1;
+                          return Math.max(0, Math.min(next, visibleProjectOptions.length - 1));
+                        });
+                        return;
+                      }
+                      if (e.key !== 'Enter') return;
+                      const target = visibleProjectOptions[activeProjectOptionIndex];
+                      if (!target) return;
                       e.preventDefault();
-                      void handleSelectPath(first.path, 'project', first);
+                      void handleSelectPath(target.path, 'project', target);
                     }}
                     placeholder={t('newChat.folderPicker.searchProjects')}
                     aria-label={t('newChat.folderPicker.searchProjects')}
+                    // 组合框:焦点留在输入框,方向键移动的高亮项通过 activedescendant 播报。
+                    role="combobox"
+                    aria-haspopup="grid"
+                    aria-autocomplete="list"
+                    aria-expanded={hasProjectResults}
+                    aria-controls={projectGridId}
+                    aria-activedescendant={
+                      activeProjectQuery && hasProjectResults
+                        ? `${projectGridId}-project-${activeProjectOptionIndex}`
+                        : undefined
+                    }
                     className={cn(
                       'h-8 w-full rounded-full border border-[var(--folder-picker-border)] bg-transparent',
                       'pl-7 pr-2 text-13 text-[var(--folder-item-name)] outline-none',
@@ -539,32 +660,27 @@ export function FolderPickerPopover({
                   <span>{t('newChat.addRemoteProject.existingLoading')}</span>
                 </div>
               ) : deviceScope?.status === 'error' ? (
-                <>
-                  <ErrorNotice
-                    role="alert"
-                    className="mx-1"
-                    message={t('newChat.folderPicker.remoteProjectsLoadFailed', {
-                      device: deviceScope.deviceName,
-                    })}
-                    actions={
-                      deviceScope.retry && (
-                        <Button
-                          size="sm"
-                          compact
-                          disabled={selectionPending}
-                          onClick={deviceScope.retry}
-                        >
-                          <RefreshCw size={12} />
-                          {t('newChat.folderPicker.retryRemoteProjects')}
-                        </Button>
-                      )
-                    }
-                  />
-                  {visibleProjectOptions.map(renderProject)}
-                </>
-              ) : visibleProjectOptions.length > 0 ? (
-                visibleProjectOptions.map(renderProject)
-              ) : activeProjectQuery ? (
+                <ErrorNotice
+                  role="alert"
+                  className="mx-1"
+                  message={t('newChat.folderPicker.remoteProjectsLoadFailed', {
+                    device: deviceScope.deviceName,
+                  })}
+                  actions={
+                    deviceScope.retry && (
+                      <Button
+                        size="sm"
+                        compact
+                        disabled={selectionPending}
+                        onClick={deviceScope.retry}
+                      >
+                        <RefreshCw size={12} />
+                        {t('newChat.folderPicker.retryRemoteProjects')}
+                      </Button>
+                    )
+                  }
+                />
+              ) : visibleProjectOptions.length > 0 ? null : activeProjectQuery ? (
                 <div
                   role="status"
                   className="px-3 py-2.5 text-sm text-[var(--folder-item-path)]"
@@ -595,6 +711,7 @@ export function FolderPickerPopover({
                   {t('newChat.folderPicker.noProjects')}
                 </div>
               )}
+              {projectGrid}
             </div>
             <div className="mx-2 my-1 h-px bg-[var(--folder-picker-border)]" />
           </>
