@@ -217,6 +217,12 @@ describe('createOpenWithHandlers.open with registered launch arguments', () => {
       args: [DOC],
     },
     {
+      name: 'an unquoted executable path with spaces does not become a launcher argument',
+      command: 'C:\\Program Files\\Office\\WINWORD.EXE /n "%1"',
+      exe: 'C:\\Program Files\\Office\\WINWORD.EXE',
+      args: [DOC],
+    },
+    {
       name: 'commands without a file placeholder keep passing just the file',
       command: '"C:\\Office\\WINWORD.EXE" /dde',
       exe: 'C:\\Office\\WINWORD.EXE',

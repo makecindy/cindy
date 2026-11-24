@@ -159,8 +159,11 @@ export function registeredLaunchArgs(
   env: Record<string, string | undefined> = process.env,
 ): string[] | null {
   if (!command) return null;
-  const tokens = splitWindowsCommandLine(command)
-    .slice(1)
+  const trimmed = command.trim();
+  const exe = parseCommandLineExe(trimmed);
+  if (!exe) return null;
+  const argumentStart = exe.length + (trimmed.startsWith('"') ? 2 : 0);
+  const tokens = splitWindowsCommandLine(trimmed.slice(argumentStart))
     .map((token) => expandWindowsEnv(token, env));
   const at = tokens.findIndex((token) => FILE_PLACEHOLDER.test(token));
   if (at <= 0) return null;
