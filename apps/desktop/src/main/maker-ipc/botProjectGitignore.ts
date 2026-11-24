@@ -115,9 +115,14 @@ async function ensureIgnored(workspace: string): Promise<'changed' | 'unchanged'
   if (endsWithBlock(current)) return 'unchanged';
   const newline = current.includes('\r\n') ? '\r\n' : '\n';
   const separator = current === '' ? '' : current.endsWith('\n') ? newline : `${newline}${newline}`;
-  await fs.writeFile(file, `${current}${separator}${[BLOCK_COMMENT, ...TEAMMATE_PROJECT_IGNORE_BLOCK].join(newline)}${newline}`, 'utf8');
+  // Append only: the owner's text is never rewritten, so nothing can read it half-written or lose it,
+  // even if another process completes the same project; its mode stays as it is.
+  await fs.appendFile(file, `${separator}${[BLOCK_COMMENT, ...TEAMMATE_PROJECT_IGNORE_BLOCK].join(newline)}${newline}`, 'utf8');
   return 'changed';
 }
+
+/** In-flight completions by project folder. */
+const completing = new Map<string, Promise<'ready' | 'failed'>>();
 
 /**
  * The one place a teammate project's `.gitignore` is completed: the local entries
@@ -127,8 +132,22 @@ async function ensureIgnored(workspace: string): Promise<'changed' | 'unchanged'
  * here: the teammate's next version includes the change, and a startup snapshot has no size bound.
  * Never throws. `failed` (a read-only file, a folder or a link) keeps the teammate usable and its
  * memory moving, but defers its versions; it is retried on the next start or repository retry.
+ * Callers on the same project share one attempt: the startup upgrade and a task's savepoint can ask
+ * at once, and two in-place rewrites could read each other's truncated file (Codex review, 2026-11-24).
  */
-export async function ensureTeammateProjectIgnored(input: { workspace: string; botId?: string }): Promise<'ready' | 'failed'> {
+export function ensureTeammateProjectIgnored(input: { workspace: string; botId?: string }): Promise<'ready' | 'failed'> {
+  const key = path.resolve(input.workspace);
+  const pending = completing.get(key);
+  if (pending) return pending;
+  const attempt = completeTeammateProjectIgnore(input).finally(() => {
+    if (completing.get(key) === attempt) completing.delete(key);
+  });
+  completing.set(key, attempt);
+  return attempt;
+}
+
+
+async function completeTeammateProjectIgnore(input: { workspace: string; botId?: string }): Promise<'ready' | 'failed'> {
   try {
     if (await isTeammateProjectIgnoreReady(input.workspace)) return 'ready';
     const result = await ensureIgnored(input.workspace);

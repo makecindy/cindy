@@ -320,6 +320,33 @@ describe('buddy repository initialization (#10216)', () => {
     expect(await versioned()).toBe(false);
   });
 
+  // Codex review 2026-11-24 (09:13): the startup upgrade (prepareBotProjectWorkspace) and a task's
+  // savepoint (createShadowSavepoint) completing the same old project at once could lose the owner's
+  // rules and let a credential into the savepoint. Both production entries run together here.
+  it('keeps the owner\'s rules and the credential out when preparation and a savepoint complete together', async () => {
+    const ownerRoot = path.join(root, 'owners', 'race-owner');
+    const workspace = teammateWorkspaceDir(ownerRoot, 'race_buddy');
+    await fs.mkdir(workspace, { recursive: true });
+    await gitExec(['init'], workspace);
+    await gitExec(['config', '--local', 'user.name', 'Test Author'], workspace);
+    await gitExec(['config', '--local', 'user.email', 'author@example.invalid'], workspace);
+    await fs.writeFile(path.join(workspace, '.gitignore'), 'auth.json\n');
+    await gitExec(['add', '.gitignore'], workspace);
+    await gitExec(['commit', '-m', 'v1'], workspace);
+    await fs.writeFile(path.join(workspace, 'auth.json'), '{"session":"fixture"}\n');
+    await fs.writeFile(path.join(workspace, 'token.json'), '{"refresh_token":"fixture"}\n');
+    await Promise.all([
+      prepareBotProjectWorkspace({ botId: 'race_buddy', displayName: 'Race buddy', ownerRoot }),
+      createShadowSavepoint(workspace, { sessionId: 'race-session', label: 'turn start', meta: { kind: 'turn-start' } }),
+    ]);
+    const text = await fs.readFile(path.join(workspace, '.gitignore'), 'utf8');
+    expect(text.startsWith('auth.json\n')).toBe(true);
+    expect(text.split('\n').filter(line => line === 'token.json')).toHaveLength(1);
+    const versioned = (await gitExec(['log', '--all', '--name-only', '--format='], workspace)).stdout.split('\n');
+    expect(versioned).not.toContain('token.json');
+    expect(versioned).not.toContain('auth.json');
+  });
+
   it('does not treat a branch referencing a missing commit as unborn', async () => {
     const result = await prepare('missing_object');
     const branch = (await gitExec(['symbolic-ref', 'HEAD'], result.workingDir)).stdout.trim();

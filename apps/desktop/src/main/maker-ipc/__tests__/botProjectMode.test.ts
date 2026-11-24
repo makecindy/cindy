@@ -639,6 +639,27 @@ describe('ensureTeammateProjectIgnored', () => {
 
   // Codex review 2026-11-24: a `.gitignore` that is a folder (or a link, which Git does not follow)
   // was left alone but counted as ready, so versions went ahead without the rules.
+  // Codex review 2026-11-24 (09:13): the startup upgrade and a task's savepoint can complete the same
+  // project at once. Each rewrote the file in place, so one could read the other's truncated file and
+  // write back only the block, dropping the owner's rules. Minimal input: two calls before either ends.
+  it('completes a project once when two callers ask at the same time', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'teammate-gitignore-race-'));
+    const workspace = teammateWorkspaceDir(root, 'bot_mia');
+    await fs.mkdir(workspace, { recursive: true });
+    const file = path.join(workspace, '.gitignore');
+    await fs.writeFile(file, 'auth.json\n');
+    const write = vi.spyOn(fs, 'writeFile');
+    try {
+      await expect(Promise.all([ensureTeammateProjectIgnored({ workspace }), ensureTeammateProjectIgnored({ workspace })]))
+        .resolves.toEqual(['ready', 'ready']);
+      // The owner's file is only appended to, never rewritten (exclusive-create attempts aside).
+      expect(write.mock.calls.filter(([target, , options]) => target === file && (options as { flag?: string } | undefined)?.flag !== 'wx')).toEqual([]);
+    } finally { write.mockRestore(); }
+    const text = await fs.readFile(file, 'utf8');
+    expect(text.startsWith('auth.json\n')).toBe(true);
+    expect(text.split('\n').filter(line => line === 'token.json')).toHaveLength(1);
+  });
+
   it('reports a .gitignore it cannot write as failed, leaving it alone and writing no receipt', async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'teammate-gitignore-dir-'));
     const workspace = teammateWorkspaceDir(root, 'bot_mia');
