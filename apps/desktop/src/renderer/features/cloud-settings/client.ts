@@ -215,7 +215,9 @@ export function createCloudSettingsClient(
       generation++;
       session = undefined;
       connecting = undefined;
-      if (old) await call(() => bridge.close({ handle: old.handle }));
+      // Main may already have dropped the old session (a throttled heartbeat, an expired or
+      // replaced runtime); closing it is cleanup, and the new session opens either way.
+      if (old) await call(() => bridge.close({ handle: old.handle })).catch(() => {});
       return connect();
     },
     async save(state, set, clear = []) {

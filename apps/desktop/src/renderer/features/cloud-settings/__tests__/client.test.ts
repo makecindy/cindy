@@ -159,6 +159,15 @@ describe('native CIS settings client using existing settingsWeb commands', () =>
     await failed;
     await vi.waitFor(() => expect(close).toHaveBeenCalledTimes(1));
   });
+  // Unit: Main already dropped the old session, so closing it fails; the page still reconnects.
+  it('opens a new session when the old one is already gone', async () => {
+    const f = setup();
+    await f.client.read(['memory']);
+    vi.spyOn(f.bridge, 'close').mockRejectedValueOnce(new Error('[CLOUD_SETTINGS_SCOPE_CHANGED] CLOUD_SETTINGS_SCOPE_CHANGED'));
+    const open = vi.spyOn(f.bridge, 'open');
+    await expect(f.client.reconnect()).resolves.toBeDefined();
+    expect(open).toHaveBeenCalledTimes(1);
+  });
   it('a fresh explicit connection cannot reuse the previous window ticket', async () => {
     const f = setup(),
       [s] = await f.client.read(['memory']);
