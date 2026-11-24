@@ -6,6 +6,8 @@ import {
 import { UPSTREAM_OVERLOAD_REASON } from '@/utils/overloadError';
 import { isUpstreamOutputBlockedErrorMessage, UPSTREAM_STREAM_INTERRUPTED_REASON } from '@/utils/streamInterruptError';
 
+export const UPSTREAM_OUTPUT_BLOCKED_I18N_KEY = 'chat.errorBanner.upstreamOutputBlocked';
+
 /**
  * Stable maker-core error reason -> renderer i18n key.
  *
@@ -59,7 +61,7 @@ export function errorReasonI18nKey(reason: string | null | undefined, message: s
     return 'chat.errorBanner.remoteCompactEncryptedContent';
   }
   if ((!reason || reason === 'turn-failed') && isUpstreamOutputBlockedErrorMessage(message)) {
-    return 'chat.errorBanner.upstreamOutputBlocked';
+    return UPSTREAM_OUTPUT_BLOCKED_I18N_KEY;
   }
   return reason ? ERROR_REASON_I18N_KEYS[reason] : undefined;
 }

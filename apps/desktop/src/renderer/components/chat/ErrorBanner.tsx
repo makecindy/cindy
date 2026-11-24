@@ -68,7 +68,10 @@ import {
 import { isQuotaExhaustedErrorMessage } from '@/utils/quotaError';
 import { parseTerminalRateLimitRetryProgress } from '@/utils/rateLimitRetry';
 import type { UsageLimitRecoveryHint } from '@/lib/usageLimitRecovery';
-import { errorReasonI18nKey as resolveErrorReasonI18nKey } from './errorReasonI18n';
+import {
+  errorReasonI18nKey as resolveErrorReasonI18nKey,
+  UPSTREAM_OUTPUT_BLOCKED_I18N_KEY,
+} from './errorReasonI18n';
 import { isCodexSharedAuthLinkUnavailableError } from '../../../shared/codexAuthReason';
 import { getToolLoopI18nKey } from './toolLoopI18n';
 import {
@@ -656,6 +659,10 @@ export function ErrorBanner({
   } else if (agentKind === 'pi' && /bundled node not installed/.test(error)) {
     // 引导:需先装 claude-code 或 codex 连带 node。
     displayError = t('chat.errorBanner.piBundledNodeMissing');
+  } else if (errorReasonI18nKey === UPSTREAM_OUTPUT_BLOCKED_I18N_KEY) {
+    // The structured reason takes precedence over status-like text in diagnostic metadata.
+    displayError = t(errorReasonI18nKey);
+    hasSpecialGuidance = false;
   } else if (isOverloadError) {
     // 服务过载:上游模型没有可用容量。原始英文("Selected model is at capacity")
     // 对用户没有行动价值,换成友好文案 + 明确的下一步;原始错误折叠可查。

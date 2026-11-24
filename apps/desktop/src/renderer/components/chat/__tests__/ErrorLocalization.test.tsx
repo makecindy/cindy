@@ -396,16 +396,16 @@ it.each(['live', 'tail', 'history'] as const)('localizes quota exhaustion on %s 
   expect(screen.queryByText(/PRIVATE_UPSTREAM_BODY|完全访问/)).toBeNull();
 });
 
-// #8100, unit: real live/tail/history notices used the generic copy and surfaced
-// the provider's "plugin" wording. The Codex error envelope is the minimum
-// input that distinguishes a provider output block from a local plugin failure.
+// #8100, unit: sequence_number=502 exercised the network fallback in live and
+// tail notices. The same envelope must keep the output-block summary and
+// collapsed diagnostics in all three production surfaces.
 it.each(['live', 'live-http', 'tail', 'history'] as const)('explains an upstream output block in %s', async surface => {
   const i18n = createInstance();
   await i18n.init({ lng: 'en', resources: { en: { translation: en } } });
   const technicalMessage = 'Synthetic plugin blocked the output stream. api_key=fixture-private-value fixture-end.';
   const error = JSON.stringify({ error: {
     type: 'invalid_request_error', code: 'safety_violation', message: technicalMessage,
-  }, sequence_number: 2 });
+  }, sequence_number: 502 });
   const diagnose = vi.fn();
   const live = surface.startsWith('live') ? handleStreamEvent({ ...EMPTY_SESSION_STATE, isStreaming: true }, {
     sessionId: 'output-block-copy', type: 'error', source: 'codex',
@@ -423,7 +423,7 @@ it.each(['live', 'live-http', 'tail', 'history'] as const)('explains an upstream
   expect(screen.getByText('The model service stopped this reply under its safety rules. Check whether any progress was saved.')).toBeTruthy();
   expect(screen.queryByText(/plugin blocked/)).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: en.chat.errorBanner.networkShowRaw }));
-  const details = screen.getByText(/"sequence_number":2/).textContent;
+  const details = screen.getByText(/"sequence_number":502/).textContent;
   expect(details).toContain('safety_violation');
   expect(details).toContain('plugin blocked');
   expect(details).toContain('[REDACTED]');
@@ -436,6 +436,21 @@ it.each(['live', 'live-http', 'tail', 'history'] as const)('explains an upstream
     }));
     expect(diagnose.mock.calls[0][0].details).not.toContain('fixture-private-value');
   }
+});
+
+it.each(['live', 'tail'] as const)('keeps a terminal HTTP 502 on the network path in %s', async surface => {
+  const i18n = createInstance();
+  await i18n.init({ lng: 'en', resources: { en: { translation: en } } });
+  const error = 'Unexpected status HTTP 502 Bad Gateway. api_key=fixture-private-value fixture-end.';
+  render(<I18nextProvider i18n={i18n}>{surface === 'live'
+    ? <ErrorBanner error={error} agentKind="codex" retryText="original input" onRetry={vi.fn()} />
+    : <ErrorTailErrorBanner errorText={error} agentKind="codex" onContinue={vi.fn()} onDismiss={vi.fn()} />}
+  </I18nextProvider>);
+  expect(screen.getByText(en.chat.errorBanner.networkUnreachable)).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: en.chat.errorBanner.networkShowRaw }));
+  const details = screen.getByText(/HTTP 502 Bad Gateway/).textContent;
+  expect(details).toContain('[REDACTED]');
+  expect(details).not.toContain('fixture-private-value');
 });
 
 // #8100 P2: an inline explanation can be suppressed by the display policy
