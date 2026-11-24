@@ -4865,68 +4865,7 @@
         "hint": "經已繫之飛書或 Lark 機器人，私遣君一訊；唯於視窗失焦時遣之。",
         "disabledHint": "須先設 Bot，並遣之一訊以成其繫。"
       },
-      "bind": "繫之",
-      "groups": {
-        "title": "群議",
-        "description": "為機器人所在之某群另定專案、模型與權柄。",
-        "rules": "未另定者：已繫專案之群從「案與模型」中該專案之設，未繫專案之群從上方「新言談配置」與「群議新差事之權柄檔」。群之主線與其話題共一群之設。",
-        "expand": "展",
-        "collapse": "收",
-        "groupCount_one": "{{count}} 群",
-        "groupCount_other": "{{count}} 群",
-        "customCount_one": "{{count}} 群另設",
-        "customCount_other": "{{count}} 群另設",
-        "refresh": "重讀",
-        "loading": "正讀群錄…",
-        "loadFailed": "群錄未能讀得，請稍後點「重讀」再試。",
-        "saveFailed": "群設未能存",
-        "notConnected": "機器人連上後方能列其所在之群。下方唯列已另設之群。",
-        "empty": "機器人尚未入群。引之入群後，再來此設之。",
-        "listPermission": "未能讀機器人所在之群：請於飛書開放平台為此應用開「獲取群組資訊」之權。下方先列機器人曾用之群。",
-        "listUnavailable": "暫未能讀機器人所在之群，下方先列機器人曾用之群。",
-        "unnamed": "無名之群（{{id}}）",
-        "summaryModel": "另定模型",
-        "summaryPermission": "另定權柄",
-        "expandAria": "設「{{name}}」",
-        "searchLabel": "尋群",
-        "searchPlaceholder": "以群名尋之",
-        "customHeading": "另設者",
-        "followHeading": "從渠道之設者",
-        "showMore": "再顯 {{count}} 個",
-        "showLess": "收",
-        "noMatch": "未見名含「{{query}}」之群",
-        "project": {
-          "label": "專案",
-          "follow": "言談",
-          "missing": "{{name}}（已離側欄）",
-          "hint": "於群中初 @ 機器人、開新話題或發 /new 時乃行，進行之差事不移。擇專案，則模型與權柄常從此專案於「案與模型」之設；擇「言談」，則差事置於機器人之言談目錄，從上方「新言談配置」。唯可擇側欄中本機之專案。"
-        },
-        "model": {
-          "label": "模型與思之深淺",
-          "hintFollow": "從「新言談配置」。於此換模型或思之深淺，則唯及此群。",
-          "hintFollowProject": "從專案「{{project}}」於「案與模型」之設。於此換模型或思之深淺，則唯及此群。",
-          "hintProjectUnavailable": "專案「{{project}}」於「案與模型」所定之模型今不可用。可往彼處重擇，或於此為此群另擇之。",
-          "hintFixed": "此群另定模型。群中未另改模型之差事，得下一言時即換之；新差事徑用之。"
-        },
-        "permission": {
-          "label": "權柄",
-          "hintFollow": "今從「群議新差事之權柄檔」。唯及此後於此群新開之差事，既有差事請於群中以 /permission 切換。",
-          "hintFollowProject": "今從專案「{{project}}」於「案與模型」之權柄。唯及此後於此群新開之差事，既有差事請於群中以 /permission 切換。",
-          "hintFixed": "此群另定權柄。唯及此後於此群新開之差事，既有差事請於群中以 /permission 切換。"
-        },
-        "fullAccessConfirm": {
-          "title": "令「{{name}}」以完全存取行之乎？",
-          "description": "此後於此群新開之差事皆徑行，不復逐項確認，群中無論何人 @ 機器人皆然。群議之言由成員掌之，請確保群中之人皆可信。",
-          "confirm": "改為完全存取",
-          "cancel": "罷"
-        },
-        "widerConfirm": {
-          "title": "寬「{{name}}」之權柄乎？",
-          "description": "此後於此群新開之差事，將由「{{current}}」易為「{{next}}」，群中無論何人 @ 機器人皆然。群議之言由成員掌之，請確保群中之人皆可信。",
-          "confirm": "仍改之",
-          "cancel": "罷"
-        }
-      }
+      "bind": "繫之"
     },
     "wechatBot": {
       "title": "個人微信",
@@ -7567,6 +7506,178 @@
       "plugins": {
         "rowHint": "登入、綁定與各群各私語之設，皆在法器頁中。",
         "open": "啟法器"
+      },
+      "replyTarget": {
+        "label": "孰為應答",
+        "cindy": "Cindy",
+        "cindyHint": "Cindy 啟新差事以應之。亦可付一同伴應之。",
+        "companionHint": "私語入與 {{name}} 之言談，每群各啟一隱差事。汝之言依 {{name}} 之權限行之。",
+        "openCompanion": "{{name}} 之設定",
+        "summary": "{{name}} 應答",
+        "missingCompanion": "已不可用之同伴",
+        "busy": "此機器人尚有待發之言或行中之差事，待其畢再易。",
+        "updateFailed": "未能更易。請察同伴尚可用，再試之。",
+        "companionSettingsHint": "模型、權限與記憶"
+      },
+      "nav": {
+        "back": "返"
+      },
+      "pageDescription": "於微信、飛書、Telegram 諸聊天之器，傳言於 Cindy 或汝之同伴。",
+      "list": {
+        "connected": "已連",
+        "available": "尚可連者",
+        "choose": "擇一聊天之器",
+        "cindyReplies": "Cindy 應答",
+        "official": "官方機器人：{{status}}",
+        "projects": "項目與模型",
+        "projectsHint": "聊天之器或法器於項目中啟新差事時，各項目所用之模型與權柄",
+        "hint": {
+          "both": "官方機器人，或汝自建之機器人",
+          "slack": "用 Cindy 官方機器人，登 Slack 即可",
+          "x": "用 Cindy 官方之號，許之則於 X 上應汝",
+          "wechat": "掃碼以連汝之微信",
+          "personal": "用汝自建之機器人"
+        }
+      },
+      "apps": {
+        "telegram": "Telegram",
+        "slack": "Slack",
+        "discord": "Discord",
+        "x": "X",
+        "wechat": "微信",
+        "feishu": "飛書 / Lark",
+        "wecom": "企業微信",
+        "dingtalk": "釘釘"
+      },
+      "ways": {
+        "official": "Cindy 官方機器人",
+        "personal": "汝自有之機器人",
+        "personalHint": "汝於平臺自建之機器人，名與像由汝定。",
+        "personalSetupTitle": "用汝自有之機器人",
+        "setUp": "設之",
+        "personalSetupHint": {
+          "telegram": "於 BotFather 建機器人，填其令牌與汝之用戶 ID。",
+          "discord": "於 Discord 開發者後臺建機器人，填其令牌。",
+          "feishu": "於飛書或 Lark 開放平臺建應用，填其 App ID 與 App Secret。"
+        }
+      },
+      "rows": {
+        "model": "模型",
+        "groupReply": "群中何時應答",
+        "persona": "名與性情",
+        "behavior": "表情與引語",
+        "receiveHere": "於此機收言",
+        "receiveHereHint": "關之則機器人於此機下線，憑證仍存，可隨時復開。",
+        "unbind": "解此機器人之係",
+        "ownerId": "吾之用戶 ID {{id}}",
+        "discordChannels": "伺服器頻道",
+        "discordChannelsHint": "機器人可於何頻道行事",
+        "notifications": "告示",
+        "on": "已開",
+        "off": "未開",
+        "project": "項目",
+        "projectDialogue": "對話（不擇項目）",
+        "projectMissing": "已不在側欄之項目",
+        "projectHint": "新差事入此項目，模型與權限依其於「項目與模型」之設。",
+        "projectDialogueHint": "新差事置於機器人自有之對話目錄，用下之模型。",
+        "officialProjectHint": "新差事置於此項目，模型與權柄從其於「項目與模型」之設。凡 Cindy 官方機器人共此一項。",
+        "officialProjectDialogueHint": "新差事置於言談目錄，模型與權柄從「項目與模型」中「言談」一行。凡 Cindy 官方機器人共此一項。",
+        "projectFullAccessTitle": "改用「{{name}}」之權限乎？",
+        "projectFullAccessDescription": "「{{name}}」於「項目與模型」為完全訪問：此後於{{app}}所啟之差事將逕行，不復逐條確認。可先於「項目與模型」改為 Auto 或 Ask。",
+        "projectFullAccessConfirm": "仍用之",
+        "projectFullAccessCancel": "取消",
+        "projectUpdateFailed": "未能換項目，請察其尚在側欄，再試之。",
+        "chats": "群議",
+        "channels": "頻道"
+      },
+      "chats": {
+        "title": "群議",
+        "description": "為機器人所在之某群另定項目、模型、權柄，及群中他人可否發問。",
+        "rules": "未另定者：已繫專案之群從「案與模型」中該專案之設，未繫專案之群從機器人之「專案」，機器人亦未擇專案者，從其「模型」之設。群之主線與其話題共一群之設。",
+        "expand": "展",
+        "collapse": "收",
+        "groupCount_one": "{{count}} 群",
+        "groupCount_other": "{{count}} 群",
+        "customCount_one": "{{count}} 群另設",
+        "customCount_other": "{{count}} 群另設",
+        "refresh": "重讀",
+        "loading": "正讀群錄…",
+        "loadFailed": "群錄未能讀得，請稍後點「重讀」再試。",
+        "saveFailed": "群設未能存",
+        "notConnected": "機器人連上後方能列其所在之群。下方唯列已另設之群。",
+        "empty": "機器人尚未入群。引之入群後，再來此設之。",
+        "listPermission": "未能讀機器人所在之群：請於飛書開放平台為此應用開「獲取群組資訊」之權。下方先列機器人曾用之群。",
+        "listUnavailable": "暫未能讀機器人所在之群，下方先列機器人曾用之群。",
+        "unnamed": "無名之群（{{id}}）",
+        "summaryModel": "另定模型",
+        "summaryPermission": "另定權柄",
+        "expandAria": "設「{{name}}」",
+        "searchLabel": "尋群",
+        "searchPlaceholder": "以群名尋之",
+        "customHeading": "另設者",
+        "followHeading": "從渠道之設者",
+        "showMore": "再顯 {{count}} 個",
+        "showLess": "收",
+        "noMatch": "未見名含「{{query}}」之群",
+        "project": {
+          "label": "專案",
+          "follow": "從機器人",
+          "missing": "{{name}}（已離側欄）",
+          "hint": "於群中初 @ 機器人、開新話題或發 /new 時乃行，進行之差事不移。擇專案，則模型與權柄常從此專案於「案與模型」之設；擇「從機器人」，則從機器人之「專案」，機器人未擇專案者，差事置於其言談目錄，從其「模型」之設。唯可擇側欄中本機之專案。",
+          "followWith": "從機器人（{{project}}）"
+        },
+        "model": {
+          "label": "模型與思之深淺",
+          "hintFollow": "從「新言談配置」。於此換模型或思之深淺，則唯及此群。",
+          "hintFollowProject": "從專案「{{project}}」於「案與模型」之設。於此換模型或思之深淺，則唯及此群。",
+          "hintProjectUnavailable": "專案「{{project}}」於「案與模型」所定之模型今不可用。可往彼處重擇，或於此為此群另擇之。",
+          "hintFixed": "此群另定模型。群中未另改模型之差事，得下一言時即換之；新差事徑用之。",
+          "reset": "模型復從"
+        },
+        "permission": {
+          "label": "權柄",
+          "hintFollow": "今從「群議新差事之權柄檔」。唯及此後於此群新開之差事，既有差事請於群中以 /permission 切換。",
+          "hintFollowProject": "今從專案「{{project}}」於「案與模型」之權柄。唯及此後於此群新開之差事，既有差事請於群中以 /permission 切換。",
+          "hintFixed": "此群另定權柄。唯及此後於此群新開之差事，既有差事請於群中以 /permission 切換。",
+          "hintFollowBot": "今從機器人自身之權柄。唯及此後於此群新啟之差事，舊差事於群中以 /permission 易之。",
+          "followWith": "從 · {{mode}}"
+        },
+        "fullAccessConfirm": {
+          "title": "令「{{name}}」以完全存取行之乎？",
+          "description": "此後於此群新開之差事皆徑行，不復逐項確認，群中無論何人 @ 機器人皆然。群議之言由成員掌之，請確保群中之人皆可信。",
+          "confirm": "改為完全存取",
+          "cancel": "罷"
+        },
+        "widerConfirm": {
+          "title": "寬「{{name}}」之權柄乎？",
+          "description": "此後於此群新開之差事，將由「{{current}}」易為「{{next}}」，群中無論何人 @ 機器人皆然。群議之言由成員掌之，請確保群中之人皆可信。",
+          "confirm": "仍改之",
+          "cancel": "罷"
+        },
+        "descriptionChannels": "為機器人所事之某頻道另定項目、模型、權柄，及頻道中他人可否發問。",
+        "kindGroup": "群議",
+        "kindChannel": "頻道",
+        "channelCount_one": "{{count}} 頻道",
+        "channelCount_other": "{{count}} 頻道",
+        "membersCount_one": "{{count}} 群許眾發問",
+        "membersCount_other": "{{count}} 群許眾發問",
+        "unnamedChannel": "無名之頻道（{{id}}）",
+        "searchPlaceholderChannels": "以頻道名索之",
+        "emptyLocal": "尚未記機器人所在之群。於群中 @ 機器人一言，此處乃列其群。",
+        "emptyChannels": "尚無所開之頻道。先於「伺服器頻道」中開機器人所事之頻道。",
+        "members": {
+          "label": "群眾亦可發問",
+          "hint": "開之，則群中他人 @ 機器人亦得其答，用此群之項目與模型。其問至多以「自審」行之，有所作為者仍待汝許；汝自問者從此群之權柄。",
+          "guard": "汝不言於群時，群眾連問滿 {{limit}} 次則暫止，待汝於群中 @ 機器人一言或點「復」。號令唯聽於汝。",
+          "paused": "已暫止答群眾：彼連問 {{limit}} 次，汝皆未言於群。",
+          "resume": "復",
+          "chip": "群眾可問",
+          "pausedChip": "群眾暫止",
+          "resumeFailed": "復之未成，請稍後再試"
+        },
+        "statusCustom": "已另定",
+        "shownHint": "已示前 {{shown}} / {{total}}，書其名可篩之。",
+        "fieldsNote": "易項目、模型、權柄者，群中下次新啟差事乃行，進行之差事不移。"
       }
     },
     "shortcuts": {
@@ -13257,7 +13368,10 @@
         "unbound": "可將官方 @askmycindy 所收君之提問交予 {{name}}。",
         "managed": "X 之問由同伴處理。可於該同伴之傳訊之所規制中更改所繫。",
         "riskBody": "X 之問將用同伴之共享記憶、才能與工作目錄，回答公開。勿經 X 處理私密資訊。專線不直接用同伴之私聊記錄。"
-      }
+      },
+      "handedOver": "{{apps}} 已於設定中付 {{name}} 應答。",
+      "handedOverSeparator": "、",
+      "manageInSettings": "往設定理之"
     },
     "voiceMode": {
       "realtime": {
@@ -13951,7 +14065,8 @@
         },
         "companion": {
           "retryLater": "請少頃再試"
-        }
+        },
+        "membersPaused": "群眾之問暫止矣，待主人歸而續之 🙈"
       },
       "hook": {
         "interaction": {

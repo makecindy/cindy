@@ -93,6 +93,7 @@ import { listTelegramKnownGroups } from './telegram/groupWindow';
 import { wireDingTalkOrchestrator } from './dingtalk';
 import { wireWechatOrchestrator } from './wechat';
 import { wireWecomOrchestrator } from './wecom';
+import { registerPersonalImChatSources } from './chatSourcesWiring';
 import { resetTelegramGroupContextCursors } from './telegram/groupWindow';
 import { resetChannelGroupContextCursors } from './shared/channelGroupWindow';
 import { getImOrchestrator, listImOrchestrators } from './shared/orchestrator';
@@ -129,6 +130,8 @@ import { getUpdateStatus, isUpdateRelaunchImminent } from '../updateService';
 
 import { createLogger } from '../logger';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
+import { readPersonalChannelChoice } from './shared/personalChannelStore';
+import { registerPersonalChannelIpc } from './shared/personalChannelIpc';
 import { throwIpcError } from '../utils/ipcValidate';
 import { registerCloudDomainCall } from '../host-settings/managementCalls';
 import { CLOUD_WECHAT_WORKING_DIR_SET } from '../../shared/cloudImSettings';
@@ -142,6 +145,7 @@ import {
 export function registerBotImConnectionIpc(): void {
   registerBotImConnectionRuntimeIpc();
   registerBotImPersonalAdoptionIpc();
+  registerPersonalChannelIpc();
 }
 export {
   registerTelegramBotConfigIpc,
@@ -279,12 +283,17 @@ export function startImOrchestrators(): void {
     }
   });
 
-  wireFeishuOrchestrator(feishuIm, FEISHU_CONFIG);
-  wireDiscordOrchestrator(discordIm, DISCORD_CONFIG);
-  wireTelegramOrchestrator(telegramIm, TELEGRAM_CONFIG);
-  wireDingTalkOrchestrator(dingtalkIm, DINGTALK_CONFIG);
+  // 设置页那份个人机器人: 「谁来回复」选了伙伴时消息交给伙伴(凭证不动, 每条消息现读)。
+  const personalCompanion = (channel: 'feishu' | 'discord' | 'telegram' | 'dingtalk' | 'wecom') =>
+    () => readPersonalChannelChoice(channel).companionBotId;
+  wireFeishuOrchestrator(feishuIm, FEISHU_CONFIG, { companionBotId: personalCompanion('feishu') });
+  wireDiscordOrchestrator(discordIm, DISCORD_CONFIG, { companionBotId: personalCompanion('discord') });
+  wireTelegramOrchestrator(telegramIm, TELEGRAM_CONFIG, { companionBotId: personalCompanion('telegram') });
+  wireDingTalkOrchestrator(dingtalkIm, DINGTALK_CONFIG, { companionBotId: personalCompanion('dingtalk') });
   wireWechatOrchestrator(wechatIm, WECHAT_CONFIG);
-  wireWecomOrchestrator(wecomIm, WECOM_CONFIG);
+  wireWecomOrchestrator(wecomIm, WECOM_CONFIG, { companionBotId: personalCompanion('wecom') });
+  // 设置页「群聊」总表的群名单来源(各平台的个人机器人)。
+  registerPersonalImChatSources();
 
   configureCloudWechatManagement({
     state: () => wechatIm.getState(),

@@ -44,6 +44,7 @@ import { imBotSettings } from './ImBotSection.settings-search';
 
 import { Button } from '@/components/ui/button';
 import { SETTINGS_HINT, SettingsCard, SettingsRow } from '@/components/ui/settings-rows';
+import { Select } from '@/components/ui/select';
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -77,6 +78,8 @@ import { useHookWorkspacePrefs, WorkspacePrefsEditor } from './HookWorkspacePref
 import { HOOK_DEFAULT_PERMISSION_MODE } from './hookWorkspacePrefsLogic';
 import { ImChannelSettingsCard } from './ImChannelSettingsCard';
 import { useImEntrancePlugins } from './ImPluginEntrances';
+import { ImReplyTargetField, type ImReplyTarget } from './ImReplyTargetField';
+import { useBotProfiles } from '@/features/bots/botStore';
 import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
 import { useSettingsTarget } from './settingsTarget';
 import {
@@ -84,10 +87,27 @@ import {
 } from './TelegramBehaviorSettings';
 
 /** 「官方」栏的渠道手风琴卡(同刻最多展开一张, 交互对齐「个人」栏)。 */
-type CindyImCard = 'slack' | 'telegram' | 'x' | 'feishu' | 'discord';
+export type CindyImCard = 'slack' | 'telegram' | 'x' | 'feishu' | 'discord';
+
+/** 主页列表要的每个官方渠道的一行状态(可见性、是否已开、徽章文案)。 */
+export type OfficialImSummary = Partial<Record<CindyImCard, {
+  visible: boolean;
+  enabled: boolean;
+  linked: boolean;
+  tone: ChannelBadgeTone;
+  label: string;
+  /** 交给的伙伴; null = 普通任务。 */
+  companionBotId: string | null;
+}>>;
+
+/**
+ * 「IM 机器人」新结构下的显示范围: list = 只算状态不显示(主页), 某个渠道 = 只显示那一张(聊天软件子页),
+ * projects = 只显示「项目与模型」。不传 = 旧的整组显示(伙伴页的 X 等)。
+ */
+export type HookConnectionsShow = 'list' | CindyImCard | 'projects';
 
 /** 渠道卡状态徽章的色调档(映射到「个人」栏同款 --settings-badge-* token)。 */
-type ChannelBadgeTone = 'ok' | 'progress' | 'attention' | 'error';
+export type ChannelBadgeTone = 'ok' | 'progress' | 'attention' | 'error';
 
 function badgeToneColor(tone: ChannelBadgeTone): string {
   switch (tone) {
@@ -117,6 +137,7 @@ function transportBadgeTone(status: SlackHookView['status']): ChannelBadgeTone {
   }
 }
 
+/** 收起行状态徽章(结构与 FeishuBotSection 的状态 pill 逐字对齐)。 */
 /** 收起行状态徽章(结构与 FeishuBotSection 的状态 pill 逐字对齐)。云实例设置的官方卡复用。 */
 export function ChannelStatusBadge({ tone, label }: { tone: ChannelBadgeTone; label: string }) {
   const color = badgeToneColor(tone);
@@ -214,15 +235,20 @@ function DefaultWorkspaceRadio({
   );
 }
 
-export function HookConnectionsSection({ companion, projectsOnly = false }: {
+export function HookConnectionsSection({ companion, projectsOnly = false, show, onSummary }: {
   companion?: { id: string; name: string };
   /** Only the shared 「项目与模型」 block, for IM plugins where the Cindy group is not shown. */
   projectsOnly?: boolean;
+  /** 只显示一部分(见 HookConnectionsShow); 同一页始终只挂一份, 状态与自动弹出的确认框不重复。 */
+  show?: HookConnectionsShow;
+  /** 每次各渠道状态变化时回报(主页列表用)。 */
+  onSummary?: (summary: OfficialImSummary) => void;
 } = {}) {
   const { t } = useTranslation();
   const imPlugins = useImEntrancePlugins();
   const { api } = useSettingsTarget();
   const hookControl = api.hookControl;
+  const bots = useBotProfiles();
   const { entry, activation } = useSettingsSearchNavigation();
   /** 飞书不可用时的去向因身份而异: 组织成员找管理员, 个人账号没有管理员可找。 */
   const personalAccount = useOptionalAuthUser()?.membershipKind === 'personal';
@@ -731,6 +757,17 @@ export function HookConnectionsSection({ companion, projectsOnly = false }: {
     runHookAction(() => hookControl.revokeTeam(target.teamId));
   };
 
+  const pendingSummaryRef = useRef<OfficialImSummary | null>(null);
+  const reportedSummaryRef = useRef('');
+  useEffect(() => {
+    const summary = pendingSummaryRef.current;
+    if (!summary || !onSummary) return;
+    const key = JSON.stringify(summary);
+    if (key === reportedSummaryRef.current) return;
+    reportedSummaryRef.current = key;
+    onSummary(summary);
+  });
+
   // 数据未就绪不渲染任何内容(规则 7: 无 loading 态、不闪空状态)
   if (hook === null) return null;
 
@@ -944,12 +981,42 @@ export function HookConnectionsSection({ companion, projectsOnly = false }: {
   // IM 插件(声明 imEntrance)读的也是这一份: 只装了插件、没开官方机器人时也要能改。
   const pluginsShareProjects = !companion && imPlugins.length > 0;
   const projectsSectionVisible = hook.enabled || projectsDefaultApplies || pluginsShareProjects;
+  // 新结构里默认项目在各官方机器人子页的「项目」下拉里选, 「项目与模型」页只管每个项目的模型与权限
+  // (2026-11-24 用户: 内页只要能选项目); 旧的整页视图(无 show)仍在表里用单选选默认。
+  const tablePicksDefault = projectsDefaultApplies && show !== 'projects';
   // 默认项目所有官方机器人共用一个(main 侧读写时已对齐), 任取一处的值即可。
   const sharedDefaultWorkspace =
     hook.feishu.defaultWorkspace ?? hook.telegram.defaultWorkspace ?? hook.x.defaultWorkspace ??
     discordView?.defaultWorkspace ?? null;
   const setSharedDefaultWorkspace = (alias: string | null) =>
     void setProviderDefaultWorkspace('feishu', alias);
+
+  /**
+   * 官方机器人子页的「项目」下拉: 只选新任务放进哪个项目, 模型与权限在「项目与模型」里改。
+   * 默认项目所有官方机器人共用一个(Slack 在频道里各自选, 不显示这一行)。
+   */
+  const renderOfficialProjectRow = () => {
+    const label = t('settings.imBot.rows.project');
+    const current = sharedDefaultWorkspace ?? HOOK_CHAT_WORKSPACE_ALIAS;
+    const options = [
+      { value: HOOK_CHAT_WORKSPACE_ALIAS, label: t('settings.imBot.rows.projectDialogue') },
+      ...Object.keys(hook.workspaces).map((name) => ({ value: name, label: name })),
+    ];
+    return (
+      <SettingsRow
+        wrap
+        title={label}
+        hint={t(sharedDefaultWorkspace ? 'settings.imBot.rows.officialProjectHint' : 'settings.imBot.rows.officialProjectDialogueHint')}
+        trailing={<Select data-setting-id={imBotSettings.cindy.id} label={label} value={current} options={options} width="sm"
+          onValueChange={(value) => setSharedDefaultWorkspace(value === HOOK_CHAT_WORKSPACE_ALIAS ? null : value)} />}
+      />
+    );
+  };
+  /** 默认项目的权限是完全访问(从没设过也是)时把后果说出来: 群里任何人 @ 机器人都会落到它里面。 */
+  const officialDefaultFullAccess = () =>
+    projectPrefsState.editable &&
+    (projectPrefsState.prefsFor(sharedDefaultWorkspace ?? HOOK_CHAT_WORKSPACE_ALIAS).permissionMode ?? HOOK_DEFAULT_PERMISSION_MODE) ===
+      HOOK_DEFAULT_PERMISSION_MODE;
 
   /** 渠道卡里指向「项目与模型」的那一行: 以前这块在每张卡里, 现在整页只有一处。 */
   const sharedSettingsPointer = (
@@ -974,7 +1041,7 @@ export function HookConnectionsSection({ companion, projectsOnly = false }: {
       key={alias}
       wrap
       lead={
-        projectsDefaultApplies ? (
+        tablePicksDefault ? (
           <DefaultWorkspaceRadio
             selected={selected}
             label={t('settings.remoteControl.hook.form.defaultWorkspaceRadioAria', { name: title })}
@@ -988,7 +1055,7 @@ export function HookConnectionsSection({ companion, projectsOnly = false }: {
         </span>
       }
       tag={
-        projectsDefaultApplies && selected
+        tablePicksDefault && selected
           ? t('settings.remoteControl.hook.form.defaultProjectTag')
           : undefined
       }
@@ -1017,17 +1084,20 @@ export function HookConnectionsSection({ companion, projectsOnly = false }: {
     const defaultAlias = sharedDefaultWorkspace ?? HOOK_CHAT_WORKSPACE_ALIAS;
     // 默认项目的权限是完全访问(从没设过也是)时把后果说出来: 群里任何人 @ 机器人都会落到它里面。
     const defaultFullAccess =
-      projectsDefaultApplies &&
+      tablePicksDefault &&
       projectPrefsState.editable &&
       (projectPrefsState.prefsFor(defaultAlias).permissionMode ?? HOOK_DEFAULT_PERMISSION_MODE) ===
         HOOK_DEFAULT_PERMISSION_MODE;
     return (
       <section
         ref={projectsSectionRef}
-        aria-labelledby="cindy-im-projects-heading"
+        data-im-projects=""
+        aria-labelledby={show === 'projects' ? undefined : 'cindy-im-projects-heading'}
+        aria-label={show === 'projects' ? t('settings.imBot.list.projects') : undefined}
         className="mt-3 flex scroll-mt-4 flex-col gap-3.5"
       >
-        <div className="flex flex-col gap-1">
+        {/* 单独成页时页头已是「项目与模型」与说明, 不再重复组名。 */}
+        {show === 'projects' ? null : <div className="flex flex-col gap-1">
           <h4
             id="cindy-im-projects-heading"
             className="text-13 font-medium leading-[1.5] text-[var(--settings-section-title)]"
@@ -1042,7 +1112,7 @@ export function HookConnectionsSection({ companion, projectsOnly = false }: {
               ? 'settings.remoteControl.hook.form.workspacesCardDescriptionWithPlugins'
               : 'settings.remoteControl.hook.form.workspacesCardDescription')}
           </p>
-        </div>
+        </div>}
         {projectPrefsState.hint !== null && (
           <div className={cn('flex items-center gap-2', SETTINGS_HINT)}>
             <span>{projectPrefsState.hint}</span>
@@ -1054,7 +1124,7 @@ export function HookConnectionsSection({ companion, projectsOnly = false }: {
           </div>
         )}
         <SettingsCard
-          {...(projectsDefaultApplies
+          {...(tablePicksDefault
             ? {
                 role: 'radiogroup',
                 'aria-label': t('settings.remoteControl.hook.form.defaultWorkspaceAria'),
@@ -1076,7 +1146,7 @@ export function HookConnectionsSection({ companion, projectsOnly = false }: {
             ),
           )}
         </SettingsCard>
-        {projectsDefaultApplies ? (
+        {tablePicksDefault ? (
           <p className={SETTINGS_HINT}>{t('settings.remoteControl.hook.form.defaultWorkspaceRowHint')}</p>
         ) : null}
         {defaultFullAccess ? (
@@ -1257,276 +1327,11 @@ export function HookConnectionsSection({ companion, projectsOnly = false }: {
     </div>
   );
 
-  const renderProviderCard = (provider: NeutralCardProvider) => {
-    const setting = provider === 'telegram'
-      ? imBotSettings.cindyTelegram
-      : provider === 'feishu'
-        ? imBotSettings.cindyFeishu
-        : provider === 'discord' ? imBotSettings.cindyDiscord : imBotSettings.cindyX;
-    const view = hook[provider] as ProviderHookView | undefined;
-    if (view === undefined) return null; // 旧 main 快照尚无该 provider 字段时不渲染
-    const cs = providerCardState(provider, view);
-    const storeAccounts = provider === 'feishu' && view.multiBindAvailable === true;
-    if (!cs.visible) return null;
-    return (
-      <ImChannelSettingsCard
-        id={`cindy-im-${provider}`}
-        title={t(
-          provider === 'telegram'
-            ? 'settings.tina.prefs.providerTelegram'
-            : provider === 'feishu'
-              ? 'settings.tina.prefs.providerFeishu'
-              : provider === 'discord'
-                ? 'settings.tina.prefs.providerDiscord'
-                : 'settings.tina.prefs.providerX',
-        )}
-        description={t(`settings.remoteControl.hook.${provider}.description`)}
-        routeSummary={companion ? null : cs.bindingLine}
-        status={<ChannelStatusBadge tone={cs.badge.tone} label={cs.badge.label} />}
-        headerAction={
-          <Switch data-setting-id={setting.id}
-            checked={cs.toggleChecked}
-            disabled={!view.enabled && view.url.length === 0}
-            onCheckedChange={(enabled) => handleProviderToggle(provider, enabled)}
-            aria-label={t(`settings.remoteControl.hook.${provider}.toggleAria`)}
-          />
-        }
-        expanded={expandedCard === provider}
-        onToggle={() => toggleCard(provider)}
-      >
-        <div className="flex flex-col gap-2">
-          {view.enabled &&
-          view.status === 'error' &&
-          cs.errorText &&
-          cs.errorText !== cs.badge.label ? (
-            <span className="text-11 leading-relaxed text-[var(--error-fg)]">{cs.errorText}</span>
-          ) : null}
-
-          {provider === 'feishu' && view.applications !== undefined ? renderFeishuApplications(view) : <>
-          {!view.enabled ? (
-            <span className="text-11 leading-relaxed text-[var(--text-tertiary)]">
-              {t(`settings.remoteControl.hook.${provider}.disabledHint`)}
-            </span>
-          ) : null}
-
-          {/* 绑定进度/结果一行(完成关联引导、失败原因等; 已关联的摘要由
-              收起行承载, 展开区不重复) */}
-          {cs.bindingLine !== null && (!cs.confirmed || companion) ? (
-            <span
-              className={`text-11 leading-relaxed ${
-                cs.state === 'failed' ||
-                cs.state === 'denied' ||
-                cs.state === 'expired' ||
-                cs.state === 'superseded'
-                  ? 'text-[var(--error-fg)]'
-                  : 'text-[var(--text-tertiary)]'
-              }`}
-            >
-              {cs.bindingLine}
-            </span>
-          ) : null}
-
-
-          {/* 飞书服务已连上但没宣告 provider:feishu: 组织账号是组织还没配置(或停用了)
-              飞书机器人; 个人账号是 Cindy 全局应用尚未开放。徽章只放得下短词,
-              这里说清原因与去向。 */}
-          {provider === 'feishu' &&
-          view.enabled &&
-          !view.capabilityPending &&
-          !view.available &&
-          view.status !== 'error' ? (
-            <span className="text-11 leading-relaxed text-[var(--text-tertiary)]">
-              {t(
-                personalAccount
-                  ? 'settings.remoteControl.hook.feishu.unavailableHintPersonal'
-                  : 'settings.remoteControl.hook.feishu.unavailableHint',
-              )}
-            </span>
-          ) : null}
-
-          {provider === 'feishu' && cs.confirmed && !storeAccounts && view.binding ? workingDeviceHint(view.binding) : null}
-
-          {provider === 'discord' && view.enabled && view.available && cs.inProgress && cs.binding?.bindCode
-            ? renderBindCode('discord', cs.binding, cs.actions)
-            : null}
-
-          {view.enabled && view.available ? (
-            <div className="flex flex-wrap items-center gap-2">
-              {cs.inProgress && cs.binding?.connectUrl ? (
-                <>
-                  {cs.actions.includes('open_connect_url') ? (
-                    <Button data-settings-search-action="Open the channel connection or group setup link"
-                      variant="secondary"
-                      size="xs"
-                      compact
-                      type="button"
-                      onClick={() => handleProviderOpen(provider, 'connect')}
-                    >
-                      {t(`settings.remoteControl.hook.${provider}.openApp`)}
-                    </Button>
-                  ) : null}
-                  {cs.actions.includes('copy_connect_url') ? (
-                    <Button data-settings-search-action="Copy the channel connection link"
-                      variant="secondary"
-                      size="xs"
-                      compact
-                      type="button"
-                      onClick={() => void handleCopyProviderLink(provider)}
-                    >
-                      {t('settings.remoteControl.hook.binding.copyLink')}
-                    </Button>
-                  ) : null}
-                </>
-              ) : null}
-              {cs.inProgress && cs.actions.includes('cancel') ? (
-                <Button data-settings-search-action="Start or cancel linking this bot account"
-                  variant="secondary"
-                  size="xs"
-                  compact
-                  type="button"
-                  onClick={() => runHookAction(() => hookControl.providerBindCancel(provider))}
-                >
-                  {t(`settings.remoteControl.hook.${provider}.cancel`)}
-                </Button>
-              ) : null}
-              {cs.confirmed && !storeAccounts ? (
-                <>
-                  {cs.actions.includes('open_provider') ? (
-                    <Button data-settings-search-action="Open the channel connection or group setup link"
-                      variant="secondary"
-                      size="xs"
-                      compact
-                      type="button"
-                      onClick={() => handleProviderOpen(provider, 'provider')}
-                    >
-                      {t(`settings.remoteControl.hook.${provider}.openBot`)}
-                    </Button>
-                  ) : null}
-                  {cs.actions.includes('add_to_group') ? (
-                    <Button data-settings-search-action="Open the channel connection or group setup link"
-                      variant="secondary"
-                      size="xs"
-                      compact
-                      type="button"
-                      onClick={() => handleProviderOpen(provider, 'add-to-group')}
-                    >
-                      {t(`settings.remoteControl.hook.${provider}.addToGroup`)}
-                    </Button>
-                  ) : null}
-                  {provider === 'feishu' && cs.actions.includes('select_device') && view.binding?.workingDevice?.isCurrent !== true ? (
-                    <Button id={imBotSettings.cindyFeishuWorkingDevice.targetId} data-setting-id={imBotSettings.cindyFeishuWorkingDevice.id}
-                      variant="secondary" size="xs" compact type="button"
-                      disabled={selectingWorkingDevice || !view.available || view.status !== 'connected'}
-                      onClick={() => void selectWorkingDevice()}>
-                      {t('settings.remoteControl.hook.feishu.setWorkingDevice')}
-                    </Button>
-                  ) : null}
-                  {cs.actions.includes('revoke') ? (
-                    <Button data-settings-search-action="Unlink this bot account"
-                      variant="secondary"
-                      size="xs"
-                      compact
-                      type="button"
-                      onClick={() => void handleProviderUnlink(provider)}
-                    >
-                      {t(`settings.remoteControl.hook.${provider}.unlink`)}
-                    </Button>
-                  ) : null}
-                </>
-              ) : cs.canStartLink ? (
-                <Button data-settings-search-action="Start or cancel linking this bot account"
-                  variant="secondary"
-                  size="xs"
-                  compact
-                  type="button"
-                  onClick={() => runHookAction(() => hookControl.providerBindStart(provider))}
-                >
-                  {t(
-                    cs.state === 'none' || storeAccounts
-                      ? `settings.remoteControl.hook.${provider}.connect`
-                      : `settings.remoteControl.hook.${provider}.retry`,
-                  )}
-                </Button>
-              ) : null}
-            </div>
-          ) : null}
-
-          {storeAccounts && (view.bindings?.length ?? 0) > 0 ? (
-            <>
-              <SettingsCard id={imBotSettings.cindyFeishuWorkingDevice.targetId}>
-                {view.bindings!.map((account) => renderFeishuAccount(account, view))}
-              </SettingsCard>
-              <div className="flex flex-wrap items-center gap-2">
-                <Button data-settings-search-action="Open the channel connection or group setup link"
-                  variant="secondary" size="xs" compact type="button"
-                  disabled={!view.enabled || !view.available || view.status !== 'connected'}
-                  onClick={() => handleProviderOpen('feishu', 'provider')}>
-                  {t('settings.remoteControl.hook.feishu.openBot')}
-                </Button>
-              </div>
-            </>
-          ) : null}
-
-          {/* 飞书关联码: 网页授权是主路径, 关联码是兜底, 放在动作行之后。 */}
-          {provider === 'feishu' && view.enabled && view.available && cs.inProgress && cs.binding?.bindCode
-            ? renderBindCode('feishu', cs.binding, cs.actions)
-            : null}
-
-          </>}
-
-          {/* X 专属: 用法与公开风险。两个刻意的选择 ——
-              · 放在工作目录区**之前**: 风险那条讲的就是这张卡上那个默认工作目录,
-                顺序必须是先看到后果再碰控件。注意这只是**排布**上的先后 ——
-                文案本身不许用方位指代(「下面」/「below」), 因为同一组件也渲染进
-                确认门弹窗, 那里根本没有目录选择器;
-              · **不按 view.enabled / cs.confirmed 收起**: 正在评估要不要打开的人
-                最需要看到「回帖是公开的」, 那时候两个条件都还不成立。 */}
-          {provider === 'x' ? <>
-            <XUsageGuide companion={!!view.companionBotId} />
-            {companion ? (
-              <div className="flex flex-col gap-2 border-t border-[var(--border-default)] pt-3">
-                <CompanionXAssignment companion={companion} companionBotId={view.companionBotId ?? null}
-                  settingId={imBotSettings.cindy.id}
-                  assign={(assign, expectedBotId) => setXCompanion(assign ? companion.id : null, expectedBotId)} />
-              </div>
-            ) : view.companionBotId ? (
-              <div className="flex flex-col gap-2 border-t border-[var(--border-default)] pt-3">
-                <p className="text-12 leading-relaxed text-[var(--text-secondary)]">{t('bots.channels.officialX.managed')}</p>
-                <Button data-setting-id={imBotSettings.cindy.id} variant="secondary" size="sm" type="button" disabled={companionPending}
-                  onClick={() => void removeXCompanion()}>{t('bots.channels.officialX.remove')}</Button>
-              </div>
-            ) : null}
-          </> : null}
-
-          {/* 没有行为设置可显示时不留一个只有分割线的空容器。 */}
-          {provider === 'telegram' && cs.confirmed && view.behaviorAvailable === true ? (
-            <div
-              key={cs.binding?.bindingId ?? 'telegram-unbound'}
-              className="mt-2 flex flex-col gap-5 border-t border-[var(--border-default)] pt-4"
-            >
-              <TelegramBehaviorSettings
-                source="official"
-                bindingId={cs.binding?.bindingId ?? undefined}
-              />
-            </div>
-          ) : null}
-          {view.enabled && !view.companionBotId ? sharedSettingsPointer : null}
-        </div>
-      </ImChannelSettingsCard>
-    );
-  };
-
-  // 本地模式没有「官方」分栏: IM 插件仍读这一份, 由 ImBotSection 把只有这一块的视图放进「插件」分栏。
-  if (projectsOnly) return projectsSectionVisible ? <div className="flex flex-col gap-3">{renderProjectsSection()}</div> : null;
-
-  return (
-    <div className="flex flex-col gap-3">
-      {!companion ? <HookConnectionsDescription /> : null}
-
-      {/* ── Slack 渠道卡 ─────────────────────────────────────────────── */}
-      {!companion ? <ImChannelSettingsCard
+  /** Slack 渠道卡(整组显示与单渠道子页共用)。 */
+  const renderSlackCard = () => (
+    <ImChannelSettingsCard
         id={imBotSettings.cindySlack.targetId}
-        title={t('settings.tina.prefs.providerSlack')}
+        title={show ? t('settings.imBot.ways.official') : t('settings.tina.prefs.providerSlack')}
         description={t('settings.remoteControl.hook.slackDescription')}
         routeSummary={slackSummary}
         status={
@@ -1547,7 +1352,8 @@ export function HookConnectionsSection({ companion, projectsOnly = false }: {
             aria-label={t('settings.remoteControl.hook.toggleAria')}
           />
         }
-        expanded={expandedCard === 'slack'}
+        expanded={expandedCard === 'slack' || show === 'slack'}
+        staticOpen={show === 'slack'}
         onToggle={() => toggleCard('slack')}
       >
         <div className="flex flex-col gap-2">
@@ -1951,9 +1757,354 @@ export function HookConnectionsSection({ companion, projectsOnly = false }: {
             </>
           ) : null}
 
-          {hook.enabled ? sharedSettingsPointer : null}
+          {/* 新结构(单个聊天软件子页)里项目在下面的「项目」行选, 项目与模型是主页上的单独一页, 不再指路。 */}
+          {hook.enabled && !show ? sharedSettingsPointer : null}
         </div>
-      </ImChannelSettingsCard> : null}
+      </ImChannelSettingsCard>
+  );
+
+  const renderProviderCard = (provider: NeutralCardProvider) => {
+    const setting = provider === 'telegram'
+      ? imBotSettings.cindyTelegram
+      : provider === 'feishu'
+        ? imBotSettings.cindyFeishu
+        : provider === 'discord' ? imBotSettings.cindyDiscord : imBotSettings.cindyX;
+    const view = hook[provider] as ProviderHookView | undefined;
+    if (view === undefined) return null; // 旧 main 快照尚无该 provider 字段时不渲染
+    const cs = providerCardState(provider, view);
+    const storeAccounts = provider === 'feishu' && view.multiBindAvailable === true;
+    if (!cs.visible) return null;
+    return (
+      <ImChannelSettingsCard
+        id={`cindy-im-${provider}`}
+        title={show ? t('settings.imBot.ways.official') : t(
+          provider === 'telegram'
+            ? 'settings.tina.prefs.providerTelegram'
+            : provider === 'feishu'
+              ? 'settings.tina.prefs.providerFeishu'
+              : provider === 'discord'
+                ? 'settings.tina.prefs.providerDiscord'
+                : 'settings.tina.prefs.providerX',
+        )}
+        description={t(`settings.remoteControl.hook.${provider}.description`)}
+        routeSummary={companion ? null : cs.bindingLine}
+        status={<ChannelStatusBadge tone={cs.badge.tone} label={cs.badge.label} />}
+        headerAction={
+          <Switch data-setting-id={setting.id}
+            checked={cs.toggleChecked}
+            disabled={!view.enabled && view.url.length === 0}
+            onCheckedChange={(enabled) => handleProviderToggle(provider, enabled)}
+            aria-label={t(`settings.remoteControl.hook.${provider}.toggleAria`)}
+          />
+        }
+        expanded={expandedCard === provider || show === provider}
+        staticOpen={show === provider}
+        onToggle={() => toggleCard(provider)}
+      >
+        <div className="flex flex-col gap-2">
+          {view.enabled &&
+          view.status === 'error' &&
+          cs.errorText &&
+          cs.errorText !== cs.badge.label ? (
+            <span className="text-11 leading-relaxed text-[var(--error-fg)]">{cs.errorText}</span>
+          ) : null}
+
+          {provider === 'feishu' && view.applications !== undefined ? renderFeishuApplications(view) : <>
+          {!view.enabled ? (
+            <span className="text-11 leading-relaxed text-[var(--text-tertiary)]">
+              {t(`settings.remoteControl.hook.${provider}.disabledHint`)}
+            </span>
+          ) : null}
+
+          {/* 绑定进度/结果一行(完成关联引导、失败原因等; 已关联的摘要由
+              收起行承载, 展开区不重复) */}
+          {cs.bindingLine !== null && (!cs.confirmed || companion) ? (
+            <span
+              className={`text-11 leading-relaxed ${
+                cs.state === 'failed' ||
+                cs.state === 'denied' ||
+                cs.state === 'expired' ||
+                cs.state === 'superseded'
+                  ? 'text-[var(--error-fg)]'
+                  : 'text-[var(--text-tertiary)]'
+              }`}
+            >
+              {cs.bindingLine}
+            </span>
+          ) : null}
+
+
+          {/* 飞书服务已连上但没宣告 provider:feishu: 组织账号是组织还没配置(或停用了)
+              飞书机器人; 个人账号是 Cindy 全局应用尚未开放。徽章只放得下短词,
+              这里说清原因与去向。 */}
+          {provider === 'feishu' &&
+          view.enabled &&
+          !view.capabilityPending &&
+          !view.available &&
+          view.status !== 'error' ? (
+            <span className="text-11 leading-relaxed text-[var(--text-tertiary)]">
+              {t(
+                personalAccount
+                  ? 'settings.remoteControl.hook.feishu.unavailableHintPersonal'
+                  : 'settings.remoteControl.hook.feishu.unavailableHint',
+              )}
+            </span>
+          ) : null}
+
+          {provider === 'feishu' && cs.confirmed && !storeAccounts && view.binding ? workingDeviceHint(view.binding) : null}
+
+          {provider === 'discord' && view.enabled && view.available && cs.inProgress && cs.binding?.bindCode
+            ? renderBindCode('discord', cs.binding, cs.actions)
+            : null}
+
+          {view.enabled && view.available ? (
+            <div className="flex flex-wrap items-center gap-2">
+              {cs.inProgress && cs.binding?.connectUrl ? (
+                <>
+                  {cs.actions.includes('open_connect_url') ? (
+                    <Button data-settings-search-action="Open the channel connection or group setup link"
+                      variant="secondary"
+                      size="xs"
+                      compact
+                      type="button"
+                      onClick={() => handleProviderOpen(provider, 'connect')}
+                    >
+                      {t(`settings.remoteControl.hook.${provider}.openApp`)}
+                    </Button>
+                  ) : null}
+                  {cs.actions.includes('copy_connect_url') ? (
+                    <Button data-settings-search-action="Copy the channel connection link"
+                      variant="secondary"
+                      size="xs"
+                      compact
+                      type="button"
+                      onClick={() => void handleCopyProviderLink(provider)}
+                    >
+                      {t('settings.remoteControl.hook.binding.copyLink')}
+                    </Button>
+                  ) : null}
+                </>
+              ) : null}
+              {cs.inProgress && cs.actions.includes('cancel') ? (
+                <Button data-settings-search-action="Start or cancel linking this bot account"
+                  variant="secondary"
+                  size="xs"
+                  compact
+                  type="button"
+                  onClick={() => runHookAction(() => hookControl.providerBindCancel(provider))}
+                >
+                  {t(`settings.remoteControl.hook.${provider}.cancel`)}
+                </Button>
+              ) : null}
+              {cs.confirmed && !storeAccounts ? (
+                <>
+                  {cs.actions.includes('open_provider') ? (
+                    <Button data-settings-search-action="Open the channel connection or group setup link"
+                      variant="secondary"
+                      size="xs"
+                      compact
+                      type="button"
+                      onClick={() => handleProviderOpen(provider, 'provider')}
+                    >
+                      {t(`settings.remoteControl.hook.${provider}.openBot`)}
+                    </Button>
+                  ) : null}
+                  {cs.actions.includes('add_to_group') ? (
+                    <Button data-settings-search-action="Open the channel connection or group setup link"
+                      variant="secondary"
+                      size="xs"
+                      compact
+                      type="button"
+                      onClick={() => handleProviderOpen(provider, 'add-to-group')}
+                    >
+                      {t(`settings.remoteControl.hook.${provider}.addToGroup`)}
+                    </Button>
+                  ) : null}
+                  {provider === 'feishu' && cs.actions.includes('select_device') && view.binding?.workingDevice?.isCurrent !== true ? (
+                    <Button id={imBotSettings.cindyFeishuWorkingDevice.targetId} data-setting-id={imBotSettings.cindyFeishuWorkingDevice.id}
+                      variant="secondary" size="xs" compact type="button"
+                      disabled={selectingWorkingDevice || !view.available || view.status !== 'connected'}
+                      onClick={() => void selectWorkingDevice()}>
+                      {t('settings.remoteControl.hook.feishu.setWorkingDevice')}
+                    </Button>
+                  ) : null}
+                  {cs.actions.includes('revoke') ? (
+                    <Button data-settings-search-action="Unlink this bot account"
+                      variant="secondary"
+                      size="xs"
+                      compact
+                      type="button"
+                      onClick={() => void handleProviderUnlink(provider)}
+                    >
+                      {t(`settings.remoteControl.hook.${provider}.unlink`)}
+                    </Button>
+                  ) : null}
+                </>
+              ) : cs.canStartLink ? (
+                <Button data-settings-search-action="Start or cancel linking this bot account"
+                  variant="secondary"
+                  size="xs"
+                  compact
+                  type="button"
+                  onClick={() => runHookAction(() => hookControl.providerBindStart(provider))}
+                >
+                  {t(
+                    cs.state === 'none' || storeAccounts
+                      ? `settings.remoteControl.hook.${provider}.connect`
+                      : `settings.remoteControl.hook.${provider}.retry`,
+                  )}
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
+
+          {storeAccounts && (view.bindings?.length ?? 0) > 0 ? (
+            <>
+              <SettingsCard id={imBotSettings.cindyFeishuWorkingDevice.targetId}>
+                {view.bindings!.map((account) => renderFeishuAccount(account, view))}
+              </SettingsCard>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button data-settings-search-action="Open the channel connection or group setup link"
+                  variant="secondary" size="xs" compact type="button"
+                  disabled={!view.enabled || !view.available || view.status !== 'connected'}
+                  onClick={() => handleProviderOpen('feishu', 'provider')}>
+                  {t('settings.remoteControl.hook.feishu.openBot')}
+                </Button>
+              </div>
+            </>
+          ) : null}
+
+          {/* 飞书关联码: 网页授权是主路径, 关联码是兜底, 放在动作行之后。 */}
+          {provider === 'feishu' && view.enabled && view.available && cs.inProgress && cs.binding?.bindCode
+            ? renderBindCode('feishu', cs.binding, cs.actions)
+            : null}
+
+          </>}
+
+          {/* X 专属: 用法与公开风险。两个刻意的选择 ——
+              · 放在工作目录区**之前**: 风险那条讲的就是这张卡上那个默认工作目录,
+                顺序必须是先看到后果再碰控件。注意这只是**排布**上的先后 ——
+                文案本身不许用方位指代(「下面」/「below」), 因为同一组件也渲染进
+                确认门弹窗, 那里根本没有目录选择器;
+              · **不按 view.enabled / cs.confirmed 收起**: 正在评估要不要打开的人
+                最需要看到「回帖是公开的」, 那时候两个条件都还不成立。 */}
+          {provider === 'x' ? <>
+            <XUsageGuide companion={!!view.companionBotId} />
+            {companion ? (
+              <div className="flex flex-col gap-2 border-t border-[var(--border-default)] pt-3">
+                <CompanionXAssignment companion={companion} companionBotId={view.companionBotId ?? null}
+                  settingId={imBotSettings.cindy.id}
+                  assign={(assign, expectedBotId) => setXCompanion(assign ? companion.id : null, expectedBotId)} />
+              </div>
+            ) : view.companionBotId ? (
+              <div className="flex flex-col gap-2 border-t border-[var(--border-default)] pt-3">
+                <p className="text-12 leading-relaxed text-[var(--text-secondary)]">{t('bots.channels.officialX.managed')}</p>
+                <Button data-setting-id={imBotSettings.cindy.id} variant="secondary" size="sm" type="button" disabled={companionPending}
+                  onClick={() => void removeXCompanion()}>{t('bots.channels.officialX.remove')}</Button>
+              </div>
+            ) : null}
+          </> : null}
+
+          {/* 没有行为设置可显示时不留一个只有分割线的空容器。 */}
+          {provider === 'telegram' && cs.confirmed && view.behaviorAvailable === true ? (
+            <div
+              key={cs.binding?.bindingId ?? 'telegram-unbound'}
+              className="mt-2 flex flex-col gap-5 border-t border-[var(--border-default)] pt-4"
+            >
+              <TelegramBehaviorSettings
+                source="official"
+                bindingId={cs.binding?.bindingId ?? undefined}
+              />
+            </div>
+          ) : null}
+          {view.enabled && !view.companionBotId && !show ? sharedSettingsPointer : null}
+        </div>
+      </ImChannelSettingsCard>
+    );
+  };
+
+  /** 单渠道子页里的「谁来回复」: 比较后写入, 与 X 的伙伴归属同一条路径。 */
+  const officialReplyTarget = (provider: CindyImCard): ImReplyTarget => {
+    const current = provider === 'slack'
+      ? hook.companionBotId ?? null
+      : (hook[provider] as ProviderHookView | undefined)?.companionBotId ?? null;
+    return {
+      supported: typeof hookControl.setProviderCompanion === 'function',
+      companionBotId: current,
+      companion: current ? bots.find((bot) => bot.id === current) ?? null : null,
+      pending: companionPending,
+      change: async (next) => {
+        if (companionPending) return;
+        setCompanionPending(true);
+        try {
+          const requestedAtRevision = ++viewRevisionRef.current;
+          const result = await hookControl.setProviderCompanion!(provider, next, current);
+          if (viewRevisionRef.current === requestedAtRevision) applyView(result.hook);
+        } catch {
+          toast.error(t('settings.imBot.replyTarget.updateFailed'));
+        } finally {
+          setCompanionPending(false);
+        }
+      },
+    };
+  };
+
+  const summary: OfficialImSummary = {
+    slack: { visible: true, enabled: hook.enabled, linked: toggleChecked, tone: slackBadge.tone, label: slackBadge.label,
+      companionBotId: hook.companionBotId ?? null },
+  };
+  for (const provider of ['telegram', 'feishu', 'discord', 'x'] as const) {
+    const view = hook[provider] as ProviderHookView | undefined;
+    if (!view) continue;
+    const cs = providerCardState(provider, view);
+    summary[provider] = { visible: cs.visible, enabled: view.enabled, linked: cs.confirmed, tone: cs.badge.tone, label: cs.badge.label,
+      companionBotId: view.companionBotId ?? null };
+  }
+  pendingSummaryRef.current = summary;
+
+  if (show === 'list') return null;
+  // 「项目与模型」单独一页: 个人机器人选了项目也读这一份, 所以没开官方机器人、没装插件也照样显示。
+  if (show === 'projects') return <div className="flex flex-col gap-3">{renderProjectsSection()}</div>;
+  if (show) {
+    const card = show === 'slack' ? renderSlackCard() : renderProviderCard(show);
+    if (!card) return null;
+    const enabled = show === 'slack' ? hook.enabled : (hook[show] as ProviderHookView | undefined)?.enabled === true;
+    const replyTarget = officialReplyTarget(show);
+    // 开着的官方机器人才问「谁来回复」与「项目」; 交给伙伴后用伙伴自己的项目与模型。
+    const showReply = enabled && replyTarget.supported;
+    const showProject = enabled && show !== 'slack' && !replyTarget.companionBotId;
+    return (
+      <section className="flex min-w-0 flex-col gap-3.5">
+        {card}
+        {showReply || showProject ? (
+          <SettingsCard>
+            {showReply ? <ImReplyTargetField target={replyTarget} /> : null}
+            {showProject ? renderOfficialProjectRow() : null}
+          </SettingsCard>
+        ) : null}
+        {showProject && officialDefaultFullAccess() ? (
+          <p className="flex gap-1.5 text-12 leading-[1.4] text-[var(--text-secondary)]">
+            <AlertTriangle size={14} aria-hidden className="mt-px shrink-0 text-[var(--warning-fg)]" />
+            <span>
+              {t('settings.remoteControl.hook.form.defaultProjectFullAccessWarning', {
+                name: sharedDefaultWorkspace ?? t('settings.tina.chat.title'),
+              })}
+            </span>
+          </p>
+        ) : null}
+      </section>
+    );
+  }
+
+  // 本地模式没有「官方」分栏: IM 插件仍读这一份, 由 ImBotSection 把只有这一块的视图放进「插件」分栏。
+  if (projectsOnly) return projectsSectionVisible ? <div className="flex flex-col gap-3">{renderProjectsSection()}</div> : null;
+
+  return (
+    <div className="flex flex-col gap-3">
+      {!companion ? <HookConnectionsDescription /> : null}
+
+      {/* ── Slack 渠道卡 ─────────────────────────────────────────────── */}
+      {!companion ? renderSlackCard() : null}
 
       {/* ── provider-neutral 渠道卡(Telegram / X, 同构渲染) ─────────── */}
       {!companion ? renderProviderCard('telegram') : null}

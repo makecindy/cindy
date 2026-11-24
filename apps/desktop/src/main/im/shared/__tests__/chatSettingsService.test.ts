@@ -1,7 +1,8 @@
 /**
- * 设置页「群聊」的读写(2026-11-23 用户需求: 内置飞书按群设置项目、模型、权限)。
+ * 设置页「群聊」总表的读写(2026-11-23 用户需求: 内置飞书按群设置项目、模型、权限; 2026-11-24 主人裁决:
+ * 推广到各平台, 加「群成员也能提问」, Telegram / 钉钉升级前用过的群保持回答群成员)。
  *
- * 生产入口: listFeishuGroupSettingsForUi / saveFeishuGroupSettings, 存储是真实文件(临时目录),
+ * 生产入口: listImChatSettingsForUi / saveImChatSettings / resumeImChatMembers, 存储是真实文件(临时目录),
  * 本机任务记录是真 SQLite。覆盖缺口: 群名单读不到时的退回、项目只能按侧栏清单选、损坏文件
  * 不被覆盖、绑定项目在「项目与模型」里的设置带给界面 —— adapter 用例只验证已保存的设置如何被
  * 建任务读到。tier: unit。
@@ -25,7 +26,7 @@ vi.mock('electron', () => ({ app: { getPath: () => '/tmp/never-used-here' } }));
 vi.mock('../../ownerScopedStorage', () => ({
   ownerScopedImUserDataPath: (...parts: string[]) => path.join(h.root, 'owners', 'owner-1', ...parts),
 }));
-vi.mock('../../shared/controlProjects', () => ({
+vi.mock('../controlProjects', () => ({
   listProjectsForControl: vi.fn(async () => h.projects),
 }));
 // 项目路由解析只在拿不到推理强度时问模型目录; 渠道设置只取群聊权限档。
@@ -40,11 +41,14 @@ let db: ReturnType<typeof drizzle>;
 vi.mock('../../../localDb/client/current', () => ({ getDbClient: () => ({ drizzle: db }) }));
 
 const { sessions } = await import('../../../localDb/schema');
-const { listFeishuGroupSettingsForUi, saveFeishuGroupSettings, FeishuGroupSettingsError, __testing } =
-  await import('../groupSettingsService');
-const { projectToken } = await import('../../shared/projectToken');
-const { writeFeishuGroupSettings } = await import('../groupSettingsStore');
-const { setFeishuGroupProjectPorts } = await import('../groupOverrides');
+const { listImChatSettingsForUi, saveImChatSettings, resumeImChatMembers, ImChatSettingsError } =
+  await import('../chatSettingsService');
+const { projectToken } = await import('../projectToken');
+const { writeImChatSettings, __testing: storeTesting } = await import('../chatSettingsStore');
+const { setImProjectPorts } = await import('../imProjectPorts');
+const { registerImChatSource } = await import('../chatSources');
+const { feishuBotGroups, cachedFeishuGroupAvatar, __testing } = await import('../../feishu/groupList');
+const { __testing: gateTesting } = await import('../guestGate');
 
 function createTableSql(): string {
   const config = getTableConfig(sessions);
@@ -61,12 +65,16 @@ function createTableSql(): string {
   return `CREATE TABLE "${config.name}" (${cols.join(', ')})`;
 }
 
+/** 飞书个人机器人的名单来源(同 im/chatSourcesWiring.ts), 接口由替身给出。 */
 function fakeIm(callApi: (args: unknown) => Promise<Record<string, unknown>>) {
-  return {
-    getBotAppId: () => 'cli_bot',
-    getStatus: () => ({ kind: 'connected' as const, appId: 'cli_bot' }),
-    callApi: vi.fn(callApi),
-  } as never;
+  const im = { callApi: vi.fn(callApi) };
+  registerImChatSource('feishu', {
+    botId: () => 'cli_bot',
+    connected: () => true,
+    remote: (refresh) => feishuBotGroups(im as never, 'cli_bot', refresh),
+    cachedAvatar: cachedFeishuGroupAvatar,
+  });
+  return im;
 }
 
 let projectDir = '';
@@ -78,14 +86,16 @@ beforeEach(async () => {
   raw.exec(createTableSql());
   db = drizzle(raw);
   __testing.resetCache();
+  storeTesting.resetCache();
+  gateTesting.reset();
 });
 
 afterEach(async () => {
-  setFeishuGroupProjectPorts(null);
+  setImProjectPorts(null);
   await fs.rm(h.root, { recursive: true, force: true });
 });
 
-describe('feishu group settings service', () => {
+describe('im chat settings service', () => {
   it('群名单读不到时退回机器人用过的群, 已保存设置的群也列出, 移出侧栏的项目标为不可用', async () => {
     await db.insert(sessions).values({
       id: 'feishu_cli_bot_g-oc_used',
@@ -96,20 +106,20 @@ describe('feishu group settings service', () => {
       createdAt: 1,
       updatedAt: 1,
     } as typeof sessions.$inferInsert);
-    writeFeishuGroupSettings('cli_bot', 'oc_saved', { projectDir: path.join(h.root, 'gone') }, '旧群');
+    writeImChatSettings('feishu', 'cli_bot', 'oc_saved', { projectDir: path.join(h.root, 'gone') }, '旧群');
     const im = fakeIm(async () => {
       throw Object.assign(new Error('no scope'), { code: 99991672 });
     });
 
-    const list = await listFeishuGroupSettingsForUi(im);
+    const list = await listImChatSettingsForUi('feishu');
 
     expect(list.source).toBe('local');
     expect(list.listError).toBe('permission');
-    expect(list.groups.map((g) => [g.chatId, g.name])).toEqual([
+    expect(list.chats.map((g) => [g.chatId, g.name])).toEqual([
       ['oc_used', '飞书 · 用过的群'],
       ['oc_saved', '旧群'],
     ]);
-    expect(list.groups[1]!.project).toMatchObject({ available: false, name: 'gone' });
+    expect(list.chats[1]!.project).toMatchObject({ available: false, name: 'gone' });
     // 界面拿到的是项目标记与名字, 不是本机路径。
     expect(JSON.stringify(list)).not.toContain(h.root);
   });
@@ -126,19 +136,19 @@ describe('feishu group settings service', () => {
       },
     }));
 
-    const list = await listFeishuGroupSettingsForUi(im);
-    expect(list.groups.map((g) => [g.chatId, g.avatarUrl])).toEqual([
+    const list = await listImChatSettingsForUi('feishu');
+    expect(list.chats.map((g) => [g.chatId, g.avatarUrl])).toEqual([
       ['oc_a', 'https://s1-imfile.feishucdn.com/static-resource/a'],
       ['oc_b', null],
       ['oc_c', null],
     ]);
-    const callApi = (im as unknown as { callApi: ReturnType<typeof vi.fn> }).callApi;
-    await listFeishuGroupSettingsForUi(im);
+    const callApi = im.callApi;
+    await listImChatSettingsForUi('feishu');
     expect(callApi).toHaveBeenCalledTimes(1);
-    await listFeishuGroupSettingsForUi(im, { refresh: true });
+    await listImChatSettingsForUi('feishu', { refresh: true });
     expect(callApi).toHaveBeenCalledTimes(2);
     // 保存不重新拉名单, 返回的群仍带着上次读到的头像。
-    const saved = await saveFeishuGroupSettings(im, 'oc_a', { permissionMode: 'plan' }, '有头像');
+    const saved = await saveImChatSettings('feishu', 'oc_a', { permissionMode: 'plan' }, '有头像');
     expect(saved.avatarUrl).toBe('https://s1-imfile.feishucdn.com/static-resource/a');
   });
 
@@ -146,21 +156,19 @@ describe('feishu group settings service', () => {
     const im = fakeIm(async () => ({ data: { items: [{ chat_id: 'oc_g1', name: '项目群' }], has_more: false } }));
 
     await expect(
-      saveFeishuGroupSettings(im, 'oc_g1', { projectToken: 'a'.repeat(24) }, '项目群'),
-    ).rejects.toBeInstanceOf(FeishuGroupSettingsError);
+      saveImChatSettings('feishu', 'oc_g1', { projectToken: 'a'.repeat(24) }, '项目群'),
+    ).rejects.toBeInstanceOf(ImChatSettingsError);
 
-    const saved = await saveFeishuGroupSettings(
-      im,
-      'oc_g1',
+    const saved = await saveImChatSettings('feishu', 'oc_g1',
       { projectToken: projectToken(projectDir), permissionMode: 'plan' },
       '项目群',
     );
     expect(saved.project).toMatchObject({ name: 'project-a', available: true });
     expect(saved.permissionMode).toBe('plan');
-    expect((await listFeishuGroupSettingsForUi(im)).groups[0]!.permissionMode).toBe('plan');
+    expect((await listImChatSettingsForUi('feishu')).chats[0]!.permissionMode).toBe('plan');
 
-    const cleared = await saveFeishuGroupSettings(im, 'oc_g1', { projectToken: null, permissionMode: null }, null);
-    expect(cleared).toMatchObject({ project: null, route: null, permissionMode: null });
+    const cleared = await saveImChatSettings('feishu', 'oc_g1', { projectToken: null, permissionMode: null }, null);
+    expect(cleared).toMatchObject({ project: null, route: null, permissionMode: null, members: false });
     const file = JSON.parse(
       await fs.readFile(path.join(h.root, 'owners', 'owner-1', 'feishu-group-settings.json'), 'utf8'),
     );
@@ -173,7 +181,7 @@ describe('feishu group settings service', () => {
     await fs.writeFile(file, '{not json');
     const im = fakeIm(async () => ({ data: { items: [] } }));
 
-    await expect(saveFeishuGroupSettings(im, 'oc_g1', { permissionMode: 'bypassPermissions' }, null)).rejects.toThrow();
+    await expect(saveImChatSettings('feishu', 'oc_g1', { permissionMode: 'bypassPermissions' }, null)).rejects.toThrow();
     expect(await fs.readFile(file, 'utf8')).toBe('{not json');
   });
 
@@ -192,7 +200,7 @@ describe('feishu group settings service', () => {
       fingerprint: 'fp',
     }));
     const syncProjectWorkspaces = vi.fn(async () => {});
-    setFeishuGroupProjectPorts({
+    setImProjectPorts({
       projectWorkspaces: () => ({ chat: '', 'project-a': projectDir, 'project-b': otherDir }),
       syncProjectWorkspaces,
       projectPermissionMode: (alias) => (alias === 'project-a' ? null : 'auto'),
@@ -202,19 +210,19 @@ describe('feishu group settings service', () => {
     });
     const im = fakeIm(async () => ({ data: { items: [{ chat_id: 'oc_g1', name: '项目群' }], has_more: false } }));
 
-    const saved = await saveFeishuGroupSettings(im, 'oc_g1', { projectToken: projectToken(projectDir) }, '项目群');
+    const saved = await saveImChatSettings('feishu', 'oc_g1', { projectToken: projectToken(projectDir) }, '项目群');
     // 没填权限的那一行按完全访问(同插件与官方机器人)。
     expect(saved.project?.config).toEqual({
       route: { agentKind: 'claude-code', model: 'claude-opus-5-5', providerId: 'anthropic', agentDeviceId: null, effort: 'xhigh' },
       permissionMode: 'bypassPermissions',
     });
     resolveProject.mockClear();
-    const list = await listFeishuGroupSettingsForUi(im);
+    const list = await listImChatSettingsForUi('feishu');
     expect(list.projects.map((p) => [p.name, p.permissionMode])).toEqual([
       ['project-a', 'bypassPermissions'],
       ['project-b', 'auto'],
     ]);
-    expect(list.groups[0]!.project?.config?.route?.model).toBe('claude-opus-5-5');
+    expect(list.chats[0]!.project?.config?.route?.model).toBe('claude-opus-5-5');
     expect(resolveProject).toHaveBeenCalledTimes(1);
     expect(resolveProject).toHaveBeenCalledWith('project-a', [], { dryRun: true });
     expect(syncProjectWorkspaces).toHaveBeenCalled();
@@ -222,9 +230,73 @@ describe('feishu group settings service', () => {
     // 打开飞书卡片时的概要(2026-11-23 用户反馈收起时的群数与头像要展开一次才出现): 仍认得这个群
     // 单独绑了项目, 但不为显示群数去解析项目模型(要列供应商、可能问另一台电脑), 也不重复读群名单。
     resolveProject.mockClear();
-    const summary = await listFeishuGroupSettingsForUi(im, { summary: true });
-    expect(summary.groups[0]!.project).toMatchObject({ name: 'project-a', available: true, config: null });
+    const summary = await listImChatSettingsForUi('feishu', { summary: true });
+    expect(summary.chats[0]!.project).toMatchObject({ name: 'project-a', available: true, config: null });
     expect(resolveProject).not.toHaveBeenCalled();
-    expect((im as unknown as { callApi: ReturnType<typeof vi.fn> }).callApi).toHaveBeenCalledTimes(1);
+    expect(im.callApi).toHaveBeenCalledTimes(1);
+  });
+
+  // 2026-11-24 主人裁决: 钉钉升级前就回答群成员, 保持现状——第一次整理时把机器人用过的群记为
+  // 「群成员也能提问」, 之后新加进的群默认不勾; 飞书等原本只认主人的平台默认不勾。
+  // 最小失败输入: 一个有任务记录的钉钉群, 整理后再出现一个新群。
+  it('钉钉: 升级前用过的群保持群成员可提问, 整理后新群默认不勾; 飞书默认不勾', async () => {
+    await db.insert(sessions).values({
+      id: 'dingtalk_old',
+      title: '钉钉群聊 · 老群',
+      source: 'dingtalk',
+      imBotContextId: 'ding1',
+      imUserId: `g/${encodeURIComponent('cid-old')}`,
+      createdAt: 1,
+      updatedAt: 1,
+    } as typeof sessions.$inferInsert);
+    let known = [{ chatId: 'cid-old', name: '老群', avatarUrl: null, kind: 'group' as const }];
+    registerImChatSource('dingtalk', { botId: () => 'ding1', connected: () => true, known: async () => known });
+
+    const first = await listImChatSettingsForUi('dingtalk');
+    expect(first.chats.map((c) => [c.chatId, c.name, c.members])).toEqual([['cid-old', '老群', true]]);
+
+    known = [...known, { chatId: 'cid-new', name: '新群', avatarUrl: null, kind: 'group' as const }];
+    const second = await listImChatSettingsForUi('dingtalk');
+    expect(second.chats.map((c) => [c.chatId, c.members])).toEqual([['cid-old', true], ['cid-new', false]]);
+
+    fakeIm(async () => ({ data: { items: [{ chat_id: 'oc_g1', name: '项目群' }], has_more: false } }));
+    expect((await listImChatSettingsForUi('feishu')).chats[0]).toMatchObject({ chatId: 'oc_g1', members: false });
+  });
+
+  // 2026-11-24 用户实测: Telegram 私聊批准卡写着「批准后群成员可以召唤」, 若勾选框另存一份, 批准后成员
+  // 仍被挡住。Telegram 的「群成员也能提问」读写的就是群准入, 不写设置文件。
+  // 最小失败输入: 一个已批准、一个待批准的 Telegram 群, 在设置里勾上待批准的那个。
+  it('Telegram: 群成员也能提问就是群准入, 勾选即批准, 不另存', async () => {
+    const approval = new Map<string, boolean>([['-100111', true], ['-100222', false]]);
+    const set = vi.fn((chatId: string, on: boolean) => { approval.set(chatId, on); return true; });
+    registerImChatSource('telegram', {
+      botId: () => 'bot1',
+      connected: () => true,
+      known: async () => [
+        { chatId: '-100111', name: '已批准', avatarUrl: null, kind: 'group' as const },
+        { chatId: '-100222', name: '待批准', avatarUrl: null, kind: 'group' as const },
+      ],
+      members: { get: (chatId) => approval.get(chatId) === true, set },
+    });
+
+    const list = await listImChatSettingsForUi('telegram');
+    expect(list.chats.map((c) => [c.chatId, c.members])).toEqual([['-100111', true], ['-100222', false]]);
+
+    expect(await saveImChatSettings('telegram', '-100222', { members: true }, '待批准')).toMatchObject({ members: true });
+    expect(set).toHaveBeenCalledExactlyOnceWith('-100222', true, '待批准');
+    // 设置文件里没有另存一份群成员开关。
+    const file = path.join(h.root, 'owners', 'owner-1', 'telegram-chat-settings.json');
+    expect(JSON.parse(await fs.readFile(file, 'utf8')).bots).toEqual({});
+  });
+
+  it('勾选群成员也能提问即保存; 暂停后「恢复」解除, 取消勾选清掉暂停', async () => {
+    fakeIm(async () => ({ data: { items: [{ chat_id: 'oc_g1', name: '项目群' }], has_more: false } }));
+    expect(await saveImChatSettings('feishu', 'oc_g1', { members: true }, '项目群')).toMatchObject({ members: true, membersPaused: false });
+    writeImChatSettings('feishu', 'cli_bot', 'oc_g1', { membersPaused: true }, null);
+    expect((await listImChatSettingsForUi('feishu')).chats[0]).toMatchObject({ members: true, membersPaused: true });
+    expect(await resumeImChatMembers('feishu', 'oc_g1', '项目群')).toMatchObject({ members: true, membersPaused: false });
+
+    writeImChatSettings('feishu', 'cli_bot', 'oc_g1', { membersPaused: true }, null);
+    expect(await saveImChatSettings('feishu', 'oc_g1', { members: false }, '项目群')).toMatchObject({ members: false, membersPaused: false });
   });
 });

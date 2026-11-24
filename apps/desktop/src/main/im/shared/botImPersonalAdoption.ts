@@ -207,6 +207,35 @@ function carriedGroupActivation(channel: BotImChannel): Record<string, 'always'>
   return Object.keys(always).length > 0 ? always : undefined;
 }
 
+/**
+ * 「谁来回复」切换(设置 → IM 机器人 → 某平台): 凭证不动, 只改归属。配好了的个人 bot 先静默停下,
+ * 写归属, 再按原凭证起来 —— 停着的这段不收消息, 没有一条消息一半按旧归属、一半按新归属处理。
+ * 已受理的轮次照常在原任务里跑完。没配好的平台直接写。
+ */
+export async function switchPersonalBotReplyTarget(channel: BotImChannel, apply: () => void): Promise<void> {
+  const current = deps;
+  if (!current?.isReady()) throwIpcError('PRECONDITION_FAILED', 'IM_NOT_READY');
+  if (inFlight) throwIpcError('PRECONDITION_FAILED', 'ADOPT_IN_PROGRESS');
+  const personal = readPersonalCredentials(channel, '') ? current.personal[channel] : undefined;
+  inFlight = true;
+  try {
+    if (personal) await personal.stop();
+    try {
+      apply();
+    } finally {
+      if (personal) {
+        try {
+          await personal.start();
+        } catch (err) {
+          log.warn(`restart personal ${channel} bot after reply target switch failed: ${String(err)}`);
+        }
+      }
+    }
+  } finally {
+    inFlight = false;
+  }
+}
+
 /** 把个人 bot 移给伙伴: 先停个人 bot, 再按添加平台建连; 失败把个人 bot 恢复原样。 */
 export async function adoptPersonalBot(input: BotImAdoptPersonalBotInput): Promise<BotImConnectionAddResult> {
   const current = deps;

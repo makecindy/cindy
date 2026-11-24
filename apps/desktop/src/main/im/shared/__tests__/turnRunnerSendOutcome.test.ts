@@ -1814,6 +1814,57 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     }
   });
 
+  // 2026-11-24「群成员也能提问」: 个人机器人的群成员轮次即使会话是完全访问、渠道声明策略可选, 也保留
+  // 策略(由共享 runner 临时降到 Auto); 渠道漏挂策略的成员轮次不按会话档位放行。
+  // 最小失败输入: 完全访问会话里一条 requesterIsOwner=false 的群轮次, 带策略 / 不带策略各一次。
+  it('keeps the turn policy for personal-bot group members and refuses a member turn without one', async () => {
+    mocks.peekSessionById.mockImplementation(async () => ({
+      permissionMode: 'bypassPermissions',
+    } as unknown as ImSessionRow));
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    mocks.getMaker.mockReturnValue(createMakerHarness(h.session));
+    const localAdapter = {
+      ...fakeAdapter,
+      turnPolicyOptionalForMode: () => true,
+    } as unknown as ImChannelAdapter;
+    const localRunner = createTurnRunner(localAdapter, fakeRepo, fakeCards, { personalGuests: { queueLimit: 5 } });
+    const policy = {
+      origin: { kind: 'im' as const, channel: 'feishu' as const, taskId: 'msg-guest' },
+      autoReviewContext: { requesterAuthority: 'guest' as const, source: 'group' as const },
+      confirmationSurface: 'channel' as const,
+      forceConfirmToolCall: () => false,
+    };
+    try {
+      await localRunner.runAgentTurn({
+        botContextId: 'cli_test_bot',
+        userId: 'g/oc_group1',
+        userMessageId: 'msg-guest',
+        text: 'member question',
+        attachments: [],
+        requesterIsOwner: false,
+        turnPermissionPolicy: policy,
+      });
+      expect(h.session.send).toHaveBeenCalledTimes(1);
+      expect(h.session.send).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ turnPermissionPolicy: policy }),
+      );
+
+      await localRunner.runAgentTurn({
+        botContextId: 'cli_test_bot',
+        userId: 'g/oc_group1',
+        userMessageId: 'msg-guest-2',
+        text: 'member question without policy',
+        attachments: [],
+        requesterIsOwner: false,
+      });
+      expect(h.session.send).toHaveBeenCalledTimes(1);
+    } finally {
+      mocks.peekSessionById.mockReset();
+      localRunner.disposeAllSessions();
+    }
+  });
+
   // Regression: Full-access personal Telegram tasks must still accept guests under
   // Auto, without changing the saved preference or restoring over a live user choice.
   // Transport state is a fake; Session CAS/reservation semantics have maker-core coverage.

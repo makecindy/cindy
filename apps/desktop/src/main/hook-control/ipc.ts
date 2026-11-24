@@ -18,7 +18,7 @@ import { registerGroupImageReader, fetchOfficialGroupImage } from './groupImageB
  * 即连即断。没有密钥概念, 旧 safeStorage secret 文件由 store 迁移时清理。
  */
 
-import { requireXCompanion, resolveXCompanionTarget } from './xCompanion.js';
+import { requireXCompanion, resolveOfficialCompanionTarget } from './xCompanion.js';
 import { captureChannelAccount } from '../im/shared/openChannelSession.js';
 
 import path from 'node:path';
@@ -119,6 +119,8 @@ import {
   DEFAULT_SLACK_LIFECYCLE_ANNOUNCEMENT,
   createSlackHookStore,
   HookConnectionValidationError,
+  OFFICIAL_COMPANION_PROVIDERS,
+  type OfficialCompanionProvider,
   type SlackHookStore,
 } from './store.js';
 import {
@@ -726,7 +728,9 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
           name: meta.name,
           url: meta.url,
           enabled: meta.enabled,
-          ...(provider === 'x' ? { companionBotId: config.xCompanionBotId ?? null } : {}),
+          companionBotId: provider === 'x'
+            ? config.xCompanionBotId ?? null
+            : config.companionBotIds?.[provider as OfficialCompanionProvider] ?? null,
           // 现用名称 + 改名前的旧名称(只供查找): 服务端可能还按旧名称派发。
           workspaces: lookupWorkspaces(config.workspaces, config.retiredWorkspaces ?? {}),
           retiredWorkspaceNames: Object.keys(config.retiredWorkspaces ?? {}).filter(
@@ -746,7 +750,8 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       }),
       mediaStore,
       runner: createMakerHookSessionRunner({ log }),
-      resolveCompanionTarget: resolveXCompanionTarget,
+      resolveCompanionTarget: (botId, externalKey, subject, provider) =>
+        resolveOfficialCompanionTarget(provider, botId, externalKey, subject),
       buildContextPrefix: buildGroupContextPrefix,
       collectGroupHistoryImages: collectOfficialGroupHistoryImages,
       // 新建 hook 会话默认预建独立 worktree(并发隔离); deps 组装与
@@ -1044,6 +1049,27 @@ export async function changeXCompanionBinding(botId: string | null, expectedBotI
   return hook;
 }
 
+/** 比较后写入某个官方渠道的伙伴归属(设置 → IM 机器人 → 某平台 →「谁来回复」)。 */
+export async function changeProviderCompanionBinding(
+  provider: OfficialCompanionProvider,
+  botId: string | null,
+  expectedBotId: string | null,
+) {
+  if (provider === 'x') return changeXCompanionBinding(botId, expectedBotId);
+  requireHookControl();
+  const assertAccount = captureChannelAccount();
+  const { store: s, manager: m } = ensureInstances();
+  if (botId !== null) await requireXCompanion(botId);
+  assertAccount();
+  if ((s.get().companionBotIds?.[provider] ?? null) !== expectedBotId) {
+    throwIpcError('PRECONDITION_FAILED', 'Companion assignment changed');
+  }
+  translateValidation(() => s.setCompanionBotId(provider, botId));
+  const hook = m.snapshot();
+  broadcastStatus(hook);
+  return hook;
+}
+
 /** What a teammate's settings page may show of the official X account: no URLs, accounts or tokens. */
 export function readXCompanionSummary(): { available: boolean; visible: boolean; enabled: boolean; connected: boolean; companionBotId: string | null } {
   const x = hookControlAvailable() ? ensureInstances().manager.snapshot().x : disabledHookView().x;
@@ -1247,6 +1273,20 @@ export function registerHookControlIpc(): void {
       return { hook: m.snapshot() };
     },
   );
+
+  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.SET_PROVIDER_COMPANION, async (_e, payload) => {
+    const p = requireObject(payload);
+    if (typeof p.provider !== 'string' || !(OFFICIAL_COMPANION_PROVIDERS as readonly string[]).includes(p.provider)) {
+      throwIpcError('INVALID_PARAMS', 'provider is invalid');
+    }
+    return {
+      hook: await changeProviderCompanionBinding(
+        p.provider as OfficialCompanionProvider,
+        requireNullableString(p.botId, 'botId'),
+        requireNullableString(p.expectedBotId, 'expectedBotId'),
+      ),
+    };
+  });
 
   registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.SET_X_COMPANION, async (_e, payload) => {
     const p = requireObject(payload);

@@ -1,12 +1,14 @@
 import { imBotSettings } from './ImBotSection.settings-search';
 import { Button } from '@/components/ui/button';
 import { ImConnectionError, ImSavedConnectionRecovery } from './ImConnectionRecovery';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, ChevronDown, ChevronRight, Eye, EyeOff, Trash2 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import { SettingsCard, SettingsRow } from '@/components/ui/settings-rows';
+import { Switch } from '@/components/ui/switch';
 import { useDiscordBot } from '@/hooks/useDiscordBot';
 import {
   formatImDefaultRouteSummary,
@@ -16,6 +18,19 @@ import {
 import { ImDefaultSettingsSection } from './ImDefaultSettingsSection';
 import { ImLifecycleAnnouncementSection } from './ImLifecycleAnnouncementSection';
 import { DiscordChannelAccessSection } from './DiscordChannelAccessSection';
+import {
+  ImBotBlockCard,
+  ImBotPersonalWay,
+  ImBotSetupGuide,
+  ImBotSetupRow,
+  ImBotStatusText,
+  ImBotSubPage,
+  useImBotNav,
+  type ImBotStatusTone,
+} from './ImBotPageParts';
+import { ImChatSettingsCard } from './ImChatSettingsSection';
+import { ImChannelProjectRows } from './ImChannelProjectRows';
+import { ImReplyTargetField, useImReplyTarget } from './ImReplyTargetField';
 
 const DISCORD_DEVELOPER_PORTAL_URL = 'https://discord.com/developers/applications';
 
@@ -453,5 +468,229 @@ export function DiscordLifecycleSettings({
       checked={lifecycleAnnouncement}
       onCheckedChange={setLifecycleAnnouncement}
     />
+  );
+}
+
+const statusTone: Record<DiscordBotTransportStatus['kind'], ImBotStatusTone> = {
+  idle: 'off',
+  connecting: 'progress',
+  connected: 'connected',
+  conflict: 'attention',
+  error: 'error',
+};
+
+export function useDiscordListStatus(): { configured: boolean; tone: ImBotStatusTone; labelKey: string } {
+  const { status } = useDiscordBot();
+  return { configured: status.kind !== 'idle', tone: statusTone[status.kind], labelKey: statusKey[status.kind] };
+}
+
+/** 设置 → IM 机器人 → Discord 里「你自己的机器人」, 以及它的更深一层页面。 */
+export function DiscordBotSettings() {
+  const bot = useDiscordBot();
+  const { status, ownerUserId, lifecycleAnnouncement, setLifecycleAnnouncement, isDisconnecting, disconnect } = bot;
+  const nav = useImBotNav();
+  const replyTarget = useImReplyTarget('discord');
+  const toCompanion = replyTarget.supported && !!replyTarget.companionBotId;
+  const { confirm } = useConfirmDialog();
+  const { t } = useTranslation();
+  const name = t('settings.imBot.apps.discord');
+
+  const handleDisconnectClick = useCallback(async () => {
+    const confirmed = await confirm({
+      title: t('settings.discordBot.disconnectConfirm.title'),
+      description: t('settings.discordBot.disconnectConfirm.description'),
+      confirmText: t('settings.discordBot.disconnectConfirm.confirm'),
+      cancelText: t('settings.discordBot.disconnectConfirm.cancel'),
+    });
+    if (!confirmed) return;
+    await disconnect();
+  }, [confirm, disconnect, t]);
+
+  const connected = status.kind === 'connected';
+  useEffect(() => {
+    if (connected && nav.page === 'setup') nav.back();
+  }, [connected, nav]);
+
+  const lifecycleRow = (
+    <SettingsRow
+      title={t('settings.discordBot.lifecycleAnnouncement.cellLabel')}
+      hint={t('settings.discordBot.lifecycleAnnouncement.hint')}
+      trailing={<Switch data-setting-id={imBotSettings.discord.id} checked={lifecycleAnnouncement}
+        onCheckedChange={setLifecycleAnnouncement} aria-label={t('settings.discordBot.lifecycleAnnouncement.label')} />}
+    />
+  );
+
+  switch (nav.page) {
+    case 'model':
+      return (
+        <ImBotSubPage title={t('settings.imBot.rows.model')} description={name}>
+          <ImBotBlockCard><ImDefaultSettingsSection channel="discord" embedded /></ImBotBlockCard>
+        </ImBotSubPage>
+      );
+    case 'channels':
+      return (
+        <ImBotSubPage title={t('settings.imBot.rows.discordChannels')} description={name}>
+          <div id={imBotSettings.discordChannels.targetId}>
+            <ImBotBlockCard><DiscordChannelAccessSection connected={connected} /></ImBotBlockCard>
+          </div>
+        </ImBotSubPage>
+      );
+    case 'setup':
+      return (
+        <ImBotSubPage title={t('settings.imBot.ways.personalSetupTitle')} description={t('settings.discordBot.description')}>
+          <ImBotBlockCard><DiscordSetupForm bot={bot} onDisconnect={handleDisconnectClick} /></ImBotBlockCard>
+          {status.kind !== 'idle' ? (
+            <ImLifecycleAnnouncementSection
+              label={t('settings.discordBot.lifecycleAnnouncement.label')}
+              cellLabel={t('settings.discordBot.lifecycleAnnouncement.cellLabel')}
+              hint={t('settings.discordBot.lifecycleAnnouncement.hint')}
+              checked={lifecycleAnnouncement}
+              onCheckedChange={setLifecycleAnnouncement}
+            />
+          ) : null}
+        </ImBotSubPage>
+      );
+  }
+
+  if (!connected) {
+    return (
+      <ImBotPersonalWay id={imBotSettings.discord.targetId} configured={false}>
+        {nav.multiWay ? (
+          <ImBotSetupRow settingId={imBotSettings.discord.id} hint={t('settings.imBot.ways.personalSetupHint.discord')}
+            status={status.kind === 'idle' ? undefined
+              : <ImBotStatusText tone={statusTone[status.kind]}>{t(statusKey[status.kind])}</ImBotStatusText>} />
+        ) : (
+          <ImBotBlockCard><DiscordSetupForm bot={bot} onDisconnect={handleDisconnectClick} /></ImBotBlockCard>
+        )}
+      </ImBotPersonalWay>
+    );
+  }
+
+  return (
+    <ImBotPersonalWay id={imBotSettings.discord.targetId}>
+      <SettingsCard>
+        <ImReplyTargetField target={replyTarget} settingId={imBotSettings.discord.id} />
+        {toCompanion ? null : <ImChannelProjectRows channel="discord" appName={t('settings.imBot.apps.discord')} settingId={imBotSettings.discord.id} />}
+        <SettingsRow title={t('settings.imBot.rows.discordChannels')} hint={t('settings.imBot.rows.discordChannelsHint')}
+          chevron onClick={() => nav.open('channels')} />
+      </SettingsCard>
+      {toCompanion ? null : <ImChatSettingsCard channel="discord" />}
+      <SettingsCard>{lifecycleRow}</SettingsCard>
+      <SettingsCard>
+        <SettingsRow
+          title={status.appId}
+          hint={<ImBotStatusText tone="connected">
+            {[t(statusKey.connected), ownerUserId ? t('settings.imBot.rows.ownerId', { id: ownerUserId }) : null].filter(Boolean).join(' · ')}
+          </ImBotStatusText>}
+        />
+        <SettingsRow data-settings-search-action="Disconnect this bot account" danger title={t('settings.imBot.rows.unbind')}
+          disabled={isDisconnecting} onClick={() => void handleDisconnectClick()} />
+      </SettingsCard>
+    </ImBotPersonalWay>
+  );
+}
+
+function DiscordSetupForm({ bot, onDisconnect }: { bot: ReturnType<typeof useDiscordBot>; onDisconnect: () => Promise<void> }) {
+  const { token, setToken, ownerUserId, setOwnerUserId, status, validationError, isSaving, isDisconnecting, canConnect, connect, reconnect } = bot;
+  const [showToken, setShowToken] = useState(false);
+  const { t } = useTranslation();
+  const guideSteps = useMemo(
+    () => [1, 2, 3, 4].map((step) => ({
+      title: t(`settings.discordBot.guide.step${step}.title`),
+      body: t(`settings.discordBot.guide.step${step}.body`),
+    })),
+    [t],
+  );
+  // 非 idle = 主进程已有保存的凭证(连接中/冲突/失败也算), 给小垃圾桶解绑入口。
+  const hasSavedCreds = status.kind !== 'idle';
+  const inputClass = cn(
+    'h-[42px] w-full rounded-full pl-3.5',
+    'bg-[var(--settings-input-bg)] border border-[var(--settings-input-border)]',
+    'text-13 text-[var(--settings-input-text)] placeholder:text-[var(--settings-input-placeholder)]',
+    'outline-none transition-colors focus:border-[var(--settings-input-border-focus)]',
+  );
+
+  return (
+    <div className="flex flex-col gap-3">
+      {hasSavedCreds && ownerUserId && (
+        <ImSavedConnectionRecovery loading={isSaving} disabled={isDisconnecting} onReconnect={reconnect} />
+      )}
+      <label className="text-12 font-medium text-[var(--settings-section-desc)]">{t('settings.discordBot.tokenLabel')}</label>
+      <div className="relative">
+        <input data-setting-id={imBotSettings.discord.id}
+          type={showToken ? 'text' : 'password'}
+          aria-label={t('settings.discordBot.tokenLabel')}
+          value={token}
+          onChange={(e) => setToken(e.target.value)}
+          placeholder={t('settings.discordBot.tokenPlaceholder')}
+          spellCheck={false}
+          autoComplete="off"
+          className={cn(inputClass, 'pr-10')}
+          style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
+        />
+        <button data-setting-id={imBotSettings.discord.id}
+          type="button"
+          onClick={() => setShowToken(!showToken)}
+          className="absolute right-[14px] top-1/2 -translate-y-1/2 text-[var(--settings-eye-icon)] transition-colors hover:text-[var(--settings-eye-icon-hover)]"
+          aria-label={showToken ? t('settings.discordBot.hideToken') : t('settings.discordBot.showToken')}
+        >
+          {showToken ? <Eye size={18} /> : <EyeOff size={18} />}
+        </button>
+      </div>
+
+      <label className="text-12 font-medium text-[var(--settings-section-desc)]">{t('settings.discordBot.ownerUserIdLabel')}</label>
+      <input data-setting-id={imBotSettings.discord.id}
+        type="text"
+        aria-label={t('settings.discordBot.ownerUserIdLabel')}
+        value={ownerUserId}
+        onChange={(e) => setOwnerUserId(e.target.value)}
+        placeholder={t('settings.discordBot.ownerUserIdPlaceholder')}
+        spellCheck={false}
+        autoComplete="off"
+        inputMode="numeric"
+        className={cn(inputClass, 'pr-3.5')}
+        style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
+      />
+
+      <div className="flex min-h-[18px] items-center justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          {validationError ? (
+            <p className="text-12 text-[var(--settings-error-text)]" role="alert">{validationError}</p>
+          ) : status.kind === 'error' ? (
+            <ImConnectionError details={status.reason} />
+          ) : (
+            <p className="text-12 text-[var(--settings-source-meta)]">{t('settings.discordBot.formHint')}</p>
+          )}
+        </div>
+        {hasSavedCreds && (
+          <button data-setting-id={imBotSettings.discord.id}
+            type="button"
+            onClick={() => void onDisconnect()}
+            disabled={isDisconnecting}
+            aria-label={t('settings.discordBot.disconnectAria')}
+            className={cn(
+              'mr-1 flex shrink-0 items-center justify-center bg-transparent p-0',
+              'text-[var(--settings-trash-icon)] transition-colors hover:text-[var(--settings-trash-icon-hover)]',
+              isDisconnecting && 'cursor-not-allowed opacity-40',
+            )}
+          >
+            <Trash2 size={18} />
+          </button>
+        )}
+      </div>
+
+      <Button data-setting-id={imBotSettings.discord.id} variant="cta" size="lg" loading={isSaving} type="button"
+        onClick={() => void connect()} disabled={!canConnect} className="w-full">
+        {t('settings.discordBot.connect')}
+      </Button>
+
+      <ImBotSetupGuide
+        settingId={imBotSettings.discord.id}
+        title={t('settings.discordBot.guide.title')}
+        steps={guideSteps}
+        linkLabel={t('settings.discordBot.guide.openPortal')}
+        onOpenLink={() => window.electronAPI.openExternal?.(DISCORD_DEVELOPER_PORTAL_URL)}
+      />
+    </div>
   );
 }

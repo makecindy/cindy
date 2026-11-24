@@ -88,6 +88,24 @@ describe('Telegram group history access scope', () => {
     expect(adapter.turnPolicyOptionalForMode?.('ask', ownerPolicy!)).toBe(false);
   });
 
+  // 设置页那份个人 bot 的「谁来回复」(2026-11-24): 伙伴归属每条消息现读, 切到伙伴时主人轮次按伙伴
+  // 权限档、不挂逐轮策略; 切回 Cindy 立刻恢复个人 bot 口径(unit)。
+  it('settings bot: a teammate chosen in 谁来回复 takes effect per message and can be switched back', () => {
+    let companion: string | null = null;
+    const adapter = buildTelegramAdapter({ getOwnerUserId: () => '123' } as never, {} as never, {
+      companionBotId: () => companion,
+    });
+    const ownerTurn = {
+      messageId: 'm-owner',
+      speaker: { id: 'owner', name: 'Owner', isOwner: true },
+    } as unknown as IMMessageEvent;
+    expect(adapter.turnPermissionPolicyFor?.(ownerTurn)).toBeDefined();
+    companion = 'bot-mimi';
+    expect(adapter.turnPermissionPolicyFor?.(ownerTurn)).toBeUndefined();
+    companion = null;
+    expect(adapter.turnPermissionPolicyFor?.(ownerTurn)).toBeDefined();
+  });
+
   it('teammate bot: owner turns carry no policy, guest turns confirm destructive calls only, Full access wins', () => {
     const teammate = buildTelegramAdapter({ getOwnerUserId: () => '123' } as never, {} as never, {
       companionBotId: 'bot-mimi',

@@ -407,6 +407,8 @@ interface QueuedSend {
   onEarlyReject?: (reason: string, text: string) => Promise<boolean> | boolean;
   /** 调用方在拼群上下文之前已落库的 user 行(见 ImRunAgentTurnArgs 同名字段)。 */
   prePersistedUserMessage?: { sessionId: string; clientId: string };
+  /** 个人机器人的群成员轮次(deps.personalGuests): 渠道策略不可跳过。 */
+  guestCapped?: boolean;
 }
 
 type DetachDrainOutcome = 'rewire' | 'cancelled';
@@ -836,6 +838,12 @@ export interface ImTurnRunnerDeps {
     sessionId: string,
     retry?: { userClientId: string; onHandoff(full: string, forRetry: string): void },
   ) => Promise<void>;
+  /**
+   * 设置页那份个人机器人(由 Cindy 自己回复时)的群成员轮次(「群成员也能提问」, guestGate.ts):
+   * 每个任务最多排队 `queueLimit` 条群成员的提问, 再多的不回答; 不进主人 `/ctr` 接管的桌面任务;
+   * 渠道的群轮次策略不因会话是完全访问而被跳过(最高按自动审批)。伙伴连接不传。
+   */
+  personalGuests?: { queueLimit: number };
 }
 
 export function createTurnRunner(
@@ -1108,19 +1116,21 @@ export function createTurnRunner(
     botContextId: string,
     userId: string,
     scopeKey?: string,
+    opts: { skipBinding?: boolean } = {},
   ): Promise<RouteTarget | null> {
-    return routeTargetOnly(await resolveExistingRouteOrUnavailable(botContextId, userId, scopeKey));
+    return routeTargetOnly(await resolveExistingRouteOrUnavailable(botContextId, userId, scopeKey, opts));
   }
 
   async function resolveExistingRouteOrUnavailable(
     botContextId: string,
     userId: string,
     scopeKey?: string,
-    opts: { createCompanion?: boolean } = {},
+    opts: { createCompanion?: boolean; skipBinding?: boolean } = {},
   ): Promise<RouteTarget | CompanionRouteUnavailable | null> {
     // 优先查 binding 是否命中 — bindingStore.get 走进程内 Map, 同步且 O(1)。
     // threadScoped 渠道的 binding 按 (identity, scopeKey) 维度存(多重接管)。
-    const targetSessionId = bindingStore.get({
+    // 个人机器人的群成员轮次不进主人 `/ctr` 接管的桌面任务, 落在群自己的任务上。
+    const targetSessionId = opts.skipBinding ? undefined : bindingStore.get({
       channel,
       botContextId,
       userId,
@@ -1206,12 +1216,21 @@ export function createTurnRunner(
     },
   ): Promise<ImTurnDispatch> {
     const { botContextId, userId, userMessageId, text, attachments, scopeKey } = args;
+    // 个人机器人的群成员轮次(交给伙伴回复时按伙伴规则, 不算)。
+    const guestCapped = deps.personalGuests !== undefined && args.requesterIsOwner !== true
+      && !args.notificationSessionId && !companionBotIdFor(botContextId, userId);
+    // 群成员的轮次必须带渠道的群轮次策略(最高自动审批); 渠道漏挂时不按会话档位放行。
+    if (guestCapped && !args.turnPermissionPolicy) {
+      log.warn(`dropped group member turn without a permission policy channel=${channel}`);
+      await discardHandedOverAck(userMessageId, args.ackReactionIdPromise);
+      return { kind: 'rejected', reason: 'guest_policy_missing' };
+    }
 
     // 路由分流 — 先查 binding: 命中走 desktop session (接管模式 C),
     // 未命中走渠道默认 session (B' 行为)。这是 /ctr 接管能生效的关键入口。
     const routed = args.notificationSessionId
       ? await resolveNotificationTarget(args.notificationSessionId, scopeKey)
-      : await resolveExistingRouteOrUnavailable(botContextId, userId, scopeKey, { createCompanion: true });
+      : await resolveExistingRouteOrUnavailable(botContextId, userId, scopeKey, { createCompanion: true, skipBinding: guestCapped });
     if (routed && 'kind' in routed) {
       // 伙伴连接上伙伴解析不出: 与已有专线的发送前守卫同一口径拒绝, 不建渠道自己的任务。
       const notice = companionUnavailableText(routed);
@@ -1242,6 +1261,16 @@ export function createTurnRunner(
         return { kind: 'rejected', reason: 'missing_auth' };
       }
       target = created.target;
+    }
+    // 同一个群最多排队 personalGuests.queueLimit 条群成员的提问, 再多的不回答(静默, 同微信插件)。
+    if (guestCapped) {
+      const queuedGuests = sessionStates.get(target.row.id)?.sendQueue
+        .filter((item) => item.guestCapped === true).length ?? 0;
+      if (queuedGuests >= deps.personalGuests!.queueLimit) {
+        log.info(`dropped group member turn: queue full session=${target.row.id.slice(-8)}`);
+        await discardHandedOverAck(userMessageId, args.ackReactionIdPromise);
+        return { kind: 'busy', reason: 'guest_queue_full' };
+      }
     }
     // A cold companion task must reconcile its saved model before starting an
     // agent. Otherwise a disconnected old provider can prevent both wiring and
@@ -1344,6 +1373,9 @@ export function createTurnRunner(
     cold?: { row: ImSessionRow; release(): void },
   ): Promise<ImTurnDispatch> {
     const { botContextId, userId, userMessageId, text, attachments, scopeKey } = args;
+    // 个人机器人的群成员轮次(落在伙伴任务上的按伙伴规则): 排队时记下, 渠道策略不可跳过。
+    const guestCapped = deps.personalGuests !== undefined && args.requesterIsOwner !== true
+      && !args.notificationSessionId && !target.botOwned;
     // Keep the entry row for title/new-conversation decisions; use the refreshed execution
     // row for authentication and wiring after a recovery clears its native id.
     const row = target.row;
@@ -1677,6 +1709,7 @@ export function createTurnRunner(
         && args.requesterIsOwner === true && target.botOwned)
         ? { turnPermissionPolicy: args.turnPermissionPolicy } : {}),
       ...(args.requesterIsOwner === true ? { requesterIsOwner: true } : {}),
+      ...(guestCapped ? { guestCapped: true } : {}),
       ...(args.onEarlyReject ? { onEarlyReject: args.onEarlyReject } : {}),
       ...(args.protectedContent === true ? { protectedContent: true } : {}),
       ...(args.groupHistoryAccess ? { groupHistoryAccess: args.groupHistoryAccess } : {}),
@@ -1840,7 +1873,7 @@ export function createTurnRunner(
   async function resolveEffectiveTurnPolicy(
     item: QueuedSend,
   ): Promise<TurnPermissionPolicy | undefined> {
-    if (!item.turnPermissionPolicy || !adapter.turnPolicyOptionalForMode) {
+    if (!item.turnPermissionPolicy || !adapter.turnPolicyOptionalForMode || item.guestCapped === true) {
       return item.turnPermissionPolicy;
     }
     try {

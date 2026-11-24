@@ -36,6 +36,7 @@ import type { ImSlashHandlers } from './slashCommands';
 import { looksLikeSlashCommand } from './slashCommands';
 import type { ImRunAgentTurnArgs, ImTurnRunner } from './turnRunner';
 import type { ImChannelAdapter } from './types';
+import type { PersonalGuestGate } from './guestGate';
 import { describeInteractionSource } from './interactionSource';
 import { buildImReplyContextBlock } from './replyContext';
 import { captureImContext } from '../../../shared/imMessageSource';
@@ -63,6 +64,10 @@ export function createMessageHandler(
   adapter: ImChannelAdapter,
   slash: ImSlashHandlers,
   turnRunner: ImTurnRunner,
+  options: {
+    /** 设置页那份个人机器人的「群成员也能提问」(见 guestGate.ts); 伙伴连接不传。 */
+    guestGate?: PersonalGuestGate;
+  } = {},
 ): (im: TextChannelIM) => () => void {
   const { ui, channel, threadScoped } = adapter;
   // 富卡渠道(仅 feishu 实现这两个能力): 群主流 @ 开话题的「思考中」开场白卡
@@ -145,6 +150,22 @@ export function createMessageHandler(
           `speaker=...${(event.speaker?.id ?? '').slice(-8)}`,
       );
       return;
+    }
+
+    // ── 个人机器人的「群成员也能提问」: 群里非主人的消息先过这道门 ────────────
+    // 交给伙伴回复时按伙伴的规则, 不经过这里。主人在群里说话清零群成员的连续提问计数。
+    if (options.guestGate && event.speaker && !turnRunner.companionBotIdFor?.(event.contextId)) {
+      if (event.speaker.isOwner === true) {
+        options.guestGate.ownerSpoke(event);
+      } else if (!(await options.guestGate.admit(event, async (text) => {
+        await im.sendMarkdownText(event.senderId, text, { threadTs: event.scopeKey });
+      }))) {
+        log.info(
+          `dropped group member message sender=...${event.senderId.slice(-8)} ` +
+            `speaker=...${event.speaker.id.slice(-8)}`,
+        );
+        return;
+      }
     }
 
     let notificationSessionId: string | undefined;
