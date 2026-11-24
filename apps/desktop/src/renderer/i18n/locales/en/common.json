@@ -12540,6 +12540,8 @@
       "transferBusy": "{{name}} is still working on a reply. Move it after the reply finishes",
       "targetUnavailable": "“{{device}}” isn’t available. It must be online with remote control turned on",
       "targetOutdated": "“{{device}}” runs an older Cindy that can’t run {{name}} yet. Update Cindy there first",
+      "skillTargetOutdated": "A Skill in {{name}} has a body larger than 64 KB, which the older Cindy on “{{device}}” cannot receive. Update Cindy on that computer before moving your buddy. Your buddy remains on the original computer",
+      "skillTargetOutdated_skill": "The older Cindy on “{{device}}” can’t receive the Skill “{{slug}}”. Its body is {{bodyBytes, number}} bytes, over the 64 KB limit. {{name}} is still running on the original computer. Update Cindy on the target computer and try again.",
       "targetOutdatedItem": "Move to “{{device}}” · older Cindy",
       "targetOutdatedMeta": "Older Cindy",
       "olderTargetNote": "“{{device}}” runs an older Cindy, so {{name}} works the older way there: the chat history still syncs, but project rules and automations don’t apply there.",
