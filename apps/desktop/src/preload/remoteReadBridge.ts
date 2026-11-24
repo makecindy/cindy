@@ -27,7 +27,6 @@ type BridgeIpc = Pick<IpcRenderer, 'invoke'> & { on: (...args: Parameters<IpcRen
 export function createRemoteReadBridge(ipc: BridgeIpc) {
   const peers = new Map<string, PeerReads>();
   const knownVersions = new Map<string, string>();
-  let observing = false;
 
   function forgetPeer(deviceId: string): void {
     peers.delete(deviceId);
@@ -40,8 +39,6 @@ export function createRemoteReadBridge(ipc: BridgeIpc) {
   }
 
   function observe(): void {
-    if (observing) return;
-    observing = true;
     for (const event of [DEVICE_LINK_PUSH.PEER_LINK_RESET, DEVICE_LINK_PUSH.PEER_LINK_REOPENED,
       DEVICE_LINK_PUSH.ACCESS_REVOKED, DEVICE_LINK_PUSH.CONTROL_TARGET_CHANGED]) {
       ipc.on(event, (_event, { deviceId }) => { forgetPeer(deviceId); });
@@ -59,10 +56,8 @@ export function createRemoteReadBridge(ipc: BridgeIpc) {
       }
       const peer = peers.get(deviceId);
       if (!peer || typeof appVersion !== 'string') return;
-      if (peer.version !== undefined && peer.version !== appVersion) {
+      if (peer.version !== appVersion) {
         peers.set(deviceId, { missing: new Map(), version: appVersion });
-      } else {
-        peer.version = appVersion;
       }
     });
     ipc.on(DEVICE_LINK_PUSH.STATUS_CHANGED, (_event, { status, dataPathChangedDeviceId }) => {
@@ -84,7 +79,6 @@ export function createRemoteReadBridge(ipc: BridgeIpc) {
   }
 
   function scope(deviceId: string): PeerReads {
-    observe();
     const existing = peers.get(deviceId);
     if (existing) return existing;
     if (peers.size >= 256) peers.delete(peers.keys().next().value!);
@@ -92,6 +86,9 @@ export function createRemoteReadBridge(ipc: BridgeIpc) {
     peers.set(deviceId, peer);
     return peer;
   }
+
+  // Presence can arrive before the first read or openLink call.
+  observe();
 
   return {
     async openLink(deviceId: string): Promise<LinkAcceptPayload> {

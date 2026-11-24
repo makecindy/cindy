@@ -254,7 +254,11 @@ function unread(): DeviceModelGroupsSnapshot {
 
 /** 一台电脑的模式(远程控制那台时用)；readOnEntry 时挂载即读一次，并在重连目录就绪时自动补读。 */
 export function useDeviceModelGroups(deviceId: string | null | undefined, readOnEntry = false): DeviceModelGroupsSnapshot & { read: () => void } {
-  const owner = useSyncExternalStore(subscribeDataOwnerGeneration, getDataOwnerGeneration);
+  const owner = useSyncExternalStore(
+    subscribeDataOwnerGeneration,
+    getDataOwnerGeneration,
+    getDataOwnerGeneration,
+  );
   const entry = useMemo(() => (deviceId ? deviceGroups(owner, deviceId) : null), [owner, deviceId]);
   const read = useCallback(() => { void entry?.read(); }, [entry]);
   useEffect(() => {
@@ -273,7 +277,11 @@ export function useDevicesModelGroups(deviceIds: readonly string[]): {
   groups: ReadonlyMap<string, DeviceModelGroupsSnapshot>;
   read: () => void;
 } {
-  const owner = useSyncExternalStore(subscribeDataOwnerGeneration, getDataOwnerGeneration);
+  const owner = useSyncExternalStore(
+    subscribeDataOwnerGeneration,
+    getDataOwnerGeneration,
+    getDataOwnerGeneration,
+  );
   const key = [...new Set(deviceIds)].sort().join('\n');
   const entries = useMemo(
     () => (key ? key.split('\n') : []).map((deviceId) => ({ deviceId, entry: deviceGroups(owner, deviceId) })),

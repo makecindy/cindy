@@ -141,10 +141,19 @@ describe('remote optional reads at the desktop IPC boundary', () => {
     presence('1');
     invoke.mockRejectedValueOnce(failure).mockResolvedValueOnce(['run']);
     await expect(read('old', channel)).rejects.toThrow();
-    presence('1');
     await expect(read('old', channel)).rejects.toThrow();
+    expect(invoke).toHaveBeenCalledTimes(1);
     presence('2');
     await expect(read('old', channel)).resolves.toEqual(['run']);
+    expect(invoke).toHaveBeenCalledTimes(2);
+  });
+
+  it('invalidates a miss when the peer first reports its version after the read', async () => {
+    const { read, invoke, push } = fixture();
+    invoke.mockRejectedValueOnce(disallowedRemotely(modelGroups)).mockResolvedValueOnce(['available']);
+    await expect(read('old', modelGroups)).rejects.toThrow('not allowed remotely');
+    push(DEVICE_LINK_PUSH.PRESENCE_CHANGED, { deviceId: 'old', online: true, appVersion: '2' });
+    await expect(read('old', modelGroups)).resolves.toEqual(['available']);
     expect(invoke).toHaveBeenCalledTimes(2);
   });
 
