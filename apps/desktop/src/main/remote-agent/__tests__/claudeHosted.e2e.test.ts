@@ -70,7 +70,7 @@ import { IpcHarness } from '../../maker-ipc/__tests__/helpers/ipcHarness';
 import { hasSendToSessionLock, isSendToSessionLockHeldByCurrentCall, withSendToSessionLock } from '../../maker-ipc/sendToSessionLock';
 import { SnapshotOperationDeadlineError } from '../../utils/operationBudget';
 import type { Maker } from '@cindy/maker-core';
-import { exerciseConnectionPool, sharedAccountRegisterWiring, sharedAccountSendTransaction } from './poolHarness';
+import { exerciseConnectionPool, sharedAccountRegisterWiring, sharedAccountSendTransaction, sharedAccountSessionTool } from './poolHarness';
 import { getActiveCatalog, setCustomProviders } from '../../maker-host/active-catalog';
 import { createModelRoutingTransform, setClaudeProxyGatewayKeyReader, setClaudeProxySessionIdResolver } from '../../maker-host/anthropic-compat-proxy-host';
 import { setCustomProviderKeyReader } from '../../maker-host/provider-route';
@@ -571,7 +571,7 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
     await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   });
 
-  async function exercise(original: 'a' | 'b', failure: 'cold' | 'run' | 'cold-auth' | 'send-auth' | 'idle-send' | 'reconnect' | 'scheduled-reconnect',
+  async function exercise(original: 'a' | 'b', failure: 'cold' | 'run' | 'cold-auth' | 'send-auth' | 'idle-send' | 'reconnect' | 'scheduled-reconnect' | 'session-reconnect',
     { disconnectHandoff = false, replayAttachments = false,
       stopRecoveryAt, automaticOrigin, rejectIpcSelection = false }: {
         disconnectHandoff?: boolean;
@@ -583,7 +583,7 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
           | 'unconfirmed' | 'send-stopped' | 'stopped-before-open' | 'mode-changed'
           | 'mode-changed-with-stop' | 'snapshot-deadline' | 'cancelled' | 'stale' | 'schedule-aborted' | 'new-input' | 'model-changed' | 'route-changed' | 'engine-changed';
       } = {}) {
-    const reconnect = failure === 'reconnect' || failure === 'scheduled-reconnect';
+    const reconnect = failure.endsWith('reconnect');
     const switchViaIpc = stopRecoveryAt === 'route-changed' || stopRecoveryAt === 'engine-changed';
     const continuation = 'Continue the remaining work.';
     const followUp = 'Check that I can send a new message.';
@@ -865,8 +865,15 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
         const cancelledInput = new AbortController();
         const fireAbort = new AbortController();
         const accepted = createQueuedAcceptedCallbacks();
+        const acceptQueuedInput = vi.fn(accepted.run);
         const oldSessionClosed = Promise.withResolvers<void>();
         const switchRequestQueued = Promise.withResolvers<void>();
+        const writeHandoff = vi.fn(async (_id: string, _body: unknown, options: { beforePublish(): Promise<void> }) => {
+          await options.beforePublish();
+          expect(row.sdkSessionId).toBe(active.id === '<pending>' ? null : active.id);
+          expect(await pending.peek(task)).toBeNull();
+          return { id: randomUUID() };
+        });
         const wiring = sharedAccountRegisterWiring({
           maker: {
             getSession: () => live,
@@ -912,12 +919,7 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
             await persistence.drainPersistQueue();
             return structuredClone(history);
           },
-          createDbMessage: async (_id: string, _body: unknown, options: { beforePublish(): Promise<void> }) => {
-            await options.beforePublish();
-            expect(row.sdkSessionId).toBe(active.id === '<pending>' ? null : active.id);
-            expect(await pending.peek(task)).toBeNull();
-            return { id: randomUUID() };
-          },
+          createDbMessage: writeHandoff,
           agentSwitchDeps: {
             getSessionRow: async () => ({ ...row }),
             setPendingHandoff: (id: string, note: string, generation: number) => pending.set(id, note, generation),
@@ -1036,7 +1038,7 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
           onResumableTurnError: attemptAutomaticResume,
           sendToAgent: send, steerToAgent: async () => {}, abortSession: async () => {},
           getSchedulerRunSignal: (id, item) => schedulerBridge?.runSignalFor(id, item),
-          onAcceptedQueuedMessage: (id, item) => accepted.run(id, item),
+          onAcceptedQueuedMessage: (id, item) => acceptQueuedInput(id, item),
           touchUserSend: async () => {}, createUserMessage: vi.fn(),
           isTurnRunning: () => live?.isTurnRunning() ?? false, hasPendingInteraction: () => false,
           getAgentKind: () => 'claude-code', getSdkSessionId: async () => live?.sdkSessionId,
@@ -1264,6 +1266,21 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
           });
           expect(pendingSwitches.get(task)).toBeUndefined();
           return;
+        } else if (failure === 'session-reconnect') {
+          const sendTool = sharedAccountSessionTool('local-sender', {
+            maker: {
+              getSession: (id: string) => id === task ? live : id === 'local-sender'
+                ? { id, agentDeviceId: null, remoteHostId: null, getStatus: () => 'active' } : undefined,
+              getSessionMeta: async (id: string) => ({ id, agentKind: 'claude-code', workDir: project, model: MODEL }),
+            },
+            getSessionRowSnapshot: async () => ({ ...row, status: 'active', title: 'Target', userSendAt: null }),
+            buildCreateOptsForQueuedSession: async () => input.createOpts,
+            inputCoordinator: coordinator,
+            createId: () => clientId,
+          });
+          expect(await sendTool(task, continuation)).toMatchObject({
+            ok: true, wake_kind: 'queued', queued_message_id: clientId,
+          });
         } else {
           const earlier = service.trackGuestStartRecovery(task);
           try {
@@ -1306,6 +1323,10 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
         await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
         await expect(send.mock.results[0].value).resolves.toMatchObject({ dispatched: true });
         expect(history.filter(message => message.clientId === clientId)).toHaveLength(1);
+        if (failure === 'session-reconnect') {
+          expect(acceptQueuedInput).toHaveBeenCalledOnce();
+          expect(writeHandoff).toHaveBeenCalledOnce();
+        }
         expect(opens).toHaveLength(3);
         expect(opens[1].options.resumeSessionId).toBe(oldNative);
         expect(opens[2].groupSwitchToken).toEqual(expect.any(String));
@@ -1454,6 +1475,12 @@ describe.skipIf(!available || process.platform === 'win32')('shared account hand
     'keeps the default offer path for automatic %s input', { timeout: 90_000 },
     async automaticOrigin => exercise('a', 'reconnect', { automaticOrigin }),
   );
+  // E2E (real Claude CLI, loopback transport): the 11-24 tool input was
+  // excluded from manual/scheduled recovery. One queued local tool message to
+  // a reclaimed shared task with one spare must finish the remaining file edit.
+  it('recovers one local send_to_session input after an idle shared run is reclaimed', { timeout: 90_000 }, async () => {
+    await exercise('a', 'session-reconnect');
+  });
   // #11895 / e2e: fire against an idle live Session, whose old executor
   // run is gone. Exercise runner acceptance and terminal tracking in addition
   // to the real controller, host and CLI. Disabling capture must break success.

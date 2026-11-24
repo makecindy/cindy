@@ -150,6 +150,7 @@ type MakerSendOptions = {
   /** Main-only observation: preparation may have side effects even if selection later changes. */
   onRuntimePreparation?: () => void;
   reconnectRecovery?: {
+    canCapture?(session: object): boolean;
     signal: AbortSignal;
     schedulerRunSignal?: AbortSignal;
     isCurrent(): boolean;
@@ -1928,6 +1929,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       let userPromptPreviewClientId: string | null = null;
       const reconnectInput = requestedSendOpts.reconnectRecovery;
       const reconnect = !recovery && createOpts && persistUserMessage && reconnectInput
+        && reconnectInput.canCapture?.(sess) !== false
         ? deps.captureSharedReconnectRecovery?.(sess) : undefined;
       try {
         let cindyLearnInvocation: CindyLearnInvocationGrant | null = null;

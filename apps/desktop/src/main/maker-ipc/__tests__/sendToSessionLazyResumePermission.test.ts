@@ -120,7 +120,7 @@ function botTaskDispatchSlice(): string {
     registerSource.indexOf('const botGroupChatDeps: BotGroupChatServiceDeps = {'),
   );
   const pluginSource = slice('function hostPluginInputSource()', '  const sessionControlService = createSessionControlService(');
-  const sendToSession = slice('sendToSession: async (params) => {', ',\n    enableOrca: enableOrcaInternal,')
+  const sendToSession = slice('sendToSession: async (params', ',\n    enableOrca: enableOrcaInternal,')
     .replace('sendToSession:', 'const sendToSession =');
   return ts.transpileModule(
     `${sendWithBaseline}

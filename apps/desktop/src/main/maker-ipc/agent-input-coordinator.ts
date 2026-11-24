@@ -3,6 +3,7 @@ import { ACCEPTED_ATTACHMENT_REPLAY } from './attachmentReplay.js';
 import { parseOutputLimitDetails, type OutputLimitDetails } from '@cindy/maker-shared';
 import { FORWARDED_REQUEST_RECEIPT, verifiedOwnerRequestText, type ForwardedRequestSource } from '../../shared/forwardedRequest.js';
 import { TELEGRAM_QUESTION_ORIGIN, telegramQuestionAnswerOrigin, inheritTelegramQuestionRetry } from './telegramQuestionReply.js';
+import type { Session } from '@cindy/maker-core';
 import { ASYNC_QUESTION_ANSWER, SUPERSEDE_ASYNC_QUESTIONS, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT } from '@cindy/maker-core';
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { assertSharedTaskQueueMutation } from './sharedTaskInput.js';
@@ -242,6 +243,7 @@ export interface AgentInputSendOpts {
   onUndispatchedRetry?: () => void;
   /** Main-owned boundary for recovering a send that never reached the supplier. */
   reconnectRecovery?: {
+    canCapture?(session: object): boolean;
     signal: AbortSignal;
     schedulerRunSignal?: AbortSignal;
     isCurrent(): boolean;
@@ -1455,6 +1457,9 @@ export class AgentInputCoordinator {
   private readonly restoredUsageLimitRetryItems = new WeakSet<AgentInputQueuedMessage>();
   private readonly restoredQueueItems = new WeakSet<AgentInputQueuedMessage>();
   private readonly manualUiInputs = new WeakSet<AgentInputQueuedMessage>();
+  // Provenance belongs to this queue object and this live target. An edit or
+  // snapshot restore produces a new object and does not inherit eligibility.
+  private readonly localSessionReconnectTargets = new WeakMap<AgentInputQueuedMessage, Session>();
   private readonly restoredOrcaReports = new WeakSet<AgentInputQueuedMessage>();
   private readonly restoreAttempted = new Set<string>();
   private readonly queueRestorePromises = new Map<string, Promise<void>>();
@@ -2239,6 +2244,7 @@ export class AgentInputCoordinator {
       manualUiSend?: boolean;
       onDuplicate?: () => void;
     },
+    sharedReconnectTarget?: Session,
   ): AgentInputProjection {
     const state = this.getState(sessionId);
     item = captureOriginalSyntheticTrigger(item);
@@ -2260,6 +2266,9 @@ export class AgentInputCoordinator {
     item = stampHostAcceptedAt(item, state.clearBoundaryMs);
     if (opts?.manualUiSend && isManualUiOrigin(item.origin) && !item.autoResume && !item.originalSyntheticTrigger) {
       this.manualUiInputs.add(item);
+    }
+    if (sharedReconnectTarget && !item.autoResume && !item.originalSyntheticTrigger) {
+      this.localSessionReconnectTargets.set(item, sharedReconnectTarget);
     }
     // Fresh host reports have already passed the dispatcher's relationship
     // checks. Like validated snapshot reports, they may cross a restore-only
@@ -4334,6 +4343,13 @@ export class AgentInputCoordinator {
     ) {
       return { merged: false, projection: this.getProjection(sessionId) };
     }
+    const reconnectTarget = this.localSessionReconnectTargets.get(survivor);
+    if (reconnectTarget && presentTargets.every(item => this.localSessionReconnectTargets.get(item) === reconnectTarget)) {
+      this.localSessionReconnectTargets.set(replacement, reconnectTarget);
+    } else {
+      this.localSessionReconnectTargets.delete(replacement);
+    }
+
     if (survivor.hostAcceptedAtMs === undefined) delete replacement.hostAcceptedAtMs;
     else replacement.hostAcceptedAtMs = survivor.hostAcceptedAtMs;
 
@@ -5945,7 +5961,9 @@ export class AgentInputCoordinator {
       // post-dispatch acknowledgements must remain older than that marker.
       const preVendorDispatchAt = Math.max(0, Date.now() - 1);
       const appMessageGuard = queuedAppMessageGuard(head);
-      const reconnectRecovery = this.manualUiInputs.has(head) ? new AbortController() : undefined;
+      const reconnectTarget = this.localSessionReconnectTargets.get(head);
+      const reconnectRecovery = this.manualUiInputs.has(head) || reconnectTarget ? new AbortController() : undefined;
+      let sessionInputAccepted = false;
       active.reconnectRecovery = reconnectRecovery;
       // Acceptance releases the queue bridge's registration. Capture the run
       // signal now so a later cancellation can still fence the replacement.
@@ -5989,6 +6007,8 @@ export class AgentInputCoordinator {
           this.captureReservedVendorGeneration(sessionId, active, generation),
         ...(reconnectRecovery ? { reconnectRecovery: {
           signal: reconnectRecovery.signal,
+          ...(reconnectTarget ? { canCapture: (session: object) =>
+            session === reconnectTarget && reconnectTarget.hasReclaimedSharedRun() } : {}),
           schedulerRunSignal,
           wasStopped: () => active.stopped === true,
           isCurrent: () => !reconnectRecovery.signal.aborted && !schedulerRunSignal?.aborted
@@ -6047,11 +6067,14 @@ export class AgentInputCoordinator {
             // callback intentionally runs before generation checks: a clear
             // or Stop may win the pre-vendor race after persistence, but it
             // must not delete media that the durable row now references.
-            this.notifyUserMessagePersisted(sessionId, head);
+            const firstAcceptance = !reconnectTarget || !sessionInputAccepted;
+            if (firstAcceptance) this.notifyUserMessagePersisted(sessionId, head);
             if (this.isTurnGenerationCurrent(sessionId, active)) {
               active.persisted = true;
               active.persisting = false;
               active.dispatchLifecycle = 'awaiting-dispatch-hooks';
+            }
+            if (firstAcceptance && this.isTurnGenerationCurrent(sessionId, active)) {
               this.notifyUserMessageQueryable(sessionId, head);
               // 跨过 DB 持久化边界即刻收窄快照:此后崩溃属 interrupted-turn
               // 辖区,若等到下一次 emit(turn done)才写,长 turn 内崩溃会把
@@ -6067,10 +6090,13 @@ export class AgentInputCoordinator {
             // host 把排队 orca 消息的 accepted 副作用挂在这个 hook 上(置 running /
             // autoBridgePending), 必须 await 完才能放行 vendor turn —— fire-and-forget
             // 会让快 worker 在状态可见前结束 turn, 桥接被 turn-end handler 误跳过。
-            if (this.restoredQueueItems.has(head)) {
-              await this.deps.onAcceptedQueuedMessage?.(sessionId, head, true);
-            } else {
-              await this.deps.onAcceptedQueuedMessage?.(sessionId, head);
+            if (firstAcceptance) {
+              if (this.restoredQueueItems.has(head)) {
+                await this.deps.onAcceptedQueuedMessage?.(sessionId, head, true);
+              } else {
+                await this.deps.onAcceptedQueuedMessage?.(sessionId, head);
+              }
+              sessionInputAccepted = true;
             }
             if (head.origin?.kind === 'scheduler') active.schedulerAccepted = true;
             if (!this.isActiveTurnCurrent(sessionId, active)) {

@@ -2426,6 +2426,10 @@ export class Session {
   // Claude 走 SDK checkpoint；Codex 走 thread/rollback 裁剪对话。
   // 业务层 (desktop agentRewind.ts) 通过这个委托对外暴露。
 
+  hasReclaimedSharedRun(): boolean {
+    return this.getStatus() === 'active' && this.handle.hasReclaimedSharedRun?.() === true;
+  }
+
   /**
    * 当前是否有 turn 在跑 (rewind preview/commit 业务前置守卫用)。
    * 默认 false (handle.isTurnRunning 不实现的 agent 永远算 idle)。

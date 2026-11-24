@@ -1307,7 +1307,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
                 }
               : {}),
             ...(agentDeviceId !== undefined ? { agentDeviceId } : {}),
-          });
+          }, true);
           if (result.ok && result.wakeKind === 'created' && dispatcherSessionId)
             reportGroupTaskCreated(dispatcherSessionId, { taskId: result.targetSessionId, deviceId: null,
               title: result.targetTitle || title?.trim() || normalizeAutoTitle(message) });

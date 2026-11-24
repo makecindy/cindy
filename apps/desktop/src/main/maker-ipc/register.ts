@@ -2907,7 +2907,7 @@ interface OrcaCollabService {
     agentDeviceId?: string | null;
     /** Host-owned create defaults for non-session callers such as scheduler script tasks. */
     createDefaults?: SendToSessionCreateDefaults;
-  }) => Promise<SendToSessionResult>;
+  }, fromSessionTool?: true) => Promise<SendToSessionResult>;
   enableOrca: (
     leadSessionId: string,
     opts: EnableOrcaOptions,
@@ -12329,7 +12329,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
      * reconcileCreateOptsAgainstDb 再读当前落库档位,不使用入队时的旧快照。
      */
     resumeWithStoredPermissionMode?: boolean;
-  }, hostBotDispatch = false): Promise<SendToSessionInternalResult> {
+  }, hostBotDispatch = false, localSessionTool = false): Promise<SendToSessionInternalResult> {
     await assertTaskActionCurrent();
     if (hasTaskActionAuthorization()) params = { ...params, forceQueue: true };
     const {
@@ -12821,7 +12821,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // Pending selections also need the canonical send transaction: it consumes the intent,
       // then refreshes queued createOpts from DB before starting the target harness.
       // enqueue does not await dispatch, so the drain can acquire this lock after we return.
-      if (params.files?.length || params.contextFiles?.length || params.forceQueue || verifiedOwnerRequestText(params.autoReviewUserText) !== undefined || explicitClientId?.startsWith('bot-dm:') || explicitClientId?.startsWith(BOT_GROUP_CLIENT_ID_PREFIX) || explicitClientId?.startsWith('bot-authorization-resume:') || inputCoordinator.shouldQueueNewTurn(targetSessionId) || agentSwitchPending.get(targetSessionId)) {
+      const reconnectTarget = localSessionTool ? maker.getSession(targetSessionId) : undefined;
+      const sharedReconnectTarget = reconnectTarget?.hasReclaimedSharedRun() && !reconnectTarget.isTurnRunning()
+        ? reconnectTarget : undefined;
+      if (sharedReconnectTarget || params.files?.length || params.contextFiles?.length || params.forceQueue || verifiedOwnerRequestText(params.autoReviewUserText) !== undefined || explicitClientId?.startsWith('bot-dm:') || explicitClientId?.startsWith(BOT_GROUP_CLIENT_ID_PREFIX) || explicitClientId?.startsWith('bot-authorization-resume:') || inputCoordinator.shouldQueueNewTurn(targetSessionId) || agentSwitchPending.get(targetSessionId)) {
         lockStage = 'enqueue-queued-message';
         const qClientId = explicitClientId ?? createId();
         const durableScriptDelivery = qClientId.startsWith('schedule-delivery:');
@@ -12856,6 +12859,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           pastedTextRanges: params.pastedTextRanges,
           inheritTargetPlanMode: params.inheritTargetPlanMode,
           taskActionDeliveryGuard: params.taskActionDeliveryGuard,
+          ...(sharedReconnectTarget ? { sharedReconnectTarget } : {}),
         });
         if (durableScriptDelivery) await awaitAgentInputQueueSnapshotPersistence(targetSessionId);
         return {
@@ -15610,6 +15614,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     onAcceptedCommit?: () => void | Promise<void>;
     origin?: AgentInputQueuedMessage['origin'];
     manualUiSend?: boolean;
+    /** Only the verified local tool path can supply this live, in-process Session. */
+    sharedReconnectTarget?: Session;
     sourcePlugin?: AgentInputQueuedMessage['sourcePlugin'];
     /** Host-accepted task text or a forwarded request receipt. */
     autoReviewUserText?: AgentInputQueuedMessage['autoReviewUserText'];
@@ -15635,7 +15641,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           params.onAcceptedCommit,
         );
       }
-      inputCoordinator.enqueue(params.targetSessionId, queued, params.manualUiSend ? { manualUiSend: true } : undefined);
+      inputCoordinator.enqueue(params.targetSessionId, queued,
+        params.manualUiSend ? { manualUiSend: true } : undefined, params.sharedReconnectTarget);
     };
     if (params.authorizationGuard) await commitBotAuthorizationInput(params.authorizationGuard, enqueue);
     else enqueue();
@@ -17829,8 +17836,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return staged ? { ...result, runtime: { ...result.runtime, pendingMutation: staged } } : result;
     },
     setSessionRuntime: (params) => sessionControlService.setSessionRuntime(params),
-    sendToSession: async (params) => {
+    sendToSession: async (params, fromSessionTool) => {
       const ownerScope = captureDataOwnerBroadcastScope();
+      // Only the host MCP adapter supplies this argument. The dispatcher comes
+      // from its bound tool context and must resolve to a live task on this host.
+      const dispatcher = fromSessionTool && params.targetSessionId && params.dispatcherSessionId && !isDeviceLinkInvoke()
+        ? maker.getSession(params.dispatcherSessionId) : undefined;
+      const localSessionTool = Boolean(dispatcher && dispatcher.getStatus() === 'active' && !dispatcher.remoteHostId
+        && (!dispatcher.agentDeviceId || isProviderShareAgentDeviceId(dispatcher.agentDeviceId)));
       const pluginSource = !params.dispatcherSessionId ? hostPluginInputSource() : undefined;
       let projectFromWorkingDir = false;
       if (!params.targetSessionId && !params.createDefaults) {
@@ -17869,7 +17882,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           forceQueue: true,
           resumeWithStoredPermissionMode: true,
         } : {}),
-      });
+      }, false, localSessionTool);
       return sent.ok && projectFromWorkingDir ? { ...sent, projectFromWorkingDir: true } : sent;
     },
     enableOrca: enableOrcaInternal,

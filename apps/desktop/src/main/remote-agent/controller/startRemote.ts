@@ -618,6 +618,7 @@ async function prepareAndStartRemoteAgentSession(
   /** 正在连或连着的那条连接(Codex 的执行环境帧经它推给对方)。 */
   let active: RemoteAgentRunClient | null = null;
   let linkState: LinkState = 'connecting';
+  let idleReclaimedByHost = false;
   /** 进行中的、要对方参与的调用数(期间不让出名额)。 */
   let inflight = 0;
   let lastActivity = Date.now();
@@ -885,6 +886,7 @@ async function prepareAndStartRemoteAgentSession(
               active = null;
               relay?.reset();
               linkState = unfinished ? 'closed' : 'released';
+              idleReclaimedByHost = !unfinished;
               if (unfinished) controller?.onClosed(reason, error?.message, client.runId);
             }
             if (releasing === pendingRelease) releasing = null;
@@ -896,6 +898,7 @@ async function prepareAndStartRemoteAgentSession(
         if ((restart || (idleReclaimed && !controller?.hasActiveTurn())) && controller) {
           relay?.reset();
           linkState = 'released';
+          idleReclaimedByHost = !restart;
           deps.log?.info('remote agent connection released by the other computer', { kind, runId: client.runId, reason });
           if (restart) {
             // A first turn may already have changed local files before its first done.
@@ -947,6 +950,7 @@ async function prepareAndStartRemoteAgentSession(
         deps.groupSwitch?.offer(startupSwitchToken);
       }
       linkState = 'connected';
+      idleReclaimedByHost = false;
       lastStarted = started;
       onOpened(started);
       clearInterval(reportingTimer);
@@ -1421,5 +1425,9 @@ async function prepareAndStartRemoteAgentSession(
   }
   touch();
   deps.log?.info('remote agent session started', { kind, runId: activeNow()?.runId });
-  return (controller as RemoteAgentHandleController | null)!.handle;
+  const handle = (controller as RemoteAgentHandleController | null)!.handle;
+  if (deps.recoverSharedReconnect) {
+    handle.hasReclaimedSharedRun = () => linkState === 'released' && idleReclaimedByHost;
+  }
+  return handle;
 }
