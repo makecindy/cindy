@@ -135,6 +135,8 @@ export function useRemoteBotSync(): void {
     const timers = new Map<string, ReturnType<typeof setTimeout>>();
     const restoredCheckTimers = new Map<string, ReturnType<typeof setTimeout>>();
     const taskRefreshes = new Set<string>();
+    /** Per host: delegation pushes seen, so a round only clears the ones it has consumed. */
+    const delegationPushes = new Map<string, number>();
     const current = () => !disposed && owner === nextOwner && isDataOwnerGenerationCurrent(dataOwner);
     async function refresh(deviceId: string, refreshTasks = false) {
       const host = byId.get(deviceId);
@@ -157,6 +159,9 @@ export function useRemoteBotSync(): void {
           [request],
         );
         if (!current() || generations.get(deviceId) !== epoch) return;
+        // A delegation push may have arrived while the roster was in flight: this round reads for it.
+        const pushesSeen = delegationPushes.get(deviceId) ?? 0;
+        refreshTasks ||= taskRefreshes.has(deviceId);
         const previous = new Map(snapshot.filter(bot => bot.deviceId === deviceId).map(bot => [bot.id, bot]));
         const bots = parseRemoteBots(result, deviceId, host.name).map((bot) => ({
           ...bot,
@@ -243,7 +248,10 @@ export function useRemoteBotSync(): void {
             }
           }
         }
-        if (current() && generations.get(deviceId) === epoch) taskRefreshes.delete(deviceId);
+        // A push during the reads stays pending for its own refresh.
+        if (current() && generations.get(deviceId) === epoch && (delegationPushes.get(deviceId) ?? 0) === pushesSeen) {
+          taskRefreshes.delete(deviceId);
+        }
       } catch {
         if (!current() || generations.get(deviceId) !== epoch) return;
         // Keep connection evidence and cached identity. An unsupported/failed
@@ -268,6 +276,7 @@ export function useRemoteBotSync(): void {
         return;
       if (push.channel === 'maker:bot-delegation:changed') {
         taskRefreshes.add(push.deviceId);
+        delegationPushes.set(push.deviceId, (delegationPushes.get(push.deviceId) ?? 0) + 1);
         legacyDelegationHosts.add(push.deviceId);
       }
       if (timers.has(push.deviceId)) return;

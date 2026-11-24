@@ -596,6 +596,37 @@ it('keeps a main chat change unconfirmed when an earlier teammate\'s timeout end
   } finally { vi.useRealTimers(); }
 });
 
+// Unit, same rule: attribution is known and the host has not pushed yet, so a reconnect starts
+// an ordinary refresh. The first delegation push arrives while that roster request is in
+// flight and the roster returns before the 500 ms push timer: the round must read for the push
+// instead of clearing it. Minimal input: deferred roster, push, roster returns at 100 ms.
+it('reads for a delegation push that arrives while an ordinary roster request is in flight', async () => {
+  h.devices = [host('a')];
+  let finishRoster: ((value: unknown) => void) | null = null;
+  let deferRoster = false;
+  let aReads = 0;
+  h.invoke.mockImplementation((_device, channel) => {
+    if (channel === REMOTE_RESOURCE_LIST_CHANNEL) {
+      return deferRoster ? new Promise(resolve => { deferRoster = false; finishRoster = resolve; }) : Promise.resolve(collection());
+    }
+    return Promise.resolve({ ok: true, delegations: [{ requestingBotId: 'same-bot', childSessionId: ++aReads === 1 ? 'child' : 'new-child' }] });
+  });
+  vi.useFakeTimers();
+  try {
+    const { result } = renderHook(useRoster);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(result.current[0].delegatedSessionIds).toEqual(['child']);
+    deferRoster = true;
+    act(() => h.status({ status: 'online' }));
+    act(() => h.push({ deviceId: 'a', channel: 'maker:bot-delegation:changed' }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+    await act(async () => { finishRoster!(collection()); await vi.advanceTimersByTimeAsync(0); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(taskTargets()).toEqual(['canonical', 'canonical']);
+    expect(result.current[0].delegatedSessionIds).toEqual(['new-child']);
+  } finally { vi.useRealTimers(); }
+});
+
 it('cannot restore old attribution when a pending task-card read completes after switching accounts', async () => {
   h.devices = [host('a')];
   let finish!: (value: unknown) => void;
