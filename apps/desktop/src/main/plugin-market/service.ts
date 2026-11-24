@@ -1,3 +1,5 @@
+import { assertConfirmedGhostUninstallOwner } from '../cindy-brain/confirmedGhostUninstall.js';
+import type { ConfirmedGhostUninstall } from '../../shared/ghost.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -5,6 +7,7 @@ import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 
 import {
   compareCindyVersions,
+  pluginCatalogPublisherGroup,
   pluginHasToolUi,
   isValidPluginResourceId,
   isValidPluginNamespace,
@@ -41,11 +44,13 @@ import type {
   MarketSourceSummary,
   PluginMarketDetail,
   PluginMarketInstallOptions,
+  PluginMarketInstallProgress,
   PluginMarketInstallResult,
   PluginMarketItem,
   PluginMarketLocalIconRequest,
   PluginMarketLocalIconResult,
   PluginMarketSnapshot,
+  OfficialModelPluginPage,
   PluginMarketQuery,
   PluginMarketPage,
   PluginMarketCounts,
@@ -128,6 +133,7 @@ import type { GhostInstallConsentInitiator } from '../../shared/ghostInstallCons
 import { isPluginMarketPassthroughErrorCode, PluginMarketApi, PluginMarketEndpointUnsupportedError } from './api.js';
 import { createOrganizationPrefixStore } from './organizationPrefixStore.js';
 import { downloadVerifiedPlugin } from './download.js';
+import { createPluginInstallProgress, type PluginInstallProgress } from './installProgress.js';
 import {
   commitCustomMarketPlugin,
   packCustomMarketPlugin,
@@ -645,6 +651,8 @@ export interface PluginMarketInstallContext {
   assertCurrent?: () => void;
   /** Owner/peer/cancellation only; remains valid after the package directory swap. */
   assertScope?: () => void;
+  /** Display-only progress for the surface that started this install. */
+  onProgress?: (progress: PluginMarketInstallProgress) => void;
 }
 
 /**
@@ -1041,6 +1049,8 @@ function removalNoticeKey(owner: ActiveAppSession): string {
  */
 export class PluginMarketService {
   private readonly snapshotFlights = new Map<string, MarketSnapshotFlight>();
+  private readonly officialEngineReads = new Map<string, Promise<VisiblePluginDetail>>();
+  private readonly officialEngineCapabilities = new Map<string, { digest: string; hasEngine: boolean }>();
   private readonly catalogFlights = new Map<string, Promise<MarketCatalog>>();
   private readonly localReadFlights = new Map<string, Promise<LocalInstallSnapshot>>();
   private readonly localRefreshContexts = new Map<string, { context: PluginMarketRefreshContext; lastUsed: number }>();
@@ -1303,6 +1313,55 @@ export class PluginMarketService {
       ...(result.organizationAccessError ? { organizationAccessError: result.organizationAccessError } : {}) };
   }
 
+  /** Provider discovery reads only public server metadata. Installation and local markets belong to the detail page. */
+  async officialModelPlugins(cursor: unknown = null, active = () => true): Promise<OfficialModelPluginPage> {
+    if (cursor !== null && (typeof cursor !== 'string' || !cursor || cursor.length > 4_096))
+      throwIpcError('INVALID_PARAMS', 'Invalid Plugin catalog cursor');
+    this.requireConfigured();
+    const endpoint = getClientEndpoint('pluginApiBaseUrl');
+    const owner = canCaptureMarketOwner() ? captureMarketOwner() : null;
+    const assertCurrent = () => {
+      if (owner) requireSameMarketOwner(owner);
+      else if (canCaptureMarketOwner() || isAppSessionBoundaryPending()) throwIpcError('PRECONDITION_FAILED', 'Plugin owner changed');
+      if (endpoint !== getClientEndpoint('pluginApiBaseUrl')) throwIpcError('PRECONDITION_FAILED', 'Plugin endpoint changed');
+    };
+    assertCurrent();
+    const page = await this.api.catalog({ scope: 'public', limit: 100, cursor, counts: cursor === null });
+    assertCurrent();
+    const candidates = (page.legacyQueryPlugins ?? page.plugins).filter(plugin => plugin.scope === 'public' && plugin.publisherKind === 'official');
+    const items: OfficialModelPluginPage['items'] = [];
+    let incomplete = false;
+    for (const plugin of candidates) {
+      if (!active()) break;
+      const key = JSON.stringify([endpoint, plugin.id]);
+      const digest = plugin.currentRelease.sha256;
+      let capability = this.officialEngineCapabilities.get(key);
+      if (capability?.digest !== digest) {
+        const flightKey = JSON.stringify([key, digest, owner?.dataOwnerId, getActiveAppSession().generation]);
+        let read = this.officialEngineReads.get(flightKey);
+        if (!read) {
+          read = this.api.detail(plugin.id).finally(() => this.officialEngineReads.delete(flightKey));
+          this.officialEngineReads.set(flightKey, read);
+        }
+        const detail = await read.catch(() => null);
+        assertCurrent();
+        if (!detail) {
+          incomplete = true;
+          continue;
+        }
+        if (detail.publisherKind !== 'official') continue;
+        try { assertDetailMatchesSummary(plugin, detail); } catch { continue; }
+        const manifest = validateNormalizedGhostManifest(detail.currentRelease.manifest);
+        if (!manifest.ok) continue;
+        capability = { digest, hasEngine: manifest.manifest.harnesses?.some(engine => engine.protocol === 'acp') === true };
+        this.officialEngineCapabilities.set(key, capability);
+      }
+      if (capability.hasEngine)
+        items.push({ pluginId: plugin.id, ghostId: plugin.ghostId, ...deliveryNamespaceFields(plugin), name: plugin.name, description: plugin.description });
+    }
+    return { items, incomplete, nextCursor: page.legacyQueryPlugins ? null : page.nextCursor, officialIds: candidates.map(plugin => plugin.id), totalOfficial: page.counts?.official ?? null };
+  }
+
   /** UI and Agent queries share target-owned pagination; they never run maintenance. */
   async query(input: PluginMarketQuery = {}): Promise<PluginMarketPage> {
     if (!input || typeof input !== 'object' || Array.isArray(input)) throwIpcError('INVALID_PARAMS', 'Invalid Plugin market query');
@@ -1368,7 +1427,7 @@ export class PluginMarketService {
       if (scope !== 'custom') items.push(...visible.map(plugin => this.toItem(plugin, local)).filter(item => !input.excludeInstalled || !isInstalled(item)));
       if (includeCounts && page.counts) {
         const queryCounts: PluginMarketCounts = !owner || owner.mode !== 'cloud'
-          ? { all: page.counts.public + custom.length, public: page.counts.public, organization: 0, personal: 0, custom: custom.length }
+          ? { ...page.counts, all: page.counts.public + custom.length, organization: 0, personal: 0, custom: custom.length }
           : { ...page.counts, custom: custom.length, all: page.counts.all + custom.length };
         counts = queryCounts;
         if (input.excludeInstalled && owner) {
@@ -1386,6 +1445,8 @@ export class PluginMarketService {
               if (!deducted.has(plugin.id) && isInstalled(this.toItem(plugin, local))) {
                 deducted.add(plugin.id);
                 queryCounts[plugin.scope]--; queryCounts.all--;
+                const group = pluginCatalogPublisherGroup(plugin.scope, plugin.publisherKind);
+                if (group && queryCounts[group] !== undefined) queryCounts[group]--;
               }
             };
             if (page.legacyQueryPlugins) {
@@ -1401,7 +1462,8 @@ export class PluginMarketService {
                 for (const row of result.results) if (row.status === 'available' && row.matchesQuery) deduct(row.plugin);
               }
             }
-            if (Object.values(queryCounts).some(value => value < 0)) throwIpcError('PLUGIN_LIST_CHANGED', 'Plugin query changed while counting installed matches');
+            if (Object.values(queryCounts).some(value => value < 0) || (queryCounts.official ?? 0) + (queryCounts.community ?? 0) > queryCounts.public)
+              throwIpcError('PLUGIN_LIST_CHANGED', 'Plugin query changed while counting installed matches');
           }
         }
       }
@@ -1443,12 +1505,20 @@ export class PluginMarketService {
       customSourceNames, unavailableCustomSourceNames: discovery.unavailableSourceNames, organizationAccessError };
   }
 
-  async recommendations(): Promise<PluginMarketItem[]> {
+  async recommendations(pluginIds?: unknown): Promise<PluginMarketItem[]> {
+    const renewalIds = Array.isArray(pluginIds) ? pluginIds : null;
+    if (pluginIds !== undefined && (!renewalIds || renewalIds.length > 3 || !renewalIds.every(isValidPluginResourceId))) {
+      throwIpcError('INVALID_PARAMS', 'Invalid recommendation Plugin IDs');
+    }
+    if (renewalIds?.length === 0) return [];
     if (!getClientEndpoint('pluginApiBaseUrl')) return [];
     const owner = canCaptureMarketOwner() ? captureMarketOwner() : null;
     const key = owner ? marketOwnerKey(owner) : getClientEndpoint('pluginApiBaseUrl');
     try {
-      const response = await this.api.recommendations();
+      const plugins = renewalIds
+        ? (await this.api.resolve([...new Set<string>(renewalIds)].map((pluginId, index) => ({ key: String(index), pluginId })))).results
+          .flatMap(row => row.status === 'available' && row.plugin.scope === 'public' && row.plugin.publisherKind === 'official' ? [row.plugin] : [])
+        : (await this.api.recommendations()).plugins;
       if (owner) requireSameMarketOwner(owner);
       else if (canCaptureMarketOwner() || isAppSessionBoundaryPending()) return [];
       if (key !== (owner ? marketOwnerKey(owner) : getClientEndpoint('pluginApiBaseUrl'))) return [];
@@ -1456,8 +1526,11 @@ export class PluginMarketService {
       if (owner) requireSameMarketOwner(owner);
       else if (canCaptureMarketOwner() || isAppSessionBoundaryPending()) return [];
       if (key !== (owner ? marketOwnerKey(owner) : getClientEndpoint('pluginApiBaseUrl'))) return [];
-      return response.plugins.map(plugin => this.toItem(plugin, local));
-    } catch { return []; }
+      return plugins.map(plugin => this.toItem(plugin, local));
+    } catch (error) {
+      if (renewalIds) throw error;
+      return [];
+    }
   }
 
   /**
@@ -2145,6 +2218,30 @@ export class PluginMarketService {
     options: PluginMarketInstallOptions,
     context: PluginMarketInstallContext,
   ): Promise<PluginMarketInstallResult> {
+    if (!context.onProgress) return this.installReviewed(pluginId, options, context);
+    const progress = createPluginInstallProgress(pluginId, context.onProgress);
+    try {
+      const result = await this.installReviewed(
+        pluginId,
+        options,
+        { ...context, consent: { ...context.consent, prompt: progress.consentPrompt(context.consent.prompt) } },
+        progress,
+      );
+      progress.settle('completed');
+      return result;
+    } catch (error) {
+      // Declining the confirmation is the user's choice, not a failed update.
+      progress.settle(isIpcError(error) && error.code === 'MUTATION_CANCELLED' ? 'cancelled' : 'failed');
+      throw error;
+    }
+  }
+
+  private async installReviewed(
+    pluginId: string,
+    options: PluginMarketInstallOptions,
+    context: PluginMarketInstallContext,
+    progress?: PluginInstallProgress,
+  ): Promise<PluginMarketInstallResult> {
     const { assertCurrent, assertScope = assertCurrent } = context;
     assertCurrent?.();
     const customRef = parseCustomMarketPluginId(pluginId);
@@ -2162,6 +2259,7 @@ export class PluginMarketService {
         captureMarketOwner(),
         assertCurrent,
         assertScope,
+        progress,
       );
     }
     if (!isValidPluginResourceId(pluginId)) {
@@ -2205,6 +2303,7 @@ export class PluginMarketService {
           prompt: context.consent.prompt,
           initiator: context.consent.initiator,
           origin: 'market',
+          communityMarket: plugin.scope === 'public' && plugin.publisherKind === 'personal' ? true : undefined,
         },
         beforeCommitInLock: assertCurrent,
         assertCurrent: assertScope,
@@ -2217,6 +2316,7 @@ export class PluginMarketService {
           options.allowSourceReplacement === true
             ? 'user-requested-source-change'
             : 'preserve-existing-source',
+        ...(progress ? { progress } : {}),
       },
       owner,
       ledger,
@@ -2224,7 +2324,7 @@ export class PluginMarketService {
     );
   }
 
-  async uninstall(pluginId: string): Promise<{ ok: true }> {
+  async uninstall(pluginId: string, confirmed?: ConfirmedGhostUninstall): Promise<{ ok: true }> {
     // 自定义市场插件的卸载走同一账本路径，仅跳过服务端 CUID 形状校验。
     if (!parseCustomMarketPluginId(pluginId) && !isValidPluginResourceId(pluginId)) {
       throwIpcError('INVALID_PARAMS', 'Invalid Plugin ID');
@@ -2233,6 +2333,7 @@ export class PluginMarketService {
     const ledger = this.ledgerForOwner(owner);
     return this.withMutation(pluginId, async () => {
       requireSameMarketOwner(owner);
+      if (confirmed) assertConfirmedGhostUninstallOwner(confirmed);
       const data = ledger.read();
       const record = Object.values(data.installations).find(
         (candidate) => candidate.pluginId === pluginId && candidate.installed,
@@ -2248,7 +2349,10 @@ export class PluginMarketService {
       if (installed) {
         await uninstallGhostAndCleanup(installedGhostPhysicalRelId(installed), {
           skipMarketLedger: true,
+          ...(confirmed ? { confirmed } : {}),
         });
+      } else if (confirmed) {
+        throwIpcError('PRECONDITION_FAILED', 'The confirmed plugin installation changed');
       }
       // The package removal is already complete at this point. The session may
       // have changed while the runtime was stopping, so ledger reconciliation
@@ -2437,6 +2541,7 @@ export class PluginMarketService {
     owner = captureMarketOwner(),
     assertCurrent?: () => void,
     assertScope = assertCurrent,
+    progress?: PluginInstallProgress,
   ): Promise<PluginMarketInstallResult> {
     const automatic = consent.mode === 'automatic';
     if (options.expectedManifest === undefined) {
@@ -2549,6 +2654,7 @@ export class PluginMarketService {
                 packed.inspected.manifest,
                 packed.inspected.packageSha256,
               );
+        progress?.installing();
         const installResult = await commitCustomMarketPlugin(packed, {
           expectedGhostId: plugin.ghostId,
           expectedVersion: plugin.version,
@@ -2940,6 +3046,8 @@ export class PluginMarketService {
        * 避免用户未回答时卡住同插件卸载/更新。后台路径仍由调用方持锁。
        */
       acquireMutation?: boolean;
+      /** Display-only progress of a user-started install; background installs pass none. */
+      progress?: PluginInstallProgress;
     },
     owner = captureMarketOwner(),
     ledger = this.ledgerForOwner(owner),
@@ -3024,6 +3132,7 @@ export class PluginMarketService {
       }
     }
 
+    options.progress?.expect(plugin.currentRelease.sizeBytes);
     const downloadServerRoot = getClientEndpoint('pluginApiBaseUrl').replace(/\/+$/, '');
     const download = await this.api.download(plugin.id, plugin.currentRelease.id);
     assertInstallIdentityCurrent();
@@ -3039,7 +3148,7 @@ export class PluginMarketService {
     }
     const expiresAt = Date.parse(download.expiresAt);
     if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
-      throwIpcError('PRECONDITION_FAILED', 'Plugin download authorization expired');
+      throwIpcError('GHOST_DOWNLOAD_AUTHORIZATION_EXPIRED', 'Plugin download authorization expired');
     }
 
     const tempPath = path.join(
@@ -3047,7 +3156,7 @@ export class PluginMarketService {
       `cindy-plugin-${plugin.id}-${crypto.randomUUID()}.cindy`,
     );
     try {
-      await downloadVerifiedPlugin(download.url, download, tempPath);
+      await downloadVerifiedPlugin(download.url, download, tempPath, options.progress?.callbacks);
       requireSameMarketOwner(owner);
       const inspected = await getGhostManager().inspect(tempPath, 'stored-release');
       if (!('rejection' in inspected)) {
@@ -3114,6 +3223,7 @@ export class PluginMarketService {
           owner,
           ledger,
         );
+      options.progress?.installing();
       const ghost = options.acquireMutation
         ? await this.withMutation(plugin.id, async () => {
             requireSameMarketOwner(owner);

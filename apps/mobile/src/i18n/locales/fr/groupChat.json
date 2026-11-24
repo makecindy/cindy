@@ -112,7 +112,7 @@
     "runtimeFailureReason": {
       "unclaimed_timeout": {
         "summary": "{{name}} n’a pas commencé le traitement dans le délai d’attente. Cette demande est terminée.",
-        "advice": "Demandez au propriétaire du coéquipier de vérifier que Cindy fonctionne et que son ordinateur est connecté au réseau.",
+        "advice": "Demandez au propriétaire de l’ami de vérifier que Cindy fonctionne et que son ordinateur est connecté au réseau.",
         "details": "Une fois Cindy et le réseau rétablis, renvoyez le message."
       }
     },
@@ -130,7 +130,7 @@
       "IMAGE_INPUT_UNSUPPORTED": {
         "summary": "{{name}} n'a pas pu répondre : le modèle actuel ne prend pas en charge les images.",
         "advice": "Choisissez un modèle compatible avec les images.",
-        "details": "Choisissez un modèle compatible avec les images, ou activez et configurez Vision Bridge dans Paramètres → Personnalisation, puis renvoyez votre message."
+        "details": "Choisissez un modèle compatible avec les images."
       },
       "MODEL_UNAVAILABLE": {
         "summary": "{{name}} n'a pas pu répondre : aucun modèle n'est disponible.",
@@ -286,7 +286,7 @@
     "organizerSaveFailed": "Impossible de changer l'organisateur. Réessayez.",
     "projectDir": "Dossier du projet",
     "projectDirNone": "Aucune sélection",
-    "projectDirNote": "Les amis travaillent ici lorsqu'ils se répartissent le travail. Vous pouvez laisser ce champ vide : ils utiliseront alors le dossier propre à cette conversation de groupe. Si vous choisissez un projet git, chaque répartition du travail obtient un nouveau worktree et une nouvelle branche, afin que votre propre code reste intact.",
+    "projectDirNote": "Choisissez un projet existant sur cet ordinateur. Sans sélection, le projet associé au dépôt est utilisé, puis celui du compagnon chargé du travail. Les tâches réparties dans Git utilisent un arbre de travail distinct.",
     "add": "Ajouter un ami",
     "projectDirOnComputer": "Modifiable sur l'ordinateur",
     "memberActions": "Actions pour {{name}}",
@@ -555,7 +555,7 @@
     "replyModeMentionedNote": "Les amis restent silencieux, sauf si quelqu’un les @mentionne.",
     "work": "Répartitions du travail",
     "organizerHint": "Décide qui effectue chaque étape. Par défaut, le premier ami.",
-    "ownFolder": "Dossier propre au groupe",
+    "ownFolder": "Automatique",
     "archive": "Archiver le groupe",
     "unarchive": "Désarchiver le groupe",
     "archiveHint": "L’archivage désactive ce groupe pour tous les membres, empêchant les nouveaux messages et les exécutions des amis. L’historique est conservé. Recherchez le groupe pour consulter son historique ou le désarchiver.",

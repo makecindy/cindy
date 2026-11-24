@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { COMPANION_CLOUD_VERSION } from '@cindy/device-link';
 import type { DeviceLinkDeviceView } from '../../../shared/deviceLinkIpc.js';
+import type { CompanionCloudActionResult } from '../../../shared/companionCloud.js';
 import { createCompanionHomeRegistry } from '../homes.js';
+import { restoreCloudAvatar } from '../avatarRestore.js';
 import { readTranscriptPage } from '../room.js';
 import { startCompanionCloud, type CompanionCloudHost, type CompanionCloudRuntime, type CompanionRuntimeActor } from '../runtime.js';
 import type { CompanionApi } from '../types.js';
@@ -20,14 +22,14 @@ let runtime: CompanionCloudRuntime | undefined;
 afterEach(() => { runtime?.dispose(); runtime = undefined; });
 
 function setup(options: { home: string | null; handler?: ApiHandler; devices?: DeviceLinkDeviceView[]; profiles?: string[]; backgroundIdentityApi?: CompanionApi;
-  identityDeferred?: (error: unknown) => boolean;
+  readActors?: () => Promise<CompanionRuntimeActor[]>; identityDeferred?: (error: unknown) => boolean;
   installationId?: string; probe?: (deviceId: string) => Promise<boolean>; values?: Array<{ key: string; value: unknown }>;
-  readValues?: () => Promise<Array<{ key: string; value: unknown }>>; syncProfile?: (botId: string) => Promise<void>;
+  readValues?: CompanionCloudHost['readValues']; syncProfile?: (botId: string) => Promise<void>;
   turnActive?: () => boolean; homeLink?: CompanionCloudHost['homeLink']; stopBotTurns?: CompanionCloudHost['stopBotTurns'];
   canonicalSession?: CompanionCloudHost['canonicalSession']; paused?: (botId: string) => boolean; refreshForeground?: () => Promise<void>;
   retireLocalCopy?: CompanionCloudHost['retireLocalCopy']; store?: Parameters<typeof startCompanionCloud>[0]['store']; savedState?: string; upgradeArrived?: CompanionCloudHost['upgradeArrived']; current?: () => boolean }) {
   const actors: CompanionRuntimeActor[] = [{ id: 'actor-1', kind: 'bot', externalId: 'bot_mia', name: 'Mia', avatar: null, homeDeviceId: options.home }];
-  const { api, calls } = fakeApi(options.handler ?? ((route, method) => {
+  const handler: ApiHandler = options.handler ?? ((route, method) => {
     // The home has uploaded the profile snapshot a take-over builds from.
     if (route === '/preferences') return method === 'GET' ? [{ key: 'companion.profile.v1', value: MIA, revision: 1 }] : { revision: 1 };
     if (route === '/conversations') return { id: ROOM };
@@ -35,7 +37,9 @@ function setup(options: { home: string | null; handler?: ApiHandler; devices?: D
     if (route.endsWith('/import')) return {};
     if (method === 'PATCH') return {};
     throw new Error(`unexpected ${method} ${route}`);
-  }));
+  });
+  const { api, calls } = fakeApi((route, method, data, actorId) => route === '/actors'
+    ? options.readActors?.() ?? actors.map(actor => ({ ...actor })) : handler(route, method, data, actorId));
   const local = fakeLocal();
   const { state, files } = memoryState(options.savedState);
   const refresh = vi.fn(async () => undefined);
@@ -543,6 +547,141 @@ describe('take over', () => {
     } finally { runtime?.dispose(); vi.useRealTimers(); }
   });
 
+  // #9684, unit: an existing null/old Actor cache survived takeOver and later
+  // reconcile as the default avatar. Prior coverage did not change the server avatar
+  // independently of that cache. These cases run real materialization and avatar
+  // conversion; only network and local persistence ports are in memory.
+  it.each([null, '🐢', '🦊'])('restores the current cloud avatar when the cached avatar is %s', async cachedAvatar => {
+    const readActors = vi.fn(async () => [{ ...t.actors[0]!, avatar: '🦊' }]);
+    const t = setup({ home: 'laptop', readActors });
+    t.actors[0]!.avatar = cachedAvatar;
+    let localAvatar: string | undefined;
+    t.host.materializer!.createProfile = vi.fn(async input => {
+      const restored = await restoreCloudAvatar(input.avatar);
+      if (!('portable' in restored)) throw new Error('unexpected image');
+      localAvatar = restored.portable;
+      t.local.setProfile({ status: 'active', displayName: input.name, description: input.description });
+    });
+    expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: true });
+    expect(localAvatar).toBe('🦊');
+    expect(readActors).toHaveBeenCalledOnce();
+    t.actors[0]!.avatar = '🦊';
+    await t.runtime.reconcile([{ id: 'bot_mia', status: 'active' }]);
+    expect(localAvatar).toBe('🦊');
+    expect(t.state.isDemoted('bot_mia')).toBe(false);
+    expect(t.local.host.createProfile).toHaveBeenCalledOnce();
+  });
+
+  it('restores the current cloud avatar on automatic arrival too', async () => {
+    const t = setup({ home: 'desk', readActors: async () => [{ ...t.actors[0]!, avatar: '🦊' }] });
+    await t.runtime.reconcile([]);
+    await vi.waitFor(() => expect(t.local.host.createProfile).toHaveBeenCalledWith(expect.objectContaining({ avatar: '🦊' }), expect.anything()));
+    await vi.waitFor(() => expect(t.state.isDemoted('bot_mia')).toBe(false));
+  });
+
+  // A failed/obsolete identity read must leave the copy hidden for the existing retry.
+  it.each(['account', 'disposed', 'failure', 'retired', 'moved', 'replaced', 'cache-replaced', 'cache-moved'] as const)('does not restore stale identity after the authoritative read is %s', async scenario => {
+    let current = true;
+    const readActors = vi.fn(async () => {
+      if (scenario === 'account') current = false;
+      if (scenario === 'disposed') t.runtime.dispose();
+      if (scenario === 'failure') throw new Error('REQUEST_TIMEOUT');
+      if (scenario === 'cache-replaced') t.actors[0]!.id = 'replacement';
+      if (scenario === 'cache-moved') t.actors[0]!.homeDeviceId = 'elsewhere';
+      return [{ ...t.actors[0]!, avatar: '🦊', ...(scenario === 'retired' ? { disabled: true } : {}),
+        ...(scenario === 'moved' ? { homeDeviceId: 'elsewhere' } : {}), ...(scenario === 'replaced' ? { id: 'replacement' } : {}) }];
+    });
+    const t = setup({ home: 'laptop', readActors, current: () => current });
+    expect((await t.runtime.takeOver('bot_mia')).ok).toBe(false);
+    expect(t.local.host.createProfile).not.toHaveBeenCalled();
+    expect(t.local.host.updateProfile).not.toHaveBeenCalled();
+    expect(t.state.isDemoted('bot_mia')).toBe(true);
+  });
+
+  // #11348 review discussion_r4613614544, unit: N simultaneous arrivals must not
+  // download N copies of the account roster. Real runtime/restore calls verify every
+  // local avatar and demotion; deferred transport exposes overlap without real waits.
+  it('coalesces authoritative rosters for a batch of arrivals', async () => {
+    let release!: (actors: CompanionRuntimeActor[]) => void;
+    const response = new Promise<CompanionRuntimeActor[]>(resolve => { release = resolve; });
+    const readActors = vi.fn(() => response);
+    const t = setup({ home: 'desk', readActors });
+    for (let index = 2; index <= 4; index++) t.actors.push({ ...t.actors[0]!, id: `actor-${index}`, externalId: `bot_${index}` });
+    const avatars = ['🦊', '🐢', '🐳', '🐼'];
+    const cloud = t.actors.map((actor, index) => ({ ...actor, avatar: avatars[index]! }));
+    vi.mocked(t.local.host.readProfile).mockResolvedValue(null);
+    vi.mocked(t.local.host.createProfile).mockResolvedValue(undefined);
+    try {
+      await t.runtime.reconcile([]);
+      await vi.waitFor(() => expect(readActors).toHaveBeenCalledTimes(1));
+      release(cloud);
+      await vi.waitFor(() => expect(t.local.host.createProfile).toHaveBeenCalledTimes(4));
+      await vi.waitFor(() => expect(t.actors.every(actor => !t.state.isDemoted(actor.externalId))).toBe(true));
+      for (const actor of cloud) expect(t.local.host.createProfile).toHaveBeenCalledWith(
+        expect.objectContaining({ id: actor.externalId, avatar: actor.avatar }), expect.anything());
+      await t.runtime.reconcile(t.actors.map(actor => ({ id: actor.externalId, status: 'active' })));
+      expect(readActors).toHaveBeenCalledTimes(1);
+    } finally { release(cloud); }
+  });
+
+  it('waits for a post-confirmation roster when another takeover starts during a read', async () => {
+    let release!: (actors: CompanionRuntimeActor[]) => void;
+    const response = new Promise<CompanionRuntimeActor[]>(resolve => { release = resolve; });
+    const readActors = vi.fn((): Promise<CompanionRuntimeActor[]> => readActors.mock.calls.length === 1 ? response
+      : Promise.resolve(t.actors.map(actor => ({ ...actor, avatar: '🦊' }))));
+    const t = setup({ home: 'laptop', readActors });
+    t.actors.push({ ...t.actors[0]!, id: 'actor-2', externalId: 'bot_second' });
+    vi.mocked(t.local.host.readProfile).mockResolvedValue(null);
+    vi.mocked(t.local.host.createProfile).mockResolvedValue(undefined);
+    const first = t.runtime.takeOver('bot_mia');
+    await vi.waitFor(() => expect(readActors).toHaveBeenCalledTimes(1));
+    // This response was captured before the second home's CAS completed.
+    const early = t.actors.map(actor => ({ ...actor, avatar: '🐢' }));
+    const second = t.runtime.takeOver('bot_second');
+    try {
+      await vi.waitFor(() => expect(t.state.isDemoted('bot_second')).toBe(true));
+      expect(readActors).toHaveBeenCalledTimes(1);
+      release(early);
+      expect(await first).toEqual({ ok: true });
+      expect(await second).toEqual({ ok: true });
+      expect(readActors).toHaveBeenCalledTimes(2);
+      expect(t.local.host.createProfile).toHaveBeenCalledWith(expect.objectContaining({ id: 'bot_second', avatar: '🦊' }), expect.anything());
+      expect(t.state.isDemoted('bot_second')).toBe(false);
+    } finally { release(early); }
+  });
+
+  it.each(['failure', 'account', 'disposed'] as const)('stops a queued roster after %s and releases the batch', async scenario => {
+    let release!: (actors: CompanionRuntimeActor[]) => void;
+    let reject!: (error: Error) => void;
+    let current = true;
+    const response = new Promise<CompanionRuntimeActor[]>((resolve, fail) => { release = resolve; reject = fail; });
+    const readActors = vi.fn((): Promise<CompanionRuntimeActor[]> => readActors.mock.calls.length === 1 ? response
+      : Promise.resolve(t.actors.map(actor => ({ ...actor, avatar: '🦊' }))));
+    const t = setup({ home: 'laptop', readActors, current: () => current });
+    t.actors.push({ ...t.actors[0]!, id: 'actor-2', externalId: 'bot_second' });
+    vi.mocked(t.local.host.readProfile).mockResolvedValue(null);
+    vi.mocked(t.local.host.createProfile).mockResolvedValue(undefined);
+    const first = t.runtime.takeOver('bot_mia');
+    await vi.waitFor(() => expect(readActors).toHaveBeenCalledTimes(1));
+    const second = t.runtime.takeOver('bot_second');
+    try {
+      await vi.waitFor(() => expect(t.state.isDemoted('bot_second')).toBe(true));
+      if (scenario === 'account') current = false;
+      if (scenario === 'disposed') t.runtime.dispose();
+      if (scenario === 'failure') reject(new Error('REQUEST_TIMEOUT'));
+      else release(t.actors.map(actor => ({ ...actor })));
+      expect((await first).ok).toBe(false);
+      expect((await second).ok).toBe(false);
+      expect(readActors).toHaveBeenCalledTimes(1);
+      expect(t.local.host.createProfile).not.toHaveBeenCalled();
+      expect(t.actors.every(actor => t.state.isDemoted(actor.externalId))).toBe(true);
+      if (scenario === 'failure') {
+        expect(await t.runtime.takeOver('bot_second')).toEqual({ ok: true });
+        expect(t.state.isDemoted('bot_second')).toBe(false);
+      }
+    } finally { release(t.actors.map(actor => ({ ...actor }))); }
+  });
+
   it('resolves an uncached actor through the explicit refresh channel before taking over', async () => {
     let restore = () => {};
     const foreground = vi.fn(async () => { restore(); });
@@ -745,7 +884,8 @@ describe('transfer', () => {
   it('uploads again when the companion changed during the flush, and refuses while it keeps changing', async () => {
     // Changes once while the first pass uploads, then stays put: the move uses the newest value.
     let version = 0;
-    const once = setup({ home: 'desk', devices: [device('laptop')], readValues: async () => {
+    const once = setup({ home: 'desk', devices: [device('laptop')], readValues: async (_botId, scope) => {
+      if (scope === 'skills') return [];
       const current = [{ key: 'companion.profile.v1', value: { name: `Mia ${version}` } }];
       if (version < 1) version += 1;
       return current;
@@ -825,7 +965,8 @@ describe('transfer', () => {
   });
 
   it('does not move the home when a value is too large to upload', async () => {
-    const t = setup({ home: 'desk', devices: [device('laptop')], values: [
+    const t = setup({ home: 'desk', devices: [device('laptop')],
+      homeLink: { version: async () => COMPANION_CLOUD_VERSION, targets: async () => [], handOver: async () => ({ ok: true }) }, values: [
       { key: 'companion.profile.v1', value: { name: 'Mia' } },
       { key: 'companion.skill.v1:huge', value: { slug: 'huge', content: 'x'.repeat(70 * 1024) } }] });
     expect(await t.runtime.transfer('bot_mia', 'laptop')).toEqual({ ok: false, code: 'FAILED' });
@@ -833,18 +974,45 @@ describe('transfer', () => {
     expect(t.state.isDemoted('bot_mia')).toBe(false);
   });
 
+  it('rejects an incompatible skill locally before syncing the conversation or profile', async () => {
+    const t = setup({ home: 'desk', devices: [device('laptop')],
+      homeLink: { version: async () => 4, targets: async () => [], handOver: async () => ({ ok: true }) },
+      values: [{ key: 'companion.skill.v1:large', value: { content: 'x'.repeat(71_560) } }],
+      syncProfile: async () => { throw new Error('OFFLINE'); } });
+    expect(await t.runtime.switchHome('bot_mia', 'laptop')).toEqual({
+      ok: false, code: 'SKILL_TARGET_OUTDATED', oversizedSkill: { slug: 'large', bodyBytes: 71_560 },
+    });
+    expect(t.calls).toHaveLength(0);
+    expect(t.state.isDemoted('bot_mia')).toBe(false);
+  });
+
+  const largeFrontmatter = `---\r\nname: large\r\ndescription: ${'x'.repeat(71_560)}\r\n---\r\n\r\nsmall\r\n`;
+
   // Regression: 127 shipped store readers but still advertised v2. Exercise the real
   // transfer decision with the shipped declaration, not a hardcoded v3 test peer.
+  // #12112, unit tier: an uploadable imported skill can still fail an old receiver's
+  // disk writer. Unlike the earlier store-only matrix, check that ownership stays here,
+  // including unchanged uploads and edits during the final flush.
   it.each([
-    { peer: 'current', version: COMPANION_CLOUD_VERSION, storeEnabled: true, succeeds: true },
-    { peer: 'old', version: 2, storeEnabled: true, succeeds: false },
-    { peer: 'current without server store', version: COMPANION_CLOUD_VERSION, storeEnabled: false, succeeds: false },
-  ])('hands large content only to a capable peer ($peer)', async ({ version, storeEnabled, succeeds }) => {
+    { peer: 'current', version: COMPANION_CLOUD_VERSION, storeEnabled: true },
+    { peer: 'old without store reader', version: 2, storeEnabled: true, failure: 'SKILL_TARGET_OUTDATED' },
+    { peer: 'old with store reader', version: 4, storeEnabled: true, failure: 'SKILL_TARGET_OUTDATED' },
+    { peer: 'current without server store', version: COMPANION_CLOUD_VERSION, storeEnabled: false, failure: 'FAILED' },
+    { peer: 'old at body limit', version: 4, storeEnabled: true, content: 'x'.repeat(65_536) },
+    { peer: 'old with large frontmatter', version: 4, storeEnabled: true, content: largeFrontmatter },
+    { peer: 'old without store reader and with large frontmatter', version: 2, storeEnabled: true, content: largeFrontmatter, failure: 'FAILED' },
+    { peer: 'old with multibyte body', version: 4, storeEnabled: true, content: `---\nname: large\n---\n${'界'.repeat(21_846)}\n`, failure: 'SKILL_TARGET_OUTDATED', bodyBytes: 65_538 },
+    { peer: 'old after background upload', version: 4, storeEnabled: true, preflush: true, failure: 'SKILL_TARGET_OUTDATED' },
+    { peer: 'old with edit during flush', version: 4, storeEnabled: true, editDuringFlush: true, failure: 'SKILL_TARGET_OUTDATED' },
+  ])('hands large content only to a capable peer ($peer)', async ({ version, storeEnabled, failure, content, preflush, editDuringFlush, bodyBytes = 71_560 }) => {
     const key = 'companion.skill.v1:large';
-    const value = { slug: 'large', content: 'x'.repeat(70 * 1024) };
+    const value = { slug: 'large', content: content ?? 'x'.repeat(71_560) };
+    const succeeds = !failure;
+    let reads = 0;
     let stored: unknown;
     const t = setup({ home: 'desk', devices: [device('laptop')],
-      values: [{ key: 'companion.profile.v1', value: MIA }, { key, value }],
+      readValues: async () => [{ key: 'companion.profile.v1', value: MIA },
+        { key, value: editDuringFlush && ++reads === 1 ? { ...value, content: 'small' } : value }],
       store: { enabled: () => storeEnabled },
       homeLink: { version: async () => version, targets: async () => [], handOver: async () => ({ ok: true }) },
       handler: (route, method, data) => {
@@ -860,7 +1028,16 @@ describe('transfer', () => {
         if (route.endsWith('/import') || method === 'PATCH') return {};
         throw new Error(`unexpected ${method} ${route}`);
       } });
-    expect(await t.runtime.switchHome('bot_mia', 'laptop')).toEqual(succeeds ? { ok: true } : { ok: false, code: 'FAILED' });
+    if (preflush) {
+      await t.runtime.syncNow();
+      expect(stored).toEqual({ companionStore: 1, prefRevision: 0, value });
+    }
+    const result = await t.runtime.switchHome('bot_mia', 'laptop');
+    if (failure === 'SKILL_TARGET_OUTDATED') {
+      expect(result).toEqual({ ok: false, code: failure, oversizedSkill: { slug: 'large', bodyBytes } });
+    } else {
+      expect(result).toEqual(succeeds ? { ok: true } : { ok: false, code: failure });
+    }
     expect(t.actors[0]!.homeDeviceId).toBe(succeeds ? 'laptop' : 'desk');
     expect(t.state.isDemoted('bot_mia')).toBe(succeeds);
     expect(t.calls.some(call => call.method === 'PATCH')).toBe(succeeds);
@@ -868,7 +1045,7 @@ describe('transfer', () => {
       expect(stored).toEqual({ companionStore: 1, prefRevision: 0, value });
       const uploaded = t.calls.findIndex(call => call.route === '/companion-store/entry' && call.method === 'POST');
       expect(uploaded).toBeLessThan(t.calls.findIndex(call => call.method === 'PATCH'));
-    } else expect(stored).toBeUndefined();
+    } else if (!preflush) expect(stored).toBeUndefined();
   });
 
   // Teammate V2 (cloud-companions.md §2.1 第 4 条, 2026-11-10 owner): a computer whose Cindy cannot run
@@ -953,7 +1130,7 @@ describe('switch home from any computer', () => {
   const link = (version: number, targets = [{ deviceId: 'desk', name: '', online: true }, { deviceId: 'tablet', name: 'Tablet', online: true }]) => ({
     version: vi.fn(async () => version),
     targets: vi.fn(async () => targets),
-    handOver: vi.fn(async (): Promise<{ ok: true } | { ok: false; code: 'BUSY' }> => ({ ok: true })),
+    handOver: vi.fn(async (): Promise<CompanionCloudActionResult> => ({ ok: true })),
   });
 
   it('says why this computer is not offered when it has not allowed same-account control', async () => {
@@ -983,11 +1160,11 @@ describe('switch home from any computer', () => {
     expect(t.calls.some(call => call.method === 'PATCH')).toBe(false);
   });
 
-  it('passes the home\'s refusal through unchanged', async () => {
+  it.each(['BUSY', 'TARGET_OUTDATED', 'SKILL_TARGET_OUTDATED'] as const)('passes the home\'s refusal through unchanged (%s)', async code => {
     const homeLink = link(2);
-    homeLink.handOver.mockResolvedValue({ ok: false, code: 'BUSY' });
+    homeLink.handOver.mockResolvedValue({ ok: false, code });
     const t = setup({ home: 'laptop', devices: [device('laptop')], homeLink });
-    expect(await t.runtime.switchHome('bot_mia', 'tablet')).toEqual({ ok: false, code: 'BUSY' });
+    expect(await t.runtime.switchHome('bot_mia', 'tablet')).toEqual({ ok: false, code });
   });
 
   it('refuses a computer the home did not offer', async () => {

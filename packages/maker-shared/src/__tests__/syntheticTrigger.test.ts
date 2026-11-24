@@ -4,12 +4,26 @@ import {
   CONTINUE_AFTER_ERROR_PROMPT,
   UI_ACTION_TRIGGER_PREFIX,
   isSyntheticTriggerText,
+  isSyntheticTriggerContent,
   isContinuationMessage,
   syntheticTriggerKind,
   canContinueFailedTurn,
 } from '../syntheticTrigger.js';
 
 describe('synthetic trigger detection', () => {
+  // #8635 unit: model attribution and group history must recognize the same raw
+  // hidden input; earlier tests covered only parsed text and recovery prompts.
+  it('recognizes hidden content without searching attachments or quoted text', () => {
+    const text = '[UI_ACTION_TRIGGER] Continue.';
+    const envelope = { text, images: [], files: [] };
+    for (const content of [text, envelope, JSON.stringify(envelope), ` \n${JSON.stringify(envelope)}`]) {
+      expect(isSyntheticTriggerContent(content)).toBe(true);
+    }
+    for (const content of [null, 42, '{broken', {}, { text: null }, { text: 42 },
+      `Quoting ${text}`, { text: `Quoting ${text}` }, JSON.stringify({ text: `Quoting ${text}` }),
+      { text: 'Read the file', files: [{ text }] }, JSON.stringify({ content: text }), [{ text }],
+    ]) expect(isSyntheticTriggerContent(content)).toBe(false);
+  });
   // Both clients must offer manual continuation for a settled scheduler error,
   // but never race ongoing work or fabricate context for a rejected first send.
   it('requires host-confirmed failed input rather than arbitrary historical context', () => {

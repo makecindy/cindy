@@ -26,6 +26,7 @@ export interface MenubarSettings {
   lowAlert: boolean;
   privacy: boolean;
   scope: MenubarUsageScope;
+  currency?: 'USD' | 'CNY' | 'auto';
 }
 
 export const DEFAULT_MENUBAR_SETTINGS: MenubarSettings = {
@@ -37,6 +38,7 @@ export const DEFAULT_MENUBAR_SETTINGS: MenubarSettings = {
   lowAlert: true,
   privacy: false,
   scope: 'all',
+  currency: 'auto',
 };
 
 export type MenubarSettingsPatch = Partial<MenubarSettings>;
@@ -174,7 +176,7 @@ export interface MenubarUsageScopeData {
     money: [number, number, number];
     /** Actually paid (API) part of `money`, summed across harnesses. */
     paid: number;
-    tokens: [number, number, number];
+    tokens: [number, number, number, ...number[]];
   }[];
   /** Model totals for the last 7, 30 and 90 days. */
   models: { '7': MenubarModelUsage[]; '30': MenubarModelUsage[]; '90': MenubarModelUsage[] };
@@ -202,10 +204,13 @@ export interface MenubarStrings {
 }
 
 export interface MenubarView {
+  /** Optional for old helper fixtures; current presenters receive the shared design. */
+  presentation?: import('./quotaPanelDesign.js').QuotaPanelDesign;
   /** BCP 47 locale for dates and numbers. */
   locale: string;
-  /** Symbol of the usage ledger currency: "$" on Global, "¥" in mainland China. */
+  /** Symbol of the selected native usage currency. */
   moneySymbol: string;
+  taskMoneySymbol?: string;
   strings: MenubarStrings;
   /** Text after the menu bar icon for each mode; the active one is `settings.statusText`. */
   statusTextByMode: Record<MenubarStatusTextMode, string | null>;

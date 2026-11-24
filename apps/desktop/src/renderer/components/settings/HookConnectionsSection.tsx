@@ -29,6 +29,9 @@ import { imBotSettings } from './ImBotSection.settings-search';
  *   - 飞书 / Lark 卡: 同构, 绑定走应用的网页授权页, pending 时另显示一次性
  *     关联码(网页授权不可用的外部用户把它发给机器人); 服务端未宣告
  *     provider:feishu(组织还没配置飞书机器人)时给专门提示; 伙伴页不显示;
+ *   - Discord 卡(官方, 与「个人」栏的 Discord bot 无关): 同构, 关联只靠一次性
+ *     关联码 —— pending 时关联码放在动作行之前醒目显示, 用户私信给机器人或在
+ *     Discord 里执行 /bind; 「添加到 Discord」只是添加应用。伙伴页不显示;
  *   - 工作目录映射内嵌在每张渠道卡的展开区: 目录清单**设备共享**(所有渠道
  *     同一份, 刻意设计, 任一卡里增删都作用于全部渠道), 运行偏好按渠道隔离,
  *     由所在卡决定读写哪个渠道的那份(Slack 多绑定时再叠 workspace 归属
@@ -68,10 +71,11 @@ import {
 } from '../../../shared/hookControlIpc';
 
 /** provider-neutral 渠道卡覆盖的 provider(Slack 走 legacy 专属卡)。 */
-type NeutralCardProvider = 'telegram' | 'x' | 'feishu';
+type NeutralCardProvider = 'telegram' | 'x' | 'feishu' | 'discord';
 import { useHookWorkspacePrefs, WorkspacePrefsEditor } from './HookWorkspacePrefsEditor';
 import { HOOK_DEFAULT_PERMISSION_MODE } from './hookWorkspacePrefsLogic';
 import { ImChannelSettingsCard } from './ImChannelSettingsCard';
+import { useImEntrancePlugins } from './ImPluginEntrances';
 import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
 import {
   TelegramBehaviorSettings,
@@ -79,7 +83,7 @@ import {
 } from './TelegramBehaviorSettings';
 
 /** 「官方」栏的渠道手风琴卡(同刻最多展开一张, 交互对齐「个人」栏)。 */
-type CindyImCard = 'slack' | 'telegram' | 'x' | 'feishu';
+type CindyImCard = 'slack' | 'telegram' | 'x' | 'feishu' | 'discord';
 
 /** 渠道卡状态徽章的色调档(映射到「个人」栏同款 --settings-badge-* token)。 */
 type ChannelBadgeTone = 'ok' | 'progress' | 'attention' | 'error';
@@ -209,8 +213,13 @@ function DefaultWorkspaceRadio({
   );
 }
 
-export function HookConnectionsSection({ companion }: { companion?: { id: string; name: string } } = {}) {
+export function HookConnectionsSection({ companion, projectsOnly = false }: {
+  companion?: { id: string; name: string };
+  /** Only the shared 「项目与模型」 block, for IM plugins where the Cindy group is not shown. */
+  projectsOnly?: boolean;
+} = {}) {
   const { t } = useTranslation();
+  const imPlugins = useImEntrancePlugins();
   const { entry, activation } = useSettingsSearchNavigation();
   /** 飞书不可用时的去向因身份而异: 组织成员找管理员, 个人账号没有管理员可找。 */
   const personalAccount = useOptionalAuthUser()?.membershipKind === 'personal';
@@ -220,7 +229,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
    * 全收起 —— 收起行自带状态徽章与绑定摘要。打开渠道开关时自动展开对应卡,
    * 让授权进度与兜底动作(复制链接 / 安装引导)立即可见。
    */
-  const targetCard = (['slack', 'telegram', 'x', 'feishu'] as const).find(
+  const targetCard = (['slack', 'telegram', 'x', 'feishu', 'discord'] as const).find(
     (card) => entry?.targetId === 'cindy-im-' + card || entry?.fallbackTargetId === 'cindy-im-' + card,
   ) ?? null;
   const [expandedCard, setExpandedCard] = useState<CindyImCard | null>(companion ? 'x' : targetCard);
@@ -637,13 +646,13 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
     }
   };
 
-  /** 复制飞书关联码(网页授权不可用时, 用户把它发给机器人完成关联)。 */
-  const handleCopyBindCode = async (provider: NeutralCardProvider) => {
+  /** 复制关联码(飞书: 网页授权不可用时的兜底; Discord: 唯一的关联方式)。 */
+  const handleCopyBindCode = async (provider: 'feishu' | 'discord') => {
     const code = hook?.[provider].binding?.bindCode;
     if (!code) return;
     try {
       await navigator.clipboard.writeText(code);
-      toast.success(t('settings.remoteControl.hook.feishu.bindCode.copied'));
+      toast.success(t(`settings.remoteControl.hook.${provider}.bindCode.copied`));
     } catch {
       toast.error(t('settings.remoteControl.hook.toast.actionFailed'));
     }
@@ -923,13 +932,19 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
     ? activeTeams.length > 0
     : hook.binding?.state === 'confirmed';
 
+  // 旧 main 快照尚无 discord 字段时按未开启处理(同 renderProviderCard 的兜底)。
+  const discordView = hook.discord as ProviderHookView | undefined;
   // 默认项目只对没有「先选项目」这一步的渠道有意义(Slack 在每个频道里各自选)。
   const projectsDefaultApplies =
-    hook.telegram.enabled || hook.feishu.enabled || (hook.x.enabled && !hook.x.companionBotId);
-  const projectsSectionVisible = hook.enabled || projectsDefaultApplies;
+    hook.telegram.enabled || hook.feishu.enabled || discordView?.enabled === true ||
+    (hook.x.enabled && !hook.x.companionBotId);
+  // IM 插件(声明 imEntrance)读的也是这一份: 只装了插件、没开官方机器人时也要能改。
+  const pluginsShareProjects = !companion && imPlugins.length > 0;
+  const projectsSectionVisible = hook.enabled || projectsDefaultApplies || pluginsShareProjects;
   // 默认项目所有官方机器人共用一个(main 侧读写时已对齐), 任取一处的值即可。
   const sharedDefaultWorkspace =
-    hook.feishu.defaultWorkspace ?? hook.telegram.defaultWorkspace ?? hook.x.defaultWorkspace;
+    hook.feishu.defaultWorkspace ?? hook.telegram.defaultWorkspace ?? hook.x.defaultWorkspace ??
+    discordView?.defaultWorkspace ?? null;
   const setSharedDefaultWorkspace = (alias: string | null) =>
     void setProviderDefaultWorkspace('feishu', alias);
 
@@ -1007,7 +1022,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
       <section
         ref={projectsSectionRef}
         aria-labelledby="cindy-im-projects-heading"
-        className="mt-3 flex scroll-mt-4 flex-col gap-[14px]"
+        className="mt-3 flex scroll-mt-4 flex-col gap-3.5"
       >
         <div className="flex flex-col gap-1">
           <h4
@@ -1020,7 +1035,9 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
             </span>
           </h4>
           <p className="text-12 leading-[1.45] text-[var(--settings-section-desc)]">
-            {t('settings.remoteControl.hook.form.workspacesCardDescription')}
+            {t(pluginsShareProjects
+              ? 'settings.remoteControl.hook.form.workspacesCardDescriptionWithPlugins'
+              : 'settings.remoteControl.hook.form.workspacesCardDescription')}
           </p>
         </div>
         {projectPrefsState.hint !== null && (
@@ -1201,10 +1218,45 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
     </div>;
   };
 
+  /**
+   * 一次性关联码。飞书: 网页授权是主路径(已自动打开), 授权页进不去的外部用户把这串码私聊
+   * 发给机器人; Discord: 关联只靠它, 私信给机器人或在 Discord 里执行 /bind。码只在 pending
+   * 时存在, 过期 / 完成后随快照消失。
+   */
+  const renderBindCode = (provider: 'feishu' | 'discord', binding: ProviderBindingView, actions: string[]) => (
+    <div className="flex flex-col gap-1.5 rounded-xl border border-[var(--border-default)] p-2.5">
+      <span className="text-11 text-[var(--text-tertiary)]">
+        {t(`settings.remoteControl.hook.${provider}.bindCode.label`)}
+      </span>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="select-text font-mono text-16 font-medium tracking-wider text-[var(--text-primary)]">
+          {binding.bindCode}
+        </span>
+        {actions.includes('copy_bind_code') ? (
+          <Button
+            data-settings-search-action="Copy the bot link code"
+            variant="secondary"
+            size="xs"
+            compact
+            type="button"
+            onClick={() => void handleCopyBindCode(provider)}
+          >
+            {t(`settings.remoteControl.hook.${provider}.bindCode.copy`)}
+          </Button>
+        ) : null}
+      </div>
+      <span className="text-11 leading-relaxed text-[var(--text-tertiary)]">
+        {t(`settings.remoteControl.hook.${provider}.bindCode.hint`)}
+      </span>
+    </div>
+  );
+
   const renderProviderCard = (provider: NeutralCardProvider) => {
     const setting = provider === 'telegram'
       ? imBotSettings.cindyTelegram
-      : provider === 'feishu' ? imBotSettings.cindyFeishu : imBotSettings.cindyX;
+      : provider === 'feishu'
+        ? imBotSettings.cindyFeishu
+        : provider === 'discord' ? imBotSettings.cindyDiscord : imBotSettings.cindyX;
     const view = hook[provider] as ProviderHookView | undefined;
     if (view === undefined) return null; // 旧 main 快照尚无该 provider 字段时不渲染
     const cs = providerCardState(provider, view);
@@ -1218,7 +1270,9 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
             ? 'settings.tina.prefs.providerTelegram'
             : provider === 'feishu'
               ? 'settings.tina.prefs.providerFeishu'
-              : 'settings.tina.prefs.providerX',
+              : provider === 'discord'
+                ? 'settings.tina.prefs.providerDiscord'
+                : 'settings.tina.prefs.providerX',
         )}
         description={t(`settings.remoteControl.hook.${provider}.description`)}
         routeSummary={companion ? null : cs.bindingLine}
@@ -1285,6 +1339,10 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
           ) : null}
 
           {provider === 'feishu' && cs.confirmed && !storeAccounts && view.binding ? workingDeviceHint(view.binding) : null}
+
+          {provider === 'discord' && view.enabled && view.available && cs.inProgress && cs.binding?.bindCode
+            ? renderBindCode('discord', cs.binding, cs.actions)
+            : null}
 
           {view.enabled && view.available ? (
             <div className="flex flex-wrap items-center gap-2">
@@ -1403,35 +1461,10 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
             </>
           ) : null}
 
-          {/* 飞书关联码: 网页授权是主路径(已自动打开), 授权页进不去的外部用户把这串
-              码私聊发给机器人。码只在 pending 时存在, 过期 / 完成后随快照消失。 */}
-          {provider === 'feishu' && view.enabled && view.available && cs.inProgress && cs.binding?.bindCode ? (
-            <div className="flex flex-col gap-1.5 rounded-xl border border-[var(--border-default)] p-2.5">
-              <span className="text-11 text-[var(--text-tertiary)]">
-                {t('settings.remoteControl.hook.feishu.bindCode.label')}
-              </span>
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="select-text font-mono text-16 font-medium tracking-wider text-[var(--text-primary)]">
-                  {cs.binding.bindCode}
-                </span>
-                {cs.actions.includes('copy_bind_code') ? (
-                  <Button
-                    data-settings-search-action="Copy the Feishu bind code"
-                    variant="secondary"
-                    size="xs"
-                    compact
-                    type="button"
-                    onClick={() => void handleCopyBindCode(provider)}
-                  >
-                    {t('settings.remoteControl.hook.feishu.bindCode.copy')}
-                  </Button>
-                ) : null}
-              </div>
-              <span className="text-11 leading-relaxed text-[var(--text-tertiary)]">
-                {t('settings.remoteControl.hook.feishu.bindCode.hint')}
-              </span>
-            </div>
-          ) : null}
+          {/* 飞书关联码: 网页授权是主路径, 关联码是兜底, 放在动作行之后。 */}
+          {provider === 'feishu' && view.enabled && view.available && cs.inProgress && cs.binding?.bindCode
+            ? renderBindCode('feishu', cs.binding, cs.actions)
+            : null}
 
           </>}
 
@@ -1485,6 +1518,9 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
       </ImChannelSettingsCard>
     );
   };
+
+  // 本地模式没有「官方」分栏: IM 插件仍读这一份, 由 ImBotSection 把只有这一块的视图放进「插件」分栏。
+  if (projectsOnly) return projectsSectionVisible ? <div className="flex flex-col gap-3">{renderProjectsSection()}</div> : null;
 
   return (
     <div className="flex flex-col gap-3">
@@ -1928,6 +1964,8 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
       {!companion ? renderProviderCard('telegram') : null}
       {/* 飞书 / Lark 没有伙伴专线, 伙伴页不显示(与 Telegram 相同)。 */}
       {!companion ? renderProviderCard('feishu') : null}
+      {/* 官方 Discord 同样没有伙伴专线; 端点下发前不显示(灰度开关)。 */}
+      {!companion ? renderProviderCard('discord') : null}
       {renderProviderCard('x')}
 
       {/* ── 项目与模型(所有官方机器人共用, 只此一处) ─────────────────── */}

@@ -525,10 +525,11 @@
           "오토메이션"
         ]
       },
-      "note": "scheduler 的模块名、单条实例与能力名统一用「自动化」；不再把「自动任务」「自动化任务」登记为用户可见译法，避免与产品条目 Session（同样叫「任务」）在『删除自动化和任务』等文案里相撞。Computer Use 是另一个概念，用「自动操作电脑 / 浏览器」，改成「自动化电脑」反而不通。因此 zh-CN 只保留「自动操作」这一语境豁免。术语门禁只扫描 locale，不扫描源码注释；历史注释与测试 fixture 的旧称按 docs/product-rules/task-and-conversation-naming.md §6.0.5 逐条判断，不借术语改名机械扩大代码改动。（2026-07 修正：ja 原声明 オートメーション 仅 37/121，主流是 自動化；ko 的 자동화 75/121 本就正确。）豁免通讯录授权提示的两个 key:那里指的是 macOS 系统设置里的面板名,日文官方标签是「オートメーション」而非产品术语「自動化」——照产品术语改会让用户按提示在系统设置里找不到对应项,授权恢复路径直接断掉。zh-CN 的「自动化」与 ko 的「자동화」恰好就是各自的 macOS 官方标签,不受影响。",
+      "note": "scheduler 的模块名、单条实例与能力名统一用「自动化」；不再把「自动任务」「自动化任务」登记为用户可见译法，避免与产品条目 Session（同样叫「任务」）在『删除自动化和任务』等文案里相撞。Computer Use 是另一个概念，用「自动操作电脑 / 浏览器」，改成「自动化电脑」反而不通。因此 zh-CN 只保留「自动操作」这一语境豁免。术语门禁只扫描 locale，不扫描源码注释；历史注释与测试 fixture 的旧称按 docs/product-rules/task-and-conversation-naming.md §6.0.5 逐条判断，不借术语改名机械扩大代码改动。（2026-07 修正：ja 原声明 オートメーション 仅 37/121，主流是 自動化；ko 的 자동화 75/121 本就正确。）通讯录和 iMessage 的授权提示引用了 macOS 系统设置面板名，日文官方标签是「オートメーション」而非产品术语「自動化」——照产品术语改会让用户按提示在系统设置里找不到对应项,授权恢复路径直接断掉。zh-CN 的「自动化」与 ko 的「자동화」恰好就是各自的 macOS 官方标签,不受影响。",
       "exempt": [
         "desktop:settings.contacts.import.permissionDenied",
-        "desktop:settings.contacts.ipcError.PERMISSION_DENIED"
+        "desktop:settings.contacts.ipcError.PERMISSION_DENIED",
+        "desktop:bots.channels.add.imessage.automationDenied"
       ]
     },
     {
@@ -1346,7 +1347,7 @@
       },
       "checkCase": false,
       "forbidden": {},
-      "note": "Directory 用「目录」（现状 96:4），Folder 用「文件夹」（37:20），两个英文词在中文里也分开。**本条刻意不设 forbidden**：英文侧自己就在一句话里混用二者（\"not a folder. Choose a project directory.\"、\"re-select the working directory and wait for the folder badge\"），而条件禁用是句子级匹配，区分不了句内哪个中文词对应哪个英文词——实测 4 处命中全是假阳性，那 4 条中文其实译得完全正确。要真正管住这对词，得先清理英文侧的 path / folder / directory 混用。此条目保留为文档指引，供人查阅。",
+      "note": "Directory 用「目录」（现状 96:4），Folder 用「文件夹」（37:20），两个英文词在中文里也分开。**本条刻意不设 forbidden**：英文侧自己就在一句话里混用二者（\"not a folder. Choose a project directory.\"、\"re-select the working directory and wait for the folder badge\"），而条件禁用是句子级匹配，区分不了句内哪个中文词对应哪个英文词——实测 4 处命中全是假阳性，那 4 条中文其实译得完全正确。要真正管住这对词，得先清理英文侧的 path / folder / directory 混用。此条目保留为文档指引，供人查阅。德语：面向用户的文件夹操作用 Ordner（主流），技术路径与复合词（Arbeits-/Projekt-/Datenverzeichnis）用 Verzeichnis；同一句指同一对象时不要混用（2026-11-20 复核，改 4 条）。",
       "alsoAllowed": {
         "es": [
           {
@@ -2265,7 +2266,7 @@
         "ko": "모델 그룹"
       },
       "checkCase": false,
-      "note": "用户把模型供应商里已连接的几个来源合成的可选项（docs/product-rules/model-groups.md），也是设置页与模型选择器那一格的名字。里面是一个个「模式」（几个来源加一种选法，可选推理强度，英文 Mode；2026-11-11 原「模式」并入当时叫「路线」的这一项，2026-11-13 用户决定统一叫「模式」，不再用「路线」）；这个词在模型组语境下这样用，不约束协同模式、计划模式等其它「模式」。与「供应商组」不同：供应商组为一个供应商选电脑，模型组为新任务选来源。"
+      "note": "用户把模型供应商里已连接的几个来源合成的可选项（docs/product-rules/model-groups.md），也是设置页与模型选择器那一格的名字。里面是一个个「模式」（几个来源加一种选法，可选推理强度，英文 Mode；2026-11-11 原「模式」并入当时叫「路线」的这一项，2026-11-13 用户决定统一叫「模式」，不再用「路线」）；这个词在模型组语境下这样用，不约束协同模式、计划模式等其它「模式」。与「供应商组」不同：供应商组为一个供应商选电脑，模型组为用到它的任务选来源（新任务、进行中的任务、定时任务等能挑模型的地方，见 model-groups.md §6.3）。"
     },
     {
       "id": "model-id",
@@ -3579,7 +3580,6 @@
         "desktop:login.errors.INVALID_BIND_TICKET",
         "desktop:login.errors.INVALID_LOGIN_TICKET",
         "desktop:newChat.atMention.typeToSearchFiles",
-        "desktop:newChat.chatInput.agentSwitch.confirmation.description",
         "desktop:newChat.collaboration.archiveWorkerConfirmDesc",
         "desktop:newChat.collaboration.stopConfirmDesc",
         "desktop:settings.about.debugLogDescription",
@@ -3965,6 +3965,101 @@
       "note": "任务 PR/MR 关联展示的顶栏。沿用 ccAgent.gitContext.pr.manage.pin/hint 的既有译法；区别于系统窗口标题栏。"
     },
     {
+      "id": "task-inbox",
+      "status": "proposed",
+      "en": "Inbox",
+      "translations": {
+        "zh-CN": "收件箱",
+        "zh-TW": "收件匣",
+        "ja": "受信トレイ",
+        "ko": "받은 편지함",
+        "fr": "Boîte de réception",
+        "es": "Bandeja de entrada",
+        "de": "Posteingang",
+        "pt-PT": "Caixa de entrada",
+        "pt-BR": "Caixa de entrada",
+        "zh-Hant-x-lzh": "收件匣",
+        "zh-Hans-x-lzh": "收件箱"
+      },
+      "note": "按状态整理任务的列表模式，由任务栏右上角按钮切换；分区为待处理、进行中、稍后处理、已处理。"
+    },
+    {
+      "id": "task-pending",
+      "status": "proposed",
+      "en": "Pending",
+      "translations": {
+        "zh-CN": "待处理",
+        "zh-TW": "待處理",
+        "ja": "未処理",
+        "ko": "처리 대기",
+        "fr": "À traiter",
+        "es": "Pendientes",
+        "de": "Offen",
+        "pt-PT": "Pendentes",
+        "pt-BR": "Pendentes",
+        "zh-Hant-x-lzh": "待處理",
+        "zh-Hans-x-lzh": "待处理"
+      },
+      "note": "收件箱模式的第一个分区：需要用户处理的任务（新结果、等待回复、未归档的普通任务）。"
+    },
+    {
+      "id": "task-processed",
+      "status": "proposed",
+      "en": "Processed",
+      "translations": {
+        "zh-CN": "已处理",
+        "zh-TW": "已處理",
+        "ja": "処理済み",
+        "ko": "처리됨",
+        "fr": "Traitées",
+        "es": "Procesadas",
+        "de": "Erledigt",
+        "pt-PT": "Tratadas",
+        "pt-BR": "Tratadas",
+        "zh-Hant-x-lzh": "已處理",
+        "zh-Hans-x-lzh": "已处理"
+      },
+      "note": "任务列表底部已归档任务分区的名称，沿用归档生命周期。"
+    },
+    {
+      "id": "task-snooze-indefinite",
+      "status": "proposed",
+      "en": "Indefinitely",
+      "translations": {
+        "zh-CN": "无限期",
+        "zh-TW": "無限期",
+        "ja": "無期限",
+        "ko": "무기한",
+        "fr": "Indéfiniment",
+        "es": "Indefinidamente",
+        "de": "Unbefristet",
+        "pt-PT": "Indefinidamente",
+        "pt-BR": "Indefinidamente",
+        "zh-Hant-x-lzh": "無期",
+        "zh-Hans-x-lzh": "无期"
+      },
+      "note": "稍后处理的无限期选项。没有到期时间，手动取回或新输入（含自动化触发）提前唤回。"
+    },
+    {
+      "id": "task-snoozed",
+      "status": "proposed",
+      "en": "Snoozed",
+      "translations": {
+        "zh-CN": "稍后处理",
+        "zh-TW": "稍後處理",
+        "ja": "後で処理",
+        "ko": "나중에 처리",
+        "fr": "Reportées",
+        "es": "Pospuestas",
+        "de": "Zurückgestellt",
+        "pt-PT": "Adiadas",
+        "pt-BR": "Adiadas",
+        "zh-Hant-x-lzh": "待後處理",
+        "zh-Hans-x-lzh": "待后处理"
+      },
+      "note": "任务暂时收起，到期回到当前执行状态对应的分区，不停止 Agent。"
+    },
+    {
       "id": "task-tag",
       "status": "proposed",
       "en": "Tag",
@@ -3995,7 +4090,19 @@
         "zh-Hant-x-lzh": "同伴"
       },
       "checkCase": false,
-      "note": "Cindy 的持久 AI 伙伴。英文单数 Buddy、复数 Buddies，句中小写；V2 默认项目名为 Buddy <名字>。其它语言按本表自然变格。内部 teammate/bot 标识保持兼容。Telegram Bot、Discord Bot 等平台机器人不使用本术语。",
+      "forbidden": {
+        "en": ["teammate", "teammates", "Teammate", "Teammates"],
+        "ja": ["チームメイト", "パートナー"],
+        "ko": ["동료", "파트너"],
+        "es": ["compañero", "compañera", "compañeros", "compañeras", "Compañero", "Compañera", "Compañeros", "Compañeras", "amigo de equipo", "amigos de equipo", "Amigo de equipo", "Amigos de equipo"],
+        "fr": ["coéquipier", "coéquipière", "coéquipiers", "coéquipières", "Coéquipier", "Coéquipière", "Coéquipiers", "Coéquipières"],
+        "de": ["Teammitglied", "Teammitglieds", "Teammitglieder", "Teammitgliedern"],
+        "pt-PT": ["colega", "colegas", "Colega", "Colegas"],
+        "pt-BR": ["colega", "colegas", "Colega", "Colegas"],
+        "zh-Hant-x-lzh": ["同僚"],
+        "zh-Hans-x-lzh": ["同僚"]
+      },
+      "note": "Cindy 的持久 AI 伙伴。英文单数 Buddy、复数 Buddies，句中小写；V2 默认项目名为 Buddy <名字>。其它语言按本表自然变格。内部 teammate/bot 标识保持兼容。Telegram Bot、Discord Bot 等平台机器人不使用本术语。豁免理由（同形异义，逐组）：① desktop:sharedTask. 与 mobile/sharedTask 四键——邀请对象是用自己的 Cindy 账号加入的真人协作者（docs/product-rules/shared-task-mode.md）；② desktop:imBot.conflictDialog. 与 desktop:logic.toasts.feishuBotConflict——共用同一个 App ID 的真人同事；③ desktop:issueTracker.——仓库/组织里的真人成员；④ desktop:settings.agentIsland.skins.boli/muffin.description——桌宠角色的修辞用法。",
       "alsoAllowed": {
         "fr": [
           {
@@ -4037,7 +4144,20 @@
             "when": "按语法使用复数形式。"
           }
         ]
-      }
+      },
+      "exempt": [
+        "desktop:imBot.conflictDialog.",
+        "desktop:logic.toasts.feishuBotConflict",
+        "desktop:settings.agentIsland.skins.boli.description",
+        "desktop:settings.agentIsland.skins.muffin.description",
+        "desktop:settings.agentIsland.skins.chaku.description",
+        "desktop:issueTracker.",
+        "desktop:sharedTask.",
+        "mobile/sharedTask:invitationCopied",
+        "mobile/sharedTask:inviteBoxHint",
+        "mobile/sharedTask:joinedEmptyHint",
+        "mobile/sharedTask:startIntro"
+      ]
     },
     {
       "id": "teammate-core-skill",
@@ -4351,17 +4471,6 @@
         "ko": "내 브라우저 로그인 사용"
       },
       "note": "设置 → 自动操作里，把系统 Chrome / Edge / Brave 当前 profile 的 cookie 与保存的密码快照到 Agent 专用浏览器。不是接管日常窗口。不要译成 real profile / 真实配置文件。"
-    },
-    {
-      "id": "vision-bridge",
-      "status": "proposed",
-      "en": "Vision Bridge",
-      "translations": {
-        "zh-CN": "视觉桥",
-        "ja": "ビジョンブリッジ",
-        "ko": "비전 브리지"
-      },
-      "note": "让纯文本模型获得看图能力的能力名:把图片交给外部多模态后端转成文字描述,再喂给文本模型。zh-CN 取「视觉桥」而非「视觉桥梁/图像转文字」——「桥」强调其桥接定位,且与英文 Vision Bridge 一一对应。设置页 visionBridge 分节、docs/vision-bridge-design.md、日志 note 使用。先登记为 proposed,待产品术语评审后固化。"
     },
     {
       "id": "voice-dictionary",

@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RemotePluginUiEnablePrompt } from '@/components/new-chat/RemotePluginUiEnablePrompt';
-import { RemotePluginPage } from '../RemotePluginPage';
+import { RemotePluginCatalogSource as RemotePluginPage } from '../RemotePluginCatalogSource';
 import { resetPluginCatalogMemoryForTest } from '../lib/pluginCatalogMemory';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { projectPluginUiConsent } from '../../../../shared/pluginUiConsent';
-import { ghostInstallApprovalToken } from '../../../../shared/ghost';
+import { ghostInstallApprovalToken, ghostPermissionItems } from '../../../../shared/ghost';
 const { invoke, confirm, localGhosts, notices, directoryMode } = vi.hoisted(() => ({
   directoryMode: { real: false },
   notices: { success: vi.fn(), info: vi.fn(), error: vi.fn(), warning: vi.fn(), dismiss: vi.fn() },
@@ -210,6 +211,69 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 describe('selected plugin host', () => {
+  it('previews the selected computer version and checks the original submission after a lost reply', async () => {
+    const normal = invoke.getMockImplementation()!;
+    const selectedVersion = '2.0.0';
+    const selected = snapshot('Weather on B');
+    const installed = {
+      ...selected.ghosts[0],
+      namespaceState: 'confirmed',
+      publishingSource: { kind: 'local', source: 'manual' },
+      manifest: { ...selected.ghosts[0].manifest, version: selectedVersion },
+    };
+    const submitted = vi.fn();
+    invoke.mockImplementation(async (device, channel, args) => {
+      const request = args[0];
+      if (request?.actionId === 'management:snapshot' && request.input?.read !== 'capabilities' && device === 'computer-b')
+        return { effects: [], result: { ...selected, communityPublication: true, ghosts: [installed] } };
+      if (request?.actionId === 'management:publish-prepare') {
+        const at = new Date().toISOString();
+        return { effects: [], result: { preview: {
+          preparedId: 'preview-b', instanceId: 'weather', pluginId: null, ghostId: 'weather', name: 'Weather on B',
+          description: 'From B', version: selectedVersion, sha256: 'a'.repeat(64), sizeBytes: 42, expiresAt: at,
+          permissionLabels: ghostPermissionItems({ ...selected.ghosts[0].manifest, agent: { hostTools: ['history'] } } as Parameters<typeof ghostPermissionItems>[0]).map(item => item.labelKey), preflight: {
+            subject: { authority: 'https://example.com', membershipId: 'member' }, queriedAt: at, policyVersion: 2,
+            target: { pluginId: null, ghostId: 'weather', version: selectedVersion, expectedRelease: null },
+            pendingRelease: null, blockers: [], actions: { canSubmit: true },
+          },
+        } } };
+      }
+      if (request?.actionId === 'management:publish-submit') {
+        submitted(device, request.input);
+        throw new Error('The reply was lost');
+      }
+      if (request?.actionId === 'management:publish-status') return { effects: [], result: { stage: 'submitted' } };
+      if (request?.actionId === 'management:publish-discard') return { effects: [], result: { discarded: false } };
+      return normal(device, channel, args);
+    });
+    const view = (deviceId: string) => <MemoryRouter>
+      <RemotePluginPage key={deviceId} device={{ deviceId, name: deviceId === 'computer-a' ? 'A' : 'B' }} online />
+    </MemoryRouter>;
+    const ui = render(view('computer-a'));
+    await screen.findByText('computer-a');
+    expect(screen.queryByRole('button', { name: 'settings.ghosts.contribution.myPlugins' })).toBeNull();
+    expect(screen.getByText('settings.ghosts.remote.publishOnTarget')).toBeTruthy();
+
+    ui.rerender(view('computer-b'));
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.ghosts.contribution.myPlugins' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Weather on B · 2.0.0 · weather' }));
+    const submit = await screen.findByRole('button', { name: 'settings.ghosts.contribution.submitVersion' });
+    expect(screen.getByText('From B')).toBeTruthy();
+    expect(screen.getByText('settings.ghosts.perm.hostTools_history')).toBeTruthy();
+    expect(invoke).toHaveBeenCalledWith('computer-b', 'maker:remote-resources:invoke', [expect.objectContaining({
+      actionId: 'management:publish-prepare',
+      input: { expectedInstalledApproval: ghostInstallApprovalToken(installed.approval), expectedVersion: selectedVersion },
+      resourceRef: { collectionId: 'plugins', kind: 'plugin', id: 'weather' },
+    })]);
+    fireEvent.click(submit);
+    await waitFor(() => expect(notices.success).toHaveBeenCalledWith('settings.ghosts.contribution.pendingVersion'));
+    expect(submitted).toHaveBeenCalledExactlyOnceWith('computer-b', { preparedId: 'preview-b' });
+    expect(invoke).toHaveBeenCalledWith('computer-b', 'maker:remote-resources:invoke', [expect.objectContaining({
+      actionId: 'management:publish-status', input: { preparedId: 'preview-b' },
+    })]);
+    expect(localGhosts).not.toHaveBeenCalled();
+  });
+
   // Unit / review finding 4: old Host snapshots were covered, but their finished
   // recommendation placeholder was not. Keep three slots while capabilities
   // are unknown, then remove them for either supported version-1 fallback.
@@ -409,6 +473,7 @@ describe('selected plugin host', () => {
     const mounted = render(view(true));
     await screen.findByText('computer-a');
     fireEvent.click(screen.getByRole('tab', { name: /^settings.ghosts.page.marketSection/ }));
+    fireEvent.click(screen.getByRole('radio', { name: /settings.ghosts.page.filterAll/ }));
     await screen.findByText('Old market release');
     mounted.rerender(view(false));
     marketName = 'New market release';
@@ -1586,7 +1651,8 @@ it.each([[120, 50], [-50, 0]])('switches a remote source without forcing an unpi
   render(<RemotePluginPage device={{ deviceId: 'computer-a', name: 'A' }} online />);
   await screen.findByText('computer-a');
   fireEvent.click(screen.getByRole('tab', { name: /^settings.ghosts.page.marketSection/ }));
-  const radio = await screen.findByRole('radio', { name: /settings.ghosts.page.origin.public/ });
+  expect(await screen.findByRole('radio', { name: /settings.ghosts.market.publisherKind.official/, checked: true })).toBeTruthy();
+  const radio = screen.getByRole('radio', { name: /settings.ghosts.market.publisherKind.community/ });
   const marker = radio.closest('[role="radiogroup"]')!.parentElement!.parentElement!.previousElementSibling!;
   const root = screen.getByRole('main');
   vi.spyOn(root, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 800, 800));

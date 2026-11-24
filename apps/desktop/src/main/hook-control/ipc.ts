@@ -82,7 +82,7 @@ import {
 import { createProjectWorkspaceSync } from './projectWorkspaceSync.js';
 import { loadImProjectCatalog, registerImProjectDirectory } from './projectCatalog.js';
 import { onProjectCatalogChanged } from '../projectCatalogEvents.js';
-import { patchSessionMetaInDb } from '../localDb/ipc/sessions.js';
+import { patchSessionMetaInDb, restoreArchivedSessionForSend } from '../localDb/ipc/sessions.js';
 import {
   dialogueWorkspaceRootDir,
   dialogueWorkspaceRoots,
@@ -138,6 +138,7 @@ import { listRecentHookSessions } from './recentSessions.js';
 import { validateTelegramExternalUrl } from './telegramDeepLink.js';
 import { validateXExternalUrl } from './xDeepLink.js';
 import { validateFeishuExternalUrl } from './feishuDeepLink.js';
+import { validateDiscordExternalUrl } from './discordDeepLink.js';
 import { isAppContentWindow } from '../windowFocusClassifier.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { getAgentIslandService } from '../agent-island/service.js';
@@ -160,11 +161,12 @@ function requireHookControl(): void {
   }
 }
 
-/** provider-neutral 线(Telegram / X / 飞书)的显示名, 只用于 IPC 错误文案。 */
+/** provider-neutral 线(Telegram / X / 飞书 / Discord)的显示名, 只用于 IPC 错误文案。 */
 const NEUTRAL_PROVIDER_DISPLAY_NAMES: Record<NeutralHookProvider, string> = {
   telegram: 'Telegram',
   x: 'X',
   feishu: 'Feishu',
+  discord: 'Discord',
 };
 
 /**
@@ -177,7 +179,7 @@ function requireNeutralProvider(payload: unknown): NeutralHookProvider {
     typeof p.provider !== 'string' ||
     !Object.prototype.hasOwnProperty.call(NEUTRAL_PROVIDER_DISPLAY_NAMES, p.provider)
   ) {
-    throwIpcError('INVALID_PARAMS', 'provider must be telegram, x or feishu');
+    throwIpcError('INVALID_PARAMS', 'provider must be telegram, x, feishu or discord');
   }
   return p.provider as NeutralHookProvider;
 }
@@ -222,6 +224,16 @@ function disabledHookView(): SlackHookView {
     feishu: {
       enabled: false,
       url: getClientEndpoint('feishuHookWsUrl'),
+      status: 'disabled',
+      lastError: null,
+      available: false,
+      capabilityPending: false,
+      binding: null,
+      defaultWorkspace: null,
+    },
+    discord: {
+      enabled: false,
+      url: getClientEndpoint('discordHookWsUrl'),
       status: 'disabled',
       lastError: null,
       available: false,
@@ -405,6 +417,7 @@ function persistUnsolicitedServerPrefs(channel: HookPrefsChannel, prefs: HookWor
 }
 
 function channelLiveBindingKey(channel: HookPrefsChannel): string | null {
+  if (!hookControlAvailable()) return null;
   const snap = ensureInstances().manager.snapshot();
   if (channel === 'slack') {
     if (snap.serverMultiTeam) {
@@ -535,7 +548,7 @@ const projectWorkspaceSync = createProjectWorkspaceSync({
   registerDirectory: async (directory) => {
     // 升级前配置的目录此刻不在(外接盘没插)也照样登记 —— 侧栏本来就能显示暂时不可用的项目。
     const registered = await registerImProjectDirectory(directory, { requireExisting: false });
-    // 不能当项目的目录(对话托管目录、任务 worktree、伙伴的项目)跳过; 其余失败(存储没就绪、
+    // 不能当项目的目录(对话托管目录、任务 worktree)跳过; 其余失败(存储没就绪、
     // 写库失败)抛出去, 这次不算迁移完成, 下次整理再试 —— 否则这个目录会从机器人那里永久消失。
     if (!registered.ok && registered.errorCode !== 'INVALID_ARGS' && registered.errorCode !== 'NOT_A_DIRECTORY') {
       throw new Error(`${registered.errorCode}: ${registered.message}`);
@@ -547,6 +560,10 @@ const projectWorkspaceSync = createProjectWorkspaceSync({
     applyRetiredProjectNames();
     // 名称清单变了要让服务端知道: 在线时重发 hello(它以最新一帧为准); 不在线时
     // 下次建连的 hello 自带新清单, 不需要为此重建连接。
+    if (!hookControlAvailable()) {
+      if (changed) broadcastStatus({ ...disabledHookView(), workspaces: store.get().workspaces });
+      return;
+    }
     if (mappingChanged) manager.refreshHello();
     if (changed) broadcastStatus(manager.snapshot());
   },
@@ -644,6 +661,11 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
             url: getClientEndpoint('feishuHookWsUrl'),
             enabled: config.feishuEnabled,
           },
+          discord: {
+            name: `${BRAND_NAME} Discord`,
+            url: getClientEndpoint('discordHookWsUrl'),
+            enabled: config.discordEnabled,
+          },
           slack: {
             name: `${BRAND_NAME} Slack`,
             url: store!.effectiveUrl(),
@@ -738,6 +760,7 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       stopSessionExplicitly: (sessionId) => stopSessionTurnExplicitly(sessionId),
       // session.archive 的归档出口: 与 device-link 远程归档同一条
       // patchSessionMetaInDb 路径(落库 + sessions:patched 广播, sidebar 即时移出)
+      restoreArchivedSession: restoreArchivedSessionForSend,
       archiveSessionRow: async (sessionId) => {
         await patchSessionMetaInDb(sessionId, { status: 'archived' });
       },
@@ -763,6 +786,7 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       getTelegramUrl: () => getClientEndpoint('telegramHookWsUrl'),
       getXUrl: () => getClientEndpoint('xHookWsUrl'),
       getFeishuUrl: () => getClientEndpoint('feishuHookWsUrl'),
+      getDiscordUrl: () => getClientEndpoint('discordHookWsUrl'),
       // 与 device-link 同款 token 源: 现值优先, 缺失 refresh 一次
       getAuthToken: async () => {
         if (!hookControlAvailable()) return null;
@@ -787,10 +811,12 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
         persistUnsolicitedServerPrefs('slack', view.prefs);
       },
       notifyProviderPrefs: (view) => {
-        if (view.provider === 'slack') return;
+        // 官方 Discord 没有 /model 卡, 不是偏好镜像渠道: 派发只读共用那一份(session-runner)。
+        if (view.provider === 'slack' || view.provider === 'discord') return;
         persistUnsolicitedServerPrefs(view.provider, view.prefs);
       },
       onHookReadyForPrefsMirror: (provider) => {
+        if (provider === 'discord') return;
         void mirrorWorkspacePrefs(provider);
       },
       notifyTelegramBehavior: broadcastTelegramBehavior,
@@ -850,6 +876,10 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       },
       openFeishuUrl: (url) => {
         const safeUrl = validateFeishuExternalUrl(url);
+        return shell.openExternal(safeUrl);
+      },
+      openDiscordUrl: (url) => {
+        const safeUrl = validateDiscordExternalUrl(url);
         return shell.openExternal(safeUrl);
       },
       log,
@@ -963,8 +993,11 @@ export function readXCompanionSummary(): { available: boolean; visible: boolean;
 
 /** 注册 IPC 并按配置 + 登录态拉起连接。bootstrap 里调用一次。 */
 export function registerHookControlIpc(): void {
-  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.GET, () => {
-    if (!hookControlAvailable()) return { hook: disabledHookView() };
+  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.GET, async () => {
+    if (!hookControlAvailable()) {
+      const { workspaces } = await readPluginImProjectCatalog();
+      return { hook: { ...disabledHookView(), workspaces } };
+    }
     const hook = ensureInstances().manager.snapshot();
     // 打开设置页时顺手与侧栏项目对齐; 有变化经状态广播推给页面。
     projectWorkspaceSync.schedule();
@@ -972,7 +1005,7 @@ export function registerHookControlIpc(): void {
   });
   disposeProjectCatalogListener?.();
   disposeProjectCatalogListener = onProjectCatalogChanged(() => {
-    if (store && hookControlAvailable()) projectWorkspaceSync.schedule();
+    if (store) projectWorkspaceSync.schedule();
   });
 
   // 开关即绑定(设置页 toggle 直接调, 无确认弹窗): 开 = 连接 + 置自动绑定意图
@@ -1101,7 +1134,8 @@ export function registerHookControlIpc(): void {
           err instanceof Error &&
           (err.name === 'TelegramDeepLinkValidationError' ||
             err.name === 'XLinkValidationError' ||
-            err.name === 'FeishuLinkValidationError')
+            err.name === 'FeishuLinkValidationError' ||
+            err.name === 'DiscordLinkValidationError')
         ) {
           throwIpcError('INVALID_PARAMS', err.message);
         }
@@ -1113,13 +1147,13 @@ export function registerHookControlIpc(): void {
 
   // 添加项目: 登记进侧栏的项目列表, 再按项目列表整理一次机器人可选的项目。
   registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.ADD_PROJECT, async (_e, payload) => {
-    requireHookControl();
-    const { manager: m } = ensureInstances();
+    const { manager: m, store: current } = ensureInstances();
     const directory = requireString(requireObject(payload).directory, 'directory');
     const registered = await registerImProjectDirectory(directory);
     if (!registered.ok) throwIpcError('INVALID_PARAMS', registered.message);
     await projectWorkspaceSync.run();
-    return { hook: m.snapshot() };
+    if (store !== current) throwIpcError('PERMISSION_DENIED', 'IM project owner changed');
+    return { hook: hookControlAvailable() ? m.snapshot() : { ...disabledHookView(), workspaces: current.get().workspaces } };
   });
 
   registerTrustedHookControlHandler(
@@ -1231,7 +1265,7 @@ export function registerHookControlIpc(): void {
   const writeSharedProjectPref = (payload: unknown): void => {
     const parsed = parseWorkspacePrefsWrite(payload);
     try {
-      adoptReadyChannels();
+      if (hookControlAvailable()) adoptReadyChannels();
       setSharedProjectPref(parsed.workspace, parsed.patch);
     } catch (err) {
       log.warn(
@@ -1240,14 +1274,15 @@ export function registerHookControlIpc(): void {
       throwIpcError('INTERNAL', 'failed to persist workspace prefs');
     }
     broadcastSharedPrefs();
-    syncSharedProjectPrefs();
+    if (hookControlAvailable()) syncSharedProjectPrefs();
   };
 
   registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.SHARED_PREFS_GET, async () => {
-    requireHookControl();
-    ensureInstances();
     try {
-      if (adoptReadyChannels().length > 0) syncSharedProjectPrefs();
+      if (hookControlAvailable()) {
+        ensureInstances();
+        if (adoptReadyChannels().length > 0) syncSharedProjectPrefs();
+      }
       return { prefs: { prefs: listSharedProjectPrefs() } satisfies SharedProjectPrefsView };
     } catch (err) {
       log.warn(`shared project prefs read failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -1256,8 +1291,7 @@ export function registerHookControlIpc(): void {
   });
 
   registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.SHARED_PREFS_SET, async (_e, payload) => {
-    requireHookControl();
-    ensureInstances();
+    if (hookControlAvailable()) ensureInstances();
     writeSharedProjectPref(payload);
     return { prefs: { prefs: listSharedProjectPrefs() } satisfies SharedProjectPrefsView };
   });

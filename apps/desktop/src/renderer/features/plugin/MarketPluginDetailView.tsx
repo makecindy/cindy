@@ -17,6 +17,8 @@ import { GhostPluginIcon } from './GhostPluginIcon';
 import { usePluginMarketIcon } from './lib/usePluginMarketIcon';
 import { pluginPresentationAuthor, pluginPresentationOrigin } from './lib/pluginMarketPresentation';
 import { PluginDetailTopBar, usePluginDetailScrolled } from './PluginDetailTopBar';
+import { PluginInstallRing } from './PluginInstallRing';
+import { usePluginInstallProgress } from './lib/pluginInstallProgress';
 
 interface MarketPluginDetailViewProps {
   detail: PluginMarketItem | PluginMarketDetail;
@@ -24,6 +26,11 @@ interface MarketPluginDetailViewProps {
   refreshing?: boolean;
   onRetry?: () => void;
   busy: boolean;
+  /**
+   * Show this window's install of the plugin as a ring in place of the button. Only the local
+   * Plugin page turns it on; a remote computer's market view is not about installs here.
+   */
+  showInstallProgress?: boolean;
   onBack: () => void;
   onInstall?: () => void;
   onIconLoadError: () => void;
@@ -35,6 +42,7 @@ export function MarketPluginDetailView({
   refreshing = false,
   onRetry,
   busy,
+  showInstallProgress = false,
   onBack,
   onInstall,
   onIconLoadError,
@@ -54,6 +62,10 @@ export function MarketPluginDetailView({
   const { scrolled, onScroll } = usePluginDetailScrolled();
   const marketIcon = usePluginMarketIcon(detail, { deferUntilVisible: false });
   const presentationOrigin = pluginPresentationOrigin(detail);
+  const installProgress = usePluginInstallProgress(showInstallProgress ? detail.pluginId : null);
+  const installFailed = installProgress?.download.phase === 'failed';
+  // 进行中与完成时圆环替换按钮;失败时圆环停在原处,按钮回来供重试。
+  const installRing = installProgress && (!installFailed || onInstall) ? installProgress : null;
   const actionKey =
     detail.installState === 'update-available'
       ? 'settings.ghosts.market.update'
@@ -67,6 +79,12 @@ export function MarketPluginDetailView({
   const replacementDescriptionId = useId();
   const replacementDescription =
     detail.installState === 'conflict' ? t('settings.ghosts.market.replaceDescription') : undefined;
+  const communityDisclaimerId = useId();
+  const isCommunityPlugin = presentationOrigin === 'public' && detail.publisherKind === 'personal';
+  const actionDescription = [
+    replacementDescription && replacementDescriptionId,
+    isCommunityPlugin && communityDisclaimerId,
+  ].filter(Boolean).join(' ') || undefined;
 
   return (
     <main
@@ -116,33 +134,50 @@ export function MarketPluginDetailView({
                 ) : null}
               </div>
             </div>
-            {onInstall ? (
-              <Button
-                variant="cta"
-                size="lg"
-                compact
-                loading={busy}
-                type="button"
-                onClick={onInstall}
-                disabled={actionDisabled}
-                aria-label={t(showActionLoading ? 'settings.ghosts.remote.detailLoading' : actionKey)}
-                aria-busy={busy || refreshing || loading || undefined}
-                aria-describedby={replacementDescription ? replacementDescriptionId : undefined}
-                className="plugin-detail-actions plugin-detail-primary-action min-w-[104px] whitespace-nowrap"
-              >
-                <span className="inline-grid">
-                  <span aria-hidden="true" className="invisible col-start-1 row-start-1 inline-flex items-center justify-center gap-2">
-                    <Download size={15} />{t('settings.ghosts.remote.detailLoading')}
-                  </span>
-                  <span className="col-start-1 row-start-1 inline-flex items-center justify-center gap-2">
-                    {showActionLoading ? <Spinner size={15} aria-hidden="true" /> : <Download size={15} aria-hidden="true" />}
-                    {t(showActionLoading ? 'settings.ghosts.remote.detailLoading' : actionKey)}
-                  </span>
-                </span>
-              </Button>
+            {onInstall || installRing ? (
+              <div className="plugin-detail-actions flex min-w-0 flex-wrap items-center gap-1.5">
+                {installRing ? (
+                  <PluginInstallRing
+                    label={detail.name}
+                    progress={installRing}
+                    size={24}
+                    explainRetry
+                    className="max-w-[260px] px-1 text-13 font-medium"
+                  />
+                ) : null}
+                {onInstall && (!installProgress || installFailed) ? (
+                  <Button
+                    variant="cta"
+                    size="lg"
+                    compact
+                    loading={busy}
+                    type="button"
+                    onClick={onInstall}
+                    disabled={actionDisabled}
+                    aria-label={t(showActionLoading ? 'settings.ghosts.remote.detailLoading' : installFailed ? 'commonUi.retry' : actionKey)}
+                    aria-busy={busy || refreshing || loading || undefined}
+                    aria-describedby={actionDescription}
+                    className="plugin-detail-primary-action min-w-[104px] whitespace-nowrap"
+                  >
+                    <span className="inline-grid">
+                      <span aria-hidden="true" className="invisible col-start-1 row-start-1 inline-flex items-center justify-center gap-2">
+                        <Download size={15} />{t('settings.ghosts.remote.detailLoading')}
+                      </span>
+                      <span className="col-start-1 row-start-1 inline-flex items-center justify-center gap-2">
+                        {showActionLoading ? <Spinner size={15} aria-hidden="true" /> : installFailed ? null : <Download size={15} aria-hidden="true" />}
+                        {t(showActionLoading ? 'settings.ghosts.remote.detailLoading' : installFailed ? 'commonUi.retry' : actionKey)}
+                      </span>
+                    </span>
+                  </Button>
+                ) : null}
+              </div>
             ) : null}
           </div>
-          <PluginPublisherDescription origin={presentationOrigin} kind={detail.publisherKind} />
+          {isCommunityPlugin ? (
+            <p id={communityDisclaimerId} className="mt-3 text-12 leading-[1.667] text-[var(--text-tertiary)]">
+              {t('settings.ghosts.market.communityDisclaimer')}
+            </p>
+          ) : <PluginPublisherDescription origin={presentationOrigin} kind={detail.publisherKind} />}
           <p className="mt-5 text-14 leading-[1.571] text-[var(--text-secondary)]">
             {detail.description || detail.ghostId}
           </p>
@@ -203,13 +238,12 @@ const MarketPluginDetailBody = memo(function MarketPluginDetailBody({ detail, er
               className="mt-0.5 shrink-0 text-[var(--text-secondary)]"
               aria-hidden="true"
             />
-            <p className="text-13 leading-5 text-[var(--text-secondary)]">
-              {t(
-                isCustomSource
-                  ? 'settings.ghosts.market.customSecurityDescription'
-                  : 'settings.ghosts.market.securityDescription',
-              )}
-            </p>
+            <div className="text-13 leading-5 text-[var(--text-secondary)]">
+              <p>{t(isCustomSource
+                ? 'settings.ghosts.market.customSecurityDescription'
+                : 'settings.ghosts.market.securityDescription')}</p>
+              {isCustomSource ? <p className="mt-2">{t('settings.ghosts.installConsent.customMarketSourceNotice')}</p> : null}
+            </div>
           </div>
         </section> : null}
 

@@ -175,8 +175,22 @@ export async function readDesktopLockState(): Promise<'locked' | 'unlocked' | 'u
   }
 }
 
-export async function readDesktopInputPermission(): Promise<DesktopPermissionStatus> {
-  if (process.platform !== 'darwin') return 'notRequired';
+export async function readDesktopInputPermission(
+  operation: 'accessibility' | 'postEvents' = 'accessibility',
+): Promise<DesktopPermissionStatus> {
+  return (await readDesktopInputAccess(operation)).status;
+}
+
+/**
+ * `chosenAppsOnly`: macOS 27.3 lets this Cindy control only the apps the person
+ * chose. Remote keyboard and mouse are system-wide, and macOS drops them unless
+ * every app is allowed, so the status stays `missing`; the flag only lets local
+ * settings say why. It is never part of a device-link permission reply.
+ */
+export async function readDesktopInputAccess(
+  operation: 'accessibility' | 'postEvents' = 'accessibility',
+): Promise<{ status: DesktopPermissionStatus; chosenAppsOnly?: true }> {
+  if (process.platform !== 'darwin') return { status: 'notRequired' };
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     // A cold dev build must prepare the helper too; preparation does not prompt.
@@ -188,18 +202,20 @@ export async function readDesktopInputPermission(): Promise<DesktopPermissionSta
         timer = setTimeout(() => reject(new Error('DESKTOP_INPUT_PREPARING')), 5000);
       }),
     ]);
-    // Only --request-permission may open the macOS authorization UI.
-    const { stdout } = await exec(binary, ['--check'], {
+    // Only --request-permission may open the macOS authorization UI. A helper
+    // older than `--scope` ignores it and answers ready/permission as before.
+    const args = operation === 'postEvents' ? ['--check', '--post-events', '--scope'] : ['--check'];
+    const { stdout } = await exec(binary, args, {
       timeout: 5000,
       maxBuffer: 1024,
     });
-    return stdout.trim() === 'ready'
-      ? 'granted'
-      : stdout.trim() === 'permission'
-        ? 'missing'
-        : 'unknown';
+    const answer = stdout.trim();
+    if (answer === 'ready') return { status: 'granted' };
+    if (answer === 'permission') return { status: 'missing' };
+    if (answer === 'chosen-apps') return { status: 'missing', chosenAppsOnly: true };
+    return { status: 'unknown' };
   } catch {
-    return 'unknown';
+    return { status: 'unknown' };
   } finally {
     if (timer) clearTimeout(timer);
   }
@@ -258,11 +274,15 @@ export async function verifyDesktopOwner(
 export async function requestDesktopInputPermission(
   isCurrent: () => boolean,
   signal: AbortSignal,
-): Promise<void> {
-  if (process.platform !== 'darwin') return;
+  operation: 'accessibility' | 'postEvents' = 'accessibility',
+): Promise<boolean> {
+  if (process.platform !== 'darwin') return true;
   const binary = await resolveBinary();
-  if (isCurrent())
-    await exec(binary, ['--request-permission'], { timeout: 5000, maxBuffer: 1024, signal });
+  if (!isCurrent()) return false;
+  const args = ['--request-permission'];
+  if (operation === 'postEvents') args.push('--post-events');
+  const { stdout } = await exec(binary, args, { timeout: 5000, maxBuffer: 1024, signal });
+  return stdout.trim() === 'ready';
 }
 
 export class DesktopInputHost {
@@ -380,7 +400,13 @@ export class DesktopInputHost {
           text += data.toString();
           if (text.includes('\n'))
             finish(
-              text.startsWith('ready') ? undefined : new Error('DESKTOP_ACCESSIBILITY_REQUIRED'),
+              text.startsWith('ready')
+                ? undefined
+                : new Error(
+                    platform === 'win32'
+                      ? 'DESKTOP_INPUT_UNAVAILABLE'
+                      : 'DESKTOP_ACCESSIBILITY_REQUIRED',
+                  ),
             );
         };
         child.stdout.on('data', receive);
@@ -411,7 +437,7 @@ export class DesktopInputHost {
       throw error;
     }
   }
-  input(events: DesktopInput[]): void {
+  input(events: DesktopInput[]): void | Promise<boolean> {
     if (this.privacyPaused) return;
     if ((this.runtime.platform ?? process.platform) === 'linux') {
       if (!this.child) throw new Error('DESKTOP_INPUT_UNAVAILABLE');
@@ -463,7 +489,7 @@ export class DesktopInputHost {
       const mapped = process.platform === 'win32' ? screen.dipToScreenPoint(point) : point;
       return { ...event, ...mapped };
     });
-    this.write(
+    return this.write(
       native,
       batch,
       points,
@@ -483,19 +509,20 @@ export class DesktopInputHost {
     batch?: { ready: Promise<void>; complete: () => void },
     points: { x: number; y: number }[] = [],
     wheel = false,
-  ): void {
+  ): Promise<boolean> {
     const child = this.child;
     const line = `${JSON.stringify(events)}\n`;
     const connection = this.windows;
     const bytes = Buffer.byteLength(line);
     if (this.queuedBytes + bytes > 32_768 || (!connection && (!child || child.stdin.destroyed))) {
+      batch?.complete();
       this.onFailure();
-      return;
+      return Promise.resolve(false);
     }
     this.queuedBytes += bytes;
     const generation = this.generation;
     const send = async () => {
-      if (generation !== this.generation) return;
+      if (generation !== this.generation) return false;
       this.writing = this.writing.then(async () => {
         if (generation !== this.generation) return;
         // Local-only windows must pass this batch's pointer through for as long as it is
@@ -533,11 +560,13 @@ export class DesktopInputHost {
         }
       });
       await this.writing;
+      return generation === this.generation;
     };
     // Waiting for an Agent primitive must not hold up empty native heartbeats.
-    void (batch ? batch.ready.then(send) : send())
+    return (batch ? batch.ready.then(send) : send())
       .catch(() => {
         if (generation === this.generation) this.onFailure();
+        return false;
       })
       .finally(() => {
         batch?.complete();
@@ -624,6 +653,23 @@ export class DesktopInputHost {
         }
       })();
     } else release?.();
+  }
+}
+
+/** Fractions use the same global display coordinates as pointer injection. */
+export async function isEditableDesktopPoint(displayId: string, x: number, y: number): Promise<boolean> {
+  const display = screen.getAllDisplays().find((item) => String(item.id) === displayId);
+  if (!display) return false;
+  const { bounds } = display;
+  try {
+    const { stdout } = await exec(await resolveBinary(), ['--editable-at',
+      String(Math.round(bounds.x + x * (bounds.width - 1))),
+      String(Math.round(bounds.y + y * (bounds.height - 1))),
+    ], { timeout: 1200, maxBuffer: 128 });
+    return stdout.trim() === 'editable';
+  } catch {
+    // Older signed helpers and apps with unavailable accessibility both keep manual input.
+    return false;
   }
 }
 

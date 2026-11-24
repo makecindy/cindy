@@ -1,6 +1,8 @@
 {
   "sharedTaskReadOnly": "此卡唯差事之主可操之。",
   "retry": "重載",
+  "viewLimit": "所開之頁過多。移他頁出屏，或收之，此頁即自開。",
+  "pluginRevoked": "法器已停用或已變更，此頁已失效",
   "loadFailed": "應用程式載入未成。請察連線後重載。",
   "updateRequired": "此機尚不支 MCP Apps，請更新機上之 Cindy 後再試。",
   "appName": "MCP App",

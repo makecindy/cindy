@@ -82,6 +82,14 @@ let _drizzle: BetterSQLite3Database<typeof schema> | null = null;
 let _currentUserId: string | null = null;
 let _currentDbPath: string | null = null;
 let _optimizeTimer: NodeJS.Timeout | null = null;
+// A worker can report corruption after main released its handle. Keep the
+// quarantine by owner-resolved file until explicit recovery closes that owner.
+const runtimeCorruptFiles = new Map<string, Error>();
+
+function assertRuntimeDbAvailable(filePath: string): void {
+  const error = runtimeCorruptFiles.get(filePath);
+  if (error) throw error;
+}
 const schemaMigrationReaderLeaseLifecycle = new SchemaMigrationReaderLeaseLifecycle();
 
 // PRAGMA optimize 周期 (SQLite 官方对长连接的推荐: 启动一次 + 周期一次 + 关闭前一次)
@@ -151,6 +159,9 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
     return { ready: false, error: { code: 'DB_INIT_FAILED', message: 'invalid userId' } };
   }
 
+  const filePath = dbPath(userId);
+  assertRuntimeDbAvailable(filePath);
+
   if (_currentUserId === userId && _db) {
     log.info(
       JSON.stringify({ event: 'localDb.ensureReady.already', userId, dbPath: _currentDbPath }),
@@ -169,7 +180,6 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
     closeDb();
   }
 
-  const filePath = dbPath(userId);
   const passiveSharedUserData = (isCindyPersonalRuntime() && fs.existsSync(filePath)) || (!localDbHostUi().isPackaged() && process.env.XDT_PASSIVE_SHARED_USER_DATA === '1');
   // A packaged release may be launched while a shared passive dev instance is still
   // open.  The passive reader lease must continue to block schema writes, but an
@@ -212,6 +222,12 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
       schemaMigrationReaderLeaseLifecycle.release();
     }
   };
+  try {
+    assertRuntimeDbAvailable(filePath);
+  } catch (error) {
+    releaseSchemaLeasesAfterFailure();
+    throw error;
+  }
   log.info(
     JSON.stringify({
       event: 'localDb.ensureReady.open',
@@ -273,6 +289,12 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
     return { ready: false, error: { code: 'DB_CORRUPT_NO_BACKUP', message } };
   }
 
+  try {
+    assertRuntimeDbAvailable(filePath);
+  } catch (error) {
+    releaseSchemaLeasesAfterFailure();
+    throw error;
+  }
   try {
     if (startupLease.kind === 'writer') prepareModelDefaultsProfile(filePath);
     _db = openWithPragmas(filePath);
@@ -352,13 +374,18 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
     );
   }
 
+  const whileAvailable = <T>(work: () => T): T => {
+    assertRuntimeDbAvailable(filePath);
+    return work();
+  };
   try {
     const schemaStartup = await runSchemaStartupPolicy({
       sharedPassive: passiveSharedUserData,
       readOnly: schemaMaintenanceReadOnly,
-      checkCompatibility: () => checkMigrationCompatibility(db, getDrizzleDir(), filePath),
-      checkReadOnlyInvariants: () => ({ compatible: !hasStaleOrcaLeadIndex(db) }),
+      checkCompatibility: () => whileAvailable(() => checkMigrationCompatibility(db, getDrizzleDir(), filePath)),
+      checkReadOnlyInvariants: () => whileAvailable(() => ({ compatible: !hasStaleOrcaLeadIndex(db) })),
       prepareRuntimeManifest: () => {
+        assertRuntimeDbAvailable(filePath);
         const prepared = prepareMigrationRuntimeManifest(
           filePath,
           getDrizzleDir(),
@@ -374,10 +401,11 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
           );
         }
       },
-      runMigrations: () => runMigrations(db, filePath),
-      handleSchemaDrift: () => handleSchemaDrift(filePath),
-      cleanupSchemaDdl: () => cleanupStaleOrcaLeadIndex(db),
+      runMigrations: () => whileAvailable(() => runMigrations(db, filePath, () => assertRuntimeDbAvailable(filePath))),
+      handleSchemaDrift: () => whileAvailable(() => handleSchemaDrift(filePath)),
+      cleanupSchemaDdl: () => whileAvailable(() => cleanupStaleOrcaLeadIndex(db)),
     });
+    assertRuntimeDbAvailable(filePath);
     if (!schemaStartup.ready) {
       const compatibility = schemaStartup.compatibility;
       const message = schemaMaintenanceReadOnly
@@ -416,6 +444,10 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
       );
     }
   } catch (err) {
+    if (runtimeCorruptFiles.has(filePath)) {
+      closeDb({ skipOptimize: true, preserveSchemaMigrationLease: !readerLeaseAcquiredThisCall });
+      throw runtimeCorruptFiles.get(filePath);
+    }
     const message = err instanceof Error ? err.message : String(err);
     log.error(
       JSON.stringify({
@@ -535,7 +567,7 @@ function openWithPragmas(filePath: string): Database.Database {
  * 失败仅记日志, 不影响业务。
  */
 function runOptimize(mask?: number): void {
-  if (!_db) return;
+  if (!_db || (_currentDbPath && runtimeCorruptFiles.has(_currentDbPath))) return;
   const t0 = performance.now();
   try {
     _db.pragma(mask !== undefined ? `optimize=${mask}` : 'optimize');
@@ -565,21 +597,48 @@ function stopOptimizeSchedule(): void {
   }
 }
 
+/** Stop main-owned maintenance as soon as its live client reports corruption. */
+export function markRuntimeDbCorrupt(userId = _currentUserId, error?: Error): void {
+  if (!userId) return;
+  const filePath = dbPath(userId);
+  if (!runtimeCorruptFiles.has(filePath)) {
+    runtimeCorruptFiles.set(filePath, error ?? Object.assign(new Error('Database access stopped after SQLite corruption.'), { code: 'SQLITE_CORRUPT' }));
+  }
+  if (_currentDbPath === filePath) stopOptimizeSchedule();
+}
+
 export interface CloseDbOptions {
   /** worker takeover 只关闭 main 连接；schema reader lease 仍由本 app 生命周期持有。 */
   preserveSchemaMigrationLease?: boolean;
+  /** Quarantined native handles must close without issuing another SQL operation. */
+  skipOptimize?: boolean;
+  /** Only the identity-checked explicit recovery path may lift this file's latch. */
+  recoverRuntimeCorruptionForUserId?: string;
 }
 
 export function closeDb(options: CloseDbOptions = {}): void {
+  const recoveringOwner = options.recoverRuntimeCorruptionForUserId;
+  if (recoveringOwner) {
+    const filePath = dbPath(recoveringOwner);
+    if (!runtimeCorruptFiles.has(filePath)) return;
+    if (_currentUserId && _currentUserId !== recoveringOwner) {
+      // This owner's main handle is absent; leave the healthy owner untouched.
+      runtimeCorruptFiles.delete(filePath);
+      return;
+    }
+  }
   // 关连接前再跑一次 optimize, 把会话期内积累的统计变化落盘 (官方推荐)
   stopOptimizeSchedule();
-  runOptimize();
+  if (!options.skipOptimize) runOptimize();
   try {
     _db?.close();
-  } catch {
-    /* noop */
+  } catch (error) {
+    // Recovery must prove the quarantined native connection is closed before
+    // clearing the singleton; leave it latched if native close fails.
+    if (options.skipOptimize) throw error;
   }
   _db = null;
+  if (recoveringOwner) runtimeCorruptFiles.delete(dbPath(recoveringOwner));
   _drizzle = null;
   _currentUserId = null;
   _currentDbPath = null;
@@ -707,7 +766,7 @@ async function handleSchemaDrift(filePath: string): Promise<void> {
           return null;
         }
       },
-      isConnectionCurrent: () => _db === db,
+      isConnectionCurrent: () => _db === db && !runtimeCorruptFiles.has(filePath),
       afterApply: () => {
         pruneMigrationBackupsToBudget(filePath);
       },

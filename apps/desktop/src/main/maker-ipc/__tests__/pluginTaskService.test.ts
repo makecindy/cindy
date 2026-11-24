@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import ts from 'typescript';
 import { createOrcaTeamService, type OrcaTeamServiceDeps } from '../orcaTeamService.js';
-import { pluginTaskRouteAttempts, pluginTaskSelectionIsOpen } from '../pluginTaskDefaultRoute.js';
+import { pluginTaskRouteAttempts, resolveLightestPluginTaskFallback, pluginTaskSelectionIsOpen } from '../pluginTaskDefaultRoute.js';
 import { createSessionExecutionResolver } from '../sessionExecutionSelection.js';
 import { Session } from '@cindy/maker-core';
 import { handlePluginTaskRequest } from '../../cindy-brain/taskSlot.js';
@@ -94,6 +94,105 @@ it('does not move an existing task or override a project configuration changed d
   await expect(f.service.followImProject('p', request)).rejects.toMatchObject({ code: 'STALE_REVISION' });
   expect(f.deps.setModel).not.toHaveBeenCalled();
   expect(await f.service.get('p', task.taskId)).toEqual(task);
+});
+
+// User decision 2026-11-18: one IM conversation in a plugin may keep its own model and permission on
+// top of the shared project; a permission looser than the project needs the user's allow in Cindy.
+// Existing cases only followed the project. Minimal inputs: own route + stricter permission; looser
+// without a grant, with another project's grant, then with this project's grant. Tier: unit.
+it("applies a conversation's own settings and loosens only with a grant for that project", async () => {
+  const f = fixture();
+  f.deps.readPermissionMode = () => undefined;
+  const task = await f.create();
+  const own = { ...f.route, model: 'own-model', effort: 'low' };
+  f.deps.resolveImProject = async (_plugin, _project, route) => ({ route: route ?? f.route, permissionMode: 'auto', assertCurrent: () => {}, matches: () => true });
+  let revision = task.revision;
+  const setModel = vi.fn(async (id: string, selected: PluginTaskRoute, assertCurrent: () => Promise<void>, permissionMode?: string) => {
+    await assertCurrent();
+    Object.assign(f.tasks.get(id)!, { resolvedConfig: selected, ...(permissionMode ? { permissionMode } : {}), revision: ++revision });
+    return { status: 'applied' };
+  });
+  f.deps.setModel = setModel as PluginTaskServiceDeps['setModel'];
+  const follow = (imOverride: object) => f.service.followImProject('p',
+    { taskId: task.taskId, expectedRevision: revision, imProject: 'chat', imOverride });
+  await expect(follow({ route: own, permissionMode: 'ask' }))
+    .resolves.toMatchObject({ task: { resolvedConfig: own, permissionMode: 'ask' } });
+  const elsewhere = await f.service.recordImPermissionGrant('p', '/other', 'bypassPermissions');
+  for (const grant of [{}, { permissionGrant: elsewhere }])
+    await expect(follow({ permissionMode: 'bypassPermissions', ...grant })).rejects.toMatchObject({ code: 'CONFIRMATION_REQUIRED' });
+  expect(setModel).toHaveBeenCalledOnce();
+  const grant = await f.service.recordImPermissionGrant('p', 'chat', 'bypassPermissions');
+  await expect(follow({ permissionMode: 'bypassPermissions', permissionGrant: grant }))
+    .resolves.toMatchObject({ task: { resolvedConfig: f.route, permissionMode: 'bypassPermissions' } });
+  expect(JSON.parse(f.rows.get(task.taskId)!.payload)).toMatchObject({ imProject: 'chat', imPermissionGrant: grant });
+  // Dispatch receives the user's grant; following the project again forgets it.
+  const granted = vi.fn();
+  f.deps.assertImProjectDispatch = (_plugin, _project, _task, mode) => granted(mode);
+  await f.service.send('p', { taskId: task.taskId, expectedRevision: revision, requestKey: 'loose', text: 'hi' });
+  expect(granted).toHaveBeenLastCalledWith('bypassPermissions');
+  // PR #11208 unit regression: TASK_BUSY must leave the previous grant usable.
+  const autoGrant = await f.service.recordImPermissionGrant('p', 'chat', 'auto');
+  const oldResolver = f.deps.resolveImProject;
+  f.deps.resolveImProject = async (...args) => ({ ...await oldResolver(...args), permissionMode: 'ask' });
+  setModel.mockRejectedValueOnce(new PluginTaskError('TASK_BUSY', 'Busy'));
+  await expect(follow({ permissionMode: 'auto', permissionGrant: autoGrant })).rejects.toMatchObject({ code: 'TASK_BUSY' });
+  await f.service.assertDispatch('p', task.taskId);
+  expect(granted).toHaveBeenLastCalledWith('bypassPermissions');
+  f.deps.resolveImProject = oldResolver;
+  await follow({});
+  expect(JSON.parse(f.rows.get(task.taskId)!.payload).imPermissionGrant).toBeUndefined();
+  expect(f.tasks.get(task.taskId)).toMatchObject({ resolvedConfig: f.route, permissionMode: 'auto' });
+});
+
+// PR #11208 unit regression: a legacy task without a project can still send after
+// a failed permission change. Previously the rejection left a project binding behind.
+it('preserves legacy dispatch when following an IM project fails before changing permissions', async () => {
+  const f = fixture();
+  f.deps.readPermissionMode = () => undefined;
+  const task = await f.create();
+  Object.assign(f.tasks.get(task.taskId)!, { permissionMode: 'bypassPermissions' });
+  f.deps.resolveImProject = async () => ({ route: f.route, permissionMode: 'ask', assertCurrent: () => {}, matches: () => true });
+  f.deps.assertImProjectDispatch = () => { throw new PluginTaskError('PERMISSION_DENIED', 'Project has no grant'); };
+  f.deps.setModel = async () => { throw new PluginTaskError('TASK_BUSY', 'Busy'); };
+  const grant = await f.service.recordImPermissionGrant('p', 'chat', 'auto');
+  await expect(f.service.followImProject('p', { taskId: task.taskId, expectedRevision: task.revision, imProject: 'chat',
+    imOverride: { permissionMode: 'auto', permissionGrant: grant } })).rejects.toMatchObject({ code: 'TASK_BUSY' });
+  await expect(f.service.assertDispatch('p', task.taskId)).resolves.toMatchObject({ permissionMode: 'bypassPermissions' });
+  expect(JSON.parse(f.rows.get(task.taskId)!.payload)).not.toHaveProperty('imProjectTransition');
+  f.deps.setModel = async () => {
+    Object.assign(f.tasks.get(task.taskId)!, { permissionMode: 'auto' });
+    throw new PluginTaskError('TASK_BUSY', 'Runtime changed before the update returned');
+  };
+  await expect(f.service.followImProject('p', { taskId: task.taskId, expectedRevision: task.revision, imProject: 'chat',
+    imOverride: { permissionMode: 'auto', permissionGrant: grant } })).rejects.toMatchObject({ code: 'TASK_BUSY' });
+  await expect(f.service.assertDispatch('p', task.taskId)).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+});
+
+// Same decision for the first message of a conversation. Existing creation cases had no per-conversation
+// input. Minimal inputs: looser without a grant, then own route + granted permission, then a retry
+// after the conversation went back to following the project (same creation key). Tier: unit.
+it('creates with conversation settings, needs a grant to loosen and replays without a conflict', async () => {
+  const f = fixture();
+  f.deps.readPermissionMode = () => undefined;
+  let defaultOffline = false;
+  f.deps.resolveImProject = async (_plugin, _project, route) => {
+    // PR #11208 unit regression: an offline default must not prevent explicit routing.
+    if (defaultOffline && !route) throw new Error('Default source offline');
+    return { route: route ?? f.route, workingDir: '/project', permissionMode: 'ask', assertCurrent: () => {}, matches: () => true };
+  };
+  const own = { ...f.route, model: 'own-model' };
+  const request = { requestKey: 'im-own', title: 'Group', imProject: '/project' };
+  await expect(f.service.create('p', { ...request, imOverride: { permissionMode: 'auto' } })).rejects.toMatchObject({ code: 'CONFIRMATION_REQUIRED' });
+  expect(f.deps.createSession).not.toHaveBeenCalled();
+  const grant = await f.service.recordImPermissionGrant('p', '/project', 'auto');
+  defaultOffline = true;
+  f.deps.resolveImProjectPermission = async () => ({ permissionMode: 'ask', label: 'Project', assertCurrent: () => {}, matches: () => true });
+  await expect(f.service.imProjectPermission('p', '/project')).resolves.toMatchObject({ permissionMode: 'ask', label: 'Project' });
+  const task = await f.service.create('p', { ...request, imOverride: { route: own, permissionMode: 'auto', permissionGrant: grant } });
+  expect(f.deps.createSession).toHaveBeenLastCalledWith('p', task.taskId, 'Group', own, undefined, own, expect.any(Function),
+    undefined, undefined, expect.objectContaining({ workingDir: '/project' }), 'auto');
+  expect(JSON.parse(f.rows.get(task.taskId)!.payload)).toMatchObject({ imProject: '/project', imPermissionGrant: grant });
+  expect(await f.service.create('p', request)).toEqual(task);
 });
 
 // PR #9155 P1: a cold/offline remote read held the shared receipt queue, so
@@ -1699,6 +1798,7 @@ it('an open plugin selection without a source session follows the auxiliary chai
       codex: [{ id: f.route.providerId, name: 'provider', models: ['next', 'cheap', 'nolow', 'onpi'] }] },
       resolveDefaultProviderIdForModel: () => f.route.providerId }),
   });
+  const reportFallback = vi.fn();
   const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
   const resolveStart = source.indexOf('    const resolveRoute = async');
   const resolve = source.slice(resolveStart, source.indexOf('    const readExecution', resolveStart));
@@ -1708,6 +1808,7 @@ it('an open plugin selection without a source session follows the auxiliary chai
       resolveSessionExecution: resolver, PluginTaskError, routeUnavailable: () => { throw Error('unavailable'); },
       getEffectiveAuxiliaryModelRefs: () => ['chain'], getEffectiveAuxiliaryModelChainSnapshot: () => 'chain',
       auxiliaryChainSessionCandidates: () => candidates, pluginTaskRouteAttempts, pluginTaskSelectionIsOpen,
+      resolveLightestPluginTaskFallback, reportPluginTaskAuxiliaryFallback: reportFallback,
       savedPluginTaskRemoteRoute, readPluginRouteProviders: async () => [],
       // Remote catalog admission is covered by resolveRemotePluginTaskRoute's own tests; mark the path taken.
       resolveRemotePluginTaskRoute: async (route: PluginTaskRoute) => ({ ...route, viaRemoteCatalog: true }) };
@@ -1725,8 +1826,16 @@ it('an open plugin selection without a source session follows the auxiliary chai
     .resolves.toMatchObject({ model: 'cheap', effort: 'low' });
   // Only when no candidate offers a light level does a model route at its default effort.
   await expect(run([{ agentKind: 'codex', providerId: f.route.providerId, model: 'nolow' }])).resolves.toMatchObject({ model: 'nolow' });
-  // No usable candidate: the new-task selection remains the last resort.
+  // No usable candidate: the new-task selection remains the last resort, at its
+  // lightest accepted effort, and the user is told (auxiliary-model-health.md, 2026-11-23).
   await expect(run([{ agentKind: 'codex', providerId: f.route.providerId, model: 'missing' }])).resolves.toMatchObject({ model: 'next', effort: 'high' });
+  expect(reportFallback).toHaveBeenLastCalledWith(expect.objectContaining({ model: 'next' }));
+  selected.model = 'cheap';
+  await expect(run([{ agentKind: 'codex', providerId: f.route.providerId, model: 'missing' }])).resolves.toMatchObject({ model: 'cheap', effort: 'low' });
+  selected.model = 'next';
+  // A chain candidate that runs clears the fallback note.
+  await run([{ agentKind: 'codex', providerId: f.route.providerId, model: 'cheap' }]);
+  expect(reportFallback).toHaveBeenLastCalledWith(null);
   // An explicit plugin model never consults the chain.
   await expect(run([{ agentKind: 'codex', providerId: f.route.providerId, model: 'cheap' }], { model: 'next' })).resolves.toMatchObject({ model: 'next' });
   // Rule (2026-11-16): a saved run location applies without an explicit route and is admitted
@@ -1817,7 +1926,8 @@ it.each([
     resolveSessionExecution: resolver, PluginTaskError, routeUnavailable: () => { throw Error('unavailable'); },
     // No auxiliary chain configured in this scenario: the new-task selection stays the inherited default.
     getEffectiveAuxiliaryModelRefs: () => [], getEffectiveAuxiliaryModelChainSnapshot: () => '',
-    auxiliaryChainSessionCandidates: () => [], pluginTaskRouteAttempts, pluginTaskSelectionIsOpen, savedPluginTaskRemoteRoute };
+    auxiliaryChainSessionCandidates: () => [], pluginTaskRouteAttempts, pluginTaskSelectionIsOpen, savedPluginTaskRemoteRoute,
+    resolveLightestPluginTaskFallback, reportPluginTaskAuxiliaryFallback: () => {} };
   const js = ts.transpileModule(`${resolve}\nreturn {${preference} resolveRoute};`, {
     compilerOptions: { target: ts.ScriptTarget.ES2022 },
   }).outputText;

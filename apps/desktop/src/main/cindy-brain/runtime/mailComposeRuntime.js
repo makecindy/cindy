@@ -165,6 +165,16 @@ var cindyMail = (function () {
             subject: "主题",
             body: "正文",
             quote: "引用内容",
+            quoteIncluded: "已附原文",
+            quoteOmitted: "未附原文",
+            addingQuote: "正在添加引用",
+            removingQuote: "正在移除引用",
+            addQuote: "未附原文 · 添加引用",
+            senderQuote: "已引用 {sender} 的原邮件",
+            quoteInBody: "请在正文中核对原文引用",
+            quoteUnavailable: "无法读取原邮件，请重新核对草稿。",
+            quoteEmpty: "原邮件没有可引用的正文。",
+            quoteMismatch: "邮箱保存的引用与草稿不一致，请核对后发送。",
             attachmentItems: "附件",
             send: "发送",
             delete: "删除草稿",
@@ -209,6 +219,16 @@ var cindyMail = (function () {
             subject: "Subject",
             body: "Message",
             quote: "Quoted message",
+            quoteIncluded: "Original message included",
+            quoteOmitted: "Original message not included",
+            addingQuote: "Adding quote",
+            removingQuote: "Removing quote",
+            addQuote: "Original message not included · Add quote",
+            senderQuote: "Original message from {sender} included",
+            quoteInBody: "Check the quoted history in the message body",
+            quoteUnavailable: "Could not read the original message. Check the draft again.",
+            quoteEmpty: "The original message has no quotable body.",
+            quoteMismatch: "The saved quote differs from the draft. Review it before sending.",
             attachmentItems: "Attachments",
             send: "Send",
             delete: "Delete draft",
@@ -290,6 +310,16 @@ var cindyMail = (function () {
         attachmentItems: JSON.stringify(readBack.attachments.map(a => ({ key: a.key, filename: a.filename, bytes: a.bytes, contentId: a.contentId || '', mimeType: a.mimeType, previewUrl: a.previewUrl }))),
       });
       return values;
+    }
+    function hasQuote(fields) {
+      return Boolean(fields?.quote?.trim() || fields?.quoteHtml?.trim());
+    }
+    function quoteParent(readBack) {
+      return readBack.headers['in-reply-to'] || '';
+    }
+    function validQuote(quote) {
+      return quote && typeof quote.quote === 'string' && quote.quote.length <= 16000 &&
+        (!adapter.richText || (typeof quote.quoteHtml === 'string' && quote.quoteHtml.length <= 64000)) && hasQuote(quote);
     }
     function comparable(name, value) {
       if (name !== 'attachmentItems') return (value || '').replace(/\r\n/g, '\n');
@@ -398,6 +428,17 @@ var cindyMail = (function () {
       if (!readBack || readBack.status !== "read_back") return false;
       var editor = readBack.editor;
       const originalValues = editor ? draftValues(readBack) : {};
+      let quoteError;
+      // Only the creating operation can request a repair. Merely opening an
+      // existing unquoted reply must respect removals made in the mailbox.
+      if (!renderOnly && editor && readBack.replyQuoteExpected && !hasQuote(originalValues) &&
+          !editor.quoteInBody && quoteParent(readBack) && adapter.readReplyQuote) {
+        try {
+          const original = await adapter.readReplyQuote({ record: { account: account.accountId, draftId: readBack.draftId }, readBack });
+          if (original !== null && !validQuote(original)) throw new Error('Invalid reply quote');
+          if (original) edits = { ...originalValues, quote: original.quote, ...(adapter.richText ? { quoteHtml: original.quoteHtml } : {}) };
+        } catch (_) { quoteError = copy.quoteUnavailable; note = quoteError; }
+      }
       const formatted = editor && adapter.richText && !renderOnly ? formatMailFields(edits || originalValues, undefined, editor.format) : undefined;
       if (formatted) {
         edits = formatted.fields;
@@ -434,12 +475,25 @@ var cindyMail = (function () {
       // New messages have no quote section. Keep the complete value set internally
       // so hiding an empty quote never changes the draft sent to the worker.
       var values = Object.fromEntries(fields.map((f) => [f.name, f.value]));
-      fields = fields.filter(function (field) {
-        return field.name !== "quote" || field.value;
-      });
       var key = renderOnly ? settledKey : crypto.randomUUID();
       if (!editor || (!editor.editable && !adapter.richText) || fields.some(f => typeof f.value !== 'string' || f.value.length > (f.name.endsWith('Html') ? 64000 : 16000))) return false;
       const activeEdit = mailEdits.get(key);
+      const parent = quoteParent(readBack);
+      const displayed = hasQuote(values);
+      // Keep a reversible edit in memory on this draft only. An external
+      // retarget must never restore a previous parent's content.
+      if (activeEdit && hasQuote(originalValues)) activeEdit.lastQuote =
+        { parent, quote: originalValues.quote, quoteHtml: originalValues.quoteHtml };
+      const previousQuote = activeEdit?.lastQuote?.parent === parent && activeEdit.lastQuote;
+      const canAddQuote = !editor.quoteInBody && !displayed && !hasQuote(originalValues) && (previousQuote || (parent && typeof adapter.readReplyQuote === 'function'));
+      const quoteField = fields.find(f => f.name === 'quote');
+      if (displayed !== hasQuote(originalValues)) quoteField.label = displayed ? copy.addingQuote : copy.removingQuote;
+      else if (displayed) {
+        const sender = editor.quoteSender;
+        quoteField.label = typeof sender === 'string' && sender.length <= 80 && sender.trim() && !/[\r\n]/.test(sender)
+          ? copy.senderQuote.replace('{sender}', () => sender) : copy.quoteIncluded;
+      } else if (parent || previousQuote) quoteField.label = editor.quoteInBody ? copy.quoteInBody : copy.quoteOmitted;
+      else fields = fields.filter(f => f !== quoteField);
       var draft = { accountId: account.accountId, draftId: readBack.draftId, key,
         ...(activeEdit?.error?.stale && !activeEdit.conflictBase ? {} : { baseValues: activeEdit?.conflictBase || originalValues }),
         from: readBack.headers.from || account.accountEmail, fields,
@@ -447,6 +501,7 @@ var cindyMail = (function () {
         ...(readBack.images ? { images: readBack.images } : {}),
         state: unconfirmed ? "unconfirmed" : note === copy.syncing ? "syncing" : note && note !== copy.waiting ? "error" : "draft",
         status: note || copy.saved, sendLabel: copy.send, fromLabel: copy.from,
+        ...(canAddQuote ? { addQuoteLabel: copy.addQuote } : {}),
         ...(typeof adapter.deleteDraft === "function" ? { deleteLabel: copy.delete } : {}) };
       if (!renderOnly)
         await mailRecords(function (records) {
@@ -490,6 +545,8 @@ var cindyMail = (function () {
           savedRevision: 0,
           callId: message.callId,
           readBack: readBack,
+          ...(hasQuote(originalValues) ? { lastQuote: { parent, quote: originalValues.quote, quoteHtml: originalValues.quoteHtml } } : {}),
+          ...(quoteError ? { error: { ok: false, execution: 'not_executed', quote: true, message: quoteError } } : {}),
           ...(formatted?.issue ? { error: { ok: false, execution: 'not_executed', format: true, message: copy[formatted.issue] } } : {}),
         });
       const presented = await cindy.send({ type: "mail-draft-update", callId: message.callId,
@@ -596,6 +653,7 @@ var cindyMail = (function () {
         if (edit.error) return edit.error;
         var result;
         var rebased = false;
+        var quoteRepaired = false;
         do {
           if (adapter.richText) {
             const formatted = formatMailFields(edit.fields, edit.additions, edit.readBack.editor.format);
@@ -751,8 +809,44 @@ var cindyMail = (function () {
               );
             return result;
           }
+          const previousParent = quoteParent(edit.readBack);
+          const clearingQuote = hasQuote(edit.readBack.editor) && !hasQuote(fields);
           edit.readBack = result.data.readBack;
           edit.conflictBase = undefined;
+          const sameParent = previousParent === quoteParent(edit.readBack);
+          // A provider may return a custom quote as part of the body. The
+          // completed write gives us its exact boundary when every byte matches.
+          if (sameParent && hasQuote(fields) && !hasQuote(edit.readBack.editor) &&
+              comparable('body', edit.readBack.editor.body) === comparable('body', fields.body + fields.quote) &&
+              (!adapter.richText || comparable('bodyHtml', edit.readBack.editor.bodyHtml) === comparable('bodyHtml', fields.bodyHtml + fields.quoteHtml))) {
+            edit.readBack = { ...edit.readBack, editor: { ...edit.readBack.editor, body: fields.body, quote: fields.quote,
+              ...(adapter.richText ? { bodyHtml: fields.bodyHtml, quoteHtml: fields.quoteHtml } : {}) } };
+          }
+          const observed = draftValues(edit.readBack);
+          // Competing user edits are handled by the revision loop. Repair only
+          // a confirmed save that dropped the quote from otherwise intact bodies.
+          const lostQuote = hasQuote(fields) && (!sameParent || (fields.quote && !observed.quote) || (fields.quoteHtml && !observed.quoteHtml));
+          if (lostQuote || (clearingQuote && hasQuote(observed))) {
+            record.fingerprint = edit.readBack.fingerprint;
+            record.locator = edit.readBack.locator;
+            record.state = 'draft';
+            await mailRecords(records => { records[key] = record; });
+            if (!quoteRepaired && sameParent && !edit.readBack.editor.quoteInBody && comparable('body', fields.body) === comparable('body', observed.body) &&
+                (!adapter.richText || comparable('bodyHtml', fields.bodyHtml) === comparable('bodyHtml', observed.bodyHtml))) {
+              quoteRepaired = true;
+              edit.additions = (edit.additions || []).filter(a => !additions.includes(a));
+              if (adapter.richText && edit.fields.attachmentItems === fields.attachmentItems) edit.fields.attachmentItems = observed.attachmentItems;
+              continue;
+            }
+            if (edit.revision === revision) {
+              if (lostQuote) edit.lastQuote = sameParent ? { parent: previousParent, quote: fields.quote, quoteHtml: fields.quoteHtml } : undefined;
+              edit.fields = observed;
+              edit.savedRevision = revision;
+            }
+            edit.error = { ok: false, execution: 'not_executed', quote: true, message: (await mailCopy()).quoteMismatch };
+            await showMailDraft({ callId: record.callId, sourceCallId }, selected, edit.readBack, edit.error.message, key, observed, true);
+            return edit.error;
+          }
           if (adapter.richText) {
             edit.additions = (edit.additions || []).filter(a => !additions.includes(a));
             if (edit.fields.attachmentItems === fields.attachmentItems) edit.fields.attachmentItems = draftValues(edit.readBack).attachmentItems;
@@ -925,20 +1019,20 @@ var cindyMail = (function () {
       return promise;
     }
     async function handleMailCard(message) {
-      var match = /^mail:(change|send|continue|cancel|now|attach|image|delete):([a-f0-9-]{36})$/.exec(
+      var match = /^mail:(change|send|continue|cancel|now|attach|image|delete|quote):([a-f0-9-]{36})$/.exec(
         message.actionId || "",
       );
       if (!match || (message.formChange === true) !== (match[1] === "change"))
         return;
       var key = match[2];
       var edit = mailEdits.get(key);
-      if (!edit && ['change', 'send', 'attach', 'image', 'cancel', 'now'].includes(match[1])) {
+      if (!edit && ['change', 'send', 'attach', 'image', 'quote', 'cancel', 'now'].includes(match[1])) {
         await restoreMailDraft(key, message.callId);
         edit = mailEdits.get(key);
       }
       if (edit?.deleting && match[1] !== "delete") return;
       if (
-        ["change", "send", "attach", "image"].includes(match[1]) &&
+        ["change", "send", "attach", "image", "quote"].includes(match[1]) &&
         edit &&
         edit.callId === message.callId &&
         (!message.formValues ||
@@ -952,7 +1046,7 @@ var cindyMail = (function () {
       }
       // Capture before the first await so a following model tool sees the keystroke.
       if (
-        ["change", "send", "attach", "image"].includes(match[1]) &&
+        ["change", "send", "attach", "image", "quote"].includes(match[1]) &&
         edit &&
         edit.callId === message.callId &&
         !edit.sent &&
@@ -977,7 +1071,9 @@ var cindyMail = (function () {
         edit.fields = merged.fields;
         edit.inputFields = incoming;
         edit.revision++;
-        if (!edit.error || edit.error.execution === 'not_executed') edit.error = await conflictError(merged.conflicts);
+        if (!edit.error?.quote || incoming.quote !== base?.quote) {
+          if (!edit.error || edit.error.execution === 'not_executed') edit.error = await conflictError(merged.conflicts);
+        }
       }
       if (['attach', 'image'].includes(match[1]) && adapter.richText && edit && !edit.sent && !edit.sending && message.mailAttachment) {
         cancelMailSend(key);
@@ -1025,8 +1121,41 @@ var cindyMail = (function () {
         }
         return;
       }
+      if (match[1] === 'quote') {
+        if (record.state !== 'draft' || edit.sent || edit.sending || edit.deleting || hasQuote(edit.fields) || edit.readBack.editor.quoteInBody) return;
+        cancelMailSend(key);
+        let lookupNote;
+        await navigator.locks.request('mail-compose:' + key, async () => {
+          if (mailEdits.get(key) !== edit || edit.sent || edit.sending || edit.deleting || edit.error?.stale ||
+              (edit.error && !edit.error.quote) || hasQuote(edit.fields)) return;
+          const before = edit.readBack;
+          const parent = quoteParent(before);
+          try {
+            const original = edit.lastQuote?.parent === parent ? edit.lastQuote :
+              parent && await adapter.readReplyQuote?.({ record: { ...record }, readBack: before });
+            if (mailEdits.get(key) !== edit || edit.deleting || edit.readBack !== before || hasQuote(edit.fields)) return;
+            if (!validQuote(original)) throw new Error(original === null ? copy.quoteEmpty : copy.quoteUnavailable);
+            edit.fields.quote = original.quote;
+            if (adapter.richText) edit.fields.quoteHtml = original.quoteHtml;
+            // The new visible quote is the base for a subsequent explicit removal.
+            edit.inputFields = { ...edit.fields };
+            edit.error = undefined;
+            edit.revision++;
+          } catch (error) {
+            lookupNote = error?.message === copy.quoteEmpty ? copy.quoteEmpty : copy.quoteUnavailable;
+          }
+        });
+        if (mailEdits.get(key) !== edit || edit.deleting) return;
+        if (lookupNote || edit.error) {
+          // The optional fetch did not change the draft. Outstanding typing
+          // still autosaves; an earlier mandatory verification failure stays in force.
+          await mailStatus(record.callId, lookupNote || edit.error.message, '', false, undefined, edit.error ? 'error' : 'draft');
+          if (!edit.error && edit.savedRevision !== edit.revision) scheduleMailSave(key, record.callId, copy.failed);
+          return;
+        }
+      }
       clearTimeout(edit.timer);
-      if (["change", "attach", "image"].includes(match[1])) {
+      if (["change", "attach", "image", "quote"].includes(match[1])) {
         var selected = await adapter.selectAccount(record.account);
         if (selected.ok)
           await showMailDraft(
@@ -1103,7 +1232,7 @@ var cindyMail = (function () {
       if (operation !== "send") cancelMailSend(key);
       // An explicit model update can resolve a conflict using the latest provider
       // version. Reads below expose both versions; automatic sends remain blocked.
-      if (operation === 'update' && (mailEdits.get(key)?.error?.stale || mailEdits.get(key)?.error?.format)) return null;
+      if (operation === 'update' && (mailEdits.get(key)?.error?.stale || mailEdits.get(key)?.error?.format || mailEdits.get(key)?.error?.quote)) return null;
       var result = operation === "send" ? await requestMailSend(key, sourceCallId) :
         operation === "get" &&
         mailEdits.get(key)?.error?.execution === "not_executed"

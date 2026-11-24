@@ -262,7 +262,8 @@ describe('Cindy native provider refresh bridge', () => {
     const end = source.indexOf("pi.registerCommand('cindy-native-provider-refresh'", start);
     const code = source.slice(start, end) + ';globalThis.settings = initialNativeSettings;';
     const sandbox: Record<string, unknown> = {
-      pi: {}, process: { env: { PI_CODING_AGENT_DIR: '/fixture' } },
+      pi: { getSettings: () => { throw new Error('Action methods cannot be called during extension loading'); } },
+      process: { env: { PI_CODING_AGENT_DIR: '/fixture' } },
       path: { join: () => '/fixture/settings.json' }, readFileSync: read,
     };
     runInNewContext(code, sandbox);

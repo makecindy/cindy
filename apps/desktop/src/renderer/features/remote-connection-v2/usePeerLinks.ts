@@ -1,7 +1,7 @@
 /**
- * usePeerLinks —— 远程连接拓扑的「本机已建链对端」快照(路径 / 往返 / 最近业务收发)。
+ * usePeerLinks —— 远程连接拓扑的本机快照(握手状态 / 路径 / 往返 / 最近业务收发)。
  * ---------------------------------------------------------------------------
- * 结构变化(建链 / 断链 / 直连↔中转)由主进程 push 全量快照;往返和业务收发没有事件钩子
+ * 结构变化(握手 / 连通 / 断开 / 直连↔中转)由主进程 push 全量快照;往返和业务收发没有事件钩子
  * (每条消息都推会太吵),页面可见时每 2 秒拉一次:消息开始走后两秒内线上就动起来,
  * 停下后几秒内静止(窗口见 topologyModel.FLOW_WINDOW_MS)。只读本机内存,不发任何帧。
  * 页面不在时不拉、不订阅。每份快照记下取到的时刻(takenAt);takenAt > 0 表示第一份快照已到,
@@ -29,15 +29,20 @@ export function usePeerLinks(active: boolean): PeerLinksState {
       return undefined;
     }
     let alive = true;
+    let pushedRevision = 0;
     const pull = () => {
       if (document.visibilityState !== 'visible') return;
+      const revision = pushedRevision;
       api.getPeerLinks().then(
-        (next) => { if (alive) setSnapshot({ ...next, takenAt: Date.now() }); },
+        (next) => { if (alive && revision === pushedRevision) setSnapshot({ ...next, takenAt: Date.now() }); },
         () => undefined, // 瞬时失败保留上一份;结构变化会再推一次
       );
     };
+    const off = api.onPeerLinksChanged?.((next) => {
+      pushedRevision += 1;
+      if (alive) setSnapshot({ ...next, takenAt: Date.now() });
+    });
     pull();
-    const off = api.onPeerLinksChanged?.((next) => { if (alive) setSnapshot({ ...next, takenAt: Date.now() }); });
     const timer = setInterval(pull, POLL_MS);
     return () => {
       alive = false;

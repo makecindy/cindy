@@ -116,13 +116,22 @@ export interface MobileHomePresentation {
   emptyNoDevice: MobileHomeNoDeviceContext | null;
   emptyTitle: string;
   overview: MobileHomeOverview;
+  /** Pinned shortcuts. In inbox mode these tasks also belong to their project or dialogue. */
   pinned: RemoteSessionListItem[];
   primaryDevice: MobileHomeDeviceFilterItem | null;
   projects: MobileHomeProjectGroup[];
   selectedDeviceId: string | null;
 }
 
+/** Enumerate list items once across the pinned shortcuts, dialogues and projects. */
+export function mobileHomeSessionItems(home: MobileHomePresentation): RemoteSessionListItem[] {
+  const grouped = [...home.chats, ...home.projects.flatMap(project => project.sessions)];
+  return home.pinned.length ? [...home.pinned, ...grouped.filter(item => !item.session.pinnedAt)] : grouped;
+}
+
 export interface MobileHomeOptions {
+  /** Inbox classifies every task in its own project or dialogue, including pinned tasks. */
+  inboxMode?: boolean;
   projectAliases?: ProjectAliasDisplayIndex;
   devices?: readonly MobileHomeDeviceLike[];
   messagePreviewIndex?: ReadonlyMap<string, string>;
@@ -143,6 +152,7 @@ export interface MobileHomeOptions {
 }
 
 export function buildMobileHomePresentation({
+  inboxMode = false,
   projectAliases,
   devices = [],
   messagePreviewIndex,
@@ -199,25 +209,25 @@ export function buildMobileHomePresentation({
     localizer,
   ));
   const pinned = items.filter((item) => !!item.session.pinnedAt);
-  const rest = items.filter((item) => !item.session.pinnedAt);
-  // 同一自动化任务的多次运行折叠成一个组行(与设备详情页 buildRemoteSessionSections 同一套折叠,
-  // 置顶行不参与,口径一致)。首页是多设备聚合列表,scopeKey 按维度隔离分组:
+  const groupedItems = inboxMode ? items : items.filter((item) => !item.session.pinnedAt);
+  // 普通列表折叠同一自动化的多次运行，置顶行不参与。收件箱按每次运行的状态分别归类。
+  // 首页是多设备聚合列表,scopeKey 按维度隔离分组:
   // - chats(dialogue)按展示设备隔离 —— 防止 legacy fallback 键(仅 workingDir + 标题,无
   //   scheduleId)把两台电脑上的同名任务错并成一组;
   // - 项目侧直接用项目分桶键(设备 + 归一化路径,与 buildProjectGroups 同一把键)—— 任务改过
   //   项目目录后 run 分布在多个 workingDir 时各项目内各自成组,原项目不丢行、计数不漂移。
   const chats = groupAutomationListItems(
-    rest.filter((item) => isDialogueSession(item.session)),
+    groupedItems.filter((item) => isDialogueSession(item.session)),
     now,
-    true,
+    !inboxMode,
     (item) => sessionDeviceKey(item.session as MobileHomeSessionLike),
     localizer,
   );
   const projects = buildProjectGroups(
     groupAutomationListItems(
-      rest.filter((item) => !isDialogueSession(item.session)),
+      groupedItems.filter((item) => !isDialogueSession(item.session)),
       now,
-      true,
+      !inboxMode,
       (item) => projectGroupKey(item.session),
       localizer,
     ),

@@ -68,6 +68,7 @@ export function familyLogo(family: MenubarFamily): string {
   if (family === 'kimi') return providerLogo('kimi-coding', 'Kimi Code');
   if (family === 'codex') return logoForKind('openai', 'Codex');
   if (family === 'opencode-go') return providerLogo('opencode-go', 'OpenCode Go');
+  if (family === 'plugin') return monogramLogo('P');
   return logoForKind('xai', 'Grok');
 }
 

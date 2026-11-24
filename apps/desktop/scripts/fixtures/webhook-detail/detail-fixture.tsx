@@ -16,9 +16,14 @@ const schedule: Schedule = {
   webhookTrigger: { endpointId: 'fixture-route', events: ['issues.opened'], source: ctx.case.startsWith('app-')
     ? { preset: 'github-app', repositories: ['makecindy/cindy', 'example/project'] } : { preset: 'github' } },
 };
+if (ctx.case === 'single-pr') {
+  schedule.name = 'PR 合并后通知';
+  schedule.webhookTrigger = undefined;
+  schedule.prTrigger = { url: 'https://github.com/example/project/pull/42', change: 'merged' };
+}
 const runs: ScheduleRun[] = initial ? [] : [{
   id: 'run', scheduleId: schedule.id, status: 'success', firedAt: time, finishedAt: time + 4600,
-  readAt: time + 5000, triggerSource: 'webhook', resultText: '检查完成',
+  readAt: time + 5000, triggerSource: ctx.case === 'single-pr' ? 'pr-status' : 'webhook', resultText: '检查完成',
 }];
 Object.assign(window, { __webhookFixtureRuns: runs });
 

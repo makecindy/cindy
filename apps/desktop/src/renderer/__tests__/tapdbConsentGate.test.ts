@@ -16,15 +16,18 @@ import type { AuthState, AuthStateSource } from '../lib/authService';
 
 const tapdb = vi.hoisted(() => ({
   init: vi.fn(),
+  initInstance: vi.fn(),
   setSuperProperties: vi.fn(),
-  pvEvent: vi.fn(),
+  timeEvent: vi.fn(),
   track: vi.fn(),
+  trackEvent: vi.fn(),
   setUser: vi.fn(),
   logout: vi.fn(),
   optInTracking: vi.fn(),
   optOutTracking: vi.fn(),
 }));
 
+const billingSdk = vi.hoisted(() => ({ setUser: vi.fn(), logout: vi.fn(), setSuperProperties: vi.fn() }));
 const workingStore = vi.hoisted(() => {
   const listeners = new Set<() => void>();
   let snapshot: ReadonlyMap<string, { isRunning: boolean }> = new Map();
@@ -49,7 +52,9 @@ const workingStore = vi.hoisted(() => {
   };
 });
 
-vi.mock('@/vendor/tapdb/tapdb.esm.min.js', () => ({ default: tapdb }));
+vi.mock('@/vendor/tapdb/tapdb.esm.min.js', () => ({
+  default: { ...tapdb, get billingRegistration() { return tapdb.initInstance.mock.calls.length ? billingSdk : undefined; } },
+}));
 vi.mock('@/lib/logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} }),
 }));
@@ -202,6 +207,7 @@ beforeEach(() => {
   visibilityHandlers.length = 0;
   windowHandlers.clear();
   workingStore.reset();
+  Object.values(billingSdk).forEach((fn) => fn.mockReset());
   Object.values(tapdb).forEach((fn) => fn.mockReset());
   vi.spyOn(document, 'addEventListener').mockImplementation(((
     type: string,
@@ -239,7 +245,7 @@ describe('TapDB consent gate', () => {
     await flush();
 
     expect(tapdb.init).not.toHaveBeenCalled();
-    expect(tapdb.pvEvent).not.toHaveBeenCalled();
+    expect(tapdb.trackEvent).not.toHaveBeenCalled();
   });
 
   it('initializes and reports app_start once consent is present at startup', async () => {
@@ -250,7 +256,7 @@ describe('TapDB consent gate', () => {
     await flush();
 
     expect(tapdb.init).toHaveBeenCalledTimes(1);
-    expect(tapdb.pvEvent).toHaveBeenCalledWith({ '#tag': 'app_start' });
+    expect(tapdb.trackEvent).toHaveBeenCalledWith('page_view', { '#tag': 'app_start' });
   });
 
   it('stays silent on auth changes while unconsented', async () => {
@@ -259,10 +265,10 @@ describe('TapDB consent gate', () => {
 
     client.initTapdb(authObserver);
     await flush();
-    authListener?.({ isAuthenticated: true, user: { id: 'user-1' } });
+    authListener?.({ isAuthenticated: true, user: { id: 'user-1', tapdbChargeAlias: 'pay1_' + '1'.repeat(48) } });
 
     expect(tapdb.init).not.toHaveBeenCalled();
-    expect(tapdb.setUser).not.toHaveBeenCalled();
+    expect(billingSdk.setUser).not.toHaveBeenCalled();
   });
 
   it('initializes as soon as the user consents, and binds the already-known user id', async () => {
@@ -272,13 +278,42 @@ describe('TapDB consent gate', () => {
     client.initTapdb(authObserver);
     await flush();
     // 冷启动已登录:auth 事件早于同意到达,userId 必须被记住而不是丢掉。
-    authListener?.({ isAuthenticated: true, user: { id: 'user-1' } });
+    authListener?.({ isAuthenticated: true, user: { id: 'user-1', tapdbChargeAlias: 'pay1_' + '1'.repeat(48) } });
     expect(tapdb.init).not.toHaveBeenCalled();
 
     settingsListener?.(ALLOWED);
 
     expect(tapdb.init).toHaveBeenCalledTimes(1);
-    expect(tapdb.setUser).toHaveBeenCalledWith('user-1');
+    expect(billingSdk.setUser).toHaveBeenCalledWith('pay1_' + '1'.repeat(48));
+  });
+
+  it('clears the legacy account before the first device event and never substitutes an account ID for a missing charge alias', async () => {
+    installElectronApi(ALLOWED);
+    const client = await importClient();
+    client.initTapdb(authObserver);
+    await flush();
+    expect(tapdb.init).toHaveBeenCalledWith(expect.objectContaining({ isInitDeviceLogin: false, persistencePrefix: 'cindy_tapdb_pseudonymous_v1_' }));
+    expect(tapdb.track.mock.calls[0]).toEqual(['device_login']);
+    expect(tapdb.logout.mock.invocationCallOrder[0]).toBeLessThan(tapdb.track.mock.invocationCallOrder[0]!);
+    authListener?.({ isAuthenticated: true, user: { id: 'legacy-member' } });
+    fireWindowEvent('focus');
+    expect(billingSdk.setUser).not.toHaveBeenCalled();
+  });
+
+  it('reports returning accounts with a usage alias independently of payment registration', async () => {
+    installElectronApi(ALLOWED);
+    const client = await importClient();
+    client.initTapdb(authObserver);
+    await flush();
+    const usage = 'use1_' + 'a'.repeat(48);
+    const payment = 'pay1_' + 'b'.repeat(48);
+    authListener?.({ isAuthenticated: true, user: { id: 'original', tapdbUsageAlias: usage, tapdbChargeAlias: payment } });
+    expect(tapdb.setUser.mock.calls).toEqual([[usage]]);
+    expect(billingSdk.setUser.mock.calls).toEqual([[payment]]);
+    expect(tapdb.initInstance).toHaveBeenCalledWith('billingRegistration', expect.objectContaining({
+      persistenceEnabled: true, persistencePrefix: 'cindy_tapdb_billing_v1_', isInitDeviceLogin: false,
+    }));
+    expect(billingSdk.logout.mock.invocationCallOrder.at(-1)).toBeGreaterThan(billingSdk.setUser.mock.invocationCallOrder.at(-1)!);
   });
 
   it('opts out of tracking when the user turns the toggle off', async () => {
@@ -309,6 +344,7 @@ describe('TapDB consent gate', () => {
     expect(tapdb.init).toHaveBeenCalledTimes(1);
     expect(tapdb.optInTracking).toHaveBeenCalled();
     expect(tapdb.setSuperProperties).toHaveBeenCalledWith({
+      '#utm': '{}',
       '#app_version': '9.9.9',
       '#platform': 'darwin',
     });
@@ -328,7 +364,7 @@ describe('TapDB consent gate', () => {
     await flush();
 
     expect(tapdb.init).toHaveBeenCalledWith(
-      expect.objectContaining({ autoTrack: { pageShow: true, pageHide: false } }),
+      expect.objectContaining({ autoTrack: { pageShow: false, pageHide: false } }),
     );
   });
 
@@ -449,11 +485,11 @@ describe('TapDB consent gate', () => {
       throw new Error('localStorage unavailable');
     });
     settingsListener?.({ privacyConsentAccepted: true, analyticsEnabled: false, allowed: false });
-    tapdb.setUser.mockClear();
+    billingSdk.setUser.mockClear();
 
-    authListener?.({ isAuthenticated: true, user: { id: 'user-2' } });
+    authListener?.({ isAuthenticated: true, user: { id: 'user-2', tapdbChargeAlias: 'pay1_' + '2'.repeat(48) } });
 
-    expect(tapdb.setUser).not.toHaveBeenCalled();
+    expect(billingSdk.setUser).not.toHaveBeenCalled();
   });
 
   it('fails closed when the settings read rejects', async () => {
@@ -499,11 +535,11 @@ describe('engagement-driven activity reporting', () => {
 
   it('app_start consumes the throttle window — input right after startup does not double-report', async () => {
     await initAllowed();
-    expect(tapdb.pvEvent).toHaveBeenCalledTimes(1); // app_start
+    expect(tapdb.trackEvent).toHaveBeenCalledTimes(1); // app_start
 
     fireWindowEvent('keydown');
 
-    expect(tapdb.pvEvent).toHaveBeenCalledTimes(1);
+    expect(tapdb.trackEvent).toHaveBeenCalledTimes(1);
   });
 
   it('reports app_engaged at most once per throttle window across rapid inputs', async () => {
@@ -514,13 +550,13 @@ describe('engagement-driven activity reporting', () => {
     fireWindowEvent('keydown');
     fireWindowEvent('pointerdown');
 
-    expect(tapdb.pvEvent).toHaveBeenCalledTimes(2); // app_start + 1 × app_engaged
-    expect(tapdb.pvEvent).toHaveBeenLastCalledWith({ '#tag': 'app_engaged' });
+    expect(tapdb.trackEvent).toHaveBeenCalledTimes(2); // app_start + 1 × app_engaged
+    expect(tapdb.trackEvent).toHaveBeenLastCalledWith('page_view', { '#tag': 'app_engaged' });
 
     vi.advanceTimersByTime(30 * 60 * 1000);
     fireWindowEvent('focus');
 
-    expect(tapdb.pvEvent).toHaveBeenCalledTimes(3);
+    expect(tapdb.trackEvent).toHaveBeenCalledTimes(3);
   });
 
   it('each of focus / keydown / pointerdown can trigger a report', async () => {
@@ -528,9 +564,9 @@ describe('engagement-driven activity reporting', () => {
 
     for (const type of ['focus', 'keydown', 'pointerdown'] as const) {
       vi.advanceTimersByTime(30 * 60 * 1000);
-      const before = tapdb.pvEvent.mock.calls.length;
+      const before = tapdb.trackEvent.mock.calls.length;
       fireWindowEvent(type);
-      expect(tapdb.pvEvent.mock.calls.length).toBe(before + 1);
+      expect(tapdb.trackEvent.mock.calls.length).toBe(before + 1);
     }
   });
 
@@ -538,26 +574,26 @@ describe('engagement-driven activity reporting', () => {
     await initAllowed();
 
     workingStore.setRunning(true);
-    expect(tapdb.pvEvent).toHaveBeenCalledTimes(1); // app_start 已占用首个窗口
+    expect(tapdb.trackEvent).toHaveBeenCalledTimes(1); // app_start 已占用首个窗口
 
     vi.advanceTimersByTime(30 * 60 * 1000);
-    expect(tapdb.pvEvent).toHaveBeenCalledTimes(2);
-    expect(tapdb.pvEvent).toHaveBeenLastCalledWith({ '#tag': 'app_engaged' });
+    expect(tapdb.trackEvent).toHaveBeenCalledTimes(2);
+    expect(tapdb.trackEvent).toHaveBeenLastCalledWith('page_view', { '#tag': 'app_engaged' });
 
     vi.advanceTimersByTime(30 * 60 * 1000);
-    expect(tapdb.pvEvent).toHaveBeenCalledTimes(3);
-    expect(tapdb.pvEvent).toHaveBeenLastCalledWith({ '#tag': 'app_engaged' });
+    expect(tapdb.trackEvent).toHaveBeenCalledTimes(3);
+    expect(tapdb.trackEvent).toHaveBeenLastCalledWith('page_view', { '#tag': 'app_engaged' });
   });
 
   it('starts the rolling report when a session was already working before TapDB initializes', async () => {
     workingStore.setRunning(true);
     await initAllowed();
 
-    expect(tapdb.pvEvent).toHaveBeenCalledTimes(1); // app_start
+    expect(tapdb.trackEvent).toHaveBeenCalledTimes(1); // app_start
     vi.advanceTimersByTime(30 * 60 * 1000);
 
-    expect(tapdb.pvEvent).toHaveBeenCalledTimes(2);
-    expect(tapdb.pvEvent).toHaveBeenLastCalledWith({ '#tag': 'app_engaged' });
+    expect(tapdb.trackEvent).toHaveBeenCalledTimes(2);
+    expect(tapdb.trackEvent).toHaveBeenLastCalledWith('page_view', { '#tag': 'app_engaged' });
   });
 
   it('does not postpone the next report when working progress notifies repeatedly', async () => {
@@ -568,8 +604,8 @@ describe('engagement-driven activity reporting', () => {
     workingStore.setRunning(true); // 模拟 text/tool progress 的高频全局 notify
     vi.advanceTimersByTime(60 * 1000);
 
-    expect(tapdb.pvEvent).toHaveBeenCalledTimes(2);
-    expect(tapdb.pvEvent).toHaveBeenLastCalledWith({ '#tag': 'app_engaged' });
+    expect(tapdb.trackEvent).toHaveBeenCalledTimes(2);
+    expect(tapdb.trackEvent).toHaveBeenLastCalledWith('page_view', { '#tag': 'app_engaged' });
   });
 
   it('serializes aligned working timers across renderer windows', async () => {
@@ -578,7 +614,7 @@ describe('engagement-driven activity reporting', () => {
     // resetModules 模拟独立 renderer 的 module state;TapDB mock、working store 与
     // localStorage 仍按真实同源窗口共享。
     await initAllowed();
-    tapdb.pvEvent.mockClear();
+    tapdb.trackEvent.mockClear();
 
     workingStore.setRunning(true);
     vi.advanceTimersByTime(30 * 60 * 1000);
@@ -586,14 +622,14 @@ describe('engagement-driven activity reporting', () => {
     await flush();
 
     expect(lockRequest).toHaveBeenCalledTimes(2);
-    expect(tapdb.pvEvent).toHaveBeenCalledTimes(1);
-    expect(tapdb.pvEvent).toHaveBeenCalledWith({ '#tag': 'app_engaged' });
+    expect(tapdb.trackEvent).toHaveBeenCalledTimes(1);
+    expect(tapdb.trackEvent).toHaveBeenCalledWith('page_view', { '#tag': 'app_engaged' });
   });
 
   it('drops a queued working report if work stops before the lock is acquired', async () => {
     const lock = installDeferredWebLock();
     await initAllowed();
-    tapdb.pvEvent.mockClear();
+    tapdb.trackEvent.mockClear();
 
     workingStore.setRunning(true);
     vi.advanceTimersByTime(30 * 60 * 1000);
@@ -604,7 +640,7 @@ describe('engagement-driven activity reporting', () => {
     await flush();
     await flush();
 
-    expect(tapdb.pvEvent).not.toHaveBeenCalled();
+    expect(tapdb.trackEvent).not.toHaveBeenCalled();
   });
 
   it('stops the rolling report as soon as no session is working', async () => {
@@ -612,12 +648,12 @@ describe('engagement-driven activity reporting', () => {
     workingStore.setRunning(true);
 
     vi.advanceTimersByTime(30 * 60 * 1000);
-    expect(tapdb.pvEvent).toHaveBeenCalledTimes(2);
+    expect(tapdb.trackEvent).toHaveBeenCalledTimes(2);
 
     workingStore.setRunning(false);
     vi.advanceTimersByTime(60 * 60 * 1000);
 
-    expect(tapdb.pvEvent).toHaveBeenCalledTimes(2);
+    expect(tapdb.trackEvent).toHaveBeenCalledTimes(2);
   });
 
   it('shares one throttle window between working and human input', async () => {
@@ -625,63 +661,77 @@ describe('engagement-driven activity reporting', () => {
     workingStore.setRunning(true);
 
     vi.advanceTimersByTime(30 * 60 * 1000);
-    expect(tapdb.pvEvent).toHaveBeenCalledTimes(2); // working
+    expect(tapdb.trackEvent).toHaveBeenCalledTimes(2); // working
 
     fireWindowEvent('keydown');
-    expect(tapdb.pvEvent).toHaveBeenCalledTimes(2);
+    expect(tapdb.trackEvent).toHaveBeenCalledTimes(2);
 
     vi.advanceTimersByTime(30 * 60 * 1000);
-    expect(tapdb.pvEvent).toHaveBeenCalledTimes(3); // working 继续
+    expect(tapdb.trackEvent).toHaveBeenCalledTimes(3); // working 继续
+  });
+
+  it('attributes the next day to the account on human input even when a background task has already reported activity', async () => {
+    vi.setSystemTime(new Date(2026, 10, 18, 23, 45));
+    await initAllowed();
+    const alias = 'use1_' + 'a'.repeat(48);
+    authListener?.({ isAuthenticated: true, user: { id: 'fixture', tapdbUsageAlias: alias } });
+    workingStore.setRunning(true);
+    tapdb.setUser.mockClear();
+    vi.advanceTimersByTime(31 * 60 * 1000);
+    expect(tapdb.setUser).not.toHaveBeenCalled();
+    fireWindowEvent('keydown');
+    fireWindowEvent('pointerdown');
+    expect(tapdb.setUser.mock.calls).toEqual([[alias]]);
   });
 
   it('sends nothing at local midnight without user input', async () => {
     // 本次改造的核心断言:过夜挂机不再产生活跃事件,0 点尖峰结构性消失。
     vi.setSystemTime(new Date(2026, 6, 28, 23, 59, 0));
     await initAllowed();
-    tapdb.pvEvent.mockClear();
-    tapdb.setUser.mockClear();
+    tapdb.trackEvent.mockClear();
+    billingSdk.setUser.mockClear();
 
     vi.advanceTimersByTime(2 * 60 * 1000); // 23:59 → 次日 00:01,期间无交互
 
-    expect(tapdb.pvEvent).not.toHaveBeenCalled();
-    expect(tapdb.setUser).not.toHaveBeenCalled();
+    expect(tapdb.trackEvent).not.toHaveBeenCalled();
+    expect(billingSdk.setUser).not.toHaveBeenCalled();
   });
 
   it('uses a rolling working timer across midnight instead of firing at 00:00', async () => {
     vi.setSystemTime(new Date(2026, 6, 28, 23, 59, 0));
     await initAllowed();
-    authListener?.({ isAuthenticated: true, user: { id: 'user-1' } });
+    authListener?.({ isAuthenticated: true, user: { id: 'user-1', tapdbChargeAlias: 'pay1_' + '1'.repeat(48) } });
     workingStore.setRunning(true);
-    tapdb.pvEvent.mockClear();
-    tapdb.setUser.mockClear();
+    tapdb.trackEvent.mockClear();
+    billingSdk.setUser.mockClear();
 
     vi.advanceTimersByTime(2 * 60 * 1000); // 00:01
     workingStore.setRunning(true); // 0 点后的 progress notify 也不能绕过滚动窗口
-    expect(tapdb.pvEvent).not.toHaveBeenCalled();
-    expect(tapdb.setUser).not.toHaveBeenCalled();
+    expect(tapdb.trackEvent).not.toHaveBeenCalled();
+    expect(billingSdk.setUser).not.toHaveBeenCalled();
 
     vi.advanceTimersByTime(28 * 60 * 1000); // 00:29,距上次 app_start 30 分钟
-    expect(tapdb.pvEvent).toHaveBeenCalledWith({ '#tag': 'app_engaged' });
-    expect(tapdb.setUser).toHaveBeenCalledTimes(1);
+    expect(tapdb.trackEvent).toHaveBeenCalledWith('page_view', { '#tag': 'app_engaged' });
+    expect(billingSdk.setUser).not.toHaveBeenCalled();
   });
 
-  it('first engagement of a new day re-binds the account, later windows do not', async () => {
+  it('daily activity uses the device without registering the billing alias again', async () => {
     await initAllowed();
-    authListener?.({ isAuthenticated: true, user: { id: 'user-1' } });
-    expect(tapdb.setUser).toHaveBeenCalledTimes(1); // 当天登录时绑定
+    authListener?.({ isAuthenticated: true, user: { id: 'user-1', tapdbChargeAlias: 'pay1_' + '1'.repeat(48) } });
+    expect(billingSdk.setUser).toHaveBeenCalledTimes(1); // 当天登录时绑定
 
-    // 次日 09:00 用户回来:首条交互既发 app_engaged,也重新 setUser(账号 DAU)。
+    // 次日 09:00 用户回来:按设备记录首条交互。
     vi.setSystemTime(new Date(2026, 6, 29, 9, 0, 0));
     fireWindowEvent('pointerdown');
 
-    expect(tapdb.pvEvent).toHaveBeenLastCalledWith({ '#tag': 'app_engaged' });
-    expect(tapdb.setUser).toHaveBeenCalledTimes(2);
+    expect(tapdb.trackEvent).toHaveBeenLastCalledWith('page_view', { '#tag': 'app_engaged' });
+    expect(billingSdk.setUser).toHaveBeenCalledTimes(1);
 
-    // 同日后续窗口只发 pvEvent,不重复 setUser。
+    // 同日后续窗口只发 page_view,不重复 setUser。
     vi.advanceTimersByTime(30 * 60 * 1000);
     fireWindowEvent('keydown');
 
-    expect(tapdb.setUser).toHaveBeenCalledTimes(2);
+    expect(billingSdk.setUser).toHaveBeenCalledTimes(1);
   });
 
   it('reads an existing identity without initializing auth or misreading a later refresh as login', async () => {
@@ -690,16 +740,16 @@ describe('engagement-driven activity reporting', () => {
     installElectronApi(ALLOWED);
     const initialize = vi.fn();
     (window as unknown as { electronAPI: Record<string, unknown> }).electronAPI.authInitialize = initialize;
-    authSeed = { isAuthenticated: true, user: { id: 'user-1' } } as AuthState;
+    authSeed = { isAuthenticated: true, user: { id: 'user-1', tapdbChargeAlias: 'pay1_' + '1'.repeat(48) } } as AuthState;
     const client = await importClient();
     client.initTapdb(authObserver);
     await flush();
-    tapdb.setUser.mockClear();
+    billingSdk.setUser.mockClear();
 
     vi.setSystemTime(new Date(2026, 6, 29, 3, 0, 0));
-    authListener?.({ isAuthenticated: true, user: { id: 'user-1' } });
+    authListener?.({ isAuthenticated: true, user: { id: 'user-1', tapdbChargeAlias: 'pay1_' + '1'.repeat(48) } });
 
-    expect(tapdb.setUser).not.toHaveBeenCalled();
+    expect(billingSdk.setUser).not.toHaveBeenCalled();
     expect(initialize).not.toHaveBeenCalled();
   });
 
@@ -716,15 +766,15 @@ describe('engagement-driven activity reporting', () => {
       const initializing = service.initialize();
       client.initTapdb(service);
       await flush();
-      tapdb.setUser.mockClear();
-      finish({ isAuthenticated: true, user: { id: 'user-1' }, mode: 'cloud' } as AuthState);
+      billingSdk.setUser.mockClear();
+      finish({ isAuthenticated: true, user: { id: 'user-1', tapdbChargeAlias: 'pay1_' + '1'.repeat(48) }, mode: 'cloud' } as AuthState);
       await initializing;
-      expect(tapdb.setUser).not.toHaveBeenCalled();
+      expect(billingSdk.setUser).not.toHaveBeenCalled();
       vi.advanceTimersByTime(30 * 60 * 1_000);
       fireWindowEvent('pointerdown');
-      expect(tapdb.setUser).toHaveBeenLastCalledWith('user-1');
-      authListener?.({ isAuthenticated: true, user: { id: 'user-2' }, mode: 'cloud' });
-      expect(tapdb.setUser).toHaveBeenLastCalledWith('user-2');
+      expect(billingSdk.setUser).toHaveBeenLastCalledWith('pay1_' + '1'.repeat(48));
+      authListener?.({ isAuthenticated: true, user: { id: 'user-2', tapdbChargeAlias: 'pay1_' + '2'.repeat(48) }, mode: 'cloud' });
+      expect(billingSdk.setUser).toHaveBeenLastCalledWith('pay1_' + '2'.repeat(48));
     } finally {
       service.dispose();
     }
@@ -732,51 +782,51 @@ describe('engagement-driven activity reporting', () => {
 
   it('a token-refresh auth broadcast on a new day does not emit setUser (no interaction)', async () => {
     // auth:state-change 也由定时 token 刷新广播:挂机过夜的机器不得凭空产生
-    // 当日账号活跃 —— 跨天重绑只走交互路径(reportActive)。
+    // 当日账号活跃。
     await initAllowed();
-    authListener?.({ isAuthenticated: true, user: { id: 'user-1' } });
-    expect(tapdb.setUser).toHaveBeenCalledTimes(1);
+    authListener?.({ isAuthenticated: true, user: { id: 'user-1', tapdbChargeAlias: 'pay1_' + '1'.repeat(48) } });
+    expect(billingSdk.setUser).toHaveBeenCalledTimes(1);
 
     vi.setSystemTime(new Date(2026, 6, 29, 3, 0, 0));
-    authListener?.({ isAuthenticated: true, user: { id: 'user-1' } });
+    authListener?.({ isAuthenticated: true, user: { id: 'user-1', tapdbChargeAlias: 'pay1_' + '1'.repeat(48) } });
 
-    expect(tapdb.setUser).toHaveBeenCalledTimes(1);
+    expect(billingSdk.setUser).toHaveBeenCalledTimes(1);
   });
 
   it('a window opened before midnight does not swallow the next day’s first interaction', async () => {
-    // 23:55 上报后窗口本该到 00:25 —— 但已换日,00:03 的交互必须放行并补当日 setUser,
+    // 23:55 上报后窗口本该到 00:25 —— 但已换日,00:03 的交互必须放行,
     // 否则「只在次日凌晨窗口内用了一下」的用户从第二天的活跃里整个消失。
     vi.setSystemTime(new Date(2026, 6, 28, 23, 55, 0));
     await initAllowed(); // app_start 消耗窗口至次日 00:25
-    authListener?.({ isAuthenticated: true, user: { id: 'user-1' } });
-    tapdb.pvEvent.mockClear();
-    tapdb.setUser.mockClear();
+    authListener?.({ isAuthenticated: true, user: { id: 'user-1', tapdbChargeAlias: 'pay1_' + '1'.repeat(48) } });
+    tapdb.trackEvent.mockClear();
+    billingSdk.setUser.mockClear();
 
     vi.setSystemTime(new Date(2026, 6, 29, 0, 3, 0));
     fireWindowEvent('keydown');
 
-    expect(tapdb.pvEvent).toHaveBeenCalledWith({ '#tag': 'app_engaged' });
-    expect(tapdb.setUser).toHaveBeenCalledTimes(1);
+    expect(tapdb.trackEvent).toHaveBeenCalledWith('page_view', { '#tag': 'app_engaged' });
+    expect(billingSdk.setUser).not.toHaveBeenCalled();
   });
 
   it('a recent report from another window suppresses this window’s app_engaged (shared throttle)', async () => {
     // detached 侧栏窗口与主窗口各有一份 module 态:共享节流经 localStorage 生效,
     // 本窗口静默让位,窗口过期后恢复正常上报。
     await initAllowed();
-    tapdb.pvEvent.mockClear();
+    tapdb.trackEvent.mockClear();
 
     vi.advanceTimersByTime(30 * 60 * 1000); // 本窗口内存窗口已过期
     window.localStorage.setItem('tapdb.lastEngagedReportAt', String(Date.now() - 30 * 1000));
     fireWindowEvent('keydown');
 
-    expect(tapdb.pvEvent).not.toHaveBeenCalled();
+    expect(tapdb.trackEvent).not.toHaveBeenCalled();
 
     // 让位后本窗口对齐共享窗口终点(还剩 29.5 分钟),而不是自己再吃满 30 分钟 ——
     // 共享窗口一过就能上报,交替交互不会把间隔拉到近 60 分钟。
     vi.advanceTimersByTime(29 * 60 * 1000 + 31 * 1000);
     fireWindowEvent('keydown');
 
-    expect(tapdb.pvEvent).toHaveBeenCalledWith({ '#tag': 'app_engaged' });
+    expect(tapdb.trackEvent).toHaveBeenCalledWith('page_view', { '#tag': 'app_engaged' });
   });
 
   it('ignores input while unconsented, then reports normally after consent', async () => {
@@ -786,22 +836,22 @@ describe('engagement-driven activity reporting', () => {
     await flush();
 
     fireWindowEvent('keydown');
-    expect(tapdb.pvEvent).not.toHaveBeenCalled();
+    expect(tapdb.trackEvent).not.toHaveBeenCalled();
 
     // 未放行期间的交互不消耗节流窗口:同意后立刻能发 app_start。
     settingsListener?.(ALLOWED);
-    expect(tapdb.pvEvent).toHaveBeenCalledWith({ '#tag': 'app_start' });
+    expect(tapdb.trackEvent).toHaveBeenCalledWith('page_view', { '#tag': 'app_start' });
   });
 
   it('stops engagement reports immediately after opt-out', async () => {
     await initAllowed();
     workingStore.setRunning(true);
     settingsListener?.({ privacyConsentAccepted: true, analyticsEnabled: false, allowed: false });
-    tapdb.pvEvent.mockClear();
+    tapdb.trackEvent.mockClear();
 
     vi.advanceTimersByTime(60 * 60 * 1000);
     fireWindowEvent('keydown');
 
-    expect(tapdb.pvEvent).not.toHaveBeenCalled();
+    expect(tapdb.trackEvent).not.toHaveBeenCalled();
   });
 });

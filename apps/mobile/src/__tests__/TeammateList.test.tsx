@@ -38,11 +38,19 @@ vi.mock('@/theme', async () => {
   return { ...tokens, useThemedStyles: (factory: (value: typeof colors) => unknown) => factory(colors), useTheme: () => ({ colors }) };
 });
 vi.mock('@/session/WorkingStatusText', () => ({ WorkingStatusText: ({ text }: any) => el('span', null, text) }));
-vi.mock('@/device-link/remoteResourceCache', () => ({ isRemoteResourceUnread: (_owner: string, _device: string, id: string) => h.unread.has(id) }));
+vi.mock('@/device-link/remoteResourceCache', () => ({ isRemoteResourceUnread: (_owner: string, _device: string, id: string) => h.unread.has(id),
+  subscribeRemoteResourceCache: () => () => {},
+}));
+vi.mock('@/chat/cloudCompanion', () => ({ CLOUD_ROW_REVISION: 'cloud', cloudActorForRow: () => null, cloudCompanionRows: (items: unknown) => items }));
+vi.mock('@/session/useTeammateNavigation', () => ({ useTeammateNavigation: () => ({ openTeammate: vi.fn() }) }));
+vi.mock('@/session/SwipeableSessionRow', () => ({ SwipeableSessionRow: ({ children }: any) => children }));
+vi.mock('@/session/TaskSnoozeSheet', () => ({ TaskSnoozeSheet: () => null }));
+vi.mock('@/session/MountOnFirstOpen', () => ({ MountOnFirstOpen: () => null }));
 vi.mock('@/session/sessionList', () => ({ formatRemoteSessionSidebarTime: () => '' }));
 vi.mock('@/utils/useMinuteNow', () => ({ useMinuteNow: () => Date.now() }));
-import { useTeammateEntries, useTeammateRowRenderer } from '../session/TeammateList';
+import { teammateRowState, useTeammateEntries, useTeammateRowRenderer } from '../session/TeammateList';
 import * as markdown from '../session/messageMarkdown';
+import { InboxTeammateRow, InboxTeammatesProvider, useInboxTeammates } from '../session/InboxTeammates';
 /** The task home section's rows: the same entries and row renderer, without the section chrome. */
 function Rows(props: Parameters<typeof useTeammateRowRenderer>[0]) {
   const entries = useTeammateEntries(props.items, props.groups?.items);
@@ -249,4 +257,36 @@ it('updates waiting, unread and connection states without reparsing the reply', 
   expect(node.textContent).toContain('devices.resources.hostOffline · Last reply');
   expect(node.textContent).not.toContain('devices.companions.awaiting');
   expect(parse).not.toHaveBeenCalled();
+});
+
+// Inbox (2026-11-20 user decision): the row and the inbox share this state, but the inbox asks for
+// it quietly. Without that an offline computer's teammates would all be listed as needing the user.
+it('does not turn an unreachable computer into a request when asked quietly, yet keeps an unread reply', () => {
+  const state = (quiet: boolean) => teammateRowState(item as never, { online: false, connected: false, quiet,
+    activities: new Map(), userId: 'owner', language: 'en' }).status;
+  expect(state(false)).toBe('error');
+  expect(state(true)).toBe('idle');
+  h.unread.add('bot');
+  expect(state(true)).toBe('unread');
+});
+
+// Unit regression #11623: the pure state test above did not cover the inbox's renderer wiring.
+// Render the real hook and row for an offline, unread non-cloud companion: its status dot and
+// accessible label must describe unread, matching classification, regardless of cloud support.
+function InboxRows({ cloudSupported }: { cloudSupported: boolean }) {
+  const inbox = useInboxTeammates({
+    context: { shared: { roster: { items: [item], isOnline: () => false } } } as any,
+    cloud: { supported: cloudSupported, actors: [], deviceNames: {} } as any,
+    enabled: true, query: '', push: vi.fn(), registry: { closeOpenRow: vi.fn() } as any,
+  });
+  return el(InboxTeammatesProvider, { value: inbox.value },
+    el(InboxTeammateRow, { rowKey: item.key, section: 'inbox', last: true }));
+}
+it.each([false, true])('renders an offline unread inbox companion consistently with cloud support %s', async cloudSupported => {
+  h.unread.add('bot');
+  await act(async () => root.render(el(InboxRows, { cloudSupported })));
+  expect(node.querySelector('[data-testid="teammate.status.unread"]')).not.toBeNull();
+  expect(node.querySelector('[data-testid="teammate.status.error"]')).toBeNull();
+  expect(node.querySelector('button')?.getAttribute('aria-label')).not.toContain('devices.companions.error');
+  expect(node.querySelector('button')?.getAttribute('aria-label')).toContain('devices.companions.unread');
 });

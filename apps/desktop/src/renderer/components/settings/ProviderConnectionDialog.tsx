@@ -430,19 +430,19 @@ function PresetDropdown({
           if (event.isComposing || event.keyCode === 229) event.preventDefault();
         }}
         className={cn(
-          // z-[10001]: 宿主弹窗 overlay 是 z-[10000],默认 z-50 会被盖住。
           // 底/hover 用 cmd-palette 菜单 token 对——settings-menu-bg-hover 在深色下
           // 与卡片底同色,hover 会看不出来。
-          'z-[10001] max-h-[280px] w-[var(--radix-popover-trigger-width)] overflow-y-auto rounded-xl p-2',
+          'max-h-[280px] w-[var(--radix-popover-trigger-width)] overflow-y-auto rounded-xl p-2',
           'border border-[var(--cmd-palette-border)]',
           'bg-[var(--cmd-palette-bg)] shadow-[shadow:var(--shadow-menu)]',
         )}
       >
-        <div className="flex flex-col gap-[2px]" role="listbox" aria-label={label}>
+        <div data-settings-search-action="List the provider presets that can fill the custom provider draft" className="flex flex-col gap-0.5" role="listbox" aria-label={label}>
           {presets.map((p) => {
             const isSelected = appliedPreset === p.id;
             return (
               <button
+                data-settings-search-action="Apply this provider preset to the custom provider draft"
                 key={p.id}
                 type="button"
                 role="option"
@@ -453,7 +453,7 @@ function PresetDropdown({
                 }}
                 className={cn(
                   // 菜单项 hover 不加 transition——渐变会让高亮拖尾跟不上指针,菜单应瞬时切换
-                  'flex w-full items-center justify-between rounded-[8px] px-3 py-2 text-left',
+                  'flex w-full items-center justify-between rounded-lg px-3 py-2 text-left',
                   'hover:bg-[var(--cmd-palette-item-hover)]',
                   isSelected && 'bg-[var(--cmd-palette-item-hover)]',
                 )}
@@ -1891,11 +1891,13 @@ export function ProviderConnectionDialog({
         modalities: latest?.modalities ?? m.modalities,
         officialDocs: latest?.officialDocs ?? m.officialDocs,
         discoveredMetadata: m.discoveredMetadata ?? latest?.discoveredMetadata,
-        discoveredCost: m.discoveredCost ?? latest?.discoveredCost,
+        discoveredCost: m.discoveredCost,
         discoveredSource: m.discoveredSource,
         discoverySnapshotId: m.discoverySnapshotId,
         opaqueModelId: m.opaqueModelId || latest?.opaqueModelId,
         nameExplicit: latest?.nameExplicit ?? m.nameExplicit,
+        // Keep the Settings-refresh listing marker (#11298); a picker save is not a new listing.
+        ...(latest?.listedUpstream ? { listedUpstream: true as const } : {}),
         ...(interfaceId ? { interfaceId } : {}),
         ...(api ? { api } : {}),
         ...(picker.agent === 'pi' && piApi ? { piApi } : {}),
@@ -1927,6 +1929,7 @@ export function ProviderConnectionDialog({
           discoveredSource: m.discoveredSource,
           discoverySnapshotId: m.discoverySnapshotId,
           opaqueModelId: m.opaqueModelId,
+          ...(m.listedUpstream ? { listedUpstream: true as const } : {}),
           nameExplicit: m.nameExplicit,
           ...(m.interfaceId ? { interfaceId: m.interfaceId } : {}),
           ...(m.api ? { api: m.api } : {}),
@@ -2052,6 +2055,7 @@ export function ProviderConnectionDialog({
           discoverySnapshotId: m.discoverySnapshotId,
           opaqueModelId: m.opaqueModelId,
           nameExplicit: m.nameExplicit,
+          ...(m.listedUpstream ? { listedUpstream: true as const } : {}),
           ...(m.interfaceId ? { interfaceId: m.interfaceId } : {}),
           ...(m.api ? { api: m.api } : {}),
           ...(a === 'pi' && m.piApi ? { piApi: m.piApi } : {}),
@@ -2437,7 +2441,7 @@ export function ProviderConnectionDialog({
       <Dialog.Portal>
         <Dialog.Overlay
           data-custom-provider-dialog-scrim="true"
-          className="modal-scrim fixed inset-0 z-[10000]"
+          className="modal-scrim fixed inset-0 z-modal"
           style={WINDOW_DRAG_STYLE}
         />
       <Dialog.Content
@@ -2480,7 +2484,7 @@ export function ProviderConnectionDialog({
           }
         }}
         className={cn(
-          'modal-panel fixed inset-0 z-[10000] m-auto flex h-fit max-h-[88vh] w-[min(600px,calc(100vw-32px))] flex-col outline-none',
+          'modal-panel fixed inset-0 z-modal m-auto flex h-fit max-h-[88vh] w-[min(600px,calc(100vw-32px))] flex-col outline-none',
           '[&_button:focus-visible]:outline-none [&_button:focus-visible]:ring-2 [&_button:focus-visible]:ring-[var(--focus-ring)]',
         )}
       >
@@ -2531,7 +2535,7 @@ export function ProviderConnectionDialog({
           )}
 
           {/* 显示名称（共享） */}
-          <div className="flex flex-col gap-[7px]">
+          <div className="flex flex-col gap-1.5">
             <FormField
               id={fieldId('name')}
               label={t('settings.providers.custom.fields.name')}
@@ -2586,7 +2590,7 @@ export function ProviderConnectionDialog({
                 <span className="text-12 leading-snug text-[var(--text-tertiary)]">
                   {t('settings.providers.custom.authMode.oauthHelp')}
                 </span>
-                <div className="flex flex-col gap-[7px]">
+                <div className="flex flex-col gap-1.5">
                   <FieldLabel>{t('settings.providers.custom.authMode.flowLabel')}</FieldLabel>
                   <SegmentedControl
                     aria-label={t('settings.providers.custom.authMode.flowLabel')}
@@ -2613,7 +2617,7 @@ export function ProviderConnectionDialog({
                     ['scopes', 'openid offline_access ...'],
                   ] as const
                 ).map(([field, ph]) => (
-                  <div key={field} className="flex flex-col gap-[7px]">
+                  <div key={field} className="flex flex-col gap-1.5">
                     <FormField
                       id={fieldId(`oauth:${field}`)}
                       label={t(`settings.providers.custom.authMode.fields.${field}`)}
@@ -2686,14 +2690,14 @@ export function ProviderConnectionDialog({
 
           {/* 当前 Tab 的独立配置面板 */}
           <div
-            className="flex flex-col gap-4 rounded-[12px] p-4"
+            className="flex flex-col gap-4 rounded-xl p-4"
             style={{
               backgroundColor: 'var(--surface)',
               border: '1px solid var(--settings-theme-card-border)',
             }}
           >
             {/* 基础 URL */}
-            <div className="flex flex-col gap-[7px]">
+            <div className="flex flex-col gap-1.5">
               <FormField
                 id={fieldId(`${activeTab}:baseUrl`)}
                 label={t('settings.providers.custom.fields.baseUrl')}
@@ -2732,7 +2736,7 @@ export function ProviderConnectionDialog({
 
             {/* API 密钥（OAuth 形态隐藏——鉴权走 Runner 的 Bearer，不收集 key） */}
             {(simpleAdding || authMode === 'apiKey') && (
-              <div className="flex flex-col gap-[7px]">
+              <div className="flex flex-col gap-1.5">
                 <FormField
                   id={fieldId(`${activeTab}:apiKey`)}
                   label={t('settings.providers.custom.fields.apiKey')}
@@ -2757,6 +2761,7 @@ export function ProviderConnectionDialog({
                   {(control) => (
                     <SettingsTextInput
                       {...control}
+                      data-settings-search-action="Enter the API key of the current provider draft"
                       key={activeTab}
                       surface="ivory"
                       size={simpleAdding ? 'md' : undefined}
@@ -2768,7 +2773,6 @@ export function ProviderConnectionDialog({
                       placeholder={keyPlaceholder}
                       mono={!simpleAdding}
                       secret
-                      secretTipContentClassName="z-[10001]"
                     />
                   )}
                 </FormField>
@@ -2884,7 +2888,7 @@ export function ProviderConnectionDialog({
             {showAdvanced && (
               <div id={fieldId('advanced-fields')} className="flex flex-col gap-4">
             {(editing || !onDetected) && !templateBound && (
-              <div className="flex flex-col gap-[7px]">
+              <div className="flex flex-col gap-1.5">
                 <FieldLabel>{t('settings.providers.custom.fields.wireProtocol')}</FieldLabel>
                 <div className="flex flex-wrap gap-1.5">
                   {CUSTOM_PROVIDER_CODEX_WIRE_PROTOCOLS.map((option) => (
@@ -2939,7 +2943,7 @@ export function ProviderConnectionDialog({
 
             {/* 精确推理路径：给非标准兼容端点使用；留空仍按所选协议推导。 */}
             {(editing || !onDetected) && !templateBound && activeTab !== 'pi' && f.wireProtocol !== 'google-generative-ai' && (
-              <div className="flex flex-col gap-[7px]">
+              <div className="flex flex-col gap-1.5">
                 <FormField
                   id={fieldId(`${activeTab}:requestPath`)}
                   label={t('settings.providers.custom.fields.requestPath')}
@@ -3041,7 +3045,6 @@ export function ProviderConnectionDialog({
                       </div>
                       <Tip
                         text={t('settings.providers.custom.fields.removeRow')}
-                        contentClassName="z-[10001]"
                       >
                         <Button
                           variant="secondary"
@@ -3285,7 +3288,7 @@ export function ProviderConnectionDialog({
                             onFocusOutside={(event) => {
                               if (imageGenerationHelpPinned) event.preventDefault();
                             }}
-                            className="z-[10001] w-72 max-w-[calc(100vw-2rem)] rounded-xl border-[var(--border-default)] bg-[var(--surface-elevated)] p-3 text-12 text-[var(--text-secondary)]"
+                            className="w-72 max-w-[calc(100vw-2rem)] rounded-xl border-[var(--border-default)] bg-[var(--surface-elevated)] p-3 text-12 text-[var(--text-secondary)]"
                           >
                             {renderImageGenerationHelpContent()}
                           </PopoverContent>
@@ -3440,7 +3443,7 @@ export function ProviderConnectionDialog({
           }}
         >
           <Dialog.Portal>
-            <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10002]" />
+            <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal-nested" />
             <Dialog.Content
               aria-describedby="custom-provider-image-generation-reload-description"
               onPointerDownOutside={(event) => event.preventDefault()}
@@ -3456,7 +3459,7 @@ export function ProviderConnectionDialog({
                 if (saving) event.preventDefault();
               }}
               className={cn(
-                'modal-panel fixed inset-0 z-[10002] m-auto flex h-fit max-h-[85vh] w-[520px] max-w-[calc(100vw-2rem)] flex-col p-4 outline-none',
+                'modal-panel fixed inset-0 z-modal-nested m-auto flex h-fit max-h-[85vh] w-[520px] max-w-[calc(100vw-2rem)] flex-col p-4 outline-none',
               )}
             >
               <button
@@ -3494,8 +3497,8 @@ export function ProviderConnectionDialog({
                 >
                   {t('settings.providers.custom.imageGenerationReload.cancel')}
                 </Button>
-                <Button
-                  variant="secondary"
+                <Button data-settings-search-action="Interrupt running image generation and save this provider"
+                  variant="primary"
                   size="lg"
                   tone="danger-solid"
                   loading={saving}
@@ -3559,7 +3562,7 @@ export function ModelPickerOverlay({
       <Dialog.Portal>
         <Dialog.Overlay
           className={cn(
-            'modal-scrim fixed inset-0 z-[10001]',
+            'modal-scrim fixed inset-0 z-modal-raised',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         />
@@ -3574,7 +3577,7 @@ export function ModelPickerOverlay({
             event.preventDefault();
             (
               searchInputRef.current ??
-              contentRef.current?.querySelector<HTMLButtonElement>('[role="checkbox"]') ??
+              contentRef.current?.querySelector<HTMLInputElement>('input[type="checkbox"]') ??
               primaryButtonRef.current
             )?.focus();
           }}
@@ -3583,7 +3586,7 @@ export function ModelPickerOverlay({
             returnFocusRef.current?.focus();
           }}
           className={cn(
-            'modal-panel fixed left-1/2 top-1/2 z-[10001] -translate-x-1/2 -translate-y-1/2',
+            'modal-panel fixed left-1/2 top-1/2 z-modal-raised -translate-x-1/2 -translate-y-1/2',
             'flex max-h-[72vh] w-[460px] max-w-[calc(100vw-2rem)] flex-col outline-none',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
@@ -3611,12 +3614,13 @@ export function ModelPickerOverlay({
           <div className="flex flex-col gap-2 px-5 pt-2">
             {picker.models.length > 8 && (
               <input
+                data-settings-search-action="Filter the fetched model list in the custom provider dialog"
                 ref={searchInputRef}
                 value={picker.query}
                 onChange={(e) => onChange({ ...picker, query: e.target.value })}
                 placeholder={t('settings.providers.custom.fetch.searchPlaceholder')}
                 className={cn(
-                  'h-[34px] w-full rounded-[9px] px-[11px] text-13 outline-none transition-colors',
+                  'h-[34px] w-full rounded-full px-3.5 text-13 outline-none transition-colors',
                   'text-[var(--settings-input-text)] placeholder:text-[var(--settings-input-placeholder)]',
                   'border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] focus:border-[var(--settings-input-border-focus)]',
                   'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
@@ -3643,24 +3647,15 @@ export function ModelPickerOverlay({
               filtered.map((m) => {
                 const isSelected = picker.selected.has(m.id);
                 return (
-                  <button
+                  <label
                     key={m.id}
-                    type="button"
-                    role="checkbox"
-                    aria-checked={isSelected}
-                    onClick={() => toggle(m.id)}
-                    className="flex w-full items-center gap-2.5 rounded-[8px] px-3 py-2 text-left hover:bg-[var(--settings-menu-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                    className="flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2 text-left hover:bg-[var(--settings-menu-bg-hover)]"
                   >
-                    <span
-                      className={cn(
-                        'flex h-4 w-4 shrink-0 items-center justify-center rounded-[4px] border transition-colors',
-                        isSelected
-                          ? 'border-[var(--settings-input-border-focus)] bg-[var(--surface-elevated)] text-[var(--settings-section-title)]'
-                          : 'border-[var(--settings-input-border)] text-transparent',
-                      )}
-                    >
-                      <Check size={12} strokeWidth={3} />
-                    </span>
+                    <Checkbox
+                      data-settings-search-action="Choose whether this fetched model is added to the custom provider draft"
+                      checked={isSelected}
+                      onChange={() => toggle(m.id)}
+                    />
                     <span className="min-w-0 flex-1 truncate text-13 text-[var(--settings-input-text)]">
                       {m.name}
                     </span>
@@ -3669,7 +3664,7 @@ export function ModelPickerOverlay({
                         {m.id}
                       </span>
                     )}
-                  </button>
+                  </label>
                 );
               })
             )}

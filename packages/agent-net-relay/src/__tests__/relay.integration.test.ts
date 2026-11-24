@@ -19,7 +19,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
 import { createSocket } from 'node:dgram';
-import { once } from 'node:events';
+import { on, once } from 'node:events';
 import type { AddressInfo, Socket } from 'node:net';
 import { createServer } from 'node:http';
 import { Readable } from 'node:stream';
@@ -560,6 +560,49 @@ describe('independent V2 relay', () => {
     await a.request('DELETE', '/devices/second');
     await expect(a.request('DELETE', '/devices/first')).rejects.toMatchObject({ code: 'OWNER_CANNOT_BE_REMOVED' });
   });
+  // Bug (2026-11-23): a device removed in Cindy could never enroll on the official network again, with no way back.
+  // Now it rejoins when it asks to itself; without asking it stays out, and its certificate from before the removal stays void.
+  // Minimal input: enroll, remove, enroll again without and then with `rejoin`.
+  it('lets a removed device rejoin only when it asks to and keeps its certificate from before the removal void', async () => {
+    const root = generateKeyPairSync('ed25519').privateKey, rootPublicKey = publicBytes(root);
+    const identities: Record<string, Identity> = { first: generateIdentity('first'), phone: generateIdentity('phone') };
+    let signedAt: number | undefined; // a replica whose clock runs behind
+    const f = await fixture({ mode: 'official', bootstrap: undefined, enroll: async (req) => {
+      const identity = identities[String(req.headers['x-test-device'])];
+      const issueWithSerial = (serial?: string) => issueCertificate(root, { networkId: 'account:one', subject: 'account:one', identity, role: 'owner', now: signedAt, serial });
+      const certificate = issueWithSerial();
+      return { certificate, rootPublicKey, networkId: certificate.networkId, name: 'Account network', deviceName: identity.deviceId, issueWithSerial };
+    } });
+    const enroll = async (device: string, body: Record<string, unknown> = {}) => {
+      const response = await fetch(f.relay.url + API + '/enroll', { method: 'POST', headers: { 'x-test-device': device }, body: JSON.stringify(body) });
+      return { status: response.status, body: await response.json() as { certificate: ReturnType<typeof issueCertificate>; error?: { code: string } } };
+    };
+    const first = new AgentNetClient(f.relay.url, identities.first, (await enroll('first')).body.certificate, rootPublicKey);
+    const beforeCertificate = (await enroll('phone')).body.certificate;
+    const before = new AgentNetClient(f.relay.url, identities.phone, beforeCertificate, rootPublicKey);
+    await first.request('PATCH', '/devices/phone', { name: 'My phone' });
+    await first.request('DELETE', '/devices/phone');
+    await expect(before.directory()).rejects.toMatchObject({ code: 'DEVICE_REVOKED' });
+    expect(await enroll('phone')).toMatchObject({ status: 403, body: { error: { code: 'DEVICE_REENROLLMENT_REQUIRES_APPROVAL' } } });
+    expect((await first.directory()).map((d) => d.certificate.deviceId)).toEqual(['first']);
+    // Review (Greptile P1): a rejoin certificate not newer than the one held before the removal is refused, so
+    // notBefore never lets that pre-removal certificate pass again.
+    signedAt = beforeCertificate.issuedAt - 1;
+    expect(await enroll('phone', { rejoin: true })).toMatchObject({ status: 409, body: { error: { code: 'CERTIFICATE_NOT_NEWER' } } });
+    await expect(before.directory()).rejects.toMatchObject({ code: 'DEVICE_REVOKED' });
+    signedAt = undefined;
+
+    await new Promise((resolve) => setTimeout(resolve, 5)); // a strictly newer certificate
+    const rejoined = await enroll('phone', { rejoin: true });
+    expect(rejoined.status).toBe(200);
+    const after = new AgentNetClient(f.relay.url, identities.phone, rejoined.body.certificate, rootPublicKey);
+    expect((await after.directory()).map((d) => d.certificate.deviceId).sort()).toEqual(['first', 'phone']);
+    expect((await first.directory()).find((d) => d.certificate.deviceId === 'phone')?.name).toBe('My phone');
+    await expect(before.directory()).rejects.toMatchObject({ code: 'DEVICE_REVOKED' });
+    // Asking to rejoin does not let new keys take over a device that was never removed.
+    identities.first = generateIdentity('first');
+    expect(await enroll('first', { rejoin: true })).toMatchObject({ status: 403, body: { error: { code: 'DEVICE_REENROLLMENT_REQUIRES_APPROVAL' } } });
+  });
   // §5.5: another account gets its own network on a shared relay. Only the relay owner admits or revokes it,
   // and neither side reaches the other's devices. Minimal input: one invite, one approval, one revocation.
   it('admits another account into an isolated network only after relay-owner approval and revokes it', async () => {
@@ -613,10 +656,26 @@ describe('independent V2 relay', () => {
     expect((await f.client.request<{ tenants: unknown[] }>('GET', '/tenants')).tenants).toEqual([
       expect.objectContaining({ networkId, accountName: 'Bob', devices: 2 })]);
     const revived = new AgentNetClient(f.relay.url, guest, request.bootstrap.ownerCertificate, guestRootKey);
+    // #11276: extend the real tenant revocation case with one share per network.
+    // The persisted private book must lose the revoked tenant without affecting the other network.
+    const createPrivateTask = async (client: AgentNetClient) => {
+      const target = API + '/private-sharing/shared-tasks';
+      const body = JSON.stringify({ sessionId: 'tenant-task', title: 'Tenant task' });
+      const response = await fetch(f.relay.url + target, { method: 'POST', headers: {
+        'content-type': 'application/json', 'x-agent-net-authorization': client.header('POST', target, body),
+      }, body });
+      expect(response.status).toBe(200);
+      return (await response.json() as { sharedTaskId: string }).sharedTaskId;
+    };
+    const retainedTask = await createPrivateTask(f.client);
+    await createPrivateTask(revived);
     const uplink = await revived.connect(); f.uplinks.push(uplink);
     const closed = once(uplink, 'close');
     await f.client.request('DELETE', '/tenants/' + encodeURIComponent(networkId));
     expect(await closed).toEqual([4410]);
+    expect(JSON.parse(await readFile(file, 'utf8')).privateSharing).toMatchObject({
+      tasks: [{ sharedTaskId: retainedTask }], bindings: [{ networkId: f.certificate.networkId }],
+    });
     await expect(revived.directory()).rejects.toMatchObject({ code: 'NETWORK_UNKNOWN' });
     expect((await f.client.request<{ tenants: unknown[] }>('GET', '/tenants')).tenants).toEqual([]);
     await expect(f.client.request('DELETE', '/tenants/' + encodeURIComponent(f.certificate.networkId))).rejects.toMatchObject({ code: 'NOT_FOUND' });
@@ -801,6 +860,32 @@ describe('independent V2 relay', () => {
     await vi.waitFor(() => expect(wsTags).toEqual([1, 2, 3, 4, 10, 11, 13]));
     expect(member.downs().map((down) => down.datagram[0]).sort()).toEqual([5, 6, 7]);
     expect(elsewhere.downs()).toEqual([]);
+  });
+
+  // Integration: a phone must be able to verify the authenticated WebSocket
+  // independently of any peer. Previously any non-presence control closed it.
+  it('answers the mobile relay probe on the authenticated socket', async () => {
+    const f = await fixture();
+    const ws = new WebSocket(f.relay.url.replace(/^http/, 'ws') + API + '/ws', {
+      headers: { authorization: authorization(f.owner, f.certificate, 'GET', API + '/ws') },
+    });
+    cleanups.push(() => { ws.terminate(); });
+    const messages = on(ws, 'message', { signal: AbortSignal.timeout(3_000) });
+    try {
+      const { value: [hello] } = await messages.next();
+      expect(JSON.parse(hello.toString())).toMatchObject({ type: 'hello', relayProbe: true });
+      ws.send('{"type":"relay-probe"}');
+      // The relay can broadcast directory updates on the same socket before replying.
+      for await (const [data] of messages) {
+        const frame = JSON.parse(data.toString());
+        if (frame.type === 'directory') continue;
+        expect(frame).toEqual({ type: 'relay-pong' });
+        return;
+      }
+      throw new Error('Relay message stream ended before relay-pong');
+    } finally {
+      await messages.return?.();
+    }
   });
 
   // 2026-11-17 review: UDP credentials are a reusable secret. On an owner-pinned private relay over plain http (the

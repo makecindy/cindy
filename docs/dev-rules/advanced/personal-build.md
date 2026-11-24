@@ -863,24 +863,27 @@ is forwarded explicitly to Terminal and stale inherited values are cleared for p
 Process discovery binds the physical executable to its installation receipt and business
 checkout; a changed location must not make a live instance invisible or another checkout ready.
 
-Continue using the personal launcher to supply the selected business release and its interface
-server. The fixed runtime is not a standalone packaged business app; double-click-only cold
+Continue using the personal launcher to supply the selected business release and its verified
+interface assets. Supervised signed-runtime launches use the candidate's prebuilt `.vite` files;
+ordinary development launches still use the interface development server. The fixed runtime is
+not a standalone packaged business app; double-click-only cold
 startup without the personal launcher is not implemented. Automatic switching stays opt-in;
 preparation never authorizes a restart or enables it. Moving from an ad-hoc shell to a developer
 identity can require macOS permission approval once; signature verification does not prove
 privacy permission or remote login works. This is local signing, not notarized public distribution.
 
-The supervisor and dev server share one Terminal window. It passes live stdin and
-`--reuse-terminal` to `desktop-restart-runner.mjs`; coordinator output still goes to the
-generation's `console.log`. The repository wrapper writes dev output directly to that input
-terminal, using one `script` PTY with the existing bounded `apps/desktop/logs/dev-terminal.log`
-drain. It does not open another Terminal window. Missing terminal input fails before stopping
-anything; ordinary headless developer launches retain their existing new-window behavior.
-Do not add another detached PTY or pipe PTY output through the supervisor: a blocked/lost
-consumer can leave Electron alive after Forge/Vite exits and produce a white window.
+The supervisor passes live stdin and `--reuse-terminal` to the runner and writes coordinator
+output to the generation's `console.log`. With redirected output, the fixed shared app runs its
+launch runner in a separate Terminal tab. The isolated smoke can reuse the caller's terminal and
+its environment. Both paths use a single `script` PTY with a bounded
+`apps/desktop/logs/dev-terminal.log` drain. Keep the launch runner's terminal open while the
+app is running. A failed or cancelled generation cannot start the fixed app after a late build.
 A nonzero wrapper exit immediately fails acceptance even if a main PID remains.
-A successful wrapper exit means readiness only, not the end of the running app. The interface
-still uses the development server; prebuilt static UI delivery is not part of this change.
+A successful wrapper exit means readiness only, not the end of the running app. For supervised
+prebuilt launches, Forge disables `VitePlugin` and the main window loads the verified local page;
+there is no interface development server to inspect. Ordinary development retains `VitePlugin`
+and its server. See [the Forge selection](../../../apps/desktop/forge.config.ts) and
+[interface verification](../../../scripts/personal-build/interface-assets.mjs).
 
 
 Manual shutdown retains the observed original PID until the OS reports it gone, in addition to
@@ -906,8 +909,9 @@ The personal runtime also seals the same English privacy usage strings as the Fo
 resources when the declaration is missing: without `NSLocalNetworkUsageDescription` the personal
 app and every agent, SSH or scheduled child process it is responsible for receive `EHOSTUNREACH`
 ("No route to host") even for the LAN gateway (2026-11). An already installed runtime gets the
-declaration only from the next personal build; afterwards check System Settings → Privacy &
-Security → Local Network for the personal app.
+declaration only from the next personal build. macOS does not ask again for an app it already
+refused silently, so the app now detects the denial itself and offers to open System Settings →
+Privacy & Security → Local Network (see `remote-and-mobile-adaptation.md`).
 
 Mobile debug recording includes non-secret push registration stages, realm, app variant, APNs
 environment and numeric HTTP failure status. It never records the native token or authorization
@@ -918,8 +922,9 @@ and the target phone before calling delivery successful.
 
 ## 个人版交接与故障验收（2026-11-10）
 
-这套流程面向具备源码、GitHub 登录与本机签名环境的贡献者；目前仍运行签名外壳加源码
-开发服务，不是面向普通用户的独立分发包，也不承诺升级后自动继承 macOS 授权。
+这套流程面向具备源码、GitHub 登录与本机签名环境的贡献者；受监督的签名运行时加载
+候选源码预构建的本地产物，普通开发启动仍使用开发服务。它不是面向普通用户的独立
+分发包，也不承诺升级后自动继承 macOS 授权。
 
 - 每次新的升级请求重新 `prepare`，冻结 main、全部选中 PR（含草稿）的最新 SHA、插件仓
   与本地补丁。用户等待确认期间不暗中改候选。确认前可运行 `freshness --config FILE
@@ -937,7 +942,7 @@ and the target phone before calling delivery successful.
   应用。也可显式用 `supervisor-release --config FILE --expected-pid PID` 单独交出监督。
   旧版监督程序不支持此协议时明确阻断，不通过 kill/删锁兼容；升级工具自身仍需独立验收。
   交出锁后旧进程仍持有 runner 子进程引用，终端在 runner 退出前不可关闭或复用；
-  释放监督权不等于释放界面服务所在的终端。
+  释放监督权不等于释放启动器所在的终端；普通开发路径的界面服务也仍依赖该终端。
 - 签名要求变化在退出旧版前阻断。证书续期/身份迁移尚无自动命令，须单独准备和审核，
   不接受静默换证或放宽校验。遗留安装事务可显式 `install-recover --config FILE --report
   CHECKED_BUILD_REPORT`，要求监督锁可取得、应用与 runner 均已停止、报告和事务的 runtime
@@ -992,6 +997,12 @@ PR 并冻结新 SHA，不能修改已验收候选来冒充新构建。
 停止旧应用前调用候选的真实 `assertSharedDevMigrationPolicy(..., ['--shared'])`；实际启动时
 再次检查。策略拒绝就保持旧应用运行，不靠 sandbox 验收绕过共享迁移规则。
 
+使用固定安装路径时，两个手动命令还会用正式切换的参数和重定向输出读取候选启动器的策略。
+候选缺少冷启动保护会在旧版退出前被拒绝。macOS 受监督的源码启动给编译到首个窗口最多
+10 分钟，首次出现窗口后给登录和数据库就绪另计 3 分钟。明确的启动错误立即上报；
+监督程序仍受配置的总启动时限约束（默认 15 分钟）。正式切换时若输出已重定向，
+开发服务使用独立的 Terminal 标签页，保持该标签页打开直至应用退出。
+
 数据库变化使用独立、一次性的计划：
 
 ```sh
@@ -1015,7 +1026,13 @@ node scripts/personal-build.mjs manual-check --config FILE --report BUILD_REPORT
 本地例外的策略及清单不得混入通用分发，下一轮不得沿用不同迁移树的批准。
 
 `automatic/activation-events.jsonl` 保留迁移和启动阶段及原始失败。启动前失败只有在
-未尝试数据库升级时才能沿用安全恢复；尝试过迁移即保持 blocked。
+未尝试数据库升级时才能沿用安全恢复；迁移完成后，若首次启动未就绪且失败进程及其启动器已经退出，可重试同一候选一次。
+重试前只读核对备份收据、数据库文件身份、迁移历史和 SQLite 完整性，记录
+`retrying-startup`。第二次失败、迁移不完整或观察期健康检查失败均保持 blocked。
+
+使用签名运行时的个人版在旧窗口运行期间构建主进程、预加载脚本和界面。隔离启动后记录
+`.vite` 的内容摘要。切换前和新进程启动前再次校验摘要，Forge 直接读取本地产物。
+隔离验收和正式观察期都要求当代进程打开预期本地页面、React 挂载并有实际内容。
 `reconcile-running --config FILE --app REPAIRED_CHECKOUT --expected-pid PID --out NEW_RECEIPT`
 只处理原失败 checkout 中启动策略及批准记录的修复：其它代码/数据实现变化拒绝。
 它持有监督锁，以只读连接核对账号库、真实进程身份和至少两分钟连续心跳后备份并更新

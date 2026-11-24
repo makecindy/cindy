@@ -14,6 +14,8 @@ import {
 } from '@/device-link/providerShareLinkIntent';
 import { clearRelayJoinIntent, getPendingRelayJoinIntent } from '@/device-link/relayJoinIntent';
 import { redirectSystemPath } from '../../app/+native-intent';
+import { sharedTaskGuestPeer, sharedTaskHostPeer } from '@cindy/device-link';
+import { buildMobileSessionDeepLink } from '@/session/sessionLinks';
 import { closeChatInvite, getChatInviteIntent, openManualChatInvite, setManualChatInviteLink } from '@/chat/chatInviteIntent';
 import { closeGiftCard, getGiftCardIntent } from '@/gift-card/giftCardIntent';
 
@@ -39,6 +41,12 @@ beforeEach(() => { vi.useFakeTimers(); clearSharedTaskInvitationIntent(); clearP
 afterEach(() => { clearSharedTaskInvitationIntent(); clearProviderShareLinkIntent(); clearRelayJoinIntent(); clearChatInvite(); clearGiftCard(); vi.useRealTimers(); });
 
 describe('mobile native deep-link redirects', () => {
+  it.each(['cindy', 'cindycn', 'cindydev'])('opens a ready device in the %s app', scheme => {
+    for (const initial of [true, false]) {
+      expect(redirectSystemPath({ path: scheme + '://devices/guest-42', initial })).toBe('/devices/guest-42');
+    }
+  });
+
   // 契约：礼品卡兑换码等同于余额，原生入口必须在交给路由前把它收进内存。此前没有任何用例
   // 覆盖 gift 链接；单元层即可验证（一条原生 URL，无网络、存储或原生运行时）。
   it.each([true, false])('receives gift card links without routing their redeem code (initial=%s)', initial => {
@@ -165,6 +173,72 @@ describe('mobile native deep-link redirects', () => {
     invalidateMobileAuthOwnerForSwitch();
     expect(getPendingSharedTaskInvitationIntent()).toBeNull();
   });
+
+  // #8205: the production native entry receives singular session links, while
+  // Expo's page route is plural and uses the normalized query names.
+  describe('session task links', () => {
+    it.each([true, false])('routes canonical and legacy links with their device and message target (initial=%s)', initial => {
+      for (const path of [
+        'cindy://session/s-123?device=host-7&message=msg-9&source=history#inbox',
+        'cindycn://session/s-123?device=host-7&message=msg-9&source=history#inbox',
+        'xdt-maker://session/s-123?device=host-7&message=msg-9&source=history#inbox',
+        '/session/s-123?device=host-7&message=msg-9&source=history#inbox',
+      ]) {
+        expect(redirectSystemPath({ path, initial })).toBe(
+          `/sessions/s-123?deviceId=host-7&focusClientId=msg-9${initial ? '' : `&focusRequestKey=${Date.now()}`}&source=history#inbox`,
+        );
+      }
+    });
+
+    it('preserves canonical query names over legacy aliases', () => {
+      expect(redirectSystemPath({
+        path: 'cindy://session/s-123?device=legacy&deviceId=canonical&message=old&focusClientId=current',
+        initial: false,
+      })).toBe('/sessions/s-123?deviceId=canonical&focusClientId=current');
+    });
+
+    it('keeps the validated path session when a query repeats the route key', () => {
+      expect(redirectSystemPath({
+        path: 'cindy://session/s-123?sessionId=other&source=history',
+        initial: false,
+      })).toBe('/sessions/s-123?source=history');
+    });
+
+    it.each([true, false])('keeps invalid singular session links out of an unmatched route (initial=%s)', initial => {
+      for (const path of ['/session/', '/session/%E0%A4%A', '/session/%2F', '/session/a/b', '/session/.hidden', '/session/a%20b', '/session/' + 'a'.repeat(129)]) {
+        expect(redirectSystemPath({ path, initial })).toBe(initial ? '/' : null);
+      }
+    });
+
+    it('does not treat an unrelated scheme as a Cindy session link', () => {
+      const path = 'evil://session/s-123?device=host-7&message=msg-9';
+      expect(redirectSystemPath({ path, initial: false })).toBe(path);
+    });
+
+    it('drops malformed query pairs without forwarding replacement characters', () => {
+      expect(redirectSystemPath({
+        path: 'cindy://session/s-123?device=%E0%A4%A&message=msg-9',
+        initial: false,
+      })).toBe(`/sessions/s-123?focusClientId=msg-9&focusRequestKey=${Date.now()}`);
+    });
+
+    it('keeps guest shared-task links on the original route contract', () => {
+      const peer = sharedTaskGuestPeer('task', 'member', 'host-7');
+      const path = `cindy://session/task?device=${encodeURIComponent(peer)}`;
+      expect(redirectSystemPath({ path, initial: false })).toBe(path);
+    });
+  });
+
+  // Unit through Expo's cold/warm entry. A copied guest link must open the scoped task screen.
+  it('opens an already joined task from the copied link without creating an invitation', () => {
+    const peer = sharedTaskHostPeer('share', 'host');
+    const link = buildMobileSessionDeepLink('task', { deviceId: peer });
+    const expected = '/sessions/task?deviceId=' + encodeURIComponent(peer);
+    expect(redirectSystemPath({ path: link, initial: true })).toBe(expected);
+    expect(redirectSystemPath({ path: link.replace('cindy:/', ''), initial: false })).toBe(expected);
+    expect(getPendingSharedTaskInvitationIntent()).toBeNull();
+  });
+
   it('handles a warm path and expires an unclaimed invitation', () => {
     redirectSystemPath({ path: incoming.replace('cindy:/', ''), initial: false });
     expect(getPendingSharedTaskInvitationIntent()).not.toBeNull();

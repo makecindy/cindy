@@ -30,6 +30,19 @@ export default {
       const buttons = [...document.querySelectorAll('iframe')].flatMap(f => [...f.contentDocument.querySelectorAll('[data-ghost-task-archive]')]);
       return buttons.length === 2 && buttons.every(b => (b.style.display !== 'none') === expected);
     }, allMerged);
+    // The second plugin snapshot was saved open. Once its live PR merges, both the
+    // existing header and footer must match the title bar in either theme.
+    if (allMerged) {
+      const frame = page.frames().filter(f => f !== page.mainFrame())[1];
+      const tile = frame.locator('[data-ghost-width="full"] > div:first-child > div:first-child');
+      assert.equal(await tile.locator('svg.lucide-git-merge').count(), 1);
+      const merged = await ui.t('chat.ghostCall.prStatus.merged');
+      const label = frame.getByText(merged, { exact: true });
+      const mergedColor = await label.evaluate(el => getComputedStyle(el).color);
+      assert.equal(await tile.evaluate(el => getComputedStyle(el).color), mergedColor);
+      const passedCheck = frame.locator('[data-ghost-pr-status] .lucide-check');
+      assert.notEqual(await passedCheck.evaluate(el => getComputedStyle(el).color), mergedColor);
+    }
     const hints = await page.evaluate(() => [...document.querySelectorAll('iframe')].reduce((n, f) => n + f.contentDocument.querySelectorAll('[data-x-auto-archive-hint]').length, 0));
     assert.equal(hints, allMerged ? 2 : 0);
     if (ui.data.cancel) {

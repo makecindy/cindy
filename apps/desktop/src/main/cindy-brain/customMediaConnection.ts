@@ -1,6 +1,41 @@
 import { isLoopbackProviderUrl, type AgentKind, type MediaCapability, type Provider, type ProviderMediaModel, type ProviderVideoApi } from '@cindy/model-providers';
 import { withProviderAppAttribution } from '../maker-host/provider-app-attribution.js';
 import { supportsMediaCapability } from '../cindy-media/mediaCapabilities.js';
+import { createHash } from 'node:crypto';
+import type { MediaGuideTarget } from '../cindy-media/localGuideStore.js';
+
+export function isCustomMediaGuideProvider(provider: Provider): boolean {
+  return provider.source === 'user' && !provider.auth.native && ['apiKey', 'none'].includes(provider.auth.method);
+}
+
+/** Native media belongs to its provider account, not a chat runtime. Keep one
+ * canonical key in the existing store; custom HTTP connections retain their keys. */
+export function mediaGuideTarget(provider: Provider | undefined, target: MediaGuideTarget): MediaGuideTarget {
+  return provider && !isCustomMediaGuideProvider(provider) ? { ...target, agent: 'pi' } : target;
+}
+
+export function mediaGuideModel(provider: Provider | undefined, target: MediaGuideTarget) {
+  if (!provider || provider.id === 'xd') return undefined;
+  const declared = provider.models[target.agent]?.find(model => model.id === target.modelId);
+  if (isCustomMediaGuideProvider(provider)) return declared;
+  const image = provider.imageModels?.find(model => model.id === target.modelId);
+  const video = provider.videoModels?.find(model => model.id === target.modelId);
+  const model = image ?? video;
+  return model ? { ...model, mode: image ? 'image_generation' as const : 'video_generation' as const,
+    modalities: model.modalities ?? { input: ['text', 'image'], output: [image ? 'image' : 'video'] } } : declared;
+}
+
+export function mediaGuideScope(provider: Provider | undefined, target: MediaGuideTarget): string | null {
+  const model = mediaGuideModel(provider, target);
+  if (!provider || !model || !['image_generation', 'video_generation'].includes(model.mode ?? '')) return null;
+  if (!isCustomMediaGuideProvider(provider))
+    return createHash('sha256').update(JSON.stringify(['native-media', provider.id, model.id, provider.auth])).digest('hex');
+  const route = provider.routing[target.agent];
+  const declared = provider.models[target.agent]?.find(candidate => candidate.id === target.modelId);
+  if (!route) return null;
+  return createHash('sha256').update(JSON.stringify([target, declared?.route?.baseUrl ?? route.upstream,
+    route.authStrategy, declared?.route?.wireProtocol ?? route.wireProtocol])).digest('hex');
+}
 
 export interface CustomMediaConnection { agent: AgentKind; baseUrl: string; headers: Record<string, string>; videoApi?: ProviderVideoApi; }
 export interface CustomMediaConnectionOptions { getProvider(): Provider | undefined; readApiKey(agent: AgentKind): string | null; isOwnerBoundaryPending(): boolean; }

@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import { classifyCodexError } from '../../../../../../packages/maker-core/src/agents/codex/translator.js';
+import { botGroupRuntimeFailureCode } from '../botGroupRuntimeFailure.js';
+import { classifyTurnOverload, classifyTurnUsageLimit } from '../../goal-host/usageLimit.js';
 
 import {
   INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS,
@@ -29,6 +32,26 @@ describe('runtime fallback rebuild ownership', () => {
 // 判定单测的核心是**白名单收紧**:自动重试一个确定性失败(认证过期、协议错)会反复
 // 烧额度并反复报错,所以只有识别得了的"上游把 turn 打断了"才允许自愈。
 describe('isInterruptedTurnError', () => {
+  // #8309 / unit: the real translator feeds ordinary host and goal classifiers.
+  // Existing tests inject reason/status directly and miss nested diagnostics.
+  it('keeps nested 529 exhaustion out of host and goal recovery', () => {
+    const data = classifyCodexError({ message: 'stream disconnected before completion',
+      codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 529 } } }).data;
+    expect(data.reason).toBe('UPSTREAM_OVERLOADED');
+    expect(isInterruptedTurnError(data)).toBe(false);
+    // A terminal snapshot consumer can omit codexErrorInfo; reason must suffice.
+    expect(isInterruptedTurnError({ message: data.message, reason: typeof data.reason === 'string' ? data.reason : undefined })).toBe(false);
+    expect(botGroupRuntimeFailureCode(data)).toBe('UPSTREAM_OVERLOADED');
+    expect(classifyTurnOverload(data)).toBe(false);
+    expect(classifyTurnUsageLimit(data)).toBe(false);
+  });
+
+  // #11484 unit: a definitive account denial must not replay the same input even
+  // if the preserved upstream explanation also contains transport vocabulary.
+  it('does not retry an explicitly denied upstream account', () => {
+    expect(isInterruptedTurnError({ reason: 'account_access_denied', message: 'connection failed',
+      codexErrorInfo: 'httpConnectionFailed' })).toBe(false);
+  });
   const availabilityError = "Error Code null: Service temporarily unavailable. The model's availability is currently degraded.";
 
   it('recovers code-less service availability errors and opaque HTTP 503 errors', () => {

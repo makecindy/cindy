@@ -359,6 +359,17 @@ export function WorkspacePrefsEditor({
       <PrefsField label={t('settings.tina.prefs.modelLabel')} className="flex-1 basis-[200px]">
         <ModelSelector
           remoteAgent={routeDevices.devices && { devices: routeDevices.devices, selectedDeviceId: agentDeviceId }}
+          // 字段上的模型名 / 来源图标按已存路由所在的目录解析(另一台电脑或分享的供应商)。
+          deviceId={agentDeviceId ?? undefined}
+          agentDevice={
+            agentDeviceId
+              ? {
+                  deviceId: agentDeviceId,
+                  name:
+                    routeDevices.devices?.find((device) => device.deviceId === agentDeviceId)?.name ?? null,
+                }
+              : null
+          }
           fastModeConfigurable={false}
           unifiedAgents={pickerAgents}
           onUnifiedSelect={({ engine, modelId, providerId, effort, agentDevice }) => state.applyPatch(
@@ -371,6 +382,7 @@ export function WorkspacePrefsEditor({
           effort={eff.effort.id ?? ''}
           vendorKey={vendorKey}
           triggerVariant="field"
+          fieldPanelWidth="readable"
           popoverSide="bottom"
           maxVisibleModelRows={maxVisibleModelRows}
           dense

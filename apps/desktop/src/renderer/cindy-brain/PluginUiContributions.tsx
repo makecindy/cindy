@@ -293,14 +293,14 @@ function EntryControl({ entry, sessionId, clientId, active, appearance }: { entr
   </button>;
   if (action.kind === 'status') return <span className={header ? 'max-w-48 shrink-0 truncate text-12 text-[var(--text-secondary)]' : 'text-12 text-[var(--text-secondary)]'} title={controlTitle}>{title}</span>;
   if (action.kind === 'select') return <Select label={title} value={state?.value ?? value} options={action.options ?? []}
-    disabled={pending || state?.disabled} onValueChange={next => void run(next)} className="h-7 max-w-48 text-12" />;
+    disabled={pending || state?.disabled} onValueChange={next => void run(next)} size="inline" className="max-w-48 text-12" />;
   if (action.presentation === 'popover' && action.view) return <Popover open={open && active} onOpenChange={setOpen}>
     <PopoverTrigger asChild><Button variant="secondary" tone="quiet" size="sm" disabled={state?.disabled}
       className={header ? 'max-w-48' : undefined} title={controlTitle}>{label}</Button></PopoverTrigger>
     <PopoverContent align="start" side={action.position === 'composer.header' || action.position === 'composer.toolbar' || action.position === 'statusbar' ? 'top' : 'bottom'}
       aria-label={title} className="w-[min(26rem,calc(100vw-2rem))] max-h-[var(--radix-popover-content-available-height)] overflow-y-auto p-2">
       {open && active && <Suspense fallback={<Spinner size={16} />}><PluginUiView chrome="panel" ghost={entry.ghost} viewId={action.view}
-        sessionId={sessionId} input={action.arguments} onUnavailable={() => setOpen(false)} /></Suspense>}
+        sessionId={sessionId} composerPlacement={JSON.stringify([action.id, clientId])} input={action.arguments} onUnavailable={() => setOpen(false)} /></Suspense>}
     </PopoverContent>
   </Popover>;
   return <Button variant="secondary" tone="quiet" size="sm" disabled={pending || state?.disabled} title={controlTitle}
@@ -363,9 +363,9 @@ function PluginUiSidebarSection({ entry, sessionId }: { entry: PluginUiEntry; se
       {expanded ? <ChevronDown size={13} className="shrink-0" /> : <ChevronRight size={13} className="shrink-0" />}
       <span className="truncate">{title}</span>
     </button>
-    <SectionCollapse collapsed={!expanded}>
-      {expanded && visible && available && <Suspense fallback={<Spinner size={16} />}><PluginUiView chrome="panel" ghost={entry.ghost}
-        viewId={view!.id} sessionId={view!.scope === 'task' ? sessionId : null} input={entry.contribution.arguments} /></Suspense>}
+    <SectionCollapse collapsed={!expanded} inert={!expanded}>
+      {visible && available && <Suspense fallback={<Spinner size={16} />}><PluginUiView chrome="panel" sizing="sidebar-section" ghost={entry.ghost}
+        viewId={view!.id} composerPlacement={JSON.stringify([entry.contribution.id])} sessionId={view!.scope === 'task' ? sessionId : null} input={entry.contribution.arguments} /></Suspense>}
     </SectionCollapse>
   </div>;
 }
@@ -374,7 +374,7 @@ function PluginUiSidebarSection({ entry, sessionId }: { entry: PluginUiEntry; se
 export function PluginUiBody({ children, position, ...target }: Target & { children: ReactNode; position: 'message.body' | 'tool.body' }) {
   const entries = useEntries(position, target);
   if (!entries.length || !target.sessionId) return <>{children}</>;
-  return <PluginUiBodyChoice entries={entries} sessionId={target.sessionId} context={target.context}>{children}</PluginUiBodyChoice>;
+  return <PluginUiBodyChoice entries={entries} sessionId={target.sessionId} clientId={target.clientId} context={target.context}>{children}</PluginUiBodyChoice>;
 }
 
 /** Return the original element itself when the list has no candidate for this body. */
@@ -382,20 +382,20 @@ export function renderPluginUiBody(options: (Target & { position: 'message.body'
   return options ? <PluginUiBody {...options}>{children}</PluginUiBody> : children;
 }
 
-function PluginUiBodyChoice({ children, entries, sessionId, context }: {
-  children: ReactNode; entries: readonly PluginUiEntry[]; sessionId: string; context?: Target['context'];
+function PluginUiBodyChoice({ children, entries, sessionId, clientId, context }: {
+  children: ReactNode; entries: readonly PluginUiEntry[]; sessionId: string; clientId?: string; context?: Target['context'];
 }) {
   const { t } = useTranslation();
   const [selected, setSelected] = useState('original');
   const entry = entries.find(entry => `${entry.instanceId}:${entry.contribution.id}` === selected);
   return <>
     <div className="mb-1 flex min-w-0 items-center gap-1">
-      <Select label={t('pluginUi.display')} value={entry ? selected : 'original'} className="h-7 max-w-56 text-12"
+      <Select label={t('pluginUi.display')} value={entry ? selected : 'original'} size="inline" className="max-w-56 text-12"
         options={[{ value: 'original', label: t('pluginUi.original') }, ...entries.map(entry => ({
           value: `${entry.instanceId}:${entry.contribution.id}`, label: `${entry.contribution.title} · ${entry.ghost.manifest.name}`,
         }))]} onValueChange={setSelected} />
     </div>
     {entry?.contribution.view ? <Suspense fallback={children}><PluginUiView ghost={entry.ghost} viewId={entry.contribution.view}
-      sessionId={sessionId} input={entry.contribution.arguments} context={context} onUnavailable={() => setSelected('original')} /></Suspense> : children}
+      sessionId={sessionId} composerPlacement={JSON.stringify([entry.contribution.id, clientId])} input={entry.contribution.arguments} context={context} onUnavailable={() => setSelected('original')} /></Suspense> : children}
   </>;
 }

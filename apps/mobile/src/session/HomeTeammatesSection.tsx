@@ -61,7 +61,7 @@ export function useHomeTeammatesSectionContext() {
   return useMemo(() => ({ navigation, route, shared }), [navigation, route, shared]);
 }
 
-export function HomeTeammatesSection({ context, active, refreshKey, visible, query, showFooter, push, runDisclosure, prepareDisclosure }: {
+export function HomeTeammatesSection({ context, active, refreshKey, visible, query, showCollapsedAvatars, showFooter, push, runDisclosure, prepareDisclosure }: {
   context: ReturnType<typeof useHomeTeammatesSectionContext>;
   /** The home is the screen in front. */
   active: boolean;
@@ -73,6 +73,7 @@ export function HomeTeammatesSection({ context, active, refreshKey, visible, que
   query: string;
   /** Full-width hairline under the section, unless the next block draws its own top line. */
   showFooter: boolean;
+  showCollapsedAvatars: boolean;
   /** Embedded lists close their modal drawer before dispatching the route. */
   push?: ReturnType<typeof useGuardedPush>;
   runDisclosure(apply: () => void): void;
@@ -81,14 +82,14 @@ export function HomeTeammatesSection({ context, active, refreshKey, visible, que
   const { navigation, route, shared } = context;
   if (!shared) return null;
   return <NavigationContext.Provider value={navigation}><NavigationRouteContext.Provider value={route}>
-    <SectionContent shared={shared} active={active} refreshKey={refreshKey} visible={visible} query={query} showFooter={showFooter}
+    <SectionContent shared={shared} active={active} refreshKey={refreshKey} visible={visible} query={query} showCollapsedAvatars={showCollapsedAvatars} showFooter={showFooter}
       push={push} runDisclosure={runDisclosure} prepareDisclosure={prepareDisclosure} />
   </NavigationRouteContext.Provider></NavigationContext.Provider>;
 }
 
-function SectionContent({ shared, active, refreshKey, visible, query, showFooter, push: hostPush, runDisclosure, prepareDisclosure }: {
+function SectionContent({ shared, active, refreshKey, visible, query, showCollapsedAvatars, showFooter, push: hostPush, runDisclosure, prepareDisclosure }: {
   shared: NonNullable<ReturnType<typeof useHomeRoster>>;
-  active: boolean; refreshKey: number; visible: boolean; query: string; showFooter: boolean;
+  active: boolean; refreshKey: number; visible: boolean; query: string; showFooter: boolean; showCollapsedAvatars: boolean;
   push?: ReturnType<typeof useGuardedPush>;
   runDisclosure(apply: () => void): void; prepareDisclosure(): void;
 }) {
@@ -130,7 +131,7 @@ function SectionContent({ shared, active, refreshKey, visible, query, showFooter
   const stored = local?.owner === owner ? local.collapsed : navigation.teammatesCollapsed;
   // Search results are always rows; the stored fold returns with the search cleared.
   const collapsed = stored && !search;
-  const headerOnly = collapsed && !navigation.showCollapsedTeammateAvatars;
+  const headerOnly = collapsed && !showCollapsedAvatars;
   const { unread, attention } = useHeaderAttention(entries, headerOnly, roster.isOnline);
   const [showAll, setShowAll] = useRetainedHomeState(getHomeViewSession(), 'teammatesShowAll', false);
   const setTeammatesCollapsed = navigation.setTeammatesCollapsed;
@@ -358,8 +359,8 @@ function sameHosts(a: readonly RemoteResourceHostTarget[], b: readonly RemoteRes
 }
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
-  header: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surface },
-  headerToggle: { flex: 1 },
+  header: { flexDirection: 'row', alignItems: 'center' },
+  headerToggle: { flex: 1, backgroundColor: 'transparent' },
   headerTitle: { flex: 0, flexShrink: 1 },
   count: { flex: 1 },
   // 44 target whose glyph sits on the row's 16pt right edge (36 + hitSlop 4 each side).

@@ -11,7 +11,7 @@
  * 的 5 秒轮询补上；用户主动断链同理。
  */
 
-import type { PeerLinks } from './peerLinks.js';
+import type { PeerLinks } from '@cindy/agent-net';
 
 import type { DeviceLinkPeerLinksSnapshot } from '../../shared/deviceLinkIpc';
 
@@ -33,16 +33,24 @@ export interface PeerLinksPushScheduler {
 const DEFAULT_DEBOUNCE_MS = 250;
 
 /**
- * 不含 rttMs 的结构 key：同一组 (deviceId, path, open) 且本机主连接的传输(Agent-Net / Device Link)不变，
- * 视为同一拓扑。主连接换了传输时对端可能一个没变，也要马上推，中间那台电脑的连接方式才不会晚一拍。
+ * 按设备、路径、控制链路、实际协议和中转走 UDP 还是 WebSocket 比较拓扑，RTT 留给页面采样。
  */
 export function peerLinksStructureKey(snapshot: DeviceLinkPeerLinksSnapshot): string {
-  const relayProtocol = snapshot.relayProtocol ?? '-';
+  const relayProtocol = `${snapshot.relayProtocol ?? '-'}|${snapshot.relayTransport ?? '-'}`;
   const links = snapshot.links
-    .map((link) => `${link.deviceId}|${link.path}|${link.open ? 1 : 0}`)
+    .map((link) => `${link.deviceId}|${link.path}|${link.open ? 1 : 0}|${link.encrypted ?? '-'}`)
     .sort()
     .join('\n');
-  return `${relayProtocol}\n${links}`;
+  const routes = (snapshot.agentNetRoutes ?? [])
+    .map((route) => {
+      const extras = route.pathPreference !== undefined || route.directRttMs !== undefined || route.relayRttMs !== undefined
+        ? `|${route.pathPreference ?? 'auto'}|${route.directRttMs != null ? 1 : 0}|${route.relayRttMs != null ? 1 : 0}`
+        : '';
+      return `${route.deviceId}|${route.path}${extras}`;
+    })
+    .sort()
+    .join('\n');
+  return `${relayProtocol}\n${links}\n\n${routes}`;
 }
 
 export function createPeerLinksPushScheduler(opts: {

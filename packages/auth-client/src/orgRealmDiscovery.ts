@@ -17,15 +17,16 @@ function isNotFound(reason: unknown): boolean {
 }
 
 /**
- * 同时探测国内与国际 auth-server，并以 fail-closed 规则选择企业所在区域。
+ * 同时探测国内与国际 auth-server，等待两侧结束后选择企业所在区域。
  *
- * 只有「一侧成功、另一侧明确 ORG_SSO_NOT_FOUND」可以继续。任一侧网络失败、
- * 超时、响应非法或 region 不匹配都不能拿另一侧的成功结果猜测，避免故障期间
- * 把同名企业路由到错误数据面。
+ * 默认要求另一侧明确 ORG_SSO_NOT_FOUND，保持邮箱发现与登录后提示的严格策略。
+ * 显式企业标识入口可启用 allowPartialSuccess：只有一侧通过客户端的响应、区域及
+ * 非空连接校验时即可继续；双命中仍报冲突，两侧均无有效结果保留原错误。
  */
 export async function discoverSsoOrgRealm(
   org: string,
   clients: SsoOrgRealmClients,
+  options: { allowPartialSuccess?: boolean } = {},
 ): Promise<SsoOrgRealmDiscovery> {
   const [cn, global] = await Promise.allSettled([
     clients.cn.discoverSsoOrg(org),
@@ -42,14 +43,14 @@ export async function discoverSsoOrgRealm(
   if (
     cn.status === "fulfilled" &&
     global.status === "rejected" &&
-    isNotFound(global.reason)
+    (options.allowPartialSuccess || isNotFound(global.reason))
   ) {
     return { region: "cn", discovery: cn.value };
   }
   if (
     global.status === "fulfilled" &&
     cn.status === "rejected" &&
-    isNotFound(cn.reason)
+    (options.allowPartialSuccess || isNotFound(cn.reason))
   ) {
     return { region: "global", discovery: global.value };
   }

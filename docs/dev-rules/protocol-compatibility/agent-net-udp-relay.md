@@ -44,11 +44,32 @@
   15 秒登记一次，正在发数据时每 2–3 秒一次；一次登记 4 秒没确认，设备两个方向都退回 WebSocket，下一次登记带「收不到」，中继随即退回；
   之后每秒重试，不通 10 秒后放慢到每 5 秒，确认恢复就马上带「收得到」重新登记。WebSocket 重连会换会话号和密钥，旧登记作废。
   - 设备只认还在等、发出不到 4 秒的登记的确认，每个确认只认一次：重放的确认、被扣下来晚放的旧确认都不能让它以为 UDP 还通。
+  - **登记通了不等于数据通（2026-11-22）。** 登记只证明小包能来回。设备经 UDP 发出数据后，4 秒内一个经中继转来的数据报
+    （UDP 或 WebSocket）都没收到，且这期间又发了至少 3 次、跨过 1 秒（核心在重发；单个没人回应的纯确认包不算），就判定这条
+    UDP 只通登记、不通数据：两个方向退回 WebSocket，登记照常低频发（每 15 秒，带「收不到」），冷却 30 秒、5 分钟、30 分钟
+    后再试。冷却结束即可用 UDP 传业务数据。Desktop 和 Node Host 连续一分钟在每个 5 秒观察窗里都经 UDP 收发了数据报、
+    且中转连接累计被对端确认的字节数持续增加，才把下次故障的冷却恢复到 30 秒。请求超时中断这段观察。单向收到对端的重传
+    曾使上传反复回到同一条故障线路。设备使用可靠传输核心已有的确认计数，无需发送探测包。停用期间的确认不触发立即重新登记。
+    官方与自建中继沿用已有登记与数据报格式，仅升级设备即可生效。
+    日志写作 `agent-net relayed datagrams now go over the relay WebSocket (relay UDP answered registrations but carried no data back; retrying UDP in 30s)`。
+  - **收得到、发不出去也要退回。** 对端一直在重发时本机总有数据进来，上一条看不出来。会话层（`AgentNetSessionLinks`）发往一个
+    此刻走中转的对端的请求超时，就报给承载它的连接（Desktop `agentNetRelayStalled`，Host `node.relayStalled`，经 worker 的
+    `relay-stalled` 消息到传输层）；走 UDP 时 60 秒内两次，按同样的冷却退回 WebSocket，日志原因写作
+    `session requests over it timed out`。直连的对端超时不报，UDP 没在用时报了也不算。
+  - **被控端自己也要能发现上行坏了。** 中继按接收方的登记选下行，控制端退回 WebSocket 不会让被控端改走：被控端请求照收
+    （静默判断被清掉）、自己不发请求（没有超时可报），结果仍沿坏掉的上行发出（审查 P1）。所以设备还看自己的发送：中转 UDP 在用时，
+    走中转的连接（核心连接统计，`addressKind() === 'relay'`）最近 5 秒重传了至少 6 个分片、且占发出包数至少四分之一，就按同样的
+    冷却退回，日志原因写作 `packets sent over it went unacknowledged`。核心的连接统计是生命周期累计、换路径不清零，所以按连接
+    计增量（`RelaySendCounters`）：只算两次采样之间一直在中转上的那段，刚从直连切到中转、第一次见到的连接只记基线，不把它
+    直连时的历史重传算成最近 5 秒的中转重传。
+    事故：一台 Mac 上的 VPN 透明代理接管了到中继 UDP 端口（`:3479`）的流量，登记照常确认；13 分钟里这条 UDP 流收了约 30 MB、
+    只发出约 2.6 MB，这台电脑与同账号所有设备的会话都超时（另一台电脑发给它的请求 3 次有回复、15 次超时），界面只显示
+    「正在自动重试」；关掉 VPN、改走 WebSocket 后同一时段 85 次有回复、0 次超时。
   - 中继地址解析失败（离线启动、DNS 暂时不通）时先走 WebSocket，从 2 秒起按倍数退避重试到每分钟一次；解析成功后每 5 分钟重新解析，
     UDP 连续 30 秒不通时可提前重新解析，失败后仍遵守 DNS 退避。地址变了就清理旧地址证明并重新登记；凭据未变时，两种计数器都继续递增。
 - **转发限额**（2026-11-17 审查 P1：每个数据报一次 MAC、一次发送都在 WebSocket 消息回调里同步做，一台设备上传每秒约 1.3 MB
   的小数据报就能占满中继的事件循环）。限额只决定走不走 UDP，超出的照旧走 WebSocket：
-  - 只有长度在 24（核心最短的包）到 1325 字节之间的数据报走 UDP。更短的不是核心的包；更长的是旧版和手机原生按 1400 字节发的包，
+  - 只有长度在 24（核心最短的包）到 1325 字节之间的数据报走 UDP。更短的不是核心的包；更长的是旧版（含旧安装包里的手机原生库）按 1400 字节发的包，
     经 UDP 下行会变成 1425 字节、在隧道里被拆片（见[发包上限](agent-net-send-packet-size.md)），所以留在 WebSocket。
   - 一个 WebSocket 帧最多 128 个数据报走 UDP。
   - 每台设备一个令牌桶：中继替它校验的 UDP 包和替它经 UDP 发出的数据报都从里面扣，每秒补 25,000（约 260 Mbit/s 的满长包）、
@@ -67,10 +88,14 @@
   同步之前官方中继不给凭据，客户端照旧走 WebSocket。官方中继的 UDP 若经独立的负载均衡（`stunHost`），
   同一设备的 UDP 包必须落到持有它 WebSocket 会话的那台中继实例上，否则登记查不到会话、一直走 WebSocket；
   地址凭证的中继进程密钥每个实例各自生成，所以一台设备的登记也必须一直落到同一实例。
-- **未覆盖**：Mobile 的原生传输与 `portableClient` 尚未带请求头、不处理这些包，仍走 WebSocket；要和原生库一起冷更。
+- **手机**：显式开启 Agent-Net 且支持 UDP 转发的原生库可以使用中转 UDP。存量原生包仍走 WebSocket。
 - **包长**：上行、下行在核心的包外分别加 41、25 字节（`UDP_RELAY_UP_OVERHEAD`、`UDP_RELAY_DOWN_OVERHEAD`；第 1 版上行是 33）。
   Desktop 按这个余量把核心的发包上限算成 `1350 - 41` = 1309 字节，经中转的 UDP 载荷不超过 1350，隧道里不再被拆片；
   见 [Agent-Net 发包上限与收包上限分开](agent-net-send-packet-size.md)。
+- **本机可见（2026-11-18，不改协议）**：Desktop 的 worker 每秒随状态快照报告经中转的数据报现在走 UDP 还是 WebSocket，
+  以及 UDP 的往返（已有登记从发出到确认，不另发包）。远程连接页的中转点据此在协议下面写「UDP · 延迟」或「WS · 延迟」，
+  延迟取实际在走的那条路；每次切换在本机日志记一行 `agent-net relayed datagrams now go over the relay UDP port / WebSocket`。
+  入口：`RelayUdpPath.rttMs`、`Transport.relayRoute`、`AgentNetWorkerSocket.relayRoute`（事件 `relay-route`）。
 
 回归：`packages/agent-net-relay/src/__tests__/relay.integration.test.ts`
 「forwards over UDP only to devices that proved their address and confirmed receiving it, and keeps the WebSocket otherwise」
@@ -82,3 +107,10 @@ UDP port as well」（访客经 UDP 越权被断开）；`packages/agent-net/src
 确认中断后几秒内退回 WebSocket 并告诉中继、恢复后切回，重放和晚到的确认不算数；中转没认定新地址时马上带新凭证再登记；
 地址解析失败后继续重试）。地址证明、上行重放窗口、两侧的加密连接门槛、晚到确认与解析重试各自去掉后都有用例失败（2026-11-17 变异验证）。
 端到端对比用 `packages/agent-net/bench/session-latency.ts --modes v1,worker,udp-relay`。
+
+**手机（2026-11-18）。** 原生库在 `packages/agent-net-native/src/udp_paths.rs` 实现同一套登记、确认、上下行与退回（时间与 `relayUdp.ts`
+一致，中转地址在单独的线程里解析、不卡住收发），上行包也带防重放计数器、超过 1350 字节的照旧走 WebSocket。凭据由
+`PortableAgentNetClient` 和 Node 客户端一样只在 TLS（或本机）上要，`agentNetRuntime.ts` 连接启动后异步读中转的 `/api/agent-net/info` 拿 UDP 地址
+（同一中转复用在途请求，成功结果保留 10 分钟，失败后 1 分钟内沿用已有结果）。旧安装包的原生库没有这项，照旧全走 WebSocket。中转协议没变，不递增 `RELAY_VERSION`。
+回归：`native.integration.test.ts`「carries sessions on the real native engine, relays them over UDP, ...」（1 MB 结果经 WebSocket 的不到
+256 KB；不下发凭据时失败）。

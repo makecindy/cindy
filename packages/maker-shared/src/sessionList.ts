@@ -4,7 +4,7 @@ import { presentationDate, presentationText, type PresentationLocalizer } from '
 import { isSyntheticTriggerText } from './syntheticTrigger.js';
 import { getSessionListActivityAt, hasPendingSessionInterruption, type SessionInterruptionState } from './sessionActivity.js';
 import type { RemoteSchedule, RemoteScheduleRun } from './scheduleTypes.js';
-import { toMillis, isUnreadScheduleRun, isUnreadFailedScheduleRun, activeScheduleFailures, classifyScheduleFailure, compareFailedScheduleRuns, scheduleRunMissingPlugin, type FailedScheduleRunSnapshot } from './scheduleModel.js';
+import { toMillis, isUnreadScheduleRun, isUnreadFailedScheduleRun, activeScheduleFailures, classifyScheduleFailure, compareFailedScheduleRuns, scheduleRunMissingPlugin, readPrCheckDiagnosis, type FailedScheduleRunSnapshot } from './scheduleModel.js';
 import { sessionCollaborationLabel, sessionWorktreeLabel } from './sessionIdentity.js';
 import { isDefaultDraftSessionTitle } from './sessionTitle.js';
 import { getSessionListCollapseView } from './sessionListCollapse.js';
@@ -26,6 +26,8 @@ export function compareSessionListStrings(left: string, right: string): number {
 }
 
 export interface RemoteSessionListSessionLike extends SessionInterruptionState {
+  snoozedUntil?: string | null;
+  snoozedAt?: string | null;
   tags?: import('./taskTags').TaskTag[];
   _count?: { messages?: number } | null;
   agentKind: 'cc' | 'codex' | string;
@@ -60,6 +62,7 @@ export interface RemoteSessionListSessionLike extends SessionInterruptionState {
   // 由桌面 sessionToCamel 产出(已处理 clearedAt / rewind / 角色过滤);idle 会话直接显示,
   // 无需 load 完整消息。sessionRowMessagePreview 会读取它。
   preview?: string | null;
+  summary?: string | null;
 }
 
 export interface RemoteSessionListMessageLike {
@@ -141,6 +144,8 @@ export interface RemoteSessionScheduleInfo {
   nextFireAt?: number;
   /** 同一会话的所有已知 schedule 绑定都已 paused / expired 时为 true；缺失按 false。 */
   allSchedulesStopped?: boolean;
+  /** An active PR follow-up currently targets this task, including between runs. */
+  hasActiveFollowUp?: boolean;
   unreadRunIds: string[];
   hasUnreadFailedRun?: boolean;
   latestFailedRun?: FailedScheduleRunSnapshot;
@@ -710,9 +715,11 @@ export function buildSessionScheduleIndex(
         unreadRunIds.push(run.id);
       }
       const candidate = activeFailures.has(run.id) ? {
-        runId: run.id, firedAt, scheduleId: run.scheduleId,
+        runId: run.id, firedAt, finishedAt: toMillis(run.finishedAt) || undefined, scheduleId: run.scheduleId,
+        ...(schedule?.status === 'active' ? nextFireAtField(schedule) : {}),
         failureKind: classifyScheduleFailure(run),
         errorMsg: run.status === 'failed' ? run.errorMsg : undefined,
+        prCheckDiagnosis: run.status === 'failed' ? readPrCheckDiagnosis(run.prCheckDiagnosis ?? run.preRunHookResult?.prCheckDiagnosis) : undefined,
         missingPlugin: run.status === 'failed' ? scheduleRunMissingPlugin(run) : undefined,
       } : undefined;
       const latestFailedRun = candidate && (!existing?.latestFailedRun || compareFailedScheduleRuns(candidate, existing.latestFailedRun) > 0)
@@ -740,7 +747,11 @@ export function buildSessionScheduleIndex(
       const status = schedulesById.get(scheduleId)?.status;
       return status === 'paused' || status === 'expired';
     });
-    index.set(sessionId, { ...info, allSchedulesStopped });
+    const hasActiveFollowUp = Array.from(scheduleIds).some((scheduleId) => {
+      const schedule = schedulesById.get(scheduleId);
+      return schedule?.status === 'active' && schedule.targetSessionId === sessionId;
+    });
+    index.set(sessionId, { ...info, allSchedulesStopped, hasActiveFollowUp });
   }
   return index;
 }
@@ -1040,6 +1051,7 @@ function mergeScheduleInfo(group: readonly RemoteSessionListItem[]): RemoteSessi
   const unreadRunIds = Array.from(new Set(group.flatMap((item) => item.scheduleInfo?.unreadRunIds ?? [])));
   return {
     ...base,
+    hasActiveFollowUp: group.some((item) => item.scheduleInfo?.hasActiveFollowUp === true),
     allSchedulesStopped: group.every((item) => item.scheduleInfo?.allSchedulesStopped === true),
     unreadRunIds,
     unreadCount: unreadRunIds.length,

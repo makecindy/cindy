@@ -32,6 +32,7 @@ import {
   isAutoReviewConfirmUndeliveredNotice,
   isAutoReviewUnavailableNotice,
   isAutoReviewNoAvailableModelNotice,
+  isAutoReviewQuotaExhaustedNotice,
   parseOverloadError,
   parseOverloadRetryProgress,
   parseTerminalRateLimitRetryProgress,
@@ -55,6 +56,7 @@ import { imText } from './imText';
  * 同名提示同句, 跟随界面语言。
  */
 function autoReviewUnavailableNotice(message: string, channel?: string): string | null {
+  if (isAutoReviewQuotaExhaustedNotice(message)) return imText('imBot.text.shared.retry.autoReviewQuotaExhausted');
   if (isAutoReviewNoAvailableModelNotice(message)) {
     return imText('imBot.text.shared.retry.autoReviewNoAvailableModel');
   }
@@ -309,10 +311,17 @@ export function terminalErrorText(data: unknown, options?: QuotaFailureNoticeOpt
     return imText('imBot.text.shared.outputLimit.silentStopExhausted');
   }
   const { message, errorStatus, codexErrorInfo } = terminalErrorRecord(data);
+  // Providers return this rejection either as plain text or inside a JSON error envelope.
+  if (/(?:^|"message"\s*:\s*")Audio input is not (?:supported for this request|available)\.?(?:"|$)/i.test(message.trim())) {
+    return imText('imBot.text.shared.audioInputUnavailable');
+  }
   return (
     toolLoopFailureNotice(data) ??
     overloadFailureNotice(message, errorStatus, codexErrorInfo) ??
     (options ? quotaFailureNotice(data, options) : null) ??
+    (data && typeof data === 'object' && 'reason' in data && data.reason === 'UPSTREAM_OVERLOADED'
+      ? imText('imBot.text.shared.retry.overloadFailed')
+      : null) ??
     message
   );
 }

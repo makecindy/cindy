@@ -34,12 +34,14 @@ import { Spinner } from '@/components/ui/spinner';
 import { Button } from '@/components/ui/button';
 import { FormField } from '@/components/ui/form-field';
 import { Switch } from '@/components/ui/switch';
+import { Checkbox } from '@/components/ui/checkbox';
 import { SettingsCard, SettingsField, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
 import { SettingsTextInput } from './SettingsTextInput';
 import { DialogueDirectorySection } from './DialogueDirectorySection';
 import { ProjectsRootSection } from './ProjectsRootSection';
+import { TaskExportDirectorySection } from './TaskExportDirectorySection';
 import { TaskManagementSection } from './TaskManagementSection';
 import {
   DB_SLIMMING_ARCHIVE_AGE_OPTIONS,
@@ -49,6 +51,7 @@ import {
   type DbSlimmingResult,
   type DbSlimmingScanResult,
 } from '../../../shared/localDbMaintenance';
+import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
 
 type StatsResult = Awaited<ReturnType<typeof window.electronAPI.cindyMediaStorage.stats>>;
 type ScanResult = Awaited<ReturnType<typeof window.electronAPI.cindyMediaStorage.scan>>;
@@ -285,6 +288,8 @@ export function StorageManagementCard() {
         <DialogueDirectorySection />
 
         <ProjectsRootSection />
+
+        <TaskExportDirectorySection />
 
         {/* 占用总览 */}
         <div
@@ -926,10 +931,11 @@ function DatabaseSlimmingSection({
               : t('settings.about.storage.dbSlimmingBackupDefaultLocation')}
           </span>
         </label>
-        <Switch data-setting-id={storageManagementCardSettings.aboutStorageDbSlimmingLabel.id}
+        {/* Read only when slimming runs: Checkbox, not Switch (DESIGN.md §4 Desktop settings controls). */}
+        <Checkbox data-setting-id={storageManagementCardSettings.aboutStorageDbSlimmingLabel.id}
           id="db-slimming-backup-enabled"
           checked={backupEnabled}
-          onCheckedChange={(checked) => setBackupEnabled(checked)}
+          onChange={(event) => setBackupEnabled(event.currentTarget.checked)}
           aria-label={t('settings.about.storage.dbSlimmingBackupLabel')}
         />
 
@@ -1108,16 +1114,16 @@ function DatabaseCleanupDialog({
     >
       <AlertDialog.Portal>
         <AlertDialog.Overlay
-          className="modal-scrim fixed inset-0 z-[10020]"
-          style={{ ...WINDOW_DRAG_STYLE, zIndex: 10020 }}
+          className="modal-scrim fixed inset-0 z-modal-nested"
+          style={{ ...WINDOW_DRAG_STYLE, zIndex: Z_INDEX_LAYERS['modal-nested'] }}
         >
           <AlertDialog.Content
             className={cn(
-              'modal-panel fixed inset-0 z-[10020] m-auto flex h-fit min-h-[180px] w-full max-w-[640px] flex-col',
+              'modal-panel fixed inset-0 z-modal-nested m-auto flex h-fit min-h-[180px] w-full max-w-[640px] flex-col',
               'p-4',
               mode === 'report' ? 'select-text' : 'select-none',
             )}
-            style={{ ...WINDOW_NO_DRAG_STYLE, zIndex: 10020 }}
+            style={{ ...WINDOW_NO_DRAG_STYLE, zIndex: Z_INDEX_LAYERS['modal-nested'] }}
             aria-describedby={mode === 'report' ? bodyId : undefined}
             aria-busy={busy || undefined}
             onEscapeKeyDown={(event) => {
@@ -1192,7 +1198,7 @@ function DatabaseCleanupDialog({
                       </Button>
                     </AlertDialog.Cancel>
                     <Button data-settings-search-action="Confirm the selected database cleanup"
-                      variant="secondary"
+                      variant="primary"
                       size="lg"
                       tone="danger-solid"
                       ref={confirmButtonRef}

@@ -10,6 +10,7 @@ import {
   type AgentSessionHandle,
   type StartSessionOptions,
   type ForkSdkSessionOptions,
+  type NativeSubscriptionAccount,
   type RefreshLocalModelsOptions,
 } from '@cindy/maker-core';
 import { CHATGPT_MODEL_PREFIX } from '@cindy/model-providers/classification';
@@ -31,7 +32,7 @@ import {
   accountProviderId,
   resolveSubscriptionPoolProvider as resolveSubscriptionPoolProviderRef,
 } from './placement.js';
-import { registerSessionSubscriptionAccount } from './session.js';
+import { getSessionSubscriptionAccount, registerSessionSubscriptionAccount } from './session.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 
 interface SubscriptionRouteOptions {
@@ -100,15 +101,21 @@ function engineProviderId(providerId: string | null | undefined, accountId: stri
  * with exactly the same model allowlist, route token and selected account capability.
  */
 function engineOptions<T extends Pick<StartSessionOptions, 'providerId' | 'deviceHosted'>>(
-  options: T, accountId: string,
-): T {
+  options: T, lease: SubscriptionAccountLease, kind: BaseAgent['kind'],
+): T & { [NATIVE_SUBSCRIPTION_ACCOUNT]: NativeSubscriptionAccount } {
   const requested = options.providerId?.trim();
-  if (!requested) return options;
+  if (!requested) return { ...options, [NATIVE_SUBSCRIPTION_ACCOUNT]: lease.account };
   const guest = options.deviceHosted?.guest ? options.deviceHosted.guestProvider : undefined;
   if (guest && guest.providerId !== requested)
     throw new AgentStartupStoppedError(new Error('[REMOTE_AGENT_PROVIDER_NOT_ALLOWED] this provider is not allowed for remote use on this computer'));
-  const providerId = engineProviderId(requested, accountId)!;
+  const providerId = engineProviderId(requested, lease.accountId)!;
+  // Codex runs on its native route, but its per-session proxy must check the
+  // original grant. Carry that identity on the host-issued account capability.
+  const account = guest && kind === 'codex' && providerId === 'openai' && requested !== providerId
+    ? { ...lease.account, sharedProviderId: requested }
+    : lease.account;
   return { ...options, providerId,
+    [NATIVE_SUBSCRIPTION_ACCOUNT]: account,
     ...(guest && providerId !== requested ? { deviceHosted: { ...options.deviceHosted!,
       guestProvider: { ...guest, providerId } } } : {}) };
 }
@@ -165,10 +172,20 @@ async function historicalCodexAccount(
  */
 function legacyConnectionAccount(providerId: string | null | undefined, keys: string[], agentKind: string, hasNativeHistory: boolean): string | undefined {
   const ref = resolveSubscriptionPoolProviderRef(providerId);
-  if (!ref?.ownAccount) return;
-  if (!readPool(ref.kind)?.accounts.some(entry => entry.id === ref.ownAccount)
-    && keys.some(key => readAccountBinding(key, ref.kind)?.accountId === ref.ownAccount))
-    throw new AgentNotAuthenticatedError(agentKind, 'Subscription account was removed');
+  const ownAccount = ref?.ownAccount;
+  if (!ref || !ownAccount) return;
+  if (!readPool(ref.kind)?.accounts.some(entry => entry.id === ownAccount)) {
+    const removedBinding = keys.map(key => readAccountBinding(key, ref.kind))
+      .find(binding => binding?.accountId === ownAccount);
+    if (removedBinding) {
+      // When starting fresh after handoff, let the built-in Claude pool replace its
+      // own removed binding. Native resumes and historical aliases still pin the old account.
+      if (!hasNativeHistory && ref.providerId === 'anthropic'
+        && (removedBinding.via ?? ref.kind) === ref.providerId
+        && accountProviderId(ref.kind, ownAccount) === ref.providerId) return;
+      throw new AgentNotAuthenticatedError(agentKind, 'Subscription account was removed');
+    }
+  }
   const fallback = readMergedProviderAccount(ref.providerId);
   if (!fallback) return;
   const bindings = keys.map(key => readAccountBinding(key, ref.kind)).filter(Boolean);
@@ -397,11 +414,14 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
             if (!provider) return startLegacy();
             const kind = kindOf(provider);
             imported ??= legacyConnectionAccount(options.providerId?.trim(), keys, target.kind, !!options.resumeSessionId);
-            if (!imported && options.resumeSessionId && !keys.some((key) => readAccountBinding(key, kind))) {
-              if (kind === 'openai') {
-                // Unknown private homes retain their legacy route; never pick another account.
-                return startLegacy();
-              } else await writeAccountBindings(keys, kind, 'default');
+            if (!imported && options.resumeSessionId && !keys.some(key => readAccountBinding(key, kind))) {
+              // Unknown Codex homes retain their legacy route; never pick another account.
+              if (kind === 'openai') return startLegacy();
+              // An unbound Claude resume can only use the default home. Do not
+              // pin the task to a removed account before the fresh handoff retry.
+              if (!readPool(kind)?.accounts.some(account => account.id === 'default'))
+                throw new Error('[SUBSCRIPTION_ACCOUNT_UNAVAILABLE] The task subscription account is unavailable');
+              await writeAccountBindings(keys, kind, 'default');
             }
           } catch (error) {
             // No underlying runtime has been started; Maker may release its worktree lease.
@@ -416,6 +436,7 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
           let lastFailure: unknown;
           for (;;) {
             let lease: SubscriptionAccountLease | null = null;
+            let startOptions: StartSessionOptions;
             let unregister = () => {};
             try {
               lease = await acquireSubscriptionAccount(poolProvider, options.model, keys, false, {
@@ -427,22 +448,21 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
                 if (lastFailure !== undefined) throw lastFailure;
                 return startLegacy();
               }
-              unregister = registerSessionSubscriptionAccount(options.sessionId, lease.account);
+              const routed = engineOptions(options, lease, target.kind);
+              unregister = registerSessionSubscriptionAccount(options.sessionId, routed[NATIVE_SUBSCRIPTION_ACCOUNT]);
+              startOptions = routed;
             } catch (error) {
               lease?.release();
               if (lastFailure !== undefined) throw lastFailure;
               // No underlying runtime has been started; Maker may release its worktree lease.
-              throw new AgentStartupStoppedError(error);
+                throw error instanceof AgentStartupStoppedError ? error : new AgentStartupStoppedError(error);
             }
             const current = lease;
             let handle: AgentSessionHandle | undefined;
             try {
               const sessionProvider = options.providerId?.trim() || poolProvider;
               const engineId = engineProviderId(sessionProvider, current.accountId);
-              handle = await target.startSession({
-                ...engineOptions(options, current.accountId),
-                [NATIVE_SUBSCRIPTION_ACCOUNT]: current.account,
-              });
+              handle = await target.startSession(startOptions);
               await current.bind([...keys, `native:${handle.id}`]);
               // Startup owns its slot until the first turn completes or the runtime closes.
               return guardAccountSwitch(wrapHandle(handle, current, unregister, options.model), target, {
@@ -481,6 +501,23 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
             }
           }
         };
+      if (property === 'requiresCodexThreadHostTransfer')
+        return async (options: Parameters<BaseAgent['requiresCodexThreadHostTransfer']>[0]) => {
+          // The live session's host carries the subscription account it runs on. When the target
+          // route stays on that account, compare against that same host instead of mistaking it for
+          // another writer of the thread (which closed and relinked unchanged sessions).
+          // A running account that was since removed or disconnected cannot be the target's writer;
+          // check the target as before instead of failing a switch to another working source.
+          let account: ReturnType<typeof getSessionSubscriptionAccount>;
+          try { account = getSessionSubscriptionAccount(options.sessionId); } catch { account = undefined; }
+          const ref = resolveSubscriptionPoolProviderRef(options.providerId?.trim());
+          // A provider can hold several accounts; its first (`ownAccount`) is only one of them. The
+          // route stays on the running account when that account belongs to the target provider.
+          const sameAccount = account && ref
+            && (accountProviderId(ref.kind, account.id) === ref.providerId || ref.ownAccount === account.id);
+          return target.requiresCodexThreadHostTransfer(sameAccount
+            ? { ...options, [NATIVE_SUBSCRIPTION_ACCOUNT]: account } : options);
+        };
       if (property === 'forkSdkSession')
         return async (options: ForkSdkSessionOptions) => {
           const key = `native:${options.sourceSdkSessionId}`;
@@ -497,10 +534,7 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
           const lease = await acquireSubscriptionAccount(provider, options.model, [key], true, { accountId: imported, resuming: true });
           if (!lease) return target.forkSdkSession(options);
           try {
-            const result = await target.forkSdkSession({
-              ...engineOptions(options, lease.accountId),
-              [NATIVE_SUBSCRIPTION_ACCOUNT]: lease.account,
-            });
+            const result = await target.forkSdkSession(engineOptions(options, lease, target.kind));
             await lease.bind([key, `native:${result.newSdkSessionId}`]);
             return result;
           } finally {

@@ -109,7 +109,7 @@
     "runtimeFailureReason": {
       "unclaimed_timeout": {
         "summary": "{{name}} hat die Verarbeitung nicht innerhalb der Wartezeit begonnen. Diese Anfrage ist beendet.",
-        "advice": "Bitte den Besitzer des Teammitglieds, zu prüfen, ob Cindy auf dem zugehörigen Computer läuft und eine Netzwerkverbindung besteht.",
+        "advice": "Bitte den Besitzer des Freundes, zu prüfen, ob Cindy auf dem zugehörigen Computer läuft und eine Netzwerkverbindung besteht.",
         "details": "Sobald Cindy und das Netzwerk wieder funktionieren, sende die Nachricht erneut."
       }
     },
@@ -127,7 +127,7 @@
       "IMAGE_INPUT_UNSUPPORTED": {
         "summary": "{{name}} konnte nicht antworten: Das aktuelle Modell unterstützt keine Bilder.",
         "advice": "Wähle ein Modell mit Bildunterstützung.",
-        "details": "Wähle ein Modell mit Bildunterstützung oder aktiviere und konfiguriere Vision Bridge unter Einstellungen → Personalisierung. Sende deine Nachricht dann erneut."
+        "details": "Wähle ein Modell mit Bildunterstützung."
       },
       "MODEL_UNAVAILABLE": {
         "summary": "{{name}} konnte nicht antworten: Kein Modell verfügbar.",
@@ -280,7 +280,7 @@
     "organizerSaveFailed": "Der Organisator konnte nicht geändert werden. Versuch es erneut.",
     "projectDir": "Projektordner",
     "projectDirNone": "Keine Auswahl",
-    "projectDirNote": "Hier arbeiten Freunde bei der Arbeitsaufteilung. Du kannst das Feld leer lassen, dann nutzen sie den eigenen Ordner dieses Gruppenchats. Wenn du ein Git-Projekt auswählst, erhält jede Arbeitsaufteilung einen neuen Worktree und Branch, damit dein eigener Code unverändert bleibt.",
+    "projectDirNote": "Wähle ein vorhandenes Projekt auf diesem Computer. Ohne Auswahl wird das passende Repository-Projekt oder das Projekt des ausführenden Begleiters verwendet. Für die Arbeitsteilung mit Git wird ein eigener Worktree angelegt.",
     "add": "Freund hinzufügen",
     "projectDirOnComputer": "Auf deinem Computer auswählen oder ändern",
     "memberActions": "Aktionen für {{name}}",
@@ -547,7 +547,7 @@
     "replyModeMentionedNote": "Freunde bleiben still, solange sie niemand mit @ erwähnt.",
     "work": "Arbeitsaufteilung",
     "organizerHint": "Legt fest, wer die einzelnen Schritte übernimmt. Standardmäßig der erste Freund.",
-    "ownFolder": "Gruppeneigener Ordner",
+    "ownFolder": "Automatisch",
     "archive": "Gruppe archivieren",
     "unarchive": "Archivierung aufheben",
     "archiveHint": "Archivieren deaktiviert diese Gruppe für alle Mitglieder und stoppt neue Nachrichten und Ausführungen der Freunde. Der Verlauf bleibt erhalten. Suche nach der Gruppe, um ihren Verlauf anzusehen oder die Archivierung aufzuheben.",
@@ -584,9 +584,9 @@
     "removeTitle": "{{name}} aus dieser Gruppe entfernen?",
     "removeHint": "Diese Person verliert den Zugriff auf Nachrichten. Ihre Freunde verlassen die Gruppe ebenfalls.",
     "removeOwn": "Aus Gruppe entfernen",
-    "removeOwnScope": "Dies betrifft nur diese Gruppe. Dein Partner bleibt in deinem Konto.",
+    "removeOwnScope": "Dies betrifft nur diese Gruppe. Dein Freund bleibt in deinem Konto.",
     "removeOwnHint": "{{name}} erhält keine Nachrichten mehr aus „{{group}}“. Der Verlauf bleibt erhalten; andere Gruppen und private Chats sind nicht betroffen.",
-    "removeOwnActiveHint": "Aktive Anfragen dieses Partners in dieser Gruppe werden gestoppt. Unabhängig gestartete Aufgaben laufen weiter.",
+    "removeOwnActiveHint": "Aktive Anfragen dieses Freundes in dieser Gruppe werden gestoppt. Unabhängig gestartete Aufgaben laufen weiter.",
     "stopAndRemove": "Stoppen und entfernen",
     "confirm": "Bestätigen",
     "inviteTitle": "Zur Gruppe einladen",

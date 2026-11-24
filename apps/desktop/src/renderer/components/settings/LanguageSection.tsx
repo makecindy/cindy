@@ -12,6 +12,7 @@ import { classicalStyleOptions, languageSettings } from './LanguageSection.setti
 import { Select } from '@/components/ui/select';
 import { SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 
+import { toast } from '@/lib/toast';
 import { useLocale } from '@/hooks/useLocale';
 import type { LocalePreference } from '@/i18n';
 import { isClassicalLocale, type ClassicalLocale } from '../../../shared/locale';
@@ -27,14 +28,18 @@ export function LanguageSection() {
   const { locale, effectiveLocale, setLocale, classicalStyle, setClassicalStyle } = useLocale();
   const classical = isClassicalLocale(locale) ? locale : null;
 
+  const saveLanguage = async (preference: LocalePreference) => {
+    if (!await setLocale(preference)) toast.error(t('regionScreenshot.translation.saveFailed'));
+  };
+
   const chooseLanguage = (option: LanguageOption) => {
     if (option !== CLASSICAL_OPTION) {
-      setLocale(option);
+      void saveLanguage(option);
       return;
     }
     if (classical) return;
     // First switch keeps the script the user already reads.
-    setLocale(effectiveLocale === 'zh-TW' ? 'zh-Hant-x-lzh' : 'zh-Hans-x-lzh');
+    void saveLanguage(effectiveLocale === 'zh-TW' ? 'zh-Hant-x-lzh' : 'zh-Hans-x-lzh');
   };
 
   return (
@@ -74,7 +79,7 @@ export function LanguageSection() {
                     value: script.value,
                     label: t(script.labelKey),
                   }))}
-                  onValueChange={(next) => setLocale(next as ClassicalLocale)}
+                  onValueChange={(next) => { void saveLanguage(next as ClassicalLocale); }}
                   label={t('settings.language.classical.scriptAriaLabel')}
                   width="xs"
                   className="shrink-0"

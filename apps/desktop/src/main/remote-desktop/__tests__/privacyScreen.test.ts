@@ -2,7 +2,12 @@ import { EventEmitter } from 'node:events';
 import { beforeEach, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({ windows: [] as any[], displays: [] as any[], confirm: vi.fn() }));
+const excludeMask = vi.hoisted(() => vi.fn((_handle: Buffer) => true));
+vi.mock('../../windowsTaskbarNative', () => ({
+  loadWindowsTaskbarNative: async () => ({ excludePrivacyMaskFromCapture: excludeMask }),
+}));
 const away = vi.hoisted(() => ({
+  permission: vi.fn<() => Promise<'missing' | 'unknown' | 'granted'>>(),
   ended: (_locked: boolean) => {},
   quit: () => {},
   lock: vi.fn<() => Promise<void>>(),
@@ -21,7 +26,10 @@ vi.mock('node:child_process', () => ({
     done: (error: null, stdout: string, stderr: string) => void,
   ) => done(null, '', ''),
 }));
+vi.mock('../../security/trustedAppRenderer', () => ({ assertTrustedAppRendererEvent: vi.fn() }));
 vi.mock('../inputHost', () => ({
+  readDesktopInputPermission: away.permission,
+  requestDesktopInputPermission: async () => {},
   lockDesktopScreen: away.lock,
   // The owner has not answered the system verification yet.
   verifyDesktopOwner: () => new Promise(() => {}),
@@ -41,7 +49,7 @@ vi.mock('electron', () => ({
   dialog: { showMessageBox: state.confirm },
   BrowserWindow: class extends EventEmitter {
     static getFocusedWindow() { return null; }
-    getNativeWindowHandle() { return Buffer.alloc(8); }
+    getNativeWindowHandle() { return Buffer.from([this.id]); }
     id = state.windows.length + 1;
     destroyed = false;
     options: any;
@@ -106,8 +114,9 @@ vi.mock('electron', () => ({
 }));
 
 import { PrivacyScreen } from '../privacyScreen';
-import { startAwayGuard } from '../awayGuardService';
-import { powerMonitor, screen } from 'electron';
+import { AWAY_GUARD_GET_STATE_CHANNEL, AWAY_GUARD_PREVIEW_CHANNEL, AWAY_GUARD_PREVIEW_DELAY_MS } from '../../../shared/awayGuard';
+import { registerAwayGuardIpc, startAwayGuard } from '../awayGuardService';
+import { ipcMain, powerMonitor, screen } from 'electron';
 beforeEach(() => {
   screen.removeAllListeners();
   state.displays = [{ id: 1, bounds: { x: 0, y: 0, width: 1440, height: 900 } }];
@@ -136,6 +145,27 @@ it('relayouts the non-captured display and releases its listeners on stop', asyn
   expect(second.getBounds()).toEqual(lockingBounds);
   h.masks.stop();
   expect(screen.listenerCount('display-metrics-changed')).toBe(0);
+});
+
+// Unit: a second monitor rejecting capture exclusion must not acknowledge an
+// active privacy screen or leave the first mask and its input hook installed.
+it('rejects Windows privacy activation when one monitor cannot exclude its mask', async () => {
+  vi.stubGlobal('process', Object.create(process, { platform: { value: 'win32' } }));
+  try {
+    state.displays.push({ id: 2, bounds: { x: 1440, y: 0, width: 900, height: 1200 } });
+    excludeMask.mockImplementation(handle => handle[0] === 1);
+    const h = fixture();
+    const preparing = h.masks.set(true, () => true);
+    expect(h.masks.active).toBe(true);
+    await expect(preparing).rejects.toThrow('DESKTOP_PRIVACY_UNAVAILABLE');
+    expect(excludeMask).toHaveBeenCalledWith(Buffer.from([2]));
+    expect(state.windows.every(window => window.destroyed)).toBe(true);
+    expect(h.monitor.stop).toHaveBeenCalled();
+    expect(h.masks.active).toBe(false);
+  } finally {
+    excludeMask.mockImplementation(() => true);
+    vi.unstubAllGlobals();
+  }
 });
 
 function fixture(heldInput?: () => void) {
@@ -460,6 +490,7 @@ it('recovers away-guard failure masks after OS unlock, including late lock failu
     Object.create(process, {
       platform: { value: 'darwin' },
       getSystemVersion: { value: () => '15.0' },
+      execPath: { value: '/Applications/Cindy Personal.app/Contents/MacOS/Cindy' },
     }),
   );
   let enabled = true;
@@ -468,6 +499,7 @@ it('recovers away-guard failure masks after OS unlock, including late lock failu
   try {
     startAwayGuard({
       excludedWindows: () => {},
+      notifyFailure: vi.fn(),
       // Covers appear only while work needs the screen (displayDemand.ts).
       needsDisplay: () => true,
       enabled: () => enabled,
@@ -476,6 +508,28 @@ it('recovers away-guard failure masks after OS unlock, including late lock failu
       seedScreenLocked: () => {},
       msSinceOwnerInput: () => Infinity,
     });
+    // Unit regression, same service lifetime: a preflight grant used to report
+    // preview success even when there were no displays to cover three seconds later.
+    registerAwayGuardIpc({
+      read: () => ({ enabled, delaySeconds: 30 }), writeEnabled: vi.fn(), writeDelay: vi.fn(),
+    });
+    const preview = vi.mocked(ipcMain.handle).mock.calls.find(([key]) => key === AWAY_GUARD_PREVIEW_CHANNEL)![1];
+    const event = {} as Electron.IpcMainInvokeEvent;
+    away.permission.mockResolvedValue('unknown');
+    const readState = vi.mocked(ipcMain.handle).mock.calls.find(([key]) => key === AWAY_GUARD_GET_STATE_CHANNEL)![1];
+    await expect(readState(event)).resolves.toMatchObject({
+      permission: 'unknown', permissionAppPath: '/Applications/Cindy Personal.app',
+    });
+    expect(await preview(event)).toEqual({ ok: false, reason: 'checkFailed' });
+    away.permission.mockResolvedValue('missing');
+    expect(await preview(event)).toEqual({ ok: false, reason: 'permission' });
+    away.permission.mockResolvedValue('granted');
+    const displays = state.displays;
+    state.displays = [];
+    const result = preview(event);
+    await vi.advanceTimersByTimeAsync(AWAY_GUARD_PREVIEW_DELAY_MS);
+    expect(await result).toEqual({ ok: false, reason: 'unavailable' });
+    state.displays = displays;
     await vi.advanceTimersByTimeAsync(30_000);
     const held = state.windows.at(-1);
     expect(held).toBeDefined();

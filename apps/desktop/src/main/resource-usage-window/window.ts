@@ -33,6 +33,7 @@ export function createResourceUsageWindow(parent?: BrowserWindow, surface?: {
   title: string; preload: string; query: string; hash: string;
   width: number; height: number; register(id: number): void;
   minWidth?: number; minHeight?: number;
+  transparent?: boolean;
 }): BrowserWindow {
   const platformOptions =
     process.platform === 'darwin'
@@ -53,7 +54,8 @@ export function createResourceUsageWindow(parent?: BrowserWindow, surface?: {
       : path.join(__dirname, '../../resources/icon.png'),
     autoHideMenuBar: true,
     show: false,
-    backgroundColor: bgColor,
+    backgroundColor: surface?.transparent ? '#00000000' : bgColor,
+    transparent: surface?.transparent ?? false,
     ...platformOptions,
     ...parentOption,
     webPreferences: {

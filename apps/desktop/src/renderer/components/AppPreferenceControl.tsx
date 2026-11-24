@@ -6,8 +6,10 @@ import { isDataOwnerPushStampCurrent } from '@/contexts/dataOwnerGeneration';
 import { appPreferenceSchema, type AppPreferencePatch } from '../../shared/appPreferenceControl';
 import { useTheme } from '@/hooks/useTheme';
 import { useLocale } from '@/hooks/useLocale';
+import { readStoredLocale } from '@/lib/localePreference';
 import { useNotificationSettings } from '@/hooks/useNotificationSettings';
 import { useComposerSendShortcutPreference } from '@/hooks/useComposerSendShortcutPreference';
+import { useComposerFollowUpPreference } from '@/hooks/useComposerFollowUpPreference';
 import { useLinkOpenPreference } from '@/hooks/useLinkOpenPreference';
 import { useStreamFadePreference } from '@/hooks/useStreamFadePreference';
 import { useMessageNavRailPreference } from '@/hooks/useMessageNavRailPreference';
@@ -19,9 +21,10 @@ import { getThemeFamilies, tryGetFamily } from '@/themes/families';
 import { refreshLocalThemes } from '@/themes/local-themes';
 
 /** Validate persistence separately from hook memory: legacy setters may swallow quota errors. */
-const persisted: Record<keyof AppPreferencePatch, { key: string; absent?: unknown }> = {
-  theme: { key: 'theme' }, themeFamily: { key: 'theme.familyId' }, language: { key: 'language' },
+const persisted: Record<Exclude<keyof AppPreferencePatch, 'language'>, { key: string; absent?: unknown }> = {
+  theme: { key: 'theme' }, themeFamily: { key: 'theme.familyId' },
   notifications: { key: 'notifications.enabled' }, sendShortcut: { key: 'chat.sendShortcutPreference', absent: 'enter' },
+  followUpBehavior: { key: 'chat.followUpBehavior', absent: 'queue' },
   webLinks: { key: 'chat.webLinkOpenPreference', absent: 'external' },
   localLinks: { key: 'chat.localLinkOpenPreference', absent: 'sidebar' },
   streamFade: { key: 'chat.streamFadePreference', absent: 'on' },
@@ -35,13 +38,13 @@ const persisted: Record<keyof AppPreferencePatch, { key: string; absent?: unknow
 /** Mounted once in the main App. Reuses the same setters and subscribers as Settings. */
 export function AppPreferenceControl() {
   const theme = useTheme(); const locale = useLocale(); const notifications = useNotificationSettings();
-  const shortcut = useComposerSendShortcutPreference(); const web = useLinkOpenPreference('web');
+  const shortcut = useComposerSendShortcutPreference(); const followUp = useComposerFollowUpPreference(); const web = useLinkOpenPreference('web');
   const local = useLinkOpenPreference('local'); const fade = useStreamFadePreference();
   const navigation = useMessageNavRailPreference(); const files = useFileBrowserPreference();
   const home = useHomeUsageDashboardPreference(); const recommendations = usePromptRecommendationPreference();
   const worktreeNaming = useWorktreeModelNamingPreference();
   const state: Required<AppPreferencePatch> = { theme: theme.theme, themeFamily: theme.familyId,
-    language: locale.locale, notifications: notifications.enabled, sendShortcut: shortcut.preference,
+    language: locale.locale, notifications: notifications.enabled, sendShortcut: shortcut.preference, followUpBehavior: followUp.preference,
     webLinks: web.preference, localLinks: local.preference, streamFade: fade.preference,
     messageNavigation: navigation.enabled, showIgnoredDirectories: files.showIgnoredDirs,
     homeUsageDashboard: home.enabled, promptRecommendations: recommendations.enabled,
@@ -52,7 +55,7 @@ export function AppPreferenceControl() {
     // The shortcut setter can reject a voice-input conflict, before other fields change.
     if (patch.sendShortcut !== undefined && !shortcut.setPreference(patch.sendShortcut).ok) throw new Error('SHORTCUT_CONFLICT');
     const applyOtherFields = () => {
-      if (patch.language !== undefined) locale.setLocale(patch.language);
+      if (patch.followUpBehavior !== undefined) followUp.setPreference(patch.followUpBehavior);
       if (patch.notifications !== undefined) notifications.setEnabled(patch.notifications);
       if (patch.webLinks !== undefined) web.setPreference(patch.webLinks);
       if (patch.localLinks !== undefined) local.setPreference(patch.localLinks);
@@ -62,14 +65,21 @@ export function AppPreferenceControl() {
       if (patch.homeUsageDashboard !== undefined) home.setEnabled(patch.homeUsageDashboard);
       if (patch.promptRecommendations !== undefined) recommendations.setEnabled(patch.promptRecommendations);
       if (patch.worktreeModelNaming !== undefined) worktreeNaming.setEnabled(patch.worktreeModelNaming);
+      if (patch.language !== undefined) {
+        return Promise.resolve(locale.setLocale(patch.language)).then(saved => {
+          if (!saved) throw new Error('PERSISTENCE_NOT_CONFIRMED');
+        });
+      }
     };
     const pending = patch.theme !== undefined || patch.themeFamily !== undefined
       ? theme.setSelection({ theme: patch.theme, familyId: patch.themeFamily }, active) : undefined;
     if (pending) return pending.then(applied => {
       if (!applied) throw new Error('THEME_PREPARATION_NOT_CONFIRMED');
-      flushSync(applyOtherFields);
+      let localeSave: Promise<void> | undefined;
+      flushSync(() => { localeSave = applyOtherFields(); });
+      return localeSave;
     });
-    applyOtherFields();
+    return applyOtherFields();
   } };
   useEffect(() => window.electronAPI?.appPreferenceControl?.onSettingsChanged(event => {
     if (event.section !== 'memory' || !isDataOwnerPushStampCurrent(event.ownerStamp)) return;
@@ -103,20 +113,28 @@ export function AppPreferenceControl() {
             customized: isModelVisibilityCustomized(target.agent, target.providerId, target.modelId) };
         }
         if (request.operation === 'reset') throw new Error('RESET_NOT_SUPPORTED');
+        let language: AppPreferencePatch['language'];
         if (request.operation === 'update') {
           const patch = appPreferenceSchema.parse(request.patch);
           let pending: Promise<void> | undefined;
-          flushSync(() => { pending = current.current.apply(patch,
-            () => isDataOwnerPushStampCurrent(request.ownerStamp) && Date.now() <= request.expiresAt); });
+          const active = () => isDataOwnerPushStampCurrent(request.ownerStamp) && Date.now() <= request.expiresAt;
+          flushSync(() => { pending = current.current.apply(patch, active); });
           if (pending) await pending;
+          if (!active()) throw new Error('REQUEST_EXPIRED');
+          if (patch.language !== undefined) {
+            language = readStoredLocale();
+            if (language !== patch.language) throw new Error('PERSISTENCE_NOT_CONFIRMED');
+          }
           for (const [key, expected] of Object.entries(patch)) {
-            const storage = persisted[key as keyof AppPreferencePatch];
+            if (key === 'language') continue;
+            const storage = persisted[key as keyof typeof persisted];
             const raw = localStorage.getItem(storage.key);
             const actual = raw === null ? storage.absent : typeof expected === 'boolean' ? raw === 'true' : raw;
             if (actual !== expected) throw new Error('PERSISTENCE_NOT_CONFIRMED');
           }
         }
-        bridge.reply({ requestId: request.requestId, ok: true, state: current.current.state,
+        const state = current.current.state;
+        bridge.reply({ requestId: request.requestId, ok: true, state: language === undefined ? state : { ...state, language },
           themeFamilies: getThemeFamilies().map(family => family.id), ...(modelVisibility ? { modelVisibility } : {}) });
       } catch { bridge.reply({ requestId: request.requestId, ok: false }); }
     });

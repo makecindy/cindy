@@ -1,3 +1,4 @@
+import { checkForwardedProjectWrite } from './project-writes.desktop.js';
 import { app, webContents } from 'electron';
 import { randomUUID } from 'node:crypto';
 import { WebSocket } from 'ws';
@@ -72,6 +73,7 @@ export function connectHostPlatformClient(config: HostDelegationConfig) {
       }
       if (pause) throw Object.assign(Error('Client upgrade in progress'), { code: 'DESKTOP_CLIENT_UPGRADING' });
       switch (op.method) {
+        case 'project.check': return checkForwardedProjectWrite(op.requestId, op.check, signal);
         case 'computer.status': return computer.getStatus();
         case 'computer.describe': return computer.describeDesktop?.();
         case 'computer.secureTarget': return computer.isSecureTarget?.(op.target);
