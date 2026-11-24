@@ -247,6 +247,7 @@ export interface RewindOrchestratorPorts {
 }
 
 export interface RewindCommitOptions {
+  assertWriteAllowed?: () => void;
   requireLatestUser?: boolean;
   allowFileRestore?: boolean;
   ownerScope?: DataOwnerBroadcastScope;
@@ -878,8 +879,12 @@ async function commitRewindAtMessage(
   await assertTaskActionCurrent(sessionId, clientId);
   const dbClient = getDbClient();
   const ownerScope = opts?.ownerScope ?? captureDataOwnerBroadcastScope();
+  const assertCommitWriteAllowed = async () => {
+    opts?.assertWriteAllowed?.();
+    await assertTaskActionCurrent();
+  };
   const ctx = await loadRewindContext(sessionId, clientId, opts);
-  await assertTaskActionCurrent();
+  await assertCommitWriteAllowed();
 
   // makerSession 必有 (loadRewindContext 已 guard); 这里只为类型收紧。
   const makerSession = getMaker().getSession(sessionId);
@@ -916,7 +921,7 @@ async function commitRewindAtMessage(
     // 最终 rewind.commit 事务再 CAS 同一值(#4994 review P1)。
     await assertClearGenerationUnchanged(sessionId, expectedClearedAt, ctx.targetCreatedAt);
     const commitThreadRollback = async () => {
-      await assertTaskActionCurrent();
+      await assertCommitWriteAllowed();
       return makerSession.commitRewindFiles('', '', { tailTurnsToDrop: ctx.tailTurnsToDrop, ...nativeBoundary });
     };
     const logCompensationError = (compErr: unknown, rollbackCommit: string | null) => {
@@ -933,7 +938,7 @@ async function commitRewindAtMessage(
     } else {
       const filePlan = await buildCodexFilePlanForSession(sessionId, clientId, ctx.codexUserMessages ?? [], makerSession);
       // shadow 保存点走文件恢复执行器,legacy 保存点走原 revert 执行器;
-      await assertTaskActionCurrent();
+      await assertCommitWriteAllowed();
       // conversation-only 计划两个执行器都会直接透传 thread rollback。
       const result =
         filePlan.mode === 'file-restore'
@@ -969,14 +974,14 @@ async function commitRewindAtMessage(
     if (!ctx.assistantUuid) nativeContextReset = await buildNativeContextReset(sessionId, ctx);
     const priorAssistantUuid = ctx.assistantUuid;
     const commitConversationRewind = async () => {
-      await assertTaskActionCurrent();
+      await assertCommitWriteAllowed();
       return priorAssistantUuid ? makerSession.commitRewindFiles('', priorAssistantUuid) : closeSessionForNativeRestart(sessionId, clientId);
     };
     if (opts?.allowFileRestore === false) {
       rewindResult = await commitConversationRewind();
     } else {
       const filePlan = await buildCodexFilePlanForSession(sessionId, clientId, ctx.codexUserMessages ?? [], makerSession);
-      await assertTaskActionCurrent();
+      await assertCommitWriteAllowed();
       const onCompensationError = (compErr: unknown, execution: { rollbackCommit: string | null }) => {
         log.error('[rewind commit] claude-code (other computer) file rewind compensation failed', {
           sessionId,
@@ -1002,7 +1007,7 @@ async function commitRewindAtMessage(
     expectedClearedAt = await rereadSessionClearedAt(sessionId);
     await assertClearGenerationUnchanged(sessionId, expectedClearedAt, ctx.targetCreatedAt);
     nativeContextReset = await buildNativeContextReset(sessionId, ctx);
-    await assertTaskActionCurrent();
+    await assertCommitWriteAllowed();
     if (ctx.userUuid && opts?.allowFileRestore !== false) {
       await makerSession.commitRewindFiles(ctx.userUuid, '', { rewindsToNativeThreadStart: true });
     }
@@ -1010,7 +1015,7 @@ async function commitRewindAtMessage(
   } else {
     expectedClearedAt = await rereadSessionClearedAt(sessionId);
     await assertClearGenerationUnchanged(sessionId, expectedClearedAt, ctx.targetCreatedAt);
-    await assertTaskActionCurrent();
+    await assertCommitWriteAllowed();
     if (ctx.userUuid && opts?.allowFileRestore !== false) {
       rewindResult = await makerSession.commitRewindFiles(ctx.userUuid, ctx.assistantUuid!);
     } else {
@@ -1040,7 +1045,7 @@ async function commitRewindAtMessage(
   const now = Date.now();
   let rewoundClientIds: string[];
   try {
-    await assertTaskActionCurrent();
+    await assertCommitWriteAllowed();
     rewoundClientIds = await dbClient.tx('rewind.commit', {
       sessionId,
       targetCreatedAt: ctx.targetCreatedAt,

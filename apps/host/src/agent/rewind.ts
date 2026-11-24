@@ -1,4 +1,3 @@
-import fs from 'node:fs';
 import { eq } from 'drizzle-orm';
 import type { AgentKind, CreateSessionOptions, Maker, Session as MakerSession } from '@cindy/maker-core';
 import { getActiveAppSession } from '../../../desktop/src/main/appSessionState.js';
@@ -7,8 +6,8 @@ import { listMessagesForAgentHandoff } from '../../../desktop/src/main/localDb/a
 import { getDbClient } from '../../../desktop/src/main/localDb/client/current.js';
 import { sessions } from '../../../desktop/src/main/localDb/schema.js';
 import { listVisibleSubagentObservationIdentities, type VisibleSubagentObservationIdentity } from '../../../desktop/src/main/localDb/subagentRuns.js';
-import { readSessionExtraDirsFromDb, readSessionWritableDirsFromDb } from '../../../desktop/src/main/maker-host/session-storage.js';
 import { createLogger } from '../../../desktop/src/main/logger.js';
+import { directoryGrantsForRuntime } from '../../../desktop/src/main/maker-ipc/extraDirsValidator.js';
 import { createRewindOrchestrator, type RewindCommitOptions } from '../../../desktop/src/main/maker-orchestration/rewindCore.js';
 import { advanceSessionRewindGeneration, withSendToSessionLock } from '../../../desktop/src/main/maker-ipc/sendToSessionLock.js';
 import { createSessionActionRuntime } from '../../../desktop/src/main/maker-ipc/sessionActionRuntime.js';
@@ -33,6 +32,18 @@ function wrapErr(err: unknown): never {
   throwIpcError(code, err instanceof Error ? err.message : String(err));
 }
 
+export interface HostRewindStartPorts {
+  buildCreateOptsWithStderr(opts: CreateSessionOptions): CreateSessionOptions;
+  checkWorkDirExists(sessionId: string, workingDir: string, agentKind: AgentKind, remoteHostId?: string): Promise<boolean>;
+  readSessionExtraDirsFromDb(sessionId: string): Promise<string[]>;
+  readSessionWritableDirsFromDb(sessionId: string): Promise<string[]>;
+  bootstrapSession(
+    opts: CreateSessionOptions,
+    assertAccess?: () => void,
+    nativeHistoryResume?: boolean,
+  ): Promise<{ session: MakerSession }>;
+}
+
 export interface HostRewindPorts {
   getMaker(): Pick<Maker, 'getSession' | 'getSessionMeta' | 'closeSession' | 'closeSessionIfCurrent'> | null;
   resolveHandoffWindow(
@@ -48,9 +59,10 @@ export interface HostRewindPorts {
   ): Promise<number | null>;
   drainSessionPersistence(sessionId: string): Promise<void>;
   setLastAssistantTranscriptUuid(sessionId: string, uuid: string | undefined): void;
-  restoreSession(sessionId: string, options: CreateSessionOptions, assertCurrent: () => void): Promise<MakerSession>;
+  startPorts(): HostRewindStartPorts;
   withSessionInputStoppedForRewind<T>(sessionId: string, action: () => Promise<T>): Promise<T>;
   profileHoldReason(): string | null;
+  profileHoldGeneration?(): number;
   clearPendingHandoff(sessionId: string): void;
   recoverGeneratedImages(sessionId: string): Promise<unknown>;
   publish(event: Record<string, unknown>): void;
@@ -67,9 +79,12 @@ export function createHostRewind(ports: HostRewindPorts) {
       throwIpcError('PRECONDITION_FAILED', 'Account changed while preparing rewind');
     }
   };
-  const assertNotHeld = () => {
+  const assertNotHeld = (expectedHoldGeneration?: number) => {
     const held = ports.profileHoldReason();
     if (held) throw holdError(held);
+    if (expectedHoldGeneration !== undefined && ports.profileHoldGeneration?.() !== expectedHoldGeneration) {
+      throw holdError('Profile hold state changed during rewind');
+    }
   };
 
   const orchestrator = createRewindOrchestrator({
@@ -93,16 +108,18 @@ export function createHostRewind(ports: HostRewindPorts) {
       return row;
     },
     resume: async (sessionId, row, assertCurrent) => {
-      if (!row.workingDir || !fs.existsSync(row.workingDir)) {
-        throwIpcError('NOT_FOUND', 'Task working directory is unavailable');
-      }
-      const extraDirs = await readSessionExtraDirsFromDb(sessionId);
-      assertCurrent();
-      const writableDirs = await readSessionWritableDirsFromDb(sessionId);
-      assertCurrent();
-      const createOpts: CreateSessionOptions = {
+      const startHoldGeneration = ports.profileHoldGeneration?.();
+      const assertResumeAllowed = () => {
+        assertCurrent();
+        assertNotHeld(startHoldGeneration);
+      };
+      assertResumeAllowed();
+      if (!row.workingDir) throwIpcError('NOT_FOUND', 'Task working directory is unavailable');
+      const start = ports.startPorts();
+      const agentKind = dbToMakerEngineKind(row.agentKind);
+      const createOpts = start.buildCreateOptsWithStderr({
         id: sessionId,
-        agentKind: dbToMakerEngineKind(row.agentKind),
+        agentKind,
         workingDir: row.workingDir,
         model: row.model ?? undefined,
         providerId: row.providerId ?? undefined,
@@ -112,10 +129,19 @@ export function createHostRewind(ports: HostRewindPorts) {
         permissionMode: (row.permissionMode ?? 'ask') as CreateSessionOptions['permissionMode'],
         planMode: row.planModeEnabled === true,
         title: row.title ?? undefined,
-        ...(extraDirs.length > 0 ? { additionalDirectories: extraDirs } : {}),
-        ...(writableDirs.length > 0 ? { writableDirs } : {}),
-      };
-      return ports.restoreSession(sessionId, createOpts, assertCurrent);
+      });
+      const ready = await start.checkWorkDirExists(sessionId, createOpts.workingDir, agentKind);
+      assertResumeAllowed();
+      if (!ready) throwIpcError('NOT_FOUND', 'Task working directory is unavailable');
+      const extraDirs = await start.readSessionExtraDirsFromDb(sessionId);
+      assertResumeAllowed();
+      if (extraDirs.length > 0) Object.assign(createOpts, directoryGrantsForRuntime(extraDirs));
+      const writableDirs = await start.readSessionWritableDirsFromDb(sessionId);
+      assertResumeAllowed();
+      if (writableDirs.length > 0) createOpts.writableDirs = writableDirs;
+      const { session } = await start.bootstrapSession(createOpts, assertResumeAllowed, true);
+      assertResumeAllowed();
+      return session;
     },
     close: async (_sessionId, live) => {
       await ports.getMaker()?.closeSessionIfCurrent(live, 'runtime-refresh');
@@ -128,12 +154,10 @@ export function createHostRewind(ports: HostRewindPorts) {
     return withSendToSessionLock(sessionId, async () => {
       let committed = false;
       try {
-        assertNotHeld();
-        if (opts.ownerScope) assertOwner(opts.ownerScope);
+        opts.assertWriteAllowed?.();
         await assertTaskActionCurrent(sessionId, clientId);
         await actionRuntime(sessionId, 'rewind');
-        assertNotHeld();
-        if (opts.ownerScope) assertOwner(opts.ownerScope);
+        opts.assertWriteAllowed?.();
         await assertTaskActionCurrent(sessionId, clientId);
         const result = await orchestrator.commitRewindAtMessage(sessionId, clientId, opts);
         committed = true;
@@ -162,10 +186,12 @@ export function createHostRewind(ports: HostRewindPorts) {
       const sid = requireString(sessionId, 'sessionId');
       const cid = requireString(clientId, 'clientId');
       const ownerScope = captureDataOwnerBroadcastScope();
+      const holdGeneration = ports.profileHoldGeneration?.();
       try {
         return await withSendToSessionLock(sid, async () => {
           try {
             assertOwner(ownerScope);
+            if (!ports.getMaker()?.getSession(sid)) assertNotHeld(holdGeneration);
             await actionRuntime(sid, 'rewind');
             assertOwner(ownerScope);
             return await orchestrator.previewRewindAtMessage(sid, cid);
@@ -180,7 +206,8 @@ export function createHostRewind(ports: HostRewindPorts) {
     },
 
     async commit(sessionId: unknown, clientId: unknown, opts?: unknown) {
-      assertNotHeld();
+      const holdGeneration = ports.profileHoldGeneration?.();
+      assertNotHeld(holdGeneration);
       const ownerScope = captureDataOwnerBroadcastScope();
       const sid = requireString(sessionId, 'sessionId');
       const cid = requireString(clientId, 'clientId');
@@ -188,9 +215,14 @@ export function createHostRewind(ports: HostRewindPorts) {
       const requireLatestUser = !!opts && typeof opts === 'object' && (opts as { requireLatestUser?: unknown }).requireLatestUser === true;
       const stopIfRunning = !!opts && typeof opts === 'object' && (opts as { stopIfRunning?: unknown }).stopIfRunning === true;
       const allowFileRestore = !!opts && typeof opts === 'object' && (opts as { allowFileRestore?: unknown }).allowFileRestore === false ? false : undefined;
+      const assertWriteAllowed = () => {
+        assertNotHeld(holdGeneration);
+        assertOwner(ownerScope);
+      };
       const commitOpts: RewindCommitOptions = {
         requireLatestUser,
         ownerScope,
+        assertWriteAllowed,
         ...(allowFileRestore === false ? { allowFileRestore: false as const } : {}),
       };
       let subagentFence: SubagentRewindFence | null = null;
@@ -199,6 +231,7 @@ export function createHostRewind(ports: HostRewindPorts) {
       try {
         subagentFence = beginSubagentRewindFence(sid);
         primeSubagentRewindFence(subagentFence, await listVisibleSubagentObservationIdentities(sid));
+        assertWriteAllowed();
         await assertTaskActionCurrent();
         const result = stopIfRunning
           ? await ports.withSessionInputStoppedForRewind(sid, () => commitAfterStopping(sid, cid, commitOpts))
