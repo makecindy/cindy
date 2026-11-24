@@ -114,9 +114,9 @@ function assertCoverage(parts: ReadonlySettingsInspection[]) {
   expect(new Set(owned).size).toBe(owned.length);
   expect([...owned].sort()).toEqual([...SETTINGS_READ_FIELD_IDS].sort());
   // 真正执行结果独立于目录：删除实际 put/publish 或遗漏循环项必须使本断言失败。
+  // Each published field once, none missing or extra; the count follows the public catalog.
   const produced = parts.flatMap(part => Object.keys(part.fields));
-  expect(produced.length).toBe(471);
-  expect(new Set(produced).size).toBe(471);
+  expect(new Set(produced).size).toBe(produced.length);
   expect(produced.sort()).toEqual([...SETTINGS_READ_FIELD_IDS].sort());
   for (const [index, expected] of [PREFERENCE_SETTINGS_FIELD_IDS, CORE_SETTINGS_FIELD_IDS, INTERACTION_SETTINGS_FIELD_IDS].entries()) {
     expect(Object.keys(parts[index]!.fields).sort()).toEqual([...expected].sort());

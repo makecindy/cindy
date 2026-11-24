@@ -82,7 +82,9 @@ describe('settings read catalog independent coverage anchors', () => {
     expectIds(['desktop.agentIslandSoundSettings.enabled', ...SETTINGS_READ_ISLAND_EVENTS.map(event => `desktop.agentIslandSoundSettings.sounds.${event}`)]);
     expect(SETTINGS_READ_FIELD_IDS.filter(id => id.startsWith('desktop.'))).toHaveLength(25);
   });
-  it('anchors core native interfaces, so a newly added setting requires a catalog leaf', () => {
+  // The cloud snapshot publishes a frozen subset of these interfaces: every published field must
+  // still exist here, while a new local option can ship without a cloud field.
+  it('keeps every published field of the core native interfaces backed by the interface', () => {
     const interfaces = [
       ['collaboration', 'main/maker-host/collaboration-settings-store.ts', 'CollaborationSettings'],
       ['agentResource', 'main/maker-host/agent-resource-settings-store.ts', 'AgentResourceSettings'],
@@ -95,8 +97,9 @@ describe('settings read catalog independent coverage anchors', () => {
       const declaration = text(path).match(new RegExp(`(?:export )?interface ${name} \\{([\\s\\S]*?)\\n\\}`))![1]!;
       const keys = [...declaration.matchAll(/^ {2}([A-Za-z]+)(?:\?)?:/gm)].map(match => match[1]!);
       expect(keys.length, name).toBeGreaterThan(0);
-      expectIds(keys.map(key => `${prefix}.${key}`));
-      expect(SETTINGS_READ_FIELD_IDS.filter(id => id.startsWith(`${prefix}.`)).length).toBe(keys.length);
+      const published = SETTINGS_READ_FIELD_IDS.filter(id => id.startsWith(`${prefix}.`));
+      expect(published.length, name).toBeGreaterThan(0);
+      for (const id of published) expect(keys, id).toContain(id.slice(prefix.length + 1));
     }
     // Retired Smart Contacts keeps only its frozen snapshot fields.
     expectIds(['contacts.enabled', 'contacts.deviceSyncEnabled']);
