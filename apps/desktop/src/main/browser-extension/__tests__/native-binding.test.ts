@@ -362,7 +362,14 @@ describe('native-binding', () => {
       platform: 'win32',
       arch: 'x64',
       env: { SystemRoot: 'C:\\Windows' },
-      readWindowsManifests: async () => [],
+      loadWindowsManifestReader: async () => {
+        // Another installer can acquire the real registration lock during a cold addon load.
+        const lockPath = path.join(dir, 'native', 'com.example.browser.lock');
+        await registrationLocks.withSecurityBoundaryLock(lockPath, { label: 'competing installer', waitMs: 0 }, async lock => {
+          expect(lock.held).toBe(true);
+        });
+        return () => null;
+      },
       run,
     });
     expect((await n.install(18819, [EXT])).ok).toBe(true);

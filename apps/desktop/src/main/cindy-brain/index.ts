@@ -4564,10 +4564,9 @@ export function getGhostBrowserExtensionSlot(): GhostBrowserExtensionSlot {
     browserExtensionSlotSingleton = new GhostBrowserExtensionSlot({
       createNativeBinding: options => createNativeBinding({
         ...options,
-        readWindowsManifests: async keys => {
+        loadWindowsManifestReader: async () => {
           const native = await loadWindowsTaskbarNative().catch(() => null);
-          if (!native?.readBrowserManifest) return undefined;
-          return keys.map(key => native.readBrowserManifest(key)).filter(path => path !== null);
+          return native?.readBrowserManifest?.bind(native);
         },
       }),
       getGhost: findGhostForInstanceId,

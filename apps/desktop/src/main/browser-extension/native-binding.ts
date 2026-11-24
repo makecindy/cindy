@@ -18,6 +18,8 @@ import net from 'node:net';
 import { readBoundedFileNoFollow, readBoundedFileNoFollowSync } from '../utils/readBoundedFile.js';
 import { withSecurityBoundaryLock } from '../device-link/crossProcessLock.js';
 
+type WindowsManifestReader = (key: string) => string | null;
+
 export interface NativeBindingOptions {
   /** 注册名(身份卡 browserExtension.nativeHost.name)。 */
   hostName: string;
@@ -35,7 +37,7 @@ export interface NativeBindingOptions {
   confirmTakeover?(): Promise<boolean>;
   assertCurrent?(): void;
   /** Undefined selects the portable reader when the desktop addon is unavailable. */
-  readWindowsManifests?(keys: readonly string[]): Promise<readonly string[] | undefined>;
+  loadWindowsManifestReader?(): Promise<WindowsManifestReader | undefined>;
   /** 覆盖浏览器 profile 目录清单(测试用)。 */
   profiles?: string[];
   run?: (
@@ -137,12 +139,12 @@ $values = @(foreach ($key in $keys) {
     return values;
   }
 
-  async function registeredBinary(expectedBinary?: string): Promise<string | null> {
+  async function registeredBinary(expectedBinary?: string, reader?: WindowsManifestReader): Promise<string | null> {
     const requiredFiles = new Set<string>();
     if (expectedBinary !== undefined && platform === 'win32') {
       let files: readonly string[];
       try {
-        files = await options.readWindowsManifests?.(windowsRegistryKeys) ?? await queryWindowsManifests();
+        files = reader ? windowsRegistryKeys.map(reader).filter(file => file !== null) : await queryWindowsManifests();
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'EACCES' || (error as Error).message === 'NATIVE_PATH_UNSAFE') throw error;
         const timedOut = (error as { killed?: boolean }).killed === true;
@@ -290,13 +292,13 @@ $values = @(foreach ($key in $keys) {
     return [...ids];
   }
 
-  async function installLocked(port: number, extensionIds: readonly string[], takeover: boolean) {
+  async function installLocked(port: number, extensionIds: readonly string[], takeover: boolean, reader?: WindowsManifestReader) {
     try {
       options.assertCurrent?.();
       await privateDirectory(root);
       const binaryName = 'cindy-browser-native' + (platform === 'win32' ? '.exe' : '');
       const binary = path.join(root, binaryName);
-      const registered = await registeredBinary(binary);
+      const registered = await registeredBinary(binary, reader);
       if (registered !== null && registered !== binary) {
         if (!takeover || !await options.confirmTakeover?.())
           return { ok: false as const, error: 'NATIVE_BINDING_UNAVAILABLE' as const, reason: 'NATIVE_HOST_IN_USE' };
@@ -377,10 +379,12 @@ $values = @(foreach ($key in $keys) {
   async function install(port: number, extensionIds: readonly string[], request?: { takeover?: boolean }) {
     try {
       await privateDirectory(registrationRoot);
+      // Development builds may need to compile the addon. Only the registry read needs the lock.
+      const reader = platform === 'win32' ? await options.loadWindowsManifestReader?.() : undefined;
       const result = await withSecurityBoundaryLock(path.join(registrationRoot, options.hostName + '.lock'),
       { label: 'browser-native-registration' }, async lock => {
         if (!lock.held) return { ok: false as const, error: 'NATIVE_BINDING_UNAVAILABLE' as const, reason: 'REGISTRATION_BUSY' };
-        return installLocked(port, extensionIds, request?.takeover === true);
+        return installLocked(port, extensionIds, request?.takeover === true, reader);
       });
       if (!result.ok) state = 'unavailable';
       return result;

@@ -38,13 +38,14 @@ fn failure(error: impl std::fmt::Display) -> napi::Error {
 /// Validate the complete UTF-16 value before expanding environment variables.
 #[napi]
 pub fn read_browser_manifest(key: String) -> napi::Result<Option<String>> {
-    use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, ERROR_SUCCESS};
+    use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_MORE_DATA, ERROR_PATH_NOT_FOUND, ERROR_SUCCESS, ERROR_UNSUPPORTED_TYPE};
     use windows_sys::Win32::System::Environment::ExpandEnvironmentStringsW;
     use windows_sys::Win32::System::Registry::{
         RegGetValueW, HKEY_CURRENT_USER, REG_EXPAND_SZ, RRF_NOEXPAND, RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ,
     };
+    let unsafe_path = || napi::Error::from_reason("NATIVE_PATH_UNSAFE");
     let key = key.strip_prefix("HKCU\\").filter(|key| !key.contains('\0'))
-        .ok_or_else(|| napi::Error::from_reason("Invalid registry key"))?;
+        .ok_or_else(unsafe_path)?;
     let wide: Vec<u16> = key.encode_utf16().chain(Some(0)).collect();
     // Longest Windows path, including its terminator. Larger or malformed
     // values must never be mistaken for an unclaimed registration.
@@ -57,26 +58,30 @@ pub fn read_browser_manifest(key: String) -> napi::Result<Option<String>> {
     };
     match status {
         ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND => Ok(None),
+        ERROR_MORE_DATA | ERROR_UNSUPPORTED_TYPE => Err(unsafe_path()),
         ERROR_SUCCESS => {
             let raw = buffer.get(..(bytes / 2) as usize)
                 .and_then(|data| data.strip_suffix(&[0]))
                 .filter(|data| bytes % 2 == 0 && !data.is_empty() && !data.contains(&0))
-                .ok_or_else(|| napi::Error::from_reason("Invalid registry value"))?;
+                .ok_or_else(unsafe_path)?;
             let mut expanded;
             let contents = if kind == REG_EXPAND_SZ {
                 expanded = vec![0u16; 32768];
                 let length = unsafe {
                     ExpandEnvironmentStringsW(buffer.as_ptr(), expanded.as_mut_ptr(), expanded.len() as u32)
                 };
-                if length <= 1 || length as usize > expanded.len() {
-                    return Err(napi::Error::from_reason("Invalid expanded registry path"));
+                if length == 0 {
+                    return Err(napi::Error::from_reason("Registry path expansion failed"));
+                }
+                if length == 1 || length as usize > expanded.len() {
+                    return Err(unsafe_path());
                 }
                 &expanded[..length as usize - 1]
             } else {
                 raw
             };
             String::from_utf16(contents).map(Some)
-                .map_err(|_| napi::Error::from_reason("Invalid registry string"))
+                .map_err(|_| unsafe_path())
         }
         _ => Err(napi::Error::from_reason(format!("Registry read failed ({status})"))),
     }
