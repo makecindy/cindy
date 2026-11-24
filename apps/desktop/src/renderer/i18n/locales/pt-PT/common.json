@@ -22773,6 +22773,10 @@
       "separator": "; "
     },
     "settings": {
+      "autoSwitch": {
+        "title": "Mudar de fonte automaticamente quando houver problema",
+        "hint": "Quando a fonte usada por uma tarefa falha, as tarefas num grupo de modelos passam para a fonte disponível seguinte do grupo, sem precisar de acompanhar. Cada mudança fica anotada por baixo dessa ronda. As tarefas sem grupo de modelos seguem «Alternativa automática de modelo para tarefas»."
+      },
       "newRoute": "Novo modo",
       "newRouteName": "Novo modo",
       "routesEmpty": "Ainda não há modos. Crie um e adicione várias fontes.",

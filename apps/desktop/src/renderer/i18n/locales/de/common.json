@@ -22558,6 +22558,10 @@
       "separator": "; "
     },
     "settings": {
+      "autoSwitch": {
+        "title": "Bei Problemen automatisch die Quelle wechseln",
+        "hint": "Fällt die Quelle einer Aufgabe aus, wechseln Aufgaben mit einer Modellgruppe automatisch zur nächsten nutzbaren Quelle der Gruppe, ohne dass Sie aufpassen müssen. Jeder Wechsel wird unter dem Durchgang vermerkt. Aufgaben ohne Modellgruppe folgen „Automatischer Modellwechsel für Aufgaben“."
+      },
       "newRoute": "Neuer Modus",
       "newRouteName": "Neuer Modus",
       "routesEmpty": "Noch keine Modi. Erstelle einen und füge mehrere Quellen hinzu.",

@@ -417,7 +417,8 @@ interface SessionGuardState {
 
 export interface InterruptedTurnAutoResumeGuardDeps {
   /** kill switch（interrupted-turn-auto-resume-store，默认开启）。 */
-  isEnabled: () => boolean;
+  /** Whether this session's interrupted turns are auto-resumed (a model-group task can be on while the setting is off). */
+  isEnabled: (sessionId: string) => boolean;
   log: GuardLogger;
   /** 可注入时钟，单测用；默认 Date.now。 */
   now?: () => number;
@@ -641,7 +642,7 @@ export class InterruptedTurnAutoResumeGuard {
    */
   onInterruptedTurn(sessionId: string, erroredAt: number): InterruptedTurnResumeDecision {
     const s = this.state(sessionId);
-    if (!this.deps.isEnabled()) {
+    if (!this.deps.isEnabled(sessionId)) {
       this.deps.log.debug('interrupted-turn auto-resume disabled by kill switch', { sessionId });
       return { action: 'skip', why: 'disabled' };
     }

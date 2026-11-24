@@ -11,6 +11,16 @@ export const modelGroupsSettings = defineSettings({
     sectionKey: 'settings.tabs.modelGroups',
     aliases: ['模型编排', '模型路由', 'model routing', 'model orchestration'],
   },
+  autoSwitch: {
+    id: 'modelGroups.autoSwitch',
+    tab: 'model-groups',
+    targetId: 'settings-model-groups-auto-switch',
+    fallbackTargetId: 'settings-panel-model-groups',
+    titleKey: 'modelGroups.settings.autoSwitch.title',
+    descriptionKey: 'modelGroups.settings.autoSwitch.hint',
+    sectionKey: 'settings.tabs.modelGroups',
+    aliases: ['自动换', '自动接替', '故障转移', '降级', 'fallback', 'failover', 'auto switch'],
+  },
   routes: {
     id: 'modelGroups.routes',
     tab: 'model-groups',

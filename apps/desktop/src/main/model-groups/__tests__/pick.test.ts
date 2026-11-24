@@ -20,6 +20,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ProviderView } from '@cindy/model-providers';
 
 import {
+  modelGroupAutoSwitchOn,
   modelGroupCandidateKey,
   modelGroupResolveResultForRemote,
   modelGroupResolveResultFromRemote,
@@ -596,5 +597,19 @@ describe('strategies added on 2026-11-21', () => {
     expect(wire.routes.map((item) => [item.strategy, (item as { pick?: string }).pick])).toEqual([['order', 'drain'], ['order', undefined]]);
     // 新版读回来是真实的选法。
     expect(normalizeModelGroupsConfig(JSON.parse(JSON.stringify(wire))).routes.map((item) => item.strategy)).toEqual(['drain', 'order']);
+  });
+});
+
+// model-groups.md §4.5: 「出问题时自动换来源」 is on unless the user turned it off, and only the off state is stored.
+describe('auto switch setting', () => {
+  it.each([
+    ['never set', {}, true, undefined],
+    ['turned off', { autoSwitch: false }, false, false],
+    ['a stray true', { autoSwitch: true }, true, undefined],
+    ['junk', { autoSwitch: 'no' }, true, undefined],
+  ] as const)('reads %s', (_name, extra, on, stored) => {
+    const config = normalizeModelGroupsConfig({ routes: [], ...extra });
+    expect(modelGroupAutoSwitchOn(config)).toBe(on);
+    expect(config.autoSwitch).toBe(stored);
   });
 });

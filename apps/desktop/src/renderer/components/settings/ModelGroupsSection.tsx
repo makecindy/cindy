@@ -37,6 +37,7 @@ import { cn } from '@/lib/utils';
 import {
   MODEL_GROUP_LIMITS,
   MODEL_GROUP_STRATEGIES,
+  modelGroupAutoSwitchOn,
   modelGroupCandidateKey,
   modelGroupWeight,
   type ModelGroupCandidate,
@@ -440,6 +441,28 @@ export function ModelGroupsSection() {
   return (
     <SettingsSection variant="page" title={t('modelGroups.title')} description={t('modelGroups.description')} testId="model-groups-settings">
       <ModelGroupsOverview config={config} onOpenRoute={(id) => setView({ kind: 'route', id })} />
+      <SettingsSection>
+        <SettingsCard id={modelGroupsSettings.autoSwitch.targetId}>
+          <SettingsRow
+            title={t('modelGroups.settings.autoSwitch.title')}
+            hint={t('modelGroups.settings.autoSwitch.hint')}
+            trailing={
+              <Switch
+                data-setting-id={modelGroupsSettings.autoSwitch.id}
+                checked={modelGroupAutoSwitchOn(config)}
+                disabled={!loaded}
+                aria-label={t('modelGroups.settings.autoSwitch.title')}
+                onCheckedChange={(on) => void save((latest) => {
+                  // 默认开：开着时不存这一项，关掉才存 false(model-groups.md §4.5)。
+                  const { autoSwitch: _was, ...rest } = latest;
+                  void _was;
+                  return on ? rest : { ...rest, autoSwitch: false };
+                })}
+              />
+            }
+          />
+        </SettingsCard>
+      </SettingsSection>
       <SettingsSection
         title={t('modelGroups.routes')}
         titleId={modelGroupsSettings.routes.targetId}

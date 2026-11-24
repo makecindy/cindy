@@ -22558,6 +22558,10 @@
       "separator": "; "
     },
     "settings": {
+      "autoSwitch": {
+        "title": "Switch sources automatically when one fails",
+        "hint": "When the source a task is using fails, tasks on a model group move to the next usable source in the group, so you don’t have to watch. Each switch is noted under that turn. Tasks not on a model group follow “Automatic task model fallback”."
+      },
       "newRoute": "New mode",
       "newRouteName": "New mode",
       "routesEmpty": "No modes yet. Create one and add a few sources.",

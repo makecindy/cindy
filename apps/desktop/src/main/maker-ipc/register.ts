@@ -1465,14 +1465,14 @@ import {
   setSessionEffort,
   setSessionFastMode,
 } from '../maker-host/session-effort-store.js';
-import { modelGroupCandidateKey } from '../../shared/modelGroups.js';
+import { modelGroupAutoSwitchOn, modelGroupCandidateKey } from '../../shared/modelGroups.js';
 import { botModelGroupsSignature, expandBotModelGroups, modelGroupCandidateRoute } from '../model-groups/botRoutes.js';
 import { pickModelGroupRoute, readModelGroupRecoveryOffer } from '../model-groups/desktopResolver.js';
 import { modelGroupSessionStart } from '../model-groups/sessionStart.desktop.js';
 import { isModelGroupRecoverySource } from '../model-groups/switchOffer.js';
 import { modelGroupRouteFor } from '../model-groups/routeFor.js';
 import { readModelGroupsConfig } from '../model-groups/store.js';
-import { bindModelGroupSession, readModelGroupBindingForDispatch } from '../model-groups/sessionBindings.js';
+import { bindModelGroupSession, readModelGroupBindingForDispatch, readModelGroupSessionBinding } from '../model-groups/sessionBindings.js';
 import { readSessionRuntimeFallbackSettings } from '../maker-host/session-runtime-fallback-store.js';
 import {
   getModelVisibilityMirrorSnapshot,
@@ -2308,8 +2308,10 @@ const {
   settleUndispatchedInterruptedAutoResume,
 } = createAutoResumeRuntime({
   isSilentStopAutoResumeEnabled: () => readSilentStopAutoResumeSettings().enabled,
-  isInterruptedTurnAutoResumeEnabled: () =>
-    readInterruptedTurnAutoResumeSettings().enabled || readSessionRuntimeFallbackSettings().enabled,
+  // A task on a model group keeps its retries and source switching (model-groups.md §4.5) whatever these settings say.
+  isInterruptedTurnAutoResumeEnabled: (sessionId) =>
+    readInterruptedTurnAutoResumeSettings().enabled || readSessionRuntimeFallbackSettings().enabled ||
+    (!!readModelGroupSessionBinding(sessionId) && modelGroupAutoSwitchOn(readModelGroupsConfig())),
   guardLog: {
     debug: (message, meta) => log.debug(message, meta),
     warn: (message, meta) => log.warn(message, meta),
@@ -17630,7 +17632,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         pendingMutation: profiles.pendingMutation,
         fallbackEnabled: await hasExplicitSessionTaskModel(sessionId) ? false : botFallback.isBot
           ? botFallback.candidate !== null
-          : readSessionRuntimeFallbackSettings().enabled,
+          : readModelGroupSessionBinding(sessionId)
+            ? modelGroupAutoSwitchOn(readModelGroupsConfig())
+            : readSessionRuntimeFallbackSettings().enabled,
       };
     },
     setSessionPermissionMode: ({ sessionId, mode, beforeMutation }) => commitSessionPermissionMode(sessionId, mode, false, beforeMutation),
@@ -18695,7 +18699,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // 自动化发出的这一轮也按任务的模式接替：接管后由 beginSchedulerAutoResume 把这次运行交给续跑(与伙伴的例行运行同一条路)。
         // 任务当前来源不是记下的那个(自动化指定了别的模型)时 activeModelGroupBinding 不认，不会误换。
         const groupFallback = !ownsQuotaRoute() && !!botInput && isModelGroupRecoverySource(botInput.source) && !botInput.remoteHostId && !botInput.agentDeviceId &&
-          !botInput.orcaRole && readSessionRuntimeFallbackSettings().enabled && !!(await activeModelGroupBinding(sessionId, botInput)) && !isSessionSharedTaskActive(sessionId);
+          !botInput.orcaRole && modelGroupAutoSwitchOn(readModelGroupsConfig()) && !!(await activeModelGroupBinding(sessionId, botInput)) && !isSessionSharedTaskActive(sessionId);
         if (groupFallback) modelGroupInputs.add(args[2]);
         else modelGroupInputs.delete(args[2]);
         if (botInput?.source === 'bot' && ['canonical', 'delegation', 'group', 'channel', 'thread', 'routine'].includes(botInput.role ?? '')) {

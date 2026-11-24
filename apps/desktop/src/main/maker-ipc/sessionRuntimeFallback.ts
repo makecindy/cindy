@@ -164,7 +164,8 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
       if (!isCurrent()) return { session: null, outcome: 'superseded' };
       let currentForFallback: FallbackRouteProfile = profiles.effective;
       let candidate: FallbackRouteProfile | null = botFallback.candidate;
-      const group = groupRecovery && !botFallback.isBot && profiles.effective.agentKind !== 'acp' && readSessionRuntimeFallbackSettings().enabled
+      // groupRecovery only comes for a model-group task with 「出问题时自动换来源」 on (register.ts modelGroupInputs).
+      const group = groupRecovery && !botFallback.isBot && profiles.effective.agentKind !== 'acp'
         ? await readModelGroupFallbackCandidate?.(sessionId, profiles.effective, profiles.control.visitedRoutes, groupRecovery, profiles.control.generation)
         : null;
       if (!isCurrent()) return { session: null, outcome: 'superseded' };

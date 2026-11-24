@@ -138,6 +138,16 @@ export interface ModelGroupRoute {
 /** 2026-11-11 起只有路线；旧版存下的 modes 读取时忽略。 */
 export interface ModelGroupsConfig {
   routes: ModelGroupRoute[];
+  /**
+   * 「出问题时自动换来源」(model-groups.md §4.5)：默认开，只在用户关掉时存 false。管所有模式与自动路由；
+   * 没经过模式的普通任务看「任务模型自动降级」。
+   */
+  autoSwitch?: false;
+}
+
+/** 用了模式的任务出问题时是否自动换来源。 */
+export function modelGroupAutoSwitchOn(config: Pick<ModelGroupsConfig, 'autoSwitch'>): boolean {
+  return config.autoSwitch !== false;
 }
 
 export const MODEL_GROUPS_DEFAULTS: ModelGroupsConfig = { routes: [] };
@@ -425,7 +435,10 @@ export function normalizeModelGroupsConfig(raw: unknown): ModelGroupsConfig {
     MODEL_GROUP_LIMITS.routes,
   );
   const routeIds = new Set(routes.map((route) => route.id));
-  return { routes: routes.map((route) => pruneExceptions(route, routeIds)) };
+  return {
+    routes: routes.map((route) => pruneExceptions(route, routeIds)),
+    ...(value.autoSwitch === false ? { autoSwitch: false as const } : {}),
+  };
 }
 
 export function findModelGroupRoute(
