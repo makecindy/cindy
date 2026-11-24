@@ -2606,4 +2606,36 @@ describe('claude proxied response usage segments', () => {
     expect(agentB).toHaveLength(1);
     expect(agentB?.[0]).toMatchObject({ inputTokens: 2000, outputTokens: 10, cacheReadTokens: 60000 });
   });
+
+  it('starts a fresh segment when a retry reuses the id of a billable partial response', async () => {
+    const done = await run(
+      ...completedRequest({ usage: { input_tokens: 1000, cache_read_input_tokens: 50000 } }),
+      {
+        type: 'system',
+        subtype: 'api_retry',
+        attempt: 1,
+        max_retries: 3,
+        retry_delay_ms: 1000,
+        error_status: 529,
+        error: 'overloaded_error',
+      },
+      ...completedRequest({ usage: { input_tokens: 1200, cache_read_input_tokens: 60000 } }),
+      ...completedRequest({
+        usage: { input_tokens: 1200, cache_read_input_tokens: 60000, output_tokens: 80 },
+      }),
+      resultEvent({ input_tokens: 2200, cache_read_input_tokens: 110000, output_tokens: 80 }),
+    );
+
+    // The failed attempt stays billable; the retry and its own split cycles merge once.
+    expect(done?.usageSegments).toHaveLength(2);
+    expect(done?.usageSegments?.[0]).toMatchObject({
+      inputTokens: 1000,
+      cacheReadTokens: 50000,
+    });
+    expect(done?.usageSegments?.[1]).toMatchObject({
+      inputTokens: 1200,
+      outputTokens: 80,
+      cacheReadTokens: 60000,
+    });
+  });
 });

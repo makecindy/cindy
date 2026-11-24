@@ -1131,6 +1131,18 @@ function handleSystem(
   if (msg.subtype === 'api_retry') {
     // The backoff wait is not generation time; the retried request's first block resumes.
     ctx.rt.generation.tokenSpeed.pause();
+    // A retry is a new provider request even when the gateway reuses its placeholder
+    // message.id. Drop the failed attempt's split-cycle record (this parent only, so
+    // concurrent streams keep theirs) and close its active segment, allowing a billable
+    // partial attempt to be counted separately instead of merged by field-wise max.
+    // SDKAPIRetryMessage is typed without a parent id; tolerate one if a future SDK
+    // includes it, otherwise this is the main request being retried.
+    const retryParentId = (msg as { parent_tool_use_id?: unknown }).parent_tool_use_id;
+    const retryParentKey = typeof retryParentId === 'string' && retryParentId
+      ? retryParentId
+      : CLAUDE_MAIN_USAGE_PARENT;
+    clearUsageSegmentRequestsForParent(ctx, retryParentKey);
+    ctx.rt.activeUsageSegmentByParent.delete(retryParentKey);
     // SDKAPIRetryMessage 明确表示本次 API 失败仍在自动重试，不是 turn 终态。
     // 除日志外也暂存最后一次 retry 的错误详情，覆盖 SDK 没有额外发送
     // assistant.error envelope、最终 ResultMessage 又没有 result 文本的路径。
