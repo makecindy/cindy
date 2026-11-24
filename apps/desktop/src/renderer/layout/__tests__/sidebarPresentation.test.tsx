@@ -7,6 +7,7 @@ import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import {
   isTaskSessionRoute,
+  isTasklessPageRoute,
   passiveRevealOnBackgroundOpen,
   rewritesRevealSource,
   useSidebarPresentation,
@@ -209,8 +210,7 @@ it('keeps a settling request when only the session key changes', async () => {
   expect(result.current).toEqual({ collapsed: false, instant: true, expandedWidth: 1600 });
 });
 
-// Codex P1: 冷启动落在 /settings、/bots 这类无侧栏路由，之后通知把窗口带到「存档里右栏开着」
-// 的任务上。这条不是启动恢复，窗口保持原宽。
+// 启动落在哪个路由由 URL 判断，不看子视图声明的右栏在场（它要等自己的 effect）。
 it('reads the startup route from the URL, not from the sidebar declaration', () => {
   // 任务会话才有可恢复的右栏记忆；/cc-agent 下的静态段与其它路由都不算。
   expect(isTaskSessionRoute('/cc-agent/session-a')).toBe(true);
@@ -219,17 +219,28 @@ it('reads the startup route from the URL, not from the sidebar declaration', () 
     '/cc-agent/orca/session-a', '/settings', '/bots/roster']) {
     expect(isTaskSessionRoute(pathname)).toBe(false);
   }
+  // Codex P1: 冷启动的 URL 不是恢复后的任务 URL——`/` 交给 MainEntryRedirect，
+  // `/cc-agent` 再交给 CCAgentIndexRedirect 恢复上次任务。这两步都不是「用户落在
+  // 无侧栏页面上」，不能记成无侧栏启动，否则每次普通重启都会把存档开着的侧栏挤窄。
+  expect(isTasklessPageRoute('/')).toBe(false);
+  expect(isTasklessPageRoute('/cc-agent')).toBe(false);
+  expect(isTasklessPageRoute('/cc-agent/session-a')).toBe(false);
+  for (const pathname of ['/settings', '/bots/roster', '/plugins', '/cc-agent/new']) {
+    expect(isTasklessPageRoute(pathname)).toBe(true);
+  }
 });
 
+// Codex P1: 冷启动落在 /settings、/bots 这类无侧栏页面，之后通知把窗口带到「存档里右栏
+// 开着」的任务上。这条不是启动恢复，窗口保持原宽。
 it('does not expand on the first task landing after a taskless start', async () => {
   const resize = vi.fn(async () => 800);
   window.electronAPI = { windowSidebarExpansion: resize } as never;
   const { rerender } = renderHook(
-    ({ ready, sessionKey, taskRoute }) =>
-      useSidebarPresentation(root, false, ready, width, false, sessionKey, false, true, taskRoute),
-    { initialProps: { ready: false, sessionKey: '', taskRoute: false } },
+    ({ ready, sessionKey, tasklessRoute }) =>
+      useSidebarPresentation(root, false, ready, width, false, sessionKey, false, true, tasklessRoute),
+    { initialProps: { ready: false, sessionKey: '', tasklessRoute: true } },
   );
-  await act(async () => { rerender({ ready: true, sessionKey: 'task-a', taskRoute: true }); });
+  await act(async () => { rerender({ ready: true, sessionKey: 'task-a', tasklessRoute: false }); });
   expect(resize).not.toHaveBeenCalled();
 });
 
@@ -240,11 +251,31 @@ it('expands a task restored during startup even before the session key arrives',
   window.electronAPI = { windowSidebarExpansion: resize } as never;
   const { rerender } = renderHook(
     ({ ready, sessionKey }) =>
-      useSidebarPresentation(root, false, ready, width, false, sessionKey, false, true, true),
+      useSidebarPresentation(root, false, ready, width, false, sessionKey, false, true, false),
     { initialProps: { ready: false, sessionKey: '' } },
   );
   await act(async () => { rerender({ ready: true, sessionKey: 'task-a' }); });
   expect(resize).toHaveBeenCalledOnce();
+});
+
+// Codex P2: 回包到了但视口还没长到位时，finish 会挂一个自己的 resize 监听等下一帧；effect
+// 不再在元数据刷新时拆监听（否则会放开正在等的开栏），所以被取代的那次必须自己收尾，
+// 否则每次快速开合都在 renderer 里留一个永久监听。
+it('releases a superseded resize wait instead of leaving its listener behind', async () => {
+  let reply!: (delta: number) => void;
+  window.electronAPI = { windowSidebarExpansion: vi.fn(() => new Promise<number>((done) => { reply = done; })) } as never;
+  const abort = vi.spyOn(AbortController.prototype, 'abort');
+  const { rerender } = renderHook(({ collapsed }) => useSidebarPresentation(root, collapsed, true, width),
+    { initialProps: { collapsed: true } });
+  await act(async () => { rerender({ collapsed: false }); });
+  // The reply arrives before Chromium reaches the target viewport: a poll frame is queued.
+  await act(async () => { reply(800); });
+  expect(frames.length).toBeGreaterThan(0);
+  // Closing supersedes that wait before the viewport ever grew.
+  await act(async () => { rerender({ collapsed: true }); });
+  abort.mockClear();
+  frame();
+  expect(abort).toHaveBeenCalled();
 });
 
 it('keeps the standalone width when a readiness gap lands on another task passively', async () => {

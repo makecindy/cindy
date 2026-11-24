@@ -51,6 +51,22 @@ export function isTaskSessionRoute(pathname: string): boolean {
   return !NON_SESSION_SEGMENTS.has(segment);
 }
 
+/**
+ * 启动时先停在这两个路径只是重定向：`/` 交给 MainEntryRedirect，`/cc-agent` 交给
+ * CCAgentIndexRedirect 恢复上次的任务。它们不是「用户落在无侧栏的页面上」，
+ * 所以不能拿它们记「本次挂载先停在无侧栏路由」。
+ */
+const TRANSIENT_STARTUP_PATHS = new Set(['/', '/cc-agent']);
+
+/**
+ * 内容区当前是否停在一个确定没有任务侧栏的页面（`/settings`、`/bots`、`/plugins`、
+ * `/cc-agent/new` 等）。启动重定向路径不算，见 `TRANSIENT_STARTUP_PATHS`。
+ */
+export function isTasklessPageRoute(pathname: string): boolean {
+  if (!pathname || TRANSIENT_STARTUP_PATHS.has(pathname)) return false;
+  return !isTaskSessionRoute(pathname);
+}
+
 /** Hold the old layout while native geometry crosses the IPC/compositor boundary. */
 export function useSidebarPresentation(
   root: RefObject<HTMLDivElement | null>,
@@ -65,10 +81,11 @@ export function useSidebarPresentation(
   /** 面板失去就绪时是否把宽度还给窗口；自动收起（最后一个页签关掉等）保留窗口矩形。 */
   retractOnUnready = true,
   /**
-   * 内容区当前落在任务路由上（`isTaskSessionRoute`）。启动时先停在无侧栏路由、
-   * 之后才被通知带到任务上，那次展开是任务自己的存档，不是用户开栏。
+   * 内容区当前停在确定没有任务侧栏的页面上（`isTasklessPageRoute`）。启动时先停在这种
+   * 页面、之后才被通知带到任务上，那次展开是任务自己的存档，不是用户开栏；启动重定向
+   * 路径（`/`、`/cc-agent`）不算，它们随后会恢复上次的任务。
    */
-  taskRoute = true,
+  tasklessRoute = false,
 ): SidebarPresentation {
   const [presentation, setPresentation] = useState<SidebarPresentation>({ collapsed, instant: false });
   const expansion = useRef(expansionWidth);
@@ -100,7 +117,7 @@ export function useSidebarPresentation(
     const turnedUser = userToggle && !previousUserToggle.current;
     // 路由来源由调用方按 URL 同步给出：任务路由冷启动的首帧 sessionKey 还没填，
     // 不能拿它当「落在无侧栏路由」，否则启动恢复会被当成落地而不展开。
-    if (!everReady.current && !taskRoute) sawTasklessRender.current = true;
+    if (!everReady.current && tasklessRoute) sawTasklessRender.current = true;
     previousUserToggle.current = userToggle;
     previous.current = ready ? collapsed : null;
     if (ready) {
@@ -179,7 +196,12 @@ export function useSidebarPresentation(
       const target = viewport + growth;
       const started = performance.now();
       const finish = () => {
-        if (!active || id !== generation.current) return;
+        // A superseded wait must release its listener: the effect no longer tears down on
+        // a metadata-only rerender, so generation mismatch is the only signal left.
+        if (!active || id !== generation.current) {
+          stopWaiting();
+          return;
+        }
         // The invoke reply can arrive before Chromium observes the new native bounds.
         // A hidden/closing window must not retain a frozen layout indefinitely.
         if (growth !== 0 && Math.abs(window.innerWidth - target) > 1 && performance.now() - started < 1000) {
@@ -199,11 +221,14 @@ export function useSidebarPresentation(
       finish();
       if (active) window.addEventListener('resize', finish, { signal: listener.signal });
     }).catch(() => {
-      if (id !== generation.current) return;
+      if (id !== generation.current) {
+        stopWaiting();
+        return;
+      }
       ownsWidth.current = false;
       setPresentation({ collapsed, instant: false });
     });
-  }, [collapsed, ready, root, sessionKey, userToggle, retractOnUnready, taskRoute]);
+  }, [collapsed, ready, root, sessionKey, userToggle, retractOnUnready, tasklessRoute]);
 
   useLayoutEffect(() => () => {
     // StrictMode's second mount must establish a fresh baseline.

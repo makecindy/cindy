@@ -157,7 +157,7 @@ import { botRouteForOwnedSession, createSessionEntryNavigator, findBotProfileFor
 import { createPassiveRevealMarker } from '@/layout/passiveRevealMarker';
 import { createUserRevealMarker } from '@/layout/userRevealMarker';
 import { rightSidebarExpansionReady } from '@/layout/rightSidebarReadiness';
-import { isTaskSessionRoute, passiveRevealOnBackgroundOpen, rewritesRevealSource } from '@/layout/sidebarPresentation';
+import { isTasklessPageRoute, passiveRevealOnBackgroundOpen, rewritesRevealSource } from '@/layout/sidebarPresentation';
 import { readRemoteBots } from '@/features/bots/useRemoteBots';
 import { useSessionEntryLocationCommits } from '@/features/bots/useSessionEntryLocationCommits';
 import { islandEntryRouteState, requestIslandEntryAlertDisposal } from '@/features/bots/islandEntryAlert';
@@ -2156,7 +2156,7 @@ export function MainLayout() {
               rightTabsRetractOnUnready={
                 isSettingsRoute || rsbDetached || (!isRightSidebarCollapsed && !lastNamedGlobalPageClosed)
               }
-              rightTabsTaskRoute={isTaskSessionRoute(location.pathname)}
+              rightTabsTasklessRoute={isTasklessPageRoute(location.pathname)}
               rightTabsCollapsed={
                 !rightSidebarMounted || isRightSidebarCollapsed || rightSidebarForceCollapsed
               }

@@ -970,8 +970,8 @@ interface LayoutRootProps {
   rightTabsSessionKey?: string;
   /** 面板失去就绪时是否把宽度还给窗口；自动收起（最后一个页签关掉等）保留窗口矩形。 */
   rightTabsRetractOnUnready?: boolean;
-  /** 内容区当前落在任务路由上（URL 同步给出），启动恢复与「从无侧栏路由落地」靠它区分。 */
-  rightTabsTaskRoute?: boolean;
+  /** 内容区当前停在确定没有任务侧栏的页面（启动重定向不算），用来区分启动恢复与落地。 */
+  rightTabsTasklessRoute?: boolean;
 }
 
 export function LayoutRoot({
@@ -983,7 +983,7 @@ export function LayoutRoot({
   rightTabsPassiveReveal = false,
   rightTabsSessionKey = '',
   rightTabsRetractOnUnready = true,
-  rightTabsTaskRoute = true,
+  rightTabsTasklessRoute = false,
 }: LayoutRootProps = {}): ReactNode {
   // 幂等注册内置面板 —— 放组件体而非模块副作用:HMR / 测试 reset 后再渲染也能自愈。
   registerBuiltinPanels();
@@ -1029,7 +1029,7 @@ export function LayoutRoot({
     rightTabsSessionKey,
     rightTabsPassiveReveal,
     rightTabsRetractOnUnready,
-    rightTabsTaskRoute,
+    rightTabsTasklessRoute,
   );
   const rememberSidebarWidth = useRef<() => void>(() => undefined);
   rememberSidebarWidth.current = () => {
