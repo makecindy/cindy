@@ -152,6 +152,98 @@ describe('FolderPickerPopover project search', () => {
   });
 });
 
+// #11653: Enter used to select visibleProjectOptions[0] no matter which match the
+// user wanted, and the arrow keys did nothing. These cases go through the real search
+// box and assert which project the selection callback receives. Unit tier (jsdom):
+// native scrolling still needs the desktop black-box check recorded in the PR.
+describe('FolderPickerPopover keyboard highlight', () => {
+  const rowOf = (name: string) =>
+    screen.getByText(name).closest('[data-folder-picker-index]') as HTMLElement;
+
+  it('moves the Enter target with arrow keys, stops at both ends and scrolls the row into view', () => {
+    const scrolled: Element[] = [];
+    // jsdom has no layout, so record which row the picker asks the browser to reveal.
+    const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView');
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value(this: Element) {
+        scrolled.push(this);
+      },
+    });
+    try {
+      const { onSelect } = renderPicker(manyProjects);
+      const input = screen.getByPlaceholderText(SEARCH);
+      // Matches cindy, cindy-server, cindy-official-plugins (the first by its makecindy path).
+      fireEvent.change(input, { target: { value: 'cindy' } });
+      for (const key of ['ArrowUp', 'ArrowDown', 'ArrowDown', 'ArrowDown', 'ArrowUp']) {
+        fireEvent.keyDown(input, { key });
+      }
+      expect(document.activeElement).toBe(input);
+      expect(scrolled.at(-1)).toBe(rowOf('cindy-server'));
+
+      fireEvent.keyDown(input, { key: 'Enter' });
+      expect(onSelect).toHaveBeenCalledWith(manyProjects[1].path, 'project', manyProjects[1]);
+    } finally {
+      if (original) Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', original);
+      else delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    }
+  });
+
+  it('returns to the first match when the query changes and ignores keys while composing', () => {
+    const { onSelect } = renderPicker(manyProjects);
+    const input = screen.getByPlaceholderText(SEARCH);
+    fireEvent.change(input, { target: { value: 'cindy' } });
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    // Two matches remain; a stale index 1 would pick cindy-official-plugins.
+    fireEvent.change(input, { target: { value: 'cindy-' } });
+    fireEvent.keyDown(input, { key: 'ArrowDown', isComposing: true });
+    fireEvent.keyDown(input, { key: 'Enter', isComposing: true });
+    expect(onSelect).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(onSelect).toHaveBeenCalledWith(manyProjects[1].path, 'project', manyProjects[1]);
+  });
+
+  it.each([
+    {
+      name: 'a real pointer move makes the hovered row the Enter target',
+      interact: () => fireEvent.mouseMove(rowOf('cindy-official-plugins'), { clientX: 10, clientY: 40 }),
+      expected: manyProjects[2],
+    },
+    {
+      name: 'a move event at an unchanged position after a keyboard scroll keeps the keyboard row',
+      interact: (input: HTMLElement) => {
+        fireEvent.mouseMove(rowOf('cindy-official-plugins'), { clientX: 10, clientY: 40 });
+        fireEvent.keyDown(input, { key: 'ArrowDown' });
+        fireEvent.mouseMove(rowOf('cindy-official-plugins'), { clientX: 10, clientY: 40 });
+      },
+      expected: manyProjects[3],
+    },
+    {
+      name: 'leaving the list without a query clears the hover highlight',
+      interact: () => {
+        fireEvent.mouseMove(rowOf('cindy-official-plugins'), { clientX: 10, clientY: 40 });
+        fireEvent.mouseLeave(document.querySelector('[data-folder-picker-scroll]')!);
+      },
+      expected: undefined,
+    },
+  ])('$name', ({ interact, expected }) => {
+    const { onSelect } = renderPicker(manyProjects);
+    const input = screen.getByPlaceholderText(SEARCH);
+    // No query: Enter selects nothing until a row is highlighted.
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(onSelect).not.toHaveBeenCalled();
+
+    interact(input);
+    fireEvent.keyDown(input, { key: 'Enter' });
+    if (expected) {
+      expect(onSelect).toHaveBeenCalledWith(expected.path, 'project', expected);
+    } else {
+      expect(onSelect).not.toHaveBeenCalled();
+    }
+  });
+});
+
 // #9695: exercise the real portal and DOM event cancellation, which the old
 // source-string wheel check missed. jsdom cannot perform native scrolling;
 // real wheel displacement and scroll chaining still require browser validation.
