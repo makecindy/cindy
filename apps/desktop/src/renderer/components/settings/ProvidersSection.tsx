@@ -3,6 +3,8 @@ import { useRemoteProviderDisable } from '@/lib/remoteProviderDisable';
 import { Select } from '@/components/ui/select';
 import { duplicateSubscriptionProviders, listedSourceFolds } from '@cindy/model-providers';
 import { isProviderLogoKind } from '@cindy/model-providers/branding';
+import { useSettingsSubpageBack } from './useSettingsEscape';
+import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
 import { providersSettings } from './ProvidersSection.settings-search';
 import {
   BorrowedProviderModels,
@@ -37,7 +39,7 @@ import { providerWeeklyQuotaSource } from '../new-chat/useProviderWeeklyQuota';
  *     fetchProviderModels,additions-only 合并进配置(与 OAuth 动态发现同语义)。
  */
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Activity, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useRemoteControlEnabled } from '@/hooks/useRemoteControlEnabled';
@@ -739,9 +741,11 @@ function DetailHeader({
   const manualReset = useCodexRateLimitReset(resetSnapshot, refreshResets, provider?.id ?? 'openai');
   const detailScrollRef = useRef<HTMLDivElement>(null);
   const hasDetail = Boolean(detail);
+  const detailWasOpen = useRef(false);
   useLayoutEffect(() => {
-    // Reveal newly opened authentication content without resetting on typing or quota refresh.
-    if (hasDetail && detailScrollRef.current) detailScrollRef.current.scrollTop = 0;
+    // Returning from sharing reconnects layout effects without opening new authentication content.
+    if (hasDetail && !detailWasOpen.current && detailScrollRef.current) detailScrollRef.current.scrollTop = 0;
+    detailWasOpen.current = hasDetail;
   }, [hasDetail]);
   const subscriptionProduct =
     provider?.access?.kind === 'subscription' ? provider.access.product : null;
@@ -2726,6 +2730,13 @@ export function ProvidersSection() {
   );
   const [shareManageProviderId, setShareManageProviderId] = useState<string | null>(null);
   const [shareManageRemote, setShareManageRemote] = useState<OwnRemoteProvider | null>(null);
+  const { entry: searchEntry, activation: searchActivation } = useSettingsSearchNavigation();
+  useEffect(() => {
+    if (searchEntry?.tab === 'providers') {
+      setShareManageProviderId(null);
+      setShareManageRemote(null);
+    }
+  }, [searchEntry, searchActivation]);
   const openaiReconnectRequired = codexAuth.state.kind === 'reconnect-required';
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -3620,6 +3631,14 @@ export function ProvidersSection() {
     ? pluginEngines.find((engine) => engine.providerId === shareManageProviderId) ?? null
     : null;
   const shareManageProvider = shareManageRemote?.provider ?? (shareManageProviderId ? byId.get(shareManageProviderId) ?? null : null);
+  const backFromSharing = () => {
+    if (shareManageRemote) setSelectedRemoteKey(shareManageRemote.key);
+    else if (shareManagePluginEngine) selectEngine(shareManagePluginEngine.key);
+    else if (!shareManageIsPluginEngine) setSelectedId(shareManageProviderId);
+    setShareManageProviderId(null);
+    setShareManageRemote(null);
+  };
+  useSettingsSubpageBack(shareManageProviderId ? backFromSharing : null);
   const shareManagePage = shareManageProviderId ? (
     <ProviderShareManagePage
       key={`${shareManageRemote?.deviceId ?? 'local'}:${shareManageProviderId}`}
@@ -3645,13 +3664,7 @@ export function ProvidersSection() {
           ? (!shareManagePluginEngine || shareManagePluginEngine.remoteUse?.enabled === true)
           : (!shareManageProvider || shareManageProvider.remoteInvocationEnabled === true),
       })}
-      onBack={() => {
-        if (shareManageRemote) setSelectedRemoteKey(shareManageRemote.key);
-        else if (shareManagePluginEngine) selectEngine(shareManagePluginEngine.key);
-        else if (!shareManageIsPluginEngine) setSelectedId(shareManageProviderId);
-        setShareManageProviderId(null);
-        setShareManageRemote(null);
-      }}
+      onBack={backFromSharing}
     />
   ) : null;
 
@@ -3793,7 +3806,9 @@ export function ProvidersSection() {
   return (
     <SubscriptionPoolViewCache.Provider value={subscriptionPoolViews}>
     <div className="flex h-full min-h-0 flex-col gap-6">
-      {shareManagePage ?? (<>
+      {shareManagePage}
+      {/* Preserve both scroll panes and their filters while their subscriptions are paused. */}
+      <Activity mode={shareManagePage ? 'hidden' : 'visible'}>
       <div className="shrink-0">
         <SettingsPageHeader
           title={t('settings.providers.title')}
@@ -3819,7 +3834,7 @@ export function ProvidersSection() {
             className="flex w-[224px] shrink-0 flex-col border-r"
             style={{ borderColor: 'var(--settings-theme-card-border)' }}
           >
-            <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-2">
+            <div data-testid="provider-list-scroll" className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-2">
               {showCindySignin && (
                 <CindySigninRow
                   selected={cindySigninActive && !otherDeviceSelected}
@@ -4132,7 +4147,11 @@ export function ProvidersSection() {
                         provider={effectiveSelected}
                         remoteControlEnabled={remoteControlEnabled}
                         pendingShareRequests={pendingShareCounts.get(effectiveSelected.id) ?? 0}
-                        onManageShare={() => { setShareManageRemote(null); setShareManageProviderId(effectiveSelected.id); }}
+                        onManageShare={() => {
+                          setFocusedModel(null);
+                          setShareManageRemote(null);
+                          setShareManageProviderId(effectiveSelected.id);
+                        }}
                         {...(effectiveSelected.subscriptionPoolAlias ? { poolName: providers.find(p => p.id === (effectiveSelected.subscriptionPoolTarget ?? 'openai'))?.name ?? 'OpenAI' } : {})}
                       />
                     )}
@@ -4301,7 +4320,7 @@ export function ProvidersSection() {
         </div>
       )}
 
-      </>)}
+      </Activity>
 
       <WithdrawnModelsDialog
         review={withdrawnReview && withdrawnReview.dataOwnerId === dataOwnerId
