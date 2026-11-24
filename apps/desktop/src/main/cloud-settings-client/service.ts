@@ -240,6 +240,8 @@ export function createCloudSettingsService(deps: {
         const finished = [...s.authorizations].find((id) => !s.pending.has(id));
         if (finished === undefined) throw new CloudClientError('CLOUD_SETTINGS_BUSY');
         s.authorizations.delete(finished);
+        s.callbacks.get(finished)?.close();
+        s.callbacks.delete(finished);
       }
       s.actions.delete(command.actionId);
       s.authorizations.add(command.operationId);
@@ -251,6 +253,7 @@ export function createCloudSettingsService(deps: {
       // must not recreate it while cancellation is in flight.
       s.pending.delete(command.operationId);
       s.callbacks.get(command.operationId)?.close();
+      s.callbacks.delete(command.operationId);
     }
     if (command.operation === 'respond')
       s.callbacks.get(command.operationId)?.claimManual(command.value);
@@ -265,7 +268,9 @@ export function createCloudSettingsService(deps: {
           }
       } else if (!['running', 'waiting'].includes(r.phase)) {
         s.pending.delete(r.operationId);
+        // An ended operation keeps no callback receiver.
         s.callbacks.get(r.operationId)?.finish();
+        s.callbacks.delete(r.operationId);
       } else if (r.prompt?.kind === 'callback' && s.pending.has(r.operationId)) {
         let callback = s.callbacks.get(r.operationId);
         if (!callback) {
