@@ -17638,15 +17638,15 @@
   "scheduler": {
     "prTrigger": {
       "fallback": "GitHub App の通知を受け取れない間も定期チェックは続きます。",
-      "label": "PR",
-      "url": "PR の URL",
+      "label": "PR / MR",
+      "url": "PR または MR の URL",
       "condition": "実行条件",
-      "any": "PR の更新",
+      "any": "更新時",
       "merged": "マージ時",
       "review": "レビューの更新",
       "ci": "CI 状態の変更",
       "timed": "定期的にも確認",
-      "invalid": "GitHub PR の URL を入力してください。"
+      "invalid": "GitHub PR または GitLab MR の URL を入力してください。"
     },
     "presentation": {
       "status": {

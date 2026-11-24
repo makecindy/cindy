@@ -17880,15 +17880,15 @@
   "scheduler": {
     "prTrigger": {
       "fallback": "Las comprobaciones programadas continúan sin notificaciones de GitHub App.",
-      "label": "PR",
-      "url": "URL de la pull request",
+      "label": "PR / MR",
+      "url": "URL de PR o MR",
       "condition": "Ejecutar cuando",
-      "any": "Actividad de la PR",
+      "any": "Actividad",
       "merged": "Fusión",
       "review": "Actividad de revisión",
       "ci": "Cambios de CI",
       "timed": "Comprobar también periódicamente",
-      "invalid": "Introduce la URL de una pull request de GitHub."
+      "invalid": "Introduce la URL de una PR de GitHub o una MR de GitLab."
     },
     "presentation": {
       "status": {

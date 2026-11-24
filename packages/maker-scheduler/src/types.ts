@@ -416,7 +416,14 @@ export interface ScheduleClosureFailure {
   laterRunSucceeded: boolean;
 }
 
+/** Verified MR facts at dispatch. Only a successful execution acknowledges them. */
+export interface MrRunObservation {
+  url: string;
+  signature: string;
+}
+
 export interface ScheduleRun {
+  mrObservation?: MrRunObservation;
   id: string;
   scheduleId: string;
   sessionId?: string;

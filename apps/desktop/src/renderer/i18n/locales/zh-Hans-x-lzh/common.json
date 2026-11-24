@@ -17638,15 +17638,15 @@
   "scheduler": {
     "prTrigger": {
       "fallback": "GitHub App 消息未通，仍依时查验。",
-      "label": "PR",
-      "url": "PR 之链",
+      "label": "PR / MR",
+      "url": "PR 或 MR 之链",
       "condition": "何时行之",
-      "any": "PR 有变",
+      "any": "有变",
       "merged": "已合并",
       "review": "评议有变",
       "ci": "CI 有变",
       "timed": "亦定时查验",
-      "invalid": "请填 GitHub PR 全链。"
+      "invalid": "请填 GitHub PR 或 GitLab MR 全链。"
     },
     "presentation": {
       "status": {
