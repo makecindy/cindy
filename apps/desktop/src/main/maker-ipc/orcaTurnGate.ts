@@ -1,6 +1,5 @@
 import { requestUtilityText } from '../utility-model/oneShotCandidates.js';
 import { requestUtilityTextWithinTimeout } from '../utility-model/utilityTextTimeout.js';
-import { getMaker } from '../maker-host/index.js';
 import { createLogger } from '../logger.js';
 import {
   consumeDispatchClaimReminder,
@@ -307,6 +306,9 @@ export async function judgeDispatchClaim(params: {
   try {
     // 整个判定必须在一个截止时间内完成:辅助链有多候选模型,单次请求的超时
     // 挡不住「第一个耗尽后换下一个」,那样收口会被拖到几十秒。
+    // 动态取 maker:静态 import 会把整棵 maker-host 模块图拉进任何间接引用
+    // 本模块的测试里(它们的 orcaTeamStore mock 不全),collect 阶段就会失败。
+    const { getMaker } = await import('../maker-host/index.js');
     const result = await requestUtilityTextWithinTimeout(
       (signal) =>
         requestUtilityText(
