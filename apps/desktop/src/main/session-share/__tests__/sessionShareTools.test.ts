@@ -208,6 +208,7 @@ describe('native package Host tools', () => {
     await fs.mkdir(path.join(directory, 'exports'));
     const exports = await fs.realpath(path.join(directory, 'exports'));
     await fs.writeFile(path.join(exports, 'Task.cshare'), 'earlier');
+    const source = await fs.open(path.join(directory, 'source.cshare'), 'r');
     let checks = 0;
     const order: string[] = [];
     const realOpen = fs.open.bind(fs);
@@ -217,7 +218,7 @@ describe('native package Host tools', () => {
       handle.close = async () => { order.push('close'); return realClose(); };
       return handle;
     });
-    expect(await writeExportFileExclusive(exports, 'Task.cshare', Buffer.from('package'), () => { checks++; order.push('check'); }))
+    expect(await writeExportFileExclusive(exports, 'Task.cshare', source, () => { checks++; order.push('check'); }))
       .toBe('Task (1).cshare');
     open.mockRestore();
     // The last authorization check happens after the handle is closed (a revocation during
@@ -228,11 +229,25 @@ describe('native package Host tools', () => {
     for (let k = 1; k <= checks; k++) {
       let seen = 0;
       const revokeAt = () => { if (++seen === k) throw new Error('PERMISSION_DENIED'); };
-      const result = await writeExportFileExclusive(exports, 'Task.cshare', Buffer.from('package'), revokeAt).catch(() => null);
+      const result = await writeExportFileExclusive(exports, 'Task.cshare', source, revokeAt).catch(() => null);
       expect(result, `revoked at check ${k}`).toBeNull();
       expect(await fs.readdir(exports), `revoked at check ${k}`).toEqual(['Task.cshare']);
     }
     expect(await fs.readFile(path.join(exports, 'Task.cshare'), 'utf8')).toBe('earlier');
+    await source.close();
+  });
+  // Unit, #12461 review (P2): the preset branch streams the temporary package in bounded
+  // chunks instead of reading it back whole; the copy must stay byte-exact across chunks.
+  it('streams a package larger than one copy chunk into the Settings folder byte for byte', async () => {
+    await fs.mkdir(path.join(directory, 'exports'));
+    const exports = await fs.realpath(path.join(directory, 'exports'));
+    const payload = Buffer.alloc(2.5 * 1024 * 1024 + 7, 0);
+    for (let i = 0; i < payload.length; i++) payload[i] = (i * 31 + 7) & 0xff;
+    await fs.writeFile(path.join(directory, 'large.cshare'), payload);
+    const source = await fs.open(path.join(directory, 'large.cshare'), 'r');
+    expect(await writeExportFileExclusive(exports, 'Task.cshare', source, () => {})).toBe('Task.cshare');
+    await source.close();
+    expect((await fs.readFile(path.join(exports, 'Task.cshare'))).equals(payload)).toBe(true);
   });
   // Unit, #12461 review: the approved folder (or an ancestor) moved after open() carries the
   // created file with it; the failure path must still empty that file through the open handle
@@ -244,26 +259,29 @@ describe('native package Host tools', () => {
     const moved = path.join(directory, 'exports-moved');
     let movedAway = false;
     let wrote = false;
+    const source = await fs.open(path.join(directory, 'source.cshare'), 'r');
     const realOpen = fs.open.bind(fs);
     const open = vi.spyOn(fs, 'open').mockImplementation(async (...args: Parameters<typeof fs.open>) => {
       const handle = await realOpen(...args);
       if (mode === 'zero-identity') {
         const realStat = handle.stat.bind(handle);
         handle.stat = (async () => ({ ...await realStat({ bigint: true }), ino: 0n, isFile: () => true })) as typeof handle.stat;
-        const realWrite = handle.writeFile.bind(handle);
-        handle.writeFile = (async (data: Uint8Array) => { wrote = true; await realWrite(data); }) as typeof handle.writeFile;
+        const realWrite = handle.write.bind(handle);
+        handle.write = (async (...args: unknown[]) => { wrote = true; return (realWrite as (...a: unknown[]) => unknown)(...args); }) as typeof handle.write;
       } else {
-        const realWrite = handle.writeFile.bind(handle);
+        const realWrite = handle.write.bind(handle);
         // Windows refuses to rename a folder holding an open file, so the race exists only elsewhere.
-        handle.writeFile = (async (data: Uint8Array) => {
-          await realWrite(data);
-          movedAway = await fs.rename(exports, moved).then(() => true, () => false);
-        }) as typeof handle.writeFile;
+        handle.write = (async (...args: unknown[]) => {
+          const result = await (realWrite as (...a: unknown[]) => Promise<unknown>)(...args);
+          if (!movedAway) movedAway = await fs.rename(exports, moved).then(() => true, () => false);
+          return result;
+        }) as typeof handle.write;
       }
       return handle;
     });
-    const result = await writeExportFileExclusive(exports, 'Task.cshare', Buffer.from('package'), () => {});
+    const result = await writeExportFileExclusive(exports, 'Task.cshare', source, () => {});
     open.mockRestore();
+    await source.close();
     if (mode === 'moved' && !movedAway) {
       expect(result).toBe('Task.cshare');
       return;

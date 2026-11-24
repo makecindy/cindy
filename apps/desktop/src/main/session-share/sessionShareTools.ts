@@ -9,8 +9,20 @@ import { readBoundedFileNoFollow, readToLength } from '../utils/readBoundedFile.
 import type { SessionShareExportOptions, SessionShareExportOutcome } from './sessionShareExport.js';
 import type { CommitShareImportOptions, CommitShareImportResult, InspectResult } from './sessionShareImport.js';
 
-/** The packer caps unpacked content at 256 MiB; this only bounds reading back its own output. */
-const PRESET_EXPORT_MAX_BYTES = 512 * 1024 * 1024;
+const COPY_CHUNK_BYTES = 1024 * 1024;
+
+/** Streams `source` into `target` in bounded chunks, so a large package is never buffered whole again. */
+async function copyFileHandle(source: FileHandle, target: FileHandle): Promise<void> {
+  const chunk = Buffer.allocUnsafe(COPY_CHUNK_BYTES);
+  for (let position = 0; ;) {
+    const { bytesRead } = await source.read(chunk, 0, chunk.length, position);
+    if (bytesRead === 0) return;
+    for (let written = 0; written < bytesRead;) {
+      written += (await target.write(chunk, written, bytesRead - written, position + written)).bytesWritten;
+    }
+    position += bytesRead;
+  }
+}
 
 /**
  * Case-preserving comparison of canonical paths; only a Windows drive letter is normalised (as in
@@ -67,7 +79,7 @@ async function discardExportFile(handle: FileHandle | null, target: string, crea
  * last check while authorization is also revoked (they could move the finished file anyway).
  */
 export async function writeExportFileExclusive(
-  directory: string, fileName: string, bytes: Uint8Array, assertCurrent: () => void,
+  directory: string, fileName: string, source: FileHandle, assertCurrent: () => void,
 ): Promise<string | null> {
   const resolvesToItself = async () => sameRealPathExactCase(await fs.realpath(directory).catch(() => ''), directory);
   for (let n = 0; n < 1000; n++) {
@@ -88,7 +100,7 @@ export async function writeExportFileExclusive(
       created = await handle.stat({ bigint: true });
       if (!created.isFile() || !hasVerifiableIdentity(created)) return null;
       assertCurrent();
-      await handle.writeFile(bytes);
+      await copyFileHandle(source, handle);
       const onDisk = await fs.lstat(target, { bigint: true });
       if (!onDisk.isFile() || onDisk.dev !== created.dev || onDisk.ino !== created.ino || !await resolvesToItself()) return null;
       const open = handle;
@@ -180,11 +192,15 @@ export function createSessionShareToolCallbacks(ports: {
           unpacked_bytes: result.unpackedBytes, missing_transcript_count: result.missingTranscripts.length,
           media_missing: result.mediaMissing, media_dropped: result.mediaDropped, orca_workers: result.orcaWorkers };
         if (preset) {
-          const packed = await readBoundedFileNoFollow(targetPath, PRESET_EXPORT_MAX_BYTES,
-            { containWithin: temporary!, verifyContentStability: true });
-          scope.assertCurrent();
-          if (!packed) throw new Error('SHARE_EXPORT_FAILED');
-          const written = await writeExportFileExclusive(preset.directory, preset.fileName, packed, scope.assertCurrent);
+          // The package sits in our private temporary folder; stream it instead of reading it back whole.
+          const packed = await fs.open(targetPath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0))
+            .catch(() => { throw new Error('SHARE_EXPORT_FAILED'); });
+          let written: string | null;
+          try {
+            written = await writeExportFileExclusive(preset.directory, preset.fileName, packed, scope.assertCurrent);
+          } finally {
+            await packed.close().catch(() => {});
+          }
           if (!written) {
             scope.assertCurrent();
             throw new Error('EXPORT_DIRECTORY_UNAVAILABLE');
