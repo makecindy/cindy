@@ -15467,6 +15467,7 @@
       "prCheck_rate-limit": "GitHub 暫時限制了 {{device}} 的請求頻率。已連續失敗 {{failures}} 次，下次自動檢查時間為 {{retry}}。",
       "prCheck_unknown": "{{device}} 上的 PR 檢查失敗，請查看執行詳情。已連續失敗 {{failures}} 次，下次自動檢查時間為 {{retry}}。",
       "precheck": "自動檢查暫時受阻。",
+      "preRunBlocked": "啟動前檢查未通過，本輪未開始。",
       "rateLimited": "自動檢查暫時受阻：請求限流。",
       "pluginMissing": "自動檢查暫時受阻：「{{name}}」插件未安裝，裝好後自動恢復。",
       "pluginMissingUnnamed": "自動檢查暫時受阻：需要的插件未安裝，裝好後自動恢復。",

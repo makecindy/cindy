@@ -15468,6 +15468,7 @@
       "prCheck_rate-limit": "GitHub 暂时限制了 {{device}} 的请求频率。已连续失败 {{failures}} 次，下次自动检查时间为 {{retry}}。",
       "prCheck_unknown": "{{device}} 上的 PR 检查失败，请查看运行详情。已连续失败 {{failures}} 次，下次自动检查时间为 {{retry}}。",
       "precheck": "自动检查暂时受阻。",
+      "preRunBlocked": "启动前检查未通过，本轮未开始。",
       "rateLimited": "自动检查暂时受阻：请求限流。",
       "pluginMissing": "自动检查暂时受阻：「{{name}}」插件未安装，装好后自动恢复。",
       "pluginMissingUnnamed": "自动检查暂时受阻：需要的插件未安装，装好后自动恢复。",

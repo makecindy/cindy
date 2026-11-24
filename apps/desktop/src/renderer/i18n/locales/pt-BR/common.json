@@ -15636,6 +15636,7 @@
       "prCheck_rate-limit": "O GitHub limitou as solicitações de {{device}}. Falhas consecutivas: {{failures}}. Próxima verificação automática: {{retry}}.",
       "prCheck_unknown": "A verificação do PR falhou em {{device}}. Consulte os detalhes da execução. Falhas consecutivas: {{failures}}. Próxima verificação automática: {{retry}}.",
       "precheck": "As verificações automáticas estão temporariamente bloqueadas.",
+      "preRunBlocked": "A verificação prévia falhou. Esta execução não foi iniciada.",
       "rateLimited": "As verificações automáticas estão temporariamente bloqueadas por um limite de frequência de solicitações.",
       "pluginMissing": "As verificações automáticas estão bloqueadas: o plugin {{name}} não está instalado. Elas serão retomadas após a instalação.",
       "pluginMissingUnnamed": "As verificações automáticas estão bloqueadas: um plugin necessário não está instalado. Elas serão retomadas após a instalação.",

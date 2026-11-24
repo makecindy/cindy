@@ -15636,6 +15636,7 @@
       "prCheck_rate-limit": "GitHub limitó las solicitudes de {{device}}. Fallos consecutivos: {{failures}}. Próxima comprobación automática: {{retry}}.",
       "prCheck_unknown": "Falló la comprobación de la PR en {{device}}. Consulta los detalles de la ejecución. Fallos consecutivos: {{failures}}. Próxima comprobación automática: {{retry}}.",
       "precheck": "Los controles automáticos están bloqueados temporalmente.",
+      "preRunBlocked": "La comprobación previa falló. Esta ejecución no se inició.",
       "rateLimited": "Los controles automáticos están bloqueados temporalmente por un límite de frecuencia de solicitudes.",
       "pluginMissing": "Los controles automáticos están bloqueados: el complemento {{name}} no está instalado. Se reanudarán al instalarlo.",
       "pluginMissingUnnamed": "Los controles automáticos están bloqueados: un complemento necesario no está instalado. Se reanudarán al instalarlo.",
