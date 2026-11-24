@@ -255,6 +255,13 @@ export function resolveProxyBundlePath(): string | null {
   return null;
 }
 
+function throwIfSshProbeChannelRejected(error: unknown): void {
+  // ssh2 forwards this error before the remote probe command can execute.
+  if (error instanceof Error && error.message.startsWith('(SSH) Channel open failure:')) {
+    throwIpcError('SSH_EXEC_FAILED', 'Could not open an SSH command channel. Try again in a moment.');
+  }
+}
+
 /**
  * Ensure cc-manager is installed on the given remote host. Idempotent:
  * cache hit returns ~0ms; cold path runs probe + (conditional) node install +
@@ -291,8 +298,8 @@ export async function ensureCcManagerInstalledOrInstall(opts: {
   //
   // stat 是单个 ssh exec `[ -f bundle ] && [ -x node ]`, 几十 ms, 比 probeCcManager 的完整
   // bash script (含 node spawn 验证 cc-mgr.mjs --version) 轻得多, 但能覆盖
-  // "缺失" 这个最常见的 cache-stale 场景。stat 失败 → 清 cache 走完整 install
-  // pipeline (包含上传新 bundle), 自动恢复。
+  // "缺失" 这个最常见的 cache-stale 场景。确认缺失时清 cache 并走安装；若 SSH
+  // 拒绝打开探测通道，本次请求直接失败并保留上次验证的缓存。
   if (!forceReinstall && ccManagerInstalledCache.has(hostId)) {
     try {
       const r = await host.exec(
@@ -309,6 +316,7 @@ export async function ensureCcManagerInstalledOrInstall(opts: {
       ccManagerInstalledCache.delete(hostId);
       claudeBinaryPathCache.delete(hostId);
     } catch (err) {
+      throwIfSshProbeChannelRejected(err);
       log.warn('cc-mgr install: bundle stat failed (will fall through to full install)', {
         hostId,
         error: err instanceof Error ? err.message : String(err),
@@ -340,6 +348,7 @@ export async function ensureCcManagerInstalledOrInstall(opts: {
         });
       }
     } catch (err) {
+      throwIfSshProbeChannelRejected(err);
       claudeRuntimeReady = false;
       log.warn('cc-mgr install: Claude Code version probe failed (will attempt install)', {
         hostId,
@@ -463,6 +472,7 @@ export async function ensureCcManagerInstalledOrInstall(opts: {
         }
       }
     } catch (err) {
+      throwIfSshProbeChannelRejected(err);
       log.warn('cc-mgr probe failed (will attempt install)', {
         hostId,
         error: err instanceof Error ? err.message : String(err),
