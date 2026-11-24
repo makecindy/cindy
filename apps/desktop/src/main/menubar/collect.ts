@@ -30,7 +30,7 @@ import { isSubscriptionProvider, isUnusedDefaultAccount, type SubscriptionAccoun
 import { formatModelShort } from '../../shared/usageModelLabel.js';
 import type { CodexAccountUsagePayload, RateLimitSnapshot, RateLimitWindow } from '../usageBroadcaster.js';
 import type { UsageHistoryPayload } from '../usage/usageHistory.js';
-import { familyLogo, MENUBAR_CINDY_LOGO, monogramLogo, providerLogo } from './logos.js';
+import { ANTIGRAVITY_LOGO, familyLogo, MENUBAR_CINDY_LOGO, monogramLogo, providerLogo } from './logos.js';
 import {
   topModels,
   type MenubarBalanceInput,
@@ -932,7 +932,7 @@ function zhipuSource(provider: ProviderView, result: ProviderAccountUsageResult 
  * collapse into one tube when their percentages or reset times happen to match.
  */
 export function pluginEngineSource(
-  engine: Pick<PluginEngineView, 'key' | 'providerId' | 'name'>,
+  engine: Pick<PluginEngineView, 'key' | 'providerId' | 'name'> & Partial<Pick<PluginEngineView, 'ghostId'>>,
   usage: GhostHarnessUsage | null,
   nowMs: number,
   scopeKey = 'local',
@@ -955,7 +955,7 @@ export function pluginEngineSource(
     id: engine.providerId,
     providerId: engine.providerId,
     family: 'plugin',
-    logoSvg: monogramLogo(engine.name),
+    logoSvg: engine.ghostId === 'agy-acp' ? ANTIGRAVITY_LOGO : monogramLogo(engine.name),
     brand: engine.name,
     account: null,
     plan: null,
