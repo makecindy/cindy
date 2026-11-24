@@ -665,22 +665,27 @@ export function UnifiedModelPickerSheet(
     const selectedModel =
       entry.providerId === sourceId && matchesEntry(entry, p.activeModelId);
     const selected = !favorite && selectedModel && !otherChoiceActive;
-    const key = favorite?.uid ?? modelKey(entry.providerId, entry.modelId);
+    const modelIdentity = modelKey(entry.providerId, entry.modelId);
+    const draft = !favorite && !selected ? candidateEfforts.get(modelIdentity) : undefined;
+    const draftAgent = draft && caps[draft.agent] && entry.capabilities[draft.agent]
+      ? draft.agent
+      : undefined;
     const resolved = resolveMobileModelConfig(entry, {
       favorite,
-      live: !favorite && selectedModel ? selection : undefined,
+      live: !favorite && selectedModel && (!draftAgent || draftAgent === selection.agent)
+        ? selection
+        : undefined,
       pinned: p.existingSessionRoute ? p.agentKind : undefined,
-      override: prefs.value.engines[modelKey(entry.providerId, entry.modelId)],
+      override: draftAgent ?? prefs.value.engines[modelIdentity],
       memory: p.modelMemory,
       fastCapable,
     });
-    const draft = !favorite && !selected ? candidateEfforts.get(key) : undefined;
-    const config = draft?.agent === resolved.agent &&
+    const config = draft && draftAgent === resolved.agent &&
       entry.capabilities[resolved.agent]?.efforts.some(effort => effort === draft.effort)
       ? { ...resolved, effort: draft.effort }
       : resolved;
     return {
-      key,
+      key: favorite?.uid ?? modelIdentity,
       entry,
       config,
       favorite,
@@ -1343,7 +1348,7 @@ export function UnifiedModelPickerSheet(
           );
         }
         if (!isCurrent()) return;
-        if (reset && candidateEfforts.has(key)) {
+        if ((reset || config.agent !== row.config.agent) && candidateEfforts.has(key)) {
           setCandidateEfforts(current => {
             const next = new Map(current);
             next.delete(key);

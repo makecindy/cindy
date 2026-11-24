@@ -84,11 +84,12 @@ it.each([
   { action: 'keeps the explicitly chosen effort', favoriteAction: null, effort: 'high' },
   { action: 'restores the default from favorite details', favoriteAction: 'reset', effort: 'medium' },
   { action: 'uses the latest effort chosen from favorite details', favoriteAction: 'change', effort: 'medium' },
+  { action: 'uses the engine and effort chosen from a different engine favorite', favoriteAction: 'change', favoriteAgent: 'claude-code', effort: 'medium' },
   { action: 'keeps the candidate effort when editing a favorite copy', favoriteAction: 'edit', effort: 'high' },
-])('$action when submitting a companion candidate', async ({ favoriteAction, effort }) => {
+])('$action when submitting a companion candidate', async ({ favoriteAction, favoriteAgent, effort }) => {
   if (favoriteAction) {
     // PR #12402: the same candidate is also reachable through a saved copy with its own UID.
-    test.prefs.favorites = [{ uid: 'saved-copy', providerId: 'account', modelId: 'codex/model', agent: 'codex', effort: 'high', fast: false }];
+    test.prefs.favorites = [{ uid: 'saved-copy', providerId: 'account', modelId: favoriteAgent ? 'model' : 'codex/model', agent: favoriteAgent ?? 'codex', effort: 'high', fast: false }];
   }
   const onSelect = vi.fn(async () => true);
   await mount(onSelect, {
@@ -122,10 +123,10 @@ it.each([
     }
     await act(async () => test.view.onBack());
   }
-  expect(row().config.effort).toBe(effort);
+  expect(row().config).toMatchObject({ agent: favoriteAgent ?? 'codex', effort });
   await act(async () => test.view.onSelect(row()));
   expect(onSelect).toHaveBeenCalledWith(
-    { providerId: 'account', modelId: 'codex/model', agent: 'codex', effort, fast: false },
+    { providerId: 'account', modelId: favoriteAgent ? 'model' : 'codex/model', agent: favoriteAgent ?? 'codex', effort, fast: false },
     { deviceId: null },
   );
 });
