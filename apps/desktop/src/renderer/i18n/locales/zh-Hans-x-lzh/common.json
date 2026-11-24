@@ -12798,6 +12798,20 @@
       }
     },
     "voiceMode": {
+      "realtime": {
+        "systemVoices": "预设声",
+        "myVoices": "吾声",
+        "refreshMyVoices": "更新吾声",
+        "callMode": "通话之法",
+        "messageReadAloud": "诵读消息",
+        "callVoice": "即时通话之声",
+        "readAloudVoice": "诵读之声",
+        "readAloudHint": "点同伴答文下之扬声钮，即以此声诵之。",
+        "resetReadAloud": "复诵读预设",
+        "title": "实时声",
+        "add": "增实时声模型",
+        "off": "用语音合成"
+      },
       "openConversation": "启言谈",
       "inCallWith": "正与 {{name}} 通话",
       "showDetails": "展通话录",
@@ -12819,7 +12833,7 @@
       "settingsTitle": "声",
       "openSettings": "语音规制",
       "startConversation": "始语音言谈",
-      "settingsHint": "择此同伴所用之朗读模型与音色。设毕，自输入框始语音言谈。",
+      "settingsHint": "以合成语音通话，则通话与诵读消息同用下列模型及音色。",
       "previewNeedsChat": "与同伴始言谈后方可试听。",
       "voiceId": "音色 ID",
       "manualVoice": "手书音色 ID",
@@ -17862,6 +17876,7 @@
       "openWorkdirFailed": "启卷匣未成"
     },
     "runs": {
+      "boundPluginEngineRecovery": "所系之务用法器引擎，故自动之务未行。宜将所系之务改回内置引擎，或改系于用内置引擎之务。",
       "queueWaitTimeoutRecovery": "排候逾时，提示词未发。待所系任务闲，按「{{action}}」补行。",
       "status": {
         "running": "方行",

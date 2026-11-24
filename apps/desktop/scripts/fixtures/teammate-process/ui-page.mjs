@@ -145,6 +145,9 @@ export default {
           return !!portrait && !!(node.compareDocumentPosition(portrait) & Node.DOCUMENT_POSITION_FOLLOWING);
         });
         assert.ok(beforePortrait, 'NEW is before the shared portrait and process');
+        const processRow = page.locator('[data-render-item-key]').filter({ has: separator });
+        assert.equal(await processRow.locator(':scope > time').count(), 1, 'Reply clock precedes the process');
+        assert.equal(await page.locator('[data-message-client-id="final_answer"] > time').count(), 0);
       };
       await assertBoundary();
       if (!ui.data.done) {

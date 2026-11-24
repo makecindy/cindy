@@ -151,7 +151,12 @@ export function RunHistoryCard({
   const { t, i18n } = useTranslation();
   const errorDetail = run.errorMsg?.replace(/^scheduled task auto-resume failed: /, '');
   const errorCode = errorDetail ? parseAgentErrorCode(errorDetail)?.code : undefined;
-  const errorKey = isScheduleActionExpired(run.errorMsg)
+  // Match the persisted refusal with or without the recovery sentence added to new runs.
+  const boundPluginEngineRefusal = run.status === 'failed' &&
+    /^Scheduled tasks is not available for tasks running on a plugin engine(?:\.|$)/.test(errorDetail ?? '');
+  const errorKey = boundPluginEngineRefusal
+    ? 'scheduler.runs.boundPluginEngineRecovery'
+    : isScheduleActionExpired(run.errorMsg)
     ? `chat.unreadFailedScheduleBanner.${run.failureRecovered ? 'actionRecovered' : 'actionExpired'}`
     : errorCode ? `chat.remoteError.${errorCode}` : undefined;
   const navigate = useNavigate();

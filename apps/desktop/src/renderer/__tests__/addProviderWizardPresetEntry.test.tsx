@@ -63,6 +63,7 @@ import { openFirstRunGuide, closeFirstRunGuide, parkFirstRunGuideForConnection, 
 import { AddSpeechModelsDialog } from '@/components/settings/AddSpeechModelsDialog';
 import { UnifiedModelList } from '@/components/settings/UnifiedModelList';
 import { speechModels } from '../../main/voice-conversation/models';
+import { realtimeModels } from '../../main/voice-conversation/realtimeModels';
 import { __resetForTest as resetVisibility, setModelVisibilityOwner } from '@/state/modelVisibilityPrefs';
 import { createCustomProvider, updateCustomProvider, deleteCustomProvider, readCustomProviderKey } from '@/lib/customProviders';
 import { fetchProviderModels as fetchModelsThroughMain } from '../../main/maker-host/provider-model-fetch';
@@ -2456,6 +2457,42 @@ describe('speech models in the existing provider wizard', () => {
 
 // PR #6768 / #6660 integration regression (Renderer unit): the real wizard and
 // additions dialog must save defaults supported at the configured endpoint.
+it.each(['gpt-realtime-2.1-mini', 'gpt-realtime-2.1'])(
+  'offers and saves only the realtime ID returned by OpenAI (%s)',
+  async (id) => {
+    // The preset and the supplemental endpoint catalog both have offline candidates.
+    const preset = structuredClone(BUNDLED_CATALOG.presets!.find(p => p.id === 'openai-api')!);
+    preset.runtimes.codex!.models.push({ id: 'gpt-realtime-mini', name: 'Offline Realtime Mini' });
+    vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue({
+      presets: [preset], modelRegistry: BUNDLED_CATALOG.modelRegistry,
+    });
+    vi.mocked(window.electronAPI.maker.fetchProviderModels).mockResolvedValue({
+      ok: true, models: [{ id, name: id }, { id: 'gpt-4o-mini-tts', name: 'TTS' }],
+    });
+    renderWizard(preset.id);
+    fireEvent.change(await screen.findByPlaceholderText('sk-…'), { target: { value: 'fixture-api-key' } });
+    await clickNext();
+    const section = await screen.findByRole('region', { name: 'bots.voiceMode.realtime.title' });
+    const choice = await within(section).findByRole('checkbox', { name: new RegExp(id) });
+    expect(within(section).getAllByRole('checkbox')).toHaveLength(1);
+    fireEvent.click(choice);
+    fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+    const [config, keys] = vi.mocked(createCustomProvider).mock.calls[0];
+    for (const runtime of Object.values(config.runtimes)) {
+      expect(runtime!.models.filter(m => m.id.startsWith('gpt-realtime')).map(m => m.id)).toEqual([id]);
+    }
+    const view = buildUserProvider(config, { modelRegistry: BUNDLED_CATALOG.modelRegistry });
+    expect(view.audioModels?.filter(m => m.mode === 'realtime').map(m => m.id)).toEqual([id]);
+    const options = realtimeModels({
+      catalog: { ...BUNDLED_CATALOG, providers: [view] },
+      gatewayAllowed: false, gatewayConnection: () => { throw new Error('unexpected gateway'); },
+      readKey: (_, agent) => keys[agent] ?? null, disabled: () => false,
+    });
+    expect(options).toMatchObject([{ id, protocol: 'openai-realtime', pickerVisible: true }]);
+  },
+);
+
 // Previous tests asserted one brand-wide CosyVoice default; a public DashScope
 // URL is the smallest failing input. No live credentials or synthesis required.
 describe('Alibaba speech recommendations follow the actual endpoint', () => {
