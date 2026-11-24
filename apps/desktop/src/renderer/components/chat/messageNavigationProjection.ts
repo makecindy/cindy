@@ -9,6 +9,7 @@ function sameEntries(before: readonly NavRailEntry[], after: readonly NavRailEnt
       const next = after[index];
       return (
         entry.id === next.id &&
+        entry.sender === next.sender &&
         entry.preview === next.preview &&
         entry.isAutomation === next.isAutomation &&
         entry.attachmentsOnly === next.attachmentsOnly &&

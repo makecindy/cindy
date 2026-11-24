@@ -15465,6 +15465,7 @@
       "label_many": "{{count}} nouveaux messages"
     },
     "messageNavRail": {
+      "you": "Vous",
       "aria": "Navigation entre les prompts",
       "jumpAria": "Aller au prompt {{index}} : {{preview}}",
       "attachmentOnly_one": "{{count}} pièce jointe",

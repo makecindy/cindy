@@ -52,6 +52,27 @@ describe('deriveNavRailEntries', () => {
     expect(entries[1].preview).toBe('第三问');
   });
 
+  // Unit / DESIGN.md §4 Desktop message nav rail preview。既有自动化刻度用例
+  // 无法区分设备和发送人；同一条 IM 改一次发送人就应改变归属，插件盖章始终优先。
+  it('按聊天来源判定本人，兼容只有设备或缺少发送人的旧 IM 消息', () => {
+    const hook = { im: 'slack' };
+    const remote = { deviceId: 'phone', platform: 'mobile' as const };
+    const cases: [Partial<ChatMessage>, boolean][] = [
+      [{}, true], [{ sourceDevice: remote }, true], [{ hookSource: hook }, true],
+      [{ hookSource: { ...hook, origin: { sender: { isOwner: true } } },
+        automationOrigin: { kind: 'scheduler', scheduleId: 'hook:slack' } }, true],
+      [{ hookSource: { ...hook, origin: { sender: { isOwner: false } } } }, false],
+      [{ sourcePlugin: { pluginId: 'relay' }, hookSource: hook }, false],
+      [{ automationOrigin: { kind: 'session', senderBotId: 'bot' } }, false],
+      [{ sharedAuthorName: 'Alex', sourceDevice: remote }, false],
+      [{ content: '{"orcaSource":"lead","content":"Review"}' }, false],
+    ];
+    for (const [source, own] of cases) {
+      const [entry] = deriveNavRailEntries([msg({ role: 'user', clientId: 'u', content: '问题', ...source })]);
+      expect(entry.isOwn).toBe(own);
+    }
+  });
+
   it('空输入返回空数组', () => {
     expect(deriveNavRailEntries([])).toEqual([]);
   });

@@ -15311,6 +15311,7 @@
       "label_other": "{{count}} 則新訊息"
     },
     "messageNavRail": {
+      "you": "你",
       "aria": "提問導航",
       "jumpAria": "跳轉到第 {{index}} 則提問：{{preview}}",
       "attachmentOnly_one": "附件 {{count}} 件",

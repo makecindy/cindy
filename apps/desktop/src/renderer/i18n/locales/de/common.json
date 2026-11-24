@@ -15336,6 +15336,7 @@
       "label_other": "{{count}} neue Nachrichten"
     },
     "messageNavRail": {
+      "you": "Du",
       "aria": "Prompt-Navigation",
       "jumpAria": "Zu Prompt {{index}} springen: {{preview}}",
       "attachmentOnly_one": "{{count}} Anhang",

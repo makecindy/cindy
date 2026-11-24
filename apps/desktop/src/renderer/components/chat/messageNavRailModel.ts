@@ -9,13 +9,19 @@
  */
 
 import type { ChatMessage } from '@/hooks/useCCAgentChat';
-import { isRealAutomationOrigin } from '@/lib/messageAutomationOrigin';
+import { isHookSchedulerOrigin, isRealAutomationOrigin } from '@/lib/messageAutomationOrigin';
 import { stripChatQuoteMarkerLines } from '@/lib/chatQuotes';
-import { resolveUserDisplayText } from './userMessageDisplayText';
+import { isOwnImSender, parseOrcaCommunicationContent, resolveUserDisplayText } from './userMessageDisplayText';
 
 export interface NavRailEntry {
   /** user 消息的 clientId,同时是 data-message-client-id 锚点值。 */
   id: string;
+  /** 原消息的来源字段；保留引用，让流式更新可以复用相同的预览。 */
+  sender: Pick<ChatMessage,
+    'sourceDevice' | 'sourcePlugin' | 'automationOrigin' | 'hookSource' | 'sharedAuthorName' | 'createdAt'
+  >;
+  orcaSource?: 'lead' | 'worker';
+  isOwn: boolean;
   /** scheduler 注入的自动化提问;导航条用更短的刻度与手动提问区分。 */
   isAutomation?: boolean;
   /**
@@ -190,7 +196,8 @@ export function deriveNavRailEntries(messages: readonly ChatMessage[]): NavRailE
       // userMessageDisplayText.ts;PR #830 review)→ ChatMessage 顶层
       // images/files 字段的附件名(store 入库时已把封装解到顶层,content 即
       // 可见正文,PR #830 review)。
-      let preview = promptPreviewLine(resolveUserDisplayText(m));
+      const orca = parseOrcaCommunicationContent(m.content);
+      let preview = promptPreviewLine(resolveUserDisplayText(m, orca));
       const attachmentNames = [
         ...(m.images ?? []).map((image) =>
           'originalName' in image ? image.originalName : undefined,
@@ -199,28 +206,21 @@ export function deriveNavRailEntries(messages: readonly ChatMessage[]): NavRailE
       ].filter((name): name is string => Boolean(name));
       if (!preview) preview = attachmentNames.join(' · ');
       const attachmentCount = (m.images?.length ?? 0) + (m.files?.length ?? 0);
-      if (preview) {
-        closeAnswerTurn();
+      closeAnswerTurn();
+      if (preview || attachmentCount > 0) {
+        const fromHookChannel = Boolean(m.hookSource) && isHookSchedulerOrigin(m.automationOrigin);
+        const isOwn = !orca && !m.sourcePlugin && !m.sharedAuthorName
+          && (!m.automationOrigin || fromHookChannel) && isOwnImSender(m.hookSource?.origin);
         entries.push({
           id: m.clientId,
           preview,
+          ...(!preview && { attachmentsOnly: attachmentCount }),
+          sender: m,
+          orcaSource: orca?.orcaSource,
+          isOwn,
           isAutomation: isRealAutomationOrigin(m.automationOrigin),
         });
         lastOwnsAnswers = true;
-      } else if (attachmentCount > 0) {
-        // 有附件但一个名字都取不到(粘贴截图):仍是真实提问,保留刻度,
-        // 预览文案由组件按 attachmentsOnly 用 i18n 兜底。
-        closeAnswerTurn();
-        entries.push({
-          id: m.clientId,
-          preview: '',
-          attachmentsOnly: attachmentCount,
-          isAutomation: isRealAutomationOrigin(m.automationOrigin),
-        });
-        lastOwnsAnswers = true;
-      } else {
-        // 无文本、无附件 → 无法识别的空刻度,不当成提问(PR #830 review)。
-        closeAnswerTurn();
       }
       continue;
     }

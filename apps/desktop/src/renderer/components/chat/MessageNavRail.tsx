@@ -46,6 +46,11 @@ import {
 } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { formatAbsolute } from '@/hooks/useRelativeTime';
+import { SessionNavigationModeProvider } from '@/features/cc-agent/embeddedSessionNavigation';
+import { hookTaskCardHeading, ImIcon } from './HookTaskCard';
+import { OrcaMessageHeading } from './OrcaMessageHeading';
+import { MessageSourceLabels, QueueSourceDeviceTag } from './MessageSourceLabels';
 import { cn } from '@/lib/utils';
 import { Tooltip } from '@/components/ui/tooltip';
 
@@ -108,6 +113,34 @@ export interface MessageNavRailProps {
   onNavCoverageChange?: (covers: boolean) => void;
   /** 切会话重置几何与 pending 态(与 usePrevUserMessageInView 同款)。 */
   resetKey?: string;
+  /** 预览来源标签所在的任务，用于解析远程任务与伙伴。 */
+  sessionId?: string;
+}
+
+function PreviewHeading({ entry, sessionId }: { entry: NavRailEntry; sessionId?: string }) {
+  const { t } = useTranslation();
+  const { sourceDevice, sourcePlugin, automationOrigin, sharedAuthorName, hookSource, createdAt } = entry.sender;
+  const time = formatAbsolute(createdAt);
+  let author;
+  if (entry.isOwn) {
+    author = <>{t('chat.messageNavRail.you')}{sourceDevice && <QueueSourceDeviceTag device={sourceDevice} separator />}</>;
+  } else if (sourcePlugin) {
+    author = <MessageSourceLabels sourcePlugin={sourcePlugin} hostSessionId={sessionId} align="start" />;
+  } else if (entry.orcaSource) {
+    author = <OrcaMessageHeading source={entry.orcaSource} origin={automationOrigin} />;
+  } else if (sharedAuthorName) {
+    author = <span className="truncate">{sharedAuthorName}</span>;
+  } else if (hookSource) {
+    author = <><ImIcon im={hookSource.im} /><span className="truncate">{hookTaskCardHeading(hookSource.im, hookSource.origin, t).label}</span></>;
+  } else {
+    author = <MessageSourceLabels automationOrigin={automationOrigin} hostSessionId={sessionId} align="start" />;
+  }
+  return (
+    <div className="flex min-w-0 items-center gap-1.5 text-12 text-[var(--text-secondary)]">
+      <SessionNavigationModeProvider mode="sidebar-embedded">{author}</SessionNavigationModeProvider>
+      {time && <time dateTime={createdAt} title={time} className="shrink-0 text-[var(--text-tertiary)]">· {time.slice(11, 16)}</time>}
+    </div>
+  );
 }
 
 export function MessageNavRail({
@@ -119,6 +152,7 @@ export function MessageNavRail({
   onJump,
   onNavCoverageChange,
   resetKey,
+  sessionId,
 }: MessageNavRailProps) {
   const { t } = useTranslation();
 
@@ -837,8 +871,14 @@ export function MessageNavRail({
                     'dark:border-[var(--border-default)]',
                   )}
                 >
-                  <span className="flex max-w-[344px] flex-col gap-1">
-                    <span className="truncate text-13 font-medium">{preview}</span>
+                  <div className="flex max-w-[344px] flex-col gap-1">
+                    <PreviewHeading entry={entry} sessionId={sessionId} />
+                    {/* DESIGN.md §4 Desktop message nav rail preview：只有本人提问可用气泡圆角底框。 */}
+                    <span className={cn('truncate text-13', entry.isOwn
+                      ? 'max-w-full self-start rounded-xl border border-[var(--msg-user-border)] bg-[var(--msg-user-bg)] px-2.5 py-1 font-medium text-[var(--msg-user-text)]'
+                      : 'text-[var(--text-secondary)]')}>
+                      {preview}
+                    </span>
                     {entry.answerExcerpt ? (
                       // 摘要 = 三级文字档。原为「主文字色 × 50% 透明度」(多轮实机验收后
                       // 用户直接指定,2026-07-28);2026-10-22 起文字是墨水阶梯,三级档
@@ -848,7 +888,7 @@ export function MessageNavRail({
                         {entry.answerExcerpt}
                       </span>
                     ) : null}
-                  </span>
+                  </div>
                 </Tooltip.Content>
               ) : null}
             </Tooltip.Root>

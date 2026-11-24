@@ -15373,6 +15373,7 @@
       "label_other": "{{count}} new messages"
     },
     "messageNavRail": {
+      "you": "You",
       "aria": "Prompt navigation",
       "jumpAria": "Jump to prompt {{index}}: {{preview}}",
       "attachmentOnly_one": "{{count}} attachment",

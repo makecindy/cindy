@@ -15465,6 +15465,7 @@
       "label_many": "{{count}} novas mensagens"
     },
     "messageNavRail": {
+      "you": "Eu",
       "aria": "Navegação entre pedidos",
       "jumpAria": "Ir para o pedido {{index}}: {{preview}}",
       "attachmentOnly_one": "{{count}} anexo",

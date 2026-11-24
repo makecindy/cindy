@@ -15303,6 +15303,7 @@
       "label_other": "新訊 {{count}} 條"
     },
     "messageNavRail": {
+      "you": "君",
       "aria": "問目導覽",
       "jumpAria": "至第 {{index}} 問：{{preview}}",
       "attachmentOnly_one": "附卷 {{count}} 件",
