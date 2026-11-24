@@ -11782,7 +11782,7 @@ describe('CodexAgent MCP thread context hooks', () => {
         return { thread: { id: threadId }, model: 'gpt-5.4', modelProvider: 'openai' };
       }
       if (method === Method.McpServerStatusList) {
-        expect(params).toMatchObject({ threadId, detail: 'toolsAndAuthOnly' });
+        expect(params).toMatchObject({ threadId, serverName: 'cindy_scheduler', detail: 'toolsAndAuthOnly' });
         return {
           data: resumeCount > 1 ? [{ name: 'cindy_scheduler', tools: { list_tools: {}, call_tool: {} } }] : [],
           nextCursor: null,

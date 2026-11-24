@@ -8336,7 +8336,7 @@ assertRouteCurrent();
             if (remainingMs <= 0) return false;
             const status: CodexMcpServerStatusListResponse = await host.request<CodexMcpServerStatusListResponse>(
               Method.McpServerStatusList,
-              { cursor, limit: 100, detail: 'toolsAndAuthOnly', threadId },
+              { cursor, limit: 100, detail: 'toolsAndAuthOnly', threadId, serverName: 'cindy_scheduler' },
               { timeoutMs: remainingMs },
             );
             const scheduler = status.data.find((server) => server.name === 'cindy_scheduler');

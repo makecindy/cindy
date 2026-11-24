@@ -13,12 +13,82 @@ import { expect, it, vi } from 'vitest';
 import { CodexAgent } from './index.js';
 import { AppServerHost } from './app-server/host.js';
 import { createStdioTransport } from './app-server/stdioTransport.js';
+import { readCodexThreadMcpServerTools } from './mcp-server-tools.js';
 import type { AgentDeps, AgentSessionHandle } from '../base-agent.js';
 import type { AgentEvent } from '../../types/events.js';
 import type { Logger } from '../../interfaces/logger.js';
 
 const binaryPath = process.env.CINDY_CODEX_TEST_BINARY;
 const logger: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child: () => logger };
+
+// 2026-11-24 supplier triage: threadId without serverName invokes native catalog
+// discovery, creating new clients for every server. Existing startup/recovery
+// fixtures did not distinguish that probe from the thread's live connection.
+// Native tier: production reader -> real app-server -> synthetic HTTP MCP.
+// Minimal failure: a healthy helper and a sibling that stalls only new discovery.
+it.skipIf(!binaryPath)('reads helper readiness without starting fresh MCP clients or probing a sibling', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-helper-status-'));
+  const initializes = { helper: 0, sibling: 0 };
+  let stallNewSibling = false;
+  let nativePid: number | undefined;
+  const server = createServer(async (req, res) => {
+    if (req.method !== 'POST') { res.writeHead(405).end(); return; }
+    let raw = '';
+    for await (const chunk of req) raw += chunk;
+    const q = JSON.parse(raw);
+    const name = req.url === '/helper' ? 'helper' : 'sibling';
+    if (q.method === 'initialize') {
+      initializes[name]++;
+      if (name === 'sibling' && stallNewSibling) return;
+    }
+    if (q.id === undefined) { res.writeHead(202).end(); return; }
+    const result = q.method === 'initialize'
+      ? { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name, version: '1' } }
+      : { tools: ['list_tools', 'call_tool'].map(name => ({ name, inputSchema: { type: 'object' } })) };
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ jsonrpc: '2.0', id: q.id, result }));
+  });
+  let host: AppServerHost | undefined;
+  try {
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const endpoint = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    host = new AppServerHost({
+      logger, clientInfo: { name: 'cindy-status-scope-test', version: '1' },
+      createTransport: () => createStdioTransport({
+        binaryPath: binaryPath!, cwd: root,
+        onProcessSpawned: pid => { nativePid = pid; return () => { nativePid = undefined; }; },
+        env: { PATH: process.env.PATH ?? '', HOME: root, USERPROFILE: root, CODEX_HOME: root,
+          ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}) },
+        extraArgs: ['-c', `mcp_servers.cindy_helper.url="${endpoint}/helper"`,
+          '-c', `mcp_servers.cindy_docs.url="${endpoint}/docs"`,
+          '-c', 'mcp_servers.cindy_docs.startup_timeout_sec=2'],
+      }),
+    });
+    const started = await host.request<{ thread: { id: string } }>('thread/start', { cwd: root });
+    const threadId = started.thread.id;
+    // Establish the control: both actual thread clients are ready before the
+    // sibling becomes unavailable to new discovery. No model request is sent.
+    for (const serverName of ['cindy_helper', 'cindy_docs']) {
+      await host.request('mcpServerStatus/list', { threadId, serverName, detail: 'toolsAndAuthOnly' });
+    }
+    const before = { ...initializes };
+    expect(before.helper).toBeGreaterThan(0);
+    expect(before.sibling).toBeGreaterThan(0);
+    stallNewSibling = true;
+    const activeHost = host;
+    const report = await readCodexThreadMcpServerTools(
+      (method, params, options) => activeHost.request(method, params, options), threadId, 'cindy_helper', 500,
+    );
+    expect(report.state).toBe('connected');
+    expect(report.tools.map(tool => tool.name).sort()).toEqual(['call_tool', 'list_tools']);
+    expect(initializes).toEqual(before);
+  } finally {
+    await stopWindowsFixtureTree(nativePid);
+    await host?.retire('status scope fixture complete');
+    await new Promise<void>(resolve => { server.close(() => resolve()); server.closeAllConnections(); });
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }
+}, 30_000);
 
 async function stopWindowsFixtureTree(pid?: number): Promise<void> {
   if (process.platform !== 'win32' || !pid) return;
