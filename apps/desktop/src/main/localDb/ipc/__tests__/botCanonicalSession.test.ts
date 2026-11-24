@@ -1214,6 +1214,53 @@ describe('Bot canonical Session lifecycle', () => {
       } finally { await modelSettings.resetBotModelChainSettings(); }
     });
 
+    // #12621, db/integration: Scenario A on a target with no default companion model — clearing an
+    // unavailable carried/previous model override via applyCapabilities must succeed (falling back
+    // to follow-default) instead of throwing `[INVALID_PARAMS] Model route unavailable`, and
+    // non-store `.md` files from V2 `.cindy/memory/` must restore/remove cleanly instead of throwing
+    // `[INVALID_PARAMS] Invalid memory`.
+    it('restores follow-default capabilities and portable markdown memories without blocking take-over', async () => {
+      const id = 'bot-restore-12621';
+      await invoke('local-db:bots:create', { id, name: 'Linux Takeover', capabilities: {} });
+      // Seed an explicit route that is unavailable on this computer, while this computer also has no default model.
+      h.sqlite!.prepare('UPDATE bot_profile_versions SET capabilities_json = ? WHERE bot_id = ?')
+        .run(JSON.stringify({
+          modelChainOverride: [{ harness: 'codex', providerId: 'openai', model: 'mac-only', effort: '', fastMode: false }],
+        }), id);
+      h.providers = [{
+        id: 'custom-gateway', connected: true, source: 'user', agents: ['pi'], auth: { method: 'api-key' },
+        models: { pi: [{ id: 'custom-model', efforts: [], defaultEffort: null, defaultEnabled: true }] },
+      }] as unknown as ProviderView[];
+      const control = await import('../../../maker-ipc/appDefaultModelControl.js');
+      const real = await vi.importActual<typeof control>('../../../maker-ipc/appDefaultModelControl.js');
+      vi.mocked(control.validateTaskModel).mockImplementation(real.validateTaskModel);
+      const host = createCompanionCloudHost({
+        deliverToCanonical: async () => ({ ok: true }),
+        ensureCanonicalSession: async () => 'unused',
+        rebuildContext: async () => 'rebuilt',
+        listDevices: async () => [],
+      });
+      const fence = { assertCurrent() {} };
+      try {
+        const notices = await host.materializer!.applyCapabilities!(id, {
+          memory: true,
+          modelChain: [{ harness: 'codex', providerId: 'openai', model: 'mac-only', effort: '', fastMode: false }],
+        }, fence);
+        expect(notices).toEqual(['model']);
+        const saved = await invoke('local-db:bots:get', id);
+        expect(saved.capabilities.modelChainOverride).toBeNull();
+        expect(saved.capabilities.modelOverride).toBeNull();
+
+        // Portable markdown memory files (not matching `<type>_<slug>.md`) restore, read back and tombstone cleanly.
+        await host.materializer!.restoreMemory(id, 'daily_2026-11-24.md', '# Notes\nhello from mac', fence);
+        expect(await host.materializer!.readMemory(id, 'daily_2026-11-24.md')).toBe('# Notes\nhello from mac');
+        await host.materializer!.removeMemory(id, 'daily_2026-11-24.md', fence);
+        expect(await host.materializer!.readMemory(id, 'daily_2026-11-24.md')).toBeNull();
+      } finally {
+        vi.mocked(control.validateTaskModel).mockResolvedValue(true);
+      }
+    });
+
     it('keeps a finished meeting record', async () => {
       unfinished('ready');
       await updateStoredBotProfile({ id: 'bot-1', name: 'Cindy' }, undefined, undefined, { replacesUnfinishedMeeting: true });

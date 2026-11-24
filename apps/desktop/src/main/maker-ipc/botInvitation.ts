@@ -21,6 +21,7 @@ import { captureDataOwnerBroadcastScope } from '../device-link/broadcast-tap.js'
 import { t } from '../i18n.desktop.js';
 import { seedBotSkillIfMissing } from './botSkillStore.js';
 import { ensureBotContentDirs, writeBotProfileFolder } from './botProfileFolder.js';
+import { isCompanionShadowed } from '../companion-cloud/homes.js';
 import {
   type BotInvitationDraft,
 } from './botInvitationDraft.js';
@@ -166,6 +167,7 @@ export function queueBotInvitation(
     const db = client.drizzle;
     const load = async () => {
       assertOwner();
+      if (isCompanionShadowed(botId)) throw new Error('INVITATION_SHADOWED');
       const [profile] = await db
         .select()
         .from(botProfiles)
@@ -405,9 +407,17 @@ export function queueBotInvitation(
       });
     } catch (error) {
       openingWriteFailures.delete(invitationId);
+      if (isCompanionShadowed(botId) || (error instanceof Error && error.message === 'INVITATION_SHADOWED')) {
+        return;
+      }
+      const rawCode = error instanceof Error ? (error as Error & { code?: unknown }).code : undefined;
+      const code = typeof rawCode === 'string'
+        ? rawCode
+        : error instanceof Error && /^[A-Z][A-Z0-9_]{0,79}$/.test(error.message) ? error.message : undefined;
       log.warn('companion preparation paused', {
         botId,
         error: error instanceof Error ? error.name : typeof error,
+        ...(code ? { code } : {}),
       });
       await save({ stage: 'failed' }).catch(() => undefined);
     }

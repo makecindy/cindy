@@ -209,6 +209,7 @@ function RemoteBotSessionGate() {
         deviceName={bot?.deviceName || offlineActor.homeDevice?.name || ''}
         controlOff={controlOff}
         profileFailure={offlineActor.profileFailure}
+        needsModel={offlineActor.needsModel}
       />
       </Suspense>
     );

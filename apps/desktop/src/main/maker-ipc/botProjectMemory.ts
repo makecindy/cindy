@@ -5,14 +5,16 @@
  * project's memory stays outside its folder (`<owner>/maker-memory/<scope>`), never in a user's
  * repository. Shared by the memory store (maker-memory-host.ts), the V2 upgrade and cloud companions.
  */
+import { randomBytes } from 'node:crypto';
 import { lstatSync, promises as fs } from 'node:fs';
 import path from 'node:path';
 
-import { MemoryError, memoryScopeDirName, resolveMemoryScopeKey } from '@cindy/maker-core';
+import { MemoryError, memoryScopeDirName, parseFilename, resolveMemoryScopeKey } from '@cindy/maker-core';
 import { teammateFolderOfProjectPath } from '@cindy/maker-shared/teammate-project';
 
 import { botProfileDir, botProfileMemoryDir } from './botProfileFolder.js';
 import { TEAMMATE_PROJECT_MEMORY_SEGMENTS } from './botProjectGitignore.js';
+import { throwIpcError } from '../utils/ipcValidate.js';
 
 /** Written once the V2 upgrade finished on this computer (botV2Migration.ts). */
 export const TEAMMATE_V2_RECEIPT_FILE = 'v2-migration.json';
@@ -22,7 +24,38 @@ export const TEAMMATE_MEMORY_MOVE_RECEIPT_FILE = 'project-memory-move.json';
 export { TEAMMATE_PROJECT_MEMORY_SEGMENTS };
 
 /** Derived files beside the records: USER.md travels inside the profile, MEMORY.md is a rebuilt index. */
-const DERIVED_MEMORY_FILES = new Set(['USER.md', 'MEMORY.md', 'README.md']);
+const DERIVED_MEMORY_FILES = new Set(['user.md', 'memory.md', 'readme.md']);
+const MAX_MEMORY_FILENAME_LENGTH = 160;
+const RESERVED_WINDOWS_NAME = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\.|$)/i;
+
+/** Filenames handled by MakerMemoryStore (curated + internal digest shards). */
+export function isStoreCompatibleMemoryFilename(filename: unknown): filename is string {
+  if (typeof filename !== 'string') return false;
+  const parsed = parseFilename(filename);
+  return !!parsed && parsed.slug.length <= 64 && !/[^a-z0-9_-]/.test(parsed.slug);
+}
+
+/**
+ * Bounded, portable `.md` basename allowed inside a teammate's memory folder.
+ * V2 teammates edit `.cindy/memory/` with native file tools, so ordinary Markdown
+ * filenames outside MakerMemoryStore's `<type>_<slug>.md` convention must still travel
+ * safely across computers without allowing traversal, control characters or derived files.
+ */
+export function isSafeTeammateMemoryFilename(filename: unknown): filename is string {
+  if (typeof filename !== 'string') return false;
+  if (!filename || filename.length > MAX_MEMORY_FILENAME_LENGTH) return false;
+  if (!filename.endsWith('.md') || filename.startsWith('.')) return false;
+  if (DERIVED_MEMORY_FILES.has(filename.toLowerCase())) return false;
+  if (filename.includes('/') || filename.includes('\\') || filename.includes('..')) return false;
+  if (/[\x00-\x1f\x7f]/.test(filename)) return false;
+  if (RESERVED_WINDOWS_NAME.test(filename)) return false;
+  return path.basename(filename) === filename;
+}
+
+export function classifyMemoryFilename(filename: unknown): 'store' | 'portable' | 'invalid' {
+  if (isStoreCompatibleMemoryFilename(filename)) return 'store';
+  return isSafeTeammateMemoryFilename(filename) ? 'portable' : 'invalid';
+}
 
 export function teammateWorkspaceDir(ownerRoot: string, botId: string): string {
   return path.join(botProfileDir(ownerRoot, botId), 'workspace');
@@ -122,7 +155,7 @@ export async function readTeammateMemories(dirs: string[]): Promise<Array<{ file
       throw error;
     });
     for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-      if (!entry.isFile() || !entry.name.endsWith('.md') || entry.name.startsWith('.') || DERIVED_MEMORY_FILES.has(entry.name)) continue;
+      if (!entry.isFile() || !isSafeTeammateMemoryFilename(entry.name)) continue;
       if (found.has(entry.name)) continue;
       found.set(entry.name, await fs.readFile(path.join(dir, entry.name), 'utf8'));
     }
@@ -132,6 +165,7 @@ export async function readTeammateMemories(dirs: string[]): Promise<Array<{ file
 
 /** One memory record as the teammate has it now (the same folders, first one wins); null when it has none. */
 export async function readTeammateMemory(dirs: string[], filename: string): Promise<string | null> {
+  if (!isSafeTeammateMemoryFilename(filename)) return null;
   for (const dir of dirs) {
     const file = path.join(dir, filename);
     try {
@@ -142,4 +176,69 @@ export async function readTeammateMemory(dirs: string[], filename: string): Prom
     }
   }
   return null;
+}
+
+/**
+ * Atomically write a safe raw Markdown memory file without following symlinks.
+ * Used for portable `.cindy/memory/*.md` files that sit outside MakerMemoryStore's
+ * strict curated-shard naming/size schema so cloud take-over never loses or blocks on them.
+ */
+export async function writeRawTeammateMemoryFile(
+  dir: string,
+  filename: string,
+  content: string,
+  assertCurrent?: () => void,
+): Promise<void> {
+  if (!isSafeTeammateMemoryFilename(filename)) {
+    throwIpcError('INVALID_PARAMS', 'Invalid memory');
+  }
+  assertCurrent?.();
+  await fs.mkdir(dir, { recursive: true });
+  const dirStat = await fs.lstat(dir);
+  if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) {
+    throw new MemoryError('not-ready', 'the buddy memory folder is a link; refusing to use it');
+  }
+  const target = path.join(dir, filename);
+  const existing = await fs.lstat(target).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  if (existing && (existing.isSymbolicLink() || !existing.isFile())) {
+    throw new MemoryError('not-ready', 'refusing to overwrite a non-file memory target');
+  }
+  const tmp = path.join(dir, `.${filename}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`);
+  assertCurrent?.();
+  await fs.writeFile(tmp, content, { encoding: 'utf8', flag: 'wx' });
+  try {
+    assertCurrent?.();
+    await fs.rename(tmp, target);
+  } catch (error) {
+    await fs.unlink(tmp).catch(() => {});
+    throw error;
+  }
+}
+
+/** Remove a safe raw Markdown memory file (cloud tombstone); missing is fine, symlinks are refused. */
+export async function removeRawTeammateMemoryFile(
+  dir: string,
+  filename: string,
+  assertCurrent?: () => void,
+): Promise<void> {
+  if (!isSafeTeammateMemoryFilename(filename)) {
+    throwIpcError('INVALID_PARAMS', 'Invalid memory');
+  }
+  assertCurrent?.();
+  const target = path.join(dir, filename);
+  const stat = await fs.lstat(target).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  if (!stat) return;
+  if (stat.isSymbolicLink() || !stat.isFile()) {
+    throw new MemoryError('not-ready', 'refusing to remove a non-file memory target');
+  }
+  assertCurrent?.();
+  await fs.unlink(target).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== 'ENOENT') throw error;
+  });
 }

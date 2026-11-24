@@ -46,6 +46,7 @@ import {
   queueBotInvitation as enqueueBotInvitation,
   setBotInvitationRuntimeReady,
 } from '../botInvitation.js';
+import { companionHomes } from '../../companion-cloud/homes.js';
 import { UI_ACTION_TRIGGER_PREFIX } from '../../../shared/interruptedTurn.js';
 import { readBotSkill, seedBotSkillIfMissing } from '../botSkillStore.js';
 import { readBotProfileFolder } from '../botProfileFolder.js';
@@ -545,6 +546,21 @@ describe('companion invitation with SQLite and real skill files', () => {
     await new Promise(resolve => setTimeout(resolve, 20));
     expect(state().stage).toBe('avatar');
     expect(h.createMessage).not.toHaveBeenCalled();
+  });
+
+  // #12621, unit: a newly created companion immediately moved to another computer becomes shadowed;
+  // its in-flight invitation must stop quietly instead of logging a pause error or marking stage=failed.
+  it('stops quietly without marking failed once the companion is shadowed', async () => {
+    companionHomes.setPersistedShadows(['bot-1']);
+    try {
+      seed({ stage: 'skills' });
+      queueBotInvitation('bot-1');
+      await new Promise(resolve => setTimeout(resolve, 25));
+      expect(state().stage).toBe('skills');
+      expect(h.createMessage).not.toHaveBeenCalled();
+    } finally {
+      companionHomes.reset();
+    }
   });
 });
 

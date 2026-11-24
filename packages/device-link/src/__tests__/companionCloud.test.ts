@@ -83,4 +83,14 @@ describe("cloud companion device-link contract", () => {
     }
     expect(parseCompanionCloudRemoteActionResult({ ok: false, code: "BUSY", oversizedSkill })).toEqual({ ok: false, code: "BUSY" });
   });
+
+  // #12621, unit: remote hand-over failures carry a sanitized machine-readable reason without leaking free text.
+  it("keeps only bounded uppercase failure reasons on remote action results", () => {
+    expect(parseCompanionCloudRemoteActionResult({ ok: false, code: "FAILED", reason: "COMPANION_READ_INCOMPLETE" }))
+      .toEqual({ ok: false, code: "FAILED", reason: "COMPANION_READ_INCOMPLETE" });
+    expect(parseCompanionCloudRemoteActionResult({ ok: false, code: "FAILED", reason: "private /path/details" }))
+      .toEqual({ ok: false, code: "FAILED" });
+    expect(parseCompanionCloudRemoteActionResult({ ok: false, code: "FAILED", reason: "A".repeat(81) }))
+      .toEqual({ ok: false, code: "FAILED" });
+  });
 });

@@ -30,6 +30,8 @@ export interface CompanionCloudActor {
   arrivalNotices?: CompanionArrivalNoticeKind[];
   /** This computer could not restore the source. No user content; absent on older hosts. */
   profileFailure?: BotProfileSourceFailure;
+  /** This computer is the home, but take-over is waiting for a usable model on this computer. */
+  needsModel?: boolean;
 }
 
 export interface CompanionCloudSnapshot {
@@ -65,7 +67,10 @@ export type CompanionCloudFailureCode =
 
 export type CompanionCloudActionResult =
   | { ok: true }
-  | { ok: false; code: CompanionCloudFailureCode; homeDeviceId?: string | null;
+  | { ok: false; code: CompanionCloudFailureCode;
+      /** Sanitized machine-readable cause when `code` is generic (`FAILED`), e.g. `MODEL_UNAVAILABLE`, `COMPANION_READ_INCOMPLETE`. */
+      reason?: string;
+      homeDeviceId?: string | null;
       oversizedSkill?: CompanionOversizedSkill;
       /** Local identity conflict provenance; older/remote replies may omit it. Never a cleanup authorization. */
       conflictingBotId?: string; conflictingDeviceId?: string | null;

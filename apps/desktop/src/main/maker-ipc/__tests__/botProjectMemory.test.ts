@@ -20,11 +20,16 @@ import { botProfileDir, botProfileMemoryDir } from '../botProfileFolder.js';
 import {
   TEAMMATE_MEMORY_MOVE_RECEIPT_FILE,
   TEAMMATE_V2_RECEIPT_FILE,
+  classifyMemoryFilename,
+  isSafeTeammateMemoryFilename,
+  isStoreCompatibleMemoryFilename,
   legacyTeammateProjectMemoryDir,
   readTeammateMemories,
+  removeRawTeammateMemoryFile,
   teammateMemoryDirs,
   teammateProjectMemoryDir,
   teammateWorkspaceDir,
+  writeRawTeammateMemoryFile,
 } from '../botProjectMemory.js';
 
 let root = '';
@@ -73,4 +78,33 @@ it('refuses to read a project memory folder that is a link', async () => {
   await mkdir(path.join(workspace, '.cindy'), { recursive: true });
   await symlink(outside, teammateProjectMemoryDir(workspace), process.platform === 'win32' ? 'junction' : 'dir');
   await expect(teammateMemoryDirs(root, 'bot_mia', true)).rejects.toThrow('link');
+});
+
+// #12621, unit: V2 teammates create ordinary Markdown files in `.cindy/memory/` outside MakerMemoryStore's
+// `<type>_<slug>.md` naming rule. Safe portable filenames must write/remove atomically without following symlinks,
+// while traversal, control chars, derived indexes and Windows reserved names remain rejected.
+it('writes and removes safe portable markdown memories while rejecting unsafe filenames and symlinks', async () => {
+  root = await mkdtemp(path.join(os.tmpdir(), 'teammate-raw-memory-'));
+  const dir = path.join(root, 'memory');
+  expect(isStoreCompatibleMemoryFilename('user_tea.md')).toBe(true);
+  expect(isStoreCompatibleMemoryFilename('digest_pi-1.md')).toBe(true);
+  expect(isStoreCompatibleMemoryFilename('notes.md')).toBe(false);
+  expect(classifyMemoryFilename('user_tea.md')).toBe('store');
+  expect(classifyMemoryFilename('daily_2026-11-24.md')).toBe('portable');
+  expect(classifyMemoryFilename('project_MyNotes.md')).toBe('portable');
+  for (const bad of ['../escape.md', 'sub/a.md', 'sub\\a.md', '.hidden.md', 'MEMORY.md', 'memory.md', 'USER.md', 'README.md', 'CON.md', 'bad\n.md', 'notes.txt']) {
+    expect(isSafeTeammateMemoryFilename(bad)).toBe(false);
+    expect(classifyMemoryFilename(bad)).toBe('invalid');
+    await expect(writeRawTeammateMemoryFile(dir, bad, 'x')).rejects.toThrow('[INVALID_PARAMS] Invalid memory');
+    await expect(removeRawTeammateMemoryFile(dir, bad)).rejects.toThrow('[INVALID_PARAMS] Invalid memory');
+  }
+  await writeRawTeammateMemoryFile(dir, 'daily_2026-11-24.md', '# Daily\nkept');
+  await writeRawTeammateMemoryFile(dir, 'project_MyNotes.md', 'upper case ok');
+  expect(await readTeammateMemories([dir])).toEqual([
+    { filename: 'daily_2026-11-24.md', content: '# Daily\nkept' },
+    { filename: 'project_MyNotes.md', content: 'upper case ok' },
+  ]);
+  await removeRawTeammateMemoryFile(dir, 'daily_2026-11-24.md');
+  await removeRawTeammateMemoryFile(dir, 'daily_2026-11-24.md');
+  expect(await readTeammateMemories([dir])).toEqual([{ filename: 'project_MyNotes.md', content: 'upper case ok' }]);
 });

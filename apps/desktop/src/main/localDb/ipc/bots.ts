@@ -1908,7 +1908,14 @@ export async function setBotProfileAvatar(botId: string, image: { buffer: Buffer
  * Never reachable from a renderer or model body. The stand-in marker lives in
  * the profile transaction, not in disposable companion sync bookkeeping.
  */
-export interface RestoredBotOrigin { templateId?: unknown; avatarFallback?: boolean; replacesUnfinishedMeeting?: true; allowSameName?: true }
+export interface RestoredBotOrigin {
+  templateId?: unknown;
+  avatarFallback?: boolean;
+  replacesUnfinishedMeeting?: true;
+  allowSameName?: true;
+  /** Cloud capability restore clearing a model override to follow-default when this computer has no default yet. */
+  allowUnavailableFollowDefault?: true;
+}
 
 /** Main-owned creation path shared by the renderer and Bot runtime tools. */
 export async function createBotProfile(raw: unknown, restored?: RestoredBotOrigin) {
@@ -2237,7 +2244,10 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
   // Compare the same representation so unrelated edits do not validate stale routes.
   const modelSelectionChanged = botProfileModelSelectionChanged(normalizeBotModelCapabilitiesOrThrow(previous), normalizedNextConfig);
   const acceptsModelSelection = modelSelectionChanged || acceptsSavedModel;
-  if (acceptsModelSelection) {
+  const allowUnavailableFollowDefault = restored?.allowUnavailableFollowDefault === true
+    && normalizedNextConfig.modelChainOverride === null
+    && normalizedNextConfig.modelOverride === null;
+  if (acceptsModelSelection && !allowUnavailableFollowDefault) {
     const primary = (await readEffectiveBotModelChain(normalizedNextConfig))[0];
     owner.assertCurrent();
     if (!primary || !await validateTaskModel(primary)) {

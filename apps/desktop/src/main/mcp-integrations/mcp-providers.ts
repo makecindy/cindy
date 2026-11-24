@@ -1444,7 +1444,8 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             const reason = skill ? `Skill "${skill.slug}" has a ${skill.bodyBytes}-byte body, above the target's 64 KiB limit.` : "A skill exceeds the target's 64 KiB limit.";
             return { ok: false, errorCode: result.code, message: `${reason} The buddy is still on its original computer. Update Cindy on the target computer and retry.` };
           }
-          return { ok: false, errorCode: result.code, message: `The buddy did not move (${result.code})` };
+          const detail = result.reason ? `${result.code}: ${result.reason}` : result.code;
+          return { ok: false, errorCode: result.code, ...(result.reason ? { reason: result.reason } : {}), message: `The buddy did not move (${detail})` };
         },
       },
       botProfiles: {

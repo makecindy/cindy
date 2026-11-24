@@ -21,9 +21,9 @@ import { taskImageRoots } from '../cindy-media/taskImageDelivery.js';
 import type { BotModelRoute } from '../../shared/botModelChain.js';
 import { inferBotTemplatePresetId } from '../../shared/botTemplatePreset.js';
 import { resolveBotCanonicalSession } from '../maker-ipc/botCanonicalSessionRegistry.js';
-import { readExplicitBotModelChain } from '../maker-host/bot-model-chain-settings-store.js';
+import { readExplicitBotModelChain, readEffectiveBotPrimaryRoute } from '../maker-host/bot-model-chain-settings-store.js';
 import { listCustomMcpServers } from '../maker-host/custom-mcp-store.desktop.js';
-import { resolveAvailableTaskModels } from '../maker-ipc/appDefaultModelControl.js';
+import { resolveAvailableTaskModels, validateTaskModel } from '../maker-ipc/appDefaultModelControl.js';
 import { botProfileDir, readBotProfileFolder, writeBotProfileFolder } from '../maker-ipc/botProfileFolder.js';
 import { readBotProjectMode } from '../../shared/botProjectMode.js';
 import { onBotRemoteResourceChanged } from '../maker-ipc/botRemoteResourceInvalidation.js';
@@ -33,7 +33,15 @@ import { assertCompanionIdentity, type CompanionMaterializeHost } from './materi
 import { applyCompanionRoutines } from './routines.js';
 import { applyProjectAutomations, applyProjectCarryover, applyProjectRules, mergeProjectRules, readProjectValues } from './project.js';
 import { backupTeammateProject, companionProjectIo, teammateStoreMemoryDirs, upgradeArrivedTeammate } from './projectHost.js';
-import { readTeammateMemories, readTeammateMemory, teammateMemoryDirs } from '../maker-ipc/botProjectMemory.js';
+import {
+  isSafeTeammateMemoryFilename,
+  isStoreCompatibleMemoryFilename,
+  readTeammateMemories,
+  readTeammateMemory,
+  removeRawTeammateMemoryFile,
+  teammateMemoryDirs,
+  writeRawTeammateMemoryFile,
+} from '../maker-ipc/botProjectMemory.js';
 import { companionHomes, inactiveCompanionCopyIds } from './homes.js';
 import { createMcpServerNamesReader } from './mcpServerNames.js';
 import { companionHasLocalData } from './localData.js';
@@ -274,11 +282,27 @@ function createMaterializer(input: {
       // otherwise the companion follows this computer's default model.
       const usable = async (routes: BotModelRoute[]) => (await resolveAvailableTaskModels(routes))
         .filter((route): route is BotModelRoute => route !== null);
-      const chain = value.modelChain ? await usable(value.modelChain) : [];
+      let chain: BotModelRoute[];
+      try {
+        chain = value.modelChain ? await usable(value.modelChain) : [];
+      } catch (error) {
+        if (error instanceof Error) Object.assign(error, { restoreStep: 'resolve-models' });
+        throw error;
+      }
       fence.assertCurrent();
       const patch = companionCapabilitiesPatch(value, { chain });
       if (Object.keys(patch).length || value.gender) {
-        await updateBotProfile({ id: botId, capabilities: patch, ...(value.gender ? { gender: value.gender } : {}) });
+        try {
+          await updateBotProfile(
+            { id: botId, capabilities: patch, ...(value.gender ? { gender: value.gender } : {}) },
+            undefined,
+            undefined,
+            chain.length === 0 ? { allowUnavailableFollowDefault: true } : undefined,
+          );
+        } catch (error) {
+          if (error instanceof Error) Object.assign(error, { restoreStep: 'save-profile' });
+          throw error;
+        }
       }
       const notices: CompanionArrivalNotice[] = [];
       if (value.modelChain && chain.length < value.modelChain.length) notices.push('model');
@@ -314,14 +338,38 @@ function createMaterializer(input: {
       return target;
     },
     readMemory: async (botId, filename) => {
-      if (path.basename(filename) !== filename) return null;
+      if (!isSafeTeammateMemoryFilename(filename)) return null;
       // Where the memory service writes it (a V2 teammate's project memory), so a restore compares
       // with what it would replace. Only a missing file is "no memory"; other errors keep the
       // take-over demoted for a retry.
       return readTeammateMemory(await teammateStoreMemoryDirs(ownerScopedUserDataPath(), botId), filename);
     },
-    restoreMemory: (botId, filename, raw) => getBotMemoryService().restoreRaw(botId, filename, raw),
-    removeMemory: (botId, filename) => getBotMemoryService().removeRaw(botId, filename),
+    restoreMemory: async (botId, filename, raw, fence) => {
+      if (isStoreCompatibleMemoryFilename(filename)) {
+        try {
+          await getBotMemoryService().restoreRaw(botId, filename, raw);
+          return;
+        } catch (error) {
+          // Native file tools in V2 `.cindy/memory/` can create valid-named Markdown files larger
+          // than curated shard limits or with empty/frontmatter-only bodies. Preserve them verbatim
+          // instead of stranding take-over on a schema limit; real I/O or owner errors still fail.
+          const message = error instanceof Error ? error.message : '';
+          if (!/memory:shard-too-large|Invalid memory content/.test(message)) throw error;
+        }
+      }
+      const [primaryDir] = await teammateStoreMemoryDirs(ownerScopedUserDataPath(), botId);
+      fence.assertCurrent();
+      await writeRawTeammateMemoryFile(primaryDir!, filename, raw, fence.assertCurrent);
+    },
+    removeMemory: async (botId, filename, fence) => {
+      if (isStoreCompatibleMemoryFilename(filename)) {
+        await getBotMemoryService().removeRaw(botId, filename);
+        return;
+      }
+      const [primaryDir] = await teammateStoreMemoryDirs(ownerScopedUserDataPath(), botId);
+      fence.assertCurrent();
+      await removeRawTeammateMemoryFile(primaryDir!, filename, fence.assertCurrent);
+    },
     readSkill: readSkillContent,
     saveSkill: async (botId, slug, content, enabled) => { await saveBotSkillSourceForBot(botId, slug, content, { enabled }); },
     removeSkill: async (botId, slug) => { await deleteBotSkillForBot(botId, slug); },
@@ -524,6 +572,21 @@ export function createCompanionCloudHost(input: {
       const resolved = await resolveBotCanonicalSession(botId);
       if (resolved.status === 'conflict') throw new Error('COMPANION_TASK_CONFLICT');
       return resolved.status === 'resolved' ? resolved.sessionId : null;
+    },
+    hasUsableBotModel: async botId => {
+      const [row] = await getDbClient().drizzle
+        .select({ capabilities: botProfileVersions.capabilitiesJson })
+        .from(botProfiles)
+        .innerJoin(botProfileVersions, and(eq(botProfileVersions.botId, botProfiles.id), eq(botProfileVersions.version, botProfiles.currentVersion)))
+        .where(eq(botProfiles.id, botId)).limit(1);
+      if (!row) return false;
+      let config: Record<string, unknown> = {};
+      try {
+        const parsed = JSON.parse(row.capabilities ?? '{}');
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) config = parsed as Record<string, unknown>;
+      } catch { /* treat unreadable capabilities as follow-default */ }
+      const primary = await readEffectiveBotPrimaryRoute(config);
+      return !!primary && await validateTaskModel(primary);
     },
     rowsAfter: (sessionId, cursor, limit) => samplingRows(sessionId, () => readMirrorRowsAfter(sessionId, cursor, limit)),
     latestRows: (sessionId, limit, options) => samplingRows(sessionId, () => readLatestMirrorRows(sessionId, limit, options)),

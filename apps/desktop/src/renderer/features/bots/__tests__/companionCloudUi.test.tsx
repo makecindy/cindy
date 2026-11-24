@@ -28,6 +28,21 @@ vi.mock('../BotGroupMessageAttachments', () => ({
     <ul>{attachments.map((file) => <li key={file.name}>{`${file.name}:${file.state ?? file.url}`}</li>)}</ul>,
 }));
 vi.mock('../botStore', () => ({ ensureBotProfilesLoaded: h.ensureLoaded, useBotProfiles: () => h.profiles }));
+vi.mock('../BotModelChainEditor', () => ({
+  BotModelChainEditor: ({ onChange, onNavigateToProviders }: {
+    onChange: (routes: Array<Record<string, unknown>>) => void;
+    onNavigateToProviders?: () => void;
+  }) => (
+    <div data-testid="mock-model-editor">
+      <button type="button" onClick={() => onChange([{ harness: 'pi', providerId: 'custom-gw', model: 'custom-m', effort: '', fastMode: false }])}>
+        pick-model
+      </button>
+      <button type="button" onClick={() => onNavigateToProviders?.()}>
+        connect-provider
+      </button>
+    </div>
+  ),
+}));
 vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({ useDeviceLinkDeviceList: () => h.devices }));
 vi.mock('@/lib/toast', () => ({ toast: { info: h.toast, error: h.toast } }));
 
@@ -176,6 +191,43 @@ describe('CloudCompanionOfflineView', () => {
     await waitFor(() => expect(h.ensureLoaded).toHaveBeenCalledWith(true));
     expect(maker.takeOverCompanion).toHaveBeenCalledTimes(2);
     expect(maker.takeOverCompanion).toHaveBeenLastCalledWith('mia');
+  });
+
+  // #12621, integration tier: Scenario B on target computer with no default model — show clear
+  // "waiting for model" recovery banner, let owner connect provider or pick a model for this buddy,
+  // persist it via localDb.bots.update, then complete take-over without losing cloud history.
+  it('lets the owner pick a model or connect a provider when take-over is waiting for a model', async () => {
+    const updateBot = vi.fn(async () => ({ id: 'mia' }));
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      writable: true,
+      value: { maker, localDb: { bots: { update: updateBot } } },
+    });
+    const cloud = snapshot('desk');
+    cloud.demotedBotIds = ['mia'];
+    cloud.actors[0]!.needsModel = true;
+    maker.getCompanionCloudState.mockResolvedValue(cloud);
+    maker.getCompanionTranscript.mockResolvedValue({ messages: [{ id: 'm1', role: 'user', text: 'Cloud history kept', createdAt: 1 }] });
+    maker.takeOverCompanion.mockResolvedValueOnce({ ok: true });
+    resetCompanionCloudStoreForTests(cloud);
+    render(<CloudCompanionOfflineView botId="mia" deviceId="desk" name="Mia" deviceName="Desk" needsModel />);
+    expect(await screen.findByText('Cloud history kept')).toBeTruthy();
+    expect(screen.getByText('bots.cloud.modelRequiredTitle')).toBeTruthy();
+    expect(screen.getByTestId('companion-model-recovery')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'connect-provider' }));
+    expect(h.navigate).toHaveBeenCalledWith('/settings?tab=providers');
+    fireEvent.click(screen.getByRole('button', { name: 'pick-model' }));
+    fireEvent.click(screen.getByRole('button', { name: 'bots.cloud.continueHere' }));
+    await waitFor(() => expect(updateBot).toHaveBeenCalledWith({
+      id: 'mia',
+      capabilities: {
+        harness: 'pi', providerId: 'custom-gw', model: 'custom-m', effort: '', fastMode: false,
+        modelChain: [{ harness: 'pi', providerId: 'custom-gw', model: 'custom-m', effort: '', fastMode: false }],
+        modelChainOverride: [{ harness: 'pi', providerId: 'custom-gw', model: 'custom-m', effort: '', fastMode: false }],
+      },
+    }));
+    await waitFor(() => expect(maker.takeOverCompanion).toHaveBeenCalledWith('mia'));
+    await waitFor(() => expect(h.ensureLoaded).toHaveBeenCalledWith(true));
   });
   // #10112, integration tier: enter through the failed companion, edit the complete
   // 12001-character source, retain edits on a failed save, then return to the recovered buddy.
