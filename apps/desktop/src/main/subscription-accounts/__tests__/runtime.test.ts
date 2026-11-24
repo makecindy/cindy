@@ -4815,14 +4815,18 @@ describe('native account assignment on the executing computer', () => {
     const start = vi.fn<(options: StartSessionOptions) => Promise<AgentSessionHandle>>(async () => ({ id: 'guest-native', close: async () => {} }) as unknown as AgentSessionHandle);
     const agent = withSubscriptionAccounts({ kind: kind === 'openai' ? 'codex' : 'claude-code', startSession: start } as unknown as BaseAgent);
     const guestProvider = { providerId, routeToken: 'fixture-route', modelIds: ['shared-model'] };
-    const options = { providerId, model: 'shared-model', deviceHosted: { guest: true, guestProvider } } as unknown as StartSessionOptions;
+    const options = { sessionId: 'guest-task', providerId, model: 'shared-model',
+      deviceHosted: { guest: true, guestProvider } } as unknown as StartSessionOptions;
     const handle = await agent.startSession(options);
     const invoked = start.mock.calls[0]![0];
     expect(invoked.deviceHosted?.guestProvider).toEqual({ ...guestProvider, providerId: invoked.providerId });
     expect(invoked[NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir).toBe(`${kind}/second`);
+    expect(invoked[NATIVE_SUBSCRIPTION_ACCOUNT]?.sharedProviderId).toBe(kind === 'openai' ? providerId : undefined);
+    expect(getSessionSubscriptionAccount('guest-task')).toBe(invoked[NATIVE_SUBSCRIPTION_ACCOUNT]);
     expect(options.deviceHosted?.guestProvider).toBe(guestProvider);
     expect(guestProvider.providerId).toBe(providerId);
     await handle.close();
+    expect(getSessionSubscriptionAccount('guest-task')).toBeUndefined();
     start.mockClear();
     await expect(agent.startSession({ ...options, deviceHosted: { ...options.deviceHosted!,
       guestProvider: { ...guestProvider, providerId: 'unrelated' } } })).rejects.toThrow('REMOTE_AGENT_PROVIDER_NOT_ALLOWED');

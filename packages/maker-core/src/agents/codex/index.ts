@@ -3209,7 +3209,13 @@ assertRouteCurrent();
                     customContextHostKey: `${key}:${generation}`,
                   }
                 : {}),
-              ...(deviceHostedGuestProviderId ? { deviceHostedGuestProviderId, deviceHostedGuestSessionId, deviceHostedGuestModelIds } : {}),
+              ...(deviceHostedGuestProviderId ? {
+                deviceHostedGuestProviderId: deviceHostedGuestProviderId === 'openai'
+                  ? nativeSubscriptionAccount?.sharedProviderId ?? deviceHostedGuestProviderId
+                  : deviceHostedGuestProviderId,
+                deviceHostedGuestSessionId,
+                deviceHostedGuestModelIds,
+              } : {}),
             },
           );
           hostRetirementCleanup = cfg.onHostRetired;
