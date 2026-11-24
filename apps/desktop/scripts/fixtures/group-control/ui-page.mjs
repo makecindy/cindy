@@ -108,7 +108,7 @@ export default {
     },
     'no-sidebar': { about: 'Collapsed sidebar layout', data: { ...base, sidebar: false } },
     bubbles: {
-      about: 'Teammate bubbles: quote, reaction footer, thread entry, task card, long text at the width cap; hover shows the toolbar beside the bubble',
+      about: 'Teammate bubbles: quote, corner reactions, thread entry, task card, long text at the width cap; hover shows the toolbar beside the bubble',
       data: { ...base, bubbles: true },
     },
     'reaction-motion': {
@@ -313,10 +313,12 @@ export default {
       await tea.waitFor();
       assert.equal(await tea.evaluate(inkAlpha), 255);
       await tea.click();
-      const selected = row.locator('[data-message-reactions]').getByRole('button', { name: /🧋/ });
+      await row.locator('[data-message-reactions] button[aria-haspopup="dialog"]').click();
+      const selected = page.getByRole('dialog').getByRole('button', { name: /🧋/ });
       assert.equal(await selected.getAttribute('aria-pressed'), 'true');
       await selected.click();
       assert.equal(await selected.count(), 0);
+      await page.keyboard.press('Escape');
       await row.hover();
       await row.getByRole('button', { name: await ui.t('bots.groupChat.server.addReaction'), exact: true }).click();
       await choice.hover();
@@ -932,32 +934,36 @@ export default {
         `toolbar stays below narrow content or beside wide content: ${JSON.stringify(geometry)}`);
       assert.ok(geometry.inside, 'toolbar stays inside the timeline');
       assert.ok(await toolbar.isVisible());
-      // A full row of reactions can wrap below the message without shifting its top.
-      const footers = await page.evaluate(() => ['a2', 'q3'].map((id) => {
+      // Many reactions share a single corner badge and leave message geometry unchanged.
+      const corners = await page.evaluate(() => ['a2', 'q3'].map((id) => {
         const row = `[data-bot-group-message-id="${id}"]`;
         const reactions = document.querySelector(`${row} [data-message-reactions]`);
-        const footer = reactions.getBoundingClientRect();
+        const badge = reactions.getBoundingClientRect();
         const bubble = document.querySelector(`${row} [data-testid="bot-group-bubble"], ${row} [data-testid="bot-group-self-bubble"]`).getBoundingClientRect();
         const bar = document.querySelector(`${row} [data-bot-group-message-actions]`).getBoundingClientRect();
         const timeline = document.querySelector('[data-testid="bot-group-timeline"]').getBoundingClientRect();
         const anchor = document.querySelector(row);
-        const offset = () => anchor.querySelector('[data-testid$="bubble"]').getBoundingClientRect().top - anchor.getBoundingClientRect().top;
+        const offset = () => {
+          const rect = anchor.querySelector('[data-testid$="bubble"]').getBoundingClientRect();
+          return [rect.top - anchor.getBoundingClientRect().top, rect.width, rect.height, anchor.offsetHeight];
+        };
         const withReactions = offset();
         reactions.style.display = 'none';
         const withoutReactions = offset();
         reactions.style.removeProperty('display');
-        return { id, displacement: withReactions - withoutReactions, below: footer.top >= bubble.bottom - 1,
-          inside: footer.left >= timeline.left && footer.right <= timeline.right,
+        return { id, withReactions, withoutReactions, corner: badge.top < bubble.top && badge.bottom > bubble.top
+          && Math.abs(id === 'a2' ? badge.right - bubble.right : badge.left - bubble.left) <= 5,
+          inside: badge.left >= timeline.left && badge.right <= timeline.right,
           narrow: document.querySelector(`${row} .chat-bubble-layout`).getBoundingClientRect().width <= 480,
-          toolbarTop: bar.top - bubble.top, wrapped: footer.height > reactions.firstElementChild.getBoundingClientRect().height };
+          toolbarTop: bar.top - bubble.top, stack: reactions.querySelectorAll('button[aria-haspopup="dialog"]').length };
       }));
-      for (const c of footers) {
+      for (const c of corners) {
         assert.ok(c.inside, `${c.id} reactions stay inside the timeline`);
-        assert.ok(c.below, `${c.id} reactions stay below the bubble`);
-        assert.equal(c.displacement, 0, `${c.id} gap before the bubble is stable`);
+        assert.ok(c.corner, `${c.id} reactions touch the outer top corner`);
+        assert.deepEqual(c.withReactions, c.withoutReactions, `${c.id} geometry is stable`);
         assert.ok(c.narrow ? c.toolbarTop > 0 : Math.abs(c.toolbarTop) <= 1,
           `${c.id} toolbar follows the available content width (${c.toolbarTop}px)`);
-        if (ui.case === 'bubbles-wrapped') assert.ok(c.wrapped, `${c.id} exercises multiple reaction rows`);
+        assert.equal(c.stack, 1, `${c.id} has one stack`);
       }
       // r4324819612: the opposite of the long-root case — the entry is wider
       // than this short message's text, and must still share the bubble's left edge.
@@ -993,8 +999,8 @@ export default {
         assert.ok(Math.abs(geometry.right) <= 1, 'shared reply stays right-aligned');
         if (geometry.entryLeft !== null) assert.ok(Math.abs(geometry.entryLeft) <= 1, `shared root entry aligns with card (${geometry.entryLeft}px)`);
         if (geometry.reactionLeft !== null) {
-          assert.ok(geometry.reactionLeft >= -1, `shared reply reactions fit below the card (${geometry.reactionLeft}px)`);
-          assert.ok(geometry.reactionRight <= 1, 'shared reply reactions stay inside the card width');
+          assert.ok(Math.abs(geometry.reactionLeft) <= 5, `shared reply reactions align with the leading corner (${geometry.reactionLeft}px)`);
+
         }
       }
       await ui.capture('shared-reply');

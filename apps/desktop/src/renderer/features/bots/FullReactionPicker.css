@@ -1,5 +1,13 @@
 .chat-full-reaction-picker {
-  margin-top: 4px;
+  margin-top: 5px;
+  --epr-font-family: inherit;
+  --epr-header-padding: 4px;
+  --epr-horizontal-padding: 3px;
+  --epr-emoji-size: 21px;
+  --epr-emoji-padding: 5px;
+  --epr-search-input-height: 30px;
+  --epr-category-navigation-button-size: 23px;
+  --epr-category-label-height: 25px;
   border: 0;
   border-top: 1px solid var(--border-default);
   --epr-picker-border-radius: 0;
@@ -20,4 +28,10 @@
 
 .chat-full-reaction-picker [data-epr-part='emoji'] {
   color: rgb(from var(--text-primary) r g b / 1);
+}
+
+
+.chat-full-reaction-picker [data-epr-part='search-input'],
+.chat-full-reaction-picker [data-epr-part='category-label'] {
+  font-size: var(--font-size-12, 12px);
 }

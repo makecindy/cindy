@@ -112,8 +112,9 @@ export function botGroupThreadShareLabel(share: BotGroupThreadShareView, t: (key
 }
 
 /** The referenced reply as the server has it now: edits show, deletions say so. */
-export function BotGroupThreadShareQuote({ share, members, attachments, onOpenThread, inset = false, richScope }: {
+export function BotGroupThreadShareQuote({ share, members, attachments, onOpenThread, inset = false, richScope, corner }: {
   richScope?: string;
+  corner?: ReactNode;
   share: BotGroupThreadShareView; members: readonly BotGroupMemberView[]; attachments: ReactNode;
   /** Omitted inside the thread panel, where the quote is already the thread's root. */
   onOpenThread?: () => void;
@@ -126,8 +127,9 @@ export function BotGroupThreadShareQuote({ share, members, attachments, onOpenTh
   const member = memberFor(members, share.authorBotId);
   const available = share.status === 'available';
   return (
-    <figure className={cn('flex w-full min-w-0 flex-col gap-1.5 px-3 py-2.5',
+    <figure className={cn('relative flex w-full min-w-0 flex-col gap-1.5 px-3 py-2.5',
       inset ? 'rounded-lg bg-[var(--surface)]' : 'max-w-[560px] rounded-xl border border-[var(--border-default)]')}>
+      {corner}
       {available ? (
         <>
           <figcaption className="flex min-w-0 select-none items-center gap-2 text-12 text-[var(--text-tertiary)]">

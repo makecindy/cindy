@@ -67,3 +67,13 @@
 @keyframes chat-reaction-frames {
   to { transform: translateY(calc(-100% * 29 / 30)); }
 }
+
+[role='dialog']:has(.chat-full-reaction-picker),
+[role='dialog']:has(.chat-full-reaction-space) {
+  --chat-reaction-catalog-height: min(256px, calc(100vh - 72px));
+}
+
+.chat-full-reaction-space {
+  width: min(264px, calc(100vw - 40px));
+  height: var(--chat-reaction-catalog-height);
+}

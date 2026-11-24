@@ -489,7 +489,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
   const shareBody = share ? <>
     <p className="flex select-none items-center gap-1 text-12 text-[var(--text-tertiary)]">
       <CornerDownRight size={12} aria-hidden />{sending ? t('bots.groupChat.timeline.sending') : botGroupThreadShareLabel(share, t)}</p>
-    <BotGroupThreadShareQuote share={share} members={members} inset={!self} richScope={props.reactionGroupId ?? shareScope}
+    <BotGroupThreadShareQuote corner={self ? reactions : undefined} share={share} members={members} inset={!self} richScope={props.reactionGroupId ?? shareScope}
       attachments={<BotGroupMessageAttachments attachments={share.attachments} align="start" />}
       onOpenThread={!message.pending && props.onOpenThread ? () => props.onOpenThread!(share.threadRootId, share.messageId) : undefined} />
   </> : null;
@@ -525,7 +525,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
         >
           {sharing && shareable ? <ShareMessageCheckbox clientId={message.id} /> : null}
           <div className={cn('flex min-w-0 flex-col items-end gap-1.5 transition-opacity', share ? 'chat-bubble-column max-w-[min(560px,calc(100%-var(--chat-bubble-gutter,120px)))]' : CHAT_BUBBLE_COLUMN_CLASS, sending && message.outbox?.status !== 'failed' && 'opacity-60')}>
-            <div className={cn("relative flex min-w-0 max-w-full flex-col items-end gap-1.5", threadPreview && "self-stretch")}>
+            <div data-reaction-anchor="" className={cn("relative flex min-w-0 max-w-full flex-col items-end gap-1.5", threadPreview && "self-stretch")}>
               {share ? <div className="relative flex w-full min-w-0 max-w-full flex-col items-end gap-1.5">{quote}{shareBody}{actions}</div> : null}
               {/* A short root and its wider thread entry share the column width and both edges. */}
               {!share && (hasText || hasAttachments) ? (
@@ -546,7 +546,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
                 </div>
               ) : null}
               {!share && !hasText && !hasAttachments ? <div className="relative">{quote}{actions}</div> : null}
-              {reactions}
+              {!share && reactions}
             </div>
             {threadPreview}
             {props.footer}
@@ -632,7 +632,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
             message.authorKind === 'bot' && hasRichAnswer(share?.content ?? message.content) && 'w-full')}>
             {message.process && message.process.groupId === props.reactionGroupId ? <BotGroupProcess process={message.process}
               member={members.find(member => member.botId === message.authorBotId)} /> : null}
-            <ChatBubble data-testid="bot-group-bubble" className="flex flex-col gap-2">
+            <ChatBubble data-reaction-anchor="" data-testid="bot-group-bubble" className="flex flex-col gap-2">
               {isPlanCard ? (
                 <div>
                   <BotGroupPlanCard
@@ -674,8 +674,8 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
                 </>
               )}
               {actions}
+              {reactions}
             </ChatBubble>
-            {reactions}
           </div>
           {threadPreview}
           {props.footer}

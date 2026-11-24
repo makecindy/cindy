@@ -90,16 +90,16 @@ export function ChatReactionButton({ groupId, messageId, reaction, revision = 0,
   const ringClass = compact ? 'ring-2 ring-[var(--surface-elevated)]' : 'ring-2 ring-[var(--button-face-bg)]';
   return (
     <Button ref={badgeRef} variant={reaction.me && !compact ? 'primary' : 'secondary'} size="sm" compact
-      disabled={disabled} aria-pressed={reaction.me} aria-label={label}
+      disabled={disabled} aria-pressed={reaction.me} aria-label={label} title={compact ? label : undefined}
       // Compact badges paint through the shared face variables; your own reaction gets a stronger outline.
-      className={cn(showAvatars && 'pr-1', compact && cn('h-7 gap-1 px-1.5 text-13 [--button-face-bg:var(--surface-elevated)]',
+      className={cn(showAvatars && !compact && 'pr-1', compact && cn('h-[22px] gap-0.5 px-1.5 text-13 [--button-face-bg:var(--surface-elevated)]',
         reaction.me ? '[--button-face-border:var(--text-tertiary)]' : '[--button-face-border:var(--border-default)]'))}
       onClick={onToggle}>
       <span className="relative inline-flex">
         <ReactionGlyph emoji={reaction.emoji} />
         {reaction.me && gesture && onFinishGesture && <ChatReactionMotion gesture={gesture} onFinish={onFinishGesture} />}
       </span>
-      {showAvatars ? (
+      {showAvatars && !compact ? (
         // Fixed slots sized by the count, so loading and remote updates never shift the row.
         <span aria-hidden className="flex items-center -space-x-1.5" data-testid="reaction-avatars">
           {Array.from({ length: reaction.count }, (_, index) => {

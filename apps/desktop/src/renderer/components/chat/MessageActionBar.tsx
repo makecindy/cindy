@@ -53,7 +53,7 @@ import { PluginUiSlot, PluginUiMessageMenuItem, runPluginUiEntry, type PluginUiE
 import { ChatReplyIcon } from './ChatReplyIcon';
 import { Spinner } from '@/components/ui/spinner';
 import type { ForkAtMessageRunOptions } from './useForkAtMessage';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tip, Tooltip } from '@/components/ui/tooltip';
 import {
   DropdownMenu,
@@ -203,6 +203,8 @@ export function MessageActionBar({
   clientId,
 }: MessageActionBarProps) {
   const { t } = useTranslation();
+  const reactionTrigger = useRef<HTMLButtonElement>(null);
+  const [reactionAnchor, setReactionAnchor] = useState<Element | null>(null);
   const readAloud = useContext(MessageReadAloudContext);
   const pluginMenuEntries = align === 'right' ? pluginUi.userMenu : pluginUi.assistantMenu;
   const [copied, setCopied] = useState(false);
@@ -490,16 +492,22 @@ export function MessageActionBar({
   );
 
   const reactionBtn = reactionAction && (
-    <Popover key="reaction" open={reactionAction.open} onOpenChange={reactionAction.onOpenChange}>
+    <Popover key="reaction" open={reactionAction.open} onOpenChange={open => {
+      setReactionAnchor(open ? reactionTrigger.current?.closest('[data-reaction-anchor]') ?? null : null);
+      reactionAction.onOpenChange(open);
+    }}>
+      {reactionAction.open && reactionAnchor && <PopoverAnchor virtualRef={{ current: reactionAnchor }} />}
       <Tip text={reactionAction.label}>
         <PopoverTrigger asChild>
-          <button type="button" className={actionButtonClass} disabled={inFlight || reactionAction.disabled}
+          <button ref={reactionTrigger} type="button" className={actionButtonClass} disabled={inFlight || reactionAction.disabled}
             aria-label={reactionAction.label} onClick={event => event.stopPropagation()}>
             <SmilePlus size={14} strokeWidth={2} className={actionIconClass} />
           </button>
         </PopoverTrigger>
       </Tip>
-      <PopoverContent align={align === 'right' ? 'end' : 'start'} className="w-fit p-2" aria-label={reactionAction.label}>
+      <PopoverContent side="top" align={align === 'right' ? 'start' : 'end'}
+        collisionBoundary={reactionAnchor?.closest('[data-testid="bot-group-timeline"], .thread-panel') ?? undefined} collisionPadding={8} sideOffset={8}
+        className="w-fit rounded-2xl p-1.5" aria-label={reactionAction.label}>
         {reactionAction.content}
       </PopoverContent>
     </Popover>

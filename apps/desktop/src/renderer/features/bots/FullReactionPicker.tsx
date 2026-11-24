@@ -20,7 +20,7 @@ export default function FullReactionPicker({ onChoose }: { onChoose: (emoji: str
   const dictionary = Object.hasOwn(dictionaries, language) ? dictionaries[language as keyof typeof dictionaries] : undefined;
   const search = t('sidebar.navigation.items.search');
   return <EmojiPicker className="chat-full-reaction-picker" emojiStyle="native" emojiData={dictionary}
-    width="min(320px, calc(100vw - 40px))" height="min(350px, calc(var(--radix-popover-content-available-height, 100vh) - 58px))"
+    width="min(264px, calc(100vw - 40px))" height="var(--chat-reaction-catalog-height)"
     previewConfig={{ showPreview: false }}
     labels={{ searchPlaceholder: search, searchLabel: search, searchClear: t('settings.search.clear'),
       searchResultsNone: t('ccAgent.workdirBrowse.searchPanel.noResults'), loading: t('bots.groupChat.files.loading'), retryLoading: t('bots.retry') }}
