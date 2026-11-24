@@ -84,13 +84,13 @@
       "source": "src/responses/function-call-compat.ts",
       "target": "src/upstream/responses/function-call-compat.ts",
       "upstreamSha256": "642c72c2d9aeaad9c6840059eaab33e3729733447ac746197ad122e3c18b779b",
-      "portedSha256": "ccdaedb5a7cdd34605d4c6ee45fa707739423d84f9ca6a18d201c8b3c5612fea"
+      "portedSha256": "30325a29df9fc167a8347b2fdce231b87e0b9da6f7eeb163d806a66619ddeac9"
     },
     {
       "source": "src/responses/namespace-tool-compat.ts",
       "target": "src/upstream/responses/namespace-tool-compat.ts",
       "upstreamSha256": "29ab7614e0757cde8bf81ad86da407afc8cb6d05027da22375fcca9a95de63b0",
-      "portedSha256": "61ee35e71aaddc243cc5076066863c2367c709b1e5828ef781e800450c91a793"
+      "portedSha256": "2ba31b26c7eeb0db6947e67b88e0f6d8f3dcb6fa5ce550bf9d6b259a28e0825a"
     },
     {
       "source": "src/responses/tool-groups.ts",

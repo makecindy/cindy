@@ -2364,7 +2364,7 @@
      return tools === item.tools ? item : { ...item, tools };
    }
    if (
-@@ -344,32 +501,157 @@ function rewriteInputItem(item: unknown, plan: NamespaceRewritePlan, emitted: Se
+@@ -344,32 +501,165 @@ function rewriteInputItem(item: unknown, plan: NamespaceRewritePlan, emitted: Se
  export function rewriteRoutedNamespaceToolsForUpstream(
    body: unknown,
    convertedCustomToolNames?: ReadonlySet<string>,
@@ -2375,6 +2375,7 @@
 +  currentSelectors?: {
 +    bare: ReadonlyMap<string, { type: string } | null>;
 +    namespaced: ReadonlyMap<string, { name: string; namespace?: string } | null>;
++    searchGroups?: readonly unknown[][];
 +  },
  ): {
    body: unknown;
@@ -2402,12 +2403,13 @@
 +  const currentGroups: unknown[][] = [];
 +  if (Array.isArray(body.tools)) currentGroups.push(body.tools);
 +  if (currentInlineTools) currentGroups.push(currentInlineTools);
++  const searchGroups = new Set(currentSelectors?.searchGroups);
 +  const priorityGroups = currentInlineTools
-+    ? [...currentGroups, ...groups.filter(group => group !== body.tools && group !== currentInlineTools)]
-+    : groups;
++    ? [...currentGroups, ...searchGroups, ...groups.filter(group => group !== body.tools && group !== currentInlineTools)]
++    : [...groups, ...searchGroups];
 +  const originalBareCustomNames = bareCustomNames ?? collectBareCustomToolNames(body);
 +  const plan = buildRewritePlan(
-+    priorityGroups, currentInlineTools ? currentGroups.length : undefined, currentSelectors?.bare.keys(),
++    priorityGroups, currentInlineTools ? currentGroups.length + searchGroups.size : undefined, currentSelectors?.bare.keys(),
 +  );
 +  // A current search can reload an exact historical coordinate. Reuse its existing allocation.
 +  for (const tool of currentSelectors?.namespaced.values() ?? []) {
@@ -2443,7 +2445,13 @@
 -    const rewrittenInput = body.input.map(item => {
 -      const next = rewriteInputItem(item, plan, emitted);
 +    const rewrittenInput = body.input.map((item, index) => {
-+      const next = index === currentInlineIndex ? current : rewriteInputItem(item, plan, emitted);
++      let next: unknown;
++      if (index === currentInlineIndex) next = current;
++      else if (isPlainObject(item) && Array.isArray(item.tools) && searchGroups.has(item.tools)) {
++        // Search results describe their own loaded tools, independent of the declarations above.
++        const tools = rewriteToolList(item.tools, plan, new Set(), new Set());
++        next = tools === item.tools ? item : { ...item, tools };
++      } else next = rewriteInputItem(item, plan, emitted);
        if (next !== item) inputChanged = true;
        return next;
      });
@@ -2529,7 +2537,7 @@
    const ambiguousDotted = collectAmbiguousDottedAliases(groups);
    // Authorize canonical identities first, then add only unambiguous spellings.
    // Selection cannot hide a collision elsewhere in the original declaration set.
-@@ -379,11 +661,6 @@ export function rewriteRoutedNamespaceToolsForUpstream(
+@@ -379,11 +669,6 @@ export function rewriteRoutedNamespaceToolsForUpstream(
        && !ambiguousDotted.has(dotted) && !plan.bareWireNames.has(dotted)
        && !aliases.has(dotted)) aliases.set(dotted, identity);
    }
@@ -2541,7 +2549,7 @@
    return {
      body: {
        ...body,
-@@ -392,6 +669,8 @@ export function rewriteRoutedNamespaceToolsForUpstream(
+@@ -392,6 +677,8 @@ export function rewriteRoutedNamespaceToolsForUpstream(
        ...(toolChoice !== body.tool_choice ? { tool_choice: toolChoice } : {}),
      },
      aliases,
@@ -2638,7 +2646,7 @@
 
  function isObject(value: unknown): value is Record<string, unknown> {
    return value !== null && typeof value === "object" && !Array.isArray(value);
-@@ -33,91 +35,213 @@ function namespaceOf(value: unknown): string | undefined {
+@@ -33,91 +35,216 @@ function namespaceOf(value: unknown): string | undefined {
    return typeof value === "string" && value !== "functions" ? value : undefined;
  }
 
@@ -2679,8 +2687,6 @@
  /** Caller supplies currentTurnWireToolCatalogBody BEFORE provider schema lowering. */
 -export function collectFunctionCallRepairSchemas(body: unknown): Map<string, FunctionCallRepairSchema> {
 -  const schemas = new Map<string, FunctionCallRepairSchema>();
--  if (!isObject(body)) return schemas;
--  const groups = collectResponsesToolGroups(body);
 +export interface FunctionCallRepairPlan {
 +  /** Wire names the live request allocated for displaced namespace children. */
 +  renamedWireNames: ReadonlyMap<string, string>;
@@ -2691,16 +2697,18 @@
 +}
 +
 +/** Native repair has no lowered live request; retain loaded tool-search schemas and selectors. */
-+export function deriveFunctionCallRepairPlan(body: unknown): FunctionCallRepairPlan & {
++export function deriveFunctionCallRepairPlan(body: unknown, currentInlineIndex?: number): FunctionCallRepairPlan & {
 +  renamedKinds: Map<string, "function" | "custom">;
 +} {
 +  if (!isObject(body)) return { renamedWireNames: new Map(), renamedKinds: new Map() };
 +  const groups: unknown[][] = Array.isArray(body.tools) ? [body.tools] : [];
-   if (Array.isArray(body.input)) {
-     for (const entry of body.input) {
--      if (isObject(entry) && entry.type === "tool_search_output" && Array.isArray(entry.tools)) groups.push(entry.tools);
-+      if (isObject(entry) && (entry.type === "additional_tools" || entry.type === "tool_search_output")
-+        && Array.isArray(entry.tools)) groups.push(entry.tools);
++  if (Array.isArray(body.input)) {
++    for (const [index, entry] of body.input.entries()) {
++      if (!isObject(entry) || !Array.isArray(entry.tools)) continue;
++      const currentInline = entry.type === "additional_tools" && (currentInlineIndex === undefined || index === currentInlineIndex);
++      const currentSearch = (entry.type === "tool_search_output" || entry.type === "tool_search_call_output")
++        && index >= (currentInlineIndex ?? -1);
++      if (currentInline || currentSearch) groups.push(entry.tools);
 +    }
 +  }
 +  const derived = rewriteRoutedNamespaceToolsForUpstream({ ...body, tools: groups.flat(), input: [] });
@@ -2720,12 +2728,15 @@
 +  const byWireName = new Map<string, FunctionCallRepairSchema>();
 +  const namespacedFunctions = new Set<string>();
 +  const schemas = { byIdentity, byWireName, namespacedFunctions };
-+  if (!isObject(body)) return schemas;
+   if (!isObject(body)) return schemas;
+-  const groups = collectResponsesToolGroups(body);
 +  const liveGroups: unknown[][] = [];
 +  if (Array.isArray(body.tools)) liveGroups.push(body.tools);
 +  const searchGroups: unknown[][] = [];
 +  const historicalGroups: unknown[][] = [];
-+  if (Array.isArray(body.input)) {
+   if (Array.isArray(body.input)) {
+-    for (const entry of body.input) {
+-      if (isObject(entry) && entry.type === "tool_search_output" && Array.isArray(entry.tools)) groups.push(entry.tools);
 +    for (const [index, entry] of body.input.entries()) {
 +      if (!isObject(entry) || !Array.isArray(entry.tools)) continue;
 +      if (entry.type === "tool_search_output" || entry.type === "tool_search_call_output") {
@@ -2749,7 +2760,7 @@
 -  const lowered = rewriteRoutedNamespaceToolsForUpstream({ ...body, tools: groups.flat(), input: [] }).body;
 +  // The forwarded request owns all wire names. Search history can only resolve selectors that
 +  // had no match when the request was lowered; it must never allocate its own wire names here.
-+  const { loweredToolChoice: loweredChoice, renamedWireNames } = plan ?? deriveFunctionCallRepairPlan(body);
++  const { loweredToolChoice: loweredChoice, renamedWireNames } = plan ?? deriveFunctionCallRepairPlan(body, currentInlineIndex);
    const choice = body.tool_choice;
 -  const loweredChoice = isObject(lowered) ? lowered.tool_choice : undefined;
 -  const occupied = new Map<string, { kind: unknown; identity: FunctionCallRepairSchema } | null>();
@@ -2889,7 +2900,7 @@
    const raw = item.arguments;
    if (raw !== "") {
      try {
-@@ -140,7 +264,7 @@ export function repairFunctionCalls(
+@@ -140,7 +267,7 @@ export function repairFunctionCalls(
    value: unknown,
    schemas: FunctionCallRepairSchemas,
  ): { value: unknown; changed: boolean } {
@@ -2898,7 +2909,7 @@
    if (typeof value.status === "string" && ["failed", "incomplete", "cancelled", "in_progress", "queued"].includes(value.status)) return { value, changed: false };
    let next: unknown = value;
    if (value.type === "function_call") next = repairItem(value, schemas, false);
-@@ -164,8 +288,11 @@ export function repairFunctionCalls(
+@@ -164,8 +291,11 @@ export function repairFunctionCalls(
    return { value: next, changed: next !== value };
  }
 

@@ -160,29 +160,32 @@ export function prepareResponsesCompatibility(body: unknown, policy: ResponsesCo
   const custom = policy.customTools && policy.customTools !== 'native'
     ? rewriteRoutedCustomToolsForUpstream(body, policy.customTools === 'functions' ? false : undefined, restorationCatalog)
     : { body, names: new Set<string>(), repairNames: new Set<string>() };
-  const search = policy.toolSearch === 'function'
-    ? rewriteRoutedToolSearchForUpstream(custom.body)
-    : { body: custom.body, names: new Set<string>() };
   const canonicalNamespaceKinds = policy.namespaceTools === 'functions' ? collectNamespaceToolKinds(restorationCatalog) : undefined;
+  const currentSearchGroups = policy.namespaceTools === 'functions' && policy.toolSearch === 'function' && isPlainObject(custom.body)
+    ? collectCurrentToolSearchGroups(custom.body.input) : [];
   const namespace = policy.namespaceTools === 'functions'
-    ? rewriteRoutedNamespaceToolsForUpstream(search.body, custom.names, bareCustomNames, canonicalNamespaceKinds,
+    ? rewriteRoutedNamespaceToolsForUpstream(custom.body, custom.names, bareCustomNames, canonicalNamespaceKinds,
         isPlainObject(body) ? body.tool_choice : undefined, currentInlineIndex,
-        currentSelectors)
+        { ...currentSelectors, searchGroups: currentSearchGroups })
     : {
-        body: custom.body !== body ? disambiguateNativeToolChoice(body, search.body, custom.body) : search.body,
+        body: custom.body,
         aliases: new Map(), renamedWireNames: new Map<string, string>(), renamedKinds: new Map<string, 'function' | 'custom'>(),
       };
+  // Current search results carry the emitted wire names before the tool-search adapter serializes them.
+  const search = policy.toolSearch === 'function'
+    ? rewriteRoutedToolSearchForUpstream(namespace.body)
+    : { body: namespace.body, names: new Set<string>() };
+  const forwarded = policy.namespaceTools !== 'functions' && custom.body !== body
+    ? disambiguateNativeToolChoice(body, search.body, custom.body) : search.body;
   // Native requests retain their declarations, but response restoration and schema lookup still
   // need one collision-safe identity plan, including original kinds and loaded search tools.
   const repairPlan = policy.repairFunctionArguments && policy.namespaceTools !== 'functions'
-    ? deriveFunctionCallRepairPlan(catalog)
+    ? deriveFunctionCallRepairPlan(body, currentInlineIndex)
     : {
         renamedWireNames: namespace.renamedWireNames,
         renamedKinds: namespace.renamedKinds,
         canonicalNamespaceKinds,
-        loweredToolChoice: namespace.body && typeof namespace.body === 'object'
-          ? (namespace.body as { tool_choice?: unknown }).tool_choice
-          : undefined,
+        loweredToolChoice: isPlainObject(forwarded) ? forwarded.tool_choice : undefined,
       };
   const displacedKinds = repairPlan.renamedKinds;
   const schemas = collectFunctionCallRepairSchemas(policy.repairFunctionArguments ? body : undefined, repairPlan, currentInlineIndex);
@@ -200,7 +203,7 @@ export function prepareResponsesCompatibility(body: unknown, policy: ResponsesCo
   const scrubAuthorization = collectSelfNamedNamespaceScrubAuthorization(restorationCatalog, new Set([...custom.names, ...custom.repairNames]), bareFunctionNames);
   const restoreNamespace = (text: string) => restoreRoutedNamespaceCallsInJson(text, namespace.aliases);
   return {
-    body: policy.namespaceTools === 'functions' ? stripCanonicalOnlyToolFields(namespace.body, false) : namespace.body,
+    body: policy.namespaceTools === 'functions' ? stripCanonicalOnlyToolFields(forwarded, false) : forwarded,
     needsResponseTransform: Boolean(policy.itemIdRepair || policy.snapshotRepair || policy.contentChannelReasoning) || custom.names.size > 0 || custom.repairNames.size > 0 || search.names.size > 0 || namespace.aliases.size > 0 || schemas.byIdentity.size > 0 || policy.backfillResponseFields === true,
     restoreJson(text: string): string {
       let next = restoreNamespace(scrubSelfNamedToolCallNamespaceInJson(text, scrubAuthorization));

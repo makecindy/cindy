@@ -379,6 +379,56 @@ describe('request-owned Responses compatibility', () => {
     }
   });
 
+  // #11199: the current search results, forwarded selector and response use one wire allocation.
+  it.each(['application/json', 'text/event-stream'])('allocates a new search-loaded namespace child (%s)', async contentType => {
+    const adapter = createCodexResponsesCompatibilityAdapter();
+    const selector = { type: 'function', namespace: 'workspace', name: 'read' };
+    const search = { type: 'tool_search_output', call_id: 'search', tools: [{ type: 'namespace', name: 'workspace', tools: [
+      { type: 'function', name: 'read', parameters: { type: 'object', properties: { line: { type: 'integer' } } } },
+    ] }] };
+    for (const allowed of [false, true]) {
+      const request = adapter.adaptRequest({
+        tools: [{ type: 'custom', name: 'workspace__read', description: 'Read a location' }],
+        input: [{ type: 'additional_tools', tools: [] }, search],
+        tool_choice: allowed ? { type: 'allowed_tools', tools: [selector] } : selector,
+      }, 10109, undefined, true) as { input: { output?: string }[]; tool_choice: unknown };
+      const selected = { type: 'function', name: 'workspace__read_2' };
+      expect(request.tool_choice).toEqual(allowed ? { type: 'allowed_tools', tools: [selected] } : selected);
+      expect(JSON.parse(request.input[1].output ?? '{}').tools).toMatchObject([selected]);
+      const item = { type: 'function_call', name: selected.name, call_id: 'current', arguments: '{"line":12.0}' };
+      const response = { status: 'completed', output: [item] };
+      const sse = contentType === 'text/event-stream';
+      const wire = sse ? `data: ${JSON.stringify({ type: 'response.completed', response })}\n\n` : JSON.stringify(response);
+      const transform = adapter.createResponseTransform(10109, { contentType, contentEncoding: '' });
+      const text = transform ? await responseText(transform, wire) : wire;
+      expect((sse ? JSON.parse(text.trim().slice(6)).response : JSON.parse(text)).output).toEqual([
+        { ...item, name: 'read', namespace: 'workspace', arguments: '{"line":12}' },
+      ]);
+    }
+  });
+
+  // A replayed bare search result cannot displace a live native child in the repair plan.
+  it.each(['application/json', 'text/event-stream'])('repairs the native child despite a replayed search collision (%s)', async contentType => {
+    const adapter = createCodexResponsesCompatibilityAdapter();
+    const selector = { type: 'function', name: 'workspace__read' };
+    const request = adapter.adaptRequest({
+      tools: [{ type: 'namespace', name: 'workspace', tools: [
+        { type: 'function', name: 'read', parameters: { type: 'object', properties: { line: { type: 'integer' } } } },
+      ] }],
+      input: [{ type: 'tool_search_output', tools: [{ type: 'function', name: selector.name }] },
+        { type: 'additional_tools', tools: [] }],
+      tool_choice: selector,
+    }, 10110) as { tool_choice: unknown };
+    expect(request.tool_choice).toEqual(selector);
+    const item = { type: 'function_call', namespace: 'workspace', name: 'read', call_id: 'current', arguments: '{"line":12.0}' };
+    const response = { status: 'completed', output: [item] };
+    const sse = contentType === 'text/event-stream';
+    const wire = sse ? `data: ${JSON.stringify({ type: 'response.completed', response })}\n\n` : JSON.stringify(response);
+    const transform = adapter.createResponseTransform(10110, { contentType, contentEncoding: '' });
+    const text = transform ? await responseText(transform, wire) : wire;
+    expect((sse ? JSON.parse(text.trim().slice(6)).response : JSON.parse(text)).output).toEqual([{ ...item, arguments: '{"line":12}' }]);
+  });
+
   // #11199: the bare owner loaded by this turn's search uses its original custom call type.
   it.each(['application/json', 'text/event-stream'])('restores a search-loaded bare custom call (%s)', async contentType => {
     const adapter = createCodexResponsesCompatibilityAdapter();

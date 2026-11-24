@@ -508,6 +508,7 @@ export function rewriteRoutedNamespaceToolsForUpstream(
   currentSelectors?: {
     bare: ReadonlyMap<string, { type: string } | null>;
     namespaced: ReadonlyMap<string, { name: string; namespace?: string } | null>;
+    searchGroups?: readonly unknown[][];
   },
 ): {
   body: unknown;
@@ -533,12 +534,13 @@ export function rewriteRoutedNamespaceToolsForUpstream(
   const currentGroups: unknown[][] = [];
   if (Array.isArray(body.tools)) currentGroups.push(body.tools);
   if (currentInlineTools) currentGroups.push(currentInlineTools);
+  const searchGroups = new Set(currentSelectors?.searchGroups);
   const priorityGroups = currentInlineTools
-    ? [...currentGroups, ...groups.filter(group => group !== body.tools && group !== currentInlineTools)]
-    : groups;
+    ? [...currentGroups, ...searchGroups, ...groups.filter(group => group !== body.tools && group !== currentInlineTools)]
+    : [...groups, ...searchGroups];
   const originalBareCustomNames = bareCustomNames ?? collectBareCustomToolNames(body);
   const plan = buildRewritePlan(
-    priorityGroups, currentInlineTools ? currentGroups.length : undefined, currentSelectors?.bare.keys(),
+    priorityGroups, currentInlineTools ? currentGroups.length + searchGroups.size : undefined, currentSelectors?.bare.keys(),
   );
   // A current search can reload an exact historical coordinate. Reuse its existing allocation.
   for (const tool of currentSelectors?.namespaced.values() ?? []) {
@@ -571,7 +573,13 @@ export function rewriteRoutedNamespaceToolsForUpstream(
     const current = rewriteInputItem(currentInline, plan, emitted, currentBareWireNames);
     let inputChanged = false;
     const rewrittenInput = body.input.map((item, index) => {
-      const next = index === currentInlineIndex ? current : rewriteInputItem(item, plan, emitted);
+      let next: unknown;
+      if (index === currentInlineIndex) next = current;
+      else if (isPlainObject(item) && Array.isArray(item.tools) && searchGroups.has(item.tools)) {
+        // Search results describe their own loaded tools, independent of the declarations above.
+        const tools = rewriteToolList(item.tools, plan, new Set(), new Set());
+        next = tools === item.tools ? item : { ...item, tools };
+      } else next = rewriteInputItem(item, plan, emitted);
       if (next !== item) inputChanged = true;
       return next;
     });

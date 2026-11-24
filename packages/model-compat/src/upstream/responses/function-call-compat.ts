@@ -78,15 +78,18 @@ export interface FunctionCallRepairPlan {
 }
 
 /** Native repair has no lowered live request; retain loaded tool-search schemas and selectors. */
-export function deriveFunctionCallRepairPlan(body: unknown): FunctionCallRepairPlan & {
+export function deriveFunctionCallRepairPlan(body: unknown, currentInlineIndex?: number): FunctionCallRepairPlan & {
   renamedKinds: Map<string, "function" | "custom">;
 } {
   if (!isObject(body)) return { renamedWireNames: new Map(), renamedKinds: new Map() };
   const groups: unknown[][] = Array.isArray(body.tools) ? [body.tools] : [];
   if (Array.isArray(body.input)) {
-    for (const entry of body.input) {
-      if (isObject(entry) && (entry.type === "additional_tools" || entry.type === "tool_search_output")
-        && Array.isArray(entry.tools)) groups.push(entry.tools);
+    for (const [index, entry] of body.input.entries()) {
+      if (!isObject(entry) || !Array.isArray(entry.tools)) continue;
+      const currentInline = entry.type === "additional_tools" && (currentInlineIndex === undefined || index === currentInlineIndex);
+      const currentSearch = (entry.type === "tool_search_output" || entry.type === "tool_search_call_output")
+        && index >= (currentInlineIndex ?? -1);
+      if (currentInline || currentSearch) groups.push(entry.tools);
     }
   }
   const derived = rewriteRoutedNamespaceToolsForUpstream({ ...body, tools: groups.flat(), input: [] });
@@ -131,7 +134,7 @@ export function collectFunctionCallRepairSchemas(
   }
   // The forwarded request owns all wire names. Search history can only resolve selectors that
   // had no match when the request was lowered; it must never allocate its own wire names here.
-  const { loweredToolChoice: loweredChoice, renamedWireNames } = plan ?? deriveFunctionCallRepairPlan(body);
+  const { loweredToolChoice: loweredChoice, renamedWireNames } = plan ?? deriveFunctionCallRepairPlan(body, currentInlineIndex);
   const choice = body.tool_choice;
   const selectorOwners = (searchGroups.length > 0 || historicalGroups.length > 0) && isObject(choice)
     ? new Map<string, { key: string | null; historical: boolean }>()
