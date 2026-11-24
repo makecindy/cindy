@@ -5,6 +5,7 @@ import {
 } from '../../shared/cloudPersonalization.js';
 import type { HostSettingState, PersonalizationSettings, SettingsOwnerStamp } from '../../shared/hostSettings.js';
 import type { OverrideSettingsCommitOptions, OverrideSettingsMutation } from '../maker-host/override-settings-file.js';
+import { runReportedRemoteChange } from './maintenance.js';
 
 export interface PersonalizationChannelDeps {
   /** The managed instance exists and its signed-in member is the instance owner. */
@@ -47,25 +48,28 @@ export function createPersonalizationChannel(deps: PersonalizationChannelDeps) {
       if (!parsed.success) fail('INVALID_PARAMS', 'invalid personalization request');
       const request = parsed.data!;
       if (request.op === 'read') return state(owner);
-      if (request.ownerGeneration !== owner.ownerGeneration) fail('OWNER_CHANGED', 'the instance account changed');
-      const assertCurrent = () => {
-        const now = deps.isInstanceOwner() ? deps.owner() : null;
-        if (!now || now.dataOwnerId !== owner.dataOwnerId || now.ownerGeneration !== owner.ownerGeneration)
-          fail('OWNER_CHANGED', 'the instance account changed');
-      };
-      try {
-        await deps.commit(
-          request.op === 'save' ? { set: { userPrompt: request.userPrompt } } : { clear: ['userPrompt'] },
-          { expectedRevision: request.revision, assertCurrent },
-        );
-      } catch (error) {
-        const code = (error as { code?: unknown })?.code;
-        if (code === 'CONFLICT') fail('REVISION_CONFLICT', 'the instructions changed; reload before saving');
-        if (error instanceof Error && /^\[[A-Z_]+\]/.test(error.message)) throw error;
-        fail('PRECONDITION_FAILED', 'the instructions were not saved');
-      }
-      assertCurrent();
-      return state(owner);
+      // A save or reset counts as maintenance work until it is persisted.
+      return runReportedRemoteChange(async () => {
+        if (request.ownerGeneration !== owner.ownerGeneration) fail('OWNER_CHANGED', 'the instance account changed');
+        const assertCurrent = () => {
+          const now = deps.isInstanceOwner() ? deps.owner() : null;
+          if (!now || now.dataOwnerId !== owner.dataOwnerId || now.ownerGeneration !== owner.ownerGeneration)
+            fail('OWNER_CHANGED', 'the instance account changed');
+        };
+        try {
+          await deps.commit(
+            request.op === 'save' ? { set: { userPrompt: request.userPrompt } } : { clear: ['userPrompt'] },
+            { expectedRevision: request.revision, assertCurrent },
+          );
+        } catch (error) {
+          const code = (error as { code?: unknown })?.code;
+          if (code === 'CONFLICT') fail('REVISION_CONFLICT', 'the instructions changed; reload before saving');
+          if (error instanceof Error && /^\[[A-Z_]+\]/.test(error.message)) throw error;
+          fail('PRECONDITION_FAILED', 'the instructions were not saved');
+        }
+        assertCurrent();
+        return state(owner);
+      });
     },
   };
 }

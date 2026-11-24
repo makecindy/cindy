@@ -1,7 +1,8 @@
 // Unit: the cloud IM settings channel. Owner-gated, closed call list, Slack is never turned on
 // here, saved credentials stay on the instance and the reply names the owner generation.
-import { describe, expect, it, vi } from 'vitest';
-import { CLOUD_IM_SETTINGS_CALLS } from '../../../shared/cloudImSettings';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
+import { CLOUD_IM_SETTINGS_CALLS, CLOUD_IM_SETTINGS_READS } from '../../../shared/cloudImSettings';
+import { connectTestMaintenanceGate, disconnectTestMaintenanceGate } from './maintenanceGateFixture';
 import { hasCloudManagementCall, registerCloudDomainCall } from '../../host-settings/managementCalls';
 import { createImSettingsChannel, type ImSettingsChannelDeps } from '../imSettingsChannel';
 
@@ -33,6 +34,20 @@ function setup(result: unknown = { ok: true }, overrides: Partial<ImSettingsChan
 }
 
 describe('cloud IM settings channel', () => {
+  // Unit: an IM change counts as maintenance work; once maintenance has begun it is refused with a
+  // retryable code before reaching Main, while reads still answer.
+  it('refuses IM changes once maintenance has begun and still reads', async () => {
+    const gate = connectTestMaintenanceGate();
+    onTestFinished(disconnectTestMaintenanceGate);
+    const { channel, call } = setup();
+    gate.preparing = true;
+    await expect(channel.handle('mac', { call: 'telegramBot:set-behavior', args: [{}] })).rejects.toThrow('[CLOUD_MAINTENANCE_RETRY]');
+    expect(call).not.toHaveBeenCalled();
+    await expect(channel.handle('mac', { call: 'telegramBot:get-behavior', args: [] })).resolves.toMatchObject({ ownerGeneration: expect.any(Number) });
+  });
+  it('lists only real calls as reads', () => {
+    for (const read of CLOUD_IM_SETTINGS_READS) expect(CLOUD_IM_SETTINGS_CALLS).toContain(read);
+  });
   it('runs one listed call with its arguments and returns the owner generation', async () => {
     const { channel, call } = setup({ persona: { botName: 'Cindy', soul: '' } });
     await expect(

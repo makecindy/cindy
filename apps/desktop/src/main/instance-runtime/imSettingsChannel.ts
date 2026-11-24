@@ -1,11 +1,13 @@
 import {
   CLOUD_IM_SETTINGS_CHANNEL,
   CLOUD_IM_SETTINGS_MAX_BYTES,
+  CLOUD_IM_SETTINGS_READS,
   cloudImSettingsRequestSchema,
   type CloudImSettingsReply,
 } from '../../shared/cloudImSettings.js';
 import type { SettingsOwnerStamp } from '../../shared/hostSettings.js';
 import type { ManagementExecution } from '../host-settings/management.js';
+import { runReportedRemoteChange } from './maintenance.js';
 
 export interface ImSettingsChannelDeps {
   /** The managed instance exists and its signed-in member is the instance owner. */
@@ -84,7 +86,9 @@ export function createImSettingsChannel(deps: ImSettingsChannelDeps) {
       const run = execution(owner);
       let result: unknown;
       try {
-        result = await deps.call(request.call, request.args, run);
+        // A change counts as maintenance work until it settles; reads do not.
+        const call = () => deps.call(request.call, request.args, run);
+        result = CLOUD_IM_SETTINGS_READS.has(request.call) ? await call() : await runReportedRemoteChange(call);
       } catch (error) {
         const code = (error as { code?: unknown })?.code;
         const message = error instanceof Error ? error.message : '';

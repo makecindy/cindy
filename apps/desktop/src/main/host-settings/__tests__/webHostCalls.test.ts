@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { executeWebHostCall, isWebHostCall, type WebHostCallDeps } from '../webHostCalls.js';
 import { SETTINGS_WEB_CHANNELS, settingsWebCommandSchema, settingsWebResultSchema, type SettingsWebCommand, type SettingsWebEnvelope } from '../../../shared/settingsWeb.js';
+import { connectTestMaintenanceGate, disconnectTestMaintenanceGate } from '../../instance-runtime/__tests__/maintenanceGateFixture.js';
 
 type HostCall = Extract<SettingsWebCommand, { kind: 'channel' | 'desktop' | 'desktopIce' }>;
 const sessionKey = 'c'.repeat(64);
@@ -27,6 +28,23 @@ describe('Host calls from the cloud service browser pages', () => {
   it('never relays the personal instructions through the cloud service', () => {
     expect(SETTINGS_WEB_CHANNELS).not.toContain('cloud:personalization:v1');
     expect(settingsWebCommandSchema.safeParse({ kind: 'channel', channel: 'cloud:personalization:v1', args: [{ op: 'read' }] }).success).toBe(false);
+  });
+
+  // Unit: favourites and provider management changes count as maintenance work; once maintenance
+  // has begun they are refused with a retryable code, while reads still answer.
+  it('refuses changes from a browser page once maintenance has begun', async () => {
+    const gate = connectTestMaintenanceGate();
+    onTestFinished(disconnectTestMaintenanceGate);
+    const f = deps();
+    gate.preparing = true;
+    await expect(executeWebHostCall(input({ kind: 'channel', channel: 'maker:model-favorites:apply', args: [{}] }), f.deps))
+      .resolves.toEqual({ ok: false, code: 'CLOUD_MAINTENANCE_RETRY' });
+    await expect(executeWebHostCall(input({ kind: 'channel', channel: 'provider-group:remote', args: [{ action: 'manage-group' }] }), f.deps))
+      .resolves.toEqual({ ok: false, code: 'CLOUD_MAINTENANCE_RETRY' });
+    expect(f.deps.invoke).not.toHaveBeenCalled();
+    expect(f.deps.providerGroup).not.toHaveBeenCalled();
+    await expect(executeWebHostCall(input({ kind: 'channel', channel: 'maker:model-favorites:get', args: [] }), f.deps))
+      .resolves.toMatchObject({ ok: true });
   });
   it('recognizes only the browser-only kinds', () => {
     expect(isWebHostCall({ kind: 'desktopIce' })).toBe(true);

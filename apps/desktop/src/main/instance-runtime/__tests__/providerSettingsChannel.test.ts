@@ -1,6 +1,7 @@
 // Unit: the cloud providers page channel. Owner-gated, full catalog including hidden models,
 // display-only routing, and every write delegated to the exact native Host channel.
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
+import { connectTestMaintenanceGate, disconnectTestMaintenanceGate } from './maintenanceGateFixture';
 import {
   createProviderSettingsChannel,
   type ProviderSettingsChannelDeps,
@@ -88,6 +89,17 @@ const run = (h: ReturnType<typeof setup>, request: unknown) =>
   h.channel.handle('same-account-mac', request);
 
 describe('cloud provider settings channel', () => {
+  // Unit: a provider change counts as maintenance work; once maintenance has begun it is refused
+  // with a retryable code before reaching Main, while the list still answers.
+  it('refuses provider changes once maintenance has begun and still lists', async () => {
+    const gate = connectTestMaintenanceGate();
+    onTestFinished(disconnectTestMaintenanceGate);
+    const h = setup();
+    gate.preparing = true;
+    await expect(run(h, { op: 'order', ownerGeneration: 7, providerIds: ['xd'] })).rejects.toThrow('[CLOUD_MAINTENANCE_RETRY]');
+    await expect(run(h, { op: 'list' })).resolves.toBeDefined();
+  });
+
   it('refuses a non-owner before reading or writing anything', async () => {
     const h = setup();
     h.setIsOwner(false);

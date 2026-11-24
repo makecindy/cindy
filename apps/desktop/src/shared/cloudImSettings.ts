@@ -67,6 +67,25 @@ export const CLOUD_IM_SETTINGS_CALLS = [
   'dingtalkBot:get-state',
 ] as const;
 export type CloudImSettingsCall = (typeof CLOUD_IM_SETTINGS_CALLS)[number];
+/** The calls that only read; every other call changes the instance. */
+export const CLOUD_IM_SETTINGS_READS: ReadonlySet<CloudImSettingsCall> = new Set([
+  'maker:hook-control:get',
+  'maker:hook-control:shared-prefs-get',
+  'maker:hook-control:workspace-provider-source-get',
+  'maker:hook-control:telegram-behavior-get',
+  'maker:hook-control:telegram-groups-list',
+  CLOUD_HOOK_PROVIDER_ACTION_URL,
+  'maker:im-default-settings:get',
+  'telegramBot:get-persona',
+  'telegramBot:get-behavior',
+  'telegramBot:list-groups',
+  'wechatBot:get-channel-settings',
+  'telegramBot:get-status',
+  'discordBot:get-status',
+  'wecomBot:get-status',
+  'feishuBot:get-state',
+  'dingtalkBot:get-state',
+]);
 
 /** Calls and replies stay small; a larger reply is refused rather than truncated. */
 export const CLOUD_IM_SETTINGS_MAX_BYTES = 512 * 1024;

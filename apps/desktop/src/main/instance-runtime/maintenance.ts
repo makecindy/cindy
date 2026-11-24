@@ -20,6 +20,16 @@ export function runRemoteChange<T>(work: () => Promise<T>): Promise<T> {
 }
 
 export const MAINTENANCE_RETRY = 'CLOUD_MAINTENANCE_RETRY';
+
+/** As {@link runRemoteChange}, for handlers whose callers read a `[CODE] message` error. */
+export async function runReportedRemoteChange<T>(work: () => Promise<T>): Promise<T> {
+  try {
+    return await runRemoteChange(work);
+  } catch (error) {
+    if (isMaintenanceRetry(error)) throw new Error(`[${MAINTENANCE_RETRY}] maintenance is in progress; try again shortly`);
+    throw error;
+  }
+}
 export function isMaintenanceRetry(error: unknown): boolean {
   return typeof error === 'object' && error !== null && (error as { code?: unknown }).code === MAINTENANCE_RETRY;
 }

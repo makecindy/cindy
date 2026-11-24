@@ -1,6 +1,7 @@
 // Unit: the cloud prompt channel. Owner-gated; saves and resets are revision-checked against
 // the Host store and keep the owner generation; failures never echo the stored text.
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
+import { connectTestMaintenanceGate, disconnectTestMaintenanceGate } from './maintenanceGateFixture';
 import {
   createPersonalizationChannel,
   type PersonalizationChannelDeps,
@@ -71,6 +72,24 @@ describe('cloud personalization channel', () => {
       channel.handle('mac', { op: 'reset', ownerGeneration: 5, revision: 'rev-1' }),
     ).resolves.toMatchObject({ userPrompt: '', customized: false });
     expect(commit.mock.calls[0][0]).toEqual({ clear: ['userPrompt'] });
+  });
+
+  // Unit: over DeviceLink and the web alike, a save counts as maintenance work until it is
+  // persisted, and once maintenance has begun a new one is refused with a retryable code.
+  it('keeps a started save in flight and refuses new saves once maintenance has begun', async () => {
+    const gate = connectTestMaintenanceGate();
+    onTestFinished(disconnectTestMaintenanceGate);
+    let persist!: () => void;
+    const { channel } = setup({ commit: vi.fn(() => new Promise<void>((resolve) => { persist = resolve; })) });
+    const saving = channel.handle('mac', { op: 'save', ownerGeneration: 5, revision: 'rev-1', userPrompt: 'new' });
+    await vi.waitFor(() => expect(gate.inFlight).toBe(1));
+    gate.preparing = true;
+    await expect(channel.handle('mac', { op: 'reset', ownerGeneration: 5, revision: 'rev-1' })).rejects.toThrow('[CLOUD_MAINTENANCE_RETRY]');
+    expect(gate.inFlight).toBe(1);
+    persist();
+    await saving;
+    expect(gate.inFlight).toBe(0);
+    await expect(channel.handle('mac', { op: 'read' })).resolves.toMatchObject({ status: 'ready' });
   });
 
   it('maps a stale revision to REVISION_CONFLICT', async () => {

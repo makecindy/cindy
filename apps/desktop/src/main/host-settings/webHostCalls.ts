@@ -1,6 +1,7 @@
 import type { DesktopIceServer } from '@cindy/device-link';
 import { SETTINGS_WEB_CHANNELS, type SettingsWebEnvelope, type SettingsWebResult } from '../../shared/settingsWeb.js';
 import { isProviderManagementRequest } from '../../shared/providerManagement.js';
+import { runReportedRemoteChange } from '../instance-runtime/maintenance.js';
 
 /**
  * The calls a browser page of the cloud instance service makes where the native client
@@ -64,12 +65,15 @@ export async function executeWebHostCall(
       // The owner's provider management only (group and share settings of this instance's
       // providers); group scheduling and continuity stay between the owner's computers.
       if (!isProviderManagementRequest(command.args[0])) return { ok: false, code: 'INVALID_PARAMS' };
-      const value = await deps.inContext(controller, channel, () => deps.providerGroup(controller, command.args[0]));
+      // Group and share changes count as maintenance work; the cloud channels count their own.
+      const value = await runReportedRemoteChange(() =>
+        deps.inContext(controller, channel, () => deps.providerGroup(controller, command.args[0])));
       return { ok: true, channel: value ?? null };
     }
     // As over DeviceLink, provider:list's argument only negotiates tunnel features.
     const args = channel === 'maker:provider:list' ? [] : command.args;
-    const value = await deps.inContext(controller, channel, () => deps.invoke(channel, args));
+    const call = () => deps.inContext(controller, channel, () => deps.invoke(channel, args));
+    const value = channel === 'maker:model-favorites:apply' ? await runReportedRemoteChange(call) : await call();
     return { ok: true, channel: value ?? null };
   } catch (error) {
     return { ok: false, code: failureCode(error) };

@@ -15,6 +15,7 @@ import type { SettingsOwnerStamp } from '../../shared/hostSettings.js';
 import type { CustomModelEdit } from '../../shared/customModelEdit.js';
 import type { ManagementExecution } from '../host-settings/management.js';
 import { hasRuntimeHeaders, type ProviderSetup } from './providerSetup.js';
+import { runReportedRemoteChange } from './maintenance.js';
 
 /** Cindy AI and organization connection controls of the instance's own Settings page. */
 export interface CloudModelAccessControl {
@@ -457,7 +458,8 @@ export function createProviderSettingsChannel(deps: ProviderSettingsChannelDeps)
       const parsed = cloudProviderSettingsRequestSchema.safeParse(raw);
       if (!parsed.success) fail('INVALID_PARAMS', 'invalid provider settings request');
       const request = parsed.data!;
-      return request.op === 'list' ? list(owner) : write(request, owner);
+      // A change counts as maintenance work until it settles, over DeviceLink and the web alike.
+      return request.op === 'list' ? list(owner) : runReportedRemoteChange(() => write(request, owner));
     },
   };
 }
