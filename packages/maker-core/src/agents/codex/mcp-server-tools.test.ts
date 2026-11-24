@@ -72,9 +72,12 @@ describe('Codex thread MCP server tools', () => {
   });
 
   // Gateway recovery must see a failed plugin client even beside a healthy
-  // helper, without multiplying status RPCs or confusing missing legacy state.
+  // helper, without confusing missing legacy state. One request selects one
+  // server, so every name is asked for separately under one shared deadline;
+  // the assertions pin the selector so no caller can widen it back to a
+  // catalog-wide request that stalls behind an unrelated server.
   // Unit tier, production reader; the servers straddle two native status pages.
-  it('reads independent gateway states in one paginated traversal', async () => {
+  it('reads independent gateway states per requested server', async () => {
     const { request, invoke } = requestFor({
       first: { nextCursor: 'next', data: [{ name: 'cindy_helper', runtimeStatus: 'connected', tools: { list_tools: {}, call_tool: {} } }] },
       next: { nextCursor: null, data: [{ name: 'cindy', runtimeStatus: 'failed', tools: { ghost_info: {} } }] },
@@ -83,6 +86,8 @@ describe('Codex thread MCP server tools', () => {
     expect(reports.get('cindy_helper')).toMatchObject({ state: 'connected' });
     expect(reports.get('cindy')).toEqual({ state: 'failed', tools: [] });
     expect(reports.get('missing')).toEqual({ state: 'not-mounted', tools: [] });
-    expect(request.mock.calls.map(([, params]) => params.cursor)).toEqual([null, 'next']);
+    const calls = request.mock.calls.map(([, params]) => params as { cursor: string | null; serverName?: unknown });
+    expect(calls.map((params) => params.cursor)).toEqual([null, null, 'next', null, 'next']);
+    expect(calls.map((params) => params.serverName)).toEqual(['cindy_helper', 'cindy', 'cindy', 'missing', 'missing']);
   });
 });
