@@ -248,11 +248,8 @@ export async function workspaceMoveStatus(ownerRoot: string, botId: string) {
   const { source, backup, journal } = locations(ownerRoot, botId, receipt ?? undefined);
   const warning = startupWarnings.get(journal);
   const workspaceAvailable =
-    receipt?.phase === 'completed'
-      ? await linkedTo(source, receipt.target).then(
-          async (linked) => linked && (await sameDirectory(receipt.target, receipt.targetIdentity)),
-          () => false,
-        )
+    receipt && !['pending', 'cancelled'].includes(receipt.phase)
+      ? await usableWorkspace(ownerRoot, receipt).catch(() => false)
       : await fs.stat(source).then(
           (info) => info.isDirectory(),
           () => false,
@@ -408,7 +405,7 @@ async function usableWorkspace(ownerRoot: string, receipt: Receipt): Promise<boo
   if (receipt.phase !== 'completed' && (await sameDirectory(source, receipt.sourceIdentity)))
     return true;
   return (
-    ['switching', 'linked', 'completed'].includes(receipt.phase) &&
+    receipt.phase === 'completed' &&
     (await linkedTo(source, receipt.target)) &&
     (await sameDirectory(receipt.target, receipt.targetIdentity))
   );
@@ -462,13 +459,13 @@ async function cleanupBackup(ownerRoot: string, receipt: Receipt): Promise<void>
 async function execute(ownerRoot: string, receipt: Receipt): Promise<void> {
   const { source, backup } = locations(ownerRoot, receipt.botId, receipt);
   const persist = async (phase: Phase) => {
+    await save(ownerRoot, { ...receipt, phase });
     receipt.phase = phase;
-    await save(ownerRoot, receipt);
   };
   try {
     if (receipt.phase === 'switching' || receipt.phase === 'linked') {
-      // A crash can occur between any two persisted steps. A proved link is already
-      // committed; never roll it back over writes from a later successful startup.
+      // A crash can leave a verified link without a committed receipt. Finish
+      // recording the cutover before allowing any writes through the link.
       if (
         (await linkedTo(source, receipt.target)) &&
         (await sameDirectory(receipt.target, receipt.targetIdentity))
@@ -544,7 +541,10 @@ async function execute(ownerRoot: string, receipt: Receipt): Promise<void> {
     await cleanupBackup(ownerRoot, receipt);
   } catch (error) {
     const phase = receipt.phase;
-    if (phase === 'switching' || phase === 'linked') await restoreOriginal(ownerRoot, receipt);
+    if (phase === 'switching' || phase === 'linked') {
+      await restoreOriginal(ownerRoot, receipt);
+      delete receipt.backupRemaining;
+    }
     if (phase === 'completed') throw error; // committed target stays authoritative.
     receipt.error = error instanceof Error ? error.message : 'MIGRATION_FAILED';
     await persist('failed');

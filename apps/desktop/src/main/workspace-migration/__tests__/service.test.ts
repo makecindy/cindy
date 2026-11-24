@@ -198,6 +198,31 @@ describe('offline workspace relocation', () => {
     },
   );
 
+  // #12587: the linked receipt used to admit writers if publishing completed
+  // alone failed. Unlike target-loss recovery, the destination is still online.
+  it('restores the original before startup when publishing completion fails', async () => {
+    await requestWorkspaceMove(owner, bot, target, current);
+    await previousProcess();
+    const { file } = await receipt();
+    const rename = fs.rename.bind(fs);
+    vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (String(to) === file && JSON.parse(await fs.readFile(from, 'utf8')).phase === 'completed')
+        throw Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' });
+      return rename(from, to);
+    });
+
+    await expect(recoverWorkspaceMovesAtStartup(owner, true)).resolves.toBeUndefined();
+    await expect(assertWorkspaceMoveReady(owner, bot)).resolves.toBeUndefined();
+    expect(await workspaceMoveStatus(owner, bot)).toMatchObject({ phase: 'failed', workspaceAvailable: true });
+    expect((await fs.lstat(source)).isSymbolicLink()).toBe(false);
+    expect(await fs.readFile(path.join(target, 'script.js'), 'utf8')).toBe('original-script');
+    await fs.writeFile(path.join(source, 'later.txt'), 'after-failed-commit');
+    await expect(fs.lstat(path.join(target, 'later.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await fs.rename(target, `${target}-unmounted`);
+    await expect(recoverWorkspaceMovesAtStartup(owner, true)).resolves.toBeUndefined();
+    expect(await fs.readFile(path.join(source, 'later.txt'), 'utf8')).toBe('after-failed-commit');
+  });
+
   it.each(['target-offline', 'copy-io-error'])(
     'keeps the original usable across repeated startups after %s',
     async (failure) => {
