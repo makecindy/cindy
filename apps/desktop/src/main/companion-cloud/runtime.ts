@@ -171,7 +171,6 @@ class SkillTargetOutdated extends Error {
   constructor(readonly skill: CompanionOversizedSkill) { super('SKILL_TARGET_OUTDATED'); }
 }
 
-/** Check the same snapshot the receiver will restore, including skills already synced. */
 function checkLegacySkillSizes(values: CompanionPreferenceValue[]): void {
   for (const { key, value } of values) {
     if (!key.startsWith(COMPANION_SKILL_PREFIX)) continue;
@@ -856,10 +855,7 @@ export function startCompanionCloud(input: {
     return false;
   }
 
-  /**
-   * The cloud-companion version another computer declares (0: older than cloud companions or not
-   * reachable). A missing or boolean-only probe conservatively assumes the legacy v4 capability.
-   */
+  // Legacy hosts assume v4 when the probe is absent or succeeds, and 0 when it fails.
   async function targetVersion(deviceId: string): Promise<number> {
     if (input.host.homeLink) return input.host.homeLink.version(deviceId).catch(() => 0);
     const probe = input.host.probeCompanionCloud;

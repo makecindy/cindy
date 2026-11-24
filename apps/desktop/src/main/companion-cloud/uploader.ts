@@ -230,7 +230,6 @@ export function createCompanionUploader(deps: {
     const unread = read.filter(entry => entry.unread).map(entry => entry.key);
     if (unread.length && options.requireAll) throw new Error(COMPANION_READ_INCOMPLETE);
     const values = read.filter(entry => !entry.unread);
-    // Check the exact snapshot being flushed, including values already uploaded unchanged.
     options.validateValues?.(values);
     if (deps.state.bot(botId)?.actorId !== actorId || !deps.state.bot(botId)?.prefsSeeded) await seed(botId, actorId);
     const desired = new Map<string, unknown>();
