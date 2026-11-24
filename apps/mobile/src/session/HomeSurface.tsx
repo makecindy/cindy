@@ -76,6 +76,7 @@ import {
   Hammer,
   Menu,
   Monitor,
+  MessageCircle,
   MessagesSquare,
   Lock,
   Pin,
@@ -807,6 +808,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const [groupByProject, setGroupByProject] = useRetainedHomeState(viewSession, 'groupByProject', true);
   const [groupDialogue, setGroupDialogue] = useRetainedHomeState(viewSession, 'groupDialogue', false);
   const [groupAutomation, setGroupAutomation] = useRetainedHomeState(viewSession, 'groupAutomation', false);
+  const [groupMessaging, setGroupMessaging] = useRetainedHomeState(viewSession, 'groupMessaging', false);
   const [sortBy, setSortBy] = useRetainedHomeState<HomeListSortBy>(viewSession, 'sortBy', 'recency');
   const [projectOrder, setProjectOrder] = useRetainedHomeState<HomeProjectOrder>(viewSession, 'projectOrder', 'activity');
   const [manualProjectOrder, setManualProjectOrder] = useRetainedHomeState<string[]>(viewSession, 'manualProjectOrder', []);
@@ -1650,6 +1652,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       setPinnedOrder(preferences.pinnedOrder);
       setGroupDialogue(preferences.groupDialogue);
       setGroupAutomation(preferences.groupAutomation);
+      setGroupMessaging(preferences.groupMessaging);
       setSortBy(preferences.sortBy);
       setStatusFilter(preferences.statusFilter);
       setProjectOrder(preferences.projectOrder);
@@ -2497,6 +2500,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         dialogueTitle: t('devices.list.menu.dialogueFolder'),
         groupAutomation,
         groupDialogue,
+        groupMessaging,
         manualProjectOrder: displayedManualProjectOrder,
         priorityContext: sortPriorityContext,
         projectOrder: displayedProjectOrder,
@@ -2507,12 +2511,12 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         : regular;
     },
     [taskListMode, inboxCollapsed, priorityContext, inboxNow, inboxTeammateEntries, displayedManualProjectOrder, displayedProjectOrder,
-      filteredHome, groupByDevice, pinnedSort, pinnedOrder, groupAutomation, groupByProject, groupDialogue, pinnedCollapsed,
+      filteredHome, groupByDevice, pinnedSort, pinnedOrder, groupAutomation, groupByProject, groupDialogue, groupMessaging, pinnedCollapsed,
       sortPriorityContext, sortBy, t],
   );
   // Sorting metadata may arrive after rows. Only user actions or a new visit release
   // the displayed order; live activity, priority and host-order pushes update content.
-  const displayOrderScope = JSON.stringify([preferenceOwner, selectedDeviceId, taskListMode, groupDevice, groupByProject, groupDialogue, groupAutomation,
+  const displayOrderScope = JSON.stringify([preferenceOwner, selectedDeviceId, taskListMode, groupDevice, groupByProject, groupDialogue, groupAutomation, groupMessaging,
     sortBy, statusFilter, projectFilter, teammateFilter, vendorFilter, lastActivityFilter, hideAutomations, searchQuery]);
   displayOrderScopeRef.current = displayOrderScope;
   const commitDisplayOrder = useCallback((order: HomeDisplayOrder) => {
@@ -2861,6 +2865,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     if (nextPatch.groupByProject !== undefined) setGroupByProject(nextPatch.groupByProject);
     if (nextPatch.groupDialogue !== undefined) setGroupDialogue(nextPatch.groupDialogue);
     if (nextPatch.groupAutomation !== undefined) setGroupAutomation(nextPatch.groupAutomation);
+    if (nextPatch.groupMessaging !== undefined) setGroupMessaging(nextPatch.groupMessaging);
     if (nextPatch.sortBy !== undefined) setSortBy(nextPatch.sortBy);
     if (nextPatch.statusFilter !== undefined) setStatusFilter(nextPatch.statusFilter);
     const modePatch: Partial<HomeModeDisplayPreferences> = {};
@@ -3314,6 +3319,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     groupAutomation,
     groupByProject,
     groupDialogue,
+    groupMessaging,
     lastActivityFilter,
     projectFilter,
     teammateFilter: effectiveTeammateFilter,
@@ -3324,7 +3330,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     taskInfoFields,
     vendorFilter,
     viewMode,
-  }), [taskListMode, groupDevice, hasDeviceGroups, hideAutomations, showCollapsedTeammateAvatars, displayedProjectOrder, groupAutomation, groupByProject, groupDialogue, lastActivityFilter, projectFilter, effectiveTeammateFilter, sortBy, statusFilter, taskInfoFields, vendorFilter, viewMode]);
+  }), [taskListMode, groupDevice, hasDeviceGroups, hideAutomations, showCollapsedTeammateAvatars, displayedProjectOrder, groupAutomation, groupByProject, groupDialogue, groupMessaging, lastActivityFilter, projectFilter, effectiveTeammateFilter, sortBy, statusFilter, taskInfoFields, vendorFilter, viewMode]);
   // 在看已归档任务时,顶栏「⋯」带提醒点(iOS 系统顶栏 / 自绘按钮两条路径共用这一个判据),
   // 同时把状态写进无障碍名称,读屏用户不用打开菜单也知道列表不是平常的进行中任务。
   const archivedReminder = taskListMode === 'tasks' && statusFilter === 'archived';
@@ -4360,7 +4366,7 @@ function ProjectRow({
   dragging?: boolean;
   expandedAutomationGroups: readonly string[];
   headerRefs?: MutableRefObject<Map<string, ViewInstance>>;
-  kind?: 'project' | 'dialogue' | 'cindy-make' | 'automation';
+  kind?: 'project' | 'dialogue' | 'cindy-make' | 'automation' | 'messaging';
   machineIdentity?: HomeProjectMachineIdentity;
   onDragEnd?: () => void;
   onDragMove?: (absoluteY: number) => void;
@@ -4473,11 +4479,14 @@ function ProjectRow({
   const leadingSpacerHeight = childWindow.leadingSpacerHeight;
   const trailingSpacerHeight = childWindow.trailingSpacerHeight;
   const groupTestID = kind === 'dialogue' ? 'home.dialogueGroup'
-    : kind === 'automation' ? 'home.automationGroup' : 'home.projectGroup';
+    : kind === 'automation' ? 'home.automationGroup'
+      : kind === 'messaging' ? 'home.messagingGroup' : 'home.projectGroup';
   const rowTestID = kind === 'dialogue' ? 'home.dialogueRow'
-    : kind === 'automation' ? 'home.automationRow' : 'home.projectRow';
+    : kind === 'automation' ? 'home.automationRow'
+      : kind === 'messaging' ? 'home.messagingRow' : 'home.projectRow';
   const childTestID = kind === 'dialogue' ? 'home.chatRow'
-    : kind === 'automation' ? 'home.automationSessionRow' : 'home.projectSessionRow';
+    : kind === 'automation' ? 'home.automationSessionRow'
+      : kind === 'messaging' ? 'home.messagingSessionRow' : 'home.projectSessionRow';
   const displayTitle = machineIdentity && !machineIdentity.hideLabel
     ? `${project.title} (${machineIdentity.displayLabel})`
     : project.title;
@@ -4518,7 +4527,10 @@ function ProjectRow({
         ? t('devices.list.a11y.dialogue')
         : kind === 'automation'
           ? t('devices.list.a11y.automation')
-          : t('devices.list.a11y.project', { title: displayTitle })}
+          // 消息平台目录的名字就是平台名(飞书、Slack…),直接读出来。
+          : kind === 'messaging'
+            ? project.title
+            : t('devices.list.a11y.project', { title: displayTitle })}
       accessibilityRole="button"
       accessibilityActions={actionable ? [
         { name: 'newTask', label: t('devices.list.projectActions.newTask') },
@@ -4567,6 +4579,8 @@ function ProjectRow({
           <Hammer color={groupIconColor} size={iconSize.xl} strokeWidth={iconStroke.thin} />
         ) : kind === 'automation' ? (
           <Timer color={groupIconColor} size={iconSize.xl} strokeWidth={iconStroke.thin} />
+        ) : kind === 'messaging' ? (
+          <MessageCircle color={groupIconColor} size={iconSize.xl} strokeWidth={iconStroke.thin} />
         ) : collapsed ? (
           <Folder color={groupIconColor} size={iconSize.xl} strokeWidth={iconStroke.thin} />
         ) : (
@@ -4823,9 +4837,9 @@ function HomeListRowInner({
         project={item.project}
         homeScrollY={homeScrollY}
         viewportHeight={viewportHeight}
-        // Cindy Make and Automations span separate workdirs; all tasks stay in the folder
-        // (runs of one automation are already one row).
-        showAll={item.kind === 'cindy-make' || item.kind === 'automation'
+        // Cindy Make, Automations and messaging platforms have no project page to open; all tasks
+        // stay in the folder (runs of one automation are already one row).
+        showAll={item.kind === 'cindy-make' || item.kind === 'automation' || item.kind === 'messaging'
           || (item.kind === 'dialogue' && showAllDialogue)}
         suppressTopBorder={prevIsBlock}
         swipe={swipe}

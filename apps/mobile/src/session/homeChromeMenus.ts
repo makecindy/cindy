@@ -146,6 +146,7 @@ export interface HomeDisplayMenuState {
   hasDeviceGroups?: boolean;
   groupDialogue: boolean;
   groupAutomation?: boolean;
+  groupMessaging?: boolean;
   sortBy: HomeListSortBy;
   projectOrder: HomeProjectOrder;
   statusFilter: HomeStatusFilter;
@@ -231,6 +232,7 @@ export function buildHomeDisplayPullDownActions(input: {
     state.groupByProject ? t(`${MENU}.groupProject`) : null,
     state.groupDialogue ? t(`${MENU}.groupDialogue`) : null,
     state.groupAutomation ? t(`${MENU}.groupAutomation`) : null,
+    state.groupMessaging ? t(`${MENU}.groupMessaging`) : null,
   ].filter(Boolean).join(t(`${MENU}.summarySeparator`)) || t(`${MENU}.summaryNone`);
   const filterCount = activeContentFilterCount({
     hideAutomations: state.hideAutomations,
@@ -251,6 +253,7 @@ export function buildHomeDisplayPullDownActions(input: {
       ...(state.hasDeviceGroups ? [checkable("group.device", t(`${MENU}.groupDevice`), !!state.groupDevice, true)] : []),
       checkable("group.dialogue", t(`${MENU}.groupDialogue`), state.groupDialogue, true),
       checkable("group.automation", t(`${MENU}.groupAutomation`), state.groupAutomation === true, true),
+      checkable("group.messaging", t(`${MENU}.groupMessaging`), state.groupMessaging === true, true),
     ]),
     submenu("sort", t(`${MENU}.sortHeading`), t(sortLabelKey(state.sortBy)), "arrow.up.arrow.down",
       SORT_OPTIONS.map((sortBy) => ({
@@ -371,6 +374,7 @@ export function homeDisplayActionPatch(
   if (id === "group.project") return { groupByProject: !state.groupByProject };
   if (id === "group.dialogue") return { groupDialogue: !state.groupDialogue };
   if (id === "group.automation") return { groupAutomation: !state.groupAutomation };
+  if (id === "group.messaging") return { groupMessaging: !state.groupMessaging };
   if (id === "filter.hideAutomations") return { hideAutomations: !state.hideAutomations };
   if (id === "filter.reset") return {
     ...DEFAULT_HOME_FILTERS,

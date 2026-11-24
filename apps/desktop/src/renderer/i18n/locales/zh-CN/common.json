@@ -16768,7 +16768,8 @@
         "flat": "平铺",
         "device": "设备",
         "dialogue": "对话",
-        "automation": "自动化"
+        "automation": "自动化",
+        "messaging": "消息平台"
       },
       "filterGroupByDeviceManualTip": "手动排序时按设备分组暂不可用",
       "deviceGroup": {
@@ -17135,6 +17136,7 @@
         "project": "项目",
         "dialogue": "对话",
         "automation": "自动化",
+        "messaging": "消息平台",
         "device": "设备"
       },
       "taskStatusHeading": "任务状态",

@@ -38,6 +38,7 @@ export const VENDOR_KEY = 'cc-agent.sidebar.filter.vendor';
 export const GROUP_BY_KEY = 'cc-agent.sidebar.filter.groupBy';
 export const GROUP_DIALOGUE_KEY = 'cc-agent.sidebar.filter.groupDialogue';
 export const GROUP_AUTOMATION_KEY = 'cc-agent.sidebar.filter.groupAutomation';
+export const GROUP_MESSAGING_KEY = 'cc-agent.sidebar.filter.groupMessaging';
 export const GROUP_DEVICE_KEY = 'cc-agent.sidebar.filter.groupDevice';
 export const DEVICE_GROUP_COLLAPSED_KEY = 'cc-agent.sidebar.deviceGroupCollapsed';
 export const DIALOGUE_GROUP_COLLAPSED_KEY = 'cc-agent.sidebar.dialogueGroupCollapsed';
@@ -425,6 +426,35 @@ export function persistGroupAutomation(groupAutomation: boolean): void {
     storage.setItem(GROUP_AUTOMATION_KEY, String(groupAutomation));
   } catch (err) {
     log.warn('[useSidebarFilter] failed to persist groupAutomation:', err);
+  }
+}
+
+/* ============================== groupMessaging load/persist ============================== */
+
+/**
+ * 「按消息平台」开关:true = 消息平台(飞书、Slack 等)来的无项目任务从「对话」/ 散排里分出,
+ * 每个平台各收一组;false = 照旧留在「对话」里。
+ * **默认关**:只有显式存过 'true' 才开启。打开它会把已有任务挪出「对话」组,升级后不替用户改
+ * 列表的样子(sidebar-redesign-plan.md §3.0);要用的人勾一次即可。
+ */
+export function loadGroupMessaging(): boolean {
+  const storage = safeStorage();
+  if (!storage) return false;
+  try {
+    return storage.getItem(GROUP_MESSAGING_KEY) === 'true';
+  } catch (err) {
+    log.warn('[useSidebarFilter] failed to read groupMessaging:', err);
+    return false;
+  }
+}
+
+export function persistGroupMessaging(groupMessaging: boolean): void {
+  const storage = safeStorage();
+  if (!storage) return;
+  try {
+    storage.setItem(GROUP_MESSAGING_KEY, String(groupMessaging));
+  } catch (err) {
+    log.warn('[useSidebarFilter] failed to persist groupMessaging:', err);
   }
 }
 

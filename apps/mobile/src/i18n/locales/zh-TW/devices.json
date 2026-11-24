@@ -379,6 +379,7 @@
     "menu": {
       "groupDialogue": "對話",
       "groupAutomation": "自動化",
+      "groupMessaging": "訊息平台",
       "dialogueFolder": "對話",
       "automationFolder": "自動化",
       "search": "搜尋",

@@ -36,6 +36,8 @@ export interface HomeViewPreferences {
   pinnedOrder: string[];
   /** 缺省关,与手机端「对话」同一默认:自动化运行的任务收进「自动化」目录。 */
   groupAutomation: boolean;
+  /** 缺省关:消息平台(飞书、Slack 等)来的无项目任务按平台各收进一个目录。 */
+  groupMessaging: boolean;
   sortBy: HomeListSortBy;
   statusFilter: HomeStatusFilter;
   /** 缺省按最近活动;手动时项目行按 manualProjectOrder,对话仍跟任务排序。 */
@@ -69,6 +71,7 @@ export interface HomeViewPreferencePatch {
   pinnedSort?: HomePinnedSort;
   pinnedOrder?: { owner: string; keys: string[] };
   groupAutomation?: boolean;
+  groupMessaging?: boolean;
   sortBy?: HomeListSortBy;
   statusFilter?: HomeStatusFilter;
   projectOrder?: HomeProjectOrder;
@@ -135,6 +138,7 @@ async function writeHomeViewPreferences(patch: HomeViewPreferencePatch, filterMo
   assign('groupByProject', patch.groupByProject);
   assign('groupDialogue', patch.groupDialogue);
   assign('groupAutomation', patch.groupAutomation);
+  assign('groupMessaging', patch.groupMessaging);
   assign('sortBy', patch.sortBy);
   assign('statusFilter', patch.statusFilter);
   assign('projectOrder', patch.projectOrder);
@@ -205,6 +209,7 @@ function emptyPreferences(): HomeViewPreferences {
     pinnedOrder: [],
     groupDialogue: false,
     groupAutomation: false,
+    groupMessaging: false,
     selectedDevice: null,
     sortBy: 'recency',
     statusFilter: 'active',
@@ -253,6 +258,7 @@ function normalizeStoredPreferences(value: unknown, owner: string): HomeViewPref
     pinnedOrder: readStringList(readRecord(record.pinnedOrders)?.[owner]),
     groupDialogue: record.groupDialogue === true,
     groupAutomation: record.groupAutomation === true,
+    groupMessaging: record.groupMessaging === true,
     selectedDevice: deviceId
       ? { deviceId, name: deviceName || deviceId }
       : null,

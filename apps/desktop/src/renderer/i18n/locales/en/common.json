@@ -16842,7 +16842,8 @@
         "flat": "Flat list",
         "device": "Device",
         "dialogue": "Chat",
-        "automation": "Automation"
+        "automation": "Automation",
+        "messaging": "Messaging platform"
       },
       "filterGroupByDeviceManualTip": "Group by device is unavailable while sorting manually",
       "deviceGroup": {
@@ -17209,6 +17210,7 @@
         "project": "Project",
         "dialogue": "Chat",
         "automation": "Automation",
+        "messaging": "Messaging platform",
         "device": "Device"
       },
       "taskStatusHeading": "Session status",

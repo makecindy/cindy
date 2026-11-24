@@ -17000,7 +17000,8 @@
         "flat": "Liste simple",
         "device": "Appareil",
         "dialogue": "Conversation",
-        "automation": "Automatisation"
+        "automation": "Automatisation",
+        "messaging": "Plateforme de messagerie"
       },
       "filterGroupByDeviceManualTip": "Le regroupement par appareil n'est pas disponible en tri manuel",
       "deviceGroup": {
@@ -17373,6 +17374,7 @@
         "project": "Projet",
         "dialogue": "Conversation",
         "automation": "Automatisation",
+        "messaging": "Plateforme de messagerie",
         "device": "Appareil"
       },
       "taskStatusHeading": "Statut des sessions",

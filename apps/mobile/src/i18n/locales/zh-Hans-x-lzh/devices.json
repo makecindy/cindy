@@ -379,6 +379,7 @@
     "menu": {
       "groupDialogue": "言谈",
       "groupAutomation": "自运",
+      "groupMessaging": "传讯之所",
       "dialogueFolder": "言谈",
       "automationFolder": "自运",
       "search": "寻",

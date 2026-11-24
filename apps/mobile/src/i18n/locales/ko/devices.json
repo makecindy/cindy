@@ -379,6 +379,7 @@
     "menu": {
       "groupDialogue": "채팅",
       "groupAutomation": "자동화",
+      "groupMessaging": "메시지 플랫폼",
       "dialogueFolder": "채팅",
       "automationFolder": "자동화",
       "search": "검색",

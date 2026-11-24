@@ -71,6 +71,7 @@ import {
   loadGroupBy,
   loadGroupDialogue,
   loadGroupAutomation,
+  loadGroupMessaging,
   loadGroupDevice,
   loadLastActivity,
   loadSortBy,
@@ -89,6 +90,7 @@ import {
   persistGroupBy,
   persistGroupDialogue,
   persistGroupAutomation,
+  persistGroupMessaging,
   persistGroupDevice,
   persistLastActivity,
   persistSortBy,
@@ -161,6 +163,8 @@ export interface UseSidebarFilterReturn {
   groupDialogue: boolean;
   /** 「自动化归为一组」开关:true = 自动化运行的任务收进「自动化」组;默认 true。 */
   groupAutomation: boolean;
+  /** 「按消息平台」开关:true = 消息平台来的无项目任务按平台各收一组;默认 false。 */
+  groupMessaging: boolean;
   /** 「按设备分组」开关(E 期):默认 true;有可选远程设备（含断线缓存）时可见/生效。 */
   groupDevice: boolean;
   /** Sidebar 主列表任务排序。默认 'recency'。 */
@@ -197,6 +201,8 @@ export interface UseSidebarFilterReturn {
   setGroupDialogue: (groupDialogue: boolean) => void;
   /** 设置「自动化归为一组」，持久化到 localStorage。 */
   setGroupAutomation: (groupAutomation: boolean) => void;
+  /** 设置「按消息平台」，持久化到 localStorage。 */
+  setGroupMessaging: (groupMessaging: boolean) => void;
   /** 设置「按设备分组」，持久化到 localStorage。 */
   setGroupDevice: (groupDevice: boolean) => void;
   /** 设置主列表任务排序，持久化到 localStorage。 */
@@ -318,6 +324,7 @@ export function useSidebarFilter(
   const [groupBy, setGroupByState] = useState<FilterGroupBy>(() => loadGroupBy());
   const [groupDialogue, setGroupDialogueState] = useState<boolean>(() => loadGroupDialogue());
   const [groupAutomation, setGroupAutomationState] = useState<boolean>(() => loadGroupAutomation());
+  const [groupMessaging, setGroupMessagingState] = useState<boolean>(() => loadGroupMessaging());
   const [groupDevice, setGroupDeviceState] = useState<boolean>(() => loadGroupDevice());
   const [sortBy, setSortByState] = useState<FilterSortBy>(() => {
     migrateLegacyManualSort();
@@ -617,6 +624,11 @@ export function useSidebarFilter(
     persistGroupAutomation(next);
   }, []);
 
+  const setGroupMessaging = useCallback((next: boolean) => {
+    setGroupMessagingState(next);
+    persistGroupMessaging(next);
+  }, []);
+
   const setGroupDevice = useCallback((next: boolean) => {
     setGroupDeviceState(next);
     persistGroupDevice(next);
@@ -757,6 +769,7 @@ export function useSidebarFilter(
     groupBy,
     groupDialogue,
     groupAutomation,
+    groupMessaging,
     groupDevice,
     sortBy,
     pinnedSortBy,
@@ -773,6 +786,7 @@ export function useSidebarFilter(
     setGroupBy,
     setGroupDialogue,
     setGroupAutomation,
+    setGroupMessaging,
     setGroupDevice,
     setSortBy,
     setPinnedSortBy,

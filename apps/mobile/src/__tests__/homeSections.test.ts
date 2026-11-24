@@ -12,6 +12,8 @@ import {
   homeRowBefore,
   mergeAutomationItems,
   withMergedAutomationPriority,
+  type HomeSectionOptions,
+  type HomeTaskRow,
   type InboxTeammateEntry,
 } from '@/session/homeSections';
 import type { MobileHomePresentation, MobileHomeProjectGroup } from '@/session/mobileHome';
@@ -162,6 +164,98 @@ describe('buildHomeSections', () => {
       ...next,
       sourceLabel: 'Chat',
     })).toBe(false);
+  });
+});
+
+describe('按消息平台归组', () => {
+  // 测试价值(engineering-conventions.md §3.2)
+  // - 生产入口与可观察结果:buildHomeSections;手机任务列表据此画出「飞书」等消息平台目录,以及对话里还剩哪些任务。
+  // - 规则依据:sidebar-redesign-plan.md §3.1「按消息平台」与「手机任务列表」(默认关;只分无项目的任务;
+  //   一个平台一个目录;按设备分组时每台电脑各一份)。
+  // - 现有覆盖缺口:此前消息平台来的任务一律按对话处理,没有按来源分出目录的分支。
+  // - 最小失败输入:飞书任务与普通对话混排、官方与个人 Discord 各一条、项目里的飞书任务、两台电脑各有飞书任务。
+  // - tier:unit(纯函数,无 I/O)。
+  const task = (id: string, day: number, source?: string): RemoteSessionListItem => ({
+    session: { id, title: id, source },
+    title: id,
+    lastActivityAt: `2026-11-${String(day).padStart(2, '0')}T00:00:00Z`,
+    pendingInteractionCount: 0,
+  } as unknown as RemoteSessionListItem);
+  const home = () => presentation({
+    chats: [
+      task('feishu-dm', 20, 'feishu'), task('slack', 19, 'slack'), task('feishu-group', 18, 'feishu'),
+      task('chat', 17, 'desktop'), task('discord-own', 12, 'discord'), task('discord-official', 11, 'discord-hook'),
+      // 伙伴经消息平台接的任务来源是 bot:归伙伴自己的入口与筛选,不进平台目录。
+      task('teammate', 10, 'bot'),
+    ],
+    projects: [projectGroup('repo', '2026-11-16T00:00:00Z', [task('feishu-in-repo', 16, 'feishu'), task('work', 15)])],
+  });
+  const mainRows = (groupByProject: boolean, options: HomeSectionOptions) =>
+    buildHomeSections(home(), groupByProject, false, options)
+      .find((section) => section.key === HOME_MAIN_SECTION_KEY)?.data ?? [];
+  const labels = (rows: readonly HomeTaskRow[]) =>
+    rows.map((row) => row.kind === 'session' ? row.item.session.id : `${row.kind}:${row.project.key}`);
+  const members = (rows: readonly HomeTaskRow[], key: string) => {
+    const row = rows.find((entry) => entry.kind !== 'session' && entry.project.key === key);
+    return row && row.kind !== 'session' ? row.project.sessions.map((item) => item.session.id) : null;
+  };
+
+  it('默认不分:消息平台来的任务照旧按对话排', () => {
+    expect(labels(mainRows(true, {}))).toEqual([
+      'feishu-dm', 'slack', 'feishu-group', 'chat', 'project:repo', 'discord-own', 'discord-official', 'teammate',
+    ]);
+  });
+
+  it.each([
+    {
+      name: '每个平台一个目录,项目里的任务留在项目里',
+      groupByProject: true,
+      options: {},
+      expected: ['messaging:messaging:feishu', 'messaging:messaging:slack', 'chat', 'project:repo', 'messaging:messaging:discord', 'teammate'],
+    },
+    {
+      name: '对话归组时,平台目录与对话目录并列',
+      groupByProject: true,
+      options: { groupDialogue: true },
+      expected: ['messaging:messaging:feishu', 'messaging:messaging:slack', 'dialogue:dialogue', 'project:repo', 'messaging:messaging:discord'],
+    },
+    {
+      name: '不按项目分组时同样收目录',
+      groupByProject: false,
+      options: {},
+      expected: ['messaging:messaging:feishu', 'messaging:messaging:slack', 'chat', 'feishu-in-repo', 'work', 'messaging:messaging:discord', 'teammate'],
+    },
+    {
+      name: '项目手动排序时排在项目之后',
+      groupByProject: true,
+      options: { projectOrder: 'custom' as const, manualProjectOrder: ['repo'] },
+      expected: ['project:repo', 'messaging:messaging:feishu', 'messaging:messaging:slack', 'chat', 'messaging:messaging:discord', 'teammate'],
+    },
+  ])('开启后:$name', ({ groupByProject, options, expected }) => {
+    const rows = mainRows(groupByProject, { groupMessaging: true, ...options });
+    expect(labels(rows)).toEqual(expected);
+    expect(members(rows, 'messaging:feishu')).toEqual(['feishu-dm', 'feishu-group']);
+    // 官方 Discord bot 派发的任务与个人 Discord bot 的任务同属 Discord。
+    expect(members(rows, 'messaging:discord')).toEqual(['discord-own', 'discord-official']);
+    if (groupByProject) expect(members(rows, 'repo')).toEqual(['feishu-in-repo', 'work']);
+    if (options.groupDialogue) expect(members(rows, 'dialogue')).toEqual(['chat', 'teammate']);
+    const feishu = rows.find((row) => row.kind === 'messaging' && row.platform === 'feishu');
+    // 目录名就是平台名,与聊天里的来源卡片同一份译文。
+    expect(feishu?.kind === 'messaging' && [feishu.project.title, feishu.project.sessionCount]).toEqual(['飞书', 2]);
+  });
+
+  it('按设备分组时每台电脑各有自己的平台目录', () => {
+    const chats = ['a', 'b'].map((deviceId) => {
+      const item = task(`feishu-${deviceId}`, 20, 'feishu');
+      return { ...item, session: { ...item.session, deviceLinkDeviceId: deviceId } };
+    });
+    const sections = buildHomeSections(presentation({ chats, deviceFilters: [] }), true, false, {
+      groupDevice: true, groupMessaging: true,
+    });
+    expect(sections.map((section) => {
+      const row = section.data[0];
+      return [row?.key, row && row.kind !== 'session' ? row.project.deviceId : null];
+    })).toEqual([['device:a:messaging:feishu', 'a'], ['device:b:messaging:feishu', 'b']]);
   });
 });
 

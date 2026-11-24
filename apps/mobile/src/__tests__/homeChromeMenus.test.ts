@@ -286,6 +286,12 @@ describe("home chrome menus", () => {
 
   it("maps menu actions to preference patches", () => {
     expect(homeDisplayActionPatch("group.dialogue", displayState)).toEqual({ groupDialogue: true });
+    // 消息平台分组:默认不勾;勾选后进「分组」摘要,点一下翻转偏好。
+    expect(find(build(), "group.messaging")?.state).not.toBe("on");
+    const byPlatform = build({ groupMessaging: true });
+    expect(find(byPlatform, "group.messaging")?.state).toBe("on");
+    expect(find(byPlatform, "group")?.subtitle).toContain("devices.list.menu.groupMessaging");
+    expect(homeDisplayActionPatch("group.messaging", displayState)).toEqual({ groupMessaging: true });
     expect(homeDisplayActionPatch("group.project", displayState)).toEqual({ groupByProject: false });
     expect(homeDisplayActionPatch("sort.created", displayState)).toEqual({ sortBy: "created" });
     expect(homeDisplayActionPatch("projectOrder.custom", displayState)).toEqual({ projectOrder: "custom" });

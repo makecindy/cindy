@@ -7,6 +7,11 @@ import {
   compareSessionListStrings,
   groupAutomationListItems,
 } from '@cindy/maker-shared/session-list';
+import {
+  MESSAGING_PLATFORM_SOURCES,
+  messagingPlatformOfSource,
+  type MessagingPlatformSource,
+} from '@cindy/maker-shared/messaging-platform-source';
 import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
 import {
   compareSessionsByStatusThenActivityDesc,
@@ -44,6 +49,8 @@ export type HomeTaskRow =
   | { key: string; kind: 'cindy-make'; project: MobileHomeProjectGroup }
   /** 「自动化」目录:自动化运行出来的任务(项目里的与对话的),组内同一自动化仍收成一行。 */
   | { key: string; kind: 'automation'; project: MobileHomeProjectGroup }
+  /** 消息平台目录:某个消息平台(飞书、Slack 等)来的无项目任务,一个平台一个目录,从对话里分出来。 */
+  | { key: string; kind: 'messaging'; platform: MessagingPlatformSource; project: MobileHomeProjectGroup }
   | {
       key: string;
       kind: 'session';
@@ -87,6 +94,8 @@ export interface HomeSectionOptions {
   /** 自动化运行的任务收进「自动化」目录(与桌面「分组 → 自动化」同口径)。 */
   groupAutomation?: boolean;
   automationTitle?: string;
+  /** 消息平台来的无项目任务按平台各收进一个目录(与桌面「分组 → 消息平台」同口径)。 */
+  groupMessaging?: boolean;
   /** The compact task-switching drawer only renders flat session rows. */
   groupCindyMake?: boolean;
   sortBy?: HomeListSortBy;
@@ -142,7 +151,7 @@ export function buildHomeSections(
       const key = 'device:' + id;
       const title = labels.get(id) ?? contents.projects[0]?.deviceName ?? i18n.t('devices.presentation.home.unknownComputer');
       const rows = buildMainRows({ ...home, ...contents }, groupByProject, options).map(row => {
-        if (row.kind !== 'dialogue' && row.kind !== 'automation') return row;
+        if (row.kind !== 'dialogue' && row.kind !== 'automation' && row.kind !== 'messaging') return row;
         const scopedKey = key + ':' + row.key;
         return { ...row, key: scopedKey, project: { ...row.project, key: scopedKey, deviceId: id || null } };
       });
@@ -189,11 +198,16 @@ function buildMainRows(home: MobileHomePresentation, groupByProject: boolean, op
   const rowOptions = automations.length && options.priorityContext
     ? { ...options, priorityContext: withMergedAutomationPriority(options.priorityContext, automations) }
     : options;
-  const rows = groupByProject ? buildGroupedHomeRows(listHome, rowOptions) : buildMixedHomeRows(listHome, rowOptions);
+  // 排在自动化之后:消息平台上触发的自动化运行仍归「自动化」目录。
+  const messaging = options.groupMessaging ? partitionMessagingItems(listHome) : null;
+  const rowsHome = messaging?.home ?? listHome;
+  const rows = groupByProject ? buildGroupedHomeRows(rowsHome, rowOptions) : buildMixedHomeRows(rowsHome, rowOptions);
   if (automations.length > 0) {
     rows.push(buildAutomationGroupRow(automations, rowOptions));
   }
-  return partitioned ? sortHomeRows(rows, rowOptions) : rows;
+  const messagingRows = messaging ? buildMessagingGroupRows(messaging.groups, rowOptions) : [];
+  rows.push(...messagingRows);
+  return partitioned || messagingRows.length > 0 ? sortHomeRows(rows, rowOptions) : rows;
 }
 
 /**
@@ -219,9 +233,9 @@ export function homeRowBefore(
 
 export function isFolderHomeRow(
   row: HomeRow | undefined,
-): row is Extract<HomeRow, { kind: 'project' | 'dialogue' | 'cindy-make' | 'automation' }> {
+): row is Extract<HomeRow, { kind: 'project' | 'dialogue' | 'cindy-make' | 'automation' | 'messaging' }> {
   return !!row && (row.kind === 'project' || row.kind === 'dialogue' || row.kind === 'cindy-make'
-    || row.kind === 'automation');
+    || row.kind === 'automation' || row.kind === 'messaging');
 }
 
 function isAutomationItem(item: RemoteSessionListItem): boolean {
@@ -345,6 +359,62 @@ export function withMergedAutomationPriority(
     unreadSessionIds: unread ?? ctx.unreadSessionIds,
     waitingSessionIds: waiting ?? ctx.waitingSessionIds,
   };
+}
+
+/**
+ * 「按消息平台」:把消息平台(飞书、Slack 等)来的无项目任务从对话里分出来,一个平台一份。
+ * 只按任务来源判断,不看标题;有项目的任务留在各自项目里,所以只处理 chats。没有任务的平台不出目录。
+ */
+export function partitionMessagingItems(home: MobileHomePresentation): {
+  home: MobileHomePresentation;
+  groups: Array<{ platform: MessagingPlatformSource; items: RemoteSessionListItem[] }>;
+} {
+  const byPlatform = new Map<MessagingPlatformSource, RemoteSessionListItem[]>();
+  const chats = home.chats.filter((item) => {
+    const platform = messagingPlatformOfSource(item.session.source);
+    if (!platform) return true;
+    const list = byPlatform.get(platform);
+    if (list) list.push(item);
+    else byPlatform.set(platform, [item]);
+    return false;
+  });
+  if (byPlatform.size === 0) return { home, groups: [] };
+  return {
+    home: { ...home, chats },
+    groups: MESSAGING_PLATFORM_SOURCES.flatMap((platform) => {
+      const items = byPlatform.get(platform);
+      return items ? [{ platform, items }] : [];
+    }),
+  };
+}
+
+/** 消息平台目录行,一个平台一行。与「自动化」目录同规:没有新建入口,任务全部留在目录里。 */
+export function buildMessagingGroupRows(
+  groups: ReadonlyArray<{ platform: MessagingPlatformSource; items: readonly RemoteSessionListItem[] }>,
+  options: HomeSectionOptions = {},
+): HomeTaskRow[] {
+  return groups.map(({ platform, items }) => {
+    const key = `messaging:${platform}`;
+    const sessions = sortSessionItems(items, options);
+    return {
+      key,
+      kind: 'messaging' as const,
+      platform,
+      project: {
+        deviceId: null,
+        deviceName: '',
+        key,
+        latestActivityAt: latestActivityAt(sessions),
+        pendingInteractionCount: sessions.reduce((sum, item) => sum + item.pendingInteractionCount, 0),
+        sessionCount: sessions.length,
+        sessions,
+        subtitle: '',
+        // 平台名与聊天里的来源卡片同一份译文。
+        title: i18n.t(`message.renderer.imPlatform.${platform}`),
+        workingDir: '',
+      },
+    };
+  });
 }
 
 /** 「自动化」目录行;items 已经过 mergeAutomationItems。 */

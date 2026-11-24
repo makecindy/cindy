@@ -66,6 +66,8 @@ export function isReviewSessionSource(source: unknown): source is 'review' {
 // feishu: IM 渠道自动建的会话——落侧边栏「对话」分组(workspaceKind='dialogue')。
 // (2026-07-06 曾加入后按 Lizi 要求回退;2026-07-16 按 Lizi 要求重新加入,
 //  这次带 dialogue 归组,不再以 im-working-dir 聚成假项目组。)
+//  用户在「分组」里勾选「消息平台」后,各消息平台来的无项目会话按平台各收一组
+//  (sidebar-redesign-plan.md §3.1;来源 → 平台见 @cindy/maker-shared/messaging-platform-source)。
 // scheduler / learn: 本机自动化会话,可见可点开看过程。
 // review: /review 创建的本机只读独立审查任务。会话本身可读(用量、打开详情),但不进
 //         普通任务列表,只能从来源任务的审查卡片打开,见 DESKTOP_TASK_LIST_SESSION_SOURCES。

@@ -1,4 +1,5 @@
 import { deviceDisplayName } from '@/lib/deviceName';
+import { imLabel } from '@/lib/imLabel';
 import { isCindyMakeFamilySource } from '../../../../../shared/cindyMakeMerge';
 /**
  * ProjectsSection — Sidebar 中部的 Projects 段
@@ -42,6 +43,7 @@ import {
   ChevronsDownUp,
   ChevronsUpDown,
   Hammer,
+  MessageCircle,
   MessagesSquare,
   MonitorSmartphone,
   SquarePen,
@@ -95,6 +97,7 @@ import {
   AUTOMATIONS_GROUP_KEY,
   CINDY_MAKE_GROUP_KEY,
   dialogueGroupActionSessions,
+  messagingGroupCollapseKey,
   getMainListEntrySessions,
   holdViewedPriorityRank,
   onlineDeviceSectionIds,
@@ -657,6 +660,7 @@ export function ProjectsSection({
     groupBy: filter.groupBy,
     groupDialogue: filter.groupDialogue,
     groupAutomation: filter.groupAutomation,
+    groupMessaging: filter.groupMessaging,
     sortBy: filter.sortBy,
     projectOrder: displayedProjectOrder.projectOrder,
     manualProjectOrder: displayedProjectOrder.manualProjectOrder,
@@ -817,6 +821,7 @@ export function ProjectsSection({
         if (entry.kind === 'dialogue-group') return [scope];
         if (entry.kind === 'cindy-make-group') return [`${CINDY_MAKE_GROUP_KEY}:${scope}`];
         if (entry.kind === 'automations-group') return [`${AUTOMATIONS_GROUP_KEY}:${scope}`];
+        if (entry.kind === 'messaging-group') return [messagingGroupCollapseKey(entry.platform, scope)];
         return [];
       });
     if (!deviceGroupingActive) {
@@ -1060,6 +1065,40 @@ export function ProjectsSection({
         />
       );
     }
+    if (entry.kind === 'messaging-group') {
+      // 与「自动化」组同规:组头无新建入口与右键菜单,折叠记忆与「收起所有分组」共用对话组那份偏好。
+      const groupKey = messagingGroupCollapseKey(entry.platform, dialogueGroupKey);
+      const isCollapsed = collapsedDialogueGroups.has(groupKey);
+      return (
+        <SessionGroupNode
+          key={`${entry.kind}:${entry.platform}:${dialogueGroupKey}`}
+          sessions={entry.sessions}
+          lamp={lampAgg(entry.sessions)}
+          foldExemptSessionIds={lampFoldExemptIds}
+          groupTitle={imLabel(entry.platform, t)}
+          groupIcon={<MessageCircle size={15} strokeWidth={1.8} className="shrink-0" aria-hidden />}
+          collapsed={isCollapsed}
+          onToggle={() => setDialogueCollapsed([groupKey], !isCollapsed)}
+          isCreateDisabled={false}
+          parentSectionCollapsed={false}
+          disableSessionCollapse={disableSessionCollapse}
+          activeSessionId={activeSessionId}
+          runningSessionIds={runningSessionIds}
+          attachedSessionIds={attachedSessionIds}
+          notifications={notifications}
+          scheduleSessionIndex={scheduleSessionIndex}
+          selectedSessionIds={selectedSessionIds}
+          onSessionClick={onSessionClick}
+          onAction={onAction}
+          onRename={onRename}
+          onTogglePin={onTogglePin}
+          onMoveSession={onMoveSession}
+          projectOptions={projectOptions}
+          onScheduleAction={onScheduleAction}
+          sessionVariant={mainSessionVariant}
+        />
+      );
+    }
     if (entry.kind === 'dialogue-group' || entry.kind === 'cindy-make-group') {
       const isMake = entry.kind === 'cindy-make-group';
       const groupKey = isMake ? `${CINDY_MAKE_GROUP_KEY}:${dialogueGroupKey}` : dialogueGroupKey;
@@ -1079,6 +1118,7 @@ export function ProjectsSection({
         ? entry.sessions
         : dialogueGroupActionSessions(dialogueActionSessions, {
             groupAutomation: filter.groupAutomation,
+            groupMessaging: filter.groupMessaging,
             scheduleSessionIndex,
           }).filter(
             (session) =>

@@ -198,8 +198,24 @@ describe('sidebar display settings menu', () => {
       within(group)
         .getAllByRole('menuitemcheckbox')
         .map((row) => row.textContent),
-    ).toEqual(['项目', '对话', '自动化']);
+    ).toEqual(['项目', '对话', '自动化', '消息平台']);
     expect(filter.groupDevice).toBe(true);
+  });
+
+  // sidebar-redesign-plan.md §3.1「按消息平台」: the option is off unless the user ticks it, toggles only
+  // itself, and joins the row summary once on. Unit: real menu, zh-CN copy.
+  it('offers messaging platform grouping unticked, and lists it in the summary once it is on', async () => {
+    const filter = makeFilter({ groupMessaging: false, setGroupMessaging: vi.fn() });
+    const view = render(<Preview filter={filter} remote={false} />);
+    expect(screen.getByRole('menuitem', { name: /^分组/ }).textContent).toBe('分组项目、对话');
+    const option = within(await openSubmenu(/^分组/)).getByRole('menuitemcheckbox', { name: '消息平台' });
+    expect(option.getAttribute('aria-checked')).toBe('false');
+    fireEvent.click(option);
+    expect(filter.setGroupMessaging).toHaveBeenCalledWith(true);
+    view.unmount();
+
+    render(<Preview filter={makeFilter({ groupMessaging: true })} remote={false} />);
+    expect(screen.getByRole('menuitem', { name: /^分组/ }).textContent).toBe('分组项目、对话、消息平台');
   });
 });
 

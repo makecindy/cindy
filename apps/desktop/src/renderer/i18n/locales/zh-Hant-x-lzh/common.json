@@ -16768,7 +16768,8 @@
         "flat": "平列",
         "device": "機",
         "dialogue": "言談",
-        "automation": "自運"
+        "automation": "自運",
+        "messaging": "傳訊之所"
       },
       "filterGroupByDeviceManualTip": "手動排序時，暫不能依裝置分組",
       "deviceGroup": {
@@ -17135,6 +17136,7 @@
         "project": "案",
         "dialogue": "言談",
         "automation": "自運",
+        "messaging": "傳訊之所",
         "device": "機"
       },
       "taskStatusHeading": "差事狀態",

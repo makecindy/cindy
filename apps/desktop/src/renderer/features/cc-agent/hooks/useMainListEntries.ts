@@ -3,12 +3,12 @@ import { buildMainListEntries, type BuildMainListEntriesInput } from '../lib/mai
 
 /** Browsing priority changes cannot invalidate time-based sorting. */
 export function useMainListEntries(input: BuildMainListEntriesInput) {
-  const { projects, dialogues, unclassified, groupBy, groupDialogue, groupAutomation, sortBy,
+  const { projects, dialogues, unclassified, groupBy, groupDialogue, groupAutomation, groupMessaging, sortBy,
     projectOrder, manualProjectOrder, notifications, scheduleSessionIndex } = input;
   const priorityContext = sortBy === 'priority' ? input.priorityContext : undefined;
   return useMemo(() => buildMainListEntries({
-    projects, dialogues, unclassified, groupBy, groupDialogue, groupAutomation, sortBy,
+    projects, dialogues, unclassified, groupBy, groupDialogue, groupAutomation, groupMessaging, sortBy,
     projectOrder, manualProjectOrder, notifications, scheduleSessionIndex, priorityContext,
-  }), [projects, dialogues, unclassified, groupBy, groupDialogue, groupAutomation, sortBy,
+  }), [projects, dialogues, unclassified, groupBy, groupDialogue, groupAutomation, groupMessaging, sortBy,
     projectOrder, manualProjectOrder, notifications, scheduleSessionIndex, priorityContext]);
 }

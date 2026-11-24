@@ -26,6 +26,11 @@
 import type { Session } from '@/lib/ccAgent.types';
 import { withProjectSessions } from './projectGrouping';
 import { CINDY_MAKE_ENABLED } from '@cindy/maker-shared/cindy-make-feature';
+import {
+  MESSAGING_PLATFORM_SOURCES,
+  messagingPlatformOfSource,
+  type MessagingPlatformSource,
+} from '@cindy/maker-shared/messaging-platform-source';
 import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
 import { sessionRowKey } from '../sidebar/sessionRowKey';
 import { isCindyMakeFamilySource } from '../../../../shared/cindyMakeMerge';
@@ -53,6 +58,8 @@ export type MainListEntry =
   | { kind: 'cindy-make-group'; sessions: Session[] }
   /** 「自动化」组:自动化运行出来的任务(项目里的与无项目的),组内再按每条自动化收文件夹。 */
   | { kind: 'automations-group'; sessions: Session[] }
+  /** 消息平台组:某个消息平台(飞书、Slack 等)来的无项目任务,一个平台一组,从「对话」里分出来。 */
+  | { kind: 'messaging-group'; platform: MessagingPlatformSource; sessions: Session[] }
   | SidebarSessionEntry;
 
 /** 优先级排序的运行时上下文(组装层的运行中 / 需关注集合)。 */
@@ -193,15 +200,24 @@ export function sessionPriorityRecencyMs(session: Session, ctx: MainListPriority
 
 export function getMainListEntrySessions(entry: MainListEntry): readonly Session[] {
   if (entry.kind === 'project') return entry.project.sessions;
-  if (
-    entry.kind === 'dialogue-group' ||
-    entry.kind === 'cindy-make-group' ||
-    entry.kind === 'automations-group'
-  ) {
-    return entry.sessions;
-  }
+  if (isSessionGroupEntry(entry)) return entry.sessions;
   if (entry.kind === 'automation-group') return entry.group.sessions;
   return [entry.session];
+}
+
+/** 直接持有成员任务的固定分类组(对话 / Cindy Make / 自动化 / 消息平台),区别于项目行与单条任务。 */
+export type MainListSessionGroupEntry = Extract<
+  MainListEntry,
+  { kind: 'dialogue-group' | 'cindy-make-group' | 'automations-group' | 'messaging-group' }
+>;
+
+export function isSessionGroupEntry(entry: MainListEntry): entry is MainListSessionGroupEntry {
+  return (
+    entry.kind === 'dialogue-group' ||
+    entry.kind === 'cindy-make-group' ||
+    entry.kind === 'automations-group' ||
+    entry.kind === 'messaging-group'
+  );
 }
 
 function entryTimeMs(entry: MainListEntry, sortBy: FilterSortBy = 'recency'): number {
@@ -303,6 +319,8 @@ export interface BuildMainListEntriesInput {
   groupDialogue: boolean;
   /** true = 自动化运行的任务从项目 / 散排里抽出,收进单个「自动化」组条目。 */
   groupAutomation?: boolean;
+  /** true = 消息平台来的无项目任务从「对话」/ 散排里分出,每个平台各收一组。 */
+  groupMessaging?: boolean;
   sortBy: FilterSortBy;
   projectOrder?: FilterProjectOrder;
   manualProjectOrder: readonly string[];
@@ -316,6 +334,13 @@ const EMPTY_SESSION_ID_SET: ReadonlySet<string> = new Set<string>();
 export const CINDY_MAKE_GROUP_KEY = 'cindy-make';
 /** 「自动化」组折叠记忆的命名空间(与对话 / Cindy Make 组同一份折叠偏好)。 */
 export const AUTOMATIONS_GROUP_KEY = 'automations';
+/** 消息平台组折叠记忆的命名空间;完整 key 再接平台名,各平台各记各的。 */
+export const MESSAGING_GROUP_KEY = 'messaging';
+
+/** 某个消息平台组在某个段(设备段 / 单一列表)里的折叠记忆 key。 */
+export function messagingGroupCollapseKey(platform: MessagingPlatformSource, scope: string): string {
+  return `${MESSAGING_GROUP_KEY}:${platform}:${scope}`;
+}
 
 /** Group by the task's source, never by a title or a guessed worktree path. */
 export function partitionCindyMakeSessions({
@@ -397,23 +422,56 @@ export function partitionAutomationSessions({
 }
 
 /**
- * 「对话」组菜单(全部归档 / 恢复 / 搜索)的成员:与列表分区同口径,去掉已收进 Cindy Make 组
- * 和(开启时)「自动化」组的任务,批量操作不会波及另一个组。
+ * 「按消息平台」:把消息平台(飞书、Slack 等)来的无项目任务从「对话」里分出来,一个平台一组。
+ * 只按来源判断,不看标题;有项目的任务留在各自项目里(它在哪个目录干活比从哪儿来更要紧),
+ * 所以只处理无项目的这一份。没有任务的平台不出组。
+ */
+export function partitionMessagingSessions(dialogues: readonly Session[]): {
+  dialogues: Session[];
+  groups: Array<{ platform: MessagingPlatformSource; sessions: Session[] }>;
+} {
+  const byPlatform = new Map<MessagingPlatformSource, Session[]>();
+  const rest: Session[] = [];
+  for (const session of dialogues) {
+    const platform = messagingPlatformOfSource(session.source);
+    if (!platform) {
+      rest.push(session);
+      continue;
+    }
+    const list = byPlatform.get(platform);
+    if (list) list.push(session);
+    else byPlatform.set(platform, [session]);
+  }
+  return {
+    dialogues: rest,
+    groups: MESSAGING_PLATFORM_SOURCES.flatMap((platform) => {
+      const sessions = byPlatform.get(platform);
+      return sessions ? [{ platform, sessions }] : [];
+    }),
+  };
+}
+
+/**
+ * 「对话」组菜单(全部归档 / 恢复 / 搜索)的成员:与列表分区同口径,去掉已收进 Cindy Make 组、
+ * (开启时)「自动化」组和(开启时)消息平台组的任务,批量操作不会波及另一个组。
  */
 export function dialogueGroupActionSessions(
   sessions: readonly Session[],
   {
     groupAutomation = false,
+    groupMessaging = false,
     scheduleSessionIndex,
   }: {
     groupAutomation?: boolean;
+    groupMessaging?: boolean;
     scheduleSessionIndex?: ReadonlyMap<string, AutomationScheduleSessionInfo>;
   } = {},
 ): Session[] {
   return sessions.filter(
     (session) =>
       !isCindyMakeFamilySource(session.source) &&
-      !(groupAutomation && getAutomationSidebarGroupInfo(session, scheduleSessionIndex)),
+      !(groupAutomation && getAutomationSidebarGroupInfo(session, scheduleSessionIndex)) &&
+      !(groupMessaging && messagingPlatformOfSource(session.source)),
   );
 }
 
@@ -444,6 +502,7 @@ export function buildMainListEntries({
   groupBy,
   groupDialogue,
   groupAutomation = false,
+  groupMessaging = false,
   sortBy,
   projectOrder = 'activity',
   manualProjectOrder,
@@ -487,6 +546,18 @@ export function buildMainListEntries({
       entries.push({
         kind: 'automations-group',
         sessions: sortSessionsForMainList(automationPartition.automations, sortBy, ctx),
+      });
+    }
+  }
+  if (groupMessaging) {
+    // 排在自动化之后:消息平台上触发的自动化运行仍归「自动化」组。
+    const messagingPartition = partitionMessagingSessions(dialogues);
+    dialogues = messagingPartition.dialogues;
+    for (const group of messagingPartition.groups) {
+      entries.push({
+        kind: 'messaging-group',
+        platform: group.platform,
+        sessions: sortSessionsForMainList(group.sessions, sortBy, ctx),
       });
     }
   }
@@ -686,23 +757,20 @@ export function splitEntriesByDevice(
   // 先把跨设备会话组拆开,再按每个片段的成员计算排序和设备聚合灯。
   const flattened: MainListEntry[] = [];
   for (const entry of entries) {
-    if (
-      entry.kind !== 'dialogue-group' &&
-      entry.kind !== 'cindy-make-group' &&
-      entry.kind !== 'automations-group'
-    ) {
+    if (!isSessionGroupEntry(entry)) {
       flattened.push(entry);
       continue;
     }
     const byDevice = new Map<string | null, Session[]>();
-    for (const s of getMainListEntrySessions(entry)) {
+    for (const s of entry.sessions) {
       const key = s.deviceLinkDeviceId ?? null;
       const list = byDevice.get(key);
       if (list) list.push(s);
       else byDevice.set(key, [s]);
     }
     for (const sessions of byDevice.values()) {
-      flattened.push({ kind: entry.kind, sessions });
+      // 保留组自身的身份(消息平台组的平台),只换成员。
+      flattened.push({ ...entry, sessions });
     }
   }
 

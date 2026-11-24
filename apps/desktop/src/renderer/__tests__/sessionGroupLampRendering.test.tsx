@@ -65,12 +65,12 @@ function props(groupDevice: boolean): ProjectsSectionProps {
     filter: {
       creators: 'all', creatorOptions: [], toggleCreator: vi.fn(), setCreatorsAll: vi.fn(), setCreatorsNone: vi.fn(),
       hideAutomations: false, setHideAutomations: vi.fn(),
-      groupBy: 'project', groupDialogue: true, groupAutomation: false, groupDevice, sortBy: 'recency',
+      groupBy: 'project', groupDialogue: true, groupAutomation: false, groupMessaging: false, groupDevice, sortBy: 'recency',
       pinnedSortBy: 'manual', setPinnedSortBy: vi.fn(),
       projectOrder: 'activity', manualProjectOrder: [], projects: 'all', status: 'active', isFilterActive: false,
       projectsAsSet: null, isSessionContentFiltered: false, vendor: 'all', lastActivity: 'all', manualPinnedOrder: [],
       setStatus: vi.fn(), toggleProject: vi.fn(), ensureProjectIncluded: vi.fn(), setProjectsAll: vi.fn(), gc: vi.fn(),
-      setVendor: vi.fn(), setLastActivity: vi.fn(), setGroupBy: vi.fn(), setGroupDialogue: vi.fn(), setGroupAutomation: vi.fn(), setGroupDevice: vi.fn(),
+      setVendor: vi.fn(), setLastActivity: vi.fn(), setGroupBy: vi.fn(), setGroupDialogue: vi.fn(), setGroupAutomation: vi.fn(), setGroupMessaging: vi.fn(), setGroupDevice: vi.fn(),
       setSortBy: vi.fn(), setProjectOrder: vi.fn(), resetContentFilters: vi.fn(), setManualProjectOrder: vi.fn(),
       setManualPinnedOrder: vi.fn(), promotePin: vi.fn(), removePin: vi.fn(),
     },
@@ -651,6 +651,30 @@ describe('Dialogue groups across devices', () => {
     fireEvent.click(screen.getByText('ccAgent.sidebar.showAllSessions'));
     expect(screen.getAllByTestId(/^row-/)).toHaveLength(5);
   });
+});
+
+// sidebar-redesign-plan.md §3.1「按消息平台」, unit: real ProjectsSection -> SessionGroupNode. The list-model
+// test covers which tasks leave the chat group; this covers what the user sees: a header named after the
+// platform, folding on its own. Minimal input: one Feishu task and one ordinary chat.
+it('lists a messaging platform task under a header named after the platform, folding apart from chats', () => {
+  const p = props(false);
+  p.filter = { ...p.filter, groupMessaging: true };
+  const at = '2026-09-03T00:00:00Z';
+  const task = (id: string, source: Session['source']) =>
+    ({ id, title: id, source, status: 'active', workspaceKind: 'dialogue', createdAt: at, updatedAt: at }) as Session;
+  p.dialogues = [task('feishu-task', 'feishu'), task('plain-chat', 'desktop')];
+  render(<ProjectsSection {...p} />);
+  // With the test translator a label is its key: this is the existing Feishu platform name.
+  const platform = screen.getByText('settings.feishuBot.services.feishu').closest<HTMLElement>('[role="button"]')!;
+  const chats = screen.getByText('ccAgent.sidebar.dialogues').closest<HTMLElement>('[role="button"]')!;
+  // Each header's parent is that group: the Feishu task sits under the platform, not under the chats.
+  expect(within(platform.parentElement!).getByTestId('row-feishu-task')).toBeTruthy();
+  expect(within(platform.parentElement!).queryByTestId('row-plain-chat')).toBeNull();
+  expect(within(chats.parentElement!).getByTestId('row-plain-chat')).toBeTruthy();
+  expect(within(chats.parentElement!).queryByTestId('row-feishu-task')).toBeNull();
+  fireEvent.click(platform);
+  expect(platform.getAttribute('aria-expanded')).toBe('false');
+  expect(chats.getAttribute('aria-expanded')).toBe('true');
 });
 
 // Unit: the two modes are exclusive; archived inbox tasks stay reachable under active tree filters.

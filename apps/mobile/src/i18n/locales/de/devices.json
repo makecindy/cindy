@@ -379,6 +379,7 @@
     "menu": {
       "groupDialogue": "Chat",
       "groupAutomation": "Automatisierung",
+      "groupMessaging": "Messaging-Plattform",
       "dialogueFolder": "Chat",
       "automationFolder": "Automatisierungen",
       "search": "Suchen",

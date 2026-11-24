@@ -84,7 +84,9 @@ function labels(entries: MainListEntry[]): string[] {
             ? 'cindy-make-group'
             : entry.kind === 'automations-group'
               ? `automations:${entry.sessions.map((session) => session.title).join(',')}`
-              : `s:${entry.session.title}`,
+              : entry.kind === 'messaging-group'
+                ? `msg:${entry.platform}:${entry.sessions.map((session) => session.title).join(',')}`
+                : `s:${entry.session.title}`,
   );
 }
 
@@ -629,6 +631,103 @@ describe('automations sidebar group', () => {
       [null, ['automations:local']],
       ['dev-a', ['automations:remote']],
     ]);
+  });
+});
+
+describe('messaging platform groups', () => {
+  // 测试价值(engineering-conventions.md §3.2)
+  // - 生产入口与可观察结果:buildMainListEntries / splitEntriesByDevice / dialogueGroupActionSessions;侧栏据此画出
+  //   「飞书」等消息平台组,决定「对话」组还剩哪些任务,以及对话组菜单的批量操作会波及谁。
+  // - 规则依据:sidebar-redesign-plan.md §3.1「按消息平台」(默认关;只分无项目的任务;一个平台一组;
+  //   与「自动化」同规随设备拆分)。
+  // - 现有覆盖缺口:此前消息平台来的任务一律落「对话」组,没有按来源分出平台组的分支。
+  // - 最小失败输入:飞书任务与本机对话混在一起、官方与个人 Discord 各一条、项目里的飞书任务、两台电脑各有飞书任务。
+  // - tier:unit(纯函数,无 I/O)。
+  const at = (day: number) => `2026-11-${String(day).padStart(2, '0')}T00:00:00Z`;
+  const titles = (sessions: readonly Session[]) => sessions.map((item) => item.title);
+  const fixture = () => {
+    const feishuDm = session({ title: 'feishu-dm', source: 'feishu', updatedAt: at(20) });
+    const slack = session({ title: 'slack', source: 'slack', updatedAt: at(19) });
+    const feishuGroup = session({ title: 'feishu-group', source: 'feishu', updatedAt: at(18) });
+    const chat = session({ title: 'chat', source: 'desktop', updatedAt: at(17) });
+    const feishuInRepo = session({
+      title: 'feishu-in-repo', source: 'feishu', workspaceKind: 'project', workingDir: '/repo', updatedAt: at(16),
+    });
+    const work = session({ title: 'work', workspaceKind: 'project', workingDir: '/repo', updatedAt: at(15) });
+    const discordOwn = session({ title: 'discord-own', source: 'discord', updatedAt: at(12) });
+    const discordOfficial = session({ title: 'discord-official', source: 'discord-hook', updatedAt: at(11) });
+    // 伙伴经消息平台接的任务来源是 bot:归伙伴自己的入口与筛选,不进平台组。
+    const teammate = session({ title: 'teammate', source: 'bot', updatedAt: at(10) });
+    return {
+      feishuDm,
+      chat,
+      input: {
+        projects: [project('/repo', [feishuInRepo, work])],
+        dialogues: [feishuDm, slack, feishuGroup, chat, discordOwn, discordOfficial, teammate],
+        groupBy: 'project' as const,
+        groupDialogue: true,
+        sortBy: 'recency' as const,
+        manualProjectOrder: [],
+      },
+    };
+  };
+
+  it('stays off unless asked: platform tasks remain in the chat group', () => {
+    const entries = buildMainListEntries(fixture().input);
+    expect(labels(entries)).toEqual(['dlg-group', 'p:/repo']);
+    expect(titles(getMainListEntrySessions(entries[0]))).toEqual([
+      'feishu-dm', 'slack', 'feishu-group', 'chat', 'discord-own', 'discord-official', 'teammate',
+    ]);
+  });
+
+  it.each([
+    {
+      name: 'next to the chat group, one group per platform, leaving project tasks in their project',
+      options: {},
+      expected: ['msg:feishu:feishu-dm,feishu-group', 'msg:slack:slack', 'dlg-group', 'p:/repo', 'msg:discord:discord-own,discord-official'],
+    },
+    {
+      name: 'while other chats are listed loosely',
+      options: { groupDialogue: false },
+      expected: ['msg:feishu:feishu-dm,feishu-group', 'msg:slack:slack', 's:chat', 'p:/repo', 'msg:discord:discord-own,discord-official', 's:teammate'],
+    },
+    {
+      name: 'in the flat list too',
+      options: { groupBy: 'flat' as const },
+      expected: ['msg:feishu:feishu-dm,feishu-group', 'msg:slack:slack', 'dlg-group', 's:feishu-in-repo', 's:work', 'msg:discord:discord-own,discord-official'],
+    },
+    {
+      name: 'after the projects when projects are ordered by hand',
+      options: { projectOrder: 'custom' as const },
+      expected: ['p:/repo', 'msg:feishu:feishu-dm,feishu-group', 'msg:slack:slack', 'dlg-group', 'msg:discord:discord-own,discord-official'],
+    },
+  ])('collects platform tasks $name', ({ options, expected }) => {
+    const entries = buildMainListEntries({ ...fixture().input, groupMessaging: true, ...options });
+    expect(labels(entries)).toEqual(expected);
+    const chats = entries.find((entry) => entry.kind === 'dialogue-group');
+    if (chats) expect(titles(getMainListEntrySessions(chats))).toEqual(['chat', 'teammate']);
+    const repo = entries.find((entry) => entry.kind === 'project');
+    if (repo) expect(titles(getMainListEntrySessions(repo))).toEqual(['feishu-in-repo', 'work']);
+  });
+
+  it('splits a platform group by device and keeps its platform', () => {
+    const local = session({ title: 'local', source: 'feishu', updatedAt: at(17) });
+    const remote = session({ title: 'remote', source: 'feishu', deviceLinkDeviceId: 'dev-a', updatedAt: at(16) });
+    const entries = buildMainListEntries({
+      projects: [], dialogues: [local, remote], groupBy: 'project', groupDialogue: true,
+      groupMessaging: true, sortBy: 'recency', manualProjectOrder: [],
+    });
+    expect(splitEntriesByDevice(entries, ['dev-a'], { sortBy: 'recency' })
+      .map((section) => [section.deviceId, labels(section.entries)])).toEqual([
+      [null, ['msg:feishu:local']],
+      ['dev-a', ['msg:feishu:remote']],
+    ]);
+  });
+
+  it('keeps chat-group bulk actions off tasks moved into a platform group', () => {
+    const { feishuDm, chat } = fixture();
+    expect(titles(dialogueGroupActionSessions([feishuDm, chat], { groupMessaging: true }))).toEqual(['chat']);
+    expect(titles(dialogueGroupActionSessions([feishuDm, chat]))).toEqual(['feishu-dm', 'chat']);
   });
 });
 

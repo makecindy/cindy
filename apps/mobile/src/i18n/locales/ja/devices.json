@@ -379,6 +379,7 @@
     "menu": {
       "groupDialogue": "チャット",
       "groupAutomation": "自動化",
+      "groupMessaging": "メッセージプラットフォーム",
       "dialogueFolder": "チャット",
       "automationFolder": "自動化",
       "search": "検索",

@@ -17,9 +17,11 @@ import {
   loadGroupBy,
   loadGroupDevice,
   loadGroupDialogue,
+  loadGroupMessaging,
   loadSortBy,
   loadTaskInfoFields,
   GROUP_DIALOGUE_KEY,
+  persistGroupMessaging,
 } from '@/features/cc-agent/hooks/helpers/sidebarFilterCore';
 import {
   getSidebarInstallVintage,
@@ -89,6 +91,18 @@ describe('侧边栏升级兼容性:默认配置', () => {
   it('对话归组仍可显式关闭(默认翻转后 false 必须仍被尊重)', () => {
     localStorage.setItem(GROUP_DIALOGUE_KEY, 'false');
     expect(loadGroupDialogue()).toBe(false);
+  });
+
+  // 「按消息平台」会把已有任务挪出「对话」组:新老安装都默认关,用户勾选后才生效并记住(§3.1)。
+  it('按消息平台分组默认关,不分老新;显式打开后保留,也能再关掉', () => {
+    expect(loadGroupMessaging()).toBe(false);
+    localStorage.setItem('cc-agent.lastChatView.v1', '{"kind":"new"}');
+    expect(getSidebarInstallVintage()).toBe('legacy');
+    expect(loadGroupMessaging()).toBe(false);
+    persistGroupMessaging(true);
+    expect(loadGroupMessaging()).toBe(true);
+    persistGroupMessaging(false);
+    expect(loadGroupMessaging()).toBe(false);
   });
 });
 

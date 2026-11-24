@@ -14,6 +14,7 @@ import { ChevronRight, MessageSquare, Send } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { SHARE_SOURCE_ATTR } from '@/lib/shareConversationImage';
+import { imLabel } from '@/lib/imLabel';
 import { cn } from '@/lib/utils';
 import { Collapse } from '@/components/ui/collapse';
 import SlackIcon from './SlackIcon';
@@ -66,33 +67,8 @@ function ImIcon({ im }: { im: string }) {
 const disclosureClassName =
   'inline-flex min-h-6 min-w-6 items-center py-1 w-fit cursor-pointer text-12 text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]';
 
-/** IM 渠道的显示名(卡片头与 Hook 来源标签共用)。未知渠道原样显示。 */
-export function imLabel(im: string, t: TFunction): string {
-  switch (im) {
-    case 'slack':
-      return t('settings.tina.prefs.providerSlack');
-    case 'telegram':
-      return t('settings.tina.prefs.providerTelegram');
-    case 'x':
-      return t('settings.tina.prefs.providerX');
-    case 'feishu':
-      return t('settings.feishuBot.services.feishu');
-    case 'lark':
-      return t('settings.feishuBot.services.lark');
-    case 'imessage':
-      return t('bots.channels.platform.imessage');
-    case 'discord':
-      return t('settings.about.social.discordLabel');
-    case 'wechat':
-      return t('login.social.wechat');
-    case 'wecom':
-      return t('settings.wecomBot.serviceName');
-    case 'dingtalk':
-      return t('settings.dingtalkBot.serviceName');
-    default:
-      return im;
-  }
-}
+// IM 渠道的显示名在 @/lib/imLabel(侧栏的消息平台组也用);这里保留导出,存量 import 不用跟着改。
+export { imLabel };
 
 /** 卡片头: 主人 / 未知来源沿用「Cindy · 来自 X」; 别人说的写出发言人与群, 不冒充主人。 */
 export function hookTaskCardHeading(

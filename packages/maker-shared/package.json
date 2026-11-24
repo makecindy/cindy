@@ -70,6 +70,7 @@
     "./message-presentation": "./src/messagePresentation.ts",
     "./message-search": "./src/messageSearch.ts",
     "./message-source": "./src/messageSource.ts",
+    "./messaging-platform-source": "./src/messagingPlatformSource.ts",
     "./message-window": "./src/messageWindow.ts",
     "./orca-team": "./src/orcaTeam.ts",
     "./orca-queue": "./src/orcaQueue.ts",

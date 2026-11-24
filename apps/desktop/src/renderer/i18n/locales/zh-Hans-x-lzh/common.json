@@ -16768,7 +16768,8 @@
         "flat": "平列",
         "device": "机",
         "dialogue": "言谈",
-        "automation": "自运"
+        "automation": "自运",
+        "messaging": "传讯之所"
       },
       "filterGroupByDeviceManualTip": "手动排序时，暂不能依设备分组",
       "deviceGroup": {
@@ -17135,6 +17136,7 @@
         "project": "案",
         "dialogue": "言谈",
         "automation": "自运",
+        "messaging": "传讯之所",
         "device": "机"
       },
       "taskStatusHeading": "差事状态",

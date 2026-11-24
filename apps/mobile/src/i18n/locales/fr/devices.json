@@ -382,6 +382,7 @@
     "menu": {
       "groupDialogue": "Conversation",
       "groupAutomation": "Automatisation",
+      "groupMessaging": "Plateforme de messagerie",
       "dialogueFolder": "Conversation",
       "automationFolder": "Automatisations",
       "search": "Rechercher",
