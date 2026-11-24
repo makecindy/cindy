@@ -705,31 +705,41 @@ describe('ProviderConnectionDialog accessibility', () => {
     expect(screen.queryByText(/settings\.providers\.custom\.test\.model/)).toBeNull();
   });
 
-  // #11462: this dialog receives the same generic HTTP 404 for several upstream
-  // causes. The saved Pi Responses test must report the observed status without
-  // blaming the base URL. The existing failure-label tests use other codes.
+  // #11462: Main can select the second saved model, including when only that
+  // model is visible. Exercise both protocol orders through the dialog.
   it.each([
-    { wireProtocol: 'openai-responses', editedForm: false, message: 'settings.providers.custom.test.responsesNotFound' },
-    { wireProtocol: 'openai-responses', editedForm: true, message: 'providerError.ENDPOINT_NOT_FOUND' },
-    { wireProtocol: 'openai-chat', editedForm: false, message: 'providerError.ENDPOINT_NOT_FOUND' },
-  ] as const)('shows $message for a $wireProtocol test with editedForm=$editedForm', async ({ wireProtocol, editedForm, message }) => {
-    const test = vi.fn(async () => ({ ok: false as const, code: 'ENDPOINT_NOT_FOUND' as const, status: 404, latencyMs: 1, modelId: 'probed-by-main' }));
+    ['openai-responses', 'openai-responses', false, 'ENDPOINT_NOT_FOUND', 'settings.providers.custom.test.responsesNotFound'],
+    ['openai-responses', 'openai-responses', true, 'ENDPOINT_NOT_FOUND', 'providerError.ENDPOINT_NOT_FOUND'],
+    ['openai-chat', 'openai-responses', false, 'ENDPOINT_NOT_FOUND', 'settings.providers.custom.test.responsesNotFound'],
+    ['openai-responses', 'openai-chat', false, 'ENDPOINT_NOT_FOUND', 'providerError.ENDPOINT_NOT_FOUND'],
+    ['openai-chat', 'openai-chat', false, 'ENDPOINT_NOT_FOUND', 'providerError.ENDPOINT_NOT_FOUND'],
+    ['openai-chat', 'openai-responses', false, 'MODEL_NOT_FOUND', 'providerError.MODEL_NOT_FOUND'],
+  ] as const)('labels a %s / %s probe with editedForm=%s and code=%s', async (wireProtocol, secondProtocol, editedForm, code, message) => {
+    const test = vi.fn(async () => ({ ok: false as const, code, status: 404, latencyMs: 1, modelId: 'other' }));
     window.electronAPI.maker.testProviderConnection = test;
-    await openFailingTest({ editedForm, wireProtocol });
+    await openFailingTest({ editedForm, wireProtocol, secondProtocol });
     expect(test).toHaveBeenCalledWith(expect.objectContaining({ kind: editedForm ? 'adhoc' : 'saved' }));
     expect(await screen.findByText(message)).toBeTruthy();
-    expect(screen.getByText('settings.providers.custom.test.model:probed-by-main')).toBeTruthy();
+    expect(screen.getByText('settings.providers.custom.test.model:other')).toBeTruthy();
   });
 
-  async function openFailingTest(opts: { editedForm?: boolean; wireProtocol?: 'openai-chat' | 'openai-responses' } = {}) {
+  async function openFailingTest(opts: {
+    editedForm?: boolean;
+    wireProtocol?: 'openai-chat' | 'openai-responses';
+    secondProtocol?: 'openai-chat' | 'openai-responses';
+  } = {}) {
     const route = { baseUrl: 'https://host.example/v1', wireProtocol: opts.wireProtocol ?? 'openai-chat' };
     const initial: CustomProviderConfig = {
       id: 'test-model-label', name: 'Test model label', auth: { method: 'apiKey' },
-      runtimes: { pi: { ...route, models: [{ id: 'chat', name: 'Chat', route }, { id: 'other', name: 'Other' }] } },
+      runtimes: { pi: { ...route, models: [
+        { id: 'chat', name: 'Chat', route },
+        { id: 'other', name: 'Other', route: { ...route, wireProtocol: opts.secondProtocol ?? route.wireProtocol } },
+      ] } },
     };
     customProviderMocks.readCustomProviderKey.mockResolvedValue('saved-key');
     const user = userEvent.setup();
-    render(<ProviderConnectionDialog initial={initial} focusAgent="pi" onSaved={vi.fn()} onClose={vi.fn()} />);
+    render(<ProviderConnectionDialog initial={initial} catalogModels={buildUserProvider(initial).models}
+      focusAgent="pi" onSaved={vi.fn()} onClose={vi.fn()} />);
     await waitForInitialDialogFocus();
     if (opts.editedForm) {
       // An unsaved edit makes the saved record stale, so the dialog tests the form values (adhoc).

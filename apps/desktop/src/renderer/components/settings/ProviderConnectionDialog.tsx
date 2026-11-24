@@ -107,6 +107,7 @@ import {
 import {
   isProviderRequestPath,
   presetDisplayName,
+  resolvePiModelWireProtocol,
   sortPresetsForRegion,
 } from '@cindy/model-providers';
 import type {
@@ -1631,9 +1632,13 @@ export function ProviderConnectionDialog({
             ? { ...model, api, piApi: api } : model),
         } }));
       }
-      // A generic upstream 404 cannot establish that the saved base URL is wrong.
-      const savedResponsesNotFound = useSaved && agent === 'pi' && probeWireProtocol === 'openai-responses'
-        && result.status === 404 && result.code === 'ENDPOINT_NOT_FOUND';
+      // Main can choose a different saved model based on visibility. Prefer the
+      // catalog projection, which includes the model's effective interface.
+      const testedModel = useSaved && agent === 'pi' && result.status === 404 && result.code === 'ENDPOINT_NOT_FOUND'
+        ? (catalogModels?.pi ?? probeFields.models).find(model => model.id === result.modelId)
+        : undefined;
+      const savedResponsesNotFound = testedModel
+        && resolvePiModelWireProtocol(testedModel, rf.wireProtocol) === 'openai-responses';
       setTest((prev) => ({
         ...prev,
         [agent]: result.ok
