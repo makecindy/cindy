@@ -181,6 +181,32 @@ describe('native-binding', () => {
     await expect(fs.access(path.join(root, 'cindy-browser-native.exe'))).rejects.toThrow();
   });
 
+  // Unit regression for #11579: native-reader failures must stop installation before publication.
+  it.each([
+    ['conflict', 'NATIVE_HOST_IN_USE'],
+    ['invalid', 'NATIVE_PATH_UNSAFE'],
+    ['unreadable', 'REGISTRY_READ_FAILED'],
+  ])('leaves Windows registrations untouched when the native reader reports %s', async (input, reason) => {
+    const { dir, binaryDir, root } = await fixture();
+    const foreign = path.join(dir, 'foreign.json');
+    const content = JSON.stringify({ path: path.join(dir, 'foreign.exe') });
+    await fs.writeFile(foreign, content);
+    const run = vi.fn(async () => ({ stdout: '[]' }));
+    const binding = createNativeBinding({
+      hostName: 'com.example.browser', binaryDir, root, platform: 'win32', arch: 'x64', run,
+      loadWindowsManifestReader: async () => key => {
+        if (!key.includes('BraveSoftware')) return null;
+        if (input === 'conflict') return foreign;
+        throw new Error(input === 'invalid' ? 'NATIVE_PATH_UNSAFE' : 'read failed');
+      },
+    });
+    expect(await binding.install(18819, [EXT])).toMatchObject({ ok: false, reason });
+    expect(run).not.toHaveBeenCalled();
+    for (const file of ['com.example.browser.json', path.join('connections', '18819.json')])
+      await expect(fs.access(path.join(root, file))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await fs.readFile(foreign, 'utf8')).toBe(content);
+  });
+
   it('registers only allowed origins; the private authority never enters the browser manifest', async () => {
     const { binaryDir, profile, root } = await fixture();
     const n = createNativeBinding({
