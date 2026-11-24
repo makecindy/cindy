@@ -88,9 +88,7 @@ export function createRemoteReadBridge(ipc: BridgeIpc) {
         return result;
       } catch (error) {
         const failure = extractIpcError(error);
-        if ((failure?.code === 'NOT_FOUND' && failure.message === `no local IPC handler for channel '${channel}'`)
-          || (failure?.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED' && failure.message === `channel '${channel}' not allowed remotely`)
-          || (failure?.code === 'UNSUPPORTED_CAPABILITY' && failure.message === `Capability ${channel} is not supported in host client mode`)) {
+        if (failure?.code === 'NOT_FOUND' && failure.message === `no local IPC handler for channel '${channel}'`) {
           peer.missing.set(channel, `[${failure.code}] ${failure.message}`);
         }
         throw error;

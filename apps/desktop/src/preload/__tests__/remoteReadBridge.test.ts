@@ -31,20 +31,27 @@ describe('remote optional reads at the desktop IPC boundary', () => {
 
   it.each([
     '[DEVICE_LINK_TIMEOUT] no result within 30000ms',
+    '[REQUEST_TIMEOUT] timed out waiting for the peer',
+    '[BACKPRESSURE] peer is busy',
     '[PERMISSION_DENIED] history is private',
     '[DEVICE_LINK_CHANNEL_NOT_ALLOWED] An account-owned link is required',
+    `[DEVICE_LINK_CHANNEL_NOT_ALLOWED] channel '${history}' not allowed remotely`,
+    `[UNSUPPORTED_CAPABILITY] Capability ${history} is not supported in host client mode`,
     '[NOT_FOUND] Session does not exist',
     `[NOT_FOUND] no local IPC handler for channel '${roster}'`,
     '[UNSUPPORTED_CAPABILITY] This collection does not support the requested action',
   ])('allows a successful next read after %s', async (message) => {
     const { read, invoke } = fixture();
-    invoke.mockRejectedValueOnce(new Error(message)).mockResolvedValueOnce(['task']);
-    await expect(read()).rejects.toThrow(message);
+    const error = new Error(message);
+    invoke.mockRejectedValueOnce(error).mockResolvedValueOnce(['task']);
+    await expect(read()).rejects.toBe(error);
     await expect(read()).resolves.toEqual(['task']);
   });
 
-  it('does not relearn an old failure after the target reconnects', async () => {
+  it('rechecks known misses on reconnect and ignores in-flight failures from before it', async () => {
     const { read, invoke, push } = fixture();
+    invoke.mockRejectedValueOnce(missing(roster));
+    await expect(read('old', roster)).rejects.toThrow('[NOT_FOUND]');
     let rejectOld!: (cause: Error) => void;
     invoke.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectOld = reject; }));
     const old = read();
@@ -53,6 +60,15 @@ describe('remote optional reads at the desktop IPC boundary', () => {
     await expect(old).rejects.toThrow('no local IPC handler');
     invoke.mockResolvedValue(['now supported']);
     await expect(read()).resolves.toEqual(['now supported']);
+    await expect(read('old', roster)).resolves.toEqual(['now supported']);
+  });
+
+  it('reads a late-registered plugin engine list on the same link', async () => {
+    const { read, invoke } = fixture();
+    const channel = 'maker:list-plugin-engines';
+    invoke.mockRejectedValueOnce(missing(channel)).mockResolvedValueOnce(['engine']);
+    await expect(read('old', channel)).rejects.toThrow('[NOT_FOUND]');
+    await expect(read('old', channel)).resolves.toEqual(['engine']);
   });
 
   it('lets a late-starting legacy scheduler become readable without reopening unrelated history', async () => {
@@ -68,19 +84,18 @@ describe('remote optional reads at the desktop IPC boundary', () => {
   });
 
   it.each([
-    ['maker:schedule:list', 'DEVICE_LINK_CHANNEL_NOT_ALLOWED', "channel 'maker:schedule:list' not allowed remotely"],
-    ['maker:schedule:list-sidebar-index-runs', 'UNSUPPORTED_CAPABILITY', 'Capability maker:schedule:list-sidebar-index-runs is not supported in host client mode'],
-  ])('retries %s on an upgraded peer even without a relay disconnect', async (channel, code, reason) => {
+    'maker:schedule:list', 'maker:schedule:list-sidebar-index-runs',
+  ])('retries %s on an upgraded peer even without a relay disconnect', async (channel) => {
     const { read, invoke, push } = fixture();
     const presence = (appVersion: string) => push(DEVICE_LINK_PUSH.PRESENCE_CHANGED, {
       deviceId: 'old', online: true, remoteControlEnabled: true, appVersion,
     });
-    invoke.mockResolvedValueOnce([]).mockRejectedValueOnce(new Error(`[${code}] ${reason}`)).mockResolvedValueOnce(['run']);
+    invoke.mockResolvedValueOnce([]).mockRejectedValueOnce(missing(channel)).mockResolvedValueOnce(['run']);
     await read('old', roster);
     presence('1');
-    await expect(read('old', channel)).rejects.toThrow(reason);
+    await expect(read('old', channel)).rejects.toThrow('[NOT_FOUND]');
     presence('1');
-    await expect(read('old', channel)).rejects.toThrow(reason);
+    await expect(read('old', channel)).rejects.toThrow('[NOT_FOUND]');
     presence('2');
     await expect(read('old', channel)).resolves.toEqual(['run']);
     expect(invoke).toHaveBeenCalledTimes(3);
