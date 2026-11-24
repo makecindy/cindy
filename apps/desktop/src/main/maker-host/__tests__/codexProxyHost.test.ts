@@ -3587,6 +3587,7 @@ describe('codex proxy host', () => {
           expect.any(Function), expect.any(Function), expect.any(Function),
           expect.any(Function), // #11278: route-scoped tool audio recovery
           expect.any(Function), // #11867: final Responses call_id projection
+          expect.any(Function), // #2907: XD Responses tool image compatibility
         ],
         transformResponse: expect.any(Function),
         routingTransform: expect.any(Function),
@@ -9035,7 +9036,7 @@ describe('codex proxy host', () => {
     await host.ensureCodexProxyReady();
 
     const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
-    expect(transforms).toHaveLength(33); // Includes the dump and final call_id projection.
+    expect(transforms).toHaveLength(34); // Includes the dump and final call_id projection.
     const ctx = {
       method: 'POST',
       url: '/v1/responses',
@@ -11062,6 +11063,81 @@ describe('Codex gateway rejection observer', () => {
     if (expected === undefined) expect(mockState.reportCindyGatewayKeyRejected).not.toHaveBeenCalled();
     else expect(mockState.reportCindyGatewayKeyRejected).toHaveBeenCalledExactlyOnceWith(expected);
   });
+});
+
+// #2907: the Chat bridge coverage cannot see images sent by the XD Responses
+// passthrough. Exercise the Desktop proxy with the smallest replay of a screenshot.
+it('downgrades only tool images on XD text-only Responses routes', async () => {
+  const host = await freshCodexProxyHost(true);
+  const { setXdGatewayModels } = await import('../active-catalog.js');
+  const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+  const real = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
+  const textModel = 'deepseek/deepseek-v4-flash';
+  const visionModel = 'deepseek/deepseek-v4.1-flash';
+  const image = { type: 'input_image', image_url: 'data:image/png;base64,aW1hZ2U=' };
+  const user = { type: 'message', role: 'user', content: [image] };
+  const call = { type: 'function_call', name: 'view_image', call_id: 'call_screenshot', arguments: '{}' };
+  const caption = { type: 'input_text', text: 'Screenshot captured' };
+  const tool = { type: 'function_call_output', call_id: call.call_id, output: [caption, image] };
+  const received: Array<{ path: string | undefined; model: string; input: unknown[] }> = [];
+  const upstream = createServer(async (req, res) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(Buffer.from(chunk));
+    const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    received.push({ path: req.url, model: body.model, input: body.input });
+    const rejected = body.model === textModel && JSON.stringify(body.input).includes('"input_image"');
+    res.writeHead(rejected ? 400 : 200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(rejected ? { error: { message: 'expected text' } } : { output: [] }));
+  });
+  upstream.listen(0, '127.0.0.1');
+  await once(upstream, 'listening');
+  mockState.gatewayBaseUrl = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
+  host.setCodexProxyAuthInjection('env-key');
+  host.setCodexProxyGatewayKeyReader(() => 'fixture-key');
+  setXdGatewayModels([
+    { id: textModel, agents: ['codex'], modalities: { input: ['text'], output: ['text'] } },
+    { id: visionModel, agents: ['codex'], modalities: { input: ['text', 'image'], output: ['text'] } },
+  ]);
+  host.registerComposed('session-2907', 'thread-2907', 'fixture');
+  setSessionProvider('session-2907', 'xd');
+  mockState.createAnthropicCompatProxy.mockImplementationOnce(options => real.createAnthropicCompatProxy({
+    ...options, resolveOutboundProxy: () => null,
+  }));
+  try {
+    await host.ensureCodexProxyReady();
+    const send = async (model: string, input: unknown[]) => {
+      const response = await fetch(`${host.getCodexProxyEndpoint()}/responses`, {
+        method: 'POST',
+        headers: { 'thread-id': 'thread-2907', 'content-type': 'application/json', authorization: 'Bearer fixture-key' },
+        body: JSON.stringify({ model, input }),
+      });
+      await response.text();
+      return response.status;
+    };
+    const statuses = [
+      await send(textModel, [call, tool]),
+      await send(textModel, [user]),
+      await send(visionModel, [call, tool, user]),
+    ];
+    expect(received.map(({ path, model }) => [path, model])).toEqual([
+      ['/v1/responses', textModel], ['/v1/responses', textModel], ['/v1/responses', visionModel],
+    ]);
+    expect(received[1]?.input).toEqual([user]);
+    expect(received[2]?.input).toEqual([call, tool, user]);
+    expect(statuses).toEqual([200, 400, 200]);
+    expect(received[0]?.input).toEqual([call, {
+      ...tool,
+      output: [caption, { type: 'input_text', text: expect.stringMatching(/image omitted/i) }],
+    }]);
+  } finally {
+    await host.disposeCodexProxy();
+    clearSessionProvider('session-2907');
+    setXdGatewayModels([]);
+    mockState.gatewayBaseUrl = '';
+    host.setCodexProxyGatewayKeyReader(() => null);
+    upstream.closeAllConnections();
+    await new Promise<void>(resolve => upstream.close(() => resolve()));
+  }
 });
 
 // Loopback integration, sharing this file's existing proxy/server fixtures: a 401
