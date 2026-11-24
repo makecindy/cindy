@@ -15,6 +15,7 @@ import {
   useGitSafetyAutoSnapshotEnabledForDevice,
   useGitSafetySettings,
 } from '@/hooks/useGitSafetySettings';
+import type { AppPreferenceControlBridge } from '../../shared/appPreferenceControl';
 
 type GitSafetyWire = {
   mode?: 'off' | 'existing-git' | 'all-projects';
@@ -27,6 +28,7 @@ function installGitSafetyApi(overrides: {
   gitSafetyGet?: () => Promise<GitSafetyWire>;
   gitSafetySet?: (mode: boolean | 'off' | 'existing-git' | 'all-projects') => Promise<GitSafetyWire>;
   gitSafetyReset?: () => Promise<GitSafetyWire>;
+  onSettingsChanged?: AppPreferenceControlBridge['onSettingsChanged'];
   deviceLinkInvoke?: (deviceId: string, channel: string, args: unknown[]) => Promise<unknown>;
 }) {
   const api = {
@@ -39,6 +41,7 @@ function installGitSafetyApi(overrides: {
     configurable: true,
     value: {
       maker: api,
+      appPreferenceControl: { onSettingsChanged: overrides.onSettingsChanged ?? (() => () => {}) },
       deviceLink: { invoke: deviceLinkInvoke },
     } as unknown as Window['electronAPI'],
   });
@@ -278,6 +281,49 @@ describe('Git safety settings wiring', () => {
     expect(result.current.mode).toBe('off');
     expect(result.current.autoSnapshotEnabled).toBe(false);
     expect(getGitSafetyAutoSnapshotEnabled()).toBe(false);
+  });
+
+  it('publishes same-mode customization changes after a current-owner main notice', async () => {
+    let isCustomized = false;
+    let notify!: Parameters<AppPreferenceControlBridge['onSettingsChanged']>[0];
+    const api = installGitSafetyApi({
+      gitSafetyGet: async () => ({
+        mode: 'existing-git',
+        autoSnapshotEnabled: true,
+        isCustomized,
+        defaultAutoSnapshotEnabled: true,
+      }),
+      onSettingsChanged: (listener) => {
+        notify = listener;
+        return () => {};
+      },
+    });
+    const { result } = renderHook(() => useGitSafetySettings());
+    await waitFor(() => expect(localStorage.getItem('gitSafety.mode')).toBe('existing-git'));
+
+    const notice = { section: 'git-safety', ownerStamp: { dataOwnerId: null, ownerGeneration: 0 } };
+    const readAfterNotice = () => act(async () => { notify(notice); });
+
+    act(() => notify({ ...notice, ownerStamp: { ...notice.ownerStamp, ownerGeneration: 1 } }));
+    expect(api.gitSafetyGet).toHaveBeenCalledTimes(1);
+    expect(localStorage.getItem('gitSafety.sync')).toBeNull();
+
+    isCustomized = true;
+    await readAfterNotice();
+    expect(result.current.isCustomized).toBe(true);
+    const overrideSignal = localStorage.getItem('gitSafety.sync');
+    expect(overrideSignal).not.toBeNull();
+
+    await readAfterNotice();
+    expect(localStorage.getItem('gitSafety.sync')).toBe(overrideSignal);
+
+    isCustomized = false;
+    await readAfterNotice();
+    expect(result.current.isCustomized).toBe(false);
+    expect(localStorage.getItem('gitSafety.sync')).not.toBe(overrideSignal);
+    expect(api.gitSafetyGet).toHaveBeenCalledTimes(4);
+    expect(api.gitSafetySet).not.toHaveBeenCalled();
+    expect(api.gitSafetyReset).not.toHaveBeenCalled();
   });
 
   it('reconciles same-mode storage notifications without publishing a reply', async () => {
