@@ -250,7 +250,7 @@ export function buildModelRows(payload: UsageHistoryPayload | null): ModelTokenR
   const merged = new Map<string, ModelTokenRow>();
   for (const model of payload.models) {
     const tokens = modelTokenTotal(model);
-    if (tokens <= 0) continue;
+    if (tokens <= 0 && model.agentKind !== 'acp') continue;
     const key = `${model.agentKind} ${model.model}`;
     const existing = merged.get(key);
     if (existing) {

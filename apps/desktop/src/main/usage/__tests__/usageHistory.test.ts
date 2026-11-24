@@ -7,6 +7,7 @@ import { buildMenubarView } from '../../menubar/snapshot';
 import { buildUsageWidgetSnapshot } from '../../quota-overview/widgetSnapshot';
 import { DEFAULT_MENUBAR_SETTINGS } from '../../../shared/menubarQuota';
 import { MENUBAR_HARNESS_LOGOS } from '../../menubar/logos';
+import { sanitizeUsageDeviceRows } from '../usageDeviceRows';
 
 const currentDbClient = vi.hoisted(() => ({
   userId: 'user-a' as string | null,
@@ -189,7 +190,7 @@ function subscriptionQuote(
 
 function modelRow(
   day: string,
-  agentKind: 'claude-code' | 'codex' | 'pi',
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'acp',
   model: string,
   money: RegionalMoney,
   tokens: {
@@ -395,6 +396,30 @@ describe('readUsageHistoryWith', () => {
       expect(result.modelDaily.find(row => row.model === 'foreign-model')?.money.amount).toBe(0);
       expect(result.totals.todayTokens).toBe(1_000_050);
     }
+  });
+
+  // #12433 (unit): a single synced ACP model row must survive validation and
+  // add the same token total to history, the menu bar, and the widget projection.
+  it('preserves ACP identity and normalized token totals across all usage projections', async () => {
+    const usage = modelRow(TODAY, 'acp', 'gemini-4-hydrogen', actual(0), {
+      inputTokens: 2161, outputTokens: 15, cacheReadTokens: 9459,
+    });
+    const synced = sanitizeUsageDeviceRows({ spendDays: [], modelRows: [usage] });
+    expect(synced?.modelRows).toEqual([usage]);
+    const result = await readUsageHistoryWith(makeDeps({
+      getModelUsageSince: async () => synced!.modelRows,
+    }));
+    expect(result.models).toEqual([expect.objectContaining({
+      agentKind: 'acp', model: usage.model, inputTokens: 2161, outputTokens: 15, cacheReadTokens: 9459,
+    })]);
+    expect(result.totals.todayTokens).toBe(11635);
+    const scope = usageScope(result, [TODAY], []);
+    const view = usageView(result);
+    const expectedDay = { money: [0, 0, 0], paid: 0, tokens: [0, 0, 0, 0, 11635] };
+    expect(view.usage.scopes.all.daily).toEqual([expectedDay]);
+    const widget = buildUsageWidgetSnapshot(view, Date.now(), () => null, scope.modelSeries)?.usage;
+    expect(widget?.daily).toEqual([{ ...expectedDay, models: [0, 0], modelTokens: [11635, 0] }]);
+    expect(widget?.models).toEqual([{ name: usage.model, harness: 'acp' }]);
   });
 
   it('keeps media fees in actual totals and model detail without inventing chat tokens', async () => {

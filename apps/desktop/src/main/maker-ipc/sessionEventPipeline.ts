@@ -13,6 +13,7 @@ import {
   type FinishSessionTerminalEventDeps,
 } from './sessionEventTerminal.js';
 import { recordSessionEventSnapshots } from './sessionEventSnapshots.js';
+import { recordSessionAcpTurnUsage } from './sessionAcpTurnUsage.js';
 import {
   recordSessionClaudeTurnUsage,
   type RecordSessionClaudeTurnUsageDeps,
@@ -45,6 +46,8 @@ export function handleSessionEvent(
   admitUsage?: () => boolean,
   observeUnbilledUsage?: () => void,
 ): void {
+  // Preparation can release the active input so a queued turn can switch models.
+  const acpModel = session.agentKind === 'acp' && event.type === 'done' ? session.model : null;
   const prepared = prepareSessionEvent(deps, session, event, admitUsage);
   if (!prepared) return;
   const project = projectQuietScheduledOutput;
@@ -75,6 +78,7 @@ export function handleSessionEvent(
     );
     recordSessionCodexTurnUsage(deps, session, event, terminal.turnAssistantPersistId);
     recordSessionPiTurnUsage(deps, session, event, terminal.turnAssistantPersistId);
+    if (acpModel !== null) recordSessionAcpTurnUsage(session, event, acpModel);
     deps.recordProviderPartyUsage?.(session, event);
   };
   if (admitUsage === undefined) record();

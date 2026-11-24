@@ -259,7 +259,7 @@ function event(
 
 const actualSnapshotWriter = await vi.importActual<typeof import('../../sessionSpendBroadcaster.js')>('../../sessionSpendBroadcaster.js');
 
-function harness(remoteHandle?: AgentSessionHandle) {
+function harness(remoteHandle?: AgentSessionHandle, agentKind: Session['agentKind'] = 'codex') {
   const log = {
     trace: vi.fn(),
     debug: vi.fn(),
@@ -286,7 +286,7 @@ function harness(remoteHandle?: AgentSessionHandle) {
   } as unknown as AgentSessionHandle;
   const session = new Session({
     id: 'task',
-    agentKind: 'codex',
+    agentKind,
     workDir: '/unused',
     handle,
     capabilities: {} as never,
@@ -2308,6 +2308,37 @@ describe('provider turn observer on real Session.send', () => {
 });
 
 describe('usage through the production event pipeline', () => {
+  // #12433 (unit): ACP completes without a built-in engine source, but its
+  // report must reach the model ledger once and refresh consumers after the write.
+  it('settles reported ACP tokens and distinguishes zero from missing usage', async () => {
+    const h = harness(undefined, 'acp');
+    const done = { type: 'done', sessionTurnGeneration: 1, data: {
+      type: 'acp/prompt_end', status: 'completed',
+      usage: { inputTokens: 2161, outputTokens: 15, cacheReadTokens: 9459, cacheCreationTokens: 0 },
+    } } satisfies AgentEvent;
+    try {
+      h.emit(done);
+      h.emit({ ...done, data: { ...done.data } });
+      h.emit({ ...done, sessionTurnGeneration: 2, data: { type: 'acp/prompt_end', status: 'completed' } });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        agentKind: 'acp', model: 'test-model', sessionId: 'task',
+        inputTokensDelta: 2161, outputTokensDelta: 15, cacheReadTokensDelta: 9459, cacheCreateTokensDelta: 0,
+      }));
+      expect(effects.fn('rebroadcastTodaySpend').mock.invocationCallOrder[0])
+        .toBeGreaterThan(effects.fn('recordModelTurnUsage').mock.invocationCallOrder[0]);
+      h.emit({ ...done, sessionTurnGeneration: 3, data: { ...done.data, usage: {
+        inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0,
+      } } });
+      expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledTimes(2);
+      expect(effects.fn('recordModelTurnUsage')).toHaveBeenLastCalledWith(expect.objectContaining({
+        inputTokensDelta: 0, outputTokensDelta: 0, cacheReadTokensDelta: 0, cacheCreateTokensDelta: 0,
+      }));
+    } finally {
+      await h.dispose();
+    }
+  });
+
   const tokens = { inputTokens: 100, outputTokens: 20, cacheReadTokens: 10, cacheCreateTokens: 0 };
   const segment = { ...tokens, model: 'test-model', priceVariant: 'standard' };
   function usage(source: 'codex' | 'pi') {
