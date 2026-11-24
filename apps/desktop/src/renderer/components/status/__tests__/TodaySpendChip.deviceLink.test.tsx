@@ -84,6 +84,7 @@ vi.mock('react-i18next', () => ({
         'todaySpend.unit.day': '天',
         'todaySpend.unit.hour': '小时',
         'todaySpend.sessionCostLabel': '本任务 {{cost}}',
+        'todaySpend.sessionEstimateLabel': '本任务估算费用 {{cost}}',
         'todaySpend.codex.sessionValueLabel': '本任务价值 {{cost}}',
         'todaySpend.codex.sessionTokensLine': '本任务已用 {{tokens}} token',
         'todaySpend.codex.noUsageLabel': '暂无用量',
@@ -1073,7 +1074,7 @@ describe('TodaySpendChip SSH remote Codex usage chip (#12149)', () => {
 
     const { container } = renderSshCodexChip();
 
-    expect(container.textContent).toContain('本任务');
+    expect(container.textContent).toContain('本任务估算费用 $1.25');
     expect(container.textContent).not.toContain('本任务已用 500 token');
   });
 
