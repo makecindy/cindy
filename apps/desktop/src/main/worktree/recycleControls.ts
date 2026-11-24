@@ -29,13 +29,19 @@ async function listWorktreeRecycleStatusInner(): Promise<WorktreeRecycleStatus[]
   });
   const diagnostics = records.some((record) => record.reason === 'referenced-or-runtime-unavailable')
     ? await loadWorktreeReferenceDiagnostics() : null;
-  return records.map((record) => ({
-    id: record.id, generation: record.generation, name: record.meta.name, path: record.meta.path,
-    state: recyclePolicy(record).state === 'retrying' && isWorktreeRecycleRetrySuspended(record) ? 'paused' : recyclePolicy(record).state, failures: recyclePolicy(record).failures,
-    reason: record.reason === 'referenced-or-runtime-unavailable'
-      ? diagnostics?.retentionReason(record.meta) ?? 'in-use'
-      : isWorktreeRecycleRetrySuspended(record) && !record.reason ? 'failed' : visibleReason(record.reason),
-  }));
+  const statuses: WorktreeRecycleStatus[] = [];
+  for (const record of records) {
+    const reason = record.reason === 'referenced-or-runtime-unavailable' && diagnostics?.hasPiReferences
+      ? (await diagnostics.inspect(record.meta, true)).retentionReason ?? 'in-use'
+      : isWorktreeRecycleRetrySuspended(record) && !record.reason ? 'failed' : visibleReason(record.reason);
+    const policy = recyclePolicy(record);
+    statuses.push({
+      id: record.id, generation: record.generation, name: record.meta.name, path: record.meta.path,
+      state: policy.state === 'retrying' && isWorktreeRecycleRetrySuspended(record) ? 'paused' : policy.state,
+      failures: policy.failures, reason,
+    });
+  }
+  return statuses;
 }
 
 /** Changes scheduling only. Actual recycling still revalidates live references and recovery evidence. */

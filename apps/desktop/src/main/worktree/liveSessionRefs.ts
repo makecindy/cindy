@@ -13,6 +13,7 @@
 
 import path from 'node:path';
 import fs from 'node:fs';
+import fsPromises from 'node:fs/promises';
 
 import { getDbClient } from '../localDb/client/current';
 import { physicalWorktreeKey } from './resourceLock';
@@ -67,6 +68,7 @@ export function loadLiveSessionPathKeys(
 interface ReferenceSources {
   pi: Set<string>;
   other: Set<string>;
+  physicalPath(value: string): Promise<string>;
 }
 
 async function readLiveSessionPathKeys(
@@ -89,7 +91,7 @@ async function readLiveSessionPathKeys(
         keys.add(key);
         source?.add(key);
       }
-      const physical = await physicalWorktreeKey(value);
+      const physical = await (sources?.physicalPath ?? physicalWorktreeKey)(value);
       keys.add(physical);
       source?.add(physical);
     };
@@ -131,18 +133,57 @@ async function readLiveSessionPathKeys(
   }
 }
 
-/** Display-only provenance for an otherwise generic retention reason. */
+/** Display-only provenance. Share lookups within one list or audit scan. */
 export async function loadWorktreeReferenceDiagnostics() {
-  const sources: ReferenceSources = { pi: new Set(), other: new Set() };
+  const lookups = new Map<string, Promise<string | null>>();
+  const realpath = (value: string): Promise<string | null> => {
+    let lookup = lookups.get(value);
+    if (!lookup) {
+      lookup = fsPromises.realpath(value).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return null;
+        throw error;
+      });
+      lookups.set(value, lookup);
+    }
+    return lookup;
+  };
+  const physicalPath = async (value: string): Promise<string> => {
+    const resolved = path.resolve(value);
+    const real = await realpath(resolved);
+    if (real !== null) return pathKey(real)!;
+    // Reference sources use the physical ancestor even when the leaf is
+    // absent. Targets use only the lexical path in that case.
+    const parent = path.dirname(resolved);
+    if (parent === resolved) return physicalWorktreeKey(resolved);
+    return pathKey(path.join(await physicalPath(parent), path.basename(resolved)))!;
+  };
+  const sources: ReferenceSources = { pi: new Set(), other: new Set(), physicalPath };
   const paths = await readLiveSessionPathKeys({}, sources);
   return {
-    paths,
-    retentionReason(meta: ReferenceTarget): 'pi-subagent-reference' | undefined {
-      if (!paths || sources.pi.size === 0) return;
-      const targets = referenceTargets(meta);
-      if (targets && matchesReference(targets, sources.pi) && !matchesReference(targets, sources.other)) {
-        return 'pi-subagent-reference';
+    physicalPath,
+    hasPiReferences: !!paths && sources.pi.size > 0,
+    async inspect(meta: ReferenceTarget, includeReason: boolean): Promise<{
+      referenced: boolean | null;
+      retentionReason?: 'pi-subagent-reference';
+    }> {
+      if (!paths) return { referenced: null };
+      const logical = [meta.path, meta.quarantinePath].map(pathKey).filter((value) => value !== null);
+      if (!logical.length) return { referenced: true };
+      const targets = new Set(logical);
+      try {
+        for (const value of logical) {
+          const real = pathKey(await realpath(value));
+          if (real) targets.add(real);
+        }
+      } catch {
+        return { referenced: true };
       }
+      const candidates = [...targets];
+      const referenced = matchesReference(candidates, paths);
+      const retentionReason = includeReason && referenced
+        && matchesReference(candidates, sources.pi) && !matchesReference(candidates, sources.other)
+        ? 'pi-subagent-reference' : undefined;
+      return { referenced, retentionReason };
     },
   };
 }

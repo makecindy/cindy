@@ -13,9 +13,9 @@ import {
 import { listSnapshotRefs, releaseSnapshotRef, SNAPSHOT_REF_PREFIX } from './contentSnapshot';
 import type { LocalWorktreeReference } from '../localDb/worker/worktreeReferences';
 import { recycleManagedWorktree } from './managedRecycle';
-import { hasLiveSessionReference, loadWorktreeReferenceDiagnostics, pathKey } from './liveSessionRefs';
+import { loadWorktreeReferenceDiagnostics, pathKey } from './liveSessionRefs';
 import * as store from './worktreeStore';
-import { physicalWorktreeKey, withWorktreeResourceLock } from './resourceLock';
+import { withWorktreeResourceLock } from './resourceLock';
 import { subscribeWorktreeRecycleEvents } from './recycleEvents';
 import { retryPendingWorktreeRuntimeLeaseReleases } from './runtimeLeases';
 
@@ -435,7 +435,7 @@ export async function auditRegisteredWorktrees(): Promise<void> {
     let physicalPath = pathKey(meta.path);
     try {
       await fs.lstat(meta.path);
-      physicalPath = await physicalWorktreeKey(meta.path);
+      physicalPath = await diagnostics.physicalPath(meta.path);
       try { await fs.lstat(path.join(meta.path, '.git')); } catch (error) {
         directory = (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'residual' : 'unreadable';
       }
@@ -443,11 +443,10 @@ export async function auditRegisteredWorktrees(): Promise<void> {
       directory = (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'unreadable';
     }
     const record = await readRecycleRecord(meta.path);
+    const reference = await diagnostics.inspect(meta, record?.reason === 'referenced-or-runtime-unavailable'
+      && record.generation === worktreeGeneration(meta));
     entries.push({ sessionId: meta.sessionId, path: meta.path, physicalPath, directory,
-      referenced: diagnostics.paths === null ? null : hasLiveSessionReference(meta, diagnostics.paths),
-      recycle: record?.phase ?? 'historical-review', reason: record?.reason,
-      retentionReason: record?.reason === 'referenced-or-runtime-unavailable'
-        && record.generation === worktreeGeneration(meta) ? diagnostics.retentionReason(meta) : undefined,
+      ...reference, recycle: record?.phase ?? 'historical-review', reason: record?.reason,
     });
   }
   const summary = {

@@ -6,6 +6,7 @@ vi.mock('../worktree/recoveryArchiveWorkerClient', async () => {
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import syncFs from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -177,13 +178,36 @@ process.stdin.on('end', () => process.exit(0));
       expect(retained).toMatchObject({ phase: 'pending', reason: 'referenced-or-runtime-unavailable' });
     };
 
-    const checkDiagnostic = async (reason: string, referenced: boolean | null) => {
-      const rows = await listWorktreeRecycleStatus();
-      expect.soft(rows).toContainEqual(expect.objectContaining({ path: meta.path, state: 'waiting', reason }));
-      await auditRegisteredWorktrees();
+    const checkDiagnostic = async (reason: string, referenced: true | null | 'active') => {
+      // #12640: the Host reads must preserve the reason without synchronously
+      // resolving the same real worktree in either the list or the audit.
+      const syncRealpath = vi.spyOn(syncFs, 'realpathSync');
+      const asyncRealpath = vi.spyOn(fs, 'realpath');
+      try {
+        const rows = await listWorktreeRecycleStatus();
+        expect.soft(rows).toContainEqual(expect.objectContaining({ path: meta.path, state: 'waiting', reason }));
+        expect.soft(syncRealpath.mock.calls.filter(([value]) => value === meta.path)).toHaveLength(0);
+        if (referenced === true) {
+          expect(asyncRealpath.mock.calls.filter(([value]) => value === meta.path)).toHaveLength(1);
+        }
+        syncRealpath.mockClear();
+        asyncRealpath.mockClear();
+        await auditRegisteredWorktrees();
+        expect.soft(syncRealpath.mock.calls.filter(([value]) => value === meta.path)).toHaveLength(0);
+        if (referenced === true) {
+          // One for the reference/metadata view, plus the existing journal lookup.
+          expect(asyncRealpath.mock.calls.filter(([value]) => value === meta.path)).toHaveLength(2);
+        }
+      } finally {
+        asyncRealpath.mockRestore();
+        syncRealpath.mockRestore();
+      }
       const audit = JSON.parse(await fs.readFile(path.join(state.root, 'worktree-audit.json'), 'utf8'));
       const entry = audit.entries.find((item: { path: string }) => item.path === meta.path);
-      expect(entry).toMatchObject({ referenced, directory: 'present' });
+      expect(entry).toMatchObject({ directory: 'present' });
+      // The live runner can update its durable directory during a scan.
+      if (referenced === 'active') expect([true, null]).toContain(entry.referenced);
+      else expect(entry.referenced).toBe(referenced);
       expect.soft(entry.retentionReason).toBe(reason === 'pi-subagent-reference' ? reason : undefined);
       expect(await readRecycleRecord(meta.path)).toEqual(retained);
       expect(await fs.readFile(path.join(meta.path, 'draft.txt'), 'utf8')).toBe(`${name} contents\n`);
@@ -193,7 +217,7 @@ process.stdin.on('end', () => process.exit(0));
       await vi.waitFor(() => fs.access(ready), { timeout: 2_500 });
       state.runtimePaths.add(meta.path);
       await checkRetention();
-      await checkDiagnostic('in-use', true);
+      await checkDiagnostic('in-use', 'active');
       await fs.writeFile(release, '');
       await runner;
       expect(JSON.parse(await fs.readFile(path.join(runDir, 'result.json'), 'utf8'))).toMatchObject({
@@ -207,6 +231,24 @@ process.stdin.on('end', () => process.exit(0));
           currentDatabase: false, workingDir: meta.path });
         await checkDiagnostic('in-use', true);
         state.refs.pop();
+      }
+      if (source === 'direct' && process.platform !== 'win32') {
+        // A fresh scan must observe a previously absent alias, then an unreadable
+        // alias. The other reference reaches the worktree via its resolved target.
+        const alias = path.join(state.root, 'pi-quarantine-alias');
+        const target = await fs.mkdtemp(path.join(state.root, 'pi-quarantine-'));
+        meta.quarantinePath = alias;
+        retained!.meta.quarantinePath = alias;
+        await writeRecycleRecord(retained!);
+        await checkDiagnostic('pi-subagent-reference', true);
+        await fs.symlink(target, alias, 'dir');
+        state.refs.push({ id: 'pi-diagnostic-borrower', status: 'active', source: 'desktop',
+          currentDatabase: false, workingDir: target });
+        await checkDiagnostic('in-use', true);
+        state.refs.pop();
+        await fs.unlink(alias);
+        await fs.symlink(alias, alias, 'dir');
+        await checkDiagnostic('in-use', true);
       }
       await fs.writeFile(configFile, '{');
       await checkDiagnostic('in-use', null);
