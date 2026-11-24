@@ -968,6 +968,8 @@
     "timeout": "«{{device}}» ainda não está pronto. Certifique-se de que o Cindy está aberto e online nesse computador e tente novamente.",
     "conflict": "{{name}} já foi transferido para «{{device}}».",
     "switchFailed": "Não é possível alterar o computador principal neste momento. Tente mais tarde.",
+    "skillTargetOutdated": "Uma Skill de {{name}} tem um corpo de texto superior a 64 KB que a versão antiga do Cindy em «{{device}}» não consegue receber. Atualize o Cindy nesse computador antes de mover o seu amigo. O amigo permanece no computador original",
+    "skillTargetOutdated_skill": "A versão antiga do Cindy em «{{device}}» não consegue receber a Skill «{{slug}}». O texto tem {{bodyBytes, number}} bytes e excede o limite de 64 KB. {{name}} continua no computador original. Atualize o Cindy no computador de destino e tente novamente.",
     "unknownDevice": "outro computador",
     "runsOn": "Em execução em «{{device}}»",
     "homeTitle": "Computador principal",

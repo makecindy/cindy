@@ -958,6 +958,8 @@
     "timeout": "「{{device}}」还没准备好。请确认那台电脑上的 Cindy 已打开并联网，再试一次。",
     "conflict": "{{name}} 已经换到「{{device}}」继续了。",
     "switchFailed": "暂时无法更换主力电脑，请稍后再试。",
+    "skillTargetOutdated": "「{{name}}」有技能正文超过 64 KB，「{{device}}」上的旧版 Cindy 无法接收。请先更新那台电脑上的 Cindy，再更换主力电脑。伙伴仍留在原电脑",
+    "skillTargetOutdated_skill": "「{{device}}」上的旧版 Cindy 无法接收技能「{{slug}}」（正文 {{bodyBytes, number}} 字节，超过 64 KB）。「{{name}}」仍在原电脑上运行。请在目标电脑上更新 Cindy，再更换主力电脑。",
     "unknownDevice": "另一台电脑",
     "runsOn": "在「{{device}}」上运行",
     "homeTitle": "主力电脑",

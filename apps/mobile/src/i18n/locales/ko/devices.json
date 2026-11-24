@@ -958,6 +958,8 @@
     "timeout": "“{{device}}”이(가) 아직 준비되지 않았습니다. 그 컴퓨터에서 Cindy가 열려 있고 온라인인지 확인한 뒤 다시 시도하세요.",
     "conflict": "{{name}}은(는) 이미 “{{device}}”(으)로 옮겨졌습니다.",
     "switchFailed": "지금은 주 컴퓨터를 바꿀 수 없습니다. 잠시 후 다시 시도하세요.",
+    "skillTargetOutdated": "“{{name}}”에 본문이 64 KB를 초과하는 스킬이 있어 “{{device}}”의 이전 버전 Cindy가 받을 수 없습니다. 해당 컴퓨터의 Cindy를 업데이트한 후 동반자를 옮기세요. 동반자는 기존 컴퓨터에 그대로 있습니다",
+    "skillTargetOutdated_skill": "“{{device}}”의 이전 버전 Cindy는 “{{slug}}” 스킬을 받을 수 없습니다. 본문이 {{bodyBytes, number}}바이트로 64 KB 제한을 초과합니다. “{{name}}”은 기존 컴퓨터에서 계속 실행 중입니다. 대상 컴퓨터에서 Cindy를 업데이트한 후 다시 시도하세요.",
     "unknownDevice": "다른 컴퓨터",
     "runsOn": "“{{device}}”에서 실행 중",
     "homeTitle": "주 컴퓨터",

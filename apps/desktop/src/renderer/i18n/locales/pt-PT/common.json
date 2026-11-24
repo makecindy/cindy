@@ -12637,6 +12637,8 @@
       "transferBusy": "{{name}} ainda está a preparar uma resposta. Mova-o quando a resposta terminar",
       "targetUnavailable": "“{{device}}” não está disponível. Tem de estar online com o controlo remoto ativado",
       "targetOutdated": "«{{device}}» tem uma versão antiga do Cindy que ainda não consegue executar {{name}}. Atualize primeiro o Cindy nesse computador",
+      "skillTargetOutdated": "Uma Skill de {{name}} tem um corpo de texto superior a 64 KB que a versão antiga do Cindy em «{{device}}» não consegue receber. Atualize o Cindy nesse computador antes de mover o seu amigo. O amigo permanece no computador original",
+      "skillTargetOutdated_skill": "A versão antiga do Cindy em «{{device}}» não consegue receber a Skill «{{slug}}». O texto tem {{bodyBytes, number}} bytes e excede o limite de 64 KB. {{name}} continua no computador original. Atualize o Cindy no computador de destino e tente novamente.",
       "targetOutdatedItem": "Mover para «{{device}}» · Cindy antigo",
       "targetOutdatedMeta": "Cindy antigo",
       "olderTargetNote": "«{{device}}» tem uma versão antiga do Cindy, por isso {{name}} funcionará aí como antes: o histórico da conversa continua sincronizado, mas as regras e automatizações do projeto não se aplicam aí.",

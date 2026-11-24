@@ -958,6 +958,8 @@
     "timeout": "「{{device}}」尚未備妥。請確認彼機上之 Cindy 已啟且已連網，再試一次。",
     "conflict": "{{name}} 已移至「{{device}}」續行矣。",
     "switchFailed": "主力之機暫不能更換，請稍後再試。",
+    "skillTargetOutdated": "「{{name}}」有技藝正文逾 64 KB，「{{device}}」之舊版 Cindy 無法接收。請先更新彼機之 Cindy，再換主力之機。同伴仍留原機",
+    "skillTargetOutdated_skill": "「{{device}}」之舊版 Cindy 無法接收技藝「{{slug}}」，其正文 {{bodyBytes, number}} 字節，逾 64 KB。「{{name}}」仍行於原機。請更新彼機之 Cindy，再換主力之機。",
     "unknownDevice": "另一機",
     "runsOn": "行於「{{device}}」",
     "homeTitle": "主力之機",
