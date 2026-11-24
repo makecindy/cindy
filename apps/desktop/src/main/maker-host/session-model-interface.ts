@@ -9,6 +9,7 @@ import { getLocalCatalogOverridesSnapshot } from './active-catalog.js';
 // remain live. The owner-scoped root is supplied by the host, never by a request.
 let storageRoot: () => string | null = () => null;
 const cache = new Map<string, Pin>();
+const MAX_PIN_BYTES = 65536;
 interface Pin { providerId: string; agent: AgentKind; modelId: string; selection: ModelInterfaceSnapshot }
 export function configureSessionModelInterfaceStorage(root: () => string | null): void {
   storageRoot = root;
@@ -20,17 +21,26 @@ function location(sessionId: string, identity: string) {
   const model = createHash('sha256').update(identity).digest('hex');
   return { key: `${root ?? 'memory'}:${name}:${model}`, file: root ? path.join(root, name, `${model}.json`) : null };
 }
-function readPin(key: string, file: string | null): Pin | undefined {
-  if (cache.has(key)) return cache.get(key);
-  if (!file || !fs.existsSync(file)) return;
-  if (fs.statSync(file).size > 65536) throw new Error('MODEL_INTERFACE_SNAPSHOT_INVALID');
-  const value: Pin = JSON.parse(fs.readFileSync(file, 'utf8'));
+function parsePin(contents: string): Pin {
+  const value: Pin = JSON.parse(contents);
   if (!value || typeof value.providerId !== 'string' || typeof value.modelId !== 'string' ||
       !['claude-code', 'codex', 'pi'].includes(value.agent) || !value.selection ||
       typeof value.selection.profileId !== 'string' || typeof value.selection.route?.baseUrl !== 'string' ||
       !Array.isArray(value.selection.compatibility)) throw new Error('MODEL_INTERFACE_SNAPSHOT_INVALID');
+  return value;
+}
+
+function readPin(key: string, file: string | null): Pin | undefined {
+  if (cache.has(key)) return cache.get(key);
+  if (!file || !fs.existsSync(file)) return;
+  if (fs.statSync(file).size > MAX_PIN_BYTES) throw new Error('MODEL_INTERFACE_SNAPSHOT_INVALID');
+  const value = parsePin(fs.readFileSync(file, 'utf8'));
   cache.set(key, value);
   return value;
+}
+
+function pinLocation(sessionId: string, providerId: string, agent: AgentKind, model: CatalogModel) {
+  return location(sessionId, JSON.stringify([providerId, agent, model.id]));
 }
 export function assertModelInterfaceAvailable(selection: ModelInterfaceSnapshot, modelId: string, registry?: ModelRegistry): void {
   // An old-server compatibility response cannot revoke a previously accepted V6
@@ -48,37 +58,65 @@ export function assertModelInterfaceAvailable(selection: ModelInterfaceSnapshot,
       (!matches[0]?.route.interfaces && profile.modelIds && !profile.modelIds.includes(modelId))) throw new Error('MODEL_INTERFACE_RETIRED');
 }
 
+function withLocalImageInput(selection: ModelInterfaceSnapshot, providerId: string, agent: AgentKind, model: CatalogModel): ModelInterfaceSnapshot {
+  // A pinned transport survives catalog refreshes; an explicit local capability
+  // edit remains live. Do not persist the override in the pin: reset must reveal
+  // the accepted interface's original metadata, including after a cold restore.
+  const patch = getLocalCatalogOverridesSnapshot().patches[`${encodeURIComponent(providerId)}:${model.id}`];
+  const value = patch && (!patch.agents || patch.agents.includes(agent))
+    ? patch.perAgent?.[agent]?.supportsImageInput ?? patch.base?.supportsImageInput
+    : undefined;
+  const result = structuredClone(selection);
+  if (value !== undefined) {
+    const modalities = result.defaults.modalities ?? model.modalities;
+    result.defaults = { ...result.defaults, supportsImageInput: value,
+      ...(modalities ? { modalities: { ...modalities,
+        input: value ? [...modalities.input.filter(m => m !== 'image'), 'image'] : modalities.input.filter(m => m !== 'image'),
+      } } : {}),
+    };
+  }
+  return result;
+}
+
+function resolvePin(previous: Pin | undefined, providerId: string, agent: AgentKind, model: CatalogModel, registry?: ModelRegistry): ModelInterfaceSnapshot | undefined {
+  if (previous?.providerId !== providerId || previous.agent !== agent || previous.modelId !== model.id) return;
+  assertModelInterfaceAvailable(previous.selection, model.id, registry);
+  return withLocalImageInput(previous.selection, providerId, agent, model);
+}
+
+/** Inspect a previously accepted interface without pinning a new task or blocking the IPC handler on disk I/O. */
+export async function readPinnedSessionModelInterface(
+  sessionId: string, providerId: string, agent: AgentKind, model: CatalogModel, registry?: ModelRegistry,
+): Promise<ModelInterfaceSnapshot | undefined> {
+  const { key, file } = pinLocation(sessionId, providerId, agent, model);
+  const cached = cache.get(key);
+  if (cached || !file) return resolvePin(cached, providerId, agent, model, registry);
+  let pin: Pin;
+  try {
+    const handle = await fs.promises.open(file, 'r');
+    try {
+      const { size } = await handle.stat();
+      if (size > MAX_PIN_BYTES) throw new Error('MODEL_INTERFACE_SNAPSHOT_INVALID');
+      pin = parsePin(await handle.readFile('utf8'));
+    } finally {
+      await handle.close();
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
+  return resolvePin(cache.get(key) ?? pin, providerId, agent, model, registry);
+}
+
 /** First dispatch captures a complete choice. Catalog refreshes and app restart
  * reuse it; an explicit provider/model change captures a new choice. No network retry. */
 export function sessionModelInterface(
   sessionId: string, providerId: string, agent: AgentKind, model: CatalogModel,
   registry?: ModelRegistry, legacyWire?: string,
 ): ModelInterfaceSnapshot | undefined {
-  // A pinned transport survives catalog refreshes; an explicit local capability
-  // edit remains live. Do not persist the override in the pin: reset must reveal
-  // the accepted interface's original metadata, including after a cold restore.
-  const withLocalImageInput = (selection: ModelInterfaceSnapshot): ModelInterfaceSnapshot => {
-    const patch = getLocalCatalogOverridesSnapshot().patches[`${encodeURIComponent(providerId)}:${model.id}`];
-    const value = patch && (!patch.agents || patch.agents.includes(agent))
-      ? patch.perAgent?.[agent]?.supportsImageInput ?? patch.base?.supportsImageInput
-      : undefined;
-    const result = structuredClone(selection);
-    if (value !== undefined) {
-      const modalities = result.defaults.modalities ?? model.modalities;
-      result.defaults = { ...result.defaults, supportsImageInput: value,
-        ...(modalities ? { modalities: { ...modalities,
-          input: value ? [...modalities.input.filter(m => m !== 'image'), 'image'] : modalities.input.filter(m => m !== 'image'),
-        } } : {}),
-      };
-    }
-    return result;
-  };
-  const { key, file } = location(sessionId, JSON.stringify([providerId, agent, model.id]));
-  const previous = readPin(key, file);
-  if (previous?.providerId === providerId && previous.agent === agent && previous.modelId === model.id) {
-    assertModelInterfaceAvailable(previous.selection, model.id, registry);
-    return withLocalImageInput(previous.selection);
-  }
+  const { key, file } = pinLocation(sessionId, providerId, agent, model);
+  const previous = resolvePin(readPin(key, file), providerId, agent, model, registry);
+  if (previous) return previous;
   if (model.interfaceUnavailable) throw new Error('MODEL_INTERFACE_UNAVAILABLE');
   let selection = model.selectedInterface;
   // A resumed pre-V6 task has no snapshot. Keep its saved transport on first migration.
@@ -98,7 +136,7 @@ export function sessionModelInterface(
     } finally { if (fs.existsSync(temporary)) fs.unlinkSync(temporary); }
   }
   cache.set(key, pin);
-  return withLocalImageInput(selection);
+  return withLocalImageInput(selection, providerId, agent, model);
 }
 
 export function removeSessionModelInterface(sessionId: string): void {

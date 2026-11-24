@@ -214,6 +214,7 @@ export function createInputEnqueueHarness(coordinator: AgentInputCoordinator, op
     isSessionSharedTaskActive: () => false,
     getActiveCatalog: () => ({ providers: [{ id: 'fixture-codex', models: { codex: [options.codexModel] } }] }),
     findCatalogModel,
+    readPinnedSessionModelInterface: async () => undefined,
     CODEX_IMAGE_INPUT_UNSUPPORTED,
     prepareDeviceLinkAutoTitle: async () => noop,
     queuedAttachmentOwnership: { activateCurrentOwner: noop },

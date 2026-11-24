@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { setLocalCatalogOverrides } from '../active-catalog.js';
 import { EMPTY_MODEL_CATALOG_OVERRIDES } from '../model-plane/localCatalogOverrides.js';
-import { configureSessionModelInterfaceStorage, sessionModelInterface } from '../session-model-interface.js';
+import { configureSessionModelInterfaceStorage, readPinnedSessionModelInterface, sessionModelInterface } from '../session-model-interface.js';
 import { afterEach, describe, it, expect, vi } from 'vitest';
 
 const { mockGetAppCapabilities } = vi.hoisted(() => ({
@@ -1745,7 +1745,7 @@ describe('resolveSessionRouteDecision — 自定义供应商(resolve 时注入 k
 });
 
 describe('task interface snapshot', () => {
-  it('pins across restart and refuses retired profiles without falling back', () => {
+  it('pins across restart and refuses retired profiles without falling back', async () => {
     const directory = mkdtempSync(path.join(tmpdir(), 'cindy-interface-'));
     const registry = structuredClone(BUNDLED_CATALOG.modelRegistry!);
     const config = { id: 'snapshot-kimi', name: 'Kimi', runtimes: { codex: {
@@ -1765,6 +1765,10 @@ describe('task interface snapshot', () => {
       registry.models.flatMap(e => e.routes).find(r => r.providerId === 'moonshot-kimi-code' && r.modelId === 'k3.1-pro')!.preferredInterfaces!.codex = ['moonshot-kimi-code-openai-completions'];
       const next = buildUserProvider(config, { modelRegistry: registry }).models.codex![0];
       configureSessionModelInterfaceStorage(() => directory); // real disk restore
+      // #593: admission sees the accepted interface before dispatch restores
+      // its in-memory pin, and inspection leaves a fresh task unpinned.
+      expect(await readPinnedSessionModelInterface('task', config.id, 'codex', next, registry)).toEqual(first);
+      expect(await readPinnedSessionModelInterface('new-task', config.id, 'codex', next, registry)).toBeUndefined();
       expect(sessionModelInterface('task', config.id, 'codex', next, registry)).toEqual(first);
       const refreshed = buildUserProvider(config, { modelRegistry: registry });
       expect(sessionProviderRoutingForModel('task', refreshed, 'codex', 'k3.1-pro'))
@@ -1781,6 +1785,7 @@ describe('task interface snapshot', () => {
         configureSessionModelInterfaceStorage(() => directory);
         const edited = sessionModelInterface('task', config.id, 'codex', next, registry)!;
         expect(edited.defaults.supportsImageInput).toBe(value);
+        expect(await readPinnedSessionModelInterface('task', config.id, 'codex', next, registry)).toEqual(edited);
         expect(edited.route).toEqual(first.route);
         expect(edited.api).toBe(first.api);
       }

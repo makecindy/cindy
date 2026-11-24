@@ -226,6 +226,7 @@ import { readCodexContextWindowInfo, readCodexTaskContextWindowInfo } from '../m
 import { readSshCodexModelList } from '../remote-ssh/codex-model-list.js';
 import { prepareCodexCustomContextCatalog } from '../maker-host/codex-custom-context-catalog.js';
 import { resolveConnectedDefaultProviderIdForModel } from '../maker-host/provider-route.js';
+import { readPinnedSessionModelInterface } from '../maker-host/session-model-interface.js';
 import { bindGroupFastPolicy } from '../provider-group/fastPolicyRuntime.js';
 import { resolveConfiguredContextWindow, resolveDesktopHandoffWindow, contextWindowBudgetChangesEffectiveWindow, resolveDesktopModelContextProviderId, resolveSessionContextWindowBounds, readStoredSessionContextWindowBudget, applySessionContextWindowBudgetToCreateOpts } from '../maker-host/model-context-settings.js';
 import { isSessionContextWindowBudgetCustomized, readSessionContextWindowBudget } from '../maker-host/session-context-budget-store.js';
@@ -17714,9 +17715,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
          ('model' in requestedRoute && requestedRoute.model !== route.model) ||
          ('providerId' in requestedRoute && requestedRoute.providerId !== route.providerId) ||
          ('remoteHostId' in requestedRoute && requestedRoute.remoteHostId))) return;
-    const provider = getActiveCatalog().providers.find(entry => entry.id === route.providerId);
+    const catalog = getActiveCatalog();
+    const provider = catalog.providers.find(entry => entry.id === route.providerId);
     const model = findCatalogModel(provider, route.model, 'codex', { exact: true });
-    const imageInput = model?.supportsImageInput ?? model?.modalities?.input.includes('image');
+    if (!model) return;
+    let imageMetadata;
+    try {
+      const pinned = await readPinnedSessionModelInterface(sessionId, route.providerId, 'codex', model, catalog.modelRegistry);
+      imageMetadata = pinned?.defaults ?? model;
+    } catch {
+      // The send transaction reports an unavailable or invalid pin.
+      return;
+    }
+    const imageInput = imageMetadata.supportsImageInput ?? imageMetadata.modalities?.input.includes('image');
     if (imageInput !== false) return;
     // A resumed task may be pinned to another interface with different capabilities.
     if (model?.availableInterfaces?.some(({ defaults, profileId }) =>
