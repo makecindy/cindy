@@ -46,7 +46,7 @@ describe('Codex thread MCP server tools', () => {
       tools: [{ name: 'search', description: 'Search OMC', inputSchema: {} }, { name: 'open', inputSchema: {} }],
     });
     expect(request).toHaveBeenCalledWith('mcpServerStatus/list',
-      { cursor: null, limit: 100, detail: 'toolsAndAuthOnly', threadId: 'thread-1' },
+      { cursor: null, limit: 100, detail: 'toolsAndAuthOnly', threadId: 'thread-1', serverName: 'custom_omc' },
       expect.objectContaining({ timeoutMs: expect.any(Number) }));
   });
 

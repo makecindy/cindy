@@ -69,6 +69,13 @@ Host 按请求代次保存待确认的接管：未派发或收到关联的原生
 原生冷恢复会重建失败任务内的 MCP 连接，其他任务的连接保持；后台工作未结束或状态不明时保留原线程。
 回归见 `agents/codex/helper-readiness.native.test.ts`、`index.test.ts` 与 `mcp-server-tools.test.ts`。
 
+单服务的线程就绪检查必须同时传 `threadId` 和 `serverName`。原生 Codex 0.166/0.167
+在缺少 `serverName` 时会重新发现全部 MCP 服务并建立临时客户端；某个无关服务阻塞时，
+健康 helper 的检查也会超时，临时客户端的迟到错误不能视为业务线程失效。
+helper 读取与恢复前复查、已有线程的 scheduler 检查均限定到目标服务；不增加查询、后台
+重试或共享进程重载。原生回归通过真实 app-server 验证健康连接不会重新初始化，也不会
+探测只对新连接挂起的其它服务；旧运行时忽略选择参数时保留原有兼容判据。
+
 回归见 `claude-code/__tests__/startup-cleanup.test.ts`、
 `pi/__tests__/pi-startsession-cleanup.test.ts` 与 `maker.test.ts`。
 

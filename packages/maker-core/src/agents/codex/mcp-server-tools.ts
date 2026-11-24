@@ -16,7 +16,10 @@ type StatusRequest = <T>(
 /**
  * Read one MCP server's tools from this thread's own MCP status. The shared
  * app-server's process-level list is not evidence for a thread, so `threadId`
- * is always sent. Read-only: never starts a server or calls its tools.
+ * and `serverName` are always sent. Without the server selector, native Codex
+ * starts fresh catalog discovery for every configured server, even with a
+ * threadId; a stalled sibling can then hide a healthy helper behind a timeout.
+ * Read-only: reuse the selected thread connection, never start catalog clients.
  */
 export async function readCodexThreadMcpServerTools(
   request: StatusRequest,
@@ -32,7 +35,7 @@ export async function readCodexThreadMcpServerTools(
     if (remainingMs <= 0) throw new Error('Codex MCP status timed out');
     const status: CodexMcpServerStatusListResponse = await request<CodexMcpServerStatusListResponse>(
       Method.McpServerStatusList,
-      { cursor, limit: 100, detail: 'toolsAndAuthOnly', threadId },
+      { cursor, limit: 100, detail: 'toolsAndAuthOnly', threadId, serverName },
       { timeoutMs: remainingMs },
     );
     const server = status.data.find((entry) => entry.name === serverName);
