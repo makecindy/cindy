@@ -63,9 +63,18 @@ async function localViews() {
   return views;
 }
 
-/** 取配置前调用：让返回的配置带上此刻的供应商路由。读目录失败时沿用上一次的。 */
-export async function refreshAutoModelGroupRoutes(): Promise<void> {
-  await localViews().catch(() => undefined);
+let refreshing: Promise<void> | null = null;
+let refreshedAt = 0;
+
+/**
+ * 读配置前调用：让随后读到的配置带上此刻的供应商路由(它们按供应商目录合成和展开，不存盘)。读目录失败时沿用上一次的。
+ * 发消息、出问题接替这些路径每次都会调：一秒内只读一次目录快照，同时来的调用等同一次读取。
+ */
+export function refreshAutoModelGroupRoutes(): Promise<void> {
+  if (refreshing) return refreshing;
+  if (Date.now() - refreshedAt < 1_000) return Promise.resolve();
+  refreshing = localViews().then(() => undefined, () => undefined).finally(() => { refreshedAt = Date.now(); refreshing = null; });
+  return refreshing;
 }
 
 export const resolver = createModelGroupResolver({
@@ -105,7 +114,8 @@ const switchOfferDeps = {
   now: Date.now,
 };
 
-export function readModelGroupRecoveryOffer(sessionId: string, recovery?: NonNullable<Parameters<typeof computeModelGroupSwitchOffer>[2]>) {
+export async function readModelGroupRecoveryOffer(sessionId: string, recovery?: NonNullable<Parameters<typeof computeModelGroupSwitchOffer>[2]>) {
+  await refreshAutoModelGroupRoutes();
   return computeModelGroupSwitchOffer(switchOfferDeps, sessionId, recovery);
 }
 

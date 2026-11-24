@@ -52,9 +52,9 @@ const LEGACY_STRATEGY: Record<ModelGroupStrategy, 'expiring' | 'order' | 'rotate
 /** 发给手机与另一台电脑的模式配置(model-groups:get 与伙伴设置里的模型组)：见 LEGACY_STRATEGY。 */
 export function modelGroupsConfigForRemote(config: ModelGroupsConfig): ModelGroupsConfig {
   return {
-    // 隐藏的供应商路由展开出来的不发给别的设备：旧版不认识 hidden，会照常列出来。供应商路由本身(sourceRoutes)也不发：
-    // 它们只在这台电脑上按目录展开，别的设备拿到的是展开后的普通路由。
-    routes: config.routes.filter((route) => !route.hidden).map((route) => (LEGACY_STRATEGY[route.strategy] === route.strategy
+    // 供应商路由及其展开目前只在这台电脑上用，不发给别的设备：旧版手机与电脑不认识 parent，会把每个模型当成
+    // 一条单独的路由平铺出来。已经用供应商路由开的任务仍由这台电脑按记下的路由接替，不受影响。
+    routes: config.routes.filter((route) => !route.hidden && !route.parent).map((route) => (LEGACY_STRATEGY[route.strategy] === route.strategy
       ? route
       : { ...route, strategy: LEGACY_STRATEGY[route.strategy], pick: route.strategy } as ModelGroupRoute)),
   };
@@ -166,6 +166,8 @@ export interface ModelGroupSourceRoute {
   strategy: ModelGroupStrategy;
   sources: ModelGroupSource[];
   effort?: string;
+  /** 「出问题时自动换来源」(model-groups.md §4.5)，与普通路由同一个开关：默认开，只在关掉时存 false；展开出来的每条路由沿用它。 */
+  autoSwitch?: false;
   auto?: true;
   hidden?: true;
 }
@@ -180,6 +182,8 @@ export interface ModelGroupsConfig {
   hiddenAuto?: string[];
   /** 用户给自动供应商路由改的选法；没改过的按默认「快作废的先用」。 */
   autoStrategy?: Record<string, ModelGroupStrategy>;
+  /** 用户关掉了「出问题时自动换来源」的自动供应商路由 id。 */
+  autoSwitchOff?: string[];
 }
 
 /** 用了这个模式的任务出问题时是否自动换来源(默认开)。 */
@@ -452,6 +456,7 @@ function normalizeSourceRoute(raw: unknown): ModelGroupSourceRoute | null {
   const auto = isAutoModelGroupId(id);
   return {
     id, name, strategy, sources, ...(effort ? { effort } : {}),
+    ...(value.autoSwitch === false ? { autoSwitch: false as const } : {}),
     ...(auto ? { auto: true as const } : {}),
     ...(auto && value.hidden === true ? { hidden: true as const } : {}),
   };
@@ -539,10 +544,13 @@ export function normalizeModelGroupsConfig(raw: unknown): ModelGroupsConfig {
   const autoStrategy = Object.fromEntries(Object.entries(value.autoStrategy && typeof value.autoStrategy === 'object' ? value.autoStrategy : {})
     .filter(([id, strategy]) => isAutoModelGroupId(id) && id.length <= MODEL_GROUP_LIMITS.id && MODEL_GROUP_STRATEGIES.includes(strategy as ModelGroupStrategy))
     .slice(0, MODEL_GROUP_HIDDEN_AUTO_LIMIT)) as Record<string, ModelGroupStrategy>;
+  const autoSwitchOff = [...new Set((Array.isArray(value.autoSwitchOff) ? value.autoSwitchOff : [])
+    .map((id) => text(id, MODEL_GROUP_LIMITS.id)).filter(isAutoModelGroupId))].slice(0, MODEL_GROUP_HIDDEN_AUTO_LIMIT);
   return {
     routes: routes.map((route) => pruneExceptions(route, routeIds)),
     ...(sourceRoutes.length > 0 ? { sourceRoutes } : {}),
     ...(hiddenAuto.length > 0 ? { hiddenAuto } : {}),
+    ...(autoSwitchOff.length > 0 ? { autoSwitchOff } : {}),
     ...(Object.keys(autoStrategy).length > 0 ? { autoStrategy } : {}),
   };
 }

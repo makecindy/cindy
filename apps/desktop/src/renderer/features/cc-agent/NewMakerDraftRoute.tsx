@@ -24,6 +24,7 @@ import {
 } from '@/lib/pluginEngineSelection';
 import { bindModelGroupSession, buildModelGroupRouteNote, commitModelGroupDecision, modelGroupLocationNameFrom, useModelGroups, writeModelGroupRouteNote } from '../model-groups/modelGroupsClient';
 import { modelGroupOwnerDevice, resolveDraftModelGroup } from '../model-groups/draftModelGroupRouting';
+import { implicitSourceRouteSelection } from '../model-groups/sourceRouteProviders';
 import { bindDeviceModelGroupSession, commitDeviceModelGroupDecision, useDeviceModelGroups, useDevicesModelGroups, writeDeviceModelGroupRouteNote } from '../model-groups/remoteModelGroups';
 import { findModelGroupRoute, MODEL_GROUPS_DEFAULTS, type ModelGroupSelection } from '../../../shared/modelGroups';
 import type { GhostModelRoute, GhostPickerModel } from '../../../shared/ghost';
@@ -1519,6 +1520,8 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
     }
     return findModelGroupRoute(modelGroupsConfig, selection) ? selection : null;
   }, [modelGroupsAllowed, activePluginModel, activePluginEngine, dlPluginEngine, modelGroupsConfig, draft.modelGroup, isDeviceLinkDraft, devicesModelGroups]);
+  // 本机草稿、没在用插件模型或插件引擎时，供应商路由成员的模型一律经路由开任务。
+  const sourceRoutesImplicit = modelGroupsAllowed && !isDeviceLinkDraft && !activePluginModel && !activePluginEngine && !dlPluginEngine;
   const modelGroupsProps = useMemo(
     () => modelGroupsAllowed
       ? {
@@ -5437,7 +5440,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       // 插件模型：发送那一帧的选择为准；插件给出的真实模型只用于这次新建，不改草稿里的默认模型。
       const pluginModelAtSend = shouldEnableCollab ? null : activePluginModel;
       // 模型组同理：按它选出的具体模型只用于这次新建。
-      const modelGroupAtSend = shouldEnableCollab || pluginModelAtSend ? null : activeModelGroup;
+      const chosenModelGroupAtSend = shouldEnableCollab || pluginModelAtSend ? null : activeModelGroup;
       // device-link 切设备后,capabilities/providers hook 可能还没 re-render 到新设备快照;
       // 此时 effectiveFastMode / supportsFastMode / sendProviderId 仍基于旧设备。
       // remoteDraftState 必须一起看:换设备时我们会把它打回 loading(防上一台的默认值串台),
@@ -5457,7 +5460,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
         }
         return true;
       };
-      if (!modelGroupAtSend && !draftCatalogReady()) return false;
+      if (!chosenModelGroupAtSend && !draftCatalogReady()) return false;
       if (isDeviceLinkDraft && remoteDraftState.status === 'error') {
         setRemoteDraftRetryEpoch((value) => value + 1);
         toast.error(t('ccAgent.draft.remoteDefaultsLoadFailed'));
@@ -5544,6 +5547,9 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
         isDataOwnerGenerationCurrent(dataOwnerAtSend);
 
       const sendBaseRoute = { persistedAgentKind, model, submittedEffort, providerId, effectiveFastMode };
+      // 选着的是某条供应商路由成员的模型但没记路由(旧草稿、最近、收藏)：照样按那条路由选成员(implicitSourceRouteSelection)。
+      const modelGroupAtSend = chosenModelGroupAtSend ?? (sourceRoutesImplicit && !shouldEnableCollab && !pluginModelAtSend
+        ? implicitSourceRouteSelection(modelGroupsConfig, sendBaseRoute) : null);
       markSendInFlight(true);
       // 已登记乐观标题预览的会话 id。交接链路(rehomeDraftAttachments / setPending /
       // navigate)在登记之后抛错时,消息没被交出去、权威标题永不回流,预览必须在下面的
@@ -6989,7 +6995,8 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
         }
         const shouldEnableCollab = effectiveCollab.enabled && collabPolicyEligible && policyEnabled;
         const goalPluginModel = shouldEnableCollab ? null : activePluginModel;
-        const goalModelGroup = shouldEnableCollab || goalPluginModel ? null : activeModelGroup;
+        const goalModelGroup = shouldEnableCollab || goalPluginModel ? null
+          : activeModelGroup ?? (sourceRoutesImplicit ? implicitSourceRouteSelection(modelGroupsConfig, goalBaseRoute) : null);
         // 同 handleSend:remoteDraftState 未就绪时不得放行,否则提交 capability 兜底值而非该设备的
         // 草稿值(缓存已热时另两个 loading 会立刻为 false,拦不住)。
         // 选了模型组时先选路，沿用原模型时才查草稿那台的目录(见选路之后)。

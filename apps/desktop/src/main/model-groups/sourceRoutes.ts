@@ -43,7 +43,7 @@ export function providerFamily(view: ProviderView): string | null {
 const usable = (view: ProviderView) => view.connected && !view.suspended && !view.removed;
 
 /** 同一家有两个以上已连接的供应商时自动合成一条。名字用这一家里排在最前的那个供应商的名字。 */
-export function buildAutoSourceRoutes(views: readonly ProviderView[], config: Pick<ModelGroupsConfig, 'hiddenAuto' | 'autoStrategy'>): ModelGroupSourceRoute[] {
+export function buildAutoSourceRoutes(views: readonly ProviderView[], config: Pick<ModelGroupsConfig, 'hiddenAuto' | 'autoStrategy' | 'autoSwitchOff'>): ModelGroupSourceRoute[] {
   // 同一个登录在列表里出现两次只算一个：与设置页、选择器用同一条合并规则。
   const folded = listedSourceFolds({ base: views }).hiddenBase;
   const families = new Map<string, ProviderView[]>();
@@ -52,6 +52,7 @@ export function buildAutoSourceRoutes(views: readonly ProviderView[], config: Pi
     if (family) families.set(family, [...(families.get(family) ?? []), view]);
   }
   const hidden = new Set(config.hiddenAuto ?? []);
+  const switchOff = new Set(config.autoSwitchOff ?? []);
   const routes: ModelGroupSourceRoute[] = [];
   for (const [family, members] of families) {
     if (members.length < 2) continue;
@@ -61,6 +62,7 @@ export function buildAutoSourceRoutes(views: readonly ProviderView[], config: Pi
       name: members[0].name.slice(0, MODEL_GROUP_LIMITS.name),
       strategy: config.autoStrategy?.[id] ?? 'expiring',
       sources: members.slice(0, MODEL_GROUP_LIMITS.candidates).map((view) => ({ providerId: view.id })),
+      ...(switchOff.has(id) ? { autoSwitch: false as const } : {}),
       auto: true,
       ...(hidden.has(id) ? { hidden: true as const } : {}),
     });
@@ -69,15 +71,15 @@ export function buildAutoSourceRoutes(views: readonly ProviderView[], config: Pi
 }
 
 /**
- * 模型的身份：认不出是同一个的不合并，不靠显示名猜。这几种写法算同一个模型：桥接前缀(chatgpt/ 等)；
- * 连接自己声明的发送前要去掉的前缀(routing.modelIdRewrite.stripPrefix)；组织下发的连接把模型写成
- * 「byok-连接名/模型」时斜杠前面那一段(2026-11-24 用户裁决按供应商聚合：这一段是连接的名字，不是模型的一部分)。
+ * 模型的身份：认不出是同一个的不合并，不靠显示名猜。这几种写法算同一个模型(model-groups.md §3.4：带不带厂商前缀
+ * 视为同一个)：桥接前缀(chatgpt/ 等)；连接自己声明的发送前要去掉的前缀(routing.modelIdRewrite.stripPrefix)；
+ * 转接入口与组织连接在模型前加的那一段「厂商/」「连接名/」(openai/gpt-x、byok-连接名/gpt-x)。只去掉恰好一段前缀：
+ * 多级路径(accounts/x/models/y)是那个入口自己的编号方式，原样保留。不分大小写。
  */
 export function sourceModelKey(view: ProviderView, agent: AgentKind, modelId: string): string {
   const declared = view.routing?.[agent]?.modelIdRewrite?.stripPrefix;
-  let id = declared && modelId.startsWith(declared) ? modelId.slice(declared.length) : modelId;
-  if (view.source === 'organization') id = id.replace(/^byok-[^/]+\//, '');
-  return unifiedModelKeyId(id);
+  const id = (declared && modelId.startsWith(declared) ? modelId.slice(declared.length) : modelId).toLowerCase();
+  return unifiedModelKeyId(id.replace(/^[a-z0-9][a-z0-9._-]*\/([^/]+)$/, '$1'));
 }
 
 const expandedId = (routeId: string, modelKey: string) =>
@@ -124,6 +126,7 @@ export function expandSourceRoute(
     strategy: route.strategy,
     candidates: entry.candidates,
     ...(route.effort ? { effort: route.effort } : {}),
+    ...(route.autoSwitch === false ? { autoSwitch: false as const } : {}),
     parent: { id: route.id, name: route.name },
     ...(route.hidden ? { hidden: true as const } : {}),
   }));

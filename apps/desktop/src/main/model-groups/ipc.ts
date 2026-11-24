@@ -69,6 +69,8 @@ const routeNotePorts: ModelGroupRouteNotePorts = {
 };
 
 export function registerModelGroupsIpc(): void {
+  // 启动后先读一次目录：重启前就在用供应商路由的任务，第一条消息之前就要认得它的路由。
+  void refreshAutoModelGroupRoutes();
   ipcMain.handle(MODEL_GROUPS_IPC.GET, async (event) => {
     assertModelGroupsCaller(event);
     await refreshAutoModelGroupRoutes();
@@ -78,7 +80,7 @@ export function registerModelGroupsIpc(): void {
     assertTrustedAppRendererEvent(event);
     if (!raw || typeof raw !== 'object') throwIpcError('INVALID_PARAMS', 'model groups config must be an object');
     // 这次写入没带的字段(只改路由的界面、旧界面)不动已存的。
-    const keep = (['sourceRoutes', 'hiddenAuto', 'autoStrategy'] as const).filter((key) => !Object.hasOwn(raw, key));
+    const keep = (['sourceRoutes', 'hiddenAuto', 'autoStrategy', 'autoSwitchOff'] as const).filter((key) => !Object.hasOwn(raw, key));
     return writeModelGroupsConfig(normalizeModelGroupsConfig(raw), keep);
   });
   ipcMain.handle(MODEL_GROUPS_IPC.RESOLVE, async (event, raw: unknown) => {

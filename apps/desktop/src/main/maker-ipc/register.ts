@@ -1472,7 +1472,7 @@ import {
 } from '../maker-host/session-effort-store.js';
 import { modelGroupAutoSwitchFor, modelGroupCandidateKey } from '../../shared/modelGroups.js';
 import { botModelGroupsSignature, expandBotModelGroups, modelGroupCandidateRoute } from '../model-groups/botRoutes.js';
-import { pickModelGroupRoute, readModelGroupRecoveryOffer } from '../model-groups/desktopResolver.js';
+import { pickModelGroupRoute, readModelGroupRecoveryOffer, refreshAutoModelGroupRoutes } from '../model-groups/desktopResolver.js';
 import { modelGroupSessionStart } from '../model-groups/sessionStart.desktop.js';
 import { isModelGroupRecoverySource } from '../model-groups/switchOffer.js';
 import { readModelGroupsConfig } from '../model-groups/store.js';
@@ -17608,6 +17608,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   async function activeModelGroupBinding(sessionId: string, row: {
     agentKind?: string | null; model?: string | null; providerId?: string | null;
   }) {
+    // 供应商路由按目录展开，不存盘：先让配置跟上此刻的目录，再判断任务记下的路由还在不在。
+    await refreshAutoModelGroupRoutes();
     const binding = await readModelGroupBindingForDispatch(sessionId);
     if (!binding || !row.providerId || !row.model ||
         (row.agentKind !== 'cc' && row.agentKind !== 'codex' && row.agentKind !== 'pi')) return null;
@@ -17631,12 +17633,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         recordUnavailable: (candidate) => recordFailedSessionRuntimeFallbackCandidate(sessionId, generation, {
           ...current, agentKind: dbToMakerAgentKind(candidate.agentKind), providerId: candidate.providerId, model: candidate.model,
         }),
-        current: { agentKind: makerToDbAgentKind(current.agentKind), providerId: current.providerId, model: current.model },
+        current: { agentKind: makerToDbAgentKind(current.agentKind), providerId: current.providerId, model: current.model,
+          effort: current.effort, fastMode: current.fastMode },
       });
       if (!offer || (dbToMakerAgentKind(offer.agentKind) === current.agentKind &&
         offer.providerId === current.providerId && offer.model === current.model)) return { candidate: null };
       return { candidate: { agentKind: dbToMakerAgentKind(offer.agentKind), model: offer.model,
-        providerId: offer.providerId, agentDeviceId: null, effort: (offer.effort as SessionRuntimeProfile['effort']) ?? null, fastMode: false },
+        providerId: offer.providerId, agentDeviceId: null, effort: (offer.effort as SessionRuntimeProfile['effort']) ?? null, fastMode: offer.fastMode ?? false },
         labels: { from: offer.fromLabel ?? current.model, to: `${offer.modelName} · ${offer.sourceName}` },
         bindCommittedRoute: profile => {
           if (profile.providerId) bindModelGroupSession(sessionId, binding.selection, modelGroupCandidateKey({

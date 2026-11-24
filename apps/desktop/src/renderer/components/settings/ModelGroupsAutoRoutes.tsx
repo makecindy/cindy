@@ -14,6 +14,7 @@ import { useTranslation } from 'react-i18next';
 import { ProviderMark } from '@/components/new-chat/ModelSelector';
 import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
+import { Switch } from '@/components/ui/switch';
 import { SettingsBlock, SettingsCard, SettingsRow, SettingsRowIcon, SettingsSection } from '@/components/ui/settings-rows';
 import { Tip } from '@/components/ui/tooltip';
 import { useLocalProviderGroups } from '@/features/provider-group/useLocalProviderGroups';
@@ -24,6 +25,7 @@ import { toast } from '@/lib/toast';
 import {
   MODEL_GROUP_LIMITS,
   MODEL_GROUP_STRATEGIES,
+  modelGroupAutoSwitchOn,
   type ModelGroupsConfig,
   type ModelGroupSourceRoute,
 } from '../../../shared/modelGroups';
@@ -161,6 +163,16 @@ export function ModelGroupsAutoRoutes({ config, save }: {
   const setStrategy = (route: ModelGroupSourceRoute, strategy: RouteStrategy) => (route.auto
     ? void save((latest) => ({ ...latest, autoStrategy: { ...(latest.autoStrategy ?? {}), [route.id]: strategy } }))
     : patchOwn(route.id, (current) => ({ ...current, strategy })));
+  const setAutoSwitch = (route: ModelGroupSourceRoute, on: boolean) => (route.auto
+    ? void save((latest) => {
+      const rest = (latest.autoSwitchOff ?? []).filter((id) => id !== route.id);
+      return { ...latest, autoSwitchOff: on ? rest : [...rest, route.id] };
+    })
+    : patchOwn(route.id, (current) => {
+      const { autoSwitch: _was, ...rest } = current;
+      void _was;
+      return on ? rest : { ...rest, autoSwitch: false as const };
+    }));
   const setHidden = (route: ModelGroupSourceRoute, hidden: boolean) => void save((latest) => {
     const rest = (latest.hiddenAuto ?? []).filter((id) => id !== route.id);
     return { ...latest, hiddenAuto: hidden ? [...rest, route.id] : rest };
@@ -233,6 +245,16 @@ export function ModelGroupsAutoRoutes({ config, save }: {
                 />
               </>
             )}
+            {/* 与普通路由同一个开关(model-groups.md §4.5)：正在用的成员出问题时自动换到下一个能用的成员。 */}
+            <SettingsRow
+              title={t('modelGroups.settings.autoSwitch.title')}
+              hint={t('modelGroups.settings.autoSwitch.hint')}
+              wrap
+              trailing={
+                <Switch checked={modelGroupAutoSwitchOn(route)} aria-label={t('modelGroups.settings.autoSwitch.title')}
+                  onCheckedChange={(on) => setAutoSwitch(route, on)} />
+              }
+            />
             {members.map(({ source, provider }) => {
               const plain = (
                 <SettingsRow
@@ -273,10 +295,12 @@ export function ModelGroupsAutoRoutes({ config, save }: {
           </SettingsCard>
         );
       })}
-      <SettingsBlock className="flex flex-col gap-1 px-0 text-12 leading-[1.5] text-[var(--text-tertiary)]">
-        {sourceRows.length > 0 && <span>{t('modelGroups.auto.quotaFirst')}</span>}
-        {sourceRoutes.some((route) => route.auto) && <span>{t('modelGroups.sources.note')}</span>}
-      </SettingsBlock>
+      {(sourceRows.length > 0 || sourceRoutes.some((route) => route.auto)) && (
+        <SettingsBlock className="flex flex-col gap-1 px-0 text-12 leading-[1.5] text-[var(--text-tertiary)]">
+          {sourceRows.length > 0 && <span>{t('modelGroups.auto.quotaFirst')}</span>}
+          {sourceRoutes.some((route) => route.auto) && <span>{t('modelGroups.sources.note')}</span>}
+        </SettingsBlock>
+      )}
     </SettingsSection>
   );
 }

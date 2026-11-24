@@ -339,8 +339,8 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
   }
 
   /** 一条路线每个候选此刻的事实(与新任务解析同一判断)；不推进「轮流」的位置与「按权重」的计数。 */
-  async function candidateFacts(route: ModelGroupRoute): Promise<ModelGroupCandidateFacts[]> {
-    return inspect(route, await deps.views());
+  async function candidateFacts(route: ModelGroupRoute, context?: ModelGroupResolveRequest['context']): Promise<ModelGroupCandidateFacts[]> {
+    return inspect(route, await deps.views(), context);
   }
 
   return { resolve, commit, candidateFacts };

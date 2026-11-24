@@ -7,8 +7,9 @@
  * 开任务时由路由按选法决定这次到底用哪个成员。面板外的代码看不到这个拼出来的条目。
  */
 import type { AgentKind, CatalogModel, ProviderView } from '@cindy/model-providers';
+import { resolveProviderLogoKind } from '@cindy/model-providers/branding';
 
-import type { ModelGroupCandidate, ModelGroupRoute, ModelGroupsConfig } from '../../../shared/modelGroups';
+import type { ModelGroupCandidate, ModelGroupRoute, ModelGroupsConfig, ModelGroupSelection } from '../../../shared/modelGroups';
 
 export const SOURCE_ROUTE_PROVIDER_PREFIX = 'sroute:';
 
@@ -64,6 +65,8 @@ export function withSourceRouteProviders(
     virtual.set(members[0].id, {
       ...members[0],
       id, name: route.name, agents,
+      // 合并后的条目自己的 id 认不出品牌：明确沿用第一个成员的品牌图标。
+      logoKind: members[0].logoKind ?? resolveProviderLogoKind(members[0].id, members[0].routing) ?? undefined,
       models: models as ProviderView['models'],
       routing: Object.assign({}, ...members.map((provider) => provider.routing)) as ProviderView['routing'],
       // 这些说的是某一个成员自己的账号、组与别名，不属于合并后的条目。
@@ -85,4 +88,19 @@ export function withSourceRouteProviders(
     hit: (providerId, modelId) => (providerId ? hits.get(`${providerId}\u0000${modelId}`) ?? null : null),
     shownAs: (providerId, activeRouteId) => (activeRouteId && byRoute.get(activeRouteId)) || (providerId ? memberOf.get(providerId) ?? null : null),
   };
+}
+
+/**
+ * 草稿里记的是某条供应商路由成员的模型、却没记路由(升级前留下的草稿、从「最近」或收藏里直接点到成员)：开任务时仍按
+ * 那条路由选成员。成员在面板里已经不单列，面板把这个模型显示在合并后的条目下，用户选的只能是合并后的条目——
+ * 不能出现「看着是合并的，实际固定用一个成员、出问题也不换」。隐藏了的供应商路由不算，那时成员照旧单列。
+ */
+export function implicitSourceRouteSelection(
+  config: ModelGroupsConfig,
+  current: { providerId?: string | null; model: string },
+): ModelGroupSelection | null {
+  if (!current.providerId) return null;
+  const route = config.routes.find((item) => item.parent && !item.hidden && item.candidates.some((candidate) =>
+    !candidate.agentDeviceId && candidate.providerId === current.providerId && candidate.model === current.model));
+  return route ? { type: 'route', id: route.id } : null;
 }

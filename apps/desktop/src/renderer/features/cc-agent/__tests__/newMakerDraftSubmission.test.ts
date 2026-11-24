@@ -31,7 +31,7 @@ import { recallAgentDeviceSelection } from '../agentDeviceDraftMemory';
 import { filterHealthyDraftProviders, resolveDraftProviderForModel } from '../../../../shared/draftModelCalibration';
 import type { GhostStartTaskRouteResult } from '../../../../shared/ghost';
 import { sshModel, sshNativeCodexProvider } from './sshModelFixtures';
-import type { ModelGroupResolveResult } from '../../../../shared/modelGroups';
+import type { ModelGroupResolveResult, ModelGroupsConfig } from '../../../../shared/modelGroups';
 import { createRemoteSessionForPreview, previewRemoteCreation } from '../remoteSessionHandoff';
 import {
   pluginEnginePermissionMode,
@@ -41,6 +41,7 @@ import {
 } from '@/lib/pluginEngineSelection';
 import { checkDraftBranchBeforeStart } from '../newMakerDraftBranchCheck';
 import { modelGroupOwnerDevice } from '../../model-groups/draftModelGroupRouting';
+import { implicitSourceRouteSelection } from '../../model-groups/sourceRouteProviders';
 
 vi.mock('@/lib/makerTransport', () => ({ makerApiFor: vi.fn() }));
 const remoteProjectsStore = vi.hoisted(() => ({
@@ -161,6 +162,8 @@ async function submit(options: {
   pluginRoute?: () => Promise<GhostStartTaskRouteResult>;
   /** 选了模型组：发送时解析出的结果。 */
   modelGroupRoute?: ModelGroupResolveResult;
+  /** 这台电脑的路由配置里有供应商路由展开出来的路由；草稿没有记着任何路由。 */
+  sourceRoutes?: ModelGroupsConfig;
   /** 草稿那台电脑的模型目录读到哪一步；默认 ready。 */
   remoteModelListStatus?: 'ready' | 'loading' | 'error';
   rememberedPluginEngineDeviceId?: string;
@@ -343,7 +346,11 @@ async function submit(options: {
     deviceDisplayName, dbToMakerAgentKind, chatEligibleSourcesForModel, askPluginModelRoute, writePluginModelRouteNote, modelCatalogKey,
     controlledModelRoute: { catalogHostDeviceId: options.catalogHostDeviceId },
     // 没选模型组的用例：发送路径不解析、不写说明、不记绑定。
-    activeModelGroup: options.modelGroupRoute ? { type: 'route', id: 'r1' } : null,
+    activeModelGroup: options.modelGroupRoute && !options.sourceRoutes ? { type: 'route', id: 'r1' } : null,
+    // 草稿直接选着供应商路由成员的模型、没记路由：发送时仍按那条路由选成员。
+    sourceRoutesImplicit: !!options.sourceRoutes && !options.deviceId,
+    modelGroupsConfig: options.sourceRoutes ?? { routes: [] },
+    implicitSourceRouteSelection,
     // 远程控制草稿由被控那台选；这里直接给出那台(或本机)的选路结果。
     modelGroupOwnerDevice, resolveDraftModelGroup: vi.fn(async () => options.modelGroupRoute ?? null), writeModelGroupRouteNote: noop,
     bindModelGroupSession: vi.fn(), commitModelGroupDecision: vi.fn(), modelGroupLocationName: () => '', keptModelNameForGroupNote: () => '', i18n: { language: 'en' },
@@ -1026,6 +1033,25 @@ describe('homepage submission to Main admission and first-message handoff', () =
     expect(result.checkAndConfirm).toHaveBeenCalledWith('pi', { deviceId: 'dev-2' });
     expect(result.ipcCreate.mock.calls[0][0]).toMatchObject({ agentDeviceId: 'dev-2', providerId, model: modelId });
     expect(result.environment.bindModelGroupSession).toHaveBeenCalledWith(expect.any(String), { type: 'route', id: 'r1' }, modelGroupRoute);
+  });
+  // 2026-11-24 用户裁决(供应商路由在面板里是一个普通供应商，成员不单列) / unit：草稿直接选着某个成员的模型、没记路由
+  // (升级前的草稿、最近、收藏)时，发送仍按那条路由选成员并记下来。失效后果：面板显示在合并条目下，任务却固定用
+  // 那一个成员，出问题也不会换。
+  it.each(['send', 'goal'] as const)('routes a %s whose draft points straight at a provider-route member', async (entry) => {
+    const modelGroupRoute: ModelGroupResolveResult = {
+      outcome: 'routed', groupName: 'Merged', modelName: modelId, sourceName: 'Other member',
+      route: { agentKind: 'pi', model: modelId, providerId }, why: 'expiring', quota: null, trace: [], decisionId: 'implicit',
+    };
+    const sourceRoutes: ModelGroupsConfig = { routes: [{
+      id: 'src:1', name: modelId, strategy: 'expiring', parent: { id: 'merged', name: 'Merged' },
+      candidates: [{ agentKind: 'pi', providerId, model: modelId }],
+    }] };
+    const result = await submit({ entry, modelGroupRoute, sourceRoutes });
+    expect(result.errors).toEqual([]);
+    expect(result.environment.resolveDraftModelGroup).toHaveBeenCalledWith({ type: 'route', id: 'src:1' }, expect.anything());
+    // 本机发送在派发前就记下选中的来源(派发可能先失败)；目标在建好任务后记下整份选路结果。
+    expect(result.environment.bindModelGroupSession).toHaveBeenCalledWith(expect.any(String), { type: 'route', id: 'src:1' },
+      entry === 'send' ? modelGroupRoute.route : modelGroupRoute);
   });
   // model-groups.md §6.3 / unit：远程控制另一台电脑时由那台的模式选路；那台建成任务后，记录与说明都请那台写，
   // 不写进本机的撞配额记录。失效后果：本机记下一个不存在的任务，或那台的任务没有说明、撞配额不提议。

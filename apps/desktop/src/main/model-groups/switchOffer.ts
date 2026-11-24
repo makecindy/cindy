@@ -5,6 +5,7 @@
  */
 import {
   modelGroupAutoSwitchFor,
+  type ModelGroupResolveRequest,
   modelGroupCandidateKey,
   type ModelGroupAgentKind,
   type ModelGroupRoute,
@@ -34,7 +35,7 @@ export interface ModelGroupSwitchOfferDeps {
   /** 这个任务有目标(目标模式自己管撞限额后的续跑)。 */
   hasGoal(sessionId: string): Promise<boolean>;
   config(): ModelGroupsConfig;
-  candidateFacts(route: ModelGroupRoute): Promise<ModelGroupCandidateFacts[]>;
+  candidateFacts(route: ModelGroupRoute, context?: ModelGroupResolveRequest['context']): Promise<ModelGroupCandidateFacts[]>;
   now(): number;
 }
 
@@ -62,8 +63,8 @@ function isPlainLocalTask(row: ModelGroupSwitchOfferSessionRow): boolean {
 export async function computeModelGroupSwitchOffer(
   deps: ModelGroupSwitchOfferDeps,
   sessionId: string,
-  recovery?: { visited: ReadonlySet<string>; accountUnavailable: boolean; hasImages?: boolean; recordUnavailable(candidate: ModelGroupRoute['candidates'][number]): void; current: { agentKind: ModelGroupAgentKind; providerId: string; model: string } },
-): Promise<(ModelGroupSwitchOffer & { effort?: string; fromLabel?: string }) | null> {
+  recovery?: { visited: ReadonlySet<string>; accountUnavailable: boolean; hasImages?: boolean; recordUnavailable(candidate: ModelGroupRoute['candidates'][number]): void; current: { agentKind: ModelGroupAgentKind; providerId: string; model: string; effort?: string | null; fastMode?: boolean | 'ultrafast' | null } },
+): Promise<(ModelGroupSwitchOffer & { effort?: string; fastMode?: true | 'ultrafast'; fromLabel?: string }) | null> {
   const binding = deps.readBinding(sessionId);
   if (!binding) return null;
   const row = await deps.readSession(sessionId);
@@ -100,7 +101,12 @@ export async function computeModelGroupSwitchOffer(
   };
   if (!eligible.candidates.some((candidate) => !candidate.off)) return null;
   // 跳过的来源(含别的位置上的)已标成停用，不为它们去读别处的目录。
-  const facts = await deps.candidateFacts(eligible);
+  // 供应商路由下的任务：接替到另一个成员时沿用任务此刻的思考深度与 Fast(那个成员支持时)，不退回模型默认档。
+  const wanted = recovery?.current;
+  const facts = await deps.candidateFacts(eligible, wanted ? {
+    ...(wanted.effort ? { effort: wanted.effort } : {}),
+    ...(wanted.fastMode ? { fastMode: wanted.fastMode } : {}),
+  } : undefined);
   // 「轮流」从正在用的这个往后数；不读也不改新任务用的轮流位置。
   const picked = pickModelGroupCandidate(eligible, facts, { now, lastPickedKey: binding.pickedKey,
     needsImage: recovery?.hasImages === true && route.exceptions?.some(item => item.when.type === 'image'),
@@ -123,6 +129,7 @@ export async function computeModelGroupSwitchOffer(
     modelName: entry.modelName,
     sourceName: entry.sourceName,
     ...(recovery && facts[picked.index].effort ? { effort: facts[picked.index].effort } : {}),
+    ...(recovery && facts[picked.index].fastMode ? { fastMode: facts[picked.index].fastMode } : {}),
     crossEngine: candidate.agentKind !== current.agentKind,
   };
 }
