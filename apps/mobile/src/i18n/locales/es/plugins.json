@@ -406,7 +406,9 @@
     "scope": {
       "public": "Público",
       "organization": "Organización",
-      "personal": "Personal"
+      "personal": "Personal",
+      "custom": "Personalizado",
+      "local": "Local"
     },
     "publisherDescription": {
       "official": "Publicado y mantenido por Cindy",
@@ -432,7 +434,8 @@
       "namespaceClientRequired": "Esta versión no puede mostrar los complementos de la organización. Actualiza Cindy para continuar. Los complementos de la organización instalados siguen disponibles.",
       "organizationContextUnavailable": "La identidad de la organización no está disponible temporalmente. Inténtalo más tarde. Los complementos de la organización instalados siguen disponibles.",
       "namespaceConfigRequired": "Los complementos de la organización no están disponibles temporalmente. Los complementos de la organización instalados siguen disponibles.",
-      "organizationUnavailable": "Los complementos de la organización no están disponibles temporalmente. Los complementos de la organización instalados siguen disponibles."
+      "organizationUnavailable": "Los complementos de la organización no están disponibles temporalmente. Los complementos de la organización instalados siguen disponibles.",
+      "idReserved": "El identificador de este complemento usa un prefijo reservado para complementos oficiales, así que no se puede instalar desde un mercado de complementos personalizado. Instala el complemento oficial correspondiente desde el mercado de complementos de Cindy."
     },
     "segmentsLabel": "Mostrar complementos",
     "installTo": "Instalar en {{device}}",
@@ -442,6 +445,8 @@
     "outdatedShort": "Cindy en este ordenador aún no permite instalar desde el teléfono. Actualízala primero.",
     "readFailed": "No se pudo cargar el mercado de complementos. Inténtalo de nuevo.",
     "securityBody": "Al tocar Instalar, el ordenador descarga y comprueba el paquete y luego te muestra los permisos que necesita para que los confirmes. No se instala nada antes de tu confirmación. Una vez instalado, se activa automáticamente y puedes desactivarlo o desinstalarlo cuando quieras.",
-    "resultUnknownDetail": "Aún no se ha confirmado si esta instalación terminó."
+    "resultUnknownDetail": "Aún no se ha confirmado si esta instalación terminó.",
+    "unconfirmedNotInstalled": "No se pudo confirmar el resultado de esta instalación. El complemento no está en este ordenador ahora mismo.",
+    "alreadyInstalled": "Este complemento ya está instalado en este ordenador."
   }
 }

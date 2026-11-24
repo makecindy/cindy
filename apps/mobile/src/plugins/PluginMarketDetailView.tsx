@@ -62,10 +62,10 @@ export function PluginMarketDetailView({ detail, market }: PluginMarketDetailVie
           <ActivityIndicator color={colors.textSecondary} />
           <Text style={styles.buttonText}>{t(state.kind === "waiting" ? "plugins.market.waiting" : "plugins.market.installing")}</Text>
         </View>
-      ) : state.kind !== "conflict" ? (
+      ) : state.kind !== "conflict" && state.kind !== "installed" ? (
         <Pressable testID="plugins.market.detailInstall" accessibilityRole="button" disabled={disabled}
           accessibilityState={{ disabled }}
-          onPress={() => state.kind === "unknown" ? market.checkResult() : market.install(item, detail.detail)}
+          onPress={() => { if (state.kind === "unknown") void market.checkResult(); else market.install(item, detail.detail); }}
           style={[styles.button, styles.primary, disabled && styles.unavailable]}>
           <Text style={[styles.buttonText, styles.primaryText]}>{primary}</Text>
         </Pressable>
@@ -73,6 +73,7 @@ export function PluginMarketDetailView({ detail, market }: PluginMarketDetailVie
       <Text style={[styles.note, styles.center]}>{t("plugins.market.installDestination", { device })}</Text>
       {state.kind === "failed" ? <Text style={styles.note}>{t(state.messageKey)}</Text> : null}
       {state.kind === "conflict" ? <Text style={styles.note}>{t("plugins.market.conflict")}</Text> : null}
+      {state.kind === "installed" ? <Text style={styles.note}>{t("plugins.market.alreadyInstalled")}</Text> : null}
       {publisher ? <Text style={styles.body}>{t(publisher)}</Text> : null}
       {item.description ? <Text style={styles.body}>{item.description}</Text> : null}
       {detail.loading ? <ActivityIndicator testID="plugins.market.detailLoading" color={colors.textSecondary} /> : null}

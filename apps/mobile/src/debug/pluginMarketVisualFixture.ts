@@ -61,7 +61,8 @@ const OFFLINE_MARKET = "Demo Offline Market";
 const installed = new Map<string, { demo: DemoPlugin; enabled: boolean }>();
 const operations = new Map<string, { kind: "install" | "uninstall"; ghostId: string; answered: boolean; polls: number; done?: "succeeded" | "failed" | "cancelled" }>();
 const instanceKey = (ghostId: string) => `_root__${ghostId}`;
-const failure = (code: string) => Object.assign(new Error(code), { code });
+// Same form the phone receives from a real Host: dispatch's IPC_ERROR unwraps to Error("[CODE] message").
+const failure = (code: string) => new Error(`[${code}] Demo plugin management request`);
 
 function marketItem(demo: DemoPlugin): ManagedMarketItem {
   const server = demo.publisher !== "custom";

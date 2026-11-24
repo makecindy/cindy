@@ -406,7 +406,9 @@
     "scope": {
       "public": "Public",
       "organization": "Organisation",
-      "personal": "Personnel"
+      "personal": "Personnel",
+      "custom": "Personnalisé",
+      "local": "Local"
     },
     "publisherDescription": {
       "official": "Publié et maintenu par Cindy",
@@ -432,7 +434,8 @@
       "namespaceClientRequired": "Cette version ne peut pas afficher les plugins de l'organisation. Mettez à jour Cindy pour continuer. Les plugins d'organisation installés restent disponibles.",
       "organizationContextUnavailable": "L'identité de l'organisation est temporairement indisponible. Réessayez plus tard. Les plugins d'organisation installés restent disponibles.",
       "namespaceConfigRequired": "Les plugins d'organisation sont temporairement indisponibles. Les plugins d'organisation installés restent disponibles.",
-      "organizationUnavailable": "Les plugins d'organisation sont temporairement indisponibles. Les plugins d'organisation installés restent disponibles."
+      "organizationUnavailable": "Les plugins d'organisation sont temporairement indisponibles. Les plugins d'organisation installés restent disponibles.",
+      "idReserved": "L’identifiant de ce plugin utilise un préfixe réservé aux plugins officiels : il ne peut pas être installé depuis un marketplace de plugins personnalisé. Installez le plugin officiel correspondant depuis le marketplace de plugins Cindy."
     },
     "segmentsLabel": "Afficher les plugins",
     "installTo": "Installer sur {{device}}",
@@ -442,6 +445,8 @@
     "outdatedShort": "Cindy sur cet ordinateur ne permet pas encore l’installation depuis le téléphone. Mettez-la d’abord à jour.",
     "readFailed": "Impossible de charger le marketplace de plugins. Réessayez.",
     "securityBody": "Après avoir touché Installer, l’ordinateur télécharge et vérifie le paquet, puis vous présente les autorisations nécessaires à confirmer. Rien n’est installé avant votre confirmation. Une fois installé, le plugin est activé automatiquement et peut être désactivé ou désinstallé à tout moment.",
-    "resultUnknownDetail": "Il n’est pas encore confirmé que cette installation est terminée."
+    "resultUnknownDetail": "Il n’est pas encore confirmé que cette installation est terminée.",
+    "unconfirmedNotInstalled": "Impossible de confirmer le résultat de cette installation. Le plugin n’est pas présent sur cet ordinateur pour le moment.",
+    "alreadyInstalled": "Ce plugin est déjà installé sur cet ordinateur."
   }
 }

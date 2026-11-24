@@ -42,14 +42,21 @@
 - 读取只用目标 Host 的 `management:snapshot {read:'capabilities'}` 与 `{read:'catalog',query}`：
   列表页 `excludeInstalled:true, counts:false`，计数另读一次 `scope:'all', limit:1, counts:true`；
   同一电脑、查询、来源 30 秒内复用（最多 6 份），下拉刷新强制重读。旧 Host 回 `INVALID_PARAMS`
-  或没有管理能力时显示「先更新那台电脑」，不回退一次读全量；普通读取失败只给重试。
+  或没有管理能力时显示「先更新那台电脑」，不回退一次读全量；普通读取失败只给重试。Host 抛出的错误经
+  dispatch 到手机是不带 code 的 `Error("[CODE] …")`，管理 client 按 `deviceProvidersCache` 的做法解出 `CODE`。
   页面按白名单字段做有界解析，`publisherKind`、`organizationAccessError`、`counts`、`nextCursor`
   缺失即降级；图标只接受未过期的 HTTPS 链接，自定义市场项不显示图标。
 - 详情读 `management:market-detail`（列表项 + manifest，无 README），工具名来自 manifest；
   权限只在电脑下载并检查真实安装包后的确认回执中出现。安装沿用现有管理 controller 与确认面板：
   点「安装」→ 等待确认 → 允许并继续 → 正在安装 → 成功后打开该插件的已装详情。每次安装单独
-  挂一个 controller，同一时间只允许一个安装，安装中不能切换市场电脑。失败在行内说明原因并可再点；
-  断线结果不确定沿用「结果待确认 / 核实结果」，只查原操作，不重发。同标识冲突（`conflict`）只提示到电脑上处理。
+  挂一个 controller；这条路径的 controller 读 `{read:'installed'}`（安装前已确认 Host 支持分页），
+  一次安装 4 次轻量读，不读全量；装好后打开的已装详情仍沿用原 controller 的全量管理快照（既有行为）。
+  同一时间只允许一个安装，安装中不能切换市场电脑，也不能同时从已装详情发起升级或卸载。
+  controller 没真正开始（连接代次变化或只发布了错误）时立即放开这一行并说明原因。失败在行内说明原因并可再点；
+  断线结果不确定沿用「结果待确认 / 核实结果」，只查原操作，从不重发。原操作已查不到（Host 重启、回执超过
+  15 分钟或 begin 未送达）时，以这次核实读回的电脑事实收口：已装上按成功处理；没有则放开这一行并说明
+  「没能确认结果、目前这台电脑上没有这个插件」，只陈述当前事实、不推断回滚，是否再装由用户决定。
+  同标识冲突（`conflict`）只提示到电脑上处理。
 - 第一版不做：README、安装前权限预览、下载进度、自定义市场图标、替换同标识插件、今日推荐、
   手机添加自定义市场、兼容 0.1.112–0.1.129 的全量读取回退。组织插件首装遇到电脑上残留的同名作品库时，
   电脑会弹只能在电脑上点的原生对话框，手机会等到超时（Host 行为未改）。
@@ -133,9 +140,10 @@ iOS 原生构建、Metro 与真实 PocketMind 数据，以及 Android Debug 包�
 最新 iOS 原生包重复目检为 Light；Dark 证据来自主干同步前。Android 真实账号联动、
 iPad、旧 iOS、VoiceOver，以及真实启停期间的断线恢复尚未实测。
 启停与回读竞态另有定向回归，不能替代运行验收；完整单测门禁由 PR CI 执行。
-插件市场（提案实现）的单测覆盖分页解析与越界拒绝、旧 Host 的更新提示（不回退全量）、
-切换电脑或账号后迟到的分页不落地，以及从全新安装到确认、成功并打开已装详情
-（`pluginManagement.test.ts`、`pluginsScreen.test.tsx`）。iOS/Android 模拟器 Light/Dark 目检、
+插件市场（提案实现）的单测覆盖分页解析与越界拒绝、真实错误形态下旧 Host 的更新提示（不回退全量）、
+切换电脑或账号后迟到的分页不落地、下拉刷新保留同一页、空发布者页最多续读 3 页，以及从全新安装到确认、
+成功并打开已装详情、安装未开始与结果待确认的收口（`pluginManagement.test.ts`、`pluginsScreen.test.tsx`、
+`pluginNativeViews.test.tsx`）。iOS/Android 模拟器 Light/Dark 目检、
 与真实电脑的安装联调以对应 PR 的记录为准，未记录前不宣称已验证。
 
 ## 兼容、冷更与回退

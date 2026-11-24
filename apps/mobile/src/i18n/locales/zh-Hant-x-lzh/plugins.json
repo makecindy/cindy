@@ -402,7 +402,9 @@
     "scope": {
       "public": "公",
       "organization": "組織",
-      "personal": "私"
+      "personal": "私",
+      "custom": "自訂",
+      "local": "此機"
     },
     "publisherDescription": {
       "official": "Cindy 官方所製，發布維護",
@@ -428,7 +430,8 @@
       "namespaceClientRequired": "此版不能觀企業法器，請更新 Cindy。已納之企業法器仍可用。",
       "organizationContextUnavailable": "暫不能確認企業身分，請稍後再試。已納之企業法器仍可用。",
       "namespaceConfigRequired": "企業法器之服務暫不可用。已納之企業法器仍可用。",
-      "organizationUnavailable": "企業法器暫不可用。已納之企業法器仍可用。"
+      "organizationUnavailable": "企業法器暫不可用。已納之企業法器仍可用。",
+      "idReserved": "此法器之標識用官方法器保留字首，不可自自訂法器坊納之；請自 Cindy 法器坊納相應之官方法器。"
     },
     "segmentsLabel": "觀法器",
     "installTo": "納於 {{device}}",
@@ -438,6 +441,8 @@
     "outdatedShort": "此機之 Cindy 尚不能自手機納法器，請先更新。",
     "readFailed": "未能讀法器市集，請復試。",
     "securityBody": "點「納」後，電腦先下載、檢視其包，再列所需權柄請君確認。未確認則不納；納畢自啟，可隨時停之、去之。",
-    "resultUnknownDetail": "此番納器成否，尚未確認。"
+    "resultUnknownDetail": "此番納器成否，尚未確認。",
+    "unconfirmedNotInstalled": "此番納器之果未能確認；今此機未有此法器。",
+    "alreadyInstalled": "此機已納此法器。"
   }
 }

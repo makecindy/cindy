@@ -404,7 +404,9 @@
     "scope": {
       "public": "Public",
       "organization": "Organization",
-      "personal": "Personal"
+      "personal": "Personal",
+      "custom": "Custom",
+      "local": "Local"
     },
     "publisherDescription": {
       "official": "Published and maintained by Cindy",
@@ -430,7 +432,8 @@
       "namespaceClientRequired": "This version cannot show organization plugins. Update Cindy to continue. Installed organization plugins remain available.",
       "organizationContextUnavailable": "Organization identity is temporarily unavailable. Try again later. Installed organization plugins remain available.",
       "namespaceConfigRequired": "Organization plugins are temporarily unavailable. Installed organization plugins remain available.",
-      "organizationUnavailable": "Organization plugins are temporarily unavailable. Installed organization plugins remain available."
+      "organizationUnavailable": "Organization plugins are temporarily unavailable. Installed organization plugins remain available.",
+      "idReserved": "This plugin’s ID uses a prefix reserved for official plugins, so it can’t be installed from a custom plugin marketplace. Install the corresponding official plugin from the Cindy plugin market."
     },
     "segmentsLabel": "Show plugins",
     "installTo": "Install to {{device}}",
@@ -440,6 +443,8 @@
     "outdatedShort": "Cindy on this computer can’t install plugins from your phone yet. Update it first.",
     "readFailed": "Couldn’t load the plugin marketplace. Try again.",
     "securityBody": "After you tap Install, the computer downloads and checks the package, then lists the permissions it needs for you to confirm. Nothing is installed before you confirm. Once installed, it’s enabled automatically, and you can disable or uninstall it anytime.",
-    "resultUnknownDetail": "It’s not confirmed yet whether this installation finished."
+    "resultUnknownDetail": "It’s not confirmed yet whether this installation finished.",
+    "unconfirmedNotInstalled": "Couldn’t confirm the result of this installation. The plugin isn’t on this computer right now.",
+    "alreadyInstalled": "This computer already has this plugin installed."
   }
 }

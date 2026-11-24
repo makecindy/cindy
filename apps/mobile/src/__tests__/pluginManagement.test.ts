@@ -366,6 +366,9 @@ describe('mobile plugin market', () => {
     await expect(client.catalogPaging()).resolves.toBe(true);
     capabilities = () => { throw Object.assign(new Error('old'), { code: 'INVALID_PARAMS' }); };
     await expect(client.catalogPaging()).resolves.toBe(false);
+    // The real wire form: dispatch IPC_ERROR → Error("[INVALID_PARAMS] …") with no code.
+    capabilities = () => { throw new Error('[INVALID_PARAMS] Invalid plugin management request'); };
+    await expect(client.catalogPaging()).resolves.toBe(false);
     capabilities = () => { throw Object.assign(new Error('offline'), { code: 'TIMEOUT' }); };
     await expect(client.catalogPaging()).rejects.toThrow('TIMEOUT');
   });

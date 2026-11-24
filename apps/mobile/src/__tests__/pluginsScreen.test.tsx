@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, createElement, useEffect } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PluginUiEnablePrompt } from "@/plugins/PluginUiEnablePrompt";
 import { sharedTaskHostPeer, providerShareHostPeer } from "@cindy/device-link";
 import PluginsScreen from "@/plugins/PluginsScreen";
@@ -1687,7 +1687,8 @@ async function openMarket() {
 const shownMarket = () => fixture.props.get("directory").market;
 it("asks to update an older computer instead of reading its whole market", async () => {
   const requests = marketWire((request) => {
-    if (request.input?.read === "capabilities") throw Object.assign(new Error("old"), { code: "INVALID_PARAMS" });
+    // Real wire shape: dispatch sends IPC_ERROR and unwrapInvoke throws the bare "[CODE] message".
+    if (request.input?.read === "capabilities") throw new Error("[INVALID_PARAMS] Invalid plugin management request");
     throw new Error("unexpected market read");
   });
   await openMarket();
@@ -1730,7 +1731,8 @@ it("installs from the market through the existing consent sheet and opens the ne
     }
   });
   await openMarket();
-  await act(async () => shownMarket().install(shownMarket().items[0]));
+  // A double tap in the same frame starts one attempt only (the guard is a synchronous ref).
+  await act(async () => { const market = shownMarket(); market.install(market.items[0]); market.install(market.items[0]); });
   await settle(14);
   const sheet = fixture.props.get("confirmation");
   expect(sheet.state.outcome).toBe("confirmation");
@@ -1740,7 +1742,100 @@ it("installs from the market through the existing consent sheet and opens the ne
   expect(requests.find((request) => request.actionId === "management:begin")).toMatchObject({ resourceRef: undefined,
     input: { kind: "install", pluginId: "market/demo", expectedReleaseId: "demo@1" } });
   expect(requests.find((request) => request.actionId === "management:begin")!.input).not.toHaveProperty("expectedInstalledApproval");
+  expect(requests.filter((request) => request.actionId === "management:begin")).toHaveLength(1);
   expect(fixture.read).toHaveBeenLastCalledWith(fixture.wire, expect.objectContaining({ deviceId: "mac" }),
     expect.objectContaining({ id: "_root__demo" }), "en", ["plugin-capabilities"]);
   expect(fixture.props.get("header").title).toBe("Demo");
+  // Browsing and installing never fall back to the full v1 snapshot on a paging Host (up to the post-commit
+  // readback; the installed detail opened afterwards keeps its existing controller and reads).
+  const answeredAt = requests.findIndex((request) => request.actionId === "management:answer");
+  expect(requests.slice(0, answeredAt + 2).filter((request) => request.actionId === "management:snapshot")
+    .map((request) => request.input?.read)).toEqual(["capabilities", "catalog", "catalog", "installed", "installed", "installed", "installed"]);
+});
+
+const hostError = (code: string) => new Error(`[${code}] Plugin management request is no longer available`);
+const demoGhost = { instanceKey: "_root__demo", namespace: null, manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" },
+  enabled: true, approval: { state: "approved", revision: "12345678-1234-4123-8123-123456789abc" } };
+const managementSnapshot = (installed: boolean) => ({ version: 1, ghosts: installed ? [demoGhost] : [],
+  market: { items: [], unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] } });
+it("keeps the shown market rows when the same page is pulled to refresh", async () => {
+  const item = marketItem("demo", "Demo");
+  marketWire((request) => request.input?.read === "capabilities" ? { catalogPaging: true } : marketPage([item]));
+  await openMarket();
+  expect(shownMarket().items.map((row: any) => row.name)).toEqual(["Demo"]);
+  await act(async () => { await shownMarket().refresh(); });
+  await settle();
+  expect(shownMarket().items.map((row: any) => row.name)).toEqual(["Demo"]);
+});
+it("stops chaining empty publisher pages after three extra reads", async () => {
+  const community = { ...marketItem("community", "Community"), publisherKind: "personal" };
+  let page = 0;
+  const requests = marketWire((request) => request.input?.read === "capabilities" ? { catalogPaging: true }
+    : request.input?.query?.counts ? { ...marketPage([]), counts: null }
+      : { ...marketPage([{ ...community, pluginId: `market/c${page}`, ghostId: `c${page}` }]), nextCursor: `cursor-${++page}` });
+  await openMarket();
+  await settle(20);
+  const pages = requests.filter((request) => request.input?.read === "catalog" && !request.input.query.counts);
+  expect(pages).toHaveLength(4);
+  expect(shownMarket()).toMatchObject({ status: "ready", hasMore: true, items: [] });
+});
+describe("market install recovery", () => {
+  const item = marketItem("demo", "Demo");
+  function installWire(options: { begin?: () => unknown; operation?: () => unknown; detail?: () => unknown; installed?: () => boolean }) {
+    return marketWire((request) => {
+      switch (request.actionId) {
+        case "management:snapshot":
+          if (request.input?.read === "capabilities") return { catalogPaging: true };
+          if (request.input?.read === "catalog") return marketPage([item]);
+          return managementSnapshot(options.installed?.() ?? false);
+        case "management:market-detail":
+          return options.detail ? options.detail() : { ...item, manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } };
+        case "management:begin": return options.begin!();
+        case "management:operation": return options.operation!();
+        default: throw new Error("unexpected " + request.actionId);
+      }
+    });
+  }
+  it("releases the row when the install never started because the computer went away mid-preparation", async () => {
+    let releaseDetail!: () => void;
+    const pending = new Promise<void>((resolve) => { releaseDetail = resolve; });
+    let detailReads = 0;
+    installWire({ detail: async () => {
+      // The hook's own detail read passes; the controller's re-read is held while the computer drops.
+      if (++detailReads === 2) await pending;
+      return { ...item, manifest: { schemaVersion: 3, id: "demo", name: "Demo", version: "1" } };
+    }, begin: () => { throw new Error("begin must not be sent"); } });
+    await openMarket();
+    await act(async () => shownMarket().install(shownMarket().items[0]));
+    await settle(14);
+    expect(shownMarket().rowState(item)).toEqual({ kind: "waiting" });
+    fixture.online = false;
+    await act(async () => root.render(createElement(PluginsScreen)));
+    await act(async () => { releaseDetail(); });
+    await settle(14);
+    expect(shownMarket().installBusy).toBe(false);
+    expect(shownMarket().rowState(item)).toEqual({ kind: "failed", messageKey: "plugins.actionFailed" });
+  });
+  it.each([
+    ["installed on the computer", true, null],
+    ["not on the computer", false, "plugins.market.unconfirmedNotInstalled"],
+  ])("settles an unconfirmed install whose operation is gone when the plugin is %s", async (_name, installedAfter, messageKey) => {
+    let installed = false;
+    const requests = installWire({
+      begin: () => { installed = installedAfter; throw new Error("[TIMEOUT] remote invoke timed out"); },
+      operation: () => { throw hostError("NOT_FOUND"); },
+      installed: () => installed,
+    });
+    await openMarket();
+    await act(async () => shownMarket().install(shownMarket().items[0]));
+    await settle(14);
+    expect(shownMarket().rowState(item)).toEqual({ kind: "unknown" });
+    await act(async () => { await shownMarket().checkResult(); });
+    await settle(14);
+    if (messageKey) expect(shownMarket()).toMatchObject({ installBusy: false, canInstall: true });
+    if (messageKey) expect(shownMarket().rowState(item)).toEqual({ kind: "failed", messageKey });
+    else expect(fixture.read).toHaveBeenLastCalledWith(fixture.wire, expect.anything(), expect.objectContaining({ id: "_root__demo" }), "en", ["plugin-capabilities"]);
+    // Never a second begin: the unknown result is only looked up, never replayed.
+    expect(requests.filter((request) => request.actionId === "management:begin")).toHaveLength(1);
+  });
 });

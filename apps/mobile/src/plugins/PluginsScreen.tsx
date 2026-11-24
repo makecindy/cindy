@@ -224,6 +224,7 @@ function PluginDirectory() {
     isOnline: list.isOnline,
     installedDeviceId: deviceId,
     query,
+    blocked: managementPending,
     onInstalled: (host, instanceKey, item) => {
       void list.refresh();
       // Same as the computer: a fresh install opens its installed detail.
@@ -859,6 +860,7 @@ function PluginDirectory() {
   const manageAction = async (action: string) => {
     if (
       !managementAvailable ||
+      market.installBusy ||
       !selected ||
       !management.controller ||
       liveManagement.current !== management.controller ||
@@ -930,7 +932,7 @@ function PluginDirectory() {
           {
             id: "update",
             title: t("plugins.management.update") + " · " + marketItem.version,
-            disabled: !managementAvailable,
+            disabled: !managementAvailable || market.installBusy,
           },
         ]
       : []),
@@ -940,7 +942,7 @@ function PluginDirectory() {
             id: "uninstall",
             title: t("plugins.management.uninstall"),
             destructive: true,
-            disabled: !managementAvailable,
+            disabled: !managementAvailable || market.installBusy,
           },
         ]
       : []),

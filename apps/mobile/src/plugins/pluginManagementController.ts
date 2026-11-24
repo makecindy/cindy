@@ -25,6 +25,8 @@ export interface PluginManagementControllerOptions {
   /** Testable identity source; production uses the existing Expo UUID implementation. */
   createOperationId?: () => string;
   pollIntervalMs?: number;
+  /** Only for callers that already confirmed paged-catalog support; default stays the v1 full snapshot. */
+  snapshotRead?: 'installed';
 }
 type BeginIntent = PluginManagementBegin extends infer T ? T extends PluginManagementBegin ? Omit<T, 'operationId'> : never : never;
 type ConsentIntent = { kind: 'approve-ui' | 'defer-ui'; installed: PluginUiConsentItem };
@@ -68,7 +70,7 @@ export function createPluginManagementController(client: PluginManagementClient,
   async function readSnapshot(token: number) {
     const sequence = ++snapshotSequence;
     const factsToken = ++factsSequence;
-    const snapshot = await client.snapshot();
+    const snapshot = await client.snapshot(options.snapshotRead);
     if (current(token) && factsToken === factsSequence) facts = snapshot;
     // Both display reads and full snapshots share this sequence. A current full
     // read replaces the older hint; a later lightweight read can replace it again.
@@ -137,7 +139,7 @@ export function createPluginManagementController(client: PluginManagementClient,
       if (capability === 'supported') {
         const snapshotToken = ++snapshotSequence;
         const factsToken = ++factsSequence;
-        const snapshot = await client.snapshot();
+        const snapshot = await client.snapshot(options.snapshotRead);
         if (current(token) && factsToken === factsSequence) facts = snapshot;
         if (current(token) && sequence === refreshSequence && snapshotToken === snapshotSequence) publish({ snapshot });
       }

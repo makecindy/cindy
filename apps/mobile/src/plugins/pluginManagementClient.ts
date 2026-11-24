@@ -26,8 +26,10 @@ export class PluginManagementRequestError extends Error {
   constructor(message: string, readonly outcomeUnknown = false) { super(message); }
 }
 export function pluginManagementErrorCode(error: unknown): string {
-  if (error && typeof error === 'object' && 'code' in error && typeof error.code === 'string') return error.code;
-  return error instanceof Error ? error.message : 'REQUEST_FAILED';
+  if (error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' && error.code !== 'IPC_ERROR') return error.code;
+  const message = error instanceof Error ? error.message : '';
+  // Host IPC errors reach the phone as Error("[CODE] message") without a code (same form as deviceProvidersCache).
+  return /^(?:Error invoking remote method '[^']+': Error: )?\[([A-Z0-9_]+)\]/.exec(message)?.[1] ?? (message || 'REQUEST_FAILED');
 }
 const descriptor = { protocolVersion: 1, primitives: ['status', 'markdown', 'action', 'form', 'list'] };
 const validId = (id: string, max = 128) => typeof id === 'string' && id.length > 0 && id.length <= max && !id.includes('\0');
@@ -98,7 +100,8 @@ export function createPluginManagementClient(options: PluginManagementClientOpti
       return (await this.capabilities()).snapshot ? 'supported' : 'unsupported';
     },
     uiConsent: () => action('ui-consent', {}, parsePluginUiConsent),
-    snapshot: () => action('snapshot', {}, (value) => {
+    /** `installed` (Host ≥ 0.1.130) returns the same shape with only the installed-maintenance market projection. */
+    snapshot: (read?: 'installed') => action('snapshot', read ? { read } : {}, (value) => {
       const snapshot = parsePluginManagementSnapshot(value);
       uiCapabilityApproval = snapshot.uiCapabilityApproval === true;
       return snapshot;

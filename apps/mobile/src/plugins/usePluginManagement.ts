@@ -18,6 +18,8 @@ export function usePluginManagement(
   visible: boolean,
   selectionKey?: string,
   chatPrompt = false,
+  /** The market install path reads `{read:'installed'}`; every existing caller keeps the full snapshot. */
+  snapshotRead?: "installed",
 ) {
   const sharedReads = usePluginPromptReads();
   const displayReads = chatPrompt ? sharedReads : null;
@@ -56,6 +58,7 @@ export function usePluginManagement(
     });
     const next = createPluginManagementController(client, {
       online: availability.current,
+      snapshotRead,
       readDisplay: displayReads ? () => displayReads.read(deviceId) : undefined,
       onChange: (value) => {
         if (value.operationId) displayReads?.invalidate(deviceId);
@@ -69,7 +72,7 @@ export function usePluginManagement(
       next.dispose();
       disposed = true;
     };
-  }, [deviceId, accountGeneration, invoke, selectionKey, displayReads]);
+  }, [deviceId, accountGeneration, invoke, selectionKey, displayReads, snapshotRead]);
   useEffect(() => {
     controller?.setOnline(availability.current);
   }, [controller, online, visible, foreground]);

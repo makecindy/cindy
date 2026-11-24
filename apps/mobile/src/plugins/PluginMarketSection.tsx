@@ -71,7 +71,7 @@ export function PluginMarketSection({ market, onConnectComputer }: {
           <Text style={styles.note}>{t(state.kind === "waiting" ? "plugins.market.waiting" : "plugins.market.installing")}</Text>
         </View>
       );
-    if (state.kind === "conflict") return null;
+    if (state.kind === "conflict" || state.kind === "installed") return null;
     const label = state.kind === "unknown" ? t("plugins.management.checkResult")
       : state.kind === "failed" ? t("plugins.retry") : t("plugins.market.install");
     const disabled = state.kind === "unknown" ? !market.online : !market.canInstall;
@@ -79,7 +79,7 @@ export function PluginMarketSection({ market, onConnectComputer }: {
       <Pressable accessibilityRole="button" testID={`plugins.market.install.${item.pluginId}`}
         accessibilityLabel={state.kind === "idle" ? t("plugins.market.installAria", { name: item.name }) : label}
         accessibilityState={{ disabled }} disabled={disabled} hitSlop={{ top: 4, bottom: 4 }}
-        onPress={() => state.kind === "unknown" ? market.checkResult() : market.install(item)}
+        onPress={() => { if (state.kind === "unknown") void market.checkResult(); else market.install(item); }}
         style={[styles.pill, disabled && styles.unavailable]}>
         <Text style={styles.pillText}>{label}</Text>
       </Pressable>
@@ -90,6 +90,7 @@ export function PluginMarketSection({ market, onConnectComputer }: {
     const origin = pluginMarketOrigin(item);
     const line = state.kind === "failed" ? t(state.messageKey)
       : state.kind === "conflict" ? t("plugins.market.conflict")
+        : state.kind === "installed" ? t("plugins.market.alreadyInstalled")
         : state.kind === "unknown" ? t("plugins.market.resultUnknownDetail") : item.description ?? "";
     return (
       <View key={item.pluginId} style={styles.row}>

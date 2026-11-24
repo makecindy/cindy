@@ -404,7 +404,9 @@
     "scope": {
       "public": "公開",
       "organization": "組織",
-      "personal": "個人"
+      "personal": "個人",
+      "custom": "自訂",
+      "local": "本機"
     },
     "publisherDescription": {
       "official": "由 Cindy 官方發布及維護",
@@ -430,7 +432,8 @@
       "namespaceClientRequired": "目前版本無法查看企業插件，請更新 Cindy。已安裝的企業插件仍可使用。",
       "organizationContextUnavailable": "暫時無法確認企業身份，請稍後重試。已安裝的企業插件仍可使用。",
       "namespaceConfigRequired": "企業插件服務暫時無法使用。已安裝的企業插件仍可使用。",
-      "organizationUnavailable": "企業插件暫時無法使用。已安裝的企業插件仍可使用。"
+      "organizationUnavailable": "企業插件暫時無法使用。已安裝的企業插件仍可使用。",
+      "idReserved": "這個插件的標識使用了官方插件保留的字首，無法從自訂插件市場安裝；請從 Cindy 插件市場安裝對應的官方插件。"
     },
     "segmentsLabel": "查看插件",
     "installTo": "安裝到 {{device}}",
@@ -440,6 +443,8 @@
     "outdatedShort": "這台電腦上的 Cindy 版本尚不支援從手機安裝插件，請先更新。",
     "readFailed": "未能讀取插件市場，請重試。",
     "securityBody": "點「安裝」後，電腦會先下載並檢查安裝包，再把它需要的權限列給你確認。確認前不會安裝；裝好後自動啟用，可隨時停用或解除安裝。",
-    "resultUnknownDetail": "尚未確認這次安裝是否完成。"
+    "resultUnknownDetail": "尚未確認這次安裝是否完成。",
+    "unconfirmedNotInstalled": "未能確認這次安裝的結果；目前這台電腦上沒有這個插件。",
+    "alreadyInstalled": "這台電腦已經安裝了這個插件。"
   }
 }

@@ -233,8 +233,9 @@ type Translate = (key: string, options?: Record<string, unknown>) => string;
 /** "Public · v1.4.2 · Cindy" under the name; community authors are omitted. */
 export function pluginMarketSubtitle(item: ManagedMarketItem, t: Translate): string {
   const author = pluginMarketAuthor(item);
-  return [item.sourceType === "server" ? t("plugins.market.scope." + item.scope) : item.sourceMarketName ?? "",
-    "v" + item.version, author ?? ""].filter(Boolean).join(" · ");
+  const origin = item.sourceType !== "server" ? "custom"
+    : item.scope === "public" || item.scope === "organization" ? item.scope : "local";
+  return [t("plugins.market.scope." + origin), "v" + item.version, author ?? ""].filter(Boolean).join(" · ");
 }
 
 export function pluginMarketPublisherKey(item: ManagedMarketItem): string | null {

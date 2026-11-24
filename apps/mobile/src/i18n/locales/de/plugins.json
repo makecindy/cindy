@@ -404,7 +404,9 @@
     "scope": {
       "public": "Öffentlich",
       "organization": "Organisation",
-      "personal": "Persönlich"
+      "personal": "Persönlich",
+      "custom": "Benutzerdefiniert",
+      "local": "Lokal"
     },
     "publisherDescription": {
       "official": "Von Cindy veröffentlicht und gepflegt",
@@ -430,7 +432,8 @@
       "namespaceClientRequired": "Diese Version kann Organisations-Plugins nicht anzeigen. Aktualisiere Cindy, um fortzufahren. Installierte Organisations-Plugins bleiben verfügbar.",
       "organizationContextUnavailable": "Die Organisationsidentität ist vorübergehend nicht verfügbar. Versuche es später erneut. Installierte Organisations-Plugins bleiben verfügbar.",
       "namespaceConfigRequired": "Organisations-Plugins sind vorübergehend nicht verfügbar. Installierte Organisations-Plugins bleiben weiterhin verfügbar.",
-      "organizationUnavailable": "Organisations-Plugins sind vorübergehend nicht verfügbar. Installierte Organisations-Plugins bleiben weiterhin verfügbar."
+      "organizationUnavailable": "Organisations-Plugins sind vorübergehend nicht verfügbar. Installierte Organisations-Plugins bleiben weiterhin verfügbar.",
+      "idReserved": "Die Kennung dieses Plugins verwendet ein für offizielle Plugins reserviertes Präfix und kann nicht über einen benutzerdefinierten Plugin-Marktplatz installiert werden. Installiere das entsprechende offizielle Plugin aus dem Cindy-Plugin-Marktplatz."
     },
     "segmentsLabel": "Plugins anzeigen",
     "installTo": "Installieren auf {{device}}",
@@ -440,6 +443,8 @@
     "outdatedShort": "Cindy auf diesem Computer unterstützt das Installieren vom Handy noch nicht. Aktualisiere Cindy zuerst.",
     "readFailed": "Der Plugin-Marktplatz konnte nicht geladen werden. Versuche es erneut.",
     "securityBody": "Nach dem Tippen auf Installieren lädt der Computer das Paket herunter, prüft es und zeigt dir die benötigten Berechtigungen zur Bestätigung. Vor deiner Bestätigung wird nichts installiert. Danach ist das Plugin automatisch aktiviert und lässt sich jederzeit deaktivieren oder deinstallieren.",
-    "resultUnknownDetail": "Es ist noch nicht bestätigt, ob diese Installation abgeschlossen wurde."
+    "resultUnknownDetail": "Es ist noch nicht bestätigt, ob diese Installation abgeschlossen wurde.",
+    "unconfirmedNotInstalled": "Das Ergebnis dieser Installation ließ sich nicht bestätigen. Das Plugin ist derzeit nicht auf diesem Computer.",
+    "alreadyInstalled": "Dieses Plugin ist auf diesem Computer bereits installiert."
   }
 }

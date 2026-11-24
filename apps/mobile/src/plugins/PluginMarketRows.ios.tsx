@@ -99,12 +99,12 @@ export function PluginMarketRows({ market, onConnectComputer }: PluginMarketRows
           </Text>
         </HStack>
       );
-    if (state.kind === "conflict") return null;
+    if (state.kind === "conflict" || state.kind === "installed") return null;
     const label = state.kind === "unknown" ? t("plugins.management.checkResult")
       : state.kind === "failed" ? t("plugins.retry") : t("plugins.market.install");
     return (
       <Button testID={`plugins.market.install.${item.pluginId}`}
-        onPress={() => state.kind === "unknown" ? market.checkResult() : market.install(item)}
+        onPress={() => { if (state.kind === "unknown") void market.checkResult(); else market.install(item); }}
         modifiers={[buttonStyle("bordered"), buttonBorderShape("capsule"), frame({ minHeight: 44 }),
           disabled(state.kind === "unknown" ? !market.online : !market.canInstall),
           accessibilityLabel(state.kind === "idle" ? t("plugins.market.installAria", { name: item.name }) : label)]}>
@@ -117,6 +117,7 @@ export function PluginMarketRows({ market, onConnectComputer }: PluginMarketRows
     const origin = pluginMarketOrigin(item);
     const line = state.kind === "failed" ? t(state.messageKey)
       : state.kind === "conflict" ? t("plugins.market.conflict")
+        : state.kind === "installed" ? t("plugins.market.alreadyInstalled")
         : state.kind === "unknown" ? t("plugins.market.resultUnknownDetail") : item.description ?? "";
     return (
       <HStack key={item.pluginId} spacing={spacing.md}

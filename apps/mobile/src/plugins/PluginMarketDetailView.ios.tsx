@@ -99,9 +99,9 @@ export function PluginMarketDetailView({ detail, market }: PluginMarketDetailVie
                 <ProgressView />
                 {text(t(state.kind === "waiting" ? "plugins.market.waiting" : "plugins.market.installing"))}
               </HStack>
-            ) : state.kind !== "conflict" ? (
+            ) : state.kind !== "conflict" && state.kind !== "installed" ? (
               <Button testID="plugins.market.detailInstall"
-                onPress={() => state.kind === "unknown" ? market.checkResult() : market.install(item, detail.detail)}
+                onPress={() => { if (state.kind === "unknown") void market.checkResult(); else market.install(item, detail.detail); }}
                 modifiers={[...(state.kind === "unknown" ? secondaryStyle : primaryStyle), frame({ maxWidth: Infinity }),
                   disabled(state.kind === "unknown" ? !online : !online || !market.canInstall),
                   accessibilityLabel(state.kind === "idle" ? t("plugins.market.installAria", { name: item.name }) : primaryLabel)]}>
@@ -115,6 +115,7 @@ export function PluginMarketDetailView({ detail, market }: PluginMarketDetailVie
             </HStack>
             {state.kind === "failed" ? text(t(state.messageKey), "footnote", "plugins.market.detailError") : null}
             {state.kind === "conflict" ? text(t("plugins.market.conflict"), "footnote", "plugins.market.detailConflict") : null}
+            {state.kind === "installed" ? text(t("plugins.market.alreadyInstalled"), "footnote", "plugins.market.detailInstalled") : null}
           </VStack>
           {publisher || item.description ? (
             <VStack alignment="leading" spacing={spacing.sm} modifiers={quiet}>
