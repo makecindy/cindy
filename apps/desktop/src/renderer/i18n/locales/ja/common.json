@@ -2778,7 +2778,8 @@
         "errorBusy": "すでにアップロードが進行中です。しばらくお待ちください",
         "errorFailed": "ログのアップロードに失敗しました。ネットワークを確認して再試行してください",
         "unavailableNotConfigured": "このビルドではログアップロードが設定されていません。",
-        "unavailableNoConsent": "先に「プライバシーポリシー」への同意が必要です。"
+        "unavailableNoConsent": "先に「プライバシーポリシー」への同意が必要です。",
+        "consentPrompt": "アップロードする前に<policy>プライバシーポリシー</policy>を読み、<accept>同意する</accept>を選択してください。"
       },
       "openLogsDirError": "ログディレクトリを開けませんでした",
       "autoUpdateLabel": "アイドル時に更新をインストール",
@@ -3387,6 +3388,7 @@
       "description": "ほかの AI コーディングツールのセッションを Cindy に取り込んで、そのまま続けられます。元の記録は読み取るだけで、変更しません。",
       "rescan": "再スキャン",
       "allSources": "すべてのソース",
+      "sourceFilterAria": "ソース",
       "search": "セッションまたはフォルダを検索",
       "projectFilter": "{{name}} のみ",
       "clearProjectFilter": "すべてのプロジェクトを表示",
@@ -5146,6 +5148,7 @@
       "formHint": "ユーザー ID は数字です。@userinfobot に DM すると自分の ID を確認できます。",
       "connect": "接続",
       "connectingAction": "接続中…",
+      "connectTimedOut": "接続がタイムアウトしました。もう一度お試しください。",
       "errorCode": {
         "invalid-token": "Bot Token が無効か再発行されています。入力し直してください",
         "provider-api": "Telegram 側でエラーが発生しました。しばらくしてから再試行してください",
@@ -12722,6 +12725,7 @@
           "conflict": "このボットはすでにこのコンピューターで使われています（設定 → IM ボット、または別の仲間）。",
           "botUnavailable": "{{name}} は現在利用できません。復帰後にもう一度お試しください。",
           "connectFailed": "接続できませんでした：{{reason}}",
+          "connectTimedOut": "接続がタイムアウトしました。もう一度お試しください。",
           "failed": "完了できませんでした。しばらくしてからもう一度お試しください。",
           "personalBotGone": "設定 → IM ボット にこのボットはもうありません。認証情報を入力してください。"
         },
@@ -16396,7 +16400,13 @@
       "open": "タスク「{{title}}」を開く",
       "untitled": "名称未設定のタスク",
       "startedOne": "開始したタスク",
-      "handedToOne": "引き継ぎ先"
+      "handedToOne": "引き継ぎ先",
+      "status": {
+        "running": "実行中",
+        "needsAction": "確認待ち",
+        "error": "エラー",
+        "idle": "待機中"
+      }
     },
     "botTaskLetter": {
       "replied": "からの返信",

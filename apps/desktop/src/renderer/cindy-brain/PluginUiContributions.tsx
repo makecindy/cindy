@@ -293,7 +293,7 @@ function EntryControl({ entry, sessionId, clientId, active, appearance }: { entr
   </button>;
   if (action.kind === 'status') return <span className={header ? 'max-w-48 shrink-0 truncate text-12 text-[var(--text-secondary)]' : 'text-12 text-[var(--text-secondary)]'} title={controlTitle}>{title}</span>;
   if (action.kind === 'select') return <Select label={title} value={state?.value ?? value} options={action.options ?? []}
-    disabled={pending || state?.disabled} onValueChange={next => void run(next)} className="h-7 max-w-48 text-12" />;
+    disabled={pending || state?.disabled} onValueChange={next => void run(next)} size="inline" className="max-w-48 text-12" />;
   if (action.presentation === 'popover' && action.view) return <Popover open={open && active} onOpenChange={setOpen}>
     <PopoverTrigger asChild><Button variant="secondary" tone="quiet" size="sm" disabled={state?.disabled}
       className={header ? 'max-w-48' : undefined} title={controlTitle}>{label}</Button></PopoverTrigger>
@@ -390,7 +390,7 @@ function PluginUiBodyChoice({ children, entries, sessionId, clientId, context }:
   const entry = entries.find(entry => `${entry.instanceId}:${entry.contribution.id}` === selected);
   return <>
     <div className="mb-1 flex min-w-0 items-center gap-1">
-      <Select label={t('pluginUi.display')} value={entry ? selected : 'original'} className="h-7 max-w-56 text-12"
+      <Select label={t('pluginUi.display')} value={entry ? selected : 'original'} size="inline" className="max-w-56 text-12"
         options={[{ value: 'original', label: t('pluginUi.original') }, ...entries.map(entry => ({
           value: `${entry.instanceId}:${entry.contribution.id}`, label: `${entry.contribution.title} · ${entry.ghost.manifest.name}`,
         }))]} onValueChange={setSelected} />

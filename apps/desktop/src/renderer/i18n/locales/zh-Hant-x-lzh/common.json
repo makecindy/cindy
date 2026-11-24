@@ -2778,7 +2778,8 @@
         "errorBusy": "已有一次上呈方行，請稍候",
         "errorFailed": "日誌上呈未成，請察網路後再試",
         "unavailableNotConfigured": "此版未設日誌上呈。",
-        "unavailableNoConsent": "須先允《隱私政策》。"
+        "unavailableNoConsent": "須先允《隱私政策》。",
+        "consentPrompt": "上呈之前，請閱<policy>《隱私政策》</policy>而<accept>允之</accept>。"
       },
       "openLogsDirError": "日誌目錄未能啟",
       "autoUpdateLabel": "閒時自裝更新",
@@ -3387,6 +3388,7 @@
       "description": "將他家 AI 程式設計工具之差事接入 Cindy，續而為之。唯讀原始記錄，不改分毫。",
       "rescan": "再察",
       "allSources": "諸源",
+      "sourceFilterAria": "源",
       "search": "尋差事或卷匣",
       "projectFilter": "唯覽 {{name}}",
       "clearProjectFilter": "示諸案",
@@ -5146,6 +5148,7 @@
       "formHint": "使用者 ID 為純數字；私聊 @userinfobot 可查己之 ID。",
       "connect": "連之",
       "connectingAction": "方連…",
+      "connectTimedOut": "連線逾時，請再試",
       "errorCode": {
         "invalid-token": "Bot Token 無效或已重置，請重填",
         "provider-api": "Telegram 服務回報謬誤，請稍後再試",
@@ -12722,6 +12725,7 @@
           "conflict": "此機器人已用於此機：或在 規制 → IM 機器人，或在另一同伴處。",
           "botUnavailable": "{{name}} 今不可用，待其復後再試。",
           "connectFailed": "連之未成：{{reason}}",
+          "connectTimedOut": "連線逾時，請再試。",
           "failed": "未竟，請稍後再試。",
           "personalBotGone": "規制 → IM 機器人 中已無此機器人，請改填憑證。"
         },
@@ -16396,7 +16400,13 @@
       "open": "啟差事「{{title}}」",
       "untitled": "無名之差事",
       "startedOne": "已啟差事",
-      "handedToOne": "付與差事"
+      "handedToOne": "付與差事",
+      "status": {
+        "running": "方行",
+        "needsAction": "候君示下",
+        "error": "有誤",
+        "idle": "閑"
+      }
     },
     "botTaskLetter": {
       "replied": "覆書",
