@@ -519,9 +519,9 @@ describe('ensureBotProjectAutomations', () => {
       let writer = 'migration';
       project.onEvent(event => { if (event.type === 'reconciled') writes.push(`${writer}:${event.updated}`); });
       const migrate = async () => { writer = 'migration'; await ensureBotProjectAutomations(bot); };
-      const arrive = (config: ProjectScheduleConfig) => applyProjectAutomations({
+      const arrive = (config: ProjectScheduleConfig, paused = true, originDeviceId = 'desk') => applyProjectAutomations({
         ...bot, selfDeviceId: 'desk', assertCurrent: () => {},
-        rows: [{ id: config.id, value: { config, paused: true, originDeviceId: 'desk' } }],
+        rows: [{ id: config.id, value: { config, paused, originDeviceId } }],
         io: {
           prepareMemoryReview: prepareArrivedMemoryReview,
           prepareProject: async () => { await migrate(); return bot; },
@@ -531,7 +531,10 @@ describe('ensureBotProjectAutomations', () => {
             writer = 'cloud';
             await project.upsertSchedule(workingDir, value as unknown as ProjectScheduleConfig);
           },
-          setAutomationPaused: async () => { throw new Error('unexpected pause change'); },
+          setAutomationPaused: async (_dir, _id, pause) => {
+            if (pause) await scheduler.pause(created!.id);
+            else await scheduler.resume(created!.id);
+          },
           removeAutomation: async () => { throw new Error('unexpected removal'); },
         },
       });
@@ -552,6 +555,15 @@ describe('ensureBotProjectAutomations', () => {
       expect(writes).toEqual(['migration:1', 'cloud:1', 'cloud:1']);
 
       await arrive(fresh!);
+      // #12617 review: a hookless definition arrives active from the old computer.
+      // The upgrade creates its check here. A check sent by that computer still arrives paused.
+      const hookless = { ...fresh!, preRunHook: undefined,
+        prompt: "Look back at Mimi's conversations from the last day (teammate id bot-1) and keep what is worth remembering in this project's memory and skills. If nothing new is worth keeping, finish quietly." };
+      await arrive(hookless, false, 'old-home');
+      expect(rows.get(created!.id)).toMatchObject({ status: 'active', preRunHook: fresh!.preRunHook });
+      await arrive(fresh!, false, 'old-home');
+      expect(rows.get(created!.id)?.status).toBe('paused');
+
       await fs.appendFile(path.join(root, '.memory-review-check-v1.cjs'), '\n// Owner customization');
       await arrive(legacy);
       await arrive(legacy);

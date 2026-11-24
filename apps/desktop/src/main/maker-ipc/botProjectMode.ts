@@ -18,6 +18,7 @@ import path from 'node:path';
 import { BrowserWindow } from 'electron';
 
 import { getActiveDataOwnerPushStamp } from '../appSessionState.js';
+import { t } from '../i18n.desktop.js';
 import { getDbPathForUser } from '../localDb/index.js';
 import { getCurrentDbClientUserId } from '../localDb/client/current.js';
 import { MEMORY_STORAGE_MIGRATION_RECEIPT, parseFilename } from '@cindy/maker-core';
@@ -486,7 +487,6 @@ export async function prepareBotMemoryReviewDefinition(input: {
   // The supplied check now counts since the last review; its untouched last-day prompt follows.
   const upgradePrompt = bundledCheck && isLastDayReviewPrompt(current?.prompt, input);
   if ((suppliedHook || (legacyHook && preRunHook.command === current?.preRunHook?.command)) && !upgradePrompt) return null;
-  const { t } = await import('../i18n.desktop.js');
   const defaults = botProjectMemoryReview({
     ...input,
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',

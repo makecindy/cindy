@@ -181,7 +181,7 @@ export async function applyProjectAutomations(input: {
       input.assertCurrent();
       changed = localDefinition !== canonicalJson(config);
     }
-    const hook = config.preRunHook as { command?: unknown } | undefined;
+    const hook = arrived.config.preRunHook as { command?: unknown } | undefined;
     // A check command saved on another computer may not exist here: it arrives paused.
     const foreignCheck = typeof hook?.command === 'string' && !!hook.command.trim() && arrived.originDeviceId !== input.selfDeviceId;
     const paused = arrived.paused || foreignCheck;

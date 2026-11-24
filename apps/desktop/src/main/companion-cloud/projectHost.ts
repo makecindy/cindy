@@ -20,7 +20,8 @@ import {
 import { isTeammateProjectIgnoreReady } from '../maker-ipc/botProjectGitignore.js';
 import { BOT_V2_CARRYOVER_FILE } from '../maker-ipc/botV2Carryover.js';
 import { readTeammateProjectMode } from '../maker-ipc/botWorkspaceRuntime.js';
-import type { ProjectScheduleConfig } from '../scheduler-host/project-automation-loader.js';
+import { prepareBotMemoryReviewDefinition } from '../maker-ipc/botProjectMode.js';
+import { isProjectScheduleConfig, type ProjectScheduleConfig } from '../scheduler-host/project-automation-loader.js';
 import { PROJECT_AUTOMATION_REL_SEGMENTS } from '../../shared/projectAutomationPaths.js';
 import type { CompanionProjectIo } from './project.js';
 
@@ -80,9 +81,7 @@ async function writeAtomic(file: string, content: string): Promise<void> {
 
 /** Run the same upgrade as project preparation, against the arriving copy before it is saved. */
 export const prepareArrivedMemoryReview: CompanionProjectIo['prepareMemoryReview'] = async (botId, project, config, assertCurrent) => {
-  const { isProjectScheduleConfig } = await import('../scheduler-host/project-automation-loader.js');
   if (!isProjectScheduleConfig(config)) return config; // Ordinary save validation reports it.
-  const { prepareBotMemoryReviewDefinition } = await import('../maker-ipc/botProjectMode.js');
   assertCurrent();
   const upgraded = await prepareBotMemoryReviewDefinition({ botId, ...project }, config);
   return upgraded ? { ...upgraded } : config;
