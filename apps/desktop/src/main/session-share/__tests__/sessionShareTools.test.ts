@@ -5,8 +5,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { XdtHelperToolRegistry } from '../../../../../../packages/lizi-mcps/src/lizi_xdtHelperToolRegistry.js';
 import { registerSessionShareTools } from '../../../../../../packages/lizi-mcps/src/xdt-helper/session_share.js';
-import { createSessionShareToolCallbacks } from '../sessionShareTools.js';
-import { writeNewSaveFile } from '../../cindy-brain/dirDeposit.js';
+import { createSessionShareToolCallbacks, writeExportFileExclusive } from '../sessionShareTools.js';
 
 // Unit, capability list #10/#15 and plugin authoring §4: a native export must
 // stay in its caller's existing handoff storage. Existing package roundtrips
@@ -46,8 +45,6 @@ describe('native package Host tools', () => {
       commitShare: vi.fn(async () => ({ sessionId: 'imported', fidelity: 'full' as const, notes: [], orcaWorkers: 0 })),
       cancelDraft: vi.fn(), chooseExportPath: vi.fn(async () => path.join(directory, 'chosen.cshare')),
       presetExportDestination: vi.fn(async (): Promise<{ directory: string; fileName: string } | null> => null),
-      writeExportFile: vi.fn((directory: string, fileName: string, bytes: Uint8Array, assertCurrent: () => void) =>
-        writeNewSaveFile(directory, fileName, bytes, { assertCurrent, exactCase: true })),
       openImportWizard: vi.fn(), handoff: () => handoff,
     };
     return { ports, handoff, callbacks: createSessionShareToolCallbacks(ports) };
@@ -202,20 +199,39 @@ describe('native package Host tools', () => {
     expect(f.ports.exportShare).not.toHaveBeenCalled();
     expect(await fs.readdir(elsewhere)).toEqual([]);
   });
-  // Unit, #12461 review: losing the caller (sign-out, account switch, revoked
-  // task action) while the Settings-folder write is pending must not report
-  // success or leave the package behind.
-  it('removes the Settings-folder package and fails when the caller is revoked during the write', async () => {
-    const f = fixture(), context = { agentKind: 'codex', sessionId: 'caller', workingDir: directory };
+  // Unit, #12461 review: losing the caller (sign-out, account switch, revoked task
+  // action) at any point of the Settings-folder write — including after the handle is
+  // closed — must not report success or leave the new package behind, and must never
+  // touch an existing same-named file. Property over every authorization check of the
+  // real writer: revoke at check k for each k, then also let it succeed.
+  it('writes the Settings-folder package only when the caller stays current through close', async () => {
     await fs.mkdir(path.join(directory, 'exports'));
     const exports = await fs.realpath(path.join(directory, 'exports'));
-    f.ports.presetExportDestination.mockResolvedValue({ directory: exports, fileName: 'Task.cshare' });
-    f.ports.writeExportFile.mockImplementationOnce(async (dir, name, bytes, assertCurrent) => {
-      current = false;
-      return writeNewSaveFile(dir, name, bytes, { assertCurrent, exactCase: true });
+    await fs.writeFile(path.join(exports, 'Task.cshare'), 'earlier');
+    let checks = 0;
+    const order: string[] = [];
+    const realOpen = fs.open.bind(fs);
+    const open = vi.spyOn(fs, 'open').mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+      const handle = await realOpen(...args);
+      const realClose = handle.close.bind(handle);
+      handle.close = async () => { order.push('close'); return realClose(); };
+      return handle;
     });
-    expect(await f.callbacks.export({ sessionId: 'task', excludeMedia: false }, context))
-      .toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
-    expect(await fs.readdir(exports)).toEqual([]);
+    expect(await writeExportFileExclusive(exports, 'Task.cshare', Buffer.from('package'), () => { checks++; order.push('check'); }))
+      .toBe('Task (1).cshare');
+    open.mockRestore();
+    // The last authorization check happens after the handle is closed (a revocation during
+    // close must still be seen before success is reported).
+    expect(order.slice(-2)).toEqual(['close', 'check']);
+    await fs.rm(path.join(exports, 'Task (1).cshare'));
+    expect(checks).toBeGreaterThanOrEqual(4);
+    for (let k = 1; k <= checks; k++) {
+      let seen = 0;
+      const revokeAt = () => { if (++seen === k) throw new Error('PERMISSION_DENIED'); };
+      const result = await writeExportFileExclusive(exports, 'Task.cshare', Buffer.from('package'), revokeAt).catch(() => null);
+      expect(result, `revoked at check ${k}`).toBeNull();
+      expect(await fs.readdir(exports), `revoked at check ${k}`).toEqual(['Task.cshare']);
+    }
+    expect(await fs.readFile(path.join(exports, 'Task.cshare'), 'utf8')).toBe('earlier');
   });
 });

@@ -1,4 +1,4 @@
-import { promises as fs } from 'node:fs';
+import { constants as fsConstants, promises as fs, type BigIntStats } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import os from 'node:os';
@@ -6,12 +6,89 @@ import path from 'node:path';
 import type { LiziMcpSessionContext, SessionShareCallbacks } from '@cindy/mcps';
 import { GHOST_HANDOFF_MAX_BYTES_PER_FILE, type GhostHandoffFile } from '../../shared/ghost.js';
 import { readBoundedFileNoFollow, readToLength } from '../utils/readBoundedFile.js';
-import { sameRealPathExactCase } from '../cindy-brain/dirDeposit.js';
 import type { SessionShareExportOptions, SessionShareExportOutcome } from './sessionShareExport.js';
 import type { CommitShareImportOptions, CommitShareImportResult, InspectResult } from './sessionShareImport.js';
 
 /** The packer caps unpacked content at 256 MiB; this only bounds reading back its own output. */
 const PRESET_EXPORT_MAX_BYTES = 512 * 1024 * 1024;
+
+/**
+ * Case-preserving comparison of canonical paths; only a Windows drive letter is normalised (as in
+ * readBoundedFile.ts), because directories with per-directory case sensitivity can differ by case.
+ */
+function sameRealPathExactCase(a: string, b: string): boolean {
+  const drive = (value: string) => process.platform === 'win32'
+    ? value.replace(/^([A-Za-z]):/, (_, letter: string) => `${letter.toLowerCase()}:`)
+    : value;
+  return drive(a) === drive(b);
+}
+
+const EXCLUSIVE_CREATE = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | (fsConstants.O_NOFOLLOW ?? 0);
+
+function dedupeExportName(fileName: string, n: number): string {
+  if (n === 0) return fileName;
+  const ext = path.extname(fileName);
+  return `${fileName.slice(0, fileName.length - ext.length)} (${n})${ext}`;
+}
+
+/** The single cleanup path: empty and close our handle if still open, then remove our own file only. */
+async function discardExportFile(handle: FileHandle | null, target: string, created: BigIntStats | null): Promise<void> {
+  if (handle) {
+    if (created) await handle.truncate(0).catch(() => {});
+    await handle.close().catch(() => {});
+  }
+  if (!created) return;
+  const current = await fs.lstat(target, { bigint: true }).catch(() => null);
+  if (current && current.dev === created.dev && current.ino === created.ino) await fs.unlink(target).catch(() => {});
+}
+
+/**
+ * Writes an export into the owner-approved folder. Invariants (#12461):
+ * - creates a new file directly in `directory` (O_EXCL, no link following); never overwrites, adds " (n)";
+ * - async I/O only, so a slow volume never blocks Main;
+ * - reports the name only when, after the bytes are written and the handle is closed, the caller is
+ *   still current, `directory` still resolves to itself (case preserved) and the path still names the
+ *   created file; every other outcome removes the file it created and returns null (or throws the
+ *   caller's revocation before anything was created).
+ */
+export async function writeExportFileExclusive(
+  directory: string, fileName: string, bytes: Uint8Array, assertCurrent: () => void,
+): Promise<string | null> {
+  const resolvesToItself = async () => sameRealPathExactCase(await fs.realpath(directory).catch(() => ''), directory);
+  for (let n = 0; n < 1000; n++) {
+    assertCurrent();
+    if (!await resolvesToItself()) return null;
+    const name = dedupeExportName(fileName, n);
+    const target = path.join(directory, name);
+    let handle: FileHandle | null;
+    try {
+      handle = await fs.open(target, EXCLUSIVE_CREATE, 0o666);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') continue;
+      return null;
+    }
+    let created: BigIntStats | null = null;
+    let committed = false;
+    try {
+      created = await handle.stat({ bigint: true });
+      if (!created.isFile()) return null;
+      assertCurrent();
+      await handle.writeFile(bytes);
+      const open = handle;
+      handle = null;
+      await open.close();
+      assertCurrent();
+      const onDisk = await fs.lstat(target, { bigint: true });
+      committed = onDisk.isFile() && onDisk.dev === created.dev && onDisk.ino === created.ino && await resolvesToItself();
+      return committed ? name : null;
+    } catch {
+      return null;
+    } finally {
+      if (!committed) await discardExportFile(handle, target, created);
+    }
+  }
+  return null;
+}
 
 /** The two callers share native package services; only their file handoff differs. */
 export function createSessionShareToolCallbacks(ports: {
@@ -27,11 +104,6 @@ export function createSessionShareToolCallbacks(ports: {
    * setting exists but cannot be used.
    */
   presetExportDestination(sessionId: string): Promise<{ directory: string; fileName: string } | null>;
-  /**
-   * Creates a new file in the folder without overwriting; returns the name actually written, or null.
-   * Calls assertCurrent before writing and before reporting success, removing the new file if it throws.
-   */
-  writeExportFile(directory: string, fileName: string, bytes: Uint8Array, assertCurrent: () => void): Promise<string | null>;
   openImportWizard(filePath: string): void;
   handoff(): {
     import(instance: string, files: Array<{ name: string; bytes: Uint8Array }>, assertCurrent: () => void): Promise<Array<Pick<GhostHandoffFile, 'ref' | 'name' | 'size' | 'sha256'>>>;
@@ -96,7 +168,7 @@ export function createSessionShareToolCallbacks(ports: {
             { containWithin: temporary!, verifyContentStability: true });
           scope.assertCurrent();
           if (!packed) throw new Error('SHARE_EXPORT_FAILED');
-          const written = await ports.writeExportFile(preset.directory, preset.fileName, packed, scope.assertCurrent);
+          const written = await writeExportFileExclusive(preset.directory, preset.fileName, packed, scope.assertCurrent);
           if (!written) {
             scope.assertCurrent();
             throw new Error('EXPORT_DIRECTORY_UNAVAILABLE');
