@@ -12,6 +12,7 @@ import { useTranslation } from 'react-i18next';
 
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
+import { useDialogExit } from '@/hooks/useDialogExit';
 import { useRemoteSessionActivity } from '@/features/device-link/remoteSessionActivityStore';
 import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
 import type { Session } from '@/lib/ccAgent.types';
@@ -161,6 +162,7 @@ export function DeliveryReceiptDialog({
   onClose: () => void;
 }) {
   const { t } = useTranslation();
+  const dialog = useDialogExit();
   const attentionKind = useSessionAttentionKind(sessionId);
   const islandActivity = useAgentIslandActivity(sessionId);
   const runningMap = useSyncExternalStore(
@@ -236,7 +238,7 @@ export function DeliveryReceiptDialog({
   const value = (text: string | null | undefined) => text?.trim() || t('deliveryReceipt.unknown');
 
   return (
-    <Dialog.Root open onOpenChange={(open) => { if (!open) onClose(); }}>
+    <Dialog.Root open={dialog.open} onOpenChange={(open) => { if (!open) dialog.close(onClose); }}>
       <Dialog.Portal>
         <Dialog.Overlay
           className="modal-scrim fixed inset-0 z-modal"
@@ -245,6 +247,8 @@ export function DeliveryReceiptDialog({
         <Dialog.Content
           className="modal-panel fixed left-1/2 top-1/2 z-modal-raised flex max-h-[85vh] w-[min(520px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-y-auto p-4 text-[var(--text-primary)]"
           onClick={(event) => event.stopPropagation()}
+          onOpenAutoFocus={dialog.onOpenAutoFocus}
+          onCloseAutoFocus={dialog.onCloseAutoFocus}
           onPointerDownOutside={(event) => event.preventDefault()}
         >
           <Dialog.Title className="text-lg font-medium">{t('deliveryReceipt.title')}</Dialog.Title>
