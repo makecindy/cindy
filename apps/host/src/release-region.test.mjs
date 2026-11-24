@@ -28,7 +28,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
-import { assertWebRegion, readWebRegions } from './release-region.mjs';
+import { assertWebRegion, readWebRegions, validateDevelopmentEndpoints } from './release-region.mjs';
 
 const exec = promisify(execFile);
 const hostDir = fileURLToPath(new URL('..', import.meta.url));
@@ -106,4 +106,22 @@ test('a release only takes the renderer build of its own region', () => {
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('a development Host keeps guest registration and the device directory on its own services', () => {
+  const manifest = name => ({
+    authApiBaseUrl: `https://auth.${name}.example.test`,
+    deviceLinkApiBaseUrl: `https://device-link.${name}.example.test`,
+    modelAccessApiBaseUrl: `https://model-access.${name}.example.test`,
+    cdnBaseUrl: `https://cdn.${name}.example.test/cindy`,
+  });
+  const dev = manifest('dev');
+  const production = [manifest('cn'), manifest('global')];
+  validateDevelopmentEndpoints(dev, production);
+  for (const other of production) {
+    assert.throws(() => validateDevelopmentEndpoints({ ...dev, authApiBaseUrl: other.authApiBaseUrl + '/guest' }, production),
+      /separate HTTPS development endpoint for authApiBaseUrl/);
+  }
+  assert.throws(() => validateDevelopmentEndpoints({ ...dev, deviceLinkApiBaseUrl: 'http://link.example.test' }, production),
+    /separate HTTPS development endpoint for deviceLinkApiBaseUrl/);
 });

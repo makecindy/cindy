@@ -15,30 +15,32 @@ it('restores the row style and ordered fields of each sidebar mode across edits 
   }));
   const row = renderHook(() => ({ style: useSidebarMainViewMode(), info: useTaskInfoFields() }));
   const shown = () => [row.result.current.style.mode, row.result.current.info.fields];
-  expect(shown()).toEqual(['text', ['cost', 'time']]);
+  expect(shown()).toEqual(['text', ['cost', 'time', 'harness', 'project', 'teammate']]);
 
   act(() => menu.result.current.list.setMode('inbox'));
-  expect(shown()).toEqual(['list', ['time']]);
+  expect(shown()).toEqual(['list', ['time', 'harness', 'project', 'teammate']]);
   act(() => {
     menu.result.current.info.toggleField('time');
     menu.result.current.info.toggleField('pr');
     menu.result.current.style.setMode('text');
   });
   act(() => menu.result.current.list.setMode('tasks'));
-  expect(shown()).toEqual(['text', ['cost', 'time']]);
+  expect(shown()).toEqual(['text', ['cost', 'time', 'harness', 'project', 'teammate']]);
   act(() => {
     menu.result.current.style.setMode('list');
+    menu.result.current.info.toggleField('harness');
+    menu.result.current.info.toggleField('teammate');
     menu.result.current.info.toggleField('cost');
     menu.result.current.info.toggleField('time');
   });
   act(() => menu.result.current.list.setMode('inbox'));
-  expect(shown()).toEqual(['text', ['pr']]);
+  expect(shown()).toEqual(['text', ['harness', 'project', 'teammate', 'pr']]);
   menu.unmount();
   row.unmount();
 
   // Read from durable storage, bypassing both hooks' in-memory snapshots.
   expect(loadSidebarMainViewMode('tasks')).toBe('list');
-  expect(loadTaskInfoFields('tasks')).toEqual([]);
+  expect(loadTaskInfoFields('tasks')).toEqual(['project']);
   expect(loadSidebarMainViewMode('inbox')).toBe('text');
-  expect(loadTaskInfoFields('inbox')).toEqual(['pr']);
+  expect(loadTaskInfoFields('inbox')).toEqual(['harness', 'project', 'teammate', 'pr']);
 });

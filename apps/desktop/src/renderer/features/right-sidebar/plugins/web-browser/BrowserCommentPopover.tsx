@@ -300,7 +300,7 @@ export function BrowserCommentPopover({
     <div
       ref={rootRef}
       className={cn(
-        'absolute z-20 flex flex-col gap-2 rounded-lg border border-[var(--border-default)]',
+        'absolute z-page-float flex flex-col gap-2 rounded-lg border border-[var(--border-default)]',
         'bg-[var(--surface-elevated)] p-2.5 shadow-[shadow:var(--shadow-menu)]',
       )}
       style={{ left: pos.left, top: pos.top, width: POPOVER_WIDTH }}

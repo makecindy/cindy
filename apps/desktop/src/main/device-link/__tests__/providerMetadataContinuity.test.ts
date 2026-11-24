@@ -4,7 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { PROVIDER_GROUP_IPC } from '../../../shared/providerGroup.js';
-import { REMOTE_AGENT_CHANNEL, PROVIDER_GROUP_REMOTE_CHANNEL, type Envelope, type InvokeResultPayload } from '@cindy/device-link';
+import { REMOTE_AGENT_CHANNEL, PROVIDER_GROUP_REMOTE_CHANNEL, REMOTE_CATALOG_FRESH_MS, type Envelope, type InvokeResultPayload } from '@cindy/device-link';
 const identity = vi.hoisted(() => ({ owner: 'owner-a:1', endpoint: 'https://a.invalid', pending: false }));
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => identity.owner, isAppSessionBoundaryPending: () => identity.pending }));
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => identity.endpoint }));
@@ -22,6 +22,7 @@ vi.mock('@cindy/device-link', async () => {
     readProviderMetadataContinuity: metadata.readProviderMetadataContinuity,
     isProviderAccessDeniedError: metadata.isProviderAccessDeniedError,
     PROVIDER_METADATA_TRUST_MS: metadata.PROVIDER_METADATA_TRUST_MS,
+    REMOTE_CATALOG_FRESH_MS: metadata.REMOTE_CATALOG_FRESH_MS,
     PROVIDER_GROUP_REMOTE_CHANNEL: group.PROVIDER_GROUP_REMOTE_CHANNEL,
     REMOTE_AGENT_CHANNEL: remoteAgent.REMOTE_AGENT_CHANNEL,
   };
@@ -43,6 +44,9 @@ const catalog = () => Promise.resolve({ ok: true as const, result: {
 const oldHostCatalog = () => Promise.resolve({ ok: true as const, result: { providers: [{ id: 'a' }] } });
 const emptyCatalog = () => Promise.resolve({ ok: true as const, result: { providers: [], providerContinuity: { stale: false, remainingMs: 30 * 60_000 } } });
 const hexTarget = (label: string): string => createHash('sha256').update(label).digest('hex');
+// Catalog reads inside the shared fresh window reuse the last snapshot without reaching the host.
+// Tests that need the host to answer again (refresh, failure, denial) step past that window first.
+const pastFreshWindow = () => vi.advanceTimersByTimeAsync(REMOTE_CATALOG_FRESH_MS);
 
 // Unit regression: successful replies invalidated by a source push must recover
 // without a renderer subscription. Existing tests only covered rejecting the old reply.
@@ -86,9 +90,39 @@ describe('source refresh during metadata admission', () => {
   });
 });
 
+// Gap (2026-11-23 field report): the picker, groups, bots and the received-share poll each had their own
+// TTL, so one share host was read again by every consumer and the answers drifted apart.
+// Minimal input: four catalog reads of one target inside the fresh window, then a source push.
+describe('shared catalog fresh window', () => {
+  it('serves every consumer of one catalog from one physical read until the window ends or the source changes', async () => {
+    const request = vi.fn(catalog);
+    for (let i = 0; i < 4; i++) await read('S', 'maker:provider:list', [], request);
+    expect(request).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(REMOTE_CATALOG_FRESH_MS - 1);
+    expect(await read('S', 'maker:provider:list', [], request)).toMatchObject({ ok: true,
+      result: { providerContinuity: { stale: false, remainingMs: 30 * 60_000 - REMOTE_CATALOG_FRESH_MS + 1 } } });
+    expect(request).toHaveBeenCalledTimes(1);
+    handleProviderMetadataSourcePush({ v: 1, kind: 'push', src: 'S', payload: { channel: 'maker:provider:changed' } });
+    await read('S', 'maker:provider:list', [], request);
+    expect(request).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(REMOTE_CATALOG_FRESH_MS);
+    await read('S', 'maker:provider:list', [], request);
+    expect(request).toHaveBeenCalledTimes(3);
+  });
+
+  it('keeps Agent run status live inside the window', async () => {
+    const request = vi.fn(async () => ({ ok: true as const, result: { running: true,
+      providerContinuity: { stale: false, remainingMs: 30 * 60_000 } } }));
+    await read('S', 'maker:agent:status', ['codex'], request);
+    await read('S', 'maker:agent:status', ['codex'], request);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('Main provider metadata continuity', () => {
   it('retains a catalog for a short outage and bounds both forwarding and a hung refresh', async () => {
     await read('M', 'maker:provider:list', [], catalog);
+    await pastFreshWindow();
     const request = vi.fn(() => new Promise<never>(() => {}));
     const result = read('M', 'maker:provider:list', [], request);
     await vi.advanceTimersByTimeAsync(2000);
@@ -108,6 +142,7 @@ describe('Main provider metadata continuity', () => {
 
   it('keeps failure envelopes and erases the target on an authoritative denial without erasing another target', async () => {
     await read('M', 'maker:provider:list', [], catalog); await read('N', 'maker:provider:list', [], catalog);
+    await pastFreshWindow();
     const denial = { ok: false as const, error: { code: 'ACCESS_REVOKED' as const, message: 'revoked' } };
     expect(await read('M', 'maker:provider:list', [], async () => denial)).toBe(denial);
     await expect(read('M', 'maker:provider:list', [], async () => { throw failure(); })).rejects.toThrow('NOT_CONNECTED');
@@ -136,6 +171,7 @@ describe('Main provider metadata continuity', () => {
       await read('M', 'maker:provider:list', [], catalog);
       await read('M', 'maker:get-capabilities', [], catalog);
       await read('N', 'maker:provider:list', [], catalog);
+      await pastFreshWindow();
       const current = captureProviderMetadataContinuityScope('M');
       let settle!: () => void;
       const refresh = read('M', 'maker:provider:list', [], () => new Promise((resolve, reject) => {
@@ -160,6 +196,7 @@ describe('Main provider metadata continuity', () => {
       try {
         await read('M', 'maker:provider:list', [], catalog);
         await read('N', 'maker:provider:list', [], catalog);
+        await pastFreshWindow();
         await expect(read('M', 'maker:provider:list', [], async () => {
           throw Object.assign(new Error(`[${code}] refused`), { code: 'IPC_ERROR' });
         })).rejects.toThrow(code);
@@ -172,6 +209,7 @@ describe('Main provider metadata continuity', () => {
 
   it('does not notify or invalidate the new owner when the old owner receives a late denial', async () => {
     await read('M', 'maker:provider:list', [], catalog);
+    await pastFreshWindow();
     let deny!: () => void;
     const old = read('M', 'maker:provider:list', [], () => new Promise((_resolve, reject) => { deny = () => reject(failure('ACCESS_REVOKED')); }));
     await vi.advanceTimersByTimeAsync(2000); await old;
@@ -382,6 +420,7 @@ describe('Main provider metadata continuity', () => {
     const denied = vi.fn(); const off = onProviderMetadataDenied(denied);
     try {
       await read('M', 'maker:provider:list', [], catalog);
+      await pastFreshWindow();
       let resolveSibling!: (value: InvokeResultPayload) => void;
       const sibling = read('M', 'maker:provider:list', [], () => new Promise<InvokeResultPayload>(resolve => { resolveSibling = resolve; }));
       await vi.advanceTimersByTimeAsync(0);
@@ -495,6 +534,7 @@ describe('Main provider metadata continuity', () => {
 
   it('does not resurrect a prior stamped snapshot when the next old-host reply has no stamp', async () => {
     await read('downgrade', 'maker:provider:list', [], catalog);
+    await pastFreshWindow();
     const old = await read('downgrade', 'maker:provider:list', [], oldHostCatalog);
     expect(old).toEqual({ ok: true, result: { providers: [{ id: 'a' }] } });
     await expect(read('downgrade', 'maker:provider:list', [], async () => { throw failure(); }))
@@ -525,6 +565,7 @@ describe('Main provider metadata continuity', () => {
       expect(notified).toHaveBeenCalledTimes(2);
       // A fresh success on this exact resource re-arms the next denial.
       await read('M', 'maker:provider:list', [], catalog);
+      await pastFreshWindow();
       await read('M', 'maker:provider:list', [], async () => denial);
       expect(notified).toHaveBeenCalledTimes(3);
     } finally {
@@ -544,10 +585,12 @@ describe('Main provider metadata continuity', () => {
       await read('M', 'maker:provider:list', [], async () => ({ ok: true as const, result: {
         providers: [{ id: 'a' }], providerContinuity: { stale: true, remainingMs: 60_000 },
       } }));
+      await pastFreshWindow();
       await read('M', 'maker:provider:list', [], async () => denial);
       expect(notified).toHaveBeenCalledTimes(1);
       // A genuinely fresh response re-arms the next denial.
       await read('M', 'maker:provider:list', [], catalog);
+      await pastFreshWindow();
       await read('M', 'maker:provider:list', [], async () => denial);
       expect(notified).toHaveBeenCalledTimes(2);
     } finally {
@@ -612,6 +655,7 @@ describe('Main provider metadata continuity', () => {
       expect(notifications.filter(target => target === targetId)).toHaveLength(afterFirst);
       // Only a fresh success on the same resource re-arms exactly one denial.
       await read(targetId, 'maker:get-capabilities', ['codex'], catalog);
+      await pastFreshWindow();
       await read(targetId, 'maker:get-capabilities', ['codex'], async () => denial);
       expect(notifications.filter(target => target === targetId)).toHaveLength(afterFirst + 1);
     } finally {
@@ -640,6 +684,7 @@ describe('Main provider metadata continuity', () => {
           [{ action: 'view', providerId: 'openai', model: 'fresh-' + i }], groupSuccess);
       }
       const before = notifications.filter(target => target === targetId).length;
+      await pastFreshWindow();
       await read(targetId, 'maker:provider:list', [], async () => denial);
       expect(notifications.filter(target => target === targetId)).toHaveLength(before + 1);
       await read(targetId, PROVIDER_GROUP_REMOTE_CHANNEL,

@@ -6,6 +6,7 @@ import {
 } from '@cindy/device-link';
 
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import { isTemporaryCatalogFailure } from '@/lib/temporaryCatalogFailure';
 
 const EMPTY_IDS: ReadonlySet<string> = new Set();
 const RECEIVED_LIST_RETRY_BASE_MS = 250;
@@ -108,9 +109,16 @@ export function useControlledShareIds(
           return;
         }
         readinessRetryAttempt = 0;
-      } catch {
+      } catch (error) {
         // 旧主机、断链和读失败都不把控制端名单当成被控端可用性的证据。
-        if (current()) setSnapshot(null);
+        // A temporary read failure (timeout, busy) keeps the host's last confirmed list instead of
+        // hiding its shares until the next focus (2026-11-23: shares blinked in remote-control tasks).
+        // Link loss, presence and control changes still clear it through invalidate() above.
+        const message = error instanceof Error ? error.message : String(error);
+        if (current()) {
+          setSnapshot((previous) => isTemporaryCatalogFailure(message) && previous
+            && previous.deviceId === deviceId && previous.owner === owner ? previous : null);
+        }
       } finally {
         if (current()) pending = false;
       }

@@ -322,9 +322,6 @@
     "apps/desktop/src/main/maker-ipc/__tests__/schedulerQueuedPreparation.test.ts": {
       "sourceReads": 1
     },
-    "apps/desktop/src/main/maker-ipc/__tests__/silentStopContinuationBinding.test.ts": {
-      "sourceReads": 1
-    },
     "apps/desktop/src/main/mcp-integrations/__tests__/forgeIconConversionPackaging.test.ts": {
       "sourceReads": 3
     },

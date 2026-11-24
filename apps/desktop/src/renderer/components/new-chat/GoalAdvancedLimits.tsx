@@ -3,11 +3,11 @@
  *
  * 三个安全上限改用下拉(各含「不限」=null),默认收起。值类型 number | null。
  * 预设见下方常量;若当前值不在预设里(历史自定义值),会作为额外一项保留显示。
- * 颜色全走主题 token(规则 16):trigger 用 settings-input,下拉面板用 model-dropdown。
+ * 下拉用共享 Select(紧凑 32px、220px),颜色随共享组件；120px 窄档放不下「不限」的译文。
  */
 
-import { SelectParts as Select } from '@/components/ui/select';
-import { Check, ChevronDown, ChevronRight } from 'lucide-react';
+import { Select } from '@/components/ui/select';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -38,28 +38,15 @@ function formatTokens(n: number): string {
   return String(n);
 }
 
-function LimitItem({ value, label }: { value: string; label: string }): React.ReactElement {
-  return (
-    <Select.Item
-      value={value}
-      className="flex cursor-pointer items-center justify-between gap-3 rounded-lg px-2.5 py-1.5 text-12 outline-none"
-      style={{ color: 'var(--model-item-text)' }}
-    >
-      <Select.ItemText>{label}</Select.ItemText>
-      <Select.ItemIndicator>
-        <Check size={13} className="shrink-0" />
-      </Select.ItemIndicator>
-    </Select.Item>
-  );
-}
-
 function LimitSelect({
+  label,
   value,
   onChange,
   presets,
   format,
   noLimitLabel,
 }: {
+  label: string;
   value: number | null;
   onChange: (v: number | null) => void;
   presets: number[];
@@ -69,42 +56,19 @@ function LimitSelect({
   // 当前值不在预设里(历史自定义)→ 作为额外一项前置,避免编辑时丢值。
   const nums = value != null && !presets.includes(value) ? [value, ...presets] : presets;
   const current = value == null ? UNLIMITED : String(value);
+  // 共享 Select(DESIGN.md §4 Desktop settings controls):紧凑 32px、220px。
   return (
-    <Select.Root value={current} onValueChange={(s) => onChange(s === UNLIMITED ? null : Number(s))}>
-      <Select.Trigger
-        className="flex h-8 w-[140px] items-center justify-between gap-1 rounded-full border px-3 text-12 outline-none"
-        style={{
-          backgroundColor: 'var(--settings-input-bg)',
-          borderColor: 'var(--settings-input-border)',
-          color: 'var(--settings-input-text)',
-        }}
-      >
-        <Select.Value />
-        <Select.Icon>
-          <ChevronDown size={13} className="opacity-60" />
-        </Select.Icon>
-      </Select.Trigger>
-      <Select.Portal>
-        <Select.Content
-          position="popper"
-          sideOffset={4}
-          className="z-[10002] overflow-hidden rounded-xl border p-1.5"
-          style={{
-            // 宽度严格跟随 trigger(radix popper 暴露的变量),避免 popup 按内容宽度自适应。
-            width: 'var(--radix-select-trigger-width)',
-            backgroundColor: 'var(--model-dropdown-bg)',
-            borderColor: 'var(--model-dropdown-border)',
-          }}
-        >
-          <Select.Viewport>
-            {nums.map((n) => (
-              <LimitItem key={n} value={String(n)} label={format(n)} />
-            ))}
-            <LimitItem value={UNLIMITED} label={noLimitLabel} />
-          </Select.Viewport>
-        </Select.Content>
-      </Select.Portal>
-    </Select.Root>
+    <Select
+      label={label}
+      value={current}
+      size="compact"
+      width="sm"
+      options={[
+        ...nums.map((n) => ({ value: String(n), label: format(n) })),
+        { value: UNLIMITED, label: noLimitLabel },
+      ]}
+      onValueChange={(s) => onChange(s === UNLIMITED ? null : Number(s))}
+    />
   );
 }
 
@@ -149,6 +113,7 @@ export function GoalAdvancedLimits({
           </div>
           <Row label={t('goal.editGoal.maxTurns')}>
             <LimitSelect
+              label={t('goal.editGoal.maxTurns')}
               value={value.maxTurns}
               onChange={(v) => onChange({ ...value, maxTurns: v })}
               presets={MAX_TURNS_PRESETS}
@@ -158,6 +123,7 @@ export function GoalAdvancedLimits({
           </Row>
           <Row label={t('goal.editGoal.budgetTokens')}>
             <LimitSelect
+              label={t('goal.editGoal.budgetTokens')}
               value={value.budgetTokens}
               onChange={(v) => onChange({ ...value, budgetTokens: v })}
               presets={BUDGET_PRESETS}
@@ -167,6 +133,7 @@ export function GoalAdvancedLimits({
           </Row>
           <Row label={t('goal.editGoal.noProgressLimit')}>
             <LimitSelect
+              label={t('goal.editGoal.noProgressLimit')}
               value={value.noProgressLimit}
               onChange={(v) => onChange({ ...value, noProgressLimit: v })}
               presets={NO_PROGRESS_PRESETS}

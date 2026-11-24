@@ -7,7 +7,7 @@ import { PROVIDER_SHARE_DIRECT_SIGNAL_CAPABILITY } from '@cindy/device-link-prot
 import { gunzipSync, gzipSync } from 'node:zlib';
 import { describe, it, expect, vi } from 'vitest';
 import { REMOTE_AGENT_CHANNEL, REMOTE_AGENT_READ_WAIT_MS } from '../remoteAgent.js';
-import { DeviceLinkClient, SYSTEM_SUSPEND_RECONNECT_HOLD_MS, computeReconnectDelayMs, type WsLike } from '../client.js';
+import { DeviceLinkClient, DeviceLinkRegistrationRemovedError, SYSTEM_SUSPEND_RECONNECT_HOLD_MS, computeReconnectDelayMs, type WsLike } from '../client.js';
 import {
   PROTOCOL_VERSION,
   DeviceLinkError,
@@ -127,6 +127,7 @@ function makeHarness(opts?: {
   invokeMetrics?: ConstructorParameters<typeof DeviceLinkClient>[0]['invokeMetrics'];
   frameAuth?: ConstructorParameters<typeof DeviceLinkClient>[0]['frameAuth'];
   transportAllowed?: () => boolean;
+  beforeSocket?: () => void;
 }): Harness {
   const sockets: FakeWs[] = [];
   const client = new DeviceLinkClient({
@@ -141,6 +142,7 @@ function makeHarness(opts?: {
       busy: false,
     }),
     createWebSocket: () => {
+      opts?.beforeSocket?.();
       const ws = new FakeWs();
       sockets.push(ws);
       return ws;
@@ -6840,6 +6842,79 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  // 2026-11-23 现场：两台 Windows 共用 MachineGuid → 同一设备身份，各自在线约 15 秒就被对方以
+  // 4409 或 1012「connection no longer current」顶掉；15 秒跨过 10 秒稳定窗，退避每次归零，
+  // 3 小时互踢 318 次。最小失败输入：在线 15 秒后被顶替，修复前任何情况都约 1 秒后重连。
+  // 不变量：宿主没确认冲突时行为与修复前完全一致；确认后才逐次拉长，且网络变化不能提前重连。
+  it('被同一设备身份的另一条连接顶替：宿主确认冲突前照旧立即重连，确认后逐次拉长等待', async () => {
+    vi.useFakeTimers();
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.9999);
+    const h = makeHarness({
+      timing: {
+        reconnectBaseMs: 1_000,
+        reconnectMaxMs: 30_000,
+        reconnectStableResetMs: 10_000,
+        // 假 socket 不回 pong；心跳拉长到用例之外，只看被顶替的重连。
+        pingIntervalMs: 60_000,
+        duplicateIdentityCooldownBaseMs: 5_000,
+        duplicateIdentityCooldownMaxMs: 60_000,
+        duplicateIdentityStreakResetMs: 5 * 60_000,
+      },
+    });
+    const replaced: Array<{ closeCode: number; onlineForMs: number | null }> = [];
+    h.client.onReplaced(({ closeCode, onlineForMs }) => replaced.push({ closeCode, onlineForMs }));
+    const kickedAfterOnline = async (code: number, reason: string) => {
+      h.current().ack();
+      await vi.advanceTimersByTimeAsync(15_000);
+      h.current().emit('close', code, reason);
+    };
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+
+      // 未确认：与修复前一致，约 1 秒后重连。
+      await kickedAfterOnline(4409, 'replaced by new connection');
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(h.sockets).toHaveLength(2);
+
+      // 确认后：1012「connection no longer current」同样算被顶替，至少等 5 秒，
+      // 期间网络变化触发的立即重连被挡住。
+      h.client.setDuplicateIdentityCooldown(true);
+      await kickedAfterOnline(1012, 'connection no longer current');
+      await vi.advanceTimersByTimeAsync(4_000);
+      h.client.connectNow('network-change');
+      expect(h.sockets).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(1_100);
+      expect(h.sockets).toHaveLength(3);
+
+      // 第二次连续被顶替：至少 10 秒。
+      await kickedAfterOnline(4409, 'replaced by new connection');
+      await vi.advanceTimersByTimeAsync(9_000);
+      expect(h.sockets).toHaveLength(3);
+      await vi.advanceTimersByTimeAsync(1_100);
+      expect(h.sockets).toHaveLength(4);
+
+      // 服务重启的 1012 不是被顶替。
+      h.current().ack();
+      h.current().emit('close', 1012, 'service restart');
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(h.sockets).toHaveLength(5);
+
+      // 撤销冷却后回到原来的立即重连。
+      h.client.setDuplicateIdentityCooldown(false);
+      await kickedAfterOnline(4409, 'replaced by new connection');
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(h.sockets).toHaveLength(6);
+
+      expect(replaced.map((event) => event.closeCode)).toEqual([4409, 1012, 4409, 4409]);
+      expect(replaced[0]?.onlineForMs).toBe(15_000);
+    } finally {
+      h.client.stop();
+      random.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it('断线时在途请求全部 NOT_CONNECTED', async () => {
     const h = makeHarness();
     h.client.start();
@@ -12342,21 +12417,27 @@ describe('host-triggered recovery of previously reliable links', () => {
   });
 });
 
-it('stops automatic reconnect after device removal and permits a new login lifecycle', async () => {
-  const h = makeHarness();
+// The same recovery entry must be visible when an official refusal happens before a socket exists.
+it.each(['socket close', 'factory refusal'])('stops automatic reconnect after device removal (%s)', async (source) => {
+  let removed = source === 'factory refusal';
+  const h = makeHarness({ beforeSocket: () => { if (removed) throw new DeviceLinkRegistrationRemovedError(); } });
   h.client.start();
   await tick();
-  h.current().ack();
-  h.current().emit('close', 4410, 'device removed');
+  if (source === 'socket close') {
+    h.current().ack();
+    h.current().emit('close', 4410, 'device removed');
+  }
+  const initialSockets = h.sockets.length;
   expect(h.client.getStatus()).toBe('stopped');
   expect(h.client.getConnectionIssue()?.kind).toBe('device-removed');
   h.client.connectNow('foreground');
   h.client.restartConnection('token-refresh');
   await tick(50);
-  expect(h.sockets).toHaveLength(1);
+  expect(h.sockets).toHaveLength(initialSockets);
+  removed = false;
   h.client.start();
   await tick();
-  expect(h.sockets).toHaveLength(2);
+  expect(h.sockets).toHaveLength(initialSockets + 1);
   h.current().ack();
   expect(h.client.getStatus()).toBe('online');
   expect(h.client.getConnectionIssue()).toBeNull();

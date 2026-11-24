@@ -72,6 +72,8 @@ it.each(['catalog', 'harness-read', 'native-preview', 'valid-harness', 'valid-mo
           effectiveProviderId: providerId, assertRuntimeOwnerCurrent: vi.fn(), assertSharedTaskCurrent: { admit: vi.fn() },
           piConfigurationRefresh: false, canTransferThread: false, atomicSelection: { effort: null, fastMode: false },
           rebuildLiveOrcaWorker: false, runtimeAgentKind: 'pi', runtimeRouteChanged: true,
+          // The adapter computes these before this slice. Pi uses neither Claude/Codex selection path.
+          configuredCredentialSelection: false, deferredSelection: undefined,
           isSessionInTurn: () => false, registerPendingCredentialSwitchForSession: vi.fn(),
           clearPendingCredentialSwitchForSession: vi.fn(), getPendingCredentialSwitchTarget: () => null,
           getCodexProxyAuthInjectionState: () => null, log: { debug: vi.fn(), info: vi.fn() },

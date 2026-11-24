@@ -1,13 +1,16 @@
 import type { ModelRoute } from '@cindy/maker-shared/model-route';
 import type { ProviderView } from '@cindy/model-providers';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { changeAppDefaultModel, configureAppDefaultModelSelection, inspectAppDefaultModel, validateTaskModel, resolveAvailableTaskModels, resolveTaskModelSelection } from '../appDefaultModelControl';
+import { changeAppDefaultModel, configureAppDefaultModelSelection, inspectAppDefaultModel, inspectTeammateModelChoices, validateTaskModel, resolveAvailableTaskModels, resolveTaskModelSelection } from '../appDefaultModelControl';
 import { setNewMakerDraftCache, syncNewMakerDraftCache } from '../../maker-host/newMakerDefaultsCache';
 
 const host = vi.hoisted(() => ({ owner: 'owner:1', enabled: true, connected: true, agents: ['codex'],
-  enableSecond: false, providers: vi.fn(), remote: vi.fn(), pluginEngines: vi.fn((): unknown[] => []) }));
+  enableSecond: false, providers: vi.fn(), remote: vi.fn(), remotePlugin: vi.fn(), pluginEngines: vi.fn((): unknown[] => []) }));
 vi.mock('../pluginEnginesIpc.js', () => ({ listPluginEngineViews: host.pluginEngines }));
-vi.mock('../../remote-agent/controller/deviceCatalog.js', () => ({ readRemoteProviderRoute: host.remote }));
+vi.mock('../../remote-agent/controller/deviceCatalog.js', () => ({
+  readRemoteProviderRoute: host.remote,
+  readRemotePluginEngines: host.remotePlugin,
+}));
 vi.mock('../../maker-host/index.js', () => ({ getMakerIfReady: () => ({ listAvailableAgents: () => host.agents }) }));
 vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
   getDesktopProviderService: () => ({ listProviders: host.providers }),
@@ -28,6 +31,7 @@ beforeEach(() => {
   host.enableSecond = false;
   host.pluginEngines.mockReset();
   host.pluginEngines.mockReturnValue([]);
+  host.remotePlugin.mockReset();
   host.owner = 'owner:1'; host.enabled = true; host.connected = true; host.agents = ['codex'];
   host.providers.mockImplementation(async () => [{ id: 'openai', source: 'builtin', connected: host.connected, agents: ['codex'], routing: { codex: { upstream: 'https://example.invalid', authStrategy: 'oauth-passthrough' } },
     models: { codex: ['luna', 'sol'].map(model => ({ id: model, status: 'active', mode: 'chat', defaultEnabled: true,
@@ -46,6 +50,55 @@ it('validates the offered companion model on its host without adding it to appli
   expect(await inspectAppDefaultModel()).toMatchObject({ current: route, available: [] });
   host.pluginEngines.mockReturnValue([]);
   expect(await validateTaskModel(plugin)).toBe(false);
+});
+
+// 依据：用户反馈伙伴自己改模型（update_teammate_profile，id 来自 get_app_default_model）选不到插件引擎，设置页却能选。
+// 覆盖缺口：伙伴工具的可选列表只来自应用默认模型目录，从不含插件引擎。最小失败输入（unit）：本机一个可用引擎
+// （有模型与只有默认模型各一）、一个已隐藏、一个不可用；再用插件引擎 id 改应用默认。
+it('offers this computer\'s plugin engines to a teammate chain, never to the application default', async () => {
+  host.pluginEngines.mockReturnValue([
+    { providerId: 'acp-plugin:agy:agy', name: 'Antigravity', availability: { state: 'available' },
+      models: [{ id: 'gemini-3-pro', displayName: 'Gemini 3 Pro', efforts: ['low', 'high', 'bogus'] }] },
+    { providerId: 'acp-plugin:dsh:dsh', name: 'DSH', availability: { state: 'unknown' }, models: [] },
+    { providerId: 'acp-plugin:shared:x', name: 'Shared', defaultModelAllowed: false, availability: { state: 'available' }, models: [{ id: 'only', displayName: 'Only' }] },
+    { providerId: 'acp-plugin:hidden:x', name: 'Hidden', hidden: true, availability: { state: 'available' }, models: [{ id: 'm', displayName: 'M' }] },
+    { providerId: 'acp-plugin:off:x', name: 'Off', availability: { state: 'unavailable' }, models: [{ id: 'm', displayName: 'M' }] },
+  ]);
+  const { available } = await inspectTeammateModelChoices();
+  const engines = available.filter(item => item.route.harness === 'acp');
+  expect(engines).toEqual([
+    // Review (#12295): the engine default stays offered after the engine reports models, so a chain
+    // saved with it can still be edited.
+    expect.objectContaining({ id: JSON.stringify(['acp', 'acp-plugin:agy:agy', 'default']), teammateOnly: true }),
+    expect.objectContaining({ id: JSON.stringify(['acp', 'acp-plugin:agy:agy', 'gemini-3-pro']), teammateOnly: true, engine: 'Antigravity',
+      displayName: 'Gemini 3 Pro', efforts: ['low', 'high'], supportsFastMode: false,
+      route: { harness: 'acp', providerId: 'acp-plugin:agy:agy', model: 'gemini-3-pro', effort: '', fastMode: false } }),
+    expect.objectContaining({ id: JSON.stringify(['acp', 'acp-plugin:dsh:dsh', 'default']), teammateOnly: true,
+      route: { harness: 'acp', providerId: 'acp-plugin:dsh:dsh', model: 'default', effort: '', fastMode: false } }),
+    expect.objectContaining({ id: JSON.stringify(['acp', 'acp-plugin:shared:x', 'only']), teammateOnly: true }),
+  ]);
+  expect(available.some(item => item.id === id)).toBe(true);
+  expect((await inspectAppDefaultModel()).available.map(item => item.route.harness)).toEqual(['codex']);
+  await expect(changeAppDefaultModel(engines[0]!.id)).rejects.toThrow();
+});
+
+// 依据：伙伴允许选择同账号远程电脑或好友分享的插件供应商，不要求本机安装同名插件。
+// 覆盖缺口：resolveAvailableTaskModels 此前对带 agentDeviceId 的 acp 路由一律返回 null。
+// 最小失败输入：本机无插件，校验 share:friend 与 other-device 上的 acp 路由；tier：unit。
+it('validates remote and shared plugin engine routes against the target device catalog', async () => {
+  const shared = { harness: 'acp' as const, agentDeviceId: 'share:friend', providerId: 'acp-plugin:sample:engine', model: 'chosen', effort: 'high', fastMode: false };
+  const badEffort = { ...shared, effort: 'max' };
+  const missing = { ...shared, agentDeviceId: 'other-device', model: 'missing' };
+  host.connected = false;
+  host.remotePlugin.mockImplementation(async (deviceId: string) => {
+    if (deviceId === 'share:friend') {
+      return [{ providerId: shared.providerId, availability: { state: 'available' }, models: [{ id: 'chosen', efforts: ['high'] }] }];
+    }
+    throw new Error('[REMOTE_AGENT_UNAVAILABLE] unavailable');
+  });
+  expect(await resolveAvailableTaskModels([shared, badEffort, missing])).toEqual([shared, null, null]);
+  expect(host.remotePlugin.mock.calls).toEqual([['share:friend'], ['other-device']]);
+  expect(host.pluginEngines).not.toHaveBeenCalled();
 });
 
 describe('Bot control of the real Cindy default', () => {

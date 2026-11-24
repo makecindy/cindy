@@ -35,7 +35,17 @@
   "retryAccess": "アクセスを再試行",
   "recheck": "再確認",
   "deviceRemovedTitle": "デバイスが削除されました",
-  "deviceRemovedHint": "ログアウトして再度ログインすると、デバイス一覧に追加できます。",
+  "deviceRemovedHint": "このスマートフォンはアカウントから削除されました。「再参加」をタップすると戻せます。",
+  "rejoin": {
+    "action": "再参加",
+    "busy": "再参加しています",
+    "doneTitle": "再参加しました",
+    "agentNetUnavailable": "Agent-Net サービスはまだ再参加に対応していないため、このスマートフォンは当面 Agent-Net を使わずに接続します。",
+    "failedTitle": "再参加できませんでした",
+    "failed": "ネットワークを確認して、もう一度お試しください。",
+    "unsupported": "サービスがまだ再参加に対応していません。ログアウトしてから再度ログインしてください。",
+    "agentNetUnsupported": "Agent-Net サービスはまだ再参加に対応していません。「暗号化された接続のみ使用」をオフにすると、Agent-Net を使わずにこのスマートフォンを戻せます。"
+  },
   "authFailedTitle": "ログインの有効期限が切れました",
   "authFailedHint": "ログインの有効期限が切れています。ログアウトして、もう一度ログインしてください。",
   "replacedTitle": "接続が置き換えられました",

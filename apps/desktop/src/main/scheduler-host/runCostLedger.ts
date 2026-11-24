@@ -6,12 +6,13 @@ import { messageCostDatabase } from '../usage/turnUsageAdmission.js';
  * 保存其聚合快照，供 Run History 直接读取。更新按“补丁前后差值”执行，同一消息
  * 重放不会重复累计，估算值改为真实费用时也能从两栏之间正确搬移。
  */
+import { supplementalConversationEstimates } from '@cindy/maker-shared/usage-cost-details';
 import { eq, sql } from 'drizzle-orm';
 
 import { getDbClient } from '../localDb/client/current';
 import { scheduleRuns } from '../localDb/schema';
 import { createLogger } from '../logger';
-import { legacyUsdMoney, normalizeRegionalMoney } from '../../shared/regionalMoney.js';
+import { legacyUsdMoney, normalizeRegionalMoney, type RegionalMoney } from '../../shared/regionalMoney.js';
 
 const log = createLogger('runCostLedger');
 
@@ -39,30 +40,32 @@ function finitePositive(value: unknown): number {
     : 0;
 }
 
-function runCostEntry(meta: Record<string, unknown>): RunCostEntry | null {
+function runCostEntries(meta: Record<string, unknown>): RunCostEntry[] {
   const origin = meta.origin;
-  if (!origin || typeof origin !== 'object' || Array.isArray(origin)) return null;
+  if (!origin || typeof origin !== 'object' || Array.isArray(origin)) return [];
   const parsedOrigin = origin as Record<string, unknown>;
-  if (parsedOrigin.kind !== 'scheduler') return null;
+  if (parsedOrigin.kind !== 'scheduler') return [];
   const runId = parsedOrigin.runId;
-  if (typeof runId !== 'string' || runId.length === 0) return null;
+  if (typeof runId !== 'string' || runId.length === 0) return [];
 
   const money =
     normalizeRegionalMoney(meta.turnCost) ??
     (finitePositive(meta.turnCostUsd) > 0
       ? legacyUsdMoney(finitePositive(meta.turnCostUsd))
       : undefined);
-  if (!money || money.amount <= 0) return null;
-  const isEstimate = meta.turnCostIsEstimate === true || money.kind === 'value-estimate';
-  return {
+  const amounts = [
+    ...(money && money.amount > 0 ? [{
+      ...money, kind: meta.turnCostIsEstimate === true ? 'value-estimate' as const : money.kind,
+    }] : []),
+    ...supplementalConversationEstimates(meta),
+  ];
+  return amounts.map(value => ({
     runId,
-    costAmount: isEstimate ? 0 : money.amount,
-    estimatedValueAmount: isEstimate ? money.amount : 0,
-    currency: money.currency,
-    // cost_is_approximate 只描述真实费用；订阅价值本身始终由
-    // estimatedValueMoney 标成 value-estimate，不能污染真实费用。
-    approximate: !isEstimate && money.approximate,
-  };
+    costAmount: value.kind === 'actual-cost' ? value.amount : 0,
+    estimatedValueAmount: value.kind === 'value-estimate' ? value.amount : 0,
+    currency: value.currency,
+    approximate: value.kind === 'actual-cost' && value.approximate,
+  }));
 }
 
 /** 计算消息元数据变化对 run 聚合的幂等差值，最多影响旧/新两个 run。 */
@@ -74,8 +77,7 @@ export function computeScheduleRunCostDeltas(
   // 历史数据重写)时,旧币种减、新币种加各成一条 delta,由 SQL 侧的 CASE 币种
   // 守卫逐条裁决——绝不 throw,抛异常会让整个差值应用被跳过。
   const changes = new Map<string, ScheduleRunCostDelta>();
-  const apply = (entry: RunCostEntry | null, direction: 1 | -1) => {
-    if (!entry) return;
+  const apply = (entry: RunCostEntry, direction: 1 | -1) => {
     const key = `${entry.runId}\u0000${entry.currency}`;
     const current = changes.get(key) ?? {
       runId: entry.runId,
@@ -88,11 +90,11 @@ export function computeScheduleRunCostDeltas(
     current.estimatedValueAmountDelta += direction * entry.estimatedValueAmount;
     // 这里是消息快照替换，不是新费用累加。只让 next 决定新的近似状态，
     // 避免 approximate 消息被精确金额替换后永久保持 true。
-    if (direction === 1) current.approximate = entry.approximate;
+    if (direction === 1) current.approximate ||= entry.approximate;
     changes.set(key, current);
   };
-  apply(runCostEntry(previous), -1);
-  apply(runCostEntry(next), 1);
+  for (const entry of runCostEntries(previous)) apply(entry, -1);
+  for (const entry of runCostEntries(next)) apply(entry, 1);
   return [...changes.values()].filter(
     (change) =>
       Math.abs(change.costAmountDelta) >= MIN_RECORDED_COST_USD ||
@@ -109,9 +111,7 @@ export async function applyScheduleRunCostMetaChange(
   if (changes.length === 0) return;
   const db = (messageCostDatabase.getStore() ?? getDbClient()).drizzle;
   for (const change of changes) {
-    // 单币种快照:币种守卫在同一条 UPDATE 里用 CASE 表达(先查再写有 TOCTOU
-    // 窗口)。币种冲突的 delta 原子地弃掉——金额、币种、约值标记全部保持原样,
-    // 绝不能只保金额却改写 costCurrency(那会把旧币种数值错标成新币种)。
+    // Compare the stored currency inside the update so each estimate lands in its own bucket.
     const sameCurrency = sql`(${scheduleRuns.costCurrency} IS NULL OR ${scheduleRuns.costCurrency} = ${change.currency})`;
     await db
       .update(scheduleRuns)
@@ -126,6 +126,10 @@ export async function applyScheduleRunCostMetaChange(
             THEN ${scheduleRuns.costAmount}
           ELSE MAX(0, ${scheduleRuns.costAmount} + ${change.costAmountDelta})
         END`,
+        otherEstimatedValueAmount: sql<number>`CASE
+          WHEN ${sameCurrency} OR ${scheduleRuns.costAttribution} = 'direct'
+            THEN ${scheduleRuns.otherEstimatedValueAmount}
+          ELSE MAX(0, ${scheduleRuns.otherEstimatedValueAmount} + ${change.estimatedValueAmountDelta}) END`,
         estimatedValueAmount: sql<number>`CASE
           WHEN NOT ${sameCurrency} THEN ${scheduleRuns.estimatedValueAmount}
           WHEN ${scheduleRuns.costAttribution} = 'direct'
@@ -162,7 +166,8 @@ export async function applyScheduleRunCostMetaChange(
  */
 export async function recordScheduleRunCostDirect(args: {
   runId: string;
-  money: import('../../shared/regionalMoney.js').RegionalMoney;
+  money: RegionalMoney;
+  estimatedAmounts?: readonly RegionalMoney[];
 }): Promise<string | null> {
   const { runId } = args;
   const money = normalizeRegionalMoney(args.money);
@@ -172,6 +177,13 @@ export async function recordScheduleRunCostDirect(args: {
   // not create a direct-only run segment or a misleading changed broadcast.
   if (money.amount > 0 && amount === 0) return null;
   const isEstimate = money.kind === 'value-estimate';
+  const estimates = supplementalConversationEstimates({
+    turnCost: money, turnUsageDetails: { estimatedAmounts: args.estimatedAmounts },
+  });
+  const sameEstimate = (isEstimate ? amount : 0) + estimates.filter(value => value.currency === money.currency)
+    .reduce((sum, value) => sum + value.amount, 0);
+  const otherEstimate = estimates.filter(value => value.currency !== money.currency)
+    .reduce((sum, value) => sum + value.amount, 0);
 
   const db = getDbClient().drizzle;
   const [run] = await db
@@ -183,7 +195,7 @@ export async function recordScheduleRunCostDirect(args: {
     .where(eq(scheduleRuns.id, runId))
     .limit(1);
   if (!run) return null;
-  if (run.costCurrency && run.costCurrency !== money.currency) {
+  if (!isEstimate && run.costCurrency && run.costCurrency !== money.currency) {
     // 观察到冲突只 warn 留痕;强制语义靠下方 UPDATE 内的 CASE 守卫(先查
     // 再写有 TOCTOU 窗口),冲突段原子地弃掉,不 throw 打断调度记账管道。
     log.warn(
@@ -196,7 +208,8 @@ export async function recordScheduleRunCostDirect(args: {
     .update(scheduleRuns)
     .set({
       costAmount: sql<number>`CASE WHEN ${sameCurrency} THEN MAX(0, ${scheduleRuns.costAmount} + ${isEstimate ? 0 : amount}) ELSE ${scheduleRuns.costAmount} END`,
-      estimatedValueAmount: sql<number>`CASE WHEN ${sameCurrency} THEN MAX(0, ${scheduleRuns.estimatedValueAmount} + ${isEstimate ? amount : 0}) ELSE ${scheduleRuns.estimatedValueAmount} END`,
+      estimatedValueAmount: sql<number>`${scheduleRuns.estimatedValueAmount} + CASE WHEN ${sameCurrency} THEN ${sameEstimate} ELSE ${otherEstimate} END`,
+      otherEstimatedValueAmount: sql<number>`${scheduleRuns.otherEstimatedValueAmount} + CASE WHEN ${sameCurrency} THEN ${otherEstimate} ELSE ${sameEstimate} END`,
       costCurrency: sql`CASE WHEN ${sameCurrency} THEN ${money.currency} ELSE ${scheduleRuns.costCurrency} END`,
       costIsApproximate: sql`CASE WHEN ${sameCurrency} THEN (${scheduleRuns.costIsApproximate} OR ${
         !isEstimate && money.approximate ? 1 : 0
@@ -207,7 +220,7 @@ export async function recordScheduleRunCostDirect(args: {
       costAttribution:
         isEstimate || amount > 0
           ? sql<string>`CASE
-              WHEN NOT ${sameCurrency} THEN ${scheduleRuns.costAttribution}
+              WHEN NOT ${sameCurrency} AND ${sameEstimate + otherEstimate} = 0 THEN ${scheduleRuns.costAttribution}
               WHEN ${scheduleRuns.costAttribution} = 'mixed' THEN 'mixed'
               WHEN ${scheduleRuns.costAttribution} = 'exact' THEN 'mixed'
               ELSE 'direct'

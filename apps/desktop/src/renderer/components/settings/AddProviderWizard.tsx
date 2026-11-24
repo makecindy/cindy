@@ -51,6 +51,10 @@ import { localCliDisplayName, type LocalCliDetection } from '../../../shared/loc
 import { useProviderOAuthDeviceCode } from '@/hooks/useProviderOAuthDeviceCode';
 import { isSubscriptionProvider } from '../../../shared/subscriptionAccounts';
 import { SubscriptionSignInChoices, type SubscriptionSignInTarget } from './SubscriptionSignInChoices';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import type { OfficialModelPlugin } from '../../../shared/pluginMarket';
+import { OfficialModelPluginStep } from './OfficialModelPluginStep';
+import { useOfficialModelPlugins } from './useOfficialModelPlugins';
 import { cardIcon, ProviderRow } from './ProviderRow';
 import { LocalOllamaInstall, offersManagedOllamaInstall } from './LocalOllamaInstall';
 import { MANAGED_LLAMACPP_PROVIDER_ID } from '../../../shared/llamaCpp';
@@ -92,6 +96,7 @@ interface AddProviderWizardProps {
   onReturnCustom?: (draft: DetectedProviderDraft) => void;
   providers: ProviderView[];
   entry?: WizardEntry;
+  showOfficialModelPlugins?: boolean;
   /** 连接失败已在向导内提示；父级只恢复草稿，不再提示目录目标失效。 */
   onEntryUnavailable?: (reason?: 'target-unavailable' | 'connection-failed') => void;
   /** 「自定义端点」卡片 → 关闭向导并打开完整表单。 */
@@ -309,6 +314,7 @@ export function AddProviderWizard({
   providers,
   entry,
   onEntryUnavailable,
+  showOfficialModelPlugins,
   onOpenCustomForm: openCustomForm,
   onClose: notifyClosed,
   onDone: notifyDone,
@@ -334,6 +340,7 @@ export function AddProviderWizard({
   const consumePresetEntry = useCallback(() => {
     if (entry?.kind === 'preset') presetEntryConsumedRef.current = entry.presetId;
   }, [entry]);
+  const [pluginStep, setPluginStep] = useState<{ item: OfficialModelPlugin; owner: ReturnType<typeof getDataOwnerGeneration> }>();
   const [query, setQuery] = useState('');
   // entry(左栏检测建议 / 引导卡直达):目录里找得到该渠道才直达授权步,否则回落目录页。
   const entryProvider =
@@ -507,6 +514,10 @@ export function AddProviderWizard({
     [presets],
   );
   const q = query.trim().toLowerCase();
+  const activePluginStep = pluginStep && isDataOwnerGenerationCurrent(pluginStep.owner) ? pluginStep : undefined;
+  const officialPlugins = useOfficialModelPlugins(step === 1 && !activePluginStep && !!showOfficialModelPlugins, i18n.language);
+  const matchingPlugins = officialPlugins.items.filter(item =>
+    !q || [item.name, item.ghostId, item.description].some(value => value?.toLowerCase().includes(q)));
   const filteredOauth = q
     ? oauthChoices.filter((p) => p.name.toLowerCase().includes(q))
     : oauthChoices;
@@ -1031,6 +1042,7 @@ export function AddProviderWizard({
           discoveredSources: { ...existing?.discoveredSources, [agent]: m.discoveredSource },
           discoverySnapshotIds: { ...existing?.discoverySnapshotIds, [agent]: m.discoverySnapshotId },
           opaqueModelIds: { ...existing?.opaqueModelIds, [agent]: m.opaqueModelId },
+          ...(m.discoveredCost ? { discoveredCosts: { ...existing?.discoveredCosts, [agent]: m.discoveredCost } } : {}),
           ...(m.route ? { routes: { ...existing?.routes, [agent]: m.route } } : {}),
         });
       }
@@ -1208,9 +1220,13 @@ export function AddProviderWizard({
               existing.name !== m.name ||
               m.discoveredSource || m.discoverySnapshotId || m.opaqueModelId ||
               existing.discoveredSources?.[agent] || existing.discoverySnapshotIds?.[agent] ||
-              m.discoveredCost ||
+              m.discoveredCost || existing.discoveredCosts?.[agent] ||
               m.discoveredMetadata || existing.speechReference
             ) {
+              const nextDiscoveredCosts = { ...existing.discoveredCosts };
+              if (m.discoveredCost) nextDiscoveredCosts[agent] = m.discoveredCost;
+              else delete nextDiscoveredCosts[agent];
+              const hasDiscoveredCosts = Object.keys(nextDiscoveredCosts).length > 0;
               next.set(m.id, {
                 ...existing,
                 speechReference: false,
@@ -1221,7 +1237,7 @@ export function AddProviderWizard({
                 discoveredSources: { ...existing.discoveredSources, [agent]: m.discoveredSource },
                 discoverySnapshotIds: { ...existing.discoverySnapshotIds, [agent]: m.discoverySnapshotId },
                 opaqueModelIds: { ...existing.opaqueModelIds, [agent]: m.opaqueModelId || existing.opaqueModelIds?.[agent] },
-                ...(m.discoveredCost ? { discoveredCosts: { ...existing.discoveredCosts, [agent]: m.discoveredCost } } : {}),
+                discoveredCosts: hasDiscoveredCosts ? nextDiscoveredCosts : undefined,
                 agents: mergedAgents,
                 discoveredMetadata: {
                   ...existing.discoveredMetadata,
@@ -1402,7 +1418,7 @@ export function AddProviderWizard({
             const discoveredMetadata = m.discoveredMetadata?.[agent] ?? {};
             // Current picks own visibility; an old disabled draft must not override
             // a checked row. Leave checked models on the existing default contract.
-            const { defaultEnabled: _oldEnabled, ...draftModel }: Partial<ProviderRuntimeModelConfig> =
+            const { defaultEnabled: _oldEnabled, discoveredCost: _oldCost, ...draftModel }: Partial<ProviderRuntimeModelConfig> =
               detected?.config.runtimes[agent]?.models.find(model => model.id === m.id) ?? {};
             return {
               ...draftModel,
@@ -1579,7 +1595,7 @@ export function AddProviderWizard({
   return (
     <Dialog.Root open={dialog.open} onOpenChange={(open) => { if (!open) handleClose(); }}>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" style={WINDOW_DRAG_STYLE} />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" style={WINDOW_DRAG_STYLE} />
       <Dialog.Content
         ref={panelRef}
         aria-describedby={undefined}
@@ -1595,8 +1611,12 @@ export function AddProviderWizard({
           if (savingRef.current || event.isComposing || event.keyCode === 229) event.preventDefault();
         }}
         style={WINDOW_NO_DRAG_STYLE}
-        className="modal-panel fixed inset-0 z-[10000] m-auto flex h-fit max-h-[min(640px,85vh)] w-[min(600px,calc(100vw-32px))] flex-col overflow-hidden outline-none"
+        className="modal-panel fixed inset-0 z-modal m-auto flex h-fit max-h-[min(640px,85vh)] w-[min(600px,calc(100vw-32px))] flex-col overflow-hidden outline-none"
       >
+        {activePluginStep ? (
+          <OfficialModelPluginStep item={activePluginStep.item} owner={activePluginStep.owner}
+            onBack={() => setPluginStep(undefined)} onDone={() => onDone()} />
+        ) : <>
         {/* 头部:标题居左 + 步骤指示居右,同一行(2026-07 定稿原型形态)。 */}
         <div className="flex items-center justify-between gap-4 px-4 pb-3 pt-4">
           <Dialog.Title asChild><h3
@@ -1823,6 +1843,33 @@ export function AddProviderWizard({
                     })}
                   </>
                 )}
+                {showOfficialModelPlugins && (matchingPlugins.length > 0 || officialPlugins.failed || officialPlugins.hasMore) && (
+                  <>
+                    <GroupLabel>{t('settings.providers.wizard.officialModelPlugins')}</GroupLabel>
+                    {matchingPlugins.map(item => (
+                      <ProviderRow
+                        key={item.pluginId}
+                        icon={cardIcon({ name: item.name })}
+                        name={item.name}
+                        meta={t('settings.providers.wizard.configurePlugin')}
+                        onClick={() => setPluginStep({ item, owner: getDataOwnerGeneration() })}
+                      />
+                    ))}
+                  </>
+                )}
+                {officialPlugins.hasMore && (
+                  <Button variant="secondary" data-settings-search-action="Load the next page of official model plugins" onClick={officialPlugins.loadMore}>
+                    {t('settings.ghosts.contribution.loadMore')}
+                  </Button>
+                )}
+                {officialPlugins.failed && (
+                  <div className="flex items-center justify-between gap-2 px-3 py-2">
+                    <span role="status">{t('settings.ghosts.market.unavailable')}</span>
+                    <Button variant="secondary" data-settings-search-action="Retry loading the official model plugin catalog" onClick={officialPlugins.retry}>
+                      {t('settings.providers.wizard.retryPlugin')}
+                    </Button>
+                  </div>
+                )}
                 {listedLocalPresets.length > 0 && (
                   <>
                     <GroupLabel>{t('settings.providers.wizard.moreLocal')}</GroupLabel>
@@ -1978,12 +2025,12 @@ export function AddProviderWizard({
                   {t('settings.providers.custom.fields.apiKey')}
                 </label>
                 <SettingsTextInput
+                  data-settings-search-action="Enter the API key of the built-in provider draft in this wizard"
                   value={apiKey}
                   onChange={setApiKey}
                   size="md"
                   mono
                   secret
-                  secretTipContentClassName="z-[10001]"
                 />
               </div>
             </div>
@@ -2024,13 +2071,13 @@ export function AddProviderWizard({
                     {t('settings.providers.custom.fields.apiKey')}
                   </label>
                   <SettingsTextInput
+                    data-settings-search-action="Enter the API key of the preset provider draft in this wizard"
                     value={apiKey}
                     onChange={setApiKey}
                     placeholder={isMimoTokenPlanPreset(sel.preset) ? 'tp-…' : 'sk-…'}
                     size="md"
                     mono
                     secret
-                    secretTipContentClassName="z-[10001]"
                   />
                   {bindGeminiImages && <InfoLine text={t('settings.providers.wizard.geminiImageKeyNote')} />}
                   {isMimoTokenPlanPreset(sel.preset) && (
@@ -2257,6 +2304,7 @@ export function AddProviderWizard({
         <div className="flex items-center justify-between px-4 pb-4 pt-2">
           <button
             type="button"
+            data-settings-search-action="Return to the previous wizard step or custom provider form"
             onClick={() => {
               if (savingRef.current) return;
               if (step === 2 && detected && onReturnCustom && sel?.kind === 'preset') {
@@ -2282,7 +2330,7 @@ export function AddProviderWizard({
                       const saved = original.models.find(row => row.id === id);
                       // Only checked rows return to the custom form. Do not
                       // resurrect an older disabled flag on this second save path.
-                      const { defaultEnabled: _oldEnabled, ...selectedModel }: Partial<ProviderRuntimeModelConfig> = saved ?? {};
+                      const { defaultEnabled: _oldEnabled, discoveredCost: _oldCost, ...selectedModel }: Partial<ProviderRuntimeModelConfig> = saved ?? {};
                       return { ...(!selectedModel.interfaceId && !selectedModel.api && !selectedModel.piApi && !selectedModel.route
                         && model.interfaceIds?.[target] ? { interfaceId: model.interfaceIds[target] } : {}),
                         ...selectedModel, id, name: model.name,
@@ -2290,6 +2338,7 @@ export function AddProviderWizard({
                         discoveredSource: model.discoveredSources?.[target],
                         discoverySnapshotId: model.discoverySnapshotIds?.[target],
                         opaqueModelId: model.opaqueModelIds?.[target] || saved?.opaqueModelId,
+                        ...(model.discoveredCosts?.[target] ? { discoveredCost: model.discoveredCosts[target] } : {}),
                         ...(saved?.route ?? model.routes?.[target] ? { route: saved?.route ?? model.routes?.[target] } : {}),
                       };
                     }) : original.models;
@@ -2372,6 +2421,7 @@ export function AddProviderWizard({
             )}
           </div>
         </div>
+        </>}
       </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

@@ -660,6 +660,78 @@
       "font-weight-semibold": {
         "$type": "fontWeight",
         "$value": 600
+      },
+      "z-below": {
+        "$type": "number",
+        "$value": -1
+      },
+      "z-raised": {
+        "$type": "number",
+        "$value": 10
+      },
+      "z-page-float": {
+        "$type": "number",
+        "$value": 20
+      },
+      "z-page-overlay": {
+        "$type": "number",
+        "$value": 30
+      },
+      "z-page-top": {
+        "$type": "number",
+        "$value": 40
+      },
+      "z-float": {
+        "$type": "number",
+        "$value": 50
+      },
+      "z-float-top": {
+        "$type": "number",
+        "$value": 60
+      },
+      "z-fullscreen": {
+        "$type": "number",
+        "$value": 9999
+      },
+      "z-modal": {
+        "$type": "number",
+        "$value": 10000
+      },
+      "z-modal-raised": {
+        "$type": "number",
+        "$value": 10001
+      },
+      "z-modal-nested": {
+        "$type": "number",
+        "$value": 10002
+      },
+      "z-dropdown": {
+        "$type": "number",
+        "$value": 10010
+      },
+      "z-tooltip": {
+        "$type": "number",
+        "$value": 10011
+      },
+      "z-modal-popover-nested": {
+        "$type": "number",
+        "$value": 10020
+      },
+      "z-modal-blocking": {
+        "$type": "number",
+        "$value": 10050
+      },
+      "z-toast": {
+        "$type": "number",
+        "$value": 10100
+      },
+      "z-toast-top": {
+        "$type": "number",
+        "$value": 10101
+      },
+      "z-blocking-gate": {
+        "$type": "number",
+        "$value": 10200
       }
     }
   }
