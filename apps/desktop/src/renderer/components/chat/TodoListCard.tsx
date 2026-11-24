@@ -313,8 +313,8 @@ export function TodoListCard({
     };
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing) return;
-      // A preview can mount after this listener, so it may not have seen Escape yet.
-      if (document.querySelector('[data-preview-scrim], [aria-modal="true"]')) return;
+      // Previews can handle Escape later, and morph popovers close without cancelling it.
+      if (document.querySelector('[data-preview-scrim], [aria-modal="true"], [data-morph-side]')) return;
       event.preventDefault();
       setOpenMode('closed');
     };

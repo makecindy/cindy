@@ -18,6 +18,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { TodoListCard } from '../components/chat/TodoListCard';
 import { MORPH_CONTENT_RESIZE_EVENT, MorphPopover } from '../components/ui/morph-popover';
 
 function setReducedMotion(reduced: boolean): void {
@@ -143,6 +144,28 @@ describe('MorphPopover interaction contract', () => {
     await waitFor(() => expect(screen.queryByRole('group', { name: 'Morph panel' })).toBeNull());
     // 键盘关闭:焦点归还 trigger(§14.2 无障碍)
     expect(document.activeElement).toBe(trigger);
+  });
+
+  // #12437: standalone Escape coverage cannot detect closing a pinned plan
+  // behind the foreground popover. Exercise both real components in one unit test.
+  it('closes a later composer popover before closing a pinned plan with Escape', async () => {
+    const { container } = render(
+      <>
+        <TodoListCard todos={[{ content: 'Check popover', status: 'in_progress' }]} />
+        <Harness />
+      </>,
+    );
+    const plan = container.querySelector<HTMLButtonElement>('button[aria-expanded]')!;
+    fireEvent.click(plan);
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle' }), { detail: 0 });
+    const action = await screen.findByRole('button', { name: 'First action' });
+
+    fireEvent.keyDown(action, { key: 'Escape' });
+    expect(plan.getAttribute('aria-expanded')).toBe('true');
+    await waitFor(() => expect(screen.queryByRole('group', { name: 'Morph panel' })).toBeNull());
+
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(plan.getAttribute('aria-expanded')).toBe('false');
   });
 
   it('焦点离开交互层(Tab 到面板外)则关闭', async () => {
