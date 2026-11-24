@@ -23,6 +23,7 @@ import {
 } from '@cindy/maker-core';
 const h = vi.hoisted(() => ({
   afterPoolWrite: undefined as (() => void) | undefined,
+  captureTunnelHttp: undefined as ((http: TunnelHandlers['http']) => void) | undefined,
   owner: 'owner-a:1',
   pools: {} as Partial<Record<SubscriptionProvider, SubscriptionPoolConfig>>,
   bindings: new Map<string, { providerId: SubscriptionProvider; accountId: string; via?: string }>(),
@@ -188,9 +189,10 @@ vi.mock('node:fs/promises', () => ({
     readFile: h.modelCacheRead, stat: async () => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); } },
 }));
 // The host production dispatcher runs in memory; no listener or personal files.
-vi.mock('../../remote-agent/host/tunnel.js', () => ({ createRunTunnel: async () => ({
-  baseUrl: 'http://tunnel.invalid', token: 'synthetic-token', close: async () => {},
-}) }));
+vi.mock('../../remote-agent/host/tunnel.js', () => ({ createRunTunnel: async (handlers: TunnelHandlers) => {
+  h.captureTunnelHttp?.(handlers.http);
+  return { baseUrl: 'http://tunnel.invalid', token: 'synthetic-token', close: async () => {} };
+} }));
 vi.mock('../legacyAccountAccess.js', () => ({
   legacyCodexAccountCanRun: h.accountAllowed,
   openAiRouteAllowsModel: h.routeAllowed,
@@ -289,11 +291,15 @@ import { createProviderGroupDirectory } from '../../provider-group/directory.js'
 import { createProviderGroupRouter, type ProviderGroupPersistedCooling } from '../../provider-group/router.js';
 import { createProviderGroupService, type ProviderGroupSessionRow } from '../../provider-group/service.js';
 import type { ProviderGroupBinding } from '../../provider-group/bindings.js';
+import { isProviderShareAgentDeviceId } from '../../../shared/providerShare.js';
 import { normalizeProviderGroupConfig } from '../../../shared/providerGroup.js';
+import type { TunnelHandlers } from '../../remote-agent/host/tunnel.js';
 import { createRemoteAgentHost, GROUP_SWITCH_TOKEN_TTL_MS } from '../../remote-agent/host/runHost.js';
-import { RemoteAgentPoller, RemoteAgentRunClient } from '../../remote-agent/controller/runClient.js';
+import { RemoteAgentPoller, RemoteAgentRunClient, remoteAgentInvoker } from '../../remote-agent/controller/runClient.js';
 import { startRemoteAgentSession, takeGroupSwitchState } from '../../remote-agent/controller/startRemote.js';
 import { createInputEnqueueHarness } from '../../maker-ipc/__tests__/inputEnqueueHarness.js';
+import { hasSendToSessionLock, sendToSessionLocks, trackSendToSessionLockRun,
+  waitForSendToSessionLock, withSendToSessionLock } from '../../maker-ipc/sendToSessionLock.js';
 import { MAKER_INVOKE } from '../../maker-ipc/channels.js';
 import type { IpcHandler } from '../../maker-ipc/ipcHandlerRegistry.js';
 import { registerMakerSessionSendHandler } from '../../maker-ipc/sessionSendHandler.js';
@@ -6601,8 +6607,18 @@ describe('shared subscription recovery through controller and account allocation
     // One local tool message to an idle-reclaimed shared task with one healthy
     // spare must queue, persist once, relocate once and dispatch once.
     { original: 'second', phase: 'session-reconnect', boundary: 'none' },
+    // Unit (real reverse HTTP frames and tool adapter, in-memory MCP server):
+    // execution on the sharing computer does not erase an owned task's bound
+    // bridge context. The idle target must queue and recover one such message.
+    { original: 'second', phase: 'session-reconnect', boundary: 'shared-sender' },
+    // Unit (real host/controller, in-memory device link): app-quit publishes the
+    // same idle-release event, which the quota cases did not cover. One queued
+    // input while O is offline must surface its failure and release the next item.
+    { original: 'second', phase: 'session-reconnect', boundary: 'host-quit-offline' },
     // Unit integration: only a reclaimed live target qualifies. The same
     // real local tool retains its prior wake kinds for the other three states.
+    // Hold an actual Session.send over a reclaimed handle to cover the race
+    // where the running check alone must prevent adding the recovery grant.
     { original: 'second', phase: 'session-reconnect', boundary: 'connected-idle' },
     { original: 'second', phase: 'session-reconnect', boundary: 'running-target' },
     { original: 'second', phase: 'session-reconnect', boundary: 'cold-target' },
@@ -6611,6 +6627,9 @@ describe('shared subscription recovery through controller and account allocation
     { original: 'second', phase: 'session-reconnect', boundary: 'remote-session' },
     { original: 'second', phase: 'session-reconnect', boundary: 'remote-orca' },
     { original: 'second', phase: 'session-reconnect', boundary: 'mixed-merge' },
+    // Unit: a Ghost rewrite edits the same object in place. The existing user
+    // edit coverage cannot prove that rewritten text loses its recovery grant.
+    { original: 'second', phase: 'session-reconnect', boundary: 'ghost-rewrite' },
     // Unit integration: cancellation, a lost acceptance ACK and revocation
     // during this local delivery must release its reservation without replay.
     { original: 'second', phase: 'session-reconnect', boundary: 'withdraw-before-drain' },
@@ -6667,6 +6686,7 @@ describe('shared subscription recovery through controller and account allocation
     const task = `guest-${phase}-${original}-${boundary}`;
     const peer = weekly ? providerShareGuestPeer('fixture-share', 'fixture-member', 'fixture-laptop') : 'share-test-guest';
     const route = 'share:isolated-test';
+    const senderId = 'local-sender';
     h.pools.anthropic = { strategy: 'order', accounts: [account('default'), account('second')].map(entry => ({ ...entry, limit: 4 })) };
     if (!weekly) h.created[a] = { kind: 'anthropic', name: 'A', account: 'default' };
     h.created[b] = { kind: 'anthropic', name: 'B', account: 'second' };
@@ -6691,7 +6711,7 @@ describe('shared subscription recovery through controller and account allocation
     let nativeSequence = 0;
     const pendingStart = phase === 'pending-start' || phase === 'auth-pending-start';
     const agent = withSubscriptionAccounts({ kind: 'claude-code', startSession: async (options: StartSessionOptions) => {
-      starts.push(options);
+      if (options.sessionId !== hostSessionIdFor(peer, senderId)) starts.push(options);
       if (phase === 'auth-cold' && options.resumeSessionId) throw new AgentNotAuthenticatedError('claude-code');
       if (phase === 'auth-pending-start') throw new AgentStartupCleanupPendingError('not authenticated', { cause: 'not authenticated', whenStopped });
       if (phase === 'pending-start') throw new AgentStartupCleanupPendingError('usage limit exceeded', { cause: 'usage limit exceeded', whenStopped });
@@ -6749,6 +6769,14 @@ describe('shared subscription recovery through controller and account allocation
     });
     const opens: RemoteAgentOpenPayload[] = [];
     let sendCalls = 0;
+    let executorOnline = true;
+    const offlineOpen = Promise.withResolvers<void>();
+    const failOfflineOpen = Promise.withResolvers<void>();
+    const invokeOffline = remoteAgentInvoker(route, async () => {
+      offlineOpen.resolve();
+      await failOfflineOpen.promise;
+      return { ok: false, error: { code: 'DEVICE_OFFLINE', message: 'Fixture executor is offline' } };
+    });
     const poller = new RemoteAgentPoller(async (args, invokeOptions) => {
       const request = JSON.parse(JSON.stringify(args[0]));
       if (nextInputBeforeReplayRpc && opens.length === 3 && sendCalls === 1
@@ -6759,13 +6787,14 @@ describe('shared subscription recovery through controller and account allocation
       }
       invokeOptions?.beforeDispatch?.();
       if (request.op === 'open') {
-        opens.push(request.payload.json);
+        if (request.payload.json.sessionId !== senderId) opens.push(request.payload.json);
         if (boundary === 'expired-host-token' && request.payload.json.groupSwitchToken) {
           // Advance only O's clock after G claims the offer. The real host
           // ignores the expired token and opens normally, as in #11081.
           hostNow += GROUP_SWITCH_TOKEN_TTL_MS + 1;
         }
       }
+      if (!executorOnline) return invokeOffline(args, invokeOptions);
       if (request.op === 'call' && request.method === 'send') sendCalls++;
       const response = await host.handle(peer, request);
       if (boundary === 'unconfirmed' && opens.length === 3 && request.op === 'call' && request.method === 'send') {
@@ -6864,7 +6893,9 @@ describe('shared subscription recovery through controller and account allocation
       isTurnRunning: () => false, hasLiveSession: () => true, continueSession, fallback,
       readResetAt: () => null, now: Date.now, sleep: async () => {}, guestSwitch, log: { info() {}, warn() {} },
     });
-    if (weekly) vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+    if (weekly) vi.useFakeTimers({ toFake: boundary === 'host-quit-offline'
+      ? ['Date', 'setInterval', 'clearInterval', 'setTimeout', 'clearTimeout']
+      : ['Date', 'setInterval', 'clearInterval'] });
     try {
       // Created-share binding is derived using the real host's same identity function.
       const hostTask = hostSessionIdFor(peer, task);
@@ -6882,9 +6913,15 @@ describe('shared subscription recovery through controller and account allocation
         await session.send('Keep the codeword PINEAPPLE-42.');
         await settled;
 
-        const connectedTarget = boundary === 'connected-idle' || boundary === 'running-target' || boundary === 'cold-target';
+        const connectedTarget = boundary === 'connected-idle' || boundary === 'cold-target';
         const resetAtMs = Date.now() + 3 * 86_400_000;
-        if (!connectedTarget) {
+        if (boundary === 'host-quit-offline') {
+          await host.abortAll('app-quit');
+          await vi.advanceTimersByTimeAsync(5_000);
+          await vi.waitFor(() => expect(session.hasReclaimedSharedRun()).toBe(true));
+          expect(host.limitUsage().total).toBe(0);
+          executorOnline = false;
+        } else if (!connectedTarget) {
           hostNow += 61_000;
           await vi.advanceTimersByTimeAsync(5_000);
           await vi.waitFor(() => expect(guestLog.info).toHaveBeenCalledWith(
@@ -6894,20 +6931,21 @@ describe('shared subscription recovery through controller and account allocation
           await vi.advanceTimersByTimeAsync(5_000);
           vi.mocked(guestLog.info).mockClear();
 
-          const exhausted = await acquireSubscriptionAccount(published, model, [], true, { accountId: original, remote: true });
-          expect(exhausted!.observeFailure({ sdkError: 'rate_limit', usageResetAt: resetAtMs }, model, 'run')).toBe(true);
-          exhausted!.release();
-          h.usage.mockImplementation(async (_kind: string, dir: string) => ({ claudeUsage: {
-            updatedAt: Date.now(), fiveHour: dir.endsWith('/second') ? null : { utilization: 11, resetsAt: Date.now() / 1000 + 3600 },
-            sevenDay: { utilization: dir.endsWith('/second') ? 100 : 3, resetsAt: resetAtMs / 1000 },
-            scoped: [{ utilization: 0, resetsAt: resetAtMs / 1000, modelDisplayName: 'Fable', modelId: null }],
-          } }));
-          await refreshSubscriptionPool(published, true);
-          const view = await readSubscriptionSessionAccount('anthropic',
-            { sessionId: hostTask, model, routeProviderId: published }, { remote: true });
-          expect(view).toMatchObject({ state: 'bound', account: { blocked: true, switchAvailable: true, status: 'limited' } });
-          expect(view).not.toHaveProperty('replacementProviderId');
-
+          if (boundary !== 'running-target') {
+            const exhausted = await acquireSubscriptionAccount(published, model, [], true, { accountId: original, remote: true });
+            expect(exhausted!.observeFailure({ sdkError: 'rate_limit', usageResetAt: resetAtMs }, model, 'run')).toBe(true);
+            exhausted!.release();
+            h.usage.mockImplementation(async (_kind: string, dir: string) => ({ claudeUsage: {
+              updatedAt: Date.now(), fiveHour: dir.endsWith('/second') ? null : { utilization: 11, resetsAt: Date.now() / 1000 + 3600 },
+              sevenDay: { utilization: dir.endsWith('/second') ? 100 : 3, resetsAt: resetAtMs / 1000 },
+              scoped: [{ utilization: 0, resetsAt: resetAtMs / 1000, modelDisplayName: 'Fable', modelId: null }],
+            } }));
+            await refreshSubscriptionPool(published, true);
+            const view = await readSubscriptionSessionAccount('anthropic',
+              { sessionId: hostTask, model, routeProviderId: published }, { remote: true });
+            expect(view).toMatchObject({ state: 'bound', account: { blocked: true, switchAvailable: true, status: 'limited' } });
+            expect(view).not.toHaveProperty('replacementProviderId');
+          }
         }
 
         let live: Session | undefined = session;
@@ -6915,10 +6953,15 @@ describe('shared subscription recovery through controller and account allocation
           if (status === 'closed' && live === session) live = undefined;
         });
         const persisted: string[] = [];
-        const persistedError = vi.fn();
+        const persistedError = vi.fn(() => {
+          // The executor comes online after the first failure, before the
+          // coordinator advances to the input already waiting behind it.
+          if (boundary === 'host-quit-offline') executorOnline = true;
+        });
         const onUsageLimitedTurnError = vi.fn();
         const bootstrapped = vi.fn();
         const accepted = vi.fn();
+        const emitProjection = vi.fn();
         if (boundary === 'all-limited') {
           const spare = await acquireSubscriptionAccount(published, model, [], true, { accountId: nextAccount, remote: true });
           expect(spare!.observeFailure({ sdkError: 'rate_limit', usageResetAt: resetAtMs }, model, 'run')).toBe(true);
@@ -6930,7 +6973,7 @@ describe('shared subscription recovery through controller and account allocation
         }
         let coordinator: AgentInputCoordinator;
         let holdEditedInput = boundary === 'edited-input' || boundary === 'mixed-merge'
-          || boundary === 'running-target' || boundary === 'withdraw-before-drain';
+          || boundary === 'withdraw-before-drain';
         const attach = (current: Session) => {
           current.onEvent(event => {
             events.push(event);
@@ -7036,16 +7079,23 @@ describe('shared subscription recovery through controller and account allocation
           expect(bootstrapped).not.toHaveBeenCalled();
           return;
         }
-        const send = vi.fn<AgentInputCoordinatorDeps['sendToAgent']>(async (...args) =>
-          (await sendToAgentAccepted(...args)).outcome);
+        const send = vi.fn<AgentInputCoordinatorDeps['sendToAgent']>(async (...args) => {
+          const dispatch = async () => (await sendToAgentAccepted(...args)).outcome;
+          return boundary === 'host-quit-offline' ? withSendToSessionLock(args[0], dispatch) : dispatch();
+        });
         coordinator = new AgentInputCoordinator({
           sendToAgent: send, steerToAgent: async () => {}, abortSession: async () => {},
           touchUserSend: async () => {}, createUserMessage: vi.fn(),
           isTurnRunning: () => holdEditedInput || (live?.isTurnRunning() ?? false), hasPendingInteraction: () => false,
           getAgentKind: () => 'claude-code', getSdkSessionId: async () => live?.sdkSessionId,
           getTurnGeneration: () => live?.getTurnGeneration() ?? null, getTurnSessionIdentity: () => live ?? null,
-          emitProjection: () => {}, persistTerminalSendError: persistedError, onUsageLimitedTurnError,
+          emitProjection, persistTerminalSendError: persistedError, onUsageLimitedTurnError,
           onAcceptedQueuedMessage: accepted,
+          ...(boundary === 'ghost-rewrite' ? {
+            screenUserMessage: async () => ({
+              action: 'rewrite' as const, ghostId: 'fixture', ghostName: 'Fixture', text: 'Rewritten input.',
+            }),
+          } : {}),
         });
         const registeredInput = nextInputBeforeReplayRpc ? createInputEnqueueHarness(coordinator, { remote: false }) : undefined;
         const inputItem = (clientId: string, body: string) => ({
@@ -7061,11 +7111,14 @@ describe('shared subscription recovery through controller and account allocation
           manualUiSend: phase !== 'scheduled-reconnect',
         });
         if (phase === 'session-reconnect') {
-          const sendTool = sharedAccountSessionTool('local-sender', {
+          let nextToolClientId = 'after-idle';
+          let sender: Session | undefined;
+          const toolPorts = {
+            isProviderShareAgentDeviceId,
             maker: {
               ...maker,
-              getSession: (id: string) => id === task ? live : id === 'local-sender'
-                ? { id, agentDeviceId: null, remoteHostId: null, getStatus: () => 'active' } : undefined,
+              getSession: (id: string) => id === task ? live : id === senderId
+                ? sender ?? { id, agentDeviceId: null, remoteHostId: null, getStatus: () => 'active' } : undefined,
               getSessionMeta: async (id: string) => ({
                 id, agentKind: 'claude-code', workDir: '/controller/work', model, sdkSessionId: row.sdkSessionId,
               }),
@@ -7073,7 +7126,10 @@ describe('shared subscription recovery through controller and account allocation
             getSessionRowSnapshot: async () => ({ ...row, status: 'active', title: 'Target', userSendAt: null }),
             buildCreateOptsForQueuedSession: async () => inputItem('after-idle', 'Continue.').createOpts,
             inputCoordinator: coordinator,
-            createId: () => 'after-idle',
+            createId: () => nextToolClientId,
+            ...(boundary === 'host-quit-offline' ? {
+              sendToSessionLocks, trackSendToSessionLockRun, waitForSendToSessionLock,
+            } : {}),
             persistUserTurnMessage: async (_id: string, msg: { clientId: string }) => { persisted.push(msg.clientId); },
             buildCreateOptsWithStderr: (opts: object) => opts,
             synthesizeOrcaVendorOptionsFromDb: async () => {},
@@ -7085,14 +7141,87 @@ describe('shared subscription recovery through controller and account allocation
             markOrcaRoleIfNeeded: async () => {},
             sendUserMessageWithAwaitedGitBaseline: (current: Session, msg: string, _id: string, opts: SendOptions) =>
               current.send(msg, opts),
-          });
+          };
+          const sendTool = sharedAccountSessionTool(senderId, toolPorts);
+          const sendFromHostedTask = async () => {
+            const tunnel = Promise.withResolvers<TunnelHandlers['http']>();
+            const bridgeUrl = 'http://mcp.invalid/fixture-sender';
+            let bridgeTool: typeof sendTool | undefined;
+            const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+              expect(url).toBe(bridgeUrl);
+              expect(init?.body).toBeInstanceOf(Uint8Array);
+              const params = JSON.parse(Buffer.from(init?.body as Uint8Array).toString()).params;
+              expect(params.name).toBe('send_to_session');
+              if (!bridgeTool) throw new Error('Missing hosted task MCP bridge');
+              return Response.json(await bridgeTool(params.arguments.target_session_id, params.arguments.message));
+            });
+            try {
+              h.captureTunnelHttp = tunnel.resolve;
+              const handle = await startRemoteAgentSession('claude-code', {
+                sessionId: senderId, workingDir: '/controller/work', model, providerId: published,
+              }, {
+                poller, invoke: poller.invoke, rgPath: 'rg', newId: randomUUID,
+                prepareMcp: async ({ opts }) => {
+                  expect(opts.sessionId).toBe(senderId);
+                  bridgeTool = sharedAccountSessionTool(opts.sessionId!, toolPorts);
+                  return { servers: new Map([['cindy_helper', { url: bridgeUrl, headers: {} }]]), dispose() {} };
+                },
+                collectProjectFiles: async () => [], isGitRepo: async () => false,
+              });
+              h.captureTunnelHttp = undefined;
+              sender = new Session({ id: senderId, agentKind: 'claude-code', permissionMode: 'bypassPermissions',
+                workDir: '/controller/work', agentDeviceId: route, handle, capabilities: {} as never, logger: guestLog });
+              const http = await tunnel.promise;
+              const response = await http({
+                method: 'POST', path: '/mcp/cindy_helper',
+                headers: [['content-type', 'application/json']],
+                body: Buffer.from(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call',
+                  params: { name: 'send_to_session', arguments: { target_session_id: task, message: 'Continue.' } } })),
+              }, new AbortController().signal);
+              expect(response.status).toBe(200);
+              return JSON.parse(response.body!.toString());
+            } finally {
+              h.captureTunnelHttp = undefined;
+              await sender?.close();
+              fetch.mockRestore();
+            }
+          };
           const remoteInput = createInputEnqueueHarness(coordinator, { remote: true });
+          if (boundary === 'running-target') {
+            // The preceding run has been reclaimed. Hold a real Session.send
+            // after it reserves the turn and before it reconnects the handle.
+            attach(session);
+            const reserved = Promise.withResolvers<void>();
+            const release = Promise.withResolvers<void>();
+            const busySend = session.send('A turn is already being sent.', { onAccepted: async () => {
+              reserved.resolve();
+              await release.promise;
+            } });
+            try {
+              await reserved.promise;
+              expect(session.isTurnRunning()).toBe(true);
+              expect(session.hasReclaimedSharedRun()).toBe(true);
+              await expect(sendTool(task, 'Continue.')).resolves.toMatchObject({
+                ok: true, wake_kind: 'queued', queued_message_id: 'after-idle',
+              });
+              expect(coordinator.getProjection(task).pendingQueue.map(item => item.clientId)).toEqual(['after-idle']);
+              expect(send).not.toHaveBeenCalled();
+            } finally {
+              release.resolve();
+              await busySend;
+            }
+            await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
+            await expect(send.mock.results[0].value).resolves.toMatchObject({ dispatched: true });
+            expect(send.mock.calls[0][3].reconnectRecovery).toBeUndefined();
+            expect(persisted).toEqual(['after-idle']);
+            return;
+          }
           const origin = boundary === 'remote-orca' ? { kind: 'orca' as const, senderLabel: 'Lead' }
             : { kind: 'session' as const, senderSessionId: 'local-sender', displayText: 'Continue.' };
           if (boundary === 'remote-session' || boundary === 'remote-orca') {
             await remoteInput.enqueue({}, task, { ...inputItem('after-idle', 'Continue.'), origin });
           } else {
-            const receipt = await sendTool(task, 'Continue.');
+            const receipt = boundary === 'shared-sender' ? await sendFromHostedTask() : await sendTool(task, 'Continue.');
             if (boundary === 'connected-idle' || boundary === 'cold-target') {
               expect(receipt, JSON.stringify(receipt)).toMatchObject({
                 ok: true, wake_kind: boundary === 'cold-target' ? 'resumed' : 'already-active',
@@ -7105,16 +7234,58 @@ describe('shared subscription recovery through controller and account allocation
               expect(insertBoundary).not.toHaveBeenCalled();
               return;
             }
-            expect(receipt).toMatchObject({ ok: true, wake_kind: 'queued', queued_message_id: 'after-idle' });
+            expect(receipt, JSON.stringify(receipt)).toMatchObject({ ok: true, wake_kind: 'queued', queued_message_id: 'after-idle' });
           }
-          if (boundary === 'running-target') {
-            expect(coordinator.getProjection(task).pendingQueue.map(item => item.clientId)).toEqual(['after-idle']);
-            expect(send).not.toHaveBeenCalled();
-            holdEditedInput = false;
-            coordinator.resume(task);
+          if (boundary === 'host-quit-offline') {
+            attach(session);
             await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
-            await expect(send.mock.results[0].value).resolves.toMatchObject({ dispatched: true });
-            expect(send.mock.calls[0][3].reconnectRecovery).toBeUndefined();
+            await Promise.race([
+              offlineOpen.promise,
+              send.mock.results[0].value.then(
+                () => { throw new Error('Send settled before the offline request'); },
+                (error: unknown) => { throw error; },
+              ),
+            ]);
+            expect(hasSendToSessionLock(task)).toBe(true);
+            expect(persisted).toEqual(['after-idle']);
+            enqueue('queued-behind-offline', 'Queued behind the offline input.');
+            expect(coordinator.getProjection(task).pendingQueue.map(item => item.clientId)).toEqual(['queued-behind-offline']);
+            const failed = expect(send.mock.results[0].value).rejects.toThrow('REMOTE_AGENT_OFFLINE');
+            failOfflineOpen.resolve();
+            // The controller retries the read-only capability handshake while offline.
+            await vi.advanceTimersByTimeAsync(8_000);
+            await failed;
+            await vi.waitFor(() => expect(persistedError).toHaveBeenCalledExactlyOnceWith(task, expect.stringContaining('REMOTE_AGENT_OFFLINE')));
+            expect(emitProjection).toHaveBeenCalledWith(expect.objectContaining({
+              sessionId: task, error: expect.stringContaining('REMOTE_AGENT_OFFLINE'),
+            }));
+            expect(persisted.filter(id => id === 'after-idle')).toEqual(['after-idle']);
+            expect(received.filter((item) => JSON.stringify(item).includes('Continue.'))).toEqual([]);
+            expect(insertBoundary).not.toHaveBeenCalled();
+            expect(guestSwitch.hasOffer(task)).toBe(false);
+            await vi.waitFor(() => {
+              expect(coordinator.getProjection(task).pendingQueue.map(item => item.clientId),
+                'the already queued input must drain when the executor returns without another send').toEqual([]);
+              expect(coordinator.getProjection(task).recovery).toBeNull();
+              expect(received).toHaveLength(2);
+              expect(hasSendToSessionLock(task)).toBe(false);
+            });
+            nextToolClientId = 'after-online';
+            await expect(sendTool(task, 'Send after the executor returns.')).resolves.toMatchObject({
+              ok: true, wake_kind: 'already-active',
+            });
+            const drained = () => {
+              expect(coordinator.getProjection(task).pendingQueue.map(item => item.clientId)).toEqual([]);
+              expect(persisted).toEqual(['after-idle', 'queued-behind-offline', 'after-online']);
+              expect(received).toHaveLength(3);
+              expect(sendCalls).toBe(3);
+              expect(hasSendToSessionLock(task)).toBe(false);
+            };
+            await vi.waitFor(drained);
+            expect(received.slice(1)).toEqual([
+              expect.objectContaining({ content: expect.stringContaining('Queued behind the offline input.') }),
+              expect.objectContaining({ content: expect.stringContaining('Send after the executor returns.') }),
+            ]);
             return;
           }
           if (boundary === 'withdraw-before-drain') {
@@ -7135,9 +7306,13 @@ describe('shared subscription recovery through controller and account allocation
             holdEditedInput = false;
             coordinator.resume(task);
           }
-          if (boundary === 'remote-session' || boundary === 'remote-orca' || boundary === 'mixed-merge') {
+          if (boundary === 'remote-session' || boundary === 'remote-orca' || boundary === 'mixed-merge'
+            || boundary === 'ghost-rewrite') {
             await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
             expect(send.mock.calls[0][3].reconnectRecovery).toBeUndefined();
+            if (boundary === 'ghost-rewrite') {
+              expect(send.mock.calls[0][3].persistUserMessage).toMatchObject({ content: 'Rewritten input.' });
+            }
             await expect(send.mock.results[0].value).rejects.toThrow('SUBSCRIPTION_ACCOUNT_LIMITED');
             expect(opens).toHaveLength(2);
             expect(insertBoundary).not.toHaveBeenCalled();
@@ -7590,6 +7765,7 @@ describe('shared subscription recovery through controller and account allocation
       expect(fallback).not.toHaveBeenCalled();
       expect(guestSwitch.takeForOpen(task)).toBeUndefined();
     } finally {
+      failOfflineOpen.resolve();
       confirmStopped();
       resolveProbe?.();
       await guestSession?.close();

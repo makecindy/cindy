@@ -244,6 +244,7 @@ export interface AgentInputSendOpts {
   /** Main-owned boundary for recovering a send that never reached the supplier. */
   reconnectRecovery?: {
     canCapture?(session: object): boolean;
+    onMissingOffer?(): void;
     signal: AbortSignal;
     schedulerRunSignal?: AbortSignal;
     isCurrent(): boolean;
@@ -5861,6 +5862,7 @@ export class AgentInputCoordinator {
       });
       return true;
     };
+    let sharedSessionReconnectWithoutOffer = false;
     try {
       if (taskActionGuard) {
         // A revoked task action settles before screening, persistence or a vendor
@@ -5907,6 +5909,7 @@ export class AgentInputCoordinator {
           const originalText = head.text;
           const rewritten = updateQueuedMessageText(head, verdict.text);
           Object.assign(head, rewritten);
+          this.localSessionReconnectTargets.delete(head);
           if (!rewritten.sessionRefs) delete head.sessionRefs;
           if (!rewritten.trustedSessionReferenceContexts)
             delete head.trustedSessionReferenceContexts;
@@ -6007,8 +6010,10 @@ export class AgentInputCoordinator {
           this.captureReservedVendorGeneration(sessionId, active, generation),
         ...(reconnectRecovery ? { reconnectRecovery: {
           signal: reconnectRecovery.signal,
-          ...(reconnectTarget ? { canCapture: (session: object) =>
-            session === reconnectTarget && reconnectTarget.hasReclaimedSharedRun() } : {}),
+          ...(reconnectTarget ? {
+            canCapture: (session: object) => session === reconnectTarget && reconnectTarget.hasReclaimedSharedRun(),
+            onMissingOffer: () => { sharedSessionReconnectWithoutOffer = true; },
+          } : {}),
           schedulerRunSignal,
           wasStopped: () => active.stopped === true,
           isCurrent: () => !reconnectRecovery.signal.aborted && !schedulerRunSignal?.aborted
@@ -6270,9 +6275,11 @@ export class AgentInputCoordinator {
       latest.stickyError = null;
       // Manual retries must not replay a closed scheduler run. Only an approved
       // automatic takeover below may retain this run's input.
-      const schedulerOrigin = this.setActiveTurnRecovery(latest, head, {
-        persistedFailure: !rewound,
-      }) === 'dropped-scheduler';
+      // This cross-task input would have failed its direct send. Keep the
+      // durable error without holding later inputs behind a manual retry.
+      const schedulerOrigin = this.setActiveTurnRecovery(
+        latest, sharedSessionReconnectWithoutOffer ? null : head, { persistedFailure: !rewound },
+      ) === 'dropped-scheduler';
       // 已落库的派发失败必须立刻放开边界。否则 coordinator 会一直占着 activeTurn,
       // 下一轮被 dispatch-boundary-busy 挡住,界面上只剩用户气泡、没有红条、也不能重试。
       latest.activeTurn = null;
@@ -6286,7 +6293,8 @@ export class AgentInputCoordinator {
       this.emit(sessionId);
       // 派发边界刚刚放开,队里可能还压着别的消息 —— 用户那条路靠 clearError 顺带唤醒,
       // scheduler 这条没有人点,必须自己唤一次。
-      if (schedulerOrigin && !recovering) this.scheduleDrain(sessionId, 'scheduler-prompt-cancelled');
+      if (sharedSessionReconnectWithoutOffer) this.scheduleDrain(sessionId, 'shared-reconnect-no-offer');
+      else if (schedulerOrigin && !recovering) this.scheduleDrain(sessionId, 'scheduler-prompt-cancelled');
       // Thread 3 fix: item was removed from the queue by drain but not put back
       // (persisted path). If no other work is pending, any deferred completion must
       // be replayed now; otherwise Agent Island stays in "running" indefinitely.

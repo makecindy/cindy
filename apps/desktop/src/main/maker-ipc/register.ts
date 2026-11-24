@@ -17838,8 +17838,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     setSessionRuntime: (params) => sessionControlService.setSessionRuntime(params),
     sendToSession: async (params, fromSessionTool) => {
       const ownerScope = captureDataOwnerBroadcastScope();
-      // Only the host MCP adapter supplies this argument. The dispatcher comes
-      // from its bound tool context and must resolve to a live task on this host.
+      // A local task qualifies through its own MCP bridge even with a shared executor; direct device-link input cannot opt in.
       const dispatcher = fromSessionTool && params.targetSessionId && params.dispatcherSessionId && !isDeviceLinkInvoke()
         ? maker.getSession(params.dispatcherSessionId) : undefined;
       const localSessionTool = Boolean(dispatcher && dispatcher.getStatus() === 'active' && !dispatcher.remoteHostId

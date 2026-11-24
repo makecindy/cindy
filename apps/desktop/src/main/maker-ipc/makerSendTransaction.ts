@@ -151,6 +151,7 @@ type MakerSendOptions = {
   onRuntimePreparation?: () => void;
   reconnectRecovery?: {
     canCapture?(session: object): boolean;
+    onMissingOffer?(): void;
     signal: AbortSignal;
     schedulerRunSignal?: AbortSignal;
     isCurrent(): boolean;
@@ -2273,6 +2274,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         if (reconnect && reconnectInput && sess.agentDeviceId && !sendAccepted && userMessagePersisted && persistUserMessage) {
           const offer = reconnect.takeOffer(err);
           if (!offer) {
+            if (!(err instanceof TurnDispatchUnconfirmedError)) reconnectInput.onMissingOffer?.();
             deps.log.warn('send: remote agent switch credential abandoned', {
               sessionId, reason: 'no-credential',
             });
