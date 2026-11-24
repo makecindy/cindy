@@ -197,7 +197,14 @@ export async function refreshSchedulePr(url: string): Promise<void> {
   if (!identity) throw new Error('PR_VERIFICATION_FAILED');
   const { url: _url, ...query } = identity;
   const [result] = await prStatusService.getStatuses([query], { waitForFresh: true, refresh: true });
-  if (!result?.ok) throw new Error('PR_VERIFICATION_FAILED');
+  if (!result?.ok) {
+    // The run history shows this message: say what the user can fix, keep the stable code first.
+    const reason = (result as { reason?: unknown } | undefined)?.reason;
+    const hint = reason === 'glab-missing' ? 'GitLab CLI (glab) is not installed on this computer'
+      : reason === 'glab-not-logged-in' ? `glab is not signed in to ${query.host ?? 'this GitLab instance'}`
+      : typeof reason === 'string' ? reason : undefined;
+    throw new Error(hint ? `PR_VERIFICATION_FAILED: ${hint}` : 'PR_VERIFICATION_FAILED');
+  }
 }
 
 export async function githubPrHeads(urls: readonly string[]): Promise<Record<string, string>> {
