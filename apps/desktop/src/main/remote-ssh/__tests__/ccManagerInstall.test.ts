@@ -58,6 +58,43 @@ describe('Claude Code SSH startup probes', () => {
     },
   );
 
+  it.each(['before the probe', 'while the probe is pending'] as const)(
+    'shares the same-host install that starts %s',
+    async (timing) => {
+      const { host, exec } = hostFixture();
+      const blockedProbe = Promise.withResolvers<Awaited<ReturnType<RemoteHost['exec']>>>();
+      const installProbe = Promise.withResolvers<Awaited<ReturnType<RemoteHost['exec']>>>();
+      const installStarted = Promise.withResolvers<void>();
+      const installError = new Error('shared install failed');
+
+      if (timing === 'while the probe is pending') {
+        exec.mockReturnValueOnce(blockedProbe.promise);
+      }
+      exec.mockResolvedValueOnce(result('NOT_INSTALLED\n')).mockImplementationOnce(() => {
+        installStarted.resolve();
+        return installProbe.promise;
+      }).mockRejectedValueOnce(channelRefused());
+      const second = timing === 'while the probe is pending'
+        ? ensureCcManagerInstalledOrInstall({ host })
+        : null;
+      const first = ensureCcManagerInstalledOrInstall({ host });
+      await installStarted.promise;
+      const joined = second ?? ensureCcManagerInstalledOrInstall({ host });
+      const results = Promise.allSettled([first, joined]);
+      if (second) blockedProbe.reject(channelRefused());
+      // Leave the install pending while the rejected probe resumes.
+      await Promise.resolve();
+      installProbe.reject(installError);
+
+      const failure = { status: 'rejected', reason: expect.objectContaining({
+        code: 'SSH_INSTALL_FAILED',
+        message: expect.stringContaining(installError.message),
+      }) };
+      expect(await results).toEqual([failure, failure]);
+      expect(exec).toHaveBeenCalledTimes(second ? 3 : 2);
+    },
+  );
+
   it('continues to installation when the probe confirms the runtime is missing', async () => {
     const { host, exec } = hostFixture();
     exec.mockResolvedValueOnce(result('NOT_INSTALLED\n'))
