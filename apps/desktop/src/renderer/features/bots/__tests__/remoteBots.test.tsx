@@ -431,6 +431,28 @@ it('checks restored attribution once per sign-in so a task added while the app w
   } finally { vi.useRealTimers(); }
 });
 
+// Unit, same rule: the only cached teammate's main chat changed, so its attribution is read and
+// confirmed right away. The delayed check then has nothing left: no extra roster read on the
+// shared channel at 60 s. Minimal input: cached chat `old-chat`, roster chat `canonical`.
+it('skips the delayed check when restored attribution was already confirmed', async () => {
+  h.devices = [host('a')];
+  localStorage.setItem(`cindy.remoteBots.v1.${h.owner}`, JSON.stringify([{ id: 'same-bot', deviceId: 'a', deviceName: 'a',
+    name: 'Writer', avatar: '', avatarColor: '', description: '', preview: '', activityAt: 100, sessionId: 'old-chat',
+    delegatedSessionIds: ['old-child'] }]));
+  h.invoke.mockImplementation(async (_device, channel) => channel === REMOTE_RESOURCE_LIST_CHANNEL ? collection()
+    : { ok: true, delegations: [{ requestingBotId: 'same-bot', childSessionId: 'new-child' }] });
+  vi.useFakeTimers();
+  try {
+    const { result } = renderHook(useRoster);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(taskTargets()).toEqual(['canonical']);
+    expect(result.current[0].delegatedSessionIds).toEqual(['new-child']);
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(rosterReads()).toBe(1);
+    expect(taskTargets()).toEqual(['canonical']);
+  } finally { vi.useRealTimers(); }
+});
+
 /** Roster A (`same-bot`, chat `canonical`) then B (`second-bot`, chat `second`), both unknown. */
 const teammatesAB = () => {
   const roster = collection();

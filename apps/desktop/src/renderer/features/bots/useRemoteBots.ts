@@ -195,7 +195,8 @@ export function useRemoteBotSync(): void {
           if (wait > 0 && !restoredCheckTimers.has(deviceId)) {
             restoredCheckTimers.set(deviceId, setTimeout(() => {
               restoredCheckTimers.delete(deviceId);
-              void refresh(deviceId);
+              // Already confirmed earlier (main chat change, a push): no extra roster read.
+              if ([...restoredAttribution].some(key => key.startsWith(`${deviceId}\n`))) void refresh(deviceId);
             }, wait));
           }
         }
