@@ -182,6 +182,50 @@ describe('reaction avatars', () => {
     await waitFor(() => expect(mocks.react).toHaveBeenCalledWith({ groupId: 'room', messageId: 'root', emoji: '👍', present: false }));
   });
 
+  it('shows the selection before the receipt, merges other actors, and rolls back only my failed edit', async () => {
+    let reject!: () => void;
+    mocks.react.mockImplementationOnce(() => new Promise((_, fail) => { reject = fail; }));
+    mocks.reactors.mockResolvedValue({ ok: false });
+    const view = render(actions([{ emoji: '👍', count: 4, me: false }]));
+    fireEvent.click(badge());
+    expect(badge().getAttribute('aria-pressed')).toBe('true');
+    expect(badge().textContent).toBe('👍5');
+    view.rerender(actions([{ emoji: '👍', count: 5, me: false }]));
+    expect(badge().textContent).toBe('👍6');
+    await act(async () => reject());
+    expect(badge().getAttribute('aria-pressed')).toBe('false');
+    expect(badge().textContent).toBe('👍5');
+  });
+
+  it('keeps my acknowledged choice through an older refresh and releases it once the server catches up', async () => {
+    const view = render(actions([{ emoji: '👍', count: 4, me: false }]));
+    await act(async () => fireEvent.click(badge()));
+    view.rerender(actions([{ emoji: '👍', count: 5, me: false }]));
+    expect(badge().textContent).toBe('👍6');
+    view.rerender(actions([{ emoji: '👍', count: 6, me: true }]));
+    expect(badge().textContent).toBe('👍6');
+    view.rerender(actions([{ emoji: '👍', count: 5, me: false }]));
+    expect(badge().getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('allows undo from the new badge while its picker write is pending and serializes the final choice', async () => {
+    let acknowledge!: () => void;
+    mocks.react.mockImplementationOnce(() => new Promise(resolve => { acknowledge = () => resolve({ ok: true }); }));
+    render(actions([]));
+    fireEvent.click(screen.getByRole('button', { name: 'addReaction' }));
+    expect(screen.queryByRole('button', { name: '🚀' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'moreReactions' }));
+    fireEvent.click(screen.getByRole('button', { name: '🚀' }));
+    const rocket = screen.getByRole('button', { name: '🚀 · 1' });
+    expect(rocket.getAttribute('aria-pressed')).toBe('true');
+    expect(mocks.reactors).not.toHaveBeenCalled();
+    fireEvent.click(rocket);
+    expect(screen.queryByRole('button', { name: '🚀 · 1' })).toBeNull();
+    expect(mocks.react).toHaveBeenCalledTimes(1);
+    await act(async () => acknowledge());
+    expect(mocks.react.mock.calls.map(([request]) => request.present)).toEqual([true, false]);
+  });
+
   it('drops a read that settles after the account changed', async () => {
     let resolve!: (value: unknown) => void;
     mocks.reactors.mockImplementation(() => new Promise(r => { resolve = r; }));

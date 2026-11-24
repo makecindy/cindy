@@ -12178,6 +12178,7 @@
         },
         "replyPlaceholder": "Responde a este mensaje; usa @ para mencionar a un amigo…",
         "sendReply": "Enviar respuesta",
+        "moreReactions": "Más reacciones",
         "addReaction": "Agregar reacción",
         "reactionCount": "{{emoji}} · {{count}} reacciones",
         "reactionWho": "{{emoji}} · {{count}} reacciones: {{names}}",

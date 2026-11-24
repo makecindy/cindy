@@ -12036,6 +12036,7 @@
         },
         "replyPlaceholder": "覆此訊，可用 @ 點名同伴…",
         "sendReply": "遣回覆",
+        "moreReactions": "餘諸表情",
         "addReaction": "增表情回應",
         "reactionCount": "{{emoji}} · {{count}} 人應之",
         "reactionWho": "{{emoji}} · {{count}} 人應之：{{names}}",

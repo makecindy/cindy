@@ -36,17 +36,17 @@ function reactorNames(reactors: ChatReactor[], t: TFunction, language: string) {
  * badge shows their avatars instead of a number; avatars come from the group member projection,
  * and actors without one fall back to an initial, never an invented identity.
  */
-export function ChatReactionButton({ groupId, messageId, reaction, revision = 0, members, disabled, onToggle, corner = false }: {
+export function ChatReactionButton({ groupId, messageId, reaction, revision = 0, members, disabled, onToggle, optimistic = false, corner = false }: {
   groupId?: string; messageId: string; reaction: Reaction; revision?: string | number; members?: readonly BotGroupMemberView[]; disabled: boolean; onToggle: () => void;
   /** Pinned to a bubble's corner: a small card-colored badge, your own reaction marked by a stronger outline. */
-  corner?: boolean;
+  optimistic?: boolean; corner?: boolean;
 }) {
   const { t, i18n } = useTranslation();
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   // Changes on every add/remove, local or remote — including a same-count swap of who reacted,
   // which only the message's realtime reaction revision reveals.
   const summary = `${reaction.count}:${reaction.me}:${revision}`;
-  const wantsAvatars = !!groupId && reaction.count > 0 && reaction.count <= REACTION_AVATAR_LIMIT;
+  const wantsAvatars = !optimistic && !!groupId && reaction.count > 0 && reaction.count <= REACTION_AVATAR_LIMIT;
   // Only badges near the viewport read, so opening a long history does not fire one read per badge.
   const badgeRef = useRef<HTMLButtonElement>(null);
   const [nearViewport, setNearViewport] = useState(() => typeof IntersectionObserver === 'undefined');
@@ -93,7 +93,8 @@ export function ChatReactionButton({ groupId, messageId, reaction, revision = 0,
       className={cn(showAvatars && 'pr-1', corner && cn('h-7 gap-1 px-1.5 text-13 [--button-face-bg:var(--surface-elevated)]',
         reaction.me ? '[--button-face-border:var(--text-tertiary)]' : '[--button-face-border:var(--border-default)]'))}
       onClick={onToggle}>
-      <span className="text-[color:rgb(from_var(--text-primary)_r_g_b_/_1)]">{reaction.emoji}</span>
+      <span className={cn('text-[color:rgb(from_var(--text-primary)_r_g_b_/_1)]',
+        optimistic && reaction.me && 'motion-safe:animate-[status-done-pop_180ms_ease-out]')}>{reaction.emoji}</span>
       {showAvatars ? (
         // Fixed slots sized by the count, so loading and remote updates never shift the row.
         <span aria-hidden className="flex items-center -space-x-1.5" data-testid="reaction-avatars">

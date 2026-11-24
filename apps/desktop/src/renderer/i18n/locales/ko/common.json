@@ -12036,6 +12036,7 @@
         },
         "replyPlaceholder": "이 메시지에 답글을 쓰세요. @로 동반자를 멘션할 수 있어요…",
         "sendReply": "답글 보내기",
+        "moreReactions": "반응 더 보기",
         "addReaction": "이모지 반응 추가",
         "reactionCount": "{{emoji}} · 반응 {{count}}개",
         "reactionWho": "{{emoji}} · 반응 {{count}}개: {{names}}",

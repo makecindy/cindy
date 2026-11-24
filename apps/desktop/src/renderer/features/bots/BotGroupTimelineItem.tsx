@@ -67,6 +67,7 @@ import { BotGroupQuoteBlock } from './BotGroupQuote';
 import { BotGroupRuntimeFailureNotice } from './BotGroupRuntimeFailureNotice';
 import { BotGroupLiveTaskCard, BotGroupTaskCard } from './BotGroupTaskCard';
 import type { BotGroupTimelineMessage } from './BotGroupTimelineModel';
+import { useChatReactions } from './useChatReactions';
 import { ChatMessageHoverActions, ChatMessageReactions } from './ChatServerControls';
 
 // ---- @ mention highlight ----------------------------------------------------------------
@@ -402,6 +403,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
   const mask = useGroupMask();
   const { t } = useTranslation();
   const { message, authorName, members, mentionLabels, locale, shareScope, sharing } = props;
+  const controls = useChatReactions(props.reactionGroupId, message, props.onChanged);
   const attribution = message.maskAttribution ? { self: maskIdentity(message.maskAttribution.self), companion: maskIdentity(message.maskAttribution.companion) }
     : mask?.attributions[message.id];
   const continued = props.continued && !attribution;
@@ -461,7 +463,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
   const hasText = message.content.trim().length > 0;
   const hasAttachments = (message.attachments?.length ?? 0) > 0;
   const self = message.authorKind === 'user' && message.isSelf !== false;
-  const hasReactions = !message.pending && (message.reactions?.length ?? 0) > 0;
+  const hasReactions = !message.pending && controls.reactions.length > 0;
   // One check once sent, two once another member has read it; not while sending or after a failed send.
   // It sits inside the bubble at the bottom right, at the end of the last line when there is room (the
   // text reserves that space, see `placeReadTail`). In a server group it opens who has read the message.
@@ -471,7 +473,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
       interactive={props.readersEnabled === true && !sharing} />
   ) : null;
   // Your own message's reactions hang over the left corner of its bubble, or of its first block without text.
-  const reactions = hasReactions ? <ChatMessageReactions corner groupId={props.reactionGroupId} message={message} members={members} reactionRevision={props.reactionRevision} align="right" onChanged={props.onChanged} /> : null;
+  const reactions = hasReactions ? <ChatMessageReactions corner groupId={props.reactionGroupId} message={message} members={members} reactionRevision={props.reactionRevision} align="right" controls={controls} /> : null;
   const quote = props.quoteDisplay ? (
     <BotGroupQuoteBlock
       display={props.quoteDisplay}
@@ -505,7 +507,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
         besideReactions={hasReactions}
         onQuote={props.onQuote ? () => props.onQuote!(message.id) : undefined}
         onReply={props.onOpenThread ? () => props.onOpenThread!(message.id) : undefined}
-        onChanged={props.onChanged}
+        controls={controls}
         copyText={share ? share.status === 'available' ? share.content : '' : undefined}
         replyCountShown={Boolean(threadPreview)}
         menuActions={props.menuActions}
@@ -632,7 +634,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
           ) : null}
           <div className={cn('relative flex min-w-0 flex-col', CHAT_BUBBLE_COLUMN_CLASS,
             message.authorKind === 'bot' && hasRichAnswer(share?.content ?? message.content) && 'w-full')}>
-            <ChatMessageReactions corner groupId={props.reactionGroupId} message={message} members={members} reactionRevision={props.reactionRevision} onChanged={props.onChanged} />
+            <ChatMessageReactions corner groupId={props.reactionGroupId} message={message} members={members} reactionRevision={props.reactionRevision} controls={controls} />
             {message.process && message.process.groupId === props.reactionGroupId ? <BotGroupProcess process={message.process}
               member={members.find(member => member.botId === message.authorBotId)} /> : null}
             <ChatBubble data-testid="bot-group-bubble" className="flex flex-col gap-2">

@@ -260,6 +260,11 @@ export default {
       const glyph = choice.locator('span');
       // Use the button itself in the pre-fix comparison, before the emoji span existed.
       assert.equal(await ((await glyph.count()) ? glyph : choice).evaluate(inkAlpha), 255, 'picker emoji must not inherit translucent text ink');
+      assert.equal(await picker.locator('button[aria-pressed]').count(), 6, 'six quick reactions before expanding');
+      const more = picker.getByRole('button', { name: await ui.t('bots.groupChat.server.moreReactions') });
+      await more.click();
+      await picker.getByRole('button', { name: '🚀', exact: true }).waitFor();
+      await ui.capture('reaction-picker-expanded');
       await choice.hover();
       await choice.focus();
       assert.equal(await glyph.evaluate(inkAlpha), 255, 'hover and focus preserve emoji colors');

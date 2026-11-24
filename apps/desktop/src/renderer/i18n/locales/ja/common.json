@@ -12036,6 +12036,7 @@
         },
         "replyPlaceholder": "このメッセージに返信。@ で仲間を指定できます…",
         "sendReply": "返信を送信",
+        "moreReactions": "その他のリアクション",
         "addReaction": "リアクションを追加",
         "reactionCount": "{{emoji}} · {{count}} 件のリアクション",
         "reactionWho": "{{emoji}} · {{count}} 件のリアクション：{{names}}",

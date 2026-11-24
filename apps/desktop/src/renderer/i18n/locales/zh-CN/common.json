@@ -12036,6 +12036,7 @@
         },
         "replyPlaceholder": "回复这条消息，可用 @ 点名伙伴…",
         "sendReply": "发送回复",
+        "moreReactions": "更多表情",
         "addReaction": "添加表情回应",
         "reactionCount": "{{emoji}} · {{count}} 人回应",
         "reactionWho": "{{emoji}} · {{count}} 人回应：{{names}}",

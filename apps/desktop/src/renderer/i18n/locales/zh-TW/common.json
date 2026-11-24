@@ -12036,6 +12036,7 @@
         },
         "replyPlaceholder": "回覆這則訊息，可用 @ 點名夥伴…",
         "sendReply": "傳送回覆",
+        "moreReactions": "更多表情",
         "addReaction": "新增表情回應",
         "reactionCount": "{{emoji}} · {{count}} 人回應",
         "reactionWho": "{{emoji}} · {{count}} 人回應：{{names}}",

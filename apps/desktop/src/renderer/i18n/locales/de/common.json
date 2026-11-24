@@ -12081,6 +12081,7 @@
         },
         "replyPlaceholder": "Antworte auf diese Nachricht; mit @ erwähnst du einen Freund…",
         "sendReply": "Antwort senden",
+        "moreReactions": "Weitere Reaktionen",
         "addReaction": "Reaktion hinzufügen",
         "reactionCount": "{{emoji}} · {{count}} Reaktionen",
         "reactionWho": "{{emoji}} · {{count}} Reaktionen: {{names}}",

@@ -12081,6 +12081,7 @@
         },
         "replyPlaceholder": "Reply to this message; use @ to mention a companion…",
         "sendReply": "Send reply",
+        "moreReactions": "More reactions",
         "addReaction": "Add reaction",
         "reactionCount": "{{emoji}} · {{count}} reactions",
         "reactionWho": "{{emoji}} · {{count}} reactions: {{names}}",
