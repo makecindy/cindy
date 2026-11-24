@@ -37,6 +37,7 @@ import type { ImSessionRepo } from '../shared/sessionRepo';
 import type { ImOrchestratorConfig } from '../shared/types';
 import type { ImFinalOutput } from '@cindy/im';
 import type { ImTurnRunner } from '../shared/turnRunner';
+import { PluginEngineUnsupportedError } from '../../maker-host/engineKind';
 import {
   createWechatTurnPermissionPolicy,
   WECHAT_INTERACTION_CONFIRM_TIMEOUT_MS,
@@ -1254,8 +1255,12 @@ export class WechatIM extends BaseIM implements RichChannelIM {
         }),
       });
     } catch (error) {
-      await stopTyping();
-      throw error;
+      if (error instanceof PluginEngineUnsupportedError) {
+        dispatch = { kind: 'rejected' as const, reason: error.code };
+      } else {
+        await stopTyping();
+        throw error;
+      }
     }
 
     if (dispatch.kind !== 'accepted') {
