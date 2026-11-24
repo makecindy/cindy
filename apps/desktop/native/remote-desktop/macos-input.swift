@@ -455,6 +455,16 @@ func handoffWindows(_ app: AXUIElement) -> [AXUIElement] {
 func handoffResolveWindow(_ app: AXUIElement, _ request: [String: Any]) -> (AXUIElement, Int)? {
   let windows = handoffWindows(app)
   if let spec = request["window"] as? [String: Any] {
+    // Once bound, a missing/ambiguous identity must never fall back to a reused title or index.
+    if let id = spec["windowId"] as? Int {
+      var pid: pid_t = 0
+      guard AXUIElementGetPid(app, &pid) == .success else { return nil }
+      let ids = handoffWindowIdentities(pid, windows)
+      let matches = ids.indices.filter { ids[$0] == id }
+      guard matches.count == 1 else { return nil }
+      let index = matches[0]
+      return (windows[index], index)
+    }
     let title = spec["title"] as? String
     if let index = spec["index"] as? Int, index >= 0, index < windows.count,
       title == nil || handoffString(windows[index], kAXTitleAttribute) ?? "" == title! { return (windows[index], index) }
@@ -621,16 +631,23 @@ func handoffWindowList(_ request: [String: Any] = [:]) -> [String: Any] {
       pids.insert(running.processIdentifier)
     }
   }
+  // Include minimized/off-Space windows. Query once per list, not once per AX window.
+  let windowInfos = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
   var apps: [[String: Any]] = []
   for pid in pids {
     guard let running = NSRunningApplication(processIdentifier: pid) else { continue }
     let element = AXUIElementCreateApplication(pid)
     AXUIElementSetMessagingTimeout(element, 0.3)
     let focused = handoffElement(handoffAttr(element, kAXFocusedWindowAttribute))
-    let windows = handoffWindows(element).enumerated().map { offset, window -> [String: Any] in
-      ["index": offset, "title": handoffString(window, kAXTitleAttribute) ?? "",
-       "frame": handoffFrame(window) ?? [], "focused": focused.map { CFEqual($0, window) } ?? false,
+    let axWindows = handoffWindows(element)
+    let frames = axWindows.map { handoffFrame($0) ?? [] }
+    let ids = handoffWindowIdentities(pid, frames, windowInfos)
+    let windows = axWindows.enumerated().map { offset, window -> [String: Any] in
+      var entry: [String: Any] = ["index": offset, "title": handoffString(window, kAXTitleAttribute) ?? "",
+       "frame": frames[offset], "focused": focused.map { CFEqual($0, window) } ?? false,
        "minimized": handoffBool(window, kAXMinimizedAttribute) ?? false]
+      if let id = ids[offset] { entry["windowId"] = id }
+      return entry
     }
     if running.activationPolicy != .regular && windows.isEmpty { continue }
     // Without `background`, an app is listed only while it has something on screen. With it, every
@@ -859,6 +876,31 @@ func handoffRaise(_ request: [String: Any]) -> [String: Any] {
   var result: [String: Any] = ["frame": frame, "activated": activated]
   if let id = handoffWindowID(pid, frame) { result["windowId"] = Int(id) }
   return result
+}
+/**
+ * Associate AX windows with server identities only when geometry is one-to-one in both lists.
+ * Equal frames, missing bounds or an unavailable server list provide no identity, never a guess.
+ */
+func handoffWindowIdentities(_ pid: Int32, _ frames: [[Double]], _ infos: [[String: Any]]) -> [Int?] {
+  let candidates = frames.map { frame -> [Int] in
+    guard frame.count == 4, frame.allSatisfy({ $0.isFinite }), frame[2] > 0, frame[3] > 0 else { return [] }
+    return infos.compactMap { info -> Int? in
+      guard (info[kCGWindowOwnerPID as String] as? Int32) == pid,
+        let raw = info[kCGWindowBounds as String] as? NSDictionary, let bounds = CGRect(dictionaryRepresentation: raw),
+        handoffSameFrame([Double(bounds.minX), Double(bounds.minY), Double(bounds.width), Double(bounds.height)], frame),
+        let id = info[kCGWindowNumber as String] as? Int, id > 0, id <= Int(UInt32.max) else { return nil }
+      return id
+    }
+  }
+  return candidates.map { matches in
+    guard matches.count == 1, let id = matches.first,
+      candidates.filter({ $0.contains(id) }).count == 1 else { return nil }
+    return id
+  }
+}
+func handoffWindowIdentities(_ pid: Int32, _ windows: [AXUIElement]) -> [Int?] {
+  let infos = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+  return handoffWindowIdentities(pid, windows.map { handoffFrame($0) ?? [] }, infos)
 }
 /** The window server's id for this app's window at this frame, for a live view of just that window. */
 func handoffWindowID(_ pid: Int32, _ frame: [Double]) -> CGWindowID? {
